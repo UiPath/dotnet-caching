@@ -1,0 +1,21 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>$(TargetFramework)</TargetFramework>
+    <IsPackable>false</IsPackable>
+    <IsTestAssetProject>true</IsTestAssetProject>
+    <RootNamespace>UiPath.AutomationSolutionsService.$(MSBuildProjectName.Replace(" ", "_"))</RootNamespace>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="FluentAssertions.Json" Version="6.1.0" />
+    <PackageReference Include="Microsoft.Extensions.Logging.Console" Version="$(DotNetMajorVersion)" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\Application\Application.csproj" />
+    <ProjectReference Include="..\..\src\Core\Core.csproj" />
+    <ProjectReference Include="..\..\src\DataSeed\DataSeed.csproj" />
+  </ItemGroup>
+
+</Project>

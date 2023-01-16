@@ -1,0 +1,40 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Project>
+  <PropertyGroup>
+    <LangVersion>10.0</LangVersion>
+    <TargetFramework>net6.0</TargetFramework>
+  </PropertyGroup>
+
+
+  <PropertyGroup Label="Libraries">
+    <AspNetCoreVersion>6.0.10</AspNetCoreVersion>
+    <MicrosoftAspNetCoreAuthenticationVersion>6.0.10</MicrosoftAspNetCoreAuthenticationVersion>
+    <DotNetMajorVersion>7.0.0</DotNetMajorVersion>
+    <MicrosoftExtensionsConfigurationVersion>7.0.0</MicrosoftExtensionsConfigurationVersion>
+    <MicrosoftExtensionsLoggingAbstractionsVersion>7.0.0</MicrosoftExtensionsLoggingAbstractionsVersion>
+    <EntityFrameworkVersion>7.0.0</EntityFrameworkVersion>
+    <StackExchangeRedisVersion>2.6.66</StackExchangeRedisVersion>
+    <MemoryCacheVersion>7.0.0</MemoryCacheVersion>
+    <CloudEventsVersion>2.5.0</CloudEventsVersion>
+    <FluentValidation>11.2.2</FluentValidation>
+    <NSwag>13.18.0</NSwag>
+    <Polly>7.2.3</Polly>
+    <System>4.3.0</System>
+    <NuGetVersion>6.3.1</NuGetVersion>
+</PropertyGroup>
+
+  <PropertyGroup Label="Test Libraries">
+    <FluentAssertionsVersion>6.7.0</FluentAssertionsVersion>
+
+    <!--update pipeline with the same version VisualStudioTestPlatformInstaller@1-->
+    <MicrosoftTestSdkVersion>17.3.2</MicrosoftTestSdkVersion>
+
+    <xUnitVersion>2.4.2</xUnitVersion>
+    <NSubstituteVersion>4.4.0</NSubstituteVersion>
+    <AutoFixtureVersion>4.17.0</AutoFixtureVersion>
+    <xUnitRunnerVersion>2.4.3</xUnitRunnerVersion>
+
+    <!--update coverlet.runsettings InProcDataCollector.assemblyQualifiedName-->
+    <coverletVersion>3.2.0</coverletVersion>
+  </PropertyGroup>
+</Project>

@@ -1,0 +1,32 @@
+mode: ContinuousDeployment
+next-version: 1.0.0
+continuous-delivery-fallback-tag: ''
+commit-message-incrementing: Disabled
+assembly-file-versioning-format: '{Major}.{Minor}.{Patch}.{env:BUILD_COUNTER}'
+assembly-versioning-format: '{Major}.{Minor}.{Patch}.{env:BUILD_COUNTER}'
+assembly-informational-format: '{Major}.{Minor}.{Patch}.{env:BUILD_COUNTER}'
+branches:
+  feature:
+    source-branches: ['master','release','develop']
+    tag: useBranchName
+    is-release-branch: false
+  fix:
+    regex: 'fix[/-]'
+    source-branches: ['master','release','develop']
+    tag: useBranchName
+    is-release-branch: false
+  pull-request:
+    tag: PullRequest
+    tag-number-pattern: '[/-](?<number>\d+)[-/]'
+    is-release-branch: false
+    increment: none
+  develop:
+    tag: 'alpha'
+    is-release-branch: false
+  master:
+    tag: 'beta'
+    is-release-branch: false
+  release:
+    tag: ''
+    is-release-branch: true
+  

@@ -1,0 +1,33 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Project>
+  <Import Project="Versions.props" />
+  <PropertyGroup>
+    <AssemblyName>UiPath.Platform.$(MSBuildProjectName)</AssemblyName>
+    <RootNamespace>$(AssemblyName)</RootNamespace>
+    <PackageId>$(AssemblyName)</PackageId>
+    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+    <NoWarn>$(NoWarn);CS1591</NoWarn>
+    <NeutralLanguage>en</NeutralLanguage>
+    <Authors>UiPath</Authors>
+    <Company>UiPath</Company>
+    <Product>Platform Services</Product>
+    <Copyright>Copyright © UiPath 2023</Copyright>
+    <Description>UiPath Caching</Description>
+    <PackageTags>Ledger</PackageTags>
+    <PackageProjectUrl>https://github.com/UiPath/ServiceCommon</PackageProjectUrl>
+    <RepositoryUrl>https://github.com/UiPath/ServiceCommon</RepositoryUrl>
+    <PackageOutputPath>$(MSBuildThisFileDirectory)Release</PackageOutputPath>
+    <GenerateAssemblyInfo>False</GenerateAssemblyInfo>
+    <GitVersion_NoFetchEnabled>true</GitVersion_NoFetchEnabled>
+    <WriteVersionInfoToBuildLog>true</WriteVersionInfoToBuildLog>
+    <NoWarn>$(NoWarn);NU5105;CS1591;AD0001;</NoWarn>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+	<EnforceCodeStyleInBuild>true</EnforceCodeStyleInBuild>
+  </PropertyGroup>
+  <ItemGroup>
+    <Compile Include="$(SolutionDir)\GlobalAssemblyInfo.cs">
+      <Link>Properties/GlobalAssemblyInfo.cs</Link>
+    </Compile>
+  </ItemGroup>
+</Project>
