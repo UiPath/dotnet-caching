@@ -19,11 +19,11 @@ Release a new version is always done from the **master** branch.
 
 Steps to release a new version:
 - make sure the code is stable before starting a new release process
-- create a new branch from master with the following format: release/ledger/v{Major}.{Minor}.{Patch}, replacing Major, Minor and Patch with the actual version
-- go to AzureDevOps (uipath.visualstudio.com), find "Service Common" project and search for UiPath.ServiceCommon.Ledger pipeline and select it
+- create a new branch from master with the following format: release/caching/v{Major}.{Minor}.{Patch}, replacing Major, Minor and Patch with the actual version
+- go to AzureDevOps (uipath.visualstudio.com), find "Service Common" project and search for UiPath.ServiceCommon.Caching pipeline and select it
 - click "Run pipeline" and select the branch just created
 - monitor the pipeline run an make sure you approve the release, in order for the package to be published to the nuget-packages feed
-- at the end run git tag -a -m "Ledger: release v{Major}.{Minor}.{Patch}" "ledger/{Major}.{Minor}.{Patch}", replacing Major, Minor and Patch with the actual version
+- at the end run git tag -a -m "Caching: release v{Major}.{Minor}.{Patch}" "caching/{Major}.{Minor}.{Patch}", replacing Major, Minor and Patch with the actual version
 - create a branch to bump version in GitVersion.yml (eg: feature/ledger/bump_version_x_y) and merge back in master
 
 ## Testing

@@ -2,9 +2,10 @@ mode: ContinuousDeployment
 next-version: 1.0.0
 continuous-delivery-fallback-tag: ''
 commit-message-incrementing: Disabled
-assembly-file-versioning-format: '{Major}.{Minor}.{Patch}.{env:BUILD_COUNTER}'
-assembly-versioning-format: '{Major}.{Minor}.{Patch}.{env:BUILD_COUNTER}'
-assembly-informational-format: '{Major}.{Minor}.{Patch}.{env:BUILD_COUNTER}'
+assembly-file-versioning-format: '{Major}.{Minor}.{Patch}'
+assembly-versioning-format: '{Major}.{Minor}.0'
+assembly-informational-format: '{Major}.{Minor}.0'
+
 branches:
   feature:
     source-branches: ['master','release','develop']
