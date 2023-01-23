@@ -4,7 +4,7 @@ namespace UiPath.Platform.Caching.Redis;
 
 public sealed class NullRegionCache : IRedisRegionCache, IHybridRegionCache
 {
-    public static readonly NullRegionCache Instance = new NullRegionCache();
+    public static readonly NullRegionCache Instance = new();
 
     public string? InstanceName => default;
 

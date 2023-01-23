@@ -1,14 +1,12 @@
-﻿using System.Text;
-
-namespace UiPath.Platform.Caching.Broadcast.Redis;
+﻿namespace UiPath.Platform.Caching.Broadcast.Redis;
 
 internal class RedisChannelPublisher : IChannelPublisher
 {
     private readonly Lazy<IDatabase> _lazyDatabase;
-    private readonly CloudEventFormatter _formatter;
+    private readonly IEventFormatterProxy _formatter;
     private readonly ILogger<RedisChannelPublisher> _logger;
 
-    public RedisChannelPublisher(Func<IDatabase> databaseAccessor, CloudEventFormatter formatter, ILogger<RedisChannelPublisher> logger)
+    public RedisChannelPublisher(Func<IDatabase> databaseAccessor, IEventFormatterProxy formatter, ILogger<RedisChannelPublisher> logger)
     {
         _lazyDatabase = new Lazy<IDatabase>(databaseAccessor);
         _formatter = formatter;
@@ -17,17 +15,15 @@ internal class RedisChannelPublisher : IChannelPublisher
 
     private IDatabase Database => _lazyDatabase.Value;
 
-
-    public async Task PublishAsync(Channel channel, CloudEvent cloudEvent, CancellationToken token = default)
+    public async Task PublishAsync(Channel channel, IClearCacheEvent clearCacheEvent, CancellationToken token = default)
     {
         RedisChannel redisChannel = (string)channel;
         token.ThrowIfCancellationRequested();
 
         try
         {
-            var bytes = _formatter.EncodeStructuredModeMessage(cloudEvent, out _);
-            var message = Encoding.UTF8.GetString(bytes.Span);
-            _logger.LogTrace("Publishing to channel {} event {}", channel, cloudEvent.Id);
+            var message = _formatter.EncodeAsString(clearCacheEvent);
+            _logger.LogTrace("Publishing to channel {} event {}", channel, clearCacheEvent.Id);
             await Database.PublishAsync(redisChannel, message).ConfigureAwait(false);
         }
         catch (Exception ex)

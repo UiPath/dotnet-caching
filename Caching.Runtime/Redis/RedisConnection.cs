@@ -44,6 +44,8 @@ public class RedisConnection : IRedisConnection
     private static ConfigurationOptions BuildConfiguration(RedisConnectionOptions options)
     {
         var config = ConfigurationOptions.Parse(options.ConnectionString);
+        config.AbortOnConnectFail = false; // if the connection fails, the multiplexer will silently retry in the background
+
         if (options.BackOffMilliseconds.HasValue)
         {
             config.ReconnectRetryPolicy = new ExponentialRetry(options.BackOffMilliseconds.Value);

@@ -1,8 +1,4 @@
-﻿using CloudNative.CloudEvents;
-using CloudNative.CloudEvents.SystemTextJson;
-using Microsoft.Extensions.Logging;
-using Microsoft.Extensions.Logging.Abstractions;
-using StackExchange.Redis;
+﻿using StackExchange.Redis;
 
 namespace UiPath.Platform.Caching.Tests.Broadcast;
 
@@ -10,7 +6,7 @@ public class RedisChannelSubscriberTests : IAsyncLifetime
 {
     private readonly IFixture _fixture = AutoFixtureCreator.NSubsitute();
     private ISubscriber _subscriber = default!;
-    private IObserver<CloudEvent> _observer = default!;
+    private IObserver<IClearCacheEvent> _observer = default!;
 
     [Fact]
     public void Subscriber_is_called_for_specific_redis_channel()
@@ -66,9 +62,8 @@ public class RedisChannelSubscriberTests : IAsyncLifetime
     public Task InitializeAsync()
     {
         _subscriber = _fixture.Freeze<ISubscriber>();
-        _observer = _fixture.Freeze<IObserver<CloudEvent>>();
-        _fixture.Inject<CloudEventFormatter>(new JsonEventFormatter<ClearCacheEventData>());
-        _fixture.Inject<ILogger<RedisChannelSubscriber>>(NullLogger<RedisChannelSubscriber>.Instance);
+        _observer = _fixture.Freeze<IObserver<IClearCacheEvent>>();
+        _fixture.Inject<IEventFormatterProxy>(new TestEventFormatterProxy());
         return Task.CompletedTask;
     }
 }

@@ -1,5 +1,5 @@
-﻿using CloudNative.CloudEvents;
-using Microsoft.Extensions.Logging;
+﻿using Microsoft.Extensions.Logging;
+using UiPath.Platform.Caching.Tests.Broadcast;
 
 namespace UiPath.Platform.Caching.Tests.Hybrid;
 
@@ -10,6 +10,7 @@ public class ChangeTokenTests : IAsyncLifetime
     private string _key = default!;
     private Channel _channel = default!;
     private IChannelSubscriber _subscriber = default!;
+    private TestEventFormatterProxy _formatter = default!;
     private Uri? _source = null;
 
     private ChangeToken? _sut = null;
@@ -23,7 +24,7 @@ public class ChangeTokenTests : IAsyncLifetime
 
     [Theory]
     [MemberData(nameof(InvalidEvents))]
-    public void OnNext_NoChanges_wheniInvalid_event(CloudEvent cloudEvent)
+    public void OnNext_NoChanges_wheniInvalid_event(TestClearCacheEvent cloudEvent)
     {
         object? actualState = null;
         var callbackCalled = false;
@@ -61,12 +62,10 @@ public class ChangeTokenTests : IAsyncLifetime
         };
 
         var d = Sut.RegisterChangeCallback(callback, expectedState);
-        var cloudEVent = new CloudEvent
+        var cloudEVent = new TestClearCacheEvent
         {
             Id = Guid.NewGuid().ToString(),
-            Type = "ClearCache",
             Source = new Uri("urn:machine"),
-            DataContentType = "application/json",
             Data = new ClearCacheEventData(_key)
         };
         Sut.OnNext(cloudEVent);
@@ -115,7 +114,7 @@ public class ChangeTokenTests : IAsyncLifetime
     public void Dispose_token()
     {
         var disposable = _fixture.Create<IDisposable>();
-        _subscriber.Subscribe(_channel, Arg.Any<IObserver<CloudEvent>>())
+        _subscriber.Subscribe(_channel, Arg.Any<IObserver<IClearCacheEvent>>())
             .Returns(disposable);
         Sut.Dispose();
         disposable.Received(1).Dispose();
@@ -133,66 +132,47 @@ public class ChangeTokenTests : IAsyncLifetime
         _fixture.Inject(_channel);
         _fixture.Freeze<ILogger<ChangeToken>>();
         _subscriber = _fixture.Freeze<IChannelSubscriber>();
+        _formatter = new TestEventFormatterProxy();
+        _fixture.Inject<IEventFormatterProxy>(_formatter);
         return Task.CompletedTask;
     }
 
-    public static IEnumerable<object[]> InvalidEvents() => new CloudEvent[]
+    public static IEnumerable<object[]> InvalidEvents() => new TestClearCacheEvent[]
     {
-        new CloudEvent
+        new TestClearCacheEvent
         {
             Id = Guid.NewGuid().ToString(),
-            Type = "ClearCache",
-            DataContentType = "application/json",
             Data = new ClearCacheEventData(Guid.NewGuid().ToString())
         },
-        new CloudEvent
+        new TestClearCacheEvent
         {
             Id = Guid.NewGuid().ToString(),
-            Type = "Test",
             Source = new Uri("urn:machine"),
-            DataContentType = "application/json",
             Data = new ClearCacheEventData(Guid.NewGuid().ToString())
         },
-        new CloudEvent
+        new TestClearCacheEvent
         {
             Id = Guid.NewGuid().ToString(),
-            Type = "ClearCache",
             Source = new Uri("urn:machine"),
-            DataContentType = "application/json",
-            Data = "asb"
-        },
-        new CloudEvent
-        {
-            Id = Guid.NewGuid().ToString(),
-            Type = "ClearCache",
-            Source = new Uri("urn:machine"),
-            DataContentType = "application/json",
-        },
-        new CloudEvent
-        {
-            Id = Guid.NewGuid().ToString(),
-            Type = "ClearCache",
-            Source = new Uri("urn:machine"),
-            DataContentType = "application/json",
-            Data = new ClearCacheEventData(Guid.NewGuid().ToString())
-        },
-
-        new CloudEvent
-        {
-            Id = Guid.NewGuid().ToString(),
-            Type = "ClearCache",
-            Source = new Uri("urn:machine"),
-            DataContentType = "application/json",
             Data = null
         },
-
-        new CloudEvent
+        new TestClearCacheEvent
         {
             Id = Guid.NewGuid().ToString(),
-            Type = "ClearCache",
             Source = new Uri("urn:machine"),
-            DataContentType = "application/text",
+        },
+        new TestClearCacheEvent
+        {
+            Id = Guid.NewGuid().ToString(),
+            Source = new Uri("urn:machine"),
             Data = new ClearCacheEventData(Guid.NewGuid().ToString())
+        },
+
+        new TestClearCacheEvent
+        {
+            Id = Guid.NewGuid().ToString(),
+            Source = new Uri("urn:machine"),
+            Data = null
         }
     }.Select(cv => new object[] { cv });
 }

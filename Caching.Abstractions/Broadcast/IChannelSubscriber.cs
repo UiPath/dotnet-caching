@@ -2,5 +2,5 @@
 
 public interface IChannelSubscriber
 {
-    IDisposable Subscribe(Channel channel, IObserver<CloudEvent> observer);
+    IDisposable Subscribe(Channel channel, IObserver<IClearCacheEvent> observer);
 }

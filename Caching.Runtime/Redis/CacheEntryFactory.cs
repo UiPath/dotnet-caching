@@ -1,6 +1,6 @@
 ﻿namespace UiPath.Platform.Caching.Redis;
 
-public class CacheEntryFactory : ICacheEntryFactory
+public sealed class CacheEntryFactory : ICacheEntryFactory
 {
     public ICacheEntry<T> Create<T>(T value, DateTimeOffset expiration, IDictionary<string, string?>? properties = null) =>
         new CacheEntry<T>(value, expiration, properties);

@@ -20,11 +20,11 @@ public interface ICache
 
     Task<bool> SetAsync<T>(string key, T? value, DateTimeOffset? expiration = null, CancellationToken token = default);
 
-    Task RefreshAsync<T>(string key, CancellationToken token = default);
+    Task<bool> RefreshAsync<T>(string key, CancellationToken token = default);
 
-    Task RefreshAsync<T>(string key, TimeSpan? expiration = null, CancellationToken token = default);
+    Task<bool> RefreshAsync<T>(string key, TimeSpan? expiration = null, CancellationToken token = default);
 
-    Task RefreshAsync<T>(string key, DateTimeOffset? expiration = null, CancellationToken token = default);
+    Task<bool> RefreshAsync<T>(string key, DateTimeOffset? expiration = null, CancellationToken token = default);
 
     Task<bool> ContainsAsync(string key, CancellationToken token = default);
 

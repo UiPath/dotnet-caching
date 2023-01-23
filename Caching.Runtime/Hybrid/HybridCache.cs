@@ -2,6 +2,7 @@
 using Microsoft.Extensions.Caching.Memory;
 using UiPath.Platform.Caching.Broadcast;
 using UiPath.Platform.Caching.Redis;
+using UiPath.Platform.Caching.Telemetry;
 
 namespace UiPath.Platform.Caching.Hybrid;
 
@@ -12,13 +13,15 @@ public sealed class HybridCache : HybridCacheBase, IHybridCache
 
     public HybridCache(
         ICache innerCache,
-        Func<IMemoryCache> memoryCacheAccessor,
+        Func<HybridCacheOptions, IMemoryCache> memoryCacheAccessor,
         IChangeTokenFactory changeTokenFactory,
         IChannelPublisher channelPublisher,
         IChannelResolver channelResolver,
+        IClearCacheEventFactory clearCacheEventFactory,
+        ICachingTelemetryProvider telemetryProvider,
         IOptions<HybridCacheOptions> optionsAccessor,
         ILogger<HybridCache> logger)
-        : base(memoryCacheAccessor, changeTokenFactory, channelPublisher, channelResolver, optionsAccessor)
+        : base(memoryCacheAccessor, changeTokenFactory, channelPublisher, channelResolver, clearCacheEventFactory, telemetryProvider, optionsAccessor)
     {
         _innerCache = innerCache;
         _logger = logger;
@@ -77,13 +80,13 @@ public sealed class HybridCache : HybridCacheBase, IHybridCache
     public Task<bool> RemoveAsync<T>(string key, CancellationToken token = default) =>
         RemoveAsync<T>(BuildEntryOptions(key, default, token));
 
-    public Task RefreshAsync<T>(string key, CancellationToken token = default) =>
+    public Task<bool> RefreshAsync<T>(string key, CancellationToken token = default) =>
         RefreshAsync<T>(key, CacheOptions.DefaultExpiration, token);
 
-    public Task RefreshAsync<T>(string key, TimeSpan? expiration = null, CancellationToken token = default) =>
+    public Task<bool> RefreshAsync<T>(string key, TimeSpan? expiration = null, CancellationToken token = default) =>
         RefreshAsync<T>(key, ToDateTimeOffset(expiration), token);
 
-    public async Task RefreshAsync<T>(string key, DateTimeOffset? expiration = null, CancellationToken token = default)
+    public async Task<bool> RefreshAsync<T>(string key, DateTimeOffset? expiration = null, CancellationToken token = default)
     {
         var cacheEntryOptions = BuildEntryOptions(key, expiration, token);
         _logger.LogDebug("Clearing cached. Key {}", cacheEntryOptions.Key);
@@ -91,12 +94,14 @@ public sealed class HybridCache : HybridCacheBase, IHybridCache
         _logger.LogTrace("Refreshing inner cache key {} at expiration {}", cacheEntryOptions.Key, cacheEntryOptions.Expiration);
         try
         {
-            await _innerCache.RefreshAsync<T>(cacheEntryOptions.Key, cacheEntryOptions.Expiration, token).ConfigureAwait(false);
+            var ret = await _innerCache.RefreshAsync<T>(cacheEntryOptions.Key, cacheEntryOptions.Expiration, token).ConfigureAwait(false);
             await RaiseClearCacheEventAsync<T>(cacheEntryOptions).ConfigureAwait(false);
+            return ret;
         }
         catch (Exception ex)
         {
             _logger.LogWarning(ex, "Inner cache refresh value for key {}", key);
+            return false;
         }
     }
 
@@ -178,6 +183,7 @@ public sealed class HybridCache : HybridCacheBase, IHybridCache
 
         MemoryCache.Set(options.Key, item, memOptions);
 
+
         static void PostEviction(object key, object? value, EvictionReason reason, object? state)
         {
             if (state is IDisposable disposable)
@@ -218,8 +224,8 @@ public sealed class HybridCache : HybridCacheBase, IHybridCache
         await ChannelPublisher.PublishAsync(channel, GetCloudEvent(options), options.Token).ConfigureAwait(false);
     }
 
-    private CloudEvent GetCloudEvent(CacheEntryOptions options) =>
-        GetCloudEvent(new ClearCacheEventData(GetInnerCacheKey(options)));
+    private IClearCacheEvent GetCloudEvent(CacheEntryOptions options) =>
+        CreateEvent(new ClearCacheEventData(GetInnerCacheKey(options)));
 
     private string GetInnerCacheKey(CacheEntryOptions options) =>
         CacheUtils.GetKey(options.Key, InstanceName);

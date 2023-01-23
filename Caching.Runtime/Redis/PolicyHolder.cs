@@ -1,26 +1,14 @@
-﻿using Polly;
-
-namespace UiPath.Platform.Caching.Redis;
+﻿namespace UiPath.Platform.Caching.Redis;
 
 public class PolicyHolder : IPolicyHolder
 {
-    public PolicyHolder(IAsyncPolicy[] policies) =>
-        AsyncPolicy = Build(policies);
-
-    public IAsyncPolicy AsyncPolicy { get; }
-
-    private static IAsyncPolicy Build(IAsyncPolicy[] policies)
+    public PolicyHolder(IPolicyExecutor read, IPolicyExecutor? write = null)
     {
-        if (policies.Length == 0)
-        {
-            return Policy.NoOpAsync();
-        }
-
-        if (policies.Length == 1)
-        {
-            return policies[0];
-        }
-
-        return Policy.WrapAsync(policies);
+        Read = read;
+        Write = write ?? read;
     }
+
+    public IPolicyExecutor Read { get; }
+
+    public IPolicyExecutor Write { get; }
 }

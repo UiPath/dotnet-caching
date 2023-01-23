@@ -2,7 +2,7 @@
 
 public class NullCache : IRedisCache, IHybridCache
 {
-    public static readonly NullCache Instance = new NullCache();
+    public static readonly NullCache Instance = new();
 
     public string? InstanceName => default;
 
@@ -24,14 +24,14 @@ public class NullCache : IRedisCache, IHybridCache
     public Task<T?> GetOrAddAsync<T>(string key, Func<Task<T?>> generator, DateTimeOffset? expiration = null, CancellationToken token = default) =>
         Task.FromResult(default(T?));
 
-    public Task RefreshAsync<T>(string key, CancellationToken token = default) =>
-        Task.FromResult(default(T?));
+    public Task<bool> RefreshAsync<T>(string key, CancellationToken token = default) =>
+        Task.FromResult(false);
 
-    public Task RefreshAsync<T>(string key, TimeSpan? expiration = null, CancellationToken token = default) =>
-        Task.CompletedTask;
+    public Task<bool> RefreshAsync<T>(string key, TimeSpan? expiration = null, CancellationToken token = default) =>
+        Task.FromResult(false);
 
-    public Task RefreshAsync<T>(string key, DateTimeOffset? expiration = null, CancellationToken token = default) =>
-        Task.CompletedTask;
+    public Task<bool> RefreshAsync<T>(string key, DateTimeOffset? expiration = null, CancellationToken token = default) =>
+        Task.FromResult(false);
 
     public Task<bool> RemoveAsync<T>(string key, CancellationToken token = default) =>
         Task.FromResult(false);

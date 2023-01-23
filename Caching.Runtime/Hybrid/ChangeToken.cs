@@ -3,7 +3,7 @@ using UiPath.Platform.Caching.Redis;
 
 namespace UiPath.Platform.Caching.Hybrid;
 
-public sealed class ChangeToken : IExtendedPropertiesChangeToken, IObserver<CloudEvent>, IDisposable
+public sealed class ChangeToken : IExtendedPropertiesChangeToken, IObserver<IClearCacheEvent>, IDisposable
 {
     private readonly string _key;
     private readonly Channel _channel;
@@ -38,41 +38,24 @@ public sealed class ChangeToken : IExtendedPropertiesChangeToken, IObserver<Clou
         Notify();
     }
 
-    public void OnNext(CloudEvent cloudEvent)
+    public void OnNext(IClearCacheEvent cloudEvent)
     {
-        var eventId = cloudEvent.Id ?? "N/A";
 
-        if (!cloudEvent.IsValid)
-        {
-            _logger.LogWarning("Invalid event. Channel:{}, Id {}", _channel, eventId);
-            return;
-        }
+        var data = cloudEvent.Data;
 
-        if (!string.Equals(cloudEvent.Type, CacheConstants.ClearCacheEventType, StringComparison.InvariantCultureIgnoreCase))
+        if (!string.Equals(data?.Key, _key, StringComparison.OrdinalIgnoreCase))
         {
-            _logger.LogTrace("Ignored event type. Channel:{}, Id {}, Type:{}", _channel, eventId, cloudEvent.Type);
+            _logger.LogTrace("Event ignored. Key {}, Channel:{}, Id {}, Source:{}", data?.Key, _channel, cloudEvent.Id, cloudEvent.Source);
             return;
         }
 
         if (Uri.Compare(_source, cloudEvent.Source, UriComponents.AbsoluteUri, UriFormat.SafeUnescaped, StringComparison.InvariantCultureIgnoreCase) == 0)
         {
-            _logger.LogTrace("Ignored event type. Channel:{}, Id {}, Type:{}, Source:{}", _channel, eventId, cloudEvent.Type, cloudEvent.Source);
+            _logger.LogTrace("Event ignored. Channel:{}, Id {}, Source:{}", _channel, cloudEvent.Id, cloudEvent.Source);
             return;
         }
 
-        if (cloudEvent.Data is not ClearCacheEventData data || data == null)
-        {
-            _logger.LogWarning("Unexpected data type. Channel:{}, Id {}, Type:{}, Source:{}", _channel, eventId, cloudEvent.Type, cloudEvent.Source);
-            return;
-        }
-
-        if (!string.Equals(data.Key, _key, StringComparison.OrdinalIgnoreCase))
-        {
-            _logger.LogTrace("Ignored key {}. Channel:{}, Id {}, Type:{}, Source:{}", data.Key, _channel, eventId, cloudEvent.Type, cloudEvent.Source);
-            return;
-        }
-
-        _logger.LogDebug("Clear local cache key {}. Channel:{}, Id {}, Type:{}, Source:{}", _key, _channel, eventId, cloudEvent.Type, cloudEvent.Source);
+        _logger.LogDebug("Clear local cache key {}. Channel:{}, Id {}, Source:{}", _key, _channel, cloudEvent.Id, cloudEvent.Source);
         Notify(data);
     }
 

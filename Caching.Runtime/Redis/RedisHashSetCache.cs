@@ -1,37 +1,42 @@
 ﻿using System.Collections.Immutable;
 using System.Data;
 using System.Runtime.CompilerServices;
-using Polly;
-using static UiPath.Platform.Caching.Redis.Messages;
+using UiPath.Platform.Caching.Telemetry;
 
 namespace UiPath.Platform.Caching.Redis;
 
 public class RedisHashSetCache : IRedisRegionCache
 {
+    private const string LogWarnMessage = "RedisHashSetCache exception.";
     private readonly Lazy<IDatabase> _lazyDatabase;
     private readonly ILogger<RedisHashSetCache> _logger;
     private readonly RedisCacheOptions _cacheOptions;
     private readonly ISystemClock _clock;
     private readonly ISerializerProxy _serializer;
+    private readonly ICachingTelemetryProvider _telemetryProvider;
     private readonly ICacheEntryFactory _cacheEntryFactory;
     private readonly bool _supportsExpireTime;
-    private readonly IAsyncPolicy _asyncPolicy;
+    private readonly IPolicyExecutor _readPolicy;
+    private readonly IPolicyExecutor _writePolicy;
 
     public RedisHashSetCache(
         Func<IDatabase> databaseAccessor,
         ISerializerProxy serializer,
         IPolicyHolder policyHolder,
+        ICachingTelemetryProvider telemetryProvider,
         IOptions<RedisCacheOptions> optionsAccessor,
         ILogger<RedisHashSetCache> logger)
     {
         _lazyDatabase = new Lazy<IDatabase>(databaseAccessor);
         _serializer = serializer;
+        _telemetryProvider = telemetryProvider;
         _logger = logger;
         _cacheOptions = optionsAccessor.Value;
         _clock = _cacheOptions.Clock ?? new SystemClock();
         _cacheEntryFactory = _cacheOptions.EntryFactory ?? new CacheEntryFactory();
         _supportsExpireTime = RedisUtils.SupportsExpireTime(_cacheOptions.Version);
-        _asyncPolicy = policyHolder.AsyncPolicy;
+        _readPolicy = policyHolder.Read;
+        _writePolicy = policyHolder.Write;
     }
 
     public string? InstanceName => _cacheOptions.InstanceName;
@@ -47,20 +52,28 @@ public class RedisHashSetCache : IRedisRegionCache
     public async Task<IDictionary<string, T?>> GetAsync<T>(Region region, CancellationToken token = default)
     {
         var redisKey = BuildRedisRegionKey(region, token);
-        var ret = new Dictionary<string, T?>();
+        IDictionary<string, T?> ret = Empty<T>();
+        var operation = StartOperation<T>();
         try
         {
-            var hashEntries = (await _asyncPolicy.ExecuteAsync(() => Database.HashGetAllAsync(redisKey, CommandFlags.PreferReplica)).ConfigureAwait(false))
+            var hashEntries = (await _readPolicy.ExecuteAsync(() => Database.HashGetAllAsync(redisKey, CommandFlags.PreferReplica)).ConfigureAwait(false))
                 .Where(k => k.Name != CacheConstants.ExtendedPropertiesKey);
-            return hashEntries.Any()
+            ret = hashEntries.Any()
                 ? hashEntries.ToDictionary(he => he.Name.ToString(), he => _serializer.Deserialize<T?>(he.Value))
                 : Empty<T>();
+            operation.Stop();
         }
         catch (Exception ex)
         {
+            operation.Stop();
             _logger.LogWarning(ex, LogWarnMessage);
-            return Empty<T>();
         }
+        finally
+        {
+            operation.Track(ret.Any());
+        }
+
+        return ret;
     }
 
     public async Task<IDictionary<string, T?>> GetAsync<T>(Region region, string[] keys, CancellationToken token = default)
@@ -73,38 +86,57 @@ public class RedisHashSetCache : IRedisRegionCache
         ValidateKeys(keys);
         var redisKey = BuildRedisRegionKey(region, token);
 
+        IDictionary<string, T?> ret = Empty<T>();
+        var operation = StartOperation<T>();
         try
         {
-            var values = await _asyncPolicy.ExecuteAsync(() => Database.HashGetAsync(redisKey, keys.Select(k => (RedisValue)k).ToArray(), CommandFlags.PreferReplica)).ConfigureAwait(false);
-            var result = new Dictionary<string, T?>();
+            var values = await _readPolicy.ExecuteAsync(() => Database.HashGetAsync(redisKey, keys.Select(k => (RedisValue)k).ToArray(), CommandFlags.PreferReplica)).ConfigureAwait(false);
+            ret = new Dictionary<string, T?>();
             for (var i = 0; i < keys.Length; i++)
             {
                 var v = values[i];
-                result.Add(keys[i], string.IsNullOrWhiteSpace(v) ? default : _serializer.Deserialize<T?>(v));
+                ret.Add(keys[i], string.IsNullOrWhiteSpace(v) ? default : _serializer.Deserialize<T?>(v));
             }
-            return result;
+            operation.Stop();
         }
         catch (Exception ex)
         {
+            operation.Stop();
             _logger.LogWarning(ex, LogWarnMessage);
-            return Empty<T>();
         }
+        finally
+        {
+            operation.Track(ret.Any());
+        }
+
+        return ret;
     }
 
     public async Task<ICacheEntry<IDictionary<string, T?>>> GetCacheEntryAsync<T>(Region region, CancellationToken token = default)
     {
         var redisKey = BuildRedisRegionKey(region, token);
+        ICacheEntry<IDictionary<string, T?>> ret = _cacheEntryFactory.Create(Empty<T>(), DateTimeOffset.MinValue);
+        var operation = StartOperation<T>();
         try
         {
-            return !await _asyncPolicy.ExecuteAsync(() => Database.KeyExistsAsync(redisKey, CommandFlags.PreferReplica)).ConfigureAwait(false)
-                ? _cacheEntryFactory.Create(Empty<T>(), DateTimeOffset.MinValue)
-                : await GetCacheEntryForKeyAsync<T>(redisKey).ConfigureAwait(false);
+            var keyExists = await _readPolicy.ExecuteAsync(() => Database.KeyExistsAsync(redisKey, CommandFlags.PreferReplica)).ConfigureAwait(false);
+            if (keyExists)
+            {
+                ret = await GetCacheEntryForKeyAsync<T>(redisKey).ConfigureAwait(false);
+            }
+            operation.Stop();
         }
         catch (Exception ex)
         {
+            operation.Stop();
             _logger.LogWarning(ex, LogWarnMessage);
-            return _cacheEntryFactory.Create(Empty<T>(), DateTimeOffset.MinValue);
         }
+        finally
+        {
+            operation.Track(ret.Value?.Any() ?? false);
+        }
+
+        return ret;
     }
 
     public Task<IDictionary<string, T?>> GetOrAddAsync<T>(Region region, Func<Task<IDictionary<string, T?>>> generator, CancellationToken token = default) =>
@@ -138,15 +170,24 @@ public class RedisHashSetCache : IRedisRegionCache
     public async Task<bool> ContainsAsync(Region region, CancellationToken token = default)
     {
         var redisKey = BuildRedisRegionKey(region, token);
+        var ret = false;
+        var operation = StartOperation();
         try
         {
-            return await _asyncPolicy.ExecuteAsync(() => Database.KeyExistsAsync(redisKey, CommandFlags.PreferReplica)).ConfigureAwait(false);
+            ret = await _readPolicy.ExecuteAsync(() => Database.KeyExistsAsync(redisKey, CommandFlags.PreferReplica)).ConfigureAwait(false);
+            operation.Stop();
         }
         catch (Exception ex)
         {
+            operation.Stop();
             _logger.LogWarning(ex, LogWarnMessage);
-            return false;
         }
+        finally
+        {
+            operation.Track(ret);
+        }
+
+        return ret;
     }
 
     public Task<bool> RefreshAsync<T>(Region region, CancellationToken token = default) =>
@@ -160,17 +201,26 @@ public class RedisHashSetCache : IRedisRegionCache
         var redisKey = BuildRedisRegionKey(region, token);
         var localExpiration = ToDateTimeOffset(expiration);
         _logger.LogTrace("Refreshing key {redisKey} at expiraton {expiration}", redisKey, localExpiration);
+        var ret = false;
+        var operation = StartOperation();
         try
         {
-            return localExpiration != DateTimeOffset.MaxValue
-                ? await _asyncPolicy.ExecuteAsync(() => Database.KeyExpireAsync(redisKey, localExpiration.UtcDateTime, CommandFlags.DemandMaster | CommandFlags.FireAndForget)).ConfigureAwait(false)
-                : await _asyncPolicy.ExecuteAsync(() => Database.KeyPersistAsync(redisKey, CommandFlags.DemandMaster | CommandFlags.FireAndForget)).ConfigureAwait(false);
+            ret = localExpiration != DateTimeOffset.MaxValue
+                ? await _writePolicy.ExecuteAsync(() => Database.KeyExpireAsync(redisKey, localExpiration.UtcDateTime, CommandFlags.DemandMaster | CommandFlags.FireAndForget)).ConfigureAwait(false)
+                : await _writePolicy.ExecuteAsync(() => Database.KeyPersistAsync(redisKey, CommandFlags.DemandMaster | CommandFlags.FireAndForget)).ConfigureAwait(false);
+            operation.Stop();
         }
         catch (Exception ex)
         {
+            operation.Stop();
             _logger.LogWarning(ex, LogWarnMessage);
-            return false;
         }
+        finally
+        {
+            operation.Track(ret);
+        }
+
+        return ret;
     }
 
     public async Task<bool> RefreshAsync<T>(Region region, RegionCacheEntryOptions options, CancellationToken token = default)
@@ -178,77 +228,103 @@ public class RedisHashSetCache : IRedisRegionCache
         var redisKey = BuildRedisRegionKey(region, token);
         var expiration = options.ExpireTime.HasValue ? ToDateTimeOffset(options.ExpireTime) : ToDateTimeOffset(options.TimeToLive);
         var now = _clock.UtcNow;
+        var ret = false;
+        var operation = StartOperation();
         try
         {
             if (expiration < now)
             {
-                return await _asyncPolicy.ExecuteAsync(() => Database.KeyDeleteAsync(redisKey, CommandFlags.DemandMaster)).ConfigureAwait(false);
-            }
-
-            var tran = Database.CreateTransaction();
-            if (options.ExtendedProperties != null)
-            {
-                var hashEntries = new[] { new HashEntry(CacheConstants.ExtendedPropertiesKey, _serializer.Serialize(options.ExtendedProperties)) };
-                _ = tran.HashSetAsync(redisKey, hashEntries, CommandFlags.DemandMaster).ConfigureAwait(false);
+                ret = await _writePolicy.ExecuteAsync(() => Database.KeyDeleteAsync(redisKey, CommandFlags.DemandMaster)).ConfigureAwait(false);
             }
             else
             {
-                var field = new RedisValue(CacheConstants.ExtendedPropertiesKey);
-                _ = tran.HashDeleteAsync(redisKey, field, CommandFlags.DemandMaster).ConfigureAwait(false);
-            }
+                var tran = Database.CreateTransaction();
+                if (options.ExtendedProperties != null)
+                {
+                    var hashEntries = new[] { new HashEntry(CacheConstants.ExtendedPropertiesKey, _serializer.Serialize(options.ExtendedProperties)) };
+                    _ = tran.HashSetAsync(redisKey, hashEntries, CommandFlags.DemandMaster).ConfigureAwait(false);
+                }
+                else
+                {
+                    var field = new RedisValue(CacheConstants.ExtendedPropertiesKey);
+                    _ = tran.HashDeleteAsync(redisKey, field, CommandFlags.DemandMaster).ConfigureAwait(false);
+                }
 
-            if (expiration != DateTimeOffset.MaxValue)
-            {
-                _ = tran.KeyExpireAsync(redisKey, expiration.UtcDateTime, CommandFlags.DemandMaster | CommandFlags.FireAndForget).ConfigureAwait(false);
-            }
-            else
-            {
-                _ = tran.KeyPersistAsync(redisKey, CommandFlags.DemandMaster | CommandFlags.FireAndForget).ConfigureAwait(false);
-            }
+                if (expiration != DateTimeOffset.MaxValue)
+                {
+                    _ = tran.KeyExpireAsync(redisKey, expiration.UtcDateTime, CommandFlags.DemandMaster | CommandFlags.FireAndForget).ConfigureAwait(false);
+                }
+                else
+                {
+                    _ = tran.KeyPersistAsync(redisKey, CommandFlags.DemandMaster | CommandFlags.FireAndForget).ConfigureAwait(false);
+                }
 
-            var ret = await _asyncPolicy.ExecuteAsync(() => tran.ExecuteAsync()).ConfigureAwait(false);
-            if (!ret)
-            {
-                _logger.LogWarning("Redis transaction failed.");
+                ret = await _writePolicy.ExecuteAsync(() => tran.ExecuteAsync()).ConfigureAwait(false);
+                if (!ret)
+                {
+                    _logger.LogWarning("Redis transaction failed.");
+                }
             }
-            return ret;
+            operation.Stop();
         }
         catch (Exception ex)
         {
+            operation.Stop();
             _logger.LogWarning(ex, LogWarnMessage);
-            return false;
         }
+        finally
+        {
+            operation.Track(ret);
+        }
+
+        return ret;
     }
 
     public async Task<bool> RemoveAsync<T>(Region region, string key, CancellationToken token = default)
     {
         ValidateKey(key);
         var redisKey = BuildRedisRegionKey(region, token);
-
+        var ret = false;
+        var operation = StartOperation();
         try
         {
-            return await _asyncPolicy.ExecuteAsync(() => Database.HashDeleteAsync(redisKey, key, CommandFlags.DemandMaster)).ConfigureAwait(false);
+            ret = await _writePolicy.ExecuteAsync(() => Database.HashDeleteAsync(redisKey, key, CommandFlags.DemandMaster)).ConfigureAwait(false);
+            operation.Stop();
         }
         catch (Exception ex)
         {
+            operation.Stop();
             _logger.LogWarning(ex, LogWarnMessage);
-            return false;
         }
+        finally
+        {
+            operation.Track(ret);
+        }
+
+        return ret;
     }
 
     public async Task<bool> RemoveAsync<T>(Region region, CancellationToken token = default)
     {
         var redisKey = BuildRedisRegionKey(region, token);
-
+        var ret = false;
+        var operation = StartOperation();
         try
         {
-            return await _asyncPolicy.ExecuteAsync(() => Database.KeyDeleteAsync(redisKey, CommandFlags.DemandMaster)).ConfigureAwait(false);
+            ret = await _writePolicy.ExecuteAsync(() => Database.KeyDeleteAsync(redisKey, CommandFlags.DemandMaster)).ConfigureAwait(false);
+            operation.Stop();
         }
         catch (Exception ex)
         {
+            operation.Stop();
             _logger.LogWarning(ex, LogWarnMessage);
-            return false;
         }
+        finally
+        {
+            operation.Track(ret);
+        }
+
+        return ret;
     }
 
     public Task<bool> SetAsync<T>(Region region, IDictionary<string, T?> values, CancellationToken token = default) =>
@@ -262,7 +338,7 @@ public class RedisHashSetCache : IRedisRegionCache
         Validate(values);
         var redisKey = BuildRedisRegionKey(region, token);
         var hashEntries = values.Select(kv => new HashEntry(kv.Key, _serializer.Serialize(kv.Value))).ToArray();
-        return SetInnerAsync(redisKey, hashEntries, ToDateTimeOffset(expiration));
+        return SetInnerAsync<T>(redisKey, hashEntries, ToDateTimeOffset(expiration));
     }
 
     public Task<bool> SetAsync<T>(Region region, IDictionary<string, T?> values, RegionCacheEntryOptions options, CancellationToken token = default)
@@ -277,21 +353,59 @@ public class RedisHashSetCache : IRedisRegionCache
 
         var expiration = options.ExpireTime.HasValue ? ToDateTimeOffset(options.ExpireTime) : ToDateTimeOffset(options.TimeToLive);
 
-        return SetInnerAsync(redisKey, entries, expiration);
+        return SetInnerAsync<T>(redisKey, entries, expiration);
     }
 
-    public async Task<TimeSpan?> TimeToLiveAsync(Region region, CancellationToken token = default) =>
-        await _asyncPolicy.ExecuteAsync(() => Database.KeyTimeToLiveAsync(BuildRedisRegionKey(region, token), CommandFlags.PreferReplica)).ConfigureAwait(false);
+    public async Task<TimeSpan?> TimeToLiveAsync(Region region, CancellationToken token = default)
+    {
+        TimeSpan? ret = default;
+        var operation = StartOperation();
+        try
+        {
+            ret = await _readPolicy.ExecuteAsync(() => Database.KeyTimeToLiveAsync(BuildRedisRegionKey(region, token), CommandFlags.PreferReplica)).ConfigureAwait(false);
+            operation.Stop();
+        }
+        catch (Exception ex)
+        {
+            operation.Stop();
+            _logger.LogWarning(ex, LogWarnMessage);
+        }
+        finally
+        {
+            operation.Track(ret != null);
+        }
+
+        return ret;
+    }
 
     public async Task<DateTimeOffset?> ExpireTimeAsync(Region region, CancellationToken token = default)
     {
-        if (_supportsExpireTime)
+        DateTimeOffset? ret = default;
+        var operation = StartOperation();
+        try
         {
-            return await _asyncPolicy.ExecuteAsync(() => Database.KeyExpireTimeAsync(BuildRedisRegionKey(region, token), CommandFlags.PreferReplica)).ConfigureAwait(false);
+            if (_supportsExpireTime)
+            {
+                ret = await _readPolicy.ExecuteAsync(() => Database.KeyExpireTimeAsync(BuildRedisRegionKey(region, token), CommandFlags.PreferReplica)).ConfigureAwait(false);
+            }
+            else
+            {
+                var timeToLive = await TimeToLiveAsync(region, token);
+                ret = timeToLive.HasValue ? _clock.UtcNow.Add(timeToLive.Value) : null;
+            }
+            operation.Stop();
+        }
+        catch (Exception ex)
+        {
+            operation.Stop();
+            _logger.LogWarning(ex, LogWarnMessage);
+        }
+        finally
+        {
+            operation.Track(ret != null);
         }
 
-        var timeToLive = await TimeToLiveAsync(region, token);
-        return timeToLive.HasValue ? _clock.UtcNow.Add(timeToLive.Value) : null;
+        return ret;
     }
 
     public Task<IDictionary<string, string?>?> GetExtendedPropertiesAsync(Region region, CancellationToken token = default) =>
@@ -300,28 +414,31 @@ public class RedisHashSetCache : IRedisRegionCache
     public async Task<bool> SetExtendedPropertiesAsync<T>(Region region, IDictionary<string, string?> extendedProperties, CancellationToken token = default)
     {
         var redisKey = BuildRedisRegionKey(region, token);
+        var ret = false;
+        var operation = StartOperation<T>();
         try
         {
-            var keyExists = await _asyncPolicy.ExecuteAsync(() => Database.KeyExistsAsync(redisKey, CommandFlags.PreferReplica)).ConfigureAwait(false);
-            if (!keyExists)
+            var keyExists = await _readPolicy.ExecuteAsync(() => Database.KeyExistsAsync(redisKey, CommandFlags.PreferReplica)).ConfigureAwait(false);
+            if (keyExists)
             {
-                return false;
+                ret = extendedProperties.Any()
+                    ? await _writePolicy.ExecuteAsync(() => Database.HashSetAsync(redisKey, CacheConstants.ExtendedPropertiesKey, _serializer.Serialize(extendedProperties))).ConfigureAwait(false)
+                    : await _writePolicy.ExecuteAsync(() => Database.HashDeleteAsync(redisKey, CacheConstants.ExtendedPropertiesKey, CommandFlags.DemandMaster)).ConfigureAwait(false);
             }
+            operation.Stop();
 
-            if (extendedProperties.Any())
-            {
-                return await _asyncPolicy.ExecuteAsync(() => Database.HashSetAsync(redisKey, CacheConstants.ExtendedPropertiesKey, _serializer.Serialize(extendedProperties))).ConfigureAwait(false);
-            }
-            else
-            {
-                return await _asyncPolicy.ExecuteAsync(() => Database.HashDeleteAsync(redisKey, CacheConstants.ExtendedPropertiesKey, CommandFlags.DemandMaster)).ConfigureAwait(false);
-            }
         }
         catch (Exception ex)
         {
+            operation.Stop();
             _logger.LogWarning(ex, LogWarnMessage);
-            return false;
         }
+        finally
+        {
+            operation.Track(ret);
+        }
+
+        return ret;
     }
 
     private async Task<ICacheEntry<IDictionary<string, T?>>> GetCacheEntryForKeyAsync<T>(RedisKey redisKey)
@@ -339,7 +456,7 @@ public class RedisHashSetCache : IRedisRegionCache
             expireTimeToLiveTask = tran.KeyTimeToLiveAsync(redisKey, CommandFlags.PreferReplica).ConfigureAwait(false);
         }
 
-        var tranResult = await _asyncPolicy.ExecuteAsync(() => tran.ExecuteAsync()).ConfigureAwait(false);
+        var tranResult = await _writePolicy.ExecuteAsync(() => tran.ExecuteAsync()).ConfigureAwait(false);
         if (!tranResult)
         {
             throw new InvalidOperationException("Unable to read from redis");
@@ -385,49 +502,67 @@ public class RedisHashSetCache : IRedisRegionCache
     private async Task<T?> GetInnerAsync<T>(Region region, string key, CancellationToken token = default)
     {
         var redisKey = BuildRedisRegionKey(region, token);
-
+        T? ret = default;
+        var operation = StartOperation<T>(nameof(GetAsync));
         try
         {
-            var value = await _asyncPolicy.ExecuteAsync(() => Database.HashGetAsync(redisKey, key, CommandFlags.PreferReplica)).ConfigureAwait(false);
-            return value.IsNullOrEmpty ? default : _serializer.Deserialize<T?>(value);
+            var value = await _readPolicy.ExecuteAsync(() => Database.HashGetAsync(redisKey, key, CommandFlags.PreferReplica)).ConfigureAwait(false);
+            ret = value.IsNullOrEmpty ? default : _serializer.Deserialize<T?>(value);
+            operation.Stop();
         }
         catch (Exception ex)
         {
+            operation.Stop();
             _logger.LogWarning(ex, LogWarnMessage);
-            return default;
         }
+        finally
+        {
+            operation.Track(ret != null);
+        }
+
+        return ret;
     }
 
-    private async Task<bool> SetInnerAsync(RedisKey redisKey, ICollection<HashEntry> hashEntries, DateTimeOffset expiration)
+    private async Task<bool> SetInnerAsync<T>(RedisKey redisKey, ICollection<HashEntry> hashEntries, DateTimeOffset expiration)
     {
         var now = _clock.UtcNow;
+        var ret = false;
+        var operation = StartOperation<T>(nameof(SetAsync));
         try
         {
             if (expiration < now || !hashEntries.Any())
             {
-                return await _asyncPolicy.ExecuteAsync(() => Database.KeyDeleteAsync(redisKey, CommandFlags.DemandMaster)).ConfigureAwait(false);
+                ret = await _writePolicy.ExecuteAsync(() => Database.KeyDeleteAsync(redisKey, CommandFlags.DemandMaster)).ConfigureAwait(false);
             }
-
-            var tran = Database.CreateTransaction();
-            _ = tran.KeyDeleteAsync(redisKey).ConfigureAwait(false);
-            _ = tran.HashSetAsync(redisKey, hashEntries.ToArray(), CommandFlags.DemandMaster).ConfigureAwait(false);
-            if (expiration != DateTimeOffset.MaxValue)
+            else
             {
-                await tran.KeyExpireAsync(redisKey, expiration.UtcDateTime, CommandFlags.DemandMaster | CommandFlags.FireAndForget).ConfigureAwait(false);
-            }
+                var tran = Database.CreateTransaction();
+                _ = tran.KeyDeleteAsync(redisKey).ConfigureAwait(false);
+                _ = tran.HashSetAsync(redisKey, hashEntries.ToArray(), CommandFlags.DemandMaster).ConfigureAwait(false);
+                if (expiration != DateTimeOffset.MaxValue)
+                {
+                    await tran.KeyExpireAsync(redisKey, expiration.UtcDateTime, CommandFlags.DemandMaster | CommandFlags.FireAndForget).ConfigureAwait(false);
+                }
 
-            var ret = await _asyncPolicy.ExecuteAsync(() => tran.ExecuteAsync()).ConfigureAwait(false);
-            if (!ret)
-            {
-                _logger.LogWarning("Redis transaction failed.");
+                ret = await _writePolicy.ExecuteAsync(() => tran.ExecuteAsync()).ConfigureAwait(false);
+                if (!ret)
+                {
+                    _logger.LogWarning("Redis transaction failed.");
+                }
             }
-            return ret;
+            operation.Stop();
         }
         catch (Exception ex)
         {
+            operation.Stop();
             _logger.LogWarning(ex, LogWarnMessage);
-            return false;
         }
+        finally
+        {
+            operation.Track(ret);
+        }
+
+        return ret;
     }
 
     private RedisKey BuildRedisRegionKey(Region key, CancellationToken token = default)
@@ -452,6 +587,12 @@ public class RedisHashSetCache : IRedisRegionCache
 
     private DateTimeOffset ToDateTimeOffset(DateTimeOffset? dateTimeOffset) =>
         dateTimeOffset ?? (_cacheOptions.DefaultExpiration.HasValue ? _clock.UtcNow.Add(_cacheOptions.DefaultExpiration.Value) : DateTimeOffset.MaxValue);
+
+    private ITelemetryOperation StartOperation([CallerMemberName] string name = "") =>
+        _telemetryProvider.StartOperation<RedisHashSetCache>(name);
+
+    private ITelemetryOperation StartOperation<T>([CallerMemberName] string name = "") =>
+        _telemetryProvider.StartOperation<RedisHashSetCache, T>(name);
 
     private static void Validate<T>(IDictionary<string, T?> values)
     {

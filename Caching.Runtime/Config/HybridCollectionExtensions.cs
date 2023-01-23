@@ -1,5 +1,4 @@
 ﻿using System.Diagnostics.CodeAnalysis;
-using CloudNative.CloudEvents.SystemTextJson;
 using Microsoft.Extensions.Caching.Memory;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
@@ -14,7 +13,7 @@ public static class HybridCollectionExtensions
 {
     private static bool CallBackRegistered = false;
 
-    public static ICachingBuilder AddHybridCache(this ICachingBuilder builder, Func<IServiceProvider, ICache> innerCache, HybridCacheOptions? options = null, bool isDefault = false)
+    public static ICachingBuilder AddHybridCache(this ICachingBuilder builder, Func<IServiceProvider, ICache>? innerCache = null, HybridCacheOptions? options = null, bool isDefault = false)
     {
         if (builder.Enabled)
         {
@@ -35,7 +34,7 @@ public static class HybridCollectionExtensions
         return builder.AddCallback();
     }
 
-    public static ICachingBuilder AddHybridRegionCache(this ICachingBuilder builder, Func<IServiceProvider, IRegionCache> innerCache, HybridCacheOptions? options = null, bool isDefault = false)
+    public static ICachingBuilder AddHybridRegionCache(this ICachingBuilder builder, Func<IServiceProvider, IRegionCache>? innerCache = null, HybridCacheOptions? options = null, bool isDefault = false)
     {
         if (builder.Enabled)
         {
@@ -72,16 +71,16 @@ public static class HybridCollectionExtensions
             {
                 builder.Services.TryAddSingleton<IChannelResolver, DefaultChannelResolver>();
                 builder.Services.TryAddSingleton<IChangeTokenFactory, ChangeTokenFactory>();
-                builder.Services.TryAddSingleton<CloudEventFormatter>(new JsonEventFormatter<ClearCacheEventData>());
                 builder.Services.TryAddTransient(sp => sp.BuildRedisChannelSubscriber());
                 builder.Services.TryAddTransient(sp => sp.BuildRedisChannelPublisher());
                 builder.Services.TryAddTransient(sp => sp.GetRequiredService<IRedisConnection>().Connection.GetSubscriber());
 
-                builder.Services.TryAddTransient<Func<IMemoryCache>>(sp => () =>
+                builder.Services.TryAddTransient<Func<HybridCacheOptions, IMemoryCache>>(sp => (HybridCacheOptions options) =>
                      new MemoryCache(
                         Options.Create(new MemoryCacheOptions
                         {
-                            Clock = sp.GetService<ISystemClock>()
+                            Clock = sp.GetService<ISystemClock>(),
+                            TrackStatistics = options.TrackStatistics
                         }),
                         sp.GetService<ILoggerFactory>() ?? NullLoggerFactory.Instance));
             });

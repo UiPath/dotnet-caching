@@ -1,6 +1,4 @@
-﻿using CloudNative.CloudEvents;
-using CloudNative.CloudEvents.SystemTextJson;
-using Microsoft.Extensions.Logging;
+﻿using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using NSubstitute.ExceptionExtensions;
 using StackExchange.Redis;
@@ -10,23 +8,21 @@ namespace UiPath.Platform.Caching.Tests.Broadcast;
 public class RedisChannelPublisherTests : IAsyncLifetime
 {
     private readonly IFixture _fixture = AutoFixtureCreator.NSubsitute();
-    private readonly ISerializerProxy _serializerProxy = new SystemJsonSerializerProxy();
     private IDatabase _database = default!;
     private string _channel = default!;
     private string _value = default!;
+    private TestEventFormatterProxy _formatter = default!;
 
     [Fact]
     public async Task Canceling_token_stops_execution()
     {
         var sut = _fixture.Create<RedisChannelPublisher>();
         Channel channel = _fixture.Create<string>();
-        var cloudEvent = new CloudEvent
+        var cloudEvent = new TestClearCacheEvent
         {
             Id = Guid.NewGuid().ToString(),
-            Type = "ClearCache",
             Source = new Uri("urn:machine"),
-            DataContentType = "application/json",
-            Data = _serializerProxy.Serialize(new ClearCacheEventData(Guid.NewGuid().ToString()))
+            Data = new ClearCacheEventData(Guid.NewGuid().ToString())
         };
         var cancelSource = new CancellationTokenSource();
         var token = cancelSource.Token;
@@ -40,13 +36,11 @@ public class RedisChannelPublisherTests : IAsyncLifetime
     {
         var sut = _fixture.Create<RedisChannelPublisher>();
         Channel channel = _fixture.Create<string>();
-        var cloudEvent = new CloudEvent
+        var cloudEvent = new TestClearCacheEvent
         {
             Id = Guid.NewGuid().ToString(),
-            Type = "ClearCache",
             Source = new Uri("urn:machine"),
-            DataContentType = "application/json",
-            Data = _serializerProxy.Serialize(new ClearCacheEventData(Guid.NewGuid().ToString()))
+            Data = new ClearCacheEventData(Guid.NewGuid().ToString())
         };
         _database.ClearReceivedCalls();
         _database.PublishAsync(Arg.Any<RedisChannel>(), Arg.Any<RedisValue>(), Arg.Any<CommandFlags>())
@@ -62,12 +56,10 @@ public class RedisChannelPublisherTests : IAsyncLifetime
     {
         var sut = _fixture.Create<RedisChannelPublisher>();
         Channel channel = _fixture.Create<string>();
-        var cloudEvent = new CloudEvent
+        var cloudEvent = new TestClearCacheEvent
         {
             Id = Guid.NewGuid().ToString(),
-            Type = "ClearCache",
             Source = new Uri("urn:machine"),
-            DataContentType = "application/json",
             Data = new ClearCacheEventData(Guid.NewGuid().ToString())
         };
         _database.ClearReceivedCalls();
@@ -98,9 +90,9 @@ public class RedisChannelPublisherTests : IAsyncLifetime
                 _channel = c.Arg<RedisChannel>()!;
                 return 1;
             });
-        _fixture.Inject<CloudEventFormatter>(new JsonEventFormatter<ClearCacheEventData>());
+        _formatter = new TestEventFormatterProxy();
+        _fixture.Inject<IEventFormatterProxy>(_formatter);
         _fixture.Inject<ILogger<RedisChannelPublisher>>(NullLogger<RedisChannelPublisher>.Instance);
-        _fixture.Inject(_serializerProxy);
         return Task.CompletedTask;
     }
 }

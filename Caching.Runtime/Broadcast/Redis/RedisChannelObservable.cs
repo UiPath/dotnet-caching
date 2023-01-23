@@ -1,33 +1,30 @@
-﻿using System.Text;
-using System.Threading.Channels;
+﻿namespace UiPath.Platform.Caching.Broadcast.Redis;
 
-namespace UiPath.Platform.Caching.Broadcast.Redis;
-
-public class RedisChannelObservable : IObservable<CloudEvent>
+public class RedisChannelObservable : IObservable<IClearCacheEvent>
 {
     private readonly Channel _channel;
     private readonly ISubscriber _subscriber;
-    private readonly ILogger _logger;
-    private readonly CloudEventFormatter _formatter;
+    private readonly ILoggerFactory _loggerFactory;
+    private readonly IEventFormatterProxy _formatter;
 
-    public RedisChannelObservable(Channel channel, ISubscriber subscriber, CloudEventFormatter formatter, ILogger logger)
-        => (_channel, _subscriber, _formatter, _logger) = (channel, subscriber, formatter, logger);
+    public RedisChannelObservable(Channel channel, ISubscriber subscriber, IEventFormatterProxy formatter, ILoggerFactory loggerFactory)
+        => (_channel, _subscriber, _formatter, _loggerFactory) = (channel, subscriber, formatter, loggerFactory);
 
-    public IDisposable Subscribe(IObserver<CloudEvent> observer) =>
-        new Subscription(_channel, _subscriber, observer, _formatter, _logger);
+    public IDisposable Subscribe(IObserver<IClearCacheEvent> observer) =>
+        new Subscription(_channel, _subscriber, observer, _formatter, _loggerFactory.CreateLogger<Subscription>());
 
 
     private sealed class Subscription : IDisposable
     {
         private readonly RedisChannel _redisChannel;
         private readonly ISubscriber _subscriber;
-        private readonly IObserver<CloudEvent> _observer;
-        private readonly CloudEventFormatter _formatter;
-        private readonly ILogger _logger;
+        private readonly IObserver<IClearCacheEvent> _observer;
+        private readonly IEventFormatterProxy _formatter;
+        private readonly ILogger<Subscription> _logger;
         private readonly Action<RedisChannel, RedisValue> _handler;
         private bool _disposed;
 
-        public Subscription(Channel channel, ISubscriber subscriber, IObserver<CloudEvent> observer, CloudEventFormatter formatter, ILogger logger)
+        public Subscription(Channel channel, ISubscriber subscriber, IObserver<IClearCacheEvent> observer, IEventFormatterProxy formatter, ILogger<Subscription> logger)
         {
             _redisChannel = (string)channel;
             _subscriber = subscriber;
@@ -59,20 +56,26 @@ public class RedisChannelObservable : IObservable<CloudEvent>
             {
                 try
                 {
-                    var memory = new ReadOnlyMemory<byte>(Encoding.UTF8.GetBytes(value.ToString()));
+                    var ev = _formatter.Decode(value.ToString());
+                    if (ev == null)
+                    {
+                        return;
+                    }
 
-                    var ev = _formatter.DecodeStructuredModeMessage(memory, null, null);
-                    if (ev != null)
+                    if (ev.IsValid())
                     {
                         _logger.LogTrace("Event received. Id {}  Channel : {}", ev.Id, _redisChannel);
                         _observer.OnNext(ev);
                     }
+                    else
+                    {
+                        _logger.LogDebug("Event received. Id {}  Channel : {}", ev.Id, _redisChannel);
+                    }
                 }
-                catch(Exception ex)
+                catch (Exception ex)
                 {
                     _logger.LogError(ex, "OnMessage error. Channel : {}", _redisChannel);
                 }
-
             }
         }
 

@@ -486,7 +486,9 @@ public class RedisCacheTests : IAsyncLifetime
         _clock = _fixture.Freeze<ISystemClock>();
         _clock.UtcNow.Returns(c => _now);
         _policyHolder = _fixture.Freeze<IPolicyHolder>();
-        _policyHolder.AsyncPolicy.Returns(Polly.Policy.NoOpAsync());
+        var noOpExecutor = new NoOpExecutor();
+        _policyHolder.Read.Returns(noOpExecutor);
+        _policyHolder.Write.Returns(noOpExecutor);
         _cacheOptions = new RedisCacheOptions
         {
             Clock = _clock

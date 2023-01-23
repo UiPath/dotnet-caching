@@ -1,5 +1,4 @@
 ﻿using Microsoft.Extensions.DependencyInjection;
-using Polly;
 
 namespace UiPath.Platform.Caching.Config;
 
@@ -16,6 +15,4 @@ public interface ICachingBuilder
 
     ICachingBuilder AddRegionCache<TCache>(Func<IServiceProvider, TCache> cacheProvider)
     where TCache : class, IRegionCache;
-
-    ICachingBuilder AddPolicy(IAsyncPolicy policy);
 }

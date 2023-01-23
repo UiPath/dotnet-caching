@@ -3,29 +3,9 @@ using Microsoft.Extensions.Caching.Distributed;
 using Microsoft.Extensions.Caching.Memory;
 using UiPath.Platform.Caching.Broadcast;
 using UiPath.Platform.Caching.Redis;
+using UiPath.Platform.Caching.Telemetry;
 
 namespace UiPath.Platform.Caching.Hybrid;
-
-public interface IChannelResolver
-{
-    Channel GetFor<T>(string key);
-
-    Channel GetFor(Type type, string key);
-}
-
-public class DefaultChannelResolver : IChannelResolver
-{
-    private readonly string _channelPrefix;
-
-    public DefaultChannelResolver(IOptions<HybridCacheOptions> optionsAccessor) =>
-        _channelPrefix = optionsAccessor.Value.ChannelPrefix;
-
-    public Channel GetFor<T>(string key)
-        => GetFor(typeof(T), key);
-
-    public Channel GetFor(Type type, string key) =>
-        CacheUtils.GetKey(type.Name, _channelPrefix);
-}
 
 public sealed class HybridRegionCache : HybridCacheBase, IHybridRegionCache
 {
@@ -34,13 +14,15 @@ public sealed class HybridRegionCache : HybridCacheBase, IHybridRegionCache
 
     public HybridRegionCache(
         IRegionCache innerCache,
-        Func<IMemoryCache> memoryCacheAccessor,
+        Func<HybridCacheOptions, IMemoryCache> memoryCacheAccessor,
         IChangeTokenFactory changeTokenFactory,
         IChannelPublisher channelPublisher,
         IChannelResolver channelResolver,
+        IClearCacheEventFactory clearCacheEventFactory,
+        ICachingTelemetryProvider telemetryProvider,
         IOptions<HybridCacheOptions> optionsAccessor,
         ILogger<HybridRegionCache> logger)
-        : base(memoryCacheAccessor, changeTokenFactory, channelPublisher, channelResolver, optionsAccessor)
+        : base(memoryCacheAccessor, changeTokenFactory, channelPublisher, channelResolver, clearCacheEventFactory, telemetryProvider, optionsAccessor)
     {
         _innerCache = innerCache;
         _logger = logger;
@@ -380,8 +362,8 @@ public sealed class HybridRegionCache : HybridCacheBase, IHybridRegionCache
         await ChannelPublisher.PublishAsync(channel, GetCloudEvent(options), options.Token).ConfigureAwait(false);
     }
 
-    private CloudEvent GetCloudEvent(CacheEntryOptions options, string[]? fields = null) =>
-        GetCloudEvent(new ClearCacheEventData(GetInnerCacheKey(options.Region), fields));
+    private IClearCacheEvent GetCloudEvent(CacheEntryOptions options, string[]? fields = null) =>
+        CreateEvent(new ClearCacheEventData(GetInnerCacheKey(options.Region), fields));
 
     private string GetInnerCacheKey(Region region) =>
         CacheUtils.GetKey(region.ToString(), InstanceName);

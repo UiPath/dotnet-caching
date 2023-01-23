@@ -2,7 +2,7 @@
 
 namespace UiPath.Platform.Caching.Hybrid;
 
-public class ChangeTokenFactory : IChangeTokenFactory
+public sealed class ChangeTokenFactory : IChangeTokenFactory
 {
     private readonly IChannelSubscriber _subscriber;
     private readonly ILoggerFactory _loggerFactory;

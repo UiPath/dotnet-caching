@@ -1,6 +1,4 @@
 ﻿using System.Text;
-using CloudNative.CloudEvents;
-using CloudNative.CloudEvents.SystemTextJson;
 using StackExchange.Redis;
 
 namespace UiPath.Platform.Caching.Tests.Broadcast;
@@ -8,14 +6,14 @@ namespace UiPath.Platform.Caching.Tests.Broadcast;
 public class RedisChannelObservableTests : IAsyncLifetime
 {
     private readonly IFixture _fixture = AutoFixtureCreator.NSubsitute();
-    private readonly List<CloudEvent> _onNextMessages = new();
-    private readonly CloudEventFormatter _formatter = new JsonEventFormatter<ClearCacheEventData>();
+    private readonly List<IClearCacheEvent> _onNextMessages = new();
 
     private Channel _channel;
     private ISubscriber _subscriber = default!;
-    private IObserver<CloudEvent> _observer = default!;
+    private IObserver<IClearCacheEvent> _observer = default!;
     private bool _onCompleted = false;
     Action<RedisChannel, RedisValue>? _handler = null;
+    private TestEventFormatterProxy _formatter = default!;
 
     [Fact]
     public void It_Subscribes_to_subscriber()
@@ -32,15 +30,13 @@ public class RedisChannelObservableTests : IAsyncLifetime
         var sut = _fixture.Create<RedisChannelObservable>();
         var disposable = sut.Subscribe(_observer);
 
-        var cloudEvent = new CloudEvent
+        var cloudEvent = new TestClearCacheEvent
         {
             Id = Guid.NewGuid().ToString(),
-            Type = "ClearCache",
             Source = new Uri("urn:machine"),
-            DataContentType = "application/json",
             Data = new ClearCacheEventData(Guid.NewGuid().ToString())
         };
-        var bytes = _formatter.EncodeStructuredModeMessage(cloudEvent, out _);
+        var bytes = _formatter.Encode(cloudEvent);
         var message = Encoding.UTF8.GetString(bytes.Span);
         _handler?.Invoke(_channel.Name, message);
         _onNextMessages.FirstOrDefault().Should().BeEquivalentTo(cloudEvent);
@@ -83,15 +79,15 @@ public class RedisChannelObservableTests : IAsyncLifetime
     {
         _channel = _fixture.Freeze<Channel>();
         _subscriber = _fixture.Freeze<ISubscriber>();
-        _observer = _fixture.Freeze<IObserver<CloudEvent>>();
-        _observer.When(x => x.OnNext(Arg.Any<CloudEvent>()))
-            .Do(c => _onNextMessages.Add(c.Arg<CloudEvent>()));
+        _observer = _fixture.Freeze<IObserver<IClearCacheEvent>>();
+        _observer.When(x => x.OnNext(Arg.Any<IClearCacheEvent>()))
+            .Do(c => _onNextMessages.Add(c.Arg<IClearCacheEvent>()));
         _observer.When(x => x.OnCompleted())
             .Do(c => _onCompleted = true);
         _subscriber.When(x => x.Subscribe(Arg.Any<RedisChannel>(), Arg.Any<Action<RedisChannel, RedisValue>>(), Arg.Any<CommandFlags>()))
             .Do(c => _handler = c.Arg<Action<RedisChannel, RedisValue>>());
-
-        _fixture.Inject(_formatter);
+        _formatter = new TestEventFormatterProxy();
+        _fixture.Inject<IEventFormatterProxy>(_formatter);
         return Task.CompletedTask;
     }
 }
