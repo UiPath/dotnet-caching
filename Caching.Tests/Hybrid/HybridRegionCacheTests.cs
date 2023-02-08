@@ -336,7 +336,7 @@ public class HybridRegionCacheTests : IAsyncLifetime
         {
             Value = expected
         };
-        var options = new RegionCacheEntryOptions(default, _fixture.Create<TimeSpan>(), _fixture.Create<IDictionary<string, string?>>());
+        var options = new RegionCacheEntryOptions(default, _fixture.Create<TimeSpan>(), RegionCacheSetOption.KeyReplace, _fixture.Create<IDictionary<string, string?>>());
         _innerCache.GetCacheEntryAsync<string>(region, CancellationToken.None)
             .ReturnsForAnyArgs(Task.FromResult<ICacheEntry<IDictionary<string, string?>>>(expectedCacheEntry));
 
@@ -357,7 +357,7 @@ public class HybridRegionCacheTests : IAsyncLifetime
         {
             Value = expected
         };
-        var options = new RegionCacheEntryOptions(default, _fixture.Create<TimeSpan>(), _fixture.Create<IDictionary<string, string?>>());
+        var options = new RegionCacheEntryOptions(default, _fixture.Create<TimeSpan>(), RegionCacheSetOption.KeyReplace, _fixture.Create<IDictionary<string, string?>>());
         _innerCache.GetCacheEntryAsync<string>(region, CancellationToken.None)
             .ReturnsForAnyArgs(Task.FromResult<ICacheEntry<IDictionary<string, string?>>>(expectedCacheEntry));
 

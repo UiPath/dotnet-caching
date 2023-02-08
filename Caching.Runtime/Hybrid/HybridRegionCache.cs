@@ -1,5 +1,4 @@
 ﻿using System.Collections.Immutable;
-using Microsoft.Extensions.Caching.Distributed;
 using Microsoft.Extensions.Caching.Memory;
 using UiPath.Platform.Caching.Broadcast;
 using UiPath.Platform.Caching.Redis;
@@ -60,11 +59,14 @@ public sealed class HybridRegionCache : HybridCacheBase, IHybridRegionCache
         GetOrAddAsync(region, generator, CacheOptions.DefaultExpiration, token);
 
     public Task<IDictionary<string, T?>> GetOrAddAsync<T>(Region region, Func<Task<IDictionary<string, T?>>> generator, TimeSpan? expiration = null, CancellationToken token = default) =>
-        GetOrAddAsync(region, generator, ToDateTimeOffset(expiration), token);
+        GetOrAddAsync(region, generator, ToDateTimeOffset(expiration), RegionCacheSetOption.KeyReplace, token);
 
-    public async Task<IDictionary<string, T?>> GetOrAddAsync<T>(Region region, Func<Task<IDictionary<string, T?>>> generator, DateTimeOffset? expiration = null, CancellationToken token = default)
+    public Task<IDictionary<string, T?>> GetOrAddAsync<T>(Region region, Func<Task<IDictionary<string, T?>>> generator, DateTimeOffset? expiration = null, CancellationToken token = default) =>
+        GetOrAddAsync(region, generator, expiration, RegionCacheSetOption.KeyReplace, token);
+
+    public async Task<IDictionary<string, T?>> GetOrAddAsync<T>(Region region, Func<Task<IDictionary<string, T?>>> generator, DateTimeOffset? expiration = null, RegionCacheSetOption setOption = RegionCacheSetOption.KeyReplace, CancellationToken token = default)
     {
-        var cacheEntryOptions = BuildEntryOptions(region, expiration, token);
+        var cacheEntryOptions = BuildEntryOptions(region, expiration, token, setOption);
         var cacheEntry = await GetCacheEntryAsync<T>(cacheEntryOptions).ConfigureAwait(false);
         if (!IsDefault(cacheEntry.Value))
         {
@@ -87,7 +89,7 @@ public sealed class HybridRegionCache : HybridCacheBase, IHybridRegionCache
     public Task<bool> SetAsync<T>(Region region, IDictionary<string, T?> values, TimeSpan? expiration = null, CancellationToken token = default) =>
         SetAsync(region, values, ToDateTimeOffset(expiration), token);
 
-    public async Task<bool> SetAsync<T>(Region region, IDictionary<string, T?> values, DateTimeOffset? expiration = null, CancellationToken token = default)
+    public async Task<bool> SetAsync<T>(Region region, IDictionary<string, T?> values,DateTimeOffset? expiration = null, CancellationToken token = default)
     {
         var options = BuildEntryOptions(region, expiration, token);
         if (IsDefault(values))
@@ -103,7 +105,7 @@ public sealed class HybridRegionCache : HybridCacheBase, IHybridRegionCache
     public async Task<bool> SetAsync<T>(Region region, IDictionary<string, T?> values, RegionCacheEntryOptions options, CancellationToken token = default)
     {
         var expiration = options.ExpireTime.HasValue ? ToDateTimeOffset(options.ExpireTime) : ToDateTimeOffset(options.TimeToLive);
-        var cacheEntryOptions = BuildEntryOptions(region, expiration, token);
+        var cacheEntryOptions = BuildEntryOptions(region, expiration, token, options.SetOption);
         cacheEntryOptions.ExtendedProperties = options.ExtendedProperties;
         if (IsDefault(values))
         {
@@ -266,14 +268,14 @@ public sealed class HybridRegionCache : HybridCacheBase, IHybridRegionCache
             {
                 using var cts = new CancellationTokenSource();
                 cts.CancelAfter(CacheOptions.Timeout);
-                var extendeProps = _innerCache.GetExtendedPropertiesAsync(propertiesState.Region, cts.Token).GetAwaiter().GetResult();
-                if (extendeProps == null)
+                var extendedProps = _innerCache.GetExtendedPropertiesAsync(propertiesState.Region, cts.Token).GetAwaiter().GetResult();
+                if (extendedProps == null)
                 {
                     return;
                 }
 
                 var expiration = _innerCache.ExpireTimeAsync(propertiesState.Region, cts.Token).GetAwaiter().GetResult();
-                var options = new CacheEntryOptions(propertiesState.Region, null, cts.Token, ToDateTimeOffset(expiration), extendeProps);
+                var options = new CacheEntryOptions(propertiesState.Region, null, cts.Token, ToDateTimeOffset(expiration), extendedProps);
                 var newEntry = propertiesState.CacheEntity.NewEntry(options.Expiration, options.ExtendedProperties);
 
                 LocalSet(options, newEntry, propertiesState.EntryType);
@@ -293,7 +295,7 @@ public sealed class HybridRegionCache : HybridCacheBase, IHybridRegionCache
         LocalSet(options, value);
         try
         {
-            return await _innerCache.SetAsync(options.Region, value, new RegionCacheEntryOptions(options.Expiration, null, options.ExtendedProperties), options.Token).ConfigureAwait(false);
+            return await _innerCache.SetAsync(options.Region, value, new RegionCacheEntryOptions(options.Expiration, null, options.SetOption, options.ExtendedProperties), options.Token).ConfigureAwait(false);
         }
         catch (Exception ex)
         {
@@ -305,13 +307,13 @@ public sealed class HybridRegionCache : HybridCacheBase, IHybridRegionCache
     private CacheEntryOptions BuildEntryOptions(Region region, CancellationToken token = default)
         => BuildEntryOptions(region, default, token);
 
-    private CacheEntryOptions BuildEntryOptions(Region region, DateTimeOffset? expiration, CancellationToken token = default)
-        => BuildEntryOptions(region, default, expiration, token);
+    private CacheEntryOptions BuildEntryOptions(Region region, DateTimeOffset? expiration, CancellationToken token = default, RegionCacheSetOption setOption = RegionCacheSetOption.KeyReplace)
+        => BuildEntryOptions(region, default, expiration, token, setOption);
 
-    private CacheEntryOptions BuildEntryOptions(Region region, string[]? keys, DateTimeOffset? expiration, CancellationToken token = default)
+    private CacheEntryOptions BuildEntryOptions(Region region, string[]? keys, DateTimeOffset? expiration, CancellationToken token = default, RegionCacheSetOption setOption = RegionCacheSetOption.KeyReplace)
     {
         token.ThrowIfCancellationRequested();
-        return new CacheEntryOptions(region, keys, token, ToDateTimeOffset(expiration));
+        return new CacheEntryOptions(region, keys, token, ToDateTimeOffset(expiration), default, setOption);
     }
 
     private static bool IsDefault<T>(IDictionary<string, T?>? value) =>
@@ -368,7 +370,7 @@ public sealed class HybridRegionCache : HybridCacheBase, IHybridRegionCache
     private string GetInnerCacheKey(Region region) =>
         CacheUtils.GetKey(region.ToString(), InstanceName);
 
-    private record struct CacheEntryOptions(Region Region, string[]? Keys, CancellationToken Token, DateTimeOffset Expiration = default, IDictionary<string, string?>? ExtendedProperties = default);
+    private record struct CacheEntryOptions(Region Region, string[]? Keys, CancellationToken Token, DateTimeOffset Expiration = default, IDictionary<string, string?>? ExtendedProperties = default, RegionCacheSetOption SetOption = RegionCacheSetOption.KeyReplace);
 
     private record struct RefreshExtendedPropertiesState(Region Region, ICacheEntry CacheEntity, IExtendedPropertiesChangeToken Token, Type EntryType);
 }

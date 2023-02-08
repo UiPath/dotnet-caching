@@ -471,7 +471,7 @@ public class RedisHashSetCacheTests : IAsyncLifetime
         RedisKey redisKey = string.Join(':', _redisCacheOptions.InstanceName, region).ToLowerInvariant();
         _database.KeyExpireAsync(redisKey, Arg.Any<DateTime?>(), CommandFlags.DemandMaster | CommandFlags.FireAndForget)
             .ThrowsAsync<Exception>();
-        var options = new RegionCacheEntryOptions(_now.Subtract(TimeSpan.FromMilliseconds(1)), null, null);
+        var options = new RegionCacheEntryOptions(_now.Subtract(TimeSpan.FromMilliseconds(1)), null, RegionCacheSetOption.KeyReplace, null);
         var actual = await Sut.RefreshAsync<string>(region, options, CancellationToken.None);
         await _database.Received(1).KeyDeleteAsync(redisKey, Arg.Any<CommandFlags>());
         await _transaction.DidNotReceive().ExecuteAsync();
@@ -485,7 +485,7 @@ public class RedisHashSetCacheTests : IAsyncLifetime
         var extendedProperties = _fixture.Create<IDictionary<string, string?>>();
         _database.KeyExpireAsync(redisKey, Arg.Any<DateTime?>(), CommandFlags.DemandMaster | CommandFlags.FireAndForget)
             .ThrowsAsync<Exception>();
-        var options = new RegionCacheEntryOptions(default, _fixture.Create<TimeSpan>(), extendedProperties);
+        var options = new RegionCacheEntryOptions(default, _fixture.Create<TimeSpan>(), RegionCacheSetOption.KeyReplace, extendedProperties);
         var actual = await Sut.RefreshAsync<string>(region, options, CancellationToken.None);
         await _database.DidNotReceive().KeyDeleteAsync(redisKey, Arg.Any<CommandFlags>());
         await _transaction.Received(1).HashSetAsync(redisKey, Arg.Any<HashEntry[]>(), Arg.Any<CommandFlags>());
@@ -515,7 +515,7 @@ public class RedisHashSetCacheTests : IAsyncLifetime
         Region region = _fixture.Create<string>();
         RedisKey redisKey = string.Join(':', _redisCacheOptions.InstanceName, region).ToLowerInvariant();
         var extendedProperties = _fixture.Create<IDictionary<string, string?>>();
-        var options = new RegionCacheEntryOptions(default, default, extendedProperties);
+        var options = new RegionCacheEntryOptions(default, default, RegionCacheSetOption.KeyReplace, extendedProperties);
         var actual = await Sut.RefreshAsync<string>(region, options, CancellationToken.None);
         await _database.DidNotReceive().KeyDeleteAsync(redisKey, Arg.Any<CommandFlags>());
         await _transaction.Received(1).HashSetAsync(redisKey, Arg.Any<HashEntry[]>(), Arg.Any<CommandFlags>());
@@ -524,13 +524,13 @@ public class RedisHashSetCacheTests : IAsyncLifetime
     }
 
     [Fact]
-    public async Task Refresh_RegionCacheEntryOptions_tranaction_fail()
+    public async Task Refresh_RegionCacheEntryOptions_transaction_fail()
     {
         _redisCacheOptions.DefaultExpiration = null;
         Region region = _fixture.Create<string>();
         RedisKey redisKey = string.Join(':', _redisCacheOptions.InstanceName, region).ToLowerInvariant();
         var extendedProperties = _fixture.Create<IDictionary<string, string?>>();
-        var options = new RegionCacheEntryOptions(default, default, extendedProperties);
+        var options = new RegionCacheEntryOptions(default, default, RegionCacheSetOption.KeyReplace, extendedProperties);
         _transaction.ExecuteAsync().Returns(false);
         var actual = await Sut.RefreshAsync<string>(region, options, CancellationToken.None);
         await _database.DidNotReceive().KeyDeleteAsync(redisKey, Arg.Any<CommandFlags>());
@@ -541,13 +541,13 @@ public class RedisHashSetCacheTests : IAsyncLifetime
     }
 
     [Fact]
-    public async Task Refresh_RegionCacheEntryOptions_tranaction_exception()
+    public async Task Refresh_RegionCacheEntryOptions_transaction_exception()
     {
         _redisCacheOptions.DefaultExpiration = null;
         Region region = _fixture.Create<string>();
         RedisKey redisKey = string.Join(':', _redisCacheOptions.InstanceName, region).ToLowerInvariant();
         var extendedProperties = _fixture.Create<IDictionary<string, string?>>();
-        var options = new RegionCacheEntryOptions(default, default, extendedProperties);
+        var options = new RegionCacheEntryOptions(default, default, RegionCacheSetOption.KeyReplace, extendedProperties);
         _transaction.ExecuteAsync().Throws(new Exception());
         var actual = await Sut.RefreshAsync<string>(region, options, CancellationToken.None);
         await _database.DidNotReceive().KeyDeleteAsync(redisKey, Arg.Any<CommandFlags>());
@@ -687,9 +687,24 @@ public class RedisHashSetCacheTests : IAsyncLifetime
         Region region = _fixture.Create<string>();
         var values = _fixture.Create<IDictionary<string, string?>>();
         var extendedProperties = _fixture.Create<IDictionary<string, string?>>();
-        var options = new RegionCacheEntryOptions(_now.AddMilliseconds(1), default, extendedProperties);
+        var options = new RegionCacheEntryOptions(_now.AddMilliseconds(1), default, RegionCacheSetOption.KeyReplace, extendedProperties);
         await Sut.SetAsync(region, values, options, CancellationToken.None);
         _database.Received(1).CreateTransaction();
+    }
+
+    [Fact]
+    public async Task Set_HashReplaceSetOption()
+    {
+        Region region = _fixture.Create<string>();
+        RedisKey redisKey = string.Join(':', _redisCacheOptions.InstanceName, region).ToLowerInvariant();
+        var values = _fixture.Create<IDictionary<string, string?>>();
+        var extendedProperties = _fixture.Create<IDictionary<string, string?>>();
+        var options = new RegionCacheEntryOptions(_now.AddMilliseconds(1), default, RegionCacheSetOption.HashReplace, extendedProperties);
+        await Sut.SetAsync(region, values, options, CancellationToken.None);
+        _database.Received(1).CreateTransaction();
+        await _database.DidNotReceive().KeyDeleteAsync(redisKey, Arg.Any<CommandFlags>());
+        await _transaction.Received(1).HashSetAsync(redisKey, Arg.Any<HashEntry[]>(), Arg.Any<CommandFlags>());
+        await _transaction.Received(1).ExecuteAsync();
     }
 
     [Fact]

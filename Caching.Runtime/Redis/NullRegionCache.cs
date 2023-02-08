@@ -38,6 +38,9 @@ public sealed class NullRegionCache : IRedisRegionCache, IHybridRegionCache
     public Task<IDictionary<string, T?>> GetOrAddAsync<T>(Region region, Func<Task<IDictionary<string, T?>>> generator, DateTimeOffset? expiration = null, CancellationToken token = default) =>
         Task.FromResult((IDictionary<string, T?>)ImmutableDictionary<string, T?>.Empty);
 
+    public Task<IDictionary<string, T?>> GetOrAddAsync<T>(Region region, Func<Task<IDictionary<string, T?>>> generator, DateTimeOffset? expiration = null, RegionCacheSetOption setOption = RegionCacheSetOption.KeyReplace, CancellationToken token = default) =>
+        Task.FromResult((IDictionary<string, T?>)ImmutableDictionary<string, T?>.Empty);
+
     public Task<bool> RefreshAsync<T>(Region region, CancellationToken token = default) =>
         Task.FromResult(false);
 

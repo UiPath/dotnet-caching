@@ -1,5 +1,4 @@
 ﻿using System.Collections.Immutable;
-using System.Data;
 using System.Runtime.CompilerServices;
 using UiPath.Platform.Caching.Telemetry;
 
@@ -145,7 +144,10 @@ public class RedisHashSetCache : IRedisRegionCache
     public Task<IDictionary<string, T?>> GetOrAddAsync<T>(Region region, Func<Task<IDictionary<string, T?>>> generator, TimeSpan? expiration = null, CancellationToken token = default) =>
         GetOrAddAsync(region, generator, ToDateTimeOffset(expiration), token);
 
-    public async Task<IDictionary<string, T?>> GetOrAddAsync<T>(Region region, Func<Task<IDictionary<string, T?>>> generator, DateTimeOffset? expiration = null, CancellationToken token = default)
+    public Task<IDictionary<string, T?>> GetOrAddAsync<T>(Region region, Func<Task<IDictionary<string, T?>>> generator, DateTimeOffset? expiration = null, CancellationToken token = default) =>
+        GetOrAddAsync(region, generator, expiration, RegionCacheSetOption.KeyReplace, token);
+
+    public async Task<IDictionary<string, T?>> GetOrAddAsync<T>(Region region, Func<Task<IDictionary<string, T?>>> generator, DateTimeOffset? expiration = null, RegionCacheSetOption setOption = RegionCacheSetOption.KeyReplace, CancellationToken token = default)
     {
         var ret = await GetAsync<T?>(region, token).ConfigureAwait(false);
         if (ret.Any())
@@ -157,7 +159,8 @@ public class RedisHashSetCache : IRedisRegionCache
         ret = await generator().ConfigureAwait(false);
         if (ret.Any())
         {
-            await SetAsync(region, ret, expiration, token).ConfigureAwait(false);
+            var options = new RegionCacheEntryOptions(expiration, default, setOption, default);
+            await SetAsync(region, ret, options, token).ConfigureAwait(false);
         }
         else
         {
@@ -338,7 +341,7 @@ public class RedisHashSetCache : IRedisRegionCache
         Validate(values);
         var redisKey = BuildRedisRegionKey(region, token);
         var hashEntries = values.Select(kv => new HashEntry(kv.Key, _serializer.Serialize(kv.Value))).ToArray();
-        return SetInnerAsync<T>(redisKey, hashEntries, ToDateTimeOffset(expiration));
+        return SetInnerAsync<T>(redisKey, hashEntries, RegionCacheSetOption.KeyReplace, ToDateTimeOffset(expiration));
     }
 
     public Task<bool> SetAsync<T>(Region region, IDictionary<string, T?> values, RegionCacheEntryOptions options, CancellationToken token = default)
@@ -353,7 +356,7 @@ public class RedisHashSetCache : IRedisRegionCache
 
         var expiration = options.ExpireTime.HasValue ? ToDateTimeOffset(options.ExpireTime) : ToDateTimeOffset(options.TimeToLive);
 
-        return SetInnerAsync<T>(redisKey, entries, expiration);
+        return SetInnerAsync<T>(redisKey, entries, options.SetOption, expiration);
     }
 
     public async Task<TimeSpan?> TimeToLiveAsync(Region region, CancellationToken token = default)
@@ -523,7 +526,7 @@ public class RedisHashSetCache : IRedisRegionCache
         return ret;
     }
 
-    private async Task<bool> SetInnerAsync<T>(RedisKey redisKey, ICollection<HashEntry> hashEntries, DateTimeOffset expiration)
+    private async Task<bool> SetInnerAsync<T>(RedisKey redisKey, ICollection<HashEntry> hashEntries, RegionCacheSetOption setOption, DateTimeOffset expiration)
     {
         var now = _clock.UtcNow;
         var ret = false;
@@ -537,7 +540,11 @@ public class RedisHashSetCache : IRedisRegionCache
             else
             {
                 var tran = Database.CreateTransaction();
-                _ = tran.KeyDeleteAsync(redisKey).ConfigureAwait(false);
+                if (setOption == RegionCacheSetOption.KeyReplace)
+                {
+                    _ = tran.KeyDeleteAsync(redisKey).ConfigureAwait(false);
+                }
+                
                 _ = tran.HashSetAsync(redisKey, hashEntries.ToArray(), CommandFlags.DemandMaster).ConfigureAwait(false);
                 if (expiration != DateTimeOffset.MaxValue)
                 {
