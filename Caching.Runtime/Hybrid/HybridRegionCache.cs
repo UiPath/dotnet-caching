@@ -295,7 +295,7 @@ public sealed class HybridRegionCache : HybridCacheBase, IHybridRegionCache
         LocalSet(options, value);
         try
         {
-            return await _innerCache.SetAsync(options.Region, value, new RegionCacheEntryOptions(options.Expiration, null, options.SetOption, options.ExtendedProperties), options.Token).ConfigureAwait(false);
+            return await _innerCache.SetAsync(options.Region, value, new RegionCacheEntryOptions(options.Expiration, null, options.ExtendedProperties, options.SetOption), options.Token).ConfigureAwait(false);
         }
         catch (Exception ex)
         {

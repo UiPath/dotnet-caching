@@ -159,7 +159,7 @@ public class RedisHashSetCache : IRedisRegionCache
         ret = await generator().ConfigureAwait(false);
         if (ret.Any())
         {
-            var options = new RegionCacheEntryOptions(expiration, default, setOption, default);
+            var options = new RegionCacheEntryOptions(expiration, default, default, setOption);
             await SetAsync(region, ret, options, token).ConfigureAwait(false);
         }
         else
