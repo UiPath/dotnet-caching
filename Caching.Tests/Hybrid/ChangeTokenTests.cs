@@ -1,4 +1,5 @@
 ﻿using Microsoft.Extensions.Logging;
+using UiPath.Platform.Caching.Broadcast;
 using UiPath.Platform.Caching.Tests.Broadcast;
 
 namespace UiPath.Platform.Caching.Tests.Hybrid;
@@ -9,8 +10,8 @@ public class ChangeTokenTests : IAsyncLifetime
 
     private string _key = default!;
     private Channel _channel = default!;
-    private IChannelSubscriber _subscriber = default!;
-    private TestEventFormatterProxy _formatter = default!;
+    private IChannelSubscriber<IClearCacheEvent> _subscriber = default!;
+    private CacheClearEventFormatterProxy _formatter = default!;
     private Uri? _source = null;
 
     private ChangeToken? _sut = null;
@@ -131,9 +132,9 @@ public class ChangeTokenTests : IAsyncLifetime
         _channel = (Channel)_fixture.Create<string>();
         _fixture.Inject(_channel);
         _fixture.Freeze<ILogger<ChangeToken>>();
-        _subscriber = _fixture.Freeze<IChannelSubscriber>();
-        _formatter = new TestEventFormatterProxy();
-        _fixture.Inject<IEventFormatterProxy>(_formatter);
+        _subscriber = _fixture.Freeze<IChannelSubscriber<IClearCacheEvent>>();
+        _formatter = new CacheClearEventFormatterProxy();
+        _fixture.Inject<IEventFormatterProxy<IClearCacheEvent>>(_formatter);
         return Task.CompletedTask;
     }
 

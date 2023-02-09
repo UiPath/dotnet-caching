@@ -3,7 +3,7 @@ using System.Text.Json;
 
 namespace UiPath.Platform.Caching.Tests.Broadcast;
 
-public class TestEventFormatterProxy : IEventFormatterProxy
+public class CacheClearEventFormatterProxy : IEventFormatterProxy<IClearCacheEvent>
 {
     public IClearCacheEvent? Decode(ReadOnlyMemory<byte> body) =>
         JsonSerializer.Deserialize<TestClearCacheEvent>(body.Span);

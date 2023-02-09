@@ -13,7 +13,7 @@ public sealed class ChangeToken : IExtendedPropertiesChangeToken, IObserver<ICle
 
     private readonly List<(Action<object?> callback, object? state)> _callbacks = new();
 
-    public ChangeToken(string key, Channel channel, IChannelSubscriber subscriber, Uri? source, ILogger<ChangeToken> logger)
+    public ChangeToken(string key, Channel channel, IChannelSubscriber<IClearCacheEvent> subscriber, Uri? source, ILogger<ChangeToken> logger)
     {
         _key = key;
         _channel = channel;

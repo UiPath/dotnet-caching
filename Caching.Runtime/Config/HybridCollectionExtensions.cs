@@ -3,6 +3,7 @@ using Microsoft.Extensions.Caching.Memory;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Logging.Abstractions;
+using UiPath.Platform.Caching.Broadcast;
 using UiPath.Platform.Caching.Hybrid;
 using UiPath.Platform.Caching.Redis;
 
@@ -71,8 +72,8 @@ public static class HybridCollectionExtensions
             {
                 builder.Services.TryAddSingleton<IChannelResolver, DefaultChannelResolver>();
                 builder.Services.TryAddSingleton<IChangeTokenFactory, ChangeTokenFactory>();
-                builder.Services.TryAddTransient(sp => sp.BuildRedisChannelSubscriber());
-                builder.Services.TryAddTransient(sp => sp.BuildRedisChannelPublisher());
+                builder.Services.TryAddTransient(sp => sp.BuildRedisChannelSubscriber<IClearCacheEvent>());
+                builder.Services.TryAddTransient(sp => sp.BuildRedisChannelPublisher<IClearCacheEvent>());
                 builder.Services.TryAddTransient(sp => sp.GetRequiredService<IRedisConnection>().Connection.GetSubscriber());
 
                 builder.Services.TryAddTransient<Func<HybridCacheOptions, IMemoryCache>>(sp => (HybridCacheOptions options) =>

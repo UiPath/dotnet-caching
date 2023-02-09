@@ -1,6 +1,6 @@
 ﻿namespace UiPath.Platform.Caching.Broadcast;
 
-public interface IChannelSubscriber
+public interface IChannelSubscriber<T>
 {
-    IDisposable Subscribe(Channel channel, IObserver<IClearCacheEvent> observer);
+    IDisposable Subscribe(Channel channel, IObserver<T> observer);
 }

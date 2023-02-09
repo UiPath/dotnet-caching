@@ -4,11 +4,11 @@ namespace UiPath.Platform.Caching.Hybrid;
 
 public sealed class ChangeTokenFactory : IChangeTokenFactory
 {
-    private readonly IChannelSubscriber _subscriber;
+    private readonly IChannelSubscriber<IClearCacheEvent> _subscriber;
     private readonly ILoggerFactory _loggerFactory;
     private readonly ILogger<ChangeTokenFactory> _logger;
 
-    public ChangeTokenFactory(IChannelSubscriber subscriber, ILoggerFactory loggerFactory)
+    public ChangeTokenFactory(IChannelSubscriber<IClearCacheEvent> subscriber, ILoggerFactory loggerFactory)
     {
         _subscriber = subscriber;
         _loggerFactory = loggerFactory;

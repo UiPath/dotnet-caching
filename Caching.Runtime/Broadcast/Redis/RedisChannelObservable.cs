@@ -1,16 +1,16 @@
 ﻿namespace UiPath.Platform.Caching.Broadcast.Redis;
 
-public class RedisChannelObservable : IObservable<IClearCacheEvent>
+public class RedisChannelObservable<T> : IObservable<T> where T : class, IPubSubEvent
 {
     private readonly Channel _channel;
     private readonly ISubscriber _subscriber;
     private readonly ILoggerFactory _loggerFactory;
-    private readonly IEventFormatterProxy _formatter;
+    private readonly IEventFormatterProxy<T> _formatter;
 
-    public RedisChannelObservable(Channel channel, ISubscriber subscriber, IEventFormatterProxy formatter, ILoggerFactory loggerFactory)
+    public RedisChannelObservable(Channel channel, ISubscriber subscriber, IEventFormatterProxy<T> formatter, ILoggerFactory loggerFactory)
         => (_channel, _subscriber, _formatter, _loggerFactory) = (channel, subscriber, formatter, loggerFactory);
 
-    public IDisposable Subscribe(IObserver<IClearCacheEvent> observer) =>
+    public IDisposable Subscribe(IObserver<T> observer) =>
         new Subscription(_channel, _subscriber, observer, _formatter, _loggerFactory.CreateLogger<Subscription>());
 
 
@@ -18,13 +18,13 @@ public class RedisChannelObservable : IObservable<IClearCacheEvent>
     {
         private readonly RedisChannel _redisChannel;
         private readonly ISubscriber _subscriber;
-        private readonly IObserver<IClearCacheEvent> _observer;
-        private readonly IEventFormatterProxy _formatter;
+        private readonly IObserver<T> _observer;
+        private readonly IEventFormatterProxy<T> _formatter;
         private readonly ILogger<Subscription> _logger;
         private readonly Action<RedisChannel, RedisValue> _handler;
         private bool _disposed;
 
-        public Subscription(Channel channel, ISubscriber subscriber, IObserver<IClearCacheEvent> observer, IEventFormatterProxy formatter, ILogger<Subscription> logger)
+        public Subscription(Channel channel, ISubscriber subscriber, IObserver<T> observer, IEventFormatterProxy<T> formatter, ILogger<Subscription> logger)
         {
             _redisChannel = (string)channel;
             _subscriber = subscriber;

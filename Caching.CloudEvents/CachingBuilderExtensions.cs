@@ -11,7 +11,7 @@ public static class CachingBuilderExtensions
 {
     public static ICachingBuilder AddCloudEvents(this ICachingBuilder builder)
     {
-        builder.Services.TryAddSingleton<IEventFormatterProxy>(sp => new EventFormatterProxy(new JsonEventFormatter<ClearCacheEventData>()));
+        builder.Services.TryAddSingleton<IEventFormatterProxy<IClearCacheEvent>>(sp => new CacheClearEventFormatterProxy(new JsonEventFormatter<ClearCacheEventData>()));
         builder.Services.TryAddSingleton<IClearCacheEventFactory, ClearCacheEventFactory>();
         return builder;
     }

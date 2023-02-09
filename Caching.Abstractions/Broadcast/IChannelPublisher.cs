@@ -1,6 +1,6 @@
 ﻿namespace UiPath.Platform.Caching.Broadcast;
 
-public interface IChannelPublisher
+public interface IChannelPublisher<in T>
 {
-    Task PublishAsync(Channel channel, IClearCacheEvent clearCacheEvent, CancellationToken token = default);
+    Task PublishAsync(Channel channel, T pubSubEvent, CancellationToken token = default);
 }

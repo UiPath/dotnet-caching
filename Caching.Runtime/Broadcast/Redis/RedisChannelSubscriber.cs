@@ -2,25 +2,25 @@
 
 namespace UiPath.Platform.Caching.Broadcast.Redis;
 
-internal class RedisChannelSubscriber : IChannelSubscriber
+internal class RedisChannelSubscriber<T> : IChannelSubscriber<T> where T : class, IPubSubEvent
 {
-    private readonly ConcurrentDictionary<Channel, IObservable<IClearCacheEvent>> _channels = new();
+    private readonly ConcurrentDictionary<Channel, IObservable<T>> _channels = new();
     private readonly ISubscriber _subscriber;
     private readonly ILoggerFactory _loggerFactory;
-    private readonly ILogger<RedisChannelSubscriber> _logger;
-    private readonly IEventFormatterProxy _formatter;
+    private readonly ILogger<RedisChannelSubscriber<T>> _logger;
+    private readonly IEventFormatterProxy<T> _formatter;
 
-    public RedisChannelSubscriber(ISubscriber subscriber, IEventFormatterProxy formatter, ILoggerFactory loggerFactory)
-         => (_subscriber, _formatter, _loggerFactory, _logger) = (subscriber, formatter, loggerFactory, loggerFactory.CreateLogger<RedisChannelSubscriber>());
+    public RedisChannelSubscriber(ISubscriber subscriber, IEventFormatterProxy<T> formatter, ILoggerFactory loggerFactory)
+         => (_subscriber, _formatter, _loggerFactory, _logger) = (subscriber, formatter, loggerFactory, loggerFactory.CreateLogger<RedisChannelSubscriber<T>>());
 
-    public IDisposable Subscribe(Channel channel, IObserver<IClearCacheEvent> observer)
+    public IDisposable Subscribe(Channel channel, IObserver<T> observer)
     {
         try
         {
             var observable = _channels.GetOrAdd(channel, c =>
             {
                 _logger.LogTrace("Observe channel {}", channel);
-                return new RedisChannelObservable(channel, _subscriber, _formatter, _loggerFactory);
+                return new RedisChannelObservable<T>(channel, _subscriber, _formatter, _loggerFactory);
             });
             _logger.LogTrace("Subscribe to channel {}", channel);
             return observable.Subscribe(observer);

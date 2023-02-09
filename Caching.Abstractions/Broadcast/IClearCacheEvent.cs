@@ -1,14 +1,8 @@
 ﻿namespace UiPath.Platform.Caching.Broadcast;
 
-public interface IClearCacheEvent
+public interface IClearCacheEvent : IPubSubEvent
 {
-    string? Id { get; }
-
-    Uri? Source { get; }
-
     ClearCacheEventData? Data { get; }
-
-    bool IsValid();
 }
 
 public interface IClearCacheEventFactory

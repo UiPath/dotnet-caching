@@ -1,14 +1,14 @@
 ﻿namespace UiPath.Platform.Caching.Broadcast;
 
-public interface IEventFormatterProxy
+public interface IEventFormatterProxy<T> where T : class, IPubSubEvent
 {
-    IClearCacheEvent? Decode(string body) =>
+    T? Decode(string body) =>
         Decode(new ReadOnlyMemory<byte>(Encoding.UTF8.GetBytes(body.ToString())));
 
-    IClearCacheEvent? Decode(ReadOnlyMemory<byte> body);
+    T? Decode(ReadOnlyMemory<byte> body);
 
-    ReadOnlyMemory<byte> Encode(IClearCacheEvent clearCacheEvent);
+    ReadOnlyMemory<byte> Encode(T @event);
 
-    string? EncodeAsString(IClearCacheEvent clearCacheEvent) =>
-        Encoding.UTF8.GetString(Encode(clearCacheEvent).Span);
+    string? EncodeAsString(T @event) =>
+        Encoding.UTF8.GetString(Encode(@event).Span);
 }

@@ -17,7 +17,7 @@ public abstract class HybridCacheBase : CacheBase, IDisposable
     protected HybridCacheBase(
         Func<HybridCacheOptions, IMemoryCache> memoryCacheAccessor,
         IChangeTokenFactory changeTokenFactory,
-        IChannelPublisher channelPublisher,
+        IChannelPublisher<IClearCacheEvent> channelPublisher,
         IChannelResolver channelResolver,
         IClearCacheEventFactory clearCacheEventFactory,
         ICachingTelemetryProvider telemetryProvider,
@@ -38,7 +38,7 @@ public abstract class HybridCacheBase : CacheBase, IDisposable
 
     protected IChangeTokenFactory ChangeTokenFactory { get; private set; }
 
-    protected IChannelPublisher ChannelPublisher { get; private set; }
+    protected IChannelPublisher<IClearCacheEvent> ChannelPublisher { get; private set; }
 
     protected IMemoryCache MemoryCache { get; private set; }
 

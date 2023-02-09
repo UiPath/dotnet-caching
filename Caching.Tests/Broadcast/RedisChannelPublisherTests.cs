@@ -11,18 +11,17 @@ public class RedisChannelPublisherTests : IAsyncLifetime
     private IDatabase _database = default!;
     private string _channel = default!;
     private string _value = default!;
-    private TestEventFormatterProxy _formatter = default!;
+    private PubSubEventFormatterProxy _formatter = default!;
 
     [Fact]
     public async Task Canceling_token_stops_execution()
     {
-        var sut = _fixture.Create<RedisChannelPublisher>();
+        var sut = _fixture.Create<RedisChannelPublisher<IPubSubEvent>>();
         Channel channel = _fixture.Create<string>();
-        var cloudEvent = new TestClearCacheEvent
+        var cloudEvent = new TestPubSubEvent
         {
             Id = Guid.NewGuid().ToString(),
-            Source = new Uri("urn:machine"),
-            Data = new ClearCacheEventData(Guid.NewGuid().ToString())
+            Source = new Uri("urn:machine")
         };
         var cancelSource = new CancellationTokenSource();
         var token = cancelSource.Token;
@@ -34,13 +33,12 @@ public class RedisChannelPublisherTests : IAsyncLifetime
     [Fact]
     public async Task No_exceptions_are_thrown_when_redis_fails()
     {
-        var sut = _fixture.Create<RedisChannelPublisher>();
+        var sut = _fixture.Create<RedisChannelPublisher<IPubSubEvent>>();
         Channel channel = _fixture.Create<string>();
-        var cloudEvent = new TestClearCacheEvent
+        var cloudEvent = new TestPubSubEvent
         {
             Id = Guid.NewGuid().ToString(),
-            Source = new Uri("urn:machine"),
-            Data = new ClearCacheEventData(Guid.NewGuid().ToString())
+            Source = new Uri("urn:machine")
         };
         _database.ClearReceivedCalls();
         _database.PublishAsync(Arg.Any<RedisChannel>(), Arg.Any<RedisValue>(), Arg.Any<CommandFlags>())
@@ -54,13 +52,12 @@ public class RedisChannelPublisherTests : IAsyncLifetime
     [Fact]
     public async Task Publish_works_as_expected()
     {
-        var sut = _fixture.Create<RedisChannelPublisher>();
+        var sut = _fixture.Create<RedisChannelPublisher<IPubSubEvent>>();
         Channel channel = _fixture.Create<string>();
-        var cloudEvent = new TestClearCacheEvent
+        var cloudEvent = new TestPubSubEvent
         {
             Id = Guid.NewGuid().ToString(),
-            Source = new Uri("urn:machine"),
-            Data = new ClearCacheEventData(Guid.NewGuid().ToString())
+            Source = new Uri("urn:machine")
         };
         _database.ClearReceivedCalls();
         var executed = false;
@@ -90,9 +87,9 @@ public class RedisChannelPublisherTests : IAsyncLifetime
                 _channel = c.Arg<RedisChannel>()!;
                 return 1;
             });
-        _formatter = new TestEventFormatterProxy();
-        _fixture.Inject<IEventFormatterProxy>(_formatter);
-        _fixture.Inject<ILogger<RedisChannelPublisher>>(NullLogger<RedisChannelPublisher>.Instance);
+        _formatter = new PubSubEventFormatterProxy();
+        _fixture.Inject<IEventFormatterProxy<IPubSubEvent>>(_formatter);
+        _fixture.Inject<ILogger<RedisChannelPublisher<IPubSubEvent>>>(NullLogger<RedisChannelPublisher<IPubSubEvent>>.Instance);
         return Task.CompletedTask;
     }
 }

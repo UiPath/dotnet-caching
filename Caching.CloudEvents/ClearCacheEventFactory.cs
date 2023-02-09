@@ -8,7 +8,7 @@ public class ClearCacheEventFactory : IClearCacheEventFactory
     internal static readonly Uri MachineUri = new($"urn:{Environment.MachineName}");
 
     public IClearCacheEvent Create(ClearCacheEventData eventData, Uri? sourceUri = null, string? id = null) =>
-        new CloudEventWrapper(new()
+        new CacheClearCloudEventWrapper(new()
         {
             Id = id ?? Guid.NewGuid().ToString(),
             Type = CloudEventTypes.ClearCache,

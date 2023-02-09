@@ -15,7 +15,7 @@ public sealed class HybridRegionCache : HybridCacheBase, IHybridRegionCache
         IRegionCache innerCache,
         Func<HybridCacheOptions, IMemoryCache> memoryCacheAccessor,
         IChangeTokenFactory changeTokenFactory,
-        IChannelPublisher channelPublisher,
+        IChannelPublisher<IClearCacheEvent> channelPublisher,
         IChannelResolver channelResolver,
         IClearCacheEventFactory clearCacheEventFactory,
         ICachingTelemetryProvider telemetryProvider,

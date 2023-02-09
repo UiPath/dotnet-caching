@@ -33,7 +33,7 @@ public static class ServiceProviderExtensions
         config ??= Options.Create(new HybridCacheOptions());
         var memoryCacheAccessor = serviceProvider.GetRequiredService<Func<HybridCacheOptions, IMemoryCache>>();
         var changeTokenFactory = serviceProvider.GetRequiredService<IChangeTokenFactory>();
-        var channelPublisher = serviceProvider.GetRequiredService<IChannelPublisher>();
+        var channelPublisher = serviceProvider.GetRequiredService<IChannelPublisher<IClearCacheEvent>>();
         var channelResolver = serviceProvider.GetRequiredService<IChannelResolver>();
         var clearCacheEventFactory = serviceProvider.GetRequiredService<IClearCacheEventFactory>();
         var loggerFactory = serviceProvider.GetService<ILoggerFactory>();
@@ -79,7 +79,7 @@ public static class ServiceProviderExtensions
         config ??= Options.Create(new HybridCacheOptions());
         var memoryCacheAccessor = serviceProvider.GetRequiredService<Func<HybridCacheOptions, IMemoryCache>>();
         var changeTokenFactory = serviceProvider.GetRequiredService<IChangeTokenFactory>();
-        var channelPublisher = serviceProvider.GetRequiredService<IChannelPublisher>();
+        var channelPublisher = serviceProvider.GetRequiredService<IChannelPublisher<IClearCacheEvent>>();
         var channelResolver = serviceProvider.GetRequiredService<IChannelResolver>();
         var clearCacheEventFactory = serviceProvider.GetRequiredService<IClearCacheEventFactory>();
 
@@ -100,21 +100,21 @@ public static class ServiceProviderExtensions
             logger);
     }
 
-    public static IChannelSubscriber BuildRedisChannelSubscriber(this IServiceProvider serviceProvider)
+    public static IChannelSubscriber<T> BuildRedisChannelSubscriber<T>(this IServiceProvider serviceProvider) where T : class, IPubSubEvent
     {
         var subscriber = serviceProvider.GetRequiredService<ISubscriber>();
-        var eventFormatter = serviceProvider.GetRequiredService<IEventFormatterProxy>();
+        var eventFormatter = serviceProvider.GetRequiredService<IEventFormatterProxy<T>>();
         var loggerFactory = serviceProvider.GetService<ILoggerFactory>() ?? NullLoggerFactory.Instance;
-        return new RedisChannelSubscriber(subscriber, eventFormatter, loggerFactory);
+        return new RedisChannelSubscriber<T>(subscriber, eventFormatter, loggerFactory);
     }
 
-    public static IChannelPublisher BuildRedisChannelPublisher(this IServiceProvider serviceProvider)
+    public static IChannelPublisher<T> BuildRedisChannelPublisher<T>(this IServiceProvider serviceProvider) where T : class, IPubSubEvent
     {
         var databaseAccessor = serviceProvider.GetRequiredService<Func<IDatabase>>();
-        var eventFormatter = serviceProvider.GetRequiredService<IEventFormatterProxy>();
+        var eventFormatter = serviceProvider.GetRequiredService<IEventFormatterProxy<T>>();
         var loggerFactory = serviceProvider.GetService<ILoggerFactory>();
-        var logger = loggerFactory?.CreateLogger<RedisChannelPublisher>() ?? NullLogger<RedisChannelPublisher>.Instance;
-        return new RedisChannelPublisher(databaseAccessor, eventFormatter, logger);
+        var logger = loggerFactory?.CreateLogger<RedisChannelPublisher<T>>() ?? NullLogger<RedisChannelPublisher<T>>.Instance;
+        return new RedisChannelPublisher<T>(databaseAccessor, eventFormatter, logger);
     }
 
     public static IRedisCache<T> BuildRedisCache<T>(this IServiceProvider serviceProvider) where T : class =>

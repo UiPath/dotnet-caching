@@ -15,11 +15,11 @@ public class HybridCacheTests : IAsyncLifetime
     private ICachingTelemetryProvider _cachingTelemetryProvider = default!;
     private ITelemetryOperation _telemetryOperation = default!;
     private IChangeTokenFactory _changeTokenFactory = default!;
-    private IChannelPublisher _channelPublisher = default!;
+    private IChannelPublisher<IClearCacheEvent> _channelPublisher = default!;
     private IChannelResolver _channelResolver = default!;
     private IMemoryCache _memoryCache = default!;
     private ISystemClock _clock = default!;
-    private IEventFormatterProxy _formatter = default!;
+    private IEventFormatterProxy<IClearCacheEvent> _formatter = default!;
     private IClearCacheEventFactory _cacheEventFactory = default!;
     private HybridCacheOptions _hybridCacheOptions = default!;
 
@@ -527,7 +527,7 @@ public class HybridCacheTests : IAsyncLifetime
     public Task InitializeAsync()
     {
         _changeTokenFactory = _fixture.Freeze<IChangeTokenFactory>();
-        _channelPublisher = _fixture.Freeze<IChannelPublisher>();
+        _channelPublisher = _fixture.Freeze<IChannelPublisher<IClearCacheEvent>>();
         _channelResolver = _fixture.Freeze<IChannelResolver>();
         _memoryCache = _fixture.Freeze<IMemoryCache>();
         _innerCache = _fixture.Freeze<ICache>();
@@ -544,7 +544,7 @@ public class HybridCacheTests : IAsyncLifetime
         _channelResolver.GetFor<object>(Arg.Any<string>()).Returns((Channel)_hybridCacheOptions.ChannelPrefix);
         _channelResolver.GetFor(Arg.Any<Type>(), Arg.Any<string>()).Returns((Channel)_hybridCacheOptions.ChannelPrefix);
         _fixture.Inject(Options.Create(_hybridCacheOptions));
-        _formatter = new TestEventFormatterProxy();
+        _formatter = new CacheClearEventFormatterProxy();
         _fixture.Inject(_formatter);
         _cacheEventFactory = _fixture.Freeze<IClearCacheEventFactory>();
         _cacheEventFactory.Create(Arg.Any<ClearCacheEventData>(), Arg.Any<Uri?>(), Arg.Any<string?>())

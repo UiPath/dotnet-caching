@@ -1,31 +1,21 @@
-﻿using CloudNative.CloudEvents;
+﻿using System;
+using System.Collections.Generic;
+using System.Linq;
+using System.Text;
+using System.Threading.Tasks;
+using CloudNative.CloudEvents;
 using UiPath.Platform.Caching.Broadcast;
 
 namespace UiPath.Platform.Caching.CloudEvents;
 
-internal sealed class CloudEventWrapper : IClearCacheEvent
+public abstract class CloudEventWrapper : IPubSubEvent
 {
-    public CloudEventWrapper(CloudEvent cloudEvent)
-    {
-        CloudEvent = cloudEvent;
-        Data = CloudEvent.Data as ClearCacheEventData;
-    }
-    internal CloudEvent CloudEvent { get; private set; }
+    public abstract string? Id { get; set; }
 
-    public bool IsValid()
-    {
-        if (!CloudEvent.IsValid)
-        {
-            return false;
-        }
+    public abstract Uri? Source { get; set; }
 
-        return string.Equals(CloudEvent.Type, CloudEventTypes.ClearCache, StringComparison.InvariantCultureIgnoreCase)
-            && CloudEvent.Data is ClearCacheEventData data && data != null;
-    }
+    public abstract bool IsValid();
 
-    public string? Id => CloudEvent.Id;
 
-    public Uri? Source => CloudEvent.Source;
-
-    public ClearCacheEventData? Data { get; }
+    public abstract CloudEvent CloudEvent { get; }
 }
