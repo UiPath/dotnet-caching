@@ -3,5 +3,5 @@
 public record struct RegionCacheEntryOptions(
     DateTimeOffset? ExpireTime = default,
     TimeSpan? TimeToLive = default,
-    RegionCacheSetOption SetOption = RegionCacheSetOption.KeyReplace,
-    IDictionary<string, string?>? ExtendedProperties = null);
+    IDictionary<string, string?>? ExtendedProperties = null,    
+    RegionCacheSetOption SetOption = RegionCacheSetOption.KeyReplace);
