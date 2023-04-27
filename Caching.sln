@@ -15,7 +15,19 @@ Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "Caching.Polly", "Caching.Po
 EndProject
 Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "Caching.CloudEvents", "Caching.CloudEvents\Caching.CloudEvents.csproj", "{7F2F7166-D11D-4E91-8FC0-D962FF319440}"
 EndProject
-Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Caching.Telemetry", "Caching.Telemetry\Caching.Telemetry.csproj", "{02462BA6-66F9-49D0-A42F-BDE5F6FB86AD}"
+Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "Caching.Telemetry", "Caching.Telemetry\Caching.Telemetry.csproj", "{02462BA6-66F9-49D0-A42F-BDE5F6FB86AD}"
+EndProject
+Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "Solution Items", "Solution Items", "{AB162B2E-38DD-4580-A0DE-B40F3AC9E8D0}"
+	ProjectSection(SolutionItems) = preProject
+		.editorconfig = .editorconfig
+		.vsts-ci.yml = .vsts-ci.yml
+		Directory.Build.props = Directory.Build.props
+		GitVersion.yml = GitVersion.yml
+		global.json = global.json
+		NuGet.Config = NuGet.Config
+		README.md = README.md
+		Versions.props = Versions.props
+	EndProjectSection
 EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
