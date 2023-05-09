@@ -1,6 +1,4 @@
-﻿using StackExchange.Redis.Profiling;
-
-namespace UiPath.Platform.Caching.Redis;
+﻿namespace UiPath.Platform.Caching.Redis;
 
 public class RedisConnection : IRedisConnection
 {
@@ -14,7 +12,7 @@ public class RedisConnection : IRedisConnection
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
         var readSettings = (optionsAccessor ?? throw new ArgumentNullException(nameof(optionsAccessor))).Value;
         var configuration = BuildConfiguration(readSettings);
-        _connection = new Lazy<IConnectionMultiplexer>(() => Connect(configuration, readSettings.ProfilingSession));
+        _connection = new Lazy<IConnectionMultiplexer>(() => Connect(configuration));
     }
 
     public IConnectionMultiplexer Connection => _connection.Value;
@@ -30,15 +28,10 @@ public class RedisConnection : IRedisConnection
         GC.SuppressFinalize(this);
     }
 
-    private IConnectionMultiplexer Connect(ConfigurationOptions configuration, Func<ProfilingSession>? profiler)
+    private IConnectionMultiplexer Connect(ConfigurationOptions configuration)
     {
-        _logger.LogDebug($"Connecting to redis");
-        var cnn = _multiplexerBuilder(configuration);
-        if (profiler != null)
-        {
-            cnn.RegisterProfiler(profiler);
-        }
-        return cnn;
+        _logger.LogDebug("Connecting to redis");
+        return _multiplexerBuilder(configuration);
     }
 
     private static ConfigurationOptions BuildConfiguration(RedisConnectionOptions options)

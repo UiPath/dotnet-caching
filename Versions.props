@@ -21,7 +21,8 @@
     <Polly>7.2.3</Polly>
     <System>4.3.0</System>
     <NuGetVersion>6.3.1</NuGetVersion>
-    <UiPathTelemetry>1.2.0-beta1200-0410</UiPathTelemetry>
+    <UiPathTelemetry>1.2.0-beta1301-0419</UiPathTelemetry>
+    <UiPathLaunchDarkly>1.0.49-beta</UiPathLaunchDarkly>
 </PropertyGroup>
 
   <PropertyGroup Label="Test Libraries">

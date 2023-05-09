@@ -1,5 +1,4 @@
 ﻿using System.Diagnostics.CodeAnalysis;
-using StackExchange.Redis.Profiling;
 
 namespace UiPath.Platform.Caching.Redis;
 
@@ -12,5 +11,4 @@ public class RedisConnectionOptions
 
     public TimeSpan? HeartbeatInterval { get; set; }
 
-    public Func<ProfilingSession>? ProfilingSession { get; set; }
 }
