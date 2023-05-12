@@ -18,7 +18,6 @@ public class RedisConnectionTests : IAsyncLifetime
     {
         var conection = new RedisConnection(optionsAccessor, multiplexerBuilder, logger);
         conection.Connection.Should().NotBeNull();
-        multiplexer.Received(1).RegisterProfiler(Arg.Any<Func<ProfilingSession>>());
         conection.Dispose();
     }
 

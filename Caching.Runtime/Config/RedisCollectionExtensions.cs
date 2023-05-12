@@ -1,6 +1,7 @@
 ﻿using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 using UiPath.Platform.Caching.Redis;
+using UiPath.Platform.Caching.Telemetry;
 
 namespace UiPath.Platform.Caching.Config;
 
@@ -11,7 +12,17 @@ public static class RedisCollectionExtensions
         RedisConnectionOptions redisConnectionOptions = new RedisConnectionOptions();
         configureOptions(redisConnectionOptions);
         builder.Services.Configure(configureOptions);
-        builder.Services.TryAddTransient<Func<ConfigurationOptions, IConnectionMultiplexer>>(sp => (ConfigurationOptions options) => ConnectionMultiplexer.Connect(options));
+        
+        builder.Services.TryAddTransient<Func<ConfigurationOptions, IConnectionMultiplexer>>(sp => (ConfigurationOptions options) => {
+            var cnn = ConnectionMultiplexer.Connect(options);
+            var profiler = sp.GetService<IRedisProfiler>();
+            if(profiler != null)
+            {
+                cnn.RegisterProfiler(profiler.GetSession);
+            }
+            return cnn;
+        });
+        
         builder.Services.TryAddSingleton<IRedisConnection, RedisConnection>();
         builder.Services.TryAddTransient<Func<IDatabase>>(sp => () => sp.GetRequiredService<IRedisConnection>().Connection.GetDatabase());
         return builder;
@@ -25,6 +36,16 @@ public static class RedisCollectionExtensions
         }
 
         return builder;
+    }
+
+    public static ICachingBuilder AddRedisProfiler(this ICachingBuilder cachingBuilder, bool enabled = false)
+    {
+        if (enabled)
+        {
+            cachingBuilder.Services.AddSingleton<IRedisProfiler, RedisProfiler>();
+        }
+
+        return cachingBuilder;
     }
 
     public static ICachingBuilder AddRedisCache(this ICachingBuilder builder, RedisCacheOptions? options = null, bool isDefault = false)

@@ -1,7 +1,6 @@
 ## Caching
 UiPath Distributed Caching using Redis. Contains L2 caching using CloudEvents for synchronization
 
-More documentation https://uipath.atlassian.net/wiki/x/bonSZw
 
 ## Branches and pull requests
 Branches should follow a few naming conventions:
