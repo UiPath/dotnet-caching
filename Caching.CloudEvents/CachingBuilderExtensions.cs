@@ -1,7 +1,4 @@
-﻿using System.Diagnostics.CodeAnalysis;
-using CloudNative.CloudEvents.SystemTextJson;
-using Microsoft.Extensions.DependencyInjection.Extensions;
-using UiPath.Platform.Caching.Broadcast;
+﻿using CloudNative.CloudEvents.SystemTextJson;
 using UiPath.Platform.Caching.Config;
 
 namespace UiPath.Platform.Caching.CloudEvents;
@@ -11,8 +8,11 @@ public static class CachingBuilderExtensions
 {
     public static ICachingBuilder AddCloudEvents(this ICachingBuilder builder)
     {
-        builder.Services.TryAddSingleton<IEventFormatterProxy<IClearCacheEvent>>(sp => new CacheClearEventFormatterProxy(new JsonEventFormatter<ClearCacheEventData>()));
-        builder.Services.TryAddSingleton<IClearCacheEventFactory, ClearCacheEventFactory>();
+        if(builder.Enabled)
+        {
+            builder.Services.TryAddSingleton<IEventFormatterProxy<ICacheEvent>>(sp => new CacheEventFormatterProxy(new JsonEventFormatter<CacheEventData>()));
+            builder.Services.TryAddSingleton<ICacheEventFactory, CloudCacheEventFactory>();
+        }
         return builder;
     }
 }

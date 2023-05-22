@@ -1,5 +1,8 @@
-﻿namespace UiPath.Platform.Caching.Telemetry;
+﻿using System.Diagnostics.CodeAnalysis;
 
+namespace UiPath.Platform.Caching.Telemetry;
+
+[ExcludeFromCodeCoverage]
 public class NullTelemetryOperation : ITelemetryOperation
 {
     public static readonly NullTelemetryOperation Instance = new();

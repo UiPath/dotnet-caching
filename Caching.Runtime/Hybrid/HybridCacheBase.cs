@@ -1,25 +1,18 @@
-﻿using System.Globalization;
-using Microsoft.Extensions.Caching.Memory;
-using UiPath.Platform.Caching.Broadcast;
-using UiPath.Platform.Caching.Telemetry;
+﻿using UiPath.Platform.Caching.Telemetry;
 
 namespace UiPath.Platform.Caching.Hybrid;
 
 public abstract class HybridCacheBase : CacheBase, IDisposable
 {
-    private readonly string StatsMetricName;
-    private PeriodicTimer? _timer;
     private bool _disposed;
-#pragma warning disable IDE0052 // Remove unread private members
-    private readonly Task _monitorMemoryCacheTask;
-#pragma warning restore IDE0052 // Remove unread private members
+    private readonly IDisposable? _monitor;
 
     protected HybridCacheBase(
         Func<HybridCacheOptions, IMemoryCache> memoryCacheAccessor,
         IChangeTokenFactory changeTokenFactory,
-        IChannelPublisher<IClearCacheEvent> channelPublisher,
+        IChannelPublisher<ICacheEvent> channelPublisher,
         IChannelResolver channelResolver,
-        IClearCacheEventFactory clearCacheEventFactory,
+        ICacheEventFactory clearCacheEventFactory,
         ICachingTelemetryProvider telemetryProvider,
         IOptions<HybridCacheOptions> optionsAccessor)
         : base(optionsAccessor.Value)
@@ -31,20 +24,22 @@ public abstract class HybridCacheBase : CacheBase, IDisposable
         ChannelResolver = channelResolver;
         ClearCacheEventFactory = clearCacheEventFactory;
         TelemetryProvider = telemetryProvider;
-        StatsMetricName = "Caching.MemoryCache." + GetType().Name + ".MemoryCacheStatistics";
-        _monitorMemoryCacheTask = Task.Run(MonitorMemoryCache);
-
+        if (CacheOptions.TrackStatistics && MemoryCache is MemoryCache memCache)
+        {
+            var statsMetricName = "Caching.MemoryCache." + GetType().Name + ".MemoryCacheStatistics";
+            _monitor = new CacheMemoryMonitor(statsMetricName, CacheOptions.StatisticsFlushInterval, memCache, TelemetryProvider);
+        }
     }
 
     protected IChangeTokenFactory ChangeTokenFactory { get; private set; }
 
-    protected IChannelPublisher<IClearCacheEvent> ChannelPublisher { get; private set; }
+    protected IChannelPublisher<ICacheEvent> ChannelPublisher { get; private set; }
 
     protected IMemoryCache MemoryCache { get; private set; }
 
     protected IChannelResolver ChannelResolver { get; private set; }
 
-    protected IClearCacheEventFactory ClearCacheEventFactory { get; private set; }
+    protected ICacheEventFactory ClearCacheEventFactory { get; private set; }
 
     protected ICachingTelemetryProvider TelemetryProvider { get; private set; }
 
@@ -65,45 +60,13 @@ public abstract class HybridCacheBase : CacheBase, IDisposable
 
         if (disposing)
         {
-            _timer?.Dispose();
+            _monitor?.Dispose();
             MemoryCache?.Dispose();
         }
 
         _disposed = true;
     }
 
-    protected virtual IClearCacheEvent CreateEvent(ClearCacheEventData eventData) =>
-        ClearCacheEventFactory.Create(eventData, CacheOptions.SourceUri);
-
-    private async Task MonitorMemoryCache()
-    {
-        if (!CacheOptions.TrackStatistics)
-        {
-            return;
-        }
-
-        _timer = new PeriodicTimer(CacheOptions.StatisticsFlushInterval);
-        while (!_disposed && await _timer.WaitForNextTickAsync())
-        {
-            if (MemoryCache is MemoryCache mc)
-            {
-                MemoryCacheStatistics? currentStats = mc.GetCurrentStatistics();
-                if (currentStats != null)
-                {
-
-                    TelemetryProvider.TrackMetric(StatsMetricName, currentStats.CurrentEntryCount, new Dictionary<string, string>
-                    {
-                        { "CurrentEntryCount", currentStats.CurrentEntryCount.ToString(CultureInfo.InvariantCulture) },
-                        { "CurrentEstimatedSize", currentStats.CurrentEstimatedSize.GetValueOrDefault().ToString(CultureInfo.InvariantCulture) },
-                        { "TotalHits", currentStats.TotalHits.ToString(CultureInfo.InvariantCulture) },
-                        { "TotalMisses", currentStats.TotalMisses.ToString(CultureInfo.InvariantCulture) },
-                    });
-                }
-            }
-            else
-            {
-                _timer.Dispose();
-            }
-        }
-    }
+    protected virtual ICacheEvent CreateEvent(CacheEventData eventData) =>
+        ClearCacheEventFactory.Create(KnownEventTypes.ClearCache, eventData);
 }

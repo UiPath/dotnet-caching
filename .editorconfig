@@ -61,7 +61,7 @@ dotnet_naming_style.pascal_case_style.capitalization             = pascal_case
 # Use PascalCase for constant fields
 dotnet_naming_rule.constant_fields_should_be_pascal_case.severity = suggestion
 dotnet_naming_rule.constant_fields_should_be_pascal_case.symbols  = constant_fields
-dotnet_naming_rule.constant_fields_should_be_pascal_case.style    = pascal_case_style
+dotnet_naming_rule.constant_fields_should_be_pascal_case.style = pascal_case_style
 dotnet_naming_symbols.constant_fields.applicable_kinds            = field
 dotnet_naming_symbols.constant_fields.applicable_accessibilities  = *
 dotnet_naming_symbols.constant_fields.required_modifiers          = const
@@ -76,6 +76,9 @@ dotnet_naming_symbols.instance_fields.applicable_kinds = field
 
 dotnet_naming_style.instance_field_style.capitalization = camel_case
 dotnet_naming_style.instance_field_style.required_prefix = _
+dotnet_style_operator_placement_when_wrapping = beginning_of_line
+tab_width = 4
+end_of_line = crlf
 
 
 ###############################
@@ -138,7 +141,7 @@ csharp_space_between_method_call_empty_parameter_list_parentheses = false
 csharp_preserve_single_line_statements = true
 csharp_preserve_single_line_blocks = true
 
-csharp_style_namespace_declarations=file_scoped
+csharp_style_namespace_declarations= file_scoped:silent
 dotnet_diagnostic.IDE0160.severity = error
 dotnet_diagnostic.IDE0161.severity = error
 
@@ -422,8 +425,16 @@ dotnet_diagnostic.CS8602.severity = error
 # CS8603: Possible null reference return.
 dotnet_diagnostic.CS8603.severity = error
 
+# CS9057: The analyzer assembly ‘{0}’ references version ‘{1}’ of the compiler, which is newer than the currently running version ‘{2}’.
+dotnet_diagnostic.CS9057.severity = warning
+
 # S107: Methods should not have too many parameters
 dotnet_diagnostic.S107.severity = none
 
-
+csharp_using_directive_placement = outside_namespace:silent
+csharp_prefer_simple_using_statement = true:suggestion
+csharp_style_prefer_method_group_conversion = true:silent
+csharp_style_prefer_top_level_statements = true:silent
+csharp_style_expression_bodied_lambdas = true:silent
+csharp_style_expression_bodied_local_functions = false:silent
 

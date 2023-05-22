@@ -1,12 +1,4 @@
-﻿using System;
-using System.Collections.Generic;
-using System.Linq;
-using System.Text;
-using System.Threading.Tasks;
-using CloudNative.CloudEvents;
-using UiPath.Platform.Caching.Broadcast;
-
-namespace UiPath.Platform.Caching.CloudEvents;
+﻿namespace UiPath.Platform.Caching.CloudEvents;
 
 public abstract class CloudEventWrapper : IPubSubEvent
 {
@@ -18,4 +10,6 @@ public abstract class CloudEventWrapper : IPubSubEvent
 
 
     public abstract CloudEvent CloudEvent { get; }
+
+    public abstract string? Type { get; set; }
 }

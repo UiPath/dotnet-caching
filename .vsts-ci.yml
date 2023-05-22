@@ -18,17 +18,23 @@ pr:
     include:
       - Caching/*
 
+resources:
+  repositories:
+    - repository: sonar
+      type: github
+      name: UiPath/AzurePipelinesTemplates
+      ref: refs/tags/uipath.sonar-coverage.1.3.0
+      endpoint: 'UiPath'
+
 variables:
   OrganizationName: "uipath"
   BuildDefinitionName: $(Build.DefinitionName)
   ProjectShortName: "Caching"
   ProjectName: "Caching"
   GitVersion.SemVer: ''
-  build_counter: $[counter('build_counter_1_0_0', 1)]
 
 stages:
   - stage: 'CI'
-    
     jobs:
     - job: BuildCachingLibrary
       displayName: Caching - Build & Run tests
@@ -41,7 +47,7 @@ stages:
         BuildConfiguration: "Release"
         BuildPlatform: "Any CPU"
         MSBuildArguments: "/p:DeployOnBuild=True;PublishProfile=local /p:GetVersion=false /p:GenerateGitVersionInformation=false /p:UpdateVersionProperties=false"
-        Solution: "$(Build.SourcesDirectory)\\Caching\\Caching.sln"
+        Solution: "$(Build.SourcesDirectory)/Caching/Caching.sln"
         VSVersion: "17.0"
         ArtifactsOutputPath: "Packages"
         Build.Repository.Clean: true
@@ -50,10 +56,10 @@ stages:
       - task: UseGitVersion@5
         displayName: gitversion
         inputs:
-          versionSpec: '5.10.3'
+          versionSpec: '5.x'
           useConfigFile: true
-          configFilePath: '$(Build.SourcesDirectory)\\Caching\\GitVersion.yml'
-          updateAssemblyInfoFilename: '$(Build.SourcesDirectory)\\Caching\\GlobalAssemblyInfo.cs'
+          configFilePath: '$(Build.SourcesDirectory)/Caching/GitVersion.yml'
+          updateAssemblyInfoFilename: '$(Build.SourcesDirectory)/Caching/GlobalAssemblyInfo.cs'
           updateAssemblyInfo: true
 
       - powershell: |
@@ -84,6 +90,13 @@ stages:
           command: 'restore'
           restoreSolution: "$(Solution)"
           feedsToUse: "config"
+          nugetConfigPath: "$(Build.SourcesDirectory)/Caching/NuGet.Config"
+
+      - template: /Sonar/prepare-sonar-coverage.yml@sonar
+        parameters:
+          projectKey: 'UiPath_ServiceCommon-Caching'
+          serviceConnectionName: SonarConnection
+          runsettingsFile: "$(Build.SourcesDirectory)/Caching/CodeCoverage.runsettings"
 
       - task: VSBuild@1
         displayName: "Build Solution"
@@ -96,21 +109,16 @@ stages:
           clean: true
           maximumCpuCount: true
 
-      - task: VisualStudioTestPlatformInstaller@1
-        displayName: "Install Visual Studio Test Platform"
-        condition: succeeded()
-
-      - task: VSTest@2
-        displayName: "Run tests"
+      - task: DotNetCoreCLI@2
+        displayName: 'Run tests'
         inputs:
-          testAssemblyVer2: "**\\*Tests.dll\n!**\\obj\\**"
-          testRunTitle: "Unit Tests"
-          platform: "$(BuildPlatform)"
-          configuration: "$(BuildConfiguration)"
-          searchFolder: "$(Build.SourcesDirectory)\\Caching"
-          vsTestVersion: toolsInstaller
-          codeCoverageEnabled: true
-        condition: succeeded()
+          command: 'test'
+          projects: 'Caching/**/*.Tests.csproj'
+          arguments: '--collect "Code coverage" --logger trx --configuration $(BuildConfiguration)'
+
+      - template: /Sonar/analyze-sonar-coverage.yml@sonar
+
+      - template: /Sonar/publish-sonar-coverage.yml@sonar
 
       - task: DotNetCoreCLI@2
         displayName: "Create Package"
@@ -129,7 +137,7 @@ stages:
         displayName: 'Publish Artifact: UiPath.Platform.Caching'
         inputs:
           ArtifactName: Caching
-          PathtoPublish: "$(Build.SourcesDirectory)\\$(ArtifactsOutputPath)"
+          PathtoPublish: "$(Build.SourcesDirectory)/$(ArtifactsOutputPath)"
 
   - stage: 'FEATURE'
     dependsOn: [ 'CI' ]
@@ -153,8 +161,8 @@ stages:
                   displayName: 'NuGet push - UiPath.Platform.Caching'
                   inputs:
                     command: push
-                    packagesToPush: '$(Agent.BuildDirectory)\Caching\*.nupkg'
-                    publishVstsFeed: '1d71f16a-8504-4895-a839-687a1a4819d4'           
+                    packagesToPush: '$(Agent.BuildDirectory)/Caching/*.nupkg'
+                    publishVstsFeed: '1d71f16a-8504-4895-a839-687a1a4819d4'
 
   - stage: 'ALPHA'
     dependsOn: [ 'CI' ]
@@ -176,8 +184,8 @@ stages:
                   displayName: 'NuGet push - UiPath.Platform.Caching'
                   inputs:
                     command: push
-                    packagesToPush: '$(Agent.BuildDirectory)\Caching\*.nupkg'
-                    publishVstsFeed: '1d71f16a-8504-4895-a839-687a1a4819d4'  
+                    packagesToPush: '$(Agent.BuildDirectory)/Caching/*.nupkg'
+                    publishVstsFeed: '1d71f16a-8504-4895-a839-687a1a4819d4'
 
   - stage: 'BETA'
     dependsOn: [ 'CI' ]
@@ -199,8 +207,8 @@ stages:
                   displayName: 'NuGet push - UiPath.Platform.Caching'
                   inputs:
                     command: push
-                    packagesToPush: '$(Agent.BuildDirectory)\Caching\*.nupkg'
-                    publishVstsFeed: '1d71f16a-8504-4895-a839-687a1a4819d4'  
+                    packagesToPush: '$(Agent.BuildDirectory)/Caching/*.nupkg'
+                    publishVstsFeed: '1d71f16a-8504-4895-a839-687a1a4819d4'
 
   - stage: 'RELEASE'
     dependsOn: [ 'CI' ]
@@ -222,6 +230,5 @@ stages:
                   displayName: 'NuGet push - UiPath.Platform.Caching'
                   inputs:
                     command: push
-                    packagesToPush: '$(Agent.BuildDirectory)\Caching\*.nupkg'
+                    packagesToPush: '$(Agent.BuildDirectory)/Caching/*.nupkg'
                     publishVstsFeed: 'a7f75525-c998-47e3-8aaf-0396542795c9'
-                    

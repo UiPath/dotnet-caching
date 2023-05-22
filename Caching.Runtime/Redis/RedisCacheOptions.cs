@@ -5,4 +5,12 @@ public class RedisCacheOptions : CacheOptions
     public string? InstanceName { get; set; }
 
     public int Version { get; set; } = 6;
+
+    public string ConnectionString { get; set; } = default!;
+
+    public int? BackOffMilliseconds { get; set; }
+
+    public TimeSpan? HeartbeatInterval { get; set; }
+
+    public bool ProfilerEnabled { get; set; }
 }

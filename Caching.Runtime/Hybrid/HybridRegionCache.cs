@@ -1,7 +1,4 @@
 ﻿using System.Collections.Immutable;
-using Microsoft.Extensions.Caching.Memory;
-using UiPath.Platform.Caching.Broadcast;
-using UiPath.Platform.Caching.Redis;
 using UiPath.Platform.Caching.Telemetry;
 
 namespace UiPath.Platform.Caching.Hybrid;
@@ -15,9 +12,9 @@ public sealed class HybridRegionCache : HybridCacheBase, IHybridRegionCache
         IRegionCache innerCache,
         Func<HybridCacheOptions, IMemoryCache> memoryCacheAccessor,
         IChangeTokenFactory changeTokenFactory,
-        IChannelPublisher<IClearCacheEvent> channelPublisher,
+        IChannelPublisher<ICacheEvent> channelPublisher,
         IChannelResolver channelResolver,
-        IClearCacheEventFactory clearCacheEventFactory,
+        ICacheEventFactory clearCacheEventFactory,
         ICachingTelemetryProvider telemetryProvider,
         IOptions<HybridCacheOptions> optionsAccessor,
         ILogger<HybridRegionCache> logger)
@@ -31,7 +28,7 @@ public sealed class HybridRegionCache : HybridCacheBase, IHybridRegionCache
 
     public async Task<T?> GetItemAsync<T>(Region region, string key, CancellationToken token = default)
     {
-        var cacheEntry = await GetCacheEntryAsync<T>(BuildEntryOptions(region, new[] { key }, default, token));
+        var cacheEntry = await GetCacheEntryAsync<T>(BuildEntryOptions(region, new[] { key }, default, token: token));
         if (cacheEntry.Value == null)
         {
             return default;
@@ -48,7 +45,7 @@ public sealed class HybridRegionCache : HybridCacheBase, IHybridRegionCache
 
     public async Task<IDictionary<string, T?>> GetAsync<T>(Region region, string[] keys, CancellationToken token = default)
     {
-        var cacheEntry = await GetCacheEntryAsync<T>(BuildEntryOptions(region, keys, default, token));
+        var cacheEntry = await GetCacheEntryAsync<T>(BuildEntryOptions(region, keys, default, token: token));
         return cacheEntry?.Value ?? Empty<T>();
     }
 
@@ -66,7 +63,7 @@ public sealed class HybridRegionCache : HybridCacheBase, IHybridRegionCache
 
     public async Task<IDictionary<string, T?>> GetOrAddAsync<T>(Region region, Func<Task<IDictionary<string, T?>>> generator, DateTimeOffset? expiration = null, RegionCacheSetOption setOption = RegionCacheSetOption.KeyReplace, CancellationToken token = default)
     {
-        var cacheEntryOptions = BuildEntryOptions(region, expiration, token, setOption);
+        var cacheEntryOptions = BuildEntryOptions(region, expiration, setOption, token);
         var cacheEntry = await GetCacheEntryAsync<T>(cacheEntryOptions).ConfigureAwait(false);
         if (!IsDefault(cacheEntry.Value))
         {
@@ -91,7 +88,7 @@ public sealed class HybridRegionCache : HybridCacheBase, IHybridRegionCache
 
     public async Task<bool> SetAsync<T>(Region region, IDictionary<string, T?> values,DateTimeOffset? expiration = null, CancellationToken token = default)
     {
-        var options = BuildEntryOptions(region, expiration, token);
+        var options = BuildEntryOptions(region, expiration, token: token);
         if (IsDefault(values))
         {
             return await RemoveAsync<T>(options).ConfigureAwait(false);
@@ -105,7 +102,7 @@ public sealed class HybridRegionCache : HybridCacheBase, IHybridRegionCache
     public async Task<bool> SetAsync<T>(Region region, IDictionary<string, T?> values, RegionCacheEntryOptions options, CancellationToken token = default)
     {
         var expiration = options.ExpireTime.HasValue ? ToDateTimeOffset(options.ExpireTime) : ToDateTimeOffset(options.TimeToLive);
-        var cacheEntryOptions = BuildEntryOptions(region, expiration, token, options.SetOption);
+        var cacheEntryOptions = BuildEntryOptions(region, expiration, options.SetOption, token);
         cacheEntryOptions.ExtendedProperties = options.ExtendedProperties;
         if (IsDefault(values))
         {
@@ -118,7 +115,7 @@ public sealed class HybridRegionCache : HybridCacheBase, IHybridRegionCache
     }
 
     public Task<bool> RemoveAsync<T>(Region region, CancellationToken token = default) =>
-        RemoveAsync<T>(BuildEntryOptions(region, default, token));
+        RemoveAsync<T>(BuildEntryOptions(region, default, token: token));
 
     public Task<bool> RefreshAsync<T>(Region region, CancellationToken token = default) =>
         RefreshAsync<T>(region, CacheOptions.DefaultExpiration, token);
@@ -132,7 +129,7 @@ public sealed class HybridRegionCache : HybridCacheBase, IHybridRegionCache
     public async Task<bool> RefreshAsync<T>(Region region, RegionCacheEntryOptions options, CancellationToken token = default)
     {
         var expiration = options.ExpireTime.HasValue ? ToDateTimeOffset(options.ExpireTime) : ToDateTimeOffset(options.TimeToLive);
-        var cacheEntryOptions = BuildEntryOptions(region, expiration, token);
+        var cacheEntryOptions = BuildEntryOptions(region, expiration, token: token);
         cacheEntryOptions.ExtendedProperties = options.ExtendedProperties;
         _logger.LogDebug("Clearing cached. Region {}", cacheEntryOptions.Region);
 
@@ -153,7 +150,7 @@ public sealed class HybridRegionCache : HybridCacheBase, IHybridRegionCache
 
     public async Task<bool> ContainsAsync(Region region, CancellationToken token = default)
     {
-        var cacheEntryOptions = BuildEntryOptions(region, default, token);
+        var cacheEntryOptions = BuildEntryOptions(region, default, token: token);
         try
         {
             return MemoryCache.TryGetValue(cacheEntryOptions.Region, out _) || await _innerCache.ContainsAsync(cacheEntryOptions.Region, cacheEntryOptions.Token).ConfigureAwait(false);
@@ -237,7 +234,7 @@ public sealed class HybridRegionCache : HybridCacheBase, IHybridRegionCache
     {
         var tokenKey = GetInnerCacheKey(options.Region);
         var channel = ChannelResolver.GetFor(entryType, tokenKey);
-        var token = ChangeTokenFactory.Create(channel, tokenKey, CacheOptions.SourceUri);
+        var token = ChangeTokenFactory.Create(channel, tokenKey);
 
         if (token is IExtendedPropertiesChangeToken channelChangeToken && (item.ExtendedProperties?.Any() ?? false))
         {
@@ -246,8 +243,13 @@ public sealed class HybridRegionCache : HybridCacheBase, IHybridRegionCache
         }
         var memOptions = new MemoryCacheEntryOptions();
         memOptions.SetAbsoluteExpiration(options.Expiration);
-        memOptions.ExpirationTokens.Add(token);
-        memOptions.RegisterPostEvictionCallback(PostEviction, token);
+
+        if(token is IChangeToken changeToken)
+        {
+            memOptions.ExpirationTokens.Add(changeToken);
+            memOptions.RegisterPostEvictionCallback(PostEviction, changeToken);
+        }
+
 
         MemoryCache.Set(options.Region, item, memOptions);
 
@@ -305,12 +307,12 @@ public sealed class HybridRegionCache : HybridCacheBase, IHybridRegionCache
     }
 
     private CacheEntryOptions BuildEntryOptions(Region region, CancellationToken token = default)
-        => BuildEntryOptions(region, default, token);
+        => BuildEntryOptions(region, default, token: token);
 
-    private CacheEntryOptions BuildEntryOptions(Region region, DateTimeOffset? expiration, CancellationToken token = default, RegionCacheSetOption setOption = RegionCacheSetOption.KeyReplace)
-        => BuildEntryOptions(region, default, expiration, token, setOption);
+    private CacheEntryOptions BuildEntryOptions(Region region, DateTimeOffset? expiration, RegionCacheSetOption setOption = RegionCacheSetOption.KeyReplace, CancellationToken token = default)
+        => BuildEntryOptions(region, default, expiration, setOption, token);
 
-    private CacheEntryOptions BuildEntryOptions(Region region, string[]? keys, DateTimeOffset? expiration, CancellationToken token = default, RegionCacheSetOption setOption = RegionCacheSetOption.KeyReplace)
+    private CacheEntryOptions BuildEntryOptions(Region region, string[]? keys, DateTimeOffset? expiration, RegionCacheSetOption setOption = RegionCacheSetOption.KeyReplace, CancellationToken token = default)
     {
         token.ThrowIfCancellationRequested();
         return new CacheEntryOptions(region, keys, token, ToDateTimeOffset(expiration), default, setOption);
@@ -324,7 +326,7 @@ public sealed class HybridRegionCache : HybridCacheBase, IHybridRegionCache
 
     public async Task<IDictionary<string, string?>?> GetExtendedPropertiesAsync(Region region, CancellationToken token = default)
     {
-        var options = BuildEntryOptions(region, ToDateTimeOffset(CacheOptions.DefaultExpiration), token);
+        var options = BuildEntryOptions(region, ToDateTimeOffset(CacheOptions.DefaultExpiration), token: token);
         return MemoryCache.TryGetValue(options.Region, out ICacheEntry? entry)
             ? (entry?.ExtendedProperties)
             : await _innerCache.GetExtendedPropertiesAsync(options.Region, token).ConfigureAwait(false);
@@ -364,8 +366,8 @@ public sealed class HybridRegionCache : HybridCacheBase, IHybridRegionCache
         await ChannelPublisher.PublishAsync(channel, GetCloudEvent(options), options.Token).ConfigureAwait(false);
     }
 
-    private IClearCacheEvent GetCloudEvent(CacheEntryOptions options, string[]? fields = null) =>
-        CreateEvent(new ClearCacheEventData(GetInnerCacheKey(options.Region), fields));
+    private ICacheEvent GetCloudEvent(CacheEntryOptions options, string[]? fields = null) =>
+        CreateEvent(new CacheEventData(GetInnerCacheKey(options.Region), fields));
 
     private string GetInnerCacheKey(Region region) =>
         CacheUtils.GetKey(region.ToString(), InstanceName);

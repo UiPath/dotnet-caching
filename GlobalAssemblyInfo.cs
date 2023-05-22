@@ -1,6 +1,5 @@
 ﻿using System.Reflection;
 using System.Resources;
-using System.Runtime.CompilerServices;
 
 [assembly: AssemblyCompany("UiPath")]
 [assembly: AssemblyProduct("Caching library")]
@@ -8,4 +7,3 @@ using System.Runtime.CompilerServices;
 [assembly: AssemblyTrademark("")]
 [assembly: NeutralResourcesLanguage("en")]
 [assembly: AssemblyCulture("")]
-[assembly: InternalsVisibleTo("UiPath.Platform.Caching.Tests")]

@@ -1,9 +1,6 @@
-﻿using UiPath.Platform.Caching.Broadcast;
-using UiPath.Platform.Caching.Redis;
+﻿namespace UiPath.Platform.Caching.Broadcast;
 
-namespace UiPath.Platform.Caching.Hybrid;
-
-public sealed class ChangeToken : IExtendedPropertiesChangeToken, IObserver<IClearCacheEvent>, IDisposable
+public sealed class ChangeToken : IExtendedPropertiesChangeToken, IObserver<ICacheEvent>, IDisposable
 {
     private readonly string _key;
     private readonly Channel _channel;
@@ -13,13 +10,13 @@ public sealed class ChangeToken : IExtendedPropertiesChangeToken, IObserver<ICle
 
     private readonly List<(Action<object?> callback, object? state)> _callbacks = new();
 
-    public ChangeToken(string key, Channel channel, IChannelSubscriber<IClearCacheEvent> subscriber, Uri? source, ILogger<ChangeToken> logger)
+    public ChangeToken(string key, Channel channel, IChannelSubscriber<ICacheEvent> subscriber, Uri? source, ILogger<ChangeToken> logger)
     {
         _key = key;
         _channel = channel;
         _source = source;
         _logger = logger;
-        _logger.LogTrace("Waiting from redis message {} on channel {}", _key, _channel);
+        _logger.LogTrace("Waiting from message {} on channel {}", _key, _channel);
         _unsubscriber = subscriber.Subscribe(channel, this);
     }
 
@@ -38,7 +35,7 @@ public sealed class ChangeToken : IExtendedPropertiesChangeToken, IObserver<ICle
         Notify();
     }
 
-    public void OnNext(IClearCacheEvent cloudEvent)
+    public void OnNext(ICacheEvent cloudEvent)
     {
 
         var data = cloudEvent.Data;
@@ -59,7 +56,7 @@ public sealed class ChangeToken : IExtendedPropertiesChangeToken, IObserver<ICle
         Notify(data);
     }
 
-    private void Notify(ClearCacheEventData? data = default)
+    private void Notify(CacheEventData? data = default)
     {
         HasChanged = true;
         ExtendedPropertiesHasChanged = data?.Fields?.Contains(CacheConstants.ExtendedPropertiesKey) ?? false;

@@ -1,4 +1,4 @@
-﻿namespace UiPath.Platform.Caching.Hybrid;
+﻿namespace UiPath.Platform.Caching.Broadcast;
 
 public interface IChannelResolver
 {

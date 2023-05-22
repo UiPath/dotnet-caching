@@ -1,12 +1,12 @@
 ﻿using UiPath.Platform.Caching.Redis;
 
-namespace UiPath.Platform.Caching.Hybrid;
+namespace UiPath.Platform.Caching.Broadcast;
 
-public sealed class DefaultChannelResolver : IChannelResolver
+public sealed class ChannelResolver : IChannelResolver
 {
     private readonly string _channelPrefix;
 
-    public DefaultChannelResolver(IOptions<HybridCacheOptions> optionsAccessor) =>
+    public ChannelResolver(IOptions<BroadcastOptions> optionsAccessor) =>
         _channelPrefix = optionsAccessor.Value.ChannelPrefix;
 
     public Channel GetFor(Type type, string key) =>

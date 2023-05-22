@@ -1,8 +1,9 @@
 ﻿using System.Collections.Immutable;
 
-namespace UiPath.Platform.Caching.Redis;
+namespace UiPath.Platform.Caching;
 
-public sealed class NullRegionCache : IRedisRegionCache, IHybridRegionCache
+[ExcludeFromCodeCoverage]
+public sealed class NullRegionCache : IRedisRegionCache, IHybridRegionCache, IMemRegionCache
 {
     public static readonly NullRegionCache Instance = new();
 
@@ -76,6 +77,7 @@ public sealed class NullRegionCache : IRedisRegionCache, IHybridRegionCache
 
     private sealed record NullCacheEntry<T> : ICacheEntry<T>
     {
+        [System.Diagnostics.CodeAnalysis.SuppressMessage("SonarLint.Rule", "S3218:Inner class members should not shadow outer class names")]
         public static readonly ICacheEntry<T> Instance = new NullCacheEntry<T>();
 
         public T? Value => default;

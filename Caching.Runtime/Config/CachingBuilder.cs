@@ -1,8 +1,4 @@
-﻿using System.Diagnostics.CodeAnalysis;
-using System.Text.Json;
-using Microsoft.Extensions.DependencyInjection;
-using Microsoft.Extensions.DependencyInjection.Extensions;
-using UiPath.Platform.Caching.Redis;
+﻿using System.Text.Json;
 
 namespace UiPath.Platform.Caching.Config;
 
@@ -11,33 +7,35 @@ public class CachingBuilder : ICachingBuilder
 {
     private readonly List<Action<ICachingBuilder>> _callbacks = new();
 
-    public CachingBuilder(IServiceCollection services, bool enabled = true)
+    public CachingBuilder(IServiceCollection services, IConfigurationSection configuration)
     {
         Services = services;
-        Enabled = enabled;
+        Configuration = configuration;
     }
 
     public IServiceCollection Services { get; private set; }
 
-    public bool Enabled { get; private set; }
+    public IConfigurationSection Configuration { get; private set; }
+
+    public bool Enabled { get; set; } = true;
 
     public ICachingBuilder AddCache<T>(Func<IServiceProvider, T> cacheProvider)
         where T : class, ICache
     {
-        Services.AddSingleton(sp => cacheProvider.Invoke(sp));
+        Services.TryAddSingleton(sp => cacheProvider.Invoke(sp));
         return this;
     }
 
     public ICachingBuilder AddRegionCache<T>(Func<IServiceProvider, T> cacheProvider)
          where T : class, IRegionCache
     {
-        Services.AddSingleton(sp => cacheProvider.Invoke(sp));
+        Services.TryAddSingleton(sp => cacheProvider.Invoke(sp));
         return this;
     }
 
     internal void Complete()
     {
-        if (!Enabled)
+        if(!Enabled)
         {
             return;
         }

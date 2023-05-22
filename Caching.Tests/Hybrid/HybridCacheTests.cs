@@ -1,4 +1,5 @@
-﻿using Microsoft.Extensions.Caching.Memory;
+﻿using System.Threading.Channels;
+using Microsoft.Extensions.Caching.Memory;
 using Microsoft.Extensions.Internal;
 using Microsoft.Extensions.Logging;
 using NSubstitute.ExceptionExtensions;
@@ -15,13 +16,14 @@ public class HybridCacheTests : IAsyncLifetime
     private ICachingTelemetryProvider _cachingTelemetryProvider = default!;
     private ITelemetryOperation _telemetryOperation = default!;
     private IChangeTokenFactory _changeTokenFactory = default!;
-    private IChannelPublisher<IClearCacheEvent> _channelPublisher = default!;
+    private IChannelPublisher<ICacheEvent> _channelPublisher = default!;
     private IChannelResolver _channelResolver = default!;
     private IMemoryCache _memoryCache = default!;
     private ISystemClock _clock = default!;
-    private IEventFormatterProxy<IClearCacheEvent> _formatter = default!;
-    private IClearCacheEventFactory _cacheEventFactory = default!;
+    private IEventFormatterProxy<ICacheEvent> _formatter = default!;
+    private ICacheEventFactory _cacheEventFactory = default!;
     private HybridCacheOptions _hybridCacheOptions = default!;
+    private Channel _channel = default!;
 
     private HybridCache? _sut = null;
 
@@ -36,7 +38,7 @@ public class HybridCacheTests : IAsyncLifetime
             .ReturnsForAnyArgs(Task.FromResult<string?>(expected));
 
         var actual = await Sut.GetAsync<string>(key, CancellationToken.None);
-        _changeTokenFactory.Received(1).Create(_hybridCacheOptions.ChannelPrefix, Arg.Is<string>(x => x.EndsWith(key, StringComparison.InvariantCultureIgnoreCase)));
+        _changeTokenFactory.Received(1).Create(_channel, Arg.Is<string>(x => x.EndsWith(key, StringComparison.InvariantCultureIgnoreCase)));
         _memoryCache.Received(1).CreateEntry(key);
         actual.Should().Be(expected);
     }
@@ -108,7 +110,8 @@ public class HybridCacheTests : IAsyncLifetime
     [Fact]
     public void Dispose_can_be_called()
     {
-        Sut.Dispose();
+        Action act = () => Sut.Dispose();
+        act.Should().NotThrow();
     }
 
     [Fact]
@@ -163,7 +166,7 @@ public class HybridCacheTests : IAsyncLifetime
         var actual = await Sut.SetAsync(key, default(string), _fixture.Create<TimeSpan>(), CancellationToken.None);
         _memoryCache.Received(1).Remove(key);
         await _innerCache.Received(1).RemoveAsync<string>(key, Arg.Any<CancellationToken>());
-        await _channelPublisher.Received(1).PublishAsync(_hybridCacheOptions.ChannelPrefix, Arg.Any<IClearCacheEvent>(), Arg.Any<CancellationToken>());
+        await _channelPublisher.Received(1).PublishAsync(_channel, Arg.Any<ICacheEvent>(), Arg.Any<CancellationToken>());
     }
 
     [Fact]
@@ -176,7 +179,7 @@ public class HybridCacheTests : IAsyncLifetime
         var actual = await Sut.SetAsync(key, default(string), CancellationToken.None);
         _memoryCache.Received(1).Remove(key);
         await _innerCache.Received(1).RemoveAsync<string>(key, Arg.Any<CancellationToken>());
-        await _channelPublisher.Received(1).PublishAsync(_hybridCacheOptions.ChannelPrefix, Arg.Any<IClearCacheEvent>(), Arg.Any<CancellationToken>());
+        await _channelPublisher.Received(1).PublishAsync(_channel, Arg.Any<ICacheEvent>(), Arg.Any<CancellationToken>());
     }
 
     [Fact]
@@ -190,7 +193,7 @@ public class HybridCacheTests : IAsyncLifetime
         var actual = await Sut.SetAsync(key, value, _fixture.Create<TimeSpan>(), CancellationToken.None);
         _memoryCache.Received(0).Remove(key);
         await _innerCache.Received(0).RemoveAsync<string>(key, Arg.Any<CancellationToken>());
-        await _channelPublisher.Received(1).PublishAsync(_hybridCacheOptions.ChannelPrefix, Arg.Any<IClearCacheEvent>(), Arg.Any<CancellationToken>());
+        await _channelPublisher.Received(1).PublishAsync(_channel, Arg.Any<ICacheEvent>(), Arg.Any<CancellationToken>());
         _memoryCache.Received(1).CreateEntry(key);
         await _innerCache.Received(1).SetAsync(key, Arg.Any<string>(), Arg.Any<DateTimeOffset>(), Arg.Any<CancellationToken>());
     }
@@ -216,12 +219,12 @@ public class HybridCacheTests : IAsyncLifetime
         var key = _fixture.Create<string>();
         _innerCache.GetAsync<string>(key, CancellationToken.None)
             .ReturnsForAnyArgs(Task.FromResult(default(string?)));
-        _channelPublisher.PublishAsync(_hybridCacheOptions.ChannelPrefix, Arg.Any<IClearCacheEvent>(), Arg.Any<CancellationToken>())
+        _channelPublisher.PublishAsync(_channel, Arg.Any<ICacheEvent>(), Arg.Any<CancellationToken>())
             .Throws<Exception>();
         var actual = await Sut.RemoveAsync<string>(key, CancellationToken.None);
         _memoryCache.Received(1).Remove(key);
         await _innerCache.Received(1).RemoveAsync<string>(key, Arg.Any<CancellationToken>());
-        await _channelPublisher.Received(1).PublishAsync(_hybridCacheOptions.ChannelPrefix, Arg.Any<IClearCacheEvent>(), Arg.Any<CancellationToken>());
+        await _channelPublisher.Received(1).PublishAsync(_channel, Arg.Any<ICacheEvent>(), Arg.Any<CancellationToken>());
         actual.Should().BeFalse();
     }
 
@@ -234,7 +237,7 @@ public class HybridCacheTests : IAsyncLifetime
         var actual = await Sut.RemoveAsync<string>(key, CancellationToken.None);
         _memoryCache.Received(1).Remove(key);
         await _innerCache.Received(1).RemoveAsync<string>(key, Arg.Any<CancellationToken>());
-        await _channelPublisher.Received(1).PublishAsync(_hybridCacheOptions.ChannelPrefix, Arg.Any<IClearCacheEvent>(), Arg.Any<CancellationToken>());
+        await _channelPublisher.Received(1).PublishAsync(_channel, Arg.Any<ICacheEvent>(), Arg.Any<CancellationToken>());
         actual.Should().BeTrue();
     }
 
@@ -258,7 +261,7 @@ public class HybridCacheTests : IAsyncLifetime
             ActiveChangeCallbacks = true,
             HasChanged = false
         };
-        _changeTokenFactory.Create(_hybridCacheOptions.ChannelPrefix, Arg.Is<string>(x => x.EndsWith(key, StringComparison.InvariantCultureIgnoreCase)), Arg.Any<Uri?>())
+        _changeTokenFactory.Create(_channel, Arg.Is<string>(x => x.EndsWith(key, StringComparison.InvariantCultureIgnoreCase)))
             .Returns(c => token);
         var sut = new HybridCache(_innerCache, (opt) => memoryCache, _changeTokenFactory, _channelPublisher, _channelResolver, _cacheEventFactory, _cachingTelemetryProvider, Options.Create(_hybridCacheOptions), _fixture.Freeze<ILogger<HybridCache>>());
         var actual = await sut.GetAsync<string>(key, CancellationToken.None);
@@ -288,7 +291,7 @@ public class HybridCacheTests : IAsyncLifetime
             ActiveChangeCallbacks = true,
             HasChanged = false
         };
-        _changeTokenFactory.Create(_hybridCacheOptions.ChannelPrefix, key, Arg.Any<Uri?>())
+        _changeTokenFactory.Create(_channel, key)
             .ReturnsForAnyArgs(c => token);
         var sut = new HybridCache(_innerCache, (opt) => memoryCache, _changeTokenFactory, _channelPublisher, _channelResolver, _cacheEventFactory, _cachingTelemetryProvider, Options.Create(_hybridCacheOptions), _fixture.Freeze<ILogger<HybridCache>>());
         var actual = await sut.GetAsync<string>(key, CancellationToken.None);
@@ -320,7 +323,7 @@ public class HybridCacheTests : IAsyncLifetime
             ActiveChangeCallbacks = false,
             HasChanged = false
         };
-        _changeTokenFactory.Create(_hybridCacheOptions.ChannelPrefix, key, Arg.Any<Uri?>())
+        _changeTokenFactory.Create(_channel, key)
             .ReturnsForAnyArgs(c => token);
         var sut = new HybridCache(_innerCache, (d) => memoryCache, _changeTokenFactory, _channelPublisher, _channelResolver, _cacheEventFactory, _cachingTelemetryProvider, Options.Create(new HybridCacheOptions
         {
@@ -339,7 +342,7 @@ public class HybridCacheTests : IAsyncLifetime
         await Sut.RefreshAsync<string>(key, CancellationToken.None);
         _memoryCache.Received(1).Remove(key);
         await _innerCache.Received(1).RefreshAsync<string>(key, Arg.Any<DateTimeOffset>(), Arg.Any<CancellationToken>());
-        await _channelPublisher.Received(1).PublishAsync(_hybridCacheOptions.ChannelPrefix, Arg.Any<IClearCacheEvent>(), Arg.Any<CancellationToken>());
+        await _channelPublisher.Received(1).PublishAsync(_channel, Arg.Any<ICacheEvent>(), Arg.Any<CancellationToken>());
     }
 
     [Fact]
@@ -350,7 +353,7 @@ public class HybridCacheTests : IAsyncLifetime
         await Sut.RefreshAsync<string>(key, expiration, CancellationToken.None);
         _memoryCache.Received(1).Remove(key);
         await _innerCache.Received(1).RefreshAsync<string>(key, Arg.Any<DateTimeOffset>(), Arg.Any<CancellationToken>());
-        await _channelPublisher.Received(1).PublishAsync(_hybridCacheOptions.ChannelPrefix, Arg.Any<IClearCacheEvent>(), Arg.Any<CancellationToken>());
+        await _channelPublisher.Received(1).PublishAsync(_channel, Arg.Any<ICacheEvent>(), Arg.Any<CancellationToken>());
     }
 
     [Fact]
@@ -361,7 +364,7 @@ public class HybridCacheTests : IAsyncLifetime
         await Sut.RefreshAsync<string>(key, expiration, CancellationToken.None);
         _memoryCache.Received(1).Remove(key);
         await _innerCache.Received(1).RefreshAsync<string>(key, Arg.Any<DateTimeOffset>(), Arg.Any<CancellationToken>());
-        await _channelPublisher.Received(1).PublishAsync(_hybridCacheOptions.ChannelPrefix, Arg.Any<IClearCacheEvent>(), Arg.Any<CancellationToken>());
+        await _channelPublisher.Received(1).PublishAsync(_channel, Arg.Any<ICacheEvent>(), Arg.Any<CancellationToken>());
     }
 
     [Fact]
@@ -374,7 +377,7 @@ public class HybridCacheTests : IAsyncLifetime
         await Sut.RefreshAsync<string>(key, expiration, CancellationToken.None);
         _memoryCache.Received(1).Remove(key);
         await _innerCache.Received(1).RefreshAsync<string>(key, Arg.Any<DateTimeOffset>(), Arg.Any<CancellationToken>());
-        await _channelPublisher.Received(0).PublishAsync(_hybridCacheOptions.ChannelPrefix, Arg.Any<IClearCacheEvent>(), Arg.Any<CancellationToken>());
+        await _channelPublisher.Received(0).PublishAsync(_channel, Arg.Any<ICacheEvent>(), Arg.Any<CancellationToken>());
     }
 
     [Fact]
@@ -387,7 +390,7 @@ public class HybridCacheTests : IAsyncLifetime
         await Sut.RefreshAsync<string>(key, expiration, CancellationToken.None);
         _memoryCache.Received(1).Remove(key);
         await _innerCache.Received(1).RefreshAsync<string>(key, Arg.Any<DateTimeOffset>(), Arg.Any<CancellationToken>());
-        await _channelPublisher.Received(0).PublishAsync(_hybridCacheOptions.ChannelPrefix, Arg.Any<IClearCacheEvent>(), Arg.Any<CancellationToken>());
+        await _channelPublisher.Received(0).PublishAsync(_channel, Arg.Any<ICacheEvent>(), Arg.Any<CancellationToken>());
     }
 
     [Fact]
@@ -461,7 +464,7 @@ public class HybridCacheTests : IAsyncLifetime
             ActiveChangeCallbacks = true,
             HasChanged = false
         };
-        _changeTokenFactory.Create(_hybridCacheOptions.ChannelPrefix, Arg.Any<string>(), Arg.Any<Uri?>())
+        _changeTokenFactory.Create(_channel, Arg.Any<string>())
             .Returns(c => token);
 
         var expiration = _clock.UtcNow.AddYears(1);
@@ -487,7 +490,7 @@ public class HybridCacheTests : IAsyncLifetime
             ActiveChangeCallbacks = true,
             HasChanged = false
         };
-        _changeTokenFactory.Create(_hybridCacheOptions.ChannelPrefix, Arg.Any<string>(), Arg.Any<Uri?>())
+        _changeTokenFactory.Create(_channel, Arg.Any<string>())
             .Returns(c => token);
 
         var expiration = TimeSpan.FromDays(1);
@@ -527,33 +530,32 @@ public class HybridCacheTests : IAsyncLifetime
     public Task InitializeAsync()
     {
         _changeTokenFactory = _fixture.Freeze<IChangeTokenFactory>();
-        _channelPublisher = _fixture.Freeze<IChannelPublisher<IClearCacheEvent>>();
+        _channelPublisher = _fixture.Freeze<IChannelPublisher<ICacheEvent>>();
         _channelResolver = _fixture.Freeze<IChannelResolver>();
         _memoryCache = _fixture.Freeze<IMemoryCache>();
         _innerCache = _fixture.Freeze<ICache>();
         _cachingTelemetryProvider = _fixture.Freeze<ICachingTelemetryProvider>();
         _telemetryOperation = _fixture.Freeze<ITelemetryOperation>();
         _clock = new SystemClock();
+        _channel = (Channel)_fixture.Create<string>();
         _hybridCacheOptions = new()
         {
-            ChannelPrefix = "test",
             DefaultExpiration = TimeSpan.FromMinutes(10),
             EntryFactory = new TestCacheEntryFactory(),
-            SourceUri = null
         };
-        _channelResolver.GetFor<object>(Arg.Any<string>()).Returns((Channel)_hybridCacheOptions.ChannelPrefix);
-        _channelResolver.GetFor(Arg.Any<Type>(), Arg.Any<string>()).Returns((Channel)_hybridCacheOptions.ChannelPrefix);
+        _channelResolver.GetFor<object>(Arg.Any<string>()).Returns(_channel);
+        _channelResolver.GetFor(Arg.Any<Type>(), Arg.Any<string>()).Returns(_channel);
         _fixture.Inject(Options.Create(_hybridCacheOptions));
         _formatter = new CacheClearEventFormatterProxy();
         _fixture.Inject(_formatter);
-        _cacheEventFactory = _fixture.Freeze<IClearCacheEventFactory>();
-        _cacheEventFactory.Create(Arg.Any<ClearCacheEventData>(), Arg.Any<Uri?>(), Arg.Any<string?>())
+        _cacheEventFactory = _fixture.Freeze<ICacheEventFactory>();
+        _cacheEventFactory.Create(Arg.Any<string>(), Arg.Any<CacheEventData>(), Arg.Any<string?>())
             .Returns(c =>
                 new TestClearCacheEvent
                 {
-                    Id = c.Arg<string?>(),
-                    Data = c.Arg<ClearCacheEventData>(),
-                    Source = c.Arg<Uri?>()
+                    Id = c.ArgAt<string?>(2),
+                    Data = c.Arg<CacheEventData>(),
+                    Type = c.ArgAt<string>(0),
                 }
             );
         return Task.CompletedTask;

@@ -8,5 +8,7 @@ public class TestPubSubEvent : IPubSubEvent
 
     public Uri? Source { get; set; }
 
+    public string? Type { get; set; }
+
     public bool IsValid() => Valid;
 }

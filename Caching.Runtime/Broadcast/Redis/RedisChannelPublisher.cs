@@ -1,6 +1,7 @@
 ﻿namespace UiPath.Platform.Caching.Broadcast.Redis;
 
-internal class RedisChannelPublisher<T> : IChannelPublisher<T> where T : class, IPubSubEvent
+internal class RedisChannelPublisher<T> : IRedisChannelPublisher<T>
+     where T : class, IPubSubEvent
 {
     private readonly Lazy<IDatabase> _lazyDatabase;
     private readonly IEventFormatterProxy<T> _formatter;

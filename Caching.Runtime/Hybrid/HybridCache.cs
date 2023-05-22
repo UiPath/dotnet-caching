@@ -1,7 +1,4 @@
 ﻿using Microsoft.Extensions.Caching.Distributed;
-using Microsoft.Extensions.Caching.Memory;
-using UiPath.Platform.Caching.Broadcast;
-using UiPath.Platform.Caching.Redis;
 using UiPath.Platform.Caching.Telemetry;
 
 namespace UiPath.Platform.Caching.Hybrid;
@@ -15,9 +12,9 @@ public sealed class HybridCache : HybridCacheBase, IHybridCache
         ICache innerCache,
         Func<HybridCacheOptions, IMemoryCache> memoryCacheAccessor,
         IChangeTokenFactory changeTokenFactory,
-        IChannelPublisher<IClearCacheEvent> channelPublisher,
+        IChannelPublisher<ICacheEvent> channelPublisher,
         IChannelResolver channelResolver,
-        IClearCacheEventFactory clearCacheEventFactory,
+        ICacheEventFactory clearCacheEventFactory,
         ICachingTelemetryProvider telemetryProvider,
         IOptions<HybridCacheOptions> optionsAccessor,
         ILogger<HybridCache> logger)
@@ -173,13 +170,16 @@ public sealed class HybridCache : HybridCacheBase, IHybridCache
     {
         var tokenKey = GetInnerCacheKey(options);
         var channel = ChannelResolver.GetFor<T>(options.Key);
-        var token = ChangeTokenFactory.Create(channel, tokenKey, CacheOptions.SourceUri);
+        var token = ChangeTokenFactory.Create(channel, tokenKey);
         var item = CacheEntryFactory.Create(value, options.Expiration);
 
         var memOptions = new MemoryCacheEntryOptions();
         memOptions.SetAbsoluteExpiration(options.Expiration);
-        memOptions.ExpirationTokens.Add(token);
-        memOptions.RegisterPostEvictionCallback(PostEviction, token);
+        if (token is IChangeToken changeToken)
+        {
+            memOptions.ExpirationTokens.Add(changeToken);
+            memOptions.RegisterPostEvictionCallback(PostEviction, changeToken);
+        }
 
         MemoryCache.Set(options.Key, item, memOptions);
 
@@ -221,11 +221,11 @@ public sealed class HybridCache : HybridCacheBase, IHybridCache
     {
         var channel = ChannelResolver.GetFor<T>(options.Key);
         _logger.LogDebug("Raise clear cache event on channel {} for key {}", channel, options.Key);
-        await ChannelPublisher.PublishAsync(channel, GetCloudEvent(options), options.Token).ConfigureAwait(false);
+        await ChannelPublisher.PublishAsync(channel, GetClearCacheEvent(options), options.Token).ConfigureAwait(false);
     }
 
-    private IClearCacheEvent GetCloudEvent(CacheEntryOptions options) =>
-        CreateEvent(new ClearCacheEventData(GetInnerCacheKey(options)));
+    private ICacheEvent GetClearCacheEvent(CacheEntryOptions options) =>
+        CreateEvent(new CacheEventData(GetInnerCacheKey(options)));
 
     private string GetInnerCacheKey(CacheEntryOptions options) =>
         CacheUtils.GetKey(options.Key, InstanceName);

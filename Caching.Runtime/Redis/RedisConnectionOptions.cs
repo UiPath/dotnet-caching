@@ -1,6 +1,4 @@
-﻿using System.Diagnostics.CodeAnalysis;
-
-namespace UiPath.Platform.Caching.Redis;
+﻿namespace UiPath.Platform.Caching.Redis;
 
 [ExcludeFromCodeCoverage]
 public class RedisConnectionOptions
@@ -10,5 +8,7 @@ public class RedisConnectionOptions
     public int? BackOffMilliseconds { get; set; }
 
     public TimeSpan? HeartbeatInterval { get; set; }
+
+    public bool ProfilerEnabled { get; set; } 
 
 }

@@ -1,6 +1,7 @@
-﻿namespace UiPath.Platform.Caching.Redis;
+﻿namespace UiPath.Platform.Caching;
 
-public class NullCache : IRedisCache, IHybridCache
+[ExcludeFromCodeCoverage]
+public class NullCache : IRedisCache, IHybridCache, IMemCache
 {
     public static readonly NullCache Instance = new();
 

@@ -1,4 +1,5 @@
-﻿using Microsoft.Extensions.DependencyInjection;
+﻿using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.DependencyInjection;
 
 namespace UiPath.Platform.Caching.Config;
 
@@ -6,7 +7,9 @@ public interface ICachingBuilder
 {
     IServiceCollection Services { get; }
 
-    public bool Enabled { get; }
+    IConfigurationSection Configuration { get; }
+
+    bool Enabled { get; set; }
 
     void RegisterOnCompleteCallback(Action<ICachingBuilder> callback);
 

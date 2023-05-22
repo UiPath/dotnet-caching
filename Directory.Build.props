@@ -13,7 +13,7 @@
     <Product>Platform Services</Product>
     <Copyright>Copyright © UiPath 2023</Copyright>
     <Description>UiPath Caching</Description>
-    <PackageTags>Ledger</PackageTags>
+    <PackageTags>Caching</PackageTags>
     <PackageProjectUrl>https://github.com/UiPath/ServiceCommon</PackageProjectUrl>
     <RepositoryUrl>https://github.com/UiPath/ServiceCommon</RepositoryUrl>
     <PackageOutputPath>$(MSBuildThisFileDirectory)Release</PackageOutputPath>

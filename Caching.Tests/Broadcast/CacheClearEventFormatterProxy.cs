@@ -3,12 +3,12 @@ using System.Text.Json;
 
 namespace UiPath.Platform.Caching.Tests.Broadcast;
 
-public class CacheClearEventFormatterProxy : IEventFormatterProxy<IClearCacheEvent>
+public class CacheClearEventFormatterProxy : IEventFormatterProxy<ICacheEvent>
 {
-    public IClearCacheEvent? Decode(ReadOnlyMemory<byte> body) =>
+    public ICacheEvent? Decode(ReadOnlyMemory<byte> body) =>
         JsonSerializer.Deserialize<TestClearCacheEvent>(body.Span);
 
-    public ReadOnlyMemory<byte> Encode(IClearCacheEvent clearCacheEvent)
+    public ReadOnlyMemory<byte> Encode(ICacheEvent clearCacheEvent)
     {
         var str = JsonSerializer.Serialize((TestClearCacheEvent)clearCacheEvent);
         return Encoding.UTF8.GetBytes(str);

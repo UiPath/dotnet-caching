@@ -1,8 +1,6 @@
 ﻿using Microsoft.Extensions.Logging;
-using UiPath.Platform.Caching.Broadcast;
-using UiPath.Platform.Caching.Tests.Broadcast;
 
-namespace UiPath.Platform.Caching.Tests.Hybrid;
+namespace UiPath.Platform.Caching.Tests.Broadcast;
 
 public class ChangeTokenTests : IAsyncLifetime
 {
@@ -10,7 +8,7 @@ public class ChangeTokenTests : IAsyncLifetime
 
     private string _key = default!;
     private Channel _channel = default!;
-    private IChannelSubscriber<IClearCacheEvent> _subscriber = default!;
+    private IChannelSubscriber<ICacheEvent> _subscriber = default!;
     private CacheClearEventFormatterProxy _formatter = default!;
     private Uri? _source = null;
 
@@ -67,7 +65,7 @@ public class ChangeTokenTests : IAsyncLifetime
         {
             Id = Guid.NewGuid().ToString(),
             Source = new Uri("urn:machine"),
-            Data = new ClearCacheEventData(_key)
+            Data = new CacheEventData(_key)
         };
         Sut.OnNext(cloudEVent);
         Sut.HasChanged.Should().Be(hasChanged);
@@ -115,7 +113,7 @@ public class ChangeTokenTests : IAsyncLifetime
     public void Dispose_token()
     {
         var disposable = _fixture.Create<IDisposable>();
-        _subscriber.Subscribe(_channel, Arg.Any<IObserver<IClearCacheEvent>>())
+        _subscriber.Subscribe(_channel, Arg.Any<IObserver<ICacheEvent>>())
             .Returns(disposable);
         Sut.Dispose();
         disposable.Received(1).Dispose();
@@ -132,9 +130,9 @@ public class ChangeTokenTests : IAsyncLifetime
         _channel = (Channel)_fixture.Create<string>();
         _fixture.Inject(_channel);
         _fixture.Freeze<ILogger<ChangeToken>>();
-        _subscriber = _fixture.Freeze<IChannelSubscriber<IClearCacheEvent>>();
+        _subscriber = _fixture.Freeze<IChannelSubscriber<ICacheEvent>>();
         _formatter = new CacheClearEventFormatterProxy();
-        _fixture.Inject<IEventFormatterProxy<IClearCacheEvent>>(_formatter);
+        _fixture.Inject<IEventFormatterProxy<ICacheEvent>>(_formatter);
         return Task.CompletedTask;
     }
 
@@ -143,13 +141,13 @@ public class ChangeTokenTests : IAsyncLifetime
         new TestClearCacheEvent
         {
             Id = Guid.NewGuid().ToString(),
-            Data = new ClearCacheEventData(Guid.NewGuid().ToString())
+            Data = new CacheEventData(Guid.NewGuid().ToString())
         },
         new TestClearCacheEvent
         {
             Id = Guid.NewGuid().ToString(),
             Source = new Uri("urn:machine"),
-            Data = new ClearCacheEventData(Guid.NewGuid().ToString())
+            Data = new CacheEventData(Guid.NewGuid().ToString())
         },
         new TestClearCacheEvent
         {
@@ -166,7 +164,7 @@ public class ChangeTokenTests : IAsyncLifetime
         {
             Id = Guid.NewGuid().ToString(),
             Source = new Uri("urn:machine"),
-            Data = new ClearCacheEventData(Guid.NewGuid().ToString())
+            Data = new CacheEventData(Guid.NewGuid().ToString())
         },
 
         new TestClearCacheEvent

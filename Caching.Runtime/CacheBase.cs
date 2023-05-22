@@ -1,6 +1,4 @@
-﻿using UiPath.Platform.Caching.Redis;
-
-namespace UiPath.Platform.Caching;
+﻿namespace UiPath.Platform.Caching;
 
 public abstract class CacheBase
 {

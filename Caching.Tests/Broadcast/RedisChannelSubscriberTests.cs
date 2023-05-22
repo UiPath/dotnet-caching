@@ -6,12 +6,12 @@ public class RedisChannelSubscriberTests : IAsyncLifetime
 {
     private readonly IFixture _fixture = AutoFixtureCreator.NSubsitute();
     private ISubscriber _subscriber = default!;
-    private IObserver<IClearCacheEvent> _observer = default!;
+    private IObserver<ICacheEvent> _observer = default!;
 
     [Fact]
     public void Subscriber_is_called_for_specific_redis_channel()
     {
-        var sut = _fixture.Create<RedisChannelSubscriber<IClearCacheEvent>>();
+        var sut = _fixture.Create<RedisChannelSubscriber<ICacheEvent>>();
         Channel channel = _fixture.Create<string>();
         string? actualRedisChannel = null;
         _subscriber.When(x => x.Subscribe(Arg.Any<RedisChannel>(), Arg.Any<Action<RedisChannel, RedisValue>>(), Arg.Any<CommandFlags>()))
@@ -28,7 +28,7 @@ public class RedisChannelSubscriberTests : IAsyncLifetime
     [Fact]
     public void Unsubscribe_is_called_when_subscriber_is_disposed()
     {
-        var sut = _fixture.Create<RedisChannelSubscriber<IClearCacheEvent>>();
+        var sut = _fixture.Create<RedisChannelSubscriber<ICacheEvent>>();
         Channel channel = _fixture.Create<string>();
         string? actualRedisChannel = null;
         _subscriber.When(x => x.Subscribe(Arg.Any<RedisChannel>(), Arg.Any<Action<RedisChannel, RedisValue>>(), Arg.Any<CommandFlags>()))
@@ -44,7 +44,7 @@ public class RedisChannelSubscriberTests : IAsyncLifetime
     [Fact]
     public void Exception_is_thrown_when_subscribe_fails()
     {
-        var sut = _fixture.Create<RedisChannelSubscriber<IClearCacheEvent>>();
+        var sut = _fixture.Create<RedisChannelSubscriber<ICacheEvent>>();
         Channel channel = _fixture.Create<string>();
         _subscriber.When(x => x.Subscribe(Arg.Any<RedisChannel>(), Arg.Any<Action<RedisChannel, RedisValue>>(), Arg.Any<CommandFlags>()))
             .Do(x => { throw new Exception(); });
@@ -62,8 +62,8 @@ public class RedisChannelSubscriberTests : IAsyncLifetime
     public Task InitializeAsync()
     {
         _subscriber = _fixture.Freeze<ISubscriber>();
-        _observer = _fixture.Freeze<IObserver<IClearCacheEvent>>();
-        _fixture.Inject<IEventFormatterProxy<IClearCacheEvent>>(new CacheClearEventFormatterProxy());
+        _observer = _fixture.Freeze<IObserver<ICacheEvent>>();
+        _fixture.Inject<IEventFormatterProxy<ICacheEvent>>(new CacheClearEventFormatterProxy());
         return Task.CompletedTask;
     }
 }

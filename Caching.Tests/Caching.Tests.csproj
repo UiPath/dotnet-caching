@@ -3,6 +3,8 @@
   <PropertyGroup>
     <TargetFramework>$(TargetFramework)</TargetFramework>
     <IsPackable>false</IsPackable>
+    <SonarQubeExclude>false</SonarQubeExclude>
+    <SonarQubeTestProject>true</SonarQubeTestProject>
   </PropertyGroup>
 
   <ItemGroup>

@@ -1,20 +1,17 @@
-﻿using CloudNative.CloudEvents;
-using UiPath.Platform.Caching.Broadcast;
+﻿namespace UiPath.Platform.Caching.CloudEvents;
 
-namespace UiPath.Platform.Caching.CloudEvents;
-
-public class CacheClearEventFormatterProxy : IEventFormatterProxy<IClearCacheEvent>
+public class CacheEventFormatterProxy : IEventFormatterProxy<ICacheEvent>
 {
     private readonly CloudEventFormatter _formatter;
 
-    public CacheClearEventFormatterProxy(CloudEventFormatter formatter) =>
+    public CacheEventFormatterProxy(CloudEventFormatter formatter) =>
         _formatter = formatter;
 
-    public IClearCacheEvent? Decode(ReadOnlyMemory<byte> body) =>
-        new CacheClearCloudEventWrapper(_formatter.DecodeStructuredModeMessage(body, null, null));
+    public ICacheEvent? Decode(ReadOnlyMemory<byte> body) =>
+        new CacheCloudEventWrapper(_formatter.DecodeStructuredModeMessage(body, null, null));
 
-    public ReadOnlyMemory<byte> Encode(IClearCacheEvent pubSubEvent) =>
-        pubSubEvent is CacheClearCloudEventWrapper wrapper
+    public ReadOnlyMemory<byte> Encode(ICacheEvent pubSubEvent) =>
+        pubSubEvent is CacheCloudEventWrapper wrapper
             ? _formatter.EncodeStructuredModeMessage(wrapper.CloudEvent, out _)
             : ReadOnlyMemory<byte>.Empty;
 }

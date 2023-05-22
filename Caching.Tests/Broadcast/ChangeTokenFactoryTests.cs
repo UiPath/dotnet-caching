@@ -1,4 +1,4 @@
-﻿namespace UiPath.Platform.Caching.Tests.Hybrid;
+﻿namespace UiPath.Platform.Caching.Tests.Broadcast;
 
 public class ChangeTokenFactoryTests
 {
@@ -10,6 +10,6 @@ public class ChangeTokenFactoryTests
     [Fact]
     public void NotNullable_change_token()
     {
-        Sut.Create(_fixture.Create<string>(), _fixture.Create<string>(), _fixture.Create<Uri?>()).Should().NotBeNull();
+        Sut.Create(_fixture.Create<string>(), _fixture.Create<string>()).Should().NotBeNull();
     }
 }

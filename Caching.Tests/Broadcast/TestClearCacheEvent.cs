@@ -1,6 +1,6 @@
 ﻿namespace UiPath.Platform.Caching.Tests.Broadcast;
 
-public class TestClearCacheEvent : IClearCacheEvent
+public class TestClearCacheEvent : ICacheEvent
 {
     public bool Valid { get; set; } = true;
 
@@ -8,7 +8,9 @@ public class TestClearCacheEvent : IClearCacheEvent
 
     public Uri? Source { get; set; }
 
-    public ClearCacheEventData? Data { get; set; }
+    public CacheEventData? Data { get; set; }
+
+    public string? Type { get; set; }
 
     public bool IsValid() => Valid;
 }

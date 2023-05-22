@@ -1,63 +1,42 @@
-﻿using Microsoft.Extensions.DependencyInjection;
-using Microsoft.Extensions.DependencyInjection.Extensions;
-using UiPath.Platform.Caching.Redis;
-using UiPath.Platform.Caching.Telemetry;
+﻿namespace UiPath.Platform.Caching.Config;
 
-namespace UiPath.Platform.Caching.Config;
-
+[ExcludeFromCodeCoverage]
 public static class RedisCollectionExtensions
 {
-    public static ICachingBuilder UseRedis(this ICachingBuilder builder, Action<RedisConnectionOptions> configureOptions)
+    private const string DefaultSectionName = "RedisCache";
+
+    public static ICachingBuilder AddRedis(this ICachingBuilder builder, string sectionName = DefaultSectionName) =>
+        builder.AddRedis(opt => builder.Configuration.GetSection(sectionName).Bind(opt));
+
+    public static ICachingBuilder AddRedis(this ICachingBuilder builder,  Action<RedisCacheOptions> configure)
     {
-        RedisConnectionOptions redisConnectionOptions = new RedisConnectionOptions();
-        configureOptions(redisConnectionOptions);
-        builder.Services.Configure(configureOptions);
-        
-        builder.Services.TryAddTransient<Func<ConfigurationOptions, IConnectionMultiplexer>>(sp => (ConfigurationOptions options) => {
-            var cnn = ConnectionMultiplexer.Connect(options);
-            var profiler = sp.GetService<IRedisProfiler>();
-            if(profiler != null)
+        var options = new RedisCacheOptions();
+        configure(options);
+        builder.Services.Configure(configure);
+        if (builder.Enabled && options.Enabled && !string.IsNullOrWhiteSpace(options.ConnectionString))
+        {
+            builder.AddRedisConnection(opt =>
             {
-                cnn.RegisterProfiler(profiler.GetSession);
-            }
-            return cnn;
-        });
+                opt.ConnectionString = options.ConnectionString;
+                opt.ProfilerEnabled = options.ProfilerEnabled;
+                opt.HeartbeatInterval = options.HeartbeatInterval;
+                opt.BackOffMilliseconds = options.BackOffMilliseconds;
+            });
+        }
         
-        builder.Services.TryAddSingleton<IRedisConnection, RedisConnection>();
-        builder.Services.TryAddTransient<Func<IDatabase>>(sp => () => sp.GetRequiredService<IRedisConnection>().Connection.GetDatabase());
-        return builder;
-    }
-
-    public static ICachingBuilder UseRedis(this ICachingBuilder builder, Func<IServiceProvider, IDatabase> databaseFactory)
-    {
-        if (builder.Enabled)
-        {
-            builder.Services.TryAddTransient<Func<IDatabase>>(sp => () => databaseFactory(sp));
-        }
-
-        return builder;
-    }
-
-    public static ICachingBuilder AddRedisProfiler(this ICachingBuilder cachingBuilder, bool enabled = false)
-    {
-        if (enabled)
-        {
-            cachingBuilder.Services.AddSingleton<IRedisProfiler, RedisProfiler>();
-        }
-
-        return cachingBuilder;
+        return builder
+            .AddRedisCache(options, options.IsDefault)
+            .AddRedisRegionCache(options, options.IsDefault);
     }
 
     public static ICachingBuilder AddRedisCache(this ICachingBuilder builder, RedisCacheOptions? options = null, bool isDefault = false)
     {
-        if (builder.Enabled)
+        builder.AddCache(sp =>
         {
-            builder.AddCache(sp => sp.BuildRedisCache(options));
-        }
-        else
-        {
-            builder.AddCache(sp => (IRedisCache)NullCache.Instance);
-        }
+            var config = options ?? sp.GetService<IOptions<RedisCacheOptions>>()?.Value ?? new RedisCacheOptions();
+            return builder.Enabled && config.Enabled ? sp.BuildRedisCache(config) : NullCache.Instance;
+        });
+
 
         builder.Services.TryAddTransient(typeof(IRedisCache<>), typeof(RedisCache<>));
 
@@ -71,14 +50,11 @@ public static class RedisCollectionExtensions
 
     public static ICachingBuilder AddRedisRegionCache(this ICachingBuilder builder, RedisCacheOptions? options = null, bool isDefault = false)
     {
-        if (builder.Enabled)
+        builder.AddRegionCache(sp =>
         {
-            builder.AddRegionCache(sp => sp.BuildRedisRegionCache(options));
-        }
-        else
-        {
-            builder.AddRegionCache(sp => (IRedisRegionCache)NullRegionCache.Instance);
-        }
+            var config = options ?? sp.GetService<IOptions<RedisCacheOptions>>()?.Value ?? new RedisCacheOptions();
+            return builder.Enabled && config.Enabled ? sp.BuildRedisRegionCache(config) : NullRegionCache.Instance;
+        });
 
         builder.Services.TryAddTransient(typeof(IRedisRegionCache<>), typeof(RedisHashSetCache<>));
 
@@ -97,4 +73,35 @@ public static class RedisCollectionExtensions
         builder.Services.Configure(configureOptions);
         return builder;
     }
+
+    public static ICachingBuilder AddRedisConnection(this ICachingBuilder builder, Action<RedisConnectionOptions> configureOptions)
+    {
+        RedisConnectionOptions redisConnectionOptions = new RedisConnectionOptions();
+        configureOptions(redisConnectionOptions);
+        builder.Services.Configure(configureOptions);
+
+        builder.Services.TryAddTransient<Func<ConfigurationOptions, IConnectionMultiplexer>>(sp => (ConfigurationOptions options) => {
+            var cnn = ConnectionMultiplexer.Connect(options);
+            if (redisConnectionOptions.ProfilerEnabled)
+            {
+                var profiler = sp.GetService<IRedisProfiler>();
+                if (profiler != null)
+                {
+                    cnn.RegisterProfiler(profiler.GetSession);
+                }
+            }
+
+            return cnn;
+        });
+
+        if(redisConnectionOptions.ProfilerEnabled)
+        {
+            builder.Services.TryAddSingleton<IRedisProfiler, RedisProfiler>();
+        }
+
+        builder.Services.TryAddSingleton<IRedisConnection, RedisConnection>();
+        builder.Services.TryAddTransient<Func<IDatabase>>(sp => () => sp.GetRequiredService<IRedisConnection>().Connection.GetDatabase());
+        return builder;
+    }
+
 }

@@ -1,6 +1,4 @@
-﻿using Polly;
-
-namespace UiPath.Platform.Caching.Polly;
+﻿namespace UiPath.Platform.Caching.Polly;
 
 public class PollyHolder : IPolicyHolder
 {

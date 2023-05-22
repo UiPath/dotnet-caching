@@ -1,4 +1,5 @@
-﻿using Microsoft.Extensions.Caching.Memory;
+﻿using System.Threading.Channels;
+using Microsoft.Extensions.Caching.Memory;
 using Microsoft.Extensions.Internal;
 using Microsoft.Extensions.Logging;
 using NSubstitute.ExceptionExtensions;
@@ -15,13 +16,14 @@ public class HybridRegionCacheTests : IAsyncLifetime
     private ICachingTelemetryProvider _cachingTelemetryProvider = default!;
     private ITelemetryOperation _telemetryOperation = default!;
     private IChangeTokenFactory _changeTokenFactory = default!;
-    private IChannelPublisher<IClearCacheEvent> _channelPublisher = default!;
+    private IChannelPublisher<ICacheEvent> _channelPublisher = default!;
     private IChannelResolver _channelResolver = default!;
     private IMemoryCache _memoryCache = default!;
     private ISystemClock _clock = default!;
-    private IEventFormatterProxy<IClearCacheEvent> _formatter = default!;
-    private IClearCacheEventFactory _cacheEventFactory = default!;
+    private IEventFormatterProxy<ICacheEvent> _formatter = default!;
+    private ICacheEventFactory _cacheEventFactory = default!;
     private HybridCacheOptions _hybridCacheOptions = default!;
+    private Channel _channel = default!;
 
     private HybridRegionCache? _sut = null;
     private HybridRegionCache Sut => _sut ??= _fixture.Create<HybridRegionCache>();
@@ -39,7 +41,7 @@ public class HybridRegionCacheTests : IAsyncLifetime
             .ReturnsForAnyArgs(Task.FromResult<ICacheEntry<IDictionary<string, string?>>>(expectedCacheEntry));
 
         var actual = await Sut.GetAsync<string>(region, CancellationToken.None);
-        _changeTokenFactory.Received(1).Create(_hybridCacheOptions.ChannelPrefix, Arg.Any<string>(), Arg.Any<Uri?>());
+        _changeTokenFactory.Received(1).Create(_channel, Arg.Any<string>());
         _memoryCache.Received(1).CreateEntry(Arg.Any<object>());
         actual.Should().BeEquivalentTo(expected);
     }
@@ -90,7 +92,7 @@ public class HybridRegionCacheTests : IAsyncLifetime
             .ReturnsForAnyArgs(Task.FromResult<ICacheEntry<IDictionary<string, string?>>>(expectedCacheEntry));
 
         var actual = await Sut.GetItemAsync<string?>(region, key, CancellationToken.None);
-        _changeTokenFactory.Received(1).Create(_hybridCacheOptions.ChannelPrefix, Arg.Any<string>(), Arg.Any<Uri?>());
+        _changeTokenFactory.Received(1).Create(_channel, Arg.Any<string>());
         _memoryCache.Received(1).CreateEntry(Arg.Any<object>());
         actual.Should().Be(expected[key]);
     }
@@ -108,7 +110,7 @@ public class HybridRegionCacheTests : IAsyncLifetime
             .ReturnsForAnyArgs(Task.FromResult<ICacheEntry<IDictionary<string, string?>>>(expectedCacheEntry));
 
         var actual = await Sut.GetItemAsync<string?>(region, _fixture.Create<string>(), CancellationToken.None);
-        _changeTokenFactory.Received(1).Create(_hybridCacheOptions.ChannelPrefix, Arg.Any<string>(), Arg.Any<Uri?>());
+        _changeTokenFactory.Received(1).Create(_channel, Arg.Any<string>());
         _memoryCache.Received(1).CreateEntry(Arg.Any<object>());
         actual.Should().BeNull();
     }
@@ -224,7 +226,8 @@ public class HybridRegionCacheTests : IAsyncLifetime
     [Fact]
     public void Dispose_can_be_called()
     {
-        Sut.Dispose();
+        Action act = () => Sut.Dispose();
+        act.Should().NotThrow();
     }
 
     [Fact]
@@ -288,7 +291,7 @@ public class HybridRegionCacheTests : IAsyncLifetime
         await Sut.SetAsync(region, new Dictionary<string, string?>(), _fixture.Create<TimeSpan>(), CancellationToken.None);
         _memoryCache.Received(1).Remove(Arg.Any<object>());
         await _innerCache.Received(1).RemoveAsync<string>(region, Arg.Any<CancellationToken>());
-        await _channelPublisher.Received(1).PublishAsync(_hybridCacheOptions.ChannelPrefix, Arg.Any<IClearCacheEvent>(), Arg.Any<CancellationToken>());
+        await _channelPublisher.Received(1).PublishAsync(_channel, Arg.Any<ICacheEvent>(), Arg.Any<CancellationToken>());
     }
 
     [Fact]
@@ -302,7 +305,7 @@ public class HybridRegionCacheTests : IAsyncLifetime
         await Sut.SetAsync(region, expected, CancellationToken.None);
         _memoryCache.DidNotReceive().Remove(Arg.Any<object>());
         await _innerCache.DidNotReceive().RemoveAsync<string>(region, Arg.Any<CancellationToken>());
-        await _channelPublisher.Received(1).PublishAsync(_hybridCacheOptions.ChannelPrefix, Arg.Any<IClearCacheEvent>(), Arg.Any<CancellationToken>());
+        await _channelPublisher.Received(1).PublishAsync(_channel, Arg.Any<ICacheEvent>(), Arg.Any<CancellationToken>());
         await _innerCache.Received(1).SetAsync(region, Arg.Any<IDictionary<string, string?>>(), Arg.Any<RegionCacheEntryOptions>(), Arg.Any<CancellationToken>());
     }
 
@@ -322,7 +325,7 @@ public class HybridRegionCacheTests : IAsyncLifetime
         var actual = await Sut.SetAsync(region, expected, _fixture.Create<TimeSpan>(), CancellationToken.None);
         _memoryCache.DidNotReceive().Remove(Arg.Any<object>());
         await _innerCache.DidNotReceive().RemoveAsync<string>(region, Arg.Any<CancellationToken>());
-        await _channelPublisher.Received(1).PublishAsync(_hybridCacheOptions.ChannelPrefix, Arg.Any<IClearCacheEvent>(), Arg.Any<CancellationToken>());
+        await _channelPublisher.Received(1).PublishAsync(_channel, Arg.Any<ICacheEvent>(), Arg.Any<CancellationToken>());
         _memoryCache.Received(1).CreateEntry(Arg.Any<object>());
         await _innerCache.Received(1).SetAsync(region, Arg.Any<IDictionary<string, string?>>(), Arg.Any<RegionCacheEntryOptions>(), Arg.Any<CancellationToken>());
     }
@@ -343,7 +346,7 @@ public class HybridRegionCacheTests : IAsyncLifetime
         var actual = await Sut.SetAsync(region, expected, options, CancellationToken.None);
         _memoryCache.DidNotReceive().Remove(Arg.Any<object>());
         await _innerCache.DidNotReceive().RemoveAsync<string>(region, Arg.Any<CancellationToken>());
-        await _channelPublisher.Received(1).PublishAsync(_hybridCacheOptions.ChannelPrefix, Arg.Any<IClearCacheEvent>(), Arg.Any<CancellationToken>());
+        await _channelPublisher.Received(1).PublishAsync(_channel, Arg.Any<ICacheEvent>(), Arg.Any<CancellationToken>());
         _memoryCache.Received(1).CreateEntry(Arg.Any<object>());
         await _innerCache.Received(1).SetAsync(region, Arg.Any<IDictionary<string, string?>>(), Arg.Any<RegionCacheEntryOptions>(), Arg.Any<CancellationToken>());
     }
@@ -364,7 +367,7 @@ public class HybridRegionCacheTests : IAsyncLifetime
         var actual = await Sut.SetAsync(region, expected, options, CancellationToken.None);
         _memoryCache.Received(1).Remove(Arg.Any<object>());
         await _innerCache.Received(1).RemoveAsync<string>(region, Arg.Any<CancellationToken>());
-        await _channelPublisher.Received(1).PublishAsync(_hybridCacheOptions.ChannelPrefix, Arg.Any<IClearCacheEvent>(), Arg.Any<CancellationToken>());
+        await _channelPublisher.Received(1).PublishAsync(_channel, Arg.Any<ICacheEvent>(), Arg.Any<CancellationToken>());
         _memoryCache.DidNotReceive().CreateEntry(Arg.Any<object>());
         await _innerCache.DidNotReceive().SetAsync(region, Arg.Any<IDictionary<string, string?>>(), Arg.Any<RegionCacheEntryOptions>(), Arg.Any<CancellationToken>());
     }
@@ -396,12 +399,12 @@ public class HybridRegionCacheTests : IAsyncLifetime
 
         _innerCache.GetCacheEntryAsync<string>(region, CancellationToken.None)
             .ReturnsForAnyArgs(Task.FromResult<ICacheEntry<IDictionary<string, string?>>>(expectedCacheEntry));
-        _channelPublisher.PublishAsync(_hybridCacheOptions.ChannelPrefix, Arg.Any<IClearCacheEvent>(), Arg.Any<CancellationToken>())
+        _channelPublisher.PublishAsync(_channel, Arg.Any<ICacheEvent>(), Arg.Any<CancellationToken>())
             .Throws<Exception>();
         var actual = await Sut.RemoveAsync<string>(region, CancellationToken.None);
         _memoryCache.Received(1).Remove(Arg.Any<object>());
         await _innerCache.Received(1).RemoveAsync<string>(region, Arg.Any<CancellationToken>());
-        await _channelPublisher.Received(1).PublishAsync(_hybridCacheOptions.ChannelPrefix, Arg.Any<IClearCacheEvent>(), Arg.Any<CancellationToken>());
+        await _channelPublisher.Received(1).PublishAsync(_channel, Arg.Any<ICacheEvent>(), Arg.Any<CancellationToken>());
         actual.Should().BeFalse();
     }
 
@@ -420,7 +423,7 @@ public class HybridRegionCacheTests : IAsyncLifetime
         var actual = await Sut.RemoveAsync<string>(region, CancellationToken.None);
         _memoryCache.Received(1).Remove(Arg.Any<object>());
         await _innerCache.Received(1).RemoveAsync<string>(region, Arg.Any<CancellationToken>());
-        await _channelPublisher.Received(1).PublishAsync(_hybridCacheOptions.ChannelPrefix, Arg.Any<IClearCacheEvent>(), Arg.Any<CancellationToken>());
+        await _channelPublisher.Received(1).PublishAsync(_channel, Arg.Any<ICacheEvent>(), Arg.Any<CancellationToken>());
         actual.Should().BeTrue();
     }
 
@@ -447,7 +450,7 @@ public class HybridRegionCacheTests : IAsyncLifetime
             ActiveChangeCallbacks = true,
             HasChanged = false
         };
-        _changeTokenFactory.Create(_hybridCacheOptions.ChannelPrefix, Arg.Is<string>(x => x.Contains(region, StringComparison.InvariantCultureIgnoreCase)), Arg.Any<Uri?>())
+        _changeTokenFactory.Create(_channel, Arg.Is<string>(x => x.Contains(region, StringComparison.InvariantCultureIgnoreCase)))
             .Returns(c => token);
         var sut = new HybridRegionCache(_innerCache, (opt) => memoryCache, _changeTokenFactory, _channelPublisher, _channelResolver, _cacheEventFactory, _cachingTelemetryProvider, Options.Create(_hybridCacheOptions), _fixture.Freeze<ILogger<HybridRegionCache>>());
         var actual = await sut.GetAsync<string>(region, CancellationToken.None);
@@ -481,7 +484,7 @@ public class HybridRegionCacheTests : IAsyncLifetime
             ActiveChangeCallbacks = true,
             HasChanged = false
         };
-        _changeTokenFactory.Create(_hybridCacheOptions.ChannelPrefix, Arg.Any<string>(), Arg.Any<Uri?>())
+        _changeTokenFactory.Create(_channel, Arg.Any<string>())
             .ReturnsForAnyArgs(c => token);
         var sut = new HybridRegionCache(_innerCache, (opt) => memoryCache, _changeTokenFactory, _channelPublisher, _channelResolver, _cacheEventFactory, _cachingTelemetryProvider, Options.Create(_hybridCacheOptions), _fixture.Freeze<ILogger<HybridRegionCache>>());
         var actual = await sut.GetAsync<string>(region, CancellationToken.None);
@@ -516,7 +519,7 @@ public class HybridRegionCacheTests : IAsyncLifetime
         _innerCache.ExpireTimeAsync(region, CancellationToken.None)
                .ReturnsForAnyArgs(Task.FromResult((DateTimeOffset?)clock.UtcNow.AddDays(1)));
         TestChangeToken? token = default;
-        _changeTokenFactory.Create(_hybridCacheOptions.ChannelPrefix, Arg.Any<string>(), Arg.Any<Uri?>())
+        _changeTokenFactory.Create(_channel, Arg.Any<string>())
             .ReturnsForAnyArgs(c =>
             {
                 token = new TestChangeToken
@@ -563,7 +566,7 @@ public class HybridRegionCacheTests : IAsyncLifetime
         _innerCache.ExpireTimeAsync(region, CancellationToken.None)
                .ReturnsForAnyArgs(Task.FromResult((DateTimeOffset?)clock.UtcNow.AddDays(1)));
         TestChangeToken? token = default;
-        _changeTokenFactory.Create(_hybridCacheOptions.ChannelPrefix, Arg.Any<string>(), Arg.Any<Uri?>())
+        _changeTokenFactory.Create(_channel, Arg.Any<string>())
             .ReturnsForAnyArgs(c =>
             {
                 token = new TestChangeToken
@@ -609,7 +612,7 @@ public class HybridRegionCacheTests : IAsyncLifetime
         _innerCache.ExpireTimeAsync(region, CancellationToken.None)
                .ReturnsForAnyArgs(Task.FromResult((DateTimeOffset?)clock.UtcNow.AddDays(1)));
         TestChangeToken? token = default;
-        _changeTokenFactory.Create(_hybridCacheOptions.ChannelPrefix, Arg.Any<string>(), Arg.Any<Uri?>())
+        _changeTokenFactory.Create(_channel, Arg.Any<string>())
             .ReturnsForAnyArgs(c =>
             {
                 token = new TestChangeToken
@@ -658,7 +661,7 @@ public class HybridRegionCacheTests : IAsyncLifetime
             ActiveChangeCallbacks = false,
             HasChanged = false
         };
-        _changeTokenFactory.Create(_hybridCacheOptions.ChannelPrefix, Arg.Any<string>(), Arg.Any<Uri?>())
+        _changeTokenFactory.Create(_channel, Arg.Any<string>())
             .ReturnsForAnyArgs(c => token);
         var sut = new HybridRegionCache(_innerCache, (opt) => memoryCache, _changeTokenFactory, _channelPublisher, _channelResolver, _cacheEventFactory, _cachingTelemetryProvider, Options.Create(new HybridCacheOptions
         {
@@ -679,7 +682,7 @@ public class HybridRegionCacheTests : IAsyncLifetime
         await Sut.RefreshAsync<string>(region, expiration, CancellationToken.None);
         _memoryCache.Received(1).Remove(region);
         await _innerCache.Received(1).RefreshAsync<string>(region, Arg.Any<RegionCacheEntryOptions>(), Arg.Any<CancellationToken>());
-        await _channelPublisher.Received(1).PublishAsync(_hybridCacheOptions.ChannelPrefix, Arg.Any<IClearCacheEvent>(), Arg.Any<CancellationToken>());
+        await _channelPublisher.Received(1).PublishAsync(_channel, Arg.Any<ICacheEvent>(), Arg.Any<CancellationToken>());
     }
 
     [Fact]
@@ -689,7 +692,7 @@ public class HybridRegionCacheTests : IAsyncLifetime
         await Sut.RefreshAsync<string>(region, CancellationToken.None);
         _memoryCache.Received(1).Remove(region);
         await _innerCache.Received(1).RefreshAsync<string>(region, Arg.Any<RegionCacheEntryOptions>(), Arg.Any<CancellationToken>());
-        await _channelPublisher.Received(1).PublishAsync(_hybridCacheOptions.ChannelPrefix, Arg.Any<IClearCacheEvent>(), Arg.Any<CancellationToken>());
+        await _channelPublisher.Received(1).PublishAsync(_channel, Arg.Any<ICacheEvent>(), Arg.Any<CancellationToken>());
     }
 
     [Fact]
@@ -700,7 +703,7 @@ public class HybridRegionCacheTests : IAsyncLifetime
         await Sut.RefreshAsync<string>(region, expiration, CancellationToken.None);
         _memoryCache.Received(1).Remove(region);
         await _innerCache.Received(1).RefreshAsync<string>(region, Arg.Any<RegionCacheEntryOptions>(), Arg.Any<CancellationToken>());
-        await _channelPublisher.Received(1).PublishAsync(_hybridCacheOptions.ChannelPrefix, Arg.Any<IClearCacheEvent>(), Arg.Any<CancellationToken>());
+        await _channelPublisher.Received(1).PublishAsync(_channel, Arg.Any<ICacheEvent>(), Arg.Any<CancellationToken>());
     }
 
     [Fact]
@@ -713,7 +716,7 @@ public class HybridRegionCacheTests : IAsyncLifetime
         await Sut.RefreshAsync<string>(region, expiration, CancellationToken.None);
         _memoryCache.Received(1).Remove(region);
         await _innerCache.Received(1).RefreshAsync<string>(region, Arg.Any<RegionCacheEntryOptions>(), Arg.Any<CancellationToken>());
-        await _channelPublisher.DidNotReceive().PublishAsync(_hybridCacheOptions.ChannelPrefix, Arg.Any<IClearCacheEvent>(), Arg.Any<CancellationToken>());
+        await _channelPublisher.DidNotReceive().PublishAsync(_channel, Arg.Any<ICacheEvent>(), Arg.Any<CancellationToken>());
     }
 
     [Fact]
@@ -726,7 +729,7 @@ public class HybridRegionCacheTests : IAsyncLifetime
         await Sut.RefreshAsync<string>(region, expiration, CancellationToken.None);
         _memoryCache.Received(1).Remove(region);
         await _innerCache.Received(1).RefreshAsync<string>(region, Arg.Any<RegionCacheEntryOptions>(), Arg.Any<CancellationToken>());
-        await _channelPublisher.DidNotReceive().PublishAsync(_hybridCacheOptions.ChannelPrefix, Arg.Any<IClearCacheEvent>(), Arg.Any<CancellationToken>());
+        await _channelPublisher.DidNotReceive().PublishAsync(_channel, Arg.Any<ICacheEvent>(), Arg.Any<CancellationToken>());
     }
 
     [Fact]
@@ -800,7 +803,7 @@ public class HybridRegionCacheTests : IAsyncLifetime
             ActiveChangeCallbacks = true,
             HasChanged = false
         };
-        _changeTokenFactory.Create(_hybridCacheOptions.ChannelPrefix, Arg.Any<string>(), Arg.Any<Uri?>())
+        _changeTokenFactory.Create(_channel, Arg.Any<string>())
             .Returns(c => token);
 
         var expiration = _clock.UtcNow.AddYears(1);
@@ -827,7 +830,7 @@ public class HybridRegionCacheTests : IAsyncLifetime
             ActiveChangeCallbacks = true,
             HasChanged = false
         };
-        _changeTokenFactory.Create(_hybridCacheOptions.ChannelPrefix, Arg.Any<string>(), Arg.Any<Uri?>())
+        _changeTokenFactory.Create(_channel, Arg.Any<string>())
             .Returns(c => token);
 
         var expiration = TimeSpan.FromDays(1);
@@ -915,7 +918,7 @@ public class HybridRegionCacheTests : IAsyncLifetime
 
         var values = _fixture.Create<IDictionary<string, int>>();
         await Sut.SetExtendedPropertiesAsync<string>(region, expected, CancellationToken.None);
-        await _channelPublisher.Received(1).PublishAsync(_hybridCacheOptions.ChannelPrefix, Arg.Any<IClearCacheEvent>(), Arg.Any<CancellationToken>());
+        await _channelPublisher.Received(1).PublishAsync(_channel, Arg.Any<ICacheEvent>(), Arg.Any<CancellationToken>());
     }
 
     [Fact]
@@ -943,7 +946,7 @@ public class HybridRegionCacheTests : IAsyncLifetime
         var values = _fixture.Create<IDictionary<string, int>>();
         var response = await Sut.SetExtendedPropertiesAsync<string>(region, expected, CancellationToken.None);
         response.Should().BeFalse();
-        await _channelPublisher.DidNotReceive().PublishAsync(_hybridCacheOptions.ChannelPrefix, Arg.Any<IClearCacheEvent>(), Arg.Any<CancellationToken>());
+        await _channelPublisher.DidNotReceive().PublishAsync(_channel, Arg.Any<ICacheEvent>(), Arg.Any<CancellationToken>());
     }
 
     [Fact]
@@ -978,34 +981,33 @@ public class HybridRegionCacheTests : IAsyncLifetime
     public Task InitializeAsync()
     {
         _changeTokenFactory = _fixture.Freeze<IChangeTokenFactory>();
-        _channelPublisher = _fixture.Freeze<IChannelPublisher<IClearCacheEvent>>();
+        _channelPublisher = _fixture.Freeze<IChannelPublisher<ICacheEvent>>();
         _channelResolver = _fixture.Freeze<IChannelResolver>();
         _memoryCache = _fixture.Freeze<IMemoryCache>();
         _innerCache = _fixture.Freeze<IRegionCache>();
         _cachingTelemetryProvider = _fixture.Freeze<ICachingTelemetryProvider>();
         _telemetryOperation = _fixture.Freeze<ITelemetryOperation>();
         _clock = new SystemClock();
+        _channel = (Channel)_fixture.Create<string>();
         _hybridCacheOptions = new()
         {
-            ChannelPrefix = "test",
             DefaultExpiration = TimeSpan.FromMinutes(10),
             EntryFactory = new TestCacheEntryFactory(),
-            SourceUri = null
         };
-        _channelResolver.GetFor<object>(Arg.Any<string>()).Returns((Channel)_hybridCacheOptions.ChannelPrefix);
-        _channelResolver.GetFor(Arg.Any<Type>(), Arg.Any<string>()).Returns((Channel)_hybridCacheOptions.ChannelPrefix);
+        _channelResolver.GetFor<object>(Arg.Any<string>()).Returns(_channel);
+        _channelResolver.GetFor(Arg.Any<Type>(), Arg.Any<string>()).Returns(_channel);
         _fixture.Inject<Func<IMemoryCache>>(() => _memoryCache);
         _fixture.Inject(Options.Create(_hybridCacheOptions));
         _formatter = new CacheClearEventFormatterProxy();
         _fixture.Inject(_formatter);
-        _cacheEventFactory = _fixture.Freeze<IClearCacheEventFactory>();
-        _cacheEventFactory.Create(Arg.Any<ClearCacheEventData>(), Arg.Any<Uri?>(), Arg.Any<string?>())
+        _cacheEventFactory = _fixture.Freeze<ICacheEventFactory>();
+        _cacheEventFactory.Create(Arg.Any<string>(), Arg.Any<CacheEventData>(), Arg.Any<string?>())
             .Returns(c =>
                 new TestClearCacheEvent
                 {
-                    Id = c.Arg<string?>(),
-                    Data = c.Arg<ClearCacheEventData>(),
-                    Source = c.Arg<Uri?>()
+                    Id = c.ArgAt<string?>(2),
+                    Data = c.Arg<CacheEventData>(),
+                    Type = c.ArgAt<string>(0),
                 }
             );
         return Task.CompletedTask;

@@ -1,12 +1,4 @@
-﻿using System.Diagnostics.CodeAnalysis;
-using Microsoft.Extensions.DependencyInjection;
-using Microsoft.Extensions.Logging;
-using Microsoft.Extensions.Logging.Abstractions;
-using Microsoft.Extensions.Options;
-using Polly;
-using Polly.Timeout;
-
-namespace UiPath.Platform.Caching.Polly;
+﻿namespace UiPath.Platform.Caching.Polly;
 
 [ExcludeFromCodeCoverage]
 public static class ServiceProviderExtensions
