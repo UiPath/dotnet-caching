@@ -2,6 +2,8 @@
 using NSubstitute.ExceptionExtensions;
 using NSubstitute.ReceivedExtensions;
 using StackExchange.Redis;
+using UiPath.Platform.Caching;
+using UiPath.Platform.Caching.Policies;
 
 namespace UiPath.Platform.Caching.Tests.Redis;
 
@@ -14,6 +16,8 @@ public class RedisCacheTests : IAsyncLifetime
     private IDatabase _database = default!;
     private ISerializerProxy _serializer = default!;
     private DateTimeOffset _now = DateTimeOffset.UtcNow;
+    private CacheKey _cacheKey = default!;
+    private RedisKey _redisKey = default!;
 
     private RedisCache? _sut = null;
     private RedisCache Sut => _sut ??= _fixture.Create<RedisCache>();
@@ -21,32 +25,22 @@ public class RedisCacheTests : IAsyncLifetime
     [Fact]
     public async Task Get_works_as_expected()
     {
-        var key = _fixture.Create<string>();
         var expectedValue = _fixture.Create<string>();
-        var actualKey = string.Empty;
-        CommandFlags actualFlags = default;
-        _database.StringGetAsync(Arg.Any<RedisKey>(), Arg.Any<CommandFlags>())
-            .ReturnsForAnyArgs(ci =>
+        _database.StringGetAsync(_redisKey, CommandFlags.PreferReplica)
+            .Returns(ci =>
             {
-                actualKey = ((RedisKey)ci[0]).ToString();
-                actualFlags = (CommandFlags)ci[1];
                 return _serializer.Serialize(expectedValue);
             });
-        var actualValue = await Sut.GetAsync<string>(key);
+        var actualValue = await Sut.GetAsync<string>(_cacheKey);
         actualValue.Should().Be(expectedValue);
-        var expectedKey = string.Concat(_cacheOptions.InstanceName, key).ToLowerInvariant();
-        actualKey.Should().Be(expectedKey);
-        actualFlags.Should().BeOneOf(CommandFlags.PreferReplica);
-        Sut.InstanceName.Should().Be(_cacheOptions.InstanceName);
     }
 
     [Fact]
     public async Task Get_has_no_redis_exceptions()
     {
-        var key = _fixture.Create<string>();
         _database.StringGetAsync(Arg.Any<RedisKey>(), Arg.Any<CommandFlags>())
             .ThrowsAsync(new RedisException("test"));
-        var actualValue = await Sut.GetAsync<int>(key);
+        var actualValue = await Sut.GetAsync<int>(_cacheKey);
         actualValue.Should().Be(default);
     }
 
@@ -83,60 +77,47 @@ public class RedisCacheTests : IAsyncLifetime
     [Fact]
     public async Task Refresh_timespan_works_as_expected()
     {
-        var key = _fixture.Create<string>();
-        var expiration = _fixture.Create<TimeSpan>();
+        var expiration =  _clock.UtcNow.AddDays(1);
         var actualKey = string.Empty;
-        TimeSpan? actualExpiration = default;
-        CommandFlags actualFlags = default;
-        _database.KeyExpireAsync(Arg.Any<RedisKey>(), Arg.Any<TimeSpan?>(), Arg.Any<CommandFlags>())
-            .ReturnsForAnyArgs(ci =>
+        bool called = false;
+        _database.KeyExpireAsync(_redisKey, Arg.Any<DateTime>(), Arg.Any<CommandFlags>())
+            .Returns(ci =>
             {
-                actualKey = ci.Arg<RedisKey>().ToString();
-                actualFlags = ci.Arg<CommandFlags>();
-                actualExpiration = ci.Arg<TimeSpan?>();
+                called = true;
                 return Task.FromResult(_fixture.Create<bool>());
             });
-        await Sut.RefreshAsync<string>(key, expiration);
+        await Sut.RefreshAsync<string>(_cacheKey, expiration);
+        called.Should().BeTrue();
     }
 
     [Fact]
     public async Task Refresh_datetime_works_as_expected()
     {
-        var key = _fixture.Create<string>();
         var expiration = _fixture.Create<TimeSpan>();
         var actualKey = string.Empty;
-        DateTime? actualExpiration = default;
-        CommandFlags actualFlags = default;
-        _database.KeyExpireAsync(Arg.Any<RedisKey>(), Arg.Any<DateTime?>(), Arg.Any<CommandFlags>())
-            .ReturnsForAnyArgs(ci =>
+        _database.KeyExpireAsync(_redisKey, Arg.Any<DateTime>(), Arg.Any<CommandFlags>())
+            .Returns(ci =>
             {
-                actualKey = ci.Arg<RedisKey>().ToString();
-                actualFlags = ci.Arg<CommandFlags>();
-                actualExpiration = ci.Arg<DateTime?>();
                 return _fixture.Create<bool>();
             });
-        await Sut.RefreshAsync<string>(key, expiration);
-        await _database.Received(1).KeyExpireAsync(Arg.Any<RedisKey>(), Arg.Any<DateTime?>(), Arg.Any<CommandFlags>());
+        await Sut.RefreshAsync<string>(_cacheKey, expiration);
+        await _database.Received(1).KeyExpireAsync(_redisKey, Arg.Any<DateTime>(), Arg.Any<CommandFlags>());
     }
 
     [Fact]
     public async Task Refresh_no_expiration_works_as_expected()
     {
-        var key = _fixture.Create<string>();
         var expiration = _fixture.Create<TimeSpan>();
         var actualKey = string.Empty;
         DateTime? actualExpiration = default;
-        CommandFlags actualFlags = default;
-        _database.KeyExpireAsync(Arg.Any<RedisKey>(), Arg.Any<DateTime?>(), Arg.Any<CommandFlags>())
-            .ReturnsForAnyArgs(ci =>
+        _database.KeyExpireAsync(_redisKey, Arg.Any<DateTime?>(), Arg.Any<CommandFlags>())
+            .Returns(ci =>
             {
-                actualKey = ci.Arg<RedisKey>().ToString();
-                actualFlags = ci.Arg<CommandFlags>();
                 actualExpiration = ci.Arg<DateTime?>();
                 return _fixture.Create<bool>();
             });
-        await Sut.RefreshAsync<string>(key, CancellationToken.None);
-        await _database.Received(1).KeyExpireAsync(Arg.Any<RedisKey>(), Arg.Any<DateTime?>(), Arg.Any<CommandFlags>());
+        await Sut.RefreshAsync<string>(_cacheKey, CancellationToken.None);
+        await _database.Received(1).KeyExpireAsync(_redisKey, Arg.Any<DateTime?>(), Arg.Any<CommandFlags>());
         actualExpiration.Should().NotBeNull();
         DateTimeOffset actualOffset = DateTime.SpecifyKind(actualExpiration!.Value, DateTimeKind.Utc);
         var expected = _now.Add(_cacheOptions.DefaultExpiration.GetValueOrDefault());
@@ -150,18 +131,17 @@ public class RedisCacheTests : IAsyncLifetime
     public async Task Refresh_no_expiration_no_default(Type expirationType)
     {
         _cacheOptions.DefaultExpiration = null;
-        var key = _fixture.Create<string>();
         if (expirationType == typeof(TimeSpan))
         {
-            await Sut.RefreshAsync<string>(key, default(TimeSpan?), CancellationToken.None);
+            await Sut.RefreshAsync<string>(_cacheKey, default(TimeSpan?), CancellationToken.None);
         }
         else if (expirationType == typeof(DateTimeOffset))
         {
-            await Sut.RefreshAsync<string>(key, default(DateTimeOffset?), CancellationToken.None);
+            await Sut.RefreshAsync<string>(_cacheKey, default(DateTimeOffset?), CancellationToken.None);
         }
         else
         {
-            await Sut.RefreshAsync<string>(key, CancellationToken.None);
+            await Sut.RefreshAsync<string>(_cacheKey, CancellationToken.None);
         }
 
         await _database.DidNotReceive().KeyExpireAsync(Arg.Any<RedisKey>(), Arg.Any<DateTime?>(), Arg.Any<CommandFlags>());
@@ -171,36 +151,34 @@ public class RedisCacheTests : IAsyncLifetime
     [Fact]
     public async Task GetOrAdd_default_key_expiration()
     {
-        var key = _fixture.Create<string>();
         DateTime? actualExpiration = default;
-        _database.KeyExpireAsync(Arg.Any<RedisKey>(), Arg.Any<DateTime?>(), Arg.Any<CommandFlags>())
-            .ReturnsForAnyArgs(ci =>
+        _database.KeyExpireAsync(_redisKey, Arg.Any<DateTime?>(), Arg.Any<CommandFlags>())
+            .Returns(ci =>
             {
                 actualExpiration = ci.Arg<DateTime?>();
                 return _fixture.Create<bool>();
             });
-        await Sut.GetOrAddAsync(key, () => Task.FromResult(_fixture.Create<string?>()), default(DateTimeOffset?), CancellationToken.None);
+        await Sut.GetOrAddAsync(_cacheKey, () => Task.FromResult(_fixture.Create<string?>()), default(DateTimeOffset?), CancellationToken.None);
         var expectedExpiration = _clock.UtcNow.Add(_cacheOptions.DefaultExpiration!.Value).Subtract(_clock.UtcNow);
 
-        await _database.Received(1).StringSetAsync(Arg.Any<RedisKey>(), Arg.Any<RedisValue>(), Arg.Is<TimeSpan?>(t => expectedExpiration == t), When.Always, CommandFlags.DemandMaster);
+        await _database.Received(1).StringSetAsync(_redisKey, Arg.Any<RedisValue>(), Arg.Is<TimeSpan?>(t => expectedExpiration == t), When.Always, CommandFlags.DemandMaster);
     }
 
     [Fact]
     public async Task GetOrAdd_key_expiration_no_default_expiration()
     {
         _cacheOptions.DefaultExpiration = null;
-        var key = _fixture.Create<string>();
         DateTime? actualExpiration = default;
-        _database.KeyExpireAsync(Arg.Any<RedisKey>(), Arg.Any<DateTime?>(), Arg.Any<CommandFlags>())
-            .ReturnsForAnyArgs(ci =>
+        _database.KeyExpireAsync(_redisKey, Arg.Any<DateTime?>(), Arg.Any<CommandFlags>())
+            .Returns(ci =>
             {
                 actualExpiration = ci.Arg<DateTime?>();
                 return _fixture.Create<bool>();
             });
         DateTimeOffset? expiration = _fixture.Create<DateTimeOffset>();
-        await Sut.GetOrAddAsync(key, () => Task.FromResult(_fixture.Create<string?>()), expiration, CancellationToken.None);
+        await Sut.GetOrAddAsync(_cacheKey, () => Task.FromResult(_fixture.Create<string?>()), expiration, CancellationToken.None);
         var expectedExpiration = expiration.Value.Subtract(_clock.UtcNow);
-        await _database.Received(1).StringSetAsync(Arg.Any<RedisKey>(), Arg.Any<RedisValue>(), Arg.Is<TimeSpan?>(t => expectedExpiration == t), When.Always, CommandFlags.DemandMaster);
+        await _database.Received(1).StringSetAsync(_redisKey, Arg.Any<RedisValue>(), Arg.Is<TimeSpan?>(t => expectedExpiration == t), When.Always, CommandFlags.DemandMaster);
     }
 
     [Theory]
@@ -208,7 +186,6 @@ public class RedisCacheTests : IAsyncLifetime
     [InlineData(5)]
     public async Task Refresh_redis_exception(int? expirationMinutes)
     {
-        var key = _fixture.Create<string>();
         TimeSpan? expiration = null;
         TimeSpan expectedExpiration;
         if (expirationMinutes.HasValue)
@@ -220,64 +197,38 @@ public class RedisCacheTests : IAsyncLifetime
         {
             expectedExpiration = _cacheOptions.DefaultExpiration ?? TimeSpan.MinValue;
         }
-        var actualKey = string.Empty;
+
         DateTime? actualExpiration = default;
-        CommandFlags actualFlags = default;
-        _database.KeyExpireAsync(Arg.Any<RedisKey>(), Arg.Any<DateTime?>(), Arg.Any<CommandFlags>())
+        _database.KeyExpireAsync(_redisKey, Arg.Any<DateTime?>(), CommandFlags.DemandMaster| CommandFlags.FireAndForget)
                 .ThrowsAsync(ci =>
                 {
-                    actualKey = ci.Arg<RedisKey>().ToString();
-                    actualFlags = ci.Arg<CommandFlags>();
                     actualExpiration = ci.Arg<DateTime?>();
                     return new RedisException("test");
                 });
-        await Sut.RefreshAsync<string>(key, expiration);
+        await Sut.RefreshAsync<string>(_cacheKey, expiration);
         actualExpiration.GetValueOrDefault().Subtract(_now.UtcDateTime).Should().BeCloseTo(expectedExpiration, TimeSpan.FromSeconds(10));
-        var expectedKey = string.Concat(_cacheOptions.InstanceName, key).ToLowerInvariant();
-        actualKey.Should().Be(expectedKey);
-        actualFlags.Should().HaveFlag(CommandFlags.DemandMaster);
-        actualFlags.Should().HaveFlag(CommandFlags.FireAndForget);
     }
 
     [Fact]
     public async Task Remove_redis_exception()
     {
-        var key = _fixture.Create<string>();
-        var actualKey = string.Empty;
-        CommandFlags actualFlags = default;
-        _database.KeyDeleteAsync(Arg.Any<RedisKey>(), Arg.Any<CommandFlags>())
+        _database.KeyDeleteAsync(_redisKey, CommandFlags.DemandMaster)
                 .ThrowsAsync(ci =>
                 {
-                    actualKey = ci.Arg<RedisKey>().ToString();
-                    actualFlags = ci.Arg<CommandFlags>();
                     return new RedisException("test");
                 });
-        var actualResponse = await Sut.RemoveAsync<string>(key);
-        var expectedKey = string.Concat(_cacheOptions.InstanceName, key).ToLowerInvariant();
-        actualKey.Should().Be(expectedKey);
+        var actualResponse = await Sut.RemoveAsync<string>(_cacheKey);
         actualResponse.Should().BeFalse();
-        actualFlags.Should().HaveFlag(CommandFlags.DemandMaster);
     }
 
     [Fact]
     public async Task Remove_works_as_expected()
     {
-        var key = _fixture.Create<string>();
-        var actualKey = string.Empty;
-        CommandFlags actualFlags = default;
         var expectedResponse = _fixture.Create<bool>();
-        _database.KeyDeleteAsync(Arg.Any<RedisKey>(), Arg.Any<CommandFlags>())
-                .ReturnsForAnyArgs(ci =>
-                {
-                    actualKey = ci.Arg<RedisKey>().ToString();
-                    actualFlags = ci.Arg<CommandFlags>();
-                    return Task.FromResult(expectedResponse);
-                });
-        var actualResponse = await Sut.RemoveAsync<string>(key);
-        var expectedKey = string.Concat(_cacheOptions.InstanceName, key).ToLowerInvariant();
-        actualKey.Should().Be(expectedKey);
+        _database.KeyDeleteAsync(_redisKey, CommandFlags.DemandMaster)
+                .Returns(expectedResponse);
+        var actualResponse = await Sut.RemoveAsync<string>(_cacheKey);
         actualResponse.Should().Be(expectedResponse);
-        actualFlags.Should().HaveFlag(CommandFlags.DemandMaster);
     }
 
     [Fact]
@@ -297,97 +248,79 @@ public class RedisCacheTests : IAsyncLifetime
     [InlineData("    ")]
     public async Task Set_invalid_key(string key)
     {
-        Func<Task> act = async () => { await Sut.SetAsync(key, _fixture.Create<string>(), _fixture.Create<TimeSpan>()); };
+        CacheKey cacheKey = key;
+        Func<Task> act = async () => { await Sut.SetAsync(cacheKey, _fixture.Create<string>(), _fixture.Create<TimeSpan>()); };
         await act.Should().ThrowAsync<ArgumentNullException>();
     }
 
     [Fact]
     public async Task Set_redis_exception()
     {
-        var key = _fixture.Create<string>();
         var value = _fixture.Create<string>();
         var expiration = _fixture.Create<TimeSpan>();
-        var actualKey = string.Empty;
-        CommandFlags actualFlags = default;
-        _database.StringSetAsync(Arg.Any<RedisKey>(), Arg.Any<RedisValue>(), Arg.Any<TimeSpan?>(), Arg.Any<When>(), Arg.Any<CommandFlags>())
+        _database.StringSetAsync(_redisKey, Arg.Any<RedisValue>(), Arg.Any<TimeSpan?>(), Arg.Any<When>(), CommandFlags.DemandMaster)
                 .ThrowsAsync(ci =>
                 {
-                    actualKey = ci.Arg<RedisKey>().ToString();
-                    actualFlags = ci.Arg<CommandFlags>();
                     return new RedisException("test");
                 });
-        var actualResponse = await Sut.SetAsync(key, value, expiration);
-        var expectedKey = string.Concat(_cacheOptions.InstanceName, key).ToLowerInvariant();
-        actualKey.Should().Be(expectedKey);
+        var actualResponse = await Sut.SetAsync(_cacheKey, value, expiration);
         actualResponse.Should().BeFalse();
-        actualFlags.Should().HaveFlag(CommandFlags.DemandMaster);
     }
 
     [Fact]
     public async Task Set_default_key()
     {
-        var key = _fixture.Create<string>();
         var value = default(string);
         var expiration = _fixture.Create<TimeSpan>();
-        var actualKey = string.Empty;
-        CommandFlags actualFlags = default;
         var expectedResponse = _fixture.Create<bool>();
-        _database.KeyDeleteAsync(Arg.Any<RedisKey>(), Arg.Any<CommandFlags>())
-                .ReturnsForAnyArgs(ci =>
+        _database.KeyDeleteAsync(_redisKey, CommandFlags.DemandMaster)
+                .Returns(ci =>
                 {
-                    actualKey = ci.Arg<RedisKey>().ToString();
-                    actualFlags = ci.Arg<CommandFlags>();
                     return Task.FromResult(expectedResponse);
                 });
-        var actualResponse = await Sut.SetAsync(key, value, expiration);
-        var expectedKey = string.Concat(_cacheOptions.InstanceName, key).ToLowerInvariant();
-        actualKey.Should().Be(expectedKey);
+        var actualResponse = await Sut.SetAsync(_cacheKey, value, expiration);
         actualResponse.Should().Be(expectedResponse);
-        actualFlags.Should().HaveFlag(CommandFlags.DemandMaster);
     }
 
 
     [Fact]
     public async Task Contains_works_as_expected()
     {
-        var key = _fixture.Create<string>();
-        var keysCalled = false;
-        _database.KeyExistsAsync(Arg.Any<RedisKey>(), CommandFlags.PreferReplica)
-            .ReturnsForAnyArgs(ci =>
+        var cacheKeyCalled = false;
+        _database.KeyExistsAsync(_redisKey, CommandFlags.PreferReplica)
+            .Returns(ci =>
             {
-                keysCalled = true;
+                cacheKeyCalled = true;
                 return Task.FromResult(true);
             });
 
-        var actual = await Sut.ContainsAsync(key, CancellationToken.None);
-        keysCalled.Should().BeTrue();
+        var actual = await Sut.ContainsAsync<string>(_cacheKey, CancellationToken.None);
+        cacheKeyCalled.Should().BeTrue();
         actual.Should().BeTrue();
     }
 
     [Fact]
     public async Task Contains_redis_exception()
     {
-        var key = _fixture.Create<string>();
         _database.KeyExistsAsync(Arg.Any<RedisKey>(), CommandFlags.PreferReplica)
             .ThrowsAsync(new Exception());
 
-        var actual = await Sut.ContainsAsync(key, CancellationToken.None);
+        var actual = await Sut.ContainsAsync<string>(_cacheKey, CancellationToken.None);
         actual.Should().BeFalse();
     }
 
     [Fact]
     public async Task Read_ExpireTime_For_Unknown_Key_v7()
     {
-        var key = _fixture.Create<string>();
         var wasCalled = false;
         _cacheOptions.Version = 7;
-        _database.KeyExpireTimeAsync(Arg.Any<RedisKey>(), Arg.Any<CommandFlags>())
-            .ReturnsForAnyArgs(ci =>
+        _database.KeyExpireTimeAsync(_redisKey, Arg.Any<CommandFlags>())
+            .Returns(ci =>
             {
                 wasCalled = true;
                 return Task.FromResult(default(DateTime?));
             });
-        var actual = await Sut.ExpireTimeAsync(key, CancellationToken.None);
+        var actual = await Sut.ExpireTimeAsync<string>(_cacheKey, CancellationToken.None);
         wasCalled.Should().BeTrue();
         actual.Should().BeNull();
     }
@@ -395,85 +328,83 @@ public class RedisCacheTests : IAsyncLifetime
     [Fact]
     public async Task Read_ExpireTime_For_Unknown_Key()
     {
-        var key = _fixture.Create<string>();
-        var wasCalled = false;
-        _database.KeyTimeToLiveAsync(Arg.Any<RedisKey>(), Arg.Any<CommandFlags>())
-            .ReturnsForAnyArgs(ci =>
-            {
-                wasCalled = true;
-                return Task.FromResult(default(TimeSpan?));
-            });
-        var actual = await Sut.ExpireTimeAsync(key, CancellationToken.None);
-        wasCalled.Should().BeTrue();
+        _database.KeyTimeToLiveAsync(_redisKey, Arg.Any<CommandFlags>())
+            .Returns(default(TimeSpan?));
+        var actual = await Sut.ExpireTimeAsync<string>(_cacheKey, CancellationToken.None);
+        await _database.Received(1).KeyTimeToLiveAsync(_redisKey, Arg.Any<CommandFlags>());
         actual.Should().BeNull();
     }
 
     [Fact]
     public async Task Read_ExpireTime_For_Known_Key_v7()
     {
-        var key = _fixture.Create<string>();
-        var wasCalled = false;
         _cacheOptions.Version = 7;
         DateTimeOffset? expected = _fixture.Create<DateTimeOffset>();
-        _database.KeyExpireTimeAsync(Arg.Any<RedisKey>(), Arg.Any<CommandFlags>())
-            .ReturnsForAnyArgs(ci =>
-            {
-                wasCalled = true;
-                return Task.FromResult((DateTime?)expected.GetValueOrDefault().UtcDateTime);
-            });
-        var actual = await Sut.ExpireTimeAsync(key, CancellationToken.None);
-        wasCalled.Should().BeTrue();
+        _database.KeyExpireTimeAsync(_redisKey, Arg.Any<CommandFlags>())
+            .Returns((DateTime?)expected.GetValueOrDefault().UtcDateTime);
+        var actual = await Sut.ExpireTimeAsync<string>(_cacheKey, CancellationToken.None);
+        await _database.Received(1).KeyExpireTimeAsync(_redisKey, Arg.Any<CommandFlags>());
         actual.Should().Be(expected.GetValueOrDefault());
     }
 
     [Fact]
     public async Task Read_ExpireTime_For_Known_Key()
     {
-        var key = _fixture.Create<string>();
-        var wasCalled = false;
         TimeSpan? expected = _fixture.Create<TimeSpan>();
-        _database.KeyTimeToLiveAsync(Arg.Any<RedisKey>(), Arg.Any<CommandFlags>())
-            .ReturnsForAnyArgs(ci =>
-            {
-                wasCalled = true;
-                return Task.FromResult(expected);
-            });
-        var actual = await Sut.ExpireTimeAsync(key, CancellationToken.None);
-        wasCalled.Should().BeTrue();
+        _database.KeyTimeToLiveAsync(_redisKey, Arg.Any<CommandFlags>())
+            .Returns(expected);
+        var actual = await Sut.ExpireTimeAsync<string>(_cacheKey, CancellationToken.None);
+        await _database.Received(1).KeyTimeToLiveAsync(_redisKey, Arg.Any<CommandFlags>());
         actual.Should().Be(_clock.UtcNow.Add(expected.Value));
     }
 
     [Fact]
     public async Task Read_TimeToLive_For_Unknown_Key()
     {
-        var key = _fixture.Create<string>();
-        var wasCalled = false;
-        _database.KeyTimeToLiveAsync(Arg.Any<RedisKey>(), Arg.Any<CommandFlags>())
-            .ReturnsForAnyArgs(ci =>
-            {
-                wasCalled = true;
-                return Task.FromResult(default(TimeSpan?));
-            });
-        var actual = await Sut.TimeToLiveAsync(key, CancellationToken.None);
-        wasCalled.Should().BeTrue();
+        _database.KeyTimeToLiveAsync(_redisKey, Arg.Any<CommandFlags>())
+            .Returns(default(TimeSpan?));
+        var actual = await Sut.TimeToLiveAsync<string>(_cacheKey, CancellationToken.None);
+        await _database.Received(1).KeyTimeToLiveAsync(_redisKey, Arg.Any<CommandFlags>());
         actual.Should().BeNull();
     }
 
     [Fact]
     public async Task Read_TimeToLive_For_Known_Key()
     {
-        var key = _fixture.Create<string>();
-        var wasCalled = false;
         TimeSpan? expected = _fixture.Create<TimeSpan>();
-        _database.KeyTimeToLiveAsync(Arg.Any<RedisKey>(), Arg.Any<CommandFlags>())
-            .ReturnsForAnyArgs(ci =>
-            {
-                wasCalled = true;
-                return Task.FromResult(expected);
-            });
-        var actual = await Sut.TimeToLiveAsync(key, CancellationToken.None);
-        wasCalled.Should().BeTrue();
+        _database.KeyTimeToLiveAsync(_redisKey, Arg.Any<CommandFlags>())
+            .Returns(expected);
+        var actual = await Sut.TimeToLiveAsync<string>(_cacheKey, CancellationToken.None);
+        await _database.Received(1).KeyTimeToLiveAsync(_redisKey, Arg.Any<CommandFlags>());
         actual.Should().Be(expected.GetValueOrDefault());
+    }
+
+    [Fact]
+    public async Task Read_TimeToLive_throws_Exception()
+    {
+        _database.KeyTimeToLiveAsync(_redisKey, Arg.Any<CommandFlags>())
+            .ThrowsAsync<Exception>();
+        var actual = await Sut.TimeToLiveAsync<string>(_cacheKey, CancellationToken.None);
+        await _database.Received(1).KeyTimeToLiveAsync(_redisKey, Arg.Any<CommandFlags>());
+        actual.Should().Be(null);
+    }
+
+    [Fact]
+    public async Task Read_ExpireTime_throw_exception_v7()
+    {
+        _cacheOptions.Version = 7;
+        _database.KeyExpireTimeAsync(_redisKey, Arg.Any<CommandFlags>())
+            .ThrowsAsync(new Exception());
+        var actual = await Sut.ExpireTimeAsync<string>(_cacheKey, CancellationToken.None);
+        await _database.Received(1).KeyExpireTimeAsync(_redisKey, Arg.Any<CommandFlags>());
+        actual.Should().BeNull();
+    }
+
+    [Fact]
+    public void Dispose_can_be_called()
+    {
+        Action act = () => Sut.Dispose();
+        act.Should().NotThrow();
     }
 
     public Task DisposeAsync()
@@ -491,85 +422,77 @@ public class RedisCacheTests : IAsyncLifetime
         _policyHolder.Write.Returns(noOpExecutor);
         _cacheOptions = new RedisCacheOptions
         {
-            Clock = _clock
+            Clock = _clock,
+            Prefix = "test"
         };
 
         _database = _fixture.Freeze<IDatabase>();
         _serializer = new SystemJsonSerializerProxy();
         _fixture.Inject(_serializer);
-        _fixture.Inject(Options.Create(_cacheOptions));
+        var opt = Options.Create(_cacheOptions);
+        _fixture.Inject(opt);
+        _fixture.Inject<IKeyResolver>(new KeyResolver(Options.Create(new CacheOptions())));
 
-
+        _cacheKey = _fixture.Create<string>();
+        _redisKey = ToRedisKey(_cacheKey);
         return Task.CompletedTask;
     }
 
     private async Task GetOrAdd_works_as_expected(string? redisReturn, string? generatorReturn, bool expectedGeneratorCall, int stringSetCalls, Type expirationType)
     {
-        var key = _fixture.Create<string>();
-        var actualKey = string.Empty;
-        CommandFlags actualFlags = default;
         var generatorWasCalled = false;
-        _database.StringGetAsync(Arg.Any<RedisKey>(), Arg.Any<CommandFlags>())
-            .ReturnsForAnyArgs(ci =>
+        _database.StringGetAsync(_redisKey, Arg.Is<CommandFlags>(f => f.HasFlag(CommandFlags.PreferReplica)))
+            .Returns(ci =>
             {
-                actualKey = ci.Arg<RedisKey>().ToString();
-                actualFlags = ci.Arg<CommandFlags>();
                 return (RedisValue)_serializer.Serialize(redisReturn);
             });
 
         string? actualValue = default;
         if (expirationType == typeof(TimeSpan))
         {
-            actualValue = await Sut.GetOrAddAsync(key, () => { generatorWasCalled = true; return Task.FromResult(generatorReturn); }, _fixture.Create<TimeSpan>(), CancellationToken.None);
+            actualValue = await Sut.GetOrAddAsync(_cacheKey, () => { generatorWasCalled = true; return Task.FromResult(generatorReturn); }, _fixture.Create<TimeSpan>(), CancellationToken.None);
         }
         else if (expirationType == typeof(DateTimeOffset))
         {
-            actualValue = await Sut.GetOrAddAsync(key, () => { generatorWasCalled = true; return Task.FromResult(generatorReturn); }, _clock.UtcNow.Add(TimeSpan.FromSeconds(2)), CancellationToken.None);
+            actualValue = await Sut.GetOrAddAsync(_cacheKey, () => { generatorWasCalled = true; return Task.FromResult(generatorReturn); }, _clock.UtcNow.Add(TimeSpan.FromSeconds(2)), CancellationToken.None);
         }
         else
         {
-            actualValue = await Sut.GetOrAddAsync(key, () => { generatorWasCalled = true; return Task.FromResult(generatorReturn); }, CancellationToken.None);
+            actualValue = await Sut.GetOrAddAsync(_cacheKey, () => { generatorWasCalled = true; return Task.FromResult(generatorReturn); }, CancellationToken.None);
         }
         actualValue.Should().Be(redisReturn ?? generatorReturn);
-        var expectedKey = string.Concat(_cacheOptions.InstanceName, key).ToLowerInvariant();
-        actualKey.Should().Be(expectedKey);
-        actualFlags.Should().BeOneOf(CommandFlags.PreferReplica);
         generatorWasCalled.Should().Be(expectedGeneratorCall);
-        await _database.Received(stringSetCalls).StringSetAsync(Arg.Any<RedisKey>(), Arg.Any<RedisValue>(), Arg.Any<TimeSpan?>(), Arg.Any<When>(), Arg.Any<CommandFlags>());
+        await _database.Received(stringSetCalls).StringSetAsync(_redisKey, Arg.Any<RedisValue>(), Arg.Any<TimeSpan?>(), Arg.Any<When>(), Arg.Any<CommandFlags>());
     }
 
     private async Task Set_works_as_expected(Type expirationType)
     {
-        var key = _fixture.Create<string>();
         var value = _fixture.Create<string>();
         var expiration = _fixture.Create<TimeSpan>();
-        var actualKey = string.Empty;
-        CommandFlags actualFlags = default;
         var expectedResponse = _fixture.Create<bool>();
-        _database.StringSetAsync(Arg.Any<RedisKey>(), Arg.Any<RedisValue>(), Arg.Any<TimeSpan?>(), Arg.Any<When>(), Arg.Any<CommandFlags>())
-                .ReturnsForAnyArgs(ci =>
+        _database.StringSetAsync(_redisKey, Arg.Any<RedisValue>(), Arg.Any<TimeSpan?>(), Arg.Any<When>(), Arg.Is<CommandFlags>(f => f.HasFlag(CommandFlags.DemandMaster)))
+                .Returns(ci =>
                 {
-                    actualKey = ci.Arg<RedisKey>().ToString();
-                    actualFlags = ci.Arg<CommandFlags>();
                     return Task.FromResult(expectedResponse);
                 });
         bool? actualResponse = default;
         if (expirationType == typeof(TimeSpan))
         {
-            actualResponse = await Sut.SetAsync(key, value, _fixture.Create<TimeSpan>(), CancellationToken.None);
+            actualResponse = await Sut.SetAsync(_cacheKey, value, _fixture.Create<TimeSpan>(), CancellationToken.None);
         }
         else if (expirationType == typeof(DateTimeOffset))
         {
-            actualResponse = await Sut.SetAsync(key, value, _fixture.Create<DateTimeOffset>(), CancellationToken.None);
+            actualResponse = await Sut.SetAsync(_cacheKey, value, _fixture.Create<DateTimeOffset>(), CancellationToken.None);
         }
         else
         {
-            actualResponse = await Sut.SetAsync(key, value, CancellationToken.None);
+            actualResponse = await Sut.SetAsync(_cacheKey, value, CancellationToken.None);
         }
 
-        var expectedKey = string.Concat(_cacheOptions.InstanceName, key).ToLowerInvariant();
-        actualKey.Should().Be(expectedKey);
         actualResponse.Should().Be(expectedResponse);
-        actualFlags.Should().HaveFlag(CommandFlags.DemandMaster);
+        await _database.Received(1).StringSetAsync(_redisKey, Arg.Any<RedisValue>(), Arg.Any<TimeSpan?>(), Arg.Any<When>(), Arg.Is<CommandFlags>(f => f.HasFlag(CommandFlags.DemandMaster)));
     }
+
+    private RedisKey ToRedisKey(CacheKey cacheKey) =>
+        string.Join(':', _cacheOptions.Prefix, _cacheOptions.RedisTypePrefixes.String, cacheKey).ToLowerInvariant();
 }

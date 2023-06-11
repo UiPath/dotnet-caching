@@ -1,6 +1,6 @@
 ﻿namespace UiPath.Platform.Caching.CloudEvents;
 
-public abstract class CloudEventWrapper : IPubSubEvent
+public abstract class CloudEventWrapper : IEvent
 {
     public abstract string? Id { get; set; }
 

@@ -1,34 +1,32 @@
 ﻿namespace UiPath.Platform.Caching;
 
-public interface ICache
+public interface ICache : IDisposable
 {
-    string? InstanceName { get; }
+    Task<T?> GetAsync<T>(CacheKey cacheKey, CancellationToken token = default);
 
-    Task<T?> GetAsync<T>(string key, CancellationToken token = default);
+    Task<T?> GetOrAddAsync<T>(CacheKey cacheKey, Func<Task<T?>> generator, CancellationToken token = default);
 
-    Task<T?> GetOrAddAsync<T>(string key, Func<Task<T?>> generator, CancellationToken token = default);
+    Task<T?> GetOrAddAsync<T>(CacheKey cacheKey, Func<Task<T?>> generator, TimeSpan? expiration = null, CancellationToken token = default);
 
-    Task<T?> GetOrAddAsync<T>(string key, Func<Task<T?>> generator, TimeSpan? expiration = null, CancellationToken token = default);
+    Task<T?> GetOrAddAsync<T>(CacheKey cacheKey, Func<Task<T?>> generator, DateTimeOffset? expiration = null, CancellationToken token = default);
 
-    Task<T?> GetOrAddAsync<T>(string key, Func<Task<T?>> generator, DateTimeOffset? expiration = null, CancellationToken token = default);
+    Task<bool> RemoveAsync<T>(CacheKey cacheKey, CancellationToken token = default);
 
-    Task<bool> RemoveAsync<T>(string key, CancellationToken token = default);
+    Task<bool> SetAsync<T>(CacheKey cacheKey, T? value, CancellationToken token = default);
 
-    Task<bool> SetAsync<T>(string key, T? value, CancellationToken token = default);
+    Task<bool> SetAsync<T>(CacheKey cacheKey, T? value, TimeSpan? expiration = null, CancellationToken token = default);
 
-    Task<bool> SetAsync<T>(string key, T? value, TimeSpan? expiration = null, CancellationToken token = default);
+    Task<bool> SetAsync<T>(CacheKey cacheKey, T? value, DateTimeOffset? expiration = null, CancellationToken token = default);
 
-    Task<bool> SetAsync<T>(string key, T? value, DateTimeOffset? expiration = null, CancellationToken token = default);
+    Task<bool> RefreshAsync<T>(CacheKey cacheKey, CancellationToken token = default);
 
-    Task<bool> RefreshAsync<T>(string key, CancellationToken token = default);
+    Task<bool> RefreshAsync<T>(CacheKey cacheKey, TimeSpan? expiration = null, CancellationToken token = default);
 
-    Task<bool> RefreshAsync<T>(string key, TimeSpan? expiration = null, CancellationToken token = default);
+    Task<bool> RefreshAsync<T>(CacheKey cacheKey, DateTimeOffset? expiration = null, CancellationToken token = default);
 
-    Task<bool> RefreshAsync<T>(string key, DateTimeOffset? expiration = null, CancellationToken token = default);
+    Task<bool> ContainsAsync<T>(CacheKey cacheKey, CancellationToken token = default);
 
-    Task<bool> ContainsAsync(string key, CancellationToken token = default);
+    Task<TimeSpan?> TimeToLiveAsync<T>(CacheKey cacheKey, CancellationToken token = default);
 
-    Task<TimeSpan?> TimeToLiveAsync(string key, CancellationToken token = default);
-
-    Task<DateTimeOffset?> ExpireTimeAsync(string key, CancellationToken token = default);
+    Task<DateTimeOffset?> ExpireTimeAsync<T>(CacheKey cacheKey, CancellationToken token = default);
 }

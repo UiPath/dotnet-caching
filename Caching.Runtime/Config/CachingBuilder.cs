@@ -1,4 +1,5 @@
 ﻿using System.Text.Json;
+using UiPath.Platform.Caching.Policies;
 
 namespace UiPath.Platform.Caching.Config;
 
@@ -7,7 +8,7 @@ public class CachingBuilder : ICachingBuilder
 {
     private readonly List<Action<ICachingBuilder>> _callbacks = new();
 
-    public CachingBuilder(IServiceCollection services, IConfigurationSection configuration)
+    public CachingBuilder(IServiceCollection services, IConfiguration configuration)
     {
         Services = services;
         Configuration = configuration;
@@ -15,23 +16,9 @@ public class CachingBuilder : ICachingBuilder
 
     public IServiceCollection Services { get; private set; }
 
-    public IConfigurationSection Configuration { get; private set; }
+    public IConfiguration Configuration { get; private set; }
 
     public bool Enabled { get; set; } = true;
-
-    public ICachingBuilder AddCache<T>(Func<IServiceProvider, T> cacheProvider)
-        where T : class, ICache
-    {
-        Services.TryAddSingleton(sp => cacheProvider.Invoke(sp));
-        return this;
-    }
-
-    public ICachingBuilder AddRegionCache<T>(Func<IServiceProvider, T> cacheProvider)
-         where T : class, IRegionCache
-    {
-        Services.TryAddSingleton(sp => cacheProvider.Invoke(sp));
-        return this;
-    }
 
     internal void Complete()
     {

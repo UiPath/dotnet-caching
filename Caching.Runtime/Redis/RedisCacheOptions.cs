@@ -1,8 +1,8 @@
 ﻿namespace UiPath.Platform.Caching.Redis;
 
-public class RedisCacheOptions : CacheOptions
+public class RedisCacheOptions : CacheOptionsBase
 {
-    public string? InstanceName { get; set; }
+    public string? Prefix { get; set; }
 
     public int Version { get; set; } = 6;
 
@@ -13,4 +13,6 @@ public class RedisCacheOptions : CacheOptions
     public TimeSpan? HeartbeatInterval { get; set; }
 
     public bool ProfilerEnabled { get; set; }
+
+    public RedisTypePrefixes RedisTypePrefixes { get; set; } = new RedisTypePrefixes();
 }

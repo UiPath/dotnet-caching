@@ -1,5 +1,4 @@
 ﻿using CloudNative.CloudEvents.SystemTextJson;
-using UiPath.Platform.Caching.Config;
 
 namespace UiPath.Platform.Caching.CloudEvents;
 

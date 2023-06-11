@@ -1,9 +1,10 @@
 ﻿namespace UiPath.Platform.Caching.Broadcast;
 
-public interface IEventFormatterProxy<T> where T : class, IPubSubEvent
+public interface IEventFormatterProxy<T>
+     where T : IEvent
 {
     T? Decode(string body) =>
-        Decode(new ReadOnlyMemory<byte>(Encoding.UTF8.GetBytes(body.ToString())));
+        Decode(new ReadOnlyMemory<byte>(Encoding.UTF8.GetBytes(body)));
 
     T? Decode(ReadOnlyMemory<byte> body);
 

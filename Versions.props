@@ -20,6 +20,7 @@
     <NSwag>13.18.0</NSwag>
     <Polly>7.2.3</Polly>
     <System>4.3.0</System>
+    <SystemReactive>6.0.0</SystemReactive>
     <NuGetVersion>6.3.1</NuGetVersion>
     <UiPathTelemetry>1.2.0-beta1354-0447</UiPathTelemetry>
     <UiPathFeatureFlags>1.3.1</UiPathFeatureFlags>
@@ -27,6 +28,7 @@
 
   <PropertyGroup Label="Test Libraries">
     <FluentAssertionsVersion>6.7.0</FluentAssertionsVersion>
+    <FluentAssertionsJson>6.1.0</FluentAssertionsJson>
 
     <!--update pipeline with the same version VisualStudioTestPlatformInstaller@1-->
     <MicrosoftTestSdkVersion>17.3.2</MicrosoftTestSdkVersion>
@@ -35,6 +37,7 @@
     <NSubstituteVersion>4.4.0</NSubstituteVersion>
     <AutoFixtureVersion>4.17.0</AutoFixtureVersion>
     <xUnitRunnerVersion>2.4.3</xUnitRunnerVersion>
+    <NSubstituteAnalyzersVersion>1.0.16</NSubstituteAnalyzersVersion>
 
     <!--update coverlet.runsettings InProcDataCollector.assemblyQualifiedName-->
     <coverletVersion>3.2.0</coverletVersion>

@@ -4,6 +4,8 @@ using System.Reflection;
 using StackExchange.Redis.Profiling;
 
 namespace UiPath.Platform.Caching.Redis;
+
+[SuppressMessage("SonarLint.Rule", "S3011: Reflection should not be used to increase accessibility of classes, methods, or fields")]
 public static class ProfiledCommandExtensions
 {
     public static string GetCommandName(this IProfiledCommand profiledCommand)

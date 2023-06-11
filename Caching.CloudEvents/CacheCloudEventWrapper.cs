@@ -9,8 +9,7 @@ internal sealed class CacheCloudEventWrapper : ICacheEvent
     }
     internal CloudEvent CloudEvent { get; }
 
-    public bool IsValid() =>
-        CloudEvent.IsValid && KnownEventTypes.IsKnown(CloudEvent.Type);
+    public bool IsValid() => CloudEvent.IsValid && !string.IsNullOrWhiteSpace(Data?.Key);
 
     public string? Id => CloudEvent.Id;
 

@@ -1,74 +1,80 @@
-﻿using UiPath.Platform.Caching.Telemetry;
+﻿using System.Runtime.CompilerServices;
+using UiPath.Platform.Caching.Policies;
+using UiPath.Platform.Caching.Telemetry;
 
 namespace UiPath.Platform.Caching.Redis;
 
-public class RedisCache : CacheBase, IRedisCache
+public sealed class RedisCache : ICache
 {
     private const string LogWarnMessage = "RedisCache exception.";
 
     private readonly Lazy<IDatabase> _lazyDatabase;
     private readonly ISerializerProxy _serializer;
     private readonly ICachingTelemetryProvider _telemetryProvider;
+    private readonly IKeyResolver _keyResolver;
     private readonly ILogger<RedisCache> _logger;
     private readonly RedisCacheOptions _cacheOptions;
     private readonly bool _supportsExpireTime;
     private readonly IPolicyExecutor _readPolicy;
     private readonly IPolicyExecutor _writePolicy;
+    private readonly string _prefix;
+    private readonly CacheClock _clock;
 
     public RedisCache(
         Func<IDatabase> databaseAccessor,
         ISerializerProxy serializer,
         IPolicyHolder policyHolder,
         ICachingTelemetryProvider telemetryProvider,
+        IKeyResolver keyResolver,
         IOptions<RedisCacheOptions> optionsAccessor,
         ILogger<RedisCache> logger)
-        : base(optionsAccessor.Value)
     {
         _logger = logger;
         _lazyDatabase = new Lazy<IDatabase>(databaseAccessor);
         _serializer = serializer;
         _telemetryProvider = telemetryProvider;
+        _keyResolver = keyResolver;
         _cacheOptions = optionsAccessor.Value;
         _supportsExpireTime = RedisUtils.SupportsExpireTime(_cacheOptions.Version);
         _readPolicy = policyHolder.Read;
         _writePolicy = policyHolder.Write;
+        _prefix = _keyResolver.GetKey(_cacheOptions.RedisTypePrefixes.String, _cacheOptions.Prefix);
+        _clock = new CacheClock(_cacheOptions.Clock, _cacheOptions.DefaultExpiration);
     }
 
     private IDatabase Database => _lazyDatabase.Value;
 
-    public string? InstanceName => _cacheOptions.InstanceName;
+    public Task<T?> GetAsync<T>(CacheKey cacheKey, CancellationToken token = default) =>
+        GetAsync<T?>(ToRedisKey(cacheKey, token));
 
-    public Task<T?> GetAsync<T>(string key, CancellationToken token = default) =>
-        GetAsync<T?>(GetRedisKey(key, token));
+    public Task<T?> GetOrAddAsync<T>(CacheKey cacheKey, Func<Task<T?>> generator, CancellationToken token = default) =>
+        GetOrAddAsync(cacheKey, generator, _cacheOptions.DefaultExpiration, token);
 
-    public Task<T?> GetOrAddAsync<T>(string key, Func<Task<T?>> generator, CancellationToken token = default) =>
-        GetOrAddAsync(key, generator, _cacheOptions.DefaultExpiration, token);
+    public Task<T?> GetOrAddAsync<T>(CacheKey cacheKey, Func<Task<T?>> generator, DateTimeOffset? expiration = null, CancellationToken token = default) =>
+        GetOrAddAsync(cacheKey, generator, _clock.ToTimeSpan(expiration), token);
 
-    public Task<T?> GetOrAddAsync<T>(string key, Func<Task<T?>> generator, DateTimeOffset? expiration = null, CancellationToken token = default) =>
-        GetOrAddAsync(key, generator, ToTimeSpan(expiration), token);
-
-    public Task<T?> GetOrAddAsync<T>(string key, Func<Task<T?>> generator, TimeSpan? expiration = null, CancellationToken token = default)
+    public Task<T?> GetOrAddAsync<T>(CacheKey cacheKey, Func<Task<T?>> generator, TimeSpan? expiration = null, CancellationToken token = default)
     {
-        var redisKey = GetRedisKey(key, token);
+        var redisKey = ToRedisKey(cacheKey, token);
 
         if (generator == null)
         {
             throw new ArgumentNullException(nameof(generator));
         }
 
-        return GetOrAddInternalAsync(redisKey, generator, ToTimeSpan(expiration));
+        return GetOrAddInternalAsync(redisKey, generator, _clock.ToTimeSpan(expiration));
     }
 
-    public Task<bool> RefreshAsync<T>(string key, CancellationToken token = default) =>
-        RefreshAsync<T>(key, _cacheOptions.DefaultExpiration, token);
+    public Task<bool> RefreshAsync<T>(CacheKey cacheKey, CancellationToken token = default) =>
+        RefreshAsync<T>(cacheKey, _cacheOptions.DefaultExpiration, token);
 
-    public Task<bool> RefreshAsync<T>(string key, TimeSpan? expiration = null, CancellationToken token = default) =>
-        RefreshAsync<T>(key, ToDateTimeOffset(expiration), token);
+    public Task<bool> RefreshAsync<T>(CacheKey cacheKey, TimeSpan? expiration = null, CancellationToken token = default) =>
+        RefreshAsync<T>(cacheKey, _clock.ToDateTimeOffset(expiration), token);
 
-    public async Task<bool> RefreshAsync<T>(string key, DateTimeOffset? expiration = null, CancellationToken token = default)
+    public async Task<bool> RefreshAsync<T>(CacheKey cacheKey, DateTimeOffset? expiration = null, CancellationToken token = default)
     {
-        var redisKey = GetRedisKey(key, token);
-        expiration = ToDateTimeOffset(expiration);
+        var redisKey = ToRedisKey(cacheKey, token);
+        expiration = _clock.ToDateTimeOffset(expiration);
 
         _logger.LogTrace("Refreshing key {redisKey} at expiration {expiration}", redisKey, expiration);
         var ret = false;
@@ -93,21 +99,21 @@ public class RedisCache : CacheBase, IRedisCache
         return ret;
     }
 
-    public Task<bool> RemoveAsync<T>(string key, CancellationToken token = default) =>
-        RemoveAsync(GetRedisKey(key, token));
+    public Task<bool> RemoveAsync<T>(CacheKey cacheKey, CancellationToken token = default) =>
+        RemoveAsync(ToRedisKey(cacheKey, token));
 
-    public Task<bool> SetAsync<T>(string key, T? value, CancellationToken token = default) =>
-        SetAsync(key, value, _cacheOptions.DefaultExpiration, token);
+    public Task<bool> SetAsync<T>(CacheKey cacheKey, T? value, CancellationToken token = default) =>
+        SetAsync(cacheKey, value, _cacheOptions.DefaultExpiration, token);
 
-    public Task<bool> SetAsync<T>(string key, T? value, TimeSpan? expiration = null, CancellationToken token = default) =>
-        SetInternalAsync(GetRedisKey(key, token), value, ToTimeSpan(expiration));
+    public Task<bool> SetAsync<T>(CacheKey cacheKey, T? value, TimeSpan? expiration = null, CancellationToken token = default) =>
+        SetInternalAsync(ToRedisKey(cacheKey, token), value, _clock.ToTimeSpan(expiration));
 
-    public Task<bool> SetAsync<T>(string key, T? value, DateTimeOffset? expiration = null, CancellationToken token = default) =>
-        SetInternalAsync(GetRedisKey(key, token), value, ToTimeSpan(expiration));
+    public Task<bool> SetAsync<T>(CacheKey cacheKey, T? value, DateTimeOffset? expiration = null, CancellationToken token = default) =>
+        SetInternalAsync(ToRedisKey(cacheKey, token), value, _clock.ToTimeSpan(expiration));
 
-    public async Task<bool> ContainsAsync(string key, CancellationToken token = default)
+    public async Task<bool> ContainsAsync<T>(CacheKey cacheKey, CancellationToken token = default)
     {
-        var redisKey = GetRedisKey(key, token);
+        var redisKey = ToRedisKey(cacheKey, token);
         var ret = false;
         var operation = StartOperation();
 
@@ -129,13 +135,13 @@ public class RedisCache : CacheBase, IRedisCache
         return ret;
     }
 
-    public async Task<TimeSpan?> TimeToLiveAsync(string key, CancellationToken token = default)
+    public async Task<TimeSpan?> TimeToLiveAsync<T>(CacheKey cacheKey, CancellationToken token = default)
     {
         TimeSpan? ret = default;
         var operation = StartOperation();
         try
         {
-            ret = await _readPolicy.ExecuteAsync(() => Database.KeyTimeToLiveAsync(GetRedisKey(key, token), CommandFlags.PreferReplica)).ConfigureAwait(false);
+            ret = await _readPolicy.ExecuteAsync(() => Database.KeyTimeToLiveAsync(ToRedisKey(cacheKey, token), CommandFlags.PreferReplica)).ConfigureAwait(false);
             operation.Stop();
         }
         catch (Exception ex)
@@ -151,7 +157,7 @@ public class RedisCache : CacheBase, IRedisCache
         return ret;
     }
 
-    public async Task<DateTimeOffset?> ExpireTimeAsync(string key, CancellationToken token = default)
+    public async Task<DateTimeOffset?> ExpireTimeAsync<T>(CacheKey cacheKey, CancellationToken token = default)
     {
         DateTimeOffset? ret = default;
         var operation = StartOperation();
@@ -159,12 +165,12 @@ public class RedisCache : CacheBase, IRedisCache
         {
             if (_supportsExpireTime)
             {
-                ret = await _readPolicy.ExecuteAsync(() => Database.KeyExpireTimeAsync(GetRedisKey(key, token), CommandFlags.PreferReplica)).ConfigureAwait(false);
+                ret = await _readPolicy.ExecuteAsync(() => Database.KeyExpireTimeAsync(ToRedisKey(cacheKey, token), CommandFlags.PreferReplica)).ConfigureAwait(false);
             }
             else
             {
-                var timeToLive = await TimeToLiveAsync(key, token);
-                ret = timeToLive.HasValue ? Clock.UtcNow.Add(timeToLive.Value) : null;
+                var timeToLive = await TimeToLiveAsync<T>(cacheKey, token);
+                ret = timeToLive.HasValue ? _clock.UtcNow.Add(timeToLive.Value) : null;
             }
             operation.Stop();
         }
@@ -277,19 +283,28 @@ public class RedisCache : CacheBase, IRedisCache
         return ret;
     }
 
-    private RedisKey GetRedisKey(string key, CancellationToken token = default)
+    private RedisKey ToRedisKey(CacheKey cacheKey, CancellationToken token = default)
     {
         token.ThrowIfCancellationRequested();
-        return CacheUtils.GetKey(key, _cacheOptions.InstanceName);
+        if (cacheKey.IsNull)
+        {
+            throw new ArgumentNullException(nameof(cacheKey));
+        }
+        
+        return _keyResolver.GetKey(cacheKey, _prefix);
     }
 
-    private ITelemetryOperation StartOperation([System.Runtime.CompilerServices.CallerMemberName] string name = "") =>
+    private ITelemetryOperation StartOperation([CallerMemberName] string name = "") =>
         _telemetryProvider.StartOperation<RedisCache>(name);
 
-    private ITelemetryOperation StartOperation<T>([System.Runtime.CompilerServices.CallerMemberName] string name = "") =>
+    private ITelemetryOperation StartOperation<T>([CallerMemberName] string name = "") =>
         _telemetryProvider.StartOperation<RedisCache, T>(name);
 
     private static bool IsDefault<T>(T value) =>
         EqualityComparer<T>.Default.Equals(value, default);
-}
 
+    public void Dispose()
+    {
+        // nothing to dispose
+    }
+}

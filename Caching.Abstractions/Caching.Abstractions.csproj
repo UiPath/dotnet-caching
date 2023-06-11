@@ -14,5 +14,6 @@
     <PackageReference Include="Microsoft.Extensions.Configuration.Abstractions" Version="$(DotNetMajorVersion)" />
     <PackageReference Include="Microsoft.Extensions.Primitives" Version="$(MicrosoftExtensionsConfigurationVersion)" />
     <PackageReference Include="Microsoft.Extensions.DependencyInjection" Version="$(DotNetMajorVersion)" />
+    <PackageReference Include="Microsoft.Extensions.Caching.Abstractions" Version="$(DotNetMajorVersion)" />
   </ItemGroup>
 </Project>

@@ -7,30 +7,30 @@ public class ChannelTests
     [Fact]
     public void Cast_and_comparations_works_as_expected()
     {
-        var actual = new Channel();
-        var expected = Channel.Null;
+        var actual = new TopicKey();
+        var expected = TopicKey.Null;
         Assert.Equal(expected, actual);
         Assert.True(actual.IsNull);
 
         Assert.True(actual == expected);
         Assert.False(actual != expected);
-        var channelName = _fixture.Create<string>();
+        var topicName = _fixture.Create<string>();
 
-        actual = new Channel(channelName.ToUpper());
-        expected = new Channel(channelName.ToLower());
+        actual = new TopicKey(topicName.ToUpper());
+        expected = new TopicKey(topicName.ToLower());
         Assert.Equal(expected, actual);
 
-        channelName = _fixture.Create<string>().ToLower();
-        actual = channelName;
-        expected = new Channel(channelName.ToUpper());
+        topicName = _fixture.Create<string>().ToLower();
+        actual = topicName;
+        expected = new TopicKey(topicName.ToUpper());
         Assert.Equal(expected, actual);
 
         string stringExpected = expected;
-        Assert.Equal(stringExpected, channelName);
+        Assert.Equal(stringExpected, topicName);
         Assert.Equal(stringExpected, actual.ToString());
 
         actual = _fixture.Create<string>().ToLower();
-        expected = new Channel(_fixture.Create<string>());
+        expected = new TopicKey(_fixture.Create<string>());
         Assert.NotEqual(expected, actual);
         Assert.True(expected != actual);
         Assert.False(expected == actual);

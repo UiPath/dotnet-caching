@@ -10,5 +10,5 @@ public sealed class CacheEvent : ICacheEvent
 
     public string? Type { get; set; }
 
-    public bool IsValid() => KnownEventTypes.IsKnown(Type);
+    public bool IsValid() => !string.IsNullOrWhiteSpace(Id) && !string.IsNullOrWhiteSpace(Type) && Source != null && !string.IsNullOrWhiteSpace(Data?.Key);
 }

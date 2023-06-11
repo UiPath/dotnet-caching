@@ -14,11 +14,11 @@ public class CacheEntryFactoryTests
         var original = sut.Create(value, expiration, properties);
         original.Value.Should().Be(value);
         original.Expiration.Should().Be(expiration);
-        original.ExtendedProperties.Should().BeEquivalentTo(properties);
+        original.Metadata.Should().BeEquivalentTo(properties);
         var newExpiration = _fixture.Create<DateTimeOffset>();
         var newProperties = _fixture.Create<IDictionary<string, string?>>();
         var clone = original.NewEntry(newExpiration, newProperties);
         clone.Expiration.Should().Be(newExpiration);
-        clone.ExtendedProperties.Should().BeEquivalentTo(newProperties);
+        clone.Metadata.Should().BeEquivalentTo(newProperties);
     }
 }

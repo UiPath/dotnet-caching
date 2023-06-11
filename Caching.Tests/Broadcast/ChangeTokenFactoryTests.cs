@@ -10,6 +10,12 @@ public class ChangeTokenFactoryTests
     [Fact]
     public void NotNullable_change_token()
     {
-        Sut.Create(_fixture.Create<string>(), _fixture.Create<string>()).Should().NotBeNull();
+        Sut.Create(_fixture.Create<string>(), _fixture.Create<ITopic<ICacheEvent>>(), _fixture.Create<string>(), _fixture.Create<Type>()).Should().NotBeNull();
+    }
+
+    [Fact]
+    public void NotNullable_change_InMemory()
+    {
+        Sut.Create(_fixture.Create<string>(), _fixture.Create<ITopic<ICacheEvent>>(), "InMemory", _fixture.Create<Type>()).Should().NotBeNull();
     }
 }

@@ -7,13 +7,14 @@ public class ChangeTokenTests : IAsyncLifetime
     private readonly IFixture _fixture = AutoFixtureCreator.NSubsitute();
 
     private string _key = default!;
-    private Channel _channel = default!;
-    private IChannelSubscriber<ICacheEvent> _subscriber = default!;
+    private TopicKey _topicKey = default!;
+    private ITopic<ICacheEvent> _topic = default!;
     private CacheClearEventFormatterProxy _formatter = default!;
     private Uri? _source = null;
+    private ISet<string>? _acceptedEvents = null;
 
     private ChangeToken? _sut = null;
-    private ChangeToken Sut => _sut ??= new ChangeToken(_key, _channel, _subscriber, _source, _fixture.Freeze<ILogger<ChangeToken>>());
+    private ChangeToken Sut => _sut ??= new ChangeToken(_key, _topic, _source, _fixture.Freeze<ILogger<ChangeToken>>(), _acceptedEvents);
 
     [Fact]
     public void Verify_ActiveChangeCallbacks()
@@ -23,7 +24,7 @@ public class ChangeTokenTests : IAsyncLifetime
 
     [Theory]
     [MemberData(nameof(InvalidEvents))]
-    public void OnNext_NoChanges_wheniInvalid_event(TestClearCacheEvent cloudEvent)
+    public void OnNext_NoChanges_wheniInvalid_event(TestCacheEvent cloudEvent)
     {
         object? actualState = null;
         var callbackCalled = false;
@@ -61,7 +62,7 @@ public class ChangeTokenTests : IAsyncLifetime
         };
 
         var d = Sut.RegisterChangeCallback(callback, expectedState);
-        var cloudEVent = new TestClearCacheEvent
+        var cloudEVent = new TestCacheEvent
         {
             Id = Guid.NewGuid().ToString(),
             Source = new Uri("urn:machine"),
@@ -110,10 +111,56 @@ public class ChangeTokenTests : IAsyncLifetime
     }
 
     [Fact]
+    public void AcceptedEvents()
+    {
+        _acceptedEvents = new[] { Guid.NewGuid().ToString(), Guid.NewGuid().ToString() }.ToHashSet();
+        Sut.OnNext(new TestCacheEvent
+        {
+            Id = Guid.NewGuid().ToString(),
+            Source = new Uri("urn:machine"),
+            Data = new CacheEventData(_key),
+            Type = _fixture.Create<string>()
+        });
+        Sut.HasChanged.Should().BeFalse();
+
+        Sut.OnNext(new TestCacheEvent
+        {
+            Id = Guid.NewGuid().ToString(),
+            Source = new Uri("urn:machine"),
+            Data = new CacheEventData(_key),
+            Type = _acceptedEvents.First()
+        });
+        Sut.HasChanged.Should().BeTrue();
+    }
+
+    [Fact]
+    public void Events_with_extended_data()
+    {
+        Sut.OnNext(new TestCacheEvent
+        {
+            Id = Guid.NewGuid().ToString(),
+            Source = new Uri("urn:machine"),
+            Data = new CacheEventData(_key, new Dictionary<string, object?>
+            {
+                ["_expiration_"] = DateTimeOffset.Now,
+                ["_metadata_"] = new Dictionary<string, string?>
+                {
+                    ["key"] = _key,
+                }
+            }),
+            Type = _fixture.Create<string>(),
+            
+        });
+        Sut.HasChanged.Should().BeTrue();
+        Sut.MetadataHasChanged.Should().BeTrue();
+        Sut.Metadata.Should().NotBeNull();
+    }
+
+    [Fact]
     public void Dispose_token()
     {
         var disposable = _fixture.Create<IDisposable>();
-        _subscriber.Subscribe(_channel, Arg.Any<IObserver<ICacheEvent>>())
+        _topic.Subscribe(Arg.Any<IObserver<ICacheEvent>>())
             .Returns(disposable);
         Sut.Dispose();
         disposable.Received(1).Dispose();
@@ -127,47 +174,47 @@ public class ChangeTokenTests : IAsyncLifetime
     public Task InitializeAsync()
     {
         _key = _fixture.Freeze<string>();
-        _channel = (Channel)_fixture.Create<string>();
-        _fixture.Inject(_channel);
+        _topicKey = (TopicKey)_fixture.Create<string>();
+        _fixture.Inject(_topicKey);
         _fixture.Freeze<ILogger<ChangeToken>>();
-        _subscriber = _fixture.Freeze<IChannelSubscriber<ICacheEvent>>();
+        _topic = _fixture.Freeze<ITopic<ICacheEvent>>();
         _formatter = new CacheClearEventFormatterProxy();
         _fixture.Inject<IEventFormatterProxy<ICacheEvent>>(_formatter);
         return Task.CompletedTask;
     }
 
-    public static IEnumerable<object[]> InvalidEvents() => new TestClearCacheEvent[]
+    public static IEnumerable<object[]> InvalidEvents() => new TestCacheEvent[]
     {
-        new TestClearCacheEvent
+        new TestCacheEvent
         {
             Id = Guid.NewGuid().ToString(),
             Data = new CacheEventData(Guid.NewGuid().ToString())
         },
-        new TestClearCacheEvent
+        new TestCacheEvent
         {
             Id = Guid.NewGuid().ToString(),
             Source = new Uri("urn:machine"),
             Data = new CacheEventData(Guid.NewGuid().ToString())
         },
-        new TestClearCacheEvent
+        new TestCacheEvent
         {
             Id = Guid.NewGuid().ToString(),
             Source = new Uri("urn:machine"),
             Data = null
         },
-        new TestClearCacheEvent
+        new TestCacheEvent
         {
             Id = Guid.NewGuid().ToString(),
             Source = new Uri("urn:machine"),
         },
-        new TestClearCacheEvent
+        new TestCacheEvent
         {
             Id = Guid.NewGuid().ToString(),
             Source = new Uri("urn:machine"),
             Data = new CacheEventData(Guid.NewGuid().ToString())
         },
 
-        new TestClearCacheEvent
+        new TestCacheEvent
         {
             Id = Guid.NewGuid().ToString(),
             Source = new Uri("urn:machine"),

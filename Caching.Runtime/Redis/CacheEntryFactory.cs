@@ -7,20 +7,20 @@ public sealed class CacheEntryFactory : ICacheEntryFactory
 
     private sealed record CacheEntry<T> : ICacheEntry<T>
     {
-        public CacheEntry(T? value, DateTimeOffset? expiration = null, IDictionary<string, string?>? extendedProperties = null)
+        public CacheEntry(T? value, DateTimeOffset? expiration = null, IDictionary<string, string?>? metadata = null)
         {
             Value = value;
             Expiration = expiration ?? DateTimeOffset.MaxValue;
-            ExtendedProperties = extendedProperties;
+            Metadata = metadata;
         }
 
         public T? Value { get; private set; }
 
         public DateTimeOffset Expiration { get; private set; }
 
-        public IDictionary<string, string?>? ExtendedProperties { get; private set; }
+        public IDictionary<string, string?>? Metadata { get; private set; }
 
-        public ICacheEntry NewEntry(DateTimeOffset? expiration = null, IDictionary<string, string?>? extendedProperties = null) =>
-            new CacheEntry<T>(Value, expiration, extendedProperties);
+        public ICacheEntry NewEntry(DateTimeOffset? expiration = null, IDictionary<string, string?>? metadata = null) =>
+            new CacheEntry<T>(Value, expiration, metadata);
     }
 }

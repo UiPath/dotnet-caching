@@ -4,7 +4,7 @@ public interface ICacheEntry
 {
     DateTimeOffset Expiration { get; }
 
-    IDictionary<string, string?>? ExtendedProperties { get; }
+    IDictionary<string, string?>? Metadata { get; }
 
-    ICacheEntry NewEntry(DateTimeOffset? expiration = null, IDictionary<string, string?>? extendedProperties = null);
+    ICacheEntry NewEntry(DateTimeOffset? expiration = null, IDictionary<string, string?>? metadata = null);
 }

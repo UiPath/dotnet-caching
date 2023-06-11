@@ -5,6 +5,5 @@ global using Microsoft.Extensions.Options;
 global using NSubstitute;
 global using UiPath.Platform.Caching.Broadcast;
 global using UiPath.Platform.Caching.Broadcast.Redis;
-global using UiPath.Platform.Caching.Hybrid;
 global using UiPath.Platform.Caching.Redis;
 global using Xunit;

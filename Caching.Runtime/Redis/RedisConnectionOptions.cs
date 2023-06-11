@@ -10,5 +10,4 @@ public class RedisConnectionOptions
     public TimeSpan? HeartbeatInterval { get; set; }
 
     public bool ProfilerEnabled { get; set; } 
-
 }

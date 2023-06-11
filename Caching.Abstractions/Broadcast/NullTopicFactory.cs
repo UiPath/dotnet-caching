@@ -1,0 +1,21 @@
+﻿using System.Diagnostics.CodeAnalysis;
+
+namespace UiPath.Platform.Caching.Broadcast;
+
+[ExcludeFromCodeCoverage]
+public class NullTopicFactory : ITopicFactory
+{
+    public static readonly ITopicFactory Instance = new NullTopicFactory();
+
+    private NullTopicFactory()
+    {
+    }
+
+    public void AddProvider(ITopicProvider provider)
+    {
+        // no op
+    }
+
+    public ITopicProvider Get(string? providerName, Type entryType) =>
+        NullTopicProvider.Instance;
+}

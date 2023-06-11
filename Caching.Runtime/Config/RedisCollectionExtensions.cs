@@ -3,9 +3,7 @@
 [ExcludeFromCodeCoverage]
 public static class RedisCollectionExtensions
 {
-    private const string DefaultSectionName = "RedisCache";
-
-    public static ICachingBuilder AddRedis(this ICachingBuilder builder, string sectionName = DefaultSectionName) =>
+    public static ICachingBuilder AddRedis(this ICachingBuilder builder, string sectionName = KnownCacheProviderNames.Redis) =>
         builder.AddRedis(opt => builder.Configuration.GetSection(sectionName).Bind(opt));
 
     public static ICachingBuilder AddRedis(this ICachingBuilder builder,  Action<RedisCacheOptions> configure)
@@ -21,56 +19,13 @@ public static class RedisCollectionExtensions
                 opt.ProfilerEnabled = options.ProfilerEnabled;
                 opt.HeartbeatInterval = options.HeartbeatInterval;
                 opt.BackOffMilliseconds = options.BackOffMilliseconds;
-            });
+            })
+           .AddRedisPubSub()
+           .AddRedisStreams();
         }
-        
-        return builder
-            .AddRedisCache(options, options.IsDefault)
-            .AddRedisRegionCache(options, options.IsDefault);
-    }
 
-    public static ICachingBuilder AddRedisCache(this ICachingBuilder builder, RedisCacheOptions? options = null, bool isDefault = false)
-    {
-        builder.AddCache(sp =>
-        {
-            var config = options ?? sp.GetService<IOptions<RedisCacheOptions>>()?.Value ?? new RedisCacheOptions();
-            return builder.Enabled && config.Enabled ? sp.BuildRedisCache(config) : NullCache.Instance;
-        });
+        builder.Services.TryAddEnumerable(ServiceDescriptor.Singleton<ICacheProvider, RedisCacheProvider>());
 
-
-        builder.Services.TryAddTransient(typeof(IRedisCache<>), typeof(RedisCache<>));
-
-        if (isDefault)
-        {
-            builder.Services.TryAddTransient<ICache>(sp => sp.GetRequiredService<IRedisCache>());
-            builder.Services.TryAddTransient(typeof(ICache<>), typeof(RedisCache<>));
-        }
-        return builder;
-    }
-
-    public static ICachingBuilder AddRedisRegionCache(this ICachingBuilder builder, RedisCacheOptions? options = null, bool isDefault = false)
-    {
-        builder.AddRegionCache(sp =>
-        {
-            var config = options ?? sp.GetService<IOptions<RedisCacheOptions>>()?.Value ?? new RedisCacheOptions();
-            return builder.Enabled && config.Enabled ? sp.BuildRedisRegionCache(config) : NullRegionCache.Instance;
-        });
-
-        builder.Services.TryAddTransient(typeof(IRedisRegionCache<>), typeof(RedisHashSetCache<>));
-
-        if (isDefault)
-        {
-            builder.Services.TryAddTransient<IRegionCache>(sp => sp.GetRequiredService<IRedisRegionCache>());
-            builder.Services.TryAddTransient(typeof(ICache<>), typeof(RedisHashSetCache<>));
-        }
-        return builder;
-    }
-
-    public static ICachingBuilder ConfigureRedis(this ICachingBuilder builder, Action<RedisCacheOptions> configureOptions)
-    {
-        RedisCacheOptions options = new();
-        configureOptions.Invoke(options);
-        builder.Services.Configure(configureOptions);
         return builder;
     }
 
@@ -80,7 +35,27 @@ public static class RedisCollectionExtensions
         configureOptions(redisConnectionOptions);
         builder.Services.Configure(configureOptions);
 
-        builder.Services.TryAddTransient<Func<ConfigurationOptions, IConnectionMultiplexer>>(sp => (ConfigurationOptions options) => {
+        builder.Services.TryAddTransient(sp =>
+        {
+            var options = sp.GetRequiredService<IOptions<RedisConnectionOptions>>().Value;
+            var config = ConfigurationOptions.Parse(options.ConnectionString);
+            config.AbortOnConnectFail = false; // if the connection fails, the multiplexer will silently retry in the background
+            config.ChannelPrefix = default;
+            if (options.BackOffMilliseconds.HasValue)
+            {
+                config.ReconnectRetryPolicy = new ExponentialRetry(options.BackOffMilliseconds.Value);
+            }
+
+            if (options.HeartbeatInterval.HasValue)
+            {
+                config.HeartbeatInterval = options.HeartbeatInterval.Value;
+            }
+
+            return config;
+        });
+
+        builder.Services.TryAddTransient<Func<IConnectionMultiplexer>>(sp => () => {
+            var options = sp.GetRequiredService<ConfigurationOptions>();
             var cnn = ConnectionMultiplexer.Connect(options);
             if (redisConnectionOptions.ProfilerEnabled)
             {

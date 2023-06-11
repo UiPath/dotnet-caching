@@ -8,6 +8,10 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <PackageReference Include="NSubstitute.Analyzers.CSharp" Version="$(NSubstituteAnalyzersVersion)">
+      <PrivateAssets>all</PrivateAssets>
+      <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
+    </PackageReference>
     <PackageReference Include="xunit" Version="$(xUnitVersion)" />
     <PackageReference Include="FluentAssertions" Version="$(FluentAssertionsVersion)" />
     <PackageReference Include="NSubstitute" Version="$(NSubstituteVersion)" />
@@ -22,11 +26,12 @@
       <PrivateAssets>all</PrivateAssets>
       <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
     </PackageReference>
-    <PackageReference Include="FluentAssertions.Json" Version="6.1.0" />
+    <PackageReference Include="FluentAssertions.Json" Version="$(FluentAssertionsJson)" />
     <PackageReference Include="Microsoft.Extensions.Logging.Console" Version="$(DotNetMajorVersion)" />
   </ItemGroup>
 
   <ItemGroup>
+    <ProjectReference Include="..\Caching.CloudEvents\Caching.CloudEvents.csproj" />
     <ProjectReference Include="..\Caching.Runtime\Caching.Runtime.csproj" />
   </ItemGroup>
 

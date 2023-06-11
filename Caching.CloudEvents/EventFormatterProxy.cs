@@ -7,8 +7,15 @@ public class CacheEventFormatterProxy : IEventFormatterProxy<ICacheEvent>
     public CacheEventFormatterProxy(CloudEventFormatter formatter) =>
         _formatter = formatter;
 
-    public ICacheEvent? Decode(ReadOnlyMemory<byte> body) =>
-        new CacheCloudEventWrapper(_formatter.DecodeStructuredModeMessage(body, null, null));
+    public ICacheEvent? Decode(ReadOnlyMemory<byte> body)
+    {
+        if (body.IsEmpty)
+        {
+            return null;
+        }
+
+        return new CacheCloudEventWrapper(_formatter.DecodeStructuredModeMessage(body, null, null));
+    }
 
     public ReadOnlyMemory<byte> Encode(ICacheEvent pubSubEvent) =>
         pubSubEvent is CacheCloudEventWrapper wrapper

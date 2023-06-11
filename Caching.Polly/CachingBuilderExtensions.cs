@@ -1,4 +1,6 @@
-﻿namespace UiPath.Platform.Caching.Polly;
+﻿using UiPath.Platform.Caching.Policies;
+
+namespace UiPath.Platform.Caching.Polly;
 
 [ExcludeFromCodeCoverage]
 public static class CachingBuilderExtensions
@@ -25,26 +27,27 @@ public static class CachingBuilderExtensions
         return builder.AddCallback();
     }
 
-    public static ICachingBuilder AddReadPolicy(this ICachingBuilder builder, Func<IServiceProvider, IAsyncPolicy> factory)
-    {
-        ReadPolicies.Add(factory);
-        return builder.AddCallback();
-    }
-    public static ICachingBuilder AddWritePolicy(this ICachingBuilder builder, Func<IServiceProvider, IAsyncPolicy> factory)
-    {
-        WritePolicies.Add(factory);
-        return builder.AddCallback();
-    }
-
     public static ICachingBuilder AddReadPolicy(this ICachingBuilder builder, IAsyncPolicy policy)
     {
         ReadPolicies.Add(sp => policy);
         return builder.AddCallback();
     }
 
+    public static ICachingBuilder AddReadPolicy(this ICachingBuilder builder, Func<IServiceProvider, IAsyncPolicy> factory)
+    {
+        ReadPolicies.Add(factory);
+        return builder.AddCallback();
+    }
+
     public static ICachingBuilder AddWritePolicy(this ICachingBuilder builder, IAsyncPolicy policy)
     {
         WritePolicies.Add(sp => policy);
+        return builder.AddCallback();
+    }
+
+    public static ICachingBuilder AddWritePolicy(this ICachingBuilder builder, Func<IServiceProvider, IAsyncPolicy> factory)
+    {
+        WritePolicies.Add(factory);
         return builder.AddCallback();
     }
 

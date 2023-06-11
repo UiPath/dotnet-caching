@@ -1,18 +1,17 @@
 ﻿namespace UiPath.Platform.Caching.Redis;
 
-public class RedisConnection : IRedisConnection
+public sealed class RedisConnection : IRedisConnection
 {
-    private readonly Func<ConfigurationOptions, IConnectionMultiplexer> _multiplexerBuilder;
     private readonly ILogger _logger;
     private readonly Lazy<IConnectionMultiplexer> _connection;
 
-    public RedisConnection(IOptions<RedisConnectionOptions> optionsAccessor, Func<ConfigurationOptions, IConnectionMultiplexer> multiplexerBuilder, ILogger<RedisConnection> logger)
+    public RedisConnection(
+        IOptions<RedisConnectionOptions> optionsAccessor,
+        Func<IConnectionMultiplexer> multiplexerFactory,
+        ILogger<RedisConnection> logger)
     {
-        _multiplexerBuilder = multiplexerBuilder;
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
-        var readSettings = (optionsAccessor ?? throw new ArgumentNullException(nameof(optionsAccessor))).Value;
-        var configuration = BuildConfiguration(readSettings);
-        _connection = new Lazy<IConnectionMultiplexer>(() => Connect(configuration));
+        _connection = new Lazy<IConnectionMultiplexer>(multiplexerFactory);
     }
 
     public IConnectionMultiplexer Connection => _connection.Value;
@@ -26,29 +25,5 @@ public class RedisConnection : IRedisConnection
         }
 
         GC.SuppressFinalize(this);
-    }
-
-    private IConnectionMultiplexer Connect(ConfigurationOptions configuration)
-    {
-        _logger.LogDebug("Connecting to redis");
-        return _multiplexerBuilder(configuration);
-    }
-
-    private static ConfigurationOptions BuildConfiguration(RedisConnectionOptions options)
-    {
-        var config = ConfigurationOptions.Parse(options.ConnectionString);
-        config.AbortOnConnectFail = false; // if the connection fails, the multiplexer will silently retry in the background
-
-        if (options.BackOffMilliseconds.HasValue)
-        {
-            config.ReconnectRetryPolicy = new ExponentialRetry(options.BackOffMilliseconds.Value);
-        }
-
-        if (options.HeartbeatInterval.HasValue)
-        {
-            config.HeartbeatInterval = options.HeartbeatInterval.Value;
-        }
-
-        return config;
     }
 }

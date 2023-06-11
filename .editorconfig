@@ -74,6 +74,10 @@ dotnet_naming_rule.instance_fields_should_be_camel_case.style = instance_field_s
 
 dotnet_naming_symbols.instance_fields.applicable_kinds = field
 
+dotnet_naming_rule.private_static_fields_none.symbols = private_static_fields
+dotnet_naming_rule.private_static_fields_none.style = camel_case
+dotnet_naming_rule.private_static_fields_none.severity = none
+
 dotnet_naming_style.instance_field_style.capitalization = camel_case
 dotnet_naming_style.instance_field_style.required_prefix = _
 dotnet_style_operator_placement_when_wrapping = beginning_of_line
@@ -85,6 +89,9 @@ end_of_line = crlf
 # C# Coding Conventions       #
 ###############################
 [*.cs]
+# Treat all warnings as errors
+warnaserror = true
+
 # var preferences
 csharp_style_var_for_built_in_types = true:silent
 csharp_style_var_when_type_is_apparent = true:silent
@@ -430,6 +437,10 @@ dotnet_diagnostic.CS9057.severity = warning
 
 # S107: Methods should not have too many parameters
 dotnet_diagnostic.S107.severity = none
+
+# CA1016,S3904: Mark assemblies with AssemblyVersionAttribute
+dotnet_diagnostic.CA1016.severity = none
+dotnet_diagnostic.S3904.severity = none
 
 csharp_using_directive_placement = outside_namespace:silent
 csharp_prefer_simple_using_statement = true:suggestion

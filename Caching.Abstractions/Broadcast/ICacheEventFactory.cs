@@ -2,5 +2,7 @@
 
 public interface ICacheEventFactory
 {
-    ICacheEvent Create(string type, CacheEventData eventData, string? id = null);
+    bool IsKnown(string? eventType);
+
+    ICacheEvent Create(string cacheName, string eventType, CacheEventData eventData, string? id = null);
 }
