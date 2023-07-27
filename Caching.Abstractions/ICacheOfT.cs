@@ -1,6 +1,5 @@
 ﻿namespace UiPath.Platform.Caching;
 public interface ICache<T>
-    where T : class
 {
     Task<T?> GetAsync(CacheKey cacheKey, CancellationToken token = default);
 

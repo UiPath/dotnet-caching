@@ -2,12 +2,11 @@
 
 [ExcludeFromCodeCoverage]
 public class HashCache<T> : IHashCache<T>
-    where T : class
 {
     private readonly IHashCache _cache;
 
-    public HashCache(ICacheFactory cacheFactory, IOptions<CacheOptions> cacheOptions) => 
-        _cache = cacheFactory.CreateHashCache(providerName: cacheOptions.Value.DefaultCache, entityType: typeof(T), callerType: GetType());
+    public HashCache(ICacheFactory cacheFactory) => 
+        _cache = cacheFactory.CreateHashCache(entityType: typeof(T), callerType: GetType());
 
     public HashCache(IHashCache cache) =>
         _cache = cache;

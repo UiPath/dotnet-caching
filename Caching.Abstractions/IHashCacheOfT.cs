@@ -1,7 +1,6 @@
 ﻿namespace UiPath.Platform.Caching;
 
 public interface IHashCache<T>
-    where T : class
 {
     Task<T?> GetItemAsync(CacheKey cacheKey, string field, CancellationToken token = default);
 
