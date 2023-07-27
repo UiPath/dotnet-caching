@@ -2,12 +2,14 @@
 
 [ExcludeFromCodeCoverage]
 public class Cache<T> : ICache<T>
-    where T : class
 {
     private readonly ICache _cache;
 
-    public Cache(ICacheFactory cacheFactory, IOptions<CacheOptions> cacheOptions) => 
-        _cache = cacheFactory.CreateCache(providerName: cacheOptions.Value.DefaultCache, entityType: typeof(T), callerType: GetType());
+    public Cache(ICacheFactory cacheFactory) => 
+        _cache = cacheFactory.CreateCache(entityType: typeof(T), callerType: GetType());
+
+    public Cache(ICache cache) =>
+        _cache = cache;
 
     public Task<bool> ContainsAsync(CacheKey cacheKey, CancellationToken token = default) =>
         _cache.ContainsAsync<T>(cacheKey, token);
