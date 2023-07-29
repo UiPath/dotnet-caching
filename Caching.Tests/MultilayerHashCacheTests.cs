@@ -19,7 +19,8 @@ public class MultilayerHashCacheTests : IAsyncLifetime
     private ITopicFactory _topicFactory = default!;
     private ITopicProvider _topicProvider = default!;
     private ITopic<ICacheEvent> _topic = default!;
-    private IKeyResolver _keyResolver = default!;
+    private ICacheKeyStrategy _cacheKeyStrategy = default!;
+    private ITopicKeyStrategy _topicKeyStrategy = default!;
     private IMemoryCache _memoryCache = default!;
     private ISystemClock _clock = default!;
     private IEventFormatterProxy<ICacheEvent> _formatter = default!;
@@ -956,7 +957,10 @@ public class MultilayerHashCacheTests : IAsyncLifetime
         _cacheKey = _fixture.Create<string>();
         _innerCacheKey = ToInnerCacheKey<string>(_cacheKey);
         _topicKey = _fixture.Create<string>();
-
+        _cacheKeyStrategy = _fixture.Create<ICacheKeyStrategy>();
+        _topicKeyStrategy = _fixture.Create<ITopicKeyStrategy>();
+        _cacheKeyStrategy.GetCacheKey<string>(_cacheKey).Returns(_innerCacheKey);
+        _topicKeyStrategy.GetTopicKey<string>().Returns(_topicKey);
         _changeTokenFactory = _fixture.Freeze<IChangeTokenFactory>();
         _memoryCache = _fixture.Freeze<IMemoryCache>();
         _innerCache = _fixture.Freeze<IHashCache>();
@@ -966,9 +970,9 @@ public class MultilayerHashCacheTests : IAsyncLifetime
         {
             DefaultExpiration = TimeSpan.FromMinutes(10),
             EntryFactory = new TestCacheEntryFactory(),
+            CacheKeyStrategy = _cacheKeyStrategy,
+            TopicKeyStrategy = _topicKeyStrategy,
         };
-        _keyResolver = new KeyResolver(Options.Create(new CacheOptions()));
-        _fixture.Inject(_keyResolver);
         _topicFactory = _fixture.Freeze<ITopicFactory>();
         _topicProvider = _fixture.Freeze<ITopicProvider>();
         _topic = _fixture.Freeze<ITopic<ICacheEvent>>();

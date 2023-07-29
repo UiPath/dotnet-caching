@@ -11,13 +11,12 @@ public sealed class RedisCache : ICache
     private readonly Lazy<IDatabase> _lazyDatabase;
     private readonly ISerializerProxy _serializer;
     private readonly ICachingTelemetryProvider _telemetryProvider;
-    private readonly IKeyResolver _keyResolver;
     private readonly ILogger<RedisCache> _logger;
-    private readonly RedisCacheOptions _cacheOptions;
     private readonly bool _supportsExpireTime;
     private readonly IPolicyExecutor _readPolicy;
     private readonly IPolicyExecutor _writePolicy;
-    private readonly string _prefix;
+    private readonly IRedisKeyStrategy _redisKeyStrategy;    
+    private readonly TimeSpan? _defaultExpiration;
     private readonly CacheClock _clock;
 
     public RedisCache(
@@ -25,21 +24,21 @@ public sealed class RedisCache : ICache
         ISerializerProxy serializer,
         IPolicyHolder policyHolder,
         ICachingTelemetryProvider telemetryProvider,
-        IKeyResolver keyResolver,
-        IOptions<RedisCacheOptions> optionsAccessor,
+        IOptions<RedisCacheOptions> redisCacheOptionsAccessor,
+        IOptions<CacheOptions> optionsAccessor,
         ILogger<RedisCache> logger)
-    {
+    {   
         _logger = logger;
         _lazyDatabase = new Lazy<IDatabase>(databaseAccessor);
         _serializer = serializer;
         _telemetryProvider = telemetryProvider;
-        _keyResolver = keyResolver;
-        _cacheOptions = optionsAccessor.Value;
-        _supportsExpireTime = RedisUtils.SupportsExpireTime(_cacheOptions.Version);
         _readPolicy = policyHolder.Read;
         _writePolicy = policyHolder.Write;
-        _prefix = _keyResolver.GetKey(_cacheOptions.RedisTypePrefixes.String, _cacheOptions.Prefix);
-        _clock = new CacheClock(_cacheOptions.Clock, _cacheOptions.DefaultExpiration);
+        var redisCacheOptions = redisCacheOptionsAccessor.Value;
+        _supportsExpireTime = RedisUtils.SupportsExpireTime(redisCacheOptions.Version);
+        _redisKeyStrategy = (redisCacheOptions.RedisKeyStrategyFactory ?? new DefaultRedisKeyStrategyFactory()).Create(optionsAccessor.Value, GetType());
+        _defaultExpiration = redisCacheOptions.DefaultExpiration;
+        _clock = new CacheClock(redisCacheOptions.Clock, _defaultExpiration);
     }
 
     private IDatabase Database => _lazyDatabase.Value;
@@ -48,7 +47,7 @@ public sealed class RedisCache : ICache
         GetAsync<T?>(ToRedisKey(cacheKey, token));
 
     public Task<T?> GetOrAddAsync<T>(CacheKey cacheKey, Func<Task<T?>> generator, CancellationToken token = default) =>
-        GetOrAddAsync(cacheKey, generator, _cacheOptions.DefaultExpiration, token);
+        GetOrAddAsync(cacheKey, generator, _defaultExpiration, token);
 
     public Task<T?> GetOrAddAsync<T>(CacheKey cacheKey, Func<Task<T?>> generator, DateTimeOffset? expiration = null, CancellationToken token = default) =>
         GetOrAddAsync(cacheKey, generator, _clock.ToTimeSpan(expiration), token);
@@ -66,7 +65,7 @@ public sealed class RedisCache : ICache
     }
 
     public Task<bool> RefreshAsync<T>(CacheKey cacheKey, CancellationToken token = default) =>
-        RefreshAsync<T>(cacheKey, _cacheOptions.DefaultExpiration, token);
+        RefreshAsync<T>(cacheKey, _defaultExpiration, token);
 
     public Task<bool> RefreshAsync<T>(CacheKey cacheKey, TimeSpan? expiration = null, CancellationToken token = default) =>
         RefreshAsync<T>(cacheKey, _clock.ToDateTimeOffset(expiration), token);
@@ -103,7 +102,7 @@ public sealed class RedisCache : ICache
         RemoveAsync(ToRedisKey(cacheKey, token));
 
     public Task<bool> SetAsync<T>(CacheKey cacheKey, T? value, CancellationToken token = default) =>
-        SetAsync(cacheKey, value, _cacheOptions.DefaultExpiration, token);
+        SetAsync(cacheKey, value, _defaultExpiration, token);
 
     public Task<bool> SetAsync<T>(CacheKey cacheKey, T? value, TimeSpan? expiration = null, CancellationToken token = default) =>
         SetInternalAsync(ToRedisKey(cacheKey, token), value, _clock.ToTimeSpan(expiration));
@@ -291,7 +290,7 @@ public sealed class RedisCache : ICache
             throw new ArgumentNullException(nameof(cacheKey));
         }
         
-        return _keyResolver.GetKey(cacheKey, _prefix);
+        return _redisKeyStrategy.GetRedisKey(cacheKey);
     }
 
     private ITelemetryOperation StartOperation([CallerMemberName] string name = "") =>

@@ -8,7 +8,7 @@ public sealed class RedisPubSubTopic<T> : ITopic<T>
 {
     private readonly RedisChannel _redisChannel;
     private readonly ISubject<T> _subject;
-    private readonly IDatabase _database;
+    private readonly Lazy<IDatabase> _databaseLazy;
     private readonly ILogger _logger;
     private readonly IEventFormatterProxy<T> _formatter;
     private readonly IPolicyExecutor _writePolicy;
@@ -18,25 +18,23 @@ public sealed class RedisPubSubTopic<T> : ITopic<T>
 
     public RedisPubSubTopic(
         TopicKey topicKey,
+        Uri sourceUri,
+        IRedisChannelStrategy redisChannelStrategy,
         Func<ISubject<T>> subjectFactory,
-        IDatabase database,
-        ISubscriber subscriber,
+        Func<IDatabase> databaseFactory,
+        Func<ISubscriber> subscriberFactory,
         IEventFormatterProxy<T> formatter,
-        IKeyResolver keyResolver,
         IPolicyHolder policyHolder,
-        RedisCacheOptions options,
-        CacheOptions cacheOptions,
         ILogger<RedisPubSubTopic<T>> logger)
     {
         TopicKey = topicKey;
+        _redisChannel = redisChannelStrategy.GetRedisChannel(topicKey);
         _formatter = formatter;
         _writePolicy = policyHolder.Write;
-        _database = database;
+        _databaseLazy = new Lazy<IDatabase>(databaseFactory);
         _logger = logger;        
         _subject = subjectFactory();
-        var sourceUri = cacheOptions.SourceUri ?? CacheOptions.MachineUri;
-        _redisChannel = GetRedisChannel(topicKey, keyResolver, options);
-        _subscriber = new RedisPubSubSubjectWriter<T>(sourceUri, _redisChannel, subscriber, _subject, _formatter, _logger);
+        _subscriber = new RedisPubSubSubjectWriter<T>(sourceUri, _redisChannel, subscriberFactory(), _subject, _formatter, _logger);
     }
 
     public IDisposable Subscribe(IObserver<T> observer) =>
@@ -49,7 +47,7 @@ public sealed class RedisPubSubTopic<T> : ITopic<T>
         {
             var messageString = _formatter.EncodeAsString(@event);
             _logger.LogTrace("Publishing to topic {} event {}", TopicKey, @event.Id);
-            await _writePolicy.ExecuteAsync(() => _database.PublishAsync(_redisChannel, messageString, CommandFlags.DemandMaster)).ConfigureAwait(false);
+            await _writePolicy.ExecuteAsync(() => _databaseLazy.Value.PublishAsync(_redisChannel, messageString, CommandFlags.DemandMaster)).ConfigureAwait(false);
             return true;
         }
         catch (Exception ex)
@@ -63,12 +61,6 @@ public sealed class RedisPubSubTopic<T> : ITopic<T>
     { 
         _subscriber.Dispose();
         _subject.OnCompleted();
-    }
-
-    private static RedisChannel GetRedisChannel(TopicKey topicKey, IKeyResolver keyResolver, RedisCacheOptions options)
-    {
-        var prefix = keyResolver.GetKey(options.RedisTypePrefixes.PubSub, options.Prefix);
-        return keyResolver.GetKey((string)topicKey, prefix);
     }
 }
 

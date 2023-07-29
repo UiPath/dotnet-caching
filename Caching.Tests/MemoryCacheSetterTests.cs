@@ -13,7 +13,8 @@ public class MemoryCacheSetterTests : IAsyncLifetime
     private ITopicFactory _topicFactory = default!;
     private ITopicProvider _topicProvider = default!;
     private ITopic<ICacheEvent> _topic = default!;
-    private IKeyResolver _keyResolver = default!;
+    private ICacheKeyStrategy _cacheKeyStrategy = default!;
+    private ITopicKeyStrategy _topicKeyStrategy = default!;
     private IMemoryCache _memoryCache = default!;
     private ISystemClock _clock = default!;
     private IEventFormatterProxy<ICacheEvent> _formatter = default!;
@@ -34,7 +35,7 @@ public class MemoryCacheSetterTests : IAsyncLifetime
         {
             Clock = _clock
         }));
-        _fixture.Inject<IMemoryCache>(_memoryCache);
+        _fixture.Inject(_memoryCache);
 
         var token = new TestChangeToken
         {
@@ -63,7 +64,7 @@ public class MemoryCacheSetterTests : IAsyncLifetime
         {
             Clock = _clock
         }));
-        _fixture.Inject<IMemoryCache>(_memoryCache);
+        _fixture.Inject(_memoryCache);
 
         var token = new TestChangeToken
         {
@@ -87,10 +88,6 @@ public class MemoryCacheSetterTests : IAsyncLifetime
 
     public Task DisposeAsync()
     {
-        _cacheKey = _fixture.Create<string>();
-        _clock = new SystemClock();
-        _keyResolver = new KeyResolver(Options.Create(new CacheOptions()));
-        _fixture.Inject(_keyResolver);
         return Task.CompletedTask;
     }
 
@@ -98,7 +95,10 @@ public class MemoryCacheSetterTests : IAsyncLifetime
     {
         _cacheKey = _fixture.Create<string>();
         _topicKey = _fixture.Create<string>();
-
+        _cacheKeyStrategy = _fixture.Create<ICacheKeyStrategy>();
+        _topicKeyStrategy = _fixture.Create<ITopicKeyStrategy>();
+        _cacheKeyStrategy.GetCacheKey<string>(_cacheKey).Returns(_cacheKey);
+        _topicKeyStrategy.GetTopicKey<string>().Returns(_topicKey);
         _changeTokenFactory = _fixture.Freeze<IChangeTokenFactory>();
         _memoryCache = _fixture.Freeze<IMemoryCache>();
         _clock = new SystemClock();
@@ -107,10 +107,9 @@ public class MemoryCacheSetterTests : IAsyncLifetime
         {
             DefaultExpiration = TimeSpan.FromMinutes(10),
             EntryFactory = new TestCacheEntryFactory(),
+            CacheKeyStrategy = _cacheKeyStrategy,
+            TopicKeyStrategy = _topicKeyStrategy,
         };
-
-        _keyResolver = new KeyResolver(Options.Create(new CacheOptions()));
-        _fixture.Inject(_keyResolver);
         _cacheClock = new CacheClock(_clock);
         _fixture.Inject(_cacheClock);
         _topicFactory = _fixture.Freeze<ITopicFactory>();
@@ -118,7 +117,7 @@ public class MemoryCacheSetterTests : IAsyncLifetime
         _topic = _fixture.Freeze<ITopic<ICacheEvent>>();
         _topicFactory.Get(Arg.Any<string>(), Arg.Any<Type>()).Returns(_topicProvider);
         _topicProvider.CreateTopic(_topicKey).Returns(_topic);
-        _fixture.Inject<IMemoryCache>(_memoryCache);
+        _fixture.Inject(_memoryCache);
         _fixture.Inject<IMultilayerCacheOptions>(_options);
         _formatter = new CacheClearEventFormatterProxy();
         _fixture.Inject(_formatter);

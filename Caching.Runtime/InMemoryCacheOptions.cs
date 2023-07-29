@@ -13,4 +13,6 @@ public class InMemoryCacheOptions : CacheOptionsBase, IMultilayerCacheOptions, I
     public string? Topic { get; set; }
 
     public TimeSpan? PrimaryMaxExpiration { get; set; }
+
+    public ITopicKeyStrategy? TopicKeyStrategy { get; set; }
 }

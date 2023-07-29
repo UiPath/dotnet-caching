@@ -4,8 +4,10 @@ public class HashCacheEntryBuilderTests : IAsyncLifetime
 {
     private readonly IFixture _fixture = AutoFixtureCreator.NSubsitute();
 
-    private IKeyResolver _keyResolver = default!;
+    private ICacheKeyStrategy _cacheKeyStrategy = default!;
+    private ITopicKeyStrategy _topicKeyStrategy = default!;
     private CacheKey _cacheKey = default!;
+    private TopicKey _topicKey = default!;
 
     private HashCacheEntryBuilder? _sut = null;
 
@@ -36,8 +38,11 @@ public class HashCacheEntryBuilderTests : IAsyncLifetime
     public Task InitializeAsync()
     {
         _cacheKey = _fixture.Create<string>();
-        _keyResolver = new KeyResolver(Options.Create(new CacheOptions()));
-        _fixture.Inject(_keyResolver);
+        _topicKey = _fixture.Create<string>();
+        _cacheKeyStrategy = _fixture.Create<ICacheKeyStrategy>();
+        _topicKeyStrategy = _fixture.Create<ITopicKeyStrategy>();
+        _cacheKeyStrategy.GetCacheKey<string>(_cacheKey).Returns(_cacheKey);
+        _topicKeyStrategy.GetTopicKey<string>().Returns(_topicKey);
         return Task.CompletedTask;
     }
 }

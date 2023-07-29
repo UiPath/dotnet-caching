@@ -8,7 +8,6 @@ public sealed class InMemoryRedisCacheProvider : ICacheProvider
     private readonly Func<IMemoryStatisticsOptions, IMemoryCache> _memoryCacheAccessor;
     private readonly IChangeTokenFactory _changeTokenFactory;
     private readonly ITopicFactory _topicFactory;
-    private readonly IKeyResolver _keyResolver;
     private readonly ICacheEventFactory _cacheEventFactory;
 
     private readonly ICachingTelemetryProvider _cachingTelemetryProvider;
@@ -28,7 +27,6 @@ public sealed class InMemoryRedisCacheProvider : ICacheProvider
         Func<ICacheFactory> cacheFactoryAccessor,
         IChangeTokenFactory changeTokenFactory,
         ITopicFactory topicFactory,
-        IKeyResolver keyResolver,
         ICacheEventFactory cacheEventFactory,
         ICachingTelemetryProvider? cachingTelemetryProvider = null,
         ILoggerFactory? loggerFactory = null)
@@ -38,7 +36,6 @@ public sealed class InMemoryRedisCacheProvider : ICacheProvider
         _cacheFactory = new Lazy<ICacheFactory>(cacheFactoryAccessor);
         _changeTokenFactory = changeTokenFactory;
         _topicFactory = topicFactory;
-        _keyResolver = keyResolver;
         _cacheEventFactory = cacheEventFactory;
         _cachingTelemetryProvider = cachingTelemetryProvider ?? NullTelemetryProvider.Instance;
         _loggerFactory = loggerFactory ?? NullLoggerFactory.Instance;
@@ -72,7 +69,6 @@ public sealed class InMemoryRedisCacheProvider : ICacheProvider
             () => _memoryCacheAccessor(_options),
             _changeTokenFactory,
             _topicFactory,
-            _keyResolver,
             _cacheEventFactory,
             _cachingTelemetryProvider,
             _options,
@@ -85,7 +81,6 @@ public sealed class InMemoryRedisCacheProvider : ICacheProvider
             () => _memoryCacheAccessor(_options),
             _changeTokenFactory,
             _topicFactory,
-            _keyResolver,
             _cacheEventFactory,
             _cachingTelemetryProvider,
             _options,

@@ -12,6 +12,7 @@ public class RedisHashCacheTests : IAsyncLifetime
 {
     private readonly IFixture _fixture = AutoFixtureCreator.NSubsitute();
 
+    private string _prefix = default!;
     private IDatabase _database = default!;
     private ITransaction _transaction = default!;
     private ISerializerProxy _serializer = default!;
@@ -21,6 +22,8 @@ public class RedisHashCacheTests : IAsyncLifetime
     private IPolicyHolder _policyHolder = default!;
     private CacheKey _cacheKey = default!;
     private RedisKey _redisKey = default!;
+    private ICacheKeyStrategy _cacheKeyStrategy = default!;
+    private IRedisKeyStrategy _redisKeyStrategy = default!;
 
     private RedisHashCache Sut => _fixture.Create<RedisHashCache>();
 
@@ -564,9 +567,7 @@ public class RedisHashCacheTests : IAsyncLifetime
     [Fact]
     public async Task Remove_redis_exception()
     {
-        var field = _fixture.Create<string>().ToLowerInvariant();
-        RedisValue redisField = field;
-        _database.HashDeleteAsync(_redisKey, redisField, CommandFlags.DemandMaster)
+        _database.KeyDeleteAsync(_redisKey, CommandFlags.DemandMaster)
             .ThrowsAsync<Exception>();
 
         var actual = await Sut.RemoveAsync<string>(_cacheKey, CancellationToken.None);
@@ -895,6 +896,10 @@ public class RedisHashCacheTests : IAsyncLifetime
 
     public Task InitializeAsync()
     {
+        _prefix = _fixture.Create<string>();
+        _cacheKey = _fixture.Create<string>();
+        _redisKey = string.Join(':', _prefix, RedisTypePrefixes.Hash, _cacheKey).ToLowerInvariant();
+
         _database = _fixture.Freeze<IDatabase>();
         _transaction = _fixture.Freeze<ITransaction>();
         _clock = _fixture.Freeze<ISystemClock>();
@@ -904,23 +909,25 @@ public class RedisHashCacheTests : IAsyncLifetime
         _policyHolder.Read.Returns(noOpExecutor);
         _policyHolder.Write.Returns(noOpExecutor);
         _database.CreateTransaction().Returns(_transaction);
+        _cacheKeyStrategy = _fixture.Create<ICacheKeyStrategy>();
+        var redisKeyStrategyFactory = _fixture.Create<IRedisKeyStrategyFactory>();
+        _redisKeyStrategy = _fixture.Create<IRedisKeyStrategy>();
+        _redisKeyStrategy.GetRedisKey(_cacheKey).Returns(_redisKey);
+        redisKeyStrategyFactory.Create(Arg.Any<CacheOptions>(), Arg.Any<Type>())
+            .Returns(_redisKeyStrategy);
+
         _redisCacheOptions = new RedisCacheOptions
         {
-            Prefix = "prefix",
             DefaultExpiration = TimeSpan.FromSeconds(Random.Shared.Next(1, 100)),
             Clock = _clock,
-            EntryFactory = new TestCacheEntryFactory()
+            EntryFactory = new TestCacheEntryFactory(),
+            CacheKeyStrategy = _cacheKeyStrategy,
+            RedisKeyStrategyFactory = redisKeyStrategyFactory
         };
         _serializer = new JsonSerializer();
         _fixture.Inject(_serializer);
         var opt = Options.Create(_redisCacheOptions);
         _fixture.Inject(opt);
-        _fixture.Inject<IKeyResolver>(new KeyResolver(Options.Create(new CacheOptions())));
-        _cacheKey = _fixture.Create<string>();
-        _redisKey = ToRedisKey(_cacheKey);
         return Task.CompletedTask;
     }
-
-    private RedisKey ToRedisKey(CacheKey cacheKey) =>
-        string.Join(':', _redisCacheOptions.Prefix, _redisCacheOptions.RedisTypePrefixes.Hash, cacheKey).ToLowerInvariant();
 }

@@ -13,4 +13,7 @@ public class RedisStreamsTopicOptions
     public TimeSpan PollInterval { get; set; } = TimeSpan.FromSeconds(5);
 
     public TimeSpan ProcessingTimeout { get; set; } = TimeSpan.FromSeconds(60);
+
+    public IRedisStreamKeyStrategy? RedisStreamKeyStrategy { get; set; }
+    
 }

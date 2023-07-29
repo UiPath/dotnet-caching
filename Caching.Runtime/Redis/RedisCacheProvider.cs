@@ -5,11 +5,11 @@ namespace UiPath.Platform.Caching.Redis;
 
 public sealed class RedisCacheProvider : ICacheProvider
 {
-    private readonly IOptions<RedisCacheOptions> _options;
+    private readonly IOptions<RedisCacheOptions> _redisCacheOptions;
+    private readonly IOptions<CacheOptions> _cacheOptions;
     private readonly Func<IDatabase> _databaseAccessor;
     private readonly ISerializerProxy _serializerProxy;
     private readonly IPolicyHolder _policyHolder;
-    private readonly IKeyResolver _keyResolver;
     private readonly ICachingTelemetryProvider _cachingTelemetryProvider;
     private readonly ILoggerFactory? _loggerFactory;
     private readonly Lazy<RedisCache> _cache;
@@ -17,21 +17,22 @@ public sealed class RedisCacheProvider : ICacheProvider
 
     public string Name => KnownCacheProviderNames.Redis;
 
-    public bool Enabled => _options.Value.Enabled;
+    public bool Enabled => _redisCacheOptions.Value.Enabled;
 
-    public RedisCacheProvider(IOptions<RedisCacheOptions> options,
+    public RedisCacheProvider(
+        IOptions<RedisCacheOptions> redisCacheOptions,
+        IOptions<CacheOptions> cacheOptions,
         Func<IDatabase> databaseAccessor,
         ISerializerProxy serializerProxy,
         IPolicyHolder policyHolder,
-        IKeyResolver keyResolver,
         ICachingTelemetryProvider? cachingTelemetryProvider = null,
         ILoggerFactory? loggerFactory = null)
     {
-        _options = options;
+        _redisCacheOptions = redisCacheOptions;
+        _cacheOptions = cacheOptions;
         _databaseAccessor = databaseAccessor;
         _serializerProxy = serializerProxy;
         _policyHolder = policyHolder;
-        _keyResolver = keyResolver;
         _cachingTelemetryProvider = cachingTelemetryProvider ?? NullTelemetryProvider.Instance;
         _loggerFactory = loggerFactory;
         _cache = new Lazy<RedisCache>(() => BuildCache());
@@ -63,8 +64,8 @@ public sealed class RedisCacheProvider : ICacheProvider
             _serializerProxy,
             _policyHolder,
             _cachingTelemetryProvider,
-            _keyResolver,
-            _options,
+            _redisCacheOptions,
+            _cacheOptions,
             _loggerFactory.Create<RedisCache>());
 
     private RedisHashCache BuildHashCache() =>
@@ -73,7 +74,7 @@ public sealed class RedisCacheProvider : ICacheProvider
             _serializerProxy,
             _policyHolder,
             _cachingTelemetryProvider,
-            _keyResolver,
-            _options,
+            _redisCacheOptions,
+            _cacheOptions,
             _loggerFactory.Create<RedisHashCache>());
 }

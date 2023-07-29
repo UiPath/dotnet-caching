@@ -6,7 +6,6 @@ public sealed class RedisConnection : IRedisConnection
     private readonly Lazy<IConnectionMultiplexer> _connection;
 
     public RedisConnection(
-        IOptions<RedisConnectionOptions> optionsAccessor,
         Func<IConnectionMultiplexer> multiplexerFactory,
         ILogger<RedisConnection> logger)
     {

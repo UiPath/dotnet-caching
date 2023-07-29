@@ -7,7 +7,6 @@ public sealed class InMemoryCacheProvider : ICacheProvider
     private readonly Func<IMemoryStatisticsOptions, IMemoryCache> _memoryCacheAccessor;
     private readonly IChangeTokenFactory _changeTokenFactory;
     private readonly ITopicFactory _topicFactory;
-    private readonly IKeyResolver _keyResolver;
     private readonly ICacheEventFactory _cacheEventFactory;
     private readonly ICachingTelemetryProvider _cachingTelemetryProvider;
     private readonly ILoggerFactory _loggerFactory;
@@ -19,9 +18,9 @@ public sealed class InMemoryCacheProvider : ICacheProvider
 
     public bool Enabled => _options.Enabled;
 
-    public InMemoryCacheProvider(IOptions<InMemoryCacheOptions> optionsAccessor,
+    public InMemoryCacheProvider(
+        IOptions<InMemoryCacheOptions> optionsAccessor,
         Func<IMemoryStatisticsOptions, IMemoryCache> memoryCacheAccessor,
-        IKeyResolver keyResolver,
         ICacheEventFactory? cacheEventFactory = null,
         IChangeTokenFactory? changeTokenFactory = null,
         ITopicFactory? topicFactory = null,
@@ -30,7 +29,6 @@ public sealed class InMemoryCacheProvider : ICacheProvider
     {
         _options = optionsAccessor.Value;
         _memoryCacheAccessor = memoryCacheAccessor;
-        _keyResolver = keyResolver;
         _changeTokenFactory = NullChangeTokenFactory.Instance;
         _topicFactory = NullTopicFactory.Instance;
         _cacheEventFactory = NullCacheEventFactory.Instance;
@@ -85,7 +83,6 @@ public sealed class InMemoryCacheProvider : ICacheProvider
             () => _memoryCacheAccessor(_options),
             _changeTokenFactory,
             _topicFactory,
-            _keyResolver,
             _cacheEventFactory,
             _cachingTelemetryProvider,
             _options,
@@ -98,7 +95,6 @@ public sealed class InMemoryCacheProvider : ICacheProvider
             () => _memoryCacheAccessor(_options),
             _changeTokenFactory,
             _topicFactory,
-            _keyResolver,
             _cacheEventFactory,
             _cachingTelemetryProvider,
             _options,

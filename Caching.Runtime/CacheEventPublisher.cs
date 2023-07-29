@@ -26,8 +26,8 @@ internal sealed class CacheEventPublisher
     {
         Dictionary<string, object?> properties = new()
         {
-            [Constants.MetadataKey] = options.Metadata,
-            [Constants.ExpirationKey] = options.Expiration,
+            [KnownFieldNames.MetadataKey] = options.Metadata,
+            [KnownFieldNames.ExpirationKey] = options.Expiration,
         };
         return RaiseEventAsync<T>(options.TopicKey, options.CacheKey, KnownEventTypes.CacheRefreshed, properties);
     }
@@ -39,7 +39,7 @@ internal sealed class CacheEventPublisher
     {
         Dictionary<string, object?> properties = new()
         {
-            [Constants.ExpirationKey] = options.Expiration,
+            [KnownFieldNames.ExpirationKey] = options.Expiration,
         };
         return RaiseEventAsync<T>(options.TopicKey, options.CacheKey, KnownEventTypes.CacheRemoved, properties);
     }

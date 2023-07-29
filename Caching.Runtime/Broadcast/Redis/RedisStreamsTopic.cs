@@ -6,7 +6,9 @@ namespace UiPath.Platform.Caching.Broadcast.Redis;
 public sealed class RedisStreamsTopic<T> : ITopic<T>
      where T : IEvent
 {
-    private readonly RedisStreamsTopicOptions _options;
+    private const string ConsumerGroupNameExistsErrorMessage = "BUSYGROUP Consumer Group name already exists";
+
+    private readonly IRedisStreamKeyStrategy _redisStreamKeyStrategy;
     private readonly RedisStreamSubjectWriter<T> _subscriber;
     private readonly CancellationTokenSource _stopTokenSource;
     private readonly RedisStreamContext _context;
@@ -15,18 +17,17 @@ public sealed class RedisStreamsTopic<T> : ITopic<T>
     private readonly IEventFormatterProxy<T> _formatter;
     private readonly IPolicyExecutor _writePolicy;
     private readonly ILogger _logger;
+    private readonly int? _maxLength;
 
     public TopicKey TopicKey { get; private set; }
 
     public RedisStreamsTopic(
         TopicKey topicKey,
         Func<ISubject<T>> subjectFactory,
-        IRedisConnection redisConnection,
+        Func<IDatabase> databaseFactory,
         IEventFormatterProxy<T> formatter,
-        IKeyResolver keyResolver,
         IPolicyHolder policyHolder,
         RedisStreamsTopicOptions options,
-        RedisCacheOptions redisOptions,
         CacheOptions cacheOptions,
         ILogger<RedisStreamsTopic<T>> logger,
         CancellationToken stopToken)
@@ -35,13 +36,14 @@ public sealed class RedisStreamsTopic<T> : ITopic<T>
         _formatter = formatter;
         _writePolicy = policyHolder.Write;
         _stopTokenSource = CancellationTokenSource.CreateLinkedTokenSource(stopToken);
-        _database = redisConnection.Connection.GetDatabase();
+        _database = databaseFactory();
         _logger = logger;
         _subject = subjectFactory();
-        _options = options;        
-        _context = GetContext(topicKey, keyResolver, redisOptions, cacheOptions, options);
+        _maxLength = options.MaxLength;
+        _redisStreamKeyStrategy = options.RedisStreamKeyStrategy ?? new PrefixStrategy(RedisTypePrefixes.Streams, cacheOptions);
+        _context = GetContext(topicKey, cacheOptions, options);
         EnsureStreamGroup();
-        _subscriber = new RedisStreamSubjectWriter<T>(_context, redisConnection.Connection.GetDatabase(), _subject, _formatter, _logger, _stopTokenSource.Token);
+        _subscriber = new RedisStreamSubjectWriter<T>(_context, _database, _subject, _formatter, _logger, _stopTokenSource.Token);
     }
 
     public IDisposable Subscribe(IObserver<T> observer) =>
@@ -57,7 +59,7 @@ public sealed class RedisStreamsTopic<T> : ITopic<T>
                 _context.Topic,
                 _context.FieldName,
                 messageString,
-                maxLength: _options.MaxLength,
+                maxLength: _maxLength,
                 useApproximateMaxLength: true,
                 flags: CommandFlags.DemandMaster)).ConfigureAwait(false);
             _logger.LogDebug("Published to topic {} event {} stream id {} ", TopicKey, @event.Id,  id);
@@ -86,23 +88,21 @@ public sealed class RedisStreamsTopic<T> : ITopic<T>
                 _context.ConsumerGroup,
                 StreamPosition.NewMessages);
         }
-        catch (RedisServerException ex) when (ex.Message == Constants.ConsumerGroupNameExistsErrorMessage)
+        catch (RedisServerException ex) when (ex.Message == ConsumerGroupNameExistsErrorMessage)
         {
             _logger.LogDebug("On Topic {} consumer group {} already exists", _context.Topic, _context.ConsumerGroup);
         }
     }
 
-    private static RedisStreamContext GetContext(
+    private RedisStreamContext GetContext(
         TopicKey topicKey,
-        IKeyResolver keyResolver,
-        RedisCacheOptions redisOptions,
         CacheOptions cacheOptions,
         RedisStreamsTopicOptions options)
     {
         var sourceUri = cacheOptions.SourceUri ?? CacheOptions.MachineUri;
         var sourceUriAsString = sourceUri.ToString().ToLowerInvariant();
         return new RedisStreamContext(
-            Topic: GetTopicRedisKey(topicKey, keyResolver, redisOptions),
+            Topic: _redisStreamKeyStrategy.GetRedisKey(topicKey),
             FieldName: options.FieldName,
             ConsumerName: sourceUriAsString,
             ConsumerGroup: sourceUriAsString,
@@ -112,9 +112,4 @@ public sealed class RedisStreamsTopic<T> : ITopic<T>
             );
     }
 
-    private static RedisKey GetTopicRedisKey(TopicKey topicKey, IKeyResolver keyResolver, RedisCacheOptions options)
-    {
-        var prefix = keyResolver.GetKey(options.RedisTypePrefixes.Streams, options.Prefix);
-        return keyResolver.GetKey((string)topicKey, prefix);
-    }
 }

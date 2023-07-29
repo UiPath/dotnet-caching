@@ -1,6 +1,8 @@
 ﻿namespace UiPath.Platform.Caching;
 public class CacheOptions
 {
+    public const char KeySeparator = ':';
+
     public static readonly Uri MachineUri = new($"urn:{Environment.MachineName}".ToLowerInvariant());
 
     public bool Enabled { get; set; } = true;
@@ -15,7 +17,13 @@ public class CacheOptions
 
     public Uri? SourceUri { get; set; } = MachineUri;
 
-    public char Separator { get; set; } = Constants.KeySeparator;
+    public char Separator { get; set; } = KeySeparator;
+
+    public string AppShortName { get; set; } = default!;
 
     public Type? CacheFactory { get; set; }
+
+    public Type? CacheKeyStrategyFactory { get; set; }
+
+    public Type? TopicKeyStrategyFactory { get; set; }
 }

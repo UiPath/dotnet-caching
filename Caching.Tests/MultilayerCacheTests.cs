@@ -16,7 +16,8 @@ public class MultilayerCacheTests : IAsyncLifetime
     private ITopicFactory _topicFactory = default!;
     private ITopicProvider _topicProvider = default!;
     private ITopic<ICacheEvent> _topic = default!;
-    private IKeyResolver _keyResolver = default!;
+    private ICacheKeyStrategy _cacheKeyStrategy = default!;
+    private ITopicKeyStrategy _topicKeyStrategy = default!;
     private IMemoryCache _memoryCache = default!;
     private ISystemClock _clock = default!;
     private IEventFormatterProxy<ICacheEvent> _formatter = default!;
@@ -504,8 +505,10 @@ public class MultilayerCacheTests : IAsyncLifetime
             EntryFactory = new TestCacheEntryFactory(),
         };
 
-        _keyResolver = new KeyResolver(Options.Create(new CacheOptions()));
-        _fixture.Inject(_keyResolver);
+        _cacheKeyStrategy = _fixture.Create<ICacheKeyStrategy>();
+        _topicKeyStrategy = _fixture.Create<ITopicKeyStrategy>();
+        _cacheKeyStrategy.GetCacheKey<string>(_cacheKey).Returns(_cacheKey);
+        _topicKeyStrategy.GetTopicKey<string>().Returns(_topicKey);
         _topicFactory = _fixture.Freeze<ITopicFactory>();
         _topicProvider = _fixture.Freeze<ITopicProvider>();
         _topic = _fixture.Freeze<ITopic<ICacheEvent>>();

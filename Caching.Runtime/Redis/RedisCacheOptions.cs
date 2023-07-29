@@ -2,8 +2,6 @@
 
 public class RedisCacheOptions : CacheOptionsBase
 {
-    public string? Prefix { get; set; }
-
     public int Version { get; set; } = 6;
 
     public string ConnectionString { get; set; } = default!;
@@ -14,5 +12,5 @@ public class RedisCacheOptions : CacheOptionsBase
 
     public bool ProfilerEnabled { get; set; }
 
-    public RedisTypePrefixes RedisTypePrefixes { get; set; } = new RedisTypePrefixes();
+    public IRedisKeyStrategyFactory? RedisKeyStrategyFactory { get; set; }
 }

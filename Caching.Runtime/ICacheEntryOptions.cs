@@ -2,7 +2,7 @@
 
 internal interface ICacheEntryOptions
 {
-     CacheKey CacheKey { get; }
+    CacheKey CacheKey { get; }
 
     TopicKey TopicKey { get; }
 

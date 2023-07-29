@@ -24,7 +24,6 @@ public sealed class MultilayerHashCache : IHashCache
         Func<IMemoryCache> memoryCacheAccessor,
         IChangeTokenFactory changeTokenFactory,
         ITopicFactory topicFactory,
-        IKeyResolver keyResolver,
         ICacheEventFactory cacheEventFactory,
         ICachingTelemetryProvider telemetryProvider,
         IMultilayerCacheOptions cacheOptions,
@@ -37,7 +36,9 @@ public sealed class MultilayerHashCache : IHashCache
         _cacheEntryFactory = _cacheOptions.EntryFactory ?? new CacheEntryFactory();
         _monitor = _memoryCache.Monitor(_cacheOptions, telemetryProvider, GetType().Name);
         _clock = new CacheClock(_cacheOptions.Clock, _cacheOptions.DefaultExpiration);
-        _entryBuilder = new HashCacheEntryBuilder(cacheName, GetType(), keyResolver, _clock);
+        var cacheKeyStrategy = _cacheOptions.CacheKeyStrategy ?? new DefaultCacheKeyStrategy();
+        var topicKeyStrategy = _cacheOptions.TopicKeyStrategy ?? new DefaultTopicKeyStrategy();
+        _entryBuilder = new HashCacheEntryBuilder(cacheKeyStrategy, topicKeyStrategy, _clock);
         _eventPublisher = new CacheEventPublisher(cacheName, _cacheOptions.Topic, topicFactory, cacheEventFactory, logger);
         _localMemorySetter = new HashLocalMemorySetter(cacheName, changeTokenFactory, topicFactory, _memoryCache, logger, _clock, _cacheOptions);
     }

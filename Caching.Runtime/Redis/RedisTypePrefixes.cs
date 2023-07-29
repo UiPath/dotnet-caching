@@ -1,10 +1,12 @@
 ﻿namespace UiPath.Platform.Caching.Redis;
 
-public class RedisTypePrefixes
+public static class RedisTypePrefixes
 {
-    public string String { get; set; } = "s";
-    public string Hash { get; set; } = "h";
-    public string PubSub { get; set; } = "ps";
-
-    public string Streams { get; set; } = "st";
+    public const string String = "s";
+    
+    public const string Hash  = "h";
+    
+    public const string PubSub = "ps";
+    
+    public const string Streams  = "st";
 }

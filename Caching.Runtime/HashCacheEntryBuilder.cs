@@ -2,20 +2,17 @@
 
 internal class HashCacheEntryBuilder
 {
-    private readonly string _cacheName;
-    private readonly Type _cacheType;
-    private readonly IKeyResolver _keyResolver;
+    private readonly ICacheKeyStrategy _cacheKeyStrategy;
+    private readonly ITopicKeyStrategy _topicKeyStrategy;
     private readonly CacheClock _clock;
 
     public HashCacheEntryBuilder(
-        string cacheName,
-        Type cacheType,
-        IKeyResolver keyResolver,
+        ICacheKeyStrategy cacheKeyStrategy,
+        ITopicKeyStrategy topicKeyStrategy,
         CacheClock clock)
     {
-        _cacheName = cacheName;
-        _cacheType = cacheType;
-        _keyResolver = keyResolver;
+        _cacheKeyStrategy = cacheKeyStrategy;
+        _topicKeyStrategy = topicKeyStrategy;
         _clock = clock;
     }
 
@@ -33,8 +30,8 @@ internal class HashCacheEntryBuilder
         {
             throw new ArgumentNullException(nameof(cacheKey));
         }
-        var entryCacheKey = _keyResolver.GetInternalCacheKey<T>(cacheKey, _cacheType, _cacheName);
-        var topicKey = _keyResolver.GetTopicKey<T>(_cacheType, _cacheName);
+        var entryCacheKey = _cacheKeyStrategy.GetCacheKey<T>(cacheKey);
+        var topicKey = _topicKeyStrategy.GetTopicKey<T>();
         return new InternalHashCacheEntryOptions { 
             CacheKey = entryCacheKey,
             Fields = fields,

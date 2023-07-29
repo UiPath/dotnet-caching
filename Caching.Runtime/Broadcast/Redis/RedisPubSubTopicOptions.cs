@@ -3,4 +3,6 @@
 public class RedisPubSubTopicOptions
 {
     public bool Enabled { get; set; } = true;
+
+    public IRedisChannelStrategy? RedisChannelStrategy { get; set; }
 }

@@ -18,7 +18,9 @@ public class RedisCacheTests : IAsyncLifetime
     private DateTimeOffset _now = DateTimeOffset.UtcNow;
     private CacheKey _cacheKey = default!;
     private RedisKey _redisKey = default!;
-
+    private ICacheKeyStrategy _cacheKeyStrategy = default!;
+    private IRedisKeyStrategy _redisKeyStrategy = default!;
+    private string _prefix = default!;
     private RedisCache? _sut = null;
     private RedisCache Sut => _sut ??= _fixture.Create<RedisCache>();
 
@@ -414,16 +416,27 @@ public class RedisCacheTests : IAsyncLifetime
 
     public Task InitializeAsync()
     {
+        _prefix = "test";
+        _cacheKey = _fixture.Create<string>();
+        _redisKey = string.Join(':', _prefix, RedisTypePrefixes.String, _cacheKey).ToLowerInvariant();
         _clock = _fixture.Freeze<ISystemClock>();
         _clock.UtcNow.Returns(c => _now);
         _policyHolder = _fixture.Freeze<IPolicyHolder>();
         var noOpExecutor = new NoOpExecutor();
         _policyHolder.Read.Returns(noOpExecutor);
         _policyHolder.Write.Returns(noOpExecutor);
+        _cacheKeyStrategy = _fixture.Create<ICacheKeyStrategy>();
+        var redisKeyStrategyFactory = _fixture.Create<IRedisKeyStrategyFactory>();
+        _redisKeyStrategy = _fixture.Create<IRedisKeyStrategy>();
+        _redisKeyStrategy.GetRedisKey(_cacheKey).Returns(_redisKey);
+        redisKeyStrategyFactory.Create(Arg.Any<CacheOptions>(), Arg.Any<Type>())
+            .Returns(_redisKeyStrategy);
+        _cacheKeyStrategy.GetCacheKey<string>(_cacheKey).Returns(_cacheKey);
         _cacheOptions = new RedisCacheOptions
         {
             Clock = _clock,
-            Prefix = "test"
+            CacheKeyStrategy = _cacheKeyStrategy,
+            RedisKeyStrategyFactory = redisKeyStrategyFactory
         };
 
         _database = _fixture.Freeze<IDatabase>();
@@ -431,10 +444,8 @@ public class RedisCacheTests : IAsyncLifetime
         _fixture.Inject(_serializer);
         var opt = Options.Create(_cacheOptions);
         _fixture.Inject(opt);
-        _fixture.Inject<IKeyResolver>(new KeyResolver(Options.Create(new CacheOptions())));
 
-        _cacheKey = _fixture.Create<string>();
-        _redisKey = ToRedisKey(_cacheKey);
+
         return Task.CompletedTask;
     }
 
@@ -492,7 +503,4 @@ public class RedisCacheTests : IAsyncLifetime
         actualResponse.Should().Be(expectedResponse);
         await _database.Received(1).StringSetAsync(_redisKey, Arg.Any<RedisValue>(), Arg.Any<TimeSpan?>(), Arg.Any<When>(), Arg.Is<CommandFlags>(f => f.HasFlag(CommandFlags.DemandMaster)));
     }
-
-    private RedisKey ToRedisKey(CacheKey cacheKey) =>
-        string.Join(':', _cacheOptions.Prefix, _cacheOptions.RedisTypePrefixes.String, cacheKey).ToLowerInvariant();
 }

@@ -22,11 +22,10 @@ public static class InMemoryRedisCollectionExtensions
         {
             builder.RegisterOnCompleteCallback(builder =>
             {
-                builder.Services.TryAddSingleton<IKeyResolver, KeyResolver>();
                 builder.Services.TryAddSingleton<IChangeTokenFactory, ChangeTokenFactory>();
                 builder.Services.TryAddSingleton<IEventFormatterProxy<ICacheEvent>, CacheEventFormatter>();
                 builder.Services.TryAddSingleton<ICacheEventFactory, CacheEventFactory>();
-                builder.Services.TryAddTransient(sp => sp.GetRequiredService<IRedisConnection>().Connection.GetSubscriber());
+                builder.Services.TryAddTransient<Func<ISubscriber>>(sp => () => sp.GetRequiredService<IRedisConnection>().Connection.GetSubscriber());
                 builder.Services.AddMemoryCacheFactory();
             });
         }

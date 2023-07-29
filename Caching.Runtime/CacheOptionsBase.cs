@@ -13,4 +13,6 @@ public abstract class CacheOptionsBase : ICacheOptions
     public ISystemClock? Clock { get; set; }
 
     public ICacheEntryFactory? EntryFactory { get; set; }
+
+    public ICacheKeyStrategy? CacheKeyStrategy { get; set; }
 }

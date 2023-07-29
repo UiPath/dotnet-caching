@@ -20,6 +20,7 @@ public class RedisPubSubTopicTests : IAsyncLifetime
     private IDatabase _database = default!;
     private string _channel = default!;
     private string _value = default!;
+    private IRedisChannelStrategy _redisChannelStrategy = default!;
     private IPolicyHolder _policyHolder = default!;
 
     private RedisPubSubTopic<ICacheEvent>? _sut = null;
@@ -174,7 +175,6 @@ public class RedisPubSubTopicTests : IAsyncLifetime
 
     public Task DisposeAsync()
     {
-        //do nothing;
         return Task.CompletedTask;
     }
 
@@ -191,6 +191,8 @@ public class RedisPubSubTopicTests : IAsyncLifetime
         _topicKey = _fixture.Freeze<string>();
         _fixture.Inject(_topicKey);
         _fixture.Inject<Func<ISubject<ICacheEvent>>>(() => new Subject<ICacheEvent>());
+        _redisChannelStrategy = _fixture.Freeze<IRedisChannelStrategy>();
+        _redisChannelStrategy.GetRedisChannel(_topicKey).Returns(c => new RedisChannel(_topicKey, RedisChannel.PatternMode.Auto));
         _policyHolder = _fixture.Freeze<IPolicyHolder>();
         var noOpExecutor = new NoOpExecutor();
         _policyHolder.Read.Returns(noOpExecutor);

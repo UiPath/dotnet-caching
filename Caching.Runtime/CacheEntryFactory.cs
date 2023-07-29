@@ -1,4 +1,4 @@
-﻿namespace UiPath.Platform.Caching.Redis;
+﻿namespace UiPath.Platform.Caching;
 
 public sealed class CacheEntryFactory : ICacheEntryFactory
 {

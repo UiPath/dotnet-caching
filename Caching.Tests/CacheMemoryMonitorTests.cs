@@ -30,7 +30,15 @@ public class CacheMemoryMonitorTests : IAsyncLifetime
     {
         Action act = () => Sut.Dispose();
         act.Should().NotThrow();
-        await Task.Delay(_statisticsFlushInterval.Multiply(10));
+        for (int i = 0; i < 100; i++)
+        {
+            await Task.Delay(_statisticsFlushInterval);
+            if (Sut.MonitorTaskStatus == TaskStatus.RanToCompletion)
+            {
+                break;
+            }
+        }
+        
         Sut.MonitorTaskStatus.Should().Be(TaskStatus.RanToCompletion);
     }
 

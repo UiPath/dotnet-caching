@@ -60,13 +60,13 @@ public sealed class ChangeToken : ICacheChangeToken, IObserver<ICacheEvent>, IDi
         HasChanged = true;
         if(data!= null && data.Properties != null)
         {
-            if (data.Properties.TryGetValue(Constants.ExpirationKey, out object? dt) && dt is DateTimeOffset datetime)
+            if (data.Properties.TryGetValue(KnownFieldNames.ExpirationKey, out object? dt) && dt is DateTimeOffset datetime)
             {
                 Expiration = datetime;
                 MetadataHasChanged = true;
             }
 
-            if (data.Properties.TryGetValue(Constants.MetadataKey, out object? m) && m is IDictionary<string, string?> mt)
+            if (data.Properties.TryGetValue(KnownFieldNames.MetadataKey, out object? m) && m is IDictionary<string, string?> mt)
             {
                 Metadata = mt;
                 MetadataHasChanged = true;
