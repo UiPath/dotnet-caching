@@ -8,7 +8,7 @@ namespace UiPath.Platform.Caching.Redis;
 public sealed class RedisHashCache : IHashCache
 {
     private const string LogWarnMessage = "RedisHashCache exception.";
-    private readonly Lazy<IDatabase> _lazyDatabase;
+    private readonly IRedisConnector _redis;
     private readonly ILogger<RedisHashCache> _logger;
     private readonly ISerializerProxy _serializer;
     private readonly ICachingTelemetryProvider _telemetryProvider;
@@ -21,7 +21,7 @@ public sealed class RedisHashCache : IHashCache
     private readonly TimeSpan? _defaultExpiration;
 
     public RedisHashCache(
-        Func<IDatabase> databaseAccessor,
+        IRedisConnector redis,
         ISerializerProxy serializer,
         IPolicyHolder policyHolder,
         ICachingTelemetryProvider telemetryProvider,
@@ -29,7 +29,7 @@ public sealed class RedisHashCache : IHashCache
         IOptions<CacheOptions> optionsAccessor,
         ILogger<RedisHashCache> logger)
     {
-        _lazyDatabase = new Lazy<IDatabase>(databaseAccessor);
+        _redis = redis;
         _serializer = serializer;
         _telemetryProvider = telemetryProvider;
         _logger = logger;
@@ -43,7 +43,7 @@ public sealed class RedisHashCache : IHashCache
         _clock = new CacheClock(redisCacheOptions.Clock, _defaultExpiration);
     }
 
-    private IDatabase Database => _lazyDatabase.Value;
+    private IDatabase Database => _redis.Database;
 
     public Task<T?> GetItemAsync<T>(CacheKey cacheKey, string field, CancellationToken token = default)
     {

@@ -93,7 +93,7 @@ public class RedisPubSubSubjectWriterTests : IAsyncLifetime
 
     public Task InitializeAsync()
     {
-        _channel = _fixture.Create<string>();
+        _channel = RedisChannel.Literal(_fixture.Create<string>());
         _fixture.Inject(_channel);
         _formatter = new CacheClearEventFormatterProxy();
         _subject = _fixture.Freeze<ISubject<ICacheEvent>>();

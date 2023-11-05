@@ -7,7 +7,7 @@ internal sealed class RedisStreamSubjectWriter<T> : IDisposable
 {
     private bool _disposed;
     private readonly RedisStreamContext _context;
-    private readonly IDatabase _database;
+    private readonly IRedisConnector _redis;
     private readonly ISubject<T> _subject;
     private readonly IEventFormatterProxy<T> _formatter;
     private readonly ILogger _logger;
@@ -19,19 +19,19 @@ internal sealed class RedisStreamSubjectWriter<T> : IDisposable
 
     public RedisStreamSubjectWriter(
         RedisStreamContext context,
-        IDatabase database,
+        IRedisConnector redis,
         ISubject<T> subject,
         IEventFormatterProxy<T> formatter,
         ILogger logger,
         CancellationToken stopToken)
     {
         _context = context;
-        _database = database;
+        _redis = redis;
         _subject = subject;
         _formatter = formatter;
         _logger = logger;
         _stopToken = stopToken;
-        _fetchLoop = Task.Run(FetchLoop, default);        
+        _fetchLoop = Task.Run(FetchLoop, default);
     }
 
     internal TaskStatus FetchTaskStatus => _fetchLoop.Status;
@@ -51,7 +51,7 @@ internal sealed class RedisStreamSubjectWriter<T> : IDisposable
         {
             try
             {
-                StreamEntry[] events = await _database.StreamReadGroupAsync(
+                StreamEntry[] events = await _redis.Database.StreamReadGroupAsync(
                     _context.Topic,
                     _context.ConsumerGroup,
                     _context.ConsumerName,
@@ -126,7 +126,8 @@ internal sealed class RedisStreamSubjectWriter<T> : IDisposable
         {
             return;
         }
-        await _database.StreamAcknowledgeAsync(_context.Topic, _context.ConsumerGroup, ids.ToArray());
+
+        await _redis.Database.StreamAcknowledgeAsync(_context.Topic, _context.ConsumerGroup, ids.ToArray());
         _logger.LogDebug("Dispatched {} messages. Topic : {}", events.Length, _context.Topic);
     }
 }

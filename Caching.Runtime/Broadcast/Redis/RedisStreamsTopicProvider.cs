@@ -11,7 +11,7 @@ public sealed class RedisStreamsTopicProvider : ITopicProvider
 
     private readonly ConcurrentDictionary<TopicKey, Lazy<ITopic<ICacheEvent>>> _topics = new();
 
-    private readonly Func<IDatabase> _databaseFactory;
+    private readonly IRedisConnector _redis;
     private readonly IEventFormatterProxy<ICacheEvent> _formatter;
     private readonly ILoggerFactory _loggerFactory;
     private readonly IPolicyHolder _policyHolder;
@@ -20,7 +20,7 @@ public sealed class RedisStreamsTopicProvider : ITopicProvider
     public RedisStreamsTopicProvider(
         IOptions<RedisStreamsTopicOptions> redisStreamsTopicOptionsAccessor,
         IOptions<CacheOptions> cacheOptionsAccessor,
-        Func<IDatabase> databaseFactory,
+        IRedisConnector redis,
         IEventFormatterProxy<ICacheEvent> formatter,
         IPolicyHolder policyHolder,
         ILoggerFactory loggerFactory)
@@ -28,7 +28,7 @@ public sealed class RedisStreamsTopicProvider : ITopicProvider
         _redisStreamsTopicOptions = redisStreamsTopicOptionsAccessor.Value;
         _cacheOptions = cacheOptionsAccessor.Value;
         _policyHolder = policyHolder;
-        _databaseFactory = databaseFactory;
+        _redis = redis;
         _formatter = formatter;
         _loggerFactory = loggerFactory;
     }
@@ -49,8 +49,8 @@ public sealed class RedisStreamsTopicProvider : ITopicProvider
     public ITopic<ICacheEvent> CreateInternalTopic(TopicKey topicKey) =>
         new RedisStreamsTopic<ICacheEvent>(
             topicKey,
+            _redis,
             NewSubject,
-            _databaseFactory,
             _formatter,
             _policyHolder,
             _redisStreamsTopicOptions,

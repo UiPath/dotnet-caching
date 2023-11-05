@@ -25,7 +25,6 @@ public static class InMemoryRedisCollectionExtensions
                 builder.Services.TryAddSingleton<IChangeTokenFactory, ChangeTokenFactory>();
                 builder.Services.TryAddSingleton<IEventFormatterProxy<ICacheEvent>, CacheEventFormatter>();
                 builder.Services.TryAddSingleton<ICacheEventFactory, CacheEventFactory>();
-                builder.Services.TryAddTransient<Func<ISubscriber>>(sp => () => sp.GetRequiredService<IRedisConnection>().Connection.GetSubscriber());
                 builder.Services.AddMemoryCacheFactory();
             });
         }

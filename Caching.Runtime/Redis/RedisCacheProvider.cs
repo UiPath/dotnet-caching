@@ -7,7 +7,7 @@ public sealed class RedisCacheProvider : ICacheProvider
 {
     private readonly IOptions<RedisCacheOptions> _redisCacheOptions;
     private readonly IOptions<CacheOptions> _cacheOptions;
-    private readonly Func<IDatabase> _databaseAccessor;
+    private readonly IRedisConnector _redis;
     private readonly ISerializerProxy _serializerProxy;
     private readonly IPolicyHolder _policyHolder;
     private readonly ICachingTelemetryProvider _cachingTelemetryProvider;
@@ -22,7 +22,7 @@ public sealed class RedisCacheProvider : ICacheProvider
     public RedisCacheProvider(
         IOptions<RedisCacheOptions> redisCacheOptions,
         IOptions<CacheOptions> cacheOptions,
-        Func<IDatabase> databaseAccessor,
+        IRedisConnector redis,
         ISerializerProxy serializerProxy,
         IPolicyHolder policyHolder,
         ICachingTelemetryProvider? cachingTelemetryProvider = null,
@@ -30,7 +30,7 @@ public sealed class RedisCacheProvider : ICacheProvider
     {
         _redisCacheOptions = redisCacheOptions;
         _cacheOptions = cacheOptions;
-        _databaseAccessor = databaseAccessor;
+        _redis = redis;
         _serializerProxy = serializerProxy;
         _policyHolder = policyHolder;
         _cachingTelemetryProvider = cachingTelemetryProvider ?? NullTelemetryProvider.Instance;
@@ -60,7 +60,7 @@ public sealed class RedisCacheProvider : ICacheProvider
 
     private RedisCache BuildCache() =>
         new(
-            _databaseAccessor,
+            _redis,
             _serializerProxy,
             _policyHolder,
             _cachingTelemetryProvider,
@@ -70,7 +70,7 @@ public sealed class RedisCacheProvider : ICacheProvider
 
     private RedisHashCache BuildHashCache() =>
         new(
-            _databaseAccessor,
+            _redis,
             _serializerProxy,
             _policyHolder,
             _cachingTelemetryProvider,

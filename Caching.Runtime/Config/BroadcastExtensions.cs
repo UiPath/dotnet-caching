@@ -22,6 +22,7 @@ public static class BroadcastExtensions
             if (enabled)
             {
                 builder.Services.TryAddSingleton<ITopicFactory, TopicFactory>();
+                builder.AddRedisPubSub().AddRedisStreams();
             }
             else
             {
@@ -31,7 +32,6 @@ public static class BroadcastExtensions
 
         return builder;
     }
-
 
     public static ICachingBuilder AddRedisPubSub(this ICachingBuilder builder, string sectionName = RedisPubSubSectionName) =>
             builder.AddRedisPubSub(opt => builder.Configuration.GetSection(sectionName).Bind(opt));

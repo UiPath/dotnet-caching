@@ -1,4 +1,4 @@
-## Caching
+## Caching docs
 
 Multilayer caching library offering multiple InMemory & Redis configurations with support for cache synchronization between layers using [Redis Streams](https://redis.io/docs/data-types/streams/) (at least one sync event guaranteed) or [Redis PubSub](https://redis.io/docs/interact/pubsub/)
 
@@ -14,18 +14,8 @@ Main capabilities:
 * Synchronization events using Redis Streams or PubSub. See [ITopic](/Caching.Abstractions/Broadcast/ITopic.cs) implementations.
 * Multiple extensions points in order to fit applications use cases
 
+## Documentation
 
-The general library guideline are defined here:
-https://github.com/UiPath/ServiceCommon/blob/master/README.md
-
-Docs can be found here:
-https://github.com/UiPath/ServiceCommon/blob/master/Caching/docs/index.md
-
-A complete change log for the library:
-https://github.com/UiPath/ServiceCommon/blob/master/Caching/CHANGELOG.md
-
-Official feed for supported versions:
-https://uipath.visualstudio.com/Service%20Common/\_artifacts/feed/nuget-packages
-
-Beta feed for all pre-release versions:
-https://uipath.visualstudio.com/Service%20Common/\_artifacts/feed/ServiceCommon
+* [Basic Usage](basics.md) \- getting started and basic usage
+* [Running sample app](sample-app.md) \- running the sample app
+* [Advanced usage](advanced-usage.md) - extending and advanced usage

@@ -8,7 +8,7 @@ internal sealed class RedisPubSubSubjectWriter<T> : IDisposable
     private bool _disposed;
     private readonly Uri _sourceUri;
     private readonly RedisChannel _redisChannel;
-    private readonly ISubscriber _subscriber;
+    private readonly IRedisConnector _redis;
     private readonly ISubject<T> _subject;
     private readonly IEventFormatterProxy<T> _formatter;
     private readonly ILogger _logger;
@@ -17,32 +17,38 @@ internal sealed class RedisPubSubSubjectWriter<T> : IDisposable
     public RedisPubSubSubjectWriter(
         Uri sourceUri,
         RedisChannel redisChannel,
-        ISubscriber subscriber,
+        IRedisConnector redis,
         ISubject<T> subject,
         IEventFormatterProxy<T> formatter,
         ILogger logger)
     {
-        _subscriber = subscriber;
+        _redis = redis;
         _subject = subject;
         _formatter = formatter;
         _logger = logger;
         _sourceUri = sourceUri;
         _redisChannel = redisChannel;
-        _handler = (channel, value) => OnMessage(channel, value);
-        _subscriber.Subscribe(_redisChannel, _handler);
+        _handler = (channel, value) => OnMessage(value);
+        _redis.Subscriber.Subscribe(_redisChannel, _handler);
+        _redis.OnReconnect += OnReconnect; 
     }
+
+    private void OnReconnect(object? sender, EventArgs e) =>
+        _redis.Subscriber.Subscribe(_redisChannel, _handler);
+
     public void Dispose()
     {
         if (!_disposed)
         {
+            _redis.OnReconnect -= OnReconnect;
             Unsubscribe();
         }
         _disposed = true;
     }
 
-    private void OnMessage(RedisChannel channel, RedisValue value)
+    private void OnMessage(RedisValue value)
     {
-        if (!_disposed && channel == _redisChannel)
+        if (!_disposed)
         {
             try
             {
@@ -74,7 +80,7 @@ internal sealed class RedisPubSubSubjectWriter<T> : IDisposable
         _logger.LogTrace("Unsubscribe channel: {}", _redisChannel);
         try
         {
-            _subscriber?.Unsubscribe(_redisChannel, _handler);
+            _redis.Subscriber.Unsubscribe(_redisChannel, _handler);
         }
         catch (Exception ex)
         {

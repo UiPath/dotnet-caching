@@ -8,7 +8,7 @@ public sealed class RedisPubSubTopic<T> : ITopic<T>
 {
     private readonly RedisChannel _redisChannel;
     private readonly ISubject<T> _subject;
-    private readonly Lazy<IDatabase> _databaseLazy;
+    private readonly IRedisConnector _redis;
     private readonly ILogger _logger;
     private readonly IEventFormatterProxy<T> _formatter;
     private readonly IPolicyExecutor _writePolicy;
@@ -19,10 +19,9 @@ public sealed class RedisPubSubTopic<T> : ITopic<T>
     public RedisPubSubTopic(
         TopicKey topicKey,
         Uri sourceUri,
+        IRedisConnector redis,
         IRedisChannelStrategy redisChannelStrategy,
         Func<ISubject<T>> subjectFactory,
-        Func<IDatabase> databaseFactory,
-        Func<ISubscriber> subscriberFactory,
         IEventFormatterProxy<T> formatter,
         IPolicyHolder policyHolder,
         ILogger<RedisPubSubTopic<T>> logger)
@@ -31,10 +30,10 @@ public sealed class RedisPubSubTopic<T> : ITopic<T>
         _redisChannel = redisChannelStrategy.GetRedisChannel(topicKey);
         _formatter = formatter;
         _writePolicy = policyHolder.Write;
-        _databaseLazy = new Lazy<IDatabase>(databaseFactory);
-        _logger = logger;        
+        _redis = redis;
+        _logger = logger;
         _subject = subjectFactory();
-        _subscriber = new RedisPubSubSubjectWriter<T>(sourceUri, _redisChannel, subscriberFactory(), _subject, _formatter, _logger);
+        _subscriber = new RedisPubSubSubjectWriter<T>(sourceUri, _redisChannel, _redis, _subject, _formatter, _logger);
     }
 
     public IDisposable Subscribe(IObserver<T> observer) =>
@@ -47,7 +46,7 @@ public sealed class RedisPubSubTopic<T> : ITopic<T>
         {
             var messageString = _formatter.EncodeAsString(@event);
             _logger.LogTrace("Publishing to topic {} event {}", TopicKey, @event.Id);
-            await _writePolicy.ExecuteAsync(() => _databaseLazy.Value.PublishAsync(_redisChannel, messageString, CommandFlags.DemandMaster)).ConfigureAwait(false);
+            await _writePolicy.ExecuteAsync(() => _redis.Database.PublishAsync(_redisChannel, messageString, CommandFlags.DemandMaster)).ConfigureAwait(false);
             return true;
         }
         catch (Exception ex)

@@ -13,7 +13,7 @@
     <MicrosoftExtensionsConfigurationVersion>7.0.0</MicrosoftExtensionsConfigurationVersion>
     <MicrosoftExtensionsLoggingAbstractionsVersion>7.0.0</MicrosoftExtensionsLoggingAbstractionsVersion>
     <EntityFrameworkVersion>7.0.0</EntityFrameworkVersion>
-    <StackExchangeRedisVersion>2.6.66</StackExchangeRedisVersion>
+    <StackExchangeRedisVersion>2.7.4</StackExchangeRedisVersion>
     <MemoryCacheVersion>7.0.0</MemoryCacheVersion>
     <CloudEventsVersion>2.5.0</CloudEventsVersion>
     <FluentValidation>11.2.2</FluentValidation>

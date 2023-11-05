@@ -5,6 +5,11 @@ public static class ServiceCollectionExtensions
 {
     private const string DefaultSectionName = "Caching";
 
+    public static IServiceCollection AddCaching(this IServiceCollection services, IConfiguration configuration, string sectionName = DefaultSectionName)
+    {
+        return services.AddCaching(configuration, opt => configuration.GetSection(sectionName).Bind(opt), sectionName);
+    }
+
     public static IServiceCollection AddCaching(this IServiceCollection services, IConfiguration configuration, Action<ICachingBuilder> configure, string sectionName = DefaultSectionName)
     {
         IConfigurationSection section = configuration.GetSection(sectionName);

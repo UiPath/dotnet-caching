@@ -8,8 +8,7 @@ public sealed class RedisPubSubTopicProvider : ITopicProvider
 {
     private readonly ConcurrentDictionary<TopicKey, Lazy<ITopic<ICacheEvent>>> _topics = new();
     private readonly RedisPubSubTopicOptions _redisPubSubTopicOptions;
-    private readonly Func<IDatabase> _databaseFactory;
-    private readonly Func<ISubscriber> _subscriberFactory;
+    private readonly IRedisConnector _redis;
     private readonly IEventFormatterProxy<ICacheEvent> _formatter;
     private readonly IPolicyHolder _policyHolder;
     private readonly ILoggerFactory _loggerFactory;
@@ -19,15 +18,13 @@ public sealed class RedisPubSubTopicProvider : ITopicProvider
     public RedisPubSubTopicProvider(
         IOptions<RedisPubSubTopicOptions> redisPubSubTopicOptionsAccessor,
         IOptions<CacheOptions> cacheOptionsAccessor,
-        Func<IDatabase> databaseFactory,
-        Func<ISubscriber> subscriberFactory,
+        IRedisConnector redis,
         IEventFormatterProxy<ICacheEvent> formatter,
         IPolicyHolder policyHolder,
         ILoggerFactory loggerFactory)
     {
         _redisPubSubTopicOptions = redisPubSubTopicOptionsAccessor.Value;
-        _databaseFactory = databaseFactory;
-        _subscriberFactory = subscriberFactory;
+        _redis = redis;
         _formatter = formatter;
         _policyHolder = policyHolder;
         _loggerFactory = loggerFactory;
@@ -50,10 +47,9 @@ public sealed class RedisPubSubTopicProvider : ITopicProvider
         new RedisPubSubTopic<ICacheEvent>(
             topicKey,
             _sourceUri,
+            _redis,
             _redisChannelStrategy,
             NewSubject,
-            _databaseFactory,
-            _subscriberFactory,
             _formatter,
             _policyHolder,
             _loggerFactory.Create<RedisPubSubTopic<ICacheEvent>>());

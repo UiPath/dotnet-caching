@@ -13,7 +13,7 @@ public sealed class RedisStreamsTopic<T> : ITopic<T>
     private readonly CancellationTokenSource _stopTokenSource;
     private readonly RedisStreamContext _context;
     private readonly ISubject<T> _subject;
-    private readonly IDatabase _database;
+    private readonly IRedisConnector _redis;
     private readonly IEventFormatterProxy<T> _formatter;
     private readonly IPolicyExecutor _writePolicy;
     private readonly ILogger _logger;
@@ -23,8 +23,8 @@ public sealed class RedisStreamsTopic<T> : ITopic<T>
 
     public RedisStreamsTopic(
         TopicKey topicKey,
+        IRedisConnector redis,
         Func<ISubject<T>> subjectFactory,
-        Func<IDatabase> databaseFactory,
         IEventFormatterProxy<T> formatter,
         IPolicyHolder policyHolder,
         RedisStreamsTopicOptions options,
@@ -36,14 +36,14 @@ public sealed class RedisStreamsTopic<T> : ITopic<T>
         _formatter = formatter;
         _writePolicy = policyHolder.Write;
         _stopTokenSource = CancellationTokenSource.CreateLinkedTokenSource(stopToken);
-        _database = databaseFactory();
+        _redis = redis;
         _logger = logger;
         _subject = subjectFactory();
         _maxLength = options.MaxLength;
         _redisStreamKeyStrategy = options.RedisStreamKeyStrategy ?? new PrefixStrategy(RedisTypePrefixes.Streams, cacheOptions);
         _context = GetContext(topicKey, cacheOptions, options);
         EnsureStreamGroup();
-        _subscriber = new RedisStreamSubjectWriter<T>(_context, _database, _subject, _formatter, _logger, _stopTokenSource.Token);
+        _subscriber = new RedisStreamSubjectWriter<T>(_context, _redis, _subject, _formatter, _logger, _stopTokenSource.Token);
     }
 
     public IDisposable Subscribe(IObserver<T> observer) =>
@@ -55,7 +55,7 @@ public sealed class RedisStreamsTopic<T> : ITopic<T>
         try
         {
             var messageString = _formatter.EncodeAsString(@event);
-            var id = await _writePolicy.ExecuteAsync(() => _database.StreamAddAsync(
+            var id = await _writePolicy.ExecuteAsync(() => _redis.Database.StreamAddAsync(
                 _context.Topic,
                 _context.FieldName,
                 messageString,
@@ -83,7 +83,7 @@ public sealed class RedisStreamsTopic<T> : ITopic<T>
     {
         try
         {
-            _ = _database.StreamCreateConsumerGroup(
+            _ = _redis.Database.StreamCreateConsumerGroup(
                 _context.Topic,
                 _context.ConsumerGroup,
                 StreamPosition.NewMessages);

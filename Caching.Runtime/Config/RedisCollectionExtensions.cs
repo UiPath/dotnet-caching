@@ -3,30 +3,27 @@
 [ExcludeFromCodeCoverage]
 public static class RedisCollectionExtensions
 {
-    public static ICachingBuilder AddRedis(this ICachingBuilder builder, string sectionName = KnownCacheProviderNames.Redis) =>
-        builder.AddRedis(opt => builder.Configuration.GetSection(sectionName).Bind(opt));
+    public const string Connections = "Connections:Redis";
+
+    public static ICachingBuilder AddRedis(this ICachingBuilder builder, string sectionName = KnownCacheProviderNames.Redis)
+    {
+        return builder.AddRedis(opt => builder.Configuration.GetSection(sectionName).Bind(opt));
+    }
 
     public static ICachingBuilder AddRedis(this ICachingBuilder builder,  Action<RedisCacheOptions> configure)
     {
         var options = new RedisCacheOptions();
         configure(options);
         builder.Services.Configure(configure);
-        if (builder.Enabled && options.Enabled && !string.IsNullOrWhiteSpace(options.ConnectionString))
-        {
-            builder.AddRedisConnection(opt =>
-            {
-                opt.ConnectionString = options.ConnectionString;
-                opt.ProfilerEnabled = options.ProfilerEnabled;
-                opt.HeartbeatInterval = options.HeartbeatInterval;
-                opt.BackOffMilliseconds = options.BackOffMilliseconds;
-            })
-           .AddRedisPubSub()
-           .AddRedisStreams();
-        }
-
         builder.Services.TryAddEnumerable(ServiceDescriptor.Singleton<ICacheProvider, RedisCacheProvider>());
 
         return builder;
+    }
+
+
+    public static ICachingBuilder AddRedisConnection(this ICachingBuilder builder, string sectionName = Connections)
+    {
+        return builder.AddRedisConnection(opt => builder.Configuration.GetSection(sectionName).Bind(opt));
     }
 
     public static ICachingBuilder AddRedisConnection(this ICachingBuilder builder, Action<RedisConnectionOptions> configureOptions)
@@ -51,6 +48,8 @@ public static class RedisCollectionExtensions
                 config.HeartbeatInterval = options.HeartbeatInterval.Value;
             }
 
+            config.LoggerFactory = sp.GetService<ILoggerFactory>();
+
             return config;
         });
 
@@ -69,14 +68,17 @@ public static class RedisCollectionExtensions
             return cnn;
         });
 
-        if(redisConnectionOptions.ProfilerEnabled)
+        if (redisConnectionOptions.ProfilerEnabled)
         {
             builder.Services.TryAddSingleton<IRedisProfiler, RedisProfiler>();
         }
 
-        builder.Services.TryAddSingleton<IRedisConnection, RedisConnection>();
-        builder.Services.TryAddTransient<Func<IDatabase>>(sp => () => sp.GetRequiredService<IRedisConnection>().Connection.GetDatabase());
+        if (redisConnectionOptions.PlannedMaintenanceEnabled)
+        {
+            builder.Services.TryAddSingleton<IRedisPlannedMaintenance, RedisPlannedMaintenance>();
+        }
+
+        builder.Services.TryAddSingleton<IRedisConnector, RedisConnector>();
         return builder;
     }
-
 }

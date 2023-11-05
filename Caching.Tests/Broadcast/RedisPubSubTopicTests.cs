@@ -18,6 +18,7 @@ public class RedisPubSubTopicTests : IAsyncLifetime
     Action<RedisChannel, RedisValue>? _handler = null;
     private TestCacheEventFormatterProxy _formatter = default!;
     private IDatabase _database = default!;
+    private IRedisConnector _redisConnector = default!;
     private string _channel = default!;
     private string _value = default!;
     private IRedisChannelStrategy _redisChannelStrategy = default!;
@@ -47,7 +48,7 @@ public class RedisPubSubTopicTests : IAsyncLifetime
         };
         var bytes = _formatter.Encode(cloudEvent);
         var message = Encoding.UTF8.GetString(bytes.Span);
-        _handler?.Invoke(_topicKey.Name, message);
+        _handler?.Invoke(RedisChannel.Literal(_topicKey.Name), message);
         _onNextMessages.FirstOrDefault().Should().BeEquivalentTo(cloudEvent);
         _onCompleted.Should().BeFalse();
     }
@@ -58,7 +59,7 @@ public class RedisPubSubTopicTests : IAsyncLifetime
         var disposable = Sut.Subscribe(_observer);
         var message = _fixture.Create<string>();
         Sut.Dispose();
-        _handler?.Invoke(_topicKey.Name, message);
+        _handler?.Invoke(RedisChannel.Literal(_topicKey.Name), message);
         _onNextMessages.Should().BeEmpty();
         _onCompleted.Should().BeTrue();
     }
@@ -68,7 +69,7 @@ public class RedisPubSubTopicTests : IAsyncLifetime
     {
         var disposable = Sut.Subscribe(_observer);
         var message = _fixture.Create<string>();
-        RedisChannel newChannel = _fixture.Create<string>();
+        RedisChannel newChannel = RedisChannel.Literal(_fixture.Create<string>());
 
         _handler?.Invoke(newChannel, message);
         _onNextMessages.Should().BeEmpty();
@@ -181,6 +182,8 @@ public class RedisPubSubTopicTests : IAsyncLifetime
     public Task InitializeAsync()
     {
         _database = _fixture.Freeze<IDatabase>();
+        _redisConnector = _fixture.Freeze<IRedisConnector>();
+        _redisConnector.Database.Returns(_database);
         _fixture.Inject<Func<IDatabase>>(() => _database);
         _database.PublishAsync(Arg.Any<RedisChannel>(), Arg.Any<RedisValue>(), Arg.Any<CommandFlags>())
             .Returns(c =>

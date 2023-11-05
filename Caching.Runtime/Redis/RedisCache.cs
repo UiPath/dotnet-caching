@@ -8,19 +8,19 @@ public sealed class RedisCache : ICache
 {
     private const string LogWarnMessage = "RedisCache exception.";
 
-    private readonly Lazy<IDatabase> _lazyDatabase;
+    private readonly IRedisConnector _redis;
     private readonly ISerializerProxy _serializer;
     private readonly ICachingTelemetryProvider _telemetryProvider;
     private readonly ILogger<RedisCache> _logger;
     private readonly bool _supportsExpireTime;
     private readonly IPolicyExecutor _readPolicy;
     private readonly IPolicyExecutor _writePolicy;
-    private readonly IRedisKeyStrategy _redisKeyStrategy;    
+    private readonly IRedisKeyStrategy _redisKeyStrategy;
     private readonly TimeSpan? _defaultExpiration;
     private readonly CacheClock _clock;
 
     public RedisCache(
-        Func<IDatabase> databaseAccessor,
+        IRedisConnector redis,
         ISerializerProxy serializer,
         IPolicyHolder policyHolder,
         ICachingTelemetryProvider telemetryProvider,
@@ -29,7 +29,7 @@ public sealed class RedisCache : ICache
         ILogger<RedisCache> logger)
     {   
         _logger = logger;
-        _lazyDatabase = new Lazy<IDatabase>(databaseAccessor);
+        _redis = redis;
         _serializer = serializer;
         _telemetryProvider = telemetryProvider;
         _readPolicy = policyHolder.Read;
@@ -41,7 +41,7 @@ public sealed class RedisCache : ICache
         _clock = new CacheClock(redisCacheOptions.Clock, _defaultExpiration);
     }
 
-    private IDatabase Database => _lazyDatabase.Value;
+    private IDatabase Database => _redis.Database;
 
     public Task<T?> GetAsync<T>(CacheKey cacheKey, CancellationToken token = default) =>
         GetAsync<T?>(ToRedisKey(cacheKey, token));

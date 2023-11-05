@@ -12,7 +12,7 @@ public class PrefixStrategy : IRedisChannelStrategy, IRedisStreamKeyStrategy
     }
 
     public RedisChannel GetRedisChannel(TopicKey topicKey) =>
-        GetKey(topicKey);
+        RedisChannel.Literal(GetKey(topicKey));
 
     public RedisKey GetRedisKey(TopicKey topicKey) =>
         GetKey(topicKey);

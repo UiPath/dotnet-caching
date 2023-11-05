@@ -24,6 +24,11 @@ public sealed class NullTelemetryProvider : ICachingTelemetryProvider
         // noop
     }
 
+    public void TrackException(Exception ex, IDictionary<string, string>? properties = null, IDictionary<string, double>? metrics = null)
+    {
+        // noop
+    }
+
     public void TrackMetric(string name, double value, IDictionary<string, string>? properties = null)
     {
         // noop

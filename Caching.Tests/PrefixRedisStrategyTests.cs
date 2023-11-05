@@ -45,6 +45,6 @@ public class PrefixStrategyTests
         actual.Should().Be((RedisKey)expected);
 
         var actualChannel = Sut.GetRedisChannel(key);
-        actualChannel.Should().Be((RedisChannel)expected);
+        actualChannel.Should().Be(RedisChannel.Literal(expected));
     }
 }
