@@ -15,7 +15,30 @@ public class RedisStreamsTopicProviderTests : IAsyncLifetime
         Sut.Name.Should().Be("RedisStreams");
         Sut.Enabled.Should().Be(_redisStreamsTopicOptions.Enabled);
         TopicKey topicKey = _fixture.Create<string>();
-        Sut.CreateTopic(topicKey).Should().NotBeNull();
+        Sut.Create(topicKey).Should().NotBeNull();
+    }
+
+    [Fact]
+    public async Task Disposing_topic_removes_it_from_provider()
+    {
+        TopicKey topicKey = _fixture.Create<string>();
+        var topic = Sut.Create(topicKey);
+        topic.Should().NotBeNull();
+        Sut.Keys.Should().NotBeEmpty();
+        topic.Dispose();
+        await Task.Delay(100);
+        Sut.Keys.Should().BeEmpty();
+    }
+
+    [Fact]
+    public void Remove_topic_from_provider()
+    {
+        TopicKey topicKey = _fixture.Create<string>();
+        var topic = Sut.Create(topicKey);
+        topic.Should().NotBeNull();
+        Sut.Keys.Should().NotBeEmpty();
+        Sut.Remove(topicKey);
+        Sut.Keys.Should().BeEmpty();
     }
 
     [Fact]

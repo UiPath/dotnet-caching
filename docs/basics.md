@@ -52,7 +52,7 @@ The same results can be achieve using the configuration options.
     "AppShortName": "app",
     "Connections": {
       "Redis": {
-        "ConnectionString": "localhost:6379,abortConnect=false, connectRetry=3, keepAlive=30,name=test,syncTimeout=250",
+        "ConnectionString": "localhost:6379,localhost:6380,localhost:6381,abortConnect=false, connectRetry=3, keepAlive=30,name=test,syncTimeout=250",
         "LogConnectionFailedEvents": "true",
         "LogConnectionRestoredEvents": "true",
         "EnableHangDetection": "true",
@@ -64,14 +64,18 @@ The same results can be achieve using the configuration options.
     },
     "Broadcast": {
       "RedisPubSub": {
-        "Enabled": "true"
+        "Enabled": "true",
+        "ConsumerCapacity": "2048", //-1 for unlimited
+        "FullMode": "Wait" // default Wait, see https://learn.microsoft.com/en-us/dotnet/api/system.threading.channels.boundedchannelfullmode?view=net-7.0
       },
       "RedisStreams": {
         "Enabled": "true",
-        "MaxLength": "1024",
-        "PollBatchSize": "200",
-        "PollInterval": "0:00:06",
-        "ProcessingTimeout": "0:01:01"
+        "MaxLength": "32768",
+        "PollBatchSize": "4096",
+        "PollInterval": "0:00:00.250",
+        "ProcessingTimeout": "0:00:05",
+        "ConsumerCapacity": "2048", //-1 for unlimited
+        "FullMode": "Wait" // see https://learn.microsoft.com/en-us/dotnet/api/system.threading.channels.boundedchannelfullmode?view=net-7.0
       }
     },
     "InMemoryRedis": {
@@ -108,6 +112,8 @@ There are 2 important settings:
 
 * AppShortName - the caching prefix for all keys. This will avoid cache key conflicts when multiple apps are using the same Redis cache server.
 * SourceUri - represents the machine/pod where the app is running, used in sending & processing cache events
+
+:warning: For production readiness twick & perf test you're app with different caching configuration (Resilience policies, Broadcast consumer capacity, batch interval, topic full mode)
 
 By default the library comes with 3 default caching providers, you can one or more in the same time
 
@@ -150,3 +156,4 @@ public class DtoObj
     public int Prop{get;set;}
 }
 ```
+

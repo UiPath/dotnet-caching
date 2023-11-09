@@ -10,7 +10,6 @@ public class RedisStreamSubjectWriterTests : IAsyncLifetime
 {
     private readonly IFixture _fixture = AutoFixtureCreator.NSubsitute();
 
-    private ISubject<ICacheEvent> _subject = default!;
     private IEventFormatterProxy<ICacheEvent> _formatter = default!;
     private CancellationTokenSource _cancellationTokenSource = default!;
     private IDatabase _database = default!;
@@ -38,7 +37,6 @@ public class RedisStreamSubjectWriterTests : IAsyncLifetime
         await Task.Delay(500);
         _cancellationTokenSource.Cancel();
         _formatter.Received(0).Decode(Arg.Any<string>());
-        _subject.Received(0).OnNext(Arg.Any<ICacheEvent>());
     }
 
     [Fact]
@@ -52,7 +50,6 @@ public class RedisStreamSubjectWriterTests : IAsyncLifetime
         await Task.Delay(_pollInterval.Multiply(5));
         _cancellationTokenSource.Cancel();
         _formatter.Received(0).Decode(Arg.Any<string>());
-        _subject.Received(0).OnNext(Arg.Any<ICacheEvent>());
     }
 
     [Fact]
@@ -69,7 +66,6 @@ public class RedisStreamSubjectWriterTests : IAsyncLifetime
         await Task.Delay(500);
         _cancellationTokenSource.Cancel();
         _formatter.Received(0).Decode(Arg.Any<string>());
-        _subject.Received(0).OnNext(Arg.Any<ICacheEvent>());
     }
 
     [Fact]
@@ -89,7 +85,6 @@ public class RedisStreamSubjectWriterTests : IAsyncLifetime
         await Task.Delay(100);
         Sut.FetchTaskStatus.Should().Be(TaskStatus.RanToCompletion);
         _formatter.Received(0).Decode(Arg.Any<string>());
-        _subject.Received(0).OnNext(Arg.Any<ICacheEvent>());
     }
 
     [Fact]
@@ -115,7 +110,6 @@ public class RedisStreamSubjectWriterTests : IAsyncLifetime
         Sut.FetchTaskStatus.Should().NotBe(TaskStatus.Faulted);
         _cancellationTokenSource.Cancel();
         _formatter.Received(0).Decode(Arg.Any<string>());
-        _subject.Received(0).OnNext(Arg.Any<ICacheEvent>());
     }
 
     [Fact]
@@ -130,7 +124,6 @@ public class RedisStreamSubjectWriterTests : IAsyncLifetime
         await Task.Delay(100);
         _cancellationTokenSource.Cancel();
         _formatter.Received().Decode(Arg.Any<string>());
-        _subject.Received(0).OnNext(Arg.Any<ICacheEvent>());
     }
 
     [Fact]
@@ -151,7 +144,6 @@ public class RedisStreamSubjectWriterTests : IAsyncLifetime
         await Task.Delay(_pollInterval.Multiply(7));
         _cancellationTokenSource.Cancel();
         _formatter.Received().Decode(Arg.Any<string>());
-        _subject.Received(0).OnNext(Arg.Any<ICacheEvent>());
     }
 
     [Fact]
@@ -172,7 +164,6 @@ public class RedisStreamSubjectWriterTests : IAsyncLifetime
         await Task.Delay(_pollInterval.Multiply(5));
         _cancellationTokenSource.Cancel();
         _formatter.Received().Decode(Arg.Any<string>());
-        _subject.Received().OnNext(Arg.Any<ICacheEvent>());
     }
 
     [Fact]
@@ -189,15 +180,11 @@ public class RedisStreamSubjectWriterTests : IAsyncLifetime
                 return entries;
             });
 
-        _subject.When(x => x.OnNext(Arg.Any<ICacheEvent>()))
-            .Throw(new Exception());
-
         var s = Sut;
         await Task.Delay(_pollInterval.Multiply(5));
         Sut.FetchTaskStatus.Should().NotBe(TaskStatus.Faulted);
         _cancellationTokenSource.Cancel();
         _formatter.Received().Decode(Arg.Any<string>());
-        _subject.Received().OnNext(Arg.Any<ICacheEvent>());
     }
 
     [Fact]
@@ -205,7 +192,6 @@ public class RedisStreamSubjectWriterTests : IAsyncLifetime
     {
         Action act = () => Sut.Dispose();
         act.Should().NotThrow();
-        _subject.Received().OnCompleted();
     }
 
     public Task DisposeAsync()
@@ -229,7 +215,6 @@ public class RedisStreamSubjectWriterTests : IAsyncLifetime
         _database = _fixture.Freeze<IDatabase>();
         _logger = _fixture.Freeze<ILogger>();
         _formatter = _fixture.Freeze<IEventFormatterProxy<ICacheEvent>>();
-        _subject = _fixture.Freeze<ISubject<ICacheEvent>>();
         
         _fixture.Inject(_formatter);
         return Task.CompletedTask;

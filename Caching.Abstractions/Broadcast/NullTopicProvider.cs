@@ -10,9 +10,15 @@ public sealed class NullTopicProvider : ITopicProvider
     public string Name => "Null";
 
     public bool Enabled { get; } = true;
+    public ICollection<TopicKey> Keys => Array.Empty<TopicKey>();
 
-    public ITopic<ICacheEvent> CreateTopic(TopicKey topicKey) =>
+    public ITopic<ICacheEvent> Create(TopicKey topicKey) =>
         NullTopic<ICacheEvent>.Instance;
+
+    public void Remove(TopicKey topicKey)
+    {
+        // Nothing to remove
+    }
 
     public void Dispose()
     {

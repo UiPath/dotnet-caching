@@ -18,8 +18,11 @@ public sealed class RedisStreamsTopic<T> : ITopic<T>
     private readonly IPolicyExecutor _writePolicy;
     private readonly ILogger _logger;
     private readonly int? _maxLength;
+    private readonly EventDispatcher<T> _dispatcher;
 
-    public TopicKey TopicKey { get; private set; }
+    public TopicKey TopicKey { get; }
+
+    public EventHandler? OnDisposed { get; set; }
 
     public RedisStreamsTopic(
         TopicKey topicKey,
@@ -43,7 +46,9 @@ public sealed class RedisStreamsTopic<T> : ITopic<T>
         _redisStreamKeyStrategy = options.RedisStreamKeyStrategy ?? new PrefixStrategy(RedisTypePrefixes.Streams, cacheOptions);
         _context = GetContext(topicKey, cacheOptions, options);
         EnsureStreamGroup();
-        _subscriber = new RedisStreamSubjectWriter<T>(_context, _redis, _subject, _formatter, _logger, _stopTokenSource.Token);
+        var channel = ChannelHelper.Create<T>(options.ConsumerCapacity < 0, options.ConsumerCapacity > 0 ? options.ConsumerCapacity : options.PollBatchSize , options.FullMode);
+        _subscriber = new RedisStreamSubjectWriter<T>(_context, _redis, channel, _formatter, _logger, _stopTokenSource.Token);
+        _dispatcher = new EventDispatcher<T>(topicKey, channel, _subject, _logger, _stopTokenSource.Token);
     }
 
     public IDisposable Subscribe(IObserver<T> observer) =>
@@ -75,10 +80,12 @@ public sealed class RedisStreamsTopic<T> : ITopic<T>
     public void Dispose()
     {
         _stopTokenSource.Cancel();
+        _dispatcher.Dispose();
         _subject.OnCompleted();
         _subscriber.Dispose();
+        OnDisposed?.Invoke(this, EventArgs.Empty);
     }
-
+ 
     private void EnsureStreamGroup()
     {
         try
@@ -111,5 +118,4 @@ public sealed class RedisStreamsTopic<T> : ITopic<T>
             PollInterval: options.PollInterval
             );
     }
-
 }

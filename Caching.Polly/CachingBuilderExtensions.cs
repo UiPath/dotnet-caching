@@ -7,8 +7,6 @@ public static class CachingBuilderExtensions
 {
     private const string DefaultSectionName = "ResiliencePolicies";
 
-    private static int _callBackRegistered = 0;
-
     private static readonly List<Func<IServiceProvider, IAsyncPolicy>> ReadPolicies = new();
 
     private static readonly List<Func<IServiceProvider, IAsyncPolicy>> WritePolicies = new();
@@ -53,11 +51,7 @@ public static class CachingBuilderExtensions
 
     private static ICachingBuilder AddCallback(this ICachingBuilder builder)
     {
-        if (Interlocked.Exchange(ref _callBackRegistered, 1) == 0)
-        {
-            builder.RegisterOnCompleteCallback(builder => builder.Services.TryAddSingleton<IPolicyHolder>(sp => sp.BuildPolicyHolder()));
-        }
-
+        builder.RegisterOnCompleteCallback(builder => builder.Services.TryAddSingleton<IPolicyHolder>(sp => sp.BuildPolicyHolder()));
         return builder;
     }
 

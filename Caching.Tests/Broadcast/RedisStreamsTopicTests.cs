@@ -76,7 +76,7 @@ public class RedisStreamsTopicTests : IAsyncLifetime
     [Fact]
     public async Task Publish_event()
     {
-        var ev = _fixture.Create<ICacheEvent>();        
+        var ev = _fixture.Create<ICacheEvent>();
         var actual = await Sut.PublishAsync(ev, CancellationToken.None);
         await _database.Received()
             .StreamAddAsync(Arg.Any<RedisKey>(), Arg.Any<RedisValue>(), Arg.Any<RedisValue>(), Arg.Any<RedisValue?>(), maxLength: Arg.Any<int?>(), useApproximateMaxLength: true, flags: CommandFlags.DemandMaster);

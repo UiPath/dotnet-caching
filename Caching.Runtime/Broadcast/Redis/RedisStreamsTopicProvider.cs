@@ -1,16 +1,12 @@
-﻿using System.Collections.Concurrent;
-using System.Reactive.Subjects;
+﻿using System.Reactive.Subjects;
 using UiPath.Platform.Caching.Policies;
 
 namespace UiPath.Platform.Caching.Broadcast.Redis;
 
-public sealed class RedisStreamsTopicProvider : ITopicProvider
+public  class RedisStreamsTopicProvider : TopicProviderBase
 {
     private readonly RedisStreamsTopicOptions _redisStreamsTopicOptions;
     private readonly CacheOptions _cacheOptions;
-
-    private readonly ConcurrentDictionary<TopicKey, Lazy<ITopic<ICacheEvent>>> _topics = new();
-
     private readonly IRedisConnector _redis;
     private readonly IEventFormatterProxy<ICacheEvent> _formatter;
     private readonly ILoggerFactory _loggerFactory;
@@ -33,30 +29,10 @@ public sealed class RedisStreamsTopicProvider : ITopicProvider
         _loggerFactory = loggerFactory;
     }
 
-    public string Name => KnownTopicNames.RedisStreams;
+    public override string Name => KnownTopicNames.RedisStreams;
 
-    public bool Enabled => _redisStreamsTopicOptions.Enabled;
+    public override bool Enabled => _redisStreamsTopicOptions.Enabled;
 
-    public ITopic<ICacheEvent> CreateTopic(TopicKey topicKey) =>
-        _topics.GetOrAdd(topicKey, tk => new Lazy<ITopic<ICacheEvent>>(() => CreateInternalTopic(tk))).Value;
-
-    public void Dispose()
-    {
-        _stopTokenSource.Cancel();
-        _topics.Clear();
-    }
-
-    public ITopic<ICacheEvent> CreateInternalTopic(TopicKey topicKey) =>
-        new RedisStreamsTopic<ICacheEvent>(
-            topicKey,
-            _redis,
-            NewSubject,
-            _formatter,
-            _policyHolder,
-            _redisStreamsTopicOptions,
-            _cacheOptions,
-            _loggerFactory.Create<RedisStreamsTopic<ICacheEvent>>(),
-            _stopTokenSource.Token);
-
-    private static ISubject<ICacheEvent> NewSubject() => new Subject<ICacheEvent>();
+    protected override ITopic<ICacheEvent> CreateInternalTopic(TopicKey topicKey) =>
+        new RedisStreamsTopic<ICacheEvent>(topicKey, _redis, () => new Subject<ICacheEvent>(), _formatter, _policyHolder, _redisStreamsTopicOptions, _cacheOptions, _loggerFactory.Create<RedisStreamsTopic<ICacheEvent>>(), _stopTokenSource.Token);
 }

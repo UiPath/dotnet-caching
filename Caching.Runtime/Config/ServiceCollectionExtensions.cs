@@ -49,16 +49,9 @@ public static class ServiceCollectionExtensions
         return services;
     }
 
-    internal static IServiceCollection AddMemoryCacheFactory(this IServiceCollection services)
+    public static IServiceCollection AddMemoryCacheFactory(this IServiceCollection services)
     {
-        services.TryAddTransient<Func<IMemoryStatisticsOptions, IMemoryCache>>(sp => (IMemoryStatisticsOptions options) =>
-             new MemoryCache(
-                Options.Create(new MemoryCacheOptions
-                {
-                    Clock = sp.GetService<ISystemClock>(),
-                    TrackStatistics = options.TrackStatistics
-                }),
-                sp.GetService<ILoggerFactory>() ?? NullLoggerFactory.Instance));
+        services.TryAddSingleton<IMemoryCacheFactory>(sp => new MemoryCacheFactory(sp.GetService<ISystemClock>(), sp.GetService<ILoggerFactory>()));
         return services;
     }
 

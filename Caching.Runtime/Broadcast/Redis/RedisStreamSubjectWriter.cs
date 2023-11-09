@@ -1,4 +1,4 @@
-﻿using System.Reactive.Subjects;
+﻿using System.Threading.Channels;
 
 namespace UiPath.Platform.Caching.Broadcast.Redis;
 
@@ -8,7 +8,7 @@ internal sealed class RedisStreamSubjectWriter<T> : IDisposable
     private bool _disposed;
     private readonly RedisStreamContext _context;
     private readonly IRedisConnector _redis;
-    private readonly ISubject<T> _subject;
+    private readonly ChannelWriter<T> _writer;
     private readonly IEventFormatterProxy<T> _formatter;
     private readonly ILogger _logger;
     private readonly CancellationToken _stopToken;
@@ -20,14 +20,14 @@ internal sealed class RedisStreamSubjectWriter<T> : IDisposable
     public RedisStreamSubjectWriter(
         RedisStreamContext context,
         IRedisConnector redis,
-        ISubject<T> subject,
+        ChannelWriter<T> channelWriter,
         IEventFormatterProxy<T> formatter,
         ILogger logger,
         CancellationToken stopToken)
     {
         _context = context;
         _redis = redis;
-        _subject = subject;
+        _writer = channelWriter;
         _formatter = formatter;
         _logger = logger;
         _stopToken = stopToken;
@@ -38,7 +38,7 @@ internal sealed class RedisStreamSubjectWriter<T> : IDisposable
 
     public void Dispose()
     {
-        _subject.OnCompleted();
+        _writer.TryComplete();
         _disposed = true;
     }
 
@@ -108,7 +108,7 @@ internal sealed class RedisStreamSubjectWriter<T> : IDisposable
                 if (ev.IsValid(_context.SourceUri))
                 {
                     _logger.LogTrace("Event received. Id {}  Topic : {}", ev.Id, _context.Topic);
-                    _subject.OnNext(ev);
+                    _writer.TryWrite(ev);
                 }
                 else
                 {

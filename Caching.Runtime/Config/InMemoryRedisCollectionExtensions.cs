@@ -3,8 +3,6 @@
 [ExcludeFromCodeCoverage]
 public static class InMemoryRedisCollectionExtensions
 {
-    private static int _callBackRegistered = 0;
-
     public static ICachingBuilder AddInMemoryRedis(this ICachingBuilder builder, string sectionName = KnownCacheProviderNames.InMemoryRedis) =>
     builder.AddInMemoryRedis(opt => builder.Configuration.GetSection(sectionName).Bind(opt));
 
@@ -18,16 +16,13 @@ public static class InMemoryRedisCollectionExtensions
 
     private static ICachingBuilder AddCallback(this ICachingBuilder builder)
     {
-        if (Interlocked.Exchange(ref _callBackRegistered, 1) == 0)
+        builder.RegisterOnCompleteCallback(builder =>
         {
-            builder.RegisterOnCompleteCallback(builder =>
-            {
-                builder.Services.TryAddSingleton<IChangeTokenFactory, ChangeTokenFactory>();
-                builder.Services.TryAddSingleton<IEventFormatterProxy<ICacheEvent>, CacheEventFormatter>();
-                builder.Services.TryAddSingleton<ICacheEventFactory, CacheEventFactory>();
-                builder.Services.AddMemoryCacheFactory();
-            });
-        }
+            builder.Services.TryAddSingleton<IChangeTokenFactory, ChangeTokenFactory>();
+            builder.Services.TryAddSingleton<IEventFormatterProxy<ICacheEvent>, CacheEventFormatter>();
+            builder.Services.TryAddSingleton<ICacheEventFactory, CacheEventFactory>();
+            builder.Services.AddMemoryCacheFactory();
+        });
 
         return builder;
     }

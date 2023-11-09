@@ -35,7 +35,7 @@ public class InMemoryCacheProviderTests : IAsyncLifetime
         var topic = _fixture.Create<ITopic<ICacheEvent>>();
         TopicKey topicKey = _fixture.Create<string>();
         var topicCallsCount = 0;
-        topicProvider.CreateTopic(topicKey)
+        topicProvider.Create(topicKey)
             .ReturnsForAnyArgs(c =>
             {
                 topicCallsCount++;

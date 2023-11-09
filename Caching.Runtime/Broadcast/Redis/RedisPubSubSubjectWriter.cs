@@ -1,4 +1,4 @@
-﻿using System.Reactive.Subjects;
+﻿using System.Threading.Channels;
 
 namespace UiPath.Platform.Caching.Broadcast.Redis;
 
@@ -9,7 +9,7 @@ internal sealed class RedisPubSubSubjectWriter<T> : IDisposable
     private readonly Uri _sourceUri;
     private readonly RedisChannel _redisChannel;
     private readonly IRedisConnector _redis;
-    private readonly ISubject<T> _subject;
+    private readonly ChannelWriter<T> _channelWriter;
     private readonly IEventFormatterProxy<T> _formatter;
     private readonly ILogger _logger;
     private readonly Action<RedisChannel, RedisValue> _handler;
@@ -18,19 +18,19 @@ internal sealed class RedisPubSubSubjectWriter<T> : IDisposable
         Uri sourceUri,
         RedisChannel redisChannel,
         IRedisConnector redis,
-        ISubject<T> subject,
+        ChannelWriter<T> channelWriter,
         IEventFormatterProxy<T> formatter,
         ILogger logger)
     {
         _redis = redis;
-        _subject = subject;
+        _channelWriter = channelWriter;
         _formatter = formatter;
         _logger = logger;
         _sourceUri = sourceUri;
         _redisChannel = redisChannel;
         _handler = (channel, value) => OnMessage(value);
         _redis.Subscriber.Subscribe(_redisChannel, _handler);
-        _redis.OnReconnect += OnReconnect; 
+        _redis.OnReconnect += OnReconnect;
     }
 
     private void OnReconnect(object? sender, EventArgs e) =>
@@ -61,7 +61,7 @@ internal sealed class RedisPubSubSubjectWriter<T> : IDisposable
                 if (ev.IsValid(_sourceUri))
                 {
                     _logger.LogTrace("Event received. Id {}  Channel : {}", ev.Id, _redisChannel);
-                    _subject.OnNext(ev);
+                    _channelWriter.TryWrite(ev);
                 }
                 else
                 {
@@ -81,6 +81,7 @@ internal sealed class RedisPubSubSubjectWriter<T> : IDisposable
         try
         {
             _redis.Subscriber.Unsubscribe(_redisChannel, _handler);
+            _channelWriter.TryComplete();
         }
         catch (Exception ex)
         {

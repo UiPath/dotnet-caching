@@ -116,7 +116,7 @@ public class MemoryCacheSetterTests : IAsyncLifetime
         _topicProvider = _fixture.Freeze<ITopicProvider>();
         _topic = _fixture.Freeze<ITopic<ICacheEvent>>();
         _topicFactory.Get(Arg.Any<string>(), Arg.Any<Type>()).Returns(_topicProvider);
-        _topicProvider.CreateTopic(_topicKey).Returns(_topic);
+        _topicProvider.Create(_topicKey).Returns(_topic);
         _fixture.Inject(_memoryCache);
         _fixture.Inject<IMultilayerCacheOptions>(_options);
         _formatter = new CacheClearEventFormatterProxy();

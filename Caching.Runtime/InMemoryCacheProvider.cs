@@ -4,7 +4,7 @@ namespace UiPath.Platform.Caching;
 public sealed class InMemoryCacheProvider : ICacheProvider
 {
     private readonly InMemoryCacheOptions _options;
-    private readonly Func<IMemoryStatisticsOptions, IMemoryCache> _memoryCacheAccessor;
+    private readonly IMemoryCacheFactory _memoryCacheFactory;
     private readonly IChangeTokenFactory _changeTokenFactory;
     private readonly ITopicFactory _topicFactory;
     private readonly ICacheEventFactory _cacheEventFactory;
@@ -20,7 +20,7 @@ public sealed class InMemoryCacheProvider : ICacheProvider
 
     public InMemoryCacheProvider(
         IOptions<InMemoryCacheOptions> optionsAccessor,
-        Func<IMemoryStatisticsOptions, IMemoryCache> memoryCacheAccessor,
+        IMemoryCacheFactory memoryCacheFactory,
         ICacheEventFactory? cacheEventFactory = null,
         IChangeTokenFactory? changeTokenFactory = null,
         ITopicFactory? topicFactory = null,
@@ -28,7 +28,7 @@ public sealed class InMemoryCacheProvider : ICacheProvider
         ILoggerFactory? loggerFactory = null)
     {
         _options = optionsAccessor.Value;
-        _memoryCacheAccessor = memoryCacheAccessor;
+        _memoryCacheFactory = memoryCacheFactory;
         _changeTokenFactory = NullChangeTokenFactory.Instance;
         _topicFactory = NullTopicFactory.Instance;
         _cacheEventFactory = NullCacheEventFactory.Instance;
@@ -80,7 +80,7 @@ public sealed class InMemoryCacheProvider : ICacheProvider
         new(
             Name,
             NullCache.Instance,
-            () => _memoryCacheAccessor(_options),
+            () => _memoryCacheFactory.Get(_options),
             _changeTokenFactory,
             _topicFactory,
             _cacheEventFactory,
@@ -92,7 +92,7 @@ public sealed class InMemoryCacheProvider : ICacheProvider
         new(
             Name,
             NullHashCache.Instance,
-            () => _memoryCacheAccessor(_options),
+            () => _memoryCacheFactory.Get(_options),
             _changeTokenFactory,
             _topicFactory,
             _cacheEventFactory,

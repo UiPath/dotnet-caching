@@ -6,6 +6,9 @@ public interface ITopicProvider : IDisposable
 
     bool Enabled { get; }
 
-    ITopic<ICacheEvent> CreateTopic(TopicKey topicKey);
-}
+    ICollection<TopicKey> Keys { get; }
 
+    ITopic<ICacheEvent> Create(TopicKey topicKey);
+
+    void Remove(TopicKey topicKey);
+}

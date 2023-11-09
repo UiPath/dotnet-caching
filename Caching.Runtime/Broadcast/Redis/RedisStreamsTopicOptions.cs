@@ -1,4 +1,6 @@
-﻿namespace UiPath.Platform.Caching.Broadcast.Redis;
+﻿using System.Threading.Channels;
+
+namespace UiPath.Platform.Caching.Broadcast.Redis;
 
 public class RedisStreamsTopicOptions
 {
@@ -15,5 +17,9 @@ public class RedisStreamsTopicOptions
     public TimeSpan ProcessingTimeout { get; set; } = TimeSpan.FromSeconds(60);
 
     public IRedisStreamKeyStrategy? RedisStreamKeyStrategy { get; set; }
+
+    public int ConsumerCapacity { get; set; } = -1;
+
+    public BoundedChannelFullMode FullMode { get; set; } = BoundedChannelFullMode.Wait;
     
 }

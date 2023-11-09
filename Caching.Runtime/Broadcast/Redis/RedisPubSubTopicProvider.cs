@@ -1,58 +1,41 @@
-﻿using System.Collections.Concurrent;
-using System.Reactive.Subjects;
+﻿using System.Reactive.Subjects;
 using UiPath.Platform.Caching.Policies;
 
 namespace UiPath.Platform.Caching.Broadcast.Redis;
 
-public sealed class RedisPubSubTopicProvider : ITopicProvider
+public class RedisPubSubTopicProvider : TopicProviderBase
 {
-    private readonly ConcurrentDictionary<TopicKey, Lazy<ITopic<ICacheEvent>>> _topics = new();
-    private readonly RedisPubSubTopicOptions _redisPubSubTopicOptions;
+    private readonly RedisPubSubTopicOptions _options;
     private readonly IRedisConnector _redis;
     private readonly IEventFormatterProxy<ICacheEvent> _formatter;
     private readonly IPolicyHolder _policyHolder;
     private readonly ILoggerFactory _loggerFactory;
     private readonly Uri _sourceUri;
     private readonly IRedisChannelStrategy _redisChannelStrategy;
+    private readonly CancellationTokenSource _stopTokenSource = new();
 
     public RedisPubSubTopicProvider(
-        IOptions<RedisPubSubTopicOptions> redisPubSubTopicOptionsAccessor,
+        IOptions<RedisPubSubTopicOptions> optionsAccessor,
         IOptions<CacheOptions> cacheOptionsAccessor,
         IRedisConnector redis,
         IEventFormatterProxy<ICacheEvent> formatter,
         IPolicyHolder policyHolder,
         ILoggerFactory loggerFactory)
     {
-        _redisPubSubTopicOptions = redisPubSubTopicOptionsAccessor.Value;
+        _options = optionsAccessor.Value;
         _redis = redis;
         _formatter = formatter;
         _policyHolder = policyHolder;
         _loggerFactory = loggerFactory;
         var cacheOptions = cacheOptionsAccessor.Value;
         _sourceUri = cacheOptions.SourceUri ?? CacheOptions.MachineUri;
-        _redisChannelStrategy = _redisPubSubTopicOptions.RedisChannelStrategy ?? new PrefixStrategy(RedisTypePrefixes.PubSub, cacheOptions);
+        _redisChannelStrategy = _options.RedisChannelStrategy ?? new PrefixStrategy(RedisTypePrefixes.PubSub, cacheOptions);
     }
 
-    public string Name => KnownTopicNames.RedisPubSub;
+    public override string Name => KnownTopicNames.RedisPubSub;
 
-    public bool Enabled => _redisPubSubTopicOptions.Enabled;
+    public override bool Enabled => _options.Enabled;
 
-    public ITopic<ICacheEvent> CreateTopic(TopicKey topicKey) =>
-        _topics.GetOrAdd(topicKey, tk => new Lazy<ITopic<ICacheEvent>>(() => CreateInternalTopic(tk))).Value;
-
-    public void Dispose() => 
-        _topics.Clear();
-
-    private ITopic<ICacheEvent> CreateInternalTopic(TopicKey topicKey) =>
-        new RedisPubSubTopic<ICacheEvent>(
-            topicKey,
-            _sourceUri,
-            _redis,
-            _redisChannelStrategy,
-            NewSubject,
-            _formatter,
-            _policyHolder,
-            _loggerFactory.Create<RedisPubSubTopic<ICacheEvent>>());
-
-    private static ISubject<ICacheEvent> NewSubject() => new Subject<ICacheEvent>();
+    protected override ITopic<ICacheEvent> CreateInternalTopic(TopicKey topicKey) =>
+        new RedisPubSubTopic<ICacheEvent>(topicKey, _sourceUri, _redis, _redisChannelStrategy, () => new Subject<ICacheEvent>(), _formatter, _policyHolder, _options, _loggerFactory.Create<RedisPubSubTopic<ICacheEvent>>(), _stopTokenSource.Token);
 }

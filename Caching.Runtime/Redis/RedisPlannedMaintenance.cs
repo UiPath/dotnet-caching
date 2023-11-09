@@ -105,7 +105,7 @@ public sealed class RedisPlannedMaintenance : IRedisPlannedMaintenance
                 }
                 finally
                 {
-                    tokenSource.Dispose();
+                    tokenSource.Cancel();
                     InProgress = false;
                     _telemetryProvider.TrackEvent("Redis.Maintenance.ProbingEnded", null, null);
                 }

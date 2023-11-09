@@ -77,7 +77,7 @@ public class TopicFactoryTests : IAsyncLifetime
         var provider = _fixture.Create<ITopicProvider>();
         provider.Enabled.Returns(true);
         var topic = _fixture.Create<ITopic<ICacheEvent>>();
-        provider.CreateTopic(_topicKey).ReturnsForAnyArgs(topic);
+        provider.Create(_topicKey).ReturnsForAnyArgs(topic);
         Sut.AddProvider(provider);
         Sut.Get(provider.Name, _fixture.Create<Type>()).Should().Be(provider);
     }
@@ -88,7 +88,7 @@ public class TopicFactoryTests : IAsyncLifetime
         var provider = _fixture.Create<ITopicProvider>();
         provider.Enabled.Returns(false);
         var topic = _fixture.Create<ITopic<ICacheEvent>>();
-        provider.CreateTopic(_topicKey).Returns(topic);
+        provider.Create(_topicKey).Returns(topic);
         Sut.AddProvider(provider);
         Sut.Get(provider.Name, _fixture.Create<Type>()).Should().NotBe(topic);
     }

@@ -5,7 +5,7 @@ namespace UiPath.Platform.Caching;
 public sealed class InMemoryRedisCacheProvider : ICacheProvider
 {
     private readonly InMemoryRedisCacheOptions _options;
-    private readonly Func<IMemoryStatisticsOptions, IMemoryCache> _memoryCacheAccessor;
+    private readonly IMemoryCacheFactory _memoryCacheFactory;
     private readonly IChangeTokenFactory _changeTokenFactory;
     private readonly ITopicFactory _topicFactory;
     private readonly ICacheEventFactory _cacheEventFactory;
@@ -22,8 +22,9 @@ public sealed class InMemoryRedisCacheProvider : ICacheProvider
 
     
 
-    public InMemoryRedisCacheProvider(IOptions<InMemoryRedisCacheOptions> optionsAccessor,
-        Func<IMemoryStatisticsOptions, IMemoryCache> memoryCacheAccessor,
+    public InMemoryRedisCacheProvider(
+        IOptions<InMemoryRedisCacheOptions> optionsAccessor,
+        IMemoryCacheFactory memoryCacheFactory,
         Func<ICacheFactory> cacheFactoryAccessor,
         IChangeTokenFactory changeTokenFactory,
         ITopicFactory topicFactory,
@@ -32,7 +33,7 @@ public sealed class InMemoryRedisCacheProvider : ICacheProvider
         ILoggerFactory? loggerFactory = null)
     {
         _options = optionsAccessor.Value;
-        _memoryCacheAccessor = memoryCacheAccessor;
+        _memoryCacheFactory = memoryCacheFactory;
         _cacheFactory = new Lazy<ICacheFactory>(cacheFactoryAccessor);
         _changeTokenFactory = changeTokenFactory;
         _topicFactory = topicFactory;
@@ -66,7 +67,7 @@ public sealed class InMemoryRedisCacheProvider : ICacheProvider
         new(
             Name,
             _cacheFactory.Value.CreateCache(KnownCacheProviderNames.Redis, callerType: GetType()),
-            () => _memoryCacheAccessor(_options),
+            () => _memoryCacheFactory.Get(_options),
             _changeTokenFactory,
             _topicFactory,
             _cacheEventFactory,
@@ -78,7 +79,7 @@ public sealed class InMemoryRedisCacheProvider : ICacheProvider
         new(
             Name,
             _cacheFactory.Value.CreateHashCache(KnownCacheProviderNames.Redis, callerType: GetType()),
-            () => _memoryCacheAccessor(_options),
+            () => _memoryCacheFactory.Get(_options),
             _changeTokenFactory,
             _topicFactory,
             _cacheEventFactory,

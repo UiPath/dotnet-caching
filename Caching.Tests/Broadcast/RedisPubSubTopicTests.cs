@@ -36,7 +36,7 @@ public class RedisPubSubTopicTests : IAsyncLifetime
     }
 
     [Fact]
-    public void Message_received_when_channel_event_received()
+    public async Task Message_received_when_channel_event_received()
     {
         var disposable = Sut.Subscribe(_observer);
         var machineName = _fixture.Create<string>();
@@ -49,6 +49,7 @@ public class RedisPubSubTopicTests : IAsyncLifetime
         var bytes = _formatter.Encode(cloudEvent);
         var message = Encoding.UTF8.GetString(bytes.Span);
         _handler?.Invoke(RedisChannel.Literal(_topicKey.Name), message);
+        await Task.Delay(500);
         _onNextMessages.FirstOrDefault().Should().BeEquivalentTo(cloudEvent);
         _onCompleted.Should().BeFalse();
     }

@@ -7,14 +7,18 @@ public sealed class RedisPubSubTopic<T> : ITopic<T>
      where T : IEvent
 {
     private readonly RedisChannel _redisChannel;
+    private readonly CancellationTokenSource _stopTokenSource;
     private readonly ISubject<T> _subject;
     private readonly IRedisConnector _redis;
     private readonly ILogger _logger;
     private readonly IEventFormatterProxy<T> _formatter;
     private readonly IPolicyExecutor _writePolicy;
     private readonly RedisPubSubSubjectWriter<T> _subscriber;
+    private readonly EventDispatcher<T> _dispatcher;
 
-    public TopicKey TopicKey { get; private set; }
+    public TopicKey TopicKey { get; }
+
+    public EventHandler? OnDisposed { get; set; }
 
     public RedisPubSubTopic(
         TopicKey topicKey,
@@ -24,16 +28,21 @@ public sealed class RedisPubSubTopic<T> : ITopic<T>
         Func<ISubject<T>> subjectFactory,
         IEventFormatterProxy<T> formatter,
         IPolicyHolder policyHolder,
-        ILogger<RedisPubSubTopic<T>> logger)
+        RedisPubSubTopicOptions options,
+        ILogger<RedisPubSubTopic<T>> logger,
+        CancellationToken stopToken)
     {
         TopicKey = topicKey;
         _redisChannel = redisChannelStrategy.GetRedisChannel(topicKey);
+        _stopTokenSource = CancellationTokenSource.CreateLinkedTokenSource(stopToken);
         _formatter = formatter;
         _writePolicy = policyHolder.Write;
         _redis = redis;
         _logger = logger;
         _subject = subjectFactory();
-        _subscriber = new RedisPubSubSubjectWriter<T>(sourceUri, _redisChannel, _redis, _subject, _formatter, _logger);
+        var channel = ChannelHelper.Create<T>(options.ConsumerCapacity < 1, options.ConsumerCapacity, options.FullMode);
+        _subscriber = new RedisPubSubSubjectWriter<T>(sourceUri, _redisChannel, _redis, channel, _formatter, _logger);
+        _dispatcher = new EventDispatcher<T>(topicKey, channel, _subject, _logger, _stopTokenSource.Token);
     }
 
     public IDisposable Subscribe(IObserver<T> observer) =>
@@ -58,8 +67,10 @@ public sealed class RedisPubSubTopic<T> : ITopic<T>
 
     public void Dispose()
     { 
-        _subscriber.Dispose();
+        _stopTokenSource.Cancel();
+        _dispatcher.Dispose();
         _subject.OnCompleted();
+        _subscriber.Dispose();
+        OnDisposed?.Invoke(this, EventArgs.Empty);
     }
 }
-

@@ -8,6 +8,6 @@ public static class TopicFactoryExtensions
     public static ITopic<ICacheEvent> Get(this ITopicFactory factory, string? providerName, TopicKey topicKey, Type entryType)
     {
         var provider = factory.Get(providerName, entryType);
-        return provider.CreateTopic(topicKey);
+        return provider.Create(topicKey);
     }
 }
