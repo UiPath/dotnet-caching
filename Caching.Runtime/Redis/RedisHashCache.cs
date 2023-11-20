@@ -19,6 +19,8 @@ public sealed class RedisHashCache : IHashCache
     private readonly IRedisKeyStrategy _redisKeyStrategy;
     private readonly CacheClock _clock;
     private readonly TimeSpan? _defaultExpiration;
+    private readonly CacheOptions _cacheOptions;
+    private readonly Action<RedisKey, string, RedisValue>? _auditKeySize;
 
     public RedisHashCache(
         IRedisConnector redis,
@@ -35,12 +37,17 @@ public sealed class RedisHashCache : IHashCache
         _logger = logger;
         _readPolicy = policyHolder.Read;
         _writePolicy = policyHolder.Write;
+        _cacheOptions = optionsAccessor.Value;
         var redisCacheOptions = redisCacheOptionsAccessor.Value;
         _cacheEntryFactory = redisCacheOptions.EntryFactory ?? new CacheEntryFactory();
         _supportsExpireTime = RedisUtils.SupportsExpireTime(redisCacheOptions.Version);
-        _redisKeyStrategy = (redisCacheOptions.RedisKeyStrategyFactory ?? new DefaultRedisKeyStrategyFactory()).Create(optionsAccessor.Value, GetType());
+        _redisKeyStrategy = (redisCacheOptions.RedisKeyStrategyFactory ?? new DefaultRedisKeyStrategyFactory()).Create(_cacheOptions, GetType());
         _defaultExpiration = redisCacheOptions.DefaultExpiration;
         _clock = new CacheClock(redisCacheOptions.Clock, _defaultExpiration);
+        if (_cacheOptions.AuditEnabled)
+        {
+            _auditKeySize = AuditKeySize;
+        }
     }
 
     private IDatabase Database => _redis.Database;
@@ -97,6 +104,7 @@ public sealed class RedisHashCache : IHashCache
             for (var i = 0; i < fields.Length; i++)
             {
                 var v = values[i];
+                _auditKeySize?.Invoke(redisKey, fields[i], v);
                 ret.Add(fields[i], string.IsNullOrWhiteSpace(v) ? default : _serializer.Deserialize<T?>(v));
             }
             operation.Stop();
@@ -328,7 +336,7 @@ public sealed class RedisHashCache : IHashCache
         Validate(values);
         var redisKey = ToRedisKey(cacheKey, token);
         var entries = values.Select(kv => new HashEntry(kv.Key, _serializer.Serialize(kv.Value))).ToList();
-        if (entries.Any() && options.Metadata != null)
+        if (entries.Count > 0 && options.Metadata != null)
         {
             entries.Add(new HashEntry(KnownFieldNames.MetadataKey, _serializer.Serialize(options.Metadata)));
         }
@@ -486,14 +494,15 @@ public sealed class RedisHashCache : IHashCache
         return _cacheEntryFactory.Create<IDictionary<string, T?>>(values, _clock.ToDateTimeOffset(expireTime), extendedProps);
     }
 
-    private async Task<T?> GetInnerAsync<T>(CacheKey cacheKey, string key, CancellationToken token = default)
+    private async Task<T?> GetInnerAsync<T>(CacheKey cacheKey, string field, CancellationToken token = default)
     {
         var redisKey = ToRedisKey(cacheKey, token);
         T? ret = default;
         var operation = StartOperation<T>(nameof(GetAsync));
         try
         {
-            var value = await _readPolicy.ExecuteAsync(() => Database.HashGetAsync(redisKey, key, CommandFlags.PreferReplica)).ConfigureAwait(false);
+            var value = await _readPolicy.ExecuteAsync(() => Database.HashGetAsync(redisKey, field, CommandFlags.PreferReplica)).ConfigureAwait(false);
+            _auditKeySize?.Invoke(redisKey, field, value);
             ret = value.IsNullOrEmpty ? default : _serializer.Deserialize<T?>(value);
             operation.Stop();
         }
@@ -517,7 +526,7 @@ public sealed class RedisHashCache : IHashCache
         var operation = StartOperation<T>(nameof(SetAsync));
         try
         {
-            if (expiration < now || !hashEntries.Any())
+            if (expiration < now || hashEntries.Count == 0)
             {
                 ret = await _writePolicy.ExecuteAsync(() => Database.KeyDeleteAsync(redisKey, CommandFlags.DemandMaster)).ConfigureAwait(false);
             }
@@ -572,6 +581,15 @@ public sealed class RedisHashCache : IHashCache
     private ITelemetryOperation StartOperation<T>([CallerMemberName] string name = "") =>
         _telemetryProvider.StartOperation<RedisHashCache, T>(name);
 
+    private void AuditKeySize(RedisKey key, string field, RedisValue value)
+    {
+        var valueLen = value.Length();
+        if (valueLen > _cacheOptions.LargeValueThreshold)
+        {
+            _logger.LogWarning("Redis large value detected for key {redisKey}, field {field}, length {length}", key, field, valueLen);
+        }
+    }
+
     private static void Validate<T>(IDictionary<string, T?> values)
     {
         ArgumentNullException.ThrowIfNull(values);
@@ -600,6 +618,6 @@ public sealed class RedisHashCache : IHashCache
         }
     }
 
-    private static IDictionary<string, T?> Empty<T>() =>
+    private static ImmutableDictionary<string, T?> Empty<T>() =>
         ImmutableDictionary<string, T?>.Empty;
 }

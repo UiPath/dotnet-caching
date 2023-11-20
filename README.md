@@ -11,6 +11,8 @@ Main capabilities:
 * In case of a Redis cluster, the writes are always done in master and the reads in slaves
 * Redis profiling (can be enabled via feature flags for specific Account/Tenant)
 * Redis hanging connections handeling and azure planned maitenance detection
+* Audit large redis key values
+* Support redis cluster [data sharding](https://redis.io/docs/management/scaling/)
 * Cache events process back-pressure using [Channels](https://learn.microsoft.com/en-us/dotnet/core/extensions/channels)
 * Synchronization events using Redis Streams or PubSub. See [ITopic](/Caching.Abstractions/Broadcast/ITopic.cs) implementations.
 * Multiple extensions points in order to fit applications use cases

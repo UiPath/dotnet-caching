@@ -51,7 +51,7 @@ public class RedisHashCacheTests : IAsyncLifetime
         var expected = _fixture.Create<string>();
         RedisValue redisField = key;
 
-        Func<Task> act = async () => { await Sut.GetItemAsync<string>(_cacheKey, key, CancellationToken.None); };
+        Func<Task> act = async () => await Sut.GetItemAsync<string>(_cacheKey, key, CancellationToken.None);
         await act.Should().ThrowAsync<ArgumentOutOfRangeException>();
     }
 
@@ -578,7 +578,7 @@ public class RedisHashCacheTests : IAsyncLifetime
     [InlineData("")]
     public async Task Remove_cacheKey_validates_input(string? cacheKey)
     {
-        Func<Task> act = async () => { await Sut.RemoveAsync<string>(cacheKey); };
+        Func<Task> act = async () => await Sut.RemoveAsync<string>(cacheKey);
         await act.Should().ThrowAsync<ArgumentException>();
     }
 

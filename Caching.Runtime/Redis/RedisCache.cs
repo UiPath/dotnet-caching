@@ -18,6 +18,8 @@ public sealed class RedisCache : ICache
     private readonly IRedisKeyStrategy _redisKeyStrategy;
     private readonly TimeSpan? _defaultExpiration;
     private readonly CacheClock _clock;
+    private readonly CacheOptions _cacheOptions;
+    private readonly Action<RedisKey, RedisValue>? _auditKeySize;
 
     public RedisCache(
         IRedisConnector redis,
@@ -27,18 +29,23 @@ public sealed class RedisCache : ICache
         IOptions<RedisCacheOptions> redisCacheOptionsAccessor,
         IOptions<CacheOptions> optionsAccessor,
         ILogger<RedisCache> logger)
-    {   
+    {
         _logger = logger;
         _redis = redis;
         _serializer = serializer;
         _telemetryProvider = telemetryProvider;
         _readPolicy = policyHolder.Read;
         _writePolicy = policyHolder.Write;
+        _cacheOptions = optionsAccessor.Value;
         var redisCacheOptions = redisCacheOptionsAccessor.Value;
         _supportsExpireTime = RedisUtils.SupportsExpireTime(redisCacheOptions.Version);
         _redisKeyStrategy = (redisCacheOptions.RedisKeyStrategyFactory ?? new DefaultRedisKeyStrategyFactory()).Create(optionsAccessor.Value, GetType());
         _defaultExpiration = redisCacheOptions.DefaultExpiration;
         _clock = new CacheClock(redisCacheOptions.Clock, _defaultExpiration);
+        if (_cacheOptions.AuditEnabled)
+        {
+            _auditKeySize = AuditKeySize;
+        }
     }
 
     private IDatabase Database => _redis.Database;
@@ -55,12 +62,7 @@ public sealed class RedisCache : ICache
     public Task<T?> GetOrAddAsync<T>(CacheKey cacheKey, Func<Task<T?>> generator, TimeSpan? expiration = null, CancellationToken token = default)
     {
         var redisKey = ToRedisKey(cacheKey, token);
-
-        if (generator == null)
-        {
-            throw new ArgumentNullException(nameof(generator));
-        }
-
+        ArgumentNullException.ThrowIfNull(generator);
         return GetOrAddInternalAsync(redisKey, generator, _clock.ToTimeSpan(expiration));
     }
 
@@ -266,6 +268,7 @@ public sealed class RedisCache : ICache
         try
         {
             var value = await _readPolicy.ExecuteAsync(() => Database.StringGetAsync(redisKey, CommandFlags.PreferReplica)).ConfigureAwait(false);
+            _auditKeySize?.Invoke(redisKey, value);
             ret = value.IsNullOrEmpty ? default : _serializer.Deserialize<T>(value);
             operation.Stop();
         }
@@ -289,7 +292,7 @@ public sealed class RedisCache : ICache
         {
             throw new ArgumentNullException(nameof(cacheKey));
         }
-        
+
         return _redisKeyStrategy.GetRedisKey(cacheKey);
     }
 
@@ -301,6 +304,15 @@ public sealed class RedisCache : ICache
 
     private static bool IsDefault<T>(T value) =>
         EqualityComparer<T>.Default.Equals(value, default);
+
+    private void AuditKeySize(RedisKey key, RedisValue value)
+    {
+        var valueLen = value.Length();
+        if (valueLen > _cacheOptions.LargeValueThreshold)
+        {
+            _logger.LogWarning("Redis large value detected for key {redisKey}, length {length}", key, valueLen);
+        }
+    }
 
     public void Dispose()
     {

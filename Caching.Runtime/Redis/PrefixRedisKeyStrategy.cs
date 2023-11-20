@@ -2,16 +2,15 @@
 
 public class PrefixRedisKeyStrategy : IRedisKeyStrategy
 {
-    private readonly string _prefix;
-    
-    private readonly char _separator;
+    protected string Prefix { get; set; }
+    protected char Separator { get; set; }
 
     public PrefixRedisKeyStrategy(string prefix, char separator)
     {
-        _prefix = Guard.NotNullOrWhiteSpace(prefix, nameof(prefix)).ToLowerInvariant();
-        _separator = char.ToLowerInvariant(Guard.NotWhiteSpace(separator, nameof(separator)));
+        Prefix = Guard.NotNullOrWhiteSpace(prefix, nameof(prefix)).ToLowerInvariant();
+        Separator = char.ToLowerInvariant(Guard.NotWhiteSpace(separator, nameof(separator)));
     }
 
-    public RedisKey GetRedisKey(CacheKey key) =>
-        string.Join(_separator, _prefix, key);
+    public virtual RedisKey GetRedisKey(CacheKey key) =>
+        string.Join(Separator, Prefix, key);
 }

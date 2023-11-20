@@ -43,19 +43,22 @@ The same results can be achieve using the configuration options.
 ```json
 {
   "Caching": {
-    "Enabled": "true",
-    "TelemetryEnabled": "true",
-    "BroadcastEnabled": "true",
+    "Enabled": true,
+    "TelemetryEnabled": true,
+    "BroadcastEnabled": true,
     "DefaultCache": "InMemoryRedis",
     "DefaultTopic": "RedisStreams",
     "SourceUri": "urn:machine1",
     "AppShortName": "app",
+    "ShardKeyEnabled": false,
+    "AuditEnabled": false,
+    "LargeValueThreshold": 20000,
     "Connections": {
       "Redis": {
         "ConnectionString": "localhost:6379,localhost:6380,localhost:6381,abortConnect=false, connectRetry=3, keepAlive=30,name=test,syncTimeout=250",
-        "LogConnectionFailedEvents": "true",
-        "LogConnectionRestoredEvents": "true",
-        "EnableHangDetection": "true",
+        "LogConnectionFailedEvents": true,
+        "LogConnectionRestoredEvents": true,
+        "EnableHangDetection": true,
         "LastWriteIntervalThresholdMilliseconds": "15000",
         "LastReadIntervalThresholdMilliseconds": "15000",
         "BackOffMilliseconds": "1000",
@@ -64,12 +67,12 @@ The same results can be achieve using the configuration options.
     },
     "Broadcast": {
       "RedisPubSub": {
-        "Enabled": "true",
+        "Enabled": true,
         "ConsumerCapacity": "2048", //-1 for unlimited
         "FullMode": "Wait" // default Wait, see https://learn.microsoft.com/en-us/dotnet/api/system.threading.channels.boundedchannelfullmode?view=net-7.0
       },
       "RedisStreams": {
-        "Enabled": "true",
+        "Enabled": true,
         "MaxLength": "32768",
         "PollBatchSize": "4096",
         "PollInterval": "0:00:00.250",
@@ -79,24 +82,24 @@ The same results can be achieve using the configuration options.
       }
     },
     "InMemoryRedis": {
-      "Enabled": "true",
+      "Enabled": true,
       "DefaultExpiration": "0:05:00",
       "Timeout": "0:00:01",
       "PrimaryMaxExpiration": "0:03:00",
-      "TrackStatistics": "true",
+      "TrackStatistics": true,
       "StatisticsFlushInterval": "0:01:00"
     },
     "Redis": {
-      "Enabled": "true",
+      "Enabled": true,
       "DefaultExpiration": "0:07:00",
       "Version": 6
     },
     "InMemory": {
-      "Enabled": "true",
-      "BroadcastEnable": "true",
+      "Enabled": true,
+      "BroadcastEnable": true,
       "DefaultExpiration": "0:05:00",
       "Timeout": "0:00:01",
-      "TrackStatistics": "true",
+      "TrackStatistics": true,
       "StatisticsFlushInterval": "0:01:00"
     },
     "ResiliencePolicies": {
@@ -114,6 +117,9 @@ There are 2 important settings:
 * SourceUri - represents the machine/pod where the app is running, used in sending & processing cache events
 
 :warning: For production readiness twick & perf test you're app with different caching configuration (Resilience policies, Broadcast consumer capacity, batch interval, topic full mode)
+If you are using a cluster with multiple shards enable key sharding `"ShardKeyEnabled": true`
+To proctect agains large values in redis you can enable the key audit size
+` "AuditEnabled": false, "LargeValueThreshold": <<bytes>>`
 
 By default the library comes with 3 default caching providers, you can one or more in the same time
 
