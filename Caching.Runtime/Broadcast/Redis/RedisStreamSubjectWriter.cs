@@ -11,11 +11,8 @@ internal sealed class RedisStreamSubjectWriter<T> : IDisposable
     private readonly ChannelWriter<T> _writer;
     private readonly IEventFormatterProxy<T> _formatter;
     private readonly ILogger _logger;
-    private readonly CancellationToken _stopToken;
-#pragma warning disable IDE0052 // Remove unread private members
-    [SuppressMessage("SonarLint.Rule", "S4487:\"Unread\" members should be removed")]
-    private readonly Task _fetchLoop;
-#pragma warning restore IDE0052 // Remove unread private members
+    private readonly CancellationTokenSource _stopTokenSource;
+    private readonly CancellationToken _cancelationToken;
 
     public RedisStreamSubjectWriter(
         RedisStreamContext context,
@@ -30,19 +27,21 @@ internal sealed class RedisStreamSubjectWriter<T> : IDisposable
         _writer = channelWriter;
         _formatter = formatter;
         _logger = logger;
-        _stopToken = stopToken;
-        _fetchLoop = Task.Run(FetchLoop, default);
+        _stopTokenSource = CancellationTokenSource.CreateLinkedTokenSource(stopToken);
+        _cancelationToken = _stopTokenSource.Token;
+        FetchTask = Task.Run(FetchLoop, _cancelationToken);
     }
-
-    internal TaskStatus FetchTaskStatus => _fetchLoop.Status;
 
     public void Dispose()
     {
-        _writer.TryComplete();
         _disposed = true;
+        _stopTokenSource.Cancel();
+        _writer.TryComplete();
     }
 
-    private bool ContinueLoop => !(_disposed || _stopToken.IsCancellationRequested);
+    internal Task FetchTask { get; }
+
+    private bool ContinueLoop => !(_disposed || _cancelationToken.IsCancellationRequested);
 
     private async Task FetchLoop()
     {
@@ -63,21 +62,21 @@ internal sealed class RedisStreamSubjectWriter<T> : IDisposable
                     await DispatchEventsAsync(events);
                     continue;
                 }
-                await Task.Delay(_context.PollInterval, _stopToken);
+                await Task.Delay(_context.PollInterval, _cancelationToken);
             }
             catch (Exception ex)
             {
-                if (ex is TaskCanceledException cancel && cancel.CancellationToken == _stopToken)
+                if (ex is TaskCanceledException cancel && cancel.CancellationToken == _cancelationToken)
                 {
                     break;
                 }
 
                 try
                 {
-                    _logger.LogError("Fetch events loop error", ex);
-                    await Task.Delay(_context.PollInterval, _stopToken);
+                    _logger.LogError(ex, "Fetch events loop error");
+                    await Task.Delay(_context.PollInterval, _cancelationToken);
                 }
-                catch 
+                catch
                 {
                     // no op
                 }

@@ -45,7 +45,7 @@ public class ChangeTokenTests : IAsyncLifetime
     [InlineData("urn:machine", false)]
     [InlineData("urn:another-machine", true)]
     [InlineData(null, true)]
-    public void OnNext_Changes_when_corect_key(string source, bool hasChanged)
+    public void OnNext_Changes_when_corect_key(string? source, bool hasChanged)
     {
         if (!string.IsNullOrWhiteSpace(source))
         {

@@ -1,4 +1,4 @@
-﻿using System.Reactive.Subjects;
+﻿using FluentAssertions.Extensions;
 using Microsoft.Extensions.Logging;
 using NSubstitute.ExceptionExtensions;
 using NSubstitute.ReceivedExtensions;
@@ -23,7 +23,7 @@ public class RedisStreamSubjectWriterTests : IAsyncLifetime
     private int _pollBatchSize = default!;
     private TimeSpan _pollInterval = default!;
 
-    private RedisStreamSubjectWriter<ICacheEvent>? _sut = null;
+    private RedisStreamSubjectWriter<ICacheEvent>? _sut;
     private RedisStreamSubjectWriter<ICacheEvent> Sut => _sut ??= _fixture.Create<RedisStreamSubjectWriter<ICacheEvent>>();
 
     [Fact]
@@ -31,10 +31,10 @@ public class RedisStreamSubjectWriterTests : IAsyncLifetime
     {
         var entries = new[] { StreamEntry.Null };
         _database.StreamReadGroupAsync(_context.Topic, _context.ConsumerGroup, _context.ConsumerName, ">", 100)
-            .ReturnsForAnyArgs(ctx => entries);
+            .ReturnsForAnyArgs(_ => entries);
 
-        var s = Sut;
-        await Task.Delay(500);
+        Func<Task> act = async () => await Sut.FetchTask;
+        await act.Should().NotCompleteWithinAsync(500.Microseconds());
         _cancellationTokenSource.Cancel();
         _formatter.Received(0).Decode(Arg.Any<string>());
     }
@@ -44,10 +44,10 @@ public class RedisStreamSubjectWriterTests : IAsyncLifetime
     {
         var entries = Array.Empty<StreamEntry>();
         _database.StreamReadGroupAsync(_context.Topic, _context.ConsumerGroup, _context.ConsumerName, ">", 100)
-            .ReturnsForAnyArgs(ctx => entries);
+            .ReturnsForAnyArgs(_ => entries);
 
-        var s = Sut;
-        await Task.Delay(_pollInterval.Multiply(5));
+        Func<Task> act = async () => await Sut.FetchTask;
+        await act.Should().NotCompleteWithinAsync(_pollInterval.Multiply(5));
         _cancellationTokenSource.Cancel();
         _formatter.Received(0).Decode(Arg.Any<string>());
     }
@@ -57,13 +57,10 @@ public class RedisStreamSubjectWriterTests : IAsyncLifetime
     {
         var entries = new[] { StreamEntry.Null };
         _database.StreamReadGroupAsync(_context.Topic, _context.ConsumerGroup, _context.ConsumerName, ">", _context.PollBatchSize)
-            .ThrowsAsyncForAnyArgs(c =>
-            {
-                throw new TaskCanceledException(_fixture.Create<string>(), _fixture.Create<Exception>(), _cancellationTokenSource.Token);
-            });
-        
-        var s = Sut;
-        await Task.Delay(500);
+            .ThrowsAsyncForAnyArgs(_ => throw new TaskCanceledException(_fixture.Create<string>(), _fixture.Create<Exception>(), _cancellationTokenSource.Token));
+ 
+        Func<Task> act = async () => await Sut.FetchTask;
+        await act.Should().NotCompleteWithinAsync(500.Microseconds());
         _cancellationTokenSource.Cancel();
         _formatter.Received(0).Decode(Arg.Any<string>());
     }
@@ -73,17 +70,12 @@ public class RedisStreamSubjectWriterTests : IAsyncLifetime
     {
         var entries = new[] { StreamEntry.Null };
         _database.StreamReadGroupAsync(_context.Topic, _context.ConsumerGroup, _context.ConsumerName, ">", _context.PollBatchSize)
-            .ThrowsAsyncForAnyArgs(c =>
-            {
-                throw new Exception();
-            });
+            .ThrowsAsyncForAnyArgs(_ => throw new Exception());
 
-        var s = Sut;
-        await Task.Delay(_pollInterval.Multiply(5));
-        Sut.FetchTaskStatus.Should().NotBe(TaskStatus.Faulted);
+        Func<Task> act = async () => await Sut.FetchTask;
+        await act.Should().NotCompleteWithinAsync(_pollInterval.Multiply(5));
         _cancellationTokenSource.Cancel();
-        await Task.Delay(100);
-        Sut.FetchTaskStatus.Should().Be(TaskStatus.RanToCompletion);
+        await act.Should().CompleteWithinAsync(_pollInterval.Multiply(10));
         _formatter.Received(0).Decode(Arg.Any<string>());
     }
 
@@ -92,10 +84,7 @@ public class RedisStreamSubjectWriterTests : IAsyncLifetime
     {
         var entries = new[] { StreamEntry.Null };
         _database.StreamReadGroupAsync(_context.Topic, _context.ConsumerGroup, _context.ConsumerName, ">", _context.PollBatchSize)
-            .ThrowsAsyncForAnyArgs(c =>
-            {
-                throw new Exception();
-            });
+            .ThrowsAsyncForAnyArgs(_ => throw new Exception());
         _logger.When(l =>l.Log(LogLevel.Error, Arg.Any<EventId>(), Arg.Any<object>(), Arg.Any<Exception?>(), Arg.Any<Func<object, Exception?, string>>()))
             .Do(ctx =>
             {
@@ -106,8 +95,8 @@ public class RedisStreamSubjectWriterTests : IAsyncLifetime
             });
 
         var s = Sut;
-        await Task.Delay(_pollInterval.Multiply(5));
-        Sut.FetchTaskStatus.Should().NotBe(TaskStatus.Faulted);
+        Func<Task> act = async () => await Sut.FetchTask;
+        await act.Should().NotCompleteWithinAsync(_pollInterval.Multiply(5));
         _cancellationTokenSource.Cancel();
         _formatter.Received(0).Decode(Arg.Any<string>());
     }
@@ -118,10 +107,10 @@ public class RedisStreamSubjectWriterTests : IAsyncLifetime
         var entries = new[] { new StreamEntry(_fixture.Create<string>(), new[] { new NameValueEntry(_fieldName, _fixture.Create<string>()) }) };
         _formatter.Decode(Arg.Any<string>()).Returns(default(ICacheEvent?));
         _database.StreamReadGroupAsync(_context.Topic, _context.ConsumerGroup, _context.ConsumerName, ">", _context.PollBatchSize)
-            .Returns(c => entries);
+            .Returns(_ => entries);
 
-        var s = Sut;
-        await Task.Delay(100);
+        Func<Task> act = async () => await Sut.FetchTask;
+        await act.Should().NotCompleteWithinAsync(_pollInterval.Multiply(5));
         _cancellationTokenSource.Cancel();
         _formatter.Received().Decode(Arg.Any<string>());
     }
@@ -135,13 +124,10 @@ public class RedisStreamSubjectWriterTests : IAsyncLifetime
             Valid = false,
         });
         _database.StreamReadGroupAsync(_context.Topic, _context.ConsumerGroup, _context.ConsumerName, ">", _context.PollBatchSize)
-            .Returns(c =>
-            {
-                return entries;
-            });
+            .Returns(_ => entries);
 
-        var s = Sut;
-        await Task.Delay(_pollInterval.Multiply(7));
+        Func<Task> act = async () => await Sut.FetchTask;
+        await act.Should().NotCompleteWithinAsync(_pollInterval.Multiply(7));
         _cancellationTokenSource.Cancel();
         _formatter.Received().Decode(Arg.Any<string>());
     }
@@ -155,13 +141,10 @@ public class RedisStreamSubjectWriterTests : IAsyncLifetime
             Valid = true,
         });
         _database.StreamReadGroupAsync(_context.Topic, _context.ConsumerGroup, _context.ConsumerName, ">", _context.PollBatchSize)
-            .Returns(c =>
-            {
-                return entries;
-            });
+            .Returns(_ => entries);
 
-        var s = Sut;
-        await Task.Delay(_pollInterval.Multiply(5));
+        Func<Task> act = async () => await Sut.FetchTask;
+        await act.Should().NotCompleteWithinAsync(_pollInterval.Multiply(5));
         _cancellationTokenSource.Cancel();
         _formatter.Received().Decode(Arg.Any<string>());
     }
@@ -175,14 +158,10 @@ public class RedisStreamSubjectWriterTests : IAsyncLifetime
             Valid = true,
         });
         _database.StreamReadGroupAsync(_context.Topic, _context.ConsumerGroup, _context.ConsumerName, ">", _context.PollBatchSize)
-            .Returns(c =>
-            {
-                return entries;
-            });
+            .Returns(_ => entries);
 
-        var s = Sut;
-        await Task.Delay(_pollInterval.Multiply(5));
-        Sut.FetchTaskStatus.Should().NotBe(TaskStatus.Faulted);
+        Func<Task> act = async () => await Sut.FetchTask;
+        await act.Should().NotCompleteWithinAsync(_pollInterval.Multiply(5));
         _cancellationTokenSource.Cancel();
         _formatter.Received().Decode(Arg.Any<string>());
     }

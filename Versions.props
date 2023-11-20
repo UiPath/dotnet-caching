@@ -2,44 +2,62 @@
 <Project>
   <PropertyGroup>
     <LangVersion>10.0</LangVersion>
-    <TargetFramework>net6.0</TargetFramework>
+    <TargetFrameworks>net6.0;net7.0;net8.0</TargetFrameworks>
   </PropertyGroup>
-
-
   <PropertyGroup Label="Libraries">
-    <AspNetCoreVersion>6.0.10</AspNetCoreVersion>
-    <MicrosoftAspNetCoreAuthenticationVersion>6.0.10</MicrosoftAspNetCoreAuthenticationVersion>
-    <DotNetMajorVersion>7.0.0</DotNetMajorVersion>
-    <MicrosoftExtensionsConfigurationVersion>7.0.0</MicrosoftExtensionsConfigurationVersion>
-    <MicrosoftExtensionsLoggingAbstractionsVersion>7.0.0</MicrosoftExtensionsLoggingAbstractionsVersion>
-    <EntityFrameworkVersion>7.0.0</EntityFrameworkVersion>
     <StackExchangeRedisVersion>2.7.4</StackExchangeRedisVersion>
-    <MemoryCacheVersion>7.0.0</MemoryCacheVersion>
-    <CloudEventsVersion>2.5.0</CloudEventsVersion>
-    <FluentValidation>11.2.2</FluentValidation>
-    <NSwag>13.18.0</NSwag>
-    <Polly>7.2.3</Polly>
-    <System>4.3.0</System>
+    <CloudEventsVersion>2.7.1</CloudEventsVersion>
+    <NSwag>13.20.0</NSwag>
+    <Polly>8.2.0</Polly>
     <SystemReactive>6.0.0</SystemReactive>
     <NuGetVersion>6.3.1</NuGetVersion>
-    <UiPathTelemetry>1.2.0-beta1354-0447</UiPathTelemetry>
+    <UiPathTelemetry>1.3.2-beta1685-0573</UiPathTelemetry>
     <UiPathFeatureFlags>1.3.1</UiPathFeatureFlags>
 </PropertyGroup>
-
+  <PropertyGroup Condition="'$(TargetFramework)' == 'net6.0'">
+    <DotNetMajorVersion>6.0.0</DotNetMajorVersion>
+    <MicrosoftExtensionsConfigurationVersion>6.0.0</MicrosoftExtensionsConfigurationVersion>
+    <MicrosoftExtensionsLoggingAbstractionsVersion>6.0.4</MicrosoftExtensionsLoggingAbstractionsVersion>
+    <MemoryCacheVersion>6.0.1</MemoryCacheVersion>
+    <MicrosoftExtensionsHosting>6.0.1</MicrosoftExtensionsHosting>
+    <MicrosoftExtensionsDependencyInjection>6.0.1</MicrosoftExtensionsDependencyInjection>
+    <MicrosoftExtensionsOptions>6.0.0</MicrosoftExtensionsOptions>
+    <MicrosoftExtensionsConfigurationBinder>6.0.0</MicrosoftExtensionsConfigurationBinder>
+  </PropertyGroup>
+  <PropertyGroup Condition="'$(TargetFramework)' == 'net7.0'">
+    <DotNetMajorVersion>7.0.0</DotNetMajorVersion>
+    <MicrosoftExtensionsConfigurationVersion>7.0.0</MicrosoftExtensionsConfigurationVersion>
+    <MicrosoftExtensionsLoggingAbstractionsVersion>7.0.1</MicrosoftExtensionsLoggingAbstractionsVersion>
+    <MemoryCacheVersion>7.0.0</MemoryCacheVersion>
+    <MicrosoftExtensionsHosting>7.0.1</MicrosoftExtensionsHosting>
+    <MicrosoftExtensionsDependencyInjection>7.0.0</MicrosoftExtensionsDependencyInjection>
+    <MicrosoftExtensionsOptions>7.0.1</MicrosoftExtensionsOptions>
+    <MicrosoftExtensionsConfigurationBinder>7.0.4</MicrosoftExtensionsConfigurationBinder>
+  </PropertyGroup>
+  <PropertyGroup Condition="'$(TargetFramework)' == 'net8.0'">
+    <DotNetMajorVersion>8.0.0</DotNetMajorVersion>
+    <MicrosoftExtensionsConfigurationVersion>8.0.0</MicrosoftExtensionsConfigurationVersion>
+    <MicrosoftExtensionsLoggingAbstractionsVersion>8.0.0</MicrosoftExtensionsLoggingAbstractionsVersion>
+    <MemoryCacheVersion>8.0.0</MemoryCacheVersion>
+    <MicrosoftExtensionsHosting>8.0.0</MicrosoftExtensionsHosting>
+    <MicrosoftExtensionsDependencyInjection>8.0.0</MicrosoftExtensionsDependencyInjection>
+    <MicrosoftExtensionsOptions>8.0.0</MicrosoftExtensionsOptions>
+    <MicrosoftExtensionsConfigurationBinder>8.0.0</MicrosoftExtensionsConfigurationBinder>
+  </PropertyGroup>
   <PropertyGroup Label="Test Libraries">
-    <FluentAssertionsVersion>6.7.0</FluentAssertionsVersion>
+    <FluentAssertionsVersion>6.12.0</FluentAssertionsVersion>
     <FluentAssertionsJson>6.1.0</FluentAssertionsJson>
 
     <!--update pipeline with the same version VisualStudioTestPlatformInstaller@1-->
-    <MicrosoftTestSdkVersion>17.3.2</MicrosoftTestSdkVersion>
+    <MicrosoftTestSdkVersion>17.8.0</MicrosoftTestSdkVersion>
 
-    <xUnitVersion>2.4.2</xUnitVersion>
-    <NSubstituteVersion>4.4.0</NSubstituteVersion>
-    <AutoFixtureVersion>4.17.0</AutoFixtureVersion>
-    <xUnitRunnerVersion>2.4.3</xUnitRunnerVersion>
+    <xUnitVersion>2.6.2</xUnitVersion>
+    <NSubstituteVersion>5.1.0</NSubstituteVersion>
+    <AutoFixtureVersion>4.18.0</AutoFixtureVersion>
+    <xUnitRunnerVersion>2.5.4</xUnitRunnerVersion>
     <NSubstituteAnalyzersVersion>1.0.16</NSubstituteAnalyzersVersion>
 
     <!--update coverlet.runsettings InProcDataCollector.assemblyQualifiedName-->
-    <coverletVersion>3.2.0</coverletVersion>
+    <coverletVersion>6.0.0</coverletVersion>
   </PropertyGroup>
 </Project>

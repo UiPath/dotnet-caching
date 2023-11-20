@@ -1,5 +1,6 @@
 ﻿using System.Reactive.Subjects;
 using System.Text;
+using FluentAssertions.Extensions;
 using NSubstitute.ExceptionExtensions;
 using StackExchange.Redis;
 using UiPath.Platform.Caching.Policies;
@@ -15,7 +16,7 @@ public class RedisPubSubTopicTests : IAsyncLifetime
     private ISubscriber _subscriber = default!;
     private IObserver<ICacheEvent> _observer = default!;
     private bool _onCompleted = false;
-    Action<RedisChannel, RedisValue>? _handler = null;
+    Action<RedisChannel, RedisValue>? _handler;
     private TestCacheEventFormatterProxy _formatter = default!;
     private IDatabase _database = default!;
     private IRedisConnector _redisConnector = default!;
@@ -24,7 +25,7 @@ public class RedisPubSubTopicTests : IAsyncLifetime
     private IRedisChannelStrategy _redisChannelStrategy = default!;
     private IPolicyHolder _policyHolder = default!;
 
-    private RedisPubSubTopic<ICacheEvent>? _sut = null;
+    private RedisPubSubTopic<ICacheEvent>? _sut;
     private RedisPubSubTopic<ICacheEvent> Sut => _sut ??= _fixture.Create<RedisPubSubTopic<ICacheEvent>>();
 
     [Fact]
@@ -49,7 +50,10 @@ public class RedisPubSubTopicTests : IAsyncLifetime
         var bytes = _formatter.Encode(cloudEvent);
         var message = Encoding.UTF8.GetString(bytes.Span);
         _handler?.Invoke(RedisChannel.Literal(_topicKey.Name), message);
-        await Task.Delay(500);
+        for (var count = 0; _onNextMessages.Count == 0 && count < 100; count++)
+        {
+            await Task.Delay(100.Milliseconds());
+        }
         _onNextMessages.FirstOrDefault().Should().BeEquivalentTo(cloudEvent);
         _onCompleted.Should().BeFalse();
     }
@@ -81,10 +85,9 @@ public class RedisPubSubTopicTests : IAsyncLifetime
     [Fact]
     public void Exception_is_thrown_when_subscribe_fails()
     {
-
         TopicKey channel = _fixture.Create<string>();
         _subscriber.When(x => x.Subscribe(Arg.Any<RedisChannel>(), Arg.Any<Action<RedisChannel, RedisValue>>(), Arg.Any<CommandFlags>()))
-            .Do(x => { throw new Exception(); });
+            .Do(_ => throw new Exception());
 
         Action act = () => _fixture.Create<RedisPubSubTopic<ICacheEvent>>();
         act.Should().Throw<Exception>();

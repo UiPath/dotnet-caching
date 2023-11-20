@@ -27,10 +27,10 @@ resources:
       endpoint: 'UiPath'
 
 variables:
-  OrganizationName: "uipath"
+  OrganizationName: UiPath
   BuildDefinitionName: $(Build.DefinitionName)
-  ProjectShortName: "Caching"
-  ProjectName: "Caching"
+  ProjectShortName: Caching
+  ProjectName: Caching
   GitVersion.SemVer: ''
 
 stages:
@@ -39,45 +39,66 @@ stages:
     - job: BuildCachingLibrary
       displayName: Caching - Build & Run tests
       pool:
-        vmImage: windows-2022
-        demands:
-          - msbuild
-          - visualstudio
+        vmImage: ubuntu-latest
       variables:
-        BuildConfiguration: "Release"
-        BuildPlatform: "Any CPU"
-        MSBuildArguments: "/p:DeployOnBuild=True;PublishProfile=local /p:GetVersion=false /p:GenerateGitVersionInformation=false /p:UpdateVersionProperties=false"
+        BuildConfiguration: Release
         Solution: "$(Build.SourcesDirectory)/Caching/Caching.sln"
-        VSVersion: "17.0"
-        ArtifactsOutputPath: "Packages"
+        ArtifactsOutputPath: Packages
         Build.Repository.Clean: true
+        build_counter: $[counter('build_counter_1_0_0', 1)]
 
       steps:
-      - task: UseGitVersion@5
-        displayName: gitversion
+      - task: gitversion/setup@0
+        displayName: 'Setup GitVersion'
         inputs:
           versionSpec: '5.x'
+      
+      - task: gitversion/execute@0
+        displayName: 'Execute GitVersion'
+        inputs:
+          runtime: 'core'
           useConfigFile: true
           configFilePath: '$(Build.SourcesDirectory)/Caching/GitVersion.yml'
-          updateAssemblyInfoFilename: '$(Build.SourcesDirectory)/Caching/GlobalAssemblyInfo.cs'
-          updateAssemblyInfo: true
+          additionalArguments: '/output json /output buildserver /updateassemblyinfo \"$(Build.SourcesDirectory)/Caching/GlobalAssemblyInfo.cs\"'
 
-      - powershell: |
-          $nugetVersion= $env:GITVERSION_NUGETVERSION + '-' + $(Build.BuildId)
+      - pwsh: |
+          $nugetVersion= $env:GITVERSION_NUGETVERSION + '-' + $env:BUILD_COUNTER.PadLeft(4,'0')
           Write-Host $nugetVersion 
           Write-Host "##vso[task.setvariable variable=GitVersion.NuGetVersion;]$nugetVersion"
+          Write-Host '##vso[build.updatebuildnumber]$(Build.BuildNumber).$(build_counter)'
         displayName: "Adjust build number to ensure package unique name"
         condition: not(startsWith(variables['Build.SourceBranch'], 'refs/heads/release'))
 
-      - powershell: |
+      - pwsh: |
           Write-Host "Variables for current build:"
           Get-ChildItem ENV:*
-        displayName: "Print variables"
+        displayName: Print variables
         continueOnError: true
         condition: always()
 
+      - task: UseDotNet@2
+        displayName: Use .NET 6 SDK
+        inputs:
+          packageType: sdk
+          version: 6.x
+          includePreviewVersions: false
+
+      - task: UseDotNet@2
+        displayName: Use .NET 7 SDK
+        inputs:
+          packageType: sdk
+          version: 7.x
+          includePreviewVersions: false
+
+      - task: UseDotNet@2
+        displayName: Use .NET 8 SDK
+        inputs:
+          packageType: sdk
+          useGlobalJson: true
+          includePreviewVersions: false
+          
       - task: NuGetToolInstaller@0
-        displayName: "Use NuGet 6.x"
+        displayName: Use NuGet 6.x
         inputs:
           versionSpec: '6.x'
 
@@ -87,9 +108,9 @@ stages:
       - task: NuGetCommand@2
         displayName: "Restore Nuget packages"
         inputs:
-          command: 'restore'
-          restoreSolution: "$(Solution)"
-          feedsToUse: "config"
+          command: restore
+          restoreSolution: $(Solution)
+          feedsToUse: config
           nugetConfigPath: "$(Build.SourcesDirectory)/Caching/NuGet.Config"
 
       - template: /Sonar/prepare-sonar-coverage.yml@sonar
@@ -98,22 +119,27 @@ stages:
           serviceConnectionName: SonarConnection
           runsettingsFile: "$(Build.SourcesDirectory)/Caching/CodeCoverage.runsettings"
 
-      - task: VSBuild@1
+      - task: DotNetCoreCLI@2
         displayName: "Build Solution"
         inputs:
-          solution: "$(Solution)"
-          vsVersion: "$(VSVersion)"
-          msbuildArgs: "$(MSBuildArguments)"
-          platform: "$(BuildPlatform)"
-          configuration: "$(BuildConfiguration)"
-          clean: true
-          maximumCpuCount: true
+          command: build
+          projects: $(Solution)
+          arguments: >
+            --configuration $(BuildConfiguration)
+            --no-restore
+            /p:Company=$(OrganizationName)
+            /p:SignAssembly=false
+            /p:IgnoreCollectDist=false
+            /p:GetVersion=false
+            /p:GenerateGitVersionInformation=false
+            /p:UpdateVersionProperties=false
 
       - task: DotNetCoreCLI@2
         displayName: 'Run tests'
         inputs:
-          command: 'test'
-          projects: 'Caching/**/*.Tests.csproj'
+          command: test
+          projects: |
+            Caching/**/Caching.Tests.csproj
           arguments: '--collect "Code coverage" --logger trx --configuration $(BuildConfiguration)'
 
       - template: /Sonar/analyze-sonar-coverage.yml@sonar
@@ -123,12 +149,12 @@ stages:
       - task: DotNetCoreCLI@2
         displayName: "Create Package"
         inputs:
-          command: "pack"
+          command: pack
           packagesToPack: "**/Caching.*.csproj;"
           versioningScheme: byEnvVar
           versionEnvVar: 'GitVersion.NuGetVersion'
-          nobuild: "true"
-          includeSymbols: "false"
+          nobuild: true
+          includeSymbols: false
           outputDir: "$(ArtifactsOutputPath)"
           configurationToPack: "$(BuildConfiguration)"
         condition: succeeded()
@@ -152,7 +178,7 @@ stages:
         displayName: 'Publish package to feature feed'
         environment: FEATURE
         pool:
-          vmImage: windows-2022
+          vmImage: ubuntu-latest
         strategy:
           runOnce:
             deploy:
@@ -175,7 +201,7 @@ stages:
         displayName: 'Publish package to alpha feed'
         environment: ALPHA
         pool:
-          vmImage: windows-2022
+          vmImage: ubuntu-latest
         strategy:
           runOnce:
             deploy:
@@ -198,7 +224,7 @@ stages:
         displayName: 'Publish package to beta feed'
         environment: BETA
         pool:
-          vmImage: windows-2022
+          vmImage: ubuntu-latest
         strategy:
           runOnce:
             deploy:
@@ -221,7 +247,7 @@ stages:
         displayName: 'Publish package to release feed'
         environment: RELEASE
         pool:
-          vmImage: windows-2022
+          vmImage: ubuntu-latest
         strategy:
           runOnce:
             deploy:

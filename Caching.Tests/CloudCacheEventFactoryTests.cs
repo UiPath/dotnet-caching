@@ -39,7 +39,6 @@ public class CloudCacheEventFactoryTests : IAsyncLifetime
     }
 
     [Theory]
-    [InlineData(null)]
     [InlineData("")]
     [InlineData(" ")]
     public void Exception_is_thrown_type_invalid(string type)

@@ -13,7 +13,7 @@ public sealed class RedisConnector : IRedisConnector
     private readonly Timer? _hangDetectionTimer;
 
     private Lazy<IConnectionMultiplexer> _lazyCacheConnectionMultiplexer;
-    private int _reconnecting = 0;
+    private int _reconnecting;
     private ReadWriteStatus? _lastMasterMetrics;
 
     public RedisConnector(ICachingTelemetryProvider telemetryProvider, Func<IConnectionMultiplexer> multiplexerFactory, IOptions<RedisConnectionOptions> redisOptions)
@@ -29,7 +29,6 @@ public sealed class RedisConnector : IRedisConnector
             _hangDetectionTimer = new Timer(_ => OnHangScan(), null, TimeSpan.FromSeconds(30), TimeSpan.FromSeconds(5));
         }
     }
-
 
     public event EventHandler? OnReconnect;
 
@@ -133,6 +132,9 @@ public sealed class RedisConnector : IRedisConnector
         };
     }
 
+#pragma warning disable IDE0079 // Remove unnecessary suppression
+    [SuppressMessage("SonarQube", "S3011:Reflection should not be used to create instances of types", Justification = "By design")]
+#pragma warning restore IDE0079 // Remove unnecessary suppression
     private ReadWriteStatus? GetMasterPhysicalConnectionMetrics(IConnectionMultiplexer multiplexer)
     {
         // single shard only is supported
@@ -196,7 +198,7 @@ public sealed class RedisConnector : IRedisConnector
         }
 
         // First scan or master has changed (due to failover)
-        if (lastScanMetrics == null || !lastScanMetrics.EndPoint.Equals(currentMasterMetrics.EndPoint))
+        if (lastScanMetrics?.EndPoint.Equals(currentMasterMetrics.EndPoint) != true)
         {
             return;
         }

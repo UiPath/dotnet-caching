@@ -12,10 +12,6 @@ internal sealed class EventDispatcher<T> : IDisposable
     private readonly ILogger _logger;
     private readonly CancellationTokenSource _stopTokenSource;
     private readonly CancellationToken _cancellationToken;
-#pragma warning disable IDE0052 // Remove unread private members
-    [SuppressMessage("SonarLint.Rule", "S4487:\"Unread\" members should be removed")]
-    private readonly Task _consumeTask;
-#pragma warning restore IDE0052 // Remove unread private members
 
     public EventDispatcher(TopicKey topicKey, ChannelReader<T> reader, ISubject<T> subject, ILogger logger, CancellationToken cancellationToken)
     {
@@ -25,8 +21,10 @@ internal sealed class EventDispatcher<T> : IDisposable
         _logger = logger;
         _stopTokenSource = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         _cancellationToken = _stopTokenSource.Token;
-        _consumeTask = Task.Run(Consume, _cancellationToken);
+        ConsumeTask = Task.Run(Consume, _cancellationToken);
     }
+
+    internal Task ConsumeTask { get; }
 
     private async Task Consume()
     {

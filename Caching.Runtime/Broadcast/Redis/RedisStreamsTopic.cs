@@ -85,7 +85,7 @@ public sealed class RedisStreamsTopic<T> : ITopic<T>
         _subscriber.Dispose();
         OnDisposed?.Invoke(this, EventArgs.Empty);
     }
- 
+
     private void EnsureStreamGroup()
     {
         try

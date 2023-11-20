@@ -1,7 +1,7 @@
 ﻿<Project Sdk="Microsoft.NET.Sdk">
 
   <PropertyGroup>
-    <TargetFramework>$(TargetFramework)</TargetFramework>
+    <TargetFrameworks>$(TargetFrameworks)</TargetFrameworks>
     <IsPackable>false</IsPackable>
     <SonarQubeExclude>false</SonarQubeExclude>
     <SonarQubeTestProject>true</SonarQubeTestProject>

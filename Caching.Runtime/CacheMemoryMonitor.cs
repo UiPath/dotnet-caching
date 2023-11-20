@@ -1,4 +1,5 @@
-﻿using System.Globalization;
+﻿#if !NET6_0
+using System.Globalization;
 using UiPath.Platform.Caching.Telemetry;
 
 namespace UiPath.Platform.Caching;
@@ -6,15 +7,11 @@ namespace UiPath.Platform.Caching;
 internal sealed class CacheMemoryMonitor : IDisposable
 {
     private readonly string _statsMetricName;
-
     private readonly MemoryCache _memoryCache;
-
     private readonly ICachingTelemetryProvider _telemetryProvider;
-
-    private readonly Task _monitorTask;
-
     private readonly PeriodicTimer _timer;
-
+    private readonly CancellationToken _cancelationToken;
+    private readonly CancellationTokenSource _cancellationTokenSource = new();
     private bool _disposed;
 
     public CacheMemoryMonitor(string statsMetricName,
@@ -26,14 +23,15 @@ internal sealed class CacheMemoryMonitor : IDisposable
         _memoryCache = memoryCache;
         _telemetryProvider = telemetryProvider;
         _timer = new PeriodicTimer(statisticsFlushInterval);
-        _monitorTask = Task.Run(StartMonitor);
+        _cancelationToken = _cancellationTokenSource.Token;
+        MonitorTask = Task.Run(StartMonitor, _cancelationToken);
     }
 
-    internal TaskStatus MonitorTaskStatus => _monitorTask.Status;
+    internal Task MonitorTask { get; }
 
     private async Task StartMonitor()
     {
-        while (!_disposed && await _timer.WaitForNextTickAsync())
+        while (!(_disposed || _cancelationToken.IsCancellationRequested) && await _timer.WaitForNextTickAsync())
         {
             var currentStats = _memoryCache.GetCurrentStatistics();
             if (currentStats == null)
@@ -53,7 +51,9 @@ internal sealed class CacheMemoryMonitor : IDisposable
 
     public void Dispose()
     {
-        _timer.Dispose();
         _disposed = true;
+        _cancellationTokenSource.Cancel();
+        _timer.Dispose();
     }
 }
+#endif

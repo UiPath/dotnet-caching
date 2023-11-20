@@ -15,8 +15,10 @@ public sealed class MemoryCacheFactory : IMemoryCacheFactory
         new MemoryCache(
            Options.Create(new MemoryCacheOptions
            {
-               Clock = _clock,
-               TrackStatistics = memoryStatisticsOptions.TrackStatistics
+#if !NET6_0
+               TrackStatistics = memoryStatisticsOptions.TrackStatistics,
+ #endif
+               Clock = _clock
            }),
            _loggerFactory);
 }

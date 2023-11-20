@@ -1,7 +1,7 @@
 ﻿<Project Sdk="Microsoft.NET.Sdk">
 
   <PropertyGroup>
-    <TargetFramework>$(TargetFramework)</TargetFramework>
+    <TargetFrameworks>$(TargetFrameworks)</TargetFrameworks>
     <GeneratePackageOnBuild>true</GeneratePackageOnBuild>
     <PackageRequireLicenseAcceptance>false</PackageRequireLicenseAcceptance>
     <Description>A package containing L2 (Memory and Redis) caching classes</Description>
@@ -13,8 +13,8 @@
   <ItemGroup>
     <PackageReference Include="Microsoft.Extensions.Diagnostics.HealthChecks.Abstractions" Version="7.0.13" />
     <PackageReference Include="Microsoft.Extensions.Hosting.Abstractions" Version="$(DotNetMajorVersion)" />
-    <PackageReference Include="Microsoft.Extensions.Options" Version="$(DotNetMajorVersion)" />
-    <PackageReference Include="Microsoft.Extensions.Configuration.Binder" Version="$(DotNetMajorVersion)" />
+    <PackageReference Include="Microsoft.Extensions.Options" Version="$(MicrosoftExtensionsOptions)" />
+    <PackageReference Include="Microsoft.Extensions.Configuration.Binder" Version="$(MicrosoftExtensionsConfigurationBinder)" />
     <PackageReference Include="Microsoft.Extensions.Caching.Memory" Version="$(MemoryCacheVersion)" />
     <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" Version="$(MicrosoftExtensionsLoggingAbstractionsVersion)" />
     <PackageReference Include="StackExchange.Redis" Version="$(StackExchangeRedisVersion)" />

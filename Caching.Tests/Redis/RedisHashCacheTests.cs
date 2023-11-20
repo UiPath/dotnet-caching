@@ -45,7 +45,6 @@ public class RedisHashCacheTests : IAsyncLifetime
     }
 
     [Theory]
-    [InlineData(null)]
     [InlineData("")]
     public async Task Get_data_key(string key)
     {
@@ -577,7 +576,7 @@ public class RedisHashCacheTests : IAsyncLifetime
     [Theory]
     [InlineData(null)]
     [InlineData("")]
-    public async Task Remove_cacheKey_validates_input(string cacheKey)
+    public async Task Remove_cacheKey_validates_input(string? cacheKey)
     {
         Func<Task> act = async () => { await Sut.RemoveAsync<string>(cacheKey); };
         await act.Should().ThrowAsync<ArgumentException>();
