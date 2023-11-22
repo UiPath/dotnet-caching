@@ -11,6 +11,10 @@ public class CacheOptions
 
     public bool BroadcastEnabled { get; set; } = true;
 
+    public bool ShardKeyEnabled { get; set; }
+
+    public bool AuditEnabled { get; set; }
+
     public string DefaultCache { get; set; } = KnownCacheProviderNames.InMemoryRedis;
 
     public string DefaultTopic { get; set; } = KnownTopicNames.RedisPubSub;
@@ -26,4 +30,6 @@ public class CacheOptions
     public Type? CacheKeyStrategyFactory { get; set; }
 
     public Type? TopicKeyStrategyFactory { get; set; }
+
+    public int LargeValueThreshold { get; set; } = 1024*1024;
 }

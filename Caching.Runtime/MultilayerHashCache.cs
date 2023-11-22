@@ -322,6 +322,6 @@ public sealed class MultilayerHashCache : IHashCache
     private static bool IsDefault<T>(IDictionary<string, T?>? value) =>
         value == null || value.Count == 0;
 
-    private static IDictionary<string, T?> Empty<T>() =>
+    private static ImmutableDictionary<string, T?> Empty<T>() =>
         ImmutableDictionary<string, T?>.Empty;
 }

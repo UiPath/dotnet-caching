@@ -82,6 +82,7 @@ stages:
           packageType: sdk
           version: 6.x
           includePreviewVersions: false
+          performMultiLevelLookup: true
 
       - task: UseDotNet@2
         displayName: Use .NET 7 SDK
@@ -89,6 +90,7 @@ stages:
           packageType: sdk
           version: 7.x
           includePreviewVersions: false
+          performMultiLevelLookup: true
 
       - task: UseDotNet@2
         displayName: Use .NET 8 SDK
@@ -96,6 +98,7 @@ stages:
           packageType: sdk
           useGlobalJson: true
           includePreviewVersions: false
+          performMultiLevelLookup: true
           
       - task: NuGetToolInstaller@0
         displayName: Use NuGet 6.x

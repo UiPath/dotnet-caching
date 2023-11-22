@@ -21,6 +21,6 @@ public sealed class DefaultRedisKeyStrategyFactory : IRedisKeyStrategyFactory
 
         var separator = Guard.NotWhiteSpace(options.Separator, nameof(options.Separator));
         var prefix = string.Join(separator, Guard.NotNullOrWhiteSpace(options.AppShortName, nameof(options.AppShortName)), typePrefix);
-        return new PrefixRedisKeyStrategy(prefix, separator);
+        return options.ShardKeyEnabled ? new ShardPrefixRedisKeyStrategy(prefix, separator) : new PrefixRedisKeyStrategy(prefix, separator);
     }
 }
