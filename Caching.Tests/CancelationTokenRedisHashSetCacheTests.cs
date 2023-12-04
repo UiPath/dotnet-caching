@@ -31,7 +31,7 @@ public class CancelationTokenRedisHashSetCacheTests
     public Task GetOrAdd() =>
         ValidateCancellationToken(async (sut, token) =>
         {
-            await sut.GetOrAddAsync((CacheKey)_fixture.Create<string>(), () => Task.FromResult(_fixture.Create<IDictionary<string, string?>>()), _fixture.Create<TimeSpan>(), token);
+            await sut.GetOrAddAsync((CacheKey)_fixture.Create<string>(), () => ValueTask.FromResult(_fixture.Create<IDictionary<string, string?>>()), _fixture.Create<TimeSpan>(), token);
         });
 
     [Fact]
