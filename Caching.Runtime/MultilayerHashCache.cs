@@ -43,7 +43,7 @@ public sealed class MultilayerHashCache : IHashCache
         _localMemorySetter = new HashLocalMemorySetter(cacheName, changeTokenFactory, topicFactory, _memoryCache, logger, _clock, _cacheOptions);
     }
 
-    public async Task<T?> GetItemAsync<T>(CacheKey cacheKey, string field, CancellationToken token = default)
+    public async ValueTask<T?> GetItemAsync<T>(CacheKey cacheKey, string field, CancellationToken token = default)
     {
         var cacheEntry = await GetCacheEntryAsync<T>(_entryBuilder.BuildEntryOptions<T>(cacheKey, new[] { field }, default, token: token));
         if (cacheEntry.Value == null)
@@ -54,31 +54,31 @@ public sealed class MultilayerHashCache : IHashCache
         return cacheEntry.Value.TryGetValue(field, out var value) ? value : default;
     }
 
-    public async Task<IDictionary<string, T?>> GetAsync<T>(CacheKey cacheKey, CancellationToken token = default)
+    public async ValueTask<IDictionary<string, T?>> GetAsync<T>(CacheKey cacheKey, CancellationToken token = default)
     {
         var cacheEntry = await GetCacheEntryAsync<T>(_entryBuilder.BuildEntryOptions<T>(cacheKey, token));
         return cacheEntry.Value ?? Empty<T>();
     }
 
-    public async Task<IDictionary<string, T?>> GetAsync<T>(CacheKey cacheKey, string[] fields, CancellationToken token = default)
+    public async ValueTask<IDictionary<string, T?>> GetAsync<T>(CacheKey cacheKey, string[] fields, CancellationToken token = default)
     {
         var cacheEntry = await GetCacheEntryAsync<T>(_entryBuilder.BuildEntryOptions<T>(cacheKey, fields, default, token: token));
         return cacheEntry?.Value ?? Empty<T>();
     }
 
-    public Task<ICacheEntry<IDictionary<string, T?>>> GetCacheEntryAsync<T>(CacheKey cacheKey, CancellationToken token = default) =>
+    public ValueTask<ICacheEntry<IDictionary<string, T?>>> GetCacheEntryAsync<T>(CacheKey cacheKey, CancellationToken token = default) =>
         GetCacheEntryAsync<T>(_entryBuilder.BuildEntryOptions<T>(cacheKey, token));
 
-    public Task<IDictionary<string, T?>> GetOrAddAsync<T>(CacheKey cacheKey, Func<Task<IDictionary<string, T?>>> generator, CancellationToken token = default) =>
+    public ValueTask<IDictionary<string, T?>> GetOrAddAsync<T>(CacheKey cacheKey, Func<ValueTask<IDictionary<string, T?>>> generator, CancellationToken token = default) =>
         GetOrAddAsync(cacheKey, generator, _cacheOptions.DefaultExpiration, token);
 
-    public Task<IDictionary<string, T?>> GetOrAddAsync<T>(CacheKey cacheKey, Func<Task<IDictionary<string, T?>>> generator, TimeSpan? expiration = null, CancellationToken token = default) =>
+    public ValueTask<IDictionary<string, T?>> GetOrAddAsync<T>(CacheKey cacheKey, Func<ValueTask<IDictionary<string, T?>>> generator, TimeSpan? expiration = null, CancellationToken token = default) =>
         GetOrAddAsync(cacheKey, generator, _clock.ToDateTimeOffset(expiration), HashCacheSetOption.KeyReplace, token);
 
-    public Task<IDictionary<string, T?>> GetOrAddAsync<T>(CacheKey cacheKey, Func<Task<IDictionary<string, T?>>> generator, DateTimeOffset? expiration = null, CancellationToken token = default) =>
+    public ValueTask<IDictionary<string, T?>> GetOrAddAsync<T>(CacheKey cacheKey, Func<ValueTask<IDictionary<string, T?>>> generator, DateTimeOffset? expiration = null, CancellationToken token = default) =>
         GetOrAddAsync(cacheKey, generator, expiration, HashCacheSetOption.KeyReplace, token);
 
-    public async Task<IDictionary<string, T?>> GetOrAddAsync<T>(CacheKey cacheKey, Func<Task<IDictionary<string, T?>>> generator, DateTimeOffset? expiration = null, HashCacheSetOption? setOption = null, CancellationToken token = default)
+    public async ValueTask<IDictionary<string, T?>> GetOrAddAsync<T>(CacheKey cacheKey, Func<ValueTask<IDictionary<string, T?>>> generator, DateTimeOffset? expiration = null, HashCacheSetOption? setOption = null, CancellationToken token = default)
     {
         var cacheEntryOptions = _entryBuilder.BuildEntryOptions<T>(cacheKey, expiration, setOption ?? HashCacheSetOption.KeyReplace, token);
         var cacheEntry = await GetCacheEntryAsync<T>(cacheEntryOptions).ConfigureAwait(false);
@@ -97,13 +97,13 @@ public sealed class MultilayerHashCache : IHashCache
         return ret;
     }
 
-    public Task<bool> SetAsync<T>(CacheKey cacheKey, IDictionary<string, T?> values, CancellationToken token = default) =>
+    public ValueTask<bool> SetAsync<T>(CacheKey cacheKey, IDictionary<string, T?> values, CancellationToken token = default) =>
         SetAsync(cacheKey, values, _cacheOptions.DefaultExpiration, token);
 
-    public Task<bool> SetAsync<T>(CacheKey cacheKey, IDictionary<string, T?> values, TimeSpan? expiration = null, CancellationToken token = default) =>
+    public ValueTask<bool> SetAsync<T>(CacheKey cacheKey, IDictionary<string, T?> values, TimeSpan? expiration = null, CancellationToken token = default) =>
         SetAsync(cacheKey, values, _clock.ToDateTimeOffset(expiration), token);
 
-    public async Task<bool> SetAsync<T>(CacheKey cacheKey, IDictionary<string, T?> values, DateTimeOffset? expiration = null, CancellationToken token = default)
+    public async ValueTask<bool> SetAsync<T>(CacheKey cacheKey, IDictionary<string, T?> values, DateTimeOffset? expiration = null, CancellationToken token = default)
     {
         var options = _entryBuilder.BuildEntryOptions<T>(cacheKey, expiration, token: token);
         if (IsDefault(values))
@@ -116,7 +116,7 @@ public sealed class MultilayerHashCache : IHashCache
         return await InternalSetAsync(options, values).ConfigureAwait(false);
     }
 
-    public async Task<bool> SetAsync<T>(CacheKey cacheKey, IDictionary<string, T?> values, HashCacheEntryOptions options, CancellationToken token = default)
+    public async ValueTask<bool> SetAsync<T>(CacheKey cacheKey, IDictionary<string, T?> values, HashCacheEntryOptions options, CancellationToken token = default)
     {
         var expiration = options.ExpireTime.HasValue ? _clock.ToDateTimeOffset(options.ExpireTime) : _clock.ToDateTimeOffset(options.TimeToLive);
         var cacheEntryOptions = _entryBuilder.BuildEntryOptions<T>(cacheKey, expiration, options.SetOption, token);
@@ -131,19 +131,19 @@ public sealed class MultilayerHashCache : IHashCache
         return await InternalSetAsync(cacheEntryOptions, values).ConfigureAwait(false);
     }
 
-    public Task<bool> RemoveAsync<T>(CacheKey cacheKey, CancellationToken token = default) =>
+    public ValueTask<bool> RemoveAsync<T>(CacheKey cacheKey, CancellationToken token = default) =>
         RemoveAsync<T>(_entryBuilder.BuildEntryOptions<T>(cacheKey, default, token: token));
 
-    public Task<bool> RefreshAsync<T>(CacheKey cacheKey, CancellationToken token = default) =>
+    public ValueTask<bool> RefreshAsync<T>(CacheKey cacheKey, CancellationToken token = default) =>
         RefreshAsync<T>(cacheKey, _cacheOptions.DefaultExpiration, token);
 
-    public Task<bool> RefreshAsync<T>(CacheKey cacheKey, TimeSpan? expiration = null, CancellationToken token = default) =>
+    public ValueTask<bool> RefreshAsync<T>(CacheKey cacheKey, TimeSpan? expiration = null, CancellationToken token = default) =>
         RefreshAsync<T>(cacheKey, _clock.ToDateTimeOffset(expiration), token);
 
-    public Task<bool> RefreshAsync<T>(CacheKey cacheKey, DateTimeOffset? expiration = null, CancellationToken token = default) =>
+    public ValueTask<bool> RefreshAsync<T>(CacheKey cacheKey, DateTimeOffset? expiration = null, CancellationToken token = default) =>
         RefreshAsync<T>(cacheKey, new HashCacheEntryOptions(expiration), token);
 
-    public async Task<bool> RefreshAsync<T>(CacheKey cacheKey, HashCacheEntryOptions options, CancellationToken token = default)
+    public async ValueTask<bool> RefreshAsync<T>(CacheKey cacheKey, HashCacheEntryOptions options, CancellationToken token = default)
     {
         var expiration = options.ExpireTime.HasValue ? _clock.ToDateTimeOffset(options.ExpireTime) : _clock.ToDateTimeOffset(options.TimeToLive);
         var cacheEntryOptions = _entryBuilder.BuildEntryOptions<T>(cacheKey, expiration, token: token);
@@ -165,7 +165,7 @@ public sealed class MultilayerHashCache : IHashCache
         }
     }
 
-    public async Task<bool> ContainsAsync<T>(CacheKey cacheKey, CancellationToken token = default)
+    public async ValueTask<bool> ContainsAsync<T>(CacheKey cacheKey, CancellationToken token = default)
     {
         var cacheEntryOptions = _entryBuilder.BuildEntryOptions<T>(cacheKey, default, token: token);
         try
@@ -179,7 +179,7 @@ public sealed class MultilayerHashCache : IHashCache
         }
     }
 
-    public async Task<TimeSpan?> TimeToLiveAsync<T>(CacheKey cacheKey, CancellationToken token = default)
+    public async ValueTask<TimeSpan?> TimeToLiveAsync<T>(CacheKey cacheKey, CancellationToken token = default)
     {
         var cacheEntryOptions = _entryBuilder.BuildEntryOptions<T>(cacheKey, default, token: token);
         return _memoryCache.TryGetValue(cacheEntryOptions.CacheKey, out ICacheEntry? value)
@@ -187,7 +187,7 @@ public sealed class MultilayerHashCache : IHashCache
             : await _innerCache.TimeToLiveAsync<T>(cacheEntryOptions.CacheKey, token);
     }
 
-    public async Task<DateTimeOffset?> ExpireTimeAsync<T>(CacheKey cacheKey, CancellationToken token = default)
+    public async ValueTask<DateTimeOffset?> ExpireTimeAsync<T>(CacheKey cacheKey, CancellationToken token = default)
     {
         var cacheEntryOptions = _entryBuilder.BuildEntryOptions<T>(cacheKey, default, token: token);
         return _memoryCache.TryGetValue(cacheEntryOptions.CacheKey, out ICacheEntry? value)
@@ -195,7 +195,7 @@ public sealed class MultilayerHashCache : IHashCache
             : await _innerCache.ExpireTimeAsync<T>(cacheEntryOptions.CacheKey, token);
     }
 
-    public async Task<IDictionary<string, string?>?> GetMetadataAsync<T>(CacheKey cacheKey, CancellationToken token = default)
+    public async ValueTask<IDictionary<string, string?>?> GetMetadataAsync<T>(CacheKey cacheKey, CancellationToken token = default)
     {
         var options = _entryBuilder.BuildEntryOptions<T>(cacheKey, _clock.ToDateTimeOffset(_cacheOptions.DefaultExpiration), token: token);
         return _memoryCache.TryGetValue(options.CacheKey, out ICacheEntry? entry)
@@ -203,7 +203,7 @@ public sealed class MultilayerHashCache : IHashCache
             : await _innerCache.GetMetadataAsync<T>(options.CacheKey, token).ConfigureAwait(false);
     }
 
-    public async Task<bool> SetMetadataAsync<T>(CacheKey cacheKey, IDictionary<string, string?> metadata, CancellationToken token = default)
+    public async ValueTask<bool> SetMetadataAsync<T>(CacheKey cacheKey, IDictionary<string, string?> metadata, CancellationToken token = default)
     {
         var cacheEntryOptions = _entryBuilder.BuildEntryOptions<T>(cacheKey, token);
         _logger.LogTrace("Set metadata for cacheKey {}", cacheEntryOptions.CacheKey);
@@ -244,7 +244,7 @@ public sealed class MultilayerHashCache : IHashCache
         _memoryCache.Dispose();
     }
 
-    private async Task<bool> RemoveAsync<T>(InternalHashCacheEntryOptions options)
+    private async ValueTask<bool> RemoveAsync<T>(InternalHashCacheEntryOptions options)
     {
         _logger.LogDebug("Clearing local cached. cacheKey {}", options.CacheKey);
         try
@@ -261,7 +261,7 @@ public sealed class MultilayerHashCache : IHashCache
         }
     }
 
-    private async Task<ICacheEntry<IDictionary<string, T?>>> GetCacheEntryAsync<T>(InternalHashCacheEntryOptions options)
+    private async ValueTask<ICacheEntry<IDictionary<string, T?>>> GetCacheEntryAsync<T>(InternalHashCacheEntryOptions options)
     {
         if (_memoryCache.TryGetValue(options.CacheKey, out ICacheEntry<IDictionary<string, T?>>? cacheEntry))
         {
@@ -291,7 +291,7 @@ public sealed class MultilayerHashCache : IHashCache
         _localMemorySetter.Set(options, item, typeof(T), _cacheOptions.PrimaryMaxExpiration);
     }
 
-    private async Task<bool> InternalSetAsync<T>(InternalHashCacheEntryOptions options, IDictionary<string, T?> value)
+    private async ValueTask<bool> InternalSetAsync<T>(InternalHashCacheEntryOptions options, IDictionary<string, T?> value)
     {
         try
         {

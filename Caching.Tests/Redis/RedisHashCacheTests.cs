@@ -242,10 +242,10 @@ public class RedisHashCacheTests : IAsyncLifetime
                 return ret;
             });
         var generatorCalled = false;
-        Func<Task<IDictionary<string, string?>>> generator = () =>
+        Func<ValueTask<IDictionary<string, string?>>> generator = () =>
         {
             generatorCalled = true;
-            return Task.FromResult(fields.ToDictionary(k => k, k => _fixture.Create<string>()) as IDictionary<string, string?>);
+            return ValueTask.FromResult(fields.ToDictionary(k => k, k => _fixture.Create<string>()) as IDictionary<string, string?>);
         };
 
         var actual = await Sut.GetOrAddAsync(_cacheKey, generator, _fixture.Create<TimeSpan?>(), CancellationToken.None);
@@ -266,10 +266,10 @@ public class RedisHashCacheTests : IAsyncLifetime
                 return ret;
             });
         var generatorCalled = false;
-        Func<Task<IDictionary<string, string?>>> generator = () =>
+        Func<ValueTask<IDictionary<string, string?>>> generator = () =>
         {
             generatorCalled = true;
-            return Task.FromResult(fields.ToDictionary(k => k, k => _fixture.Create<string>()) as IDictionary<string, string?>);
+            return ValueTask.FromResult(fields.ToDictionary(k => k, k => _fixture.Create<string>()) as IDictionary<string, string?>);
         };
 
         var actual = await Sut.GetOrAddAsync(_cacheKey, generator, CancellationToken.None);
@@ -290,10 +290,10 @@ public class RedisHashCacheTests : IAsyncLifetime
                 return Array.Empty<HashEntry>();
             });
         var generatorCalled = false;
-        Func<Task<IDictionary<string, string?>>> generator = () =>
+        Func<ValueTask<IDictionary<string, string?>>> generator = () =>
         {
             generatorCalled = true;
-            return Task.FromResult(expected);
+            return ValueTask.FromResult(expected);
         };
         _transaction.ExecuteAsync().Returns(true);
         var actual = await Sut.GetOrAddAsync(_cacheKey, generator, _fixture.Create<TimeSpan?>(), CancellationToken.None);
@@ -318,10 +318,10 @@ public class RedisHashCacheTests : IAsyncLifetime
                 return Array.Empty<HashEntry>();
             });
         var generatorCalled = false;
-        Func<Task<IDictionary<string, string?>>> generator = () =>
+        Func<ValueTask<IDictionary<string, string?>>> generator = () =>
         {
             generatorCalled = true;
-            return Task.FromResult(expected);
+            return ValueTask.FromResult(expected);
         };
         _transaction.ExecuteAsync().Returns(true);
         var actual = await Sut.GetOrAddAsync(_cacheKey, generator, _clock.UtcNow.AddDays(1), hashCacheSetOption, CancellationToken.None);
@@ -344,10 +344,10 @@ public class RedisHashCacheTests : IAsyncLifetime
                 return Array.Empty<HashEntry>();
             });
         var generatorCalled = false;
-        Func<Task<IDictionary<string, string?>>> generator = () =>
+        Func<ValueTask<IDictionary<string, string?>>> generator = () =>
         {
             generatorCalled = true;
-            return Task.FromResult(expected);
+            return ValueTask.FromResult(expected);
         };
         var actual = await Sut.GetOrAddAsync(_cacheKey, generator, _fixture.Create<TimeSpan?>(), CancellationToken.None);
         actual.Should().BeEquivalentTo(expected);

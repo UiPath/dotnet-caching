@@ -50,29 +50,29 @@ public sealed class RedisCache : ICache
 
     private IDatabase Database => _redis.Database;
 
-    public Task<T?> GetAsync<T>(CacheKey cacheKey, CancellationToken token = default) =>
+    public ValueTask<T?> GetAsync<T>(CacheKey cacheKey, CancellationToken token = default) =>
         GetAsync<T?>(ToRedisKey(cacheKey, token));
 
-    public Task<T?> GetOrAddAsync<T>(CacheKey cacheKey, Func<Task<T?>> generator, CancellationToken token = default) =>
+    public ValueTask<T?> GetOrAddAsync<T>(CacheKey cacheKey, Func<ValueTask<T?>> generator, CancellationToken token = default) =>
         GetOrAddAsync(cacheKey, generator, _defaultExpiration, token);
 
-    public Task<T?> GetOrAddAsync<T>(CacheKey cacheKey, Func<Task<T?>> generator, DateTimeOffset? expiration = null, CancellationToken token = default) =>
+    public ValueTask<T?> GetOrAddAsync<T>(CacheKey cacheKey, Func<ValueTask<T?>> generator, DateTimeOffset? expiration = null, CancellationToken token = default) =>
         GetOrAddAsync(cacheKey, generator, _clock.ToTimeSpan(expiration), token);
 
-    public Task<T?> GetOrAddAsync<T>(CacheKey cacheKey, Func<Task<T?>> generator, TimeSpan? expiration = null, CancellationToken token = default)
+    public ValueTask<T?> GetOrAddAsync<T>(CacheKey cacheKey, Func<ValueTask<T?>> generator, TimeSpan? expiration = null, CancellationToken token = default)
     {
         var redisKey = ToRedisKey(cacheKey, token);
         ArgumentNullException.ThrowIfNull(generator);
         return GetOrAddInternalAsync(redisKey, generator, _clock.ToTimeSpan(expiration));
     }
 
-    public Task<bool> RefreshAsync<T>(CacheKey cacheKey, CancellationToken token = default) =>
+    public ValueTask<bool> RefreshAsync<T>(CacheKey cacheKey, CancellationToken token = default) =>
         RefreshAsync<T>(cacheKey, _defaultExpiration, token);
 
-    public Task<bool> RefreshAsync<T>(CacheKey cacheKey, TimeSpan? expiration = null, CancellationToken token = default) =>
+    public ValueTask<bool> RefreshAsync<T>(CacheKey cacheKey, TimeSpan? expiration = null, CancellationToken token = default) =>
         RefreshAsync<T>(cacheKey, _clock.ToDateTimeOffset(expiration), token);
 
-    public async Task<bool> RefreshAsync<T>(CacheKey cacheKey, DateTimeOffset? expiration = null, CancellationToken token = default)
+    public async ValueTask<bool> RefreshAsync<T>(CacheKey cacheKey, DateTimeOffset? expiration = null, CancellationToken token = default)
     {
         var redisKey = ToRedisKey(cacheKey, token);
         expiration = _clock.ToDateTimeOffset(expiration);
@@ -100,19 +100,19 @@ public sealed class RedisCache : ICache
         return ret;
     }
 
-    public Task<bool> RemoveAsync<T>(CacheKey cacheKey, CancellationToken token = default) =>
+    public ValueTask<bool> RemoveAsync<T>(CacheKey cacheKey, CancellationToken token = default) =>
         RemoveAsync(ToRedisKey(cacheKey, token));
 
-    public Task<bool> SetAsync<T>(CacheKey cacheKey, T? value, CancellationToken token = default) =>
+    public ValueTask<bool> SetAsync<T>(CacheKey cacheKey, T? value, CancellationToken token = default) =>
         SetAsync(cacheKey, value, _defaultExpiration, token);
 
-    public Task<bool> SetAsync<T>(CacheKey cacheKey, T? value, TimeSpan? expiration = null, CancellationToken token = default) =>
+    public ValueTask<bool> SetAsync<T>(CacheKey cacheKey, T? value, TimeSpan? expiration = null, CancellationToken token = default) =>
         SetInternalAsync(ToRedisKey(cacheKey, token), value, _clock.ToTimeSpan(expiration));
 
-    public Task<bool> SetAsync<T>(CacheKey cacheKey, T? value, DateTimeOffset? expiration = null, CancellationToken token = default) =>
+    public ValueTask<bool> SetAsync<T>(CacheKey cacheKey, T? value, DateTimeOffset? expiration = null, CancellationToken token = default) =>
         SetInternalAsync(ToRedisKey(cacheKey, token), value, _clock.ToTimeSpan(expiration));
 
-    public async Task<bool> ContainsAsync<T>(CacheKey cacheKey, CancellationToken token = default)
+    public async ValueTask<bool> ContainsAsync<T>(CacheKey cacheKey, CancellationToken token = default)
     {
         var redisKey = ToRedisKey(cacheKey, token);
         var ret = false;
@@ -136,7 +136,7 @@ public sealed class RedisCache : ICache
         return ret;
     }
 
-    public async Task<TimeSpan?> TimeToLiveAsync<T>(CacheKey cacheKey, CancellationToken token = default)
+    public async ValueTask<TimeSpan?> TimeToLiveAsync<T>(CacheKey cacheKey, CancellationToken token = default)
     {
         TimeSpan? ret = default;
         var operation = StartOperation();
@@ -158,7 +158,7 @@ public sealed class RedisCache : ICache
         return ret;
     }
 
-    public async Task<DateTimeOffset?> ExpireTimeAsync<T>(CacheKey cacheKey, CancellationToken token = default)
+    public async ValueTask<DateTimeOffset?> ExpireTimeAsync<T>(CacheKey cacheKey, CancellationToken token = default)
     {
         DateTimeOffset? ret = default;
         var operation = StartOperation();
@@ -188,7 +188,7 @@ public sealed class RedisCache : ICache
         return ret;
     }
 
-    private async Task<T?> GetOrAddInternalAsync<T>(RedisKey redisKey, Func<Task<T?>> generator, TimeSpan expiration)
+    private async ValueTask<T?> GetOrAddInternalAsync<T>(RedisKey redisKey, Func<ValueTask<T?>> generator, TimeSpan expiration)
     {
         var ret = await GetAsync<T>(redisKey).ConfigureAwait(false);
         if (!IsDefault(ret))
@@ -207,7 +207,7 @@ public sealed class RedisCache : ICache
         return ret;
     }
 
-    private async Task<bool> SetInternalAsync<T>(RedisKey redisKey, T? value, TimeSpan expiration)
+    private async ValueTask<bool> SetInternalAsync<T>(RedisKey redisKey, T? value, TimeSpan expiration)
     {
         bool ret = default;
         var operation = StartOperation<T>(nameof(SetAsync));
@@ -239,7 +239,7 @@ public sealed class RedisCache : ICache
         return ret;
     }
 
-    private async Task<bool> RemoveAsync(RedisKey redisKey)
+    private async ValueTask<bool> RemoveAsync(RedisKey redisKey)
     {
         bool ret = default;
         var operation = StartOperation();
@@ -261,7 +261,7 @@ public sealed class RedisCache : ICache
         return ret;
     }
 
-    private async Task<T?> GetAsync<T>(RedisKey redisKey)
+    private async ValueTask<T?> GetAsync<T>(RedisKey redisKey)
     {
         T? ret = default;
         var operation = StartOperation<T>();
