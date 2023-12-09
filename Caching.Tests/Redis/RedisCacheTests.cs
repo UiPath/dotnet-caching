@@ -444,7 +444,7 @@ public class RedisCacheTests : IAsyncLifetime
         _fixture.Inject(_serializer);
         var opt = Options.Create(_cacheOptions);
         _fixture.Inject(opt);
-
+        _fixture.Inject(_cacheOptions);
 
         return Task.CompletedTask;
     }
@@ -453,10 +453,7 @@ public class RedisCacheTests : IAsyncLifetime
     {
         var generatorWasCalled = false;
         _database.StringGetAsync(_redisKey, Arg.Is<CommandFlags>(f => f.HasFlag(CommandFlags.PreferReplica)))
-            .Returns(ci =>
-            {
-                return (RedisValue)_serializer.Serialize(redisReturn);
-            });
+            .Returns(_ => (RedisValue)_serializer.Serialize(redisReturn));
 
         string? actualValue = default;
         if (expirationType == typeof(TimeSpan))

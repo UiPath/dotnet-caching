@@ -18,16 +18,16 @@ public sealed class RedisCache : ICache
     private readonly IRedisKeyStrategy _redisKeyStrategy;
     private readonly TimeSpan? _defaultExpiration;
     private readonly CacheClock _clock;
-    private readonly CacheOptions _cacheOptions;
     private readonly Action<RedisKey, RedisValue>? _auditKeySize;
+    private readonly int _largeValueThreshold;
 
     public RedisCache(
         IRedisConnector redis,
         ISerializerProxy serializer,
         IPolicyHolder policyHolder,
         ICachingTelemetryProvider telemetryProvider,
-        IOptions<RedisCacheOptions> redisCacheOptionsAccessor,
-        IOptions<CacheOptions> optionsAccessor,
+        RedisCacheOptions redisCacheOptions,
+        CacheOptions cacheOptions,
         ILogger<RedisCache> logger)
     {
         _logger = logger;
@@ -36,13 +36,12 @@ public sealed class RedisCache : ICache
         _telemetryProvider = telemetryProvider;
         _readPolicy = policyHolder.Read;
         _writePolicy = policyHolder.Write;
-        _cacheOptions = optionsAccessor.Value;
-        var redisCacheOptions = redisCacheOptionsAccessor.Value;
         _supportsExpireTime = RedisUtils.SupportsExpireTime(redisCacheOptions.Version);
-        _redisKeyStrategy = (redisCacheOptions.RedisKeyStrategyFactory ?? new DefaultRedisKeyStrategyFactory()).Create(optionsAccessor.Value, GetType());
+        _largeValueThreshold = cacheOptions.LargeValueThreshold;
+        _redisKeyStrategy = (redisCacheOptions.RedisKeyStrategyFactory ?? new DefaultRedisKeyStrategyFactory()).Create(cacheOptions, GetType());
         _defaultExpiration = redisCacheOptions.DefaultExpiration;
         _clock = new CacheClock(redisCacheOptions.Clock, _defaultExpiration);
-        if (_cacheOptions.AuditEnabled)
+        if (cacheOptions.AuditEnabled && _largeValueThreshold > 0)
         {
             _auditKeySize = AuditKeySize;
         }
@@ -308,7 +307,7 @@ public sealed class RedisCache : ICache
     private void AuditKeySize(RedisKey key, RedisValue value)
     {
         var valueLen = value.Length();
-        if (valueLen > _cacheOptions.LargeValueThreshold)
+        if (valueLen > _largeValueThreshold)
         {
             _logger.LogWarning("Redis large value detected for key {redisKey}, length {length}", key, valueLen);
         }

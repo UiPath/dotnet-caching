@@ -3,15 +3,17 @@
 [ExcludeFromCodeCoverage]
 public class RedisConnectionOptions
 {
-    public bool Enabled { get; set; } = true;
+    public bool Enabled => !string.IsNullOrWhiteSpace(ConnectionString);
 
-    public string ConnectionString { get; set; } = default!;
+    public string ConnectionString { get; set; } = string.Empty;
 
-    public int? BackOffMilliseconds { get; set; }
+    public int BackOffMilliseconds { get; set; } = 1000;
 
     public TimeSpan? HeartbeatInterval { get; set; }
 
     public bool ProfilerEnabled { get; set; }
+
+    public string ProfilerFeatureFlagKey { get; set; } = "RedisProfiler.Enabled";
 
     public bool PlannedMaintenanceEnabled { get; set; } = true;
 
@@ -19,7 +21,7 @@ public class RedisConnectionOptions
 
     public bool LogConnectionRestoredEvents { get; set; } = true;
 
-    public bool EnableHangDetection { get; set; } = false;
+    public bool EnableHangDetection { get; set; } = true;
 
     public int LastWriteIntervalThresholdMilliseconds { get; set; } = 15000;
 

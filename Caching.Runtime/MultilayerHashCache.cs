@@ -1,5 +1,4 @@
 ﻿using System.Collections.Immutable;
-using UiPath.Platform.Caching.Memory;
 using UiPath.Platform.Caching.Telemetry;
 
 namespace UiPath.Platform.Caching;

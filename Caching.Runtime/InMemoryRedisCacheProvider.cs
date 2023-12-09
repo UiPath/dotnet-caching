@@ -18,11 +18,12 @@ public sealed class InMemoryRedisCacheProvider : ICacheProvider
 
     public string Name => KnownCacheProviderNames.InMemoryRedis;
 
-    public bool Enabled => _options.Enabled;
+    public bool Enabled { get; }
 
     
 
     public InMemoryRedisCacheProvider(
+        IOptions<RedisConnectionOptions> connectionOptionsAccessor,
         IOptions<InMemoryRedisCacheOptions> optionsAccessor,
         IMemoryCacheFactory memoryCacheFactory,
         Func<ICacheFactory> cacheFactoryAccessor,
@@ -42,6 +43,7 @@ public sealed class InMemoryRedisCacheProvider : ICacheProvider
         _loggerFactory = loggerFactory ?? NullLoggerFactory.Instance;
         _cache = new Lazy<MultilayerCache>(() => BuildCache());
         _hashCache = new Lazy<MultilayerHashCache>(() => BuildHashCache());
+        Enabled = _options.Enabled && connectionOptionsAccessor.Value.Enabled;
     }
 
     public ICache CreateCache() =>

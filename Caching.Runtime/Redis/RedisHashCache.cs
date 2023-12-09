@@ -27,8 +27,8 @@ public sealed class RedisHashCache : IHashCache
         ISerializerProxy serializer,
         IPolicyHolder policyHolder,
         ICachingTelemetryProvider telemetryProvider,
-        IOptions<RedisCacheOptions> redisCacheOptionsAccessor,
-        IOptions<CacheOptions> optionsAccessor,
+        RedisCacheOptions redisCacheOptions,
+        CacheOptions cacheOptions,
         ILogger<RedisHashCache> logger)
     {
         _redis = redis;
@@ -37,8 +37,7 @@ public sealed class RedisHashCache : IHashCache
         _logger = logger;
         _readPolicy = policyHolder.Read;
         _writePolicy = policyHolder.Write;
-        _cacheOptions = optionsAccessor.Value;
-        var redisCacheOptions = redisCacheOptionsAccessor.Value;
+        _cacheOptions = cacheOptions;
         _cacheEntryFactory = redisCacheOptions.EntryFactory ?? new CacheEntryFactory();
         _supportsExpireTime = RedisUtils.SupportsExpireTime(redisCacheOptions.Version);
         _redisKeyStrategy = (redisCacheOptions.RedisKeyStrategyFactory ?? new DefaultRedisKeyStrategyFactory()).Create(_cacheOptions, GetType());

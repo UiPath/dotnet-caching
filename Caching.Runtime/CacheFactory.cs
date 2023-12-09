@@ -2,7 +2,7 @@
 
 public sealed class CacheFactory : ICacheFactory
 {
-    private readonly IDictionary<string, ICacheProvider> _providers = new Dictionary<string, ICacheProvider>(StringComparer.OrdinalIgnoreCase);
+    private readonly Dictionary<string, ICacheProvider> _providers = new(StringComparer.OrdinalIgnoreCase);
     private readonly CacheOptions _options;
     private volatile bool _disposed;
 
@@ -27,19 +27,14 @@ public sealed class CacheFactory : ICacheFactory
             throw new ObjectDisposedException(nameof(CacheFactory));
         }
 
-        if (!provider.Enabled)
-        {
-            return;
-        }
-
         _providers[provider.Name] = provider;
     }
 
     public ICache CreateCache(string? providerName = null, Type? entityType = null, Type? callerType = null) =>
-        _providers.TryGetValue(providerName ?? _options.DefaultCache, out var cacheProvider) ? cacheProvider.CreateCache() : DefaultCache();
+        GetProvider(providerName ?? _options.DefaultCache)?.CreateCache() ?? DefaultCache();
 
     public IHashCache CreateHashCache(string? providerName = null, Type? entityType = null, Type? callerType = null) =>
-        _providers.TryGetValue(providerName ?? _options.DefaultCache, out var cacheProvider) ? cacheProvider.CreateHashCache() : DefaultHashCache();
+        GetProvider(providerName ?? _options.DefaultCache)?.CreateHashCache() ?? DefaultHashCache();
 
     public void Dispose()
     {
@@ -58,9 +53,10 @@ public sealed class CacheFactory : ICacheFactory
         _disposed = true;
     }
 
-    private ICache DefaultCache() =>
-        _providers.TryGetValue(_options.DefaultCache, out var cacheProvider) ? cacheProvider.CreateCache() : NullCache.Instance;
+    private ICache DefaultCache() => GetProvider(_options.DefaultCache)?.CreateCache() ?? NullCache.Instance;
 
-    private IHashCache DefaultHashCache() =>
-        _providers.TryGetValue(_options.DefaultCache, out var cacheProvider) ? cacheProvider.CreateHashCache() : NullHashCache.Instance;
+    private IHashCache DefaultHashCache() => GetProvider(_options.DefaultCache)?.CreateHashCache() ?? NullHashCache.Instance;
+
+    private ICacheProvider? GetProvider(string providerName) =>
+        _providers.TryGetValue(providerName, out var provider) && provider.Enabled ? provider : null;
 }

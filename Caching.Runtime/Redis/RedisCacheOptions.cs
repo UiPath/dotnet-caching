@@ -1,7 +1,19 @@
 ﻿namespace UiPath.Platform.Caching.Redis;
 
-public class RedisCacheOptions : CacheOptionsBase
+public class RedisCacheOptions : ICacheOptions
 {
+    public bool Enabled { get; set; } = true;
+
+    public TimeSpan? DefaultExpiration { get; set; } = TimeSpan.FromHours(1);
+
+    public TimeSpan Timeout { get; set; } = TimeSpan.FromSeconds(1);
+
+    public ISystemClock? Clock { get; set; }
+
+    public ICacheEntryFactory? EntryFactory { get; set; }
+
+    public ICacheKeyStrategy? CacheKeyStrategy { get; set; }
+
     public int Version { get; set; } = 6;
 
     public IRedisKeyStrategyFactory? RedisKeyStrategyFactory { get; set; }

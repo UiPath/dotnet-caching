@@ -2,7 +2,7 @@
 
 public sealed class TopicFactory : ITopicFactory, IDisposable
 {
-    private readonly IDictionary<string, ITopicProvider> _providers = new Dictionary<string, ITopicProvider>(StringComparer.OrdinalIgnoreCase);
+    private readonly Dictionary<string, ITopicProvider> _providers = new(StringComparer.OrdinalIgnoreCase);
     private readonly CacheOptions _options;
     private volatile bool _disposed;
 
@@ -27,11 +27,6 @@ public sealed class TopicFactory : ITopicFactory, IDisposable
             throw new ObjectDisposedException(nameof(TopicFactory));
         }
 
-        if (!provider.Enabled)
-        {
-            return;
-        }
-
         _providers[provider.Name] = provider;
     }
 
@@ -42,8 +37,11 @@ public sealed class TopicFactory : ITopicFactory, IDisposable
     }
 
     public ITopicProvider Get(string? providerName, Type entryType) =>
-        _providers.TryGetValue(providerName ?? _options.DefaultTopic, out var provider) ? provider : Default();
+        GetProvider(providerName ?? _options.DefaultTopic) ?? Default();
 
     private ITopicProvider Default() =>
-        _providers.TryGetValue(_options.DefaultTopic, out var provider) ? provider : NullTopicProvider.Instance;
+        GetProvider(_options.DefaultTopic) ?? NullTopicProvider.Instance;
+
+    private ITopicProvider? GetProvider(string providerName) =>
+        _providers.TryGetValue(providerName, out var provider) && provider.Enabled ? provider : null;
 }

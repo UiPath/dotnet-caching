@@ -1,6 +1,4 @@
-﻿using UiPath.Platform.Caching.Memory;
-
-namespace UiPath.Platform.Caching;
+﻿namespace UiPath.Platform.Caching;
 
 internal class LocalMemorySetter : MemoryCacheSetter
 {

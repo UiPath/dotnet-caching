@@ -1,4 +1,4 @@
-﻿namespace UiPath.Platform.Caching.Memory;
+﻿namespace UiPath.Platform.Caching;
 
 public interface IMultilayerCacheOptions : ICacheOptions
 {
