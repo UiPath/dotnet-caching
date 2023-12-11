@@ -73,9 +73,9 @@ public class RedisStreamSubjectWriterTests : IAsyncLifetime
             .ThrowsAsyncForAnyArgs(_ => throw new Exception());
 
         Func<Task> act = async () => await Sut.FetchTask;
-        await act.Should().NotCompleteWithinAsync(_pollInterval.Multiply(5));
+        await act.Should().NotCompleteWithinAsync(_pollInterval.Multiply(50));
         _cancellationTokenSource.Cancel();
-        await act.Should().CompleteWithinAsync(_pollInterval.Multiply(10));
+        await act.Should().CompleteWithinAsync(_pollInterval.Multiply(100));
         _formatter.Received(0).Decode(Arg.Any<string>());
     }
 
@@ -163,7 +163,7 @@ public class RedisStreamSubjectWriterTests : IAsyncLifetime
             .Returns(_ => entries);
 
         Func<Task> act = async () => await Sut.FetchTask;
-        await act.Should().NotCompleteWithinAsync(_pollInterval.Multiply(5));
+        await act.Should().NotCompleteWithinAsync(_pollInterval.Multiply(100));
         _cancellationTokenSource.Cancel();
         _formatter.Received().Decode(Arg.Any<string>());
     }

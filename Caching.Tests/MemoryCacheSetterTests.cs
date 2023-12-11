@@ -1,6 +1,6 @@
 ﻿using Microsoft.Extensions.Caching.Memory;
 using Microsoft.Extensions.Internal;
-using UiPath.Platform.Caching.Memory;
+using UiPath.Platform.Caching;
 using UiPath.Platform.Caching.Tests.Broadcast;
 
 namespace UiPath.Platform.Caching.Tests;

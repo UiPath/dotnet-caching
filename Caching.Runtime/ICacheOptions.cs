@@ -1,8 +1,8 @@
-﻿namespace UiPath.Platform.Caching.Memory;
+﻿namespace UiPath.Platform.Caching;
 
 public interface ICacheOptions
 {
-    public bool Enabled { get;  }
+    public bool Enabled { get; }
 
     public TimeSpan? DefaultExpiration { get; }
 

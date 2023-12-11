@@ -1,9 +1,19 @@
-﻿using UiPath.Platform.Caching.Memory;
+﻿namespace UiPath.Platform.Caching;
 
-namespace UiPath.Platform.Caching;
-
-public class InMemoryRedisCacheOptions : CacheOptionsBase, IMultilayerCacheOptions, IMemoryStatisticsOptions
+public class InMemoryRedisCacheOptions : IMultilayerCacheOptions, IMemoryStatisticsOptions
 {
+    public bool Enabled { get; set; } = true;
+
+    public TimeSpan? DefaultExpiration { get; set; } = TimeSpan.FromHours(1);
+
+    public TimeSpan Timeout { get; set; } = TimeSpan.FromSeconds(1);
+
+    public ISystemClock? Clock { get; set; }
+
+    public ICacheEntryFactory? EntryFactory { get; set; }
+
+    public ICacheKeyStrategy? CacheKeyStrategy { get; set; }
+
     public bool TrackStatistics { get; set; }
 
     public TimeSpan StatisticsFlushInterval { get; set; } = TimeSpan.FromMinutes(5);

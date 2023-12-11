@@ -13,11 +13,11 @@ public class CacheOptions
 
     public bool ShardKeyEnabled { get; set; }
 
-    public bool AuditEnabled { get; set; }
+    public bool AuditEnabled { get; set; } = true;
 
     public string DefaultCache { get; set; } = KnownCacheProviderNames.InMemoryRedis;
 
-    public string DefaultTopic { get; set; } = KnownTopicNames.RedisPubSub;
+    public string DefaultTopic { get; set; } = KnownTopicNames.RedisStreams;
 
     public Uri? SourceUri { get; set; } = MachineUri;
 
@@ -31,5 +31,5 @@ public class CacheOptions
 
     public Type? TopicKeyStrategyFactory { get; set; }
 
-    public int LargeValueThreshold { get; set; } = 1024*1024;
+    public int LargeValueThreshold { get; set; } = 20_000;
 }

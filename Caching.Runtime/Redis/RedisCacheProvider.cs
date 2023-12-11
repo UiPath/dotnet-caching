@@ -5,8 +5,8 @@ namespace UiPath.Platform.Caching.Redis;
 
 public sealed class RedisCacheProvider : ICacheProvider
 {
-    private readonly IOptions<RedisCacheOptions> _redisCacheOptions;
-    private readonly IOptions<CacheOptions> _cacheOptions;
+    private readonly RedisCacheOptions _redisCacheOptions;
+    private readonly CacheOptions _cacheOptions;
     private readonly IRedisConnector _redis;
     private readonly ISerializerProxy _serializerProxy;
     private readonly IPolicyHolder _policyHolder;
@@ -17,9 +17,10 @@ public sealed class RedisCacheProvider : ICacheProvider
 
     public string Name => KnownCacheProviderNames.Redis;
 
-    public bool Enabled => _redisCacheOptions.Value.Enabled;
+    public bool Enabled { get; }
 
     public RedisCacheProvider(
+        IOptions<RedisConnectionOptions> connectionOptionsAccessor,
         IOptions<RedisCacheOptions> redisCacheOptions,
         IOptions<CacheOptions> cacheOptions,
         IRedisConnector redis,
@@ -28,8 +29,8 @@ public sealed class RedisCacheProvider : ICacheProvider
         ICachingTelemetryProvider? cachingTelemetryProvider = null,
         ILoggerFactory? loggerFactory = null)
     {
-        _redisCacheOptions = redisCacheOptions;
-        _cacheOptions = cacheOptions;
+        _redisCacheOptions = redisCacheOptions.Value;
+        _cacheOptions = cacheOptions.Value;
         _redis = redis;
         _serializerProxy = serializerProxy;
         _policyHolder = policyHolder;
@@ -37,6 +38,7 @@ public sealed class RedisCacheProvider : ICacheProvider
         _loggerFactory = loggerFactory;
         _cache = new Lazy<RedisCache>(() => BuildCache());
         _hashCache = new Lazy<RedisHashCache>(() => BuildHashCache());
+        Enabled = connectionOptionsAccessor.Value.Enabled && _redisCacheOptions.Enabled;
     }
 
     public ICache CreateCache() =>

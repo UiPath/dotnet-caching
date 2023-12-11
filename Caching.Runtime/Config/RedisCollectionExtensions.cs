@@ -35,12 +35,17 @@ public static class RedisCollectionExtensions
         builder.Services.TryAddTransient(sp =>
         {
             var options = sp.GetRequiredService<IOptions<RedisConnectionOptions>>().Value;
+            if(string.IsNullOrWhiteSpace(options.ConnectionString))
+            {
+                return new ConfigurationOptions();
+            }
+
             var config = ConfigurationOptions.Parse(options.ConnectionString);
             config.AbortOnConnectFail = false; // if the connection fails, the multiplexer will silently retry in the background
             config.ChannelPrefix = default;
-            if (options.BackOffMilliseconds.HasValue)
+            if (options.BackOffMilliseconds > 0)
             {
-                config.ReconnectRetryPolicy = new ExponentialRetry(options.BackOffMilliseconds.Value);
+                config.ReconnectRetryPolicy = new ExponentialRetry(options.BackOffMilliseconds);
             }
 
             if (options.HeartbeatInterval.HasValue)

@@ -5,7 +5,6 @@ using Microsoft.Extensions.Primitives;
 using NSubstitute.ClearExtensions;
 using NSubstitute.ExceptionExtensions;
 using UiPath.Platform.Caching;
-using UiPath.Platform.Caching.Memory;
 using UiPath.Platform.Caching.Tests.Broadcast;
 
 namespace UiPath.Platform.Caching.Tests;

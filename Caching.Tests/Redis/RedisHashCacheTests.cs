@@ -927,6 +927,7 @@ public class RedisHashCacheTests : IAsyncLifetime
         _fixture.Inject(_serializer);
         var opt = Options.Create(_redisCacheOptions);
         _fixture.Inject(opt);
+        _fixture.Inject(opt.Value);
         return Task.CompletedTask;
     }
 }

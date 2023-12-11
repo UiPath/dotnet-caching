@@ -1,18 +1,28 @@
-﻿using UiPath.Platform.Caching.Memory;
+﻿namespace UiPath.Platform.Caching;
 
-namespace UiPath.Platform.Caching;
-
-public class InMemoryCacheOptions : CacheOptionsBase, IMultilayerCacheOptions, IMemoryStatisticsOptions
+public class InMemoryCacheOptions : IMultilayerCacheOptions, IMemoryStatisticsOptions
 {
-    public bool TrackStatistics { get; set; }
+    public bool Enabled { get; set; } = true;
 
-    public TimeSpan StatisticsFlushInterval { get; set; } = TimeSpan.FromMinutes(5);
+    public TimeSpan? DefaultExpiration { get; set; } = TimeSpan.FromHours(1);
+
+    public TimeSpan Timeout { get; set; } = TimeSpan.FromSeconds(1);
+
+    public ISystemClock? Clock { get; set; }
+
+    public ICacheEntryFactory? EntryFactory { get; set; }
+
+    public ICacheKeyStrategy? CacheKeyStrategy { get; set; }
+
+    public bool TrackStatistics { get; set; } = true;
+
+    public TimeSpan StatisticsFlushInterval { get; set; } = TimeSpan.FromMinutes(1);
 
     public bool BroadcastEnable { get; set; }
 
     public string? Topic { get; set; }
 
-    public TimeSpan? PrimaryMaxExpiration { get; set; }
+    public TimeSpan? PrimaryMaxExpiration { get; set; } = TimeSpan.FromHours(1);
 
     public ITopicKeyStrategy? TopicKeyStrategy { get; set; }
 }

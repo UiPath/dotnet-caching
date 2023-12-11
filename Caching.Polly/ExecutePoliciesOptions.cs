@@ -6,7 +6,7 @@ public class ExecutePoliciesOptions
 
     public int ExceptionsAllowedBeforeBreaking { get; set; } = 10;
 
-    public TimeSpan? RequestTimeout { get; set; }
+    public TimeSpan? RequestTimeout { get; set; } = TimeSpan.FromSeconds(1);
 
-    public int? RetryCount { get; set; }
+    public int? RetryCount { get; set; } = 3;
 }

@@ -1,5 +1,4 @@
-﻿using UiPath.Platform.Caching.Memory;
-using UiPath.Platform.Caching.Telemetry;
+﻿using UiPath.Platform.Caching.Telemetry;
 
 namespace UiPath.Platform.Caching;
 
