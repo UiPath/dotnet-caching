@@ -8,15 +8,15 @@ public class CachingBuilder : ICachingBuilder
 {
     private readonly List<Action<ICachingBuilder>> _callbacks = new();
 
-    public CachingBuilder(IServiceCollection services, IConfiguration configuration)
+    public CachingBuilder(IServiceCollection services, IConfiguration? configuration = null)
     {
         Services = services;
-        Configuration = configuration;
+        Configuration = configuration ?? NullConfiguration.Instance;
     }
 
-    public IServiceCollection Services { get; private set; }
+    public IServiceCollection Services { get; }
 
-    public IConfiguration Configuration { get; private set; }
+    public IConfiguration Configuration { get; }
 
     public bool Enabled { get; set; } = true;
 
@@ -38,4 +38,6 @@ public class CachingBuilder : ICachingBuilder
 
     public void RegisterOnCompleteCallback(Action<ICachingBuilder> callback) =>
         _callbacks.Add(callback);
+
+
 }

@@ -10,21 +10,21 @@ public class CancelationTokenRedisHashSetCacheTests
     public Task Get() =>
         ValidateCancellationToken(async (sut, token) =>
         {
-            await sut.GetAsync<string>((CacheKey)_fixture.Create<string>(), token);
+            await sut.GetAsync<string>((CacheKey)_fixture.Create<string>(), null, token);
         });
 
     [Fact]
     public Task Get_field() =>
         ValidateCancellationToken(async (sut, token) =>
         {
-            await sut.GetItemAsync<string>((CacheKey)_fixture.Create<string>(), _fixture.Create<string>(), token);
+            await sut.GetItemAsync<string>((CacheKey)_fixture.Create<string>(), _fixture.Create<string>(), null, token);
         });
 
     [Fact]
     public Task Get_fields() =>
         ValidateCancellationToken(async (sut, token) =>
         {
-            await sut.GetAsync<string>((CacheKey)_fixture.Create<string>(), _fixture.CreateMany<string>().ToArray(), token);
+            await sut.GetAsync<string>((CacheKey)_fixture.Create<string>(), _fixture.CreateMany<string>().ToArray(), null, token);
         });
 
     [Fact]

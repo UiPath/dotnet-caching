@@ -41,20 +41,35 @@ public sealed class MultilayerCache : ICache
         _localMemorySetter = new LocalMemorySetter(cacheName, changeTokenFactory, topicFactory, _memoryCache, logger, _clock, _cacheOptions);
     }
 
-    public ValueTask<T?> GetAsync<T>(CacheKey cacheKey, CancellationToken token = default) =>
-        GetAsync<T>(_entryBuilder.BuildEntryOptions<T>(cacheKey, _clock.ToDateTimeOffset(_cacheOptions.DefaultExpiration), token));
+    public async ValueTask<T?> GetAsync<T>(CacheKey cacheKey, T? defaultValue = null, CancellationToken token = default) where T : class
+    {
+        var ret = await GetInnerAsync<T>(_entryBuilder.BuildEntryOptions<T>(cacheKey, _clock.ToDateTimeOffset(_cacheOptions.DefaultExpiration), token));
+        return ret ?? defaultValue;
+    }
 
-    public ValueTask<T?> GetOrAddAsync<T>(CacheKey cacheKey, Func<ValueTask<T?>> generator, CancellationToken token = default) =>
+    public async ValueTask<T?> GetAsync<T>(CacheKey cacheKey, T? defaultValue = null, CancellationToken token = default) where T : struct
+    {
+        var ret = await GetStructInnerAsync<T>(_entryBuilder.BuildEntryOptions<T>(cacheKey, _clock.ToDateTimeOffset(_cacheOptions.DefaultExpiration), token));
+        return ret ?? defaultValue;
+    }
+
+    public ValueTask<T?> GetOrAddAsync<T>(CacheKey cacheKey, Func<ValueTask<T?>> generator, CancellationToken token = default) where T : class =>
         GetOrAddAsync(cacheKey, generator, _cacheOptions.DefaultExpiration, token);
 
-    public ValueTask<T?> GetOrAddAsync<T>(CacheKey cacheKey, Func<ValueTask<T?>> generator, TimeSpan? expiration = null, CancellationToken token = default) =>
+    public ValueTask<T?> GetOrAddAsync<T>(CacheKey cacheKey, Func<ValueTask<T?>> generator, CancellationToken token = default) where T : struct =>
+        GetOrAddAsync(cacheKey, generator, _cacheOptions.DefaultExpiration, token);
+
+    public ValueTask<T?> GetOrAddAsync<T>(CacheKey cacheKey, Func<ValueTask<T?>> generator, TimeSpan? expiration, CancellationToken token = default) where T : class =>
         GetOrAddAsync(cacheKey, generator, _clock.ToDateTimeOffset(expiration), token);
 
-    public async ValueTask<T?> GetOrAddAsync<T>(CacheKey cacheKey, Func<ValueTask<T?>> generator, DateTimeOffset? expiration = null, CancellationToken token = default)
+    public ValueTask<T?> GetOrAddAsync<T>(CacheKey cacheKey, Func<ValueTask<T?>> generator, TimeSpan? expiration, CancellationToken token = default) where T : struct =>
+        GetOrAddAsync(cacheKey, generator, _clock.ToDateTimeOffset(expiration), token);
+
+    public async ValueTask<T?> GetOrAddAsync<T>(CacheKey cacheKey, Func<ValueTask<T?>> generator, DateTimeOffset? expiration, CancellationToken token = default) where T : class
     {
         var cacheEntryOptions = _entryBuilder.BuildEntryOptions<T>(cacheKey, expiration, token);
 
-        var ret = await GetAsync<T>(cacheEntryOptions).ConfigureAwait(false);
+        var ret = await GetInnerAsync<T>(cacheEntryOptions).ConfigureAwait(false);
         if (!IsDefault(ret))
         {
             return ret;
@@ -70,13 +85,39 @@ public sealed class MultilayerCache : ICache
         return ret;
     }
 
-    public ValueTask<bool> SetAsync<T>(CacheKey cacheKey, T? value, CancellationToken token = default) =>
+    public async ValueTask<T?> GetOrAddAsync<T>(CacheKey cacheKey, Func<ValueTask<T?>> generator, DateTimeOffset? expiration, CancellationToken token = default) where T : struct
+    {
+        var cacheEntryOptions = _entryBuilder.BuildEntryOptions<T>(cacheKey, expiration, token);
+
+        var ret = await GetStructInnerAsync<T>(cacheEntryOptions).ConfigureAwait(false);
+        if (!IsDefault(ret))
+        {
+            return ret;
+        }
+
+        _logger.LogDebug("Cache missed. generating new {}", cacheEntryOptions.CacheKey);
+        ret = await generator().ConfigureAwait(false);
+
+        if (!IsDefault(ret))
+        {
+            await InternalStructSetAsync(cacheEntryOptions, ret).ConfigureAwait(false);
+        }
+        return ret;
+    }
+
+    public ValueTask<bool> SetAsync<T>(CacheKey cacheKey, T? value, CancellationToken token = default) where T : class =>
         SetAsync(cacheKey, value, _cacheOptions.DefaultExpiration, token);
 
-    public ValueTask<bool> SetAsync<T>(CacheKey cacheKey, T? value, TimeSpan? expiration = null, CancellationToken token = default) =>
+    public ValueTask<bool> SetAsync<T>(CacheKey cacheKey, T? value, CancellationToken token = default) where T : struct =>
+        SetAsync(cacheKey, value, _cacheOptions.DefaultExpiration, token);
+
+    public ValueTask<bool> SetAsync<T>(CacheKey cacheKey, T? value, TimeSpan? expiration, CancellationToken token = default) where T : class =>
         SetAsync(cacheKey, value, _clock.ToDateTimeOffset(expiration), token);
 
-    public async ValueTask<bool> SetAsync<T>(CacheKey cacheKey, T? value, DateTimeOffset? expiration = null, CancellationToken token = default)
+    public ValueTask<bool> SetAsync<T>(CacheKey cacheKey, T? value, TimeSpan? expiration, CancellationToken token = default) where T : struct =>
+        SetAsync(cacheKey, value, _clock.ToDateTimeOffset(expiration), token);
+
+    public async ValueTask<bool> SetAsync<T>(CacheKey cacheKey, T? value, DateTimeOffset? expiration, CancellationToken token = default) where T : class
     {
         var cacheEntryOptions = _entryBuilder.BuildEntryOptions<T>(cacheKey, expiration, token);
         if (IsDefault(value))
@@ -89,16 +130,29 @@ public sealed class MultilayerCache : ICache
         return await InternalSetAsync(cacheEntryOptions, value).ConfigureAwait(false);
     }
 
+    public async ValueTask<bool> SetAsync<T>(CacheKey cacheKey, T? value, DateTimeOffset? expiration, CancellationToken token = default) where T : struct
+    {
+        var cacheEntryOptions = _entryBuilder.BuildEntryOptions<T>(cacheKey, expiration, token);
+        if (IsDefault(value))
+        {
+            return await RemoveAsync<T>(cacheEntryOptions).ConfigureAwait(false);
+        }
+
+        _logger.LogDebug("Replacing cached key {}", cacheEntryOptions.CacheKey);
+        await _eventPublisher.CacheSetAsync<T>(cacheEntryOptions).ConfigureAwait(false);
+        return await InternalStructSetAsync(cacheEntryOptions, value).ConfigureAwait(false);
+    }
+
     public ValueTask<bool> RemoveAsync<T>(CacheKey cacheKey, CancellationToken token = default) =>
         RemoveAsync<T>(_entryBuilder.BuildEntryOptions<T>(cacheKey, default, token));
 
     public ValueTask<bool> RefreshAsync<T>(CacheKey cacheKey, CancellationToken token = default) =>
         RefreshAsync<T>(cacheKey, _cacheOptions.DefaultExpiration, token);
 
-    public ValueTask<bool> RefreshAsync<T>(CacheKey cacheKey, TimeSpan? expiration = null, CancellationToken token = default) =>
+    public ValueTask<bool> RefreshAsync<T>(CacheKey cacheKey, TimeSpan? expiration, CancellationToken token = default) =>
         RefreshAsync<T>(cacheKey, _clock.ToDateTimeOffset(expiration), token);
 
-    public async ValueTask<bool> RefreshAsync<T>(CacheKey cacheKey, DateTimeOffset? expiration = null, CancellationToken token = default)
+    public async ValueTask<bool> RefreshAsync<T>(CacheKey cacheKey, DateTimeOffset? expiration, CancellationToken token = default)
     {
         var cacheEntryOptions = _entryBuilder.BuildEntryOptions<T>(cacheKey, expiration, token);
         _logger.LogDebug("Clearing cached. Key {}", cacheEntryOptions.CacheKey);
@@ -165,15 +219,16 @@ public sealed class MultilayerCache : ICache
         }
     }
 
-    private async ValueTask<T?> GetAsync<T>(CacheEntryOptions options)
+    private async ValueTask<T?> GetInnerAsync<T>(CacheEntryOptions options)
+        where T : class
     {
         if (_memoryCache.TryGetValue(options.CacheKey, out ICacheEntry<T>? entry))
         {
             _logger.LogTrace("Found local. {}", options.CacheKey);
-            return entry == null ? default : entry.Value;
+            return entry?.Value;
         }
 
-        var ret = await _innerCache.GetAsync<T>(options.CacheKey, options.Token).ConfigureAwait(false);
+        var ret = await _innerCache.GetAsync<T>(options.CacheKey, null, options.Token).ConfigureAwait(false);
 
         if (IsDefault(ret))
         {
@@ -186,7 +241,43 @@ public sealed class MultilayerCache : ICache
         return ret;
     }
 
-    private async ValueTask<bool> InternalSetAsync<T>(CacheEntryOptions options, T? value)
+    private async ValueTask<T?> GetStructInnerAsync<T>(CacheEntryOptions options)
+        where T : struct
+    {
+        if (_memoryCache.TryGetValue(options.CacheKey, out ICacheEntry<T>? entry))
+        {
+            _logger.LogTrace("Found local. {}", options.CacheKey);
+            return entry?.Value;
+        }
+
+        var ret = await _innerCache.GetAsync<T>(options.CacheKey, null, options.Token).ConfigureAwait(false);
+
+        if (IsDefault(ret))
+        {
+            return default;
+        }
+
+        _logger.LogTrace("Found inner cache copy at cacheKey {}", options.CacheKey);
+        options.Expiration = await _innerCache.ExpireTimeAsync<T>(options.CacheKey, options.Token).ConfigureAwait(false) ?? _clock.DefaultDateTimeOffset();
+        MemorySet(options, ret);
+        return ret;
+    }
+
+    private async ValueTask<bool> InternalSetAsync<T>(CacheEntryOptions options, T? value) where T : class
+    {
+        try
+        {
+            MemorySet(options, value);
+            return await _innerCache.SetAsync(options.CacheKey, value, options.Expiration, options.Token).ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Inner cache set value for {}", options.CacheKey);
+            return false;
+        }
+    }
+
+    private async ValueTask<bool> InternalStructSetAsync<T>(CacheEntryOptions options, T? value) where T : struct
     {
         try
         {

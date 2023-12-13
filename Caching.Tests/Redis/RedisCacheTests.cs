@@ -43,7 +43,7 @@ public class RedisCacheTests : IAsyncLifetime
         _database.StringGetAsync(Arg.Any<RedisKey>(), Arg.Any<CommandFlags>())
             .ThrowsAsync(new RedisException("test"));
         var actualValue = await Sut.GetAsync<int>(_cacheKey);
-        actualValue.Should().Be(default);
+        actualValue.Should().Be(default(int?));
     }
 
 
