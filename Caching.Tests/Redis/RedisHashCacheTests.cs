@@ -40,7 +40,7 @@ public class RedisHashCacheTests : IAsyncLifetime
                 return ret;
             });
 
-        var actual = await Sut.GetItemAsync<string>(_cacheKey, field, CancellationToken.None);
+        var actual = await Sut.GetItemAsync<string>(_cacheKey, field, token: CancellationToken.None);
         actual.Should().Be(expected);
     }
 
@@ -51,7 +51,7 @@ public class RedisHashCacheTests : IAsyncLifetime
         var expected = _fixture.Create<string>();
         RedisValue redisField = key;
 
-        Func<Task> act = async () => await Sut.GetItemAsync<string>(_cacheKey, key, CancellationToken.None);
+        Func<Task> act = async () => await Sut.GetItemAsync<string>(_cacheKey, key, token: CancellationToken.None);
         await act.Should().ThrowAsync<ArgumentOutOfRangeException>();
     }
 
@@ -63,7 +63,7 @@ public class RedisHashCacheTests : IAsyncLifetime
         _database.HashGetAsync(_redisKey, redisField, CommandFlags.PreferReplica)
             .ThrowsAsync<Exception>();
 
-        var actual = await Sut.GetItemAsync<string>(_cacheKey, field, CancellationToken.None);
+        var actual = await Sut.GetItemAsync<string>(_cacheKey, field, token: CancellationToken.None);
         actual.Should().BeNull();
     }
 
@@ -86,7 +86,7 @@ public class RedisHashCacheTests : IAsyncLifetime
                 return ret;
             });
 
-        var actual = await Sut.GetAsync<string>(_cacheKey, fields, CancellationToken.None);
+        var actual = await Sut.GetAsync<string>(_cacheKey, fields, token: CancellationToken.None);
         actual.Should().BeEquivalentTo(expected);
     }
 
@@ -99,7 +99,7 @@ public class RedisHashCacheTests : IAsyncLifetime
         _database.HashGetAsync(_redisKey, redisFields, CommandFlags.PreferReplica)
             .ThrowsAsync<Exception>();
 
-        var actual = await Sut.GetAsync<string>(_cacheKey, fields, CancellationToken.None);
+        var actual = await Sut.GetAsync<string>(_cacheKey, fields, token: CancellationToken.None);
         actual.Should().BeEmpty();
     }
 
@@ -113,7 +113,7 @@ public class RedisHashCacheTests : IAsyncLifetime
                 return Array.Empty<HashEntry>();
             });
 
-        await Sut.GetAsync<string>(_cacheKey, fields, CancellationToken.None);
+        await Sut.GetAsync<string>(_cacheKey, fields, token: CancellationToken.None);
         await _database.Received(1).HashGetAllAsync(_redisKey, CommandFlags.PreferReplica);
     }
 
@@ -130,7 +130,7 @@ public class RedisHashCacheTests : IAsyncLifetime
                 return ret;
             });
 
-        var actual = await Sut.GetAsync<string>(_cacheKey, CancellationToken.None);
+        var actual = await Sut.GetAsync<string>(_cacheKey, token: CancellationToken.None);
         actual.Should().BeEquivalentTo(expected);
     }
 
@@ -143,7 +143,7 @@ public class RedisHashCacheTests : IAsyncLifetime
         _database.HashGetAllAsync(_redisKey, CommandFlags.PreferReplica)
             .ThrowsAsync<Exception>();
 
-        var actual = await Sut.GetAsync<string>(_cacheKey, CancellationToken.None);
+        var actual = await Sut.GetAsync<string>(_cacheKey, token: CancellationToken.None);
         actual.Should().BeEmpty();
     }
 
@@ -156,7 +156,7 @@ public class RedisHashCacheTests : IAsyncLifetime
         _database.HashGetAllAsync(_redisKey, CommandFlags.PreferReplica)
             .ThrowsAsync<Exception>();
 
-        var actual = await Sut.GetCacheEntryAsync<string>(_cacheKey, CancellationToken.None);
+        var actual = await Sut.GetCacheEntryAsync<string>(_cacheKey, token: CancellationToken.None);
         actual.Value.Should().BeEmpty();
     }
 
@@ -169,7 +169,7 @@ public class RedisHashCacheTests : IAsyncLifetime
         _database.KeyExistsAsync(_redisKey, CommandFlags.PreferReplica)
             .Returns(ci => true);
         _transaction.ExecuteAsync().Returns(false);
-        var actual = await Sut.GetCacheEntryAsync<string>(_cacheKey, CancellationToken.None);
+        var actual = await Sut.GetCacheEntryAsync<string>(_cacheKey, token: CancellationToken.None);
         actual.Value.Should().BeEmpty();
     }
 
@@ -180,7 +180,7 @@ public class RedisHashCacheTests : IAsyncLifetime
         _database.KeyExistsAsync(_redisKey, CommandFlags.PreferReplica)
             .Returns(ci => false);
 
-        var actual = await Sut.GetCacheEntryAsync<string>(_cacheKey, CancellationToken.None);
+        var actual = await Sut.GetCacheEntryAsync<string>(_cacheKey, token: CancellationToken.None);
         actual.Value.Should().BeEmpty();
     }
 
@@ -202,7 +202,7 @@ public class RedisHashCacheTests : IAsyncLifetime
         _transaction.KeyExpireTimeAsync(_redisKey, CommandFlags.PreferReplica)
             .Returns((DateTime?)expireTime.UtcDateTime);
         _transaction.ExecuteAsync().Returns(true);
-        var actual = await Sut.GetCacheEntryAsync<string>(_cacheKey, CancellationToken.None);
+        var actual = await Sut.GetCacheEntryAsync<string>(_cacheKey, token: CancellationToken.None);
         actual.Value.Should().BeEquivalentTo(expected);
     }
 
@@ -225,7 +225,7 @@ public class RedisHashCacheTests : IAsyncLifetime
         _transaction.KeyTimeToLiveAsync(_redisKey, CommandFlags.PreferReplica)
             .Returns((TimeSpan?)expireTime);
         _transaction.ExecuteAsync().Returns(true);
-        var actual = await Sut.GetCacheEntryAsync<string>(_cacheKey, CancellationToken.None);
+        var actual = await Sut.GetCacheEntryAsync<string>(_cacheKey, null, CancellationToken.None);
         actual.Value.Should().BeEquivalentTo(expected);
     }
 

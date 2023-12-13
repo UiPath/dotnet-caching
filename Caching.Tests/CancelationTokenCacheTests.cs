@@ -24,7 +24,7 @@ public abstract class CancelationTokenCacheTests<T> where T : ICache
     public Task Get() =>
         ValidateCancellationToken(async (sut, token) =>
         {
-            await sut.GetAsync<string>(Fixture.Create<string>(), token);
+            await sut.GetAsync<string>(Fixture.Create<string>(), null, token);
         });
 
 
