@@ -45,8 +45,6 @@ public static class ServiceCollectionExtensions
         services.TryAddTransient<Func<ICacheFactory>>(ctx => () => ctx.GetRequiredService<ICacheFactory>());
         services.TryAddTransient(typeof(ICache<>), typeof(Cache<>));
         services.TryAddTransient(typeof(IHashCache<>), typeof(HashCache<>));
-        services.TryAddTransient(typeof(IStructCache<>), typeof(StructCache<>));
-        services.TryAddTransient(typeof(IStructHashCache<>), typeof(StructHashCache<>));
 
         var builder = new CachingBuilder(services, configuration)
         {
