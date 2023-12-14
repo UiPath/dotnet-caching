@@ -51,8 +51,13 @@ internal sealed class CacheMemoryMonitor : IDisposable
 
     public void Dispose()
     {
+        if (_disposed)
+        {
+            return;
+        }
         _disposed = true;
-        _cancellationTokenSource.Cancel();
+        _cancellationTokenSource?.Cancel();
+        _cancellationTokenSource?.Dispose();
         _timer.Dispose();
     }
 }

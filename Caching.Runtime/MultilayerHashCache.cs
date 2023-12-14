@@ -196,7 +196,7 @@ public sealed class MultilayerHashCache : IHashCache
     {
         NotCacheableException.ThrowIfNotCacheable<T>();
         var cacheEntryOptions = _entryBuilder.BuildEntryOptions<T>(cacheKey, default, token: token);
-        return _memoryCache.TryGetValue(cacheEntryOptions.CacheKey, out ICacheEntry? value)
+        return _memoryCache.TryGetValue<ICacheEntry>(cacheEntryOptions.CacheKey, out var value)
             ? value?.Expiration.Subtract(_clock.UtcNow)
             : await _innerCache.TimeToLiveAsync<T>(cacheEntryOptions.CacheKey, token);
     }
@@ -205,7 +205,7 @@ public sealed class MultilayerHashCache : IHashCache
     {
         NotCacheableException.ThrowIfNotCacheable<T>();
         var cacheEntryOptions = _entryBuilder.BuildEntryOptions<T>(cacheKey, default, token: token);
-        return _memoryCache.TryGetValue(cacheEntryOptions.CacheKey, out ICacheEntry? value)
+        return _memoryCache.TryGetValue<ICacheEntry>(cacheEntryOptions.CacheKey, out var value)
             ? value?.Expiration
             : await _innerCache.ExpireTimeAsync<T>(cacheEntryOptions.CacheKey, token);
     }
@@ -214,7 +214,7 @@ public sealed class MultilayerHashCache : IHashCache
     {
         NotCacheableException.ThrowIfNotCacheable<T>();
         var options = _entryBuilder.BuildEntryOptions<T>(cacheKey, _clock.ToDateTimeOffset(_cacheOptions.DefaultExpiration), token: token);
-        return _memoryCache.TryGetValue(options.CacheKey, out ICacheEntry? entry)
+        return _memoryCache.TryGetValue<ICacheEntry>(options.CacheKey, out var entry)
             ? (entry?.Metadata)
             : await _innerCache.GetMetadataAsync<T>(options.CacheKey, token).ConfigureAwait(false);
     }
@@ -233,7 +233,7 @@ public sealed class MultilayerHashCache : IHashCache
                 return false;
             }
 
-            if(_memoryCache.TryGetValue(cacheEntryOptions.CacheKey, out ICacheEntry? entry) && entry != null)
+            if(_memoryCache.TryGetValue<ICacheEntry>(cacheEntryOptions.CacheKey, out var entry) && entry != null)
             {
                 cacheEntryOptions.Expiration = entry.Expiration;
             }

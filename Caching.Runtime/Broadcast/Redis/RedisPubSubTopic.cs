@@ -15,6 +15,7 @@ public sealed class RedisPubSubTopic<T> : ITopic<T>
     private readonly IPolicyExecutor _writePolicy;
     private readonly RedisPubSubSubjectWriter<T> _subscriber;
     private readonly EventDispatcher<T> _dispatcher;
+    private bool _disposed;
 
     public TopicKey TopicKey { get; }
 
@@ -66,8 +67,14 @@ public sealed class RedisPubSubTopic<T> : ITopic<T>
     }
 
     public void Dispose()
-    { 
-        _stopTokenSource.Cancel();
+    {
+        if (_disposed)
+        {
+            return;
+        }
+        _disposed = true;
+        _stopTokenSource?.Cancel();
+        _stopTokenSource?.Dispose();
         _dispatcher.Dispose();
         _subject.OnCompleted();
         _subscriber.Dispose();

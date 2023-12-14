@@ -46,7 +46,8 @@ public abstract class TopicProviderBase : ITopicProvider
         {
             if (disposing)
             {
-                _stopTokenSource.Cancel();
+                _stopTokenSource?.Cancel();
+                _stopTokenSource?.Dispose();
                 _topics.Clear();
             }
             _disposed = true;

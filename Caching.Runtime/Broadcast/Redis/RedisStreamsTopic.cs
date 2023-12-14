@@ -19,6 +19,7 @@ public sealed class RedisStreamsTopic<T> : ITopic<T>
     private readonly ILogger _logger;
     private readonly int? _maxLength;
     private readonly EventDispatcher<T> _dispatcher;
+    private bool _disposed;
 
     public TopicKey TopicKey { get; }
 
@@ -79,7 +80,13 @@ public sealed class RedisStreamsTopic<T> : ITopic<T>
 
     public void Dispose()
     {
-        _stopTokenSource.Cancel();
+        if (_disposed)
+        {
+            return;
+        }
+        _disposed = true;
+        _stopTokenSource?.Cancel();
+        _stopTokenSource?.Dispose();
         _dispatcher.Dispose();
         _subject.OnCompleted();
         _subscriber.Dispose();

@@ -34,8 +34,13 @@ internal sealed class RedisStreamSubjectWriter<T> : IDisposable
 
     public void Dispose()
     {
+        if (_disposed)
+        {
+            return;
+        }
         _disposed = true;
-        _stopTokenSource.Cancel();
+        _stopTokenSource?.Cancel();
+        _stopTokenSource?.Dispose();
         _writer.TryComplete();
     }
 
