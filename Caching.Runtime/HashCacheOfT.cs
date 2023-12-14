@@ -36,6 +36,9 @@ public class HashCache<T> : IHashCache<T>
     public ValueTask<IDictionary<string, T?>> GetOrAddAsync(CacheKey cacheKey, Func<ValueTask<IDictionary<string, T?>>> generator, DateTimeOffset? expiration, CancellationToken token = default) =>
         _cache.GetOrAddAsync(GetCacheKey(cacheKey), generator, expiration, token);
 
+    public ValueTask<ICacheEntry<IDictionary<string, T?>>> GetCacheEntryAsync(CacheKey cacheKey, CancellationToken token = default) =>
+        _cache.GetCacheEntryAsync<T>(GetCacheKey(cacheKey), null, token);
+
     public ValueTask<bool> SetAsync(CacheKey cacheKey, IDictionary<string, T?> values, CancellationToken token = default) =>
         _cache.SetAsync(GetCacheKey(cacheKey), values, token);
 
@@ -120,6 +123,9 @@ public class StructHashCache<T> : IStructHashCache<T>
 
     public ValueTask<bool> SetAsync(CacheKey cacheKey, IDictionary<string, T?> values, CancellationToken token = default) =>
         _cache.SetAsync(GetCacheKey(cacheKey), values, token);
+
+    public ValueTask<ICacheEntry<IDictionary<string, T?>>> GetCacheEntryAsync(CacheKey cacheKey, CancellationToken token = default) =>
+        _cache.GetCacheEntryAsync<T>(GetCacheKey(cacheKey), null, token);
 
     public ValueTask<bool> SetAsync(CacheKey cacheKey, IDictionary<string, T?> values, TimeSpan? expiration, CancellationToken token = default) =>
         _cache.SetAsync(GetCacheKey(cacheKey), values, expiration, token);
