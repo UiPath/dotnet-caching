@@ -222,7 +222,7 @@ public sealed class MultilayerCache : ICache
     private async ValueTask<T?> GetInnerAsync<T>(CacheEntryOptions options)
         where T : class
     {
-        if (_memoryCache.TryGetValue(options.CacheKey, out ICacheEntry<T>? entry))
+        if (_memoryCache.TryGetValue<ICacheEntry<T?>>(options.CacheKey, out var entry))
         {
             _logger.LogTrace("Found local. {}", options.CacheKey);
             return entry?.Value;
@@ -244,7 +244,7 @@ public sealed class MultilayerCache : ICache
     private async ValueTask<T?> GetStructInnerAsync<T>(CacheEntryOptions options)
         where T : struct
     {
-        if (_memoryCache.TryGetValue(options.CacheKey, out ICacheEntry<T>? entry))
+        if (_memoryCache.TryGetValue<ICacheEntry<T?>>(options.CacheKey, out var entry))
         {
             _logger.LogTrace("Found local. {}", options.CacheKey);
             return entry?.Value;
