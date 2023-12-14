@@ -13,8 +13,10 @@ public class RedisPubSubTopicProvider : TopicProviderBase
     private readonly Uri _sourceUri;
     private readonly IRedisChannelStrategy _redisChannelStrategy;
     private readonly CancellationTokenSource _stopTokenSource = new();
+    private bool _disposed;
 
     public RedisPubSubTopicProvider(
+        IOptions<RedisConnectionOptions> connectionOptionsAccessor,
         IOptions<RedisPubSubTopicOptions> optionsAccessor,
         IOptions<CacheOptions> cacheOptionsAccessor,
         IRedisConnector redis,
@@ -30,12 +32,29 @@ public class RedisPubSubTopicProvider : TopicProviderBase
         var cacheOptions = cacheOptionsAccessor.Value;
         _sourceUri = cacheOptions.SourceUri ?? CacheOptions.MachineUri;
         _redisChannelStrategy = _options.RedisChannelStrategy ?? new PrefixStrategy(RedisTypePrefixes.PubSub, cacheOptions);
+        Enabled = connectionOptionsAccessor.Value.Enabled && _options.Enabled;
     }
 
     public override string Name => KnownTopicNames.RedisPubSub;
 
-    public override bool Enabled => _options.Enabled;
+    public override bool Enabled { get; }
 
     protected override ITopic<ICacheEvent> CreateInternalTopic(TopicKey topicKey) =>
         new RedisPubSubTopic<ICacheEvent>(topicKey, _sourceUri, _redis, _redisChannelStrategy, () => new Subject<ICacheEvent>(), _formatter, _policyHolder, _options, _loggerFactory.Create<RedisPubSubTopic<ICacheEvent>>(), _stopTokenSource.Token);
+
+    protected override void Dispose(bool disposing)
+    {
+        if (!_disposed)
+        {
+            if (disposing)
+            {
+                _stopTokenSource.Cancel();
+                _stopTokenSource.Dispose();
+            }
+
+            _disposed = true;
+        }
+
+        base.Dispose(disposing);
+    }
 }

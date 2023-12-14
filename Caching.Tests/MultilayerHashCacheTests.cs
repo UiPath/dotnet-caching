@@ -146,7 +146,7 @@ public class MultilayerHashCacheTests : IAsyncLifetime
             });
         var actual = await Sut.GetAsync<string>(_cacheKey, token: CancellationToken.None);
         actual.Should().BeEquivalentTo(expected);
-        await _innerCache.DidNotReceive().GetCacheEntryAsync<string>(_cacheKey, null, Arg.Any<CancellationToken>());
+        await _innerCache.DidNotReceive().GetCacheEntryAsync<string>(_cacheKey, Arg.Any<CancellationToken>());
     }
 
     [Fact]
@@ -760,7 +760,7 @@ public class MultilayerHashCacheTests : IAsyncLifetime
         var expiration = _clock.UtcNow.AddYears(1);
         var values = _fixture.Create<IDictionary<string, int?>>();
         await Sut.SetAsync(_cacheKey, values, expiration, CancellationToken.None);
-        var actual = await Sut.ExpireTimeAsync<int>(_cacheKey);
+        var actual = await Sut.ExpireTimeAsync<int?>(_cacheKey);
         expiration.Should().Be(actual);
     }
 
@@ -782,7 +782,7 @@ public class MultilayerHashCacheTests : IAsyncLifetime
         var expiration = TimeSpan.FromDays(1);
         var values = _fixture.Create<IDictionary<string, int?>>();
         await Sut.SetAsync(_cacheKey, values, expiration, CancellationToken.None);
-        var actual = await Sut.TimeToLiveAsync<int>(_cacheKey);
+        var actual = await Sut.TimeToLiveAsync<int?>(_cacheKey);
         expiration.Should().BeCloseTo(actual.GetValueOrDefault(), TimeSpan.FromSeconds(10));
     }
 

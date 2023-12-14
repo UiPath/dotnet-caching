@@ -219,13 +219,13 @@ public class RedisHashCacheTests : IAsyncLifetime
             .Union(expected.Select(kv => new HashEntry(kv.Key, JsonConvert.SerializeObject(kv.Value))))
             .ToArray();
         _database.KeyExistsAsync(_redisKey, CommandFlags.PreferReplica)
-            .Returns(ci => true);
+            .Returns(_ => true);
         _transaction.HashGetAllAsync(_redisKey, CommandFlags.PreferReplica)
             .Returns(entries);
         _transaction.KeyTimeToLiveAsync(_redisKey, CommandFlags.PreferReplica)
             .Returns((TimeSpan?)expireTime);
         _transaction.ExecuteAsync().Returns(true);
-        var actual = await Sut.GetCacheEntryAsync<string>(_cacheKey, null, CancellationToken.None);
+        var actual = await Sut.GetCacheEntryAsync<string>(_cacheKey, CancellationToken.None);
         actual.Value.Should().BeEquivalentTo(expected);
     }
 

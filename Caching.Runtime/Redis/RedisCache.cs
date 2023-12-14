@@ -49,52 +49,43 @@ public sealed class RedisCache : ICache
 
     private IDatabase Database => _redis.Database;
 
-    public async ValueTask<T?> GetAsync<T>(CacheKey cacheKey, T? defaultValue = null, CancellationToken token = default) where T : class
+    public ValueTask<T?> GetAsync<T>(CacheKey cacheKey, CancellationToken token = default)
     {
-        var ret = await GetAsync<T?>(ToRedisKey(cacheKey, token));
-        return ret ?? defaultValue;
+        NotCacheableException.ThrowIfNotCacheable<T>();
+        return GetAsync<T>(ToRedisKey(cacheKey, token));
     }
 
-    public async ValueTask<T?> GetAsync<T>(CacheKey cacheKey, T? defaultValue = null, CancellationToken token = default) where T : struct
-    {
-        var ret = await GetAsync<T?>(ToRedisKey(cacheKey, token));
-        return ret ?? defaultValue;
-    }
-
-    public ValueTask<T?> GetOrAddAsync<T>(CacheKey cacheKey, Func<ValueTask<T?>> generator, CancellationToken token = default) where T : class =>
+    public ValueTask<T?> GetOrAddAsync<T>(CacheKey cacheKey, Func<ValueTask<T?>> generator, CancellationToken token = default) =>
         GetOrAddAsync(cacheKey, generator, _defaultExpiration, token);
 
-    public ValueTask<T?> GetOrAddAsync<T>(CacheKey cacheKey, Func<ValueTask<T?>> generator, CancellationToken token = default) where T : struct =>
-        GetOrAddAsync(cacheKey, generator, _defaultExpiration, token);
-
-    public ValueTask<T?> GetOrAddAsync<T>(CacheKey cacheKey, Func<ValueTask<T?>> generator, DateTimeOffset? expiration, CancellationToken token = default) where T : class =>
+    public ValueTask<T?> GetOrAddAsync<T>(CacheKey cacheKey, Func<ValueTask<T?>> generator, DateTimeOffset? expiration = null, CancellationToken token = default) =>
         GetOrAddAsync(cacheKey, generator, _clock.ToTimeSpan(expiration), token);
 
-    public ValueTask<T?> GetOrAddAsync<T>(CacheKey cacheKey, Func<ValueTask<T?>> generator, DateTimeOffset? expiration, CancellationToken token = default) where T : struct =>
-        GetOrAddAsync(cacheKey, generator, _clock.ToTimeSpan(expiration), token);
-
-    public ValueTask<T?> GetOrAddAsync<T>(CacheKey cacheKey, Func<ValueTask<T?>> generator, TimeSpan? expiration, CancellationToken token = default) where T : class
+    public ValueTask<T?> GetOrAddAsync<T>(CacheKey cacheKey, Func<ValueTask<T?>> generator, TimeSpan? expiration = null, CancellationToken token = default)
     {
-        var redisKey = ToRedisKey(cacheKey, token);
+        NotCacheableException.ThrowIfNotCacheable<T>();
         ArgumentNullException.ThrowIfNull(generator);
+        var redisKey = ToRedisKey(cacheKey, token);
         return GetOrAddInternalAsync(redisKey, generator, _clock.ToTimeSpan(expiration));
     }
 
-    public ValueTask<T?> GetOrAddAsync<T>(CacheKey cacheKey, Func<ValueTask<T?>> generator, TimeSpan? expiration, CancellationToken token = default) where T : struct
+    public ValueTask<T?> GetOrAddAsync<T>(CacheKey cacheKey, Func<ValueTask<T?>> generator, TimeSpan? expiration = null, CancellationToken token = default) where T : struct
     {
-        var redisKey = ToRedisKey(cacheKey, token);
+        NotCacheableException.ThrowIfNotCacheable<T>();
         ArgumentNullException.ThrowIfNull(generator);
+        var redisKey = ToRedisKey(cacheKey, token);
         return GetOrAddInternalAsync(redisKey, generator, _clock.ToTimeSpan(expiration));
     }
 
     public ValueTask<bool> RefreshAsync<T>(CacheKey cacheKey, CancellationToken token = default) =>
         RefreshAsync<T>(cacheKey, _defaultExpiration, token);
 
-    public ValueTask<bool> RefreshAsync<T>(CacheKey cacheKey, TimeSpan? expiration, CancellationToken token = default) =>
+    public ValueTask<bool> RefreshAsync<T>(CacheKey cacheKey, TimeSpan? expiration = null, CancellationToken token = default) =>
         RefreshAsync<T>(cacheKey, _clock.ToDateTimeOffset(expiration), token);
 
-    public async ValueTask<bool> RefreshAsync<T>(CacheKey cacheKey, DateTimeOffset? expiration, CancellationToken token = default)
+    public async ValueTask<bool> RefreshAsync<T>(CacheKey cacheKey, DateTimeOffset? expiration = null, CancellationToken token = default)
     {
+        NotCacheableException.ThrowIfNotCacheable<T>();
         var redisKey = ToRedisKey(cacheKey, token);
         expiration = _clock.ToDateTimeOffset(expiration);
 
@@ -121,29 +112,30 @@ public sealed class RedisCache : ICache
         return ret;
     }
 
-    public ValueTask<bool> RemoveAsync<T>(CacheKey cacheKey, CancellationToken token = default) =>
-        RemoveAsync(ToRedisKey(cacheKey, token));
+    public ValueTask<bool> RemoveAsync<T>(CacheKey cacheKey, CancellationToken token = default)
+    {
+        NotCacheableException.ThrowIfNotCacheable<T>();
+        return RemoveAsync(ToRedisKey(cacheKey, token));
+    }
 
-    public ValueTask<bool> SetAsync<T>(CacheKey cacheKey, T? value, CancellationToken token = default) where T : class =>
+    public ValueTask<bool> SetAsync<T>(CacheKey cacheKey, T? value, CancellationToken token = default) =>
         SetAsync(cacheKey, value, _defaultExpiration, token);
 
-    public ValueTask<bool> SetAsync<T>(CacheKey cacheKey, T? value, CancellationToken token = default) where T : struct =>
-        SetAsync(cacheKey, value, _defaultExpiration, token);
+    public ValueTask<bool> SetAsync<T>(CacheKey cacheKey, T? value, TimeSpan? expiration = null, CancellationToken token = default)
+    {
+        NotCacheableException.ThrowIfNotCacheable<T>();
+        return SetInternalAsync(ToRedisKey(cacheKey, token), value, _clock.ToTimeSpan(expiration));
+    }
 
-    public ValueTask<bool> SetAsync<T>(CacheKey cacheKey, T? value, TimeSpan? expiration, CancellationToken token = default) where T : class =>
-        SetInternalAsync(ToRedisKey(cacheKey, token), value, _clock.ToTimeSpan(expiration));
-
-    public ValueTask<bool> SetAsync<T>(CacheKey cacheKey, T? value, TimeSpan? expiration, CancellationToken token = default) where T : struct =>
-        SetInternalAsync(ToRedisKey(cacheKey, token), value, _clock.ToTimeSpan(expiration));
-
-    public ValueTask<bool> SetAsync<T>(CacheKey cacheKey, T? value, DateTimeOffset? expiration, CancellationToken token = default) where T : class =>
-        SetInternalAsync(ToRedisKey(cacheKey, token), value, _clock.ToTimeSpan(expiration));
-
-    public ValueTask<bool> SetAsync<T>(CacheKey cacheKey, T? value, DateTimeOffset? expiration, CancellationToken token = default) where T : struct =>
-        SetInternalAsync(ToRedisKey(cacheKey, token), value, _clock.ToTimeSpan(expiration));
+    public ValueTask<bool> SetAsync<T>(CacheKey cacheKey, T? value, DateTimeOffset? expiration = null, CancellationToken token = default)
+    {
+        NotCacheableException.ThrowIfNotCacheable<T>();
+        return SetInternalAsync(ToRedisKey(cacheKey, token), value, _clock.ToTimeSpan(expiration));
+    }
 
     public async ValueTask<bool> ContainsAsync<T>(CacheKey cacheKey, CancellationToken token = default)
     {
+        NotCacheableException.ThrowIfNotCacheable<T>();
         var redisKey = ToRedisKey(cacheKey, token);
         var ret = false;
         var operation = StartOperation();
@@ -168,6 +160,7 @@ public sealed class RedisCache : ICache
 
     public async ValueTask<TimeSpan?> TimeToLiveAsync<T>(CacheKey cacheKey, CancellationToken token = default)
     {
+        NotCacheableException.ThrowIfNotCacheable<T>();
         TimeSpan? ret = default;
         var operation = StartOperation();
         try
@@ -190,6 +183,7 @@ public sealed class RedisCache : ICache
 
     public async ValueTask<DateTimeOffset?> ExpireTimeAsync<T>(CacheKey cacheKey, CancellationToken token = default)
     {
+        NotCacheableException.ThrowIfNotCacheable<T>();
         DateTimeOffset? ret = default;
         var operation = StartOperation();
         try
@@ -220,6 +214,7 @@ public sealed class RedisCache : ICache
 
     private async ValueTask<T?> GetOrAddInternalAsync<T>(RedisKey redisKey, Func<ValueTask<T?>> generator, TimeSpan expiration)
     {
+        NotCacheableException.ThrowIfNotCacheable<T>();
         var ret = await GetAsync<T>(redisKey).ConfigureAwait(false);
         if (!IsDefault(ret))
         {

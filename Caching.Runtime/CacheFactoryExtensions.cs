@@ -7,10 +7,4 @@ public static class CacheFactoryExtensions
 
     public static IHashCache<T> CreateHashCache<T>(this ICacheFactory factory, string? providerName = null, Type? callerType = null) where T : class =>
         new HashCache<T>(factory.CreateHashCache(providerName, typeof(T), callerType));
-
-    public static IStructCache<T> CreateStructCache<T>(this ICacheFactory factory, string? providerName = null, Type? callerType = null) where T : struct =>
-        new StructCache<T>(factory.CreateCache(providerName, typeof(T), callerType));
-
-    public static IStructHashCache<T> CreateStructHashCache<T>(this ICacheFactory factory, string? providerName = null, Type? callerType = null) where T : struct =>
-        new StructHashCache<T>(factory.CreateHashCache(providerName, typeof(T), callerType));
 }

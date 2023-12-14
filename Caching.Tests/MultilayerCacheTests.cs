@@ -55,7 +55,7 @@ public class MultilayerCacheTests : IAsyncLifetime
             });
         var actual = await Sut.GetAsync<string>(_cacheKey, token: CancellationToken.None);
         actual.Should().Be(expected);
-        await _innerCache.DidNotReceive().GetAsync<string>(_innerCacheKey, null, Arg.Any<CancellationToken>());
+        await _innerCache.DidNotReceive().GetAsync<string>(_innerCacheKey, Arg.Any<CancellationToken>());
     }
 
     [Fact]
@@ -435,8 +435,8 @@ public class MultilayerCacheTests : IAsyncLifetime
             .Returns(token);
 
         var expiration = _clock.UtcNow.AddYears(1);
-        await Sut.SetAsync<int>(_cacheKey, 1, expiration, CancellationToken.None);
-        var actual = await Sut.ExpireTimeAsync<int>(_cacheKey);
+        await Sut.SetAsync<int?>(_cacheKey, 1, expiration, CancellationToken.None);
+        var actual = await Sut.ExpireTimeAsync<int?>(_cacheKey);
         expiration.Should().Be(actual);
     }
 
@@ -457,8 +457,8 @@ public class MultilayerCacheTests : IAsyncLifetime
             .Returns(c => token);
 
         var expiration = TimeSpan.FromDays(1);
-        await Sut.SetAsync<int>(_cacheKey, 1, expiration, CancellationToken.None);
-        var actual = await Sut.TimeToLiveAsync<int>(_cacheKey);
+        await Sut.SetAsync<int?>(_cacheKey, 1, expiration, CancellationToken.None);
+        var actual = await Sut.TimeToLiveAsync<int?>(_cacheKey);
         expiration.Should().BeCloseTo(actual.GetValueOrDefault(), TimeSpan.FromSeconds(10));
     }
 
