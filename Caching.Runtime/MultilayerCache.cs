@@ -145,7 +145,7 @@ public sealed class MultilayerCache : ICache
     {
         NotCacheableException.ThrowIfNotCacheable<T>();
         var cacheEntryOptions = _entryBuilder.BuildEntryOptions<T>(cacheKey, default, token);
-        return _memoryCache.TryGetValue(cacheEntryOptions.CacheKey, out ICacheEntry? value)
+        return _memoryCache.TryGetValue<ICacheEntry>(cacheEntryOptions.CacheKey, out var value)
             ? value?.Expiration.Subtract(_clock.UtcNow)
             : await _innerCache.TimeToLiveAsync<T>(cacheEntryOptions.CacheKey, token);
     }
@@ -155,7 +155,7 @@ public sealed class MultilayerCache : ICache
         NotCacheableException.ThrowIfNotCacheable<T>();
         var cacheEntryOptions = _entryBuilder.BuildEntryOptions<T>(cacheKey, default, token);
 
-        return _memoryCache.TryGetValue(cacheEntryOptions.CacheKey, out ICacheEntry? value)
+        return _memoryCache.TryGetValue<ICacheEntry>(cacheEntryOptions.CacheKey, out var value)
             ? value?.Expiration
             : await _innerCache.ExpireTimeAsync<T>(cacheEntryOptions.CacheKey, token);
     }

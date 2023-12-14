@@ -3,7 +3,7 @@ using UiPath.Platform.Caching.Policies;
 
 namespace UiPath.Platform.Caching.Broadcast.Redis;
 
-public  class RedisStreamsTopicProvider : TopicProviderBase
+public class RedisStreamsTopicProvider : TopicProviderBase
 {
     private readonly RedisStreamsTopicOptions _redisStreamsTopicOptions;
     private readonly CacheOptions _cacheOptions;
@@ -45,8 +45,8 @@ public  class RedisStreamsTopicProvider : TopicProviderBase
         {
             if (disposing)
             {
-                _stopTokenSource.Cancel();
-                _stopTokenSource.Dispose();
+                _stopTokenSource?.Cancel();
+                _stopTokenSource?.Dispose();
             }
 
             _disposed = true;

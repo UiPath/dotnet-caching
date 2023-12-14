@@ -48,8 +48,8 @@ public class RedisPubSubTopicProvider : TopicProviderBase
         {
             if (disposing)
             {
-                _stopTokenSource.Cancel();
-                _stopTokenSource.Dispose();
+                _stopTokenSource?.Cancel();
+                _stopTokenSource?.Dispose();
             }
 
             _disposed = true;

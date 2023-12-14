@@ -12,6 +12,7 @@ internal sealed class EventDispatcher<T> : IDisposable
     private readonly ILogger _logger;
     private readonly CancellationTokenSource _stopTokenSource;
     private readonly CancellationToken _cancellationToken;
+    private bool _disposed;
 
     public EventDispatcher(TopicKey topicKey, ChannelReader<T> reader, ISubject<T> subject, ILogger logger, CancellationToken cancellationToken)
     {
@@ -40,6 +41,12 @@ internal sealed class EventDispatcher<T> : IDisposable
 
     public void Dispose()
     {
-        _stopTokenSource.Cancel();
+        if (_disposed)
+        {
+            return;
+        }
+        _disposed = true;
+        _stopTokenSource?.Cancel();
+        _stopTokenSource?.Dispose();
     }
 }
