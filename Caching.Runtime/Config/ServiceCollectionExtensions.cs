@@ -20,7 +20,10 @@ public static class ServiceCollectionExtensions
         return services.AddCaching(section, configure, opt => section.Bind(opt));
     }
 
-    public static IServiceCollection AddCaching(this IServiceCollection services, IConfigurationSection? configuration = null, Action<ICachingBuilder>? configure = null, Action<CacheOptions>? configureOptions = null)
+    public static IServiceCollection AddCaching(this IServiceCollection services, Action<ICachingBuilder>? configure = null, Action<CacheOptions>? configureOptions = null) =>
+        services.AddCaching(null, configure, configureOptions);
+
+    public static IServiceCollection AddCaching(this IServiceCollection services, IConfigurationSection? configuration, Action<ICachingBuilder>? configure = null, Action<CacheOptions>? configureOptions = null)
     {
         ArgumentNullException.ThrowIfNull(services);
 
