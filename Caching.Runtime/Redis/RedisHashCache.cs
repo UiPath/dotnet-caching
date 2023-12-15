@@ -39,7 +39,7 @@ public sealed class RedisHashCache : IHashCache
         _writePolicy = policyHolder.Write;
         _cacheOptions = cacheOptions;
         _cacheEntryFactory = redisCacheOptions.EntryFactory ?? new CacheEntryFactory();
-        _supportsExpireTime = RedisUtils.SupportsExpireTime(redisCacheOptions.Version);
+        _supportsExpireTime = RedisUtils.SupportsExpireTime(redis.Version);
         _redisKeyStrategy = (redisCacheOptions.RedisKeyStrategyFactory ?? new DefaultRedisKeyStrategyFactory()).Create(_cacheOptions, GetType());
         _defaultExpiration = redisCacheOptions.DefaultExpiration;
         _clock = new CacheClock(redisCacheOptions.Clock, _defaultExpiration);

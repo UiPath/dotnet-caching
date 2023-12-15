@@ -4,6 +4,8 @@ public interface IRedisConnector : IDisposable
 {
     event EventHandler? OnReconnect;
 
+    Version Version { get; }
+
     IDatabase Database { get; }
 
     ISubscriber Subscriber { get; }

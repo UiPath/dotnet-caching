@@ -14,7 +14,5 @@ public class RedisCacheOptions : ICacheOptions
 
     public ICacheKeyStrategy? CacheKeyStrategy { get; set; }
 
-    public int Version { get; set; } = 6;
-
     public IRedisKeyStrategyFactory? RedisKeyStrategyFactory { get; set; }
 }

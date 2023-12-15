@@ -21,6 +21,8 @@ public class RedisCacheTests : IAsyncLifetime
     private ICacheKeyStrategy _cacheKeyStrategy = default!;
     private IRedisKeyStrategy _redisKeyStrategy = default!;
     private string _prefix = default!;
+    private IRedisConnector _connector = default!;
+    private Version _version = new(6, 0);
     private RedisCache? _sut = null;
     private RedisCache Sut => _sut ??= _fixture.Create<RedisCache>();
 
@@ -315,7 +317,7 @@ public class RedisCacheTests : IAsyncLifetime
     public async Task Read_ExpireTime_For_Unknown_Key_v7()
     {
         var wasCalled = false;
-        _cacheOptions.Version = 7;
+        _version = new(7,0);
         _database.KeyExpireTimeAsync(_redisKey, Arg.Any<CommandFlags>())
             .Returns(ci =>
             {
@@ -340,7 +342,7 @@ public class RedisCacheTests : IAsyncLifetime
     [Fact]
     public async Task Read_ExpireTime_For_Known_Key_v7()
     {
-        _cacheOptions.Version = 7;
+        _version = new(7, 0);
         DateTimeOffset? expected = _fixture.Create<DateTimeOffset>();
         _database.KeyExpireTimeAsync(_redisKey, Arg.Any<CommandFlags>())
             .Returns((DateTime?)expected.GetValueOrDefault().UtcDateTime);
@@ -394,7 +396,7 @@ public class RedisCacheTests : IAsyncLifetime
     [Fact]
     public async Task Read_ExpireTime_throw_exception_v7()
     {
-        _cacheOptions.Version = 7;
+        _version = new(7, 0);
         _database.KeyExpireTimeAsync(_redisKey, Arg.Any<CommandFlags>())
             .ThrowsAsync(new Exception());
         var actual = await Sut.ExpireTimeAsync<string>(_cacheKey, CancellationToken.None);
@@ -445,7 +447,9 @@ public class RedisCacheTests : IAsyncLifetime
         var opt = Options.Create(_cacheOptions);
         _fixture.Inject(opt);
         _fixture.Inject(_cacheOptions);
-
+        _connector = _fixture.Freeze<IRedisConnector>();
+        _connector.Database.Returns(_ => _database);
+        _connector.Version.Returns(_ => _version);
         return Task.CompletedTask;
     }
 
@@ -479,10 +483,7 @@ public class RedisCacheTests : IAsyncLifetime
         var expiration = _fixture.Create<TimeSpan>();
         var expectedResponse = _fixture.Create<bool>();
         _database.StringSetAsync(_redisKey, Arg.Any<RedisValue>(), Arg.Any<TimeSpan?>(), Arg.Any<When>(), Arg.Is<CommandFlags>(f => f.HasFlag(CommandFlags.DemandMaster)))
-                .Returns(ci =>
-                {
-                    return Task.FromResult(expectedResponse);
-                });
+                .Returns(_ => Task.FromResult(expectedResponse));
         bool? actualResponse = default;
         if (expirationType == typeof(TimeSpan))
         {

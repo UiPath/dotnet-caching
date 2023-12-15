@@ -24,8 +24,10 @@ public class RedisHashCacheTests : IAsyncLifetime
     private RedisKey _redisKey = default!;
     private ICacheKeyStrategy _cacheKeyStrategy = default!;
     private IRedisKeyStrategy _redisKeyStrategy = default!;
-
-    private RedisHashCache Sut => _fixture.Create<RedisHashCache>();
+    private IRedisConnector _connector = default!;
+    private Version _version = new(6, 0);
+    private RedisHashCache? _sut = null;
+    private RedisHashCache Sut => _sut ??= _fixture.Create<RedisHashCache>();
 
     [Fact]
     public async Task Get_data_from_cacheKey_cache()
@@ -187,7 +189,7 @@ public class RedisHashCacheTests : IAsyncLifetime
     [Fact]
     public async Task Get_cache_entry_with_metadata_v7()
     {
-        _redisCacheOptions.Version = 7;
+        _version = new(7, 0);
         var expected = _fixture.Create<IDictionary<string, string?>>();
         var extendedProps = _fixture.Create<IDictionary<string, string?>>();
         var expireTime = _now.AddSeconds(1);
@@ -209,7 +211,7 @@ public class RedisHashCacheTests : IAsyncLifetime
     [Fact]
     public async Task Get_cache_entry_metadata_v6()
     {
-        _redisCacheOptions.Version = 6;
+        _version = new(6, 0);
         var expected = _fixture.Create<IDictionary<string, string?>>();
         var extendedProps = _fixture.Create<IDictionary<string, string?>>();
         var expireTime = _fixture.Create<TimeSpan>();
@@ -722,7 +724,7 @@ public class RedisHashCacheTests : IAsyncLifetime
     [Fact]
     public async Task Read_ExpireTime_For_Unknown_cacheKey_v7()
     {
-        _redisCacheOptions.Version = 7;
+        _version = new(7, 0);
         _database.KeyExpireTimeAsync(_redisKey, Arg.Any<CommandFlags>())
             .Returns(default(DateTime?));
         var actual = await Sut.ExpireTimeAsync<string>(_cacheKey, CancellationToken.None);
@@ -733,7 +735,7 @@ public class RedisHashCacheTests : IAsyncLifetime
     [Fact]
     public async Task Read_ExpireTime_throw_exception_v7()
     {
-        _redisCacheOptions.Version = 7;
+        _version = new(7, 0);
         _database.KeyExpireTimeAsync(_redisKey, Arg.Any<CommandFlags>())
             .ThrowsAsync(new Exception());
         var actual = await Sut.ExpireTimeAsync<string>(_cacheKey, CancellationToken.None);
@@ -744,7 +746,7 @@ public class RedisHashCacheTests : IAsyncLifetime
     [Fact]
     public async Task Read_ExpireTime_For_Known_cacheKey_v7()
     {
-        _redisCacheOptions.Version = 7;
+        _version = new(7, 0);
         DateTimeOffset? expected = _fixture.Create<DateTimeOffset>();
         _database.KeyExpireTimeAsync(_redisKey, Arg.Any<CommandFlags>())
             .Returns(c => (DateTime?)expected.GetValueOrDefault().UtcDateTime);
@@ -757,7 +759,7 @@ public class RedisHashCacheTests : IAsyncLifetime
     public async Task Read_ExpireTime_For_Known_cacheKey_v6()
     {
         var wasCalled = false;
-        _redisCacheOptions.Version = 6;
+        _version = new(6, 0);
         TimeSpan? expected = _fixture.Create<TimeSpan>();
         _database.KeyTimeToLiveAsync(_redisKey, Arg.Any<CommandFlags>())
             .ReturnsForAnyArgs(ci =>
@@ -773,7 +775,7 @@ public class RedisHashCacheTests : IAsyncLifetime
     public async Task Read_ExpireTime_For_Known_cacheKey_v6_not_default_expiration()
     {
         var wasCalled = false;
-        _redisCacheOptions.Version = 6;
+        _version = new(6, 0);
         _redisCacheOptions.DefaultExpiration = null;
         _database.KeyTimeToLiveAsync(Arg.Any<RedisKey>(), Arg.Any<CommandFlags>())
             .ReturnsForAnyArgs(ci =>
@@ -928,6 +930,9 @@ public class RedisHashCacheTests : IAsyncLifetime
         var opt = Options.Create(_redisCacheOptions);
         _fixture.Inject(opt);
         _fixture.Inject(opt.Value);
+        _connector = _fixture.Freeze<IRedisConnector>();
+        _connector.Database.Returns(_ => _database);
+        _connector.Version.Returns(_ => _version);
         return Task.CompletedTask;
     }
 }

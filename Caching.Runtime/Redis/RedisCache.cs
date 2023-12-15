@@ -36,7 +36,7 @@ public sealed class RedisCache : ICache
         _telemetryProvider = telemetryProvider;
         _readPolicy = policyHolder.Read;
         _writePolicy = policyHolder.Write;
-        _supportsExpireTime = RedisUtils.SupportsExpireTime(redisCacheOptions.Version);
+        _supportsExpireTime = RedisUtils.SupportsExpireTime(redis.Version);
         _largeValueThreshold = cacheOptions.LargeValueThreshold;
         _redisKeyStrategy = (redisCacheOptions.RedisKeyStrategyFactory ?? new DefaultRedisKeyStrategyFactory()).Create(cacheOptions, GetType());
         _defaultExpiration = redisCacheOptions.DefaultExpiration;
