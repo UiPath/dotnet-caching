@@ -1,5 +1,7 @@
 ﻿namespace UiPath.Platform.Caching.Redis;
 internal static class RedisUtils
 {
-    internal static bool SupportsExpireTime(int version) => version >= 7;
+    private static readonly Version ExpireTimeVersion = new(7, 0);
+
+    internal static bool SupportsExpireTime(Version version) => version >= ExpireTimeVersion;
 }

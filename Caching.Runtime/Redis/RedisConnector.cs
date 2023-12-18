@@ -11,6 +11,7 @@ public sealed class RedisConnector : IRedisConnector
     private readonly ICachingTelemetryProvider _telemetryProvider;
     private readonly Func<IConnectionMultiplexer> _multiplexerFactory;
     private readonly Timer? _hangDetectionTimer;
+    private readonly Lazy<Version> _version;
 
     private Lazy<IConnectionMultiplexer> _lazyCacheConnectionMultiplexer;
     private int _reconnecting;
@@ -28,6 +29,7 @@ public sealed class RedisConnector : IRedisConnector
         {
             _hangDetectionTimer = new Timer(_ => OnHangScan(), null, TimeSpan.FromSeconds(30), TimeSpan.FromSeconds(5));
         }
+        _version = new Lazy<Version>(GetVersion);
     }
 
     public event EventHandler? OnReconnect;
@@ -35,6 +37,8 @@ public sealed class RedisConnector : IRedisConnector
     public ISubscriber Subscriber => ConnectionMultiplexer.GetSubscriber();
 
     public IDatabase Database => ConnectionMultiplexer.GetDatabase();
+
+    public Version Version => _version.Value;
 
     private IConnectionMultiplexer ConnectionMultiplexer => _lazyCacheConnectionMultiplexer.Value;
 
@@ -94,6 +98,49 @@ public sealed class RedisConnector : IRedisConnector
                 Interlocked.Exchange(ref _reconnecting, 0);
             }
         });
+    }
+
+    private Version GetVersion()
+    {
+        Version defaultVersion = new Version(4, 0);
+
+        Version DefaultVersion()
+        {
+            if (Version.TryParse(_redisOptions.Version, out var version))
+            {
+                return version;
+            }
+
+            if (string.IsNullOrWhiteSpace(_redisOptions.ConnectionString))
+            {
+                return defaultVersion;
+            }
+            try
+            {
+                return ConfigurationOptions.Parse(_redisOptions.ConnectionString).DefaultVersion;
+            }
+            catch (Exception)
+            {
+                return defaultVersion;
+            }
+        }
+
+        try
+        {
+            var endpoint = ConnectionMultiplexer.GetEndPoints().FirstOrDefault();
+            if (endpoint == null)
+            {
+                return defaultVersion;
+            }
+
+            var server = ConnectionMultiplexer.GetServer(endpoint);
+            return server.Version;
+        }
+        catch (Exception ex)
+        {
+            _telemetryProvider.TrackException(ex);
+            return DefaultVersion();
+        }
     }
 
     public void Dispose()

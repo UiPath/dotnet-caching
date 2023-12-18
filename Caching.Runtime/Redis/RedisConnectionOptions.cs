@@ -26,4 +26,8 @@ public class RedisConnectionOptions
     public int LastWriteIntervalThresholdMilliseconds { get; set; } = 15000;
 
     public int LastReadIntervalThresholdMilliseconds { get; set; } = 15000;
+
+    public string? Version { get; set; } = new Version(6, 0).ToString();
+
+    public int? DefaultDatabase { get; set; } = 0;
 }
