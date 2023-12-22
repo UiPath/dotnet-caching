@@ -55,7 +55,7 @@ public sealed class RedisStreamsTopic<T> : ITopic<T>
     public IDisposable Subscribe(IObserver<T> observer) =>
         _subject.Subscribe(observer);
 
-    public async Task<bool> PublishAsync(T @event, CancellationToken token = default)
+    public async ValueTask<bool> PublishAsync(T @event, CancellationToken token = default)
     {
         token.ThrowIfCancellationRequested();
         try
@@ -69,7 +69,7 @@ public sealed class RedisStreamsTopic<T> : ITopic<T>
                 useApproximateMaxLength: true,
                 flags: CommandFlags.DemandMaster)).ConfigureAwait(false);
             _logger.LogDebug("Published to topic {} event {} stream id {} ", TopicKey, @event.Id,  id);
-            return true;
+            return !id.IsNull;
         }
         catch (Exception ex)
         {

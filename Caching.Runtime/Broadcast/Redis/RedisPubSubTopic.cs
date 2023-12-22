@@ -49,7 +49,7 @@ public sealed class RedisPubSubTopic<T> : ITopic<T>
     public IDisposable Subscribe(IObserver<T> observer) =>
         _subject.Subscribe(observer);
 
-    public async Task<bool> PublishAsync(T @event, CancellationToken token = default)
+    public async ValueTask<bool> PublishAsync(T @event, CancellationToken token = default)
     {
         token.ThrowIfCancellationRequested();
         try

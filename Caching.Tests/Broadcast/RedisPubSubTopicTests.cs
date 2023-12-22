@@ -155,7 +155,7 @@ public class RedisPubSubTopicTests : IAsyncLifetime
         var cancelSource = new CancellationTokenSource();
         var token = cancelSource.Token;
         cancelSource.Cancel();
-        Func<Task> act = async () => { await Sut.PublishAsync(cloudEvent, token); };
+        Func<Task> act = async () => await Sut.PublishAsync(cloudEvent, token);
         await act.Should().ThrowAsync<OperationCanceledException>();
     }
 
@@ -171,7 +171,7 @@ public class RedisPubSubTopicTests : IAsyncLifetime
         _database.ClearReceivedCalls();
         _database.PublishAsync(Arg.Any<RedisChannel>(), Arg.Any<RedisValue>(), Arg.Any<CommandFlags>())
             .ThrowsAsync(new RedisException("test"));
-        Func<Task> act = async () => { await Sut.PublishAsync(cloudEvent); };
+        Func<Task> act = async () => await Sut.PublishAsync(cloudEvent);
         await act.Should().NotThrowAsync();
         _channel.Should().BeNull();
         _value.Should().BeNull();
