@@ -16,8 +16,8 @@ public sealed class NullTopic<T> : ITopic<T>
 
     public EventHandler? OnDisposed { get; set; }
 
-    public Task<bool> PublishAsync(T @event, CancellationToken token = default) =>
-        Task.FromResult(true);
+    public ValueTask<bool> PublishAsync(T @event, CancellationToken token = default) =>
+        ValueTask.FromResult(true);
 
     public IDisposable Subscribe(IObserver<T> observer) =>
         Disposable.Empty;

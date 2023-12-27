@@ -33,10 +33,12 @@ public class InMemoryCacheProviderTests : IAsyncLifetime
         topicFactory.Get(Arg.Any<string?>(), Arg.Any<Type>())
             .Returns(topicProvider);
         var topic = _fixture.Create<ITopic<ICacheEvent>>();
+        topic.PublishAsync(Arg.Any<ICacheEvent>(), Arg.Any<CancellationToken>())
+            .Returns(_ => true);
         TopicKey topicKey = _fixture.Create<string>();
         var topicCallsCount = 0;
         topicProvider.Create(topicKey)
-            .ReturnsForAnyArgs(c =>
+            .ReturnsForAnyArgs(_ =>
             {
                 topicCallsCount++;
                 return topic;
@@ -45,7 +47,7 @@ public class InMemoryCacheProviderTests : IAsyncLifetime
         var token = _fixture.Create<IChangeToken>();
         var tokenCallsCount = 0;
         changeTokenFactory.Create(Arg.Any<string>(), Arg.Any<ITopic<ICacheEvent>>(), Arg.Any<string>(), Arg.Any<Type>())
-            .ReturnsForAnyArgs(c =>
+            .ReturnsForAnyArgs(_ =>
             {
                 tokenCallsCount++;
                 return token;
@@ -55,7 +57,7 @@ public class InMemoryCacheProviderTests : IAsyncLifetime
         var cacheEvent = _fixture.Create<ICacheEvent>();
         var eventCallsCount = 0;
         cacheEventFactory.Create(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CacheEventData>(), Arg.Any<string>())
-            .ReturnsForAnyArgs(c =>
+            .ReturnsForAnyArgs(_ =>
             {
                 eventCallsCount++;
                 return cacheEvent;

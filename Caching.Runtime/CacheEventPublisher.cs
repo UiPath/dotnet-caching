@@ -22,7 +22,7 @@ internal sealed class CacheEventPublisher
         _logger = logger;
     }
 
-    public Task MetadataUpdatedAsync<T>(ICacheEntryOptions options)
+    public ValueTask<bool> MetadataUpdatedAsync<T>(ICacheEntryOptions options)
     {
         Dictionary<string, object?> properties = new()
         {
@@ -32,10 +32,10 @@ internal sealed class CacheEventPublisher
         return RaiseEventAsync<T>(options.TopicKey, options.CacheKey, KnownEventTypes.CacheRefreshed, properties);
     }
 
-    public Task CacheSetAsync<T>(ICacheEntryOptions options) =>
+    public ValueTask<bool> CacheSetAsync<T>(ICacheEntryOptions options) =>
         RaiseEventAsync<T>(options.TopicKey, options.CacheKey, KnownEventTypes.CacheSet);
 
-    public Task CacheRefreshedAsync<T>(ICacheEntryOptions options)
+    public ValueTask<bool> CacheRefreshedAsync<T>(ICacheEntryOptions options)
     {
         Dictionary<string, object?> properties = new()
         {
@@ -44,10 +44,10 @@ internal sealed class CacheEventPublisher
         return RaiseEventAsync<T>(options.TopicKey, options.CacheKey, KnownEventTypes.CacheRemoved, properties);
     }
 
-    public Task CacheRemovedAsync<T>(ICacheEntryOptions options) =>
+    public ValueTask<bool> CacheRemovedAsync<T>(ICacheEntryOptions options) =>
         RaiseEventAsync<T>(options.TopicKey, options.CacheKey, KnownEventTypes.CacheRemoved);
 
-    private async Task RaiseEventAsync<T>(TopicKey topicKey, CacheKey cacheKey, string eventType, IDictionary<string, object?>? properties = null)
+    private async ValueTask<bool> RaiseEventAsync<T>(TopicKey topicKey, CacheKey cacheKey, string eventType, IDictionary<string, object?>? properties = null)
     {
         _logger.LogDebug("Raise {} on topicKey {} for key {}", eventType, topicKey, cacheKey);
         var data = new CacheEventData(cacheKey)
@@ -56,6 +56,6 @@ internal sealed class CacheEventPublisher
         };
         var ev = _cacheEventFactory.Create(_cacheName, eventType, data);
         var topic = _topicFactory.Get<T>(_topicProviderName, topicKey);
-        await topic.PublishAsync(ev, CancellationToken.None).ConfigureAwait(false);
+        return await topic.PublishAsync(ev, CancellationToken.None).ConfigureAwait(false);
     }
 }

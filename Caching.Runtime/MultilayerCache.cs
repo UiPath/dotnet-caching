@@ -90,8 +90,8 @@ public sealed class MultilayerCache : ICache
         }
 
         _logger.LogDebug("Replacing cached key {}", cacheEntryOptions.CacheKey);
-        await _eventPublisher.CacheSetAsync<T>(cacheEntryOptions).ConfigureAwait(false);
-        return await InternalSetAsync(cacheEntryOptions, value).ConfigureAwait(false);
+        var fired = await _eventPublisher.CacheSetAsync<T>(cacheEntryOptions).ConfigureAwait(false);
+        return fired && await InternalSetAsync(cacheEntryOptions, value).ConfigureAwait(false);
     }
 
     public ValueTask<bool> RemoveAsync<T>(CacheKey cacheKey, CancellationToken token = default)
@@ -115,9 +115,8 @@ public sealed class MultilayerCache : ICache
         _logger.LogTrace("Refreshing inner cache key {} at expiration {}", cacheEntryOptions.CacheKey, cacheEntryOptions.Expiration);
         try
         {
-            var ret = await _innerCache.RefreshAsync<T>(cacheEntryOptions.CacheKey, cacheEntryOptions.Expiration, token).ConfigureAwait(false);
-            await _eventPublisher.CacheRefreshedAsync<T>(cacheEntryOptions).ConfigureAwait(false);
-            return ret;
+            var fired = await _eventPublisher.CacheRefreshedAsync<T>(cacheEntryOptions).ConfigureAwait(false);
+            return fired && await _innerCache.RefreshAsync<T>(cacheEntryOptions.CacheKey, cacheEntryOptions.Expiration, token).ConfigureAwait(false);
         }
         catch (Exception ex)
         {
@@ -166,9 +165,9 @@ public sealed class MultilayerCache : ICache
         try
         {
             _memoryCache.Remove(options.CacheKey);
-            var ret = await _innerCache.RemoveAsync<T>(options.CacheKey, options.Token).ConfigureAwait(false);
-            await _eventPublisher.CacheRemovedAsync<T>(options).ConfigureAwait(false);
-            return ret;
+            var removed = await _innerCache.RemoveAsync<T>(options.CacheKey, options.Token).ConfigureAwait(false);
+            var eventFired = await _eventPublisher.CacheRemovedAsync<T>(options).ConfigureAwait(false);
+            return removed && eventFired;
         }
         catch (Exception ex)
         {
@@ -202,8 +201,13 @@ public sealed class MultilayerCache : ICache
     {
         try
         {
-            MemorySet(options, value);
-            return await _innerCache.SetAsync<T?>(options.CacheKey, value, options.Expiration, options.Token).ConfigureAwait(false);
+
+            var ret = await _innerCache.SetAsync<T?>(options.CacheKey, value, options.Expiration, options.Token).ConfigureAwait(false);
+            if (ret)
+            {
+                MemorySet(options, value);
+            }
+            return ret;
         }
         catch (Exception ex)
         {

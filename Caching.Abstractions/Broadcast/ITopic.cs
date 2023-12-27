@@ -7,7 +7,7 @@ public interface ITopic<T> : IDisposable
 
     IDisposable Subscribe(IObserver<T> observer);
 
-    Task<bool> PublishAsync(T @event, CancellationToken token = default);
+    ValueTask<bool> PublishAsync(T @event, CancellationToken token = default);
 
     EventHandler? OnDisposed { get; set; }
 }

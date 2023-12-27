@@ -51,7 +51,7 @@ public sealed class MultilayerHashCache : IHashCache
             return default;
         }
 
-        return cacheEntry.Value.TryGetValue(field, out var value) ? value : default(T?);
+        return cacheEntry.Value.TryGetValue(field, out var value) ? value : default;
     }
 
     public async ValueTask<IDictionary<string, T?>> GetAsync<T>(CacheKey cacheKey, CancellationToken token = default)
@@ -119,8 +119,8 @@ public sealed class MultilayerHashCache : IHashCache
         }
 
         _logger.LogDebug("Replacing cached cacheKey {}", options.CacheKey);
-        await _eventPublisher.CacheSetAsync<T>(options).ConfigureAwait(false);
-        return await InternalSetAsync(options, values).ConfigureAwait(false);
+        var fired = await _eventPublisher.CacheSetAsync<T>(options).ConfigureAwait(false);
+        return fired && await InternalSetAsync(options, values).ConfigureAwait(false);
     }
 
     public async ValueTask<bool> SetAsync<T>(CacheKey cacheKey, IDictionary<string, T?> values, HashCacheEntryOptions options, CancellationToken token = default)
@@ -135,8 +135,8 @@ public sealed class MultilayerHashCache : IHashCache
         }
 
         _logger.LogDebug("Replacing cached cacheKey {}", cacheEntryOptions.CacheKey);
-        await _eventPublisher.CacheSetAsync<T>(cacheEntryOptions).ConfigureAwait(false);
-        return await InternalSetAsync(cacheEntryOptions, values).ConfigureAwait(false);
+        var fired = await _eventPublisher.CacheSetAsync<T>(cacheEntryOptions).ConfigureAwait(false);
+        return fired && await InternalSetAsync(cacheEntryOptions, values).ConfigureAwait(false);
     }
 
     public ValueTask<bool> RemoveAsync<T>(CacheKey cacheKey, CancellationToken token = default)
@@ -166,9 +166,8 @@ public sealed class MultilayerHashCache : IHashCache
         _logger.LogTrace("Refreshing inner cache cacheKey {} at expiration {}", cacheEntryOptions.CacheKey, cacheEntryOptions.Expiration);
         try
         {
-            await _innerCache.RefreshAsync<T>(cacheEntryOptions.CacheKey, options, token).ConfigureAwait(false);
-            await _eventPublisher.CacheRefreshedAsync<T>(cacheEntryOptions).ConfigureAwait(false);
-            return true;
+            var fired = await _eventPublisher.CacheRefreshedAsync<T>(cacheEntryOptions).ConfigureAwait(false);
+            return fired && await _innerCache.RefreshAsync<T>(cacheEntryOptions.CacheKey, options, token).ConfigureAwait(false);
         }
         catch (Exception ex)
         {
@@ -244,8 +243,7 @@ public sealed class MultilayerHashCache : IHashCache
             }
 
             cacheEntryOptions.Metadata = metadata;
-            await _eventPublisher.MetadataUpdatedAsync<T>(cacheEntryOptions).ConfigureAwait(false);
-            return true;
+            return await _eventPublisher.MetadataUpdatedAsync<T>(cacheEntryOptions).ConfigureAwait(false);
         }
         catch (Exception ex)
         {
@@ -267,9 +265,9 @@ public sealed class MultilayerHashCache : IHashCache
         try
         {
             _memoryCache.Remove(options.CacheKey);
-            var ret = await _innerCache.RemoveAsync<T>(options.CacheKey, options.Token).ConfigureAwait(false);
-            await _eventPublisher.CacheRemovedAsync<T>(options).ConfigureAwait(false);
-            return ret;
+            var removed = await _innerCache.RemoveAsync<T>(options.CacheKey, options.Token).ConfigureAwait(false);
+            var eventFired = await _eventPublisher.CacheRemovedAsync<T>(options).ConfigureAwait(false);
+            return removed && eventFired;
         }
         catch (Exception ex)
         {
@@ -312,8 +310,13 @@ public sealed class MultilayerHashCache : IHashCache
     {
         try
         {
-            MemorySet(options, value);
-            return await _innerCache.SetAsync<T?>(options.CacheKey, value, new HashCacheEntryOptions(options.Expiration, null, options.Metadata, options.SetOption), options.Token).ConfigureAwait(false);
+            var ret = await _innerCache.SetAsync<T?>(options.CacheKey, value, new HashCacheEntryOptions(options.Expiration, null, options.Metadata, options.SetOption), options.Token).ConfigureAwait(false);
+            if (ret)
+            {
+                MemorySet(options, value);
+            }
+
+            return ret;
         }
         catch (Exception ex)
         {
