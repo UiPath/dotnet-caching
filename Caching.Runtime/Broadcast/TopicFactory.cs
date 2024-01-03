@@ -36,7 +36,7 @@ public sealed class TopicFactory : ITopicFactory, IDisposable
         _disposed = true;
     }
 
-    public ITopicProvider Get(string? providerName, Type entryType) =>
+    public ITopicProvider Get(string? providerName = null) =>
         GetProvider(providerName ?? _options.DefaultTopic) ?? Default();
 
     private ITopicProvider Default() =>

@@ -5,6 +5,7 @@ namespace UiPath.Platform.Caching;
 public sealed class InMemoryRedisCacheProvider : ICacheProvider
 {
     private readonly InMemoryRedisCacheOptions _options;
+    private readonly CacheOptions _cacheOptions;
     private readonly IMemoryCacheFactory _memoryCacheFactory;
     private readonly IChangeTokenFactory _changeTokenFactory;
     private readonly ITopicFactory _topicFactory;
@@ -25,6 +26,7 @@ public sealed class InMemoryRedisCacheProvider : ICacheProvider
     public InMemoryRedisCacheProvider(
         IOptions<RedisConnectionOptions> connectionOptionsAccessor,
         IOptions<InMemoryRedisCacheOptions> optionsAccessor,
+        IOptions<CacheOptions> cacheOptionsAccessor,
         IMemoryCacheFactory memoryCacheFactory,
         Func<ICacheFactory> cacheFactoryAccessor,
         IChangeTokenFactory changeTokenFactory,
@@ -34,6 +36,7 @@ public sealed class InMemoryRedisCacheProvider : ICacheProvider
         ILoggerFactory loggerFactory)
     {
         _options = optionsAccessor.Value;
+        _cacheOptions = cacheOptionsAccessor.Value;
         _memoryCacheFactory = memoryCacheFactory;
         _cacheFactory = new Lazy<ICacheFactory>(cacheFactoryAccessor);
         _changeTokenFactory = changeTokenFactory;
@@ -68,24 +71,26 @@ public sealed class InMemoryRedisCacheProvider : ICacheProvider
     private MultilayerCache BuildCache() =>
         new(
             Name,
-            _cacheFactory.Value.CreateCache(KnownCacheProviderNames.Redis, callerType: GetType()),
+            _cacheFactory.Value.CreateCache(KnownCacheProviderNames.Redis),
             () => _memoryCacheFactory.Get(_options),
             _changeTokenFactory,
             _topicFactory,
             _cacheEventFactory,
             _cachingTelemetryProvider,
             _options,
+            _cacheOptions,
             _loggerFactory.CreateLogger($"{Name}.Cache"));
 
     private MultilayerHashCache BuildHashCache() =>
         new(
             Name,
-            _cacheFactory.Value.CreateHashCache(KnownCacheProviderNames.Redis, callerType: GetType()),
+            _cacheFactory.Value.CreateHashCache(KnownCacheProviderNames.Redis),
             () => _memoryCacheFactory.Get(_options),
             _changeTokenFactory,
             _topicFactory,
             _cacheEventFactory,
             _cachingTelemetryProvider,
             _options,
+            _cacheOptions,
              _loggerFactory.CreateLogger($"{Name}.HashCache"));
 }

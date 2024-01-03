@@ -23,4 +23,6 @@ public class InMemoryRedisCacheOptions : IMultilayerCacheOptions, IMemoryStatist
     public ITopicKeyStrategy? TopicKeyStrategy { get; set; }
 
     public TimeSpan? PrimaryMaxExpiration { get; set; }
+
+    public bool? ConnectionMonitorEnabled { get; set; }
 }

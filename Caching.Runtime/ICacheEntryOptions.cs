@@ -1,6 +1,6 @@
 ﻿namespace UiPath.Platform.Caching;
 
-internal interface ICacheEntryOptions
+public interface ICacheEntryOptions
 {
     CacheKey CacheKey { get; }
 

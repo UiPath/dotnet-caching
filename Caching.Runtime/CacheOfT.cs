@@ -7,10 +7,8 @@ public class Cache<T> : ICache<T>
     private readonly ICacheKeyStrategy _cacheKeyStrategy;
 
     public Cache(ICacheFactory cacheFactory)
+        : this(cacheFactory.CreateCache())
     {
-        NotCacheableException.ThrowIfNotCacheable<T>();
-        _cache = cacheFactory.CreateCache(entityType: typeof(T), callerType: GetType());
-        _cacheKeyStrategy = new DefaultCacheKeyStrategy();
     }
 
     public Cache(ICache cache, ICacheKeyStrategy? cacheKeyStrategy = null)

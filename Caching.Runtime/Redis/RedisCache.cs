@@ -4,7 +4,7 @@ using UiPath.Platform.Caching.Telemetry;
 
 namespace UiPath.Platform.Caching.Redis;
 
-public sealed class RedisCache : ICache
+public sealed class RedisCache : RedisCacheBase, ICache
 {
     private const string LogWarnMessage = "RedisCache exception.";
 
@@ -29,6 +29,7 @@ public sealed class RedisCache : ICache
         RedisCacheOptions redisCacheOptions,
         CacheOptions cacheOptions,
         ILogger<RedisCache> logger)
+        : base(redis, redisCacheOptions.ConnectionMonitorEnabled ?? cacheOptions.ConnectionMonitorEnabled)
     {
         _logger = logger;
         _redis = redis;
@@ -41,13 +42,12 @@ public sealed class RedisCache : ICache
         _redisKeyStrategy = (redisCacheOptions.RedisKeyStrategyFactory ?? new DefaultRedisKeyStrategyFactory()).Create(cacheOptions, GetType());
         _defaultExpiration = redisCacheOptions.DefaultExpiration;
         _clock = new CacheClock(redisCacheOptions.Clock, _defaultExpiration);
+        
         if (cacheOptions.AuditEnabled && _largeValueThreshold > 0)
         {
             _auditKeySize = AuditKeySize;
         }
     }
-
-    private IDatabase Database => _redis.Database;
 
     public ValueTask<T?> GetAsync<T>(CacheKey cacheKey, CancellationToken token = default)
     {
@@ -337,10 +337,5 @@ public sealed class RedisCache : ICache
         {
             _logger.LogWarning("Redis large value detected for key {redisKey}, length {length}", key, valueLen);
         }
-    }
-
-    public void Dispose()
-    {
-        // nothing to dispose
     }
 }

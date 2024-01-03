@@ -30,10 +30,10 @@ public sealed class CacheFactory : ICacheFactory
         _providers[provider.Name] = provider;
     }
 
-    public ICache CreateCache(string? providerName = null, Type? entityType = null, Type? callerType = null) =>
+    public ICache CreateCache(string? providerName = null) =>
         GetProvider(providerName ?? _options.DefaultCache)?.CreateCache() ?? DefaultCache();
 
-    public IHashCache CreateHashCache(string? providerName = null, Type? entityType = null, Type? callerType = null) =>
+    public IHashCache CreateHashCache(string? providerName = null) =>
         GetProvider(providerName ?? _options.DefaultCache)?.CreateHashCache() ?? DefaultHashCache();
 
     public void Dispose()

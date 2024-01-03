@@ -13,4 +13,6 @@ public interface ICacheOptions
     public ICacheEntryFactory? EntryFactory { get; set; }
 
     public ICacheKeyStrategy? CacheKeyStrategy { get; set; }
+
+    public bool? ConnectionMonitorEnabled { get; set; }
 }

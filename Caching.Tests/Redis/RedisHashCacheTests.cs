@@ -933,6 +933,7 @@ public class RedisHashCacheTests : IAsyncLifetime
         _connector = _fixture.Freeze<IRedisConnector>();
         _connector.Database.Returns(_ => _database);
         _connector.Version.Returns(_ => _version);
+        _connector.IsConnected.Returns(true);
         return Task.CompletedTask;
     }
 }

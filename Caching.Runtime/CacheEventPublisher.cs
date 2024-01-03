@@ -1,53 +1,50 @@
 ﻿namespace UiPath.Platform.Caching;
 
-internal sealed class CacheEventPublisher
+public sealed class CacheEventPublisher
 {
     private readonly string _cacheName;
-    private readonly string? _topicProviderName;
-    private readonly ITopicFactory _topicFactory;
+    private readonly ITopicProvider _topicProvider;
     private readonly ICacheEventFactory _cacheEventFactory;
     private readonly ILogger _logger;
 
     public CacheEventPublisher(
         string cacheName,
-        string? topicProviderName,
-        ITopicFactory topicFactory,
+        ITopicProvider topicProvider,
         ICacheEventFactory cacheEventFactory,
         ILogger logger)
     {
         _cacheName = cacheName;
-        _topicProviderName = topicProviderName;
-        _topicFactory = topicFactory;
+        _topicProvider = topicProvider;
         _cacheEventFactory = cacheEventFactory;
         _logger = logger;
     }
 
-    public ValueTask<bool> MetadataUpdatedAsync<T>(ICacheEntryOptions options)
+    public ValueTask<bool> MetadataUpdatedAsync(ICacheEntryOptions options)
     {
         Dictionary<string, object?> properties = new()
         {
             [KnownFieldNames.MetadataKey] = options.Metadata,
             [KnownFieldNames.ExpirationKey] = options.Expiration,
         };
-        return RaiseEventAsync<T>(options.TopicKey, options.CacheKey, KnownEventTypes.CacheRefreshed, properties);
+        return RaiseEventAsync(options.TopicKey, options.CacheKey, KnownEventTypes.CacheRefreshed, properties);
     }
 
-    public ValueTask<bool> CacheSetAsync<T>(ICacheEntryOptions options) =>
-        RaiseEventAsync<T>(options.TopicKey, options.CacheKey, KnownEventTypes.CacheSet);
+    public ValueTask<bool> CacheSetAsync(ICacheEntryOptions options) =>
+        RaiseEventAsync(options.TopicKey, options.CacheKey, KnownEventTypes.CacheSet);
 
-    public ValueTask<bool> CacheRefreshedAsync<T>(ICacheEntryOptions options)
+    public ValueTask<bool> CacheRefreshedAsync(ICacheEntryOptions options)
     {
         Dictionary<string, object?> properties = new()
         {
             [KnownFieldNames.ExpirationKey] = options.Expiration,
         };
-        return RaiseEventAsync<T>(options.TopicKey, options.CacheKey, KnownEventTypes.CacheRemoved, properties);
+        return RaiseEventAsync(options.TopicKey, options.CacheKey, KnownEventTypes.CacheRemoved, properties);
     }
 
-    public ValueTask<bool> CacheRemovedAsync<T>(ICacheEntryOptions options) =>
-        RaiseEventAsync<T>(options.TopicKey, options.CacheKey, KnownEventTypes.CacheRemoved);
+    public ValueTask<bool> CacheRemovedAsync(ICacheEntryOptions options) =>
+        RaiseEventAsync(options.TopicKey, options.CacheKey, KnownEventTypes.CacheRemoved);
 
-    private async ValueTask<bool> RaiseEventAsync<T>(TopicKey topicKey, CacheKey cacheKey, string eventType, IDictionary<string, object?>? properties = null)
+    private async ValueTask<bool> RaiseEventAsync(TopicKey topicKey, CacheKey cacheKey, string eventType, IDictionary<string, object?>? properties = null)
     {
         _logger.LogDebug("Raise {} on topicKey {} for key {}", eventType, topicKey, cacheKey);
         var data = new CacheEventData(cacheKey)
@@ -55,7 +52,7 @@ internal sealed class CacheEventPublisher
             Properties = properties
         };
         var ev = _cacheEventFactory.Create(_cacheName, eventType, data);
-        var topic = _topicFactory.Get<T>(_topicProviderName, topicKey);
+        var topic = _topicProvider.Create(topicKey);
         return await topic.PublishAsync(ev, CancellationToken.None).ConfigureAwait(false);
     }
 }

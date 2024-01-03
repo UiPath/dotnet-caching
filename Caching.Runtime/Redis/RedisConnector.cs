@@ -32,7 +32,11 @@ public sealed class RedisConnector : IRedisConnector
         _version = new Lazy<Version>(GetVersion);
     }
 
-    public event EventHandler? OnReconnect;
+    public event EventHandler? OnConnectionFailed;
+
+    public event EventHandler? OnConnectionRestored;
+
+    public event EventHandler? OnReconnected;
 
     public ISubscriber Subscriber => ConnectionMultiplexer.GetSubscriber();
 
@@ -41,6 +45,8 @@ public sealed class RedisConnector : IRedisConnector
     public Version Version => _version.Value;
 
     private IConnectionMultiplexer ConnectionMultiplexer => _lazyCacheConnectionMultiplexer.Value;
+
+    public bool IsConnected => ConnectionMultiplexer.IsConnected;
 
     public void ForceReconnect()
     {
@@ -78,7 +84,7 @@ public sealed class RedisConnector : IRedisConnector
 
                 try
                 {
-                    OnReconnect?.Invoke(this, EventArgs.Empty);
+                    OnReconnected?.Invoke(this, EventArgs.Empty);
 
                     // Waits AsyncTimeout (default 5 sec) for all commands to complete
                     await oldMultiplexer.CloseAsync(allowCommandsToComplete: true);
@@ -276,17 +282,14 @@ public sealed class RedisConnector : IRedisConnector
 
     private IConnectionMultiplexer ConfigureMultiplexerEvents(IConnectionMultiplexer multiplexer)
     {
+        multiplexer.ConnectionFailed += OnInternalConnectionFailed;
+        multiplexer.ConnectionRestored += OnInternalConnectionRestored;
+
         // Depends on Application Insights being enabled, otherwise NullTelemetryProvider is used
         if (_redisOptions.LogConnectionFailedEvents)
         {
-            multiplexer.ConnectionFailed += OnConnectionFailed;
             multiplexer.InternalError += OnInternalError;
-            multiplexer.ErrorMessage += OnErrorMessage;
-        }
-
-        if (_redisOptions.LogConnectionRestoredEvents)
-        {
-            multiplexer.ConnectionRestored += OnConnectionRestored;
+            multiplexer.ErrorMessage += OnInternalErrorMessage;
         }
 
         return multiplexer;
@@ -294,16 +297,13 @@ public sealed class RedisConnector : IRedisConnector
 
     private void DisposeMultiplexer(IConnectionMultiplexer multiplexer)
     {
+        multiplexer.ConnectionFailed -= OnInternalConnectionFailed;
+        multiplexer.ConnectionRestored -= OnInternalConnectionRestored;
+
         if (_redisOptions.LogConnectionFailedEvents)
         {
-            multiplexer.ConnectionFailed -= OnConnectionFailed;
             multiplexer.InternalError -= OnInternalError;
-            multiplexer.ErrorMessage -= OnErrorMessage;
-        }
-
-        if (_redisOptions.LogConnectionRestoredEvents)
-        {
-            multiplexer.ConnectionRestored -= OnConnectionRestored;
+            multiplexer.ErrorMessage -= OnInternalErrorMessage;
         }
 
         multiplexer.Dispose();
@@ -323,7 +323,7 @@ public sealed class RedisConnector : IRedisConnector
             null);
     }
 
-    private void OnErrorMessage(object? send, RedisErrorEventArgs e)
+    private void OnInternalErrorMessage(object? send, RedisErrorEventArgs e)
     {
         _telemetryProvider.TrackEvent(
             "Redis.ErrorMessage",
@@ -335,14 +335,22 @@ public sealed class RedisConnector : IRedisConnector
             null);
     }
 
-    private void OnConnectionRestored(object? sender, ConnectionFailedEventArgs e)
+    private void OnInternalConnectionRestored(object? sender, ConnectionFailedEventArgs e)
     {
-        _telemetryProvider.TrackEvent("Redis.ConnectionRestored", GetEventProperties(e), metrics: null);
+        OnConnectionRestored?.Invoke(sender, e);
+        if (_redisOptions.LogConnectionRestoredEvents)
+        {
+            _telemetryProvider.TrackEvent("Redis.ConnectionRestored", GetEventProperties(e), metrics: null);
+        }
     }
 
-    private void OnConnectionFailed(object? sender, ConnectionFailedEventArgs e)
+    private void OnInternalConnectionFailed(object? sender, ConnectionFailedEventArgs e)
     {
-        _telemetryProvider.TrackEvent("Redis.ConnectionFailed", GetEventProperties(e), metrics: null);
+        OnConnectionFailed?.Invoke(sender, e);
+        if (_redisOptions.LogConnectionFailedEvents)
+        {
+            _telemetryProvider.TrackEvent("Redis.ConnectionFailed", GetEventProperties(e), metrics: null);
+        }
     }
 
     private sealed record ReadWriteStatus(EndPoint EndPoint, int AwaitingResponseCount, int LastWrite, int WriteStatus, int LastRead, int ReadStatus);

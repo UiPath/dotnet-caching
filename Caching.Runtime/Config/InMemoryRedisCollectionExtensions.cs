@@ -1,4 +1,6 @@
-﻿namespace UiPath.Platform.Caching.Config;
+﻿using UiPath.Platform.Caching.Telemetry;
+
+namespace UiPath.Platform.Caching.Config;
 
 [ExcludeFromCodeCoverage]
 public static class InMemoryRedisCollectionExtensions
@@ -22,7 +24,6 @@ public static class InMemoryRedisCollectionExtensions
             builder.Services.TryAddSingleton<IEventFormatterProxy<ICacheEvent>, CacheEventFormatter>();
             builder.Services.TryAddSingleton<ICacheEventFactory, CacheEventFactory>();
             builder.Services.AddMemoryCacheFactory();
-            builder.Services.TryAddNullInstances();
         });
 
         return builder;

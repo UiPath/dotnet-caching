@@ -30,17 +30,17 @@ internal sealed class RedisPubSubSubjectWriter<T> : IDisposable
         _redisChannel = redisChannel;
         _handler = (channel, value) => OnMessage(value);
         _redis.Subscriber.Subscribe(_redisChannel, _handler);
-        _redis.OnReconnect += OnReconnect;
+        _redis.OnReconnected += OnReconnected;
     }
 
-    private void OnReconnect(object? sender, EventArgs e) =>
+    private void OnReconnected(object? sender, EventArgs e) =>
         _redis.Subscriber.Subscribe(_redisChannel, _handler);
 
     public void Dispose()
     {
         if (!_disposed)
         {
-            _redis.OnReconnect -= OnReconnect;
+            _redis.OnReconnected -= OnReconnected;
             Unsubscribe();
         }
         _disposed = true;

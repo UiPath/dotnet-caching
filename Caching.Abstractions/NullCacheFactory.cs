@@ -12,10 +12,10 @@ public sealed class NullCacheFactory : ICacheFactory
         // do nothing
     }
 
-    public ICache CreateCache(string? providerName = null, Type? entityType = null, Type? callerType = null) =>
+    public ICache CreateCache(string? providerName = null) =>
         NullCache.Instance;
 
-    public IHashCache CreateHashCache(string? providerName = null, Type? entityType = null, Type? callerType = null) =>
+    public IHashCache CreateHashCache(string? providerName = null) =>
         NullHashCache.Instance;
 
     public void Dispose()

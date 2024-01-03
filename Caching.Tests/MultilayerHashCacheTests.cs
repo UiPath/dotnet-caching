@@ -579,9 +579,6 @@ public class MultilayerHashCacheTests : IAsyncLifetime
             Metadata = _fixture.Create<IDictionary<string, string?>>(),
             Expiration = _clock.UtcNow.AddDays(1)
         };
-        _topicFactory.ClearSubstitute();
-        _topicFactory.Get(Arg.Any<string?>(), Arg.Any<Type>())
-            .Returns(x => _topicProvider, x => throw new Exception());
 
         TestChangeToken? token = default;
         _changeTokenFactory.Create(Arg.Any<string>(), Arg.Any<ITopic<ICacheEvent>>(), Arg.Any<string>(), Arg.Any<Type>())
@@ -604,6 +601,10 @@ public class MultilayerHashCacheTests : IAsyncLifetime
         var actual = await Sut.GetAsync<string>(_cacheKey, token: CancellationToken.None);
         token.Should().NotBeNull();
         _memoryCache.TryGetValue(_innerCacheKey, out _).Should().BeTrue();
+        _topicProvider.ClearSubstitute();
+
+        _topicProvider.Create(_topicKey)
+            .Returns(_ => throw new Exception());
         token!.HasChanged = true;
         token.MetadataHasChanged = true;
         token.InvokeCallbacks();
@@ -990,7 +991,7 @@ public class MultilayerHashCacheTests : IAsyncLifetime
         _topicFactory = _fixture.Freeze<ITopicFactory>();
         _topicProvider = _fixture.Freeze<ITopicProvider>();
         _topic = _fixture.Freeze<ITopic<ICacheEvent>>();
-        _topicFactory.Get(Arg.Any<string>(), Arg.Any<Type>()).Returns(_topicProvider);
+        _topicFactory.Get(Arg.Any<string>()).Returns(_topicProvider);
         _topicProvider.Create(_topicKey).Returns(_topic);
         _fixture.Inject<Func<IMemoryCache>>(() => _memoryCache);
         _fixture.Inject<IMultilayerCacheOptions>(_options);

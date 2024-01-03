@@ -2,19 +2,11 @@
 
 namespace UiPath.Platform.Caching;
 
-public sealed class MultilayerCache : ICache
+public sealed class MultilayerCache : MultilayerCacheBase, ICache
 {
-    private readonly ILogger _logger;
-    private readonly IMemoryCache _memoryCache;
     private readonly ICache _innerCache;
-    private readonly ICacheEntryFactory _cacheEntryFactory;
-    private readonly IMultilayerCacheOptions _cacheOptions;
-    private readonly IDisposable _monitor;
-    private readonly CacheClock _clock;
     private readonly CacheEntryBuilder _entryBuilder;
-    private readonly CacheEventPublisher _eventPublisher;
     private readonly LocalMemorySetter _localMemorySetter;
-
 
     public MultilayerCache(
         string cacheName,
@@ -24,31 +16,27 @@ public sealed class MultilayerCache : ICache
         ITopicFactory topicFactory,
         ICacheEventFactory cacheEventFactory,
         ICachingTelemetryProvider telemetryProvider,
-        IMultilayerCacheOptions cacheOptions,
+        IMultilayerCacheOptions multiLayerCacheOptions,
+        CacheOptions cacheOptions,
         ILogger logger)
+        : base(cacheName, innerCache, memoryCacheAccessor, topicFactory, cacheEventFactory, telemetryProvider, multiLayerCacheOptions, cacheOptions, logger)
     {
         _innerCache = innerCache;
-        _logger = logger;
-        _cacheOptions = cacheOptions;
-        _memoryCache = memoryCacheAccessor();
-        _cacheEntryFactory = _cacheOptions.EntryFactory ?? new CacheEntryFactory();
-        _monitor = _memoryCache.Monitor(cacheOptions, telemetryProvider, GetType().Name);
-        _clock = new CacheClock(_cacheOptions.Clock, _cacheOptions.DefaultExpiration);
-        var cacheKeyStrategy = _cacheOptions.CacheKeyStrategy ?? new DefaultCacheKeyStrategy();
-        var topicKeyStrategy = _cacheOptions.TopicKeyStrategy ?? new DefaultTopicKeyStrategy();
+        var cacheKeyStrategy = _multiLayerCacheOptions.CacheKeyStrategy ?? new DefaultCacheKeyStrategy();
+        var topicKeyStrategy = _multiLayerCacheOptions.TopicKeyStrategy ?? new DefaultTopicKeyStrategy();
+        var topicProvider = topicFactory.Get(_multiLayerCacheOptions.Topic);
         _entryBuilder = new CacheEntryBuilder(cacheKeyStrategy, topicKeyStrategy, _clock);
-        _eventPublisher = new CacheEventPublisher(cacheName, _cacheOptions.Topic, topicFactory, cacheEventFactory, logger);
-        _localMemorySetter = new LocalMemorySetter(cacheName, changeTokenFactory, topicFactory, _memoryCache, logger, _clock, _cacheOptions);
+        _localMemorySetter = new LocalMemorySetter(cacheName, changeTokenFactory, topicProvider, _memoryCache, logger, _clock, _multiLayerCacheOptions);
     }
 
     public  ValueTask<T?> GetAsync<T>(CacheKey cacheKey, CancellationToken token = default)
     {
         NotCacheableException.ThrowIfNotCacheable<T>();
-        return GetInnerAsync<T>(_entryBuilder.BuildEntryOptions<T>(cacheKey, _clock.ToDateTimeOffset(_cacheOptions.DefaultExpiration), token));
+        return GetInnerAsync<T>(_entryBuilder.BuildEntryOptions<T>(cacheKey, _clock.ToDateTimeOffset(_multiLayerCacheOptions.DefaultExpiration), token));
     }
 
     public ValueTask<T?> GetOrAddAsync<T>(CacheKey cacheKey, Func<ValueTask<T?>> generator, CancellationToken token = default)=>
-        GetOrAddAsync(cacheKey, generator, _cacheOptions.DefaultExpiration, token);
+        GetOrAddAsync(cacheKey, generator, _multiLayerCacheOptions.DefaultExpiration, token);
 
     public ValueTask<T?> GetOrAddAsync<T>(CacheKey cacheKey, Func<ValueTask<T?>> generator, TimeSpan? expiration = null, CancellationToken token = default)=>
         GetOrAddAsync(cacheKey, generator, _clock.ToDateTimeOffset(expiration), token);
@@ -75,7 +63,7 @@ public sealed class MultilayerCache : ICache
     }
 
     public ValueTask<bool> SetAsync<T>(CacheKey cacheKey, T? value, CancellationToken token = default)=>
-        SetAsync(cacheKey, value, _cacheOptions.DefaultExpiration, token);
+        SetAsync(cacheKey, value, _multiLayerCacheOptions.DefaultExpiration, token);
 
     public ValueTask<bool> SetAsync<T>(CacheKey cacheKey, T? value, TimeSpan? expiration = null, CancellationToken token = default) =>
         SetAsync(cacheKey, value, _clock.ToDateTimeOffset(expiration), token);
@@ -90,7 +78,7 @@ public sealed class MultilayerCache : ICache
         }
 
         _logger.LogDebug("Replacing cached key {}", cacheEntryOptions.CacheKey);
-        var fired = await _eventPublisher.CacheSetAsync<T>(cacheEntryOptions).ConfigureAwait(false);
+        var fired = await _eventPublisher.CacheSetAsync(cacheEntryOptions).ConfigureAwait(false);
         return fired && await InternalSetAsync(cacheEntryOptions, value).ConfigureAwait(false);
     }
 
@@ -101,7 +89,7 @@ public sealed class MultilayerCache : ICache
     }
 
     public ValueTask<bool> RefreshAsync<T>(CacheKey cacheKey, CancellationToken token = default) =>
-        RefreshAsync<T>(cacheKey, _cacheOptions.DefaultExpiration, token);
+        RefreshAsync<T>(cacheKey, _multiLayerCacheOptions.DefaultExpiration, token);
 
     public ValueTask<bool> RefreshAsync<T>(CacheKey cacheKey, TimeSpan? expiration = null, CancellationToken token = default) =>
         RefreshAsync<T>(cacheKey, _clock.ToDateTimeOffset(expiration), token);
@@ -115,7 +103,7 @@ public sealed class MultilayerCache : ICache
         _logger.LogTrace("Refreshing inner cache key {} at expiration {}", cacheEntryOptions.CacheKey, cacheEntryOptions.Expiration);
         try
         {
-            var fired = await _eventPublisher.CacheRefreshedAsync<T>(cacheEntryOptions).ConfigureAwait(false);
+            var fired = await _eventPublisher.CacheRefreshedAsync(cacheEntryOptions).ConfigureAwait(false);
             return fired && await _innerCache.RefreshAsync<T>(cacheEntryOptions.CacheKey, cacheEntryOptions.Expiration, token).ConfigureAwait(false);
         }
         catch (Exception ex)
@@ -166,7 +154,7 @@ public sealed class MultilayerCache : ICache
         {
             _memoryCache.Remove(options.CacheKey);
             var removed = await _innerCache.RemoveAsync<T>(options.CacheKey, options.Token).ConfigureAwait(false);
-            var eventFired = await _eventPublisher.CacheRemovedAsync<T>(options).ConfigureAwait(false);
+            var eventFired = await _eventPublisher.CacheRemovedAsync(options).ConfigureAwait(false);
             return removed && eventFired;
         }
         catch (Exception ex)
@@ -180,8 +168,17 @@ public sealed class MultilayerCache : ICache
     {
         if (_memoryCache.TryGetValue<ICacheEntry<T>>(options.CacheKey, out var entry))
         {
-            _logger.LogTrace("Found local. {}", options.CacheKey);
-            return entry!.Value;
+            _logger.LogTrace("Found local. {}.", options.CacheKey);
+            if(_connectionEventSource.IsConnected)
+            {
+                return entry!.Value;
+            }
+            else
+            {
+                _logger.LogTrace("Inner cache is not connected. Returning default for cacheKey {}", options.CacheKey);
+                _memoryCache.Remove(options.CacheKey);
+                return default;
+            }
         }
 
         var ret = await _innerCache.GetAsync<T>(options.CacheKey, options.Token).ConfigureAwait(false);
@@ -201,13 +198,8 @@ public sealed class MultilayerCache : ICache
     {
         try
         {
-
             var ret = await _innerCache.SetAsync<T?>(options.CacheKey, value, options.Expiration, options.Token).ConfigureAwait(false);
-            if (ret)
-            {
-                MemorySet(options, value);
-            }
-            return ret;
+            return ret ? MemorySet(options, value) : ret;
         }
         catch (Exception ex)
         {
@@ -216,18 +208,12 @@ public sealed class MultilayerCache : ICache
         }
     }
 
-    private void MemorySet<T>(CacheEntryOptions options, T value)
+    private bool MemorySet<T>(CacheEntryOptions options, T value)
     {
         var item = _cacheEntryFactory.Create(value, options.Expiration);
-        _localMemorySetter.Set(options, item, typeof(T), _cacheOptions.PrimaryMaxExpiration);
+        return _localMemorySetter.Set(options, item, typeof(T), _multiLayerCacheOptions.PrimaryMaxExpiration);
     }
 
     private static bool IsDefault<T>(T value) =>
         EqualityComparer<T>.Default.Equals(value, default);
-
-    public void Dispose()
-    {
-        _monitor.Dispose();
-        _memoryCache.Dispose();
-    }
 }

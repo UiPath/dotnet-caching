@@ -20,7 +20,7 @@ public class TopicFactoryTests : IAsyncLifetime
     {
         _cacheOptions.DefaultTopic = defaultCache;
         var providerName = _fixture.Create<string>();
-        Sut.Get(providerName, _fixture.Create<Type>()).Should().BeOfType<NullTopicProvider>();
+        Sut.Get(providerName).Should().BeOfType<NullTopicProvider>();
     }
 
 
@@ -28,20 +28,20 @@ public class TopicFactoryTests : IAsyncLifetime
     public void Works_as_expected()
     {
         var provider = _providers.Where(p => p.Name != _defaultProvider.Name).ToList().First();
-        Sut.Get(provider.Name, _fixture.Create<Type>()).Should().Be(provider);
+        Sut.Get(provider.Name).Should().Be(provider);
     }
 
     [Fact]
     public void empty_factory()
     {
         _sut = new TopicFactory(Options.Create(_cacheOptions));
-        Sut.Get(_fixture.Create<string>(), _fixture.Create<Type>()).Should().BeOfType<NullTopicProvider>();
+        Sut.Get(_fixture.Create<string>()).Should().BeOfType<NullTopicProvider>();
     }
 
     [Fact]
     public void Default_works_as_expected()
     {
-        Sut.Get(_defaultProvider.Name, _fixture.Create<Type>()).Should().Be(_defaultProvider);
+        Sut.Get(_defaultProvider.Name).Should().Be(_defaultProvider);
     }
 
 
@@ -51,7 +51,7 @@ public class TopicFactoryTests : IAsyncLifetime
         var provider = _providers.Where(p => p.Name != _defaultProvider.Name).ToList().First();
         provider.ClearSubstitute();
         provider.Enabled.Returns(false);
-        Sut.Get(provider.Name, _fixture.Create<Type>()).Should().NotBe(provider);
+        Sut.Get(provider.Name).Should().NotBe(provider);
     }
 
     [Fact]
@@ -79,7 +79,7 @@ public class TopicFactoryTests : IAsyncLifetime
         var topic = _fixture.Create<ITopic<ICacheEvent>>();
         provider.Create(_topicKey).ReturnsForAnyArgs(topic);
         Sut.AddProvider(provider);
-        Sut.Get(provider.Name, _fixture.Create<Type>()).Should().Be(provider);
+        Sut.Get(provider.Name).Should().Be(provider);
     }
 
     [Fact]
@@ -90,7 +90,7 @@ public class TopicFactoryTests : IAsyncLifetime
         var topic = _fixture.Create<ITopic<ICacheEvent>>();
         provider.Create(_topicKey).Returns(topic);
         Sut.AddProvider(provider);
-        Sut.Get(provider.Name, _fixture.Create<Type>()).Should().NotBe(topic);
+        Sut.Get(provider.Name).Should().NotBe(topic);
     }
 
     public Task DisposeAsync()

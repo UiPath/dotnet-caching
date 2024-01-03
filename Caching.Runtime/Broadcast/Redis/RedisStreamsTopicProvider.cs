@@ -3,11 +3,10 @@ using UiPath.Platform.Caching.Policies;
 
 namespace UiPath.Platform.Caching.Broadcast.Redis;
 
-public class RedisStreamsTopicProvider : TopicProviderBase
+public class RedisStreamsTopicProvider : RedisTopicProviderBase
 {
     private readonly RedisStreamsTopicOptions _redisStreamsTopicOptions;
     private readonly CacheOptions _cacheOptions;
-    private readonly IRedisConnector _redis;
     private readonly IEventFormatterProxy<ICacheEvent> _formatter;
     private readonly ILoggerFactory _loggerFactory;
     private readonly IPolicyHolder _policyHolder;
@@ -22,11 +21,11 @@ public class RedisStreamsTopicProvider : TopicProviderBase
         IEventFormatterProxy<ICacheEvent> formatter,
         IPolicyHolder policyHolder,
         ILoggerFactory loggerFactory)
+        : base(redis, redisStreamsTopicOptionsAccessor.Value.ConnectionMonitorEnabled ?? cacheOptionsAccessor.Value.ConnectionMonitorEnabled)
     {
         _redisStreamsTopicOptions = redisStreamsTopicOptionsAccessor.Value;
         _cacheOptions = cacheOptionsAccessor.Value;
         _policyHolder = policyHolder;
-        _redis = redis;
         _formatter = formatter;
         _loggerFactory = loggerFactory;
         Enabled = connectionOptionsAccessor.Value.Enabled && _redisStreamsTopicOptions.Enabled;
@@ -37,7 +36,7 @@ public class RedisStreamsTopicProvider : TopicProviderBase
     public override bool Enabled { get; }
 
     protected override ITopic<ICacheEvent> CreateInternalTopic(TopicKey topicKey) =>
-        new RedisStreamsTopic<ICacheEvent>(topicKey, _redis, () => new Subject<ICacheEvent>(), _formatter, _policyHolder, _redisStreamsTopicOptions, _cacheOptions, _loggerFactory.Create<RedisStreamsTopic<ICacheEvent>>(), _stopTokenSource.Token);
+        new RedisStreamsTopic<ICacheEvent>(topicKey, Redis, () => new Subject<ICacheEvent>(), _formatter, _policyHolder, _redisStreamsTopicOptions, _cacheOptions, _loggerFactory.Create<RedisStreamsTopic<ICacheEvent>>(), _stopTokenSource.Token);
 
     protected override void Dispose(bool disposing)
     {

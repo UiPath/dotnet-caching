@@ -3,10 +3,9 @@ using UiPath.Platform.Caching.Policies;
 
 namespace UiPath.Platform.Caching.Broadcast.Redis;
 
-public class RedisPubSubTopicProvider : TopicProviderBase
+public class RedisPubSubTopicProvider : RedisTopicProviderBase
 {
     private readonly RedisPubSubTopicOptions _options;
-    private readonly IRedisConnector _redis;
     private readonly IEventFormatterProxy<ICacheEvent> _formatter;
     private readonly IPolicyHolder _policyHolder;
     private readonly ILoggerFactory _loggerFactory;
@@ -23,9 +22,9 @@ public class RedisPubSubTopicProvider : TopicProviderBase
         IEventFormatterProxy<ICacheEvent> formatter,
         IPolicyHolder policyHolder,
         ILoggerFactory loggerFactory)
+        : base(redis, optionsAccessor.Value.ConnectionMonitorEnabled ?? cacheOptionsAccessor.Value.ConnectionMonitorEnabled)
     {
         _options = optionsAccessor.Value;
-        _redis = redis;
         _formatter = formatter;
         _policyHolder = policyHolder;
         _loggerFactory = loggerFactory;
@@ -40,7 +39,7 @@ public class RedisPubSubTopicProvider : TopicProviderBase
     public override bool Enabled { get; }
 
     protected override ITopic<ICacheEvent> CreateInternalTopic(TopicKey topicKey) =>
-        new RedisPubSubTopic<ICacheEvent>(topicKey, _sourceUri, _redis, _redisChannelStrategy, () => new Subject<ICacheEvent>(), _formatter, _policyHolder, _options, _loggerFactory.Create<RedisPubSubTopic<ICacheEvent>>(), _stopTokenSource.Token);
+        new RedisPubSubTopic<ICacheEvent>(topicKey, _sourceUri, Redis, _redisChannelStrategy, () => new Subject<ICacheEvent>(), _formatter, _policyHolder, _options, _loggerFactory.Create<RedisPubSubTopic<ICacheEvent>>(), _stopTokenSource.Token);
 
     protected override void Dispose(bool disposing)
     {

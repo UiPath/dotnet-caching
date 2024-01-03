@@ -245,3 +245,4 @@ src/ProcessForms/UiPath.ProcessForms/UiPath.ProcessForms.XML
 .idea
 .terraform
 
+!Sample.AspNetCore/Properties/launchSettings.json

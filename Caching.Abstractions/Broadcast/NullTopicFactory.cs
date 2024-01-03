@@ -16,6 +16,6 @@ public class NullTopicFactory : ITopicFactory
         // no op
     }
 
-    public ITopicProvider Get(string? providerName, Type entryType) =>
+    public ITopicProvider Get(string? providerName = null) =>
         NullTopicProvider.Instance;
 }

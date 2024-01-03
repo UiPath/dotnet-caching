@@ -188,6 +188,7 @@ public class RedisPubSubTopicTests : IAsyncLifetime
         _database = _fixture.Freeze<IDatabase>();
         _redisConnector = _fixture.Freeze<IRedisConnector>();
         _redisConnector.Database.Returns(_database);
+        _redisConnector.IsConnected.Returns(true);
         _fixture.Inject<Func<IDatabase>>(() => _database);
         _database.PublishAsync(Arg.Any<RedisChannel>(), Arg.Any<RedisValue>(), Arg.Any<CommandFlags>())
             .Returns(c =>

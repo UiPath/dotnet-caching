@@ -4,6 +4,7 @@ namespace UiPath.Platform.Caching;
 public sealed class InMemoryCacheProvider : ICacheProvider
 {
     private readonly InMemoryCacheOptions _options;
+    private readonly CacheOptions _cacheOptions;
     private readonly IMemoryCacheFactory _memoryCacheFactory;
     private readonly IChangeTokenFactory _changeTokenFactory;
     private readonly ITopicFactory _topicFactory;
@@ -20,6 +21,7 @@ public sealed class InMemoryCacheProvider : ICacheProvider
 
     public InMemoryCacheProvider(
         IOptions<InMemoryCacheOptions> optionsAccessor,
+        IOptions<CacheOptions> cacheOptionsAccessor,
         IMemoryCacheFactory memoryCacheFactory,
         ICacheEventFactory cacheEventFactory,
         IChangeTokenFactory changeTokenFactory,
@@ -28,6 +30,7 @@ public sealed class InMemoryCacheProvider : ICacheProvider
         ILoggerFactory loggerFactory)
     {
         _options = optionsAccessor.Value;
+        _cacheOptions = cacheOptionsAccessor.Value;
         _memoryCacheFactory = memoryCacheFactory;
         _changeTokenFactory = NullChangeTokenFactory.Instance;
         _topicFactory = NullTopicFactory.Instance;
@@ -85,6 +88,7 @@ public sealed class InMemoryCacheProvider : ICacheProvider
             _cacheEventFactory,
             _cachingTelemetryProvider,
             _options,
+            _cacheOptions,
             _loggerFactory.CreateLogger($"{Name}.Cache"));
 
     private MultilayerHashCache BuildHashCache() =>
@@ -97,5 +101,6 @@ public sealed class InMemoryCacheProvider : ICacheProvider
             _cacheEventFactory,
             _cachingTelemetryProvider,
             _options,
+            _cacheOptions,
            _loggerFactory.CreateLogger($"{Name}.HashCache"));
 }

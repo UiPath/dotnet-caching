@@ -4,7 +4,7 @@ internal abstract class MemoryCacheSetter
 {
     protected string CacheName { get; set; }
     protected IChangeTokenFactory ChangeTokenFactory { get; set; }
-    protected ITopicFactory TopicFactory { get; set; }
+    protected ITopicProvider TopicProvider { get; set; }
     protected IMemoryCache MemoryCache { get; set; }
     protected ILogger Logger { get; set; }
     protected IMultilayerCacheOptions CacheOptions { get; set; }
@@ -13,7 +13,7 @@ internal abstract class MemoryCacheSetter
     protected MemoryCacheSetter(
         string cacheName,
         IChangeTokenFactory changeTokenFactory,
-        ITopicFactory topicFactory,
+        ITopicProvider topicProvider,
         IMemoryCache memoryCache,
         ILogger logger,
         CacheClock clock,
@@ -21,26 +21,36 @@ internal abstract class MemoryCacheSetter
     {
         CacheName = cacheName;
         ChangeTokenFactory = changeTokenFactory;
-        TopicFactory = topicFactory;
+        TopicProvider = topicProvider;
         MemoryCache = memoryCache;
         Logger = logger;
         Clock = clock;
         CacheOptions = cacheOptions;
     }
 
-    public void Set(ICacheEntryOptions options, ICacheEntry item, Type entryType, TimeSpan? maxExpiration)
+    public bool Set(ICacheEntryOptions options, ICacheEntry item, Type entryType, TimeSpan? maxExpiration)
     {
-        var topic = TopicFactory.Get(CacheOptions.Topic, options.TopicKey, entryType);
-        var token = ChangeTokenFactory.Create(options.CacheKey, topic, CacheName, entryType);
+        try
+        {
+            var topic = TopicProvider.Create(options.TopicKey);
+            var token = ChangeTokenFactory.Create(options.CacheKey, topic, CacheName, entryType);
 
-        var state = new RefreshMetadataState(options.CacheKey, options.TopicKey, item, token, entryType, maxExpiration);
-        token.RegisterChangeCallback(RefreshMetadata, state);
-        var memOptions = new MemoryCacheEntryOptions();
-        var expiration = GetCacheExpiration(options.Expiration, maxExpiration);
-        memOptions.SetAbsoluteExpiration(expiration);
-        memOptions.ExpirationTokens.Add(token);
-        memOptions.RegisterPostEvictionCallback(PostEviction, token);
-        MemoryCache.Set(options.CacheKey, item, memOptions);
+            var state = new RefreshMetadataState(options.CacheKey, options.TopicKey, item, token, entryType, maxExpiration);
+            token.RegisterChangeCallback(RefreshMetadata, state);
+            var memOptions = new MemoryCacheEntryOptions();
+            var expiration = GetCacheExpiration(options.Expiration, maxExpiration);
+            memOptions.SetAbsoluteExpiration(expiration);
+            memOptions.ExpirationTokens.Add(token);
+            memOptions.RegisterPostEvictionCallback(PostEviction, token);
+            MemoryCache.Set(options.CacheKey, item, memOptions);
+            return true;
+        }
+        catch (Exception ex)
+        {
+            MemoryCache.Remove(options.CacheKey);
+            Logger.LogWarning(ex, "Unable to set local memory for {}", options.CacheKey);
+            return false;
+        }
     }
 
     static void PostEviction(object key, object? value, EvictionReason reason, object? state)

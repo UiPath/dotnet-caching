@@ -11,7 +11,7 @@ public sealed class RedisCacheProvider : ICacheProvider
     private readonly ISerializerProxy _serializerProxy;
     private readonly IPolicyHolder _policyHolder;
     private readonly ICachingTelemetryProvider _cachingTelemetryProvider;
-    private readonly ILoggerFactory? _loggerFactory;
+    private readonly ILoggerFactory _loggerFactory;
     private readonly Lazy<RedisCache> _cache;
     private readonly Lazy<RedisHashCache> _hashCache;
 

@@ -1,9 +1,7 @@
 ﻿namespace UiPath.Platform.Caching.Redis;
 
-public interface IRedisConnector : IDisposable
+public interface IRedisConnector : IConnectionState
 {
-    event EventHandler? OnReconnect;
-
     Version Version { get; }
 
     IDatabase Database { get; }

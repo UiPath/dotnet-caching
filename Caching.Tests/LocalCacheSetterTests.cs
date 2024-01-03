@@ -115,7 +115,7 @@ public class LocalCacheSetterTests : IAsyncLifetime
         _topicFactory = _fixture.Freeze<ITopicFactory>();
         _topicProvider = _fixture.Freeze<ITopicProvider>();
         _topic = _fixture.Freeze<ITopic<ICacheEvent>>();
-        _topicFactory.Get(Arg.Any<string>(), Arg.Any<Type>()).Returns(_topicProvider);
+        _topicFactory.Get(Arg.Any<string>()).Returns(_topicProvider);
         _topicProvider.Create(_topicKey).Returns(_topic);
         _fixture.Inject<IMemoryCache>(_memoryCache);
         _fixture.Inject<IMultilayerCacheOptions>(_options);

@@ -5,7 +5,7 @@ using UiPath.Platform.Caching.Telemetry;
 
 namespace UiPath.Platform.Caching.Redis;
 
-public sealed class RedisHashCache : IHashCache
+public sealed class RedisHashCache : RedisCacheBase, IHashCache
 {
     private const string LogWarnMessage = "RedisHashCache exception.";
     private readonly IRedisConnector _redis;
@@ -21,6 +21,7 @@ public sealed class RedisHashCache : IHashCache
     private readonly TimeSpan? _defaultExpiration;
     private readonly CacheOptions _cacheOptions;
     private readonly Action<RedisKey, string, RedisValue>? _auditKeySize;
+    private readonly IConnectionState _connectionState;
 
     public RedisHashCache(
         IRedisConnector redis,
@@ -30,6 +31,7 @@ public sealed class RedisHashCache : IHashCache
         RedisCacheOptions redisCacheOptions,
         CacheOptions cacheOptions,
         ILogger<RedisHashCache> logger)
+        : base(redis, redisCacheOptions.ConnectionMonitorEnabled ?? cacheOptions.ConnectionMonitorEnabled)
     {
         _redis = redis;
         _serializer = serializer;
@@ -47,9 +49,10 @@ public sealed class RedisHashCache : IHashCache
         {
             _auditKeySize = AuditKeySize;
         }
-    }
 
-    private IDatabase Database => _redis.Database;
+        var connectionMonitorEnabled = redisCacheOptions.ConnectionMonitorEnabled ?? cacheOptions.ConnectionMonitorEnabled;
+        _connectionState = connectionMonitorEnabled ? new ConnectionStateMonitor(redis) : NullConnectionStateMonitor.Instance;
+    }
 
     public async ValueTask<T?> GetItemAsync<T>(CacheKey cacheKey, string field,  CancellationToken token = default)
     {
@@ -385,11 +388,6 @@ public sealed class RedisHashCache : IHashCache
         }
 
         return ret;
-    }
-
-    public void Dispose()
-    {
-        //nothing to dispose
     }
 
     private async ValueTask<ICacheEntry<IDictionary<string, T?>>> GetCacheEntryForKeyAsync<T>(RedisKey redisKey)

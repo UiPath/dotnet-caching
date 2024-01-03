@@ -2,7 +2,7 @@
 
 public interface ITopicFactory
 {
-    ITopicProvider Get(string? providerName, Type entryType);
+    ITopicProvider Get(string? providerName = null);
 
     void AddProvider(ITopicProvider provider);
 }

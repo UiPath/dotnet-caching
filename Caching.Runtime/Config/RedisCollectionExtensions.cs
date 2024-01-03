@@ -16,7 +16,7 @@ public static class RedisCollectionExtensions
         configure(options);
         builder.Services.Configure(configure);
         builder.Services.TryAddEnumerable(ServiceDescriptor.Singleton<ICacheProvider, RedisCacheProvider>());
-        return builder.AddCallback();
+        return builder;
     }
 
 
@@ -44,7 +44,7 @@ public static class RedisCollectionExtensions
         }
 
         builder.Services.TryAddSingleton<IRedisConnector, RedisConnector>();
-        return builder.AddCallback();
+        return builder;
     }
 
     private static ConfigurationOptions CreateRedisConfiguration(IServiceProvider sp)
@@ -97,11 +97,4 @@ public static class RedisCollectionExtensions
 
         return cnn;
     }
-    private static ICachingBuilder AddCallback(this ICachingBuilder builder)
-    {
-        builder.RegisterOnCompleteCallback(builder => builder.Services.TryAddNullInstances());
-        return builder;
-    }
-
-
 }

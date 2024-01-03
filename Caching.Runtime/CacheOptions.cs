@@ -32,4 +32,6 @@ public class CacheOptions
     public Type? TopicKeyStrategyFactory { get; set; }
 
     public int LargeValueThreshold { get; set; } = 20_000;
+
+    public bool ConnectionMonitorEnabled { get; set; }
 }

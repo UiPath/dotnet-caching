@@ -5,12 +5,12 @@ internal class LocalMemorySetter : MemoryCacheSetter
     public LocalMemorySetter(
         string cacheName,
         IChangeTokenFactory changeTokenFactory,
-        ITopicFactory topicFactory,
+        ITopicProvider topicProvider,
         IMemoryCache memoryCache,
         ILogger logger,
         CacheClock clock,
         IMultilayerCacheOptions cacheOptions)
-        : base(cacheName, changeTokenFactory, topicFactory, memoryCache, logger, clock, cacheOptions)
+        : base(cacheName, changeTokenFactory, topicProvider, memoryCache, logger, clock, cacheOptions)
     {
     }
 

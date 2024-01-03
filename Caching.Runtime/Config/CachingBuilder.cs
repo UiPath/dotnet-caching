@@ -1,5 +1,6 @@
 ﻿using System.Text.Json;
 using UiPath.Platform.Caching.Policies;
+using UiPath.Platform.Caching.Telemetry;
 
 namespace UiPath.Platform.Caching.Config;
 
@@ -33,7 +34,12 @@ public class CachingBuilder : ICachingBuilder
         }
 
         Services.TryAddSingleton<ISerializerProxy>(sp => new SystemJsonSerializerProxy(sp.GetService<JsonSerializerOptions>()));
-        Services.TryAddSingleton<IPolicyHolder>(sp => new PolicyHolder(new NoOpExecutor()));
+        Services.TryAddSingleton<IPolicyHolder>(_ => new PolicyHolder(new NoOpExecutor()));
+        Services.TryAddSingleton<IChangeTokenFactory>(NullChangeTokenFactory.Instance);
+        Services.TryAddSingleton<ITopicFactory>(NullTopicFactory.Instance);
+        Services.TryAddSingleton<ICachingTelemetryProvider>(NullTelemetryProvider.Instance);
+        Services.TryAddSingleton<ICacheEventFactory>(NullCacheEventFactory.Instance);
+        Services.TryAddSingleton<ILoggerFactory>(NullLoggerFactory.Instance);
     }
 
     public void RegisterOnCompleteCallback(Action<ICachingBuilder> callback) =>

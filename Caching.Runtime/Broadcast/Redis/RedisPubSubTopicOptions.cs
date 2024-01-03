@@ -11,4 +11,6 @@ public class RedisPubSubTopicOptions
     public int ConsumerCapacity { get; set; } = 2048;
 
     public BoundedChannelFullMode FullMode { get; set; } = BoundedChannelFullMode.Wait;
+
+    public bool? ConnectionMonitorEnabled { get; set; }
 }

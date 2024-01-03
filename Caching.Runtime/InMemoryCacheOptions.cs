@@ -25,4 +25,6 @@ public class InMemoryCacheOptions : IMultilayerCacheOptions, IMemoryStatisticsOp
     public TimeSpan? PrimaryMaxExpiration { get; set; } = TimeSpan.FromHours(1);
 
     public ITopicKeyStrategy? TopicKeyStrategy { get; set; }
+
+    public bool? ConnectionMonitorEnabled { get; set; }
 }

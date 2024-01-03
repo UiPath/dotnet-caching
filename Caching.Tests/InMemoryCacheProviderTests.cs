@@ -30,7 +30,7 @@ public class InMemoryCacheProviderTests : IAsyncLifetime
         _options.BroadcastEnable = enabled;
         var topicFactory = _fixture.Freeze<ITopicFactory>();
         var topicProvider = _fixture.Freeze<ITopicProvider>();
-        topicFactory.Get(Arg.Any<string?>(), Arg.Any<Type>())
+        topicFactory.Get(Arg.Any<string?>())
             .Returns(topicProvider);
         var topic = _fixture.Create<ITopic<ICacheEvent>>();
         topic.PublishAsync(Arg.Any<ICacheEvent>(), Arg.Any<CancellationToken>())

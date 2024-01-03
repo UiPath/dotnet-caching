@@ -2,7 +2,7 @@
 
 namespace UiPath.Platform.Caching.Broadcast.Redis;
 
-public abstract class TopicProviderBase : ITopicProvider
+public abstract class RedisTopicProviderBase : ITopicProvider, IConnectionState
 {
     private bool _disposed;
 
@@ -10,6 +10,36 @@ public abstract class TopicProviderBase : ITopicProvider
 
     private readonly CancellationTokenSource _stopTokenSource = new();
 
+    private readonly IConnectionState _connectionState;
+
+    protected RedisTopicProviderBase(IRedisConnector redis, bool connectionMonitorEnabled)
+    {
+        Redis = redis;
+        _connectionState = connectionMonitorEnabled ? new ConnectionStateMonitor(redis) : NullConnectionStateMonitor.Instance;
+    }
+
+    protected IRedisConnector Redis { get; }
+
+
+    public event EventHandler? OnConnectionFailed
+    {
+        add => _connectionState.OnConnectionFailed += value;
+        remove => _connectionState.OnConnectionFailed -= value;
+    }
+
+    public event EventHandler? OnConnectionRestored
+    {
+        add => _connectionState.OnConnectionRestored += value;
+        remove => _connectionState.OnConnectionRestored -= value;
+    }
+
+    public event EventHandler? OnReconnected
+    {
+        add => _connectionState.OnReconnected += value;
+        remove => _connectionState.OnReconnected -= value;
+    }
+
+    public bool IsConnected => _connectionState.IsConnected;
 
     public abstract string Name { get; }
 
@@ -46,6 +76,7 @@ public abstract class TopicProviderBase : ITopicProvider
         {
             if (disposing)
             {
+                _connectionState.Dispose();
                 _stopTokenSource?.Cancel();
                 _stopTokenSource?.Dispose();
                 _topics.Clear();
