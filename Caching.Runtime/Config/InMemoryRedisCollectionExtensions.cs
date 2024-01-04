@@ -22,6 +22,7 @@ public static class InMemoryRedisCollectionExtensions
             builder.Services.TryAddSingleton<IEventFormatterProxy<ICacheEvent>, CacheEventFormatter>();
             builder.Services.TryAddSingleton<ICacheEventFactory, CacheEventFactory>();
             builder.Services.AddMemoryCacheFactory();
+            builder.Services.TryAddNullInstances();
         });
 
         return builder;

@@ -26,8 +26,8 @@ public sealed class RedisCacheProvider : ICacheProvider
         IRedisConnector redis,
         ISerializerProxy serializerProxy,
         IPolicyHolder policyHolder,
-        ICachingTelemetryProvider? cachingTelemetryProvider = null,
-        ILoggerFactory? loggerFactory = null)
+        ICachingTelemetryProvider cachingTelemetryProvider,
+        ILoggerFactory loggerFactory)
     {
         _redisCacheOptions = redisCacheOptions.Value;
         _cacheOptions = cacheOptions.Value;
