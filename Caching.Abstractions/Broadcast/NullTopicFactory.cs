@@ -5,7 +5,7 @@ namespace UiPath.Platform.Caching.Broadcast;
 [ExcludeFromCodeCoverage]
 public class NullTopicFactory : ITopicFactory
 {
-    public static readonly ITopicFactory Instance = new NullTopicFactory();
+    public static readonly NullTopicFactory Instance = new NullTopicFactory();
 
     private NullTopicFactory()
     {

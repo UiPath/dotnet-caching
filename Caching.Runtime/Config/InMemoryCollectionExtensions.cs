@@ -21,6 +21,7 @@ public static class InMemoryCollectionExtensions
         builder.RegisterOnCompleteCallback(builder =>
         {
             builder.Services.AddMemoryCacheFactory();
+            builder.Services.TryAddNullInstances();
         });
         return builder;
     }

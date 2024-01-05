@@ -30,8 +30,8 @@ public sealed class InMemoryRedisCacheProvider : ICacheProvider
         IChangeTokenFactory changeTokenFactory,
         ITopicFactory topicFactory,
         ICacheEventFactory cacheEventFactory,
-        ICachingTelemetryProvider? cachingTelemetryProvider = null,
-        ILoggerFactory? loggerFactory = null)
+        ICachingTelemetryProvider cachingTelemetryProvider,
+        ILoggerFactory loggerFactory)
     {
         _options = optionsAccessor.Value;
         _memoryCacheFactory = memoryCacheFactory;
@@ -39,8 +39,8 @@ public sealed class InMemoryRedisCacheProvider : ICacheProvider
         _changeTokenFactory = changeTokenFactory;
         _topicFactory = topicFactory;
         _cacheEventFactory = cacheEventFactory;
-        _cachingTelemetryProvider = cachingTelemetryProvider ?? NullTelemetryProvider.Instance;
-        _loggerFactory = loggerFactory ?? NullLoggerFactory.Instance;
+        _cachingTelemetryProvider = cachingTelemetryProvider;
+        _loggerFactory = loggerFactory;
         _cache = new Lazy<MultilayerCache>(() => BuildCache());
         _hashCache = new Lazy<MultilayerHashCache>(() => BuildHashCache());
         Enabled = _options.Enabled && connectionOptionsAccessor.Value.Enabled;

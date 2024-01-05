@@ -38,6 +38,4 @@ public class CachingBuilder : ICachingBuilder
 
     public void RegisterOnCompleteCallback(Action<ICachingBuilder> callback) =>
         _callbacks.Add(callback);
-
-
 }

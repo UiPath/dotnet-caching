@@ -21,11 +21,11 @@ public sealed class InMemoryCacheProvider : ICacheProvider
     public InMemoryCacheProvider(
         IOptions<InMemoryCacheOptions> optionsAccessor,
         IMemoryCacheFactory memoryCacheFactory,
-        ICacheEventFactory? cacheEventFactory = null,
-        IChangeTokenFactory? changeTokenFactory = null,
-        ITopicFactory? topicFactory = null,
-        ICachingTelemetryProvider? cachingTelemetryProvider = null,
-        ILoggerFactory? loggerFactory = null)
+        ICacheEventFactory cacheEventFactory,
+        IChangeTokenFactory changeTokenFactory,
+        ITopicFactory topicFactory,
+        ICachingTelemetryProvider cachingTelemetryProvider,
+        ILoggerFactory loggerFactory)
     {
         _options = optionsAccessor.Value;
         _memoryCacheFactory = memoryCacheFactory;
@@ -50,9 +50,8 @@ public sealed class InMemoryCacheProvider : ICacheProvider
             }
         }
 
-
-        _cachingTelemetryProvider = cachingTelemetryProvider ?? NullTelemetryProvider.Instance;
-        _loggerFactory = loggerFactory ?? NullLoggerFactory.Instance;
+        _cachingTelemetryProvider = cachingTelemetryProvider;
+        _loggerFactory = loggerFactory;
         _cache = new Lazy<MultilayerCache>(BuildCache);
         _hashCache = new Lazy<MultilayerHashCache>(BuildHashCache);
     }
