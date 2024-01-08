@@ -23,7 +23,7 @@ resources:
     - repository: sonar
       type: github
       name: UiPath/AzurePipelinesTemplates
-      ref: refs/tags/uipath.sonar-coverage.1.3.0
+      ref: refs/tags/uipath.sonar-coverage.1.7.1
       endpoint: 'UiPath'
 
 variables:
@@ -100,6 +100,24 @@ stages:
           includePreviewVersions: false
           performMultiLevelLookup: true
           
+      - pwsh: |
+          if (!(dotnet tool list -g | Where-Object {$_.contains("coverlet")})){
+            dotnet tool install --global coverlet.console --version 6.0.0
+          } else {
+            dotnet tool update --global coverlet.console --version 6.0.0
+          }
+
+          if (!(dotnet tool list -g | Where-Object {$_.contains("dotnet-coverage")})){
+            dotnet tool install --global dotnet-coverage --version 17.9.6
+          } else {
+            dotnet tool update --global dotnet-coverage --version 17.9.6
+          }
+
+          dotnet --info
+          dotnet tool list -g
+        displayName: Install dotnet tools
+        retryCountOnTaskFailure: 10
+
       - task: NuGetToolInstaller@0
         displayName: Use NuGet 6.x
         inputs:
@@ -137,13 +155,16 @@ stages:
             /p:GenerateGitVersionInformation=false
             /p:UpdateVersionProperties=false
 
-      - task: DotNetCoreCLI@2
-        displayName: 'Run tests'
+      - pwsh : |
+          dotnet test "$(Solution)" --configuration $(BuildConfiguration) --no-build --collect "XPlat Code Coverage" --logger trx --results-directory "$(Agent.TempDirectory)/test-results"
+          dotnet-coverage merge "$(Agent.TempDirectory)/test-results/**/*.xml" -f xml -o "$(Agent.TempDirectory)/test-results/caching.coveragexml"
+        displayName: "Run tests"
+
+      - task: PublishPipelineArtifact@1
+        displayName: "Publish test results"
         inputs:
-          command: test
-          projects: |
-            Caching/**/Caching.Tests.csproj
-          arguments: '--collect "Code coverage" --logger trx --configuration $(BuildConfiguration)'
+          targetPath: "$(Agent.TempDirectory)/test-results"
+          artifactName: "test-results"
 
       - template: /Sonar/analyze-sonar-coverage.yml@sonar
 
