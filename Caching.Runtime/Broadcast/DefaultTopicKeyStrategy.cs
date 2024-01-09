@@ -2,5 +2,9 @@
 
 public sealed class DefaultTopicKeyStrategy : ITopicKeyStrategy
 {
-    public TopicKey GetTopicKey<T>() => typeof(T).Name;
+    private readonly char _separator;
+ 
+    public DefaultTopicKeyStrategy(char? separator = null) => _separator = separator ?? CacheOptions.KeySeparator;
+
+    public TopicKey GetTopicKey(Type topicType) => topicType.GetCacheFriendlyTypeName(_separator);
 }

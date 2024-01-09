@@ -23,7 +23,7 @@ public sealed class MultilayerCache : MultilayerCacheBase, ICache
     {
         _innerCache = innerCache;
         var cacheKeyStrategy = _multiLayerCacheOptions.CacheKeyStrategy ?? new DefaultCacheKeyStrategy();
-        var topicKeyStrategy = _multiLayerCacheOptions.TopicKeyStrategy ?? new DefaultTopicKeyStrategy();
+        var topicKeyStrategy = _multiLayerCacheOptions.TopicKeyStrategy ?? new DefaultTopicKeyStrategy(cacheOptions.Separator);
         var topicProvider = topicFactory.Get(_multiLayerCacheOptions.Topic);
         _entryBuilder = new CacheEntryBuilder(cacheKeyStrategy, topicKeyStrategy, _clock);
         _localMemorySetter = new LocalMemorySetter(cacheName, changeTokenFactory, topicProvider, _memoryCache, logger, _clock, _multiLayerCacheOptions);

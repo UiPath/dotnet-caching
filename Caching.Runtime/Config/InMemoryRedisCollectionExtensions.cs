@@ -1,6 +1,4 @@
-﻿using UiPath.Platform.Caching.Telemetry;
-
-namespace UiPath.Platform.Caching.Config;
+﻿namespace UiPath.Platform.Caching.Config;
 
 [ExcludeFromCodeCoverage]
 public static class InMemoryRedisCollectionExtensions
