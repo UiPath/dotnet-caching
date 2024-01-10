@@ -10,9 +10,9 @@ public class PollyHolder : IPolicyHolder
         Write = new PolicyWrapper(Build(write));
     }
 
-    public IPolicyExecutor Read { get; private set; }
+    public IPolicyExecutor Read { get; }
 
-    public IPolicyExecutor Write { get; private set; }
+    public IPolicyExecutor Write { get; }
 
     private static IAsyncPolicy Build(IAsyncPolicy[] policies)
     {

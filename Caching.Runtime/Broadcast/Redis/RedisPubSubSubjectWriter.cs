@@ -13,6 +13,11 @@ internal sealed class RedisPubSubSubjectWriter<T> : IDisposable
     private readonly IEventFormatterProxy<T> _formatter;
     private readonly ILogger _logger;
     private readonly Action<RedisChannel, RedisValue> _handler;
+    private readonly TimeSpan _timerPeriod;
+    private readonly TimeSpan _timerDueTime;
+    private readonly Timer _subscribeTimer;
+    private Action? _unsubscribe;
+    private int _subscribing;
 
     public RedisPubSubSubjectWriter(
         Uri sourceUri,
@@ -28,19 +33,61 @@ internal sealed class RedisPubSubSubjectWriter<T> : IDisposable
         _logger = logger;
         _sourceUri = sourceUri;
         _redisChannel = redisChannel;
-        _handler = (channel, value) => OnMessage(value);
-        _redis.Subscriber.Subscribe(_redisChannel, _handler);
         _redis.OnReconnected += OnReconnected;
+        var connectionTimeout = TimeSpan.FromMilliseconds(_redis.Subscriber.Multiplexer.TimeoutMilliseconds);
+        _timerPeriod = connectionTimeout.Multiply(1.5);
+        _timerDueTime = connectionTimeout.Multiply(0.5);
+        if(_timerDueTime > TimeSpan.FromSeconds(1))
+        {
+            _timerDueTime = TimeSpan.FromSeconds(1);
+        }
+        _handler = (_, value) => OnMessage(value);
+        _subscribeTimer = new Timer(Subscribe, null, _timerPeriod, _timerPeriod);
     }
 
-    private void OnReconnected(object? sender, EventArgs e) =>
-        _redis.Subscriber.Subscribe(_redisChannel, _handler);
+    private void Subscribe(object? state)
+    {
+        if (Interlocked.CompareExchange(ref _subscribing, 1, 0) != 0)
+        {
+            return;
+        }
+
+        _logger.LogTrace("Subscribe channel: {}", _redisChannel);
+        try
+        {
+            _unsubscribe?.Invoke();
+            _unsubscribe = null;
+            var subscriber = _redis.Subscriber;
+            subscriber.Subscribe(_redisChannel, _handler);
+            _unsubscribe = () => subscriber.Unsubscribe(_redisChannel, _handler, CommandFlags.FireAndForget);
+            _subscribeTimer.Change(Timeout.Infinite, Timeout.Infinite);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Subscribe error. Channel: {}", _redisChannel);
+        }
+        finally
+        {
+            Interlocked.Exchange(ref _subscribing, 0);
+        }
+    }
+
+    private void OnReconnected(object? sender, EventArgs e)
+    {
+        if(_disposed)
+        {
+            return;
+        }
+
+        _subscribeTimer.Change(_timerDueTime, _timerPeriod);
+    }
 
     public void Dispose()
     {
         if (!_disposed)
         {
             _redis.OnReconnected -= OnReconnected;
+            _subscribeTimer.Dispose();
             Unsubscribe();
         }
         _disposed = true;
@@ -80,7 +127,7 @@ internal sealed class RedisPubSubSubjectWriter<T> : IDisposable
         _logger.LogTrace("Unsubscribe channel: {}", _redisChannel);
         try
         {
-            _redis.Subscriber.Unsubscribe(_redisChannel, _handler);
+            _unsubscribe?.Invoke();
             _channelWriter.TryComplete();
         }
         catch (Exception ex)

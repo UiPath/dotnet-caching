@@ -17,17 +17,10 @@ public static class BroadcastExtensions
 
     public static ICachingBuilder AddBroadcast(this ICachingBuilder builder, bool enabled)
     {
-        if (builder.Enabled)
+        if (builder.Enabled && enabled)
         {
-            if (enabled)
-            {
-                builder.Services.TryAddSingleton<ITopicFactory, TopicFactory>();
-                builder.AddRedisPubSub().AddRedisStreams();
-            }
-            else
-            {
-                builder.Services.TryAddSingleton<ITopicFactory, NullTopicFactory>();
-            }
+            builder.Services.TryAddSingleton<ITopicFactory, TopicFactory>();
+            builder.AddRedisPubSub().AddRedisStreams();
         }
 
         return builder;

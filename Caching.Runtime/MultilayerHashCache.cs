@@ -25,9 +25,8 @@ public sealed class MultilayerHashCache : MultilayerCacheBase, IHashCache
         _innerCache = innerCache;
         var cacheKeyStrategy = _multiLayerCacheOptions.CacheKeyStrategy ?? new DefaultCacheKeyStrategy();
         var topicKeyStrategy = _multiLayerCacheOptions.TopicKeyStrategy ?? new DefaultTopicKeyStrategy(cacheOptions.Separator);
-        var topicProvider = topicFactory.Get(_multiLayerCacheOptions.Topic);
         _entryBuilder = new HashCacheEntryBuilder(cacheKeyStrategy, topicKeyStrategy, _clock);
-        _localMemorySetter = new HashLocalMemorySetter(cacheName, changeTokenFactory, topicProvider, _memoryCache, logger, _clock, _multiLayerCacheOptions);
+        _localMemorySetter = new HashLocalMemorySetter(cacheName, changeTokenFactory, _topicProvider, _memoryCache, logger, _clock, _multiLayerCacheOptions);
     }
 
     public async ValueTask<T?> GetItemAsync<T>(CacheKey cacheKey, string field, CancellationToken token = default)

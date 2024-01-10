@@ -13,6 +13,7 @@ public abstract class MultilayerCacheBase : IDisposable
     protected readonly CacheClock _clock;
     protected readonly CacheEventPublisher _eventPublisher;
     protected readonly IConnectionState _connectionEventSource;
+    protected readonly ITopicProvider _topicProvider;
 
     protected MultilayerCacheBase(
         string cacheName,
@@ -31,10 +32,10 @@ public abstract class MultilayerCacheBase : IDisposable
         _cacheEntryFactory = _multiLayerCacheOptions.EntryFactory ?? new CacheEntryFactory();
         _monitor = _memoryCache.Monitor(multiLayerCacheOptions, telemetryProvider, GetType().Name);
         _clock = new CacheClock(_multiLayerCacheOptions.Clock, _multiLayerCacheOptions.DefaultExpiration);
-        var topicProvider = topicFactory.Get(_multiLayerCacheOptions.Topic);
-        _eventPublisher = new CacheEventPublisher(cacheName, topicProvider, cacheEventFactory, logger);
+        _topicProvider = topicFactory.Get(_multiLayerCacheOptions.Topic);
+        _eventPublisher = new CacheEventPublisher(cacheName, _topicProvider, cacheEventFactory, logger);
         var connectionMonitorEnabled = multiLayerCacheOptions.ConnectionMonitorEnabled ?? cacheOptions.ConnectionMonitorEnabled;
-        _connectionEventSource = connectionMonitorEnabled ? GetConnectionMonitor(innerCache, topicProvider) : NullConnectionStateMonitor.Instance;
+        _connectionEventSource = connectionMonitorEnabled ? GetConnectionMonitor(innerCache, _topicProvider) : NullConnectionStateMonitor.Instance;
     }
 
     private static IConnectionState GetConnectionMonitor(params object[] connectionStates)
