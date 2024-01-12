@@ -7,6 +7,8 @@ public sealed class NullCache : ICache
 {
     public static readonly NullCache Instance = new();
 
+    public string Name => "Null";
+
     public ValueTask<bool> ContainsAsync<T>(CacheKey cacheKey, CancellationToken token = default)
     {
         NotCacheableException.ThrowIfNotCacheable<T>();

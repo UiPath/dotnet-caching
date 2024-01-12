@@ -17,6 +17,9 @@ public class HashCache<T> : IHashCache<T>
         _cache = cache;
         _cacheKeyStrategy = cacheKeyStrategy ?? new DefaultCacheKeyStrategy();
     }
+
+    public string Name => _cache.Name;
+
     public ValueTask<T?> GetItemAsync(CacheKey cacheKey, string field, CancellationToken token = default) =>
         _cache.GetItemAsync<T>(GetCacheKey(cacheKey), field, token);
 

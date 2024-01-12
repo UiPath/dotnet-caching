@@ -49,6 +49,8 @@ public sealed class RedisCache : RedisCacheBase, ICache
         }
     }
 
+    public string Name => KnownCacheProviderNames.Redis;
+
     public ValueTask<T?> GetAsync<T>(CacheKey cacheKey, CancellationToken token = default)
     {
         NotCacheableException.ThrowIfNotCacheable<T>();

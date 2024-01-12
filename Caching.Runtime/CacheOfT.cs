@@ -18,6 +18,8 @@ public class Cache<T> : ICache<T>
         _cacheKeyStrategy = cacheKeyStrategy ?? new DefaultCacheKeyStrategy();
     }
 
+    public string Name => _cache.Name;
+
     public ValueTask<bool> ContainsAsync(CacheKey cacheKey, CancellationToken token = default) =>
         _cache.ContainsAsync<T>(GetCacheKey(cacheKey), token);
 

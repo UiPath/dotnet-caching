@@ -12,7 +12,6 @@ public abstract class RedisCacheBase : IConnectionState
         _connectionState = monitorConnection ? new ConnectionStateMonitor(redis) : NullConnectionStateMonitor.Instance;
     }
 
-
     public event EventHandler? OnConnectionFailed
     {
         add => _connectionState.OnConnectionFailed += value;

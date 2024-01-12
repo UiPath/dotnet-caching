@@ -2,6 +2,8 @@
 
 public interface IHashCache<T>
 {
+    string Name { get; }
+
     ValueTask<T?> GetItemAsync(CacheKey cacheKey, string field, CancellationToken token = default);
 
     ValueTask<IDictionary<string, T?>> GetAsync(CacheKey cacheKey, CancellationToken token = default);
