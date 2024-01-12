@@ -1,6 +1,8 @@
 ﻿namespace UiPath.Platform.Caching;
 public interface ICache<T>
 {
+    string Name { get; }
+
     ValueTask<T?> GetAsync(CacheKey cacheKey, CancellationToken token = default);
 
     ValueTask<T?> GetOrAddAsync(CacheKey cacheKey, Func<ValueTask<T?>> generator, CancellationToken token = default);

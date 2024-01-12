@@ -54,6 +54,8 @@ public sealed class RedisHashCache : RedisCacheBase, IHashCache
         _connectionState = connectionMonitorEnabled ? new ConnectionStateMonitor(redis) : NullConnectionStateMonitor.Instance;
     }
 
+    public string Name => KnownCacheProviderNames.Redis;
+
     public async ValueTask<T?> GetItemAsync<T>(CacheKey cacheKey, string field,  CancellationToken token = default)
     {
         NotCacheableException.ThrowIfNotCacheable<T>();

@@ -36,7 +36,10 @@ public abstract class MultilayerCacheBase : IDisposable
         _eventPublisher = new CacheEventPublisher(cacheName, _topicProvider, cacheEventFactory, logger);
         var connectionMonitorEnabled = multiLayerCacheOptions.ConnectionMonitorEnabled ?? cacheOptions.ConnectionMonitorEnabled;
         _connectionEventSource = connectionMonitorEnabled ? GetConnectionMonitor(innerCache, _topicProvider) : NullConnectionStateMonitor.Instance;
+        Name = cacheName;
     }
+
+    public string Name { get; }
 
     private static IConnectionState GetConnectionMonitor(params object[] connectionStates)
     {

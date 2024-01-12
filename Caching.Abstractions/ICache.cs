@@ -2,6 +2,8 @@
 
 public interface ICache : IDisposable
 {
+    string Name { get; }
+
     ValueTask<T?> GetAsync<T>(CacheKey cacheKey, CancellationToken token = default);
 
     ValueTask<T?> GetOrAddAsync<T>(CacheKey cacheKey, Func<ValueTask<T?>> generator, CancellationToken token = default);

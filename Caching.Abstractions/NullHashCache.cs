@@ -8,6 +8,8 @@ public sealed class NullHashCache : IHashCache
 {
     public static readonly NullHashCache Instance = new();
 
+    public string Name => "Null";
+
     public ValueTask<bool> ContainsAsync<T>(CacheKey cacheKey, CancellationToken token = default)
     {
         NotCacheableException.ThrowIfNotCacheable<T>();
