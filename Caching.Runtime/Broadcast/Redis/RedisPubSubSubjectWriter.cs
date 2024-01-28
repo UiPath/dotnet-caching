@@ -1,4 +1,5 @@
 ﻿using System.Threading.Channels;
+using Microsoft.Extensions.Options;
 
 namespace UiPath.Platform.Caching.Broadcast.Redis;
 
@@ -25,6 +26,7 @@ internal sealed class RedisPubSubSubjectWriter<T> : IDisposable
         IRedisConnector redis,
         ChannelWriter<T> channelWriter,
         IEventFormatterProxy<T> formatter,
+        RedisPubSubTopicOptions options,
         ILogger logger)
     {
         _redis = redis;
@@ -34,15 +36,10 @@ internal sealed class RedisPubSubSubjectWriter<T> : IDisposable
         _sourceUri = sourceUri;
         _redisChannel = redisChannel;
         _redis.OnReconnected += OnReconnected;
-        var connectionTimeout = TimeSpan.FromMilliseconds(_redis.Subscriber.Multiplexer.TimeoutMilliseconds);
-        _timerPeriod = connectionTimeout.Multiply(1.5);
-        _timerDueTime = connectionTimeout.Multiply(0.5);
-        if(_timerDueTime > TimeSpan.FromSeconds(1))
-        {
-            _timerDueTime = TimeSpan.FromSeconds(1);
-        }
         _handler = (_, value) => OnMessage(value);
-        _subscribeTimer = new Timer(Subscribe, null, _timerPeriod, _timerPeriod);
+        _timerPeriod = options.SubscriberTimeout > TimeSpan.Zero ? options.SubscriberTimeout.Value : TimeSpan.FromMilliseconds(_redis.Subscriber.Multiplexer.TimeoutMilliseconds);
+        _timerDueTime = options.SubscriberDueTime == null ? _timerPeriod.Multiply(0.5) : options.SubscriberDueTime.Value;
+        _subscribeTimer = new Timer(Subscribe, null, _timerDueTime, _timerPeriod);
     }
 
     private void Subscribe(object? state)

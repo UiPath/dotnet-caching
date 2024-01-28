@@ -34,7 +34,7 @@ public class CachingBuilder : ICachingBuilder
         }
 
         Services.TryAddSingleton<ISerializerProxy>(sp => new SystemJsonSerializerProxy(sp.GetService<JsonSerializerOptions>()));
-        Services.TryAddSingleton<IPolicyHolder>(_ => new PolicyHolder(new NoOpExecutor()));
+        Services.TryAddSingleton<IPolicyHolder>(_ => PolicyHolder.NoOp);
         Services.TryAddSingleton<IChangeTokenFactory>(NullChangeTokenFactory.Instance);
         Services.TryAddSingleton<ITopicFactory>(NullTopicFactory.Instance);
         Services.TryAddSingleton<ICachingTelemetryProvider>(NullTelemetryProvider.Instance);

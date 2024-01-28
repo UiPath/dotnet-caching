@@ -1,7 +1,9 @@
 ﻿namespace UiPath.Platform.Caching.Polly;
 
-public class ExecutePoliciesOptions
+public class ResiliencePoliciesOptions
 {
+    public bool Enabled { get; set; } = true;
+
     public TimeSpan DurationOfBreak { get; set; } = TimeSpan.FromMinutes(1);
 
     public int ExceptionsAllowedBeforeBreaking { get; set; } = 10;

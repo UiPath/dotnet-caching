@@ -1,4 +1,5 @@
-﻿using UiPath.Platform.Caching.Policies;
+﻿using Polly.NoOp;
+using UiPath.Platform.Caching.Policies;
 
 namespace UiPath.Platform.Caching.Polly;
 
@@ -7,9 +8,9 @@ public static class CachingBuilderExtensions
 {
     private const string DefaultSectionName = "ResiliencePolicies";
 
-    private static readonly List<Func<IServiceProvider, IAsyncPolicy>> ReadPolicies = new();
+    private static readonly List<Func<IServiceProvider, IAsyncPolicy?>> ReadPolicies = new();
 
-    private static readonly List<Func<IServiceProvider, IAsyncPolicy>> WritePolicies = new();
+    private static readonly List<Func<IServiceProvider, IAsyncPolicy?>> WritePolicies = new();
 
     public static ICachingBuilder AddResiliencePolicies(this ICachingBuilder builder) =>
         builder.AddResiliencePolicies(DefaultSectionName);
@@ -17,11 +18,14 @@ public static class CachingBuilderExtensions
     public static ICachingBuilder AddResiliencePolicies(this ICachingBuilder builder, string sectionName) =>
         builder.AddResiliencePolicies(opt => builder.Configuration.GetSection(sectionName).Bind(opt));
 
-    public static ICachingBuilder AddResiliencePolicies(this ICachingBuilder builder, Action<ExecutePoliciesOptions> configureOptions)
+    public static ICachingBuilder AddResiliencePolicies(this ICachingBuilder builder, Action<ResiliencePoliciesOptions> configureOptions)
     {
-        ExecutePoliciesOptions options = new();
+        ResiliencePoliciesOptions options = new();
         configureOptions.Invoke(options);
         builder.Services.Configure(configureOptions);
+        ReadPolicies.Add(sp => sp.BuildCircuitBreakerPolicy(options));
+        ReadPolicies.Add(sp => sp.BuildRetryPolicy(options));
+        ReadPolicies.Add(sp => sp.BuildTimeoutPolicy(options));
         return builder.AddCallback();
     }
 
@@ -51,44 +55,22 @@ public static class CachingBuilderExtensions
 
     private static ICachingBuilder AddCallback(this ICachingBuilder builder)
     {
-        builder.RegisterOnCompleteCallback(builder => builder.Services.TryAddSingleton<IPolicyHolder>(sp => sp.BuildPolicyHolder()));
+        builder.RegisterOnCompleteCallback(builder => builder.Services.TryAddSingleton(sp => sp.BuildPolicyHolder()));
         return builder;
     }
 
-    private static PollyHolder BuildPolicyHolder(this IServiceProvider sp)
+    private static IPolicyHolder BuildPolicyHolder(this IServiceProvider sp)
     {
-        IAsyncPolicy[]? readPolicies = null;
-        IAsyncPolicy[]? writePolicies = null;
-
-        if (ReadPolicies.Any())
+        var readPolicies = ReadPolicies.Select(factory => factory(sp)).OfType<IAsyncPolicy>().ToArray();
+        var writePolicies = WritePolicies.Select(factory => factory(sp)).OfType<IAsyncPolicy>().ToArray();
+        if(readPolicies.Length > 0 && writePolicies.Length == 0)
         {
-            readPolicies = ReadPolicies.Select(factory => factory(sp)).ToArray();
-            writePolicies = WritePolicies.Select(factory => factory(sp)).ToArray();
-            if (!writePolicies.Any())
-            {
-                writePolicies = readPolicies;
-            }
+            writePolicies = readPolicies;
         }
-        else
-        {
-            var policies = new List<IAsyncPolicy> { sp.BuildCircuitBreakerPolicy() };
-            var p = sp.BuildRetryPolicy();
-            if (p != null)
-            {
-                policies.Add(p);
-            }
 
-            p = sp.BuildTimeoutPolicy();
-            if (p != null)
-            {
-                policies.Add(p);
-            }
-            readPolicies = policies.ToArray();
-            writePolicies = WritePolicies.Select(factory => factory(sp)).ToArray();
-            if (!writePolicies.Any())
-            {
-                writePolicies = readPolicies;
-            }
+        if(readPolicies.Length == 0 && writePolicies.Length == 0)
+        {
+            return PolicyHolder.NoOp;
         }
 
         return new PollyHolder(readPolicies, writePolicies);

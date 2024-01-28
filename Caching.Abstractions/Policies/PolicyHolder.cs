@@ -1,9 +1,9 @@
-﻿using UiPath.Platform.Caching.Policies;
+﻿namespace UiPath.Platform.Caching.Policies;
 
-namespace UiPath.Platform.Caching;
-
-public class PolicyHolder : IPolicyHolder
+public sealed class PolicyHolder : IPolicyHolder
 {
+    public static readonly PolicyHolder NoOp = new(new NoOpExecutor());
+
     public PolicyHolder(IPolicyExecutor read, IPolicyExecutor? write = null)
     {
         Read = read;

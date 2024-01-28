@@ -13,4 +13,8 @@ public class RedisPubSubTopicOptions
     public BoundedChannelFullMode FullMode { get; set; } = BoundedChannelFullMode.Wait;
 
     public bool? ConnectionMonitorEnabled { get; set; }
+
+    public TimeSpan? SubscriberTimeout { get; set; }
+
+    public TimeSpan? SubscriberDueTime { get; set; }
 }
