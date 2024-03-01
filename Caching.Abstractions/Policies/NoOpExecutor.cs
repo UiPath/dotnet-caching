@@ -12,6 +12,12 @@ public class NoOpExecutor : IPolicyExecutor
     public Task<TResult> ExecuteAsync<TResult>(Func<Task<TResult>> action) =>
         action();
 
+    public Task ExecuteAsync(Func<Task> action) =>
+        action();
+
     public Task<TResult> ExecuteAsync<TResult>(Func<CancellationToken, Task<TResult>> action, CancellationToken cancellationToken) =>
+        action(cancellationToken);
+
+    public Task ExecuteAsync(Func<CancellationToken, Task> action, CancellationToken cancellationToken) =>
         action(cancellationToken);
 }

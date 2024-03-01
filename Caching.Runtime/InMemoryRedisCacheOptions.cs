@@ -14,9 +14,9 @@ public class InMemoryRedisCacheOptions : IMultilayerCacheOptions, IMemoryStatist
 
     public ICacheKeyStrategy? CacheKeyStrategy { get; set; }
 
-    public bool TrackStatistics { get; set; }
+    public bool TrackStatistics { get; set; } = true;
 
-    public TimeSpan StatisticsFlushInterval { get; set; } = TimeSpan.FromMinutes(5);
+    public TimeSpan StatisticsFlushInterval { get; set; } = TimeSpan.FromMinutes(1);
 
     public string? Topic { get; set; }
 

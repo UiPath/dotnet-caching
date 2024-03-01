@@ -1,5 +1,4 @@
-﻿using Polly.NoOp;
-using UiPath.Platform.Caching.Policies;
+﻿using UiPath.Platform.Caching.Policies;
 
 namespace UiPath.Platform.Caching.Polly;
 

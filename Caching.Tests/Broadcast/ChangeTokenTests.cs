@@ -12,9 +12,10 @@ public class ChangeTokenTests : IAsyncLifetime
     private CacheClearEventFormatterProxy _formatter = default!;
     private Uri? _source = null;
     private ISet<string>? _acceptedEvents = null;
+    private ISerializerProxy _serializer = default!;
 
     private ChangeToken? _sut = null;
-    private ChangeToken Sut => _sut ??= new ChangeToken(_key, _topic, _source, _fixture.Freeze<ILogger<ChangeToken>>(), _acceptedEvents);
+    private ChangeToken Sut => _sut ??= new ChangeToken(_key, _topic, _source, _serializer, _fixture.Freeze<ILogger<ChangeToken>>(), _acceptedEvents);
 
     [Fact]
     public void Verify_ActiveChangeCallbacks()
@@ -179,6 +180,7 @@ public class ChangeTokenTests : IAsyncLifetime
         _fixture.Freeze<ILogger<ChangeToken>>();
         _topic = _fixture.Freeze<ITopic<ICacheEvent>>();
         _formatter = new CacheClearEventFormatterProxy();
+        _serializer = new SystemJsonSerializerProxy();
         _fixture.Inject<IEventFormatterProxy<ICacheEvent>>(_formatter);
         return Task.CompletedTask;
     }

@@ -1,5 +1,4 @@
 ﻿using System.Threading.Channels;
-using Microsoft.Extensions.Options;
 
 namespace UiPath.Platform.Caching.Broadcast.Redis;
 

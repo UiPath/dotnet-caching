@@ -1,7 +1,7 @@
 ﻿using System.Reactive.Subjects;
 using System.Threading.Channels;
 
-namespace UiPath.Platform.Caching.Broadcast.Redis;
+namespace UiPath.Platform.Caching.Broadcast;
 
 internal sealed class EventDispatcher<T> : IDisposable
     where T : IEvent
@@ -29,7 +29,7 @@ internal sealed class EventDispatcher<T> : IDisposable
 
     private async Task Consume()
     {
-        while(await _reader.WaitToReadAsync(_cancellationToken).ConfigureAwait(false))
+        while (await _reader.WaitToReadAsync(_cancellationToken).ConfigureAwait(false))
         {
             while (_reader.TryRead(out var item))
             {

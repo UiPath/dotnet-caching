@@ -5,17 +5,19 @@ public sealed class ChangeToken : ICacheChangeToken, IObserver<ICacheEvent>, IDi
     private readonly string _key;
     private readonly TopicKey _topic;
     private readonly Uri? _source;
+    private readonly ISerializerProxy _serializer;
     private readonly ILogger<ChangeToken> _logger;
     private readonly ISet<string>? _acceptedEvents;
     private readonly IDisposable _unsubscriber;
 
     private readonly List<(Action<object?> callback, object? state)> _callbacks = new();
 
-    public ChangeToken(string key, ITopic<ICacheEvent> topic, Uri? source, ILogger<ChangeToken> logger, ISet<string>? acceptedEvents = null)
+    public ChangeToken(string key, ITopic<ICacheEvent> topic, Uri? source, ISerializerProxy serializer, ILogger<ChangeToken> logger, ISet<string>? acceptedEvents = null)
     {
         _key = key;
         _topic = topic.TopicKey;
         _source = source;
+        _serializer = serializer;
         _logger = logger;
         _acceptedEvents = acceptedEvents;
         _logger.LogTrace("Waiting from message {} on topic {}", _key, _topic);
@@ -60,16 +62,23 @@ public sealed class ChangeToken : ICacheChangeToken, IObserver<ICacheEvent>, IDi
         HasChanged = true;
         if(data!= null && data.Properties != null)
         {
-            if (data.Properties.TryGetValue(KnownFieldNames.ExpirationKey, out object? dt) && dt is DateTimeOffset datetime)
+            if (data.Properties.TryGetValue(KnownFieldNames.ExpirationKey, out object? dt) && dt is not null)
             {
-                Expiration = datetime;
-                MetadataHasChanged = true;
+                
+                if(dt is DateTimeOffset datetime || _serializer.TryDeserialize(dt, out datetime))
+                {
+                    Expiration = datetime;
+                    MetadataHasChanged = true;
+                }
             }
 
-            if (data.Properties.TryGetValue(KnownFieldNames.MetadataKey, out object? m) && m is IDictionary<string, string?> mt)
+            if (data.Properties.TryGetValue(KnownFieldNames.MetadataKey, out object? m) && m is not null)
             {
-                Metadata = mt;
-                MetadataHasChanged = true;
+                if(m is IDictionary<string, string?> mt || _serializer.TryDeserialize(m, out mt!))
+                {
+                    Metadata = mt;
+                    MetadataHasChanged = true;
+                }
             }
         }
 

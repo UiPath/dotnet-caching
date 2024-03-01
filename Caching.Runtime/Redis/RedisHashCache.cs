@@ -372,9 +372,18 @@ public sealed class RedisHashCache : RedisCacheBase, IHashCache
             var keyExists = await _readPolicy.ExecuteAsync(() => Database.KeyExistsAsync(redisKey, CommandFlags.PreferReplica)).ConfigureAwait(false);
             if (keyExists)
             {
-                ret = metadata.Any()
-                    ? await _writePolicy.ExecuteAsync(() => Database.HashSetAsync(redisKey, KnownFieldNames.MetadataKey, _serializer.Serialize(metadata))).ConfigureAwait(false)
-                    : await _writePolicy.ExecuteAsync(() => Database.HashDeleteAsync(redisKey, KnownFieldNames.MetadataKey, CommandFlags.DemandMaster)).ConfigureAwait(false);
+                if (metadata.Any())
+                {
+                    ret = await _writePolicy.ExecuteAsync(async () =>
+                    {
+                        await Database.HashSetAsync(redisKey, KnownFieldNames.MetadataKey, _serializer.Serialize(metadata), When.Always, CommandFlags.DemandMaster);
+                        return true;
+                    }).ConfigureAwait(false);
+                }
+                else
+                {
+                   ret = await _writePolicy.ExecuteAsync(() => Database.HashDeleteAsync(redisKey, KnownFieldNames.MetadataKey, CommandFlags.DemandMaster)).ConfigureAwait(false);
+                }
             }
             operation.Stop();
 

@@ -1,10 +1,10 @@
 ﻿using System.Threading.Channels;
 
-namespace UiPath.Platform.Caching.Broadcast.Redis;
+namespace UiPath.Platform.Caching.Broadcast;
 
 internal static class ChannelHelper
 {
-    public static Channel<T> Create<T>(bool unbounded, int capacity, BoundedChannelFullMode fullMode) => unbounded 
+    public static Channel<T> Create<T>(bool unbounded, int capacity, BoundedChannelFullMode fullMode) => unbounded
             ? Channel.CreateUnbounded<T>(new UnboundedChannelOptions
             {
                 SingleReader = true,

@@ -1,4 +1,4 @@
-﻿namespace UiPath.Platform.Caching.Broadcast.Redis;
+﻿namespace UiPath.Platform.Caching.Broadcast;
 
 public static class EventExtensions
 {

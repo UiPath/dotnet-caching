@@ -39,7 +39,13 @@ public class PollyHolder : IPolicyHolder
         public Task<TResult> ExecuteAsync<TResult>(Func<Task<TResult>> action) =>
             _asyncPolicy.ExecuteAsync(action);
 
+        public Task ExecuteAsync(Func<Task> action) =>
+            _asyncPolicy.ExecuteAsync(action);
+
         public Task<TResult> ExecuteAsync<TResult>(Func<CancellationToken, Task<TResult>> action, CancellationToken cancellationToken) =>
+            _asyncPolicy.ExecuteAsync(action, cancellationToken);
+
+        public Task ExecuteAsync(Func<CancellationToken, Task> action, CancellationToken cancellationToken) =>
             _asyncPolicy.ExecuteAsync(action, cancellationToken);
     }
 }
