@@ -67,7 +67,7 @@ public sealed class RedisStreamsTopic<T> : ITopic<T>
                 messageString,
                 maxLength: _maxLength,
                 useApproximateMaxLength: true,
-                flags: CommandFlags.DemandMaster)).ConfigureAwait(false);
+                flags: CommandFlags.DemandMaster), token).ConfigureAwait(false);
             _logger.LogDebug("Published to topic {} event {} stream id {} ", TopicKey, @event.Id,  id);
             return !id.IsNull;
         }

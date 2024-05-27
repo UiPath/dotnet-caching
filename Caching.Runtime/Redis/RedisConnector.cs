@@ -27,7 +27,9 @@ public sealed class RedisConnector : IRedisConnector
         _multiplexerFactory = multiplexerFactory;
         if (_redisOptions.EnableHangDetection)
         {
-            _hangDetectionTimer = new Timer(_ => OnHangScan(), null, TimeSpan.FromSeconds(30), TimeSpan.FromSeconds(5));
+            var hangDetectionDueTime = _redisOptions.HangDetectionDueTime ?? TimeSpan.FromSeconds(30);
+            var hangDetectionPeriod = _redisOptions.HangDetectionPeriod ?? TimeSpan.FromSeconds(5);
+            _hangDetectionTimer = new Timer(_ => OnHangScan(), null, hangDetectionDueTime, hangDetectionPeriod);
         }
         _version = new Lazy<Version>(GetVersion);
     }
@@ -123,7 +125,7 @@ public sealed class RedisConnector : IRedisConnector
             }
             try
             {
-                return ConfigurationOptions.Parse(_redisOptions.ConnectionString).DefaultVersion;
+                return _redisOptions.CreateConfigurationOptions().DefaultVersion;
             }
             catch (Exception)
             {

@@ -6,9 +6,9 @@ public class ResiliencePoliciesOptions
 
     public TimeSpan DurationOfBreak { get; set; } = TimeSpan.FromMinutes(1);
 
-    public int ExceptionsAllowedBeforeBreaking { get; set; } = 10;
+    public int ExceptionsAllowedBeforeBreaking { get; set; } = 500;
 
     public TimeSpan? RequestTimeout { get; set; } = TimeSpan.FromSeconds(1);
 
-    public int? RetryCount { get; set; } = 3;
+    public int? RetryCount { get; set; } = 2;
 }

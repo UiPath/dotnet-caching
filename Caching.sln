@@ -22,16 +22,16 @@ Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "Solution Items", "Solution 
 		.editorconfig = .editorconfig
 		.vsts-ci.yml = .vsts-ci.yml
 		Directory.Build.props = Directory.Build.props
+		Directory.Packages.props = Directory.Packages.props
 		GitVersion.yml = GitVersion.yml
 		global.json = global.json
 		NuGet.Config = NuGet.Config
 		README.md = README.md
-		Versions.props = Versions.props
 	EndProjectSection
 EndProject
 Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "Caching.AspNetCore", "Caching.AspNetCore\Caching.AspNetCore.csproj", "{7E4C5764-8506-4758-8993-662B4554CA26}"
 EndProject
-Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Caching.BenchmarkTests", "Caching.BenchmarkTests\Caching.BenchmarkTests.csproj", "{A95ED086-3FAE-4D78-B59F-4123E14BDBE0}"
+Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "Caching.BenchmarkTests", "Caching.BenchmarkTests\Caching.BenchmarkTests.csproj", "{A95ED086-3FAE-4D78-B59F-4123E14BDBE0}"
 EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
