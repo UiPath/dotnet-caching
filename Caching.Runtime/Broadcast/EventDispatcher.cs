@@ -36,7 +36,7 @@ internal sealed class EventDispatcher<T> : IDisposable
                 _subject.OnNext(item);
             }
         }
-        _logger.LogDebug("Stopped consuming from topic {}", _topicKey);
+        _logger.LogDebug("Stopped consuming from topic {TopicKey}", _topicKey);
     }
 
     public void Dispose()

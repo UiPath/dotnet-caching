@@ -68,12 +68,12 @@ public sealed class RedisStreamsTopic<T> : ITopic<T>
                 maxLength: _maxLength,
                 useApproximateMaxLength: true,
                 flags: CommandFlags.DemandMaster), token).ConfigureAwait(false);
-            _logger.LogDebug("Published to topic {} event {} stream id {} ", TopicKey, @event.Id,  id);
+            _logger.LogDebug("Published to topic {TopicKey} event {EventId} stream id {StreamId} ", TopicKey, @event.Id,  id);
             return !id.IsNull;
         }
         catch (Exception ex)
         {
-            _logger.LogError(ex, "Error when publishing to topic {} event {}", TopicKey, @event.Id);
+            _logger.LogError(ex, "Error when publishing to topic {TopicKey} event {EventId}", TopicKey, @event.Id);
             return false;
         }
     }
@@ -104,7 +104,7 @@ public sealed class RedisStreamsTopic<T> : ITopic<T>
         }
         catch (RedisServerException ex) when (ex.Message == ConsumerGroupNameExistsErrorMessage)
         {
-            _logger.LogDebug("On Topic {} consumer group {} already exists", _context.Topic, _context.ConsumerGroup);
+            _logger.LogDebug(ex, "On Topic {Topic} consumer group {ConsumerGroup} already exists", _context.Topic, _context.ConsumerGroup);
         }
     }
 

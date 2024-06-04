@@ -62,12 +62,19 @@ stages:
           additionalArguments: '/output json /output buildserver /updateassemblyinfo \"$(Build.SourcesDirectory)/Caching/GlobalAssemblyInfo.cs\"'
 
       - pwsh: |
-          $nugetVersion= $env:GITVERSION_NUGETVERSION + '-' + $env:BUILD_COUNTER.PadLeft(4,'0')
-          Write-Host $nugetVersion 
-          Write-Host "##vso[task.setvariable variable=GitVersion.NuGetVersion;]$nugetVersion"
-          Write-Host '##vso[build.updatebuildnumber]$(Build.BuildNumber).$(build_counter)'
+          $semVer = $env:GITVERSION_NUGETVERSION
+          $buildNumber = "$(Build.BuildNumber)"
+          if (("$(Build.SourceBranch)" -match "^refs/heads/release/*") -or ("$(Build.SourceBranch)" -eq "refs/heads/master")) {
+            $buildNumber = $semVer + "." + $env:BUILD_COUNTER
+          } else {
+            $semVer += '-' + $env:BUILD_COUNTER
+            $buildNumber += "." + $env:BUILD_COUNTER
+          }
+          Write-Host "SemVer: $semVer"
+          Write-Host "BuildNumber: $buildNumber"
+          Write-Host "##vso[build.updatebuildnumber]$buildNumber"
+          Write-Host "##vso[task.setvariable variable=PackageVersion;]$semVer"
         displayName: "Adjust build number to ensure package unique name"
-        condition: not(startsWith(variables['Build.SourceBranch'], 'refs/heads/release'))
 
       - pwsh: |
           Write-Host "Variables for current build:"
@@ -176,11 +183,10 @@ stages:
           command: pack
           packagesToPack: "**/Caching.*.csproj;"
           versioningScheme: byEnvVar
-          versionEnvVar: 'GitVersion.NuGetVersion'
+          versionEnvVar: 'PackageVersion'
           nobuild: true
           includeSymbols: false
-          outputDir: "$(ArtifactsOutputPath)"
-          configurationToPack: "$(BuildConfiguration)"
+          outputDir: $(ArtifactsOutputPath)
         condition: succeeded()
 
       - task: PublishBuildArtifacts@1

@@ -46,7 +46,7 @@ public sealed class CacheEventPublisher
 
     private async ValueTask<bool> RaiseEventAsync(TopicKey topicKey, CacheKey cacheKey, string eventType, IDictionary<string, object?>? properties = null)
     {
-        _logger.LogDebug("Raise {} on topicKey {} for key {}", eventType, topicKey, cacheKey);
+        _logger.LogDebug("Raise {EventType} on topicKey {TopicKey} for key {CacheKey}", eventType, topicKey, cacheKey);
         var data = new CacheEventData(cacheKey)
         {
             Properties = properties
