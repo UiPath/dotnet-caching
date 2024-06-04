@@ -47,7 +47,7 @@ public static class RedisCollectionExtensions
         return builder;
     }
 
-    private static ConfigurationOptions CreateRedisConfiguration(IServiceProvider sp)
+    internal static ConfigurationOptions CreateRedisConfiguration(IServiceProvider sp)
     {
         var options = sp.GetRequiredService<IOptions<RedisConnectionOptions>>().Value;
         if (string.IsNullOrWhiteSpace(options.ConnectionString))
@@ -55,27 +55,7 @@ public static class RedisCollectionExtensions
             return new ConfigurationOptions();
         }
 
-        var config = ConfigurationOptions.Parse(options.ConnectionString);
-        config.AbortOnConnectFail = false; // if the connection fails, the multiplexer will silently retry in the background
-        config.ChannelPrefix = default;
-        if (Version.TryParse(options.Version, out var version))
-        {
-            config.DefaultVersion = version;
-        }
-        if (options.BackOffMilliseconds > 0)
-        {
-            config.ReconnectRetryPolicy = new ExponentialRetry(options.BackOffMilliseconds);
-        }
-
-        if (options.DefaultDatabase >= 0)
-        {
-            config.DefaultDatabase = options.DefaultDatabase.Value;
-        }
-
-        if (options.HeartbeatInterval.HasValue)
-        {
-            config.HeartbeatInterval = options.HeartbeatInterval.Value;
-        }
+        var config = options.CreateConfigurationOptions();
 
         config.LoggerFactory = sp.GetService<ILoggerFactory>();
 

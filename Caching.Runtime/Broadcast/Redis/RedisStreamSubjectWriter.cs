@@ -71,6 +71,19 @@ internal sealed class RedisStreamSubjectWriter<T> : IDisposable
             }
             catch (Exception ex)
             {
+                if (ex is RedisServerException server && server.Message.Contains("NOGROUP", StringComparison.OrdinalIgnoreCase))
+                {
+                    try
+                    {
+                        await _redis.Database.StreamCreateConsumerGroupAsync(_context.Topic, _context.ConsumerGroup, StreamPosition.Beginning, true);
+                        continue;
+                    }
+                    catch
+                    {
+                        // no op
+                    }
+                }
+
                 if (ex is TaskCanceledException cancel && cancel.CancellationToken == _cancelationToken)
                 {
                     break;

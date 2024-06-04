@@ -99,7 +99,7 @@ public sealed class RedisHashCache : RedisCacheBase, IHashCache
             return ret;
         }
 
-        _logger.LogDebug("Cache missed. generating new {}", cacheKey);
+        _logger.LogDebug("Cache missed. generating new {cacheKey}", cacheKey);
         ret = await generator().ConfigureAwait(false);
         if (ret.Any())
         {
@@ -122,7 +122,7 @@ public sealed class RedisHashCache : RedisCacheBase, IHashCache
         var operation = StartOperation();
         try
         {
-            ret = await _readPolicy.ExecuteAsync(() => Database.KeyExistsAsync(redisKey, CommandFlags.PreferReplica)).ConfigureAwait(false);
+            ret = await _readPolicy.ExecuteAsync(() => Database.KeyExistsAsync(redisKey, CommandFlags.PreferReplica), token).ConfigureAwait(false);
             operation.Stop();
         }
         catch (Exception ex)
@@ -155,8 +155,8 @@ public sealed class RedisHashCache : RedisCacheBase, IHashCache
         try
         {
             ret = localExpiration != DateTimeOffset.MaxValue
-                ? await _writePolicy.ExecuteAsync(() => Database.KeyExpireAsync(redisKey, localExpiration.UtcDateTime, CommandFlags.DemandMaster | CommandFlags.FireAndForget)).ConfigureAwait(false)
-                : await _writePolicy.ExecuteAsync(() => Database.KeyPersistAsync(redisKey, CommandFlags.DemandMaster | CommandFlags.FireAndForget)).ConfigureAwait(false);
+                ? await _writePolicy.ExecuteAsync(() => Database.KeyExpireAsync(redisKey, localExpiration.UtcDateTime, CommandFlags.DemandMaster | CommandFlags.FireAndForget), token).ConfigureAwait(false)
+                : await _writePolicy.ExecuteAsync(() => Database.KeyPersistAsync(redisKey, CommandFlags.DemandMaster | CommandFlags.FireAndForget), token).ConfigureAwait(false);
             operation.Stop();
         }
         catch (Exception ex)
@@ -184,7 +184,7 @@ public sealed class RedisHashCache : RedisCacheBase, IHashCache
         {
             if (expiration < now)
             {
-                ret = await _writePolicy.ExecuteAsync(() => Database.KeyDeleteAsync(redisKey, CommandFlags.DemandMaster)).ConfigureAwait(false);
+                ret = await _writePolicy.ExecuteAsync(() => Database.KeyDeleteAsync(redisKey, CommandFlags.DemandMaster), token).ConfigureAwait(false);
             }
             else
             {
@@ -209,7 +209,7 @@ public sealed class RedisHashCache : RedisCacheBase, IHashCache
                     _ = tran.KeyPersistAsync(redisKey, CommandFlags.DemandMaster | CommandFlags.FireAndForget).ConfigureAwait(false);
                 }
 
-                ret = await _writePolicy.ExecuteAsync(() => tran.ExecuteAsync()).ConfigureAwait(false);
+                ret = await _writePolicy.ExecuteAsync(() => tran.ExecuteAsync(), token).ConfigureAwait(false);
                 if (!ret)
                 {
                     _logger.LogWarning("Redis transaction failed.");
@@ -238,7 +238,7 @@ public sealed class RedisHashCache : RedisCacheBase, IHashCache
         var operation = StartOperation();
         try
         {
-            ret = await _writePolicy.ExecuteAsync(() => Database.KeyDeleteAsync(redisKey, CommandFlags.DemandMaster)).ConfigureAwait(false);
+            ret = await _writePolicy.ExecuteAsync(() => Database.KeyDeleteAsync(redisKey, CommandFlags.DemandMaster), token).ConfigureAwait(false);
             operation.Stop();
         }
         catch (Exception ex)
@@ -266,7 +266,7 @@ public sealed class RedisHashCache : RedisCacheBase, IHashCache
         Validate(values);
         var redisKey = ToRedisKey(cacheKey, token);
         var hashEntries = values.Select(kv => new HashEntry(kv.Key, _serializer.Serialize(kv.Value))).ToArray();
-        return SetInnerAsync<T>(redisKey, hashEntries, HashCacheSetOption.KeyReplace, _clock.ToDateTimeOffset(expiration));
+        return SetInnerAsync<T>(redisKey, hashEntries, HashCacheSetOption.KeyReplace, _clock.ToDateTimeOffset(expiration), token);
     }
 
     public ValueTask<bool> SetAsync<T>(CacheKey cacheKey, IDictionary<string, T?> values, HashCacheEntryOptions options, CancellationToken token = default)
@@ -282,7 +282,7 @@ public sealed class RedisHashCache : RedisCacheBase, IHashCache
 
         var expiration = options.ExpireTime.HasValue ? _clock.ToDateTimeOffset(options.ExpireTime) : _clock.ToDateTimeOffset(options.TimeToLive);
 
-        return SetInnerAsync<T>(redisKey, entries, options.SetOption, expiration);
+        return SetInnerAsync<T>(redisKey, entries, options.SetOption, expiration, token);
     }
 
     public ValueTask<bool> SetAsync<T>(CacheKey cacheKey, IDictionary<string, T?> values, HashCacheEntryOptions options, CancellationToken token = default) where T : struct
@@ -298,7 +298,7 @@ public sealed class RedisHashCache : RedisCacheBase, IHashCache
 
         var expiration = options.ExpireTime.HasValue ? _clock.ToDateTimeOffset(options.ExpireTime) : _clock.ToDateTimeOffset(options.TimeToLive);
 
-        return SetInnerAsync<T>(redisKey, entries, options.SetOption, expiration);
+        return SetInnerAsync<T>(redisKey, entries, options.SetOption, expiration, token);
     }
 
     public async ValueTask<TimeSpan?> TimeToLiveAsync<T>(CacheKey cacheKey, CancellationToken token = default)
@@ -308,7 +308,7 @@ public sealed class RedisHashCache : RedisCacheBase, IHashCache
         var operation = StartOperation();
         try
         {
-            ret = await _readPolicy.ExecuteAsync(() => Database.KeyTimeToLiveAsync(ToRedisKey(cacheKey, token), CommandFlags.PreferReplica)).ConfigureAwait(false);
+            ret = await _readPolicy.ExecuteAsync(() => Database.KeyTimeToLiveAsync(ToRedisKey(cacheKey, token), CommandFlags.PreferReplica), token).ConfigureAwait(false);
             operation.Stop();
         }
         catch (Exception ex)
@@ -333,7 +333,7 @@ public sealed class RedisHashCache : RedisCacheBase, IHashCache
         {
             if (_supportsExpireTime)
             {
-                ret = await _readPolicy.ExecuteAsync(() => Database.KeyExpireTimeAsync(ToRedisKey(cacheKey, token), CommandFlags.PreferReplica)).ConfigureAwait(false);
+                ret = await _readPolicy.ExecuteAsync(() => Database.KeyExpireTimeAsync(ToRedisKey(cacheKey, token), CommandFlags.PreferReplica), token).ConfigureAwait(false);
             }
             else
             {
@@ -369,7 +369,7 @@ public sealed class RedisHashCache : RedisCacheBase, IHashCache
         var operation = StartOperation<T>();
         try
         {
-            var keyExists = await _readPolicy.ExecuteAsync(() => Database.KeyExistsAsync(redisKey, CommandFlags.PreferReplica)).ConfigureAwait(false);
+            var keyExists = await _readPolicy.ExecuteAsync(() => Database.KeyExistsAsync(redisKey, CommandFlags.PreferReplica), token).ConfigureAwait(false);
             if (keyExists)
             {
                 if (metadata.Any())
@@ -378,11 +378,11 @@ public sealed class RedisHashCache : RedisCacheBase, IHashCache
                     {
                         await Database.HashSetAsync(redisKey, KnownFieldNames.MetadataKey, _serializer.Serialize(metadata), When.Always, CommandFlags.DemandMaster);
                         return true;
-                    }).ConfigureAwait(false);
+                    }, token).ConfigureAwait(false);
                 }
                 else
                 {
-                   ret = await _writePolicy.ExecuteAsync(() => Database.HashDeleteAsync(redisKey, KnownFieldNames.MetadataKey, CommandFlags.DemandMaster)).ConfigureAwait(false);
+                   ret = await _writePolicy.ExecuteAsync(() => Database.HashDeleteAsync(redisKey, KnownFieldNames.MetadataKey, CommandFlags.DemandMaster), token).ConfigureAwait(false);
                 }
             }
             operation.Stop();
@@ -401,8 +401,9 @@ public sealed class RedisHashCache : RedisCacheBase, IHashCache
         return ret;
     }
 
-    private async ValueTask<ICacheEntry<IDictionary<string, T?>>> GetCacheEntryForKeyAsync<T>(RedisKey redisKey)
+    private async ValueTask<ICacheEntry<IDictionary<string, T?>>> GetCacheEntryForKeyAsync<T>(RedisKey redisKey, CancellationToken token)
     {
+        token.ThrowIfCancellationRequested();
         var tran = Database.CreateTransaction();
         var hashEntriesTask = tran.HashGetAllAsync(redisKey, CommandFlags.PreferReplica).ConfigureAwait(false);
         ConfiguredTaskAwaitable<DateTime?>? expireTimeTask = default;
@@ -416,7 +417,7 @@ public sealed class RedisHashCache : RedisCacheBase, IHashCache
             expireTimeToLiveTask = tran.KeyTimeToLiveAsync(redisKey, CommandFlags.PreferReplica).ConfigureAwait(false);
         }
 
-        var tranResult = await _writePolicy.ExecuteAsync(() => tran.ExecuteAsync()).ConfigureAwait(false);
+        var tranResult = await _writePolicy.ExecuteAsync(() => tran.ExecuteAsync(), token).ConfigureAwait(false);
         if (!tranResult)
         {
             throw new InvalidOperationException("Unable to read from redis");
@@ -466,14 +467,14 @@ public sealed class RedisHashCache : RedisCacheBase, IHashCache
         return _cacheEntryFactory.Create<IDictionary<string, T?>>(values, _clock.ToDateTimeOffset(expireTime), extendedProps);
     }
 
-    private async ValueTask<T?> GetInnerAsync<T>(CacheKey cacheKey, string field, CancellationToken token = default)
+    private async ValueTask<T?> GetInnerAsync<T>(CacheKey cacheKey, string field, CancellationToken token) 
     {
         var redisKey = ToRedisKey(cacheKey, token);
         T? ret = default;
         var operation = StartOperation<T>(nameof(GetAsync));
         try
         {
-            var value = await _readPolicy.ExecuteAsync(() => Database.HashGetAsync(redisKey, field, CommandFlags.PreferReplica)).ConfigureAwait(false);
+            var value = await _readPolicy.ExecuteAsync(() => Database.HashGetAsync(redisKey, field, CommandFlags.PreferReplica), token).ConfigureAwait(false);
             _auditKeySize?.Invoke(redisKey, field, value);
             ret = value.IsNullOrEmpty ? default : _serializer.Deserialize<T?>(value);
             operation.Stop();
@@ -491,7 +492,7 @@ public sealed class RedisHashCache : RedisCacheBase, IHashCache
         return ret;
     }
 
-    private async ValueTask<IDictionary<string, T?>> GetInnerAsync<T>(CacheKey cacheKey, string[] fields, CancellationToken token = default)
+    private async ValueTask<IDictionary<string, T?>> GetInnerAsync<T>(CacheKey cacheKey, string[] fields, CancellationToken token)
     {
         if (fields == null || fields.Length == 0)
         {
@@ -505,7 +506,7 @@ public sealed class RedisHashCache : RedisCacheBase, IHashCache
         var operation = StartOperation<T>();
         try
         {
-            var values = await _readPolicy.ExecuteAsync(() => Database.HashGetAsync(redisKey, fields.Select(k => (RedisValue)k).ToArray(), CommandFlags.PreferReplica)).ConfigureAwait(false);
+            var values = await _readPolicy.ExecuteAsync(() => Database.HashGetAsync(redisKey, fields.Select(k => (RedisValue)k).ToArray(), CommandFlags.PreferReplica), token).ConfigureAwait(false);
             ret = new Dictionary<string, T?>();
             for (var i = 0; i < fields.Length; i++)
             {
@@ -528,7 +529,7 @@ public sealed class RedisHashCache : RedisCacheBase, IHashCache
         return ret;
     }
 
-    private async ValueTask<IDictionary<string, T?>> GetInnerAsync<T>(CacheKey cacheKey, CancellationToken token = default)
+    private async ValueTask<IDictionary<string, T?>> GetInnerAsync<T>(CacheKey cacheKey, CancellationToken token)
     {
         var redisKey = ToRedisKey(cacheKey, token);
         IDictionary<string, T?> ret = Empty<T?>();
@@ -536,7 +537,7 @@ public sealed class RedisHashCache : RedisCacheBase, IHashCache
         try
         {
             var hashEntries = (await _readPolicy.ExecuteAsync(() =>
-            Database.HashGetAllAsync(redisKey, CommandFlags.PreferReplica)).ConfigureAwait(false))
+            Database.HashGetAllAsync(redisKey, CommandFlags.PreferReplica), token).ConfigureAwait(false))
                 .Where(k => k.Name != KnownFieldNames.MetadataKey);
             if (hashEntries.Any())
             {
@@ -563,17 +564,17 @@ public sealed class RedisHashCache : RedisCacheBase, IHashCache
         return ret;
     }
 
-    private async ValueTask<ICacheEntry<IDictionary<string, T?>>> GetInnerCacheEntryAsync<T>(CacheKey cacheKey, CancellationToken token = default)
+    private async ValueTask<ICacheEntry<IDictionary<string, T?>>> GetInnerCacheEntryAsync<T>(CacheKey cacheKey, CancellationToken token)
     {
         var redisKey = ToRedisKey(cacheKey, token);
         ICacheEntry<IDictionary<string, T?>> ret = _cacheEntryFactory.Create(Empty<T?>(), DateTimeOffset.MinValue);
         var operation = StartOperation<T>();
         try
         {
-            var keyExists = await _readPolicy.ExecuteAsync(() => Database.KeyExistsAsync(redisKey, CommandFlags.PreferReplica)).ConfigureAwait(false);
+            var keyExists = await _readPolicy.ExecuteAsync(() => Database.KeyExistsAsync(redisKey, CommandFlags.PreferReplica), token).ConfigureAwait(false);
             if (keyExists)
             {
-                ret = await GetCacheEntryForKeyAsync<T?>(redisKey).ConfigureAwait(false);
+                ret = await GetCacheEntryForKeyAsync<T?>(redisKey, token).ConfigureAwait(false);
             }
             operation.Stop();
         }
@@ -590,16 +591,17 @@ public sealed class RedisHashCache : RedisCacheBase, IHashCache
         return ret;
     }
 
-    private async ValueTask<bool> SetInnerAsync<T>(RedisKey redisKey, ICollection<HashEntry> hashEntries, HashCacheSetOption setOption, DateTimeOffset expiration)
+    private async ValueTask<bool> SetInnerAsync<T>(RedisKey redisKey, ICollection<HashEntry> hashEntries, HashCacheSetOption setOption, DateTimeOffset expiration, CancellationToken token)
     {
         var now = _clock.UtcNow;
         var ret = false;
+        token.ThrowIfCancellationRequested();
         var operation = StartOperation<T>(nameof(SetAsync));
         try
         {
             if (expiration < now || hashEntries.Count == 0)
             {
-                ret = await _writePolicy.ExecuteAsync(() => Database.KeyDeleteAsync(redisKey, CommandFlags.DemandMaster)).ConfigureAwait(false);
+                ret = await _writePolicy.ExecuteAsync(() => Database.KeyDeleteAsync(redisKey, CommandFlags.DemandMaster), token).ConfigureAwait(false);
             }
             else
             {
@@ -615,7 +617,7 @@ public sealed class RedisHashCache : RedisCacheBase, IHashCache
                     await tran.KeyExpireAsync(redisKey, expiration.UtcDateTime, CommandFlags.DemandMaster | CommandFlags.FireAndForget).ConfigureAwait(false);
                 }
 
-                ret = await _writePolicy.ExecuteAsync(() => tran.ExecuteAsync()).ConfigureAwait(false);
+                ret = await _writePolicy.ExecuteAsync(() => tran.ExecuteAsync(), token).ConfigureAwait(false);
                 if (!ret)
                 {
                     _logger.LogWarning("Redis transaction failed.");

@@ -18,8 +18,7 @@ public sealed class RedisPlannedMaintenance : IRedisPlannedMaintenance
         _telemetryProvider = telemetryProvider;
         _redisConnector = redisConnector;
 
-        var configOptions = ConfigurationOptions.Parse(redisOptions.Value.ConnectionString);
-        configOptions.AbortOnConnectFail = false;
+        var configOptions = redisOptions.Value.CreateConfigurationOptions();
         configOptions.LoggerFactory = loggerFactory;
         _multiplexer = ConnectionMultiplexer.Connect(configOptions);
         _multiplexer.ServerMaintenanceEvent += OnServerMaintenance;

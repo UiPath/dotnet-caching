@@ -56,7 +56,7 @@ public sealed class RedisPubSubTopic<T> : ITopic<T>
         {
             var messageString = _formatter.EncodeAsString(@event);
             _logger.LogTrace("Publishing to topic {} event {}", TopicKey, @event.Id);
-            await _writePolicy.ExecuteAsync(() => _redis.Database.PublishAsync(_redisChannel, messageString, CommandFlags.DemandMaster)).ConfigureAwait(false);
+            await _writePolicy.ExecuteAsync(() => _redis.Database.PublishAsync(_redisChannel, messageString, CommandFlags.DemandMaster), token).ConfigureAwait(false);
             return true;
         }
         catch (Exception ex)

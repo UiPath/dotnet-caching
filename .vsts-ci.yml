@@ -102,15 +102,15 @@ stages:
           
       - pwsh: |
           if (!(dotnet tool list -g | Where-Object {$_.contains("coverlet")})){
-            dotnet tool install --global coverlet.console --version 6.0.0
+            dotnet tool install --global coverlet.console --version 6.0.2
           } else {
-            dotnet tool update --global coverlet.console --version 6.0.0
+            dotnet tool update --global coverlet.console --version 6.0.2
           }
 
           if (!(dotnet tool list -g | Where-Object {$_.contains("dotnet-coverage")})){
-            dotnet tool install --global dotnet-coverage --version 17.9.6
+            dotnet tool install --global dotnet-coverage --version 17.11.0
           } else {
-            dotnet tool update --global dotnet-coverage --version 17.9.6
+            dotnet tool update --global dotnet-coverage --version 17.11.0
           }
 
           dotnet --info

@@ -8,30 +8,31 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <PackageReference Include="NSubstitute.Analyzers.CSharp" Version="$(NSubstituteAnalyzersVersion)">
+    <PackageReference Include="NSubstitute.Analyzers.CSharp">
       <PrivateAssets>all</PrivateAssets>
       <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
     </PackageReference>
-    <PackageReference Include="xunit" Version="$(xUnitVersion)" />
-    <PackageReference Include="FluentAssertions" Version="$(FluentAssertionsVersion)" />
-    <PackageReference Include="NSubstitute" Version="$(NSubstituteVersion)" />
-    <PackageReference Include="AutoFixture.Xunit2" Version="$(AutoFixtureVersion)" />
-    <PackageReference Include="AutoFixture.AutoNSubstitute" Version="$(AutoFixtureVersion)" />
-    <PackageReference Include="Microsoft.NET.Test.Sdk" Version="$(MicrosoftTestSdkVersion)" />
-    <PackageReference Include="xunit.runner.visualstudio" Version="$(xUnitRunnerVersion)">
+    <PackageReference Include="xunit" />
+    <PackageReference Include="FluentAssertions" />
+    <PackageReference Include="NSubstitute" />
+    <PackageReference Include="AutoFixture.Xunit2" />
+    <PackageReference Include="AutoFixture.AutoNSubstitute" />
+    <PackageReference Include="Microsoft.NET.Test.Sdk" />
+    <PackageReference Include="xunit.runner.visualstudio" >
       <PrivateAssets>all</PrivateAssets>
       <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
     </PackageReference>
-    <PackageReference Include="coverlet.collector" Version="$(coverletVersion)">
+    <PackageReference Include="coverlet.collector">
       <PrivateAssets>all</PrivateAssets>
       <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
     </PackageReference>
-    <PackageReference Include="FluentAssertions.Json" Version="$(FluentAssertionsJson)" />
-    <PackageReference Include="Microsoft.Extensions.Logging.Console" Version="$(DotNetMajorVersion)" />
+    <PackageReference Include="FluentAssertions.Json" />
+    <PackageReference Include="Microsoft.Extensions.Logging.Console" />
   </ItemGroup>
 
   <ItemGroup>
     <ProjectReference Include="..\Caching.CloudEvents\Caching.CloudEvents.csproj" />
+    <ProjectReference Include="..\Caching.Polly\Caching.Polly.csproj" />
     <ProjectReference Include="..\Caching.Runtime\Caching.Runtime.csproj" />
   </ItemGroup>
 
