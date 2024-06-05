@@ -8,7 +8,6 @@ public sealed class RedisCache : RedisCacheBase, ICache
 {
     private const string LogWarnMessage = "RedisCache exception.";
 
-    private readonly IRedisConnector _redis;
     private readonly ISerializerProxy _serializer;
     private readonly ICachingTelemetryProvider _telemetryProvider;
     private readonly ILogger<RedisCache> _logger;
@@ -32,7 +31,6 @@ public sealed class RedisCache : RedisCacheBase, ICache
         : base(redis, redisCacheOptions.ConnectionMonitorEnabled ?? cacheOptions.ConnectionMonitorEnabled)
     {
         _logger = logger;
-        _redis = redis;
         _serializer = serializer;
         _telemetryProvider = telemetryProvider;
         _readPolicy = policyHolder.Read;
@@ -91,7 +89,7 @@ public sealed class RedisCache : RedisCacheBase, ICache
         var redisKey = ToRedisKey(cacheKey, token);
         expiration = _clock.ToDateTimeOffset(expiration);
 
-        _logger.LogTrace("Refreshing key {redisKey} at expiration {expiration}", redisKey, expiration);
+        _logger.LogTrace("Refreshing key {RedisKey} at expiration {Expiration}", redisKey, expiration);
         var ret = false;
         var operation = StartOperation();
         try
@@ -223,7 +221,7 @@ public sealed class RedisCache : RedisCacheBase, ICache
             return ret;
         }
 
-        _logger.LogDebug("Cache missed. generating new {redisKey}", redisKey);
+        _logger.LogDebug("Cache missed. generating new {RedisKey}", redisKey);
         ret = await generator().ConfigureAwait(false);
 
         if (!IsDefault(ret))
@@ -309,7 +307,7 @@ public sealed class RedisCache : RedisCacheBase, ICache
         }
         finally
         {
-            operation.Track(ret != null);
+            operation.Track(ret is not null);
         }
 
         return ret;
@@ -340,7 +338,7 @@ public sealed class RedisCache : RedisCacheBase, ICache
         var valueLen = value.Length();
         if (valueLen > _largeValueThreshold)
         {
-            _logger.LogWarning("Redis large value detected for key {redisKey}, length {length}", key, valueLen);
+            _logger.LogWarning("Redis large value detected for key {RedisKey}, length {Length}", key, valueLen);
         }
     }
 }

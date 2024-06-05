@@ -43,9 +43,7 @@ public class RedisConnectionOptions
 
     public ConfigurationOptions CreateConfigurationOptions()
     {
-        string cnn = string.IsNullOrWhiteSpace(ConnectionStringExtraParams)
-                    ? ConnectionString :
-                    string.IsNullOrWhiteSpace(ConnectionString) ? string.Empty : string.Concat(ConnectionString, ",", ConnectionStringExtraParams);
+        string cnn = string.IsNullOrWhiteSpace(ConnectionStringExtraParams) ? ConnectionString : ComposedConnectionString;
 
         if (string.IsNullOrWhiteSpace(cnn))
         {
@@ -86,4 +84,7 @@ public class RedisConnectionOptions
 
         return config;
     }
+
+    public string ComposedConnectionString =>
+        string.IsNullOrWhiteSpace(ConnectionString) ? string.Empty : string.Concat(ConnectionString, ",", ConnectionStringExtraParams);
 }

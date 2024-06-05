@@ -52,5 +52,5 @@ public sealed class ConnectionStateMonitor : IConnectionState
         OnReconnected?.Invoke(sender, e);
     }
     private void ResetIsConnected() =>
-        _isConnected = new Lazy<bool>(() => _connectionStates.All(static x => x.IsConnected));
+        _isConnected = new Lazy<bool>(() => Array.TrueForAll(_connectionStates, static x => x.IsConnected));
 }

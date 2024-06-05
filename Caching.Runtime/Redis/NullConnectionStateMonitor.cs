@@ -6,20 +6,38 @@ public sealed class NullConnectionStateMonitor : IConnectionState
 
     public event EventHandler? OnConnectionFailed
     {
-        add { }
-        remove { }
+        add
+        {
+            // do nothing
+        }
+        remove
+        {
+            // do nothing
+        }
     }
 
     public event EventHandler? OnConnectionRestored
     {
-        add { }
-        remove { }
+        add
+        {
+            // do nothing
+        }
+        remove
+        {
+            // do nothing
+        }
     }
 
     public event EventHandler? OnReconnected
     {
-        add { }
-        remove { }
+        add
+        {
+            // do nothing
+        }
+        remove 
+        {
+            // do nothing
+        }
     }
 
     public bool IsConnected => true;

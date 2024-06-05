@@ -8,7 +8,6 @@ namespace UiPath.Platform.Caching.Redis;
 public sealed class RedisHashCache : RedisCacheBase, IHashCache
 {
     private const string LogWarnMessage = "RedisHashCache exception.";
-    private readonly IRedisConnector _redis;
     private readonly ILogger<RedisHashCache> _logger;
     private readonly ISerializerProxy _serializer;
     private readonly ICachingTelemetryProvider _telemetryProvider;
@@ -21,7 +20,6 @@ public sealed class RedisHashCache : RedisCacheBase, IHashCache
     private readonly TimeSpan? _defaultExpiration;
     private readonly CacheOptions _cacheOptions;
     private readonly Action<RedisKey, string, RedisValue>? _auditKeySize;
-    private readonly IConnectionState _connectionState;
 
     public RedisHashCache(
         IRedisConnector redis,
@@ -33,7 +31,6 @@ public sealed class RedisHashCache : RedisCacheBase, IHashCache
         ILogger<RedisHashCache> logger)
         : base(redis, redisCacheOptions.ConnectionMonitorEnabled ?? cacheOptions.ConnectionMonitorEnabled)
     {
-        _redis = redis;
         _serializer = serializer;
         _telemetryProvider = telemetryProvider;
         _logger = logger;
@@ -49,9 +46,6 @@ public sealed class RedisHashCache : RedisCacheBase, IHashCache
         {
             _auditKeySize = AuditKeySize;
         }
-
-        var connectionMonitorEnabled = redisCacheOptions.ConnectionMonitorEnabled ?? cacheOptions.ConnectionMonitorEnabled;
-        _connectionState = connectionMonitorEnabled ? new ConnectionStateMonitor(redis) : NullConnectionStateMonitor.Instance;
     }
 
     public string Name => KnownCacheProviderNames.Redis;
@@ -99,7 +93,7 @@ public sealed class RedisHashCache : RedisCacheBase, IHashCache
             return ret;
         }
 
-        _logger.LogDebug("Cache missed. generating new {cacheKey}", cacheKey);
+        _logger.LogDebug("Cache missed. generating new {CacheKey}", cacheKey);
         ret = await generator().ConfigureAwait(false);
         if (ret.Any())
         {
@@ -149,7 +143,7 @@ public sealed class RedisHashCache : RedisCacheBase, IHashCache
         NotCacheableException.ThrowIfNotCacheable<T>();
         var redisKey = ToRedisKey(cacheKey, token);
         var localExpiration = _clock.ToDateTimeOffset(expiration);
-        _logger.LogTrace("Refreshing key {redisKey} at expiraton {expiration}", redisKey, localExpiration);
+        _logger.LogTrace("Refreshing key {RedisKey} at expiraton {Expiration}", redisKey, localExpiration);
         var ret = false;
         var operation = StartOperation();
         try
@@ -486,7 +480,7 @@ public sealed class RedisHashCache : RedisCacheBase, IHashCache
         }
         finally
         {
-            operation.Track(ret != null);
+            operation.Track(ret is not null);
         }
 
         return ret;
@@ -659,7 +653,7 @@ public sealed class RedisHashCache : RedisCacheBase, IHashCache
         var valueLen = value.Length();
         if (valueLen > _cacheOptions.LargeValueThreshold)
         {
-            _logger.LogWarning("Redis large value detected for key {redisKey}, field {field}, length {length}", key, field, valueLen);
+            _logger.LogWarning("Redis large value detected for key {RedisKey}, field {Field}, length {Length}", key, field, valueLen);
         }
     }
 
