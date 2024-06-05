@@ -50,7 +50,7 @@ public class SystemJsonSerializerProxy : ISerializerProxy
             }
             else
             {
-                var text = value?.ToString() ?? string.Empty;
+                var text = value.ToString() ?? string.Empty;
                 return TryDeserialize(text, out result);
             }
         }

@@ -55,6 +55,7 @@
     <PackageVersion Include="CloudNative.CloudEvents.SystemTextJson" Version="$(CloudEvents)" />
     <PackageVersion Include="Polly" Version="8.4.0" />
     <PackageVersion Include="Swashbuckle.AspNetCore" Version="6.6.2" />
+    <PackageVersion Include="SonarAnalyzer.CSharp" Version="9.26.0.92422" />
     <!-- UiPath libs -->
     <PackageVersion Include="UiPath.Platform.Telemetry" Version="$(UiPathTelemetry)" />
     <PackageVersion Include="UiPath.Platform.Telemetry.AspNetCore" Version="$(UiPathTelemetry)" />
