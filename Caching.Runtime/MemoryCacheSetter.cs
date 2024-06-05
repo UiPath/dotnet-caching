@@ -48,7 +48,7 @@ internal abstract class MemoryCacheSetter
         catch (Exception ex)
         {
             MemoryCache.Remove(options.CacheKey);
-            Logger.LogWarning(ex, "Unable to set local memory for {}", options.CacheKey);
+            Logger.LogWarning(ex, "Unable to set local memory for {CacheKey}", options.CacheKey);
             return false;
         }
     }
@@ -87,7 +87,7 @@ internal abstract class MemoryCacheSetter
         }
         catch (Exception ex)
         {
-            Logger.LogWarning(ex, "Unable to refresh cache cacheKey {}", metadataState.CacheKey);
+            Logger.LogWarning(ex, "Unable to refresh cache cacheKey {CacheKey}", metadataState.CacheKey);
         }
     }
 

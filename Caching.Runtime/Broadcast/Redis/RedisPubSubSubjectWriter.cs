@@ -48,7 +48,7 @@ internal sealed class RedisPubSubSubjectWriter<T> : IDisposable
             return;
         }
 
-        _logger.LogTrace("Subscribe channel: {}", _redisChannel);
+        _logger.LogTrace("Subscribe channel: {RedisChannel}", _redisChannel);
         try
         {
             _unsubscribe?.Invoke();
@@ -60,7 +60,7 @@ internal sealed class RedisPubSubSubjectWriter<T> : IDisposable
         }
         catch (Exception ex)
         {
-            _logger.LogError(ex, "Subscribe error. Channel: {}", _redisChannel);
+            _logger.LogError(ex, "Subscribe error. Channel: {RedisChannel}", _redisChannel);
         }
         finally
         {
@@ -96,31 +96,31 @@ internal sealed class RedisPubSubSubjectWriter<T> : IDisposable
             try
             {
                 var ev = _formatter.Decode(value.ToString());
-                if (ev == null)
+                if (ev is null)
                 {
                     return;
                 }
 
                 if (ev.IsValid(_sourceUri))
                 {
-                    _logger.LogTrace("Event received. Id {}  Channel : {}", ev.Id, _redisChannel);
+                    _logger.LogTrace("Event received. Id {EventId}  Channel : {RedisChannel}", ev.Id, _redisChannel);
                     _channelWriter.TryWrite(ev);
                 }
                 else
                 {
-                    _logger.LogDebug("Skip event received. Id {}  Channel : {}", ev.Id, _redisChannel);
+                    _logger.LogDebug("Skip event received. Id {EventId}  Channel : {RedisChannel}", ev.Id, _redisChannel);
                 }
             }
             catch (Exception ex)
             {
-                _logger.LogError(ex, "OnMessage error. Channel : {}", _redisChannel);
+                _logger.LogError(ex, "OnMessage error. Channel : {RedisChannel}", _redisChannel);
             }
         }
     }
 
     private void Unsubscribe()
     {
-        _logger.LogTrace("Unsubscribe channel: {}", _redisChannel);
+        _logger.LogTrace("Unsubscribe channel: {RedisChannel}", _redisChannel);
         try
         {
             _unsubscribe?.Invoke();
@@ -128,7 +128,7 @@ internal sealed class RedisPubSubSubjectWriter<T> : IDisposable
         }
         catch (Exception ex)
         {
-            _logger.LogError(ex, "Unsubscribe error. Channel : {}", _redisChannel);
+            _logger.LogError(ex, "Unsubscribe error. Channel : {RedisChannel}", _redisChannel);
         }
     }
 }

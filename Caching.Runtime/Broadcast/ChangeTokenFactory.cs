@@ -21,7 +21,7 @@ public sealed class ChangeTokenFactory : IChangeTokenFactory
 
     public ICacheChangeToken Create(string token, ITopic<ICacheEvent> topic, string cacheName, Type entryType)
     {
-        _logger.LogTrace("Create change token. topic {} token {} source {}", topic.TopicKey, token, _sourceUri);
+        _logger.LogTrace("Create change token. topic {TopicKey} token {Token} source {SourceUri}", topic.TopicKey, token, _sourceUri);
         var acceptedEvents = KnownCacheProviderNames.InMemory.Equals(cacheName, StringComparison.OrdinalIgnoreCase) ? MemoryAcceptedEvents : null;
         return new ChangeToken(token, topic, _sourceUri, _serializer, _loggerFactory.CreateLogger<ChangeToken>(), acceptedEvents);
     }

@@ -55,57 +55,72 @@ internal sealed class RedisStreamSubjectWriter<T> : IDisposable
         {
             try
             {
-                StreamEntry[] events = await _redis.Database.StreamReadGroupAsync(
-                    _context.Topic,
-                    _context.ConsumerGroup,
-                    _context.ConsumerName,
-                    ">",
-                    _context.PollBatchSize).ConfigureAwait(false);
-
-                if (events.Length > 0)
-                {
-                    await DispatchEventsAsync(events);
-                    continue;
-                }
-                await Task.Delay(_context.PollInterval, _cancelationToken);
+                await FetchBatch().ConfigureAwait(false);
             }
             catch (Exception ex)
             {
-                if (ex is RedisServerException server && server.Message.Contains("NOGROUP", StringComparison.OrdinalIgnoreCase))
-                {
-                    try
-                    {
-                        await _redis.Database.StreamCreateConsumerGroupAsync(_context.Topic, _context.ConsumerGroup, StreamPosition.Beginning, true);
-                        continue;
-                    }
-                    catch
-                    {
-                        // no op
-                    }
-                }
-
-                if (ex is TaskCanceledException cancel && cancel.CancellationToken == _cancelationToken)
+                if (!await ProcessException(ex).ConfigureAwait(false))
                 {
                     break;
-                }
-
-                try
-                {
-                    _logger.LogError(ex, "Fetch events loop error");
-                    await Task.Delay(_context.PollInterval, _cancelationToken);
-                }
-                catch
-                {
-                    // no op
                 }
             }
         }
         _logger.LogDebug("Fetch events loop stopped");
     }
 
+    private async Task FetchBatch()
+    {
+        StreamEntry[] events = await _redis.Database.StreamReadGroupAsync(
+            _context.Topic,
+            _context.ConsumerGroup,
+            _context.ConsumerName,
+            ">",
+            _context.PollBatchSize).ConfigureAwait(false);
+
+        if (events.Length > 0)
+        {
+            await DispatchEventsAsync(events);
+            return;
+        }
+        await Task.Delay(_context.PollInterval, _cancelationToken);
+    }
+
+    private async Task<bool> ProcessException(Exception ex)
+    {
+        if (ex is RedisServerException server && server.Message.Contains("NOGROUP", StringComparison.OrdinalIgnoreCase))
+        {
+            try
+            {
+                await _redis.Database.StreamCreateConsumerGroupAsync(_context.Topic, _context.ConsumerGroup, StreamPosition.Beginning, true);
+                return true;
+            }
+            catch
+            {
+                // no op
+            }
+        }
+
+        if (ex is TaskCanceledException cancel && cancel.CancellationToken == _cancelationToken)
+        {
+            return false;
+        }
+
+        try
+        {
+            _logger.LogError(ex, "Fetch events loop error");
+            await Task.Delay(_context.PollInterval, _cancelationToken);
+        }
+        catch
+        {
+            // no op
+        }
+
+        return true;
+    }
+
     private async Task DispatchEventsAsync(StreamEntry[] events)
     {
-        List<RedisValue> ids = new();
+        List<RedisValue> ids = [];
 
         foreach (StreamEntry @event in events)
         {
@@ -117,25 +132,25 @@ internal sealed class RedisStreamSubjectWriter<T> : IDisposable
             try
             {
                 var ev = _formatter.Decode(@event[_context.FieldName].ToString());
-                if (ev == null)
+                if (ev is null)
                 {
                     continue;
                 }
 
                 if (ev.IsValid(_context.SourceUri))
                 {
-                    _logger.LogTrace("Event received. Id {}  Topic : {}", ev.Id, _context.Topic);
+                    _logger.LogTrace("Event received. Id {EventId}  Topic : {Topic}", ev.Id, _context.Topic);
                     _writer.TryWrite(ev);
                 }
                 else
                 {
-                    _logger.LogDebug("Event received. Id {}  Topic : {}", ev.Id, _context.Topic);
+                    _logger.LogDebug("Event received. Id {EventId}  Topic : {Topic}", ev.Id, _context.Topic);
                 }
                 ids.Add(@event.Id);
             }
             catch (Exception ex)
             {
-                _logger.LogError(ex, "OnMessage error. Topic : {}", _context.Topic);
+                _logger.LogError(ex, "OnMessage error. Topic : {Topic}", _context.Topic);
             }
         }
 
@@ -145,6 +160,6 @@ internal sealed class RedisStreamSubjectWriter<T> : IDisposable
         }
 
         await _redis.Database.StreamAcknowledgeAsync(_context.Topic, _context.ConsumerGroup, ids.ToArray());
-        _logger.LogDebug("Dispatched {} messages. Topic : {}", events.Length, _context.Topic);
+        _logger.LogDebug("Dispatched {Length} messages. Topic : {Topic}", events.Length, _context.Topic);
     }
 }

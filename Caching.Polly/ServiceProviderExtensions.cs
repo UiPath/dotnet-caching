@@ -21,7 +21,7 @@ public static class ServiceProviderExtensions
             .CircuitBreakerAsync(
                 exceptionsAllowedBeforeBreaking: resilienceOptions.ExceptionsAllowedBeforeBreaking,
                 durationOfBreak: resilienceOptions.DurationOfBreak,
-                onBreak: (exception, breakDelay) => logger.LogWarning(exception, "CircuitBreaker for Redis operation: Breaking the circuit for {}!", resilienceOptions.DurationOfBreak),
+                onBreak: (exception, breakDelay) => logger.LogWarning(exception, "CircuitBreaker for Redis operation: Breaking the circuit for {DurationOfBreak}!", resilienceOptions.DurationOfBreak),
                 onReset: () => logger.LogWarning("CircuitBreaker for Redis operation: Circuit closed, requests flow normally."),
                 onHalfOpen: () => logger.LogWarning("CircuitBreaker for Redis operation: Circuit in test mode, one request will be allowed.")
             );
