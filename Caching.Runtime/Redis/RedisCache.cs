@@ -55,6 +55,12 @@ public sealed class RedisCache : RedisCacheBase, ICache
         return GetAsync<T>(ToRedisKey(cacheKey, token), token);
     }
 
+    public ValueTask<KeyValuePair<CacheKey, T?>[]> GetAsync<T>(CacheKey[] cacheKey, CancellationToken token = default)
+    {
+        NotCacheableException.ThrowIfNotCacheable<T>();
+        return GetAsyncInternal<T>(cacheKey, token);
+    }
+
     public ValueTask<T?> GetOrAddAsync<T>(CacheKey cacheKey, Func<ValueTask<T?>> generator, CancellationToken token = default) =>
         GetOrAddAsync(cacheKey, generator, _defaultExpiration, token);
 
@@ -118,6 +124,11 @@ public sealed class RedisCache : RedisCacheBase, ICache
         return RemoveAsync(ToRedisKey(cacheKey, token), token);
     }
 
+    public ValueTask<bool> RemoveAsync<T>(CacheKey[] cacheKey, CancellationToken token = default)
+    {
+        return RemoveAsync(cacheKey.Select(k => ToRedisKey(k, token)).ToArray(), token);
+    }
+
     public ValueTask<bool> SetAsync<T>(CacheKey cacheKey, T? value, CancellationToken token = default) =>
         SetAsync(cacheKey, value, _defaultExpiration, token);
 
@@ -131,6 +142,24 @@ public sealed class RedisCache : RedisCacheBase, ICache
     {
         NotCacheableException.ThrowIfNotCacheable<T>();
         return SetInternalAsync(ToRedisKey(cacheKey, token), value, _clock.ToTimeSpan(expiration), token);
+    }
+
+    public ValueTask<bool> SetAsync<T>(KeyValuePair<CacheKey, T?>[] keyValues, CancellationToken token = default)
+    {
+        NotCacheableException.ThrowIfNotCacheable<T>();
+        return SetAsync(keyValues, _defaultExpiration, token);
+    }
+
+    public ValueTask<bool> SetAsync<T>(KeyValuePair<CacheKey, T?>[] keyValues, TimeSpan? expiration = null, CancellationToken token = default)
+    {
+        NotCacheableException.ThrowIfNotCacheable<T>();
+        return SetInternalAsync(keyValues, _clock.ToTimeSpan(expiration), token);
+    }
+
+    public ValueTask<bool> SetAsync<T>(KeyValuePair<CacheKey, T?>[] keyValues, DateTimeOffset? expiration = null, CancellationToken token = default)
+    {
+        NotCacheableException.ThrowIfNotCacheable<T>();
+        return SetInternalAsync(keyValues, _clock.ToTimeSpan(expiration), token);
     }
 
     public async ValueTask<bool> ContainsAsync<T>(CacheKey cacheKey, CancellationToken token = default)
@@ -265,6 +294,46 @@ public sealed class RedisCache : RedisCacheBase, ICache
         return ret;
     }
 
+    private async ValueTask<bool> SetInternalAsync<T>(KeyValuePair<CacheKey, T?>[] keyValues, TimeSpan expiration, CancellationToken token)
+    {
+        bool ret = default;
+        token.ThrowIfCancellationRequested();
+        var operation = StartOperation<T>(nameof(SetAsync));
+        try
+        {
+            var transaction = await _writePolicy.ExecuteAsync(() => Task.Factory.StartNew(() => Database.CreateTransaction(asyncState: null)), token);
+
+            foreach (var keyValue in keyValues)
+            {
+                var redisKey = ToRedisKey(keyValue.Key, token);
+                var value = keyValue.Value;
+                if (IsDefault(value))
+                {
+                    _ = _writePolicy.ExecuteAsync(() => Database.KeyDeleteAsync(redisKey, CommandFlags.DemandMaster), token);
+                }
+                else
+                {
+                    var serialized = _serializer.Serialize(value);
+                    _ = _writePolicy.ExecuteAsync(() => Database.StringSetAsync(redisKey, serialized, expiration, When.Always, CommandFlags.FireAndForget), token);
+                }
+            }
+
+            ret = await _writePolicy.ExecuteAsync(() => transaction.ExecuteAsync(), token);
+            operation.Stop();
+        }
+        catch (Exception ex)
+        {
+            operation.Stop();
+            _logger.LogWarning(ex, LogWarnMessage);
+        }
+        finally
+        {
+            operation.Track(ret);
+        }
+
+        return ret;
+    }
+
     private async ValueTask<bool> RemoveAsync(RedisKey redisKey, CancellationToken token)
     {
         bool ret = default;
@@ -274,6 +343,30 @@ public sealed class RedisCache : RedisCacheBase, ICache
         {
             ret = await _writePolicy.ExecuteAsync(() => Database.KeyDeleteAsync(redisKey, CommandFlags.DemandMaster), token).ConfigureAwait(false);
             operation.Stop();
+        }
+        catch (Exception ex)
+        {
+            operation.Stop();
+            _logger.LogWarning(ex, LogWarnMessage);
+        }
+        finally
+        {
+            operation.Track(ret);
+        }
+
+        return ret;
+    }
+
+    private async ValueTask<bool> RemoveAsync(RedisKey[] redisKey, CancellationToken token)
+    {
+        bool ret = default;
+        token.ThrowIfCancellationRequested();
+        var operation = StartOperation();
+        try
+        {
+            await _writePolicy.ExecuteAsync(() => Database.KeyDeleteAsync(redisKey, CommandFlags.DemandMaster), token).ConfigureAwait(false);
+            operation.Stop();
+            ret = true;
         }
         catch (Exception ex)
         {
@@ -311,6 +404,37 @@ public sealed class RedisCache : RedisCacheBase, ICache
         }
 
         return ret;
+    }
+
+    private async ValueTask<KeyValuePair<CacheKey, T?>[]> GetAsyncInternal<T>(CacheKey[] keys, CancellationToken token)
+    {
+        KeyValuePair<CacheKey, T?>[] retValues = new KeyValuePair<CacheKey, T?>[keys.Length];
+        token.ThrowIfCancellationRequested();
+        var redisKeys = keys.Select(keys => ToRedisKey(keys, token)).ToArray();
+        var operation = StartOperation<T>();
+        try
+        {
+            var values = await _readPolicy.ExecuteAsync(() => Database.StringGetAsync(redisKeys, CommandFlags.PreferReplica), token).ConfigureAwait(false);
+            for (int i = 0; i < redisKeys.Length; i++)
+            {
+                var value = values[i];
+                _auditKeySize?.Invoke(redisKeys[i], value);
+                var obj = value.IsNullOrEmpty ? default : _serializer.Deserialize<T>(value);
+                retValues[i] = new KeyValuePair<CacheKey, T?>(keys[i], obj);
+            }
+            operation.Stop();
+        }
+        catch (Exception ex)
+        {
+            operation.Stop();
+            _logger.LogWarning(ex, LogWarnMessage);
+        }
+        finally
+        {
+            //operation.Track(ret != null);
+        }
+
+        return retValues;
     }
 
     private RedisKey ToRedisKey(CacheKey cacheKey, CancellationToken token = default)

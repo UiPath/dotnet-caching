@@ -25,6 +25,12 @@ public sealed class NullCache : ICache
         return ValueTask.FromResult(default(T?));
     }
 
+    public ValueTask<KeyValuePair<CacheKey, T?>[]> GetAsync<T>(CacheKey[] cacheKey, CancellationToken token = default)
+    {
+        NotCacheableException.ThrowIfNotCacheable<T>();
+        return ValueTask.FromResult(cacheKey.Select(k => new KeyValuePair<CacheKey, T?>(k, default(T?))).ToArray());
+    }
+
     public ValueTask<T?> GetOrAddAsync<T>(CacheKey cacheKey, Func<ValueTask<T?>> generator, CancellationToken token = default) =>
         GetAsync<T>(cacheKey, token);
 
@@ -42,11 +48,19 @@ public sealed class NullCache : ICache
 
     public ValueTask<bool> RemoveAsync<T>(CacheKey cacheKey, CancellationToken token = default) => ReturnTrueAsync<T>();
 
+    public ValueTask<bool> RemoveAsync<T>(CacheKey[] cacheKey, CancellationToken token = default) => ReturnTrueAsync<T>();
+
     public ValueTask<bool> SetAsync<T>(CacheKey cacheKey, T? value, CancellationToken token = default) => ReturnTrueAsync<T>();
 
     public ValueTask<bool> SetAsync<T>(CacheKey cacheKey, T? value, TimeSpan? expiration = null, CancellationToken token = default) => ReturnTrueAsync<T>();
 
     public ValueTask<bool> SetAsync<T>(CacheKey cacheKey, T? value, DateTimeOffset? expiration = null, CancellationToken token = default) => ReturnTrueAsync<T>();
+
+    public ValueTask<bool> SetAsync<T>(KeyValuePair<CacheKey, T?>[] keyValues, CancellationToken token = default) => ReturnTrueAsync<T>();
+
+    public ValueTask<bool> SetAsync<T>(KeyValuePair<CacheKey, T?>[] keyValues, TimeSpan? expiration = null, CancellationToken token = default) => ReturnTrueAsync<T>();
+
+    public ValueTask<bool> SetAsync<T>(KeyValuePair<CacheKey, T?>[] keyValues, DateTimeOffset? expiration = null, CancellationToken token = default) => ReturnTrueAsync<T>();
 
     public ValueTask<TimeSpan?> TimeToLiveAsync<T>(CacheKey cacheKey, CancellationToken token = default)
     {
