@@ -14,8 +14,6 @@ public class RedisStreamsTopicOptions
 
     public TimeSpan PollInterval { get; set; } = TimeSpan.FromMilliseconds(250);
 
-    public TimeSpan ProcessingTimeout { get; set; } = TimeSpan.FromSeconds(5);
-
     public IRedisStreamKeyStrategy? RedisStreamKeyStrategy { get; set; }
 
     public int ConsumerCapacity { get; set; } = 2048;
@@ -23,4 +21,18 @@ public class RedisStreamsTopicOptions
     public BoundedChannelFullMode FullMode { get; set; } = BoundedChannelFullMode.Wait;
 
     public bool? ConnectionMonitorEnabled { get; set; }
+
+    public bool TrackStatistics { get; set; } = true;
+
+    public bool MaintainerEnabled { get; set; } = true;
+
+    public TimeSpan MaintainerCheckInterval { get; set; } = TimeSpan.FromMinutes(30);
+
+    public TimeSpan MaintainerTrimInterval { get; set; } = TimeSpan.FromHours(1);
+
+    public TimeSpan MaintainerQuarantineInterval { get; set; } = TimeSpan.FromHours(1);
+
+    public string? MaintainerSearchPattern { get; set; }
+
+    public string[] TrackedClientDimensions { get; set; } = ["name", "age", "idle", "flags", "multi", "qbuf", "qbuf-free", "obl", "oll", "omem"];
 }

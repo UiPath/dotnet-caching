@@ -5,6 +5,6 @@
 
 using System.Diagnostics.CodeAnalysis;
 
-/*
-[assembly: SuppressMessage("Blocker Bug", "S1048: If Finalize or an override of Finalize throws an exception, and the runtime is not hosted by an application that overrides the default policy, th", Justification = "<Pending>")]
-*/
+//[assembly: SuppressMessage("Blocker Bug", "S1048: If Finalize or an override of Finalize throws an exception, and the runtime is not hosted by an application that overrides the default policy, th", Justification = "<Pending>")]
+[assembly: SuppressMessage("Assembly", "S3904")]
+

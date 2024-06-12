@@ -13,6 +13,7 @@ internal sealed class RedisStreamSubjectWriter<T> : IDisposable
     private readonly ILogger _logger;
     private readonly CancellationTokenSource _stopTokenSource;
     private readonly CancellationToken _cancelationToken;
+    private RedisValue _lastId = StreamPosition.NewMessages;
 
     public RedisStreamSubjectWriter(
         RedisStreamContext context,
@@ -74,12 +75,13 @@ internal sealed class RedisStreamSubjectWriter<T> : IDisposable
             _context.Topic,
             _context.ConsumerGroup,
             _context.ConsumerName,
-            ">",
+            StreamConstants.UndeliveredMessages,
             _context.PollBatchSize).ConfigureAwait(false);
 
         if (events.Length > 0)
         {
             await DispatchEventsAsync(events);
+            _lastId = events[^1].Id;
             return;
         }
         await Task.Delay(_context.PollInterval, _cancelationToken);
@@ -91,7 +93,7 @@ internal sealed class RedisStreamSubjectWriter<T> : IDisposable
         {
             try
             {
-                await _redis.Database.StreamCreateConsumerGroupAsync(_context.Topic, _context.ConsumerGroup, StreamPosition.Beginning, true);
+                await _redis.Database.StreamCreateConsumerGroupAsync(_context.Topic, _context.ConsumerGroup, _lastId);
                 return true;
             }
             catch
@@ -163,3 +165,4 @@ internal sealed class RedisStreamSubjectWriter<T> : IDisposable
         _logger.LogDebug("Dispatched {Length} messages. Topic : {Topic}", events.Length, _context.Topic);
     }
 }
+

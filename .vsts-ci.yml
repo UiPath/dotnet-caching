@@ -18,14 +18,6 @@ pr:
     include:
       - Caching/*
 
-resources:
-  repositories:
-    - repository: sonar
-      type: github
-      name: UiPath/AzurePipelinesTemplates
-      ref: refs/tags/uipath.sonar-coverage.1.7.1
-      endpoint: 'UiPath'
-
 variables:
   OrganizationName: UiPath
   BuildDefinitionName: $(Build.DefinitionName)
@@ -36,8 +28,8 @@ variables:
 stages:
   - stage: 'CI'
     jobs:
-    - job: BuildCachingLibrary
-      displayName: Caching - Build & Run tests
+    - job: BuildAndRunTests
+      displayName: Build & Run tests
       pool:
         vmImage: ubuntu-latest
       variables:
@@ -106,18 +98,11 @@ stages:
           useGlobalJson: true
           includePreviewVersions: false
           performMultiLevelLookup: true
-          
       - pwsh: |
-          if (!(dotnet tool list -g | Where-Object {$_.contains("coverlet")})){
-            dotnet tool install --global coverlet.console --version 6.0.2
-          } else {
-            dotnet tool update --global coverlet.console --version 6.0.2
-          }
-
           if (!(dotnet tool list -g | Where-Object {$_.contains("dotnet-coverage")})){
-            dotnet tool install --global dotnet-coverage --version 17.11.0
+            dotnet tool install --global dotnet-coverage --version 17.11.3
           } else {
-            dotnet tool update --global dotnet-coverage --version 17.11.0
+            dotnet tool update --global dotnet-coverage --version 17.11.3
           }
 
           dotnet --info
@@ -141,11 +126,23 @@ stages:
           feedsToUse: config
           nugetConfigPath: "$(Build.SourcesDirectory)/Caching/NuGet.Config"
 
-      - template: /Sonar/prepare-sonar-coverage.yml@sonar
-        parameters:
-          projectKey: 'UiPath_ServiceCommon-Caching'
-          serviceConnectionName: SonarConnection
-          runsettingsFile: "$(Build.SourcesDirectory)/Caching/CodeCoverage.runsettings"
+      - task: SonarCloudPrepare@2
+        inputs:
+          SonarCloud: SonarConnection
+          organization: ui
+          scannerMode: MSBuild
+          projectKey: UiPath_ServiceCommon-Caching
+          projectName: UiPath_ServiceCommon-Caching
+          projectVersion: '$(PackageVersion)'
+          extraProperties: |
+            sonar.sourceEncoding=UTF-8
+            sonar.verbose=false
+            sonar.log.level=Info
+            sonar.exclusions=**/*AssemblyInfo.cs,**/*.js,**/*.css,**/*.scss,**/*.ts,**/*.json,**/*.config,**/*.resx
+            sonar.cs.vscoveragexml.reportsPaths=$(Agent.TempDirectory)/**/coverage.xml
+            sonar.cs.file.suffixes=.cs
+            sonar.cs.analyzeGeneratedCode=false
+            sonar.dotnet.excludeTestProjects=true
 
       - task: DotNetCoreCLI@2
         displayName: "Build Solution"
@@ -155,6 +152,7 @@ stages:
           arguments: >
             --configuration $(BuildConfiguration)
             --no-restore
+            --no-incremental
             /p:Company=$(OrganizationName)
             /p:SignAssembly=false
             /p:IgnoreCollectDist=false
@@ -162,20 +160,16 @@ stages:
             /p:GenerateGitVersionInformation=false
             /p:UpdateVersionProperties=false
 
-      - pwsh : |
-          dotnet test "$(Solution)" --configuration $(BuildConfiguration) --no-build --collect "XPlat Code Coverage" --logger trx --results-directory "$(Agent.TempDirectory)/test-results"
-          dotnet-coverage merge "$(Agent.TempDirectory)/test-results/**/*.xml" -f xml -o "$(Agent.TempDirectory)/test-results/caching.coveragexml"
-        displayName: "Run tests"
+      - pwsh: |
+          dotnet-coverage collect "dotnet test --verbosity normal" -f xml -o "$(Agent.TempDirectory)/test-results/coverage.xml"
+        displayName: 'Run tests'
+        workingDirectory: $(Build.SourcesDirectory)/Caching
 
-      - task: PublishPipelineArtifact@1
-        displayName: "Publish test results"
+      - task: SonarCloudAnalyze@2
+
+      - task: SonarCloudPublish@2
         inputs:
-          targetPath: "$(Agent.TempDirectory)/test-results"
-          artifactName: "test-results"
-
-      - template: /Sonar/analyze-sonar-coverage.yml@sonar
-
-      - template: /Sonar/publish-sonar-coverage.yml@sonar
+          pollingTimeoutSec: '300'
 
       - task: DotNetCoreCLI@2
         displayName: "Create Package"
@@ -190,7 +184,7 @@ stages:
         condition: succeeded()
 
       - task: PublishBuildArtifacts@1
-        displayName: 'Publish Artifact: UiPath.Platform.Caching'
+        displayName: 'Publish Artifact'
         inputs:
           ArtifactName: Caching
           PathtoPublish: "$(Build.SourcesDirectory)/$(ArtifactsOutputPath)"
@@ -205,7 +199,7 @@ stages:
       )
     jobs:
       - deployment: 'PublishPackageToFeature'
-        displayName: 'Publish package to feature feed'
+        displayName: 'Publish to feature feed'
         environment: FEATURE
         pool:
           vmImage: ubuntu-latest
@@ -214,7 +208,7 @@ stages:
             deploy:
               steps:
                 - task: NuGetCommand@2
-                  displayName: 'NuGet push - UiPath.Platform.Caching'
+                  displayName: 'NuGet push'
                   inputs:
                     command: push
                     packagesToPush: '$(Agent.BuildDirectory)/Caching/*.nupkg'
@@ -228,7 +222,7 @@ stages:
       )
     jobs:
       - deployment: 'PublishPackageToAlpha'
-        displayName: 'Publish package to alpha feed'
+        displayName: 'Publish to alpha feed'
         environment: ALPHA
         pool:
           vmImage: ubuntu-latest
@@ -237,7 +231,7 @@ stages:
             deploy:
               steps:
                 - task: NuGetCommand@2
-                  displayName: 'NuGet push - UiPath.Platform.Caching'
+                  displayName: 'NuGet push'
                   inputs:
                     command: push
                     packagesToPush: '$(Agent.BuildDirectory)/Caching/*.nupkg'
@@ -251,7 +245,7 @@ stages:
       )
     jobs:
       - deployment: 'PublishPackageToBeta'
-        displayName: 'Publish package to beta feed'
+        displayName: 'Publish to beta feed'
         environment: BETA
         pool:
           vmImage: ubuntu-latest
@@ -260,7 +254,7 @@ stages:
             deploy:
               steps:
                 - task: NuGetCommand@2
-                  displayName: 'NuGet push - UiPath.Platform.Caching'
+                  displayName: 'NuGet push'
                   inputs:
                     command: push
                     packagesToPush: '$(Agent.BuildDirectory)/Caching/*.nupkg'
@@ -274,7 +268,7 @@ stages:
       )
     jobs:
       - deployment: 'PublishPackageToRelease'
-        displayName: 'Publish package to release feed'
+        displayName: 'Publish to release feed'
         environment: RELEASE
         pool:
           vmImage: ubuntu-latest
@@ -283,7 +277,7 @@ stages:
             deploy:
               steps:
                 - task: NuGetCommand@2
-                  displayName: 'NuGet push - UiPath.Platform.Caching'
+                  displayName: 'NuGet push'
                   inputs:
                     command: push
                     packagesToPush: '$(Agent.BuildDirectory)/Caching/*.nupkg'

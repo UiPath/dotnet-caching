@@ -22,7 +22,6 @@ public class RedisStreamSubjectWriterTests : IAsyncLifetime
     private Uri _sourceUri = default!;
     private int _pollBatchSize = default!;
     private TimeSpan _pollInterval = default!;
-
     private RedisStreamSubjectWriter<ICacheEvent>? _sut;
     private RedisStreamSubjectWriter<ICacheEvent> Sut => _sut ??= _fixture.Create<RedisStreamSubjectWriter<ICacheEvent>>();
 

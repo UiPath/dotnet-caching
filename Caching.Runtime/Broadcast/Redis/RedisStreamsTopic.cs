@@ -17,9 +17,11 @@ public sealed class RedisStreamsTopic<T> : ITopic<T>
     private readonly IEventFormatterProxy<T> _formatter;
     private readonly IPolicyExecutor _writePolicy;
     private readonly ILogger _logger;
-    private readonly int? _maxLength;
+    private readonly RedisStreamsTopicOptions _streamOptions;
     private readonly EventDispatcher<T> _dispatcher;
+    private readonly object _syncObj = new();
     private bool _disposed;
+    private bool _consumerGroupCreated = false;
 
     public TopicKey TopicKey { get; }
 
@@ -31,7 +33,7 @@ public sealed class RedisStreamsTopic<T> : ITopic<T>
         Func<ISubject<T>> subjectFactory,
         IEventFormatterProxy<T> formatter,
         IPolicyHolder policyHolder,
-        RedisStreamsTopicOptions options,
+        RedisStreamsTopicOptions streamOptions,
         CacheOptions cacheOptions,
         ILogger<RedisStreamsTopic<T>> logger,
         CancellationToken stopToken)
@@ -42,18 +44,29 @@ public sealed class RedisStreamsTopic<T> : ITopic<T>
         _stopTokenSource = CancellationTokenSource.CreateLinkedTokenSource(stopToken);
         _redis = redis;
         _logger = logger;
+        _streamOptions = streamOptions;
         _subject = subjectFactory();
-        _maxLength = options.MaxLength;
-        _redisStreamKeyStrategy = options.RedisStreamKeyStrategy ?? new PrefixStrategy(RedisTypePrefixes.Streams, cacheOptions);
-        _context = GetContext(topicKey, cacheOptions, options);
-        EnsureStreamGroup();
-        var channel = ChannelHelper.Create<T>(options.ConsumerCapacity < 0, options.ConsumerCapacity > 0 ? options.ConsumerCapacity : options.PollBatchSize , options.FullMode);
+        _redisStreamKeyStrategy = streamOptions.RedisStreamKeyStrategy ?? new PrefixStrategy(RedisTypePrefixes.Streams, cacheOptions);
+        _context = GetContext(topicKey, cacheOptions, streamOptions);
+        var channel = ChannelHelper.Create<T>(streamOptions.ConsumerCapacity < 0, streamOptions.ConsumerCapacity > 0 ? streamOptions.ConsumerCapacity : streamOptions.PollBatchSize , streamOptions.FullMode);
         _subscriber = new RedisStreamSubjectWriter<T>(_context, _redis, channel, _formatter, _logger, _stopTokenSource.Token);
         _dispatcher = new EventDispatcher<T>(topicKey, channel, _subject, _logger, _stopTokenSource.Token);
     }
 
-    public IDisposable Subscribe(IObserver<T> observer) =>
-        _subject.Subscribe(observer);
+    public IDisposable Subscribe(IObserver<T> observer)
+    {
+#if NET7_0_OR_GREATER
+        ObjectDisposedException.ThrowIf(_disposed, this);
+#else
+        if (_disposed)
+        {
+            throw new ObjectDisposedException(GetType().Name);
+        }
+#endif
+
+        CreateConsumerGroup();
+        return _subject.Subscribe(observer);
+    }
 
     public async ValueTask<bool> PublishAsync(T @event, CancellationToken token = default)
     {
@@ -65,7 +78,7 @@ public sealed class RedisStreamsTopic<T> : ITopic<T>
                 _context.Topic,
                 _context.FieldName,
                 messageString,
-                maxLength: _maxLength,
+                maxLength: _streamOptions.MaxLength,
                 useApproximateMaxLength: true,
                 flags: CommandFlags.DemandMaster), token).ConfigureAwait(false);
             _logger.LogDebug("Published to topic {TopicKey} event {EventId} stream id {StreamId} ", TopicKey, @event.Id,  id);
@@ -93,11 +106,25 @@ public sealed class RedisStreamsTopic<T> : ITopic<T>
         OnDisposed?.Invoke(this, EventArgs.Empty);
     }
 
-    private void EnsureStreamGroup()
+    private void CreateConsumerGroup()
+    {
+        if (!_consumerGroupCreated)
+        {
+            lock (_syncObj)
+            {
+                if (!_consumerGroupCreated)
+                {
+                    _consumerGroupCreated = EnsureStreamGroup();
+                }
+            }
+        }
+    }
+
+    private bool EnsureStreamGroup()
     {
         try
         {
-            _ = _redis.Database.StreamCreateConsumerGroup(
+            return _redis.Database.StreamCreateConsumerGroup(
                 _context.Topic,
                 _context.ConsumerGroup,
                 StreamPosition.NewMessages);
@@ -105,6 +132,7 @@ public sealed class RedisStreamsTopic<T> : ITopic<T>
         catch (RedisServerException ex) when (ex.Message == ConsumerGroupNameExistsErrorMessage)
         {
             _logger.LogDebug(ex, "On Topic {Topic} consumer group {ConsumerGroup} already exists", _context.Topic, _context.ConsumerGroup);
+            return true;
         }
     }
 

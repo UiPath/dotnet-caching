@@ -31,7 +31,7 @@ public class RedisConnectionOptions
 
     public int LastReadIntervalThresholdMilliseconds { get; set; } = 15000;
 
-    public string? Version { get; set; } = new Version(6, 0).ToString();
+    public string? DefaultVersion { get; set; } = new Version(6, 0).ToString();
 
     public TimeSpan? HangDetectionDueTime { get; set; }
 
@@ -53,7 +53,7 @@ public class RedisConnectionOptions
         var config = ConfigurationOptions.Parse(cnn);
         config.AbortOnConnectFail = false; // if the connection fails, the multiplexer will silently retry in the background
         config.ChannelPrefix = default;
-        if (System.Version.TryParse(Version, out var version))
+        if (Version.TryParse(DefaultVersion, out var version))
         {
             config.DefaultVersion = version;
         }

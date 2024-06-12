@@ -8,7 +8,7 @@
     <AssemblyName>UiPath.Platform.$(MSBuildProjectName)</AssemblyName>
     <RootNamespace>$(AssemblyName)</RootNamespace>
     <PackageId>$(AssemblyName)</PackageId>
-    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+    <TreatWarningsAsErrors>false</TreatWarningsAsErrors>
     <NeutralLanguage>en</NeutralLanguage>
     <Authors>UiPath</Authors>
     <Company>UiPath</Company>

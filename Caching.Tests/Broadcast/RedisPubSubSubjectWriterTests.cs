@@ -31,7 +31,7 @@ public class RedisPubSubSubjectWriterTests : IAsyncLifetime
     }
 
     [Fact]
-    public async Task Reiceive_redis_null()
+    public async Task Receive_redis_null()
     {
         Action<RedisChannel, RedisValue>? action = null!;
         
@@ -48,7 +48,7 @@ public class RedisPubSubSubjectWriterTests : IAsyncLifetime
     }
 
     [Fact]
-    public async Task Reiceive_no_json()
+    public async Task Receive_no_json()
     {
         Action<RedisChannel, RedisValue>? action = null!;
         _subscriber.When(x => x.Subscribe(_redisChannel, Arg.Any<Action<RedisChannel, RedisValue>>()))
@@ -66,7 +66,7 @@ public class RedisPubSubSubjectWriterTests : IAsyncLifetime
     [Theory]
     [InlineData(false)]
     [InlineData(true)]
-    public async Task Reiceive_event(bool valid)
+    public async Task Receive_event(bool valid)
     {
         Action<RedisChannel, RedisValue>? action = null!;
         var expected = _fixture.Create<TestCacheEvent>();

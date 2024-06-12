@@ -1,6 +1,4 @@
-﻿using System.Diagnostics.CodeAnalysis;
-
-namespace UiPath.Platform.Caching;
+﻿namespace UiPath.Platform.Caching;
 
 [ExcludeFromCodeCoverage]
 public sealed class NullCache : ICache

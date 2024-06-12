@@ -1,3 +1,3 @@
-﻿global using System.Text;
+﻿global using System.Diagnostics.CodeAnalysis;
+global using System.Text;
 
-[assembly: System.Diagnostics.CodeAnalysis.SuppressMessage("Assembly", "S3904")]

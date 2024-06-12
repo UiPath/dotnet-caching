@@ -110,11 +110,11 @@ public sealed class RedisConnector : IRedisConnector
 
     private Version GetVersion()
     {
-        Version defaultVersion = new Version(4, 0);
+        Version defaultVersion = new Version(6, 0);
 
         Version DefaultVersion()
         {
-            if (Version.TryParse(_redisOptions.Version, out var version))
+            if (Version.TryParse(_redisOptions.DefaultVersion, out var version))
             {
                 return version;
             }
