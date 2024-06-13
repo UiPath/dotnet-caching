@@ -23,11 +23,6 @@ public class RedisStreamsTopicTests : IAsyncLifetime
     [Fact]
     public void Dispose_works_as_expected()
     {
-        var s = Sut;
-        _database.Received().StreamCreateConsumerGroup(
-                Arg.Any<RedisKey>(),
-                Arg.Any<RedisValue>(),
-                StreamPosition.NewMessages);
         var act = () => Sut.Dispose();
         act.Should().NotThrow();
     }
@@ -35,33 +30,36 @@ public class RedisStreamsTopicTests : IAsyncLifetime
     [Fact]
     public void EnsureStreamGroup_exception()
     {
+        var observer = _fixture.Create<IObserver<ICacheEvent>>();
         _database.StreamCreateConsumerGroup(
                 Arg.Any<RedisKey>(),
                 Arg.Any<RedisValue>(),
                 StreamPosition.NewMessages).Throws<Exception>();
-        Action act = () => Sut.Dispose();
+        Action act = () => Sut.Subscribe(observer);
         act.Should().Throw<Exception>();
     }
 
     [Fact]
     public void EnsureStreamGroup_RedisServerException_BUSYGROUP()
     {
+        var observer = _fixture.Create<IObserver<ICacheEvent>>();
         _database.StreamCreateConsumerGroup(
                 Arg.Any<RedisKey>(),
                 Arg.Any<RedisValue>(),
                 StreamPosition.NewMessages).Throws(new RedisServerException("BUSYGROUP Consumer Group name already exists"));
-        Action act = () => Sut.Dispose();
+        Action act = () => Sut.Subscribe(observer);
         act.Should().NotThrow();
     }
 
     [Fact]
     public void EnsureStreamGroup_RedisServerException()
     {
+        var observer = _fixture.Create<IObserver<ICacheEvent>>();
         _database.StreamCreateConsumerGroup(
                 Arg.Any<RedisKey>(),
                 Arg.Any<RedisValue>(),
                 StreamPosition.NewMessages).Throws(new RedisServerException(_fixture.Create<string>()));
-        Action act = () => Sut.Dispose();
+        Action act = () => Sut.Subscribe(observer);
         act.Should().Throw<Exception>();
     }
 

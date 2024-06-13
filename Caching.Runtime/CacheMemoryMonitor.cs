@@ -6,7 +6,7 @@ namespace UiPath.Platform.Caching;
 
 internal sealed class CacheMemoryMonitor : IDisposable
 {
-    private readonly string _statsMetricName;
+    private readonly string _name;
     private readonly MemoryCache _memoryCache;
     private readonly ICachingTelemetryProvider _telemetryProvider;
     private readonly PeriodicTimer _timer;
@@ -14,12 +14,12 @@ internal sealed class CacheMemoryMonitor : IDisposable
     private readonly CancellationTokenSource _cancellationTokenSource = new();
     private bool _disposed;
 
-    public CacheMemoryMonitor(string statsMetricName,
+    public CacheMemoryMonitor(string name,
         TimeSpan statisticsFlushInterval,
         MemoryCache memoryCache,
         ICachingTelemetryProvider telemetryProvider)
     {
-        _statsMetricName = statsMetricName;
+        _name = name;
         _memoryCache = memoryCache;
         _telemetryProvider = telemetryProvider;
         _timer = new PeriodicTimer(statisticsFlushInterval);
@@ -39,12 +39,13 @@ internal sealed class CacheMemoryMonitor : IDisposable
                 continue;
             }
 
-            _telemetryProvider.TrackMetric(_statsMetricName, currentStats.CurrentEntryCount, new Dictionary<string, string>
+            _telemetryProvider.TrackMetric(_name, currentStats.CurrentEntryCount, new Dictionary<string, string>
             {
                 { "CurrentEntryCount", currentStats.CurrentEntryCount.ToString(CultureInfo.InvariantCulture) },
                 { "CurrentEstimatedSize", currentStats.CurrentEstimatedSize.GetValueOrDefault().ToString(CultureInfo.InvariantCulture) },
                 { "TotalHits", currentStats.TotalHits.ToString(CultureInfo.InvariantCulture) },
                 { "TotalMisses", currentStats.TotalMisses.ToString(CultureInfo.InvariantCulture) },
+                { "name", _name }
             });
         }
     }

@@ -1,6 +1,4 @@
 ﻿
-using System.Diagnostics.CodeAnalysis;
-
 namespace UiPath.Platform.Caching.Broadcast;
 
 [ExcludeFromCodeCoverage]

@@ -53,6 +53,10 @@ public static class BroadcastExtensions
         if (options.Enabled)
         {
             builder.Services.TryAddEnumerable(ServiceDescriptor.Singleton<ITopicProvider, RedisStreamsTopicProvider>());
+            if (options.MaintainerEnabled)
+            {
+                builder.Services.AddHostedService<RedisStreamHealthMaintainer>();
+            }
         }
         return builder;
     }

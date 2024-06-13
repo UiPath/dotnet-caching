@@ -36,7 +36,16 @@ public class RedisStreamsTopicProvider : RedisTopicProviderBase
     public override bool Enabled { get; }
 
     protected override ITopic<ICacheEvent> CreateInternalTopic(TopicKey topicKey) =>
-        new RedisStreamsTopic<ICacheEvent>(topicKey, Redis, () => new Subject<ICacheEvent>(), _formatter, _policyHolder, _redisStreamsTopicOptions, _cacheOptions, _loggerFactory.Create<RedisStreamsTopic<ICacheEvent>>(), _stopTokenSource.Token);
+        new RedisStreamsTopic<ICacheEvent>(
+            topicKey,
+            Redis,
+            () => new Subject<ICacheEvent>(),
+            _formatter,
+            _policyHolder,
+            _redisStreamsTopicOptions,
+            _cacheOptions,
+            _loggerFactory.Create<RedisStreamsTopic<ICacheEvent>>(),
+            _stopTokenSource.Token);
 
     protected override void Dispose(bool disposing)
     {

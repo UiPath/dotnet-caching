@@ -6,4 +6,3 @@ global using UiPath.Platform.Caching.Broadcast;
 global using UiPath.Platform.Caching.Config;
 
 [assembly: System.Runtime.CompilerServices.InternalsVisibleTo("UiPath.Platform.Caching.Tests")]
-[assembly: SuppressMessage("Assembly", "S3904")]
