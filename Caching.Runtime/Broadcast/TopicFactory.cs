@@ -22,11 +22,7 @@ public sealed class TopicFactory : ITopicFactory, IDisposable
 
     public void AddProvider(ITopicProvider provider)
     {
-        if (_disposed)
-        {
-            throw new ObjectDisposedException(nameof(TopicFactory));
-        }
-
+        this.ThrowIfDisposed(_disposed);
         _providers[provider.Name] = provider;
     }
 

@@ -7,7 +7,7 @@ namespace UiPath.Platform.Caching.Config;
 [ExcludeFromCodeCoverage]
 public class CachingBuilder : ICachingBuilder
 {
-    private readonly List<Action<ICachingBuilder>> _callbacks = new();
+    private readonly List<Action<ICachingBuilder>> _callbacks = [];
 
     public CachingBuilder(IServiceCollection services, IConfiguration? configuration = null)
     {
@@ -34,7 +34,7 @@ public class CachingBuilder : ICachingBuilder
         }
 
         Services.TryAddSingleton<ISerializerProxy>(sp => new SystemJsonSerializerProxy(sp.GetService<JsonSerializerOptions>()));
-        Services.TryAddSingleton<IPolicyHolder>(_ => PolicyHolder.NoOp);
+        Services.TryAddSingleton<IResiliencePipelineHolder>(_ => ResiliencePipelineHolder.Empty);
         Services.TryAddSingleton<IChangeTokenFactory>(NullChangeTokenFactory.Instance);
         Services.TryAddSingleton<ITopicFactory>(NullTopicFactory.Instance);
         Services.TryAddSingleton<ICachingTelemetryProvider>(NullTelemetryProvider.Instance);

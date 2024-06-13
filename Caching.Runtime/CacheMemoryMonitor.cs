@@ -1,5 +1,4 @@
-﻿#if !NET6_0
-using System.Globalization;
+﻿using System.Globalization;
 using UiPath.Platform.Caching.Telemetry;
 
 namespace UiPath.Platform.Caching;
@@ -62,4 +61,3 @@ internal sealed class CacheMemoryMonitor : IDisposable
         _timer.Dispose();
     }
 }
-#endif

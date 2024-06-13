@@ -11,7 +11,7 @@ public class RedisCacheTests : IAsyncLifetime
 {
     private readonly IFixture _fixture = AutoFixtureCreator.NSubsitute();
     private ISystemClock _clock = default!;
-    private IPolicyHolder _policyHolder = default!;
+    private IResiliencePipelineHolder _resiliencePipelineHolder = default!;
     private RedisCacheOptions _cacheOptions = default!;
     private IDatabase _database = default!;
     private ITransaction _transaction = default!;
@@ -484,10 +484,10 @@ public class RedisCacheTests : IAsyncLifetime
         _redisMultiKey = string.Join(':', _prefix, RedisTypePrefixes.String, _multiKey).ToLowerInvariant();
         _clock = _fixture.Freeze<ISystemClock>();
         _clock.UtcNow.Returns(c => _now);
-        _policyHolder = _fixture.Freeze<IPolicyHolder>();
-        var noOpExecutor = new NoOpExecutor();
-        _policyHolder.Read.Returns(noOpExecutor);
-        _policyHolder.Write.Returns(noOpExecutor);
+        _resiliencePipelineHolder = _fixture.Freeze<IResiliencePipelineHolder>();
+        var noOpExecutor = new EmptyResiliencePipeline();
+        _resiliencePipelineHolder.Read.Returns(noOpExecutor);
+        _resiliencePipelineHolder.Write.Returns(noOpExecutor);
         _cacheKeyStrategy = _fixture.Create<ICacheKeyStrategy>();
         var redisKeyStrategyFactory = _fixture.Create<IRedisKeyStrategyFactory>();
         _redisKeyStrategy = _fixture.Create<IRedisKeyStrategy>();
@@ -572,9 +572,9 @@ public class RedisCacheTests : IAsyncLifetime
         var value = _fixture.Create<string>();
         var expiration = _fixture.Create<TimeSpan>();
         var expectedResponse = _fixture.Create<bool>();
-        _database.StringSetAsync(_redisKey, Arg.Any<RedisValue>(), Arg.Any<TimeSpan?>(), Arg.Any<When>(), Arg.Is<CommandFlags>(f => f.HasFlag(CommandFlags.DemandMaster)))
+        _transaction.StringSetAsync(_redisKey, Arg.Any<RedisValue>(), Arg.Any<TimeSpan?>(), Arg.Any<When>(), Arg.Is<CommandFlags>(f => f.HasFlag(CommandFlags.DemandMaster)))
                 .Returns(_ => Task.FromResult(expectedResponse));
-        _database.StringSetAsync(_redisMultiKey, Arg.Any<RedisValue>(), Arg.Any<TimeSpan?>(), Arg.Any<When>(), Arg.Is<CommandFlags>(f => f.HasFlag(CommandFlags.DemandMaster)))
+        _transaction.StringSetAsync(_redisMultiKey, Arg.Any<RedisValue>(), Arg.Any<TimeSpan?>(), Arg.Any<When>(), Arg.Is<CommandFlags>(f => f.HasFlag(CommandFlags.DemandMaster)))
                 .Returns(_ => Task.FromResult(expectedResponse));
         _transaction.ExecuteAsync().Returns(_ => Task.FromResult(expectedResponse));
         bool? actualResponse = default;
@@ -592,7 +592,7 @@ public class RedisCacheTests : IAsyncLifetime
         }
 
         actualResponse.Should().Be(expectedResponse);
-        await _database.Received(1).StringSetAsync(_redisKey, Arg.Any<RedisValue>(), Arg.Any<TimeSpan?>(), Arg.Any<When>(), Arg.Is<CommandFlags>(f => f.HasFlag(CommandFlags.DemandMaster)));
-        await _database.Received(1).StringSetAsync(_redisMultiKey, Arg.Any<RedisValue>(), Arg.Any<TimeSpan?>(), Arg.Any<When>(), Arg.Is<CommandFlags>(f => f.HasFlag(CommandFlags.DemandMaster)));
+        await _transaction.Received(1).StringSetAsync(_redisKey, Arg.Any<RedisValue>(), Arg.Any<TimeSpan?>(), Arg.Any<When>(), Arg.Is<CommandFlags>(f => f.HasFlag(CommandFlags.DemandMaster)));
+        await _transaction.Received(1).StringSetAsync(_redisMultiKey, Arg.Any<RedisValue>(), Arg.Any<TimeSpan?>(), Arg.Any<When>(), Arg.Is<CommandFlags>(f => f.HasFlag(CommandFlags.DemandMaster)));
     }
 }

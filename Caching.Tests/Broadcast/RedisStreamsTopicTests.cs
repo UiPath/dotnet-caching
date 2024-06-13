@@ -15,7 +15,7 @@ public class RedisStreamsTopicTests : IAsyncLifetime
     private CancellationTokenSource _cancellationTokenSource = default!;
     private IObserver<ICacheEvent> _observer = default!;
     private IDatabase _database = default!;
-    private IPolicyHolder _policyHolder = default!;
+    private IResiliencePipelineHolder _resiliencePipelineHolder = default!;
 
     private RedisStreamsTopic<ICacheEvent>? _sut = null;
     private RedisStreamsTopic<ICacheEvent> Sut => _sut ??= _fixture.Create<RedisStreamsTopic<ICacheEvent>>();
@@ -104,10 +104,10 @@ public class RedisStreamsTopicTests : IAsyncLifetime
         _subject = _fixture.Freeze<ISubject<ICacheEvent>>();
         _observer = _fixture.Freeze<IObserver<ICacheEvent>>();
         _fixture.Inject<Func<ISubject<ICacheEvent>>>(() => _subject);
-        _policyHolder = _fixture.Freeze<IPolicyHolder>();
-        var noOpExecutor = new NoOpExecutor();
-        _policyHolder.Read.Returns(noOpExecutor);
-        _policyHolder.Write.Returns(noOpExecutor);
+        _resiliencePipelineHolder = _fixture.Freeze<IResiliencePipelineHolder>();
+        var noOpExecutor = new EmptyResiliencePipeline();
+        _resiliencePipelineHolder.Read.Returns(noOpExecutor);
+        _resiliencePipelineHolder.Write.Returns(noOpExecutor);
         _cancellationTokenSource = new CancellationTokenSource();
         _fixture.Inject(_cancellationTokenSource.Token);
         _redisStreamsTopicOptions = _fixture.Create<RedisStreamsTopicOptions>();

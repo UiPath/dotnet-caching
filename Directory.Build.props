@@ -2,7 +2,7 @@
 <Project>
   <PropertyGroup>
     <LangVersion>12.0</LangVersion>
-    <TargetFrameworks>net8.0;net7.0;net6.0</TargetFrameworks>
+    <TargetFrameworks>net8.0;net6.0</TargetFrameworks>
   </PropertyGroup>
   <PropertyGroup>
     <AssemblyName>UiPath.Platform.$(MSBuildProjectName)</AssemblyName>
@@ -13,7 +13,7 @@
     <Authors>UiPath</Authors>
     <Company>UiPath</Company>
     <Product>Platform Services</Product>
-    <Copyright>Copyright © UiPath 2023</Copyright>
+    <Copyright>Copyright © UiPath $([System.DateTime]::Now.Year)</Copyright>
     <Description>UiPath Caching</Description>
     <PackageTags>Caching</PackageTags>
     <PackageProjectUrl>https://github.com/UiPath/ServiceCommon</PackageProjectUrl>

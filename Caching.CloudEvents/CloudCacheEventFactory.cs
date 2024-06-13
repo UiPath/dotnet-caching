@@ -6,7 +6,7 @@ namespace UiPath.Platform.Caching.CloudEvents;
 public class CloudCacheEventFactory : ICacheEventFactory
 {
     private readonly Uri? _sourceUri;
-    private readonly ISet<string> _knownEventTypes;
+    private readonly ImmutableHashSet<string> _knownEventTypes;
 
     public CloudCacheEventFactory(IOptions<CacheOptions> optionsAccessor)
     {

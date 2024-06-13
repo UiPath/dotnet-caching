@@ -10,7 +10,7 @@ public sealed class ChangeToken : ICacheChangeToken, IObserver<ICacheEvent>, IDi
     private readonly ISet<string>? _acceptedEvents;
     private readonly IDisposable _unsubscriber;
 
-    private readonly List<(Action<object?> callback, object? state)> _callbacks = new();
+    private readonly List<(Action<object?> callback, object? state)> _callbacks = [];
 
     public ChangeToken(string key, ITopic<ICacheEvent> topic, Uri? source, ISerializerProxy serializer, ILogger<ChangeToken> logger, ISet<string>? acceptedEvents = null)
     {

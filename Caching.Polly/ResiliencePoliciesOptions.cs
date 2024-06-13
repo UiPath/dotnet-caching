@@ -11,4 +11,6 @@ public class ResiliencePoliciesOptions
     public TimeSpan? RequestTimeout { get; set; } = TimeSpan.FromSeconds(1);
 
     public int? RetryCount { get; set; } = 2;
+
+    public bool TelemetryEnabled { get; set; } = true;
 }

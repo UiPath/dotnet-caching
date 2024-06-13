@@ -16,7 +16,7 @@ public sealed class RedisStreamsTopic<T> : ITopic<T>
     private readonly ISubject<T> _subject;
     private readonly IRedisConnector _redis;
     private readonly IEventFormatterProxy<T> _formatter;
-    private readonly IPolicyExecutor _writePolicy;
+    private readonly IResiliencePipeline _write;
     private readonly ILogger _logger;
     private readonly ICachingTelemetryProvider _cachingTelemetryProvider;
     private readonly RedisStreamsTopicOptions _streamOptions;
@@ -34,7 +34,7 @@ public sealed class RedisStreamsTopic<T> : ITopic<T>
         IRedisConnector redis,
         Func<ISubject<T>> subjectFactory,
         IEventFormatterProxy<T> formatter,
-        IPolicyHolder policyHolder,
+        IResiliencePipelineHolder resiliencePipelineHolder,
         RedisStreamsTopicOptions streamOptions,
         CacheOptions cacheOptions,
         ILogger<RedisStreamsTopic<T>> logger,
@@ -43,7 +43,7 @@ public sealed class RedisStreamsTopic<T> : ITopic<T>
     {
         TopicKey = topicKey;
         _formatter = formatter;
-        _writePolicy = policyHolder.Write;
+        _write = resiliencePipelineHolder.Write;
         _stopTokenSource = CancellationTokenSource.CreateLinkedTokenSource(stopToken);
         _redis = redis;
         _logger = logger;
@@ -59,15 +59,7 @@ public sealed class RedisStreamsTopic<T> : ITopic<T>
 
     public IDisposable Subscribe(IObserver<T> observer)
     {
-#if NET7_0_OR_GREATER
-        ObjectDisposedException.ThrowIf(_disposed, this);
-#else
-        if (_disposed)
-        {
-            throw new ObjectDisposedException(GetType().Name);
-        }
-#endif
-
+        this.ThrowIfDisposed(_disposed);
         CreateConsumerGroup();
         return _subject.Subscribe(observer);
     }
@@ -78,13 +70,17 @@ public sealed class RedisStreamsTopic<T> : ITopic<T>
         try
         {
             var messageString = _formatter.EncodeAsString(@event);
-            var id = await _writePolicy.ExecuteAsync(() => _redis.Database.StreamAddAsync(
-                _context.Topic,
-                _context.FieldName,
-                messageString,
-                maxLength: _streamOptions.MaxLength,
-                useApproximateMaxLength: true,
-                flags: CommandFlags.DemandMaster), token).ConfigureAwait(false);
+            var id = await _write.ExecuteAsync(async token =>
+            {
+                token.ThrowIfCancellationRequested();
+                return await _redis.Database.StreamAddAsync(
+                    _context.Topic,
+                    _context.FieldName,
+                    messageString,
+                    maxLength: _streamOptions.MaxLength,
+                    useApproximateMaxLength: true,
+                    flags: CommandFlags.DemandMaster).ConfigureAwait(false);
+            }, token).ConfigureAwait(false);
             _cachingTelemetryProvider.TrackTopicWriteMetric(_context.Topic!, id);
             _logger.LogDebug("Published to topic {TopicKey} event {EventId} stream id {StreamId} ", TopicKey, @event.Id,  id);
             return !id.IsNull;

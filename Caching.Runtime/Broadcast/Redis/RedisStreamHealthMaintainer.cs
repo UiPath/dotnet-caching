@@ -153,7 +153,6 @@ public class RedisStreamHealthMaintainer : IHostedService
         }
     }
 
-
     private async Task CheckStreamAsync(StreamContext context, DateTimeOffset minOffset, CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();

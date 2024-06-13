@@ -19,7 +19,7 @@ public class RedisHashCacheTests : IAsyncLifetime
     private ISystemClock _clock = default!;
     private RedisCacheOptions _redisCacheOptions = new();
     private DateTimeOffset _now = DateTimeOffset.UtcNow;
-    private IPolicyHolder _policyHolder = default!;
+    private IResiliencePipelineHolder _pipelineHolder = default!;
     private CacheKey _cacheKey = default!;
     private RedisKey _redisKey = default!;
     private ICacheKeyStrategy _cacheKeyStrategy = default!;
@@ -905,10 +905,10 @@ public class RedisHashCacheTests : IAsyncLifetime
         _transaction = _fixture.Freeze<ITransaction>();
         _clock = _fixture.Freeze<ISystemClock>();
         _clock.UtcNow.Returns(c => _now);
-        _policyHolder = _fixture.Freeze<IPolicyHolder>();
-        var noOpExecutor = new NoOpExecutor();
-        _policyHolder.Read.Returns(noOpExecutor);
-        _policyHolder.Write.Returns(noOpExecutor);
+        _pipelineHolder = _fixture.Freeze<IResiliencePipelineHolder>();
+        var resiliencePipeline = new EmptyResiliencePipeline();
+        _pipelineHolder.Read.Returns(resiliencePipeline);
+        _pipelineHolder.Write.Returns(resiliencePipeline);
         _database.CreateTransaction().Returns(_transaction);
         _cacheKeyStrategy = _fixture.Create<ICacheKeyStrategy>();
         var redisKeyStrategyFactory = _fixture.Create<IRedisKeyStrategyFactory>();

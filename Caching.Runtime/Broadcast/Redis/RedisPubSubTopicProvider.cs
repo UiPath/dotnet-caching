@@ -7,7 +7,7 @@ public class RedisPubSubTopicProvider : RedisTopicProviderBase
 {
     private readonly RedisPubSubTopicOptions _options;
     private readonly IEventFormatterProxy<ICacheEvent> _formatter;
-    private readonly IPolicyHolder _policyHolder;
+    private readonly IResiliencePipelineHolder _resiliencePipelineHolder;
     private readonly ILoggerFactory _loggerFactory;
     private readonly Uri _sourceUri;
     private readonly IRedisChannelStrategy _redisChannelStrategy;
@@ -20,13 +20,13 @@ public class RedisPubSubTopicProvider : RedisTopicProviderBase
         IOptions<CacheOptions> cacheOptionsAccessor,
         IRedisConnector redis,
         IEventFormatterProxy<ICacheEvent> formatter,
-        IPolicyHolder policyHolder,
+        IResiliencePipelineHolder resiliencePipelineHolder,
         ILoggerFactory loggerFactory)
         : base(redis, optionsAccessor.Value.ConnectionMonitorEnabled ?? cacheOptionsAccessor.Value.ConnectionMonitorEnabled)
     {
         _options = optionsAccessor.Value;
         _formatter = formatter;
-        _policyHolder = policyHolder;
+        _resiliencePipelineHolder = resiliencePipelineHolder;
         _loggerFactory = loggerFactory;
         var cacheOptions = cacheOptionsAccessor.Value;
         _sourceUri = cacheOptions.SourceUri ?? CacheOptions.MachineUri;
@@ -39,7 +39,7 @@ public class RedisPubSubTopicProvider : RedisTopicProviderBase
     public override bool Enabled { get; }
 
     protected override ITopic<ICacheEvent> CreateInternalTopic(TopicKey topicKey) =>
-        new RedisPubSubTopic<ICacheEvent>(topicKey, _sourceUri, Redis, _redisChannelStrategy, () => new Subject<ICacheEvent>(), _formatter, _policyHolder, _options, _loggerFactory.Create<RedisPubSubTopic<ICacheEvent>>(), _stopTokenSource.Token);
+        new RedisPubSubTopic<ICacheEvent>(topicKey, _sourceUri, Redis, _redisChannelStrategy, () => new Subject<ICacheEvent>(), _formatter, _resiliencePipelineHolder, _options, _loggerFactory.Create<RedisPubSubTopic<ICacheEvent>>(), _stopTokenSource.Token);
 
     protected override void Dispose(bool disposing)
     {

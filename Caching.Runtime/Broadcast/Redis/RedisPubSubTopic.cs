@@ -12,7 +12,7 @@ public sealed class RedisPubSubTopic<T> : ITopic<T>
     private readonly IRedisConnector _redis;
     private readonly ILogger _logger;
     private readonly IEventFormatterProxy<T> _formatter;
-    private readonly IPolicyExecutor _writePolicy;
+    private readonly IResiliencePipeline _write;
     private readonly RedisPubSubSubjectWriter<T> _subscriber;
     private readonly EventDispatcher<T> _dispatcher;
     private bool _disposed;
@@ -28,7 +28,7 @@ public sealed class RedisPubSubTopic<T> : ITopic<T>
         IRedisChannelStrategy redisChannelStrategy,
         Func<ISubject<T>> subjectFactory,
         IEventFormatterProxy<T> formatter,
-        IPolicyHolder policyHolder,
+        IResiliencePipelineHolder resiliencePipelineHolder,
         RedisPubSubTopicOptions options,
         ILogger<RedisPubSubTopic<T>> logger,
         CancellationToken stopToken)
@@ -37,7 +37,7 @@ public sealed class RedisPubSubTopic<T> : ITopic<T>
         _redisChannel = redisChannelStrategy.GetRedisChannel(topicKey);
         _stopTokenSource = CancellationTokenSource.CreateLinkedTokenSource(stopToken);
         _formatter = formatter;
-        _writePolicy = policyHolder.Write;
+        _write = resiliencePipelineHolder.Write;
         _redis = redis;
         _logger = logger;
         _subject = subjectFactory();
@@ -56,7 +56,11 @@ public sealed class RedisPubSubTopic<T> : ITopic<T>
         {
             var messageString = _formatter.EncodeAsString(@event);
             _logger.LogTrace("Publishing to topic {TopicKey} event {EventId}", TopicKey, @event.Id);
-            await _writePolicy.ExecuteAsync(() => _redis.Database.PublishAsync(_redisChannel, messageString, CommandFlags.DemandMaster), token).ConfigureAwait(false);
+            _ = await _write.ExecuteAsync(async token =>
+            {
+                token.ThrowIfCancellationRequested();
+                return await _redis.Database.PublishAsync(_redisChannel, messageString, CommandFlags.DemandMaster).ConfigureAwait(false);
+            }, token).ConfigureAwait(false);
             return true;
         }
         catch (Exception ex)

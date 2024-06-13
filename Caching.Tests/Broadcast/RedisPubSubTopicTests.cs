@@ -23,7 +23,7 @@ public class RedisPubSubTopicTests : IAsyncLifetime
     private string _channel = default!;
     private string _value = default!;
     private IRedisChannelStrategy _redisChannelStrategy = default!;
-    private IPolicyHolder _policyHolder = default!;
+    private IResiliencePipelineHolder _resiliencePipelineHolder = default!;
     private RedisPubSubTopicOptions _options = default!;
     private string? _actualRedisChannel;
     private readonly TimeSpan _delay = 50.Milliseconds();
@@ -211,8 +211,8 @@ public class RedisPubSubTopicTests : IAsyncLifetime
         _fixture.Inject<Func<ISubject<ICacheEvent>>>(() => new Subject<ICacheEvent>());
         _redisChannelStrategy = _fixture.Freeze<IRedisChannelStrategy>();
         _redisChannelStrategy.GetRedisChannel(_topicKey).Returns(c => new RedisChannel(_topicKey, RedisChannel.PatternMode.Auto));
-        _policyHolder = PolicyHolder.NoOp;
-        _fixture.Inject<IPolicyHolder>(_policyHolder);
+        _resiliencePipelineHolder = ResiliencePipelineHolder.Empty;
+        _fixture.Inject(_resiliencePipelineHolder);
         _subscriber = _fixture.Freeze<ISubscriber>();
         _observer = _fixture.Freeze<IObserver<ICacheEvent>>();
         _observer.When(x => x.OnNext(Arg.Any<ICacheEvent>()))
