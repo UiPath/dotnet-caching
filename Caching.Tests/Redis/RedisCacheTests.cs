@@ -14,10 +14,13 @@ public class RedisCacheTests : IAsyncLifetime
     private IPolicyHolder _policyHolder = default!;
     private RedisCacheOptions _cacheOptions = default!;
     private IDatabase _database = default!;
+    private ITransaction _transaction = default!;
     private ISerializerProxy _serializer = default!;
     private DateTimeOffset _now = DateTimeOffset.UtcNow;
     private CacheKey _cacheKey = default!;
     private RedisKey _redisKey = default!;
+    private CacheKey _multiKey = default!;
+    private RedisKey _redisMultiKey = default!;
     private ICacheKeyStrategy _cacheKeyStrategy = default!;
     private IRedisKeyStrategy _redisKeyStrategy = default!;
     private string _prefix = default!;
@@ -46,6 +49,28 @@ public class RedisCacheTests : IAsyncLifetime
             .ThrowsAsync(new RedisException("test"));
         var actualValue = await Sut.GetAsync<int?>(_cacheKey);
         actualValue.Should().Be(default(int?));
+    }
+
+    [Fact]
+    public async Task Multi_get_works_as_expected()
+    {
+        var expectedValue = _fixture.Create<string>();
+        _database.StringGetAsync(Arg.Is<RedisKey[]>(k => k.Contains(_redisKey) && k.Contains(_redisMultiKey)), CommandFlags.PreferReplica)
+            .Returns(ci =>
+            {
+                return new RedisValue[] { _serializer.Serialize(expectedValue), _serializer.Serialize(expectedValue) };
+            });
+        var actualValue = await Sut.GetAsync<string>(new CacheKey[] { _cacheKey, _multiKey });
+        actualValue.Should().BeEquivalentTo(new KeyValuePair<CacheKey, string>[] { new(_cacheKey, expectedValue), new(_multiKey, expectedValue) });
+    }
+
+    [Fact]
+    public async Task Multi_get_has_no_redis_exceptions()
+    {
+        _database.StringGetAsync(Arg.Any<RedisKey[]>(), Arg.Any<CommandFlags>())
+            .ThrowsAsync(new RedisException("test"));
+        var actualValue = await Sut.GetAsync<int?>(new CacheKey[] { _cacheKey, _multiKey });
+        actualValue.Should().BeEquivalentTo(new KeyValuePair<CacheKey, int?>[] { new(_cacheKey, default), new(_multiKey, default) });
     }
 
 
@@ -236,6 +261,28 @@ public class RedisCacheTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task Multi_remove_redis_exception()
+    {
+        _database.KeyDeleteAsync(new RedisKey[] { _redisKey }, CommandFlags.DemandMaster)
+                .ThrowsAsync(ci =>
+                {
+                    return new RedisException("test");
+                });
+        var actualResponse = await Sut.RemoveAsync<string>(new CacheKey[] { _cacheKey });
+        actualResponse.Should().BeFalse();
+    }
+
+    [Fact]
+    public async Task Multi_remove_works_as_expected()
+    {
+        var expectedResponse = _fixture.Create<bool>();
+        _database.KeyDeleteAsync(_redisKey, CommandFlags.DemandMaster)
+                .Returns(expectedResponse);
+        var actualResponse = await Sut.RemoveAsync<string>(_cacheKey);
+        actualResponse.Should().Be(expectedResponse);
+    }
+
+    [Fact]
     public Task Set_works_as_expected_timespan_expiration() =>
         Set_works_as_expected(typeof(TimeSpan));
 
@@ -246,6 +293,18 @@ public class RedisCacheTests : IAsyncLifetime
     [Fact]
     public Task Set_works_as_expected_no_expiration() =>
         Set_works_as_expected(typeof(object));
+
+    [Fact]
+    public Task Multi_set_works_as_expected_timespan_expiration() =>
+        Multi_set_works_as_expected(typeof(TimeSpan));
+
+    [Fact]
+    public Task Multi_set_works_as_expected_datetime_expiration() =>
+        Multi_set_works_as_expected(typeof(DateTimeOffset));
+
+    [Fact]
+    public Task Multi_set_works_as_expected_no_expiration() =>
+        Multi_set_works_as_expected(typeof(object));
 
     [Theory]
     [InlineData("")]
@@ -421,6 +480,8 @@ public class RedisCacheTests : IAsyncLifetime
         _prefix = "test";
         _cacheKey = _fixture.Create<string>();
         _redisKey = string.Join(':', _prefix, RedisTypePrefixes.String, _cacheKey).ToLowerInvariant();
+        _multiKey = _fixture.Create<string>();
+        _redisMultiKey = string.Join(':', _prefix, RedisTypePrefixes.String, _multiKey).ToLowerInvariant();
         _clock = _fixture.Freeze<ISystemClock>();
         _clock.UtcNow.Returns(c => _now);
         _policyHolder = _fixture.Freeze<IPolicyHolder>();
@@ -431,6 +492,7 @@ public class RedisCacheTests : IAsyncLifetime
         var redisKeyStrategyFactory = _fixture.Create<IRedisKeyStrategyFactory>();
         _redisKeyStrategy = _fixture.Create<IRedisKeyStrategy>();
         _redisKeyStrategy.GetRedisKey(_cacheKey).Returns(_redisKey);
+        _redisKeyStrategy.GetRedisKey(_multiKey).Returns(_redisMultiKey);
         redisKeyStrategyFactory.Create(Arg.Any<CacheOptions>(), Arg.Any<Type>())
             .Returns(_redisKeyStrategy);
         _cacheKeyStrategy.GetCacheKey<string>(_cacheKey).Returns(_cacheKey);
@@ -442,6 +504,8 @@ public class RedisCacheTests : IAsyncLifetime
         };
 
         _database = _fixture.Freeze<IDatabase>();
+        _transaction = _fixture.Freeze<ITransaction>();
+        _database.CreateTransaction().Returns(_transaction);
         _serializer = new SystemJsonSerializerProxy();
         _fixture.Inject(_serializer);
         var opt = Options.Create(_cacheOptions);
@@ -501,5 +565,34 @@ public class RedisCacheTests : IAsyncLifetime
 
         actualResponse.Should().Be(expectedResponse);
         await _database.Received(1).StringSetAsync(_redisKey, Arg.Any<RedisValue>(), Arg.Any<TimeSpan?>(), Arg.Any<When>(), Arg.Is<CommandFlags>(f => f.HasFlag(CommandFlags.DemandMaster)));
+    }
+
+    private async Task Multi_set_works_as_expected(Type expirationType)
+    {
+        var value = _fixture.Create<string>();
+        var expiration = _fixture.Create<TimeSpan>();
+        var expectedResponse = _fixture.Create<bool>();
+        _database.StringSetAsync(_redisKey, Arg.Any<RedisValue>(), Arg.Any<TimeSpan?>(), Arg.Any<When>(), Arg.Is<CommandFlags>(f => f.HasFlag(CommandFlags.DemandMaster)))
+                .Returns(_ => Task.FromResult(expectedResponse));
+        _database.StringSetAsync(_redisMultiKey, Arg.Any<RedisValue>(), Arg.Any<TimeSpan?>(), Arg.Any<When>(), Arg.Is<CommandFlags>(f => f.HasFlag(CommandFlags.DemandMaster)))
+                .Returns(_ => Task.FromResult(expectedResponse));
+        _transaction.ExecuteAsync().Returns(_ => Task.FromResult(expectedResponse));
+        bool? actualResponse = default;
+        if (expirationType == typeof(TimeSpan))
+        {
+            actualResponse = await Sut.SetAsync(new KeyValuePair<CacheKey, string?>[] { new(_cacheKey, value), new(_multiKey, value) }, _fixture.Create<TimeSpan>(), CancellationToken.None);
+        }
+        else if (expirationType == typeof(DateTimeOffset))
+        {
+            actualResponse = await Sut.SetAsync(new KeyValuePair<CacheKey, string?>[] { new(_cacheKey, value), new(_multiKey, value) }, _fixture.Create<DateTimeOffset>(), CancellationToken.None);
+        }
+        else
+        {
+            actualResponse = await Sut.SetAsync(new KeyValuePair<CacheKey, string?>[] { new(_cacheKey, value), new(_multiKey, value) }, CancellationToken.None);
+        }
+
+        actualResponse.Should().Be(expectedResponse);
+        await _database.Received(1).StringSetAsync(_redisKey, Arg.Any<RedisValue>(), Arg.Any<TimeSpan?>(), Arg.Any<When>(), Arg.Is<CommandFlags>(f => f.HasFlag(CommandFlags.DemandMaster)));
+        await _database.Received(1).StringSetAsync(_redisMultiKey, Arg.Any<RedisValue>(), Arg.Any<TimeSpan?>(), Arg.Any<When>(), Arg.Is<CommandFlags>(f => f.HasFlag(CommandFlags.DemandMaster)));
     }
 }

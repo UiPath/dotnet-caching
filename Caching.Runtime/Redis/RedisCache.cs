@@ -314,7 +314,7 @@ public sealed class RedisCache : RedisCacheBase, ICache
                 else
                 {
                     var serialized = _serializer.Serialize(value);
-                    _ = _writePolicy.ExecuteAsync(() => Database.StringSetAsync(redisKey, serialized, expiration, When.Always, CommandFlags.FireAndForget), token);
+                    _ = _writePolicy.ExecuteAsync(() => Database.StringSetAsync(redisKey, serialized, expiration, When.Always, CommandFlags.DemandMaster), token);
                 }
             }
 
@@ -428,6 +428,7 @@ public sealed class RedisCache : RedisCacheBase, ICache
         {
             operation.Stop();
             _logger.LogWarning(ex, LogWarnMessage);
+            retValues = keys.Select((k, i) => new KeyValuePair<CacheKey, T?>(k, default)).ToArray();
         }
         finally
         {

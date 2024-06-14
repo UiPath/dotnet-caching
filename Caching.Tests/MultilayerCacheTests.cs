@@ -25,6 +25,8 @@ public class MultilayerCacheTests : IAsyncLifetime
     private TopicKey _topicKey = default!;
     private CacheKey _cacheKey = default!;
     private CacheKey _innerCacheKey = default!;
+    private CacheKey _multiKey = default!;
+    private CacheKey _innerMultiKey = default!;
 
     private MultilayerCache? _sut = null;
 
@@ -63,6 +65,50 @@ public class MultilayerCacheTests : IAsyncLifetime
     {
         string? ns = null;
         Func<Task> act = async () => await Sut.GetAsync<object>(ns!, token: CancellationToken.None);
+        await act.Should().ThrowAsync<ArgumentNullException>();
+    }
+
+    [Fact]
+    public async Task Multi_get_data_from_inner_cache()
+    {
+        var expected = _fixture.Create<string>();
+        _innerCache.GetAsync<string>(Arg.Is<CacheKey[]>(k => k.Contains(_innerCacheKey) && k.Contains(_innerMultiKey)), token: CancellationToken.None)
+            .Returns(new KeyValuePair<CacheKey, string?>[] { new (_innerCacheKey, expected ), new ( _innerMultiKey, expected ) });
+
+        var actual = await Sut.GetAsync<string>(new CacheKey[] { _cacheKey, _multiKey }, token: CancellationToken.None);
+        _changeTokenFactory.Received(1).Create(_innerCacheKey, Arg.Any<ITopic<ICacheEvent>>(), Arg.Any<string>(), Arg.Any<Type>());
+        _memoryCache.Received(1).CreateEntry(_innerCacheKey);
+        _changeTokenFactory.Received(1).Create(_innerMultiKey, Arg.Any<ITopic<ICacheEvent>>(), Arg.Any<string>(), Arg.Any<Type>());
+        _memoryCache.Received(1).CreateEntry(_innerMultiKey);
+        actual.Should().BeEquivalentTo(new KeyValuePair<CacheKey, string?>[] { new (_cacheKey, expected), new (_multiKey, expected) });
+    }
+
+    [Fact]
+    public async Task Multi_get_data_from_memory_cache()
+    {
+        var expected = _fixture.Create<string>();
+        _memoryCache.TryGetValue(_innerCacheKey, out Arg.Any<object?>())
+            .Returns(x =>
+            {
+                x[1] = new TestCacheEntry<string> { Value = expected };
+                return true;
+            });
+        _memoryCache.TryGetValue(_innerMultiKey, out Arg.Any<object?>())
+            .Returns(x =>
+            {
+                x[1] = new TestCacheEntry<string> { Value = expected };
+                return true;
+            });
+        var actual = await Sut.GetAsync<string>(new CacheKey[] { _cacheKey, _multiKey }, token: CancellationToken.None);
+        actual.Should().BeEquivalentTo(new KeyValuePair<CacheKey, string?>[] { new(_cacheKey, expected), new(_multiKey, expected) });
+        await _innerCache.DidNotReceive().GetAsync<string>(Arg.Any<CacheKey[]>(), Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task Multi_get_null_key()
+    {
+        string? ns = null;
+        Func<Task> act = async () => await Sut.GetAsync<object>(new CacheKey[] { ns! }, token: CancellationToken.None);
         await act.Should().ThrowAsync<ArgumentNullException>();
     }
 
@@ -212,6 +258,74 @@ public class MultilayerCacheTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task Multi_set_default_value()
+    {
+        _topic.PublishAsync(Arg.Any<ICacheEvent>(), Arg.Any<CancellationToken>())
+            .Returns(_ => true);
+        _innerCache.GetAsync<string>(_innerCacheKey, token: CancellationToken.None)
+            .Returns(default(string?));
+        _innerCache.GetAsync<string>(_innerMultiKey, token: CancellationToken.None)
+            .Returns(default(string?));
+
+        var actual = await Sut.SetAsync(new KeyValuePair<CacheKey, string>[] { new ( _cacheKey, default(string) ), new ( _multiKey, default(string) ) }, _fixture.Create<TimeSpan>(), CancellationToken.None);
+        _memoryCache.Received(1).Remove(_innerCacheKey);
+        _memoryCache.Received(1).Remove(_innerMultiKey);
+        await _innerCache.Received(1).RemoveAsync<string>(Arg.Is<CacheKey[]>(c => c.Contains(_innerMultiKey) && c.Contains(_innerCacheKey)), Arg.Any<CancellationToken>());
+        await _topic.Received(2).PublishAsync(Arg.Any<ICacheEvent>(), Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task Multi_set_default_value_default_expiration()
+    {
+        _topic.PublishAsync(Arg.Any<ICacheEvent>(), Arg.Any<CancellationToken>())
+            .Returns(_ => true);
+        _innerCache.GetAsync<string>(_innerCacheKey, token: CancellationToken.None)
+            .Returns(default(string?));
+        _innerCache.GetAsync<string>(_innerMultiKey, token: CancellationToken.None)
+            .Returns(default(string?));
+
+        var actual = await Sut.SetAsync(new KeyValuePair<CacheKey, string>[] { new(_cacheKey, default(string)), new(_multiKey, default(string)) }, CancellationToken.None);
+        _memoryCache.Received(1).Remove(_innerCacheKey);
+        _memoryCache.Received(1).Remove(_innerMultiKey);
+        await _innerCache.Received(1).RemoveAsync<string>(Arg.Is<CacheKey[]>(c => c.Contains(_innerMultiKey) && c.Contains(_innerCacheKey)), Arg.Any<CancellationToken>());
+        await _topic.Received(2).PublishAsync(Arg.Any<ICacheEvent>(), Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task Multi_set_value_value()
+    {
+        var value = _fixture.Create<string>();
+        _innerCache.GetAsync<string>(_innerCacheKey, token: CancellationToken.None)
+            .Returns(default(string?));
+        _innerCache.GetAsync<string>(_innerMultiKey, token: CancellationToken.None)
+            .Returns(default(string?));
+        _topic.PublishAsync(Arg.Any<ICacheEvent>(), token: CancellationToken.None)
+            .Returns(_ => true);
+
+        var actual = await Sut.SetAsync(new KeyValuePair<CacheKey, string>[] { new(_cacheKey, value), new(_multiKey, value) }, _fixture.Create<TimeSpan>(), CancellationToken.None);
+        _memoryCache.Received(0).Remove(_innerCacheKey);
+        _memoryCache.Received(0).Remove(_innerMultiKey);
+        await _innerCache.Received(0).RemoveAsync<string>(Arg.Is<CacheKey[]>(c => c.Contains(_innerMultiKey) || c.Contains(_innerCacheKey)), Arg.Any<CancellationToken>());
+        _memoryCache.Received(1).CreateEntry(_innerCacheKey);
+        _memoryCache.Received(1).CreateEntry(_innerMultiKey);
+        await _topic.Received(2).PublishAsync(Arg.Any<ICacheEvent>(), Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task Multi_set_value_inner_cache_throw_exception()
+    {
+        var value = _fixture.Create<string>();
+        _innerCache.SetAsync(Arg.Any<KeyValuePair<CacheKey, string?>[]>(), Arg.Any<DateTimeOffset>(), Arg.Any<CancellationToken>())
+            .ThrowsAsync(new Exception());
+
+        var actual = await Sut.SetAsync(new KeyValuePair<CacheKey, string>[] { new(_cacheKey, default(string)), new(_multiKey, default(string)) }, _fixture.Create<TimeSpan>(), CancellationToken.None);
+        actual.Should().BeFalse();
+
+        actual = await Sut.SetAsync(new KeyValuePair<CacheKey, string>[] { new(_cacheKey, default(string)), new(_multiKey, default(string)) }, CancellationToken.None);
+        actual.Should().BeFalse();
+    }
+
+    [Fact]
     public async Task Remove_default_value()
     {
         _innerCache.GetAsync<string>(_innerCacheKey, token: CancellationToken.None)
@@ -327,6 +441,120 @@ public class MultilayerCacheTests : IAsyncLifetime
         token.HasChanged = true;
         _memoryCache.TryGetValue(_innerCacheKey, out _).Should().BeFalse();
     }
+
+    [Theory]
+    [InlineData(false, false, false)]
+    [InlineData(true, true, true)]
+    [InlineData(true, false, false)]
+    [InlineData(false, true, false)]
+    public async Task Multi_remove_default_value_error(bool removed, bool eventPublished, bool expected)
+    {
+        _innerCache.GetAsync<string>(_innerCacheKey, token: CancellationToken.None)
+            .Returns(default(string?));
+        _innerCache.GetAsync<string>(_innerMultiKey, token: CancellationToken.None)
+            .Returns(default(string?));
+
+        _innerCache.RemoveAsync<string>(Arg.Is<CacheKey[]>(c => c.Contains(_innerMultiKey) && c.Contains(_innerCacheKey)), CancellationToken.None)
+            .Returns(_ => removed);
+        _topic.PublishAsync(Arg.Any<ICacheEvent>(), Arg.Any<CancellationToken>())
+            .Returns(_ => eventPublished);
+        var actual = await Sut.RemoveAsync<string>(new CacheKey[] { _cacheKey, _multiKey }, token: CancellationToken.None);
+        _memoryCache.Received(1).Remove(_innerCacheKey);
+        if (eventPublished)
+        {
+            // Removal is skipped if publishing fails
+            _memoryCache.Received(1).Remove(_innerMultiKey);
+            await _innerCache.Received(1).RemoveAsync<string>(Arg.Is<CacheKey[]>(c => c.Contains(_innerMultiKey) && c.Contains(_innerCacheKey)), Arg.Any<CancellationToken>());
+        }
+        
+        // If one event is not published, the second event publish is skipped
+        await _topic.Received(eventPublished ? 2 : 1).PublishAsync(Arg.Any<ICacheEvent>(), Arg.Any<CancellationToken>());
+        actual.Should().Be(expected);
+    }
+
+    [Fact]
+    public async Task Multi_remove_evict_active_token()
+    {
+        _memoryCache = new MemoryCache(Options.Create(new MemoryCacheOptions
+        {
+            Clock = _clock,
+            CompactionPercentage = 0.3,
+            ExpirationScanFrequency = TimeSpan.FromSeconds(2),
+        }));
+
+        var expected = _fixture.Create<string>();
+        _innerCache.GetAsync<string>(_innerCacheKey, token: CancellationToken.None)
+            .Returns(expected);
+        var token = new TestChangeToken
+        {
+            ActiveChangeCallbacks = true,
+            HasChanged = false
+        };
+        _changeTokenFactory.Create(_innerCacheKey, Arg.Any<ITopic<ICacheEvent>>(), Arg.Any<string>(), Arg.Any<Type>())
+            .Returns(c => token);
+        var fi = _fixture.Create<IOptions<InMemoryRedisCacheOptions>>();
+        var actual = await Sut.GetAsync<string>(new CacheKey[] { _cacheKey }, token: CancellationToken.None);
+        await Sut.RemoveAsync<string>(new CacheKey[] { _cacheKey });
+        await token.AssertIsDisposed();
+    }
+
+    [Fact]
+    public async Task Multi_remove_evict_active_token_callback()
+    {
+        _memoryCache = new MemoryCache(Options.Create(new MemoryCacheOptions
+        {
+            Clock = _clock
+        }));
+
+        var expected = _fixture.Create<string>();
+
+        _innerCache.GetAsync<string>(_innerCacheKey, token: CancellationToken.None)
+            .Returns(expected);
+        _innerCache.ExpireTimeAsync<string>(_innerCacheKey, token: CancellationToken.None)
+            .Returns((DateTimeOffset?)_clock.UtcNow.AddDays(1));
+        var token = new TestChangeToken
+        {
+            ActiveChangeCallbacks = true,
+            HasChanged = false
+        };
+        _changeTokenFactory.Create(_innerCacheKey, Arg.Any<ITopic<ICacheEvent>>(), Arg.Any<string>(), Arg.Any<Type>())
+            .Returns(c => token);
+        var actual = await Sut.GetAsync<string>(new CacheKey[] { _cacheKey }, token: CancellationToken.None);
+        token.HasChanged = true;
+        token.InvokeCallbacks();
+        _memoryCache.TryGetValue(_innerCacheKey, out _).Should().BeFalse();
+    }
+
+    [Fact]
+    public async Task Multi_remove_evict_token_non_active()
+    {
+        _clock = _fixture.Freeze<ISystemClock>();
+        var now = DateTimeOffset.UtcNow;
+        _clock.UtcNow.Returns(now);
+        _memoryCache = new MemoryCache(Options.Create(new MemoryCacheOptions
+        {
+            Clock = _clock,
+        }));
+
+        var expected = _fixture.Create<string>();
+        _innerCache.GetAsync<string>(_innerCacheKey, token: CancellationToken.None)
+            .Returns(expected);
+        _innerCache.ExpireTimeAsync<string>(_innerCacheKey, token: CancellationToken.None)
+            .Returns((DateTimeOffset?)now.AddDays(1));
+        var token = new TestChangeToken
+        {
+            ActiveChangeCallbacks = false,
+            HasChanged = false
+        };
+
+        _changeTokenFactory.Create(_innerCacheKey, Arg.Any<ITopic<ICacheEvent>>(), Arg.Any<string>(), Arg.Any<Type>())
+            .Returns(c => token);
+        var actual = await Sut.GetAsync<string>(new CacheKey[] { _cacheKey }, token: CancellationToken.None);
+        _memoryCache.TryGetValue(_innerCacheKey, out _).Should().BeTrue();
+        token.HasChanged = true;
+        _memoryCache.TryGetValue(_innerCacheKey, out _).Should().BeFalse();
+    }
+
     [Fact]
     public async Task Refresh_value_default_expiration()
     {
@@ -516,6 +744,8 @@ public class MultilayerCacheTests : IAsyncLifetime
         _cacheKey = _fixture.Create<string>();
         _innerCacheKey = ToInnerCacheKey<string>(_cacheKey);
         _topicKey = _fixture.Create<string>();
+        _multiKey = _fixture.Create<string>();
+        _innerMultiKey = ToInnerCacheKey<string>(_multiKey);
 
         _changeTokenFactory = _fixture.Freeze<IChangeTokenFactory>();
         _memoryCache = _fixture.Freeze<IMemoryCache>();

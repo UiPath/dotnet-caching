@@ -122,6 +122,16 @@ public sealed class MultilayerCache : MultilayerCacheBase, ICache
             }
         }
         
+        foreach (var setEntry in setEntries)
+        {
+            _logger.LogDebug("Replacing cached key {}", setEntry.CacheEntry.CacheKey);
+            var fired = await _eventPublisher.CacheSetAsync(setEntry.CacheEntry).ConfigureAwait(false);
+            if (!fired)
+            {
+                return false;
+            }
+        }
+
         return await InternalSetAsync<T>(setEntries.ToArray(), token).ConfigureAwait(false);
     }
 
@@ -263,12 +273,16 @@ public sealed class MultilayerCache : MultilayerCacheBase, ICache
         }
 
         var keys = cacheEntriesToFetch.Select(c => c.CacheKey).ToArray();
+        if (keys.Length == 0)
+        {
+            return results.ToArray();
+        }
+
         var fetched = await _innerCache.GetAsync<T>(keys, token).ConfigureAwait(false);
 
         for (int i = 0; i < keys.Length; i++)
         {
             var keyValue = fetched[i];
-            results.Add(keyValue);
 
             if (IsDefault(keyValue.Value))
             {
