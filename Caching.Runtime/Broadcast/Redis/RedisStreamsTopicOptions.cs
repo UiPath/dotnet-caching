@@ -22,9 +22,9 @@ public class RedisStreamsTopicOptions
 
     public bool? ConnectionMonitorEnabled { get; set; }
 
-    public bool TrackStatistics { get; set; } = true;
+    public bool TrackStatistics { get; set; }
 
-    public bool MaintainerEnabled { get; set; } = true;
+    public bool MaintainerEnabled { get; set; }
 
     public TimeSpan MaintainerCheckInterval { get; set; } = TimeSpan.FromMinutes(30);
 

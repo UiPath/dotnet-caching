@@ -91,19 +91,21 @@ internal sealed class RedisStreamSubjectWriter<T> : IDisposable
     {
         if (ex is RedisServerException server && server.Message.Contains("NOGROUP", StringComparison.OrdinalIgnoreCase))
         {
+            _logger.LogWarning(ex, "NOGROUP. Recreating Topic {Topic}, consumer group {ConsumerGroup}, last id {LastId}", _context.Topic, _context.ConsumerGroup, _lastId);
             try
             {
                 await _redis.Database.StreamCreateConsumerGroupAsync(_context.Topic, _context.ConsumerGroup, _lastId);
                 return true;
             }
-            catch
+            catch(Exception ex2)
             {
-                // no op
+                _logger.LogError(ex2, "Recreating topic exception.");
             }
         }
 
         if (ex is TaskCanceledException cancel && cancel.CancellationToken == _cancelationToken)
         {
+            _logger.LogDebug("Reading topic {Topic}, consumer group {ConsumerGroup} stopped at {Id}", _context.Topic, _context.ConsumerGroup, _lastId);
             return false;
         }
 
@@ -156,7 +158,7 @@ internal sealed class RedisStreamSubjectWriter<T> : IDisposable
             }
         }
 
-        if(ids.Count == 0)
+        if (ids.Count == 0)
         {
             return;
         }

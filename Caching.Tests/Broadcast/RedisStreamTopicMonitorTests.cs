@@ -22,14 +22,10 @@ public class RedisStreamHealthMaintainerTests : IAsyncLifetime
     private bool _ownLock = true;
     private RedisValue _quarantineValue = RedisValue.Null;
     private bool _successStreamDeleteConsumerGroup = true; 
-    private RedisValue _clientsResponse = @"""
-id=18734367 addr=40.125.125.100:5120 fd=14 name=automation-solutions-service-primary-7c5445785d-rrrq2 age=3970 idle=1 flags=N db=0 sub=0 psub=0 multi=-1 qbuf=0 qbuf-free=0 argv-mem=0 obl=0 oll=0 omem=0 tot-mem=20496 ow=0 owmem=0 events=r cmd=ping user=default lib-name=SE.Redis lib-ver=2.7.33.41805 numops=3981
-
-id=18750907 addr=20.62.229.253:30725 fd=48 name=automation-solutions-service-primary-659df94c58-rt78s age=2887 idle=1 flags=N db=0 sub=0 psub=0 multi=-1 qbuf=0 qbuf-free=0 argv-mem=0 obl=0 oll=0 omem=0 tot-mem=20496 ow=0 owmem=0 events=r cmd=ping user=default lib-name=SE.Redis lib-ver=2.7.33.41805 numops=2898
-id=18750908 addr=20.62.229.253:30726 fd=47 name=automation-solutions-service-primary-659df94c58-rt78s age=2887 idle=16 flags=P db=0 sub=2 psub=0 multi=-1 qbuf=0 qbuf-free=0 argv-mem=0 obl=0 oll=0 omem=0 tot-mem=20496 ow=0 owmem=0 events=r cmd=ping user=default lib-name=SE.Redis lib-ver=2.7.33.41805 numops=104
-""";
 
     private RedisValue[] _streams = ["stream1", "stream2"];
+    private ITransaction _transaction = default!;
+    private bool _transactionSuccess = true;
 
     private RedisStreamHealthMaintainer Sut => _sut ??= new RedisStreamHealthMaintainer(
         _redisConnector,
@@ -44,7 +40,7 @@ id=18750908 addr=20.62.229.253:30726 fd=47 name=automation-solutions-service-pri
     {
         _ownLock = false;
         await Sut.CheckStreamsAsync(CancellationToken.None);
-        await _database.DidNotReceive().ExecuteAsync(Arg.Any<string>(), Arg.Any<object>());
+        await _database.DidNotReceive().ExecuteAsync(Arg.Any<string>(), Arg.Any<ICollection<object>?>(), Arg.Any<CommandFlags>());
         _telemetryProvider.DidNotReceive().TrackMetric(Arg.Any<string>(), Arg.Any<double>(), Arg.Any<IDictionary<string, string>?>());
     }
 
@@ -53,14 +49,25 @@ id=18750908 addr=20.62.229.253:30726 fd=47 name=automation-solutions-service-pri
     {
         Sut.Initialize();
         await Sut.CheckStreamsAsync(CancellationToken.None);
-        await _database.Received().ExecuteAsync(Arg.Any<string>(), Arg.Any<object>());
+        await _database.Received().ExecuteAsync(Arg.Any<string>(), Arg.Any<ICollection<object>?>(), Arg.Any<CommandFlags>());
         _telemetryProvider.Received().TrackMetric(Arg.Any<string>(), Arg.Any<double>(), Arg.Any<IDictionary<string, string>?>());
     }
 
     [Fact]
-    public async Task DeleteStreamsWithNoConsumerGroups()
+    public async Task StreamsWithNoConsumerGroups_and_new_message_are_not_deleted()
     {
         Sut.Initialize();
+        _lastGeneratedId = $"{DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()}-0";
+        await Sut.CheckStreamsAsync(CancellationToken.None);
+        await _database.DidNotReceive().ExecuteAsync(Arg.Is<string>(s => s == "DEL"), Arg.Any<ICollection<object>?>(), Arg.Any<CommandFlags>());
+        await _database.DidNotReceive().StreamGroupInfoAsync(Arg.Any<RedisKey>(), CommandFlags.DemandMaster);
+    }
+
+    [Fact]
+    public async Task StreamsWithNoConsumerGroups_and_old_message_are_deleted()
+    {
+        Sut.Initialize();
+        _lastGeneratedId = $"{DateTimeOffset.UtcNow.Subtract(_streamOptions.MaintainerQuarantineInterval).Subtract(TimeSpan.FromMinutes(1)).ToUnixTimeMilliseconds()}-0";
         await Sut.CheckStreamsAsync(CancellationToken.None);
         await _database.Received().ExecuteAsync(Arg.Is<string>(s => s == "DEL"), Arg.Any<ICollection<object>?>(), Arg.Any<CommandFlags>());
         await _database.DidNotReceive().StreamGroupInfoAsync(Arg.Any<RedisKey>(), CommandFlags.DemandMaster);
@@ -74,6 +81,17 @@ id=18750908 addr=20.62.229.253:30726 fd=47 name=automation-solutions-service-pri
         Sut.Initialize();
         await Sut.CheckStreamsAsync(CancellationToken.None);
         await _database.Received().HashSetAsync(Arg.Any<RedisKey>(), Arg.Any<RedisValue>(), Arg.Any<RedisValue>(), When.Always, CommandFlags.DemandMaster);
+    }
+
+    [Fact]
+    public async Task No_Quarantine_if_transaction_fails()
+    {
+        _transactionSuccess = false;
+        var g1 = GenerateGroupInfo(DateTimeOffset.UtcNow.Subtract(TimeSpan.FromMilliseconds(10)), 0);
+        _streamGroupInfos = [g1];
+        Sut.Initialize();
+        await Sut.CheckStreamsAsync(CancellationToken.None);
+        await _database.DidNotReceive().HashSetAsync(Arg.Any<RedisKey>(), Arg.Any<RedisValue>(), Arg.Any<RedisValue>(), When.Always, CommandFlags.DemandMaster);
     }
 
     [Fact]
@@ -170,8 +188,6 @@ id=18750908 addr=20.62.229.253:30726 fd=47 name=automation-solutions-service-pri
         _database.LockTakeAsync(Arg.Any<RedisKey>(), Arg.Any<RedisValue>(), Arg.Any<TimeSpan>(), Arg.Any<CommandFlags>())
             .Returns(c => _ownLock);
 
-        _database.ExecuteAsync(Arg.Is<string>(s => s == "CLIENT"), Arg.Is<object[]>(a => a.OfType<string>().FirstOrDefault() == "LIST"))
-            .Returns(c => RedisResult.Create(_clientsResponse));
         _database.ExecuteAsync(Arg.Is<string>(s => s == "SCAN"), Arg.Any<ICollection<object>?>(), Arg.Any<CommandFlags>())
             .Returns(c =>
             {
@@ -186,7 +202,7 @@ id=18750908 addr=20.62.229.253:30726 fd=47 name=automation-solutions-service-pri
         _database.ExecuteAsync(Arg.Is<string>(s => s == "XTRIM"), Arg.Any<ICollection<object>?>(), Arg.Any<CommandFlags>())
             .Returns(c => RedisResult.Create(_fixture.Create<ulong>()));
 
-        _database.HashGetAsync(Arg.Is<RedisKey>(k => k.ToString().Contains("quarantine", StringComparison.OrdinalIgnoreCase)), Arg.Any<RedisValue>(), CommandFlags.PreferReplica)
+        _database.HashGetAsync(Arg.Is<RedisKey>(k => k.ToString().Contains("stream", StringComparison.OrdinalIgnoreCase)), Arg.Any<RedisValue>(), CommandFlags.PreferReplica)
             .Returns(c => _quarantineValue);
 
         _database.StreamDeleteConsumerGroupAsync(Arg.Any<RedisKey>(), Arg.Any<RedisValue>(), Arg.Any<CommandFlags>())
@@ -195,6 +211,8 @@ id=18750908 addr=20.62.229.253:30726 fd=47 name=automation-solutions-service-pri
         _database.StreamConsumerInfoAsync(Arg.Any<RedisKey>(), Arg.Any<RedisValue>(), Arg.Any<CommandFlags>())
             .Returns(c => _streamConsumerInfos);
 
+        _transaction = _fixture.Freeze<ITransaction>();
+        _transaction.ExecuteAsync().Returns(c => _transactionSuccess);
         return Task.CompletedTask;
     }
 
