@@ -86,7 +86,7 @@ internal sealed class RedisStreamSubjectWriter<T> : IDisposable
         {
             await DispatchEventsAsync(events);
             _lastId = events[^1].Id;
-            _cachingTelemetryProvider.TrackTopicReadMetric(_context.Topic!, (double)_lastId);
+            _cachingTelemetryProvider.TrackTopicReadMetric(_context.Topic!, _lastId);
             return;
         }
         await Task.Delay(_context.PollInterval, _cancelationToken);

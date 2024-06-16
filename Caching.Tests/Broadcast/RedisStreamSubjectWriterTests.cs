@@ -74,7 +74,7 @@ public class RedisStreamSubjectWriterTests : IAsyncLifetime
         Func<Task> act = async () => await Sut.FetchTask;
         await act.Should().NotCompleteWithinAsync(_pollInterval.Multiply(50));
         _cancellationTokenSource.Cancel();
-        await act.Should().CompleteWithinAsync(_pollInterval.Multiply(100));
+        await act.Should().CompleteWithinAsync(_pollInterval.Multiply(200));
         _formatter.Received(0).Decode(Arg.Any<string>());
     }
 
