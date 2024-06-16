@@ -267,7 +267,7 @@ public class MultilayerCacheTests : IAsyncLifetime
         _innerCache.GetAsync<string>(_innerMultiKey, token: CancellationToken.None)
             .Returns(default(string?));
 
-        var actual = await Sut.SetAsync(new KeyValuePair<CacheKey, string>[] { new ( _cacheKey, default(string) ), new ( _multiKey, default(string) ) }, _fixture.Create<TimeSpan>(), CancellationToken.None);
+        var actual = await Sut.SetAsync(new KeyValuePair<CacheKey, string?>[] { new ( _cacheKey, default(string) ), new ( _multiKey, default(string) ) }, _fixture.Create<TimeSpan>(), CancellationToken.None);
         _memoryCache.Received(1).Remove(_innerCacheKey);
         _memoryCache.Received(1).Remove(_innerMultiKey);
         await _innerCache.Received(1).RemoveAsync<string>(Arg.Is<CacheKey[]>(c => c.Contains(_innerMultiKey) && c.Contains(_innerCacheKey)), Arg.Any<CancellationToken>());
@@ -284,7 +284,7 @@ public class MultilayerCacheTests : IAsyncLifetime
         _innerCache.GetAsync<string>(_innerMultiKey, token: CancellationToken.None)
             .Returns(default(string?));
 
-        var actual = await Sut.SetAsync(new KeyValuePair<CacheKey, string>[] { new(_cacheKey, default(string)), new(_multiKey, default(string)) }, CancellationToken.None);
+        var actual = await Sut.SetAsync(new KeyValuePair<CacheKey, string?>[] { new(_cacheKey, default(string)), new(_multiKey, default(string)) }, CancellationToken.None);
         _memoryCache.Received(1).Remove(_innerCacheKey);
         _memoryCache.Received(1).Remove(_innerMultiKey);
         await _innerCache.Received(1).RemoveAsync<string>(Arg.Is<CacheKey[]>(c => c.Contains(_innerMultiKey) && c.Contains(_innerCacheKey)), Arg.Any<CancellationToken>());
@@ -302,7 +302,7 @@ public class MultilayerCacheTests : IAsyncLifetime
         _topic.PublishAsync(Arg.Any<ICacheEvent>(), token: CancellationToken.None)
             .Returns(_ => true);
 
-        var actual = await Sut.SetAsync(new KeyValuePair<CacheKey, string>[] { new(_cacheKey, value), new(_multiKey, value) }, _fixture.Create<TimeSpan>(), CancellationToken.None);
+        var actual = await Sut.SetAsync(new KeyValuePair<CacheKey, string?>[] { new(_cacheKey, value), new(_multiKey, value) }, _fixture.Create<TimeSpan>(), CancellationToken.None);
         _memoryCache.Received(0).Remove(_innerCacheKey);
         _memoryCache.Received(0).Remove(_innerMultiKey);
         await _innerCache.Received(0).RemoveAsync<string>(Arg.Is<CacheKey[]>(c => c.Contains(_innerMultiKey) || c.Contains(_innerCacheKey)), Arg.Any<CancellationToken>());
@@ -318,10 +318,10 @@ public class MultilayerCacheTests : IAsyncLifetime
         _innerCache.SetAsync(Arg.Any<KeyValuePair<CacheKey, string?>[]>(), Arg.Any<DateTimeOffset>(), Arg.Any<CancellationToken>())
             .ThrowsAsync(new Exception());
 
-        var actual = await Sut.SetAsync(new KeyValuePair<CacheKey, string>[] { new(_cacheKey, default(string)), new(_multiKey, default(string)) }, _fixture.Create<TimeSpan>(), CancellationToken.None);
+        var actual = await Sut.SetAsync(new KeyValuePair<CacheKey, string?>[] { new(_cacheKey, default(string)), new(_multiKey, default(string)) }, _fixture.Create<TimeSpan>(), CancellationToken.None);
         actual.Should().BeFalse();
 
-        actual = await Sut.SetAsync(new KeyValuePair<CacheKey, string>[] { new(_cacheKey, default(string)), new(_multiKey, default(string)) }, CancellationToken.None);
+        actual = await Sut.SetAsync(new KeyValuePair<CacheKey, string?>[] { new(_cacheKey, default(string)), new(_multiKey, default(string)) }, CancellationToken.None);
         actual.Should().BeFalse();
     }
 

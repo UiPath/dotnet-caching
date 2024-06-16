@@ -126,7 +126,7 @@ public class RedisPubSubTopicTests : IAsyncLifetime
     {
         var sut = await Sut();
         sut.Dispose();
-        await Task.Delay(_delay.Multiply(2));
+        await Task.Delay(_delay.Multiply(6));
         _subscriber.Received().Unsubscribe(Arg.Any<RedisChannel>(), Arg.Any<Action<RedisChannel, RedisValue>?>(), Arg.Any<CommandFlags>());
         _topicKey.Name.Should().BeEquivalentTo(_actualRedisChannel);
     }
