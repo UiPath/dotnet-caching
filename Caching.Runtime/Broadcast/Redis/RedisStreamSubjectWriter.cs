@@ -1,4 +1,5 @@
 ﻿using System.Threading.Channels;
+using UiPath.Platform.Caching.Telemetry;
 
 namespace UiPath.Platform.Caching.Broadcast.Redis;
 
@@ -11,6 +12,7 @@ internal sealed class RedisStreamSubjectWriter<T> : IDisposable
     private readonly ChannelWriter<T> _writer;
     private readonly IEventFormatterProxy<T> _formatter;
     private readonly ILogger _logger;
+    private readonly ICachingTelemetryProvider _cachingTelemetryProvider;
     private readonly CancellationTokenSource _stopTokenSource;
     private readonly CancellationToken _cancelationToken;
     private RedisValue _lastId = StreamPosition.NewMessages;
@@ -21,6 +23,7 @@ internal sealed class RedisStreamSubjectWriter<T> : IDisposable
         ChannelWriter<T> channelWriter,
         IEventFormatterProxy<T> formatter,
         ILogger logger,
+        ICachingTelemetryProvider cachingTelemetryProvider,
         CancellationToken stopToken)
     {
         _context = context;
@@ -28,6 +31,7 @@ internal sealed class RedisStreamSubjectWriter<T> : IDisposable
         _writer = channelWriter;
         _formatter = formatter;
         _logger = logger;
+        _cachingTelemetryProvider = cachingTelemetryProvider;
         _stopTokenSource = CancellationTokenSource.CreateLinkedTokenSource(stopToken);
         _cancelationToken = _stopTokenSource.Token;
         FetchTask = Task.Run(FetchLoop, _cancelationToken);
@@ -82,6 +86,7 @@ internal sealed class RedisStreamSubjectWriter<T> : IDisposable
         {
             await DispatchEventsAsync(events);
             _lastId = events[^1].Id;
+            _cachingTelemetryProvider.TrackTopicReadMetric(_context.Topic!, (double)_lastId);
             return;
         }
         await Task.Delay(_context.PollInterval, _cancelationToken);
@@ -145,6 +150,7 @@ internal sealed class RedisStreamSubjectWriter<T> : IDisposable
                 {
                     _logger.LogTrace("Event received. Id {EventId}  Topic : {Topic}", ev.Id, _context.Topic);
                     _writer.TryWrite(ev);
+                    _cachingTelemetryProvider.TrackTopicReadMetric(_context.Topic!, @event.Id);
                 }
                 else
                 {

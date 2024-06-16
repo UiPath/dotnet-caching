@@ -270,7 +270,8 @@ public sealed class RedisCache : RedisCacheBase, ICache
         {
             if (IsDefault(value))
             {
-                ret = await RemoveAsync(redisKey, token).ConfigureAwait(false);
+                await RemoveAsync(redisKey, token).ConfigureAwait(false);
+                ret = true;
             }
             else
             {
@@ -341,7 +342,8 @@ public sealed class RedisCache : RedisCacheBase, ICache
         var operation = StartOperation();
         try
         {
-            ret = await _writePolicy.ExecuteAsync(() => Database.KeyDeleteAsync(redisKey, CommandFlags.DemandMaster), token).ConfigureAwait(false);
+            await _writePolicy.ExecuteAsync(() => Database.KeyDeleteAsync(redisKey, CommandFlags.DemandMaster), token).ConfigureAwait(false);
+            ret = true;
             operation.Stop();
         }
         catch (Exception ex)

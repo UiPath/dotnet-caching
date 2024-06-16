@@ -1,5 +1,6 @@
 ﻿using System.Reactive.Subjects;
 using UiPath.Platform.Caching.Policies;
+using UiPath.Platform.Caching.Telemetry;
 
 namespace UiPath.Platform.Caching.Broadcast.Redis;
 
@@ -9,6 +10,7 @@ public class RedisStreamsTopicProvider : RedisTopicProviderBase
     private readonly CacheOptions _cacheOptions;
     private readonly IEventFormatterProxy<ICacheEvent> _formatter;
     private readonly ILoggerFactory _loggerFactory;
+    private readonly ICachingTelemetryProvider _cachingTelemetryProvider;
     private readonly IPolicyHolder _policyHolder;
     private readonly CancellationTokenSource _stopTokenSource = new();
     private bool _disposed;
@@ -20,7 +22,8 @@ public class RedisStreamsTopicProvider : RedisTopicProviderBase
         IRedisConnector redis,
         IEventFormatterProxy<ICacheEvent> formatter,
         IPolicyHolder policyHolder,
-        ILoggerFactory loggerFactory)
+        ILoggerFactory loggerFactory,
+        ICachingTelemetryProvider cachingTelemetryProvider)
         : base(redis, redisStreamsTopicOptionsAccessor.Value.ConnectionMonitorEnabled ?? cacheOptionsAccessor.Value.ConnectionMonitorEnabled)
     {
         _redisStreamsTopicOptions = redisStreamsTopicOptionsAccessor.Value;
@@ -28,6 +31,7 @@ public class RedisStreamsTopicProvider : RedisTopicProviderBase
         _policyHolder = policyHolder;
         _formatter = formatter;
         _loggerFactory = loggerFactory;
+        _cachingTelemetryProvider = cachingTelemetryProvider;
         Enabled = connectionOptionsAccessor.Value.Enabled && _redisStreamsTopicOptions.Enabled;
     }
 
@@ -45,6 +49,7 @@ public class RedisStreamsTopicProvider : RedisTopicProviderBase
             _redisStreamsTopicOptions,
             _cacheOptions,
             _loggerFactory.Create<RedisStreamsTopic<ICacheEvent>>(),
+            _cachingTelemetryProvider,
             _stopTokenSource.Token);
 
     protected override void Dispose(bool disposing)

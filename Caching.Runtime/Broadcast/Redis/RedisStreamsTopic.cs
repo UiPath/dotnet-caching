@@ -1,5 +1,7 @@
 ﻿using System.Reactive.Subjects;
 using UiPath.Platform.Caching.Policies;
+using UiPath.Platform.Caching.Telemetry;
+using UiPath.Platform.Telemetry;
 
 namespace UiPath.Platform.Caching.Broadcast.Redis;
 
@@ -17,6 +19,7 @@ public sealed class RedisStreamsTopic<T> : ITopic<T>
     private readonly IEventFormatterProxy<T> _formatter;
     private readonly IPolicyExecutor _writePolicy;
     private readonly ILogger _logger;
+    private readonly ICachingTelemetryProvider _cachingTelemetryProvider;
     private readonly RedisStreamsTopicOptions _streamOptions;
     private readonly EventDispatcher<T> _dispatcher;
     private readonly object _syncObj = new();
@@ -36,6 +39,7 @@ public sealed class RedisStreamsTopic<T> : ITopic<T>
         RedisStreamsTopicOptions streamOptions,
         CacheOptions cacheOptions,
         ILogger<RedisStreamsTopic<T>> logger,
+        ICachingTelemetryProvider cachingTelemetryProvider,
         CancellationToken stopToken)
     {
         TopicKey = topicKey;
@@ -44,12 +48,13 @@ public sealed class RedisStreamsTopic<T> : ITopic<T>
         _stopTokenSource = CancellationTokenSource.CreateLinkedTokenSource(stopToken);
         _redis = redis;
         _logger = logger;
+        _cachingTelemetryProvider = cachingTelemetryProvider;
         _streamOptions = streamOptions;
         _subject = subjectFactory();
         _redisStreamKeyStrategy = streamOptions.RedisStreamKeyStrategy ?? new PrefixStrategy(RedisTypePrefixes.Streams, cacheOptions);
         _context = GetContext(topicKey, cacheOptions, streamOptions);
         var channel = ChannelHelper.Create<T>(streamOptions.ConsumerCapacity < 0, streamOptions.ConsumerCapacity > 0 ? streamOptions.ConsumerCapacity : streamOptions.PollBatchSize , streamOptions.FullMode);
-        _subscriber = new RedisStreamSubjectWriter<T>(_context, _redis, channel, _formatter, _logger, _stopTokenSource.Token);
+        _subscriber = new RedisStreamSubjectWriter<T>(_context, _redis, channel, _formatter, _logger, _cachingTelemetryProvider, _stopTokenSource.Token);
         _dispatcher = new EventDispatcher<T>(topicKey, channel, _subject, _logger, _stopTokenSource.Token);
     }
 
@@ -81,6 +86,7 @@ public sealed class RedisStreamsTopic<T> : ITopic<T>
                 maxLength: _streamOptions.MaxLength,
                 useApproximateMaxLength: true,
                 flags: CommandFlags.DemandMaster), token).ConfigureAwait(false);
+            _cachingTelemetryProvider.TrackTopicWriteMetric(_context.Topic!, id);
             _logger.LogDebug("Published to topic {TopicKey} event {EventId} stream id {StreamId} ", TopicKey, @event.Id,  id);
             return !id.IsNull;
         }

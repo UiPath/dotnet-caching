@@ -537,8 +537,8 @@ public class MultilayerCacheTests : IAsyncLifetime
         }));
 
         var expected = _fixture.Create<string>();
-        _innerCache.GetAsync<string>(_innerCacheKey, token: CancellationToken.None)
-            .Returns(expected);
+        _innerCache.GetAsync<string>(Arg.Is<CacheKey[]>(k => k.Contains(_innerCacheKey)), token: CancellationToken.None)
+            .Returns(new KeyValuePair<CacheKey, string?>[1] {new KeyValuePair<CacheKey, string?>(_innerCacheKey, expected)});
         _innerCache.ExpireTimeAsync<string>(_innerCacheKey, token: CancellationToken.None)
             .Returns((DateTimeOffset?)now.AddDays(1));
         var token = new TestChangeToken

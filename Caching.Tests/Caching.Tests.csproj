@@ -17,7 +17,7 @@
     <PackageReference Include="AutoFixture.Xunit2" />
     <PackageReference Include="AutoFixture.AutoNSubstitute" />
     <PackageReference Include="Microsoft.NET.Test.Sdk" />
-    <PackageReference Include="xunit.runner.visualstudio" >
+    <PackageReference Include="xunit.runner.visualstudio">
       <PrivateAssets>all</PrivateAssets>
       <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
     </PackageReference>
@@ -30,6 +30,7 @@
   </ItemGroup>
 
   <ItemGroup>
+    <ProjectReference Include="..\Caching.Abstractions\Caching.Abstractions.csproj" />
     <ProjectReference Include="..\Caching.CloudEvents\Caching.CloudEvents.csproj" />
     <ProjectReference Include="..\Caching.Polly\Caching.Polly.csproj" />
     <ProjectReference Include="..\Caching.Runtime\Caching.Runtime.csproj" />

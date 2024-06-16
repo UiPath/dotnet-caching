@@ -1,6 +1,8 @@
 ﻿using System.Reflection;
 using System.Resources;
+using System.Runtime.CompilerServices;
 
+[assembly: InternalsVisibleTo("UiPath.Platform.Caching.Tests")]
 [assembly: AssemblyCompany("UiPath")]
 [assembly: AssemblyProduct("Caching library")]
 [assembly: AssemblyCopyright("Copyright © UiPath 2023")]

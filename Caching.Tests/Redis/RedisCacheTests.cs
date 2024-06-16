@@ -253,17 +253,17 @@ public class RedisCacheTests : IAsyncLifetime
     [Fact]
     public async Task Remove_works_as_expected()
     {
-        var expectedResponse = _fixture.Create<bool>();
+        var apiResponse = _fixture.Create<bool>();
         _database.KeyDeleteAsync(_redisKey, CommandFlags.DemandMaster)
-                .Returns(expectedResponse);
+                .Returns(apiResponse);
         var actualResponse = await Sut.RemoveAsync<string>(_cacheKey);
-        actualResponse.Should().Be(expectedResponse);
+        actualResponse.Should().Be(true);
     }
 
     [Fact]
     public async Task Multi_remove_redis_exception()
     {
-        _database.KeyDeleteAsync(new RedisKey[] { _redisKey }, CommandFlags.DemandMaster)
+        _database.KeyDeleteAsync(Arg.Is<RedisKey[]>(keys => keys.Contains(_redisKey )), CommandFlags.DemandMaster)
                 .ThrowsAsync(ci =>
                 {
                     return new RedisException("test");
@@ -275,11 +275,11 @@ public class RedisCacheTests : IAsyncLifetime
     [Fact]
     public async Task Multi_remove_works_as_expected()
     {
-        var expectedResponse = _fixture.Create<bool>();
+        var keyDeleteResponse = _fixture.Create<bool>();
         _database.KeyDeleteAsync(_redisKey, CommandFlags.DemandMaster)
-                .Returns(expectedResponse);
+                .Returns(keyDeleteResponse);
         var actualResponse = await Sut.RemoveAsync<string>(_cacheKey);
-        actualResponse.Should().Be(expectedResponse);
+        actualResponse.Should().Be(true);
     }
 
     [Fact]
@@ -335,14 +335,14 @@ public class RedisCacheTests : IAsyncLifetime
     {
         var value = default(string);
         var expiration = _fixture.Create<TimeSpan>();
-        var expectedResponse = _fixture.Create<bool>();
+        var apiResponse = _fixture.Create<bool>();
         _database.KeyDeleteAsync(_redisKey, CommandFlags.DemandMaster)
                 .Returns(ci =>
                 {
-                    return Task.FromResult(expectedResponse);
+                    return Task.FromResult(apiResponse);
                 });
         var actualResponse = await Sut.SetAsync(_cacheKey, value, expiration);
-        actualResponse.Should().Be(expectedResponse);
+        actualResponse.Should().Be(true);
     }
 
 
