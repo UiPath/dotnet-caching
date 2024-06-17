@@ -414,6 +414,7 @@ public sealed class RedisCache : RedisCacheBase, ICache
         token.ThrowIfCancellationRequested();
         var redisKeys = keys.Select(keys => ToRedisKey(keys, token)).ToArray();
         var operation = StartOperation<T>();
+        bool atLeastOneCacheHit = false;
         try
         {
             var values = await _readPolicy.ExecuteAsync(() => Database.StringGetAsync(redisKeys, CommandFlags.PreferReplica), token).ConfigureAwait(false);
@@ -422,6 +423,7 @@ public sealed class RedisCache : RedisCacheBase, ICache
                 var value = values[i];
                 _auditKeySize?.Invoke(redisKeys[i], value);
                 var obj = value.IsNullOrEmpty ? default : _serializer.Deserialize<T>(value);
+                atLeastOneCacheHit = atLeastOneCacheHit || obj is not null;
                 retValues[i] = new KeyValuePair<CacheKey, T?>(keys[i], obj);
             }
             operation.Stop();
@@ -434,7 +436,7 @@ public sealed class RedisCache : RedisCacheBase, ICache
         }
         finally
         {
-            //operation.Track(ret != null);
+            operation.Track(atLeastOneCacheHit);
         }
 
         return retValues;
