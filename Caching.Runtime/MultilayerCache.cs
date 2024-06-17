@@ -124,7 +124,7 @@ public sealed class MultilayerCache : MultilayerCacheBase, ICache
         
         foreach (var setEntry in setEntries)
         {
-            _logger.LogDebug("Replacing cached key {}", setEntry.CacheEntry.CacheKey);
+            _logger.LogDebug("Replacing cached key {CacheKey}", setEntry.CacheEntry.CacheKey);
             var fired = await _eventPublisher.CacheSetAsync(setEntry.CacheEntry).ConfigureAwait(false);
             if (!fired)
             {
@@ -242,7 +242,7 @@ public sealed class MultilayerCache : MultilayerCacheBase, ICache
         }
         catch (Exception ex)
         {
-            _logger.LogWarning(ex, "Inner cache remove cacheKeys {}", string.Join(",", options.Select(o => o.CacheKey)));
+            _logger.LogWarning(ex, "Inner cache remove cacheKeys {CacheKeys}", string.Join(",", options.Select(o => o.CacheKey)));
             return false;
         }
     }
@@ -255,14 +255,14 @@ public sealed class MultilayerCache : MultilayerCacheBase, ICache
         {
             if (_memoryCache.TryGetValue<ICacheEntry<T>>(option.CacheKey, out var entry))
             {
-                _logger.LogTrace("Found local. {}.", option.CacheKey);
+                _logger.LogTrace("Found local. {CacheKeys}.", option.CacheKey);
                 if (_connectionEventSource.IsConnected)
                 {
                     results.Add(new KeyValuePair<CacheKey, T?>(option.CacheKey, entry!.Value));
                 }
                 else
                 {
-                    _logger.LogTrace("Inner cache is not connected. Returning default for cacheKey {}", option.CacheKey);
+                    _logger.LogTrace("Inner cache is not connected. Returning default for cacheKey {CacheKey}", option.CacheKey);
                     _memoryCache.Remove(option.CacheKey);
                 }
             }
@@ -289,7 +289,7 @@ public sealed class MultilayerCache : MultilayerCacheBase, ICache
                 continue;
             }
 
-            _logger.LogTrace("Found inner cache copy at cacheKey {}", keyValue.Key);
+            _logger.LogTrace("Found inner cache copy at cacheKey {CacheKey}", keyValue.Key);
             var option = cacheEntriesToFetch[i];
             option.Expiration = await _innerCache.ExpireTimeAsync<T>(keyValue.Key, token).ConfigureAwait(false) ?? _clock.DefaultDateTimeOffset();
             results.Add(keyValue);
@@ -369,7 +369,7 @@ public sealed class MultilayerCache : MultilayerCacheBase, ICache
         }
         catch (Exception ex)
         {
-            _logger.LogWarning(ex, "Inner cache set value for {}", string.Join(",", cacheEntries.Select(o => o.CacheEntry.CacheKey)));
+            _logger.LogWarning(ex, "Inner cache set value for {CacheKeys}", string.Join(",", cacheEntries.Select(o => o.CacheEntry.CacheKey)));
             return false;
         }
     }
