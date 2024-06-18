@@ -16,8 +16,8 @@ public static class Metrics
     public const string SequenceNumber = nameof(SequenceNumber);
     public const string Invalid = nameof(Invalid);
 
-    private static Dictionary<string, string> _topicWriteMetricNames = new();
-    private static Dictionary<string, string> _topicReadMetricNames = new();
+    private static Dictionary<string, string> _topicWriteMetricNames = [];
+    private static Dictionary<string, string> _topicReadMetricNames = [];
     private static string GetMetricName(string topicName, Dictionary<string, string> metricDictionary, string operationType)
     {
         if (metricDictionary.TryGetValue(topicName, out var metricName))

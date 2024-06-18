@@ -1,5 +1,4 @@
-﻿using System.Reactive;
-using System.Text;
+﻿using System.Globalization;
 using UiPath.Platform.Caching.Telemetry;
 
 namespace UiPath.Platform.Caching;
@@ -47,7 +46,7 @@ internal static class MetricExtensions
         };
         if (streamIdValue.Valid)
         {
-            properties.Add(Metrics.SequenceNumber, streamIdValue.Sequence.ToString());
+            properties.Add(Metrics.SequenceNumber, streamIdValue.Sequence.ToString(CultureInfo.InvariantCulture));
             cachingTelemetryProvider.TrackMetric(metricName, streamIdValue.Timestamp, properties);
         }
         else

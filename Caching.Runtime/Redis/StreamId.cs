@@ -1,10 +1,4 @@
-﻿using System;
-using System.Collections.Generic;
-using System.Linq;
-using System.Text;
-using System.Threading.Tasks;
-
-namespace UiPath.Platform.Caching.Redis;
+﻿namespace UiPath.Platform.Caching.Redis;
 internal struct StreamId
 {
     public long Timestamp { get; private set; }

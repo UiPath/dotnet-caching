@@ -1,7 +1,6 @@
 ﻿using System.Reactive.Subjects;
 using UiPath.Platform.Caching.Policies;
 using UiPath.Platform.Caching.Telemetry;
-using UiPath.Platform.Telemetry;
 
 namespace UiPath.Platform.Caching.Broadcast.Redis;
 

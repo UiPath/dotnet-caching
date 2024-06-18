@@ -1,5 +1,4 @@
-﻿using Microsoft.Extensions.Options;
-using UiPath.Platform.Caching.Telemetry;
+﻿using UiPath.Platform.Caching.Telemetry;
 
 namespace UiPath.Platform.Caching;
 
@@ -122,10 +121,10 @@ public sealed class MultilayerCache : MultilayerCacheBase, ICache
             }
         }
         
-        foreach (var setEntry in setEntries)
+        foreach (var cacheEntry in setEntries.Select(s => s.CacheEntry))
         {
-            _logger.LogDebug("Replacing cached key {CacheKey}", setEntry.CacheEntry.CacheKey);
-            var fired = await _eventPublisher.CacheSetAsync(setEntry.CacheEntry).ConfigureAwait(false);
+            _logger.LogDebug("Replacing cached key {CacheKey}", cacheEntry.CacheKey);
+            var fired = await _eventPublisher.CacheSetAsync(cacheEntry).ConfigureAwait(false);
             if (!fired)
             {
                 return false;
@@ -249,8 +248,8 @@ public sealed class MultilayerCache : MultilayerCacheBase, ICache
 
     private async ValueTask<KeyValuePair<CacheKey, T?>[]> GetInnerAsync<T>(CacheEntryOptions[] options, CancellationToken token = default)
     {
-        List<KeyValuePair<CacheKey, T?>> results = new();
-        List<CacheEntryOptions> cacheEntriesToFetch = new();
+        List<KeyValuePair<CacheKey, T?>> results = [];
+        List<CacheEntryOptions> cacheEntriesToFetch = [];
         foreach (var option in options)
         {
             if (_memoryCache.TryGetValue<ICacheEntry<T>>(option.CacheKey, out var entry))
