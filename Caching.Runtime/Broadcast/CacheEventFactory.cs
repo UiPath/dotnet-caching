@@ -5,7 +5,7 @@ namespace UiPath.Platform.Caching.Broadcast;
 public sealed class CacheEventFactory : ICacheEventFactory
 {
     private readonly Uri? _sourceUri;
-    private readonly ISet<string> _knownEventTypes;
+    private readonly ImmutableHashSet<string> _knownEventTypes;
 
     public CacheEventFactory(IOptions<CacheOptions> optionsAccessor)
     {

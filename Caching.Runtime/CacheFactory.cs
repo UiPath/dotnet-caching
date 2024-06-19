@@ -22,11 +22,7 @@ public sealed class CacheFactory : ICacheFactory
 
     public void AddProvider(ICacheProvider provider)
     {
-        if (_disposed)
-        {
-            throw new ObjectDisposedException(nameof(CacheFactory));
-        }
-
+        this.ThrowIfDisposed(_disposed);
         _providers[provider.Name] = provider;
     }
 

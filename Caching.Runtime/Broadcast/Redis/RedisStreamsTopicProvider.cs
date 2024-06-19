@@ -11,7 +11,7 @@ public class RedisStreamsTopicProvider : RedisTopicProviderBase
     private readonly IEventFormatterProxy<ICacheEvent> _formatter;
     private readonly ILoggerFactory _loggerFactory;
     private readonly ICachingTelemetryProvider _cachingTelemetryProvider;
-    private readonly IPolicyHolder _policyHolder;
+    private readonly IResiliencePipelineHolder _resiliencePipelineHolder;
     private readonly CancellationTokenSource _stopTokenSource = new();
     private bool _disposed;
 
@@ -21,14 +21,14 @@ public class RedisStreamsTopicProvider : RedisTopicProviderBase
         IOptions<CacheOptions> cacheOptionsAccessor,
         IRedisConnector redis,
         IEventFormatterProxy<ICacheEvent> formatter,
-        IPolicyHolder policyHolder,
+        IResiliencePipelineHolder resiliencePipelineHolder,
         ILoggerFactory loggerFactory,
         ICachingTelemetryProvider cachingTelemetryProvider)
         : base(redis, redisStreamsTopicOptionsAccessor.Value.ConnectionMonitorEnabled ?? cacheOptionsAccessor.Value.ConnectionMonitorEnabled)
     {
         _redisStreamsTopicOptions = redisStreamsTopicOptionsAccessor.Value;
         _cacheOptions = cacheOptionsAccessor.Value;
-        _policyHolder = policyHolder;
+        _resiliencePipelineHolder = resiliencePipelineHolder;
         _formatter = formatter;
         _loggerFactory = loggerFactory;
         _cachingTelemetryProvider = cachingTelemetryProvider;
@@ -45,7 +45,7 @@ public class RedisStreamsTopicProvider : RedisTopicProviderBase
             Redis,
             () => new Subject<ICacheEvent>(),
             _formatter,
-            _policyHolder,
+            _resiliencePipelineHolder,
             _redisStreamsTopicOptions,
             _cacheOptions,
             _loggerFactory.Create<RedisStreamsTopic<ICacheEvent>>(),

@@ -9,7 +9,7 @@ public sealed class RedisCacheProvider : ICacheProvider
     private readonly CacheOptions _cacheOptions;
     private readonly IRedisConnector _redis;
     private readonly ISerializerProxy _serializerProxy;
-    private readonly IPolicyHolder _policyHolder;
+    private readonly IResiliencePipelineHolder _resiliencePipelineHolder;
     private readonly ICachingTelemetryProvider _cachingTelemetryProvider;
     private readonly ILoggerFactory _loggerFactory;
     private readonly Lazy<RedisCache> _cache;
@@ -25,7 +25,7 @@ public sealed class RedisCacheProvider : ICacheProvider
         IOptions<CacheOptions> cacheOptions,
         IRedisConnector redis,
         ISerializerProxy serializerProxy,
-        IPolicyHolder policyHolder,
+        IResiliencePipelineHolder resiliencePipelineHolder,
         ICachingTelemetryProvider cachingTelemetryProvider,
         ILoggerFactory loggerFactory)
     {
@@ -33,7 +33,7 @@ public sealed class RedisCacheProvider : ICacheProvider
         _cacheOptions = cacheOptions.Value;
         _redis = redis;
         _serializerProxy = serializerProxy;
-        _policyHolder = policyHolder;
+        _resiliencePipelineHolder = resiliencePipelineHolder;
         _cachingTelemetryProvider = cachingTelemetryProvider ?? NullTelemetryProvider.Instance;
         _loggerFactory = loggerFactory;
         _cache = new Lazy<RedisCache>(() => BuildCache());
@@ -64,7 +64,7 @@ public sealed class RedisCacheProvider : ICacheProvider
         new(
             _redis,
             _serializerProxy,
-            _policyHolder,
+            _resiliencePipelineHolder,
             _cachingTelemetryProvider,
             _redisCacheOptions,
             _cacheOptions,
@@ -74,7 +74,7 @@ public sealed class RedisCacheProvider : ICacheProvider
         new(
             _redis,
             _serializerProxy,
-            _policyHolder,
+            _resiliencePipelineHolder,
             _cachingTelemetryProvider,
             _redisCacheOptions,
             _cacheOptions,
