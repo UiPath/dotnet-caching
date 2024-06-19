@@ -1,6 +1,4 @@
-﻿using System.Collections.Generic;
-
-namespace UiPath.Platform.Caching;
+﻿namespace UiPath.Platform.Caching;
 
 public interface ICache : IDisposable
 {

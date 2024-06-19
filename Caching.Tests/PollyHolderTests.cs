@@ -29,7 +29,7 @@ public class PolicyWrapperTests
     {
         var cts = new CancellationTokenSource();
         var sut = new PolicyWrapper(Policy.NoOpAsync());
-        Func<Task> act = async () => await sut.ExecuteAsync(() => Task.Delay(1000), cts.Token);
+        Func<Task> act = async () => await sut.ExecuteAsync(() => Task.Delay(2000), cts.Token);
         await act.Should().NotThrowAsync();
     }
 
@@ -39,7 +39,7 @@ public class PolicyWrapperTests
         var cts = new CancellationTokenSource();
         cts.CancelAfter(100);
         var sut = new PolicyWrapper(Policy.NoOpAsync());
-        Func<Task> act = async () => await sut.ExecuteAsync(() => Task.Delay(1000), cts.Token);
+        Func<Task> act = async () => await sut.ExecuteAsync(() => Task.Delay(2000), cts.Token);
         await act.Should().ThrowAsync<OperationCanceledException>();
     }
 
