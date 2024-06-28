@@ -64,9 +64,16 @@ internal sealed class RedisStreamSubjectWriter<T> : IDisposable
             }
             catch (Exception ex)
             {
-                if (!await ProcessException(ex).ConfigureAwait(false))
+                try
                 {
-                    break;
+                    if (!await ProcessException(ex).ConfigureAwait(false))
+                    {
+                        break;
+                    }
+                }
+                catch (Exception)
+                {
+                    await Task.Delay(_context.PollInterval, _cancelationToken).ConfigureAwait(false);
                 }
             }
         }
@@ -84,46 +91,44 @@ internal sealed class RedisStreamSubjectWriter<T> : IDisposable
 
         if (events.Length > 0)
         {
-            await DispatchEventsAsync(events);
+            await DispatchEventsAsync(events).ConfigureAwait(false);
             _lastId = events[^1].Id;
             _cachingTelemetryProvider.TrackTopicReadMetric(_context.Topic!, _lastId);
             return;
         }
-        await Task.Delay(_context.PollInterval, _cancelationToken);
+        await Task.Delay(_context.PollInterval, _cancelationToken).ConfigureAwait(false);
     }
 
     private async Task<bool> ProcessException(Exception ex)
     {
-        if (ex is RedisServerException server && server.Message.Contains("NOGROUP", StringComparison.OrdinalIgnoreCase))
-        {
-            _logger.LogWarning(ex, "NOGROUP. Recreating Topic {Topic}, consumer group {ConsumerGroup}, last id {LastId}", _context.Topic, _context.ConsumerGroup, _lastId);
-            try
-            {
-                await _redis.Database.StreamCreateConsumerGroupAsync(_context.Topic, _context.ConsumerGroup, _lastId);
-                return true;
-            }
-            catch(Exception ex2)
-            {
-                _logger.LogError(ex2, "Recreating topic exception.");
-            }
-        }
-
         if (ex is TaskCanceledException cancel && cancel.CancellationToken == _cancelationToken)
         {
             _logger.LogDebug("Reading topic {Topic}, consumer group {ConsumerGroup} stopped at {Id}", _context.Topic, _context.ConsumerGroup, _lastId);
             return false;
         }
 
-        try
+        if (ex.Message.StartsWith("NOGROUP ", StringComparison.OrdinalIgnoreCase))
         {
-            _logger.LogError(ex, "Fetch events loop error");
-            await Task.Delay(_context.PollInterval, _cancelationToken);
+            if(_lastId != StreamPosition.NewMessages)
+            {
+                _logger.LogWarning(ex, "Recreating Topic {Topic}, consumer group {ConsumerGroup}, last id {LastId}", _context.Topic, _context.ConsumerGroup, _lastId);
+            }
+
+            try
+            {
+                await _redis.Database.StreamCreateConsumerGroupAsync(_context.Topic, _context.ConsumerGroup, _lastId).ConfigureAwait(false);
+            }
+            catch(Exception ex2)
+            {
+                _logger.LogError(ex2, "Recreating topic exception.");
+            }
         }
-        catch
+        else
         {
-            // no op
+           _logger.LogError(ex, "Fetch events loop error");
         }
 
+        await Task.Delay(_context.PollInterval, _cancelationToken).ConfigureAwait(false);
         return true;
     }
 
@@ -171,7 +176,7 @@ internal sealed class RedisStreamSubjectWriter<T> : IDisposable
             return;
         }
 
-        await _redis.Database.StreamAcknowledgeAsync(_context.Topic, _context.ConsumerGroup, ids.ToArray());
+        await _redis.Database.StreamAcknowledgeAsync(_context.Topic, _context.ConsumerGroup, ids.ToArray()).ConfigureAwait(false);
         _logger.LogDebug("Dispatched {Length} messages. Topic : {Topic}", events.Length, _context.Topic);
     }
 }

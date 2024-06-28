@@ -210,6 +210,7 @@ public class RedisStreamHealthMaintainer : IHostedService
 
         if (delete)
         {
+            _logger.LogWarning("Stream {StreamKey} deleted", context.StreamKey);
             await Database.ExecuteAsync("DEL", [context.StreamKey, context.QuarantineKey], CommandFlags.DemandMaster).ConfigureAwait(false);
         }
     }
