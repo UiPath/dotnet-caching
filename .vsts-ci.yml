@@ -84,20 +84,14 @@ stages:
           performMultiLevelLookup: true
 
       - task: UseDotNet@2
-        displayName: Use .NET 7 SDK
-        inputs:
-          packageType: sdk
-          version: 7.x
-          includePreviewVersions: false
-          performMultiLevelLookup: true
-
-      - task: UseDotNet@2
         displayName: Use .NET 8 SDK
         inputs:
           packageType: sdk
+          version: 8.x
           useGlobalJson: true
           includePreviewVersions: false
           performMultiLevelLookup: true
+
       - pwsh: |
           if (!(dotnet tool list -g | Where-Object {$_.contains("dotnet-coverage")})){
             dotnet tool install --global dotnet-coverage --version 17.11.3

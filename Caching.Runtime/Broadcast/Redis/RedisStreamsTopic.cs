@@ -132,7 +132,7 @@ public sealed class RedisStreamsTopic<T> : ITopic<T>
         }
         catch (RedisServerException ex) when (ex.Message == ConsumerGroupNameExistsErrorMessage)
         {
-            _logger.LogDebug(ex, "On Topic {Topic} consumer group {ConsumerGroup} already exists", _context.Topic, _context.ConsumerGroup);
+            _logger.LogDebug("On Topic {Topic} consumer group {ConsumerGroup} already exists", _context.Topic, _context.ConsumerGroup);
             return true;
         }
     }
