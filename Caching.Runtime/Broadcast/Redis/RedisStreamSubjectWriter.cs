@@ -101,22 +101,23 @@ internal sealed class RedisStreamSubjectWriter<T> : IDisposable
 
     private async Task<bool> ProcessException(Exception ex)
     {
+        var id = _lastId;
         if (ex is TaskCanceledException cancel && cancel.CancellationToken == _cancelationToken)
         {
-            _logger.LogDebug("Reading topic {Topic}, consumer group {ConsumerGroup} stopped at {Id}", _context.Topic, _context.ConsumerGroup, _lastId);
+            _logger.LogDebug("Reading topic {Topic}, consumer group {ConsumerGroup} stopped at {Id}", _context.Topic, _context.ConsumerGroup, id);
             return false;
         }
 
-        if (ex.Message.StartsWith("NOGROUP ", StringComparison.OrdinalIgnoreCase))
+        if (ex.Message.StartsWith("NOGROUP", StringComparison.OrdinalIgnoreCase))
         {
-            if(_lastId != StreamPosition.NewMessages)
+            if(id != StreamPosition.NewMessages)
             {
-                _logger.LogWarning(ex, "Recreating Topic {Topic}, consumer group {ConsumerGroup}, last id {LastId}", _context.Topic, _context.ConsumerGroup, _lastId);
+                _logger.LogWarning("Recreating Topic {Topic}, consumer group {ConsumerGroup}, last id {LastId}", _context.Topic, _context.ConsumerGroup, id);
             }
 
             try
             {
-                await _redis.Database.StreamCreateConsumerGroupAsync(_context.Topic, _context.ConsumerGroup, _lastId).ConfigureAwait(false);
+                await _redis.Database.StreamCreateConsumerGroupAsync(_context.Topic, _context.ConsumerGroup, id).ConfigureAwait(false);
             }
             catch(Exception ex2)
             {
