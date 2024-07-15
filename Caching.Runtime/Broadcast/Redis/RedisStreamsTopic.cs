@@ -7,8 +7,6 @@ namespace UiPath.Platform.Caching.Broadcast.Redis;
 public sealed class RedisStreamsTopic<T> : ITopic<T>
      where T : IEvent
 {
-    private const string ConsumerGroupNameExistsErrorMessage = "BUSYGROUP Consumer Group name already exists";
-
     private readonly IRedisStreamKeyStrategy _redisStreamKeyStrategy;
     private readonly RedisStreamSubjectWriter<T> _subscriber;
     private readonly CancellationTokenSource _stopTokenSource;
@@ -130,7 +128,7 @@ public sealed class RedisStreamsTopic<T> : ITopic<T>
                 _context.ConsumerGroup,
                 StreamPosition.NewMessages);
         }
-        catch (RedisServerException ex) when (ex.Message == ConsumerGroupNameExistsErrorMessage)
+        catch (RedisServerException ex) when (ex.Message == StreamConstants.ConsumerGroupNameExistsErrorMessage)
         {
             _logger.LogDebug("On Topic {Topic} consumer group {ConsumerGroup} already exists", _context.Topic, _context.ConsumerGroup);
             return true;
