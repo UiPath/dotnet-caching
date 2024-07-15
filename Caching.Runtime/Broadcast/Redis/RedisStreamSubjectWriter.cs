@@ -119,7 +119,12 @@ internal sealed class RedisStreamSubjectWriter<T> : IDisposable
             {
                 await _redis.Database.StreamCreateConsumerGroupAsync(_context.Topic, _context.ConsumerGroup, id).ConfigureAwait(false);
             }
-            catch(Exception ex2)
+            catch (RedisServerException rex) when (rex.Message == StreamConstants.ConsumerGroupNameExistsErrorMessage)
+            {
+                _logger.LogDebug("On Topic {Topic} consumer group {ConsumerGroup} already exists", _context.Topic, _context.ConsumerGroup);
+                return true;
+            }
+            catch (Exception ex2)
             {
                 _logger.LogError(ex2, "Recreating topic exception.");
             }
