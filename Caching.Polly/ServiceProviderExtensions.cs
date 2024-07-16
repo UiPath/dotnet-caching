@@ -1,5 +1,4 @@
-﻿using System;
-using Polly.CircuitBreaker;
+﻿using Polly.CircuitBreaker;
 using Polly.Retry;
 
 namespace UiPath.Platform.Caching.Polly;

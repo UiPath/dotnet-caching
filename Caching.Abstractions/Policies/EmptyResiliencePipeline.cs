@@ -1,6 +1,4 @@
-﻿using System.Diagnostics.CodeAnalysis;
-
-namespace UiPath.Platform.Caching.Policies;
+﻿namespace UiPath.Platform.Caching.Policies;
 
 [ExcludeFromCodeCoverage]
 public sealed class EmptyResiliencePipeline : IResiliencePipeline
