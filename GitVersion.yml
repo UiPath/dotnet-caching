@@ -9,29 +9,23 @@ branches:
   feature:
     source-branches: ['master','release','develop']
     tag: useBranchName
-    increment: None
     is-release-branch: false
   fix:
     regex: 'fix[/-]'
     source-branches: ['master','release','develop']
     tag: useBranchName
-    increment: None
     is-release-branch: false
   pull-request:
     tag: PullRequest
-    increment: None
     tag-number-pattern: '[/-](?<number>\d+)[-/]'
     is-release-branch: false
+    increment: none
   develop:
     tag: 'alpha'
-    increment: None
     is-release-branch: false
   master:
     tag: 'beta'
-    increment: None
     is-release-branch: false
   release:
-    source-branches: ['master','release']
     tag: ''
-    increment: None
     is-release-branch: true
