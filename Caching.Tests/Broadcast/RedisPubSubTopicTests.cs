@@ -10,7 +10,7 @@ namespace UiPath.Platform.Caching.Tests.Broadcast;
 public class RedisPubSubTopicTests : IAsyncLifetime
 {
     private readonly IFixture _fixture = AutoFixtureCreator.NSubsitute();
-    private readonly List<ICacheEvent> _onNextMessages = new();
+    private readonly List<ICacheEvent> _onNextMessages = [];
 
     private TopicKey _topicKey;
     private ISubscriber _subscriber = default!;
@@ -29,14 +29,14 @@ public class RedisPubSubTopicTests : IAsyncLifetime
     private readonly TimeSpan _delay = 50.Milliseconds();
 
     private RedisPubSubTopic<ICacheEvent>? _sut;
-    private async Task<RedisPubSubTopic<ICacheEvent>> Sut()
+    private async Task<RedisPubSubTopic<ICacheEvent>> Sut(int delayMultiplier = 2)
     {
         if (_sut != null)
         {
             return _sut;
         }
         _sut = _fixture.Create<RedisPubSubTopic<ICacheEvent>>();
-        await Task.Delay(_delay.Multiply(2));
+        await Task.Delay(_delay.Multiply(delayMultiplier));
         return _sut;
     }
 
@@ -85,7 +85,7 @@ public class RedisPubSubTopicTests : IAsyncLifetime
     }
 
     [Fact]
-    public async Task No_message_when_channel_is_unknwon()
+    public async Task No_message_when_channel_is_unknown()
     {
         var sut = await Sut();
         var disposable = sut.Subscribe(_observer);
@@ -124,9 +124,9 @@ public class RedisPubSubTopicTests : IAsyncLifetime
     [Fact]
     public async Task Unsubscribe_is_called_when_subscriber_is_disposed()
     {
-        var sut = await Sut();
+        var sut = await Sut(5);
         sut.Dispose();
-        await Task.Delay(_delay.Multiply(6));
+        await Task.Delay(_delay.Multiply(10));
         _subscriber.Received().Unsubscribe(Arg.Any<RedisChannel>(), Arg.Any<Action<RedisChannel, RedisValue>?>(), Arg.Any<CommandFlags>());
         _topicKey.Name.Should().BeEquivalentTo(_actualRedisChannel);
     }

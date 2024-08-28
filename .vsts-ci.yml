@@ -21,8 +21,6 @@ pr:
 variables:
   OrganizationName: UiPath
   BuildDefinitionName: $(Build.DefinitionName)
-  ProjectShortName: Caching
-  ProjectName: Caching
   GitVersion.SemVer: ''
 
 stages:
@@ -65,7 +63,8 @@ stages:
           Write-Host "SemVer: $semVer"
           Write-Host "BuildNumber: $buildNumber"
           Write-Host "##vso[build.updatebuildnumber]$buildNumber"
-          Write-Host "##vso[task.setvariable variable=PackageVersion;]$semVer"
+          Write-Host "##vso[task.setvariable variable=PackageVersion;isOutput=true]$semVer"
+        name: Versions
         displayName: "Adjust build number to ensure package unique name"
 
       - pwsh: |
@@ -94,9 +93,9 @@ stages:
 
       - pwsh: |
           if (!(dotnet tool list -g | Where-Object {$_.contains("dotnet-coverage")})){
-            dotnet tool install --global dotnet-coverage --version 17.11.3
+            dotnet tool install --global dotnet-coverage --version 17.11.5
           } else {
-            dotnet tool update --global dotnet-coverage --version 17.11.3
+            dotnet tool update --global dotnet-coverage --version 17.11.5
           }
 
           dotnet --info
@@ -127,7 +126,7 @@ stages:
           scannerMode: MSBuild
           projectKey: UiPath_ServiceCommon-Caching
           projectName: UiPath_ServiceCommon-Caching
-          projectVersion: '$(PackageVersion)'
+          projectVersion: '$(Versions.PackageVersion)'
           extraProperties: |
             sonar.sourceEncoding=UTF-8
             sonar.verbose=false
@@ -171,7 +170,7 @@ stages:
           command: pack
           packagesToPack: "**/Caching.*.csproj;"
           versioningScheme: byEnvVar
-          versionEnvVar: 'PackageVersion'
+          versionEnvVar: 'Versions_PackageVersion'
           nobuild: true
           includeSymbols: false
           outputDir: $(ArtifactsOutputPath)
@@ -185,6 +184,8 @@ stages:
 
   - stage: 'FEATURE'
     dependsOn: [ 'CI' ]
+    variables:
+      NugetPackageVersion: $[ stageDependencies.CI.BuildAndRunTests.outputs['Versions.PackageVersion'] ]
     condition: and(
         succeeded(), 
         ne(variables['Build.SourceBranch'], 'refs/heads/develop'), 
@@ -208,6 +209,59 @@ stages:
                     packagesToPush: '$(Agent.BuildDirectory)/Caching/*.nupkg'
                     publishVstsFeed: '1d71f16a-8504-4895-a839-687a1a4819d4'
 
+                - pwsh: |
+                    $feedId = $env:FeedId
+                    $version = $env:NugetPackageVersion
+                    $personalAccessToken = $env:PAT
+                    Write-Host "FeedId: $feedId"
+                    Write-Host "Version: $version"
+
+                    $base64AuthInfo = [Convert]::ToBase64String([Text.Encoding]::ASCII.GetBytes(":$personalAccessToken"))
+
+                    $headers = @{
+                        "Authorization" = "Basic $base64AuthInfo"
+                        "Content-Type"  = "application/json"
+                    }
+                    $packages = @()
+
+                    $files = Get-ChildItem -Path "$(Agent.BuildDirectory)/Caching/" -Filter "*.nupkg"
+
+                    foreach ($file in $files) {
+                        $fileName = $file.BaseName
+                        $match = [regex]::Match($fileName, "^(.*?)(?=\.\d+\.\d+\.\d+-)")
+                        # If there is a match, print the result
+                        if ($match.Success) {
+                            $result = $match.Groups[1].Value
+                            Write-Output $result
+                            $packages += @{
+                                "id" = $result
+                                "version" = $version
+                            }
+                        } else {
+                            Write-Output "No match found for $fileName"
+                        }
+                    }
+
+                    $body = @{
+                        "data" = @{
+                            "listed" = $false
+                        }
+                        "operation" = 1
+                        "packages" = $packages
+                    } | ConvertTo-Json
+
+                    Write-Host "Body: $body"
+
+                    [System.Net.ServicePointManager]::SecurityProtocol = [System.Net.SecurityProtocolType]::Tls12
+                    $uri = "https://uipath.pkgs.visualstudio.com/_apis/packaging/feeds/$($feedId)/nuget/packagesBatch?api-version=7.1-preview.1"
+                    Write-Host "Url: $uri"
+                    $response = Invoke-RestMethod -Uri $uri -Method POST -Headers $headers -Body $body  -Verbose
+                  displayName: 'Unlist package'
+                  env:
+                    FeedId: '1d71f16a-8504-4895-a839-687a1a4819d4'
+                    PAT: "$(System.AccessToken)"
+                    NugetPackageVersion: $(NugetPackageVersion)
+
   - stage: 'ALPHA'
     dependsOn: [ 'CI' ]
     condition: and(
@@ -230,6 +284,7 @@ stages:
                     command: push
                     packagesToPush: '$(Agent.BuildDirectory)/Caching/*.nupkg'
                     publishVstsFeed: '1d71f16a-8504-4895-a839-687a1a4819d4'
+                
 
   - stage: 'BETA'
     dependsOn: [ 'CI' ]

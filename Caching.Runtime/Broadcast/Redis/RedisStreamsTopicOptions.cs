@@ -33,6 +33,4 @@ public class RedisStreamsTopicOptions
     public TimeSpan MaintainerQuarantineInterval { get; set; } = TimeSpan.FromHours(1);
 
     public string? MaintainerSearchPattern { get; set; }
-
-    public string[] TrackedClientDimensions { get; set; } = ["name", "age", "idle", "flags", "multi", "qbuf", "qbuf-free", "obl", "oll", "omem"];
 }

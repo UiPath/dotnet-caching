@@ -6,8 +6,6 @@ namespace UiPath.Platform.Caching.Broadcast.Redis;
 
 public class RedisStreamHealthMaintainer : IHostedService
 {
-    private const int MaxDimensions = 10;
-
     private readonly IRedisConnector _redis;
     private readonly RedisStreamsTopicOptions _streamOptions;
     private readonly RedisCacheOptions _redisOptions;
@@ -19,7 +17,6 @@ public class RedisStreamHealthMaintainer : IHostedService
     private readonly ICachingTelemetryProvider _telemetryProvider;
     private readonly SemaphoreSlim _semaphore;
     private readonly ISystemClock _clock;
-    private readonly HashSet<string> _allowedDimensions = new(StringComparer.OrdinalIgnoreCase) { "name" };
     private string _streamsSearchPattern = string.Empty;
     private PeriodicTimer? _timer;
     private RedisKey _lockKey;
@@ -93,24 +90,6 @@ public class RedisStreamHealthMaintainer : IHostedService
         _lockKey = stringKeyStrategy.GetRedisKey(string.Join(_cacheOptions.Separator, nameof(RedisStreamHealthMaintainer), "Lock2"));
         _quarantineKeyPrefix = hashKeyStrategy.GetRedisKey(string.Join(_cacheOptions.Separator, "caching", "meta", "stream")+"$");
         _supportsXtrimMinId = new Lazy<bool>(() => _redis.Version >= Version.Parse("6.2.0"));
-
-        var ignoredDimensions = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-        foreach(var dim in _streamOptions.TrackedClientDimensions)
-        {
-            if (_allowedDimensions.Count >= MaxDimensions)
-            {
-                ignoredDimensions.Add(dim);
-            }
-            else
-            {
-                _allowedDimensions.Add(dim);
-            }
-        }
-
-        if (ignoredDimensions.Count != 0)
-        {
-            _logger.LogWarning("Ignored client dimensions {Dimensions}", string.Join(", ", ignoredDimensions));
-        }
     }
 
     internal async Task CheckStreamsAsync(CancellationToken cancellationToken)
