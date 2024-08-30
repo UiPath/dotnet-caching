@@ -24,5 +24,10 @@
     <ProjectReference Include="..\Caching.Abstractions\Caching.Abstractions.csproj" />
     <ProjectReference Include="..\Caching.Telemetry\Caching.Telemetry.csproj" />
   </ItemGroup>
-
+  <ItemGroup>
+    <PackageReference Update="SonarAnalyzer.CSharp">
+      <PrivateAssets>all</PrivateAssets>
+      <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
+    </PackageReference>
+  </ItemGroup>
 </Project>

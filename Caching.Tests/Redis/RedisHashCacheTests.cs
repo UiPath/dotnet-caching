@@ -471,7 +471,7 @@ public class RedisHashCacheTests : IAsyncLifetime
         _database.KeyExpireAsync(_redisKey, Arg.Any<DateTime?>(), CommandFlags.DemandMaster | CommandFlags.FireAndForget)
             .ThrowsAsync<Exception>();
         var options = new HashCacheEntryOptions(_now.Subtract(TimeSpan.FromMilliseconds(1)), null, null);
-        var actual = await Sut.RefreshAsync<string>(_cacheKey, options, CancellationToken.None);
+        await Sut.RefreshAsync<string>(_cacheKey, options, CancellationToken.None);
         await _database.Received(1).KeyDeleteAsync(_redisKey, Arg.Any<CommandFlags>());
         await _transaction.DidNotReceive().ExecuteAsync();
     }
@@ -488,6 +488,7 @@ public class RedisHashCacheTests : IAsyncLifetime
         await _transaction.Received(1).HashSetAsync(_redisKey, Arg.Any<HashEntry[]>(), Arg.Any<CommandFlags>());
         await _transaction.Received(1).KeyExpireAsync(_redisKey, Arg.Any<DateTime?>(), Arg.Any<CommandFlags>());
         await _transaction.Received(1).ExecuteAsync();
+        actual.Should().BeTrue();
     }
 
     [Fact]
@@ -496,7 +497,7 @@ public class RedisHashCacheTests : IAsyncLifetime
         _database.KeyExpireAsync(_redisKey, Arg.Any<DateTime?>(), CommandFlags.DemandMaster | CommandFlags.FireAndForget)
             .ThrowsAsync<Exception>();
         var options = new HashCacheEntryOptions(default, _fixture.Create<TimeSpan>(), default);
-        var actual = await Sut.RefreshAsync<string>(_cacheKey, options, CancellationToken.None);
+        await Sut.RefreshAsync<string>(_cacheKey, options, CancellationToken.None);
         await _database.DidNotReceive().KeyDeleteAsync(_redisKey, Arg.Any<CommandFlags>());
         await _transaction.Received(1).HashDeleteAsync(_redisKey, new RedisValue("_metadata_"), Arg.Any<CommandFlags>());
         await _transaction.Received(1).KeyExpireAsync(_redisKey, Arg.Any<DateTime?>(), Arg.Any<CommandFlags>());
@@ -514,6 +515,7 @@ public class RedisHashCacheTests : IAsyncLifetime
         await _transaction.Received(1).HashSetAsync(_redisKey, Arg.Any<HashEntry[]>(), Arg.Any<CommandFlags>());
         await _transaction.Received(1).KeyPersistAsync(_redisKey, Arg.Any<CommandFlags>());
         await _transaction.Received(1).ExecuteAsync();
+        actual.Should().BeTrue();
     }
 
     [Fact]
