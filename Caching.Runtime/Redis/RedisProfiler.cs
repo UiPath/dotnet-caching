@@ -37,6 +37,7 @@ public class RedisProfiler : IRedisProfiler
         }
         catch (Exception ex)
         {
+            _asyncContextSession.Value = null;
             _logger.LogWarning(ex, "Failed to read profiled commands.");
             return Enumerable.Empty<IProfiledCommand>();
         }

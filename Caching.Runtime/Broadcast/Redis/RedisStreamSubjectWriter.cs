@@ -168,7 +168,8 @@ internal sealed class RedisStreamSubjectWriter<T> : IDisposable
                 }
                 else
                 {
-                    _logger.LogDebug("Event received. Id {EventId}  Topic : {Topic}", ev.Id, _context.Topic);
+                    _logger.LogWarning("Event received. Id {EventId}  Topic : {Topic}", ev.Id, _context.Topic);
+                    ids.Add(@event.Id);
                 }
             }
             catch (Exception ex)
@@ -181,6 +182,7 @@ internal sealed class RedisStreamSubjectWriter<T> : IDisposable
         {
             return;
         }
+
 
         await _redis.Database.StreamAcknowledgeAsync(_context.Topic, _context.ConsumerGroup, ids.ToArray()).ConfigureAwait(false);
         _logger.LogDebug("Dispatched {Length} messages. Topic : {Topic}", events.Length, _context.Topic);
