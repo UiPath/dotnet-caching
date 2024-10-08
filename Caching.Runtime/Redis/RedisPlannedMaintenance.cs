@@ -80,7 +80,7 @@ public sealed class RedisPlannedMaintenance : IRedisPlannedMaintenance
             {
                 try
                 {
-                    _telemetryProvider.TrackEvent("Redis.Maintenance.Started", null, null);
+                    _telemetryProvider.TrackEvent("Redis.MaintenanceStarted", null, null);
 
                     while (!token.IsCancellationRequested)
                     {
@@ -107,7 +107,7 @@ public sealed class RedisPlannedMaintenance : IRedisPlannedMaintenance
                     tokenSource?.Cancel();
                     tokenSource?.Dispose();
                     InProgress = false;
-                    _telemetryProvider.TrackEvent("Redis.Maintenance.ProbingEnded", null, null);
+                    _telemetryProvider.TrackEvent("Redis.MaintenanceEnded", null, null);
                 }
             }, token);
     }

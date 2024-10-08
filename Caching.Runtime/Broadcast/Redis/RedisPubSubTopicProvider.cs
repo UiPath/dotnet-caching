@@ -1,5 +1,6 @@
 ﻿using System.Reactive.Subjects;
 using UiPath.Platform.Caching.Policies;
+using UiPath.Platform.Caching.Telemetry;
 
 namespace UiPath.Platform.Caching.Broadcast.Redis;
 
@@ -21,8 +22,9 @@ public class RedisPubSubTopicProvider : RedisTopicProviderBase
         IRedisConnector redis,
         IEventFormatterProxy<ICacheEvent> formatter,
         IResiliencePipelineHolder resiliencePipelineHolder,
+        ICachingTelemetryProvider telemetryProvider,
         ILoggerFactory loggerFactory)
-        : base(redis, optionsAccessor.Value.ConnectionMonitorEnabled ?? cacheOptionsAccessor.Value.ConnectionMonitorEnabled)
+        : base(redis, telemetryProvider, optionsAccessor.Value.ConnectionMonitorEnabled ?? cacheOptionsAccessor.Value.ConnectionMonitorEnabled)
     {
         _options = optionsAccessor.Value;
         _formatter = formatter;

@@ -1,4 +1,6 @@
-﻿namespace UiPath.Platform.Caching.Redis;
+﻿using UiPath.Platform.Caching.Telemetry;
+
+namespace UiPath.Platform.Caching.Redis;
 
 public abstract class RedisCacheBase : IConnectionState
 {
@@ -6,10 +8,10 @@ public abstract class RedisCacheBase : IConnectionState
     private readonly IRedisConnector _redis;
     private readonly IConnectionState _connectionState;
 
-    protected RedisCacheBase(IRedisConnector redis, bool monitorConnection)
+    protected RedisCacheBase( IRedisConnector redis, ICachingTelemetryProvider telemetryProvider, bool monitorConnection)
     {
         _redis = redis;
-        _connectionState = monitorConnection ? new ConnectionStateMonitor(redis) : NullConnectionStateMonitor.Instance;
+        _connectionState = monitorConnection ? new ConnectionStateMonitor(telemetryProvider,redis) : NullConnectionStateMonitor.Instance;
     }
 
     public event EventHandler? OnConnectionFailed

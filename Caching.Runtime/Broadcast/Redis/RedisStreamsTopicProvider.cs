@@ -24,7 +24,7 @@ public class RedisStreamsTopicProvider : RedisTopicProviderBase
         IResiliencePipelineHolder resiliencePipelineHolder,
         ILoggerFactory loggerFactory,
         ICachingTelemetryProvider cachingTelemetryProvider)
-        : base(redis, redisStreamsTopicOptionsAccessor.Value.ConnectionMonitorEnabled ?? cacheOptionsAccessor.Value.ConnectionMonitorEnabled)
+        : base(redis, cachingTelemetryProvider, redisStreamsTopicOptionsAccessor.Value.ConnectionMonitorEnabled ?? cacheOptionsAccessor.Value.ConnectionMonitorEnabled)
     {
         _redisStreamsTopicOptions = redisStreamsTopicOptionsAccessor.Value;
         _cacheOptions = cacheOptionsAccessor.Value;
