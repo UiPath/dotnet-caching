@@ -1,4 +1,5 @@
 ﻿using System.Collections.Concurrent;
+using UiPath.Platform.Caching.Telemetry;
 
 namespace UiPath.Platform.Caching.Broadcast.Redis;
 
@@ -12,10 +13,10 @@ public abstract class RedisTopicProviderBase : ITopicProvider, IConnectionState
 
     private readonly IConnectionState _connectionState;
 
-    protected RedisTopicProviderBase(IRedisConnector redis, bool connectionMonitorEnabled)
+    protected RedisTopicProviderBase(IRedisConnector redis, ICachingTelemetryProvider telemetryProvider, bool connectionMonitorEnabled)
     {
         Redis = redis;
-        _connectionState = connectionMonitorEnabled ? new ConnectionStateMonitor(redis) : NullConnectionStateMonitor.Instance;
+        _connectionState = connectionMonitorEnabled ? new ConnectionStateMonitor(telemetryProvider, redis) : NullConnectionStateMonitor.Instance;
     }
 
     protected IRedisConnector Redis { get; }

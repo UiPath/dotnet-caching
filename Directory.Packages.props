@@ -4,8 +4,8 @@
     <!-- Shared Package Versions -->
     <xUnit>2.9.0</xUnit>
     <AutoFixture>4.18.1</AutoFixture>
-    <UiPathTelemetry>1.3.2-beta2072-0584</UiPathTelemetry>
-    <UiPathFeatureFlags>1.9.2</UiPathFeatureFlags>
+    <UiPathTelemetry>1.3.2-beta2242-0600</UiPathTelemetry>
+    <UiPathFeatureFlags>1.11.1</UiPathFeatureFlags>
     <CloudEvents>2.8.0</CloudEvents>
   </PropertyGroup>
   <ItemGroup>

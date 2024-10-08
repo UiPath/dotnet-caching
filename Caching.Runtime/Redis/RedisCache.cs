@@ -28,7 +28,7 @@ public sealed class RedisCache : RedisCacheBase, ICache
         RedisCacheOptions redisCacheOptions,
         CacheOptions cacheOptions,
         ILogger<RedisCache> logger)
-        : base(redis, redisCacheOptions.ConnectionMonitorEnabled ?? cacheOptions.ConnectionMonitorEnabled)
+        : base(redis, telemetryProvider, redisCacheOptions.ConnectionMonitorEnabled ?? cacheOptions.ConnectionMonitorEnabled)
     {
         _logger = logger;
         _serializer = serializer;
