@@ -9,7 +9,6 @@ public sealed class RedisCache : RedisCacheBase, ICache
     private const string LogWarnMessage = "RedisCache exception.";
 
     private readonly ISerializerProxy _serializer;
-    private readonly ICachingTelemetryProvider _telemetryProvider;
     private readonly ILogger<RedisCache> _logger;
     private readonly bool _supportsExpireTime;
     private readonly IResiliencePipeline _read;
@@ -32,7 +31,6 @@ public sealed class RedisCache : RedisCacheBase, ICache
     {
         _logger = logger;
         _serializer = serializer;
-        _telemetryProvider = telemetryProvider;
         _read = resiliencePipelineHolder.Read;
         _write = resiliencePipelineHolder.Write;
         _supportsExpireTime = RedisUtils.SupportsExpireTime(redis.Version);
@@ -68,14 +66,6 @@ public sealed class RedisCache : RedisCacheBase, ICache
         GetOrAddAsync(cacheKey, generator, _clock.ToTimeSpan(expiration), token);
 
     public ValueTask<T?> GetOrAddAsync<T>(CacheKey cacheKey, Func<ValueTask<T?>> generator, TimeSpan? expiration = null, CancellationToken token = default)
-    {
-        NotCacheableException.ThrowIfNotCacheable<T>();
-        ArgumentNullException.ThrowIfNull(generator);
-        var redisKey = ToRedisKey(cacheKey, token);
-        return GetOrAddInternalAsync(redisKey, generator, _clock.ToTimeSpan(expiration), token);
-    }
-
-    public ValueTask<T?> GetOrAddAsync<T>(CacheKey cacheKey, Func<ValueTask<T?>> generator, TimeSpan? expiration = null, CancellationToken token = default) where T : struct
     {
         NotCacheableException.ThrowIfNotCacheable<T>();
         ArgumentNullException.ThrowIfNull(generator);
@@ -290,6 +280,12 @@ public sealed class RedisCache : RedisCacheBase, ICache
     {
         bool ret = default;
         token.ThrowIfCancellationRequested();
+
+        if (!IsConnected)
+        {
+            return false;
+        }
+
         var operation = StartOperation<T>(nameof(SetAsync));
         try
         {
@@ -328,6 +324,12 @@ public sealed class RedisCache : RedisCacheBase, ICache
     {
         bool ret = default;
         token.ThrowIfCancellationRequested();
+        
+        if (!IsConnected)
+        {
+            return false;
+        }
+
         var operation = StartOperation<T>(nameof(SetAsync));
         try
         {
@@ -430,6 +432,12 @@ public sealed class RedisCache : RedisCacheBase, ICache
         T? ret = default;
         token.ThrowIfCancellationRequested();
         var operation = StartOperation<T>();
+        
+        if (!IsConnected)
+        {
+            return default;
+        }
+
         try
         {
             var value = await _read.ExecuteAsync(async token =>
@@ -504,10 +512,10 @@ public sealed class RedisCache : RedisCacheBase, ICache
     }
 
     private ITelemetryOperation StartOperation([CallerMemberName] string name = "") =>
-        _telemetryProvider.StartOperation<RedisCache>(name);
+        Telemetry.StartOperation<RedisCache>(name);
 
     private ITelemetryOperation StartOperation<T>([CallerMemberName] string name = "") =>
-        _telemetryProvider.StartOperation<RedisCache, T>(name);
+        Telemetry.StartOperation<RedisCache, T>(name);
 
     private static bool IsDefault<T>(T value) =>
         EqualityComparer<T>.Default.Equals(value, default);

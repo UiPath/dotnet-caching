@@ -10,7 +10,6 @@ public class RedisStreamsTopicProvider : RedisTopicProviderBase
     private readonly CacheOptions _cacheOptions;
     private readonly IEventFormatterProxy<ICacheEvent> _formatter;
     private readonly ILoggerFactory _loggerFactory;
-    private readonly ICachingTelemetryProvider _cachingTelemetryProvider;
     private readonly IResiliencePipelineHolder _resiliencePipelineHolder;
     private readonly CancellationTokenSource _stopTokenSource = new();
     private bool _disposed;
@@ -31,7 +30,6 @@ public class RedisStreamsTopicProvider : RedisTopicProviderBase
         _resiliencePipelineHolder = resiliencePipelineHolder;
         _formatter = formatter;
         _loggerFactory = loggerFactory;
-        _cachingTelemetryProvider = cachingTelemetryProvider;
         Enabled = connectionOptionsAccessor.Value.Enabled && _redisStreamsTopicOptions.Enabled;
     }
 
@@ -42,6 +40,7 @@ public class RedisStreamsTopicProvider : RedisTopicProviderBase
     protected override ITopic<ICacheEvent> CreateInternalTopic(TopicKey topicKey) =>
         new RedisStreamsTopic<ICacheEvent>(
             topicKey,
+            ConnectionState,
             Redis,
             () => new Subject<ICacheEvent>(),
             _formatter,
@@ -49,7 +48,7 @@ public class RedisStreamsTopicProvider : RedisTopicProviderBase
             _redisStreamsTopicOptions,
             _cacheOptions,
             _loggerFactory.Create<RedisStreamsTopic<ICacheEvent>>(),
-            _cachingTelemetryProvider,
+            Telemetry,
             _stopTokenSource.Token);
 
     protected override void Dispose(bool disposing)

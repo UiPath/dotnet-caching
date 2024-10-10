@@ -2,17 +2,12 @@
 
 namespace UiPath.Platform.Caching.Redis;
 
-public abstract class RedisCacheBase : IConnectionState
+public abstract class RedisCacheBase(IRedisConnector redis, ICachingTelemetryProvider telemetryProvider, bool monitorConnection) : IConnectionState, IDisposable
 {
     private bool _disposed;
-    private readonly IRedisConnector _redis;
-    private readonly IConnectionState _connectionState;
+    private readonly IConnectionState _connectionState = monitorConnection ? redis : NullConnectionStateMonitor.Instance;
 
-    protected RedisCacheBase( IRedisConnector redis, ICachingTelemetryProvider telemetryProvider, bool monitorConnection)
-    {
-        _redis = redis;
-        _connectionState = monitorConnection ? new ConnectionStateMonitor(telemetryProvider,redis) : NullConnectionStateMonitor.Instance;
-    }
+    protected ICachingTelemetryProvider Telemetry { get; } = telemetryProvider;
 
     public event EventHandler? OnConnectionFailed
     {
@@ -34,7 +29,7 @@ public abstract class RedisCacheBase : IConnectionState
 
     public bool IsConnected => _connectionState.IsConnected;
 
-    protected IDatabase Database => _redis.Database;
+    protected IDatabase Database => redis.Database;
 
     public void Dispose()
     {
@@ -48,7 +43,7 @@ public abstract class RedisCacheBase : IConnectionState
         {
             if (disposing)
             {
-                _connectionState.Dispose();
+                // Dispose managed resources
             }
             _disposed = true;
         }

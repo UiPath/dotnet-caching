@@ -10,7 +10,6 @@ public sealed class RedisHashCache : RedisCacheBase, IHashCache
     private const string LogWarnMessage = "RedisHashCache exception.";
     private readonly ILogger<RedisHashCache> _logger;
     private readonly ISerializerProxy _serializer;
-    private readonly ICachingTelemetryProvider _telemetryProvider;
     private readonly ICacheEntryFactory _cacheEntryFactory;
     private readonly IResiliencePipeline _read;
     private readonly IResiliencePipeline _write;
@@ -32,7 +31,6 @@ public sealed class RedisHashCache : RedisCacheBase, IHashCache
         : base(redis, telemetryProvider, redisCacheOptions.ConnectionMonitorEnabled ?? cacheOptions.ConnectionMonitorEnabled)
     {
         _serializer = serializer;
-        _telemetryProvider = telemetryProvider;
         _logger = logger;
         _read = resiliencePipelineHolder.Read;
         _write = resiliencePipelineHolder.Write;
@@ -289,22 +287,6 @@ public sealed class RedisHashCache : RedisCacheBase, IHashCache
     }
 
     public ValueTask<bool> SetAsync<T>(CacheKey cacheKey, IDictionary<string, T?> values, HashCacheEntryOptions options, CancellationToken token = default)
-    {
-        NotCacheableException.ThrowIfNotCacheable<T>();
-        Validate(values);
-        var redisKey = ToRedisKey(cacheKey, token);
-        var entries = values.Select(kv => new HashEntry(kv.Key, _serializer.Serialize(kv.Value))).ToList();
-        if (entries.Count > 0 && options.Metadata != null)
-        {
-            entries.Add(new HashEntry(KnownFieldNames.MetadataKey, _serializer.Serialize(options.Metadata)));
-        }
-
-        var expiration = options.ExpireTime.HasValue ? _clock.ToDateTimeOffset(options.ExpireTime) : _clock.ToDateTimeOffset(options.TimeToLive);
-
-        return SetInnerAsync<T>(redisKey, entries, options.SetOption, expiration, token);
-    }
-
-    public ValueTask<bool> SetAsync<T>(CacheKey cacheKey, IDictionary<string, T?> values, HashCacheEntryOptions options, CancellationToken token = default) where T : struct
     {
         NotCacheableException.ThrowIfNotCacheable<T>();
         Validate(values);
@@ -581,6 +563,12 @@ public sealed class RedisHashCache : RedisCacheBase, IHashCache
     {
         var redisKey = ToRedisKey(cacheKey, token);
         IDictionary<string, T?> ret = Empty<T?>();
+
+        if (!IsConnected)
+        {
+            return ret;
+        }
+
         var operation = StartOperation<T>();
         try
         {
@@ -617,8 +605,13 @@ public sealed class RedisHashCache : RedisCacheBase, IHashCache
 
     private async ValueTask<ICacheEntry<IDictionary<string, T?>>> GetInnerCacheEntryAsync<T>(CacheKey cacheKey, CancellationToken token)
     {
+        var ret = Default<T>();
+        if(!IsConnected)
+        {
+            return ret;
+        }
+
         var redisKey = ToRedisKey(cacheKey, token);
-        ICacheEntry<IDictionary<string, T?>> ret = _cacheEntryFactory.Create(Empty<T?>(), DateTimeOffset.MinValue);
         var operation = StartOperation<T>();
         try
         {
@@ -651,6 +644,11 @@ public sealed class RedisHashCache : RedisCacheBase, IHashCache
         var now = _clock.UtcNow;
         var ret = false;
         token.ThrowIfCancellationRequested();
+        if (!IsConnected)
+        {
+            return ret;
+        }
+
         var operation = StartOperation<T>(nameof(SetAsync));
         try
         {
@@ -712,10 +710,10 @@ public sealed class RedisHashCache : RedisCacheBase, IHashCache
     }
 
     private ITelemetryOperation StartOperation([CallerMemberName] string name = "") =>
-        _telemetryProvider.StartOperation<RedisHashCache>(name);
+        Telemetry.StartOperation<RedisHashCache>(name);
 
     private ITelemetryOperation StartOperation<T>([CallerMemberName] string name = "") =>
-        _telemetryProvider.StartOperation<RedisHashCache, T>(name);
+        Telemetry.StartOperation<RedisHashCache, T>(name);
 
     private void AuditKeySize(RedisKey key, string field, RedisValue value)
     {
@@ -755,4 +753,6 @@ public sealed class RedisHashCache : RedisCacheBase, IHashCache
     }
 
     private static ImmutableDictionary<string, T?> Empty<T>() => ImmutableDictionary<string, T?>.Empty;
+    
+    private ICacheEntry<IDictionary<string, T?>> Default<T>() => _cacheEntryFactory.Create(Empty<T?>(), DateTimeOffset.MinValue);
 }

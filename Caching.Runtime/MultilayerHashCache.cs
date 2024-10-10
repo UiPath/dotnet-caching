@@ -262,7 +262,7 @@ public sealed class MultilayerHashCache : MultilayerCacheBase, IHashCache
         if (_memoryCache.TryGetValue<ICacheEntry<IDictionary<string, T?>>>(options.CacheKey, out var cacheEntry))
         {
             _logger.LogTrace("Found local. {CacheKey}", options.CacheKey);
-            if (_connectionEventSource.IsConnected)
+            if (_connectionState.IsConnected)
             {
                 return Filter(cacheEntry!, options);
             }

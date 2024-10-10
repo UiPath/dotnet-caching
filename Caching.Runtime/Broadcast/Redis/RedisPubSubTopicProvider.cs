@@ -41,7 +41,7 @@ public class RedisPubSubTopicProvider : RedisTopicProviderBase
     public override bool Enabled { get; }
 
     protected override ITopic<ICacheEvent> CreateInternalTopic(TopicKey topicKey) =>
-        new RedisPubSubTopic<ICacheEvent>(topicKey, _sourceUri, Redis, _redisChannelStrategy, () => new Subject<ICacheEvent>(), _formatter, _resiliencePipelineHolder, _options, _loggerFactory.Create<RedisPubSubTopic<ICacheEvent>>(), _stopTokenSource.Token);
+        new RedisPubSubTopic<ICacheEvent>(topicKey, _sourceUri, ConnectionState, Redis, _redisChannelStrategy, () => new Subject<ICacheEvent>(), _formatter, _resiliencePipelineHolder, _options, _loggerFactory.Create<RedisPubSubTopic<ICacheEvent>>(), _stopTokenSource.Token);
 
     protected override void Dispose(bool disposing)
     {

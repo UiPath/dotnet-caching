@@ -27,6 +27,7 @@ public class RedisPubSubTopicTests : IAsyncLifetime
     private RedisPubSubTopicOptions _options = default!;
     private string? _actualRedisChannel;
     private readonly TimeSpan _delay = 50.Milliseconds();
+    private bool _isConnected = true;
 
     private RedisPubSubTopic<ICacheEvent>? _sut;
     private async Task<RedisPubSubTopic<ICacheEvent>> Sut(int delayMultiplier = 2)
@@ -38,6 +39,16 @@ public class RedisPubSubTopicTests : IAsyncLifetime
         _sut = _fixture.Create<RedisPubSubTopic<ICacheEvent>>();
         await Task.Delay(_delay.Multiply(delayMultiplier));
         return _sut;
+    }
+
+    [Fact]
+    public async Task Publish_WhenDisconnected()
+    {
+        _isConnected = false;
+        var sut = await Sut();
+        var actual = await sut.PublishAsync(new TestCacheEvent());
+        actual.Should().BeFalse();
+        await _database.DidNotReceive().PublishAsync(Arg.Any<RedisChannel>(), Arg.Any<RedisValue>(), Arg.Any<CommandFlags>());
     }
 
     [Fact]
@@ -230,14 +241,17 @@ public class RedisPubSubTopicTests : IAsyncLifetime
         _options = new RedisPubSubTopicOptions
         {
             SubscriberTimeout = _delay,
-            SubscriberDueTime = TimeSpan.Zero
+            SubscriberDueTime = TimeSpan.Zero,
+            ConnectionMonitorEnabled = true
         };
         _fixture.Inject(_options);
 
         _redisConnector = _fixture.Freeze<IRedisConnector>();
         _redisConnector.Database.Returns(_database);
         _redisConnector.Subscriber.Returns(_subscriber);
-        _redisConnector.IsConnected.Returns(true);
+        _redisConnector.IsConnected.Returns(ctx => _isConnected);
+
+        _fixture.Inject<IConnectionState>(_redisConnector);
 
         return Task.CompletedTask;
     }

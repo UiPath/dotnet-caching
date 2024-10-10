@@ -25,8 +25,10 @@ public class RedisHashCacheTests : IAsyncLifetime
     private ICacheKeyStrategy _cacheKeyStrategy = default!;
     private IRedisKeyStrategy _redisKeyStrategy = default!;
     private IRedisConnector _connector = default!;
+    private bool _isConnected = true;
     private Version _version = new(6, 0);
     private RedisHashCache? _sut = null;
+
     private RedisHashCache Sut => _sut ??= _fixture.Create<RedisHashCache>();
 
     [Fact]
@@ -892,6 +894,27 @@ public class RedisHashCacheTests : IAsyncLifetime
         act.Should().NotThrow();
     }
 
+    [Fact]
+    public async Task Set_WithNoConnection()
+    {
+        _redisCacheOptions.ConnectionMonitorEnabled = true;
+        _isConnected = false;
+        var values = _fixture.Create<IDictionary<string, string?>>();
+        var actual = await Sut.SetAsync(_cacheKey, values, CancellationToken.None);
+        actual.Should().BeFalse();
+        await _transaction.DidNotReceive().ExecuteAsync();
+    }
+
+    [Fact]
+    public async Task Get_WithNoConnection()
+    {
+        _redisCacheOptions.ConnectionMonitorEnabled = true;
+        _isConnected = false;
+        var actual = await Sut.GetAsync<string>(_cacheKey, CancellationToken.None);
+        actual.Should().BeEmpty();
+        await _database.DidNotReceive().HashGetAllAsync(_redisKey, CommandFlags.PreferReplica);
+    }
+
     public Task DisposeAsync()
     {
         return Task.CompletedTask;
@@ -935,7 +958,7 @@ public class RedisHashCacheTests : IAsyncLifetime
         _connector = _fixture.Freeze<IRedisConnector>();
         _connector.Database.Returns(_ => _database);
         _connector.Version.Returns(_ => _version);
-        _connector.IsConnected.Returns(true);
+        _connector.IsConnected.Returns(_ => _isConnected);
         return Task.CompletedTask;
     }
 }

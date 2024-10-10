@@ -15,6 +15,7 @@ public sealed class RedisPubSubTopic<T> : ITopic<T>
     private readonly IResiliencePipeline _write;
     private readonly RedisPubSubSubjectWriter<T> _subscriber;
     private readonly EventDispatcher<T> _dispatcher;
+    private readonly IConnectionState _connectionState;
     private bool _disposed;
 
     public TopicKey TopicKey { get; }
@@ -24,6 +25,7 @@ public sealed class RedisPubSubTopic<T> : ITopic<T>
     public RedisPubSubTopic(
         TopicKey topicKey,
         Uri sourceUri,
+        IConnectionState connectionState,
         IRedisConnector redis,
         IRedisChannelStrategy redisChannelStrategy,
         Func<ISubject<T>> subjectFactory,
@@ -34,6 +36,7 @@ public sealed class RedisPubSubTopic<T> : ITopic<T>
         CancellationToken stopToken)
     {
         TopicKey = topicKey;
+        _connectionState = connectionState;
         _redisChannel = redisChannelStrategy.GetRedisChannel(topicKey);
         _stopTokenSource = CancellationTokenSource.CreateLinkedTokenSource(stopToken);
         _formatter = formatter;
@@ -52,6 +55,12 @@ public sealed class RedisPubSubTopic<T> : ITopic<T>
     public async ValueTask<bool> PublishAsync(T @event, CancellationToken token = default)
     {
         token.ThrowIfCancellationRequested();
+
+        if (!_connectionState.IsConnected)
+        {
+            return false;
+        }
+
         try
         {
             var messageString = _formatter.EncodeAsString(@event);

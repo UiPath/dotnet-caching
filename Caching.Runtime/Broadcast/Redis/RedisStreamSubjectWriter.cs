@@ -9,6 +9,7 @@ internal sealed class RedisStreamSubjectWriter<T> : IDisposable
     private bool _disposed;
     private readonly RedisStreamContext _context;
     private readonly IRedisConnector _redis;
+    private readonly IConnectionState _connectionState;
     private readonly ChannelWriter<T> _writer;
     private readonly IEventFormatterProxy<T> _formatter;
     private readonly ILogger _logger;
@@ -19,6 +20,7 @@ internal sealed class RedisStreamSubjectWriter<T> : IDisposable
 
     public RedisStreamSubjectWriter(
         RedisStreamContext context,
+        IConnectionState connectionState,
         IRedisConnector redis,
         ChannelWriter<T> channelWriter,
         IEventFormatterProxy<T> formatter,
@@ -27,6 +29,7 @@ internal sealed class RedisStreamSubjectWriter<T> : IDisposable
         CancellationToken stopToken)
     {
         _context = context;
+        _connectionState = connectionState;
         _redis = redis;
         _writer = channelWriter;
         _formatter = formatter;
@@ -73,7 +76,7 @@ internal sealed class RedisStreamSubjectWriter<T> : IDisposable
                 }
                 catch (Exception)
                 {
-                    await Task.Delay(_context.PollInterval, _cancelationToken).ConfigureAwait(false);
+                    await Wait().ConfigureAwait(false);
                 }
             }
         }
@@ -82,6 +85,12 @@ internal sealed class RedisStreamSubjectWriter<T> : IDisposable
 
     private async Task FetchBatch()
     {
+        if (!_connectionState.IsConnected)
+        {
+            await Wait().ConfigureAwait(false);
+            return;
+        }
+
         StreamEntry[] events = await _redis.Database.StreamReadGroupAsync(
             _context.Topic,
             _context.ConsumerGroup,
@@ -96,8 +105,10 @@ internal sealed class RedisStreamSubjectWriter<T> : IDisposable
             _cachingTelemetryProvider.TrackTopicReadMetric(_context.Topic!, _lastId);
             return;
         }
-        await Task.Delay(_context.PollInterval, _cancelationToken).ConfigureAwait(false);
+        await Wait().ConfigureAwait(false);
     }
+
+    private Task Wait() => Task.Delay(_context.PollInterval, _cancelationToken);
 
     private async Task<bool> ProcessException(Exception ex)
     {
@@ -134,7 +145,7 @@ internal sealed class RedisStreamSubjectWriter<T> : IDisposable
            _logger.LogError(ex, "Fetch events loop error");
         }
 
-        await Task.Delay(_context.PollInterval, _cancelationToken).ConfigureAwait(false);
+        await Wait().ConfigureAwait(false);
         return true;
     }
 

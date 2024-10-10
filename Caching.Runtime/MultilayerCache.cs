@@ -255,7 +255,7 @@ public sealed class MultilayerCache : MultilayerCacheBase, ICache
             if (_memoryCache.TryGetValue<ICacheEntry<T>>(option.CacheKey, out var entry))
             {
                 _logger.LogTrace("Found local. {CacheKeys}.", option.CacheKey);
-                if (_connectionEventSource.IsConnected)
+                if (_connectionState.IsConnected)
                 {
                     results.Add(new KeyValuePair<CacheKey, T?>(option.CacheKey, entry!.Value));
                 }
@@ -304,7 +304,7 @@ public sealed class MultilayerCache : MultilayerCacheBase, ICache
         if (_memoryCache.TryGetValue<ICacheEntry<T>>(options.CacheKey, out var entry))
         {
             _logger.LogTrace("Found local. {CacheKey}.", options.CacheKey);
-            if(_connectionEventSource.IsConnected)
+            if(_connectionState.IsConnected)
             {
                 return entry!.Value;
             }

@@ -25,4 +25,6 @@ public class InMemoryRedisCacheOptions : IMultilayerCacheOptions, IMemoryStatist
     public TimeSpan? PrimaryMaxExpiration { get; set; }
 
     public bool? ConnectionMonitorEnabled { get; set; }
+
+    public TimeSpan? ConnectionMonitorPeriod { get; set; } = TimeSpan.FromSeconds(5);
 }
