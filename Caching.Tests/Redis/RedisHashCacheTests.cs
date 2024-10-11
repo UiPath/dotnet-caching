@@ -46,6 +46,7 @@ public class RedisHashCacheTests : IAsyncLifetime
 
         var actual = await Sut.GetItemAsync<string>(_cacheKey, field, token: CancellationToken.None);
         actual.Should().Be(expected);
+        Sut.Name.Should().Be("Redis");
     }
 
     [Theory]
