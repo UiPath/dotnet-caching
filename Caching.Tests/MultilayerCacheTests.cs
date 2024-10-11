@@ -40,6 +40,7 @@ public class MultilayerCacheTests : IAsyncLifetime
             .Returns(expected);
 
         var actual = await Sut.GetAsync<string>(_cacheKey, token: CancellationToken.None);
+        Sut.Name.Should().NotBeNullOrWhiteSpace();
         _changeTokenFactory.Received(1).Create(_innerCacheKey, Arg.Any<ITopic<ICacheEvent>>(), Arg.Any<string>(), Arg.Any<Type>());
         _memoryCache.Received(1).CreateEntry(_innerCacheKey);
         actual.Should().Be(expected);
@@ -153,6 +154,7 @@ public class MultilayerCacheTests : IAsyncLifetime
     [Fact]
     public void Dispose_can_be_called()
     {
+        _options.ConnectionMonitorEnabled = true;
         Action act = () => Sut.Dispose();
         act.Should().NotThrow();
     }
@@ -762,7 +764,7 @@ public class MultilayerCacheTests : IAsyncLifetime
         _cacheKeyStrategy.GetCacheKey<string>(_cacheKey).Returns(_cacheKey);
         _topicKeyStrategy.GetTopicKey<string>().Returns(_topicKey);
         _topicFactory = _fixture.Freeze<ITopicFactory>();
-        _topicProvider = _fixture.Freeze<ITopicProvider>();
+        _topicProvider = _fixture.Freeze<ITopicProviderWithConnectionState>();
         _topic = _fixture.Freeze<ITopic<ICacheEvent>>();
         _topicFactory.Get(Arg.Any<string>()).Returns(_topicProvider);
         _topicProvider.Create(_topicKey).Returns(_topic);
@@ -786,5 +788,9 @@ public class MultilayerCacheTests : IAsyncLifetime
     protected virtual CacheKey ToInnerCacheKey<T>(CacheKey key)
     {
         return key;
+    }
+
+    public interface ITopicProviderWithConnectionState : ITopicProvider, IConnectionState
+    {
     }
 }

@@ -27,4 +27,6 @@ public class InMemoryCacheOptions : IMultilayerCacheOptions, IMemoryStatisticsOp
     public ITopicKeyStrategy? TopicKeyStrategy { get; set; }
 
     public bool? ConnectionMonitorEnabled { get; set; }
+
+    public TimeSpan? ConnectionMonitorPeriod { get; set; } = TimeSpan.FromSeconds(5);
 }

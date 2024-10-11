@@ -14,8 +14,10 @@ public class RedisStreamsTopicTests : IAsyncLifetime
     private ISubject<ICacheEvent> _subject = default!;
     private CancellationTokenSource _cancellationTokenSource = default!;
     private IObserver<ICacheEvent> _observer = default!;
+    private IConnectionState _connectionState = default!;
     private IDatabase _database = default!;
     private IResiliencePipelineHolder _resiliencePipelineHolder = default!;
+    private bool _isConnected = true;
 
     private RedisStreamsTopic<ICacheEvent>? _sut = null;
     private RedisStreamsTopic<ICacheEvent> Sut => _sut ??= _fixture.Create<RedisStreamsTopic<ICacheEvent>>();
@@ -49,6 +51,16 @@ public class RedisStreamsTopicTests : IAsyncLifetime
                 StreamPosition.NewMessages).Throws(new RedisServerException("BUSYGROUP Consumer Group name already exists"));
         Action act = () => Sut.Subscribe(observer);
         act.Should().NotThrow();
+    }
+
+    [Fact]
+    public async Task Publish_When_NotConnected()
+    {
+        _isConnected = false;
+        var actual = await Sut.PublishAsync(_fixture.Create<ICacheEvent>(), CancellationToken.None);
+        actual.Should().BeFalse();
+        await _database.DidNotReceive()
+        .StreamAddAsync(Arg.Any<RedisKey>(), Arg.Any<RedisValue>(), Arg.Any<RedisValue>(), Arg.Any<RedisValue?>(), maxLength: Arg.Any<int?>(), useApproximateMaxLength: true, flags: CommandFlags.DemandMaster);
     }
 
     [Fact]
@@ -103,6 +115,8 @@ public class RedisStreamsTopicTests : IAsyncLifetime
         _database = _fixture.Freeze<IDatabase>();
         _subject = _fixture.Freeze<ISubject<ICacheEvent>>();
         _observer = _fixture.Freeze<IObserver<ICacheEvent>>();
+        _connectionState = _fixture.Freeze<IConnectionState>();
+        _connectionState.IsConnected.Returns(info => _isConnected);
         _fixture.Inject<Func<ISubject<ICacheEvent>>>(() => _subject);
         _resiliencePipelineHolder = _fixture.Freeze<IResiliencePipelineHolder>();
         var noOpExecutor = new EmptyResiliencePipeline();

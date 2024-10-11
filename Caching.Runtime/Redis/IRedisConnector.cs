@@ -1,6 +1,6 @@
 ﻿namespace UiPath.Platform.Caching.Redis;
 
-public interface IRedisConnector : IConnectionState
+public interface IRedisConnector : IConnectionState, IDisposable
 {
     Version Version { get; }
 

@@ -41,8 +41,4 @@ public sealed class NullConnectionStateMonitor : IConnectionState
     }
 
     public bool IsConnected => true;
-
-    public void Dispose()
-    {
-    }
 }

@@ -7,4 +7,6 @@ public interface IMultilayerCacheOptions : ICacheOptions
     public ITopicKeyStrategy? TopicKeyStrategy { get; set; }
 
     public TimeSpan? PrimaryMaxExpiration { get; set; }
+
+    public TimeSpan? ConnectionMonitorPeriod { get; set; }
 }

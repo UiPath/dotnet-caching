@@ -25,8 +25,10 @@ public class RedisCacheTests : IAsyncLifetime
     private IRedisKeyStrategy _redisKeyStrategy = default!;
     private string _prefix = default!;
     private IRedisConnector _connector = default!;
+    private bool _isConnected = true;
     private Version _version = new(6, 0);
     private RedisCache? _sut = null;
+
     private RedisCache Sut => _sut ??= _fixture.Create<RedisCache>();
 
     [Fact]
@@ -40,6 +42,21 @@ public class RedisCacheTests : IAsyncLifetime
             });
         var actualValue = await Sut.GetAsync<string>(_cacheKey);
         actualValue.Should().Be(expectedValue);
+        Sut.Name.Should().Be("Redis");
+    }
+
+    [Fact]
+    public async Task Get_works_as_expected_when_disconnected()
+    {
+        _isConnected = false;
+        var value = _fixture.Create<string>();
+        _database.StringGetAsync(_redisKey, CommandFlags.PreferReplica)
+            .Returns(ci =>
+            {
+                return _serializer.Serialize(value);
+            });
+        var actualValue = await Sut.GetAsync<string>(_cacheKey);
+        actualValue.Should().Be(null);
     }
 
     [Fact]
@@ -101,6 +118,15 @@ public class RedisCacheTests : IAsyncLifetime
         Func<ValueTask<string?>> generator = default!;
         Func<Task> act = async () => await Sut.GetOrAddAsync(_fixture.Create<string>(), generator, CancellationToken.None);
         await act.Should().ThrowAsync<ArgumentNullException>();
+    }
+
+    [Fact]
+    public async Task GetOrAdd_generator()
+    {
+        var expectedValue = _fixture.Create<string?>();
+        Func<ValueTask<string?>> generator = () => ValueTask.FromResult(expectedValue);
+        var actual = await Sut.GetOrAddAsync(_fixture.Create<string>(), generator, TimeSpan.FromSeconds(5), CancellationToken.None);
+        actual.Should().Be(expectedValue);
     }
 
     [Fact]
@@ -305,6 +331,34 @@ public class RedisCacheTests : IAsyncLifetime
     [Fact]
     public Task Multi_set_works_as_expected_no_expiration() =>
         Multi_set_works_as_expected(typeof(object));
+
+    [Fact]
+    public async Task Multi_set_when_no_connection()
+    {
+        _isConnected = false;
+        var value = _fixture.Create<string>();
+        var actualResponse = await Sut.SetAsync(new KeyValuePair<CacheKey, string?>[] { new(_cacheKey, value), new(_multiKey, value) }, _fixture.Create<TimeSpan>(), CancellationToken.None);
+        actualResponse.Should().BeFalse();
+    }
+
+    [Fact]
+    public async Task Multi_set_when_defaultValue()
+    {
+        string? value = default;
+        var actualResponse = await Sut.SetAsync(new KeyValuePair<CacheKey, string?>[] { new(_cacheKey, value), new(_multiKey, value) }, _fixture.Create<TimeSpan>(), CancellationToken.None);
+        await _transaction.Received().KeyDeleteAsync(Arg.Any<RedisKey>(),Arg.Is<CommandFlags>(f => f.HasFlag(CommandFlags.DemandMaster)));
+    }
+
+    [Fact]
+    public async Task Multi_set_when_redis_exceptions()
+    {
+        var value = _fixture.Create<string>();
+        _database.CreateTransaction(Arg.Any<object?>()).Throws(new RedisException("test"));
+        var actualResponse = await Sut.SetAsync(new KeyValuePair<CacheKey, string?>[] { new(_cacheKey, value), new(_multiKey, value) }, _fixture.Create<TimeSpan>(), CancellationToken.None);
+        actualResponse.Should().BeFalse();
+    }
+
+
 
     [Theory]
     [InlineData("")]
@@ -514,7 +568,7 @@ public class RedisCacheTests : IAsyncLifetime
         _connector = _fixture.Freeze<IRedisConnector>();
         _connector.Database.Returns(_ => _database);
         _connector.Version.Returns(_ => _version);
-        _connector.IsConnected.Returns(true);
+        _connector.IsConnected.Returns(ctx => _isConnected);
         return Task.CompletedTask;
     }
 
@@ -569,7 +623,7 @@ public class RedisCacheTests : IAsyncLifetime
 
     private async Task Multi_set_works_as_expected(Type expirationType)
     {
-        var value = _fixture.Create<string>();
+        var value = _fixture.Create<string?>();
         var expiration = _fixture.Create<TimeSpan>();
         var expectedResponse = _fixture.Create<bool>();
         _transaction.StringSetAsync(_redisKey, Arg.Any<RedisValue>(), Arg.Any<TimeSpan?>(), Arg.Any<When>(), Arg.Is<CommandFlags>(f => f.HasFlag(CommandFlags.DemandMaster)))

@@ -1,6 +1,6 @@
 ﻿namespace UiPath.Platform.Caching;
 
-public interface IConnectionState : IDisposable
+public interface IConnectionState
 {
     event EventHandler? OnConnectionFailed;
 

@@ -1,5 +1,6 @@
 ﻿using System.Collections.Concurrent;
 using UiPath.Platform.Caching.Telemetry;
+using UiPath.Platform.Telemetry;
 
 namespace UiPath.Platform.Caching.Broadcast.Redis;
 
@@ -11,36 +12,39 @@ public abstract class RedisTopicProviderBase : ITopicProvider, IConnectionState
 
     private readonly CancellationTokenSource _stopTokenSource = new();
 
-    private readonly IConnectionState _connectionState;
 
     protected RedisTopicProviderBase(IRedisConnector redis, ICachingTelemetryProvider telemetryProvider, bool connectionMonitorEnabled)
     {
         Redis = redis;
-        _connectionState = connectionMonitorEnabled ? new ConnectionStateMonitor(telemetryProvider, redis) : NullConnectionStateMonitor.Instance;
+        Telemetry = telemetryProvider;
+        ConnectionState = connectionMonitorEnabled ? redis : NullConnectionStateMonitor.Instance;
     }
 
     protected IRedisConnector Redis { get; }
 
+    protected IConnectionState ConnectionState { get; }
+
+    protected ICachingTelemetryProvider Telemetry { get; }
 
     public event EventHandler? OnConnectionFailed
     {
-        add => _connectionState.OnConnectionFailed += value;
-        remove => _connectionState.OnConnectionFailed -= value;
+        add => ConnectionState.OnConnectionFailed += value;
+        remove => ConnectionState.OnConnectionFailed -= value;
     }
 
     public event EventHandler? OnConnectionRestored
     {
-        add => _connectionState.OnConnectionRestored += value;
-        remove => _connectionState.OnConnectionRestored -= value;
+        add => ConnectionState.OnConnectionRestored += value;
+        remove => ConnectionState.OnConnectionRestored -= value;
     }
 
     public event EventHandler? OnReconnected
     {
-        add => _connectionState.OnReconnected += value;
-        remove => _connectionState.OnReconnected -= value;
+        add => ConnectionState.OnReconnected += value;
+        remove => ConnectionState.OnReconnected -= value;
     }
 
-    public bool IsConnected => _connectionState.IsConnected;
+    public bool IsConnected => ConnectionState.IsConnected;
 
     public abstract string Name { get; }
 
@@ -77,7 +81,6 @@ public abstract class RedisTopicProviderBase : ITopicProvider, IConnectionState
         {
             if (disposing)
             {
-                _connectionState.Dispose();
                 _stopTokenSource?.Cancel();
                 _stopTokenSource?.Dispose();
                 _topics.Clear();

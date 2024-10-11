@@ -12,9 +12,8 @@ public abstract class MultilayerCacheBase : IDisposable
     protected readonly IDisposable _monitor;
     protected readonly CacheClock _clock;
     protected readonly CacheEventPublisher _eventPublisher;
-    protected readonly IConnectionState _connectionEventSource;
+    protected readonly IConnectionState _connectionState;
     protected readonly ITopicProvider _topicProvider;
-    protected readonly ICachingTelemetryProvider _telemetryProvider;
 
     protected MultilayerCacheBase(
         string cacheName,
@@ -30,23 +29,25 @@ public abstract class MultilayerCacheBase : IDisposable
         _logger = logger;
         _multiLayerCacheOptions = multiLayerCacheOptions;
         _memoryCache = memoryCacheAccessor();
-        _telemetryProvider = telemetryProvider;
+        Telemetry = telemetryProvider;
         _cacheEntryFactory = _multiLayerCacheOptions.EntryFactory ?? new CacheEntryFactory();
-        _monitor = _memoryCache.Monitor(multiLayerCacheOptions, _telemetryProvider, GetType().Name);
+        _monitor = _memoryCache.Monitor(multiLayerCacheOptions, Telemetry, GetType().Name);
         _clock = new CacheClock(_multiLayerCacheOptions.Clock, _multiLayerCacheOptions.DefaultExpiration);
         _topicProvider = topicFactory.Get(_multiLayerCacheOptions.Topic);
         _eventPublisher = new CacheEventPublisher(cacheName, _topicProvider, cacheEventFactory, logger);
         var connectionMonitorEnabled = multiLayerCacheOptions.ConnectionMonitorEnabled ?? cacheOptions.ConnectionMonitorEnabled;
-        _connectionEventSource = connectionMonitorEnabled ? GetConnectionMonitor(innerCache, _topicProvider) : NullConnectionStateMonitor.Instance;
+        _connectionState = connectionMonitorEnabled ? GetConnectionMonitor(innerCache, _topicProvider) : NullConnectionStateMonitor.Instance;
         Name = cacheName;
     }
 
     public string Name { get; }
 
+    protected ICachingTelemetryProvider Telemetry { get; }
+
     private IConnectionState GetConnectionMonitor(params object[] connectionStates)
     {
         var lst = connectionStates.OfType<IConnectionState>().ToArray();
-        return lst.Length == 0 ? NullConnectionStateMonitor.Instance : new ConnectionStateMonitor(_telemetryProvider, lst);
+        return lst.Length == 0 ? NullConnectionStateMonitor.Instance : new ConnectionStateMonitor(Telemetry, _multiLayerCacheOptions.ConnectionMonitorPeriod ?? TimeSpan.FromSeconds(5), lst);
     }
     public void Dispose()
     {
@@ -62,7 +63,10 @@ public abstract class MultilayerCacheBase : IDisposable
             {
                 _monitor.Dispose();
                 _memoryCache.Dispose();
-                _connectionEventSource.Dispose();
+                if (_connectionState is IDisposable connectionState)
+                {
+                    connectionState.Dispose();
+                }
             }
             _disposed = true;
         }

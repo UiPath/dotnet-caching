@@ -12,6 +12,7 @@ public sealed class RedisStreamsTopic<T> : ITopic<T>
     private readonly CancellationTokenSource _stopTokenSource;
     private readonly RedisStreamContext _context;
     private readonly ISubject<T> _subject;
+    private readonly IConnectionState _connectionState;
     private readonly IRedisConnector _redis;
     private readonly IEventFormatterProxy<T> _formatter;
     private readonly IResiliencePipeline _write;
@@ -29,6 +30,7 @@ public sealed class RedisStreamsTopic<T> : ITopic<T>
 
     public RedisStreamsTopic(
         TopicKey topicKey,
+        IConnectionState connectionState,
         IRedisConnector redis,
         Func<ISubject<T>> subjectFactory,
         IEventFormatterProxy<T> formatter,
@@ -40,6 +42,7 @@ public sealed class RedisStreamsTopic<T> : ITopic<T>
         CancellationToken stopToken)
     {
         TopicKey = topicKey;
+        _connectionState = connectionState;
         _formatter = formatter;
         _write = resiliencePipelineHolder.Write;
         _stopTokenSource = CancellationTokenSource.CreateLinkedTokenSource(stopToken);
@@ -51,7 +54,7 @@ public sealed class RedisStreamsTopic<T> : ITopic<T>
         _redisStreamKeyStrategy = streamOptions.RedisStreamKeyStrategy ?? new PrefixStrategy(RedisTypePrefixes.Streams, cacheOptions);
         _context = GetContext(topicKey, cacheOptions, streamOptions);
         var channel = ChannelHelper.Create<T>(streamOptions.ConsumerCapacity < 0, streamOptions.ConsumerCapacity > 0 ? streamOptions.ConsumerCapacity : streamOptions.PollBatchSize , streamOptions.FullMode);
-        _subscriber = new RedisStreamSubjectWriter<T>(_context, _redis, channel, _formatter, _logger, _cachingTelemetryProvider, _stopTokenSource.Token);
+        _subscriber = new RedisStreamSubjectWriter<T>(_context, _connectionState, _redis, channel, _formatter, _logger, _cachingTelemetryProvider, _stopTokenSource.Token);
         _dispatcher = new EventDispatcher<T>(topicKey, channel, _subject, _logger, _stopTokenSource.Token);
     }
 
@@ -65,6 +68,12 @@ public sealed class RedisStreamsTopic<T> : ITopic<T>
     public async ValueTask<bool> PublishAsync(T @event, CancellationToken token = default)
     {
         token.ThrowIfCancellationRequested();
+
+        if (!_connectionState.IsConnected)
+        {
+            return false;
+        }
+
         try
         {
             var messageString = _formatter.EncodeAsString(@event);
