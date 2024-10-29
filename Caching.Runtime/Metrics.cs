@@ -7,6 +7,7 @@ public static class Metrics
     public const string StreamConsumer = Prefix + "StreamConsumer";
     public const string RedisClient = Prefix + "RedisClient";
     public const string MemoryCache = Prefix + "MemoryCache";
+    public const string RedisProfilerSessions = Prefix + "RedisProfilerSessions";
     public const string Topic = Prefix + $"{nameof(Topic)}.";
     public const string Write = $".{nameof(Write)}";
     public const string Read = $".{nameof(Read)}";

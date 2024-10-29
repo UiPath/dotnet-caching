@@ -4,9 +4,9 @@ namespace UiPath.Platform.Caching.Redis;
 
 public interface IRedisProfiler
 {
-    bool CreateSession();
+    int Count { get; }
 
-    ProfilingSession GetSession();
+    ProfilingSession? GetSession(string? sessionId = null);
 
-    IEnumerable<IProfiledCommand> EndSession();
+    IDisposable CreateSession(string? sessionId = null);
 }

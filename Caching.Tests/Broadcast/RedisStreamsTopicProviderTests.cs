@@ -1,6 +1,4 @@
-﻿using StackExchange.Redis;
-
-namespace UiPath.Platform.Caching.Tests.Broadcast;
+﻿namespace UiPath.Platform.Caching.Tests.Broadcast;
 public class RedisStreamsTopicProviderTests : IAsyncLifetime
 {
     private readonly IFixture _fixture = AutoFixtureCreator.NSubsitute();

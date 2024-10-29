@@ -7,5 +7,6 @@ internal sealed record RedisStreamContext(
     RedisValue ConsumerGroup,
     Uri SourceUri,
     int PollBatchSize,
-    TimeSpan PollInterval
+    TimeSpan PollInterval,
+    bool ProfilerEnabled
 );

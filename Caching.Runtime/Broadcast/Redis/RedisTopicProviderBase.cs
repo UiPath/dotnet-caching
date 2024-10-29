@@ -1,10 +1,15 @@
 ﻿using System.Collections.Concurrent;
 using UiPath.Platform.Caching.Telemetry;
-using UiPath.Platform.Telemetry;
 
 namespace UiPath.Platform.Caching.Broadcast.Redis;
 
-public abstract class RedisTopicProviderBase : ITopicProvider, IConnectionState
+public abstract class RedisTopicProviderBase(
+    IRedisConnector redis,
+    ICachingTelemetryProvider telemetryProvider,
+    IRedisProfiler redisProfiler,
+    ILoggerFactory loggerFactory,
+    bool connectionMonitorEnabled)
+    : ITopicProvider, IConnectionState
 {
     private bool _disposed;
 
@@ -12,19 +17,15 @@ public abstract class RedisTopicProviderBase : ITopicProvider, IConnectionState
 
     private readonly CancellationTokenSource _stopTokenSource = new();
 
+    protected IRedisConnector Redis { get; } = redis;
 
-    protected RedisTopicProviderBase(IRedisConnector redis, ICachingTelemetryProvider telemetryProvider, bool connectionMonitorEnabled)
-    {
-        Redis = redis;
-        Telemetry = telemetryProvider;
-        ConnectionState = connectionMonitorEnabled ? redis : NullConnectionStateMonitor.Instance;
-    }
+    protected IConnectionState ConnectionState { get; } = connectionMonitorEnabled ? redis : NullConnectionStateMonitor.Instance;
 
-    protected IRedisConnector Redis { get; }
+    protected ICachingTelemetryProvider Telemetry { get; } = telemetryProvider;
 
-    protected IConnectionState ConnectionState { get; }
+    protected IRedisProfiler Profiler { get; } = redisProfiler;
 
-    protected ICachingTelemetryProvider Telemetry { get; }
+    protected ILoggerFactory LoggerFactory { get; } = loggerFactory;
 
     public event EventHandler? OnConnectionFailed
     {

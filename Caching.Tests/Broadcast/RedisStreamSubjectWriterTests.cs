@@ -195,7 +195,7 @@ public class RedisStreamSubjectWriterTests : IAsyncLifetime
         _sourceUri = new Uri("urn:" + _fixture.Create<string>());
         _pollBatchSize = _fixture.Create<int>();
         _pollInterval = TimeSpan.FromMilliseconds(50);
-        _context = new RedisStreamContext(_topic, _fieldName, _consumerName, _consumerGroup, _sourceUri, _pollBatchSize, _pollInterval);
+        _context = new RedisStreamContext(_topic, _fieldName, _consumerName, _consumerGroup, _sourceUri, _pollBatchSize, _pollInterval, false);
         _fixture.Inject(_context);
         _cancellationTokenSource = new CancellationTokenSource();
         _fixture.Inject(_cancellationTokenSource.Token);

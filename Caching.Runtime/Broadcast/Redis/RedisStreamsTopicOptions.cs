@@ -33,4 +33,6 @@ public class RedisStreamsTopicOptions
     public TimeSpan MaintainerQuarantineInterval { get; set; } = TimeSpan.FromHours(1);
 
     public string? MaintainerSearchPattern { get; set; }
+
+    public bool? ProfilerEnabled { get; set; }
 }

@@ -1,6 +1,4 @@
-﻿using System.Data;
-
-namespace UiPath.Platform.Caching.Tests.Broadcast;
+﻿namespace UiPath.Platform.Caching.Tests.Broadcast;
 
 public class ConnectionStateMonitorTests : IAsyncLifetime
 {

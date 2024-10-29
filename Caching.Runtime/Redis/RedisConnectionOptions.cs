@@ -1,4 +1,6 @@
-﻿namespace UiPath.Platform.Caching.Redis;
+﻿using StackExchange.Redis.Profiling;
+
+namespace UiPath.Platform.Caching.Redis;
 
 [ExcludeFromCodeCoverage]
 public class RedisConnectionOptions
@@ -15,7 +17,6 @@ public class RedisConnectionOptions
 
     public TimeSpan? HeartbeatInterval { get; set; }
 
-    public bool ProfilerEnabled { get; set; }
 
     public string ProfilerFeatureFlagKey { get; set; } = "RedisProfiler.Enabled";
 
@@ -40,6 +41,20 @@ public class RedisConnectionOptions
     public bool? FailFastBacklogPolicy { get; set; }
 
     public bool? ThreadPoolSocketManager { get; set; }
+
+    public bool ProfilerEnabled { get; set; }
+
+    public bool ProfilerHasDefaultSession { get; set; } = true;
+
+    public TimeSpan ProfilerFlushInterval { get; set; } = TimeSpan.FromSeconds(1);
+
+    public TimeSpan? ProfilerSessionMaxLifespan { get; set; } = TimeSpan.FromMinutes(1);
+
+    public int? ProfilerSessionMaxChecks { get; set; } = 100;
+
+    public Func<ProfilingSession?>? ProfilingSessionFactory { get; set; }
+
+    public ISystemClock? Clock { get; set; }
 
     public ConfigurationOptions CreateConfigurationOptions()
     {

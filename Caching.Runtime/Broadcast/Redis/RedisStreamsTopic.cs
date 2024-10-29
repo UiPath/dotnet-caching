@@ -19,6 +19,7 @@ public sealed class RedisStreamsTopic<T> : ITopic<T>
     private readonly ILogger _logger;
     private readonly ICachingTelemetryProvider _cachingTelemetryProvider;
     private readonly RedisStreamsTopicOptions _streamOptions;
+    private readonly RedisConnectionOptions _redisConnectionOptions;
     private readonly EventDispatcher<T> _dispatcher;
     private readonly object _syncObj = new();
     private bool _disposed;
@@ -36,9 +37,11 @@ public sealed class RedisStreamsTopic<T> : ITopic<T>
         IEventFormatterProxy<T> formatter,
         IResiliencePipelineHolder resiliencePipelineHolder,
         RedisStreamsTopicOptions streamOptions,
+        RedisConnectionOptions redisConnectionOptions,
         CacheOptions cacheOptions,
         ILogger<RedisStreamsTopic<T>> logger,
         ICachingTelemetryProvider cachingTelemetryProvider,
+        IRedisProfiler redisProfiler,
         CancellationToken stopToken)
     {
         TopicKey = topicKey;
@@ -50,11 +53,12 @@ public sealed class RedisStreamsTopic<T> : ITopic<T>
         _logger = logger;
         _cachingTelemetryProvider = cachingTelemetryProvider;
         _streamOptions = streamOptions;
+        _redisConnectionOptions = redisConnectionOptions;
         _subject = subjectFactory();
         _redisStreamKeyStrategy = streamOptions.RedisStreamKeyStrategy ?? new PrefixStrategy(RedisTypePrefixes.Streams, cacheOptions);
         _context = GetContext(topicKey, cacheOptions, streamOptions);
         var channel = ChannelHelper.Create<T>(streamOptions.ConsumerCapacity < 0, streamOptions.ConsumerCapacity > 0 ? streamOptions.ConsumerCapacity : streamOptions.PollBatchSize , streamOptions.FullMode);
-        _subscriber = new RedisStreamSubjectWriter<T>(_context, _connectionState, _redis, channel, _formatter, _logger, _cachingTelemetryProvider, _stopTokenSource.Token);
+        _subscriber = new RedisStreamSubjectWriter<T>(_context, _connectionState, _redis, channel, _formatter, _logger, _cachingTelemetryProvider, redisProfiler, _stopTokenSource.Token);
         _dispatcher = new EventDispatcher<T>(topicKey, channel, _subject, _logger, _stopTokenSource.Token);
     }
 
@@ -158,7 +162,8 @@ public sealed class RedisStreamsTopic<T> : ITopic<T>
             ConsumerGroup: sourceUriAsString,
             SourceUri: sourceUri,
             PollBatchSize: options.PollBatchSize,
-            PollInterval: options.PollInterval
+            PollInterval: options.PollInterval,
+            ProfilerEnabled: options.ProfilerEnabled ?? _redisConnectionOptions.ProfilerEnabled
             );
     }
 }

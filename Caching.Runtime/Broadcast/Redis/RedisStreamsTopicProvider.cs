@@ -7,9 +7,9 @@ namespace UiPath.Platform.Caching.Broadcast.Redis;
 public class RedisStreamsTopicProvider : RedisTopicProviderBase
 {
     private readonly RedisStreamsTopicOptions _redisStreamsTopicOptions;
+    private readonly RedisConnectionOptions _redisConnectionOptions;
     private readonly CacheOptions _cacheOptions;
     private readonly IEventFormatterProxy<ICacheEvent> _formatter;
-    private readonly ILoggerFactory _loggerFactory;
     private readonly IResiliencePipelineHolder _resiliencePipelineHolder;
     private readonly CancellationTokenSource _stopTokenSource = new();
     private bool _disposed;
@@ -22,15 +22,16 @@ public class RedisStreamsTopicProvider : RedisTopicProviderBase
         IEventFormatterProxy<ICacheEvent> formatter,
         IResiliencePipelineHolder resiliencePipelineHolder,
         ILoggerFactory loggerFactory,
-        ICachingTelemetryProvider cachingTelemetryProvider)
-        : base(redis, cachingTelemetryProvider, redisStreamsTopicOptionsAccessor.Value.ConnectionMonitorEnabled ?? cacheOptionsAccessor.Value.ConnectionMonitorEnabled)
+        ICachingTelemetryProvider cachingTelemetryProvider,
+        IRedisProfiler redisProfiler)
+        : base(redis, cachingTelemetryProvider, redisProfiler, loggerFactory, redisStreamsTopicOptionsAccessor.Value.ConnectionMonitorEnabled ?? cacheOptionsAccessor.Value.ConnectionMonitorEnabled)
     {
         _redisStreamsTopicOptions = redisStreamsTopicOptionsAccessor.Value;
+        _redisConnectionOptions = connectionOptionsAccessor.Value;
         _cacheOptions = cacheOptionsAccessor.Value;
         _resiliencePipelineHolder = resiliencePipelineHolder;
         _formatter = formatter;
-        _loggerFactory = loggerFactory;
-        Enabled = connectionOptionsAccessor.Value.Enabled && _redisStreamsTopicOptions.Enabled;
+        Enabled = _redisConnectionOptions.Enabled && _redisStreamsTopicOptions.Enabled;
     }
 
     public override string Name => KnownTopicNames.RedisStreams;
@@ -46,9 +47,11 @@ public class RedisStreamsTopicProvider : RedisTopicProviderBase
             _formatter,
             _resiliencePipelineHolder,
             _redisStreamsTopicOptions,
+            _redisConnectionOptions,
             _cacheOptions,
-            _loggerFactory.Create<RedisStreamsTopic<ICacheEvent>>(),
+            LoggerFactory.Create<RedisStreamsTopic<ICacheEvent>>(),
             Telemetry,
+            Profiler,
             _stopTokenSource.Token);
 
     protected override void Dispose(bool disposing)

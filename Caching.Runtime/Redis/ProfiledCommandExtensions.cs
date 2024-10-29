@@ -6,6 +6,7 @@ using StackExchange.Redis.Profiling;
 namespace UiPath.Platform.Caching.Redis;
 
 [SuppressMessage("SonarLint.Rule", "S3011: Reflection should not be used to increase accessibility of classes, methods, or fields")]
+[ExcludeFromCodeCoverage]
 public static class ProfiledCommandExtensions
 {
     public static string GetCommandName(this IProfiledCommand profiledCommand)
@@ -31,7 +32,10 @@ public static class ProfiledCommandExtensions
             _ => null,
         };
 
-    private static readonly Lazy<RedisProfileFetcher> _fetcherLazy = new(() => {
+    internal static Lazy<RedisProfileFetcher> FetcherLazy { get; set; } = new(FetcherFactory);
+
+    private static RedisProfileFetcher FetcherFactory()
+    {
         var messageType = Type.GetType("StackExchange.Redis.Message,StackExchange.Redis", false);
         var profiledCommandType = Type.GetType("StackExchange.Redis.Profiling.ProfiledCommand,StackExchange.Redis", false);
         if (messageType != null && profiledCommandType != null)
@@ -52,7 +56,7 @@ public static class ProfiledCommandExtensions
         }
 
         return new RedisProfileFetcher();
-    });
+    }
 
     /// <summary>
     /// Builds a delegate to get a property from an object. <paramref name="type"/> is cast to <see cref="Object"/>,
@@ -87,7 +91,7 @@ public static class ProfiledCommandExtensions
 
     private static string? GetCommandAndKey(this IProfiledCommand profiledCommand)
     {
-        var fetcher = _fetcherLazy.Value;
+        var fetcher = FetcherLazy.Value;
         if (profiledCommand.GetType() != fetcher.ProfiledCommandType || fetcher.Message == null)
             return null;
 
@@ -95,7 +99,7 @@ public static class ProfiledCommandExtensions
         return fetcher.CommandAndKey?.Invoke(message) as string;
     }
 
-    private struct RedisProfileFetcher
+    internal struct RedisProfileFetcher
     {
         public Func<object, object>? Message { get; set; }
         public Func<object, object>? CommandAndKey { get; set; }

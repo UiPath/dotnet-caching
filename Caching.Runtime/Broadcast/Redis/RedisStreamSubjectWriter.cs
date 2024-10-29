@@ -14,6 +14,7 @@ internal sealed class RedisStreamSubjectWriter<T> : IDisposable
     private readonly IEventFormatterProxy<T> _formatter;
     private readonly ILogger _logger;
     private readonly ICachingTelemetryProvider _cachingTelemetryProvider;
+    private readonly IRedisProfiler _redisProfiler;
     private readonly CancellationTokenSource _stopTokenSource;
     private readonly CancellationToken _cancelationToken;
     private RedisValue _lastId = StreamPosition.NewMessages;
@@ -26,6 +27,7 @@ internal sealed class RedisStreamSubjectWriter<T> : IDisposable
         IEventFormatterProxy<T> formatter,
         ILogger logger,
         ICachingTelemetryProvider cachingTelemetryProvider,
+        IRedisProfiler redisProfiler,
         CancellationToken stopToken)
     {
         _context = context;
@@ -35,6 +37,7 @@ internal sealed class RedisStreamSubjectWriter<T> : IDisposable
         _formatter = formatter;
         _logger = logger;
         _cachingTelemetryProvider = cachingTelemetryProvider;
+        _redisProfiler = redisProfiler;
         _stopTokenSource = CancellationTokenSource.CreateLinkedTokenSource(stopToken);
         _cancelationToken = _stopTokenSource.Token;
         FetchTask = Task.Run(FetchLoop, _cancelationToken);
@@ -61,27 +64,32 @@ internal sealed class RedisStreamSubjectWriter<T> : IDisposable
         _logger.LogDebug("Fetch events loop started");
         while (ContinueLoop)
         {
-            try
-            {
-                await FetchBatch().ConfigureAwait(false);
-            }
-            catch (Exception ex)
+            using (CreateProfilerSession())
             {
                 try
                 {
-                    if (!await ProcessException(ex).ConfigureAwait(false))
-                    {
-                        break;
-                    }
+                    await FetchBatch().ConfigureAwait(false);
                 }
-                catch (Exception)
+                catch (Exception ex)
                 {
-                    await Wait().ConfigureAwait(false);
+                    try
+                    {
+                        if (!await ProcessException(ex).ConfigureAwait(false))
+                        {
+                            break;
+                        }
+                    }
+                    catch (Exception)
+                    {
+                        await Wait().ConfigureAwait(false);
+                    }
                 }
             }
         }
         _logger.LogDebug("Fetch events loop stopped");
     }
+
+    private IDisposable CreateProfilerSession() => _context.ProfilerEnabled ? _redisProfiler.CreateSession($"{_context.Topic}:{Guid.NewGuid()}") : Disposable.Empty;
 
     private async Task FetchBatch()
     {
