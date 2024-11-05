@@ -52,6 +52,8 @@ public class RedisConnectionOptions
 
     public int? ProfilerSessionMaxChecks { get; set; } = 100;
 
+    public bool ProfilerTrackMetricEnabled { get; set; } = true;
+
     public Func<ProfilingSession?>? ProfilingSessionFactory { get; set; }
 
     public ISystemClock? Clock { get; set; }

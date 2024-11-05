@@ -117,7 +117,11 @@ internal sealed class RedisProfiler : IRedisProfiler, IDisposable
     }
     private void DrainAllSessions()
     {
-        _telemetryProvider.TrackMetric(Metrics.RedisProfilerSessions, _sessions.Count);
+        if (_options.ProfilerTrackMetricEnabled)
+        {
+            _telemetryProvider.TrackMetric(Metrics.RedisProfilerSessions, _sessions.Count);
+        }
+
         DrainDefaultSession();
         foreach (var entry in _sessions)
         {
