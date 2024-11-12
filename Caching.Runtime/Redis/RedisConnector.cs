@@ -50,6 +50,8 @@ public sealed class RedisConnector : IRedisConnector
 
     public bool IsConnected => ConnectionMultiplexer.IsConnected;
 
+    public EndPoint[] GetEndPoints(bool configuredOnly = false) => ConnectionMultiplexer.GetEndPoints(configuredOnly);
+
     public void ForceReconnect()
     {
         if (!_lazyCacheConnectionMultiplexer.IsValueCreated)

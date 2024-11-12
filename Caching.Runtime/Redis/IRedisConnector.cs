@@ -1,4 +1,6 @@
-﻿namespace UiPath.Platform.Caching.Redis;
+﻿using System.Net;
+
+namespace UiPath.Platform.Caching.Redis;
 
 public interface IRedisConnector : IConnectionState, IDisposable
 {
@@ -9,4 +11,6 @@ public interface IRedisConnector : IConnectionState, IDisposable
     ISubscriber Subscriber { get; }
 
     void ForceReconnect();
+
+    EndPoint[] GetEndPoints(bool configuredOnly = false);
 }
