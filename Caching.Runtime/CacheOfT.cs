@@ -26,6 +26,9 @@ public class Cache<T> : ICache<T>
     public ValueTask<T?> GetAsync(CacheKey cacheKey, CancellationToken token = default) =>
         _cache.GetAsync<T>(GetCacheKey(cacheKey), token);
 
+    public ValueTask<KeyValuePair<CacheKey, T?>[]> GetAsync(CacheKey[] cacheKeys, CancellationToken token = default) =>
+        _cache.GetAsync<T>(GetCacheKeys(cacheKeys), token);
+
     public ValueTask<T?> GetOrAddAsync(CacheKey cacheKey, Func<ValueTask<T?>> generator, CancellationToken token = default) =>
         _cache.GetOrAddAsync(GetCacheKey(cacheKey), generator, token);
 
@@ -47,6 +50,9 @@ public class Cache<T> : ICache<T>
     public ValueTask<bool> RemoveAsync(CacheKey cacheKey, CancellationToken token = default) =>
         _cache.RemoveAsync<T>(GetCacheKey(cacheKey), token);
 
+    public ValueTask<bool> RemoveAsync(CacheKey[] cacheKeys, CancellationToken token = default) =>
+        _cache.RemoveAsync<T>(GetCacheKeys(cacheKeys), token);
+
     public ValueTask<bool> SetAsync(CacheKey cacheKey, T? value, CancellationToken token = default) =>
         _cache.SetAsync(GetCacheKey(cacheKey), value, token);
 
@@ -56,6 +62,15 @@ public class Cache<T> : ICache<T>
     public ValueTask<bool> SetAsync(CacheKey cacheKey, T? value, DateTimeOffset? expiration, CancellationToken token = default) =>
         _cache.SetAsync(GetCacheKey(cacheKey), value, expiration, token);
 
+    public ValueTask<bool> SetAsync(KeyValuePair<CacheKey, T?>[] keyValues, CancellationToken token = default) =>
+        _cache.SetAsync(GetKeyValuePairs(keyValues), token);
+
+    public ValueTask<bool> SetAsync(KeyValuePair<CacheKey, T?>[] keyValues, TimeSpan? expiration = null, CancellationToken token = default) =>
+        _cache.SetAsync(GetKeyValuePairs(keyValues), expiration, token);
+
+    public ValueTask<bool> SetAsync(KeyValuePair<CacheKey, T?>[] keyValues, DateTimeOffset? expiration = null, CancellationToken token = default) =>
+        _cache.SetAsync(GetKeyValuePairs(keyValues), expiration, token);
+ 
     public ValueTask<TimeSpan?> TimeToLiveAsync(CacheKey cacheKey, CancellationToken token = default) =>
         _cache.TimeToLiveAsync<T>(GetCacheKey(cacheKey), token);
 
@@ -64,5 +79,11 @@ public class Cache<T> : ICache<T>
 
     private CacheKey GetCacheKey(CacheKey cacheKey) =>
         _cacheKeyStrategy.GetCacheKey<T>(cacheKey);
+
+    private CacheKey[] GetCacheKeys(CacheKey[] cacheKeys) =>
+        cacheKeys.Select(GetCacheKey).ToArray();
+
+    private KeyValuePair<CacheKey, T?>[] GetKeyValuePairs(KeyValuePair<CacheKey, T?>[] keyValues) =>
+        keyValues.Select(kv => new KeyValuePair<CacheKey, T?>(GetCacheKey(kv.Key), kv.Value)).ToArray();
 }
 
