@@ -22,7 +22,6 @@
   </ItemGroup>
   <ItemGroup>
     <ProjectReference Include="..\Caching.Abstractions\Caching.Abstractions.csproj" />
-    <ProjectReference Include="..\Caching.Telemetry\Caching.Telemetry.csproj" />
   </ItemGroup>
   <ItemGroup>
     <PackageReference Update="SonarAnalyzer.CSharp">

@@ -16,6 +16,7 @@
     <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" />
     <PackageReference Include="CloudNative.CloudEvents" />
     <PackageReference Include="CloudNative.CloudEvents.SystemTextJson" />
+    <PackageReference Include="System.Text.Json" />
   </ItemGroup>
   <ItemGroup>
     <ProjectReference Include="..\Caching.Runtime\Caching.Runtime.csproj" />
