@@ -1,5 +1,5 @@
 ﻿using StackExchange.Redis.Profiling;
-using UiPath.Platform.Telemetry;
+using UiPath.Platform.Caching.Telemetry;
 using static UiPath.Platform.Caching.Redis.ProfiledCommandExtensions;
 
 namespace UiPath.Platform.Caching.Tests;
@@ -8,7 +8,7 @@ public class ProfiledCommandProcessorTest : IAsyncLifetime
     private readonly IFixture _fixture = AutoFixtureCreator.NSubsitute();
 
     private ProfiledCommandProcessor? _sut = null;
-    private ITelemetryProvider _telemetryProvider = default!;
+    private ICachingTelemetryProvider _telemetryProvider = default!;
     private IProfiledCommand _profiledCommand = default!;
     private Lazy<RedisProfileFetcher> _oldFetcherLazy = default!;
 
@@ -53,7 +53,7 @@ public class ProfiledCommandProcessorTest : IAsyncLifetime
 
     public Task InitializeAsync()
     {
-        _telemetryProvider = _fixture.Freeze<ITelemetryProvider>();
+        _telemetryProvider = _fixture.Freeze<ICachingTelemetryProvider>();
         _profiledCommand = _fixture.Freeze<IProfiledCommand>();
         _oldFetcherLazy = FetcherLazy;
         FetcherLazy = new(() => new RedisProfileFetcher

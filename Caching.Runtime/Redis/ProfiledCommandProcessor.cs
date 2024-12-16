@@ -1,9 +1,9 @@
 ﻿using StackExchange.Redis.Profiling;
-using UiPath.Platform.Telemetry;
+using UiPath.Platform.Caching.Telemetry;
 
 namespace UiPath.Platform.Caching.Redis;
 
-public sealed class ProfiledCommandProcessor(ITelemetryProvider telemetryProvider) : IProfiledCommandProcessor
+public sealed class ProfiledCommandProcessor(ICachingTelemetryProvider telemetryProvider) : IProfiledCommandProcessor
 {
     public static string FlagsField { get; set; } = "Flags";
 
