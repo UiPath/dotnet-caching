@@ -4,7 +4,8 @@ using Microsoft.Extensions.Primitives;
 namespace UiPath.Platform.Caching.Config;
 #nullable disable
 
-internal class NullConfiguration : IConfiguration
+[ExcludeFromCodeCoverage]
+public class NullConfiguration : IConfiguration
 {
     public static readonly IConfiguration Instance = new NullConfiguration();
 
@@ -17,9 +18,9 @@ internal class NullConfiguration : IConfiguration
         }
     }
 
-    public IEnumerable<IConfigurationSection> GetChildren() => Enumerable.Empty<IConfigurationSection>();
+    public IEnumerable<IConfigurationSection> GetChildren() => [];
 
     public IChangeToken GetReloadToken() => NullChangeToken.Singleton;
 
-    public IConfigurationSection GetSection(string key) => null;
+    public IConfigurationSection GetSection(string key) => NullConfigurationSection.Instance;
 }

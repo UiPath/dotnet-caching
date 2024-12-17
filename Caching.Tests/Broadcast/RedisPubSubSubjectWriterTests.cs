@@ -43,7 +43,7 @@ public class RedisPubSubSubjectWriterTests : IAsyncLifetime
         var sut = await Sut();
         action.Should().NotBeNull();
         action!(_redisChannel, RedisValue.Null);
-        await Task.Delay(100);
+        await Task.Delay(_delay.Multiply(5));
         _channel.Reader.TryRead(out var item).Should().BeFalse();
     }
 
@@ -59,7 +59,7 @@ public class RedisPubSubSubjectWriterTests : IAsyncLifetime
         var sut = await Sut();
         action.Should().NotBeNull();
         action!(_redisChannel, (RedisValue)_fixture.Create<string>());
-        await Task.Delay(100);
+        await Task.Delay(_delay.Multiply(5));
         _channel.Reader.TryRead(out var item).Should().BeFalse();
     }
 

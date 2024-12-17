@@ -26,6 +26,7 @@ public static class ServiceCollectionExtensions
     public static IServiceCollection AddCaching(this IServiceCollection services, IConfigurationSection? configuration = null, Action<ICachingBuilder>? configure = null, Action<CacheOptions>? configureOptions = null)
     {
         ArgumentNullException.ThrowIfNull(services);
+        configuration ??= NullConfigurationSection.Instance;
 
         services.AddOptions();
 
