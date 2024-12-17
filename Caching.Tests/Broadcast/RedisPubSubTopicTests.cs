@@ -126,6 +126,7 @@ public class RedisPubSubTopicTests : IAsyncLifetime
     {
         var sut = await Sut();
         var disposable = sut.Subscribe(_observer);
+        await Task.Delay(_delay.Multiply(10));
         _subscriber.Received().Subscribe(Arg.Any<RedisChannel>(), Arg.Any<Action<RedisChannel, RedisValue>>(), Arg.Any<CommandFlags>());
         await _subscriber.DidNotReceive().SubscribeAsync(Arg.Any<RedisChannel>(), Arg.Any<Action<RedisChannel, RedisValue>>(), Arg.Any<CommandFlags>());
         disposable.Should().NotBeNull();

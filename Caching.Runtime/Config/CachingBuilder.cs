@@ -5,19 +5,13 @@ using UiPath.Platform.Caching.Telemetry;
 namespace UiPath.Platform.Caching.Config;
 
 [ExcludeFromCodeCoverage]
-public class CachingBuilder : ICachingBuilder
+public class CachingBuilder(IServiceCollection services, IConfiguration? configuration = null) : ICachingBuilder
 {
     private readonly List<Action<ICachingBuilder>> _callbacks = [];
 
-    public CachingBuilder(IServiceCollection services, IConfiguration? configuration = null)
-    {
-        Services = services;
-        Configuration = configuration ?? NullConfiguration.Instance;
-    }
+    public IServiceCollection Services { get; } = services;
 
-    public IServiceCollection Services { get; }
-
-    public IConfiguration Configuration { get; }
+    public IConfiguration Configuration { get; } = configuration ?? NullConfiguration.Instance;
 
     public bool Enabled { get; set; } = true;
 
