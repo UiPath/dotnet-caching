@@ -11,7 +11,12 @@ public interface ICachingTelemetryProvider
     public ITelemetryOperation StartOperation(Type cacheClass, string methodName = "") =>
         StartOperation(cacheClass, null, methodName);
 
-    public ITelemetryOperation StartOperation(Type cacheClass, Type? cacheObject, string methodName = "");
+    public ITelemetryOperation StartOperation(Type cacheClass, Type? cacheObject, string methodName = "")
+    {
+        var ret = new TelemetryOperation(cacheClass, methodName, cacheObject, this);
+        ret.Start();
+        return ret;
+    }
 
     void TrackDependency(string type, string target, string name, string data, DateTimeOffset startTime, TimeSpan duration, string resultCode, bool success, IDictionary<string, string>? properties = null, IDictionary<string, double>? metrics = null);
 
