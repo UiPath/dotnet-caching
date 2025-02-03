@@ -238,7 +238,7 @@ public sealed class MultilayerCache : MultilayerCacheBase, ICache
                 _memoryCache.Remove(option.CacheKey);
             }
 
-            var removeInnerResult = await _innerCache.RemoveAsync<T>(options.Select(o => o.CacheKey).ToArray(), token);
+            var removeInnerResult = await _innerCache.RemoveAsync<T>(options.Select(o => o.CacheKey).ToArray(), token).ConfigureAwait(false);
             if (!removeInnerResult)
             {
                 return false;
