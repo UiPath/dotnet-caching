@@ -120,7 +120,13 @@ public sealed class MultilayerCache : MultilayerCacheBase, ICache
                 return false;
             }
         }
-        
+
+        var internalSetResult = await InternalSetAsync<T>(setEntries.ToArray(), token).ConfigureAwait(false);
+        if (!internalSetResult)
+        {
+            return false;
+        }
+
         foreach (var cacheEntry in setEntries.Select(s => s.CacheEntry))
         {
             _logger.LogDebug("Replacing cached key {CacheKey}", cacheEntry.CacheKey);
@@ -131,7 +137,7 @@ public sealed class MultilayerCache : MultilayerCacheBase, ICache
             }
         }
 
-        return await InternalSetAsync<T>(setEntries.ToArray(), token).ConfigureAwait(false);
+        return true;
     }
 
     public ValueTask<bool> RemoveAsync<T>(CacheKey cacheKey, CancellationToken token = default)
@@ -227,9 +233,19 @@ public sealed class MultilayerCache : MultilayerCacheBase, ICache
     {
         try
         {
+            var removeInnerResult = await _innerCache.RemoveAsync<T>(options.Select(o => o.CacheKey).ToArray(), token).ConfigureAwait(false);
+            if (!removeInnerResult)
+            {
+                return false;
+            }
+
             foreach (var option in options)
             {
                 _memoryCache.Remove(option.CacheKey);
+            }
+
+            foreach (var option in options)
+            {
                 var removedEventPublished = await _eventPublisher.CacheRemovedAsync(option).ConfigureAwait(false);
                 if (!removedEventPublished)
                 {
@@ -237,7 +253,7 @@ public sealed class MultilayerCache : MultilayerCacheBase, ICache
                 }
             }
 
-            return await _innerCache.RemoveAsync<T>(options.Select(o => o.CacheKey).ToArray(), token);
+            return true;
         }
         catch (Exception ex)
         {
