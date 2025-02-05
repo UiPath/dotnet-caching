@@ -461,12 +461,13 @@ public class MultilayerCacheTests : IAsyncLifetime
         _topic.PublishAsync(Arg.Any<ICacheEvent>(), Arg.Any<CancellationToken>())
             .Returns(_ => eventPublished);
         var actual = await Sut.RemoveAsync<string>(new CacheKey[] { _cacheKey, _multiKey }, token: CancellationToken.None);
-        _memoryCache.Received(1).Remove(_innerCacheKey);
-        _memoryCache.Received(1).Remove(_innerMultiKey);
         await _innerCache.Received(1).RemoveAsync<string>(Arg.Is<CacheKey[]>(c => c.Contains(_innerMultiKey) && c.Contains(_innerCacheKey)), Arg.Any<CancellationToken>());
         
         if (removed)
         {
+            _memoryCache.Received(1).Remove(_innerCacheKey);
+            _memoryCache.Received(1).Remove(_innerMultiKey);
+
             // If one event is not published, the second event publish is skipped
             await _topic.Received(eventPublished ? 2 : 1).PublishAsync(Arg.Any<ICacheEvent>(), Arg.Any<CancellationToken>());
         }
