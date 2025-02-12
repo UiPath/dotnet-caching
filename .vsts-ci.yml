@@ -86,8 +86,8 @@ stages:
         displayName: Use .NET 8 SDK
         inputs:
           packageType: sdk
-          version: 8.x
-          useGlobalJson: true
+          version: 8.0.404
+          useGlobalJson: false
           includePreviewVersions: false
           performMultiLevelLookup: true
 
