@@ -298,6 +298,7 @@ public sealed class MultilayerCache : MultilayerCacheBase, ICache
         for (int i = 0; i < keys.Length; i++)
         {
             var keyValue = fetched[i];
+            results.Add(keyValue);
 
             if (IsDefault(keyValue.Value))
             {
@@ -307,7 +308,6 @@ public sealed class MultilayerCache : MultilayerCacheBase, ICache
             _logger.LogTrace("Found inner cache copy at cacheKey {CacheKey}", keyValue.Key);
             var option = cacheEntriesToFetch[i];
             option.Expiration = await _innerCache.ExpireTimeAsync<T>(keyValue.Key, token).ConfigureAwait(false) ?? _clock.DefaultDateTimeOffset();
-            results.Add(keyValue);
             MemorySet(option, keyValue);
 
         }
