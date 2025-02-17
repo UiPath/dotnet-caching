@@ -3,7 +3,6 @@
 [ExcludeFromCodeCoverage]
 public static class InMemoryCollectionExtensions
 {
-    private static int _callbackRegistered = 0;
     public static ICachingBuilder AddMemory(this ICachingBuilder builder, string sectionName = KnownCacheProviderNames.InMemory) =>
         builder.AddMemory(opt => builder.Configuration.GetSection(sectionName).Bind(opt));
 
@@ -16,20 +15,9 @@ public static class InMemoryCollectionExtensions
         {
             return builder;
         }
-        builder.Services.TryAddEnumerable(ServiceDescriptor.Singleton<ICacheProvider, InMemoryCacheProvider>());
-
-        return builder.AddCallback();
-    }
-
-    private static ICachingBuilder AddCallback(this ICachingBuilder builder)
-    {
-        if (Interlocked.Exchange(ref _callbackRegistered, 1) == 0)
-        {
-            builder.RegisterOnCompleteCallback(builder =>
-            {
-                builder.Services.AddMemoryCacheFactory();
-            });
-        }
+        builder.Services
+            .TryAddMemoryCacheFactory()
+            .TryAddEnumerable(ServiceDescriptor.Singleton<ICacheProvider, InMemoryCacheProvider>());
 
         return builder;
     }

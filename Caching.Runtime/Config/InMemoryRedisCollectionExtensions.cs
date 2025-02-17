@@ -17,7 +17,9 @@ public static class InMemoryRedisCollectionExtensions
         {
             return builder;
         }
-        builder.Services.TryAddEnumerable(ServiceDescriptor.Singleton<ICacheProvider, InMemoryRedisCacheProvider>());
+        builder.Services
+            .TryAddMemoryCacheFactory()
+            .TryAddEnumerable(ServiceDescriptor.Singleton<ICacheProvider, InMemoryRedisCacheProvider>());
         builder.AddBroadcast();
         return builder.AddCallback();
     }
@@ -31,7 +33,6 @@ public static class InMemoryRedisCollectionExtensions
                 builder.Services.TryAddSingleton<IChangeTokenFactory, ChangeTokenFactory>();
                 builder.Services.TryAddSingleton<IEventFormatterProxy<ICacheEvent>, CacheEventFormatter>();
                 builder.Services.TryAddSingleton<ICacheEventFactory, CacheEventFactory>();
-                builder.Services.AddMemoryCacheFactory();
             });
         }
 
