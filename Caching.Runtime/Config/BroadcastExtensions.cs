@@ -34,7 +34,7 @@ public static class BroadcastExtensions
         RedisPubSubTopicOptions options = new();
         configureOptions.Invoke(options);
         builder.Services.TryConfigure(configureOptions);
-        if (options.Enabled)
+        if (builder.Enabled && options.Enabled)
         {
             builder.Services.TryAddEnumerable(ServiceDescriptor.Singleton<ITopicProvider, RedisPubSubTopicProvider>());
         }
@@ -50,7 +50,7 @@ public static class BroadcastExtensions
         RedisStreamsTopicOptions options = new();
         configureOptions.Invoke(options);
         builder.Services.TryConfigure(configureOptions);
-        if (options.Enabled)
+        if (builder.Enabled && options.Enabled)
         {
             builder.Services.TryAddEnumerable(ServiceDescriptor.Singleton<ITopicProvider, RedisStreamsTopicProvider>());
             if (options.MaintainerEnabled)
