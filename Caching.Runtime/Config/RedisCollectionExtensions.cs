@@ -17,6 +17,10 @@ public static class RedisCollectionExtensions
         var options = new RedisCacheOptions();
         configure(options);
         builder.Services.Configure(configure);
+        if (!builder.Enabled || !options.Enabled)
+        {
+            return builder;
+        }
         builder.Services.TryAddEnumerable(ServiceDescriptor.Singleton<ICacheProvider, RedisCacheProvider>());
         return builder;
     }

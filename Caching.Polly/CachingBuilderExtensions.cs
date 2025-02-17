@@ -1,5 +1,6 @@
 ﻿using Polly.Telemetry;
 using UiPath.Platform.Caching.Policies;
+using System.Threading;
 
 namespace UiPath.Platform.Caching.Polly;
 
@@ -12,6 +13,7 @@ public static class CachingBuilderExtensions
     private static readonly List<Action<IServiceProvider, ResiliencePipelineBuilder>> WriteStrategies = [];
     private static bool _telemetryEnabled = false;
     private static Action<TelemetryOptions>? _telemetryConfig;
+    private static int _callbackRegistered = 0;
 
     public static ICachingBuilder AddResilienceStrategies(this ICachingBuilder builder) =>
         builder.AddResilienceStrategies(DefaultSectionName);
@@ -21,9 +23,15 @@ public static class CachingBuilderExtensions
 
     public static ICachingBuilder AddResilienceStrategies(this ICachingBuilder builder, Action<ResiliencePoliciesOptions> configureOptions)
     {
+
+
         ResiliencePoliciesOptions options = new();
         configureOptions.Invoke(options);
         builder.Services.Configure(configureOptions);
+        if (!builder.Enabled || !options.Enabled)
+        {
+            return builder;
+        }
         ReadStrategies.Add((sp, builder) => sp.AddCircuitBreaker(builder, options));
         ReadStrategies.Add((sp, builder) => sp.AddRetryPolicy(builder, options));
         ReadStrategies.Add((sp, builder) => sp.AddTimeoutPolicy(builder, options));
@@ -34,12 +42,20 @@ public static class CachingBuilderExtensions
 
     public static ICachingBuilder AddReadStrategy(this ICachingBuilder builder, Action<IServiceProvider, ResiliencePipelineBuilder> configure)
     {
+        if (!builder.Enabled)
+        {
+            return builder;
+        }
         ReadStrategies.Add(configure);
         return builder.AddCallback();
     }
 
     public static ICachingBuilder AddWriteStrategy(this ICachingBuilder builder, Action<IServiceProvider, ResiliencePipelineBuilder> configure)
     {
+        if (!builder.Enabled)
+        {
+            return builder;
+        }
         WriteStrategies.Add(configure);
         return builder.AddCallback();
     }
@@ -53,19 +69,30 @@ public static class CachingBuilderExtensions
 
     private static ICachingBuilder AddCallback(this ICachingBuilder builder)
     {
-        builder.RegisterOnCompleteCallback(builder => builder.Services.TryAddSingleton<IResiliencePipelineHolder>(sp => sp.BuildResiliencePipelineHolder()));
+        if (Interlocked.Exchange(ref _callbackRegistered, 1) == 0)
+        {
+            builder.RegisterOnCompleteCallback(builder => builder.Services.TryAddSingleton<IResiliencePipelineHolder>(sp => sp.BuildResiliencePipelineHolder(builder)));
+        }
+
         return builder;
     }
 
-    private static ResiliencePipelineHolder BuildResiliencePipelineHolder(this IServiceProvider serviceProvider)
+    private static ResiliencePipelineHolder BuildResiliencePipelineHolder(this IServiceProvider serviceProvider, ICachingBuilder builder)
     {
-        if (ReadStrategies.Count == 0 && WriteStrategies.Count == 0)
+        if (!builder.Enabled)
+        {
+            return ResiliencePipelineHolder.Empty;
+        }
+
+        var readStrategies = ReadStrategies.ToArray();
+        var writeStrategies = WriteStrategies.ToArray();
+        if (readStrategies.Length == 0 && writeStrategies.Length == 0)
         {
             return ResiliencePipelineHolder.Empty;
         }
 
         var readBuilder = new ResiliencePipelineBuilder();
-        ReadStrategies.ForEach(a => a(serviceProvider, readBuilder));
+        Array.ForEach(readStrategies, a => a(serviceProvider, readBuilder));
         TelemetryOptions? telemetryOptions = null;
         if (_telemetryEnabled)
         {
@@ -74,14 +101,14 @@ public static class CachingBuilderExtensions
             telemetryOptions.LoggerFactory ??= serviceProvider.GetService<ILoggerFactory>() ?? NullLoggerFactory.Instance;
             readBuilder.ConfigureTelemetry(telemetryOptions);
         }
-        if (WriteStrategies.Count == 0)
+        if (writeStrategies.Length == 0)
         {
             readBuilder.Name = "Caching";
             return new ResiliencePipelineHolder(new ResiliencePipelineWrapper(readBuilder.Build()));
         }
 
         var writerBuilder = new ResiliencePipelineBuilder();
-        WriteStrategies.ForEach(a => a(serviceProvider, writerBuilder));
+        Array.ForEach(writeStrategies, a => a(serviceProvider, writerBuilder));
         if(_telemetryEnabled)
         {
             writerBuilder.ConfigureTelemetry(telemetryOptions!);
