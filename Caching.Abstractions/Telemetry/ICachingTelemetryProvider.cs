@@ -2,18 +2,9 @@
 
 public interface ICachingTelemetryProvider
 {
-    public ITelemetryOperation StartOperation<TCache>(string methodName = "") =>
-        StartOperation(typeof(TCache), methodName);
-
-    public ITelemetryOperation StartOperation<TCache, TCacheObject>(string methodName = "") =>
-        StartOperation(typeof(TCache), typeof(TCacheObject), methodName);
-
-    public ITelemetryOperation StartOperation(Type cacheClass, string methodName = "") =>
-        StartOperation(cacheClass, null, methodName);
-
-    public ITelemetryOperation StartOperation(Type cacheClass, Type? cacheObject, string methodName = "")
+    public ITelemetryOperation StartOperation(string providerName, Type cacheObject, string methodName = "")
     {
-        var ret = new TelemetryOperation(cacheClass, methodName, cacheObject, this);
+        var ret = new TelemetryOperation(providerName, methodName, cacheObject, this);
         ret.Start();
         return ret;
     }

@@ -111,7 +111,7 @@ public sealed class RedisHashCache : RedisCacheBase, IHashCache
         NotCacheableException.ThrowIfNotCacheable<T>();
         var redisKey = ToRedisKey(cacheKey, token);
         var ret = false;
-        var operation = StartOperation();
+        var operation = StartOperation<T>();
         try
         {
             ret = await _read.ExecuteAsync(async token =>
@@ -147,7 +147,7 @@ public sealed class RedisHashCache : RedisCacheBase, IHashCache
         var localExpiration = _clock.ToDateTimeOffset(expiration);
         _logger.LogTrace("Refreshing key {RedisKey} at expiration {Expiration}", redisKey, localExpiration);
         var ret = false;
-        var operation = StartOperation();
+        var operation = StartOperation<T>();
         try
         {
             ret = localExpiration != DateTimeOffset.MaxValue
@@ -183,7 +183,7 @@ public sealed class RedisHashCache : RedisCacheBase, IHashCache
         var expiration = options.ExpireTime.HasValue ? _clock.ToDateTimeOffset(options.ExpireTime) : _clock.ToDateTimeOffset(options.TimeToLive);
         var now = _clock.UtcNow;
         var ret = false;
-        var operation = StartOperation();
+        var operation = StartOperation<T>();
         try
         {
             if (expiration < now)
@@ -248,7 +248,7 @@ public sealed class RedisHashCache : RedisCacheBase, IHashCache
         NotCacheableException.ThrowIfNotCacheable<T>();
         var redisKey = ToRedisKey(cacheKey, token);
         var ret = false;
-        var operation = StartOperation();
+        var operation = StartOperation<T>();
         try
         {
             ret = await _write.ExecuteAsync(async token =>
@@ -306,7 +306,7 @@ public sealed class RedisHashCache : RedisCacheBase, IHashCache
     {
         NotCacheableException.ThrowIfNotCacheable<T>();
         TimeSpan? ret = default;
-        var operation = StartOperation();
+        var operation = StartOperation<T>();
         try
         {
             ret = await _read.ExecuteAsync(async token =>
@@ -333,7 +333,7 @@ public sealed class RedisHashCache : RedisCacheBase, IHashCache
     {
         NotCacheableException.ThrowIfNotCacheable<T>();
         DateTimeOffset? ret = default;
-        var operation = StartOperation();
+        var operation = StartOperation<T>();
         try
         {
             if (_supportsExpireTime)
@@ -709,11 +709,9 @@ public sealed class RedisHashCache : RedisCacheBase, IHashCache
         return _redisKeyStrategy.GetRedisKey(cacheKey);
     }
 
-    private ITelemetryOperation StartOperation([CallerMemberName] string name = "") =>
-        Telemetry.StartOperation<RedisHashCache>(name);
+    private ITelemetryOperation StartOperation<T>([CallerMemberName] string methodName = "") =>
+        Telemetry.StartOperation(Name, typeof(T), methodName);
 
-    private ITelemetryOperation StartOperation<T>([CallerMemberName] string name = "") =>
-        Telemetry.StartOperation<RedisHashCache, T>(name);
 
     private void AuditKeySize(RedisKey key, string field, RedisValue value)
     {

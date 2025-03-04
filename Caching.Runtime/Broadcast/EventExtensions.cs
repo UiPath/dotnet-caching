@@ -2,7 +2,7 @@
 
 public static class EventExtensions
 {
-    public static bool IsValid(this IEvent ev, Uri machineUri) =>
-        ev.IsValid() && Uri.Compare(machineUri, ev.Source, UriComponents.AbsoluteUri, UriFormat.SafeUnescaped, StringComparison.InvariantCultureIgnoreCase) != 0;
+    public static bool SameSource(this IEvent ev, Uri currentSource) =>
+        Uri.Compare(currentSource, ev.Source, UriComponents.AbsoluteUri, UriFormat.SafeUnescaped, StringComparison.InvariantCultureIgnoreCase) == 0;
 }
 

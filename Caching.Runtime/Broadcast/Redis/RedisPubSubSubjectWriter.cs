@@ -101,14 +101,21 @@ internal sealed class RedisPubSubSubjectWriter<T> : IDisposable
                     return;
                 }
 
-                if (ev.IsValid(_sourceUri))
+                _logger.LogDebug("Event received. Id {EventId}  Channel : {RedisChannel}", ev.Id, _redisChannel);
+                if (ev.IsValid())
                 {
-                    _logger.LogTrace("Event received. Id {EventId}  Channel : {RedisChannel}", ev.Id, _redisChannel);
-                    _channelWriter.TryWrite(ev);
+                    if (ev.SameSource(_sourceUri))
+                    {
+                        _logger.LogTrace("Event from current source. Id {EventId}  Channel : {RedisChannel}", ev.Id, _redisChannel);
+                    }
+                    else
+                    {
+                        _channelWriter.TryWrite(ev);
+                    }
                 }
                 else
                 {
-                    _logger.LogDebug("Skip event received. Id {EventId}  Channel : {RedisChannel}", ev.Id, _redisChannel);
+                    _logger.LogWarning("Event invalid. Id {EventId}  Channel : {RedisChannel}", ev.Id, _redisChannel);
                 }
             }
             catch (Exception ex)

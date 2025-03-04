@@ -87,7 +87,7 @@ public sealed class RedisCache : RedisCacheBase, ICache
 
         _logger.LogTrace("Refreshing key {RedisKey} at expiration {Expiration}", redisKey, expiration);
         var ret = false;
-        var operation = StartOperation();
+        var operation = StartOperation<T>();
         try
         {
             if (expiration == DateTimeOffset.MaxValue)
@@ -124,12 +124,12 @@ public sealed class RedisCache : RedisCacheBase, ICache
     public ValueTask<bool> RemoveAsync<T>(CacheKey cacheKey, CancellationToken token = default)
     {
         NotCacheableException.ThrowIfNotCacheable<T>();
-        return RemoveAsync(ToRedisKey(cacheKey, token), token);
+        return RemoveAsync<T>(ToRedisKey(cacheKey, token), token);
     }
 
     public ValueTask<bool> RemoveAsync<T>(CacheKey[] cacheKey, CancellationToken token = default)
     {
-        return RemoveAsync(cacheKey.Select(k => ToRedisKey(k, token)).ToArray(), token);
+        return RemoveAsync<T>(cacheKey.Select(k => ToRedisKey(k, token)).ToArray(), token);
     }
 
     public ValueTask<bool> SetAsync<T>(CacheKey cacheKey, T? value, CancellationToken token = default) =>
@@ -170,7 +170,7 @@ public sealed class RedisCache : RedisCacheBase, ICache
         NotCacheableException.ThrowIfNotCacheable<T>();
         var redisKey = ToRedisKey(cacheKey, token);
         var ret = false;
-        var operation = StartOperation();
+        var operation = StartOperation<T>();
 
         try
         {
@@ -198,7 +198,7 @@ public sealed class RedisCache : RedisCacheBase, ICache
     {
         NotCacheableException.ThrowIfNotCacheable<T>();
         TimeSpan? ret = default;
-        var operation = StartOperation();
+        var operation = StartOperation<T>();
         try
         {
             ret = await _read.ExecuteAsync(async token =>
@@ -225,7 +225,7 @@ public sealed class RedisCache : RedisCacheBase, ICache
     {
         NotCacheableException.ThrowIfNotCacheable<T>();
         DateTimeOffset? ret = default;
-        var operation = StartOperation();
+        var operation = StartOperation<T>();
         try
         {
             if (_supportsExpireTime)
@@ -291,7 +291,7 @@ public sealed class RedisCache : RedisCacheBase, ICache
         {
             if (IsDefault(value))
             {
-                await RemoveAsync(redisKey, token).ConfigureAwait(false);
+                await RemoveAsync<T>(redisKey, token).ConfigureAwait(false);
                 ret = true;
             }
             else
@@ -371,11 +371,11 @@ public sealed class RedisCache : RedisCacheBase, ICache
         return ret;
     }
 
-    private async ValueTask<bool> RemoveAsync(RedisKey redisKey, CancellationToken token)
+    private async ValueTask<bool> RemoveAsync<T>(RedisKey redisKey, CancellationToken token)
     {
         bool ret = default;
         token.ThrowIfCancellationRequested();
-        var operation = StartOperation();
+        var operation = StartOperation<T>();
         try
         {
             await _write.ExecuteAsync(async token =>
@@ -399,11 +399,11 @@ public sealed class RedisCache : RedisCacheBase, ICache
         return ret;
     }
 
-    private async ValueTask<bool> RemoveAsync(RedisKey[] redisKey, CancellationToken token)
+    private async ValueTask<bool> RemoveAsync<T>(RedisKey[] redisKey, CancellationToken token)
     {
         bool ret = default;
         token.ThrowIfCancellationRequested();
-        var operation = StartOperation();
+        var operation = StartOperation<T>();
         try
         {
             await _write.ExecuteAsync(async token =>
@@ -511,11 +511,8 @@ public sealed class RedisCache : RedisCacheBase, ICache
         return _redisKeyStrategy.GetRedisKey(cacheKey);
     }
 
-    private ITelemetryOperation StartOperation([CallerMemberName] string name = "") =>
-        Telemetry.StartOperation<RedisCache>(name);
-
-    private ITelemetryOperation StartOperation<T>([CallerMemberName] string name = "") =>
-        Telemetry.StartOperation<RedisCache, T>(name);
+    private ITelemetryOperation StartOperation<T>([CallerMemberName] string methodName = "") =>
+        Telemetry.StartOperation(Name, typeof(T), methodName);
 
     private static bool IsDefault<T>(T value) =>
         EqualityComparer<T>.Default.Equals(value, default);

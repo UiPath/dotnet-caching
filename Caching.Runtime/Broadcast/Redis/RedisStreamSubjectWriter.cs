@@ -176,18 +176,26 @@ internal sealed class RedisStreamSubjectWriter<T> : IDisposable
                     continue;
                 }
 
-                if (ev.IsValid(_context.SourceUri))
+                _logger.LogDebug("Event received. Id {EventId}  Topic : {Topic}", ev.Id, _context.Topic);
+                if (ev.IsValid())
                 {
-                    _logger.LogTrace("Event received. Id {EventId}  Topic : {Topic}", ev.Id, _context.Topic);
-                    if (_writer.TryWrite(ev))
+                    if (ev.SameSource(_context.SourceUri))
                     {
-                        _cachingTelemetryProvider.TrackTopicReadMetric(_context.Topic!, @event.Id);
+                        _logger.LogTrace("Event from current source. Id {EventId}  Topic : {Topic}", ev.Id, _context.Topic);
                         ids.Add(@event.Id);
+                    }
+                    else
+                    {
+                        if (_writer.TryWrite(ev))
+                        {
+                            _cachingTelemetryProvider.TrackTopicReadMetric(_context.Topic!, @event.Id);
+                            ids.Add(@event.Id);
+                        }
                     }
                 }
                 else
                 {
-                    _logger.LogWarning("Event received. Id {EventId}  Topic : {Topic}", ev.Id, _context.Topic);
+                    _logger.LogWarning("Event invalid. Id {EventId}  Topic : {Topic}", ev.Id, _context.Topic);
                     ids.Add(@event.Id);
                 }
             }
