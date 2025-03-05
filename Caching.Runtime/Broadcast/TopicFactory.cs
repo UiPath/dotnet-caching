@@ -7,7 +7,7 @@ public sealed class TopicFactory : ITopicFactory, IDisposable
     private volatile bool _disposed;
 
     public TopicFactory(IOptions<CacheOptions> cacheOptions)
-        : this(cacheOptions, Array.Empty<ITopicProvider>())
+        : this(cacheOptions, [])
     {
     }
 
@@ -19,6 +19,8 @@ public sealed class TopicFactory : ITopicFactory, IDisposable
             AddProvider(provider);
         }
     }
+
+    public IEnumerable<string> ProviderNames => _providers.Values.Where(p => p.Enabled).Select(p => p.Name);
 
     public void AddProvider(ITopicProvider provider)
     {

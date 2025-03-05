@@ -53,6 +53,7 @@ public class CacheFactoryTests : IAsyncLifetime
         _defaultProvider.CreateHashCache().Returns(hashCache);
         Sut.CreateCache(_defaultProvider.Name).Should().Be(cache);
         Sut.CreateHashCache(_defaultProvider.Name).Should().Be(hashCache);
+        Sut.ProviderNames.Should().Contain(_defaultProvider.Name);
     }
 
 
@@ -69,6 +70,7 @@ public class CacheFactoryTests : IAsyncLifetime
 
         Sut.CreateCache(provider.Name).Should().Be(cache);
         Sut.CreateHashCache(provider.Name).Should().Be(hashCache);
+        Sut.ProviderNames.Should().NotContain(provider.Name);
     }
 
     [Fact]
