@@ -7,7 +7,7 @@ public sealed class CacheFactory : ICacheFactory
     private volatile bool _disposed;
 
     public CacheFactory(IOptions<CacheOptions> cacheOptions)
-        : this(cacheOptions, Array.Empty<ICacheProvider>())
+        : this(cacheOptions, [])
     {
     }
 
@@ -19,6 +19,8 @@ public sealed class CacheFactory : ICacheFactory
             AddProvider(provider);
         }
     }
+
+    public IEnumerable<string> ProviderNames => _providers.Values.Where(p => p.Enabled).Select(p => p.Name);
 
     public void AddProvider(ICacheProvider provider)
     {

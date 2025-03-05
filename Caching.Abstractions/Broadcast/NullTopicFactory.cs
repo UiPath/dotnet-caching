@@ -9,6 +9,8 @@ public class NullTopicFactory : ITopicFactory
     {
     }
 
+    public IEnumerable<string> ProviderNames => [];
+
     public void AddProvider(ITopicProvider provider)
     {
         // no op

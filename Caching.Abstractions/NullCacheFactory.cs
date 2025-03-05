@@ -5,6 +5,8 @@ public sealed class NullCacheFactory : ICacheFactory
 {
     public static readonly NullCacheFactory Instance = new();
 
+    public IEnumerable<string> ProviderNames => [];
+
     public void AddProvider(ICacheProvider provider)
     {
         // do nothing

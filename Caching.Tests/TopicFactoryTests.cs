@@ -52,6 +52,7 @@ public class TopicFactoryTests : IAsyncLifetime
         provider.ClearSubstitute();
         provider.Enabled.Returns(false);
         Sut.Get(provider.Name).Should().NotBe(provider);
+        Sut.ProviderNames.Should().NotContain(provider.Name);
     }
 
     [Fact]
@@ -80,6 +81,7 @@ public class TopicFactoryTests : IAsyncLifetime
         provider.Create(_topicKey).ReturnsForAnyArgs(topic);
         Sut.AddProvider(provider);
         Sut.Get(provider.Name).Should().Be(provider);
+        Sut.ProviderNames.Should().Contain(provider.Name);
     }
 
     [Fact]
