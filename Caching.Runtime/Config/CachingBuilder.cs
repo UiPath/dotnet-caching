@@ -34,6 +34,7 @@ public class CachingBuilder(IServiceCollection services, IConfiguration? configu
         Services.TryAddSingleton<ICachingTelemetryProvider>(NullTelemetryProvider.Instance);
         Services.TryAddSingleton<ICacheEventFactory>(NullCacheEventFactory.Instance);
         Services.TryAddSingleton<ILoggerFactory>(NullLoggerFactory.Instance);
+        Services.TryAddSingleton<IRedisProfiler>(NullRedisProfiler.Instance);
     }
 
     public void RegisterOnCompleteCallback(Action<ICachingBuilder> callback) =>

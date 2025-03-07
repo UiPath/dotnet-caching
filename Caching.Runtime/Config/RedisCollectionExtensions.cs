@@ -38,7 +38,17 @@ public static class RedisCollectionExtensions
 
         builder.Services.TryAddTransient<Func<IConnectionMultiplexer>>(sp => () => CreateMultiplexer(sp, redisConnectionOptions));
 
-        if (redisConnectionOptions.ProfilerEnabled)
+        builder
+            .AddRedisProfiler(redisConnectionOptions.ProfilerEnabled)
+            .AddIRedisPlannedMaintenance(redisConnectionOptions.PlannedMaintenanceEnabled);
+
+        builder.Services.TryAddSingleton<IRedisConnector, RedisConnector>();
+        return builder;
+    }
+
+    public static ICachingBuilder AddRedisProfiler(this ICachingBuilder builder, bool enabled)
+    {
+        if (enabled)
         {
             builder.Services.TryAddSingleton<IProfiledCommandProcessor, ProfiledCommandProcessor>();
             builder.Services.TryAddSingleton<IProfilingSessionCommandReader, ProfilingSessionCommandReader>();
@@ -48,13 +58,15 @@ public static class RedisCollectionExtensions
         {
             builder.Services.TryAddSingleton<IRedisProfiler>(sp => NullRedisProfiler.Instance);
         }
+        return builder;
+    }
 
-        if (redisConnectionOptions.PlannedMaintenanceEnabled)
+    public static ICachingBuilder AddIRedisPlannedMaintenance(this ICachingBuilder builder, bool enabled)
+    {
+        if (enabled)
         {
             builder.Services.TryAddSingleton<IRedisPlannedMaintenance, RedisPlannedMaintenance>();
         }
-
-        builder.Services.TryAddSingleton<IRedisConnector, RedisConnector>();
         return builder;
     }
 
