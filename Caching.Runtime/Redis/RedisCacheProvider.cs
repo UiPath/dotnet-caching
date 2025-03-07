@@ -20,7 +20,6 @@ public sealed class RedisCacheProvider : ICacheProvider
     public bool Enabled { get; }
 
     public RedisCacheProvider(
-        IOptions<RedisConnectionOptions> connectionOptionsAccessor,
         IOptions<RedisCacheOptions> redisCacheOptions,
         IOptions<CacheOptions> cacheOptions,
         IRedisConnector redis,
@@ -38,7 +37,7 @@ public sealed class RedisCacheProvider : ICacheProvider
         _loggerFactory = loggerFactory;
         _cache = new Lazy<RedisCache>(() => BuildCache());
         _hashCache = new Lazy<RedisHashCache>(() => BuildHashCache());
-        Enabled = connectionOptionsAccessor.Value.Enabled && _redisCacheOptions.Enabled;
+        Enabled = _redisCacheOptions.Enabled;
     }
 
     public ICache CreateCache() =>

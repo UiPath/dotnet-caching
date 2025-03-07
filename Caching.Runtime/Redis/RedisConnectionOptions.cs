@@ -5,8 +5,6 @@ namespace UiPath.Platform.Caching.Redis;
 [ExcludeFromCodeCoverage]
 public class RedisConnectionOptions
 {
-    public bool Enabled => !string.IsNullOrWhiteSpace(ConnectionString);
-
     public string ConnectionString { get; set; } = string.Empty;
 
     public string? ConnectionStringExtraParams { get; set; }

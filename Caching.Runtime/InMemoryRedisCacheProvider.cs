@@ -24,7 +24,6 @@ public sealed class InMemoryRedisCacheProvider : ICacheProvider
     
 
     public InMemoryRedisCacheProvider(
-        IOptions<RedisConnectionOptions> connectionOptionsAccessor,
         IOptions<InMemoryRedisCacheOptions> optionsAccessor,
         IOptions<CacheOptions> cacheOptionsAccessor,
         IMemoryCacheFactory memoryCacheFactory,
@@ -46,7 +45,7 @@ public sealed class InMemoryRedisCacheProvider : ICacheProvider
         _loggerFactory = loggerFactory;
         _cache = new Lazy<MultilayerCache>(() => BuildCache());
         _hashCache = new Lazy<MultilayerHashCache>(() => BuildHashCache());
-        Enabled = _options.Enabled && connectionOptionsAccessor.Value.Enabled;
+        Enabled = _options.Enabled;
     }
 
     public ICache CreateCache() =>
