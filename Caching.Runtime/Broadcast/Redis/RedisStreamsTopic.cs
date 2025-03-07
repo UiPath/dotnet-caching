@@ -19,7 +19,6 @@ public sealed class RedisStreamsTopic<T> : ITopic<T>
     private readonly ILogger _logger;
     private readonly ICachingTelemetryProvider _cachingTelemetryProvider;
     private readonly RedisStreamsTopicOptions _streamOptions;
-    private readonly RedisConnectionOptions _redisConnectionOptions;
     private readonly EventDispatcher<T> _dispatcher;
     private readonly object _syncObj = new();
     private bool _disposed;
@@ -37,7 +36,6 @@ public sealed class RedisStreamsTopic<T> : ITopic<T>
         IEventFormatterProxy<T> formatter,
         IResiliencePipelineHolder resiliencePipelineHolder,
         RedisStreamsTopicOptions streamOptions,
-        RedisConnectionOptions redisConnectionOptions,
         CacheOptions cacheOptions,
         ILogger<RedisStreamsTopic<T>> logger,
         ICachingTelemetryProvider cachingTelemetryProvider,
@@ -53,7 +51,6 @@ public sealed class RedisStreamsTopic<T> : ITopic<T>
         _logger = logger;
         _cachingTelemetryProvider = cachingTelemetryProvider;
         _streamOptions = streamOptions;
-        _redisConnectionOptions = redisConnectionOptions;
         _subject = subjectFactory();
         _redisStreamKeyStrategy = streamOptions.RedisStreamKeyStrategy ?? new PrefixStrategy(RedisTypePrefixes.Streams, cacheOptions);
         _context = GetContext(topicKey, cacheOptions, streamOptions);
@@ -163,7 +160,7 @@ public sealed class RedisStreamsTopic<T> : ITopic<T>
             SourceUri: sourceUri,
             PollBatchSize: options.PollBatchSize,
             PollInterval: options.PollInterval,
-            ProfilerEnabled: options.ProfilerEnabled ?? _redisConnectionOptions.ProfilerEnabled
+            ProfilerEnabled: options.ProfilerEnabled
             );
     }
 }

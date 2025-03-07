@@ -7,7 +7,6 @@ namespace UiPath.Platform.Caching.Broadcast.Redis;
 public class RedisStreamsTopicProvider : RedisTopicProviderBase
 {
     private readonly RedisStreamsTopicOptions _redisStreamsTopicOptions;
-    private readonly RedisConnectionOptions _redisConnectionOptions;
     private readonly CacheOptions _cacheOptions;
     private readonly IEventFormatterProxy<ICacheEvent> _formatter;
     private readonly IResiliencePipelineHolder _resiliencePipelineHolder;
@@ -15,7 +14,6 @@ public class RedisStreamsTopicProvider : RedisTopicProviderBase
     private bool _disposed;
 
     public RedisStreamsTopicProvider(
-        IOptions<RedisConnectionOptions> connectionOptionsAccessor,
         IOptions<RedisStreamsTopicOptions> redisStreamsTopicOptionsAccessor,
         IOptions<CacheOptions> cacheOptionsAccessor,
         IRedisConnector redis,
@@ -27,11 +25,10 @@ public class RedisStreamsTopicProvider : RedisTopicProviderBase
         : base(redis, cachingTelemetryProvider, redisProfiler, loggerFactory, redisStreamsTopicOptionsAccessor.Value.ConnectionMonitorEnabled ?? cacheOptionsAccessor.Value.ConnectionMonitorEnabled)
     {
         _redisStreamsTopicOptions = redisStreamsTopicOptionsAccessor.Value;
-        _redisConnectionOptions = connectionOptionsAccessor.Value;
         _cacheOptions = cacheOptionsAccessor.Value;
         _resiliencePipelineHolder = resiliencePipelineHolder;
         _formatter = formatter;
-        Enabled = _redisConnectionOptions.Enabled && _redisStreamsTopicOptions.Enabled;
+        Enabled = _redisStreamsTopicOptions.Enabled;
     }
 
     public override string Name => KnownTopicNames.RedisStreams;
@@ -47,7 +44,6 @@ public class RedisStreamsTopicProvider : RedisTopicProviderBase
             _formatter,
             _resiliencePipelineHolder,
             _redisStreamsTopicOptions,
-            _redisConnectionOptions,
             _cacheOptions,
             LoggerFactory.Create<RedisStreamsTopic<ICacheEvent>>(),
             Telemetry,

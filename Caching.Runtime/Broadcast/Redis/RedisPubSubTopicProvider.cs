@@ -15,7 +15,6 @@ public class RedisPubSubTopicProvider : RedisTopicProviderBase
     private bool _disposed;
 
     public RedisPubSubTopicProvider(
-        IOptions<RedisConnectionOptions> connectionOptionsAccessor,
         IOptions<RedisPubSubTopicOptions> optionsAccessor,
         IOptions<CacheOptions> cacheOptionsAccessor,
         IRedisConnector redis,
@@ -32,7 +31,7 @@ public class RedisPubSubTopicProvider : RedisTopicProviderBase
         var cacheOptions = cacheOptionsAccessor.Value;
         _sourceUri = cacheOptions.SourceUri ?? CacheOptions.MachineUri;
         _redisChannelStrategy = _options.RedisChannelStrategy ?? new PrefixStrategy(RedisTypePrefixes.PubSub, cacheOptions);
-        Enabled = connectionOptionsAccessor.Value.Enabled && _options.Enabled;
+        Enabled = _options.Enabled;
     }
 
     public override string Name => KnownTopicNames.RedisPubSub;
