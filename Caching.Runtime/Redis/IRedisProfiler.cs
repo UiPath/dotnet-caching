@@ -6,7 +6,9 @@ public interface IRedisProfiler
 {
     int Count { get; }
 
-    ProfilingSession? GetSession(string? sessionId = null);
+    ProfilingSession? GetSession();
+
+    ProfilingSession? GetSession(string? sessionId);
 
     IDisposable CreateSession(string? sessionId = null);
 }

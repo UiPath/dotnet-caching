@@ -1,6 +1,4 @@
-﻿using StackExchange.Redis.Profiling;
-
-namespace UiPath.Platform.Caching.Config;
+﻿namespace UiPath.Platform.Caching.Config;
 
 [ExcludeFromCodeCoverage]
 public static class RedisCollectionExtensions
@@ -33,11 +31,6 @@ public static class RedisCollectionExtensions
         RedisConnectionOptions redisConnectionOptions = new RedisConnectionOptions();
         configureOptions(redisConnectionOptions);
         builder.Services.Configure(configureOptions);
-
-        builder.Services.TryAddTransient(sp => CreateRedisConfiguration(sp));
-
-        builder.Services.TryAddTransient<Func<IConnectionMultiplexer>>(sp => () => CreateMultiplexer(sp, redisConnectionOptions));
-
         builder
             .AddRedisProfiler(redisConnectionOptions.ProfilerEnabled)
             .AddIRedisPlannedMaintenance(redisConnectionOptions.PlannedMaintenanceEnabled);
@@ -69,50 +62,4 @@ public static class RedisCollectionExtensions
         }
         return builder;
     }
-
-    internal static ConfigurationOptions CreateRedisConfiguration(IServiceProvider sp)
-    {
-        var options = sp.GetRequiredService<IOptions<RedisConnectionOptions>>().Value;
-        if (string.IsNullOrWhiteSpace(options.ConnectionString))
-        {
-            return new ConfigurationOptions();
-        }
-
-        var config = options.CreateConfigurationOptions();
-
-        config.LoggerFactory = sp.GetService<ILoggerFactory>();
-
-        return config;
-    }
-
-    private static ConnectionMultiplexer CreateMultiplexer(IServiceProvider sp, RedisConnectionOptions redisConnectionOptions)
-    {
-        var options = sp.GetRequiredService<ConfigurationOptions>();
-        var cnn = ConnectionMultiplexer.Connect(options);
-        if (redisConnectionOptions.ProfilerEnabled)
-        {
-            var factory = ProfilingSessionFactory(sp, redisConnectionOptions);
-            cnn.RegisterProfiler(factory);
-        }
-
-        return cnn;
-    }
-
-    public static Func<ProfilingSession?> ProfilingSessionFactory(IServiceProvider sp, RedisConnectionOptions redisConnectionOptions)
-    {
-        if (redisConnectionOptions.ProfilingSessionFactory != null)
-        {
-            return redisConnectionOptions.ProfilingSessionFactory;
-        }
-
-        var profiler = sp.GetService<IRedisProfiler>();
-
-        if (profiler == null)
-        {
-            return static () => default;
-        }
-
-        return () => profiler.GetSession();
-
-    } 
 }

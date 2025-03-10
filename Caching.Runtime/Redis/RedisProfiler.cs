@@ -51,7 +51,9 @@ internal sealed class RedisProfiler : IRedisProfiler, IDisposable
 
     public int Count => _sessions.Count;
 
-    public ProfilingSession? GetSession(string? sessionId = null)
+    public ProfilingSession? GetSession() => GetSession(null);
+
+    public ProfilingSession? GetSession(string? sessionId)
     {
         if (_disposed)
         {
@@ -150,7 +152,7 @@ internal sealed class RedisProfiler : IRedisProfiler, IDisposable
     {
         try
         {
-            _logger.LogDebug("Disposing profiling session {SessionId}. Count:{Count}", profileInfo.SessionId, profileInfo.Count);
+            _logger.LogTrace("Disposing profiling session {SessionId}. Count:{Count}", profileInfo.SessionId, profileInfo.Count);
             foreach (var command in profileInfo.Commands)
             {
                 _profiledCommandProcessor.Process(command, profileInfo.SessionId);

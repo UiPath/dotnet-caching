@@ -1,6 +1,5 @@
 ﻿using Polly.Telemetry;
 using UiPath.Platform.Caching.Policies;
-using System.Threading;
 
 namespace UiPath.Platform.Caching.Polly;
 

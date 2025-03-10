@@ -9,7 +9,9 @@ public class NullRedisProfiler : IRedisProfiler
 
     public int Count => 0;
 
-    public ProfilingSession? GetSession(string? sessionId = null) => null;
+    public ProfilingSession? GetSession() => null;
+
+    public ProfilingSession? GetSession(string? sessionId) => null;
 
     public IDisposable CreateSession(string? sessionId = null) => Disposable.Empty;
 }
