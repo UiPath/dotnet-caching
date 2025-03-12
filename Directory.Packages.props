@@ -2,7 +2,7 @@
   <PropertyGroup>
     <ManagePackageVersionsCentrally>true</ManagePackageVersionsCentrally>
     <!-- Shared Package Versions -->
-    <xUnit>2.9.2</xUnit>
+    <xUnit>2.9.3</xUnit>
     <AutoFixture>4.18.1</AutoFixture>
     <UiPathTelemetry>1.3.2-beta2242-0600</UiPathTelemetry>
     <UiPathFeatureFlags>1.11.1</UiPathFeatureFlags>
@@ -16,22 +16,22 @@
     <PackageVersion Include="Microsoft.Extensions.Hosting" Version="8.0.1" />
     <PackageVersion Include="Microsoft.Extensions.Logging.Console" Version="8.0.1" />
     <PackageVersion Include="Microsoft.Extensions.Primitives" Version="8.0.0" />
-    <PackageVersion Include="Microsoft.Extensions.Diagnostics.HealthChecks.Abstractions" Version="8.0.11" />
+    <PackageVersion Include="Microsoft.Extensions.Diagnostics.HealthChecks.Abstractions" Version="8.0.13" />
     <PackageVersion Include="Microsoft.Extensions.Hosting.Abstractions" Version="8.0.1" />
-    <PackageVersion Include="Microsoft.Extensions.Logging.Abstractions" Version="8.0.2" />
+    <PackageVersion Include="Microsoft.Extensions.Logging.Abstractions" Version="8.0.3" />
     <PackageVersion Include="Microsoft.Extensions.Options" Version="8.0.2" />
     <PackageVersion Include="BenchmarkDotNet" Version="0.14.0" />
     <PackageVersion Include="System.Reactive" Version="6.0.1" />
     <PackageVersion Include="System.Text.RegularExpressions" Version="4.3.1" />
     <PackageVersion Include="System.Text.Json" Version="8.0.5" />
     <PackageVersion Include="System.Net.Http" Version="4.3.4" />
-    <PackageVersion Include="StackExchange.Redis" Version="2.8.22" />
+    <PackageVersion Include="StackExchange.Redis" Version="2.8.24" />
     <PackageVersion Include="CloudNative.CloudEvents" Version="$(CloudEvents)" />
     <PackageVersion Include="CloudNative.CloudEvents.SystemTextJson" Version="$(CloudEvents)" />
-    <PackageVersion Include="Polly.Core" Version="8.5.0" />
-    <PackageVersion Include="Polly.Extensions" Version="8.5.0" />
-    <PackageVersion Include="Swashbuckle.AspNetCore" Version="7.2.0" />
-    <PackageVersion Include="SonarAnalyzer.CSharp" Version="10.3.0.106239" />
+    <PackageVersion Include="Polly.Core" Version="8.5.2" />
+    <PackageVersion Include="Polly.Extensions" Version="8.5.2" />
+    <PackageVersion Include="Swashbuckle.AspNetCore" Version="7.3.1" />
+    <PackageVersion Include="SonarAnalyzer.CSharp" Version="10.6.0.109712" />
     <!-- UiPath libs -->
     <PackageVersion Include="UiPath.Platform.Telemetry" Version="$(UiPathTelemetry)" />
     <PackageVersion Include="UiPath.Platform.Telemetry.AspNetCore" Version="$(UiPathTelemetry)" />
@@ -39,20 +39,20 @@
     <PackageVersion Include="UiPath.Platform.Telemetry.WorkerService" Version="$(UiPathTelemetry)" />
     <PackageVersion Include="UiPath.Platform.FeatureFlags" Version="$(UiPathFeatureFlags)" />
     <!-- Test related packages -->
-    <PackageVersion Include="FluentAssertions" Version="7.0.0" />
-    <PackageVersion Include="Microsoft.NET.Test.Sdk" Version="17.12.0" />
+    <PackageVersion Include="FluentAssertions" Version="8.1.1" />
+    <PackageVersion Include="Microsoft.NET.Test.Sdk" Version="17.13.0" />
     <PackageVersion Include="xunit" Version="$(xUnit)" />
     <PackageVersion Include="xunit.assert" Version="$(xUnit)" />
     <PackageVersion Include="xunit.extensibility.core" Version="$(xUnit)" />
     <PackageVersion Include="xunit.extensibility.execution" Version="$(xUnit)" />
-    <PackageVersion Include="xunit.runner.visualstudio" Version="2.8.2" />
-    <PackageVersion Include="xunit.analyzers" Version="1.16.0" />
+    <PackageVersion Include="xunit.runner.visualstudio" Version="3.0.2" />
+    <PackageVersion Include="xunit.analyzers" Version="1.20.0" />
     <PackageVersion Include="AutoFixture" Version="$(AutoFixture)" />
     <PackageVersion Include="AutoFixture.Xunit2" Version="$(AutoFixture)" />
     <PackageVersion Include="AutoFixture.AutoNSubstitute" Version="$(AutoFixture)" />
     <PackageVersion Include="NSubstitute" Version="5.3.0" />
     <PackageVersion Include="NSubstitute.Analyzers.CSharp" Version="1.0.17" />
-    <PackageVersion Include="coverlet.collector" Version="6.0.2" />
-    <PackageVersion Include="FluentAssertions.Json" Version="6.1.0" />
+    <PackageVersion Include="coverlet.collector" Version="6.0.4" />
+    <PackageVersion Include="FluentAssertions.Json" Version="8.0.0" />
   </ItemGroup>
 </Project>

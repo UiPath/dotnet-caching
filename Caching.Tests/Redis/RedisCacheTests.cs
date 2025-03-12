@@ -115,7 +115,7 @@ public class RedisCacheTests : IAsyncLifetime
     [Fact]
     public async Task GetOrAdd_null_generator()
     {
-        Func<ValueTask<string?>> generator = default!;
+        Func<CancellationToken, Task<string?>> generator = default!;
         Func<Task> act = async () => await Sut.GetOrAddAsync(_fixture.Create<string>(), generator, CancellationToken.None);
         await act.Should().ThrowAsync<ArgumentNullException>();
     }
@@ -124,7 +124,7 @@ public class RedisCacheTests : IAsyncLifetime
     public async Task GetOrAdd_generator()
     {
         var expectedValue = _fixture.Create<string?>();
-        Func<ValueTask<string?>> generator = () => ValueTask.FromResult(expectedValue);
+        Func<CancellationToken, Task<string?>> generator = _ => Task.FromResult(expectedValue);
         var actual = await Sut.GetOrAddAsync(_fixture.Create<string>(), generator, TimeSpan.FromSeconds(5), CancellationToken.None);
         actual.Should().Be(expectedValue);
     }
@@ -213,7 +213,7 @@ public class RedisCacheTests : IAsyncLifetime
                 actualExpiration = ci.Arg<DateTime?>();
                 return _fixture.Create<bool>();
             });
-        await Sut.GetOrAddAsync(_cacheKey, () => ValueTask.FromResult(_fixture.Create<string?>()), default(DateTimeOffset?), CancellationToken.None);
+        await Sut.GetOrAddAsync(_cacheKey, _ => Task.FromResult(_fixture.Create<string?>()), default(DateTimeOffset?), CancellationToken.None);
         var expectedExpiration = _clock.UtcNow.Add(_cacheOptions.DefaultExpiration!.Value).Subtract(_clock.UtcNow);
 
         await _database.Received(1).StringSetAsync(_redisKey, Arg.Any<RedisValue>(), Arg.Is<TimeSpan?>(t => expectedExpiration == t), When.Always, CommandFlags.DemandMaster);
@@ -231,7 +231,7 @@ public class RedisCacheTests : IAsyncLifetime
                 return _fixture.Create<bool>();
             });
         DateTimeOffset? expiration = _fixture.Create<DateTimeOffset>();
-        await Sut.GetOrAddAsync(_cacheKey, () => ValueTask.FromResult(_fixture.Create<string?>()), expiration, CancellationToken.None);
+        await Sut.GetOrAddAsync(_cacheKey, _ => Task.FromResult(_fixture.Create<string?>()), expiration, CancellationToken.None);
         var expectedExpiration = expiration.Value.Subtract(_clock.UtcNow);
         await _database.Received(1).StringSetAsync(_redisKey, Arg.Any<RedisValue>(), Arg.Is<TimeSpan?>(t => expectedExpiration == t), When.Always, CommandFlags.DemandMaster);
     }
@@ -581,15 +581,15 @@ public class RedisCacheTests : IAsyncLifetime
         string? actualValue = default;
         if (expirationType == typeof(TimeSpan))
         {
-            actualValue = await Sut.GetOrAddAsync(_cacheKey, () => { generatorWasCalled = true; return ValueTask.FromResult(generatorReturn); }, _fixture.Create<TimeSpan>(), CancellationToken.None);
+            actualValue = await Sut.GetOrAddAsync(_cacheKey, _ => { generatorWasCalled = true; return Task.FromResult(generatorReturn); }, _fixture.Create<TimeSpan>(), CancellationToken.None);
         }
         else if (expirationType == typeof(DateTimeOffset))
         {
-            actualValue = await Sut.GetOrAddAsync(_cacheKey, () => { generatorWasCalled = true; return ValueTask.FromResult(generatorReturn); }, _clock.UtcNow.Add(TimeSpan.FromSeconds(2)), CancellationToken.None);
+            actualValue = await Sut.GetOrAddAsync(_cacheKey, _ => { generatorWasCalled = true; return Task.FromResult(generatorReturn); }, _clock.UtcNow.Add(TimeSpan.FromSeconds(2)), CancellationToken.None);
         }
         else
         {
-            actualValue = await Sut.GetOrAddAsync(_cacheKey, () => { generatorWasCalled = true; return ValueTask.FromResult(generatorReturn); }, CancellationToken.None);
+            actualValue = await Sut.GetOrAddAsync(_cacheKey, _ => { generatorWasCalled = true; return Task.FromResult(generatorReturn); }, CancellationToken.None);
         }
         actualValue.Should().Be(redisReturn ?? generatorReturn);
         generatorWasCalled.Should().Be(expectedGeneratorCall);

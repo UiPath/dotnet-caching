@@ -59,13 +59,13 @@ public sealed class RedisCache : RedisCacheBase, ICache
         return GetAsyncInternal<T>(cacheKey, token);
     }
 
-    public ValueTask<T?> GetOrAddAsync<T>(CacheKey cacheKey, Func<ValueTask<T?>> generator, CancellationToken token = default) =>
+    public ValueTask<T?> GetOrAddAsync<T>(CacheKey cacheKey, Func<CancellationToken, Task<T?>> generator, CancellationToken token = default) =>
         GetOrAddAsync(cacheKey, generator, _defaultExpiration, token);
 
-    public ValueTask<T?> GetOrAddAsync<T>(CacheKey cacheKey, Func<ValueTask<T?>> generator, DateTimeOffset? expiration = null, CancellationToken token = default) =>
+    public ValueTask<T?> GetOrAddAsync<T>(CacheKey cacheKey, Func<CancellationToken, Task<T?>> generator, DateTimeOffset? expiration = null, CancellationToken token = default) =>
         GetOrAddAsync(cacheKey, generator, _clock.ToTimeSpan(expiration), token);
 
-    public ValueTask<T?> GetOrAddAsync<T>(CacheKey cacheKey, Func<ValueTask<T?>> generator, TimeSpan? expiration = null, CancellationToken token = default)
+    public ValueTask<T?> GetOrAddAsync<T>(CacheKey cacheKey, Func<CancellationToken, Task<T?>> generator, TimeSpan? expiration = null, CancellationToken token = default)
     {
         NotCacheableException.ThrowIfNotCacheable<T>();
         ArgumentNullException.ThrowIfNull(generator);
@@ -256,7 +256,7 @@ public sealed class RedisCache : RedisCacheBase, ICache
         return ret;
     }
 
-    private async ValueTask<T?> GetOrAddInternalAsync<T>(RedisKey redisKey, Func<ValueTask<T?>> generator, TimeSpan expiration, CancellationToken token)
+    private async ValueTask<T?> GetOrAddInternalAsync<T>(RedisKey redisKey, Func<CancellationToken, Task<T?>> generator, TimeSpan expiration, CancellationToken token)
     {
         NotCacheableException.ThrowIfNotCacheable<T>();
         var ret = await GetAsync<T>(redisKey, token).ConfigureAwait(false);
@@ -266,7 +266,7 @@ public sealed class RedisCache : RedisCacheBase, ICache
         }
 
         _logger.LogDebug("Cache missed. generating new {RedisKey}", redisKey);
-        ret = await generator().ConfigureAwait(false);
+        ret = await generator(token).ConfigureAwait(false);
 
         if (!IsDefault(ret))
         {

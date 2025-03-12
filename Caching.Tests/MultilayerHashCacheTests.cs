@@ -159,10 +159,10 @@ public class MultilayerHashCacheTests : IAsyncLifetime
         };
         var generatorExpected = _fixture.Create<IDictionary<string, string?>>();
         var generatorWasCalled = false;
-        Func<ValueTask<IDictionary<string, string?>>> generator = () =>
+        Func<CancellationToken, Task<IDictionary<string, string?>>> generator = token =>
         {
             generatorWasCalled = true;
-            return ValueTask.FromResult(generatorExpected);
+            return Task.FromResult(generatorExpected);
         };
         _innerCache.GetCacheEntryAsync<string>(_innerCacheKey, token: CancellationToken.None)
             .Returns(expectedCacheEntry);
@@ -184,10 +184,10 @@ public class MultilayerHashCacheTests : IAsyncLifetime
         };
         var generatorExpected = _fixture.Create<IDictionary<string, string?>>();
         var generatorWasCalled = false;
-        Func<ValueTask<IDictionary<string, string?>>> generator = () =>
+        Func<CancellationToken, Task<IDictionary<string, string?>>> generator = token =>
         {
             generatorWasCalled = true;
-            return ValueTask.FromResult(generatorExpected);
+            return Task.FromResult(generatorExpected);
         };
         _innerCache.GetCacheEntryAsync<string>(_innerCacheKey, token: CancellationToken.None)
             .Returns(expectedCacheEntry);
@@ -207,10 +207,10 @@ public class MultilayerHashCacheTests : IAsyncLifetime
         };
         var generatorExpected = _fixture.Create<IDictionary<string, string?>>();
         var generatorWasCalled = false;
-        Func<ValueTask<IDictionary<string, string?>>> generator = () =>
+        Func<CancellationToken, Task<IDictionary<string, string?>>> generator = token =>
         {
             generatorWasCalled = true;
-            return ValueTask.FromResult(generatorExpected);
+            return Task.FromResult(generatorExpected);
         };
         _innerCache.GetCacheEntryAsync<string>(_innerCacheKey, token: CancellationToken.None)
             .Returns(expectedCacheEntry);
@@ -230,10 +230,10 @@ public class MultilayerHashCacheTests : IAsyncLifetime
         };
         var generatorExpected = _fixture.Create<IDictionary<string, string?>>();
         var generatorWasCalled = false;
-        Func<ValueTask<IDictionary<string, string?>>> generator = () =>
+        Func<CancellationToken, Task<IDictionary<string, string?>>> generator = token =>
         {
             generatorWasCalled = true;
-            return ValueTask.FromResult(generatorExpected);
+            return Task.FromResult(generatorExpected);
         };
         _innerCache.GetCacheEntryAsync<string>(_innerCacheKey, token: CancellationToken.None)
             .Returns(expectedCacheEntry);
@@ -259,10 +259,10 @@ public class MultilayerHashCacheTests : IAsyncLifetime
         ICacheEntry<IDictionary<string, string?>> expectedCacheEntry = new TestCacheEntry<IDictionary<string, string?>>();
         var generatorExpected = _fixture.Create<IDictionary<string, string?>>();
         var generatorWasCalled = false;
-        Func<ValueTask<IDictionary<string, string?>>> generator = () =>
+        Func<CancellationToken, Task<IDictionary<string, string?>>> generator = token =>
         {
             generatorWasCalled = true;
-            return ValueTask.FromResult(generatorExpected);
+            return Task.FromResult(generatorExpected);
         };
 
         _innerCache.SetAsync(_innerCacheKey, Arg.Any<IDictionary<string, string?>>(), Arg.Any<HashCacheEntryOptions>(), Arg.Any<CancellationToken>())
@@ -283,10 +283,10 @@ public class MultilayerHashCacheTests : IAsyncLifetime
         var expectedCacheEntry = new TestCacheEntry<IDictionary<string, string?>>();
         IDictionary<string, string?> generatorExpected = new Dictionary<string, string?>();
         var generatorWasCalled = false;
-        Func<ValueTask<IDictionary<string, string?>>> generator = () =>
+        Func<CancellationToken, Task<IDictionary<string, string?>>> generator = token =>
         {
             generatorWasCalled = true;
-            return ValueTask.FromResult(generatorExpected);
+            return Task.FromResult(generatorExpected);
         };
         _innerCache.GetCacheEntryAsync<string>(_innerCacheKey, token: CancellationToken.None)
             .Returns(expectedCacheEntry);
@@ -948,7 +948,7 @@ public class MultilayerHashCacheTests : IAsyncLifetime
     public async Task When_no_inner_cache_expire_time_use_max()
     {
         var expected = _fixture.Create<IDictionary<string, string?>>();
-        Func<ValueTask<IDictionary<string, string?>>> generator = () => ValueTask.FromResult(expected);
+        Func<CancellationToken, Task<IDictionary<string, string?>>> generator = token => Task.FromResult(expected);
 
         _innerCache.ExpireTimeAsync<string>(_innerCacheKey, CancellationToken.None)
             .Returns(default(DateTimeOffset?));

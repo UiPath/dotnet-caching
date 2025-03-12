@@ -41,13 +41,13 @@ public sealed class MultilayerCache : MultilayerCacheBase, ICache
         return GetInnerAsync<T>(options, token);
     }
 
-    public ValueTask<T?> GetOrAddAsync<T>(CacheKey cacheKey, Func<ValueTask<T?>> generator, CancellationToken token = default)=>
+    public ValueTask<T?> GetOrAddAsync<T>(CacheKey cacheKey, Func<CancellationToken, Task<T?>> generator, CancellationToken token = default)=>
         GetOrAddAsync(cacheKey, generator, _multiLayerCacheOptions.DefaultExpiration, token);
 
-    public ValueTask<T?> GetOrAddAsync<T>(CacheKey cacheKey, Func<ValueTask<T?>> generator, TimeSpan? expiration = null, CancellationToken token = default)=>
+    public ValueTask<T?> GetOrAddAsync<T>(CacheKey cacheKey, Func<CancellationToken, Task<T?>> generator, TimeSpan? expiration = null, CancellationToken token = default)=>
         GetOrAddAsync(cacheKey, generator, _clock.ToDateTimeOffset(expiration), token);
 
-    public async ValueTask<T?> GetOrAddAsync<T>(CacheKey cacheKey, Func<ValueTask<T?>> generator, DateTimeOffset? expiration = null, CancellationToken token = default)
+    public async ValueTask<T?> GetOrAddAsync<T>(CacheKey cacheKey, Func<CancellationToken, Task<T?>> generator, DateTimeOffset? expiration = null, CancellationToken token = default)
     {
         NotCacheableException.ThrowIfNotCacheable<T>();
         var cacheEntryOptions = _entryBuilder.BuildEntryOptions<T>(cacheKey, expiration, token);
@@ -59,7 +59,7 @@ public sealed class MultilayerCache : MultilayerCacheBase, ICache
         }
 
         _logger.LogDebug("Cache missed. generating new {CacheKey}", cacheEntryOptions.CacheKey);
-        ret = await generator().ConfigureAwait(false);
+        ret = await generator(token).ConfigureAwait(false);
 
         if (!IsDefault(ret))
         {

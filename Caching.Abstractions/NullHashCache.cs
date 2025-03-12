@@ -51,25 +51,25 @@ public sealed class NullHashCache : IHashCache
         return ValueTask.FromResult(default(T?));
     }
 
-    public ValueTask<IDictionary<string, T?>> GetOrAddAsync<T>(CacheKey cacheKey, Func<ValueTask<IDictionary<string, T?>>> generator, CancellationToken token = default)
+    public ValueTask<IDictionary<string, T?>> GetOrAddAsync<T>(CacheKey cacheKey, Func<CancellationToken, Task<IDictionary<string, T?>>> generator, CancellationToken token = default)
     {
         NotCacheableException.ThrowIfNotCacheable<T>();
         return ValueTask.FromResult((IDictionary<string, T?>)ImmutableDictionary<string, T?>.Empty);
     }
 
-    public ValueTask<IDictionary<string, T?>> GetOrAddAsync<T>(CacheKey cacheKey, Func<ValueTask<IDictionary<string, T?>>> generator, TimeSpan? expiration = null, CancellationToken token = default)
+    public ValueTask<IDictionary<string, T?>> GetOrAddAsync<T>(CacheKey cacheKey, Func<CancellationToken, Task<IDictionary<string, T?>>> generator, TimeSpan? expiration = null, CancellationToken token = default)
     {
         NotCacheableException.ThrowIfNotCacheable<T>();
         return ValueTask.FromResult((IDictionary<string, T?>)ImmutableDictionary<string, T?>.Empty);
     }
 
-    public ValueTask<IDictionary<string, T?>> GetOrAddAsync<T>(CacheKey cacheKey, Func<ValueTask<IDictionary<string, T?>>> generator, DateTimeOffset? expiration = null, CancellationToken token = default)
+    public ValueTask<IDictionary<string, T?>> GetOrAddAsync<T>(CacheKey cacheKey, Func<CancellationToken, Task<IDictionary<string, T?>>> generator, DateTimeOffset? expiration = null, CancellationToken token = default)
     {
         NotCacheableException.ThrowIfNotCacheable<T>();
         return ValueTask.FromResult((IDictionary<string, T?>)ImmutableDictionary<string, T?>.Empty);
     }
 
-    public ValueTask<IDictionary<string, T?>> GetOrAddAsync<T>(CacheKey cacheKey, Func<ValueTask<IDictionary<string, T?>>> generator, DateTimeOffset? expiration = null, HashCacheSetOption? setOption = null, CancellationToken token = default)
+    public ValueTask<IDictionary<string, T?>> GetOrAddAsync<T>(CacheKey cacheKey, Func<CancellationToken, Task<IDictionary<string, T?>>> generator, DateTimeOffset? expiration = null, HashCacheSetOption? setOption = null, CancellationToken token = default)
     {
         NotCacheableException.ThrowIfNotCacheable<T>();
         return ValueTask.FromResult((IDictionary<string, T?>)ImmutableDictionary<string, T?>.Empty);

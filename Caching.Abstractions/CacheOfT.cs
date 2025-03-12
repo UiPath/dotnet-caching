@@ -29,13 +29,13 @@ public class Cache<T> : ICache<T>
     public ValueTask<KeyValuePair<CacheKey, T?>[]> GetAsync(CacheKey[] cacheKeys, CancellationToken token = default) =>
         _cache.GetAsync<T>(GetCacheKeys(cacheKeys), token);
 
-    public ValueTask<T?> GetOrAddAsync(CacheKey cacheKey, Func<ValueTask<T?>> generator, CancellationToken token = default) =>
+    public ValueTask<T?> GetOrAddAsync(CacheKey cacheKey, Func<CancellationToken, Task<T?>> generator, CancellationToken token = default) =>
         _cache.GetOrAddAsync(GetCacheKey(cacheKey), generator, token);
 
-    public ValueTask<T?> GetOrAddAsync(CacheKey cacheKey, Func<ValueTask<T?>> generator, TimeSpan? expiration, CancellationToken token = default) =>
+    public ValueTask<T?> GetOrAddAsync(CacheKey cacheKey, Func<CancellationToken, Task<T?>> generator, TimeSpan? expiration, CancellationToken token = default) =>
         _cache.GetOrAddAsync(GetCacheKey(cacheKey), generator, expiration, token);
 
-    public ValueTask<T?> GetOrAddAsync(CacheKey cacheKey, Func<ValueTask<T?>> generator, DateTimeOffset? expiration, CancellationToken token = default) =>
+    public ValueTask<T?> GetOrAddAsync(CacheKey cacheKey, Func<CancellationToken, Task<T?>> generator, DateTimeOffset? expiration, CancellationToken token = default) =>
         _cache.GetOrAddAsync(GetCacheKey(cacheKey), generator, expiration, token);
 
     public ValueTask<bool> RefreshAsync(CacheKey cacheKey, CancellationToken token = default) =>
