@@ -32,7 +32,7 @@ public abstract class CancelationTokenCacheTests<T> where T : ICache
     public Task GetOrAdd() =>
         ValidateCancellationToken(async (sut, token) =>
         {
-            await sut.GetOrAddAsync(Fixture.Create<string>(), () => ValueTask.FromResult(Fixture.Create<string?>()), Fixture.Create<TimeSpan>(), token);
+            await sut.GetOrAddAsync(Fixture.Create<string>(), token => Task.FromResult(Fixture.Create<string?>()), Fixture.Create<TimeSpan>(), token);
         });
 
     [Fact]
