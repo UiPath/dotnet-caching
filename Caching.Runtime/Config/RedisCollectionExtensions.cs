@@ -36,6 +36,8 @@ public static class RedisCollectionExtensions
             .AddIRedisPlannedMaintenance(redisConnectionOptions.PlannedMaintenanceEnabled);
 
         builder.Services.TryAddSingleton<IRedisConnector, RedisConnector>();
+        builder.Services.TryAddSingleton<IRedisConfigurationOptionsProvider, RedisConfigurationOptionsProvider>();
+        builder.Services.TryAddSingleton<IConnectionMultiplexerFactory, ConnectionMultiplexerFactory>();
         return builder;
     }
 
