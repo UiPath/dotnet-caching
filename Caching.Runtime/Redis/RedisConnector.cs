@@ -10,27 +10,30 @@ public sealed class RedisConnector : IRedisConnector
 {
     private readonly RedisConnectionOptions _redisOptions;
     private readonly ICachingTelemetryProvider _telemetryProvider;
-    private readonly ILoggerFactory _loggerFactory;
+    private readonly IRedisConfigurationOptionsProvider _redisConfigurationOptionsProvider;
+    private readonly IConnectionMultiplexerFactory _connectionMultiplexerFactory;
     private readonly IRedisProfiler _redisProfiler;
     private readonly Timer? _hangDetectionTimer;
     private readonly Lazy<Version> _version;
 
-    private Lazy<ConnectionMultiplexer> _lazyCacheConnectionMultiplexer;
+    private Lazy<IConnectionMultiplexer> _lazyCacheConnectionMultiplexer;
     private int _reconnecting;
     private ReadWriteStatus? _lastMasterMetrics;
 
     public RedisConnector(
         IRedisProfiler redisProfiler,
         ICachingTelemetryProvider telemetryProvider,
-        ILoggerFactory loggerFactory,
+        IRedisConfigurationOptionsProvider redisConfigurationOptionsProvider,
+        IConnectionMultiplexerFactory connectionMultiplexerFactory,
         IOptions<RedisConnectionOptions> redisOptions)
     {
         _redisOptions = redisOptions.Value;
 
-        _lazyCacheConnectionMultiplexer = new Lazy<ConnectionMultiplexer>(CreateConnectionMultiplexer);
+        _lazyCacheConnectionMultiplexer = new Lazy<IConnectionMultiplexer>(CreateConnectionMultiplexer);
 
         _telemetryProvider = telemetryProvider;
-        _loggerFactory = loggerFactory;
+        _redisConfigurationOptionsProvider = redisConfigurationOptionsProvider;
+        _connectionMultiplexerFactory = connectionMultiplexerFactory;
         _redisProfiler = redisProfiler;
         if (_redisOptions.EnableHangDetection)
         {
@@ -53,7 +56,7 @@ public sealed class RedisConnector : IRedisConnector
 
     public Version Version => _version.Value;
 
-    private ConnectionMultiplexer ConnectionMultiplexer => _lazyCacheConnectionMultiplexer.Value;
+    private IConnectionMultiplexer ConnectionMultiplexer => _lazyCacheConnectionMultiplexer.Value;
 
     public bool IsConnected => ConnectionMultiplexer.IsConnected;
 
@@ -76,7 +79,7 @@ public sealed class RedisConnector : IRedisConnector
 
             try
             {
-                ConnectionMultiplexer? newMultiplexer = null;
+                IConnectionMultiplexer? newMultiplexer = null;
                 try
                 {
                     newMultiplexer = CreateConnectionMultiplexer();
@@ -90,7 +93,7 @@ public sealed class RedisConnector : IRedisConnector
                 }
 
                 var oldMultiplexer = _lazyCacheConnectionMultiplexer.Value;
-                _lazyCacheConnectionMultiplexer = new Lazy<ConnectionMultiplexer>(() => newMultiplexer);
+                _lazyCacheConnectionMultiplexer = new Lazy<IConnectionMultiplexer>(() => newMultiplexer);
                 _telemetryProvider.TrackEvent("Redis.ForcedReconnect", properties: null, metrics: null);
 
                 try
@@ -134,7 +137,8 @@ public sealed class RedisConnector : IRedisConnector
             }
             try
             {
-                return _redisOptions.CreateConfigurationOptions().DefaultVersion;
+                var configuration = _redisConfigurationOptionsProvider.GetConfiguration();
+                return configuration.DefaultVersion;
             }
             catch (Exception)
             {
@@ -179,7 +183,7 @@ public sealed class RedisConnector : IRedisConnector
         }
     }
 
-    private ConnectionMultiplexer CreateConnectionMultiplexer()
+    private IConnectionMultiplexer CreateConnectionMultiplexer()
     {
         var multiplexer = CreateMultiplexer();
         return ConfigureMultiplexerEvents(multiplexer);
@@ -199,7 +203,7 @@ public sealed class RedisConnector : IRedisConnector
 #pragma warning disable IDE0079 // Remove unnecessary suppression
     [SuppressMessage("SonarQube", "S3011:Reflection should not be used to create instances of types", Justification = "By design")]
 #pragma warning restore IDE0079 // Remove unnecessary suppression
-    private ReadWriteStatus? GetMasterPhysicalConnectionMetrics(ConnectionMultiplexer multiplexer)
+    private ReadWriteStatus? GetMasterPhysicalConnectionMetrics(IConnectionMultiplexer multiplexer)
     {
         // single shard only is supported
         if (multiplexer.GetEndPoints().Select(x => multiplexer.GetServer(x)).FirstOrDefault(x => !x.IsReplica && x.IsConnected) is not IServer master)
@@ -291,7 +295,7 @@ public sealed class RedisConnector : IRedisConnector
         _lastMasterMetrics = currentMasterMetrics;
     }
 
-    private ConnectionMultiplexer ConfigureMultiplexerEvents(ConnectionMultiplexer multiplexer)
+    private IConnectionMultiplexer ConfigureMultiplexerEvents(IConnectionMultiplexer multiplexer)
     {
         multiplexer.ConnectionFailed += OnInternalConnectionFailed;
         multiplexer.ConnectionRestored += OnInternalConnectionRestored;
@@ -364,17 +368,10 @@ public sealed class RedisConnector : IRedisConnector
         }
     }
 
-    private ConfigurationOptions CreateRedisConfiguration()
+    private IConnectionMultiplexer CreateMultiplexer()
     {
-        var config = string.IsNullOrWhiteSpace(_redisOptions.ConnectionString) ? new ConfigurationOptions() : _redisOptions.CreateConfigurationOptions();
-        config.LoggerFactory = _loggerFactory;
-        return config;
-    }
-
-    private ConnectionMultiplexer CreateMultiplexer()
-    {
-        var options = CreateRedisConfiguration();
-        var cnn = ConnectionMultiplexer.Connect(options);
+        var configuration = _redisConfigurationOptionsProvider.GetConfiguration();
+        var cnn = _connectionMultiplexerFactory.Create(configuration);
         if (_redisOptions.ProfilerEnabled)
         {
             var factory = ProfilingSessionFactory();

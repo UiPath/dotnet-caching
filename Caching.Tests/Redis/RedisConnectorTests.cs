@@ -9,12 +9,14 @@ public class RedisConnectorTests : IAsyncLifetime
     private ICachingTelemetryProvider _telemetryProvider = default!;
     private IRedisProfiler _profiler = default!;
     private IOptions<RedisConnectionOptions> _redisOptions = default!;
+    private IRedisConfigurationOptionsProvider _redisConfigurationOptionsProvider = default!;
+    private IConnectionMultiplexerFactory _connectionMultiplexerFactory = default!;
     private readonly string _connectionString = "localhost:6379";
 
     [Fact]
     public void NotNullConnection()
     {
-        var connector = new RedisConnector(_profiler, _telemetryProvider, NullLoggerFactory.Instance, _redisOptions);
+        var connector = new RedisConnector(_profiler, _telemetryProvider, _redisConfigurationOptionsProvider, _connectionMultiplexerFactory, _redisOptions);
         connector.Database.Should().NotBeNull();
         connector.Subscriber.Should().NotBeNull();
         connector.Dispose();
@@ -29,8 +31,8 @@ public class RedisConnectorTests : IAsyncLifetime
             ConnectionString = "localhost:6379,ssl=True,abortConnect=True,connectTimeout=1001",
             ConnectionStringExtraParams = "allowAdmin=true,abortConnect=false,connectRetry=2,keepAlive=30,name=test,syncTimeout=250,connectTimeout=1000"
         };
-
-        var connection = opt.CreateConfigurationOptions();
+        var sut = new RedisConfigurationOptionsProvider(NullLoggerFactory.Instance, Options.Create(opt));
+        var connection = sut.GetConfiguration();
         connection.AllowAdmin.Should().BeTrue();
         connection.AbortOnConnectFail.Should().BeFalse();
         connection.ConnectRetry.Should().Be(2);
@@ -52,8 +54,8 @@ public class RedisConnectorTests : IAsyncLifetime
             ConnectionString = connectionString,
             ConnectionStringExtraParams = extraParams
         };
-
-        var cnn = opt.CreateConfigurationOptions().ToString();
+        var sut = new RedisConfigurationOptionsProvider(NullLoggerFactory.Instance, Options.Create(opt));
+        var cnn = sut.GetConfiguration().ToString();
         cnn.Should().Be(expected);
     }
 
@@ -70,6 +72,11 @@ public class RedisConnectorTests : IAsyncLifetime
         {
             ConnectionString = _connectionString
         });
+        _fixture.Inject(_redisOptions);
+        _redisConfigurationOptionsProvider = new RedisConfigurationOptionsProvider(NullLoggerFactory.Instance, _redisOptions);
+        _fixture.Inject(_redisConfigurationOptionsProvider);
+        _connectionMultiplexerFactory = new ConnectionMultiplexerFactory(_redisOptions);
+        _fixture.Inject(_connectionMultiplexerFactory);
         return Task.CompletedTask;
     }
 }

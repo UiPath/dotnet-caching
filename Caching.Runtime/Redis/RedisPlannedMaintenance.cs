@@ -7,20 +7,23 @@ namespace UiPath.Platform.Caching.Redis;
 public sealed class RedisPlannedMaintenance : IRedisPlannedMaintenance
 {
     private readonly ICachingTelemetryProvider _telemetryProvider;
-    private readonly ConnectionMultiplexer _multiplexer;
+    private readonly IRedisConnector _redisConnector;
+    private readonly IConnectionMultiplexer _multiplexer;
     private readonly TimeSpan _probingTime = TimeSpan.FromMinutes(10);
     private readonly TimeSpan _hangingTime = TimeSpan.FromSeconds(10);
-    private readonly IRedisConnector _redisConnector;
     private long _maintenanceInProgress;
 
-    public RedisPlannedMaintenance(ICachingTelemetryProvider telemetryProvider, IRedisConnector redisConnector, ILoggerFactory loggerFactory, IOptions<RedisConnectionOptions> redisOptions)
+    public RedisPlannedMaintenance(
+        ICachingTelemetryProvider telemetryProvider,
+        IRedisConnector redisConnector,
+        IRedisConfigurationOptionsProvider redisConfigurationOptionsProvider,
+        IConnectionMultiplexerFactory connectionMultiplexerFactory)
     {
         _telemetryProvider = telemetryProvider;
         _redisConnector = redisConnector;
 
-        var configOptions = redisOptions.Value.CreateConfigurationOptions();
-        configOptions.LoggerFactory = loggerFactory;
-        _multiplexer = ConnectionMultiplexer.Connect(configOptions);
+        var configuration = redisConfigurationOptionsProvider.GetConfiguration();
+        _multiplexer = connectionMultiplexerFactory.Create(configuration);
         _multiplexer.ServerMaintenanceEvent += OnServerMaintenance;
     }
 

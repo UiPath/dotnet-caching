@@ -56,50 +56,5 @@ public class RedisConnectionOptions
 
     public ISystemClock? Clock { get; set; }
 
-    public ConfigurationOptions CreateConfigurationOptions()
-    {
-        string cnn = string.IsNullOrWhiteSpace(ConnectionStringExtraParams) ? ConnectionString : ComposedConnectionString;
-
-        if (string.IsNullOrWhiteSpace(cnn))
-        {
-            return new ConfigurationOptions();
-        }
-
-        var config = ConfigurationOptions.Parse(cnn);
-        config.AbortOnConnectFail = false; // if the connection fails, the multiplexer will silently retry in the background
-        config.ChannelPrefix = default;
-        if (Version.TryParse(DefaultVersion, out var version))
-        {
-            config.DefaultVersion = version;
-        }
-        if (BackOffMilliseconds > 0)
-        {
-            config.ReconnectRetryPolicy = new ExponentialRetry(BackOffMilliseconds);
-        }
-
-        if(HeartbeatConsistencyChecks.HasValue)
-        {
-            config.HeartbeatConsistencyChecks = HeartbeatConsistencyChecks.Value;
-        }
-
-        if (HeartbeatInterval.HasValue)
-        {
-            config.HeartbeatInterval = HeartbeatInterval.Value;
-        }
-
-        if (FailFastBacklogPolicy.GetValueOrDefault())
-        {
-            config.BacklogPolicy = BacklogPolicy.FailFast;
-        }
-
-        if(ThreadPoolSocketManager.GetValueOrDefault())
-        {
-            config.SocketManager = SocketManager.ThreadPool;
-        }
-
-        return config;
-    }
-
-    public string ComposedConnectionString =>
-        string.IsNullOrWhiteSpace(ConnectionString) ? string.Empty : string.Concat(ConnectionString, ",", ConnectionStringExtraParams);
+    public Func<ConfigurationOptions, IConnectionMultiplexer>? ConnectionFactory { get; set; }
 }
