@@ -26,18 +26,55 @@ public static class RedisCollectionExtensions
     public static ICachingBuilder AddRedisConnection(this ICachingBuilder builder, string sectionName = Connections) =>
         builder.AddRedisConnection(opt => builder.Configuration.GetSection(sectionName).Bind(opt));
 
-    public static ICachingBuilder AddRedisConnection(this ICachingBuilder builder, Action<RedisConnectionOptions> configureOptions)
+    public static ICachingBuilder AddRedisConnection(this ICachingBuilder builder, Action<RedisConnectionOptions> configure)
     {
         RedisConnectionOptions redisConnectionOptions = new RedisConnectionOptions();
+        configure(redisConnectionOptions);
+        builder.Services.Configure(configure);
+        builder.AddRedisConnection(redisConnectionOptions);
+        return builder;
+    }
+
+    public static ICachingBuilder AddRedisConnection(this ICachingBuilder builder, string sectionName, Action<RedisConnectionOptions> configure)
+    {
+        void configureOptions(RedisConnectionOptions opt)
+        {
+            builder.Configuration.GetSection(sectionName).Bind(opt);
+            configure(opt);
+        }
+
+        RedisConnectionOptions redisConnectionOptions = new RedisConnectionOptions();
         configureOptions(redisConnectionOptions);
-        builder.Services.Configure(configureOptions);
+        builder.Services.Configure((Action<RedisConnectionOptions>)configureOptions);
+        builder.AddRedisConnection(redisConnectionOptions);
+        return builder;
+    }
+
+    private static ICachingBuilder AddRedisConnection(this ICachingBuilder builder, RedisConnectionOptions redisConnectionOptions)
+    {
         builder
             .AddRedisProfiler(redisConnectionOptions.ProfilerEnabled)
             .AddIRedisPlannedMaintenance(redisConnectionOptions.PlannedMaintenanceEnabled);
-
         builder.Services.TryAddSingleton<IRedisConnector, RedisConnector>();
-        builder.Services.TryAddSingleton<IRedisConfigurationOptionsProvider, RedisConfigurationOptionsProvider>();
-        builder.Services.TryAddSingleton<IConnectionMultiplexerFactory, ConnectionMultiplexerFactory>();
+        builder.Services.TryAddTransient<IRedisConfigurationOptionsProvider, RedisConfigurationOptionsProvider>();
+        var factoryImplementationType = typeof(ConnectionMultiplexerFactory);
+        if (!string.IsNullOrWhiteSpace(redisConnectionOptions.ConnectionMultiplexerFactoryType))
+        {
+            try
+            {
+                var tempType = Type.GetType(redisConnectionOptions.ConnectionMultiplexerFactoryType);
+                if (tempType is not null && typeof(IConnectionMultiplexerFactory).IsAssignableFrom(tempType))
+                {
+                    factoryImplementationType = tempType;
+                }
+            }
+            catch
+            {
+                // ignored
+            }
+        }
+
+        builder.Services.TryAddTransient(typeof(IConnectionMultiplexerFactory), factoryImplementationType);
         return builder;
     }
 

@@ -57,4 +57,6 @@ public class RedisConnectionOptions
     public ISystemClock? Clock { get; set; }
 
     public Func<ConfigurationOptions, IConnectionMultiplexer>? ConnectionFactory { get; set; }
+
+    public string? ConnectionMultiplexerFactoryType { get; set; }
 }

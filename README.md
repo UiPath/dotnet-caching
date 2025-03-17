@@ -16,6 +16,7 @@ Main capabilities:
 * Cache events process back-pressure using [Channels](https://learn.microsoft.com/en-us/dotnet/core/extensions/channels)
 * Synchronization events using Redis Streams or PubSub. See [ITopic](/Caching.Abstractions/Broadcast/ITopic.cs) implementations.
 * Multiple extensions points in order to fit applications use cases
+* The Redis operation is now OpenTelemetry compliant within the pacakge
 
 
 The general library guideline are defined here:

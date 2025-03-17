@@ -12,7 +12,6 @@ public sealed class RedisConnector : IRedisConnector
     private readonly ICachingTelemetryProvider _telemetryProvider;
     private readonly IRedisConfigurationOptionsProvider _redisConfigurationOptionsProvider;
     private readonly IConnectionMultiplexerFactory _connectionMultiplexerFactory;
-    private readonly IRedisProfiler _redisProfiler;
     private readonly Timer? _hangDetectionTimer;
     private readonly Lazy<Version> _version;
 
@@ -20,9 +19,7 @@ public sealed class RedisConnector : IRedisConnector
     private int _reconnecting;
     private ReadWriteStatus? _lastMasterMetrics;
 
-    public RedisConnector(
-        IRedisProfiler redisProfiler,
-        ICachingTelemetryProvider telemetryProvider,
+    public RedisConnector(ICachingTelemetryProvider telemetryProvider,
         IRedisConfigurationOptionsProvider redisConfigurationOptionsProvider,
         IConnectionMultiplexerFactory connectionMultiplexerFactory,
         IOptions<RedisConnectionOptions> redisOptions)
@@ -34,7 +31,6 @@ public sealed class RedisConnector : IRedisConnector
         _telemetryProvider = telemetryProvider;
         _redisConfigurationOptionsProvider = redisConfigurationOptionsProvider;
         _connectionMultiplexerFactory = connectionMultiplexerFactory;
-        _redisProfiler = redisProfiler;
         if (_redisOptions.EnableHangDetection)
         {
             var hangDetectionDueTime = _redisOptions.HangDetectionDueTime ?? TimeSpan.FromSeconds(30);
@@ -372,17 +368,8 @@ public sealed class RedisConnector : IRedisConnector
     {
         var configuration = _redisConfigurationOptionsProvider.GetConfiguration();
         var cnn = _connectionMultiplexerFactory.Create(configuration);
-        if (_redisOptions.ProfilerEnabled)
-        {
-            var factory = ProfilingSessionFactory();
-            cnn.RegisterProfiler(factory);
-        }
-
         return cnn;
     }
-
-    public Func<ProfilingSession?> ProfilingSessionFactory() =>
-        _redisOptions.ProfilingSessionFactory ?? _redisProfiler.GetSession;
 
     private sealed record ReadWriteStatus(EndPoint EndPoint, int AwaitingResponseCount, int LastWrite, int WriteStatus, int LastRead, int ReadStatus);
 }

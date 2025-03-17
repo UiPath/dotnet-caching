@@ -32,8 +32,14 @@
     <PackageVersion Include="Polly.Extensions" Version="8.5.2" />
     <PackageVersion Include="Swashbuckle.AspNetCore" Version="7.3.1" />
     <PackageVersion Include="SonarAnalyzer.CSharp" Version="10.6.0.109712" />
-    <PackageVersion Include="OpenTelemetry" Version="1.11.2" />
-    <PackageVersion Include="OpenTelemetry.Instrumentation.StackExchangeRedis" Version="1.11.0-beta.2" />
+    
+    <!-- Please ensure the version sync with the ones from UiPath.Platform.Telemetry.OpenTelemetry -->
+    <PackageVersion Include="OpenTelemetry" Version="1.9.0" />
+    <PackageVersion Include="OpenTelemetry.Instrumentation.StackExchangeRedis" Version="1.9.0-beta.1" />
+    <PackageVersion Include="OpenTelemetry.Exporter.Console" Version="1.9.0" />
+    <PackageVersion Include="OpenTelemetry.Extensions.Hosting" Version="1.9.0" />
+    <PackageVersion Include="OpenTelemetry.Instrumentation.AspNetCore" Version="1.9.0" />
+    <PackageVersion Include="OpenTelemetry.Instrumentation.Http" Version="1.9.0" />
     <!-- UiPath libs -->
     <PackageVersion Include="UiPath.Platform.Telemetry" Version="$(UiPathTelemetry)" />
     <PackageVersion Include="UiPath.Platform.Telemetry.AspNetCore" Version="$(UiPathTelemetry)" />

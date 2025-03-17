@@ -16,7 +16,7 @@ public class RedisConnectorTests : IAsyncLifetime
     [Fact]
     public void NotNullConnection()
     {
-        var connector = new RedisConnector(_profiler, _telemetryProvider, _redisConfigurationOptionsProvider, _connectionMultiplexerFactory, _redisOptions);
+        var connector = new RedisConnector(_telemetryProvider, _redisConfigurationOptionsProvider, _connectionMultiplexerFactory, _redisOptions);
         connector.Database.Should().NotBeNull();
         connector.Subscriber.Should().NotBeNull();
         connector.Dispose();
@@ -75,7 +75,7 @@ public class RedisConnectorTests : IAsyncLifetime
         _fixture.Inject(_redisOptions);
         _redisConfigurationOptionsProvider = new RedisConfigurationOptionsProvider(NullLoggerFactory.Instance, _redisOptions);
         _fixture.Inject(_redisConfigurationOptionsProvider);
-        _connectionMultiplexerFactory = new ConnectionMultiplexerFactory(_redisOptions);
+        _connectionMultiplexerFactory = new ConnectionMultiplexerFactory(_redisOptions, _profiler);
         _fixture.Inject(_connectionMultiplexerFactory);
         return Task.CompletedTask;
     }
