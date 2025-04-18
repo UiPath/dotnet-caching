@@ -31,14 +31,17 @@ public sealed class NullCache : ICache
         return ValueTask.FromResult(cacheKey.Select(k => new KeyValuePair<CacheKey, T?>(k, default(T?))).ToArray());
     }
 
-    public ValueTask<T?> GetOrAddAsync<T>(CacheKey cacheKey, Func<CancellationToken, Task<T?>> generator, CancellationToken token = default) =>
-        GetAsync<T>(cacheKey, token);
+    public ValueTask<T?> GetOrAddAsync<T>(CacheKey cacheKey, Func<CancellationToken, Task<T?>> generator, CancellationToken token = default)
+    {
+        NotCacheableException.ThrowIfNotCacheable<T>();
+        return new ValueTask<T?>(generator(token));
+    }
 
     public ValueTask<T?> GetOrAddAsync<T>(CacheKey cacheKey, Func<CancellationToken, Task<T?>> generator, TimeSpan? expiration = null, CancellationToken token = default) =>
-        GetAsync<T>(cacheKey, token);
+        GetOrAddAsync(cacheKey, generator, token);
 
     public ValueTask<T?> GetOrAddAsync<T>(CacheKey cacheKey, Func<CancellationToken, Task<T?>> generator, DateTimeOffset? expiration = null, CancellationToken token = default) =>
-        GetAsync<T>(cacheKey, token);
+        GetOrAddAsync(cacheKey, generator, token);
 
     public ValueTask<bool> RefreshAsync<T>(CacheKey cacheKey, CancellationToken token = default) => ReturnTrueAsync<T>();
 
