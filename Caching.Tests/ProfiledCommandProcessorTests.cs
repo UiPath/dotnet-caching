@@ -5,7 +5,7 @@ using static UiPath.Platform.Caching.Redis.ProfiledCommandExtensions;
 namespace UiPath.Platform.Caching.Tests;
 public class ProfiledCommandProcessorTest : IAsyncLifetime
 {
-    private readonly IFixture _fixture = AutoFixtureCreator.NSubsitute();
+    private readonly IFixture _fixture = AutoFixtureCreator.NSubstitute();
 
     private ProfiledCommandProcessor? _sut = null;
     private ICachingTelemetryProvider _telemetryProvider = default!;

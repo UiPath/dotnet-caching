@@ -2,7 +2,7 @@
 
 public class ConnectionStateMonitorTests : IAsyncLifetime
 {
-    private readonly IFixture _fixture = AutoFixtureCreator.NSubsitute();
+    private readonly IFixture _fixture = AutoFixtureCreator.NSubstitute();
     private IConnectionState[] _connectionStates = default!;
 
     private ConnectionStateMonitor? _sut = null;

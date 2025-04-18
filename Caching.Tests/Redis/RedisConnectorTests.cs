@@ -5,7 +5,7 @@ namespace UiPath.Platform.Caching.Tests.Redis;
 
 public class RedisConnectorTests : IAsyncLifetime
 {
-    private readonly IFixture _fixture = AutoFixtureCreator.NSubsitute();
+    private readonly IFixture _fixture = AutoFixtureCreator.NSubstitute();
     private ICachingTelemetryProvider _telemetryProvider = default!;
     private IRedisProfiler _profiler = default!;
     private IOptions<RedisConnectionOptions> _redisOptions = default!;

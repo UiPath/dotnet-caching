@@ -18,7 +18,7 @@ public class CancelationTokenInMemoryRedisCacheTests : CancelationTokenCacheTest
 
 public abstract class CancelationTokenCacheTests<T> where T : ICache
 {
-    protected IFixture Fixture { get; } = AutoFixtureCreator.NSubsitute();
+    protected IFixture Fixture { get; } = AutoFixtureCreator.NSubstitute();
 
     [Fact]
     public Task Get() =>

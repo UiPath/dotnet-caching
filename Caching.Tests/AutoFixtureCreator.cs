@@ -2,7 +2,7 @@
 
 public static class AutoFixtureCreator
 {
-    public static IFixture NSubsitute() =>
+    public static IFixture NSubstitute() =>
         Create(new AutoNSubstituteCustomization { ConfigureMembers = true });
 
     private static IFixture Create(ICustomization customization)

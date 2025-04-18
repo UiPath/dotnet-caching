@@ -2,7 +2,7 @@
 
 public class DefaultRedisKeyStrategyFactoryTests
 {
-    private readonly IFixture _fixture = AutoFixtureCreator.NSubsitute();
+    private readonly IFixture _fixture = AutoFixtureCreator.NSubstitute();
 
     private DefaultRedisKeyStrategyFactory? _sut = null;
 

@@ -4,7 +4,7 @@ using UiPath.Platform.Caching.CloudEvents;
 namespace UiPath.Platform.Caching.Tests;
 public class CacheCloudEventWrapperTests
 {
-    private readonly IFixture _fixture = AutoFixtureCreator.NSubsitute();
+    private readonly IFixture _fixture = AutoFixtureCreator.NSubstitute();
 
     [Fact]
     public void Works_as_expected()

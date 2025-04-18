@@ -2,7 +2,7 @@
 
 public class ChangeTokenFactoryTests
 {
-    private readonly IFixture _fixture = AutoFixtureCreator.NSubsitute();
+    private readonly IFixture _fixture = AutoFixtureCreator.NSubstitute();
 
     private ChangeTokenFactory? _sut = null;
     private ChangeTokenFactory Sut => _sut ??= _fixture.Create<ChangeTokenFactory>();

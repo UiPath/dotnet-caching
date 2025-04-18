@@ -4,7 +4,7 @@ namespace UiPath.Platform.Caching.Tests;
 
 public class CacheFactoryTests : IAsyncLifetime
 {
-    private readonly IFixture _fixture = AutoFixtureCreator.NSubsitute();
+    private readonly IFixture _fixture = AutoFixtureCreator.NSubstitute();
     private CacheOptions _cacheOptions = default!;
     private List<ICacheProvider> _providers = default!;
     private ICacheProvider _defaultProvider = default!;

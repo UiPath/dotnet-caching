@@ -5,7 +5,7 @@ namespace UiPath.Platform.Caching.Tests;
 
 public class InMemoryCacheProviderTests : IAsyncLifetime
 {
-    private readonly IFixture _fixture = AutoFixtureCreator.NSubsitute();
+    private readonly IFixture _fixture = AutoFixtureCreator.NSubstitute();
     private InMemoryCacheOptions _options = default!;
 
     private InMemoryCacheProvider? _sut = null;

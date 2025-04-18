@@ -7,7 +7,7 @@ namespace UiPath.Platform.Caching.Tests;
 
 public class RedisProfilerTests : IAsyncLifetime
 {
-    private readonly IFixture _fixture = AutoFixtureCreator.NSubsitute();
+    private readonly IFixture _fixture = AutoFixtureCreator.NSubstitute();
 
     private RedisProfiler? _sut = null;
     private ISystemClock _clock = default!;

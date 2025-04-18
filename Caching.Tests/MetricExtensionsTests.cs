@@ -3,7 +3,7 @@ using UiPath.Platform.Caching.Telemetry;
 namespace UiPath.Platform.Caching.Tests;
 public class MetricExtensionsTests
 {
-    private readonly IFixture _fixture = AutoFixtureCreator.NSubsitute();
+    private readonly IFixture _fixture = AutoFixtureCreator.NSubstitute();
 
     [Fact]
     public void TrackReadWriteTopicMetric()
