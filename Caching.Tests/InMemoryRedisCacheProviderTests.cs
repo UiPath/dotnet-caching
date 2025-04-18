@@ -4,7 +4,7 @@ namespace UiPath.Platform.Caching.Tests;
 
 public class InMemoryRedisCacheProviderTests : IAsyncLifetime
 {
-    private readonly IFixture _fixture = AutoFixtureCreator.NSubsitute();
+    private readonly IFixture _fixture = AutoFixtureCreator.NSubstitute();
     private InMemoryRedisCacheOptions _options = default!;
 
     private InMemoryRedisCacheProvider? _sut = null;

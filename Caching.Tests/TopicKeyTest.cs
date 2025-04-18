@@ -2,7 +2,7 @@
 
 public class TopicKeyTest
 {
-    private readonly IFixture _fixture = AutoFixtureCreator.NSubsitute();
+    private readonly IFixture _fixture = AutoFixtureCreator.NSubstitute();
 
     [Fact]
     public void AllOperations()

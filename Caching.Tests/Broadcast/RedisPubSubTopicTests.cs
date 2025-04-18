@@ -9,7 +9,7 @@ namespace UiPath.Platform.Caching.Tests.Broadcast;
 
 public class RedisPubSubTopicTests : IAsyncLifetime
 {
-    private readonly IFixture _fixture = AutoFixtureCreator.NSubsitute();
+    private readonly IFixture _fixture = AutoFixtureCreator.NSubstitute();
     private readonly List<ICacheEvent> _onNextMessages = [];
 
     private TopicKey _topicKey;

@@ -7,7 +7,7 @@ namespace UiPath.Platform.Caching.Tests;
 
 public class LocalCacheSetterTests : IAsyncLifetime
 {
-    private readonly IFixture _fixture = AutoFixtureCreator.NSubsitute();
+    private readonly IFixture _fixture = AutoFixtureCreator.NSubstitute();
 
     private IChangeTokenFactory _changeTokenFactory = default!;
     private ITopicFactory _topicFactory = default!;

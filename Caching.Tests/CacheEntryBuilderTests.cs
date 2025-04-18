@@ -2,7 +2,7 @@
 
 public class CacheEntryBuilderTests : IAsyncLifetime
 {
-    private readonly IFixture _fixture = AutoFixtureCreator.NSubsitute();
+    private readonly IFixture _fixture = AutoFixtureCreator.NSubstitute();
 
     private ICacheKeyStrategy _cacheKeyStrategy = default!;
     private ITopicKeyStrategy _topicKeyStrategy = default!;

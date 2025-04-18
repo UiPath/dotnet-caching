@@ -4,7 +4,7 @@ namespace UiPath.Platform.Caching.Tests.Broadcast;
 
 public class ChangeTokenTests : IAsyncLifetime
 {
-    private readonly IFixture _fixture = AutoFixtureCreator.NSubsitute();
+    private readonly IFixture _fixture = AutoFixtureCreator.NSubstitute();
 
     private string _key = default!;
     private TopicKey _topicKey = default!;

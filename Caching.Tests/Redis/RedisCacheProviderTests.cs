@@ -2,7 +2,7 @@
 
 public class RedisCacheProviderTests : IAsyncLifetime
 {
-    private readonly IFixture _fixture = AutoFixtureCreator.NSubsitute();
+    private readonly IFixture _fixture = AutoFixtureCreator.NSubstitute();
     private RedisCacheOptions _options = default!;
 
     private RedisCacheProvider? _sut = null;

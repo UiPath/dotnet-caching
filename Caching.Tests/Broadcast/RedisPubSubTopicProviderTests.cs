@@ -2,7 +2,7 @@
 
 public class RedisPubSubTopicProviderTests : IAsyncLifetime
 {
-    private readonly IFixture _fixture = AutoFixtureCreator.NSubsitute();
+    private readonly IFixture _fixture = AutoFixtureCreator.NSubstitute();
     private RedisPubSubTopicOptions _redisPubSubTopicOptions = default!;
     private RedisCacheOptions _redisCacheOptions = default!;
     private CacheOptions _cacheOptions = default!;

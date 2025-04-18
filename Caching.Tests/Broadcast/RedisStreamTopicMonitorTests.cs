@@ -7,7 +7,7 @@ using UiPath.Platform.Caching.Telemetry;
 namespace UiPath.Platform.Caching.Tests;
 public class RedisStreamHealthMaintainerTests : IAsyncLifetime
 {
-    private readonly IFixture _fixture = AutoFixtureCreator.NSubsitute();
+    private readonly IFixture _fixture = AutoFixtureCreator.NSubstitute();
     private IRedisConnector _redisConnector = default!;
     private IDatabase _database = default!;
     private ICachingTelemetryProvider _telemetryProvider = default!;

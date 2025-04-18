@@ -2,7 +2,7 @@
 
 public class CacheKeyTest
 {
-    private readonly IFixture _fixture = AutoFixtureCreator.NSubsitute();
+    private readonly IFixture _fixture = AutoFixtureCreator.NSubstitute();
 
     [Fact]
     public void AllOperations()

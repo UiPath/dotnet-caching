@@ -4,7 +4,7 @@ namespace UiPath.Platform.Caching.Tests;
 
 public class CloudCacheEventFactoryTests : IAsyncLifetime
 {
-    private readonly IFixture _fixture = AutoFixtureCreator.NSubsitute();
+    private readonly IFixture _fixture = AutoFixtureCreator.NSubstitute();
     private Uri? _source = null;
     private CacheOptions _cacheOptions = default!;
     private string _type = default!;

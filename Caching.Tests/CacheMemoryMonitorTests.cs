@@ -6,7 +6,7 @@ using UiPath.Platform.Caching.Telemetry;
 namespace UiPath.Platform.Caching.Tests;
 public class CacheMemoryMonitorTests : IAsyncLifetime
 {
-    private readonly IFixture _fixture = AutoFixtureCreator.NSubsitute();
+    private readonly IFixture _fixture = AutoFixtureCreator.NSubstitute();
 
     private ICachingTelemetryProvider _telemetryProvider = default!;
     private string _statsMetricName = default!;

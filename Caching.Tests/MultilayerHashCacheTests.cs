@@ -11,7 +11,7 @@ namespace UiPath.Platform.Caching.Tests;
 
 public class MultilayerHashCacheTests : IAsyncLifetime
 {
-    private readonly IFixture _fixture = AutoFixtureCreator.NSubsitute();
+    private readonly IFixture _fixture = AutoFixtureCreator.NSubstitute();
 
     private IHashCache _innerCache = default!;
     private IChangeTokenFactory _changeTokenFactory = default!;

@@ -1,7 +1,7 @@
 ﻿namespace UiPath.Platform.Caching.Tests.Broadcast;
 public class RedisStreamsTopicProviderTests : IAsyncLifetime
 {
-    private readonly IFixture _fixture = AutoFixtureCreator.NSubsitute();
+    private readonly IFixture _fixture = AutoFixtureCreator.NSubstitute();
     private  RedisStreamsTopicOptions _redisStreamsTopicOptions = default!;
     private  RedisCacheOptions _redisCacheOptions = default!;
     private  CacheOptions _cacheOptions = default!;

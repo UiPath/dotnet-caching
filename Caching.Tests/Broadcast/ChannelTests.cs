@@ -2,7 +2,7 @@
 
 public class ChannelTests
 {
-    private readonly IFixture _fixture = AutoFixtureCreator.NSubsitute();
+    private readonly IFixture _fixture = AutoFixtureCreator.NSubstitute();
 
     [Fact]
     public void Cast_and_comparations_works_as_expected()

@@ -9,7 +9,7 @@ namespace UiPath.Platform.Caching.Tests.Redis;
 
 public class RedisCacheTests : IAsyncLifetime
 {
-    private readonly IFixture _fixture = AutoFixtureCreator.NSubsitute();
+    private readonly IFixture _fixture = AutoFixtureCreator.NSubstitute();
     private ISystemClock _clock = default!;
     private IResiliencePipelineHolder _resiliencePipelineHolder = default!;
     private RedisCacheOptions _cacheOptions = default!;

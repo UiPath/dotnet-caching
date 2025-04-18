@@ -4,7 +4,7 @@ namespace UiPath.Platform.Caching.Tests;
 
 public class CancelationTokenRedisHashSetCacheTests
 {
-    private readonly IFixture _fixture = AutoFixtureCreator.NSubsitute();
+    private readonly IFixture _fixture = AutoFixtureCreator.NSubstitute();
 
     [Fact]
     public Task Get() =>

@@ -8,7 +8,7 @@ namespace UiPath.Platform.Caching.Tests.Broadcast;
 
 public class RedisPubSubSubjectWriterTests : IAsyncLifetime
 {
-    private readonly IFixture _fixture = AutoFixtureCreator.NSubsitute();
+    private readonly IFixture _fixture = AutoFixtureCreator.NSubstitute();
 
     private ISubscriber _subscriber = default!;
     private Channel<ICacheEvent> _channel = default!;

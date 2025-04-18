@@ -3,7 +3,7 @@
 namespace UiPath.Platform.Caching.Tests;
 public class ResiliencePipelineHolderTests
 {
-    private readonly IFixture _fixture = AutoFixtureCreator.NSubsitute();
+    private readonly IFixture _fixture = AutoFixtureCreator.NSubstitute();
 
     [Fact]
     public void Create_with_read_write_policy()
