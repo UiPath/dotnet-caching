@@ -66,7 +66,7 @@ internal abstract class MemoryCacheSetter
         }
     }
 
-    private void RefreshMetadata(object? state)
+    internal void RefreshMetadata(object? state)
     {
         if (state is RefreshMetadataState metadataState)
         {
@@ -82,25 +82,34 @@ internal abstract class MemoryCacheSetter
             return;
         }
 
+        bool set = default;
+
         try
         {
             using var cts = new CancellationTokenSource();
             cts.CancelAfter(CacheOptions.Timeout);
             var options = CreateEntry(metadataState, cts.Token);
             var newEntry = metadataState.CacheEntity.NewEntry(options.Expiration, options.Metadata);
-            Set(options, newEntry, metadataState.EntryType, metadataState.MaxExpiration);
+            set = Set(options, newEntry, metadataState.EntryType, metadataState.MaxExpiration);
 
         }
         catch (Exception ex)
         {
             Logger.LogWarning(ex, "Unable to refresh cache cacheKey {CacheKey}", metadataState.CacheKey);
-            CachingTelemetryProvider.TrackEvent($"Caching.{nameof(MemoryCacheSetter)}.{nameof(RefreshMetadata)}.Failed", new Dictionary<string, string>
-            {
-                { "CacheKey", metadataState.CacheKey },
-                { "TopicKey", metadataState.TopicKey },
-                { "TransportId", token?.TransportId ?? string.Empty}
-            });
         }
+        finally
+        {
+            if (!set)
+            {
+                CachingTelemetryProvider.TrackEvent($"Caching.{nameof(MemoryCacheSetter)}.{nameof(RefreshMetadata)}.Failed", new Dictionary<string, string>
+                {
+                    { "CacheKey", metadataState.CacheKey },
+                    { "TopicKey", metadataState.TopicKey },
+                    { "TransportId", token?.TransportId ?? string.Empty}
+                });
+            }
+        }
+
     }
 
     protected abstract ICacheEntryOptions CreateEntry(RefreshMetadataState metadataState, CancellationToken cancellationToken);

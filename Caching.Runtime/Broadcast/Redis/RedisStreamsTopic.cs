@@ -160,7 +160,8 @@ public sealed class RedisStreamsTopic<T> : ITopic<T>
             SourceUri: sourceUri,
             PollBatchSize: options.PollBatchSize,
             PollInterval: options.PollInterval,
-            ProfilerEnabled: options.ProfilerEnabled
+            ProfilerEnabled: options.ProfilerEnabled,
+            EmitStreamReceivedEvent: options.EmitStreamReceivedEvent
             );
     }
 }

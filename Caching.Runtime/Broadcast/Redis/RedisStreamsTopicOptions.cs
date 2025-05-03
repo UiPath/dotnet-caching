@@ -35,4 +35,6 @@ public class RedisStreamsTopicOptions
     public string? MaintainerSearchPattern { get; set; }
 
     public bool ProfilerEnabled { get; set; }
+
+    public bool EmitStreamReceivedEvent { get; set; }
 }

@@ -14,7 +14,6 @@ internal sealed class EventDispatcher<T> : IDisposable
     private readonly ILogger _logger;
     private readonly CancellationTokenSource _stopTokenSource;
     private readonly CancellationToken _cancellationToken;
-    private ICachingTelemetryProvider _telemetryProvider;
     private bool _disposed;
 
     public EventDispatcher(TopicKey topicKey,

@@ -176,14 +176,13 @@ internal sealed class RedisStreamSubjectWriter<T> : IDisposable
                 }
                 ev.AttachTransportId(@event.Id);
 
-                _logger.LogInformation("Event received. Id {EventId}  Topic : {Topic}, StreamId: {StreamId}, Key: {Key}", ev.Id, _context.Topic, ev.TransportId, ev.Key);
-
                 if (ev.IsValid())
                 {
                     if (ev.SameSource(_context.SourceUri))
                     {
                         _logger.LogTrace("Event from current source. Id {EventId}  Topic : {Topic}, StreamId : {StreamId}", ev.Id, _context.Topic, @event.Id);
                         _cachingTelemetryProvider.TrackTopicReadMetric(_context.Topic!, @event.Id);
+                        TraceReceipt(ev);
                         ids.Add(@event.Id);
                     }
                     else
@@ -191,6 +190,7 @@ internal sealed class RedisStreamSubjectWriter<T> : IDisposable
                         if (_writer.TryWrite(ev))
                         {
                             ids.Add(@event.Id);
+                            TraceReceipt(ev);
                         }
                         else
                         {
@@ -223,6 +223,22 @@ internal sealed class RedisStreamSubjectWriter<T> : IDisposable
 
         await _redis.Database.StreamAcknowledgeAsync(_context.Topic, _context.ConsumerGroup, ids.ToArray()).ConfigureAwait(false);
         _logger.LogDebug("Dispatched {Length} messages. Topic : {Topic}", events.Length, _context.Topic);
+    }
+
+    private void TraceReceipt(T ev)
+    {
+        _logger.LogInformation("Event received. Id {EventId}  Topic : {Topic}, StreamId: {StreamId}, Key: {Key}", ev.Id, _context.Topic, ev.TransportId, ev.Key);
+
+        if (_context.EmitStreamReceivedEvent)
+        {
+            _cachingTelemetryProvider.TrackEvent($"Caching.{nameof(RedisStreamSubjectWriter<T>)}.{nameof(DispatchEventsAsync)}.EventReceived", new Dictionary<string, string>
+        {
+            { "EventId", ev.Id!},
+            { "TopicKey", _context.Topic!},
+            { "TransportId", ev.TransportId! },
+            { "Key", ev.Key! }
+        });
+        }
     }
 }
 
