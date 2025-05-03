@@ -12,5 +12,14 @@ public class TestCacheEvent : ICacheEvent
 
     public string? Type { get; set; }
 
+    public string? TransportId {get; set;}
+
+    public string? Key => Data?.Key;
+
+    public void AttachTransportId(string? transportId)
+    {
+        TransportId = transportId;
+    }
+
     public bool IsValid() => Valid;
 }

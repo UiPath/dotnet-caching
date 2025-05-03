@@ -1,4 +1,5 @@
 ﻿using Microsoft.Extensions.Logging;
+using UiPath.Platform.Caching.Telemetry;
 
 namespace UiPath.Platform.Caching.Tests.Broadcast;
 
@@ -15,7 +16,7 @@ public class ChangeTokenTests : IAsyncLifetime
     private ISerializerProxy _serializer = default!;
 
     private ChangeToken? _sut = null;
-    private ChangeToken Sut => _sut ??= new ChangeToken(_key, _topic, _source, _serializer, _fixture.Freeze<ILogger<ChangeToken>>(), _acceptedEvents);
+    private ChangeToken Sut => _sut ??= new ChangeToken(_key, _topic, _source, _serializer, _fixture.Freeze<ILogger<ChangeToken>>(), _fixture.Freeze<ICachingTelemetryProvider>(), _acceptedEvents);
 
     [Fact]
     public void Verify_ActiveChangeCallbacks()

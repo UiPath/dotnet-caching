@@ -110,7 +110,6 @@ internal sealed class RedisStreamSubjectWriter<T> : IDisposable
         {
             await DispatchEventsAsync(events).ConfigureAwait(false);
             _lastId = events[^1].Id;
-            _cachingTelemetryProvider.TrackTopicReadMetric(_context.Topic!, _lastId);
             return;
         }
         await Wait().ConfigureAwait(false);
@@ -175,27 +174,38 @@ internal sealed class RedisStreamSubjectWriter<T> : IDisposable
                 {
                     continue;
                 }
+                ev.AttachTransportId(@event.Id);
 
-                _logger.LogDebug("Event received. Id {EventId}  Topic : {Topic}", ev.Id, _context.Topic);
+                _logger.LogInformation("Event received. Id {EventId}  Topic : {Topic}, StreamId: {StreamId}, Key: {Key}", ev.Id, _context.Topic, ev.TransportId, ev.Key);
+
                 if (ev.IsValid())
                 {
                     if (ev.SameSource(_context.SourceUri))
                     {
-                        _logger.LogTrace("Event from current source. Id {EventId}  Topic : {Topic}", ev.Id, _context.Topic);
+                        _logger.LogTrace("Event from current source. Id {EventId}  Topic : {Topic}, StreamId : {StreamId}", ev.Id, _context.Topic, @event.Id);
+                        _cachingTelemetryProvider.TrackTopicReadMetric(_context.Topic!, @event.Id);
                         ids.Add(@event.Id);
                     }
                     else
                     {
                         if (_writer.TryWrite(ev))
                         {
-                            _cachingTelemetryProvider.TrackTopicReadMetric(_context.Topic!, @event.Id);
                             ids.Add(@event.Id);
+                        }
+                        else
+                        {
+                            _logger.LogWarning("Failed processing stream entry. Id {EventId} Topic : {Topic}, StreamId : {StreamId}. Will retry.", ev.Id, _context.Topic, @event.Id);
                         }
                     }
                 }
                 else
                 {
-                    _logger.LogWarning("Event invalid. Id {EventId}  Topic : {Topic}", ev.Id, _context.Topic);
+                    _cachingTelemetryProvider.TrackEvent($"Caching.{nameof(RedisStreamSubjectWriter<T>)}.{nameof(DispatchEventsAsync)}.InvalidEvent", new Dictionary<string, string>
+                    {
+                        { "TopicKey", _context.Topic!},
+                        { "TransportId", @event.Id! }
+                    });
+                    _logger.LogWarning("Event invalid. Id {EventId}  Topic : {Topic}, StreamId : {StreamId}", ev.Id, _context.Topic, @event.Id);
                     ids.Add(@event.Id);
                 }
             }

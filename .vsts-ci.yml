@@ -111,11 +111,11 @@ stages:
       - task: NuGetAuthenticate@1
         displayName: Authenticate to NuGet
 
-      - task: NuGetCommand@2
+      - task: DotNetCoreCLI@2
         displayName: "Restore Nuget packages"
         inputs:
           command: restore
-          restoreSolution: $(Solution)
+          restoreArguments: $(Solution)
           feedsToUse: config
           nugetConfigPath: "$(Build.SourcesDirectory)/Caching/NuGet.Config"
 
@@ -202,7 +202,10 @@ stages:
           runOnce:
             deploy:
               steps:
-                - task: NuGetCommand@2
+                - task: NuGetAuthenticate@1
+                  displayName: Authenticate to NuGet
+
+                - task: DotNetCoreCLI@2
                   displayName: 'NuGet push'
                   inputs:
                     command: push
@@ -278,10 +281,12 @@ stages:
           runOnce:
             deploy:
               steps:
-                - task: NuGetCommand@2
+                - task: NuGetAuthenticate@1
+                  displayName: Authenticate to NuGet
+
+                - task: DotNetCoreCLI@2
                   displayName: 'NuGet push'
                   inputs:
-                    command: push
                     packagesToPush: '$(Agent.BuildDirectory)/Caching/*.nupkg'
                     publishVstsFeed: '1d71f16a-8504-4895-a839-687a1a4819d4'
                 
@@ -302,10 +307,12 @@ stages:
           runOnce:
             deploy:
               steps:
-                - task: NuGetCommand@2
+                - task: NuGetAuthenticate@1
+                  displayName: Authenticate to NuGet
+
+                - task: DotNetCoreCLI@2
                   displayName: 'NuGet push'
                   inputs:
-                    command: push
                     packagesToPush: '$(Agent.BuildDirectory)/Caching/*.nupkg'
                     publishVstsFeed: '1d71f16a-8504-4895-a839-687a1a4819d4'
 
@@ -325,9 +332,11 @@ stages:
           runOnce:
             deploy:
               steps:
-                - task: NuGetCommand@2
+                - task: NuGetAuthenticate@1
+                  displayName: Authenticate to NuGet
+
+                - task: DotNetCoreCLI@2
                   displayName: 'NuGet push'
                   inputs:
-                    command: push
                     packagesToPush: '$(Agent.BuildDirectory)/Caching/*.nupkg'
                     publishVstsFeed: 'a7f75525-c998-47e3-8aaf-0396542795c9'

@@ -8,5 +8,7 @@ public interface ICacheChangeToken : IChangeToken
 
     DateTimeOffset? Expiration { get; }
 
+    string? TransportId { get; }
+
     public IDictionary<string, string?>? Metadata { get; }
 }

@@ -20,6 +20,8 @@ public class NullCacheChangeToken : ICacheChangeToken
 
     public IDictionary<string, string?>? Metadata => null;
 
+    public string? TransportId => null;
+
     public IDisposable RegisterChangeCallback(Action<object?> callback, object? state) =>
         Disposable.Empty;
 }
