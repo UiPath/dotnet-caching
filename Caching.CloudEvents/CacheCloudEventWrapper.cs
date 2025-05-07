@@ -18,4 +18,18 @@ internal sealed class CacheCloudEventWrapper : ICacheEvent
     public CacheEventData? Data { get; }
 
     public string? Type => CloudEvent.Type;
+
+    public string? TransportId { get; private set; }
+
+    public string? Key => Data?.Key;
+
+    public void AttachTransportId(string? transportId)
+    {
+        if (TransportId != null)
+        {
+            throw new InvalidOperationException();
+        }
+
+        TransportId = transportId;
+    }
 }

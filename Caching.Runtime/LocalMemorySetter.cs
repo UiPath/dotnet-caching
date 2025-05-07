@@ -1,4 +1,6 @@
-﻿namespace UiPath.Platform.Caching;
+﻿using UiPath.Platform.Caching.Telemetry;
+
+namespace UiPath.Platform.Caching;
 
 internal class LocalMemorySetter : MemoryCacheSetter
 {
@@ -9,8 +11,9 @@ internal class LocalMemorySetter : MemoryCacheSetter
         IMemoryCache memoryCache,
         ILogger logger,
         CacheClock clock,
-        IMultilayerCacheOptions cacheOptions)
-        : base(cacheName, changeTokenFactory, topicProvider, memoryCache, logger, clock, cacheOptions)
+        IMultilayerCacheOptions cacheOptions,
+        ICachingTelemetryProvider telemetryProvider)
+        : base(cacheName, changeTokenFactory, topicProvider, memoryCache, logger, clock, cacheOptions, telemetryProvider)
     {
     }
 

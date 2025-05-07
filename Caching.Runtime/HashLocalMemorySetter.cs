@@ -10,8 +10,9 @@ internal class HashLocalMemorySetter : MemoryCacheSetter
         IMemoryCache memoryCache,
         ILogger logger,
         CacheClock clock,
-        IMultilayerCacheOptions cacheOptions)
-        :base(cacheName, changeTokenFactory, topicProvider, memoryCache, logger, clock, cacheOptions)
+        IMultilayerCacheOptions cacheOptions,
+        Telemetry.ICachingTelemetryProvider telemetryProvider)
+        :base(cacheName, changeTokenFactory, topicProvider, memoryCache, logger, clock, cacheOptions, telemetryProvider)
     {
     }
 

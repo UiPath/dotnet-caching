@@ -16,6 +16,8 @@ internal class TestChangeToken : ICacheChangeToken, IDisposable
 
     public IDictionary<string, string?>? Metadata { get; set; }
 
+    public string? TransportId {get; set;}
+
     public void Dispose()
     {
         Disposed = true;

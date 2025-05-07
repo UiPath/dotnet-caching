@@ -1,4 +1,7 @@
-﻿namespace UiPath.Platform.Caching.Broadcast;
+﻿using Microsoft.Extensions.Logging;
+using UiPath.Platform.Caching.Telemetry;
+
+namespace UiPath.Platform.Caching.Broadcast;
 
 public sealed class ChangeToken : ICacheChangeToken, IObserver<ICacheEvent>, IDisposable
 {
@@ -9,10 +12,18 @@ public sealed class ChangeToken : ICacheChangeToken, IObserver<ICacheEvent>, IDi
     private readonly ILogger<ChangeToken> _logger;
     private readonly ISet<string>? _acceptedEvents;
     private readonly IDisposable _unsubscriber;
+    private readonly ICachingTelemetryProvider _telemetryProvider;
 
     private readonly List<(Action<object?> callback, object? state)> _callbacks = [];
 
-    public ChangeToken(string key, ITopic<ICacheEvent> topic, Uri? source, ISerializerProxy serializer, ILogger<ChangeToken> logger, ISet<string>? acceptedEvents = null)
+    public ChangeToken(
+        string key,
+        ITopic<ICacheEvent> topic,
+        Uri? source,
+        ISerializerProxy serializer,
+        ILogger<ChangeToken> logger,
+        ICachingTelemetryProvider telemetryProvider,
+        ISet<string>? acceptedEvents = null)
     {
         _key = key;
         _topic = topic.TopicKey;
@@ -21,6 +32,7 @@ public sealed class ChangeToken : ICacheChangeToken, IObserver<ICacheEvent>, IDi
         _logger = logger;
         _acceptedEvents = acceptedEvents;
         _logger.LogTrace("Waiting from message {Key} on topic {Topic}", _key, _topic);
+        _telemetryProvider = telemetryProvider;
         _unsubscriber = topic.Subscribe(this);
     }
 
@@ -33,6 +45,8 @@ public sealed class ChangeToken : ICacheChangeToken, IObserver<ICacheEvent>, IDi
     public DateTimeOffset? Expiration { get; private set; }
 
     public IDictionary<string, string?>? Metadata  { get; private set; }
+
+    public string? TransportId { get; private set; }
 
     public void OnCompleted() =>
         _logger.LogTrace("OnCompleted {Key},{Topic}", _key, _topic);
@@ -48,12 +62,15 @@ public sealed class ChangeToken : ICacheChangeToken, IObserver<ICacheEvent>, IDi
         var data = cacheEvent.Data;
         if (IsAcceptedEvent(cacheEvent))
         {
+            TransportId = cacheEvent.TransportId;
             _logger.LogDebug("Clear local cache key {Key}. Topic:{Topic}, Id {EventId}, Source:{EventSource}", _key, _topic, cacheEvent.Id, cacheEvent.Source);
             Notify(data);
+            _telemetryProvider.TrackTopicReadMetric(_topic, TransportId);
         }
         else
         {
             _logger.LogDebug("Event ignored. Key {Key}, Topic:{Topic}, Id {EventId}, Source:{EventSource}", data?.Key, _topic, cacheEvent.Id, cacheEvent.Source);
+            _telemetryProvider.TrackTopicReadMetric(_topic, cacheEvent.TransportId);
         }
     }
 

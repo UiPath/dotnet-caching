@@ -27,6 +27,12 @@ public sealed class NullCacheEventFactory : ICacheEventFactory
 
         public Uri? Source => null;
 
+        public string? TransportId => null;
+
+        public string? Key => null;
+
+        public void AttachTransportId(string? transportId) { }
+
         public bool IsValid() => true;
     }
 }

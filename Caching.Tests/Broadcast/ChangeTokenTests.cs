@@ -1,4 +1,5 @@
 ﻿using Microsoft.Extensions.Logging;
+using UiPath.Platform.Caching.Telemetry;
 
 namespace UiPath.Platform.Caching.Tests.Broadcast;
 
@@ -15,7 +16,7 @@ public class ChangeTokenTests : IAsyncLifetime
     private ISerializerProxy _serializer = default!;
 
     private ChangeToken? _sut = null;
-    private ChangeToken Sut => _sut ??= new ChangeToken(_key, _topic, _source, _serializer, _fixture.Freeze<ILogger<ChangeToken>>(), _acceptedEvents);
+    private ChangeToken Sut => _sut ??= new ChangeToken(_key, _topic, _source, _serializer, _fixture.Freeze<ILogger<ChangeToken>>(), _fixture.Freeze<ICachingTelemetryProvider>(), _acceptedEvents);
 
     [Fact]
     public void Verify_ActiveChangeCallbacks()
@@ -156,6 +157,56 @@ public class ChangeTokenTests : IAsyncLifetime
         Sut.MetadataHasChanged.Should().BeTrue();
         Sut.Metadata.Should().NotBeNull();
     }
+
+    [Fact]
+    public void Accepted_event_emits_telemetry_on_read()
+    {
+        var transportId = "123456789013-1";
+        Sut.OnNext(new TestCacheEvent
+        {
+            TransportId = transportId,
+            Id = Guid.NewGuid().ToString(),
+            Source = new Uri("urn:machine"),
+            Data = new CacheEventData(_key, new Dictionary<string, object?>
+            {
+                ["_expiration_"] = DateTimeOffset.Now,
+                ["_metadata_"] = new Dictionary<string, string?>
+                {
+                    ["key"] = _key,
+                }
+            }),
+            Type = _fixture.Create<string>(),
+
+        });
+        _fixture.Create<ICachingTelemetryProvider>().Received().TrackMetric(Metrics.GetReadTopicMetricName(_topicKey), 123456789013, Arg.Any<Dictionary<string, string>>());
+        Sut.HasChanged.Should().BeTrue();
+        Sut.MetadataHasChanged.Should().BeTrue();
+        Sut.Metadata.Should().NotBeNull();
+    }
+
+    [Fact]
+    public void Accepted_event_emits_telemetry_on_unaccepted_read()
+    {
+        var transportId = "123456789013-1";
+        Sut.OnNext(new TestCacheEvent
+        {
+            TransportId = transportId,
+            Id = Guid.NewGuid().ToString(),
+            Source = _source,
+            Data = new CacheEventData(_key, new Dictionary<string, object?>
+            {
+                ["_expiration_"] = DateTimeOffset.Now,
+                ["_metadata_"] = new Dictionary<string, string?>
+                {
+                    ["key"] = _key,
+                }
+            }),
+            Type = _fixture.Create<string>(),
+
+        });
+        _fixture.Create<ICachingTelemetryProvider>().Received().TrackMetric(Metrics.GetReadTopicMetricName(_topicKey), 123456789013, Arg.Any<Dictionary<string, string>>());
+    }
+
 
     [Fact]
     public void Dispose_token()

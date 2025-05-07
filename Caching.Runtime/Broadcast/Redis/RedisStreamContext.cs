@@ -8,5 +8,6 @@ internal sealed record RedisStreamContext(
     Uri SourceUri,
     int PollBatchSize,
     TimeSpan PollInterval,
-    bool ProfilerEnabled
+    bool ProfilerEnabled,
+    bool EmitStreamReceivedEvent
 );
