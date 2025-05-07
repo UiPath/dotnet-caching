@@ -287,6 +287,7 @@ stages:
                 - task: DotNetCoreCLI@2
                   displayName: 'NuGet push'
                   inputs:
+                    command: push
                     packagesToPush: '$(Agent.BuildDirectory)/Caching/*.nupkg'
                     publishVstsFeed: '1d71f16a-8504-4895-a839-687a1a4819d4'
                 
@@ -313,6 +314,7 @@ stages:
                 - task: DotNetCoreCLI@2
                   displayName: 'NuGet push'
                   inputs:
+                    command: push
                     packagesToPush: '$(Agent.BuildDirectory)/Caching/*.nupkg'
                     publishVstsFeed: '1d71f16a-8504-4895-a839-687a1a4819d4'
 
@@ -338,5 +340,6 @@ stages:
                 - task: DotNetCoreCLI@2
                   displayName: 'NuGet push'
                   inputs:
+                    command: push
                     packagesToPush: '$(Agent.BuildDirectory)/Caching/*.nupkg'
                     publishVstsFeed: 'a7f75525-c998-47e3-8aaf-0396542795c9'
