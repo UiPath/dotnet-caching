@@ -15,7 +15,7 @@ public class RedisHashCacheTests : IAsyncLifetime
     private string _prefix = default!;
     private IDatabase _database = default!;
     private ITransaction _transaction = default!;
-    private ISerializerProxy _serializer = default!;
+    private ISerializerProxy<RedisValue> _serializer = default!;
     private ISystemClock _clock = default!;
     private RedisCacheOptions _redisCacheOptions = new();
     private DateTimeOffset _now = DateTimeOffset.UtcNow;

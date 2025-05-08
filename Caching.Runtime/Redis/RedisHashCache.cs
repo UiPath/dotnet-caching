@@ -9,7 +9,7 @@ public sealed class RedisHashCache : RedisCacheBase, IHashCache
 {
     private const string LogWarnMessage = "RedisHashCache exception.";
     private readonly ILogger<RedisHashCache> _logger;
-    private readonly ISerializerProxy _serializer;
+    private readonly ISerializerProxy<RedisValue> _serializer;
     private readonly ICacheEntryFactory _cacheEntryFactory;
     private readonly IResiliencePipeline _read;
     private readonly IResiliencePipeline _write;
@@ -22,7 +22,7 @@ public sealed class RedisHashCache : RedisCacheBase, IHashCache
 
     public RedisHashCache(
         IRedisConnector redis,
-        ISerializerProxy serializer,
+        ISerializerProxy<RedisValue> serializer,
         IResiliencePipelineHolder resiliencePipelineHolder,
         ICachingTelemetryProvider telemetryProvider,
         RedisCacheOptions redisCacheOptions,

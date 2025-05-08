@@ -6,7 +6,7 @@ public sealed class ChangeTokenFactory : IChangeTokenFactory
 {
 #pragma warning disable IDE1006 // Naming Styles
     private static readonly ISet<string> MemoryAcceptedEvents = new HashSet<string>(new string[] { KnownEventTypes.CacheRemoved, KnownEventTypes.CacheRefreshed }, StringComparer.InvariantCultureIgnoreCase);
-    private readonly ISerializerProxy _serializer;
+    private readonly ISerializerProxy<RedisValue> _serializer;
 #pragma warning restore IDE1006 // Naming Styles
 
     private readonly ILoggerFactory _loggerFactory;
@@ -14,7 +14,7 @@ public sealed class ChangeTokenFactory : IChangeTokenFactory
     private readonly Uri? _sourceUri;
     private readonly ICachingTelemetryProvider _telemetryProvider;
 
-    public ChangeTokenFactory(IOptions<CacheOptions> optionsAccessor, ISerializerProxy serializer, ILoggerFactory loggerFactory, ICachingTelemetryProvider telemetryProvider)
+    public ChangeTokenFactory(IOptions<CacheOptions> optionsAccessor, ISerializerProxy<RedisValue> serializer, ILoggerFactory loggerFactory, ICachingTelemetryProvider telemetryProvider)
     {
         _sourceUri = optionsAccessor.Value.SourceUri;
         _serializer = serializer;

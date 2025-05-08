@@ -27,7 +27,7 @@ public class CachingBuilder(IServiceCollection services, IConfiguration? configu
             callback(this);
         }
 
-        Services.TryAddSingleton<ISerializerProxy>(sp => new SystemJsonSerializerProxy(sp.GetService<JsonSerializerOptions>()));
+        Services.TryAddSingleton<ISerializerProxy<RedisValue>>(sp => new SystemJsonSerializerProxy(sp.GetService<JsonSerializerOptions>()));
         Services.TryAddSingleton<IResiliencePipelineHolder>(ResiliencePipelineHolder.Empty);
         Services.TryAddSingleton<IChangeTokenFactory>(NullChangeTokenFactory.Instance);
         Services.TryAddSingleton<ITopicFactory>(NullTopicFactory.Instance);

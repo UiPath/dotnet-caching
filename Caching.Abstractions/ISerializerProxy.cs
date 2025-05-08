@@ -1,10 +1,10 @@
 ﻿namespace UiPath.Platform.Caching;
 
-public interface ISerializerProxy
+public interface ISerializerProxy<T1>
 {
-    string? Serialize(object? value);
+    T1? Serialize(object? value);
 
-    T? Deserialize<T>(string? value);
+    T? Deserialize<T>(T1? value);
 
     bool TryDeserialize<T>(string? value, out T? result);
 

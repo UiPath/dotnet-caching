@@ -2,17 +2,17 @@
 
 namespace UiPath.Platform.Caching;
 
-public class SystemJsonSerializerProxy : ISerializerProxy
+public class SystemJsonSerializerProxy : ISerializerProxy<RedisValue>
 {
     private readonly JsonSerializerOptions? _options;
 
     public SystemJsonSerializerProxy(JsonSerializerOptions? options = null) =>
         _options = options;
 
-    public string? Serialize(object? value) =>
+    public RedisValue Serialize(object? value) =>
         JsonSerializer.Serialize(value, _options);
 
-    public T? Deserialize<T>(string? value) =>
+    public T? Deserialize<T>(RedisValue value) =>
         string.IsNullOrWhiteSpace(value) ? default : JsonSerializer.Deserialize<T>(value, _options);
 
     public bool TryDeserialize<T>(string? value, out T? result)

@@ -8,7 +8,7 @@ public sealed class RedisCache : RedisCacheBase, ICache
 {
     private const string LogWarnMessage = "RedisCache exception.";
 
-    private readonly ISerializerProxy _serializer;
+    private readonly ISerializerProxy<RedisValue> _serializer;
     private readonly ILogger<RedisCache> _logger;
     private readonly bool _supportsExpireTime;
     private readonly IResiliencePipeline _read;
@@ -21,7 +21,7 @@ public sealed class RedisCache : RedisCacheBase, ICache
 
     public RedisCache(
         IRedisConnector redis,
-        ISerializerProxy serializer,
+        ISerializerProxy<RedisValue> serializer,
         IResiliencePipelineHolder resiliencePipelineHolder,
         ICachingTelemetryProvider telemetryProvider,
         RedisCacheOptions redisCacheOptions,

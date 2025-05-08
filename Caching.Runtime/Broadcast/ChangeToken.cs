@@ -8,7 +8,7 @@ public sealed class ChangeToken : ICacheChangeToken, IObserver<ICacheEvent>, IDi
     private readonly string _key;
     private readonly TopicKey _topic;
     private readonly Uri? _source;
-    private readonly ISerializerProxy _serializer;
+    private readonly ISerializerProxy<RedisValue> _serializer;
     private readonly ILogger<ChangeToken> _logger;
     private readonly ISet<string>? _acceptedEvents;
     private readonly IDisposable _unsubscriber;
@@ -20,7 +20,7 @@ public sealed class ChangeToken : ICacheChangeToken, IObserver<ICacheEvent>, IDi
         string key,
         ITopic<ICacheEvent> topic,
         Uri? source,
-        ISerializerProxy serializer,
+        ISerializerProxy<RedisValue> serializer,
         ILogger<ChangeToken> logger,
         ICachingTelemetryProvider telemetryProvider,
         ISet<string>? acceptedEvents = null)

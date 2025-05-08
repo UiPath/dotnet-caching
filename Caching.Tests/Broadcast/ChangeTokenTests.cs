@@ -1,4 +1,5 @@
 ﻿using Microsoft.Extensions.Logging;
+using StackExchange.Redis;
 using UiPath.Platform.Caching.Telemetry;
 
 namespace UiPath.Platform.Caching.Tests.Broadcast;
@@ -13,7 +14,7 @@ public class ChangeTokenTests : IAsyncLifetime
     private CacheClearEventFormatterProxy _formatter = default!;
     private Uri? _source = null;
     private ISet<string>? _acceptedEvents = null;
-    private ISerializerProxy _serializer = default!;
+    private ISerializerProxy<RedisValue> _serializer = default!;
 
     private ChangeToken? _sut = null;
     private ChangeToken Sut => _sut ??= new ChangeToken(_key, _topic, _source, _serializer, _fixture.Freeze<ILogger<ChangeToken>>(), _fixture.Freeze<ICachingTelemetryProvider>(), _acceptedEvents);
