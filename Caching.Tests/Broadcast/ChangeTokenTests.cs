@@ -16,8 +16,8 @@ public class ChangeTokenTests : IAsyncLifetime
     private ISet<string>? _acceptedEvents = null;
     private ISerializerProxy<RedisValue> _serializer = default!;
 
-    private ChangeToken? _sut = null;
-    private ChangeToken Sut => _sut ??= new ChangeToken(_key, _topic, _source, _serializer, _fixture.Freeze<ILogger<ChangeToken>>(), _fixture.Freeze<ICachingTelemetryProvider>(), _acceptedEvents);
+    private ChangeToken<RedisValue>? _sut = null;
+    private ChangeToken<RedisValue> Sut => _sut ??= new ChangeToken<RedisValue>(_key, _topic, _source, _serializer, _fixture.Freeze<ILogger<ChangeToken<RedisValue>>>(), _fixture.Freeze<ICachingTelemetryProvider>(), _acceptedEvents);
 
     [Fact]
     public void Verify_ActiveChangeCallbacks()
@@ -229,7 +229,7 @@ public class ChangeTokenTests : IAsyncLifetime
         _key = _fixture.Freeze<string>();
         _topicKey = (TopicKey)_fixture.Create<string>();
         _fixture.Inject(_topicKey);
-        _fixture.Freeze<ILogger<ChangeToken>>();
+        _fixture.Freeze<ILogger<ChangeToken<RedisValue>>>();
         _topic = _fixture.Freeze<ITopic<ICacheEvent>>();
         _formatter = new CacheClearEventFormatterProxy();
         _serializer = new SystemJsonSerializerProxy();

@@ -3,13 +3,13 @@ using UiPath.Platform.Caching.Telemetry;
 
 namespace UiPath.Platform.Caching.Broadcast;
 
-public sealed class ChangeToken : ICacheChangeToken, IObserver<ICacheEvent>, IDisposable
+public sealed class ChangeToken<T> : ICacheChangeToken, IObserver<ICacheEvent>, IDisposable
 {
     private readonly string _key;
     private readonly TopicKey _topic;
     private readonly Uri? _source;
-    private readonly ISerializerProxy<RedisValue> _serializer;
-    private readonly ILogger<ChangeToken> _logger;
+    private readonly ISerializerProxy<T> _serializer;
+    private readonly ILogger<ChangeToken<T>> _logger;
     private readonly ISet<string>? _acceptedEvents;
     private readonly IDisposable _unsubscriber;
     private readonly ICachingTelemetryProvider _telemetryProvider;
@@ -20,8 +20,8 @@ public sealed class ChangeToken : ICacheChangeToken, IObserver<ICacheEvent>, IDi
         string key,
         ITopic<ICacheEvent> topic,
         Uri? source,
-        ISerializerProxy<RedisValue> serializer,
-        ILogger<ChangeToken> logger,
+        ISerializerProxy<T> serializer,
+        ILogger<ChangeToken<T>> logger,
         ICachingTelemetryProvider telemetryProvider,
         ISet<string>? acceptedEvents = null)
     {

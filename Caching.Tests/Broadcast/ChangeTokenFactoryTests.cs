@@ -1,11 +1,13 @@
-﻿namespace UiPath.Platform.Caching.Tests.Broadcast;
+﻿using StackExchange.Redis;
+
+namespace UiPath.Platform.Caching.Tests.Broadcast;
 
 public class ChangeTokenFactoryTests
 {
     private readonly IFixture _fixture = AutoFixtureCreator.NSubstitute();
 
-    private ChangeTokenFactory? _sut = null;
-    private ChangeTokenFactory Sut => _sut ??= _fixture.Create<ChangeTokenFactory>();
+    private ChangeTokenFactory<RedisValue>? _sut = null;
+    private ChangeTokenFactory<RedisValue> Sut => _sut ??= _fixture.Create<ChangeTokenFactory<RedisValue>>();
 
     [Fact]
     public void NotNullable_change_token()
