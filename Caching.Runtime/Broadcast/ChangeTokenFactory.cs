@@ -5,7 +5,7 @@ namespace UiPath.Platform.Caching.Broadcast;
 public sealed class ChangeTokenFactory<T> : IChangeTokenFactory
 {
 #pragma warning disable IDE1006 // Naming Styles
-    private static readonly ISet<string> MemoryAcceptedEvents = new HashSet<string>(new string[] { KnownEventTypes.CacheRemoved, KnownEventTypes.CacheRefreshed }, StringComparer.InvariantCultureIgnoreCase);
+    private readonly ISet<string> MemoryAcceptedEvents = new HashSet<string>([KnownEventTypes.CacheRemoved, KnownEventTypes.CacheRefreshed], StringComparer.InvariantCultureIgnoreCase);
     private readonly ISerializerProxy<T> _serializer;
 #pragma warning restore IDE1006 // Naming Styles
 

@@ -13,7 +13,7 @@ public class SystemJsonSerializerProxy : ISerializerProxy<RedisValue>
         JsonSerializer.Serialize(value, _options);
 
     public T? Deserialize<T>(RedisValue value) =>
-        string.IsNullOrWhiteSpace(value) ? default : JsonSerializer.Deserialize<T>(value, _options);
+        value.IsNullOrEmpty ? default : JsonSerializer.Deserialize<T>(value!, _options);
 
     public bool TryDeserialize<T>(string? value, out T? result)
     {
