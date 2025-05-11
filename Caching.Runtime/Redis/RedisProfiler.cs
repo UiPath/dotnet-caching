@@ -1,11 +1,16 @@
 ﻿using System.Collections.Concurrent;
 using StackExchange.Redis.Profiling;
 using UiPath.Platform.Caching.Telemetry;
+using ReactiveDisposable = System.Reactive.Disposables.Disposable;
 
 namespace UiPath.Platform.Caching.Redis;
 
+
 internal sealed class RedisProfiler : IRedisProfiler, IDisposable
 {
+    private const string NoSessionId = "(null)";
+    private static readonly AsyncLocal<string?> _currentSessionId = new();
+
     private readonly RedisConnectionOptions _options;
     private readonly ConcurrentDictionary<string, RedisProfileEntry> _sessions = new();
     private readonly ProfilingSession? _defaultSession;
@@ -16,7 +21,6 @@ internal sealed class RedisProfiler : IRedisProfiler, IDisposable
     private readonly IProfilingSessionCommandReader _profilingSessionCommandReader;
     private readonly ICachingTelemetryProvider _telemetryProvider;
     private readonly ILogger<RedisProfiler> _logger;
-    private readonly AsyncLocal<string?> _contextSessionId = new();
     private bool _disposed;
 
     public RedisProfiler(
@@ -51,48 +55,63 @@ internal sealed class RedisProfiler : IRedisProfiler, IDisposable
 
     public int Count => _sessions.Count;
 
-    public ProfilingSession? GetSession() => GetSession(null);
-
-    public ProfilingSession? GetSession(string? sessionId)
+    public ProfilingSession? GetSession()
     {
-        if (_disposed)
+        if (_disposed || !_options.ProfilerEnabled)
         {
             return null;
         }
 
-        sessionId ??= _contextSessionId.Value;
-
-        if (sessionId is not null && _sessions.TryGetValue(sessionId, out var entry))
+        var sessionId = _currentSessionId.Value;
+        if (sessionId == NoSessionId)
         {
-            return entry.Session;
+            return null;
         }
 
-        return _defaultSession;
+        if (string.IsNullOrEmpty(sessionId))
+        {
+            return _defaultSession;
+        }
+
+        return _sessions.TryGetValue(sessionId, out var entry) ? entry.Session : _defaultSession;
     }
 
-    public IDisposable CreateSession(string? sessionId = null)
+    /// <summary>
+    /// sessionId null => no session
+    /// sessionId empty/white space => default session
+    /// sessionId not empty => custom session
+    /// </summary>
+    public IDisposable CreateSession(string? sessionId)
     {
         if (_disposed || !_options.ProfilerEnabled)
         {
             return Disposable.Empty;
         }
 
-        if (string.IsNullOrWhiteSpace(sessionId))
+        var outerSessionId = _currentSessionId.Value;
+        sessionId = sessionId?.Trim() ?? NoSessionId;
+        if (string.IsNullOrEmpty(sessionId) || sessionId == NoSessionId)
         {
-            sessionId = Guid.NewGuid().ToString();
-        }
-
-        _contextSessionId.Value = sessionId;
-
-        _sessions.TryAdd(sessionId, new RedisProfileEntry(new ProfilingSession(sessionId), _clock.UtcNow));
-        return System.Reactive.Disposables.Disposable.Create(() =>
-        {
-            if (_sessions.TryRemove(sessionId, out var entry))
+            _currentSessionId.Value = sessionId;
+            return ReactiveDisposable.Create(outerSessionId, static sId =>
             {
-                var profileInfo = _profilingSessionCommandReader.Get(entry.Session);
-                Process(profileInfo);
-            }
-        });
+                _currentSessionId.Value = sId;
+            });
+        }
+        else
+        {
+            _sessions.TryAdd(sessionId, new RedisProfileEntry(new ProfilingSession(sessionId), _clock.UtcNow));
+            _currentSessionId.Value = sessionId;
+            return ReactiveDisposable.Create((outerSessionId, sessionId), args =>
+            {
+                _currentSessionId.Value = args.outerSessionId;
+                if (_sessions.TryRemove(args.sessionId, out var entry))
+                {
+                    var profileInfo = _profilingSessionCommandReader.Get(entry.Session);
+                    Process(profileInfo);
+                }
+            });
+        }
     }
 
     private async Task FlushSessionsAsync()

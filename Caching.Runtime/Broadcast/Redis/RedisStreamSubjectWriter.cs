@@ -89,7 +89,11 @@ internal sealed class RedisStreamSubjectWriter<T> : IDisposable
         _logger.LogDebug("Fetch events loop stopped");
     }
 
-    private IDisposable CreateProfilerSession() => _context.ProfilerEnabled ? _redisProfiler.CreateSession($"{_context.Topic}:{Guid.NewGuid()}") : Disposable.Empty;
+    private IDisposable CreateProfilerSession()
+    {
+        var sessionId = _context.ProfilerEnabled ? $"{_context.Topic}:{Guid.NewGuid()}" : null;
+        return _redisProfiler.CreateSession(sessionId);
+    }
 
     private async Task FetchBatch()
     {

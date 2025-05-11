@@ -8,7 +8,5 @@ public interface IRedisProfiler
 
     ProfilingSession? GetSession();
 
-    ProfilingSession? GetSession(string? sessionId);
-
-    IDisposable CreateSession(string? sessionId = null);
+    IDisposable CreateSession(string? sessionId);
 }

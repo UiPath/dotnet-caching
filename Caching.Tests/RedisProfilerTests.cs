@@ -23,13 +23,14 @@ public class RedisProfilerTests : IAsyncLifetime
     [Fact]
     public void Profiler_with_default_session()
     {
+        _redisConnectionOptions.ProfilerHasDefaultSession = true;
         var sessionId = _fixture.Create<string>();
         var disposableAction = Sut.CreateSession(sessionId);
         Sut.Count.Should().Be(1);
-        var session = Sut.GetSession(sessionId);
+        var session = Sut.GetSession();
         sessionId.Should().Be(session?.UserToken?.ToString());
         disposableAction.Dispose();
-        session = Sut.GetSession(sessionId);
+        session = Sut.GetSession();
         "default".Should().Be(session?.UserToken?.ToString());
         Sut.Count.Should().Be(0);
     }
@@ -41,10 +42,10 @@ public class RedisProfilerTests : IAsyncLifetime
         var sessionId = _fixture.Create<string>();
         var disposableAction = Sut.CreateSession(sessionId);
         Sut.Count.Should().Be(1);
-        var session = Sut.GetSession(sessionId);
+        var session = Sut.GetSession();
         sessionId.Should().Be(session?.UserToken?.ToString());
         disposableAction.Dispose();
-        session = Sut.GetSession(sessionId);
+         session = Sut.GetSession();
         session.Should().BeNull();
         Sut.Count.Should().Be(0);
     }
@@ -56,7 +57,7 @@ public class RedisProfilerTests : IAsyncLifetime
         using (Sut.CreateSession(sessionId))
         {
             Sut.Dispose();
-            Sut.GetSession(sessionId).Should().BeNull();
+            Sut.GetSession().Should().BeNull();
         }
     }
 
@@ -78,7 +79,7 @@ public class RedisProfilerTests : IAsyncLifetime
                 }
                 await Task.Delay(_redisConnectionOptions.ProfilerFlushInterval);
             }
-            Sut.GetSession(sessionId).Should().BeNull();
+            Sut.GetSession().Should().BeNull();
         }
     }
 
@@ -100,7 +101,7 @@ public class RedisProfilerTests : IAsyncLifetime
                 }
                 await Task.Delay(_redisConnectionOptions.ProfilerFlushInterval);
             }
-            Sut.GetSession(sessionId).Should().BeNull();
+            Sut.GetSession().Should().BeNull();
         }
     }
 
@@ -109,7 +110,7 @@ public class RedisProfilerTests : IAsyncLifetime
     {
         _redisConnectionOptions.ProfilerSessionMaxLifespan = null;
         _redisConnectionOptions.ProfilerSessionMaxChecks = null;
-        var act = () => Sut.CreateSession();
+        var act = () => Sut.GetSession();
         act.Should().Throw<Exception>();
     }
 
@@ -136,7 +137,7 @@ public class RedisProfilerTests : IAsyncLifetime
     {
         var sut = Sut;
         sut.Dispose();
-        Disposable.Empty.Should().Be(sut.CreateSession());
+        Disposable.Empty.Should().Be(sut.CreateSession(_fixture.Create<string>()));
     }
 
     [Theory]
@@ -147,7 +148,7 @@ public class RedisProfilerTests : IAsyncLifetime
     {
         _redisConnectionOptions.ProfilerEnabled = true;
         var dispose =  Sut.CreateSession(sessionId);
-        Sut.Count.Should().Be(1);
+        Sut.Count.Should().Be(0);
     }
 
     public Task DisposeAsync()

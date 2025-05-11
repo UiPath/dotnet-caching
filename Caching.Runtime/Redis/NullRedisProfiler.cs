@@ -11,7 +11,5 @@ public class NullRedisProfiler : IRedisProfiler
 
     public ProfilingSession? GetSession() => null;
 
-    public ProfilingSession? GetSession(string? sessionId) => null;
-
-    public IDisposable CreateSession(string? sessionId = null) => Disposable.Empty;
+    public IDisposable CreateSession(string? sessionId) => Disposable.Empty;
 }
