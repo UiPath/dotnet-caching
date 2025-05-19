@@ -88,14 +88,14 @@ public sealed class RedisStreamsTopic<T> : ITopic<T>
                     maxLength: _streamOptions.MaxLength,
                     useApproximateMaxLength: true,
                     flags: CommandFlags.DemandMaster).ConfigureAwait(false);
-            }, token).ConfigureAwait(false);
+            }, defaultValue: RedisValue.Null, token).ConfigureAwait(false);
             _cachingTelemetryProvider.TrackTopicWriteMetric(_context.Topic!, id);
             _logger.LogDebug("Published to topic {TopicKey} event {EventId} stream id {StreamId} ", TopicKey, @event.Id,  id);
             return !id.IsNull;
         }
         catch (Exception ex)
         {
-            _logger.LogError(ex, "Error when publishing to topic {TopicKey} event {EventId}", TopicKey, @event.Id);
+            _logger.LogWarning(ex, "Error when publishing to topic {TopicKey} event {EventId}", TopicKey, @event.Id);
             return false;
         }
     }
