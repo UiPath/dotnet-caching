@@ -1,18 +1,21 @@
-﻿using UiPath.Platform.Caching.Policies;
+﻿using System.Collections.Concurrent;
+using UiPath.Platform.Caching.Policies;
 
 namespace UiPath.Platform.Caching.Polly;
 
-internal sealed class ResiliencePipelineWrapper(ResiliencePipeline pipeline) : IResiliencePipeline
+internal sealed class ResiliencePipelineWrapper(IResiliencePipelineFactory factory, string? scope) : IResiliencePipeline
 {
-    public void Execute(Action callback) => pipeline.Execute(callback);
+    private readonly ConcurrentDictionary<(Type,object?), object> _cachePipeline = new();
 
-    public void Execute(Action<CancellationToken> callback, CancellationToken cancellationToken = default) => pipeline.Execute(callback, cancellationToken);
-
-    public TResult Execute<TResult>(Func<CancellationToken, TResult> callback, CancellationToken cancellationToken = default) => pipeline.Execute(callback, cancellationToken);
-
-    public TResult Execute<TResult>(Func<TResult> callback) => pipeline.Execute(callback);
-
-    public ValueTask ExecuteAsync(Func<CancellationToken, ValueTask> callback, CancellationToken cancellationToken = default) => pipeline.ExecuteAsync(callback, cancellationToken);
-
-    public ValueTask<TResult> ExecuteAsync<TResult>(Func<CancellationToken, ValueTask<TResult>> callback, CancellationToken cancellationToken = default) => pipeline.ExecuteAsync(callback, cancellationToken);
+    public ValueTask<TResult> ExecuteAsync<TResult>(Func<CancellationToken, ValueTask<TResult>> callback, TResult defaultValue, CancellationToken cancellationToken = default)
+    {
+        var pipeline = GetPipeline(defaultValue);
+        return pipeline.ExecuteAsync(callback, cancellationToken);
+    }
+    private ResiliencePipeline<TResult> GetPipeline<TResult>(TResult defaultValue)
+    {
+        var key = (typeof(TResult), defaultValue);
+        var pipeline = _cachePipeline.GetOrAdd(key, _ => factory.Create(scope, defaultValue));
+        return pipeline is ResiliencePipeline<TResult> p ? p : throw new InvalidOperationException($"Pipeline for {typeof(TResult)} not found.");
+    }
 }

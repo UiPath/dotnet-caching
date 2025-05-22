@@ -8,8 +8,6 @@ public static class CachingBuilderExtensions
 {
     private const string DefaultSectionName = "ResiliencePolicies";
 
-    private static readonly List<Action<IServiceProvider, ResiliencePipelineBuilder>> ReadStrategies = [];
-    private static readonly List<Action<IServiceProvider, ResiliencePipelineBuilder>> WriteStrategies = [];
     private static bool _telemetryEnabled = false;
     private static Action<TelemetryOptions>? _telemetryConfig;
     private static int _callbackRegistered = 0;
@@ -20,10 +18,10 @@ public static class CachingBuilderExtensions
     public static ICachingBuilder AddResilienceStrategies(this ICachingBuilder builder, string sectionName) =>
         builder.AddResilienceStrategies(opt => builder.Configuration.GetSection(sectionName).Bind(opt));
 
-    public static ICachingBuilder AddResilienceStrategies(this ICachingBuilder builder, Action<ResiliencePoliciesOptions> configureOptions)
+    public static ICachingBuilder AddResilienceStrategies(this ICachingBuilder builder,
+        Action<ResiliencePoliciesOptions> configureOptions,
+         Action<TelemetryOptions>? configureTelemetryOptions = null)
     {
-
-
         ResiliencePoliciesOptions options = new();
         configureOptions.Invoke(options);
         builder.Services.Configure(configureOptions);
@@ -31,33 +29,25 @@ public static class CachingBuilderExtensions
         {
             return builder;
         }
-        ReadStrategies.Add((sp, builder) => sp.AddCircuitBreaker(builder, options));
-        ReadStrategies.Add((sp, builder) => sp.AddRetryPolicy(builder, options));
-        ReadStrategies.Add((sp, builder) => sp.AddTimeoutPolicy(builder, options));
+
+        builder.Services.AddSingleton<IResiliencePipelineFactory>(sp =>
+        {
+            var loggerFactory = sp.GetService<ILoggerFactory>() ?? NullLoggerFactory.Instance;
+            TelemetryOptions? telemetryOptions = null;
+            if (_telemetryEnabled)
+            {
+                telemetryOptions = new TelemetryOptions();
+                _telemetryConfig?.Invoke(telemetryOptions);
+             }
+
+            return new ResiliencePipelineFactory(loggerFactory, telemetryOptions, sp.GetRequiredService<IOptions<ResiliencePoliciesOptions>>());
+        });
+
         return builder
-            .ConfigureTelemetry(enabled: options.TelemetryEnabled)
+            .ConfigureTelemetry(enabled: options.TelemetryEnabled, configureTelemetryOptions)
             .AddCallback();
     }
 
-    public static ICachingBuilder AddReadStrategy(this ICachingBuilder builder, Action<IServiceProvider, ResiliencePipelineBuilder> configure)
-    {
-        if (!builder.Enabled)
-        {
-            return builder;
-        }
-        ReadStrategies.Add(configure);
-        return builder.AddCallback();
-    }
-
-    public static ICachingBuilder AddWriteStrategy(this ICachingBuilder builder, Action<IServiceProvider, ResiliencePipelineBuilder> configure)
-    {
-        if (!builder.Enabled)
-        {
-            return builder;
-        }
-        WriteStrategies.Add(configure);
-        return builder.AddCallback();
-    }
 
     public static ICachingBuilder ConfigureTelemetry(this ICachingBuilder builder, bool enabled = true, Action<TelemetryOptions>? configureOptions = null)
     {
@@ -83,38 +73,8 @@ public static class CachingBuilderExtensions
             return ResiliencePipelineHolder.Empty;
         }
 
-        var readStrategies = ReadStrategies.ToArray();
-        var writeStrategies = WriteStrategies.ToArray();
-        if (readStrategies.Length == 0 && writeStrategies.Length == 0)
-        {
-            return ResiliencePipelineHolder.Empty;
-        }
+        var factory = serviceProvider.GetRequiredService<IResiliencePipelineFactory>();
 
-        var readBuilder = new ResiliencePipelineBuilder();
-        Array.ForEach(readStrategies, a => a(serviceProvider, readBuilder));
-        TelemetryOptions? telemetryOptions = null;
-        if (_telemetryEnabled)
-        {
-            telemetryOptions = new TelemetryOptions();
-            _telemetryConfig?.Invoke(telemetryOptions);
-            telemetryOptions.LoggerFactory ??= serviceProvider.GetService<ILoggerFactory>() ?? NullLoggerFactory.Instance;
-            readBuilder.ConfigureTelemetry(telemetryOptions);
-        }
-        if (writeStrategies.Length == 0)
-        {
-            readBuilder.Name = "Caching";
-            return new ResiliencePipelineHolder(new ResiliencePipelineWrapper(readBuilder.Build()));
-        }
-
-        var writerBuilder = new ResiliencePipelineBuilder();
-        Array.ForEach(writeStrategies, a => a(serviceProvider, writerBuilder));
-        if(_telemetryEnabled)
-        {
-            writerBuilder.ConfigureTelemetry(telemetryOptions!);
-        }
-        readBuilder.Name = "Caching.Read";
-        writerBuilder.Name = "Caching.Write";
-
-        return new ResiliencePipelineHolder(new ResiliencePipelineWrapper(readBuilder.Build()), new ResiliencePipelineWrapper(writerBuilder.Build()));
+        return new ResiliencePipelineHolder(new ResiliencePipelineWrapper(factory, "read"), new ResiliencePipelineWrapper(factory, "write"));
     }
 }

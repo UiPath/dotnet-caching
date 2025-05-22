@@ -13,4 +13,6 @@ public class ResiliencePoliciesOptions
     public int? RetryCount { get; set; } = 1;
 
     public bool TelemetryEnabled { get; set; } = true;
+
+    public bool RethrowCircuitBreakerExceptions { get; set; }
 }
