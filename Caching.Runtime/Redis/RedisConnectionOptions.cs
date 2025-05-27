@@ -59,4 +59,20 @@ public class RedisConnectionOptions
     public Func<ConfigurationOptions, IConnectionMultiplexer>? ConnectionFactory { get; set; }
 
     public string? ConnectionMultiplexerFactoryType { get; set; }
+
+    /// <summary>
+    /// Gets or sets a value indicating whether the connection should fail immediately 
+    /// if the initial connection attempt cannot be established.
+    /// </summary>
+    /// <remarks>
+    /// When set to <c>true</c>, the connection attempt will throw an exception if the 
+    /// initial connection cannot be established. This is useful in scenarios where 
+    /// immediate feedback about connection issues is required.
+    /// 
+    /// When set to <c>false</c>, the connection multiplexer will silently retry in the 
+    /// background, allowing the application to continue running while the connection 
+    /// is re-established. This is useful for applications that can tolerate temporary 
+    /// connection interruptions.
+    /// </remarks>
+    public bool AbortOnConnectFail { get; set; }
 }
