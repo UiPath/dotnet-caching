@@ -59,4 +59,7 @@ public class RedisConnectionOptions
     public Func<ConfigurationOptions, IConnectionMultiplexer>? ConnectionFactory { get; set; }
 
     public string? ConnectionMultiplexerFactoryType { get; set; }
+
+    // false: if the connection fails, the multiplexer will silently retry in the background
+    public bool AbortOnConnectFail { get; set; }
 }

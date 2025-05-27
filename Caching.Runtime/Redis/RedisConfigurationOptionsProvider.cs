@@ -29,7 +29,7 @@ public class RedisConfigurationOptionsProvider(ILoggerFactory loggerFactory, IOp
 
         var config = ConfigurationOptions.Parse(sb.ToString());
         config.LoggerFactory = loggerFactory;
-        config.AbortOnConnectFail = false; // if the connection fails, the multiplexer will silently retry in the background
+        config.AbortOnConnectFail = _options.AbortOnConnectFail; 
         config.ChannelPrefix = default;
         if (Version.TryParse(_options.DefaultVersion, out var version))
         {

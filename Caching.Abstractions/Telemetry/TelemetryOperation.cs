@@ -9,7 +9,6 @@ public sealed class TelemetryOperation(string providerName, string callerMethod,
     private const string Misses = Prefix + "Misses.";
     private readonly Stopwatch _stopWatch = new();
 
-
     public void Start() =>
         _stopWatch.Start();
 
