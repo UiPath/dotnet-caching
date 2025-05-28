@@ -2,21 +2,18 @@
 
 namespace UiPath.Platform.Caching;
 
-internal class LocalMemorySetter : MemoryCacheSetter
+internal class LocalMemorySetter(
+    string cacheName,
+    IChangeTokenFactory changeTokenFactory,
+    ITopicProvider topicProvider,
+    IMemoryCache memoryCache,
+    ILogger logger,
+    CacheClock clock,
+    IMultilayerCacheOptions cacheOptions,
+    IMemoryCacheOptions memoryCacheOptions,
+    ICachingTelemetryProvider telemetryProvider)
+    : MemoryCacheSetter(cacheName, changeTokenFactory, topicProvider, memoryCache, logger, clock, cacheOptions, memoryCacheOptions, telemetryProvider)
 {
-    public LocalMemorySetter(
-        string cacheName,
-        IChangeTokenFactory changeTokenFactory,
-        ITopicProvider topicProvider,
-        IMemoryCache memoryCache,
-        ILogger logger,
-        CacheClock clock,
-        IMultilayerCacheOptions cacheOptions,
-        ICachingTelemetryProvider telemetryProvider)
-        : base(cacheName, changeTokenFactory, topicProvider, memoryCache, logger, clock, cacheOptions, telemetryProvider)
-    {
-    }
-
     protected override ICacheEntryOptions CreateEntry(RefreshMetadataState metadataState, CancellationToken cancellationToken)
     {
         var token = metadataState.Token;

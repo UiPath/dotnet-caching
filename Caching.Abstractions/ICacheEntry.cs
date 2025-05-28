@@ -7,4 +7,6 @@ public interface ICacheEntry
     IDictionary<string, string?>? Metadata { get; }
 
     ICacheEntry NewEntry(DateTimeOffset? expiration = null, IDictionary<string, string?>? metadata = null);
+
+    object? Value { get; }
 }

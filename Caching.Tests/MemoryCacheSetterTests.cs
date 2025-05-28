@@ -1,6 +1,5 @@
 ﻿using Microsoft.Extensions.Caching.Memory;
 using Microsoft.Extensions.Internal;
-using NSubstitute.ClearExtensions;
 using UiPath.Platform.Caching;
 using UiPath.Platform.Caching.Telemetry;
 using UiPath.Platform.Caching.Tests.Broadcast;
@@ -32,7 +31,7 @@ public class MemoryCacheSetterTests : IAsyncLifetime
     private HashLocalMemorySetter Sut => _sut ??= _fixture.Create<HashLocalMemorySetter>();
 
     [Fact]
-    public void Setter_innner_exception()
+    public void Setter_inner_exception()
     {
         _memoryCache = new MemoryCache(Options.Create(new MemoryCacheOptions
         {
@@ -53,7 +52,7 @@ public class MemoryCacheSetterTests : IAsyncLifetime
         {
             CacheKey = _cacheKey,
             TopicKey = _topicKey,
-            Expiration = _clock.UtcNow.AddDays(1),            
+            Expiration = _clock.UtcNow.AddDays(1),
         };
 
         Sut.Set(x, _fixture.Create<ICacheEntry>(), _fixture.Create<Type>(), _fixture.Create<TimeSpan?>());

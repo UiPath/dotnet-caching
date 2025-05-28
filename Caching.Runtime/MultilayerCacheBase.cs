@@ -18,17 +18,18 @@ public abstract class MultilayerCacheBase : IDisposable
     protected MultilayerCacheBase(
         string cacheName,
         object innerCache,
-        Func<IMemoryCache> memoryCacheAccessor,
+        IMemoryCacheFactory memoryCacheFactory,
         ITopicFactory topicFactory,
         ICacheEventFactory cacheEventFactory,
         ICachingTelemetryProvider telemetryProvider,
         IMultilayerCacheOptions multiLayerCacheOptions,
+        IMemoryCacheOptions memoryOptions,
         CacheOptions cacheOptions,
         ILogger logger)
     {
         _logger = logger;
         _multiLayerCacheOptions = multiLayerCacheOptions;
-        _memoryCache = memoryCacheAccessor();
+        _memoryCache = memoryCacheFactory.Get(memoryOptions);
         Telemetry = telemetryProvider;
         _cacheEntryFactory = _multiLayerCacheOptions.EntryFactory ?? new CacheEntryFactory();
         _monitor = _memoryCache.Monitor(multiLayerCacheOptions, Telemetry, GetType().Name);

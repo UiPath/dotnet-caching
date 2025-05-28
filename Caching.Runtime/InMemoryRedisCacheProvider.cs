@@ -71,11 +71,12 @@ public sealed class InMemoryRedisCacheProvider : ICacheProvider
         new(
             Name,
             _cacheFactory.Value.CreateCache(KnownCacheProviderNames.Redis),
-            () => _memoryCacheFactory.Get(_options),
+            _memoryCacheFactory,
             _changeTokenFactory,
             _topicFactory,
             _cacheEventFactory,
             _cachingTelemetryProvider,
+            _options,
             _options,
             _cacheOptions,
             _loggerFactory.CreateLogger($"{Name}.Cache"));
@@ -84,11 +85,12 @@ public sealed class InMemoryRedisCacheProvider : ICacheProvider
         new(
             Name,
             _cacheFactory.Value.CreateHashCache(KnownCacheProviderNames.Redis),
-            () => _memoryCacheFactory.Get(_options),
+            _memoryCacheFactory,
             _changeTokenFactory,
             _topicFactory,
             _cacheEventFactory,
             _cachingTelemetryProvider,
+            _options,
             _options,
             _cacheOptions,
              _loggerFactory.CreateLogger($"{Name}.HashCache"));

@@ -12,21 +12,22 @@ public sealed class MultilayerHashCache : MultilayerCacheBase, IHashCache
     public MultilayerHashCache(
         string cacheName,
         IHashCache innerCache,
-        Func<IMemoryCache> memoryCacheAccessor,
+        IMemoryCacheFactory memoryCacheFactory,
         IChangeTokenFactory changeTokenFactory,
         ITopicFactory topicFactory,
         ICacheEventFactory cacheEventFactory,
         ICachingTelemetryProvider telemetryProvider,
         IMultilayerCacheOptions multiLayerCacheOptions,
+        IMemoryCacheOptions memoryCacheOptions,
         CacheOptions cacheOptions,
         ILogger logger)
-        : base(cacheName, innerCache, memoryCacheAccessor, topicFactory, cacheEventFactory, telemetryProvider, multiLayerCacheOptions, cacheOptions, logger)
+        : base(cacheName, innerCache, memoryCacheFactory, topicFactory, cacheEventFactory, telemetryProvider, multiLayerCacheOptions, memoryCacheOptions, cacheOptions, logger)
     {
         _innerCache = innerCache;
         var cacheKeyStrategy = _multiLayerCacheOptions.CacheKeyStrategy ?? new DefaultCacheKeyStrategy();
         var topicKeyStrategy = _multiLayerCacheOptions.TopicKeyStrategy ?? new DefaultTopicKeyStrategy(cacheOptions.Separator);
         _entryBuilder = new HashCacheEntryBuilder(cacheKeyStrategy, topicKeyStrategy, _clock);
-        _localMemorySetter = new HashLocalMemorySetter(cacheName, changeTokenFactory, _topicProvider, _memoryCache, logger, _clock, _multiLayerCacheOptions, telemetryProvider);
+        _localMemorySetter = new HashLocalMemorySetter(cacheName, changeTokenFactory, _topicProvider, _memoryCache, logger, _clock, _multiLayerCacheOptions, memoryCacheOptions, telemetryProvider);
     }
 
     public async ValueTask<T?> GetItemAsync<T>(CacheKey cacheKey, string field, CancellationToken token = default)

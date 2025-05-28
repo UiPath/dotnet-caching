@@ -61,7 +61,9 @@ public static class ServiceCollectionExtensions
 
     public static IServiceCollection TryAddMemoryCacheFactory(this IServiceCollection services)
     {
-        services.TryAddSingleton<IMemoryCacheFactory>(sp => new MemoryCacheFactory(sp.GetService<ISystemClock>(), sp.GetService<ILoggerFactory>()));
+        services.TryAddSingleton<IMemoryCacheFactory>(sp => 
+            new MemoryCacheFactory(sp.GetService<ISystemClock>(),
+            sp.GetService<ILoggerFactory>() ?? NullLoggerFactory.Instance));
         return services;
     }
 

@@ -21,6 +21,7 @@ public class MultilayerCacheTests : IAsyncLifetime
     private ISystemClock _clock = default!;
     private IEventFormatterProxy<ICacheEvent> _formatter = default!;
     private ICacheEventFactory _cacheEventFactory = default!;
+    private IMemoryCacheFactory _memoryCacheFactory = default!;
     private InMemoryRedisCacheOptions _options = default!;
     private TopicKey _topicKey = default!;
     private CacheKey _cacheKey = default!;
@@ -768,8 +769,11 @@ public class MultilayerCacheTests : IAsyncLifetime
         _topic = _fixture.Freeze<ITopic<ICacheEvent>>();
         _topicFactory.Get(Arg.Any<string>()).Returns(_topicProvider);
         _topicProvider.Create(_topicKey).Returns(_topic);
-        _fixture.Inject<Func<IMemoryCache>>(() => _memoryCache);
+        _memoryCacheFactory = _fixture.Freeze<IMemoryCacheFactory>();
+        _memoryCacheFactory.Get(Arg.Any<IMemoryCacheOptions>())
+            .Returns(c => _memoryCache);
         _fixture.Inject<IMultilayerCacheOptions>(_options);
+        _fixture.Inject<IMemoryCacheOptions>(_options);
         _formatter = new CacheClearEventFormatterProxy();
         _fixture.Inject(_formatter);
         _cacheEventFactory = _fixture.Freeze<ICacheEventFactory>();

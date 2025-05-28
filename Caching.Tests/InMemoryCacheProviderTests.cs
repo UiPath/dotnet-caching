@@ -101,7 +101,11 @@ public class InMemoryCacheProviderTests : IAsyncLifetime
 
     public Task InitializeAsync()
     {
-        _options = _fixture.Create<InMemoryCacheOptions>();
+        _options = _fixture.Build<InMemoryCacheOptions>()
+            .Without(x => x.SizeLimit)
+            .Without(x => x.CompactionPercentage)
+            .Without(x => x.SizeProvider)
+            .Create();
         _fixture.Inject(Options.Create(_options));
 
         

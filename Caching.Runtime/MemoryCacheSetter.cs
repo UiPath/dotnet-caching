@@ -2,44 +2,28 @@
 
 namespace UiPath.Platform.Caching;
 
-internal abstract class MemoryCacheSetter
-{
-    protected string CacheName { get; set; }
-    protected IChangeTokenFactory ChangeTokenFactory { get; set; }
-    protected ITopicProvider TopicProvider { get; set; }
-    protected IMemoryCache MemoryCache { get; set; }
-    protected ILogger Logger { get; set; }
-    protected IMultilayerCacheOptions CacheOptions { get; set; }
-    protected ICachingTelemetryProvider CachingTelemetryProvider { get; set; }
-    protected CacheClock Clock { get; set; }
-
-    protected MemoryCacheSetter(
-        string cacheName,
-        IChangeTokenFactory changeTokenFactory,
-        ITopicProvider topicProvider,
-        IMemoryCache memoryCache,
-        ILogger logger,
-        CacheClock clock,
-        IMultilayerCacheOptions cacheOptions,
-        ICachingTelemetryProvider telemetryProvider
+internal abstract class MemoryCacheSetter(
+    string cacheName,
+    IChangeTokenFactory changeTokenFactory,
+    ITopicProvider topicProvider,
+    IMemoryCache memoryCache,
+    ILogger logger,
+    CacheClock clock,
+    IMultilayerCacheOptions cacheOptions,
+    IMemoryCacheOptions memoryCacheOptions,
+    ICachingTelemetryProvider telemetryProvider
         )
-    {
-        CacheName = cacheName;
-        ChangeTokenFactory = changeTokenFactory;
-        TopicProvider = topicProvider;
-        MemoryCache = memoryCache;
-        Logger = logger;
-        Clock = clock;
-        CacheOptions = cacheOptions;
-        CachingTelemetryProvider = telemetryProvider;
-    }
+{
+    private ICacheEntrySizeProvider SizeProvider { get; } = memoryCacheOptions.SizeProvider ?? new DefaultCacheEntrySizeProvider();
+
+    protected CacheClock Clock { get; } = clock;
 
     public bool Set(ICacheEntryOptions options, ICacheEntry item, Type entryType, TimeSpan? maxExpiration)
     {
         try
         {
-            var topic = TopicProvider.Create(options.TopicKey);
-            var token = ChangeTokenFactory.Create(options.CacheKey, topic, CacheName, entryType);
+            var topic = topicProvider.Create(options.TopicKey);
+            var token = changeTokenFactory.Create(options.CacheKey, topic, cacheName, entryType);
             var state = new RefreshMetadataState(options.CacheKey, options.TopicKey, item, token, entryType, maxExpiration);
             token.RegisterChangeCallback(RefreshMetadata, state);
             var memOptions = new MemoryCacheEntryOptions();
@@ -47,13 +31,17 @@ internal abstract class MemoryCacheSetter
             memOptions.SetAbsoluteExpiration(expiration);
             memOptions.ExpirationTokens.Add(token);
             memOptions.RegisterPostEvictionCallback(PostEviction, token);
-            MemoryCache.Set(options.CacheKey, item, memOptions);
+            if(memoryCacheOptions.SizeLimit.HasValue)
+            {
+                memOptions.SetSize(SizeProvider.GetSize(item));
+            }
+            memoryCache.Set(options.CacheKey, item, memOptions);
             return true;
         }
         catch (Exception ex)
         {
-            MemoryCache.Remove(options.CacheKey);
-            Logger.LogWarning(ex, "Unable to set local memory for {CacheKey}", options.CacheKey);
+            memoryCache.Remove(options.CacheKey);
+            logger.LogWarning(ex, "Unable to set local memory for {CacheKey}", options.CacheKey);
             return false;
         }
     }
@@ -87,7 +75,7 @@ internal abstract class MemoryCacheSetter
         try
         {
             using var cts = new CancellationTokenSource();
-            cts.CancelAfter(CacheOptions.Timeout);
+            cts.CancelAfter(cacheOptions.Timeout);
             var options = CreateEntry(metadataState, cts.Token);
             var newEntry = metadataState.CacheEntity.NewEntry(options.Expiration, options.Metadata);
             set = Set(options, newEntry, metadataState.EntryType, metadataState.MaxExpiration);
@@ -95,13 +83,13 @@ internal abstract class MemoryCacheSetter
         }
         catch (Exception ex)
         {
-            Logger.LogWarning(ex, "Unable to refresh cache cacheKey {CacheKey}", metadataState.CacheKey);
+            logger.LogWarning(ex, "Unable to refresh cache cacheKey {CacheKey}", metadataState.CacheKey);
         }
         finally
         {
             if (!set)
             {
-                CachingTelemetryProvider.TrackEvent($"Caching.{nameof(MemoryCacheSetter)}.{nameof(RefreshMetadata)}.Failed", new Dictionary<string, string>
+                telemetryProvider.TrackEvent($"Caching.{nameof(MemoryCacheSetter)}.{nameof(RefreshMetadata)}.Failed", new Dictionary<string, string>
                 {
                     { "CacheKey", metadataState.CacheKey },
                     { "TopicKey", metadataState.TopicKey },

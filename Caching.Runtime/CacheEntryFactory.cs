@@ -16,6 +16,8 @@ public sealed class CacheEntryFactory : ICacheEntryFactory
 
         public T? Value { get; private set; }
 
+        object? ICacheEntry.Value => Value;
+
         public DateTimeOffset Expiration { get; private set; }
 
         public IDictionary<string, string?>? Metadata { get; private set; }

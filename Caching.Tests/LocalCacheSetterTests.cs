@@ -17,6 +17,7 @@ public class LocalCacheSetterTests : IAsyncLifetime
     private ITopicKeyStrategy _topicKeyStrategy = default!;
     private IMemoryCache _memoryCache = default!;
     private ISystemClock _clock = default!;
+    private ICacheEntrySizeProvider _sizeProvider = default!;
     private IEventFormatterProxy<ICacheEvent> _formatter = default!;
     private ICacheEventFactory _cacheEventFactory = default!;
     private InMemoryRedisCacheOptions _options = default!;
@@ -29,7 +30,7 @@ public class LocalCacheSetterTests : IAsyncLifetime
     private LocalMemorySetter Sut => _sut ??= _fixture.Create<LocalMemorySetter>();
 
     [Fact]
-    public void Setter_innner_exception()
+    public void Setter_inner_exception()
     {
         _memoryCache = new MemoryCache(Options.Create(new MemoryCacheOptions
         {
@@ -64,7 +65,7 @@ public class LocalCacheSetterTests : IAsyncLifetime
         {
             Clock = _clock
         }));
-        _fixture.Inject<IMemoryCache>(_memoryCache);
+        _fixture.Inject(_memoryCache);
 
         var token = new TestChangeToken
         {
@@ -84,6 +85,56 @@ public class LocalCacheSetterTests : IAsyncLifetime
         Sut.Set(x, _fixture.Create<ICacheEntry>(), _fixture.Create<Type>(), TimeSpan.FromMinutes(1));
         token.InvokeCallbacks();
         _memoryCache.TryGetValue(_cacheKey, out _).Should().BeTrue();
+    }
+
+    [Fact]
+    public void SizeLimit_set_provided_size_negative()
+    {
+        _memoryCache = new MemoryCache(Options.Create(new MemoryCacheOptions
+        {
+            Clock = _clock,
+            SizeLimit = 2,
+        }));
+        _options.SizeLimit = 2;
+        _sizeProvider.GetSize(Arg.Any<ICacheEntry>())
+            .Returns(-1);
+
+        _options.SizeProvider = _sizeProvider;
+        _fixture.Inject(_memoryCache);
+        var x = new CacheEntryOptions()
+        {
+            CacheKey = _cacheKey,
+            TopicKey = _topicKey,
+            Expiration = _clock.UtcNow.AddDays(1),
+        };
+        var actual = Sut.Set(x, _fixture.Create<ICacheEntry>(), _fixture.Create<Type>(), null);
+        actual.Should().BeFalse();
+        _memoryCache.TryGetValue(_cacheKey, out _).Should().BeFalse();
+    }
+
+    [Fact]
+    public void SizeLimit_set_provided_size_positive()
+    {
+        _memoryCache = new MemoryCache(Options.Create(new MemoryCacheOptions
+        {
+            Clock = _clock,
+            SizeLimit = 2,
+        }));
+        _options.SizeLimit = 2;
+        _sizeProvider.GetSize(Arg.Any<ICacheEntry>())
+            .Returns(-1);
+
+        _options.SizeProvider = _sizeProvider;
+        _fixture.Inject(_memoryCache);
+        var x = new CacheEntryOptions()
+        {
+            CacheKey = _cacheKey,
+            TopicKey = _topicKey,
+            Expiration = _clock.UtcNow.AddDays(1),
+        };
+        var actual = Sut.Set(x, _fixture.Create<ICacheEntry>(), _fixture.Create<Type>(), null);
+        actual.Should().BeFalse();
+        _memoryCache.TryGetValue(_cacheKey, out _).Should().BeFalse();
     }
 
     public Task DisposeAsync()
@@ -117,8 +168,10 @@ public class LocalCacheSetterTests : IAsyncLifetime
         _topic = _fixture.Freeze<ITopic<ICacheEvent>>();
         _topicFactory.Get(Arg.Any<string>()).Returns(_topicProvider);
         _topicProvider.Create(_topicKey).Returns(_topic);
-        _fixture.Inject<IMemoryCache>(_memoryCache);
+        _fixture.Inject(_memoryCache);
         _fixture.Inject<IMultilayerCacheOptions>(_options);
+        _fixture.Inject<IMemoryCacheOptions>(_options);
+        _sizeProvider = _fixture.Freeze<ICacheEntrySizeProvider>();
         _formatter = new CacheClearEventFormatterProxy();
         _fixture.Inject(_formatter);
         _cacheEventFactory = _fixture.Freeze<ICacheEventFactory>();

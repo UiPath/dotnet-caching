@@ -82,11 +82,12 @@ public sealed class InMemoryCacheProvider : ICacheProvider
         new(
             Name,
             NullCache.Instance,
-            () => _memoryCacheFactory.Get(_options),
+            _memoryCacheFactory,
             _changeTokenFactory,
             _topicFactory,
             _cacheEventFactory,
             _cachingTelemetryProvider,
+            _options,
             _options,
             _cacheOptions,
             _loggerFactory.CreateLogger($"{Name}.Cache"));
@@ -95,11 +96,12 @@ public sealed class InMemoryCacheProvider : ICacheProvider
         new(
             Name,
             NullHashCache.Instance,
-            () => _memoryCacheFactory.Get(_options),
+            _memoryCacheFactory,
             _changeTokenFactory,
             _topicFactory,
             _cacheEventFactory,
             _cachingTelemetryProvider,
+            _options,
             _options,
             _cacheOptions,
            _loggerFactory.CreateLogger($"{Name}.HashCache"));

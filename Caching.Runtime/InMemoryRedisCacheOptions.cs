@@ -1,6 +1,6 @@
 ﻿namespace UiPath.Platform.Caching;
 
-public class InMemoryRedisCacheOptions : IMultilayerCacheOptions, IMemoryStatisticsOptions
+public class InMemoryRedisCacheOptions : IMultilayerCacheOptions, IMemoryCacheOptions
 {
     public bool Enabled { get; set; } = true;
 
@@ -27,4 +27,10 @@ public class InMemoryRedisCacheOptions : IMultilayerCacheOptions, IMemoryStatist
     public bool? ConnectionMonitorEnabled { get; set; }
 
     public TimeSpan? ConnectionMonitorPeriod { get; set; } = TimeSpan.FromSeconds(5);
+
+    public long? SizeLimit { get; set; }
+
+    public double? CompactionPercentage { get; set; }
+
+    public ICacheEntrySizeProvider? SizeProvider { get; set; }
 }
