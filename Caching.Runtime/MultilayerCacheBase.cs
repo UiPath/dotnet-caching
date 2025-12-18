@@ -14,6 +14,7 @@ public abstract class MultilayerCacheBase : IDisposable
     protected readonly CacheEventPublisher _eventPublisher;
     protected readonly IConnectionState _connectionState;
     protected readonly ITopicProvider _topicProvider;
+    protected readonly bool _usePrimaryOnlyWhenDisconnected;
 
     protected MultilayerCacheBase(
         string cacheName,
@@ -29,6 +30,7 @@ public abstract class MultilayerCacheBase : IDisposable
     {
         _logger = logger;
         _multiLayerCacheOptions = multiLayerCacheOptions;
+        ValidateExpirationOptions(multiLayerCacheOptions);
         _memoryCache = memoryCacheFactory.Get(memoryOptions);
         Telemetry = telemetryProvider;
         _cacheEntryFactory = _multiLayerCacheOptions.EntryFactory ?? new CacheEntryFactory();
@@ -38,6 +40,7 @@ public abstract class MultilayerCacheBase : IDisposable
         _eventPublisher = new CacheEventPublisher(cacheName, _topicProvider, cacheEventFactory, logger);
         var connectionMonitorEnabled = multiLayerCacheOptions.ConnectionMonitorEnabled ?? cacheOptions.ConnectionMonitorEnabled;
         _connectionState = connectionMonitorEnabled ? GetConnectionMonitor(innerCache, _topicProvider) : NullConnectionStateMonitor.Instance;
+        _usePrimaryOnlyWhenDisconnected = (multiLayerCacheOptions.UsePrimaryOnlyWhenDisconnected ?? false) && connectionMonitorEnabled;
         Name = cacheName;
     }
 
@@ -70,6 +73,18 @@ public abstract class MultilayerCacheBase : IDisposable
                 }
             }
             _disposed = true;
+        }
+    }
+
+    private static void ValidateExpirationOptions(IMultilayerCacheOptions options)
+    {
+        if (options.PrimaryMaxExpiration.HasValue &&
+            options.PrimaryMaxExpirationDisconnected.HasValue &&
+            options.PrimaryMaxExpirationDisconnected.Value > options.PrimaryMaxExpiration.Value)
+        {
+            throw new ArgumentException(
+                $"{nameof(options.PrimaryMaxExpirationDisconnected)} ({options.PrimaryMaxExpirationDisconnected.Value}) must be less than or equal to {nameof(options.PrimaryMaxExpiration)} ({options.PrimaryMaxExpiration.Value}).",
+                nameof(options));
         }
     }
 }

@@ -267,6 +267,11 @@ public sealed class MultilayerHashCache : MultilayerCacheBase, IHashCache
             {
                 return Filter(cacheEntry!, options);
             }
+            else if (_usePrimaryOnlyWhenDisconnected)
+            {
+                _logger.LogTrace("Inner cache is not connected. Using local copy for cacheKey {CacheKey}", options.CacheKey);
+                return Filter(cacheEntry!, options);
+            }
             else
             {
                 _memoryCache.Remove(options.CacheKey);
@@ -286,23 +291,29 @@ public sealed class MultilayerHashCache : MultilayerCacheBase, IHashCache
         options.Expiration = await _innerCache.ExpireTimeAsync<T>(options.CacheKey, options.Token).ConfigureAwait(false) ?? _clock.DefaultDateTimeOffset();
         options.Metadata = cacheEntry.Metadata;
         var values = cacheEntry.Value!;
-        MemorySet(options, values);
+        MemorySet(options, values, _multiLayerCacheOptions.PrimaryMaxExpiration);
 
         return Filter(cacheEntry!, options);
     }
 
-    private bool MemorySet<T>(InternalHashCacheEntryOptions options, IDictionary<string, T?> value)
+    private bool MemorySet<T>(InternalHashCacheEntryOptions options, IDictionary<string, T?> value, TimeSpan? maxExpiration)
     {
         var item = CreateEntry(value, options);
-        return _localMemorySetter.Set(options, item, typeof(T), _multiLayerCacheOptions.PrimaryMaxExpiration);
+        return _localMemorySetter.Set(options, item, typeof(T), maxExpiration);
     }
 
     private async ValueTask<bool> InternalSetAsync<T>(InternalHashCacheEntryOptions options, IDictionary<string, T?> value)
     {
         try
         {
+            if (_usePrimaryOnlyWhenDisconnected && !_connectionState.IsConnected)
+            {
+                _logger.LogTrace("Inner cache is not connected. Setting local only for cacheKey {CacheKey}", options.CacheKey);
+                return MemorySet(options, value, _multiLayerCacheOptions.PrimaryMaxExpirationDisconnected);
+            }
+
             var ret = await _innerCache.SetAsync<T?>(options.CacheKey, value, new HashCacheEntryOptions(options.Expiration, null, options.Metadata, options.SetOption), options.Token).ConfigureAwait(false);
-            return ret ? MemorySet(options, value) : ret;
+            return ret && MemorySet(options, value, _multiLayerCacheOptions.PrimaryMaxExpiration);
         }
         catch (Exception ex)
         {

@@ -53,10 +53,10 @@ public sealed class RedisCache : RedisCacheBase, ICache
         return GetAsync<T>(ToRedisKey(cacheKey, token), token);
     }
 
-    public ValueTask<KeyValuePair<CacheKey, T?>[]> GetAsync<T>(CacheKey[] cacheKey, CancellationToken token = default)
+    public ValueTask<KeyValuePair<CacheKey, T?>[]> GetAsync<T>(CacheKey[] cacheKeys, CancellationToken token = default)
     {
         NotCacheableException.ThrowIfNotCacheable<T>();
-        return GetAsyncInternal<T>(cacheKey, token);
+        return GetAsyncInternal<T>(cacheKeys, token);
     }
 
     public ValueTask<T?> GetOrAddAsync<T>(CacheKey cacheKey, Func<CancellationToken, Task<T?>> generator, CancellationToken token = default) =>

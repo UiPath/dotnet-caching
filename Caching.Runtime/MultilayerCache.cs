@@ -35,10 +35,10 @@ public sealed class MultilayerCache : MultilayerCacheBase, ICache
         return GetInnerAsync<T>(_entryBuilder.BuildEntryOptions<T>(cacheKey, _clock.ToDateTimeOffset(_multiLayerCacheOptions.DefaultExpiration), token));
     }
 
-    public ValueTask<KeyValuePair<CacheKey, T?>[]> GetAsync<T>(CacheKey[] cacheKey, CancellationToken token = default)
+    public ValueTask<KeyValuePair<CacheKey, T?>[]> GetAsync<T>(CacheKey[] cacheKeys, CancellationToken token = default)
     {
         NotCacheableException.ThrowIfNotCacheable<T>();
-        var options = cacheKey.Select(k => _entryBuilder.BuildEntryOptions<T>(k, default, token)).ToArray();
+        var options = cacheKeys.Select(k => _entryBuilder.BuildEntryOptions<T>(k, default, token)).ToArray();
         return GetInnerAsync<T>(options, token);
     }
 
@@ -276,6 +276,11 @@ public sealed class MultilayerCache : MultilayerCacheBase, ICache
                 {
                     results.Add(new KeyValuePair<CacheKey, T?>(option.CacheKey, entry!.Value));
                 }
+                else if (_usePrimaryOnlyWhenDisconnected)
+                {
+                    _logger.LogTrace("Using primary only when disconnected. Returning local for cacheKey {CacheKey}", option.CacheKey);
+                    results.Add(new KeyValuePair<CacheKey, T?>(option.CacheKey, entry!.Value));
+                }
                 else
                 {
                     _logger.LogTrace("Inner cache is not connected. Returning default for cacheKey {CacheKey}", option.CacheKey);
@@ -309,8 +314,7 @@ public sealed class MultilayerCache : MultilayerCacheBase, ICache
             _logger.LogTrace("Found inner cache copy at cacheKey {CacheKey}", keyValue.Key);
             var option = cacheEntriesToFetch[i];
             option.Expiration = await _innerCache.ExpireTimeAsync<T>(keyValue.Key, token).ConfigureAwait(false) ?? _clock.DefaultDateTimeOffset();
-            MemorySet(option, keyValue);
-
+            MemorySet(option, keyValue, _multiLayerCacheOptions.PrimaryMaxExpiration);
         }
 
         return results.ToArray();
@@ -323,6 +327,11 @@ public sealed class MultilayerCache : MultilayerCacheBase, ICache
             _logger.LogTrace("Found local. {CacheKey}.", options.CacheKey);
             if(_connectionState.IsConnected)
             {
+                return entry!.Value;
+            }
+            else if (_usePrimaryOnlyWhenDisconnected)
+            {
+                _logger.LogTrace("Using primary only when disconnected. Returning local for cacheKey {CacheKey}", options.CacheKey);
                 return entry!.Value;
             }
             else
@@ -342,7 +351,7 @@ public sealed class MultilayerCache : MultilayerCacheBase, ICache
 
         _logger.LogTrace("Found inner cache copy at cacheKey {CacheKey}", options.CacheKey);
         options.Expiration = await _innerCache.ExpireTimeAsync<T>(options.CacheKey, options.Token).ConfigureAwait(false) ?? _clock.DefaultDateTimeOffset();
-        MemorySet(options, ret);
+        MemorySet(options, ret, _multiLayerCacheOptions.PrimaryMaxExpiration);
         return ret;
     }
 
@@ -350,8 +359,14 @@ public sealed class MultilayerCache : MultilayerCacheBase, ICache
     {
         try
         {
+            if (_usePrimaryOnlyWhenDisconnected && !_connectionState.IsConnected)
+            {
+                _logger.LogTrace("Inner cache is not connected. Setting local only for cacheKey {CacheKey}", options.CacheKey);
+                return MemorySet(options, value, _multiLayerCacheOptions.PrimaryMaxExpirationDisconnected);
+            }
+
             var ret = await _innerCache.SetAsync<T?>(options.CacheKey, value, options.Expiration, options.Token).ConfigureAwait(false);
-            return ret ? MemorySet(options, value) : ret;
+            return ret && MemorySet(options, value, _multiLayerCacheOptions.PrimaryMaxExpiration);
         }
         catch (Exception ex)
         {
@@ -366,16 +381,26 @@ public sealed class MultilayerCache : MultilayerCacheBase, ICache
         {
             var cacheKeyValuePairs = cacheEntries.Select(c => new KeyValuePair<CacheKey, T?>(c.CacheEntry.CacheKey, c.Value)).ToArray();
 
-            var set = await _innerCache.SetAsync<T?>(cacheKeyValuePairs, token).ConfigureAwait(false);
-
-            if (!set)
+            if (_usePrimaryOnlyWhenDisconnected && !_connectionState.IsConnected)
             {
-                return false;
+                _logger.LogTrace("Inner cache is not connected. Setting local only for cacheKeys {CacheKeys}", string.Join(",", cacheEntries.Select(o => o.CacheEntry.CacheKey)));
+                return MemSet(_multiLayerCacheOptions.PrimaryMaxExpirationDisconnected);
             }
 
+            var set = await _innerCache.SetAsync<T?>(cacheKeyValuePairs, token).ConfigureAwait(false);
+            return set && MemSet(_multiLayerCacheOptions.PrimaryMaxExpiration);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Inner cache set value for {CacheKeys}", string.Join(",", cacheEntries.Select(o => o.CacheEntry.CacheKey)));
+            return false;
+        }
+
+        bool MemSet(TimeSpan? maxExpiration)
+        {
             foreach (var cacheEntry in cacheEntries)
             {
-                set = MemorySet(cacheEntry.CacheEntry, cacheEntry.Value);
+                var set = MemorySet(cacheEntry.CacheEntry, cacheEntry.Value, maxExpiration);
                 if (!set)
                 {
                     return false;
@@ -383,17 +408,12 @@ public sealed class MultilayerCache : MultilayerCacheBase, ICache
             }
             return true;
         }
-        catch (Exception ex)
-        {
-            _logger.LogWarning(ex, "Inner cache set value for {CacheKeys}", string.Join(",", cacheEntries.Select(o => o.CacheEntry.CacheKey)));
-            return false;
-        }
     }
 
-    private bool MemorySet<T>(CacheEntryOptions options, T value)
+    private bool MemorySet<T>(CacheEntryOptions options, T value, TimeSpan? maxExpiration)
     {
         var item = _cacheEntryFactory.Create(value, options.Expiration);
-        return _localMemorySetter.Set(options, item, typeof(T), _multiLayerCacheOptions.PrimaryMaxExpiration);
+        return _localMemorySetter.Set(options, item, typeof(T), maxExpiration);
     }
 
     private static bool IsDefault<T>(T value) =>
