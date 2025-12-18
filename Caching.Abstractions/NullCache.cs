@@ -25,10 +25,10 @@ public sealed class NullCache : ICache
         return ValueTask.FromResult(default(T?));
     }
 
-    public ValueTask<KeyValuePair<CacheKey, T?>[]> GetAsync<T>(CacheKey[] cacheKey, CancellationToken token = default)
+    public ValueTask<KeyValuePair<CacheKey, T?>[]> GetAsync<T>(CacheKey[] cacheKeys, CancellationToken token = default)
     {
         NotCacheableException.ThrowIfNotCacheable<T>();
-        return ValueTask.FromResult(cacheKey.Select(k => new KeyValuePair<CacheKey, T?>(k, default(T?))).ToArray());
+        return ValueTask.FromResult(cacheKeys.Select(k => new KeyValuePair<CacheKey, T?>(k, default(T?))).ToArray());
     }
 
     public ValueTask<T?> GetOrAddAsync<T>(CacheKey cacheKey, Func<CancellationToken, Task<T?>> generator, CancellationToken token = default) =>

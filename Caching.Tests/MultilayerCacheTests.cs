@@ -13,7 +13,7 @@ public class MultilayerCacheTests : IAsyncLifetime
     private ICache _innerCache = default!;
     private IChangeTokenFactory _changeTokenFactory = default!;
     private ITopicFactory _topicFactory = default!;
-    private ITopicProvider _topicProvider = default!;
+    private ITopicProviderWithConnectionState _topicProvider = default!;
     private ITopic<ICacheEvent> _topic = default!;
     private ICacheKeyStrategy _cacheKeyStrategy = default!;
     private ITopicKeyStrategy _topicKeyStrategy = default!;
@@ -735,6 +735,213 @@ public class MultilayerCacheTests : IAsyncLifetime
         _options.DefaultExpiration = null;
         _ = await Sut.GetOrAddAsync(_cacheKey, generator, default(DateTimeOffset?), CancellationToken.None);
         cacheEntry.AbsoluteExpiration.Should().Be(DateTimeOffset.MaxValue);
+    }
+
+    [Fact]
+    public async Task Get_returns_local_when_disconnected_and_UsePrimaryOnlyWhenDisconnected_is_true()
+    {
+        var expected = _fixture.Create<string>();
+        _options.UsePrimaryOnlyWhenDisconnected = true;
+        _topicProvider.IsConnected.Returns(false);
+        _memoryCache.TryGetValue(_innerCacheKey, out Arg.Any<object?>())
+            .Returns(x =>
+            {
+                x[1] = new TestCacheEntry<string> { Value = expected };
+                return true;
+            });
+
+        var actual = await Sut.GetAsync<string>(_cacheKey, token: CancellationToken.None);
+        actual.Should().Be(expected);
+        await _innerCache.DidNotReceive().GetAsync<string>(_innerCacheKey, Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task Get_returns_default_when_disconnected_and_UsePrimaryOnlyWhenDisconnected_is_false()
+    {
+        var expected = _fixture.Create<string>();
+        _options.UsePrimaryOnlyWhenDisconnected = false;
+        _topicProvider.IsConnected.Returns(false);
+        _options.ConnectionMonitorEnabled = true;
+        _memoryCache.TryGetValue(_innerCacheKey, out Arg.Any<object?>())
+            .Returns(x =>
+            {
+                x[1] = new TestCacheEntry<string> { Value = expected };
+                return true;
+            });
+
+        var actual = await Sut.GetAsync<string>(_cacheKey, token: CancellationToken.None);
+        actual.Should().BeNull();
+        _memoryCache.Received(1).Remove(_innerCacheKey);
+    }
+
+    [Fact]
+    public async Task Multi_get_returns_local_when_disconnected_and_UsePrimaryOnlyWhenDisconnected_is_true()
+    {
+        var expected = _fixture.Create<string>();
+        _options.UsePrimaryOnlyWhenDisconnected = true;
+        _topicProvider.IsConnected.Returns(false);
+        _memoryCache.TryGetValue(_innerCacheKey, out Arg.Any<object?>())
+            .Returns(x =>
+            {
+                x[1] = new TestCacheEntry<string> { Value = expected };
+                return true;
+            });
+        _memoryCache.TryGetValue(_innerMultiKey, out Arg.Any<object?>())
+            .Returns(x =>
+            {
+                x[1] = new TestCacheEntry<string> { Value = expected };
+                return true;
+            });
+
+        var actual = await Sut.GetAsync<string>(new CacheKey[] { _cacheKey, _multiKey }, token: CancellationToken.None);
+        actual.Should().BeEquivalentTo(new KeyValuePair<CacheKey, string?>[] { new(_cacheKey, expected), new(_multiKey, expected) });
+        await _innerCache.DidNotReceive().GetAsync<string>(Arg.Any<CacheKey[]>(), Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task Multi_get_returns_default_when_disconnected_and_UsePrimaryOnlyWhenDisconnected_is_false()
+    {
+        var expected = _fixture.Create<string>();
+        _options.UsePrimaryOnlyWhenDisconnected = false;
+        _topicProvider.IsConnected.Returns(false);
+        _options.ConnectionMonitorEnabled = true;
+        _memoryCache.TryGetValue(_innerCacheKey, out Arg.Any<object?>())
+            .Returns(x =>
+            {
+                x[1] = new TestCacheEntry<string> { Value = expected };
+                return true;
+            });
+        _memoryCache.TryGetValue(_innerMultiKey, out Arg.Any<object?>())
+            .Returns(x =>
+            {
+                x[1] = new TestCacheEntry<string> { Value = expected };
+                return true;
+            });
+
+        var actual = await Sut.GetAsync<string>(new CacheKey[] { _cacheKey, _multiKey }, token: CancellationToken.None);
+        actual.Should().BeEmpty();
+        _memoryCache.Received(1).Remove(_innerCacheKey);
+        _memoryCache.Received(1).Remove(_innerMultiKey);
+    }
+
+    [Fact]
+    public async Task Set_uses_local_only_when_disconnected_and_UsePrimaryOnlyWhenDisconnected_is_true()
+    {
+        var value = _fixture.Create<string>();
+        _options.UsePrimaryOnlyWhenDisconnected = true;
+        _options.PrimaryMaxExpirationDisconnected = TimeSpan.FromMinutes(5);
+        _options.ConnectionMonitorEnabled = true;
+        _topicProvider.IsConnected.Returns(false);
+        _topic.PublishAsync(Arg.Any<ICacheEvent>(), token: CancellationToken.None)
+            .Returns(_ => true);
+
+        var actual = await Sut.SetAsync(_cacheKey, value, _fixture.Create<TimeSpan>(), CancellationToken.None);
+        actual.Should().BeTrue();
+        _memoryCache.Received(1).CreateEntry(_innerCacheKey);
+        await _innerCache.DidNotReceive().SetAsync(_innerCacheKey, Arg.Any<string>(), Arg.Any<DateTimeOffset>(), Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task Multi_set_uses_local_only_when_disconnected_and_UsePrimaryOnlyWhenDisconnected_is_true()
+    {
+        var value = _fixture.Create<string>();
+        _options.UsePrimaryOnlyWhenDisconnected = true;
+        _options.PrimaryMaxExpirationDisconnected = TimeSpan.FromMinutes(5);
+        _options.ConnectionMonitorEnabled = true;
+        _topicProvider.IsConnected.Returns(false);
+        _topic.PublishAsync(Arg.Any<ICacheEvent>(), token: CancellationToken.None)
+            .Returns(_ => true);
+
+        var actual = await Sut.SetAsync(new KeyValuePair<CacheKey, string?>[] { new(_cacheKey, value), new(_multiKey, value) }, _fixture.Create<TimeSpan>(), CancellationToken.None);
+        actual.Should().BeTrue();
+        _memoryCache.Received(1).CreateEntry(_innerCacheKey);
+        _memoryCache.Received(1).CreateEntry(_innerMultiKey);
+        await _innerCache.DidNotReceive().SetAsync(Arg.Any<KeyValuePair<CacheKey, string?>[]>(), Arg.Any<DateTimeOffset>(), Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task GetOrAdd_uses_local_only_when_disconnected_and_UsePrimaryOnlyWhenDisconnected_is_true()
+    {
+        var generatorExpected = _fixture.Create<string>();
+        var generatorWasCalled = false;
+        Func<CancellationToken, Task<string?>> generator = token =>
+        {
+            generatorWasCalled = true;
+            return Task.FromResult((string?)generatorExpected);
+        };
+
+        _options.UsePrimaryOnlyWhenDisconnected = true;
+        _options.PrimaryMaxExpirationDisconnected = TimeSpan.FromMinutes(5);
+        _options.ConnectionMonitorEnabled = true;
+        _topicProvider.IsConnected.Returns(false);
+
+        _innerCache.GetAsync<string>(_innerCacheKey, token: CancellationToken.None)
+            .Returns(default(string?));
+
+        var actual = await Sut.GetOrAddAsync(_cacheKey, generator, _fixture.Create<TimeSpan>(), CancellationToken.None);
+        generatorWasCalled.Should().BeTrue();
+        actual.Should().Be(generatorExpected);
+        _memoryCache.Received(1).CreateEntry(_innerCacheKey);
+        await _innerCache.DidNotReceive().SetAsync(_innerCacheKey, Arg.Any<string>(), Arg.Any<DateTimeOffset>(), Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public void Constructor_throws_when_PrimaryMaxExpirationDisconnected_is_greater_than_PrimaryMaxExpiration()
+    {
+        _options.PrimaryMaxExpiration = TimeSpan.FromMinutes(5);
+        _options.PrimaryMaxExpirationDisconnected = TimeSpan.FromMinutes(10);
+
+        Action act = () => _fixture.Create<MultilayerCache>();
+
+        var ex = act.Should().Throw<Exception>().Which;
+        ex.InnerException!.InnerException.Should().BeOfType<ArgumentException>()
+            .Which.Message.Should().Contain("PrimaryMaxExpirationDisconnected")
+            .And.Contain("must be less than or equal to")
+            .And.Contain("PrimaryMaxExpiration");
+    }
+
+    [Fact]
+    public void Constructor_does_not_throw_when_PrimaryMaxExpirationDisconnected_equals_PrimaryMaxExpiration()
+    {
+        _options.PrimaryMaxExpiration = TimeSpan.FromMinutes(5);
+        _options.PrimaryMaxExpirationDisconnected = TimeSpan.FromMinutes(5);
+
+        Action act = () => _fixture.Create<MultilayerCache>();
+
+        act.Should().NotThrow();
+    }
+
+    [Fact]
+    public void Constructor_does_not_throw_when_PrimaryMaxExpirationDisconnected_is_less_than_PrimaryMaxExpiration()
+    {
+        _options.PrimaryMaxExpiration = TimeSpan.FromMinutes(10);
+        _options.PrimaryMaxExpirationDisconnected = TimeSpan.FromMinutes(5);
+
+        Action act = () => _fixture.Create<MultilayerCache>();
+
+        act.Should().NotThrow();
+    }
+
+    [Fact]
+    public void Constructor_does_not_throw_when_PrimaryMaxExpiration_is_null()
+    {
+        _options.PrimaryMaxExpiration = null;
+        _options.PrimaryMaxExpirationDisconnected = TimeSpan.FromMinutes(5);
+
+        Action act = () => _fixture.Create<MultilayerCache>();
+
+        act.Should().NotThrow();
+    }
+
+    [Fact]
+    public void Constructor_does_not_throw_when_PrimaryMaxExpirationDisconnected_is_null()
+    {
+        _options.PrimaryMaxExpiration = TimeSpan.FromMinutes(5);
+        _options.PrimaryMaxExpirationDisconnected = null;
+
+        Action act = () => _fixture.Create<MultilayerCache>();
+
+        act.Should().NotThrow();
     }
 
     public Task DisposeAsync()

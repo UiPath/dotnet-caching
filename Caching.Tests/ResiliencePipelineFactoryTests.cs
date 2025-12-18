@@ -106,7 +106,7 @@ public class ResiliencePipelineFactoryTest : IAsyncLifetime
     {
         List<string?> logMessages = [];
         _resiliencePoliciesOptions.RetryCount = 1;
-        _resiliencePoliciesOptions.RequestTimeout = TimeSpan.FromMilliseconds(10);
+        _resiliencePoliciesOptions.RequestTimeout = TimeSpan.FromMilliseconds(50);
         _resiliencePoliciesOptions.ExceptionsAllowedBeforeBreaking = 2;
         _resiliencePoliciesOptions.DurationOfBreak = TimeSpan.FromMilliseconds(500);
         _resiliencePoliciesOptions.RethrowCircuitBreakerExceptions = false;
@@ -121,7 +121,7 @@ public class ResiliencePipelineFactoryTest : IAsyncLifetime
             });
         var timeoutFunc = new Func<CancellationToken, ValueTask<bool>>(async token =>
         {
-            await Task.Delay(500, token);
+            await Task.Delay(5000, token);
             return true;
         });
         var exceptionFunc = new Func<CancellationToken, ValueTask<bool>>(token =>

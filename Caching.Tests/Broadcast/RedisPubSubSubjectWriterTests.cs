@@ -34,13 +34,14 @@ public class RedisPubSubSubjectWriterTests : IAsyncLifetime
     public async Task Receive_redis_null()
     {
         Action<RedisChannel, RedisValue>? action = null!;
-        
+
         _subscriber.When(x => x.Subscribe(_redisChannel, Arg.Any<Action<RedisChannel, RedisValue>>()))
             .Do(ctx =>
             {
                 action = ctx.Arg<Action<RedisChannel, RedisValue>>();
             });
         var sut = await Sut();
+        await Task.Delay(_delay.Multiply(3));
         action.Should().NotBeNull();
         action!(_redisChannel, RedisValue.Null);
         await Task.Delay(_delay.Multiply(5));
@@ -57,6 +58,7 @@ public class RedisPubSubSubjectWriterTests : IAsyncLifetime
                 action = ctx.Arg<Action<RedisChannel, RedisValue>>();
             });
         var sut = await Sut();
+        await Task.Delay(_delay.Multiply(3));
         action.Should().NotBeNull();
         action!(_redisChannel, (RedisValue)_fixture.Create<string>());
         await Task.Delay(_delay.Multiply(5));

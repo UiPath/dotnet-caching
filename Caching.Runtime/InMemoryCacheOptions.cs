@@ -35,4 +35,8 @@ public class InMemoryCacheOptions : IMultilayerCacheOptions, IMemoryCacheOptions
     public double? CompactionPercentage { get; set; }
 
     public ICacheEntrySizeProvider? SizeProvider { get; set; }
+
+    public bool? UsePrimaryOnlyWhenDisconnected { get; set; }
+
+    public TimeSpan? PrimaryMaxExpirationDisconnected { get; set; } = TimeSpan.FromSeconds(30);
 }
