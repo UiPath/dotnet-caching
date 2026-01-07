@@ -1175,6 +1175,117 @@ public class MultilayerHashCacheTests : IAsyncLifetime
         act.Should().NotThrow();
     }
 
+    [Theory]
+    [InlineData(true, false)]  // innerCacheDisconnected = true (UsePrimaryOnlyWhenDisconnected=true, IsConnected=false)
+    [InlineData(false, true)]  // innerCacheDisconnected = false (UsePrimaryOnlyWhenDisconnected=false, IsConnected=true)
+    [InlineData(false, false)] // innerCacheDisconnected = false (UsePrimaryOnlyWhenDisconnected=false, IsConnected=false)
+    [InlineData(true, true)]   // innerCacheDisconnected = false (UsePrimaryOnlyWhenDisconnected=true, IsConnected=true)
+    public async Task SetAsync_calls_inner_cache_based_on_innerCacheDisconnected(bool usePrimaryOnlyWhenDisconnected, bool isConnected)
+    {
+        var value = _fixture.Create<IDictionary<string, string?>>();
+        var innerCacheDisconnected = usePrimaryOnlyWhenDisconnected && !isConnected;
+        _options.UsePrimaryOnlyWhenDisconnected = usePrimaryOnlyWhenDisconnected;
+        _options.PrimaryMaxExpirationDisconnected = TimeSpan.FromMinutes(5);
+        _options.ConnectionMonitorEnabled = true;
+        _topicProvider.IsConnected.Returns(isConnected);
+        _topic.PublishAsync(Arg.Any<ICacheEvent>(), token: CancellationToken.None)
+            .Returns(_ => true);
+        _innerCache.SetAsync(_innerCacheKey, Arg.Any<IDictionary<string, string?>>(), Arg.Any<HashCacheEntryOptions>(), Arg.Any<CancellationToken>())
+            .Returns(true);
+
+        var actual = await Sut.SetAsync(_cacheKey, value, _fixture.Create<TimeSpan>(), CancellationToken.None);
+        actual.Should().BeTrue();
+        _memoryCache.Received(1).CreateEntry(_innerCacheKey);
+
+        if (innerCacheDisconnected)
+        {
+            await _innerCache.DidNotReceive().SetAsync(_innerCacheKey, Arg.Any<IDictionary<string, string?>>(), Arg.Any<HashCacheEntryOptions>(), Arg.Any<CancellationToken>());
+            await _topic.DidNotReceive().PublishAsync(Arg.Any<ICacheEvent>(), Arg.Any<CancellationToken>());
+        }
+        else
+        {
+            await _innerCache.Received(1).SetAsync(_innerCacheKey, Arg.Any<IDictionary<string, string?>>(), Arg.Any<HashCacheEntryOptions>(), Arg.Any<CancellationToken>());
+            await _topic.Received(1).PublishAsync(Arg.Any<ICacheEvent>(), Arg.Any<CancellationToken>());
+        }
+    }
+
+    [Theory]
+    [InlineData(true, false)]  // innerCacheDisconnected = true
+    [InlineData(false, true)]  // innerCacheDisconnected = false
+    [InlineData(false, false)] // innerCacheDisconnected = false
+    [InlineData(true, true)]   // innerCacheDisconnected = false
+    public async Task SetAsync_with_options_calls_inner_cache_based_on_innerCacheDisconnected(bool usePrimaryOnlyWhenDisconnected, bool isConnected)
+    {
+        var value = _fixture.Create<IDictionary<string, string?>>();
+        var innerCacheDisconnected = usePrimaryOnlyWhenDisconnected && !isConnected;
+        _options.UsePrimaryOnlyWhenDisconnected = usePrimaryOnlyWhenDisconnected;
+        _options.PrimaryMaxExpirationDisconnected = TimeSpan.FromMinutes(5);
+        _options.ConnectionMonitorEnabled = true;
+        _topicProvider.IsConnected.Returns(isConnected);
+        _topic.PublishAsync(Arg.Any<ICacheEvent>(), token: CancellationToken.None)
+            .Returns(_ => true);
+        _innerCache.SetAsync(_innerCacheKey, Arg.Any<IDictionary<string, string?>>(), Arg.Any<HashCacheEntryOptions>(), Arg.Any<CancellationToken>())
+            .Returns(true);
+        var hashOptions = new HashCacheEntryOptions(default, _fixture.Create<TimeSpan>(), _fixture.Create<IDictionary<string, string?>>());
+
+        var actual = await Sut.SetAsync(_cacheKey, value, hashOptions, CancellationToken.None);
+        actual.Should().BeTrue();
+        _memoryCache.Received(1).CreateEntry(_innerCacheKey);
+
+        if (innerCacheDisconnected)
+        {
+            await _innerCache.DidNotReceive().SetAsync(_innerCacheKey, Arg.Any<IDictionary<string, string?>>(), Arg.Any<HashCacheEntryOptions>(), Arg.Any<CancellationToken>());
+            await _topic.DidNotReceive().PublishAsync(Arg.Any<ICacheEvent>(), Arg.Any<CancellationToken>());
+        }
+        else
+        {
+            await _innerCache.Received(1).SetAsync(_innerCacheKey, Arg.Any<IDictionary<string, string?>>(), Arg.Any<HashCacheEntryOptions>(), Arg.Any<CancellationToken>());
+            await _topic.Received(1).PublishAsync(Arg.Any<ICacheEvent>(), Arg.Any<CancellationToken>());
+        }
+    }
+
+    [Theory]
+    [InlineData(true, false)]  // innerCacheDisconnected = true
+    [InlineData(false, true)]  // innerCacheDisconnected = false
+    [InlineData(false, false)] // innerCacheDisconnected = false
+    [InlineData(true, true)]   // innerCacheDisconnected = false
+    public async Task GetOrAddAsync_calls_inner_cache_based_on_innerCacheDisconnected(bool usePrimaryOnlyWhenDisconnected, bool isConnected)
+    {
+        var generatorExpected = _fixture.Create<IDictionary<string, string?>>();
+        var generatorWasCalled = false;
+        Func<CancellationToken, Task<IDictionary<string, string?>>> generator = token =>
+        {
+            generatorWasCalled = true;
+            return Task.FromResult(generatorExpected);
+        };
+
+        var innerCacheDisconnected = usePrimaryOnlyWhenDisconnected && !isConnected;
+        _options.UsePrimaryOnlyWhenDisconnected = usePrimaryOnlyWhenDisconnected;
+        _options.PrimaryMaxExpirationDisconnected = TimeSpan.FromMinutes(5);
+        _options.ConnectionMonitorEnabled = true;
+        _topicProvider.IsConnected.Returns(isConnected);
+
+        var expectedCacheEntry = new TestCacheEntry<IDictionary<string, string?>>();
+        _innerCache.GetCacheEntryAsync<string>(_innerCacheKey, token: CancellationToken.None)
+            .Returns(expectedCacheEntry);
+        _innerCache.SetAsync(_innerCacheKey, Arg.Any<IDictionary<string, string?>>(), Arg.Any<HashCacheEntryOptions>(), Arg.Any<CancellationToken>())
+            .Returns(true);
+
+        var actual = await Sut.GetOrAddAsync(_cacheKey, generator, _fixture.Create<TimeSpan>(), CancellationToken.None);
+        generatorWasCalled.Should().BeTrue();
+        actual.Should().BeEquivalentTo(generatorExpected);
+        _memoryCache.Received(1).CreateEntry(_innerCacheKey);
+
+        if (innerCacheDisconnected)
+        {
+            await _innerCache.DidNotReceive().SetAsync(_innerCacheKey, Arg.Any<IDictionary<string, string?>>(), Arg.Any<HashCacheEntryOptions>(), Arg.Any<CancellationToken>());
+        }
+        else
+        {
+            await _innerCache.Received(1).SetAsync(_innerCacheKey, Arg.Any<IDictionary<string, string?>>(), Arg.Any<HashCacheEntryOptions>(), Arg.Any<CancellationToken>());
+        }
+    }
+
     public Task DisposeAsync()
     {
         return Task.CompletedTask;

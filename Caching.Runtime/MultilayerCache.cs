@@ -64,7 +64,8 @@ public sealed class MultilayerCache : MultilayerCacheBase, ICache
 
         if (!IsDefault(ret))
         {
-            await InternalSetAsync(cacheEntryOptions, ret).ConfigureAwait(false);
+            var innerCacheDisconnected = GetInnerCacheDisconnected();
+            await InternalSetAsync(cacheEntryOptions, ret, innerCacheDisconnected).ConfigureAwait(false);
         }
         return ret;
     }
@@ -85,8 +86,17 @@ public sealed class MultilayerCache : MultilayerCacheBase, ICache
         }
 
         _logger.LogDebug("Replacing cached key {CacheKey}", cacheEntryOptions.CacheKey);
-        var fired = await _eventPublisher.CacheSetAsync(cacheEntryOptions).ConfigureAwait(false);
-        return fired && await InternalSetAsync(cacheEntryOptions, value).ConfigureAwait(false);
+        var innerCacheDisconnected = GetInnerCacheDisconnected();
+        if (innerCacheDisconnected)
+        {
+            _logger.LogTrace("Inner cache is not connected. Setting local only for cacheKey {CacheKey}", cacheEntryOptions.CacheKey);
+            return await InternalSetAsync(cacheEntryOptions, value, innerCacheDisconnected).ConfigureAwait(false);
+        }
+        else
+        {
+            var fired = await _eventPublisher.CacheSetAsync(cacheEntryOptions).ConfigureAwait(false);
+            return fired && await InternalSetAsync(cacheEntryOptions, value, innerCacheDisconnected).ConfigureAwait(false);
+        }
     }
 
 
@@ -122,10 +132,17 @@ public sealed class MultilayerCache : MultilayerCacheBase, ICache
             }
         }
 
-        var internalSetResult = await InternalSetAsync<T>(setEntries.ToArray(), token).ConfigureAwait(false);
+        var innerCacheDisconnected = GetInnerCacheDisconnected();
+        var internalSetResult = await InternalSetAsync<T>(setEntries.ToArray(), innerCacheDisconnected, token).ConfigureAwait(false);
         if (!internalSetResult)
         {
             return false;
+        }
+
+        if (innerCacheDisconnected)
+        {
+            _logger.LogTrace("Inner cache is not connected. Setting local only for cacheKeys {CacheKeys}", string.Join(",", setEntries.Select(o => o.CacheEntry.CacheKey)));
+            return true;
         }
 
         foreach (var cacheEntry in setEntries.Select(s => s.CacheEntry))
@@ -355,11 +372,11 @@ public sealed class MultilayerCache : MultilayerCacheBase, ICache
         return ret;
     }
 
-    private async ValueTask<bool> InternalSetAsync<T>(CacheEntryOptions options, T? value)
+    private async ValueTask<bool> InternalSetAsync<T>(CacheEntryOptions options, T? value, bool innerCacheDisconnected)
     {
         try
         {
-            if (_usePrimaryOnlyWhenDisconnected && !_connectionState.IsConnected)
+            if (innerCacheDisconnected)
             {
                 _logger.LogTrace("Inner cache is not connected. Setting local only for cacheKey {CacheKey}", options.CacheKey);
                 return MemorySet(options, value, _multiLayerCacheOptions.PrimaryMaxExpirationDisconnected);
@@ -375,13 +392,13 @@ public sealed class MultilayerCache : MultilayerCacheBase, ICache
         }
     }
 
-    private async ValueTask<bool> InternalSetAsync<T>(CacheEntryValue<T>[] cacheEntries, CancellationToken token = default)
+    private async ValueTask<bool> InternalSetAsync<T>(CacheEntryValue<T>[] cacheEntries, bool innerCacheDisconnected, CancellationToken token = default)
     {
         try
         {
             var cacheKeyValuePairs = cacheEntries.Select(c => new KeyValuePair<CacheKey, T?>(c.CacheEntry.CacheKey, c.Value)).ToArray();
 
-            if (_usePrimaryOnlyWhenDisconnected && !_connectionState.IsConnected)
+            if (innerCacheDisconnected)
             {
                 _logger.LogTrace("Inner cache is not connected. Setting local only for cacheKeys {CacheKeys}", string.Join(",", cacheEntries.Select(o => o.CacheEntry.CacheKey)));
                 return MemSet(_multiLayerCacheOptions.PrimaryMaxExpirationDisconnected);
