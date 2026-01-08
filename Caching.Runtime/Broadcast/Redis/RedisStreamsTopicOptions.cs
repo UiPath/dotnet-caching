@@ -24,7 +24,7 @@ public class RedisStreamsTopicOptions
 
     public bool TrackStatistics { get; set; }
 
-    public bool MaintainerEnabled { get; set; }
+    public bool MaintainerEnabled { get; set; } = true;
 
     public TimeSpan MaintainerCheckInterval { get; set; } = TimeSpan.FromMinutes(30);
 
