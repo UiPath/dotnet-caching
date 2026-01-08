@@ -1,8 +1,5 @@
 ﻿using System.Threading.Channels;
 using UiPath.Platform.Caching.Telemetry;
-#if NET8_0_OR_GREATER
-using UiPath.Platform.Logging.Abstractions;
-#endif
 
 namespace UiPath.Platform.Caching.Broadcast.Redis;
 
@@ -165,7 +162,7 @@ internal sealed class RedisStreamSubjectWriter<T> : IDisposable
 
     private async Task DispatchEventsAsync(StreamEntry[] events)
     {
-        List<RedisValue> ids = [];
+        List<RedisValue> ids = new(events.Length);
 
         foreach (StreamEntry @event in events)
         {
@@ -234,11 +231,7 @@ internal sealed class RedisStreamSubjectWriter<T> : IDisposable
 
     private void TraceReceipt(T ev)
     {
-#if NET8_0_OR_GREATER
-        _logger.LogInformation("Event received. Id {EventId}  Topic : {Topic}, StreamId: {StreamId}, Key: {Key}", ev.Id, _context.Topic, ev.TransportId, new LogField(ev.Key!, isPii: false).ToString(showPii: false) ?? string.Empty);
-#else
         _logger.LogInformation("Event received. Id {EventId}  Topic : {Topic}, StreamId: {StreamId}", ev.Id, _context.Topic, ev.TransportId);
-#endif
 
         if (_context.EmitStreamReceivedEvent)
         {
@@ -247,9 +240,6 @@ internal sealed class RedisStreamSubjectWriter<T> : IDisposable
             { "EventId", ev.Id!},
             { "TopicKey", _context.Topic!},
             { "TransportId", ev.TransportId! }
-#if NET8_0_OR_GREATER
-            ,{ "Key", new LogField(ev.Key!, isPii: false).ToString(showPii: false) ?? string.Empty}
-#endif
         });
         }
     }

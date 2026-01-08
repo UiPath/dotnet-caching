@@ -59,8 +59,16 @@ public class RedisStreamsTopicTests : IAsyncLifetime
         _isConnected = false;
         var actual = await Sut.PublishAsync(_fixture.Create<ICacheEvent>(), CancellationToken.None);
         actual.Should().BeFalse();
-        await _database.DidNotReceive()
-        .StreamAddAsync(Arg.Any<RedisKey>(), Arg.Any<RedisValue>(), Arg.Any<RedisValue>(), Arg.Any<RedisValue?>(), maxLength: Arg.Any<int?>(), useApproximateMaxLength: true, flags: CommandFlags.DemandMaster);
+        await _database.DidNotReceive().StreamAddAsync(
+                key: Arg.Any<RedisKey>(),
+                streamField: Arg.Any<RedisValue>(),
+                streamValue: Arg.Any<RedisValue>(),
+                messageId: Arg.Any<RedisValue?>(),
+                maxLength: Arg.Any<long?>(),
+                useApproximateMaxLength: Arg.Any<bool>(),
+                limit: Arg.Any<long?>(),
+                trimMode: Arg.Any<StreamTrimMode>(),
+                flags: Arg.Any<CommandFlags>());
     }
 
     [Fact]
@@ -88,8 +96,18 @@ public class RedisStreamsTopicTests : IAsyncLifetime
     {
         var ev = _fixture.Create<ICacheEvent>();
         var actual = await Sut.PublishAsync(ev, CancellationToken.None);
+
         await _database.Received()
-            .StreamAddAsync(Arg.Any<RedisKey>(), Arg.Any<RedisValue>(), Arg.Any<RedisValue>(), Arg.Any<RedisValue?>(), maxLength: Arg.Any<int?>(), useApproximateMaxLength: true, flags: CommandFlags.DemandMaster);
+            .StreamAddAsync(
+                key: Arg.Any<RedisKey>(),
+                streamField: Arg.Any<RedisValue>(),
+                streamValue: Arg.Any<RedisValue>(),
+                messageId: Arg.Any<RedisValue?>(),
+                maxLength: Arg.Any<long?>(),
+                useApproximateMaxLength: Arg.Any<bool>(),
+                limit: Arg.Any<long?>(),
+                trimMode: Arg.Any<StreamTrimMode>(),
+                flags: Arg.Any<CommandFlags>());
         actual.Should().BeTrue();
     }
 
@@ -98,7 +116,16 @@ public class RedisStreamsTopicTests : IAsyncLifetime
     {
         var ev = _fixture.Create<ICacheEvent>();
         _database
-            .StreamAddAsync(Arg.Any<RedisKey>(), Arg.Any<RedisValue>(), Arg.Any<RedisValue>(), Arg.Any<RedisValue?>(), maxLength: Arg.Any<int?>(), useApproximateMaxLength: true, flags: CommandFlags.DemandMaster)
+            .StreamAddAsync(
+                key: Arg.Any<RedisKey>(),
+                streamField: Arg.Any<RedisValue>(),
+                streamValue: Arg.Any<RedisValue>(),
+                messageId: Arg.Any<RedisValue?>(),
+                maxLength: Arg.Any<long?>(),
+                useApproximateMaxLength: Arg.Any<bool>(),
+                limit: Arg.Any<long?>(),
+                trimMode: Arg.Any<StreamTrimMode>(),
+                flags: Arg.Any<CommandFlags>())
             .ThrowsAsync<Exception>();
         var actual = await Sut.PublishAsync(ev, CancellationToken.None);
         actual.Should().BeFalse();

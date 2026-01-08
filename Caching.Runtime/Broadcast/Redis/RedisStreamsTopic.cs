@@ -20,9 +20,13 @@ public sealed class RedisStreamsTopic<T> : ITopic<T>
     private readonly ICachingTelemetryProvider _cachingTelemetryProvider;
     private readonly RedisStreamsTopicOptions _streamOptions;
     private readonly EventDispatcher<T> _dispatcher;
+#if NET9_0_OR_GREATER
+    private readonly Lock _syncObj = new();
+#else
     private readonly object _syncObj = new();
+#endif
     private bool _disposed;
-    private bool _consumerGroupCreated = false;
+    private bool _consumerGroupCreated;
 
     public TopicKey TopicKey { get; }
 
@@ -77,16 +81,20 @@ public sealed class RedisStreamsTopic<T> : ITopic<T>
 
         try
         {
-            var messageString = _formatter.EncodeAsString(@event);
+            RedisValue messageString = _formatter.EncodeAsString(@event);
+            RedisValue? messageId = null;
             var id = await _write.ExecuteAsync(async token =>
             {
                 token.ThrowIfCancellationRequested();
                 return await _redis.Database.StreamAddAsync(
-                    _context.Topic,
-                    _context.FieldName,
-                    messageString,
+                    key: _context.Topic,
+                    streamField: _context.FieldName,
+                    streamValue: messageString,
+                    messageId: messageId,
                     maxLength: _streamOptions.MaxLength,
                     useApproximateMaxLength: true,
+                    limit: _streamOptions.Limit,
+                    trimMode: StreamTrimMode.KeepReferences,
                     flags: CommandFlags.DemandMaster).ConfigureAwait(false);
             }, defaultValue: RedisValue.Null, token).ConfigureAwait(false);
             _cachingTelemetryProvider.TrackTopicWriteMetric(_context.Topic!, id);
@@ -119,7 +127,11 @@ public sealed class RedisStreamsTopic<T> : ITopic<T>
     {
         if (!_consumerGroupCreated)
         {
+#if NET9_0_OR_GREATER
+            using (_syncObj.EnterScope())
+#else
             lock (_syncObj)
+#endif
             {
                 if (!_consumerGroupCreated)
                 {

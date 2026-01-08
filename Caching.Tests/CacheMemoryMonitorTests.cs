@@ -1,5 +1,4 @@
-﻿#if !NET6_0
-using Microsoft.Extensions.Caching.Memory;
+﻿using Microsoft.Extensions.Caching.Memory;
 using Microsoft.Extensions.Internal;
 using UiPath.Platform.Caching.Telemetry;
 
@@ -44,4 +43,3 @@ public class CacheMemoryMonitorTests : IAsyncLifetime
         return Task.CompletedTask;
     }
 }
-#endif

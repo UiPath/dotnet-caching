@@ -6,7 +6,9 @@ public class RedisStreamsTopicOptions
 {
     public bool Enabled { get; set; } = true;
 
-    public int? MaxLength { get; set; } = 32_768;
+    public long? MaxLength { get; set; } = 32_768;
+
+    public long? Limit { get; set; } = 1_024;
 
     public int PollBatchSize { get; set; } = 4096;
 
