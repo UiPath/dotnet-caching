@@ -48,6 +48,8 @@ public abstract class MultilayerCacheBase : IDisposable
 
     protected ICachingTelemetryProvider Telemetry { get; }
 
+    protected bool GetInnerCacheDisconnected() => _usePrimaryOnlyWhenDisconnected && !_connectionState.IsConnected;
+
     private IConnectionState GetConnectionMonitor(params object[] connectionStates)
     {
         var lst = connectionStates.OfType<IConnectionState>().ToArray();

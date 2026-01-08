@@ -86,7 +86,8 @@ public sealed class MultilayerHashCache : MultilayerCacheBase, IHashCache
 
         if (!IsDefault(ret))
         {
-            await InternalSetAsync(cacheEntryOptions, ret).ConfigureAwait(false);
+            var innerCacheDisconnected = GetInnerCacheDisconnected();
+            await InternalSetAsync(cacheEntryOptions, ret, innerCacheDisconnected).ConfigureAwait(false);
         }
         return ret;
     }
@@ -107,8 +108,17 @@ public sealed class MultilayerHashCache : MultilayerCacheBase, IHashCache
         }
 
         _logger.LogDebug("Replacing cached cacheKey {CacheKey}", options.CacheKey);
-        var fired = await _eventPublisher.CacheSetAsync(options).ConfigureAwait(false);
-        return fired && await InternalSetAsync(options, values).ConfigureAwait(false);
+        var innerCacheDisconnected = GetInnerCacheDisconnected();
+        if (innerCacheDisconnected)
+        {
+            _logger.LogTrace("Inner cache is not connected. Setting local only for cacheKey {CacheKey}", options.CacheKey);
+            return await InternalSetAsync(options, values, innerCacheDisconnected).ConfigureAwait(false);
+        }
+        else
+        {
+            var fired = await _eventPublisher.CacheSetAsync(options).ConfigureAwait(false);
+            return fired && await InternalSetAsync(options, values, innerCacheDisconnected).ConfigureAwait(false);
+        }
     }
 
     public async ValueTask<bool> SetAsync<T>(CacheKey cacheKey, IDictionary<string, T?> values, HashCacheEntryOptions options, CancellationToken token = default)
@@ -123,8 +133,15 @@ public sealed class MultilayerHashCache : MultilayerCacheBase, IHashCache
         }
 
         _logger.LogDebug("Replacing cached cacheKey {CacheKey}", cacheEntryOptions.CacheKey);
+        var innerCacheDisconnected = GetInnerCacheDisconnected();
+        if (innerCacheDisconnected)
+        {
+            _logger.LogTrace("Inner cache is not connected. Setting local only for cacheKey {CacheKey}", cacheEntryOptions.CacheKey);
+            return await InternalSetAsync(cacheEntryOptions, values, innerCacheDisconnected).ConfigureAwait(false);
+        }
+
         var fired = await _eventPublisher.CacheSetAsync(cacheEntryOptions).ConfigureAwait(false);
-        return fired && await InternalSetAsync(cacheEntryOptions, values).ConfigureAwait(false);
+        return fired && await InternalSetAsync(cacheEntryOptions, values, innerCacheDisconnected).ConfigureAwait(false);
     }
 
     public ValueTask<bool> RemoveAsync<T>(CacheKey cacheKey, CancellationToken token = default)
@@ -302,11 +319,11 @@ public sealed class MultilayerHashCache : MultilayerCacheBase, IHashCache
         return _localMemorySetter.Set(options, item, typeof(T), maxExpiration);
     }
 
-    private async ValueTask<bool> InternalSetAsync<T>(InternalHashCacheEntryOptions options, IDictionary<string, T?> value)
+    private async ValueTask<bool> InternalSetAsync<T>(InternalHashCacheEntryOptions options, IDictionary<string, T?> value, bool disconnected)
     {
         try
         {
-            if (_usePrimaryOnlyWhenDisconnected && !_connectionState.IsConnected)
+            if (disconnected)
             {
                 _logger.LogTrace("Inner cache is not connected. Setting local only for cacheKey {CacheKey}", options.CacheKey);
                 return MemorySet(options, value, _multiLayerCacheOptions.PrimaryMaxExpirationDisconnected);
