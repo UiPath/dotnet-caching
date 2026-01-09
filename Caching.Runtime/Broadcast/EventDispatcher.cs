@@ -5,7 +5,7 @@ using UiPath.Platform.Caching.Telemetry;
 
 namespace UiPath.Platform.Caching.Broadcast;
 
-internal sealed class EventDispatcher<T> : IDisposable
+internal sealed partial class EventDispatcher<T> : IDisposable
     where T : IEvent
 {
     private readonly TopicKey _topicKey;
@@ -42,7 +42,7 @@ internal sealed class EventDispatcher<T> : IDisposable
                 _subject.OnNext(item);
             }
         }
-        _logger.LogDebug("Stopped consuming from topic {TopicKey}", _topicKey);
+        LogStoppedConsuming(_topicKey);
     }
 
     public void Dispose()
@@ -55,4 +55,7 @@ internal sealed class EventDispatcher<T> : IDisposable
         _stopTokenSource?.Cancel();
         _stopTokenSource?.Dispose();
     }
+
+    [LoggerMessage(Level = LogLevel.Debug, Message = "Stopped consuming from topic {TopicKey}")]
+    private partial void LogStoppedConsuming(TopicKey topicKey);
 }

@@ -4,7 +4,7 @@ using UiPath.Platform.Caching.Telemetry;
 
 namespace UiPath.Platform.Caching.Broadcast.Redis;
 
-public sealed class RedisStreamsTopic<T> : ITopic<T>
+public sealed partial class RedisStreamsTopic<T> : ITopic<T>
      where T : IEvent
 {
     private readonly IRedisStreamKeyStrategy _redisStreamKeyStrategy;
@@ -26,7 +26,7 @@ public sealed class RedisStreamsTopic<T> : ITopic<T>
     private readonly object _syncObj = new();
 #endif
     private bool _disposed;
-    private bool _consumerGroupCreated;
+    private volatile bool _consumerGroupCreated;
 
     public TopicKey TopicKey { get; }
 
@@ -98,12 +98,12 @@ public sealed class RedisStreamsTopic<T> : ITopic<T>
                     flags: CommandFlags.DemandMaster).ConfigureAwait(false);
             }, defaultValue: RedisValue.Null, token).ConfigureAwait(false);
             _cachingTelemetryProvider.TrackTopicWriteMetric(_context.Topic!, id);
-            _logger.LogDebug("Published to topic {TopicKey} event {EventId} stream id {StreamId} ", TopicKey, @event.Id,  id);
+            LogPublished(TopicKey, @event.Id, id);
             return !id.IsNull;
         }
         catch (Exception ex)
         {
-            _logger.LogWarning(ex, "Error when publishing to topic {TopicKey} event {EventId}", TopicKey, @event.Id);
+            LogPublishError(ex, TopicKey, @event.Id);
             return false;
         }
     }
@@ -152,7 +152,7 @@ public sealed class RedisStreamsTopic<T> : ITopic<T>
         }
         catch (RedisServerException ex) when (ex.Message == StreamConstants.ConsumerGroupNameExistsErrorMessage)
         {
-            _logger.LogDebug("On Topic {Topic} consumer group {ConsumerGroup} already exists", _context.Topic, _context.ConsumerGroup);
+            LogConsumerGroupExists(_context.Topic, _context.ConsumerGroup);
             return true;
         }
     }
@@ -176,4 +176,13 @@ public sealed class RedisStreamsTopic<T> : ITopic<T>
             EmitStreamReceivedEvent: options.EmitStreamReceivedEvent
             );
     }
+
+    [LoggerMessage(Level = LogLevel.Debug, Message = "Published to topic {TopicKey} event {EventId} stream id {StreamId}")]
+    private partial void LogPublished(TopicKey topicKey, string? eventId, RedisValue streamId);
+
+    [LoggerMessage(Level = LogLevel.Warning, Message = "Error when publishing to topic {TopicKey} event {EventId}")]
+    private partial void LogPublishError(Exception ex, TopicKey topicKey, string? eventId);
+
+    [LoggerMessage(Level = LogLevel.Debug, Message = "On Topic {Topic} consumer group {ConsumerGroup} already exists")]
+    private partial void LogConsumerGroupExists(RedisKey topic, RedisValue consumerGroup);
 }

@@ -1,6 +1,6 @@
 ﻿namespace UiPath.Platform.Caching;
 
-public sealed class CacheEventPublisher
+public sealed partial class CacheEventPublisher
 {
     private readonly string _cacheName;
     private readonly ITopicProvider _topicProvider;
@@ -46,7 +46,7 @@ public sealed class CacheEventPublisher
 
     private async ValueTask<bool> RaiseEventAsync(TopicKey topicKey, CacheKey cacheKey, string eventType, IDictionary<string, object?>? properties = null)
     {
-        _logger.LogDebug("Raise {EventType} on topicKey {TopicKey} for key {CacheKey}", eventType, topicKey, cacheKey);
+        LogRaiseEvent(eventType, topicKey, cacheKey);
         var data = new CacheEventData(cacheKey)
         {
             Properties = properties
@@ -55,4 +55,7 @@ public sealed class CacheEventPublisher
         var topic = _topicProvider.Create(topicKey);
         return await topic.PublishAsync(ev, CancellationToken.None).ConfigureAwait(false);
     }
+
+    [LoggerMessage(Level = LogLevel.Debug, Message = "Raise {EventType} on topicKey {TopicKey} for key {CacheKey}")]
+    private partial void LogRaiseEvent(string eventType, TopicKey topicKey, CacheKey cacheKey);
 }

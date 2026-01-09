@@ -4,9 +4,8 @@ using UiPath.Platform.Caching.Telemetry;
 
 namespace UiPath.Platform.Caching.Redis;
 
-public sealed class RedisCache : RedisCacheBase, ICache
+public sealed partial class RedisCache : RedisCacheBase, ICache
 {
-    private const string LogWarnMessage = "RedisCache exception.";
 
     private readonly ISerializerProxy<RedisValue> _serializer;
     private readonly ILogger<RedisCache> _logger;
@@ -85,7 +84,7 @@ public sealed class RedisCache : RedisCacheBase, ICache
         var redisKey = ToRedisKey(cacheKey, token);
         expiration = _clock.ToDateTimeOffset(expiration);
 
-        _logger.LogTrace("Refreshing key {RedisKey} at expiration {Expiration}", redisKey, expiration);
+        LogRefreshingKey(redisKey, expiration);
         var ret = false;
         var operation = StartOperation<T>();
         try
@@ -111,7 +110,7 @@ public sealed class RedisCache : RedisCacheBase, ICache
         catch (Exception ex)
         {
             operation.Stop();
-            _logger.LogWarning(ex, LogWarnMessage);
+            LogRedisCacheException(ex);
         }
         finally
         {
@@ -184,7 +183,7 @@ public sealed class RedisCache : RedisCacheBase, ICache
         catch (Exception ex)
         {
             operation.Stop();
-            _logger.LogWarning(ex, LogWarnMessage);
+            LogRedisCacheException(ex);
         }
         finally
         {
@@ -211,7 +210,7 @@ public sealed class RedisCache : RedisCacheBase, ICache
         catch (Exception ex)
         {
             operation.Stop();
-            _logger.LogWarning(ex, LogWarnMessage);
+            LogRedisCacheException(ex);
         }
         finally
         {
@@ -246,7 +245,7 @@ public sealed class RedisCache : RedisCacheBase, ICache
         catch (Exception ex)
         {
             operation.Stop();
-            _logger.LogWarning(ex, LogWarnMessage);
+            LogRedisCacheException(ex);
         }
         finally
         {
@@ -265,7 +264,7 @@ public sealed class RedisCache : RedisCacheBase, ICache
             return ret;
         }
 
-        _logger.LogDebug("Cache missed. generating new {RedisKey}", redisKey);
+        LogCacheMissed(redisKey);
         ret = await generator(token).ConfigureAwait(false);
 
         if (!IsDefault(ret))
@@ -310,7 +309,7 @@ public sealed class RedisCache : RedisCacheBase, ICache
         catch (Exception ex)
         {
             operation.Stop();
-            _logger.LogWarning(ex, LogWarnMessage);
+            LogRedisCacheException(ex);
         }
         finally
         {
@@ -361,7 +360,7 @@ public sealed class RedisCache : RedisCacheBase, ICache
         catch (Exception ex)
         {
             operation.Stop();
-            _logger.LogWarning(ex, LogWarnMessage);
+            LogRedisCacheException(ex);
         }
         finally
         {
@@ -389,7 +388,7 @@ public sealed class RedisCache : RedisCacheBase, ICache
         catch (Exception ex)
         {
             operation.Stop();
-            _logger.LogWarning(ex, LogWarnMessage);
+            LogRedisCacheException(ex);
         }
         finally
         {
@@ -417,7 +416,7 @@ public sealed class RedisCache : RedisCacheBase, ICache
         catch (Exception ex)
         {
             operation.Stop();
-            _logger.LogWarning(ex, LogWarnMessage);
+            LogRedisCacheException(ex);
         }
         finally
         {
@@ -452,7 +451,7 @@ public sealed class RedisCache : RedisCacheBase, ICache
         catch (Exception ex)
         {
             operation.Stop();
-            _logger.LogWarning(ex, LogWarnMessage);
+            LogRedisCacheException(ex);
         }
         finally
         {
@@ -500,7 +499,7 @@ public sealed class RedisCache : RedisCacheBase, ICache
         catch (Exception ex)
         {
             operation.Stop();
-            _logger.LogWarning(ex, LogWarnMessage);
+            LogRedisCacheException(ex);
             retValues = GetDefaultValues<T>(keys);
         }
         finally
@@ -536,7 +535,19 @@ public sealed class RedisCache : RedisCacheBase, ICache
         var valueLen = value.Length();
         if (valueLen > _largeValueThreshold)
         {
-            _logger.LogWarning("Redis large value detected for key {RedisKey}, length {Length}", key, valueLen);
+            LogLargeValueDetected(key, valueLen);
         }
     }
+
+    [LoggerMessage(Level = LogLevel.Trace, Message = "Refreshing key {RedisKey} at expiration {Expiration}")]
+    private partial void LogRefreshingKey(RedisKey redisKey, DateTimeOffset? expiration);
+
+    [LoggerMessage(Level = LogLevel.Warning, Message = "RedisCache exception.")]
+    private partial void LogRedisCacheException(Exception ex);
+
+    [LoggerMessage(Level = LogLevel.Debug, Message = "Cache missed. generating new {RedisKey}")]
+    private partial void LogCacheMissed(RedisKey redisKey);
+
+    [LoggerMessage(Level = LogLevel.Warning, Message = "Redis large value detected for key {RedisKey}, length {Length}")]
+    private partial void LogLargeValueDetected(RedisKey redisKey, long length);
 }

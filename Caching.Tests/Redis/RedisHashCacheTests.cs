@@ -1,4 +1,5 @@
 ﻿using Microsoft.Extensions.Internal;
+using Microsoft.Extensions.Logging;
 using Newtonsoft.Json;
 using NSubstitute.ExceptionExtensions;
 using StackExchange.Redis;
@@ -27,6 +28,7 @@ public class RedisHashCacheTests(ITestContextAccessor testContextAccessor) : IAs
     private IRedisConnector _connector = default!;
     private bool _isConnected = true;
     private Version _version = new(6, 0);
+    private ILogger<RedisHashCache> _logger = default!;
     private RedisHashCache? _sut = null;
 
     private RedisHashCache Sut => _sut ??= _fixture.Create<RedisHashCache>();
@@ -70,6 +72,7 @@ public class RedisHashCacheTests(ITestContextAccessor testContextAccessor) : IAs
 
         var actual = await Sut.GetItemAsync<string>(_cacheKey, field, token: testContextAccessor.Current.CancellationToken);
         actual.Should().BeNull();
+        _logger.ReceivedCalls().Should().Contain(c => c.GetMethodInfo().Name == "Log" && (LogLevel)c.GetArguments()[0]! == LogLevel.Warning);
     }
 
     [Fact]
@@ -413,6 +416,7 @@ public class RedisHashCacheTests(ITestContextAccessor testContextAccessor) : IAs
 
         await Sut.RefreshAsync<string>(_cacheKey, expiration, testContextAccessor.Current.CancellationToken);
         fieldsCalled.Should().BeTrue();
+        _logger.ReceivedCalls().Should().Contain(c => c.GetMethodInfo().Name == "Log" && (LogLevel)c.GetArguments()[0]! == LogLevel.Trace);
         var expectedTime = expirationMinutes.HasValue
             ? _clock.UtcNow.AddMinutes(expirationMinutes.Value).UtcDateTime
             : _clock.UtcNow.Add(_redisCacheOptions.DefaultExpiration ?? TimeSpan.MinValue).UtcDateTime;
@@ -931,6 +935,8 @@ public class RedisHashCacheTests(ITestContextAccessor testContextAccessor) : IAs
         _transaction = _fixture.Freeze<ITransaction>();
         _clock = _fixture.Freeze<ISystemClock>();
         _clock.UtcNow.Returns(c => _now);
+        _logger = _fixture.Freeze<ILogger<RedisHashCache>>();
+        _logger.IsEnabled(Arg.Any<LogLevel>()).Returns(true);
         _pipelineHolder = _fixture.Freeze<IResiliencePipelineHolder>();
         var resiliencePipeline = new EmptyResiliencePipeline();
         _pipelineHolder.Read.Returns(resiliencePipeline);

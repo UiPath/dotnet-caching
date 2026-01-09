@@ -18,16 +18,19 @@ internal static class MetricExtensions
         {
             return StreamId.Invalid;
         }
-        var streamIdParts = value.Split('-');
-        if (streamIdParts.Length != 2)
+
+        ReadOnlySpan<char> span = value.AsSpan();
+        int separatorIndex = span.IndexOf('-');
+        if (separatorIndex < 0 || separatorIndex == span.Length - 1)
         {
             return StreamId.Invalid;
         }
-        if (!long.TryParse(streamIdParts[0], out long timestamp))
+
+        if (!long.TryParse(span[..separatorIndex], out long timestamp))
         {
             return StreamId.Invalid;
         }
-        if (!long.TryParse(streamIdParts[1], out long sequence))
+        if (!long.TryParse(span[(separatorIndex + 1)..], out long sequence))
         {
             return StreamId.Invalid;
         }

@@ -1,5 +1,6 @@
 ﻿using Microsoft.Extensions.Caching.Memory;
 using Microsoft.Extensions.Internal;
+using Microsoft.Extensions.Logging;
 using NSubstitute.ExceptionExtensions;
 using UiPath.Platform.Caching;
 using UiPath.Platform.Caching.Tests.Broadcast;
@@ -28,6 +29,7 @@ public class MultilayerCacheTests(ITestContextAccessor testContextAccessor) : IA
     private CacheKey _innerCacheKey = default!;
     private CacheKey _multiKey = default!;
     private CacheKey _innerMultiKey = default!;
+    private ILogger _logger = default!;
 
     private MultilayerCache? _sut = null;
 
@@ -45,6 +47,7 @@ public class MultilayerCacheTests(ITestContextAccessor testContextAccessor) : IA
         _changeTokenFactory.Received(1).Create(_innerCacheKey, Arg.Any<ITopic<ICacheEvent>>(), Arg.Any<string>(), Arg.Any<Type>());
         _memoryCache.Received(1).CreateEntry(_innerCacheKey);
         actual.Should().Be(expected);
+        _logger.ReceivedCalls().Should().Contain(c => c.GetMethodInfo().Name == "Log" && (LogLevel)c.GetArguments()[0]! == LogLevel.Trace);
     }
 
     [Fact]
@@ -60,6 +63,7 @@ public class MultilayerCacheTests(ITestContextAccessor testContextAccessor) : IA
         var actual = await Sut.GetAsync<string>(_cacheKey, token: testContextAccessor.Current.CancellationToken);
         actual.Should().Be(expected);
         await _innerCache.DidNotReceive().GetAsync<string>(_innerCacheKey, Arg.Any<CancellationToken>());
+        _logger.ReceivedCalls().Should().Contain(c => c.GetMethodInfo().Name == "Log" && (LogLevel)c.GetArguments()[0]! == LogLevel.Trace);
     }
 
     [Fact]
@@ -183,6 +187,7 @@ public class MultilayerCacheTests(ITestContextAccessor testContextAccessor) : IA
         _memoryCache.Received(innerCacheSet ? 1 : 0).CreateEntry(_innerCacheKey);
         await _innerCache.Received(1).SetAsync(_innerCacheKey, Arg.Any<string>(), Arg.Any<DateTimeOffset>(), Arg.Any<CancellationToken>());
         actual.Should().Be(generatorExpected);
+        _logger.ReceivedCalls().Should().Contain(c => c.GetMethodInfo().Name == "Log" && (LogLevel)c.GetArguments()[0]! == LogLevel.Debug);
     }
 
     [Fact]
@@ -235,6 +240,8 @@ public class MultilayerCacheTests(ITestContextAccessor testContextAccessor) : IA
         var value = _fixture.Create<string>();
         _innerCache.GetAsync<string>(_innerCacheKey, Arg.Any<CancellationToken>())
             .Returns(default(string?));
+        _innerCache.SetAsync(_innerCacheKey, Arg.Any<string>(), Arg.Any<DateTimeOffset>(), Arg.Any<CancellationToken>())
+            .Returns(true);
         _topic.PublishAsync(Arg.Any<ICacheEvent>(), Arg.Any<CancellationToken>())
             .Returns(_ => true);
 
@@ -486,8 +493,10 @@ public class MultilayerCacheTests(ITestContextAccessor testContextAccessor) : IA
         }));
 
         var expected = _fixture.Create<string>();
-        _innerCache.GetAsync<string>(_innerCacheKey, Arg.Any<CancellationToken>())
-            .Returns(expected);
+        _innerCache.GetAsync<string>(Arg.Is<CacheKey[]>(k => k.Contains(_innerCacheKey)), Arg.Any<CancellationToken>())
+            .Returns(new KeyValuePair<CacheKey, string?>[] { new(_innerCacheKey, expected) });
+        _innerCache.RemoveAsync<string>(Arg.Any<CacheKey[]>(), Arg.Any<CancellationToken>())
+            .Returns(true);
         var token = new TestChangeToken
         {
             ActiveChangeCallbacks = true,
@@ -687,6 +696,8 @@ public class MultilayerCacheTests(ITestContextAccessor testContextAccessor) : IA
         };
         _changeTokenFactory.Create(Arg.Any<string>(), Arg.Any<ITopic<ICacheEvent>>(), Arg.Any<string>(), Arg.Any<Type>())
             .Returns(token);
+        _innerCache.SetAsync<int?>(_innerCacheKey, Arg.Any<int?>(), Arg.Any<DateTimeOffset?>(), Arg.Any<CancellationToken>())
+            .Returns(true);
 
         var expiration = _clock.UtcNow.AddYears(1);
         _topic.PublishAsync(Arg.Any<ICacheEvent>(), Arg.Any<CancellationToken>())
@@ -711,6 +722,8 @@ public class MultilayerCacheTests(ITestContextAccessor testContextAccessor) : IA
 
         _changeTokenFactory.Create(Arg.Any<string>(), Arg.Any<ITopic<ICacheEvent>>(), Arg.Any<string>(), Arg.Any<Type>())
             .Returns(_ => token);
+        _innerCache.SetAsync<int?>(_innerCacheKey, Arg.Any<int?>(), Arg.Any<DateTimeOffset?>(), Arg.Any<CancellationToken>())
+            .Returns(true);
         _topic.PublishAsync(Arg.Any<ICacheEvent>(), Arg.Any<CancellationToken>())
             .Returns(_ => true);
         var expiration = TimeSpan.FromDays(1);
@@ -1070,6 +1083,8 @@ public class MultilayerCacheTests(ITestContextAccessor testContextAccessor) : IA
         _changeTokenFactory = _fixture.Freeze<IChangeTokenFactory>();
         _memoryCache = _fixture.Freeze<IMemoryCache>();
         _innerCache = _fixture.Freeze<ICache>();
+        _logger = _fixture.Freeze<ILogger>();
+        _logger.IsEnabled(Arg.Any<LogLevel>()).Returns(true);
         _clock = new SystemClock();
         _options = new()
         {

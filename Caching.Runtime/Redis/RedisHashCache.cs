@@ -5,9 +5,8 @@ using UiPath.Platform.Caching.Telemetry;
 
 namespace UiPath.Platform.Caching.Redis;
 
-public sealed class RedisHashCache : RedisCacheBase, IHashCache
+public sealed partial class RedisHashCache : RedisCacheBase, IHashCache
 {
-    private const string LogWarnMessage = "RedisHashCache exception.";
     private readonly ILogger<RedisHashCache> _logger;
     private readonly ISerializerProxy<RedisValue> _serializer;
     private readonly ICacheEntryFactory _cacheEntryFactory;
@@ -91,7 +90,7 @@ public sealed class RedisHashCache : RedisCacheBase, IHashCache
             return ret;
         }
 
-        _logger.LogDebug("Cache missed. generating new {CacheKey}", cacheKey);
+        LogCacheMissed(cacheKey);
         ret = await generator(token).ConfigureAwait(false);
         if (ret.Count > 0)
         {
@@ -124,7 +123,7 @@ public sealed class RedisHashCache : RedisCacheBase, IHashCache
         catch (Exception ex)
         {
             operation.Stop();
-            _logger.LogWarning(ex, LogWarnMessage);
+            LogRedisHashCacheException(ex);
         }
         finally
         {
@@ -145,7 +144,7 @@ public sealed class RedisHashCache : RedisCacheBase, IHashCache
         NotCacheableException.ThrowIfNotCacheable<T>();
         var redisKey = ToRedisKey(cacheKey, token);
         var localExpiration = _clock.ToDateTimeOffset(expiration);
-        _logger.LogTrace("Refreshing key {RedisKey} at expiration {Expiration}", redisKey, localExpiration);
+        LogRefreshingKey(redisKey, localExpiration);
         var ret = false;
         var operation = StartOperation<T>();
         try
@@ -166,7 +165,7 @@ public sealed class RedisHashCache : RedisCacheBase, IHashCache
         catch (Exception ex)
         {
             operation.Stop();
-            _logger.LogWarning(ex, LogWarnMessage);
+            LogRedisHashCacheException(ex);
         }
         finally
         {
@@ -225,7 +224,7 @@ public sealed class RedisHashCache : RedisCacheBase, IHashCache
 
                 if (!ret)
                 {
-                    _logger.LogWarning("Redis transaction failed.");
+                    LogRedisTransactionFailed();
                 }
             }
             operation.Stop();
@@ -233,7 +232,7 @@ public sealed class RedisHashCache : RedisCacheBase, IHashCache
         catch (Exception ex)
         {
             operation.Stop();
-            _logger.LogWarning(ex, LogWarnMessage);
+            LogRedisHashCacheException(ex);
         }
         finally
         {
@@ -261,7 +260,7 @@ public sealed class RedisHashCache : RedisCacheBase, IHashCache
         catch (Exception ex)
         {
             operation.Stop();
-            _logger.LogWarning(ex, LogWarnMessage);
+            LogRedisHashCacheException(ex);
         }
         finally
         {
@@ -330,7 +329,7 @@ public sealed class RedisHashCache : RedisCacheBase, IHashCache
         catch (Exception ex)
         {
             operation.Stop();
-            _logger.LogWarning(ex, LogWarnMessage);
+            LogRedisHashCacheException(ex);
         }
         finally
         {
@@ -365,7 +364,7 @@ public sealed class RedisHashCache : RedisCacheBase, IHashCache
         catch (Exception ex)
         {
             operation.Stop();
-            _logger.LogWarning(ex, LogWarnMessage);
+            LogRedisHashCacheException(ex);
         }
         finally
         {
@@ -420,7 +419,7 @@ public sealed class RedisHashCache : RedisCacheBase, IHashCache
         catch (Exception ex)
         {
             operation.Stop();
-            _logger.LogWarning(ex, LogWarnMessage);
+            LogRedisHashCacheException(ex);
         }
         finally
         {
@@ -519,7 +518,7 @@ public sealed class RedisHashCache : RedisCacheBase, IHashCache
         catch (Exception ex)
         {
             operation.Stop();
-            _logger.LogWarning(ex, LogWarnMessage);
+            LogRedisHashCacheException(ex);
         }
         finally
         {
@@ -560,7 +559,7 @@ public sealed class RedisHashCache : RedisCacheBase, IHashCache
         catch (Exception ex)
         {
             operation.Stop();
-            _logger.LogWarning(ex, LogWarnMessage);
+            LogRedisHashCacheException(ex);
         }
         finally
         {
@@ -607,7 +606,7 @@ public sealed class RedisHashCache : RedisCacheBase, IHashCache
         catch (Exception ex)
         {
             operation.Stop();
-            _logger.LogWarning(ex, LogWarnMessage);
+            LogRedisHashCacheException(ex);
         }
         finally
         {
@@ -643,7 +642,7 @@ public sealed class RedisHashCache : RedisCacheBase, IHashCache
         catch (Exception ex)
         {
             operation.Stop();
-            _logger.LogWarning(ex, LogWarnMessage);
+            LogRedisHashCacheException(ex);
         }
         finally
         {
@@ -695,7 +694,7 @@ public sealed class RedisHashCache : RedisCacheBase, IHashCache
                 }, default, token).ConfigureAwait(false);
                 if (!ret)
                 {
-                    _logger.LogWarning("Redis transaction failed.");
+                    LogRedisTransactionFailed();
                 }
             }
             operation.Stop();
@@ -703,7 +702,7 @@ public sealed class RedisHashCache : RedisCacheBase, IHashCache
         catch (Exception ex)
         {
             operation.Stop();
-            _logger.LogWarning(ex, LogWarnMessage);
+            LogRedisHashCacheException(ex);
         }
         finally
         {
@@ -729,10 +728,15 @@ public sealed class RedisHashCache : RedisCacheBase, IHashCache
 
     private void AuditKeySize(RedisKey key, string field, RedisValue value)
     {
+        if (!_logger.IsEnabled(LogLevel.Warning))
+        {
+            return;
+        }
+
         var valueLen = value.Length();
         if (valueLen > _cacheOptions.LargeValueThreshold)
         {
-            _logger.LogWarning("Redis large value detected for key {RedisKey}, field {Field}, length {Length}", key, field, valueLen);
+            LogLargeValueDetected(key, field, valueLen);
         }
     }
 
@@ -765,6 +769,21 @@ public sealed class RedisHashCache : RedisCacheBase, IHashCache
     }
 
     private static ImmutableDictionary<string, T?> Empty<T>() => ImmutableDictionary<string, T?>.Empty;
-    
+
     private ICacheEntry<IDictionary<string, T?>> Default<T>() => _cacheEntryFactory.Create(Empty<T?>(), DateTimeOffset.MinValue);
+
+    [LoggerMessage(Level = LogLevel.Debug, Message = "Cache missed. generating new {CacheKey}")]
+    private partial void LogCacheMissed(CacheKey cacheKey);
+
+    [LoggerMessage(Level = LogLevel.Trace, Message = "Refreshing key {RedisKey} at expiration {LocalExpiration}")]
+    private partial void LogRefreshingKey(RedisKey redisKey, DateTimeOffset localExpiration);
+
+    [LoggerMessage(Level = LogLevel.Warning, Message = "RedisHashCache exception.")]
+    private partial void LogRedisHashCacheException(Exception ex);
+
+    [LoggerMessage(Level = LogLevel.Warning, Message = "Redis transaction failed.")]
+    private partial void LogRedisTransactionFailed();
+
+    [LoggerMessage(Level = LogLevel.Warning, Message = "Redis large value detected for key {RedisKey}, field {Field}, length {Length}")]
+    private partial void LogLargeValueDetected(RedisKey redisKey, string field, long length);
 }

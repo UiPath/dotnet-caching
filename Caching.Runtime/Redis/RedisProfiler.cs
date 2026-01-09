@@ -6,7 +6,7 @@ using ReactiveDisposable = System.Reactive.Disposables.Disposable;
 namespace UiPath.Platform.Caching.Redis;
 
 
-internal sealed class RedisProfiler : IRedisProfiler, IDisposable
+internal sealed partial class RedisProfiler : IRedisProfiler, IDisposable
 {
     private const string NoSessionId = "(null)";
     private static readonly AsyncLocal<string?> _currentSessionId = new();
@@ -171,7 +171,7 @@ internal sealed class RedisProfiler : IRedisProfiler, IDisposable
     {
         try
         {
-            _logger.LogTrace("Disposing profiling session {SessionId}. Count:{Count}", profileInfo.SessionId, profileInfo.Count);
+            LogDisposingProfilingSession(profileInfo.SessionId, profileInfo.Count);
             foreach (var command in profileInfo.Commands)
             {
                 _profiledCommandProcessor.Process(command, profileInfo.SessionId);
@@ -179,7 +179,7 @@ internal sealed class RedisProfiler : IRedisProfiler, IDisposable
         }
         catch (Exception ex)
         {
-            _logger.LogWarning(ex, "Failed to process redis profiled commands in {SessionId}", profileInfo.SessionId);
+            LogFailedToProcessProfiledCommands(ex, profileInfo.SessionId);
         }
 
     }
@@ -214,4 +214,10 @@ internal sealed class RedisProfiler : IRedisProfiler, IDisposable
 
         public int Count { get; set; }
     }
+
+    [LoggerMessage(Level = LogLevel.Trace, Message = "Disposing profiling session {SessionId}. Count:{Count}")]
+    private partial void LogDisposingProfilingSession(string? sessionId, int count);
+
+    [LoggerMessage(Level = LogLevel.Warning, Message = "Failed to process redis profiled commands in {SessionId}")]
+    private partial void LogFailedToProcessProfiledCommands(Exception ex, string? sessionId);
 }
