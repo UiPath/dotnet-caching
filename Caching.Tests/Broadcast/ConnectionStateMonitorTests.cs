@@ -28,7 +28,7 @@ public class ConnectionStateMonitorTests : IAsyncLifetime
         Sut.IsConnected.Should().BeFalse();
     }
 
-    [Fact(Skip = "Flaky")]
+    [Fact]
     public async Task Works_as_expected_when_no_events()
     {
         var _isConnected0 = false;
@@ -37,7 +37,14 @@ public class ConnectionStateMonitorTests : IAsyncLifetime
         _connectionStates[1].IsConnected.Returns(_ => _isConnected1);
         Sut.IsConnected.Should().BeFalse();
         _isConnected0 = true;
-        await Task.Delay(300);
+
+        var timeout = TimeSpan.FromSeconds(5);
+        var stopwatch = System.Diagnostics.Stopwatch.StartNew();
+        while (!Sut.IsConnected && stopwatch.Elapsed < timeout)
+        {
+            await Task.Delay(50);
+        }
+
         Sut.IsConnected.Should().BeTrue();
     }
 
