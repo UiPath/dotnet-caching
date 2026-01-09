@@ -7,7 +7,7 @@ using UiPath.Platform.Caching.Policies;
 
 namespace UiPath.Platform.Caching.Tests.Redis;
 
-public class RedisCacheTests : IAsyncLifetime
+public class RedisCacheTests(ITestContextAccessor testContextAccessor) : IAsyncLifetime
 {
     private readonly IFixture _fixture = AutoFixtureCreator.NSubstitute();
     private ISystemClock _clock = default!;
@@ -40,7 +40,7 @@ public class RedisCacheTests : IAsyncLifetime
             {
                 return _serializer.Serialize(expectedValue);
             });
-        var actualValue = await Sut.GetAsync<string>(_cacheKey);
+        var actualValue = await Sut.GetAsync<string>(_cacheKey, testContextAccessor.Current.CancellationToken);
         actualValue.Should().Be(expectedValue);
         Sut.Name.Should().Be("Redis");
     }
@@ -55,7 +55,7 @@ public class RedisCacheTests : IAsyncLifetime
             {
                 return _serializer.Serialize(value);
             });
-        var actualValue = await Sut.GetAsync<string>(_cacheKey);
+        var actualValue = await Sut.GetAsync<string>(_cacheKey, testContextAccessor.Current.CancellationToken);
         actualValue.Should().Be(null);
     }
 
@@ -64,7 +64,7 @@ public class RedisCacheTests : IAsyncLifetime
     {
         _database.StringGetAsync(Arg.Any<RedisKey>(), Arg.Any<CommandFlags>())
             .ThrowsAsync(new RedisException("test"));
-        var actualValue = await Sut.GetAsync<int?>(_cacheKey);
+        var actualValue = await Sut.GetAsync<int?>(_cacheKey, testContextAccessor.Current.CancellationToken);
         actualValue.Should().Be(default(int?));
     }
 
@@ -77,7 +77,7 @@ public class RedisCacheTests : IAsyncLifetime
             {
                 return new RedisValue[] { _serializer.Serialize(expectedValue), _serializer.Serialize(expectedValue) };
             });
-        var actualValue = await Sut.GetAsync<string>(new CacheKey[] { _cacheKey, _multiKey });
+        var actualValue = await Sut.GetAsync<string>(new CacheKey[] { _cacheKey, _multiKey }, testContextAccessor.Current.CancellationToken);
         actualValue.Should().BeEquivalentTo(new KeyValuePair<CacheKey, string>[] { new(_cacheKey, expectedValue), new(_multiKey, expectedValue) });
     }
 
@@ -86,7 +86,7 @@ public class RedisCacheTests : IAsyncLifetime
     {
         _database.StringGetAsync(Arg.Any<RedisKey[]>(), Arg.Any<CommandFlags>())
             .ThrowsAsync(new RedisException("test"));
-        var actualValue = await Sut.GetAsync<int?>(new CacheKey[] { _cacheKey, _multiKey });
+        var actualValue = await Sut.GetAsync<int?>(new CacheKey[] { _cacheKey, _multiKey }, testContextAccessor.Current.CancellationToken);
         actualValue.Should().BeEquivalentTo(new KeyValuePair<CacheKey, int?>[] { new(_cacheKey, default), new(_multiKey, default) });
     }
 
@@ -116,7 +116,7 @@ public class RedisCacheTests : IAsyncLifetime
     public async Task GetOrAdd_null_generator()
     {
         Func<CancellationToken, Task<string?>> generator = default!;
-        Func<Task> act = async () => await Sut.GetOrAddAsync(_fixture.Create<string>(), generator, CancellationToken.None);
+        Func<Task> act = async () => await Sut.GetOrAddAsync(_fixture.Create<string>(), generator, testContextAccessor.Current.CancellationToken);
         await act.Should().ThrowAsync<ArgumentNullException>();
     }
 
@@ -125,7 +125,7 @@ public class RedisCacheTests : IAsyncLifetime
     {
         var expectedValue = _fixture.Create<string?>();
         Func<CancellationToken, Task<string?>> generator = _ => Task.FromResult(expectedValue);
-        var actual = await Sut.GetOrAddAsync(_fixture.Create<string>(), generator, TimeSpan.FromSeconds(5), CancellationToken.None);
+        var actual = await Sut.GetOrAddAsync(_fixture.Create<string>(), generator, TimeSpan.FromSeconds(5), testContextAccessor.Current.CancellationToken);
         actual.Should().Be(expectedValue);
     }
 
@@ -141,7 +141,7 @@ public class RedisCacheTests : IAsyncLifetime
                 called = true;
                 return Task.FromResult(_fixture.Create<bool>());
             });
-        await Sut.RefreshAsync<string>(_cacheKey, expiration);
+        await Sut.RefreshAsync<string>(_cacheKey, expiration, testContextAccessor.Current.CancellationToken);
         called.Should().BeTrue();
     }
 
@@ -155,7 +155,7 @@ public class RedisCacheTests : IAsyncLifetime
             {
                 return _fixture.Create<bool>();
             });
-        await Sut.RefreshAsync<string>(_cacheKey, expiration);
+        await Sut.RefreshAsync<string>(_cacheKey, expiration, testContextAccessor.Current.CancellationToken);
         await _database.Received(1).KeyExpireAsync(_redisKey, Arg.Any<DateTime>(), Arg.Any<CommandFlags>());
     }
 
@@ -171,7 +171,7 @@ public class RedisCacheTests : IAsyncLifetime
                 actualExpiration = ci.Arg<DateTime?>();
                 return _fixture.Create<bool>();
             });
-        await Sut.RefreshAsync<string>(_cacheKey, CancellationToken.None);
+        await Sut.RefreshAsync<string>(_cacheKey, testContextAccessor.Current.CancellationToken);
         await _database.Received(1).KeyExpireAsync(_redisKey, Arg.Any<DateTime?>(), Arg.Any<CommandFlags>());
         actualExpiration.Should().NotBeNull();
         DateTimeOffset actualOffset = DateTime.SpecifyKind(actualExpiration!.Value, DateTimeKind.Utc);
@@ -188,15 +188,15 @@ public class RedisCacheTests : IAsyncLifetime
         _cacheOptions.DefaultExpiration = null;
         if (expirationType == typeof(TimeSpan))
         {
-            await Sut.RefreshAsync<string>(_cacheKey, default(TimeSpan?), CancellationToken.None);
+            await Sut.RefreshAsync<string>(_cacheKey, default(TimeSpan?), testContextAccessor.Current.CancellationToken);
         }
         else if (expirationType == typeof(DateTimeOffset))
         {
-            await Sut.RefreshAsync<string>(_cacheKey, default(DateTimeOffset?), CancellationToken.None);
+            await Sut.RefreshAsync<string>(_cacheKey, default(DateTimeOffset?), testContextAccessor.Current.CancellationToken);
         }
         else
         {
-            await Sut.RefreshAsync<string>(_cacheKey, CancellationToken.None);
+            await Sut.RefreshAsync<string>(_cacheKey, testContextAccessor.Current.CancellationToken);
         }
 
         await _database.DidNotReceive().KeyExpireAsync(Arg.Any<RedisKey>(), Arg.Any<DateTime?>(), Arg.Any<CommandFlags>());
@@ -213,7 +213,7 @@ public class RedisCacheTests : IAsyncLifetime
                 actualExpiration = ci.Arg<DateTime?>();
                 return _fixture.Create<bool>();
             });
-        await Sut.GetOrAddAsync(_cacheKey, _ => Task.FromResult(_fixture.Create<string?>()), default(DateTimeOffset?), CancellationToken.None);
+        await Sut.GetOrAddAsync(_cacheKey, _ => Task.FromResult(_fixture.Create<string?>()), default(DateTimeOffset?), testContextAccessor.Current.CancellationToken);
         var expectedExpiration = _clock.UtcNow.Add(_cacheOptions.DefaultExpiration!.Value).Subtract(_clock.UtcNow);
 
         await _database.Received(1).StringSetAsync(_redisKey, Arg.Any<RedisValue>(), Arg.Is<TimeSpan?>(t => expectedExpiration == t), When.Always, CommandFlags.DemandMaster);
@@ -231,7 +231,7 @@ public class RedisCacheTests : IAsyncLifetime
                 return _fixture.Create<bool>();
             });
         DateTimeOffset? expiration = _fixture.Create<DateTimeOffset>();
-        await Sut.GetOrAddAsync(_cacheKey, _ => Task.FromResult(_fixture.Create<string?>()), expiration, CancellationToken.None);
+        await Sut.GetOrAddAsync(_cacheKey, _ => Task.FromResult(_fixture.Create<string?>()), expiration, testContextAccessor.Current.CancellationToken);
         var expectedExpiration = expiration.Value.Subtract(_clock.UtcNow);
         await _database.Received(1).StringSetAsync(_redisKey, Arg.Any<RedisValue>(), Arg.Is<TimeSpan?>(t => expectedExpiration == t), When.Always, CommandFlags.DemandMaster);
     }
@@ -260,7 +260,7 @@ public class RedisCacheTests : IAsyncLifetime
                     actualExpiration = ci.Arg<DateTime?>();
                     return new RedisException("test");
                 });
-        await Sut.RefreshAsync<string>(_cacheKey, expiration);
+        await Sut.RefreshAsync<string>(_cacheKey, expiration, testContextAccessor.Current.CancellationToken);
         actualExpiration.GetValueOrDefault().Subtract(_now.UtcDateTime).Should().BeCloseTo(expectedExpiration, TimeSpan.FromSeconds(10));
     }
 
@@ -272,7 +272,7 @@ public class RedisCacheTests : IAsyncLifetime
                 {
                     return new RedisException("test");
                 });
-        var actualResponse = await Sut.RemoveAsync<string>(_cacheKey);
+        var actualResponse = await Sut.RemoveAsync<string>(_cacheKey, testContextAccessor.Current.CancellationToken);
         actualResponse.Should().BeFalse();
     }
 
@@ -282,7 +282,7 @@ public class RedisCacheTests : IAsyncLifetime
         var apiResponse = _fixture.Create<bool>();
         _database.KeyDeleteAsync(_redisKey, CommandFlags.DemandMaster)
                 .Returns(apiResponse);
-        var actualResponse = await Sut.RemoveAsync<string>(_cacheKey);
+        var actualResponse = await Sut.RemoveAsync<string>(_cacheKey, testContextAccessor.Current.CancellationToken);
         actualResponse.Should().Be(true);
     }
 
@@ -294,7 +294,7 @@ public class RedisCacheTests : IAsyncLifetime
                 {
                     return new RedisException("test");
                 });
-        var actualResponse = await Sut.RemoveAsync<string>(new CacheKey[] { _cacheKey });
+        var actualResponse = await Sut.RemoveAsync<string>(new CacheKey[] { _cacheKey }, testContextAccessor.Current.CancellationToken);
         actualResponse.Should().BeFalse();
     }
 
@@ -304,7 +304,7 @@ public class RedisCacheTests : IAsyncLifetime
         var keyDeleteResponse = _fixture.Create<bool>();
         _database.KeyDeleteAsync(_redisKey, CommandFlags.DemandMaster)
                 .Returns(keyDeleteResponse);
-        var actualResponse = await Sut.RemoveAsync<string>(_cacheKey);
+        var actualResponse = await Sut.RemoveAsync<string>(_cacheKey, testContextAccessor.Current.CancellationToken);
         actualResponse.Should().Be(true);
     }
 
@@ -337,7 +337,7 @@ public class RedisCacheTests : IAsyncLifetime
     {
         _isConnected = false;
         var value = _fixture.Create<string>();
-        var actualResponse = await Sut.SetAsync(new KeyValuePair<CacheKey, string?>[] { new(_cacheKey, value), new(_multiKey, value) }, _fixture.Create<TimeSpan>(), CancellationToken.None);
+        var actualResponse = await Sut.SetAsync(new KeyValuePair<CacheKey, string?>[] { new(_cacheKey, value), new(_multiKey, value) }, _fixture.Create<TimeSpan>(), testContextAccessor.Current.CancellationToken);
         actualResponse.Should().BeFalse();
     }
 
@@ -345,7 +345,7 @@ public class RedisCacheTests : IAsyncLifetime
     public async Task Multi_set_when_defaultValue()
     {
         string? value = default;
-        var actualResponse = await Sut.SetAsync(new KeyValuePair<CacheKey, string?>[] { new(_cacheKey, value), new(_multiKey, value) }, _fixture.Create<TimeSpan>(), CancellationToken.None);
+        var actualResponse = await Sut.SetAsync(new KeyValuePair<CacheKey, string?>[] { new(_cacheKey, value), new(_multiKey, value) }, _fixture.Create<TimeSpan>(), testContextAccessor.Current.CancellationToken);
         await _transaction.Received().KeyDeleteAsync(Arg.Any<RedisKey>(),Arg.Is<CommandFlags>(f => f.HasFlag(CommandFlags.DemandMaster)));
     }
 
@@ -354,7 +354,7 @@ public class RedisCacheTests : IAsyncLifetime
     {
         var value = _fixture.Create<string>();
         _database.CreateTransaction(Arg.Any<object?>()).Throws(new RedisException("test"));
-        var actualResponse = await Sut.SetAsync(new KeyValuePair<CacheKey, string?>[] { new(_cacheKey, value), new(_multiKey, value) }, _fixture.Create<TimeSpan>(), CancellationToken.None);
+        var actualResponse = await Sut.SetAsync(new KeyValuePair<CacheKey, string?>[] { new(_cacheKey, value), new(_multiKey, value) }, _fixture.Create<TimeSpan>(), testContextAccessor.Current.CancellationToken);
         actualResponse.Should().BeFalse();
     }
 
@@ -380,7 +380,7 @@ public class RedisCacheTests : IAsyncLifetime
                 {
                     return new RedisException("test");
                 });
-        var actualResponse = await Sut.SetAsync(_cacheKey, value, expiration);
+        var actualResponse = await Sut.SetAsync(_cacheKey, value, expiration, testContextAccessor.Current.CancellationToken);
         actualResponse.Should().BeFalse();
     }
 
@@ -395,7 +395,7 @@ public class RedisCacheTests : IAsyncLifetime
                 {
                     return Task.FromResult(apiResponse);
                 });
-        var actualResponse = await Sut.SetAsync(_cacheKey, value, expiration);
+        var actualResponse = await Sut.SetAsync(_cacheKey, value, expiration, testContextAccessor.Current.CancellationToken);
         actualResponse.Should().Be(true);
     }
 
@@ -411,7 +411,7 @@ public class RedisCacheTests : IAsyncLifetime
                 return Task.FromResult(true);
             });
 
-        var actual = await Sut.ContainsAsync<string>(_cacheKey, CancellationToken.None);
+        var actual = await Sut.ContainsAsync<string>(_cacheKey, testContextAccessor.Current.CancellationToken);
         cacheKeyCalled.Should().BeTrue();
         actual.Should().BeTrue();
     }
@@ -422,7 +422,7 @@ public class RedisCacheTests : IAsyncLifetime
         _database.KeyExistsAsync(Arg.Any<RedisKey>(), CommandFlags.PreferReplica)
             .ThrowsAsync(new Exception());
 
-        var actual = await Sut.ContainsAsync<string>(_cacheKey, CancellationToken.None);
+        var actual = await Sut.ContainsAsync<string>(_cacheKey, testContextAccessor.Current.CancellationToken);
         actual.Should().BeFalse();
     }
 
@@ -437,7 +437,7 @@ public class RedisCacheTests : IAsyncLifetime
                 wasCalled = true;
                 return Task.FromResult(default(DateTime?));
             });
-        var actual = await Sut.ExpireTimeAsync<string>(_cacheKey, CancellationToken.None);
+        var actual = await Sut.ExpireTimeAsync<string>(_cacheKey, testContextAccessor.Current.CancellationToken);
         wasCalled.Should().BeTrue();
         actual.Should().BeNull();
     }
@@ -447,7 +447,7 @@ public class RedisCacheTests : IAsyncLifetime
     {
         _database.KeyTimeToLiveAsync(_redisKey, Arg.Any<CommandFlags>())
             .Returns(default(TimeSpan?));
-        var actual = await Sut.ExpireTimeAsync<string>(_cacheKey, CancellationToken.None);
+        var actual = await Sut.ExpireTimeAsync<string>(_cacheKey, testContextAccessor.Current.CancellationToken);
         await _database.Received(1).KeyTimeToLiveAsync(_redisKey, Arg.Any<CommandFlags>());
         actual.Should().BeNull();
     }
@@ -459,7 +459,7 @@ public class RedisCacheTests : IAsyncLifetime
         DateTimeOffset? expected = _fixture.Create<DateTimeOffset>();
         _database.KeyExpireTimeAsync(_redisKey, Arg.Any<CommandFlags>())
             .Returns((DateTime?)expected.GetValueOrDefault().UtcDateTime);
-        var actual = await Sut.ExpireTimeAsync<string>(_cacheKey, CancellationToken.None);
+        var actual = await Sut.ExpireTimeAsync<string>(_cacheKey, testContextAccessor.Current.CancellationToken);
         await _database.Received(1).KeyExpireTimeAsync(_redisKey, Arg.Any<CommandFlags>());
         actual.Should().Be(expected.GetValueOrDefault());
     }
@@ -470,7 +470,7 @@ public class RedisCacheTests : IAsyncLifetime
         TimeSpan? expected = _fixture.Create<TimeSpan>();
         _database.KeyTimeToLiveAsync(_redisKey, Arg.Any<CommandFlags>())
             .Returns(expected);
-        var actual = await Sut.ExpireTimeAsync<string>(_cacheKey, CancellationToken.None);
+        var actual = await Sut.ExpireTimeAsync<string>(_cacheKey, testContextAccessor.Current.CancellationToken);
         await _database.Received(1).KeyTimeToLiveAsync(_redisKey, Arg.Any<CommandFlags>());
         actual.Should().Be(_clock.UtcNow.Add(expected.Value));
     }
@@ -480,7 +480,7 @@ public class RedisCacheTests : IAsyncLifetime
     {
         _database.KeyTimeToLiveAsync(_redisKey, Arg.Any<CommandFlags>())
             .Returns(default(TimeSpan?));
-        var actual = await Sut.TimeToLiveAsync<string>(_cacheKey, CancellationToken.None);
+        var actual = await Sut.TimeToLiveAsync<string>(_cacheKey, testContextAccessor.Current.CancellationToken);
         await _database.Received(1).KeyTimeToLiveAsync(_redisKey, Arg.Any<CommandFlags>());
         actual.Should().BeNull();
     }
@@ -491,7 +491,7 @@ public class RedisCacheTests : IAsyncLifetime
         TimeSpan? expected = _fixture.Create<TimeSpan>();
         _database.KeyTimeToLiveAsync(_redisKey, Arg.Any<CommandFlags>())
             .Returns(expected);
-        var actual = await Sut.TimeToLiveAsync<string>(_cacheKey, CancellationToken.None);
+        var actual = await Sut.TimeToLiveAsync<string>(_cacheKey, testContextAccessor.Current.CancellationToken);
         await _database.Received(1).KeyTimeToLiveAsync(_redisKey, Arg.Any<CommandFlags>());
         actual.Should().Be(expected.GetValueOrDefault());
     }
@@ -501,7 +501,7 @@ public class RedisCacheTests : IAsyncLifetime
     {
         _database.KeyTimeToLiveAsync(_redisKey, Arg.Any<CommandFlags>())
             .ThrowsAsync<Exception>();
-        var actual = await Sut.TimeToLiveAsync<string>(_cacheKey, CancellationToken.None);
+        var actual = await Sut.TimeToLiveAsync<string>(_cacheKey, testContextAccessor.Current.CancellationToken);
         await _database.Received(1).KeyTimeToLiveAsync(_redisKey, Arg.Any<CommandFlags>());
         actual.Should().Be(null);
     }
@@ -512,7 +512,7 @@ public class RedisCacheTests : IAsyncLifetime
         _version = new(7, 0);
         _database.KeyExpireTimeAsync(_redisKey, Arg.Any<CommandFlags>())
             .ThrowsAsync(new Exception());
-        var actual = await Sut.ExpireTimeAsync<string>(_cacheKey, CancellationToken.None);
+        var actual = await Sut.ExpireTimeAsync<string>(_cacheKey, testContextAccessor.Current.CancellationToken);
         await _database.Received(1).KeyExpireTimeAsync(_redisKey, Arg.Any<CommandFlags>());
         actual.Should().BeNull();
     }
@@ -524,12 +524,12 @@ public class RedisCacheTests : IAsyncLifetime
         act.Should().NotThrow();
     }
 
-    public Task DisposeAsync()
+    public ValueTask DisposeAsync()
     {
-        return Task.CompletedTask;
+        return ValueTask.CompletedTask;
     }
 
-    public Task InitializeAsync()
+    public ValueTask InitializeAsync()
     {
         _prefix = "test";
         _cacheKey = _fixture.Create<string>();
@@ -569,7 +569,7 @@ public class RedisCacheTests : IAsyncLifetime
         _connector.Database.Returns(_ => _database);
         _connector.Version.Returns(_ => _version);
         _connector.IsConnected.Returns(ctx => _isConnected);
-        return Task.CompletedTask;
+        return ValueTask.CompletedTask;
     }
 
     private async Task GetOrAdd_works_as_expected(string? redisReturn, string? generatorReturn, bool expectedGeneratorCall, int stringSetCalls, Type expirationType)
@@ -581,15 +581,15 @@ public class RedisCacheTests : IAsyncLifetime
         string? actualValue = default;
         if (expirationType == typeof(TimeSpan))
         {
-            actualValue = await Sut.GetOrAddAsync(_cacheKey, _ => { generatorWasCalled = true; return Task.FromResult(generatorReturn); }, _fixture.Create<TimeSpan>(), CancellationToken.None);
+            actualValue = await Sut.GetOrAddAsync(_cacheKey, _ => { generatorWasCalled = true; return Task.FromResult(generatorReturn); }, _fixture.Create<TimeSpan>(), testContextAccessor.Current.CancellationToken);
         }
         else if (expirationType == typeof(DateTimeOffset))
         {
-            actualValue = await Sut.GetOrAddAsync(_cacheKey, _ => { generatorWasCalled = true; return Task.FromResult(generatorReturn); }, _clock.UtcNow.Add(TimeSpan.FromSeconds(2)), CancellationToken.None);
+            actualValue = await Sut.GetOrAddAsync(_cacheKey, _ => { generatorWasCalled = true; return Task.FromResult(generatorReturn); }, _clock.UtcNow.Add(TimeSpan.FromSeconds(2)), testContextAccessor.Current.CancellationToken);
         }
         else
         {
-            actualValue = await Sut.GetOrAddAsync(_cacheKey, _ => { generatorWasCalled = true; return Task.FromResult(generatorReturn); }, CancellationToken.None);
+            actualValue = await Sut.GetOrAddAsync(_cacheKey, _ => { generatorWasCalled = true; return Task.FromResult(generatorReturn); }, testContextAccessor.Current.CancellationToken);
         }
         actualValue.Should().Be(redisReturn ?? generatorReturn);
         generatorWasCalled.Should().Be(expectedGeneratorCall);
@@ -606,15 +606,15 @@ public class RedisCacheTests : IAsyncLifetime
         bool? actualResponse = default;
         if (expirationType == typeof(TimeSpan))
         {
-            actualResponse = await Sut.SetAsync(_cacheKey, value, _fixture.Create<TimeSpan>(), CancellationToken.None);
+            actualResponse = await Sut.SetAsync(_cacheKey, value, _fixture.Create<TimeSpan>(), testContextAccessor.Current.CancellationToken);
         }
         else if (expirationType == typeof(DateTimeOffset))
         {
-            actualResponse = await Sut.SetAsync(_cacheKey, value, _fixture.Create<DateTimeOffset>(), CancellationToken.None);
+            actualResponse = await Sut.SetAsync(_cacheKey, value, _fixture.Create<DateTimeOffset>(), testContextAccessor.Current.CancellationToken);
         }
         else
         {
-            actualResponse = await Sut.SetAsync(_cacheKey, value, CancellationToken.None);
+            actualResponse = await Sut.SetAsync(_cacheKey, value, testContextAccessor.Current.CancellationToken);
         }
 
         actualResponse.Should().Be(expectedResponse);
@@ -634,15 +634,15 @@ public class RedisCacheTests : IAsyncLifetime
         bool? actualResponse = default;
         if (expirationType == typeof(TimeSpan))
         {
-            actualResponse = await Sut.SetAsync(new KeyValuePair<CacheKey, string?>[] { new(_cacheKey, value), new(_multiKey, value) }, _fixture.Create<TimeSpan>(), CancellationToken.None);
+            actualResponse = await Sut.SetAsync(new KeyValuePair<CacheKey, string?>[] { new(_cacheKey, value), new(_multiKey, value) }, _fixture.Create<TimeSpan>(), testContextAccessor.Current.CancellationToken);
         }
         else if (expirationType == typeof(DateTimeOffset))
         {
-            actualResponse = await Sut.SetAsync(new KeyValuePair<CacheKey, string?>[] { new(_cacheKey, value), new(_multiKey, value) }, _fixture.Create<DateTimeOffset>(), CancellationToken.None);
+            actualResponse = await Sut.SetAsync(new KeyValuePair<CacheKey, string?>[] { new(_cacheKey, value), new(_multiKey, value) }, _fixture.Create<DateTimeOffset>(), testContextAccessor.Current.CancellationToken);
         }
         else
         {
-            actualResponse = await Sut.SetAsync(new KeyValuePair<CacheKey, string?>[] { new(_cacheKey, value), new(_multiKey, value) }, CancellationToken.None);
+            actualResponse = await Sut.SetAsync(new KeyValuePair<CacheKey, string?>[] { new(_cacheKey, value), new(_multiKey, value) }, testContextAccessor.Current.CancellationToken);
         }
 
         actualResponse.Should().Be(expectedResponse);

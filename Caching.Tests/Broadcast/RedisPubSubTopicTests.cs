@@ -7,7 +7,7 @@ using UiPath.Platform.Caching.Policies;
 
 namespace UiPath.Platform.Caching.Tests.Broadcast;
 
-public class RedisPubSubTopicTests : IAsyncLifetime
+public class RedisPubSubTopicTests(ITestContextAccessor testContextAccessor) : IAsyncLifetime
 {
     private readonly IFixture _fixture = AutoFixtureCreator.NSubstitute();
     private readonly List<ICacheEvent> _onNextMessages = [];
@@ -37,7 +37,7 @@ public class RedisPubSubTopicTests : IAsyncLifetime
             return _sut;
         }
         _sut = _fixture.Create<RedisPubSubTopic<ICacheEvent>>();
-        await Task.Delay(_delay.Multiply(delayMultiplier));
+        await Task.Delay(_delay.Multiply(delayMultiplier), testContextAccessor.Current.CancellationToken);
         return _sut;
     }
 
@@ -46,7 +46,7 @@ public class RedisPubSubTopicTests : IAsyncLifetime
     {
         _isConnected = false;
         var sut = await Sut();
-        var actual = await sut.PublishAsync(new TestCacheEvent());
+        var actual = await sut.PublishAsync(new TestCacheEvent(), testContextAccessor.Current.CancellationToken);
         actual.Should().BeFalse();
         await _database.DidNotReceive().PublishAsync(Arg.Any<RedisChannel>(), Arg.Any<RedisValue>(), Arg.Any<CommandFlags>());
     }
@@ -77,7 +77,7 @@ public class RedisPubSubTopicTests : IAsyncLifetime
         _handler?.Invoke(RedisChannel.Literal(_topicKey.Name), message);
         for (var count = 0; _onNextMessages.Count == 0 && count < 100; count++)
         {
-            await Task.Delay(100.Milliseconds());
+            await Task.Delay(100.Milliseconds(), testContextAccessor.Current.CancellationToken);
         }
         _onNextMessages.FirstOrDefault().Should().BeEquivalentTo(cloudEvent);
         _onCompleted.Should().BeFalse();
@@ -126,7 +126,7 @@ public class RedisPubSubTopicTests : IAsyncLifetime
     {
         var sut = await Sut();
         var disposable = sut.Subscribe(_observer);
-        await Task.Delay(_delay.Multiply(10));
+        await Task.Delay(_delay.Multiply(10), testContextAccessor.Current.CancellationToken);
         _subscriber.Received().Subscribe(Arg.Any<RedisChannel>(), Arg.Any<Action<RedisChannel, RedisValue>>(), Arg.Any<CommandFlags>());
         await _subscriber.DidNotReceive().SubscribeAsync(Arg.Any<RedisChannel>(), Arg.Any<Action<RedisChannel, RedisValue>>(), Arg.Any<CommandFlags>());
         disposable.Should().NotBeNull();
@@ -138,7 +138,7 @@ public class RedisPubSubTopicTests : IAsyncLifetime
     {
         var sut = await Sut(5);
         sut.Dispose();
-        await Task.Delay(_delay.Multiply(10));
+        await Task.Delay(_delay.Multiply(10), testContextAccessor.Current.CancellationToken);
         _subscriber.Received().Unsubscribe(Arg.Any<RedisChannel>(), Arg.Any<Action<RedisChannel, RedisValue>?>(), Arg.Any<CommandFlags>());
         _topicKey.Name.Should().BeEquivalentTo(_actualRedisChannel);
     }
@@ -160,7 +160,7 @@ public class RedisPubSubTopicTests : IAsyncLifetime
                 executed = true;
                 return _fixture.Create<long>();
             });
-        await sut.PublishAsync(cloudEvent);
+        await sut.PublishAsync(cloudEvent, testContextAccessor.Current.CancellationToken);
         executed.Should().BeTrue();
     }
 
@@ -202,12 +202,12 @@ public class RedisPubSubTopicTests : IAsyncLifetime
     }
 
 
-    public Task DisposeAsync()
+    public ValueTask DisposeAsync()
     {
-        return Task.CompletedTask;
+        return ValueTask.CompletedTask;
     }
 
-    public Task InitializeAsync()
+    public ValueTask InitializeAsync()
     {
         _database = _fixture.Freeze<IDatabase>();
 
@@ -254,6 +254,6 @@ public class RedisPubSubTopicTests : IAsyncLifetime
 
         _fixture.Inject<IConnectionState>(_redisConnector);
 
-        return Task.CompletedTask;
+        return ValueTask.CompletedTask;
     }
 }

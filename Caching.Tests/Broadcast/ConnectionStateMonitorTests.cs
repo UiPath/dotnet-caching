@@ -1,6 +1,6 @@
 ﻿namespace UiPath.Platform.Caching.Tests.Broadcast;
 
-public class ConnectionStateMonitorTests : IAsyncLifetime
+public class ConnectionStateMonitorTests(ITestContextAccessor testContextAccessor) : IAsyncLifetime
 {
     private readonly IFixture _fixture = AutoFixtureCreator.NSubstitute();
     private IConnectionState[] _connectionStates = default!;
@@ -42,7 +42,7 @@ public class ConnectionStateMonitorTests : IAsyncLifetime
         var stopwatch = System.Diagnostics.Stopwatch.StartNew();
         while (!Sut.IsConnected && stopwatch.Elapsed < timeout)
         {
-            await Task.Delay(50);
+            await Task.Delay(50, testContextAccessor.Current.CancellationToken);
         }
 
         Sut.IsConnected.Should().BeTrue();
@@ -55,17 +55,17 @@ public class ConnectionStateMonitorTests : IAsyncLifetime
         act.Should().NotThrow();
     }
 
-    public Task DisposeAsync()
+    public ValueTask DisposeAsync()
     {
-        return Task.CompletedTask;
+        return ValueTask.CompletedTask;
     }
 
-    public Task InitializeAsync()
+    public ValueTask InitializeAsync()
     {
         _connectionStates = _fixture.CreateMany<IConnectionState>(2).ToArray();
         _fixture.Inject(_connectionStates);
         _fixture.Inject(TimeSpan.FromMilliseconds(100));
-        return Task.CompletedTask;
+        return ValueTask.CompletedTask;
     }
 }
 

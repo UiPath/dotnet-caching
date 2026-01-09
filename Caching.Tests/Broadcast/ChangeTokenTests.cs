@@ -219,12 +219,12 @@ public class ChangeTokenTests : IAsyncLifetime
         disposable.Received(1).Dispose();
     }
 
-    public Task DisposeAsync()
+    public ValueTask DisposeAsync()
     {
-        return Task.CompletedTask;
+        return ValueTask.CompletedTask;
     }
 
-    public Task InitializeAsync()
+    public ValueTask InitializeAsync()
     {
         _key = _fixture.Freeze<string>();
         _topicKey = (TopicKey)_fixture.Create<string>();
@@ -234,7 +234,7 @@ public class ChangeTokenTests : IAsyncLifetime
         _formatter = new CacheClearEventFormatterProxy();
         _serializer = new SystemJsonSerializerProxy();
         _fixture.Inject<IEventFormatterProxy<ICacheEvent>>(_formatter);
-        return Task.CompletedTask;
+        return ValueTask.CompletedTask;
     }
 
     public static IEnumerable<object[]> InvalidEvents() => new TestCacheEvent[]

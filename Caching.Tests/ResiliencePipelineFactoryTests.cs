@@ -6,7 +6,7 @@ using Polly.Timeout;
 using UiPath.Platform.Caching.Polly;
 
 namespace UiPath.Platform.Caching.Tests;
-public class ResiliencePipelineFactoryTest : IAsyncLifetime
+public class ResiliencePipelineFactoryTest(ITestContextAccessor testContextAccessor) : IAsyncLifetime
 {
     private readonly IFixture _fixture = AutoFixtureCreator.NSubstitute();
 
@@ -141,7 +141,7 @@ public class ResiliencePipelineFactoryTest : IAsyncLifetime
         {
             try
             {
-                actual = await pipeline.ExecuteAsync(exceptionFunc);
+                actual = await pipeline.ExecuteAsync(exceptionFunc, testContextAccessor.Current.CancellationToken);
                 if(actual is not null)
                 {
                     break;
@@ -154,12 +154,12 @@ public class ResiliencePipelineFactoryTest : IAsyncLifetime
         }
         actual.Should().BeFalse();
         actual = null;
-        await Task.Delay(250);
+        await Task.Delay(250, testContextAccessor.Current.CancellationToken);
         for (int i = 0; i < 4; i++)
         {
-            await Task.Delay(100);
+            await Task.Delay(100, testContextAccessor.Current.CancellationToken);
             //we are in a circuit breaker state => no exception is thrown, returning default value
-            actual = await pipeline.ExecuteAsync(successFunc);
+            actual = await pipeline.ExecuteAsync(successFunc, testContextAccessor.Current.CancellationToken);
             if(actual == true)
             {
                 // circuit breaker is closed
@@ -188,12 +188,12 @@ public class ResiliencePipelineFactoryTest : IAsyncLifetime
         pipeline.Should().NotBeNull();
     }
 
-    public Task DisposeAsync()
+    public ValueTask DisposeAsync()
     {
-        return Task.CompletedTask;
+        return ValueTask.CompletedTask;
     }
 
-    public Task InitializeAsync()
+    public ValueTask InitializeAsync()
     {
         _telemetryOptions = new TelemetryOptions
         {
@@ -205,6 +205,6 @@ public class ResiliencePipelineFactoryTest : IAsyncLifetime
         _loggerFactory = _fixture.Freeze<ILoggerFactory>();
         _boolLogger = _fixture.Freeze<ILogger<ResiliencePipeline<bool>>>();
         _loggerFactory.CreateLogger(Arg.Any<string>()).ReturnsForAnyArgs(_boolLogger);
-        return Task.CompletedTask;
+        return ValueTask.CompletedTask;
     }
 }

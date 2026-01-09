@@ -182,12 +182,12 @@ public class RedisStreamSubjectWriterTests : IAsyncLifetime
         act.Should().NotThrow();
     }
 
-    public Task DisposeAsync()
+    public ValueTask DisposeAsync()
     {
-        return Task.CompletedTask;
+        return ValueTask.CompletedTask;
     }
 
-    public Task InitializeAsync()
+    public ValueTask InitializeAsync()
     {
         _topic = _fixture.Create<string>();
         _fieldName = _fixture.Create<string>();
@@ -211,6 +211,6 @@ public class RedisStreamSubjectWriterTests : IAsyncLifetime
         redisConnector.Database.Returns(_database);
 
         _fixture.Inject(_formatter);
-        return Task.CompletedTask;
+        return ValueTask.CompletedTask;
     }
 }

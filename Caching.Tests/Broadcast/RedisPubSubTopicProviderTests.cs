@@ -1,6 +1,6 @@
 ﻿namespace UiPath.Platform.Caching.Tests.Broadcast;
 
-public class RedisPubSubTopicProviderTests : IAsyncLifetime
+public class RedisPubSubTopicProviderTests(ITestContextAccessor testContextAccessor) : IAsyncLifetime
 {
     private readonly IFixture _fixture = AutoFixtureCreator.NSubstitute();
     private RedisPubSubTopicOptions _redisPubSubTopicOptions = default!;
@@ -27,7 +27,7 @@ public class RedisPubSubTopicProviderTests : IAsyncLifetime
         topic.Should().NotBeNull();
         Sut.Keys.Should().NotBeEmpty();
         topic.Dispose();
-        await Task.Delay(100);
+        await Task.Delay(100, testContextAccessor.Current.CancellationToken);
         Sut.Keys.Should().BeEmpty();
     }
 
@@ -49,12 +49,12 @@ public class RedisPubSubTopicProviderTests : IAsyncLifetime
         act.Should().NotThrow();
     }
 
-    public Task DisposeAsync()
+    public ValueTask DisposeAsync()
     {
-        return Task.CompletedTask;
+        return ValueTask.CompletedTask;
     }
 
-    public Task InitializeAsync()
+    public ValueTask InitializeAsync()
     {
         _redisPubSubTopicOptions = _fixture.Create<RedisPubSubTopicOptions>();
         _fixture.Inject(Options.Create(_redisPubSubTopicOptions));
@@ -63,6 +63,6 @@ public class RedisPubSubTopicProviderTests : IAsyncLifetime
         _cacheOptions = _fixture.Create<CacheOptions>();
         _fixture.Inject(Options.Create(_cacheOptions));
 
-        return Task.CompletedTask;
+        return ValueTask.CompletedTask;
     }
 }

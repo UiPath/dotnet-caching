@@ -29,15 +29,15 @@ public class InMemoryRedisCacheProviderTests : IAsyncLifetime
         act.Should().NotThrow();
     }
 
-    public Task DisposeAsync()
+    public ValueTask DisposeAsync()
     {
-        return Task.CompletedTask;
+        return ValueTask.CompletedTask;
     }
 
-    public Task InitializeAsync()
+    public ValueTask InitializeAsync()
     {
         _options = _fixture.Create<InMemoryRedisCacheOptions>();
         _fixture.Inject(Options.Create(_options));
-        return Task.CompletedTask;
+        return ValueTask.CompletedTask;
     }
 }

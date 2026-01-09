@@ -139,12 +139,12 @@ public class MemoryCacheSetterTests : IAsyncLifetime
         _memoryCache.TryGetValue(_cacheKey, out _).Should().BeTrue();
     }
 
-    public Task DisposeAsync()
+    public ValueTask DisposeAsync()
     {
-        return Task.CompletedTask;
+        return ValueTask.CompletedTask;
     }
 
-    public Task InitializeAsync()
+    public ValueTask InitializeAsync()
     {
         _cacheKey = _fixture.Create<string>();
         _topicKey = _fixture.Create<string>();
@@ -185,6 +185,6 @@ public class MemoryCacheSetterTests : IAsyncLifetime
                     Type = c.ArgAt<string>(1),
                 }
             );
-        return Task.CompletedTask;
+        return ValueTask.CompletedTask;
     }
 }

@@ -1,5 +1,5 @@
 ﻿namespace UiPath.Platform.Caching.Tests.Broadcast;
-public class RedisStreamsTopicProviderTests : IAsyncLifetime
+public class RedisStreamsTopicProviderTests(ITestContextAccessor testContextAccessor) : IAsyncLifetime
 {
     private readonly IFixture _fixture = AutoFixtureCreator.NSubstitute();
     private  RedisStreamsTopicOptions _redisStreamsTopicOptions = default!;
@@ -29,7 +29,7 @@ public class RedisStreamsTopicProviderTests : IAsyncLifetime
         topic.Should().NotBeNull();
         Sut.Keys.Should().NotBeEmpty();
         topic.Dispose();
-        await Task.Delay(100);
+        await Task.Delay(100, testContextAccessor.Current.CancellationToken);
         Sut.Keys.Should().BeEmpty();
     }
 
@@ -56,7 +56,7 @@ public class RedisStreamsTopicProviderTests : IAsyncLifetime
     {
         _isConnected = false;
         _redisStreamsTopicOptions.ConnectionMonitorEnabled = false;
-        Sut.OnConnectionFailed += Raise.Event();
+        _redisConnector.OnConnectionFailed += Raise.Event();
         Sut.IsConnected.Should().Be(true);
     }
 
@@ -77,11 +77,11 @@ public class RedisStreamsTopicProviderTests : IAsyncLifetime
         void Sut_OnEvent(object? sender, EventArgs e) => wasCalled = true;
 
         Sut.OnConnectionFailed += Sut_OnEvent;
-        Sut.OnConnectionFailed += Raise.Event();
+        _redisConnector.OnConnectionFailed += Raise.Event();
         wasCalled.Should().Be(true);
         Sut.OnConnectionFailed -= Sut_OnEvent;
         wasCalled = false;
-        Sut.OnConnectionFailed += Raise.Event();
+        _redisConnector.OnConnectionFailed += Raise.Event();
         wasCalled.Should().Be(false);
     }
 
@@ -93,11 +93,11 @@ public class RedisStreamsTopicProviderTests : IAsyncLifetime
         void Sut_OnEvent(object? sender, EventArgs e) => wasCalled = true;
 
         Sut.OnConnectionRestored += Sut_OnEvent;
-        Sut.OnConnectionRestored += Raise.Event();
+        _redisConnector.OnConnectionRestored += Raise.Event();
         wasCalled.Should().Be(true);
         Sut.OnConnectionRestored -= Sut_OnEvent;
         wasCalled = false;
-        Sut.OnConnectionRestored += Raise.Event();
+        _redisConnector.OnConnectionRestored += Raise.Event();
         wasCalled.Should().Be(false);
     }
 
@@ -109,11 +109,11 @@ public class RedisStreamsTopicProviderTests : IAsyncLifetime
         void Sut_OnEvent(object? sender, EventArgs e) => wasCalled = true;
 
         Sut.OnReconnected += Sut_OnEvent;
-        Sut.OnReconnected += Raise.Event();
+        _redisConnector.OnReconnected += Raise.Event();
         wasCalled.Should().Be(true);
         Sut.OnReconnected -= Sut_OnEvent;
         wasCalled = false;
-        Sut.OnReconnected += Raise.Event();
+        _redisConnector.OnReconnected += Raise.Event();
         wasCalled.Should().Be(false);
     }
 
@@ -123,16 +123,16 @@ public class RedisStreamsTopicProviderTests : IAsyncLifetime
     public void ConnectionState_connected_should_be_monitored(bool connected, bool expected)
     {
         _isConnected = connected;
-        Sut.OnConnectionFailed += Raise.Event();
+        _redisConnector.OnConnectionFailed += Raise.Event();
         Sut.IsConnected.Should().Be(expected);
     }
 
-    public Task DisposeAsync()
+    public ValueTask DisposeAsync()
     {
-        return Task.CompletedTask;
+        return ValueTask.CompletedTask;
     }
 
-    public Task InitializeAsync()
+    public ValueTask InitializeAsync()
     {
         _redisStreamsTopicOptions = _fixture.Create<RedisStreamsTopicOptions>();
         _redisStreamsTopicOptions.Enabled = true;
@@ -149,6 +149,6 @@ public class RedisStreamsTopicProviderTests : IAsyncLifetime
 
         _fixture.Inject<IConnectionState>(_redisConnector);
 
-        return Task.CompletedTask;
+        return ValueTask.CompletedTask;
     }
 }

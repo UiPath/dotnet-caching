@@ -45,13 +45,13 @@ public class ProfiledCommandProcessorTest : IAsyncLifetime
         properties.Should().ContainKey(ProfiledCommandProcessor.RetransmissionOfField);
         properties.Should().ContainKey(ProfiledCommandProcessor.RetransmissionReasonField);
     }
-    public Task DisposeAsync()
+    public ValueTask DisposeAsync()
     {
         FetcherLazy = _oldFetcherLazy;
-        return Task.CompletedTask;
+        return ValueTask.CompletedTask;
     }
 
-    public Task InitializeAsync()
+    public ValueTask InitializeAsync()
     {
         _telemetryProvider = _fixture.Freeze<ICachingTelemetryProvider>();
         _profiledCommand = _fixture.Freeze<IProfiledCommand>();
@@ -62,6 +62,6 @@ public class ProfiledCommandProcessorTest : IAsyncLifetime
             Message = cmd => _fixture.Create<string>(),
             ProfiledCommandType = _profiledCommand.GetType()
         });
-        return Task.CompletedTask;
+        return ValueTask.CompletedTask;
     }
 }
