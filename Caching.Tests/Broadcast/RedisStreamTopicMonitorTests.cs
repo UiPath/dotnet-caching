@@ -21,7 +21,7 @@ public class RedisStreamHealthMaintainerTests(ITestContextAccessor testContextAc
     private RedisStreamHealthMaintainer? _sut;
     private bool _ownLock = true;
     private RedisValue _quarantineValue = RedisValue.Null;
-    private bool _successStreamDeleteConsumerGroup = true; 
+    private bool _successStreamDeleteConsumerGroup = true;
 
     private RedisValue[] _streams = ["stream1", "stream2"];
     private ITransaction _transaction = default!;
@@ -59,7 +59,7 @@ public class RedisStreamHealthMaintainerTests(ITestContextAccessor testContextAc
         Sut.Initialize();
         _lastGeneratedId = $"{DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()}-0";
         await Sut.CheckStreamsAsync(testContextAccessor.Current.CancellationToken);
-        await _database.DidNotReceive().ExecuteAsync(Arg.Is<string>(s => s == "DEL"), Arg.Any<ICollection<object>?>(), Arg.Any<CommandFlags>());
+        await _database.DidNotReceive().KeyDeleteAsync(Arg.Any<RedisKey[]>(), Arg.Any<CommandFlags>());
         await _database.DidNotReceive().StreamGroupInfoAsync(Arg.Any<RedisKey>(), CommandFlags.DemandMaster);
     }
 
@@ -69,7 +69,7 @@ public class RedisStreamHealthMaintainerTests(ITestContextAccessor testContextAc
         Sut.Initialize();
         _lastGeneratedId = $"{DateTimeOffset.UtcNow.Subtract(_streamOptions.MaintainerQuarantineInterval).Subtract(TimeSpan.FromMinutes(1)).ToUnixTimeMilliseconds()}-0";
         await Sut.CheckStreamsAsync(testContextAccessor.Current.CancellationToken);
-        await _database.Received().ExecuteAsync(Arg.Is<string>(s => s == "DEL"), Arg.Any<ICollection<object>?>(), Arg.Any<CommandFlags>());
+        await _database.Received().KeyDeleteAsync(Arg.Any<RedisKey[]>(), Arg.Any<CommandFlags>());
         await _database.DidNotReceive().StreamGroupInfoAsync(Arg.Any<RedisKey>(), CommandFlags.DemandMaster);
     }
 
@@ -117,7 +117,6 @@ public class RedisStreamHealthMaintainerTests(ITestContextAccessor testContextAc
         await Sut.CheckStreamsAsync(testContextAccessor.Current.CancellationToken);
         await _database.DidNotReceive().StreamDeleteConsumerGroupAsync(Arg.Any<RedisKey>(), Arg.Any<RedisValue>(), CommandFlags.DemandMaster);
         await _database.Received().HashDeleteAsync(Arg.Any<RedisKey>(), Arg.Any<RedisValue>(), CommandFlags.DemandMaster);
-        await _database.DidNotReceive().ExecuteAsync(Arg.Is<string>(s => s == "XTRIM"), Arg.Any<ICollection<object>?>(), Arg.Any<CommandFlags>());
     }
 
     [Fact]
@@ -132,9 +131,8 @@ public class RedisStreamHealthMaintainerTests(ITestContextAccessor testContextAc
         await Sut.CheckStreamsAsync(testContextAccessor.Current.CancellationToken);
         await _database.DidNotReceive().StreamDeleteConsumerGroupAsync(Arg.Any<RedisKey>(), Arg.Any<RedisValue>(), CommandFlags.DemandMaster);
         await _database.Received().HashDeleteAsync(Arg.Any<RedisKey>(), Arg.Any<RedisValue>(), CommandFlags.DemandMaster);
-        await _database.Received().ExecuteAsync(Arg.Is<string>(s => s == "XTRIM"), Arg.Any<ICollection<object>?>(), Arg.Any<CommandFlags>());
+        await _database.Received().StreamTrimByMinIdAsync(Arg.Any<RedisKey>(), Arg.Any<RedisValue>(), Arg.Any<bool>(), Arg.Any<long?>(), Arg.Any<StreamTrimMode>(), CommandFlags.DemandMaster);
     }
-
 
 
     [Fact]
@@ -147,7 +145,6 @@ public class RedisStreamHealthMaintainerTests(ITestContextAccessor testContextAc
         Func<Task> act = async () => await Sut.CheckStreamsAsync(testContextAccessor.Current.CancellationToken);
         await act.Should().NotThrowAsync();
     }
-
 
     public ValueTask DisposeAsync()
     {
@@ -181,7 +178,7 @@ public class RedisStreamHealthMaintainerTests(ITestContextAccessor testContextAc
 
         _database.StreamInfoAsync(Arg.Any<RedisKey>(), Arg.Any<CommandFlags>())
             .Returns(c => GenerateStreamInfo(_streamGroupInfos.Length));
-        
+
         _database.StreamGroupInfoAsync(Arg.Any<RedisKey>(), Arg.Any<CommandFlags>())
             .Returns(c => _streamGroupInfos);
 
@@ -195,12 +192,6 @@ public class RedisStreamHealthMaintainerTests(ITestContextAccessor testContextAc
                 var entry2 = RedisResult.Create(_streams);
                 return RedisResult.Create([entry1, entry2]);
             });
-
-        _database.ExecuteAsync(Arg.Is<string>(s => s == "DEL"), Arg.Any<ICollection<object>?>(), Arg.Any<CommandFlags>())
-            .Returns(c => RedisResult.Create(true));
-
-        _database.ExecuteAsync(Arg.Is<string>(s => s == "XTRIM"), Arg.Any<ICollection<object>?>(), Arg.Any<CommandFlags>())
-            .Returns(c => RedisResult.Create(_fixture.Create<ulong>()));
 
         _database.HashGetAsync(Arg.Is<RedisKey>(k => k.ToString().Contains("stream", StringComparison.OrdinalIgnoreCase)), Arg.Any<RedisValue>(), CommandFlags.PreferReplica)
             .Returns(c => _quarantineValue);
