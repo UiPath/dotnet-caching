@@ -59,12 +59,12 @@ public class RedisConnectorTests : IAsyncLifetime
         cnn.Should().Be(expected);
     }
 
-    public Task DisposeAsync()
+    public ValueTask DisposeAsync()
     {
-        return Task.CompletedTask;
+        return ValueTask.CompletedTask;
     }
 
-    public Task InitializeAsync()
+    public ValueTask InitializeAsync()
     {
         _telemetryProvider = _fixture.Create<ICachingTelemetryProvider>();
         _profiler = _fixture.Create<IRedisProfiler>();
@@ -77,6 +77,6 @@ public class RedisConnectorTests : IAsyncLifetime
         _fixture.Inject(_redisConfigurationOptionsProvider);
         _connectionMultiplexerFactory = new ConnectionMultiplexerFactory(_redisOptions, _profiler);
         _fixture.Inject(_connectionMultiplexerFactory);
-        return Task.CompletedTask;
+        return ValueTask.CompletedTask;
     }
 }

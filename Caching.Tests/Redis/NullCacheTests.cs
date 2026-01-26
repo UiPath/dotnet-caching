@@ -1,6 +1,6 @@
 ﻿namespace UiPath.Platform.Caching.Tests.Redis;
 
-public class NullCacheTests
+public class NullCacheTests(ITestContextAccessor testContextAccessor)
 {
     private readonly IFixture _fixture = AutoFixtureCreator.NSubstitute();
 
@@ -10,7 +10,7 @@ public class NullCacheTests
         var sut = new NullCache();
         CacheKey cacheKey = _fixture.Create<string>();
         var expected = _fixture.Create<TestDto?>();
-        var actual = await sut.GetOrAddAsync(cacheKey, _ => Task.FromResult(expected), token: default);
+        var actual = await sut.GetOrAddAsync(cacheKey, _ => Task.FromResult(expected), token: testContextAccessor.Current.CancellationToken);
         actual.Should().NotBeNull();
         actual.Should().BeEquivalentTo(expected);
     }
@@ -21,7 +21,7 @@ public class NullCacheTests
         var sut = new NullCache();
         CacheKey cacheKey = _fixture.Create<string>();
         var expected = _fixture.Create<TestDto?>();
-        var actual = await sut.GetOrAddAsync(cacheKey, _ => Task.FromResult(expected), TimeSpan.Zero, token: default);
+        var actual = await sut.GetOrAddAsync(cacheKey, _ => Task.FromResult(expected), TimeSpan.Zero, token: testContextAccessor.Current.CancellationToken);
         actual.Should().NotBeNull();
         actual.Should().BeEquivalentTo(expected);
     }
@@ -32,7 +32,7 @@ public class NullCacheTests
         var sut = new NullCache();
         CacheKey cacheKey = _fixture.Create<string>();
         var expected = _fixture.Create<TestDto?>();
-        var actual = await sut.GetOrAddAsync(cacheKey, _ => Task.FromResult(expected), DateTimeOffset.UtcNow, token: default);
+        var actual = await sut.GetOrAddAsync(cacheKey, _ => Task.FromResult(expected), DateTimeOffset.UtcNow, token: testContextAccessor.Current.CancellationToken);
         actual.Should().NotBeNull();
         actual.Should().BeEquivalentTo(expected);
     }

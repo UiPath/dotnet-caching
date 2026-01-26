@@ -3,7 +3,7 @@ using UiPath.Platform.Caching;
 
 namespace UiPath.Platform.Caching.Tests;
 
-public class InMemoryCacheProviderTests : IAsyncLifetime
+public class InMemoryCacheProviderTests(ITestContextAccessor testContextAccessor) : IAsyncLifetime
 {
     private readonly IFixture _fixture = AutoFixtureCreator.NSubstitute();
     private InMemoryCacheOptions _options = default!;
@@ -67,9 +67,9 @@ public class InMemoryCacheProviderTests : IAsyncLifetime
         var memHashCache = Sut.CreateHashCache();
         memCache.Should().BeOfType<MultilayerCache>();
         memHashCache.Should().BeOfType<MultilayerHashCache>();
-        await memCache.SetAsync(_fixture.Create<string>(), _fixture.Create<string>(), CancellationToken.None);
+        await memCache.SetAsync(_fixture.Create<string>(), _fixture.Create<string>(), testContextAccessor.Current.CancellationToken);
         var values = _fixture.Create<IDictionary<string, string?>>();
-        await memHashCache.SetAsync(_fixture.Create<string>(), values, CancellationToken.None);
+        await memHashCache.SetAsync(_fixture.Create<string>(), values, testContextAccessor.Current.CancellationToken);
         if (enabled)
         {
             topicCallsCount.Should().BeGreaterThan(0);
@@ -94,12 +94,12 @@ public class InMemoryCacheProviderTests : IAsyncLifetime
         act.Should().NotThrow();
     }
 
-    public Task DisposeAsync()
+    public ValueTask DisposeAsync()
     {
-        return Task.CompletedTask;
+        return ValueTask.CompletedTask;
     }
 
-    public Task InitializeAsync()
+    public ValueTask InitializeAsync()
     {
         _options = _fixture.Build<InMemoryCacheOptions>()
             .Without(x => x.SizeLimit)
@@ -108,7 +108,7 @@ public class InMemoryCacheProviderTests : IAsyncLifetime
             .Create();
         _fixture.Inject(Options.Create(_options));
 
-        
-        return Task.CompletedTask;
+
+        return ValueTask.CompletedTask;
     }
 }

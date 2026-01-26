@@ -29,12 +29,12 @@ public class CacheEntryBuilderTests : IAsyncLifetime
         act.Should().Throw<OperationCanceledException>();
     }
 
-    public Task DisposeAsync()
+    public ValueTask DisposeAsync()
     {
-        return Task.CompletedTask;
+        return ValueTask.CompletedTask;
     }
 
-    public Task InitializeAsync()
+    public ValueTask InitializeAsync()
     {
         _cacheKey = _fixture.Create<string>();
         _topicKey = _fixture.Create<string>();
@@ -42,6 +42,6 @@ public class CacheEntryBuilderTests : IAsyncLifetime
         _topicKeyStrategy = _fixture.Create<ITopicKeyStrategy>();
         _cacheKeyStrategy.GetCacheKey<string>(_cacheKey).Returns(_cacheKey);
         _topicKeyStrategy.GetTopicKey<string>().Returns(_topicKey);
-        return Task.CompletedTask;
+        return ValueTask.CompletedTask;
     }
 }

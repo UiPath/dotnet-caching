@@ -4,7 +4,7 @@ using UiPath.Platform.Caching.Telemetry;
 
 namespace UiPath.Platform.Caching.Broadcast.Redis;
 
-public class RedisStreamHealthMaintainer : IHostedService
+public partial class RedisStreamHealthMaintainer : IHostedService
 {
     private readonly IRedisConnector _redis;
     private readonly RedisStreamsTopicOptions _streamOptions;
@@ -113,7 +113,7 @@ public class RedisStreamHealthMaintainer : IHostedService
         }
         catch (Exception ex)
         {
-            _logger.LogError(ex, "Redis stream monitor");
+            LogRedisStreamMonitorError(ex);
             if (ownsLock)
             {
                 try
@@ -161,7 +161,7 @@ public class RedisStreamHealthMaintainer : IHostedService
 
         if (Array.TrueForAll(groupInfos, g => g.ConsumerCount == 0))
         {
-            _logger.LogWarning("Stream {StreamKey} has no consumers", context.StreamKey);
+            LogStreamHasNoConsumers(context.StreamKey);
         }
 
         foreach (var groupInfo in groupInfos)
@@ -174,7 +174,7 @@ public class RedisStreamHealthMaintainer : IHostedService
             long minId = minOffset.ToUnixTimeMilliseconds();
             var result = await Database.ExecuteAsync("XTRIM", [context.StreamKey.ToString(), "MINID", minId], CommandFlags.DemandMaster).ConfigureAwait(false);
             var entriesDeleted = (long)result;
-            _logger.LogWarning("Entries deleted: {Entries} in stream {Stream}. MinId: {MinId}", entriesDeleted, context.StreamKey, minId);
+            LogEntriesDeleted(entriesDeleted, context.StreamKey, minId);
         }
     }
 
@@ -183,13 +183,13 @@ public class RedisStreamHealthMaintainer : IHostedService
         var delete = true;
         if (TryParseDeliveredIdToDatetimeOffset(streamInfo.LastGeneratedId, out var offset) && offset >= _clock.UtcNow.Subtract(_streamOptions.MaintainerQuarantineInterval))
         {
-            _logger.LogWarning("Stream {StreamKey} not deleted, last generated id at {Offset}", context.StreamKey, offset.Value.ToString("O"));
+            LogStreamNotDeleted(context.StreamKey, offset);
             delete = false;
         }
 
         if (delete)
         {
-            _logger.LogWarning("Stream {StreamKey} deleted", context.StreamKey);
+            LogStreamDeleted(context.StreamKey);
             await Database.ExecuteAsync("DEL", [context.StreamKey, context.QuarantineKey], CommandFlags.DemandMaster).ConfigureAwait(false);
         }
     }
@@ -242,7 +242,7 @@ public class RedisStreamHealthMaintainer : IHostedService
                 if (success)
                 {
                     await Database.HashDeleteAsync(context.QuarantineKey, groupInfo.Name, CommandFlags.DemandMaster).ConfigureAwait(false);
-                    _logger.LogWarning("Consumer group {Group} from stream {Stream} deleted", groupInfo.Name, context.StreamKey);
+                    LogConsumerGroupDeleted(groupInfo.Name, context.StreamKey);
                 }
             }
 
@@ -252,7 +252,7 @@ public class RedisStreamHealthMaintainer : IHostedService
             var success = await Database.HashSetAsync(context.QuarantineKey, groupInfo.Name, _clock.UtcNow.ToString("O"), When.Always, CommandFlags.DemandMaster).ConfigureAwait(false);
             if (success)
             {
-                _logger.LogWarning("Consumer group {Group} from stream {Stream} added in quarantine", groupInfo.Name, context.StreamKey);
+                LogConsumerGroupQuarantined(groupInfo.Name, context.StreamKey);
             }
         }
     }
@@ -336,8 +336,10 @@ public class RedisStreamHealthMaintainer : IHostedService
             return false;
         }
 
-        var parts = entryId.Split('-');
-        var timestampPart = parts[0];
+        ReadOnlySpan<char> span = entryId.AsSpan();
+        int separatorIndex = span.IndexOf('-');
+        ReadOnlySpan<char> timestampPart = separatorIndex < 0 ? span : span[..separatorIndex];
+
         try
         {
             if (long.TryParse(timestampPart, NumberStyles.None, CultureInfo.InvariantCulture, out long result) && result > 0)
@@ -349,7 +351,7 @@ public class RedisStreamHealthMaintainer : IHostedService
         }
         catch
         {
-            return false ;
+            return false;
         }
     }
 
@@ -365,7 +367,7 @@ public class RedisStreamHealthMaintainer : IHostedService
     {
         if (result.IsNull || result.Length == 0)
         {
-            return (0, Enumerable.Empty<RedisKey>().ToList());
+            return (0, []);
         }
 
         var pointer = Convert.ToUInt64(result[0].ToString(), CultureInfo.InvariantCulture);
@@ -387,4 +389,25 @@ public class RedisStreamHealthMaintainer : IHostedService
     }
 
     private sealed record StreamContext(RedisKey StreamKey, RedisKey QuarantineKey);
+
+    [LoggerMessage(Level = LogLevel.Error, Message = "Redis stream monitor")]
+    private partial void LogRedisStreamMonitorError(Exception ex);
+
+    [LoggerMessage(Level = LogLevel.Warning, Message = "Stream {StreamKey} has no consumers")]
+    private partial void LogStreamHasNoConsumers(RedisKey streamKey);
+
+    [LoggerMessage(Level = LogLevel.Warning, Message = "Entries deleted: {Entries} in stream {Stream}. MinId: {MinId}")]
+    private partial void LogEntriesDeleted(long entries, RedisKey stream, long minId);
+
+    [LoggerMessage(Level = LogLevel.Warning, Message = "Stream {StreamKey} not deleted, last generated id at {Offset:O}")]
+    private partial void LogStreamNotDeleted(RedisKey streamKey, DateTimeOffset? offset);
+
+    [LoggerMessage(Level = LogLevel.Warning, Message = "Stream {StreamKey} deleted")]
+    private partial void LogStreamDeleted(RedisKey streamKey);
+
+    [LoggerMessage(Level = LogLevel.Warning, Message = "Consumer group {Group} from stream {Stream} deleted")]
+    private partial void LogConsumerGroupDeleted(string group, RedisKey stream);
+
+    [LoggerMessage(Level = LogLevel.Warning, Message = "Consumer group {Group} from stream {Stream} added in quarantine")]
+    private partial void LogConsumerGroupQuarantined(string group, RedisKey stream);
 }

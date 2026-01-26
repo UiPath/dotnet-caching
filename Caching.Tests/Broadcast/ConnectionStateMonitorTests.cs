@@ -1,6 +1,6 @@
 ﻿namespace UiPath.Platform.Caching.Tests.Broadcast;
 
-public class ConnectionStateMonitorTests : IAsyncLifetime
+public class ConnectionStateMonitorTests(ITestContextAccessor testContextAccessor) : IAsyncLifetime
 {
     private readonly IFixture _fixture = AutoFixtureCreator.NSubstitute();
     private IConnectionState[] _connectionStates = default!;
@@ -28,7 +28,7 @@ public class ConnectionStateMonitorTests : IAsyncLifetime
         Sut.IsConnected.Should().BeFalse();
     }
 
-    [Fact(Skip = "Flaky")]
+    [Fact]
     public async Task Works_as_expected_when_no_events()
     {
         var _isConnected0 = false;
@@ -37,7 +37,14 @@ public class ConnectionStateMonitorTests : IAsyncLifetime
         _connectionStates[1].IsConnected.Returns(_ => _isConnected1);
         Sut.IsConnected.Should().BeFalse();
         _isConnected0 = true;
-        await Task.Delay(300);
+
+        var timeout = TimeSpan.FromSeconds(5);
+        var stopwatch = System.Diagnostics.Stopwatch.StartNew();
+        while (!Sut.IsConnected && stopwatch.Elapsed < timeout)
+        {
+            await Task.Delay(50, testContextAccessor.Current.CancellationToken);
+        }
+
         Sut.IsConnected.Should().BeTrue();
     }
 
@@ -48,17 +55,17 @@ public class ConnectionStateMonitorTests : IAsyncLifetime
         act.Should().NotThrow();
     }
 
-    public Task DisposeAsync()
+    public ValueTask DisposeAsync()
     {
-        return Task.CompletedTask;
+        return ValueTask.CompletedTask;
     }
 
-    public Task InitializeAsync()
+    public ValueTask InitializeAsync()
     {
         _connectionStates = _fixture.CreateMany<IConnectionState>(2).ToArray();
         _fixture.Inject(_connectionStates);
         _fixture.Inject(TimeSpan.FromMilliseconds(100));
-        return Task.CompletedTask;
+        return ValueTask.CompletedTask;
     }
 }
 

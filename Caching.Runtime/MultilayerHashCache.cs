@@ -3,7 +3,7 @@ using UiPath.Platform.Caching.Telemetry;
 
 namespace UiPath.Platform.Caching;
 
-public sealed class MultilayerHashCache : MultilayerCacheBase, IHashCache
+public sealed partial class MultilayerHashCache : MultilayerCacheBase, IHashCache
 {
     private readonly IHashCache _innerCache;
     private readonly HashCacheEntryBuilder _entryBuilder;
@@ -81,7 +81,7 @@ public sealed class MultilayerHashCache : MultilayerCacheBase, IHashCache
             return cacheEntry.Value!;
         }
 
-        _logger.LogDebug("Cache missed. generating new {CacheKey}", cacheEntryOptions.CacheKey);
+        LogCacheMissed(cacheEntryOptions.CacheKey);
         var ret = await generator(token).ConfigureAwait(false);
 
         if (!IsDefault(ret))
@@ -107,11 +107,11 @@ public sealed class MultilayerHashCache : MultilayerCacheBase, IHashCache
             return await RemoveAsync<T>(options).ConfigureAwait(false);
         }
 
-        _logger.LogDebug("Replacing cached cacheKey {CacheKey}", options.CacheKey);
+        LogReplacingCachedKey(options.CacheKey);
         var innerCacheDisconnected = GetInnerCacheDisconnected();
         if (innerCacheDisconnected)
         {
-            _logger.LogTrace("Inner cache is not connected. Setting local only for cacheKey {CacheKey}", options.CacheKey);
+            LogSettingLocalOnly(options.CacheKey);
             return await InternalSetAsync(options, values, innerCacheDisconnected).ConfigureAwait(false);
         }
         else
@@ -132,11 +132,11 @@ public sealed class MultilayerHashCache : MultilayerCacheBase, IHashCache
             return await RemoveAsync<T>(cacheEntryOptions).ConfigureAwait(false);
         }
 
-        _logger.LogDebug("Replacing cached cacheKey {CacheKey}", cacheEntryOptions.CacheKey);
+        LogReplacingCachedKey(cacheEntryOptions.CacheKey);
         var innerCacheDisconnected = GetInnerCacheDisconnected();
         if (innerCacheDisconnected)
         {
-            _logger.LogTrace("Inner cache is not connected. Setting local only for cacheKey {CacheKey}", cacheEntryOptions.CacheKey);
+            LogSettingLocalOnly(cacheEntryOptions.CacheKey);
             return await InternalSetAsync(cacheEntryOptions, values, innerCacheDisconnected).ConfigureAwait(false);
         }
 
@@ -165,10 +165,10 @@ public sealed class MultilayerHashCache : MultilayerCacheBase, IHashCache
         var expiration = options.ExpireTime.HasValue ? _clock.ToDateTimeOffset(options.ExpireTime) : _clock.ToDateTimeOffset(options.TimeToLive);
         var cacheEntryOptions = _entryBuilder.BuildEntryOptions<T>(cacheKey, expiration, token: token);
         cacheEntryOptions.Metadata = options.Metadata;
-        _logger.LogDebug("Clearing cached. cacheKey {CacheKey}", cacheEntryOptions.CacheKey);
+        LogClearingCached(cacheEntryOptions.CacheKey);
 
         _memoryCache.Remove(cacheEntryOptions.CacheKey);
-        _logger.LogTrace("Refreshing inner cache cacheKey {CacheKey} at expiration {Expiration}", cacheEntryOptions.CacheKey, cacheEntryOptions.Expiration);
+        LogRefreshingInnerCacheKey(cacheEntryOptions.CacheKey, cacheEntryOptions.Expiration);
         try
         {
             var fired = await _eventPublisher.CacheRefreshedAsync(cacheEntryOptions).ConfigureAwait(false);
@@ -176,7 +176,7 @@ public sealed class MultilayerHashCache : MultilayerCacheBase, IHashCache
         }
         catch (Exception ex)
         {
-            _logger.LogWarning(ex, "Inner cache refresh value for cacheKey {CacheKey}", cacheEntryOptions.CacheKey);
+            LogInnerCacheRefreshError(ex, cacheEntryOptions.CacheKey);
             return false;
         }
     }
@@ -191,7 +191,7 @@ public sealed class MultilayerHashCache : MultilayerCacheBase, IHashCache
         }
         catch (Exception ex)
         {
-            _logger.LogWarning(ex, "Inner cache contains for cacheKey {CacheKey}", cacheEntryOptions.CacheKey);
+            LogInnerCacheContainsError(ex, cacheEntryOptions.CacheKey);
             return false;
         }
     }
@@ -227,13 +227,13 @@ public sealed class MultilayerHashCache : MultilayerCacheBase, IHashCache
     {
         NotCacheableException.ThrowIfNotCacheable<T>();
         var cacheEntryOptions = _entryBuilder.BuildEntryOptions<T>(cacheKey, token);
-        _logger.LogTrace("Set metadata for cacheKey {CacheKey}", cacheEntryOptions.CacheKey);
+        LogSetMetadata(cacheEntryOptions.CacheKey);
         try
         {
             var response = await _innerCache.SetMetadataAsync<T>(cacheEntryOptions.CacheKey, metadata, cacheEntryOptions.Token).ConfigureAwait(false);
             if (!response)
             {
-                _logger.LogWarning("Inner cache set metadata for cacheKey {CacheKey} failed", cacheEntryOptions.CacheKey);
+                LogInnerCacheSetMetadataFailed(cacheEntryOptions.CacheKey);
                 return false;
             }
 
@@ -253,14 +253,14 @@ public sealed class MultilayerHashCache : MultilayerCacheBase, IHashCache
         catch (Exception ex)
         {
             _memoryCache.Remove(cacheEntryOptions.CacheKey);
-            _logger.LogWarning(ex, "Inner cache refresh value for cacheKey {CacheKey}", cacheEntryOptions.CacheKey);
+            LogInnerCacheRefreshError(ex, cacheEntryOptions.CacheKey);
             return false;
         }
     }
 
     private async ValueTask<bool> RemoveAsync<T>(InternalHashCacheEntryOptions options)
     {
-        _logger.LogDebug("Clearing local cached. cacheKey {CacheKey}", options.CacheKey);
+        LogClearingLocalCached(options.CacheKey);
         try
         {
             _memoryCache.Remove(options.CacheKey);
@@ -270,7 +270,7 @@ public sealed class MultilayerHashCache : MultilayerCacheBase, IHashCache
         }
         catch (Exception ex)
         {
-            _logger.LogWarning(ex, "Inner cache remove cacheKey {CacheKey}", options.CacheKey);
+            LogInnerCacheRemoveError(ex, options.CacheKey);
             return false;
         }
     }
@@ -279,20 +279,20 @@ public sealed class MultilayerHashCache : MultilayerCacheBase, IHashCache
     {
         if (_memoryCache.TryGetValue<ICacheEntry<IDictionary<string, T?>>>(options.CacheKey, out var cacheEntry))
         {
-            _logger.LogTrace("Found local. {CacheKey}", options.CacheKey);
+            LogFoundLocal(options.CacheKey);
             if (_connectionState.IsConnected)
             {
                 return Filter(cacheEntry!, options);
             }
             else if (_usePrimaryOnlyWhenDisconnected)
             {
-                _logger.LogTrace("Inner cache is not connected. Using local copy for cacheKey {CacheKey}", options.CacheKey);
+                LogUsingLocalCopyDisconnected(options.CacheKey);
                 return Filter(cacheEntry!, options);
             }
             else
             {
                 _memoryCache.Remove(options.CacheKey);
-                _logger.LogTrace("Inner cache is not connected. Returning default for cacheKey {CacheKey}", options.CacheKey);
+                LogReturningDefaultDisconnected(options.CacheKey);
                 return _cacheEntryFactory.Create<IDictionary<string, T?>>(Empty<T>(), default, default);
             }
         }
@@ -304,7 +304,7 @@ public sealed class MultilayerHashCache : MultilayerCacheBase, IHashCache
             return cacheEntry!;
         }
 
-        _logger.LogTrace("Found inner copy at cacheKey {CacheKey}", options.CacheKey);
+        LogFoundInnerCopy(options.CacheKey);
         options.Expiration = await _innerCache.ExpireTimeAsync<T>(options.CacheKey, options.Token).ConfigureAwait(false) ?? _clock.DefaultDateTimeOffset();
         options.Metadata = cacheEntry.Metadata;
         var values = cacheEntry.Value!;
@@ -325,7 +325,7 @@ public sealed class MultilayerHashCache : MultilayerCacheBase, IHashCache
         {
             if (disconnected)
             {
-                _logger.LogTrace("Inner cache is not connected. Setting local only for cacheKey {CacheKey}", options.CacheKey);
+                LogSettingLocalOnly(options.CacheKey);
                 return MemorySet(options, value, _multiLayerCacheOptions.PrimaryMaxExpirationDisconnected);
             }
 
@@ -334,7 +334,7 @@ public sealed class MultilayerHashCache : MultilayerCacheBase, IHashCache
         }
         catch (Exception ex)
         {
-            _logger.LogWarning(ex, "Inner cache set value for {CacheKey}", options.CacheKey);
+            LogInnerCacheSetError(ex, options.CacheKey);
             return false;
         }
     }
@@ -358,4 +358,52 @@ public sealed class MultilayerHashCache : MultilayerCacheBase, IHashCache
 
     private static ImmutableDictionary<string, T?> Empty<T>() =>
         ImmutableDictionary<string, T?>.Empty;
+
+    [LoggerMessage(Level = LogLevel.Debug, Message = "Cache missed. generating new {CacheKey}")]
+    private partial void LogCacheMissed(CacheKey cacheKey);
+
+    [LoggerMessage(Level = LogLevel.Debug, Message = "Replacing cached cacheKey {CacheKey}")]
+    private partial void LogReplacingCachedKey(CacheKey cacheKey);
+
+    [LoggerMessage(Level = LogLevel.Trace, Message = "Inner cache is not connected. Setting local only for cacheKey {CacheKey}")]
+    private partial void LogSettingLocalOnly(CacheKey cacheKey);
+
+    [LoggerMessage(Level = LogLevel.Debug, Message = "Clearing cached. cacheKey {CacheKey}")]
+    private partial void LogClearingCached(CacheKey cacheKey);
+
+    [LoggerMessage(Level = LogLevel.Trace, Message = "Refreshing inner cache cacheKey {CacheKey} at expiration {Expiration}")]
+    private partial void LogRefreshingInnerCacheKey(CacheKey cacheKey, DateTimeOffset? expiration);
+
+    [LoggerMessage(Level = LogLevel.Warning, Message = "Inner cache refresh value for cacheKey {CacheKey}")]
+    private partial void LogInnerCacheRefreshError(Exception ex, CacheKey cacheKey);
+
+    [LoggerMessage(Level = LogLevel.Warning, Message = "Inner cache contains for cacheKey {CacheKey}")]
+    private partial void LogInnerCacheContainsError(Exception ex, CacheKey cacheKey);
+
+    [LoggerMessage(Level = LogLevel.Trace, Message = "Set metadata for cacheKey {CacheKey}")]
+    private partial void LogSetMetadata(CacheKey cacheKey);
+
+    [LoggerMessage(Level = LogLevel.Warning, Message = "Inner cache set metadata for cacheKey {CacheKey} failed")]
+    private partial void LogInnerCacheSetMetadataFailed(CacheKey cacheKey);
+
+    [LoggerMessage(Level = LogLevel.Debug, Message = "Clearing local cached. cacheKey {CacheKey}")]
+    private partial void LogClearingLocalCached(CacheKey cacheKey);
+
+    [LoggerMessage(Level = LogLevel.Warning, Message = "Inner cache remove cacheKey {CacheKey}")]
+    private partial void LogInnerCacheRemoveError(Exception ex, CacheKey cacheKey);
+
+    [LoggerMessage(Level = LogLevel.Trace, Message = "Found local. {CacheKey}")]
+    private partial void LogFoundLocal(CacheKey cacheKey);
+
+    [LoggerMessage(Level = LogLevel.Trace, Message = "Inner cache is not connected. Using local copy for cacheKey {CacheKey}")]
+    private partial void LogUsingLocalCopyDisconnected(CacheKey cacheKey);
+
+    [LoggerMessage(Level = LogLevel.Trace, Message = "Inner cache is not connected. Returning default for cacheKey {CacheKey}")]
+    private partial void LogReturningDefaultDisconnected(CacheKey cacheKey);
+
+    [LoggerMessage(Level = LogLevel.Trace, Message = "Found inner copy at cacheKey {CacheKey}")]
+    private partial void LogFoundInnerCopy(CacheKey cacheKey);
+
+    [LoggerMessage(Level = LogLevel.Warning, Message = "Inner cache set value for {CacheKey}")]
+    private partial void LogInnerCacheSetError(Exception ex, CacheKey cacheKey);
 }

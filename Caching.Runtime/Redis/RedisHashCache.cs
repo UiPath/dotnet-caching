@@ -5,9 +5,8 @@ using UiPath.Platform.Caching.Telemetry;
 
 namespace UiPath.Platform.Caching.Redis;
 
-public sealed class RedisHashCache : RedisCacheBase, IHashCache
+public sealed partial class RedisHashCache : RedisCacheBase, IHashCache
 {
-    private const string LogWarnMessage = "RedisHashCache exception.";
     private readonly ILogger<RedisHashCache> _logger;
     private readonly ISerializerProxy<RedisValue> _serializer;
     private readonly ICacheEntryFactory _cacheEntryFactory;
@@ -86,14 +85,14 @@ public sealed class RedisHashCache : RedisCacheBase, IHashCache
     {
         NotCacheableException.ThrowIfNotCacheable<T>();
         var ret = await GetInnerAsync<T?>(cacheKey, token).ConfigureAwait(false);
-        if (ret.Any())
+        if (ret.Count > 0)
         {
             return ret;
         }
 
-        _logger.LogDebug("Cache missed. generating new {CacheKey}", cacheKey);
+        LogCacheMissed(cacheKey);
         ret = await generator(token).ConfigureAwait(false);
-        if (ret.Any())
+        if (ret.Count > 0)
         {
             var options = new HashCacheEntryOptions(expiration, default, default, setOption ?? HashCacheSetOption.KeyReplace);
             await SetAsync(cacheKey, ret, options, token).ConfigureAwait(false);
@@ -124,7 +123,7 @@ public sealed class RedisHashCache : RedisCacheBase, IHashCache
         catch (Exception ex)
         {
             operation.Stop();
-            _logger.LogWarning(ex, LogWarnMessage);
+            LogRedisHashCacheException(ex);
         }
         finally
         {
@@ -145,7 +144,7 @@ public sealed class RedisHashCache : RedisCacheBase, IHashCache
         NotCacheableException.ThrowIfNotCacheable<T>();
         var redisKey = ToRedisKey(cacheKey, token);
         var localExpiration = _clock.ToDateTimeOffset(expiration);
-        _logger.LogTrace("Refreshing key {RedisKey} at expiration {Expiration}", redisKey, localExpiration);
+        LogRefreshingKey(redisKey, localExpiration);
         var ret = false;
         var operation = StartOperation<T>();
         try
@@ -166,7 +165,7 @@ public sealed class RedisHashCache : RedisCacheBase, IHashCache
         catch (Exception ex)
         {
             operation.Stop();
-            _logger.LogWarning(ex, LogWarnMessage);
+            LogRedisHashCacheException(ex);
         }
         finally
         {
@@ -225,7 +224,7 @@ public sealed class RedisHashCache : RedisCacheBase, IHashCache
 
                 if (!ret)
                 {
-                    _logger.LogWarning("Redis transaction failed.");
+                    LogRedisTransactionFailed();
                 }
             }
             operation.Stop();
@@ -233,7 +232,7 @@ public sealed class RedisHashCache : RedisCacheBase, IHashCache
         catch (Exception ex)
         {
             operation.Stop();
-            _logger.LogWarning(ex, LogWarnMessage);
+            LogRedisHashCacheException(ex);
         }
         finally
         {
@@ -261,7 +260,7 @@ public sealed class RedisHashCache : RedisCacheBase, IHashCache
         catch (Exception ex)
         {
             operation.Stop();
-            _logger.LogWarning(ex, LogWarnMessage);
+            LogRedisHashCacheException(ex);
         }
         finally
         {
@@ -282,7 +281,12 @@ public sealed class RedisHashCache : RedisCacheBase, IHashCache
         NotCacheableException.ThrowIfNotCacheable<T>();
         Validate(values);
         var redisKey = ToRedisKey(cacheKey, token);
-        var hashEntries = values.Select(kv => new HashEntry(kv.Key, _serializer.Serialize(kv.Value))).ToArray();
+        var hashEntries = new HashEntry[values.Count];
+        var i = 0;
+        foreach (var kv in values)
+        {
+            hashEntries[i++] = new HashEntry(kv.Key, _serializer.Serialize(kv.Value));
+        }
         return SetInnerAsync<T>(redisKey, hashEntries, HashCacheSetOption.KeyReplace, _clock.ToDateTimeOffset(expiration), token);
     }
 
@@ -291,10 +295,16 @@ public sealed class RedisHashCache : RedisCacheBase, IHashCache
         NotCacheableException.ThrowIfNotCacheable<T>();
         Validate(values);
         var redisKey = ToRedisKey(cacheKey, token);
-        var entries = values.Select(kv => new HashEntry(kv.Key, _serializer.Serialize(kv.Value))).ToList();
-        if (entries.Count > 0 && options.Metadata != null)
+        var hasMetadata = values.Count > 0 && options.Metadata != null;
+        var entries = new HashEntry[values.Count + (hasMetadata ? 1 : 0)];
+        var i = 0;
+        foreach (var kv in values)
         {
-            entries.Add(new HashEntry(KnownFieldNames.MetadataKey, _serializer.Serialize(options.Metadata)));
+            entries[i++] = new HashEntry(kv.Key, _serializer.Serialize(kv.Value));
+        }
+        if (hasMetadata)
+        {
+            entries[i] = new HashEntry(KnownFieldNames.MetadataKey, _serializer.Serialize(options.Metadata));
         }
 
         var expiration = options.ExpireTime.HasValue ? _clock.ToDateTimeOffset(options.ExpireTime) : _clock.ToDateTimeOffset(options.TimeToLive);
@@ -319,7 +329,7 @@ public sealed class RedisHashCache : RedisCacheBase, IHashCache
         catch (Exception ex)
         {
             operation.Stop();
-            _logger.LogWarning(ex, LogWarnMessage);
+            LogRedisHashCacheException(ex);
         }
         finally
         {
@@ -354,7 +364,7 @@ public sealed class RedisHashCache : RedisCacheBase, IHashCache
         catch (Exception ex)
         {
             operation.Stop();
-            _logger.LogWarning(ex, LogWarnMessage);
+            LogRedisHashCacheException(ex);
         }
         finally
         {
@@ -385,7 +395,7 @@ public sealed class RedisHashCache : RedisCacheBase, IHashCache
             }, default, token).ConfigureAwait(false);
             if (keyExists)
             {
-                if (metadata.Any())
+                if (metadata.Count > 0)
                 {
                     ret = await _write.ExecuteAsync(async token =>
                     {
@@ -409,7 +419,7 @@ public sealed class RedisHashCache : RedisCacheBase, IHashCache
         catch (Exception ex)
         {
             operation.Stop();
-            _logger.LogWarning(ex, LogWarnMessage);
+            LogRedisHashCacheException(ex);
         }
         finally
         {
@@ -508,7 +518,7 @@ public sealed class RedisHashCache : RedisCacheBase, IHashCache
         catch (Exception ex)
         {
             operation.Stop();
-            _logger.LogWarning(ex, LogWarnMessage);
+            LogRedisHashCacheException(ex);
         }
         finally
         {
@@ -549,11 +559,11 @@ public sealed class RedisHashCache : RedisCacheBase, IHashCache
         catch (Exception ex)
         {
             operation.Stop();
-            _logger.LogWarning(ex, LogWarnMessage);
+            LogRedisHashCacheException(ex);
         }
         finally
         {
-            operation.Track(ret.Any());
+            operation.Track(ret.Count > 0);
         }
 
         return ret;
@@ -572,20 +582,23 @@ public sealed class RedisHashCache : RedisCacheBase, IHashCache
         var operation = StartOperation<T>();
         try
         {
-            var hashEntries = (await _read.ExecuteAsync(async token =>
+            var hashEntries = await _read.ExecuteAsync(async token =>
             {
                 token.ThrowIfCancellationRequested();
                 return await Database.HashGetAllAsync(redisKey, CommandFlags.PreferReplica).ConfigureAwait(false);
-            }, [], token).ConfigureAwait(false))
-                .Where(k => k.Name != KnownFieldNames.MetadataKey);
-            if (hashEntries.Any())
+            }, [], token).ConfigureAwait(false);
+            if (hashEntries.Length > 0)
             {
                 ret = new Dictionary<string, T?>();
                 foreach (var hashEntry in hashEntries)
                 {
+                    if (hashEntry.Name == KnownFieldNames.MetadataKey)
+                    {
+                        continue;
+                    }
                     var v = hashEntry.Value;
                     _auditKeySize?.Invoke(redisKey, hashEntry.Name.ToString(), v);
-                    ret.Add(hashEntry.Name.ToString(),v.IsNullOrEmpty ? default : _serializer.Deserialize<T?>(v));
+                    ret.Add(hashEntry.Name.ToString(), v.IsNullOrEmpty ? default : _serializer.Deserialize<T?>(v));
                 }
             }
             operation.Stop();
@@ -593,11 +606,11 @@ public sealed class RedisHashCache : RedisCacheBase, IHashCache
         catch (Exception ex)
         {
             operation.Stop();
-            _logger.LogWarning(ex, LogWarnMessage);
+            LogRedisHashCacheException(ex);
         }
         finally
         {
-            operation.Track(ret.Any());
+            operation.Track(ret.Count > 0);
         }
 
         return ret;
@@ -629,17 +642,17 @@ public sealed class RedisHashCache : RedisCacheBase, IHashCache
         catch (Exception ex)
         {
             operation.Stop();
-            _logger.LogWarning(ex, LogWarnMessage);
+            LogRedisHashCacheException(ex);
         }
         finally
         {
-            operation.Track(ret.Value?.Any() ?? false);
+            operation.Track(ret.Value?.Count > 0);
         }
 
         return ret;
     }
 
-    private async ValueTask<bool> SetInnerAsync<T>(RedisKey redisKey, ICollection<HashEntry> hashEntries, HashCacheSetOption setOption, DateTimeOffset expiration, CancellationToken token)
+    private async ValueTask<bool> SetInnerAsync<T>(RedisKey redisKey, HashEntry[] hashEntries, HashCacheSetOption setOption, DateTimeOffset expiration, CancellationToken token)
     {
         var now = _clock.UtcNow;
         var ret = false;
@@ -652,7 +665,7 @@ public sealed class RedisHashCache : RedisCacheBase, IHashCache
         var operation = StartOperation<T>(nameof(SetAsync));
         try
         {
-            if (expiration < now || hashEntries.Count == 0)
+            if (expiration < now || hashEntries.Length == 0)
             {
                 ret = await _write.ExecuteAsync(async token =>
                 {
@@ -667,8 +680,8 @@ public sealed class RedisHashCache : RedisCacheBase, IHashCache
                 {
                     _ = transaction.KeyDeleteAsync(redisKey).ConfigureAwait(false);
                 }
-                
-                _ = transaction.HashSetAsync(redisKey, hashEntries.ToArray(), CommandFlags.DemandMaster).ConfigureAwait(false);
+
+                _ = transaction.HashSetAsync(redisKey, hashEntries, CommandFlags.DemandMaster).ConfigureAwait(false);
                 if (expiration != DateTimeOffset.MaxValue)
                 {
                     await transaction.KeyExpireAsync(redisKey, expiration.UtcDateTime, CommandFlags.DemandMaster | CommandFlags.FireAndForget).ConfigureAwait(false);
@@ -681,7 +694,7 @@ public sealed class RedisHashCache : RedisCacheBase, IHashCache
                 }, default, token).ConfigureAwait(false);
                 if (!ret)
                 {
-                    _logger.LogWarning("Redis transaction failed.");
+                    LogRedisTransactionFailed();
                 }
             }
             operation.Stop();
@@ -689,7 +702,7 @@ public sealed class RedisHashCache : RedisCacheBase, IHashCache
         catch (Exception ex)
         {
             operation.Stop();
-            _logger.LogWarning(ex, LogWarnMessage);
+            LogRedisHashCacheException(ex);
         }
         finally
         {
@@ -715,10 +728,15 @@ public sealed class RedisHashCache : RedisCacheBase, IHashCache
 
     private void AuditKeySize(RedisKey key, string field, RedisValue value)
     {
+        if (!_logger.IsEnabled(LogLevel.Warning))
+        {
+            return;
+        }
+
         var valueLen = value.Length();
         if (valueLen > _cacheOptions.LargeValueThreshold)
         {
-            _logger.LogWarning("Redis large value detected for key {RedisKey}, field {Field}, length {Length}", key, field, valueLen);
+            LogLargeValueDetected(key, field, valueLen);
         }
     }
 
@@ -751,6 +769,21 @@ public sealed class RedisHashCache : RedisCacheBase, IHashCache
     }
 
     private static ImmutableDictionary<string, T?> Empty<T>() => ImmutableDictionary<string, T?>.Empty;
-    
+
     private ICacheEntry<IDictionary<string, T?>> Default<T>() => _cacheEntryFactory.Create(Empty<T?>(), DateTimeOffset.MinValue);
+
+    [LoggerMessage(Level = LogLevel.Debug, Message = "Cache missed. generating new {CacheKey}")]
+    private partial void LogCacheMissed(CacheKey cacheKey);
+
+    [LoggerMessage(Level = LogLevel.Trace, Message = "Refreshing key {RedisKey} at expiration {LocalExpiration}")]
+    private partial void LogRefreshingKey(RedisKey redisKey, DateTimeOffset localExpiration);
+
+    [LoggerMessage(Level = LogLevel.Warning, Message = "RedisHashCache exception.")]
+    private partial void LogRedisHashCacheException(Exception ex);
+
+    [LoggerMessage(Level = LogLevel.Warning, Message = "Redis transaction failed.")]
+    private partial void LogRedisTransactionFailed();
+
+    [LoggerMessage(Level = LogLevel.Warning, Message = "Redis large value detected for key {RedisKey}, field {Field}, length {Length}")]
+    private partial void LogLargeValueDetected(RedisKey redisKey, string field, long length);
 }

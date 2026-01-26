@@ -5,7 +5,7 @@ using StackExchange.Redis.Profiling;
 
 namespace UiPath.Platform.Caching.Tests;
 
-public class RedisProfilerTests : IAsyncLifetime
+public class RedisProfilerTests(ITestContextAccessor testContextAccessor) : IAsyncLifetime
 {
     private readonly IFixture _fixture = AutoFixtureCreator.NSubstitute();
 
@@ -77,7 +77,7 @@ public class RedisProfilerTests : IAsyncLifetime
                 {
                     break;
                 }
-                await Task.Delay(_redisConnectionOptions.ProfilerFlushInterval);
+                await Task.Delay(_redisConnectionOptions.ProfilerFlushInterval, testContextAccessor.Current.CancellationToken);
             }
             Sut.GetSession().Should().BeNull();
         }
@@ -99,7 +99,7 @@ public class RedisProfilerTests : IAsyncLifetime
                 {
                     break;
                 }
-                await Task.Delay(_redisConnectionOptions.ProfilerFlushInterval);
+                await Task.Delay(_redisConnectionOptions.ProfilerFlushInterval, testContextAccessor.Current.CancellationToken);
             }
             Sut.GetSession().Should().BeNull();
         }
@@ -151,12 +151,12 @@ public class RedisProfilerTests : IAsyncLifetime
         Sut.Count.Should().Be(0);
     }
 
-    public Task DisposeAsync()
+    public ValueTask DisposeAsync()
     {
-        return Task.CompletedTask;
+        return ValueTask.CompletedTask;
     }
 
-    public Task InitializeAsync()
+    public ValueTask InitializeAsync()
     {
         _clock = _fixture.Freeze<ISystemClock>();
         _now = DateTimeOffset.UtcNow;
@@ -172,6 +172,6 @@ public class RedisProfilerTests : IAsyncLifetime
             ProfilerHasDefaultSession = true
         };
         _fixture.Inject(Options.Create(_redisConnectionOptions));
-        return Task.CompletedTask;
+        return ValueTask.CompletedTask;
     }
 }

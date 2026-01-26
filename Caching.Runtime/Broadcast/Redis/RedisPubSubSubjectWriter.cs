@@ -2,7 +2,7 @@
 
 namespace UiPath.Platform.Caching.Broadcast.Redis;
 
-internal sealed class RedisPubSubSubjectWriter<T> : IDisposable
+internal sealed partial class RedisPubSubSubjectWriter<T> : IDisposable
     where T : IEvent
 {
     private bool _disposed;
@@ -48,7 +48,7 @@ internal sealed class RedisPubSubSubjectWriter<T> : IDisposable
             return;
         }
 
-        _logger.LogTrace("Subscribe channel: {RedisChannel}", _redisChannel);
+        LogSubscribeChannel(_redisChannel);
         try
         {
             _unsubscribe?.Invoke();
@@ -60,7 +60,7 @@ internal sealed class RedisPubSubSubjectWriter<T> : IDisposable
         }
         catch (Exception ex)
         {
-            _logger.LogError(ex, "Subscribe error. Channel: {RedisChannel}", _redisChannel);
+            LogSubscribeError(ex, _redisChannel);
         }
         finally
         {
@@ -101,12 +101,12 @@ internal sealed class RedisPubSubSubjectWriter<T> : IDisposable
                     return;
                 }
 
-                _logger.LogDebug("Event received. Id {EventId}  Channel : {RedisChannel}", ev.Id, _redisChannel);
+                LogEventReceived(ev.Id, _redisChannel);
                 if (ev.IsValid())
                 {
                     if (ev.SameSource(_sourceUri))
                     {
-                        _logger.LogTrace("Event from current source. Id {EventId}  Channel : {RedisChannel}", ev.Id, _redisChannel);
+                        LogEventFromCurrentSource(ev.Id, _redisChannel);
                     }
                     else
                     {
@@ -115,19 +115,19 @@ internal sealed class RedisPubSubSubjectWriter<T> : IDisposable
                 }
                 else
                 {
-                    _logger.LogWarning("Event invalid. Id {EventId}  Channel : {RedisChannel}", ev.Id, _redisChannel);
+                    LogEventInvalid(ev.Id, _redisChannel);
                 }
             }
             catch (Exception ex)
             {
-                _logger.LogError(ex, "OnMessage error. Channel : {RedisChannel}", _redisChannel);
+                LogOnMessageError(ex, _redisChannel);
             }
         }
     }
 
     private void Unsubscribe()
     {
-        _logger.LogTrace("Unsubscribe channel: {RedisChannel}", _redisChannel);
+        LogUnsubscribeChannel(_redisChannel);
         try
         {
             _unsubscribe?.Invoke();
@@ -135,7 +135,31 @@ internal sealed class RedisPubSubSubjectWriter<T> : IDisposable
         }
         catch (Exception ex)
         {
-            _logger.LogError(ex, "Unsubscribe error. Channel : {RedisChannel}", _redisChannel);
+            LogUnsubscribeError(ex, _redisChannel);
         }
     }
+
+    [LoggerMessage(Level = LogLevel.Trace, Message = "Subscribe channel: {RedisChannel}")]
+    private partial void LogSubscribeChannel(RedisChannel redisChannel);
+
+    [LoggerMessage(Level = LogLevel.Error, Message = "Subscribe error. Channel: {RedisChannel}")]
+    private partial void LogSubscribeError(Exception ex, RedisChannel redisChannel);
+
+    [LoggerMessage(Level = LogLevel.Debug, Message = "Event received. Id {EventId}  Channel : {RedisChannel}")]
+    private partial void LogEventReceived(string? eventId, RedisChannel redisChannel);
+
+    [LoggerMessage(Level = LogLevel.Trace, Message = "Event from current source. Id {EventId}  Channel : {RedisChannel}")]
+    private partial void LogEventFromCurrentSource(string? eventId, RedisChannel redisChannel);
+
+    [LoggerMessage(Level = LogLevel.Warning, Message = "Event invalid. Id {EventId}  Channel : {RedisChannel}")]
+    private partial void LogEventInvalid(string? eventId, RedisChannel redisChannel);
+
+    [LoggerMessage(Level = LogLevel.Error, Message = "OnMessage error. Channel : {RedisChannel}")]
+    private partial void LogOnMessageError(Exception ex, RedisChannel redisChannel);
+
+    [LoggerMessage(Level = LogLevel.Trace, Message = "Unsubscribe channel: {RedisChannel}")]
+    private partial void LogUnsubscribeChannel(RedisChannel redisChannel);
+
+    [LoggerMessage(Level = LogLevel.Error, Message = "Unsubscribe error. Channel : {RedisChannel}")]
+    private partial void LogUnsubscribeError(Exception ex, RedisChannel redisChannel);
 }

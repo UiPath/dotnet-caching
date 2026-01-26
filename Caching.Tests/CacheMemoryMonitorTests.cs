@@ -1,5 +1,4 @@
-﻿#if !NET6_0
-using Microsoft.Extensions.Caching.Memory;
+﻿using Microsoft.Extensions.Caching.Memory;
 using Microsoft.Extensions.Internal;
 using UiPath.Platform.Caching.Telemetry;
 
@@ -25,12 +24,12 @@ public class CacheMemoryMonitorTests : IAsyncLifetime
         await act.Should().CompleteWithinAsync(_statisticsFlushInterval.Multiply(10));
     }
 
-    public Task DisposeAsync()
+    public ValueTask DisposeAsync()
     {
-        return Task.CompletedTask;
+        return ValueTask.CompletedTask;
     }
 
-    public Task InitializeAsync()
+    public ValueTask InitializeAsync()
     {
         _telemetryProvider = _fixture.Create<ICachingTelemetryProvider>();
         _statsMetricName = _fixture.Create<string>();
@@ -41,7 +40,6 @@ public class CacheMemoryMonitorTests : IAsyncLifetime
             TrackLinkedCacheEntries = true,
             Clock = new SystemClock()
         }));
-        return Task.CompletedTask;
+        return ValueTask.CompletedTask;
     }
 }
-#endif

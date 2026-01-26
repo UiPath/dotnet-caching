@@ -1,12 +1,9 @@
 ﻿using System.Threading.Channels;
 using UiPath.Platform.Caching.Telemetry;
-#if NET8_0_OR_GREATER
-using UiPath.Platform.Logging.Abstractions;
-#endif
 
 namespace UiPath.Platform.Caching.Broadcast.Redis;
 
-internal sealed class RedisStreamSubjectWriter<T> : IDisposable
+internal sealed partial class RedisStreamSubjectWriter<T> : IDisposable
     where T : IEvent
 {
     private bool _disposed;
@@ -64,7 +61,7 @@ internal sealed class RedisStreamSubjectWriter<T> : IDisposable
 
     private async Task FetchLoop()
     {
-        _logger.LogDebug("Fetch events loop started");
+        LogFetchLoopStarted();
         while (ContinueLoop)
         {
             using (CreateProfilerSession())
@@ -89,7 +86,7 @@ internal sealed class RedisStreamSubjectWriter<T> : IDisposable
                 }
             }
         }
-        _logger.LogDebug("Fetch events loop stopped");
+        LogFetchLoopStopped();
     }
 
     private IDisposable CreateProfilerSession()
@@ -129,7 +126,7 @@ internal sealed class RedisStreamSubjectWriter<T> : IDisposable
         var id = _lastId;
         if (ex is TaskCanceledException cancel && cancel.CancellationToken == _cancelationToken)
         {
-            _logger.LogDebug("Reading topic {Topic}, consumer group {ConsumerGroup} stopped at {Id}", _context.Topic, _context.ConsumerGroup, id);
+            LogReadingStopped(_context.Topic, _context.ConsumerGroup, id);
             return false;
         }
 
@@ -137,7 +134,7 @@ internal sealed class RedisStreamSubjectWriter<T> : IDisposable
         {
             if(id != StreamPosition.NewMessages)
             {
-                _logger.LogWarning("Recreating Topic {Topic}, consumer group {ConsumerGroup}, last id {LastId}", _context.Topic, _context.ConsumerGroup, id);
+                LogRecreatingTopic(_context.Topic, _context.ConsumerGroup, id);
             }
 
             try
@@ -146,17 +143,17 @@ internal sealed class RedisStreamSubjectWriter<T> : IDisposable
             }
             catch (RedisServerException rex) when (rex.Message == StreamConstants.ConsumerGroupNameExistsErrorMessage)
             {
-                _logger.LogDebug("On Topic {Topic} consumer group {ConsumerGroup} already exists", _context.Topic, _context.ConsumerGroup);
+                LogConsumerGroupExists(_context.Topic, _context.ConsumerGroup);
                 return true;
             }
             catch (Exception ex2)
             {
-                _logger.LogError(ex2, "Recreating topic exception.");
+                LogRecreatingTopicException(ex2);
             }
         }
         else
         {
-           _logger.LogError(ex, "Fetch events loop error");
+           LogFetchLoopError(ex);
         }
 
         await Wait().ConfigureAwait(false);
@@ -165,7 +162,7 @@ internal sealed class RedisStreamSubjectWriter<T> : IDisposable
 
     private async Task DispatchEventsAsync(StreamEntry[] events)
     {
-        List<RedisValue> ids = [];
+        List<RedisValue> ids = new(events.Length);
 
         foreach (StreamEntry @event in events)
         {
@@ -187,7 +184,7 @@ internal sealed class RedisStreamSubjectWriter<T> : IDisposable
                 {
                     if (ev.SameSource(_context.SourceUri))
                     {
-                        _logger.LogTrace("Event from current source. Id {EventId}  Topic : {Topic}, StreamId : {StreamId}", ev.Id, _context.Topic, @event.Id);
+                        LogEventFromCurrentSource(ev.Id, _context.Topic, @event.Id);
                         _cachingTelemetryProvider.TrackTopicReadMetric(_context.Topic!, @event.Id);
                         TraceReceipt(ev);
                         ids.Add(@event.Id);
@@ -201,7 +198,7 @@ internal sealed class RedisStreamSubjectWriter<T> : IDisposable
                         }
                         else
                         {
-                            _logger.LogWarning("Failed processing stream entry. Id {EventId} Topic : {Topic}, StreamId : {StreamId}. Will retry.", ev.Id, _context.Topic, @event.Id);
+                            LogFailedProcessingEntry(ev.Id, _context.Topic, @event.Id);
                         }
                     }
                 }
@@ -212,13 +209,13 @@ internal sealed class RedisStreamSubjectWriter<T> : IDisposable
                         { "TopicKey", _context.Topic!},
                         { "TransportId", @event.Id! }
                     });
-                    _logger.LogWarning("Event invalid. Id {EventId}  Topic : {Topic}, StreamId : {StreamId}", ev.Id, _context.Topic, @event.Id);
+                    LogEventInvalid(ev.Id, _context.Topic, @event.Id);
                     ids.Add(@event.Id);
                 }
             }
             catch (Exception ex)
             {
-                _logger.LogError(ex, "OnMessage error. Topic : {Topic}", _context.Topic);
+                LogOnMessageError(ex, _context.Topic);
             }
         }
 
@@ -229,16 +226,12 @@ internal sealed class RedisStreamSubjectWriter<T> : IDisposable
 
 
         await _redis.Database.StreamAcknowledgeAsync(_context.Topic, _context.ConsumerGroup, ids.ToArray()).ConfigureAwait(false);
-        _logger.LogDebug("Dispatched {Length} messages. Topic : {Topic}", events.Length, _context.Topic);
+        LogDispatched(events.Length, _context.Topic);
     }
 
     private void TraceReceipt(T ev)
     {
-#if NET8_0_OR_GREATER
-        _logger.LogInformation("Event received. Id {EventId}  Topic : {Topic}, StreamId: {StreamId}, Key: {Key}", ev.Id, _context.Topic, ev.TransportId, new LogField(ev.Key!, isPii: false).ToString(showPii: false) ?? string.Empty);
-#else
-        _logger.LogInformation("Event received. Id {EventId}  Topic : {Topic}, StreamId: {StreamId}", ev.Id, _context.Topic, ev.TransportId);
-#endif
+        LogEventReceived(ev.Id, _context.Topic, ev.TransportId);
 
         if (_context.EmitStreamReceivedEvent)
         {
@@ -247,11 +240,47 @@ internal sealed class RedisStreamSubjectWriter<T> : IDisposable
             { "EventId", ev.Id!},
             { "TopicKey", _context.Topic!},
             { "TransportId", ev.TransportId! }
-#if NET8_0_OR_GREATER
-            ,{ "Key", new LogField(ev.Key!, isPii: false).ToString(showPii: false) ?? string.Empty}
-#endif
         });
         }
     }
+
+    [LoggerMessage(Level = LogLevel.Debug, Message = "Fetch events loop started")]
+    private partial void LogFetchLoopStarted();
+
+    [LoggerMessage(Level = LogLevel.Debug, Message = "Fetch events loop stopped")]
+    private partial void LogFetchLoopStopped();
+
+    [LoggerMessage(Level = LogLevel.Debug, Message = "Reading topic {Topic}, consumer group {ConsumerGroup} stopped at {Id}")]
+    private partial void LogReadingStopped(RedisKey topic, RedisValue consumerGroup, RedisValue id);
+
+    [LoggerMessage(Level = LogLevel.Warning, Message = "Recreating Topic {Topic}, consumer group {ConsumerGroup}, last id {LastId}")]
+    private partial void LogRecreatingTopic(RedisKey topic, RedisValue consumerGroup, RedisValue lastId);
+
+    [LoggerMessage(Level = LogLevel.Debug, Message = "On Topic {Topic} consumer group {ConsumerGroup} already exists")]
+    private partial void LogConsumerGroupExists(RedisKey topic, RedisValue consumerGroup);
+
+    [LoggerMessage(Level = LogLevel.Error, Message = "Recreating topic exception.")]
+    private partial void LogRecreatingTopicException(Exception ex);
+
+    [LoggerMessage(Level = LogLevel.Error, Message = "Fetch events loop error")]
+    private partial void LogFetchLoopError(Exception ex);
+
+    [LoggerMessage(Level = LogLevel.Trace, Message = "Event from current source. Id {EventId}  Topic : {Topic}, StreamId : {StreamId}")]
+    private partial void LogEventFromCurrentSource(string? eventId, RedisKey topic, RedisValue streamId);
+
+    [LoggerMessage(Level = LogLevel.Warning, Message = "Failed processing stream entry. Id {EventId} Topic : {Topic}, StreamId : {StreamId}. Will retry.")]
+    private partial void LogFailedProcessingEntry(string? eventId, RedisKey topic, RedisValue streamId);
+
+    [LoggerMessage(Level = LogLevel.Warning, Message = "Event invalid. Id {EventId}  Topic : {Topic}, StreamId : {StreamId}")]
+    private partial void LogEventInvalid(string? eventId, RedisKey topic, RedisValue streamId);
+
+    [LoggerMessage(Level = LogLevel.Error, Message = "OnMessage error. Topic : {Topic}")]
+    private partial void LogOnMessageError(Exception ex, RedisKey topic);
+
+    [LoggerMessage(Level = LogLevel.Debug, Message = "Dispatched {Length} messages. Topic : {Topic}")]
+    private partial void LogDispatched(int length, RedisKey topic);
+
+    [LoggerMessage(Level = LogLevel.Information, Message = "Event received. Id {EventId}  Topic : {Topic}, StreamId: {StreamId}")]
+    private partial void LogEventReceived(string? eventId, RedisKey topic, string? streamId);
 }
 

@@ -87,12 +87,12 @@ public class CloudCacheEventFactoryTests : IAsyncLifetime
     }
 
 
-    public Task DisposeAsync()
+    public ValueTask DisposeAsync()
     {
-        return Task.CompletedTask;
+        return ValueTask.CompletedTask;
     }
 
-    public Task InitializeAsync()
+    public ValueTask InitializeAsync()
     {
         _source = new Uri($"urn:{_fixture.Create<string>()}");
         _type = _fixture.Create<string>();
@@ -103,7 +103,7 @@ public class CloudCacheEventFactoryTests : IAsyncLifetime
             SourceUri = _source,
         };
         _fixture.Inject(Options.Create(_cacheOptions));
-        return Task.CompletedTask;
+        return ValueTask.CompletedTask;
     }
 }
 

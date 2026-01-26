@@ -1,11 +1,12 @@
-﻿using System.Reflection;
+﻿using System.Collections.Frozen;
+using System.Reflection;
 using System.Text;
 
 namespace UiPath.Platform.Caching;
 
 public static class TypeExtensions
 {
-    private static readonly Dictionary<Type, string> TypesToFriendlyNames = new()
+    private static readonly FrozenDictionary<Type, string> TypesToFriendlyNames = new Dictionary<Type, string>
     {
         {typeof(bool), "bool"},
         {typeof(byte), "byte"},
@@ -21,7 +22,7 @@ public static class TypeExtensions
         {typeof(short), "short"},
         {typeof(ushort), "ushort"},
         {typeof(string), "string"}
-    };
+    }.ToFrozenDictionary();
 
     public static List<T> GetAllPublicConstantValues<T>(this Type type) =>
         type

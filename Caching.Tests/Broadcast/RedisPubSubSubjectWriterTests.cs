@@ -6,7 +6,7 @@ using StackExchange.Redis;
 
 namespace UiPath.Platform.Caching.Tests.Broadcast;
 
-public class RedisPubSubSubjectWriterTests : IAsyncLifetime
+public class RedisPubSubSubjectWriterTests(ITestContextAccessor testContextAccessor) : IAsyncLifetime
 {
     private readonly IFixture _fixture = AutoFixtureCreator.NSubstitute();
 
@@ -26,7 +26,7 @@ public class RedisPubSubSubjectWriterTests : IAsyncLifetime
             return _sut;
         }
         _sut = _fixture.Create<RedisPubSubSubjectWriter<ICacheEvent>>();
-        await Task.Delay(_delay.Multiply(2));
+        await Task.Delay(_delay.Multiply(2), testContextAccessor.Current.CancellationToken);
         return _sut;
     }
 
@@ -41,10 +41,10 @@ public class RedisPubSubSubjectWriterTests : IAsyncLifetime
                 action = ctx.Arg<Action<RedisChannel, RedisValue>>();
             });
         var sut = await Sut();
-        await Task.Delay(_delay.Multiply(3));
+        await Task.Delay(_delay.Multiply(3), testContextAccessor.Current.CancellationToken);
         action.Should().NotBeNull();
         action!(_redisChannel, RedisValue.Null);
-        await Task.Delay(_delay.Multiply(5));
+        await Task.Delay(_delay.Multiply(5), testContextAccessor.Current.CancellationToken);
         _channel.Reader.TryRead(out var item).Should().BeFalse();
     }
 
@@ -58,10 +58,10 @@ public class RedisPubSubSubjectWriterTests : IAsyncLifetime
                 action = ctx.Arg<Action<RedisChannel, RedisValue>>();
             });
         var sut = await Sut();
-        await Task.Delay(_delay.Multiply(3));
+        await Task.Delay(_delay.Multiply(3), testContextAccessor.Current.CancellationToken);
         action.Should().NotBeNull();
         action!(_redisChannel, (RedisValue)_fixture.Create<string>());
-        await Task.Delay(_delay.Multiply(5));
+        await Task.Delay(_delay.Multiply(5), testContextAccessor.Current.CancellationToken);
         _channel.Reader.TryRead(out var item).Should().BeFalse();
     }
 
@@ -81,10 +81,10 @@ public class RedisPubSubSubjectWriterTests : IAsyncLifetime
                 action = ctx.Arg<Action<RedisChannel, RedisValue>>();
             });
         var sut = await Sut();
-        await Task.Delay(_delay.Multiply(3));
+        await Task.Delay(_delay.Multiply(3), testContextAccessor.Current.CancellationToken);
         action.Should().NotBeNull();
         action!(_redisChannel, (RedisValue)expectedString);
-        await Task.Delay(_delay.Multiply(3));
+        await Task.Delay(_delay.Multiply(3), testContextAccessor.Current.CancellationToken);
         _channel.Reader.TryRead(out var item).Should().Be(valid);
     }
 
@@ -107,12 +107,12 @@ public class RedisPubSubSubjectWriterTests : IAsyncLifetime
         act.Should().NotThrow();
     }
 
-    public Task DisposeAsync()
+    public ValueTask DisposeAsync()
     {
-        return Task.CompletedTask;
+        return ValueTask.CompletedTask;
     }
 
-    public Task InitializeAsync()
+    public ValueTask InitializeAsync()
     {
         _redisChannel = RedisChannel.Literal(_fixture.Create<string>());
         _fixture.Inject(_redisChannel);
@@ -127,6 +127,6 @@ public class RedisPubSubSubjectWriterTests : IAsyncLifetime
             SubscriberDueTime = TimeSpan.Zero
         };
         _fixture.Inject(_options);
-        return Task.CompletedTask;
+        return ValueTask.CompletedTask;
     }
 }

@@ -2,7 +2,7 @@
 using UiPath.Platform.Caching.Polly;
 
 namespace UiPath.Platform.Caching.Tests;
-public class ResiliencePipelineWrapperTests : IAsyncLifetime
+public class ResiliencePipelineWrapperTests(ITestContextAccessor testContextAccessor) : IAsyncLifetime
 {
     private readonly IFixture _fixture = AutoFixtureCreator.NSubstitute();
     private IResiliencePipelineFactory _resiliencePipelineFactory = default!;
@@ -13,8 +13,8 @@ public class ResiliencePipelineWrapperTests : IAsyncLifetime
     public async Task IntPipelineIsCached_same_default()
     {
         var sut = _fixture.Create<ResiliencePipelineWrapper>();
-        await sut.ExecuteAsync(_ => new ValueTask<int>(1), 1, default);
-        await sut.ExecuteAsync(_ => new ValueTask<int>(1), 1, default);
+        await sut.ExecuteAsync(_ => new ValueTask<int>(1), 1, testContextAccessor.Current.CancellationToken);
+        await sut.ExecuteAsync(_ => new ValueTask<int>(1), 1, testContextAccessor.Current.CancellationToken);
         intCallCount.Should().Be(1);
     }
 
@@ -22,8 +22,8 @@ public class ResiliencePipelineWrapperTests : IAsyncLifetime
     public async Task IntPipeline_different_default()
     {
         var sut = _fixture.Create<ResiliencePipelineWrapper>();
-        await sut.ExecuteAsync(_ => new ValueTask<int>(1), 1, default);
-        await sut.ExecuteAsync(_ => new ValueTask<int>(1), 2, default);
+        await sut.ExecuteAsync(_ => new ValueTask<int>(1), 1, testContextAccessor.Current.CancellationToken);
+        await sut.ExecuteAsync(_ => new ValueTask<int>(1), 2, testContextAccessor.Current.CancellationToken);
         intCallCount.Should().Be(2);
     }
 
@@ -31,8 +31,8 @@ public class ResiliencePipelineWrapperTests : IAsyncLifetime
     public async Task BoolPipeline_different_default()
     {
         var sut = _fixture.Create<ResiliencePipelineWrapper>();
-        await sut.ExecuteAsync(_ => new ValueTask<bool>(false), false, default);
-        await sut.ExecuteAsync(_ => new ValueTask<bool>(false), true, default);
+        await sut.ExecuteAsync(_ => new ValueTask<bool>(false), false, testContextAccessor.Current.CancellationToken);
+        await sut.ExecuteAsync(_ => new ValueTask<bool>(false), true, testContextAccessor.Current.CancellationToken);
         boolCallCount.Should().Be(2);
     }
 
@@ -40,21 +40,21 @@ public class ResiliencePipelineWrapperTests : IAsyncLifetime
     public async Task AllCached()
     {
         var sut = _fixture.Create<ResiliencePipelineWrapper>();
-        await sut.ExecuteAsync(_ => new ValueTask<int>(1), 1, default);
-        await sut.ExecuteAsync(_ => new ValueTask<int>(1), 1, default);
-        await sut.ExecuteAsync(_ => new ValueTask<bool>(false), false, default);
-        await sut.ExecuteAsync(_ => new ValueTask<bool>(false), false, default);
+        await sut.ExecuteAsync(_ => new ValueTask<int>(1), 1, testContextAccessor.Current.CancellationToken);
+        await sut.ExecuteAsync(_ => new ValueTask<int>(1), 1, testContextAccessor.Current.CancellationToken);
+        await sut.ExecuteAsync(_ => new ValueTask<bool>(false), false, testContextAccessor.Current.CancellationToken);
+        await sut.ExecuteAsync(_ => new ValueTask<bool>(false), false, testContextAccessor.Current.CancellationToken);
         boolCallCount.Should().Be(1);
         intCallCount.Should().Be(1);
     }
 
-    public Task DisposeAsync()
+    public ValueTask DisposeAsync()
     {
 
-        return Task.CompletedTask;
+        return ValueTask.CompletedTask;
     }
 
-    public Task InitializeAsync()
+    public ValueTask InitializeAsync()
     {
         _resiliencePipelineFactory = _fixture.Freeze<IResiliencePipelineFactory>();
         _resiliencePipelineFactory.Create(Arg.Any<string>(), Arg.Any<bool>())
@@ -69,6 +69,6 @@ public class ResiliencePipelineWrapperTests : IAsyncLifetime
                 intCallCount++;
                 return new ResiliencePipelineBuilder<int>().Build();
             });
-        return Task.CompletedTask;
+        return ValueTask.CompletedTask;
     }
 }

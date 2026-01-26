@@ -76,12 +76,12 @@ public class CacheEventFactoryTests : IAsyncLifetime
         actual.Should().Be(isKnown);
     }
 
-    public Task DisposeAsync()
+    public ValueTask DisposeAsync()
     {
-        return Task.CompletedTask;
+        return ValueTask.CompletedTask;
     }
 
-    public Task InitializeAsync()
+    public ValueTask InitializeAsync()
     {
         _source = new Uri($"urn:{_fixture.Create<string>()}");
         _type = _fixture.Create<string>();
@@ -90,10 +90,10 @@ public class CacheEventFactoryTests : IAsyncLifetime
         _cacheName = _fixture.Create<string>();
 
         _cacheOptions = new CacheOptions
-        { 
+        {
             SourceUri = _source,
         };
         _fixture.Inject(Options.Create(_cacheOptions));
-        return Task.CompletedTask;
+        return ValueTask.CompletedTask;
     }
 }

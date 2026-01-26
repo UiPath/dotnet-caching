@@ -6,9 +6,7 @@ public sealed class MemoryCacheFactory(ISystemClock? clock, ILoggerFactory logge
     {
         var memoryCacheOptions = new MemoryCacheOptions
         {
-#if !NET6_0
-               TrackStatistics = memoryOptions.TrackStatistics,
-#endif
+            TrackStatistics = memoryOptions.TrackStatistics,
             Clock = clock
         };
 

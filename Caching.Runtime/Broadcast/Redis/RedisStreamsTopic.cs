@@ -4,7 +4,7 @@ using UiPath.Platform.Caching.Telemetry;
 
 namespace UiPath.Platform.Caching.Broadcast.Redis;
 
-public sealed class RedisStreamsTopic<T> : ITopic<T>
+public sealed partial class RedisStreamsTopic<T> : ITopic<T>
      where T : IEvent
 {
     private readonly IRedisStreamKeyStrategy _redisStreamKeyStrategy;
@@ -20,9 +20,13 @@ public sealed class RedisStreamsTopic<T> : ITopic<T>
     private readonly ICachingTelemetryProvider _cachingTelemetryProvider;
     private readonly RedisStreamsTopicOptions _streamOptions;
     private readonly EventDispatcher<T> _dispatcher;
+#if NET9_0_OR_GREATER
+    private readonly Lock _syncObj = new();
+#else
     private readonly object _syncObj = new();
+#endif
     private bool _disposed;
-    private bool _consumerGroupCreated = false;
+    private volatile bool _consumerGroupCreated;
 
     public TopicKey TopicKey { get; }
 
@@ -77,25 +81,29 @@ public sealed class RedisStreamsTopic<T> : ITopic<T>
 
         try
         {
-            var messageString = _formatter.EncodeAsString(@event);
+            RedisValue messageString = _formatter.EncodeAsString(@event);
+            RedisValue? messageId = null;
             var id = await _write.ExecuteAsync(async token =>
             {
                 token.ThrowIfCancellationRequested();
                 return await _redis.Database.StreamAddAsync(
-                    _context.Topic,
-                    _context.FieldName,
-                    messageString,
+                    key: _context.Topic,
+                    streamField: _context.FieldName,
+                    streamValue: messageString,
+                    messageId: messageId,
                     maxLength: _streamOptions.MaxLength,
                     useApproximateMaxLength: true,
+                    limit: _streamOptions.Limit,
+                    trimMode: StreamTrimMode.KeepReferences,
                     flags: CommandFlags.DemandMaster).ConfigureAwait(false);
             }, defaultValue: RedisValue.Null, token).ConfigureAwait(false);
             _cachingTelemetryProvider.TrackTopicWriteMetric(_context.Topic!, id);
-            _logger.LogDebug("Published to topic {TopicKey} event {EventId} stream id {StreamId} ", TopicKey, @event.Id,  id);
+            LogPublished(TopicKey, @event.Id, id);
             return !id.IsNull;
         }
         catch (Exception ex)
         {
-            _logger.LogWarning(ex, "Error when publishing to topic {TopicKey} event {EventId}", TopicKey, @event.Id);
+            LogPublishError(ex, TopicKey, @event.Id);
             return false;
         }
     }
@@ -119,7 +127,11 @@ public sealed class RedisStreamsTopic<T> : ITopic<T>
     {
         if (!_consumerGroupCreated)
         {
+#if NET9_0_OR_GREATER
+            using (_syncObj.EnterScope())
+#else
             lock (_syncObj)
+#endif
             {
                 if (!_consumerGroupCreated)
                 {
@@ -140,7 +152,7 @@ public sealed class RedisStreamsTopic<T> : ITopic<T>
         }
         catch (RedisServerException ex) when (ex.Message == StreamConstants.ConsumerGroupNameExistsErrorMessage)
         {
-            _logger.LogDebug("On Topic {Topic} consumer group {ConsumerGroup} already exists", _context.Topic, _context.ConsumerGroup);
+            LogConsumerGroupExists(_context.Topic, _context.ConsumerGroup);
             return true;
         }
     }
@@ -164,4 +176,13 @@ public sealed class RedisStreamsTopic<T> : ITopic<T>
             EmitStreamReceivedEvent: options.EmitStreamReceivedEvent
             );
     }
+
+    [LoggerMessage(Level = LogLevel.Debug, Message = "Published to topic {TopicKey} event {EventId} stream id {StreamId}")]
+    private partial void LogPublished(TopicKey topicKey, string? eventId, RedisValue streamId);
+
+    [LoggerMessage(Level = LogLevel.Warning, Message = "Error when publishing to topic {TopicKey} event {EventId}")]
+    private partial void LogPublishError(Exception ex, TopicKey topicKey, string? eventId);
+
+    [LoggerMessage(Level = LogLevel.Debug, Message = "On Topic {Topic} consumer group {ConsumerGroup} already exists")]
+    private partial void LogConsumerGroupExists(RedisKey topic, RedisValue consumerGroup);
 }

@@ -3,7 +3,7 @@ using UiPath.Platform.Caching.Policies;
 
 namespace UiPath.Platform.Caching.Broadcast.Redis;
 
-public sealed class RedisPubSubTopic<T> : ITopic<T>
+public sealed partial class RedisPubSubTopic<T> : ITopic<T>
      where T : IEvent
 {
     private readonly RedisChannel _redisChannel;
@@ -64,7 +64,7 @@ public sealed class RedisPubSubTopic<T> : ITopic<T>
         try
         {
             var messageString = _formatter.EncodeAsString(@event);
-            _logger.LogTrace("Publishing to topic {TopicKey} event {EventId}", TopicKey, @event.Id);
+            LogPublishing(TopicKey, @event.Id);
             var response = await _write.ExecuteAsync(async token =>
             {
                 token.ThrowIfCancellationRequested();
@@ -74,7 +74,7 @@ public sealed class RedisPubSubTopic<T> : ITopic<T>
         }
         catch (Exception ex)
         {
-            _logger.LogWarning(ex, "Error when publishing to Topic {TopicKey}", TopicKey);
+            LogPublishError(ex, TopicKey);
             return false;
         }
     }
@@ -93,4 +93,10 @@ public sealed class RedisPubSubTopic<T> : ITopic<T>
         _subscriber.Dispose();
         OnDisposed?.Invoke(this, EventArgs.Empty);
     }
+
+    [LoggerMessage(Level = LogLevel.Trace, Message = "Publishing to topic {TopicKey} event {EventId}")]
+    private partial void LogPublishing(TopicKey topicKey, string? eventId);
+
+    [LoggerMessage(Level = LogLevel.Warning, Message = "Error when publishing to Topic {TopicKey}")]
+    private partial void LogPublishError(Exception ex, TopicKey topicKey);
 }

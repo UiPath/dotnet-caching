@@ -5,7 +5,7 @@ using StackExchange.Redis;
 using UiPath.Platform.Caching.Telemetry;
 
 namespace UiPath.Platform.Caching.Tests;
-public class RedisStreamHealthMaintainerTests : IAsyncLifetime
+public class RedisStreamHealthMaintainerTests(ITestContextAccessor testContextAccessor) : IAsyncLifetime
 {
     private readonly IFixture _fixture = AutoFixtureCreator.NSubstitute();
     private IRedisConnector _redisConnector = default!;
@@ -39,7 +39,7 @@ public class RedisStreamHealthMaintainerTests : IAsyncLifetime
     public async Task Works_as_expected_when_locked()
     {
         _ownLock = false;
-        await Sut.CheckStreamsAsync(CancellationToken.None);
+        await Sut.CheckStreamsAsync(testContextAccessor.Current.CancellationToken);
         await _database.DidNotReceive().ExecuteAsync(Arg.Any<string>(), Arg.Any<ICollection<object>?>(), Arg.Any<CommandFlags>());
         _telemetryProvider.DidNotReceive().TrackMetric(Arg.Any<string>(), Arg.Any<double>(), Arg.Any<IDictionary<string, string>?>());
     }
@@ -48,7 +48,7 @@ public class RedisStreamHealthMaintainerTests : IAsyncLifetime
     public async Task Works_as_expected_when_no_lock()
     {
         Sut.Initialize();
-        await Sut.CheckStreamsAsync(CancellationToken.None);
+        await Sut.CheckStreamsAsync(testContextAccessor.Current.CancellationToken);
         await _database.Received().ExecuteAsync(Arg.Any<string>(), Arg.Any<ICollection<object>?>(), Arg.Any<CommandFlags>());
         _telemetryProvider.Received().TrackMetric(Arg.Any<string>(), Arg.Any<double>(), Arg.Any<IDictionary<string, string>?>());
     }
@@ -58,7 +58,7 @@ public class RedisStreamHealthMaintainerTests : IAsyncLifetime
     {
         Sut.Initialize();
         _lastGeneratedId = $"{DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()}-0";
-        await Sut.CheckStreamsAsync(CancellationToken.None);
+        await Sut.CheckStreamsAsync(testContextAccessor.Current.CancellationToken);
         await _database.DidNotReceive().ExecuteAsync(Arg.Is<string>(s => s == "DEL"), Arg.Any<ICollection<object>?>(), Arg.Any<CommandFlags>());
         await _database.DidNotReceive().StreamGroupInfoAsync(Arg.Any<RedisKey>(), CommandFlags.DemandMaster);
     }
@@ -68,7 +68,7 @@ public class RedisStreamHealthMaintainerTests : IAsyncLifetime
     {
         Sut.Initialize();
         _lastGeneratedId = $"{DateTimeOffset.UtcNow.Subtract(_streamOptions.MaintainerQuarantineInterval).Subtract(TimeSpan.FromMinutes(1)).ToUnixTimeMilliseconds()}-0";
-        await Sut.CheckStreamsAsync(CancellationToken.None);
+        await Sut.CheckStreamsAsync(testContextAccessor.Current.CancellationToken);
         await _database.Received().ExecuteAsync(Arg.Is<string>(s => s == "DEL"), Arg.Any<ICollection<object>?>(), Arg.Any<CommandFlags>());
         await _database.DidNotReceive().StreamGroupInfoAsync(Arg.Any<RedisKey>(), CommandFlags.DemandMaster);
     }
@@ -79,7 +79,7 @@ public class RedisStreamHealthMaintainerTests : IAsyncLifetime
         var g1 = GenerateGroupInfo(DateTimeOffset.UtcNow.Subtract(TimeSpan.FromMilliseconds(10)), 0);
         _streamGroupInfos = [g1];
         Sut.Initialize();
-        await Sut.CheckStreamsAsync(CancellationToken.None);
+        await Sut.CheckStreamsAsync(testContextAccessor.Current.CancellationToken);
         await _database.Received().HashSetAsync(Arg.Any<RedisKey>(), Arg.Any<RedisValue>(), Arg.Any<RedisValue>(), When.Always, CommandFlags.DemandMaster);
     }
 
@@ -90,7 +90,7 @@ public class RedisStreamHealthMaintainerTests : IAsyncLifetime
         var g1 = GenerateGroupInfo(DateTimeOffset.UtcNow.Subtract(TimeSpan.FromMilliseconds(10)), 0);
         _streamGroupInfos = [g1];
         Sut.Initialize();
-        await Sut.CheckStreamsAsync(CancellationToken.None);
+        await Sut.CheckStreamsAsync(testContextAccessor.Current.CancellationToken);
         await _database.DidNotReceive().HashSetAsync(Arg.Any<RedisKey>(), Arg.Any<RedisValue>(), Arg.Any<RedisValue>(), When.Always, CommandFlags.DemandMaster);
     }
 
@@ -101,7 +101,7 @@ public class RedisStreamHealthMaintainerTests : IAsyncLifetime
         _streamGroupInfos = [g1];
         _quarantineValue = DateTimeOffset.UtcNow.Subtract(_streamOptions.MaintainerQuarantineInterval).Subtract(TimeSpan.FromMilliseconds(10)).ToString("O");
         Sut.Initialize();
-        await Sut.CheckStreamsAsync(CancellationToken.None);
+        await Sut.CheckStreamsAsync(testContextAccessor.Current.CancellationToken);
         await _database.Received().StreamDeleteConsumerGroupAsync(Arg.Any<RedisKey>(), Arg.Any<RedisValue>(), CommandFlags.DemandMaster);
         await _database.Received().HashDeleteAsync(Arg.Any<RedisKey>(), Arg.Any<RedisValue>(), CommandFlags.DemandMaster);
     }
@@ -114,7 +114,7 @@ public class RedisStreamHealthMaintainerTests : IAsyncLifetime
         var c1 = GenerateConsumerInfo();
         _streamConsumerInfos = [c1];
         Sut.Initialize();
-        await Sut.CheckStreamsAsync(CancellationToken.None);
+        await Sut.CheckStreamsAsync(testContextAccessor.Current.CancellationToken);
         await _database.DidNotReceive().StreamDeleteConsumerGroupAsync(Arg.Any<RedisKey>(), Arg.Any<RedisValue>(), CommandFlags.DemandMaster);
         await _database.Received().HashDeleteAsync(Arg.Any<RedisKey>(), Arg.Any<RedisValue>(), CommandFlags.DemandMaster);
         await _database.DidNotReceive().ExecuteAsync(Arg.Is<string>(s => s == "XTRIM"), Arg.Any<ICollection<object>?>(), Arg.Any<CommandFlags>());
@@ -129,7 +129,7 @@ public class RedisStreamHealthMaintainerTests : IAsyncLifetime
         _streamConsumerInfos = [c1];
         _redisConnector.Version.Returns(Version.Parse("7.0.0"));
         Sut.Initialize();
-        await Sut.CheckStreamsAsync(CancellationToken.None);
+        await Sut.CheckStreamsAsync(testContextAccessor.Current.CancellationToken);
         await _database.DidNotReceive().StreamDeleteConsumerGroupAsync(Arg.Any<RedisKey>(), Arg.Any<RedisValue>(), CommandFlags.DemandMaster);
         await _database.Received().HashDeleteAsync(Arg.Any<RedisKey>(), Arg.Any<RedisValue>(), CommandFlags.DemandMaster);
         await _database.Received().ExecuteAsync(Arg.Is<string>(s => s == "XTRIM"), Arg.Any<ICollection<object>?>(), Arg.Any<CommandFlags>());
@@ -144,17 +144,17 @@ public class RedisStreamHealthMaintainerTests : IAsyncLifetime
         _database.StreamInfoAsync(Arg.Any<RedisKey>(), Arg.Any<CommandFlags>())
             .ThrowsAsync(new Exception());
 
-        Func<Task> act = async () => await Sut.CheckStreamsAsync(CancellationToken.None);
+        Func<Task> act = async () => await Sut.CheckStreamsAsync(testContextAccessor.Current.CancellationToken);
         await act.Should().NotThrowAsync();
     }
 
 
-    public Task DisposeAsync()
+    public ValueTask DisposeAsync()
     {
-        return Task.CompletedTask;
+        return ValueTask.CompletedTask;
     }
 
-    public Task InitializeAsync()
+    public ValueTask InitializeAsync()
     {
         _redisConnector = _fixture.Freeze<IRedisConnector>();
         _database = _fixture.Freeze<IDatabase>();
@@ -213,7 +213,7 @@ public class RedisStreamHealthMaintainerTests : IAsyncLifetime
 
         _transaction = _fixture.Freeze<ITransaction>();
         _transaction.ExecuteAsync().Returns(c => _transactionSuccess);
-        return Task.CompletedTask;
+        return ValueTask.CompletedTask;
     }
 
     private StreamInfo GenerateStreamInfo(int? groupsCount = null)

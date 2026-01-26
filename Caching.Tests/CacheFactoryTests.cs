@@ -118,12 +118,12 @@ public class CacheFactoryTests : IAsyncLifetime
         Sut.CreateHashCache(provider.Name).Should().NotBe(hashCache);
     }
 
-    public Task DisposeAsync()
+    public ValueTask DisposeAsync()
     {
-        return Task.CompletedTask;
+        return ValueTask.CompletedTask;
     }
 
-    public Task InitializeAsync()
+    public ValueTask InitializeAsync()
     {
         _providers = _fixture.CreateMany<ICacheProvider>().ToList();
         _providers.ForEach(p => p.Enabled.Returns(true));
@@ -133,6 +133,6 @@ public class CacheFactoryTests : IAsyncLifetime
             Enabled = true,
             DefaultCache = _defaultProvider.Name,
         };
-        return Task.CompletedTask;
+        return ValueTask.CompletedTask;
     }
 }

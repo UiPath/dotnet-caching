@@ -5,7 +5,7 @@ using UiPath.Platform.Caching.Policies;
 
 namespace UiPath.Platform.Caching.Tests.Broadcast;
 
-public class RedisStreamsTopicTests : IAsyncLifetime
+public class RedisStreamsTopicTests(ITestContextAccessor testContextAccessor) : IAsyncLifetime
 {
     private readonly IFixture _fixture = AutoFixtureCreator.NSubstitute();
     private RedisStreamsTopicOptions _redisStreamsTopicOptions = default!;
@@ -57,10 +57,18 @@ public class RedisStreamsTopicTests : IAsyncLifetime
     public async Task Publish_When_NotConnected()
     {
         _isConnected = false;
-        var actual = await Sut.PublishAsync(_fixture.Create<ICacheEvent>(), CancellationToken.None);
+        var actual = await Sut.PublishAsync(_fixture.Create<ICacheEvent>(), testContextAccessor.Current.CancellationToken);
         actual.Should().BeFalse();
-        await _database.DidNotReceive()
-        .StreamAddAsync(Arg.Any<RedisKey>(), Arg.Any<RedisValue>(), Arg.Any<RedisValue>(), Arg.Any<RedisValue?>(), maxLength: Arg.Any<int?>(), useApproximateMaxLength: true, flags: CommandFlags.DemandMaster);
+        await _database.DidNotReceive().StreamAddAsync(
+                key: Arg.Any<RedisKey>(),
+                streamField: Arg.Any<RedisValue>(),
+                streamValue: Arg.Any<RedisValue>(),
+                messageId: Arg.Any<RedisValue?>(),
+                maxLength: Arg.Any<long?>(),
+                useApproximateMaxLength: Arg.Any<bool>(),
+                limit: Arg.Any<long?>(),
+                trimMode: Arg.Any<StreamTrimMode>(),
+                flags: Arg.Any<CommandFlags>());
     }
 
     [Fact]
@@ -87,9 +95,19 @@ public class RedisStreamsTopicTests : IAsyncLifetime
     public async Task Publish_event()
     {
         var ev = _fixture.Create<ICacheEvent>();
-        var actual = await Sut.PublishAsync(ev, CancellationToken.None);
+        var actual = await Sut.PublishAsync(ev, testContextAccessor.Current.CancellationToken);
+
         await _database.Received()
-            .StreamAddAsync(Arg.Any<RedisKey>(), Arg.Any<RedisValue>(), Arg.Any<RedisValue>(), Arg.Any<RedisValue?>(), maxLength: Arg.Any<int?>(), useApproximateMaxLength: true, flags: CommandFlags.DemandMaster);
+            .StreamAddAsync(
+                key: Arg.Any<RedisKey>(),
+                streamField: Arg.Any<RedisValue>(),
+                streamValue: Arg.Any<RedisValue>(),
+                messageId: Arg.Any<RedisValue?>(),
+                maxLength: Arg.Any<long?>(),
+                useApproximateMaxLength: Arg.Any<bool>(),
+                limit: Arg.Any<long?>(),
+                trimMode: Arg.Any<StreamTrimMode>(),
+                flags: Arg.Any<CommandFlags>());
         actual.Should().BeTrue();
     }
 
@@ -98,19 +116,28 @@ public class RedisStreamsTopicTests : IAsyncLifetime
     {
         var ev = _fixture.Create<ICacheEvent>();
         _database
-            .StreamAddAsync(Arg.Any<RedisKey>(), Arg.Any<RedisValue>(), Arg.Any<RedisValue>(), Arg.Any<RedisValue?>(), maxLength: Arg.Any<int?>(), useApproximateMaxLength: true, flags: CommandFlags.DemandMaster)
+            .StreamAddAsync(
+                key: Arg.Any<RedisKey>(),
+                streamField: Arg.Any<RedisValue>(),
+                streamValue: Arg.Any<RedisValue>(),
+                messageId: Arg.Any<RedisValue?>(),
+                maxLength: Arg.Any<long?>(),
+                useApproximateMaxLength: Arg.Any<bool>(),
+                limit: Arg.Any<long?>(),
+                trimMode: Arg.Any<StreamTrimMode>(),
+                flags: Arg.Any<CommandFlags>())
             .ThrowsAsync<Exception>();
-        var actual = await Sut.PublishAsync(ev, CancellationToken.None);
+        var actual = await Sut.PublishAsync(ev, testContextAccessor.Current.CancellationToken);
         actual.Should().BeFalse();
     }
 
-    public Task DisposeAsync()
+    public ValueTask DisposeAsync()
     {
         //do nothing;
-        return Task.CompletedTask;
+        return ValueTask.CompletedTask;
     }
 
-    public Task InitializeAsync()
+    public ValueTask InitializeAsync()
     {
         _database = _fixture.Freeze<IDatabase>();
         _subject = _fixture.Freeze<ISubject<ICacheEvent>>();
@@ -130,6 +157,6 @@ public class RedisStreamsTopicTests : IAsyncLifetime
         _fixture.Inject(_redisCacheOptions);
         _cacheOptions = _fixture.Create<CacheOptions>();
         _fixture.Inject(_cacheOptions);
-        return Task.CompletedTask;
+        return ValueTask.CompletedTask;
     }
 }

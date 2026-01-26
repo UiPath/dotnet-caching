@@ -95,12 +95,12 @@ public class TopicFactoryTests : IAsyncLifetime
         Sut.Get(provider.Name).Should().NotBe(topic);
     }
 
-    public Task DisposeAsync()
+    public ValueTask DisposeAsync()
     {
-        return Task.CompletedTask;
+        return ValueTask.CompletedTask;
     }
 
-    public Task InitializeAsync()
+    public ValueTask InitializeAsync()
     {
         _topicKey = _fixture.Create<string>();
         _providers = _fixture.CreateMany<ITopicProvider>().ToList();
@@ -111,6 +111,6 @@ public class TopicFactoryTests : IAsyncLifetime
             Enabled = true,
             DefaultTopic = _defaultProvider.Name,
         };
-        return Task.CompletedTask;
+        return ValueTask.CompletedTask;
     }
 }

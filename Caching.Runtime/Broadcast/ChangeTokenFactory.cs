@@ -2,7 +2,7 @@
 
 namespace UiPath.Platform.Caching.Broadcast;
 
-public sealed class ChangeTokenFactory<T> : IChangeTokenFactory
+public sealed partial class ChangeTokenFactory<T> : IChangeTokenFactory
 {
 #pragma warning disable IDE1006 // Naming Styles
     private readonly ISet<string> MemoryAcceptedEvents = new HashSet<string>([KnownEventTypes.CacheRemoved, KnownEventTypes.CacheRefreshed], StringComparer.InvariantCultureIgnoreCase);
@@ -25,8 +25,11 @@ public sealed class ChangeTokenFactory<T> : IChangeTokenFactory
 
     public ICacheChangeToken Create(string token, ITopic<ICacheEvent> topic, string cacheName, Type entryType)
     {
-        _logger.LogTrace("Create change token. topic {TopicKey} token {Token} source {SourceUri}", topic.TopicKey, token, _sourceUri);
+        LogCreateChangeToken(topic.TopicKey, token, _sourceUri);
         var acceptedEvents = KnownCacheProviderNames.InMemory.Equals(cacheName, StringComparison.OrdinalIgnoreCase) ? MemoryAcceptedEvents : null;
         return new ChangeToken<T>(token, topic, _sourceUri, _serializer, _loggerFactory.CreateLogger<ChangeToken<T>>(), _telemetryProvider, acceptedEvents);
     }
+
+    [LoggerMessage(Level = LogLevel.Trace, Message = "Create change token. topic {TopicKey} token {Token} source {SourceUri}")]
+    private partial void LogCreateChangeToken(TopicKey topicKey, string token, Uri? sourceUri);
 }
