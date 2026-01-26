@@ -6,6 +6,8 @@ public class RedisCacheOptions : ICacheOptions
 
     public TimeSpan? DefaultExpiration { get; set; } = TimeSpan.FromHours(1);
 
+    public string KeyPrefix { get; set; } = string.Empty;
+
     public TimeSpan Timeout { get; set; } = TimeSpan.FromSeconds(1);
 
     public ISystemClock? Clock { get; set; }

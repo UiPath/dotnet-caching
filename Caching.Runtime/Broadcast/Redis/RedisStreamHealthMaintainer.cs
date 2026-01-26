@@ -21,7 +21,7 @@ public partial class RedisStreamHealthMaintainer : IHostedService
     private PeriodicTimer? _timer;
     private RedisKey _lockKey;
     private RedisKey _quarantineKeyPrefix;
- 
+
     private Lazy<bool> _supportsXtrimMinId = new(() => false);
 
     public RedisStreamHealthMaintainer(
@@ -88,7 +88,7 @@ public partial class RedisStreamHealthMaintainer : IHostedService
         }
 
         _lockKey = stringKeyStrategy.GetRedisKey(string.Join(_cacheOptions.Separator, nameof(RedisStreamHealthMaintainer), "Lock2"));
-        _quarantineKeyPrefix = hashKeyStrategy.GetRedisKey(string.Join(_cacheOptions.Separator, "caching", "meta", "stream")+"$");
+        _quarantineKeyPrefix = hashKeyStrategy.GetRedisKey(string.Join(_cacheOptions.Separator, "caching", "meta", "stream") + "$");
         _supportsXtrimMinId = new Lazy<bool>(() => _redis.Version >= Version.Parse("6.2.0"));
     }
 
@@ -135,6 +135,15 @@ public partial class RedisStreamHealthMaintainer : IHostedService
     private async Task CheckStreamAsync(StreamContext context, DateTimeOffset minOffset, CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
+
+        // The key may have been deleted between SCAN and processing; skip if it no longer exists
+        var exists = await Database.KeyExistsAsync(context.StreamKey, CommandFlags.DemandMaster).ConfigureAwait(false);
+        if (!exists)
+        {
+            _logger.LogInformation("Stream {StreamKey} no longer exists. Skipping.", context.StreamKey);
+            return;
+        }
+
         var streamInfo = await Database.StreamInfoAsync(context.StreamKey, CommandFlags.DemandMaster).ConfigureAwait(false);
         TrackStream(context.StreamKey, streamInfo);
         if (streamInfo.ConsumerGroupCount == 0)
@@ -166,13 +175,13 @@ public partial class RedisStreamHealthMaintainer : IHostedService
 
         foreach (var groupInfo in groupInfos)
         {
-            await CheckStreamGroupAsync(context, groupInfo, cancellationToken).ConfigureAwait(false);
+            await CheckStreamGroupAsync(context, groupInfo, minOffset, cancellationToken).ConfigureAwait(false);
         }
 
         if (_supportsXtrimMinId.Value && TryParseDeliveredIdToDatetimeOffset(streamInfo.LastGeneratedId, out var dateTimeOffset) && dateTimeOffset > minOffset)
         {
             long minId = minOffset.ToUnixTimeMilliseconds();
-            var result = await Database.ExecuteAsync("XTRIM", [context.StreamKey.ToString(), "MINID", minId], CommandFlags.DemandMaster).ConfigureAwait(false);
+            var result = await Database.StreamTrimByMinIdAsync(context.StreamKey, minId, flags: CommandFlags.DemandMaster).ConfigureAwait(false);
             var entriesDeleted = (long)result;
             LogEntriesDeleted(entriesDeleted, context.StreamKey, minId);
         }
@@ -190,11 +199,11 @@ public partial class RedisStreamHealthMaintainer : IHostedService
         if (delete)
         {
             LogStreamDeleted(context.StreamKey);
-            await Database.ExecuteAsync("DEL", [context.StreamKey, context.QuarantineKey], CommandFlags.DemandMaster).ConfigureAwait(false);
+            await Database.KeyDeleteAsync([context.StreamKey, context.QuarantineKey], CommandFlags.DemandMaster).ConfigureAwait(false);
         }
     }
 
-    private async Task CheckStreamGroupAsync(StreamContext context, StreamGroupInfo groupInfo, CancellationToken cancellationToken)
+    private async Task CheckStreamGroupAsync(StreamContext context, StreamGroupInfo groupInfo, DateTimeOffset minOffset, CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
 
@@ -206,14 +215,52 @@ public partial class RedisStreamHealthMaintainer : IHostedService
         }
         else
         {
-            await CheckStreamGroupWithConsumersAsync(context, groupInfo, cancellationToken).ConfigureAwait(false);
+            await CheckStreamGroupWithConsumersAsync(context, groupInfo, minOffset, cancellationToken).ConfigureAwait(false);
         }
     }
 
-    private async Task CheckStreamGroupWithConsumersAsync(StreamContext context, StreamGroupInfo groupInfo, CancellationToken cancellationToken)
+    private async Task CheckStreamGroupWithConsumersAsync(StreamContext context, StreamGroupInfo groupInfo, DateTimeOffset minOffset, CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
+
+        // Check if the consumer group's last-delivered-id is older than minOffset
+        if (TryParseDeliveredIdToDatetimeOffset(groupInfo.LastDeliveredId, out var lastDeliveredOffset) &&
+            lastDeliveredOffset.HasValue &&
+            lastDeliveredOffset.Value < minOffset)
+        {
+            _logger.LogWarning(
+                "Consumer group {Group} from stream {Stream} has stale last-delivered-id. LastDeliveredId: {LastDeliveredId}, LastDeliveredDate: {LastDeliveredDate}, MinOffset: {MinOffset}",
+                groupInfo.Name,
+                context.StreamKey,
+                groupInfo.LastDeliveredId,
+                lastDeliveredOffset.Value.ToString("O"),
+                minOffset.ToString("O"));
+
+            // Check quarantine before deleting
+            var quarantineValue = await Database.HashGetAsync(context.QuarantineKey, groupInfo.Name, CommandFlags.PreferReplica).ConfigureAwait(false);
+
+            if (quarantineValue.HasValue)
+            {
+                // Exists in quarantine - delete the consumer group
+                var success = await Database.StreamDeleteConsumerGroupAsync(context.StreamKey, groupInfo.Name, CommandFlags.DemandMaster).ConfigureAwait(false);
+                if (success)
+                {
+                    await Database.HashDeleteAsync(context.QuarantineKey, groupInfo.Name, CommandFlags.DemandMaster).ConfigureAwait(false);
+                    _logger.LogWarning("Consumer group {Group} from stream {Stream} deleted due to stale last-delivered-id (was in quarantine)", groupInfo.Name, context.StreamKey);
+                }
+            }
+            else
+            {
+                // Not in quarantine - add to quarantine
+                await Database.HashSetAsync(context.QuarantineKey, groupInfo.Name, _clock.UtcNow.ToString("O"), When.Always, CommandFlags.DemandMaster).ConfigureAwait(false);
+                _logger.LogWarning("Consumer group {Group} from stream {Stream} added to quarantine due to stale last-delivered-id", groupInfo.Name, context.StreamKey);
+            }
+
+            return;
+        }
+
         await Database.HashDeleteAsync(context.QuarantineKey, groupInfo.Name, CommandFlags.DemandMaster).ConfigureAwait(false);
+
         if (_streamOptions.TrackStatistics)
         {
             var streamConsumerInfos = await Database.StreamConsumerInfoAsync(context.StreamKey, groupInfo.Name, CommandFlags.DemandMaster).ConfigureAwait(false);
@@ -245,7 +292,6 @@ public partial class RedisStreamHealthMaintainer : IHostedService
                     LogConsumerGroupDeleted(groupInfo.Name, context.StreamKey);
                 }
             }
-
         }
         else
         {
@@ -274,16 +320,19 @@ public partial class RedisStreamHealthMaintainer : IHostedService
         ulong pointer = 0;
         while (!cancellationToken.IsCancellationRequested)
         {
-            var result = await Database.ExecuteAsync("SCAN", [pointer, "MATCH", _streamsSearchPattern, "COUNT", 100, "TYPE", "stream"], CommandFlags.DemandMaster).ConfigureAwait(false);
-            (ulong tempPointer, List<RedisKey> keys)  = ParseStreamScan(result);
+            var result = await Database.ExecuteAsync("SCAN", [pointer.ToString(), "MATCH", _streamsSearchPattern, "COUNT", 100, "TYPE", "stream"], CommandFlags.DemandMaster).ConfigureAwait(false);
+
+            (ulong tempPointer, List<RedisKey> keys) = ParseStreamScan(result);
             foreach (var key in keys)
             {
-               ret.Add(new StreamContext(key, string.Concat(_quarantineKeyPrefix, key)));
+                ret.Add(new StreamContext(key, string.Concat(_quarantineKeyPrefix, key)));
             }
+
             if (tempPointer == 0)
             {
                 break;
             }
+
             pointer = tempPointer;
         }
 
@@ -313,6 +362,7 @@ public partial class RedisStreamHealthMaintainer : IHostedService
         {
             return;
         }
+
         var props = new Dictionary<string, string>();
         AddProp(props, "Name", groupInfo.Name);
         AddProp(props, "Lag", groupInfo.Lag.GetValueOrDefault(0).ToString(CultureInfo.InvariantCulture));
@@ -325,6 +375,7 @@ public partial class RedisStreamHealthMaintainer : IHostedService
         {
             AddProp(props, "LastDeliveredDate", lastDeliveredDate.Value.ToString("u"));
         }
+
         _telemetryProvider.TrackMetric(Metrics.StreamGroup, groupInfo.Lag.GetValueOrDefault(), props);
     }
 
@@ -347,6 +398,7 @@ public partial class RedisStreamHealthMaintainer : IHostedService
                 dateTimeOffset = DateTimeOffset.FromUnixTimeMilliseconds(result);
                 return true;
             }
+
             return false;
         }
         catch
@@ -363,7 +415,7 @@ public partial class RedisStreamHealthMaintainer : IHostedService
         }
     }
 
-    private static (ulong pointer, List<RedisKey> keys) ParseStreamScan(RedisResult result)
+    private (ulong pointer, List<RedisKey> keys) ParseStreamScan(RedisResult result)
     {
         if (result.IsNull || result.Length == 0)
         {
@@ -372,6 +424,9 @@ public partial class RedisStreamHealthMaintainer : IHostedService
 
         var pointer = Convert.ToUInt64(result[0].ToString(), CultureInfo.InvariantCulture);
         var lst = new List<RedisKey>();
+
+        var keyPrefix = _redisOptions.KeyPrefix;
+
         if (result.Length == 2 && result[1].Length > 0)
         {
             var arr = result[1];
@@ -380,7 +435,15 @@ public partial class RedisStreamHealthMaintainer : IHostedService
                 var key = arr[i];
                 if (key != null && !key.IsNull)
                 {
-                    lst.Add((RedisKey)key);
+                    var keyString = key.ToString();
+
+                    // Strip the AppShortName prefix so built-in Database methods (which use WithKeyPrefix) work correctly
+                    if (!string.IsNullOrEmpty(keyPrefix) && keyString.StartsWith(keyPrefix, StringComparison.Ordinal))
+                    {
+                        keyString = keyString[keyPrefix.Length..];
+                    }
+
+                    lst.Add((RedisKey)keyString);
                 }
             }
         }
