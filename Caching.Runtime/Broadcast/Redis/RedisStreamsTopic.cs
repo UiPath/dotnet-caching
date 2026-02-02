@@ -82,19 +82,15 @@ public sealed partial class RedisStreamsTopic<T> : ITopic<T>
         try
         {
             RedisValue messageString = _formatter.EncodeAsString(@event);
-            RedisValue? messageId = null;
             var id = await _write.ExecuteAsync(async token =>
             {
                 token.ThrowIfCancellationRequested();
                 return await _redis.Database.StreamAddAsync(
-                    key: _context.Topic,
-                    streamField: _context.FieldName,
-                    streamValue: messageString,
-                    messageId: messageId,
+                    _context.Topic,
+                    _context.FieldName,
+                    messageString,
                     maxLength: _streamOptions.MaxLength,
                     useApproximateMaxLength: true,
-                    limit: _streamOptions.Limit,
-                    trimMode: StreamTrimMode.KeepReferences,
                     flags: CommandFlags.DemandMaster).ConfigureAwait(false);
             }, defaultValue: RedisValue.Null, token).ConfigureAwait(false);
             _cachingTelemetryProvider.TrackTopicWriteMetric(_context.Topic!, id);
