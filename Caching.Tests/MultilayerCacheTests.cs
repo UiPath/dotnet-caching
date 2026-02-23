@@ -1,6 +1,7 @@
 ﻿using Microsoft.Extensions.Caching.Memory;
 using Microsoft.Extensions.Internal;
 using Microsoft.Extensions.Logging;
+using Newtonsoft.Json.Linq;
 using NSubstitute.ExceptionExtensions;
 using UiPath.Platform.Caching;
 using UiPath.Platform.Caching.Tests.Broadcast;

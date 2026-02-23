@@ -76,7 +76,7 @@ public sealed partial class MultilayerHashCache : MultilayerCacheBase, IHashCach
         NotCacheableException.ThrowIfNotCacheable<T>();
         var cacheEntryOptions = _entryBuilder.BuildEntryOptions<T>(cacheKey, expiration, setOption ?? HashCacheSetOption.KeyReplace, token);
         var cacheEntry = await GetCacheEntryAsync<T>(cacheEntryOptions).ConfigureAwait(false);
-        if (!IsDefault(cacheEntry.Value))
+        if (!IsNullOrEmpty(cacheEntry.Value))
         {
             return cacheEntry.Value!;
         }
@@ -84,7 +84,7 @@ public sealed partial class MultilayerHashCache : MultilayerCacheBase, IHashCach
         LogCacheMissed(cacheEntryOptions.CacheKey);
         var ret = await generator(token).ConfigureAwait(false);
 
-        if (!IsDefault(ret))
+        if (!IsNullOrEmpty(ret))
         {
             var innerCacheDisconnected = GetInnerCacheDisconnected();
             await InternalSetAsync(cacheEntryOptions, ret, innerCacheDisconnected).ConfigureAwait(false);
@@ -102,7 +102,7 @@ public sealed partial class MultilayerHashCache : MultilayerCacheBase, IHashCach
     {
         NotCacheableException.ThrowIfNotCacheable<T>();
         var options = _entryBuilder.BuildEntryOptions<T>(cacheKey, expiration, token: token);
-        if (IsDefault(values))
+        if (IsNullOrEmpty(values))
         {
             return await RemoveAsync<T>(options).ConfigureAwait(false);
         }
@@ -127,7 +127,7 @@ public sealed partial class MultilayerHashCache : MultilayerCacheBase, IHashCach
         var expiration = options.ExpireTime.HasValue ? _clock.ToDateTimeOffset(options.ExpireTime) : _clock.ToDateTimeOffset(options.TimeToLive);
         var cacheEntryOptions = _entryBuilder.BuildEntryOptions<T>(cacheKey, expiration, options.SetOption, token);
         cacheEntryOptions.Metadata = options.Metadata;
-        if (IsDefault(values))
+        if (IsNullOrEmpty(values))
         {
             return await RemoveAsync<T>(cacheEntryOptions).ConfigureAwait(false);
         }
@@ -299,7 +299,7 @@ public sealed partial class MultilayerHashCache : MultilayerCacheBase, IHashCach
 
         cacheEntry = await _innerCache.GetCacheEntryAsync<T>(options.CacheKey, options.Token).ConfigureAwait(false);
 
-        if (IsDefault(cacheEntry.Value))
+        if (IsNullOrEmpty(cacheEntry.Value))
         {
             return cacheEntry!;
         }
@@ -353,8 +353,8 @@ public sealed partial class MultilayerHashCache : MultilayerCacheBase, IHashCach
     private ICacheEntry<IDictionary<string, T?>> CreateEntry<T>(IDictionary<string, T?> values, InternalHashCacheEntryOptions options) =>
         _cacheEntryFactory.Create<IDictionary<string, T?>>(values.ToImmutableDictionary(), options.Expiration, options.Metadata?.ToImmutableDictionary());
 
-    private static bool IsDefault<T>(IDictionary<string, T?>? value) =>
-        value == null || value.Count == 0;
+    private static bool IsNullOrEmpty<T>(IDictionary<string, T?>? value) =>
+        value is null || value.Count == 0;
 
     private static ImmutableDictionary<string, T?> Empty<T>() =>
         ImmutableDictionary<string, T?>.Empty;
