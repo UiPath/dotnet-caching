@@ -53,8 +53,8 @@ public sealed partial class MultilayerCache : MultilayerCacheBase, ICache
         NotCacheableException.ThrowIfNotCacheable<T>();
         var cacheEntryOptions = _entryBuilder.BuildEntryOptions<T>(cacheKey, expiration, token);
 
-        var ret = await GetInnerAsync<T>(cacheEntryOptions).ConfigureAwait(false);
-        if (!IsDefault(ret))
+        T? ret = await GetInnerAsync<T>(cacheEntryOptions).ConfigureAwait(false);
+        if (ret is not null)
         {
             return ret;
         }
@@ -62,7 +62,7 @@ public sealed partial class MultilayerCache : MultilayerCacheBase, ICache
         LogCacheMissed(cacheEntryOptions.CacheKey);
         ret = await generator(token).ConfigureAwait(false);
 
-        if (!IsDefault(ret))
+        if (ret is not null)
         {
             var innerCacheDisconnected = GetInnerCacheDisconnected();
             await InternalSetAsync(cacheEntryOptions, ret, innerCacheDisconnected).ConfigureAwait(false);
@@ -80,7 +80,7 @@ public sealed partial class MultilayerCache : MultilayerCacheBase, ICache
     {
         NotCacheableException.ThrowIfNotCacheable<T>();
         var cacheEntryOptions = _entryBuilder.BuildEntryOptions<T>(cacheKey, expiration, token);
-        if (IsDefault(value))
+        if (value is null)
         {
             return await RemoveAsync<T>(cacheEntryOptions).ConfigureAwait(false);
         }
@@ -113,13 +113,13 @@ public sealed partial class MultilayerCache : MultilayerCacheBase, ICache
         var setEntries = new List<CacheEntryValue<T>>();
         foreach (var keyValue in keyValues)
         {
-            if (IsDefault(keyValue.Value))
+            if (keyValue.Value is null)
             {
                 removeEntries.Add(_entryBuilder.BuildEntryOptions<T>(keyValue.Key, token: token));
             }
             else
             {
-                setEntries.Add(new ( _entryBuilder.BuildEntryOptions<T>(keyValue.Key, expiration, token), keyValue.Value ));
+                setEntries.Add(new (_entryBuilder.BuildEntryOptions<T>(keyValue.Key, expiration, token), keyValue.Value ));
             }
         }
 
@@ -329,7 +329,7 @@ public sealed partial class MultilayerCache : MultilayerCacheBase, ICache
             var keyValue = fetched[i];
             results.Add(keyValue);
 
-            if (IsDefault(keyValue.Value))
+            if (keyValue.Value is null)
             {
                 continue;
             }
@@ -365,9 +365,9 @@ public sealed partial class MultilayerCache : MultilayerCacheBase, ICache
             }
         }
 
-        var ret = await _innerCache.GetAsync<T>(options.CacheKey, options.Token).ConfigureAwait(false);
+        T? ret = await _innerCache.GetAsync<T>(options.CacheKey, options.Token).ConfigureAwait(false);
 
-        if (IsDefault(ret))
+        if (ret is null)
         {
             return default;
         }
@@ -445,19 +445,10 @@ public sealed partial class MultilayerCache : MultilayerCacheBase, ICache
         return _localMemorySetter.Set(options, item, typeof(T), maxExpiration);
     }
 
-    private static bool IsDefault<T>(T value) =>
-        EqualityComparer<T>.Default.Equals(value, default);
-
-    private struct CacheEntryValue<T>
+    private readonly struct CacheEntryValue<T>(CacheEntryOptions cacheEntry, T? value)
     {
-        public CacheEntryValue(CacheEntryOptions cacheEntry, T? value)
-        {
-            CacheEntry = cacheEntry;
-            Value = value;
-        }
-
-        public CacheEntryOptions CacheEntry { get; init; }
-        public T? Value { get; init; }
+        public CacheEntryOptions CacheEntry { get; init; } = cacheEntry;
+        public T? Value { get; init; } = value;
     }
 
     [LoggerMessage(Level = LogLevel.Debug, Message = "Cache missed. generating new {CacheKey}")]
