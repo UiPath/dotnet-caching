@@ -1,5 +1,4 @@
-﻿using System.Reactive.Subjects;
-using UiPath.Platform.Caching.Policies;
+﻿using UiPath.Platform.Caching.Policies;
 using UiPath.Platform.Caching.Telemetry;
 
 namespace UiPath.Platform.Caching.Broadcast.Redis;
@@ -40,7 +39,7 @@ public class RedisStreamsTopicProvider : RedisTopicProviderBase
             topicKey,
             ConnectionState,
             Redis,
-            () => new Subject<ICacheEvent>(),
+            () => new KeyedSubject<ICacheEvent>(),
             _formatter,
             _resiliencePipelineHolder,
             _redisStreamsTopicOptions,

@@ -39,7 +39,6 @@
   <ItemGroup>
     
     <PackageVersion Include="BenchmarkDotNet" Version="0.15.8" />
-    <PackageVersion Include="System.Reactive" Version="6.1.0" />
     <PackageVersion Include="System.Net.Http" Version="4.3.4" />
     <PackageVersion Include="StackExchange.Redis" Version="2.10.1" />
     <PackageVersion Include="CloudNative.CloudEvents" Version="$(CloudEvents)" />

@@ -1,8 +1,8 @@
-﻿using System.Reactive.Subjects;
-using System.Text;
+﻿using System.Text;
 using FluentAssertions.Extensions;
 using NSubstitute.ExceptionExtensions;
 using StackExchange.Redis;
+using UiPath.Platform.Caching.Broadcast;
 using UiPath.Platform.Caching.Policies;
 
 namespace UiPath.Platform.Caching.Tests.Broadcast;
@@ -220,7 +220,7 @@ public class RedisPubSubTopicTests(ITestContextAccessor testContextAccessor) : I
             });
         _topicKey = _fixture.Freeze<string>();
         _fixture.Inject(_topicKey);
-        _fixture.Inject<Func<ISubject<ICacheEvent>>>(() => new Subject<ICacheEvent>());
+        _fixture.Inject<Func<IEventSubject<ICacheEvent>>>(() => new KeyedSubject<ICacheEvent>());
         _redisChannelStrategy = _fixture.Freeze<IRedisChannelStrategy>();
         _redisChannelStrategy.GetRedisChannel(_topicKey).Returns(c => new RedisChannel(_topicKey, RedisChannel.PatternMode.Auto));
         _resiliencePipelineHolder = ResiliencePipelineHolder.Empty;

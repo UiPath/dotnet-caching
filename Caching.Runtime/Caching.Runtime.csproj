@@ -18,7 +18,7 @@
     <PackageReference Include="Microsoft.Extensions.Caching.Memory" />
     <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" />
     <PackageReference Include="StackExchange.Redis" />
-    <PackageReference Include="System.Reactive" />
+
   </ItemGroup>
   <ItemGroup>
     <ProjectReference Include="..\Caching.Abstractions\Caching.Abstractions.csproj" />

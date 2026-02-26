@@ -1,5 +1,4 @@
-﻿using System.Reactive.Subjects;
-using UiPath.Platform.Caching.Policies;
+﻿using UiPath.Platform.Caching.Policies;
 using UiPath.Platform.Caching.Telemetry;
 
 namespace UiPath.Platform.Caching.Broadcast.Redis;
@@ -11,7 +10,7 @@ public sealed partial class RedisStreamsTopic<T> : ITopic<T>
     private readonly RedisStreamSubjectWriter<T> _subscriber;
     private readonly CancellationTokenSource _stopTokenSource;
     private readonly RedisStreamContext _context;
-    private readonly ISubject<T> _subject;
+    private readonly IEventSubject<T> _subject;
     private readonly IConnectionState _connectionState;
     private readonly IRedisConnector _redis;
     private readonly IEventFormatterProxy<T> _formatter;
@@ -36,7 +35,7 @@ public sealed partial class RedisStreamsTopic<T> : ITopic<T>
         TopicKey topicKey,
         IConnectionState connectionState,
         IRedisConnector redis,
-        Func<ISubject<T>> subjectFactory,
+        Func<IEventSubject<T>> subjectFactory,
         IEventFormatterProxy<T> formatter,
         IResiliencePipelineHolder resiliencePipelineHolder,
         RedisStreamsTopicOptions streamOptions,
@@ -114,14 +113,8 @@ public sealed partial class RedisStreamsTopic<T> : ITopic<T>
         _stopTokenSource?.Cancel();
         _stopTokenSource?.Dispose();
         _dispatcher.Dispose();
-        _subject.OnCompleted();
+        _subject.Dispose();
         _subscriber.Dispose();
-
-        if (_subject is IDisposable disposableSubject)
-        {
-            disposableSubject.Dispose();
-        }
-
         OnDisposed?.Invoke(this, EventArgs.Empty);
     }
 

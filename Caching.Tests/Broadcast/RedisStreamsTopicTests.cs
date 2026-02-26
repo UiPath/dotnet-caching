@@ -1,6 +1,6 @@
-﻿using System.Reactive.Subjects;
-using NSubstitute.ExceptionExtensions;
+﻿using NSubstitute.ExceptionExtensions;
 using StackExchange.Redis;
+using UiPath.Platform.Caching.Broadcast;
 using UiPath.Platform.Caching.Policies;
 
 namespace UiPath.Platform.Caching.Tests.Broadcast;
@@ -11,7 +11,7 @@ public class RedisStreamsTopicTests(ITestContextAccessor testContextAccessor) : 
     private RedisStreamsTopicOptions _redisStreamsTopicOptions = default!;
     private RedisCacheOptions _redisCacheOptions = default!;
     private CacheOptions _cacheOptions = default!;
-    private ISubject<ICacheEvent> _subject = default!;
+    private IEventSubject<ICacheEvent> _subject = default!;
     private CancellationTokenSource _cancellationTokenSource = default!;
     private IObserver<ICacheEvent> _observer = default!;
     private IConnectionState _connectionState = default!;
@@ -140,11 +140,11 @@ public class RedisStreamsTopicTests(ITestContextAccessor testContextAccessor) : 
     public ValueTask InitializeAsync()
     {
         _database = _fixture.Freeze<IDatabase>();
-        _subject = _fixture.Freeze<ISubject<ICacheEvent>>();
+        _subject = _fixture.Freeze<IEventSubject<ICacheEvent>>();
         _observer = _fixture.Freeze<IObserver<ICacheEvent>>();
         _connectionState = _fixture.Freeze<IConnectionState>();
         _connectionState.IsConnected.Returns(info => _isConnected);
-        _fixture.Inject<Func<ISubject<ICacheEvent>>>(() => _subject);
+        _fixture.Inject<Func<IEventSubject<ICacheEvent>>>(() => _subject);
         _resiliencePipelineHolder = _fixture.Freeze<IResiliencePipelineHolder>();
         var noOpExecutor = new EmptyResiliencePipeline();
         _resiliencePipelineHolder.Read.Returns(noOpExecutor);

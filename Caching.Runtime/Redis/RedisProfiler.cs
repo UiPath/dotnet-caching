@@ -1,7 +1,6 @@
 ﻿using System.Collections.Concurrent;
 using StackExchange.Redis.Profiling;
 using UiPath.Platform.Caching.Telemetry;
-using ReactiveDisposable = System.Reactive.Disposables.Disposable;
 
 namespace UiPath.Platform.Caching.Redis;
 
@@ -93,7 +92,7 @@ internal sealed partial class RedisProfiler : IRedisProfiler, IDisposable
         if (string.IsNullOrEmpty(sessionId) || sessionId == NoSessionId)
         {
             _currentSessionId.Value = sessionId;
-            return ReactiveDisposable.Create(outerSessionId, static sId =>
+            return Disposable.Create(outerSessionId, static sId =>
             {
                 _currentSessionId.Value = sId;
             });
@@ -102,7 +101,7 @@ internal sealed partial class RedisProfiler : IRedisProfiler, IDisposable
         {
             _sessions.TryAdd(sessionId, new RedisProfileEntry(new ProfilingSession(sessionId), _clock.UtcNow));
             _currentSessionId.Value = sessionId;
-            return ReactiveDisposable.Create((outerSessionId, sessionId), args =>
+            return Disposable.Create((outerSessionId, sessionId), args =>
             {
                 _currentSessionId.Value = args.outerSessionId;
                 if (_sessions.TryRemove(args.sessionId, out var entry))

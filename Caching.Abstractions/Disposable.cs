@@ -1,6 +1,12 @@
-﻿namespace UiPath.Platform.Caching;
+namespace UiPath.Platform.Caching;
+
 public sealed class Disposable
 {
+    public static IDisposable Empty => EmptyDisposable.Instance;
+
+    public static IDisposable Create<TState>(TState state, Action<TState> action) =>
+        new ActionDisposable<TState>(state, action);
+
     private sealed class EmptyDisposable : IDisposable
     {
         public static readonly EmptyDisposable Instance = new();
@@ -15,7 +21,10 @@ public sealed class Disposable
         }
     }
 
-    public static IDisposable Empty => EmptyDisposable.Instance;
+    private sealed class ActionDisposable<TState>(TState state, Action<TState> action) : IDisposable
+    {
+        private Action<TState>? _action = action;
+
+        public void Dispose() => Interlocked.Exchange(ref _action, null)?.Invoke(state);
+    }
 }
-
-
