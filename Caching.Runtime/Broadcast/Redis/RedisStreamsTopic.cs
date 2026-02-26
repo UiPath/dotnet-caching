@@ -116,6 +116,12 @@ public sealed partial class RedisStreamsTopic<T> : ITopic<T>
         _dispatcher.Dispose();
         _subject.OnCompleted();
         _subscriber.Dispose();
+
+        if (_subject is IDisposable disposableSubject)
+        {
+            disposableSubject.Dispose();
+        }
+
         OnDisposed?.Invoke(this, EventArgs.Empty);
     }
 
