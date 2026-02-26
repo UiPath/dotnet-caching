@@ -148,7 +148,7 @@ internal sealed partial class RedisPubSubSubjectWriter<T> : IDisposable
     [LoggerMessage(Level = LogLevel.Debug, Message = "Event received. Id {EventId}  Channel : {RedisChannel}")]
     private partial void LogEventReceived(string? eventId, RedisChannel redisChannel);
 
-    [LoggerMessage(Level = LogLevel.Trace, Message = "Event from current source. Id {EventId}  Channel : {RedisChannel}")]
+    [LoggerMessage(Level = LogLevel.Debug, Message = "Event from current source. Id {EventId}  Channel : {RedisChannel}")]
     private partial void LogEventFromCurrentSource(string? eventId, RedisChannel redisChannel);
 
     [LoggerMessage(Level = LogLevel.Warning, Message = "Event invalid. Id {EventId}  Channel : {RedisChannel}")]
