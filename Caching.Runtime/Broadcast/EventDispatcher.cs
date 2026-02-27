@@ -1,7 +1,4 @@
-﻿using System.Reactive.Subjects;
-using System.Threading.Channels;
-using Microsoft.Extensions.Logging;
-using UiPath.Platform.Caching.Telemetry;
+﻿using System.Threading.Channels;
 
 namespace UiPath.Platform.Caching.Broadcast;
 
@@ -10,7 +7,7 @@ internal sealed partial class EventDispatcher<T> : IDisposable
 {
     private readonly TopicKey _topicKey;
     private readonly ChannelReader<T> _reader;
-    private readonly ISubject<T> _subject;
+    private readonly IEventSubject<T> _subject;
     private readonly ILogger _logger;
     private readonly CancellationTokenSource _stopTokenSource;
     private readonly CancellationToken _cancellationToken;
@@ -18,7 +15,7 @@ internal sealed partial class EventDispatcher<T> : IDisposable
 
     public EventDispatcher(TopicKey topicKey,
         ChannelReader<T> reader,
-        ISubject<T> subject,
+        IEventSubject<T> subject,
         ILogger logger,
         CancellationToken cancellationToken)
     {

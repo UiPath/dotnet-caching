@@ -225,7 +225,7 @@ internal sealed partial class RedisStreamSubjectWriter<T> : IDisposable
         }
 
 
-        await _redis.Database.StreamAcknowledgeAsync(_context.Topic, _context.ConsumerGroup, ids.ToArray()).ConfigureAwait(false);
+        await _redis.Database.StreamAcknowledgeAsync(_context.Topic, _context.ConsumerGroup, [.. ids]).ConfigureAwait(false);
         LogDispatched(events.Length, _context.Topic);
     }
 
@@ -280,7 +280,7 @@ internal sealed partial class RedisStreamSubjectWriter<T> : IDisposable
     [LoggerMessage(Level = LogLevel.Debug, Message = "Dispatched {Length} messages. Topic : {Topic}")]
     private partial void LogDispatched(int length, RedisKey topic);
 
-    [LoggerMessage(Level = LogLevel.Debug, Message = "Event received. Id {EventId}  Topic : {Topic}, StreamId: {StreamId}")]
+    [LoggerMessage(Level = LogLevel.Trace, Message = "Event received. Id {EventId}  Topic : {Topic}, StreamId: {StreamId}")]
     private partial void LogEventReceived(string? eventId, RedisKey topic, string? streamId);
 }
 

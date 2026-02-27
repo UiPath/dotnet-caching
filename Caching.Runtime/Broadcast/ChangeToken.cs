@@ -1,9 +1,8 @@
-﻿using Microsoft.Extensions.Logging;
-using UiPath.Platform.Caching.Telemetry;
+﻿using UiPath.Platform.Caching.Telemetry;
 
 namespace UiPath.Platform.Caching.Broadcast;
 
-public sealed partial class ChangeToken<T> : ICacheChangeToken, IObserver<ICacheEvent>, IDisposable
+public sealed partial class ChangeToken<T> : ICacheChangeToken, IKeyedObserver<ICacheEvent>, IDisposable
 {
     private readonly string _key;
     private readonly TopicKey _topic;
@@ -39,6 +38,8 @@ public sealed partial class ChangeToken<T> : ICacheChangeToken, IObserver<ICache
     public bool HasChanged { get; private set; }
 
     public bool MetadataHasChanged { get; private set; }
+
+    string IKeyedObserver<ICacheEvent>.Key => _key;
 
     public bool ActiveChangeCallbacks => true;
 

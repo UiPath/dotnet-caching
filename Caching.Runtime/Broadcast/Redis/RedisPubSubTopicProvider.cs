@@ -1,5 +1,4 @@
-﻿using System.Reactive.Subjects;
-using UiPath.Platform.Caching.Policies;
+﻿using UiPath.Platform.Caching.Policies;
 using UiPath.Platform.Caching.Telemetry;
 
 namespace UiPath.Platform.Caching.Broadcast.Redis;
@@ -39,7 +38,7 @@ public class RedisPubSubTopicProvider : RedisTopicProviderBase
     public override bool Enabled { get; }
 
     protected override ITopic<ICacheEvent> CreateInternalTopic(TopicKey topicKey) =>
-        new RedisPubSubTopic<ICacheEvent>(topicKey, _sourceUri, ConnectionState, Redis, _redisChannelStrategy, () => new Subject<ICacheEvent>(), _formatter, _resiliencePipelineHolder, _options, LoggerFactory.Create<RedisPubSubTopic<ICacheEvent>>(), _stopTokenSource.Token);
+        new RedisPubSubTopic<ICacheEvent>(topicKey, _sourceUri, ConnectionState, Redis, _redisChannelStrategy, () => new KeyedSubject<ICacheEvent>(), _formatter, _resiliencePipelineHolder, _options, LoggerFactory.Create<RedisPubSubTopic<ICacheEvent>>(), _stopTokenSource.Token);
 
     protected override void Dispose(bool disposing)
     {
