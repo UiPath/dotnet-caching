@@ -6,6 +6,7 @@ internal sealed class KeyedSubject<T> : IEventSubject<T> where T : IEvent
 {
     private readonly ConcurrentDictionary<string, ConcurrentDictionary<IObserver<T>, byte>> _keyedObservers = new(StringComparer.OrdinalIgnoreCase);
     private readonly ConcurrentDictionary<IObserver<T>, byte> _broadcastObservers = new();
+    private readonly object _keyedLock = new();
     private volatile bool _completed;
 
     public IDisposable Subscribe(IObserver<T> observer)
@@ -18,8 +19,11 @@ internal sealed class KeyedSubject<T> : IEventSubject<T> where T : IEvent
 
         if (observer is IKeyedObserver<T> keyed)
         {
-            var inner = _keyedObservers.GetOrAdd(keyed.Key, _ => new ConcurrentDictionary<IObserver<T>, byte>());
-            inner.TryAdd(observer, 0);
+            lock (_keyedLock)
+            {
+                var inner = _keyedObservers.GetOrAdd(keyed.Key, _ => new ConcurrentDictionary<IObserver<T>, byte>());
+                inner.TryAdd(observer, 0);
+            }
             return new Subscription(this, keyed.Key, observer);
         }
 
@@ -76,9 +80,16 @@ internal sealed class KeyedSubject<T> : IEventSubject<T> where T : IEvent
     {
         if (key != null)
         {
-            if (_keyedObservers.TryGetValue(key, out var inner))
+            lock (_keyedLock)
             {
-                inner.TryRemove(observer, out _);
+                if (_keyedObservers.TryGetValue(key, out var inner))
+                {
+                    inner.TryRemove(observer, out _);
+                    if (inner.IsEmpty)
+                    {
+                        _keyedObservers.TryRemove(key, out _);
+                    }
+                }
             }
         }
         else
