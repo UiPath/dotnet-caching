@@ -1,6 +1,5 @@
 ﻿using NSubstitute.ExceptionExtensions;
 using StackExchange.Redis;
-using UiPath.Platform.Caching.Broadcast;
 using UiPath.Platform.Caching.Policies;
 
 namespace UiPath.Platform.Caching.Tests.Broadcast;

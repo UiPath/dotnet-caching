@@ -1,6 +1,4 @@
 ﻿using System.Threading.Channels;
-using Microsoft.Extensions.Logging;
-using UiPath.Platform.Caching.Telemetry;
 
 namespace UiPath.Platform.Caching.Broadcast;
 

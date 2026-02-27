@@ -1,7 +1,6 @@
 ﻿using System.Globalization;
 using System.Net;
 using System.Reflection;
-using StackExchange.Redis.Profiling;
 using UiPath.Platform.Caching.Telemetry;
 
 namespace UiPath.Platform.Caching.Redis;
