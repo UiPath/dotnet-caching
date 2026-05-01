@@ -52,6 +52,24 @@ public class MultilayerHashCacheTests(ITestContextAccessor testContextAccessor) 
     }
 
     [Fact]
+    public async Task Get_does_not_call_inner_ExpireTimeAsync_separately()
+    {
+        var expected = _fixture.Create<IDictionary<string, string?>>();
+        ICacheEntry<IDictionary<string, string?>> expectedCacheEntry = new TestCacheEntry<IDictionary<string, string?>>
+        {
+            Value = expected,
+            Expiration = _fixture.Create<DateTimeOffset>()
+        };
+        _innerCache.GetCacheEntryAsync<string>(_innerCacheKey, Arg.Any<CancellationToken>())
+            .Returns(expectedCacheEntry);
+
+        await Sut.GetAsync<string>(_cacheKey, token: testContextAccessor.Current.CancellationToken);
+
+        await _innerCache.DidNotReceive().ExpireTimeAsync<string>(_innerCacheKey, Arg.Any<CancellationToken>());
+        await _innerCache.DidNotReceive().TimeToLiveAsync<string>(_innerCacheKey, Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
     public async Task Get_unknown_cacheKey()
     {
         ICacheEntry<IDictionary<string, string?>> expectedCacheEntry = new TestCacheEntry<IDictionary<string, string?>>
@@ -974,13 +992,13 @@ public class MultilayerHashCacheTests(ITestContextAccessor testContextAccessor) 
     }
 
     [Fact]
-    public async Task When_no_inner_cache_expire_time_use_max()
+    public async Task When_inner_cache_returns_max_expiration_local_uses_max()
     {
         var expected = _fixture.Create<IDictionary<string, string?>>();
         Func<CancellationToken, Task<IDictionary<string, string?>>> generator = token => Task.FromResult(expected);
 
-        _innerCache.ExpireTimeAsync<string>(_innerCacheKey, testContextAccessor.Current.CancellationToken)
-            .Returns(default(DateTimeOffset?));
+        _innerCache.GetCacheEntryAsync<string>(_innerCacheKey, Arg.Any<CancellationToken>())
+            .Returns(new TestCacheEntry<IDictionary<string, string?>> { Value = expected, Expiration = DateTimeOffset.MaxValue });
 
         var cacheEntry = _fixture.Freeze<Microsoft.Extensions.Caching.Memory.ICacheEntry>();
         _memoryCache.CreateEntry(Arg.Any<object>())

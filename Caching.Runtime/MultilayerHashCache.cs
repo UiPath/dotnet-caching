@@ -305,7 +305,7 @@ public sealed partial class MultilayerHashCache : MultilayerCacheBase, IHashCach
         }
 
         LogFoundInnerCopy(options.CacheKey);
-        options.Expiration = await _innerCache.ExpireTimeAsync<T>(options.CacheKey, options.Token).ConfigureAwait(false) ?? _clock.DefaultDateTimeOffset();
+        options.Expiration = cacheEntry.Expiration;
         options.Metadata = cacheEntry.Metadata;
         var values = cacheEntry.Value!;
         MemorySet(options, values, _multiLayerCacheOptions.PrimaryMaxExpiration);

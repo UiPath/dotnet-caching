@@ -15,6 +15,7 @@ public sealed partial class RedisCache : RedisCacheBase, ICache
     private readonly IRedisKeyStrategy _redisKeyStrategy;
     private readonly TimeSpan? _defaultExpiration;
     private readonly CacheClock _clock;
+    private readonly ICacheEntryFactory _cacheEntryFactory;
     private readonly Action<RedisKey, RedisValue>? _auditKeySize;
     private readonly int _largeValueThreshold;
 
@@ -37,6 +38,7 @@ public sealed partial class RedisCache : RedisCacheBase, ICache
         _redisKeyStrategy = (redisCacheOptions.RedisKeyStrategyFactory ?? new DefaultRedisKeyStrategyFactory()).Create(cacheOptions, GetType());
         _defaultExpiration = redisCacheOptions.DefaultExpiration;
         _clock = new CacheClock(redisCacheOptions.Clock, _defaultExpiration);
+        _cacheEntryFactory = redisCacheOptions.EntryFactory ?? new CacheEntryFactory();
         
         if (cacheOptions.AuditEnabled && _largeValueThreshold > 0)
         {
@@ -56,6 +58,18 @@ public sealed partial class RedisCache : RedisCacheBase, ICache
     {
         NotCacheableException.ThrowIfNotCacheable<T>();
         return GetAsyncInternal<T>(cacheKeys, token);
+    }
+
+    public ValueTask<ICacheEntry<T?>> GetCacheEntryAsync<T>(CacheKey cacheKey, CancellationToken token = default)
+    {
+        NotCacheableException.ThrowIfNotCacheable<T>();
+        return GetCacheEntryInternalAsync<T>(cacheKey, token);
+    }
+
+    public ValueTask<KeyValuePair<CacheKey, ICacheEntry<T?>>[]> GetCacheEntriesAsync<T>(CacheKey[] cacheKeys, CancellationToken token = default)
+    {
+        NotCacheableException.ThrowIfNotCacheable<T>();
+        return GetCacheEntriesInternalAsync<T>(cacheKeys, token);
     }
 
     public ValueTask<T?> GetOrAddAsync<T>(CacheKey cacheKey, Func<CancellationToken, Task<T?>> generator, CancellationToken token = default) =>
@@ -509,6 +523,148 @@ public sealed partial class RedisCache : RedisCacheBase, ICache
 
         return retValues;
     }
+
+    private async ValueTask<ICacheEntry<T?>> GetCacheEntryInternalAsync<T>(CacheKey cacheKey, CancellationToken token)
+    {
+        token.ThrowIfCancellationRequested();
+        if (!IsConnected)
+        {
+            return DefaultEntry<T>();
+        }
+
+        var redisKey = ToRedisKey(cacheKey, token);
+        var operation = StartOperation<T>();
+        ICacheEntry<T?> ret = DefaultEntry<T>();
+        try
+        {
+            var transaction = Database.CreateTransaction();
+            var valueTask = transaction.StringGetAsync(redisKey, CommandFlags.PreferReplica).ConfigureAwait(false);
+            ConfiguredTaskAwaitable<DateTime?>? expireTimeTask = default;
+            ConfiguredTaskAwaitable<TimeSpan?>? ttlTask = default;
+            if (_supportsExpireTime)
+            {
+                expireTimeTask = transaction.KeyExpireTimeAsync(redisKey, CommandFlags.PreferReplica).ConfigureAwait(false);
+            }
+            else
+            {
+                ttlTask = transaction.KeyTimeToLiveAsync(redisKey, CommandFlags.PreferReplica).ConfigureAwait(false);
+            }
+
+            var transactionResult = await _write.ExecuteAsync(async token =>
+            {
+                token.ThrowIfCancellationRequested();
+                return await transaction.ExecuteAsync().ConfigureAwait(false);
+            }, default, token).ConfigureAwait(false);
+
+            if (!transactionResult)
+            {
+                operation.Stop();
+                return ret;
+            }
+
+            var value = await valueTask;
+            _auditKeySize?.Invoke(redisKey, value);
+            var deserialized = value.IsNullOrEmpty ? default : _serializer.Deserialize<T>(value);
+            DateTimeOffset? expiration = _supportsExpireTime
+                ? (DateTimeOffset?)await expireTimeTask!.Value
+                : _clock.ToDateTimeOffset(await ttlTask!.Value);
+            ret = _cacheEntryFactory.Create<T?>(deserialized, expiration ?? DateTimeOffset.MaxValue);
+            operation.Stop();
+        }
+        catch (Exception ex)
+        {
+            operation.Stop();
+            LogRedisCacheException(ex);
+        }
+        finally
+        {
+            operation.Track(ret.Value is not null);
+        }
+
+        return ret;
+    }
+
+    private async ValueTask<KeyValuePair<CacheKey, ICacheEntry<T?>>[]> GetCacheEntriesInternalAsync<T>(CacheKey[] keys, CancellationToken token)
+    {
+        token.ThrowIfCancellationRequested();
+        if (keys.Length == 0)
+        {
+            return [];
+        }
+        if (!IsConnected)
+        {
+            return GetDefaultEntries<T>(keys);
+        }
+
+        var redisKeys = keys.Select(k => ToRedisKey(k, token)).ToArray();
+        var operation = StartOperation<T>();
+        var retValues = GetDefaultEntries<T>(keys);
+        bool atLeastOneCacheHit = false;
+        try
+        {
+            var transaction = Database.CreateTransaction();
+            var mgetTask = transaction.StringGetAsync(redisKeys, CommandFlags.PreferReplica).ConfigureAwait(false);
+            ConfiguredTaskAwaitable<DateTime?>[]? expireTimeTasks = default;
+            ConfiguredTaskAwaitable<TimeSpan?>[]? ttlTasks = default;
+            if (_supportsExpireTime)
+            {
+                expireTimeTasks = redisKeys
+                    .Select(k => transaction.KeyExpireTimeAsync(k, CommandFlags.PreferReplica).ConfigureAwait(false))
+                    .ToArray();
+            }
+            else
+            {
+                ttlTasks = redisKeys
+                    .Select(k => transaction.KeyTimeToLiveAsync(k, CommandFlags.PreferReplica).ConfigureAwait(false))
+                    .ToArray();
+            }
+
+            var transactionResult = await _write.ExecuteAsync(async token =>
+            {
+                token.ThrowIfCancellationRequested();
+                return await transaction.ExecuteAsync().ConfigureAwait(false);
+            }, default, token).ConfigureAwait(false);
+
+            if (!transactionResult)
+            {
+                operation.Stop();
+                return retValues;
+            }
+
+            var values = await mgetTask;
+            for (int i = 0; i < redisKeys.Length; i++)
+            {
+                var value = values[i];
+                _auditKeySize?.Invoke(redisKeys[i], value);
+                var deserialized = value.IsNullOrEmpty ? default : _serializer.Deserialize<T>(value);
+                atLeastOneCacheHit = atLeastOneCacheHit || deserialized is not null;
+                DateTimeOffset? expiration = _supportsExpireTime
+                    ? (DateTimeOffset?)await expireTimeTasks![i]
+                    : _clock.ToDateTimeOffset(await ttlTasks![i]);
+                retValues[i] = new KeyValuePair<CacheKey, ICacheEntry<T?>>(
+                    keys[i],
+                    _cacheEntryFactory.Create<T?>(deserialized, expiration ?? DateTimeOffset.MaxValue));
+            }
+            operation.Stop();
+        }
+        catch (Exception ex)
+        {
+            operation.Stop();
+            LogRedisCacheException(ex);
+        }
+        finally
+        {
+            operation.Track(atLeastOneCacheHit);
+        }
+
+        return retValues;
+    }
+
+    private ICacheEntry<T?> DefaultEntry<T>() =>
+        _cacheEntryFactory.Create<T?>(default, DateTimeOffset.MinValue);
+
+    private KeyValuePair<CacheKey, ICacheEntry<T?>>[] GetDefaultEntries<T>(CacheKey[] keys) =>
+        [.. keys.Select(k => new KeyValuePair<CacheKey, ICacheEntry<T?>>(k, DefaultEntry<T>()))];
 
     private RedisKey ToRedisKey(CacheKey cacheKey, CancellationToken token = default)
     {

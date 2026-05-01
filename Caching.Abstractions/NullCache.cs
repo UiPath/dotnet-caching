@@ -31,6 +31,20 @@ public sealed class NullCache : ICache
         return ValueTask.FromResult(cacheKeys.Select(k => new KeyValuePair<CacheKey, T?>(k, default(T?))).ToArray());
     }
 
+    public ValueTask<ICacheEntry<T?>> GetCacheEntryAsync<T>(CacheKey cacheKey, CancellationToken token = default)
+    {
+        NotCacheableException.ThrowIfNotCacheable<T>();
+        return ValueTask.FromResult(NullCacheEntry<T?>.Instance);
+    }
+
+    public ValueTask<KeyValuePair<CacheKey, ICacheEntry<T?>>[]> GetCacheEntriesAsync<T>(CacheKey[] cacheKeys, CancellationToken token = default)
+    {
+        NotCacheableException.ThrowIfNotCacheable<T>();
+        return ValueTask.FromResult(cacheKeys
+            .Select(k => new KeyValuePair<CacheKey, ICacheEntry<T?>>(k, NullCacheEntry<T?>.Instance))
+            .ToArray());
+    }
+
     public ValueTask<T?> GetOrAddAsync<T>(CacheKey cacheKey, Func<CancellationToken, Task<T?>> generator, CancellationToken token = default) =>
         ReturnGeneratorAsync(generator, token);
 
@@ -83,5 +97,22 @@ public sealed class NullCache : ICache
     public void Dispose()
     {
         // Nothing to dispose
+    }
+
+    private sealed record NullCacheEntry<T> : ICacheEntry<T>
+    {
+        [System.Diagnostics.CodeAnalysis.SuppressMessage("SonarLint.Rule", "S3218:Inner class members should not shadow outer class names")]
+        public static readonly ICacheEntry<T> Instance = new NullCacheEntry<T>();
+
+        public T? Value => default;
+
+        object? ICacheEntry.Value => default;
+
+        public DateTimeOffset Expiration => DateTimeOffset.MinValue;
+
+        public IDictionary<string, string?>? Metadata => default;
+
+        public ICacheEntry NewEntry(DateTimeOffset? expiration = null, IDictionary<string, string?>? metadata = null) =>
+            NullCacheEntry<T>.Instance;
     }
 }

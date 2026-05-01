@@ -42,6 +42,20 @@ public sealed partial class MultilayerCache : MultilayerCacheBase, ICache
         return GetInnerAsync<T>(options, token);
     }
 
+    public async ValueTask<ICacheEntry<T?>> GetCacheEntryAsync<T>(CacheKey cacheKey, CancellationToken token = default)
+    {
+        NotCacheableException.ThrowIfNotCacheable<T>();
+        var options = _entryBuilder.BuildEntryOptions<T>(cacheKey, _clock.ToDateTimeOffset(_multiLayerCacheOptions.DefaultExpiration), token);
+        return await GetCacheEntryInnerAsync<T>(options).ConfigureAwait(false);
+    }
+
+    public async ValueTask<KeyValuePair<CacheKey, ICacheEntry<T?>>[]> GetCacheEntriesAsync<T>(CacheKey[] cacheKeys, CancellationToken token = default)
+    {
+        NotCacheableException.ThrowIfNotCacheable<T>();
+        var options = cacheKeys.Select(k => _entryBuilder.BuildEntryOptions<T>(k, default, token)).ToArray();
+        return await GetCacheEntriesInnerAsync<T>(options, token).ConfigureAwait(false);
+    }
+
     public ValueTask<T?> GetOrAddAsync<T>(CacheKey cacheKey, Func<CancellationToken, Task<T?>> generator, CancellationToken token = default)=>
         GetOrAddAsync(cacheKey, generator, _multiLayerCacheOptions.DefaultExpiration, token);
 
@@ -322,22 +336,80 @@ public sealed partial class MultilayerCache : MultilayerCacheBase, ICache
             return results.ToArray();
         }
 
-        var fetched = await _innerCache.GetAsync<T>(keys, token).ConfigureAwait(false);
+        var fetched = await _innerCache.GetCacheEntriesAsync<T>(keys, token).ConfigureAwait(false);
 
         for (int i = 0; i < keys.Length; i++)
         {
-            var keyValue = fetched[i];
-            results.Add(keyValue);
+            var entry = fetched[i].Value;
+            var key = fetched[i].Key;
+            results.Add(new KeyValuePair<CacheKey, T?>(key, entry.Value));
 
-            if (keyValue.Value is null)
+            if (entry.Value is null)
             {
                 continue;
             }
 
-            LogFoundInnerCacheCopy(keyValue.Key);
+            LogFoundInnerCacheCopy(key);
             var option = cacheEntriesToFetch[i];
-            option.Expiration = await _innerCache.ExpireTimeAsync<T>(keyValue.Key, token).ConfigureAwait(false) ?? _clock.DefaultDateTimeOffset();
-            MemorySet(option, keyValue, _multiLayerCacheOptions.PrimaryMaxExpiration);
+            option.Expiration = entry.Expiration;
+            MemorySet(option, new KeyValuePair<CacheKey, T?>(key, entry.Value), _multiLayerCacheOptions.PrimaryMaxExpiration);
+        }
+
+        return results.ToArray();
+    }
+
+    private async ValueTask<KeyValuePair<CacheKey, ICacheEntry<T?>>[]> GetCacheEntriesInnerAsync<T>(CacheEntryOptions[] options, CancellationToken token = default)
+    {
+        List<KeyValuePair<CacheKey, ICacheEntry<T?>>> results = [];
+        List<CacheEntryOptions> cacheEntriesToFetch = [];
+        foreach (var option in options)
+        {
+            if (_memoryCache.TryGetValue<ICacheEntry<T?>>(option.CacheKey, out var entry))
+            {
+                LogFoundLocal(option.CacheKey);
+                if (_connectionState.IsConnected || _usePrimaryOnlyWhenDisconnected)
+                {
+                    if (!_connectionState.IsConnected)
+                    {
+                        LogUsingPrimaryOnlyWhenDisconnected(option.CacheKey);
+                    }
+                    results.Add(new KeyValuePair<CacheKey, ICacheEntry<T?>>(option.CacheKey, entry!));
+                }
+                else
+                {
+                    LogReturningDefaultDisconnected(option.CacheKey);
+                    _memoryCache.Remove(option.CacheKey);
+                }
+            }
+            else
+            {
+                cacheEntriesToFetch.Add(option);
+            }
+        }
+
+        var keys = cacheEntriesToFetch.Select(c => c.CacheKey).ToArray();
+        if (keys.Length == 0)
+        {
+            return results.ToArray();
+        }
+
+        var fetched = await _innerCache.GetCacheEntriesAsync<T>(keys, token).ConfigureAwait(false);
+
+        for (int i = 0; i < keys.Length; i++)
+        {
+            var entry = fetched[i].Value;
+            var key = fetched[i].Key;
+            results.Add(new KeyValuePair<CacheKey, ICacheEntry<T?>>(key, entry));
+
+            if (entry.Value is null)
+            {
+                continue;
+            }
+
+            LogFoundInnerCacheCopy(key);
+            var option = cacheEntriesToFetch[i];
+            option.Expiration = entry.Expiration;
+            MemorySet(option, new KeyValuePair<CacheKey, T?>(key, entry.Value), _multiLayerCacheOptions.PrimaryMaxExpiration);
         }
 
         return results.ToArray();
@@ -365,17 +437,49 @@ public sealed partial class MultilayerCache : MultilayerCacheBase, ICache
             }
         }
 
-        T? ret = await _innerCache.GetAsync<T>(options.CacheKey, options.Token).ConfigureAwait(false);
+        var fetched = await _innerCache.GetCacheEntryAsync<T>(options.CacheKey, options.Token).ConfigureAwait(false);
 
-        if (ret is null)
+        if (fetched.Value is null)
         {
             return default;
         }
 
         LogFoundInnerCacheCopy(options.CacheKey);
-        options.Expiration = await _innerCache.ExpireTimeAsync<T>(options.CacheKey, options.Token).ConfigureAwait(false) ?? _clock.DefaultDateTimeOffset();
-        MemorySet(options, ret, _multiLayerCacheOptions.PrimaryMaxExpiration);
-        return ret;
+        options.Expiration = fetched.Expiration;
+        MemorySet(options, fetched.Value, _multiLayerCacheOptions.PrimaryMaxExpiration);
+        return fetched.Value;
+    }
+
+    private async ValueTask<ICacheEntry<T?>> GetCacheEntryInnerAsync<T>(CacheEntryOptions options)
+    {
+        if (_memoryCache.TryGetValue<ICacheEntry<T?>>(options.CacheKey, out var entry))
+        {
+            LogFoundLocal(options.CacheKey);
+            if (_connectionState.IsConnected || _usePrimaryOnlyWhenDisconnected)
+            {
+                if (!_connectionState.IsConnected)
+                {
+                    LogUsingPrimaryOnlyWhenDisconnected(options.CacheKey);
+                }
+                return entry!;
+            }
+
+            LogReturningDefaultDisconnected(options.CacheKey);
+            _memoryCache.Remove(options.CacheKey);
+            return _cacheEntryFactory.Create<T?>(default, DateTimeOffset.MinValue);
+        }
+
+        var fetched = await _innerCache.GetCacheEntryAsync<T>(options.CacheKey, options.Token).ConfigureAwait(false);
+
+        if (fetched.Value is null)
+        {
+            return fetched;
+        }
+
+        LogFoundInnerCacheCopy(options.CacheKey);
+        options.Expiration = fetched.Expiration;
+        MemorySet(options, fetched.Value, _multiLayerCacheOptions.PrimaryMaxExpiration);
+        return fetched;
     }
 
     private async ValueTask<bool> InternalSetAsync<T>(CacheEntryOptions options, T? value, bool innerCacheDisconnected)
