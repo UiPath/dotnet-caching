@@ -360,10 +360,12 @@ public sealed partial class MultilayerCache : MultilayerCacheBase, ICache
 
     private async ValueTask<KeyValuePair<CacheKey, ICacheEntry<T?>>[]> GetCacheEntriesInnerAsync<T>(CacheEntryOptions[] options, CancellationToken token = default)
     {
-        List<KeyValuePair<CacheKey, ICacheEntry<T?>>> results = [];
+        var results = new KeyValuePair<CacheKey, ICacheEntry<T?>>[options.Length];
+        List<int> missIndices = [];
         List<CacheEntryOptions> cacheEntriesToFetch = [];
-        foreach (var option in options)
+        for (int i = 0; i < options.Length; i++)
         {
+            var option = options[i];
             if (_memoryCache.TryGetValue<ICacheEntry<T?>>(option.CacheKey, out var entry))
             {
                 LogFoundLocal(option.CacheKey);
@@ -373,33 +375,34 @@ public sealed partial class MultilayerCache : MultilayerCacheBase, ICache
                     {
                         LogUsingPrimaryOnlyWhenDisconnected(option.CacheKey);
                     }
-                    results.Add(new KeyValuePair<CacheKey, ICacheEntry<T?>>(option.CacheKey, entry!));
+                    results[i] = new KeyValuePair<CacheKey, ICacheEntry<T?>>(option.CacheKey, entry!);
+                    continue;
                 }
-                else
-                {
-                    LogReturningDefaultDisconnected(option.CacheKey);
-                    _memoryCache.Remove(option.CacheKey);
-                }
+
+                LogReturningDefaultDisconnected(option.CacheKey);
+                _memoryCache.Remove(option.CacheKey);
+                results[i] = new KeyValuePair<CacheKey, ICacheEntry<T?>>(option.CacheKey, _cacheEntryFactory.Create<T?>(default, DateTimeOffset.MinValue));
+                continue;
             }
-            else
-            {
-                cacheEntriesToFetch.Add(option);
-            }
+
+            missIndices.Add(i);
+            cacheEntriesToFetch.Add(option);
+        }
+
+        if (cacheEntriesToFetch.Count == 0)
+        {
+            return results;
         }
 
         var keys = cacheEntriesToFetch.Select(c => c.CacheKey).ToArray();
-        if (keys.Length == 0)
-        {
-            return results.ToArray();
-        }
-
         var fetched = await _innerCache.GetCacheEntriesAsync<T>(keys, token).ConfigureAwait(false);
 
-        for (int i = 0; i < keys.Length; i++)
+        for (int j = 0; j < keys.Length; j++)
         {
-            var entry = fetched[i].Value;
-            var key = fetched[i].Key;
-            results.Add(new KeyValuePair<CacheKey, ICacheEntry<T?>>(key, entry));
+            var resultIndex = missIndices[j];
+            var entry = fetched[j].Value;
+            var key = fetched[j].Key;
+            results[resultIndex] = new KeyValuePair<CacheKey, ICacheEntry<T?>>(key, entry);
 
             if (entry.Value is null)
             {
@@ -407,12 +410,12 @@ public sealed partial class MultilayerCache : MultilayerCacheBase, ICache
             }
 
             LogFoundInnerCacheCopy(key);
-            var option = cacheEntriesToFetch[i];
+            var option = cacheEntriesToFetch[j];
             option.Expiration = entry.Expiration;
             MemorySet(option, new KeyValuePair<CacheKey, T?>(key, entry.Value), _multiLayerCacheOptions.PrimaryMaxExpiration);
         }
 
-        return results.ToArray();
+        return results;
     }
 
     private async ValueTask<T?> GetInnerAsync<T>(CacheEntryOptions options)

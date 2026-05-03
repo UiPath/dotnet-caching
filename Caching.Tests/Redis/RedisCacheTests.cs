@@ -173,6 +173,59 @@ public class RedisCacheTests(ITestContextAccessor testContextAccessor) : IAsyncL
     }
 
     [Fact]
+    public async Task GetCacheEntry_validates_null_key_when_disconnected()
+    {
+        _isConnected = false;
+        Func<Task> act = async () => await Sut.GetCacheEntryAsync<string>((string?)null!, testContextAccessor.Current.CancellationToken);
+        await act.Should().ThrowAsync<ArgumentNullException>();
+    }
+
+    [Fact]
+    public async Task GetCacheEntries_validates_null_key_when_disconnected()
+    {
+        _isConnected = false;
+        Func<Task> act = async () => await Sut.GetCacheEntriesAsync<string>(new CacheKey[] { (string?)null! }, testContextAccessor.Current.CancellationToken);
+        await act.Should().ThrowAsync<ArgumentNullException>();
+    }
+
+    [Fact]
+    public async Task GetCacheEntry_returns_default_expiration_when_remote_has_no_ttl_v7()
+    {
+        _version = new(7, 0);
+        var expectedValue = _fixture.Create<string>();
+        _cacheOptions.DefaultExpiration = TimeSpan.FromHours(1);
+        _transaction.StringGetAsync(_redisKey, CommandFlags.PreferReplica)
+            .Returns(_serializer.Serialize(expectedValue));
+        _transaction.KeyExpireTimeAsync(_redisKey, CommandFlags.PreferReplica)
+            .Returns(default(DateTime?));
+        _transaction.ExecuteAsync().Returns(true);
+
+        var entry = await Sut.GetCacheEntryAsync<string>(_cacheKey, testContextAccessor.Current.CancellationToken);
+
+        entry.Value.Should().Be(expectedValue);
+        // Both Redis 6 and Redis 7 paths must converge on UtcNow + DefaultExpiration when the remote has no TTL.
+        entry.Expiration.Should().Be(_clock.UtcNow.Add(TimeSpan.FromHours(1)));
+    }
+
+    [Fact]
+    public async Task GetCacheEntry_returns_max_value_when_remote_has_no_ttl_and_no_default_v7()
+    {
+        _version = new(7, 0);
+        var expectedValue = _fixture.Create<string>();
+        _cacheOptions.DefaultExpiration = null;
+        _transaction.StringGetAsync(_redisKey, CommandFlags.PreferReplica)
+            .Returns(_serializer.Serialize(expectedValue));
+        _transaction.KeyExpireTimeAsync(_redisKey, CommandFlags.PreferReplica)
+            .Returns(default(DateTime?));
+        _transaction.ExecuteAsync().Returns(true);
+
+        var entry = await Sut.GetCacheEntryAsync<string>(_cacheKey, testContextAccessor.Current.CancellationToken);
+
+        entry.Value.Should().Be(expectedValue);
+        entry.Expiration.Should().Be(DateTimeOffset.MaxValue);
+    }
+
+    [Fact]
     public async Task GetCacheEntries_returns_defaults_on_redis_exception()
     {
         _transaction.StringGetAsync(Arg.Any<RedisKey[]>(), Arg.Any<CommandFlags>())

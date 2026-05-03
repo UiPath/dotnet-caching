@@ -155,6 +155,61 @@ public class MultilayerCacheTests(ITestContextAccessor testContextAccessor) : IA
     }
 
     [Fact]
+    public async Task GetCacheEntries_preserves_input_order_with_mixed_local_and_remote_hits()
+    {
+        var localValue = _fixture.Create<string>();
+        var remoteValue = _fixture.Create<string>();
+        // _cacheKey -> local hit, _multiKey -> remote hit
+        _memoryCache.TryGetValue(_innerCacheKey, out Arg.Any<object?>())
+            .Returns(x =>
+            {
+                x[1] = new TestCacheEntry<string?> { Value = localValue };
+                return true;
+            });
+        _innerCache.GetCacheEntriesAsync<string>(Arg.Is<CacheKey[]>(k => k.Length == 1 && k.Contains(_innerMultiKey)), Arg.Any<CancellationToken>())
+            .Returns(new KeyValuePair<CacheKey, ICacheEntry<string?>>[]
+            {
+                new(_innerMultiKey, new TestCacheEntry<string?> { Value = remoteValue })
+            });
+
+        var entries = await Sut.GetCacheEntriesAsync<string>(new CacheKey[] { _cacheKey, _multiKey }, token: testContextAccessor.Current.CancellationToken);
+
+        entries.Should().HaveCount(2);
+        entries[0].Key.Should().Be(_innerCacheKey);
+        entries[0].Value.Value.Should().Be(localValue);
+        entries[1].Key.Should().Be(_innerMultiKey);
+        entries[1].Value.Value.Should().Be(remoteValue);
+    }
+
+    [Fact]
+    public async Task GetCacheEntries_returns_one_entry_per_input_key_when_disconnected_without_use_primary_only()
+    {
+        _options.UsePrimaryOnlyWhenDisconnected = false;
+        _options.ConnectionMonitorEnabled = true;
+        _topicProvider.IsConnected.Returns(false);
+        // _cacheKey has a stale local entry; _multiKey has none.
+        var staleValue = _fixture.Create<string>();
+        _memoryCache.TryGetValue(_innerCacheKey, out Arg.Any<object?>())
+            .Returns(x =>
+            {
+                x[1] = new TestCacheEntry<string?> { Value = staleValue };
+                return true;
+            });
+        _innerCache.GetCacheEntriesAsync<string>(Arg.Any<CacheKey[]>(), Arg.Any<CancellationToken>())
+            .Returns(new KeyValuePair<CacheKey, ICacheEntry<string?>>[]
+            {
+                new(_innerMultiKey, new TestCacheEntry<string?> { Value = default })
+            });
+
+        var entries = await Sut.GetCacheEntriesAsync<string>(new CacheKey[] { _cacheKey, _multiKey }, token: testContextAccessor.Current.CancellationToken);
+
+        entries.Should().HaveCount(2);
+        entries[0].Key.Should().Be(_innerCacheKey);
+        entries[0].Value.Value.Should().BeNull();
+        _memoryCache.Received(1).Remove(_innerCacheKey);
+    }
+
+    [Fact]
     public async Task GetOrAdd_data_from_inner_cache()
     {
         var expected = _fixture.Create<string>();

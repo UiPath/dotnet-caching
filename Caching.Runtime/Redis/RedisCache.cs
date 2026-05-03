@@ -527,12 +527,12 @@ public sealed partial class RedisCache : RedisCacheBase, ICache
     private async ValueTask<ICacheEntry<T?>> GetCacheEntryInternalAsync<T>(CacheKey cacheKey, CancellationToken token)
     {
         token.ThrowIfCancellationRequested();
+        var redisKey = ToRedisKey(cacheKey, token);
         if (!IsConnected)
         {
             return DefaultEntry<T>();
         }
 
-        var redisKey = ToRedisKey(cacheKey, token);
         var operation = StartOperation<T>();
         ICacheEntry<T?> ret = DefaultEntry<T>();
         try
@@ -568,7 +568,7 @@ public sealed partial class RedisCache : RedisCacheBase, ICache
             DateTimeOffset? expiration = _supportsExpireTime
                 ? (DateTimeOffset?)await expireTimeTask!.Value
                 : _clock.ToDateTimeOffset(await ttlTask!.Value);
-            ret = _cacheEntryFactory.Create<T?>(deserialized, expiration ?? DateTimeOffset.MaxValue);
+            ret = _cacheEntryFactory.Create<T?>(deserialized, _clock.ToDateTimeOffset(expiration));
             operation.Stop();
         }
         catch (Exception ex)
@@ -591,12 +591,12 @@ public sealed partial class RedisCache : RedisCacheBase, ICache
         {
             return [];
         }
+        var redisKeys = keys.Select(k => ToRedisKey(k, token)).ToArray();
         if (!IsConnected)
         {
             return GetDefaultEntries<T>(keys);
         }
 
-        var redisKeys = keys.Select(k => ToRedisKey(k, token)).ToArray();
         var operation = StartOperation<T>();
         var retValues = GetDefaultEntries<T>(keys);
         bool atLeastOneCacheHit = false;
@@ -643,7 +643,7 @@ public sealed partial class RedisCache : RedisCacheBase, ICache
                     : _clock.ToDateTimeOffset(await ttlTasks![i]);
                 retValues[i] = new KeyValuePair<CacheKey, ICacheEntry<T?>>(
                     keys[i],
-                    _cacheEntryFactory.Create<T?>(deserialized, expiration ?? DateTimeOffset.MaxValue));
+                    _cacheEntryFactory.Create<T?>(deserialized, _clock.ToDateTimeOffset(expiration)));
             }
             operation.Stop();
         }
