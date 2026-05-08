@@ -17,6 +17,7 @@ internal sealed partial class RedisStreamSubjectWriter<T> : IDisposable
     private readonly IRedisProfiler _redisProfiler;
     private readonly CancellationTokenSource _stopTokenSource;
     private readonly CancellationToken _cancelationToken;
+    private readonly IFetchWaiter _waiter;
     private RedisValue _lastId = StreamPosition.NewMessages;
 
     public RedisStreamSubjectWriter(
@@ -28,6 +29,7 @@ internal sealed partial class RedisStreamSubjectWriter<T> : IDisposable
         ILogger logger,
         ICachingTelemetryProvider cachingTelemetryProvider,
         IRedisProfiler redisProfiler,
+        IFetchWaiter waiter,
         CancellationToken stopToken)
     {
         _context = context;
@@ -38,6 +40,7 @@ internal sealed partial class RedisStreamSubjectWriter<T> : IDisposable
         _logger = logger;
         _cachingTelemetryProvider = cachingTelemetryProvider;
         _redisProfiler = redisProfiler;
+        _waiter = waiter;
         _stopTokenSource = CancellationTokenSource.CreateLinkedTokenSource(stopToken);
         _cancelationToken = _stopTokenSource.Token;
         FetchTask = Task.Run(FetchLoop, _cancelationToken);
@@ -81,7 +84,7 @@ internal sealed partial class RedisStreamSubjectWriter<T> : IDisposable
                     }
                     catch (Exception)
                     {
-                        await Wait().ConfigureAwait(false);
+                        await _waiter.WaitAsync(_cancelationToken).ConfigureAwait(false);
                     }
                 }
             }
@@ -99,7 +102,7 @@ internal sealed partial class RedisStreamSubjectWriter<T> : IDisposable
     {
         if (!_connectionState.IsConnected)
         {
-            await Wait().ConfigureAwait(false);
+            await _waiter.WaitAsync(_cancelationToken).ConfigureAwait(false);
             return;
         }
 
@@ -116,15 +119,13 @@ internal sealed partial class RedisStreamSubjectWriter<T> : IDisposable
             _lastId = events[^1].Id;
             return;
         }
-        await Wait().ConfigureAwait(false);
+        await _waiter.WaitAsync(_cancelationToken).ConfigureAwait(false);
     }
-
-    private Task Wait() => Task.Delay(_context.PollInterval, _cancelationToken);
 
     private async Task<bool> ProcessException(Exception ex)
     {
         var id = _lastId;
-        if (ex is TaskCanceledException cancel && cancel.CancellationToken == _cancelationToken)
+        if (ex is OperationCanceledException cancel && cancel.CancellationToken == _cancelationToken)
         {
             LogReadingStopped(_context.Topic, _context.ConsumerGroup, id);
             return false;
@@ -156,7 +157,7 @@ internal sealed partial class RedisStreamSubjectWriter<T> : IDisposable
            LogFetchLoopError(ex);
         }
 
-        await Wait().ConfigureAwait(false);
+        await _waiter.WaitAsync(_cancelationToken).ConfigureAwait(false);
         return true;
     }
 

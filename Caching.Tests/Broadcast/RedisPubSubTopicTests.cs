@@ -73,7 +73,14 @@ public class RedisPubSubTopicTests(ITestContextAccessor testContextAccessor) : I
         };
         var bytes = _formatter.Encode(cloudEvent);
         var message = Encoding.UTF8.GetString(bytes.Span);
-        _handler?.Invoke(RedisChannel.Literal(_topicKey.Name), message);
+
+        for (var count = 0; _handler is null && count < 100; count++)
+        {
+            await Task.Delay(50.Milliseconds(), testContextAccessor.Current.CancellationToken);
+        }
+        _handler.Should().NotBeNull("the topic must subscribe and capture the message handler");
+
+        _handler!.Invoke(RedisChannel.Literal(_topicKey.Name), message);
         for (var count = 0; _onNextMessages.Count == 0 && count < 100; count++)
         {
             await Task.Delay(100.Milliseconds(), testContextAccessor.Current.CancellationToken);
