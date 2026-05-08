@@ -219,7 +219,7 @@ public sealed partial class RedisHashCache : RedisCacheBase, IHashCache
                 ret = await _write.ExecuteAsync(async token =>
                 {
                     token.ThrowIfCancellationRequested();
-                    return await transaction.ExecuteAsync().ConfigureAwait(false);
+                    return await transaction.ExecuteAsync(CommandFlags.DemandMaster).ConfigureAwait(false);
                 }, default, token).ConfigureAwait(false);
 
                 if (!ret)
@@ -445,10 +445,10 @@ public sealed partial class RedisHashCache : RedisCacheBase, IHashCache
             expireTimeToLiveTask = transaction.KeyTimeToLiveAsync(redisKey, CommandFlags.PreferReplica).ConfigureAwait(false);
         }
 
-        var transactionResult = await _write.ExecuteAsync( async token =>
+        var transactionResult = await _read.ExecuteAsync( async token =>
         {
             token.ThrowIfCancellationRequested();
-            return await transaction.ExecuteAsync().ConfigureAwait(false);
+            return await transaction.ExecuteAsync(CommandFlags.PreferReplica).ConfigureAwait(false);
         }, default, token).ConfigureAwait(false);
         if (!transactionResult)
         {
@@ -690,7 +690,7 @@ public sealed partial class RedisHashCache : RedisCacheBase, IHashCache
                 ret = await _write.ExecuteAsync(async token =>
                 {
                     token.ThrowIfCancellationRequested();
-                    return await transaction.ExecuteAsync().ConfigureAwait(false);
+                    return await transaction.ExecuteAsync(CommandFlags.DemandMaster).ConfigureAwait(false);
                 }, default, token).ConfigureAwait(false);
                 if (!ret)
                 {

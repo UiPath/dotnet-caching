@@ -210,6 +210,130 @@ public class MultilayerCacheTests(ITestContextAccessor testContextAccessor) : IA
     }
 
     [Fact]
+    public async Task GetCacheEntry_returns_remote_when_inner_has_value()
+    {
+        var expected = _fixture.Create<string>();
+        var expectedExpiration = _fixture.Create<DateTimeOffset>();
+        _innerCache.GetCacheEntryAsync<string>(_innerCacheKey, Arg.Any<CancellationToken>())
+            .Returns(new TestCacheEntry<string?> { Value = expected, Expiration = expectedExpiration });
+
+        var entry = await Sut.GetCacheEntryAsync<string>(_cacheKey, testContextAccessor.Current.CancellationToken);
+
+        entry.Value.Should().Be(expected);
+        entry.Expiration.Should().Be(expectedExpiration);
+        _memoryCache.Received(1).CreateEntry(_innerCacheKey);
+        await _innerCache.DidNotReceive().ExpireTimeAsync<string>(_innerCacheKey, Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task GetCacheEntry_returns_default_entry_when_inner_returns_null()
+    {
+        _innerCache.GetCacheEntryAsync<string>(_innerCacheKey, Arg.Any<CancellationToken>())
+            .Returns(new TestCacheEntry<string?> { Value = default });
+
+        var entry = await Sut.GetCacheEntryAsync<string>(_cacheKey, testContextAccessor.Current.CancellationToken);
+
+        entry.Should().NotBeNull();
+        entry.Value.Should().BeNull();
+        _memoryCache.DidNotReceive().CreateEntry(_innerCacheKey);
+    }
+
+    [Fact]
+    public async Task GetCacheEntry_returns_local_when_disconnected_and_UsePrimaryOnlyWhenDisconnected_is_true()
+    {
+        var expected = _fixture.Create<string>();
+        _options.UsePrimaryOnlyWhenDisconnected = true;
+        _options.ConnectionMonitorEnabled = true;
+        _topicProvider.IsConnected.Returns(false);
+        _memoryCache.TryGetValue(_innerCacheKey, out Arg.Any<object?>())
+            .Returns(x =>
+            {
+                x[1] = new TestCacheEntry<string?> { Value = expected };
+                return true;
+            });
+
+        var entry = await Sut.GetCacheEntryAsync<string>(_cacheKey, testContextAccessor.Current.CancellationToken);
+
+        entry.Value.Should().Be(expected);
+        await _innerCache.DidNotReceive().GetCacheEntryAsync<string>(_innerCacheKey, Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task GetCacheEntry_returns_default_entry_when_disconnected_and_UsePrimaryOnlyWhenDisconnected_is_false()
+    {
+        var staleValue = _fixture.Create<string>();
+        _options.UsePrimaryOnlyWhenDisconnected = false;
+        _options.ConnectionMonitorEnabled = true;
+        _topicProvider.IsConnected.Returns(false);
+        _memoryCache.TryGetValue(_innerCacheKey, out Arg.Any<object?>())
+            .Returns(x =>
+            {
+                x[1] = new TestCacheEntry<string?> { Value = staleValue };
+                return true;
+            });
+
+        var entry = await Sut.GetCacheEntryAsync<string>(_cacheKey, testContextAccessor.Current.CancellationToken);
+
+        entry.Should().NotBeNull();
+        entry.Value.Should().BeNull();
+        _memoryCache.Received(1).Remove(_innerCacheKey);
+        await _innerCache.DidNotReceive().GetCacheEntryAsync<string>(_innerCacheKey, Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task GetCacheEntries_returns_local_when_disconnected_and_UsePrimaryOnlyWhenDisconnected_is_true()
+    {
+        var expected = _fixture.Create<string>();
+        _options.UsePrimaryOnlyWhenDisconnected = true;
+        _options.ConnectionMonitorEnabled = true;
+        _topicProvider.IsConnected.Returns(false);
+        _memoryCache.TryGetValue(_innerCacheKey, out Arg.Any<object?>())
+            .Returns(x =>
+            {
+                x[1] = new TestCacheEntry<string?> { Value = expected };
+                return true;
+            });
+        _memoryCache.TryGetValue(_innerMultiKey, out Arg.Any<object?>())
+            .Returns(x =>
+            {
+                x[1] = new TestCacheEntry<string?> { Value = expected };
+                return true;
+            });
+
+        var entries = await Sut.GetCacheEntriesAsync<string>(new CacheKey[] { _cacheKey, _multiKey }, token: testContextAccessor.Current.CancellationToken);
+
+        entries.Should().HaveCount(2);
+        entries[0].Value.Value.Should().Be(expected);
+        entries[1].Value.Value.Should().Be(expected);
+        await _innerCache.DidNotReceive().GetCacheEntriesAsync<string>(Arg.Any<CacheKey[]>(), Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task GetCacheEntries_skips_inner_call_when_all_keys_hit_locally()
+    {
+        var expected = _fixture.Create<string>();
+        _memoryCache.TryGetValue(_innerCacheKey, out Arg.Any<object?>())
+            .Returns(x =>
+            {
+                x[1] = new TestCacheEntry<string?> { Value = expected };
+                return true;
+            });
+        _memoryCache.TryGetValue(_innerMultiKey, out Arg.Any<object?>())
+            .Returns(x =>
+            {
+                x[1] = new TestCacheEntry<string?> { Value = expected };
+                return true;
+            });
+
+        var entries = await Sut.GetCacheEntriesAsync<string>(new CacheKey[] { _cacheKey, _multiKey }, token: testContextAccessor.Current.CancellationToken);
+
+        entries.Should().HaveCount(2);
+        entries[0].Value.Value.Should().Be(expected);
+        entries[1].Value.Value.Should().Be(expected);
+        await _innerCache.DidNotReceive().GetCacheEntriesAsync<string>(Arg.Any<CacheKey[]>(), Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
     public async Task GetOrAdd_data_from_inner_cache()
     {
         var expected = _fixture.Create<string>();

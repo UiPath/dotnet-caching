@@ -358,6 +358,41 @@ public sealed partial class MultilayerCache : MultilayerCacheBase, ICache
         return results.ToArray();
     }
 
+    private async ValueTask<T?> GetInnerAsync<T>(CacheEntryOptions options)
+    {
+        if (_memoryCache.TryGetValue<ICacheEntry<T>>(options.CacheKey, out var entry))
+        {
+            LogFoundLocal(options.CacheKey);
+            if(_connectionState.IsConnected)
+            {
+                return entry!.Value;
+            }
+            else if (_usePrimaryOnlyWhenDisconnected)
+            {
+                LogUsingPrimaryOnlyWhenDisconnected(options.CacheKey);
+                return entry!.Value;
+            }
+            else
+            {
+                LogReturningDefaultDisconnected(options.CacheKey);
+                _memoryCache.Remove(options.CacheKey);
+                return default;
+            }
+        }
+
+        var fetched = await _innerCache.GetCacheEntryAsync<T>(options.CacheKey, options.Token).ConfigureAwait(false);
+
+        if (fetched.Value is null)
+        {
+            return default;
+        }
+
+        LogFoundInnerCacheCopy(options.CacheKey);
+        options.Expiration = fetched.Expiration;
+        MemorySet(options, fetched.Value, _multiLayerCacheOptions.PrimaryMaxExpiration);
+        return fetched.Value;
+    }
+
     private async ValueTask<KeyValuePair<CacheKey, ICacheEntry<T?>>[]> GetCacheEntriesInnerAsync<T>(CacheEntryOptions[] options, CancellationToken token = default)
     {
         var results = new KeyValuePair<CacheKey, ICacheEntry<T?>>[options.Length];
@@ -416,41 +451,6 @@ public sealed partial class MultilayerCache : MultilayerCacheBase, ICache
         }
 
         return results;
-    }
-
-    private async ValueTask<T?> GetInnerAsync<T>(CacheEntryOptions options)
-    {
-        if (_memoryCache.TryGetValue<ICacheEntry<T>>(options.CacheKey, out var entry))
-        {
-            LogFoundLocal(options.CacheKey);
-            if(_connectionState.IsConnected)
-            {
-                return entry!.Value;
-            }
-            else if (_usePrimaryOnlyWhenDisconnected)
-            {
-                LogUsingPrimaryOnlyWhenDisconnected(options.CacheKey);
-                return entry!.Value;
-            }
-            else
-            {
-                LogReturningDefaultDisconnected(options.CacheKey);
-                _memoryCache.Remove(options.CacheKey);
-                return default;
-            }
-        }
-
-        var fetched = await _innerCache.GetCacheEntryAsync<T>(options.CacheKey, options.Token).ConfigureAwait(false);
-
-        if (fetched.Value is null)
-        {
-            return default;
-        }
-
-        LogFoundInnerCacheCopy(options.CacheKey);
-        options.Expiration = fetched.Expiration;
-        MemorySet(options, fetched.Value, _multiLayerCacheOptions.PrimaryMaxExpiration);
-        return fetched.Value;
     }
 
     private async ValueTask<ICacheEntry<T?>> GetCacheEntryInnerAsync<T>(CacheEntryOptions options)

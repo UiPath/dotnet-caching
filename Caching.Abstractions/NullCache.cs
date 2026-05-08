@@ -101,7 +101,7 @@ public sealed class NullCache : ICache
 
     private sealed record NullCacheEntry<T> : ICacheEntry<T>
     {
-        [System.Diagnostics.CodeAnalysis.SuppressMessage("SonarLint.Rule", "S3218:Inner class members should not shadow outer class names")]
+        [SuppressMessage("SonarLint.Rule", "S3218:Inner class members should not shadow outer class names")]
         public static readonly ICacheEntry<T> Instance = new NullCacheEntry<T>();
 
         public T? Value => default;

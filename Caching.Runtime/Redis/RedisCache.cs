@@ -366,7 +366,7 @@ public sealed partial class RedisCache : RedisCacheBase, ICache
             ret = await _write.ExecuteAsync(async token =>
             {
                 token.ThrowIfCancellationRequested();
-                return await transaction.ExecuteAsync().ConfigureAwait(false);
+                return await transaction.ExecuteAsync(CommandFlags.DemandMaster).ConfigureAwait(false);
             }, default, token).ConfigureAwait(false);
 
             operation.Stop();
@@ -550,10 +550,10 @@ public sealed partial class RedisCache : RedisCacheBase, ICache
                 ttlTask = transaction.KeyTimeToLiveAsync(redisKey, CommandFlags.PreferReplica).ConfigureAwait(false);
             }
 
-            var transactionResult = await _write.ExecuteAsync(async token =>
+            var transactionResult = await _read.ExecuteAsync(async token =>
             {
                 token.ThrowIfCancellationRequested();
-                return await transaction.ExecuteAsync().ConfigureAwait(false);
+                return await transaction.ExecuteAsync(CommandFlags.PreferReplica).ConfigureAwait(false);
             }, default, token).ConfigureAwait(false);
 
             if (!transactionResult)
@@ -619,10 +619,10 @@ public sealed partial class RedisCache : RedisCacheBase, ICache
                     .ToArray();
             }
 
-            var transactionResult = await _write.ExecuteAsync(async token =>
+            var transactionResult = await _read.ExecuteAsync(async token =>
             {
                 token.ThrowIfCancellationRequested();
-                return await transaction.ExecuteAsync().ConfigureAwait(false);
+                return await transaction.ExecuteAsync(CommandFlags.PreferReplica).ConfigureAwait(false);
             }, default, token).ConfigureAwait(false);
 
             if (!transactionResult)
