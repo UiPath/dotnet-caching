@@ -8,6 +8,7 @@ namespace UiPath.Platform.Caching.Config;
 public class CachingBuilder(IServiceCollection services, IConfiguration? configuration = null) : ICachingBuilder
 {
     private readonly List<Action<ICachingBuilder>> _callbacks = [];
+    private readonly HashSet<object> _registeredKeys = [];
 
     public IServiceCollection Services { get; } = services;
 
@@ -37,6 +38,14 @@ public class CachingBuilder(IServiceCollection services, IConfiguration? configu
         Services.TryAddSingleton<IRedisProfiler>(NullRedisProfiler.Instance);
     }
 
-    public void RegisterOnCompleteCallback(Action<ICachingBuilder> callback) =>
-        _callbacks.Add(callback);
+    public void RegisterOnCompleteCallback(object key, Action<ICachingBuilder> callback)
+    {
+        ArgumentNullException.ThrowIfNull(key);
+        ArgumentNullException.ThrowIfNull(callback);
+
+        if (_registeredKeys.Add(key))
+        {
+            _callbacks.Add(callback);
+        }
+    }
 }
