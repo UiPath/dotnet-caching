@@ -11,5 +11,5 @@ public interface ICachingBuilder
 
     bool Enabled { get; set; }
 
-    void RegisterOnCompleteCallback(Action<ICachingBuilder> callback);
+    void RegisterOnCompleteCallback(object key, Action<ICachingBuilder> callback);
 }
