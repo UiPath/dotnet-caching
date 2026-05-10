@@ -194,6 +194,7 @@ public class KeyedSubjectTests
         const int iterations = 1000;
         var barrier = new Barrier(3);
 
+        var ct = TestContext.Current.CancellationToken;
         var subscribeTask = Task.Run(() =>
         {
             barrier.SignalAndWait();
@@ -203,7 +204,7 @@ public class KeyedSubjectTests
                 subs.Add(_sut.Subscribe(new TestKeyedObserver($"key{i}")));
             }
             return subs;
-        });
+        }, ct);
 
         var dispatchTask = Task.Run(() =>
         {
@@ -212,7 +213,7 @@ public class KeyedSubjectTests
             {
                 _sut.OnNext(CreateEvent($"key{i}"));
             }
-        });
+        }, ct);
 
         var unsubscribeTask = Task.Run(() =>
         {
@@ -222,7 +223,7 @@ public class KeyedSubjectTests
                 var sub = _sut.Subscribe(new TestKeyedObserver($"temp{i}"));
                 sub.Dispose();
             }
-        });
+        }, ct);
 
         await Task.WhenAll(subscribeTask, dispatchTask, unsubscribeTask);
     }
@@ -284,6 +285,7 @@ public class KeyedSubjectTests
 
         var eventCount = 0;
 
+        var ct = TestContext.Current.CancellationToken;
         var churnTask = Task.Run(() =>
         {
             for (var i = 0; i < churnIterations; i++)
@@ -292,7 +294,7 @@ public class KeyedSubjectTests
                 var sub = _sut.Subscribe(obs);
                 sub.Dispose();
             }
-        });
+        }, ct);
 
         var dispatchTask = Task.Run(() =>
         {
@@ -301,7 +303,7 @@ public class KeyedSubjectTests
                 _sut.OnNext(CreateEvent(key));
                 Interlocked.Increment(ref eventCount);
             }
-        });
+        }, ct);
 
         await Task.WhenAll(churnTask, dispatchTask);
 
@@ -329,6 +331,7 @@ public class KeyedSubjectTests
         var barrier = new Barrier(2);
 
         var lateObservers = new ConcurrentBag<TestKeyedObserver>();
+        var ct = TestContext.Current.CancellationToken;
         var lateTask = Task.Run(() =>
         {
             barrier.SignalAndWait();
@@ -338,7 +341,7 @@ public class KeyedSubjectTests
                 _sut.Subscribe(obs);
                 lateObservers.Add(obs);
             }
-        });
+        }, ct);
 
         var dispatchTask = Task.Run(() =>
         {
@@ -347,7 +350,7 @@ public class KeyedSubjectTests
             {
                 _sut.OnNext(CreateEvent(key));
             }
-        });
+        }, ct);
 
         await Task.WhenAll(lateTask, dispatchTask);
 

@@ -164,7 +164,9 @@ public sealed partial class RedisStreamsTopic<T> : ITopic<T>
             lock (_syncObj)
 #endif
             {
+#pragma warning disable S2589 // double-checked locking with a volatile field; outer check is racy by design
                 if (!_consumerGroupCreated)
+#pragma warning restore S2589
                 {
                     _consumerGroupCreated = EnsureStreamGroup();
                 }

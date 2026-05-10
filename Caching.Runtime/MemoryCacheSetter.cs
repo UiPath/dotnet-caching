@@ -93,7 +93,7 @@ internal abstract class MemoryCacheSetter(
                 {
                     { "CacheKey", metadataState.CacheKey },
                     { "TopicKey", metadataState.TopicKey },
-                    { "TransportId", token?.TransportId ?? string.Empty}
+                    { "TransportId", token.TransportId ?? string.Empty}
                 });
             }
         }

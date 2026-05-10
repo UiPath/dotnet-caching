@@ -167,57 +167,7 @@ internal sealed partial class RedisStreamSubjectWriter<T> : IDisposable
 
         foreach (StreamEntry @event in events)
         {
-            if (@event.IsNull)
-            {
-                continue;
-            }
-
-            try
-            {
-                var ev = _formatter.Decode(@event[_context.FieldName].ToString());
-                if (ev is null)
-                {
-                    continue;
-                }
-                ev.AttachTransportId(@event.Id);
-
-                if (ev.IsValid())
-                {
-                    if (ev.SameSource(_context.SourceUri))
-                    {
-                        LogEventFromCurrentSource(ev.Id, _context.Topic, @event.Id);
-                        _cachingTelemetryProvider.TrackTopicReadMetric(_context.Topic!, @event.Id);
-                        TraceReceipt(ev);
-                        ids.Add(@event.Id);
-                    }
-                    else
-                    {
-                        if (_writer.TryWrite(ev))
-                        {
-                            ids.Add(@event.Id);
-                            TraceReceipt(ev);
-                        }
-                        else
-                        {
-                            LogFailedProcessingEntry(ev.Id, _context.Topic, @event.Id);
-                        }
-                    }
-                }
-                else
-                {
-                    _cachingTelemetryProvider.TrackEvent($"Caching.{nameof(RedisStreamSubjectWriter<T>)}.{nameof(DispatchEventsAsync)}.InvalidEvent", new Dictionary<string, string>
-                    {
-                        { "TopicKey", _context.Topic!},
-                        { "TransportId", @event.Id! }
-                    });
-                    LogEventInvalid(ev.Id, _context.Topic, @event.Id);
-                    ids.Add(@event.Id);
-                }
-            }
-            catch (Exception ex)
-            {
-                LogOnMessageError(ex, _context.Topic);
-            }
+            ProcessEvent(@event, ids);
         }
 
         if (ids.Count == 0)
@@ -228,6 +178,70 @@ internal sealed partial class RedisStreamSubjectWriter<T> : IDisposable
 
         await _redis.Database.StreamAcknowledgeAsync(_context.Topic, _context.ConsumerGroup, [.. ids]).ConfigureAwait(false);
         LogDispatched(events.Length, _context.Topic);
+    }
+
+    private void ProcessEvent(StreamEntry @event, List<RedisValue> ids)
+    {
+        if (@event.IsNull)
+        {
+            return;
+        }
+
+        try
+        {
+            var ev = _formatter.Decode(@event[_context.FieldName].ToString());
+            if (ev is null)
+            {
+                return;
+            }
+            ev.AttachTransportId(@event.Id);
+
+            if (ev.IsValid())
+            {
+                HandleValidEvent(ev, @event, ids);
+            }
+            else
+            {
+                HandleInvalidEvent(ev, @event, ids);
+            }
+        }
+        catch (Exception ex)
+        {
+            LogOnMessageError(ex, _context.Topic);
+        }
+    }
+
+    private void HandleValidEvent(T ev, StreamEntry @event, List<RedisValue> ids)
+    {
+        if (ev.SameSource(_context.SourceUri))
+        {
+            LogEventFromCurrentSource(ev.Id, _context.Topic, @event.Id);
+            _cachingTelemetryProvider.TrackTopicReadMetric(_context.Topic!, @event.Id);
+            TraceReceipt(ev);
+            ids.Add(@event.Id);
+            return;
+        }
+
+        if (_writer.TryWrite(ev))
+        {
+            ids.Add(@event.Id);
+            TraceReceipt(ev);
+        }
+        else
+        {
+            LogFailedProcessingEntry(ev.Id, _context.Topic, @event.Id);
+        }
+    }
+
+    private void HandleInvalidEvent(T ev, StreamEntry @event, List<RedisValue> ids)
+    {
+        _cachingTelemetryProvider.TrackEvent($"Caching.{nameof(RedisStreamSubjectWriter<T>)}.{nameof(DispatchEventsAsync)}.InvalidEvent", new Dictionary<string, string>
+        {
+            { "TopicKey", _context.Topic!},
+            { "TransportId", @event.Id! }
+        });
+        LogEventInvalid(ev.Id, _context.Topic, @event.Id);
+        ids.Add(@event.Id);
     }
 
     private void TraceReceipt(T ev)

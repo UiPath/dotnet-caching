@@ -181,8 +181,7 @@ public partial class RedisStreamHealthMaintainer : IHostedService
         if (_supportsXtrimMinId.Value && TryParseDeliveredIdToDatetimeOffset(streamInfo.LastGeneratedId, out var dateTimeOffset) && dateTimeOffset > minOffset)
         {
             long minId = minOffset.ToUnixTimeMilliseconds();
-            var result = await Database.StreamTrimByMinIdAsync(context.StreamKey, minId, flags: CommandFlags.DemandMaster).ConfigureAwait(false);
-            var entriesDeleted = (long)result;
+            var entriesDeleted = await Database.StreamTrimByMinIdAsync(context.StreamKey, minId, flags: CommandFlags.DemandMaster).ConfigureAwait(false);
             LogEntriesDeleted(entriesDeleted, context.StreamKey, minId);
         }
     }

@@ -2,7 +2,7 @@
   <PropertyGroup>
     <ManagePackageVersionsCentrally>true</ManagePackageVersionsCentrally>
     <!-- Shared Package Versions -->
-    <xUnit>3.2.1</xUnit>
+    <xUnit>3.2.2</xUnit>
     <AutoFixture>4.18.1</AutoFixture>
     <UiPathTelemetry>1.3.2-beta2242-0600</UiPathTelemetry>
     <UiPathFeatureFlags>2.4.2</UiPathFeatureFlags>
@@ -45,14 +45,14 @@
     <PackageVersion Include="CloudNative.CloudEvents.SystemTextJson" Version="$(CloudEvents)" />
     <PackageVersion Include="Polly.Core" Version="8.6.5" />
     <PackageVersion Include="Polly.Extensions" Version="8.6.5" />
-    <PackageVersion Include="SonarAnalyzer.CSharp" Version="10.17.0.131074" />
+    <PackageVersion Include="SonarAnalyzer.CSharp" Version="10.25.0.139117" />
     <!-- Please ensure the version sync with the ones from UiPath.Platform.Telemetry.OpenTelemetry -->
-    <PackageVersion Include="OpenTelemetry" Version="1.12.0" />
-    <PackageVersion Include="OpenTelemetry.Instrumentation.StackExchangeRedis" Version="1.12.0-beta.1" />
-    <PackageVersion Include="OpenTelemetry.Exporter.Console" Version="1.12.0" />
-    <PackageVersion Include="OpenTelemetry.Extensions.Hosting" Version="1.12.0" />
-    <PackageVersion Include="OpenTelemetry.Instrumentation.AspNetCore" Version="1.12.0" />
-    <PackageVersion Include="OpenTelemetry.Instrumentation.Http" Version="1.12.0" />
+    <PackageVersion Include="OpenTelemetry" Version="1.15.3" />
+    <PackageVersion Include="OpenTelemetry.Instrumentation.StackExchangeRedis" Version="1.15.1-beta.1" />
+    <PackageVersion Include="OpenTelemetry.Exporter.Console" Version="1.15.3" />
+    <PackageVersion Include="OpenTelemetry.Extensions.Hosting" Version="1.15.3" />
+    <PackageVersion Include="OpenTelemetry.Instrumentation.AspNetCore" Version="1.15.2" />
+    <PackageVersion Include="OpenTelemetry.Instrumentation.Http" Version="1.15.1" />
     <!-- UiPath libs -->
     <PackageVersion Include="UiPath.Platform.Telemetry" Version="$(UiPathTelemetry)" />
     <PackageVersion Include="UiPath.Platform.Telemetry.AspNetCore" Version="$(UiPathTelemetry)" />
@@ -64,7 +64,7 @@
     <PackageVersion Include="Microsoft.NET.Test.Sdk" Version="18.0.1" />
     <PackageVersion Include="xunit.v3" Version="$(xUnit)" />
     <PackageVersion Include="xunit.runner.visualstudio" Version="3.1.5" />
-    <PackageVersion Include="xunit.analyzers" Version="1.26.0" />
+    <PackageVersion Include="xunit.analyzers" Version="1.27.0" />
     <PackageVersion Include="AutoFixture" Version="$(AutoFixture)" />
     <PackageVersion Include="AutoFixture.Xunit3" Version="4.19.0" />
     <PackageVersion Include="AutoFixture.AutoNSubstitute" Version="$(AutoFixture)" />

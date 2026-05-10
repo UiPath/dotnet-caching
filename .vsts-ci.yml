@@ -38,11 +38,15 @@ stages:
         build_counter: $[counter('build_counter_1_0_0', 1)]
 
       steps:
+      # TODO: Bumping past gitversion/*@1.2.0 requires migrating to GitVersion 6
+      # (config schema change + the publish script's $env:GITVERSION_NUGETVERSION
+      # variable was removed in v6). Tracked separately; staying on @1.2.0 means
+      # accepting the Node 10 EOL warning until that migration lands.
       - task: gitversion/setup@1.2.0
         displayName: 'Setup GitVersion'
         inputs:
           versionSpec: '5.x'
-      
+
       - task: gitversion/execute@1.2.0
         displayName: 'Execute GitVersion'
         inputs:
@@ -119,11 +123,11 @@ stages:
           feedsToUse: config
           nugetConfigPath: "$(Build.SourcesDirectory)/Caching/NuGet.Config"
 
-      - task: SonarCloudPrepare@2
+      - task: SonarCloudPrepare@4
         inputs:
           SonarCloud: SonarConnection
           organization: ui
-          scannerMode: MSBuild
+          scannerMode: dotnet
           projectKey: UiPath_ServiceCommon-Caching
           projectName: UiPath_ServiceCommon-Caching
           projectVersion: '$(Versions.PackageVersion)'
@@ -158,9 +162,9 @@ stages:
         displayName: 'Run tests'
         workingDirectory: $(Build.SourcesDirectory)/Caching
 
-      - task: SonarCloudAnalyze@2
+      - task: SonarCloudAnalyze@4
 
-      - task: SonarCloudPublish@2
+      - task: SonarCloudPublish@4
         inputs:
           pollingTimeoutSec: '300'
 
