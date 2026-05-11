@@ -283,7 +283,7 @@ internal sealed partial class RedisStreamSubjectWriter<T> : IDisposable
     [LoggerMessage(Level = LogLevel.Trace, Message = "Event from current source. Id {EventId}  Topic : {Topic}, StreamId : {StreamId}")]
     private partial void LogEventFromCurrentSource(string? eventId, RedisKey topic, RedisValue streamId);
 
-    [LoggerMessage(Level = LogLevel.Warning, Message = "Failed processing stream entry. Id {EventId} Topic : {Topic}, StreamId : {StreamId}. Will retry.")]
+    [LoggerMessage(Level = LogLevel.Warning, Message = "Channel full; dropping local invalidation. Entry will remain in PEL until consumer group is recreated. Id {EventId} Topic : {Topic}, StreamId : {StreamId}.")]
     private partial void LogFailedProcessingEntry(string? eventId, RedisKey topic, RedisValue streamId);
 
     [LoggerMessage(Level = LogLevel.Warning, Message = "Event invalid. Id {EventId}  Topic : {Topic}, StreamId : {StreamId}")]

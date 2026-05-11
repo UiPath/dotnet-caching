@@ -226,7 +226,7 @@ public class RedisPubSubTopicTests(ITestContextAccessor testContextAccessor) : I
             });
         _topicKey = _fixture.Freeze<string>();
         _fixture.Inject(_topicKey);
-        _fixture.Inject<Func<IEventSubject<ICacheEvent>>>(() => new KeyedSubject<ICacheEvent>());
+        _fixture.Inject<Func<IEventSubject<ICacheEvent>>>(() => new KeyedSubject<ICacheEvent>(Microsoft.Extensions.Logging.Abstractions.NullLogger<KeyedSubject<ICacheEvent>>.Instance));
         _redisChannelStrategy = _fixture.Freeze<IRedisChannelStrategy>();
         _redisChannelStrategy.GetRedisChannel(_topicKey).Returns(c => new RedisChannel(_topicKey, RedisChannel.PatternMode.Auto));
         _resiliencePipelineHolder = ResiliencePipelineHolder.Empty;
