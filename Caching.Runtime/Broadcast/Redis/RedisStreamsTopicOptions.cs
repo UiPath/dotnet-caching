@@ -39,4 +39,16 @@ public class RedisStreamsTopicOptions
     public bool ProfilerEnabled { get; set; }
 
     public bool EmitStreamReceivedEvent { get; set; }
+
+    public bool NotifyEnabled { get; set; }
+
+    public IRedisChannelStrategy? NotifyChannelStrategy { get; set; }
+
+    public string NotifyChannelName { get; set; } = StreamSuffixChannelStrategy.DefaultName;
+
+    public bool NotifyShardedPubSub { get; set; }
+
+    public TimeSpan? NotifySubscriberTimeout { get; set; }
+
+    public TimeSpan? NotifySubscriberDueTime { get; set; }
 }

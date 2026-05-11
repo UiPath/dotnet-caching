@@ -19,6 +19,9 @@ public sealed partial class RedisStreamsTopic<T> : ITopic<T>
     private readonly ICachingTelemetryProvider _cachingTelemetryProvider;
     private readonly RedisStreamsTopicOptions _streamOptions;
     private readonly EventDispatcher<T> _dispatcher;
+    private readonly RedisStreamNotifyChannel? _notifyChannel;
+    private readonly RedisChannel? _notifyRedisChannel;
+    private readonly IFetchWaiter _waiter;
 #if NET9_0_OR_GREATER
     private readonly Lock _syncObj = new();
 #else
@@ -56,9 +59,28 @@ public sealed partial class RedisStreamsTopic<T> : ITopic<T>
         _streamOptions = streamOptions;
         _subject = subjectFactory();
         _redisStreamKeyStrategy = streamOptions.RedisStreamKeyStrategy ?? new PrefixStrategy(RedisTypePrefixes.Streams, cacheOptions);
+        if (_streamOptions.NotifyEnabled)
+        {
+            var notifyChannelStrategy = streamOptions.NotifyChannelStrategy
+                ?? StreamSuffixChannel.Create(_redisStreamKeyStrategy, cacheOptions, streamOptions.NotifyChannelName, streamOptions.NotifyShardedPubSub);
+            _notifyRedisChannel = notifyChannelStrategy.GetRedisChannel(topicKey);
+            var signaling = new SignalingFetchWaiter(streamOptions.PollInterval);
+            _waiter = signaling;
+            _notifyChannel = new RedisStreamNotifyChannel(
+                _notifyRedisChannel.Value,
+                _redis,
+                _logger,
+                signaling,
+                streamOptions.NotifySubscriberTimeout,
+                streamOptions.NotifySubscriberDueTime);
+        }
+        else
+        {
+            _waiter = new TimedFetchWaiter(streamOptions.PollInterval);
+        }
         _context = GetContext(topicKey, cacheOptions, streamOptions);
         var channel = ChannelHelper.Create<T>(streamOptions.ConsumerCapacity < 0, streamOptions.ConsumerCapacity > 0 ? streamOptions.ConsumerCapacity : streamOptions.PollBatchSize , streamOptions.FullMode);
-        _subscriber = new RedisStreamSubjectWriter<T>(_context, _connectionState, _redis, channel, _formatter, _logger, _cachingTelemetryProvider, redisProfiler, _stopTokenSource.Token);
+        _subscriber = new RedisStreamSubjectWriter<T>(_context, _connectionState, _redis, channel, _formatter, _logger, _cachingTelemetryProvider, redisProfiler, _waiter, _stopTokenSource.Token);
         _dispatcher = new EventDispatcher<T>(topicKey, channel, _subject, _logger, _stopTokenSource.Token);
     }
 
@@ -93,6 +115,18 @@ public sealed partial class RedisStreamsTopic<T> : ITopic<T>
                     flags: CommandFlags.DemandMaster).ConfigureAwait(false);
             }, defaultValue: RedisValue.Null, token).ConfigureAwait(false);
             _cachingTelemetryProvider.TrackTopicWriteMetric(_context.Topic!, id);
+            if (_notifyRedisChannel.HasValue && !id.IsNull)
+            {
+                try
+                {
+                    _ = _redis.Database.PublishAsync(_notifyRedisChannel.Value, RedisValue.EmptyString, CommandFlags.FireAndForget)
+                        .ContinueWith(t => LogNotifyPublishError(t.Exception!, TopicKey), TaskContinuationOptions.OnlyOnFaulted | TaskContinuationOptions.ExecuteSynchronously);
+                }
+                catch (Exception ex)
+                {
+                    LogNotifyPublishError(ex, TopicKey);
+                }
+            }
             LogPublished(TopicKey, @event.Id, id);
             return !id.IsNull;
         }
@@ -115,6 +149,8 @@ public sealed partial class RedisStreamsTopic<T> : ITopic<T>
         _dispatcher.Dispose();
         _subject.Dispose();
         _subscriber.Dispose();
+        _notifyChannel?.Dispose();
+        _waiter.Dispose();
         OnDisposed?.Invoke(this, EventArgs.Empty);
     }
 
@@ -177,6 +213,9 @@ public sealed partial class RedisStreamsTopic<T> : ITopic<T>
 
     [LoggerMessage(Level = LogLevel.Warning, Message = "Error when publishing to topic {TopicKey} event {EventId}")]
     private partial void LogPublishError(Exception ex, TopicKey topicKey, string? eventId);
+
+    [LoggerMessage(Level = LogLevel.Warning, Message = "Best-effort notify doorbell publish failed for topic {TopicKey}")]
+    private partial void LogNotifyPublishError(Exception ex, TopicKey topicKey);
 
     [LoggerMessage(Level = LogLevel.Debug, Message = "On Topic {Topic} consumer group {ConsumerGroup} already exists")]
     private partial void LogConsumerGroupExists(RedisKey topic, RedisValue consumerGroup);

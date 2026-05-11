@@ -9,6 +9,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 ### Added
 
 - `ICache.GetCacheEntryAsync<T>` and `ICache.GetCacheEntriesAsync<T>` — bundled GET + TTL reads. Implementations may fetch the value and its remote expiration in a single network round-trip; `RedisCache` uses a `MULTI`/`EXEC` transaction (mirroring the hash-cache pattern).
+- `RedisStreamsTopic` supports an optional Pub/Sub notify doorbell (`NotifyEnabled`) that drops publish-to-deliver latency from the poll interval to network RTT, while preserving stream durability and consumer-group semantics. Channel name defaults to the stream's Redis key joined with `NotifyChannelName` (default `"notify"`) using the same `CacheOptions.Separator` as the rest of the key scheme. Set `NotifyShardedPubSub = true` to use sharded Pub/Sub (`SPUBLISH`/`SSUBSCRIBE`, requires Redis 7.0+) so the doorbell does not fan out across cluster nodes; the sharded strategy wraps the stream key as a Redis Cluster hash tag (or inherits an existing one) so the channel and stream share the same slot — `XADD` and `SPUBLISH` go to the same node. Otherwise regular `PUBLISH`/`SUBSCRIBE` is used. Override the channel entirely via `NotifyChannelStrategy`. Pub/Sub is best-effort — the existing poll continues to run as a safety net.
 
 ### Changed
 

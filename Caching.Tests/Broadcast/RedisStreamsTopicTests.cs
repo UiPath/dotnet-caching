@@ -130,9 +130,124 @@ public class RedisStreamsTopicTests(ITestContextAccessor testContextAccessor) : 
         actual.Should().BeFalse();
     }
 
+    [Fact]
+    public async Task Publish_does_not_publish_pubsub_when_notify_disabled()
+    {
+        _redisStreamsTopicOptions.NotifyEnabled = false;
+        _sut = null;
+
+        _database.StreamAddAsync(
+                key: Arg.Any<RedisKey>(),
+                streamField: Arg.Any<RedisValue>(),
+                streamValue: Arg.Any<RedisValue>(),
+                messageId: Arg.Any<RedisValue?>(),
+                maxLength: Arg.Any<long?>(),
+                useApproximateMaxLength: Arg.Any<bool>(),
+                limit: Arg.Any<long?>(),
+                trimMode: Arg.Any<StreamTrimMode>(),
+                flags: Arg.Any<CommandFlags>())
+            .Returns("1-0");
+
+        var ev = _fixture.Create<ICacheEvent>();
+        var ok = await Sut.PublishAsync(ev, testContextAccessor.Current.CancellationToken);
+
+        ok.Should().BeTrue();
+        await _database.DidNotReceiveWithAnyArgs().PublishAsync(
+            channel: default,
+            message: default,
+            flags: default);
+    }
+
+    [Fact]
+    public async Task Publish_publishes_pubsub_after_xadd_when_notify_enabled()
+    {
+        _redisStreamsTopicOptions.NotifyEnabled = true;
+        _redisStreamsTopicOptions.NotifySubscriberTimeout = TimeSpan.FromSeconds(60);
+        _redisStreamsTopicOptions.NotifySubscriberDueTime = TimeSpan.FromSeconds(60);
+        _sut = null;
+
+        _database.StreamAddAsync(
+                key: Arg.Any<RedisKey>(),
+                streamField: Arg.Any<RedisValue>(),
+                streamValue: Arg.Any<RedisValue>(),
+                messageId: Arg.Any<RedisValue?>(),
+                maxLength: Arg.Any<long?>(),
+                useApproximateMaxLength: Arg.Any<bool>(),
+                limit: Arg.Any<long?>(),
+                trimMode: Arg.Any<StreamTrimMode>(),
+                flags: Arg.Any<CommandFlags>())
+            .Returns("1-0");
+
+        var ev = _fixture.Create<ICacheEvent>();
+        var ok = await Sut.PublishAsync(ev, testContextAccessor.Current.CancellationToken);
+
+        ok.Should().BeTrue();
+        await _database.ReceivedWithAnyArgs(1).PublishAsync(
+            channel: default,
+            message: default,
+            flags: CommandFlags.FireAndForget);
+    }
+
+    [Fact]
+    public async Task Publish_returns_true_when_doorbell_publish_faults_asynchronously()
+    {
+        _redisStreamsTopicOptions.NotifyEnabled = true;
+        _redisStreamsTopicOptions.NotifySubscriberTimeout = TimeSpan.FromSeconds(60);
+        _redisStreamsTopicOptions.NotifySubscriberDueTime = TimeSpan.FromSeconds(60);
+        _sut = null;
+
+        _database.StreamAddAsync(
+                key: Arg.Any<RedisKey>(),
+                streamField: Arg.Any<RedisValue>(),
+                streamValue: Arg.Any<RedisValue>(),
+                messageId: Arg.Any<RedisValue?>(),
+                maxLength: Arg.Any<long?>(),
+                useApproximateMaxLength: Arg.Any<bool>(),
+                limit: Arg.Any<long?>(),
+                trimMode: Arg.Any<StreamTrimMode>(),
+                flags: Arg.Any<CommandFlags>())
+            .Returns("1-0");
+        _database.PublishAsync(Arg.Any<RedisChannel>(), Arg.Any<RedisValue>(), Arg.Any<CommandFlags>())
+            .Returns(Task.FromException<long>(new RedisException("doorbell async fault")));
+
+        var ev = _fixture.Create<ICacheEvent>();
+        var ok = await Sut.PublishAsync(ev, testContextAccessor.Current.CancellationToken);
+
+        ok.Should().BeTrue();
+    }
+
+    [Fact]
+    public async Task Publish_returns_true_when_doorbell_publish_throws_synchronously()
+    {
+        _redisStreamsTopicOptions.NotifyEnabled = true;
+        _redisStreamsTopicOptions.NotifySubscriberTimeout = TimeSpan.FromSeconds(60);
+        _redisStreamsTopicOptions.NotifySubscriberDueTime = TimeSpan.FromSeconds(60);
+        _sut = null;
+
+        _database.StreamAddAsync(
+                key: Arg.Any<RedisKey>(),
+                streamField: Arg.Any<RedisValue>(),
+                streamValue: Arg.Any<RedisValue>(),
+                messageId: Arg.Any<RedisValue?>(),
+                maxLength: Arg.Any<long?>(),
+                useApproximateMaxLength: Arg.Any<bool>(),
+                limit: Arg.Any<long?>(),
+                trimMode: Arg.Any<StreamTrimMode>(),
+                flags: Arg.Any<CommandFlags>())
+            .Returns("1-0");
+        _database.PublishAsync(Arg.Any<RedisChannel>(), Arg.Any<RedisValue>(), Arg.Any<CommandFlags>())
+            .ReturnsForAnyArgs<Task<long>>(_ => throw new RedisException("doorbell down"));
+
+        var ev = _fixture.Create<ICacheEvent>();
+        var ok = await Sut.PublishAsync(ev, testContextAccessor.Current.CancellationToken);
+
+        ok.Should().BeTrue();
+    }
+
     public ValueTask DisposeAsync()
     {
-        //do nothing;
+        _sut?.Dispose();
+        _cancellationTokenSource?.Dispose();
         return ValueTask.CompletedTask;
     }
 

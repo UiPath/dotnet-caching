@@ -111,14 +111,20 @@ public class RedisStreamSubjectWriterTests : IAsyncLifetime
     public async Task StreamReadGroupAsync_null_event()
     {
         var entries = new[] { new StreamEntry(_fixture.Create<string>(), new[] { new NameValueEntry(_fieldName, _fixture.Create<string>()) }) };
-        _formatter.Decode(Arg.Any<string>()).Returns(default(ICacheEvent?));
+        var decodeCalled = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+        _formatter.Decode(Arg.Any<string>()).Returns(_ =>
+        {
+            decodeCalled.TrySetResult(true);
+            return default(ICacheEvent?);
+        });
         _database.StreamReadGroupAsync(_context.Topic, _context.ConsumerGroup, _context.ConsumerName, ">", _context.PollBatchSize)
             .ReturnsForAnyArgs(_ => entries);
 
-        Func<Task> act = async () => await Sut.FetchTask;
-        await act.Should().NotCompleteWithinAsync(_pollInterval.Multiply(5));
+        var fetchTask = Sut.FetchTask;
+        await decodeCalled.Task.WaitAsync(5.Seconds(), TestContext.Current.CancellationToken);
         _cancellationTokenSource.Cancel();
-        await act.Should().CompleteWithinAsync(_pollInterval.Multiply(10));
+        await fetchTask.WaitAsync(5.Seconds(), TestContext.Current.CancellationToken);
+
         _formatter.Received().Decode(Arg.Any<string>());
     }
 
@@ -126,17 +132,20 @@ public class RedisStreamSubjectWriterTests : IAsyncLifetime
     public async Task StreamReadGroupAsync_invalid_event()
     {
         var entries = new[] { new StreamEntry(_fixture.Create<string>(), new[] { new NameValueEntry(_fieldName, _fixture.Create<string>()) }) };
-        _formatter.Decode(Arg.Any<string>()).Returns(new TestCacheEvent
+        var decodeCalled = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+        _formatter.Decode(Arg.Any<string>()).Returns(_ =>
         {
-            Valid = false,
+            decodeCalled.TrySetResult(true);
+            return new TestCacheEvent { Valid = false };
         });
         _database.StreamReadGroupAsync(_context.Topic, _context.ConsumerGroup, _context.ConsumerName, ">", _context.PollBatchSize)
             .ReturnsForAnyArgs(_ => entries);
 
-        Func<Task> act = async () => await Sut.FetchTask;
-        await act.Should().NotCompleteWithinAsync(_pollInterval.Multiply(7));
+        var fetchTask = Sut.FetchTask;
+        await decodeCalled.Task.WaitAsync(5.Seconds(), TestContext.Current.CancellationToken);
         _cancellationTokenSource.Cancel();
-        await act.Should().CompleteWithinAsync(_pollInterval.Multiply(10));
+        await fetchTask.WaitAsync(5.Seconds(), TestContext.Current.CancellationToken);
+
         _formatter.Received().Decode(Arg.Any<string>());
     }
 
@@ -144,17 +153,20 @@ public class RedisStreamSubjectWriterTests : IAsyncLifetime
     public async Task StreamReadGroupAsync_valid_event()
     {
         var entries = new[] { new StreamEntry(_fixture.Create<string>(), new[] { new NameValueEntry(_fieldName, _fixture.Create<string>()) }) };
-        _formatter.Decode(Arg.Any<string>()).Returns(new TestCacheEvent
+        var decodeCalled = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+        _formatter.Decode(Arg.Any<string>()).Returns(_ =>
         {
-            Valid = true,
+            decodeCalled.TrySetResult(true);
+            return new TestCacheEvent { Valid = true };
         });
         _database.StreamReadGroupAsync(_context.Topic, _context.ConsumerGroup, _context.ConsumerName, ">", _context.PollBatchSize)
             .ReturnsForAnyArgs(_ => entries);
 
-        Func<Task> act = async () => await Sut.FetchTask;
-        await act.Should().NotCompleteWithinAsync(_pollInterval.Multiply(5));
+        var fetchTask = Sut.FetchTask;
+        await decodeCalled.Task.WaitAsync(5.Seconds(), TestContext.Current.CancellationToken);
         _cancellationTokenSource.Cancel();
-        await act.Should().CompleteWithinAsync(_pollInterval.Multiply(10));
+        await fetchTask.WaitAsync(5.Seconds(), TestContext.Current.CancellationToken);
+
         _formatter.Received().Decode(Arg.Any<string>());
     }
 
@@ -211,6 +223,7 @@ public class RedisStreamSubjectWriterTests : IAsyncLifetime
         redisConnector.Database.Returns(_database);
 
         _fixture.Inject(_formatter);
+        _fixture.Inject<IFetchWaiter>(new TimedFetchWaiter(_pollInterval));
         return ValueTask.CompletedTask;
     }
 }
