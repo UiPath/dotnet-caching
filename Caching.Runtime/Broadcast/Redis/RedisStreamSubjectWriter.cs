@@ -164,27 +164,28 @@ internal sealed partial class RedisStreamSubjectWriter<T> : IDisposable
     private async Task DispatchEventsAsync(StreamEntry[] events)
     {
         List<RedisValue> ids = new(events.Length);
-
-        foreach (StreamEntry @event in events)
+        try
         {
-            ProcessEvent(@event, ids);
+            foreach (StreamEntry @event in events)
+            {
+                await ProcessEvent(@event, ids).ConfigureAwait(false);
+            }
         }
-
-        if (ids.Count == 0)
+        finally
         {
-            return;
+            if (ids.Count > 0)
+            {
+                await _redis.Database.StreamAcknowledgeAsync(_context.Topic, _context.ConsumerGroup, [.. ids]).ConfigureAwait(false);
+                LogDispatched(ids.Count, _context.Topic);
+            }
         }
-
-
-        await _redis.Database.StreamAcknowledgeAsync(_context.Topic, _context.ConsumerGroup, [.. ids]).ConfigureAwait(false);
-        LogDispatched(events.Length, _context.Topic);
     }
 
-    private void ProcessEvent(StreamEntry @event, List<RedisValue> ids)
+    private ValueTask ProcessEvent(StreamEntry @event, List<RedisValue> ids)
     {
         if (@event.IsNull)
         {
-            return;
+            return default;
         }
 
         try
@@ -192,44 +193,61 @@ internal sealed partial class RedisStreamSubjectWriter<T> : IDisposable
             var ev = _formatter.Decode(@event[_context.FieldName].ToString());
             if (ev is null)
             {
-                return;
+                return default;
             }
             ev.AttachTransportId(@event.Id);
 
-            if (ev.IsValid())
-            {
-                HandleValidEvent(ev, @event, ids);
-            }
-            else
+            if (!ev.IsValid())
             {
                 HandleInvalidEvent(ev, @event, ids);
+                return default;
             }
+
+            if (ev.SameSource(_context.SourceUri))
+            {
+                LogEventFromCurrentSource(ev.Id, _context.Topic, @event.Id);
+                _cachingTelemetryProvider.TrackTopicReadMetric(_context.Topic!, @event.Id);
+                TraceReceipt(ev);
+                ids.Add(@event.Id);
+                return default;
+            }
+
+            return DispatchValidEventAsync(ev, @event, ids);
         }
         catch (Exception ex)
         {
             LogOnMessageError(ex, _context.Topic);
+            return default;
         }
     }
 
-    private void HandleValidEvent(T ev, StreamEntry @event, List<RedisValue> ids)
+    private async ValueTask DispatchValidEventAsync(T ev, StreamEntry @event, List<RedisValue> ids)
     {
-        if (ev.SameSource(_context.SourceUri))
+        try
         {
-            LogEventFromCurrentSource(ev.Id, _context.Topic, @event.Id);
-            _cachingTelemetryProvider.TrackTopicReadMetric(_context.Topic!, @event.Id);
-            TraceReceipt(ev);
-            ids.Add(@event.Id);
-            return;
-        }
-
-        if (_writer.TryWrite(ev))
-        {
+            await _writer.WriteAsync(ev, _cancelationToken).ConfigureAwait(false);
             ids.Add(@event.Id);
             TraceReceipt(ev);
         }
-        else
+        catch (OperationCanceledException) when (_cancelationToken.IsCancellationRequested)
         {
-            LogFailedProcessingEntry(ev.Id, _context.Topic, @event.Id);
+            throw;
+        }
+        catch (ChannelClosedException)
+        {
+            LogChannelClosed(ev.Id, _context.Topic, @event.Id);
+            try
+            {
+                await _stopTokenSource.CancelAsync().ConfigureAwait(false);
+            }
+            catch (ObjectDisposedException)
+            {
+                // Dispose ran concurrently; cancellation already happened.
+            }
+        }
+        catch (Exception ex)
+        {
+            LogDispatchFailed(ex, ev.Id, _context.Topic, @event.Id);
         }
     }
 
@@ -283,14 +301,17 @@ internal sealed partial class RedisStreamSubjectWriter<T> : IDisposable
     [LoggerMessage(Level = LogLevel.Trace, Message = "Event from current source. Id {EventId}  Topic : {Topic}, StreamId : {StreamId}")]
     private partial void LogEventFromCurrentSource(string? eventId, RedisKey topic, RedisValue streamId);
 
-    [LoggerMessage(Level = LogLevel.Warning, Message = "Channel full; dropping local invalidation. Entry will remain in PEL until consumer group is recreated. Id {EventId} Topic : {Topic}, StreamId : {StreamId}.")]
-    private partial void LogFailedProcessingEntry(string? eventId, RedisKey topic, RedisValue streamId);
-
     [LoggerMessage(Level = LogLevel.Warning, Message = "Event invalid. Id {EventId}  Topic : {Topic}, StreamId : {StreamId}")]
     private partial void LogEventInvalid(string? eventId, RedisKey topic, RedisValue streamId);
 
     [LoggerMessage(Level = LogLevel.Error, Message = "OnMessage error. Topic : {Topic}")]
     private partial void LogOnMessageError(Exception ex, RedisKey topic);
+
+    [LoggerMessage(Level = LogLevel.Information, Message = "Channel closed during dispatch. Id {EventId} Topic : {Topic}, StreamId : {StreamId}.")]
+    private partial void LogChannelClosed(string? eventId, RedisKey topic, RedisValue streamId);
+
+    [LoggerMessage(Level = LogLevel.Error, Message = "Failed to dispatch event. Id {EventId} Topic : {Topic}, StreamId : {StreamId}.")]
+    private partial void LogDispatchFailed(Exception ex, string? eventId, RedisKey topic, RedisValue streamId);
 
     [LoggerMessage(Level = LogLevel.Debug, Message = "Dispatched {Length} messages. Topic : {Topic}")]
     private partial void LogDispatched(int length, RedisKey topic);

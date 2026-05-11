@@ -1,13 +1,18 @@
-﻿using FluentAssertions.Extensions;
+﻿using System.Threading.Channels;
+using FluentAssertions.Extensions;
 using Microsoft.Extensions.Logging;
 using NSubstitute.ExceptionExtensions;
 using NSubstitute.ReceivedExtensions;
 using StackExchange.Redis;
+using UiPath.Platform.Caching.Telemetry;
 
 namespace UiPath.Platform.Caching.Tests.Broadcast;
 
 public class RedisStreamSubjectWriterTests : IAsyncLifetime
 {
+    private static readonly TimeSpan DefaultPollInterval = TimeSpan.FromMilliseconds(50);
+    private static readonly TimeSpan WaitTimeout = TimeSpan.FromSeconds(10);
+
     private readonly IFixture _fixture = AutoFixtureCreator.NSubstitute();
 
     private IEventFormatterProxy<ICacheEvent> _formatter = default!;
@@ -117,13 +122,12 @@ public class RedisStreamSubjectWriterTests : IAsyncLifetime
             decodeCalled.TrySetResult(true);
             return default(ICacheEvent?);
         });
-        _database.StreamReadGroupAsync(_context.Topic, _context.ConsumerGroup, _context.ConsumerName, ">", _context.PollBatchSize)
-            .ReturnsForAnyArgs(_ => entries);
+        SetupSingleBatch(entries);
 
         var fetchTask = Sut.FetchTask;
-        await decodeCalled.Task.WaitAsync(5.Seconds(), TestContext.Current.CancellationToken);
+        await decodeCalled.Task.WaitAsync(WaitTimeout, TestContext.Current.CancellationToken);
         _cancellationTokenSource.Cancel();
-        await fetchTask.WaitAsync(5.Seconds(), TestContext.Current.CancellationToken);
+        await fetchTask.WaitAsync(WaitTimeout, TestContext.Current.CancellationToken);
 
         _formatter.Received().Decode(Arg.Any<string>());
     }
@@ -138,13 +142,12 @@ public class RedisStreamSubjectWriterTests : IAsyncLifetime
             decodeCalled.TrySetResult(true);
             return new TestCacheEvent { Valid = false };
         });
-        _database.StreamReadGroupAsync(_context.Topic, _context.ConsumerGroup, _context.ConsumerName, ">", _context.PollBatchSize)
-            .ReturnsForAnyArgs(_ => entries);
+        SetupSingleBatch(entries);
 
         var fetchTask = Sut.FetchTask;
-        await decodeCalled.Task.WaitAsync(5.Seconds(), TestContext.Current.CancellationToken);
+        await decodeCalled.Task.WaitAsync(WaitTimeout, TestContext.Current.CancellationToken);
         _cancellationTokenSource.Cancel();
-        await fetchTask.WaitAsync(5.Seconds(), TestContext.Current.CancellationToken);
+        await fetchTask.WaitAsync(WaitTimeout, TestContext.Current.CancellationToken);
 
         _formatter.Received().Decode(Arg.Any<string>());
     }
@@ -159,13 +162,12 @@ public class RedisStreamSubjectWriterTests : IAsyncLifetime
             decodeCalled.TrySetResult(true);
             return new TestCacheEvent { Valid = true };
         });
-        _database.StreamReadGroupAsync(_context.Topic, _context.ConsumerGroup, _context.ConsumerName, ">", _context.PollBatchSize)
-            .ReturnsForAnyArgs(_ => entries);
+        SetupSingleBatch(entries);
 
         var fetchTask = Sut.FetchTask;
-        await decodeCalled.Task.WaitAsync(5.Seconds(), TestContext.Current.CancellationToken);
+        await decodeCalled.Task.WaitAsync(WaitTimeout, TestContext.Current.CancellationToken);
         _cancellationTokenSource.Cancel();
-        await fetchTask.WaitAsync(5.Seconds(), TestContext.Current.CancellationToken);
+        await fetchTask.WaitAsync(WaitTimeout, TestContext.Current.CancellationToken);
 
         _formatter.Received().Decode(Arg.Any<string>());
     }
@@ -194,6 +196,179 @@ public class RedisStreamSubjectWriterTests : IAsyncLifetime
         act.Should().NotThrow();
     }
 
+    [Fact]
+    public async Task SameSource_event_is_acknowledged_without_writing_to_channel()
+    {
+        var channel = Channel.CreateBounded<ICacheEvent>(new BoundedChannelOptions(10));
+        var ackCalled = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+        _database.StreamAcknowledgeAsync(Arg.Any<RedisKey>(), Arg.Any<RedisValue>(), Arg.Any<RedisValue[]>())
+            .Returns(_ => { ackCalled.TrySetResult(true); return Task.FromResult(1L); });
+        var entries = new[] { new StreamEntry(_fixture.Create<string>(), [new NameValueEntry(_fieldName, _fixture.Create<string>())]) };
+        _formatter.Decode(Arg.Any<string>()).Returns(new TestCacheEvent { Valid = true, Source = _sourceUri });
+        SetupSingleBatch(entries);
+
+        using var sut = CreateSut(channel.Writer, _logger);
+
+        await ackCalled.Task.WaitAsync(WaitTimeout, TestContext.Current.CancellationToken);
+        _cancellationTokenSource.Cancel();
+        await sut.FetchTask.WaitAsync(WaitTimeout, TestContext.Current.CancellationToken);
+
+        channel.Reader.TryRead(out _).Should().BeFalse("events from the current source must not enter the dispatcher channel");
+    }
+
+    [Fact]
+    public async Task Valid_event_is_written_to_channel_and_acknowledged()
+    {
+        var channel = Channel.CreateBounded<ICacheEvent>(new BoundedChannelOptions(10));
+        var ackCalled = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+        _database.StreamAcknowledgeAsync(Arg.Any<RedisKey>(), Arg.Any<RedisValue>(), Arg.Any<RedisValue[]>())
+            .Returns(_ => { ackCalled.TrySetResult(true); return Task.FromResult(1L); });
+        var entries = new[] { new StreamEntry(_fixture.Create<string>(), [new NameValueEntry(_fieldName, _fixture.Create<string>())]) };
+        var ev = new TestCacheEvent { Valid = true, Source = new Uri("urn:other-source") };
+        _formatter.Decode(Arg.Any<string>()).Returns(ev);
+        SetupSingleBatch(entries);
+
+        using var sut = CreateSut(channel.Writer, _logger);
+
+        var read = await channel.Reader.ReadAsync(TestContext.Current.CancellationToken).AsTask().WaitAsync(WaitTimeout, TestContext.Current.CancellationToken);
+        read.Should().BeSameAs(ev);
+        await ackCalled.Task.WaitAsync(WaitTimeout, TestContext.Current.CancellationToken);
+
+        _cancellationTokenSource.Cancel();
+        await sut.FetchTask.WaitAsync(WaitTimeout, TestContext.Current.CancellationToken);
+    }
+
+    [Fact]
+    public async Task ChannelClosed_during_dispatch_logs_information_and_skips_ack()
+    {
+        var channel = Channel.CreateBounded<ICacheEvent>(new BoundedChannelOptions(1));
+        channel.Writer.Complete();
+        var recordingLogger = new RecordingLogger();
+        var loggedClosed = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+        recordingLogger.OnRecord = r => { if (r.Message.Contains("Channel closed during dispatch")) loggedClosed.TrySetResult(true); };
+        var entries = new[] { new StreamEntry(_fixture.Create<string>(), [new NameValueEntry(_fieldName, _fixture.Create<string>())]) };
+        _formatter.Decode(Arg.Any<string>()).Returns(new TestCacheEvent { Valid = true, Source = new Uri("urn:other-source") });
+        SetupSingleBatch(entries);
+
+        using var sut = CreateSut(channel.Writer, recordingLogger);
+
+        await loggedClosed.Task.WaitAsync(WaitTimeout, TestContext.Current.CancellationToken);
+        _cancellationTokenSource.Cancel();
+        await sut.FetchTask.WaitAsync(WaitTimeout, TestContext.Current.CancellationToken);
+
+        await _database.DidNotReceiveWithAnyArgs().StreamAcknowledgeAsync(default, default, default(RedisValue[])!);
+    }
+
+    [Fact]
+    public async Task DispatchEventsAsync_acks_collected_ids_when_cancellation_aborts_foreach()
+    {
+        var channel = Channel.CreateBounded<ICacheEvent>(new BoundedChannelOptions(1));
+        var ackCalled = new TaskCompletionSource<RedisValue[]>(TaskCreationOptions.RunContinuationsAsynchronously);
+        _database.StreamAcknowledgeAsync(Arg.Any<RedisKey>(), Arg.Any<RedisValue>(), Arg.Any<RedisValue[]>())
+            .Returns(ci => { ackCalled.TrySetResult(ci.Arg<RedisValue[]>()); return Task.FromResult(1L); });
+        var firstId = _fixture.Create<string>();
+        var secondId = _fixture.Create<string>();
+        var entries = new[]
+        {
+            new StreamEntry(firstId, [new NameValueEntry(_fieldName, _fixture.Create<string>())]),
+            new StreamEntry(secondId, [new NameValueEntry(_fieldName, _fixture.Create<string>())]),
+        };
+        _formatter.Decode(Arg.Any<string>()).Returns(new TestCacheEvent { Valid = true, Source = new Uri("urn:other-source") });
+        SetupSingleBatch(entries);
+
+        using var sut = CreateSut(channel.Writer, _logger);
+
+        await channel.Reader.WaitToReadAsync(TestContext.Current.CancellationToken).AsTask().WaitAsync(WaitTimeout, TestContext.Current.CancellationToken);
+        _cancellationTokenSource.Cancel();
+
+        var ackArgs = await ackCalled.Task.WaitAsync(WaitTimeout, TestContext.Current.CancellationToken);
+        ackArgs.Should().ContainSingle().Which.Should().Be((RedisValue)firstId);
+
+        await sut.FetchTask.WaitAsync(WaitTimeout, TestContext.Current.CancellationToken);
+    }
+
+    [Fact]
+    public async Task Dispatch_failure_logs_error_with_event_and_stream_ids()
+    {
+        var throwingWriter = new ThrowingChannelWriter(new InvalidOperationException("boom"));
+        var recordingLogger = new RecordingLogger();
+        var loggedFailed = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var streamEntryId = _fixture.Create<string>();
+        var eventId = _fixture.Create<string>();
+        recordingLogger.OnRecord = r =>
+        {
+            if (r.Message.Contains("Failed to dispatch event") && r.Message.Contains(eventId) && r.Message.Contains(streamEntryId))
+            {
+                loggedFailed.TrySetResult(true);
+            }
+        };
+        var entries = new[] { new StreamEntry(streamEntryId, [new NameValueEntry(_fieldName, _fixture.Create<string>())]) };
+        _formatter.Decode(Arg.Any<string>()).Returns(new TestCacheEvent { Id = eventId, Valid = true, Source = new Uri("urn:other-source") });
+        SetupSingleBatch(entries);
+
+        using var sut = CreateSut(throwingWriter, recordingLogger);
+
+        await loggedFailed.Task.WaitAsync(WaitTimeout, TestContext.Current.CancellationToken);
+        _cancellationTokenSource.Cancel();
+        await sut.FetchTask.WaitAsync(WaitTimeout, TestContext.Current.CancellationToken);
+
+        await _database.DidNotReceiveWithAnyArgs().StreamAcknowledgeAsync(default, default, default(RedisValue[])!);
+    }
+
+    private void SetupSingleBatch(StreamEntry[] entries)
+    {
+        var emitted = 0;
+        _database.StreamReadGroupAsync(_context.Topic, _context.ConsumerGroup, _context.ConsumerName, ">", _context.PollBatchSize)
+            .ReturnsForAnyArgs(_ => ++emitted == 1 ? entries : []);
+    }
+
+    private RedisStreamSubjectWriter<ICacheEvent> CreateSut(ChannelWriter<ICacheEvent> writer, ILogger logger)
+    {
+        var connectionState = _fixture.Create<IConnectionState>();
+        connectionState.IsConnected.Returns(true);
+        var redis = _fixture.Create<IRedisConnector>();
+        redis.Database.Returns(_database);
+        return new RedisStreamSubjectWriter<ICacheEvent>(
+            _context,
+            connectionState,
+            redis,
+            writer,
+            _formatter,
+            logger,
+            _fixture.Create<ICachingTelemetryProvider>(),
+            _fixture.Create<IRedisProfiler>(),
+            new TimedFetchWaiter(_pollInterval),
+            _cancellationTokenSource.Token);
+    }
+
+    private sealed class ThrowingChannelWriter(Exception toThrow) : ChannelWriter<ICacheEvent>
+    {
+        public override bool TryWrite(ICacheEvent item) => throw toThrow;
+        public override ValueTask<bool> WaitToWriteAsync(CancellationToken cancellationToken = default) => ValueTask.FromException<bool>(toThrow);
+        public override ValueTask WriteAsync(ICacheEvent item, CancellationToken cancellationToken = default) => ValueTask.FromException(toThrow);
+    }
+
+    private sealed class RecordingLogger : ILogger
+    {
+        public List<(LogLevel Level, string Message)> Records { get; } = [];
+        public Action<(LogLevel Level, string Message)>? OnRecord { get; set; }
+
+        public IDisposable BeginScope<TState>(TState state) where TState : notnull => NullScope.Instance;
+        public bool IsEnabled(LogLevel logLevel) => true;
+        public void Log<TState>(LogLevel logLevel, EventId eventId, TState state, Exception? exception, Func<TState, Exception?, string> formatter)
+        {
+            var record = (logLevel, formatter(state, exception));
+            Records.Add(record);
+            OnRecord?.Invoke(record);
+        }
+
+        private sealed class NullScope : IDisposable
+        {
+            public static readonly NullScope Instance = new();
+            public void Dispose() { }
+        }
+    }
+
     public ValueTask DisposeAsync()
     {
         return ValueTask.CompletedTask;
@@ -207,7 +382,7 @@ public class RedisStreamSubjectWriterTests : IAsyncLifetime
         _consumerGroup = _fixture.Create<string>();
         _sourceUri = new Uri("urn:" + _fixture.Create<string>());
         _pollBatchSize = _fixture.Create<int>();
-        _pollInterval = TimeSpan.FromMilliseconds(50);
+        _pollInterval = DefaultPollInterval;
         _context = new RedisStreamContext(_topic, _fieldName, _consumerName, _consumerGroup, _sourceUri, _pollBatchSize, _pollInterval, false, true);
         _fixture.Inject(_context);
         _cancellationTokenSource = new CancellationTokenSource();
