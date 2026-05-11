@@ -36,7 +36,14 @@ internal sealed partial class EventDispatcher<T> : IDisposable
         {
             while (_reader.TryRead(out var item))
             {
-                _subject.OnNext(item);
+                try
+                {
+                    _subject.OnNext(item);
+                }
+                catch (Exception ex)
+                {
+                    LogDispatchFailed(ex, _topicKey);
+                }
             }
         }
         LogStoppedConsuming(_topicKey);
@@ -55,4 +62,7 @@ internal sealed partial class EventDispatcher<T> : IDisposable
 
     [LoggerMessage(Level = LogLevel.Debug, Message = "Stopped consuming from topic {TopicKey}")]
     private partial void LogStoppedConsuming(TopicKey topicKey);
+
+    [LoggerMessage(Level = LogLevel.Error, Message = "Dispatch threw for topic {TopicKey}; continuing.")]
+    private partial void LogDispatchFailed(Exception ex, TopicKey topicKey);
 }

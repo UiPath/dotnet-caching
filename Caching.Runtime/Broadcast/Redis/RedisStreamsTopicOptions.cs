@@ -22,6 +22,8 @@ public class RedisStreamsTopicOptions
 
     public BoundedChannelFullMode FullMode { get; set; } = BoundedChannelFullMode.Wait;
 
+    public TimeSpan SlowObserverThreshold { get; set; } = TimeSpan.FromMilliseconds(250);
+
     public bool? ConnectionMonitorEnabled { get; set; }
 
     public bool TrackStatistics { get; set; }

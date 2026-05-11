@@ -1,13 +1,22 @@
-﻿using System.Collections.Concurrent;
+using System.Collections.Concurrent;
+using System.Diagnostics;
 
 namespace UiPath.Platform.Caching.Broadcast;
 
-internal sealed class KeyedSubject<T> : IEventSubject<T> where T : IEvent
+internal sealed partial class KeyedSubject<T> : IEventSubject<T> where T : IEvent
 {
     private readonly ConcurrentDictionary<string, ConcurrentDictionary<IObserver<T>, byte>> _keyedObservers = new(StringComparer.OrdinalIgnoreCase);
     private readonly ConcurrentDictionary<IObserver<T>, byte> _broadcastObservers = new();
     private readonly object _keyedLock = new();
+    private readonly ILogger _logger;
+    private readonly TimeSpan _slowObserverThreshold;
     private volatile bool _completed;
+
+    public KeyedSubject(ILogger logger, TimeSpan? slowObserverThreshold = null)
+    {
+        _logger = logger;
+        _slowObserverThreshold = slowObserverThreshold ?? TimeSpan.MaxValue;
+    }
 
     public IDisposable Subscribe(IObserver<T> observer)
     {
@@ -43,13 +52,31 @@ internal sealed class KeyedSubject<T> : IEventSubject<T> where T : IEvent
         {
             foreach (var kvp in observers)
             {
-                kvp.Key.OnNext(value);
+                SafeOnNext(kvp.Key, value);
             }
         }
 
         foreach (var kvp in _broadcastObservers)
         {
-            kvp.Key.OnNext(value);
+            SafeOnNext(kvp.Key, value);
+        }
+    }
+
+    private void SafeOnNext(IObserver<T> observer, T value)
+    {
+        var start = Stopwatch.GetTimestamp();
+        try
+        {
+            observer.OnNext(value);
+        }
+        catch (Exception ex)
+        {
+            LogObserverOnNextFailed(ex, value.Id);
+        }
+        var elapsed = Stopwatch.GetElapsedTime(start);
+        if (elapsed > _slowObserverThreshold)
+        {
+            LogObserverSlow(observer.GetType().FullName, elapsed.TotalMilliseconds, value.Id);
         }
     }
 
@@ -61,17 +88,29 @@ internal sealed class KeyedSubject<T> : IEventSubject<T> where T : IEvent
         {
             foreach (var kvp in inner)
             {
-                kvp.Key.OnCompleted();
+                SafeOnCompleted(kvp.Key);
             }
         }
 
         foreach (var kvp in _broadcastObservers)
         {
-            kvp.Key.OnCompleted();
+            SafeOnCompleted(kvp.Key);
         }
 
         _keyedObservers.Clear();
         _broadcastObservers.Clear();
+    }
+
+    private void SafeOnCompleted(IObserver<T> observer)
+    {
+        try
+        {
+            observer.OnCompleted();
+        }
+        catch (Exception ex)
+        {
+            LogObserverOnCompletedFailed(ex);
+        }
     }
 
     public void Dispose() => OnCompleted();
@@ -107,4 +146,13 @@ internal sealed class KeyedSubject<T> : IEventSubject<T> where T : IEvent
             Interlocked.Exchange(ref _subject, null)?.Unsubscribe(key, observer);
         }
     }
+
+    [LoggerMessage(Level = LogLevel.Warning, Message = "Observer threw in OnNext for event {EventId}; continuing with remaining observers.")]
+    private partial void LogObserverOnNextFailed(Exception ex, string? eventId);
+
+    [LoggerMessage(Level = LogLevel.Warning, Message = "Observer threw in OnCompleted; continuing.")]
+    private partial void LogObserverOnCompletedFailed(Exception ex);
+
+    [LoggerMessage(Level = LogLevel.Warning, Message = "Slow observer {Observer} took {ElapsedMs} ms in OnNext for event {EventId}.")]
+    private partial void LogObserverSlow(string? observer, double elapsedMs, string? eventId);
 }

@@ -18,4 +18,9 @@ internal static class ChannelHelper
                 SingleWriter = true,
                 AllowSynchronousContinuations = false
             });
+
+    public static int CalculateBoundedCapacity(int consumerCapacity, int pollBatchSize) =>
+        consumerCapacity > 0
+            ? Math.Max(consumerCapacity, pollBatchSize)
+            : pollBatchSize;
 }

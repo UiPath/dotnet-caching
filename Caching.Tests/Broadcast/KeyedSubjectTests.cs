@@ -4,7 +4,7 @@ namespace UiPath.Platform.Caching.Tests.Broadcast;
 
 public class KeyedSubjectTests
 {
-    private readonly KeyedSubject<ICacheEvent> _sut = new();
+    private readonly KeyedSubject<ICacheEvent> _sut = new(Microsoft.Extensions.Logging.Abstractions.NullLogger<KeyedSubject<ICacheEvent>>.Instance);
 
     [Fact]
     public void OnNext_dispatches_to_keyed_observer_matching_key()
@@ -83,6 +83,98 @@ public class KeyedSubjectTests
 
         keyed.Events.Should().BeEmpty();
         broadcast.Events.Should().ContainSingle();
+    }
+
+    [Fact]
+    public void OnNext_does_not_propagate_observer_exception()
+    {
+        _sut.Subscribe(new ThrowingKeyedObserver("key1"));
+
+        Action act = () => _sut.OnNext(CreateEvent("key1"));
+
+        act.Should().NotThrow();
+    }
+
+    [Fact]
+    public void OnNext_continues_to_remaining_keyed_observers_when_one_throws()
+    {
+        var thrower = new ThrowingKeyedObserver("key1");
+        var survivor = new TestKeyedObserver("key1");
+        _sut.Subscribe(thrower);
+        _sut.Subscribe(survivor);
+
+        _sut.OnNext(CreateEvent("key1"));
+
+        survivor.Events.Should().ContainSingle("sibling keyed observer must still receive the event when another throws");
+    }
+
+    [Fact]
+    public void OnNext_continues_to_broadcast_observers_when_keyed_observer_throws()
+    {
+        var thrower = new ThrowingKeyedObserver("key1");
+        var broadcast = new TestBroadcastObserver();
+        _sut.Subscribe(thrower);
+        _sut.Subscribe(broadcast);
+
+        _sut.OnNext(CreateEvent("key1"));
+
+        broadcast.Events.Should().ContainSingle("broadcast observer must still receive the event when a keyed observer throws");
+    }
+
+    [Fact]
+    public void OnNext_continues_to_remaining_broadcast_observers_when_one_throws()
+    {
+        var thrower = new ThrowingBroadcastObserver();
+        var survivor = new TestBroadcastObserver();
+        _sut.Subscribe(thrower);
+        _sut.Subscribe(survivor);
+
+        _sut.OnNext(CreateEvent("key1"));
+
+        survivor.Events.Should().ContainSingle("sibling broadcast observer must still receive the event when another throws");
+    }
+
+    [Fact]
+    public void OnNext_logs_slow_observer_when_call_exceeds_threshold()
+    {
+        var logger = new RecordingLogger();
+        var sut = new KeyedSubject<ICacheEvent>(logger, TimeSpan.FromMilliseconds(20));
+        sut.Subscribe(new DelayingKeyedObserver("key1", TimeSpan.FromMilliseconds(80)));
+
+        sut.OnNext(CreateEvent("key1"));
+
+        logger.Records.Should().Contain(r => r.Contains("Slow observer") && r.Contains("OnNext"),
+            "an observer slower than the threshold must trigger a slow-observer warning");
+    }
+
+    [Fact]
+    public void OnNext_does_not_log_slow_observer_when_call_is_fast()
+    {
+        var logger = new RecordingLogger();
+        var sut = new KeyedSubject<ICacheEvent>(logger, TimeSpan.FromMilliseconds(500));
+        sut.Subscribe(new TestKeyedObserver("key1"));
+
+        sut.OnNext(CreateEvent("key1"));
+
+        logger.Records.Should().NotContain(r => r.Contains("Slow observer"),
+            "a fast observer must not trigger the slow-observer warning");
+    }
+
+    [Fact]
+    public void OnCompleted_completes_remaining_observers_when_one_throws()
+    {
+        var thrower = new ThrowingKeyedObserver("key1");
+        var survivor = new TestKeyedObserver("key1");
+        var broadcast = new TestBroadcastObserver();
+        _sut.Subscribe(thrower);
+        _sut.Subscribe(survivor);
+        _sut.Subscribe(broadcast);
+
+        Action act = () => _sut.OnCompleted();
+
+        act.Should().NotThrow();
+        survivor.Completed.Should().BeTrue();
+        broadcast.Completed.Should().BeTrue();
     }
 
     [Fact]
@@ -419,5 +511,51 @@ public class KeyedSubjectTests
         public void OnNext(ICacheEvent value) { }
         public void OnError(Exception error) { }
         public void OnCompleted() { }
+    }
+
+    private sealed class ThrowingKeyedObserver(string key) : IKeyedObserver<ICacheEvent>
+    {
+        public string Key { get; } = key;
+        public void OnNext(ICacheEvent value) => throw new InvalidOperationException("boom on next");
+        public void OnError(Exception error) { }
+        public void OnCompleted() => throw new InvalidOperationException("boom on completed");
+    }
+
+    private sealed class ThrowingBroadcastObserver : IObserver<ICacheEvent>
+    {
+        public void OnNext(ICacheEvent value) => throw new InvalidOperationException("boom on next");
+        public void OnError(Exception error) { }
+        public void OnCompleted() => throw new InvalidOperationException("boom on completed");
+    }
+
+    private sealed class DelayingKeyedObserver(string key, TimeSpan delay) : IKeyedObserver<ICacheEvent>
+    {
+        public string Key { get; } = key;
+        public void OnNext(ICacheEvent value) => Thread.Sleep(delay);
+        public void OnError(Exception error) { }
+        public void OnCompleted() { }
+    }
+
+    private sealed class RecordingLogger : Microsoft.Extensions.Logging.ILogger
+    {
+        public List<string> Records { get; } = [];
+
+        public IDisposable BeginScope<TState>(TState state) where TState : notnull => NullScope.Instance;
+        public bool IsEnabled(Microsoft.Extensions.Logging.LogLevel logLevel) => true;
+        public void Log<TState>(
+            Microsoft.Extensions.Logging.LogLevel logLevel,
+            Microsoft.Extensions.Logging.EventId eventId,
+            TState state,
+            Exception? exception,
+            Func<TState, Exception?, string> formatter)
+        {
+            Records.Add(formatter(state, exception));
+        }
+
+        private sealed class NullScope : IDisposable
+        {
+            public static readonly NullScope Instance = new();
+            public void Dispose() { }
+        }
     }
 }

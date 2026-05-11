@@ -39,7 +39,7 @@ public class RedisStreamsTopicProvider : RedisTopicProviderBase
             topicKey,
             ConnectionState,
             Redis,
-            () => new KeyedSubject<ICacheEvent>(),
+            () => new KeyedSubject<ICacheEvent>(LoggerFactory.Create<KeyedSubject<ICacheEvent>>(), _redisStreamsTopicOptions.SlowObserverThreshold),
             _formatter,
             _resiliencePipelineHolder,
             _redisStreamsTopicOptions,

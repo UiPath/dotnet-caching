@@ -79,7 +79,8 @@ public sealed partial class RedisStreamsTopic<T> : ITopic<T>
             _waiter = new TimedFetchWaiter(streamOptions.PollInterval);
         }
         _context = GetContext(topicKey, cacheOptions, streamOptions);
-        var channel = ChannelHelper.Create<T>(streamOptions.ConsumerCapacity < 0, streamOptions.ConsumerCapacity > 0 ? streamOptions.ConsumerCapacity : streamOptions.PollBatchSize , streamOptions.FullMode);
+        var capacity = ChannelHelper.CalculateBoundedCapacity(streamOptions.ConsumerCapacity, streamOptions.PollBatchSize);
+        var channel = ChannelHelper.Create<T>(streamOptions.ConsumerCapacity < 0, capacity, streamOptions.FullMode);
         _subscriber = new RedisStreamSubjectWriter<T>(_context, _connectionState, _redis, channel, _formatter, _logger, _cachingTelemetryProvider, redisProfiler, _waiter, _stopTokenSource.Token);
         _dispatcher = new EventDispatcher<T>(topicKey, channel, _subject, _logger, _stopTokenSource.Token);
     }
