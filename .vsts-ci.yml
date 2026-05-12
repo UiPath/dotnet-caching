@@ -38,22 +38,37 @@ stages:
         build_counter: $[counter('build_counter_1_0_0', 1)]
 
       steps:
-      # TODO: Bumping past gitversion/*@1.2.0 requires migrating to GitVersion 6
-      # (config schema change + the publish script's $env:GITVERSION_NUGETVERSION
-      # variable was removed in v6). Tracked separately; staying on @1.2.0 means
-      # accepting the Node 10 EOL warning until that migration lands.
-      - task: gitversion/setup@1.2.0
+      # Pinned to gitversion/*@2.0.1 — last 2.x release. Runs on Node 20 (clears the
+      # Node 10 EOL warning emitted by v1.x), version range '>=5.2.0 <6.1.0' keeps
+      # GitVersion 5.x as the runtime, and the task wrapper does NOT inject the
+      # '--roll-forward Major' CLI flag that v3+ adds (which breaks GitVersion 5.x
+      # invocations and produces 'undefined' output). Bumping further to @3+ would
+      # force GitVersion 6, requiring a config schema migration in GitVersion.yml.
+      - task: gitversion/setup@2.0.1
         displayName: 'Setup GitVersion'
         inputs:
           versionSpec: '5.x'
 
-      - task: gitversion/execute@1.2.0
+      - task: gitversion/execute@2.0.1
         displayName: 'Execute GitVersion'
         inputs:
-          runtime: 'core'
           useConfigFile: true
           configFilePath: '$(Build.SourcesDirectory)/Caching/GitVersion.yml'
-          additionalArguments: '/output json /output buildserver /updateassemblyinfo \"$(Build.SourcesDirectory)/Caching/GlobalAssemblyInfo.cs\"'
+          # /updateassemblyinfo is delivered via additionalArguments rather than
+          # the dedicated input because:
+          #   1. GitVersion 5 lists 'updateassemblyinfo' in booleanArguments, so
+          #      its argument collector does NOT consume the next token as the
+          #      filename. If that next token starts with '/' (as it does for
+          #      an absolute Linux path), GitVersion's IsSwitchArgument matches
+          #      and the parser treats it as an unknown switch, then throws.
+          #   2. The dedicated 'updateAssemblyInfoFilename' input requires the
+          #      file to exist relative to the task's CWD (not Build.Sources-
+          #      Directory), so a relative path fails the wrapper's fileExists
+          #      validation.
+          # A relative path inside additionalArguments sidesteps both: the
+          # wrapper passes it through verbatim, and GitVersion resolves it
+          # against TargetPath ($(Build.SourcesDirectory)).
+          additionalArguments: '/updateassemblyinfo Caching/GlobalAssemblyInfo.cs'
 
       - pwsh: |
           $semVer = $env:GITVERSION_NUGETVERSION
