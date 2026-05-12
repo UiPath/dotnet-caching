@@ -15,6 +15,7 @@ public sealed partial class RedisPubSubTopic<T> : ITopic<T>
     private readonly RedisPubSubSubjectWriter<T> _subscriber;
     private readonly EventDispatcher<T> _dispatcher;
     private readonly IConnectionState _connectionState;
+    private readonly RedisPubSubTopicOptions _options;
     private bool _disposed;
 
     public TopicKey TopicKey { get; }
@@ -42,6 +43,7 @@ public sealed partial class RedisPubSubTopic<T> : ITopic<T>
         _write = resiliencePipelineHolder.Write;
         _redis = redis;
         _logger = logger;
+        _options = options;
         _subject = subjectFactory();
         var channel = ChannelHelper.Create<T>(options.ConsumerCapacity < 1, options.ConsumerCapacity, options.FullMode);
         _subscriber = new RedisPubSubSubjectWriter<T>(sourceUri, _redisChannel, _redis, channel, _formatter, options, _logger);
@@ -50,6 +52,8 @@ public sealed partial class RedisPubSubTopic<T> : ITopic<T>
 
     public IDisposable Subscribe(IObserver<T> observer) =>
         _subject.Subscribe(observer);
+
+    internal RedisPubSubTopicOptions GetResolvedOptionsForTests() => _options;
 
     public async ValueTask<bool> PublishAsync(T @event, CancellationToken token = default)
     {

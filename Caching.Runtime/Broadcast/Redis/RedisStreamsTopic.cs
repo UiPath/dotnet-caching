@@ -85,6 +85,8 @@ public sealed partial class RedisStreamsTopic<T> : ITopic<T>
         _dispatcher = new EventDispatcher<T>(topicKey, channel, _subject, _logger, _stopTokenSource.Token);
     }
 
+    internal RedisStreamsTopicOptions GetResolvedOptionsForTests() => _streamOptions;
+
     public IDisposable Subscribe(IObserver<T> observer)
     {
         this.ThrowIfDisposed(_disposed);

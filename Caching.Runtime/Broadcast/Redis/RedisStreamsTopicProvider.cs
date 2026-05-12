@@ -1,4 +1,4 @@
-﻿using UiPath.Platform.Caching.Policies;
+using UiPath.Platform.Caching.Policies;
 using UiPath.Platform.Caching.Telemetry;
 
 namespace UiPath.Platform.Caching.Broadcast.Redis;
@@ -9,12 +9,15 @@ public class RedisStreamsTopicProvider : RedisTopicProviderBase
     private readonly CacheOptions _cacheOptions;
     private readonly IEventFormatterProxy<ICacheEvent> _formatter;
     private readonly IResiliencePipelineHolder _resiliencePipelineHolder;
+    private readonly PerTopicOptionsRegistry<RedisStreamsTopicOptions> _registry;
     private readonly CancellationTokenSource _stopTokenSource = new();
+    private readonly ILogger<RedisStreamsTopicProvider> _logger;
     private bool _disposed;
 
     public RedisStreamsTopicProvider(
         IOptions<RedisStreamsTopicOptions> redisStreamsTopicOptionsAccessor,
         IOptions<CacheOptions> cacheOptionsAccessor,
+        PerTopicOptionsRegistry<RedisStreamsTopicOptions> registry,
         IRedisConnector redis,
         IEventFormatterProxy<ICacheEvent> formatter,
         IResiliencePipelineHolder resiliencePipelineHolder,
@@ -25,8 +28,10 @@ public class RedisStreamsTopicProvider : RedisTopicProviderBase
     {
         _redisStreamsTopicOptions = redisStreamsTopicOptionsAccessor.Value;
         _cacheOptions = cacheOptionsAccessor.Value;
+        _registry = registry;
         _resiliencePipelineHolder = resiliencePipelineHolder;
         _formatter = formatter;
+        _logger = loggerFactory.Create<RedisStreamsTopicProvider>();
         Enabled = _redisStreamsTopicOptions.Enabled;
     }
 
@@ -34,20 +39,26 @@ public class RedisStreamsTopicProvider : RedisTopicProviderBase
 
     public override bool Enabled { get; }
 
-    protected override ITopic<ICacheEvent> CreateInternalTopic(TopicKey topicKey) =>
-        new RedisStreamsTopic<ICacheEvent>(
+    protected override ITopic<ICacheEvent> CreateInternalTopic(TopicKey topicKey)
+    {
+        var resolved = ResolveOptions(topicKey) ?? _redisStreamsTopicOptions;
+        return new RedisStreamsTopic<ICacheEvent>(
             topicKey,
             ConnectionState,
             Redis,
-            () => new KeyedSubject<ICacheEvent>(LoggerFactory.Create<KeyedSubject<ICacheEvent>>(), _redisStreamsTopicOptions.SlowObserverThreshold),
+            () => new KeyedSubject<ICacheEvent>(LoggerFactory.Create<KeyedSubject<ICacheEvent>>(), resolved.SlowObserverThreshold),
             _formatter,
             _resiliencePipelineHolder,
-            _redisStreamsTopicOptions,
+            resolved,
             _cacheOptions,
             LoggerFactory.Create<RedisStreamsTopic<ICacheEvent>>(),
             Telemetry,
             Profiler,
             _stopTokenSource.Token);
+    }
+
+    private RedisStreamsTopicOptions? ResolveOptions(TopicKey topicKey) =>
+        _registry.Resolve(topicKey, _redisStreamsTopicOptions.Clone, _logger);
 
     protected override void Dispose(bool disposing)
     {

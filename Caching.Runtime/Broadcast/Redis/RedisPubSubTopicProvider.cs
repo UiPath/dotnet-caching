@@ -1,4 +1,4 @@
-﻿using UiPath.Platform.Caching.Policies;
+using UiPath.Platform.Caching.Policies;
 using UiPath.Platform.Caching.Telemetry;
 
 namespace UiPath.Platform.Caching.Broadcast.Redis;
@@ -8,14 +8,17 @@ public class RedisPubSubTopicProvider : RedisTopicProviderBase
     private readonly RedisPubSubTopicOptions _options;
     private readonly IEventFormatterProxy<ICacheEvent> _formatter;
     private readonly IResiliencePipelineHolder _resiliencePipelineHolder;
+    private readonly PerTopicOptionsRegistry<RedisPubSubTopicOptions> _registry;
     private readonly Uri _sourceUri;
-    private readonly IRedisChannelStrategy _redisChannelStrategy;
+    private readonly IRedisChannelStrategy _defaultChannelStrategy;
     private readonly CancellationTokenSource _stopTokenSource = new();
+    private readonly ILogger<RedisPubSubTopicProvider> _logger;
     private bool _disposed;
 
     public RedisPubSubTopicProvider(
         IOptions<RedisPubSubTopicOptions> optionsAccessor,
         IOptions<CacheOptions> cacheOptionsAccessor,
+        PerTopicOptionsRegistry<RedisPubSubTopicOptions> registry,
         IRedisConnector redis,
         IEventFormatterProxy<ICacheEvent> formatter,
         IResiliencePipelineHolder resiliencePipelineHolder,
@@ -25,11 +28,13 @@ public class RedisPubSubTopicProvider : RedisTopicProviderBase
         : base(redis, telemetryProvider, redisProfiler, loggerFactory, optionsAccessor.Value.ConnectionMonitorEnabled ?? cacheOptionsAccessor.Value.ConnectionMonitorEnabled)
     {
         _options = optionsAccessor.Value;
+        var cacheOptions = cacheOptionsAccessor.Value;
+        _registry = registry;
         _formatter = formatter;
         _resiliencePipelineHolder = resiliencePipelineHolder;
-        var cacheOptions = cacheOptionsAccessor.Value;
+        _logger = loggerFactory.Create<RedisPubSubTopicProvider>();
         _sourceUri = cacheOptions.SourceUri ?? CacheOptions.MachineUri;
-        _redisChannelStrategy = _options.RedisChannelStrategy ?? new PrefixStrategy(RedisTypePrefixes.PubSub, cacheOptions);
+        _defaultChannelStrategy = _options.RedisChannelStrategy ?? new PrefixStrategy(RedisTypePrefixes.PubSub, cacheOptions);
         Enabled = _options.Enabled;
     }
 
@@ -37,8 +42,26 @@ public class RedisPubSubTopicProvider : RedisTopicProviderBase
 
     public override bool Enabled { get; }
 
-    protected override ITopic<ICacheEvent> CreateInternalTopic(TopicKey topicKey) =>
-        new RedisPubSubTopic<ICacheEvent>(topicKey, _sourceUri, ConnectionState, Redis, _redisChannelStrategy, () => new KeyedSubject<ICacheEvent>(LoggerFactory.Create<KeyedSubject<ICacheEvent>>(), _options.SlowObserverThreshold), _formatter, _resiliencePipelineHolder, _options, LoggerFactory.Create<RedisPubSubTopic<ICacheEvent>>(), _stopTokenSource.Token);
+    protected override ITopic<ICacheEvent> CreateInternalTopic(TopicKey topicKey)
+    {
+        var resolved = ResolveOptions(topicKey) ?? _options;
+        var strategy = resolved.RedisChannelStrategy ?? _defaultChannelStrategy;
+        return new RedisPubSubTopic<ICacheEvent>(
+            topicKey,
+            _sourceUri,
+            ConnectionState,
+            Redis,
+            strategy,
+            () => new KeyedSubject<ICacheEvent>(LoggerFactory.Create<KeyedSubject<ICacheEvent>>(), resolved.SlowObserverThreshold),
+            _formatter,
+            _resiliencePipelineHolder,
+            resolved,
+            LoggerFactory.Create<RedisPubSubTopic<ICacheEvent>>(),
+            _stopTokenSource.Token);
+    }
+
+    private RedisPubSubTopicOptions? ResolveOptions(TopicKey topicKey) =>
+        _registry.Resolve(topicKey, _options.Clone, _logger);
 
     protected override void Dispose(bool disposing)
     {

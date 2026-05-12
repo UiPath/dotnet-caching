@@ -4,6 +4,11 @@ namespace UiPath.Platform.Caching.Broadcast.Redis;
 
 public class RedisStreamsTopicOptions
 {
+    /// <summary>
+    /// Enables or disables the Redis Streams topic provider for the whole app.
+    /// Per-topic overrides of this property in appsettings or via the builder API are ignored;
+    /// provider enablement is app-wide only.
+    /// </summary>
     public bool Enabled { get; set; } = true;
 
     public long? MaxLength { get; set; } = 32_768;
@@ -53,4 +58,33 @@ public class RedisStreamsTopicOptions
     public TimeSpan? NotifySubscriberTimeout { get; set; }
 
     public TimeSpan? NotifySubscriberDueTime { get; set; }
+
+    internal RedisStreamsTopicOptions Clone() => new()
+    {
+        Enabled                      = Enabled,
+        MaxLength                    = MaxLength,
+        Limit                        = Limit,
+        PollBatchSize                = PollBatchSize,
+        FieldName                    = FieldName,
+        PollInterval                 = PollInterval,
+        RedisStreamKeyStrategy       = RedisStreamKeyStrategy,
+        ConsumerCapacity             = ConsumerCapacity,
+        FullMode                     = FullMode,
+        SlowObserverThreshold        = SlowObserverThreshold,
+        ConnectionMonitorEnabled     = ConnectionMonitorEnabled,
+        TrackStatistics              = TrackStatistics,
+        MaintainerEnabled            = MaintainerEnabled,
+        MaintainerCheckInterval      = MaintainerCheckInterval,
+        MaintainerTrimInterval       = MaintainerTrimInterval,
+        MaintainerQuarantineInterval = MaintainerQuarantineInterval,
+        MaintainerSearchPattern      = MaintainerSearchPattern,
+        ProfilerEnabled              = ProfilerEnabled,
+        EmitStreamReceivedEvent      = EmitStreamReceivedEvent,
+        NotifyEnabled                = NotifyEnabled,
+        NotifyChannelStrategy        = NotifyChannelStrategy,
+        NotifyChannelName            = NotifyChannelName,
+        NotifyShardedPubSub          = NotifyShardedPubSub,
+        NotifySubscriberTimeout      = NotifySubscriberTimeout,
+        NotifySubscriberDueTime      = NotifySubscriberDueTime,
+    };
 }
