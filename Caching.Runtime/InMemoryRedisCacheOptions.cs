@@ -1,4 +1,6 @@
-﻿namespace UiPath.Platform.Caching;
+﻿using UiPath.Platform.Caching.Locking;
+
+namespace UiPath.Platform.Caching;
 
 public class InMemoryRedisCacheOptions : IMultilayerCacheOptions, IMemoryCacheOptions
 {
@@ -37,4 +39,16 @@ public class InMemoryRedisCacheOptions : IMultilayerCacheOptions, IMemoryCacheOp
     public bool? UsePrimaryOnlyWhenDisconnected { get; set; }
 
     public TimeSpan? PrimaryMaxExpirationDisconnected { get; set; } = TimeSpan.FromSeconds(30);
+
+    public bool? LocalLockEnabled { get; set; } = true;
+
+    public TimeSpan? LocalLockTimeout { get; set; } = TimeSpan.FromMilliseconds(500);
+
+    public bool? DistributedLockEnabled { get; set; }
+
+    public TimeSpan? DistributedLockTimeout { get; set; } = TimeSpan.FromMilliseconds(500);
+
+    public TimeSpan? DistributedLockExpiry { get; set; } = TimeSpan.FromSeconds(5);
+
+    public IDistributedLockKeyStrategy? LockKeyStrategy { get; set; }
 }

@@ -1,4 +1,5 @@
 ﻿using System.Text.Json;
+using UiPath.Platform.Caching.Locking;
 using UiPath.Platform.Caching.Policies;
 using UiPath.Platform.Caching.Telemetry;
 
@@ -36,6 +37,8 @@ public class CachingBuilder(IServiceCollection services, IConfiguration? configu
         Services.TryAddSingleton<ICacheEventFactory>(NullCacheEventFactory.Instance);
         Services.TryAddSingleton<ILoggerFactory>(NullLoggerFactory.Instance);
         Services.TryAddSingleton<IRedisProfiler>(NullRedisProfiler.Instance);
+        Services.TryAddSingleton<ILocalLock>(NullLocalLock.Instance);
+        Services.TryAddSingleton<IDistributedLock>(NullDistributedLock.Instance);
     }
 
     public void RegisterOnCompleteCallback(object key, Action<ICachingBuilder> callback)

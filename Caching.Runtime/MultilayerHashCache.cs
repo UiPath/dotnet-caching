@@ -1,4 +1,5 @@
 ﻿using System.Collections.Immutable;
+using UiPath.Platform.Caching.Locking;
 using UiPath.Platform.Caching.Telemetry;
 
 namespace UiPath.Platform.Caching;
@@ -20,8 +21,10 @@ public sealed partial class MultilayerHashCache : MultilayerCacheBase, IHashCach
         IMultilayerCacheOptions multiLayerCacheOptions,
         IMemoryCacheOptions memoryCacheOptions,
         CacheOptions cacheOptions,
+        ILocalLock localLock,
+        IDistributedLock distributedLock,
         ILogger logger)
-        : base(cacheName, innerCache, memoryCacheFactory, topicFactory, cacheEventFactory, telemetryProvider, multiLayerCacheOptions, memoryCacheOptions, cacheOptions, logger)
+        : base(cacheName, innerCache, memoryCacheFactory, topicFactory, cacheEventFactory, telemetryProvider, multiLayerCacheOptions, memoryCacheOptions, cacheOptions, localLock, distributedLock, logger)
     {
         _innerCache = innerCache;
         var cacheKeyStrategy = _multiLayerCacheOptions.CacheKeyStrategy ?? new DefaultCacheKeyStrategy();
@@ -81,6 +84,16 @@ public sealed partial class MultilayerHashCache : MultilayerCacheBase, IHashCach
             return cacheEntry.Value!;
         }
 
+        return await RunUnderLocksAsync<IDictionary<string, T?>>(
+            cacheEntryOptions.CacheKey,
+            async () => (await GetCacheEntryAsync<T>(cacheEntryOptions).ConfigureAwait(false)).Value ?? Empty<T>(),
+            v => !IsNullOrEmpty(v),
+            ct => RunHashGeneratorAndStoreAsync(cacheEntryOptions, generator, ct),
+            token).ConfigureAwait(false);
+    }
+
+    private async ValueTask<IDictionary<string, T?>> RunHashGeneratorAndStoreAsync<T>(InternalHashCacheEntryOptions cacheEntryOptions, Func<CancellationToken, Task<IDictionary<string, T?>>> generator, CancellationToken token)
+    {
         LogCacheMissed(cacheEntryOptions.CacheKey);
         var ret = await generator(token).ConfigureAwait(false);
 

@@ -19,6 +19,34 @@ public class InMemoryRedisCollectionExtensionsTests
             .Should().BeOfType<ChangeTokenFactory<RedisValue>>();
     }
 
+    [Fact]
+    public void AddInMemoryRedis_throws_at_registration_when_DistributedLockExpiry_is_zero()
+    {
+        var services = new ServiceCollection();
+        var act = () => services.AddCaching(builder =>
+            builder.AddInMemoryRedis(opt =>
+            {
+                opt.DistributedLockExpiry = TimeSpan.Zero;
+            }));
+
+        act.Should().Throw<OptionsValidationException>()
+            .Which.OptionsType.Should().Be(typeof(InMemoryRedisCacheOptions));
+    }
+
+    [Fact]
+    public void AddInMemoryRedis_throws_at_registration_when_DistributedLockTimeout_is_negative()
+    {
+        var services = new ServiceCollection();
+        var act = () => services.AddCaching(builder =>
+            builder.AddInMemoryRedis(opt =>
+            {
+                opt.DistributedLockTimeout = TimeSpan.FromMilliseconds(-1);
+            }));
+
+        act.Should().Throw<OptionsValidationException>()
+            .Which.OptionsType.Should().Be(typeof(InMemoryRedisCacheOptions));
+    }
+
     private static ServiceProvider BuildContainer()
     {
         var services = new ServiceCollection();

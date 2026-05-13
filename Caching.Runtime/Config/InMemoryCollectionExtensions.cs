@@ -15,8 +15,19 @@ public static class InMemoryCollectionExtensions
         {
             return builder;
         }
+        var validation = new MultilayerCacheLockOptionsValidator<InMemoryCacheOptions>().Validate(name: null, options);
+        if (validation.Failed)
+        {
+            throw new OptionsValidationException(
+                nameof(InMemoryCacheOptions),
+                typeof(InMemoryCacheOptions),
+                validation.Failures);
+        }
+        builder.Services.TryAddMemoryCacheFactory();
+        builder.AddLocalLock();
         builder.Services
-            .TryAddMemoryCacheFactory()
+            .TryAddEnumerable(ServiceDescriptor.Singleton<IValidateOptions<InMemoryCacheOptions>, MultilayerCacheLockOptionsValidator<InMemoryCacheOptions>>());
+        builder.Services
             .TryAddEnumerable(ServiceDescriptor.Singleton<ICacheProvider, InMemoryCacheProvider>());
 
         return builder;

@@ -1,4 +1,5 @@
-﻿using UiPath.Platform.Caching.Telemetry;
+﻿using UiPath.Platform.Caching.Locking;
+using UiPath.Platform.Caching.Telemetry;
 
 namespace UiPath.Platform.Caching;
 
@@ -14,6 +15,8 @@ public sealed class InMemoryRedisCacheProvider : ICacheProvider
     private readonly ICachingTelemetryProvider _cachingTelemetryProvider;
     private readonly ILoggerFactory _loggerFactory;
     private readonly Lazy<ICacheFactory> _cacheFactory;
+    private readonly ILocalLock _localLock;
+    private readonly IDistributedLock _distributedLock;
     private readonly Lazy<MultilayerCache> _cache;
     private readonly Lazy<MultilayerHashCache> _hashCache;
 
@@ -21,7 +24,7 @@ public sealed class InMemoryRedisCacheProvider : ICacheProvider
 
     public bool Enabled { get; }
 
-    
+
 
     public InMemoryRedisCacheProvider(
         IOptions<InMemoryRedisCacheOptions> optionsAccessor,
@@ -32,7 +35,9 @@ public sealed class InMemoryRedisCacheProvider : ICacheProvider
         ITopicFactory topicFactory,
         ICacheEventFactory cacheEventFactory,
         ICachingTelemetryProvider cachingTelemetryProvider,
-        ILoggerFactory loggerFactory)
+        ILoggerFactory loggerFactory,
+        ILocalLock localLock,
+        IDistributedLock distributedLock)
     {
         _options = optionsAccessor.Value;
         _cacheOptions = cacheOptionsAccessor.Value;
@@ -43,6 +48,8 @@ public sealed class InMemoryRedisCacheProvider : ICacheProvider
         _cacheEventFactory = cacheEventFactory;
         _cachingTelemetryProvider = cachingTelemetryProvider;
         _loggerFactory = loggerFactory;
+        _localLock = localLock;
+        _distributedLock = distributedLock;
         _cache = new Lazy<MultilayerCache>(() => BuildCache());
         _hashCache = new Lazy<MultilayerHashCache>(() => BuildHashCache());
         Enabled = _options.Enabled;
@@ -79,7 +86,9 @@ public sealed class InMemoryRedisCacheProvider : ICacheProvider
             _options,
             _options,
             _cacheOptions,
-            _loggerFactory.CreateLogger($"{Name}.Cache"));
+            localLock: _localLock,
+            distributedLock: _distributedLock,
+            logger: _loggerFactory.CreateLogger($"{Name}.Cache"));
 
     private MultilayerHashCache BuildHashCache() =>
         new(
@@ -93,5 +102,7 @@ public sealed class InMemoryRedisCacheProvider : ICacheProvider
             _options,
             _options,
             _cacheOptions,
-             _loggerFactory.CreateLogger($"{Name}.HashCache"));
+            localLock: _localLock,
+            distributedLock: _distributedLock,
+            logger: _loggerFactory.CreateLogger($"{Name}.HashCache"));
 }

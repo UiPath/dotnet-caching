@@ -1,4 +1,5 @@
-﻿using UiPath.Platform.Caching.Telemetry;
+﻿using UiPath.Platform.Caching.Locking;
+using UiPath.Platform.Caching.Telemetry;
 
 namespace UiPath.Platform.Caching;
 
@@ -19,8 +20,10 @@ public sealed partial class MultilayerCache : MultilayerCacheBase, ICache
         IMultilayerCacheOptions multiLayerCacheOptions,
         IMemoryCacheOptions memoryCacheOptions,
         CacheOptions cacheOptions,
+        ILocalLock localLock,
+        IDistributedLock distributedLock,
         ILogger logger)
-        : base(cacheName, innerCache, memoryCacheFactory, topicFactory, cacheEventFactory, telemetryProvider, multiLayerCacheOptions, memoryCacheOptions, cacheOptions, logger)
+        : base(cacheName, innerCache, memoryCacheFactory, topicFactory, cacheEventFactory, telemetryProvider, multiLayerCacheOptions, memoryCacheOptions, cacheOptions, localLock, distributedLock, logger)
     {
         _innerCache = innerCache;
         var cacheKeyStrategy = _multiLayerCacheOptions.CacheKeyStrategy ?? new DefaultCacheKeyStrategy();
@@ -29,7 +32,7 @@ public sealed partial class MultilayerCache : MultilayerCacheBase, ICache
         _localMemorySetter = new LocalMemorySetter(cacheName, changeTokenFactory, _topicProvider, _memoryCache, logger, _clock, _multiLayerCacheOptions, memoryCacheOptions, telemetryProvider);
     }
 
-    public  ValueTask<T?> GetAsync<T>(CacheKey cacheKey, CancellationToken token = default)
+    public ValueTask<T?> GetAsync<T>(CacheKey cacheKey, CancellationToken token = default)
     {
         NotCacheableException.ThrowIfNotCacheable<T>();
         return GetInnerAsync<T>(_entryBuilder.BuildEntryOptions<T>(cacheKey, _clock.ToDateTimeOffset(_multiLayerCacheOptions.DefaultExpiration), token));
@@ -73,8 +76,18 @@ public sealed partial class MultilayerCache : MultilayerCacheBase, ICache
             return ret;
         }
 
+        return await RunUnderLocksAsync<T?>(
+            cacheEntryOptions.CacheKey,
+            () => GetInnerAsync<T>(cacheEntryOptions),
+            v => v is not null,
+            ct => RunGeneratorAndStoreAsync(cacheEntryOptions, generator, ct),
+            token).ConfigureAwait(false);
+    }
+
+    private async ValueTask<T?> RunGeneratorAndStoreAsync<T>(CacheEntryOptions cacheEntryOptions, Func<CancellationToken, Task<T?>> generator, CancellationToken token)
+    {
         LogCacheMissed(cacheEntryOptions.CacheKey);
-        ret = await generator(token).ConfigureAwait(false);
+        var ret = await generator(token).ConfigureAwait(false);
 
         if (ret is not null)
         {

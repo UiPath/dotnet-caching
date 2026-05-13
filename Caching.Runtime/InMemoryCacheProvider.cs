@@ -1,4 +1,5 @@
-﻿using UiPath.Platform.Caching.Telemetry;
+﻿using UiPath.Platform.Caching.Locking;
+using UiPath.Platform.Caching.Telemetry;
 
 namespace UiPath.Platform.Caching;
 public sealed class InMemoryCacheProvider : ICacheProvider
@@ -11,6 +12,7 @@ public sealed class InMemoryCacheProvider : ICacheProvider
     private readonly ICacheEventFactory _cacheEventFactory;
     private readonly ICachingTelemetryProvider _cachingTelemetryProvider;
     private readonly ILoggerFactory _loggerFactory;
+    private readonly ILocalLock _localLock;
 
     private readonly Lazy<MultilayerCache> _cache;
     private readonly Lazy<MultilayerHashCache> _hashCache;
@@ -27,7 +29,8 @@ public sealed class InMemoryCacheProvider : ICacheProvider
         IChangeTokenFactory changeTokenFactory,
         ITopicFactory topicFactory,
         ICachingTelemetryProvider cachingTelemetryProvider,
-        ILoggerFactory loggerFactory)
+        ILoggerFactory loggerFactory,
+        ILocalLock localLock)
     {
         _options = optionsAccessor.Value;
         _cacheOptions = cacheOptionsAccessor.Value;
@@ -55,6 +58,7 @@ public sealed class InMemoryCacheProvider : ICacheProvider
 
         _cachingTelemetryProvider = cachingTelemetryProvider;
         _loggerFactory = loggerFactory;
+        _localLock = localLock;
         _cache = new Lazy<MultilayerCache>(BuildCache);
         _hashCache = new Lazy<MultilayerHashCache>(BuildHashCache);
     }
@@ -90,7 +94,9 @@ public sealed class InMemoryCacheProvider : ICacheProvider
             _options,
             _options,
             _cacheOptions,
-            _loggerFactory.CreateLogger($"{Name}.Cache"));
+            localLock: _localLock,
+            distributedLock: NullDistributedLock.Instance,
+            logger: _loggerFactory.CreateLogger($"{Name}.Cache"));
 
     private MultilayerHashCache BuildHashCache() =>
         new(
@@ -104,5 +110,7 @@ public sealed class InMemoryCacheProvider : ICacheProvider
             _options,
             _options,
             _cacheOptions,
-           _loggerFactory.CreateLogger($"{Name}.HashCache"));
+            localLock: _localLock,
+            distributedLock: NullDistributedLock.Instance,
+            logger: _loggerFactory.CreateLogger($"{Name}.HashCache"));
 }

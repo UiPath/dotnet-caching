@@ -15,8 +15,22 @@ public static class InMemoryRedisCollectionExtensions
         {
             return builder;
         }
+        var validation = new MultilayerCacheLockOptionsValidator<InMemoryRedisCacheOptions>().Validate(name: null, options);
+        if (validation.Failed)
+        {
+            throw new OptionsValidationException(
+                nameof(InMemoryRedisCacheOptions),
+                typeof(InMemoryRedisCacheOptions),
+                validation.Failures);
+        }
+        builder.Services.TryAddMemoryCacheFactory();
+        builder.AddLocalLock();
+        builder.AddRedisDistributedLock();
         builder.Services
-            .TryAddMemoryCacheFactory()
+            .TryAddEnumerable(ServiceDescriptor.Singleton<IValidateOptions<InMemoryRedisCacheOptions>, MultilayerCacheLockOptionsValidator<InMemoryRedisCacheOptions>>());
+        builder.Services
+            .TryAddEnumerable(ServiceDescriptor.Singleton<IValidateOptions<InMemoryRedisCacheOptions>, MultilayerCacheLockCrossOptionsValidator<InMemoryRedisCacheOptions>>());
+        builder.Services
             .TryAddEnumerable(ServiceDescriptor.Singleton<ICacheProvider, InMemoryRedisCacheProvider>());
         builder.AddBroadcast();
         return builder.AddCallback();

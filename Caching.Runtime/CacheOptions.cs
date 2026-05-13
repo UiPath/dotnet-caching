@@ -34,4 +34,37 @@ public class CacheOptions
     public int LargeValueThreshold { get; set; } = 20_000;
 
     public bool ConnectionMonitorEnabled { get; set; }
+
+    /// <summary>
+    /// Size of the reusable semaphore pool inside the default local lock implementation.
+    /// This is an allocation hint, not a hard concurrency cap — when the pool is exhausted the
+    /// underlying <c>AsyncKeyedLocker</c> allocates fresh semaphores, so increasing this value
+    /// only reduces GC pressure under high cold-miss concurrency, it does not throttle callers.
+    /// Defaults to 100.
+    /// </summary>
+    public int LocalLockPoolSize { get; set; } = 100;
+
+    /// <summary>
+    /// Number of semaphores pre-allocated at startup for the default local lock pool.
+    /// Must be in [0, <see cref="LocalLockPoolSize"/>]. Defaults to 10.
+    /// </summary>
+    public int LocalLockPoolInitialFill { get; set; } = 10;
+
+    /// <summary>
+    /// Initial wait between distributed-lock acquire retries when the lock is contended.
+    /// The interval doubles after every failed attempt up to <see cref="DistributedLockMaxPollInterval"/>.
+    /// Actual delays vary ±20% due to jitter applied at each step to de-synchronize concurrent waiters.
+    /// Defaults to 50 ms. Must be greater than zero and ≤ <see cref="IMultilayerCacheOptions.DistributedLockTimeout"/>;
+    /// otherwise the first retry sleep clamps to the remaining wait budget, neutralizing exponential backoff
+    /// and limiting the loop to ~1–2 acquire attempts.
+    /// </summary>
+    public TimeSpan DistributedLockPollInterval { get; set; } = TimeSpan.FromMilliseconds(50);
+
+    /// <summary>
+    /// Upper bound for the exponential-backoff retry interval used by the distributed lock.
+    /// Defaults to 500 ms. Must be greater than or equal to <see cref="DistributedLockPollInterval"/>.
+    /// Values above <see cref="IMultilayerCacheOptions.DistributedLockTimeout"/> are accepted but have no
+    /// effect — the remaining-wait clamp on each sleep takes over before the cap is reached.
+    /// </summary>
+    public TimeSpan DistributedLockMaxPollInterval { get; set; } = TimeSpan.FromMilliseconds(500);
 }
