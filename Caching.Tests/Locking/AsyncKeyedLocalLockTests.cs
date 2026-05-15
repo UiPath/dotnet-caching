@@ -44,6 +44,8 @@ public class AsyncKeyedLocalLockTests(ITestContextAccessor testContextAccessor)
         var inCriticalSection = 0;
         var maxObserved = 0;
         var callCount = 0;
+        var firstEntered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
 
         async Task Worker()
         {
@@ -57,12 +59,19 @@ public class AsyncKeyedLocalLockTests(ITestContextAccessor testContextAccessor)
             }
             while (Interlocked.CompareExchange(ref maxObserved, current, observedSnapshot) != observedSnapshot);
 
-            await Task.Delay(10, token);
+            if (firstEntered.TrySetResult())
+            {
+                await release.Task.WaitAsync(TimeSpan.FromSeconds(30), token);
+            }
             Interlocked.Increment(ref callCount);
             Interlocked.Decrement(ref inCriticalSection);
         }
 
         var tasks = Enumerable.Range(0, 32).Select(_ => Task.Run(Worker)).ToArray();
+
+        await firstEntered.Task.WaitAsync(TimeSpan.FromSeconds(10), token);
+        release.TrySetResult();
+
         await Task.WhenAll(tasks);
 
         maxObserved.Should().Be(1, "the local locker must serialize holders of the same key");

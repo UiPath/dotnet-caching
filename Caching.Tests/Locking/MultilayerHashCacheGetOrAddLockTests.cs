@@ -38,6 +38,9 @@ public class MultilayerHashCacheGetOrAddLockTests(ITestContextAccessor testConte
     [Fact]
     public async Task GetOrAddAsync_runs_generator_exactly_once_under_concurrent_callers_for_the_same_key()
     {
+        _options.LocalLockTimeout = TimeSpan.FromMinutes(1);
+        _sut = null;
+
         var token = testContextAccessor.Current.CancellationToken;
         var cacheKey = _fixture.Create<string>();
         _cacheKeyStrategy.GetCacheKey<string>(cacheKey).Returns((CacheKey)cacheKey);
@@ -55,6 +58,8 @@ public class MultilayerHashCacheGetOrAddLockTests(ITestContextAccessor testConte
         var generatorCalls = 0;
         var concurrentInGenerator = 0;
         var maxConcurrent = 0;
+        var firstEntered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var producedValue = new Dictionary<string, string?> { ["k"] = "v" };
 
         async Task<IDictionary<string, string?>> Generator(CancellationToken ct)
@@ -63,7 +68,8 @@ public class MultilayerHashCacheGetOrAddLockTests(ITestContextAccessor testConte
             int observed;
             do { observed = Volatile.Read(ref maxConcurrent); if (inside <= observed) break; }
             while (Interlocked.CompareExchange(ref maxConcurrent, inside, observed) != observed);
-            await Task.Delay(20, ct);
+            firstEntered.TrySetResult();
+            await release.Task.WaitAsync(TimeSpan.FromSeconds(30), ct);
             Interlocked.Increment(ref generatorCalls);
             Interlocked.Decrement(ref concurrentInGenerator);
             return producedValue;
@@ -72,6 +78,10 @@ public class MultilayerHashCacheGetOrAddLockTests(ITestContextAccessor testConte
         var tasks = Enumerable.Range(0, 32)
             .Select(_ => Task.Run(async () => await Sut.GetOrAddAsync(cacheKey, Generator, token)))
             .ToArray();
+
+        await firstEntered.Task.WaitAsync(TimeSpan.FromSeconds(10), token);
+        release.TrySetResult();
+
         var results = await Task.WhenAll(tasks);
 
         results.Should().AllSatisfy(r => r.Should().BeEquivalentTo(producedValue));
@@ -95,6 +105,8 @@ public class MultilayerHashCacheGetOrAddLockTests(ITestContextAccessor testConte
 
         var concurrentInGenerator = 0;
         var maxConcurrent = 0;
+        var startedCount = 0;
+        var bothStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
 
         async Task<IDictionary<string, string?>> Generator(CancellationToken ct)
         {
@@ -102,7 +114,13 @@ public class MultilayerHashCacheGetOrAddLockTests(ITestContextAccessor testConte
             int observed;
             do { observed = Volatile.Read(ref maxConcurrent); if (inside <= observed) break; }
             while (Interlocked.CompareExchange(ref maxConcurrent, inside, observed) != observed);
-            await Task.Delay(50, ct);
+
+            if (Interlocked.Increment(ref startedCount) == 2)
+            {
+                bothStarted.TrySetResult();
+            }
+            await bothStarted.Task.WaitAsync(TimeSpan.FromSeconds(5), ct);
+
             Interlocked.Decrement(ref concurrentInGenerator);
             return new Dictionary<string, string?> { ["k"] = "v" };
         }
@@ -127,8 +145,11 @@ public class MultilayerHashCacheGetOrAddLockTests(ITestContextAccessor testConte
         _innerCache.GetCacheEntryAsync<string>((CacheKey)cacheKey, Arg.Any<CancellationToken>())
             .Returns(new TestCacheEntry<IDictionary<string, string?>> { Value = null });
 
+        const int concurrentCallers = 8;
         var concurrentInGenerator = 0;
         var maxConcurrent = 0;
+        var startedCount = 0;
+        var allStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
 
         async Task<IDictionary<string, string?>> Generator(CancellationToken ct)
         {
@@ -136,12 +157,18 @@ public class MultilayerHashCacheGetOrAddLockTests(ITestContextAccessor testConte
             int observed;
             do { observed = Volatile.Read(ref maxConcurrent); if (inside <= observed) break; }
             while (Interlocked.CompareExchange(ref maxConcurrent, inside, observed) != observed);
-            await Task.Delay(20, ct);
+
+            if (Interlocked.Increment(ref startedCount) == concurrentCallers)
+            {
+                allStarted.TrySetResult();
+            }
+            await allStarted.Task.WaitAsync(TimeSpan.FromSeconds(5), ct);
+
             Interlocked.Decrement(ref concurrentInGenerator);
             return new Dictionary<string, string?> { ["k"] = "v" };
         }
 
-        var tasks = Enumerable.Range(0, 8)
+        var tasks = Enumerable.Range(0, concurrentCallers)
             .Select(_ => Task.Run(async () => await Sut.GetOrAddAsync(cacheKey, Generator, token)))
             .ToArray();
         await Task.WhenAll(tasks);

@@ -1,4 +1,5 @@
 ﻿using System.Globalization;
+using System.Runtime.InteropServices;
 using Microsoft.Extensions.Hosting;
 using UiPath.Platform.Caching.Telemetry;
 
@@ -304,13 +305,13 @@ public partial class RedisStreamHealthMaintainer : IHostedService
 
     private void CheckConsumer(RedisKey stream, StreamGroupInfo groupInfo, StreamConsumerInfo consumerInfo)
     {
-        var props = new Dictionary<string, string>();
+        var props = new List<KeyValuePair<string, string>>(5);
         AddProp(props, "Name", consumerInfo.Name);
         AddProp(props, "IdleTimeInMilliseconds", consumerInfo.IdleTimeInMilliseconds.ToString(CultureInfo.InvariantCulture));
         AddProp(props, "PendingMessageCount", consumerInfo.PendingMessageCount.ToString(CultureInfo.InvariantCulture));
         AddProp(props, "Group", groupInfo.Name);
         AddProp(props, "Stream", stream.ToString());
-        _telemetryProvider.TrackMetric(Metrics.StreamConsumer, groupInfo.Lag.GetValueOrDefault(), props);
+        _telemetryProvider.TrackMetric(Metrics.StreamConsumer, groupInfo.Lag.GetValueOrDefault(), CollectionsMarshal.AsSpan(props));
     }
 
     private async Task<List<StreamContext>> GetAllStreamsAsync(CancellationToken cancellationToken)
@@ -345,14 +346,14 @@ public partial class RedisStreamHealthMaintainer : IHostedService
             return;
         }
 
-        var props = new Dictionary<string, string>();
+        var props = new List<KeyValuePair<string, string>>(6);
         AddProp(props, "Name", stream.ToString());
         AddProp(props, "Length", streamInfo.Length.ToString(CultureInfo.InvariantCulture));
         AddProp(props, "LastGeneratedId", streamInfo.LastGeneratedId.ToString());
         AddProp(props, "ConsumerGroupCount", streamInfo.ConsumerGroupCount.ToString(CultureInfo.InvariantCulture));
         AddProp(props, "RadixTreeKeys", streamInfo.RadixTreeKeys.ToString(CultureInfo.InvariantCulture));
         AddProp(props, "RadixTreeNodes", streamInfo.RadixTreeNodes.ToString(CultureInfo.InvariantCulture));
-        _telemetryProvider.TrackMetric(Metrics.Stream, streamInfo.Length, props);
+        _telemetryProvider.TrackMetric(Metrics.Stream, streamInfo.Length, CollectionsMarshal.AsSpan(props));
     }
 
     private void TrackStreamGroup(RedisKey stream, StreamGroupInfo groupInfo)
@@ -362,7 +363,7 @@ public partial class RedisStreamHealthMaintainer : IHostedService
             return;
         }
 
-        var props = new Dictionary<string, string>();
+        var props = new List<KeyValuePair<string, string>>(8);
         AddProp(props, "Name", groupInfo.Name);
         AddProp(props, "Lag", groupInfo.Lag.GetValueOrDefault(0).ToString(CultureInfo.InvariantCulture));
         AddProp(props, "LastDeliveredId", groupInfo.LastDeliveredId);
@@ -375,7 +376,7 @@ public partial class RedisStreamHealthMaintainer : IHostedService
             AddProp(props, "LastDeliveredDate", lastDeliveredDate.Value.ToString("u"));
         }
 
-        _telemetryProvider.TrackMetric(Metrics.StreamGroup, groupInfo.Lag.GetValueOrDefault(), props);
+        _telemetryProvider.TrackMetric(Metrics.StreamGroup, groupInfo.Lag.GetValueOrDefault(), CollectionsMarshal.AsSpan(props));
     }
 
     private static bool TryParseDeliveredIdToDatetimeOffset(string? entryId, out DateTimeOffset? dateTimeOffset)
@@ -406,11 +407,11 @@ public partial class RedisStreamHealthMaintainer : IHostedService
         }
     }
 
-    private static void AddProp(Dictionary<string, string> dictionary, string key, string? value)
+    private static void AddProp(List<KeyValuePair<string, string>> properties, string key, string? value)
     {
-        if (!dictionary.ContainsKey(key) && !string.IsNullOrWhiteSpace(key) && !string.IsNullOrWhiteSpace(value))
+        if (!string.IsNullOrWhiteSpace(key) && !string.IsNullOrWhiteSpace(value))
         {
-            dictionary.Add(key, value);
+            properties.Add(new(key, value));
         }
     }
 

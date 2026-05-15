@@ -1,4 +1,5 @@
 ﻿using AutoFixture.Kernel;
+using UiPath.Platform.Caching.Telemetry;
 
 namespace UiPath.Platform.Caching.Tests;
 
@@ -13,6 +14,7 @@ public static class AutoFixtureCreator
             .Customize(customization);
         fixture.Customizations.Add(new CollectionPropertyOmitter());
         fixture.Customizations.Add(new MultilayerCacheOptionsCustomization());
+        fixture.Customizations.Add(new TelemetryProviderCustomization());
 
         fixture.Behaviors.OfType<ThrowingRecursionBehavior>().ToList()
             .ForEach(b => fixture.Behaviors.Remove(b));
@@ -20,6 +22,18 @@ public static class AutoFixtureCreator
         fixture.Behaviors.Add(new GenerationDepthBehavior(10));
 
         return fixture;
+    }
+}
+
+public class TelemetryProviderCustomization : ISpecimenBuilder
+{
+    public object Create(object request, ISpecimenContext context)
+    {
+        if (request is Type type && type == typeof(ICachingTelemetryProvider))
+        {
+            return NullTelemetryProvider.Instance;
+        }
+        return new NoSpecimen();
     }
 }
 

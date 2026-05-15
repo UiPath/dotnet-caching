@@ -3,6 +3,7 @@ using Microsoft.Extensions.Logging;
 using NSubstitute.ExceptionExtensions;
 using StackExchange.Redis;
 using UiPath.Platform.Caching.Telemetry;
+using UiPath.Platform.Caching.Tests.Telemetry;
 
 namespace UiPath.Platform.Caching.Tests;
 public class RedisStreamHealthMaintainerTests(ITestContextAccessor testContextAccessor) : IAsyncLifetime
@@ -10,7 +11,7 @@ public class RedisStreamHealthMaintainerTests(ITestContextAccessor testContextAc
     private readonly IFixture _fixture = AutoFixtureCreator.NSubstitute();
     private IRedisConnector _redisConnector = default!;
     private IDatabase _database = default!;
-    private ICachingTelemetryProvider _telemetryProvider = default!;
+    private RecordingTelemetryProvider _telemetryProvider = default!;
     private RedisStreamsTopicOptions _streamOptions = default!;
     private RedisCacheOptions _redisCacheOptions = default!;
     private CacheOptions _cacheOptions = default!;
@@ -41,7 +42,7 @@ public class RedisStreamHealthMaintainerTests(ITestContextAccessor testContextAc
         _ownLock = false;
         await Sut.CheckStreamsAsync(testContextAccessor.Current.CancellationToken);
         await _database.DidNotReceive().ExecuteAsync(Arg.Any<string>(), Arg.Any<ICollection<object>?>(), Arg.Any<CommandFlags>());
-        _telemetryProvider.DidNotReceive().TrackMetric(Arg.Any<string>(), Arg.Any<double>(), Arg.Any<IDictionary<string, string>?>());
+        _telemetryProvider.Metrics.Should().BeEmpty();
     }
 
     [Fact]
@@ -50,7 +51,7 @@ public class RedisStreamHealthMaintainerTests(ITestContextAccessor testContextAc
         Sut.Initialize();
         await Sut.CheckStreamsAsync(testContextAccessor.Current.CancellationToken);
         await _database.Received().ExecuteAsync(Arg.Any<string>(), Arg.Any<ICollection<object>?>(), Arg.Any<CommandFlags>());
-        _telemetryProvider.Received().TrackMetric(Arg.Any<string>(), Arg.Any<double>(), Arg.Any<IDictionary<string, string>?>());
+        _telemetryProvider.Metrics.Should().NotBeEmpty();
     }
 
     [Fact]
@@ -146,6 +147,101 @@ public class RedisStreamHealthMaintainerTests(ITestContextAccessor testContextAc
         await act.Should().NotThrowAsync();
     }
 
+    [Fact]
+    public async Task OnException_releases_held_lock_even_if_LockRelease_throws()
+    {
+        // Exercises the catch-inside-catch in CheckStreamsAsync: when stream processing fails AND
+        // the subsequent LockReleaseAsync also throws, the maintainer must swallow both.
+        _database.StreamInfoAsync(Arg.Any<RedisKey>(), Arg.Any<CommandFlags>())
+            .ThrowsAsync(new Exception("processing failed"));
+        _database.LockReleaseAsync(Arg.Any<RedisKey>(), Arg.Any<RedisValue>(), Arg.Any<CommandFlags>())
+            .ThrowsAsync(new Exception("release failed"));
+
+        Sut.Initialize();
+        Func<Task> act = async () => await Sut.CheckStreamsAsync(testContextAccessor.Current.CancellationToken);
+        await act.Should().NotThrowAsync("the inner LockRelease catch must swallow even when the outer catch is already firing");
+
+        await _database.Received().LockReleaseAsync(Arg.Any<RedisKey>(), Arg.Any<RedisValue>(), Arg.Any<CommandFlags>());
+    }
+
+    [Fact]
+    public async Task Group_with_consumers_and_stale_LastDeliveredId_is_quarantined_when_not_already()
+    {
+        // Stale = last-delivered older than MaintainerTrimInterval (default 1h). Consumer count > 0 so it
+        // routes into CheckStreamGroupWithConsumersAsync, then the stale branch — and with no quarantine
+        // record the group is added to quarantine via HashSet.
+        var stale = DateTimeOffset.UtcNow.Subtract(_streamOptions.MaintainerTrimInterval).Subtract(TimeSpan.FromMinutes(5));
+        var g1 = GenerateGroupInfo(stale, consumerCount: 1);
+        _streamGroupInfos = [g1];
+        _quarantineValue = RedisValue.Null;
+
+        Sut.Initialize();
+        await Sut.CheckStreamsAsync(testContextAccessor.Current.CancellationToken);
+
+        await _database.Received().HashSetAsync(
+            Arg.Any<RedisKey>(),
+            Arg.Is<RedisValue>(v => v == g1.Name),
+            Arg.Any<RedisValue>(),
+            When.Always,
+            CommandFlags.DemandMaster);
+        await _database.DidNotReceive().StreamDeleteConsumerGroupAsync(Arg.Any<RedisKey>(), Arg.Any<RedisValue>(), Arg.Any<CommandFlags>());
+    }
+
+    [Fact]
+    public async Task Group_with_consumers_and_stale_LastDeliveredId_is_deleted_when_already_quarantined()
+    {
+        // Same stale-LastDeliveredId condition as above but the group is already in quarantine —
+        // the maintainer should delete the consumer group and then drop its quarantine entry.
+        var stale = DateTimeOffset.UtcNow.Subtract(_streamOptions.MaintainerTrimInterval).Subtract(TimeSpan.FromMinutes(5));
+        var g1 = GenerateGroupInfo(stale, consumerCount: 1);
+        _streamGroupInfos = [g1];
+        _quarantineValue = DateTimeOffset.UtcNow.ToString("O");
+
+        Sut.Initialize();
+        await Sut.CheckStreamsAsync(testContextAccessor.Current.CancellationToken);
+
+        await _database.Received().StreamDeleteConsumerGroupAsync(
+            Arg.Any<RedisKey>(),
+            Arg.Is<RedisValue>(v => v == g1.Name),
+            CommandFlags.DemandMaster);
+        await _database.Received().HashDeleteAsync(
+            Arg.Any<RedisKey>(),
+            Arg.Is<RedisValue>(v => v == g1.Name),
+            CommandFlags.DemandMaster);
+    }
+
+    [Fact]
+    public async Task Initialize_uses_MaintainerSearchPattern_when_configured()
+    {
+        // When MaintainerSearchPattern is set, Initialize must use it verbatim instead of deriving
+        // a pattern from the RedisStreamKeyStrategy.
+        _streamOptions.MaintainerSearchPattern = "explicit-pattern-*";
+
+        Sut.Initialize();
+        await Sut.CheckStreamsAsync(testContextAccessor.Current.CancellationToken);
+
+        await _database.Received().ExecuteAsync(
+            "SCAN",
+            Arg.Is<ICollection<object>?>(args => args != null && args.Contains((object)"explicit-pattern-*")),
+            Arg.Any<CommandFlags>());
+    }
+
+    [Fact]
+    public async Task TrackStatistics_off_skips_stream_and_group_metrics()
+    {
+        // Both TrackStream and TrackStreamGroup early-return when TrackStatistics is false.
+        _streamOptions.TrackStatistics = false;
+        var g1 = GenerateGroupInfo(DateTimeOffset.UtcNow.Subtract(TimeSpan.FromMilliseconds(10)), consumerCount: 1);
+        _streamGroupInfos = [g1];
+        _streamConsumerInfos = [GenerateConsumerInfo()];
+
+        Sut.Initialize();
+        await Sut.CheckStreamsAsync(testContextAccessor.Current.CancellationToken);
+
+        _telemetryProvider.Metrics.Should().NotContain(m => m.Name == Metrics.Stream);
+        _telemetryProvider.Metrics.Should().NotContain(m => m.Name == Metrics.StreamGroup);
+    }
+
     public ValueTask DisposeAsync()
     {
         return ValueTask.CompletedTask;
@@ -157,7 +253,8 @@ public class RedisStreamHealthMaintainerTests(ITestContextAccessor testContextAc
         _database = _fixture.Freeze<IDatabase>();
         _redisConnector.Database.Returns(_database);
 
-        _telemetryProvider = _fixture.Freeze<ICachingTelemetryProvider>();
+        _telemetryProvider = new RecordingTelemetryProvider();
+        _fixture.Inject<ICachingTelemetryProvider>(_telemetryProvider);
         _streamOptions = new RedisStreamsTopicOptions
         {
             TrackStatistics = true,

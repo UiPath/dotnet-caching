@@ -38,14 +38,14 @@ internal sealed class CacheMemoryMonitor : IDisposable
                 continue;
             }
 
-            _telemetryProvider.TrackMetric(_name, currentStats.CurrentEntryCount, new Dictionary<string, string>
-            {
-                { "CurrentEntryCount", currentStats.CurrentEntryCount.ToString(CultureInfo.InvariantCulture) },
-                { "CurrentEstimatedSize", currentStats.CurrentEstimatedSize.GetValueOrDefault().ToString(CultureInfo.InvariantCulture) },
-                { "TotalHits", currentStats.TotalHits.ToString(CultureInfo.InvariantCulture) },
-                { "TotalMisses", currentStats.TotalMisses.ToString(CultureInfo.InvariantCulture) },
-                { "name", _name }
-            });
+            _telemetryProvider.TrackMetric(_name, currentStats.CurrentEntryCount,
+            [
+                new("CurrentEntryCount", currentStats.CurrentEntryCount.ToString(CultureInfo.InvariantCulture)),
+                new("CurrentEstimatedSize", currentStats.CurrentEstimatedSize.GetValueOrDefault().ToString(CultureInfo.InvariantCulture)),
+                new("TotalHits", currentStats.TotalHits.ToString(CultureInfo.InvariantCulture)),
+                new("TotalMisses", currentStats.TotalMisses.ToString(CultureInfo.InvariantCulture)),
+                new("name", _name),
+            ]);
         }
     }
 

@@ -1,4 +1,4 @@
-﻿namespace UiPath.Platform.Caching.Telemetry;
+namespace UiPath.Platform.Caching.Telemetry;
 
 public interface ICachingTelemetryProvider
 {
@@ -9,11 +9,23 @@ public interface ICachingTelemetryProvider
         return ret;
     }
 
-    void TrackDependency(string type, string target, string name, string data, DateTimeOffset startTime, TimeSpan duration, string resultCode, bool success, IDictionary<string, string>? properties = null, IDictionary<string, double>? metrics = null);
+    [ExcludeFromCodeCoverage(Justification = "Default no-op body kept only to dodge Castle.Proxies mock-gen for ref-struct parameters; every real implementer overrides it.")]
+    void TrackDependency(string type, string target, string name, string data, DateTimeOffset startTime, TimeSpan duration, string resultCode, bool success, ReadOnlySpan<KeyValuePair<string, string>> properties = default, ReadOnlySpan<KeyValuePair<string, double>> metrics = default)
+    {
+    }
 
-    void TrackEvent(string eventName, IDictionary<string, string>? properties = null, IDictionary<string, double>? metrics = null);
+    [ExcludeFromCodeCoverage(Justification = "Default no-op body kept only to dodge Castle.Proxies mock-gen for ref-struct parameters; every real implementer overrides it.")]
+    void TrackEvent(string eventName, ReadOnlySpan<KeyValuePair<string, string>> properties = default, ReadOnlySpan<KeyValuePair<string, double>> metrics = default)
+    {
+    }
 
-    void TrackException(Exception ex, IDictionary<string, string>? properties = null, IDictionary<string, double>? metrics = null);
+    [ExcludeFromCodeCoverage(Justification = "Default no-op body kept only to dodge Castle.Proxies mock-gen for ref-struct parameters; every real implementer overrides it.")]
+    void TrackException(Exception ex, ReadOnlySpan<KeyValuePair<string, string>> properties = default, ReadOnlySpan<KeyValuePair<string, double>> metrics = default)
+    {
+    }
 
-    void TrackMetric(string name, double value, IDictionary<string, string>? properties = null);
+    [ExcludeFromCodeCoverage(Justification = "Default no-op body kept only to dodge Castle.Proxies mock-gen for ref-struct parameters; every real implementer overrides it.")]
+    void TrackMetric(string name, double value, ReadOnlySpan<KeyValuePair<string, string>> properties = default)
+    {
+    }
 }

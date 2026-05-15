@@ -4,6 +4,7 @@ using UiPath.Platform.Caching.Telemetry;
 
 namespace UiPath.Platform.Caching.Redis;
 
+[ExcludeFromCodeCoverage(Justification = "Wires up StackExchange.Redis ServerMaintenanceEvent — exercised only by real Azure Cache for Redis planned-maintenance notifications.")]
 public sealed class RedisPlannedMaintenance : IRedisPlannedMaintenance
 {
     private readonly ICachingTelemetryProvider _telemetryProvider;
@@ -54,17 +55,15 @@ public sealed class RedisPlannedMaintenance : IRedisPlannedMaintenance
 
         _telemetryProvider.TrackEvent(
             "Redis.Maintenance",
-            new Dictionary<string, string>(7)
-            {
-                ["IPAddress"] = azureEvent.IPAddress?.ToString() ?? string.Empty,
-                ["NotificationTypeString"] = azureEvent.NotificationTypeString,
-                ["SslPort"] = azureEvent.SslPort.ToString(CultureInfo.InvariantCulture),
-                ["ReceivedTimeUtc"] = azureEvent.ReceivedTimeUtc.ToString(CultureInfo.InvariantCulture),
-                ["StartTimeUtc"] = azureEvent.StartTimeUtc?.ToString(CultureInfo.InvariantCulture)??string.Empty,
-                ["IsReplica"] = azureEvent.IsReplica.ToString(CultureInfo.InvariantCulture),
-                ["RawMessage"] = azureEvent.RawMessage??string.Empty,
-            },
-            null);
+            [
+                new("IPAddress", azureEvent.IPAddress?.ToString() ?? string.Empty),
+                new("NotificationTypeString", azureEvent.NotificationTypeString),
+                new("SslPort", azureEvent.SslPort.ToString(CultureInfo.InvariantCulture)),
+                new("ReceivedTimeUtc", azureEvent.ReceivedTimeUtc.ToString(CultureInfo.InvariantCulture)),
+                new("StartTimeUtc", azureEvent.StartTimeUtc?.ToString(CultureInfo.InvariantCulture) ?? string.Empty),
+                new("IsReplica", azureEvent.IsReplica.ToString(CultureInfo.InvariantCulture)),
+                new("RawMessage", azureEvent.RawMessage ?? string.Empty),
+            ]);
     }
 
     private void StartConnectionProbing()
@@ -83,7 +82,7 @@ public sealed class RedisPlannedMaintenance : IRedisPlannedMaintenance
             {
                 try
                 {
-                    _telemetryProvider.TrackEvent("Redis.MaintenanceStarted", null, null);
+                    _telemetryProvider.TrackEvent("Redis.MaintenanceStarted");
 
                     while (!token.IsCancellationRequested)
                     {
@@ -110,7 +109,7 @@ public sealed class RedisPlannedMaintenance : IRedisPlannedMaintenance
                     tokenSource?.Cancel();
                     tokenSource?.Dispose();
                     InProgress = false;
-                    _telemetryProvider.TrackEvent("Redis.MaintenanceEnded", null, null);
+                    _telemetryProvider.TrackEvent("Redis.MaintenanceEnded");
                 }
             }, token);
     }

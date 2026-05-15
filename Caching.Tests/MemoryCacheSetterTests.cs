@@ -3,6 +3,7 @@ using Microsoft.Extensions.Internal;
 using UiPath.Platform.Caching;
 using UiPath.Platform.Caching.Telemetry;
 using UiPath.Platform.Caching.Tests.Broadcast;
+using UiPath.Platform.Caching.Tests.Telemetry;
 
 namespace UiPath.Platform.Caching.Tests;
 
@@ -24,7 +25,7 @@ public class MemoryCacheSetterTests : IAsyncLifetime
     private TopicKey _topicKey = default!;
     private CacheKey _cacheKey = default!;
     private CacheClock _cacheClock = default!;
-    private ICachingTelemetryProvider _telemetryProvider = default!;
+    private RecordingTelemetryProvider _telemetryProvider = default!;
 
     private HashLocalMemorySetter? _sut = null;
 
@@ -99,15 +100,51 @@ public class MemoryCacheSetterTests : IAsyncLifetime
         Sut.Set(x, _fixture.Create<ICacheEntry>(), _fixture.Create<Type>(), TimeSpan.FromMinutes(1));
         @throw = true;
         token.InvokeCallbacks();
-        var eventDimensionPredicate = (IDictionary<string, string> d) =>
+        _telemetryProvider.Events.Should().ContainSingle(e =>
+            e.Name == $"Caching.{nameof(MemoryCacheSetter)}.{nameof(MemoryCacheSetter.RefreshMetadata)}.Failed" &&
+            e.Properties != null &&
+            e.Properties["CacheKey"] == _cacheKey &&
+            e.Properties["TopicKey"] == _topicKey &&
+            (e.Properties["TransportId"] == null || e.Properties["TransportId"] == string.Empty));
+    }
+
+    [Fact]
+    public void RefreshMetadata_swallows_NewEntry_exception_and_emits_failure_event()
+    {
+        _memoryCache = new MemoryCache(Options.Create(new MemoryCacheOptions
         {
-            return d["CacheKey"] == _cacheKey && d["TopicKey"] == _topicKey && (d["TransportId"] == null || d["TransportId"] == string.Empty);
+            Clock = _clock
+        }));
+        _fixture.Inject(_memoryCache);
+
+        var token = new TestChangeToken
+        {
+            ActiveChangeCallbacks = true,
+            HasChanged = false,
+            Expiration = _clock.UtcNow.AddDays(1),
+        };
+        _changeTokenFactory.Create(Arg.Any<string>(), Arg.Any<ITopic<ICacheEvent>>(), Arg.Any<string>(), Arg.Any<Type>())
+            .Returns(token);
+
+        var cacheEntity = _fixture.Create<ICacheEntry>();
+        cacheEntity.NewEntry(Arg.Any<DateTimeOffset?>(), Arg.Any<IDictionary<string, string?>?>())
+            .Returns(_ => throw new InvalidOperationException("simulated NewEntry failure"));
+
+        var x = new InternalHashCacheEntryOptions()
+        {
+            CacheKey = _cacheKey,
+            TopicKey = _topicKey,
+            Expiration = _clock.UtcNow.AddDays(1),
         };
 
-        _telemetryProvider.Received().TrackEvent($"Caching.{nameof(MemoryCacheSetter)}.{nameof(MemoryCacheSetter.RefreshMetadata)}.Failed",
-            Arg.Is<IDictionary<string, string>>(d => eventDimensionPredicate(d)),
-            Arg.Any<IDictionary<string, double>>());
+        Sut.Set(x, cacheEntity, _fixture.Create<Type>(), TimeSpan.FromMinutes(1));
+        Action act = () => token.InvokeCallbacks();
+        act.Should().NotThrow("RefreshMetadata's catch must swallow exceptions thrown outside the inner Set call");
 
+        _telemetryProvider.Events.Should().ContainSingle(e =>
+            e.Name == $"Caching.{nameof(MemoryCacheSetter)}.{nameof(MemoryCacheSetter.RefreshMetadata)}.Failed" &&
+            e.Properties != null &&
+            e.Properties["CacheKey"] == _cacheKey);
     }
 
     [Fact]
@@ -154,7 +191,8 @@ public class MemoryCacheSetterTests : IAsyncLifetime
         _topicKeyStrategy.GetTopicKey<string>().Returns(_topicKey);
         _changeTokenFactory = _fixture.Freeze<IChangeTokenFactory>();
         _memoryCache = _fixture.Freeze<IMemoryCache>();
-        _telemetryProvider = _fixture.Freeze<ICachingTelemetryProvider>();
+        _telemetryProvider = new RecordingTelemetryProvider();
+        _fixture.Inject<ICachingTelemetryProvider>(_telemetryProvider);
         _clock = new SystemClock();
 
         _options = new()

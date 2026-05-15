@@ -34,6 +34,7 @@
     <ProjectReference Include="..\Caching.CloudEvents\Caching.CloudEvents.csproj" />
     <ProjectReference Include="..\Caching.Polly\Caching.Polly.csproj" />
     <ProjectReference Include="..\Caching.Runtime\Caching.Runtime.csproj" />
+    <ProjectReference Include="..\Caching.Telemetry\Caching.Telemetry.csproj" />
   </ItemGroup>
 
 </Project>

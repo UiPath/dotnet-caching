@@ -1,5 +1,6 @@
-﻿using StackExchange.Redis.Profiling;
+using StackExchange.Redis.Profiling;
 using UiPath.Platform.Caching.Telemetry;
+using UiPath.Platform.Caching.Tests.Telemetry;
 using static UiPath.Platform.Caching.Redis.ProfiledCommandExtensions;
 
 namespace UiPath.Platform.Caching.Tests;
@@ -8,7 +9,7 @@ public class ProfiledCommandProcessorTest : IAsyncLifetime
     private readonly IFixture _fixture = AutoFixtureCreator.NSubstitute();
 
     private ProfiledCommandProcessor? _sut = null;
-    private ICachingTelemetryProvider _telemetryProvider = default!;
+    private RecordingTelemetryProvider _telemetryProvider = default!;
     private IProfiledCommand _profiledCommand = default!;
     private Lazy<RedisProfileFetcher> _oldFetcherLazy = default!;
 
@@ -17,23 +18,11 @@ public class ProfiledCommandProcessorTest : IAsyncLifetime
     [Fact]
     public void CommandProcessor_Null()
     {
-        IDictionary<string, string>? properties = null;
         var sessionId = _fixture.Create<string>();
-        _telemetryProvider.WhenForAnyArgs(x => x.TrackDependency(
-            type: Arg.Any<string>(),
-            name: Arg.Any<string>(),
-            target: Arg.Any<string>(),
-            data: Arg.Any<string>(),
-            startTime: Arg.Any<DateTimeOffset>(),
-            duration: Arg.Any<TimeSpan>(),
-            resultCode: Arg.Any<string>(),
-            success: Arg.Any<bool>(),
-            properties: Arg.Any<IDictionary<string, string>?>()))
-            .Do(callInfo =>
-            {
-                properties = callInfo.Arg<IDictionary<string, string>?>();
-            });
         Sut.Process(_profiledCommand, sessionId);
+
+        _telemetryProvider.Dependencies.Should().ContainSingle();
+        var properties = _telemetryProvider.Dependencies[0].Properties;
         properties.Should().NotBeNull();
         properties.Should().ContainKey(ProfiledCommandProcessor.TelemetryTypeField);
         properties.Should().ContainKey(ProfiledCommandProcessor.CreationToEnqueuedField);
@@ -53,7 +42,8 @@ public class ProfiledCommandProcessorTest : IAsyncLifetime
 
     public ValueTask InitializeAsync()
     {
-        _telemetryProvider = _fixture.Freeze<ICachingTelemetryProvider>();
+        _telemetryProvider = new RecordingTelemetryProvider();
+        _fixture.Inject<ICachingTelemetryProvider>(_telemetryProvider);
         _profiledCommand = _fixture.Freeze<IProfiledCommand>();
         _oldFetcherLazy = FetcherLazy;
         FetcherLazy = new(() => new RedisProfileFetcher

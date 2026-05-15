@@ -6,6 +6,12 @@ namespace UiPath.Platform.Caching.Broadcast.Redis;
 internal sealed partial class RedisStreamSubjectWriter<T> : IDisposable
     where T : IEvent
 {
+    private const string EventInvalid = "Caching." + nameof(RedisStreamSubjectWriter<T>) + "." + nameof(DispatchEventsAsync) + ".InvalidEvent";
+    private const string EventReceived = "Caching." + nameof(RedisStreamSubjectWriter<T>) + "." + nameof(DispatchEventsAsync) + ".EventReceived";
+    private const string PropTopicKey = "TopicKey";
+    private const string PropTransportId = "TransportId";
+    private const string PropEventId = "EventId";
+
     private bool _disposed;
     private readonly RedisStreamContext _context;
     private readonly IRedisConnector _redis;
@@ -253,11 +259,11 @@ internal sealed partial class RedisStreamSubjectWriter<T> : IDisposable
 
     private void HandleInvalidEvent(T ev, StreamEntry @event, List<RedisValue> ids)
     {
-        _cachingTelemetryProvider.TrackEvent($"Caching.{nameof(RedisStreamSubjectWriter<T>)}.{nameof(DispatchEventsAsync)}.InvalidEvent", new Dictionary<string, string>
-        {
-            { "TopicKey", _context.Topic!},
-            { "TransportId", @event.Id! }
-        });
+        _cachingTelemetryProvider.TrackEvent(EventInvalid,
+        [
+            new(PropTopicKey, _context.Topic!),
+            new(PropTransportId, @event.Id!),
+        ]);
         LogEventInvalid(ev.Id, _context.Topic, @event.Id);
         ids.Add(@event.Id);
     }
@@ -268,12 +274,12 @@ internal sealed partial class RedisStreamSubjectWriter<T> : IDisposable
 
         if (_context.EmitStreamReceivedEvent)
         {
-            _cachingTelemetryProvider.TrackEvent($"Caching.{nameof(RedisStreamSubjectWriter<T>)}.{nameof(DispatchEventsAsync)}.EventReceived", new Dictionary<string, string>
-        {
-            { "EventId", ev.Id!},
-            { "TopicKey", _context.Topic!},
-            { "TransportId", ev.TransportId! }
-        });
+            _cachingTelemetryProvider.TrackEvent(EventReceived,
+            [
+                new(PropEventId, ev.Id!),
+                new(PropTopicKey, _context.Topic!),
+                new(PropTransportId, ev.TransportId!),
+            ]);
         }
     }
 

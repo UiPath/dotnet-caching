@@ -16,34 +16,25 @@ public class RedisPubSubSubjectWriterTests(ITestContextAccessor testContextAcces
     private RedisChannel _redisChannel = default!;
     private RedisPubSubTopicOptions _options = default!;
     private readonly TimeSpan _delay = 50.Milliseconds();
+    private Action<RedisChannel, RedisValue>? _capturedAction;
+    private readonly TaskCompletionSource _subscribeCalled = new(TaskCreationOptions.RunContinuationsAsynchronously);
 
     private RedisPubSubSubjectWriter<ICacheEvent>? _sut = null;
 
-    private async Task<RedisPubSubSubjectWriter<ICacheEvent>> Sut()
-    {
-        if(_sut != null)
-        {
-            return _sut;
-        }
-        _sut = _fixture.Create<RedisPubSubSubjectWriter<ICacheEvent>>();
-        await Task.Delay(_delay.Multiply(2), testContextAccessor.Current.CancellationToken);
-        return _sut;
-    }
+    private RedisPubSubSubjectWriter<ICacheEvent> Sut() =>
+        _sut ??= _fixture.Create<RedisPubSubSubjectWriter<ICacheEvent>>();
+
+    private Task<Action<RedisChannel, RedisValue>> WaitForSubscribeAsync() =>
+        _subscribeCalled.Task
+            .WaitAsync(TimeSpan.FromSeconds(2), testContextAccessor.Current.CancellationToken)
+            .ContinueWith(_ => _capturedAction!, TaskContinuationOptions.OnlyOnRanToCompletion);
 
     [Fact]
     public async Task Receive_redis_null()
     {
-        Action<RedisChannel, RedisValue>? action = null!;
-
-        _subscriber.When(x => x.Subscribe(_redisChannel, Arg.Any<Action<RedisChannel, RedisValue>>()))
-            .Do(ctx =>
-            {
-                action = ctx.Arg<Action<RedisChannel, RedisValue>>();
-            });
-        var sut = await Sut();
-        await Task.Delay(_delay.Multiply(3), testContextAccessor.Current.CancellationToken);
-        action.Should().NotBeNull();
-        action!(_redisChannel, RedisValue.Null);
+        Sut();
+        var action = await WaitForSubscribeAsync();
+        action(_redisChannel, RedisValue.Null);
         await Task.Delay(_delay.Multiply(5), testContextAccessor.Current.CancellationToken);
         _channel.Reader.TryRead(out var item).Should().BeFalse();
     }
@@ -51,16 +42,9 @@ public class RedisPubSubSubjectWriterTests(ITestContextAccessor testContextAcces
     [Fact]
     public async Task Receive_no_json()
     {
-        Action<RedisChannel, RedisValue>? action = null!;
-        _subscriber.When(x => x.Subscribe(_redisChannel, Arg.Any<Action<RedisChannel, RedisValue>>()))
-            .Do(ctx =>
-            {
-                action = ctx.Arg<Action<RedisChannel, RedisValue>>();
-            });
-        var sut = await Sut();
-        await Task.Delay(_delay.Multiply(3), testContextAccessor.Current.CancellationToken);
-        action.Should().NotBeNull();
-        action!(_redisChannel, (RedisValue)_fixture.Create<string>());
+        Sut();
+        var action = await WaitForSubscribeAsync();
+        action(_redisChannel, (RedisValue)_fixture.Create<string>());
         await Task.Delay(_delay.Multiply(5), testContextAccessor.Current.CancellationToken);
         _channel.Reader.TryRead(out var item).Should().BeFalse();
     }
@@ -70,38 +54,32 @@ public class RedisPubSubSubjectWriterTests(ITestContextAccessor testContextAcces
     [InlineData(true)]
     public async Task Receive_event(bool valid)
     {
-        Action<RedisChannel, RedisValue>? action = null!;
         var expected = _fixture.Create<TestCacheEvent>();
         expected.Valid = valid;
         var str = JsonSerializer.Serialize(expected);
         var expectedString = Encoding.UTF8.GetBytes(str);
-        _subscriber.When(x => x.Subscribe(_redisChannel, Arg.Any<Action<RedisChannel, RedisValue>>()))
-            .Do(ctx =>
-            {
-                action = ctx.Arg<Action<RedisChannel, RedisValue>>();
-            });
-        var sut = await Sut();
-        await Task.Delay(_delay.Multiply(3), testContextAccessor.Current.CancellationToken);
-        action.Should().NotBeNull();
-        action!(_redisChannel, (RedisValue)expectedString);
+
+        Sut();
+        var action = await WaitForSubscribeAsync();
+        action(_redisChannel, (RedisValue)expectedString);
         await Task.Delay(_delay.Multiply(3), testContextAccessor.Current.CancellationToken);
         _channel.Reader.TryRead(out var item).Should().Be(valid);
     }
 
     [Fact]
-    public async Task Dispose_works()
+    public void Dispose_works()
     {
-        var sut = await Sut();
+        var sut = Sut();
         var act = () => sut.Dispose();
         act.Should().NotThrow();
     }
 
     [Fact]
-    public async Task Dispose_unsubscribe_exception()
+    public void Dispose_unsubscribe_exception()
     {
         _subscriber.When(x => x.Unsubscribe(_redisChannel, Arg.Any<Action<RedisChannel, RedisValue>>()))
         .Throw<Exception>();
-        var sut = await Sut();
+        var sut = Sut();
 
         var act = () => sut.Dispose();
         act.Should().NotThrow();
@@ -119,6 +97,12 @@ public class RedisPubSubSubjectWriterTests(ITestContextAccessor testContextAcces
         _formatter = new CacheClearEventFormatterProxy();
         _channel = Channel.CreateUnbounded<ICacheEvent>();
         _subscriber = _fixture.Freeze<ISubscriber>();
+        _subscriber.When(x => x.Subscribe(_redisChannel, Arg.Any<Action<RedisChannel, RedisValue>>()))
+            .Do(ctx =>
+            {
+                _capturedAction = ctx.Arg<Action<RedisChannel, RedisValue>>();
+                _subscribeCalled.TrySetResult();
+            });
         _fixture.Inject(_formatter);
         _fixture.Inject((ChannelWriter<ICacheEvent>)_channel);
         _options = new RedisPubSubTopicOptions

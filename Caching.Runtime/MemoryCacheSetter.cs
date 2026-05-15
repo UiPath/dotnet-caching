@@ -14,6 +14,11 @@ internal abstract class MemoryCacheSetter(
     ICachingTelemetryProvider telemetryProvider
         )
 {
+    private const string EventRefreshMetadataFailed = "Caching." + nameof(MemoryCacheSetter) + "." + nameof(RefreshMetadata) + ".Failed";
+    private const string PropCacheKey = "CacheKey";
+    private const string PropTopicKey = "TopicKey";
+    private const string PropTransportId = "TransportId";
+
     private ICacheEntrySizeProvider SizeProvider { get; } = memoryCacheOptions.SizeProvider ?? new DefaultCacheEntrySizeProvider();
 
     protected CacheClock Clock { get; } = clock;
@@ -89,12 +94,12 @@ internal abstract class MemoryCacheSetter(
         {
             if (!set)
             {
-                telemetryProvider.TrackEvent($"Caching.{nameof(MemoryCacheSetter)}.{nameof(RefreshMetadata)}.Failed", new Dictionary<string, string>
-                {
-                    { "CacheKey", metadataState.CacheKey },
-                    { "TopicKey", metadataState.TopicKey },
-                    { "TransportId", token.TransportId ?? string.Empty}
-                });
+                telemetryProvider.TrackEvent(EventRefreshMetadataFailed,
+                [
+                    new(PropCacheKey, metadataState.CacheKey),
+                    new(PropTopicKey, metadataState.TopicKey),
+                    new(PropTransportId, token.TransportId ?? string.Empty),
+                ]);
             }
         }
 

@@ -26,12 +26,16 @@ public class RedisStreamsTopicProviderTests(ITestContextAccessor testContextAcce
     [Fact]
     public async Task Disposing_topic_removes_it_from_provider()
     {
+        var token = testContextAccessor.Current.CancellationToken;
         TopicKey topicKey = _fixture.Create<string>();
         var topic = Sut.Create(topicKey);
         topic.Should().NotBeNull();
         Sut.Keys.Should().NotBeEmpty();
         topic.Dispose();
-        await Task.Delay(100, testContextAccessor.Current.CancellationToken);
+        for (var attempt = 0; Sut.Keys.Any() && attempt < 50; attempt++)
+        {
+            await Task.Delay(20, token);
+        }
         Sut.Keys.Should().BeEmpty();
     }
 

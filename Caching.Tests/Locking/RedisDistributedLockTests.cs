@@ -2,19 +2,22 @@ using StackExchange.Redis;
 using UiPath.Platform.Caching.Locking;
 using UiPath.Platform.Caching.Redis;
 using UiPath.Platform.Caching.Telemetry;
+using UiPath.Platform.Caching.Tests.Telemetry;
 
 namespace UiPath.Platform.Caching.Tests.Locking;
 
 public class RedisDistributedLockTests(ITestContextAccessor testContextAccessor)
 {
+    private const string OperationRelease = "distributedlock.release";
+    private const string PropOperation = "operation";
+
     private readonly IFixture _fixture = AutoFixtureCreator.NSubstitute();
 
-    private RedisDistributedLock NewLock(IRedisConnector? redis = null, CacheOptions? options = null)
+    private RedisDistributedLock NewLock(IRedisConnector? redis = null, CacheOptions? options = null, ICachingTelemetryProvider? telemetry = null)
     {
         redis ??= _fixture.Freeze<IRedisConnector>();
         var opts = Options.Create(options ?? new CacheOptions());
-        var telemetry = Substitute.For<ICachingTelemetryProvider>();
-        return new RedisDistributedLock(redis, opts, telemetry);
+        return new RedisDistributedLock(redis, opts, telemetry ?? NullTelemetryProvider.Instance);
     }
 
     [Fact]
@@ -93,9 +96,10 @@ public class RedisDistributedLockTests(ITestContextAccessor testContextAccessor)
     public async Task Acquire_uses_exponential_backoff_so_retry_count_is_bounded()
     {
         var redis = _fixture.Freeze<IRedisConnector>();
+        var callTimestamps = new System.Collections.Concurrent.ConcurrentQueue<long>();
         redis.Database
             .LockTakeAsync(Arg.Any<RedisKey>(), Arg.Any<RedisValue>(), Arg.Any<TimeSpan>(), Arg.Any<CommandFlags>())
-            .Returns(false);
+            .Returns(_ => { callTimestamps.Enqueue(System.Diagnostics.Stopwatch.GetTimestamp()); return false; });
 
         var sut = NewLock(redis);
         var token = testContextAccessor.Current.CancellationToken;
@@ -103,12 +107,20 @@ public class RedisDistributedLockTests(ITestContextAccessor testContextAccessor)
         var lease = await sut.AcquireAsync("k", TimeSpan.FromSeconds(5), TimeSpan.FromMilliseconds(1500), token);
         lease.Should().BeSameAs(NoOpAsyncDisposable.Instance);
 
-        var calls = redis.Database.ReceivedCalls()
-            .Count(c => c.GetMethodInfo().Name == nameof(IDatabaseAsync.LockTakeAsync));
-        calls.Should().BeLessThan(15,
-            "exponential backoff should bound retry count; a regressed fixed 50ms interval would call LockTakeAsync ~30 times in 1500ms");
-        calls.Should().BeGreaterThan(2,
-            "the retry loop should run at least a few times under sustained contention");
+        var times = callTimestamps.ToArray();
+        times.Length.Should().BeGreaterThanOrEqualTo(4,
+            "exponential backoff with default 50ms initial and 1500ms timeout should fit several attempts before the deadline");
+
+        // Inter-call gaps. With exponential growth, the longest gap should be substantially larger than
+        // the first one — a fixed-interval regression (no backoff) would keep all gaps roughly equal.
+        var gaps = Enumerable.Range(0, times.Length - 1)
+            .Select(i => System.Diagnostics.Stopwatch.GetElapsedTime(times[i], times[i + 1]).TotalMilliseconds)
+            .ToArray();
+        var firstGap = gaps[0];
+        var maxGap = gaps.Max();
+        maxGap.Should().BeGreaterThan(firstGap * 2,
+            $"exponential backoff should grow inter-call gaps; got firstGap={firstGap:F1}ms, maxGap={maxGap:F1}ms — " +
+            "a regression to a fixed retry interval would keep gaps roughly constant");
     }
 
     [Fact]
@@ -135,6 +147,34 @@ public class RedisDistributedLockTests(ITestContextAccessor testContextAccessor)
         await redis.Database
             .Received(1)
             .LockReleaseAsync(Arg.Any<RedisKey>(), Arg.Is<RedisValue>(v => v == capturedToken), Arg.Any<CommandFlags>());
+    }
+
+    [Fact]
+    public async Task Disposing_lease_swallows_LockRelease_exception_and_tracks_it()
+    {
+        var redis = _fixture.Freeze<IRedisConnector>();
+        redis.Database
+            .LockTakeAsync(Arg.Any<RedisKey>(), Arg.Any<RedisValue>(), Arg.Any<TimeSpan>(), Arg.Any<CommandFlags>())
+            .Returns(true);
+        var releaseException = new RedisException("release-failed");
+        redis.Database
+            .LockReleaseAsync(Arg.Any<RedisKey>(), Arg.Any<RedisValue>(), Arg.Any<CommandFlags>())
+            .Returns<Task<bool>>(_ => throw releaseException);
+
+        var telemetry = new RecordingTelemetryProvider();
+        var sut = NewLock(redis, telemetry: telemetry);
+        var token = testContextAccessor.Current.CancellationToken;
+
+        var lease = await sut.AcquireAsync("k", TimeSpan.FromSeconds(5), TimeSpan.Zero, token);
+
+        Func<Task> act = async () => await lease!.DisposeAsync();
+        await act.Should().NotThrowAsync("LockReleaseAsync failures must not leak out of DisposeAsync");
+
+        telemetry.Exceptions.Should().ContainSingle()
+            .Which.Should().Match<ExceptionRecord>(r =>
+                r.Exception == releaseException &&
+                r.Properties!.ContainsKey(PropOperation) &&
+                r.Properties[PropOperation] == OperationRelease);
     }
 
     [Fact]

@@ -24,6 +24,17 @@ public class CacheMemoryMonitorTests : IAsyncLifetime
         await act.Should().CompleteWithinAsync(_statisticsFlushInterval.Multiply(10));
     }
 
+    [Fact]
+    public void Dispose_is_idempotent()
+    {
+        var sut = Sut;
+        sut.Dispose();
+
+        Action act = () => sut.Dispose();
+
+        act.Should().NotThrow("a second Dispose must short-circuit on the _disposed flag rather than re-disposing the inner CTS/timer");
+    }
+
     public ValueTask DisposeAsync()
     {
         return ValueTask.CompletedTask;

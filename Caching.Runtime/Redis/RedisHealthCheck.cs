@@ -1,6 +1,7 @@
 ﻿using Microsoft.Extensions.Diagnostics.HealthChecks;
 
 namespace UiPath.Platform.Caching.Redis;
+[ExcludeFromCodeCoverage(Justification = "Pings a live IConnectionMultiplexer and reads its Status/IsConnected/OperationCount — depends on a real Redis endpoint.")]
 public class RedisHealthCheck : IHealthCheck
 {
     private readonly IRedisConnector _redisConnector;

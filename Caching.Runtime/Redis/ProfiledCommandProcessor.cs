@@ -34,25 +34,25 @@ public sealed class ProfiledCommandProcessor(ICachingTelemetryProvider telemetry
         var statement = command.GetStatement();
         var commandName = command.GetCommandName();
         var target = command.GetTarget();
-        var properties = new Dictionary<string, string>
-                {
-                    { FlagsField, command.Flags.ToString("F") },
-                    { CreationToEnqueuedField, command.CreationToEnqueued.ToString() },
-                    { EnqueuedToSendingField, command.EnqueuedToSending.ToString() },
-                    { SentToResponseField, command.SentToResponse.ToString() },
-                    { ResponseToCompletionField, command.ResponseToCompletion.ToString() },
-                    { TelemetryTypeField, RedisTelemetryType }
-                };
+        var properties = new List<KeyValuePair<string, string>>(9)
+        {
+            new(FlagsField, command.Flags.ToString("F")),
+            new(CreationToEnqueuedField, command.CreationToEnqueued.ToString()),
+            new(EnqueuedToSendingField, command.EnqueuedToSending.ToString()),
+            new(SentToResponseField, command.SentToResponse.ToString()),
+            new(ResponseToCompletionField, command.ResponseToCompletion.ToString()),
+            new(TelemetryTypeField, RedisTelemetryType),
+        };
 
         if (command.RetransmissionOf != null)
         {
-            properties.Add(RetransmissionOfField, command.RetransmissionOf.GetCommandName());
-            properties.Add(RetransmissionReasonField, command.RetransmissionReason?.ToString() ?? UnknownRetransmissionReason);
+            properties.Add(new(RetransmissionOfField, command.RetransmissionOf.GetCommandName()));
+            properties.Add(new(RetransmissionReasonField, command.RetransmissionReason?.ToString() ?? UnknownRetransmissionReason));
         }
 
         if (!string.IsNullOrEmpty(sessionId))
         {
-            properties.Add(ProfileSessionIdField, sessionId);
+            properties.Add(new(ProfileSessionIdField, sessionId));
         }
 
         telemetryProvider.TrackDependency(
@@ -64,6 +64,6 @@ public sealed class ProfiledCommandProcessor(ICachingTelemetryProvider telemetry
             duration: command.ElapsedTime,
             resultCode: string.Empty,
             success: true,
-            properties: properties);
+            properties: System.Runtime.InteropServices.CollectionsMarshal.AsSpan(properties));
     }
 }

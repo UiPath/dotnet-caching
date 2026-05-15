@@ -2,6 +2,7 @@
 
 namespace UiPath.Platform.Caching.Redis;
 
+[ExcludeFromCodeCoverage(Justification = "Wraps StackExchange.Redis.ConnectionMultiplexer.Connect — needs a real Redis endpoint to exercise.")]
 public class ConnectionMultiplexerFactory(IOptions<RedisConnectionOptions> redisOptions, IRedisProfiler redisProfiler) : IConnectionMultiplexerFactory
 {
     public IConnectionMultiplexer Create(ConfigurationOptions configuration)

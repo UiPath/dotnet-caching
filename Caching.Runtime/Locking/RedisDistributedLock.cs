@@ -71,8 +71,9 @@ internal sealed class RedisDistributedLock : IDistributedLock
             }
             catch (Exception ex)
             {
-                _telemetry.TrackException(ex, new Dictionary<string, string> { [PropOperation] = OperationAcquire, [PropKey] = key, [PropContended] = contended.ToString() });
-                _telemetry.TrackEvent(EventUnavailable, new Dictionary<string, string> { [PropKey] = key, [PropContended] = contended.ToString() });
+                var contendedStr = contended.ToString();
+                _telemetry.TrackException(ex, [new(PropOperation, OperationAcquire), new(PropKey, key), new(PropContended, contendedStr)]);
+                _telemetry.TrackEvent(EventUnavailable, [new(PropKey, key), new(PropContended, contendedStr)]);
                 return NoOpAsyncDisposable.Instance;
             }
 
@@ -118,13 +119,13 @@ internal sealed class RedisDistributedLock : IDistributedLock
 
     private Releaser BuildAcquiredLease(RedisKey redisKey, RedisValue lockToken, string key, bool contended)
     {
-        _telemetry.TrackEvent(EventAcquired, new Dictionary<string, string> { [PropKey] = key, [PropContended] = contended.ToString() });
+        _telemetry.TrackEvent(EventAcquired, [new(PropKey, key), new(PropContended, contended.ToString())]);
         return new Releaser(_redis, _telemetry, redisKey, lockToken);
     }
 
     private NoOpAsyncDisposable TrackTimeoutNoOp(string key)
     {
-        _telemetry.TrackEvent(EventTimeout, new Dictionary<string, string> { [PropKey] = key, [PropContended] = bool.TrueString });
+        _telemetry.TrackEvent(EventTimeout, [new(PropKey, key), new(PropContended, bool.TrueString)]);
         return NoOpAsyncDisposable.Instance;
     }
 
@@ -145,11 +146,7 @@ internal sealed class RedisDistributedLock : IDistributedLock
             }
             catch (Exception ex)
             {
-                telemetry.TrackException(ex, new Dictionary<string, string>
-                {
-                    [PropOperation] = OperationRelease,
-                    [PropKey] = redisKey.ToString(),
-                });
+                telemetry.TrackException(ex, [new(PropOperation, OperationRelease), new(PropKey, redisKey.ToString())]);
             }
         }
     }

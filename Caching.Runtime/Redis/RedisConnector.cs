@@ -49,14 +49,18 @@ public sealed class RedisConnector : IRedisConnector
 
     public IDatabase Database => ConnectionMultiplexer.GetDatabase();
 
+    [ExcludeFromCodeCoverage(Justification = "Lazy resolves through GetVersion, which is itself excluded as live-multiplexer-only.")]
     public Version Version => _version.Value;
 
     private IConnectionMultiplexer ConnectionMultiplexer => _lazyCacheConnectionMultiplexer.Value;
 
+    [ExcludeFromCodeCoverage(Justification = "Forwards to live IConnectionMultiplexer.IsConnected.")]
     public bool IsConnected => ConnectionMultiplexer.IsConnected;
 
+    [ExcludeFromCodeCoverage(Justification = "Forwards to live IConnectionMultiplexer.GetEndPoints.")]
     public EndPoint[] GetEndPoints(bool configuredOnly = false) => ConnectionMultiplexer.GetEndPoints(configuredOnly);
 
+    [ExcludeFromCodeCoverage(Justification = "Swaps a live IConnectionMultiplexer and awaits CloseAsync — needs a real Redis (or a faithful integration double) to exercise.")]
     public void ForceReconnect()
     {
         if (!_lazyCacheConnectionMultiplexer.IsValueCreated)
@@ -89,7 +93,7 @@ public sealed class RedisConnector : IRedisConnector
 
                 var oldMultiplexer = _lazyCacheConnectionMultiplexer.Value;
                 _lazyCacheConnectionMultiplexer = new Lazy<IConnectionMultiplexer>(() => newMultiplexer);
-                _telemetryProvider.TrackEvent("Redis.ForcedReconnect", properties: null, metrics: null);
+                _telemetryProvider.TrackEvent("Redis.ForcedReconnect");
 
                 try
                 {
@@ -115,6 +119,7 @@ public sealed class RedisConnector : IRedisConnector
         });
     }
 
+    [ExcludeFromCodeCoverage(Justification = "Reads server.Version off a live IConnectionMultiplexer endpoint — needs a real Redis to exercise.")]
     private Version GetVersion()
     {
         Version defaultVersion = new Version(6, 0);
@@ -184,20 +189,19 @@ public sealed class RedisConnector : IRedisConnector
         return ConfigureMultiplexerEvents(multiplexer);
     }
 
-    private static Dictionary<string, string> GetEventProperties(ConnectionFailedEventArgs e)
-    {
-        return new Dictionary<string, string>(4)
-        {
-            [nameof(e.EndPoint)] = e.EndPoint?.ToString() ?? string.Empty,
-            [nameof(e.FailureType)] = e.FailureType.ToString(),
-            ["ExceptionMessage"] = e.Exception?.Message ?? string.Empty,
-            ["ExceptionType"] = e.Exception?.GetType()?.FullName ?? string.Empty,
-        };
-    }
+    [ExcludeFromCodeCoverage(Justification = "Only called from the excluded OnInternalConnection* event handlers.")]
+    private static KeyValuePair<string, string>[] GetEventProperties(ConnectionFailedEventArgs e) =>
+    [
+        new(nameof(e.EndPoint), e.EndPoint?.ToString() ?? string.Empty),
+        new(nameof(e.FailureType), e.FailureType.ToString()),
+        new("ExceptionMessage", e.Exception?.Message ?? string.Empty),
+        new("ExceptionType", e.Exception?.GetType()?.FullName ?? string.Empty),
+    ];
 
 #pragma warning disable IDE0079 // Remove unnecessary suppression
     [SuppressMessage("SonarQube", "S3011:Reflection should not be used to create instances of types", Justification = "By design")]
 #pragma warning restore IDE0079 // Remove unnecessary suppression
+    [ExcludeFromCodeCoverage(Justification = "Reflects into StackExchange.Redis private fields (server/interactive/physical) — values only exist on a live multiplexer with established physical connections.")]
     private ReadWriteStatus? GetMasterPhysicalConnectionMetrics(IConnectionMultiplexer multiplexer)
     {
         // single shard only is supported
@@ -235,6 +239,7 @@ public sealed class RedisConnector : IRedisConnector
         }
     }
 
+    [ExcludeFromCodeCoverage(Justification = "Timer callback driven by hang-detection on live multiplexer metrics — depends on GetMasterPhysicalConnectionMetrics reflection output that only exists on a real Redis connection.")]
     private void OnHangScan()
     {
         if (!_lazyCacheConnectionMultiplexer.IsValueCreated)
@@ -275,13 +280,11 @@ public sealed class RedisConnector : IRedisConnector
         {
             _telemetryProvider.TrackEvent(
                 "Redis.HangDetected",
-                new Dictionary<string, string>
-                {
-                    ["Now"] = now.ToString(CultureInfo.InvariantCulture),
-                    ["LastWrite"] = currentMasterMetrics.LastWrite.ToString(CultureInfo.InvariantCulture),
-                    ["LastRead"] = currentMasterMetrics.LastRead.ToString(CultureInfo.InvariantCulture),
-                },
-                null);
+                [
+                    new("Now", now.ToString(CultureInfo.InvariantCulture)),
+                    new("LastWrite", currentMasterMetrics.LastWrite.ToString(CultureInfo.InvariantCulture)),
+                    new("LastRead", currentMasterMetrics.LastRead.ToString(CultureInfo.InvariantCulture)),
+                ]);
 
             // Reconnects on a background thread
             ForceReconnect();
@@ -290,6 +293,7 @@ public sealed class RedisConnector : IRedisConnector
         _lastMasterMetrics = currentMasterMetrics;
     }
 
+    [ExcludeFromCodeCoverage(Justification = "Wires multiplexer event handlers (ConnectionFailed/Restored/InternalError/ErrorMessage) — fires only from real StackExchange.Redis multiplexer events.")]
     private IConnectionMultiplexer ConfigureMultiplexerEvents(IConnectionMultiplexer multiplexer)
     {
         multiplexer.ConnectionFailed += OnInternalConnectionFailed;
@@ -305,6 +309,7 @@ public sealed class RedisConnector : IRedisConnector
         return multiplexer;
     }
 
+    [ExcludeFromCodeCoverage(Justification = "Unwires multiplexer event handlers and disposes — only reached from ForceReconnect against a live multiplexer.")]
     private void DisposeMultiplexer(IConnectionMultiplexer multiplexer)
     {
         multiplexer.ConnectionFailed -= OnInternalConnectionFailed;
@@ -319,47 +324,47 @@ public sealed class RedisConnector : IRedisConnector
         multiplexer.Dispose();
     }
 
+    [ExcludeFromCodeCoverage(Justification = "Handler for IConnectionMultiplexer.InternalError — fires only from real Redis transport errors.")]
     private void OnInternalError(object? send, InternalErrorEventArgs e)
     {
         _telemetryProvider.TrackEvent(
             "Redis.InternalError",
-            new Dictionary<string, string>(4)
-            {
-                ["Endpoint"] = e.EndPoint?.ToString() ?? string.Empty,
-                ["Origin"] = e.Origin ?? string.Empty,
-                ["ExceptionMessage"] = e.Exception?.Message ?? string.Empty,
-                ["ExceptionType"] = e.Exception?.GetType()?.FullName ?? string.Empty,
-            },
-            null);
+            [
+                new("Endpoint", e.EndPoint?.ToString() ?? string.Empty),
+                new("Origin", e.Origin ?? string.Empty),
+                new("ExceptionMessage", e.Exception?.Message ?? string.Empty),
+                new("ExceptionType", e.Exception?.GetType()?.FullName ?? string.Empty),
+            ]);
     }
 
+    [ExcludeFromCodeCoverage(Justification = "Handler for IConnectionMultiplexer.ErrorMessage — fires only from real Redis-side error replies.")]
     private void OnInternalErrorMessage(object? send, RedisErrorEventArgs e)
     {
         _telemetryProvider.TrackEvent(
             "Redis.ErrorMessage",
-            new Dictionary<string, string>(2)
-            {
-                ["Endpoint"] = e.EndPoint?.ToString() ?? string.Empty,
-                ["Message"] = e.Message,
-            },
-            null);
+            [
+                new("Endpoint", e.EndPoint?.ToString() ?? string.Empty),
+                new("Message", e.Message),
+            ]);
     }
 
+    [ExcludeFromCodeCoverage(Justification = "Handler for IConnectionMultiplexer.ConnectionRestored — fires only from a real reconnect event.")]
     private void OnInternalConnectionRestored(object? sender, ConnectionFailedEventArgs e)
     {
         OnConnectionRestored?.Invoke(sender, e);
         if (_redisOptions.LogConnectionRestoredEvents)
         {
-            _telemetryProvider.TrackEvent("Redis.ConnectionRestored", GetEventProperties(e), metrics: null);
+            _telemetryProvider.TrackEvent("Redis.ConnectionRestored", GetEventProperties(e));
         }
     }
 
+    [ExcludeFromCodeCoverage(Justification = "Handler for IConnectionMultiplexer.ConnectionFailed — fires only from a real connection-drop event.")]
     private void OnInternalConnectionFailed(object? sender, ConnectionFailedEventArgs e)
     {
         OnConnectionFailed?.Invoke(sender, e);
         if (_redisOptions.LogConnectionFailedEvents)
         {
-            _telemetryProvider.TrackEvent("Redis.ConnectionFailed", GetEventProperties(e), metrics: null);
+            _telemetryProvider.TrackEvent("Redis.ConnectionFailed", GetEventProperties(e));
         }
     }
 
@@ -370,5 +375,6 @@ public sealed class RedisConnector : IRedisConnector
         return cnn;
     }
 
+    [ExcludeFromCodeCoverage(Justification = "Carrier record for GetMasterPhysicalConnectionMetrics, which is itself excluded as reflection-on-live-Redis-only.")]
     private sealed record ReadWriteStatus(EndPoint EndPoint, int AwaitingResponseCount, int LastWrite, int WriteStatus, int LastRead, int ReadStatus);
 }

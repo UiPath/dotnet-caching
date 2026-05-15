@@ -1,6 +1,7 @@
 ﻿using Microsoft.Extensions.Logging;
 using StackExchange.Redis;
 using UiPath.Platform.Caching.Telemetry;
+using UiPath.Platform.Caching.Tests.Telemetry;
 
 namespace UiPath.Platform.Caching.Tests.Broadcast;
 
@@ -16,8 +17,9 @@ public class ChangeTokenTests : IAsyncLifetime
     private ISet<string>? _acceptedEvents = null;
     private ISerializerProxy<RedisValue> _serializer = default!;
 
+    private readonly RecordingTelemetryProvider _telemetryProvider = new();
     private ChangeToken<RedisValue>? _sut = null;
-    private ChangeToken<RedisValue> Sut => _sut ??= new ChangeToken<RedisValue>(_key, _topic, _source, _serializer, _fixture.Freeze<ILogger<ChangeToken<RedisValue>>>(), _fixture.Freeze<ICachingTelemetryProvider>(), _acceptedEvents);
+    private ChangeToken<RedisValue> Sut => _sut ??= new ChangeToken<RedisValue>(_key, _topic, _source, _serializer, _fixture.Freeze<ILogger<ChangeToken<RedisValue>>>(), _telemetryProvider, _acceptedEvents);
 
     [Fact]
     public void Verify_ActiveChangeCallbacks()
@@ -179,7 +181,8 @@ public class ChangeTokenTests : IAsyncLifetime
             Type = _fixture.Create<string>(),
 
         });
-        _fixture.Create<ICachingTelemetryProvider>().Received().TrackMetric(Metrics.GetReadTopicMetricName(_topicKey), 123456789013, Arg.Any<Dictionary<string, string>>());
+        _telemetryProvider.Metrics.Should().ContainSingle(m =>
+            m.Name == Metrics.GetReadTopicMetricName(_topicKey) && m.Value == 123456789013);
         Sut.HasChanged.Should().BeTrue();
         Sut.MetadataHasChanged.Should().BeTrue();
         Sut.Metadata.Should().NotBeNull();
@@ -205,7 +208,8 @@ public class ChangeTokenTests : IAsyncLifetime
             Type = _fixture.Create<string>(),
 
         });
-        _fixture.Create<ICachingTelemetryProvider>().Received().TrackMetric(Metrics.GetReadTopicMetricName(_topicKey), 123456789013, Arg.Any<Dictionary<string, string>>());
+        _telemetryProvider.Metrics.Should().ContainSingle(m =>
+            m.Name == Metrics.GetReadTopicMetricName(_topicKey) && m.Value == 123456789013);
     }
 
 

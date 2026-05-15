@@ -5,6 +5,13 @@ namespace UiPath.Platform.Caching.Redis;
 
 public sealed class ConnectionStateMonitor : IConnectionState, IDisposable
 {
+    private const string EventConnectionRestored = "Redis.ConnectionRestored";
+    private const string EventConnectionFailed = "Redis.ConnectionFailed";
+    private const string EventReconnected = "Redis.Reconnected";
+    private const string EventEvaluateConnected = "Redis.EvaluateConnected";
+    private const string PropNow = "Now";
+    private const string PropConnected = "connected";
+
     private readonly IConnectionState[] _connectionStates;
     private Lazy<bool> _isConnected = default!;
     private readonly ICachingTelemetryProvider _telemetryProvider;
@@ -49,21 +56,21 @@ public sealed class ConnectionStateMonitor : IConnectionState, IDisposable
 
     private void InternalOnConnectionRestored(object? sender, EventArgs e)
     {
-        TrackEvent("ConnectionRestored");
+        TrackEvent(EventConnectionRestored);
         ResetIsConnected();
         OnConnectionRestored?.Invoke(this, EventArgs.Empty);
     }
 
     private void InternalOnConnectionFailed(object? sender, EventArgs e)
     {
-        TrackEvent("ConnectionFailed");
+        TrackEvent(EventConnectionFailed);
         ResetIsConnected();
         OnConnectionFailed?.Invoke(sender, e);
     }
 
     private void InternalOnReconnected(object? sender, EventArgs e)
     {
-        TrackEvent("Reconnected");
+        TrackEvent(EventReconnected);
         ResetIsConnected();
         OnReconnected?.Invoke(sender, e);
     }
@@ -71,7 +78,7 @@ public sealed class ConnectionStateMonitor : IConnectionState, IDisposable
     {
         _isConnected = new Lazy<bool>(() => {
             var ret = Array.TrueForAll(_connectionStates, static x => x.IsConnected);
-            TrackEvent("EvaluateConnected", new KeyValuePair<string, string>("connected", ret.ToString()));
+            TrackEvent(EventEvaluateConnected, new KeyValuePair<string, string>(PropConnected, ret.ToString()));
             return ret;
         });
 
@@ -96,16 +103,9 @@ public sealed class ConnectionStateMonitor : IConnectionState, IDisposable
 
     private void TrackEvent(string eventName, params KeyValuePair<string, string>[] data)
     {
-        var properties = new Dictionary<string, string>
-        {
-            ["Now"] = Environment.TickCount.ToString(CultureInfo.InvariantCulture),
-        };
-
-        foreach (var item in data)
-        {
-            properties[item.Key] = item.Value;
-        }
-
-        _telemetryProvider.TrackEvent($"Redis.{eventName}", properties, null);
+        var properties = new KeyValuePair<string, string>[data.Length + 1];
+        properties[0] = new(PropNow, Environment.TickCount.ToString(CultureInfo.InvariantCulture));
+        Array.Copy(data, 0, properties, 1, data.Length);
+        _telemetryProvider.TrackEvent(eventName, properties);
     }
 }

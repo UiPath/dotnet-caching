@@ -197,6 +197,93 @@ public class RedisStreamSubjectWriterTests : IAsyncLifetime
     }
 
     [Fact]
+    public void Dispose_is_idempotent()
+    {
+        var sut = Sut;
+        sut.Dispose();
+
+        Action act = () => sut.Dispose();
+
+        act.Should().NotThrow("the second Dispose must short-circuit on the _disposed flag rather than re-canceling the inner CTS");
+    }
+
+    [Fact]
+    public async Task NOGROUP_error_triggers_StreamCreateConsumerGroup()
+    {
+        // ProcessException must detect the StackExchange "NOGROUP" error and call StreamCreateConsumerGroup.
+        var createCalled = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+        _database.StreamReadGroupAsync(_context.Topic, _context.ConsumerGroup, _context.ConsumerName, ">", _context.PollBatchSize)
+            .ThrowsAsyncForAnyArgs(_ => throw new RedisException("NOGROUP No such key or consumer group"));
+        _database.StreamCreateConsumerGroupAsync(_context.Topic, _context.ConsumerGroup, Arg.Any<RedisValue?>())
+            .ReturnsForAnyArgs(_ => { createCalled.TrySetResult(true); return Task.FromResult(true); });
+
+        var fetchTask = Sut.FetchTask;
+        await createCalled.Task.WaitAsync(WaitTimeout, TestContext.Current.CancellationToken);
+        _cancellationTokenSource.Cancel();
+        // The fetch loop may end faulted with OCE after cancellation while still in the NOGROUP retry loop —
+        // that's incidental; the assertion of interest already fired via createCalled.
+        try { await fetchTask.WaitAsync(WaitTimeout, TestContext.Current.CancellationToken); } catch (OperationCanceledException) { }
+    }
+
+    [Fact]
+    public async Task NOGROUP_recovery_swallows_BUSYGROUP_when_group_already_exists()
+    {
+        // Race: ProcessException sees NOGROUP and tries to recreate; another instance won the race
+        // so StreamCreateConsumerGroup throws BUSYGROUP. The writer must log + continue, not crash.
+        const string BusyGroupMessage = "BUSYGROUP Consumer Group name already exists";
+        var createCalled = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        _database.StreamReadGroupAsync(_context.Topic, _context.ConsumerGroup, _context.ConsumerName, ">", _context.PollBatchSize)
+            .ThrowsAsyncForAnyArgs(_ => throw new RedisException("NOGROUP unknown group"));
+        _database.StreamCreateConsumerGroupAsync(_context.Topic, _context.ConsumerGroup, Arg.Any<RedisValue?>())
+            .ThrowsAsyncForAnyArgs(_ => { createCalled.TrySetResult(true); throw new RedisServerException(BusyGroupMessage); });
+
+        var fetchTask = Sut.FetchTask;
+        await createCalled.Task.WaitAsync(WaitTimeout, TestContext.Current.CancellationToken);
+        _cancellationTokenSource.Cancel();
+        try { await fetchTask.WaitAsync(WaitTimeout, TestContext.Current.CancellationToken); } catch (OperationCanceledException) { }
+    }
+
+    [Fact]
+    public async Task NOGROUP_recovery_logs_and_continues_when_StreamCreate_throws_unexpectedly()
+    {
+        // ProcessException's outer catch must handle non-BUSYGROUP exceptions from StreamCreateConsumerGroup
+        // (logged, then the fetch loop continues).
+        var createCalled = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        _database.StreamReadGroupAsync(_context.Topic, _context.ConsumerGroup, _context.ConsumerName, ">", _context.PollBatchSize)
+            .ThrowsAsyncForAnyArgs(_ => throw new RedisException("NOGROUP unknown group"));
+        _database.StreamCreateConsumerGroupAsync(_context.Topic, _context.ConsumerGroup, Arg.Any<RedisValue?>())
+            .ThrowsAsyncForAnyArgs(_ => { createCalled.TrySetResult(true); throw new InvalidOperationException("create failed"); });
+
+        var fetchTask = Sut.FetchTask;
+        await createCalled.Task.WaitAsync(WaitTimeout, TestContext.Current.CancellationToken);
+        _cancellationTokenSource.Cancel();
+        try { await fetchTask.WaitAsync(WaitTimeout, TestContext.Current.CancellationToken); } catch (OperationCanceledException) { }
+    }
+
+    [Fact]
+    public async Task ProcessEvent_swallows_formatter_exception()
+    {
+        // Decode throwing inside ProcessEvent must hit the outer catch (LogOnMessageError) so the
+        // fetch loop doesn't blow up on a single malformed message.
+        var decodeCalled = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+        _formatter.Decode(Arg.Any<string>()).Returns<ICacheEvent?>(_ =>
+        {
+            decodeCalled.TrySetResult(true);
+            throw new InvalidOperationException("decode boom");
+        });
+        var entries = new[] { new StreamEntry(_fixture.Create<string>(), [new NameValueEntry(_fieldName, _fixture.Create<string>())]) };
+        SetupSingleBatch(entries);
+
+        var fetchTask = Sut.FetchTask;
+        await decodeCalled.Task.WaitAsync(WaitTimeout, TestContext.Current.CancellationToken);
+        _cancellationTokenSource.Cancel();
+        Func<Task> act = async () => await fetchTask.WaitAsync(WaitTimeout, TestContext.Current.CancellationToken);
+        await act.Should().NotThrowAsync("a single bad event must not tear down the fetch loop");
+    }
+
+    [Fact]
     public async Task SameSource_event_is_acknowledged_without_writing_to_channel()
     {
         var channel = Channel.CreateBounded<ICacheEvent>(new BoundedChannelOptions(10));

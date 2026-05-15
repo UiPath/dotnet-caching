@@ -29,6 +29,8 @@ public class RedisPubSubTopicTests(ITestContextAccessor testContextAccessor) : I
     private bool _isConnected = true;
 
     private RedisPubSubTopic<ICacheEvent>? _sut;
+    private readonly TaskCompletionSource _subscribeCalled = new(TaskCreationOptions.RunContinuationsAsynchronously);
+    private readonly TaskCompletionSource _unsubscribeCalled = new(TaskCreationOptions.RunContinuationsAsynchronously);
     private async Task<RedisPubSubTopic<ICacheEvent>> Sut(int delayMultiplier = 2)
     {
         if (_sut != null)
@@ -39,6 +41,9 @@ public class RedisPubSubTopicTests(ITestContextAccessor testContextAccessor) : I
         await Task.Delay(_delay.Multiply(delayMultiplier), testContextAccessor.Current.CancellationToken);
         return _sut;
     }
+
+    private Task WaitForSubscribeAsync() =>
+        _subscribeCalled.Task.WaitAsync(TimeSpan.FromSeconds(2), testContextAccessor.Current.CancellationToken);
 
     [Fact]
     public async Task Publish_WhenDisconnected()
@@ -56,6 +61,7 @@ public class RedisPubSubTopicTests(ITestContextAccessor testContextAccessor) : I
         var sut = await Sut();
         var disposable = sut.Subscribe(_observer);
         disposable.Should().NotBeNull();
+        await WaitForSubscribeAsync();
         _subscriber.Received().Subscribe(Arg.Is<RedisChannel>(rc => rc.ToString().EndsWith((string)_topicKey)), Arg.Any<Action<RedisChannel, RedisValue>>(), Arg.Any<CommandFlags>());
     }
 
@@ -132,7 +138,7 @@ public class RedisPubSubTopicTests(ITestContextAccessor testContextAccessor) : I
     {
         var sut = await Sut();
         var disposable = sut.Subscribe(_observer);
-        await Task.Delay(_delay.Multiply(10), testContextAccessor.Current.CancellationToken);
+        await WaitForSubscribeAsync();
         _subscriber.Received().Subscribe(Arg.Any<RedisChannel>(), Arg.Any<Action<RedisChannel, RedisValue>>(), Arg.Any<CommandFlags>());
         await _subscriber.DidNotReceive().SubscribeAsync(Arg.Any<RedisChannel>(), Arg.Any<Action<RedisChannel, RedisValue>>(), Arg.Any<CommandFlags>());
         disposable.Should().NotBeNull();
@@ -144,7 +150,7 @@ public class RedisPubSubTopicTests(ITestContextAccessor testContextAccessor) : I
     {
         var sut = await Sut(5);
         sut.Dispose();
-        await Task.Delay(_delay.Multiply(10), testContextAccessor.Current.CancellationToken);
+        await _unsubscribeCalled.Task.WaitAsync(TimeSpan.FromSeconds(2), testContextAccessor.Current.CancellationToken);
         _subscriber.Received().Unsubscribe(Arg.Any<RedisChannel>(), Arg.Any<Action<RedisChannel, RedisValue>?>(), Arg.Any<CommandFlags>());
         _topicKey.Name.Should().BeEquivalentTo(_actualRedisChannel);
     }
@@ -242,6 +248,13 @@ public class RedisPubSubTopicTests(ITestContextAccessor testContextAccessor) : I
             {
                 _actualRedisChannel = c.Arg<RedisChannel>().ToString();
                 _handler = c.Arg<Action<RedisChannel, RedisValue>>();
+                _subscribeCalled.TrySetResult();
+            });
+        _subscriber.When(x => x.Unsubscribe(Arg.Any<RedisChannel>(), Arg.Any<Action<RedisChannel, RedisValue>?>(), Arg.Any<CommandFlags>()))
+            .Do(c =>
+            {
+                _actualRedisChannel = c.Arg<RedisChannel>().ToString();
+                _unsubscribeCalled.TrySetResult();
             });
         _formatter = new TestCacheEventFormatterProxy();
         _fixture.Inject<IEventFormatterProxy<ICacheEvent>>(_formatter);
