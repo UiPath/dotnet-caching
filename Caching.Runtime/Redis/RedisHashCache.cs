@@ -138,13 +138,13 @@ public sealed partial class RedisHashCache : RedisCacheBase, IHashCache
             }
 
             var values = new Dictionary<string, T?>();
-            var hasMarker = false;
+            var hasEmptyMarker = false;
             foreach (var hashEntry in hashEntries)
             {
                 var name = hashEntry.Name.ToString();
                 if (name == KnownFieldNames.MetadataKey)
                 {
-                    hasMarker = true;
+                    hasEmptyMarker = hashEntry.Value.Length() == 0;
                     continue;
                 }
                 if (KnownFieldNames.IsSystemField(name))
@@ -156,7 +156,7 @@ public sealed partial class RedisHashCache : RedisCacheBase, IHashCache
                 values.Add(name, DeserializeField<T>(v));
             }
             ret = values;
-            found = values.Count > 0 || (hasMarker && _cacheNullValues);
+            found = values.Count > 0 || (hasEmptyMarker && _cacheNullValues);
             operation.Stop();
         }
         catch (Exception ex)
@@ -604,6 +604,7 @@ public sealed partial class RedisHashCache : RedisCacheBase, IHashCache
 
         Dictionary<string, T?> values = [];
         IDictionary<string, string?>? extendedProps = default;
+        var hasEmptyMarker = false;
 
         for (var i = 0; i < hashEntries.Length; i++)
         {
@@ -614,7 +615,11 @@ public sealed partial class RedisHashCache : RedisCacheBase, IHashCache
 
             if (string.Equals(key, KnownFieldNames.MetadataKey))
             {
-                if (v.Length() > 0)
+                if (v.Length() == 0)
+                {
+                    hasEmptyMarker = true;
+                }
+                else
                 {
                     extendedProps = _serializer.Deserialize<IDictionary<string, string?>>(v);
                 }
@@ -628,7 +633,7 @@ public sealed partial class RedisHashCache : RedisCacheBase, IHashCache
             values.Add(key, DeserializeField<T>(v));
         }
 
-        if (values.Count == 0 && !_cacheNullValues)
+        if (values.Count == 0 && (!_cacheNullValues || !hasEmptyMarker))
         {
             return Default<T>();
         }

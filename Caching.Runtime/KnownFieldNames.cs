@@ -16,5 +16,5 @@ internal static class KnownFieldNames
 
     /// <summary>True for the actual system field names (kept in sync with the per-field read validation).</summary>
     public static bool IsSystemField(string field) =>
-        field == MetadataKey || field == ExpirationKey;
+        field == MetadataKey;
 }

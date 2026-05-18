@@ -467,6 +467,43 @@ public class RedisHashCacheTests(ITestContextAccessor testContextAccessor) : IAs
     }
 
     [Fact]
+    public async Task GetCacheEntry_legacy_nonempty_metadata_only_hash_returns_miss_when_CacheNullValues_true()
+    {
+        _redisCacheOptions.CacheNullValues = true;
+        _sut = null;
+        var legacyMetadata = _serializer.Serialize(new Dictionary<string, string?> { ["legacy"] = "v" });
+        _database.KeyExistsAsync(_redisKey, CommandFlags.PreferReplica).Returns(_ => true);
+        _transaction.HashGetAllAsync(_redisKey, CommandFlags.PreferReplica)
+            .Returns(new[] { new HashEntry(KnownFieldNames.MetadataKey, legacyMetadata) });
+        _transaction.KeyExpireTimeAsync(_redisKey, CommandFlags.PreferReplica).Returns((DateTime?)_now.AddMinutes(5).UtcDateTime);
+        _transaction.ExecuteAsync(Arg.Any<CommandFlags>()).Returns(true);
+
+        var actual = await Sut.GetCacheEntryAsync<string>(_cacheKey, testContextAccessor.Current.CancellationToken);
+
+        actual.Found.Should().BeFalse("only Length==0 _metadata_ is the cached-empty sentinel; legacy hashes containing non-empty _metadata_ with no user fields must remain misses to avoid being reinterpreted on opt-in");
+    }
+
+    [Fact]
+    public async Task GetOrAdd_legacy_nonempty_metadata_only_hash_runs_generator_when_CacheNullValues_true()
+    {
+        _redisCacheOptions.CacheNullValues = true;
+        _sut = null;
+        var legacyMetadata = _serializer.Serialize(new Dictionary<string, string?> { ["legacy"] = "v" });
+        _database.HashGetAllAsync(_redisKey, CommandFlags.PreferReplica)
+            .Returns(_ => new[] { new HashEntry(KnownFieldNames.MetadataKey, legacyMetadata) });
+        var generatorCalled = false;
+        Func<CancellationToken, Task<IDictionary<string, string?>>> generator = _ =>
+        {
+            generatorCalled = true;
+            return Task.FromResult<IDictionary<string, string?>>(new Dictionary<string, string?> { ["fresh"] = "v" });
+        };
+
+        await Sut.GetOrAddAsync(_cacheKey, generator, _fixture.Create<TimeSpan?>(), testContextAccessor.Current.CancellationToken);
+
+        generatorCalled.Should().BeTrue("only Length==0 _metadata_ is the cached-empty sentinel in the GetOrAdd probe path; legacy non-empty _metadata_-only hashes must remain misses");
+    }
+
+    [Fact]
     public async Task GetOrAdd_marker_only_hash_runs_generator_when_CacheNullValues_false()
     {
         _redisCacheOptions.CacheNullValues = false;
@@ -553,12 +590,10 @@ public class RedisHashCacheTests(ITestContextAccessor testContextAccessor) : IAs
         await _transaction.Received(1).KeyDeleteAsync(_redisKey);
     }
 
-    [Theory]
-    [InlineData("_metadata_")]
-    [InlineData("_expiration_")]
-    public async Task GetItemAsync_rejects_real_system_field_names(string systemField)
+    [Fact]
+    public async Task GetItemAsync_rejects_metadata_system_field_name()
     {
-        Func<Task> act = async () => await Sut.GetItemAsync<string>(_cacheKey, systemField, testContextAccessor.Current.CancellationToken);
+        Func<Task> act = async () => await Sut.GetItemAsync<string>(_cacheKey, KnownFieldNames.MetadataKey, testContextAccessor.Current.CancellationToken);
         await act.Should().ThrowAsync<ArgumentException>()
             .Where(e => e.Message.Contains("reserved for system metadata"));
     }
@@ -572,6 +607,17 @@ public class RedisHashCacheTests(ITestContextAccessor testContextAccessor) : IAs
 
         var actual = await Sut.GetItemAsync<string>(_cacheKey, "_legacy_field_", testContextAccessor.Current.CancellationToken);
         actual.Should().Be(expected);
+    }
+
+    [Fact]
+    public async Task GetItemAsync_allows_legacy_expiration_field_name()
+    {
+        var expected = _fixture.Create<string>();
+        _database.HashGetAsync(_redisKey, (RedisValue)KnownFieldNames.ExpirationKey, CommandFlags.PreferReplica)
+            .Returns(_ => (RedisValue)JsonConvert.SerializeObject(expected));
+
+        var actual = await Sut.GetItemAsync<string>(_cacheKey, KnownFieldNames.ExpirationKey, testContextAccessor.Current.CancellationToken);
+        actual.Should().Be(expected, "before this PR _expiration_ was a regular user field name (only _metadata_ was reserved); legacy data writing it must remain readable");
     }
 
     [Fact]
@@ -631,19 +677,21 @@ public class RedisHashCacheTests(ITestContextAccessor testContextAccessor) : IAs
     }
 
     [Fact]
-    public async Task GetAsync_all_fields_skips_expiration_system_field()
+    public async Task GetAsync_all_fields_returns_legacy_expiration_field_as_user_data()
     {
-        var expected = new Dictionary<string, string> { ["a"] = "1" };
-        var entries = expected
-            .Select(kv => new HashEntry(kv.Key, JsonConvert.SerializeObject(kv.Value)))
-            .Append(new HashEntry(KnownFieldNames.ExpirationKey, "future-system-bytes"))
-            .ToArray();
+        var expectedExpirationValue = _fixture.Create<string>();
+        var entries = new[]
+        {
+            new HashEntry("a", JsonConvert.SerializeObject("1")),
+            new HashEntry(KnownFieldNames.ExpirationKey, JsonConvert.SerializeObject(expectedExpirationValue)),
+        };
         _database.HashGetAllAsync(_redisKey, CommandFlags.PreferReplica).Returns(entries);
 
         var actual = await Sut.GetAsync<string>(_cacheKey, testContextAccessor.Current.CancellationToken);
 
-        actual.Should().BeEquivalentTo(expected);
-        actual.Should().NotContainKey(KnownFieldNames.ExpirationKey);
+        actual.Should().ContainKey(KnownFieldNames.ExpirationKey, "_expiration_ is not reserved by this cache; only _metadata_ is. Legacy data using this field name must round-trip.");
+        actual[KnownFieldNames.ExpirationKey].Should().Be(expectedExpirationValue);
+        actual["a"].Should().Be("1");
     }
 
     [Fact]
