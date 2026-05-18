@@ -502,12 +502,27 @@ public sealed partial class RedisHashCache : RedisCacheBase, IHashCache
             {
                 if (metadata.Count > 0)
                 {
-                    ret = await _write.ExecuteAsync(async token =>
+                    var metadataValue = _serializer.Serialize(metadata);
+                    if (_cacheNullValues)
                     {
-                        token.ThrowIfCancellationRequested();
-                        await Database.HashSetAsync(redisKey, KnownFieldNames.MetadataKey, _serializer.Serialize(metadata), When.Always, CommandFlags.DemandMaster).ConfigureAwait(false);
-                        return true;
-                    }, default, token).ConfigureAwait(false);
+                        ret = await _write.ExecuteAsync(async token =>
+                        {
+                            token.ThrowIfCancellationRequested();
+                            var transaction = Database.CreateTransaction();
+                            transaction.AddCondition(Condition.KeyExists(redisKey));
+                            _ = transaction.HashSetAsync(redisKey, KnownFieldNames.MetadataKey, metadataValue, When.Always, CommandFlags.DemandMaster);
+                            return await transaction.ExecuteAsync(CommandFlags.DemandMaster).ConfigureAwait(false);
+                        }, default, token).ConfigureAwait(false);
+                    }
+                    else
+                    {
+                        ret = await _write.ExecuteAsync(async token =>
+                        {
+                            token.ThrowIfCancellationRequested();
+                            await Database.HashSetAsync(redisKey, KnownFieldNames.MetadataKey, metadataValue, When.Always, CommandFlags.DemandMaster).ConfigureAwait(false);
+                            return true;
+                        }, default, token).ConfigureAwait(false);
+                    }
                 }
                 else if (_cacheNullValues)
                 {

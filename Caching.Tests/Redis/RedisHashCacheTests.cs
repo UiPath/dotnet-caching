@@ -519,6 +519,21 @@ public class RedisHashCacheTests(ITestContextAccessor testContextAccessor) : IAs
     }
 
     [Fact]
+    public async Task SetMetadataAsync_nonempty_with_CacheNullValues_uses_KeyExists_condition()
+    {
+        _redisCacheOptions.CacheNullValues = true;
+        _sut = null;
+        var metadata = _fixture.Create<IDictionary<string, string?>>();
+        _database.KeyExistsAsync(_redisKey, CommandFlags.PreferReplica).Returns(true);
+        _transaction.ExecuteAsync(Arg.Any<CommandFlags>()).Returns(true);
+
+        await Sut.SetMetadataAsync<string>(_cacheKey, metadata, testContextAccessor.Current.CancellationToken);
+
+        _transaction.Received(1).AddCondition(Arg.Any<Condition>());
+        await _database.DidNotReceive().HashSetAsync(_redisKey, Arg.Any<RedisValue>(), Arg.Any<RedisValue>(), Arg.Any<When>(), Arg.Any<CommandFlags>());
+    }
+
+    [Fact]
     public async Task GetOrAdd_empty_result_forces_KeyReplace_even_when_caller_passes_HashReplace()
     {
         _redisCacheOptions.CacheNullValues = true;

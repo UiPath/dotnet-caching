@@ -2,11 +2,37 @@ using Microsoft.Extensions.DependencyInjection;
 using StackExchange.Redis;
 using UiPath.Platform.Caching.Broadcast;
 using UiPath.Platform.Caching.Config;
+using UiPath.Platform.Caching.Redis;
 
 namespace UiPath.Platform.Caching.Tests;
 
 public class InMemoryRedisCollectionExtensionsTests
 {
+    [Fact]
+    public void AddInMemoryRedis_with_CacheNullValues_true_propagates_to_RedisCacheOptions()
+    {
+        var services = new ServiceCollection();
+        services.AddLogging();
+        services.AddCaching(builder => builder.AddInMemoryRedis(opt => opt.CacheNullValues = true));
+        using var provider = services.BuildServiceProvider();
+
+        var redisOptions = provider.GetRequiredService<IOptions<RedisCacheOptions>>().Value;
+        redisOptions.CacheNullValues.Should().BeTrue("the post-configurer wired by AddInMemoryRedis must force the inner Redis layer on so cached nulls are visible across nodes");
+    }
+
+    [Fact]
+    public void AddInMemoryRedis_with_CacheNullValues_false_leaves_RedisCacheOptions_off()
+    {
+        var services = new ServiceCollection();
+        services.AddLogging();
+        services.AddCaching(builder => builder.AddInMemoryRedis(opt => opt.CacheNullValues = false));
+        using var provider = services.BuildServiceProvider();
+
+        var redisOptions = provider.GetRequiredService<IOptions<RedisCacheOptions>>().Value;
+        redisOptions.CacheNullValues.Should().BeFalse();
+    }
+
+
     [Fact]
     public void Multiple_AddInMemoryRedis_in_same_process_each_register_real_change_token_factory()
     {

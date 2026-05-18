@@ -837,6 +837,42 @@ public class RedisCacheTests(ITestContextAccessor testContextAccessor) : IAsyncL
     }
 
     [Fact]
+    public async Task GetCacheEntriesAsync_returns_cached_null_when_CacheNullValues_true_and_value_is_empty()
+    {
+        _cacheOptions.CacheNullValues = true;
+        var expectedValue = _fixture.Create<string>();
+        var expectedTtl = TimeSpan.FromMinutes(15);
+        _transaction.StringGetAsync(Arg.Is<RedisKey[]>(k => k.Contains(_redisKey) && k.Contains(_redisMultiKey)), CommandFlags.PreferReplica)
+            .Returns(new RedisValue[] { RedisValue.EmptyString, _serializer.Serialize(expectedValue) });
+        _transaction.KeyTimeToLiveAsync(Arg.Any<RedisKey>(), CommandFlags.PreferReplica).Returns(expectedTtl);
+        _transaction.ExecuteAsync(Arg.Any<CommandFlags>()).Returns(true);
+
+        var entries = await Sut.GetCacheEntriesAsync<string>(new CacheKey[] { _cacheKey, _multiKey }, testContextAccessor.Current.CancellationToken);
+
+        entries.Should().HaveCount(2);
+        entries[0].Value.Found.Should().BeTrue("Length==0 with CacheNullValues=true is the explicit cached-null sentinel in the batched path");
+        entries[0].Value.Value.Should().BeNull();
+        entries[0].Value.Expiration.Should().Be(_clock.UtcNow.Add(expectedTtl));
+        entries[1].Value.Found.Should().BeTrue();
+        entries[1].Value.Value.Should().Be(expectedValue);
+    }
+
+    [Fact]
+    public async Task GetCacheEntriesAsync_returns_miss_for_empty_value_when_CacheNullValues_false()
+    {
+        _cacheOptions.CacheNullValues = false;
+        _transaction.StringGetAsync(Arg.Is<RedisKey[]>(k => k.Contains(_redisKey) && k.Contains(_redisMultiKey)), CommandFlags.PreferReplica)
+            .Returns(new RedisValue[] { RedisValue.EmptyString, RedisValue.EmptyString });
+        _transaction.KeyTimeToLiveAsync(Arg.Any<RedisKey>(), CommandFlags.PreferReplica).Returns(TimeSpan.FromMinutes(15));
+        _transaction.ExecuteAsync(Arg.Any<CommandFlags>()).Returns(true);
+
+        var entries = await Sut.GetCacheEntriesAsync<string>(new CacheKey[] { _cacheKey, _multiKey }, testContextAccessor.Current.CancellationToken);
+
+        entries.Should().HaveCount(2);
+        entries.Should().AllSatisfy(kv => kv.Value.Found.Should().BeFalse("the empty-value sentinel must be ignored when the opt-in is off"));
+    }
+
+    [Fact]
     public async Task SetAsync_writes_empty_value_when_CacheNullValues_true_and_value_is_null()
     {
         _cacheOptions.CacheNullValues = true;
