@@ -380,6 +380,25 @@ public class RedisCacheTests(ITestContextAccessor testContextAccessor) : IAsyncL
     }
 
     [Fact]
+    public async Task GetOrAdd_when_disconnected_runs_generator_without_redis_probe()
+    {
+        _isConnected = false;
+        var expected = _fixture.Create<string>();
+        var generatorCalled = false;
+        Func<CancellationToken, Task<string?>> generator = _ =>
+        {
+            generatorCalled = true;
+            return Task.FromResult<string?>(expected);
+        };
+
+        var actual = await Sut.GetOrAddAsync(_cacheKey, generator, TimeSpan.FromSeconds(5), testContextAccessor.Current.CancellationToken);
+
+        actual.Should().Be(expected);
+        generatorCalled.Should().BeTrue();
+        await _database.DidNotReceive().StringGetAsync(_redisKey, Arg.Any<CommandFlags>());
+    }
+
+    [Fact]
     public async Task Refresh_timespan_works_as_expected()
     {
         var expiration =  _clock.UtcNow.AddDays(1);
@@ -772,6 +791,142 @@ public class RedisCacheTests(ITestContextAccessor testContextAccessor) : IAsyncL
     {
         Action act = () => Sut.Dispose();
         act.Should().NotThrow();
+    }
+
+    [Fact]
+    public async Task GetCacheEntryAsync_returns_miss_for_RedisValue_Null()
+    {
+        _cacheOptions.CacheNullValues = true;
+        _transaction.StringGetAsync(_redisKey, CommandFlags.PreferReplica)
+            .Returns(RedisValue.Null);
+        _transaction.KeyExpireTimeAsync(_redisKey, CommandFlags.PreferReplica).Returns((DateTime?)null);
+        _transaction.ExecuteAsync(Arg.Any<CommandFlags>()).Returns(true);
+
+        var entry = await Sut.GetCacheEntryAsync<string>(_cacheKey, testContextAccessor.Current.CancellationToken);
+
+        entry.Found.Should().BeFalse();
+    }
+
+    [Fact]
+    public async Task GetCacheEntryAsync_returns_cached_null_when_CacheNullValues_true_and_value_is_empty()
+    {
+        _cacheOptions.CacheNullValues = true;
+        _transaction.StringGetAsync(_redisKey, CommandFlags.PreferReplica)
+            .Returns(RedisValue.EmptyString);
+        _transaction.KeyExpireTimeAsync(_redisKey, CommandFlags.PreferReplica).Returns(_now.AddMinutes(5).UtcDateTime);
+        _transaction.ExecuteAsync(Arg.Any<CommandFlags>()).Returns(true);
+
+        var entry = await Sut.GetCacheEntryAsync<string>(_cacheKey, testContextAccessor.Current.CancellationToken);
+
+        entry.Found.Should().BeTrue("Length==0 with CacheNullValues=true is the explicit cached-null sentinel");
+        entry.Value.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task GetCacheEntryAsync_returns_miss_for_empty_value_when_CacheNullValues_false()
+    {
+        _cacheOptions.CacheNullValues = false;
+        _transaction.StringGetAsync(_redisKey, CommandFlags.PreferReplica)
+            .Returns(RedisValue.EmptyString);
+        _transaction.KeyExpireTimeAsync(_redisKey, CommandFlags.PreferReplica).Returns(_now.AddMinutes(5).UtcDateTime);
+        _transaction.ExecuteAsync(Arg.Any<CommandFlags>()).Returns(true);
+
+        var entry = await Sut.GetCacheEntryAsync<string>(_cacheKey, testContextAccessor.Current.CancellationToken);
+
+        entry.Found.Should().BeFalse();
+    }
+
+    [Fact]
+    public async Task SetAsync_writes_empty_value_when_CacheNullValues_true_and_value_is_null()
+    {
+        _cacheOptions.CacheNullValues = true;
+        RedisValue? captured = null;
+        _database.StringSetAsync(_redisKey, Arg.Do<RedisValue>(v => captured = v), Arg.Any<TimeSpan?>(), When.Always, Arg.Any<CommandFlags>())
+            .Returns(true);
+
+        var ok = await Sut.SetAsync<string>(_cacheKey, value: null, testContextAccessor.Current.CancellationToken);
+
+        ok.Should().BeTrue();
+        captured.HasValue.Should().BeTrue();
+        captured!.Value.Length().Should().Be(0, "explicit null caching writes Redis EmptyString (Length==0), not a JSON 'null' literal");
+        await _database.DidNotReceive().KeyDeleteAsync(_redisKey, Arg.Any<CommandFlags>());
+    }
+
+    [Fact]
+    public async Task SetAsync_deletes_key_when_CacheNullValues_false_and_value_is_null()
+    {
+        _cacheOptions.CacheNullValues = false;
+        var ok = await Sut.SetAsync<string>(_cacheKey, value: null, testContextAccessor.Current.CancellationToken);
+
+        ok.Should().BeTrue();
+        await _database.Received().KeyDeleteAsync(_redisKey, Arg.Any<CommandFlags>());
+        await _database.DidNotReceive().StringSetAsync(_redisKey, Arg.Any<RedisValue>(), Arg.Any<TimeSpan?>(), Arg.Any<When>(), Arg.Any<CommandFlags>());
+    }
+
+    [Fact]
+    public async Task SetAsync_null_with_past_expiration_deletes_even_when_CacheNullValues_true()
+    {
+        _cacheOptions.CacheNullValues = true;
+        var pastExpiration = _clock.UtcNow.AddMinutes(-5);
+
+        var ok = await Sut.SetAsync<string>(_cacheKey, value: null, pastExpiration, testContextAccessor.Current.CancellationToken);
+
+        ok.Should().BeTrue();
+        await _database.Received().KeyDeleteAsync(_redisKey, Arg.Any<CommandFlags>());
+        await _database.DidNotReceive().StringSetAsync(_redisKey, Arg.Any<RedisValue>(), Arg.Any<TimeSpan?>(), Arg.Any<When>(), Arg.Any<CommandFlags>());
+    }
+
+    [Fact]
+    public async Task GetOrAddAsync_returns_cached_null_without_invoking_generator_when_CacheNullValues_true()
+    {
+        _cacheOptions.CacheNullValues = true;
+        _database.StringGetAsync(_redisKey, Arg.Is<CommandFlags>(f => f.HasFlag(CommandFlags.PreferReplica)))
+            .Returns(RedisValue.EmptyString);
+        var generatorCalled = false;
+
+        var ret = await Sut.GetOrAddAsync<string>(
+            _cacheKey,
+            _ => { generatorCalled = true; return Task.FromResult<string?>("fresh"); },
+            testContextAccessor.Current.CancellationToken);
+
+        ret.Should().BeNull();
+        generatorCalled.Should().BeFalse("an explicit cached null must short-circuit the generator");
+    }
+
+    [Fact]
+    public async Task GetOrAddAsync_stores_null_when_generator_yields_null_and_CacheNullValues_true()
+    {
+        _cacheOptions.CacheNullValues = true;
+        _database.StringGetAsync(_redisKey, Arg.Is<CommandFlags>(f => f.HasFlag(CommandFlags.PreferReplica)))
+            .Returns(RedisValue.Null);
+        RedisValue? captured = null;
+        _database.StringSetAsync(_redisKey, Arg.Do<RedisValue>(v => captured = v), Arg.Any<TimeSpan?>(), When.Always, Arg.Any<CommandFlags>())
+            .Returns(true);
+
+        var ret = await Sut.GetOrAddAsync<string>(
+            _cacheKey,
+            _ => Task.FromResult<string?>(null),
+            testContextAccessor.Current.CancellationToken);
+
+        ret.Should().BeNull();
+        captured.HasValue.Should().BeTrue("a null generator result must be persisted when CacheNullValues=true");
+        captured!.Value.Length().Should().Be(0);
+    }
+
+    [Fact]
+    public async Task GetOrAddAsync_does_not_store_null_when_generator_yields_null_and_CacheNullValues_false()
+    {
+        _cacheOptions.CacheNullValues = false;
+        _database.StringGetAsync(_redisKey, Arg.Is<CommandFlags>(f => f.HasFlag(CommandFlags.PreferReplica)))
+            .Returns(RedisValue.Null);
+
+        var ret = await Sut.GetOrAddAsync<string>(
+            _cacheKey,
+            _ => Task.FromResult<string?>(null),
+            testContextAccessor.Current.CancellationToken);
+
+        ret.Should().BeNull();
+        await _database.DidNotReceiveWithAnyArgs().StringSetAsync(default, default, default, default, default);
     }
 
     public ValueTask DisposeAsync()

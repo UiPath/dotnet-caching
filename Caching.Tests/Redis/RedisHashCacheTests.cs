@@ -366,6 +366,294 @@ public class RedisHashCacheTests(ITestContextAccessor testContextAccessor) : IAs
     }
 
     [Fact]
+    public async Task GetOrAdd_returns_empty_dict_without_invoking_generator_when_only_metadata_marker_present()
+    {
+        _redisCacheOptions.CacheNullValues = true;
+        _sut = null;
+        _database.HashGetAllAsync(_redisKey, CommandFlags.PreferReplica)
+            .Returns(_ => new[] { new HashEntry(KnownFieldNames.MetadataKey, RedisValue.EmptyString) });
+        var generatorCalled = false;
+        Func<CancellationToken, Task<IDictionary<string, string?>>> generator = _ =>
+        {
+            generatorCalled = true;
+            return Task.FromResult<IDictionary<string, string?>>(new Dictionary<string, string?> { ["fresh"] = "v" });
+        };
+
+        var actual = await Sut.GetOrAddAsync(_cacheKey, generator, _fixture.Create<TimeSpan?>(), testContextAccessor.Current.CancellationToken);
+
+        actual.Should().BeEmpty();
+        generatorCalled.Should().BeFalse();
+    }
+
+    [Fact]
+    public async Task GetOrAdd_empty_result_with_CacheNullValues_writes_metadata_marker()
+    {
+        _redisCacheOptions.CacheNullValues = true;
+        IDictionary<string, string?> generated = new Dictionary<string, string?>();
+        _database.HashGetAllAsync(_redisKey, CommandFlags.PreferReplica)
+            .Returns(_ => Array.Empty<HashEntry>());
+        _transaction.ExecuteAsync(Arg.Any<CommandFlags>()).Returns(true);
+        HashEntry[]? captured = null;
+        _transaction.HashSetAsync(_redisKey, Arg.Do<HashEntry[]>(h => captured = h), Arg.Any<CommandFlags>())
+            .Returns(Task.CompletedTask);
+
+        var actual = await Sut.GetOrAddAsync(_cacheKey, _ => Task.FromResult(generated), _fixture.Create<TimeSpan?>(), testContextAccessor.Current.CancellationToken);
+
+        actual.Should().BeEmpty();
+        captured.Should().NotBeNull();
+        captured!.Should().ContainSingle()
+            .Which.Name.Should().Be((RedisValue)KnownFieldNames.MetadataKey);
+        captured[0].Value.Length().Should().Be(0, "the marker keeps the hash alive in Redis without carrying user metadata");
+        await _database.DidNotReceive().KeyDeleteAsync(_redisKey, Arg.Any<CommandFlags>());
+    }
+
+    [Fact]
+    public async Task GetOrAdd_empty_result_without_CacheNullValues_deletes_key()
+    {
+        _redisCacheOptions.CacheNullValues = false;
+        IDictionary<string, string?> generated = new Dictionary<string, string?>();
+        _database.HashGetAllAsync(_redisKey, CommandFlags.PreferReplica)
+            .Returns(_ => Array.Empty<HashEntry>());
+
+        var actual = await Sut.GetOrAddAsync(_cacheKey, _ => Task.FromResult(generated), _fixture.Create<TimeSpan?>(), testContextAccessor.Current.CancellationToken);
+
+        actual.Should().BeEmpty();
+        await _database.Received().KeyDeleteAsync(_redisKey, Arg.Any<CommandFlags>());
+    }
+
+    [Theory]
+    [InlineData("_metadata_")]
+    [InlineData("_anything_")]
+    [InlineData("_x_")]
+    public async Task SetAsync_rejects_reserved_field_name_pattern(string reservedName)
+    {
+        var values = new Dictionary<string, string?> { [reservedName] = "v" };
+        Func<Task> act = async () => await Sut.SetAsync(_cacheKey, values, testContextAccessor.Current.CancellationToken);
+        await act.Should().ThrowAsync<ArgumentException>()
+            .Where(e => e.Message.Contains("reserved"));
+    }
+
+    [Fact]
+    public async Task GetCacheEntry_marker_only_hash_returns_miss_when_CacheNullValues_false()
+    {
+        _redisCacheOptions.CacheNullValues = false;
+        _sut = null;
+        _database.KeyExistsAsync(_redisKey, CommandFlags.PreferReplica).Returns(_ => true);
+        _transaction.HashGetAllAsync(_redisKey, CommandFlags.PreferReplica)
+            .Returns(new[] { new HashEntry(KnownFieldNames.MetadataKey, RedisValue.EmptyString) });
+        _transaction.KeyExpireTimeAsync(_redisKey, CommandFlags.PreferReplica).Returns((DateTime?)_now.AddMinutes(5).UtcDateTime);
+        _transaction.ExecuteAsync(Arg.Any<CommandFlags>()).Returns(true);
+
+        var actual = await Sut.GetCacheEntryAsync<string>(_cacheKey, testContextAccessor.Current.CancellationToken);
+
+        actual.Found.Should().BeFalse();
+    }
+
+    [Fact]
+    public async Task GetCacheEntry_marker_only_hash_returns_hit_when_CacheNullValues_true()
+    {
+        _redisCacheOptions.CacheNullValues = true;
+        _sut = null;
+        _database.KeyExistsAsync(_redisKey, CommandFlags.PreferReplica).Returns(_ => true);
+        _transaction.HashGetAllAsync(_redisKey, CommandFlags.PreferReplica)
+            .Returns(new[] { new HashEntry(KnownFieldNames.MetadataKey, RedisValue.EmptyString) });
+        _transaction.KeyExpireTimeAsync(_redisKey, CommandFlags.PreferReplica).Returns((DateTime?)_now.AddMinutes(5).UtcDateTime);
+        _transaction.ExecuteAsync(Arg.Any<CommandFlags>()).Returns(true);
+
+        var actual = await Sut.GetCacheEntryAsync<string>(_cacheKey, testContextAccessor.Current.CancellationToken);
+
+        actual.Found.Should().BeTrue();
+        actual.Value.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task GetOrAdd_marker_only_hash_runs_generator_when_CacheNullValues_false()
+    {
+        _redisCacheOptions.CacheNullValues = false;
+        _sut = null;
+        _database.HashGetAllAsync(_redisKey, CommandFlags.PreferReplica)
+            .Returns(_ => new[] { new HashEntry(KnownFieldNames.MetadataKey, RedisValue.EmptyString) });
+        var generated = new Dictionary<string, string?> { ["k"] = "v" };
+        bool generatorCalled = false;
+        Func<CancellationToken, Task<IDictionary<string, string?>>> generator = _ =>
+        {
+            generatorCalled = true;
+            return Task.FromResult<IDictionary<string, string?>>(generated);
+        };
+
+        var actual = await Sut.GetOrAddAsync(_cacheKey, generator, _fixture.Create<TimeSpan?>(), testContextAccessor.Current.CancellationToken);
+
+        generatorCalled.Should().BeTrue();
+        actual.Should().BeEquivalentTo(generated);
+    }
+
+    [Fact]
+    public async Task SetAsync_empty_with_metadata_and_CacheNullValues_false_removes()
+    {
+        _redisCacheOptions.CacheNullValues = false;
+        _sut = null;
+        var metadata = _fixture.Create<IDictionary<string, string?>>();
+        _transaction.ExecuteAsync(Arg.Any<CommandFlags>()).Returns(true);
+
+        await Sut.SetAsync(
+            _cacheKey,
+            new Dictionary<string, string?>(),
+            new HashCacheEntryOptions(TimeToLive: _fixture.Create<TimeSpan>(), Metadata: metadata),
+            testContextAccessor.Current.CancellationToken);
+
+        await _database.Received().KeyDeleteAsync(_redisKey, Arg.Any<CommandFlags>());
+        await _transaction.DidNotReceive().HashSetAsync(_redisKey, Arg.Any<HashEntry[]>(), Arg.Any<CommandFlags>());
+    }
+
+    [Fact]
+    public async Task SetMetadataAsync_empty_with_CacheNullValues_uses_KeyExists_condition()
+    {
+        _redisCacheOptions.CacheNullValues = true;
+        _sut = null;
+        _database.KeyExistsAsync(_redisKey, CommandFlags.PreferReplica).Returns(true);
+        _transaction.ExecuteAsync(Arg.Any<CommandFlags>()).Returns(true);
+
+        await Sut.SetMetadataAsync<string>(_cacheKey, new Dictionary<string, string?>(), testContextAccessor.Current.CancellationToken);
+
+        _transaction.Received(1).AddCondition(Arg.Any<Condition>());
+    }
+
+    [Fact]
+    public async Task GetOrAdd_empty_result_forces_KeyReplace_even_when_caller_passes_HashReplace()
+    {
+        _redisCacheOptions.CacheNullValues = true;
+        _sut = null;
+        IDictionary<string, string?> generated = new Dictionary<string, string?>();
+        _database.HashGetAllAsync(_redisKey, CommandFlags.PreferReplica)
+            .Returns(_ => Array.Empty<HashEntry>());
+        _transaction.ExecuteAsync(Arg.Any<CommandFlags>()).Returns(true);
+
+        await Sut.GetOrAddAsync(
+            _cacheKey,
+            _ => Task.FromResult(generated),
+            (DateTimeOffset?)_now.AddMinutes(5),
+            HashCacheSetOption.HashReplace,
+            testContextAccessor.Current.CancellationToken);
+
+        await _transaction.Received(1).KeyDeleteAsync(_redisKey);
+    }
+
+    [Theory]
+    [InlineData("_metadata_")]
+    [InlineData("_expiration_")]
+    public async Task GetItemAsync_rejects_real_system_field_names(string systemField)
+    {
+        Func<Task> act = async () => await Sut.GetItemAsync<string>(_cacheKey, systemField, testContextAccessor.Current.CancellationToken);
+        await act.Should().ThrowAsync<ArgumentException>()
+            .Where(e => e.Message.Contains("reserved for system metadata"));
+    }
+
+    [Fact]
+    public async Task GetItemAsync_allows_legacy_underscore_bracketed_names()
+    {
+        var expected = _fixture.Create<string>();
+        _database.HashGetAsync(_redisKey, (RedisValue)"_legacy_field_", CommandFlags.PreferReplica)
+            .Returns(_ => (RedisValue)JsonConvert.SerializeObject(expected));
+
+        var actual = await Sut.GetItemAsync<string>(_cacheKey, "_legacy_field_", testContextAccessor.Current.CancellationToken);
+        actual.Should().Be(expected);
+    }
+
+    [Fact]
+    public async Task GetCacheEntry_with_empty_hashEntries_returns_miss()
+    {
+        _database.KeyExistsAsync(_redisKey, CommandFlags.PreferReplica).Returns(_ => true);
+        _transaction.HashGetAllAsync(_redisKey, CommandFlags.PreferReplica).Returns(Array.Empty<HashEntry>());
+        _transaction.KeyExpireTimeAsync(_redisKey, CommandFlags.PreferReplica).Returns((DateTime?)_now.AddMinutes(5).UtcDateTime);
+        _transaction.ExecuteAsync(Arg.Any<CommandFlags>()).Returns(true);
+
+        var actual = await Sut.GetCacheEntryAsync<string>(_cacheKey, testContextAccessor.Current.CancellationToken);
+
+        actual.Found.Should().BeFalse();
+        actual.Value.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task Refresh_no_metadata_with_CacheNullValues_gates_marker_write_on_KeyExists()
+    {
+        _redisCacheOptions.CacheNullValues = true;
+        _sut = null;
+        _transaction.ExecuteAsync(Arg.Any<CommandFlags>()).Returns(true);
+        var options = new HashCacheEntryOptions(default, _fixture.Create<TimeSpan>(), default);
+
+        await Sut.RefreshAsync<string>(_cacheKey, options, testContextAccessor.Current.CancellationToken);
+
+        _transaction.Received(1).AddCondition(Arg.Any<Condition>());
+        await _transaction.DidNotReceive().HashDeleteAsync(_redisKey, Arg.Any<RedisValue>(), Arg.Any<CommandFlags>());
+    }
+
+    [Fact]
+    public async Task Refresh_with_metadata_and_CacheNullValues_gates_marker_write_on_KeyExists()
+    {
+        _redisCacheOptions.CacheNullValues = true;
+        _sut = null;
+        _transaction.ExecuteAsync(Arg.Any<CommandFlags>()).Returns(true);
+        var metadata = _fixture.Create<IDictionary<string, string?>>();
+        var options = new HashCacheEntryOptions(default, _fixture.Create<TimeSpan>(), metadata);
+
+        await Sut.RefreshAsync<string>(_cacheKey, options, testContextAccessor.Current.CancellationToken);
+
+        _transaction.Received(1).AddCondition(Arg.Any<Condition>());
+    }
+
+    [Fact]
+    public async Task Refresh_with_metadata_without_CacheNullValues_does_not_add_KeyExists_condition()
+    {
+        _redisCacheOptions.CacheNullValues = false;
+        _sut = null;
+        _transaction.ExecuteAsync(Arg.Any<CommandFlags>()).Returns(true);
+        var metadata = _fixture.Create<IDictionary<string, string?>>();
+        var options = new HashCacheEntryOptions(default, _fixture.Create<TimeSpan>(), metadata);
+
+        await Sut.RefreshAsync<string>(_cacheKey, options, testContextAccessor.Current.CancellationToken);
+
+        _transaction.DidNotReceive().AddCondition(Arg.Any<Condition>());
+    }
+
+    [Fact]
+    public async Task GetAsync_all_fields_skips_expiration_system_field()
+    {
+        var expected = new Dictionary<string, string> { ["a"] = "1" };
+        var entries = expected
+            .Select(kv => new HashEntry(kv.Key, JsonConvert.SerializeObject(kv.Value)))
+            .Append(new HashEntry(KnownFieldNames.ExpirationKey, "future-system-bytes"))
+            .ToArray();
+        _database.HashGetAllAsync(_redisKey, CommandFlags.PreferReplica).Returns(entries);
+
+        var actual = await Sut.GetAsync<string>(_cacheKey, testContextAccessor.Current.CancellationToken);
+
+        actual.Should().BeEquivalentTo(expected);
+        actual.Should().NotContainKey(KnownFieldNames.ExpirationKey);
+    }
+
+    [Fact]
+    public async Task SetAsync_empty_with_metadata_and_CacheNullValues_preserves_metadata()
+    {
+        _redisCacheOptions.CacheNullValues = true;
+        var metadata = _fixture.Create<IDictionary<string, string?>>();
+        HashEntry[]? captured = null;
+        _transaction.HashSetAsync(_redisKey, Arg.Do<HashEntry[]>(h => captured = h), Arg.Any<CommandFlags>())
+            .Returns(Task.CompletedTask);
+        _transaction.ExecuteAsync(Arg.Any<CommandFlags>()).Returns(true);
+
+        await Sut.SetAsync(
+            _cacheKey,
+            new Dictionary<string, string?>(),
+            new HashCacheEntryOptions(TimeToLive: _fixture.Create<TimeSpan>(), Metadata: metadata),
+            testContextAccessor.Current.CancellationToken);
+
+        captured.Should().NotBeNull();
+        captured!.Should().ContainSingle()
+            .Which.Name.Should().Be((RedisValue)KnownFieldNames.MetadataKey);
+        captured![0].Value.Length().Should().BeGreaterThan(0, "metadata serialized into the marker field, not lost");
+    }
+
+    [Fact]
     public async Task Contains_null_cacheKey_throws_exception()
     {
         Func<Task> act = async () => { await Sut.ContainsAsync<string>(CacheKey.Null); };

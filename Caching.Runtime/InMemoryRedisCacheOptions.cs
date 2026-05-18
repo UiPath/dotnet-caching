@@ -28,6 +28,13 @@ public class InMemoryRedisCacheOptions : IMultilayerCacheOptions, IMemoryCacheOp
 
     public bool? ConnectionMonitorEnabled { get; set; }
 
+    /// <summary>
+    /// Persists generator-returned nulls and empty hashes as sentinels. <c>AddInMemoryRedis</c> propagates
+    /// this flag to the inner <c>RedisCacheOptions.CacheNullValues</c>; custom <c>MultilayerCache</c>-over-
+    /// <c>RedisCache</c> compositions must keep both options in sync themselves.
+    /// </summary>
+    public bool CacheNullValues { get; set; }
+
     public TimeSpan? ConnectionMonitorPeriod { get; set; } = TimeSpan.FromSeconds(5);
 
     public long? SizeLimit { get; set; }

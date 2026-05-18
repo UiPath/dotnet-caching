@@ -90,7 +90,7 @@ internal sealed class RedisDistributedLock : IDistributedLock
             }
 
             await Task.Delay(delay, token).ConfigureAwait(false);
-            pollInterval = pollInterval < _maxPollInterval ? TimeSpan.FromTicks(Math.Min(pollInterval.Ticks * 2, _maxPollInterval.Ticks)) : _maxPollInterval;
+            pollInterval = NextPollInterval(pollInterval, _maxPollInterval);
         }
     }
 
@@ -101,7 +101,15 @@ internal sealed class RedisDistributedLock : IDistributedLock
             Guid.NewGuid().TryFormat(span[prefix.Length..], out _, "N");
         });
 
-    private static TimeSpan ComputeRetryDelay(bool hasDeadline, long startTimestamp, TimeSpan waitTimeout, TimeSpan pollInterval)
+    internal static TimeSpan NextPollInterval(TimeSpan current, TimeSpan max) =>
+        current < max
+            ? TimeSpan.FromTicks(Math.Min(current.Ticks * 2, max.Ticks))
+            : max;
+
+    private static TimeSpan ComputeRetryDelay(bool hasDeadline, long startTimestamp, TimeSpan waitTimeout, TimeSpan pollInterval) =>
+        ComputeRetryDelayWithJitter(hasDeadline, startTimestamp, waitTimeout, pollInterval, Random.Shared.NextDouble());
+
+    internal static TimeSpan ComputeRetryDelayWithJitter(bool hasDeadline, long startTimestamp, TimeSpan waitTimeout, TimeSpan pollInterval, double jitterUnit)
     {
         if (!hasDeadline)
         {
@@ -112,7 +120,7 @@ internal sealed class RedisDistributedLock : IDistributedLock
         {
             return TimeSpan.Zero;
         }
-        var jitterFactor = 0.8 + Random.Shared.NextDouble() * 0.4;
+        var jitterFactor = 0.8 + jitterUnit * 0.4;
         var jittered = TimeSpan.FromTicks((long)(pollInterval.Ticks * jitterFactor));
         return jittered < remaining ? jittered : remaining;
     }

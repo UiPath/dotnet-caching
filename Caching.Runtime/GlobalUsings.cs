@@ -10,5 +10,6 @@ global using Microsoft.Extensions.Options;
 global using StackExchange.Redis;
 global using UiPath.Platform.Caching.Broadcast;
 global using UiPath.Platform.Caching.Redis;
+global using static UiPath.Platform.Caching.CacheValueHelpers;
 
 [assembly: System.Runtime.CompilerServices.InternalsVisibleTo("UiPath.Platform.Caching.Tests")]

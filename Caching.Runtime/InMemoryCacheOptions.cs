@@ -30,6 +30,8 @@ public class InMemoryCacheOptions : IMultilayerCacheOptions, IMemoryCacheOptions
 
     public bool? ConnectionMonitorEnabled { get; set; }
 
+    public bool CacheNullValues { get; set; }
+
     public TimeSpan? ConnectionMonitorPeriod { get; set; } = TimeSpan.FromSeconds(5);
 
     public long? SizeLimit { get; set; }

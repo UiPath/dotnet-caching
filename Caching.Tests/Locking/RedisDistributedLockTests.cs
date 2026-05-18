@@ -92,35 +92,110 @@ public class RedisDistributedLockTests(ITestContextAccessor testContextAccessor)
         sw.ElapsedMilliseconds.Should().BeGreaterThanOrEqualTo(180, "the locker should retry until the wait timeout elapses");
     }
 
+    [Theory]
+    [InlineData(50, 500, 100)]    // 50 → 100 (doubles, under cap)
+    [InlineData(100, 500, 200)]   // 100 → 200
+    [InlineData(200, 500, 400)]   // 200 → 400
+    [InlineData(400, 500, 500)]   // 400 → min(800, 500) = 500 (caps at max)
+    [InlineData(500, 500, 500)]   // already at cap → stays at cap
+    [InlineData(700, 500, 500)]   // above cap → coerces down to cap
+    public void NextPollInterval_doubles_until_clamped_at_max(int currentMs, int maxMs, int expectedMs)
+    {
+        var next = RedisDistributedLock.NextPollInterval(TimeSpan.FromMilliseconds(currentMs), TimeSpan.FromMilliseconds(maxMs));
+        next.Should().Be(TimeSpan.FromMilliseconds(expectedMs));
+    }
+
     [Fact]
-    public async Task Acquire_uses_exponential_backoff_so_retry_count_is_bounded()
+    public void NextPollInterval_doubles_geometrically_until_cap()
+    {
+        var max = TimeSpan.FromMilliseconds(500);
+        var sequence = new List<TimeSpan>();
+        var current = TimeSpan.FromMilliseconds(50);
+        for (int i = 0; i < 10; i++)
+        {
+            sequence.Add(current);
+            current = RedisDistributedLock.NextPollInterval(current, max);
+        }
+
+        sequence.Take(5).Should().Equal(
+            TimeSpan.FromMilliseconds(50),
+            TimeSpan.FromMilliseconds(100),
+            TimeSpan.FromMilliseconds(200),
+            TimeSpan.FromMilliseconds(400),
+            TimeSpan.FromMilliseconds(500));
+        sequence.Skip(5).Should().AllBeEquivalentTo(TimeSpan.FromMilliseconds(500), "the sequence must remain at the cap once reached, never collapsing back to the initial interval");
+    }
+
+    [Theory]
+    [InlineData(0.0, 40)]    // jitter floor: 50 * 0.8 = 40
+    [InlineData(0.5, 50)]    // mid: 50 * 1.0 = 50
+    [InlineData(1.0, 60)]    // jitter ceiling: 50 * 1.2 = 60
+    public void ComputeRetryDelay_applies_jitter_within_80_to_120_percent(double jitterUnit, int expectedMs)
+    {
+        var delay = RedisDistributedLock.ComputeRetryDelayWithJitter(
+            hasDeadline: true,
+            startTimestamp: System.Diagnostics.Stopwatch.GetTimestamp(),
+            waitTimeout: TimeSpan.FromSeconds(10),
+            pollInterval: TimeSpan.FromMilliseconds(50),
+            jitterUnit: jitterUnit);
+        delay.TotalMilliseconds.Should().BeApproximately(expectedMs, precision: 5);
+    }
+
+    [Fact]
+    public void ComputeRetryDelay_clamps_to_remaining_budget()
+    {
+        var start = System.Diagnostics.Stopwatch.GetTimestamp() - System.Diagnostics.Stopwatch.Frequency; // ~1s in the past
+        var delay = RedisDistributedLock.ComputeRetryDelayWithJitter(
+            hasDeadline: true,
+            startTimestamp: start,
+            waitTimeout: TimeSpan.FromMilliseconds(1100),
+            pollInterval: TimeSpan.FromMilliseconds(500),
+            jitterUnit: 0.5);
+        delay.Should().BeLessThanOrEqualTo(TimeSpan.FromMilliseconds(200),
+            "remaining budget (~100ms) is smaller than jittered poll interval (~500ms), so the delay must clamp to remaining");
+    }
+
+    [Fact]
+    public void ComputeRetryDelay_returns_zero_when_no_deadline()
+    {
+        var delay = RedisDistributedLock.ComputeRetryDelayWithJitter(
+            hasDeadline: false,
+            startTimestamp: 0,
+            waitTimeout: TimeSpan.Zero,
+            pollInterval: TimeSpan.FromMilliseconds(50),
+            jitterUnit: 0.5);
+        delay.Should().Be(TimeSpan.Zero);
+    }
+
+    [Fact]
+    public void ComputeRetryDelay_returns_zero_when_deadline_already_exceeded()
+    {
+        var start = System.Diagnostics.Stopwatch.GetTimestamp() - 10 * System.Diagnostics.Stopwatch.Frequency;
+        var delay = RedisDistributedLock.ComputeRetryDelayWithJitter(
+            hasDeadline: true,
+            startTimestamp: start,
+            waitTimeout: TimeSpan.FromMilliseconds(500),
+            pollInterval: TimeSpan.FromMilliseconds(50),
+            jitterUnit: 0.5);
+        delay.Should().Be(TimeSpan.Zero);
+    }
+
+    [Fact]
+    public async Task Acquire_retries_at_least_once_when_lock_is_contended()
     {
         var redis = _fixture.Freeze<IRedisConnector>();
-        var callTimestamps = new System.Collections.Concurrent.ConcurrentQueue<long>();
+        var callCount = 0;
         redis.Database
             .LockTakeAsync(Arg.Any<RedisKey>(), Arg.Any<RedisValue>(), Arg.Any<TimeSpan>(), Arg.Any<CommandFlags>())
-            .Returns(_ => { callTimestamps.Enqueue(System.Diagnostics.Stopwatch.GetTimestamp()); return false; });
+            .Returns(_ => { Interlocked.Increment(ref callCount); return false; });
 
         var sut = NewLock(redis);
         var token = testContextAccessor.Current.CancellationToken;
 
-        var lease = await sut.AcquireAsync("k", TimeSpan.FromSeconds(5), TimeSpan.FromMilliseconds(1500), token);
+        var lease = await sut.AcquireAsync("k", TimeSpan.FromSeconds(5), TimeSpan.FromMilliseconds(300), token);
+
         lease.Should().BeSameAs(NoOpAsyncDisposable.Instance);
-
-        var times = callTimestamps.ToArray();
-        times.Length.Should().BeGreaterThanOrEqualTo(4,
-            "exponential backoff with default 50ms initial and 1500ms timeout should fit several attempts before the deadline");
-
-        // Inter-call gaps. With exponential growth, the longest gap should be substantially larger than
-        // the first one — a fixed-interval regression (no backoff) would keep all gaps roughly equal.
-        var gaps = Enumerable.Range(0, times.Length - 1)
-            .Select(i => System.Diagnostics.Stopwatch.GetElapsedTime(times[i], times[i + 1]).TotalMilliseconds)
-            .ToArray();
-        var firstGap = gaps[0];
-        var maxGap = gaps.Max();
-        maxGap.Should().BeGreaterThan(firstGap * 2,
-            $"exponential backoff should grow inter-call gaps; got firstGap={firstGap:F1}ms, maxGap={maxGap:F1}ms — " +
-            "a regression to a fixed retry interval would keep gaps roughly constant");
+        callCount.Should().BeGreaterThanOrEqualTo(2, "the retry loop must fire at least once before giving up");
     }
 
     [Fact]

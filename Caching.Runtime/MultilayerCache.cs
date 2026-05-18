@@ -70,31 +70,32 @@ public sealed partial class MultilayerCache : MultilayerCacheBase, ICache
         NotCacheableException.ThrowIfNotCacheable<T>();
         var cacheEntryOptions = _entryBuilder.BuildEntryOptions<T>(cacheKey, expiration, token);
 
-        T? ret = await GetInnerAsync<T>(cacheEntryOptions).ConfigureAwait(false);
-        if (ret is not null)
+        var entry = await GetCacheEntryInnerAsync<T>(cacheEntryOptions).ConfigureAwait(false);
+        if (entry.Found)
         {
-            return ret;
+            return entry.Value;
         }
 
-        return await RunUnderLocksAsync<T?>(
+        var result = await RunUnderLocksAsync<ICacheEntry<T?>>(
             cacheEntryOptions.CacheKey,
-            () => GetInnerAsync<T>(cacheEntryOptions),
-            v => v is not null,
-            ct => RunGeneratorAndStoreAsync(cacheEntryOptions, generator, ct),
+            () => GetCacheEntryInnerAsync<T>(cacheEntryOptions),
+            e => e.Found,
+            ct => RunGeneratorAndStoreEntryAsync(cacheEntryOptions, generator, ct),
             token).ConfigureAwait(false);
+        return result.Value;
     }
 
-    private async ValueTask<T?> RunGeneratorAndStoreAsync<T>(CacheEntryOptions cacheEntryOptions, Func<CancellationToken, Task<T?>> generator, CancellationToken token)
+    private async ValueTask<ICacheEntry<T?>> RunGeneratorAndStoreEntryAsync<T>(CacheEntryOptions cacheEntryOptions, Func<CancellationToken, Task<T?>> generator, CancellationToken token)
     {
         LogCacheMissed(cacheEntryOptions.CacheKey);
         var ret = await generator(token).ConfigureAwait(false);
 
-        if (ret is not null)
+        if (ret is not null || _multiLayerCacheOptions.CacheNullValues)
         {
             var innerCacheDisconnected = GetInnerCacheDisconnected();
             await InternalSetAsync(cacheEntryOptions, ret, innerCacheDisconnected).ConfigureAwait(false);
         }
-        return ret;
+        return _cacheEntryFactory.Create<T?>(ret, cacheEntryOptions.Expiration);
     }
 
     public ValueTask<bool> SetAsync<T>(CacheKey cacheKey, T? value, CancellationToken token = default) =>
@@ -107,7 +108,7 @@ public sealed partial class MultilayerCache : MultilayerCacheBase, ICache
     {
         NotCacheableException.ThrowIfNotCacheable<T>();
         var cacheEntryOptions = _entryBuilder.BuildEntryOptions<T>(cacheKey, expiration, token);
-        if (value is null)
+        if (value is null && !_multiLayerCacheOptions.CacheNullValues)
         {
             return await RemoveAsync<T>(cacheEntryOptions).ConfigureAwait(false);
         }
@@ -140,13 +141,13 @@ public sealed partial class MultilayerCache : MultilayerCacheBase, ICache
         var setEntries = new List<CacheEntryValue<T>>();
         foreach (var keyValue in keyValues)
         {
-            if (keyValue.Value is null)
+            if (keyValue.Value is null && !_multiLayerCacheOptions.CacheNullValues)
             {
                 removeEntries.Add(_entryBuilder.BuildEntryOptions<T>(keyValue.Key, token: token));
             }
             else
             {
-                setEntries.Add(new (_entryBuilder.BuildEntryOptions<T>(keyValue.Key, expiration, token), keyValue.Value ));
+                setEntries.Add(new (_entryBuilder.BuildEntryOptions<T>(keyValue.Key, expiration, token), keyValue.Value));
             }
         }
 
@@ -357,7 +358,7 @@ public sealed partial class MultilayerCache : MultilayerCacheBase, ICache
             var key = fetched[i].Key;
             results.Add(new KeyValuePair<CacheKey, T?>(key, entry.Value));
 
-            if (entry.Value is null)
+            if (!entry.Found)
             {
                 continue;
             }
@@ -395,7 +396,7 @@ public sealed partial class MultilayerCache : MultilayerCacheBase, ICache
 
         var fetched = await _innerCache.GetCacheEntryAsync<T>(options.CacheKey, options.Token).ConfigureAwait(false);
 
-        if (fetched.Value is null)
+        if (!fetched.Found)
         {
             return default;
         }
@@ -452,7 +453,7 @@ public sealed partial class MultilayerCache : MultilayerCacheBase, ICache
             var key = fetched[j].Key;
             results[resultIndex] = new KeyValuePair<CacheKey, ICacheEntry<T?>>(key, entry);
 
-            if (entry.Value is null)
+            if (!entry.Found)
             {
                 continue;
             }
@@ -487,7 +488,7 @@ public sealed partial class MultilayerCache : MultilayerCacheBase, ICache
 
         var fetched = await _innerCache.GetCacheEntryAsync<T>(options.CacheKey, options.Token).ConfigureAwait(false);
 
-        if (fetched.Value is null)
+        if (!fetched.Found)
         {
             return fetched;
         }
@@ -533,7 +534,8 @@ public sealed partial class MultilayerCache : MultilayerCacheBase, ICache
                 return MemSet(_multiLayerCacheOptions.PrimaryMaxExpirationDisconnected);
             }
 
-            var set = await _innerCache.SetAsync<T?>(cacheKeyValuePairs, token).ConfigureAwait(false);
+            DateTimeOffset? batchExpiration = cacheEntries.Length > 0 ? cacheEntries[0].CacheEntry.Expiration : null;
+            var set = await _innerCache.SetAsync<T?>(cacheKeyValuePairs, batchExpiration, token).ConfigureAwait(false);
             return set && MemSet(_multiLayerCacheOptions.PrimaryMaxExpiration);
         }
         catch (Exception ex)

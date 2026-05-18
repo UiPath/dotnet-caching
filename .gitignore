@@ -246,3 +246,6 @@ src/ProcessForms/UiPath.ProcessForms/UiPath.ProcessForms.XML
 .terraform
 
 !Sample.AspNetCore/Properties/launchSettings.json
+
+# Language-server / Roslyn analyzer caches
+*.csproj.lscache

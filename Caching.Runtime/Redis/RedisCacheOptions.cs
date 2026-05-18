@@ -19,4 +19,6 @@ public class RedisCacheOptions : ICacheOptions
     public IRedisKeyStrategyFactory? RedisKeyStrategyFactory { get; set; }
 
     public bool? ConnectionMonitorEnabled { get; set; }
+
+    public bool CacheNullValues { get; set; }
 }

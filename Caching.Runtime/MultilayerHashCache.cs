@@ -74,35 +74,43 @@ public sealed partial class MultilayerHashCache : MultilayerCacheBase, IHashCach
     public ValueTask<IDictionary<string, T?>> GetOrAddAsync<T>(CacheKey cacheKey, Func<CancellationToken, Task<IDictionary<string, T?>>> generator, DateTimeOffset? expiration = null, CancellationToken token = default) =>
         GetOrAddAsync(cacheKey, generator, expiration, HashCacheSetOption.KeyReplace, token);
 
+    /// <summary>
+    /// Never returns <c>null</c>. A cache hit (real data or cached-empty marker) returns the stored
+    /// dictionary or an empty one; a cache miss invokes the generator and returns its result. The inner
+    /// cache may legally return <c>Found=true</c> with <c>Value=null</c> when only the
+    /// <c>_metadata_</c>-as-empty-marker is present; we collapse that to <see cref="Empty{T}"/> for the
+    /// caller, who can always iterate the result without a null check.
+    /// </summary>
     public async ValueTask<IDictionary<string, T?>> GetOrAddAsync<T>(CacheKey cacheKey, Func<CancellationToken, Task<IDictionary<string, T?>>> generator, DateTimeOffset? expiration = null, HashCacheSetOption? setOption = null, CancellationToken token = default)
     {
         NotCacheableException.ThrowIfNotCacheable<T>();
         var cacheEntryOptions = _entryBuilder.BuildEntryOptions<T>(cacheKey, expiration, setOption ?? HashCacheSetOption.KeyReplace, token);
         var cacheEntry = await GetCacheEntryAsync<T>(cacheEntryOptions).ConfigureAwait(false);
-        if (!IsNullOrEmpty(cacheEntry.Value))
+        if (cacheEntry.Found)
         {
-            return cacheEntry.Value!;
+            return cacheEntry.Value ?? Empty<T>();
         }
 
-        return await RunUnderLocksAsync<IDictionary<string, T?>>(
+        var result = await RunUnderLocksAsync<ICacheEntry<IDictionary<string, T?>>>(
             cacheEntryOptions.CacheKey,
-            async () => (await GetCacheEntryAsync<T>(cacheEntryOptions).ConfigureAwait(false)).Value ?? Empty<T>(),
-            v => !IsNullOrEmpty(v),
-            ct => RunHashGeneratorAndStoreAsync(cacheEntryOptions, generator, ct),
+            () => GetCacheEntryAsync<T>(cacheEntryOptions),
+            e => e.Found,
+            ct => RunHashGeneratorAndStoreEntryAsync(cacheEntryOptions, generator, ct),
             token).ConfigureAwait(false);
+        return result.Value ?? Empty<T>();
     }
 
-    private async ValueTask<IDictionary<string, T?>> RunHashGeneratorAndStoreAsync<T>(InternalHashCacheEntryOptions cacheEntryOptions, Func<CancellationToken, Task<IDictionary<string, T?>>> generator, CancellationToken token)
+    private async ValueTask<ICacheEntry<IDictionary<string, T?>>> RunHashGeneratorAndStoreEntryAsync<T>(InternalHashCacheEntryOptions cacheEntryOptions, Func<CancellationToken, Task<IDictionary<string, T?>>> generator, CancellationToken token)
     {
         LogCacheMissed(cacheEntryOptions.CacheKey);
         var ret = await generator(token).ConfigureAwait(false);
 
-        if (!IsNullOrEmpty(ret))
+        if (!IsNullOrEmpty(ret) || _multiLayerCacheOptions.CacheNullValues)
         {
             var innerCacheDisconnected = GetInnerCacheDisconnected();
-            await InternalSetAsync(cacheEntryOptions, ret, innerCacheDisconnected).ConfigureAwait(false);
+            await InternalSetAsync(cacheEntryOptions, ret ?? Empty<T>(), innerCacheDisconnected).ConfigureAwait(false);
         }
-        return ret;
+        return _cacheEntryFactory.Create<IDictionary<string, T?>>(ret ?? Empty<T>(), cacheEntryOptions.Expiration, cacheEntryOptions.Metadata);
     }
 
     public ValueTask<bool> SetAsync<T>(CacheKey cacheKey, IDictionary<string, T?> values, CancellationToken token = default) =>
@@ -115,10 +123,12 @@ public sealed partial class MultilayerHashCache : MultilayerCacheBase, IHashCach
     {
         NotCacheableException.ThrowIfNotCacheable<T>();
         var options = _entryBuilder.BuildEntryOptions<T>(cacheKey, expiration, token: token);
-        if (IsNullOrEmpty(values))
+        if (IsNullOrEmpty(values) && !_multiLayerCacheOptions.CacheNullValues)
         {
             return await RemoveAsync<T>(options).ConfigureAwait(false);
         }
+
+        values ??= new Dictionary<string, T?>();
 
         LogReplacingCachedKey(options.CacheKey);
         var innerCacheDisconnected = GetInnerCacheDisconnected();
@@ -140,10 +150,12 @@ public sealed partial class MultilayerHashCache : MultilayerCacheBase, IHashCach
         var expiration = options.ExpireTime.HasValue ? _clock.ToDateTimeOffset(options.ExpireTime) : _clock.ToDateTimeOffset(options.TimeToLive);
         var cacheEntryOptions = _entryBuilder.BuildEntryOptions<T>(cacheKey, expiration, options.SetOption, token);
         cacheEntryOptions.Metadata = options.Metadata;
-        if (IsNullOrEmpty(values))
+        if (IsNullOrEmpty(values) && !_multiLayerCacheOptions.CacheNullValues)
         {
             return await RemoveAsync<T>(cacheEntryOptions).ConfigureAwait(false);
         }
+
+        values ??= new Dictionary<string, T?>();
 
         LogReplacingCachedKey(cacheEntryOptions.CacheKey);
         var innerCacheDisconnected = GetInnerCacheDisconnected();
@@ -312,7 +324,7 @@ public sealed partial class MultilayerHashCache : MultilayerCacheBase, IHashCach
 
         cacheEntry = await _innerCache.GetCacheEntryAsync<T>(options.CacheKey, options.Token).ConfigureAwait(false);
 
-        if (IsNullOrEmpty(cacheEntry.Value))
+        if (!cacheEntry.Found)
         {
             return cacheEntry!;
         }
@@ -320,7 +332,7 @@ public sealed partial class MultilayerHashCache : MultilayerCacheBase, IHashCach
         LogFoundInnerCopy(options.CacheKey);
         options.Expiration = cacheEntry.Expiration;
         options.Metadata = cacheEntry.Metadata;
-        var values = cacheEntry.Value!;
+        var values = cacheEntry.Value ?? Empty<T>();
         MemorySet(options, values, _multiLayerCacheOptions.PrimaryMaxExpiration);
 
         return Filter(cacheEntry!, options);
