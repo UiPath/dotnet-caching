@@ -1,6 +1,6 @@
 ﻿namespace UiPath.Platform.Caching;
 
-public interface IHashCache<T>
+public partial interface IHashCache<T>
 {
     string Name { get; }
 

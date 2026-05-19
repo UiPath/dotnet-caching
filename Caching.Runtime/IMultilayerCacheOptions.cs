@@ -8,12 +8,27 @@ public interface IMultilayerCacheOptions : ICacheOptions
 
     public ITopicKeyStrategy? TopicKeyStrategy { get; set; }
 
+    /// <summary>L1 (in-memory tier) cap on entry lifetime. Aligns with .NET HybridCache's `LocalCacheExpiration` naming.</summary>
+    public TimeSpan? LocalMaxExpiration { get; set; }
+
+    /// <summary>Renamed to <see cref="LocalMaxExpiration"/>. The old name still works; assignments forward to the new property.</summary>
+    [Obsolete("Renamed to LocalMaxExpiration. The old name still works (assignments forward to the new property) but will be removed in a future release.")]
     public TimeSpan? PrimaryMaxExpiration { get; set; }
 
     public TimeSpan? ConnectionMonitorPeriod { get; set; }
 
+    /// <summary>Serve from L1 only (without falling back to default) when the L2 connection is unhealthy. Aligns with Local/Distributed tier naming.</summary>
+    public bool? UseLocalOnlyWhenDisconnected { get; set; }
+
+    /// <summary>Renamed to <see cref="UseLocalOnlyWhenDisconnected"/>. The old name still works; assignments forward to the new property.</summary>
+    [Obsolete("Renamed to UseLocalOnlyWhenDisconnected. The old name still works (assignments forward to the new property) but will be removed in a future release.")]
     public bool? UsePrimaryOnlyWhenDisconnected { get; set; }
 
+    /// <summary>L1 cap on entry lifetime while the L2 connection is unhealthy (paired with <see cref="UseLocalOnlyWhenDisconnected"/>).</summary>
+    public TimeSpan? LocalMaxExpirationDisconnected { get; set; }
+
+    /// <summary>Renamed to <see cref="LocalMaxExpirationDisconnected"/>. The old name still works; assignments forward to the new property.</summary>
+    [Obsolete("Renamed to LocalMaxExpirationDisconnected. The old name still works (assignments forward to the new property) but will be removed in a future release.")]
     public TimeSpan? PrimaryMaxExpirationDisconnected { get; set; }
 
     /// <summary>

@@ -24,7 +24,14 @@ public class InMemoryCacheOptions : IMultilayerCacheOptions, IMemoryCacheOptions
 
     public string? Topic { get; set; }
 
-    public TimeSpan? PrimaryMaxExpiration { get; set; } = TimeSpan.FromHours(1);
+    public TimeSpan? LocalMaxExpiration { get; set; } = TimeSpan.FromHours(1);
+
+    [Obsolete("Renamed to LocalMaxExpiration. The old name still works (assignments forward to the new property) but will be removed in a future release.")]
+    public TimeSpan? PrimaryMaxExpiration
+    {
+        get => LocalMaxExpiration;
+        set => LocalMaxExpiration = value;
+    }
 
     public ITopicKeyStrategy? TopicKeyStrategy { get; set; }
 
@@ -40,9 +47,23 @@ public class InMemoryCacheOptions : IMultilayerCacheOptions, IMemoryCacheOptions
 
     public ICacheEntrySizeProvider? SizeProvider { get; set; }
 
-    public bool? UsePrimaryOnlyWhenDisconnected { get; set; }
+    public bool? UseLocalOnlyWhenDisconnected { get; set; }
 
-    public TimeSpan? PrimaryMaxExpirationDisconnected { get; set; } = TimeSpan.FromSeconds(30);
+    [Obsolete("Renamed to UseLocalOnlyWhenDisconnected. The old name still works (assignments forward to the new property) but will be removed in a future release.")]
+    public bool? UsePrimaryOnlyWhenDisconnected
+    {
+        get => UseLocalOnlyWhenDisconnected;
+        set => UseLocalOnlyWhenDisconnected = value;
+    }
+
+    public TimeSpan? LocalMaxExpirationDisconnected { get; set; } = TimeSpan.FromSeconds(30);
+
+    [Obsolete("Renamed to LocalMaxExpirationDisconnected. The old name still works (assignments forward to the new property) but will be removed in a future release.")]
+    public TimeSpan? PrimaryMaxExpirationDisconnected
+    {
+        get => LocalMaxExpirationDisconnected;
+        set => LocalMaxExpirationDisconnected = value;
+    }
 
     public bool? LocalLockEnabled { get; set; } = true;
 

@@ -1,5 +1,5 @@
 ﻿namespace UiPath.Platform.Caching;
-public interface ICache<T>
+public partial interface ICache<T>
 {
     string Name { get; }
 

@@ -3,5 +3,5 @@
 public record struct HashCacheEntryOptions(
     DateTimeOffset? ExpireTime = default,
     TimeSpan? TimeToLive = default,
-    IDictionary<string, string?>? Metadata = null,    
+    IDictionary<string, string?>? Metadata = null,
     HashCacheSetOption SetOption = HashCacheSetOption.KeyReplace);

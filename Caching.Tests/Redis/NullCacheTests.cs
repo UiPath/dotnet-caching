@@ -10,7 +10,7 @@ public class NullCacheTests(ITestContextAccessor testContextAccessor)
         var sut = new NullCache();
         CacheKey cacheKey = _fixture.Create<string>();
         var expected = _fixture.Create<TestDto?>();
-        var actual = await sut.GetOrAddAsync(cacheKey, _ => Task.FromResult(expected), token: testContextAccessor.Current.CancellationToken);
+        var actual = await sut.GetOrAddAsync(cacheKey, _ => Task.FromResult(expected), (CachePolicy?)null, testContextAccessor.Current.CancellationToken);
         actual.Should().NotBeNull();
         actual.Should().BeEquivalentTo(expected);
     }

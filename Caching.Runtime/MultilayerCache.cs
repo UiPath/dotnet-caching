@@ -3,7 +3,7 @@ using UiPath.Platform.Caching.Telemetry;
 
 namespace UiPath.Platform.Caching;
 
-public sealed partial class MultilayerCache : MultilayerCacheBase, ICache
+internal sealed partial class MultilayerCache : MultilayerCacheBase, ICache
 {
     private readonly ICache _innerCache;
     private readonly CacheEntryBuilder _entryBuilder;
@@ -22,8 +22,9 @@ public sealed partial class MultilayerCache : MultilayerCacheBase, ICache
         CacheOptions cacheOptions,
         ILocalLock localLock,
         IDistributedLock distributedLock,
+        ICachePolicyFactory policyFactory,
         ILogger logger)
-        : base(cacheName, innerCache, memoryCacheFactory, topicFactory, cacheEventFactory, telemetryProvider, multiLayerCacheOptions, memoryCacheOptions, cacheOptions, localLock, distributedLock, logger)
+        : base(cacheName, innerCache, memoryCacheFactory, topicFactory, cacheEventFactory, telemetryProvider, multiLayerCacheOptions, memoryCacheOptions, cacheOptions, localLock, distributedLock, policyFactory, logger)
     {
         _innerCache = innerCache;
         var cacheKeyStrategy = _multiLayerCacheOptions.CacheKeyStrategy ?? new DefaultCacheKeyStrategy();
@@ -32,81 +33,167 @@ public sealed partial class MultilayerCache : MultilayerCacheBase, ICache
         _localMemorySetter = new LocalMemorySetter(cacheName, changeTokenFactory, _topicProvider, _memoryCache, logger, _clock, _multiLayerCacheOptions, memoryCacheOptions, telemetryProvider);
     }
 
-    public ValueTask<T?> GetAsync<T>(CacheKey cacheKey, CancellationToken token = default)
+    public ValueTask<T?> GetAsync<T>(CacheKey cacheKey, CachePolicy? policy = null, CancellationToken token = default)
     {
         NotCacheableException.ThrowIfNotCacheable<T>();
-        return GetInnerAsync<T>(_entryBuilder.BuildEntryOptions<T>(cacheKey, _clock.ToDateTimeOffset(_multiLayerCacheOptions.DefaultExpiration), token));
+        policy ??= _policyFactory.Default;
+        return GetInnerAsync<T>(_entryBuilder.BuildEntryOptions<T>(cacheKey, _clock.ToDateTimeOffset(_multiLayerCacheOptions.DefaultExpiration), token), policy);
     }
 
-    public ValueTask<KeyValuePair<CacheKey, T?>[]> GetAsync<T>(CacheKey[] cacheKeys, CancellationToken token = default)
+    public ValueTask<KeyValuePair<CacheKey, T?>[]> GetAsync<T>(CacheKey[] cacheKeys, CachePolicy? policy = null, CancellationToken token = default)
     {
         NotCacheableException.ThrowIfNotCacheable<T>();
+        policy ??= _policyFactory.Default;
         var options = cacheKeys.Select(k => _entryBuilder.BuildEntryOptions<T>(k, default, token)).ToArray();
-        return GetInnerAsync<T>(options, token);
+        return GetInnerAsync<T>(options, policy, token);
     }
 
-    public async ValueTask<ICacheEntry<T?>> GetCacheEntryAsync<T>(CacheKey cacheKey, CancellationToken token = default)
+    public async ValueTask<ICacheEntry<T?>> GetCacheEntryAsync<T>(CacheKey cacheKey, CachePolicy? policy = null, CancellationToken token = default)
     {
         NotCacheableException.ThrowIfNotCacheable<T>();
+        policy ??= _policyFactory.Default;
         var options = _entryBuilder.BuildEntryOptions<T>(cacheKey, _clock.ToDateTimeOffset(_multiLayerCacheOptions.DefaultExpiration), token);
-        return await GetCacheEntryInnerAsync<T>(options).ConfigureAwait(false);
+        return await GetCacheEntryInnerAsync<T>(options, policy).ConfigureAwait(false);
     }
 
-    public async ValueTask<KeyValuePair<CacheKey, ICacheEntry<T?>>[]> GetCacheEntriesAsync<T>(CacheKey[] cacheKeys, CancellationToken token = default)
+    public async ValueTask<KeyValuePair<CacheKey, ICacheEntry<T?>>[]> GetCacheEntriesAsync<T>(CacheKey[] cacheKeys, CachePolicy? policy = null, CancellationToken token = default)
     {
         NotCacheableException.ThrowIfNotCacheable<T>();
+        policy ??= _policyFactory.Default;
         var options = cacheKeys.Select(k => _entryBuilder.BuildEntryOptions<T>(k, default, token)).ToArray();
-        return await GetCacheEntriesInnerAsync<T>(options, token).ConfigureAwait(false);
+        return await GetCacheEntriesInnerAsync<T>(options, policy, token).ConfigureAwait(false);
     }
 
-    public ValueTask<T?> GetOrAddAsync<T>(CacheKey cacheKey, Func<CancellationToken, Task<T?>> generator, CancellationToken token = default)=>
-        GetOrAddAsync(cacheKey, generator, _multiLayerCacheOptions.DefaultExpiration, token);
+    public ValueTask<T?> GetOrAddAsync<T>(CacheKey cacheKey, Func<CancellationToken, Task<T?>> generator, CachePolicy? policy = null, CancellationToken token = default)
+    {
+        ArgumentNullException.ThrowIfNull(generator);
+        policy ??= _policyFactory.Default;
+        var duration = policy.DistributedExpiration;
+        return GetOrAddInternalAsync(cacheKey, generator, _clock.ToDateTimeOffset(duration), duration, policy, token);
+    }
 
-    public ValueTask<T?> GetOrAddAsync<T>(CacheKey cacheKey, Func<CancellationToken, Task<T?>> generator, TimeSpan? expiration = null, CancellationToken token = default)=>
-        GetOrAddAsync(cacheKey, generator, _clock.ToDateTimeOffset(expiration), token);
+    public ValueTask<T?> GetOrAddAsync<T>(CacheKey cacheKey, Func<CancellationToken, Task<T?>> generator, TimeSpan? expiration = null, CachePolicy? policy = null, CancellationToken token = default)
+    {
+        ArgumentNullException.ThrowIfNull(generator);
+        policy ??= _policyFactory.Default;
+        var duration = expiration ?? policy.DistributedExpiration;
+        return GetOrAddInternalAsync(cacheKey, generator, _clock.ToDateTimeOffset(duration), duration, policy, token);
+    }
 
-    public async ValueTask<T?> GetOrAddAsync<T>(CacheKey cacheKey, Func<CancellationToken, Task<T?>> generator, DateTimeOffset? expiration = null, CancellationToken token = default)
+    public ValueTask<T?> GetOrAddAsync<T>(CacheKey cacheKey, Func<CancellationToken, Task<T?>> generator, DateTimeOffset? expiration = null, CachePolicy? policy = null, CancellationToken token = default)
+    {
+        ArgumentNullException.ThrowIfNull(generator);
+        policy ??= _policyFactory.Default;
+        TimeSpan? duration;
+        if (expiration.HasValue)
+        {
+            duration = expiration.Value - _clock.UtcNow;
+            if (duration is { } d && d <= TimeSpan.Zero) { duration = null; }
+        }
+        else
+        {
+            duration = policy.DistributedExpiration;
+            expiration = _clock.ToDateTimeOffset(duration);
+        }
+        return GetOrAddInternalAsync(cacheKey, generator, expiration, duration, policy, token);
+    }
+
+    private async ValueTask<T?> GetOrAddInternalAsync<T>(CacheKey cacheKey, Func<CancellationToken, Task<T?>> generator, DateTimeOffset? expiration, TimeSpan? effectiveDuration, CachePolicy policy, CancellationToken token)
     {
         NotCacheableException.ThrowIfNotCacheable<T>();
         var cacheEntryOptions = _entryBuilder.BuildEntryOptions<T>(cacheKey, expiration, token);
 
-        var entry = await GetCacheEntryInnerAsync<T>(cacheEntryOptions).ConfigureAwait(false);
+        var entry = await GetCacheEntryInnerAsync<T>(cacheEntryOptions, policy).ConfigureAwait(false);
         if (entry.Found)
         {
+            TryRehydrate(cacheKey, entry.Expiration, entry.Value, generator, policy, effectiveDuration);
             return entry.Value;
         }
 
         var result = await RunUnderLocksAsync<ICacheEntry<T?>>(
             cacheEntryOptions.CacheKey,
-            () => GetCacheEntryInnerAsync<T>(cacheEntryOptions),
+            () => GetCacheEntryInnerAsync<T>(cacheEntryOptions, policy),
             e => e.Found,
-            ct => RunGeneratorAndStoreEntryAsync(cacheEntryOptions, generator, ct),
-            token).ConfigureAwait(false);
+            ct => RunGeneratorAndStoreEntryAsync(cacheEntryOptions, generator, policy, ct),
+            token,
+            policyLock: policy.Lock).ConfigureAwait(false);
         return result.Value;
     }
 
-    private async ValueTask<ICacheEntry<T?>> RunGeneratorAndStoreEntryAsync<T>(CacheEntryOptions cacheEntryOptions, Func<CancellationToken, Task<T?>> generator, CancellationToken token)
+    private void TryRehydrate<T>(CacheKey originalCacheKey, DateTimeOffset entryExpiration, T? currentValue, Func<CancellationToken, Task<T?>> generator, CachePolicy policy, TimeSpan? effectiveDuration)
+    {
+        if (policy.RehydrateEnabled != true || policy.Rehydrate is null)
+        {
+            return;
+        }
+        if (currentValue is null && _multiLayerCacheOptions.CacheNullValues)
+        {
+            return;
+        }
+        var resolvedDuration = effectiveDuration ?? policy.DistributedExpiration ?? _multiLayerCacheOptions.DefaultExpiration;
+        if (resolvedDuration is not { } duration || duration <= TimeSpan.Zero)
+        {
+            return;
+        }
+        _rehydrator.TryTrigger(
+            originalCacheKey,
+            entryExpiration,
+            policy,
+            duration,
+            kind: "cache",
+            rehydrateAsync: async ct =>
+            {
+                var newValue = await generator(ct).ConfigureAwait(false);
+                if (newValue is null && !_multiLayerCacheOptions.CacheNullValues)
+                {
+                    return;
+                }
+                // Factory transitions to null: preserve the original deadline so the null doesn't get a fresh TTL window.
+                var rehydrateExpiration = newValue is null
+                    ? entryExpiration
+                    : _clock.UtcNow.Add(duration);
+                var rehydrateOptions = _entryBuilder.BuildEntryOptions<T>(originalCacheKey, rehydrateExpiration, ct);
+                var innerCacheDisconnected = GetInnerCacheDisconnected();
+                var fired = innerCacheDisconnected || await _eventPublisher.CacheSetAsync(rehydrateOptions).ConfigureAwait(false);
+                var written = fired && await InternalSetAsync(rehydrateOptions, newValue, innerCacheDisconnected, policy).ConfigureAwait(false);
+                if (!written)
+                {
+                    throw new RehydrateWriteFailedException(originalCacheKey.Name);
+                }
+            });
+    }
+
+    private async ValueTask<ICacheEntry<T?>> RunGeneratorAndStoreEntryAsync<T>(CacheEntryOptions cacheEntryOptions, Func<CancellationToken, Task<T?>> generator, CachePolicy policy, CancellationToken token)
     {
         LogCacheMissed(cacheEntryOptions.CacheKey);
-        var ret = await generator(token).ConfigureAwait(false);
+        var ret = await InvokeFactoryAsync(cacheEntryOptions.CacheKey, generator, policy.FactoryTimeout, token).ConfigureAwait(false);
 
         if (ret is not null || _multiLayerCacheOptions.CacheNullValues)
         {
             var innerCacheDisconnected = GetInnerCacheDisconnected();
-            await InternalSetAsync(cacheEntryOptions, ret, innerCacheDisconnected).ConfigureAwait(false);
+            await InternalSetAsync(cacheEntryOptions, ret, innerCacheDisconnected, policy).ConfigureAwait(false);
         }
         return _cacheEntryFactory.Create<T?>(ret, cacheEntryOptions.Expiration);
     }
 
-    public ValueTask<bool> SetAsync<T>(CacheKey cacheKey, T? value, CancellationToken token = default) =>
-        SetAsync(cacheKey, value, _multiLayerCacheOptions.DefaultExpiration, token);
+    public ValueTask<bool> SetAsync<T>(CacheKey cacheKey, T? value, CachePolicy? policy = null, CancellationToken token = default)
+    {
+        policy ??= _policyFactory.Default;
+        return SetAsync(cacheKey, value, policy.DistributedExpiration ?? _multiLayerCacheOptions.DefaultExpiration, policy, token);
+    }
 
-    public ValueTask<bool> SetAsync<T>(CacheKey cacheKey, T? value, TimeSpan? expiration = null, CancellationToken token = default) =>
-        SetAsync(cacheKey, value, _clock.ToDateTimeOffset(expiration), token);
+    public ValueTask<bool> SetAsync<T>(CacheKey cacheKey, T? value, TimeSpan? expiration = null, CachePolicy? policy = null, CancellationToken token = default)
+    {
+        policy ??= _policyFactory.Default;
+        var resolved = expiration ?? policy.DistributedExpiration;
+        return SetAsync(cacheKey, value, _clock.ToDateTimeOffset(resolved), policy, token);
+    }
 
-    public async ValueTask<bool> SetAsync<T>(CacheKey cacheKey, T? value, DateTimeOffset? expiration = null, CancellationToken token = default)
+    public async ValueTask<bool> SetAsync<T>(CacheKey cacheKey, T? value, DateTimeOffset? expiration = null, CachePolicy? policy = null, CancellationToken token = default)
     {
         NotCacheableException.ThrowIfNotCacheable<T>();
+        policy ??= _policyFactory.Default;
+        expiration ??= _clock.ToDateTimeOffset(policy.DistributedExpiration ?? _multiLayerCacheOptions.DefaultExpiration);
         var cacheEntryOptions = _entryBuilder.BuildEntryOptions<T>(cacheKey, expiration, token);
         if (value is null && !_multiLayerCacheOptions.CacheNullValues)
         {
@@ -118,26 +205,35 @@ public sealed partial class MultilayerCache : MultilayerCacheBase, ICache
         if (innerCacheDisconnected)
         {
             LogSettingLocalOnly(cacheEntryOptions.CacheKey);
-            return await InternalSetAsync(cacheEntryOptions, value, innerCacheDisconnected).ConfigureAwait(false);
+            return await InternalSetAsync(cacheEntryOptions, value, innerCacheDisconnected, policy).ConfigureAwait(false);
         }
         else
         {
             var fired = await _eventPublisher.CacheSetAsync(cacheEntryOptions).ConfigureAwait(false);
-            return fired && await InternalSetAsync(cacheEntryOptions, value, innerCacheDisconnected).ConfigureAwait(false);
+            return fired && await InternalSetAsync(cacheEntryOptions, value, innerCacheDisconnected, policy).ConfigureAwait(false);
         }
     }
 
 
-    public ValueTask<bool> SetAsync<T>(KeyValuePair<CacheKey, T?>[] keyValues, CancellationToken token = default) =>
-        SetAsync(keyValues, _multiLayerCacheOptions.DefaultExpiration, token);
+    public ValueTask<bool> SetAsync<T>(KeyValuePair<CacheKey, T?>[] keyValues, CachePolicy? policy = null, CancellationToken token = default)
+    {
+        policy ??= _policyFactory.Default;
+        return SetAsync(keyValues, policy.DistributedExpiration ?? _multiLayerCacheOptions.DefaultExpiration, policy, token);
+    }
 
-    public ValueTask<bool> SetAsync<T>(KeyValuePair<CacheKey, T?>[] keyValues, TimeSpan? expiration = null, CancellationToken token = default) =>
-        SetAsync(keyValues, _clock.ToDateTimeOffset(expiration), token);
+    public ValueTask<bool> SetAsync<T>(KeyValuePair<CacheKey, T?>[] keyValues, TimeSpan? expiration = null, CachePolicy? policy = null, CancellationToken token = default)
+    {
+        policy ??= _policyFactory.Default;
+        var resolved = expiration ?? policy.DistributedExpiration;
+        return SetAsync(keyValues, _clock.ToDateTimeOffset(resolved), policy, token);
+    }
 
-    public async ValueTask<bool> SetAsync<T>(KeyValuePair<CacheKey, T?>[] keyValues, DateTimeOffset? expiration = null, CancellationToken token = default)
+    public async ValueTask<bool> SetAsync<T>(KeyValuePair<CacheKey, T?>[] keyValues, DateTimeOffset? expiration = null, CachePolicy? policy = null, CancellationToken token = default)
     {
         NotCacheableException.ThrowIfNotCacheable<T>();
-        var removeEntries = new List<CacheEntryOptions>(); 
+        policy ??= _policyFactory.Default;
+        expiration ??= _clock.ToDateTimeOffset(policy.DistributedExpiration ?? _multiLayerCacheOptions.DefaultExpiration);
+        var removeEntries = new List<CacheEntryOptions>();
         var setEntries = new List<CacheEntryValue<T>>();
         foreach (var keyValue in keyValues)
         {
@@ -161,7 +257,7 @@ public sealed partial class MultilayerCache : MultilayerCacheBase, ICache
         }
 
         var innerCacheDisconnected = GetInnerCacheDisconnected();
-        var internalSetResult = await InternalSetAsync<T>(setEntries.ToArray(), innerCacheDisconnected, token).ConfigureAwait(false);
+        var internalSetResult = await InternalSetAsync<T>(setEntries.ToArray(), innerCacheDisconnected, policy, token).ConfigureAwait(false);
         if (!internalSetResult)
         {
             return false;
@@ -202,15 +298,24 @@ public sealed partial class MultilayerCache : MultilayerCacheBase, ICache
         return RemoveAsync<T>(options, token);
     }
 
-    public ValueTask<bool> RefreshAsync<T>(CacheKey cacheKey, CancellationToken token = default) =>
-        RefreshAsync<T>(cacheKey, _multiLayerCacheOptions.DefaultExpiration, token);
+    public ValueTask<bool> RefreshAsync<T>(CacheKey cacheKey, CachePolicy? policy = null, CancellationToken token = default)
+    {
+        policy ??= _policyFactory.Default;
+        return RefreshAsync<T>(cacheKey, policy.DistributedExpiration ?? _multiLayerCacheOptions.DefaultExpiration, policy, token);
+    }
 
-    public ValueTask<bool> RefreshAsync<T>(CacheKey cacheKey, TimeSpan? expiration = null, CancellationToken token = default) =>
-        RefreshAsync<T>(cacheKey, _clock.ToDateTimeOffset(expiration), token);
+    public ValueTask<bool> RefreshAsync<T>(CacheKey cacheKey, TimeSpan? expiration = null, CachePolicy? policy = null, CancellationToken token = default)
+    {
+        policy ??= _policyFactory.Default;
+        var resolved = expiration ?? policy.DistributedExpiration;
+        return RefreshAsync<T>(cacheKey, _clock.ToDateTimeOffset(resolved), policy, token);
+    }
 
-    public async ValueTask<bool> RefreshAsync<T>(CacheKey cacheKey, DateTimeOffset? expiration = null, CancellationToken token = default)
+    public async ValueTask<bool> RefreshAsync<T>(CacheKey cacheKey, DateTimeOffset? expiration = null, CachePolicy? policy = null, CancellationToken token = default)
     {
         NotCacheableException.ThrowIfNotCacheable<T>();
+        policy ??= _policyFactory.Default;
+        expiration ??= _clock.ToDateTimeOffset(policy.DistributedExpiration ?? _multiLayerCacheOptions.DefaultExpiration);
         var cacheEntryOptions = _entryBuilder.BuildEntryOptions<T>(cacheKey, expiration, token);
         LogClearingCached(cacheEntryOptions.CacheKey);
         _memoryCache.Remove(cacheEntryOptions.CacheKey);
@@ -218,7 +323,7 @@ public sealed partial class MultilayerCache : MultilayerCacheBase, ICache
         try
         {
             var fired = await _eventPublisher.CacheRefreshedAsync(cacheEntryOptions).ConfigureAwait(false);
-            return fired && await _innerCache.RefreshAsync<T>(cacheEntryOptions.CacheKey, cacheEntryOptions.Expiration, token).ConfigureAwait(false);
+            return fired && await _innerCache.RefreshAsync<T>(cacheEntryOptions.CacheKey, cacheEntryOptions.Expiration, policy, token).ConfigureAwait(false);
         }
         catch (Exception ex)
         {
@@ -314,7 +419,7 @@ public sealed partial class MultilayerCache : MultilayerCacheBase, ICache
         }
     }
 
-    private async ValueTask<KeyValuePair<CacheKey, T?>[]> GetInnerAsync<T>(CacheEntryOptions[] options, CancellationToken token = default)
+    private async ValueTask<KeyValuePair<CacheKey, T?>[]> GetInnerAsync<T>(CacheEntryOptions[] options, CachePolicy policy, CancellationToken token = default)
     {
         List<KeyValuePair<CacheKey, T?>> results = [];
         List<CacheEntryOptions> cacheEntriesToFetch = [];
@@ -327,7 +432,7 @@ public sealed partial class MultilayerCache : MultilayerCacheBase, ICache
                 {
                     results.Add(new KeyValuePair<CacheKey, T?>(option.CacheKey, entry!.Value));
                 }
-                else if (_usePrimaryOnlyWhenDisconnected)
+                else if (_useLocalOnlyWhenDisconnected)
                 {
                     LogUsingPrimaryOnlyWhenDisconnected(option.CacheKey);
                     results.Add(new KeyValuePair<CacheKey, T?>(option.CacheKey, entry!.Value));
@@ -350,7 +455,7 @@ public sealed partial class MultilayerCache : MultilayerCacheBase, ICache
             return results.ToArray();
         }
 
-        var fetched = await _innerCache.GetCacheEntriesAsync<T>(keys, token).ConfigureAwait(false);
+        var fetched = await _innerCache.GetCacheEntriesAsync<T>(keys, policy, token).ConfigureAwait(false);
 
         for (int i = 0; i < keys.Length; i++)
         {
@@ -366,13 +471,13 @@ public sealed partial class MultilayerCache : MultilayerCacheBase, ICache
             LogFoundInnerCacheCopy(key);
             var option = cacheEntriesToFetch[i];
             option.Expiration = entry.Expiration;
-            MemorySet(option, new KeyValuePair<CacheKey, T?>(key, entry.Value), _multiLayerCacheOptions.PrimaryMaxExpiration);
+            MemorySet(option, new KeyValuePair<CacheKey, T?>(key, entry.Value), policy.LocalExpiration ?? _multiLayerCacheOptions.LocalMaxExpiration);
         }
 
         return results.ToArray();
     }
 
-    private async ValueTask<T?> GetInnerAsync<T>(CacheEntryOptions options)
+    private async ValueTask<T?> GetInnerAsync<T>(CacheEntryOptions options, CachePolicy policy)
     {
         if (_memoryCache.TryGetValue<ICacheEntry<T>>(options.CacheKey, out var entry))
         {
@@ -381,7 +486,7 @@ public sealed partial class MultilayerCache : MultilayerCacheBase, ICache
             {
                 return entry!.Value;
             }
-            else if (_usePrimaryOnlyWhenDisconnected)
+            else if (_useLocalOnlyWhenDisconnected)
             {
                 LogUsingPrimaryOnlyWhenDisconnected(options.CacheKey);
                 return entry!.Value;
@@ -394,7 +499,7 @@ public sealed partial class MultilayerCache : MultilayerCacheBase, ICache
             }
         }
 
-        var fetched = await _innerCache.GetCacheEntryAsync<T>(options.CacheKey, options.Token).ConfigureAwait(false);
+        var fetched = await _innerCache.GetCacheEntryAsync<T>(options.CacheKey, policy, options.Token).ConfigureAwait(false);
 
         if (!fetched.Found)
         {
@@ -403,11 +508,11 @@ public sealed partial class MultilayerCache : MultilayerCacheBase, ICache
 
         LogFoundInnerCacheCopy(options.CacheKey);
         options.Expiration = fetched.Expiration;
-        MemorySet(options, fetched.Value, _multiLayerCacheOptions.PrimaryMaxExpiration);
+        MemorySet(options, fetched.Value, policy.LocalExpiration ?? _multiLayerCacheOptions.LocalMaxExpiration);
         return fetched.Value;
     }
 
-    private async ValueTask<KeyValuePair<CacheKey, ICacheEntry<T?>>[]> GetCacheEntriesInnerAsync<T>(CacheEntryOptions[] options, CancellationToken token = default)
+    private async ValueTask<KeyValuePair<CacheKey, ICacheEntry<T?>>[]> GetCacheEntriesInnerAsync<T>(CacheEntryOptions[] options, CachePolicy policy, CancellationToken token = default)
     {
         var results = new KeyValuePair<CacheKey, ICacheEntry<T?>>[options.Length];
         List<int> missIndices = [];
@@ -418,7 +523,7 @@ public sealed partial class MultilayerCache : MultilayerCacheBase, ICache
             if (_memoryCache.TryGetValue<ICacheEntry<T?>>(option.CacheKey, out var entry))
             {
                 LogFoundLocal(option.CacheKey);
-                if (_connectionState.IsConnected || _usePrimaryOnlyWhenDisconnected)
+                if (_connectionState.IsConnected || _useLocalOnlyWhenDisconnected)
                 {
                     if (!_connectionState.IsConnected)
                     {
@@ -444,7 +549,7 @@ public sealed partial class MultilayerCache : MultilayerCacheBase, ICache
         }
 
         var keys = cacheEntriesToFetch.Select(c => c.CacheKey).ToArray();
-        var fetched = await _innerCache.GetCacheEntriesAsync<T>(keys, token).ConfigureAwait(false);
+        var fetched = await _innerCache.GetCacheEntriesAsync<T>(keys, policy, token).ConfigureAwait(false);
 
         for (int j = 0; j < keys.Length; j++)
         {
@@ -461,18 +566,18 @@ public sealed partial class MultilayerCache : MultilayerCacheBase, ICache
             LogFoundInnerCacheCopy(key);
             var option = cacheEntriesToFetch[j];
             option.Expiration = entry.Expiration;
-            MemorySet(option, new KeyValuePair<CacheKey, T?>(key, entry.Value), _multiLayerCacheOptions.PrimaryMaxExpiration);
+            MemorySet(option, new KeyValuePair<CacheKey, T?>(key, entry.Value), policy.LocalExpiration ?? _multiLayerCacheOptions.LocalMaxExpiration);
         }
 
         return results;
     }
 
-    private async ValueTask<ICacheEntry<T?>> GetCacheEntryInnerAsync<T>(CacheEntryOptions options)
+    private async ValueTask<ICacheEntry<T?>> GetCacheEntryInnerAsync<T>(CacheEntryOptions options, CachePolicy policy)
     {
         if (_memoryCache.TryGetValue<ICacheEntry<T?>>(options.CacheKey, out var entry))
         {
             LogFoundLocal(options.CacheKey);
-            if (_connectionState.IsConnected || _usePrimaryOnlyWhenDisconnected)
+            if (_connectionState.IsConnected || _useLocalOnlyWhenDisconnected)
             {
                 if (!_connectionState.IsConnected)
                 {
@@ -486,7 +591,7 @@ public sealed partial class MultilayerCache : MultilayerCacheBase, ICache
             return _cacheEntryFactory.Create<T?>(default, DateTimeOffset.MinValue);
         }
 
-        var fetched = await _innerCache.GetCacheEntryAsync<T>(options.CacheKey, options.Token).ConfigureAwait(false);
+        var fetched = await _innerCache.GetCacheEntryAsync<T>(options.CacheKey, policy, options.Token).ConfigureAwait(false);
 
         if (!fetched.Found)
         {
@@ -495,22 +600,22 @@ public sealed partial class MultilayerCache : MultilayerCacheBase, ICache
 
         LogFoundInnerCacheCopy(options.CacheKey);
         options.Expiration = fetched.Expiration;
-        MemorySet(options, fetched.Value, _multiLayerCacheOptions.PrimaryMaxExpiration);
+        MemorySet(options, fetched.Value, policy.LocalExpiration ?? _multiLayerCacheOptions.LocalMaxExpiration);
         return fetched;
     }
 
-    private async ValueTask<bool> InternalSetAsync<T>(CacheEntryOptions options, T? value, bool innerCacheDisconnected)
+    private async ValueTask<bool> InternalSetAsync<T>(CacheEntryOptions options, T? value, bool innerCacheDisconnected, CachePolicy policy)
     {
         try
         {
             if (innerCacheDisconnected)
             {
                 LogSettingLocalOnly(options.CacheKey);
-                return MemorySet(options, value, _multiLayerCacheOptions.PrimaryMaxExpirationDisconnected);
+                return MemorySet(options, value, policy.LocalExpirationDisconnected ?? _multiLayerCacheOptions.LocalMaxExpirationDisconnected);
             }
 
-            var ret = await _innerCache.SetAsync<T?>(options.CacheKey, value, options.Expiration, options.Token).ConfigureAwait(false);
-            return ret && MemorySet(options, value, _multiLayerCacheOptions.PrimaryMaxExpiration);
+            var ret = await _innerCache.SetAsync<T?>(options.CacheKey, value, options.Expiration, policy, options.Token).ConfigureAwait(false);
+            return ret && MemorySet(options, value, policy.LocalExpiration ?? _multiLayerCacheOptions.LocalMaxExpiration);
         }
         catch (Exception ex)
         {
@@ -519,7 +624,7 @@ public sealed partial class MultilayerCache : MultilayerCacheBase, ICache
         }
     }
 
-    private async ValueTask<bool> InternalSetAsync<T>(CacheEntryValue<T>[] cacheEntries, bool innerCacheDisconnected, CancellationToken token = default)
+    private async ValueTask<bool> InternalSetAsync<T>(CacheEntryValue<T>[] cacheEntries, bool innerCacheDisconnected, CachePolicy policy, CancellationToken token = default)
     {
         try
         {
@@ -531,12 +636,12 @@ public sealed partial class MultilayerCache : MultilayerCacheBase, ICache
                 {
                     LogSettingLocalOnlyForCacheKeys(string.Join(",", cacheEntries.Select(o => o.CacheEntry.CacheKey)));
                 }
-                return MemSet(_multiLayerCacheOptions.PrimaryMaxExpirationDisconnected);
+                return MemSet(policy.LocalExpirationDisconnected ?? _multiLayerCacheOptions.LocalMaxExpirationDisconnected);
             }
 
             DateTimeOffset? batchExpiration = cacheEntries.Length > 0 ? cacheEntries[0].CacheEntry.Expiration : null;
-            var set = await _innerCache.SetAsync<T?>(cacheKeyValuePairs, batchExpiration, token).ConfigureAwait(false);
-            return set && MemSet(_multiLayerCacheOptions.PrimaryMaxExpiration);
+            var set = await _innerCache.SetAsync<T?>(cacheKeyValuePairs, batchExpiration, policy, token).ConfigureAwait(false);
+            return set && MemSet(policy.LocalExpiration ?? _multiLayerCacheOptions.LocalMaxExpiration);
         }
         catch (Exception ex)
         {

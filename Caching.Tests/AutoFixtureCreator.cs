@@ -1,4 +1,5 @@
 ﻿using AutoFixture.Kernel;
+using UiPath.Platform.Caching.Config;
 using UiPath.Platform.Caching.Telemetry;
 
 namespace UiPath.Platform.Caching.Tests;
@@ -15,6 +16,7 @@ public static class AutoFixtureCreator
         fixture.Customizations.Add(new CollectionPropertyOmitter());
         fixture.Customizations.Add(new MultilayerCacheOptionsCustomization());
         fixture.Customizations.Add(new TelemetryProviderCustomization());
+        fixture.Customizations.Add(new CachePolicyFactoryCustomization());
 
         fixture.Behaviors.OfType<ThrowingRecursionBehavior>().ToList()
             .ForEach(b => fixture.Behaviors.Remove(b));
@@ -37,6 +39,18 @@ public class TelemetryProviderCustomization : ISpecimenBuilder
     }
 }
 
+public class CachePolicyFactoryCustomization : ISpecimenBuilder
+{
+    public object Create(object request, ISpecimenContext context)
+    {
+        if (request is Type type && type == typeof(ICachePolicyFactory))
+        {
+            return NullCachePolicyFactory.Instance;
+        }
+        return new NoSpecimen();
+    }
+}
+
 public class MultilayerCacheOptionsCustomization : ISpecimenBuilder
 {
     public object Create(object request, ISpecimenContext context)
@@ -47,35 +61,46 @@ public class MultilayerCacheOptionsCustomization : ISpecimenBuilder
             {
                 return new InMemoryRedisCacheOptions
                 {
-                    PrimaryMaxExpiration = TimeSpan.FromMinutes(3),
-                    PrimaryMaxExpirationDisconnected = TimeSpan.FromSeconds(30)
+                    LocalMaxExpiration = TimeSpan.FromMinutes(3),
+                    LocalMaxExpirationDisconnected = TimeSpan.FromSeconds(30)
                 };
             }
             if (type == typeof(InMemoryCacheOptions))
             {
                 return new InMemoryCacheOptions
                 {
-                    PrimaryMaxExpiration = TimeSpan.FromMinutes(3),
-                    PrimaryMaxExpirationDisconnected = TimeSpan.FromSeconds(30)
+                    LocalMaxExpiration = TimeSpan.FromMinutes(3),
+                    LocalMaxExpirationDisconnected = TimeSpan.FromSeconds(30)
                 };
             }
             if (typeof(IMultilayerCacheOptions).IsAssignableFrom(type))
             {
                 return new InMemoryRedisCacheOptions
                 {
-                    PrimaryMaxExpiration = TimeSpan.FromMinutes(3),
-                    PrimaryMaxExpirationDisconnected = TimeSpan.FromSeconds(30)
+                    LocalMaxExpiration = TimeSpan.FromMinutes(3),
+                    LocalMaxExpirationDisconnected = TimeSpan.FromSeconds(30)
                 };
             }
         }
 
         if (request is System.Reflection.PropertyInfo propertyInfo)
         {
-            if (propertyInfo.Name == nameof(IMultilayerCacheOptions.PrimaryMaxExpiration))
+            // [Obsolete]-marked aliases on IMultilayerCacheOptions (e.g. PrimaryMaxExpiration →
+            // LocalMaxExpiration) forward assignments to the new property. If AutoFixture auto-fills
+            // them with random values they would overwrite the sensible defaults set on the new
+            // property below. Skip ONLY the IMultilayerCacheOptions hierarchy's obsolete forwarders
+            // so we don't accidentally suppress unrelated [Obsolete] properties on other types.
+            if (propertyInfo.DeclaringType is { } declaringType
+                && typeof(IMultilayerCacheOptions).IsAssignableFrom(declaringType)
+                && System.Reflection.CustomAttributeExtensions.GetCustomAttribute<ObsoleteAttribute>(propertyInfo) is not null)
+            {
+                return new OmitSpecimen();
+            }
+            if (propertyInfo.Name == nameof(IMultilayerCacheOptions.LocalMaxExpiration))
             {
                 return TimeSpan.FromMinutes(3);
             }
-            if (propertyInfo.Name == nameof(IMultilayerCacheOptions.PrimaryMaxExpirationDisconnected))
+            if (propertyInfo.Name == nameof(IMultilayerCacheOptions.LocalMaxExpirationDisconnected))
             {
                 return TimeSpan.FromSeconds(30);
             }

@@ -67,4 +67,24 @@ public class CacheOptions
     /// effect — the remaining-wait clamp on each sleep takes over before the cap is reached.
     /// </summary>
     public TimeSpan DistributedLockMaxPollInterval { get; set; } = TimeSpan.FromMilliseconds(500);
+
+    /// <summary>
+    /// Per-cache-instance policies keyed by name. <see cref="ICache{T}"/> / <see cref="IHashCache{T}"/>
+    /// bind a policy by name at construction (defaulting to <c>typeof(T).FullName!</c>); the resolved
+    /// policy drives lock settings, foreground factory timeout, hydrating-cache behavior, and the
+    /// L1/L2 TTLs via <see cref="CachePolicy.LocalExpiration"/> /
+    /// <see cref="CachePolicy.LocalExpirationDisconnected"/> /
+    /// <see cref="CachePolicy.DistributedExpiration"/>. Per-call <c>expiration</c> arguments still
+    /// take precedence over the policy's L2 TTL. Names not registered fall back to
+    /// <see cref="DefaultCachePolicy"/>.
+    /// </summary>
+    public IDictionary<string, CachePolicy> Policies { get; set; } = new Dictionary<string, CachePolicy>();
+
+    /// <summary>
+    /// Fallback policy used when a cache instance's name is not registered in <see cref="Policies"/>.
+    /// When null, <c>ICachePolicyFactory.Default</c> is <c>CachePolicy.Empty</c> — provider-specific
+    /// defaults (<c>IMultilayerCacheOptions.DefaultExpiration</c>, lock fields, etc.) are applied at
+    /// call time by each impl, not propagated through the factory.
+    /// </summary>
+    public CachePolicy? DefaultCachePolicy { get; set; }
 }

@@ -74,6 +74,59 @@ public class RedisDistributedLockTests(ITestContextAccessor testContextAccessor)
     }
 
     [Fact]
+    public async Task TryAcquire_returns_releaser_when_LockTake_succeeds()
+    {
+        var redis = _fixture.Freeze<IRedisConnector>();
+        var db = redis.Database;
+        db.LockTakeAsync(Arg.Any<RedisKey>(), Arg.Any<RedisValue>(), Arg.Any<TimeSpan>(), Arg.Any<CommandFlags>())
+            .Returns(true);
+
+        var sut = NewLock(redis);
+        var token = testContextAccessor.Current.CancellationToken;
+
+        var lease = await sut.TryAcquireAsync("k", TimeSpan.FromSeconds(5), token);
+
+        lease.Should().NotBeNull();
+        await lease!.DisposeAsync();
+        await db.Received().LockReleaseAsync(Arg.Any<RedisKey>(), Arg.Any<RedisValue>(), Arg.Any<CommandFlags>());
+    }
+
+    [Fact]
+    public async Task TryAcquire_returns_null_when_LockTake_fails()
+    {
+        var redis = _fixture.Freeze<IRedisConnector>();
+        redis.Database
+            .LockTakeAsync(Arg.Any<RedisKey>(), Arg.Any<RedisValue>(), Arg.Any<TimeSpan>(), Arg.Any<CommandFlags>())
+            .Returns(false);
+
+        var sut = NewLock(redis);
+        var token = testContextAccessor.Current.CancellationToken;
+
+        var lease = await sut.TryAcquireAsync("k", TimeSpan.FromSeconds(5), token);
+
+        lease.Should().BeNull("a null return must unambiguously signal not-acquired without sentinel comparison");
+        await redis.Database.DidNotReceive().LockReleaseAsync(Arg.Any<RedisKey>(), Arg.Any<RedisValue>(), Arg.Any<CommandFlags>());
+    }
+
+    [Fact]
+    public async Task TryAcquire_returns_null_when_Redis_throws_and_tracks_unavailable()
+    {
+        var redis = _fixture.Freeze<IRedisConnector>();
+        redis.Database
+            .LockTakeAsync(Arg.Any<RedisKey>(), Arg.Any<RedisValue>(), Arg.Any<TimeSpan>(), Arg.Any<CommandFlags>())
+            .Returns<Task<bool>>(_ => throw new RedisException("simulated"));
+
+        var telemetry = new RecordingTelemetryProvider();
+        var sut = NewLock(redis, telemetry: telemetry);
+        var token = testContextAccessor.Current.CancellationToken;
+
+        var lease = await sut.TryAcquireAsync("k", TimeSpan.FromSeconds(5), token);
+
+        lease.Should().BeNull("Redis unavailability is distinguishable from contention but for the rehydrate coordinator both map to not-acquired — telemetry preserves the distinction");
+        telemetry.Events.Should().Contain(e => e.Name == "cache.distributedlock.unavailable");
+    }
+
+    [Fact]
     public async Task Acquire_eventually_times_out_when_lock_is_contended()
     {
         var redis = _fixture.Freeze<IRedisConnector>();
@@ -90,6 +143,43 @@ public class RedisDistributedLockTests(ITestContextAccessor testContextAccessor)
 
         lease.Should().BeSameAs(NoOpAsyncDisposable.Instance);
         sw.ElapsedMilliseconds.Should().BeGreaterThanOrEqualTo(180, "the locker should retry until the wait timeout elapses");
+    }
+
+    [Fact]
+    public async Task Acquire_does_not_emit_timeout_event_when_wait_is_zero_and_lock_is_contended()
+    {
+        var redis = _fixture.Freeze<IRedisConnector>();
+        redis.Database
+            .LockTakeAsync(Arg.Any<RedisKey>(), Arg.Any<RedisValue>(), Arg.Any<TimeSpan>(), Arg.Any<CommandFlags>())
+            .Returns(false);
+
+        var telemetry = new RecordingTelemetryProvider();
+        var sut = NewLock(redis, telemetry: telemetry);
+        var token = testContextAccessor.Current.CancellationToken;
+
+        var lease = await sut.AcquireAsync("k", TimeSpan.FromSeconds(5), TimeSpan.Zero, token);
+
+        lease.Should().BeSameAs(NoOpAsyncDisposable.Instance);
+        telemetry.Events.Should().NotContain(e => e.Name == "cache.distributedlock.timeout",
+            "a single non-blocking try-acquire is not a timeout — callers that need to distinguish acquired from not-acquired should use TryAcquireAsync (clean null return) rather than the no-op sentinel exposed here");
+    }
+
+    [Fact]
+    public async Task Acquire_emits_timeout_event_when_positive_wait_elapses()
+    {
+        var redis = _fixture.Freeze<IRedisConnector>();
+        redis.Database
+            .LockTakeAsync(Arg.Any<RedisKey>(), Arg.Any<RedisValue>(), Arg.Any<TimeSpan>(), Arg.Any<CommandFlags>())
+            .Returns(false);
+
+        var telemetry = new RecordingTelemetryProvider();
+        var sut = NewLock(redis, telemetry: telemetry);
+        var token = testContextAccessor.Current.CancellationToken;
+
+        var lease = await sut.AcquireAsync("k", TimeSpan.FromSeconds(5), TimeSpan.FromMilliseconds(150), token);
+
+        lease.Should().BeSameAs(NoOpAsyncDisposable.Instance);
+        telemetry.Events.Should().Contain(e => e.Name == "cache.distributedlock.timeout");
     }
 
     [Theory]

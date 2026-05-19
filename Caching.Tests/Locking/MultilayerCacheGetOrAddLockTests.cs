@@ -46,9 +46,9 @@ public class MultilayerCacheGetOrAddLockTests(ITestContextAccessor testContextAc
         _cacheKeyStrategy.GetCacheKey<string>(cacheKey).Returns((CacheKey)cacheKey);
 
         string? storedValue = null;
-        _innerCache.GetCacheEntryAsync<string>((CacheKey)cacheKey, Arg.Any<CancellationToken>())
+        _innerCache.GetCacheEntryAsync<string>((CacheKey)cacheKey, Arg.Any<CachePolicy?>(), Arg.Any<CancellationToken>())
             .Returns(_ => new TestCacheEntry<string?> { Value = storedValue });
-        _innerCache.SetAsync<string?>((CacheKey)cacheKey, Arg.Any<string?>(), Arg.Any<DateTimeOffset?>(), Arg.Any<CancellationToken>())
+        _innerCache.SetAsync<string?>((CacheKey)cacheKey, Arg.Any<string?>(), Arg.Any<DateTimeOffset?>(), Arg.Any<CachePolicy?>(), Arg.Any<CancellationToken>())
             .Returns(c => { storedValue = c.Arg<string?>(); return true; });
 
         var generatorCalls = 0;
@@ -72,7 +72,7 @@ public class MultilayerCacheGetOrAddLockTests(ITestContextAccessor testContextAc
         }
 
         var tasks = Enumerable.Range(0, 32)
-            .Select(_ => Task.Run(async () => await Sut.GetOrAddAsync(cacheKey, Generator, token)))
+            .Select(_ => Task.Run(async () => await Sut.GetOrAddAsync(cacheKey, Generator, (CachePolicy?)null, token)))
             .ToArray();
 
         await firstEntered.Task.WaitAsync(TimeSpan.FromSeconds(10), token);
@@ -94,9 +94,9 @@ public class MultilayerCacheGetOrAddLockTests(ITestContextAccessor testContextAc
         _cacheKeyStrategy.GetCacheKey<string>(keyA).Returns((CacheKey)keyA);
         _cacheKeyStrategy.GetCacheKey<string>(keyB).Returns((CacheKey)keyB);
 
-        _innerCache.GetCacheEntryAsync<string>((CacheKey)keyA, Arg.Any<CancellationToken>())
+        _innerCache.GetCacheEntryAsync<string>((CacheKey)keyA, Arg.Any<CachePolicy?>(), Arg.Any<CancellationToken>())
             .Returns(new TestCacheEntry<string?> { Value = null });
-        _innerCache.GetCacheEntryAsync<string>((CacheKey)keyB, Arg.Any<CancellationToken>())
+        _innerCache.GetCacheEntryAsync<string>((CacheKey)keyB, Arg.Any<CachePolicy?>(), Arg.Any<CancellationToken>())
             .Returns(new TestCacheEntry<string?> { Value = null });
 
         var concurrentInGenerator = 0;
@@ -121,8 +121,8 @@ public class MultilayerCacheGetOrAddLockTests(ITestContextAccessor testContextAc
             return "v";
         }
 
-        var taskA = Task.Run(async () => await Sut.GetOrAddAsync(keyA, Generator, token));
-        var taskB = Task.Run(async () => await Sut.GetOrAddAsync(keyB, Generator, token));
+        var taskA = Task.Run(async () => await Sut.GetOrAddAsync(keyA, Generator, (CachePolicy?)null, token));
+        var taskB = Task.Run(async () => await Sut.GetOrAddAsync(keyB, Generator, (CachePolicy?)null, token));
         await Task.WhenAll(taskA, taskB);
 
         maxConcurrent.Should().BeGreaterThan(1, "different keys should be able to run their generators concurrently");
@@ -141,7 +141,7 @@ public class MultilayerCacheGetOrAddLockTests(ITestContextAccessor testContextAc
         _cacheKeyStrategy.GetCacheKey<string>(cacheKey).Returns((CacheKey)cacheKey);
 
         var callCount = 0;
-        _innerCache.GetCacheEntryAsync<string>((CacheKey)cacheKey, Arg.Any<CancellationToken>())
+        _innerCache.GetCacheEntryAsync<string>((CacheKey)cacheKey, Arg.Any<CachePolicy?>(), Arg.Any<CancellationToken>())
             .Returns(_ => Interlocked.Increment(ref callCount) == 1
                 ? new TestCacheEntry<string?> { Value = null }
                 : new TestCacheEntry<string?> { Value = "populated" });
@@ -153,7 +153,7 @@ public class MultilayerCacheGetOrAddLockTests(ITestContextAccessor testContextAc
             return Task.FromResult<string?>("generated");
         }
 
-        var result = await Sut.GetOrAddAsync(cacheKey, Generator, token);
+        var result = await Sut.GetOrAddAsync(cacheKey, Generator, (CachePolicy?)null, token);
 
         result.Should().Be("populated");
         generatorCalls.Should().Be(0, "post-local-lock re-read hits — the generator must not run");
@@ -170,7 +170,7 @@ public class MultilayerCacheGetOrAddLockTests(ITestContextAccessor testContextAc
         var token = testContextAccessor.Current.CancellationToken;
         var cacheKey = _fixture.Create<string>();
         _cacheKeyStrategy.GetCacheKey<string>(cacheKey).Returns((CacheKey)cacheKey);
-        _innerCache.GetCacheEntryAsync<string>((CacheKey)cacheKey, Arg.Any<CancellationToken>())
+        _innerCache.GetCacheEntryAsync<string>((CacheKey)cacheKey, Arg.Any<CachePolicy?>(), Arg.Any<CancellationToken>())
             .Returns(new TestCacheEntry<string?> { Value = null });
 
         var holderAcquired = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -188,10 +188,10 @@ public class MultilayerCacheGetOrAddLockTests(ITestContextAccessor testContextAc
             return "second";
         }
 
-        var holderTask = Task.Run(async () => await Sut.GetOrAddAsync(cacheKey, Holder, token));
+        var holderTask = Task.Run(async () => await Sut.GetOrAddAsync(cacheKey, Holder, (CachePolicy?)null, token));
         await holderAcquired.Task.WaitAsync(TimeSpan.FromSeconds(2), token);
 
-        await Sut.GetOrAddAsync(cacheKey, Second, token);
+        await Sut.GetOrAddAsync(cacheKey, Second, (CachePolicy?)null, token);
 
         var calls = _innerCache.ReceivedCalls()
             .Count(c => c.GetMethodInfo().Name == nameof(ICache.GetCacheEntryAsync));
@@ -212,7 +212,7 @@ public class MultilayerCacheGetOrAddLockTests(ITestContextAccessor testContextAc
         var token = testContextAccessor.Current.CancellationToken;
         var cacheKey = _fixture.Create<string>();
         _cacheKeyStrategy.GetCacheKey<string>(cacheKey).Returns((CacheKey)cacheKey);
-        _innerCache.GetCacheEntryAsync<string>((CacheKey)cacheKey, Arg.Any<CancellationToken>())
+        _innerCache.GetCacheEntryAsync<string>((CacheKey)cacheKey, Arg.Any<CachePolicy?>(), Arg.Any<CancellationToken>())
             .Returns(new TestCacheEntry<string?> { Value = null });
 
         const int concurrentCallers = 8;
@@ -239,7 +239,7 @@ public class MultilayerCacheGetOrAddLockTests(ITestContextAccessor testContextAc
         }
 
         var tasks = Enumerable.Range(0, concurrentCallers)
-            .Select(_ => Task.Run(async () => await Sut.GetOrAddAsync(cacheKey, Generator, token)))
+            .Select(_ => Task.Run(async () => await Sut.GetOrAddAsync(cacheKey, Generator, (CachePolicy?)null, token)))
             .ToArray();
         await Task.WhenAll(tasks);
 

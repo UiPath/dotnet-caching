@@ -15,16 +15,18 @@ public abstract class MultilayerCacheBase : IDisposable
     protected readonly CacheEventPublisher _eventPublisher;
     protected readonly IConnectionState _connectionState;
     protected readonly ITopicProvider _topicProvider;
-    protected readonly bool _usePrimaryOnlyWhenDisconnected;
+    protected readonly bool _useLocalOnlyWhenDisconnected;
     private readonly ILocalLock _localLock;
     private readonly IDistributedLock _distributedLock;
     private readonly IDistributedLockKeyStrategy _lockKeyStrategy;
+    private protected readonly RehydrationCoordinator _rehydrator;
     private readonly string _localLockKeyPrefix;
     private readonly TimeSpan _distributedLockExpiry;
     private readonly TimeSpan _distributedLockTimeout;
     private readonly TimeSpan _localLockTimeout;
     private readonly bool _localLockEnabled;
     private readonly bool _distributedLockEnabled;
+    private protected readonly ICachePolicyFactory _policyFactory;
 
     protected MultilayerCacheBase(
         string cacheName,
@@ -38,6 +40,7 @@ public abstract class MultilayerCacheBase : IDisposable
         CacheOptions cacheOptions,
         ILocalLock localLock,
         IDistributedLock distributedLock,
+        ICachePolicyFactory policyFactory,
         ILogger logger)
     {
         _logger = logger;
@@ -53,7 +56,7 @@ public abstract class MultilayerCacheBase : IDisposable
         _eventPublisher = new CacheEventPublisher(cacheName, _topicProvider, cacheEventFactory, logger);
         var connectionMonitorEnabled = multiLayerCacheOptions.ConnectionMonitorEnabled ?? cacheOptions.ConnectionMonitorEnabled;
         _connectionState = connectionMonitorEnabled ? GetConnectionMonitor(innerCache, _topicProvider) : NullConnectionStateMonitor.Instance;
-        _usePrimaryOnlyWhenDisconnected = (multiLayerCacheOptions.UsePrimaryOnlyWhenDisconnected ?? false) && connectionMonitorEnabled;
+        _useLocalOnlyWhenDisconnected = (multiLayerCacheOptions.UseLocalOnlyWhenDisconnected ?? false) && connectionMonitorEnabled;
         _localLock = localLock;
         _distributedLock = distributedLock;
         _lockKeyStrategy = multiLayerCacheOptions.LockKeyStrategy ?? new DefaultDistributedLockKeyStrategy(cacheOptions.Separator);
@@ -63,7 +66,9 @@ public abstract class MultilayerCacheBase : IDisposable
         _localLockTimeout = multiLayerCacheOptions.LocalLockTimeout ?? TimeSpan.FromMilliseconds(500);
         _localLockEnabled = multiLayerCacheOptions.LocalLockEnabled ?? true;
         _distributedLockEnabled = multiLayerCacheOptions.DistributedLockEnabled ?? false;
+        _policyFactory = policyFactory;
         Name = cacheName;
+        _rehydrator = new RehydrationCoordinator(cacheName, _clock, distributedLock, _lockKeyStrategy, telemetryProvider, logger);
     }
 
     public string Name { get; }
@@ -73,15 +78,23 @@ public abstract class MultilayerCacheBase : IDisposable
         Func<ValueTask<TResult>> readCachedAsync,
         Func<TResult, bool> isHit,
         Func<CancellationToken, ValueTask<TResult>> runGeneratorAndStoreAsync,
-        CancellationToken token)
+        CancellationToken token,
+        LockProfile? policyLock = null)
     {
+        var localLockEnabled = policyLock?.LocalLockEnabled ?? _localLockEnabled;
+        var distributedLockEnabled = policyLock?.DistributedLockEnabled ?? _distributedLockEnabled;
+        // Per-call LockProfile bypasses options validators; mirror LockSettingsValidator's accepted ranges and fall back when out-of-range.
+        var localLockTimeout = PositiveOrFallback(policyLock?.LocalLockTimeout, _localLockTimeout);
+        var distributedLockTimeout = NonNegativeOrFallback(policyLock?.DistributedLockTimeout, _distributedLockTimeout);
+        var distributedLockExpiry = PositiveOrFallback(policyLock?.DistributedLockExpiry, _distributedLockExpiry);
+
         IDisposable? localLock = null;
         IAsyncDisposable? distributedLock = null;
         try
         {
-            if (_localLockEnabled)
+            if (localLockEnabled)
             {
-                localLock = await TryAcquireLocalLockAsync(cacheKey, token).ConfigureAwait(false);
+                localLock = await TryAcquireLocalLockAsync(cacheKey, localLockTimeout, token).ConfigureAwait(false);
                 var fromCache = await readCachedAsync().ConfigureAwait(false);
                 if (isHit(fromCache))
                 {
@@ -89,10 +102,10 @@ public abstract class MultilayerCacheBase : IDisposable
                 }
             }
 
-            if (_distributedLockEnabled)
+            if (distributedLockEnabled)
             {
                 var lockKey = _lockKeyStrategy.GetLockKey(cacheKey);
-                distributedLock = await _distributedLock.AcquireAsync(lockKey, _distributedLockExpiry, _distributedLockTimeout, token).ConfigureAwait(false);
+                distributedLock = await _distributedLock.AcquireAsync(lockKey, distributedLockExpiry, distributedLockTimeout, token).ConfigureAwait(false);
                 var fromCache = await readCachedAsync().ConfigureAwait(false);
                 if (isHit(fromCache))
                 {
@@ -118,11 +131,28 @@ public abstract class MultilayerCacheBase : IDisposable
         }
     }
 
-    private async ValueTask<IDisposable?> TryAcquireLocalLockAsync(CacheKey cacheKey, CancellationToken token)
+    protected Task<TResult> InvokeFactoryAsync<TResult>(
+        CacheKey cacheKey,
+        Func<CancellationToken, Task<TResult>> factory,
+        TimeSpan? factoryTimeout,
+        CancellationToken token) =>
+        FactoryTimeout.RunAsync(factory, factoryTimeout, cacheKey, Name, Telemetry, token);
+
+    private static TimeSpan PositiveOrFallback(TimeSpan? value, TimeSpan fallback) =>
+        value is { } v && v > TimeSpan.Zero ? v : fallback;
+
+    private static TimeSpan NonNegativeOrFallback(TimeSpan? value, TimeSpan fallback) =>
+        value is { } v && v >= TimeSpan.Zero ? v : fallback;
+
+    private async ValueTask<IDisposable?> TryAcquireLocalLockAsync(CacheKey cacheKey, TimeSpan localLockTimeout, CancellationToken token)
     {
         var lockKey = _localLockKeyPrefix + cacheKey.Name;
         using var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(token);
-        linkedCts.CancelAfter(_localLockTimeout);
+        // CancelAfter throws on > Int32.MaxValue ms; clamp so misconfigured Lock.LocalLockTimeout degrades gracefully.
+        var clampedTimeout = localLockTimeout.TotalMilliseconds > int.MaxValue
+            ? TimeSpan.FromMilliseconds(int.MaxValue)
+            : localLockTimeout;
+        linkedCts.CancelAfter(clampedTimeout);
         try
         {
             return await _localLock.AcquireAsync(lockKey, linkedCts.Token).ConfigureAwait(false);
@@ -135,7 +165,7 @@ public abstract class MultilayerCacheBase : IDisposable
 
     protected ICachingTelemetryProvider Telemetry { get; }
 
-    protected bool GetInnerCacheDisconnected() => _usePrimaryOnlyWhenDisconnected && !_connectionState.IsConnected;
+    protected bool GetInnerCacheDisconnected() => _useLocalOnlyWhenDisconnected && !_connectionState.IsConnected;
 
     private IConnectionState GetConnectionMonitor(params object[] connectionStates)
     {
@@ -167,12 +197,12 @@ public abstract class MultilayerCacheBase : IDisposable
 
     private static void ValidateExpirationOptions(IMultilayerCacheOptions options)
     {
-        if (options.PrimaryMaxExpiration.HasValue &&
-            options.PrimaryMaxExpirationDisconnected.HasValue &&
-            options.PrimaryMaxExpirationDisconnected.Value > options.PrimaryMaxExpiration.Value)
+        if (options.LocalMaxExpiration.HasValue &&
+            options.LocalMaxExpirationDisconnected.HasValue &&
+            options.LocalMaxExpirationDisconnected.Value > options.LocalMaxExpiration.Value)
         {
             throw new ArgumentException(
-                $"{nameof(options.PrimaryMaxExpirationDisconnected)} ({options.PrimaryMaxExpirationDisconnected.Value}) must be less than or equal to {nameof(options.PrimaryMaxExpiration)} ({options.PrimaryMaxExpiration.Value}).",
+                $"{nameof(options.LocalMaxExpirationDisconnected)} ({options.LocalMaxExpirationDisconnected.Value}) must be less than or equal to {nameof(options.LocalMaxExpiration)} ({options.LocalMaxExpiration.Value}).",
                 nameof(options));
         }
     }

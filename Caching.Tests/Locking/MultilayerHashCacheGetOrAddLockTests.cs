@@ -46,12 +46,13 @@ public class MultilayerHashCacheGetOrAddLockTests(ITestContextAccessor testConte
         _cacheKeyStrategy.GetCacheKey<string>(cacheKey).Returns((CacheKey)cacheKey);
 
         IDictionary<string, string?>? storedValue = null;
-        _innerCache.GetCacheEntryAsync<string>((CacheKey)cacheKey, Arg.Any<CancellationToken>())
+        _innerCache.GetCacheEntryAsync<string>((CacheKey)cacheKey, Arg.Any<CachePolicy?>(), Arg.Any<CancellationToken>())
             .Returns(_ => new TestCacheEntry<IDictionary<string, string?>> { Value = storedValue });
         _innerCache.SetAsync<string?>(
                 (CacheKey)cacheKey,
                 Arg.Any<IDictionary<string, string?>>(),
                 Arg.Any<HashCacheEntryOptions>(),
+                Arg.Any<CachePolicy?>(),
                 Arg.Any<CancellationToken>())
             .Returns(c => { storedValue = c.Arg<IDictionary<string, string?>>(); return true; });
 
@@ -76,7 +77,7 @@ public class MultilayerHashCacheGetOrAddLockTests(ITestContextAccessor testConte
         }
 
         var tasks = Enumerable.Range(0, 32)
-            .Select(_ => Task.Run(async () => await Sut.GetOrAddAsync(cacheKey, Generator, token)))
+            .Select(_ => Task.Run(async () => await Sut.GetOrAddAsync(cacheKey, Generator, (CachePolicy?)null, token)))
             .ToArray();
 
         await firstEntered.Task.WaitAsync(TimeSpan.FromSeconds(10), token);
@@ -98,9 +99,9 @@ public class MultilayerHashCacheGetOrAddLockTests(ITestContextAccessor testConte
         _cacheKeyStrategy.GetCacheKey<string>(keyA).Returns((CacheKey)keyA);
         _cacheKeyStrategy.GetCacheKey<string>(keyB).Returns((CacheKey)keyB);
 
-        _innerCache.GetCacheEntryAsync<string>((CacheKey)keyA, Arg.Any<CancellationToken>())
+        _innerCache.GetCacheEntryAsync<string>((CacheKey)keyA, Arg.Any<CachePolicy?>(), Arg.Any<CancellationToken>())
             .Returns(new TestCacheEntry<IDictionary<string, string?>> { Value = null });
-        _innerCache.GetCacheEntryAsync<string>((CacheKey)keyB, Arg.Any<CancellationToken>())
+        _innerCache.GetCacheEntryAsync<string>((CacheKey)keyB, Arg.Any<CachePolicy?>(), Arg.Any<CancellationToken>())
             .Returns(new TestCacheEntry<IDictionary<string, string?>> { Value = null });
 
         var concurrentInGenerator = 0;
@@ -125,8 +126,8 @@ public class MultilayerHashCacheGetOrAddLockTests(ITestContextAccessor testConte
             return new Dictionary<string, string?> { ["k"] = "v" };
         }
 
-        var taskA = Task.Run(async () => await Sut.GetOrAddAsync(keyA, Generator, token));
-        var taskB = Task.Run(async () => await Sut.GetOrAddAsync(keyB, Generator, token));
+        var taskA = Task.Run(async () => await Sut.GetOrAddAsync(keyA, Generator, (CachePolicy?)null, token));
+        var taskB = Task.Run(async () => await Sut.GetOrAddAsync(keyB, Generator, (CachePolicy?)null, token));
         await Task.WhenAll(taskA, taskB);
 
         maxConcurrent.Should().BeGreaterThan(1, "different keys should be able to run their generators concurrently");
@@ -142,7 +143,7 @@ public class MultilayerHashCacheGetOrAddLockTests(ITestContextAccessor testConte
         var token = testContextAccessor.Current.CancellationToken;
         var cacheKey = _fixture.Create<string>();
         _cacheKeyStrategy.GetCacheKey<string>(cacheKey).Returns((CacheKey)cacheKey);
-        _innerCache.GetCacheEntryAsync<string>((CacheKey)cacheKey, Arg.Any<CancellationToken>())
+        _innerCache.GetCacheEntryAsync<string>((CacheKey)cacheKey, Arg.Any<CachePolicy?>(), Arg.Any<CancellationToken>())
             .Returns(new TestCacheEntry<IDictionary<string, string?>> { Value = null });
 
         const int concurrentCallers = 8;
@@ -169,7 +170,7 @@ public class MultilayerHashCacheGetOrAddLockTests(ITestContextAccessor testConte
         }
 
         var tasks = Enumerable.Range(0, concurrentCallers)
-            .Select(_ => Task.Run(async () => await Sut.GetOrAddAsync(cacheKey, Generator, token)))
+            .Select(_ => Task.Run(async () => await Sut.GetOrAddAsync(cacheKey, Generator, (CachePolicy?)null, token)))
             .ToArray();
         await Task.WhenAll(tasks);
 

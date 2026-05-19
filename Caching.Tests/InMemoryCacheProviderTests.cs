@@ -67,9 +67,9 @@ public class InMemoryCacheProviderTests(ITestContextAccessor testContextAccessor
         var memHashCache = Sut.CreateHashCache();
         memCache.Should().BeOfType<MultilayerCache>();
         memHashCache.Should().BeOfType<MultilayerHashCache>();
-        await memCache.SetAsync(_fixture.Create<string>(), _fixture.Create<string>(), testContextAccessor.Current.CancellationToken);
+        await memCache.SetAsync(_fixture.Create<string>(), _fixture.Create<string>(), policy: null, token: testContextAccessor.Current.CancellationToken);
         var values = _fixture.Create<IDictionary<string, string?>>();
-        await memHashCache.SetAsync(_fixture.Create<string>(), values, testContextAccessor.Current.CancellationToken);
+        await memHashCache.SetAsync(_fixture.Create<string>(), values, policy: null, token: testContextAccessor.Current.CancellationToken);
         if (enabled)
         {
             topicCallsCount.Should().BeGreaterThan(0);

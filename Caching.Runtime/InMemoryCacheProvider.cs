@@ -13,6 +13,7 @@ public sealed class InMemoryCacheProvider : ICacheProvider
     private readonly ICachingTelemetryProvider _cachingTelemetryProvider;
     private readonly ILoggerFactory _loggerFactory;
     private readonly ILocalLock _localLock;
+    private readonly ICachePolicyFactory _policyFactory;
 
     private readonly Lazy<MultilayerCache> _cache;
     private readonly Lazy<MultilayerHashCache> _hashCache;
@@ -30,7 +31,8 @@ public sealed class InMemoryCacheProvider : ICacheProvider
         ITopicFactory topicFactory,
         ICachingTelemetryProvider cachingTelemetryProvider,
         ILoggerFactory loggerFactory,
-        ILocalLock localLock)
+        ILocalLock localLock,
+        ICachePolicyFactory policyFactory)
     {
         _options = optionsAccessor.Value;
         _cacheOptions = cacheOptionsAccessor.Value;
@@ -59,6 +61,7 @@ public sealed class InMemoryCacheProvider : ICacheProvider
         _cachingTelemetryProvider = cachingTelemetryProvider;
         _loggerFactory = loggerFactory;
         _localLock = localLock;
+        _policyFactory = policyFactory;
         _cache = new Lazy<MultilayerCache>(BuildCache);
         _hashCache = new Lazy<MultilayerHashCache>(BuildHashCache);
     }
@@ -96,6 +99,7 @@ public sealed class InMemoryCacheProvider : ICacheProvider
             _cacheOptions,
             localLock: _localLock,
             distributedLock: NullDistributedLock.Instance,
+            policyFactory: _policyFactory,
             logger: _loggerFactory.CreateLogger($"{Name}.Cache"));
 
     private MultilayerHashCache BuildHashCache() =>
@@ -112,5 +116,6 @@ public sealed class InMemoryCacheProvider : ICacheProvider
             _cacheOptions,
             localLock: _localLock,
             distributedLock: NullDistributedLock.Instance,
+            policyFactory: _policyFactory,
             logger: _loggerFactory.CreateLogger($"{Name}.HashCache"));
 }

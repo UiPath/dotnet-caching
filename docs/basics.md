@@ -85,7 +85,9 @@ The same results can be achieve using the configuration options.
       "Enabled": true,
       "DefaultExpiration": "0:05:00",
       "Timeout": "0:00:01",
-      "PrimaryMaxExpiration": "0:03:00",
+      // LocalMaxExpiration is the L1 (in-memory tier) cap on entry lifetime.
+      // The older "PrimaryMaxExpiration" name still binds for backcompat but is marked [Obsolete].
+      "LocalMaxExpiration": "0:03:00",
       "TrackStatistics": true,
       "StatisticsFlushInterval": "0:01:00"
     },
@@ -110,6 +112,17 @@ The same results can be achieve using the configuration options.
   }
 }
 ```
+
+## Distributed lock
+
+When you register a real `IDistributedLock` (e.g. `RedisDistributedLock` via `AddRedisDistributedLock`), the hydrating cache's `RehydrationCoordinator` uses it for cross-node dedup and post-failure cooldown: `TryAcquireAsync` returns `null` when the lock was not acquired (either contended — another node is rehydrating the same key or its cooldown is still active — or the lock backend is unavailable). The lock TTL (`factoryTimeout + cooldown`) enforces the cooldown window when a rehydrate fails. Backend-failure visibility is preserved separately via `cache.distributedlock.unavailable` telemetry.
+
+When **no `IDistributedLock` is registered**, the fallback is `NullDistributedLock` — a pure no-op shim. In this mode:
+
+* `TryAcquireAsync` always returns a no-op handle (no contention check).
+* The blocking `AcquireAsync` returns a no-op handle (no mutual exclusion).
+* `RehydrationCoordinator` cross-node dedup and cooldown enforcement do **not** apply — rehydrate can trigger per node on every hit past threshold (subject only to the per-node `_inFlight` single-flight).
+* Use this only for single-node setups where cross-node coordination is not needed; for multi-node deployments, wire `RedisDistributedLock` (or another real distributed lock).
 
 There are 2 important settings:
 

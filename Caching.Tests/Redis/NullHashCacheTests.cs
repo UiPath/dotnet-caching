@@ -10,7 +10,7 @@ public class NullHashCacheTests(ITestContextAccessor testContextAccessor)
         var sut = new NullHashCache();
         IDictionary<string, TestDto?> expected = _fixture.Create<IDictionary<string, TestDto?>>();
         CacheKey cacheKey = _fixture.Create<string>();
-        var actual = await sut.GetOrAddAsync(cacheKey, _ => Task.FromResult(expected), testContextAccessor.Current.CancellationToken);
+        var actual = await sut.GetOrAddAsync(cacheKey, _ => Task.FromResult(expected), (CachePolicy?)null, testContextAccessor.Current.CancellationToken);
         actual.Should().NotBeNull();
         actual.Should().BeEquivalentTo(expected);
     }
@@ -21,7 +21,7 @@ public class NullHashCacheTests(ITestContextAccessor testContextAccessor)
         var sut = new NullHashCache();
         IDictionary<string, TestDto?> expected = _fixture.Create<IDictionary<string, TestDto?>>();
         CacheKey cacheKey = _fixture.Create<string>();
-        var actual = await sut.GetOrAddAsync(cacheKey, _ => Task.FromResult(expected), TimeSpan.Zero, testContextAccessor.Current.CancellationToken);
+        var actual = await sut.GetOrAddAsync(cacheKey, _ => Task.FromResult(expected), TimeSpan.Zero, token: testContextAccessor.Current.CancellationToken);
         actual.Should().NotBeNull();
         actual.Should().BeEquivalentTo(expected);
     }
@@ -32,7 +32,7 @@ public class NullHashCacheTests(ITestContextAccessor testContextAccessor)
         var sut = new NullHashCache();
         IDictionary<string, TestDto?> expected = _fixture.Create<IDictionary<string, TestDto?>>();
         CacheKey cacheKey = _fixture.Create<string>();
-        var actual = await sut.GetOrAddAsync(cacheKey, _ => Task.FromResult(expected), DateTimeOffset.UtcNow, testContextAccessor.Current.CancellationToken);
+        var actual = await sut.GetOrAddAsync(cacheKey, _ => Task.FromResult(expected), DateTimeOffset.UtcNow, (CachePolicy?)null, testContextAccessor.Current.CancellationToken);
         actual.Should().NotBeNull();
         actual.Should().BeEquivalentTo(expected);
     }
@@ -43,7 +43,7 @@ public class NullHashCacheTests(ITestContextAccessor testContextAccessor)
         var sut = new NullHashCache();
         IDictionary<string, TestDto?> expected = _fixture.Create<IDictionary<string, TestDto?>>();
         CacheKey cacheKey = _fixture.Create<string>();
-        var actual = await sut.GetOrAddAsync(cacheKey, _ => Task.FromResult(expected), DateTimeOffset.UtcNow, HashCacheSetOption.KeyReplace, testContextAccessor.Current.CancellationToken);
+        var actual = await sut.GetOrAddAsync(cacheKey, _ => Task.FromResult(expected), expiration: DateTimeOffset.UtcNow, setOption: HashCacheSetOption.KeyReplace, token: testContextAccessor.Current.CancellationToken);
         actual.Should().NotBeNull();
         actual.Should().BeEquivalentTo(expected);
     }

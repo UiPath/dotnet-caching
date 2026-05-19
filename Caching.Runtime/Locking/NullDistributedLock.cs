@@ -7,4 +7,7 @@ public sealed class NullDistributedLock : IDistributedLock
 
     public ValueTask<IAsyncDisposable> AcquireAsync(string key, TimeSpan expiry, TimeSpan waitTimeout, CancellationToken token) =>
         new(NoOpAsyncDisposable.Instance);
+
+    public ValueTask<IAsyncDisposable?> TryAcquireAsync(string key, TimeSpan expiry, CancellationToken token) =>
+        new(NoOpAsyncDisposable.Instance);
 }

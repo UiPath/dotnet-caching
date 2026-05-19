@@ -42,10 +42,10 @@ public class MultilayerHashCacheTests(ITestContextAccessor testContextAccessor) 
         {
             Value = expected
         };
-        _innerCache.GetCacheEntryAsync<string>(_innerCacheKey, Arg.Any<CancellationToken>())
+        _innerCache.GetCacheEntryAsync<string>(_innerCacheKey, Arg.Any<CachePolicy?>(), Arg.Any<CancellationToken>())
             .Returns(expectedCacheEntry);
 
-        var actual = await Sut.GetAsync<string>(_cacheKey, token: testContextAccessor.Current.CancellationToken);
+        var actual = await Sut.GetAsync<string>(_cacheKey, policy: null, token: testContextAccessor.Current.CancellationToken);
         _changeTokenFactory.Received(1).Create(_innerCacheKey, Arg.Any<ITopic<ICacheEvent>>(), Arg.Any<string>(), Arg.Any<Type>());
         _memoryCache.Received(1).CreateEntry(_innerCacheKey);
         actual.Should().BeEquivalentTo(expected);
@@ -60,10 +60,10 @@ public class MultilayerHashCacheTests(ITestContextAccessor testContextAccessor) 
             Value = expected,
             Expiration = _fixture.Create<DateTimeOffset>()
         };
-        _innerCache.GetCacheEntryAsync<string>(_innerCacheKey, Arg.Any<CancellationToken>())
+        _innerCache.GetCacheEntryAsync<string>(_innerCacheKey, Arg.Any<CachePolicy?>(), Arg.Any<CancellationToken>())
             .Returns(expectedCacheEntry);
 
-        await Sut.GetAsync<string>(_cacheKey, token: testContextAccessor.Current.CancellationToken);
+        await Sut.GetAsync<string>(_cacheKey, policy: null, token: testContextAccessor.Current.CancellationToken);
 
         await _innerCache.DidNotReceive().ExpireTimeAsync<string>(_innerCacheKey, Arg.Any<CancellationToken>());
         await _innerCache.DidNotReceive().TimeToLiveAsync<string>(_innerCacheKey, Arg.Any<CancellationToken>());
@@ -76,7 +76,7 @@ public class MultilayerHashCacheTests(ITestContextAccessor testContextAccessor) 
         {
             Value = null
         };
-        _innerCache.GetCacheEntryAsync<string>(_cacheKey, Arg.Any<CancellationToken>())
+        _innerCache.GetCacheEntryAsync<string>(_cacheKey, Arg.Any<CachePolicy?>(), Arg.Any<CancellationToken>())
             .Returns(expectedCacheEntry);
 
         var actual = await Sut.GetAsync<string>(_cacheKey, _fixture.CreateMany<string>().ToArray(), token: testContextAccessor.Current.CancellationToken);
@@ -91,10 +91,10 @@ public class MultilayerHashCacheTests(ITestContextAccessor testContextAccessor) 
         {
             Value = expected
         };
-        _innerCache.GetCacheEntryAsync<string>(_innerCacheKey, Arg.Any<CancellationToken>())
+        _innerCache.GetCacheEntryAsync<string>(_innerCacheKey, Arg.Any<CachePolicy?>(), Arg.Any<CancellationToken>())
             .Returns(expectedCacheEntry);
 
-        var actual = await Sut.GetCacheEntryAsync<string>(_cacheKey, token: testContextAccessor.Current.CancellationToken);
+        var actual = await Sut.GetCacheEntryAsync<string>(_cacheKey, policy: null, token: testContextAccessor.Current.CancellationToken);
         actual.Should().NotBeNull();
         actual.Value.Should().BeEquivalentTo(expected);
     }
@@ -108,10 +108,10 @@ public class MultilayerHashCacheTests(ITestContextAccessor testContextAccessor) 
         {
             Value = expected
         };
-        _innerCache.GetCacheEntryAsync<string>(_innerCacheKey, Arg.Any<CancellationToken>())
+        _innerCache.GetCacheEntryAsync<string>(_innerCacheKey, Arg.Any<CachePolicy?>(), Arg.Any<CancellationToken>())
             .ReturnsForAnyArgs(_ => expectedCacheEntry);
 
-        var actual = await Sut.GetItemAsync<string>(_cacheKey, field, token: testContextAccessor.Current.CancellationToken);
+        var actual = await Sut.GetItemAsync<string>(_cacheKey, field, policy: null, token: testContextAccessor.Current.CancellationToken);
         _changeTokenFactory.Received(1).Create(_innerCacheKey, Arg.Any<ITopic<ICacheEvent>>(), Arg.Any<string>(), Arg.Any<Type>());
         _memoryCache.Received(1).CreateEntry(_innerCacheKey);
         actual.Should().Be(expected[field]);
@@ -125,10 +125,10 @@ public class MultilayerHashCacheTests(ITestContextAccessor testContextAccessor) 
         {
             Value = expected
         };
-        _innerCache.GetCacheEntryAsync<string>(_cacheKey, Arg.Any<CancellationToken>())
+        _innerCache.GetCacheEntryAsync<string>(_cacheKey, Arg.Any<CachePolicy?>(), Arg.Any<CancellationToken>())
             .Returns(expectedCacheEntry);
 
-        var actual = await Sut.GetItemAsync<string>(_cacheKey, _fixture.Create<string>(), token: testContextAccessor.Current.CancellationToken);
+        var actual = await Sut.GetItemAsync<string>(_cacheKey, _fixture.Create<string>(), policy: null, token: testContextAccessor.Current.CancellationToken);
         _changeTokenFactory.Received(1).Create(Arg.Any<string>(), Arg.Any<ITopic<ICacheEvent>>(), Arg.Any<string>(), Arg.Any<Type>());
         _memoryCache.Received(1).CreateEntry(Arg.Any<object>());
         actual.Should().BeNull();
@@ -141,10 +141,10 @@ public class MultilayerHashCacheTests(ITestContextAccessor testContextAccessor) 
         {
             Value = null
         };
-        _innerCache.GetCacheEntryAsync<string>(_cacheKey, Arg.Any<CancellationToken>())
+        _innerCache.GetCacheEntryAsync<string>(_cacheKey, Arg.Any<CachePolicy?>(), Arg.Any<CancellationToken>())
             .Returns(expectedCacheEntry);
 
-        var actual = await Sut.GetItemAsync<string>(_cacheKey, _fixture.Create<string>(), token: testContextAccessor.Current.CancellationToken);
+        var actual = await Sut.GetItemAsync<string>(_cacheKey, _fixture.Create<string>(), policy: null, token: testContextAccessor.Current.CancellationToken);
         actual.Should().BeNull();
     }
 
@@ -163,9 +163,9 @@ public class MultilayerHashCacheTests(ITestContextAccessor testContextAccessor) 
                 x[1] = expectedCacheEntry;
                 return true;
             });
-        var actual = await Sut.GetAsync<string>(_cacheKey, token: testContextAccessor.Current.CancellationToken);
+        var actual = await Sut.GetAsync<string>(_cacheKey, policy: null, token: testContextAccessor.Current.CancellationToken);
         actual.Should().BeEquivalentTo(expected);
-        await _innerCache.DidNotReceive().GetCacheEntryAsync<string>(_cacheKey, Arg.Any<CancellationToken>());
+        await _innerCache.DidNotReceive().GetCacheEntryAsync<string>(_cacheKey, Arg.Any<CachePolicy?>(), Arg.Any<CancellationToken>());
     }
 
     [Fact]
@@ -183,10 +183,10 @@ public class MultilayerHashCacheTests(ITestContextAccessor testContextAccessor) 
             generatorWasCalled = true;
             return Task.FromResult(generatorExpected);
         };
-        _innerCache.GetCacheEntryAsync<string>(_innerCacheKey, Arg.Any<CancellationToken>())
+        _innerCache.GetCacheEntryAsync<string>(_innerCacheKey, Arg.Any<CachePolicy?>(), Arg.Any<CancellationToken>())
             .Returns(expectedCacheEntry);
 
-        var actual = await Sut.GetOrAddAsync(_cacheKey, generator, _fixture.Create<TimeSpan>(), testContextAccessor.Current.CancellationToken);
+        var actual = await Sut.GetOrAddAsync(_cacheKey, generator, _fixture.Create<TimeSpan>(), token: testContextAccessor.Current.CancellationToken);
         generatorWasCalled.Should().BeFalse();
         actual.Should().BeEquivalentTo(expected);
     }
@@ -208,10 +208,10 @@ public class MultilayerHashCacheTests(ITestContextAccessor testContextAccessor) 
             generatorWasCalled = true;
             return Task.FromResult(generatorExpected);
         };
-        _innerCache.GetCacheEntryAsync<string>(_innerCacheKey, Arg.Any<CancellationToken>())
+        _innerCache.GetCacheEntryAsync<string>(_innerCacheKey, Arg.Any<CachePolicy?>(), Arg.Any<CancellationToken>())
             .Returns(expectedCacheEntry);
 
-        var actual = await Sut.GetOrAddAsync(_cacheKey, generator, _fixture.Create<DateTimeOffset>(), hashCacheSetOption, testContextAccessor.Current.CancellationToken);
+        var actual = await Sut.GetOrAddAsync(_cacheKey, generator, expiration: _fixture.Create<DateTimeOffset>(), setOption: hashCacheSetOption, token: testContextAccessor.Current.CancellationToken);
         generatorWasCalled.Should().BeFalse();
         actual.Should().BeEquivalentTo(expected);
     }
@@ -231,10 +231,10 @@ public class MultilayerHashCacheTests(ITestContextAccessor testContextAccessor) 
             generatorWasCalled = true;
             return Task.FromResult(generatorExpected);
         };
-        _innerCache.GetCacheEntryAsync<string>(_innerCacheKey, Arg.Any<CancellationToken>())
+        _innerCache.GetCacheEntryAsync<string>(_innerCacheKey, Arg.Any<CachePolicy?>(), Arg.Any<CancellationToken>())
             .Returns(expectedCacheEntry);
 
-        var actual = await Sut.GetOrAddAsync(_cacheKey, generator, _fixture.Create<DateTimeOffset>(), testContextAccessor.Current.CancellationToken);
+        var actual = await Sut.GetOrAddAsync(_cacheKey, generator, _fixture.Create<DateTimeOffset>(), (CachePolicy?)null, testContextAccessor.Current.CancellationToken);
         generatorWasCalled.Should().BeFalse();
         actual.Should().BeEquivalentTo(expected);
     }
@@ -254,10 +254,10 @@ public class MultilayerHashCacheTests(ITestContextAccessor testContextAccessor) 
             generatorWasCalled = true;
             return Task.FromResult(generatorExpected);
         };
-        _innerCache.GetCacheEntryAsync<string>(_innerCacheKey, Arg.Any<CancellationToken>())
+        _innerCache.GetCacheEntryAsync<string>(_innerCacheKey, Arg.Any<CachePolicy?>(), Arg.Any<CancellationToken>())
             .Returns(expectedCacheEntry);
 
-        var actual = await Sut.GetOrAddAsync(_cacheKey, generator, testContextAccessor.Current.CancellationToken);
+        var actual = await Sut.GetOrAddAsync(_cacheKey, generator, (CachePolicy?)null, testContextAccessor.Current.CancellationToken);
         generatorWasCalled.Should().BeFalse();
         actual.Should().BeEquivalentTo(expected);
     }
@@ -284,15 +284,15 @@ public class MultilayerHashCacheTests(ITestContextAccessor testContextAccessor) 
             return Task.FromResult(generatorExpected);
         };
 
-        _innerCache.SetAsync(_innerCacheKey, Arg.Any<IDictionary<string, string?>>(), Arg.Any<HashCacheEntryOptions>(), Arg.Any<CancellationToken>())
+        _innerCache.SetAsync(_innerCacheKey, Arg.Any<IDictionary<string, string?>>(), Arg.Any<HashCacheEntryOptions>(), Arg.Any<CachePolicy?>(), Arg.Any<CancellationToken>())
             .Returns(_ => innerCacheSet);
 
-        _innerCache.GetCacheEntryAsync<string>(_innerCacheKey, Arg.Any<CancellationToken>())
+        _innerCache.GetCacheEntryAsync<string>(_innerCacheKey, Arg.Any<CachePolicy?>(), Arg.Any<CancellationToken>())
             .Returns(expectedCacheEntry);
-        var actual = await Sut.GetOrAddAsync(_cacheKey, generator, _fixture.Create<TimeSpan>(), testContextAccessor.Current.CancellationToken);
+        var actual = await Sut.GetOrAddAsync(_cacheKey, generator, _fixture.Create<TimeSpan>(), token: testContextAccessor.Current.CancellationToken);
         generatorWasCalled.Should().BeTrue();
         _memoryCache.Received(innerCacheSet ? 1 : 0).CreateEntry(_innerCacheKey);
-        await _innerCache.Received(1).SetAsync(_innerCacheKey, Arg.Any<IDictionary<string, string?>>(), Arg.Any<HashCacheEntryOptions>(), Arg.Any<CancellationToken>());
+        await _innerCache.Received(1).SetAsync(_innerCacheKey, Arg.Any<IDictionary<string, string?>>(), Arg.Any<HashCacheEntryOptions>(), Arg.Any<CachePolicy?>(), Arg.Any<CancellationToken>());
         actual.Should().BeEquivalentTo(generatorExpected);
     }
 
@@ -307,13 +307,13 @@ public class MultilayerHashCacheTests(ITestContextAccessor testContextAccessor) 
             generatorWasCalled = true;
             return Task.FromResult(generatorExpected);
         };
-        _innerCache.GetCacheEntryAsync<string>(_innerCacheKey, Arg.Any<CancellationToken>())
+        _innerCache.GetCacheEntryAsync<string>(_innerCacheKey, Arg.Any<CachePolicy?>(), Arg.Any<CancellationToken>())
             .Returns(expectedCacheEntry);
 
-        var actual = await Sut.GetOrAddAsync(_cacheKey, generator, _fixture.Create<TimeSpan>(), testContextAccessor.Current.CancellationToken);
+        var actual = await Sut.GetOrAddAsync(_cacheKey, generator, _fixture.Create<TimeSpan>(), token: testContextAccessor.Current.CancellationToken);
         generatorWasCalled.Should().BeTrue();
         _memoryCache.DidNotReceive().CreateEntry(_innerCacheKey);
-        await _innerCache.DidNotReceive().SetAsync(_innerCacheKey, Arg.Any<IDictionary<string, string?>>(), Arg.Any<HashCacheEntryOptions>(), Arg.Any<CancellationToken>());
+        await _innerCache.DidNotReceive().SetAsync(_innerCacheKey, Arg.Any<IDictionary<string, string?>>(), Arg.Any<HashCacheEntryOptions>(), Arg.Any<CachePolicy?>(), Arg.Any<CancellationToken>());
         actual.Should().BeEmpty();
     }
 
@@ -332,10 +332,10 @@ public class MultilayerHashCacheTests(ITestContextAccessor testContextAccessor) 
             Found = true,
             Expiration = DateTimeOffset.UtcNow.AddMinutes(5),
         };
-        _innerCache.GetCacheEntryAsync<string>(_innerCacheKey, Arg.Any<CancellationToken>())
+        _innerCache.GetCacheEntryAsync<string>(_innerCacheKey, Arg.Any<CachePolicy?>(), Arg.Any<CancellationToken>())
             .Returns(emptyEntry);
 
-        var actual = await Sut.GetOrAddAsync(_cacheKey, generator, _fixture.Create<TimeSpan>(), testContextAccessor.Current.CancellationToken);
+        var actual = await Sut.GetOrAddAsync(_cacheKey, generator, _fixture.Create<TimeSpan>(), token: testContextAccessor.Current.CancellationToken);
 
         generatorWasCalled.Should().BeFalse("a cached-empty hash is a hit, not a miss");
         actual.Should().BeEmpty();
@@ -352,14 +352,14 @@ public class MultilayerHashCacheTests(ITestContextAccessor testContextAccessor) 
             generatorWasCalled = true;
             return Task.FromResult<IDictionary<string, string?>>(new Dictionary<string, string?>());
         };
-        _innerCache.GetCacheEntryAsync<string>(_innerCacheKey, Arg.Any<CancellationToken>())
+        _innerCache.GetCacheEntryAsync<string>(_innerCacheKey, Arg.Any<CachePolicy?>(), Arg.Any<CancellationToken>())
             .Returns(new TestCacheEntry<IDictionary<string, string?>> { Value = null }); // miss
 
-        var actual = await Sut.GetOrAddAsync(_cacheKey, generator, _fixture.Create<TimeSpan>(), testContextAccessor.Current.CancellationToken);
+        var actual = await Sut.GetOrAddAsync(_cacheKey, generator, _fixture.Create<TimeSpan>(), token: testContextAccessor.Current.CancellationToken);
 
         generatorWasCalled.Should().BeTrue();
         actual.Should().BeEmpty();
-        await _innerCache.Received().SetAsync(_innerCacheKey, Arg.Is<IDictionary<string, string?>>(d => d.Count == 0), Arg.Any<HashCacheEntryOptions>(), Arg.Any<CancellationToken>());
+        await _innerCache.Received().SetAsync(_innerCacheKey, Arg.Is<IDictionary<string, string?>>(d => d.Count == 0), Arg.Any<HashCacheEntryOptions>(), Arg.Any<CachePolicy?>(), Arg.Any<CancellationToken>());
     }
 
     [Fact]
@@ -372,24 +372,24 @@ public class MultilayerHashCacheTests(ITestContextAccessor testContextAccessor) 
             generatorWasCalled = true;
             return Task.FromResult<IDictionary<string, string?>>(new Dictionary<string, string?>());
         };
-        _innerCache.GetCacheEntryAsync<string>(_innerCacheKey, Arg.Any<CancellationToken>())
+        _innerCache.GetCacheEntryAsync<string>(_innerCacheKey, Arg.Any<CachePolicy?>(), Arg.Any<CancellationToken>())
             .Returns(new TestCacheEntry<IDictionary<string, string?>> { Value = null });
 
-        var actual = await Sut.GetOrAddAsync(_cacheKey, generator, _fixture.Create<TimeSpan>(), testContextAccessor.Current.CancellationToken);
+        var actual = await Sut.GetOrAddAsync(_cacheKey, generator, _fixture.Create<TimeSpan>(), token: testContextAccessor.Current.CancellationToken);
 
         generatorWasCalled.Should().BeTrue();
         actual.Should().BeEmpty();
-        await _innerCache.DidNotReceive().SetAsync(_innerCacheKey, Arg.Any<IDictionary<string, string?>>(), Arg.Any<HashCacheEntryOptions>(), Arg.Any<CancellationToken>());
+        await _innerCache.DidNotReceive().SetAsync(_innerCacheKey, Arg.Any<IDictionary<string, string?>>(), Arg.Any<HashCacheEntryOptions>(), Arg.Any<CachePolicy?>(), Arg.Any<CancellationToken>());
     }
 
     [Fact]
     public async Task Set_default_value()
     {
         var expectedCacheEntry = new TestCacheEntry<IDictionary<string, string?>>();
-        _innerCache.GetCacheEntryAsync<string>(_innerCacheKey, Arg.Any<CancellationToken>())
+        _innerCache.GetCacheEntryAsync<string>(_innerCacheKey, Arg.Any<CachePolicy?>(), Arg.Any<CancellationToken>())
             .Returns(expectedCacheEntry);
 
-        await Sut.SetAsync(_cacheKey, new Dictionary<string, string?>(), _fixture.Create<TimeSpan>(), testContextAccessor.Current.CancellationToken);
+        await Sut.SetAsync(_cacheKey, new Dictionary<string, string?>(), _fixture.Create<TimeSpan>(), token: testContextAccessor.Current.CancellationToken);
         _memoryCache.Received(1).Remove(Arg.Any<object>());
         await _innerCache.Received(1).RemoveAsync<string>(_innerCacheKey, Arg.Any<CancellationToken>());
         await _topic.Received(1).PublishAsync(Arg.Any<ICacheEvent>(), Arg.Any<CancellationToken>());
@@ -400,15 +400,15 @@ public class MultilayerHashCacheTests(ITestContextAccessor testContextAccessor) 
     {
         _options.CacheNullValues = true;
         _sut = null;
-        _innerCache.SetAsync(_innerCacheKey, Arg.Any<IDictionary<string, string?>>(), Arg.Any<HashCacheEntryOptions>(), Arg.Any<CancellationToken>())
+        _innerCache.SetAsync(_innerCacheKey, Arg.Any<IDictionary<string, string?>>(), Arg.Any<HashCacheEntryOptions>(), Arg.Any<CachePolicy?>(), Arg.Any<CancellationToken>())
             .Returns(true);
         _topic.PublishAsync(Arg.Any<ICacheEvent>(), Arg.Any<CancellationToken>())
             .Returns(_ => true);
 
-        await Sut.SetAsync(_cacheKey, new Dictionary<string, string?>(), _fixture.Create<TimeSpan>(), testContextAccessor.Current.CancellationToken);
+        await Sut.SetAsync(_cacheKey, new Dictionary<string, string?>(), _fixture.Create<TimeSpan>(), token: testContextAccessor.Current.CancellationToken);
 
         await _innerCache.DidNotReceive().RemoveAsync<string>(_innerCacheKey, Arg.Any<CancellationToken>());
-        await _innerCache.Received(1).SetAsync(_innerCacheKey, Arg.Is<IDictionary<string, string?>>(d => d.Count == 0), Arg.Any<HashCacheEntryOptions>(), Arg.Any<CancellationToken>());
+        await _innerCache.Received(1).SetAsync(_innerCacheKey, Arg.Is<IDictionary<string, string?>>(d => d.Count == 0), Arg.Any<HashCacheEntryOptions>(), Arg.Any<CachePolicy?>(), Arg.Any<CancellationToken>());
     }
 
     [Fact]
@@ -417,7 +417,7 @@ public class MultilayerHashCacheTests(ITestContextAccessor testContextAccessor) 
         _options.CacheNullValues = true;
         _sut = null;
         var metadata = new Dictionary<string, string?> { ["k"] = "v" };
-        _innerCache.SetAsync(_innerCacheKey, Arg.Any<IDictionary<string, string?>>(), Arg.Any<HashCacheEntryOptions>(), Arg.Any<CancellationToken>())
+        _innerCache.SetAsync(_innerCacheKey, Arg.Any<IDictionary<string, string?>>(), Arg.Any<HashCacheEntryOptions>(), Arg.Any<CachePolicy?>(), Arg.Any<CancellationToken>())
             .Returns(true);
         _topic.PublishAsync(Arg.Any<ICacheEvent>(), Arg.Any<CancellationToken>())
             .Returns(_ => true);
@@ -425,15 +425,13 @@ public class MultilayerHashCacheTests(ITestContextAccessor testContextAccessor) 
         await Sut.SetAsync(
             _cacheKey,
             new Dictionary<string, string?>(),
-            new HashCacheEntryOptions(TimeToLive: _fixture.Create<TimeSpan>(), Metadata: metadata),
-            testContextAccessor.Current.CancellationToken);
+            new HashCacheEntryOptions(TimeToLive: _fixture.Create<TimeSpan>(), Metadata: metadata), token: testContextAccessor.Current.CancellationToken);
 
         await _innerCache.DidNotReceive().RemoveAsync<string>(_innerCacheKey, Arg.Any<CancellationToken>());
         await _innerCache.Received(1).SetAsync(
             _innerCacheKey,
             Arg.Is<IDictionary<string, string?>>(d => d.Count == 0),
-            Arg.Is<HashCacheEntryOptions>(o => o.Metadata == metadata),
-            Arg.Any<CancellationToken>());
+            Arg.Is<HashCacheEntryOptions>(o => o.Metadata == metadata), Arg.Any<CachePolicy?>(), Arg.Any<CancellationToken>());
     }
 
     [Fact]
@@ -441,16 +439,16 @@ public class MultilayerHashCacheTests(ITestContextAccessor testContextAccessor) 
     {
         var expected = _fixture.Create<IDictionary<string, string?>>();
         ICacheEntry<IDictionary<string, string?>> expectedCacheEntry = new TestCacheEntry<IDictionary<string, string?>> { Value = expected };
-        _innerCache.GetCacheEntryAsync<string>(_innerCacheKey, Arg.Any<CancellationToken>()).Returns(expectedCacheEntry);
-        _innerCache.SetAsync(_innerCacheKey, Arg.Any<IDictionary<string, string?>>(), Arg.Any<HashCacheEntryOptions>(), Arg.Any<CancellationToken>())
+        _innerCache.GetCacheEntryAsync<string>(_innerCacheKey, Arg.Any<CachePolicy?>(), Arg.Any<CancellationToken>()).Returns(expectedCacheEntry);
+        _innerCache.SetAsync(_innerCacheKey, Arg.Any<IDictionary<string, string?>>(), Arg.Any<HashCacheEntryOptions>(), Arg.Any<CachePolicy?>(), Arg.Any<CancellationToken>())
             .Returns(true);
         _topic.PublishAsync(Arg.Any<ICacheEvent>(), Arg.Any<CancellationToken>())
             .Returns(_ => true);
-        await Sut.SetAsync(_cacheKey, expected, testContextAccessor.Current.CancellationToken);
+        await Sut.SetAsync(_cacheKey, expected, policy: null, token: testContextAccessor.Current.CancellationToken);
         _memoryCache.DidNotReceive().Remove(_innerCacheKey);
         await _innerCache.DidNotReceive().RemoveAsync<string>(_innerCacheKey, Arg.Any<CancellationToken>());
         await _topic.Received(1).PublishAsync(Arg.Any<ICacheEvent>(), Arg.Any<CancellationToken>());
-        await _innerCache.Received(1).SetAsync(_innerCacheKey, Arg.Any<IDictionary<string, string?>>(), Arg.Any<HashCacheEntryOptions>(), Arg.Any<CancellationToken>());
+        await _innerCache.Received(1).SetAsync(_innerCacheKey, Arg.Any<IDictionary<string, string?>>(), Arg.Any<HashCacheEntryOptions>(), Arg.Any<CachePolicy?>(), Arg.Any<CancellationToken>());
     }
 
     [Fact]
@@ -458,18 +456,18 @@ public class MultilayerHashCacheTests(ITestContextAccessor testContextAccessor) 
     {
         var expected = _fixture.Create<IDictionary<string, string?>>();
         ICacheEntry<IDictionary<string, string?>> expectedCacheEntry = new TestCacheEntry<IDictionary<string, string?>> { Value = expected };
-        _innerCache.GetCacheEntryAsync<string>(_innerCacheKey, Arg.Any<CancellationToken>()).Returns(expectedCacheEntry);
-        _innerCache.SetAsync(_innerCacheKey, Arg.Any<IDictionary<string, string?>>(), Arg.Any<HashCacheEntryOptions>(), Arg.Any<CancellationToken>())
+        _innerCache.GetCacheEntryAsync<string>(_innerCacheKey, Arg.Any<CachePolicy?>(), Arg.Any<CancellationToken>()).Returns(expectedCacheEntry);
+        _innerCache.SetAsync(_innerCacheKey, Arg.Any<IDictionary<string, string?>>(), Arg.Any<HashCacheEntryOptions>(), Arg.Any<CachePolicy?>(), Arg.Any<CancellationToken>())
             .Returns(true);
         _topic.PublishAsync(Arg.Any<ICacheEvent>(), Arg.Any<CancellationToken>())
             .Returns(_ => true);
-        var actual = await Sut.SetAsync(_cacheKey, expected, _fixture.Create<TimeSpan>(), testContextAccessor.Current.CancellationToken);
+        var actual = await Sut.SetAsync(_cacheKey, expected, _fixture.Create<TimeSpan>(), token: testContextAccessor.Current.CancellationToken);
         actual.Should().BeTrue();
         _memoryCache.DidNotReceive().Remove(_innerCacheKey);
         await _innerCache.DidNotReceive().RemoveAsync<string>(_innerCacheKey, Arg.Any<CancellationToken>());
         await _topic.Received(1).PublishAsync(Arg.Any<ICacheEvent>(), Arg.Any<CancellationToken>());
         _memoryCache.Received(1).CreateEntry(_innerCacheKey);
-        await _innerCache.Received(1).SetAsync(_innerCacheKey, Arg.Any<IDictionary<string, string?>>(), Arg.Any<HashCacheEntryOptions>(), Arg.Any<CancellationToken>());
+        await _innerCache.Received(1).SetAsync(_innerCacheKey, Arg.Any<IDictionary<string, string?>>(), Arg.Any<HashCacheEntryOptions>(), Arg.Any<CachePolicy?>(), Arg.Any<CancellationToken>());
     }
 
     [Fact]
@@ -477,19 +475,19 @@ public class MultilayerHashCacheTests(ITestContextAccessor testContextAccessor) 
     {
         var expected = _fixture.Create<IDictionary<string, string?>>();
         ICacheEntry<IDictionary<string, string?>> expectedCacheEntry = new TestCacheEntry<IDictionary<string, string?>> { Value = expected };
-        _innerCache.GetCacheEntryAsync<string>(_innerCacheKey, Arg.Any<CancellationToken>()).Returns(expectedCacheEntry);
-        _innerCache.SetAsync(_innerCacheKey, Arg.Any<IDictionary<string, string?>>(), Arg.Any<HashCacheEntryOptions>(), Arg.Any<CancellationToken>())
+        _innerCache.GetCacheEntryAsync<string>(_innerCacheKey, Arg.Any<CachePolicy?>(), Arg.Any<CancellationToken>()).Returns(expectedCacheEntry);
+        _innerCache.SetAsync(_innerCacheKey, Arg.Any<IDictionary<string, string?>>(), Arg.Any<HashCacheEntryOptions>(), Arg.Any<CachePolicy?>(), Arg.Any<CancellationToken>())
             .Returns(true);
         _topic.PublishAsync(Arg.Any<ICacheEvent>(), Arg.Any<CancellationToken>())
             .Returns(_ => true);
         var options = new HashCacheEntryOptions(default, _fixture.Create<TimeSpan>(), _fixture.Create<IDictionary<string, string?>>());
-        var actual = await Sut.SetAsync(_cacheKey, expected, options, testContextAccessor.Current.CancellationToken);
+        var actual = await Sut.SetAsync(_cacheKey, expected, options, token: testContextAccessor.Current.CancellationToken);
         actual.Should().BeTrue();
         _memoryCache.DidNotReceive().Remove(_innerCacheKey);
         await _innerCache.DidNotReceive().RemoveAsync<string>(_innerCacheKey, Arg.Any<CancellationToken>());
         await _topic.Received(1).PublishAsync(Arg.Any<ICacheEvent>(), Arg.Any<CancellationToken>());
         _memoryCache.Received(1).CreateEntry(_innerCacheKey);
-        await _innerCache.Received(1).SetAsync(_innerCacheKey, Arg.Any<IDictionary<string, string?>>(), Arg.Any<HashCacheEntryOptions>(), Arg.Any<CancellationToken>());
+        await _innerCache.Received(1).SetAsync(_innerCacheKey, Arg.Any<IDictionary<string, string?>>(), Arg.Any<HashCacheEntryOptions>(), Arg.Any<CachePolicy?>(), Arg.Any<CancellationToken>());
     }
 
     [Fact]
@@ -500,13 +498,13 @@ public class MultilayerHashCacheTests(ITestContextAccessor testContextAccessor) 
         _innerCache.RemoveAsync<string>(_innerCacheKey, Arg.Any<CancellationToken>()).Returns(true);
         _topic.PublishAsync(Arg.Any<ICacheEvent>(), Arg.Any<CancellationToken>())
             .Returns(_ => true);
-        var actual = await Sut.SetAsync(_cacheKey, expected, options, testContextAccessor.Current.CancellationToken);
+        var actual = await Sut.SetAsync(_cacheKey, expected, options, token: testContextAccessor.Current.CancellationToken);
         actual.Should().BeTrue();
         _memoryCache.Received(1).Remove(_innerCacheKey);
         await _innerCache.Received(1).RemoveAsync<string>(_innerCacheKey, Arg.Any<CancellationToken>());
         await _topic.Received(1).PublishAsync(Arg.Any<ICacheEvent>(), Arg.Any<CancellationToken>());
         _memoryCache.DidNotReceive().CreateEntry(_innerCacheKey);
-        await _innerCache.DidNotReceive().SetAsync(_innerCacheKey, Arg.Any<IDictionary<string, string?>>(), Arg.Any<HashCacheEntryOptions>(), Arg.Any<CancellationToken>());
+        await _innerCache.DidNotReceive().SetAsync(_innerCacheKey, Arg.Any<IDictionary<string, string?>>(), Arg.Any<HashCacheEntryOptions>(), Arg.Any<CachePolicy?>(), Arg.Any<CancellationToken>());
     }
 
     [Fact]
@@ -514,14 +512,14 @@ public class MultilayerHashCacheTests(ITestContextAccessor testContextAccessor) 
     {
         var expected = _fixture.Create<IDictionary<string, string?>>();
 #pragma warning disable CA2012 // Use ValueTasks correctly
-        _innerCache.SetAsync(_innerCacheKey, Arg.Any<IDictionary<string, string?>>(), Arg.Any<HashCacheEntryOptions>(), Arg.Any<CancellationToken>())
+        _innerCache.SetAsync(_innerCacheKey, Arg.Any<IDictionary<string, string?>>(), Arg.Any<HashCacheEntryOptions>(), Arg.Any<CachePolicy?>(), Arg.Any<CancellationToken>())
             .ThrowsForAnyArgs(new Exception());
 #pragma warning restore CA2012 // Use ValueTasks correctly
 
-        var actual = await Sut.SetAsync(_cacheKey, expected, _fixture.Create<TimeSpan>(), testContextAccessor.Current.CancellationToken);
+        var actual = await Sut.SetAsync(_cacheKey, expected, _fixture.Create<TimeSpan>(), token: testContextAccessor.Current.CancellationToken);
         actual.Should().BeFalse();
 
-        actual = await Sut.SetAsync(_cacheKey, expected, _fixture.Create<DateTimeOffset>(), testContextAccessor.Current.CancellationToken);
+        actual = await Sut.SetAsync(_cacheKey, expected, _fixture.Create<DateTimeOffset>(), token: testContextAccessor.Current.CancellationToken);
         actual.Should().BeFalse();
     }
 
@@ -563,7 +561,7 @@ public class MultilayerHashCacheTests(ITestContextAccessor testContextAccessor) 
             Value = expected
         };
 
-        _innerCache.GetCacheEntryAsync<string>(_innerCacheKey, Arg.Any<CancellationToken>())
+        _innerCache.GetCacheEntryAsync<string>(_innerCacheKey, Arg.Any<CachePolicy?>(), Arg.Any<CancellationToken>())
             .Returns(expectedCacheEntry);
         var token = new TestChangeToken
         {
@@ -572,7 +570,7 @@ public class MultilayerHashCacheTests(ITestContextAccessor testContextAccessor) 
         };
         _changeTokenFactory.Create(Arg.Any<string>(), Arg.Any<ITopic<ICacheEvent>>(), Arg.Any<string>(), Arg.Any<Type>())
             .Returns(c => token);
-        var actual = await Sut.GetAsync<string>(_cacheKey, token: testContextAccessor.Current.CancellationToken);
+        var actual = await Sut.GetAsync<string>(_cacheKey, policy: null, token: testContextAccessor.Current.CancellationToken);
         await Sut.RemoveAsync<string>(_cacheKey, testContextAccessor.Current.CancellationToken);
         await token.AssertIsDisposed();
     }
@@ -591,7 +589,7 @@ public class MultilayerHashCacheTests(ITestContextAccessor testContextAccessor) 
             Value = expected
         };
 
-        _innerCache.GetCacheEntryAsync<string>(_cacheKey, Arg.Any<CancellationToken>())
+        _innerCache.GetCacheEntryAsync<string>(_cacheKey, Arg.Any<CachePolicy?>(), Arg.Any<CancellationToken>())
             .Returns(expectedCacheEntry);
         _innerCache.ExpireTimeAsync<string>(_cacheKey, testContextAccessor.Current.CancellationToken)
                .Returns(_clock.UtcNow.AddDays(1));
@@ -602,7 +600,7 @@ public class MultilayerHashCacheTests(ITestContextAccessor testContextAccessor) 
         };
         _changeTokenFactory.Create(Arg.Any<string>(), Arg.Any<ITopic<ICacheEvent>>(), Arg.Any<string>(), Arg.Any<Type>())
             .Returns(c => token);
-        var actual = await Sut.GetAsync<string>(_cacheKey, token: testContextAccessor.Current.CancellationToken);
+        var actual = await Sut.GetAsync<string>(_cacheKey, policy: null, token: testContextAccessor.Current.CancellationToken);
         token.HasChanged = true;
         token.InvokeCallbacks();
         _memoryCache.TryGetValue(_cacheKey, out _).Should().BeFalse();
@@ -626,7 +624,7 @@ public class MultilayerHashCacheTests(ITestContextAccessor testContextAccessor) 
             Expiration = expireDate.GetValueOrDefault(),
         };
 
-        _innerCache.GetCacheEntryAsync<string>(_innerCacheKey, Arg.Any<CancellationToken>())
+        _innerCache.GetCacheEntryAsync<string>(_innerCacheKey, Arg.Any<CachePolicy?>(), Arg.Any<CancellationToken>())
             .Returns(cacheEntry);
         _innerCache.GetMetadataAsync<string>(_innerCacheKey, Arg.Any<CancellationToken>())
             .Returns(default(IDictionary<string, string?>?));
@@ -650,7 +648,7 @@ public class MultilayerHashCacheTests(ITestContextAccessor testContextAccessor) 
         _changeTokenFactory.ClearSubstitute();
         _changeTokenFactory.Create(_innerCacheKey.Name, Arg.Any<ITopic<ICacheEvent>>(), Arg.Any<string>(), Arg.Any<Type>())
             .Returns(c => token, c => token2);
-        var actual = await Sut.GetAsync<string>(_cacheKey, token: testContextAccessor.Current.CancellationToken);
+        var actual = await Sut.GetAsync<string>(_cacheKey, policy: null, token: testContextAccessor.Current.CancellationToken);
         _memoryCache.TryGetValue(_innerCacheKey, out var bla).Should().BeTrue();
         token.InvokeCallbacks();
         _memoryCache.TryGetValue(_innerCacheKey, out var _).Should().BeTrue();
@@ -672,7 +670,7 @@ public class MultilayerHashCacheTests(ITestContextAccessor testContextAccessor) 
             Expiration = _clock.UtcNow.AddDays(1),
         };
 
-        _innerCache.GetCacheEntryAsync<string>(_innerCacheKey, Arg.Any<CancellationToken>())
+        _innerCache.GetCacheEntryAsync<string>(_innerCacheKey, Arg.Any<CachePolicy?>(), Arg.Any<CancellationToken>())
                 .Returns(expectedCacheEntry);
         _innerCache.GetMetadataAsync<string>(_innerCacheKey, Arg.Any<CancellationToken>())
             .Returns(default(IDictionary<string, string?>?));
@@ -691,7 +689,7 @@ public class MultilayerHashCacheTests(ITestContextAccessor testContextAccessor) 
                 };
                 return token;
             });
-        var actual = await Sut.GetAsync<string>(_cacheKey, token: testContextAccessor.Current.CancellationToken);
+        var actual = await Sut.GetAsync<string>(_cacheKey, policy: null, token: testContextAccessor.Current.CancellationToken);
         token.Should().NotBeNull();
         _memoryCache.TryGetValue(_innerCacheKey, out _).Should().BeTrue();
         token!.HasChanged = true;
@@ -727,13 +725,13 @@ public class MultilayerHashCacheTests(ITestContextAccessor testContextAccessor) 
                 };
                 return token;
             });
-        _innerCache.GetCacheEntryAsync<string>(_innerCacheKey, Arg.Any<CancellationToken>())
+        _innerCache.GetCacheEntryAsync<string>(_innerCacheKey, Arg.Any<CachePolicy?>(), Arg.Any<CancellationToken>())
             .Returns(expectedCacheEntry);
         _innerCache.GetMetadataAsync<string>(_innerCacheKey, Arg.Any<CancellationToken>())
             .ThrowsAsync(new Exception());
         _innerCache.ExpireTimeAsync<string>(_innerCacheKey, testContextAccessor.Current.CancellationToken)
                .Returns(_clock.UtcNow.AddDays(1));
-        var actual = await Sut.GetAsync<string>(_cacheKey, token: testContextAccessor.Current.CancellationToken);
+        var actual = await Sut.GetAsync<string>(_cacheKey, policy: null, token: testContextAccessor.Current.CancellationToken);
         token.Should().NotBeNull();
         _memoryCache.TryGetValue(_innerCacheKey, out _).Should().BeTrue();
         _topicProvider.ClearSubstitute();
@@ -763,7 +761,7 @@ public class MultilayerHashCacheTests(ITestContextAccessor testContextAccessor) 
             Value = expected,
             Expiration = _clock.UtcNow.AddDays(1)
         };
-        _innerCache.GetCacheEntryAsync<string>(_innerCacheKey, Arg.Any<CancellationToken>())
+        _innerCache.GetCacheEntryAsync<string>(_innerCacheKey, Arg.Any<CachePolicy?>(), Arg.Any<CancellationToken>())
             .Returns(expectedCacheEntry);
         _innerCache.ExpireTimeAsync<string>(_innerCacheKey, testContextAccessor.Current.CancellationToken)
             .Returns(now.AddDays(1));
@@ -774,7 +772,7 @@ public class MultilayerHashCacheTests(ITestContextAccessor testContextAccessor) 
         };
         _changeTokenFactory.Create(Arg.Any<string>(), Arg.Any<ITopic<ICacheEvent>>(), Arg.Any<string>(), Arg.Any<Type>())
             .Returns(c => token);
-        var actual = await Sut.GetAsync<string>(_cacheKey, token: testContextAccessor.Current.CancellationToken);
+        var actual = await Sut.GetAsync<string>(_cacheKey, policy: null, token: testContextAccessor.Current.CancellationToken);
         _memoryCache.TryGetValue(_innerCacheKey, out _).Should().BeTrue();
         token.HasChanged = true;
         _memoryCache.TryGetValue(_innerCacheKey, out _).Should().BeFalse();
@@ -784,18 +782,18 @@ public class MultilayerHashCacheTests(ITestContextAccessor testContextAccessor) 
     public async Task Refresh_value_TimeSpan()
     {
         var expiration = _fixture.Create<TimeSpan?>();
-        await Sut.RefreshAsync<string>(_cacheKey, expiration, testContextAccessor.Current.CancellationToken);
+        await Sut.RefreshAsync<string>(_cacheKey, expiration, token: testContextAccessor.Current.CancellationToken);
         _memoryCache.Received(1).Remove(_innerCacheKey);
-        await _innerCache.Received(1).RefreshAsync<string>(_innerCacheKey, Arg.Any<HashCacheEntryOptions>(), Arg.Any<CancellationToken>());
+        await _innerCache.Received(1).RefreshAsync<string>(_innerCacheKey, Arg.Any<HashCacheEntryOptions>(), Arg.Any<CachePolicy?>(), Arg.Any<CancellationToken>());
         await _topic.Received(1).PublishAsync(Arg.Any<ICacheEvent>(), Arg.Any<CancellationToken>());
     }
 
     [Fact]
     public async Task Refresh_value_no_expiration()
     {
-        await Sut.RefreshAsync<string>(_cacheKey, testContextAccessor.Current.CancellationToken);
+        await Sut.RefreshAsync<string>(_cacheKey, policy: null, token: testContextAccessor.Current.CancellationToken);
         _memoryCache.Received(1).Remove(_innerCacheKey);
-        await _innerCache.Received(1).RefreshAsync<string>(_innerCacheKey, Arg.Any<HashCacheEntryOptions>(), Arg.Any<CancellationToken>());
+        await _innerCache.Received(1).RefreshAsync<string>(_innerCacheKey, Arg.Any<HashCacheEntryOptions>(), Arg.Any<CachePolicy?>(), Arg.Any<CancellationToken>());
         await _topic.Received(1).PublishAsync(Arg.Any<ICacheEvent>(), Arg.Any<CancellationToken>());
     }
 
@@ -803,9 +801,9 @@ public class MultilayerHashCacheTests(ITestContextAccessor testContextAccessor) 
     public async Task Refresh_value_DateTimeOffset()
     {
         var expiration = DateTimeOffset.UtcNow.AddDays(1);
-        await Sut.RefreshAsync<string>(_cacheKey, expiration, testContextAccessor.Current.CancellationToken);
+        await Sut.RefreshAsync<string>(_cacheKey, expiration, token: testContextAccessor.Current.CancellationToken);
         _memoryCache.Received(1).Remove(_innerCacheKey);
-        await _innerCache.Received(1).RefreshAsync<string>(_innerCacheKey, Arg.Any<HashCacheEntryOptions>(), Arg.Any<CancellationToken>());
+        await _innerCache.Received(1).RefreshAsync<string>(_innerCacheKey, Arg.Any<HashCacheEntryOptions>(), Arg.Any<CachePolicy?>(), Arg.Any<CancellationToken>());
         await _topic.Received(1).PublishAsync(Arg.Any<ICacheEvent>(), Arg.Any<CancellationToken>());
     }
 
@@ -815,13 +813,13 @@ public class MultilayerHashCacheTests(ITestContextAccessor testContextAccessor) 
     public async Task Refresh_inner_cache_exception_timespan(bool eventFired)
     {
         var expiration = _fixture.Create<TimeSpan?>();
-        _innerCache.RefreshAsync<string>(_innerCacheKey, Arg.Any<HashCacheEntryOptions>(), Arg.Any<CancellationToken>())
+        _innerCache.RefreshAsync<string>(_innerCacheKey, Arg.Any<HashCacheEntryOptions>(), Arg.Any<CachePolicy?>(), Arg.Any<CancellationToken>())
             .ThrowsAsync(new Exception());
         _topic.PublishAsync(Arg.Any<ICacheEvent>(), Arg.Any<CancellationToken>())
             .Returns(_ => eventFired);
-        await Sut.RefreshAsync<string>(_cacheKey, expiration, testContextAccessor.Current.CancellationToken);
+        await Sut.RefreshAsync<string>(_cacheKey, expiration, token: testContextAccessor.Current.CancellationToken);
         _memoryCache.Received(1).Remove(_innerCacheKey);
-        await _innerCache.Received(eventFired ? 1 : 0).RefreshAsync<string>(_innerCacheKey, Arg.Any<HashCacheEntryOptions>(), Arg.Any<CancellationToken>());
+        await _innerCache.Received(eventFired ? 1 : 0).RefreshAsync<string>(_innerCacheKey, Arg.Any<HashCacheEntryOptions>(), Arg.Any<CachePolicy?>(), Arg.Any<CancellationToken>());
         await _topic.Received(1).PublishAsync(Arg.Any<ICacheEvent>(), Arg.Any<CancellationToken>());
     }
 
@@ -831,13 +829,13 @@ public class MultilayerHashCacheTests(ITestContextAccessor testContextAccessor) 
     public async Task Refresh_inner_cache_exception_DateTimeOffset(bool eventFired)
     {
         var expiration = DateTimeOffset.UtcNow.AddDays(1);
-        _innerCache.RefreshAsync<string>(_innerCacheKey, Arg.Any<HashCacheEntryOptions>(), Arg.Any<CancellationToken>())
+        _innerCache.RefreshAsync<string>(_innerCacheKey, Arg.Any<HashCacheEntryOptions>(), Arg.Any<CachePolicy?>(), Arg.Any<CancellationToken>())
             .ThrowsAsync(new Exception());
         _topic.PublishAsync(Arg.Any<ICacheEvent>(), Arg.Any<CancellationToken>())
             .Returns(_ => eventFired);
-        await Sut.RefreshAsync<string>(_cacheKey, expiration, testContextAccessor.Current.CancellationToken);
+        await Sut.RefreshAsync<string>(_cacheKey, expiration, token: testContextAccessor.Current.CancellationToken);
         _memoryCache.Received(1).Remove(_innerCacheKey);
-        await _innerCache.Received(eventFired ? 1 : 0).RefreshAsync<string>(_innerCacheKey, Arg.Any<HashCacheEntryOptions>(), Arg.Any<CancellationToken>());
+        await _innerCache.Received(eventFired ? 1 : 0).RefreshAsync<string>(_innerCacheKey, Arg.Any<HashCacheEntryOptions>(), Arg.Any<CachePolicy?>(), Arg.Any<CancellationToken>());
         await _topic.Received(1).PublishAsync(Arg.Any<ICacheEvent>(), Arg.Any<CancellationToken>());
     }
 
@@ -916,11 +914,11 @@ public class MultilayerHashCacheTests(ITestContextAccessor testContextAccessor) 
             .Returns(token);
         _topic.PublishAsync(Arg.Any<ICacheEvent>(), Arg.Any<CancellationToken>())
             .Returns(_ => true);
-        _innerCache.SetAsync(_innerCacheKey, Arg.Any<IDictionary<string, int?>>(), Arg.Any<HashCacheEntryOptions>(), Arg.Any<CancellationToken>())
+        _innerCache.SetAsync(_innerCacheKey, Arg.Any<IDictionary<string, int?>>(), Arg.Any<HashCacheEntryOptions>(), Arg.Any<CachePolicy?>(), Arg.Any<CancellationToken>())
             .Returns(true);
         var expiration = _clock.UtcNow.AddYears(1);
         var values = _fixture.Create<IDictionary<string, int?>>();
-        await Sut.SetAsync(_cacheKey, values, expiration, testContextAccessor.Current.CancellationToken);
+        await Sut.SetAsync(_cacheKey, values, expiration, token: testContextAccessor.Current.CancellationToken);
         var actual = await Sut.ExpireTimeAsync<int?>(_cacheKey, testContextAccessor.Current.CancellationToken);
         expiration.Should().Be(actual);
     }
@@ -947,11 +945,11 @@ public class MultilayerHashCacheTests(ITestContextAccessor testContextAccessor) 
             .Returns(_ => token);
         _topic.PublishAsync(Arg.Any<ICacheEvent>(), Arg.Any<CancellationToken>())
             .Returns(_ => true);
-        _innerCache.SetAsync(_innerCacheKey, Arg.Any<IDictionary<string, int?>>(), Arg.Any<HashCacheEntryOptions>(), Arg.Any<CancellationToken>())
+        _innerCache.SetAsync(_innerCacheKey, Arg.Any<IDictionary<string, int?>>(), Arg.Any<HashCacheEntryOptions>(), Arg.Any<CachePolicy?>(), Arg.Any<CancellationToken>())
             .Returns(true);
         var expiration = TimeSpan.FromDays(1);
         var values = _fixture.Create<IDictionary<string, int?>>();
-        await Sut.SetAsync(_cacheKey, values, expiration, testContextAccessor.Current.CancellationToken);
+        await Sut.SetAsync(_cacheKey, values, expiration, token: testContextAccessor.Current.CancellationToken);
         var actual = await Sut.TimeToLiveAsync<int?>(_cacheKey, testContextAccessor.Current.CancellationToken);
         expiration.Should().BeCloseTo(actual.GetValueOrDefault(), TimeSpan.FromSeconds(10));
     }
@@ -1103,7 +1101,7 @@ public class MultilayerHashCacheTests(ITestContextAccessor testContextAccessor) 
         var expected = _fixture.Create<IDictionary<string, string?>>();
         Func<CancellationToken, Task<IDictionary<string, string?>>> generator = token => Task.FromResult(expected);
 
-        _innerCache.GetCacheEntryAsync<string>(_innerCacheKey, Arg.Any<CancellationToken>())
+        _innerCache.GetCacheEntryAsync<string>(_innerCacheKey, Arg.Any<CachePolicy?>(), Arg.Any<CancellationToken>())
             .Returns(new TestCacheEntry<IDictionary<string, string?>> { Value = expected, Expiration = DateTimeOffset.MaxValue });
 
         var cacheEntry = _fixture.Freeze<Microsoft.Extensions.Caching.Memory.ICacheEntry>();
@@ -1111,19 +1109,19 @@ public class MultilayerHashCacheTests(ITestContextAccessor testContextAccessor) 
             .Returns(cacheEntry);
 
         _options.DefaultExpiration = null;
-        _ = await Sut.GetOrAddAsync(_cacheKey, generator, default(DateTimeOffset?), testContextAccessor.Current.CancellationToken);
+        _ = await Sut.GetOrAddAsync(_cacheKey, generator, default(DateTimeOffset?), (CachePolicy?)null, testContextAccessor.Current.CancellationToken);
         cacheEntry.AbsoluteExpiration.Should().Be(DateTimeOffset.MaxValue);
     }
 
     [Fact]
-    public async Task Get_returns_local_when_disconnected_and_UsePrimaryOnlyWhenDisconnected_is_true()
+    public async Task Get_returns_local_when_disconnected_and_UseLocalOnlyWhenDisconnected_is_true()
     {
         var expected = _fixture.Create<IDictionary<string, string?>>();
         var expectedCacheEntry = new TestCacheEntry<IDictionary<string, string?>>
         {
             Value = expected
         };
-        _options.UsePrimaryOnlyWhenDisconnected = true;
+        _options.UseLocalOnlyWhenDisconnected = true;
         _topicProvider.IsConnected.Returns(false);
         _memoryCache.TryGetValue(Arg.Any<object>(), out Arg.Any<object?>())
             .Returns(x =>
@@ -1132,20 +1130,20 @@ public class MultilayerHashCacheTests(ITestContextAccessor testContextAccessor) 
                 return true;
             });
 
-        var actual = await Sut.GetAsync<string>(_cacheKey, token: testContextAccessor.Current.CancellationToken);
+        var actual = await Sut.GetAsync<string>(_cacheKey, policy: null, token: testContextAccessor.Current.CancellationToken);
         actual.Should().BeEquivalentTo(expected);
-        await _innerCache.DidNotReceive().GetCacheEntryAsync<string>(_innerCacheKey, Arg.Any<CancellationToken>());
+        await _innerCache.DidNotReceive().GetCacheEntryAsync<string>(_innerCacheKey, Arg.Any<CachePolicy?>(), Arg.Any<CancellationToken>());
     }
 
     [Fact]
-    public async Task Get_returns_empty_when_disconnected_and_UsePrimaryOnlyWhenDisconnected_is_false()
+    public async Task Get_returns_empty_when_disconnected_and_UseLocalOnlyWhenDisconnected_is_false()
     {
         var expected = _fixture.Create<IDictionary<string, string?>>();
         var expectedCacheEntry = new TestCacheEntry<IDictionary<string, string?>>
         {
             Value = expected
         };
-        _options.UsePrimaryOnlyWhenDisconnected = false;
+        _options.UseLocalOnlyWhenDisconnected = false;
         _options.ConnectionMonitorEnabled = true;
         _topicProvider.IsConnected.Returns(false);
         _memoryCache.TryGetValue(Arg.Any<object>(), out Arg.Any<object?>())
@@ -1155,48 +1153,48 @@ public class MultilayerHashCacheTests(ITestContextAccessor testContextAccessor) 
                 return true;
             });
 
-        var actual = await Sut.GetAsync<string>(_cacheKey, token: testContextAccessor.Current.CancellationToken);
+        var actual = await Sut.GetAsync<string>(_cacheKey, policy: null, token: testContextAccessor.Current.CancellationToken);
         actual.Should().BeEmpty();
         _memoryCache.Received(1).Remove(_innerCacheKey);
     }
 
     [Fact]
-    public async Task Set_uses_local_only_when_disconnected_and_UsePrimaryOnlyWhenDisconnected_is_true()
+    public async Task Set_uses_local_only_when_disconnected_and_UseLocalOnlyWhenDisconnected_is_true()
     {
         var value = _fixture.Create<IDictionary<string, string?>>();
-        _options.UsePrimaryOnlyWhenDisconnected = true;
-        _options.PrimaryMaxExpirationDisconnected = TimeSpan.FromMinutes(5);
+        _options.UseLocalOnlyWhenDisconnected = true;
+        _options.LocalMaxExpirationDisconnected = TimeSpan.FromMinutes(5);
         _options.ConnectionMonitorEnabled = true;
         _topicProvider.IsConnected.Returns(false);
         _topic.PublishAsync(Arg.Any<ICacheEvent>(), Arg.Any<CancellationToken>())
             .Returns(_ => true);
 
-        var actual = await Sut.SetAsync(_cacheKey, value, _fixture.Create<TimeSpan>(), testContextAccessor.Current.CancellationToken);
+        var actual = await Sut.SetAsync(_cacheKey, value, _fixture.Create<TimeSpan>(), token: testContextAccessor.Current.CancellationToken);
         actual.Should().BeTrue();
         _memoryCache.Received(1).CreateEntry(_innerCacheKey);
-        await _innerCache.DidNotReceive().SetAsync(_innerCacheKey, Arg.Any<IDictionary<string, string?>>(), Arg.Any<HashCacheEntryOptions>(), Arg.Any<CancellationToken>());
+        await _innerCache.DidNotReceive().SetAsync(_innerCacheKey, Arg.Any<IDictionary<string, string?>>(), Arg.Any<HashCacheEntryOptions>(), Arg.Any<CachePolicy?>(), Arg.Any<CancellationToken>());
     }
 
     [Fact]
-    public async Task Set_with_options_uses_local_only_when_disconnected_and_UsePrimaryOnlyWhenDisconnected_is_true()
+    public async Task Set_with_options_uses_local_only_when_disconnected_and_UseLocalOnlyWhenDisconnected_is_true()
     {
         var value = _fixture.Create<IDictionary<string, string?>>();
-        _options.UsePrimaryOnlyWhenDisconnected = true;
-        _options.PrimaryMaxExpirationDisconnected = TimeSpan.FromMinutes(5);
+        _options.UseLocalOnlyWhenDisconnected = true;
+        _options.LocalMaxExpirationDisconnected = TimeSpan.FromMinutes(5);
         _options.ConnectionMonitorEnabled = true;
         _topicProvider.IsConnected.Returns(false);
         _topic.PublishAsync(Arg.Any<ICacheEvent>(), Arg.Any<CancellationToken>())
             .Returns(_ => true);
         var hashOptions = new HashCacheEntryOptions(default, _fixture.Create<TimeSpan>(), _fixture.Create<IDictionary<string, string?>>());
 
-        var actual = await Sut.SetAsync(_cacheKey, value, hashOptions, testContextAccessor.Current.CancellationToken);
+        var actual = await Sut.SetAsync(_cacheKey, value, hashOptions, token: testContextAccessor.Current.CancellationToken);
         actual.Should().BeTrue();
         _memoryCache.Received(1).CreateEntry(_innerCacheKey);
-        await _innerCache.DidNotReceive().SetAsync(_innerCacheKey, Arg.Any<IDictionary<string, string?>>(), Arg.Any<HashCacheEntryOptions>(), Arg.Any<CancellationToken>());
+        await _innerCache.DidNotReceive().SetAsync(_innerCacheKey, Arg.Any<IDictionary<string, string?>>(), Arg.Any<HashCacheEntryOptions>(), Arg.Any<CachePolicy?>(), Arg.Any<CancellationToken>());
     }
 
     [Fact]
-    public async Task GetOrAdd_uses_local_only_when_disconnected_and_UsePrimaryOnlyWhenDisconnected_is_true()
+    public async Task GetOrAdd_uses_local_only_when_disconnected_and_UseLocalOnlyWhenDisconnected_is_true()
     {
         var generatorExpected = _fixture.Create<IDictionary<string, string?>>();
         var generatorWasCalled = false;
@@ -1206,31 +1204,31 @@ public class MultilayerHashCacheTests(ITestContextAccessor testContextAccessor) 
             return Task.FromResult(generatorExpected);
         };
 
-        _options.UsePrimaryOnlyWhenDisconnected = true;
-        _options.PrimaryMaxExpirationDisconnected = TimeSpan.FromMinutes(5);
+        _options.UseLocalOnlyWhenDisconnected = true;
+        _options.LocalMaxExpirationDisconnected = TimeSpan.FromMinutes(5);
         _options.ConnectionMonitorEnabled = true;
         _topicProvider.IsConnected.Returns(false);
 
         var expectedCacheEntry = new TestCacheEntry<IDictionary<string, string?>>();
-        _innerCache.GetCacheEntryAsync<string>(_innerCacheKey, Arg.Any<CancellationToken>())
+        _innerCache.GetCacheEntryAsync<string>(_innerCacheKey, Arg.Any<CachePolicy?>(), Arg.Any<CancellationToken>())
             .Returns(expectedCacheEntry);
 
-        var actual = await Sut.GetOrAddAsync(_cacheKey, generator, _fixture.Create<TimeSpan>(), testContextAccessor.Current.CancellationToken);
+        var actual = await Sut.GetOrAddAsync(_cacheKey, generator, _fixture.Create<TimeSpan>(), token: testContextAccessor.Current.CancellationToken);
         generatorWasCalled.Should().BeTrue();
         actual.Should().BeEquivalentTo(generatorExpected);
         _memoryCache.Received(1).CreateEntry(_innerCacheKey);
-        await _innerCache.DidNotReceive().SetAsync(_innerCacheKey, Arg.Any<IDictionary<string, string?>>(), Arg.Any<HashCacheEntryOptions>(), Arg.Any<CancellationToken>());
+        await _innerCache.DidNotReceive().SetAsync(_innerCacheKey, Arg.Any<IDictionary<string, string?>>(), Arg.Any<HashCacheEntryOptions>(), Arg.Any<CachePolicy?>(), Arg.Any<CancellationToken>());
     }
 
     [Fact]
-    public async Task GetCacheEntry_returns_local_when_disconnected_and_UsePrimaryOnlyWhenDisconnected_is_true()
+    public async Task GetCacheEntry_returns_local_when_disconnected_and_UseLocalOnlyWhenDisconnected_is_true()
     {
         var expected = _fixture.Create<IDictionary<string, string?>>();
         var expectedCacheEntry = new TestCacheEntry<IDictionary<string, string?>>
         {
             Value = expected
         };
-        _options.UsePrimaryOnlyWhenDisconnected = true;
+        _options.UseLocalOnlyWhenDisconnected = true;
         _topicProvider.IsConnected.Returns(false);
         _memoryCache.TryGetValue(Arg.Any<object>(), out Arg.Any<object?>())
             .Returns(x =>
@@ -1239,14 +1237,14 @@ public class MultilayerHashCacheTests(ITestContextAccessor testContextAccessor) 
                 return true;
             });
 
-        var actual = await Sut.GetCacheEntryAsync<string>(_cacheKey, token: testContextAccessor.Current.CancellationToken);
+        var actual = await Sut.GetCacheEntryAsync<string>(_cacheKey, policy: null, token: testContextAccessor.Current.CancellationToken);
         actual.Should().NotBeNull();
         actual.Value.Should().BeEquivalentTo(expected);
-        await _innerCache.DidNotReceive().GetCacheEntryAsync<string>(_innerCacheKey, Arg.Any<CancellationToken>());
+        await _innerCache.DidNotReceive().GetCacheEntryAsync<string>(_innerCacheKey, Arg.Any<CachePolicy?>(), Arg.Any<CancellationToken>());
     }
 
     [Fact]
-    public async Task GetItem_returns_local_when_disconnected_and_UsePrimaryOnlyWhenDisconnected_is_true()
+    public async Task GetItem_returns_local_when_disconnected_and_UseLocalOnlyWhenDisconnected_is_true()
     {
         var expected = _fixture.Create<IDictionary<string, string?>>();
         var field = expected.Keys.First();
@@ -1254,7 +1252,7 @@ public class MultilayerHashCacheTests(ITestContextAccessor testContextAccessor) 
         {
             Value = expected
         };
-        _options.UsePrimaryOnlyWhenDisconnected = true;
+        _options.UseLocalOnlyWhenDisconnected = true;
         _topicProvider.IsConnected.Returns(false);
         _memoryCache.TryGetValue(Arg.Any<object>(), out Arg.Any<object?>())
             .Returns(x =>
@@ -1263,31 +1261,31 @@ public class MultilayerHashCacheTests(ITestContextAccessor testContextAccessor) 
                 return true;
             });
 
-        var actual = await Sut.GetItemAsync<string>(_cacheKey, field, token: testContextAccessor.Current.CancellationToken);
+        var actual = await Sut.GetItemAsync<string>(_cacheKey, field, policy: null, token: testContextAccessor.Current.CancellationToken);
         actual.Should().Be(expected[field]);
-        await _innerCache.DidNotReceive().GetCacheEntryAsync<string>(_innerCacheKey, Arg.Any<CancellationToken>());
+        await _innerCache.DidNotReceive().GetCacheEntryAsync<string>(_innerCacheKey, Arg.Any<CachePolicy?>(), Arg.Any<CancellationToken>());
     }
 
     [Fact]
-    public void Constructor_throws_when_PrimaryMaxExpirationDisconnected_is_greater_than_PrimaryMaxExpiration()
+    public void Constructor_throws_when_LocalMaxExpirationDisconnected_is_greater_than_LocalMaxExpiration()
     {
-        _options.PrimaryMaxExpiration = TimeSpan.FromMinutes(5);
-        _options.PrimaryMaxExpirationDisconnected = TimeSpan.FromMinutes(10);
+        _options.LocalMaxExpiration = TimeSpan.FromMinutes(5);
+        _options.LocalMaxExpirationDisconnected = TimeSpan.FromMinutes(10);
 
         Action act = () => _fixture.Create<MultilayerHashCache>();
 
         var ex = act.Should().Throw<Exception>().Which;
         ex.InnerException!.InnerException.Should().BeOfType<ArgumentException>()
-            .Which.Message.Should().Contain("PrimaryMaxExpirationDisconnected")
+            .Which.Message.Should().Contain("LocalMaxExpirationDisconnected")
             .And.Contain("must be less than or equal to")
-            .And.Contain("PrimaryMaxExpiration");
+            .And.Contain("LocalMaxExpiration");
     }
 
     [Fact]
-    public void Constructor_does_not_throw_when_PrimaryMaxExpirationDisconnected_equals_PrimaryMaxExpiration()
+    public void Constructor_does_not_throw_when_LocalMaxExpirationDisconnected_equals_LocalMaxExpiration()
     {
-        _options.PrimaryMaxExpiration = TimeSpan.FromMinutes(5);
-        _options.PrimaryMaxExpirationDisconnected = TimeSpan.FromMinutes(5);
+        _options.LocalMaxExpiration = TimeSpan.FromMinutes(5);
+        _options.LocalMaxExpirationDisconnected = TimeSpan.FromMinutes(5);
 
         Action act = () => _fixture.Create<MultilayerHashCache>();
 
@@ -1295,10 +1293,10 @@ public class MultilayerHashCacheTests(ITestContextAccessor testContextAccessor) 
     }
 
     [Fact]
-    public void Constructor_does_not_throw_when_PrimaryMaxExpirationDisconnected_is_less_than_PrimaryMaxExpiration()
+    public void Constructor_does_not_throw_when_LocalMaxExpirationDisconnected_is_less_than_LocalMaxExpiration()
     {
-        _options.PrimaryMaxExpiration = TimeSpan.FromMinutes(10);
-        _options.PrimaryMaxExpirationDisconnected = TimeSpan.FromMinutes(5);
+        _options.LocalMaxExpiration = TimeSpan.FromMinutes(10);
+        _options.LocalMaxExpirationDisconnected = TimeSpan.FromMinutes(5);
 
         Action act = () => _fixture.Create<MultilayerHashCache>();
 
@@ -1306,10 +1304,10 @@ public class MultilayerHashCacheTests(ITestContextAccessor testContextAccessor) 
     }
 
     [Fact]
-    public void Constructor_does_not_throw_when_PrimaryMaxExpiration_is_null()
+    public void Constructor_does_not_throw_when_LocalMaxExpiration_is_null()
     {
-        _options.PrimaryMaxExpiration = null;
-        _options.PrimaryMaxExpirationDisconnected = TimeSpan.FromMinutes(5);
+        _options.LocalMaxExpiration = null;
+        _options.LocalMaxExpirationDisconnected = TimeSpan.FromMinutes(5);
 
         Action act = () => _fixture.Create<MultilayerHashCache>();
 
@@ -1317,10 +1315,10 @@ public class MultilayerHashCacheTests(ITestContextAccessor testContextAccessor) 
     }
 
     [Fact]
-    public void Constructor_does_not_throw_when_PrimaryMaxExpirationDisconnected_is_null()
+    public void Constructor_does_not_throw_when_LocalMaxExpirationDisconnected_is_null()
     {
-        _options.PrimaryMaxExpiration = TimeSpan.FromMinutes(5);
-        _options.PrimaryMaxExpirationDisconnected = null;
+        _options.LocalMaxExpiration = TimeSpan.FromMinutes(5);
+        _options.LocalMaxExpirationDisconnected = null;
 
         Action act = () => _fixture.Create<MultilayerHashCache>();
 
@@ -1328,35 +1326,35 @@ public class MultilayerHashCacheTests(ITestContextAccessor testContextAccessor) 
     }
 
     [Theory]
-    [InlineData(true, false)]  // innerCacheDisconnected = true (UsePrimaryOnlyWhenDisconnected=true, IsConnected=false)
-    [InlineData(false, true)]  // innerCacheDisconnected = false (UsePrimaryOnlyWhenDisconnected=false, IsConnected=true)
-    [InlineData(false, false)] // innerCacheDisconnected = false (UsePrimaryOnlyWhenDisconnected=false, IsConnected=false)
-    [InlineData(true, true)]   // innerCacheDisconnected = false (UsePrimaryOnlyWhenDisconnected=true, IsConnected=true)
-    public async Task SetAsync_calls_inner_cache_based_on_innerCacheDisconnected(bool usePrimaryOnlyWhenDisconnected, bool isConnected)
+    [InlineData(true, false)]  // innerCacheDisconnected = true (UseLocalOnlyWhenDisconnected=true, IsConnected=false)
+    [InlineData(false, true)]  // innerCacheDisconnected = false (UseLocalOnlyWhenDisconnected=false, IsConnected=true)
+    [InlineData(false, false)] // innerCacheDisconnected = false (UseLocalOnlyWhenDisconnected=false, IsConnected=false)
+    [InlineData(true, true)]   // innerCacheDisconnected = false (UseLocalOnlyWhenDisconnected=true, IsConnected=true)
+    public async Task SetAsync_calls_inner_cache_based_on_innerCacheDisconnected(bool useLocalOnlyWhenDisconnected, bool isConnected)
     {
         var value = _fixture.Create<IDictionary<string, string?>>();
-        var innerCacheDisconnected = usePrimaryOnlyWhenDisconnected && !isConnected;
-        _options.UsePrimaryOnlyWhenDisconnected = usePrimaryOnlyWhenDisconnected;
-        _options.PrimaryMaxExpirationDisconnected = TimeSpan.FromMinutes(5);
+        var innerCacheDisconnected = useLocalOnlyWhenDisconnected && !isConnected;
+        _options.UseLocalOnlyWhenDisconnected = useLocalOnlyWhenDisconnected;
+        _options.LocalMaxExpirationDisconnected = TimeSpan.FromMinutes(5);
         _options.ConnectionMonitorEnabled = true;
         _topicProvider.IsConnected.Returns(isConnected);
         _topic.PublishAsync(Arg.Any<ICacheEvent>(), Arg.Any<CancellationToken>())
             .Returns(_ => true);
-        _innerCache.SetAsync(_innerCacheKey, Arg.Any<IDictionary<string, string?>>(), Arg.Any<HashCacheEntryOptions>(), Arg.Any<CancellationToken>())
+        _innerCache.SetAsync(_innerCacheKey, Arg.Any<IDictionary<string, string?>>(), Arg.Any<HashCacheEntryOptions>(), Arg.Any<CachePolicy?>(), Arg.Any<CancellationToken>())
             .Returns(true);
 
-        var actual = await Sut.SetAsync(_cacheKey, value, _fixture.Create<TimeSpan>(), testContextAccessor.Current.CancellationToken);
+        var actual = await Sut.SetAsync(_cacheKey, value, _fixture.Create<TimeSpan>(), token: testContextAccessor.Current.CancellationToken);
         actual.Should().BeTrue();
         _memoryCache.Received(1).CreateEntry(_innerCacheKey);
 
         if (innerCacheDisconnected)
         {
-            await _innerCache.DidNotReceive().SetAsync(_innerCacheKey, Arg.Any<IDictionary<string, string?>>(), Arg.Any<HashCacheEntryOptions>(), Arg.Any<CancellationToken>());
+            await _innerCache.DidNotReceive().SetAsync(_innerCacheKey, Arg.Any<IDictionary<string, string?>>(), Arg.Any<HashCacheEntryOptions>(), Arg.Any<CachePolicy?>(), Arg.Any<CancellationToken>());
             await _topic.DidNotReceive().PublishAsync(Arg.Any<ICacheEvent>(), Arg.Any<CancellationToken>());
         }
         else
         {
-            await _innerCache.Received(1).SetAsync(_innerCacheKey, Arg.Any<IDictionary<string, string?>>(), Arg.Any<HashCacheEntryOptions>(), Arg.Any<CancellationToken>());
+            await _innerCache.Received(1).SetAsync(_innerCacheKey, Arg.Any<IDictionary<string, string?>>(), Arg.Any<HashCacheEntryOptions>(), Arg.Any<CachePolicy?>(), Arg.Any<CancellationToken>());
             await _topic.Received(1).PublishAsync(Arg.Any<ICacheEvent>(), Arg.Any<CancellationToken>());
         }
     }
@@ -1366,32 +1364,32 @@ public class MultilayerHashCacheTests(ITestContextAccessor testContextAccessor) 
     [InlineData(false, true)]  // innerCacheDisconnected = false
     [InlineData(false, false)] // innerCacheDisconnected = false
     [InlineData(true, true)]   // innerCacheDisconnected = false
-    public async Task SetAsync_with_options_calls_inner_cache_based_on_innerCacheDisconnected(bool usePrimaryOnlyWhenDisconnected, bool isConnected)
+    public async Task SetAsync_with_options_calls_inner_cache_based_on_innerCacheDisconnected(bool useLocalOnlyWhenDisconnected, bool isConnected)
     {
         var value = _fixture.Create<IDictionary<string, string?>>();
-        var innerCacheDisconnected = usePrimaryOnlyWhenDisconnected && !isConnected;
-        _options.UsePrimaryOnlyWhenDisconnected = usePrimaryOnlyWhenDisconnected;
-        _options.PrimaryMaxExpirationDisconnected = TimeSpan.FromMinutes(5);
+        var innerCacheDisconnected = useLocalOnlyWhenDisconnected && !isConnected;
+        _options.UseLocalOnlyWhenDisconnected = useLocalOnlyWhenDisconnected;
+        _options.LocalMaxExpirationDisconnected = TimeSpan.FromMinutes(5);
         _options.ConnectionMonitorEnabled = true;
         _topicProvider.IsConnected.Returns(isConnected);
         _topic.PublishAsync(Arg.Any<ICacheEvent>(), Arg.Any<CancellationToken>())
             .Returns(_ => true);
-        _innerCache.SetAsync(_innerCacheKey, Arg.Any<IDictionary<string, string?>>(), Arg.Any<HashCacheEntryOptions>(), Arg.Any<CancellationToken>())
+        _innerCache.SetAsync(_innerCacheKey, Arg.Any<IDictionary<string, string?>>(), Arg.Any<HashCacheEntryOptions>(), Arg.Any<CachePolicy?>(), Arg.Any<CancellationToken>())
             .Returns(true);
         var hashOptions = new HashCacheEntryOptions(default, _fixture.Create<TimeSpan>(), _fixture.Create<IDictionary<string, string?>>());
 
-        var actual = await Sut.SetAsync(_cacheKey, value, hashOptions, testContextAccessor.Current.CancellationToken);
+        var actual = await Sut.SetAsync(_cacheKey, value, hashOptions, token: testContextAccessor.Current.CancellationToken);
         actual.Should().BeTrue();
         _memoryCache.Received(1).CreateEntry(_innerCacheKey);
 
         if (innerCacheDisconnected)
         {
-            await _innerCache.DidNotReceive().SetAsync(_innerCacheKey, Arg.Any<IDictionary<string, string?>>(), Arg.Any<HashCacheEntryOptions>(), Arg.Any<CancellationToken>());
+            await _innerCache.DidNotReceive().SetAsync(_innerCacheKey, Arg.Any<IDictionary<string, string?>>(), Arg.Any<HashCacheEntryOptions>(), Arg.Any<CachePolicy?>(), Arg.Any<CancellationToken>());
             await _topic.DidNotReceive().PublishAsync(Arg.Any<ICacheEvent>(), Arg.Any<CancellationToken>());
         }
         else
         {
-            await _innerCache.Received(1).SetAsync(_innerCacheKey, Arg.Any<IDictionary<string, string?>>(), Arg.Any<HashCacheEntryOptions>(), Arg.Any<CancellationToken>());
+            await _innerCache.Received(1).SetAsync(_innerCacheKey, Arg.Any<IDictionary<string, string?>>(), Arg.Any<HashCacheEntryOptions>(), Arg.Any<CachePolicy?>(), Arg.Any<CancellationToken>());
             await _topic.Received(1).PublishAsync(Arg.Any<ICacheEvent>(), Arg.Any<CancellationToken>());
         }
     }
@@ -1401,7 +1399,7 @@ public class MultilayerHashCacheTests(ITestContextAccessor testContextAccessor) 
     [InlineData(false, true)]  // innerCacheDisconnected = false
     [InlineData(false, false)] // innerCacheDisconnected = false
     [InlineData(true, true)]   // innerCacheDisconnected = false
-    public async Task GetOrAddAsync_calls_inner_cache_based_on_innerCacheDisconnected(bool usePrimaryOnlyWhenDisconnected, bool isConnected)
+    public async Task GetOrAddAsync_calls_inner_cache_based_on_innerCacheDisconnected(bool useLocalOnlyWhenDisconnected, bool isConnected)
     {
         var generatorExpected = _fixture.Create<IDictionary<string, string?>>();
         var generatorWasCalled = false;
@@ -1411,30 +1409,30 @@ public class MultilayerHashCacheTests(ITestContextAccessor testContextAccessor) 
             return Task.FromResult(generatorExpected);
         };
 
-        var innerCacheDisconnected = usePrimaryOnlyWhenDisconnected && !isConnected;
-        _options.UsePrimaryOnlyWhenDisconnected = usePrimaryOnlyWhenDisconnected;
-        _options.PrimaryMaxExpirationDisconnected = TimeSpan.FromMinutes(5);
+        var innerCacheDisconnected = useLocalOnlyWhenDisconnected && !isConnected;
+        _options.UseLocalOnlyWhenDisconnected = useLocalOnlyWhenDisconnected;
+        _options.LocalMaxExpirationDisconnected = TimeSpan.FromMinutes(5);
         _options.ConnectionMonitorEnabled = true;
         _topicProvider.IsConnected.Returns(isConnected);
 
         var expectedCacheEntry = new TestCacheEntry<IDictionary<string, string?>>();
-        _innerCache.GetCacheEntryAsync<string>(_innerCacheKey, Arg.Any<CancellationToken>())
+        _innerCache.GetCacheEntryAsync<string>(_innerCacheKey, Arg.Any<CachePolicy?>(), Arg.Any<CancellationToken>())
             .Returns(expectedCacheEntry);
-        _innerCache.SetAsync(_innerCacheKey, Arg.Any<IDictionary<string, string?>>(), Arg.Any<HashCacheEntryOptions>(), Arg.Any<CancellationToken>())
+        _innerCache.SetAsync(_innerCacheKey, Arg.Any<IDictionary<string, string?>>(), Arg.Any<HashCacheEntryOptions>(), Arg.Any<CachePolicy?>(), Arg.Any<CancellationToken>())
             .Returns(true);
 
-        var actual = await Sut.GetOrAddAsync(_cacheKey, generator, _fixture.Create<TimeSpan>(), testContextAccessor.Current.CancellationToken);
+        var actual = await Sut.GetOrAddAsync(_cacheKey, generator, _fixture.Create<TimeSpan>(), token: testContextAccessor.Current.CancellationToken);
         generatorWasCalled.Should().BeTrue();
         actual.Should().BeEquivalentTo(generatorExpected);
         _memoryCache.Received(1).CreateEntry(_innerCacheKey);
 
         if (innerCacheDisconnected)
         {
-            await _innerCache.DidNotReceive().SetAsync(_innerCacheKey, Arg.Any<IDictionary<string, string?>>(), Arg.Any<HashCacheEntryOptions>(), Arg.Any<CancellationToken>());
+            await _innerCache.DidNotReceive().SetAsync(_innerCacheKey, Arg.Any<IDictionary<string, string?>>(), Arg.Any<HashCacheEntryOptions>(), Arg.Any<CachePolicy?>(), Arg.Any<CancellationToken>());
         }
         else
         {
-            await _innerCache.Received(1).SetAsync(_innerCacheKey, Arg.Any<IDictionary<string, string?>>(), Arg.Any<HashCacheEntryOptions>(), Arg.Any<CancellationToken>());
+            await _innerCache.Received(1).SetAsync(_innerCacheKey, Arg.Any<IDictionary<string, string?>>(), Arg.Any<HashCacheEntryOptions>(), Arg.Any<CachePolicy?>(), Arg.Any<CancellationToken>());
         }
     }
 

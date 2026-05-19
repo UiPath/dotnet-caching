@@ -86,12 +86,34 @@ internal sealed class RedisDistributedLock : IDistributedLock
             var delay = ComputeRetryDelay(hasDeadline, startTimestamp, waitTimeout, pollInterval);
             if (delay <= TimeSpan.Zero)
             {
-                return TrackTimeoutNoOp(key);
+                return hasDeadline ? TrackTimeoutNoOp(key) : NoOpAsyncDisposable.Instance;
             }
 
             await Task.Delay(delay, token).ConfigureAwait(false);
             pollInterval = NextPollInterval(pollInterval, _maxPollInterval);
         }
+    }
+
+    public async ValueTask<IAsyncDisposable?> TryAcquireAsync(string key, TimeSpan expiry, CancellationToken token)
+    {
+        token.ThrowIfCancellationRequested();
+
+        var redisKey = new RedisKey(key);
+        var lockToken = BuildLockToken();
+
+        bool acquired;
+        try
+        {
+            acquired = await _redis.Database.LockTakeAsync(redisKey, lockToken, expiry, CommandFlags.DemandMaster).ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            _telemetry.TrackException(ex, [new(PropOperation, OperationAcquire), new(PropKey, key), new(PropContended, bool.FalseString)]);
+            _telemetry.TrackEvent(EventUnavailable, [new(PropKey, key), new(PropContended, bool.FalseString)]);
+            return null;
+        }
+
+        return acquired ? BuildAcquiredLease(redisKey, lockToken, key, contended: false) : null;
     }
 
     private string BuildLockToken() =>

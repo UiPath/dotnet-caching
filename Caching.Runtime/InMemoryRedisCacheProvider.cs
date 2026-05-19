@@ -17,6 +17,7 @@ public sealed class InMemoryRedisCacheProvider : ICacheProvider
     private readonly Lazy<ICacheFactory> _cacheFactory;
     private readonly ILocalLock _localLock;
     private readonly IDistributedLock _distributedLock;
+    private readonly ICachePolicyFactory _policyFactory;
     private readonly Lazy<MultilayerCache> _cache;
     private readonly Lazy<MultilayerHashCache> _hashCache;
 
@@ -37,7 +38,8 @@ public sealed class InMemoryRedisCacheProvider : ICacheProvider
         ICachingTelemetryProvider cachingTelemetryProvider,
         ILoggerFactory loggerFactory,
         ILocalLock localLock,
-        IDistributedLock distributedLock)
+        IDistributedLock distributedLock,
+        ICachePolicyFactory policyFactory)
     {
         _options = optionsAccessor.Value;
         _cacheOptions = cacheOptionsAccessor.Value;
@@ -50,6 +52,7 @@ public sealed class InMemoryRedisCacheProvider : ICacheProvider
         _loggerFactory = loggerFactory;
         _localLock = localLock;
         _distributedLock = distributedLock;
+        _policyFactory = policyFactory;
         _cache = new Lazy<MultilayerCache>(() => BuildCache());
         _hashCache = new Lazy<MultilayerHashCache>(() => BuildHashCache());
         Enabled = _options.Enabled;
@@ -88,6 +91,7 @@ public sealed class InMemoryRedisCacheProvider : ICacheProvider
             _cacheOptions,
             localLock: _localLock,
             distributedLock: _distributedLock,
+            policyFactory: _policyFactory,
             logger: _loggerFactory.CreateLogger($"{Name}.Cache"));
 
     private MultilayerHashCache BuildHashCache() =>
@@ -104,5 +108,6 @@ public sealed class InMemoryRedisCacheProvider : ICacheProvider
             _cacheOptions,
             localLock: _localLock,
             distributedLock: _distributedLock,
+            policyFactory: _policyFactory,
             logger: _loggerFactory.CreateLogger($"{Name}.HashCache"));
 }

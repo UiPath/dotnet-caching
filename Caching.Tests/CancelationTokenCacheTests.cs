@@ -2,13 +2,14 @@
 
 namespace UiPath.Platform.Caching.Tests;
 
-public class CancelationTokenRedisCacheTests : CancelationTokenCacheTests<RedisCache>
+public class CancelationTokenRedisCacheTests : CancelationTokenCacheTests
 {
+    protected override ICache CreateSut() => Fixture.Create<RedisCache>();
 }
 
-public class CancelationTokenInMemoryRedisCacheTests : CancelationTokenCacheTests<MultilayerCache>
+public class CancelationTokenInMemoryRedisCacheTests : CancelationTokenCacheTests
 {
-    protected override MultilayerCache CreateSut()
+    protected override ICache CreateSut()
     {
         Fixture.Inject<Func<RedisCacheOptions, IHashCache>>(options => Fixture.Create<IHashCache>());
         Fixture.Inject(Options.Create(new InMemoryRedisCacheOptions()));
@@ -16,7 +17,7 @@ public class CancelationTokenInMemoryRedisCacheTests : CancelationTokenCacheTest
     }
 }
 
-public abstract class CancelationTokenCacheTests<T> where T : ICache
+public abstract class CancelationTokenCacheTests
 {
     protected IFixture Fixture { get; } = AutoFixtureCreator.NSubstitute();
 
@@ -24,7 +25,7 @@ public abstract class CancelationTokenCacheTests<T> where T : ICache
     public Task Get() =>
         ValidateCancellationToken(async (sut, token) =>
         {
-            await sut.GetAsync<string>(Fixture.Create<string>(), token);
+            await sut.GetAsync<string>(Fixture.Create<string>(), policy: null, token: token);
         });
 
 
@@ -32,14 +33,14 @@ public abstract class CancelationTokenCacheTests<T> where T : ICache
     public Task GetOrAdd() =>
         ValidateCancellationToken(async (sut, token) =>
         {
-            await sut.GetOrAddAsync(Fixture.Create<string>(), token => Task.FromResult(Fixture.Create<string?>()), Fixture.Create<TimeSpan>(), token);
+            await sut.GetOrAddAsync(Fixture.Create<string>(), token => Task.FromResult(Fixture.Create<string?>()), Fixture.Create<TimeSpan>(), token: token);
         });
 
     [Fact]
     public Task Refresh() =>
         ValidateCancellationToken(async (sut, token) =>
         {
-            await sut.RefreshAsync<string>(Fixture.Create<string>(), Fixture.Create<TimeSpan>(), token);
+            await sut.RefreshAsync<string>(Fixture.Create<string>(), Fixture.Create<TimeSpan>(), token: token);
         });
 
     [Fact]
@@ -53,7 +54,7 @@ public abstract class CancelationTokenCacheTests<T> where T : ICache
     public Task Set() =>
         ValidateCancellationToken(async (sut, token) =>
         {
-            await sut.SetAsync(Fixture.Create<string>(), Fixture.Create<string>(), Fixture.Create<TimeSpan>(), token);
+            await sut.SetAsync(Fixture.Create<string>(), Fixture.Create<string>(), Fixture.Create<TimeSpan>(), token: token);
         });
 
     [Fact]
@@ -72,5 +73,5 @@ public abstract class CancelationTokenCacheTests<T> where T : ICache
         await Assert.ThrowsAsync<OperationCanceledException>(() => act(sut, token));
     }
 
-    protected virtual T CreateSut() => Fixture.Create<T>();
+    protected abstract ICache CreateSut();
 }

@@ -28,6 +28,8 @@ public static class InMemoryCollectionExtensions
         builder.Services
             .TryAddEnumerable(ServiceDescriptor.Singleton<IValidateOptions<InMemoryCacheOptions>, MultilayerCacheLockOptionsValidator<InMemoryCacheOptions>>());
         builder.Services
+            .TryAddEnumerable(ServiceDescriptor.Singleton<ICachePolicyDefaultBuilder, InMemoryDefaultPolicyBuilder>());
+        builder.Services
             .TryAddEnumerable(ServiceDescriptor.Singleton<ICacheProvider, InMemoryCacheProvider>());
 
         return builder;
