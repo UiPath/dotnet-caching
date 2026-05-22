@@ -87,6 +87,162 @@ public class MultilayerHashCachePerNameJitterTests(ITestContextAccessor testCont
             Arg.Any<CancellationToken>());
     }
 
+    [Fact]
+    public async Task SetAsync_jitters_options_DefaultExpiration_when_policy_DistributedExpiration_is_null()
+    {
+        var token = testContextAccessor.Current.CancellationToken;
+        var optionsTtl = _options.DefaultExpiration!.Value;
+        var maxJitter = TimeSpan.FromSeconds(30);
+        var defaultPolicy = new CachePolicy { JitterMaxDuration = maxJitter }; // no DistributedExpiration
+        var policyFactory = new DefaultCachePolicyFactory(Array.Empty<KeyValuePair<string, CachePolicy>>(), defaultPolicy);
+        _fixture.Inject<ICachePolicyFactory>(policyFactory);
+        _sut = null;
+
+        _innerCache.SetAsync<string?>(_cacheKey, Arg.Any<IDictionary<string, string?>>(), Arg.Any<HashCacheEntryOptions>(), Arg.Any<CachePolicy?>(), Arg.Any<CancellationToken>())
+            .Returns(true);
+        _topic.PublishAsync(Arg.Any<ICacheEvent>(), Arg.Any<CancellationToken>())
+            .Returns(_ => true);
+
+        var values = new Dictionary<string, string?> { ["f"] = "v" };
+        await Sut.SetAsync(_cacheKey, values, (TimeSpan?)null, policy: null, token);
+
+        await _innerCache.Received(1).SetAsync<string?>(
+            _cacheKey,
+            Arg.Any<IDictionary<string, string?>>(),
+            Arg.Is<HashCacheEntryOptions>(o => o.ExpireTime.HasValue
+                && o.ExpireTime.Value - DateTimeOffset.UtcNow >= optionsTtl - TimeSpan.FromSeconds(5)
+                && o.ExpireTime.Value - DateTimeOffset.UtcNow <= optionsTtl + maxJitter + TimeSpan.FromSeconds(5)),
+            Arg.Any<CachePolicy?>(),
+            Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task RefreshAsync_TimeSpan_overload_jitters_policy_derived_expiration()
+    {
+        var token = testContextAccessor.Current.CancellationToken;
+        var baseTtl = TimeSpan.FromMinutes(5);
+        var maxJitter = TimeSpan.FromSeconds(30);
+        var defaultPolicy = new CachePolicy { DistributedExpiration = baseTtl, JitterMaxDuration = maxJitter };
+        var policyFactory = new DefaultCachePolicyFactory(Array.Empty<KeyValuePair<string, CachePolicy>>(), defaultPolicy);
+        _fixture.Inject<ICachePolicyFactory>(policyFactory);
+        _sut = null;
+
+        _innerCache.RefreshAsync<string>(_cacheKey, Arg.Any<HashCacheEntryOptions>(), Arg.Any<CachePolicy?>(), Arg.Any<CancellationToken>())
+            .Returns(true);
+        _topic.PublishAsync(Arg.Any<ICacheEvent>(), Arg.Any<CancellationToken>())
+            .Returns(_ => true);
+
+        await Sut.RefreshAsync<string>(_cacheKey, (TimeSpan?)null, policy: null, token);
+
+        await _innerCache.Received(1).RefreshAsync<string>(
+            _cacheKey,
+            Arg.Is<HashCacheEntryOptions>(o => o.ExpireTime.HasValue
+                && o.ExpireTime.Value - DateTimeOffset.UtcNow >= baseTtl - TimeSpan.FromSeconds(5)
+                && o.ExpireTime.Value - DateTimeOffset.UtcNow <= baseTtl + maxJitter + TimeSpan.FromSeconds(5)),
+            Arg.Any<CachePolicy?>(),
+            Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task RefreshAsync_HashCacheEntryOptions_honors_ExpireTime_without_jitter()
+    {
+        var token = testContextAccessor.Current.CancellationToken;
+        var maxJitter = TimeSpan.FromMinutes(1);
+        var defaultPolicy = new CachePolicy { JitterMaxDuration = maxJitter };
+        var policyFactory = new DefaultCachePolicyFactory(Array.Empty<KeyValuePair<string, CachePolicy>>(), defaultPolicy);
+        _fixture.Inject<ICachePolicyFactory>(policyFactory);
+        _sut = null;
+
+        var callerInstant = DateTimeOffset.UtcNow.AddMinutes(2);
+        var options = new HashCacheEntryOptions(ExpireTime: callerInstant);
+
+        _innerCache.RefreshAsync<string>(_cacheKey, Arg.Any<HashCacheEntryOptions>(), Arg.Any<CachePolicy?>(), Arg.Any<CancellationToken>())
+            .Returns(true);
+        _topic.PublishAsync(Arg.Any<ICacheEvent>(), Arg.Any<CancellationToken>())
+            .Returns(_ => true);
+
+        await Sut.RefreshAsync<string>(_cacheKey, options, policy: null, token);
+
+        await _innerCache.Received(1).RefreshAsync<string>(
+            _cacheKey,
+            Arg.Is<HashCacheEntryOptions>(o => o.ExpireTime.HasValue
+                && o.ExpireTime.Value - callerInstant > TimeSpan.FromSeconds(-1)
+                && o.ExpireTime.Value - callerInstant < TimeSpan.FromSeconds(1)),
+            Arg.Any<CachePolicy?>(),
+            Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task RefreshAsync_HashCacheEntryOptions_honors_TimeToLive_without_jitter()
+    {
+        var token = testContextAccessor.Current.CancellationToken;
+        var callerTtl = TimeSpan.FromMinutes(2);
+        var metadata = new Dictionary<string, string?> { ["m"] = "1" };
+        var defaultPolicy = new CachePolicy
+        {
+            DistributedExpiration = TimeSpan.FromDays(30),
+            JitterMaxDuration = TimeSpan.FromDays(30),
+        };
+        var policyFactory = new DefaultCachePolicyFactory(Array.Empty<KeyValuePair<string, CachePolicy>>(), defaultPolicy);
+        _fixture.Inject<ICachePolicyFactory>(policyFactory);
+        _sut = null;
+
+        var options = new HashCacheEntryOptions(
+            TimeToLive: callerTtl,
+            Metadata: metadata,
+            SetOption: HashCacheSetOption.HashReplace);
+
+        _innerCache.RefreshAsync<string>(_cacheKey, Arg.Any<HashCacheEntryOptions>(), Arg.Any<CachePolicy?>(), Arg.Any<CancellationToken>())
+            .Returns(true);
+        _topic.PublishAsync(Arg.Any<ICacheEvent>(), Arg.Any<CancellationToken>())
+            .Returns(_ => true);
+
+        await Sut.RefreshAsync<string>(_cacheKey, options, policy: null, token);
+
+        await _innerCache.Received(1).RefreshAsync<string>(
+            _cacheKey,
+            Arg.Is<HashCacheEntryOptions>(o => o.ExpireTime.HasValue
+                && !o.TimeToLive.HasValue
+                && o.ExpireTime.Value - DateTimeOffset.UtcNow > callerTtl - TimeSpan.FromSeconds(5)
+                && o.ExpireTime.Value - DateTimeOffset.UtcNow < callerTtl + TimeSpan.FromSeconds(5)
+                && ReferenceEquals(o.Metadata, metadata)
+                && o.SetOption == HashCacheSetOption.HashReplace),
+            Arg.Any<CachePolicy?>(),
+            Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task RefreshAsync_HashCacheEntryOptions_jitters_when_neither_ExpireTime_nor_TimeToLive_set()
+    {
+        var token = testContextAccessor.Current.CancellationToken;
+        var baseTtl = TimeSpan.FromMinutes(5);
+        var maxJitter = TimeSpan.FromSeconds(30);
+        var defaultPolicy = new CachePolicy { DistributedExpiration = baseTtl, JitterMaxDuration = maxJitter };
+        var policyFactory = new DefaultCachePolicyFactory(Array.Empty<KeyValuePair<string, CachePolicy>>(), defaultPolicy);
+        _fixture.Inject<ICachePolicyFactory>(policyFactory);
+        _sut = null;
+
+        var metadata = new Dictionary<string, string?> { ["m"] = "1" };
+        var options = new HashCacheEntryOptions(Metadata: metadata, SetOption: HashCacheSetOption.HashReplace);
+
+        _innerCache.RefreshAsync<string>(_cacheKey, Arg.Any<HashCacheEntryOptions>(), Arg.Any<CachePolicy?>(), Arg.Any<CancellationToken>())
+            .Returns(true);
+        _topic.PublishAsync(Arg.Any<ICacheEvent>(), Arg.Any<CancellationToken>())
+            .Returns(_ => true);
+
+        await Sut.RefreshAsync<string>(_cacheKey, options, policy: null, token);
+
+        await _innerCache.Received(1).RefreshAsync<string>(
+            _cacheKey,
+            Arg.Is<HashCacheEntryOptions>(o => o.ExpireTime.HasValue
+                && o.ExpireTime.Value - DateTimeOffset.UtcNow >= baseTtl - TimeSpan.FromSeconds(5)
+                && o.ExpireTime.Value - DateTimeOffset.UtcNow <= baseTtl + maxJitter + TimeSpan.FromSeconds(5)
+                && ReferenceEquals(o.Metadata, metadata)
+                && o.SetOption == HashCacheSetOption.HashReplace),
+            Arg.Any<CachePolicy?>(),
+            Arg.Any<CancellationToken>());
+    }
+
     public ValueTask DisposeAsync() => ValueTask.CompletedTask;
 
     public ValueTask InitializeAsync()

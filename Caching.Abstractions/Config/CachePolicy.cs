@@ -35,11 +35,20 @@ public sealed class CachePolicy
 
     /// <summary>
     /// Upper bound on the random duration added to the L2 (distributed) expiration at write time —
-    /// uniform random in <c>[0, JitterMaxDuration]</c> added to the resolved
-    /// <see cref="DistributedExpiration"/> on <c>SetAsync</c> / <c>GetOrAddAsync</c> / <c>RefreshAsync</c>.
+    /// uniform random in <c>[0, JitterMaxDuration)</c> added to the resolved write duration on
+    /// <c>SetAsync</c> / <c>GetOrAddAsync</c> / <c>RefreshAsync</c>. The resolved write duration is
+    /// <see cref="DistributedExpiration"/> or, if null, <c>IMultilayerCacheOptions.DefaultExpiration</c>.
     /// Applies only when the caller does not pass an explicit <c>expiration</c> argument (caller-supplied
     /// values are honored exactly). Spreads cluster-wide expirations after bulk writes (e.g. deploy
-    /// warm-up). L1 caps are not jittered. <c>null</c> or <see cref="TimeSpan.Zero"/> disables jitter.
+    /// warm-up). The L1 cap (<see cref="LocalExpiration"/> /
+    /// <c>IMultilayerCacheOptions.LocalMaxExpiration</c>) is unaffected in the typical case where it is
+    /// less than or equal to the resolved L2 duration; if the L1 cap is configured longer, the L2 entry's
+    /// jittered absolute expiration flows through to the in-memory entry's absolute expiration — per-node
+    /// only, no cluster-sync concern. Bulk <c>SetAsync(KeyValuePair[])</c> writes share a single jittered
+    /// TTL across the batch (one draw per call), which still spreads expirations across nodes but does
+    /// not vary within the batch. <c>null</c> or <see cref="TimeSpan.Zero"/> disables jitter. A
+    /// <c>JitterMaxDuration</c> larger than <see cref="DistributedExpiration"/> is accepted but produces
+    /// wildly skewed TTLs — pick a value smaller than the typical lifetime.
     /// </summary>
     public TimeSpan? JitterMaxDuration { get; init; }
 

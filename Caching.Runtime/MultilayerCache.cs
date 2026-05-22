@@ -69,7 +69,7 @@ internal sealed partial class MultilayerCache : MultilayerCacheBase, ICache
         ArgumentNullException.ThrowIfNull(generator);
         policy ??= _policyFactory.Default;
         var duration = policy.DistributedExpiration;
-        var writeExpiration = _clock.ToDateTimeOffset(ApplyJitter(duration, policy.JitterMaxDuration));
+        var writeExpiration = _clock.ToDateTimeOffset(ResolveWriteDuration(policy));
         return GetOrAddInternalAsync(cacheKey, generator, writeExpiration, duration, policy, token);
     }
 
@@ -78,8 +78,7 @@ internal sealed partial class MultilayerCache : MultilayerCacheBase, ICache
         ArgumentNullException.ThrowIfNull(generator);
         policy ??= _policyFactory.Default;
         var duration = expiration ?? policy.DistributedExpiration;
-        var writeDuration = expiration is null ? ApplyJitter(duration, policy.JitterMaxDuration) : duration;
-        return GetOrAddInternalAsync(cacheKey, generator, _clock.ToDateTimeOffset(writeDuration), duration, policy, token);
+        return GetOrAddInternalAsync(cacheKey, generator, _clock.ToDateTimeOffset(ResolveWriteDuration(policy, expiration)), duration, policy, token);
     }
 
     public ValueTask<T?> GetOrAddAsync<T>(CacheKey cacheKey, Func<CancellationToken, Task<T?>> generator, DateTimeOffset? expiration = null, CachePolicy? policy = null, CancellationToken token = default)
@@ -95,7 +94,7 @@ internal sealed partial class MultilayerCache : MultilayerCacheBase, ICache
         else
         {
             duration = policy.DistributedExpiration;
-            expiration = _clock.ToDateTimeOffset(ApplyJitter(duration, policy.JitterMaxDuration));
+            expiration = _clock.ToDateTimeOffset(ResolveWriteDuration(policy));
         }
         return GetOrAddInternalAsync(cacheKey, generator, expiration, duration, policy, token);
     }
@@ -181,22 +180,20 @@ internal sealed partial class MultilayerCache : MultilayerCacheBase, ICache
     public ValueTask<bool> SetAsync<T>(CacheKey cacheKey, T? value, CachePolicy? policy = null, CancellationToken token = default)
     {
         policy ??= _policyFactory.Default;
-        var resolved = ApplyJitter(policy.DistributedExpiration ?? _multiLayerCacheOptions.DefaultExpiration, policy.JitterMaxDuration);
-        return SetAsync(cacheKey, value, resolved, policy, token);
+        return SetAsync(cacheKey, value, ResolveWriteDuration(policy), policy, token);
     }
 
     public ValueTask<bool> SetAsync<T>(CacheKey cacheKey, T? value, TimeSpan? expiration = null, CachePolicy? policy = null, CancellationToken token = default)
     {
         policy ??= _policyFactory.Default;
-        var resolved = expiration ?? ApplyJitter(policy.DistributedExpiration, policy.JitterMaxDuration);
-        return SetAsync(cacheKey, value, _clock.ToDateTimeOffset(resolved), policy, token);
+        return SetAsync(cacheKey, value, _clock.ToDateTimeOffset(ResolveWriteDuration(policy, expiration)), policy, token);
     }
 
     public async ValueTask<bool> SetAsync<T>(CacheKey cacheKey, T? value, DateTimeOffset? expiration = null, CachePolicy? policy = null, CancellationToken token = default)
     {
         NotCacheableException.ThrowIfNotCacheable<T>();
         policy ??= _policyFactory.Default;
-        expiration ??= _clock.ToDateTimeOffset(ApplyJitter(policy.DistributedExpiration ?? _multiLayerCacheOptions.DefaultExpiration, policy.JitterMaxDuration));
+        expiration ??= _clock.ToDateTimeOffset(ResolveWriteDuration(policy));
         var cacheEntryOptions = _entryBuilder.BuildEntryOptions<T>(cacheKey, expiration, token);
         if (value is null && !_multiLayerCacheOptions.CacheNullValues)
         {
@@ -221,22 +218,20 @@ internal sealed partial class MultilayerCache : MultilayerCacheBase, ICache
     public ValueTask<bool> SetAsync<T>(KeyValuePair<CacheKey, T?>[] keyValues, CachePolicy? policy = null, CancellationToken token = default)
     {
         policy ??= _policyFactory.Default;
-        var resolved = ApplyJitter(policy.DistributedExpiration ?? _multiLayerCacheOptions.DefaultExpiration, policy.JitterMaxDuration);
-        return SetAsync(keyValues, resolved, policy, token);
+        return SetAsync(keyValues, ResolveWriteDuration(policy), policy, token);
     }
 
     public ValueTask<bool> SetAsync<T>(KeyValuePair<CacheKey, T?>[] keyValues, TimeSpan? expiration = null, CachePolicy? policy = null, CancellationToken token = default)
     {
         policy ??= _policyFactory.Default;
-        var resolved = expiration ?? ApplyJitter(policy.DistributedExpiration, policy.JitterMaxDuration);
-        return SetAsync(keyValues, _clock.ToDateTimeOffset(resolved), policy, token);
+        return SetAsync(keyValues, _clock.ToDateTimeOffset(ResolveWriteDuration(policy, expiration)), policy, token);
     }
 
     public async ValueTask<bool> SetAsync<T>(KeyValuePair<CacheKey, T?>[] keyValues, DateTimeOffset? expiration = null, CachePolicy? policy = null, CancellationToken token = default)
     {
         NotCacheableException.ThrowIfNotCacheable<T>();
         policy ??= _policyFactory.Default;
-        expiration ??= _clock.ToDateTimeOffset(ApplyJitter(policy.DistributedExpiration ?? _multiLayerCacheOptions.DefaultExpiration, policy.JitterMaxDuration));
+        expiration ??= _clock.ToDateTimeOffset(ResolveWriteDuration(policy));
         var removeEntries = new List<CacheEntryOptions>();
         var setEntries = new List<CacheEntryValue<T>>();
         foreach (var keyValue in keyValues)
@@ -305,22 +300,20 @@ internal sealed partial class MultilayerCache : MultilayerCacheBase, ICache
     public ValueTask<bool> RefreshAsync<T>(CacheKey cacheKey, CachePolicy? policy = null, CancellationToken token = default)
     {
         policy ??= _policyFactory.Default;
-        var resolved = ApplyJitter(policy.DistributedExpiration ?? _multiLayerCacheOptions.DefaultExpiration, policy.JitterMaxDuration);
-        return RefreshAsync<T>(cacheKey, resolved, policy, token);
+        return RefreshAsync<T>(cacheKey, ResolveWriteDuration(policy), policy, token);
     }
 
     public ValueTask<bool> RefreshAsync<T>(CacheKey cacheKey, TimeSpan? expiration = null, CachePolicy? policy = null, CancellationToken token = default)
     {
         policy ??= _policyFactory.Default;
-        var resolved = expiration ?? ApplyJitter(policy.DistributedExpiration, policy.JitterMaxDuration);
-        return RefreshAsync<T>(cacheKey, _clock.ToDateTimeOffset(resolved), policy, token);
+        return RefreshAsync<T>(cacheKey, _clock.ToDateTimeOffset(ResolveWriteDuration(policy, expiration)), policy, token);
     }
 
     public async ValueTask<bool> RefreshAsync<T>(CacheKey cacheKey, DateTimeOffset? expiration = null, CachePolicy? policy = null, CancellationToken token = default)
     {
         NotCacheableException.ThrowIfNotCacheable<T>();
         policy ??= _policyFactory.Default;
-        expiration ??= _clock.ToDateTimeOffset(ApplyJitter(policy.DistributedExpiration ?? _multiLayerCacheOptions.DefaultExpiration, policy.JitterMaxDuration));
+        expiration ??= _clock.ToDateTimeOffset(ResolveWriteDuration(policy));
         var cacheEntryOptions = _entryBuilder.BuildEntryOptions<T>(cacheKey, expiration, token);
         LogClearingCached(cacheEntryOptions.CacheKey);
         _memoryCache.Remove(cacheEntryOptions.CacheKey);

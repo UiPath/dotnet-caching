@@ -27,6 +27,7 @@ public abstract class MultilayerCacheBase : IDisposable
     private readonly bool _localLockEnabled;
     private readonly bool _distributedLockEnabled;
     private protected readonly ICachePolicyFactory _policyFactory;
+    private static readonly TimeSpan ClockDriftSlack = TimeSpan.FromMinutes(1);
 
     protected MultilayerCacheBase(
         string cacheName,
@@ -144,14 +145,34 @@ public abstract class MultilayerCacheBase : IDisposable
     private static TimeSpan NonNegativeOrFallback(TimeSpan? value, TimeSpan fallback) =>
         value is { } v && v >= TimeSpan.Zero ? v : fallback;
 
-    protected static TimeSpan? ApplyJitter(TimeSpan? duration, TimeSpan? maxJitter)
+    protected static TimeSpan? ApplyJitter(TimeSpan? duration, TimeSpan? maxJitter, DateTimeOffset utcNow)
     {
-        if (duration is not { } d || maxJitter is not { } max || max <= TimeSpan.Zero)
+        if (duration is not { } d || d <= TimeSpan.Zero || maxJitter is not { } max || max <= TimeSpan.Zero)
         {
             return duration;
         }
-        var bonusMs = Random.Shared.NextDouble() * max.TotalMilliseconds;
-        return d + TimeSpan.FromMilliseconds(bonusMs);
+        var bonusTicks = Random.Shared.NextInt64(max.Ticks);
+        // Saturate at TimeSpan.MaxValue then at remaining DateTime range. A small slack covers the gap
+        // between this UtcNow and the slightly-later UtcNow inside CacheClock.ToDateTimeOffset.
+        var sumTicks = d.Ticks > TimeSpan.MaxValue.Ticks - bonusTicks ? TimeSpan.MaxValue.Ticks : d.Ticks + bonusTicks;
+        var maxFromNow = DateTime.MaxValue.Ticks - utcNow.UtcTicks - ClockDriftSlack.Ticks;
+        return new TimeSpan(Math.Max(0, Math.Min(sumTicks, maxFromNow)));
+    }
+
+    /// <summary>
+    /// Resolves the L2 write duration, applying jitter only when the caller did not pass an explicit
+    /// expiration. Resolves the full fallback chain (<c>policy.DistributedExpiration</c> →
+    /// <c>IMultilayerCacheOptions.DefaultExpiration</c>) BEFORE jittering so the options-default path
+    /// is jittered too — not just the policy path.
+    /// </summary>
+    protected TimeSpan? ResolveWriteDuration(CachePolicy policy, TimeSpan? callerExpiration = null)
+    {
+        if (callerExpiration is not null)
+        {
+            return callerExpiration;
+        }
+        var resolved = policy.DistributedExpiration ?? _multiLayerCacheOptions.DefaultExpiration;
+        return ApplyJitter(resolved, policy.JitterMaxDuration, _clock.UtcNow);
     }
 
     private async ValueTask<IDisposable?> TryAcquireLocalLockAsync(CacheKey cacheKey, TimeSpan localLockTimeout, CancellationToken token)

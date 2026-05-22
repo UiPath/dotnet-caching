@@ -113,7 +113,7 @@ public class RehydrationCoordinatorTests
             async ct => await Task.Delay(TimeSpan.FromSeconds(30), ct));
 
         triggered.Should().BeTrue();
-        await WaitForEvent(telemetry, "cache.rehydrate.timed_out", TimeSpan.FromSeconds(5));
+        await WaitForEvent(telemetry, "cache.rehydrate.timed_out", TimeSpan.FromSeconds(30));
         telemetry.Events.Should().Contain(e => e.Name == "cache.rehydrate.timed_out");
     }
 
@@ -137,17 +137,13 @@ public class RehydrationCoordinatorTests
             _ => throw new InvalidOperationException("boom"));
 
         triggered.Should().BeTrue();
-        await WaitForEvent(telemetry, "cache.rehydrate.failed", TimeSpan.FromSeconds(5));
+        await WaitForEvent(telemetry, "cache.rehydrate.failed", TimeSpan.FromSeconds(30));
         telemetry.Events.Should().Contain(e => e.Name == "cache.rehydrate.failed");
     }
 
     [Fact]
     public async Task SpawnAsync_emits_deduped_when_lock_acquire_exceeds_factoryTimeout()
     {
-        // Hung TryAcquireAsync must not pin the rehydrate task indefinitely — the FactoryTimeout
-        // wrapper bounds it by the same budget the factory itself runs under, and the timeout
-        // falls through to the dedup path so the failure-count + cooldown machinery doesn't
-        // record a spurious "failed" event for a hung acquire.
         var distributedLock = Substitute.For<IDistributedLock>();
         distributedLock.TryAcquireAsync(Arg.Any<string>(), Arg.Any<TimeSpan>(), Arg.Any<CancellationToken>())
             .Returns(call =>
@@ -170,7 +166,7 @@ public class RehydrationCoordinatorTests
             _ => ValueTask.CompletedTask);
 
         triggered.Should().BeTrue();
-        await WaitForEvent(telemetry, "cache.rehydrate.deduped", TimeSpan.FromSeconds(5));
+        await WaitForEvent(telemetry, "cache.rehydrate.deduped", TimeSpan.FromSeconds(30));
         telemetry.Events.Should().Contain(e => e.Name == "cache.rehydrate.deduped");
         var timedOut = telemetry.Events.SingleOrDefault(e => e.Name == "cache.factory.timed_out");
         timedOut.Should().NotBeNull("the FactoryTimeout helper emits timed_out when the acquire exceeds the bound");

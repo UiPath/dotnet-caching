@@ -53,7 +53,7 @@ public class CachePolicyJitterValidatorTests
         var result = Sut.Validate(name: null, options);
 
         result.Failed.Should().BeTrue();
-        result.Failures.Should().ContainSingle(f => f.Contains("DefaultCachePolicy.JitterMaxDuration"));
+        result.Failures.Should().ContainSingle(f => f.StartsWith("DefaultCachePolicy.JitterMaxDuration must be"));
     }
 
     [Fact]
@@ -70,6 +70,6 @@ public class CachePolicyJitterValidatorTests
         var result = Sut.Validate(name: null, options);
 
         result.Failed.Should().BeTrue();
-        result.Failures.Should().ContainSingle(f => f.Contains("Policies['clients'].JitterMaxDuration"));
+        result.Failures.Should().ContainSingle(f => f.StartsWith("Policies['clients'].JitterMaxDuration must be"));
     }
 }

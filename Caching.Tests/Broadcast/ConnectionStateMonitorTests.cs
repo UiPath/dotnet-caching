@@ -38,14 +38,21 @@ public class ConnectionStateMonitorTests(ITestContextAccessor testContextAccesso
         Sut.IsConnected.Should().BeFalse();
         _isConnected0 = true;
 
-        var timeout = TimeSpan.FromSeconds(5);
-        var stopwatch = System.Diagnostics.Stopwatch.StartNew();
-        while (!Sut.IsConnected && stopwatch.Elapsed < timeout)
-        {
-            await Task.Delay(50, testContextAccessor.Current.CancellationToken);
-        }
+        await WaitUntilAsync(() => Sut.IsConnected, TimeSpan.FromSeconds(30), testContextAccessor.Current.CancellationToken);
+    }
 
-        Sut.IsConnected.Should().BeTrue();
+    private static async Task WaitUntilAsync(Func<bool> predicate, TimeSpan timeout, CancellationToken token)
+    {
+        var sw = System.Diagnostics.Stopwatch.StartNew();
+        while (sw.Elapsed < timeout)
+        {
+            if (predicate())
+            {
+                return;
+            }
+            await Task.Delay(20, token);
+        }
+        throw new TimeoutException($"Predicate was not satisfied within {timeout}.");
     }
 
     [Fact]

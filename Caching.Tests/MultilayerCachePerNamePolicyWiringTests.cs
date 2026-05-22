@@ -291,7 +291,6 @@ public class MultilayerCachePerNamePolicyWiringTests : IAsyncLifetime
 
         await Sut.SetAsync(_cacheKey, "v", callerTtl, policy: null, TestContext.Current.CancellationToken);
 
-        // Caller's explicit expiration must be honored exactly — jitter only applies to policy-derived defaults.
         await _innerCache.Received(1).SetAsync<string?>(
             _cacheKey,
             "v",
@@ -327,6 +326,143 @@ public class MultilayerCachePerNamePolicyWiringTests : IAsyncLifetime
                 && d.Value - DateTimeOffset.UtcNow <= baseTtl + maxJitter + TimeSpan.FromSeconds(5)),
             Arg.Any<CachePolicy?>(),
             Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task SetAsync_jitters_options_DefaultExpiration_when_policy_DistributedExpiration_is_null()
+    {
+        var optionsTtl = _options.DefaultExpiration!.Value;
+        var maxJitter = TimeSpan.FromSeconds(30);
+        var defaultPolicy = new CachePolicy { JitterMaxDuration = maxJitter }; // no DistributedExpiration
+        var policyFactory = new DefaultCachePolicyFactory(Array.Empty<KeyValuePair<string, CachePolicy>>(), defaultPolicy);
+        _fixture.Inject<ICachePolicyFactory>(policyFactory);
+        _sut = null;
+
+        _innerCache.SetAsync<string?>(_cacheKey, Arg.Any<string?>(), Arg.Any<DateTimeOffset?>(), Arg.Any<CachePolicy?>(), Arg.Any<CancellationToken>())
+            .Returns(true);
+        _topic.PublishAsync(Arg.Any<ICacheEvent>(), Arg.Any<CancellationToken>())
+            .Returns(_ => true);
+
+        await Sut.SetAsync(_cacheKey, "v", (TimeSpan?)null, policy: null, TestContext.Current.CancellationToken);
+
+        await _innerCache.Received(1).SetAsync<string?>(
+            _cacheKey,
+            "v",
+            Arg.Is<DateTimeOffset?>(d => d.HasValue
+                && d.Value - DateTimeOffset.UtcNow >= optionsTtl - TimeSpan.FromSeconds(5)
+                && d.Value - DateTimeOffset.UtcNow <= optionsTtl + maxJitter + TimeSpan.FromSeconds(5)),
+            Arg.Any<CachePolicy?>(),
+            Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task SetAsync_DateTimeOffset_overload_jitters_when_caller_passes_null()
+    {
+        var baseTtl = TimeSpan.FromMinutes(5);
+        var maxJitter = TimeSpan.FromSeconds(30);
+        var defaultPolicy = new CachePolicy { DistributedExpiration = baseTtl, JitterMaxDuration = maxJitter };
+        var policyFactory = new DefaultCachePolicyFactory(Array.Empty<KeyValuePair<string, CachePolicy>>(), defaultPolicy);
+        _fixture.Inject<ICachePolicyFactory>(policyFactory);
+        _sut = null;
+
+        _innerCache.SetAsync<string?>(_cacheKey, Arg.Any<string?>(), Arg.Any<DateTimeOffset?>(), Arg.Any<CachePolicy?>(), Arg.Any<CancellationToken>())
+            .Returns(true);
+        _topic.PublishAsync(Arg.Any<ICacheEvent>(), Arg.Any<CancellationToken>())
+            .Returns(_ => true);
+
+        await Sut.SetAsync(_cacheKey, "v", (DateTimeOffset?)null, policy: null, TestContext.Current.CancellationToken);
+
+        await _innerCache.Received(1).SetAsync<string?>(
+            _cacheKey,
+            "v",
+            Arg.Is<DateTimeOffset?>(d => d.HasValue
+                && d.Value - DateTimeOffset.UtcNow >= baseTtl - TimeSpan.FromSeconds(5)
+                && d.Value - DateTimeOffset.UtcNow <= baseTtl + maxJitter + TimeSpan.FromSeconds(5)),
+            Arg.Any<CachePolicy?>(),
+            Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task SetAsync_bulk_KeyValuePair_overload_jitters_policy_derived_expiration()
+    {
+        var baseTtl = TimeSpan.FromMinutes(5);
+        var maxJitter = TimeSpan.FromSeconds(30);
+        var defaultPolicy = new CachePolicy { DistributedExpiration = baseTtl, JitterMaxDuration = maxJitter };
+        var policyFactory = new DefaultCachePolicyFactory(Array.Empty<KeyValuePair<string, CachePolicy>>(), defaultPolicy);
+        _fixture.Inject<ICachePolicyFactory>(policyFactory);
+        _sut = null;
+
+        _innerCache.SetAsync<string?>(Arg.Any<KeyValuePair<CacheKey, string?>[]>(), Arg.Any<DateTimeOffset?>(), Arg.Any<CachePolicy?>(), Arg.Any<CancellationToken>())
+            .Returns(true);
+        _topic.PublishAsync(Arg.Any<ICacheEvent>(), Arg.Any<CancellationToken>())
+            .Returns(_ => true);
+
+        var keyValues = new[] { new KeyValuePair<CacheKey, string?>(_cacheKey, "v") };
+        await Sut.SetAsync(keyValues, (CachePolicy?)null, TestContext.Current.CancellationToken);
+
+        await _innerCache.Received(1).SetAsync<string?>(
+            Arg.Any<KeyValuePair<CacheKey, string?>[]>(),
+            Arg.Is<DateTimeOffset?>(d => d.HasValue
+                && d.Value - DateTimeOffset.UtcNow >= baseTtl - TimeSpan.FromSeconds(5)
+                && d.Value - DateTimeOffset.UtcNow <= baseTtl + maxJitter + TimeSpan.FromSeconds(5)),
+            Arg.Any<CachePolicy?>(),
+            Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task SetAsync_jitter_actually_varies_across_calls()
+    {
+        // Capture per-call relative TTL (expireAt − now_at_capture) so wall-clock drift across
+        // the 30 iterations doesn't masquerade as jitter variance on a contended CI agent.
+        var baseTtl = TimeSpan.FromSeconds(1);
+        var maxJitter = TimeSpan.FromSeconds(10);
+        var defaultPolicy = new CachePolicy { DistributedExpiration = baseTtl, JitterMaxDuration = maxJitter };
+        var policyFactory = new DefaultCachePolicyFactory(Array.Empty<KeyValuePair<string, CachePolicy>>(), defaultPolicy);
+        _fixture.Inject<ICachePolicyFactory>(policyFactory);
+        _sut = null;
+
+        var ttls = new List<TimeSpan>();
+        _innerCache.SetAsync<string?>(_cacheKey, Arg.Any<string?>(),
+                Arg.Do<DateTimeOffset?>(d => { if (d.HasValue) { ttls.Add(d.Value - DateTimeOffset.UtcNow); } }),
+                Arg.Any<CachePolicy?>(), Arg.Any<CancellationToken>())
+            .Returns(true);
+        _topic.PublishAsync(Arg.Any<ICacheEvent>(), Arg.Any<CancellationToken>())
+            .Returns(_ => true);
+
+        for (int i = 0; i < 30; i++)
+        {
+            await Sut.SetAsync(_cacheKey, "v", (CachePolicy?)null, TestContext.Current.CancellationToken);
+        }
+
+        ttls.Should().HaveCount(30);
+        (ttls.Max() - ttls.Min()).Should().BeGreaterThan(TimeSpan.FromSeconds(1),
+            "across 30 draws with maxJitter=10s, per-call TTL spread should clearly exceed 1s — a no-op ApplyJitter would produce zero spread independent of wall-clock time");
+    }
+
+    [Fact]
+    public async Task SetAsync_clamps_jitter_when_base_plus_jitter_would_overflow_DateTime()
+    {
+        var baseTtl = TimeSpan.FromHours(1);
+        var defaultPolicy = new CachePolicy { DistributedExpiration = baseTtl, JitterMaxDuration = TimeSpan.MaxValue };
+        var policyFactory = new DefaultCachePolicyFactory(Array.Empty<KeyValuePair<string, CachePolicy>>(), defaultPolicy);
+        _fixture.Inject<ICachePolicyFactory>(policyFactory);
+        _sut = null;
+
+        _innerCache.SetAsync<string?>(_cacheKey, Arg.Any<string?>(), Arg.Any<DateTimeOffset?>(), Arg.Any<CachePolicy?>(), Arg.Any<CancellationToken>())
+            .Returns(true);
+        _topic.PublishAsync(Arg.Any<ICacheEvent>(), Arg.Any<CancellationToken>())
+            .Returns(_ => true);
+
+        Func<Task> act = async () =>
+            await Sut.SetAsync(_cacheKey, "v", (CachePolicy?)null, TestContext.Current.CancellationToken);
+
+        await act.Should().NotThrowAsync(
+            "ApplyJitter must clamp the result to UtcNow's remaining range so an absurd JitterMaxDuration can't crash writes");
+
+        await _innerCache.Received(1).SetAsync<string?>(
+            _cacheKey, "v",
+            Arg.Is<DateTimeOffset?>(d => d.HasValue && d.Value <= DateTimeOffset.MaxValue),
+            Arg.Any<CachePolicy?>(), Arg.Any<CancellationToken>());
     }
 
     public ValueTask DisposeAsync() => ValueTask.CompletedTask;

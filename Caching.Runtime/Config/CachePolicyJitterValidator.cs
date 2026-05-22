@@ -6,7 +6,7 @@ internal sealed class CachePolicyJitterValidator : IValidateOptions<CacheOptions
     {
         if (options.DefaultCachePolicy is { } defaultPolicy)
         {
-            var result = ValidateJitter("DefaultCachePolicy.JitterMaxDuration: ", defaultPolicy.JitterMaxDuration);
+            var result = ValidateJitter("DefaultCachePolicy.JitterMaxDuration", defaultPolicy.JitterMaxDuration);
             if (result.Failed)
             {
                 return result;
@@ -16,7 +16,7 @@ internal sealed class CachePolicyJitterValidator : IValidateOptions<CacheOptions
         var policies = (IEnumerable<KeyValuePair<string, CachePolicy>>?)options.Policies ?? Array.Empty<KeyValuePair<string, CachePolicy>>();
         foreach (var (policyName, policy) in policies)
         {
-            var result = ValidateJitter($"Policies['{policyName}'].JitterMaxDuration: ", policy.JitterMaxDuration);
+            var result = ValidateJitter($"Policies['{policyName}'].JitterMaxDuration", policy.JitterMaxDuration);
             if (result.Failed)
             {
                 return result;
@@ -29,7 +29,7 @@ internal sealed class CachePolicyJitterValidator : IValidateOptions<CacheOptions
     {
         if (jitter is { } j && j < TimeSpan.Zero)
         {
-            return ValidateOptionsResult.Fail($"{scope}must be greater than or equal to zero. Actual: {j}.");
+            return ValidateOptionsResult.Fail($"{scope} must be greater than or equal to zero. Actual: {j}.");
         }
         return ValidateOptionsResult.Success;
     }
