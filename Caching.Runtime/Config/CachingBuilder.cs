@@ -61,6 +61,7 @@ public class CachingBuilder(IServiceCollection services, IConfiguration? configu
         });
         Services.TryAddEnumerable(ServiceDescriptor.Singleton<IValidateOptions<CacheOptions>, CachePolicyLockValidator>());
         Services.TryAddEnumerable(ServiceDescriptor.Singleton<IValidateOptions<CacheOptions>, CachePolicyRehydrateValidator>());
+        Services.TryAddEnumerable(ServiceDescriptor.Singleton<IValidateOptions<CacheOptions>, CachePolicyJitterValidator>());
     }
 
     public void RegisterOnCompleteCallback(object key, Action<ICachingBuilder> callback)

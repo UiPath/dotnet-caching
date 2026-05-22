@@ -246,6 +246,89 @@ public class MultilayerCachePerNamePolicyWiringTests : IAsyncLifetime
                 && d.Value - DateTimeOffset.UtcNow < policyTtl + TimeSpan.FromSeconds(5)), Arg.Any<CachePolicy?>(), Arg.Any<CancellationToken>());
     }
 
+    [Fact]
+    public async Task SetAsync_jitters_policy_derived_expiration_within_max()
+    {
+        var baseTtl = TimeSpan.FromMinutes(5);
+        var maxJitter = TimeSpan.FromSeconds(30);
+        var defaultPolicy = new CachePolicy { DistributedExpiration = baseTtl, JitterMaxDuration = maxJitter };
+        var policyFactory = new DefaultCachePolicyFactory(Array.Empty<KeyValuePair<string, CachePolicy>>(), defaultPolicy);
+        _fixture.Inject<ICachePolicyFactory>(policyFactory);
+        _sut = null;
+
+        _innerCache.SetAsync<string?>(_cacheKey, Arg.Any<string?>(), Arg.Any<DateTimeOffset?>(), Arg.Any<CachePolicy?>(), Arg.Any<CancellationToken>())
+            .Returns(true);
+        _topic.PublishAsync(Arg.Any<ICacheEvent>(), Arg.Any<CancellationToken>())
+            .Returns(_ => true);
+
+        await Sut.SetAsync(_cacheKey, "v", (CachePolicy?)null, TestContext.Current.CancellationToken);
+
+        await _innerCache.Received(1).SetAsync<string?>(
+            _cacheKey,
+            "v",
+            Arg.Is<DateTimeOffset?>(d => d.HasValue
+                && d.Value - DateTimeOffset.UtcNow >= baseTtl - TimeSpan.FromSeconds(5)
+                && d.Value - DateTimeOffset.UtcNow <= baseTtl + maxJitter + TimeSpan.FromSeconds(5)),
+            Arg.Any<CachePolicy?>(),
+            Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task SetAsync_honors_caller_explicit_expiration_without_jitter()
+    {
+        var maxJitter = TimeSpan.FromMinutes(1);
+        var defaultPolicy = new CachePolicy { JitterMaxDuration = maxJitter };
+        var policyFactory = new DefaultCachePolicyFactory(Array.Empty<KeyValuePair<string, CachePolicy>>(), defaultPolicy);
+        _fixture.Inject<ICachePolicyFactory>(policyFactory);
+        _sut = null;
+
+        var callerTtl = TimeSpan.FromMinutes(2);
+
+        _innerCache.SetAsync<string?>(_cacheKey, Arg.Any<string?>(), Arg.Any<DateTimeOffset?>(), Arg.Any<CachePolicy?>(), Arg.Any<CancellationToken>())
+            .Returns(true);
+        _topic.PublishAsync(Arg.Any<ICacheEvent>(), Arg.Any<CancellationToken>())
+            .Returns(_ => true);
+
+        await Sut.SetAsync(_cacheKey, "v", callerTtl, policy: null, TestContext.Current.CancellationToken);
+
+        // Caller's explicit expiration must be honored exactly — jitter only applies to policy-derived defaults.
+        await _innerCache.Received(1).SetAsync<string?>(
+            _cacheKey,
+            "v",
+            Arg.Is<DateTimeOffset?>(d => d.HasValue
+                && d.Value - DateTimeOffset.UtcNow > callerTtl - TimeSpan.FromSeconds(5)
+                && d.Value - DateTimeOffset.UtcNow < callerTtl + TimeSpan.FromSeconds(5)),
+            Arg.Any<CachePolicy?>(),
+            Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task GetOrAdd_jitters_policy_derived_expiration_within_max()
+    {
+        var baseTtl = TimeSpan.FromMinutes(5);
+        var maxJitter = TimeSpan.FromSeconds(30);
+        var defaultPolicy = new CachePolicy { DistributedExpiration = baseTtl, JitterMaxDuration = maxJitter };
+        var policyFactory = new DefaultCachePolicyFactory(Array.Empty<KeyValuePair<string, CachePolicy>>(), defaultPolicy);
+        _fixture.Inject<ICachePolicyFactory>(policyFactory);
+        _sut = null;
+
+        Func<CancellationToken, Task<string?>> generator = _ => Task.FromResult<string?>("v");
+
+        _innerCache.GetCacheEntryAsync<string>(_cacheKey, Arg.Any<CachePolicy?>(), Arg.Any<CancellationToken>())
+            .Returns(new TestCacheEntry<string?> { Value = null });
+
+        await Sut.GetOrAddAsync(_cacheKey, generator, policy: null, token: TestContext.Current.CancellationToken);
+
+        await _innerCache.Received(1).SetAsync<string?>(
+            _cacheKey,
+            "v",
+            Arg.Is<DateTimeOffset?>(d => d.HasValue
+                && d.Value - DateTimeOffset.UtcNow >= baseTtl - TimeSpan.FromSeconds(5)
+                && d.Value - DateTimeOffset.UtcNow <= baseTtl + maxJitter + TimeSpan.FromSeconds(5)),
+            Arg.Any<CachePolicy?>(),
+            Arg.Any<CancellationToken>());
+    }
+
     public ValueTask DisposeAsync() => ValueTask.CompletedTask;
 
     public ValueTask InitializeAsync()

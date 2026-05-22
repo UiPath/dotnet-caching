@@ -144,6 +144,16 @@ public abstract class MultilayerCacheBase : IDisposable
     private static TimeSpan NonNegativeOrFallback(TimeSpan? value, TimeSpan fallback) =>
         value is { } v && v >= TimeSpan.Zero ? v : fallback;
 
+    protected static TimeSpan? ApplyJitter(TimeSpan? duration, TimeSpan? maxJitter)
+    {
+        if (duration is not { } d || maxJitter is not { } max || max <= TimeSpan.Zero)
+        {
+            return duration;
+        }
+        var bonusMs = Random.Shared.NextDouble() * max.TotalMilliseconds;
+        return d + TimeSpan.FromMilliseconds(bonusMs);
+    }
+
     private async ValueTask<IDisposable?> TryAcquireLocalLockAsync(CacheKey cacheKey, TimeSpan localLockTimeout, CancellationToken token)
     {
         var lockKey = _localLockKeyPrefix + cacheKey.Name;

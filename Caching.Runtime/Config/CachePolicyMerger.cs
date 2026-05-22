@@ -9,6 +9,7 @@ internal static class CachePolicyMerger
             LocalExpirationDisconnected = named.LocalExpirationDisconnected ?? defaults.LocalExpirationDisconnected,
             DistributedExpiration = named.DistributedExpiration ?? defaults.DistributedExpiration,
             FactoryTimeout = named.FactoryTimeout ?? defaults.FactoryTimeout,
+            JitterMaxDuration = named.JitterMaxDuration ?? defaults.JitterMaxDuration,
             RehydrateEnabled = named.RehydrateEnabled ?? defaults.RehydrateEnabled,
             Rehydrate = named.Rehydrate ?? defaults.Rehydrate,
             Lock = MergeLock(named.Lock, defaults.Lock),

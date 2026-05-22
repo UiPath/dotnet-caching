@@ -124,8 +124,27 @@ public class CachePolicyMergerTests
         merged.LocalExpiration.Should().BeNull();
         merged.DistributedExpiration.Should().BeNull();
         merged.FactoryTimeout.Should().BeNull();
+        merged.JitterMaxDuration.Should().BeNull();
         merged.RehydrateEnabled.Should().BeNull();
         merged.Lock.Should().BeNull();
         merged.Rehydrate.Should().BeNull();
+    }
+
+    [Fact]
+    public void JitterMaxDuration_named_wins_over_default()
+    {
+        var named = new CachePolicy { JitterMaxDuration = TimeSpan.FromSeconds(10) };
+        var defaults = new CachePolicy { JitterMaxDuration = TimeSpan.FromMinutes(1) };
+
+        CachePolicyMerger.Merge(named, defaults).JitterMaxDuration.Should().Be(TimeSpan.FromSeconds(10));
+    }
+
+    [Fact]
+    public void JitterMaxDuration_inherits_from_default_when_named_is_null()
+    {
+        var named = new CachePolicy { LocalExpiration = TimeSpan.FromMinutes(1) };
+        var defaults = new CachePolicy { JitterMaxDuration = TimeSpan.FromSeconds(30) };
+
+        CachePolicyMerger.Merge(named, defaults).JitterMaxDuration.Should().Be(TimeSpan.FromSeconds(30));
     }
 }

@@ -34,6 +34,16 @@ public sealed class CachePolicy
     public TimeSpan? FactoryTimeout { get; init; }
 
     /// <summary>
+    /// Upper bound on the random duration added to the L2 (distributed) expiration at write time —
+    /// uniform random in <c>[0, JitterMaxDuration]</c> added to the resolved
+    /// <see cref="DistributedExpiration"/> on <c>SetAsync</c> / <c>GetOrAddAsync</c> / <c>RefreshAsync</c>.
+    /// Applies only when the caller does not pass an explicit <c>expiration</c> argument (caller-supplied
+    /// values are honored exactly). Spreads cluster-wide expirations after bulk writes (e.g. deploy
+    /// warm-up). L1 caps are not jittered. <c>null</c> or <see cref="TimeSpan.Zero"/> disables jitter.
+    /// </summary>
+    public TimeSpan? JitterMaxDuration { get; init; }
+
+    /// <summary>
     /// Master switch for proactive background refresh. Rehydration fires only when this is
     /// <c>true</c> <em>and</em> <see cref="Rehydrate"/> carries tuning settings. <c>null</c>
     /// inherits from the next level down (default <em>off</em>).
