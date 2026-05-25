@@ -87,7 +87,7 @@ public class MultilayerHashCacheRehydrateTests(ITestContextAccessor testContextA
 
         result.Should().BeEquivalentTo(CachedDict);
 
-        await WaitForAsync(() => _distributedLock.ReceivedCalls().Any(), TimeSpan.FromSeconds(5));
+        await WaitForAsync(() => _distributedLock.ReceivedCalls().Any(), TimeSpan.FromSeconds(5), token);
         await _distributedLock.ReceivedWithAnyArgs(1).TryAcquireAsync(default!, default, Arg.Any<CancellationToken>());
         generatorTcs.TrySetResult(RefreshedDict);
     }
@@ -110,7 +110,7 @@ public class MultilayerHashCacheRehydrateTests(ITestContextAccessor testContextA
 
         await Sut.GetOrAddAsync(_cacheKey, generator, RehydratePolicy(), token);
 
-        await WaitForAsync(() => _innerCache.ReceivedCalls().Any(c => c.GetMethodInfo().Name == nameof(IHashCache.SetAsync)), TimeSpan.FromSeconds(5));
+        await WaitForAsync(() => _innerCache.ReceivedCalls().Any(c => c.GetMethodInfo().Name == nameof(IHashCache.SetAsync)), TimeSpan.FromSeconds(5), token);
         await _innerCache.Received(1).SetAsync<string?>(
             _cacheKey,
             Arg.Is<IDictionary<string, string?>>(d => d["f"] == "rehydrated"),
@@ -140,7 +140,7 @@ public class MultilayerHashCacheRehydrateTests(ITestContextAccessor testContextA
 
         await Sut.GetOrAddAsync(_cacheKey, generator, RehydratePolicy(), token);
 
-        await WaitForAsync(() => _distributedLock.ReceivedCalls().Any(), TimeSpan.FromSeconds(5));
+        await WaitForAsync(() => _distributedLock.ReceivedCalls().Any(), TimeSpan.FromSeconds(5), token);
         await Task.Delay(50, TestContext.Current.CancellationToken);
         generatorCalls.Should().Be(0);
         await _innerCache.DidNotReceive().SetAsync<string?>(_cacheKey, Arg.Any<IDictionary<string, string?>>(), Arg.Any<HashCacheEntryOptions>(), Arg.Any<CachePolicy?>(), Arg.Any<CancellationToken>());
@@ -162,7 +162,7 @@ public class MultilayerHashCacheRehydrateTests(ITestContextAccessor testContextA
 
         await Sut.GetOrAddAsync(_cacheKey, generator, RehydratePolicy(), token);
 
-        await WaitForAsync(() => _distributedLock.ReceivedCalls().Any(), TimeSpan.FromSeconds(5));
+        await WaitForAsync(() => _distributedLock.ReceivedCalls().Any(), TimeSpan.FromSeconds(5), token);
         await Task.Delay(100, TestContext.Current.CancellationToken);
         await acquiredLock.DidNotReceive().DisposeAsync();
         await _innerCache.DidNotReceive().SetAsync<string?>(_cacheKey, Arg.Any<IDictionary<string, string?>>(), Arg.Any<HashCacheEntryOptions>(), Arg.Any<CachePolicy?>(), Arg.Any<CancellationToken>());
@@ -246,8 +246,8 @@ public class MultilayerHashCacheRehydrateTests(ITestContextAccessor testContextA
 
         await Sut.GetOrAddAsync(_cacheKey, generator, RehydratePolicy(), token);
 
-        await WaitForAsync(() => _topic.ReceivedCalls().Any(c => c.GetMethodInfo().Name == nameof(ITopic<ICacheEvent>.PublishAsync)), TimeSpan.FromSeconds(5));
-        await _topic.ReceivedWithAnyArgs(1).PublishAsync(default!, default);
+        await WaitForAsync(() => _topic.ReceivedCalls().Any(c => c.GetMethodInfo().Name == nameof(ITopic<ICacheEvent>.PublishAsync)), TimeSpan.FromSeconds(5), token);
+        await _topic.ReceivedWithAnyArgs(1).PublishAsync(default!, token);
     }
 
     [Fact]
@@ -301,7 +301,7 @@ public class MultilayerHashCacheRehydrateTests(ITestContextAccessor testContextA
 
         await Sut.GetOrAddAsync(_cacheKey, generator, RehydratePolicy(), token);
 
-        await WaitForAsync(() => _innerCache.ReceivedCalls().Any(c => c.GetMethodInfo().Name == nameof(IHashCache.SetAsync)), TimeSpan.FromSeconds(5));
+        await WaitForAsync(() => _innerCache.ReceivedCalls().Any(c => c.GetMethodInfo().Name == nameof(IHashCache.SetAsync)), TimeSpan.FromSeconds(5), token);
         await _innerCache.Received(1).SetAsync<string?>(
             _cacheKey,
             Arg.Any<IDictionary<string, string?>>(),
@@ -312,7 +312,7 @@ public class MultilayerHashCacheRehydrateTests(ITestContextAccessor testContextA
             Arg.Any<CancellationToken>());
     }
 
-    private static async Task WaitForAsync(Func<bool> predicate, TimeSpan timeout)
+    private static async Task WaitForAsync(Func<bool> predicate, TimeSpan timeout, CancellationToken token)
     {
         var sw = System.Diagnostics.Stopwatch.StartNew();
         while (sw.Elapsed < timeout)
@@ -321,7 +321,7 @@ public class MultilayerHashCacheRehydrateTests(ITestContextAccessor testContextA
             {
                 return;
             }
-            await Task.Delay(10);
+            await Task.Delay(10, token);
         }
         throw new TimeoutException($"WaitForAsync timed out after {timeout} — predicate never became true. Background rehydrate path likely never ran.");
     }

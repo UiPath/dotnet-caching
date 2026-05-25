@@ -35,6 +35,10 @@ Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "Caching.AspNetCore", "Cachi
 EndProject
 Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "Caching.BenchmarkTests", "Caching.BenchmarkTests\Caching.BenchmarkTests.csproj", "{A95ED086-3FAE-4D78-B59F-4123E14BDBE0}"
 EndProject
+Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "Sample.AspNetCore.AppHost", "Sample.AspNetCore.AppHost\Sample.AspNetCore.AppHost.csproj", "{8B7B64DD-A974-40D5-800D-C63F325031D6}"
+EndProject
+Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "Sample.AspNetCore.ServiceDefaults", "Sample.AspNetCore.ServiceDefaults\Sample.AspNetCore.ServiceDefaults.csproj", "{C1F8B02B-6355-442E-8E78-346A8C26383C}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU
@@ -77,6 +81,14 @@ Global
 		{A95ED086-3FAE-4D78-B59F-4123E14BDBE0}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{A95ED086-3FAE-4D78-B59F-4123E14BDBE0}.Release|Any CPU.ActiveCfg = Release|Any CPU
 		{A95ED086-3FAE-4D78-B59F-4123E14BDBE0}.Release|Any CPU.Build.0 = Release|Any CPU
+		{8B7B64DD-A974-40D5-800D-C63F325031D6}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{8B7B64DD-A974-40D5-800D-C63F325031D6}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{8B7B64DD-A974-40D5-800D-C63F325031D6}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{8B7B64DD-A974-40D5-800D-C63F325031D6}.Release|Any CPU.Build.0 = Release|Any CPU
+		{C1F8B02B-6355-442E-8E78-346A8C26383C}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{C1F8B02B-6355-442E-8E78-346A8C26383C}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{C1F8B02B-6355-442E-8E78-346A8C26383C}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{C1F8B02B-6355-442E-8E78-346A8C26383C}.Release|Any CPU.Build.0 = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE

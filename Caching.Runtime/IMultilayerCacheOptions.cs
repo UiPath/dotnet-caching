@@ -2,6 +2,8 @@
 
 namespace UiPath.Platform.Caching;
 
+#pragma warning disable S1133 // Backward-compatible aliases are intentionally obsolete during the rename window.
+
 public interface IMultilayerCacheOptions : ICacheOptions
 {
     public string? Topic { get; set; }
@@ -88,3 +90,5 @@ public interface IMultilayerCacheOptions : ICacheOptions
     /// </summary>
     public IDistributedLockKeyStrategy? LockKeyStrategy { get; set; }
 }
+
+#pragma warning restore S1133

@@ -22,7 +22,8 @@
     <GenerateAssemblyInfo>False</GenerateAssemblyInfo>
     <GitVersion_NoFetchEnabled>true</GitVersion_NoFetchEnabled>
     <WriteVersionInfoToBuildLog>true</WriteVersionInfoToBuildLog>
-    <NoWarn>$(NoWarn);NU5105;NU1507;CS1591;AD0001;</NoWarn>
+    <NoWarn>$(NoWarn);NU5105;NU1507;CS1591;AD0001;NU1900;</NoWarn>
+    <PackageReadmeFile>README.md</PackageReadmeFile>
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
 	  <EnforceCodeStyleInBuild>true</EnforceCodeStyleInBuild>
@@ -33,6 +34,9 @@
     <Compile Include="$(SolutionDir)\GlobalAssemblyInfo.cs">
       <Link>Properties/GlobalAssemblyInfo.cs</Link>
     </Compile>
+  </ItemGroup>
+  <ItemGroup Condition="'$(IsPackable)' != 'false'">
+    <None Include="$(MSBuildThisFileDirectory)README.md" Pack="true" PackagePath="\" />
   </ItemGroup>
   <ItemGroup Condition="'$(SonarQubeExclude)' == 'false' And '$(SonarQubeTestProject)' == 'false'">
     <PackageReference Include="SonarAnalyzer.CSharp">
