@@ -26,6 +26,7 @@
       <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
     </PackageReference>
     <PackageReference Include="FluentAssertions.Json" />
+    <PackageReference Include="Microsoft.Extensions.Configuration.Json" />
     <PackageReference Include="Microsoft.Extensions.Logging.Console" />
   </ItemGroup>
 
@@ -35,6 +36,12 @@
     <ProjectReference Include="..\Caching.Polly\Caching.Polly.csproj" />
     <ProjectReference Include="..\Caching.Runtime\Caching.Runtime.csproj" />
     <ProjectReference Include="..\Caching.Telemetry\Caching.Telemetry.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <None Include="..\Sample.AspNetCore\appsettings.all.json" Link="appsettings.all.json">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </None>
   </ItemGroup>
 
 </Project>
