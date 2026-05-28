@@ -1,4 +1,6 @@
-﻿namespace UiPath.Platform.Caching;
+﻿using System.Globalization;
+
+namespace UiPath.Platform.Caching;
 
 public readonly struct CacheKey : IEquatable<CacheKey>
 {
@@ -18,6 +20,15 @@ public readonly struct CacheKey : IEquatable<CacheKey>
     public bool Equals(CacheKey other) =>
         string.Equals(Name, other.Name, StringComparison.InvariantCultureIgnoreCase);
 
+    public bool Equals(int other) =>
+        Equals((CacheKey)other);
+
+    public bool Equals(long other) =>
+        Equals((CacheKey)other);
+
+    public bool Equals(Guid other) =>
+        Equals((CacheKey)other);
+
     public bool IsNull => string.IsNullOrEmpty(Name);
 
     public override string ToString() =>
@@ -34,6 +45,15 @@ public readonly struct CacheKey : IEquatable<CacheKey>
         if (cacheKey == null) return default;
         return new CacheKey(cacheKey);
     }
+
+    public static implicit operator CacheKey(int value) =>
+        new(value.ToString(CultureInfo.InvariantCulture));
+
+    public static implicit operator CacheKey(long value) =>
+        new(value.ToString(CultureInfo.InvariantCulture));
+
+    public static implicit operator CacheKey(Guid value) =>
+        new(value.ToString());
 
     public static bool operator ==(CacheKey left, CacheKey right) =>
         left.Equals(right);
