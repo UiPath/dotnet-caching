@@ -1,7 +1,6 @@
-using FluentAssertions.Extensions;
+﻿using FluentAssertions.Extensions;
 using Microsoft.Extensions.Logging;
 using StackExchange.Redis;
-using UiPath.Platform.Caching.Broadcast.Redis;
 
 namespace UiPath.Platform.Caching.Tests.Broadcast;
 

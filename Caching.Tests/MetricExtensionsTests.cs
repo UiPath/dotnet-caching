@@ -1,5 +1,4 @@
-using StackExchange.Redis;
-using UiPath.Platform.Caching.Telemetry;
+﻿using StackExchange.Redis;
 using UiPath.Platform.Caching.Tests.Telemetry;
 namespace UiPath.Platform.Caching.Tests;
 public class MetricExtensionsTests

@@ -41,8 +41,8 @@ public class CachingBuilder(IServiceCollection services, IConfiguration? configu
         Services.TryAddSingleton<IDistributedLock>(NullDistributedLock.Instance);
         Services.TryAddSingleton<ICachePolicyFactory>(sp =>
         {
-            var options = sp.GetRequiredService<IOptions<CacheOptions>>().Value;
-            CachePolicy? defaultPolicy = options.DefaultCachePolicy;
+            var resolvedOptions = sp.GetRequiredService<IOptions<CacheOptions>>().Value;
+            CachePolicy? defaultPolicy = resolvedOptions.DefaultCachePolicy;
             var builders = sp.GetServices<ICachePolicyDefaultBuilder>().ToArray();
             // Validate against every registered provider, not just the DefaultCache match — a named
             // policy is resolved by Cache<T> type name and may be used against any provider's cache
@@ -51,13 +51,13 @@ public class CachingBuilder(IServiceCollection services, IConfiguration? configu
             foreach (var builder in builders)
             {
                 var providerDefault = builder.Build();
-                var effectiveDefaultLock = CachePolicyMerger.MergeLock(options.DefaultCachePolicy?.Lock, providerDefault?.Lock);
+                var effectiveDefaultLock = CachePolicyMerger.MergeLock(resolvedOptions.DefaultCachePolicy?.Lock, providerDefault?.Lock);
                 if (effectiveDefaultLock is not null)
                 {
-                    CachePolicyLockValidator.ValidateEffectiveDefaultAndNamedLocks(options, effectiveDefaultLock);
+                    CachePolicyLockValidator.ValidateEffectiveDefaultAndNamedLocks(resolvedOptions, effectiveDefaultLock);
                 }
             }
-            return new DefaultCachePolicyFactory(options.Policies, defaultPolicy);
+            return new DefaultCachePolicyFactory(resolvedOptions.Policies, defaultPolicy);
         });
         Services.TryAddEnumerable(ServiceDescriptor.Singleton<IValidateOptions<CacheOptions>, CachePolicyLockValidator>());
         Services.TryAddEnumerable(ServiceDescriptor.Singleton<IValidateOptions<CacheOptions>, CachePolicyRehydrateValidator>());

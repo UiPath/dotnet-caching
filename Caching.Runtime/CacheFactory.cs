@@ -1,4 +1,4 @@
-﻿namespace UiPath.Platform.Caching;
+namespace UiPath.Platform.Caching;
 
 public sealed class CacheFactory : ICacheFactory
 {
@@ -7,13 +7,19 @@ public sealed class CacheFactory : ICacheFactory
     private volatile bool _disposed;
 
     public CacheFactory(IOptions<CacheOptions> cacheOptions)
-        : this(cacheOptions, [])
+        : this(cacheOptions, [], policyFactory: null)
     {
     }
 
     public CacheFactory(IOptions<CacheOptions> cacheOptions, IEnumerable<ICacheProvider> providers)
+        : this(cacheOptions, providers, policyFactory: null)
+    {
+    }
+
+    public CacheFactory(IOptions<CacheOptions> cacheOptions, IEnumerable<ICacheProvider> providers, ICachePolicyFactory? policyFactory)
     {
         _options = cacheOptions.Value;
+        PolicyFactory = policyFactory;
         foreach (var provider in providers)
         {
             AddProvider(provider);
@@ -21,6 +27,8 @@ public sealed class CacheFactory : ICacheFactory
     }
 
     public IEnumerable<string> ProviderNames => _providers.Values.Where(p => p.Enabled).Select(p => p.Name);
+
+    public ICachePolicyFactory? PolicyFactory { get; }
 
     public void AddProvider(ICacheProvider provider)
     {

@@ -1,4 +1,7 @@
-﻿namespace UiPath.Platform.Caching;
+﻿using UiPath.Platform.Caching.Broadcast;
+
+namespace UiPath.Platform.Caching;
+
 public class CacheOptions
 {
     public const char KeySeparator = ':';
@@ -24,12 +27,6 @@ public class CacheOptions
     public char Separator { get; set; } = KeySeparator;
 
     public string AppShortName { get; set; } = default!;
-
-    public Type? CacheFactory { get; set; }
-
-    public Type? CacheKeyStrategyFactory { get; set; }
-
-    public Type? TopicKeyStrategyFactory { get; set; }
 
     public int LargeValueThreshold { get; set; } = 20_000;
 

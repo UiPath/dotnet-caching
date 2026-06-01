@@ -1,4 +1,4 @@
-﻿namespace UiPath.Platform.Caching;
+namespace UiPath.Platform.Caching;
 
 [ExcludeFromCodeCoverage]
 public sealed class NullCacheFactory : ICacheFactory

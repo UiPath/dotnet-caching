@@ -1,6 +1,4 @@
-using UiPath.Platform.Caching.Broadcast;
-using UiPath.Platform.Caching.Broadcast.Redis;
-using UiPath.Platform.Caching.Config;
+﻿using UiPath.Platform.Caching.Config;
 
 namespace UiPath.Platform.Caching.Tests.Broadcast;
 

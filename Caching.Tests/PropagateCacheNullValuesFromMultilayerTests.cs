@@ -1,6 +1,5 @@
-using Microsoft.Extensions.Logging.Abstractions;
+﻿using Microsoft.Extensions.Logging.Abstractions;
 using UiPath.Platform.Caching.Config;
-using UiPath.Platform.Caching.Redis;
 
 namespace UiPath.Platform.Caching.Tests;
 

@@ -1,5 +1,4 @@
 ﻿using System.Runtime.CompilerServices;
-using UiPath.Platform.Caching.Config;
 using UiPath.Platform.Caching.Policies;
 using UiPath.Platform.Caching.Telemetry;
 

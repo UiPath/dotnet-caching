@@ -39,7 +39,10 @@ public static class ServiceCollectionExtensions
 
         if (options.Enabled)
         {
-            services.TryAddSingleton(typeof(ICacheFactory), options.CacheFactory ?? typeof(CacheFactory));
+            services.TryAddSingleton<ICacheFactory>(sp => new CacheFactory(
+                sp.GetRequiredService<IOptions<CacheOptions>>(),
+                sp.GetServices<ICacheProvider>(),
+                sp.GetService<ICachePolicyFactory>()));
         }
         else
         {

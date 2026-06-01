@@ -1,6 +1,4 @@
-using UiPath.Platform.Caching.Redis;
-
-namespace UiPath.Platform.Caching.Config;
+﻿namespace UiPath.Platform.Caching.Config;
 
 /// <summary>
 /// Forces <see cref="RedisCacheOptions.CacheNullValues"/> on whenever the wrapping
