@@ -33,8 +33,6 @@ public static class InMemoryRedisCollectionExtensions
         builder.Services
             .TryAddEnumerable(ServiceDescriptor.Singleton<IValidateOptions<InMemoryRedisCacheOptions>, MultilayerCacheLockCrossOptionsValidator<InMemoryRedisCacheOptions>>());
         builder.Services
-            .TryAddEnumerable(ServiceDescriptor.Singleton<ICachePolicyDefaultBuilder, InMemoryRedisDefaultPolicyBuilder>());
-        builder.Services
             .TryAddEnumerable(ServiceDescriptor.Singleton<ICacheProvider, InMemoryRedisCacheProvider>());
         builder.AddBroadcast();
         return builder.AddCallback();

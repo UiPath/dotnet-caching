@@ -131,6 +131,28 @@ public class CachePolicyMergerTests
     }
 
     [Fact]
+    public void Merge_returns_null_when_both_inputs_are_null()
+    {
+        CachePolicyMerger.Merge(null, null).Should().BeNull();
+    }
+
+    [Fact]
+    public void Merge_returns_primary_when_fallback_is_null()
+    {
+        var primary = new CachePolicy { LocalExpiration = TimeSpan.FromMinutes(1) };
+
+        CachePolicyMerger.Merge(primary, null).Should().BeSameAs(primary);
+    }
+
+    [Fact]
+    public void Merge_returns_fallback_when_primary_is_null()
+    {
+        var fallback = new CachePolicy { LocalExpiration = TimeSpan.FromMinutes(5) };
+
+        CachePolicyMerger.Merge(null, fallback).Should().BeSameAs(fallback);
+    }
+
+    [Fact]
     public void JitterMaxDuration_named_wins_over_default()
     {
         var named = new CachePolicy { JitterMaxDuration = TimeSpan.FromSeconds(10) };

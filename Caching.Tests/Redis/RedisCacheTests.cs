@@ -507,6 +507,33 @@ public class RedisCacheTests(ITestContextAccessor testContextAccessor) : IAsyncL
     }
 
     [Fact]
+    public async Task GetOrAdd_CacheOptions_DefaultCachePolicy_DistributedExpiration_drives_TTL_when_caller_omits_policy()
+    {
+        // Provider's DefaultExpiration is null so user DefaultCachePolicy.DistributedExpiration
+        // fills the gap and drives TTL (provider wins per "specific over generic" otherwise).
+        var defaultTtl = TimeSpan.FromMinutes(9);
+        _cacheOptions.DefaultExpiration = null;
+        _fixture.Inject(new CacheOptions
+        {
+            AppShortName = "test",
+            ConnectionMonitorEnabled = true,
+            DefaultCachePolicy = new CachePolicy { DistributedExpiration = defaultTtl },
+        });
+        _sut = null;
+        _database.KeyExpireAsync(_redisKey, Arg.Any<DateTime?>(), Arg.Any<CommandFlags>())
+            .Returns(_fixture.Create<bool>());
+
+        await Sut.GetOrAddAsync(_cacheKey, _ => Task.FromResult(_fixture.Create<string?>()), policy: null, token: testContextAccessor.Current.CancellationToken);
+
+        await _database.Received(1).StringSetAsync(
+            _redisKey,
+            Arg.Any<RedisValue>(),
+            Arg.Is<TimeSpan?>(t => t.HasValue && t.Value > defaultTtl - TimeSpan.FromSeconds(5) && t.Value < defaultTtl + TimeSpan.FromSeconds(5)),
+            When.Always,
+            CommandFlags.DemandMaster);
+    }
+
+    [Fact]
     public async Task GetOrAdd_policy_FactoryTimeout_cancels_slow_generator()
     {
         var policy = new CachePolicy { FactoryTimeout = TimeSpan.FromMilliseconds(50) };
@@ -1042,6 +1069,8 @@ public class RedisCacheTests(ITestContextAccessor testContextAccessor) : IAsyncL
         var opt = Options.Create(_cacheOptions);
         _fixture.Inject(opt);
         _fixture.Inject(_cacheOptions);
+        // Wires real ConnectionStateMonitor so disconnected-path tests can flip _isConnected.
+        _fixture.Inject(new CacheOptions { AppShortName = "test", ConnectionMonitorEnabled = true });
         _connector = _fixture.Freeze<IRedisConnector>();
         _connector.Database.Returns(_ => _database);
         _connector.Version.Returns(_ => _version);

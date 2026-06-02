@@ -6,7 +6,7 @@ public class HashCacheOfTPolicyResolutionTests
     public void PolicyName_defaults_to_typeof_T_FullName_when_name_omitted()
     {
         var policyFactory = Substitute.For<ICachePolicyFactory>();
-        policyFactory.Resolve(default!).ReturnsForAnyArgs(CachePolicy.Empty);
+        policyFactory.Resolve(default!).ReturnsForAnyArgs(new CachePolicy());
         var cacheFactory = BuildCacheFactory(policyFactory);
 
         _ = new HashCache<MyService>(cacheFactory);
@@ -18,7 +18,7 @@ public class HashCacheOfTPolicyResolutionTests
     public void Explicit_name_overrides_type_name()
     {
         var policyFactory = Substitute.For<ICachePolicyFactory>();
-        policyFactory.Resolve(default!).ReturnsForAnyArgs(CachePolicy.Empty);
+        policyFactory.Resolve(default!).ReturnsForAnyArgs(new CachePolicy());
         var cacheFactory = BuildCacheFactory(policyFactory);
 
         _ = new HashCache<MyService>(cacheFactory, policyName: "user-orgs");

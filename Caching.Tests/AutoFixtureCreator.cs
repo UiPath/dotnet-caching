@@ -17,6 +17,7 @@ public static class AutoFixtureCreator
         fixture.Customizations.Add(new MultilayerCacheOptionsCustomization());
         fixture.Customizations.Add(new TelemetryProviderCustomization());
         fixture.Customizations.Add(new CachePolicyFactoryCustomization());
+        fixture.Customizations.Add(new CacheOptionsCustomization());
 
         fixture.Behaviors.OfType<ThrowingRecursionBehavior>().ToList()
             .ForEach(b => fixture.Behaviors.Remove(b));
@@ -45,7 +46,21 @@ public class CachePolicyFactoryCustomization : ISpecimenBuilder
     {
         if (request is Type type && type == typeof(ICachePolicyFactory))
         {
-            return NullCachePolicyFactory.Instance;
+            var cacheOptions = (CacheOptions)context.Resolve(typeof(CacheOptions));
+            return new DefaultCachePolicyFactory(cacheOptions.Policies, cacheOptions.DefaultCachePolicy);
+        }
+        return new NoSpecimen();
+    }
+}
+
+public class CacheOptionsCustomization : ISpecimenBuilder
+{
+    // Pin to a fresh default so AutoFixture doesn't fill DefaultCachePolicy with random data.
+    public object Create(object request, ISpecimenContext context)
+    {
+        if (request is Type type && type == typeof(CacheOptions))
+        {
+            return new CacheOptions { AppShortName = "test" };
         }
         return new NoSpecimen();
     }
@@ -103,6 +118,15 @@ public class MultilayerCacheOptionsCustomization : ISpecimenBuilder
             if (propertyInfo.Name == nameof(IMultilayerCacheOptions.LocalMaxExpirationDisconnected))
             {
                 return TimeSpan.FromSeconds(30);
+            }
+            // Lock-related TimeSpan? fields: AutoFixture fills with sub-millisecond random values
+            // which fail LockSettingsValidator.ValidateCross (must be >= DistributedLockPollInterval).
+            // Leave them null so the validator treats them as unset.
+            if (propertyInfo.Name is nameof(IMultilayerCacheOptions.DistributedLockTimeout)
+                or nameof(IMultilayerCacheOptions.DistributedLockExpiry)
+                or nameof(IMultilayerCacheOptions.LocalLockTimeout))
+            {
+                return new OmitSpecimen();
             }
         }
 

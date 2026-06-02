@@ -32,8 +32,8 @@ public class MultilayerHashCachePerNameJitterTests(ITestContextAccessor testCont
         var baseTtl = TimeSpan.FromMinutes(5);
         var maxJitter = TimeSpan.FromSeconds(30);
         var defaultPolicy = new CachePolicy { DistributedExpiration = baseTtl, JitterMaxDuration = maxJitter };
-        var policyFactory = new DefaultCachePolicyFactory(Array.Empty<KeyValuePair<string, CachePolicy>>(), defaultPolicy);
-        _fixture.Inject<ICachePolicyFactory>(policyFactory);
+        _options.DefaultExpiration = null;
+        _fixture.Inject(new CacheOptions { DefaultCachePolicy = defaultPolicy, AppShortName = "test" });
         _sut = null;
 
         _innerCache.SetAsync<string?>(_cacheKey, Arg.Any<IDictionary<string, string?>>(), Arg.Any<HashCacheEntryOptions>(), Arg.Any<CachePolicy?>(), Arg.Any<CancellationToken>())
@@ -60,8 +60,7 @@ public class MultilayerHashCachePerNameJitterTests(ITestContextAccessor testCont
         var token = testContextAccessor.Current.CancellationToken;
         var maxJitter = TimeSpan.FromMinutes(1);
         var defaultPolicy = new CachePolicy { JitterMaxDuration = maxJitter };
-        var policyFactory = new DefaultCachePolicyFactory(Array.Empty<KeyValuePair<string, CachePolicy>>(), defaultPolicy);
-        _fixture.Inject<ICachePolicyFactory>(policyFactory);
+        _fixture.Inject(new CacheOptions { DefaultCachePolicy = defaultPolicy, AppShortName = "test" });
         _sut = null;
 
         var callerTtl = TimeSpan.FromMinutes(2);
@@ -91,8 +90,7 @@ public class MultilayerHashCachePerNameJitterTests(ITestContextAccessor testCont
         var optionsTtl = _options.DefaultExpiration!.Value;
         var maxJitter = TimeSpan.FromSeconds(30);
         var defaultPolicy = new CachePolicy { JitterMaxDuration = maxJitter }; // no DistributedExpiration
-        var policyFactory = new DefaultCachePolicyFactory(Array.Empty<KeyValuePair<string, CachePolicy>>(), defaultPolicy);
-        _fixture.Inject<ICachePolicyFactory>(policyFactory);
+        _fixture.Inject(new CacheOptions { DefaultCachePolicy = defaultPolicy, AppShortName = "test" });
         _sut = null;
 
         _innerCache.SetAsync<string?>(_cacheKey, Arg.Any<IDictionary<string, string?>>(), Arg.Any<HashCacheEntryOptions>(), Arg.Any<CachePolicy?>(), Arg.Any<CancellationToken>())
@@ -120,8 +118,8 @@ public class MultilayerHashCachePerNameJitterTests(ITestContextAccessor testCont
         var baseTtl = TimeSpan.FromMinutes(5);
         var maxJitter = TimeSpan.FromSeconds(30);
         var defaultPolicy = new CachePolicy { DistributedExpiration = baseTtl, JitterMaxDuration = maxJitter };
-        var policyFactory = new DefaultCachePolicyFactory(Array.Empty<KeyValuePair<string, CachePolicy>>(), defaultPolicy);
-        _fixture.Inject<ICachePolicyFactory>(policyFactory);
+        _options.DefaultExpiration = null;
+        _fixture.Inject(new CacheOptions { DefaultCachePolicy = defaultPolicy, AppShortName = "test" });
         _sut = null;
 
         _innerCache.RefreshAsync<string>(_cacheKey, Arg.Any<HashCacheEntryOptions>(), Arg.Any<CachePolicy?>(), Arg.Any<CancellationToken>())
@@ -146,8 +144,7 @@ public class MultilayerHashCachePerNameJitterTests(ITestContextAccessor testCont
         var token = testContextAccessor.Current.CancellationToken;
         var maxJitter = TimeSpan.FromMinutes(1);
         var defaultPolicy = new CachePolicy { JitterMaxDuration = maxJitter };
-        var policyFactory = new DefaultCachePolicyFactory(Array.Empty<KeyValuePair<string, CachePolicy>>(), defaultPolicy);
-        _fixture.Inject<ICachePolicyFactory>(policyFactory);
+        _fixture.Inject(new CacheOptions { DefaultCachePolicy = defaultPolicy, AppShortName = "test" });
         _sut = null;
 
         var callerInstant = DateTimeOffset.UtcNow.AddMinutes(2);
@@ -180,8 +177,7 @@ public class MultilayerHashCachePerNameJitterTests(ITestContextAccessor testCont
             DistributedExpiration = TimeSpan.FromDays(30),
             JitterMaxDuration = TimeSpan.FromDays(30),
         };
-        var policyFactory = new DefaultCachePolicyFactory(Array.Empty<KeyValuePair<string, CachePolicy>>(), defaultPolicy);
-        _fixture.Inject<ICachePolicyFactory>(policyFactory);
+        _fixture.Inject(new CacheOptions { DefaultCachePolicy = defaultPolicy, AppShortName = "test" });
         _sut = null;
 
         var options = new HashCacheEntryOptions(
@@ -215,8 +211,8 @@ public class MultilayerHashCachePerNameJitterTests(ITestContextAccessor testCont
         var baseTtl = TimeSpan.FromMinutes(5);
         var maxJitter = TimeSpan.FromSeconds(30);
         var defaultPolicy = new CachePolicy { DistributedExpiration = baseTtl, JitterMaxDuration = maxJitter };
-        var policyFactory = new DefaultCachePolicyFactory(Array.Empty<KeyValuePair<string, CachePolicy>>(), defaultPolicy);
-        _fixture.Inject<ICachePolicyFactory>(policyFactory);
+        _options.DefaultExpiration = null;
+        _fixture.Inject(new CacheOptions { DefaultCachePolicy = defaultPolicy, AppShortName = "test" });
         _sut = null;
 
         var metadata = new Dictionary<string, string?> { ["m"] = "1" };

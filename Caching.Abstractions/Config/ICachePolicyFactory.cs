@@ -7,20 +7,29 @@ namespace UiPath.Platform.Caching;
 /// pre-merged named policies; consumers can replace it via DI for custom resolution.
 /// </summary>
 /// <remarks>
-/// Implementations MUST be fast (single-digit microseconds), MUST NOT throw, and MUST return
-/// non-null. <see cref="CachePolicy.Empty"/> is the conventional fallback when the name is not
-/// registered and no default policy is configured.
+/// Implementations MUST be fast (single-digit microseconds) and MUST NOT throw. Both members
+/// return <c>null</c> when there is no configured policy — cache implementations fall back to
+/// their provider's own effective default at construction time.
 /// </remarks>
 public interface ICachePolicyFactory
 {
-    CachePolicy Resolve(string policyName);
+    /// <summary>
+    /// Resolves the named cache policy. Returns <c>null</c> when no specific policy is registered
+    /// for <paramref name="policyName"/>.
+    /// </summary>
+    CachePolicy? Resolve(string policyName);
 
     /// <summary>
-    /// The pre-merged default policy. Returned when a caller has no name to bind (e.g., direct
-    /// <see cref="ICache"/> / <see cref="IHashCache"/> usage with <c>policy: null</c>) so cache-wide
-    /// tuning from <c>CacheOptions.DefaultCachePolicy</c> and the provider's
-    /// <c>IMultilayerCacheOptions</c> backcompat shim still applies. Always non-null;
-    /// implementations with no configured default return <see cref="CachePolicy.Empty"/>.
+    /// The user-configured default policy. Returns <c>null</c> when no default is configured —
+    /// each cache implementation then materializes its own effective default from its provider
+    /// options at construction.
     /// </summary>
-    CachePolicy Default { get; }
+    CachePolicy? Default { get; }
+
+    /// <summary>
+    /// Names of all registered policies. Validators iterate this and call <see cref="Resolve"/>
+    /// for each to validate the merged effective policy. Custom factories that don't enumerate
+    /// statically may return an empty sequence and opt out of validation.
+    /// </summary>
+    IEnumerable<string> Keys { get; }
 }

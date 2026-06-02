@@ -252,7 +252,7 @@ public class MultilayerCacheGetOrAddLockTests(ITestContextAccessor testContextAc
         var act = () => _ = Sut;
         act.Should().Throw<Exception>()
             .Which.GetBaseException()
-            .Should().BeOfType<ArgumentOutOfRangeException>()
+            .Should().BeOfType<OptionsValidationException>()
             .Which.Message.Should().Contain(nameof(IMultilayerCacheOptions.DistributedLockExpiry));
     }
 
@@ -264,7 +264,7 @@ public class MultilayerCacheGetOrAddLockTests(ITestContextAccessor testContextAc
         var act = () => _ = Sut;
         act.Should().Throw<Exception>()
             .Which.GetBaseException()
-            .Should().BeOfType<ArgumentOutOfRangeException>()
+            .Should().BeOfType<OptionsValidationException>()
             .Which.Message.Should().Contain(nameof(IMultilayerCacheOptions.DistributedLockTimeout));
     }
 
@@ -276,7 +276,7 @@ public class MultilayerCacheGetOrAddLockTests(ITestContextAccessor testContextAc
         var act = () => _ = Sut;
         act.Should().Throw<Exception>()
             .Which.GetBaseException()
-            .Should().BeOfType<ArgumentOutOfRangeException>()
+            .Should().BeOfType<OptionsValidationException>()
             .Which.Message.Should().Contain(nameof(IMultilayerCacheOptions.LocalLockTimeout));
     }
 
@@ -289,7 +289,7 @@ public class MultilayerCacheGetOrAddLockTests(ITestContextAccessor testContextAc
         var act = () => _ = Sut;
         act.Should().Throw<Exception>()
             .Which.GetBaseException()
-            .Should().BeOfType<ArgumentException>()
+            .Should().BeOfType<OptionsValidationException>()
             .Which.Message.Should().Contain(nameof(IMultilayerCacheOptions.LocalLockEnabled));
     }
 

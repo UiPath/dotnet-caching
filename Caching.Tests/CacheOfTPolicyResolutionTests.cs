@@ -6,7 +6,7 @@ public class CacheOfTPolicyResolutionTests(ITestContextAccessor testContextAcces
     public void PolicyName_defaults_to_typeof_T_FullName_when_name_omitted()
     {
         var policyFactory = Substitute.For<ICachePolicyFactory>();
-        policyFactory.Resolve(default!).ReturnsForAnyArgs(CachePolicy.Empty);
+        policyFactory.Resolve(default!).ReturnsForAnyArgs(new CachePolicy());
         var cacheFactory = BuildCacheFactory(policyFactory);
 
         _ = new Cache<MyService>(cacheFactory);
@@ -18,7 +18,7 @@ public class CacheOfTPolicyResolutionTests(ITestContextAccessor testContextAcces
     public void Explicit_name_overrides_type_name()
     {
         var policyFactory = Substitute.For<ICachePolicyFactory>();
-        policyFactory.Resolve(default!).ReturnsForAnyArgs(CachePolicy.Empty);
+        policyFactory.Resolve(default!).ReturnsForAnyArgs(new CachePolicy());
         var cacheFactory = BuildCacheFactory(policyFactory);
 
         _ = new Cache<MyService>(cacheFactory, policyName: "tenant-settings");
@@ -30,7 +30,7 @@ public class CacheOfTPolicyResolutionTests(ITestContextAccessor testContextAcces
     public void Policy_resolved_at_construction_not_per_call()
     {
         var policyFactory = Substitute.For<ICachePolicyFactory>();
-        policyFactory.Resolve(default!).ReturnsForAnyArgs(CachePolicy.Empty);
+        policyFactory.Resolve(default!).ReturnsForAnyArgs(new CachePolicy());
         var inner = Substitute.For<ICache>();
         var cacheFactory = BuildCacheFactory(policyFactory, inner);
         var sut = new Cache<MyService>(cacheFactory);

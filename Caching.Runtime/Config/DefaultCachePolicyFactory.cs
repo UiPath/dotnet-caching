@@ -3,36 +3,40 @@ namespace UiPath.Platform.Caching.Config;
 internal sealed class DefaultCachePolicyFactory : ICachePolicyFactory
 {
     private readonly Dictionary<string, CachePolicy> _preMerged;
-    private readonly CachePolicy _default;
 
     public DefaultCachePolicyFactory(
         IEnumerable<KeyValuePair<string, CachePolicy>>? policies,
-        CachePolicy? defaultPolicy)
+        CachePolicy? defaultPolicy,
+        TimeSpan distributedLockPollInterval = default)
     {
-        _default = defaultPolicy ?? CachePolicy.Empty;
+        Default = defaultPolicy;
         _preMerged = new Dictionary<string, CachePolicy>(StringComparer.OrdinalIgnoreCase);
-        if (policies is null)
+        if (policies is not null)
         {
-            return;
-        }
-        foreach (var (key, policy) in policies)
-        {
-            if (!_preMerged.TryAdd(key, CachePolicyMerger.Merge(policy, _default)))
+            foreach (var (key, policy) in policies)
             {
-                throw new InvalidOperationException(
-                    $"CacheOptions.Policies contains keys that differ only by case (collision on '{key}'). Policy names are matched case-insensitively — rename them to be distinct.");
+                if (!_preMerged.TryAdd(key, CachePolicyMerger.Merge(policy, defaultPolicy)))
+                {
+                    throw new InvalidOperationException(
+                        $"CacheOptions.Policies contains keys that differ only by case (collision on '{key}'). Policy names are matched case-insensitively — rename them to be distinct.");
+                }
             }
         }
+
+        CachePolicyFactoryValidator.Validate(this, distributedLockPollInterval);
     }
 
-    public CachePolicy Resolve(string policyName)
+    public CachePolicy? Default { get; }
+
+    public IEnumerable<string> Keys => _preMerged.Keys;
+
+    public CachePolicy? Resolve(string policyName)
     {
         if (string.IsNullOrEmpty(policyName))
         {
-            return _default;
+            return null;
         }
-        return _preMerged.TryGetValue(policyName, out var policy) ? policy : _default;
-    }
 
-    public CachePolicy Default => _default;
+        return _preMerged.TryGetValue(policyName, out var policy) ? policy : null;
+    }
 }

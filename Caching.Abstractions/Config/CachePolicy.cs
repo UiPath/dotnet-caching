@@ -73,6 +73,4 @@ public sealed class CachePolicy
     /// while inheriting the rest. (Compare with <see cref="Rehydrate"/>, which is replaced wholesale.)
     /// </summary>
     public LockProfile? Lock { get; init; }
-
-    public static readonly CachePolicy Empty = new();
 }

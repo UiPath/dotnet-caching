@@ -36,14 +36,14 @@ internal sealed partial class MultilayerCache : MultilayerCacheBase, ICache
     public ValueTask<T?> GetAsync<T>(CacheKey cacheKey, CachePolicy? policy = null, CancellationToken token = default)
     {
         NotCacheableException.ThrowIfNotCacheable<T>();
-        policy ??= _policyFactory.Default;
+        policy ??= _defaultPolicy;
         return GetInnerAsync<T>(_entryBuilder.BuildEntryOptions<T>(cacheKey, _clock.ToDateTimeOffset(_multiLayerCacheOptions.DefaultExpiration), token), policy);
     }
 
     public ValueTask<KeyValuePair<CacheKey, T?>[]> GetAsync<T>(CacheKey[] cacheKeys, CachePolicy? policy = null, CancellationToken token = default)
     {
         NotCacheableException.ThrowIfNotCacheable<T>();
-        policy ??= _policyFactory.Default;
+        policy ??= _defaultPolicy;
         var options = cacheKeys.Select(k => _entryBuilder.BuildEntryOptions<T>(k, default, token)).ToArray();
         return GetInnerAsync<T>(options, policy, token);
     }
@@ -51,7 +51,7 @@ internal sealed partial class MultilayerCache : MultilayerCacheBase, ICache
     public async ValueTask<ICacheEntry<T?>> GetCacheEntryAsync<T>(CacheKey cacheKey, CachePolicy? policy = null, CancellationToken token = default)
     {
         NotCacheableException.ThrowIfNotCacheable<T>();
-        policy ??= _policyFactory.Default;
+        policy ??= _defaultPolicy;
         var options = _entryBuilder.BuildEntryOptions<T>(cacheKey, _clock.ToDateTimeOffset(_multiLayerCacheOptions.DefaultExpiration), token);
         return await GetCacheEntryInnerAsync<T>(options, policy).ConfigureAwait(false);
     }
@@ -59,7 +59,7 @@ internal sealed partial class MultilayerCache : MultilayerCacheBase, ICache
     public async ValueTask<KeyValuePair<CacheKey, ICacheEntry<T?>>[]> GetCacheEntriesAsync<T>(CacheKey[] cacheKeys, CachePolicy? policy = null, CancellationToken token = default)
     {
         NotCacheableException.ThrowIfNotCacheable<T>();
-        policy ??= _policyFactory.Default;
+        policy ??= _defaultPolicy;
         var options = cacheKeys.Select(k => _entryBuilder.BuildEntryOptions<T>(k, default, token)).ToArray();
         return await GetCacheEntriesInnerAsync<T>(options, policy, token).ConfigureAwait(false);
     }
@@ -67,7 +67,7 @@ internal sealed partial class MultilayerCache : MultilayerCacheBase, ICache
     public ValueTask<T?> GetOrAddAsync<T>(CacheKey cacheKey, Func<CancellationToken, Task<T?>> generator, CachePolicy? policy = null, CancellationToken token = default)
     {
         ArgumentNullException.ThrowIfNull(generator);
-        policy ??= _policyFactory.Default;
+        policy ??= _defaultPolicy;
         var duration = policy.DistributedExpiration;
         var writeExpiration = _clock.ToDateTimeOffset(ResolveWriteDuration(policy));
         return GetOrAddInternalAsync(cacheKey, generator, writeExpiration, duration, policy, token);
@@ -76,7 +76,7 @@ internal sealed partial class MultilayerCache : MultilayerCacheBase, ICache
     public ValueTask<T?> GetOrAddAsync<T>(CacheKey cacheKey, Func<CancellationToken, Task<T?>> generator, TimeSpan? expiration = null, CachePolicy? policy = null, CancellationToken token = default)
     {
         ArgumentNullException.ThrowIfNull(generator);
-        policy ??= _policyFactory.Default;
+        policy ??= _defaultPolicy;
         var duration = expiration ?? policy.DistributedExpiration;
         return GetOrAddInternalAsync(cacheKey, generator, _clock.ToDateTimeOffset(ResolveWriteDuration(policy, expiration)), duration, policy, token);
     }
@@ -84,7 +84,7 @@ internal sealed partial class MultilayerCache : MultilayerCacheBase, ICache
     public ValueTask<T?> GetOrAddAsync<T>(CacheKey cacheKey, Func<CancellationToken, Task<T?>> generator, DateTimeOffset? expiration = null, CachePolicy? policy = null, CancellationToken token = default)
     {
         ArgumentNullException.ThrowIfNull(generator);
-        policy ??= _policyFactory.Default;
+        policy ??= _defaultPolicy;
         TimeSpan? duration;
         if (expiration.HasValue)
         {
@@ -179,20 +179,20 @@ internal sealed partial class MultilayerCache : MultilayerCacheBase, ICache
 
     public ValueTask<bool> SetAsync<T>(CacheKey cacheKey, T? value, CachePolicy? policy = null, CancellationToken token = default)
     {
-        policy ??= _policyFactory.Default;
+        policy ??= _defaultPolicy;
         return SetAsync(cacheKey, value, ResolveWriteDuration(policy), policy, token);
     }
 
     public ValueTask<bool> SetAsync<T>(CacheKey cacheKey, T? value, TimeSpan? expiration = null, CachePolicy? policy = null, CancellationToken token = default)
     {
-        policy ??= _policyFactory.Default;
+        policy ??= _defaultPolicy;
         return SetAsync(cacheKey, value, _clock.ToDateTimeOffset(ResolveWriteDuration(policy, expiration)), policy, token);
     }
 
     public async ValueTask<bool> SetAsync<T>(CacheKey cacheKey, T? value, DateTimeOffset? expiration = null, CachePolicy? policy = null, CancellationToken token = default)
     {
         NotCacheableException.ThrowIfNotCacheable<T>();
-        policy ??= _policyFactory.Default;
+        policy ??= _defaultPolicy;
         expiration ??= _clock.ToDateTimeOffset(ResolveWriteDuration(policy));
         var cacheEntryOptions = _entryBuilder.BuildEntryOptions<T>(cacheKey, expiration, token);
         if (value is null && !_multiLayerCacheOptions.CacheNullValues)
@@ -217,20 +217,20 @@ internal sealed partial class MultilayerCache : MultilayerCacheBase, ICache
 
     public ValueTask<bool> SetAsync<T>(KeyValuePair<CacheKey, T?>[] keyValues, CachePolicy? policy = null, CancellationToken token = default)
     {
-        policy ??= _policyFactory.Default;
+        policy ??= _defaultPolicy;
         return SetAsync(keyValues, ResolveWriteDuration(policy), policy, token);
     }
 
     public ValueTask<bool> SetAsync<T>(KeyValuePair<CacheKey, T?>[] keyValues, TimeSpan? expiration = null, CachePolicy? policy = null, CancellationToken token = default)
     {
-        policy ??= _policyFactory.Default;
+        policy ??= _defaultPolicy;
         return SetAsync(keyValues, _clock.ToDateTimeOffset(ResolveWriteDuration(policy, expiration)), policy, token);
     }
 
     public async ValueTask<bool> SetAsync<T>(KeyValuePair<CacheKey, T?>[] keyValues, DateTimeOffset? expiration = null, CachePolicy? policy = null, CancellationToken token = default)
     {
         NotCacheableException.ThrowIfNotCacheable<T>();
-        policy ??= _policyFactory.Default;
+        policy ??= _defaultPolicy;
         expiration ??= _clock.ToDateTimeOffset(ResolveWriteDuration(policy));
         var removeEntries = new List<CacheEntryOptions>();
         var setEntries = new List<CacheEntryValue<T>>();
@@ -299,20 +299,20 @@ internal sealed partial class MultilayerCache : MultilayerCacheBase, ICache
 
     public ValueTask<bool> RefreshAsync<T>(CacheKey cacheKey, CachePolicy? policy = null, CancellationToken token = default)
     {
-        policy ??= _policyFactory.Default;
+        policy ??= _defaultPolicy;
         return RefreshAsync<T>(cacheKey, ResolveWriteDuration(policy), policy, token);
     }
 
     public ValueTask<bool> RefreshAsync<T>(CacheKey cacheKey, TimeSpan? expiration = null, CachePolicy? policy = null, CancellationToken token = default)
     {
-        policy ??= _policyFactory.Default;
+        policy ??= _defaultPolicy;
         return RefreshAsync<T>(cacheKey, _clock.ToDateTimeOffset(ResolveWriteDuration(policy, expiration)), policy, token);
     }
 
     public async ValueTask<bool> RefreshAsync<T>(CacheKey cacheKey, DateTimeOffset? expiration = null, CachePolicy? policy = null, CancellationToken token = default)
     {
         NotCacheableException.ThrowIfNotCacheable<T>();
-        policy ??= _policyFactory.Default;
+        policy ??= _defaultPolicy;
         expiration ??= _clock.ToDateTimeOffset(ResolveWriteDuration(policy));
         var cacheEntryOptions = _entryBuilder.BuildEntryOptions<T>(cacheKey, expiration, token);
         LogClearingCached(cacheEntryOptions.CacheKey);

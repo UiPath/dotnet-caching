@@ -73,10 +73,8 @@ public class MultilayerCachePerNamePolicyWiringTests : IAsyncLifetime
         var token = TestContext.Current.CancellationToken;
         var defaultTtl = TimeSpan.FromMinutes(9);
         var defaultPolicy = new CachePolicy { DistributedExpiration = defaultTtl };
-        var policyFactory = new DefaultCachePolicyFactory(
-            Array.Empty<KeyValuePair<string, CachePolicy>>(),
-            defaultPolicy);
-        _fixture.Inject<ICachePolicyFactory>(policyFactory);
+        _options.DefaultExpiration = null;
+        _fixture.Inject(new CacheOptions { DefaultCachePolicy = defaultPolicy, AppShortName = "test" });
         _sut = null;
 
         Func<CancellationToken, Task<string?>> generator = _ => Task.FromResult<string?>("v");
@@ -99,10 +97,7 @@ public class MultilayerCachePerNamePolicyWiringTests : IAsyncLifetime
     {
         var token = TestContext.Current.CancellationToken;
         var defaultPolicy = new CachePolicy { Lock = new LockProfile { LocalLockEnabled = false } };
-        var policyFactory = new DefaultCachePolicyFactory(
-            Array.Empty<KeyValuePair<string, CachePolicy>>(),
-            defaultPolicy);
-        _fixture.Inject<ICachePolicyFactory>(policyFactory);
+        _fixture.Inject(new CacheOptions { DefaultCachePolicy = defaultPolicy, AppShortName = "test" });
         _sut = null;
 
         Func<CancellationToken, Task<string?>> generator = _ => Task.FromResult<string?>("v");
@@ -126,10 +121,8 @@ public class MultilayerCachePerNamePolicyWiringTests : IAsyncLifetime
     {
         var defaultTtl = TimeSpan.FromMinutes(9);
         var defaultPolicy = new CachePolicy { DistributedExpiration = defaultTtl };
-        var policyFactory = new DefaultCachePolicyFactory(
-            Array.Empty<KeyValuePair<string, CachePolicy>>(),
-            defaultPolicy);
-        _fixture.Inject<ICachePolicyFactory>(policyFactory);
+        _options.DefaultExpiration = null;
+        _fixture.Inject(new CacheOptions { DefaultCachePolicy = defaultPolicy, AppShortName = "test" });
         _sut = null;
 
         _innerCache.SetAsync<string?>(_cacheKey, Arg.Any<string?>(), Arg.Any<DateTimeOffset?>(), Arg.Any<CachePolicy?>(), Arg.Any<CancellationToken>())
@@ -170,17 +163,13 @@ public class MultilayerCachePerNamePolicyWiringTests : IAsyncLifetime
     [Fact]
     public async Task GetCacheEntry_L2_hit_populates_L1_with_DefaultCachePolicy_LocalExpiration()
     {
-        // DefaultCachePolicy contributes a 1-min L1 cap; provider LocalMaxExpiration is 10 min.
-        // The read-from-L2 populate must apply the policy's smaller cap, not the provider's, so
-        // that a user-set DefaultCachePolicy.LocalExpiration governs read-path L1 hydration
-        // the same way it governs write-path L1.
+        // Provider's LocalMaxExpiration is unset, so user DefaultCachePolicy.LocalExpiration fills
+        // the gap and governs the read-from-L2 populate path on L1. (When provider sets its own,
+        // provider wins per the "specific over generic" precedence.)
         var policyCap = TimeSpan.FromMinutes(1);
-        _options.LocalMaxExpiration = TimeSpan.FromMinutes(10);
+        _options.LocalMaxExpiration = null;
         var defaultPolicy = new CachePolicy { LocalExpiration = policyCap };
-        var policyFactory = new DefaultCachePolicyFactory(
-            Array.Empty<KeyValuePair<string, CachePolicy>>(),
-            defaultPolicy);
-        _fixture.Inject<ICachePolicyFactory>(policyFactory);
+        _fixture.Inject(new CacheOptions { DefaultCachePolicy = defaultPolicy, AppShortName = "test" });
         _sut = null;
 
         var cacheEntry = _fixture.Freeze<Microsoft.Extensions.Caching.Memory.ICacheEntry>();
@@ -219,14 +208,12 @@ public class MultilayerCachePerNamePolicyWiringTests : IAsyncLifetime
     [Fact]
     public async Task RefreshAsync_uses_DefaultCachePolicy_DistributedExpiration_when_caller_omits_expiration()
     {
-        // DefaultCachePolicy says 7 min; provider options.DefaultExpiration is 10 min.
-        // RefreshAsync(key, policy: null, token: token) without explicit expiration must extend to 7 min, not 10.
+        // Provider's DefaultExpiration is unset so user DefaultCachePolicy.DistributedExpiration
+        // fills the gap; RefreshAsync(key, policy: null) extends to the user's 7 min.
         var policyTtl = TimeSpan.FromMinutes(7);
         var defaultPolicy = new CachePolicy { DistributedExpiration = policyTtl };
-        var policyFactory = new DefaultCachePolicyFactory(
-            Array.Empty<KeyValuePair<string, CachePolicy>>(),
-            defaultPolicy);
-        _fixture.Inject<ICachePolicyFactory>(policyFactory);
+        _options.DefaultExpiration = null;
+        _fixture.Inject(new CacheOptions { DefaultCachePolicy = defaultPolicy, AppShortName = "test" });
         _sut = null;
 
         _innerCache.RefreshAsync<string>(_cacheKey, Arg.Any<DateTimeOffset?>(), Arg.Any<CachePolicy?>(), Arg.Any<CancellationToken>())
@@ -249,8 +236,8 @@ public class MultilayerCachePerNamePolicyWiringTests : IAsyncLifetime
         var baseTtl = TimeSpan.FromMinutes(5);
         var maxJitter = TimeSpan.FromSeconds(30);
         var defaultPolicy = new CachePolicy { DistributedExpiration = baseTtl, JitterMaxDuration = maxJitter };
-        var policyFactory = new DefaultCachePolicyFactory(Array.Empty<KeyValuePair<string, CachePolicy>>(), defaultPolicy);
-        _fixture.Inject<ICachePolicyFactory>(policyFactory);
+        _options.DefaultExpiration = null;
+        _fixture.Inject(new CacheOptions { DefaultCachePolicy = defaultPolicy, AppShortName = "test" });
         _sut = null;
 
         _innerCache.SetAsync<string?>(_cacheKey, Arg.Any<string?>(), Arg.Any<DateTimeOffset?>(), Arg.Any<CachePolicy?>(), Arg.Any<CancellationToken>())
@@ -275,8 +262,7 @@ public class MultilayerCachePerNamePolicyWiringTests : IAsyncLifetime
     {
         var maxJitter = TimeSpan.FromMinutes(1);
         var defaultPolicy = new CachePolicy { JitterMaxDuration = maxJitter };
-        var policyFactory = new DefaultCachePolicyFactory(Array.Empty<KeyValuePair<string, CachePolicy>>(), defaultPolicy);
-        _fixture.Inject<ICachePolicyFactory>(policyFactory);
+        _fixture.Inject(new CacheOptions { DefaultCachePolicy = defaultPolicy, AppShortName = "test" });
         _sut = null;
 
         var callerTtl = TimeSpan.FromMinutes(2);
@@ -304,8 +290,8 @@ public class MultilayerCachePerNamePolicyWiringTests : IAsyncLifetime
         var baseTtl = TimeSpan.FromMinutes(5);
         var maxJitter = TimeSpan.FromSeconds(30);
         var defaultPolicy = new CachePolicy { DistributedExpiration = baseTtl, JitterMaxDuration = maxJitter };
-        var policyFactory = new DefaultCachePolicyFactory(Array.Empty<KeyValuePair<string, CachePolicy>>(), defaultPolicy);
-        _fixture.Inject<ICachePolicyFactory>(policyFactory);
+        _options.DefaultExpiration = null;
+        _fixture.Inject(new CacheOptions { DefaultCachePolicy = defaultPolicy, AppShortName = "test" });
         _sut = null;
 
         Func<CancellationToken, Task<string?>> generator = _ => Task.FromResult<string?>("v");
@@ -331,8 +317,7 @@ public class MultilayerCachePerNamePolicyWiringTests : IAsyncLifetime
         var optionsTtl = _options.DefaultExpiration!.Value;
         var maxJitter = TimeSpan.FromSeconds(30);
         var defaultPolicy = new CachePolicy { JitterMaxDuration = maxJitter }; // no DistributedExpiration
-        var policyFactory = new DefaultCachePolicyFactory(Array.Empty<KeyValuePair<string, CachePolicy>>(), defaultPolicy);
-        _fixture.Inject<ICachePolicyFactory>(policyFactory);
+        _fixture.Inject(new CacheOptions { DefaultCachePolicy = defaultPolicy, AppShortName = "test" });
         _sut = null;
 
         _innerCache.SetAsync<string?>(_cacheKey, Arg.Any<string?>(), Arg.Any<DateTimeOffset?>(), Arg.Any<CachePolicy?>(), Arg.Any<CancellationToken>())
@@ -358,8 +343,8 @@ public class MultilayerCachePerNamePolicyWiringTests : IAsyncLifetime
         var baseTtl = TimeSpan.FromMinutes(5);
         var maxJitter = TimeSpan.FromSeconds(30);
         var defaultPolicy = new CachePolicy { DistributedExpiration = baseTtl, JitterMaxDuration = maxJitter };
-        var policyFactory = new DefaultCachePolicyFactory(Array.Empty<KeyValuePair<string, CachePolicy>>(), defaultPolicy);
-        _fixture.Inject<ICachePolicyFactory>(policyFactory);
+        _options.DefaultExpiration = null;
+        _fixture.Inject(new CacheOptions { DefaultCachePolicy = defaultPolicy, AppShortName = "test" });
         _sut = null;
 
         _innerCache.SetAsync<string?>(_cacheKey, Arg.Any<string?>(), Arg.Any<DateTimeOffset?>(), Arg.Any<CachePolicy?>(), Arg.Any<CancellationToken>())
@@ -385,8 +370,8 @@ public class MultilayerCachePerNamePolicyWiringTests : IAsyncLifetime
         var baseTtl = TimeSpan.FromMinutes(5);
         var maxJitter = TimeSpan.FromSeconds(30);
         var defaultPolicy = new CachePolicy { DistributedExpiration = baseTtl, JitterMaxDuration = maxJitter };
-        var policyFactory = new DefaultCachePolicyFactory(Array.Empty<KeyValuePair<string, CachePolicy>>(), defaultPolicy);
-        _fixture.Inject<ICachePolicyFactory>(policyFactory);
+        _options.DefaultExpiration = null;
+        _fixture.Inject(new CacheOptions { DefaultCachePolicy = defaultPolicy, AppShortName = "test" });
         _sut = null;
 
         _innerCache.SetAsync<string?>(Arg.Any<KeyValuePair<CacheKey, string?>[]>(), Arg.Any<DateTimeOffset?>(), Arg.Any<CachePolicy?>(), Arg.Any<CancellationToken>())
@@ -414,8 +399,7 @@ public class MultilayerCachePerNamePolicyWiringTests : IAsyncLifetime
         var baseTtl = TimeSpan.FromSeconds(1);
         var maxJitter = TimeSpan.FromSeconds(10);
         var defaultPolicy = new CachePolicy { DistributedExpiration = baseTtl, JitterMaxDuration = maxJitter };
-        var policyFactory = new DefaultCachePolicyFactory(Array.Empty<KeyValuePair<string, CachePolicy>>(), defaultPolicy);
-        _fixture.Inject<ICachePolicyFactory>(policyFactory);
+        _fixture.Inject(new CacheOptions { DefaultCachePolicy = defaultPolicy, AppShortName = "test" });
         _sut = null;
 
         var ttls = new List<TimeSpan>();
@@ -441,8 +425,7 @@ public class MultilayerCachePerNamePolicyWiringTests : IAsyncLifetime
     {
         var baseTtl = TimeSpan.FromHours(1);
         var defaultPolicy = new CachePolicy { DistributedExpiration = baseTtl, JitterMaxDuration = TimeSpan.MaxValue };
-        var policyFactory = new DefaultCachePolicyFactory(Array.Empty<KeyValuePair<string, CachePolicy>>(), defaultPolicy);
-        _fixture.Inject<ICachePolicyFactory>(policyFactory);
+        _fixture.Inject(new CacheOptions { DefaultCachePolicy = defaultPolicy, AppShortName = "test" });
         _sut = null;
 
         _innerCache.SetAsync<string?>(_cacheKey, Arg.Any<string?>(), Arg.Any<DateTimeOffset?>(), Arg.Any<CachePolicy?>(), Arg.Any<CancellationToken>())

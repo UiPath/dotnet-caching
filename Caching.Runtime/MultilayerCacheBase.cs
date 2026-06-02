@@ -1,4 +1,5 @@
-﻿using UiPath.Platform.Caching.Locking;
+﻿using UiPath.Platform.Caching.Config;
+using UiPath.Platform.Caching.Locking;
 using UiPath.Platform.Caching.Telemetry;
 
 namespace UiPath.Platform.Caching;
@@ -26,8 +27,23 @@ public abstract class MultilayerCacheBase : IDisposable
     private readonly TimeSpan _localLockTimeout;
     private readonly bool _localLockEnabled;
     private readonly bool _distributedLockEnabled;
-    private protected readonly ICachePolicyFactory _policyFactory;
+    private protected readonly CachePolicy _defaultPolicy;
     private static readonly TimeSpan ClockDriftSlack = TimeSpan.FromMinutes(1);
+
+    // Hardcoded fallback values for the lock fields. Merged in as the lowest-priority policy
+    // (after provider-specific + user DefaultCachePolicy) so every cache instance has a fully
+    // resolved Lock — every field non-null — by the time validation runs.
+    private static readonly CachePolicy HardcodedDefaults = new()
+    {
+        Lock = new LockProfile
+        {
+            LocalLockEnabled = true,
+            DistributedLockEnabled = false,
+            LocalLockTimeout = TimeSpan.FromMilliseconds(500),
+            DistributedLockTimeout = TimeSpan.FromMilliseconds(500),
+            DistributedLockExpiry = TimeSpan.FromSeconds(5),
+        },
+    };
 
     protected MultilayerCacheBase(
         string cacheName,
@@ -46,13 +62,15 @@ public abstract class MultilayerCacheBase : IDisposable
     {
         _logger = logger;
         _multiLayerCacheOptions = multiLayerCacheOptions;
-        ValidateExpirationOptions(multiLayerCacheOptions);
-        ValidateLockOptions(multiLayerCacheOptions);
+        _defaultPolicy = CachePolicyMerger.Merge(
+            CachePolicyMerger.Merge(CachePolicyFromMultilayerOptions.Build(multiLayerCacheOptions), policyFactory.Default),
+            HardcodedDefaults);
+        CachePolicyFactoryValidator.ValidateAgainstEffectiveDefault(policyFactory, cacheOptions.DistributedLockPollInterval, _defaultPolicy);
         _memoryCache = memoryCacheFactory.Get(memoryOptions);
         Telemetry = telemetryProvider;
         _cacheEntryFactory = _multiLayerCacheOptions.EntryFactory ?? new CacheEntryFactory();
         _monitor = _memoryCache.Monitor(multiLayerCacheOptions, Telemetry, GetType().Name);
-        _clock = new CacheClock(_multiLayerCacheOptions.Clock, _multiLayerCacheOptions.DefaultExpiration);
+        _clock = new CacheClock(_multiLayerCacheOptions.Clock, _defaultPolicy.DistributedExpiration);
         _topicProvider = topicFactory.Get(_multiLayerCacheOptions.Topic);
         _eventPublisher = new CacheEventPublisher(cacheName, _topicProvider, cacheEventFactory, logger);
         var connectionMonitorEnabled = multiLayerCacheOptions.ConnectionMonitorEnabled ?? cacheOptions.ConnectionMonitorEnabled;
@@ -62,12 +80,12 @@ public abstract class MultilayerCacheBase : IDisposable
         _distributedLock = distributedLock;
         _lockKeyStrategy = multiLayerCacheOptions.LockKeyStrategy ?? new DefaultDistributedLockKeyStrategy(cacheOptions.Separator);
         _localLockKeyPrefix = cacheName + cacheOptions.Separator;
-        _distributedLockExpiry = multiLayerCacheOptions.DistributedLockExpiry ?? TimeSpan.FromSeconds(5);
-        _distributedLockTimeout = multiLayerCacheOptions.DistributedLockTimeout ?? TimeSpan.FromMilliseconds(500);
-        _localLockTimeout = multiLayerCacheOptions.LocalLockTimeout ?? TimeSpan.FromMilliseconds(500);
-        _localLockEnabled = multiLayerCacheOptions.LocalLockEnabled ?? true;
-        _distributedLockEnabled = multiLayerCacheOptions.DistributedLockEnabled ?? false;
-        _policyFactory = policyFactory;
+        var defaultLock = _defaultPolicy.Lock!;
+        _distributedLockExpiry = defaultLock.DistributedLockExpiry!.Value;
+        _distributedLockTimeout = defaultLock.DistributedLockTimeout!.Value;
+        _localLockTimeout = defaultLock.LocalLockTimeout!.Value;
+        _localLockEnabled = defaultLock.LocalLockEnabled!.Value;
+        _distributedLockEnabled = defaultLock.DistributedLockEnabled!.Value;
         Name = cacheName;
         _rehydrator = new RehydrationCoordinator(cacheName, _clock, distributedLock, _lockKeyStrategy, telemetryProvider, logger);
     }
@@ -226,49 +244,4 @@ public abstract class MultilayerCacheBase : IDisposable
         }
     }
 
-    private static void ValidateExpirationOptions(IMultilayerCacheOptions options)
-    {
-        if (options.LocalMaxExpiration.HasValue &&
-            options.LocalMaxExpirationDisconnected.HasValue &&
-            options.LocalMaxExpirationDisconnected.Value > options.LocalMaxExpiration.Value)
-        {
-            throw new ArgumentException(
-                $"{nameof(options.LocalMaxExpirationDisconnected)} ({options.LocalMaxExpirationDisconnected.Value}) must be less than or equal to {nameof(options.LocalMaxExpiration)} ({options.LocalMaxExpiration.Value}).",
-                nameof(options));
-        }
-    }
-
-    private static void ValidateLockOptions(IMultilayerCacheOptions options)
-    {
-        if (options.DistributedLockExpiry is { } expiry && expiry <= TimeSpan.Zero)
-        {
-            throw new ArgumentOutOfRangeException(
-                nameof(options),
-                expiry,
-                $"{nameof(IMultilayerCacheOptions.DistributedLockExpiry)} must be greater than zero.");
-        }
-        if (options.DistributedLockTimeout is { } timeout && timeout < TimeSpan.Zero)
-        {
-            throw new ArgumentOutOfRangeException(
-                nameof(options),
-                timeout,
-                $"{nameof(IMultilayerCacheOptions.DistributedLockTimeout)} must be greater than or equal to zero.");
-        }
-        if (options.LocalLockTimeout is { } localTimeout && localTimeout <= TimeSpan.Zero)
-        {
-            throw new ArgumentOutOfRangeException(
-                nameof(options),
-                localTimeout,
-                $"{nameof(IMultilayerCacheOptions.LocalLockTimeout)} must be greater than zero.");
-        }
-        if (options.LocalLockEnabled == false && options.DistributedLockEnabled == true)
-        {
-            throw new ArgumentException(
-                $"{nameof(IMultilayerCacheOptions.LocalLockEnabled)}=false with " +
-                $"{nameof(IMultilayerCacheOptions.DistributedLockEnabled)}=true weakens single-flight: " +
-                "every local caller competes independently for the distributed lock, multiplying " +
-                "LockTakeAsync round-trips per node. Enable both or disable both.",
-                nameof(options));
-        }
-    }
 }

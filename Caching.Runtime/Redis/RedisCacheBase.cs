@@ -1,13 +1,45 @@
-﻿using UiPath.Platform.Caching.Telemetry;
+using UiPath.Platform.Caching.Config;
+using UiPath.Platform.Caching.Telemetry;
 
 namespace UiPath.Platform.Caching.Redis;
 
-public abstract class RedisCacheBase(IRedisConnector redis, ICachingTelemetryProvider telemetryProvider, bool monitorConnection) : IConnectionState, IDisposable
+public abstract class RedisCacheBase : IConnectionState, IDisposable
 {
+    private readonly IRedisConnector _redis;
+    private readonly IConnectionState _connectionState;
     private bool _disposed;
-    private readonly IConnectionState _connectionState = monitorConnection ? redis : NullConnectionStateMonitor.Instance;
 
-    protected ICachingTelemetryProvider Telemetry { get; } = telemetryProvider;
+    protected RedisCacheBase(
+        IRedisConnector redis,
+        ICachingTelemetryProvider telemetryProvider,
+        RedisCacheOptions redisCacheOptions,
+        CacheOptions cacheOptions,
+        ICachePolicyFactory policyFactory)
+    {
+        _redis = redis;
+        Telemetry = telemetryProvider;
+        var monitorConnection = redisCacheOptions.ConnectionMonitorEnabled ?? cacheOptions.ConnectionMonitorEnabled;
+        _connectionState = monitorConnection ? redis : NullConnectionStateMonitor.Instance;
+        DefaultPolicy = CachePolicyMerger.Merge(
+            new CachePolicy { DistributedExpiration = redisCacheOptions.DefaultExpiration },
+            policyFactory.Default);
+        DefaultExpiration = DefaultPolicy.DistributedExpiration;
+        Clock = new CacheClock(redisCacheOptions.Clock, DefaultExpiration);
+    }
+
+    protected ICachingTelemetryProvider Telemetry { get; }
+
+    protected CachePolicy DefaultPolicy { get; }
+
+    protected TimeSpan? DefaultExpiration { get; }
+
+    protected CacheClock Clock { get; }
+
+    protected TimeSpan? ResolveExpiration(TimeSpan? expiration, CachePolicy? policy) =>
+        expiration ?? policy?.DistributedExpiration ?? DefaultExpiration;
+
+    protected DateTimeOffset ResolveExpiration(DateTimeOffset? expiration, CachePolicy? policy) =>
+        expiration ?? Clock.ToDateTimeOffset(policy?.DistributedExpiration ?? DefaultExpiration);
 
     public event EventHandler? OnConnectionFailed
     {
@@ -29,7 +61,7 @@ public abstract class RedisCacheBase(IRedisConnector redis, ICachingTelemetryPro
 
     public bool IsConnected => _connectionState.IsConnected;
 
-    protected IDatabase Database => redis.Database;
+    protected IDatabase Database => _redis.Database;
 
     public void Dispose()
     {

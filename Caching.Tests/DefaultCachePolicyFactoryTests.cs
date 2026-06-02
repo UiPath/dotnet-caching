@@ -5,38 +5,30 @@ namespace UiPath.Platform.Caching.Tests;
 public class DefaultCachePolicyFactoryTests
 {
     [Fact]
-    public void Resolve_returns_default_when_name_not_registered()
+    public void Resolve_returns_null_when_name_not_registered()
     {
         var defaults = new CachePolicy { LocalExpiration = TimeSpan.FromMinutes(5) };
         var factory = new DefaultCachePolicyFactory(new Dictionary<string, CachePolicy>(), defaults);
 
-        factory.Resolve("nothing-registered").Should().BeSameAs(defaults);
+        factory.Resolve("nothing-registered").Should().BeNull();
     }
 
     [Fact]
-    public void Resolve_returns_Empty_when_name_not_registered_and_no_default()
-    {
-        var factory = new DefaultCachePolicyFactory(new Dictionary<string, CachePolicy>(), defaultPolicy: null);
-
-        factory.Resolve("anything").Should().BeSameAs(CachePolicy.Empty);
-    }
-
-    [Fact]
-    public void Resolve_returns_default_when_policyName_is_null()
+    public void Resolve_returns_null_when_policyName_is_null()
     {
         var defaults = new CachePolicy { LocalExpiration = TimeSpan.FromMinutes(5) };
         var factory = new DefaultCachePolicyFactory(new Dictionary<string, CachePolicy>(), defaults);
 
-        factory.Resolve(null!).Should().BeSameAs(defaults);
+        factory.Resolve(null!).Should().BeNull();
     }
 
     [Fact]
-    public void Resolve_returns_default_when_policyName_is_empty()
+    public void Resolve_returns_null_when_policyName_is_empty()
     {
         var defaults = new CachePolicy { LocalExpiration = TimeSpan.FromMinutes(5) };
         var factory = new DefaultCachePolicyFactory(new Dictionary<string, CachePolicy>(), defaults);
 
-        factory.Resolve(string.Empty).Should().BeSameAs(defaults);
+        factory.Resolve(string.Empty).Should().BeNull();
     }
 
     [Fact]
@@ -51,7 +43,8 @@ public class DefaultCachePolicyFactoryTests
 
         var policy = factory.Resolve("clients-cache");
 
-        policy.LocalExpiration.Should().Be(TimeSpan.FromMinutes(1));
+        policy.Should().NotBeNull();
+        policy!.LocalExpiration.Should().Be(TimeSpan.FromMinutes(1));
         policy.DistributedExpiration.Should().Be(TimeSpan.FromMinutes(10), "inherited from default");
     }
 
@@ -67,15 +60,6 @@ public class DefaultCachePolicyFactoryTests
         var second = factory.Resolve("x");
 
         first.Should().BeSameAs(second, "pre-merged once at construction; the hot path is a dictionary lookup, no allocation");
-    }
-
-    [Fact]
-    public void Resolve_never_returns_null()
-    {
-        var factory = new DefaultCachePolicyFactory(new Dictionary<string, CachePolicy>(), defaultPolicy: null);
-
-        factory.Resolve("any").Should().NotBeNull();
-        factory.Resolve("").Should().NotBeNull();
     }
 
     [Fact]
@@ -102,7 +86,7 @@ public class DefaultCachePolicyFactoryTests
             new Dictionary<string, CachePolicy> { ["Clients-Cache"] = named },
             defaultPolicy: null);
 
-        factory.Resolve("clients-cache").LocalExpiration.Should().Be(TimeSpan.FromMinutes(1));
-        factory.Resolve("CLIENTS-CACHE").LocalExpiration.Should().Be(TimeSpan.FromMinutes(1));
+        factory.Resolve("clients-cache")!.LocalExpiration.Should().Be(TimeSpan.FromMinutes(1));
+        factory.Resolve("CLIENTS-CACHE")!.LocalExpiration.Should().Be(TimeSpan.FromMinutes(1));
     }
 }

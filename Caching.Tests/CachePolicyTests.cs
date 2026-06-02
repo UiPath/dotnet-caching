@@ -3,19 +3,6 @@ namespace UiPath.Platform.Caching.Tests;
 public class CachePolicyTests
 {
     [Fact]
-    public void Empty_singleton_has_all_null_fields()
-    {
-        var empty = CachePolicy.Empty;
-
-        empty.LocalExpiration.Should().BeNull();
-        empty.DistributedExpiration.Should().BeNull();
-        empty.FactoryTimeout.Should().BeNull();
-        empty.RehydrateEnabled.Should().BeNull();
-        empty.Rehydrate.Should().BeNull();
-        empty.Lock.Should().BeNull();
-    }
-
-    [Fact]
     public void Default_constructed_has_all_null_fields()
     {
         var policy = new CachePolicy();

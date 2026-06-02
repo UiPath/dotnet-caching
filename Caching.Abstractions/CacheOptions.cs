@@ -79,9 +79,9 @@ public class CacheOptions
 
     /// <summary>
     /// Fallback policy used when a cache instance's name is not registered in <see cref="Policies"/>.
-    /// When null, <c>ICachePolicyFactory.Default</c> is <c>CachePolicy.Empty</c> — provider-specific
-    /// defaults (<c>IMultilayerCacheOptions.DefaultExpiration</c>, lock fields, etc.) are applied at
-    /// call time by each impl, not propagated through the factory.
+    /// When null, each cache implementation materializes its own effective default from its provider
+    /// options (<c>IMultilayerCacheOptions.LocalMaxExpiration</c>, <c>DefaultExpiration</c>, lock
+    /// fields, etc.) at construction.
     /// </summary>
     public CachePolicy? DefaultCachePolicy { get; set; }
 }

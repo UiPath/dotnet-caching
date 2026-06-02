@@ -1274,11 +1274,12 @@ public class MultilayerHashCacheTests(ITestContextAccessor testContextAccessor) 
 
         Action act = () => _fixture.Create<MultilayerHashCache>();
 
-        var ex = act.Should().Throw<Exception>().Which;
-        ex.InnerException!.InnerException.Should().BeOfType<ArgumentException>()
-            .Which.Message.Should().Contain("LocalMaxExpirationDisconnected")
+        act.Should().Throw<Exception>()
+            .Which.GetBaseException()
+            .Should().BeOfType<OptionsValidationException>()
+            .Which.Message.Should().Contain("LocalExpirationDisconnected")
             .And.Contain("must be less than or equal to")
-            .And.Contain("LocalMaxExpiration");
+            .And.Contain("LocalExpiration");
     }
 
     [Fact]

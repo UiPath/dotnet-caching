@@ -2,10 +2,18 @@ namespace UiPath.Platform.Caching.Config;
 
 public static class CachePolicyMerger
 {
-    public static CachePolicy Merge(CachePolicy primary, CachePolicy fallback)
+    [return: NotNullIfNotNull(nameof(primary))]
+    [return: NotNullIfNotNull(nameof(fallback))]
+    public static CachePolicy? Merge(CachePolicy? primary, CachePolicy? fallback)
     {
-        ArgumentNullException.ThrowIfNull(primary);
-        ArgumentNullException.ThrowIfNull(fallback);
+        if (primary is null)
+        {
+            return fallback;
+        }
+        if (fallback is null)
+        {
+            return primary;
+        }
         return new()
         {
             LocalExpiration = primary.LocalExpiration ?? fallback.LocalExpiration,
