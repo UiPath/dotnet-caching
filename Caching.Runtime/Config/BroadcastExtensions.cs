@@ -1,4 +1,3 @@
-using UiPath.Platform.Caching.Broadcast;
 using UiPath.Platform.Caching.Broadcast.Redis;
 
 namespace UiPath.Platform.Caching.Config;
@@ -6,12 +5,12 @@ namespace UiPath.Platform.Caching.Config;
 [ExcludeFromCodeCoverage]
 public static class BroadcastExtensions
 {
-    private const string DefaultFielKey = "BroadcastEnabled";
+    private const string BroadcastEnabledKey = "BroadcastEnabled";
     private const string RedisPubSubSectionName = "Broadcast:RedisPubSub";
     private const string RedisStreamsSectionName = "Broadcast:RedisStreams";
 
     public static ICachingBuilder AddBroadcast(this ICachingBuilder builder) =>
-        builder.AddBroadcast(DefaultFielKey);
+        builder.AddBroadcast(BroadcastEnabledKey);
 
     public static ICachingBuilder AddBroadcast(this ICachingBuilder builder, string fieldName) =>
         builder.AddBroadcast(builder.Configuration.GetValue<bool?>(fieldName).GetValueOrDefault(true));

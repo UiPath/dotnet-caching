@@ -1,8 +1,10 @@
-﻿namespace UiPath.Platform.Caching;
+namespace UiPath.Platform.Caching;
 
 public interface ICacheFactory : IDisposable
 {
     IEnumerable<string> ProviderNames { get; }
+
+    ICachePolicyFactory? PolicyFactory => null;
 
     ICache CreateCache(string? providerName = null);
 

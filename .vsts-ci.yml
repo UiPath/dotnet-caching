@@ -32,7 +32,7 @@ stages:
         vmImage: ubuntu-latest
       variables:
         BuildConfiguration: Release
-        Solution: "$(Build.SourcesDirectory)/Caching/Caching.sln"
+        Solution: "$(Build.SourcesDirectory)/Caching/Caching.slnx"
         ArtifactsOutputPath: Packages
         Build.Repository.Clean: true
         build_counter: $[counter('build_counter_1_0_0', 1)]

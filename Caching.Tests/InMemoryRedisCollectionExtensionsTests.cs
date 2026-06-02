@@ -1,8 +1,6 @@
-using Microsoft.Extensions.DependencyInjection;
+﻿using Microsoft.Extensions.DependencyInjection;
 using StackExchange.Redis;
-using UiPath.Platform.Caching.Broadcast;
 using UiPath.Platform.Caching.Config;
-using UiPath.Platform.Caching.Redis;
 
 namespace UiPath.Platform.Caching.Tests;
 

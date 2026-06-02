@@ -1,6 +1,6 @@
 namespace UiPath.Platform.Caching.Config;
 
-internal sealed class NullCachePolicyFactory : ICachePolicyFactory
+public sealed class NullCachePolicyFactory : ICachePolicyFactory
 {
     public static readonly NullCachePolicyFactory Instance = new();
 

@@ -1,6 +1,4 @@
-using Microsoft.Extensions.Caching.Memory;
-using Microsoft.Extensions.Internal;
-using Microsoft.Extensions.Logging;
+﻿using Microsoft.Extensions.Caching.Memory;
 using UiPath.Platform.Caching.Locking;
 using UiPath.Platform.Caching.Tests.Broadcast;
 

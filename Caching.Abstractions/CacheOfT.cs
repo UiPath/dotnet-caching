@@ -6,38 +6,30 @@ public class Cache<T> : ICache<T>
     private readonly ICache _cache;
     private readonly ICacheKeyStrategy _cacheKeyStrategy;
 
-    public Cache(ICacheFactory cacheFactory, ICachePolicyFactory? policyFactory = null, string? name = null)
-        : this(cacheFactory.CreateCache(), cacheKeyStrategy: null, policyFactory, name)
+    public Cache(ICacheFactory cacheFactory, ICacheKeyStrategy? cacheKeyStrategy = null, ICachePolicyFactory? policyFactory = null, string? policyName = null)
+    : this(cacheFactory.CreateCache(), cacheKeyStrategy, (policyFactory ?? cacheFactory.PolicyFactory)?.Resolve(policyName ?? typeof(T).FullName ?? typeof(T).Name))
     {
     }
 
     public Cache(
         ICache cache,
         ICacheKeyStrategy? cacheKeyStrategy = null,
-        ICachePolicyFactory? policyFactory = null,
-        string? name = null)
+        CachePolicy? policy = null)
     {
         NotCacheableException.ThrowIfNotCacheable<T>();
         _cache = cache;
         _cacheKeyStrategy = cacheKeyStrategy ?? new DefaultCacheKeyStrategy();
-        PolicyName = name ?? typeof(T).FullName ?? typeof(T).Name;
-        Policy = policyFactory?.Resolve(PolicyName);
+        Policy = policy;
     }
 
     public string Name => _cache.Name;
 
     /// <summary>
-    /// Cache instance name used for policy resolution. Defaults to <c>typeof(T).FullName ?? typeof(T).Name</c>.
-    /// For closed generics like <c>Cache&lt;Dictionary&lt;string,int&gt;&gt;</c>, <c>FullName</c> is a long
-    /// assembly-qualified string that's awkward to hand-write in <c>appsettings.json</c> under
-    /// <c>CacheOptions.Policies</c> — pass an explicit <c>name:</c> at construction in that case.
-    /// </summary>
-    public string PolicyName { get; }
-
-    /// <summary>
-    /// Resolved <see cref="CachePolicy"/> captured at construction when an <c>ICachePolicyFactory</c>
-    /// was supplied. <c>null</c> when no factory is wired — the underlying <see cref="ICache"/>
-    /// coalesces to its factory's <c>Default</c> on every call, so cache-wide
+    /// Resolved <see cref="CachePolicy"/> snapshot taken at construction. Supplied directly via the
+    /// base ctor's <c>policy</c> argument, or resolved by the DI-injected <c>ICachePolicyFactory</c>
+    /// (falling back to <see cref="ICacheFactory.PolicyFactory"/> when no DI factory is registered).
+    /// <c>null</c> when neither source is wired — the underlying <see cref="ICache"/> then coalesces
+    /// to its factory's <c>Default</c> on every call, so cache-wide
     /// <c>CacheOptions.DefaultCachePolicy</c> defaults are still honored.
     /// </summary>
     public CachePolicy? Policy { get; }

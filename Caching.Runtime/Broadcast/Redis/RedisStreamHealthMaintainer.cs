@@ -51,6 +51,10 @@ public partial class RedisStreamHealthMaintainer : IHostedService
 
     public Task StartAsync(CancellationToken cancellationToken)
     {
+        if (!_cacheOptions.BroadcastEnabled)
+        {
+            return Task.CompletedTask;
+        }
         Initialize();
         Task = Task.Run(Start, _cancellationToken);
         return Task.CompletedTask;

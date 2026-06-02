@@ -1,6 +1,5 @@
-using StackExchange.Redis;
+﻿using StackExchange.Redis;
 using UiPath.Platform.Caching.Locking;
-using UiPath.Platform.Caching.Redis;
 using UiPath.Platform.Caching.Telemetry;
 using UiPath.Platform.Caching.Tests.Telemetry;
 

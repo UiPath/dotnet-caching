@@ -1,8 +1,6 @@
-using Microsoft.Extensions.Configuration;
+﻿using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging.Abstractions;
-using UiPath.Platform.Caching.Broadcast;
-using UiPath.Platform.Caching.Broadcast.Redis;
 using UiPath.Platform.Caching.Config;
 
 namespace UiPath.Platform.Caching.Tests;

@@ -1,5 +1,4 @@
-using FluentAssertions.Extensions;
-using UiPath.Platform.Caching.Broadcast.Redis;
+﻿using FluentAssertions.Extensions;
 
 namespace UiPath.Platform.Caching.Tests.Broadcast;
 

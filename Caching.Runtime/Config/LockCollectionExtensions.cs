@@ -1,5 +1,4 @@
-using UiPath.Platform.Caching.Locking;
-using UiPath.Platform.Caching.Redis;
+﻿using UiPath.Platform.Caching.Locking;
 
 namespace UiPath.Platform.Caching.Config;
 

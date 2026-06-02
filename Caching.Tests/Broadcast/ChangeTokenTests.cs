@@ -1,6 +1,5 @@
 ﻿using Microsoft.Extensions.Logging;
 using StackExchange.Redis;
-using UiPath.Platform.Caching.Telemetry;
 using UiPath.Platform.Caching.Tests.Telemetry;
 
 namespace UiPath.Platform.Caching.Tests.Broadcast;

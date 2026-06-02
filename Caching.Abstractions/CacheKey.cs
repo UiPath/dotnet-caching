@@ -20,15 +20,6 @@ public readonly struct CacheKey : IEquatable<CacheKey>
     public bool Equals(CacheKey other) =>
         string.Equals(Name, other.Name, StringComparison.InvariantCultureIgnoreCase);
 
-    public bool Equals(int other) =>
-        Equals((CacheKey)other);
-
-    public bool Equals(long other) =>
-        Equals((CacheKey)other);
-
-    public bool Equals(Guid other) =>
-        Equals((CacheKey)other);
-
     public bool IsNull => string.IsNullOrEmpty(Name);
 
     public override string ToString() =>
