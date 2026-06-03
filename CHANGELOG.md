@@ -30,3 +30,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 - `AddInMemoryRedis` and `AddResilienceStrategies` no longer use a process-static `_callbackRegistered` flag to gate their on-complete callback. The static guard silently broke L1 invalidation / resilience pipelines for any second host wired up in the same process: only the first builder's callback ever ran, leaving subsequent builders with `NullChangeTokenFactory` and `ResiliencePipelineHolder.Empty`. Both extensions now register their callbacks against `typeof(self)` via the keyed `RegisterOnCompleteCallback` overload.
 - `AddResilienceStrategies` no longer stores telemetry enable/config in process-static fields. `IResiliencePipelineFactory` now resolves `IOptions<TelemetryOptions>` and `IOptions<ResiliencePoliciesOptions>` from its own container, so two hosts in the same process keep independent telemetry settings. Previously the second `AddResilienceStrategies` call would silently overwrite the first host's telemetry configuration (the factory singleton read the statics at resolution time, not at registration time).
 
+### Documentation
+
+- Restructured `docs/` into a layered surface: `quickstart.md`, `concepts.md`, `how-to/`, `recipes/`, `reference/`. `docs/basics.md`, `docs/advanced-usage.md`, and `docs/telemetry.md` are removed; their content is migrated. See `docs/index.md` for the decision tree.
+- `Sample.AspNetCore/appsettings.all.json` now lists every binding-visible option on every shipped options class with shipped defaults. Verified by `Caching.Tests/AppSettingsAllJsonBindingTests.cs`.
+
