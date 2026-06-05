@@ -12,6 +12,7 @@ internal sealed class ResiliencePipelineWrapper(IResiliencePipelineFactory facto
         var pipeline = GetPipeline(defaultValue);
         return pipeline.ExecuteAsync(callback, cancellationToken);
     }
+
     private ResiliencePipeline<TResult> GetPipeline<TResult>(TResult defaultValue)
     {
         var key = (typeof(TResult), defaultValue);

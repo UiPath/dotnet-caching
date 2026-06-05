@@ -30,7 +30,7 @@ public sealed partial class RedisPubSubTopic<T> : ITopic<T>
         IRedisChannelStrategy redisChannelStrategy,
         Func<IEventSubject<T>> subjectFactory,
         IEventFormatterProxy<T> formatter,
-        IResiliencePipelineHolder resiliencePipelineHolder,
+        IResiliencePipelineProvider resiliencePipelineProvider,
         RedisPubSubTopicOptions options,
         ILogger<RedisPubSubTopic<T>> logger,
         CancellationToken stopToken)
@@ -40,7 +40,7 @@ public sealed partial class RedisPubSubTopic<T> : ITopic<T>
         _redisChannel = redisChannelStrategy.GetRedisChannel(topicKey);
         _stopTokenSource = CancellationTokenSource.CreateLinkedTokenSource(stopToken);
         _formatter = formatter;
-        _write = resiliencePipelineHolder.Write;
+        _write = resiliencePipelineProvider.Get(ResiliencePipelineNames.Write);
         _redis = redis;
         _logger = logger;
         _options = options;

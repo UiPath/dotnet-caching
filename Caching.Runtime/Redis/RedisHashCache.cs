@@ -21,7 +21,7 @@ internal sealed partial class RedisHashCache : RedisCacheBase, IHashCache
     public RedisHashCache(
         IRedisConnector redis,
         ISerializerProxy<RedisValue> serializer,
-        IResiliencePipelineHolder resiliencePipelineHolder,
+        IResiliencePipelineProvider resiliencePipelineProvider,
         ICachingTelemetryProvider telemetryProvider,
         RedisCacheOptions redisCacheOptions,
         CacheOptions cacheOptions,
@@ -31,8 +31,8 @@ internal sealed partial class RedisHashCache : RedisCacheBase, IHashCache
     {
         _serializer = serializer;
         _logger = logger;
-        _read = resiliencePipelineHolder.Read;
-        _write = resiliencePipelineHolder.Write;
+        _read = resiliencePipelineProvider.Get(ResiliencePipelineNames.Read);
+        _write = resiliencePipelineProvider.Get(ResiliencePipelineNames.Write);
         _cacheOptions = cacheOptions;
         _cacheEntryFactory = redisCacheOptions.EntryFactory ?? new CacheEntryFactory();
         _supportsExpireTime = RedisUtils.SupportsExpireTime(redis.Version);

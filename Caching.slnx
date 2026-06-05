@@ -16,6 +16,7 @@
   <Project Path="Caching.BenchmarkTests/Caching.BenchmarkTests.csproj" />
   <Project Path="Caching.CloudEvents/Caching.CloudEvents.csproj" />
   <Project Path="Caching.Polly/Caching.Polly.csproj" />
+  <Project Path="Caching.Queue/Caching.Queue.csproj" />
   <Project Path="Caching.Runtime/Caching.Runtime.csproj" />
   <Project Path="Caching.Telemetry/Caching.Telemetry.csproj" />
   <Project Path="Caching.Tests/Caching.Tests.csproj" />

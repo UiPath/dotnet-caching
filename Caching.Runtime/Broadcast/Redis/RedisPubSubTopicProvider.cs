@@ -7,7 +7,7 @@ public class RedisPubSubTopicProvider : RedisTopicProviderBase
 {
     private readonly RedisPubSubTopicOptions _options;
     private readonly IEventFormatterProxy<ICacheEvent> _formatter;
-    private readonly IResiliencePipelineHolder _resiliencePipelineHolder;
+    private readonly IResiliencePipelineProvider _resiliencePipelineProvider;
     private readonly PerTopicOptionsRegistry<RedisPubSubTopicOptions> _registry;
     private readonly Uri _sourceUri;
     private readonly IRedisChannelStrategy _defaultChannelStrategy;
@@ -21,7 +21,7 @@ public class RedisPubSubTopicProvider : RedisTopicProviderBase
         PerTopicOptionsRegistry<RedisPubSubTopicOptions> registry,
         IRedisConnector redis,
         IEventFormatterProxy<ICacheEvent> formatter,
-        IResiliencePipelineHolder resiliencePipelineHolder,
+        IResiliencePipelineProvider resiliencePipelineProvider,
         ICachingTelemetryProvider telemetryProvider,
         IRedisProfiler redisProfiler,
         ILoggerFactory loggerFactory)
@@ -31,7 +31,7 @@ public class RedisPubSubTopicProvider : RedisTopicProviderBase
         var cacheOptions = cacheOptionsAccessor.Value;
         _registry = registry;
         _formatter = formatter;
-        _resiliencePipelineHolder = resiliencePipelineHolder;
+        _resiliencePipelineProvider = resiliencePipelineProvider;
         _logger = loggerFactory.Create<RedisPubSubTopicProvider>();
         _sourceUri = cacheOptions.SourceUri ?? CacheOptions.MachineUri;
         _defaultChannelStrategy = _options.RedisChannelStrategy ?? new PrefixStrategy(RedisTypePrefixes.PubSub, cacheOptions);
@@ -54,7 +54,7 @@ public class RedisPubSubTopicProvider : RedisTopicProviderBase
             strategy,
             () => new KeyedSubject<ICacheEvent>(LoggerFactory.Create<KeyedSubject<ICacheEvent>>(), resolved.SlowObserverThreshold),
             _formatter,
-            _resiliencePipelineHolder,
+            _resiliencePipelineProvider,
             resolved,
             LoggerFactory.Create<RedisPubSubTopic<ICacheEvent>>(),
             _stopTokenSource.Token);

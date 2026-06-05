@@ -20,7 +20,7 @@ public class RedisHashCacheTests(ITestContextAccessor testContextAccessor) : IAs
     private ISystemClock _clock = default!;
     private RedisCacheOptions _redisCacheOptions = new();
     private DateTimeOffset _now = DateTimeOffset.UtcNow;
-    private IResiliencePipelineHolder _pipelineHolder = default!;
+    private IResiliencePipelineProvider _pipelineProvider = default!;
     private CacheKey _cacheKey = default!;
     private RedisKey _redisKey = default!;
     private ICacheKeyStrategy _cacheKeyStrategy = default!;
@@ -1286,10 +1286,10 @@ public class RedisHashCacheTests(ITestContextAccessor testContextAccessor) : IAs
         _clock.UtcNow.Returns(c => _now);
         _logger = _fixture.Freeze<ILogger<RedisHashCache>>();
         _logger.IsEnabled(Arg.Any<LogLevel>()).Returns(true);
-        _pipelineHolder = _fixture.Freeze<IResiliencePipelineHolder>();
+        _pipelineProvider = _fixture.Freeze<IResiliencePipelineProvider>();
         var resiliencePipeline = new EmptyResiliencePipeline();
-        _pipelineHolder.Read.Returns(resiliencePipeline);
-        _pipelineHolder.Write.Returns(resiliencePipeline);
+        _pipelineProvider.Get(ResiliencePipelineNames.Read).Returns(resiliencePipeline);
+        _pipelineProvider.Get(ResiliencePipelineNames.Write).Returns(resiliencePipeline);
         _database.CreateTransaction().Returns(_transaction);
         _cacheKeyStrategy = _fixture.Create<ICacheKeyStrategy>();
         var redisKeyStrategyFactory = _fixture.Create<IRedisKeyStrategyFactory>();

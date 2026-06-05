@@ -307,6 +307,58 @@ via `ResiliencePoliciesOptions`:
 
 See [reference/settings.md](../reference/settings.md) for the full reference.
 
+### Retries and non-idempotent operations
+
+`RetryCount` defaults to `1` and the retry strategy handles **every** exception, including the
+per-attempt `RequestTimeout` (`TimeoutRejectedException`). For idempotent commands this is safe —
+replaying `SADD`/`SREM`/`SET`/`DEL`/`EXPIRE` converges to the same end state (only the returned
+count may differ). It is **not** safe for destructive-read commands like `SPOP` (and the planned
+`LPOP`/`RPOP`): if the server executed the pop but the response was lost to a timeout or a
+connection drop, a retry pops a *different* set of members and the first batch is gone forever —
+silent data loss.
+
+Such operations therefore do **not** go through the retrying `Write` pipeline. The set cache
+resolves a configurable pipeline via `IResiliencePipelineProvider.Get(RedisSetCacheOptions.ResilienceKeyName)`.
+Register your own pipeline for that name and point the set cache at it:
+
+```csharp
+builder
+    .AddResilienceStrategies()
+    .AddResiliencePipeline("set-pop", o => o.RetryCount = 0)   // timeout + breaker + fallback, no retry
+    .AddRedisSetCache(o => o.ResilienceKeyName = "set-pop");
+```
+
+If `ResilienceKeyName` is left null/empty (the default), or names a pipeline that was never
+registered, `Get` returns the no-op `EmptyResiliencePipeline` — `SPOP` runs raw, with no retry,
+circuit-breaker or timeout. This is the safe default for non-idempotent commands: on a transient
+failure the op fails (returning the empty/default result) rather than risk popping members that
+are never returned to any caller, so `PopAsync` is **at-most-once**. The idempotent read/write
+operations continue to use the predefined `Read` / `Write` pipelines.
+
+### Registering your own pipelines
+
+`AddResiliencePipeline(name, configure)` registers a named pipeline built from its own
+`ResiliencePoliciesOptions`. The `name` is the scope you pass to `IResiliencePipelineProvider.Get(name)`.
+`AddResilienceStrategies` predefines `ResiliencePipelineNames.Read` and `ResiliencePipelineNames.Write`
+from the base configuration; you can add new names or retune the built-ins (named options compose, so
+the last `configure` for a name wins per field):
+
+```csharp
+builder
+    .AddResilienceStrategies(o => o.RetryCount = 1)            // base config for read + write
+    .AddResiliencePipeline(ResiliencePipelineNames.Write, o => o.RetryCount = 3)  // retune write
+    .AddResiliencePipeline("bulk-import", o =>                 // a brand-new pipeline
+    {
+        o.RequestTimeout = TimeSpan.FromSeconds(10);
+        o.RetryCount = 0;
+    });
+```
+
+Only registered names resolve to a real pipeline; `Get` on any other name is a no-op. To take full
+control of the Polly strategy chain (beyond what `ResiliencePoliciesOptions` exposes), subclass
+`ResiliencePipelineFactory`, override `Create`/`GetBuilder`, and register your factory after
+`AddResilienceStrategies`.
+
 ### Why exception count, not error rate
 
 The circuit-breaker counts absolute failures inside a sliding `DurationOfBreak` window

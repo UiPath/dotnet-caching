@@ -10,15 +10,15 @@ namespace UiPath.Platform.Caching.Tests;
 public class PollyCachingBuilderExtensionsTests
 {
     [Fact]
-    public void Multiple_AddResilienceStrategies_in_same_process_each_register_real_pipeline_holder()
+    public void Multiple_AddResilienceStrategies_in_same_process_each_register_real_pipeline_provider()
     {
         using var providerA = BuildContainer();
         using var providerB = BuildContainer();
 
-        providerA.GetRequiredService<IResiliencePipelineHolder>()
-            .Read.Should().BeOfType<ResiliencePipelineWrapper>();
-        providerB.GetRequiredService<IResiliencePipelineHolder>()
-            .Read.Should().BeOfType<ResiliencePipelineWrapper>();
+        providerA.GetRequiredService<IResiliencePipelineProvider>()
+            .Get(ResiliencePipelineNames.Read).Should().BeOfType<ResiliencePipelineWrapper>();
+        providerB.GetRequiredService<IResiliencePipelineProvider>()
+            .Get(ResiliencePipelineNames.Read).Should().BeOfType<ResiliencePipelineWrapper>();
     }
 
     [Fact]

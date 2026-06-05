@@ -15,7 +15,7 @@ public class RedisStreamsTopicTests(ITestContextAccessor testContextAccessor) : 
     private IObserver<ICacheEvent> _observer = default!;
     private IConnectionState _connectionState = default!;
     private IDatabase _database = default!;
-    private IResiliencePipelineHolder _resiliencePipelineHolder = default!;
+    private IResiliencePipelineProvider _resiliencePipelineProvider = default!;
     private bool _isConnected = true;
 
     private RedisStreamsTopic<ICacheEvent>? _sut = null;
@@ -259,10 +259,10 @@ public class RedisStreamsTopicTests(ITestContextAccessor testContextAccessor) : 
         _connectionState = _fixture.Freeze<IConnectionState>();
         _connectionState.IsConnected.Returns(info => _isConnected);
         _fixture.Inject<Func<IEventSubject<ICacheEvent>>>(() => _subject);
-        _resiliencePipelineHolder = _fixture.Freeze<IResiliencePipelineHolder>();
+        _resiliencePipelineProvider = _fixture.Freeze<IResiliencePipelineProvider>();
         var noOpExecutor = new EmptyResiliencePipeline();
-        _resiliencePipelineHolder.Read.Returns(noOpExecutor);
-        _resiliencePipelineHolder.Write.Returns(noOpExecutor);
+        _resiliencePipelineProvider.Get(ResiliencePipelineNames.Read).Returns(noOpExecutor);
+        _resiliencePipelineProvider.Get(ResiliencePipelineNames.Write).Returns(noOpExecutor);
         _cancellationTokenSource = new CancellationTokenSource();
         _fixture.Inject(_cancellationTokenSource.Token);
         _redisStreamsTopicOptions = _fixture.Create<RedisStreamsTopicOptions>();

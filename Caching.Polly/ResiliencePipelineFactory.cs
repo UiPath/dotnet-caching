@@ -8,17 +8,17 @@ namespace UiPath.Platform.Caching.Polly;
 public class ResiliencePipelineFactory(
     ILoggerFactory loggerFactory,
     TelemetryOptions? telemetryOptions,
-    IOptions<ResiliencePoliciesOptions> optionsAccessor)
+    IOptionsMonitor<ResiliencePoliciesOptions> optionsAccessor)
     : IResiliencePipelineFactory
 {
-    protected ResiliencePoliciesOptions ResilienceOptions => optionsAccessor.Value;
+    protected ResiliencePoliciesOptions ResilienceOptions => optionsAccessor.CurrentValue;
 
     protected ILoggerFactory LoggerFactory => loggerFactory;
 
     protected TelemetryOptions? TelemetryOptions => telemetryOptions;
 
     public virtual ResiliencePipeline<TResult> Create<TResult>(string? scope, TResult defaultValue) =>
-        GetBuilder(LoggerFactory.CreateLogger<ResiliencePipeline<TResult>>(), ResilienceOptions, defaultValue).Build();
+        GetBuilder(LoggerFactory.CreateLogger<ResiliencePipeline<TResult>>(), optionsAccessor.Get(scope ?? Options.DefaultName), defaultValue).Build();
 
     protected virtual ResiliencePipelineBuilder<TResult> GetBuilder<TResult>(ILogger logger, ResiliencePoliciesOptions resilienceOptions, TResult defaultValue)
     {

@@ -65,13 +65,13 @@ public class CachingBuilderTests
 
         providerA.GetRequiredService<IChangeTokenFactory>()
             .Should().BeOfType<ChangeTokenFactory<RedisValue>>();
-        providerA.GetRequiredService<IResiliencePipelineHolder>()
-            .Read.Should().BeOfType<ResiliencePipelineWrapper>();
+        providerA.GetRequiredService<IResiliencePipelineProvider>()
+            .Get(ResiliencePipelineNames.Read).Should().BeOfType<ResiliencePipelineWrapper>();
 
         providerB.GetRequiredService<IChangeTokenFactory>()
             .Should().BeOfType<ChangeTokenFactory<RedisValue>>();
-        providerB.GetRequiredService<IResiliencePipelineHolder>()
-            .Read.Should().BeOfType<ResiliencePipelineWrapper>();
+        providerB.GetRequiredService<IResiliencePipelineProvider>()
+            .Get(ResiliencePipelineNames.Read).Should().BeOfType<ResiliencePipelineWrapper>();
     }
 
     private static ServiceProvider BuildContainer()

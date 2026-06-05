@@ -9,7 +9,7 @@ public sealed class RedisCacheProvider : ICacheProvider
     private readonly CacheOptions _cacheOptions;
     private readonly IRedisConnector _redis;
     private readonly ISerializerProxy<RedisValue> _serializerProxy;
-    private readonly IResiliencePipelineHolder _resiliencePipelineHolder;
+    private readonly IResiliencePipelineProvider _resiliencePipelineProvider;
     private readonly ICachingTelemetryProvider _cachingTelemetryProvider;
     private readonly ILoggerFactory _loggerFactory;
     private readonly ICachePolicyFactory _policyFactory;
@@ -25,7 +25,7 @@ public sealed class RedisCacheProvider : ICacheProvider
         IOptions<CacheOptions> cacheOptions,
         IRedisConnector redis,
         ISerializerProxy<RedisValue> serializerProxy,
-        IResiliencePipelineHolder resiliencePipelineHolder,
+        IResiliencePipelineProvider resiliencePipelineProvider,
         ICachingTelemetryProvider cachingTelemetryProvider,
         ILoggerFactory loggerFactory,
         ICachePolicyFactory policyFactory)
@@ -34,7 +34,7 @@ public sealed class RedisCacheProvider : ICacheProvider
         _cacheOptions = cacheOptions.Value;
         _redis = redis;
         _serializerProxy = serializerProxy;
-        _resiliencePipelineHolder = resiliencePipelineHolder;
+        _resiliencePipelineProvider = resiliencePipelineProvider;
         _cachingTelemetryProvider = cachingTelemetryProvider ?? NullTelemetryProvider.Instance;
         _loggerFactory = loggerFactory;
         _policyFactory = policyFactory;
@@ -66,7 +66,7 @@ public sealed class RedisCacheProvider : ICacheProvider
         new(
             _redis,
             _serializerProxy,
-            _resiliencePipelineHolder,
+            _resiliencePipelineProvider,
             _cachingTelemetryProvider,
             _redisCacheOptions,
             _cacheOptions,
@@ -77,7 +77,7 @@ public sealed class RedisCacheProvider : ICacheProvider
         new(
             _redis,
             _serializerProxy,
-            _resiliencePipelineHolder,
+            _resiliencePipelineProvider,
             _cachingTelemetryProvider,
             _redisCacheOptions,
             _cacheOptions,

@@ -200,8 +200,10 @@ public class ResiliencePipelineFactoryTest(ITestContextAccessor testContextAcces
         };
         _fixture.Inject(_telemetryOptions);
         _resiliencePoliciesOptions = new ResiliencePoliciesOptions();
-        IOptions<ResiliencePoliciesOptions> ro = Options.Create(_resiliencePoliciesOptions);
-        _fixture.Inject(ro);
+        var monitor = Substitute.For<IOptionsMonitor<ResiliencePoliciesOptions>>();
+        monitor.CurrentValue.Returns(_ => _resiliencePoliciesOptions);
+        monitor.Get(Arg.Any<string>()).Returns(_ => _resiliencePoliciesOptions);
+        _fixture.Inject(monitor);
         _loggerFactory = _fixture.Freeze<ILoggerFactory>();
         _boolLogger = _fixture.Freeze<ILogger<ResiliencePipeline<bool>>>();
         _loggerFactory.CreateLogger(Arg.Any<string>()).ReturnsForAnyArgs(_boolLogger);

@@ -22,7 +22,7 @@ public class RedisPubSubTopicTests(ITestContextAccessor testContextAccessor) : I
     private string _channel = default!;
     private string _value = default!;
     private IRedisChannelStrategy _redisChannelStrategy = default!;
-    private IResiliencePipelineHolder _resiliencePipelineHolder = default!;
+    private IResiliencePipelineProvider _resiliencePipelineProvider = default!;
     private RedisPubSubTopicOptions _options = default!;
     private string? _actualRedisChannel;
     private readonly TimeSpan _delay = 50.Milliseconds();
@@ -235,8 +235,8 @@ public class RedisPubSubTopicTests(ITestContextAccessor testContextAccessor) : I
         _fixture.Inject<Func<IEventSubject<ICacheEvent>>>(() => new KeyedSubject<ICacheEvent>(Microsoft.Extensions.Logging.Abstractions.NullLogger<KeyedSubject<ICacheEvent>>.Instance));
         _redisChannelStrategy = _fixture.Freeze<IRedisChannelStrategy>();
         _redisChannelStrategy.GetRedisChannel(_topicKey).Returns(c => new RedisChannel(_topicKey, RedisChannel.PatternMode.Auto));
-        _resiliencePipelineHolder = ResiliencePipelineHolder.Empty;
-        _fixture.Inject(_resiliencePipelineHolder);
+        _resiliencePipelineProvider = EmptyResiliencePipelineProvider.Instance;
+        _fixture.Inject(_resiliencePipelineProvider);
         _subscriber = _fixture.Freeze<ISubscriber>();
         _observer = _fixture.Freeze<IObserver<ICacheEvent>>();
         _observer.When(x => x.OnNext(Arg.Any<ICacheEvent>()))

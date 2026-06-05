@@ -40,7 +40,7 @@ public sealed partial class RedisStreamsTopic<T> : ITopic<T>
         IRedisConnector redis,
         Func<IEventSubject<T>> subjectFactory,
         IEventFormatterProxy<T> formatter,
-        IResiliencePipelineHolder resiliencePipelineHolder,
+        IResiliencePipelineProvider resiliencePipelineProvider,
         RedisStreamsTopicOptions streamOptions,
         CacheOptions cacheOptions,
         ILogger<RedisStreamsTopic<T>> logger,
@@ -51,7 +51,7 @@ public sealed partial class RedisStreamsTopic<T> : ITopic<T>
         TopicKey = topicKey;
         _connectionState = connectionState;
         _formatter = formatter;
-        _write = resiliencePipelineHolder.Write;
+        _write = resiliencePipelineProvider.Get(ResiliencePipelineNames.Write);
         _stopTokenSource = CancellationTokenSource.CreateLinkedTokenSource(stopToken);
         _redis = redis;
         _logger = logger;

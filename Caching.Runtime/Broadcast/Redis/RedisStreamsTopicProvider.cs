@@ -8,7 +8,7 @@ public class RedisStreamsTopicProvider : RedisTopicProviderBase
     private readonly RedisStreamsTopicOptions _redisStreamsTopicOptions;
     private readonly CacheOptions _cacheOptions;
     private readonly IEventFormatterProxy<ICacheEvent> _formatter;
-    private readonly IResiliencePipelineHolder _resiliencePipelineHolder;
+    private readonly IResiliencePipelineProvider _resiliencePipelineProvider;
     private readonly PerTopicOptionsRegistry<RedisStreamsTopicOptions> _registry;
     private readonly CancellationTokenSource _stopTokenSource = new();
     private readonly ILogger<RedisStreamsTopicProvider> _logger;
@@ -20,7 +20,7 @@ public class RedisStreamsTopicProvider : RedisTopicProviderBase
         PerTopicOptionsRegistry<RedisStreamsTopicOptions> registry,
         IRedisConnector redis,
         IEventFormatterProxy<ICacheEvent> formatter,
-        IResiliencePipelineHolder resiliencePipelineHolder,
+        IResiliencePipelineProvider resiliencePipelineProvider,
         ILoggerFactory loggerFactory,
         ICachingTelemetryProvider cachingTelemetryProvider,
         IRedisProfiler redisProfiler)
@@ -29,7 +29,7 @@ public class RedisStreamsTopicProvider : RedisTopicProviderBase
         _redisStreamsTopicOptions = redisStreamsTopicOptionsAccessor.Value;
         _cacheOptions = cacheOptionsAccessor.Value;
         _registry = registry;
-        _resiliencePipelineHolder = resiliencePipelineHolder;
+        _resiliencePipelineProvider = resiliencePipelineProvider;
         _formatter = formatter;
         _logger = loggerFactory.Create<RedisStreamsTopicProvider>();
         Enabled = _redisStreamsTopicOptions.Enabled;
@@ -48,7 +48,7 @@ public class RedisStreamsTopicProvider : RedisTopicProviderBase
             Redis,
             () => new KeyedSubject<ICacheEvent>(LoggerFactory.Create<KeyedSubject<ICacheEvent>>(), resolved.SlowObserverThreshold),
             _formatter,
-            _resiliencePipelineHolder,
+            _resiliencePipelineProvider,
             resolved,
             _cacheOptions,
             LoggerFactory.Create<RedisStreamsTopic<ICacheEvent>>(),
