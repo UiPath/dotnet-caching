@@ -6,8 +6,9 @@ namespace UiPath.Platform.Caching.Redis;
 public sealed class RedisSetCacheOptions
 {
     /// <summary>
+    /// Name of the resilience pipeline applied to non-idempotent, destructive-read operations,
     /// such as <c>SPOP</c>. Resolved via <see cref="IResiliencePipelineProvider"/>.
-    /// When <see langword="null"/> or empty, those operations run with no resilience pipeline
+    /// When <see langword="null"/> or empty, those operations run with no resilience pipeline.
     /// </summary>
     public string? ResilienceKeyName { get; set; }
 }
