@@ -36,13 +36,6 @@
     <ProjectReference Include="..\Caching.Polly\Caching.Polly.csproj" />
     <ProjectReference Include="..\Caching.Queue\Caching.Queue.csproj" />
     <ProjectReference Include="..\Caching.Runtime\Caching.Runtime.csproj" />
-    <ProjectReference Include="..\Caching.Telemetry\Caching.Telemetry.csproj" />
-  </ItemGroup>
-
-  <ItemGroup>
-    <None Include="..\Sample.AspNetCore\appsettings.all.json" Link="appsettings.all.json">
-      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
-    </None>
   </ItemGroup>
 
 </Project>
