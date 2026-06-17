@@ -40,6 +40,7 @@ public static class SetCacheCollectionExtensions
         ArgumentNullException.ThrowIfNull(configureOptions);
         services.Configure(configureOptions);
         services.TryAddSingleton<ISetCache>(BuildRedisSetCache);
+        services.TryAddSingleton<IQueueCacheFactory, QueueCacheFactory>();
         services.TryAddTransient(typeof(ISetCache<>), typeof(SetCache<>));
         return services;
     }
