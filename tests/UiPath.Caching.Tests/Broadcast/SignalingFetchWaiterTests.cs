@@ -18,9 +18,6 @@ public class SignalingFetchWaiterTests
     [Fact]
     public async Task WaitAsync_returns_quickly_when_signaled()
     {
-        // 30s interval so a completion within the generous 10s budget can only be the signal, never the
-        // timeout. Awaiting the task directly (rather than racing it against a 500ms Task.Delay and
-        // asserting which finished first) avoids a scheduling race that flaked under CI thread-pool load.
         using var sut = new SignalingFetchWaiter(30.Seconds());
 
         var task = sut.WaitAsync(CancellationToken.None);

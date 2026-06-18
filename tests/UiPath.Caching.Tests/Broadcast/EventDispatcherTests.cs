@@ -22,8 +22,6 @@ public class EventDispatcherTests
         channel.Writer.TryWrite(CreateEvent("ok-2"));
         channel.Writer.Complete();
 
-        // The consume loop exits once the completed channel is fully drained — deterministic, unlike
-        // polling Keys.Count in a short window (which is flaky under thread-pool starvation on CI).
         await dispatcher.ConsumeTask.WaitAsync(TimeSpan.FromSeconds(30), TestContext.Current.CancellationToken);
 
         subject.Keys.Should().ContainInOrder("ok-1", "poison", "ok-2");

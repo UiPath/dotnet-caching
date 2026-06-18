@@ -196,9 +196,19 @@ public class RehydrationCoordinatorTests
         var triggered = sut.TryTrigger(key, aged, RehydratePolicy(), Duration, "cache", _ => ValueTask.CompletedTask);
 
         triggered.Should().BeTrue();
-        await Task.Delay(100, TestContext.Current.CancellationToken);
-        // _inFlight must be cleared so a follow-up trigger on the same key can proceed.
-        var second = sut.TryTrigger(key, aged, RehydratePolicy(), Duration, "cache", _ => ValueTask.CompletedTask);
+
+        var second = false;
+        var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(10);
+        while (DateTime.UtcNow < deadline)
+        {
+            second = sut.TryTrigger(key, aged, RehydratePolicy(), Duration, "cache", _ => ValueTask.CompletedTask);
+            if (second)
+            {
+                break;
+            }
+            await Task.Delay(25, TestContext.Current.CancellationToken);
+        }
+
         second.Should().BeTrue();
     }
 
