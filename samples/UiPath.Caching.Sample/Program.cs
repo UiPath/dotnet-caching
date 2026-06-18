@@ -1,7 +1,9 @@
 using OpenTelemetry.Instrumentation.StackExchangeRedis;
+using OpenTelemetry.Metrics;
 using OpenTelemetry.Trace;
 using UiPath.Caching.CloudEvents;
 using UiPath.Caching.Config;
+using UiPath.Caching.OpenTelemetry;
 using UiPath.Caching.Polly;
 using UiPath.Caching.Redis;
 using UiPath.Caching.Sample;
@@ -14,7 +16,11 @@ builder.Logging.AddConsole();
 
 builder.Services
     .AddOpenTelemetry()
-    .WithTracing(tracing => tracing.AddRedisInstrumentation(ConfigureRedisInstrumentation));
+    .WithTracing(tracing => tracing
+        .AddSource(CachingTelemetryProvider.ActivitySourceName)
+        .AddRedisInstrumentation(ConfigureRedisInstrumentation))
+    .WithMetrics(metrics => metrics
+        .AddMeter(CachingTelemetryProvider.MeterName));
 
 builder.Host
     .ConfigureCaching(cachingBuilder =>
@@ -28,7 +34,8 @@ builder.Host
             .AddInMemoryRedis()
             .AddMemory()
             .AddResilienceStrategies()
-            .AddCloudEvents();
+            .AddCloudEvents()
+            .AddOpenTelemetry();
     });
 
 builder.Services.AddControllers();

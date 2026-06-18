@@ -19,5 +19,8 @@
   <Project Path="samples/UiPath.Caching.Sample/UiPath.Caching.Sample.csproj" />
   <Project Path="samples/UiPath.Caching.Sample.AppHost/UiPath.Caching.Sample.AppHost.csproj" />
   <Project Path="samples/UiPath.Caching.Sample.ServiceDefaults/UiPath.Caching.Sample.ServiceDefaults.csproj" />
+  <Folder Name="/src/">
+    <Project Path="src/UiPath.Caching.OpenTelemetry/UiPath.Caching.OpenTelemetry.csproj" />
+  </Folder>
   <Project Path="benchmarks/UiPath.Caching.Benchmarks/UiPath.Caching.Benchmarks.csproj" />
 </Solution>

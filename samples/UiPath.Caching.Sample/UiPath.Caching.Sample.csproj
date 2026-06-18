@@ -16,6 +16,7 @@
     <ProjectReference Include="..\..\src\UiPath.Caching.Abstractions\UiPath.Caching.Abstractions.csproj" />
     <ProjectReference Include="..\..\src\UiPath.Caching.CloudEvents\UiPath.Caching.CloudEvents.csproj" />
     <ProjectReference Include="..\..\src\UiPath.Caching.Polly\UiPath.Caching.Polly.csproj" />
+    <ProjectReference Include="..\..\src\UiPath.Caching.OpenTelemetry\UiPath.Caching.OpenTelemetry.csproj" />
     <ProjectReference Include="..\..\src\UiPath.Caching\UiPath.Caching.csproj" />
     <PackageReference Include="OpenTelemetry" />
     <PackageReference Include="OpenTelemetry.Instrumentation.StackExchangeRedis" />
