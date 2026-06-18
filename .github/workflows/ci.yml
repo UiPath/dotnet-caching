@@ -43,7 +43,7 @@ jobs:
 
       - name: Upload test results
         if: always()
-        uses: actions/upload-artifact@v5
+        uses: actions/upload-artifact@v7
         with:
           name: test-results-ubuntu-latest
           path: TestResults
@@ -52,7 +52,7 @@ jobs:
         run: dotnet pack UiPath.Caching.slnx -c Release --no-build -o packages
 
       - name: Upload packages
-        uses: actions/upload-artifact@v5
+        uses: actions/upload-artifact@v7
         with:
           name: nupkg
           path: packages/*.nupkg
