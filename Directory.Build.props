@@ -17,8 +17,12 @@
     <PackageLicenseExpression>MIT</PackageLicenseExpression>
     <Description>UiPath Caching</Description>
     <PackageTags>Caching</PackageTags>
-    <PackageProjectUrl>https://github.com/UiPath/ServiceCommon</PackageProjectUrl>
-    <RepositoryUrl>https://github.com/UiPath/ServiceCommon</RepositoryUrl>
+    <PackageProjectUrl>https://github.com/UiPath/dotnet-caching</PackageProjectUrl>
+    <RepositoryUrl>https://github.com/UiPath/dotnet-caching</RepositoryUrl>
+    <PublishRepositoryUrl>true</PublishRepositoryUrl>
+    <EmbedUntrackedSources>true</EmbedUntrackedSources>
+    <IncludeSymbols>true</IncludeSymbols>
+    <SymbolPackageFormat>snupkg</SymbolPackageFormat>
     <PackageOutputPath>$(MSBuildThisFileDirectory)Release</PackageOutputPath>
     <GenerateAssemblyInfo>False</GenerateAssemblyInfo>
     <GitVersion_NoFetchEnabled>true</GitVersion_NoFetchEnabled>

@@ -6,6 +6,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 
 ## [Unreleased]
 
+### Changed
+
+- Repository extracted from `UiPath/ServiceCommon` to the public `UiPath/dotnet-caching` repository under the MIT license. PackageIds are renamed `UiPath.Platform.Caching.*` → `UiPath.Caching.*` at the first nuget.org release.
+
 ### Added
 
 - `IQueueCacheFactory` / `QueueCacheFactory` (+ `QueueCacheFactoryExtensions.CreateSetCache<T>()`) in `UiPath.Platform.Caching.Queue` — a dedicated set-cache factory that lets you create a typed set the same ergonomic way you create a cache: `queueCacheFactory.CreateSetCache<T>()`. It mirrors `CacheFactory.CreateCache` / `CacheFactoryExtensions.CreateCache<T>` for Redis sets. It is a separate factory (not a method on `ICacheFactory`) because the entire set implementation lives in the optional `Caching.Queue` package, which is downstream of `ICacheFactory` in `Caching.Abstractions` — so `ICacheFactory` cannot reference `ISetCache`. `QueueCacheFactory` hands out the singleton `ISetCache` registered by `AddRedisSetCache` (sets have a single Redis backing); `CreateSetCache<T>()` wraps it in `SetCache<T>` with no policy factory, exactly like `CreateCache<T>` (the underlying `RedisSetCache` still applies the global default policy). Registered automatically by `AddRedisSetCache`; inject `IQueueCacheFactory` where you need sets.

@@ -2,9 +2,13 @@
 
 Multilayer caching for .NET — L1 in-memory + L2 Redis, cross-node sync over Redis Streams, single-flight stampede protection, hydrating cache, and CloudEvents — behind a small, opinionated DI surface.
 
-[![.NET](https://img.shields.io/badge/.NET-8.0%20%7C%2010.0-512BD4)](#requirements) [![License](https://img.shields.io/badge/license-UiPath_internal-lightgrey)](#license) [![Feed](https://img.shields.io/badge/feed-Service%20Common-blue)](#feeds)
+[![CI](https://github.com/UiPath/dotnet-caching/actions/workflows/ci.yml/badge.svg)](https://github.com/UiPath/dotnet-caching/actions/workflows/ci.yml) [![.NET](https://img.shields.io/badge/.NET-8.0%20%7C%2010.0-512BD4)](#requirements) [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
 The library powers caching in UiPath Platform services. It is built for multi-tenant workloads that need a hot in-process tier, a shared Redis tier, and cross-node coherence — without each service reinventing the same patterns.
+
+<!-- TBD (revisit): full OSS content pass. PackageIds are still `UiPath.Platform.Caching.*` until the rename + first nuget.org release (PR #2); the `Telemetry` and `AspNetCore` integrations stay in ServiceCommon and are replaced here by a forthcoming `UiPath.Caching.OpenTelemetry` adapter (PR #3). -->
+
+> **Note:** Until the v1.0.0 release, NuGet PackageIds are still `UiPath.Platform.Caching.*`; they are renamed to `UiPath.Caching.*` in the publish PR.
 
 ## Quick Start
 
@@ -79,9 +83,8 @@ That's it. Everything else has a sensible default. Five-minute onboarding lives 
 - **Large-value auditing** — `AuditEnabled` + `LargeValueThreshold` log writes over a byte threshold.
 
 **Observability**
-- **`ICachingTelemetryProvider`** seam with span-based tag bags (allocation-free when telemetry is off). Drop-in AppInsights via `AddTelemetry()`, OpenTelemetry via the `IConnectionMultiplexerFactory` hook.
+- **`ICachingTelemetryProvider`** seam with span-based tag bags (allocation-free when telemetry is off). An OpenTelemetry adapter (`ActivitySource` + `Meter`) ships as `UiPath.Caching.OpenTelemetry` <!-- TBD: added in PR #3 -->; OpenTelemetry Redis instrumentation wires up via the `IConnectionMultiplexerFactory` hook (see the sample).
 - **CloudEvents** — broadcast events wrapped in the CNCF CloudEvents envelope (`UiPath.Platform.Caching.CloudEvents`).
-- **Redis profiler middleware** — per-request profiling sessions collapsed to one telemetry row (`UiPath.Platform.Caching.AspNetCore`).
 
 ## Architecture
 
@@ -107,8 +110,7 @@ flowchart LR
 | `UiPath.Platform.Caching.Runtime` | Always — providers, topics, locks. |
 | `UiPath.Platform.Caching.Polly` | Resilience pipelines. Recommended. |
 | `UiPath.Platform.Caching.CloudEvents` | CloudEvents envelope for broadcast events. Recommended. |
-| `UiPath.Platform.Caching.Telemetry` | AppInsights wiring for `ICachingTelemetryProvider`. Skip on OpenTelemetry. |
-| `UiPath.Platform.Caching.AspNetCore` | Dynamic filter + Redis profiler middleware for AppInsights. |
+| `UiPath.Platform.Caching.Queue` | Redis set ("queue") support — `ISetCache` / `AddRedisSetCache`. |
 
 ## Documentation
 
@@ -133,11 +135,6 @@ flowchart LR
 - **Redis** — 6.0+. Redis 7.0+ required for sharded Pub/Sub (`SPUBLISH`/`SSUBSCRIBE`) on the streams notify doorbell.
 - **StackExchange.Redis** — pulled transitively; no direct dependency needed in consumers.
 
-## Feeds
-
-- **Stable** — [Service Common feed](https://uipath.visualstudio.com/Service%20Common/_artifacts/feed/nuget-packages)
-- **Beta (pre-release)** — [ServiceCommon feed](https://uipath.visualstudio.com/Service%20Common/_artifacts/feed/ServiceCommon)
-
 ## License
 
-UiPath proprietary. See the [repository root](https://github.com/UiPath/ServiceCommon) for the general library guidelines.
+[MIT](LICENSE).
