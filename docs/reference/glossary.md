@@ -32,7 +32,7 @@ Alphabetical lookup for terms used across the docs.
 
 **Per-topic overlay** — The `Topics[]` array under `Broadcast:RedisStreams` / `Broadcast:RedisPubSub`. Each entry's fields override the app-wide values for that topic only. See [how-to/broadcast.md](../how-to/broadcast.md#per-topic-overrides).
 
-**Redis type prefix** — A short literal segment (`s`, `h`, `st`, `ps`) inserted between `AppShortName` and the cache key by `DefaultRedisKeyStrategyFactory`. Identifies the Redis data type the key holds (STRING / HASH / Stream / Pub-Sub channel) so caches of different types cannot collide on the same Redis key. Constants live on `UiPath.Platform.Caching.Redis.RedisTypePrefixes`. See [how-to/telemetry-and-strategies.md](../how-to/telemetry-and-strategies.md#final-key-shape-on-redis).
+**Redis type prefix** — A short literal segment (`s`, `h`, `st`, `ps`) inserted between `AppShortName` and the cache key by `DefaultRedisKeyStrategyFactory`. Identifies the Redis data type the key holds (STRING / HASH / Stream / Pub-Sub channel) so caches of different types cannot collide on the same Redis key. Constants live on `UiPath.Caching.Redis.RedisTypePrefixes`. See [how-to/telemetry-and-strategies.md](../how-to/telemetry-and-strategies.md#final-key-shape-on-redis).
 
 **Separator** — `CacheOptions.Separator`, default `:`. Joins prefix segments in keys, channel names, and stream keys.
 

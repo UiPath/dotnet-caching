@@ -10,7 +10,7 @@ Triage what you actually need before reaching for the seams below.
 |---|---|
 | Change how keys look on Redis (prefixing, sharding, namespacing) | `ICacheKeyStrategy` — see [telemetry-and-strategies.md](telemetry-and-strategies.md#cache-key-strategies) |
 | Use a different Redis instance, custom multiplexer, or OTel hookup | `IConnectionMultiplexerFactory` — see [recipes/opentelemetry-multiplexer-factory.md](../recipes/opentelemetry-multiplexer-factory.md) |
-| Route telemetry events to a non-AppInsights/non-OTel surface | `ICachingTelemetryProvider` — see [recipes/custom-telemetry-provider.md](../recipes/custom-telemetry-provider.md) |
+| Route telemetry events to a non-OTel surface | `ICachingTelemetryProvider` — see [recipes/custom-telemetry-provider.md](../recipes/custom-telemetry-provider.md) |
 | Change how cache values are serialized to Redis | `ISerializerProxy<RedisValue>` — see [Serializers](#custom-serializer) below |
 | Add a brand-new storage backend (Memcached, S3, local file, in-memory test fake) | `ICacheProvider` — see [Cache providers](#custom-cache-provider) below |
 | Add a brand-new cross-node broadcast transport (Kafka, NATS, RabbitMQ) | `ITopicProvider` — see [Topic providers](#custom-topic-provider) below |
@@ -27,7 +27,7 @@ The seams in the bottom half of the table are heavier work than the ones at the 
 ### Interface
 
 ```csharp
-namespace UiPath.Platform.Caching;
+namespace UiPath.Caching;
 
 public interface ICacheProvider : IDisposable
 {
@@ -43,7 +43,7 @@ public interface ICacheProvider : IDisposable
 ### Skeleton implementation
 
 ```csharp
-using UiPath.Platform.Caching;
+using UiPath.Caching;
 
 public sealed class MemcachedCacheProvider(IMemcachedClient client, IOptions<MemcachedCacheOptions> options)
     : ICacheProvider
@@ -72,8 +72,8 @@ public sealed class MemcachedCacheProvider(IMemcachedClient client, IOptions<Mem
 Wire the provider via a builder extension that adds it to the DI container and then calls `ICacheFactory.AddProvider`:
 
 ```csharp
-using UiPath.Platform.Caching;
-using UiPath.Platform.Caching.Config;
+using UiPath.Caching;
+using UiPath.Caching.Config;
 
 public static class MemcachedCachingBuilderExtensions
 {
@@ -121,7 +121,7 @@ And select it by name in `appsettings.json`:
 ### Interface
 
 ```csharp
-namespace UiPath.Platform.Caching.Broadcast;
+namespace UiPath.Caching.Broadcast;
 
 public interface ITopicProvider : IDisposable
 {
@@ -138,7 +138,7 @@ public interface ITopicProvider : IDisposable
 ### Skeleton implementation
 
 ```csharp
-using UiPath.Platform.Caching.Broadcast;
+using UiPath.Caching.Broadcast;
 
 public sealed class KafkaTopicProvider(IKafkaClient kafka, IOptions<KafkaTopicOptions> options)
     : ITopicProvider
@@ -213,7 +213,7 @@ Select via configuration:
 ### Interface
 
 ```csharp
-namespace UiPath.Platform.Caching;
+namespace UiPath.Caching;
 
 public interface ISerializerProxy<T1>
 {
@@ -231,7 +231,7 @@ The two `TryDeserialize` overloads exist so callers can attempt a deserializatio
 ```csharp
 using MessagePack;
 using StackExchange.Redis;
-using UiPath.Platform.Caching;
+using UiPath.Caching;
 
 public sealed class MessagePackSerializerProxy : ISerializerProxy<RedisValue>
 {
@@ -333,7 +333,7 @@ The default `DefaultCachePolicyFactory` resolves policies by name against `Cache
 - Custom merge semantics (e.g. layered defaults: type → assembly → app-wide).
 - A dynamic policy that recomputes on every `Resolve` call (the default snapshots once at startup).
 
-The `CachePolicyMerger` static helper (public in `UiPath.Platform.Caching.Config`) exposes the canonical "primary wins, fallback fills" merge for `CachePolicy` if your custom factory wants to reuse it. `CachePolicyFactoryValidator.Validate(factory, distributedLockPollInterval)` runs the same per-policy validation that `DefaultCachePolicyFactory`'s constructor applies (lock invariants, jitter range, rehydrate fields, `LocalExpirationDisconnected ≤ LocalExpiration`); call it at the end of your own factory's constructor to opt into the rules.
+The `CachePolicyMerger` static helper (public in `UiPath.Caching.Config`) exposes the canonical "primary wins, fallback fills" merge for `CachePolicy` if your custom factory wants to reuse it. `CachePolicyFactoryValidator.Validate(factory, distributedLockPollInterval)` runs the same per-policy validation that `DefaultCachePolicyFactory`'s constructor applies (lock invariants, jitter range, rehydrate fields, `LocalExpirationDisconnected ≤ LocalExpiration`); call it at the end of your own factory's constructor to opt into the rules.
 
 ## Customizing what already has a seam
 

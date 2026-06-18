@@ -11,7 +11,7 @@
 
 ```csharp
 using MediatR;
-using UiPath.Platform.Caching;
+using UiPath.Caching;
 
 public interface IHybridCacheable
 {

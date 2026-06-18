@@ -6,12 +6,11 @@ UiPath's internal multilayer caching library. L1 in-memory + L2 Redis, cross-nod
 
 | Package | When you need it |
 |---|---|
-| `UiPath.Platform.Caching.Abstractions` | Always (transitive). |
-| `UiPath.Platform.Caching.Runtime` | Always — Redis, InMemory, multilayer providers, Streams + Pub/Sub topics. |
-| `UiPath.Platform.Caching.Polly` | Resilience pipelines around cache ops. Recommended. |
-| `UiPath.Platform.Caching.CloudEvents` | CNCF CloudEvents wrapper around broadcast events. Recommended. |
-| `UiPath.Platform.Caching.Telemetry` | AppInsights wiring for `ICachingTelemetryProvider`. Skip if you use OpenTelemetry. |
-| `UiPath.Platform.Caching.AspNetCore` | Dynamic filter + Redis profiler middleware for AppInsights. |
+| `UiPath.Caching.Abstractions` | Always (transitive). |
+| `UiPath.Caching` | Always — Redis, InMemory, multilayer providers, Streams + Pub/Sub topics. |
+| `UiPath.Caching.Polly` | Resilience pipelines around cache ops. Recommended. |
+| `UiPath.Caching.CloudEvents` | CNCF CloudEvents wrapper around broadcast events. Recommended. |
+| `UiPath.Caching.OpenTelemetry` | OpenTelemetry wiring for `ICachingTelemetryProvider` (`ActivitySource` + `Meter` named `UiPath.Caching`). |
 
 ## Pick your path
 
@@ -24,7 +23,7 @@ UiPath's internal multilayer caching library. L1 in-memory + L2 Redis, cross-nod
 - Single-flight, hydrating cache, jitter, named policies, Polly → [how-to/resilience.md](how-to/resilience.md).
 - Cross-node sync, per-topic options, streams notify doorbell, sharded Pub/Sub → [how-to/broadcast.md](how-to/broadcast.md).
 - Per-field caching, side-channel metadata, bundled GET+TTL → [how-to/hash-cache.md](how-to/hash-cache.md).
-- AppInsights vs OpenTelemetry, custom key/channel strategies → [how-to/telemetry-and-strategies.md](how-to/telemetry-and-strategies.md).
+- OpenTelemetry adapter + Redis instrumentation, custom key/channel strategies → [how-to/telemetry-and-strategies.md](how-to/telemetry-and-strategies.md).
 - Adding a new cache provider, topic provider, or serializer → [how-to/extending.md](how-to/extending.md).
 
 **I need a short pattern I can paste.** → [recipes/](recipes/):

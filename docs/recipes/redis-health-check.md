@@ -10,7 +10,7 @@
 
 ```csharp
 using Microsoft.Extensions.Diagnostics.HealthChecks;
-using UiPath.Platform.Caching.Redis;
+using UiPath.Caching.Redis;
 
 builder.Services.AddHealthChecks()
     .Add(new HealthCheckRegistration(

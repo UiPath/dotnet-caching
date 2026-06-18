@@ -30,7 +30,6 @@ All flags live under `SampleAspNetCore:*` in `Sample.AspNetCore.AppHost/appsetti
 
 | Flag | Default | Effect |
 |---|---|---|
-| `UseOpenTelemetry` | `true` | Use OpenTelemetry Redis instrumentation (the lib's `AddTelemetry` is skipped on the sample's caching builder). Set to `false` to use AppInsights instead. |
 | `UseRedisInsight` | `true` | Spin up RedisInsight (port 8001 in single-instance mode, 8001+8002 in sharded mode). |
 | `UseSingleMachine` | `false` | Boot only `machine1` (skip `machine2`). Useful when you don't want to test cross-node sync. |
 | `UseShardedRedis` | `false` | Boot a Redis Cluster (2 masters + 4 replicas, formed via `redis-trib`). Default is a single Redis instance. |
@@ -48,9 +47,7 @@ With `UseSingleMachine: false` and `UseShardedRedis: false` (the defaults), two 
 2. **Write `foo = "baz"` on `machine1`** (`POST /Cache/Set?cacheKey=foo`, body `"baz"`). `machine1` updates its own L1 and writes through to L2; an invalidation event is published on the Redis Stream backplane that `machine2` is subscribed to.
 3. **Read `foo` again on `machine2`**. Without invalidation, `machine2` would return its now-stale L1 entry. With invalidation, the L1 entry was dropped by the stream consumer, so this read misses L1, fetches the new value from L2, and back-fills L1 with `"baz"`.
 
-The OTel wiring that enables per-connection tracing for both machines is shown in `Sample.AspNetCore/OpenTelemetryConnectionMultiplexerFactory.cs`: it wraps the raw `ConnectionMultiplexer.Connect` call and registers the resulting multiplexer with `StackExchangeRedisInstrumentation.AddConnection`.
-
-Setting `UseOpenTelemetry: false` flips the sample to the AppInsights telemetry path. The caching builder then calls `.AddTelemetry()`, and the ASP.NET Core pipeline wires up `AddRedisDynamicFilter` and `RedisProfilerMiddleware`. Both paths cannot be active simultaneously — StackExchange.Redis supports only one profiler callback per multiplexer — so the flag is how you A/B them locally. The AppInsights path also registers `UseTelemetry()` middleware and `TelemetryContextMiddleware` in the HTTP pipeline.
+The sample is OpenTelemetry-only. Its `Program.cs` calls `.AddOpenTelemetry()` on the caching builder and registers `AddSource("UiPath.Caching")` + `AddMeter("UiPath.Caching")` so cache-semantic activities and metrics are collected. The OTel wiring that enables per-connection Redis-command tracing for both machines is shown in `Sample.AspNetCore/OpenTelemetryConnectionMultiplexerFactory.cs`: it wraps the raw `ConnectionMultiplexer.Connect` call and registers the resulting multiplexer with `StackExchangeRedisInstrumentation.AddConnection`.
 
 ## Endpoints
 
@@ -144,7 +141,7 @@ Source files:
 
 ## Common adjustments
 
-- **Want to A/B AppInsights vs OpenTelemetry?** Toggle `UseOpenTelemetry` and restart the AppHost. The sample re-wires the caching builder accordingly.
+- **Want to see cache telemetry?** Open the Aspire dashboard's traces and metrics views — the `UiPath.Caching` source/meter and `Redis.*` command spans flow there with no extra configuration.
 - **Want to inspect L1 invalidation events on the wire?** Open RedisInsight, navigate to the stream key (`<AppShortName>:st:<topic>`), and watch entries appear as you write keys via Swagger.
 - **Want to run only one machine?** Set `UseSingleMachine: true`. The second machine resource is skipped.
 - **Want sharded Redis?** Set `UseShardedRedis: true`. Aspire boots a 6-node cluster (2 masters, 4 replicas) and runs `redis-trib create --replicas 1 ...` to form the cluster. Initial cluster formation takes ~10-20 seconds — the AppHost includes a `sleep 10` hedge for the race between Aspire's `WaitFor` and the Redis process actually listening.
@@ -152,5 +149,5 @@ Source files:
 ## See also
 
 - [quickstart.md](quickstart.md) — for the equivalent wiring in your own service.
-- [how-to/telemetry-and-strategies.md](how-to/telemetry-and-strategies.md) — for the AppInsights vs OTel choice.
+- [how-to/telemetry-and-strategies.md](how-to/telemetry-and-strategies.md) — for the OpenTelemetry adapter and Redis instrumentation.
 - [how-to/broadcast.md](how-to/broadcast.md) — for the cross-node sync mechanics the sample exercises.

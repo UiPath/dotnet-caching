@@ -11,7 +11,7 @@
 
 ```csharp
 using System.Reflection;
-using UiPath.Platform.Caching;
+using UiPath.Caching;
 
 public static class CacheKeyStrategies
 {

@@ -10,7 +10,7 @@
 ## Code
 
 ```csharp
-using UiPath.Platform.Caching;
+using UiPath.Caching;
 
 public static class CacheFactoryExtensions
 {
@@ -27,8 +27,8 @@ Then at the call site:
 
 ```csharp
 using Microsoft.Extensions.Options;
-using UiPath.Platform.Caching;
-using UiPath.Platform.Caching.Redis;
+using UiPath.Caching;
+using UiPath.Caching.Redis;
 
 public class UserCache
 {

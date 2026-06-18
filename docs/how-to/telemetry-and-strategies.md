@@ -1,22 +1,20 @@
 # Telemetry and strategies
 
-Two telemetry paths and five customization seams. Pick one telemetry path — they are mutually exclusive for Redis instrumentation.
+Two telemetry paths and five customization seams. The two telemetry paths are complementary: the OpenTelemetry adapter routes cache-semantic signals through `ICachingTelemetryProvider`, while Redis-command instrumentation is layered on via the multiplexer-factory hook (mutually exclusive with the StackExchange.Redis profiler).
 
-## AppInsights
+## OpenTelemetry adapter
 
-Default. `.AddTelemetry()` on the builder registers `CachingTelemetryProvider` as the `ICachingTelemetryProvider` implementation. `CachingTelemetryProvider` wraps `UiPath.Platform.Telemetry.ITelemetryProvider` and bridges every `TrackDependency` / `TrackEvent` / `TrackException` / `TrackMetric` call to it, materializing `ReadOnlySpan<KeyValuePair>` tag bags into dictionaries only when the span is non-empty. No allocation occurs on the hot path when the span is empty.
+Default. `.AddOpenTelemetry()` on the caching builder registers `UiPath.Caching.OpenTelemetry.CachingTelemetryProvider` as the `ICachingTelemetryProvider` implementation. The provider is backed by a `System.Diagnostics.ActivitySource` and a `Meter`, both named **`UiPath.Caching`**: every `TrackDependency` / `TrackEvent` / `TrackException` call starts (or annotates) an `Activity` on that source, and `TrackMetric` plus the hit/miss counters record on instruments from that `Meter`. Tag bags arrive as `ReadOnlySpan<KeyValuePair>` and are materialized only when non-empty, so no allocation occurs on the hot path when the span is empty.
+
+You collect these signals the same way you collect any other OTel source — add the source and meter to your tracer/meter providers by name:
 
 **Program.cs wiring:**
 
 ```csharp
-using UiPath.Platform.Caching;
-using UiPath.Platform.Caching.CloudEvents;
-using UiPath.Platform.Caching.Polly;
-using UiPath.Platform.Caching.Telemetry;
-using UiPath.Platform.Caching.Redis;
-using UiPath.Platform.Telemetry.AspNetCore;
-using UiPath.Platform.Telemetry.AspNetCore.DynamicFilters;
-using UiPath.Platform.Caching.AspNetCore;
+using UiPath.Caching;
+using UiPath.Caching.CloudEvents;
+using UiPath.Caching.Polly;
+using UiPath.Caching.Redis;
 
 builder.Host.ConfigureCaching(b => b
     .AddRedisConnection()
@@ -26,80 +24,29 @@ builder.Host.ConfigureCaching(b => b
     .AddMemory()
     .AddResilienceStrategies()
     .AddCloudEvents()
-    .AddTelemetry());                          // wires ICachingTelemetryProvider → ITelemetryProvider
+    .AddOpenTelemetry());                       // registers CachingTelemetryProvider (ActivitySource + Meter "UiPath.Caching")
 
 builder.Services
-    .AddAspNetCoreTelemetry(builder.Configuration)
-    .AddRedisDynamicFilter()                   // filter Redis dependency telemetry by duration + feature flag
-    .WithAdaptiveSampling()
-    .WithBuiltinProcessors();
-
-app.UseTelemetry()
-   .UseMiddleware<RedisProfilerMiddleware>();  // capture per-request Redis profiler output
+    .AddOpenTelemetry()
+    .WithTracing(tracing => tracing
+        .AddAspNetCoreInstrumentation()
+        .AddHttpClientInstrumentation()
+        .AddSource("UiPath.Caching"))           // collect the caching ActivitySource
+    .WithMetrics(metrics => metrics
+        .AddMeter("UiPath.Caching"));           // collect the caching Meter
 ```
 
-**Minimum appsettings (telemetry section only):**
-
-```jsonc
-"TelemetrySettings": {
-  "ConnectionString": "InstrumentationKey=<your-ikey>",
-  "DynamicFilters": {
-    "RedisDependency": { "Enabled": true, "FeatureFlag": "DynamicFilters.Redis" }
-  }
-}
-```
-
-### RedisDynamicFilter
-
-`AddRedisDynamicFilter()` registers `RedisDependencyFilterProcessor` in the AppInsights telemetry pipeline. The processor suppresses any `DependencyTelemetry` item whose `Type` is `"Redis"`, `Success` is `true`, and `Duration` is at or below the duration threshold (default 100 ms). The net effect: fast, routine cache traffic — the overwhelming majority of cache operations in a healthy service — does not flood AppInsights. Only slow or failing Redis calls (which indicate real problems) pass through by default.
-
-On top of the duration gate, an optional `FeatureFlag` key can be set. When the flag is active for the current request context, the filter disables itself and all Redis dependency items flow through regardless of duration. This allows targeted per-account or per-tenant debug capture at runtime without a redeployment. Configure the feature flag name in appsettings under `DynamicFilters:RedisDependency:FeatureFlag`; the value is looked up via the platform `IFeatureProvider`.
-
-`RedisDependencyFilterOptions` properties:
-
-| Property | Default | Purpose |
-|---|---|---|
-| `Enabled` | `true` | Master switch for the filter. Set to `false` to pass all Redis items through unconditionally. |
-| `DurationThresholdMSecs` | `100` | Redis items with `Duration <= threshold` and `Success == true` are dropped. |
-| `FeatureFlag` | `null` | Feature flag key. When the flag is on, the duration gate is bypassed for that request. |
-
-### RedisProfilerMiddleware
-
-`RedisProfilerMiddleware` manages a StackExchange.Redis profiling session around each HTTP request. All Redis commands issued within the request are collected and can be emitted as a single dependency telemetry entry per request, so N Redis round-trips within one HTTP call collapse to one telemetry row rather than N rows. This is particularly valuable for services that fan out many cache reads per API call.
-
-The middleware gates itself behind `ProfilerEnabled` on `RedisConnectionOptions`. When `ProfilerEnabled` is `false` (the default), `CreateSession` returns a no-op `IDisposable` and the middleware has no effect on throughput. When enabled, a feature-flag key (`ProfilerFeatureFlagKey`, default `"RedisProfiler.Enabled"`) is checked per request: the flag can be used to activate profiling selectively for specific tenants or debug sessions without changing config and restarting.
-
-**Required appsettings to activate the profiler:**
-
-```jsonc
-"Caching": {
-  "Connections": {
-    "Redis": {
-      "ProfilerEnabled": true
-    }
-  }
-}
-```
-
-Additional profiler knobs on `RedisConnectionOptions`:
-
-| Property | Default | Purpose |
-|---|---|---|
-| `ProfilerEnabled` | `false` | Enables per-request profiling sessions. |
-| `ProfilerHasDefaultSession` | `true` | When `true`, a background default session captures commands that fall outside any request (e.g. background workers). |
-| `ProfilerFlushInterval` | `1 s` | How often the background session is flushed and emitted as telemetry. |
-| `ProfilerSessionMaxLifespan` | `1 min` | Maximum lifetime of a single profiling session before it is force-closed. |
-| `ProfilerFeatureFlagKey` | `"RedisProfiler.Enabled"` | Feature flag key for per-request profiling overrides. |
+The `AddSource("UiPath.Caching")` / `AddMeter("UiPath.Caching")` calls are what connect the provider's `ActivitySource` and `Meter` to your exporters. Omit them and the signals are emitted but never collected.
 
 ### When to bridge instead
 
-If your service has its own platform telemetry surface and you want cache events on it, implement `ICachingTelemetryProvider` and register the implementation instead of calling `.AddTelemetry()`. See [Custom `ICachingTelemetryProvider`](#custom-icachingtelemetryprovider) below and [recipes/custom-telemetry-provider.md](../recipes/custom-telemetry-provider.md).
+If your service has its own platform telemetry surface and you want cache events on it directly, implement `ICachingTelemetryProvider` and register the implementation instead of calling `.AddOpenTelemetry()`. See [Custom `ICachingTelemetryProvider`](#custom-icachingtelemetryprovider) below and [recipes/custom-telemetry-provider.md](../recipes/custom-telemetry-provider.md).
 
-## OpenTelemetry
+## OpenTelemetry Redis instrumentation
 
-Redis instrumentation is provided by the upstream OTel package (`OpenTelemetry.Instrumentation.StackExchangeRedis`). It hooks into the `IConnectionMultiplexer` at construction time via `StackExchangeRedisInstrumentation.AddConnection`. The lib creates the multiplexer internally via `IConnectionMultiplexerFactory`, which is the seam for injecting this hook. Registering `IConnectionMultiplexerFactory` is the only required code change — no other caching builder changes are needed.
+The adapter above emits cache-semantic signals; to also capture raw Redis **command** spans (timing, command text, slot), add the upstream OTel package (`OpenTelemetry.Instrumentation.StackExchangeRedis`). It hooks into the `IConnectionMultiplexer` at construction time via `StackExchangeRedisInstrumentation.AddConnection`. The lib creates the multiplexer internally via `IConnectionMultiplexerFactory`, which is the seam for injecting this hook. Registering `IConnectionMultiplexerFactory` is the only required code change — no other caching builder changes are needed.
 
-The mutual exclusivity with AppInsights is a StackExchange.Redis constraint: only one profiling hook can be attached to a multiplexer. AppInsights profiling (via `RedisProfilerMiddleware`) and OTel instrumentation both use the profiler callback, so they cannot coexist. Set `ProfilerEnabled: false` in `RedisConnectionOptions` when using OTel.
+Redis command instrumentation hooks the StackExchange.Redis profiler callback, and only one profiling hook can be attached to a multiplexer. Set `ProfilerEnabled: false` in `RedisConnectionOptions` when using OTel Redis instrumentation so the two do not contend for the callback.
 
 ### In-code wiring
 
@@ -107,8 +54,8 @@ The mutual exclusivity with AppInsights is a StackExchange.Redis constraint: onl
 using OpenTelemetry.Instrumentation.StackExchangeRedis;
 using OpenTelemetry.Trace;
 using StackExchange.Redis;
-using UiPath.Platform.Caching;
-using UiPath.Platform.Caching.Redis;
+using UiPath.Caching;
+using UiPath.Caching.Redis;
 
 builder.Services
     .AddOpenTelemetry()
@@ -127,7 +74,7 @@ builder.Host.ConfigureCaching(b =>
      .AddMemory()
      .AddResilienceStrategies()
      .AddCloudEvents();
-    // No .AddTelemetry() here — OTel owns Redis instrumentation.
+    // No profiler-based instrumentation here — OTel owns Redis command spans.
 });
 ```
 
@@ -154,13 +101,13 @@ The lib reads `ConnectionMultiplexerFactoryType` from `RedisConnectionOptions` a
 
 ## Custom `ICachingTelemetryProvider`
 
-Reach for this when your service has its own platform telemetry surface — an internal `ITelemetryProvider` that bridges to a structured logging pipeline, an internal metrics bus, or a non-AppInsights backend — and you want cache events routed through it. Implement `ICachingTelemetryProvider` directly and register the implementation:
+Reach for this when your service has its own telemetry surface — a structured logging pipeline, an internal metrics bus, or a backend you address directly rather than through OpenTelemetry — and you want cache events routed through it. Implement `ICachingTelemetryProvider` directly and register the implementation:
 
 ```csharp
 services.AddSingleton<ICachingTelemetryProvider, MyBridge>();
 ```
 
-Skip `.AddTelemetry()` on the caching builder — the two are mutually exclusive registrations. See [recipes/custom-telemetry-provider.md](../recipes/custom-telemetry-provider.md) for a full implementation skeleton.
+Skip `.AddOpenTelemetry()` on the caching builder — the two are mutually exclusive registrations of `ICachingTelemetryProvider`. See [recipes/custom-telemetry-provider.md](../recipes/custom-telemetry-provider.md) for a full implementation skeleton.
 
 ### Interface
 
@@ -187,7 +134,7 @@ public interface ICachingTelemetryProvider
 }
 ```
 
-All four tracking methods accept tag bags as `ReadOnlySpan<KeyValuePair<string, string>>` and `ReadOnlySpan<KeyValuePair<string, double>>`. This is intentional: `NullTelemetryProvider` (the default when `.AddTelemetry()` is not called) is a true no-op — the compiler elides the span parameters when the receiver is sealed and has empty method bodies, so there is zero allocation when telemetry is disabled.
+All four tracking methods accept tag bags as `ReadOnlySpan<KeyValuePair<string, string>>` and `ReadOnlySpan<KeyValuePair<string, double>>`. This is intentional: `NullTelemetryProvider` (the default when no `ICachingTelemetryProvider` is registered) is a true no-op — the compiler elides the span parameters when the receiver is sealed and has empty method bodies, so there is zero allocation when telemetry is disabled.
 
 The interface methods carry a `[ExcludeFromCodeCoverage]` no-op default body on the interface itself (required because Castle.Proxies cannot generate mocks for ref-struct parameters). Implementations override only the methods they want to handle; un-overridden methods inherit the no-op default.
 
@@ -196,7 +143,7 @@ The interface methods carry a `[ExcludeFromCodeCoverage]` no-op default body on 
 When implementing a bridge that forwards to a downstream API expecting `IDictionary<string, string>`, use `TelemetryTags.ToDictionaryOrNull` to materialize the span. The helper returns `null` (no allocation) for empty spans, and allocates a `Dictionary<TKey, TValue>` only when there are entries:
 
 ```csharp
-using UiPath.Platform.Caching.Telemetry;
+using UiPath.Caching.Telemetry;
 
 public sealed class MyBridge(IMyMetricsSink sink) : ICachingTelemetryProvider
 {
@@ -214,11 +161,11 @@ public sealed class MyBridge(IMyMetricsSink sink) : ICachingTelemetryProvider
 }
 ```
 
-`TelemetryTags.ToDictionaryOrNull` is in `UiPath.Platform.Caching.Telemetry`. This is the same helper `CachingTelemetryProvider` uses when bridging to `ITelemetryProvider`.
+`TelemetryTags.ToDictionaryOrNull` is in `UiPath.Caching.Telemetry`. This is the same helper the OpenTelemetry adapter's `CachingTelemetryProvider` uses when materializing tag bags.
 
 ### What the lib emits
 
-The lib tracks cache operations via `ITelemetryOperation`. Each `StartOperation` call wraps a `Stopwatch`; calling `Track(hit: bool)` emits a metric with name `Caching.Stats.Hits.<provider>.<method>.<type>` (on a hit) or `Caching.Stats.Misses.<provider>.<method>.<type>` (on a miss), with the elapsed time as the value. These hit/miss counters are one category of signal the lib emits through `ICachingTelemetryProvider`; the runtime also calls `TrackEvent` and `TrackException` directly for rehydration outcomes, distributed-lock acquire/release, Redis connection-monitor state changes, and stream receipt events. Redis command telemetry (timing, command text, slot, etc.) is captured by `RedisProfilerMiddleware` or by the OTel instrumentation, not by `ICachingTelemetryProvider`.
+The lib tracks cache operations via `ITelemetryOperation`. Each `StartOperation` call wraps a `Stopwatch`; calling `Track(hit: bool)` emits a metric with name `Caching.Stats.Hits.<provider>.<method>.<type>` (on a hit) or `Caching.Stats.Misses.<provider>.<method>.<type>` (on a miss), with the elapsed time as the value. These hit/miss counters are one category of signal the lib emits through `ICachingTelemetryProvider`; the runtime also calls `TrackEvent` and `TrackException` directly for rehydration outcomes, distributed-lock acquire/release, Redis connection-monitor state changes, and stream receipt events. Redis command telemetry (timing, command text, slot, etc.) is captured by the OTel Redis instrumentation via the multiplexer-factory hook, not by `ICachingTelemetryProvider`.
 
 ## Cache key strategies
 
@@ -230,7 +177,7 @@ Three segments are stitched together by the default `IRedisKeyStrategyFactory` b
 <AppShortName>:<RedisTypePrefix>:<your key after ICacheKeyStrategy>
 ```
 
-`<RedisTypePrefix>` is a short literal from `UiPath.Platform.Caching.Redis.RedisTypePrefixes` that identifies the Redis data type the key holds:
+`<RedisTypePrefix>` is a short literal from `UiPath.Caching.Redis.RedisTypePrefixes` that identifies the Redis data type the key holds:
 
 | Constant | Value | Used for |
 |---|---|---|
@@ -264,7 +211,7 @@ For an app-wide default, set `CacheKeyStrategy` on each provider's options (`Red
 A `PrefixCacheKeyStrategy` that bakes the assembly version into the prefix gives you free deploy invalidation — old keys cannot collide with new keys because the version segment in the key changes with every deploy.
 
 ```csharp
-using UiPath.Platform.Caching;
+using UiPath.Caching;
 using System.Reflection;
 
 public static class CacheKeyStrategies

@@ -12,10 +12,10 @@
 ```csharp
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
-using UiPath.Platform.Caching;
-using UiPath.Platform.Caching.CloudEvents;
-using UiPath.Platform.Caching.Config;
-using UiPath.Platform.Caching.Polly;
+using UiPath.Caching;
+using UiPath.Caching.CloudEvents;
+using UiPath.Caching.Config;
+using UiPath.Caching.Polly;
 
 public static class CachingExtensions
 {

@@ -7,19 +7,18 @@ Get a working `ICache<MyDto>` injected and a sensible `appsettings.json` in unde
 Add the three packages a typical consumer needs:
 
 ```bash
-dotnet add package UiPath.Platform.Caching.Runtime
-dotnet add package UiPath.Platform.Caching.Polly
-dotnet add package UiPath.Platform.Caching.CloudEvents
+dotnet add package UiPath.Caching
+dotnet add package UiPath.Caching.Polly
+dotnet add package UiPath.Caching.CloudEvents
 ```
 
-`UiPath.Platform.Caching.Abstractions` is pulled in transitively by `Runtime`, so you don't need to add it explicitly.
+`UiPath.Caching.Abstractions` is pulled in transitively by `Runtime`, so you don't need to add it explicitly.
 
 **Optional**, depending on your platform:
 
-- `UiPath.Platform.Caching.Telemetry` — wires the lib's `ICachingTelemetryProvider` to AppInsights via `UiPath.Platform.Telemetry`.
-- `UiPath.Platform.Caching.AspNetCore` — dynamic filter for AppInsights, Redis profiler middleware.
+- `UiPath.Caching.OpenTelemetry` — wires the lib's `ICachingTelemetryProvider` to an OpenTelemetry `ActivitySource` + `Meter` named `UiPath.Caching` via `.AddOpenTelemetry()` on the caching builder.
 
-If you're on OpenTelemetry, skip `Telemetry` and follow [how-to/telemetry-and-strategies.md](how-to/telemetry-and-strategies.md) instead.
+To collect cache telemetry, add `AddSource("UiPath.Caching")` / `AddMeter("UiPath.Caching")` to your OTel providers and follow [how-to/telemetry-and-strategies.md](how-to/telemetry-and-strategies.md).
 
 ## 2. Wire DI
 
@@ -28,11 +27,11 @@ The recommended shape is a static `ConfigureCaching(this IServiceCollection, ICo
 ```csharp
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
-using UiPath.Platform.Caching;
-using UiPath.Platform.Caching.CloudEvents;
-using UiPath.Platform.Caching.Config;
-using UiPath.Platform.Caching.Polly;
-using UiPath.Platform.Caching.Redis;
+using UiPath.Caching;
+using UiPath.Caching.CloudEvents;
+using UiPath.Caching.Config;
+using UiPath.Caching.Polly;
+using UiPath.Caching.Redis;
 
 public static class CachingExtensions
 {
@@ -98,7 +97,7 @@ That's it. Everything else has a sensible default. For the full set of options, 
 Define a typed-cache extension method on `ICacheFactory`:
 
 ```csharp
-using UiPath.Platform.Caching;
+using UiPath.Caching;
 
 public static class CacheFactoryExtensions
 {
@@ -141,7 +140,7 @@ For richer patterns — provider fallback when Redis is disabled, app-version pr
 Run your app and look for:
 
 - **Logs** — `Caching.*` log scopes; SE.Redis connection events at Information level.
-- **Telemetry** — `cache.dependency` events in AppInsights (if you wired `.AddTelemetry()`), `Redis.*` spans in OpenTelemetry (if you wired the OTel multiplexer factory).
+- **Telemetry** — `cache.*` activities and metrics on the `UiPath.Caching` OTel source/meter (if you wired `.AddOpenTelemetry()` + `AddSource`/`AddMeter`), `Redis.*` command spans in OpenTelemetry (if you wired the OTel multiplexer factory).
 - **RedisInsight** — keys prefixed with `my-service:user:*` (where `my-service` is your `AppShortName` and `user` is the strategy prefix).
 
 If you see `my-service:user:42` after a call to `GetUserAsync(42, ct)`, the typed surface is wired correctly.

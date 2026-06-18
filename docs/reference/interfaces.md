@@ -14,7 +14,7 @@ The library's public interface surface. Each entry shows the namespace, signatur
 
 ### `ICache<T>`
 
-**Namespace:** `UiPath.Platform.Caching`
+**Namespace:** `UiPath.Caching`
 
 ```csharp
 public partial interface ICache<T>
@@ -83,7 +83,7 @@ public partial interface ICache<T>
 
 ### `ICache`
 
-**Namespace:** `UiPath.Platform.Caching`
+**Namespace:** `UiPath.Caching`
 
 ```csharp
 public partial interface ICache : IDisposable
@@ -155,7 +155,7 @@ public partial interface ICache : IDisposable
 
 ### `IHashCache<T>`
 
-**Namespace:** `UiPath.Platform.Caching`
+**Namespace:** `UiPath.Caching`
 
 ```csharp
 public partial interface IHashCache<T>
@@ -228,7 +228,7 @@ public partial interface IHashCache<T>
 
 ### `IHashCache`
 
-**Namespace:** `UiPath.Platform.Caching`
+**Namespace:** `UiPath.Caching`
 
 ```csharp
 public partial interface IHashCache : IDisposable
@@ -304,7 +304,7 @@ public partial interface IHashCache : IDisposable
 
 ### `ICacheFactory`
 
-**Namespace:** `UiPath.Platform.Caching`
+**Namespace:** `UiPath.Caching`
 
 ```csharp
 public interface ICacheFactory : IDisposable
@@ -321,7 +321,7 @@ public interface ICacheFactory : IDisposable
 }
 ```
 
-`ICacheFactory` is the entry point for obtaining cache instances. `CreateCache` and `CreateHashCache` return the untyped `ICache` / `IHashCache` interfaces; the typed `ICache<T>` / `IHashCache<T>` wrappers are obtained through the `ICacheFactory` extension methods (`CreateCache<T>`, `CreateHashCache<T>`) defined in the `UiPath.Platform.Caching` namespace. When `providerName` is omitted, the factory uses the default registered provider. `AddProvider` supports registering additional provider implementations at runtime, for example in test fixtures or multi-tenant scenarios where provider instances are created dynamically.
+`ICacheFactory` is the entry point for obtaining cache instances. `CreateCache` and `CreateHashCache` return the untyped `ICache` / `IHashCache` interfaces; the typed `ICache<T>` / `IHashCache<T>` wrappers are obtained through the `ICacheFactory` extension methods (`CreateCache<T>`, `CreateHashCache<T>`) defined in the `UiPath.Caching` namespace. When `providerName` is omitted, the factory uses the default registered provider. `AddProvider` supports registering additional provider implementations at runtime, for example in test fixtures or multi-tenant scenarios where provider instances are created dynamically.
 
 `PolicyFactory` is nullable with a default interface implementation of `null` — existing `ICacheFactory` implementors do not need to add anything to keep compiling. `Cache<T>` / `HashCache<T>` ctors prefer the DI-registered `ICachePolicyFactory` (injected via the optional `policyFactory` parameter) and fall back to `cacheFactory.PolicyFactory`. A custom factory that returns `null` here still gets configured policy resolution applied to its caches via DI.
 
@@ -342,7 +342,7 @@ public interface ICacheFactory : IDisposable
 
 ### `ICachePolicyFactory`
 
-**Namespace:** `UiPath.Platform.Caching`
+**Namespace:** `UiPath.Caching`
 
 ```csharp
 public interface ICachePolicyFactory
@@ -377,7 +377,7 @@ public interface ICachePolicyFactory
 
 ### `ITopicFactory`
 
-**Namespace:** `UiPath.Platform.Caching.Broadcast`
+**Namespace:** `UiPath.Caching.Broadcast`
 
 ```csharp
 public interface ITopicFactory
@@ -411,7 +411,7 @@ public interface ITopicFactory
 
 ### `ICacheKeyStrategy`
 
-**Namespace:** `UiPath.Platform.Caching`
+**Namespace:** `UiPath.Caching`
 
 ```csharp
 public interface ICacheKeyStrategy
@@ -439,7 +439,7 @@ public interface ICacheKeyStrategy
 
 ### `IRedisStreamKeyStrategy`
 
-**Namespace:** `UiPath.Platform.Caching.Broadcast.Redis`
+**Namespace:** `UiPath.Caching.Broadcast.Redis`
 
 ```csharp
 public interface IRedisStreamKeyStrategy
@@ -466,7 +466,7 @@ public interface IRedisStreamKeyStrategy
 
 ### `IRedisChannelStrategy`
 
-**Namespace:** `UiPath.Platform.Caching.Broadcast.Redis`
+**Namespace:** `UiPath.Caching.Broadcast.Redis`
 
 ```csharp
 public interface IRedisChannelStrategy
@@ -493,7 +493,7 @@ public interface IRedisChannelStrategy
 
 ### `IDistributedLockKeyStrategy`
 
-**Namespace:** `UiPath.Platform.Caching.Locking`
+**Namespace:** `UiPath.Caching.Locking`
 
 ```csharp
 public interface IDistributedLockKeyStrategy
@@ -522,7 +522,7 @@ public interface IDistributedLockKeyStrategy
 
 ### `ILocalLock`
 
-**Namespace:** `UiPath.Platform.Caching.Locking`
+**Namespace:** `UiPath.Caching.Locking`
 
 ```csharp
 public interface ILocalLock
@@ -549,7 +549,7 @@ public interface ILocalLock
 
 ### `IDistributedLock`
 
-**Namespace:** `UiPath.Platform.Caching.Locking`
+**Namespace:** `UiPath.Caching.Locking`
 
 ```csharp
 public interface IDistributedLock
@@ -582,7 +582,7 @@ public interface IDistributedLock
 
 ### `ICachingTelemetryProvider`
 
-**Namespace:** `UiPath.Platform.Caching.Telemetry`
+**Namespace:** `UiPath.Caching.Telemetry`
 
 ```csharp
 public interface ICachingTelemetryProvider
@@ -611,7 +611,7 @@ public interface ICachingTelemetryProvider
 
 **Use this when:**
 
-- You are integrating with an observability backend (Application Insights, OpenTelemetry, Datadog) and need to route cache telemetry into that backend.
+- You are integrating with an observability backend (OpenTelemetry, Datadog, a structured logging pipeline) and need to route cache telemetry into that backend.
 - You are writing a custom telemetry adapter that forwards signals to multiple sinks.
 - You need to mock or capture telemetry in unit or integration tests.
 
@@ -628,7 +628,7 @@ public interface ICachingTelemetryProvider
 
 ### `ICachingBuilder`
 
-**Namespace:** `UiPath.Platform.Caching.Config`
+**Namespace:** `UiPath.Caching.Config`
 
 ```csharp
 public interface ICachingBuilder
@@ -643,7 +643,7 @@ public interface ICachingBuilder
 }
 ```
 
-`ICachingBuilder` is the fluent configuration handle passed to the `services.AddCaching(...)` lambda. It exposes the `IServiceCollection` and `IConfiguration` so the builder extensions that ship in the library — `AddRedisConnection()`, `AddBroadcast()`, `AddRedis()`, `AddInMemoryRedis()`, `AddMemory()`, `AddResilienceStrategies()`, `AddCloudEvents()`, `AddTelemetry()`, `AddRedisDistributedLock()`, `AddLocalLock()` — can register services, bind options, and wire up providers against the same DI container. `Enabled` acts as a feature flag — setting it to `false` causes the builder to skip provider registration, which is useful for conditional configuration (e.g. disabling caching in integration-test hosts). `RegisterOnCompleteCallback` defers arbitrary builder actions until all `AddCaching` calls in the startup chain have run, allowing later registrations to override earlier ones without ordering constraints.
+`ICachingBuilder` is the fluent configuration handle passed to the `services.AddCaching(...)` lambda. It exposes the `IServiceCollection` and `IConfiguration` so the builder extensions that ship in the library — `AddRedisConnection()`, `AddBroadcast()`, `AddRedis()`, `AddInMemoryRedis()`, `AddMemory()`, `AddResilienceStrategies()`, `AddCloudEvents()`, `AddOpenTelemetry()`, `AddRedisDistributedLock()`, `AddLocalLock()` — can register services, bind options, and wire up providers against the same DI container. `Enabled` acts as a feature flag — setting it to `false` causes the builder to skip provider registration, which is useful for conditional configuration (e.g. disabling caching in integration-test hosts). `RegisterOnCompleteCallback` defers arbitrary builder actions until all `AddCaching` calls in the startup chain have run, allowing later registrations to override earlier ones without ordering constraints.
 
 **Use this when:**
 

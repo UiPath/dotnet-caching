@@ -10,7 +10,7 @@
 ## Code
 
 ```csharp
-using UiPath.Platform.Caching;
+using UiPath.Caching;
 
 public class UserDirectoryCache(IHashCache<UserField> cache)
 {

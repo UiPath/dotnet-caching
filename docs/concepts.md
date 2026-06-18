@@ -361,7 +361,7 @@ See also: [how-to/resilience.md#named-policies](how-to/resilience.md#named-polic
 a hard dependency on a particular telemetry SDK; instead it calls the four
 methods on this interface and lets the host decide how to route the signal. This
 design means the caching library is useful in any service regardless of which
-observability infrastructure the service uses — Application Insights, OpenTelemetry,
+observability infrastructure the service uses — OpenTelemetry,
 a proprietary internal system, or a test double that records calls for assertions.
 
 Cache hit/miss outcomes are tracked through `ITelemetryOperation.Track(hit: bool)`
@@ -373,7 +373,7 @@ and stream receipt events. `TrackMetric` emits other counters and timings —
 statistics flushed from the in-memory cache at the configured
 `StatisticsFlushInterval`, profiler-derived counters, etc. `TrackDependency`
 records Redis dependency events with start time and duration, following the
-Application Insights dependency model. `TrackException` captures failures that
+standard OpenTelemetry dependency/span model. `TrackException` captures failures that
 occur inside resilience pipelines, such as a generator timeout or a Redis
 command failure during a background
 refresh.
@@ -386,22 +386,22 @@ dictionary is heap-allocated on each call. The default implementations on the
 interface are no-ops, so a partial custom provider only needs to override the
 methods it cares about.
 
-Two integration paths are supported and are mutually exclusive for Redis
-instrumentation. The first is Application Insights via `.AddTelemetry()` on the
-cache builder, which wires `ICachingTelemetryProvider` to
-`UiPath.Platform.Telemetry.ITelemetryProvider`. This is the default for services
-in the UiPath platform. The second is OpenTelemetry, where you supply a custom
-`IConnectionMultiplexerFactory` that calls
-`StackExchangeRedisInstrumentation.AddConnection(...)` on each new connection
-and skip `.AddTelemetry()` on the builder to avoid double-counting Redis
-operations. The two paths are mutually exclusive only for the Redis
-`TrackDependency` signal; `TrackEvent`, `TrackMetric`, and `TrackException`
-work the same way regardless of which path you choose.
+The default integration path is OpenTelemetry. Calling `.AddOpenTelemetry()` on
+the cache builder registers `UiPath.Caching.OpenTelemetry.CachingTelemetryProvider`,
+an `ICachingTelemetryProvider` backed by a `System.Diagnostics.ActivitySource`
+and a `Meter` both named `UiPath.Caching`. You collect those signals by adding
+the source and meter to your OTel providers (`AddSource("UiPath.Caching")` /
+`AddMeter("UiPath.Caching")`). Raw Redis **command** spans are a separate,
+optional layer: supply a custom `IConnectionMultiplexerFactory` that calls
+`StackExchangeRedisInstrumentation.AddConnection(...)` on each new connection.
+Cache-semantic signals (`TrackEvent`, `TrackMetric`, `TrackException`, and the
+hit/miss counters) flow through the adapter regardless of whether you also wire
+up the Redis-command instrumentation.
 
 Registering a custom `ICachingTelemetryProvider` implementation directly is also
-first-class: if your service has its own platform telemetry surface, implement
+first-class: if your service has its own telemetry surface, implement
 the interface and register it in the DI container instead of calling
-`.AddTelemetry()`. The interface is small — four methods with default no-op
+`.AddOpenTelemetry()`. The interface is small — four methods with default no-op
 bodies — so custom implementations are straightforward to write and easy to test.
 
 See also: [how-to/telemetry-and-strategies.md](how-to/telemetry-and-strategies.md).

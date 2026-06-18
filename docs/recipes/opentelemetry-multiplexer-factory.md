@@ -3,8 +3,7 @@
 **What:** A custom `IConnectionMultiplexerFactory` that registers each new `IConnectionMultiplexer` with the OpenTelemetry StackExchange.Redis instrumentation, so Redis commands show up in OTel spans.
 
 **When to use:**
-- You've chosen OpenTelemetry over AppInsights for telemetry.
-- You want Redis commands to appear as OTel spans (alongside HTTP, DB, etc.).
+- You want Redis commands to appear as OTel spans (alongside HTTP, DB, etc.), on top of the cache-semantic signals the `.AddOpenTelemetry()` adapter emits.
 - You need a single integration point for OTel Redis instrumentation that survives connection failures and reconnects.
 
 ## Code
@@ -14,7 +13,7 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Options;
 using OpenTelemetry.Instrumentation.StackExchangeRedis;
 using StackExchange.Redis;
-using UiPath.Platform.Caching.Redis;
+using UiPath.Caching.Redis;
 
 public class OpenTelemetryConnectionMultiplexerFactory(
     IOptions<RedisConnectionOptions> redisOptions,
@@ -53,7 +52,7 @@ builder.Services.AddCaching(
          .AddMemory()
          .AddResilienceStrategies()
          .AddCloudEvents();
-        // No .AddTelemetry() — OTel owns Redis instrumentation.
+        // .AddOpenTelemetry() (cache-semantic signals) is independent; this factory adds Redis command spans.
     },
     options => section.Bind(options));   // bind root CacheOptions (AppShortName, DefaultCache, …)
 ```
@@ -83,7 +82,8 @@ The `ConnectionMultiplexerFactoryType` appsettings string is parsed via `Type.Ge
 
 ## When not to use
 
-- You've chosen AppInsights — use `.AddTelemetry()` instead. The two paths are mutually exclusive for Redis instrumentation (StackExchange.Redis allows only one profiler callback per multiplexer).
+- You only need cache-semantic signals (hit/miss, events, exceptions) and not raw Redis command spans — `.AddOpenTelemetry()` on the caching builder covers that on its own; this factory is the optional Redis-command layer.
+- You have the StackExchange.Redis profiler enabled (`ProfilerEnabled: true`) — Redis command instrumentation and the profiler both claim the single profiler callback per multiplexer, so set `ProfilerEnabled: false` when using this factory.
 - You're not using OTel at all — the factory is dead code without an `IInstrumentation` to add the connection to.
 
 ## See also

@@ -3,14 +3,14 @@
 **What:** Implement `ICachingTelemetryProvider` to bridge cache events to a host platform telemetry surface (an internal `ITelemetryProvider`, a structured logging pipeline, a metrics bus).
 
 **When to use:**
-- Your service has its own platform telemetry surface and you want cache events on it.
-- You're not on AppInsights (so `.AddTelemetry()` doesn't fit) and not on OpenTelemetry-for-Redis (which uses the multiplexer factory instead).
+- Your service has its own telemetry surface and you want cache events on it.
+- The built-in OpenTelemetry adapter (`.AddOpenTelemetry()`) doesn't fit, and you want more than the Redis-command spans the OTel multiplexer factory provides.
 - You want to control what events get emitted and how (e.g. drop some, redact others, route by category).
 
 ## Code
 
 ```csharp
-using UiPath.Platform.Caching.Telemetry;
+using UiPath.Caching.Telemetry;
 
 public class HostTelemetryBridge(IHostTelemetry hostTelemetry) : ICachingTelemetryProvider
 {
@@ -54,7 +54,7 @@ public class HostTelemetryBridge(IHostTelemetry hostTelemetry) : ICachingTelemet
 }
 ```
 
-Register the bridge **instead of** calling `.AddTelemetry()` on the caching builder:
+Register the bridge **instead of** calling `.AddOpenTelemetry()` on the caching builder:
 
 ```csharp
 services.AddSingleton<ICachingTelemetryProvider, HostTelemetryBridge>();
@@ -69,7 +69,7 @@ services.AddCaching(
         .AddMemory()
         .AddResilienceStrategies()
         .AddCloudEvents());
-// Note: no .AddTelemetry() — the bridge replaces it.
+// Note: no .AddOpenTelemetry() — the bridge replaces it.
 ```
 
 ## Notes
@@ -84,7 +84,7 @@ The interface has default no-op implementations for every method, so you only ne
 
 ## When not to use
 
-- You're on AppInsights and `.AddTelemetry()` does what you need — one extra line beats a 60-line bridge.
+- The built-in OpenTelemetry adapter `.AddOpenTelemetry()` does what you need — one extra line beats a 60-line bridge.
 - You only want Redis-level instrumentation (commands, dependencies) and don't care about cache-semantic events. Use the OTel multiplexer-factory path instead — see [recipes/opentelemetry-multiplexer-factory.md](opentelemetry-multiplexer-factory.md).
 
 ## See also
