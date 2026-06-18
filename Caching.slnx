@@ -11,9 +11,13 @@
     <File Path="README.md" />
   </Folder>
   <Project Path="Caching.Abstractions/Caching.Abstractions.csproj" />
+  <Project Path="Caching.BenchmarkTests/Caching.BenchmarkTests.csproj" />
   <Project Path="Caching.CloudEvents/Caching.CloudEvents.csproj" />
   <Project Path="Caching.Polly/Caching.Polly.csproj" />
   <Project Path="Caching.Queue/Caching.Queue.csproj" />
   <Project Path="Caching.Runtime/Caching.Runtime.csproj" />
   <Project Path="Caching.Tests/Caching.Tests.csproj" />
+  <Project Path="Sample.AspNetCore.AppHost/Sample.AspNetCore.AppHost.csproj" />
+  <Project Path="Sample.AspNetCore.ServiceDefaults/Sample.AspNetCore.ServiceDefaults.csproj" />
+  <Project Path="Sample.AspNetCore/Sample.AspNetCore.csproj" />
 </Solution>
