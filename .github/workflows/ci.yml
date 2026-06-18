@@ -9,6 +9,8 @@ on:
 jobs:
   build-test-linux:
     runs-on: ubuntu-latest
+    env:
+      SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
     services:
       redis:
         image: redis:7
@@ -21,6 +23,14 @@ jobs:
           --health-retries 5
     steps:
       - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0  # SonarQube Cloud needs full history for new-code / blame
+
+      - name: Setup Java (SonarScanner runtime)
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
 
       - name: Setup .NET 8
         uses: actions/setup-dotnet@v5
@@ -32,6 +42,21 @@ jobs:
         with:
           dotnet-version: 10.0.x
 
+      - name: Install SonarScanner
+        if: env.SONAR_TOKEN != ''
+        run: dotnet tool install --global dotnet-sonarscanner
+
+      - name: SonarQube Cloud begin
+        if: env.SONAR_TOKEN != ''
+        run: >
+          dotnet sonarscanner begin
+          /k:"UiPath_dotnet-caching"
+          /o:"uipath"
+          /d:sonar.token="${{ env.SONAR_TOKEN }}"
+          /d:sonar.host.url="https://sonarcloud.io"
+          /d:sonar.cs.opencover.reportsPaths="**/coverage.opencover.xml"
+          /d:sonar.cs.vstest.reportsPaths="**/*.trx"
+
       - name: Restore
         run: dotnet restore UiPath.Caching.slnx
 
@@ -39,7 +64,11 @@ jobs:
         run: dotnet build UiPath.Caching.slnx -c Release --no-restore
 
       - name: Test
-        run: dotnet test UiPath.Caching.slnx -c Release --no-build --logger trx --results-directory TestResults
+        run: dotnet test UiPath.Caching.slnx -c Release --no-build --logger trx --results-directory TestResults --collect:"XPlat Code Coverage;Format=opencover"
+
+      - name: SonarQube Cloud end
+        if: env.SONAR_TOKEN != ''
+        run: dotnet sonarscanner end /d:sonar.token="${{ env.SONAR_TOKEN }}"
 
       - name: Upload test results
         if: always()
