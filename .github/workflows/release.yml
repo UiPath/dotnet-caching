@@ -1,18 +1,15 @@
-name: CI
+name: Release
 
 on:
   push:
-    branches: [main]
-  pull_request:
-    branches: [main]
+    tags:
+      - 'v*'
 
 jobs:
-  build-test:
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [ubuntu-latest, windows-latest]
-    runs-on: ${{ matrix.os }}
+  publish:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write  # to create the GitHub release
     services:
       redis:
         image: redis:7
@@ -26,7 +23,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          fetch-depth: 0  # GitVersion needs full history
+          fetch-depth: 0
 
       - name: Setup .NET 8
         uses: actions/setup-dotnet@v4
@@ -54,22 +51,16 @@ jobs:
         run: dotnet build UiPath.Caching.slnx -c Release --no-restore /p:Version=${{ steps.gitversion.outputs.nuGetVersion }}
 
       - name: Test
-        run: dotnet test UiPath.Caching.slnx -c Release --no-build --logger trx --results-directory TestResults
-
-      - name: Upload test results
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: test-results-${{ matrix.os }}
-          path: TestResults
+        run: dotnet test UiPath.Caching.slnx -c Release --no-build
 
       - name: Pack
-        if: matrix.os == 'ubuntu-latest'
         run: dotnet pack UiPath.Caching.slnx -c Release --no-build -o packages /p:Version=${{ steps.gitversion.outputs.nuGetVersion }}
 
-      - name: Upload packages
-        if: matrix.os == 'ubuntu-latest'
-        uses: actions/upload-artifact@v4
+      - name: Push to nuget.org
+        run: dotnet nuget push 'packages/*.nupkg' --source https://api.nuget.org/v3/index.json --api-key ${{ secrets.NUGET_API_KEY }} --skip-duplicate
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
         with:
-          name: nupkg
-          path: packages/*.nupkg
+          generate_release_notes: true
+          files: packages/*.nupkg

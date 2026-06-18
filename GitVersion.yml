@@ -7,12 +7,12 @@ assembly-file-versioning-format: '{Major}.{Minor}.{Patch}'
 assembly-informational-format: '{Major}.{Minor}.0'
 branches:
   feature:
-    source-branches: ['master','release','develop']
+    source-branches: ['main']
     tag: useBranchName
     is-release-branch: false
   fix:
     regex: 'fix[/-]'
-    source-branches: ['master','release','develop']
+    source-branches: ['main']
     tag: useBranchName
     is-release-branch: false
   pull-request:
@@ -20,12 +20,6 @@ branches:
     tag-number-pattern: '[/-](?<number>\d+)[-/]'
     is-release-branch: false
     increment: none
-  develop:
-    tag: 'alpha'
-    is-release-branch: false
-  master:
-    tag: 'beta'
-    is-release-branch: false
-  release:
+  main:
     tag: ''
     is-release-branch: true
