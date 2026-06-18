@@ -62,7 +62,7 @@
     <PackageVersion Include="Microsoft.Extensions.Http.Resilience" Version="10.5.0" />
     <PackageVersion Include="Microsoft.Extensions.ServiceDiscovery" Version="10.5.0" />
     <!-- Test related packages -->
-    <PackageVersion Include="FluentAssertions" Version="8.1.1" />
+    <PackageVersion Include="FluentAssertions" Version="8.10.0" />
     <PackageVersion Include="Microsoft.NET.Test.Sdk" Version="18.0.1" />
     <PackageVersion Include="xunit.v3" Version="$(xUnit)" />
     <PackageVersion Include="xunit.runner.visualstudio" Version="3.1.5" />
