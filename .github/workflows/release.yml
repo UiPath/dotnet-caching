@@ -22,8 +22,6 @@ jobs:
           --health-retries 5
     steps:
       - uses: actions/checkout@v5
-        with:
-          fetch-depth: 0
 
       - name: Setup .NET 8
         uses: actions/setup-dotnet@v5
@@ -35,26 +33,21 @@ jobs:
         with:
           dotnet-version: 10.0.x
 
-      - name: Setup GitVersion
-        uses: gittools/actions/gitversion/setup@v1
-        with:
-          versionSpec: '5.x'
-
-      - name: Execute GitVersion
-        id: gitversion
-        uses: gittools/actions/gitversion/execute@v1
+      - name: Derive version from tag
+        id: version
+        run: echo "value=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
 
       - name: Restore
         run: dotnet restore UiPath.Caching.slnx
 
       - name: Build
-        run: dotnet build UiPath.Caching.slnx -c Release --no-restore /p:Version=${{ steps.gitversion.outputs.nuGetVersion }}
+        run: dotnet build UiPath.Caching.slnx -c Release --no-restore /p:Version=${{ steps.version.outputs.value }}
 
       - name: Test
         run: dotnet test UiPath.Caching.slnx -c Release --no-build
 
       - name: Pack
-        run: dotnet pack UiPath.Caching.slnx -c Release --no-build -o packages /p:Version=${{ steps.gitversion.outputs.nuGetVersion }}
+        run: dotnet pack UiPath.Caching.slnx -c Release --no-build -o packages /p:Version=${{ steps.version.outputs.value }}
 
       - name: Push to nuget.org
         run: dotnet nuget push 'packages/*.nupkg' --source https://api.nuget.org/v3/index.json --api-key ${{ secrets.NUGET_API_KEY }} --skip-duplicate

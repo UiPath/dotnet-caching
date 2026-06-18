@@ -25,8 +25,6 @@
     <SymbolPackageFormat>snupkg</SymbolPackageFormat>
     <PackageOutputPath>$(MSBuildThisFileDirectory)Release</PackageOutputPath>
     <GenerateAssemblyInfo>False</GenerateAssemblyInfo>
-    <GitVersion_NoFetchEnabled>true</GitVersion_NoFetchEnabled>
-    <WriteVersionInfoToBuildLog>true</WriteVersionInfoToBuildLog>
     <NoWarn>$(NoWarn);NU5105;NU1507;CS1591;AD0001;NU1900;</NoWarn>
     <PackageReadmeFile>README.md</PackageReadmeFile>
     <ImplicitUsings>enable</ImplicitUsings>
