@@ -22,7 +22,9 @@ public class EventDispatcherTests
         channel.Writer.TryWrite(CreateEvent("ok-2"));
         channel.Writer.Complete();
 
-        await WaitForCount(subject, 3, TimeSpan.FromSeconds(5));
+        // The consume loop exits once the completed channel is fully drained — deterministic, unlike
+        // polling Keys.Count in a short window (which is flaky under thread-pool starvation on CI).
+        await dispatcher.ConsumeTask.WaitAsync(TimeSpan.FromSeconds(30), TestContext.Current.CancellationToken);
 
         subject.Keys.Should().ContainInOrder("ok-1", "poison", "ok-2");
         subject.ThrowCount.Should().Be(1);
@@ -47,21 +49,9 @@ public class EventDispatcherTests
         }
         channel.Writer.Complete();
 
-        await WaitForCount(subject, 5, TimeSpan.FromSeconds(5));
+        await dispatcher.ConsumeTask.WaitAsync(TimeSpan.FromSeconds(30), TestContext.Current.CancellationToken);
 
         subject.ThrowCount.Should().Be(5, "every OnNext call must be attempted even when previous calls threw");
-    }
-
-    private static async Task WaitForCount(RecordingSubject subject, int expected, TimeSpan timeout)
-    {
-        var deadline = DateTime.UtcNow + timeout;
-        while (DateTime.UtcNow < deadline)
-        {
-            if (subject.Keys.Count >= expected) return;
-            await Task.Delay(10);
-        }
-        throw new TimeoutException(
-            $"Expected {expected} dispatched events; observed {subject.Keys.Count}.");
     }
 
     private static ICacheEvent CreateEvent(string key) => new TestCacheEvent

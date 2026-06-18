@@ -211,14 +211,15 @@ public class RedisStreamSubjectWriterTests : IAsyncLifetime
     public async Task NOGROUP_error_triggers_StreamCreateConsumerGroup()
     {
         // ProcessException must detect the StackExchange "NOGROUP" error and call StreamCreateConsumerGroup.
+        var createCalled = new TaskCompletionSource();
         _database.StreamReadGroupAsync(_context.Topic, _context.ConsumerGroup, _context.ConsumerName, ">", _context.PollBatchSize)
             .ThrowsAsyncForAnyArgs(_ => throw new RedisException("NOGROUP No such key or consumer group"));
         _database.StreamCreateConsumerGroupAsync(_context.Topic, _context.ConsumerGroup, Arg.Any<RedisValue?>())
-            .ReturnsForAnyArgs(_ => Task.FromResult(true));
+            .ReturnsForAnyArgs(_ => { createCalled.TrySetResult(); return Task.FromResult(true); });
         _database.ClearReceivedCalls();
 
         var fetchTask = Sut.FetchTask;
-        await WaitForStreamCreateConsumerGroupAsync(NogroupPollTimeout);
+        await createCalled.Task.WaitAsync(NogroupPollTimeout, TestContext.Current.CancellationToken);
         _cancellationTokenSource.Cancel();
         try { await fetchTask.WaitAsync(WaitTimeout, TestContext.Current.CancellationToken); } catch (OperationCanceledException) { }
     }
@@ -228,14 +229,15 @@ public class RedisStreamSubjectWriterTests : IAsyncLifetime
     {
         const string BusyGroupMessage = "BUSYGROUP Consumer Group name already exists";
 
+        var createCalled = new TaskCompletionSource();
         _database.StreamReadGroupAsync(_context.Topic, _context.ConsumerGroup, _context.ConsumerName, ">", _context.PollBatchSize)
             .ThrowsAsyncForAnyArgs(_ => throw new RedisException("NOGROUP unknown group"));
         _database.StreamCreateConsumerGroupAsync(_context.Topic, _context.ConsumerGroup, Arg.Any<RedisValue?>())
-            .ThrowsAsyncForAnyArgs(_ => throw new RedisServerException(BusyGroupMessage));
+            .ThrowsAsyncForAnyArgs(_ => { createCalled.TrySetResult(); throw new RedisServerException(BusyGroupMessage); });
         _database.ClearReceivedCalls();
 
         var fetchTask = Sut.FetchTask;
-        await WaitForStreamCreateConsumerGroupAsync(NogroupPollTimeout);
+        await createCalled.Task.WaitAsync(NogroupPollTimeout, TestContext.Current.CancellationToken);
         _cancellationTokenSource.Cancel();
         try { await fetchTask.WaitAsync(WaitTimeout, TestContext.Current.CancellationToken); } catch (OperationCanceledException) { }
     }
@@ -243,33 +245,20 @@ public class RedisStreamSubjectWriterTests : IAsyncLifetime
     [Fact]
     public async Task NOGROUP_recovery_logs_and_continues_when_StreamCreate_throws_unexpectedly()
     {
+        var createCalled = new TaskCompletionSource();
         _database.StreamReadGroupAsync(_context.Topic, _context.ConsumerGroup, _context.ConsumerName, ">", _context.PollBatchSize)
             .ThrowsAsyncForAnyArgs(_ => throw new RedisException("NOGROUP unknown group"));
         _database.StreamCreateConsumerGroupAsync(_context.Topic, _context.ConsumerGroup, Arg.Any<RedisValue?>())
-            .ThrowsAsyncForAnyArgs(_ => throw new InvalidOperationException("create failed"));
+            .ThrowsAsyncForAnyArgs(_ => { createCalled.TrySetResult(); throw new InvalidOperationException("create failed"); });
         _database.ClearReceivedCalls();
 
         var fetchTask = Sut.FetchTask;
-        await WaitForStreamCreateConsumerGroupAsync(NogroupPollTimeout);
+        await createCalled.Task.WaitAsync(NogroupPollTimeout, TestContext.Current.CancellationToken);
         _cancellationTokenSource.Cancel();
         try { await fetchTask.WaitAsync(WaitTimeout, TestContext.Current.CancellationToken); } catch (OperationCanceledException) { }
     }
 
     private static readonly TimeSpan NogroupPollTimeout = TimeSpan.FromSeconds(30);
-
-    private async Task WaitForStreamCreateConsumerGroupAsync(TimeSpan timeout)
-    {
-        var deadline = DateTime.UtcNow + timeout;
-        while (DateTime.UtcNow < deadline)
-        {
-            if (_database.ReceivedCalls().Any(c => c.GetMethodInfo().Name == nameof(IDatabase.StreamCreateConsumerGroupAsync)))
-            {
-                return;
-            }
-            await Task.Delay(25, TestContext.Current.CancellationToken).ConfigureAwait(false);
-        }
-        throw new TimeoutException($"StreamCreateConsumerGroupAsync was not called within {timeout.TotalSeconds}s — the fetch loop never reached ProcessException's NOGROUP branch.");
-    }
 
     [Fact]
     public async Task ProcessEvent_swallows_formatter_exception()
