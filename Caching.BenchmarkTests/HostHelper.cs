@@ -72,13 +72,12 @@ internal static class HostHelper
 {
     private static Lazy<string> BasePath = new Lazy<string>(() =>
     {
-        var currentDir = Directory.GetCurrentDirectory();
-        var temp = new DirectoryInfo(currentDir);
-        while (!string.Equals(temp!.Name, "Caching", StringComparison.InvariantCultureIgnoreCase))
+        var temp = new DirectoryInfo(Directory.GetCurrentDirectory());
+        while (temp is not null && !Directory.Exists(Path.Combine(temp.FullName, "Sample.AspNetCore")))
         {
             temp = temp.Parent;
         }
-        return Path.Combine(temp.FullName, "Sample.AspNetCore");
+        return Path.Combine(temp?.FullName ?? Directory.GetCurrentDirectory(), "Sample.AspNetCore");
     });
 
     public static IHost GetHost(int i, string? cache = null, string? topic = null, IDictionary<string, string?>? extra = null)

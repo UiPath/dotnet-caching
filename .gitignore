@@ -249,3 +249,6 @@ src/ProcessForms/UiPath.ProcessForms/UiPath.ProcessForms.XML
 
 # Language-server / Roslyn analyzer caches
 *.csproj.lscache
+
+# BenchmarkDotNet run output
+BenchmarkDotNet.Artifacts/

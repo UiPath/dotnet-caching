@@ -308,7 +308,7 @@ try {
         Set-ScopedEnvironmentVariable $originalEnvironment 'Caching__Connections__Redis__ConnectionStringExtraParams' 'allowAdmin=true,abortConnect=false,ssl=false,connectRetry=5,keepAlive=30,name=test,syncTimeout=10000,connectTimeout=10000'
     }
     else {
-        $redisEndpoint = Wait-RedisContainer -NamePrefix 'cache-' -ContainerPort 6379 -TimeoutSeconds $StartupTimeoutSeconds -AppHostProcess $appHost -ExcludedContainerIds $preExistingDockerContainers
+        $redisEndpoint = Wait-RedisContainer -NamePrefix 'cache-' -ContainerPort 6380 -TimeoutSeconds $StartupTimeoutSeconds -AppHostProcess $appHost -ExcludedContainerIds $preExistingDockerContainers
         $redisConnectionString = "$($redisEndpoint.HostName):$($redisEndpoint.HostPort),abortConnect=false,ssl=false"
         if (-not [string]::IsNullOrEmpty($redisEndpoint.Password)) {
             $redisConnectionString = "$redisConnectionString,password=$($redisEndpoint.Password)"
