@@ -247,12 +247,12 @@ try {
     Push-Location $repoRoot
 
     if (-not $NoBuild) {
-        dotnet build Sample.AspNetCore.AppHost/Sample.AspNetCore.AppHost.csproj
+        dotnet build samples/UiPath.Caching.Sample.AppHost/UiPath.Caching.Sample.AppHost.csproj
         if ($LASTEXITCODE -ne 0) {
             throw "AppHost build failed with exit code $LASTEXITCODE."
         }
 
-        dotnet build Caching.BenchmarkTests/Caching.BenchmarkTests.csproj -c Release
+        dotnet build benchmarks/UiPath.Caching.Benchmarks/UiPath.Caching.Benchmarks.csproj -c Release
         if ($LASTEXITCODE -ne 0) {
             throw "Benchmark build failed with exit code $LASTEXITCODE."
         }
@@ -266,7 +266,7 @@ try {
     $appHostArgs = @(
         'run',
         '--project',
-        'Sample.AspNetCore.AppHost/Sample.AspNetCore.AppHost.csproj',
+        'samples/UiPath.Caching.Sample.AppHost/UiPath.Caching.Sample.AppHost.csproj',
         '--launch-profile',
         'http'
     )
@@ -322,7 +322,7 @@ try {
     $benchmarkCommand = @(
         'run',
         '--project',
-        'Caching.BenchmarkTests/Caching.BenchmarkTests.csproj',
+        'benchmarks/UiPath.Caching.Benchmarks/UiPath.Caching.Benchmarks.csproj',
         '--framework',
         'net10.0',
         '-c',

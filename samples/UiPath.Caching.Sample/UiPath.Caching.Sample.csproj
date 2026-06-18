@@ -1,0 +1,33 @@
+<Project Sdk="Microsoft.NET.Sdk.Web">
+
+  <PropertyGroup>
+    <TargetFrameworks>net10.0</TargetFrameworks>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <IsPackable>false</IsPackable>
+    <SonarQubeExclude>true</SonarQubeExclude>
+    <SonarQubeTestProject>false</SonarQubeTestProject>
+  </PropertyGroup>
+  <ItemGroup>
+    <PackageReference Include="Swashbuckle.AspNetCore" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\UiPath.Caching.Abstractions\UiPath.Caching.Abstractions.csproj" />
+    <ProjectReference Include="..\..\src\UiPath.Caching.CloudEvents\UiPath.Caching.CloudEvents.csproj" />
+    <ProjectReference Include="..\..\src\UiPath.Caching.Polly\UiPath.Caching.Polly.csproj" />
+    <ProjectReference Include="..\..\src\UiPath.Caching\UiPath.Caching.csproj" />
+    <PackageReference Include="OpenTelemetry" />
+    <PackageReference Include="OpenTelemetry.Instrumentation.StackExchangeRedis" />
+    <PackageReference Include="OpenTelemetry.Extensions.Hosting" />
+  </ItemGroup>
+  <ItemGroup>
+    <PackageReference Update="SonarAnalyzer.CSharp">
+      <PrivateAssets>all</PrivateAssets>
+      <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
+    </PackageReference>
+  </ItemGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\UiPath.Caching.Sample.ServiceDefaults\UiPath.Caching.Sample.ServiceDefaults.csproj" />
+  </ItemGroup>
+</Project>

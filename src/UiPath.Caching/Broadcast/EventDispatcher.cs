@@ -1,0 +1,68 @@
+using System.Threading.Channels;
+
+namespace UiPath.Caching.Broadcast;
+
+internal sealed partial class EventDispatcher<T> : IDisposable
+    where T : IEvent
+{
+    private readonly TopicKey _topicKey;
+    private readonly ChannelReader<T> _reader;
+    private readonly IEventSubject<T> _subject;
+    private readonly ILogger _logger;
+    private readonly CancellationTokenSource _stopTokenSource;
+    private readonly CancellationToken _cancellationToken;
+    private bool _disposed;
+
+    public EventDispatcher(TopicKey topicKey,
+        ChannelReader<T> reader,
+        IEventSubject<T> subject,
+        ILogger logger,
+        CancellationToken cancellationToken)
+    {
+        _topicKey = topicKey;
+        _reader = reader;
+        _subject = subject;
+        _logger = logger;
+        _stopTokenSource = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        _cancellationToken = _stopTokenSource.Token;
+        ConsumeTask = Task.Run(Consume, _cancellationToken);
+    }
+
+    internal Task ConsumeTask { get; }
+
+    private async Task Consume()
+    {
+        while (await _reader.WaitToReadAsync(_cancellationToken).ConfigureAwait(false))
+        {
+            while (_reader.TryRead(out var item))
+            {
+                try
+                {
+                    _subject.OnNext(item);
+                }
+                catch (Exception ex)
+                {
+                    LogDispatchFailed(ex, _topicKey);
+                }
+            }
+        }
+        LogStoppedConsuming(_topicKey);
+    }
+
+    public void Dispose()
+    {
+        if (_disposed)
+        {
+            return;
+        }
+        _disposed = true;
+        _stopTokenSource?.Cancel();
+        _stopTokenSource?.Dispose();
+    }
+
+    [LoggerMessage(Level = LogLevel.Debug, Message = "Stopped consuming from topic {TopicKey}")]
+    private partial void LogStoppedConsuming(TopicKey topicKey);
+
+    [LoggerMessage(Level = LogLevel.Error, Message = "Dispatch threw for topic {TopicKey}; continuing.")]
+    private partial void LogDispatchFailed(Exception ex, TopicKey topicKey);
+}

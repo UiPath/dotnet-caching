@@ -1,0 +1,25 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <IsPackable>false</IsPackable>
+    <SonarQubeTestProject>true</SonarQubeTestProject>
+    <StartupObject>UiPath.Caching.Benchmarks.Program</StartupObject>
+    <OutputType>Exe</OutputType>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="BenchmarkDotNet" />
+    <PackageReference Include="Microsoft.Extensions.DependencyInjection" />
+    <PackageReference Include="Microsoft.Extensions.Hosting" />
+    <PackageReference Include="Microsoft.Extensions.Logging.Console" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\UiPath.Caching.Abstractions\UiPath.Caching.Abstractions.csproj" />
+    <ProjectReference Include="..\..\src\UiPath.Caching.CloudEvents\UiPath.Caching.CloudEvents.csproj" />
+    <ProjectReference Include="..\..\src\UiPath.Caching.Polly\UiPath.Caching.Polly.csproj" />
+    <ProjectReference Include="..\..\src\UiPath.Caching\UiPath.Caching.csproj" />
+  </ItemGroup>
+
+</Project>

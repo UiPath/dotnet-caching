@@ -6,25 +6,23 @@ Multilayer caching for .NET — L1 in-memory + L2 Redis, cross-node sync over Re
 
 The library powers caching in UiPath Platform services. It is built for multi-tenant workloads that need a hot in-process tier, a shared Redis tier, and cross-node coherence — without each service reinventing the same patterns.
 
-<!-- TBD (revisit): full OSS content pass. PackageIds are still `UiPath.Platform.Caching.*` until the rename + first nuget.org release (PR #2); the `Telemetry` and `AspNetCore` integrations stay in ServiceCommon and are replaced here by a forthcoming `UiPath.Caching.OpenTelemetry` adapter (PR #3). -->
-
-> **Note:** Until the v1.0.0 release, NuGet PackageIds are still `UiPath.Platform.Caching.*`; they are renamed to `UiPath.Caching.*` in the publish PR.
+<!-- TBD (revisit): full OSS content/docs pass — the `docs/` tree still uses old namespaces/names; the `Telemetry` and `AspNetCore` integrations stay in ServiceCommon and are replaced here by a forthcoming `UiPath.Caching.OpenTelemetry` adapter. -->
 
 ## Quick Start
 
 ```bash
-dotnet add package UiPath.Platform.Caching.Runtime
-dotnet add package UiPath.Platform.Caching.Polly
-dotnet add package UiPath.Platform.Caching.CloudEvents
+dotnet add package UiPath.Caching
+dotnet add package UiPath.Caching.Polly
+dotnet add package UiPath.Caching.CloudEvents
 ```
 
 Wire it once in `Program.cs`:
 
 ```csharp
-using UiPath.Platform.Caching;
-using UiPath.Platform.Caching.CloudEvents;
-using UiPath.Platform.Caching.Config;
-using UiPath.Platform.Caching.Polly;
+using UiPath.Caching;
+using UiPath.Caching.CloudEvents;
+using UiPath.Caching.Config;
+using UiPath.Caching.Polly;
 
 var section = builder.Configuration.GetSection("Caching");
 builder.Services.AddCaching(
@@ -84,7 +82,7 @@ That's it. Everything else has a sensible default. Five-minute onboarding lives 
 
 **Observability**
 - **`ICachingTelemetryProvider`** seam with span-based tag bags (allocation-free when telemetry is off). An OpenTelemetry adapter (`ActivitySource` + `Meter`) ships as `UiPath.Caching.OpenTelemetry` <!-- TBD: added in PR #3 -->; OpenTelemetry Redis instrumentation wires up via the `IConnectionMultiplexerFactory` hook (see the sample).
-- **CloudEvents** — broadcast events wrapped in the CNCF CloudEvents envelope (`UiPath.Platform.Caching.CloudEvents`).
+- **CloudEvents** — broadcast events wrapped in the CNCF CloudEvents envelope (`UiPath.Caching.CloudEvents`).
 
 ## Architecture
 
@@ -106,11 +104,11 @@ flowchart LR
 
 | Package | When you need it |
 |---|---|
-| `UiPath.Platform.Caching.Abstractions` | Always (transitive). |
-| `UiPath.Platform.Caching.Runtime` | Always — providers, topics, locks. |
-| `UiPath.Platform.Caching.Polly` | Resilience pipelines. Recommended. |
-| `UiPath.Platform.Caching.CloudEvents` | CloudEvents envelope for broadcast events. Recommended. |
-| `UiPath.Platform.Caching.Queue` | Redis set ("queue") support — `ISetCache` / `AddRedisSetCache`. |
+| `UiPath.Caching.Abstractions` | Always (transitive). |
+| `UiPath.Caching` | Always — providers, topics, locks. |
+| `UiPath.Caching.Polly` | Resilience pipelines. Recommended. |
+| `UiPath.Caching.CloudEvents` | CloudEvents envelope for broadcast events. Recommended. |
+| `UiPath.Caching.Queue` | Redis set ("queue") support — `ISetCache` / `AddRedisSetCache`. |
 
 ## Documentation
 

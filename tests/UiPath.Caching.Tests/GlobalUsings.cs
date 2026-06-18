@@ -1,0 +1,9 @@
+global using AutoFixture;
+global using AutoFixture.AutoNSubstitute;
+global using FluentAssertions;
+global using Microsoft.Extensions.Options;
+global using NSubstitute;
+global using UiPath.Caching.Broadcast;
+global using UiPath.Caching.Broadcast.Redis;
+global using UiPath.Caching.Redis;
+global using Xunit;
