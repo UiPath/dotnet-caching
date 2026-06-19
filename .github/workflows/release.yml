@@ -8,6 +8,8 @@ on:
 jobs:
   publish:
     runs-on: ubuntu-latest
+    env:
+      NUGET_API_KEY: ${{ secrets.NUGET_API_KEY }}
     permissions:
       contents: write  # to create the GitHub release
     services:
@@ -50,7 +52,8 @@ jobs:
         run: dotnet pack UiPath.Caching.slnx -c Release --no-build -o packages /p:Version=${{ steps.version.outputs.value }}
 
       - name: Push to nuget.org
-        run: dotnet nuget push 'packages/*.nupkg' --source https://api.nuget.org/v3/index.json --api-key ${{ secrets.NUGET_API_KEY }} --skip-duplicate
+        if: env.NUGET_API_KEY != ''
+        run: dotnet nuget push 'packages/*.nupkg' --source https://api.nuget.org/v3/index.json --api-key ${{ env.NUGET_API_KEY }} --skip-duplicate
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
