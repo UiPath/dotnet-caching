@@ -24,16 +24,15 @@ dotnet test
 - Update CHANGELOG.md under `## [Unreleased]`.
 - Commit messages follow [Conventional Commits](https://www.conventionalcommits.org/): `<type>(<scope>): <subject>`. Example: `feat(redis): add cluster sharding support`.
 
-## Sign-off
+## Sign-off (DCO)
 
-<!-- TBD: DCO vs CLA decision. Default below assumes DCO; replace if a CLA is chosen. -->
-<SIGN_OFF_POLICY — TBD: DCO or CLA>
+This project uses the [Developer Certificate of Origin](https://developercertificate.org/): by contributing, you certify that you wrote the change or otherwise have the right to submit it under the project's license. Sign off every commit:
 
-We use the [Developer Certificate of Origin](https://developercertificate.org/). Sign off each commit with `git commit -s`.
+```bash
+git commit -s
+```
 
-## Code of Conduct
-
-This project follows the [Contributor Covenant](./CODE_OF_CONDUCT.md). By participating, you agree to abide by its terms.
+This appends a `Signed-off-by: Your Name <you@example.com>` trailer (using your `git config user.name` / `user.email`). Commits made through GitHub's web editor are signed off automatically.
 
 ## Reporting security issues
 
