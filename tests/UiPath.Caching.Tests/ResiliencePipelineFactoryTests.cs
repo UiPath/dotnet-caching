@@ -121,7 +121,7 @@ public class ResiliencePipelineFactoryTest(ITestContextAccessor testContextAcces
             });
         var timeoutFunc = new Func<CancellationToken, ValueTask<bool>>(async token =>
         {
-            await Task.Delay(5000, token);
+            await Task.Delay(TimeSpan.FromSeconds(60), token);
             return true;
         });
         var exceptionFunc = new Func<CancellationToken, ValueTask<bool>>(token =>
