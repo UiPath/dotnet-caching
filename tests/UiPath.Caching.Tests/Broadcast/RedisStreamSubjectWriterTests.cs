@@ -1,5 +1,4 @@
 using System.Threading.Channels;
-using FluentAssertions.Extensions;
 using Microsoft.Extensions.Logging;
 using NSubstitute.ExceptionExtensions;
 using NSubstitute.ReceivedExtensions;

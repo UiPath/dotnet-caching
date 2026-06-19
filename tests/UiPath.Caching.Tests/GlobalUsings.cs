@@ -1,6 +1,7 @@
 global using AutoFixture;
 global using AutoFixture.AutoNSubstitute;
-global using FluentAssertions;
+global using AwesomeAssertions;
+global using AwesomeAssertions.Extensions;
 global using Microsoft.Extensions.Options;
 global using NSubstitute;
 global using UiPath.Caching.Broadcast;

@@ -1,4 +1,3 @@
-using FluentAssertions.Extensions;
 
 namespace UiPath.Caching.Tests.Broadcast;
 

@@ -62,7 +62,7 @@
     <PackageVersion Include="Microsoft.Extensions.Http.Resilience" Version="10.5.0" />
     <PackageVersion Include="Microsoft.Extensions.ServiceDiscovery" Version="10.5.0" />
     <!-- Test related packages -->
-    <PackageVersion Include="FluentAssertions" Version="8.1.1" />
+    <PackageVersion Include="AwesomeAssertions" Version="9.4.0" />
     <PackageVersion Include="Microsoft.NET.Test.Sdk" Version="18.0.1" />
     <PackageVersion Include="xunit.v3" Version="$(xUnit)" />
     <PackageVersion Include="xunit.runner.visualstudio" Version="3.1.5" />
@@ -73,6 +73,6 @@
     <PackageVersion Include="NSubstitute" Version="5.3.0" />
     <PackageVersion Include="NSubstitute.Analyzers.CSharp" Version="1.0.17" />
     <PackageVersion Include="coverlet.collector" Version="6.0.4" />
-    <PackageVersion Include="FluentAssertions.Json" Version="8.0.0" />
+    <PackageVersion Include="AwesomeAssertions.Json" Version="9.0.0" />
   </ItemGroup>
 </Project>

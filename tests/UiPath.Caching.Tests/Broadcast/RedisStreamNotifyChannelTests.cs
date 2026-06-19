@@ -1,4 +1,3 @@
-using FluentAssertions.Extensions;
 using Microsoft.Extensions.Logging;
 using StackExchange.Redis;
 

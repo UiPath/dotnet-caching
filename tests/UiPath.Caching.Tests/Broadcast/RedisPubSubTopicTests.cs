@@ -1,5 +1,4 @@
 using System.Text;
-using FluentAssertions.Extensions;
 using NSubstitute.ExceptionExtensions;
 using StackExchange.Redis;
 using UiPath.Caching.Policies;
