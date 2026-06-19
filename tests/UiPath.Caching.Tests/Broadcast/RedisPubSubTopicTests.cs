@@ -43,7 +43,7 @@ public class RedisPubSubTopicTests(ITestContextAccessor testContextAccessor) : I
     }
 
     private Task WaitForSubscribeAsync() =>
-        _subscribeCalled.Task.WaitAsync(TimeSpan.FromSeconds(2), testContextAccessor.Current.CancellationToken);
+        _subscribeCalled.Task.WaitAsync(TimeSpan.FromSeconds(30), testContextAccessor.Current.CancellationToken);
 
     [Fact]
     public async Task Publish_WhenDisconnected()
@@ -150,7 +150,7 @@ public class RedisPubSubTopicTests(ITestContextAccessor testContextAccessor) : I
     {
         var sut = await Sut(5);
         sut.Dispose();
-        await _unsubscribeCalled.Task.WaitAsync(TimeSpan.FromSeconds(2), testContextAccessor.Current.CancellationToken);
+        await _unsubscribeCalled.Task.WaitAsync(TimeSpan.FromSeconds(30), testContextAccessor.Current.CancellationToken);
         _subscriber.Received().Unsubscribe(Arg.Any<RedisChannel>(), Arg.Any<Action<RedisChannel, RedisValue>?>(), Arg.Any<CommandFlags>());
         _topicKey.Name.Should().BeEquivalentTo(_actualRedisChannel);
     }

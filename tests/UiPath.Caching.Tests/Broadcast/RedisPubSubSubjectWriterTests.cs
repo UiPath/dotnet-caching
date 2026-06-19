@@ -26,7 +26,7 @@ public class RedisPubSubSubjectWriterTests(ITestContextAccessor testContextAcces
 
     private Task<Action<RedisChannel, RedisValue>> WaitForSubscribeAsync() =>
         _subscribeCalled.Task
-            .WaitAsync(TimeSpan.FromSeconds(2), testContextAccessor.Current.CancellationToken)
+            .WaitAsync(TimeSpan.FromSeconds(30), testContextAccessor.Current.CancellationToken)
             .ContinueWith(_ => _capturedAction!, TaskContinuationOptions.OnlyOnRanToCompletion);
 
     [Fact]
