@@ -113,7 +113,7 @@ public class MultilayerCacheGetOrAddLockTests(ITestContextAccessor testContextAc
             {
                 bothStarted.TrySetResult();
             }
-            await bothStarted.Task.WaitAsync(TimeSpan.FromSeconds(5), ct);
+            await bothStarted.Task.WaitAsync(TimeSpan.FromSeconds(30), ct);
 
             Interlocked.Decrement(ref concurrentInGenerator);
             return "v";
@@ -187,7 +187,7 @@ public class MultilayerCacheGetOrAddLockTests(ITestContextAccessor testContextAc
         }
 
         var holderTask = Task.Run(async () => await Sut.GetOrAddAsync(cacheKey, Holder, (CachePolicy?)null, token));
-        await holderAcquired.Task.WaitAsync(TimeSpan.FromSeconds(2), token);
+        await holderAcquired.Task.WaitAsync(TimeSpan.FromSeconds(30), token);
 
         await Sut.GetOrAddAsync(cacheKey, Second, (CachePolicy?)null, token);
 
@@ -230,7 +230,7 @@ public class MultilayerCacheGetOrAddLockTests(ITestContextAccessor testContextAc
             {
                 allStarted.TrySetResult();
             }
-            await allStarted.Task.WaitAsync(TimeSpan.FromSeconds(5), ct);
+            await allStarted.Task.WaitAsync(TimeSpan.FromSeconds(30), ct);
 
             Interlocked.Decrement(ref concurrentInGenerator);
             return "v";

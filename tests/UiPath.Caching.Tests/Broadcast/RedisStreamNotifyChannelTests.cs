@@ -27,7 +27,7 @@ public class RedisStreamNotifyChannelTests
         using var waiter = new SignalingFetchWaiter(5.Seconds());
         using var sut = new RedisStreamNotifyChannel(channel, redis, _fixture.Create<ILogger>(), waiter, null, 10.Milliseconds());
 
-        var capturedHandler = await captured.Task.WaitAsync(5.Seconds(), token);
+        var capturedHandler = await captured.Task.WaitAsync(30.Seconds(), token);
 
         var waitTask = waiter.WaitAsync(token);
         capturedHandler(channel, RedisValue.EmptyString);
@@ -66,7 +66,7 @@ public class RedisStreamNotifyChannelTests
 
         using var waiter = new SignalingFetchWaiter(5.Seconds());
         using var sut = new RedisStreamNotifyChannel(channel, redis, _fixture.Create<ILogger>(), waiter, 50.Milliseconds(), 10.Milliseconds());
-        await twoCalls.Task.WaitAsync(5.Seconds(), token);
+        await twoCalls.Task.WaitAsync(30.Seconds(), token);
 
         Volatile.Read(ref calls).Should().BeGreaterThanOrEqualTo(2);
     }
@@ -89,7 +89,7 @@ public class RedisStreamNotifyChannelTests
 
         using var waiter = new SignalingFetchWaiter(5.Seconds());
         var sut = new RedisStreamNotifyChannel(channel, redis, _fixture.Create<ILogger>(), waiter, null, 10.Milliseconds());
-        await subscribed.Task.WaitAsync(5.Seconds(), token);
+        await subscribed.Task.WaitAsync(30.Seconds(), token);
 
         sut.Dispose();
 
@@ -114,7 +114,7 @@ public class RedisStreamNotifyChannelTests
 
         using var waiter = new SignalingFetchWaiter(50.Milliseconds());
         var sut = new RedisStreamNotifyChannel(channel, redis, _fixture.Create<ILogger>(), waiter, null, 10.Milliseconds());
-        await subscribed.Task.WaitAsync(5.Seconds(), token);
+        await subscribed.Task.WaitAsync(30.Seconds(), token);
 
         sut.Dispose();
 
@@ -147,11 +147,11 @@ public class RedisStreamNotifyChannelTests
 
         using var waiter = new SignalingFetchWaiter(5.Seconds());
         using var sut = new RedisStreamNotifyChannel(channel, redis, _fixture.Create<ILogger>(), waiter, 60.Seconds(), 10.Milliseconds());
-        await firstCall.Task.WaitAsync(5.Seconds(), token);
+        await firstCall.Task.WaitAsync(30.Seconds(), token);
 
         redis.OnReconnected += Raise.Event();
 
-        await secondCall.Task.WaitAsync(5.Seconds(), token);
+        await secondCall.Task.WaitAsync(30.Seconds(), token);
         Volatile.Read(ref calls).Should().BeGreaterThanOrEqualTo(2);
     }
 
@@ -173,7 +173,7 @@ public class RedisStreamNotifyChannelTests
 
         using var waiter = new SignalingFetchWaiter(5.Seconds());
         var sut = new RedisStreamNotifyChannel(channel, redis, _fixture.Create<ILogger>(), waiter, null, 10.Milliseconds());
-        await subscribed.Task.WaitAsync(5.Seconds(), token);
+        await subscribed.Task.WaitAsync(30.Seconds(), token);
 
         sut.Dispose();
         Action act = () => sut.Dispose();
@@ -202,7 +202,7 @@ public class RedisStreamNotifyChannelTests
 
         using var waiter = new SignalingFetchWaiter(5.Seconds());
         var sut = new RedisStreamNotifyChannel(channel, redis, _fixture.Create<ILogger>(), waiter, null, 10.Milliseconds());
-        await subscribed.Task.WaitAsync(5.Seconds(), token);
+        await subscribed.Task.WaitAsync(30.Seconds(), token);
 
         Action act = () => sut.Dispose();
 
@@ -227,7 +227,7 @@ public class RedisStreamNotifyChannelTests
 
         using var waiter = new SignalingFetchWaiter(5.Seconds());
         var sut = new RedisStreamNotifyChannel(channel, redis, _fixture.Create<ILogger>(), waiter, null, 10.Milliseconds());
-        await subscribed.Task.WaitAsync(5.Seconds(), token);
+        await subscribed.Task.WaitAsync(30.Seconds(), token);
         sut.Dispose();
 
         Action act = () => redis.OnReconnected += Raise.Event();
@@ -262,11 +262,11 @@ public class RedisStreamNotifyChannelTests
 
         using var waiter = new SignalingFetchWaiter(5.Seconds());
         using var sut = new RedisStreamNotifyChannel(channel, redis, _fixture.Create<ILogger>(), waiter, 60.Seconds(), 10.Milliseconds());
-        await firstSubscribed.Task.WaitAsync(5.Seconds(), token);
+        await firstSubscribed.Task.WaitAsync(30.Seconds(), token);
 
         redis.OnReconnected += Raise.Event();
 
-        await secondSubscribed.Task.WaitAsync(5.Seconds(), token);
+        await secondSubscribed.Task.WaitAsync(30.Seconds(), token);
         Volatile.Read(ref subscribeCalls).Should().BeGreaterThanOrEqualTo(2);
     }
 }

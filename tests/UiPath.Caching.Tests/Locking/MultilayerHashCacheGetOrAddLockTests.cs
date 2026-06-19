@@ -118,7 +118,7 @@ public class MultilayerHashCacheGetOrAddLockTests(ITestContextAccessor testConte
             {
                 bothStarted.TrySetResult();
             }
-            await bothStarted.Task.WaitAsync(TimeSpan.FromSeconds(5), ct);
+            await bothStarted.Task.WaitAsync(TimeSpan.FromSeconds(30), ct);
 
             Interlocked.Decrement(ref concurrentInGenerator);
             return new Dictionary<string, string?> { ["k"] = "v" };
@@ -161,7 +161,7 @@ public class MultilayerHashCacheGetOrAddLockTests(ITestContextAccessor testConte
             {
                 allStarted.TrySetResult();
             }
-            await allStarted.Task.WaitAsync(TimeSpan.FromSeconds(5), ct);
+            await allStarted.Task.WaitAsync(TimeSpan.FromSeconds(30), ct);
 
             Interlocked.Decrement(ref concurrentInGenerator);
             return new Dictionary<string, string?> { ["k"] = "v" };

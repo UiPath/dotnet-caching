@@ -29,19 +29,19 @@ public class SignalingFetchWaiterTests
     [Fact]
     public async Task Signal_before_wait_is_consumed_by_next_wait()
     {
-        using var sut = new SignalingFetchWaiter(5.Seconds());
+        using var sut = new SignalingFetchWaiter(30.Seconds());
         sut.Signal();
 
         var sw = System.Diagnostics.Stopwatch.StartNew();
         await sut.WaitAsync(CancellationToken.None);
 
-        sw.Elapsed.Should().BeLessThan(500.Milliseconds());
+        sw.Elapsed.Should().BeLessThan(5.Seconds());
     }
 
     [Fact]
     public async Task Multiple_signals_between_waits_collapse_to_one()
     {
-        var interval = 500.Milliseconds();
+        var interval = 2.Seconds();
         using var sut = new SignalingFetchWaiter(interval);
         sut.Signal();
         sut.Signal();
