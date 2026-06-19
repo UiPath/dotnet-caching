@@ -12,8 +12,8 @@
     <NeutralLanguage>en</NeutralLanguage>
     <Authors>UiPath</Authors>
     <Company>UiPath</Company>
-    <Product>Platform Services</Product>
-    <Copyright>Copyright © UiPath $([System.DateTime]::Now.Year)</Copyright>
+    <Product>UiPath Caching</Product>
+    <Copyright>Copyright © $([System.DateTime]::Now.Year) UiPath, Inc.</Copyright>
     <PackageLicenseExpression>MIT</PackageLicenseExpression>
     <Description>UiPath Caching</Description>
     <PackageTags>Caching</PackageTags>
@@ -24,7 +24,7 @@
     <IncludeSymbols>true</IncludeSymbols>
     <SymbolPackageFormat>snupkg</SymbolPackageFormat>
     <PackageOutputPath>$(MSBuildThisFileDirectory)Release</PackageOutputPath>
-    <GenerateAssemblyInfo>False</GenerateAssemblyInfo>
+    <GenerateAssemblyInfo>true</GenerateAssemblyInfo>
     <NoWarn>$(NoWarn);NU5105;NU1507;CS1591;AD0001;NU1900;</NoWarn>
     <PackageReadmeFile>README.md</PackageReadmeFile>
     <ImplicitUsings>enable</ImplicitUsings>

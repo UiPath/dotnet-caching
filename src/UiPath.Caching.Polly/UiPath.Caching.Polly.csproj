@@ -4,7 +4,7 @@
     <TargetFrameworks>$(TargetFrameworks)</TargetFrameworks>
     <GeneratePackageOnBuild>true</GeneratePackageOnBuild>
     <PackageRequireLicenseAcceptance>false</PackageRequireLicenseAcceptance>
-    <Description>A package containing redis executor classes</Description>
+    <Description>Polly resilience pipelines (retry, timeout, circuit breaker) for UiPath.Caching.</Description>
     <PackageTags>UiPath;Caching;Polly</PackageTags>
   </PropertyGroup>
   <ItemGroup>
