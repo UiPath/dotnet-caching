@@ -59,4 +59,7 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           generate_release_notes: true
-          files: packages/*.nupkg
+          prerelease: ${{ contains(github.ref_name, '-') }}
+          files: |
+            packages/*.nupkg
+            packages/*.snupkg
