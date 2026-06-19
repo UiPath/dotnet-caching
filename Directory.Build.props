@@ -44,12 +44,4 @@
   <ItemGroup Condition="'$(IsPackable)' != 'false'">
     <None Include="$(MSBuildThisFileDirectory)README.md" Pack="true" PackagePath="\" />
   </ItemGroup>
-  <ItemGroup Condition="'$(SonarQubeExclude)' == 'false' And '$(SonarQubeTestProject)' == 'false'">
-    <PackageReference Include="SonarAnalyzer.CSharp">
-      <PrivateAssets>all</PrivateAssets>
-      <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
-    </PackageReference>
-    <!-- http://www.finnangelo.com/sonarqube/dotnet/2021/05/11/SonarAnalyzer.CSharp-and-a-monster-GlobalSuppressions.html -->
-    <Compile Include="$(SolutionDir)/GlobalSuppressions.cs" Link="GlobalSuppressions.cs" />
-  </ItemGroup>
 </Project>
