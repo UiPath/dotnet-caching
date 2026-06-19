@@ -6,8 +6,6 @@ Multilayer caching for .NET — L1 in-memory + L2 Redis, cross-node sync over Re
 
 The library powers caching in UiPath Platform services. It is built for multi-tenant workloads that need a hot in-process tier, a shared Redis tier, and cross-node coherence — without each service reinventing the same patterns.
 
-<!-- TBD (revisit): full OSS content/docs pass — the `docs/` tree still uses old namespaces/names; the `Telemetry` and `AspNetCore` integrations stay in ServiceCommon and are replaced here by a forthcoming `UiPath.Caching.OpenTelemetry` adapter. -->
-
 ## Quick Start
 
 ```bash
@@ -81,7 +79,7 @@ That's it. Everything else has a sensible default. Five-minute onboarding lives 
 - **Large-value auditing** — `AuditEnabled` + `LargeValueThreshold` log writes over a byte threshold.
 
 **Observability**
-- **`ICachingTelemetryProvider`** seam with span-based tag bags (allocation-free when telemetry is off). An OpenTelemetry adapter (`ActivitySource` + `Meter`) ships as `UiPath.Caching.OpenTelemetry` <!-- TBD: added in PR #3 -->; OpenTelemetry Redis instrumentation wires up via the `IConnectionMultiplexerFactory` hook (see the sample).
+- **`ICachingTelemetryProvider`** seam with span-based tag bags (allocation-free when telemetry is off). An OpenTelemetry adapter (`ActivitySource` + `Meter`) ships as `UiPath.Caching.OpenTelemetry`; OpenTelemetry Redis instrumentation wires up via the `IConnectionMultiplexerFactory` hook (see the sample).
 - **CloudEvents** — broadcast events wrapped in the CNCF CloudEvents envelope (`UiPath.Caching.CloudEvents`).
 
 ## Architecture
