@@ -1,7 +1,6 @@
 using System.Text;
 using System.Text.Json;
 using System.Threading.Channels;
-using FluentAssertions.Extensions;
 using StackExchange.Redis;
 
 namespace UiPath.Caching.Tests.Broadcast;
