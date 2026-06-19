@@ -8,10 +8,9 @@ on:
 jobs:
   publish:
     runs-on: ubuntu-latest
-    env:
-      NUGET_API_KEY: ${{ secrets.NUGET_API_KEY }}
     permissions:
-      contents: write  # to create the GitHub release
+      contents: write  # create the GitHub release
+      id-token: write  # OIDC token for nuget.org trusted publishing
     services:
       redis:
         image: redis:7
@@ -51,9 +50,16 @@ jobs:
       - name: Pack
         run: dotnet pack UiPath.Caching.slnx -c Release --no-build -o packages /p:Version=${{ steps.version.outputs.value }}
 
+      - name: Authenticate to nuget.org (OIDC trusted publishing)
+        if: vars.NUGET_USER != ''
+        id: nuget-login
+        uses: NuGet/login@8d196754b4036150537f80ac539e15c2f1028841 # v1.2.0
+        with:
+          user: ${{ vars.NUGET_USER }}
+
       - name: Push to nuget.org
-        if: env.NUGET_API_KEY != ''
-        run: dotnet nuget push 'packages/*.nupkg' --source https://api.nuget.org/v3/index.json --api-key ${{ env.NUGET_API_KEY }} --skip-duplicate
+        if: vars.NUGET_USER != ''
+        run: dotnet nuget push 'packages/*.nupkg' --source https://api.nuget.org/v3/index.json --api-key ${{ steps.nuget-login.outputs.NUGET_API_KEY }} --skip-duplicate
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2
