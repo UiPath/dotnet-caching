@@ -61,7 +61,7 @@ jobs:
         run: dotnet restore UiPath.Caching.slnx
 
       - name: Build
-        run: dotnet build UiPath.Caching.slnx -c Release --no-restore
+        run: dotnet build UiPath.Caching.slnx -c Release --no-restore -p:VersionSuffix=ci.${{ github.run_number }}
 
       - name: Test
         run: dotnet test UiPath.Caching.slnx -c Release --no-build --logger trx --results-directory TestResults --collect:"XPlat Code Coverage;Format=opencover"
@@ -78,7 +78,7 @@ jobs:
           path: TestResults
 
       - name: Pack
-        run: dotnet pack UiPath.Caching.slnx -c Release --no-build -o packages
+        run: dotnet pack UiPath.Caching.slnx -c Release --no-build -o packages -p:VersionSuffix=ci.${{ github.run_number }}
 
       - name: Upload packages
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
@@ -105,7 +105,7 @@ jobs:
         run: dotnet restore UiPath.Caching.slnx
 
       - name: Build
-        run: dotnet build UiPath.Caching.slnx -c Release --no-restore
+        run: dotnet build UiPath.Caching.slnx -c Release --no-restore -p:VersionSuffix=ci.${{ github.run_number }}
 
       # Redis-backed integration tests run on the Linux job (service containers are Linux-only).
       # Windows is build-only to validate cross-platform compilation.
