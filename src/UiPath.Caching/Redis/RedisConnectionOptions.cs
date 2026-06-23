@@ -52,6 +52,8 @@ public class RedisConnectionOptions
 
     public bool ProfilerTrackMetricEnabled { get; set; } = true;
 
+    public IReadOnlyList<string> ProfilerCommandDenyList { get; set; } = [];
+
     public Func<ProfilingSession?>? ProfilingSessionFactory { get; set; }
 
     public ISystemClock? Clock { get; set; }

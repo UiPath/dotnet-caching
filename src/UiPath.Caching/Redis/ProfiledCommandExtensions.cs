@@ -87,7 +87,7 @@ public static class ProfiledCommandExtensions
     private static string GetCommand(this IProfiledCommand profiledCommand) =>
     !string.IsNullOrEmpty(profiledCommand.Command)
         ? profiledCommand.Command
-        : "UNKNOWN";
+        : ProfiledCommandProcessor.UnknownCommand;
 
     private static string? GetCommandAndKey(this IProfiledCommand profiledCommand)
     {
