@@ -1,10 +1,16 @@
+using Microsoft.Extensions.Options;
 using StackExchange.Redis.Profiling;
 using UiPath.Caching.Telemetry;
 
 namespace UiPath.Caching.Redis;
 
-public sealed class ProfiledCommandProcessor(ICachingTelemetryProvider telemetryProvider) : IProfiledCommandProcessor
+public sealed class ProfiledCommandProcessor(
+    ICachingTelemetryProvider telemetryProvider,
+    IOptions<RedisConnectionOptions> options) : IProfiledCommandProcessor
 {
+    private readonly HashSet<string> _commandDenyList =
+        new(options.Value.ProfilerCommandDenyList ?? [], StringComparer.OrdinalIgnoreCase);
+
     public static string FlagsField { get; set; } = "Flags";
 
     public static string CreationToEnqueuedField { get; set; } = "CreationToEnqueued";
@@ -23,6 +29,8 @@ public sealed class ProfiledCommandProcessor(ICachingTelemetryProvider telemetry
 
     public static string ProfileSessionIdField { get; set; } = "ProfileSessionId";
 
+    public static string UnknownCommand { get; set; } = "UNKNOWN";
+
     public static string UnknownTarget { get; set; } = "Unk";
 
     public static string UnknownRetransmissionReason { get; set; } = "N/A";
@@ -31,6 +39,13 @@ public sealed class ProfiledCommandProcessor(ICachingTelemetryProvider telemetry
 
     public void Process(IProfiledCommand command, string? sessionId)
     {
+        var baseCommand = string.IsNullOrEmpty(command.Command) ? UnknownCommand : command.Command;
+
+        if (_commandDenyList.Count > 0 && _commandDenyList.Contains(baseCommand))
+        {
+            return;
+        }
+
         var statement = command.GetStatement();
         var commandName = command.GetCommandName();
         var target = command.GetTarget();

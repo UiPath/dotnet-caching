@@ -1,3 +1,4 @@
+using Microsoft.Extensions.Options;
 using StackExchange.Redis.Profiling;
 using UiPath.Caching.Telemetry;
 using UiPath.Caching.Tests.Telemetry;
@@ -14,6 +15,34 @@ public class ProfiledCommandProcessorTest : IAsyncLifetime
     private Lazy<RedisProfileFetcher> _oldFetcherLazy = default!;
 
     private ProfiledCommandProcessor Sut => _sut ??= _fixture.Create<ProfiledCommandProcessor>();
+
+    [Theory]
+    [InlineData("PING", "PING")]
+    [InlineData("PING", "ping")]
+    public void CommandProcessor_DeniedCommand_NotEmitted(string commandName, string denyListEntry)
+    {
+        _profiledCommand.Command.Returns(commandName);
+        _fixture.Inject<IOptions<RedisConnectionOptions>>(
+            Options.Create(new RedisConnectionOptions { ProfilerCommandDenyList = [denyListEntry] }));
+        _sut = null;
+
+        Sut.Process(_profiledCommand, _fixture.Create<string>());
+
+        _telemetryProvider.Dependencies.Should().BeEmpty();
+    }
+
+    [Fact]
+    public void CommandProcessor_AllowedCommand_Emitted()
+    {
+        _profiledCommand.Command.Returns("GET");
+        _fixture.Inject<IOptions<RedisConnectionOptions>>(
+            Options.Create(new RedisConnectionOptions { ProfilerCommandDenyList = ["PING"] }));
+        _sut = null;
+
+        Sut.Process(_profiledCommand, _fixture.Create<string>());
+
+        _telemetryProvider.Dependencies.Should().ContainSingle();
+    }
 
     [Fact]
     public void CommandProcessor_Null()
@@ -44,6 +73,7 @@ public class ProfiledCommandProcessorTest : IAsyncLifetime
     {
         _telemetryProvider = new RecordingTelemetryProvider();
         _fixture.Inject<ICachingTelemetryProvider>(_telemetryProvider);
+        _fixture.Inject<IOptions<RedisConnectionOptions>>(Options.Create(new RedisConnectionOptions()));
         _profiledCommand = _fixture.Freeze<IProfiledCommand>();
         _oldFetcherLazy = FetcherLazy;
         FetcherLazy = new(() => new RedisProfileFetcher
