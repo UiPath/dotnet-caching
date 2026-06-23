@@ -2,7 +2,7 @@
 
 Multilayer caching for .NET — L1 in-memory + L2 Redis, cross-node sync over Redis Streams, single-flight stampede protection, hydrating cache, and CloudEvents — behind a small, opinionated DI surface.
 
-[![CI](https://github.com/UiPath/dotnet-caching/actions/workflows/ci.yml/badge.svg)](https://github.com/UiPath/dotnet-caching/actions/workflows/ci.yml) [![.NET](https://img.shields.io/badge/.NET-8.0%20%7C%2010.0-512BD4)](#requirements) [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+[![CI](https://github.com/UiPath/dotnet-caching/actions/workflows/ci.yml/badge.svg)](https://github.com/UiPath/dotnet-caching/actions/workflows/ci.yml) [![.NET](https://img.shields.io/badge/.NET-8.0%20%7C%2010.0-512BD4)](#requirements) [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE) [![FOSSA License](https://app.fossa.com/api/projects/custom%2B6060%2Fgithub.com%2FUiPath%2Fdotnet-caching.svg?type=shield&issueType=license)](https://app.fossa.com/projects/custom%2B6060%2Fgithub.com%2FUiPath%2Fdotnet-caching?ref=badge_shield&issueType=license) [![FOSSA Security](https://app.fossa.com/api/projects/custom%2B6060%2Fgithub.com%2FUiPath%2Fdotnet-caching.svg?type=shield&issueType=security)](https://app.fossa.com/projects/custom%2B6060%2Fgithub.com%2FUiPath%2Fdotnet-caching?ref=badge_shield&issueType=security)
 
 The library powers caching in UiPath Platform services. It is built for multi-tenant workloads that need a hot in-process tier, a shared Redis tier, and cross-node coherence — without each service reinventing the same patterns.
 
