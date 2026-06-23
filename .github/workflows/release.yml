@@ -61,12 +61,13 @@ jobs:
       - name: Test
         run: dotnet test UiPath.Caching.slnx -c Release --no-build
 
-      - name: FOSSA scan (license + CVE gate)
+      # Push-only token: upload only (records the released revision in FOSSA).
+      # CVE/license gating is enforced by the FOSSA GitHub App's policy check.
+      - name: FOSSA analyze (upload)
         if: env.FOSSA_API_KEY != ''
         uses: fossas/fossa-action@ff70fe9fe17cbd2040648f1c45e8ec4e4884dcf3 # v1.9.0
         with:
           api-key: ${{ secrets.FOSSA_API_KEY }}
-          run-tests: true
 
       - name: Pack (validation only — not published or uploaded)
         run: dotnet pack UiPath.Caching.slnx -c Release --no-build -o packages /p:Version=${{ steps.version.outputs.value }}
