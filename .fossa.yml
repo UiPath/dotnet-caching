@@ -1,0 +1,9 @@
+version: 3
+
+# Scan only shipped code/dependencies. Tests, samples, and benchmarks are
+# dev-only (never redistributed), so their dependencies are excluded.
+paths:
+  exclude:
+    - tests
+    - samples
+    - benchmarks

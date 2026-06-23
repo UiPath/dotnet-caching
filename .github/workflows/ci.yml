@@ -11,7 +11,6 @@ jobs:
     runs-on: ubuntu-latest
     env:
       SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
-      FOSSA_API_KEY: ${{ secrets.FOSSA_API_KEY }}
     services:
       redis:
         image: redis:7
@@ -81,13 +80,6 @@ jobs:
       - name: Pack
         run: dotnet pack UiPath.Caching.slnx -c Release --no-build -o packages
 
-      - name: FOSSA scan (license + CVE gate)
-        if: github.event_name == 'push' && env.FOSSA_API_KEY != ''
-        uses: fossas/fossa-action@ff70fe9fe17cbd2040648f1c45e8ec4e4884dcf3 # v1.9.0
-        with:
-          api-key: ${{ secrets.FOSSA_API_KEY }}
-          run-tests: true
-
   build-windows:
     runs-on: windows-latest
     steps:
@@ -111,3 +103,32 @@ jobs:
 
       # Redis-backed integration tests run on the Linux job (service containers are Linux-only).
       # Windows is build-only to validate cross-platform compilation.
+
+  # FOSSA runs as its own parallel job (push to main only) so it doesn't delay the build.
+  fossa:
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    env:
+      FOSSA_API_KEY: ${{ secrets.FOSSA_API_KEY }}
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+
+      - name: Setup .NET 8
+        uses: actions/setup-dotnet@9a946fdbd5fb07b82b2f5a4466058b876ab72bb2 # v5
+        with:
+          dotnet-version: 8.0.x
+
+      - name: Setup .NET 10
+        uses: actions/setup-dotnet@9a946fdbd5fb07b82b2f5a4466058b876ab72bb2 # v5
+        with:
+          dotnet-version: 10.0.x
+
+      - name: Restore
+        run: dotnet restore UiPath.Caching.slnx
+
+      - name: FOSSA scan (license + CVE gate)
+        if: env.FOSSA_API_KEY != ''
+        uses: fossas/fossa-action@ff70fe9fe17cbd2040648f1c45e8ec4e4884dcf3 # v1.9.0
+        with:
+          api-key: ${{ secrets.FOSSA_API_KEY }}
+          run-tests: true
