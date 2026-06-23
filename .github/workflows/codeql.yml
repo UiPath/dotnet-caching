@@ -7,7 +7,24 @@ on:
     - cron: '23 4 * * 1'  # weekly, Monday 04:23 UTC
 
 jobs:
+  # Code scanning is free on public repos but needs GitHub Advanced Security
+  # while private. Gate on visibility so runs are skipped (green) until the
+  # repo is public, then activate automatically — no workflow change needed.
+  check-visibility:
+    runs-on: ubuntu-latest
+    outputs:
+      public: ${{ steps.v.outputs.public }}
+    steps:
+      - id: v
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          vis=$(gh api "repos/${{ github.repository }}" --jq .visibility)
+          echo "public=$([ "$vis" = public ] && echo true || echo false)" >> "$GITHUB_OUTPUT"
+
   analyze:
+    needs: check-visibility
+    if: needs.check-visibility.outputs.public == 'true'
     runs-on: ubuntu-latest
     permissions:
       security-events: write
