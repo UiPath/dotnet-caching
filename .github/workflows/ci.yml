@@ -126,10 +126,15 @@ jobs:
       - name: Restore
         run: dotnet restore UiPath.Caching.slnx
 
-      # Push-only token: upload only. CVE/license gating is enforced by the
-      # FOSSA GitHub App (which reads this analysis and posts a policy check).
       - name: FOSSA analyze (upload)
         if: env.FOSSA_API_KEY != ''
         uses: fossas/fossa-action@ff70fe9fe17cbd2040648f1c45e8ec4e4884dcf3 # v1.9.0
         with:
           api-key: ${{ secrets.FOSSA_API_KEY }}
+
+      - name: FOSSA test (license + CVE gate)
+        if: env.FOSSA_API_KEY != ''
+        uses: fossas/fossa-action@ff70fe9fe17cbd2040648f1c45e8ec4e4884dcf3 # v1.9.0
+        with:
+          api-key: ${{ secrets.FOSSA_API_KEY }}
+          run-tests: true
