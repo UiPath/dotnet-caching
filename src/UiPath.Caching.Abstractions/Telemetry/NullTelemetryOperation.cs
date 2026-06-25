@@ -19,4 +19,14 @@ public class NullTelemetryOperation : ITelemetryOperation
     {
         // noop
     }
+
+    public void Track(bool hit, int keyCount)
+    {
+        // noop
+    }
+
+    public void TrackKeyReads((string Key, bool Hit)[] reads)
+    {
+        // noop
+    }
 }
