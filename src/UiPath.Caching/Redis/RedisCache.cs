@@ -352,7 +352,7 @@ internal sealed partial class RedisCache : RedisCacheBase, ICache
         }
         finally
         {
-            operation.Track(found);
+            TrackRead(operation, found, redisKey);
         }
 
         return (found, deserialized);
@@ -465,7 +465,7 @@ internal sealed partial class RedisCache : RedisCacheBase, ICache
         }
         finally
         {
-            operation.Track(ret);
+            operation.Track(ret, keyValues.Length);
         }
 
         return ret;
@@ -521,7 +521,7 @@ internal sealed partial class RedisCache : RedisCacheBase, ICache
         }
         finally
         {
-            operation.Track(ret);
+            operation.Track(ret, redisKey.Length);
         }
 
         return ret;
@@ -530,13 +530,15 @@ internal sealed partial class RedisCache : RedisCacheBase, ICache
     private async ValueTask<T?> GetAsync<T>(RedisKey redisKey, CancellationToken token)
     {
         T? ret = default;
+        bool found = false;
         token.ThrowIfCancellationRequested();
-        var operation = StartOperation<T>();
-        
+
         if (!IsConnected)
         {
             return default;
         }
+
+        var operation = StartOperation<T>();
 
         try
         {
@@ -546,7 +548,7 @@ internal sealed partial class RedisCache : RedisCacheBase, ICache
                 return await Database.StringGetAsync(redisKey, CommandFlags.PreferReplica).ConfigureAwait(false);
             }, RedisValue.Null, token).ConfigureAwait(false);
             _auditKeySize?.Invoke(redisKey, value);
-            ret = value.IsNullOrEmpty ? default : _serializer.Deserialize<T>(value);
+            (found, ret) = InterpretReadResult<T>(value);
             operation.Stop();
         }
         catch (Exception ex)
@@ -556,7 +558,7 @@ internal sealed partial class RedisCache : RedisCacheBase, ICache
         }
         finally
         {
-            operation.Track(ret is not null);
+            TrackRead(operation, found, redisKey);
         }
 
         return ret;
@@ -570,9 +572,13 @@ internal sealed partial class RedisCache : RedisCacheBase, ICache
         {
             return retValues;
         }
-        var redisKeys = keys.Select(keys => ToRedisKey(keys, token)).ToArray();
+        var redisKeys = keys.Select(k => ToRedisKey(k, token)).ToArray();
+        if (!IsConnected)
+        {
+            return GetDefaultValues<T>(keys);
+        }
         var operation = StartOperation<T>();
-        bool atLeastOneCacheHit = false;
+        var reads = InitReads(redisKeys);
         try
         {
             var values = await _read.ExecuteAsync(async token =>
@@ -580,20 +586,20 @@ internal sealed partial class RedisCache : RedisCacheBase, ICache
                 token.ThrowIfCancellationRequested();
                 return await Database.StringGetAsync(redisKeys, CommandFlags.PreferReplica);
             }, [], token).ConfigureAwait(false);
-            if (values.Length == 0)
-            {
-                retValues = GetDefaultValues<T>(keys);
-            }
-            else
+            if (values.Length == redisKeys.Length)
             {
                 for (int i = 0; i < redisKeys.Length; i++)
                 {
                     var value = values[i];
                     _auditKeySize?.Invoke(redisKeys[i], value);
-                    var obj = value.IsNullOrEmpty ? default : _serializer.Deserialize<T>(value);
-                    atLeastOneCacheHit = atLeastOneCacheHit || obj is not null;
+                    var (found, obj) = InterpretReadResult<T>(value);
+                    reads[i].Hit = found;
                     retValues[i] = new KeyValuePair<CacheKey, T?>(keys[i], obj);
                 }
+            }
+            else
+            {
+                retValues = GetDefaultValues<T>(keys);
             }
             operation.Stop();
         }
@@ -602,10 +608,11 @@ internal sealed partial class RedisCache : RedisCacheBase, ICache
             operation.Stop();
             LogRedisCacheException(ex);
             retValues = GetDefaultValues<T>(keys);
+            reads = InitReads(redisKeys);
         }
         finally
         {
-            operation.Track(atLeastOneCacheHit);
+            TrackPerKey(operation, reads);
         }
 
         return retValues;
@@ -672,7 +679,7 @@ internal sealed partial class RedisCache : RedisCacheBase, ICache
         }
         finally
         {
-            operation.Track(ret.Found);
+            TrackRead(operation, ret.Found, redisKey);
         }
 
         return ret;
@@ -693,7 +700,7 @@ internal sealed partial class RedisCache : RedisCacheBase, ICache
 
         var operation = StartOperation<T>();
         var retValues = GetDefaultEntries<T>(keys);
-        bool atLeastOneCacheHit = false;
+        var reads = InitReads(redisKeys);
         try
         {
             var transaction = Database.CreateTransaction();
@@ -725,7 +732,7 @@ internal sealed partial class RedisCache : RedisCacheBase, ICache
                 DateTimeOffset? expiration = _supportsExpireTime
                     ? (DateTimeOffset?)await expireTimeTasks![i]
                     : Clock.ToDateTimeOffset(await ttlTasks![i]);
-                atLeastOneCacheHit = true;
+                reads[i].Hit = true;
                 retValues[i] = new KeyValuePair<CacheKey, ICacheEntry<T?>>(
                     keys[i],
                     _cacheEntryFactory.Create<T?>(deserialized, Clock.ToDateTimeOffset(expiration)));
@@ -736,10 +743,12 @@ internal sealed partial class RedisCache : RedisCacheBase, ICache
         {
             operation.Stop();
             LogRedisCacheException(ex);
+            retValues = GetDefaultEntries<T>(keys);
+            reads = InitReads(redisKeys);
         }
         finally
         {
-            operation.Track(atLeastOneCacheHit);
+            TrackPerKey(operation, reads);
         }
 
         return retValues;
@@ -781,6 +790,35 @@ internal sealed partial class RedisCache : RedisCacheBase, ICache
     private ITelemetryOperation StartOperation<T>([CallerMemberName] string methodName = "") =>
         Telemetry.StartOperation(Name, typeof(T), methodName);
 
+    private static (RedisKey Key, bool Hit)[] InitReads(RedisKey[] redisKeys)
+    {
+        var reads = new (RedisKey Key, bool Hit)[redisKeys.Length];
+        for (int i = 0; i < redisKeys.Length; i++)
+        {
+            reads[i] = (redisKeys[i], false);
+        }
+        return reads;
+    }
+
+    private void TrackPerKey(ITelemetryOperation operation, (RedisKey Key, bool Hit)[] reads)
+    {
+        var anyHit = false;
+        foreach (var (_, hit) in reads)
+        {
+            anyHit |= hit;
+        }
+        operation.Track(anyHit, reads.Length);
+
+        if (KeyReadTelemetryEnabled)
+        {
+            var keyed = new (string Key, bool Hit)[reads.Length];
+            for (int i = 0; i < reads.Length; i++)
+            {
+                keyed[i] = (reads[i].Key.ToString(), reads[i].Hit);
+            }
+            operation.TrackKeyReads(keyed);
+        }
+    }
 
     private static KeyValuePair<CacheKey, T?>[] GetDefaultValues<T>(CacheKey[] keys) =>
         [.. keys.Select(k => new KeyValuePair<CacheKey, T?>(k, default))];

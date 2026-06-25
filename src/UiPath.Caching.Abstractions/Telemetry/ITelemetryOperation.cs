@@ -6,4 +6,7 @@ public interface ITelemetryOperation
     void Stop();
     void Track(bool hit);
 
+    void Track(bool hit, int keyCount);
+
+    void TrackKeyReads((string Key, bool Hit)[] reads);
 }

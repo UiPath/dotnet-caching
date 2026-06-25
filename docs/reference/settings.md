@@ -168,6 +168,7 @@ Per-topic overrides: add entries to `Topics[]` under `Broadcast:RedisPubSub`. Ea
 | `Timeout` | `TimeSpan` | `00:00:01` | Per-provider | Max wait for a cache operation before giving up and falling through. |
 | `ConnectionMonitorEnabled` | `bool?` | `null` | Per-provider | `null` = inherit from `CacheOptions.ConnectionMonitorEnabled`. |
 | `CacheNullValues` | `bool` | `false` | Per-provider | Persist `null`/empty factory returns as sentinels to suppress thundering-herd on missing keys. |
+| `KeyReadTelemetryEnabled` | `bool` | `false` | Per-provider | Opt-in per-key read attribution: each read emits a `Redis` dependency carrying the key in `data` (one per hash key for hash reads), with a `BatchId` shared across the operation. Off by default because raw keys are high-cardinality; the per-operation hit/miss metric is always emitted regardless. |
 
 *Code-only seams:* `Clock`, `EntryFactory`, `CacheKeyStrategy`, `RedisKeyStrategyFactory`.
 
