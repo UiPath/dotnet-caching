@@ -13,6 +13,7 @@ namespace UiPath.Caching.Tests.Redis;
 
 public class RedisHashCacheTests(ITestContextAccessor testContextAccessor) : IAsyncLifetime
 {
+    private static readonly string[] TwoFields = ["f1", "f2"];
     private readonly IFixture _fixture = AutoFixtureCreator.NSubstitute();
 
     private string _prefix = default!;
@@ -1383,7 +1384,7 @@ public class RedisHashCacheTests(ITestContextAccessor testContextAccessor) : IAs
     {
         _redisCacheOptions.ConnectionMonitorEnabled = true;
         _isConnected = false;
-        var actual = await Sut.GetAsync<string>(_cacheKey, new[] { "f1", "f2" }, token: testContextAccessor.Current.CancellationToken);
+        var actual = await Sut.GetAsync<string>(_cacheKey, TwoFields, token: testContextAccessor.Current.CancellationToken);
         actual.Should().BeEmpty();
         await _database.DidNotReceive().HashGetAsync(_redisKey, Arg.Any<RedisValue[]>(), Arg.Any<CommandFlags>());
     }

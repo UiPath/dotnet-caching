@@ -54,7 +54,7 @@ public class TelemetryOperationTests
         op.Start();
         op.Stop();
         var afterStop = DateTimeOffset.UtcNow;
-        await Task.Delay(50);
+        await Task.Delay(50, TestContext.Current.CancellationToken);
         op.TrackKeyReads([("k1", true)]);
 
         telemetry.Dependencies.Single().StartTime.Should().BeOnOrBefore(afterStop);
