@@ -5,6 +5,13 @@ updates:
     schedule:
       interval: "weekly"
     open-pull-requests-limit: 5
+    ignore:
+      # Microsoft.Extensions.* versions are framework-aligned via TFM-conditional
+      # ItemGroups in Directory.Packages.props (net8 -> 8.x, net10 -> 10.x).
+      # Block major bumps so Dependabot can't push 10.x onto the net8 target;
+      # cross-major moves are managed by hand.
+      - dependency-name: "Microsoft.Extensions.*"
+        update-types: ["version-update:semver-major"]
   - package-ecosystem: "github-actions"
     directory: "/"
     schedule:
