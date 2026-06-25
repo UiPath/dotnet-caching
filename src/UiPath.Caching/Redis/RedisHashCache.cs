@@ -148,6 +148,7 @@ internal sealed partial class RedisHashCache : RedisCacheBase, IHashCache
 
             var values = new Dictionary<string, T?>();
             var hasEmptyMarker = false;
+            var anyValue = false;
             foreach (var hashEntry in hashEntries)
             {
                 var name = hashEntry.Name.ToString();
@@ -162,10 +163,11 @@ internal sealed partial class RedisHashCache : RedisCacheBase, IHashCache
                 }
                 var v = hashEntry.Value;
                 _auditKeySize?.Invoke(redisKey, name, v);
+                anyValue |= IsCacheHit(v);
                 values.Add(name, DeserializeField<T>(v));
             }
             ret = values;
-            found = values.Count > 0 || (hasEmptyMarker && _cacheNullValues);
+            found = anyValue || (hasEmptyMarker && _cacheNullValues);
             operation.Stop();
         }
         catch (Exception ex)
@@ -175,7 +177,7 @@ internal sealed partial class RedisHashCache : RedisCacheBase, IHashCache
         }
         finally
         {
-            operation.Track(found);
+            TrackRead(operation, found, redisKey);
         }
 
         return (found, ret);
@@ -675,11 +677,19 @@ internal sealed partial class RedisHashCache : RedisCacheBase, IHashCache
         return deserialized;
     }
 
+    private bool IsCacheHit(RedisValue value) =>
+        !value.IsNull && (value.Length() != 0 || _cacheNullValues);
+
 
     private async ValueTask<T?> GetInnerAsync<T>(CacheKey cacheKey, string field, CancellationToken token)
     {
         var redisKey = ToRedisKey(cacheKey, token);
+        if (!IsConnected)
+        {
+            return default;
+        }
         T? ret = default;
+        bool found = false;
         var operation = StartOperation<T>(nameof(GetAsync));
         try
         {
@@ -690,6 +700,7 @@ internal sealed partial class RedisHashCache : RedisCacheBase, IHashCache
             }, RedisValue.Null, token).ConfigureAwait(false);
             _auditKeySize?.Invoke(redisKey, field, value);
             ret = DeserializeField<T?>(value);
+            found = IsCacheHit(value);
             operation.Stop();
         }
         catch (Exception ex)
@@ -699,7 +710,7 @@ internal sealed partial class RedisHashCache : RedisCacheBase, IHashCache
         }
         finally
         {
-            operation.Track(ret is not null);
+            TrackRead(operation, found, redisKey);
         }
 
         return ret;
@@ -716,7 +727,12 @@ internal sealed partial class RedisHashCache : RedisCacheBase, IHashCache
         var redisKey = ToRedisKey(cacheKey, token);
 
         IDictionary<string, T?> ret = Empty<T?>();
+        if (!IsConnected)
+        {
+            return ret;
+        }
         var operation = StartOperation<T>();
+        bool found = false;
         try
         {
             var values = await _read.ExecuteAsync(async token =>
@@ -724,12 +740,19 @@ internal sealed partial class RedisHashCache : RedisCacheBase, IHashCache
                 token.ThrowIfCancellationRequested();
                 return await Database.HashGetAsync(redisKey, fields.Select(k => (RedisValue)k).ToArray(), CommandFlags.PreferReplica).ConfigureAwait(false);
             },[], token).ConfigureAwait(false);
-            ret = new Dictionary<string, T?>();
-            for (var i = 0; i < fields.Length; i++)
+            if (values.Length == fields.Length)
             {
-                var v = values[i];
-                _auditKeySize?.Invoke(redisKey, fields[i], v);
-                ret.Add(fields[i], DeserializeField<T?>(v));
+                var dict = new Dictionary<string, T?>(fields.Length);
+                var anyPresent = false;
+                for (var i = 0; i < fields.Length; i++)
+                {
+                    var v = values[i];
+                    _auditKeySize?.Invoke(redisKey, fields[i], v);
+                    dict.Add(fields[i], DeserializeField<T?>(v));
+                    anyPresent |= IsCacheHit(v);
+                }
+                ret = dict;
+                found = anyPresent;
             }
             operation.Stop();
         }
@@ -740,7 +763,7 @@ internal sealed partial class RedisHashCache : RedisCacheBase, IHashCache
         }
         finally
         {
-            operation.Track(ret.Count > 0);
+            TrackRead(operation, found, redisKey);
         }
 
         return ret;
@@ -757,6 +780,7 @@ internal sealed partial class RedisHashCache : RedisCacheBase, IHashCache
         }
 
         var operation = StartOperation<T>();
+        bool found = false;
         try
         {
             var hashEntries = await _read.ExecuteAsync(async token =>
@@ -766,18 +790,28 @@ internal sealed partial class RedisHashCache : RedisCacheBase, IHashCache
             }, [], token).ConfigureAwait(false);
             if (hashEntries.Length > 0)
             {
-                ret = new Dictionary<string, T?>();
+                var values = new Dictionary<string, T?>();
+                var hasEmptyMarker = false;
+                var anyValue = false;
                 foreach (var hashEntry in hashEntries)
                 {
                     var name = hashEntry.Name.ToString();
+                    if (name == KnownFieldNames.MetadataKey)
+                    {
+                        hasEmptyMarker = hashEntry.Value.Length() == 0;
+                        continue;
+                    }
                     if (KnownFieldNames.IsSystemField(name))
                     {
                         continue;
                     }
                     var v = hashEntry.Value;
                     _auditKeySize?.Invoke(redisKey, name, v);
-                    ret.Add(name, DeserializeField<T?>(v));
+                    anyValue |= IsCacheHit(v);
+                    values.Add(name, DeserializeField<T?>(v));
                 }
+                ret = values;
+                found = anyValue || (hasEmptyMarker && _cacheNullValues);
             }
             operation.Stop();
         }
@@ -788,7 +822,7 @@ internal sealed partial class RedisHashCache : RedisCacheBase, IHashCache
         }
         finally
         {
-            operation.Track(ret.Count > 0);
+            TrackRead(operation, found, redisKey);
         }
 
         return ret;
@@ -824,7 +858,7 @@ internal sealed partial class RedisHashCache : RedisCacheBase, IHashCache
         }
         finally
         {
-            operation.Track(ret.Value?.Count > 0);
+            TrackRead(operation, ret.Found, redisKey);
         }
 
         return ret;
