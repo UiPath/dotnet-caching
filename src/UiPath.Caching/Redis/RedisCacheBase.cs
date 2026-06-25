@@ -25,9 +25,21 @@ public abstract class RedisCacheBase : IConnectionState, IDisposable
             policyFactory.Default);
         DefaultExpiration = DefaultPolicy.DistributedExpiration;
         Clock = new CacheClock(redisCacheOptions.Clock, DefaultExpiration);
+        KeyReadTelemetryEnabled = redisCacheOptions.KeyReadTelemetryEnabled;
     }
 
     protected ICachingTelemetryProvider Telemetry { get; }
+
+    protected bool KeyReadTelemetryEnabled { get; }
+
+    protected void TrackRead(ITelemetryOperation operation, bool hit, RedisKey key)
+    {
+        operation.Track(hit, 1);
+        if (KeyReadTelemetryEnabled)
+        {
+            operation.TrackKeyReads([(key.ToString(), hit)]);
+        }
+    }
 
     protected CachePolicy DefaultPolicy { get; }
 

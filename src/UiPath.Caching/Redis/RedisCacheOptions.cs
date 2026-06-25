@@ -21,4 +21,6 @@ public class RedisCacheOptions : ICacheOptions
     public bool? ConnectionMonitorEnabled { get; set; }
 
     public bool CacheNullValues { get; set; }
+
+    public bool KeyReadTelemetryEnabled { get; set; }
 }

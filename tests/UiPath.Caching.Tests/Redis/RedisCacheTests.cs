@@ -4,6 +4,8 @@ using NSubstitute.ReceivedExtensions;
 using StackExchange.Redis;
 using UiPath.Caching;
 using UiPath.Caching.Policies;
+using UiPath.Caching.Telemetry;
+using UiPath.Caching.Tests.Telemetry;
 
 namespace UiPath.Caching.Tests.Redis;
 
@@ -27,6 +29,7 @@ public class RedisCacheTests(ITestContextAccessor testContextAccessor) : IAsyncL
     private IRedisConnector _connector = default!;
     private bool _isConnected = true;
     private Version _version = new(6, 0);
+    private readonly RecordingTelemetryProvider _telemetry = new();
     private RedisCache? _sut = null;
 
     private RedisCache Sut => _sut ??= _fixture.Create<RedisCache>();
@@ -88,6 +91,205 @@ public class RedisCacheTests(ITestContextAccessor testContextAccessor) : IAsyncL
             .ThrowsAsync(new RedisException("test"));
         var actualValue = await Sut.GetAsync<int?>(new CacheKey[] { _cacheKey, _multiKey }, policy: null, token: testContextAccessor.Current.CancellationToken);
         actualValue.Should().BeEquivalentTo(new KeyValuePair<CacheKey, int?>[] { new(_cacheKey, default), new(_multiKey, default) });
+    }
+
+    private int HitCount => _telemetry.Metrics.Count(m => m.Name.Contains(".Hits."));
+    private int MissCount => _telemetry.Metrics.Count(m => m.Name.Contains(".Misses."));
+    private IEnumerable<DependencyRecord> ReadDeps => _telemetry.Dependencies.Where(d => d.Type == TelemetryOperation.DependencyType);
+
+    [Fact]
+    public async Task Multi_get_returns_defaults_without_redis_or_telemetry_when_disconnected()
+    {
+        _isConnected = false;
+
+        var actual = await Sut.GetAsync<string>(new CacheKey[] { _cacheKey, _multiKey }, policy: null, token: testContextAccessor.Current.CancellationToken);
+
+        actual.Should().BeEquivalentTo(new KeyValuePair<CacheKey, string?>[] { new(_cacheKey, default), new(_multiKey, default) });
+        await _database.DidNotReceive().StringGetAsync(Arg.Any<RedisKey[]>(), Arg.Any<CommandFlags>());
+        HitCount.Should().Be(0);
+        MissCount.Should().Be(0);
+    }
+
+    [Fact]
+    public async Task Single_get_tracks_one_hit_for_the_key()
+    {
+        _database.StringGetAsync(_redisKey, CommandFlags.PreferReplica)
+            .Returns(ci => _serializer.Serialize(_fixture.Create<string>()));
+
+        await Sut.GetAsync<string>(_cacheKey, policy: null, token: testContextAccessor.Current.CancellationToken);
+
+        HitCount.Should().Be(1);
+        MissCount.Should().Be(0);
+    }
+
+    [Fact]
+    public async Task Single_get_tracks_one_miss_for_the_key()
+    {
+        _database.StringGetAsync(_redisKey, CommandFlags.PreferReplica)
+            .Returns(RedisValue.Null);
+
+        await Sut.GetAsync<string>(_cacheKey, policy: null, token: testContextAccessor.Current.CancellationToken);
+
+        HitCount.Should().Be(0);
+        MissCount.Should().Be(1);
+    }
+
+    [Fact]
+    public async Task Multi_get_emits_one_metric_per_operation_with_key_count()
+    {
+        _database.StringGetAsync(Arg.Is<RedisKey[]>(k => k.Contains(_redisKey) && k.Contains(_redisMultiKey)), CommandFlags.PreferReplica)
+            .Returns(new RedisValue[] { _serializer.Serialize(_fixture.Create<string>()), RedisValue.Null });
+
+        await Sut.GetAsync<string>(new CacheKey[] { _cacheKey, _multiKey }, policy: null, token: testContextAccessor.Current.CancellationToken);
+
+        HitCount.Should().Be(1);
+        MissCount.Should().Be(0);
+        _telemetry.Metrics.Should().ContainSingle(m => m.Name.Contains(".Hits.") && m.Properties![TelemetryOperation.KeysTag] == "2");
+    }
+
+    [Fact]
+    public async Task Multi_get_emits_one_miss_metric_when_no_values_returned()
+    {
+        _database.StringGetAsync(Arg.Any<RedisKey[]>(), CommandFlags.PreferReplica)
+            .Returns(Array.Empty<RedisValue>());
+
+        await Sut.GetAsync<string>(new CacheKey[] { _cacheKey, _multiKey }, policy: null, token: testContextAccessor.Current.CancellationToken);
+
+        HitCount.Should().Be(0);
+        MissCount.Should().Be(1);
+        _telemetry.Metrics.Should().ContainSingle(m => m.Name.Contains(".Misses.") && m.Properties![TelemetryOperation.KeysTag] == "2");
+    }
+
+    [Fact]
+    public async Task Multi_get_returns_defaults_when_value_array_is_partial()
+    {
+        _database.StringGetAsync(Arg.Is<RedisKey[]>(k => k.Contains(_redisKey) && k.Contains(_redisMultiKey)), CommandFlags.PreferReplica)
+            .Returns(new RedisValue[] { _serializer.Serialize(_fixture.Create<string>()) });
+
+        var actual = await Sut.GetAsync<string>(new CacheKey[] { _cacheKey, _multiKey }, policy: null, token: testContextAccessor.Current.CancellationToken);
+
+        actual.Should().BeEquivalentTo(new KeyValuePair<CacheKey, string?>[] { new(_cacheKey, default), new(_multiKey, default) });
+        HitCount.Should().Be(0);
+        MissCount.Should().Be(1);
+    }
+
+    [Fact]
+    public async Task Multi_set_metric_carries_the_key_count()
+    {
+        _transaction.StringSetAsync(Arg.Any<RedisKey>(), Arg.Any<RedisValue>(), Arg.Any<TimeSpan?>(), Arg.Any<When>(), Arg.Any<CommandFlags>()).Returns(true);
+        _transaction.ExecuteAsync(Arg.Any<CommandFlags>()).Returns(true);
+
+        await Sut.SetAsync(new KeyValuePair<CacheKey, string?>[] { new(_cacheKey, "a"), new(_multiKey, "b") }, policy: null, token: testContextAccessor.Current.CancellationToken);
+
+        _telemetry.Metrics.Should().Contain(m => m.Name.Contains(".Hits.") && m.Properties![TelemetryOperation.KeysTag] == "2");
+    }
+
+    [Fact]
+    public async Task Multi_get_emits_one_miss_metric_on_redis_exception()
+    {
+        _database.StringGetAsync(Arg.Any<RedisKey[]>(), Arg.Any<CommandFlags>())
+            .ThrowsAsync(new RedisException("test"));
+
+        await Sut.GetAsync<string>(new CacheKey[] { _cacheKey, _multiKey }, policy: null, token: testContextAccessor.Current.CancellationToken);
+
+        HitCount.Should().Be(0);
+        MissCount.Should().Be(1);
+    }
+
+    [Fact]
+    public async Task GetCacheEntries_emits_one_metric_per_operation_with_key_count()
+    {
+        _transaction.StringGetAsync(Arg.Is<RedisKey[]>(k => k.Contains(_redisKey) && k.Contains(_redisMultiKey)), CommandFlags.PreferReplica)
+            .Returns(new RedisValue[] { _serializer.Serialize(_fixture.Create<string>()), RedisValue.Null });
+        _transaction.KeyTimeToLiveAsync(Arg.Any<RedisKey>(), CommandFlags.PreferReplica)
+            .Returns(TimeSpan.FromMinutes(15));
+        _transaction.ExecuteAsync(Arg.Any<CommandFlags>()).Returns(true);
+
+        await Sut.GetCacheEntriesAsync<string>(new CacheKey[] { _cacheKey, _multiKey }, policy: null, token: testContextAccessor.Current.CancellationToken);
+
+        HitCount.Should().Be(1);
+        MissCount.Should().Be(0);
+        _telemetry.Metrics.Should().ContainSingle(m => m.Name.Contains(".Hits.") && m.Properties![TelemetryOperation.KeysTag] == "2");
+    }
+
+    [Fact]
+    public async Task GetCacheEntries_emits_one_miss_metric_on_transaction_failure()
+    {
+        _transaction.StringGetAsync(Arg.Any<RedisKey[]>(), CommandFlags.PreferReplica)
+            .Returns(new RedisValue[] { _serializer.Serialize(_fixture.Create<string>()), _serializer.Serialize(_fixture.Create<string>()) });
+        _transaction.KeyTimeToLiveAsync(Arg.Any<RedisKey>(), CommandFlags.PreferReplica)
+            .Returns(TimeSpan.FromMinutes(15));
+        _transaction.ExecuteAsync(Arg.Any<CommandFlags>()).Returns(false);
+
+        await Sut.GetCacheEntriesAsync<string>(new CacheKey[] { _cacheKey, _multiKey }, policy: null, token: testContextAccessor.Current.CancellationToken);
+
+        HitCount.Should().Be(0);
+        MissCount.Should().Be(1);
+    }
+
+    [Fact]
+    public async Task GetCacheEntries_emits_one_miss_metric_on_redis_exception()
+    {
+        _transaction.StringGetAsync(Arg.Any<RedisKey[]>(), Arg.Any<CommandFlags>())
+            .ThrowsAsync(new RedisException("test"));
+        _transaction.ExecuteAsync(Arg.Any<CommandFlags>()).Returns(true);
+
+        await Sut.GetCacheEntriesAsync<string>(new CacheKey[] { _cacheKey, _multiKey }, policy: null, token: testContextAccessor.Current.CancellationToken);
+
+        HitCount.Should().Be(0);
+        MissCount.Should().Be(1);
+    }
+
+    [Fact]
+    public async Task Multi_get_does_not_carry_keys_by_default()
+    {
+        _database.StringGetAsync(Arg.Is<RedisKey[]>(k => k.Contains(_redisKey) && k.Contains(_redisMultiKey)), CommandFlags.PreferReplica)
+            .Returns(new RedisValue[] { _serializer.Serialize(_fixture.Create<string>()), RedisValue.Null });
+
+        await Sut.GetAsync<string>(new CacheKey[] { _cacheKey, _multiKey }, policy: null, token: testContextAccessor.Current.CancellationToken);
+
+        ReadDeps.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task Multi_get_carries_key_per_hit_and_miss_when_opt_in()
+    {
+        _cacheOptions.KeyReadTelemetryEnabled = true;
+        _database.StringGetAsync(Arg.Is<RedisKey[]>(k => k.Contains(_redisKey) && k.Contains(_redisMultiKey)), CommandFlags.PreferReplica)
+            .Returns(new RedisValue[] { _serializer.Serialize(_fixture.Create<string>()), RedisValue.Null });
+
+        await Sut.GetAsync<string>(new CacheKey[] { _cacheKey, _multiKey }, policy: null, token: testContextAccessor.Current.CancellationToken);
+
+        ReadDeps.Should().Contain(d => d.Data == _redisKey.ToString() && d.Success && d.ResultCode == "Hit");
+        ReadDeps.Should().Contain(d => d.Data == _redisMultiKey.ToString() && d.Success && d.ResultCode == "Miss");
+    }
+
+    [Fact]
+    public async Task GetCacheEntries_carries_key_per_hit_and_miss_when_opt_in()
+    {
+        _cacheOptions.KeyReadTelemetryEnabled = true;
+        _transaction.StringGetAsync(Arg.Is<RedisKey[]>(k => k.Contains(_redisKey) && k.Contains(_redisMultiKey)), CommandFlags.PreferReplica)
+            .Returns(new RedisValue[] { _serializer.Serialize(_fixture.Create<string>()), RedisValue.Null });
+        _transaction.KeyTimeToLiveAsync(Arg.Any<RedisKey>(), CommandFlags.PreferReplica)
+            .Returns(TimeSpan.FromMinutes(15));
+        _transaction.ExecuteAsync(Arg.Any<CommandFlags>()).Returns(true);
+
+        await Sut.GetCacheEntriesAsync<string>(new CacheKey[] { _cacheKey, _multiKey }, policy: null, token: testContextAccessor.Current.CancellationToken);
+
+        ReadDeps.Should().Contain(d => d.Data == _redisKey.ToString() && d.Success && d.ResultCode == "Hit");
+        ReadDeps.Should().Contain(d => d.Data == _redisMultiKey.ToString() && d.Success && d.ResultCode == "Miss");
+    }
+
+    [Fact]
+    public async Task Single_get_carries_key_when_opt_in()
+    {
+        _cacheOptions.KeyReadTelemetryEnabled = true;
+        _database.StringGetAsync(_redisKey, CommandFlags.PreferReplica)
+            .Returns(ci => _serializer.Serialize(_fixture.Create<string>()));
+
+        await Sut.GetAsync<string>(_cacheKey, policy: null, token: testContextAccessor.Current.CancellationToken);
+
+        ReadDeps.Should().ContainSingle(d => d.Data == _redisKey.ToString() && d.Success && d.ResultCode == "Hit");
     }
 
     [Fact]
@@ -234,6 +436,23 @@ public class RedisCacheTests(ITestContextAccessor testContextAccessor) : IAsyncL
         var entries = await Sut.GetCacheEntriesAsync<int?>(new CacheKey[] { _cacheKey, _multiKey }, policy: null, token: testContextAccessor.Current.CancellationToken);
         entries.Should().HaveCount(2);
         entries.Should().AllSatisfy(kv => kv.Value.Value.Should().BeNull());
+    }
+
+    [Fact]
+    public async Task GetCacheEntries_returns_defaults_and_records_miss_when_a_per_key_subtask_throws()
+    {
+        _transaction.StringGetAsync(Arg.Is<RedisKey[]>(k => k.Contains(_redisKey) && k.Contains(_redisMultiKey)), CommandFlags.PreferReplica)
+            .Returns(new RedisValue[] { _serializer.Serialize(_fixture.Create<string>()), _serializer.Serialize(_fixture.Create<string>()) });
+        _transaction.KeyTimeToLiveAsync(_redisKey, CommandFlags.PreferReplica).Returns(TimeSpan.FromMinutes(5));
+        _transaction.KeyTimeToLiveAsync(_redisMultiKey, CommandFlags.PreferReplica).ThrowsAsync(new RedisException("ttl boom"));
+        _transaction.ExecuteAsync(Arg.Any<CommandFlags>()).Returns(true);
+
+        var entries = await Sut.GetCacheEntriesAsync<string>(new CacheKey[] { _cacheKey, _multiKey }, policy: null, token: testContextAccessor.Current.CancellationToken);
+
+        entries.Should().HaveCount(2);
+        entries.Should().AllSatisfy(kv => kv.Value.Value.Should().BeNull());
+        HitCount.Should().Be(0);
+        MissCount.Should().Be(1);
     }
 
     [Fact]
@@ -1069,6 +1288,7 @@ public class RedisCacheTests(ITestContextAccessor testContextAccessor) : IAsyncL
         var opt = Options.Create(_cacheOptions);
         _fixture.Inject(opt);
         _fixture.Inject(_cacheOptions);
+        _fixture.Inject<ICachingTelemetryProvider>(_telemetry);
         // Wires real ConnectionStateMonitor so disconnected-path tests can flip _isConnected.
         _fixture.Inject(new CacheOptions { AppShortName = "test", ConnectionMonitorEnabled = true });
         _connector = _fixture.Freeze<IRedisConnector>();
