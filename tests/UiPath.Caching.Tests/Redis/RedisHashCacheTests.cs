@@ -5,12 +5,15 @@ using NSubstitute.ExceptionExtensions;
 using StackExchange.Redis;
 using UiPath.Caching;
 using UiPath.Caching.Policies;
+using UiPath.Caching.Telemetry;
+using UiPath.Caching.Tests.Telemetry;
 using JsonSerializer = UiPath.Caching.SystemJsonSerializerProxy;
 
 namespace UiPath.Caching.Tests.Redis;
 
 public class RedisHashCacheTests(ITestContextAccessor testContextAccessor) : IAsyncLifetime
 {
+    private static readonly string[] TwoFields = ["f1", "f2"];
     private readonly IFixture _fixture = AutoFixtureCreator.NSubstitute();
 
     private string _prefix = default!;
@@ -29,6 +32,7 @@ public class RedisHashCacheTests(ITestContextAccessor testContextAccessor) : IAs
     private bool _isConnected = true;
     private Version _version = new(6, 0);
     private ILogger<RedisHashCache> _logger = default!;
+    private readonly RecordingTelemetryProvider _telemetry = new();
     private RedisHashCache? _sut = null;
 
     private RedisHashCache Sut => _sut ??= _fixture.Create<RedisHashCache>();
@@ -109,6 +113,46 @@ public class RedisHashCacheTests(ITestContextAccessor testContextAccessor) : IAs
 
         var actual = await Sut.GetAsync<string>(_cacheKey, fields, token: testContextAccessor.Current.CancellationToken);
         actual.Should().BeEmpty();
+    }
+
+    private IEnumerable<DependencyRecord> ReadDeps => _telemetry.Dependencies.Where(d => d.Type == TelemetryOperation.DependencyType);
+
+    [Fact]
+    public async Task Hash_multi_field_get_does_not_emit_dependency_by_default()
+    {
+        var fields = _fixture.CreateMany<string>().ToArray();
+        _database.HashGetAsync(_redisKey, Arg.Any<RedisValue[]>(), CommandFlags.PreferReplica)
+            .Returns(c => fields.Select(f => (RedisValue)JsonConvert.SerializeObject(f)).ToArray());
+
+        await Sut.GetAsync<string>(_cacheKey, fields, token: testContextAccessor.Current.CancellationToken);
+
+        ReadDeps.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task Hash_multi_field_get_emits_one_dependency_for_the_hash_key_when_opt_in()
+    {
+        _redisCacheOptions.KeyReadTelemetryEnabled = true;
+        var fields = _fixture.CreateMany<string>().ToArray();
+        _database.HashGetAsync(_redisKey, Arg.Any<RedisValue[]>(), CommandFlags.PreferReplica)
+            .Returns(c => fields.Select(f => (RedisValue)JsonConvert.SerializeObject(f)).ToArray());
+
+        await Sut.GetAsync<string>(_cacheKey, fields, token: testContextAccessor.Current.CancellationToken);
+
+        ReadDeps.Should().ContainSingle(d => d.Data == _redisKey.ToString() && d.Success && d.ResultCode == "Hit");
+    }
+
+    [Fact]
+    public async Task Hash_get_all_emits_one_dependency_for_the_hash_key_when_opt_in()
+    {
+        _redisCacheOptions.KeyReadTelemetryEnabled = true;
+        var expected = _fixture.CreateMany<string>().ToDictionary(k => k, k => _fixture.Create<string?>());
+        _database.HashGetAllAsync(_redisKey, CommandFlags.PreferReplica)
+            .Returns(c => expected.Select(kv => new HashEntry(kv.Key, JsonConvert.SerializeObject(kv.Value))).ToArray());
+
+        await Sut.GetAsync<string>(_cacheKey, policy: null, token: testContextAccessor.Current.CancellationToken);
+
+        ReadDeps.Should().ContainSingle(d => d.Data == _redisKey.ToString() && d.Success && d.ResultCode == "Hit");
     }
 
     [Fact]
@@ -383,6 +427,62 @@ public class RedisHashCacheTests(ITestContextAccessor testContextAccessor) : IAs
 
         actual.Should().BeEmpty();
         generatorCalled.Should().BeFalse();
+    }
+
+    [Fact]
+    public async Task Hash_get_all_with_only_metadata_marker_is_a_hit_when_CacheNullValues_on()
+    {
+        _redisCacheOptions.CacheNullValues = true;
+        _redisCacheOptions.KeyReadTelemetryEnabled = true;
+        _sut = null;
+        _database.HashGetAllAsync(_redisKey, CommandFlags.PreferReplica)
+            .Returns(_ => new[] { new HashEntry(KnownFieldNames.MetadataKey, RedisValue.EmptyString) });
+
+        await Sut.GetAsync<string>(_cacheKey, policy: null, token: testContextAccessor.Current.CancellationToken);
+
+        ReadDeps.Should().ContainSingle(d => d.Data == _redisKey.ToString() && d.ResultCode == "Hit");
+    }
+
+    [Fact]
+    public async Task Hash_get_all_with_only_system_fields_is_a_miss_when_CacheNullValues_off()
+    {
+        _redisCacheOptions.CacheNullValues = false;
+        _redisCacheOptions.KeyReadTelemetryEnabled = true;
+        _sut = null;
+        _database.HashGetAllAsync(_redisKey, CommandFlags.PreferReplica)
+            .Returns(_ => new[] { new HashEntry(KnownFieldNames.MetadataKey, RedisValue.EmptyString) });
+
+        await Sut.GetAsync<string>(_cacheKey, policy: null, token: testContextAccessor.Current.CancellationToken);
+
+        ReadDeps.Should().ContainSingle(d => d.Data == _redisKey.ToString() && d.ResultCode == "Miss");
+    }
+
+    [Fact]
+    public async Task Hash_get_all_with_only_empty_sentinel_field_is_a_miss_when_CacheNullValues_off()
+    {
+        _redisCacheOptions.CacheNullValues = false;
+        _redisCacheOptions.KeyReadTelemetryEnabled = true;
+        _sut = null;
+        _database.HashGetAllAsync(_redisKey, CommandFlags.PreferReplica)
+            .Returns(_ => new[] { new HashEntry("f1", RedisValue.EmptyString) });
+
+        await Sut.GetAsync<string>(_cacheKey, policy: null, token: testContextAccessor.Current.CancellationToken);
+
+        ReadDeps.Should().ContainSingle(d => d.Data == _redisKey.ToString() && d.ResultCode == "Miss");
+    }
+
+    [Fact]
+    public async Task Hash_get_all_with_only_empty_sentinel_field_is_a_hit_when_CacheNullValues_on()
+    {
+        _redisCacheOptions.CacheNullValues = true;
+        _redisCacheOptions.KeyReadTelemetryEnabled = true;
+        _sut = null;
+        _database.HashGetAllAsync(_redisKey, CommandFlags.PreferReplica)
+            .Returns(_ => new[] { new HashEntry("f1", RedisValue.EmptyString) });
+
+        await Sut.GetAsync<string>(_cacheKey, policy: null, token: testContextAccessor.Current.CancellationToken);
+
+        ReadDeps.Should().ContainSingle(d => d.Data == _redisKey.ToString() && d.ResultCode == "Hit");
     }
 
     [Fact]
@@ -1269,6 +1369,26 @@ public class RedisHashCacheTests(ITestContextAccessor testContextAccessor) : IAs
         await _database.DidNotReceive().HashGetAllAsync(_redisKey, CommandFlags.PreferReplica);
     }
 
+    [Fact]
+    public async Task GetItem_WithNoConnection()
+    {
+        _redisCacheOptions.ConnectionMonitorEnabled = true;
+        _isConnected = false;
+        var actual = await Sut.GetItemAsync<string>(_cacheKey, "f", policy: null, token: testContextAccessor.Current.CancellationToken);
+        actual.Should().BeNull();
+        await _database.DidNotReceive().HashGetAsync(_redisKey, Arg.Any<RedisValue>(), Arg.Any<CommandFlags>());
+    }
+
+    [Fact]
+    public async Task GetFields_WithNoConnection()
+    {
+        _redisCacheOptions.ConnectionMonitorEnabled = true;
+        _isConnected = false;
+        var actual = await Sut.GetAsync<string>(_cacheKey, TwoFields, token: testContextAccessor.Current.CancellationToken);
+        actual.Should().BeEmpty();
+        await _database.DidNotReceive().HashGetAsync(_redisKey, Arg.Any<RedisValue[]>(), Arg.Any<CommandFlags>());
+    }
+
     public ValueTask DisposeAsync()
     {
         return ValueTask.CompletedTask;
@@ -1308,6 +1428,7 @@ public class RedisHashCacheTests(ITestContextAccessor testContextAccessor) : IAs
         };
         _serializer = new JsonSerializer();
         _fixture.Inject(_serializer);
+        _fixture.Inject<ICachingTelemetryProvider>(_telemetry);
         var opt = Options.Create(_redisCacheOptions);
         _fixture.Inject(opt);
         _fixture.Inject(opt.Value);
