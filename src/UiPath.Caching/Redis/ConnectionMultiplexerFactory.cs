@@ -2,17 +2,21 @@ using StackExchange.Redis.Profiling;
 
 namespace UiPath.Caching.Redis;
 
-[ExcludeFromCodeCoverage(Justification = "Wraps StackExchange.Redis.ConnectionMultiplexer.Connect — needs a real Redis endpoint to exercise.")]
+[ExcludeFromCodeCoverage(Justification = "Wraps StackExchange.Redis.ConnectionMultiplexer.ConnectAsync — needs a real Redis endpoint to exercise.")]
 public class ConnectionMultiplexerFactory(IOptions<RedisConnectionOptions> redisOptions, IRedisProfiler redisProfiler) : IConnectionMultiplexerFactory
 {
-    public IConnectionMultiplexer Create(ConfigurationOptions configuration)
+    public async ValueTask<IConnectionMultiplexer> CreateAsync(ConfigurationOptions configuration, CancellationToken cancellationToken = default)
     {
-        IConnectionMultiplexer connectionMultiplexer = redisOptions.Value.ConnectionFactory?.Invoke(configuration) ?? ConnectionMultiplexer.Connect(configuration);
+        cancellationToken.ThrowIfCancellationRequested();
+        return RegisterProfilerIfEnabled(redisOptions.Value.ConnectionFactory?.Invoke(configuration)
+            ?? await ConnectionMultiplexer.ConnectAsync(configuration).ConfigureAwait(false));
+    }
 
+    private IConnectionMultiplexer RegisterProfilerIfEnabled(IConnectionMultiplexer connectionMultiplexer)
+    {
         if (redisOptions.Value.ProfilerEnabled)
         {
-            var factory = ProfilingSessionFactory();
-            connectionMultiplexer.RegisterProfiler(factory);
+            connectionMultiplexer.RegisterProfiler(ProfilingSessionFactory());
         }
 
         return connectionMultiplexer;
@@ -20,5 +24,4 @@ public class ConnectionMultiplexerFactory(IOptions<RedisConnectionOptions> redis
 
     private Func<ProfilingSession?> ProfilingSessionFactory() =>
         redisOptions.Value.ProfilingSessionFactory ?? redisProfiler.GetSession;
-
 }

@@ -46,11 +46,14 @@ Every binding-visible property on every shipped options class, with shipped defa
 |---|---|---|---|---|
 | `ConnectionString` | `string` | _required_ | App-wide | StackExchange.Redis connection string; apps fail at startup without a valid value. Use `"localhost:6379"` as a local placeholder. |
 | `ConnectionStringExtraParams` | `string?` | `null` | App-wide | Appended verbatim to `ConnectionString`; useful for Azure Redis extra parameters. |
+| `WarmUpOnStart` | `bool` | `false` | App-wide | When `true`, kicks off the Redis connection at host startup via a hosted service (running any auth configurators), best-effort (never fails startup). Default `false` connects lazily on first cache use — **except** that with `PlannedMaintenanceEnabled=true` (the default) the planned-maintenance hosted service opens its own connection (and acquires an Entra token, if configured) at startup regardless of `WarmUpOnStart`. Set `PlannedMaintenanceEnabled=false` to keep startup fully lazy. |
 | `BackOffMilliseconds` | `int` | `1000` | App-wide | ms to wait before reconnecting after a connection failure. |
 | `HeartbeatConsistencyChecks` | `bool?` | `null` | App-wide | `null` = StackExchange.Redis default; `true` enables heartbeat consistency checks. |
 | `HeartbeatInterval` | `TimeSpan?` | `null` | App-wide | `null` = StackExchange.Redis default; TimeSpan override for the heartbeat period. |
 | `ProfilerFeatureFlagKey` | `string` | `"RedisProfiler.Enabled"` | App-wide | Feature-flag key consulted before enabling the StackExchange.Redis command profiler. |
 | `PlannedMaintenanceEnabled` | `bool` | `true` | App-wide | Tolerate planned-maintenance disconnects gracefully instead of faulting. |
+| `PlannedMaintenanceConnectionRetryCount` | `int` | `5` | App-wide | Attempts to establish the planned-maintenance subscription before backing off to quiet retries; failures are logged as warnings, never faulting startup. |
+| `PlannedMaintenanceConnectionRetryDelay` | `TimeSpan` | `00:00:05` | App-wide | Delay between planned-maintenance subscription attempts (negative/zero is clamped to 1s). |
 | `LogConnectionFailedEvents` | `bool` | `true` | App-wide | Log `ConnectionFailed` events from the multiplexer. |
 | `LogConnectionRestoredEvents` | `bool` | `true` | App-wide | Log `ConnectionRestored` events from the multiplexer. |
 | `EnableHangDetection` | `bool` | `true` | App-wide | Detect hung write/read channels and emit log warnings. |

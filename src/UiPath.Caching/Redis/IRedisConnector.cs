@@ -13,4 +13,7 @@ public interface IRedisConnector : IConnectionState, IDisposable
     void ForceReconnect();
 
     EndPoint[] GetEndPoints(bool configuredOnly = false);
+
+    /// <summary>Optionally pre-establishes the connection on a fully async path.</summary>
+    ValueTask ConnectAsync(CancellationToken cancellationToken = default) => ValueTask.CompletedTask;
 }

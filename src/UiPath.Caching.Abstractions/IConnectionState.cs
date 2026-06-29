@@ -8,5 +8,6 @@ public interface IConnectionState
 
     event EventHandler? OnReconnected;
 
+    /// <summary>Non-blocking snapshot of the current connection state; returns false while connecting or after a failed connect, and never blocks or throws.</summary>
     bool IsConnected { get; }
 }

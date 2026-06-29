@@ -64,6 +64,9 @@ jobs:
         run: dotnet build UiPath.Caching.slnx -c Release --no-restore
 
       - name: Test
+        env:
+          RUN_REDIS_INTEGRATION_TESTS: '1'
+          REDIS_CONNECTION_STRING: 'localhost:6379'
         run: dotnet test UiPath.Caching.slnx -c Release --no-build --logger trx --results-directory TestResults --collect:"XPlat Code Coverage;Format=opencover"
 
       - name: SonarQube Cloud end

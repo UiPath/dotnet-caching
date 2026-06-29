@@ -9,6 +9,8 @@ public class RedisConnectionOptions
 
     public string? ConnectionStringExtraParams { get; set; }
 
+    public bool WarmUpOnStart { get; set; }
+
     public int BackOffMilliseconds { get; set; } = 1000;
 
     public bool? HeartbeatConsistencyChecks { get; set; }
@@ -19,6 +21,10 @@ public class RedisConnectionOptions
     public string ProfilerFeatureFlagKey { get; set; } = "RedisProfiler.Enabled";
 
     public bool PlannedMaintenanceEnabled { get; set; } = true;
+
+    public int PlannedMaintenanceConnectionRetryCount { get; set; } = 5;
+
+    public TimeSpan PlannedMaintenanceConnectionRetryDelay { get; set; } = TimeSpan.FromSeconds(5);
 
     public bool LogConnectionFailedEvents { get; set; } = true;
 
