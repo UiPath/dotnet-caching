@@ -1,4 +1,4 @@
-# UiPath Platform Caching
+# UiPath Caching
 
 Multilayer caching for .NET — L1 in-memory + L2 Redis, cross-node sync over Redis Streams, single-flight stampede protection, hydrating cache, and CloudEvents — behind a small, opinionated DI surface.
 

@@ -1,3 +1,5 @@
+using Microsoft.Extensions.Hosting;
+
 namespace UiPath.Caching.Config;
 
 [ExcludeFromCodeCoverage]
@@ -31,8 +33,7 @@ public static class RedisCollectionExtensions
         RedisConnectionOptions redisConnectionOptions = new RedisConnectionOptions();
         configure(redisConnectionOptions);
         builder.Services.Configure(configure);
-        builder.AddRedisConnection(redisConnectionOptions);
-        return builder;
+        return builder.AddRedisConnection(redisConnectionOptions);
     }
 
     public static ICachingBuilder AddRedisConnection(this ICachingBuilder builder, string sectionName, Action<RedisConnectionOptions> configure)
@@ -46,8 +47,7 @@ public static class RedisCollectionExtensions
         RedisConnectionOptions redisConnectionOptions = new RedisConnectionOptions();
         configureOptions(redisConnectionOptions);
         builder.Services.Configure((Action<RedisConnectionOptions>)configureOptions);
-        builder.AddRedisConnection(redisConnectionOptions);
-        return builder;
+        return builder.AddRedisConnection(redisConnectionOptions);
     }
 
     private static ICachingBuilder AddRedisConnection(this ICachingBuilder builder, RedisConnectionOptions redisConnectionOptions)
@@ -70,11 +70,17 @@ public static class RedisCollectionExtensions
             }
             catch
             {
-                // ignored
+                factoryImplementationType = typeof(ConnectionMultiplexerFactory);
             }
         }
 
         builder.Services.TryAddTransient(typeof(IConnectionMultiplexerFactory), factoryImplementationType);
+
+        if (builder.Enabled && redisConnectionOptions.WarmUpOnStart)
+        {
+            builder.Services.TryAddEnumerable(ServiceDescriptor.Singleton<IHostedService, RedisConnectionWarmup>());
+        }
+
         return builder;
     }
 
@@ -97,7 +103,12 @@ public static class RedisCollectionExtensions
     {
         if (enabled)
         {
-            builder.Services.TryAddSingleton<IRedisPlannedMaintenance, RedisPlannedMaintenance>();
+            builder.Services.TryAddSingleton<RedisPlannedMaintenance>();
+            builder.Services.TryAddSingleton<IRedisPlannedMaintenance>(sp => sp.GetRequiredService<RedisPlannedMaintenance>());
+            if (builder.Enabled)
+            {
+                builder.Services.TryAddEnumerable(ServiceDescriptor.Singleton<IHostedService, RedisPlannedMaintenance>(sp => sp.GetRequiredService<RedisPlannedMaintenance>()));
+            }
         }
         return builder;
     }

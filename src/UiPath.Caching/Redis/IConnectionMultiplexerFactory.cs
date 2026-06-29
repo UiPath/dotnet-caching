@@ -2,5 +2,5 @@ namespace UiPath.Caching.Redis;
 
 public interface IConnectionMultiplexerFactory
 {
-    IConnectionMultiplexer Create(ConfigurationOptions configuration);
+    ValueTask<IConnectionMultiplexer> CreateAsync(ConfigurationOptions configuration, CancellationToken cancellationToken = default);
 }

@@ -7,9 +7,10 @@ namespace UiPath.Caching.Sample;
 
 public class OpenTelemetryConnectionMultiplexerFactory(IOptions<RedisConnectionOptions> redisOptions, IServiceProvider serviceProvider) : IConnectionMultiplexerFactory
 {
-    public IConnectionMultiplexer Create(ConfigurationOptions configuration)
+    public async ValueTask<IConnectionMultiplexer> CreateAsync(ConfigurationOptions configuration, CancellationToken cancellationToken = default)
     {
-        var cnn = redisOptions.Value.ConnectionFactory?.Invoke(configuration) ?? ConnectionMultiplexer.Connect(configuration);
+        cancellationToken.ThrowIfCancellationRequested();
+        var cnn = redisOptions.Value.ConnectionFactory?.Invoke(configuration) ?? await ConnectionMultiplexer.ConnectAsync(configuration);
         var instrumentation = serviceProvider.GetService<StackExchangeRedisInstrumentation>();
         instrumentation?.AddConnection(cnn);
         return cnn;
