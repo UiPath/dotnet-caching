@@ -433,7 +433,7 @@ dotnet_diagnostic.CS8602.severity = error
 # CS8603: Possible null reference return.
 dotnet_diagnostic.CS8603.severity = error
 
-# CS9057: The analyzer assembly ‘{0}’ references version ‘{1}’ of the compiler, which is newer than the currently running version ‘{2}’.
+# CS9057: The analyzer assembly ï¿½{0}ï¿½ references version ï¿½{1}ï¿½ of the compiler, which is newer than the currently running version ï¿½{2}ï¿½.
 dotnet_diagnostic.CS9057.severity = warning
 
 # S107: Methods should not have too many parameters
@@ -449,4 +449,18 @@ csharp_style_prefer_method_group_conversion = true:silent
 csharp_style_prefer_top_level_statements = true:silent
 csharp_style_expression_bodied_lambdas = true:silent
 csharp_style_expression_bodied_local_functions = false:silent
+
+###############################
+# Public API surface tracking #
+###############################
+# Microsoft.CodeAnalysis.PublicApiAnalyzers (referenced only by src/ libraries).
+# Public/protected API must be declared in PublicAPI.Shipped.txt / PublicAPI.Unshipped.txt.
+# These are errors so the public surface cannot change without updating the API files
+# in the same PR â€” which is also the signal the CLA-triage workflow keys off.
+dotnet_diagnostic.RS0016.severity = error
+dotnet_diagnostic.RS0017.severity = error
+dotnet_diagnostic.RS0024.severity = error
+dotnet_diagnostic.RS0025.severity = error
+# RS0041: pre-existing public types implement nullable-oblivious BCL interfaces; informational only.
+dotnet_diagnostic.RS0041.severity = none
 

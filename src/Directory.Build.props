@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Project>
+
+  <!-- Chain the repo-root props (MSBuild only auto-imports the nearest Directory.Build.props). -->
+  <Import Project="$([MSBuild]::GetPathOfFileAbove('Directory.Build.props', '$(MSBuildThisFileDirectory)../'))" />
+
+  <!--
+    Public API surface tracking for the shipped libraries under src/.
+    Every public/protected member must be declared in PublicAPI.Shipped.txt
+    (already released) or PublicAPI.Unshipped.txt (added since last release).
+    RS0016/RS0017 are errors (see .editorconfig), so a change to the public API
+    cannot build unless the API files are updated in the same change — which is
+    also the exact signal the CLA-triage workflow keys off (.github/workflows/cla-triage.yml).
+  -->
+  <ItemGroup>
+    <PackageReference Include="Microsoft.CodeAnalysis.PublicApiAnalyzers">
+      <PrivateAssets>all</PrivateAssets>
+      <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
+    </PackageReference>
+  </ItemGroup>
+
+  <ItemGroup>
+    <AdditionalFiles Include="PublicAPI.Shipped.txt" />
+    <AdditionalFiles Include="PublicAPI.Unshipped.txt" />
+  </ItemGroup>
+
+</Project>

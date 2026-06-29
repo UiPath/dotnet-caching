@@ -1,0 +1,145 @@
+name: CLA triage
+
+# Advisory tripwire for the CLA process (see CONTRIBUTING.md).
+#
+# This workflow does NOT decide anything and does NOT gate merges. It scans a PR
+# for objective signals that a contribution may be MATERIAL, and if any trip it
+# applies the `needs-cla-review` label and posts a checklist for a maintainer.
+# A human then decides whether to escalate by adding `cla-required` (see cla.yml).
+#
+# It only ever RAISES scrutiny — it never says "no CLA needed". Tune the
+# thresholds in `env` below to taste.
+#
+# Labels used: needs-cla-review (created automatically if missing).
+
+on:
+  pull_request_target:
+    types: [opened, reopened, ready_for_review, synchronize]
+
+permissions:
+  contents: read
+  issues: write
+  pull-requests: write
+
+env:
+  SRC_LINES_STRONG: '250'   # net added lines under src/ that alone flags review
+  SRC_LINES_EXTERNAL: '100' # added src/ lines that flag review for external contributors
+
+jobs:
+  triage:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Scan PR for materiality signals
+        uses: actions/github-script@60a0d83039c74a4aee543508d2ffcb1c3799cdea # v7.0.1
+        with:
+          script: |
+            const pr = context.payload.pull_request;
+
+            // Skip bots and drafts — nothing useful to triage.
+            if (pr.draft || pr.user.type === 'Bot') return;
+
+            // If a maintainer already actioned this PR, don't add noise.
+            const existing = pr.labels.map(l => l.name);
+            if (existing.includes('cla-required') || existing.includes('cla-signed') || existing.includes('needs-cla-review')) return;
+
+            const files = await github.paginate(github.rest.pulls.listFiles, {
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              pull_number: pr.number,
+              per_page: 100,
+            });
+
+            const inSrc = f => f.startsWith('src/');
+            const isProd = f => inSrc(f) &&
+              !f.includes('/obj/') && !f.includes('/bin/');
+
+            const strong = [];   // any single one of these flags review
+            const medium = [];   // any single one of these flags review
+            const weak = [];     // only flags in combination
+
+            const newDeps = [];
+            const newProjects = [];
+            const licenseFiles = [];
+            const apiFiles = [];
+            let srcAdds = 0;
+
+            for (const f of files) {
+              const fn = f.filename;
+              if (isProd(fn)) srcAdds += f.additions;
+
+              // Exact public-API signal: the PublicApiAnalyzers make any public surface change
+              // touch PublicAPI.Unshipped.txt (the build fails otherwise — see src/Directory.Build.props).
+              if (/PublicAPI\.Unshipped\.txt$/i.test(fn) && f.additions > 0) apiFiles.push(fn.replace(/\/PublicAPI\.Unshipped\.txt$/i, ''));
+              if (isProd(fn) && fn.endsWith('.csproj') && f.status === 'added') newProjects.push(fn);
+              if (/(^|\/)(LICENSE|NOTICE|THIRD[-_ ]?PARTY)/i.test(fn)) licenseFiles.push(fn);
+
+              if (!f.patch) continue;
+              const added = f.patch.split('\n').filter(l => l.startsWith('+') && !l.startsWith('+++'));
+
+              if (isProd(fn) && fn.endsWith('.csproj')) {
+                for (const l of added) {
+                  const m = l.match(/<PackageReference\s+Include="([^"]+)"/i);
+                  if (m) newDeps.push(m[1]);
+                }
+              }
+            }
+
+            if (apiFiles.length)     strong.push(`adds public API surface (\`PublicAPI.Unshipped.txt\` in ${[...new Set(apiFiles)].map(p => `\`${p}\``).join(', ')})`);
+            if (newDeps.length)      strong.push(`adds dependenc${newDeps.length === 1 ? 'y' : 'ies'}: \`${[...new Set(newDeps)].join('`, `')}\``);
+            if (newProjects.length)  strong.push(`adds new project(s): \`${newProjects.join('`, `')}\``);
+            if (licenseFiles.length) strong.push(`touches licensing files: \`${licenseFiles.join('`, `')}\``);
+            if (srcAdds >= Number(process.env.SRC_LINES_STRONG)) medium.push(`large production change (+${srcAdds} lines under \`src/\`)`);
+
+            const assoc = pr.author_association; // OWNER, MEMBER, COLLABORATOR, CONTRIBUTOR, FIRST_TIME_CONTRIBUTOR, NONE
+            const isExternal = assoc === 'FIRST_TIME_CONTRIBUTOR' || assoc === 'NONE' || assoc === 'CONTRIBUTOR';
+            if (isExternal && srcAdds >= Number(process.env.SRC_LINES_EXTERNAL)) {
+              weak.push(`external contributor (\`${assoc}\`) with a substantial change (+${srcAdds} lines under \`src/\`)`);
+            }
+
+            const flag = strong.length > 0 || medium.length > 0 || weak.length > 0;
+            if (!flag) {
+              core.info('No materiality signals tripped; leaving PR untouched.');
+              return;
+            }
+
+            // Ensure the advisory label exists, then apply it.
+            const label = 'needs-cla-review';
+            try {
+              await github.rest.issues.getLabel({ owner: context.repo.owner, repo: context.repo.repo, name: label });
+            } catch (e) {
+              if (e.status === 404) {
+                await github.rest.issues.createLabel({
+                  owner: context.repo.owner, repo: context.repo.repo,
+                  name: label, color: 'fbca04',
+                  description: 'A maintainer should assess whether a signed CLA is required (see CONTRIBUTING.md).',
+                });
+              } else { throw e; }
+            }
+            await github.rest.issues.addLabels({
+              owner: context.repo.owner, repo: context.repo.repo,
+              issue_number: pr.number, labels: [label],
+            });
+
+            const bullets = arr => arr.map(s => `- ${s}`).join('\n');
+            const sections = [];
+            if (strong.length) sections.push(`**Strong signals**\n${bullets(strong)}`);
+            if (medium.length) sections.push(`**Other signals**\n${bullets(medium)}`);
+            if (weak.length)   sections.push(`**Context**\n${bullets(weak)}`);
+
+            const marker = '<!-- cla-triage-comment -->';
+            const body = [
+              marker,
+              `🔎 **Maintainer heads-up:** automated triage flagged this PR as potentially **material**, so it may need a signed [CLA](../CLA.md) in addition to the DCO sign-off.`,
+              ``,
+              sections.join('\n\n'),
+              ``,
+              `This is **advisory only** — the bot does not decide. Please judge against the [CLA criteria](../CONTRIBUTING.md#contributor-license-agreement-cla) (material, product-critical, patent-sensitive, corporate contributor, broad commercial use). Note that thresholds can be gamed by splitting PRs, so use your judgement.`,
+              ``,
+              `- If a CLA **is** needed → add the \`cla-required\` label (a contributor comment with signing steps is posted automatically).`,
+              `- If it is **not** needed → just remove the \`needs-cla-review\` label.`,
+            ].join('\n');
+
+            await github.rest.issues.createComment({
+              owner: context.repo.owner, repo: context.repo.repo,
+              issue_number: pr.number, body,
+            });

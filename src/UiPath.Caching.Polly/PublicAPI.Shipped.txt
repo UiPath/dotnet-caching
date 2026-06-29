@@ -1,0 +1,31 @@
+#nullable enable
+UiPath.Caching.Polly.CachingBuilderExtensions
+UiPath.Caching.Polly.IResiliencePipelineFactory
+UiPath.Caching.Polly.IResiliencePipelineFactory.Create<TResult>(string? scope, TResult defaultValue) -> Polly.ResiliencePipeline<TResult>!
+UiPath.Caching.Polly.ResiliencePipelineFactory
+UiPath.Caching.Polly.ResiliencePipelineFactory.LoggerFactory.get -> Microsoft.Extensions.Logging.ILoggerFactory!
+UiPath.Caching.Polly.ResiliencePipelineFactory.ResilienceOptions.get -> UiPath.Caching.Polly.ResiliencePoliciesOptions!
+UiPath.Caching.Polly.ResiliencePipelineFactory.ResiliencePipelineFactory(Microsoft.Extensions.Logging.ILoggerFactory! loggerFactory, Polly.Telemetry.TelemetryOptions? telemetryOptions, Microsoft.Extensions.Options.IOptionsMonitor<UiPath.Caching.Polly.ResiliencePoliciesOptions!>! optionsAccessor) -> void
+UiPath.Caching.Polly.ResiliencePipelineFactory.TelemetryOptions.get -> Polly.Telemetry.TelemetryOptions?
+UiPath.Caching.Polly.ResiliencePoliciesOptions
+UiPath.Caching.Polly.ResiliencePoliciesOptions.DurationOfBreak.get -> System.TimeSpan
+UiPath.Caching.Polly.ResiliencePoliciesOptions.DurationOfBreak.set -> void
+UiPath.Caching.Polly.ResiliencePoliciesOptions.Enabled.get -> bool
+UiPath.Caching.Polly.ResiliencePoliciesOptions.Enabled.set -> void
+UiPath.Caching.Polly.ResiliencePoliciesOptions.ExceptionsAllowedBeforeBreaking.get -> int
+UiPath.Caching.Polly.ResiliencePoliciesOptions.ExceptionsAllowedBeforeBreaking.set -> void
+UiPath.Caching.Polly.ResiliencePoliciesOptions.RequestTimeout.get -> System.TimeSpan?
+UiPath.Caching.Polly.ResiliencePoliciesOptions.RequestTimeout.set -> void
+UiPath.Caching.Polly.ResiliencePoliciesOptions.ResiliencePoliciesOptions() -> void
+UiPath.Caching.Polly.ResiliencePoliciesOptions.RethrowCircuitBreakerExceptions.get -> bool
+UiPath.Caching.Polly.ResiliencePoliciesOptions.RethrowCircuitBreakerExceptions.set -> void
+UiPath.Caching.Polly.ResiliencePoliciesOptions.RetryCount.get -> int?
+UiPath.Caching.Polly.ResiliencePoliciesOptions.RetryCount.set -> void
+UiPath.Caching.Polly.ResiliencePoliciesOptions.TelemetryEnabled.get -> bool
+UiPath.Caching.Polly.ResiliencePoliciesOptions.TelemetryEnabled.set -> void
+static UiPath.Caching.Polly.CachingBuilderExtensions.AddResiliencePipeline(this UiPath.Caching.Config.ICachingBuilder! builder, string! name, System.Action<UiPath.Caching.Polly.ResiliencePoliciesOptions!>! configureOptions) -> UiPath.Caching.Config.ICachingBuilder!
+static UiPath.Caching.Polly.CachingBuilderExtensions.AddResilienceStrategies(this UiPath.Caching.Config.ICachingBuilder! builder) -> UiPath.Caching.Config.ICachingBuilder!
+static UiPath.Caching.Polly.CachingBuilderExtensions.AddResilienceStrategies(this UiPath.Caching.Config.ICachingBuilder! builder, System.Action<UiPath.Caching.Polly.ResiliencePoliciesOptions!>! configureOptions, System.Action<Polly.Telemetry.TelemetryOptions!>? configureTelemetryOptions = null) -> UiPath.Caching.Config.ICachingBuilder!
+static UiPath.Caching.Polly.CachingBuilderExtensions.AddResilienceStrategies(this UiPath.Caching.Config.ICachingBuilder! builder, string! sectionName) -> UiPath.Caching.Config.ICachingBuilder!
+virtual UiPath.Caching.Polly.ResiliencePipelineFactory.Create<TResult>(string? scope, TResult defaultValue) -> Polly.ResiliencePipeline<TResult>!
+virtual UiPath.Caching.Polly.ResiliencePipelineFactory.GetBuilder<TResult>(Microsoft.Extensions.Logging.ILogger! logger, UiPath.Caching.Polly.ResiliencePoliciesOptions! resilienceOptions, TResult defaultValue) -> Polly.ResiliencePipelineBuilder<TResult>!
