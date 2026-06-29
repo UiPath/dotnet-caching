@@ -147,7 +147,8 @@ public class RedisPubSubTopicTests(ITestContextAccessor testContextAccessor) : I
     [Fact]
     public async Task Unsubscribe_is_called_when_subscriber_is_disposed()
     {
-        var sut = await Sut(5);
+        var sut = await Sut();
+        await WaitForSubscribeAsync();
         sut.Dispose();
         await _unsubscribeCalled.Task.WaitAsync(TimeSpan.FromSeconds(30), testContextAccessor.Current.CancellationToken);
         _subscriber.Received().Unsubscribe(Arg.Any<RedisChannel>(), Arg.Any<Action<RedisChannel, RedisValue>?>(), Arg.Any<CommandFlags>());

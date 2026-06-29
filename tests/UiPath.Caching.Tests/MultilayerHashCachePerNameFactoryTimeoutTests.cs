@@ -69,15 +69,14 @@ public class MultilayerHashCachePerNameFactoryTimeoutTests(ITestContextAccessor 
     [Fact]
     public async Task GetOrAdd_FactoryTimeout_does_not_swallow_caller_cancellation()
     {
-        var policy = new CachePolicy { FactoryTimeout = TimeSpan.FromSeconds(10) };
+        var policy = new CachePolicy { FactoryTimeout = TimeSpan.FromSeconds(1) };
         using var cts = new CancellationTokenSource();
         Func<CancellationToken, Task<IDictionary<string, string?>>> generator = async ct =>
         {
+            cts.Cancel();
             await Task.Delay(TimeSpan.FromSeconds(30), ct);
             return new Dictionary<string, string?> { ["f"] = "v" };
         };
-
-        cts.CancelAfter(TimeSpan.FromMilliseconds(50));
 
         var act = async () => await Sut.GetOrAddAsync(_cacheKey, generator, policy, cts.Token);
 
