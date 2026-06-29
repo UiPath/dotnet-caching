@@ -1,0 +1,14 @@
+#nullable enable
+UiPath.Caching.OpenTelemetry.CachingBuilderExtensions
+UiPath.Caching.OpenTelemetry.CachingTelemetryProvider
+UiPath.Caching.OpenTelemetry.CachingTelemetryProvider.CachingTelemetryProvider() -> void
+UiPath.Caching.OpenTelemetry.CachingTelemetryProvider.Dispose() -> void
+UiPath.Caching.OpenTelemetry.CachingTelemetryProvider.TrackDependency(string! type, string! target, string! name, string! data, System.DateTimeOffset startTime, System.TimeSpan duration, string! resultCode, bool success, System.ReadOnlySpan<System.Collections.Generic.KeyValuePair<string!, string!>> properties = default(System.ReadOnlySpan<System.Collections.Generic.KeyValuePair<string!, string!>>), System.ReadOnlySpan<System.Collections.Generic.KeyValuePair<string!, double>> metrics = default(System.ReadOnlySpan<System.Collections.Generic.KeyValuePair<string!, double>>)) -> void
+UiPath.Caching.OpenTelemetry.CachingTelemetryProvider.TrackEvent(string! eventName, System.ReadOnlySpan<System.Collections.Generic.KeyValuePair<string!, string!>> properties = default(System.ReadOnlySpan<System.Collections.Generic.KeyValuePair<string!, string!>>), System.ReadOnlySpan<System.Collections.Generic.KeyValuePair<string!, double>> metrics = default(System.ReadOnlySpan<System.Collections.Generic.KeyValuePair<string!, double>>)) -> void
+UiPath.Caching.OpenTelemetry.CachingTelemetryProvider.TrackException(System.Exception! ex, System.ReadOnlySpan<System.Collections.Generic.KeyValuePair<string!, string!>> properties = default(System.ReadOnlySpan<System.Collections.Generic.KeyValuePair<string!, string!>>), System.ReadOnlySpan<System.Collections.Generic.KeyValuePair<string!, double>> metrics = default(System.ReadOnlySpan<System.Collections.Generic.KeyValuePair<string!, double>>)) -> void
+UiPath.Caching.OpenTelemetry.CachingTelemetryProvider.TrackMetric(string! name, double value, System.ReadOnlySpan<System.Collections.Generic.KeyValuePair<string!, string!>> properties = default(System.ReadOnlySpan<System.Collections.Generic.KeyValuePair<string!, string!>>)) -> void
+const UiPath.Caching.OpenTelemetry.CachingTelemetryProvider.ActivitySourceName = "UiPath.Caching" -> string!
+const UiPath.Caching.OpenTelemetry.CachingTelemetryProvider.MeterName = "UiPath.Caching" -> string!
+static UiPath.Caching.OpenTelemetry.CachingBuilderExtensions.AddOpenTelemetry(this UiPath.Caching.Config.ICachingBuilder! builder) -> UiPath.Caching.Config.ICachingBuilder!
+static UiPath.Caching.OpenTelemetry.CachingBuilderExtensions.AddOpenTelemetry(this UiPath.Caching.Config.ICachingBuilder! builder, bool enabled) -> UiPath.Caching.Config.ICachingBuilder!
+static UiPath.Caching.OpenTelemetry.CachingBuilderExtensions.AddOpenTelemetry(this UiPath.Caching.Config.ICachingBuilder! builder, string! fieldName) -> UiPath.Caching.Config.ICachingBuilder!

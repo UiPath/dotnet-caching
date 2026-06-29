@@ -1,0 +1,20 @@
+#nullable enable
+UiPath.Caching.Azure.AzureEntraConnectionConfigurator
+UiPath.Caching.Azure.AzureEntraConnectionConfigurator.AzureEntraConnectionConfigurator(Microsoft.Extensions.Options.IOptions<UiPath.Caching.Azure.AzureEntraOptions!>! options) -> void
+UiPath.Caching.Azure.AzureEntraConnectionConfigurator.ConfigureAsync(StackExchange.Redis.ConfigurationOptions! configuration, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.ValueTask
+UiPath.Caching.Azure.AzureEntraOptions
+UiPath.Caching.Azure.AzureEntraOptions.AzureEntraOptions() -> void
+UiPath.Caching.Azure.AzureEntraOptions.Credential.get -> Azure.Core.TokenCredential?
+UiPath.Caching.Azure.AzureEntraOptions.Credential.set -> void
+UiPath.Caching.Azure.AzureEntraOptions.ManagedIdentityClientId.get -> string?
+UiPath.Caching.Azure.AzureEntraOptions.ManagedIdentityClientId.set -> void
+UiPath.Caching.Azure.AzureEntraOptions.ManagedIdentityOptions.get -> Azure.Identity.ManagedIdentityCredentialOptions?
+UiPath.Caching.Azure.AzureEntraOptions.ManagedIdentityOptions.set -> void
+UiPath.Caching.Azure.AzureEntraOptions.RequireResp3.get -> bool
+UiPath.Caching.Azure.AzureEntraOptions.RequireResp3.set -> void
+UiPath.Caching.Azure.AzureEntraOptions.RequireSsl.get -> bool
+UiPath.Caching.Azure.AzureEntraOptions.RequireSsl.set -> void
+UiPath.Caching.Config.AzureCachingBuilderExtensions
+static UiPath.Caching.Config.AzureCachingBuilderExtensions.AddAzureEntraAuthentication(this UiPath.Caching.Config.ICachingBuilder! builder, System.Action<UiPath.Caching.Azure.AzureEntraOptions!>? configure = null) -> UiPath.Caching.Config.ICachingBuilder!
+static UiPath.Caching.Config.AzureCachingBuilderExtensions.AddAzureEntraAuthentication(this UiPath.Caching.Config.ICachingBuilder! builder, string! sectionName) -> UiPath.Caching.Config.ICachingBuilder!
+virtual UiPath.Caching.Azure.AzureEntraConnectionConfigurator.ApplyAzureAuthenticationAsync(StackExchange.Redis.ConfigurationOptions! configuration, Azure.Core.TokenCredential! credential) -> System.Threading.Tasks.Task!

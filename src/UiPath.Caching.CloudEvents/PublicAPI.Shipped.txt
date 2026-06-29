@@ -1,0 +1,11 @@
+#nullable enable
+UiPath.Caching.CloudEvents.CacheEventFormatterProxy
+UiPath.Caching.CloudEvents.CacheEventFormatterProxy.CacheEventFormatterProxy(CloudNative.CloudEvents.CloudEventFormatter! formatter) -> void
+UiPath.Caching.CloudEvents.CacheEventFormatterProxy.Decode(System.ReadOnlyMemory<byte> body) -> UiPath.Caching.Broadcast.ICacheEvent?
+UiPath.Caching.CloudEvents.CacheEventFormatterProxy.Encode(UiPath.Caching.Broadcast.ICacheEvent! pubSubEvent) -> System.ReadOnlyMemory<byte>
+UiPath.Caching.CloudEvents.CachingBuilderExtensions
+UiPath.Caching.CloudEvents.CloudCacheEventFactory
+UiPath.Caching.CloudEvents.CloudCacheEventFactory.CloudCacheEventFactory(Microsoft.Extensions.Options.IOptions<UiPath.Caching.CacheOptions!>! optionsAccessor) -> void
+UiPath.Caching.CloudEvents.CloudCacheEventFactory.Create(string! cacheName, string! eventType, UiPath.Caching.Broadcast.CacheEventData! eventData, string? id = null) -> UiPath.Caching.Broadcast.ICacheEvent!
+UiPath.Caching.CloudEvents.CloudCacheEventFactory.IsKnown(string? eventType) -> bool
+static UiPath.Caching.CloudEvents.CachingBuilderExtensions.AddCloudEvents(this UiPath.Caching.Config.ICachingBuilder! builder) -> UiPath.Caching.Config.ICachingBuilder!
