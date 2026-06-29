@@ -121,7 +121,7 @@ public class ResiliencePipelineFactoryTest(ITestContextAccessor testContextAcces
             });
         var timeoutFunc = new Func<CancellationToken, ValueTask<bool>>(async token =>
         {
-            await Task.Delay(TimeSpan.FromSeconds(60), token);
+            await Task.Delay(Timeout.InfiniteTimeSpan, token);
             return true;
         });
         var exceptionFunc = new Func<CancellationToken, ValueTask<bool>>(token =>
@@ -134,7 +134,10 @@ public class ResiliencePipelineFactoryTest(ITestContextAccessor testContextAcces
         });
         var resiliencePipelineFactory = _fixture.Create<ResiliencePipelineFactory>();
         var pipeline = resiliencePipelineFactory.Create("read", false);
-        var act = async () => await pipeline.ExecuteAsync(timeoutFunc);
+        using var guard = CancellationTokenSource.CreateLinkedTokenSource(testContextAccessor.Current.CancellationToken);
+        guard.CancelAfter(TimeSpan.FromSeconds(5));
+
+        var act = async () => await pipeline.ExecuteAsync(timeoutFunc, guard.Token);
         await act.Should().ThrowAsync<TimeoutRejectedException>();
         bool? actual = null;
         for (int i = 0; i < 3; i++)
