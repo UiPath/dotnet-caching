@@ -1,2 +1,7 @@
 # Caching library maintainers — default owners for everything in the repo.
 * @cosmin-staicu @litheon @cosminvlad @alinahornet @lucianaparaschivei @razvalex
+
+# CLA registry — entries are added only after a maintainer verifies with UiPath
+# legal that the signed CLA is on file. Approval routes to the maintainers here;
+# swap in a dedicated legal/CLA-approver team handle if one is created.
+/signatures/ @cosmin-staicu @litheon @cosminvlad @alinahornet @lucianaparaschivei @razvalex

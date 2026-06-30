@@ -43,7 +43,7 @@ jobs:
             // If a maintainer already actioned this PR, don't add noise. cla-not-required is
             // a durable "reviewed, no CLA needed" state so a synchronize event can't re-flag it.
             const existing = pr.labels.map(l => l.name);
-            const actioned = ['cla-required', 'cla-signed', 'needs-cla-review', 'cla-not-required'];
+            const actioned = ['cla-required', 'needs-cla-review', 'cla-not-required'];
             if (existing.some(l => actioned.includes(l))) return;
 
             const files = await github.paginate(github.rest.pulls.listFiles, {
