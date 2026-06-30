@@ -1,0 +1,8 @@
+# Configuration for the DCO GitHub App (https://github.com/apps/dco).
+#
+# Exempt UiPath org members from the DCO sign-off requirement — their
+# contributions are covered by employment, and org membership is a reliable
+# signal (commit author email is not). External contributors must still sign
+# off every commit (git commit -s), per CONTRIBUTING.md.
+require:
+  members: false
