@@ -10,7 +10,9 @@ name: CLA triage
 # It only ever RAISES scrutiny — it never says "no CLA needed". Tune the
 # thresholds in `env` below to taste.
 #
-# Labels used: needs-cla-review (created automatically if missing).
+# Labels: needs-cla-review (created automatically if missing) is the advisory flag.
+# A maintainer who decides no CLA is needed should apply cla-not-required, which
+# suppresses re-flagging on later pushes (cla-required / cla-signed also suppress).
 
 on:
   pull_request_target:
@@ -38,9 +40,11 @@ jobs:
             // Skip bots and drafts — nothing useful to triage.
             if (pr.draft || pr.user.type === 'Bot') return;
 
-            // If a maintainer already actioned this PR, don't add noise.
+            // If a maintainer already actioned this PR, don't add noise. cla-not-required is
+            // a durable "reviewed, no CLA needed" state so a synchronize event can't re-flag it.
             const existing = pr.labels.map(l => l.name);
-            if (existing.includes('cla-required') || existing.includes('cla-signed') || existing.includes('needs-cla-review')) return;
+            const actioned = ['cla-required', 'cla-signed', 'needs-cla-review', 'cla-not-required'];
+            if (existing.some(l => actioned.includes(l))) return;
 
             const files = await github.paginate(github.rest.pulls.listFiles, {
               owner: context.repo.owner,
@@ -57,37 +61,56 @@ jobs:
             const medium = [];   // any single one of these flags review
             const weak = [];     // only flags in combination
 
-            const newDeps = [];
             const newProjects = [];
             const licenseFiles = [];
-            const apiFiles = [];
+            const govFiles = [];
+            const apiAdded = new Set();     // projects whose PublicAPI.Unshipped.txt gained entries (new API)
+            const apiShipped = new Set();   // projects whose PublicAPI.Shipped.txt changed (possible removal/breaking change)
+            const addedDeps = new Set();    // PackageReference/PackageVersion names added
+            const removedDeps = new Set();  // ...removed, so a version bump isn't mistaken for a new dependency
             let srcAdds = 0;
+
+            const projOf = fn => fn.replace(/\/PublicAPI\.(?:Unshipped|Shipped)\.txt$/i, '');
 
             for (const f of files) {
               const fn = f.filename;
               if (isProd(fn)) srcAdds += f.additions;
 
-              // Exact public-API signal: the PublicApiAnalyzers make any public surface change
-              // touch PublicAPI.Unshipped.txt (the build fails otherwise — see src/Directory.Build.props).
-              if (/PublicAPI\.Unshipped\.txt$/i.test(fn) && f.additions > 0) apiFiles.push(fn.replace(/\/PublicAPI\.Unshipped\.txt$/i, ''));
+              // Public API surface — PublicApiAnalyzers enforce these files (see src/Directory.Build.props):
+              //   Unshipped.txt additions => new public API; Shipped.txt change => possible removal/breaking change.
+              if (/PublicAPI\.Unshipped\.txt$/i.test(fn) && f.additions > 0) apiAdded.add(projOf(fn));
+              if (/PublicAPI\.Shipped\.txt$/i.test(fn) && (f.additions + f.deletions) > 0) apiShipped.add(projOf(fn));
+
               if (isProd(fn) && fn.endsWith('.csproj') && f.status === 'added') newProjects.push(fn);
               if (/(^|\/)(LICENSE|NOTICE|THIRD[-_ ]?PARTY)/i.test(fn)) licenseFiles.push(fn);
+              // Governance / security / release-sensitive files.
+              if (/(^|\/)(CODEOWNERS|SECURITY\.md|CLA\.md|CONTRIBUTING\.md|nuget\.config)$/i.test(fn)
+                  || /^\.github\/workflows\/release.*\.ya?ml$/i.test(fn)) govFiles.push(fn);
 
               if (!f.patch) continue;
-              const added = f.patch.split('\n').filter(l => l.startsWith('+') && !l.startsWith('+++'));
+              const lines = f.patch.split('\n');
+              const added = lines.filter(l => l.startsWith('+') && !l.startsWith('+++'));
+              const removed = lines.filter(l => l.startsWith('-') && !l.startsWith('---'));
 
-              if (isProd(fn) && fn.endsWith('.csproj')) {
-                for (const l of added) {
-                  const m = l.match(/<PackageReference\s+Include="([^"]+)"/i);
-                  if (m) newDeps.push(m[1]);
-                }
+              // New dependency = a PackageReference (src/*.csproj) or PackageVersion
+              // (Directory.Packages.props, since this repo uses central package management)
+              // whose name is added but not removed — so version bumps don't count.
+              const depRe = /<Package(?:Reference|Version)\s+Include="([^"]+)"/i;
+              const isDepFile = (isProd(fn) && fn.endsWith('.csproj')) || /(^|\/)Directory\.Packages\.props$/i.test(fn);
+              if (isDepFile) {
+                for (const l of added)   { const m = l.match(depRe); if (m) addedDeps.add(m[1]); }
+                for (const l of removed) { const m = l.match(depRe); if (m) removedDeps.add(m[1]); }
               }
             }
 
-            if (apiFiles.length)     strong.push(`adds public API surface (\`PublicAPI.Unshipped.txt\` in ${[...new Set(apiFiles)].map(p => `\`${p}\``).join(', ')})`);
-            if (newDeps.length)      strong.push(`adds dependenc${newDeps.length === 1 ? 'y' : 'ies'}: \`${[...new Set(newDeps)].join('`, `')}\``);
+            const newDeps = [...addedDeps].filter(n => !removedDeps.has(n));
+
+            if (apiAdded.size)       strong.push(`adds public API surface (\`PublicAPI.Unshipped.txt\` in ${[...apiAdded].map(p => `\`${p}\``).join(', ')})`);
+            if (apiShipped.size)     strong.push(`changes shipped public API — possible removal/breaking change (\`PublicAPI.Shipped.txt\` in ${[...apiShipped].map(p => `\`${p}\``).join(', ')})`);
+            if (newDeps.length)      strong.push(`adds dependenc${newDeps.length === 1 ? 'y' : 'ies'}: \`${newDeps.join('`, `')}\``);
             if (newProjects.length)  strong.push(`adds new project(s): \`${newProjects.join('`, `')}\``);
-            if (licenseFiles.length) strong.push(`touches licensing files: \`${licenseFiles.join('`, `')}\``);
+            if (licenseFiles.length) strong.push(`touches licensing files: \`${[...new Set(licenseFiles)].join('`, `')}\``);
+            if (govFiles.length)     strong.push(`changes governance/security files: \`${[...new Set(govFiles)].join('`, `')}\``);
             if (srcAdds >= Number(process.env.SRC_LINES_STRONG)) medium.push(`large production change (+${srcAdds} lines under \`src/\`)`);
 
             const assoc = pr.author_association; // OWNER, MEMBER, COLLABORATOR, CONTRIBUTOR, FIRST_TIME_CONTRIBUTOR, NONE
@@ -126,17 +149,18 @@ jobs:
             if (medium.length) sections.push(`**Other signals**\n${bullets(medium)}`);
             if (weak.length)   sections.push(`**Context**\n${bullets(weak)}`);
 
+            const blob = `https://github.com/${context.repo.owner}/${context.repo.repo}/blob/main`;
             const marker = '<!-- cla-triage-comment -->';
             const body = [
               marker,
-              `🔎 **Maintainer heads-up:** automated triage flagged this PR as potentially **material**, so it may need a signed [CLA](../CLA.md) in addition to the DCO sign-off.`,
+              `🔎 **Maintainer heads-up:** automated triage flagged this PR as potentially **material**, so it may need a signed [CLA](${blob}/CLA.md) in addition to the DCO sign-off.`,
               ``,
               sections.join('\n\n'),
               ``,
-              `This is **advisory only** — the bot does not decide. Please judge against the [CLA criteria](../CONTRIBUTING.md#contributor-license-agreement-cla) (material, product-critical, patent-sensitive, corporate contributor, broad commercial use). Note that thresholds can be gamed by splitting PRs, so use your judgement.`,
+              `This is **advisory only** — the bot does not decide. Please judge against the [CLA criteria](${blob}/CONTRIBUTING.md#contributor-license-agreement-cla) (material, product-critical, patent-sensitive, corporate contributor, broad commercial use). Note that thresholds can be gamed by splitting PRs, so use your judgement.`,
               ``,
               `- If a CLA **is** needed → add the \`cla-required\` label (a contributor comment with signing steps is posted automatically).`,
-              `- If it is **not** needed → just remove the \`needs-cla-review\` label.`,
+              `- If it is **not** needed → replace \`needs-cla-review\` with \`cla-not-required\` so later pushes don't re-flag it.`,
             ].join('\n');
 
             await github.rest.issues.createComment({
