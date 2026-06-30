@@ -1,31 +1,85 @@
-name: DCO Sign-off
+name: DCO
+
+# Developer Certificate of Origin check (https://developercertificate.org/).
+#
+# Self-contained replacement for the archived contributor-assistant/github-action.
+# It verifies that every non-merge, non-bot commit in the PR carries a
+# `Signed-off-by:` trailer whose email matches the commit author or committer —
+# i.e. real commit-trailer DCO, matching CONTRIBUTING.md ("git commit -s").
+#
+# The job id is `dco` so the produced check run is named `dco`, matching the
+# required status check already configured on `main` (GitHub Actions integration).
+#
+# Runs as `pull_request` with a read-only token: it only reads commits and writes
+# a job summary, so it needs no write access and is safe for fork PRs.
 
 on:
-  issue_comment:
-    types: [created]
-  pull_request_target:
-    types: [opened, synchronize]
+  pull_request:
+    types: [opened, reopened, synchronize]
 
 permissions:
-  actions: write
-  contents: write
-  pull-requests: write
-  statuses: write
+  contents: read
 
 jobs:
   dco:
     runs-on: ubuntu-latest
     steps:
-      - name: DCO sign-off assistant
-        if: (github.event.comment.body == 'recheck' || github.event.comment.body == 'I have read the DCO and I hereby sign off on my contribution') || github.event_name == 'pull_request_target'
-        uses: contributor-assistant/github-action@ca4a40a7d1004f18d9960b404b97e5f30a505a08 # v2.6.1
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - name: Check DCO sign-off
+        uses: actions/github-script@60a0d83039c74a4aee543508d2ffcb1c3799cdea # v7.0.1
         with:
-          use-dco-flag: true
-          path-to-signatures: signatures/version1/dco.json
-          path-to-document: https://github.com/UiPath/dotnet-caching/blob/main/CONTRIBUTING.md
-          branch: dco-signatures
-          allowlist: dependabot[bot],github-actions[bot]
-          custom-pr-sign-comment: I have read the DCO and I hereby sign off on my contribution
-          custom-allsigned-prcomment: All contributors have signed off on their contributions per the DCO. ✍️
+          script: |
+            const pr = context.payload.pull_request;
+            const commits = await github.paginate(github.rest.pulls.listCommits, {
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              pull_number: pr.number,
+              per_page: 100,
+            });
+
+            const failures = [];
+            let checked = 0;
+
+            for (const c of commits) {
+              // Merge commits are exempt (DCO convention).
+              if ((c.parents || []).length > 1) continue;
+              // Bot authors are exempt (e.g. dependabot[bot], github-actions[bot]).
+              if (c.author && c.author.type === 'Bot') continue;
+
+              checked++;
+              const sha = c.sha.substring(0, 7);
+              const msg = c.commit.message || '';
+              const signoffs = [...msg.matchAll(/^\s*Signed-off-by:\s*.+\s+<([^>]+)>\s*$/gim)]
+                .map(m => m[1].trim().toLowerCase());
+
+              if (signoffs.length === 0) {
+                failures.push(`\`${sha}\` — no \`Signed-off-by\` trailer`);
+                continue;
+              }
+              const author = (c.commit.author && c.commit.author.email || '').toLowerCase();
+              const committer = (c.commit.committer && c.commit.committer.email || '').toLowerCase();
+              if (!signoffs.includes(author) && !signoffs.includes(committer)) {
+                failures.push(`\`${sha}\` — \`Signed-off-by\` does not match author <${author}>`);
+              }
+            }
+
+            if (failures.length === 0) {
+              core.info(`DCO: all ${checked} commit(s) carry a valid sign-off.`);
+              return;
+            }
+
+            const summary = [
+              '### ❌ DCO check failed',
+              '',
+              'Every commit must carry a `Signed-off-by` trailer matching its author. See the [DCO](https://github.com/UiPath/dotnet-caching/blob/main/CONTRIBUTING.md#sign-off-dco).',
+              '',
+              ...failures.map(f => `- ${f}`),
+              '',
+              '**Fix:** sign off your commits and force-push:',
+              '```bash',
+              'git rebase --signoff origin/main   # sign off all commits in the PR',
+              '# or, for a single commit:  git commit --amend -s --no-edit',
+              'git push --force-with-lease',
+              '```',
+            ].join('\n');
+            await core.summary.addRaw(summary).write();
+            core.setFailed(`DCO: ${failures.length} commit(s) missing a valid sign-off.`);
