@@ -63,7 +63,7 @@ An automated check may add a `needs-cla-review` label to flag a pull request for
 
 1. A maintainer adds the `cla-required` label to your pull request, and an automated comment links to [CLA.md](./CLA.md). A `legal/cla` status check on the PR turns red while a CLA is outstanding.
 2. Read [CLA.md](./CLA.md), complete the section that applies to you (**Option A — Individual Contributor** or **Option B — Corporate Contributor**), sign it, and email the signed copy to **contractnotice@uipath.com**, referencing your pull request URL.
-3. Once UiPath has recorded your signed CLA, a maintainer adds the `cla-signed` label. The `legal/cla` check turns green and the pull request becomes eligible to merge.
+3. Once UiPath has confirmed and recorded your signed CLA, a maintainer adds you to the [CLA registry](./signatures/cla.json) (a reviewed, version-controlled record). The `legal/cla` check then turns green and the pull request becomes eligible to merge.
 
 The CLA covers your present and future Contributions, so you won't be asked to sign again for later pull requests — unless you change employers, in which case a new agreement is required (see clause 5.3 of the CLA).
 

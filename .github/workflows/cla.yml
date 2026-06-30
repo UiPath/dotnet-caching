@@ -1,18 +1,16 @@
 name: CLA
 
 # Two-tier contribution model (see CONTRIBUTING.md):
-#   - DCO sign-off is required on every PR (see dco.yml).
+#   - DCO sign-off is enforced on every PR by the DCO GitHub App (org members exempt).
 #   - A signed Contributor License Agreement (CLA.md) is required ONLY for
-#     material/strategic contributions, escalated per-PR by a maintainer.
+#     material/strategic contributions, escalated per-PR by a maintainer applying
+#     the `cla-required` label.
 #
-# This workflow does NOT gate ordinary PRs. It publishes a `legal/cla` commit
-# status that is GREEN by default and only turns RED when a maintainer has
-# applied the `cla-required` label and the `cla-signed` label is not yet present.
-# Mark `legal/cla` as a required status check in branch protection to enforce it.
-#
-# Labels (create them once in the repo):
-#   - cla-required : maintainer flags a contribution as needing a signed CLA
-#   - cla-signed   : maintainer confirms UiPath has recorded the signed CLA
+# The authoritative "has a signed CLA on file" state is the CLA registry
+# (signatures/cla.json on the default branch), NOT a label. This job publishes a
+# `legal/cla` commit status that is GREEN by default and turns RED only when
+# `cla-required` is present AND the PR author is not yet in the registry.
+# Mark `legal/cla` as a required status check to enforce it.
 
 on:
   pull_request_target:
@@ -32,12 +30,28 @@ jobs:
         with:
           script: |
             const pr = context.payload.pull_request;
-            const labels = pr.labels.map(l => l.name);
-            const required = labels.includes('cla-required');
-            const signed = labels.includes('cla-signed');
-            const outstanding = required && !signed;
-
+            const required = pr.labels.map(l => l.name).includes('cla-required');
             const claUrl = `https://github.com/${context.repo.owner}/${context.repo.repo}/blob/main/CLA.md`;
+            const registryUrl = `https://github.com/${context.repo.owner}/${context.repo.repo}/blob/main/signatures/cla.json`;
+
+            // Read the CLA registry from the BASE branch (trusted) — never the PR head,
+            // so a pull request cannot authorize its own author.
+            let signed = false;
+            try {
+              const res = await github.rest.repos.getContent({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                path: 'signatures/cla.json',
+                ref: pr.base.ref,
+              });
+              const json = JSON.parse(Buffer.from(res.data.content, 'base64').toString('utf8'));
+              const users = (json.signatories || []).map(s => String(s.githubUsername || '').toLowerCase());
+              signed = users.includes(String(pr.user.login || '').toLowerCase());
+            } catch (e) {
+              if (e.status !== 404) throw e; // missing registry => treat as empty
+            }
+
+            const outstanding = required && !signed;
 
             await github.rest.repos.createCommitStatus({
               owner: context.repo.owner,
@@ -46,9 +60,9 @@ jobs:
               context: 'legal/cla',
               state: outstanding ? 'failure' : 'success',
               description: outstanding
-                ? 'Signed CLA required for this contribution — see CLA.md'
-                : (signed ? 'CLA recorded by UiPath' : 'No CLA required'),
-              target_url: claUrl,
+                ? 'Signed CLA required — author not yet in the CLA registry'
+                : (required ? 'CLA on file (author in registry)' : 'No CLA required'),
+              target_url: outstanding ? claUrl : registryUrl,
             });
 
             // Post the instructional comment once, when a CLA first becomes outstanding.
@@ -64,14 +78,14 @@ jobs:
 
             const body = [
               marker,
-              `Thanks for your contribution, @${pr.user.login}! A maintainer has flagged this as a **material or strategic** contribution, which requires a signed **Contributor License Agreement (CLA)** in addition to the DCO sign-off.`,
+              `Thanks for your contribution, @${pr.user.login}! A maintainer flagged this as a **material or strategic** contribution, which requires a signed **Contributor License Agreement (CLA)** in addition to the DCO sign-off.`,
               ``,
               `**What to do:**`,
               `1. Read the [CLA](${claUrl}).`,
               `2. Complete the section that applies to you — **Option A — Individual Contributor** or **Option B — Corporate Contributor** — and sign it.`,
               `3. Email the signed copy to **contractnotice@uipath.com**, referencing this pull request: ${pr.html_url}`,
               ``,
-              `Once UiPath records your signed CLA, a maintainer will add the \`cla-signed\` label and the \`legal/cla\` check will turn green. The CLA covers your present and future contributions, so this is a one-time step.`,
+              `Once UiPath records your signed CLA in the [CLA registry](${registryUrl}), the \`legal/cla\` check turns green. The CLA covers your present and future contributions, so this is a one-time step.`,
             ].join('\n');
 
             await github.rest.issues.createComment({
