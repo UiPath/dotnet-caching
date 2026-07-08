@@ -83,15 +83,16 @@ jobs:
           generate_release_notes: true
           prerelease: ${{ contains(github.ref_name, '-') }}
 
-  # Gated by the protected `nuget` environment (manual approval). Auth is nuget.org
-  # OIDC trusted publishing (NuGet/login with the NUGET_USER secret); packages get the
-  # registered author signature via Azure Key Vault (NuGetKeyVaultSignTool) before the push.
+  # Gated by the protected `nuget` environment (manual approval). Both nuget.org publishing
+  # and Azure Key Vault signing authenticate with OIDC (no long-lived secrets): nuget.org via
+  # trusted publishing, Key Vault via a federated credential on the signing app.
   publish-nuget:
     needs: release
     runs-on: ubuntu-latest
     environment: nuget
     permissions:
-      id-token: write  # OIDC token for nuget.org trusted publishing
+      contents: read
+      id-token: write  # OIDC tokens for nuget.org trusted publishing and Azure federation
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
 
@@ -124,12 +125,19 @@ jobs:
           KV_CERT: ${{ secrets.SIGNING_KEYVAULT_CERTIFICATE }}
           KV_TENANT_ID: ${{ secrets.SIGNING_AZURE_TENANT_ID }}
           KV_CLIENT_ID: ${{ secrets.SIGNING_AZURE_CLIENT_ID }}
-          KV_CLIENT_SECRET: ${{ secrets.SIGNING_AZURE_CLIENT_SECRET }}
         run: |
           if [ -z "${KV_URL}" ] || [ -z "${KV_CERT}" ]; then
             echo "::error::Key Vault signing is not configured (SIGNING_KEYVAULT_URL / SIGNING_KEYVAULT_CERTIFICATE); nuget.org requires the registered author signature."
             exit 1
           fi
+          # Federated (OIDC) login to Azure -- no client secret leaves GitHub. The runner's
+          # short-lived GitHub token is exchanged, through the app's federated credential,
+          # for a Key Vault access token scoped to this environment.
+          oidc=$(curl -sS -H "Authorization: Bearer ${ACTIONS_ID_TOKEN_REQUEST_TOKEN}" \
+            "${ACTIONS_ID_TOKEN_REQUEST_URL}&audience=api://AzureADTokenExchange" | jq -r '.value')
+          az login --service-principal --username "${KV_CLIENT_ID}" --tenant "${KV_TENANT_ID}" \
+            --federated-token "${oidc}" --allow-no-subscriptions >/dev/null
+          kv_token=$(az account get-access-token --tenant "${KV_TENANT_ID}" --resource https://vault.azure.net --query accessToken -o tsv)
           dotnet tool install --global NuGetKeyVaultSignTool
           export PATH="${PATH}:${HOME}/.dotnet/tools"
           # RFC 3161 timestamping: the TSA reply is a signed token, so its integrity
@@ -142,9 +150,7 @@ jobs:
               --timestamp-digest sha256 \
               --azure-key-vault-url "${KV_URL}" \
               --azure-key-vault-certificate "${KV_CERT}" \
-              --azure-key-vault-tenant-id "${KV_TENANT_ID}" \
-              --azure-key-vault-client-id "${KV_CLIENT_ID}" \
-              --azure-key-vault-client-secret "${KV_CLIENT_SECRET}"
+              --azure-key-vault-accesstoken "${kv_token}"
           done
 
       - name: Authenticate to nuget.org (OIDC trusted publishing)
