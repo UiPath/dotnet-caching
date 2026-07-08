@@ -83,13 +83,12 @@ jobs:
           generate_release_notes: true
           prerelease: ${{ contains(github.ref_name, '-') }}
 
-  # Publishing to nuget.org is gated twice: an explicit opt-in variable AND a
-  # protected environment requiring manual approval. Neither tagging nor having
-  # NUGET_USER set is enough on its own.
+  # Gated by the protected `nuget` environment (manual approval). Auth is nuget.org
+  # OIDC trusted publishing (NuGet/login with the NUGET_USER secret); packages get the
+  # registered author signature via Azure Key Vault (NuGetKeyVaultSignTool) before the push.
   publish-nuget:
     needs: release
     runs-on: ubuntu-latest
-    if: vars.NUGET_USER != '' && vars.PUBLISH_TO_NUGET == 'true'
     environment: nuget
     permissions:
       id-token: write  # OIDC token for nuget.org trusted publishing
@@ -119,11 +118,40 @@ jobs:
       - name: Pack
         run: dotnet pack UiPath.Caching.slnx -c Release --no-build -o packages /p:Version=${{ steps.version.outputs.value }}
 
+      - name: Sign packages (author signature via Azure Key Vault)
+        env:
+          KV_URL: ${{ secrets.SIGNING_KEYVAULT_URL }}
+          KV_CERT: ${{ secrets.SIGNING_KEYVAULT_CERTIFICATE }}
+          KV_TENANT_ID: ${{ secrets.SIGNING_AZURE_TENANT_ID }}
+          KV_CLIENT_ID: ${{ secrets.SIGNING_AZURE_CLIENT_ID }}
+          KV_CLIENT_SECRET: ${{ secrets.SIGNING_AZURE_CLIENT_SECRET }}
+        run: |
+          if [ -z "${KV_URL}" ] || [ -z "${KV_CERT}" ]; then
+            echo "::error::Key Vault signing is not configured (SIGNING_KEYVAULT_URL / SIGNING_KEYVAULT_CERTIFICATE); nuget.org requires the registered author signature."
+            exit 1
+          fi
+          dotnet tool install --global NuGetKeyVaultSignTool
+          export PATH="${PATH}:${HOME}/.dotnet/tools"
+          # RFC 3161 timestamping: the TSA reply is a signed token, so its integrity
+          # does not depend on the transport. http is DigiCert's documented endpoint
+          # (no https RFC 3161 endpoint is published) and carries only the hash.
+          for pkg in packages/*.nupkg; do
+            NuGetKeyVaultSignTool sign "${pkg}" \
+              --file-digest sha256 \
+              --timestamp-rfc3161 http://timestamp.digicert.com \
+              --timestamp-digest sha256 \
+              --azure-key-vault-url "${KV_URL}" \
+              --azure-key-vault-certificate "${KV_CERT}" \
+              --azure-key-vault-tenant-id "${KV_TENANT_ID}" \
+              --azure-key-vault-client-id "${KV_CLIENT_ID}" \
+              --azure-key-vault-client-secret "${KV_CLIENT_SECRET}"
+          done
+
       - name: Authenticate to nuget.org (OIDC trusted publishing)
         id: nuget-login
         uses: NuGet/login@8d196754b4036150537f80ac539e15c2f1028841 # v1.2.0
         with:
-          user: ${{ vars.NUGET_USER }}
+          user: ${{ secrets.NUGET_USER }}
 
       - name: Push to nuget.org
         run: dotnet nuget push 'packages/*.nupkg' --source https://api.nuget.org/v3/index.json --api-key ${{ steps.nuget-login.outputs.NUGET_API_KEY }} --skip-duplicate
