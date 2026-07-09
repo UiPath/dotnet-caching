@@ -36,13 +36,13 @@ if (useShardedRedis)
 }
 else
 {
-    var cache = builder.AddRedis("cache", port: 6379)
+    var cache = builder.AddRedis("cache")
         .WithDataVolume()
         .WithPersistence(TimeSpan.FromSeconds(20), keysChangedThreshold: 1);
 
     if (useRedisInsight)
     {
-        cache.WithRedisInsight(insight => insight.WithHostPort(8001));
+        cache.WithRedisInsight();
     }
 
     foreach (var sampleMachine in AddSampleMachines(builder, cache.Resource.ConnectionStringExpression, singleRedisExtraParams, shardKeyEnabled: false, useShardedPubSub: false, useOpenTelemetry: useOpenTelemetry, useSingleMachine: useSingleMachine))
