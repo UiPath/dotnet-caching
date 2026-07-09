@@ -1,4 +1,4 @@
-namespace UiPath.Caching.Config;
+﻿namespace UiPath.Caching.Config;
 
 [ExcludeFromCodeCoverage]
 public static class ServiceCollectionExtensions
@@ -70,7 +70,7 @@ public static class ServiceCollectionExtensions
         return services;
     }
 
-    internal static IServiceCollection TryConfigure<TOptions>(this IServiceCollection services, Action<TOptions> configureOptions)
+    public static IServiceCollection TryConfigure<TOptions>(this IServiceCollection services, Action<TOptions> configureOptions)
          where TOptions : class
     {
         if (!services.Any(d => d.ServiceType == typeof(IConfigureOptions<TOptions>)))
