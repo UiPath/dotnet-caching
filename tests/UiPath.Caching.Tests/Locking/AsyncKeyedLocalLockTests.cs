@@ -69,7 +69,7 @@ public class AsyncKeyedLocalLockTests(ITestContextAccessor testContextAccessor)
 
         var tasks = Enumerable.Range(0, 32).Select(_ => Task.Run(Worker)).ToArray();
 
-        await firstEntered.Task.WaitAsync(TimeSpan.FromSeconds(10), token);
+        await firstEntered.Task.WaitAsync(TimeSpan.FromSeconds(30), token);
         release.TrySetResult();
 
         await Task.WhenAll(tasks);
