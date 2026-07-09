@@ -1,4 +1,4 @@
-namespace UiPath.Caching.Config;
+﻿namespace UiPath.Caching.Config;
 
 [ExcludeFromCodeCoverage]
 public static class SetCacheCollectionExtensions
@@ -12,8 +12,10 @@ public static class SetCacheCollectionExtensions
         ArgumentNullException.ThrowIfNull(configureOptions);
         if (!builder.Enabled)
         {
+            builder.Services.AddNullSetCache();
             return builder;
         }
+
         builder.Services.AddRedisSetCache(configureOptions);
         return builder;
     }
@@ -38,9 +40,24 @@ public static class SetCacheCollectionExtensions
     {
         ArgumentNullException.ThrowIfNull(services);
         ArgumentNullException.ThrowIfNull(configureOptions);
-        services.Configure(configureOptions);
+        RedisSetCacheOptions options = new();
+        configureOptions.Invoke(options);
+        services.TryConfigure(configureOptions);
+        if (!options.Enabled)
+        {
+            return services.AddNullSetCache();
+        }
+
         services.TryAddSingleton<ISetCache>(BuildRedisSetCache);
         services.TryAddSingleton<IQueueCacheFactory, QueueCacheFactory>();
+        services.TryAddTransient(typeof(ISetCache<>), typeof(SetCache<>));
+        return services;
+    }
+
+    private static IServiceCollection AddNullSetCache(this IServiceCollection services)
+    {
+        services.TryAddSingleton<ISetCache>(NullSetCache.Instance);
+        services.TryAddSingleton<IQueueCacheFactory>(NullQueueCacheFactory.Instance);
         services.TryAddTransient(typeof(ISetCache<>), typeof(SetCache<>));
         return services;
     }

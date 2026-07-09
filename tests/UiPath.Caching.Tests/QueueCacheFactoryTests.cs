@@ -58,5 +58,47 @@ public class QueueCacheFactoryTests
             d.ServiceType == typeof(IQueueCacheFactory) && d.ImplementationType == typeof(QueueCacheFactory));
     }
 
+    [Fact]
+    public void NullQueueCacheFactory_CreateSetCache_returns_NullSetCache()
+    {
+        NullQueueCacheFactory.Instance.CreateSetCache().Should().BeSameAs(NullSetCache.Instance);
+    }
+
+    [Fact]
+    public void AddRedisSetCache_when_caching_disabled_registers_NullQueueCacheFactory()
+    {
+        var services = new ServiceCollection();
+        services.AddLogging();
+        services.AddCaching(
+            builder => builder.AddRedisSetCache(),
+            opt => opt.Enabled = false);
+        using var provider = services.BuildServiceProvider();
+
+        provider.GetRequiredService<IQueueCacheFactory>().Should().BeOfType<NullQueueCacheFactory>();
+    }
+
+    [Fact]
+    public void AddRedisSetCache_when_caching_disabled_still_allows_dependent_service_to_be_constructed()
+    {
+        var services = new ServiceCollection();
+        services.AddLogging();
+        services.AddCaching(
+            builder => builder.AddRedisSetCache(),
+            opt => opt.Enabled = false);
+        services.AddSingleton<DependsOnQueueCacheFactory>();
+
+        using var provider = services.BuildServiceProvider(new ServiceProviderOptions { ValidateOnBuild = true });
+
+        var sut = provider.GetRequiredService<DependsOnQueueCacheFactory>();
+        sut.SetCache.Should().BeSameAs(NullSetCache.Instance);
+    }
+
     public class MyService { }
+
+    private sealed class DependsOnQueueCacheFactory
+    {
+        public DependsOnQueueCacheFactory(IQueueCacheFactory factory) => SetCache = factory.CreateSetCache();
+
+        public ISetCache SetCache { get; }
+    }
 }
