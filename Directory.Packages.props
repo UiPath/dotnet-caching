@@ -4,7 +4,7 @@
     <!-- Shared Package Versions -->
     <xUnit>3.2.2</xUnit>
     <AutoFixture>4.18.1</AutoFixture>
-    <CloudEvents>2.8.0</CloudEvents>
+    <CloudEvents>2.9.0</CloudEvents>
   </PropertyGroup>
   <ItemGroup>
     <PackageVersion Include="MessagePack" Version="2.5.302" />
