@@ -57,7 +57,8 @@ b.AddAzureEntraAuthentication(o =>
 });
 
 // Any Azure.Core TokenCredential (service principal, workload identity, chained, ...)
-b.AddAzureEntraAuthentication(o => o.Credential = new ManagedIdentityCredential());
+b.AddAzureEntraAuthentication(o =>
+    o.Credential = new ClientSecretCredential("<tenant-id>", "<client-id>", "<client-secret>"));
 
 // Bind from a custom config section name instead of the default "AzureEntra"
 b.AddAzureEntraAuthentication("CustomAzureEntra");
