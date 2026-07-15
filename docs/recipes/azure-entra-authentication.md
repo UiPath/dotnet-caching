@@ -44,18 +44,21 @@ using Azure.Identity;
 b.AddAzureEntraAuthentication(o => o.ManagedIdentityClientId = "<client-id>");
 
 // Managed identity with Azure.Identity options, such as a sovereign cloud authority.
-// Include ManagedIdentityClientId for user-assigned MI, or omit it for system-assigned MI.
+// The target identity lives inside ManagedIdentityCredentialOptions: pass a ManagedIdentityId to its
+// constructor for a user-assigned identity, or omit it for the system-assigned identity. When
+// ManagedIdentityOptions is set it takes precedence over ManagedIdentityClientId.
 b.AddAzureEntraAuthentication(o =>
 {
-    o.ManagedIdentityClientId = "<client-id>";
-    o.ManagedIdentityOptions = new ManagedIdentityCredentialOptions
+    o.ManagedIdentityOptions = new ManagedIdentityCredentialOptions(
+        ManagedIdentityId.FromUserAssignedClientId("<client-id>"))
     {
         AuthorityHost = AzureAuthorityHosts.AzureGovernment,
     };
 });
 
 // Any Azure.Core TokenCredential (service principal, workload identity, chained, ...)
-b.AddAzureEntraAuthentication(o => o.Credential = new ManagedIdentityCredential());
+b.AddAzureEntraAuthentication(o =>
+    o.Credential = new ClientSecretCredential("<tenant-id>", "<client-id>", "<client-secret>"));
 
 // Bind from a custom config section name instead of the default "AzureEntra"
 b.AddAzureEntraAuthentication("CustomAzureEntra");
@@ -67,10 +70,7 @@ Default config shape:
 {
   "Caching": {
     "AzureEntra": {
-      "ManagedIdentityClientId": "<client-id>",
-      "ManagedIdentityOptions": {
-        "AuthorityHost": "https://login.microsoftonline.us/"
-      }
+      "ManagedIdentityClientId": "<client-id>"
     }
   }
 }
@@ -79,6 +79,11 @@ Default config shape:
 `ManagedIdentityOptions` is `Azure.Identity.ManagedIdentityCredentialOptions`; see Microsoft Learn
 for the full option surface:
 [ManagedIdentityCredentialOptions](https://learn.microsoft.com/dotnet/api/azure.identity.managedidentitycredentialoptions).
+Binding `ManagedIdentityOptions` from configuration can set tuning such as `AuthorityHost`, but not the
+target identity — that is fixed on the `ManagedIdentityCredentialOptions` at construction, so a
+user-assigned identity with custom options must be configured in code (as above). From configuration,
+use `ManagedIdentityClientId` to select a user-assigned identity; do not also set `ManagedIdentityOptions`,
+which would take precedence and drop the client id.
 
 By default the connection is established lazily on first cache use. Set
 `RedisConnectionOptions.WarmUpOnStart = true` to kick it off at host startup instead (best-effort —
@@ -96,9 +101,12 @@ service opens its own multiplexer — and acquires an Entra token — at startup
 - **Applied once per connect.** The configurator runs each time the library creates a multiplexer —
   initial connect and after a `ForceReconnect` — so a reconnect picks up a freshly configured
   `ConfigurationOptions`.
-- **Credential precedence.** `AzureEntraOptions.Credential` wins when supplied. If it is `null`,
-  `ManagedIdentityOptions` creates a `ManagedIdentityCredential`; with `ManagedIdentityClientId` this
-  is a user-assigned managed identity, and without it this is the system-assigned managed identity.
+- **Credential precedence.** `AzureEntraOptions.Credential` wins when supplied. Otherwise, if
+  `ManagedIdentityOptions` is set it creates a `ManagedIdentityCredential` from that options object — whose
+  identity is fixed on the `ManagedIdentityCredentialOptions` at construction (a `ManagedIdentityId` for a
+  user-assigned identity, or the system-assigned identity by default) — and `ManagedIdentityClientId` is
+  ignored. If `ManagedIdentityOptions` is `null`, a non-empty `ManagedIdentityClientId` selects a
+  user-assigned managed identity; otherwise it falls back to `DefaultAzureCredential`.
 - **CLI reaches the endpoint, Redis authorizes the identity.** If
   `az redisenterprise test-connection --auth entra` prints `Successfully connected` and then fails
   `PING` with `invalid username-password pair`, network/TLS is working but the Entra object id is not
