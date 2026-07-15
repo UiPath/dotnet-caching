@@ -47,7 +47,7 @@
     <PackageVersion Include="StackExchange.Redis" Version="2.10.1" />
     <PackageVersion Include="Azure.Identity" Version="1.21.0" />
     <PackageVersion Include="Microsoft.Azure.StackExchangeRedis" Version="3.3.1" />
-    <PackageVersion Include="AsyncKeyedLock" Version="7.1.7" />
+    <PackageVersion Include="AsyncKeyedLock" Version="8.0.2" />
     <PackageVersion Include="CloudNative.CloudEvents" Version="$(CloudEvents)" />
     <PackageVersion Include="CloudNative.CloudEvents.SystemTextJson" Version="$(CloudEvents)" />
     <PackageVersion Include="Polly.Core" Version="8.7.0" />
