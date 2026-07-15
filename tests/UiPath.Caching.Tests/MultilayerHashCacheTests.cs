@@ -359,7 +359,7 @@ public class MultilayerHashCacheTests(ITestContextAccessor testContextAccessor) 
 
         generatorWasCalled.Should().BeTrue();
         actual.Should().BeEmpty();
-        await _innerCache.Received().SetAsync(_innerCacheKey, Arg.Is<IDictionary<string, string?>>(d => d.Count == 0), Arg.Any<HashCacheEntryOptions>(), Arg.Any<CachePolicy?>(), Arg.Any<CancellationToken>());
+        await _innerCache.Received().SetAsync(_innerCacheKey, Arg.Is<IDictionary<string, string?>>(d => d != null && d.Count == 0), Arg.Any<HashCacheEntryOptions>(), Arg.Any<CachePolicy?>(), Arg.Any<CancellationToken>());
     }
 
     [Fact]
@@ -408,7 +408,7 @@ public class MultilayerHashCacheTests(ITestContextAccessor testContextAccessor) 
         await Sut.SetAsync(_cacheKey, new Dictionary<string, string?>(), _fixture.Create<TimeSpan>(), token: testContextAccessor.Current.CancellationToken);
 
         await _innerCache.DidNotReceive().RemoveAsync<string>(_innerCacheKey, Arg.Any<CancellationToken>());
-        await _innerCache.Received(1).SetAsync(_innerCacheKey, Arg.Is<IDictionary<string, string?>>(d => d.Count == 0), Arg.Any<HashCacheEntryOptions>(), Arg.Any<CachePolicy?>(), Arg.Any<CancellationToken>());
+        await _innerCache.Received(1).SetAsync(_innerCacheKey, Arg.Is<IDictionary<string, string?>>(d => d != null && d.Count == 0), Arg.Any<HashCacheEntryOptions>(), Arg.Any<CachePolicy?>(), Arg.Any<CancellationToken>());
     }
 
     [Fact]
@@ -430,7 +430,7 @@ public class MultilayerHashCacheTests(ITestContextAccessor testContextAccessor) 
         await _innerCache.DidNotReceive().RemoveAsync<string>(_innerCacheKey, Arg.Any<CancellationToken>());
         await _innerCache.Received(1).SetAsync(
             _innerCacheKey,
-            Arg.Is<IDictionary<string, string?>>(d => d.Count == 0),
+            Arg.Is<IDictionary<string, string?>>(d => d != null && d.Count == 0),
             Arg.Is<HashCacheEntryOptions>(o => o.Metadata == metadata), Arg.Any<CachePolicy?>(), Arg.Any<CancellationToken>());
     }
 

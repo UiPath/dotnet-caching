@@ -73,9 +73,9 @@
     <PackageVersion Include="AutoFixture" Version="$(AutoFixture)" />
     <PackageVersion Include="AutoFixture.Xunit3" Version="4.19.0" />
     <PackageVersion Include="AutoFixture.AutoNSubstitute" Version="$(AutoFixture)" />
-    <PackageVersion Include="NSubstitute" Version="5.3.0" />
+    <PackageVersion Include="NSubstitute" Version="6.0.0" />
     <PackageVersion Include="NSubstitute.Analyzers.CSharp" Version="1.0.17" />
-    <PackageVersion Include="coverlet.collector" Version="6.0.4" />
+    <PackageVersion Include="coverlet.collector" Version="10.0.1" />
     <PackageVersion Include="AwesomeAssertions.Json" Version="9.0.0" />
   </ItemGroup>
 </Project>
