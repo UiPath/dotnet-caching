@@ -818,3 +818,4 @@ virtual UiPath.Caching.Redis.RedisCacheBase.Dispose(bool disposing) -> void
 ~UiPath.Caching.Config.NullConfigurationSection.this[string key].set -> void
 ~static readonly UiPath.Caching.Config.NullConfiguration.Instance -> Microsoft.Extensions.Configuration.IConfiguration
 ~static readonly UiPath.Caching.Config.NullConfigurationSection.Instance -> Microsoft.Extensions.Configuration.IConfigurationSection
+static UiPath.Caching.Config.ServiceCollectionExtensions.TryConfigure<TOptions>(this Microsoft.Extensions.DependencyInjection.IServiceCollection! services, System.Action<TOptions!>! configureOptions) -> Microsoft.Extensions.DependencyInjection.IServiceCollection!

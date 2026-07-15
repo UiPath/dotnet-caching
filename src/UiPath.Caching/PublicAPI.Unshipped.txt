@@ -1,2 +1,1 @@
 #nullable enable
-static UiPath.Caching.Config.ServiceCollectionExtensions.TryConfigure<TOptions>(this Microsoft.Extensions.DependencyInjection.IServiceCollection! services, System.Action<TOptions!>! configureOptions) -> Microsoft.Extensions.DependencyInjection.IServiceCollection!
