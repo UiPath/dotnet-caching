@@ -43,9 +43,7 @@ public class AzureEntraConnectionConfigurator : IRedisConnectionConfigurator
 
         if (options.ManagedIdentityOptions is not null)
         {
-            return string.IsNullOrWhiteSpace(options.ManagedIdentityClientId)
-                ? credentialFactory.CreateManagedIdentityCredential(options.ManagedIdentityOptions)
-                : credentialFactory.CreateManagedIdentityCredential(options.ManagedIdentityClientId, options.ManagedIdentityOptions);
+            return credentialFactory.CreateManagedIdentityCredential(options.ManagedIdentityOptions);
         }
 
         return string.IsNullOrWhiteSpace(options.ManagedIdentityClientId)

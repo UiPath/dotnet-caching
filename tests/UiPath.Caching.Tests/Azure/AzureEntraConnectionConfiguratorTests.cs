@@ -36,10 +36,8 @@ public class AzureEntraConnectionConfiguratorTests
     {
         None,
         Default,
-        ManagedIdentity,
         ManagedIdentityClientId,
         ManagedIdentityOptions,
-        ManagedIdentityClientIdWithOptions,
     }
 
     private sealed class CapturingCredentialFactory(TokenCredential credential) : IAzureEntraCredentialFactory
@@ -56,13 +54,6 @@ public class AzureEntraConnectionConfiguratorTests
             return credential;
         }
 
-        public TokenCredential CreateManagedIdentityCredential()
-        {
-            CallCount++;
-            Call = CredentialFactoryCall.ManagedIdentity;
-            return credential;
-        }
-
         public TokenCredential CreateManagedIdentityCredential(string clientId)
         {
             CallCount++;
@@ -75,15 +66,6 @@ public class AzureEntraConnectionConfiguratorTests
         {
             CallCount++;
             Call = CredentialFactoryCall.ManagedIdentityOptions;
-            Options = options;
-            return credential;
-        }
-
-        public TokenCredential CreateManagedIdentityCredential(string clientId, ManagedIdentityCredentialOptions options)
-        {
-            CallCount++;
-            Call = CredentialFactoryCall.ManagedIdentityClientIdWithOptions;
-            ClientId = clientId;
             Options = options;
             return credential;
         }
@@ -207,7 +189,7 @@ public class AzureEntraConnectionConfiguratorTests
     }
 
     [Fact]
-    public async Task ConfigureAsync_UsesManagedIdentityClientId_WithManagedIdentityOptions()
+    public async Task ConfigureAsync_ManagedIdentityOptions_TakePrecedenceOverClientId()
     {
         var options = new ManagedIdentityCredentialOptions
         {
@@ -224,9 +206,9 @@ public class AzureEntraConnectionConfiguratorTests
         await sut.ConfigureAsync(new ConfigurationOptions(), TestContext.Current.CancellationToken);
 
         sut.CapturedCredential.Should().BeSameAs(credential);
-        factory.Call.Should().Be(CredentialFactoryCall.ManagedIdentityClientIdWithOptions);
-        factory.ClientId.Should().Be("managed-identity-client-id");
+        factory.Call.Should().Be(CredentialFactoryCall.ManagedIdentityOptions);
         factory.Options.Should().BeSameAs(options);
+        factory.ClientId.Should().BeNull();
     }
 
     [Fact]
@@ -248,9 +230,7 @@ public class AzureEntraConnectionConfiguratorTests
         var factory = AzureEntraCredentialFactory.Instance;
 
         factory.CreateDefaultCredential().Should().BeOfType<DefaultAzureCredential>();
-        factory.CreateManagedIdentityCredential().Should().BeOfType<ManagedIdentityCredential>();
         factory.CreateManagedIdentityCredential("managed-identity-client-id").Should().BeOfType<ManagedIdentityCredential>();
         factory.CreateManagedIdentityCredential(new ManagedIdentityCredentialOptions()).Should().BeOfType<ManagedIdentityCredential>();
-        factory.CreateManagedIdentityCredential("managed-identity-client-id", new ManagedIdentityCredentialOptions()).Should().BeOfType<ManagedIdentityCredential>();
     }
 }
