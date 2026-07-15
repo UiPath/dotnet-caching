@@ -6,6 +6,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 
 ## [Unreleased]
 
+## [1.0.1] - 2026-07-15
+
 ### Changed
 
 - Repository extracted from `UiPath/ServiceCommon` to the public `UiPath/dotnet-caching` repository under the MIT license. PackageIds are renamed `UiPath.Platform.Caching.*` → `UiPath.Caching.*` at the first nuget.org release.

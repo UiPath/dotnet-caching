@@ -116,3 +116,9 @@ static UiPath.Caching.Config.SetCacheCollectionExtensions.AddRedisSetCache(this 
 static UiPath.Caching.Config.SetCacheCollectionExtensions.AddRedisSetCache(this UiPath.Caching.Config.ICachingBuilder! builder, System.Action<UiPath.Caching.Redis.RedisSetCacheOptions!>! configureOptions) -> UiPath.Caching.Config.ICachingBuilder!
 static UiPath.Caching.QueueCacheFactoryExtensions.CreateSetCache<T>(this UiPath.Caching.IQueueCacheFactory! factory) -> UiPath.Caching.ISetCache<T>!
 static readonly UiPath.Caching.NullSetCache.Instance -> UiPath.Caching.NullSetCache!
+UiPath.Caching.NullQueueCacheFactory
+UiPath.Caching.NullQueueCacheFactory.CreateSetCache() -> UiPath.Caching.ISetCache!
+UiPath.Caching.NullQueueCacheFactory.NullQueueCacheFactory() -> void
+static readonly UiPath.Caching.NullQueueCacheFactory.Instance -> UiPath.Caching.NullQueueCacheFactory!
+UiPath.Caching.Redis.RedisSetCacheOptions.Enabled.get -> bool
+UiPath.Caching.Redis.RedisSetCacheOptions.Enabled.set -> void
