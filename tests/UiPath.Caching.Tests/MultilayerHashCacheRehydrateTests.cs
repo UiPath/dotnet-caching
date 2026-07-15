@@ -109,7 +109,7 @@ public class MultilayerHashCacheRehydrateTests(ITestContextAccessor testContextA
         await WaitForAsync(() => _innerCache.ReceivedCalls().Any(c => c.GetMethodInfo().Name == nameof(IHashCache.SetAsync)), TimeSpan.FromSeconds(5), token);
         await _innerCache.Received(1).SetAsync<string?>(
             _cacheKey,
-            Arg.Is<IDictionary<string, string?>>(d => d["f"] == "rehydrated"),
+            Arg.Is<IDictionary<string, string?>>(d => d != null && d["f"] == "rehydrated"),
             Arg.Is<HashCacheEntryOptions>(o => o.SetOption == HashCacheSetOption.KeyReplace),
             Arg.Any<CachePolicy?>(),
             Arg.Any<CancellationToken>());
