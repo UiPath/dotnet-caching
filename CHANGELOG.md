@@ -6,6 +6,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 
 ## [Unreleased]
 
+### Changed
+
+- Bumped `StackExchange.Redis` from 2.10.1 to 2.13.17 (latest 2.x), the first step of the staged upgrade toward 3.0. No public API or runtime behavior change.
+
 ## [1.0.1] - 2026-07-15
 
 ### Changed
