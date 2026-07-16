@@ -306,19 +306,27 @@ public class RedisStreamHealthMaintainerTests(ITestContextAccessor testContextAc
 
     private StreamInfo GenerateStreamInfo(int? groupsCount = null)
     {
-        //int length, int radixTreeKeys, int radixTreeNodes, int groups, StreamEntry firstEntry, StreamEntry lastEntry, RedisValue lastGeneratedId
-        object?[] args = [
-               (object?)_fixture.Create<int>(),
-                       (object?)_fixture.Create<int>(),
-                       (object?)_fixture.Create<int>(),
-                       (object?) groupsCount ?? _fixture.Create<int>(),
-                       (object?)_fixture.Create<StreamEntry>(),
-                       (object?)_fixture.Create<StreamEntry>(),
-                       (object?)(RedisValue)_lastGeneratedId
-            ];
+        // StreamInfo's internal ctor keeps its leading params (length, radixTreeKeys, radixTreeNodes,
+        // groups, firstEntry, lastEntry, lastGeneratedId) stable but grows a trailing tail across
+        // StackExchange.Redis versions. Fill by the actual ctor's parameter list and set only the
+        // fields the maintainer reads, so version bumps that append params don't break this fixture.
+        var ctor = typeof(StreamInfo).GetConstructors(BindingFlags.Instance | BindingFlags.NonPublic).Single();
+        var parameters = ctor.GetParameters();
+        var args = new object?[parameters.Length];
+        for (var i = 0; i < parameters.Length; i++)
+        {
+            args[i] = parameters[i].ParameterType.IsValueType ? Activator.CreateInstance(parameters[i].ParameterType) : null;
+        }
 
-        var streamInfo = (StreamInfo)Activator.CreateInstance(typeof(StreamInfo), BindingFlags.Instance | BindingFlags.NonPublic, null, args, null)!;
-        return streamInfo;
+        args[0] = _fixture.Create<int>();
+        args[1] = _fixture.Create<int>();
+        args[2] = _fixture.Create<int>();
+        args[3] = groupsCount ?? _fixture.Create<int>();
+        args[4] = _fixture.Create<StreamEntry>();
+        args[5] = _fixture.Create<StreamEntry>();
+        args[6] = (RedisValue)_lastGeneratedId;
+
+        return (StreamInfo)ctor.Invoke(args);
     }
 
     private StreamGroupInfo GenerateGroupInfo(DateTimeOffset lastGenerated, int? consumerCount = null)
