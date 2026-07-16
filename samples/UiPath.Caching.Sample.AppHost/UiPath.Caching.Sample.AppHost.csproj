@@ -16,6 +16,8 @@
   <ItemGroup>
     <PackageReference Include="Aspire.Hosting.Redis" />
     <PackageReference Include="MessagePack" />
+    <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" />
+    <PackageReference Include="StackExchange.Redis" />
   </ItemGroup>
 
   <ItemGroup>
