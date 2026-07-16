@@ -6,6 +6,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 
 ## [Unreleased]
 
+### Added
+
+- `RedisCollectionExtensions.AddRedisConfigurationOptionsProvider(this ICachingBuilder, Func<IServiceProvider, IRedisConfigurationOptionsProvider>)` — registers a custom `IRedisConfigurationOptionsProvider` via a factory delegate, replacing the default `RedisConfigurationOptionsProvider`. Order-independent (uses `Replace`), so it can be called before or after `AddRedisConnection` and the supplied factory always wins. Previously a custom provider required manually pre-registering it so the `TryAdd` default backed off.
+
 ### Changed
 
 - Bumped `StackExchange.Redis` from 2.10.1 to 2.13.17 (latest 2.x), the first step of the staged upgrade toward 3.0. No public API or runtime behavior change.

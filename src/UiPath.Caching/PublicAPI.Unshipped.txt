@@ -1,1 +1,2 @@
 #nullable enable
+static UiPath.Caching.Config.RedisCollectionExtensions.AddRedisConfigurationOptionsProvider(this UiPath.Caching.Config.ICachingBuilder! builder, System.Func<System.IServiceProvider!, UiPath.Caching.Redis.IRedisConfigurationOptionsProvider!>! factory) -> UiPath.Caching.Config.ICachingBuilder!

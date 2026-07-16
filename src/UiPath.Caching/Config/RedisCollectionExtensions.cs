@@ -50,6 +50,20 @@ public static class RedisCollectionExtensions
         return builder.AddRedisConnection(redisConnectionOptions);
     }
 
+    /// <summary>
+    /// Registers a custom <see cref="IRedisConfigurationOptionsProvider"/> built by <paramref name="factory"/>,
+    /// replacing the default <see cref="RedisConfigurationOptionsProvider"/>. Can be called before or after
+    /// <c>AddRedisConnection</c> — the supplied factory always wins.
+    /// </summary>
+    public static ICachingBuilder AddRedisConfigurationOptionsProvider(
+        this ICachingBuilder builder,
+        Func<IServiceProvider, IRedisConfigurationOptionsProvider> factory)
+    {
+        ArgumentNullException.ThrowIfNull(factory);
+        builder.Services.Replace(ServiceDescriptor.Transient(factory));
+        return builder;
+    }
+
     private static ICachingBuilder AddRedisConnection(this ICachingBuilder builder, RedisConnectionOptions redisConnectionOptions)
     {
         builder
