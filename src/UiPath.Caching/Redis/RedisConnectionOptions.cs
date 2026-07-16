@@ -44,6 +44,7 @@ public class RedisConnectionOptions
 
     public bool? FailFastBacklogPolicy { get; set; }
 
+    [Obsolete("SocketManager was removed in StackExchange.Redis 3.0; this option no longer has any effect.")]
     public bool? ThreadPoolSocketManager { get; set; }
 
     public bool ProfilerEnabled { get; set; }

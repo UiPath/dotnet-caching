@@ -55,11 +55,6 @@ public class RedisConfigurationOptionsProvider(ILoggerFactory loggerFactory, IOp
             config.BacklogPolicy = BacklogPolicy.FailFast;
         }
 
-        if (_options.ThreadPoolSocketManager.GetValueOrDefault())
-        {
-            config.SocketManager = SocketManager.ThreadPool;
-        }
-
         return config;
     }
 }
