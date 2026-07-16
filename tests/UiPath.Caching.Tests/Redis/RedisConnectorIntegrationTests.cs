@@ -65,5 +65,7 @@ public class RedisConnectorIntegrationTests(RedisContainerFixture fixture)
         var metrics = connector.GetMasterPhysicalConnectionMetrics(multiplexer);
 
         metrics.Should().NotBeNull();
+        metrics!.EndPoint.Should().BeOneOf(multiplexer.GetEndPoints());
+        metrics.AwaitingResponseCount.Should().BeGreaterThanOrEqualTo(0);
     }
 }
