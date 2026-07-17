@@ -9,6 +9,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 ### Changed
 
 - Bumped `StackExchange.Redis` from 2.10.1 to 2.13.17 (latest 2.x), the first step of the staged upgrade toward 3.0. No public API or runtime behavior change.
+- Bumped `Microsoft.Extensions.Logging.Abstractions` on `net8.0` from 8.0.3 to 10.0.10 (matching the `net10.0` pin). Prerequisite for `StackExchange.Redis` 3.0, which requires `>= 10.0.5`; `net8.0` consumers now transitively resolve the 10.x abstractions package (compatible — it targets net8.0).
 
 ## [1.0.1] - 2026-07-15
 
