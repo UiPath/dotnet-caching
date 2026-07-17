@@ -21,7 +21,7 @@ public class RedisStreamNotifyChannelTests
 
         var captured = new TaskCompletionSource<Action<RedisChannel, RedisValue>>(TaskCreationOptions.RunContinuationsAsynchronously);
         subscriber.When(s => s.Subscribe(channel, Arg.Any<Action<RedisChannel, RedisValue>>()))
-            .Do(ci => captured.TrySetResult(ci.Arg<Action<RedisChannel, RedisValue>>()));
+            .Do(ci => captured.TrySetResult(ci.Arg<Action<RedisChannel, RedisValue>>()!));
 
         using var waiter = new SignalingFetchWaiter(5.Seconds());
         using var sut = new RedisStreamNotifyChannel(channel, redis, _fixture.Create<ILogger>(), waiter, null, 10.Milliseconds());

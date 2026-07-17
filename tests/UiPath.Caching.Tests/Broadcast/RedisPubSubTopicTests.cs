@@ -240,7 +240,7 @@ public class RedisPubSubTopicTests(ITestContextAccessor testContextAccessor) : I
         _subscriber = _fixture.Freeze<ISubscriber>();
         _observer = _fixture.Freeze<IObserver<ICacheEvent>>();
         _observer.When(x => x.OnNext(Arg.Any<ICacheEvent>()))
-            .Do(c => _onNextMessages.Add(c.Arg<ICacheEvent>()));
+            .Do(c => _onNextMessages.Add(c.Arg<ICacheEvent>()!));
         _observer.When(x => x.OnCompleted())
             .Do(c => _onCompleted = true);
         _subscriber.When(x => x.Subscribe(Arg.Any<RedisChannel>(), Arg.Any<Action<RedisChannel, RedisValue>>(), Arg.Any<CommandFlags>()))

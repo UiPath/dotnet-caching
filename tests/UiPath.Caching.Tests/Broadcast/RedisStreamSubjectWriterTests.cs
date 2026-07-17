@@ -349,7 +349,7 @@ public class RedisStreamSubjectWriterTests : IAsyncLifetime
         var channel = Channel.CreateBounded<ICacheEvent>(new BoundedChannelOptions(1));
         var ackCalled = new TaskCompletionSource<RedisValue[]>(TaskCreationOptions.RunContinuationsAsynchronously);
         _database.StreamAcknowledgeAsync(Arg.Any<RedisKey>(), Arg.Any<RedisValue>(), Arg.Any<RedisValue[]>())
-            .Returns(ci => { ackCalled.TrySetResult(ci.Arg<RedisValue[]>()); return Task.FromResult(1L); });
+            .Returns(ci => { ackCalled.TrySetResult(ci.Arg<RedisValue[]>()!); return Task.FromResult(1L); });
         var firstId = _fixture.Create<string>();
         var secondId = _fixture.Create<string>();
         var entries = new[]
