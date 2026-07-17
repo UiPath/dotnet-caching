@@ -14,6 +14,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 
 - Bumped `StackExchange.Redis` from 2.10.1 to 2.13.17 (latest 2.x), the first step of the staged upgrade toward 3.0. No public API or runtime behavior change.
 - Bumped `Microsoft.Extensions.Logging.Abstractions` on `net8.0` from 8.0.3 to 10.0.10 (matching the `net10.0` pin). Prerequisite for `StackExchange.Redis` 3.0, which requires `>= 10.0.5`; `net8.0` consumers now transitively resolve the 10.x abstractions package (compatible — it targets net8.0).
+- Bumped `StackExchange.Redis` from 2.13.17 to 3.0.17. 3.0 is an internal IO-core rewrite that mirrors 2.13.17's public API, so there is no public API change here. The live hang-detection and profiling reflection paths were verified against a real Redis on both target frameworks.
+- **Obsolete:** `RedisConnectionOptions.ThreadPoolSocketManager` no longer has any effect and is marked `[Obsolete]`. StackExchange.Redis 3.0 removed `SocketManager` (its IO core no longer uses one), so the setting is now a no-op; it will be removed in a future major release.
 
 ## [1.0.1] - 2026-07-15
 
