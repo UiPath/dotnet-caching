@@ -10,10 +10,18 @@ public class SystemJsonSerializerProxy : ISerializerProxy<RedisValue>
         _options = options;
 
     public RedisValue Serialize(object? value) =>
-        JsonSerializer.Serialize(value, _options);
+        JsonSerializer.SerializeToUtf8Bytes(value, _options);
 
-    public T? Deserialize<T>(RedisValue value) =>
-        value.IsNullOrEmpty ? default : JsonSerializer.Deserialize<T>(value!, _options);
+    public T? Deserialize<T>(RedisValue value)
+    {
+        if (value.IsNullOrEmpty)
+        {
+            return default;
+        }
+
+        ReadOnlyMemory<byte> payload = value;
+        return JsonSerializer.Deserialize<T>(payload.Span, _options);
+    }
 
     public bool TryDeserialize<T>(string? value, out T? result)
     {
@@ -45,7 +53,7 @@ public class SystemJsonSerializerProxy : ISerializerProxy<RedisValue>
         {
             if(value is JsonElement jsonElement)
             {
-                result = JsonSerializer.Deserialize<T>(jsonElement.GetRawText(), _options);
+                result = jsonElement.Deserialize<T>(_options);
                 return true;
             }
             else

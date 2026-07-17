@@ -39,7 +39,7 @@ public class RedisStreamSubjectWriterTests : IAsyncLifetime
         Func<Task> act = async () => await Sut.FetchTask;
         await act.Should().NotCompleteWithinAsync(500.Microseconds());
         _cancellationTokenSource.Cancel();
-        _formatter.Received(0).Decode(Arg.Any<string>());
+        _formatter.Received(0).Decode(Arg.Any<ReadOnlyMemory<byte>>());
     }
 
     [Fact]
@@ -52,7 +52,7 @@ public class RedisStreamSubjectWriterTests : IAsyncLifetime
         Func<Task> act = async () => await Sut.FetchTask;
         await act.Should().NotCompleteWithinAsync(_pollInterval.Multiply(5));
         _cancellationTokenSource.Cancel();
-        _formatter.Received(0).Decode(Arg.Any<string>());
+        _formatter.Received(0).Decode(Arg.Any<ReadOnlyMemory<byte>>());
     }
 
     [Fact]
@@ -65,7 +65,7 @@ public class RedisStreamSubjectWriterTests : IAsyncLifetime
         Func<Task> act = async () => await Sut.FetchTask;
         await act.Should().NotCompleteWithinAsync(500.Microseconds());
         _cancellationTokenSource.Cancel();
-        _formatter.Received(0).Decode(Arg.Any<string>());
+        _formatter.Received(0).Decode(Arg.Any<ReadOnlyMemory<byte>>());
     }
 
     [Fact]
@@ -86,7 +86,7 @@ public class RedisStreamSubjectWriterTests : IAsyncLifetime
         {
             ex.Should().BeOfType<TaskCanceledException>();
         }
-        _formatter.Received(0).Decode(Arg.Any<string>());
+        _formatter.Received(0).Decode(Arg.Any<ReadOnlyMemory<byte>>());
     }
 
     [Fact]
@@ -108,7 +108,7 @@ public class RedisStreamSubjectWriterTests : IAsyncLifetime
         Func<Task> act = async () => await Sut.FetchTask;
         await act.Should().NotCompleteWithinAsync(_pollInterval.Multiply(5));
         _cancellationTokenSource.Cancel();
-        _formatter.Received(0).Decode(Arg.Any<string>());
+        _formatter.Received(0).Decode(Arg.Any<ReadOnlyMemory<byte>>());
     }
 
     [Fact]
@@ -116,7 +116,7 @@ public class RedisStreamSubjectWriterTests : IAsyncLifetime
     {
         var entries = new[] { new StreamEntry(_fixture.Create<string>(), new[] { new NameValueEntry(_fieldName, _fixture.Create<string>()) }) };
         var decodeCalled = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
-        _formatter.Decode(Arg.Any<string>()).Returns(_ =>
+        _formatter.Decode(Arg.Any<ReadOnlyMemory<byte>>()).Returns(_ =>
         {
             decodeCalled.TrySetResult(true);
             return default(ICacheEvent?);
@@ -128,7 +128,7 @@ public class RedisStreamSubjectWriterTests : IAsyncLifetime
         _cancellationTokenSource.Cancel();
         await fetchTask.WaitAsync(WaitTimeout, TestContext.Current.CancellationToken);
 
-        _formatter.Received().Decode(Arg.Any<string>());
+        _formatter.Received().Decode(Arg.Any<ReadOnlyMemory<byte>>());
     }
 
     [Fact]
@@ -136,7 +136,7 @@ public class RedisStreamSubjectWriterTests : IAsyncLifetime
     {
         var entries = new[] { new StreamEntry(_fixture.Create<string>(), new[] { new NameValueEntry(_fieldName, _fixture.Create<string>()) }) };
         var decodeCalled = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
-        _formatter.Decode(Arg.Any<string>()).Returns(_ =>
+        _formatter.Decode(Arg.Any<ReadOnlyMemory<byte>>()).Returns(_ =>
         {
             decodeCalled.TrySetResult(true);
             return new TestCacheEvent { Valid = false };
@@ -148,7 +148,7 @@ public class RedisStreamSubjectWriterTests : IAsyncLifetime
         _cancellationTokenSource.Cancel();
         await fetchTask.WaitAsync(WaitTimeout, TestContext.Current.CancellationToken);
 
-        _formatter.Received().Decode(Arg.Any<string>());
+        _formatter.Received().Decode(Arg.Any<ReadOnlyMemory<byte>>());
     }
 
     [Fact]
@@ -156,7 +156,7 @@ public class RedisStreamSubjectWriterTests : IAsyncLifetime
     {
         var entries = new[] { new StreamEntry(_fixture.Create<string>(), new[] { new NameValueEntry(_fieldName, _fixture.Create<string>()) }) };
         var decodeCalled = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
-        _formatter.Decode(Arg.Any<string>()).Returns(_ =>
+        _formatter.Decode(Arg.Any<ReadOnlyMemory<byte>>()).Returns(_ =>
         {
             decodeCalled.TrySetResult(true);
             return new TestCacheEvent { Valid = true };
@@ -168,14 +168,14 @@ public class RedisStreamSubjectWriterTests : IAsyncLifetime
         _cancellationTokenSource.Cancel();
         await fetchTask.WaitAsync(WaitTimeout, TestContext.Current.CancellationToken);
 
-        _formatter.Received().Decode(Arg.Any<string>());
+        _formatter.Received().Decode(Arg.Any<ReadOnlyMemory<byte>>());
     }
 
     [Fact]
     public async Task StreamReadGroupAsync_valid_event_subject_exception()
     {
         var entries = new[] { new StreamEntry(_fixture.Create<string>(), new[] { new NameValueEntry(_fieldName, _fixture.Create<string>()) }) };
-        _formatter.Decode(Arg.Any<string>()).Returns(new TestCacheEvent
+        _formatter.Decode(Arg.Any<ReadOnlyMemory<byte>>()).Returns(new TestCacheEvent
         {
             Valid = true,
         });
@@ -185,7 +185,7 @@ public class RedisStreamSubjectWriterTests : IAsyncLifetime
         Func<Task> act = async () => await Sut.FetchTask;
         await act.Should().NotCompleteWithinAsync(_pollInterval.Multiply(100));
         _cancellationTokenSource.Cancel();
-        _formatter.Received().Decode(Arg.Any<string>());
+        _formatter.Received().Decode(Arg.Any<ReadOnlyMemory<byte>>());
     }
 
     [Fact]
@@ -265,7 +265,7 @@ public class RedisStreamSubjectWriterTests : IAsyncLifetime
         // Decode throwing inside ProcessEvent must hit the outer catch (LogOnMessageError) so the
         // fetch loop doesn't blow up on a single malformed message.
         var decodeCalled = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
-        _formatter.Decode(Arg.Any<string>()).Returns<ICacheEvent?>(_ =>
+        _formatter.Decode(Arg.Any<ReadOnlyMemory<byte>>()).Returns<ICacheEvent?>(_ =>
         {
             decodeCalled.TrySetResult(true);
             throw new InvalidOperationException("decode boom");
@@ -288,7 +288,7 @@ public class RedisStreamSubjectWriterTests : IAsyncLifetime
         _database.StreamAcknowledgeAsync(Arg.Any<RedisKey>(), Arg.Any<RedisValue>(), Arg.Any<RedisValue[]>())
             .Returns(_ => { ackCalled.TrySetResult(true); return Task.FromResult(1L); });
         var entries = new[] { new StreamEntry(_fixture.Create<string>(), [new NameValueEntry(_fieldName, _fixture.Create<string>())]) };
-        _formatter.Decode(Arg.Any<string>()).Returns(new TestCacheEvent { Valid = true, Source = _sourceUri });
+        _formatter.Decode(Arg.Any<ReadOnlyMemory<byte>>()).Returns(new TestCacheEvent { Valid = true, Source = _sourceUri });
         SetupSingleBatch(entries);
 
         using var sut = CreateSut(channel.Writer, _logger);
@@ -309,7 +309,7 @@ public class RedisStreamSubjectWriterTests : IAsyncLifetime
             .Returns(_ => { ackCalled.TrySetResult(true); return Task.FromResult(1L); });
         var entries = new[] { new StreamEntry(_fixture.Create<string>(), [new NameValueEntry(_fieldName, _fixture.Create<string>())]) };
         var ev = new TestCacheEvent { Valid = true, Source = new Uri("urn:other-source") };
-        _formatter.Decode(Arg.Any<string>()).Returns(ev);
+        _formatter.Decode(Arg.Any<ReadOnlyMemory<byte>>()).Returns(ev);
         SetupSingleBatch(entries);
 
         using var sut = CreateSut(channel.Writer, _logger);
@@ -331,7 +331,7 @@ public class RedisStreamSubjectWriterTests : IAsyncLifetime
         var loggedClosed = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
         recordingLogger.OnRecord = r => { if (r.Message.Contains("Channel closed during dispatch")) loggedClosed.TrySetResult(true); };
         var entries = new[] { new StreamEntry(_fixture.Create<string>(), [new NameValueEntry(_fieldName, _fixture.Create<string>())]) };
-        _formatter.Decode(Arg.Any<string>()).Returns(new TestCacheEvent { Valid = true, Source = new Uri("urn:other-source") });
+        _formatter.Decode(Arg.Any<ReadOnlyMemory<byte>>()).Returns(new TestCacheEvent { Valid = true, Source = new Uri("urn:other-source") });
         SetupSingleBatch(entries);
 
         using var sut = CreateSut(channel.Writer, recordingLogger);
@@ -357,7 +357,7 @@ public class RedisStreamSubjectWriterTests : IAsyncLifetime
             new StreamEntry(firstId, [new NameValueEntry(_fieldName, _fixture.Create<string>())]),
             new StreamEntry(secondId, [new NameValueEntry(_fieldName, _fixture.Create<string>())]),
         };
-        _formatter.Decode(Arg.Any<string>()).Returns(new TestCacheEvent { Valid = true, Source = new Uri("urn:other-source") });
+        _formatter.Decode(Arg.Any<ReadOnlyMemory<byte>>()).Returns(new TestCacheEvent { Valid = true, Source = new Uri("urn:other-source") });
         SetupSingleBatch(entries);
 
         using var sut = CreateSut(channel.Writer, _logger);
@@ -387,7 +387,7 @@ public class RedisStreamSubjectWriterTests : IAsyncLifetime
             }
         };
         var entries = new[] { new StreamEntry(streamEntryId, [new NameValueEntry(_fieldName, _fixture.Create<string>())]) };
-        _formatter.Decode(Arg.Any<string>()).Returns(new TestCacheEvent { Id = eventId, Valid = true, Source = new Uri("urn:other-source") });
+        _formatter.Decode(Arg.Any<ReadOnlyMemory<byte>>()).Returns(new TestCacheEvent { Id = eventId, Valid = true, Source = new Uri("urn:other-source") });
         SetupSingleBatch(entries);
 
         using var sut = CreateSut(throwingWriter, recordingLogger);

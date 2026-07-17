@@ -105,14 +105,14 @@ public sealed partial class RedisStreamsTopic<T> : ITopic<T>
 
         try
         {
-            RedisValue messageString = _formatter.EncodeAsString(@event);
+            RedisValue message = _formatter.Encode(@event);
             var id = await _write.ExecuteAsync(async token =>
             {
                 token.ThrowIfCancellationRequested();
                 return await _redis.Database.StreamAddAsync(
                     _context.Topic,
                     _context.FieldName,
-                    messageString,
+                    message,
                     maxLength: _streamOptions.MaxLength,
                     useApproximateMaxLength: true,
                     flags: CommandFlags.DemandMaster).ConfigureAwait(false);
