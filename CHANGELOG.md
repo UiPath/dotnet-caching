@@ -6,6 +6,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 
 ## [Unreleased]
 
+## [1.1.0] - 2026-07-17
+
 ### Added
 
 - `RedisCollectionExtensions.AddRedisConfigurationOptionsProvider(this ICachingBuilder, Func<IServiceProvider, IRedisConfigurationOptionsProvider>)` — registers a custom `IRedisConfigurationOptionsProvider` via a factory delegate, replacing the default `RedisConfigurationOptionsProvider`. Order-independent (uses `Replace`), so it can be called before or after `AddRedisConnection` and the supplied factory always wins. Previously a custom provider required manually pre-registering it so the `TryAdd` default backed off.
