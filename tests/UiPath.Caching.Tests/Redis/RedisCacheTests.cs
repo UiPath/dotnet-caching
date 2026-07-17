@@ -75,7 +75,7 @@ public class RedisCacheTests(ITestContextAccessor testContextAccessor) : IAsyncL
     public async Task Multi_get_works_as_expected()
     {
         var expectedValue = _fixture.Create<string>();
-        _database.StringGetAsync(Arg.Is<RedisKey[]>(k => k.Contains(_redisKey) && k.Contains(_redisMultiKey)), CommandFlags.PreferReplica)
+        _database.StringGetAsync(Arg.Is<RedisKey[]>(k => k != null && k.Contains(_redisKey) && k.Contains(_redisMultiKey)), CommandFlags.PreferReplica)
             .Returns(ci =>
             {
                 return new RedisValue[] { _serializer.Serialize(expectedValue), _serializer.Serialize(expectedValue) };
@@ -137,7 +137,7 @@ public class RedisCacheTests(ITestContextAccessor testContextAccessor) : IAsyncL
     [Fact]
     public async Task Multi_get_emits_one_metric_per_operation_with_key_count()
     {
-        _database.StringGetAsync(Arg.Is<RedisKey[]>(k => k.Contains(_redisKey) && k.Contains(_redisMultiKey)), CommandFlags.PreferReplica)
+        _database.StringGetAsync(Arg.Is<RedisKey[]>(k => k != null && k.Contains(_redisKey) && k.Contains(_redisMultiKey)), CommandFlags.PreferReplica)
             .Returns(new RedisValue[] { _serializer.Serialize(_fixture.Create<string>()), RedisValue.Null });
 
         await Sut.GetAsync<string>(new CacheKey[] { _cacheKey, _multiKey }, policy: null, token: testContextAccessor.Current.CancellationToken);
@@ -163,7 +163,7 @@ public class RedisCacheTests(ITestContextAccessor testContextAccessor) : IAsyncL
     [Fact]
     public async Task Multi_get_returns_defaults_when_value_array_is_partial()
     {
-        _database.StringGetAsync(Arg.Is<RedisKey[]>(k => k.Contains(_redisKey) && k.Contains(_redisMultiKey)), CommandFlags.PreferReplica)
+        _database.StringGetAsync(Arg.Is<RedisKey[]>(k => k != null && k.Contains(_redisKey) && k.Contains(_redisMultiKey)), CommandFlags.PreferReplica)
             .Returns(new RedisValue[] { _serializer.Serialize(_fixture.Create<string>()) });
 
         var actual = await Sut.GetAsync<string>(new CacheKey[] { _cacheKey, _multiKey }, policy: null, token: testContextAccessor.Current.CancellationToken);
@@ -199,7 +199,7 @@ public class RedisCacheTests(ITestContextAccessor testContextAccessor) : IAsyncL
     [Fact]
     public async Task GetCacheEntries_emits_one_metric_per_operation_with_key_count()
     {
-        _transaction.StringGetAsync(Arg.Is<RedisKey[]>(k => k.Contains(_redisKey) && k.Contains(_redisMultiKey)), CommandFlags.PreferReplica)
+        _transaction.StringGetAsync(Arg.Is<RedisKey[]>(k => k != null && k.Contains(_redisKey) && k.Contains(_redisMultiKey)), CommandFlags.PreferReplica)
             .Returns(new RedisValue[] { _serializer.Serialize(_fixture.Create<string>()), RedisValue.Null });
         _transaction.KeyTimeToLiveAsync(Arg.Any<RedisKey>(), CommandFlags.PreferReplica)
             .Returns(TimeSpan.FromMinutes(15));
@@ -243,7 +243,7 @@ public class RedisCacheTests(ITestContextAccessor testContextAccessor) : IAsyncL
     [Fact]
     public async Task Multi_get_does_not_carry_keys_by_default()
     {
-        _database.StringGetAsync(Arg.Is<RedisKey[]>(k => k.Contains(_redisKey) && k.Contains(_redisMultiKey)), CommandFlags.PreferReplica)
+        _database.StringGetAsync(Arg.Is<RedisKey[]>(k => k != null && k.Contains(_redisKey) && k.Contains(_redisMultiKey)), CommandFlags.PreferReplica)
             .Returns(new RedisValue[] { _serializer.Serialize(_fixture.Create<string>()), RedisValue.Null });
 
         await Sut.GetAsync<string>(new CacheKey[] { _cacheKey, _multiKey }, policy: null, token: testContextAccessor.Current.CancellationToken);
@@ -255,7 +255,7 @@ public class RedisCacheTests(ITestContextAccessor testContextAccessor) : IAsyncL
     public async Task Multi_get_carries_key_per_hit_and_miss_when_opt_in()
     {
         _cacheOptions.KeyReadTelemetryEnabled = true;
-        _database.StringGetAsync(Arg.Is<RedisKey[]>(k => k.Contains(_redisKey) && k.Contains(_redisMultiKey)), CommandFlags.PreferReplica)
+        _database.StringGetAsync(Arg.Is<RedisKey[]>(k => k != null && k.Contains(_redisKey) && k.Contains(_redisMultiKey)), CommandFlags.PreferReplica)
             .Returns(new RedisValue[] { _serializer.Serialize(_fixture.Create<string>()), RedisValue.Null });
 
         await Sut.GetAsync<string>(new CacheKey[] { _cacheKey, _multiKey }, policy: null, token: testContextAccessor.Current.CancellationToken);
@@ -268,7 +268,7 @@ public class RedisCacheTests(ITestContextAccessor testContextAccessor) : IAsyncL
     public async Task GetCacheEntries_carries_key_per_hit_and_miss_when_opt_in()
     {
         _cacheOptions.KeyReadTelemetryEnabled = true;
-        _transaction.StringGetAsync(Arg.Is<RedisKey[]>(k => k.Contains(_redisKey) && k.Contains(_redisMultiKey)), CommandFlags.PreferReplica)
+        _transaction.StringGetAsync(Arg.Is<RedisKey[]>(k => k != null && k.Contains(_redisKey) && k.Contains(_redisMultiKey)), CommandFlags.PreferReplica)
             .Returns(new RedisValue[] { _serializer.Serialize(_fixture.Create<string>()), RedisValue.Null });
         _transaction.KeyTimeToLiveAsync(Arg.Any<RedisKey>(), CommandFlags.PreferReplica)
             .Returns(TimeSpan.FromMinutes(15));
@@ -348,7 +348,7 @@ public class RedisCacheTests(ITestContextAccessor testContextAccessor) : IAsyncL
     {
         var expected = _fixture.Create<string>();
         var expectedTtl = TimeSpan.FromMinutes(15);
-        _transaction.StringGetAsync(Arg.Is<RedisKey[]>(k => k.Contains(_redisKey) && k.Contains(_redisMultiKey)), CommandFlags.PreferReplica)
+        _transaction.StringGetAsync(Arg.Is<RedisKey[]>(k => k != null && k.Contains(_redisKey) && k.Contains(_redisMultiKey)), CommandFlags.PreferReplica)
             .Returns(new RedisValue[] { _serializer.Serialize(expected), _serializer.Serialize(expected) });
         _transaction.KeyTimeToLiveAsync(Arg.Any<RedisKey>(), CommandFlags.PreferReplica)
             .Returns(expectedTtl);
@@ -441,7 +441,7 @@ public class RedisCacheTests(ITestContextAccessor testContextAccessor) : IAsyncL
     [Fact]
     public async Task GetCacheEntries_returns_defaults_and_records_miss_when_a_per_key_subtask_throws()
     {
-        _transaction.StringGetAsync(Arg.Is<RedisKey[]>(k => k.Contains(_redisKey) && k.Contains(_redisMultiKey)), CommandFlags.PreferReplica)
+        _transaction.StringGetAsync(Arg.Is<RedisKey[]>(k => k != null && k.Contains(_redisKey) && k.Contains(_redisMultiKey)), CommandFlags.PreferReplica)
             .Returns(new RedisValue[] { _serializer.Serialize(_fixture.Create<string>()), _serializer.Serialize(_fixture.Create<string>()) });
         _transaction.KeyTimeToLiveAsync(_redisKey, CommandFlags.PreferReplica).Returns(TimeSpan.FromMinutes(5));
         _transaction.KeyTimeToLiveAsync(_redisMultiKey, CommandFlags.PreferReplica).ThrowsAsync(new RedisException("ttl boom"));
@@ -503,7 +503,7 @@ public class RedisCacheTests(ITestContextAccessor testContextAccessor) : IAsyncL
         _version = new(7, 0);
         var expected = _fixture.Create<string>();
         var expectedExpiration = DateTimeOffset.UtcNow.AddMinutes(15);
-        _transaction.StringGetAsync(Arg.Is<RedisKey[]>(k => k.Contains(_redisKey) && k.Contains(_redisMultiKey)), CommandFlags.PreferReplica)
+        _transaction.StringGetAsync(Arg.Is<RedisKey[]>(k => k != null && k.Contains(_redisKey) && k.Contains(_redisMultiKey)), CommandFlags.PreferReplica)
             .Returns(new RedisValue[] { _serializer.Serialize(expected), _serializer.Serialize(expected) });
         _transaction.KeyExpireTimeAsync(Arg.Any<RedisKey>(), CommandFlags.PreferReplica)
             .Returns(expectedExpiration.UtcDateTime);
@@ -837,7 +837,7 @@ public class RedisCacheTests(ITestContextAccessor testContextAccessor) : IAsyncL
     [Fact]
     public async Task Multi_remove_redis_exception()
     {
-        _database.KeyDeleteAsync(Arg.Is<RedisKey[]>(keys => keys.Contains(_redisKey )), CommandFlags.DemandMaster)
+        _database.KeyDeleteAsync(Arg.Is<RedisKey[]>(keys => keys != null && keys.Contains(_redisKey )), CommandFlags.DemandMaster)
                 .ThrowsAsync(ci =>
                 {
                     return new RedisException("test");
@@ -1121,7 +1121,7 @@ public class RedisCacheTests(ITestContextAccessor testContextAccessor) : IAsyncL
         _cacheOptions.CacheNullValues = true;
         var expectedValue = _fixture.Create<string>();
         var expectedTtl = TimeSpan.FromMinutes(15);
-        _transaction.StringGetAsync(Arg.Is<RedisKey[]>(k => k.Contains(_redisKey) && k.Contains(_redisMultiKey)), CommandFlags.PreferReplica)
+        _transaction.StringGetAsync(Arg.Is<RedisKey[]>(k => k != null && k.Contains(_redisKey) && k.Contains(_redisMultiKey)), CommandFlags.PreferReplica)
             .Returns(new RedisValue[] { RedisValue.EmptyString, _serializer.Serialize(expectedValue) });
         _transaction.KeyTimeToLiveAsync(Arg.Any<RedisKey>(), CommandFlags.PreferReplica).Returns(expectedTtl);
         _transaction.ExecuteAsync(Arg.Any<CommandFlags>()).Returns(true);
@@ -1140,7 +1140,7 @@ public class RedisCacheTests(ITestContextAccessor testContextAccessor) : IAsyncL
     public async Task GetCacheEntriesAsync_returns_miss_for_empty_value_when_CacheNullValues_false()
     {
         _cacheOptions.CacheNullValues = false;
-        _transaction.StringGetAsync(Arg.Is<RedisKey[]>(k => k.Contains(_redisKey) && k.Contains(_redisMultiKey)), CommandFlags.PreferReplica)
+        _transaction.StringGetAsync(Arg.Is<RedisKey[]>(k => k != null && k.Contains(_redisKey) && k.Contains(_redisMultiKey)), CommandFlags.PreferReplica)
             .Returns(new RedisValue[] { RedisValue.EmptyString, RedisValue.EmptyString });
         _transaction.KeyTimeToLiveAsync(Arg.Any<RedisKey>(), CommandFlags.PreferReplica).Returns(TimeSpan.FromMinutes(15));
         _transaction.ExecuteAsync(Arg.Any<CommandFlags>()).Returns(true);

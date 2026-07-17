@@ -4,6 +4,8 @@
     <TargetFrameworks>$(TargetFrameworks)</TargetFrameworks>
     <IsPackable>false</IsPackable>
     <SonarQubeTestProject>true</SonarQubeTestProject>
+    <!-- AutoFixture.AutoNSubstitute 4.18.1 caps NSubstitute at <6, but 6.0.0 is used and passes; the pin is intentional. -->
+    <NoWarn>$(NoWarn);NU1608</NoWarn>
   </PropertyGroup>
 
   <ItemGroup>
