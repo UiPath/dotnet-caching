@@ -17,6 +17,17 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 - Bumped `StackExchange.Redis` from 2.13.17 to 3.0.17. 3.0 is an internal IO-core rewrite that mirrors 2.13.17's public API, so there is no public API change here. The live hang-detection and profiling reflection paths were verified against a real Redis on both target frameworks.
 - **Obsolete:** `RedisConnectionOptions.ThreadPoolSocketManager` no longer has any effect and is marked `[Obsolete]`. StackExchange.Redis 3.0 removed `SocketManager` (its IO core no longer uses one), so the setting is now a no-op; it will be removed in a future major release.
 
+### Performance
+
+- Serialization now stays on UTF-8 bytes end-to-end instead of round-tripping through UTF-16 `string`s. JSON is UTF-8 on the wire, so the string hop was a pure allocation + transcode on every read/write. Measured with BenchmarkDotNet (`SerializerBenchmark`), this roughly **halves allocations** on the serialize/deserialize paths (e.g. large-payload deserialize `1,385,629 B → 607,714 B`, serialize `778,689 B → 389,660 B`) with equal-or-better throughput. No public API changes.
+  - `SystemJsonSerializerProxy` (the default proxy shared by `RedisCache`, `RedisHashCache`, `RedisSetCache`, `RedisCacheProvider`) serializes via `JsonSerializer.SerializeToUtf8Bytes` and deserializes from the `RedisValue` payload as `ReadOnlySpan<byte>`. The benchmark also measured a `ReadOnlySequence<byte>`/`Utf8JsonReader` variant; it allocated identically to the span path but was slower for these (single-segment) payloads, so the span path was chosen.
+  - `CacheEventFormatter.Encode` uses `SerializeToUtf8Bytes` (dropping the intermediate string + `Encoding.UTF8.GetBytes`); the Redis broadcast publish paths (`RedisPubSubTopic`, `RedisStreamsTopic`) publish the encoded bytes as a `RedisValue` directly instead of via `EncodeAsString`; and the subscribe paths (`RedisPubSubSubjectWriter`, `RedisStreamSubjectWriter`) decode from the `RedisValue` bytes instead of `value.ToString()`.
+  - Wire format is unchanged everywhere — values written by the previous string paths still deserialize.
+
+### Deprecated
+
+- `IEventFormatterProxy<T>.Decode(string)` and `IEventFormatterProxy<T>.EncodeAsString(T)` are marked `[Obsolete]`. They forced a UTF-16 transcode and are no longer used by the library; use the byte-based `Decode(ReadOnlyMemory<byte>)` / `Encode(T)` instead.
+
 ## [1.0.1] - 2026-07-15
 
 ### Changed

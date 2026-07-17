@@ -196,7 +196,7 @@ internal sealed partial class RedisStreamSubjectWriter<T> : IDisposable
 
         try
         {
-            var ev = _formatter.Decode(@event[_context.FieldName].ToString());
+            var ev = _formatter.Decode((ReadOnlyMemory<byte>)@event[_context.FieldName]);
             if (ev is null)
             {
                 return default;

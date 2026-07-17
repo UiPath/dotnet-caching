@@ -66,12 +66,12 @@ public sealed partial class RedisPubSubTopic<T> : ITopic<T>
 
         try
         {
-            var messageString = _formatter.EncodeAsString(@event);
+            RedisValue message = _formatter.Encode(@event);
             LogPublishing(TopicKey, @event.Id);
             var response = await _write.ExecuteAsync(async token =>
             {
                 token.ThrowIfCancellationRequested();
-                return await _redis.Database.PublishAsync(_redisChannel, messageString, CommandFlags.DemandMaster).ConfigureAwait(false);
+                return await _redis.Database.PublishAsync(_redisChannel, message, CommandFlags.DemandMaster).ConfigureAwait(false);
             }, defaultValue: -1, token).ConfigureAwait(false);
             return response >= 0;
         }

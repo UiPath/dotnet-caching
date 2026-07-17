@@ -95,7 +95,7 @@ internal sealed partial class RedisPubSubSubjectWriter<T> : IDisposable
         {
             try
             {
-                var ev = _formatter.Decode(value.ToString());
+                var ev = _formatter.Decode((ReadOnlyMemory<byte>)value);
                 if (ev is null)
                 {
                     return;
