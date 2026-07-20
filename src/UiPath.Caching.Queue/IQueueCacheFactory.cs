@@ -6,18 +6,22 @@ namespace UiPath.Caching;
 /// <c>AddInMemorySetCache</c> / <c>AddRedisSetCache</c> / <c>AddInMemoryRedisSetCache</c>. Inject
 /// this instead of <see cref="ICacheFactory"/> when you need sets.
 /// </summary>
-public interface IQueueCacheFactory
+public interface IQueueCacheFactory : IDisposable
 {
+    /// <summary>Names of the registered, enabled set-cache providers.</summary>
+    IEnumerable<string> ProviderNames { get; }
+
     /// <summary>Returns the <see cref="ISetCache"/> for the default provider.</summary>
     ISetCache CreateSetCache();
-
-    /// <summary>Names of the registered, enabled set-cache providers.</summary>
-    IEnumerable<string> ProviderNames => [];
 
     /// <summary>
     /// Returns the <see cref="ISetCache"/> for the given provider (see
     /// <see cref="KnownCacheProviderNames"/>). When <paramref name="providerName"/> is
-    /// <see langword="null"/>, the configured default provider is used.
+    /// <see langword="null"/> or not registered, the <see cref="CacheOptions.DefaultCache"/>
+    /// provider is used, degrading to <see cref="NullSetCache"/> when that is missing too.
     /// </summary>
-    ISetCache CreateSetCache(string? providerName) => CreateSetCache();
+    ISetCache CreateSetCache(string? providerName);
+
+    /// <summary>Registers (or replaces) a provider under its <see cref="ISetCacheProvider.Name"/>.</summary>
+    void AddProvider(ISetCacheProvider provider);
 }

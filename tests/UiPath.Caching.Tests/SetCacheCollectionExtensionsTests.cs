@@ -46,7 +46,11 @@ public class SetCacheCollectionExtensionsTests
     {
         var services = new ServiceCollection();
         services.AddLogging();
-        services.AddCaching(builder => builder.AddInMemorySetCache());
+        // The factory resolves the default provider from CacheOptions.DefaultCache (InMemoryRedis
+        // when unset), exactly like CacheFactory — point it at the InMemory provider.
+        services.AddCaching(
+            builder => builder.AddInMemorySetCache(),
+            opt => opt.DefaultCache = KnownCacheProviderNames.InMemory);
         using var provider = services.BuildServiceProvider();
 
         provider.GetRequiredService<ISetCache>().Should().BeOfType<MultilayerSetCache>();
@@ -58,6 +62,21 @@ public class SetCacheCollectionExtensionsTests
         factory.ProviderNames.Should().Contain(KnownCacheProviderNames.InMemory);
 
         provider.GetRequiredService<ISetCache<string>>().Should().BeOfType<SetCache<string>>();
+    }
+
+    [Fact]
+    public void AddInMemorySetCache_without_default_cache_configured_resolves_null_set_cache()
+    {
+        var services = new ServiceCollection();
+        services.AddLogging();
+        services.AddCaching(builder => builder.AddInMemorySetCache());
+        using var provider = services.BuildServiceProvider();
+
+        // Mirrors CacheFactory: an unregistered default (InMemoryRedis when unset) resolves to the
+        // null cache — there is no fallback to the sole registered provider.
+        provider.GetRequiredService<ISetCache>().Should().BeSameAs(NullSetCache.Instance);
+        provider.GetRequiredService<IQueueCacheFactory>()
+            .CreateSetCache(KnownCacheProviderNames.InMemory).Should().BeOfType<MultilayerSetCache>();
     }
 
     [Fact]

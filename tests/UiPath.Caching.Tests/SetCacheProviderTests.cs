@@ -100,8 +100,8 @@ public class QueueCacheFactoryProviderSelectionTests
         var inMem = Substitute.For<ISetCache>();
         var redis = Substitute.For<ISetCache>();
         var factory = new QueueCacheFactory(
-            new[] { Provider(KnownCacheProviderNames.InMemory, inMem), Provider(KnownCacheProviderNames.Redis, redis) },
-            Options.Create(new CacheOptions { DefaultCache = KnownCacheProviderNames.Redis }));
+            Options.Create(new CacheOptions { DefaultCache = KnownCacheProviderNames.Redis }),
+            new[] { Provider(KnownCacheProviderNames.InMemory, inMem), Provider(KnownCacheProviderNames.Redis, redis) });
 
         factory.CreateSetCache().Should().BeSameAs(redis);
         factory.CreateSetCache(KnownCacheProviderNames.InMemory).Should().BeSameAs(inMem);
@@ -109,40 +109,101 @@ public class QueueCacheFactoryProviderSelectionTests
     }
 
     [Fact]
-    public void Falls_back_to_single_registered_provider_when_default_missing()
+    public void Unknown_provider_name_falls_back_to_the_default_provider()
+    {
+        var inMem = Substitute.For<ISetCache>();
+        var redis = Substitute.For<ISetCache>();
+        var factory = new QueueCacheFactory(
+            Options.Create(new CacheOptions { DefaultCache = KnownCacheProviderNames.Redis }),
+            new[] { Provider(KnownCacheProviderNames.InMemory, inMem), Provider(KnownCacheProviderNames.Redis, redis) });
+
+        factory.CreateSetCache("does-not-exist").Should().BeSameAs(redis);
+    }
+
+    [Fact]
+    public void Unknown_default_returns_null_cache_even_with_single_provider()
     {
         var inMem = Substitute.For<ISetCache>();
         var factory = new QueueCacheFactory(
-            new[] { Provider(KnownCacheProviderNames.InMemory, inMem) },
-            Options.Create(new CacheOptions { DefaultCache = KnownCacheProviderNames.InMemoryRedis }));
+            Options.Create(new CacheOptions { DefaultCache = KnownCacheProviderNames.InMemoryRedis }),
+            new[] { Provider(KnownCacheProviderNames.InMemory, inMem) });
 
-        factory.CreateSetCache().Should().BeSameAs(inMem);
+        // Mirrors CacheFactory: no fallback to the sole registered provider — the default must be
+        // registered (or requested by name).
+        factory.CreateSetCache().Should().BeSameAs(NullSetCache.Instance);
+        factory.CreateSetCache(KnownCacheProviderNames.InMemory).Should().BeSameAs(inMem);
     }
 
     [Fact]
     public void Unknown_provider_with_multiple_registered_returns_null_cache()
     {
         var factory = new QueueCacheFactory(
+            Options.Create(new CacheOptions { DefaultCache = "does-not-exist" }),
             new[]
             {
                 Provider(KnownCacheProviderNames.InMemory, Substitute.For<ISetCache>()),
                 Provider(KnownCacheProviderNames.Redis, Substitute.For<ISetCache>()),
-            },
-            Options.Create(new CacheOptions { DefaultCache = "does-not-exist" }));
+            });
 
         factory.CreateSetCache().Should().BeSameAs(NullSetCache.Instance);
         factory.CreateSetCache("also-missing").Should().BeSameAs(NullSetCache.Instance);
     }
 
     [Fact]
+    public void Empty_factory_returns_null_cache()
+    {
+        var factory = new QueueCacheFactory(Options.Create(new CacheOptions()));
+
+        factory.CreateSetCache().Should().BeSameAs(NullSetCache.Instance);
+        factory.CreateSetCache("anything").Should().BeSameAs(NullSetCache.Instance);
+        factory.ProviderNames.Should().BeEmpty();
+    }
+
+    [Fact]
     public void Disabled_provider_is_not_selected()
     {
         var factory = new QueueCacheFactory(
-            new[] { Provider(KnownCacheProviderNames.InMemory, Substitute.For<ISetCache>(), enabled: false) },
-            Options.Create(new CacheOptions { DefaultCache = KnownCacheProviderNames.InMemory }));
+            Options.Create(new CacheOptions { DefaultCache = KnownCacheProviderNames.InMemory }),
+            new[] { Provider(KnownCacheProviderNames.InMemory, Substitute.For<ISetCache>(), enabled: false) });
 
         factory.CreateSetCache().Should().BeSameAs(NullSetCache.Instance);
         factory.ProviderNames.Should().BeEmpty();
+    }
+
+    [Fact]
+    public void AddProvider_registers_the_provider()
+    {
+        var redis = Substitute.For<ISetCache>();
+        var factory = new QueueCacheFactory(Options.Create(new CacheOptions { DefaultCache = KnownCacheProviderNames.Redis }));
+
+        factory.AddProvider(Provider(KnownCacheProviderNames.Redis, redis));
+
+        factory.CreateSetCache().Should().BeSameAs(redis);
+        factory.CreateSetCache(KnownCacheProviderNames.Redis).Should().BeSameAs(redis);
+    }
+
+    [Fact]
+    public void Disposed_factory_add_provider_exception()
+    {
+        var factory = new QueueCacheFactory(Options.Create(new CacheOptions()));
+        factory.Dispose();
+
+        var act = () => factory.AddProvider(Provider(KnownCacheProviderNames.Redis, Substitute.For<ISetCache>()));
+
+        act.Should().Throw<ObjectDisposedException>();
+    }
+
+    [Fact]
+    public void Dispose_disposes_providers_and_swallows_exceptions()
+    {
+        var provider = Provider(KnownCacheProviderNames.Redis, Substitute.For<ISetCache>());
+        provider.When(p => p.Dispose()).Throw(new Exception("test"));
+        var factory = new QueueCacheFactory(Options.Create(new CacheOptions()), new[] { provider });
+
+        var act = () => factory.Dispose();
+
+        act.Should().NotThrow();
+        provider.Received(1).Dispose();
     }
 
     [Fact]

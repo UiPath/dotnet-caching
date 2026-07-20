@@ -43,7 +43,7 @@ public class QueueCacheFactoryTests
     [Fact]
     public void QueueCacheFactory_throws_when_set_cache_is_null()
     {
-        var act = () => new QueueCacheFactory(null!);
+        var act = () => new QueueCacheFactory((ISetCache)null!);
 
         act.Should().Throw<ArgumentNullException>();
     }

@@ -30,7 +30,9 @@ public static class SetCacheCollectionExtensions
     /// Registers the in-process <see cref="ISetCache"/> provider (<c>InMemory</c>) plus
     /// <see cref="IQueueCacheFactory"/>, <see cref="ISetCache"/> and <see cref="ISetCache{T}"/>.
     /// Requires the core caching services (<c>AddCaching</c>). Unlike the Redis providers, this one
-    /// has no Redis prerequisite.
+    /// has no Redis prerequisite. The factory selects providers via
+    /// <see cref="CacheOptions.DefaultCache"/> (default <c>InMemoryRedis</c>, like the core cache
+    /// factory) — point it at <c>InMemory</c> when this is the only registered set-cache provider.
     /// </summary>
     public static IServiceCollection AddInMemorySetCache(this IServiceCollection services, Action<InMemorySetCacheOptions> configureOptions)
     {
@@ -151,7 +153,7 @@ public static class SetCacheCollectionExtensions
     private static IServiceCollection AddSetCacheCore(this IServiceCollection services)
     {
         services.TryAddSingleton<IQueueCacheFactory>(sp =>
-            new QueueCacheFactory(sp.GetServices<ISetCacheProvider>(), sp.GetRequiredService<IOptions<CacheOptions>>()));
+            new QueueCacheFactory(sp.GetRequiredService<IOptions<CacheOptions>>(), sp.GetServices<ISetCacheProvider>()));
         // Deferred accessor so a provider can reach the factory without a construction-time cycle
         // (the factory is built from the providers). Mirrors the core's Func<ICacheFactory>.
         services.TryAddTransient<Func<IQueueCacheFactory>>(sp => () => sp.GetRequiredService<IQueueCacheFactory>());

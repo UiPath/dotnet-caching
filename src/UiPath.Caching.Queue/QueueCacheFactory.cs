@@ -1,75 +1,94 @@
 namespace UiPath.Caching;
 
 /// <summary>
-/// Default <see cref="IQueueCacheFactory"/>. Mirrors <c>CacheFactory</c>: holds the registered
-/// <see cref="ISetCacheProvider"/> instances keyed by name and hands out the matching
-/// <see cref="ISetCache"/>, defaulting to <see cref="CacheOptions.DefaultCache"/>.
+/// Default <see cref="IQueueCacheFactory"/>. Mirrors <see cref="CacheFactory"/>: holds the
+/// registered <see cref="ISetCacheProvider"/> instances keyed by name and hands out the matching
+/// <see cref="ISetCache"/>, defaulting to <see cref="CacheOptions.DefaultCache"/> and degrading to
+/// <see cref="NullSetCache"/> when no provider matches.
 /// </summary>
 public sealed class QueueCacheFactory : IQueueCacheFactory
 {
     private readonly Dictionary<string, ISetCacheProvider> _providers = new(StringComparer.OrdinalIgnoreCase);
-    private readonly ISetCache? _single;
-    private readonly string _defaultCache = KnownCacheProviderNames.InMemoryRedis;
+    private readonly CacheOptions _options;
+    private volatile bool _disposed;
 
     /// <summary>
-    /// Single-provider factory: always hands out <paramref name="setCache"/> regardless of the
-    /// requested provider name. Retained for backward compatibility.
+    /// Single-cache factory: hands out <paramref name="setCache"/> for every request. Retained for
+    /// backward compatibility; prefer the provider-based constructors.
     /// </summary>
     public QueueCacheFactory(ISetCache setCache)
     {
         ArgumentNullException.ThrowIfNull(setCache);
-        _single = setCache;
+        _options = new CacheOptions { DefaultCache = setCache.Name };
+        AddProvider(new SingleSetCacheProvider(setCache));
     }
 
-    /// <summary>
-    /// Provider-based factory: selects an <see cref="ISetCacheProvider"/> by name (or by
-    /// <see cref="CacheOptions.DefaultCache"/> when no name is given).
-    /// </summary>
-    public QueueCacheFactory(IEnumerable<ISetCacheProvider> providers, IOptions<CacheOptions> cacheOptions)
+    public QueueCacheFactory(IOptions<CacheOptions> cacheOptions)
+        : this(cacheOptions, [])
     {
-        ArgumentNullException.ThrowIfNull(providers);
-        _defaultCache = cacheOptions?.Value.DefaultCache ?? KnownCacheProviderNames.InMemoryRedis;
+    }
+
+    public QueueCacheFactory(IOptions<CacheOptions> cacheOptions, IEnumerable<ISetCacheProvider> providers)
+    {
+        _options = cacheOptions.Value;
         foreach (var provider in providers)
         {
-            _providers[provider.Name] = provider;
+            AddProvider(provider);
         }
     }
 
-    public IEnumerable<string> ProviderNames =>
-        _single is not null ? [_single.Name] : _providers.Values.Where(p => p.Enabled).Select(p => p.Name);
+    public IEnumerable<string> ProviderNames => _providers.Values.Where(p => p.Enabled).Select(p => p.Name);
 
-    public ISetCache CreateSetCache() => Resolve(_defaultCache, allowFallback: true);
-
-    // A null providerName means "the default provider" and is allowed to fall back to the sole
-    // registered provider. An explicit name must resolve exactly (or yield NullSetCache) — this is
-    // what the multilayer provider uses to fetch its Redis tier, and falling back there could
-    // resolve the multilayer provider back to itself.
-    public ISetCache CreateSetCache(string? providerName) =>
-        providerName is null ? Resolve(_defaultCache, allowFallback: true) : Resolve(providerName, allowFallback: false);
-
-    private ISetCache Resolve(string providerName, bool allowFallback)
+    public void AddProvider(ISetCacheProvider provider)
     {
-        if (_single is not null)
-        {
-            return _single;
-        }
-        var provider = GetProvider(providerName);
-        if (provider is not null)
-        {
-            return provider.CreateSetCache();
-        }
-        return allowFallback && FallbackProvider() is { } sole ? sole.CreateSetCache() : NullSetCache.Instance;
+        ObjectDisposedException.ThrowIf(_disposed, this);
+        _providers[provider.Name] = provider;
     }
+
+    public ISetCache CreateSetCache() => CreateSetCache(providerName: null);
+
+    public ISetCache CreateSetCache(string? providerName) =>
+        GetProvider(providerName ?? _options.DefaultCache)?.CreateSetCache() ?? DefaultSetCache();
+
+    public void Dispose()
+    {
+        foreach (var p in _providers)
+        {
+            try
+            {
+                p.Value.Dispose();
+            }
+            catch
+            {
+                // Swallow exceptions on dispose
+            }
+        }
+        _providers.Clear();
+        _disposed = true;
+    }
+
+    private ISetCache DefaultSetCache() => GetProvider(_options.DefaultCache)?.CreateSetCache() ?? NullSetCache.Instance;
 
     private ISetCacheProvider? GetProvider(string providerName) =>
         _providers.TryGetValue(providerName, out var provider) && provider.Enabled ? provider : null;
 
-    // When the default provider is not registered, fall back to the sole enabled provider (if
-    // unambiguous) so a single AddXxxSetCache registration "just works" without configuring
-    // CacheOptions.DefaultCache.
-    private ISetCacheProvider? FallbackProvider()
+    // Adapts the single-cache constructor to the provider model: that constructor points
+    // CacheOptions.DefaultCache at this provider, so every request resolves to the supplied cache.
+    private sealed class SingleSetCacheProvider : ISetCacheProvider
     {
-        var enabled = _providers.Values.Where(p => p.Enabled).ToArray();
-        return enabled.Length == 1 ? enabled[0] : null;
+        private readonly ISetCache _setCache;
+
+        public SingleSetCacheProvider(ISetCache setCache) => _setCache = setCache;
+
+        public string Name => _setCache.Name;
+
+        public bool Enabled => true;
+
+        public ISetCache CreateSetCache() => _setCache;
+
+        public void Dispose()
+        {
+            // The factory does not own the externally supplied cache.
+        }
     }
 }
