@@ -1,5 +1,6 @@
-using Microsoft.Extensions.DependencyInjection;
+﻿using Microsoft.Extensions.DependencyInjection;
 using UiPath.Caching.Config;
+using UiPath.Caching.Queue.Config;
 
 namespace UiPath.Caching.Tests;
 
@@ -54,8 +55,11 @@ public class QueueCacheFactoryTests
 
         services.AddRedisSetCache();
 
+        // The factory is registered from the set of ISetCacheProvider registrations, so it is wired
+        // via a factory delegate rather than an implementation type.
+        services.Should().ContainSingle(d => d.ServiceType == typeof(IQueueCacheFactory));
         services.Should().ContainSingle(d =>
-            d.ServiceType == typeof(IQueueCacheFactory) && d.ImplementationType == typeof(QueueCacheFactory));
+            d.ServiceType == typeof(ISetCacheProvider) && d.ImplementationType == typeof(RedisSetCacheProvider));
     }
 
     [Fact]
