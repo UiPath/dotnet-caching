@@ -62,7 +62,7 @@
     <!-- Public API surface tracking (src libraries only; wired in src/Directory.Build.props) -->
     <PackageVersion Include="Microsoft.CodeAnalysis.PublicApiAnalyzers" Version="5.6.0" />
     <!-- Test related packages -->
-    <PackageVersion Include="AwesomeAssertions" Version="9.4.0" />
+    <PackageVersion Include="AwesomeAssertions" Version="9.5.0" />
     <PackageVersion Include="Microsoft.NET.Test.Sdk" Version="18.8.1" />
     <PackageVersion Include="xunit.v3" Version="$(xUnit)" />
     <PackageVersion Include="xunit.runner.visualstudio" Version="3.1.5" />
