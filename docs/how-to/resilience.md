@@ -325,7 +325,7 @@ Register your own pipeline for that name and point the set cache at it:
 builder
     .AddResilienceStrategies()
     .AddResiliencePipeline("set-pop", o => o.RetryCount = 0)   // timeout + breaker + fallback, no retry
-    .AddRedisSetCache(o => o.ResilienceKeyName = "set-pop");
+    .AddQueueRedis(o => o.ResilienceKeyName = "set-pop");
 ```
 
 If `ResilienceKeyName` is left null/empty (the default), or names a pipeline that was never

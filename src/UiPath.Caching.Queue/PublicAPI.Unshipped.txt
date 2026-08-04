@@ -1,1 +1,101 @@
 #nullable enable
+*REMOVED*UiPath.Caching.IQueueCacheFactory.CreateSetCache() -> UiPath.Caching.ISetCache!
+*REMOVED*UiPath.Caching.QueueCacheFactory.CreateSetCache() -> UiPath.Caching.ISetCache!
+*REMOVED*UiPath.Caching.QueueCacheFactory.QueueCacheFactory(UiPath.Caching.ISetCache! setCache) -> void
+*REMOVED*static UiPath.Caching.QueueCacheFactoryExtensions.CreateSetCache<T>(this UiPath.Caching.IQueueCacheFactory! factory) -> UiPath.Caching.ISetCache<T>!
+*REMOVED*UiPath.Caching.Queue.Config.SetCacheCollectionExtensions
+*REMOVED*static UiPath.Caching.Queue.Config.SetCacheCollectionExtensions.AddRedisSetCache(this Microsoft.Extensions.DependencyInjection.IServiceCollection! services) -> Microsoft.Extensions.DependencyInjection.IServiceCollection!
+*REMOVED*static UiPath.Caching.Queue.Config.SetCacheCollectionExtensions.AddRedisSetCache(this Microsoft.Extensions.DependencyInjection.IServiceCollection! services, System.Action<UiPath.Caching.Redis.RedisSetCacheOptions!>! configureOptions) -> Microsoft.Extensions.DependencyInjection.IServiceCollection!
+*REMOVED*static UiPath.Caching.Queue.Config.SetCacheCollectionExtensions.AddRedisSetCache(this UiPath.Caching.Config.ICachingBuilder! builder) -> UiPath.Caching.Config.ICachingBuilder!
+*REMOVED*static UiPath.Caching.Queue.Config.SetCacheCollectionExtensions.AddRedisSetCache(this UiPath.Caching.Config.ICachingBuilder! builder, System.Action<UiPath.Caching.Redis.RedisSetCacheOptions!>! configureOptions) -> UiPath.Caching.Config.ICachingBuilder!
+UiPath.Caching.NullQueueCacheFactory
+UiPath.Caching.NullQueueCacheFactory.AddProvider(UiPath.Caching.IQueueCacheProvider! provider) -> void
+UiPath.Caching.NullQueueCacheFactory.CreateSetCache(string? providerName = null) -> UiPath.Caching.ISetCache!
+UiPath.Caching.NullQueueCacheFactory.Dispose() -> void
+UiPath.Caching.NullQueueCacheFactory.NullQueueCacheFactory() -> void
+UiPath.Caching.NullQueueCacheFactory.ProviderNames.get -> System.Collections.Generic.IEnumerable<string!>!
+static readonly UiPath.Caching.NullQueueCacheFactory.Instance -> UiPath.Caching.NullQueueCacheFactory!
+UiPath.Caching.Redis.RedisSetCacheOptions.Enabled.get -> bool
+UiPath.Caching.Redis.RedisSetCacheOptions.Enabled.set -> void
+UiPath.Caching.IQueueCacheFactory.AddProvider(UiPath.Caching.IQueueCacheProvider! provider) -> void
+UiPath.Caching.IQueueCacheFactory.CreateSetCache(string? providerName = null) -> UiPath.Caching.ISetCache!
+UiPath.Caching.IQueueCacheFactory.ProviderNames.get -> System.Collections.Generic.IEnumerable<string!>!
+UiPath.Caching.IQueueCacheProvider
+UiPath.Caching.IQueueCacheProvider.CreateSetCache() -> UiPath.Caching.ISetCache!
+UiPath.Caching.IQueueCacheProvider.Enabled.get -> bool
+UiPath.Caching.IQueueCacheProvider.Name.get -> string!
+UiPath.Caching.InMemoryRedisQueueCacheOptions
+UiPath.Caching.InMemoryRedisQueueCacheOptions.CompactionPercentage.get -> double?
+UiPath.Caching.InMemoryRedisQueueCacheOptions.CompactionPercentage.set -> void
+UiPath.Caching.InMemoryRedisQueueCacheOptions.ConnectionMonitorEnabled.get -> bool
+UiPath.Caching.InMemoryRedisQueueCacheOptions.ConnectionMonitorEnabled.set -> void
+UiPath.Caching.InMemoryRedisQueueCacheOptions.ConnectionMonitorPeriod.get -> System.TimeSpan?
+UiPath.Caching.InMemoryRedisQueueCacheOptions.ConnectionMonitorPeriod.set -> void
+UiPath.Caching.InMemoryRedisQueueCacheOptions.LocalMaxExpirationDisconnected.get -> System.TimeSpan?
+UiPath.Caching.InMemoryRedisQueueCacheOptions.LocalMaxExpirationDisconnected.set -> void
+UiPath.Caching.InMemoryRedisQueueCacheOptions.UseLocalOnlyWhenDisconnected.get -> bool
+UiPath.Caching.InMemoryRedisQueueCacheOptions.UseLocalOnlyWhenDisconnected.set -> void
+UiPath.Caching.InMemoryRedisQueueCacheOptions.Enabled.get -> bool
+UiPath.Caching.InMemoryRedisQueueCacheOptions.Enabled.set -> void
+UiPath.Caching.InMemoryRedisQueueCacheOptions.InMemoryRedisQueueCacheOptions() -> void
+UiPath.Caching.InMemoryRedisQueueCacheOptions.LocalMaxExpiration.get -> System.TimeSpan?
+UiPath.Caching.InMemoryRedisQueueCacheOptions.LocalMaxExpiration.set -> void
+UiPath.Caching.InMemoryRedisQueueCacheOptions.SizeLimit.get -> long?
+UiPath.Caching.InMemoryRedisQueueCacheOptions.SizeLimit.set -> void
+UiPath.Caching.InMemoryRedisQueueCacheOptions.SizeProvider.get -> UiPath.Caching.ICacheEntrySizeProvider?
+UiPath.Caching.InMemoryRedisQueueCacheOptions.SizeProvider.set -> void
+UiPath.Caching.InMemoryRedisQueueCacheOptions.StatisticsFlushInterval.get -> System.TimeSpan
+UiPath.Caching.InMemoryRedisQueueCacheOptions.StatisticsFlushInterval.set -> void
+UiPath.Caching.InMemoryRedisQueueCacheOptions.TrackStatistics.get -> bool
+UiPath.Caching.InMemoryRedisQueueCacheOptions.TrackStatistics.set -> void
+UiPath.Caching.InMemoryRedisQueueCacheProvider
+UiPath.Caching.InMemoryRedisQueueCacheProvider.CreateSetCache() -> UiPath.Caching.ISetCache!
+UiPath.Caching.InMemoryRedisQueueCacheProvider.Dispose() -> void
+UiPath.Caching.InMemoryRedisQueueCacheProvider.Enabled.get -> bool
+UiPath.Caching.InMemoryRedisQueueCacheProvider.InMemoryRedisQueueCacheProvider(Microsoft.Extensions.Options.IOptions<UiPath.Caching.InMemoryRedisQueueCacheOptions!>! optionsAccessor, UiPath.Caching.IMemoryCacheFactory! memoryCacheFactory, System.Func<UiPath.Caching.IQueueCacheFactory!>! queueCacheFactoryAccessor, UiPath.Caching.ISerializerProxy<StackExchange.Redis.RedisValue>! serializer, UiPath.Caching.Locking.ILocalLock! localLock) -> void
+UiPath.Caching.InMemoryRedisQueueCacheProvider.Name.get -> string!
+UiPath.Caching.InMemoryQueueCacheOptions
+UiPath.Caching.InMemoryQueueCacheOptions.CompactionPercentage.get -> double?
+UiPath.Caching.InMemoryQueueCacheOptions.CompactionPercentage.set -> void
+UiPath.Caching.InMemoryQueueCacheOptions.DefaultExpiration.get -> System.TimeSpan?
+UiPath.Caching.InMemoryQueueCacheOptions.DefaultExpiration.set -> void
+UiPath.Caching.InMemoryQueueCacheOptions.Enabled.get -> bool
+UiPath.Caching.InMemoryQueueCacheOptions.Enabled.set -> void
+UiPath.Caching.InMemoryQueueCacheOptions.InMemoryQueueCacheOptions() -> void
+UiPath.Caching.InMemoryQueueCacheOptions.SizeLimit.get -> long?
+UiPath.Caching.InMemoryQueueCacheOptions.SizeLimit.set -> void
+UiPath.Caching.InMemoryQueueCacheOptions.SizeProvider.get -> UiPath.Caching.ICacheEntrySizeProvider?
+UiPath.Caching.InMemoryQueueCacheOptions.SizeProvider.set -> void
+UiPath.Caching.InMemoryQueueCacheOptions.StatisticsFlushInterval.get -> System.TimeSpan
+UiPath.Caching.InMemoryQueueCacheOptions.StatisticsFlushInterval.set -> void
+UiPath.Caching.InMemoryQueueCacheOptions.TrackStatistics.get -> bool
+UiPath.Caching.InMemoryQueueCacheOptions.TrackStatistics.set -> void
+UiPath.Caching.InMemoryQueueCacheProvider
+UiPath.Caching.InMemoryQueueCacheProvider.CreateSetCache() -> UiPath.Caching.ISetCache!
+UiPath.Caching.InMemoryQueueCacheProvider.Dispose() -> void
+UiPath.Caching.InMemoryQueueCacheProvider.Enabled.get -> bool
+UiPath.Caching.InMemoryQueueCacheProvider.InMemoryQueueCacheProvider(Microsoft.Extensions.Options.IOptions<UiPath.Caching.InMemoryQueueCacheOptions!>! optionsAccessor, UiPath.Caching.IMemoryCacheFactory! memoryCacheFactory, UiPath.Caching.ISerializerProxy<StackExchange.Redis.RedisValue>! serializer, UiPath.Caching.Locking.ILocalLock! localLock) -> void
+UiPath.Caching.InMemoryQueueCacheProvider.Name.get -> string!
+UiPath.Caching.QueueCacheFactory.AddProvider(UiPath.Caching.IQueueCacheProvider! provider) -> void
+UiPath.Caching.QueueCacheFactory.CreateSetCache(string? providerName = null) -> UiPath.Caching.ISetCache!
+UiPath.Caching.QueueCacheFactory.Dispose() -> void
+UiPath.Caching.QueueCacheFactory.ProviderNames.get -> System.Collections.Generic.IEnumerable<string!>!
+UiPath.Caching.QueueCacheFactory.QueueCacheFactory(Microsoft.Extensions.Options.IOptions<UiPath.Caching.CacheOptions!>! cacheOptions) -> void
+UiPath.Caching.QueueCacheFactory.QueueCacheFactory(Microsoft.Extensions.Options.IOptions<UiPath.Caching.CacheOptions!>! cacheOptions, System.Collections.Generic.IEnumerable<UiPath.Caching.IQueueCacheProvider!>! providers) -> void
+UiPath.Caching.RedisQueueCacheProvider
+UiPath.Caching.RedisQueueCacheProvider.CreateSetCache() -> UiPath.Caching.ISetCache!
+UiPath.Caching.RedisQueueCacheProvider.Dispose() -> void
+UiPath.Caching.RedisQueueCacheProvider.Enabled.get -> bool
+UiPath.Caching.RedisQueueCacheProvider.Name.get -> string!
+UiPath.Caching.RedisQueueCacheProvider.RedisQueueCacheProvider(Microsoft.Extensions.Options.IOptions<UiPath.Caching.Redis.RedisCacheOptions!>! redisCacheOptions, Microsoft.Extensions.Options.IOptions<UiPath.Caching.CacheOptions!>! cacheOptions, Microsoft.Extensions.Options.IOptions<UiPath.Caching.Redis.RedisSetCacheOptions!>! setCacheOptions, UiPath.Caching.Redis.IRedisConnector! redis, UiPath.Caching.ISerializerProxy<StackExchange.Redis.RedisValue>! serializerProxy, UiPath.Caching.Policies.IResiliencePipelineProvider! resiliencePipelineProvider, UiPath.Caching.Telemetry.ICachingTelemetryProvider! cachingTelemetryProvider, Microsoft.Extensions.Logging.ILoggerFactory! loggerFactory, UiPath.Caching.ICachePolicyFactory! policyFactory) -> void
+UiPath.Caching.Queue.Config.QueueCacheCollectionExtensions
+static UiPath.Caching.Queue.Config.QueueCacheCollectionExtensions.AddQueueInMemoryRedis(this UiPath.Caching.Config.ICachingBuilder! builder) -> UiPath.Caching.Config.ICachingBuilder!
+static UiPath.Caching.Queue.Config.QueueCacheCollectionExtensions.AddQueueInMemoryRedis(this UiPath.Caching.Config.ICachingBuilder! builder, System.Action<UiPath.Caching.InMemoryRedisQueueCacheOptions!>! configureOptions) -> UiPath.Caching.Config.ICachingBuilder!
+static UiPath.Caching.Queue.Config.QueueCacheCollectionExtensions.AddQueueInMemoryRedis(this UiPath.Caching.Config.ICachingBuilder! builder, string! sectionName) -> UiPath.Caching.Config.ICachingBuilder!
+static UiPath.Caching.Queue.Config.QueueCacheCollectionExtensions.AddQueueMemory(this UiPath.Caching.Config.ICachingBuilder! builder) -> UiPath.Caching.Config.ICachingBuilder!
+static UiPath.Caching.Queue.Config.QueueCacheCollectionExtensions.AddQueueMemory(this UiPath.Caching.Config.ICachingBuilder! builder, System.Action<UiPath.Caching.InMemoryQueueCacheOptions!>! configureOptions) -> UiPath.Caching.Config.ICachingBuilder!
+static UiPath.Caching.Queue.Config.QueueCacheCollectionExtensions.AddQueueMemory(this UiPath.Caching.Config.ICachingBuilder! builder, string! sectionName) -> UiPath.Caching.Config.ICachingBuilder!
+static UiPath.Caching.Queue.Config.QueueCacheCollectionExtensions.AddQueueRedis(this UiPath.Caching.Config.ICachingBuilder! builder) -> UiPath.Caching.Config.ICachingBuilder!
+static UiPath.Caching.Queue.Config.QueueCacheCollectionExtensions.AddQueueRedis(this UiPath.Caching.Config.ICachingBuilder! builder, System.Action<UiPath.Caching.Redis.RedisSetCacheOptions!>! configureOptions) -> UiPath.Caching.Config.ICachingBuilder!
+static UiPath.Caching.Queue.Config.QueueCacheCollectionExtensions.AddQueueRedis(this UiPath.Caching.Config.ICachingBuilder! builder, string! sectionName) -> UiPath.Caching.Config.ICachingBuilder!
+static UiPath.Caching.QueueCacheFactoryExtensions.CreateSetCache<T>(this UiPath.Caching.IQueueCacheFactory! factory, string? providerName = null) -> UiPath.Caching.ISetCache<T>!

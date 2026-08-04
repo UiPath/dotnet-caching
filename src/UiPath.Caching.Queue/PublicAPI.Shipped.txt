@@ -1,5 +1,5 @@
 #nullable enable
-UiPath.Caching.Config.SetCacheCollectionExtensions
+UiPath.Caching.Queue.Config.SetCacheCollectionExtensions
 UiPath.Caching.IQueueCacheFactory
 UiPath.Caching.IQueueCacheFactory.CreateSetCache() -> UiPath.Caching.ISetCache!
 UiPath.Caching.ISetCache
@@ -110,10 +110,10 @@ UiPath.Caching.SetCache<T>.RemoveAsync(UiPath.Caching.CacheKey cacheKey, System.
 UiPath.Caching.SetCache<T>.RemoveItemAsync(UiPath.Caching.CacheKey cacheKey, T item, System.Threading.CancellationToken token = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.ValueTask<bool>
 UiPath.Caching.SetCache<T>.RemoveItemsAsync(UiPath.Caching.CacheKey cacheKey, System.Collections.Generic.IEnumerable<T>! items, System.Threading.CancellationToken token = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.ValueTask<long>
 UiPath.Caching.SetCache<T>.SetCache(UiPath.Caching.ISetCache! cache, UiPath.Caching.ICacheKeyStrategy? cacheKeyStrategy = null, UiPath.Caching.ICachePolicyFactory? policyFactory = null, string? policyName = null) -> void
-static UiPath.Caching.Config.SetCacheCollectionExtensions.AddRedisSetCache(this Microsoft.Extensions.DependencyInjection.IServiceCollection! services) -> Microsoft.Extensions.DependencyInjection.IServiceCollection!
-static UiPath.Caching.Config.SetCacheCollectionExtensions.AddRedisSetCache(this Microsoft.Extensions.DependencyInjection.IServiceCollection! services, System.Action<UiPath.Caching.Redis.RedisSetCacheOptions!>! configureOptions) -> Microsoft.Extensions.DependencyInjection.IServiceCollection!
-static UiPath.Caching.Config.SetCacheCollectionExtensions.AddRedisSetCache(this UiPath.Caching.Config.ICachingBuilder! builder) -> UiPath.Caching.Config.ICachingBuilder!
-static UiPath.Caching.Config.SetCacheCollectionExtensions.AddRedisSetCache(this UiPath.Caching.Config.ICachingBuilder! builder, System.Action<UiPath.Caching.Redis.RedisSetCacheOptions!>! configureOptions) -> UiPath.Caching.Config.ICachingBuilder!
+static UiPath.Caching.Queue.Config.SetCacheCollectionExtensions.AddRedisSetCache(this Microsoft.Extensions.DependencyInjection.IServiceCollection! services) -> Microsoft.Extensions.DependencyInjection.IServiceCollection!
+static UiPath.Caching.Queue.Config.SetCacheCollectionExtensions.AddRedisSetCache(this Microsoft.Extensions.DependencyInjection.IServiceCollection! services, System.Action<UiPath.Caching.Redis.RedisSetCacheOptions!>! configureOptions) -> Microsoft.Extensions.DependencyInjection.IServiceCollection!
+static UiPath.Caching.Queue.Config.SetCacheCollectionExtensions.AddRedisSetCache(this UiPath.Caching.Config.ICachingBuilder! builder) -> UiPath.Caching.Config.ICachingBuilder!
+static UiPath.Caching.Queue.Config.SetCacheCollectionExtensions.AddRedisSetCache(this UiPath.Caching.Config.ICachingBuilder! builder, System.Action<UiPath.Caching.Redis.RedisSetCacheOptions!>! configureOptions) -> UiPath.Caching.Config.ICachingBuilder!
 static UiPath.Caching.QueueCacheFactoryExtensions.CreateSetCache<T>(this UiPath.Caching.IQueueCacheFactory! factory) -> UiPath.Caching.ISetCache<T>!
 static readonly UiPath.Caching.NullSetCache.Instance -> UiPath.Caching.NullSetCache!
 UiPath.Caching.NullQueueCacheFactory

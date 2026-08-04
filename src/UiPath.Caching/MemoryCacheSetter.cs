@@ -1,4 +1,4 @@
-using UiPath.Caching.Telemetry;
+﻿using UiPath.Caching.Telemetry;
 
 namespace UiPath.Caching;
 

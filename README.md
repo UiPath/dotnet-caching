@@ -106,7 +106,7 @@ flowchart LR
 | `UiPath.Caching` | Always — providers, topics, locks. |
 | `UiPath.Caching.Polly` | Resilience pipelines. Recommended. |
 | `UiPath.Caching.CloudEvents` | CloudEvents envelope for broadcast events. Recommended. |
-| `UiPath.Caching.Queue` | Redis set ("queue") support — `ISetCache` / `AddRedisSetCache`. |
+| `UiPath.Caching.Queue` | Set ("queue") support — `ISetCache`, registered per backing via `AddQueueMemory` / `AddQueueRedis` / `AddQueueInMemoryRedis`. |
 
 ## Documentation
 

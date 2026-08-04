@@ -1,7 +1,8 @@
-using UiPath.Caching.Locking;
+﻿using UiPath.Caching.Locking;
 using UiPath.Caching.Telemetry;
 
 namespace UiPath.Caching;
+
 public sealed class InMemoryCacheProvider : ICacheProvider
 {
     private readonly InMemoryCacheOptions _options;

@@ -1,4 +1,4 @@
-using UiPath.Caching.Locking;
+﻿using UiPath.Caching.Locking;
 using UiPath.Caching.Telemetry;
 
 namespace UiPath.Caching;
@@ -24,8 +24,6 @@ public sealed class InMemoryRedisCacheProvider : ICacheProvider
     public string Name => KnownCacheProviderNames.InMemoryRedis;
 
     public bool Enabled { get; }
-
-
 
     public InMemoryRedisCacheProvider(
         IOptions<InMemoryRedisCacheOptions> optionsAccessor,

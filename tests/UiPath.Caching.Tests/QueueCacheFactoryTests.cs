@@ -1,5 +1,6 @@
-using Microsoft.Extensions.DependencyInjection;
+﻿using Microsoft.Extensions.DependencyInjection;
 using UiPath.Caching.Config;
+using UiPath.Caching.Queue.Config;
 
 namespace UiPath.Caching.Tests;
 
@@ -30,32 +31,17 @@ public class QueueCacheFactoryTests
     }
 
     [Fact]
-    public void QueueCacheFactory_hands_out_the_registered_set_cache()
-    {
-        var inner = Substitute.For<ISetCache>();
-
-        var sut = new QueueCacheFactory(inner);
-
-        sut.CreateSetCache().Should().BeSameAs(inner);
-    }
-
-    [Fact]
-    public void QueueCacheFactory_throws_when_set_cache_is_null()
-    {
-        var act = () => new QueueCacheFactory(null!);
-
-        act.Should().Throw<ArgumentNullException>();
-    }
-
-    [Fact]
-    public void AddRedisSetCache_registers_IQueueCacheFactory()
+    public void AddQueueRedis_registers_IQueueCacheFactory()
     {
         var services = new ServiceCollection();
 
-        services.AddRedisSetCache();
+        services.AddCaching(builder => builder.AddQueueRedis());
 
+        // The factory is registered from the set of IQueueCacheProvider registrations, so it is wired
+        // via a factory delegate rather than an implementation type.
+        services.Should().ContainSingle(d => d.ServiceType == typeof(IQueueCacheFactory));
         services.Should().ContainSingle(d =>
-            d.ServiceType == typeof(IQueueCacheFactory) && d.ImplementationType == typeof(QueueCacheFactory));
+            d.ServiceType == typeof(IQueueCacheProvider) && d.ImplementationType == typeof(RedisQueueCacheProvider));
     }
 
     [Fact]
@@ -65,12 +51,12 @@ public class QueueCacheFactoryTests
     }
 
     [Fact]
-    public void AddRedisSetCache_when_caching_disabled_registers_NullQueueCacheFactory()
+    public void AddQueueRedis_when_caching_disabled_registers_NullQueueCacheFactory()
     {
         var services = new ServiceCollection();
         services.AddLogging();
         services.AddCaching(
-            builder => builder.AddRedisSetCache(),
+            builder => builder.AddQueueRedis(),
             opt => opt.Enabled = false);
         using var provider = services.BuildServiceProvider();
 
@@ -78,12 +64,12 @@ public class QueueCacheFactoryTests
     }
 
     [Fact]
-    public void AddRedisSetCache_when_caching_disabled_still_allows_dependent_service_to_be_constructed()
+    public void AddQueueRedis_when_caching_disabled_still_allows_dependent_service_to_be_constructed()
     {
         var services = new ServiceCollection();
         services.AddLogging();
         services.AddCaching(
-            builder => builder.AddRedisSetCache(),
+            builder => builder.AddQueueRedis(),
             opt => opt.Enabled = false);
         services.AddSingleton<DependsOnQueueCacheFactory>();
 
