@@ -6,6 +6,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 
 ## [Unreleased]
 
+### Changed
+
+- Bumped the OpenTelemetry package family from 1.16.0 to 1.17.0 (`OpenTelemetry`, `OpenTelemetry.Exporter.OpenTelemetryProtocol`, `OpenTelemetry.Exporter.Console`, `OpenTelemetry.Extensions.Hosting`, `OpenTelemetry.Instrumentation.AspNetCore`, `OpenTelemetry.Instrumentation.Http`, `OpenTelemetry.Instrumentation.Runtime`, and `OpenTelemetry.Instrumentation.StackExchangeRedis` 1.16.0-beta.1 → 1.17.0-beta.1). Bumped as one set so the family stays version-consistent.
+
 ## [1.1.0] - 2026-07-17
 
 ### Added
