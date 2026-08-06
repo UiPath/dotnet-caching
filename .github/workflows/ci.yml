@@ -8,7 +8,7 @@ on:
 
 jobs:
   build-linux:
-    runs-on: ubuntu-latest
+    runs-on: uipath-ubuntu-latest
     env:
       SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
     services:
@@ -22,23 +22,23 @@ jobs:
           --health-timeout 5s
           --health-retries 5
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
           fetch-depth: 0  # SonarQube Cloud needs full history for new-code / blame
 
       - name: Setup Java (SonarScanner runtime)
-        uses: actions/setup-java@03ad4de0992f5dab5e18fcb136590ce7c4a0ac95 # v5
+        uses: actions/setup-java@03ad4de0992f5dab5e18fcb136590ce7c4a0ac95  # v5
         with:
           distribution: temurin
           java-version: '17'
 
       - name: Setup .NET 8
-        uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
+        uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68  # v6.0.0
         with:
           dotnet-version: 8.0.x
 
       - name: Setup .NET 10
-        uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
+        uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68  # v6.0.0
         with:
           dotnet-version: 10.0.x
 
@@ -75,7 +75,7 @@ jobs:
 
       - name: Upload test results
         if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7
         with:
           name: test-results-ubuntu-latest
           path: TestResults
@@ -84,17 +84,17 @@ jobs:
         run: dotnet pack UiPath.Caching.slnx -c Release --no-build -o packages
 
   build-windows:
-    runs-on: windows-latest
+    runs-on: uipath-windows-latest
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
 
       - name: Setup .NET 8
-        uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
+        uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68  # v6.0.0
         with:
           dotnet-version: 8.0.x
 
       - name: Setup .NET 10
-        uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
+        uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68  # v6.0.0
         with:
           dotnet-version: 10.0.x
 
@@ -110,19 +110,19 @@ jobs:
   # FOSSA runs as its own parallel job (push to main only) so it doesn't delay the build.
   fossa:
     if: github.event_name == 'push'
-    runs-on: ubuntu-latest
+    runs-on: uipath-ubuntu-latest
     env:
       FOSSA_API_KEY: ${{ secrets.FOSSA_API_KEY }}
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
 
       - name: Setup .NET 8
-        uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
+        uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68  # v6.0.0
         with:
           dotnet-version: 8.0.x
 
       - name: Setup .NET 10
-        uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
+        uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68  # v6.0.0
         with:
           dotnet-version: 10.0.x
 
@@ -131,13 +131,13 @@ jobs:
 
       - name: FOSSA analyze (upload)
         if: env.FOSSA_API_KEY != ''
-        uses: fossas/fossa-action@29693cc50323968e039056be419b32989fc5880c # v2.0.0
+        uses: fossas/fossa-action@29693cc50323968e039056be419b32989fc5880c  # v2.0.0
         with:
           api-key: ${{ secrets.FOSSA_API_KEY }}
 
       - name: FOSSA test (license + CVE gate)
         if: env.FOSSA_API_KEY != ''
-        uses: fossas/fossa-action@29693cc50323968e039056be419b32989fc5880c # v2.0.0
+        uses: fossas/fossa-action@29693cc50323968e039056be419b32989fc5880c  # v2.0.0
         with:
           api-key: ${{ secrets.FOSSA_API_KEY }}
           run-tests: true

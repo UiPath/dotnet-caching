@@ -23,10 +23,10 @@ permissions:
 
 jobs:
   cla:
-    runs-on: ubuntu-latest
+    runs-on: uipath-ubuntu-latest
     steps:
       - name: Evaluate CLA status
-        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3  # v9.0.0
         with:
           script: |
             const pr = context.payload.pull_request;
