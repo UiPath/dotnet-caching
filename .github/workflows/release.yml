@@ -7,7 +7,7 @@ on:
 
 jobs:
   validate-tag:
-    runs-on: ubuntu-latest
+    runs-on: uipath-ubuntu-latest
     steps:
       - name: Enforce release tag naming policy
         run: |
@@ -20,7 +20,7 @@ jobs:
 
   release:
     needs: validate-tag
-    runs-on: ubuntu-latest
+    runs-on: uipath-ubuntu-latest
     permissions:
       contents: write  # create the GitHub release
     env:
@@ -36,15 +36,15 @@ jobs:
           --health-timeout 5s
           --health-retries 5
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
 
       - name: Setup .NET 8
-        uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
+        uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68  # v6.0.0
         with:
           dotnet-version: 8.0.x
 
       - name: Setup .NET 10
-        uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
+        uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68  # v6.0.0
         with:
           dotnet-version: 10.0.x
 
@@ -63,13 +63,13 @@ jobs:
 
       - name: FOSSA analyze (upload)
         if: env.FOSSA_API_KEY != ''
-        uses: fossas/fossa-action@29693cc50323968e039056be419b32989fc5880c # v2.0.0
+        uses: fossas/fossa-action@29693cc50323968e039056be419b32989fc5880c  # v2.0.0
         with:
           api-key: ${{ secrets.FOSSA_API_KEY }}
 
       - name: FOSSA test (license + CVE gate)
         if: env.FOSSA_API_KEY != ''
-        uses: fossas/fossa-action@29693cc50323968e039056be419b32989fc5880c # v2.0.0
+        uses: fossas/fossa-action@29693cc50323968e039056be419b32989fc5880c  # v2.0.0
         with:
           api-key: ${{ secrets.FOSSA_API_KEY }}
           run-tests: true
@@ -78,7 +78,7 @@ jobs:
         run: dotnet pack UiPath.Caching.slnx -c Release --no-build -o packages /p:Version=${{ steps.version.outputs.value }}
 
       - name: Create GitHub Release
-        uses: softprops/action-gh-release@3d0d9888cb7fd7b750713d6e236d1fcb99157228 # v3.0.2
+        uses: softprops/action-gh-release@3d0d9888cb7fd7b750713d6e236d1fcb99157228  # v3.0.2
         with:
           generate_release_notes: true
           prerelease: ${{ contains(github.ref_name, '-') }}
@@ -88,21 +88,21 @@ jobs:
   # trusted publishing, Key Vault via a federated credential on the signing app.
   publish-nuget:
     needs: release
-    runs-on: ubuntu-latest
+    runs-on: uipath-ubuntu-latest
     environment: nuget
     permissions:
       contents: read
       id-token: write  # OIDC tokens for nuget.org trusted publishing and Azure federation
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
 
       - name: Setup .NET 8
-        uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
+        uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68  # v6.0.0
         with:
           dotnet-version: 8.0.x
 
       - name: Setup .NET 10
-        uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
+        uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68  # v6.0.0
         with:
           dotnet-version: 10.0.x
 
@@ -155,7 +155,7 @@ jobs:
 
       - name: Authenticate to nuget.org (OIDC trusted publishing)
         id: nuget-login
-        uses: NuGet/login@8d196754b4036150537f80ac539e15c2f1028841 # v1.2.0
+        uses: NuGet/login@8d196754b4036150537f80ac539e15c2f1028841  # v1.2.0
         with:
           user: ${{ secrets.NUGET_USER }}
 
@@ -166,18 +166,18 @@ jobs:
   # Only -alpha tags, gated by the PUBLISH_INTERNAL repo variable.
   publish-internal:
     needs: release
-    runs-on: ubuntu-latest
+    runs-on: uipath-ubuntu-latest
     if: vars.PUBLISH_INTERNAL == 'true' && contains(github.ref_name, '-alpha')
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
 
       - name: Setup .NET 8
-        uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
+        uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68  # v6.0.0
         with:
           dotnet-version: 8.0.x
 
       - name: Setup .NET 10
-        uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
+        uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68  # v6.0.0
         with:
           dotnet-version: 10.0.x
 
