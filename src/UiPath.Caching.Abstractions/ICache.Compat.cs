@@ -1,4 +1,4 @@
-namespace UiPath.Caching;
+﻿namespace UiPath.Caching;
 
 // Source-compatibility default interface methods for pre-CachePolicy call sites. Each forwards
 // to the policy-bearing overload with policy=null. Excluded from coverage — these are forwarders

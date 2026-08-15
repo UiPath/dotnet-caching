@@ -1,4 +1,6 @@
 using UiPath.Caching.Locking;
+using UiPath.Caching.Telemetry;
+using UiPath.Caching.Tests.Telemetry;
 
 namespace UiPath.Caching.Tests;
 
@@ -20,6 +22,7 @@ public class MultilayerCacheRehydrateTests(ITestContextAccessor testContextAcces
     private InMemoryRedisCacheOptions _options = default!;
     private CacheKey _cacheKey = default!;
     private TopicKey _topicKey = default!;
+    private RecordingTelemetryProvider _telemetry = default!;
     private MultilayerCache? _sut;
 
     private MultilayerCache Sut => _sut ??= _fixture.Create<MultilayerCache>();
@@ -318,6 +321,24 @@ public class MultilayerCacheRehydrateTests(ITestContextAccessor testContextAcces
             Arg.Any<CancellationToken>());
     }
 
+    [Fact]
+    public async Task Single_key_rehydrate_does_not_emit_a_batch_size_tag()
+    {
+        var token = testContextAccessor.Current.CancellationToken;
+        var aged = new TestCacheEntry<string?> { Value = "cached", Expiration = DateTimeOffset.UtcNow.AddMinutes(2) };
+        _innerCache.GetCacheEntryAsync<string>(_cacheKey, Arg.Any<CachePolicy?>(), Arg.Any<CancellationToken>()).Returns(aged);
+        _distributedLock.TryAcquireAsync(Arg.Any<string>(), Arg.Any<TimeSpan>(), Arg.Any<CancellationToken>())
+            .Returns(Substitute.For<IAsyncDisposable>());
+
+        await Sut.GetOrAddAsync(_cacheKey, _ => Task.FromResult<string?>("rehydrated"), RehydratePolicy(), token);
+        await Task.Delay(300, token);
+
+        _telemetry.Events.Should().NotBeEmpty("the rehydrate path must still emit telemetry");
+        _telemetry.Events.Should().AllSatisfy(e =>
+            (e.Properties?.ContainsKey("batch.size") ?? false).Should().BeFalse(
+                "single-key rehydrate telemetry must be unchanged by the set refactor"));
+    }
+
     private static async Task WaitForAsync(Func<bool> predicate, TimeSpan timeout, CancellationToken token)
     {
         var sw = System.Diagnostics.Stopwatch.StartNew();
@@ -342,6 +363,8 @@ public class MultilayerCacheRehydrateTests(ITestContextAccessor testContextAcces
         _memoryCache = _fixture.Freeze<global::Microsoft.Extensions.Caching.Memory.IMemoryCache>();
         _localLock = _fixture.Freeze<ILocalLock>();
         _distributedLock = _fixture.Freeze<IDistributedLock>();
+        _telemetry = new RecordingTelemetryProvider();
+        _fixture.Inject<ICachingTelemetryProvider>(_telemetry);
         _options = new InMemoryRedisCacheOptions
         {
             DefaultExpiration = Duration,

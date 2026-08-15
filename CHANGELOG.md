@@ -6,6 +6,38 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 
 ## [Unreleased]
 
+### Added
+
+- **Batch `GetOrAddAsync` with caller state.** `ICache`, `ICache<T>` and `Cache<T>` gained multi-key
+  `GetOrAddAsync` overloads that pair each key with an opaque caller state (`TState`) — a database id,
+  a request object, whatever identifies the entry in the caller's own vocabulary. The generator is
+  invoked at most once on the calling path, receiving only the states of the entries that missed every
+  cache layer, never the keys; results come back keyed by state, one entry per distinct requested
+  state, in first-occurrence order. Cache operations de-duplicate by `CacheKey` (one probe, one write
+  per distinct key); results de-duplicate by state — when two states share a key the generator is
+  asked once, about the first state seen for that key, and the value is reported under both. A state
+  the generator omits is returned as `default(T)` and left uncached, so the next call retries the
+  source. A caller whose keys are their own identity pairs each key with
+  itself (`TState = CacheKey`); the blocking `GetOrAdd` facade on `ICache<T>` accepts `CacheKey[]`
+  directly and does that pairing for you. On `MultilayerCache` the generator call is guarded by
+  a single composite lock derived from the missing key set, and proactive rehydration of hit keys is
+  coalesced into one background call that locks per key, so overlapping aging sets on different
+  nodes refresh each shared key once. Added to `ICache` as default interface methods, so existing
+  `ICache` implementations keep compiling; the `ICache<T>` overloads are **abstract** — see the
+  breaking note under **Changed**.
+
+### Changed
+
+- **BREAKING:** `ICache<T>` gains three **abstract** multi-key `GetOrAddAsync` members. They could not
+  ship as default interface methods: `ICache<T>` has no `GetCacheEntriesAsync`, so a default body
+  could not tell a miss from a cached null. This is **source- and binary-breaking** for any
+  hand-written `ICache<T>` implementation (test fakes, typically) — source-breaking because such a
+  type no longer compiles until the members are added, and binary-breaking because an already-compiled
+  assembly implementing `ICache<T>` throws `TypeLoadException` when loaded against the new
+  `UiPath.Caching.Abstractions`, with no recompile involved. Consumers that pick the new abstractions
+  up transitively must rebuild, not just restore. The `ICache` overloads are default interface
+  methods, so `ICache` implementations are unaffected.
+
 ## [1.2.0] - 2026-08-04
 
 ### Added

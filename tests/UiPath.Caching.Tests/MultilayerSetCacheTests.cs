@@ -26,7 +26,7 @@ public class MultilayerSetCacheTests
     {
         IReadOnlyCollection<string?> snapshot = members.ToList();
         l2.MembersAsync<string>(default, default, Ct)
-            .ReturnsForAnyArgs(_ => new ValueTask<IReadOnlyCollection<string?>>(snapshot));
+            .ReturnsForAnyArgs<IReadOnlyCollection<string?>>(_ => snapshot);
     }
 
     [Fact]
@@ -55,7 +55,7 @@ public class MultilayerSetCacheTests
     {
         var (sut, l2) = CreateSut();
         SetupMembers(l2, "a");
-        l2.AddAsync<string>(default, default(string)!, default, Ct).ReturnsForAnyArgs(_ => new ValueTask<bool>(true));
+        l2.AddAsync<string>(default, default(string)!, default, Ct).ReturnsForAnyArgs(_ => true);
 
         await sut.MembersAsync<string>("k", token: Ct);              // primes L1
         await sut.AddAsync("k", "b", token: Ct);                     // must patch L1, not evict it
@@ -72,7 +72,7 @@ public class MultilayerSetCacheTests
         var (sut, l2) = CreateSut();
         SetupMembers(l2, "a");
         // The batch overloads normalize into the DateTimeOffset one before hitting L2.
-        l2.AddAsync<string>(default, default(IEnumerable<string>)!, default(DateTimeOffset?), default(CachePolicy), Ct).ReturnsForAnyArgs(_ => new ValueTask<long>(2));
+        l2.AddAsync<string>(default, default!, default(DateTimeOffset?), default, Ct).ReturnsForAnyArgs(_ => 2L);
 
         await sut.MembersAsync<string>("k", token: Ct);              // primes L1
         await sut.AddAsync("k", (IEnumerable<string>)new[] { "b", "c" }, (CachePolicy?)null, Ct);
@@ -87,7 +87,7 @@ public class MultilayerSetCacheTests
     {
         var (sut, l2) = CreateSut();
         SetupMembers(l2, "a", "b");
-        l2.AddAsync<string>(default, default(string)!, default, Ct).ReturnsForAnyArgs(_ => new ValueTask<bool>(true));
+        l2.AddAsync<string>(default, default(string)!, default, Ct).ReturnsForAnyArgs(_ => true);
 
         await sut.AddAsync("k", "b", token: Ct);                     // no snapshot cached: must not create one
         var members = await sut.MembersAsync<string>("k", token: Ct); // must fetch the whole set from L2
@@ -101,7 +101,7 @@ public class MultilayerSetCacheTests
     {
         var (sut, l2) = CreateSut();
         SetupMembers(l2, "a", "b");
-        l2.PopAsync<string>(default, default(CachePolicy?), Ct).ReturnsForAnyArgs(_ => new ValueTask<string?>("a"));
+        l2.PopAsync<string>(default, default(CachePolicy?), Ct).ReturnsForAnyArgs<string?>(_ => "a");
 
         await sut.MembersAsync<string>("k", token: Ct);              // primes L1
         var popped = await sut.PopAsync<string>("k", token: Ct);
@@ -117,7 +117,7 @@ public class MultilayerSetCacheTests
     {
         var (sut, l2) = CreateSut();
         SetupMembers(l2, "a", "b");
-        l2.RemoveItemAsync<string>(default, default(string)!, Ct).ReturnsForAnyArgs(_ => new ValueTask<bool>(true));
+        l2.RemoveItemAsync<string>(default, default!, Ct).ReturnsForAnyArgs(_ => true);
 
         await sut.MembersAsync<string>("k", token: Ct);              // primes L1
         await sut.RemoveItemAsync("k", "a", Ct);
@@ -132,7 +132,7 @@ public class MultilayerSetCacheTests
     {
         var (sut, l2) = CreateSut();
         SetupMembers(l2, "a");
-        l2.RemoveAsync<string>(default, Ct).ReturnsForAnyArgs(_ => new ValueTask<bool>(true));
+        l2.RemoveAsync<string>(default, Ct).ReturnsForAnyArgs(_ => true);
 
         await sut.MembersAsync<string>("k", token: Ct);   // primes L1
         await sut.RemoveAsync<string>("k", Ct);
@@ -161,7 +161,7 @@ public class MultilayerSetCacheTests
     public async Task Reads_fall_through_to_inner_when_not_cached()
     {
         var (sut, l2) = CreateSut();
-        l2.CountAsync<string>(default, Ct).ReturnsForAnyArgs(_ => new ValueTask<long>(7));
+        l2.CountAsync<string>(default, Ct).ReturnsForAnyArgs(_ => 7L);
 
         (await sut.CountAsync<string>("k", Ct)).Should().Be(7);
         await l2.ReceivedWithAnyArgs(1).CountAsync<string>(default, Ct);
@@ -229,7 +229,7 @@ public class MultilayerSetCacheTests
     public async Task Disconnected_without_local_only_still_writes_through_to_inner()
     {
         var (sut, l2) = CreateMonitoredSut(connected: false, useLocalOnlyWhenDisconnected: false);
-        l2.AddAsync<string>(default, default(string)!, default, Ct).ReturnsForAnyArgs(_ => new ValueTask<bool>(true));
+        l2.AddAsync<string>(default, default(string)!, default, Ct).ReturnsForAnyArgs(_ => true);
 
         (await sut.AddAsync("k", "x", token: Ct)).Should().BeTrue();
 

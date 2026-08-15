@@ -27,6 +27,32 @@ public partial interface ICache<T>
         => GetOrAddAsync(cacheKey, _ => Task.FromResult(generator()), expiration, token).AsTask().GetAwaiter().GetResult();
 
     [ExcludeFromCodeCoverage]
+    KeyValuePair<CacheKey, T?>[] GetOrAdd(CacheKey[] cacheKeys, Func<CacheKey[], KeyValuePair<CacheKey, T?>[]> generator, CancellationToken token = default)
+        => GetOrAddAsync(
+                Array.ConvertAll(cacheKeys, k => new KeyValuePair<CacheKey, CacheKey>(k, k)),
+                (keys, _) => Task.FromResult(generator(keys)),
+                token)
+            .AsTask().GetAwaiter().GetResult();
+
+    [ExcludeFromCodeCoverage]
+    KeyValuePair<CacheKey, T?>[] GetOrAdd(CacheKey[] cacheKeys, Func<CacheKey[], KeyValuePair<CacheKey, T?>[]> generator, TimeSpan? expiration, CancellationToken token = default)
+        => GetOrAddAsync(
+                Array.ConvertAll(cacheKeys, k => new KeyValuePair<CacheKey, CacheKey>(k, k)),
+                (keys, _) => Task.FromResult(generator(keys)),
+                expiration,
+                token)
+            .AsTask().GetAwaiter().GetResult();
+
+    [ExcludeFromCodeCoverage]
+    KeyValuePair<CacheKey, T?>[] GetOrAdd(CacheKey[] cacheKeys, Func<CacheKey[], KeyValuePair<CacheKey, T?>[]> generator, DateTimeOffset? expiration, CancellationToken token = default)
+        => GetOrAddAsync(
+                Array.ConvertAll(cacheKeys, k => new KeyValuePair<CacheKey, CacheKey>(k, k)),
+                (keys, _) => Task.FromResult(generator(keys)),
+                expiration,
+                token)
+            .AsTask().GetAwaiter().GetResult();
+
+    [ExcludeFromCodeCoverage]
     bool Remove(CacheKey cacheKey, CancellationToken token = default)
         => RemoveAsync(cacheKey, token).AsTask().GetAwaiter().GetResult();
 

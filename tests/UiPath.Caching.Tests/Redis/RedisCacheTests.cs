@@ -768,6 +768,51 @@ public class RedisCacheTests(ITestContextAccessor testContextAccessor) : IAsyncL
     }
 
     [Fact]
+    public async Task Batch_GetOrAdd_policy_FactoryTimeout_cancels_slow_generator()
+    {
+        var token = testContextAccessor.Current.CancellationToken;
+        var policy = new CachePolicy { FactoryTimeout = TimeSpan.FromMilliseconds(50) };
+        var entries = new KeyValuePair<CacheKey, string>[] { new(_cacheKey, "one"), new(_multiKey, "two") };
+        static async Task<KeyValuePair<string, string?>[]> Generator(string[] _, CancellationToken ct)
+        {
+            await Task.Delay(Timeout.InfiniteTimeSpan, ct);
+            return [];
+        }
+
+        var call = ((ICache)Sut).GetOrAddAsync<string, string>(entries, Generator, policy, token).AsTask();
+
+        var finished = await Task.WhenAny(call, Task.Delay(TimeSpan.FromSeconds(10), token));
+        finished.Should().BeSameAs(call, "the batch generator must be bounded by CachePolicy.FactoryTimeout");
+        var act = async () => await call;
+        await act.Should().ThrowAsync<TimeoutException>();
+    }
+
+    [Fact]
+    public async Task Batch_GetOrAdd_without_FactoryTimeout_returns_generator_values()
+    {
+        var token = testContextAccessor.Current.CancellationToken;
+        var policy = new CachePolicy { FactoryTimeout = null };
+        var entries = new KeyValuePair<CacheKey, string>[] { new(_cacheKey, "one"), new(_multiKey, "two") };
+        var calls = 0;
+        Task<KeyValuePair<string, string?>[]> Generator(string[] states, CancellationToken _)
+        {
+            Interlocked.Increment(ref calls);
+            return Task.FromResult(Array.ConvertAll(states, s => new KeyValuePair<string, string?>(s, s + "-value")));
+        }
+
+        var call = ((ICache)Sut).GetOrAddAsync<string, string>(entries, Generator, policy, token).AsTask();
+
+        var finished = await Task.WhenAny(call, Task.Delay(TimeSpan.FromSeconds(10), token));
+        finished.Should().BeSameAs(call, "an untimed batch generator must not be cut short");
+        var actual = await call;
+
+        calls.Should().Be(1);
+        actual.Should().Equal(
+            new[] { new KeyValuePair<string, string?>("one", "one-value"), new KeyValuePair<string, string?>("two", "two-value") },
+            "the untimed path still projects the generator's values onto the caller's states");
+    }
+
+    [Fact]
     public async Task GetOrAdd_key_expiration_no_default_expiration()
     {
         _cacheOptions.DefaultExpiration = null;

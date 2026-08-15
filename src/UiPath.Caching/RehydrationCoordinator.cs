@@ -1,4 +1,5 @@
 using System.Collections.Concurrent;
+using System.Globalization;
 using UiPath.Caching.Locking;
 using UiPath.Caching.Telemetry;
 
@@ -23,6 +24,7 @@ internal sealed class RehydrationCoordinator(
     private const string TagProfile = "profile";
     private const string TagReason = "reason";
     private const string TagExceptionType = "exception_type";
+    private const string TagBatchSize = "batch.size";
     private const string ReasonNotAcquired = "not_acquired";
     private const string LockKeyPrefix = "rehydrate:";
     private const double MinTimeoutMs = 1000.0;
@@ -38,7 +40,28 @@ internal sealed class RehydrationCoordinator(
         CachePolicy? policy,
         TimeSpan duration,
         string kind,
-        Func<CancellationToken, ValueTask> rehydrateAsync)
+        Func<CancellationToken, ValueTask> rehydrateAsync) =>
+        TryTriggerCore(
+            [(cacheKey, entryExpiration)],
+            policy,
+            duration,
+            kind,
+            (_, ct) => rehydrateAsync(ct));
+
+    public bool TryTriggerBatch(
+        IReadOnlyList<(CacheKey Key, DateTimeOffset Expiration)> candidates,
+        CachePolicy? policy,
+        TimeSpan duration,
+        string kind,
+        Func<CacheKey[], CancellationToken, ValueTask> rehydrateAsync) =>
+        TryTriggerCore(candidates, policy, duration, kind, rehydrateAsync);
+
+    private bool TryTriggerCore(
+        IReadOnlyList<(CacheKey Key, DateTimeOffset Expiration)> candidates,
+        CachePolicy? policy,
+        TimeSpan duration,
+        string kind,
+        Func<CacheKey[], CancellationToken, ValueTask> rehydrateAsync)
     {
         if (policy?.RehydrateEnabled != true || policy.Rehydrate is null)
         {
@@ -48,140 +71,223 @@ internal sealed class RehydrationCoordinator(
         {
             return false;
         }
-        var remaining = entryExpiration - clock.UtcNow;
-        if (remaining <= TimeSpan.Zero)
-        {
-            return false;
-        }
-        var elapsedFraction = (duration - remaining).TotalMilliseconds / duration.TotalMilliseconds;
-        if (elapsedFraction < policy.Rehydrate.Threshold)
+
+        var reserved = ReserveKeysPastThreshold(candidates, policy.Rehydrate.Threshold, duration);
+        if (reserved.Count == 0)
         {
             return false;
         }
 
-        if (!_inFlight.TryAdd(cacheKey.Name, 0))
-        {
-            return false;
-        }
-
-        _ = SpawnAsync(cacheKey, policy.Rehydrate, duration, kind, rehydrateAsync);
+        var reservedKeys = reserved.ToArray();
+        _ = SpawnAsync(reservedKeys, policy.Rehydrate, duration, kind, rehydrateAsync);
         return true;
     }
 
+    /// <summary>Reserves the candidates past <paramref name="threshold"/> that this coordinator can claim.</summary>
+    private List<CacheKey> ReserveKeysPastThreshold(
+        IReadOnlyList<(CacheKey Key, DateTimeOffset Expiration)> candidates,
+        double threshold,
+        TimeSpan duration)
+    {
+        var reserved = new List<CacheKey>(candidates.Count);
+        foreach (var (key, entryExpiration) in candidates)
+        {
+            var remaining = entryExpiration - clock.UtcNow;
+            if (remaining <= TimeSpan.Zero)
+            {
+                continue;
+            }
+            var elapsedFraction = (duration - remaining).TotalMilliseconds / duration.TotalMilliseconds;
+            if (elapsedFraction < threshold)
+            {
+                continue;
+            }
+            if (!_inFlight.TryAdd(key.Name, 0))
+            {
+                continue;
+            }
+            reserved.Add(key);
+        }
+        return reserved;
+    }
+
     private async Task SpawnAsync(
-        CacheKey cacheKey,
+        CacheKey[] reservedKeys,
         RehydrateOptions options,
         TimeSpan duration,
         string kind,
-        Func<CancellationToken, ValueTask> rehydrateAsync)
+        Func<CacheKey[], CancellationToken, ValueTask> rehydrateAsync)
     {
         var profile = options.Name ?? string.Empty;
-        IAsyncDisposable? handle = null;
+        var groupKey = CompositeCacheKey.For(reservedKeys);
+        var keys = Array.Empty<CacheKey>();
+        List<IAsyncDisposable>? handles = null;
         try
         {
-            var failureCount = ReadFailureCount(cacheKey.Name, options.MaxCooldown);
+            var failureCount = reservedKeys.Max(k => ReadFailureCount(k.Name, options.MaxCooldown));
             var cooldown = ComputeCooldown(options.BaseCooldown, options.MaxCooldown, failureCount);
             var timeoutMs = Math.Min(int.MaxValue, Math.Max(MinTimeoutMs, options.TimeoutFraction * duration.TotalMilliseconds));
             var factoryTimeout = TimeSpan.FromMilliseconds(timeoutMs);
-            // Failure paths leave handle=null so the lock holds for factoryTimeout+cooldown, which
+            // Failure paths leave handles=null so the locks hold for factoryTimeout+cooldown, which
             // gives BaseCooldown/MaxCooldown real retry-cadence control regardless of factory outcome.
             var lockExpiry = SafeAdd(factoryTimeout, cooldown);
-            var lockKey = LockKeyPrefix + lockKeyStrategy.GetLockKey(cacheKey);
-            try
+
+            (keys, handles) = await AcquirePerKeyLocksAsync(reservedKeys, lockExpiry, factoryTimeout).ConfigureAwait(false);
+            if (keys.Length == 0)
             {
-                handle = await FactoryTimeout.RunAsync<IAsyncDisposable?>(
-                    ct => distributedLock.TryAcquireAsync(lockKey, lockExpiry, ct).AsTask(),
-                    factoryTimeout,
-                    cacheKey,
-                    cacheName,
-                    telemetry,
-                    CancellationToken.None,
-                    source: FactoryTimeout.SourceRehydrateLock).ConfigureAwait(false);
-            }
-            catch (TimeoutException)
-            {
-                handle = null;
-            }
-            if (handle is null)
-            {
-                telemetry.TrackEvent(EventDeduped,
-                [
-                    new(TagCacheName, cacheName),
-                    new(TagCacheKey, cacheKey.Name),
-                    new(TagKind, kind),
-                    new(TagProfile, profile),
-                    new(TagReason, ReasonNotAcquired),
-                ]);
+                telemetry.TrackEvent(EventDeduped, Tags(KeyValuePair.Create(TagReason, ReasonNotAcquired)));
                 return;
             }
+            groupKey = CompositeCacheKey.For(keys);
 
-            telemetry.TrackEvent(EventTriggered,
-            [
-                new(TagCacheName, cacheName),
-                new(TagCacheKey, cacheKey.Name),
-                new(TagKind, kind),
-                new(TagProfile, profile),
-            ]);
+            telemetry.TrackEvent(EventTriggered, Tags());
 
             using var cts = new CancellationTokenSource(factoryTimeout);
             try
             {
-                await rehydrateAsync(cts.Token).ConfigureAwait(false);
-                _failureCount.TryRemove(cacheKey.Name, out _);
-                telemetry.TrackEvent(EventSucceeded,
-                [
-                    new(TagCacheName, cacheName),
-                    new(TagCacheKey, cacheKey.Name),
-                    new(TagKind, kind),
-                    new(TagProfile, profile),
-                ]);
-                await handle.DisposeAsync().ConfigureAwait(false);
-                handle = null;
+                await rehydrateAsync(keys, cts.Token).ConfigureAwait(false);
+                ClearFailureCounts(keys);
+                telemetry.TrackEvent(EventSucceeded, Tags());
+                await ReleaseLocksAsync(handles, groupKey).ConfigureAwait(false);
+                handles = null;
             }
             catch (OperationCanceledException) when (cts.IsCancellationRequested)
             {
-                IncrementFailureCount(cacheKey.Name);
-                telemetry.TrackEvent(EventTimedOut,
-                [
-                    new(TagCacheName, cacheName),
-                    new(TagCacheKey, cacheKey.Name),
-                    new(TagKind, kind),
-                    new(TagProfile, profile),
-                ]);
-                handle = null;
+                IncrementFailureCounts(keys);
+                telemetry.TrackEvent(EventTimedOut, Tags());
+                handles = null;
             }
             catch (Exception ex)
             {
-                IncrementFailureCount(cacheKey.Name);
-                telemetry.TrackEvent(EventFailed,
-                [
-                    new(TagCacheName, cacheName),
-                    new(TagCacheKey, cacheKey.Name),
-                    new(TagKind, kind),
-                    new(TagProfile, profile),
-                    new(TagExceptionType, ex.GetType().Name),
-                ]);
-                handle = null;
+                IncrementFailureCounts(keys);
+                telemetry.TrackEvent(EventFailed, Tags(KeyValuePair.Create(TagExceptionType, ex.GetType().Name)));
+                handles = null;
             }
         }
         catch (Exception ex)
         {
-            logger.LogError(ex, "Rehydrate spawn failed for cache key {CacheKey}", cacheKey.Name);
+            logger.LogError(ex, "Rehydrate spawn failed for cache key {CacheKey}", groupKey.Name);
         }
         finally
         {
-            _inFlight.TryRemove(cacheKey.Name, out _);
-            if (handle is not null)
+            ReleaseInFlight(reservedKeys);
+            if (handles is not null)
             {
-                try
-                {
-                    await handle.DisposeAsync().ConfigureAwait(false);
-                }
-                catch (Exception ex)
-                {
-                    logger.LogError(ex, "Rehydrate cleanup dispose failed for cache key {CacheKey}", cacheKey.Name);
-                }
+                await ReleaseLocksAsync(handles, groupKey).ConfigureAwait(false);
             }
+        }
+
+        KeyValuePair<string, string>[] Tags(params KeyValuePair<string, string>[] extra)
+        {
+            var size = keys.Length == 0 ? reservedKeys.Length : keys.Length;
+            var tags = new List<KeyValuePair<string, string>>(5 + extra.Length)
+            {
+                new(TagCacheName, cacheName),
+                new(TagCacheKey, groupKey.Name),
+                new(TagKind, kind),
+                new(TagProfile, profile),
+            };
+            if (size > 1)
+            {
+                tags.Add(new(TagBatchSize, size.ToString(CultureInfo.InvariantCulture)));
+            }
+            tags.AddRange(extra);
+            return tags.ToArray();
+        }
+    }
+
+    /// <summary>Takes one lock per reserved key and returns only the keys whose lock was won.</summary>
+    private async Task<(CacheKey[] Keys, List<IAsyncDisposable> Handles)> AcquirePerKeyLocksAsync(
+        CacheKey[] reservedKeys,
+        TimeSpan lockExpiry,
+        TimeSpan factoryTimeout)
+    {
+        var attempts = new Task<IAsyncDisposable?>[reservedKeys.Length];
+        for (var i = 0; i < reservedKeys.Length; i++)
+        {
+            attempts[i] = TryAcquireOneAsync(reservedKeys[i], lockExpiry, factoryTimeout);
+        }
+        var results = await Task.WhenAll(attempts).ConfigureAwait(false);
+
+        var keys = new List<CacheKey>(reservedKeys.Length);
+        var handles = new List<IAsyncDisposable>(reservedKeys.Length);
+        for (var i = 0; i < reservedKeys.Length; i++)
+        {
+            if (results[i] is { } handle)
+            {
+                keys.Add(reservedKeys[i]);
+                handles.Add(handle);
+            }
+        }
+        return (keys.ToArray(), handles);
+    }
+
+    private async Task<IAsyncDisposable?> TryAcquireOneAsync(CacheKey key, TimeSpan lockExpiry, TimeSpan factoryTimeout)
+    {
+        var lockKey = LockKeyPrefix + lockKeyStrategy.GetLockKey(key);
+        try
+        {
+            return await FactoryTimeout.RunAsync<IAsyncDisposable?>(
+                ct => distributedLock.TryAcquireAsync(lockKey, lockExpiry, ct).AsTask(),
+                factoryTimeout,
+                key,
+                cacheName,
+                telemetry,
+                CancellationToken.None,
+                source: FactoryTimeout.SourceRehydrateLock).ConfigureAwait(false);
+        }
+        catch (TimeoutException)
+        {
+            return null;
+        }
+        catch (Exception ex)
+        {
+            logger.LogError(ex, "Rehydrate lock acquire failed for cache key {CacheKey}", key.Name);
+            return null;
+        }
+    }
+
+    private async ValueTask ReleaseLocksAsync(List<IAsyncDisposable> handles, CacheKey groupKey)
+    {
+        foreach (var handle in handles)
+        {
+            await DisposeLockQuietlyAsync(handle, groupKey).ConfigureAwait(false);
+        }
+    }
+
+    private void ClearFailureCounts(CacheKey[] keys)
+    {
+        foreach (var key in keys)
+        {
+            _failureCount.TryRemove(key.Name, out _);
+        }
+    }
+
+    private void IncrementFailureCounts(CacheKey[] keys)
+    {
+        foreach (var key in keys)
+        {
+            IncrementFailureCount(key.Name);
+        }
+    }
+
+    private void ReleaseInFlight(CacheKey[] keys)
+    {
+        foreach (var key in keys)
+        {
+            _inFlight.TryRemove(key.Name, out _);
+        }
+    }
+
+    private async ValueTask DisposeLockQuietlyAsync(IAsyncDisposable handle, CacheKey groupKey)
+    {
+        try
+        {
+            await handle.DisposeAsync().ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            logger.LogError(ex, "Rehydrate cleanup dispose failed for cache key {CacheKey}", groupKey.Name);
         }
     }
 

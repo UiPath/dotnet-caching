@@ -2,24 +2,47 @@ using UiPath.Caching.Telemetry;
 
 namespace UiPath.Caching.Tests.Telemetry;
 
+/// <summary>Records telemetry for assertions; access is serialized and readers get an immutable snapshot.</summary>
 internal sealed class RecordingTelemetryProvider : ICachingTelemetryProvider
 {
-    public List<EventRecord> Events { get; } = new();
-    public List<MetricRecord> Metrics { get; } = new();
-    public List<DependencyRecord> Dependencies { get; } = new();
-    public List<ExceptionRecord> Exceptions { get; } = new();
+    private readonly object _gate = new();
+    private readonly List<EventRecord> _events = [];
+    private readonly List<MetricRecord> _metrics = [];
+    private readonly List<DependencyRecord> _dependencies = [];
+    private readonly List<ExceptionRecord> _exceptions = [];
+
+    public IReadOnlyList<EventRecord> Events => Snapshot(_events);
+    public IReadOnlyList<MetricRecord> Metrics => Snapshot(_metrics);
+    public IReadOnlyList<DependencyRecord> Dependencies => Snapshot(_dependencies);
+    public IReadOnlyList<ExceptionRecord> Exceptions => Snapshot(_exceptions);
 
     public void TrackDependency(string type, string target, string name, string data, DateTimeOffset startTime, TimeSpan duration, string resultCode, bool success, ReadOnlySpan<KeyValuePair<string, string>> properties = default, ReadOnlySpan<KeyValuePair<string, double>> metrics = default) =>
-        Dependencies.Add(new(type, target, name, data, startTime, duration, resultCode, success, TelemetryTags.ToDictionaryOrNull(properties), TelemetryTags.ToDictionaryOrNull(metrics)));
+        Record(_dependencies, new(type, target, name, data, startTime, duration, resultCode, success, TelemetryTags.ToDictionaryOrNull(properties), TelemetryTags.ToDictionaryOrNull(metrics)));
 
     public void TrackEvent(string eventName, ReadOnlySpan<KeyValuePair<string, string>> properties = default, ReadOnlySpan<KeyValuePair<string, double>> metrics = default) =>
-        Events.Add(new(eventName, TelemetryTags.ToDictionaryOrNull(properties), TelemetryTags.ToDictionaryOrNull(metrics)));
+        Record(_events, new(eventName, TelemetryTags.ToDictionaryOrNull(properties), TelemetryTags.ToDictionaryOrNull(metrics)));
 
     public void TrackException(Exception ex, ReadOnlySpan<KeyValuePair<string, string>> properties = default, ReadOnlySpan<KeyValuePair<string, double>> metrics = default) =>
-        Exceptions.Add(new(ex, TelemetryTags.ToDictionaryOrNull(properties), TelemetryTags.ToDictionaryOrNull(metrics)));
+        Record(_exceptions, new(ex, TelemetryTags.ToDictionaryOrNull(properties), TelemetryTags.ToDictionaryOrNull(metrics)));
 
     public void TrackMetric(string name, double value, ReadOnlySpan<KeyValuePair<string, string>> properties = default) =>
-        Metrics.Add(new(name, value, TelemetryTags.ToDictionaryOrNull(properties)));
+        Record(_metrics, new(name, value, TelemetryTags.ToDictionaryOrNull(properties)));
+
+    private void Record<T>(List<T> target, T record)
+    {
+        lock (_gate)
+        {
+            target.Add(record);
+        }
+    }
+
+    private T[] Snapshot<T>(List<T> source)
+    {
+        lock (_gate)
+        {
+            return source.ToArray();
+        }
+    }
 }
 
 internal sealed record EventRecord(string Name, Dictionary<string, string>? Properties, Dictionary<string, double>? Metrics);

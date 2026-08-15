@@ -7,9 +7,9 @@ moving parts in action; this page explains why they are shaped the way they are.
 Each section closes with a pointer to the place that carries the operational
 detail.
 
-The seven concepts covered here — providers, layers, topics, locks, policies,
-telemetry, and the two API surfaces — are largely independent of one another,
-but they compose. A single `GetOrAddAsync` call can touch all of them: the
+The eight concepts covered here — providers, layers, topics, locks, policies,
+telemetry, the two API surfaces, and batch get-or-add — are largely independent
+of one another, but they compose. A single `GetOrAddAsync` call can touch all of them: the
 provider resolves which tiers to read and write, the layers determine what is
 already in memory vs. Redis, topics keep remote nodes in sync after the write,
 locks prevent redundant generator runs, the policy governs TTLs and rehydration,
@@ -458,3 +458,46 @@ to call `factory.Users()` on every request — the result is the same singleton
 cache instance each time.
 
 See also: [reference/interfaces.md](reference/interfaces.md), [recipes/factory-extension-methods.md](recipes/factory-extension-methods.md), [recipes/mediatr-pipeline-behavior.md](recipes/mediatr-pipeline-behavior.md).
+
+---
+
+## Batch get-or-add
+
+`GetOrAddAsync(entries, generator, …)` pairs each key with an opaque caller state (`TState`) — a
+database id, a request object, whatever names the entry in the caller's own vocabulary — probes every
+key once, then invokes the generator **at most once on the calling path** with **only the states** of
+the entries that missed both cache layers, never the keys — and not at all when nothing missed. A generator that fetches from a database or an HTTP API therefore
+makes one round trip for N misses instead of N, and no call site parses a cache key to recover an id.
+
+De-duplication is asymmetric: **cache operations de-duplicate by `CacheKey`** — one probe, one lock
+participant, one write per distinct key — while **results de-duplicate by state** — one entry per
+distinct requested state, in first-occurrence request order. When two entries carry different states
+but the same key, the generator is asked once, about the first state seen for that key, and the value
+it returns is reported under both states. The converse — one state paired with two different keys — is
+caller error: the first occurrence wins and the second key is dropped entirely, never probed or written.
+
+Semantics worth knowing:
+
+- A state the generator does **not** return comes back as `default(T)` and is **not** cached, so the
+  next call retries the source. Return an explicit `null` instead if you want the miss remembered
+  (subject to `CacheNullValues`).
+- States the generator returns that were not requested are ignored.
+- `TState` is used as a dictionary key when matching the generator's output back to requests, so it
+  must have the equality the caller intends. `where TState : notnull` is enforceable; sane
+  `Equals`/`GetHashCode` semantics are not.
+- Stampede protection uses **one lock derived from the missing key set**. Two concurrent batches
+  with identical miss sets run the generator once; batches whose miss sets differ by even one key
+  take different locks and both run it. A batch with a single miss locks on that key, so it
+  serializes with concurrent single-key `GetOrAddAsync` calls.
+- When rehydration is enabled, hit keys past their threshold are refreshed by **one** background
+  generator call rather than one per key. That background call and the calling-path generator call
+  for misses can run concurrently, over disjoint key sets, so the generator must be safe to call
+  concurrently with itself. Unlike the fill path, rehydration takes **one distributed lock per key**,
+  so overlapping-but-unequal aging sets on different nodes still refresh each shared key once.
+- Keys de-duplicate on the **strategy-mapped** key. Two caller keys that an `ICacheKeyStrategy` maps
+  onto the same cache key collapse to one probe, one generator request and one write.
+
+Callers whose keys already are their identity can skip the state pairing via a key-only extension
+method — see [recipes/batch-get-or-add.md](recipes/batch-get-or-add.md#keys-you-already-own).
+
+See also: [reference/interfaces.md](reference/interfaces.md), [recipes/batch-get-or-add.md](recipes/batch-get-or-add.md), [how-to/resilience.md#stampede-protection](how-to/resilience.md#stampede-protection).

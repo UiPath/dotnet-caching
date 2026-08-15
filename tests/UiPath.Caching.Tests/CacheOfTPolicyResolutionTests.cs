@@ -27,7 +27,7 @@ public class CacheOfTPolicyResolutionTests(ITestContextAccessor testContextAcces
     }
 
     [Fact]
-    public void Policy_resolved_at_construction_not_per_call()
+    public async Task Policy_resolved_at_construction_not_per_call()
     {
         var policyFactory = Substitute.For<ICachePolicyFactory>();
         policyFactory.Resolve(default!).ReturnsForAnyArgs(new CachePolicy());
@@ -37,9 +37,9 @@ public class CacheOfTPolicyResolutionTests(ITestContextAccessor testContextAcces
         policyFactory.ClearReceivedCalls();
 
         var token = testContextAccessor.Current.CancellationToken;
-        _ = sut.GetAsync("k", token);
-        _ = sut.SetAsync("k", new MyService(), token);
-        _ = sut.ContainsAsync("k", token);
+        await sut.GetAsync("k", token);
+        await sut.SetAsync("k", new MyService(), token);
+        await sut.ContainsAsync("k", token);
 
         policyFactory.DidNotReceiveWithAnyArgs().Resolve(default!);
     }

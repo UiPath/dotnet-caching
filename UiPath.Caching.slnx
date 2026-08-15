@@ -9,18 +9,16 @@
     <File Path="NuGet.Config" />
     <File Path="README.md" />
   </Folder>
-  <Project Path="src/UiPath.Caching.Abstractions/UiPath.Caching.Abstractions.csproj" />
-  <Project Path="src/UiPath.Caching/UiPath.Caching.csproj" />
-  <Project Path="src/UiPath.Caching.Polly/UiPath.Caching.Polly.csproj" />
-  <Project Path="src/UiPath.Caching.CloudEvents/UiPath.Caching.CloudEvents.csproj" />
-  <Project Path="src/UiPath.Caching.Queue/UiPath.Caching.Queue.csproj" />
-  <Project Path="src/UiPath.Caching.Azure/UiPath.Caching.Azure.csproj" />
-  <Project Path="tests/UiPath.Caching.Tests/UiPath.Caching.Tests.csproj" />
-  <Project Path="samples/UiPath.Caching.Sample/UiPath.Caching.Sample.csproj" />
+  <Project Path="benchmarks/UiPath.Caching.Benchmarks/UiPath.Caching.Benchmarks.csproj" />
   <Project Path="samples/UiPath.Caching.Sample.AppHost/UiPath.Caching.Sample.AppHost.csproj" />
   <Project Path="samples/UiPath.Caching.Sample.ServiceDefaults/UiPath.Caching.Sample.ServiceDefaults.csproj" />
-  <Folder Name="/src/">
-    <Project Path="src/UiPath.Caching.OpenTelemetry/UiPath.Caching.OpenTelemetry.csproj" />
-  </Folder>
-  <Project Path="benchmarks/UiPath.Caching.Benchmarks/UiPath.Caching.Benchmarks.csproj" />
+  <Project Path="samples/UiPath.Caching.Sample/UiPath.Caching.Sample.csproj" />
+  <Project Path="src/UiPath.Caching.Abstractions/UiPath.Caching.Abstractions.csproj" />
+  <Project Path="src/UiPath.Caching.Azure/UiPath.Caching.Azure.csproj" />
+  <Project Path="src/UiPath.Caching.CloudEvents/UiPath.Caching.CloudEvents.csproj" />
+  <Project Path="src/UiPath.Caching.OpenTelemetry/UiPath.Caching.OpenTelemetry.csproj" />
+  <Project Path="src/UiPath.Caching.Polly/UiPath.Caching.Polly.csproj" />
+  <Project Path="src/UiPath.Caching.Queue/UiPath.Caching.Queue.csproj" />
+  <Project Path="src/UiPath.Caching/UiPath.Caching.csproj" />
+  <Project Path="tests/UiPath.Caching.Tests/UiPath.Caching.Tests.csproj" />
 </Solution>
