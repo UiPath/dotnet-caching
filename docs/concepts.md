@@ -38,6 +38,13 @@ any application-level plumbing. The higher-level concepts of L1/L2 tiers and
 topics are described in their own sections below; what matters here is that
 `InMemoryRedis` is the composition that ties them together.
 
+"Automatically" is literal: `AddInMemoryRedis()` calls `AddBroadcast()` for you, so
+broadcast is on whether or not you call `AddBroadcast()` yourself, and a code-only
+`AddBroadcast(enabled: false)` does not stick. To turn it off, or to keep L1+L2 while
+using a transport other than Redis Streams (which matters against Redis-compatible
+backends that lack `XREADGROUP`), see
+[how-to/broadcast.md](how-to/broadcast.md#enabling-and-disabling-broadcast).
+
 `Redis` is the provider to choose when you want every read and write to go
 straight to Redis and never be fronted by an in-process copy. The typical reason
 is footprint: if cached values are large or numerous enough that duplicating them

@@ -1,4 +1,4 @@
-using System.Threading.Channels;
+﻿using System.Threading.Channels;
 using UiPath.Caching.Telemetry;
 
 namespace UiPath.Caching.Broadcast.Redis;
@@ -25,6 +25,9 @@ internal sealed partial class RedisStreamSubjectWriter<T> : IDisposable
     private readonly CancellationToken _cancelationToken;
     private readonly IFetchWaiter _waiter;
     private RedisValue _lastId = StreamPosition.NewMessages;
+    private readonly SemaphoreSlim _retryGate = new(0, 1);
+    private int _consecutiveFailures;
+    private volatile bool _unsupportedCommand;
 
     public RedisStreamSubjectWriter(
         RedisStreamContext context,
@@ -49,6 +52,8 @@ internal sealed partial class RedisStreamSubjectWriter<T> : IDisposable
         _waiter = waiter;
         _stopTokenSource = CancellationTokenSource.CreateLinkedTokenSource(stopToken);
         _cancelationToken = _stopTokenSource.Token;
+        _connectionState.OnReconnected += OnConnectionRecovered;
+        _connectionState.OnConnectionRestored += OnConnectionRecovered;
         FetchTask = Task.Run(FetchLoop, _cancelationToken);
     }
 
@@ -59,9 +64,35 @@ internal sealed partial class RedisStreamSubjectWriter<T> : IDisposable
             return;
         }
         _disposed = true;
+        _connectionState.OnReconnected -= OnConnectionRecovered;
+        _connectionState.OnConnectionRestored -= OnConnectionRecovered;
         _stopTokenSource?.Cancel();
         _stopTokenSource?.Dispose();
+        _retryGate.Dispose();
         _writer.TryComplete();
+    }
+
+    private void OnConnectionRecovered(object? sender, EventArgs e) => ReleaseRetryGate();
+
+    private void ReleaseRetryGate()
+    {
+        if (_disposed)
+        {
+            return;
+        }
+
+        try
+        {
+            _retryGate.Release();
+        }
+        catch (SemaphoreFullException)
+        {
+            // A wake-up is already pending; collapsing to one is the desired behavior.
+        }
+        catch (ObjectDisposedException)
+        {
+            // Disposed concurrently; there is no loop left to wake.
+        }
     }
 
     internal Task FetchTask { get; }
@@ -119,6 +150,13 @@ internal sealed partial class RedisStreamSubjectWriter<T> : IDisposable
             StreamConstants.UndeliveredMessages,
             _context.PollBatchSize).ConfigureAwait(false);
 
+        _consecutiveFailures = 0;
+        if (_unsupportedCommand)
+        {
+            _unsupportedCommand = false;
+            LogStreamsSupportRecovered(_context.Topic);
+        }
+
         if (events.Length > 0)
         {
             await DispatchEventsAsync(events).ConfigureAwait(false);
@@ -135,6 +173,18 @@ internal sealed partial class RedisStreamSubjectWriter<T> : IDisposable
         {
             LogReadingStopped(_context.Topic, _context.ConsumerGroup, id);
             return false;
+        }
+
+        if (IsUnsupportedCommand(ex))
+        {
+            if (!_unsupportedCommand)
+            {
+                _unsupportedCommand = true;
+                LogStreamsUnsupported(ex, _context.Topic);
+            }
+
+            await WaitForRetryAsync(StreamConstants.MaxErrorBackoff).ConfigureAwait(false);
+            return true;
         }
 
         if (ex.Message.StartsWith("NOGROUP", StringComparison.OrdinalIgnoreCase))
@@ -163,8 +213,40 @@ internal sealed partial class RedisStreamSubjectWriter<T> : IDisposable
            LogFetchLoopError(ex);
         }
 
-        await _waiter.WaitAsync(_cancelationToken).ConfigureAwait(false);
+        await BackoffAsync().ConfigureAwait(false);
         return true;
+    }
+
+    private static bool IsUnsupportedCommand(Exception ex) =>
+        ex is RedisCommandException ||
+        (ex is RedisServerException &&
+         ex.Message.Contains(StreamConstants.UnknownCommandErrorMessage, StringComparison.OrdinalIgnoreCase));
+
+    private Task BackoffAsync()
+    {
+        var failures = ++_consecutiveFailures;
+        if (failures <= StreamConstants.ErrorBackoffThreshold)
+        {
+            return _waiter.WaitAsync(_cancelationToken);
+        }
+
+        var exponent = Math.Min(failures - StreamConstants.ErrorBackoffThreshold, 16);
+        var scaled = _context.PollInterval.Multiply(Math.Pow(2, exponent));
+        var delay = scaled > StreamConstants.MaxErrorBackoff ? StreamConstants.MaxErrorBackoff : scaled;
+        LogFetchLoopBackoff(failures, delay);
+        return WaitForRetryAsync(delay);
+    }
+
+    private async Task WaitForRetryAsync(TimeSpan delay)
+    {
+        try
+        {
+            await _retryGate.WaitAsync(delay, _cancelationToken).ConfigureAwait(false);
+        }
+        catch (ObjectDisposedException)
+        {
+            // Disposed concurrently with the wait; treat as a wake-up so the loop observes disposal.
+        }
     }
 
     private async Task DispatchEventsAsync(StreamEntry[] events)
@@ -303,6 +385,17 @@ internal sealed partial class RedisStreamSubjectWriter<T> : IDisposable
 
     [LoggerMessage(Level = LogLevel.Error, Message = "Fetch events loop error")]
     private partial void LogFetchLoopError(Exception ex);
+
+    [LoggerMessage(
+        Level = LogLevel.Critical,
+        Message = "Redis Streams reads are not supported by the server for topic {Topic}. This node will not receive cross-node cache invalidations over Streams. Retrying slowly in case the connection moves to a server that supports XREADGROUP; to fix it now switch to Pub/Sub (DefaultTopic: RedisPubSub) or disable broadcast.")]
+    private partial void LogStreamsUnsupported(Exception ex, RedisKey topic);
+
+    [LoggerMessage(Level = LogLevel.Information, Message = "Redis Streams reads recovered for topic {Topic}; resuming normal polling.")]
+    private partial void LogStreamsSupportRecovered(RedisKey topic);
+
+    [LoggerMessage(Level = LogLevel.Warning, Message = "Fetch events loop backing off for {Delay} after {Failures} consecutive failures")]
+    private partial void LogFetchLoopBackoff(int failures, TimeSpan delay);
 
     [LoggerMessage(Level = LogLevel.Trace, Message = "Event from current source. Id {EventId}  Topic : {Topic}, StreamId : {StreamId}")]
     private partial void LogEventFromCurrentSource(string? eventId, RedisKey topic, RedisValue streamId);

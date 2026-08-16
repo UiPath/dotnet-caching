@@ -259,6 +259,115 @@ public class RedisStreamSubjectWriterTests : IAsyncLifetime
 
     private static readonly TimeSpan NogroupPollTimeout = TimeSpan.FromSeconds(30);
 
+    [Theory]
+    [InlineData("ERR unknown command 'XREADGROUP'")]
+    [InlineData("err unknown command 'xreadgroup', with args beginning with:")]
+    [InlineData("unknown command XREADGROUP")] // proxy stripped the ERR prefix
+    public async Task Unknown_command_is_logged_once_and_stops_hammering_the_server(string message)
+    {
+        // A RESP server without XREADGROUP (Garnet, for example) fails identically on every attempt. The loop
+        // must not re-issue it once per poll interval, and must not log the same critical error every time.
+        var recordingLogger = new RecordingLogger();
+        var loggedCritical = new TaskCompletionSource();
+        recordingLogger.OnRecord = r =>
+        {
+            if (r.Level == LogLevel.Critical)
+            {
+                loggedCritical.TrySetResult();
+            }
+        };
+        var attempts = 0;
+        _database.StreamReadGroupAsync(_context.Topic, _context.ConsumerGroup, _context.ConsumerName, ">", _context.PollBatchSize)
+            .ReturnsForAnyArgs<StreamEntry[]>(_ =>
+            {
+                Interlocked.Increment(ref attempts);
+                throw UnknownCommandError(message);
+            });
+
+        using var sut = CreateSut(Channel.CreateUnbounded<ICacheEvent>().Writer, recordingLogger);
+        await loggedCritical.Task.WaitAsync(WaitTimeout, TestContext.Current.CancellationToken);
+
+        // The quarantine backoff is far longer than several poll intervals, so nothing more should happen.
+        await Task.Delay(_pollInterval.Multiply(10), TestContext.Current.CancellationToken);
+
+        recordingLogger.Records.Count(r => r.Level == LogLevel.Critical)
+            .Should().Be(1, "the unsupported-command error must be reported once, not once per poll interval");
+        Volatile.Read(ref attempts)
+            .Should().Be(1, "a command the server does not implement must not be re-issued every poll interval");
+
+        sut.FetchTask.IsCompleted.Should().BeFalse("the loop stays alive so a reconnect to a capable server can recover");
+
+        _cancellationTokenSource.Cancel();
+        try { await sut.FetchTask.WaitAsync(WaitTimeout, TestContext.Current.CancellationToken); } catch (OperationCanceledException) { }
+    }
+
+    [Fact]
+    public async Task Unknown_command_quarantine_is_lifted_when_the_connection_reconnects()
+    {
+        var recordingLogger = new RecordingLogger();
+        var loggedCritical = new TaskCompletionSource();
+        recordingLogger.OnRecord = r =>
+        {
+            if (r.Level == LogLevel.Critical)
+            {
+                loggedCritical.TrySetResult();
+            }
+        };
+
+        var fail = true;
+        _database.StreamReadGroupAsync(_context.Topic, _context.ConsumerGroup, _context.ConsumerName, ">", _context.PollBatchSize)
+            .ReturnsForAnyArgs(_ => fail
+                ? throw UnknownCommandError("ERR unknown command 'XREADGROUP'")
+                : Task.FromResult(Array.Empty<StreamEntry>()));
+
+        var connectionState = _fixture.Create<IConnectionState>();
+        connectionState.IsConnected.Returns(true);
+        var redis = _fixture.Create<IRedisConnector>();
+        redis.Database.Returns(_database);
+
+        using var sut = new RedisStreamSubjectWriter<ICacheEvent>(
+            _context,
+            connectionState,
+            redis,
+            Channel.CreateUnbounded<ICacheEvent>().Writer,
+            _formatter,
+            recordingLogger,
+            _fixture.Create<ICachingTelemetryProvider>(),
+            _fixture.Create<IRedisProfiler>(),
+            new TimedFetchWaiter(_pollInterval),
+            _cancellationTokenSource.Token);
+
+        await loggedCritical.Task.WaitAsync(WaitTimeout, TestContext.Current.CancellationToken);
+
+        // Server now answers XREADGROUP; the reconnect must wake the loop instead of waiting out the backoff.
+        fail = false;
+        connectionState.OnReconnected += Raise.Event<EventHandler>(connectionState, EventArgs.Empty);
+
+        var recovered = await WaitUntil(() => recordingLogger.Records.Any(
+            r => r.Level == LogLevel.Information && r.Message.Contains("recovered", StringComparison.OrdinalIgnoreCase)));
+
+        recovered.Should().BeTrue(
+            "the reconnect must wake the fetch loop so the next successful read lifts the quarantine, rather than leaving it to wait out the 30s backoff");
+
+        _cancellationTokenSource.Cancel();
+        try { await sut.FetchTask.WaitAsync(WaitTimeout, TestContext.Current.CancellationToken); } catch (OperationCanceledException) { }
+    }
+
+    private static async Task<bool> WaitUntil(Func<bool> condition)
+    {
+        var deadline = DateTime.UtcNow + WaitTimeout;
+        while (DateTime.UtcNow < deadline)
+        {
+            if (condition())
+            {
+                return true;
+            }
+            await Task.Delay(20, TestContext.Current.CancellationToken);
+        }
+
+        return false;
+    }
+
     [Fact]
     public async Task ProcessEvent_swallows_formatter_exception()
     {
@@ -485,4 +594,12 @@ public class RedisStreamSubjectWriterTests : IAsyncLifetime
         _fixture.Inject<IFetchWaiter>(new TimedFetchWaiter(_pollInterval));
         return ValueTask.CompletedTask;
     }
+
+    // RedisServerException(string) is obsolete as of StackExchange.Redis 3.1 and slated for removal in 3.2.
+    // Its replacement takes RedisErrorKind, which upstream still marks [Experimental] (SER007), so the
+    // suppression is centralized here rather than repeated at each call site.
+#pragma warning disable SER007 // RedisErrorKind is for evaluation purposes only
+    private static RedisServerException UnknownCommandError(string message) =>
+        new(RedisErrorKind.UnknownCommand, CommandFlags.None, message);
+#pragma warning restore SER007
 }

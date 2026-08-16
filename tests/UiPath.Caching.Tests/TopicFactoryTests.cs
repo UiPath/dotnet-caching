@@ -56,6 +56,29 @@ public class TopicFactoryTests : IAsyncLifetime
     }
 
     [Fact]
+    public void Broadcast_disabled_resolves_every_provider_to_null()
+    {
+        // CacheOptions.BroadcastEnabled used to be read only by RedisStreamHealthMaintainer, so setting it
+        // stopped the maintainer while the Streams fetch loop kept running. It has to gate topic resolution too.
+        _cacheOptions.BroadcastEnabled = false;
+
+        Sut.Get(_defaultProvider.Name).Should().BeOfType<NullTopicProvider>();
+        Sut.Get(null).Should().BeOfType<NullTopicProvider>();
+        Sut.ProviderNames.Should().BeEmpty();
+    }
+
+    [Fact]
+    public void Broadcast_disabled_wins_over_an_explicitly_enabled_provider()
+    {
+        _cacheOptions.BroadcastEnabled = false;
+        var provider = _fixture.Create<ITopicProvider>();
+        provider.Enabled.Returns(true);
+        Sut.AddProvider(provider);
+
+        Sut.Get(provider.Name).Should().BeOfType<NullTopicProvider>("the app-wide flag can only narrow, never be widened by a provider");
+    }
+
+    [Fact]
     public void Disposed_factory_add_provider_exception()
     {
         Sut.Dispose();

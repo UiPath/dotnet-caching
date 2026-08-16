@@ -22,6 +22,19 @@ public class InMemoryRedisCacheOptions : IMultilayerCacheOptions, IMemoryCacheOp
 
     public TimeSpan StatisticsFlushInterval { get; set; } = TimeSpan.FromMinutes(1);
 
+    /// <summary>
+    /// Publishes and consumes cross-node L1 invalidations for this provider. Set to <c>false</c> to run
+    /// L1+L2 with no broadcast traffic, which is what you want on a single node or against a Redis-compatible
+    /// store whose Streams support does not cover <c>XREADGROUP</c>. Defaults to <c>true</c>; note this is the
+    /// opposite of <see cref="InMemoryCacheOptions.BroadcastEnable"/>, which is opt-in.
+    /// <para>
+    /// This flag can only narrow the app-wide setting, never widen it. The effective behavior is
+    /// <see cref="CacheOptions.BroadcastEnabled"/> AND this property, so when broadcast is off app-wide
+    /// setting this to <c>true</c> has no effect.
+    /// </para>
+    /// </summary>
+    public bool BroadcastEnable { get; set; } = true;
+
     public string? Topic { get; set; }
 
     public ITopicKeyStrategy? TopicKeyStrategy { get; set; }
