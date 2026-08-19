@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using Microsoft.Extensions.Logging.Abstractions;
 using UiPath.Caching.Locking;
 using UiPath.Caching.Tests.Telemetry;
@@ -186,7 +187,7 @@ public class RehydrationCoordinatorTests
     {
         var distributedLock = Substitute.For<IDistributedLock>();
         distributedLock.TryAcquireAsync(Arg.Any<string>(), Arg.Any<TimeSpan>(), Arg.Any<CancellationToken>())
-            .Returns<ValueTask<IAsyncDisposable?>>(_ => throw new InvalidOperationException("lock unavailable"));
+            .Returns<IAsyncDisposable?>(_ => throw new InvalidOperationException("lock unavailable"));
 
         var telemetry = new RecordingTelemetryProvider();
         var sut = NewCoordinator(distributedLock, telemetry);
@@ -216,20 +217,20 @@ public class RehydrationCoordinatorTests
     public void Second_concurrent_TryTrigger_on_same_key_returns_false()
     {
         var distributedLock = Substitute.For<IDistributedLock>();
-        var lockHeld = new TaskCompletionSource<IAsyncDisposable?>(TaskCreationOptions.RunContinuationsAsynchronously);
         distributedLock.TryAcquireAsync(Arg.Any<string>(), Arg.Any<TimeSpan>(), Arg.Any<CancellationToken>())
-            .Returns(_ => new ValueTask<IAsyncDisposable?>(lockHeld.Task));
+            .Returns<IAsyncDisposable?>(_ => Substitute.For<IAsyncDisposable>());
 
         var sut = NewCoordinator(distributedLock);
         var aged = DateTimeOffset.UtcNow.Add(TimeSpan.FromSeconds(1));
         var key = (CacheKey)"k";
+        var gate = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
 
-        var first = sut.TryTrigger(key, aged, RehydratePolicy(), Duration, "cache", _ => ValueTask.CompletedTask);
+        var first = sut.TryTrigger(key, aged, RehydratePolicy(), Duration, "cache", async _ => await gate.Task);
         var second = sut.TryTrigger(key, aged, RehydratePolicy(), Duration, "cache", _ => ValueTask.CompletedTask);
 
         first.Should().BeTrue();
         second.Should().BeFalse("per-node _inFlight blocks duplicate spawns on the same key");
-        lockHeld.TrySetResult(Substitute.For<IAsyncDisposable>());
+        gate.TrySetResult();
     }
 
     [Fact]
@@ -265,6 +266,108 @@ public class RehydrationCoordinatorTests
         var expectedFactoryTimeout = TimeSpan.FromMilliseconds(0.5 * Duration.TotalMilliseconds);
         capturedExpiry.Should().Be(expectedFactoryTimeout + cooldown,
             "lockExpiry = factoryTimeout + cooldown so the failure path holds the lock for the factory window plus the configured cooldown");
+    }
+
+    [Fact]
+    public async Task Overlapping_reserved_sets_on_two_nodes_rehydrate_the_shared_key_once()
+    {
+        var granted = new ConcurrentDictionary<string, byte>(StringComparer.Ordinal);
+        var distributedLock = Substitute.For<IDistributedLock>();
+        distributedLock.TryAcquireAsync(Arg.Any<string>(), Arg.Any<TimeSpan>(), Arg.Any<CancellationToken>())
+            .Returns<IAsyncDisposable?>(c => granted.TryAdd(c.ArgAt<string>(0), 0) ? Substitute.For<IAsyncDisposable>() : null);
+
+        var nodeA = NewCoordinator(distributedLock);
+        var nodeB = NewCoordinator(distributedLock);
+        var aged = DateTimeOffset.UtcNow.AddMinutes(1);
+        var policy = RehydratePolicy();
+        var a = (CacheKey)"a";
+
+        var rehydrated = new ConcurrentBag<CacheKey>();
+        var ranA = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var ranB = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        ValueTask Record(CacheKey[] keys, TaskCompletionSource ran)
+        {
+            foreach (var key in keys) { rehydrated.Add(key); }
+            ran.TrySetResult();
+            return ValueTask.CompletedTask;
+        }
+
+        nodeA.TryTriggerBatch([(a, aged), ((CacheKey)"b", aged)], policy, Duration, "cache", (keys, _) => Record(keys, ranA))
+            .Should().BeTrue();
+        nodeB.TryTriggerBatch([(a, aged), ((CacheKey)"c", aged)], policy, Duration, "cache", (keys, _) => Record(keys, ranB))
+            .Should().BeTrue();
+
+        await ranA.Task.WaitAsync(TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken);
+        await ranB.Task.WaitAsync(TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken);
+
+        var all = rehydrated.ToArray();
+        all.Count(k => k == a).Should().Be(
+            1,
+            "per-key locks make the shared key dedupe across nodes even though the reserved sets are not equal");
+        all.Should().Contain((CacheKey)"b").And.Contain((CacheKey)"c", "each node still refreshes the key only it reserved");
+    }
+
+    [Fact]
+    public async Task Batch_cooldown_uses_the_max_failure_count_across_the_set()
+    {
+        var expiries = new ConcurrentDictionary<string, TimeSpan>(StringComparer.Ordinal);
+        var distributedLock = Substitute.For<IDistributedLock>();
+        distributedLock.TryAcquireAsync(Arg.Any<string>(), Arg.Any<TimeSpan>(), Arg.Any<CancellationToken>())
+            .Returns(c =>
+            {
+                expiries[c.ArgAt<string>(0)] = c.ArgAt<TimeSpan>(1);
+                return Substitute.For<IAsyncDisposable>();
+            });
+
+        var sut = NewCoordinator(distributedLock);
+        var aged = DateTimeOffset.UtcNow.AddMinutes(1);
+        var baseCooldown = TimeSpan.FromSeconds(1);
+        var policy = RehydratePolicy(baseCooldown: baseCooldown);
+        var lockKeyStrategy = new DefaultDistributedLockKeyStrategy(separator: ':');
+        var failing = (CacheKey)"failing";
+
+        sut.TryTrigger(failing, aged, policy, Duration, "cache", _ => throw new InvalidOperationException("boom"))
+            .Should().BeTrue();
+
+        var expectedFactoryTimeout = TimeSpan.FromMilliseconds(0.5 * Duration.TotalMilliseconds);
+        var expectedCooldown = baseCooldown * 2;
+        var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(20);
+        for (var attempt = 0; DateTime.UtcNow < deadline; attempt++)
+        {
+            CacheKey[]? rehydrated = null;
+            var ran = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            sut.TryTriggerBatch(
+                [(failing, aged), ((CacheKey)("never-failed-" + attempt), aged)],
+                policy,
+                Duration,
+                "cache",
+                (keys, _) => { rehydrated = keys; ran.TrySetResult(); return ValueTask.CompletedTask; })
+                .Should().BeTrue("the partner key has never been seen, so it is always reservable");
+            await ran.Task.WaitAsync(TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken);
+
+            if (rehydrated!.Contains(failing))
+            {
+                var partner = rehydrated!.Single(k => k != failing);
+                foreach (var key in rehydrated!)
+                {
+                    var lockKey = "rehydrate:" + lockKeyStrategy.GetLockKey(key);
+                    expiries.Should().ContainKey(lockKey, "each reserved key takes its own rehydrate lock");
+                    expiries[lockKey].Should().Be(
+                        expectedFactoryTimeout + expectedCooldown,
+                        "the group backs off on the worst key's failure count, not the partner key's zero");
+                }
+                expiries.Should().NotContainKey(
+                    "rehydrate:" + lockKeyStrategy.GetLockKey(CompositeCacheKey.For(rehydrated!)),
+                    "the group is no longer locked under a composite key");
+                partner.Should().NotBe(failing);
+                return;
+            }
+
+            await Task.Delay(25, TestContext.Current.CancellationToken);
+        }
+
+        Assert.Fail("\"failing\" never left the in-flight set, so the max-failure-count path was never exercised.");
     }
 
     private static async Task WaitForCallAsync(Func<bool> predicate, TimeSpan timeout)

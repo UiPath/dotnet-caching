@@ -31,6 +31,12 @@ public partial interface ICache<T>
 
     ValueTask<T?> GetOrAddAsync(CacheKey cacheKey, Func<CancellationToken, Task<T?>> generator, DateTimeOffset? expiration, CancellationToken token = default);
 
+    ValueTask<KeyValuePair<TState, T?>[]> GetOrAddAsync<TState>(KeyValuePair<CacheKey, TState>[] entries, Func<TState[], CancellationToken, Task<KeyValuePair<TState, T?>[]>> generator, CancellationToken token = default) where TState : notnull;
+
+    ValueTask<KeyValuePair<TState, T?>[]> GetOrAddAsync<TState>(KeyValuePair<CacheKey, TState>[] entries, Func<TState[], CancellationToken, Task<KeyValuePair<TState, T?>[]>> generator, TimeSpan? expiration, CancellationToken token = default) where TState : notnull;
+
+    ValueTask<KeyValuePair<TState, T?>[]> GetOrAddAsync<TState>(KeyValuePair<CacheKey, TState>[] entries, Func<TState[], CancellationToken, Task<KeyValuePair<TState, T?>[]>> generator, DateTimeOffset? expiration, CancellationToken token = default) where TState : notnull;
+
     ValueTask<bool> RemoveAsync(CacheKey cacheKey, CancellationToken token = default);
 
     ValueTask<bool> RemoveAsync(CacheKey[] cacheKeys, CancellationToken token = default);
@@ -61,7 +67,9 @@ public partial interface ICache<T>
 }
 ```
 
-`ICache<T>` is the primary typed cache surface for single-value key/value caching. The type parameter `T` fixes the value type for the lifetime of the cache instance, which lets the library resolve `CachePolicy` by `typeof(T).FullName` and apply a single key strategy per cache. Every operation accepts a `CancellationToken` and returns a `ValueTask`, so callers integrate naturally into async pipelines without heap allocation in the hot path. Sync overloads (`Get`, `GetOrAdd`, `Set`, `Remove`, `Refresh`, `Contains`, `TimeToLive`, `ExpireTime`) are provided as blocking default interface methods for call sites that cannot use `await`.
+`ICache<T>` is the primary typed cache surface for single-value key/value caching. The type parameter `T` fixes the value type for the lifetime of the cache instance, which lets the library resolve `CachePolicy` by `typeof(T).FullName` and apply a single key strategy per cache. Every operation accepts a `CancellationToken` and returns a `ValueTask`, so callers integrate naturally into async pipelines without heap allocation in the hot path. Sync overloads (`Get`, `GetOrAdd`, `Set`, `Remove`, `Refresh`, `Contains`, `TimeToLive`, `ExpireTime`) are provided as blocking default interface methods for call sites that cannot use `await`; `GetOrAdd` covers both the single-key generator shape and a key-only multi-key shape (see below).
+
+The multi-key `GetOrAddAsync<TState>` overloads pair each key with an opaque caller state (`TState`) — a database id, a request object, whatever identifies the entry in the caller's own vocabulary. The generator is invoked at most once, with only the states of the entries that missed, and results come back keyed by state. These three overloads are **abstract** on `ICache<T>` — unlike the equivalent members on `ICache`, there is no default body, because `ICache<T>` has no `GetCacheEntriesAsync` and so cannot distinguish a genuine miss from a cached `null` inside a default implementation. A hand-written `ICache<T>` implementation (a test fake, typically) must add all three. There is no key-only convenience overload on the async surface: a caller whose keys are their own identity pairs each key with itself (`TState = CacheKey`). The blocking `GetOrAdd` facade above is the one place that accepts `CacheKey[]` directly and does that pairing for you.
 
 > **Typical vs. power-user surface:** This is the standard typed surface. If you need to vary the value type or key per call rather than per cache instance, use [`ICache`](#icache) instead. `ICache<T>` and `ICache` are different shapes for different problems — neither is strictly more capable.
 
@@ -104,6 +112,18 @@ public partial interface ICache : IDisposable
 
     ValueTask<T?> GetOrAddAsync<T>(CacheKey cacheKey, Func<CancellationToken, Task<T?>> generator, DateTimeOffset? expiration = null, CachePolicy? policy = null, CancellationToken token = default);
 
+    ValueTask<KeyValuePair<TState, T?>[]> GetOrAddAsync<T, TState>(KeyValuePair<CacheKey, TState>[] entries, Func<TState[], CancellationToken, Task<KeyValuePair<TState, T?>[]>> generator, CachePolicy? policy, CancellationToken token = default)
+        where TState : notnull
+        => BatchGetOrAdd.RunAsync<T, TState>(this, entries, generator, (pairs, t) => SetAsync(pairs, policy, t), policy, token);
+
+    ValueTask<KeyValuePair<TState, T?>[]> GetOrAddAsync<T, TState>(KeyValuePair<CacheKey, TState>[] entries, Func<TState[], CancellationToken, Task<KeyValuePair<TState, T?>[]>> generator, TimeSpan? expiration, CachePolicy? policy, CancellationToken token = default)
+        where TState : notnull
+        => BatchGetOrAdd.RunAsync<T, TState>(this, entries, generator, (pairs, t) => SetAsync(pairs, expiration, policy, t), policy, token);
+
+    ValueTask<KeyValuePair<TState, T?>[]> GetOrAddAsync<T, TState>(KeyValuePair<CacheKey, TState>[] entries, Func<TState[], CancellationToken, Task<KeyValuePair<TState, T?>[]>> generator, DateTimeOffset? expiration, CachePolicy? policy, CancellationToken token = default)
+        where TState : notnull
+        => BatchGetOrAdd.RunAsync<T, TState>(this, entries, generator, (pairs, t) => SetAsync(pairs, expiration, policy, t), policy, token);
+
     ValueTask<bool> RemoveAsync<T>(CacheKey cacheKey, CancellationToken token = default);
 
     ValueTask<bool> RemoveAsync<T>(CacheKey[] cacheKey, CancellationToken token = default);
@@ -135,6 +155,8 @@ public partial interface ICache : IDisposable
 ```
 
 `ICache` is the dynamic-key, dynamic-type cache surface. Unlike `ICache<T>`, the value type is specified as a generic type argument on each method call rather than fixed at cache-creation time, and a `CachePolicy` can be supplied per call rather than resolved by `typeof(T).FullName`. It also exposes `GetCacheEntryAsync` for callers that need cache-entry metadata (hit/miss status, expiration) in addition to the value. `ICache` implements `IDisposable`, but instances returned by `ICacheFactory.CreateCache(...)` are provider-owned (typically singletons resolved through a `Lazy<>`); their lifetime is managed by the provider and the DI container, so callers should not dispose them per use.
+
+The multi-key `GetOrAddAsync<T, TState>` overloads shown above pair each key with an opaque caller state (`TState`) and are **default interface methods** — each forwards to the shared `BatchGetOrAdd.RunAsync` machinery, so existing `ICache` implementations keep compiling without adding them. The generator is invoked at most once, only with the states of the entries that missed every cache layer, never with keys; results come back keyed by state, one entry per distinct requested state in first-occurrence order. Cache operations de-duplicate by `CacheKey`; results de-duplicate by state — when two states share a key the generator is asked once and the value is reported under both. Their parameter shape matches the single-key `GetOrAddAsync` exactly — `expiration`, `policy` and `token` all optional. `ICache.Compat.cs` carries no token-positional forwarder for them: that file is pre-`CachePolicy` back-compat sugar, and this API predates nothing. There is no key-only convenience overload; a caller whose keys are their own identity pairs each key with itself (`TState = CacheKey`).
 
 > **Typical vs. power-user surface:** `ICache` is the power-user surface. For most application code where the value type is fixed and you want automatic policy resolution, prefer [`ICache<T>`](#icachet) — it is simpler and less error-prone.
 

@@ -1,4 +1,4 @@
-namespace UiPath.Caching;
+﻿namespace UiPath.Caching;
 
 public partial interface ICache : IDisposable
 {
@@ -17,6 +17,18 @@ public partial interface ICache : IDisposable
     ValueTask<T?> GetOrAddAsync<T>(CacheKey cacheKey, Func<CancellationToken, Task<T?>> generator, TimeSpan? expiration = null, CachePolicy? policy = null, CancellationToken token = default);
 
     ValueTask<T?> GetOrAddAsync<T>(CacheKey cacheKey, Func<CancellationToken, Task<T?>> generator, DateTimeOffset? expiration = null, CachePolicy? policy = null, CancellationToken token = default);
+
+    ValueTask<KeyValuePair<TState, T?>[]> GetOrAddAsync<T, TState>(KeyValuePair<CacheKey, TState>[] entries, Func<TState[], CancellationToken, Task<KeyValuePair<TState, T?>[]>> generator, CachePolicy? policy = null, CancellationToken token = default)
+        where TState : notnull
+        => BatchGetOrAdd.RunAsync(this, entries, generator, (pairs, t) => SetAsync(pairs, policy, t), policy, token);
+
+    ValueTask<KeyValuePair<TState, T?>[]> GetOrAddAsync<T, TState>(KeyValuePair<CacheKey, TState>[] entries, Func<TState[], CancellationToken, Task<KeyValuePair<TState, T?>[]>> generator, TimeSpan? expiration = null, CachePolicy? policy = null, CancellationToken token = default)
+        where TState : notnull
+        => BatchGetOrAdd.RunAsync(this, entries, generator, (pairs, t) => SetAsync(pairs, expiration, policy, t), policy, token);
+
+    ValueTask<KeyValuePair<TState, T?>[]> GetOrAddAsync<T, TState>(KeyValuePair<CacheKey, TState>[] entries, Func<TState[], CancellationToken, Task<KeyValuePair<TState, T?>[]>> generator, DateTimeOffset? expiration = null, CachePolicy? policy = null, CancellationToken token = default)
+        where TState : notnull
+        => BatchGetOrAdd.RunAsync(this, entries, generator, (pairs, t) => SetAsync(pairs, expiration, policy, t), policy, token);
 
     ValueTask<bool> RemoveAsync<T>(CacheKey cacheKey, CancellationToken token = default);
 

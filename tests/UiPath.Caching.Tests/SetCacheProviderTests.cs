@@ -63,7 +63,7 @@ public class InMemoryRedisQueueCacheProviderTests
     {
         var ct = TestContext.Current.CancellationToken;
         var redisL2 = Substitute.For<ISetCache>();
-        redisL2.AddAsync<string>(default, default(string)!, default, ct).ReturnsForAnyArgs(_ => new ValueTask<bool>(true));
+        redisL2.AddAsync<string>(default, default(string)!, default, ct).ReturnsForAnyArgs(_ => true);
 
         var factory = Substitute.For<IQueueCacheFactory>();
         factory.CreateSetCache(KnownCacheProviderNames.Redis).Returns(redisL2);

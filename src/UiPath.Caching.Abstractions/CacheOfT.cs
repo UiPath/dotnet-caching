@@ -52,6 +52,25 @@ public class Cache<T> : ICache<T>
     public ValueTask<T?> GetOrAddAsync(CacheKey cacheKey, Func<CancellationToken, Task<T?>> generator, DateTimeOffset? expiration, CancellationToken token = default) =>
         _cache.GetOrAddAsync(GetCacheKey(cacheKey), generator, expiration, Policy, token);
 
+    public ValueTask<KeyValuePair<TState, T?>[]> GetOrAddAsync<TState>(KeyValuePair<CacheKey, TState>[] entries, Func<TState[], CancellationToken, Task<KeyValuePair<TState, T?>[]>> generator, CancellationToken token = default)
+        where TState : notnull =>
+        _cache.GetOrAddAsync<T, TState>(MapKeys(entries), generator, policy: Policy, token: token);
+
+    public ValueTask<KeyValuePair<TState, T?>[]> GetOrAddAsync<TState>(KeyValuePair<CacheKey, TState>[] entries, Func<TState[], CancellationToken, Task<KeyValuePair<TState, T?>[]>> generator, TimeSpan? expiration, CancellationToken token = default)
+        where TState : notnull =>
+        _cache.GetOrAddAsync<T, TState>(MapKeys(entries), generator, expiration, Policy, token);
+
+    public ValueTask<KeyValuePair<TState, T?>[]> GetOrAddAsync<TState>(KeyValuePair<CacheKey, TState>[] entries, Func<TState[], CancellationToken, Task<KeyValuePair<TState, T?>[]>> generator, DateTimeOffset? expiration, CancellationToken token = default)
+        where TState : notnull =>
+        _cache.GetOrAddAsync<T, TState>(MapKeys(entries), generator, expiration, Policy, token);
+
+    /// <summary>Applies the key strategy to each entry's key and leaves its state alone.</summary>
+    private KeyValuePair<CacheKey, TState>[] MapKeys<TState>(KeyValuePair<CacheKey, TState>[] entries)
+    {
+        ArgumentNullException.ThrowIfNull(entries);
+        return Array.ConvertAll(entries, e => new KeyValuePair<CacheKey, TState>(GetCacheKey(e.Key), e.Value));
+    }
+
     public ValueTask<bool> RefreshAsync(CacheKey cacheKey, CancellationToken token = default) =>
         _cache.RefreshAsync<T>(GetCacheKey(cacheKey), policy: Policy, token: token);
 
