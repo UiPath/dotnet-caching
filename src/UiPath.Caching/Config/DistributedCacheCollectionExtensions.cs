@@ -31,7 +31,7 @@ public static class DistributedCacheCollectionExtensions
         }
 
         builder.Services.AddKeyedSingleton<ICacheProvider>(DistributedCacheServiceKey,
-            (sp, _) => CreateProvider(sp, providerName));
+            (sp, _) => CreateProvider(sp, providerName, options));
         builder.Services.AddKeyedSingleton<ICache>(DistributedCacheServiceKey,
             (sp, key) => sp.GetRequiredKeyedService<ICacheProvider>(key!).CreateCache());
         builder.Services.TryAddSingleton<IDistributedCache>(sp => new UiPathDistributedCache(
@@ -43,7 +43,37 @@ public static class DistributedCacheCollectionExtensions
         return builder;
     }
 
-    private static ICacheProvider CreateProvider(IServiceProvider sp, string providerName) =>
+    private static ICacheProvider CreateProvider(IServiceProvider sp, string providerName, UiPathDistributedCacheOptions options)
+    {
+        var provider = CreateProviderCore(sp, providerName);
+        EnsureBoundedWrites(sp, providerName, options);
+        return provider;
+    }
+
+    /// <summary>Writes without a caller expiration take the provider default TTL; reject configurations where that default resolves to unbounded.</summary>
+    private static void EnsureBoundedWrites(IServiceProvider sp, string providerName, UiPathDistributedCacheOptions options)
+    {
+        TimeSpan? tierDefault = providerName switch
+        {
+            KnownCacheProviderNames.Redis => sp.GetRequiredService<IOptions<RedisCacheOptions>>().Value.DefaultExpiration,
+            KnownCacheProviderNames.InMemoryRedis => sp.GetRequiredService<IOptions<InMemoryRedisCacheOptions>>().Value.DefaultExpiration,
+            _ => sp.GetRequiredService<IOptions<InMemoryCacheOptions>>().Value.DefaultExpiration,
+        };
+        if (tierDefault is not null)
+        {
+            return;
+        }
+
+        var policyFactory = sp.GetService<ICachePolicyFactory>();
+        var policy = options.PolicyName is { } policyName ? policyFactory?.Resolve(policyName) : null;
+        if ((policy ?? policyFactory?.Default)?.DistributedExpiration is null)
+        {
+            throw new InvalidOperationException(
+                $"AddDistributedCache('{providerName}') would store entries without an expiration: the provider's DefaultExpiration is null and no cache policy supplies DistributedExpiration. Configure DefaultExpiration or a policy with DistributedExpiration.");
+        }
+    }
+
+    private static ICacheProvider CreateProviderCore(IServiceProvider sp, string providerName) =>
         providerName switch
         {
             KnownCacheProviderNames.Redis => CreateRedisProvider(sp),

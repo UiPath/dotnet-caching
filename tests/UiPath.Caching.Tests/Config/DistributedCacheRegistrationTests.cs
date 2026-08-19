@@ -32,6 +32,38 @@ public class DistributedCacheRegistrationTests
     }
 
     [Fact]
+    public void Null_default_expiration_without_policy_fails_fast()
+    {
+        var services = new ServiceCollection();
+        services.AddCaching(b =>
+        {
+            b.Services.Configure<InMemoryCacheOptions>(o => o.DefaultExpiration = null);
+            b.AddDistributedCache(KnownCacheProviderNames.InMemory);
+        });
+        using var provider = services.BuildServiceProvider();
+
+        var act = () => provider.GetRequiredService<IDistributedCache>();
+
+        act.Should().Throw<InvalidOperationException>().WithMessage("*DefaultExpiration*DistributedExpiration*");
+    }
+
+    [Fact]
+    public void Null_default_expiration_is_accepted_when_a_policy_bounds_writes()
+    {
+        var services = new ServiceCollection();
+        services.AddCaching(
+            b =>
+            {
+                b.Services.Configure<InMemoryCacheOptions>(o => o.DefaultExpiration = null);
+                b.AddDistributedCache(KnownCacheProviderNames.InMemory);
+            },
+            o => o.DefaultCachePolicy = new CachePolicy { DistributedExpiration = TimeSpan.FromMinutes(5) });
+        using var provider = services.BuildServiceProvider();
+
+        provider.GetRequiredService<IDistributedCache>().Should().NotBeNull();
+    }
+
+    [Fact]
     public void Redis_tier_without_a_connection_fails_with_guidance()
     {
         var services = new ServiceCollection();
