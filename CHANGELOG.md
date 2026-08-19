@@ -6,6 +6,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 
 ## [Unreleased]
 
+## [1.3.0] - 2026-08-19
+
 ### Added
 
 - **Batch `GetOrAddAsync` with caller state.** `ICache`, `ICache<T>` and `Cache<T>` gained multi-key
