@@ -50,7 +50,7 @@ public class CacheKeyComparerTest
     [Fact]
     public void Default_key_does_not_throw()
     {
-        CacheKeyComparer.Sensitive.GetHashCode(default(CacheKey)).Should().Be(CacheKeyComparer.Sensitive.GetHashCode(default(CacheKey)));
+        CacheKeyComparer.Sensitive.GetHashCode(default).Should().Be(CacheKeyComparer.Sensitive.GetHashCode(default));
         CacheKeyComparer.Insensitive.Equals(default, default).Should().BeTrue();
     }
 }
