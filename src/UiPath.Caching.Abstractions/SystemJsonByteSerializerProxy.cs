@@ -15,13 +15,21 @@ public class SystemJsonByteSerializerProxy(JsonSerializerOptions? options = null
 
     public T? Deserialize<T>(byte[]? value)
     {
-        if (value is null || value.Length == 0)
+        if (value is null)
         {
             return default;
         }
         if (value is T bytes)
         {
             return bytes;
+        }
+        if (typeof(T) == typeof(ReadOnlyMemory<byte>))
+        {
+            return (T)(object)new ReadOnlyMemory<byte>(value);
+        }
+        if (value.Length == 0)
+        {
+            return default;
         }
         return JsonSerializer.Deserialize<T>(value, options);
     }

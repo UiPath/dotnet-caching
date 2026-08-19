@@ -102,6 +102,18 @@ public class UiPathDistributedCacheTests
     }
 
     [Fact]
+    public async Task Expired_absolute_entry_is_a_miss_and_gets_removed()
+    {
+        _inner.GetAsync<byte[]>(Arg.Any<CacheKey>(), Arg.Any<CachePolicy?>(), Arg.Any<CancellationToken>())
+            .Returns(Envelope(TimeSpan.FromMinutes(20).Ticks, Now.AddMinutes(-1)));
+
+        (await _cache.GetAsync("k", TestContext.Current.CancellationToken)).Should().BeNull();
+
+        await _inner.Received(1).RemoveAsync<byte[]>(Arg.Any<CacheKey>(), Arg.Any<CancellationToken>());
+        await _inner.DidNotReceiveWithAnyArgs().RefreshAsync<byte[]>(default, (DateTimeOffset?)null, null, TestContext.Current.CancellationToken);
+    }
+
+    [Fact]
     public async Task Foreign_value_is_a_miss_not_an_exception()
     {
         _inner.GetAsync<byte[]>(Arg.Any<CacheKey>(), Arg.Any<CachePolicy?>(), Arg.Any<CancellationToken>())

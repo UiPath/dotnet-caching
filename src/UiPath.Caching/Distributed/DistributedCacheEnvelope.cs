@@ -68,6 +68,11 @@ internal sealed class DistributedCacheEnvelope(byte[] data, long? slidingTicks, 
             }
 
             sliding = BinaryPrimitives.ReadInt64LittleEndian(span[offset..]);
+            if (sliding <= 0)
+            {
+                return null;
+            }
+
             offset += sizeof(long);
         }
 
@@ -78,7 +83,13 @@ internal sealed class DistributedCacheEnvelope(byte[] data, long? slidingTicks, 
                 return null;
             }
 
-            absolute = new DateTimeOffset(BinaryPrimitives.ReadInt64LittleEndian(span[offset..]), TimeSpan.Zero);
+            var ticks = BinaryPrimitives.ReadInt64LittleEndian(span[offset..]);
+            if ((ulong)ticks > (ulong)DateTime.MaxValue.Ticks)
+            {
+                return null;
+            }
+
+            absolute = new DateTimeOffset(ticks, TimeSpan.Zero);
             offset += sizeof(long);
         }
 

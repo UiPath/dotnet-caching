@@ -47,6 +47,35 @@ public class DistributedCacheEnvelopeTests
     }
 
     [Fact]
+    public void Out_of_range_expiration_ticks_decode_to_null_instead_of_throwing()
+    {
+        DistributedCacheEnvelope.TryDecode(WithAbsoluteTicks(-1)).Should().BeNull();
+        DistributedCacheEnvelope.TryDecode(WithAbsoluteTicks(long.MaxValue)).Should().BeNull();
+        DistributedCacheEnvelope.TryDecode(WithSlidingTicks(0)).Should().BeNull();
+        DistributedCacheEnvelope.TryDecode(WithSlidingTicks(-5)).Should().BeNull();
+    }
+
+    private static byte[] WithAbsoluteTicks(long ticks)
+    {
+        var buffer = new byte[14];
+        "UPDC"u8.CopyTo(buffer);
+        buffer[4] = 1;
+        buffer[5] = 2;
+        BitConverter.GetBytes(ticks).CopyTo(buffer, 6);
+        return buffer;
+    }
+
+    private static byte[] WithSlidingTicks(long ticks)
+    {
+        var buffer = new byte[14];
+        "UPDC"u8.CopyTo(buffer);
+        buffer[4] = 1;
+        buffer[5] = 1;
+        BitConverter.GetBytes(ticks).CopyTo(buffer, 6);
+        return buffer;
+    }
+
+    [Fact]
     public void Json_payload_is_not_mistaken_for_an_envelope()
     {
         DistributedCacheEnvelope.TryDecode("""{"Name":"x"}"""u8.ToArray()).Should().BeNull();

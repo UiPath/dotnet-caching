@@ -25,6 +25,11 @@ public static class DistributedCacheCollectionExtensions
             return builder;
         }
 
+        if (providerName is KnownCacheProviderNames.InMemory or KnownCacheProviderNames.InMemoryRedis)
+        {
+            builder.Services.TryAddMemoryCacheFactory();
+        }
+
         builder.Services.AddKeyedSingleton<ICacheProvider>(DistributedCacheServiceKey,
             (sp, _) => CreateProvider(sp, providerName));
         builder.Services.AddKeyedSingleton<ICache>(DistributedCacheServiceKey,
@@ -78,7 +83,8 @@ public static class DistributedCacheCollectionExtensions
         new(
             sp.GetRequiredService<IOptions<RedisCacheOptions>>(),
             sp.GetRequiredService<IOptions<CacheOptions>>(),
-            sp.GetRequiredService<IRedisConnector>(),
+            sp.GetService<IRedisConnector>() ?? throw new InvalidOperationException(
+                "AddDistributedCache with a Redis-backed provider requires a Redis connection. Call AddRedisConnection on the caching builder."),
             new RedisValueSerializerProxy(sp.GetRequiredService<ISerializerProxy<byte[]>>()),
             sp.GetRequiredService<IResiliencePipelineProvider>(),
             sp.GetRequiredService<ICachingTelemetryProvider>(),

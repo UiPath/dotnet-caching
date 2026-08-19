@@ -290,9 +290,10 @@ That single registration replaces the default JSON serializer for every cache th
 
 The distributed cache path (`AddDistributedCache`) serializes through `ISerializerProxy<byte[]>`
 instead of `ISerializerProxy<RedisValue>`. The default, `SystemJsonByteSerializerProxy`, passes
-`byte[]` payloads through raw (no base64, no JSON — matching what
-`Microsoft.Extensions.Caching.StackExchangeRedis` writes) and JSON-encodes every other type; the
-requested type argument decides, there is no format sniffing.
+`byte[]` payloads through raw — no base64, no JSON, no extra encoding layer — and JSON-encodes
+every other type; the requested type argument decides, there is no format sniffing. Note that the
+distributed cache still wraps payloads in its own binary envelope, so the stored values are not
+interchangeable with other `IDistributedCache` implementations.
 
 Swapping it follows the same pattern as the `RedisValue` proxy — and is simpler, because most
 binary serializers natively produce `byte[]`:
@@ -307,7 +308,41 @@ public sealed class MessagePackByteSerializerProxy(MessagePackSerializerOptions?
     public T? Deserialize<T>(byte[]? value) =>
         value is null or { Length: 0 } ? default : MessagePackSerializer.Deserialize<T>(value, options);
 
-    // TryDeserialize<T>(string?/object?): guard + try/catch, mirroring the JSON default.
+    public bool TryDeserialize<T>(string? value, out T? result)
+    {
+        result = default;
+        if (string.IsNullOrWhiteSpace(value))
+        {
+            return false;
+        }
+        try
+        {
+            result = MessagePackSerializer.Deserialize<T>(Convert.FromBase64String(value), options);
+            return true;
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
+    public bool TryDeserialize<T>(object? value, out T? result)
+    {
+        result = default;
+        try
+        {
+            if (value is byte[] bytes)
+            {
+                result = MessagePackSerializer.Deserialize<T>(bytes, options);
+                return true;
+            }
+            return TryDeserialize(value?.ToString(), out result);
+        }
+        catch
+        {
+            return false;
+        }
+    }
 }
 
 services.AddSingleton<ISerializerProxy<byte[]>>(new MessagePackByteSerializerProxy());
@@ -316,8 +351,8 @@ services.AddSingleton<ISerializerProxy<byte[]>>(new MessagePackByteSerializerPro
 Two rules for custom implementations:
 
 1. **Round-trip `byte[]` symmetrically.** The distributed cache stores its envelope as `byte[]`;
-   raw passthrough (recommended) keeps wire bytes identical to the MS implementation, but any
-   symmetric encoding also works.
+   raw passthrough (recommended) avoids per-entry encoding overhead, but any symmetric encoding
+   also works.
 2. **This does not change the main caches' wire format** — `ICache`/`IHashCache` still serialize
    through `ISerializerProxy<RedisValue>`. Swap both registrations if you want one format everywhere.
 

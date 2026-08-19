@@ -94,9 +94,15 @@ internal sealed class UiPathDistributedCache : IDistributedCache
             return null;
         }
 
+        var now = _clock.UtcNow;
+        if (envelope.AbsoluteExpiration is { } absoluteExpiration && absoluteExpiration <= now)
+        {
+            _ = await _cache.RemoveAsync<byte[]>(cacheKey, token).ConfigureAwait(false);
+            return null;
+        }
+
         if (envelope.SlidingTicks is { } slidingTicks)
         {
-            var now = _clock.UtcNow;
             var target = now.AddTicks(slidingTicks);
             if (envelope.AbsoluteExpiration is { } absolute && absolute < target)
             {

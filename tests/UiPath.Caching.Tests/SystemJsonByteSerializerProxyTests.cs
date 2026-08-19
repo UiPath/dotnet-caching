@@ -25,6 +25,22 @@ public class SystemJsonByteSerializerProxyTests
     }
 
     [Fact]
+    public void ReadOnlyMemory_round_trips()
+    {
+        ReadOnlyMemory<byte> memory = new byte[] { 1, 2, 3 };
+        var stored = _proxy.Serialize(memory);
+        _proxy.Deserialize<ReadOnlyMemory<byte>>(stored).ToArray().Should().Equal(1, 2, 3);
+    }
+
+    [Fact]
+    public void Empty_byte_array_round_trips()
+    {
+        var empty = Array.Empty<byte>();
+        _proxy.Serialize(empty).Should().BeSameAs(empty);
+        _proxy.Deserialize<byte[]>(empty).Should().BeSameAs(empty);
+    }
+
+    [Fact]
     public void Null_maps_to_null_and_empty_to_default()
     {
         _proxy.Serialize(null).Should().BeNull();

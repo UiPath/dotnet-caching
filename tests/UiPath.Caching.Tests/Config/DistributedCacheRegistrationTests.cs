@@ -19,6 +19,31 @@ public class DistributedCacheRegistrationTests
     }
 
     [Fact]
+    public void InMemory_tier_works_without_AddMemory()
+    {
+        var services = new ServiceCollection();
+        services.AddCaching(b => b.AddDistributedCache(KnownCacheProviderNames.InMemory));
+        using var provider = services.BuildServiceProvider();
+        var cache = provider.GetRequiredService<IDistributedCache>();
+
+        cache.Set("k", [1], new DistributedCacheEntryOptions());
+
+        cache.Get("k").Should().Equal(1);
+    }
+
+    [Fact]
+    public void Redis_tier_without_a_connection_fails_with_guidance()
+    {
+        var services = new ServiceCollection();
+        services.AddCaching(b => b.AddDistributedCache(KnownCacheProviderNames.Redis));
+        using var provider = services.BuildServiceProvider();
+
+        var act = () => provider.GetRequiredService<IDistributedCache>();
+
+        act.Should().Throw<InvalidOperationException>().WithMessage("*AddRedisConnection*");
+    }
+
+    [Fact]
     public void Resolves_IDistributedCache_and_keyed_cache()
     {
         using var provider = Build(KnownCacheProviderNames.InMemory);
