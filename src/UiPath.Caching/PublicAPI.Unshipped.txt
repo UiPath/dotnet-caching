@@ -1,1 +1,10 @@
 #nullable enable
+const UiPath.Caching.Config.DistributedCacheCollectionExtensions.DistributedCacheServiceKey = "UiPath.Caching.Distributed" -> string!
+static UiPath.Caching.Config.DistributedCacheCollectionExtensions.AddDistributedCache(this UiPath.Caching.Config.ICachingBuilder! builder, string! providerName, System.Action<UiPath.Caching.Distributed.UiPathDistributedCacheOptions!>? configure = null) -> UiPath.Caching.Config.ICachingBuilder!
+UiPath.Caching.Config.DistributedCacheCollectionExtensions
+UiPath.Caching.Distributed.UiPathDistributedCacheOptions
+UiPath.Caching.Distributed.UiPathDistributedCacheOptions.InstanceName.get -> string?
+UiPath.Caching.Distributed.UiPathDistributedCacheOptions.InstanceName.set -> void
+UiPath.Caching.Distributed.UiPathDistributedCacheOptions.PolicyName.get -> string?
+UiPath.Caching.Distributed.UiPathDistributedCacheOptions.PolicyName.set -> void
+UiPath.Caching.Distributed.UiPathDistributedCacheOptions.UiPathDistributedCacheOptions() -> void

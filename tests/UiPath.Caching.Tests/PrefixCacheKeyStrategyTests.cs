@@ -37,4 +37,24 @@ public class PrefixCacheKeyStrategyTests
         var actual = Sut.GetCacheKey<string>(cacheKey);
         actual.Should().Be((CacheKey)expected);
     }
+
+    [Fact]
+    public void Preserves_sensitive_casing_through_prefixing()
+    {
+        var strategy = new PrefixCacheKeyStrategy("MyApp");
+        var key = new CacheKey("AbC", CacheKeyCasing.Sensitive);
+
+        var result = strategy.GetCacheKey<string>(key);
+
+        result.Name.Should().Be("myapp:AbC");
+        result.Casing.Should().Be(CacheKeyCasing.Sensitive);
+    }
+
+    [Fact]
+    public void Insensitive_keys_behave_exactly_as_before()
+    {
+        var strategy = new PrefixCacheKeyStrategy("MyApp");
+        var result = strategy.GetCacheKey<string>(new CacheKey("AbC"));
+        result.Name.Should().Be("myapp:abc");
+    }
 }

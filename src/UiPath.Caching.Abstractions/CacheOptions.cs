@@ -18,6 +18,9 @@ public class CacheOptions
 
     public bool AuditEnabled { get; set; } = true;
 
+    /// <summary>Seeds <see cref="CacheKey.DefaultCasing"/> when options bind. The distributed cache ignores this — its keys are always sensitive.</summary>
+    public CacheKeyCasing KeyCasing { get; set; } = CacheKeyCasing.Insensitive;
+
     public string DefaultCache { get; set; } = KnownCacheProviderNames.InMemoryRedis;
 
     public string DefaultTopic { get; set; } = KnownTopicNames.RedisStreams;

@@ -286,6 +286,76 @@ That single registration replaces the default JSON serializer for every cache th
 - **Schema evolution is your problem.** The library does not version cached payloads. If your serializer can't deserialize an older payload after a deploy, `TryDeserialize` should return `false` and the cache will treat that as a miss; the generator will run and write a fresh entry.
 - **Consider `RedisValue` directly.** `RedisValue` can hold strings, bytes, or numbers without conversion. A binary serializer (MessagePack, ProtoBuf, MemoryPack) should write `byte[]` directly via `RedisValue` implicit conversion rather than going through `string`/Base64 — JSON-style proxies can stay string-based.
 
+### Byte-oriented serializers (`ISerializerProxy<byte[]>`)
+
+The distributed cache path (`AddDistributedCache`) serializes through `ISerializerProxy<byte[]>`
+instead of `ISerializerProxy<RedisValue>`. The default, `SystemJsonByteSerializerProxy`, passes
+`byte[]` payloads through raw — no base64, no JSON, no extra encoding layer — and JSON-encodes
+every other type; the requested type argument decides, there is no format sniffing. Note that the
+distributed cache still wraps payloads in its own binary envelope, so the stored values are not
+interchangeable with other `IDistributedCache` implementations.
+
+Swapping it follows the same pattern as the `RedisValue` proxy — and is simpler, because most
+binary serializers natively produce `byte[]`:
+
+```csharp
+public sealed class MessagePackByteSerializerProxy(MessagePackSerializerOptions? options = null)
+    : ISerializerProxy<byte[]>
+{
+    public byte[]? Serialize(object? value) =>
+        value is null ? null : MessagePackSerializer.Serialize(value.GetType(), value, options);
+
+    public T? Deserialize<T>(byte[]? value) =>
+        value is null or { Length: 0 } ? default : MessagePackSerializer.Deserialize<T>(value, options);
+
+    public bool TryDeserialize<T>(string? value, out T? result)
+    {
+        result = default;
+        if (string.IsNullOrWhiteSpace(value))
+        {
+            return false;
+        }
+        try
+        {
+            result = MessagePackSerializer.Deserialize<T>(Convert.FromBase64String(value), options);
+            return true;
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
+    public bool TryDeserialize<T>(object? value, out T? result)
+    {
+        result = default;
+        try
+        {
+            if (value is byte[] bytes)
+            {
+                result = MessagePackSerializer.Deserialize<T>(bytes, options);
+                return true;
+            }
+            return TryDeserialize(value?.ToString(), out result);
+        }
+        catch
+        {
+            return false;
+        }
+    }
+}
+
+services.AddSingleton<ISerializerProxy<byte[]>>(new MessagePackByteSerializerProxy());
+```
+
+Two rules for custom implementations:
+
+1. **Round-trip `byte[]` symmetrically.** The distributed cache stores its envelope as `byte[]`;
+   raw passthrough (recommended) avoids per-entry encoding overhead, but any symmetric encoding
+   also works.
+2. **This does not change the main caches' wire format** — `ICache`/`IHashCache` still serialize
+   through `ISerializerProxy<RedisValue>`. Swap both registrations if you want one format everywhere.
+
 ## Swapping the default factories
 
 `ICacheFactory` and `ICachePolicyFactory` each have a default DI registration set up by `AddCaching` — the concrete `CacheFactory` and `DefaultCachePolicyFactory` respectively. When you need to substitute either, use the fluent `Use*Factory` extensions on `ICachingBuilder`. They internally call `Services.Replace(...)` so the swap survives the rest of the `AddCaching` pipeline (which uses `TryAddSingleton` and would otherwise lose to the default registration).
