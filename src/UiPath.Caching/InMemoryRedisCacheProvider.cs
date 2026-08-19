@@ -43,9 +43,18 @@ public sealed class InMemoryRedisCacheProvider : ICacheProvider
         _cacheOptions = cacheOptionsAccessor.Value;
         _memoryCacheFactory = memoryCacheFactory;
         _cacheFactory = new Lazy<ICacheFactory>(cacheFactoryAccessor);
-        _changeTokenFactory = changeTokenFactory;
-        _topicFactory = topicFactory;
-        _cacheEventFactory = cacheEventFactory;
+        if (_options.BroadcastEnable)
+        {
+            _changeTokenFactory = changeTokenFactory;
+            _topicFactory = topicFactory;
+            _cacheEventFactory = cacheEventFactory;
+        }
+        else
+        {
+            _changeTokenFactory = NullChangeTokenFactory.Instance;
+            _topicFactory = NullTopicFactory.Instance;
+            _cacheEventFactory = NullCacheEventFactory.Instance;
+        }
         _cachingTelemetryProvider = cachingTelemetryProvider;
         _loggerFactory = loggerFactory;
         _localLock = localLock;

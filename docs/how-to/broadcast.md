@@ -26,6 +26,27 @@ Broadcast is wired up by calling `AddBroadcast()` on the caching builder. The no
 
 When broadcast is disabled via `BroadcastEnabled: false`, neither `RedisStreamsTopicProvider` nor `RedisPubSubTopicProvider` is registered. All `ITopic` resolutions fall through to the null implementation — writes go to Redis and L1 but no invalidation messages are sent or received. This is safe for single-node deployments and for development environments where a second Redis connection for streams is undesirable.
 
+The same key also exists as a runtime property, `CacheOptions.BroadcastEnabled`, settable from the `AddCaching` options lambda. Setting it to `false` makes `TopicFactory` resolve every topic to `NullTopicProvider`, so broadcast goes quiet even when the providers were already registered. Prefer the configuration key when you can: it skips the registration altogether rather than neutering it afterwards.
+
+### Disabling broadcast for `InMemoryRedis` only
+
+`InMemoryRedisCacheOptions.BroadcastEnable` turns broadcast off for that one provider while leaving it on for everything else:
+
+```jsonc
+"Caching": {
+  "InMemoryRedis": {
+    "BroadcastEnable": false   // L1+L2 tiering, no cross-node invalidation
+  }
+}
+```
+
+Use it when a single provider should skip broadcast: a single-node deployment where cross-node invalidation buys nothing, or a Redis-compatible backend whose Streams support does not cover `XREADGROUP` (Garnet, for example) and you would rather drop invalidation than switch transport.
+
+Two things to know:
+
+- It defaults to `true`, the opposite of `InMemoryCacheOptions.BroadcastEnable`, which is opt-in. `InMemoryRedis` has always broadcast by default and continues to.
+- It can only narrow the app-wide setting. The effective behavior is `CacheOptions.BroadcastEnabled` AND this flag, so when broadcast is off app-wide, setting this to `true` changes nothing.
+
 ## Choosing a transport
 
 `AddBroadcast()` calls both `AddRedisStreams()` and `AddRedisPubSub()` — which provider actually handles a topic depends on whether its `Enabled` flag is `true`. By default Redis Streams is enabled and Pub/Sub is disabled (`RedisPubSubTopicOptions.Enabled` defaults to `false`).
@@ -330,6 +351,14 @@ Confirm `MaintainerEnabled: true` and that `StartAsync` was called (the service 
 **Consumer groups from decommissioned pods accumulate.**
 
 These are cleaned up by the maintainer's quarantine logic. A group with no consumers is quarantined on the first cycle it is observed and deleted after `MaintainerQuarantineInterval` (default 1 h). If groups are accumulating faster than they are being cleaned up, lower `MaintainerCheckInterval` to run maintenance more frequently.
+
+**`ERR unknown command` from the fetch loop against a Redis-compatible backend.**
+
+The server does not implement `XREADGROUP`. Some RESP-compatible stores support Streams writes and ranges without the consumer-group read side; Microsoft Garnet is the common case. The fetch loop reports this once at `Critical` and then retries every 30 s instead of once per `PollInterval`, so the log does not flood, and it recovers on its own if the connection later lands on a server that does support the command. Until then this node receives no invalidations over Streams.
+
+Three ways out, in order of preference: switch to Pub/Sub (see [Choosing a transport](#choosing-a-transport)), which those backends do support and which keeps cross-node invalidation; set `InMemoryRedis:BroadcastEnable: false` to keep L1+L2 without invalidation; or disable broadcast app-wide with `BroadcastEnabled: false`.
+
+Note that `RedisStreams:Enabled: false` is worth setting alongside either of the last two, otherwise `RedisStreamHealthMaintainer` still starts and runs `SCAN`/`XINFO` against the same backend.
 
 **`MaintainerSearchPattern` warning: SCAN is matching keys outside this app.**
 

@@ -20,7 +20,10 @@ public sealed class TopicFactory : ITopicFactory, IDisposable
         }
     }
 
-    public IEnumerable<string> ProviderNames => _providers.Values.Where(p => p.Enabled).Select(p => p.Name);
+    public IEnumerable<string> ProviderNames =>
+        _options.BroadcastEnabled
+            ? _providers.Values.Where(p => p.Enabled).Select(p => p.Name)
+            : [];
 
     public void AddProvider(ITopicProvider provider)
     {
@@ -34,8 +37,15 @@ public sealed class TopicFactory : ITopicFactory, IDisposable
         _disposed = true;
     }
 
+    /// <summary>
+    /// Resolves a topic provider by name. When <see cref="CacheOptions.BroadcastEnabled"/> is <c>false</c>
+    /// every resolution returns <see cref="NullTopicProvider"/>, so setting the flag at runtime silences
+    /// broadcast even for providers that were registered before it was read.
+    /// </summary>
     public ITopicProvider Get(string? providerName = null) =>
-        GetProvider(providerName ?? _options.DefaultTopic) ?? Default();
+        !_options.BroadcastEnabled
+            ? NullTopicProvider.Instance
+            : GetProvider(providerName ?? _options.DefaultTopic) ?? Default();
 
     private ITopicProvider Default() =>
         GetProvider(_options.DefaultTopic) ?? NullTopicProvider.Instance;

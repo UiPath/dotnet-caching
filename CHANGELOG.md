@@ -25,6 +25,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
   nodes refresh each shared key once. Added to `ICache` as default interface methods, so existing
   `ICache` implementations keep compiling; the `ICache<T>` overloads are **abstract** — see the
   breaking note under **Changed**.
+- **`InMemoryRedisCacheOptions.BroadcastEnable`** (default `true`) turns cross-node L1 invalidation off for the `InMemoryRedis` provider alone, so L1+L2 tiering can be used without broadcast traffic. Intended for single-node deployments, where cross-node invalidation buys nothing, and for Redis-compatible backends whose Streams support does not cover `XREADGROUP`. When `false` the provider gets `NullTopicFactory` / `NullChangeTokenFactory` / `NullCacheEventFactory`, mirroring what `InMemoryCacheProvider` already did for `InMemoryCacheOptions.BroadcastEnable`. The flag can only narrow `CacheOptions.BroadcastEnabled`, never widen it; note its default is the opposite of the `InMemory` equivalent, which is opt-in. ([#103](https://github.com/UiPath/dotnet-caching/issues/103))
 
 ### Changed
 
@@ -37,6 +38,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
   `UiPath.Caching.Abstractions`, with no recompile involved. Consumers that pick the new abstractions
   up transitively must rebuild, not just restore. The `ICache` overloads are default interface
   methods, so `ICache` implementations are unaffected.
+
+### Fixed
+
+- The Redis Streams fetch loop no longer hammers a server that does not implement `XREADGROUP`. It previously re-issued the command and logged `Fetch events loop error` once per `PollInterval` (250 ms by default) forever. The unsupported-command case is now reported once at `Critical` with the available remedies, then retried every 30 s; a successful fetch lifts the quarantine and logs recovery, and a connection-restored/reconnected event wakes the loop early so recovery does not wait out the backoff. Recovery does not depend on those events: with the connection monitor off (the default) the timed retry still gets there. Other consecutive fetch failures now back off exponentially from `PollInterval` up to 30 s instead of retrying at the poll rate. ([#103](https://github.com/UiPath/dotnet-caching/issues/103))
+- **`CacheOptions.BroadcastEnabled` now actually disables broadcast.** It was read only by `RedisStreamHealthMaintainer`, so setting it through the `AddCaching` options lambda stopped the maintainer while the Streams fetch loop kept running, despite sharing a name with the configuration key that does perform the real opt-out. `TopicFactory` now resolves every topic to `NullTopicProvider` and reports no provider names when the flag is `false`. ([#103](https://github.com/UiPath/dotnet-caching/issues/103))
+
+### Documentation
+
+- `concepts.md` now states that `AddInMemoryRedis()` wires broadcast internally and that a code-only `AddBroadcast(enabled: false)` does not stick, and links to the broadcast how-to. The how-to gains a section on disabling broadcast for `InMemoryRedis` alone and a troubleshooting entry for `ERR unknown command` against Redis-compatible backends. ([#103](https://github.com/UiPath/dotnet-caching/issues/103))
 
 ## [1.2.0] - 2026-08-04
 

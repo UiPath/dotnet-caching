@@ -142,6 +142,7 @@ Per-topic overrides: add entries to `Topics[]` under `Broadcast:RedisPubSub`. Ea
 | `Timeout` | `TimeSpan` | `00:00:01` | Per-provider | Max wait for a cache operation before giving up and falling through. |
 | `TrackStatistics` | `bool` | `true` | Per-provider | Emit hit/miss/eviction counters via the telemetry provider. |
 | `StatisticsFlushInterval` | `TimeSpan` | `00:01:00` | Per-provider | How often statistics are flushed to the telemetry sink. |
+| `BroadcastEnable` | `bool` | `true` | Per-provider | Publish/consume cross-node L1 invalidations for this provider. `false` keeps L1+L2 with no broadcast traffic. Can only narrow `CacheOptions.BroadcastEnabled`, never widen it. Note the default is the opposite of `InMemoryCacheOptions.BroadcastEnable`. |
 | `Topic` | `string?` | `null` | Per-provider | Topic name for L1 invalidation broadcasts; `null` = use `CacheOptions.DefaultTopic`. |
 | `LocalMaxExpiration` | `TimeSpan?` | `null` | Per-provider | Cap on the L1 (in-memory) TTL while L2 is connected; `null` = no cap beyond `DefaultExpiration`. |
 | `ConnectionMonitorEnabled` | `bool?` | `null` | Per-provider | `null` = inherit from `CacheOptions.ConnectionMonitorEnabled`. |

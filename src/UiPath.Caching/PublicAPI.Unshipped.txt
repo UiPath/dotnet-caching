@@ -1,1 +1,3 @@
 #nullable enable
+UiPath.Caching.InMemoryRedisCacheOptions.BroadcastEnable.get -> bool
+UiPath.Caching.InMemoryRedisCacheOptions.BroadcastEnable.set -> void
