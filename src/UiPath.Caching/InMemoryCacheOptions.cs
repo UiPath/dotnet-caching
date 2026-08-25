@@ -89,6 +89,9 @@ public class InMemoryCacheOptions : IMultilayerCacheOptions, IMemoryCacheOptions
     public TimeSpan? DistributedLockExpiry { get; set; }
 
     public IDistributedLockKeyStrategy? LockKeyStrategy { get; set; }
+
+    /// <summary>Member-wise copy, so a caller can vary one setting without mutating the DI singleton.</summary>
+    internal InMemoryCacheOptions ShallowCopy() => (InMemoryCacheOptions)MemberwiseClone();
 }
 
 #pragma warning restore S1133

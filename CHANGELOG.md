@@ -6,11 +6,77 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 
 ## [Unreleased]
 
+### Added
+
+- **`IDistributedCache` adapter.** `builder.AddDistributedCache(providerName)` registers a
+  `Microsoft.Extensions.Caching.Distributed.IDistributedCache` backed by this library's pipeline —
+  shared Redis connection, resilience, telemetry — so consumers that require it (ASP.NET Core session
+  state, OpenIddict, DataProtection, rate limiters, and `HybridCache` as an L2) stop running a second,
+  parallel Redis stack. The backing tier is a required argument
+  (`Redis` recommended, `InMemoryRedis`, or `InMemory`); full absolute + sliding expiration and
+  `Refresh` semantics are supported. Keys are **always case-sensitive**, independent of
+  `CacheOptions.KeyCasing`, because `IDistributedCache` keys are opaque and case-significant.
+  Entries are stored as a Redis hash (`data`, `absexp`, `sldexp` — the conventional layout for this
+  contract) in a keyspace disjoint from the application's own caches, so `Refresh` reads
+  only the expiration metadata rather than transferring the payload. Keyspace separation is
+  configurable at both levels: `CacheKeyStrategy` prefixes the `CacheKey` itself (`d:` by default) so a
+  distributed entry cannot be reached through the application's own `ICache`/`IHashCache` with the bare
+  caller key, and `RedisKeyDifferentiator` plus `RedisKeyStrategyFactory` separate the physical Redis
+  keyspace (`dh` by default, inheriting the application's factory). A differentiator matching one of the
+  application's own type prefixes is rejected at registration, and because a differentiator only
+  separates anything if the factory honors it, registration also proves the composed key differs from
+  what the application's caches would produce. Configurable via
+  `UiPathDistributedCacheOptions`: `PolicyName`, `DefaultEntryExpiration`, and
+  `AllowUnboundedEntries`. Writes with no caller expiration take a bounded default rather than living
+  forever in shared storage; registration fails fast when no bounded default resolves and
+  `AllowUnboundedEntries` is not set.
+- **`CacheOptions.KeyCasing`** selects how keys built without an explicit mode are normalized —
+  `Insensitive` (trim + lowercase, the historical behavior and the default) or `Sensitive` (preserve
+  the caller's casing). `CacheKey` gained a `(string?, CacheKeyCasing)` constructor, a `Casing`
+  property, and `WithName` so key transformations preserve the mode. Changing the app-wide setting
+  relocates every cache key, so existing entries are rewritten under the new spelling.
+- **`CacheKeyComparer`** exposes cached `Sensitive` / `Insensitive` equality comparers over
+  `CacheKey`, in the `StringComparer` shape.
+- **`ISerializerProxy<byte[]>`** is a new serialization seam, defaulting to
+  `SystemJsonByteSerializerProxy`: byte payloads pass through raw (no base64, no JSON) and everything
+  else is UTF-8 JSON, with the requested type argument deciding. The existing
+  `ISerializerProxy<RedisValue>` registration and every existing wire format are untouched. Swapping
+  in a binary serializer such as MessagePack is one class and one registration — see
+  [how-to/extending.md](docs/how-to/extending.md).
+- **`RedisCacheOptions.AwaitRefresh`** (default `false`) waits for the server to apply a refresh instead of
+  sending `KEYEXPIRE`/`PERSIST` fire-and-forget. Off by default, which keeps the round trip off the
+  sliding-expiration path — it runs on every read of a sliding entry — and preserves existing behavior.
+  `AddDistributedCache` enables it on the private provider it builds, because a silently dropped refresh
+  shortens a session and fire-and-forget cannot report one. Honored by both `RedisCache` and
+  `RedisHashCache`.
+
 ### Changed
 
+- **BREAKING:** `CacheKey.Equals` and `GetHashCode` are now ordinal rather than
+  `InvariantCultureIgnoreCase`. Insensitive keys are still lowercased at construction, so the stored
+  key and every comparison between insensitive keys are unchanged; what changes is that equality is
+  now consistent with `GetHashCode` (the previous pairing could report two keys equal while hashing
+  them into different buckets) and that keys built with `CacheKeyCasing.Sensitive` compare
+  case-sensitively.
 - **`Microsoft.Extensions.*` dependency floor for `net10.0` raised to 10.0.11** (from 10.0.10).
   The `net8.0` floor is unchanged at 8.0.x.
 - **OpenTelemetry packages moved to 1.18.0** (`OpenTelemetry.Instrumentation.StackExchangeRedis` to 1.18.0-beta.1).
+
+### Fixed
+
+- **`RefreshAsync` on Redis reported nothing.** Both Redis caches sent their standalone
+  `KEYEXPIRE`/`PERSIST` fire-and-forget, so the call returned `false` whether the refresh succeeded, failed
+  or the key did not exist, the server's reply was never seen — a rejected command was neither logged nor
+  retried by the resilience pipeline — and telemetry recorded every refresh as unsuccessful. Setting
+  `RedisCacheOptions.AwaitRefresh` makes the result meaningful; the default is unchanged, so existing
+  callers see the previous behavior until they opt in. The fire-and-forget flags inside the write
+  transactions are untouched: those replies are discarded, but the transaction itself is awaited.
+- **`AddCaching(IConfigurationSection)` never bound `CacheOptions`.** The overload passed its options
+  binder positionally, so it landed on the `configure` parameter and type-checked as
+  `Action<ICachingBuilder>` — leaving `configureOptions` null, the section unread, and the config bound
+  onto the builder object instead. Every `CacheOptions` value supplied through that entry point was
+  silently ignored; `Enabled`, `AppShortName`, `KeyCasing` and the rest now take effect, which changes
+  behavior for anyone who was unknowingly running on the defaults.
 
 ## [1.3.0] - 2026-08-19
 

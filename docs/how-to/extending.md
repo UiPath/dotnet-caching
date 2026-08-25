@@ -286,6 +286,106 @@ That single registration replaces the default JSON serializer for every cache th
 - **Schema evolution is your problem.** The library does not version cached payloads. If your serializer can't deserialize an older payload after a deploy, `TryDeserialize` should return `false` and the cache will treat that as a miss; the generator will run and write a fresh entry.
 - **Consider `RedisValue` directly.** `RedisValue` can hold strings, bytes, or numbers without conversion. A binary serializer (MessagePack, ProtoBuf, MemoryPack) should write `byte[]` directly via `RedisValue` implicit conversion rather than going through `string`/Base64 — JSON-style proxies can stay string-based.
 
+### Byte-oriented serializers (`ISerializerProxy<byte[]>`)
+
+The distributed cache path (`AddDistributedCache`) serializes through `ISerializerProxy<byte[]>`
+instead of `ISerializerProxy<RedisValue>`. The default, `SystemJsonByteSerializerProxy`, passes
+`byte[]` payloads through raw — no base64, no JSON, no extra encoding layer — and JSON-encodes
+every other type; the requested type argument decides, there is no format sniffing.
+
+The distributed cache stores each entry as a Redis hash with a `data` field plus `absexp`/`sldexp`
+expiration metadata, the conventional layout for this contract, so
+`Refresh` reads the metadata without transferring the payload. Its keyspace is deliberately disjoint
+from the application's own caches, at two overridable levels — `RedisKeyDifferentiator` for the
+physical Redis keyspace, and `CacheKeyStrategy` for the `CacheKey` itself, so an entry cannot be
+reached through the application's own `ICache`/`IHashCache` with the bare caller key:
+
+```csharp
+builder.AddDistributedCache(KnownCacheProviderNames.Redis, o =>
+{
+    o.CacheKeyStrategy = new PrefixCacheKeyStrategy("sessions");
+    o.RedisKeyDifferentiator = "sess";
+});
+```
+
+Both default to values that keep the two keyspaces apart (`"d"` and `"dh"`); overriding them makes
+that separation yours to preserve. A differentiator matching one of the application's own
+`RedisTypePrefixes` is rejected at registration.
+
+For full control of the Redis key — a mandated layout, or a cluster hash-tag scheme —
+`RedisKeyStrategyFactory` replaces the factory the key is built from. It still receives
+`RedisKeyDifferentiator`, and registration proves the composed key differs from what the
+application's caches would produce, so a factory that ignores the differentiator fails at startup
+rather than sharing the keyspace:
+
+```csharp
+o.RedisKeyStrategyFactory = new MyRedisKeyStrategyFactory();   // gets "dh" (or your differentiator)
+```
+
+Left null it inherits the application's own `RedisCacheOptions.RedisKeyStrategyFactory`, so
+`AppShortName`, the separator and sharding behave as they do everywhere else.
+
+Swapping it follows the same pattern as the `RedisValue` proxy — and is simpler, because most
+binary serializers natively produce `byte[]`:
+
+```csharp
+public sealed class MessagePackByteSerializerProxy(MessagePackSerializerOptions? options = null)
+    : ISerializerProxy<byte[]>
+{
+    public byte[]? Serialize(object? value) =>
+        value is null ? null : MessagePackSerializer.Serialize(value.GetType(), value, options);
+
+    public T? Deserialize<T>(byte[]? value) =>
+        value is null or { Length: 0 } ? default : MessagePackSerializer.Deserialize<T>(value, options);
+
+    public bool TryDeserialize<T>(string? value, out T? result)
+    {
+        result = default;
+        if (string.IsNullOrWhiteSpace(value))
+        {
+            return false;
+        }
+        try
+        {
+            result = MessagePackSerializer.Deserialize<T>(Convert.FromBase64String(value), options);
+            return true;
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
+    public bool TryDeserialize<T>(object? value, out T? result)
+    {
+        result = default;
+        try
+        {
+            if (value is byte[] bytes)
+            {
+                result = MessagePackSerializer.Deserialize<T>(bytes, options);
+                return true;
+            }
+            return TryDeserialize(value?.ToString(), out result);
+        }
+        catch
+        {
+            return false;
+        }
+    }
+}
+
+services.AddSingleton<ISerializerProxy<byte[]>>(new MessagePackByteSerializerProxy());
+```
+
+Two rules for custom implementations:
+
+1. **Round-trip `byte[]` symmetrically.** The distributed cache stores the caller's payload directly
+   in the hash's `data` field; raw passthrough (recommended) avoids per-entry encoding overhead, but
+   any symmetric encoding also works.
+2. **This does not change the main caches' wire format** — `ICache`/`IHashCache` still serialize
+   through `ISerializerProxy<RedisValue>`. Swap both registrations if you want one format everywhere.
+
 ## Swapping the default factories
 
 `ICacheFactory` and `ICachePolicyFactory` each have a default DI registration set up by `AddCaching` — the concrete `CacheFactory` and `DefaultCachePolicyFactory` respectively. When you need to substitute either, use the fluent `Use*Factory` extensions on `ICachingBuilder`. They internally call `Services.Replace(...)` so the swap survives the rest of the `AddCaching` pipeline (which uses `TryAddSingleton` and would otherwise lose to the default registration).

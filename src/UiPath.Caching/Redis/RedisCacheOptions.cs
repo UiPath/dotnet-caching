@@ -23,4 +23,15 @@ public class RedisCacheOptions : ICacheOptions
     public bool CacheNullValues { get; set; }
 
     public bool KeyReadTelemetryEnabled { get; set; }
+
+    /// <summary>
+    /// Wait for the server to apply a refresh rather than sending it fire-and-forget. Off by default, keeping
+    /// the round trip off the sliding-expiration path. Fire-and-forget makes a refresh unverifiable:
+    /// <c>RefreshAsync</c> returns <see langword="false"/> either way, a rejection is neither logged nor
+    /// retried, and the new deadline is not yet in effect when the call returns.
+    /// </summary>
+    public bool AwaitRefresh { get; set; }
+
+    /// <summary>Member-wise copy, so a caller can vary one setting without mutating the DI singleton.</summary>
+    internal RedisCacheOptions ShallowCopy() => (RedisCacheOptions)MemberwiseClone();
 }

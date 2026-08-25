@@ -6,10 +6,15 @@ public static class ServiceCollectionExtensions
     private const string DefaultSectionName = "Caching";
 
     public static IServiceCollection AddCaching(this IServiceCollection services, IConfiguration configuration, string sectionName = DefaultSectionName) =>
-        services.AddCaching(configuration, opt => configuration.GetSection(sectionName).Bind(opt), sectionName);
+        services.AddCaching(configuration, configure: null, sectionName);
 
+    /// <summary>
+    /// Binds <see cref="CacheOptions"/> from <paramref name="configuration"/>. The binder is passed by name:
+    /// positionally it lands on the <c>configure</c> parameter instead, where it type-checks as
+    /// <c>Action&lt;ICachingBuilder&gt;</c> and leaves the section unread.
+    /// </summary>
     public static IServiceCollection AddCaching(this IServiceCollection services, IConfigurationSection configuration) =>
-        services.AddCaching(configuration, opt => configuration.Bind(opt));
+        services.AddCaching(configuration, configure: null, configureOptions: opt => configuration.Bind(opt));
 
     public static IServiceCollection AddCaching(this IServiceCollection services, Action<ICachingBuilder> configure) =>
         services.AddCaching(null, configure);
@@ -36,6 +41,8 @@ public static class ServiceCollectionExtensions
             configureOptions(options);
             services.Configure(configureOptions);
         }
+
+        SeedDefaultKeyCasing(options);
 
         if (options.Enabled)
         {
@@ -68,6 +75,25 @@ public static class ServiceCollectionExtensions
             new MemoryCacheFactory(sp.GetService<ISystemClock>(),
             sp.GetService<ILoggerFactory>() ?? NullLoggerFactory.Instance));
         return services;
+    }
+
+    /// <summary>
+    /// Validates the casing and seeds <see cref="CacheKey.DefaultCasing"/>. Called eagerly from
+    /// <c>AddCaching</c>, because a key built before anything resolves <see cref="IOptions{CacheOptions}"/>
+    /// would normalize with the wrong casing, and again from the PostConfigure callback, which is what
+    /// options registered after <c>AddCaching</c> reach. Both paths validate: configuration binding accepts
+    /// an out-of-range enum numerically, and assigning one straight to the global default would be reported
+    /// only by whichever key happened to be built next.
+    /// </summary>
+    internal static void SeedDefaultKeyCasing(CacheOptions options)
+    {
+        if (options.KeyCasing is not (CacheKeyCasing.Insensitive or CacheKeyCasing.Sensitive))
+        {
+            throw new InvalidOperationException(
+                $"CacheOptions.KeyCasing has the unsupported value {(int)options.KeyCasing}. Use {nameof(CacheKeyCasing.Insensitive)} or {nameof(CacheKeyCasing.Sensitive)}.");
+        }
+
+        CacheKey.DefaultCasing = options.KeyCasing;
     }
 
     public static IServiceCollection TryConfigure<TOptions>(this IServiceCollection services, Action<TOptions> configureOptions)

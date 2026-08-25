@@ -252,3 +252,6 @@ src/ProcessForms/UiPath.ProcessForms/UiPath.ProcessForms.XML
 
 # BenchmarkDotNet run output
 BenchmarkDotNet.Artifacts/
+
+# Local-only design notes (specs/plans); never committed
+docs/superpowers/
