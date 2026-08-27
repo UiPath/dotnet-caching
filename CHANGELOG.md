@@ -10,6 +10,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 
 - **`Microsoft.Extensions.*` dependency floor for `net10.0` raised to 10.0.11** (from 10.0.10).
   The `net8.0` floor is unchanged at 8.0.x.
+- **OpenTelemetry packages moved to 1.18.0** (`OpenTelemetry.Instrumentation.StackExchangeRedis` to 1.18.0-beta.1).
 
 ## [1.3.0] - 2026-08-19
 
