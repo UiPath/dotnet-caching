@@ -5,6 +5,13 @@ updates:
     schedule:
       interval: "weekly"
     open-pull-requests-limit: 5
+    groups:
+      # The OpenTelemetry packages are version-locked on each other; bumping them one PR at
+      # a time fails restore with NU1605. Keep the family in a single PR.
+      opentelemetry:
+        patterns:
+          - "OpenTelemetry"
+          - "OpenTelemetry.*"
     ignore:
       # Microsoft.Extensions.* versions are framework-aligned via TFM-conditional
       # ItemGroups in Directory.Packages.props (net8 -> 8.x, net10 -> 10.x).
