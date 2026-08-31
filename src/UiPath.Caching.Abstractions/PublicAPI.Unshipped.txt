@@ -1,21 +1,39 @@
 #nullable enable
+UiPath.Caching.Cache<T>.TryAddAsync(UiPath.Caching.CacheKey cacheKey, T? value, System.DateTimeOffset? expiration, System.Threading.CancellationToken token = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.ValueTask<bool>
+UiPath.Caching.Cache<T>.TryAddAsync(UiPath.Caching.CacheKey cacheKey, T? value, System.Threading.CancellationToken token = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.ValueTask<bool>
+UiPath.Caching.Cache<T>.TryAddAsync(UiPath.Caching.CacheKey cacheKey, T? value, System.TimeSpan? expiration, System.Threading.CancellationToken token = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.ValueTask<bool>
 UiPath.Caching.CacheKey.CacheKey(string? name, UiPath.Caching.CacheKeyCasing casing) -> void
 UiPath.Caching.CacheKey.Casing.get -> UiPath.Caching.CacheKeyCasing
 UiPath.Caching.CacheKey.WithName(string? name) -> UiPath.Caching.CacheKey
 UiPath.Caching.CacheKeyCasing
 UiPath.Caching.CacheKeyCasing.Insensitive = 0 -> UiPath.Caching.CacheKeyCasing
+UiPath.Caching.CacheKeyCasing.Sensitive = 1 -> UiPath.Caching.CacheKeyCasing
 UiPath.Caching.CacheKeyComparer
 UiPath.Caching.CacheKeyComparer.CacheKeyComparer() -> void
-static UiPath.Caching.CacheKeyComparer.Insensitive.get -> UiPath.Caching.CacheKeyComparer!
-static UiPath.Caching.CacheKeyComparer.Sensitive.get -> UiPath.Caching.CacheKeyComparer!
-UiPath.Caching.CacheKeyCasing.Sensitive = 1 -> UiPath.Caching.CacheKeyCasing
 UiPath.Caching.CacheOptions.KeyCasing.get -> UiPath.Caching.CacheKeyCasing
 UiPath.Caching.CacheOptions.KeyCasing.set -> void
+UiPath.Caching.ICache.TryAddAsync<T>(UiPath.Caching.CacheKey cacheKey, T? value, System.DateTimeOffset? expiration = null, UiPath.Caching.CachePolicy? policy = null, System.Threading.CancellationToken token = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.ValueTask<bool>
+UiPath.Caching.ICache.TryAddAsync<T>(UiPath.Caching.CacheKey cacheKey, T? value, System.DateTimeOffset? expiration, System.Threading.CancellationToken token = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.ValueTask<bool>
+UiPath.Caching.ICache.TryAddAsync<T>(UiPath.Caching.CacheKey cacheKey, T? value, System.Threading.CancellationToken token = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.ValueTask<bool>
+UiPath.Caching.ICache.TryAddAsync<T>(UiPath.Caching.CacheKey cacheKey, T? value, System.TimeSpan? expiration = null, UiPath.Caching.CachePolicy? policy = null, System.Threading.CancellationToken token = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.ValueTask<bool>
+UiPath.Caching.ICache.TryAddAsync<T>(UiPath.Caching.CacheKey cacheKey, T? value, System.TimeSpan? expiration, System.Threading.CancellationToken token = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.ValueTask<bool>
+UiPath.Caching.ICache.TryAddAsync<T>(UiPath.Caching.CacheKey cacheKey, T? value, UiPath.Caching.CachePolicy? policy = null, System.Threading.CancellationToken token = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.ValueTask<bool>
+UiPath.Caching.ICache<T>.TryAdd(UiPath.Caching.CacheKey cacheKey, T? value, System.DateTimeOffset? expiration, System.Threading.CancellationToken token = default(System.Threading.CancellationToken)) -> bool
+UiPath.Caching.ICache<T>.TryAdd(UiPath.Caching.CacheKey cacheKey, T? value, System.Threading.CancellationToken token = default(System.Threading.CancellationToken)) -> bool
+UiPath.Caching.ICache<T>.TryAdd(UiPath.Caching.CacheKey cacheKey, T? value, System.TimeSpan? expiration, System.Threading.CancellationToken token = default(System.Threading.CancellationToken)) -> bool
+UiPath.Caching.ICache<T>.TryAddAsync(UiPath.Caching.CacheKey cacheKey, T? value, System.DateTimeOffset? expiration, System.Threading.CancellationToken token = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.ValueTask<bool>
+UiPath.Caching.ICache<T>.TryAddAsync(UiPath.Caching.CacheKey cacheKey, T? value, System.Threading.CancellationToken token = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.ValueTask<bool>
+UiPath.Caching.ICache<T>.TryAddAsync(UiPath.Caching.CacheKey cacheKey, T? value, System.TimeSpan? expiration, System.Threading.CancellationToken token = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.ValueTask<bool>
+UiPath.Caching.NullCache.TryAddAsync<T>(UiPath.Caching.CacheKey cacheKey, T? value, System.DateTimeOffset? expiration = null, UiPath.Caching.CachePolicy? policy = null, System.Threading.CancellationToken token = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.ValueTask<bool>
+UiPath.Caching.NullCache.TryAddAsync<T>(UiPath.Caching.CacheKey cacheKey, T? value, System.TimeSpan? expiration = null, UiPath.Caching.CachePolicy? policy = null, System.Threading.CancellationToken token = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.ValueTask<bool>
+UiPath.Caching.NullCache.TryAddAsync<T>(UiPath.Caching.CacheKey cacheKey, T? value, UiPath.Caching.CachePolicy? policy = null, System.Threading.CancellationToken token = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.ValueTask<bool>
 UiPath.Caching.SystemJsonByteSerializerProxy
-UiPath.Caching.SystemJsonByteSerializerProxy.SystemJsonByteSerializerProxy(System.Text.Json.JsonSerializerOptions? options = null) -> void
-UiPath.Caching.SystemJsonByteSerializerProxy.Serialize(object? value) -> byte[]?
 UiPath.Caching.SystemJsonByteSerializerProxy.Deserialize<T>(byte[]? value) -> T?
-UiPath.Caching.SystemJsonByteSerializerProxy.TryDeserialize<T>(string? value, out T? result) -> bool
+UiPath.Caching.SystemJsonByteSerializerProxy.Serialize(object? value) -> byte[]?
+UiPath.Caching.SystemJsonByteSerializerProxy.SystemJsonByteSerializerProxy(System.Text.Json.JsonSerializerOptions? options = null) -> void
 UiPath.Caching.SystemJsonByteSerializerProxy.TryDeserialize<T>(object? value, out T? result) -> bool
+UiPath.Caching.SystemJsonByteSerializerProxy.TryDeserialize<T>(string? value, out T? result) -> bool
 static UiPath.Caching.CacheKey.DefaultCasing.get -> UiPath.Caching.CacheKeyCasing
 static UiPath.Caching.CacheKey.DefaultCasing.set -> void
+static UiPath.Caching.CacheKeyComparer.Insensitive.get -> UiPath.Caching.CacheKeyComparer!
+static UiPath.Caching.CacheKeyComparer.Sensitive.get -> UiPath.Caching.CacheKeyComparer!

@@ -245,6 +245,20 @@ register `RedisDistributedLock` (the in-memory provider passes
 custom wiring that skips `AddInMemoryRedis()` should add
 `.AddRedisDistributedLock()` explicitly on the builder.
 
+`ICache.TryAddAsync` sits alongside these but answers a different question. The
+locks exist to reduce redundant work — the degradation above is deliberate, and
+neither lock guarantees exactly-once generator execution. `TryAddAsync` instead
+returns a decision the caller can branch on: it writes the key only if it is
+absent (Redis `SET … NX`) and returns `true` only to the caller that created it,
+so it is the right primitive for at-most-once semantics keyed by something (a
+dedup marker, an idempotency key, electing which node runs a job). It is not a
+lock: the claim expires on its own TTL, carries no ownership token, and any later
+`SetAsync`/`RemoveAsync` on the key ignores it. When you need a fencing token and
+an explicit release, use `IDistributedLock`; when you need an atomic, expiring
+"first one here wins" marker, use `TryAddAsync`. See
+[the interfaces reference](reference/interfaces.md#icache) for the per-provider
+behavior, including why it fails closed when the L2 is disconnected.
+
 When both locks are enabled, `GetOrAddAsync` takes the local lock first (cheap,
 in-process) and then — under a double-checked read to avoid redundant generator
 runs after waiting — attempts the distributed lock. A failure to acquire the

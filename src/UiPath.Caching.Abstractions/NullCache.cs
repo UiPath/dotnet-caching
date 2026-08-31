@@ -76,6 +76,20 @@ public sealed class NullCache : ICache
 
     public ValueTask<bool> SetAsync<T>(KeyValuePair<CacheKey, T?>[] keyValues, DateTimeOffset? expiration = null, CachePolicy? policy = null, CancellationToken token = default) => ReturnTrueAsync<T>();
 
+    /// <summary>
+    /// Always <c>true</c>, as <c>SetAsync</c> is here: nothing is retained, so no key pre-exists and
+    /// nobody loses. No exclusion at all, then — and this type is what
+    /// <c>ICacheFactory.CreateCache</c> resolves to for an absent or disabled provider, so assert the
+    /// provider you expect at startup.
+    /// </summary>
+    public ValueTask<bool> TryAddAsync<T>(CacheKey cacheKey, T? value, CachePolicy? policy = null, CancellationToken token = default) => ReturnTrueAsync<T>();
+
+    /// <inheritdoc cref="TryAddAsync{T}(CacheKey, T, CachePolicy, CancellationToken)"/>
+    public ValueTask<bool> TryAddAsync<T>(CacheKey cacheKey, T? value, TimeSpan? expiration = null, CachePolicy? policy = null, CancellationToken token = default) => ReturnTrueAsync<T>();
+
+    /// <inheritdoc cref="TryAddAsync{T}(CacheKey, T, CachePolicy, CancellationToken)"/>
+    public ValueTask<bool> TryAddAsync<T>(CacheKey cacheKey, T? value, DateTimeOffset? expiration = null, CachePolicy? policy = null, CancellationToken token = default) => ReturnTrueAsync<T>();
+
     public ValueTask<TimeSpan?> TimeToLiveAsync<T>(CacheKey cacheKey, CancellationToken token = default)
     {
         NotCacheableException.ThrowIfNotCacheable<T>();

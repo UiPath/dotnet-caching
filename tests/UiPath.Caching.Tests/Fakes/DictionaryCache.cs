@@ -13,6 +13,8 @@ internal sealed class DictionaryCache : ICache
 
     public int SetCalls { get; private set; }
 
+    public int TryAddCalls { get; private set; }
+
     public List<CacheKey[]> SetKeySets { get; } = [];
 
     public void Seed<T>(CacheKey key, T? value) => _store[key] = value;
@@ -85,6 +87,22 @@ internal sealed class DictionaryCache : ICache
 
     public ValueTask<bool> SetAsync<T>(KeyValuePair<CacheKey, T?>[] keyValues, DateTimeOffset? expiration = null, CachePolicy? policy = null, CancellationToken token = default) =>
         SetAsync(keyValues, policy, token);
+
+    public ValueTask<bool> TryAddAsync<T>(CacheKey cacheKey, T? value, CachePolicy? policy = null, CancellationToken token = default)
+    {
+        TryAddCalls++;
+        if (value is null && !CacheNullValues)
+        {
+            return ValueTask.FromResult(false);
+        }
+        return ValueTask.FromResult(_store.TryAdd(cacheKey, value));
+    }
+
+    public ValueTask<bool> TryAddAsync<T>(CacheKey cacheKey, T? value, TimeSpan? expiration = null, CachePolicy? policy = null, CancellationToken token = default) =>
+        TryAddAsync(cacheKey, value, policy, token);
+
+    public ValueTask<bool> TryAddAsync<T>(CacheKey cacheKey, T? value, DateTimeOffset? expiration = null, CachePolicy? policy = null, CancellationToken token = default) =>
+        TryAddAsync(cacheKey, value, policy, token);
 
     public ValueTask<bool> RemoveAsync<T>(CacheKey cacheKey, CancellationToken token = default) =>
         ValueTask.FromResult(_store.Remove(cacheKey));

@@ -35,6 +35,7 @@ public class CacheOptions
 
     public bool ConnectionMonitorEnabled { get; set; }
 
+
     /// <summary>
     /// Size of the reusable semaphore pool inside the default local lock implementation.
     /// This is an allocation hint, not a hard concurrency cap — when the pool is exhausted the

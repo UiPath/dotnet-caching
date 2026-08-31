@@ -85,6 +85,18 @@ public partial interface ICache<T>
         => SetAsync(keyValues, expiration, token).AsTask().GetAwaiter().GetResult();
 
     [ExcludeFromCodeCoverage]
+    bool TryAdd(CacheKey cacheKey, T? value, CancellationToken token = default)
+        => TryAddAsync(cacheKey, value, token).AsTask().GetAwaiter().GetResult();
+
+    [ExcludeFromCodeCoverage]
+    bool TryAdd(CacheKey cacheKey, T? value, TimeSpan? expiration, CancellationToken token = default)
+        => TryAddAsync(cacheKey, value, expiration, token).AsTask().GetAwaiter().GetResult();
+
+    [ExcludeFromCodeCoverage]
+    bool TryAdd(CacheKey cacheKey, T? value, DateTimeOffset? expiration, CancellationToken token = default)
+        => TryAddAsync(cacheKey, value, expiration, token).AsTask().GetAwaiter().GetResult();
+
+    [ExcludeFromCodeCoverage]
     bool Refresh(CacheKey cacheKey, CancellationToken token = default)
         => RefreshAsync(cacheKey, token).AsTask().GetAwaiter().GetResult();
 

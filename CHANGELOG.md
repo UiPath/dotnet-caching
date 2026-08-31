@@ -49,6 +49,63 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
   `AddDistributedCache` enables it on the private provider it builds, because a silently dropped refresh
   shortens a session and fire-and-forget cannot report one. Honored by both `RedisCache` and
   `RedisHashCache`.
+- **Conditional add: `ICache.TryAddAsync` / `ICache<T>.TryAddAsync` (+ blocking `ICache<T>.TryAdd`).**
+  Writes a key only if it does not already exist, returning `true` only to the caller that created it.
+  On Redis-backed caches this is StackExchange.Redis `When.NotExists` — `SET key value EX … NX` — a
+  single atomic round-trip with the TTL applied by the same command, so exactly one caller across all
+  nodes wins a given key and a won key is never briefly immortal. Intended for at-most-once semantics
+  keyed by something: idempotency keys, dedup markers whose TTL is the dedup window, electing which
+  replica runs a job. `false` deliberately conflates "the key already existed" with "the write could
+  not be completed" (disconnected, threw, or a `null`/`default` value the cache cannot represent) —
+  fail-closed, so a caller treating `true` as "I own this key" is never wrongly told it won; the same
+  conflation `IDistributedLock.TryAcquireAsync` already documents. Unlike `SetAsync`, it never
+  deletes: where `SetAsync` removes the key when handed a `null` with `CacheNullValues` off,
+  `TryAddAsync` reports `false` and leaves the key untouched. Per tier: `RedisCache` issues the `NX`
+  write; `MultilayerCache` runs one sequence for every provider — take the local lock, probe the
+  local tier, ask the L2, populate L1 (plus an invalidation broadcast) on a win, best-effort. A
+  broadcast or L1 failure never downgrades a real win to `false`, since that would strand the entry
+  with no owner; with the L2 disconnected the call returns `false` rather than granting a local-only
+  claim every node would also be granted (`SetAsync` degrades to a local write there). The probe is
+  what bounds exclusion at one winner per process, and the only thing doing so on the `InMemory`
+  provider, whose `NullCache` L2 tells every caller it added the key; it also reports a local hit as
+  a loss without asking the L2, which is fail-closed but costs a win the L2 would have granted when
+  the local copy outlived the shared one. The local lock is what makes that probe-then-write atomic,
+  so a conditional add takes it regardless of `Lock.LocalLockEnabled` (which trades single-flight for
+  throughput on `GetOrAddAsync` and must not be able to hand one key to two callers), and a caller
+  that cannot acquire it within `Lock.LocalLockTimeout` is told it lost rather than proceeding
+  unserialized. The L2 itself is only ever asked, never classified by type or provider name, so a
+  provider a consumer registers participates on the same terms — with the corollary that an L2
+  arbitrating in-process only is trusted as though it arbitrated for every sharer. On the `InMemory`
+  provider no invalidation broadcast is published: `ChangeTokenFactory` accepts only `CacheRemoved`
+  and `CacheRefreshed` there, so peers ignore `CacheSet` — deliberately, since each node's memory is
+  the store rather than a copy of a shared one.
+  An expiration that is not in the future reports `false` on every tier: the entry would be evicted on
+  arrival, so a `true` would be handed to every later caller as well. `NullCache` returns `false` —
+  the one member where it does not degrade to "caching is off, carry on", because it cannot complete
+  the write (which is exactly what a fail-closed `false` means) and because `true` there would hand
+  every caller a claim of exclusive ownership; it is reached by accident, being what
+  `ICacheFactory.CreateCache` resolves to when the requested provider is absent or has
+  `Enabled=false`. Added to both interfaces as **default interface methods**, so
+  **required** members rather than default interface methods: a probe followed by a write is not
+  atomic, and no fallback body could stand in for one without either voiding the guarantee or hiding
+  which stores can arbitrate, so an implementation states what its own store can do. **This is
+  source-breaking for hand-written `ICache` / `ICache<T>` implementations,** which must add the three
+  overloads. `NullCache` returns `true`, as its `SetAsync` does — the null store retains nothing, so
+  no key pre-exists and no caller loses; note that it provides no exclusion at all and is what
+  `ICacheFactory.CreateCache` resolves to for an absent or disabled provider, so assert the provider
+  you expect at startup when the `true` branch runs a side effect that must not repeat. `ICache.Compat.cs` carries the token-positional forwarders
+  (`TryAddAsync(key, value, token)` and the `TimeSpan?`/`DateTimeOffset?` pairs), matching `SetAsync`.
+  No multi-key overload: Redis has no atomic multi-key `NX`, and all-or-nothing versus per-key
+  semantics would be a guess. This is a cache primitive, not a lock — no ownership token, no early
+  release, and a later `SetAsync`/`RemoveAsync` ignores the claim; for a fencing token and explicit
+  release use `IDistributedLock`. No conditional-add member was added to the hash surface, where `NX`
+  is per-field (`HSETNX`) and a different shape.
+- A cancellation raised while the `SET … NX` write is in flight now propagates instead of being
+  reported as `false`, which would have claimed the key belongs to someone else — a fact the cancelled
+  call never established. The write itself stays on the shared `Write` resilience pipeline: retries
+  fire on exceptions only, and re-issuing `NX` is harmless, since an attempt whose reply was lost is
+  refused by the key it just wrote and reports the same `false` the exception would have, while an
+  attempt that never reached Redis is recovered as the `true` it should have been.
 
 ### Changed
 
@@ -77,6 +134,27 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
   onto the builder object instead. Every `CacheOptions` value supplied through that entry point was
   silently ignored; `Enabled`, `AppShortName`, `KeyCasing` and the rest now take effect, which changes
   behavior for anyone who was unknowingly running on the defaults.
+### Documentation
+
+- New recipe [`conditional-add.md`](docs/recipes/conditional-add.md) — claiming a key exactly once with
+  `TryAddAsync`, why check-then-set is not equivalent, and when to reach for `IDistributedLock`
+  instead. `interfaces.md` documents the member on both cache surfaces with a per-provider table of
+  who arbitrates and how far exclusion reaches; `concepts.md` places it next to the two lock
+  abstractions, whose goal is reducing redundant work rather than a decision the caller can branch on.
+  The recipe's worked example is a daily digest rather than a payment capture, and says why: a claim
+  marker records that someone *started*, never that anyone finished, so an operation that must
+  eventually happen needs a recorded outcome instead. Both documents also state plainly that the
+  ambiguity in `false` is not recoverable — a serialization or command failure returns `false` with
+  the connection snapshot still healthy — rather than pointing at `IConnectionState` as an escape
+  hatch, and both explain why the `NX` write is safe to retry where `SPOP` is not.
+- New `IConnectionState` section in `interfaces.md`, a public type that was documented nowhere (and
+  that the `TryAddAsync` guidance linked to through an anchor resolving to `IDistributedLock`). It is
+  described as what it is — a cache-health snapshot for probes, metrics and backoff — not as a way to
+  explain a negative result.
+- Corrected `interfaces.md`, which described the `IHashCache<T>.SetAsync(…, HashCacheEntryOptions, …)`
+  overload as offering "conditional set, individual field TTL". `HashCacheEntryOptions` carries
+  neither: `HashCacheSetOption` selects write *scope* (`HashReplace` merges fields, `KeyReplace` drops
+  the key first), and there is no per-field TTL.
 
 ## [1.3.0] - 2026-08-19
 

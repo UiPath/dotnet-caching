@@ -46,6 +46,26 @@ public partial interface ICache : IDisposable
 
     ValueTask<bool> SetAsync<T>(KeyValuePair<CacheKey, T?>[] keyValues, DateTimeOffset? expiration = null, CachePolicy? policy = null, CancellationToken token = default);
 
+    /// <summary>
+    /// Writes <paramref name="value"/> only if <paramref name="cacheKey"/> is absent. Redis
+    /// <c>SET … NX</c>, one atomic round-trip.
+    /// </summary>
+    /// <returns>
+    /// <c>true</c> only if this call created the key. <c>false</c> conflates "it existed" with "the
+    /// write could not be completed", deliberately and fail-closed. Never deletes; not a lock.
+    /// </returns>
+    ValueTask<bool> TryAddAsync<T>(CacheKey cacheKey, T? value, CachePolicy? policy = null, CancellationToken token = default);
+
+    /// <inheritdoc cref="TryAddAsync{T}(CacheKey, T, CachePolicy, CancellationToken)"/>
+    /// <param name="expiration">
+    /// Lifetime if the entry is created, applied by the same command. Falls back to
+    /// <c>CachePolicy.DistributedExpiration</c> then the cache default. Not in the future: no-op.
+    /// </param>
+    ValueTask<bool> TryAddAsync<T>(CacheKey cacheKey, T? value, TimeSpan? expiration = null, CachePolicy? policy = null, CancellationToken token = default);
+
+    /// <inheritdoc cref="TryAddAsync{T}(CacheKey, T, TimeSpan?, CachePolicy, CancellationToken)"/>
+    ValueTask<bool> TryAddAsync<T>(CacheKey cacheKey, T? value, DateTimeOffset? expiration = null, CachePolicy? policy = null, CancellationToken token = default);
+
     ValueTask<bool> RefreshAsync<T>(CacheKey cacheKey, CachePolicy? policy = null, CancellationToken token = default);
 
     ValueTask<bool> RefreshAsync<T>(CacheKey cacheKey, TimeSpan? expiration = null, CachePolicy? policy = null, CancellationToken token = default);
