@@ -94,6 +94,9 @@ public class InMemoryRedisCacheOptions : IMultilayerCacheOptions, IMemoryCacheOp
     public TimeSpan? DistributedLockExpiry { get; set; } = TimeSpan.FromSeconds(5);
 
     public IDistributedLockKeyStrategy? LockKeyStrategy { get; set; }
+
+    /// <summary>Member-wise copy, so a caller can vary one setting without mutating the DI singleton.</summary>
+    internal InMemoryRedisCacheOptions ShallowCopy() => (InMemoryRedisCacheOptions)MemberwiseClone();
 }
 
 #pragma warning restore S1133

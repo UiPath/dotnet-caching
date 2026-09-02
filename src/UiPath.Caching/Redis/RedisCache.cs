@@ -163,7 +163,7 @@ internal sealed partial class RedisCache : RedisCacheBase, ICache
                 ret = await _write.ExecuteAsync(async token =>
                 {
                     token.ThrowIfCancellationRequested();
-                    return await Database.KeyPersistAsync(redisKey, CommandFlags.DemandMaster | CommandFlags.FireAndForget).ConfigureAwait(false);
+                    return await Database.KeyPersistAsync(redisKey, RefreshFlags).ConfigureAwait(false);
                 }, default, token).ConfigureAwait(false);
             }
             else
@@ -171,7 +171,7 @@ internal sealed partial class RedisCache : RedisCacheBase, ICache
                 ret = await _write.ExecuteAsync(async token =>
                 {
                     token.ThrowIfCancellationRequested();
-                    return await Database.KeyExpireAsync(redisKey, expiration.Value.UtcDateTime, CommandFlags.DemandMaster | CommandFlags.FireAndForget).ConfigureAwait(false);
+                    return await Database.KeyExpireAsync(redisKey, expiration.Value.UtcDateTime, RefreshFlags).ConfigureAwait(false);
                 }, default, token).ConfigureAwait(false);
             }
             operation.Stop();

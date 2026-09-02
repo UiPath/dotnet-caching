@@ -27,6 +27,7 @@ Every binding-visible property on every shipped options class, with shipped defa
 | `SourceUri` | `Uri?` | `urn:<hostname>` | App-wide | Machine/pod identity embedded in cross-node sync events; use _placeholder_ `"urn:machine1"` in config, override per environment. |
 | `Separator` | `char` | `':'` | App-wide | Character used to join cache key segments. |
 | `AppShortName` | `string` | _required_ | App-wide | Short application name prefixed to every cache key; apps throw at startup if blank or missing. |
+| `KeyCasing` | `CacheKeyCasing` | `Insensitive` | App-wide | Key case folding applied when a key is built without an explicit mode, including every implicit `string` -> `CacheKey` conversion. `Insensitive` trims and lowercases (historical behavior); `Sensitive` preserves the caller's casing. **Changing this relocates every cache key** — existing entries become unreachable and are rewritten under the new spelling. The distributed cache always uses `Sensitive` and is unaffected. Scope is the **process**, not the container: `CacheKey` is a struct built by callers without access to DI, so the setting is seeded into the static `CacheKey.DefaultCasing`. Hosting two differently-configured containers in one process is therefore unsupported — the last `AddCaching` wins for both. |
 | `LargeValueThreshold` | `int` | `20000` | App-wide | Byte threshold for audit logging; writes whose payload exceeds this are logged when `AuditEnabled` is `true`. |
 | `ConnectionMonitorEnabled` | `bool` | `false` | App-wide | Enable Redis health-check polling app-wide; provider-level `ConnectionMonitorEnabled` inherits this when `null`. |
 | `LocalLockPoolSize` | `int` | `100` | App-wide | Semaphore pool size for the default local lock — allocation hint, not a hard concurrency cap. |
@@ -173,6 +174,7 @@ Per-topic overrides: add entries to `Topics[]` under `Broadcast:RedisPubSub`. Ea
 | `ConnectionMonitorEnabled` | `bool?` | `null` | Per-provider | `null` = inherit from `CacheOptions.ConnectionMonitorEnabled`. |
 | `CacheNullValues` | `bool` | `false` | Per-provider | Persist `null`/empty factory returns as sentinels to suppress thundering-herd on missing keys. |
 | `KeyReadTelemetryEnabled` | `bool` | `false` | Per-provider | Opt-in per-key read attribution: each read emits a `Redis` dependency carrying the key in `data` (one per hash key for hash reads), with a `BatchId` shared across the operation. Off by default because raw keys are high-cardinality; the per-operation hit/miss metric is always emitted regardless. |
+| `AwaitRefresh` | `bool` | `false` | Per-provider | Wait for the server to apply a refresh instead of sending `KEYEXPIRE`/`PERSIST` fire-and-forget. Off by default, keeping the round trip off the sliding-expiration path, which runs on every read of a sliding entry. While off, a refresh is unverifiable: `RefreshAsync` returns `false` whether it succeeded, failed or the key was absent; the reply is never seen, so a rejected command is neither logged nor retried by the resilience pipeline, and telemetry records every refresh as unsuccessful; and the new deadline is not yet in effect when the call returns. Turn it on where a lost refresh matters more than a round trip. `AddDistributedCache` sets it for its own provider. |
 
 *Code-only seams:* `Clock`, `EntryFactory`, `CacheKeyStrategy`, `RedisKeyStrategyFactory`.
 
@@ -204,6 +206,75 @@ Per-topic overrides: add entries to `Topics[]` under `Broadcast:RedisPubSub`. Ea
 | `DistributedLockExpiry` | `TimeSpan?` | `null` | Per-provider | Inert for this provider; present to satisfy `IMultilayerCacheOptions`. |
 
 *Code-only seams:* `Clock`, `EntryFactory`, `CacheKeyStrategy`, `TopicKeyStrategy`, `SizeProvider`, `LockKeyStrategy`.
+
+---
+
+## Caching:Distributed (UiPathDistributedCacheOptions)
+
+Registered in code via `builder.AddDistributedCache(providerName)`; the backing tier is a required
+argument (`Redis` recommended, `InMemoryRedis`, or `InMemory`). The options object is passed to the
+extension rather than bound from configuration.
+
+| Property | Type | Default | Scope | Notes |
+|---|---|---|---|---|
+| `CacheKeyStrategy` | `ICacheKeyStrategy?` | `null` | Per registration | Composes the stored key from the caller key. Null applies `PrefixCacheKeyStrategy` with `DefaultKeyPrefix` (`"d"`); pass `new PrefixCacheKeyStrategy("d:sess")` to sub-namespace while keeping that prefix, or `DefaultCacheKeyStrategy` to opt out of prefixing entirely. Code-only seam. |
+| `RedisKeyDifferentiator` | `string?` | `null` | Per registration | Fills the slot after `AppShortName` that the application's caches fill with a `RedisTypePrefixes` value. Null uses `DefaultRedisKeyDifferentiator` (`"dh"`). Inert on the `InMemory` tier; a value matching a `RedisTypePrefixes` value is rejected at registration. Prefixes belonging to packages layered on top of `UiPath.Caching` are **not** checked — it cannot see them without depending on them — so avoid those too: `UiPath.Caching.Queue`'s set cache uses `"se"`. |
+| `RedisKeyStrategyFactory` | `IRedisKeyStrategyFactory?` | `null` | Per registration | Builds the Redis key, receiving `RedisKeyDifferentiator`. Null inherits the application's `RedisCacheOptions.RedisKeyStrategyFactory`, keeping its `AppShortName`, separator and sharding conventions. Code-only seam. |
+| `PolicyName` | `string?` | `null` | Per registration | Named `CachePolicy` applied to the adapter's operations; an unregistered name fails fast at startup. |
+| `DefaultEntryExpiration` | `TimeSpan?` | `null` | Per registration | Expiration used when the caller supplies none. `IDistributedCache` treats absent expiration as "until removed"; unless `AllowUnboundedEntries` is set that is mapped to this value, falling back to the backing tier's `DefaultExpiration`. |
+| `AllowUnboundedEntries` | `bool` | `false` | Per registration | Honor "no expiration" literally. Off by default: registration fails when no bounded default can be resolved, so shared storage cannot accumulate keys that never expire. |
+
+Entries are stored as a Redis hash (`data`, `absexp`, `sldexp`) in a keyspace disjoint from the
+application's own caches, so `Refresh` reads only the expiration metadata. Keys are always
+case-sensitive regardless of `CacheOptions.KeyCasing`.
+
+**Keyspace separation.** A full Redis key carries three independent segments, each answering a
+different question:
+
+```
+app  :  dh  :  d:  <caller key>
+└─┬─┘   └┬─┘   └┬┘
+  │      │      └─ CacheKey level: CacheKeyStrategy ("d:" by default)
+  │      └─ RedisKeyDifferentiator — separates this cache from the application's own
+  └─ CacheOptions.AppShortName — separates applications sharing one Redis
+```
+
+`AppShortName` is required and app-wide, so it is never this registration's job. `CacheKeyStrategy`
+prefixes the `CacheKey` itself, so a distributed entry cannot be reached through the application's own
+`ICache`/`IHashCache` with the bare caller key, and the memory tiers' local lock keyspace (keyed by
+provider name plus cache key) stays separate too — neither of which a Redis-key-level segment can do.
+`RedisKeyDifferentiator` and `RedisKeyStrategyFactory` separate the physical Redis keyspace, taking the
+slot the application's caches fill with a `RedisTypePrefixes` value. Because a differentiator only separates anything if the factory
+honors it, registration composes a probe key both ways and fails when the distributed key matches what
+the application's own caches would produce — so a factory that ignores its differentiator argument is
+rejected instead of quietly sharing the keyspace.
+
+The cache-key strategy is applied by the adapter rather than by the backing provider's own
+`ICacheOptions.CacheKeyStrategy`, which `RedisHashCache` does not consult — routing it through the
+provider would make the stored key depend on which tier is configured.
+
+> **Keys appear in logs.** `IDistributedCache` keys are chosen by the consumer and can be secrets — under
+> ASP.NET Core session the key is the session id. This adapter names the key in its two own messages (a failed
+> write at `Warning`, a no-op remove at `Debug`), and the composed key is passed to the backing cache, which
+> logs it in its own diagnostics too: `MultilayerHashCache` includes the `CacheKey` in five `LogLevel.Warning` messages (raised on
+> inner-cache exceptions) and in several Debug/Trace ones, and `RedisHashCache` includes the physical key in
+> `LogLargeValueDetected` (Warning) and `LogRefreshingKey` (Trace). Keys stored verbatim for parity with
+> the conventional layout also means they appear in `KEYS`/`SCAN` output and RDB
+> snapshots. Treat logs and Redis dumps for this provider as containing session identifiers, or filter the
+> `UiPath.Caching` log categories accordingly.
+
+**`Refresh` waits for the server on this provider.** `AddDistributedCache` sets
+`RedisCacheOptions.AwaitRefresh` on the private provider it builds, so `IDistributedCache.Refresh` — and the
+sliding extension a `Get` performs — costs a round trip but is in effect when the call returns, a rejection
+reaches the log and the resilience pipeline, and telemetry reflects the real outcome. Deliberate for a
+session store: a silently dropped refresh shortens the session and fire-and-forget cannot report one. The
+application's own caches keep the fire-and-forget default; see `AwaitRefresh` above.
+
+**Backing-tier caveats.** `InMemoryRedis` carries a stale-read window until backplane invalidation
+lands and requires `AddInMemoryRedis` for its broadcast wiring (enforced at startup). `InMemory`
+stores entries only in memory, where `InMemoryCacheOptions.LocalMaxExpiration` (1 hour by default)
+caps every entry regardless of the caller's requested expiration — use it for tests and single-node
+scenarios, not for long-lived entries.
 
 ---
 

@@ -26,11 +26,17 @@ public abstract class RedisCacheBase : IConnectionState, IDisposable
         DefaultExpiration = DefaultPolicy.DistributedExpiration;
         Clock = new CacheClock(redisCacheOptions.Clock, DefaultExpiration);
         KeyReadTelemetryEnabled = redisCacheOptions.KeyReadTelemetryEnabled;
+        RefreshFlags = redisCacheOptions.AwaitRefresh
+            ? CommandFlags.DemandMaster
+            : CommandFlags.DemandMaster | CommandFlags.FireAndForget;
     }
 
     protected ICachingTelemetryProvider Telemetry { get; }
 
     protected bool KeyReadTelemetryEnabled { get; }
+
+    /// <summary>Flags for a standalone TTL write, shared by both caches so the option cannot be honored in one and not the other.</summary>
+    internal CommandFlags RefreshFlags { get; }
 
     protected void TrackRead(ITelemetryOperation operation, bool hit, RedisKey key)
     {

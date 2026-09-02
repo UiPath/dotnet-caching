@@ -244,12 +244,12 @@ internal sealed partial class RedisHashCache : RedisCacheBase, IHashCache
                 ? await _write.ExecuteAsync(async token =>
                 {
                     token.ThrowIfCancellationRequested();
-                    return await Database.KeyExpireAsync(redisKey, localExpiration.UtcDateTime, CommandFlags.DemandMaster | CommandFlags.FireAndForget).ConfigureAwait(false);
+                    return await Database.KeyExpireAsync(redisKey, localExpiration.UtcDateTime, RefreshFlags).ConfigureAwait(false);
                 }, default, token).ConfigureAwait(false)
                 : await _write.ExecuteAsync(async token =>
                 {
                     token.ThrowIfCancellationRequested();
-                    return await Database.KeyPersistAsync(redisKey, CommandFlags.DemandMaster | CommandFlags.FireAndForget).ConfigureAwait(false);
+                    return await Database.KeyPersistAsync(redisKey, RefreshFlags).ConfigureAwait(false);
                 }, default, token).ConfigureAwait(false);
             operation.Stop();
         }

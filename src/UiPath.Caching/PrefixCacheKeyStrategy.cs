@@ -11,5 +11,6 @@ public sealed class PrefixCacheKeyStrategy : ICacheKeyStrategy
         _separator = separator == null ? CacheOptions.KeySeparator :  char.ToLowerInvariant(Guard.NotWhiteSpace(separator.Value, nameof(separator)));
     }
     
-    public CacheKey GetCacheKey<T>(CacheKey key) => string.Join(_separator, _prefix, key);
+    public CacheKey GetCacheKey<T>(CacheKey key) =>
+        key.WithName(string.Join(_separator, _prefix, key.Name));
 }
