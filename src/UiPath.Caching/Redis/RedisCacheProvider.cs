@@ -8,7 +8,7 @@ public sealed class RedisCacheProvider : ICacheProvider
     private readonly RedisCacheOptions _redisCacheOptions;
     private readonly CacheOptions _cacheOptions;
     private readonly IRedisConnector _redis;
-    private readonly ISerializerProxy<RedisValue> _serializerProxy;
+    private readonly ISerializerProxy<byte[]> _serializerProxy;
     private readonly IResiliencePipelineProvider _resiliencePipelineProvider;
     private readonly ICachingTelemetryProvider _cachingTelemetryProvider;
     private readonly ILoggerFactory _loggerFactory;
@@ -24,7 +24,7 @@ public sealed class RedisCacheProvider : ICacheProvider
         IOptions<RedisCacheOptions> redisCacheOptions,
         IOptions<CacheOptions> cacheOptions,
         IRedisConnector redis,
-        ISerializerProxy<RedisValue> serializerProxy,
+        ISerializerProxy<byte[]> serializerProxy,
         IResiliencePipelineProvider resiliencePipelineProvider,
         ICachingTelemetryProvider cachingTelemetryProvider,
         ILoggerFactory loggerFactory,

@@ -13,7 +13,7 @@ public class RedisSetCacheTests(ITestContextAccessor testContextAccessor) : IAsy
     private string _prefix = default!;
     private IDatabase _database = default!;
     private ITransaction _transaction = default!;
-    private ISerializerProxy<RedisValue> _serializer = default!;
+    private SystemJsonByteSerializerProxy _serializer = default!;
     private ISystemClock _clock = default!;
     private const string PopResilienceKeyName = "set-pop";
     private RedisCacheOptions _redisCacheOptions = new();
@@ -196,7 +196,7 @@ public class RedisSetCacheTests(ITestContextAccessor testContextAccessor) : IAsy
     public async Task Pop_count_works()
     {
         var expected = _fixture.CreateMany<TestDto>().ToArray();
-        var serialized = expected.Select(e => _serializer.Serialize(e)).ToArray();
+        var serialized = expected.Select(e => (RedisValue)_serializer.Serialize(e)).ToArray();
         _database.SetPopAsync(_redisKey, expected.Length, CommandFlags.DemandMaster).Returns(serialized);
 
         var actual = await Sut.PopAsync<TestDto>(_cacheKey, expected.Length, policy: null, token: testContextAccessor.Current.CancellationToken);
@@ -274,7 +274,7 @@ public class RedisSetCacheTests(ITestContextAccessor testContextAccessor) : IAsy
         _pipelineProvider.Get(PopResilienceKeyName).Returns(pop);
         _pipelineProvider.Get(ResiliencePipelineNames.Write).Returns(write);
         var expected = _fixture.CreateMany<TestDto>().ToArray();
-        var serialized = expected.Select(e => _serializer.Serialize(e)).ToArray();
+        var serialized = expected.Select(e => (RedisValue)_serializer.Serialize(e)).ToArray();
         _database.SetPopAsync(_redisKey, expected.Length, CommandFlags.DemandMaster).Returns(serialized);
 
         var actual = await Sut.PopAsync<TestDto>(_cacheKey, expected.Length, policy: null, token: testContextAccessor.Current.CancellationToken);
@@ -305,7 +305,7 @@ public class RedisSetCacheTests(ITestContextAccessor testContextAccessor) : IAsy
     public async Task Members_works()
     {
         var expected = _fixture.CreateMany<TestDto>().ToArray();
-        var serialized = expected.Select(e => _serializer.Serialize(e)).ToArray();
+        var serialized = expected.Select(e => (RedisValue)_serializer.Serialize(e)).ToArray();
         _database.SetMembersAsync(_redisKey, CommandFlags.PreferReplica).Returns(serialized);
 
         var actual = await Sut.MembersAsync<TestDto>(_cacheKey, policy: null, token: testContextAccessor.Current.CancellationToken);
@@ -550,8 +550,8 @@ public class RedisSetCacheTests(ITestContextAccessor testContextAccessor) : IAsy
             CacheKeyStrategy = _cacheKeyStrategy,
             RedisKeyStrategyFactory = _redisKeyStrategyFactory
         };
-        _serializer = new SystemJsonSerializerProxy();
-        _fixture.Inject(_serializer);
+        _serializer = new SystemJsonByteSerializerProxy();
+        _fixture.Inject<ISerializerProxy<byte[]>>(_serializer);
         var opt = Options.Create(_redisCacheOptions);
         _fixture.Inject(opt);
         _fixture.Inject(opt.Value);

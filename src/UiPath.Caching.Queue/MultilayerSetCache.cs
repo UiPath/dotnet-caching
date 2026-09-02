@@ -18,7 +18,7 @@ internal sealed class MultilayerSetCache : ISetCache
         string name,
         ISetCache inner,
         IMemoryCacheFactory memoryCacheFactory,
-        ISerializerProxy<RedisValue> serializer,
+        ISerializerProxy<byte[]> serializer,
         IMemoryCacheOptions memoryOptions,
         ILocalLock localLock,
         TimeSpan? localMaxExpiration,

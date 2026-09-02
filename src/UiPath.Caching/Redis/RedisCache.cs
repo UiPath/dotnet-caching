@@ -6,7 +6,7 @@ namespace UiPath.Caching.Redis;
 
 internal sealed partial class RedisCache : RedisCacheBase, ICache
 {
-    private readonly ISerializerProxy<RedisValue> _serializer;
+    private readonly ISerializerProxy<byte[]> _serializer;
     private readonly ILogger<RedisCache> _logger;
     private readonly bool _supportsExpireTime;
     private readonly IResiliencePipeline _read;
@@ -19,7 +19,7 @@ internal sealed partial class RedisCache : RedisCacheBase, ICache
 
     public RedisCache(
         IRedisConnector redis,
-        ISerializerProxy<RedisValue> serializer,
+        ISerializerProxy<byte[]> serializer,
         IResiliencePipelineProvider resiliencePipelineProvider,
         ICachingTelemetryProvider telemetryProvider,
         RedisCacheOptions redisCacheOptions,
@@ -505,7 +505,9 @@ internal sealed partial class RedisCache : RedisCacheBase, ICache
             }
             else
             {
-                var serialized = isNull ? RedisValue.EmptyString : _serializer.Serialize(value);
+                // Both arms have to land on RedisValue: the serializer now yields byte[], which
+                // converts implicitly, but not in a var-typed conditional against EmptyString.
+                RedisValue serialized = isNull ? RedisValue.EmptyString : _serializer.Serialize(value);
 
                 ret = await _write.ExecuteAsync(async token =>
                 {

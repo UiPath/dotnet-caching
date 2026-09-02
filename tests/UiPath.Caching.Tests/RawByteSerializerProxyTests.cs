@@ -3,89 +3,65 @@ using System.Text.Json;
 
 namespace UiPath.Caching.Tests;
 
-public class SystemJsonByteSerializerProxyTests
+public class RawByteSerializerProxyTests
 {
-    private readonly SystemJsonByteSerializerProxy _proxy = new();
+    private readonly RawByteSerializerProxy _proxy = new();
 
     private sealed record Poco(string Name, int Count);
 
     [Fact]
-    public void Byte_array_is_base64_encoded_inside_json()
+    public void Byte_array_passes_through_by_reference()
     {
-        var payload = new byte[] { 0x01, 0x02, 0x03 };
-
-        var stored = _proxy.Serialize(payload)!;
-
-        Encoding.UTF8.GetString(stored).Should().Be("\"AQID\"");
-        stored.Should().NotBeSameAs(payload);
+        var payload = new byte[] { 0x00, 0x01, 0xFF };
+        _proxy.Serialize(payload).Should().BeSameAs(payload);
+        _proxy.Deserialize<byte[]>(payload).Should().BeSameAs(payload);
     }
 
     [Fact]
-    public void Byte_array_round_trips_through_base64()
+    public void ReadOnlyMemory_is_materialized_not_json_encoded()
     {
-        var payload = new byte[] { 0x00, 0x01, 0xFF };
-
-        _proxy.Deserialize<byte[]>(_proxy.Serialize(payload)).Should().Equal(payload);
+        ReadOnlyMemory<byte> memory = new byte[] { 1, 2, 3 };
+        _proxy.Serialize(memory).Should().Equal(1, 2, 3);
     }
 
     [Fact]
     public void ReadOnlyMemory_round_trips()
     {
         ReadOnlyMemory<byte> memory = new byte[] { 1, 2, 3 };
-
         var stored = _proxy.Serialize(memory);
-
         _proxy.Deserialize<ReadOnlyMemory<byte>>(stored).ToArray().Should().Equal(1, 2, 3);
     }
 
     [Fact]
     public void Empty_byte_array_round_trips()
     {
-        var stored = _proxy.Serialize(Array.Empty<byte>())!;
-
-        Encoding.UTF8.GetString(stored).Should().Be("\"\"");
-        _proxy.Deserialize<byte[]>(stored).Should().BeEmpty();
-    }
-
-    /// <summary>
-    /// Must stay non-null: a null payload reaches StackExchange.Redis as <c>RedisValue.Null</c>,
-    /// which throws on SADD and on the multi-field HSET, and stores nothing on the single-value paths.
-    /// </summary>
-    [Fact]
-    public void Null_serializes_to_the_json_null_literal_never_to_a_null_payload()
-    {
-        var stored = _proxy.Serialize(null);
-
-        stored.Should().NotBeNull();
-        Encoding.UTF8.GetString(stored!).Should().Be("null");
+        var empty = Array.Empty<byte>();
+        _proxy.Serialize(empty).Should().BeSameAs(empty);
+        _proxy.Deserialize<byte[]>(empty).Should().BeSameAs(empty);
     }
 
     [Fact]
-    public void Null_empty_and_the_json_null_literal_all_read_back_as_default()
+    public void Null_falls_through_to_json_and_empty_reads_as_default()
     {
+        _proxy.Serialize(null).Should().Equal("null"u8.ToArray());
         _proxy.Deserialize<Poco>(null).Should().BeNull();
         _proxy.Deserialize<Poco>([]).Should().BeNull();
-        _proxy.Deserialize<Poco>(Encoding.UTF8.GetBytes("null")).Should().BeNull();
     }
 
     [Fact]
     public void Poco_round_trips_as_utf8_json()
     {
         var value = new Poco("x", 42);
-
         var bytes = _proxy.Serialize(value)!;
-
         JsonSerializer.Deserialize<Poco>(bytes).Should().Be(value);
         _proxy.Deserialize<Poco>(bytes).Should().Be(value);
     }
 
-    /// <summary>Unlike <see cref="RawByteSerializerProxy"/>, reading JSON as bytes parses it rather than passing it through.</summary>
     [Fact]
-    public void Deserializing_json_as_bytes_decodes_rather_than_passing_through()
+    public void Deserializing_json_as_bytes_returns_raw_utf8()
     {
-        var stored = _proxy.Serialize(new byte[] { 7, 8 })!;
-
-        _proxy.Deserialize<byte[]>(stored).Should().Equal(7, 8).And.NotEqual(stored);
+        var bytes = _proxy.Serialize(new Poco("x", 1))!;
+        _proxy.Deserialize<byte[]>(bytes).Should().BeSameAs(bytes);
     }
 
     [Fact]
@@ -102,8 +78,8 @@ public class SystemJsonByteSerializerProxyTests
     public void TryDeserialize_object_handles_bytes_json_element_and_text()
     {
         var raw = Encoding.UTF8.GetBytes("""{"Name":"x","Count":1}""");
-        _proxy.TryDeserialize<Poco>(raw, out var fromBytes).Should().BeTrue();
-        fromBytes.Should().Be(new Poco("x", 1));
+        _proxy.TryDeserialize<byte[]>(raw, out var bytes).Should().BeTrue();
+        bytes.Should().BeSameAs(raw);
 
         var element = JsonSerializer.SerializeToElement(new Poco("x", 1));
         _proxy.TryDeserialize<Poco>(element, out var fromElement).Should().BeTrue();
@@ -118,11 +94,11 @@ public class SystemJsonByteSerializerProxyTests
     [Fact]
     public void Honors_custom_serializer_options()
     {
-        var proxy = new SystemJsonByteSerializerProxy(new JsonSerializerOptions { PropertyNamingPolicy = JsonNamingPolicy.CamelCase });
-
+        var proxy = new RawByteSerializerProxy(new JsonSerializerOptions { PropertyNamingPolicy = JsonNamingPolicy.CamelCase });
         Encoding.UTF8.GetString(proxy.Serialize(new Poco("x", 1))!).Should().Contain("\"name\"");
     }
 
+    /// <summary><c>byte[]</c> is an object, so a naive "value is T" passthrough would hand back the raw bytes.</summary>
     [Fact]
     public void Deserializing_as_object_parses_json_instead_of_returning_bytes()
     {
@@ -163,9 +139,9 @@ public class SystemJsonByteSerializerProxyTests
     public void Memory_of_byte_round_trips()
     {
         Memory<byte> memory = new byte[] { 4, 5, 6 };
-
         var stored = _proxy.Serialize(memory)!;
 
+        stored.Should().Equal(4, 5, 6);
         _proxy.Deserialize<Memory<byte>>(stored).ToArray().Should().Equal(4, 5, 6);
     }
 }

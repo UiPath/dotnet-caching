@@ -16,7 +16,7 @@ public class MultilayerSetCacheTests
         var l2 = Substitute.For<ISetCache>();
         var sut = new MultilayerSetCache(
             KnownCacheProviderNames.InMemoryRedis, l2,
-            MemoryFactory(), new SystemJsonSerializerProxy(), new InMemoryRedisQueueCacheOptions(),
+            MemoryFactory(), new SystemJsonByteSerializerProxy(), new InMemoryRedisQueueCacheOptions(),
             NullLocalLock.Instance,
             localMaxExpiration: TimeSpan.FromMinutes(5));
         return (sut, l2);
@@ -175,7 +175,7 @@ public class MultilayerSetCacheTests
         ((IConnectionState)l2).IsConnected.Returns(connected);
         var sut = new MultilayerSetCache(
             KnownCacheProviderNames.InMemoryRedis, l2,
-            MemoryFactory(), new SystemJsonSerializerProxy(), new InMemoryRedisQueueCacheOptions(),
+            MemoryFactory(), new SystemJsonByteSerializerProxy(), new InMemoryRedisQueueCacheOptions(),
             NullLocalLock.Instance,
             localMaxExpiration: TimeSpan.FromMinutes(5),
             connectionMonitorEnabled: true,

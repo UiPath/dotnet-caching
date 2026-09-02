@@ -38,9 +38,9 @@ public class InMemoryRedisCollectionExtensionsTests
         using var providerB = BuildContainer();
 
         providerA.GetRequiredService<IChangeTokenFactory>()
-            .Should().BeOfType<ChangeTokenFactory<RedisValue>>();
+            .Should().BeOfType<ChangeTokenFactory<byte[]>>();
         providerB.GetRequiredService<IChangeTokenFactory>()
-            .Should().BeOfType<ChangeTokenFactory<RedisValue>>();
+            .Should().BeOfType<ChangeTokenFactory<byte[]>>();
     }
 
     [Fact]

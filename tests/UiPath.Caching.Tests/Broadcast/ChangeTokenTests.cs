@@ -14,11 +14,11 @@ public class ChangeTokenTests : IAsyncLifetime
     private CacheClearEventFormatterProxy _formatter = default!;
     private Uri? _source = null;
     private ISet<string>? _acceptedEvents = null;
-    private ISerializerProxy<RedisValue> _serializer = default!;
+    private SystemJsonByteSerializerProxy _serializer = default!;
 
     private readonly RecordingTelemetryProvider _telemetryProvider = new();
-    private ChangeToken<RedisValue>? _sut = null;
-    private ChangeToken<RedisValue> Sut => _sut ??= new ChangeToken<RedisValue>(_key, _topic, _source, _serializer, _fixture.Freeze<ILogger<ChangeToken<RedisValue>>>(), _telemetryProvider, _acceptedEvents);
+    private ChangeToken<byte[]>? _sut = null;
+    private ChangeToken<byte[]> Sut => _sut ??= new ChangeToken<byte[]>(_key, _topic, _source, _serializer, _fixture.Freeze<ILogger<ChangeToken<byte[]>>>(), _telemetryProvider, _acceptedEvents);
 
     [Fact]
     public void Verify_ActiveChangeCallbacks()
@@ -232,10 +232,10 @@ public class ChangeTokenTests : IAsyncLifetime
         _key = _fixture.Freeze<string>();
         _topicKey = (TopicKey)_fixture.Create<string>();
         _fixture.Inject(_topicKey);
-        _fixture.Freeze<ILogger<ChangeToken<RedisValue>>>();
+        _fixture.Freeze<ILogger<ChangeToken<byte[]>>>();
         _topic = _fixture.Freeze<ITopic<ICacheEvent>>();
         _formatter = new CacheClearEventFormatterProxy();
-        _serializer = new SystemJsonSerializerProxy();
+        _serializer = new SystemJsonByteSerializerProxy();
         _fixture.Inject<IEventFormatterProxy<ICacheEvent>>(_formatter);
         return ValueTask.CompletedTask;
     }

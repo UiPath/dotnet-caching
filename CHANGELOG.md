@@ -37,12 +37,23 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
   relocates every cache key, so existing entries are rewritten under the new spelling.
 - **`CacheKeyComparer`** exposes cached `Sensitive` / `Insensitive` equality comparers over
   `CacheKey`, in the `StringComparer` shape.
-- **`ISerializerProxy<byte[]>`** is a new serialization seam, defaulting to
-  `SystemJsonByteSerializerProxy`: byte payloads pass through raw (no base64, no JSON) and everything
-  else is UTF-8 JSON, with the requested type argument deciding. The existing
-  `ISerializerProxy<RedisValue>` registration and every existing wire format are untouched. Swapping
-  in a binary serializer such as MessagePack is one class and one registration — see
-  [how-to/extending.md](docs/how-to/extending.md).
+- **`ISerializerProxy<byte[]>`** is now the library's only serialization seam, replacing
+  `ISerializerProxy<RedisValue>` everywhere — see **Removed** below. The serialization contract no
+  longer names a Redis type, so a custom serializer needs no dependency on StackExchange.Redis, and
+  one registration covers `ICache`, `IHashCache` and `ISetCache`. Swapping in a binary serializer
+  such as MessagePack is one class and one registration — see
+  [how-to/extending.md](docs/how-to/extending.md). Two implementations ship:
+  - `SystemJsonByteSerializerProxy` (the default) is UTF-8 JSON for every value, which is
+    byte-for-byte the format `SystemJsonSerializerProxy` wrote — **no cache entry needs migrating**,
+    byte payloads and nulls included.
+  - `RawByteSerializerProxy` stores byte payloads verbatim — no base64, no JSON, no encoding layer —
+    and JSON for every other type. `AddDistributedCache` constructs this for the provider it builds
+    rather than resolving one from DI, because an `IDistributedCache` payload is caller bytes the
+    caller has already serialized and re-encoding them would be both wasteful and wrong; that also
+    means replacing the app-wide serializer does not change what the adapter stores. Registering it
+    app-wide is available as an opt-in, and *is* a wire-format change: it returns stored bytes as-is
+    rather than base64-decoding them, so relocate the keyspace (a version segment in `AppShortName`
+    or the cache-key strategy) when switching an existing deployment over.
 - **`RedisCacheOptions.AwaitRefresh`** (default `false`) waits for the server to apply a refresh instead of
   sending `KEYEXPIRE`/`PERSIST` fire-and-forget. Off by default, which keeps the round trip off the
   sliding-expiration path — it runs on every read of a sliding entry — and preserves existing behavior.
@@ -118,6 +129,25 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 - **`Microsoft.Extensions.*` dependency floor for `net10.0` raised to 10.0.11** (from 10.0.10).
   The `net8.0` floor is unchanged at 8.0.x.
 - **OpenTelemetry packages moved to 1.18.0** (`OpenTelemetry.Instrumentation.StackExchangeRedis` to 1.18.0-beta.1).
+- **BREAKING (source, not data):** every cache now serializes through `ISerializerProxy<byte[]>`.
+  `RedisCache`, `RedisHashCache`, `RedisSetCache`, the memory set tier and all four providers take
+  `ISerializerProxy<byte[]>` in place of `ISerializerProxy<RedisValue>`, and the broadcast change
+  token is built as `ChangeTokenFactory<byte[]>`. **No stored entry changes format and nothing needs
+  migrating** — the default serializer emits exactly what `SystemJsonSerializerProxy` emitted.
+  Consumers who pass these constructors a serializer directly, or who register a custom one, need a
+  one-line type change; `AddCaching` now throws at startup if a leftover
+  `ISerializerProxy<RedisValue>` registration is present, rather than ignoring it and silently
+  falling back to JSON.
+
+### Removed
+
+- **BREAKING:** `SystemJsonSerializerProxy` and the `ISerializerProxy<RedisValue>` registration.
+  `SystemJsonByteSerializerProxy` (in `UiPath.Caching.Abstractions`) is the single default and writes
+  the same bytes. The generic `ISerializerProxy<T>` interface itself is unchanged.
+- **BREAKING:** `IEventFormatterProxy<T>.Decode(string)` and `EncodeAsString(T)`, both obsolete since
+  the broadcast path moved to `ReadOnlyMemory<byte>` and both unused — nothing in the library called
+  them and no implementation overrode the default bodies. Use `Decode(ReadOnlyMemory<byte>)` and
+  `Encode(T)`.
 
 ### Fixed
 

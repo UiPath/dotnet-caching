@@ -8,7 +8,7 @@ namespace UiPath.Caching.Redis;
 internal sealed partial class RedisHashCache : RedisCacheBase, IHashCache
 {
     private readonly ILogger<RedisHashCache> _logger;
-    private readonly ISerializerProxy<RedisValue> _serializer;
+    private readonly ISerializerProxy<byte[]> _serializer;
     private readonly ICacheEntryFactory _cacheEntryFactory;
     private readonly IResiliencePipeline _read;
     private readonly IResiliencePipeline _write;
@@ -20,7 +20,7 @@ internal sealed partial class RedisHashCache : RedisCacheBase, IHashCache
 
     public RedisHashCache(
         IRedisConnector redis,
-        ISerializerProxy<RedisValue> serializer,
+        ISerializerProxy<byte[]> serializer,
         IResiliencePipelineProvider resiliencePipelineProvider,
         ICachingTelemetryProvider telemetryProvider,
         RedisCacheOptions redisCacheOptions,
@@ -186,7 +186,7 @@ internal sealed partial class RedisHashCache : RedisCacheBase, IHashCache
     private ValueTask<bool> SetEmptyMarkerAsync<T>(CacheKey cacheKey, HashCacheEntryOptions options, CancellationToken token)
     {
         var redisKey = ToRedisKey(cacheKey, token);
-        var metadata = options.Metadata != null && options.Metadata.Count > 0
+        RedisValue metadata = options.Metadata != null && options.Metadata.Count > 0
             ? _serializer.Serialize(options.Metadata)
             : RedisValue.EmptyString;
         var entries = new[] { new HashEntry(KnownFieldNames.MetadataKey, metadata) };

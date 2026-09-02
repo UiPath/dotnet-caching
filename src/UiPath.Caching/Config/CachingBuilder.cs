@@ -31,7 +31,7 @@ public class CachingBuilder(IServiceCollection services, IConfiguration? configu
 
         Services.TryAddEnumerable(
             ServiceDescriptor.Singleton<IValidateOptions<CacheOptions>, CacheKeyCasingSeeder>());
-        Services.TryAddSingleton<ISerializerProxy<RedisValue>>(sp => new SystemJsonSerializerProxy(sp.GetService<JsonSerializerOptions>()));
+        ThrowIfLegacySerializerRegistered();
         Services.TryAddSingleton<ISerializerProxy<byte[]>>(sp => new SystemJsonByteSerializerProxy(sp.GetService<JsonSerializerOptions>()));
         Services.TryAddSingleton<IResiliencePipelineProvider>(EmptyResiliencePipelineProvider.Instance);
         Services.TryAddSingleton<IChangeTokenFactory>(NullChangeTokenFactory.Instance);
@@ -50,6 +50,19 @@ public class CachingBuilder(IServiceCollection services, IConfiguration? configu
                 resolvedOptions.DefaultCachePolicy,
                 resolvedOptions.DistributedLockPollInterval);
         });
+    }
+
+    private void ThrowIfLegacySerializerRegistered()
+    {
+        if (Services.Any(d => d.ServiceType == typeof(ISerializerProxy<RedisValue>)))
+        {
+            throw new InvalidOperationException(
+                $"A registration for ISerializerProxy<RedisValue> is present, but that seam no longer exists and " +
+                $"nothing resolves it — the serializer would be silently ignored. Re-register the implementation " +
+                $"as ISerializerProxy<byte[]> (see docs/how-to/extending.md#custom-serializer). Note that " +
+                $"{nameof(SystemJsonByteSerializerProxy)} keeps the wire format unchanged, while " +
+                $"{nameof(RawByteSerializerProxy)} stores byte payloads verbatim.");
+        }
     }
 
     public void RegisterOnCompleteCallback(object key, Action<ICachingBuilder> callback)
