@@ -2,7 +2,7 @@
   <PropertyGroup>
     <ManagePackageVersionsCentrally>true</ManagePackageVersionsCentrally>
     <!-- Shared Package Versions -->
-    <xUnit>3.2.2</xUnit>
+    <xUnit>4.0.0</xUnit>
     <AutoFixture>4.18.1</AutoFixture>
     <CloudEvents>2.9.0</CloudEvents>
   </PropertyGroup>
