@@ -35,6 +35,20 @@ public partial interface ICache<T>
 
     ValueTask<bool> SetAsync(KeyValuePair<CacheKey, T?>[] keyValues, DateTimeOffset? expiration = null, CancellationToken token = default);
 
+    /// <summary>
+    /// Typed façade over
+    /// <see cref="ICache.TryAddAsync{T}(CacheKey, T, TimeSpan?, CachePolicy, CancellationToken)"/>;
+    /// see that member for the contract.
+    /// </summary>
+    ValueTask<bool> TryAddAsync(CacheKey cacheKey, T? value, CancellationToken token = default);
+
+    /// <inheritdoc cref="TryAddAsync(CacheKey, T, CancellationToken)"/>
+    /// <param name="expiration">Lifetime of the entry if it is created.</param>
+    ValueTask<bool> TryAddAsync(CacheKey cacheKey, T? value, TimeSpan? expiration, CancellationToken token = default);
+
+    /// <inheritdoc cref="TryAddAsync(CacheKey, T, TimeSpan?, CancellationToken)"/>
+    ValueTask<bool> TryAddAsync(CacheKey cacheKey, T? value, DateTimeOffset? expiration, CancellationToken token = default);
+
     ValueTask<bool> RefreshAsync(CacheKey cacheKey, CancellationToken token = default);
 
     ValueTask<bool> RefreshAsync(CacheKey cacheKey, TimeSpan? expiration, CancellationToken token = default);

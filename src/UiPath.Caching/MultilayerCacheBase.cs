@@ -100,10 +100,9 @@ public abstract class MultilayerCacheBase : IDisposable
         CancellationToken token,
         LockProfile? policyLock = null)
     {
-        var localLockEnabled = policyLock?.LocalLockEnabled ?? _localLockEnabled;
+        var (localLockEnabled, localLockTimeout) = ResolveLocalLock(policyLock);
         var distributedLockEnabled = policyLock?.DistributedLockEnabled ?? _distributedLockEnabled;
         // Per-call LockProfile bypasses options validators; mirror LockSettingsValidator's accepted ranges and fall back when out-of-range.
-        var localLockTimeout = PositiveOrFallback(policyLock?.LocalLockTimeout, _localLockTimeout);
         var distributedLockTimeout = NonNegativeOrFallback(policyLock?.DistributedLockTimeout, _distributedLockTimeout);
         var distributedLockExpiry = PositiveOrFallback(policyLock?.DistributedLockExpiry, _distributedLockExpiry);
 
@@ -192,6 +191,23 @@ public abstract class MultilayerCacheBase : IDisposable
         var resolved = policy.DistributedExpiration ?? _multiLayerCacheOptions.DefaultExpiration;
         return ApplyJitter(resolved, policy.JitterMaxDuration, _clock.UtcNow);
     }
+
+    /// <summary>
+    /// The local lock alone, for callers that need it for correctness rather than de-duplication.
+    /// Taken regardless of <c>Lock.LocalLockEnabled</c>, which only trades single-flight for
+    /// throughput on <c>GetOrAddAsync</c>; <c>null</c> means the acquire timed out, and the caller
+    /// must fail closed.
+    /// </summary>
+    private protected ValueTask<IDisposable?> AcquireLocalLockAsync(CacheKey cacheKey, LockProfile? policyLock, CancellationToken token) =>
+        TryAcquireLocalLockAsync(cacheKey, ResolveLocalLock(policyLock).Timeout, token);
+
+    /// <summary>
+    /// One place for the local-lock policy: a per-call <see cref="LockProfile"/> wins over the
+    /// options. It bypasses the options validators, so the timeout falls back when out of range.
+    /// </summary>
+    private (bool Enabled, TimeSpan Timeout) ResolveLocalLock(LockProfile? policyLock) =>
+        (policyLock?.LocalLockEnabled ?? _localLockEnabled,
+         PositiveOrFallback(policyLock?.LocalLockTimeout, _localLockTimeout));
 
     private async ValueTask<IDisposable?> TryAcquireLocalLockAsync(CacheKey cacheKey, TimeSpan localLockTimeout, CancellationToken token)
     {

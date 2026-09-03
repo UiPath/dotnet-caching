@@ -58,6 +58,18 @@ public partial interface ICache
         => SetAsync<T>(keyValues, expiration, null, token);
 
     [ExcludeFromCodeCoverage]
+    ValueTask<bool> TryAddAsync<T>(CacheKey cacheKey, T? value, CancellationToken token = default)
+        => TryAddAsync<T>(cacheKey, value, (CachePolicy?)null, token);
+
+    [ExcludeFromCodeCoverage]
+    ValueTask<bool> TryAddAsync<T>(CacheKey cacheKey, T? value, TimeSpan? expiration, CancellationToken token = default)
+        => TryAddAsync<T>(cacheKey, value, expiration, null, token);
+
+    [ExcludeFromCodeCoverage]
+    ValueTask<bool> TryAddAsync<T>(CacheKey cacheKey, T? value, DateTimeOffset? expiration, CancellationToken token = default)
+        => TryAddAsync<T>(cacheKey, value, expiration, null, token);
+
+    [ExcludeFromCodeCoverage]
     ValueTask<bool> RefreshAsync<T>(CacheKey cacheKey, CancellationToken token = default)
         => RefreshAsync<T>(cacheKey, (CachePolicy?)null, token);
 

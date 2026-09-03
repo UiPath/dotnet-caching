@@ -1,20 +1,20 @@
 #nullable enable
-const UiPath.Caching.Config.DistributedCacheCollectionExtensions.DistributedCacheServiceKey = "UiPath.Caching.Distributed" -> string!
-static UiPath.Caching.Config.DistributedCacheCollectionExtensions.AddDistributedCache(this UiPath.Caching.Config.ICachingBuilder! builder, string! providerName, System.Action<UiPath.Caching.Distributed.UiPathDistributedCacheOptions!>? configure = null) -> UiPath.Caching.Config.ICachingBuilder!
 UiPath.Caching.Config.DistributedCacheCollectionExtensions
 UiPath.Caching.Distributed.UiPathDistributedCacheOptions
-UiPath.Caching.Distributed.UiPathDistributedCacheOptions.PolicyName.get -> string?
-UiPath.Caching.Distributed.UiPathDistributedCacheOptions.PolicyName.set -> void
-UiPath.Caching.Distributed.UiPathDistributedCacheOptions.UiPathDistributedCacheOptions() -> void
-UiPath.Caching.Distributed.UiPathDistributedCacheOptions.DefaultEntryExpiration.get -> System.TimeSpan?
-UiPath.Caching.Distributed.UiPathDistributedCacheOptions.DefaultEntryExpiration.set -> void
 UiPath.Caching.Distributed.UiPathDistributedCacheOptions.AllowUnboundedEntries.get -> bool
 UiPath.Caching.Distributed.UiPathDistributedCacheOptions.AllowUnboundedEntries.set -> void
-UiPath.Caching.Redis.RedisCacheOptions.AwaitRefresh.get -> bool
-UiPath.Caching.Redis.RedisCacheOptions.AwaitRefresh.set -> void
 UiPath.Caching.Distributed.UiPathDistributedCacheOptions.CacheKeyStrategy.get -> UiPath.Caching.ICacheKeyStrategy?
 UiPath.Caching.Distributed.UiPathDistributedCacheOptions.CacheKeyStrategy.set -> void
+UiPath.Caching.Distributed.UiPathDistributedCacheOptions.DefaultEntryExpiration.get -> System.TimeSpan?
+UiPath.Caching.Distributed.UiPathDistributedCacheOptions.DefaultEntryExpiration.set -> void
+UiPath.Caching.Distributed.UiPathDistributedCacheOptions.PolicyName.get -> string?
+UiPath.Caching.Distributed.UiPathDistributedCacheOptions.PolicyName.set -> void
 UiPath.Caching.Distributed.UiPathDistributedCacheOptions.RedisKeyDifferentiator.get -> string?
 UiPath.Caching.Distributed.UiPathDistributedCacheOptions.RedisKeyDifferentiator.set -> void
 UiPath.Caching.Distributed.UiPathDistributedCacheOptions.RedisKeyStrategyFactory.get -> UiPath.Caching.Redis.IRedisKeyStrategyFactory?
 UiPath.Caching.Distributed.UiPathDistributedCacheOptions.RedisKeyStrategyFactory.set -> void
+UiPath.Caching.Distributed.UiPathDistributedCacheOptions.UiPathDistributedCacheOptions() -> void
+UiPath.Caching.Redis.RedisCacheOptions.AwaitRefresh.get -> bool
+UiPath.Caching.Redis.RedisCacheOptions.AwaitRefresh.set -> void
+const UiPath.Caching.Config.DistributedCacheCollectionExtensions.DistributedCacheServiceKey = "UiPath.Caching.Distributed" -> string!
+static UiPath.Caching.Config.DistributedCacheCollectionExtensions.AddDistributedCache(this UiPath.Caching.Config.ICachingBuilder! builder, string! providerName, System.Action<UiPath.Caching.Distributed.UiPathDistributedCacheOptions!>? configure = null) -> UiPath.Caching.Config.ICachingBuilder!

@@ -32,6 +32,7 @@ UiPath's internal multilayer caching library. L1 in-memory + L2 Redis, cross-nod
 - [provider-fallback.md](recipes/provider-fallback.md) — InMemoryRedis when Redis is on, InMemory otherwise.
 - [factory-extension-methods.md](recipes/factory-extension-methods.md) — typed `ICache<T>` via `ICacheFactory` extension methods.
 - [batch-get-or-add.md](recipes/batch-get-or-add.md) — one source round trip for N cache misses via multi-key `GetOrAddAsync`.
+- [conditional-add.md](recipes/conditional-add.md) — claim a key exactly once with `TryAddAsync` (Redis `SET … NX`).
 - [app-version-prefix.md](recipes/app-version-prefix.md) — auto-invalidate on deploy via assembly-version key prefix.
 - [mediatr-pipeline-behavior.md](recipes/mediatr-pipeline-behavior.md) — generic per-request cache as a MediatR behavior.
 - [hash-cache-with-metadata.md](recipes/hash-cache-with-metadata.md) — payload + freshness metadata side-by-side.

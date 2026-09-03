@@ -237,6 +237,23 @@ internal sealed partial class RedisCache : RedisCacheBase, ICache
         return SetInternalAsync(keyValues, Clock.ToTimeSpan(effective), token);
     }
 
+    public ValueTask<bool> TryAddAsync<T>(CacheKey cacheKey, T? value, CachePolicy? policy = null, CancellationToken token = default) =>
+        TryAddAsync(cacheKey, value, expiration: (TimeSpan?)null, policy, token);
+
+    public ValueTask<bool> TryAddAsync<T>(CacheKey cacheKey, T? value, TimeSpan? expiration = null, CachePolicy? policy = null, CancellationToken token = default)
+    {
+        NotCacheableException.ThrowIfNotCacheable<T>();
+        var effective = ResolveExpiration(expiration, policy);
+        return TryAddInternalAsync(ToRedisKey(cacheKey, token), value, Clock.ToTimeSpan(effective), token);
+    }
+
+    public ValueTask<bool> TryAddAsync<T>(CacheKey cacheKey, T? value, DateTimeOffset? expiration = null, CachePolicy? policy = null, CancellationToken token = default)
+    {
+        NotCacheableException.ThrowIfNotCacheable<T>();
+        var effective = ResolveExpiration(expiration, policy);
+        return TryAddInternalAsync(ToRedisKey(cacheKey, token), value, Clock.ToTimeSpan(effective), token);
+    }
+
     public async ValueTask<bool> ContainsAsync<T>(CacheKey cacheKey, CancellationToken token = default)
     {
         NotCacheableException.ThrowIfNotCacheable<T>();
@@ -445,6 +462,64 @@ internal sealed partial class RedisCache : RedisCacheBase, ICache
                 }, default, token).ConfigureAwait(false);
             }
             operation.Stop();
+        }
+        catch (Exception ex)
+        {
+            operation.Stop();
+            LogRedisCacheException(ex);
+        }
+        finally
+        {
+            operation.Track(ret);
+        }
+
+        return ret;
+    }
+
+    /// <summary>
+    /// <c>SET key value EX … NX</c> in one round-trip: Redis decides, so no probe precedes the write.
+    /// Safe to retry — an attempt whose reply was lost is refused by the key it just wrote, and
+    /// reports the same <c>false</c> the exception would have.
+    /// </summary>
+    private async ValueTask<bool> TryAddInternalAsync<T>(RedisKey redisKey, T? value, TimeSpan expiration, CancellationToken token)
+    {
+        bool ret = default;
+        token.ThrowIfCancellationRequested();
+
+        if (!IsConnected)
+        {
+            return false;
+        }
+
+        var operation = StartOperation<T>(nameof(TryAddAsync));
+        try
+        {
+            var isNull = IsDefault(value);
+            if (expiration <= TimeSpan.Zero)
+            {
+                LogTryAddSkippedExpiredEntry(redisKey, expiration);
+            }
+            else if (isNull && !_cacheNullValues)
+            {
+                LogTryAddSkippedUnrepresentableValue(redisKey);
+            }
+            else
+            {
+                var serialized = isNull ? RedisValue.EmptyString : _serializer.Serialize(value);
+
+                ret = await _write.ExecuteAsync(async token =>
+                {
+                    token.ThrowIfCancellationRequested();
+                    return await Database.StringSetAsync(redisKey, serialized, expiration, When.NotExists, CommandFlags.DemandMaster).ConfigureAwait(false);
+                }, default, token).ConfigureAwait(false);
+            }
+            operation.Stop();
+        }
+        // false would claim someone else owns the key, which a cancelled call never established.
+        catch (OperationCanceledException) when (token.IsCancellationRequested)
+        {
+            operation.Stop();
+            throw;
         }
         catch (Exception ex)
         {
@@ -880,6 +955,12 @@ internal sealed partial class RedisCache : RedisCacheBase, ICache
 
     [LoggerMessage(Level = LogLevel.Trace, Message = "Refreshing key {RedisKey} at expiration {Expiration}")]
     private partial void LogRefreshingKey(RedisKey redisKey, DateTimeOffset? expiration);
+
+    [LoggerMessage(Level = LogLevel.Debug, Message = "TryAdd skipped for {RedisKey}: a default value cannot be represented unless CacheNullValues is on.")]
+    private partial void LogTryAddSkippedUnrepresentableValue(RedisKey redisKey);
+
+    [LoggerMessage(Level = LogLevel.Debug, Message = "TryAdd skipped for {RedisKey}: the requested expiration {Expiration} is not positive, so the entry would retain nothing.")]
+    private partial void LogTryAddSkippedExpiredEntry(RedisKey redisKey, TimeSpan expiration);
 
     [LoggerMessage(Level = LogLevel.Warning, Message = "RedisCache exception.")]
     private partial void LogRedisCacheException(Exception ex);

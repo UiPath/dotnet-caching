@@ -53,6 +53,12 @@ public partial interface ICache<T>
 
     ValueTask<bool> SetAsync(KeyValuePair<CacheKey, T?>[] keyValues, DateTimeOffset? expiration = null, CancellationToken token = default);
 
+    ValueTask<bool> TryAddAsync(CacheKey cacheKey, T? value, CancellationToken token = default);
+
+    ValueTask<bool> TryAddAsync(CacheKey cacheKey, T? value, TimeSpan? expiration, CancellationToken token = default);
+
+    ValueTask<bool> TryAddAsync(CacheKey cacheKey, T? value, DateTimeOffset? expiration, CancellationToken token = default);
+
     ValueTask<bool> RefreshAsync(CacheKey cacheKey, CancellationToken token = default);
 
     ValueTask<bool> RefreshAsync(CacheKey cacheKey, TimeSpan? expiration, CancellationToken token = default);
@@ -70,6 +76,8 @@ public partial interface ICache<T>
 `ICache<T>` is the primary typed cache surface for single-value key/value caching. The type parameter `T` fixes the value type for the lifetime of the cache instance, which lets the library resolve `CachePolicy` by `typeof(T).FullName` and apply a single key strategy per cache. Every operation accepts a `CancellationToken` and returns a `ValueTask`, so callers integrate naturally into async pipelines without heap allocation in the hot path. Sync overloads (`Get`, `GetOrAdd`, `Set`, `Remove`, `Refresh`, `Contains`, `TimeToLive`, `ExpireTime`) are provided as blocking default interface methods for call sites that cannot use `await`; `GetOrAdd` covers both the single-key generator shape and a key-only multi-key shape (see below).
 
 The multi-key `GetOrAddAsync<TState>` overloads pair each key with an opaque caller state (`TState`) — a database id, a request object, whatever identifies the entry in the caller's own vocabulary. The generator is invoked at most once, with only the states of the entries that missed, and results come back keyed by state. These three overloads are **abstract** on `ICache<T>` — unlike the equivalent members on `ICache`, there is no default body, because `ICache<T>` has no `GetCacheEntriesAsync` and so cannot distinguish a genuine miss from a cached `null` inside a default implementation. A hand-written `ICache<T>` implementation (a test fake, typically) must add all three. There is no key-only convenience overload on the async surface: a caller whose keys are their own identity pairs each key with itself (`TState = CacheKey`). The blocking `GetOrAdd` facade above is the one place that accepts `CacheKey[]` directly and does that pairing for you.
+
+`TryAddAsync` is the conditional-add (create-if-absent) member: it writes only when the key does not already exist, and returns `true` only to the caller that created it. On a Redis-backed cache it maps to StackExchange.Redis `When.NotExists` (`SET key value EX … NX`) — a single atomic round-trip, so exactly one caller across all nodes wins a given key. It is the primitive to reach for when you need at-most-once semantics keyed by something: a dedup marker, an idempotency key, a "who runs this job" election. See [`ICache.TryAddAsync`](#icache) for the full contract, including what a `false` return does and does not tell you.
 
 > **Typical vs. power-user surface:** This is the standard typed surface. If you need to vary the value type or key per call rather than per cache instance, use [`ICache`](#icache) instead. `ICache<T>` and `ICache` are different shapes for different problems — neither is strictly more capable.
 
@@ -140,6 +148,12 @@ public partial interface ICache : IDisposable
 
     ValueTask<bool> SetAsync<T>(KeyValuePair<CacheKey, T?>[] keyValues, DateTimeOffset? expiration = null, CachePolicy? policy = null, CancellationToken token = default);
 
+    ValueTask<bool> TryAddAsync<T>(CacheKey cacheKey, T? value, CachePolicy? policy = null, CancellationToken token = default);
+
+    ValueTask<bool> TryAddAsync<T>(CacheKey cacheKey, T? value, TimeSpan? expiration = null, CachePolicy? policy = null, CancellationToken token = default);
+
+    ValueTask<bool> TryAddAsync<T>(CacheKey cacheKey, T? value, DateTimeOffset? expiration = null, CachePolicy? policy = null, CancellationToken token = default);
+
     ValueTask<bool> RefreshAsync<T>(CacheKey cacheKey, CachePolicy? policy = null, CancellationToken token = default);
 
     ValueTask<bool> RefreshAsync<T>(CacheKey cacheKey, TimeSpan? expiration = null, CachePolicy? policy = null, CancellationToken token = default);
@@ -157,6 +171,43 @@ public partial interface ICache : IDisposable
 `ICache` is the dynamic-key, dynamic-type cache surface. Unlike `ICache<T>`, the value type is specified as a generic type argument on each method call rather than fixed at cache-creation time, and a `CachePolicy` can be supplied per call rather than resolved by `typeof(T).FullName`. It also exposes `GetCacheEntryAsync` for callers that need cache-entry metadata (hit/miss status, expiration) in addition to the value. `ICache` implements `IDisposable`, but instances returned by `ICacheFactory.CreateCache(...)` are provider-owned (typically singletons resolved through a `Lazy<>`); their lifetime is managed by the provider and the DI container, so callers should not dispose them per use.
 
 The multi-key `GetOrAddAsync<T, TState>` overloads shown above pair each key with an opaque caller state (`TState`) and are **default interface methods** — each forwards to the shared `BatchGetOrAdd.RunAsync` machinery, so existing `ICache` implementations keep compiling without adding them. The generator is invoked at most once, only with the states of the entries that missed every cache layer, never with keys; results come back keyed by state, one entry per distinct requested state in first-occurrence order. Cache operations de-duplicate by `CacheKey`; results de-duplicate by state — when two states share a key the generator is asked once and the value is reported under both. Their parameter shape matches the single-key `GetOrAddAsync` exactly — `expiration`, `policy` and `token` all optional. `ICache.Compat.cs` carries no token-positional forwarder for them: that file is pre-`CachePolicy` back-compat sugar, and this API predates nothing. There is no key-only convenience overload; a caller whose keys are their own identity pairs each key with itself (`TState = CacheKey`).
+
+`TryAddAsync` writes only if the key is absent — StackExchange.Redis `When.NotExists` (`SET … NX`) on Redis-backed caches, in one atomic command with the TTL applied by the same write. Four points decide whether it fits your problem:
+
+- **`false` is deliberately ambiguous.** It means "you did not create this key" — either it already existed, or the write could not be completed (backing store disconnected, write threw, or the value was a `null`/`default` that the cache has no way to represent). This is fail-closed by design: a caller treating `true` as "I own this key" is never wrongly told it won. The ambiguity is not recoverable: a serialization or command failure also returns `false`, with [`IConnectionState.IsConnected`](#iconnectionstate) still reporting healthy, and [`IDistributedLock.TryAcquireAsync`](#idistributedlock) conflates backend-unavailable with already-held in the same way. Design the `false` branch so that not proceeding is safe; if the two readings must be handled differently, the caller needs a primitive with a richer result than a `bool`.
+- **It never deletes.** Where `SetAsync` removes the key when handed a `null` and `CacheNullValues` is off, `TryAddAsync` returns `false` and leaves the key untouched. With `CacheNullValues` on, a `null` claims the key via the cached-null sentinel.
+- **It is a cache primitive, not a lock.** The entry expires on its own TTL, there is no ownership token, and any later `SetAsync`/`RemoveAsync` on the key ignores the claim. For mutual exclusion with a fencing token and explicit release, use [`IDistributedLock`](#idistributedlock).
+- **An expiration that is not in the future claims nothing** and reports `false` on every tier. The entry would be evicted on arrival, so answering `true` would hand the same key to every later caller as well.
+
+Every provider runs the same sequence: take the local lock, probe the local tier, ask the L2, then populate the local tier on a win. Two tiers therefore contribute — the probe bounds exclusion at one winner per process, and the L2 decides how much further than that it reaches:
+
+| Provider | Who decides | Scope of exclusion |
+| --- | --- | --- |
+| `Redis` | Redis (`SET … NX`) | Cross-node |
+| `InMemoryRedis` | L2 Redis, after a local probe that reports a hit as a loss; L1 populated only after a win, best-effort, plus an invalidation broadcast | Cross-node |
+| `InMemoryRedis`, L2 disconnected | Nobody — returns `false` | None (fails closed rather than granting a claim every node would also get) |
+| `InMemory` | The local probe, since `NullCache` as the L2 tells every caller it added the key. Serialized by the local lock — taken regardless of `Lock.LocalLockEnabled`, since here it *is* the guarantee; a caller that cannot acquire it within `Lock.LocalLockTimeout` is told it lost | In-process only, and against other conditional adds only: `SetAsync` takes no lock, so a set interleaved between the probe and the write is overwritten by the claim |
+| `NullCache` | Nobody — returns `true` for every caller | None |
+| Any other provider whose L2 resolved to `NullCache` | Whatever that L2 answers, so `true` for every caller. Which tier arbitrates is stated by the provider composing the cache — only `InMemory` arbitrates locally; every other provider asks its L2 and takes the answer as given | None |
+
+The L2 is asked through `ICache`, never classified by type or provider name, so a provider you register yourself participates on the same terms. Three consequences worth knowing:
+
+- **A local hit is reported as a loss without asking the L2.** Fail-closed and a round-trip saved, but a local copy that outlived the shared one costs a win the L2 would have granted.
+- **An L2 that arbitrates in-process only is trusted as though it arbitrated for every sharer,** so pointing a provider's distributed tier at something in-process narrows that provider's exclusion with it.
+- **A local write the L1 declines does not deny the win.** A size-limited `IMemoryCache` drops an entry it cannot fit without throwing; denying the claim there would strand a key the L2 already granted. On `InMemory`, where the L1 copy is the only copy, a `SizeLimit` too small to hold the value therefore means every caller wins.
+
+`NullCache.TryAddAsync` returns `true`, as its `SetAsync` does: the null store accepts every write and retains none, so no key can pre-exist and no caller loses the race — the same "caching is off, carry on" degradation the rest of that type applies. It provides no exclusion whatsoever, and it is what `ICacheFactory.CreateCache` falls back to when the requested provider is absent or has `Enabled=false`, so a mistyped or switched-off provider turns at-most-once into at-least-once. **Assert the provider you expect at startup** whenever the `true` branch runs a side effect that must not repeat:
+
+```csharp
+if (cacheFactory.CreateCache(KnownCacheProviderNames.Redis) is NullCache)
+{
+    throw new InvalidOperationException("Webhook dedup needs the Redis provider registered and Enabled.");
+}
+```
+
+**Retries are safe here,** unlike the destructive reads in `UiPath.Caching.Queue`, so the `NX` write stays on the shared `Write` pipeline. That pipeline retries on exceptions only — a `false` reply is never retried — and in the one ambiguous case the retry changes nothing: if attempt 1 creates the key and its reply is lost, the retried attempt is refused by that key and reports `false`, which is exactly what the un-retried exception would have reported. Where the first attempt never reached Redis, the retry recovers the correct `true` instead. Contrast `SPOP` behind `ISetCache.PopAsync`, where a retry pops a *second* item and loses the first — which is why `RedisSetCacheOptions.ResilienceKeyName` exists and defaults to no pipeline.
+
+The three overloads are **required** members of `ICache` and `ICache<T>`, not default interface methods: a probe followed by a write is not atomic, and no fallback body could stand in for one without either voiding the guarantee or hiding which stores can arbitrate. A hand-written implementation therefore states what its own store can do — and existing implementations must add the member, which is a source-breaking change for them. There is no multi-key overload — Redis has no atomic multi-key `NX`, and "all-or-nothing" versus "per-key" would be a coin flip on the caller's behalf.
 
 > **Typical vs. power-user surface:** `ICache` is the power-user surface. For most application code where the value type is fixed and you want automatic policy resolution, prefer [`ICache<T>`](#icachet) — it is simpler and less error-prone.
 
@@ -228,7 +279,7 @@ public partial interface IHashCache<T>
 }
 ```
 
-`IHashCache<T>` is the typed hash-cache surface. Each cache key maps to a dictionary of named fields rather than a single value — the backing store is a Redis hash (or an in-memory equivalent). `GetItemAsync` retrieves a single field by name; `GetAsync` retrieves all fields or a subset. `SetAsync` accepts a `HashCacheEntryOptions` overload for fine-grained per-write control (e.g. conditional set, individual field TTL). Metadata (`GetMetadataAsync` / `SetMetadataAsync`) provides a side-channel string dictionary attached to the same key, useful for audit or versioning data. Sync overloads (`Get`, `GetItem`, `GetOrAdd`, `Set`, `Refresh`, `Remove`, `Contains`, etc.) are provided as blocking default interface methods.
+`IHashCache<T>` is the typed hash-cache surface. Each cache key maps to a dictionary of named fields rather than a single value — the backing store is a Redis hash (or an in-memory equivalent). `GetItemAsync` retrieves a single field by name; `GetAsync` retrieves all fields or a subset. `SetAsync` accepts a `HashCacheEntryOptions` overload for per-write control of expiration, metadata, and write scope — `HashCacheSetOption.HashReplace` merges the given fields into the existing hash, `KeyReplace` drops the key first so the written fields are the whole hash. Note that this is write *scope*, not a precondition: the hash surface has no conditional-add member, and `TryAddAsync` exists only on [`ICache`](#icache) / [`ICache<T>`](#icachet). Metadata (`GetMetadataAsync` / `SetMetadataAsync`) provides a side-channel string dictionary attached to the same key, useful for audit or versioning data. Sync overloads (`Get`, `GetItem`, `GetOrAdd`, `Set`, `Refresh`, `Remove`, `Contains`, etc.) are provided as blocking default interface methods.
 
 > **Typical vs. power-user surface:** `IHashCache<T>` is the standard typed hash surface. If you need to vary the value type per call, use [`IHashCache`](#ihashcache) instead. The two surfaces are different shapes for different problems.
 
@@ -599,6 +650,29 @@ public interface IDistributedLock
 **See also:** [`ILocalLock`](#ilocallock), [`IDistributedLockKeyStrategy`](#idistributedlockkeystrategy), [Reference: settings](settings.md), [Concepts](../concepts.md)
 
 ---
+
+## Connection state
+
+### `IConnectionState`
+
+```csharp
+public interface IConnectionState
+{
+    event EventHandler? OnConnectionFailed;
+
+    event EventHandler? OnConnectionRestored;
+
+    event EventHandler? OnReconnected;
+
+    bool IsConnected { get; }
+}
+```
+
+A non-blocking snapshot of whether the backing store is reachable, plus the transitions as events. `IsConnected` never blocks and never throws. Implemented by `RedisCacheBase`, so `Redis`-provider caches expose it; the multilayer caches and `NullCache` do not, and neither does `Cache<T>`, which holds its underlying `ICache` privately.
+
+What it is *not*: a way to explain a negative result. It is a cached snapshot refreshed on connection events and a timer, it says nothing about whether any particular command succeeded, and it is `true` both where there is nothing to disconnect from and where `ConnectionMonitorEnabled` is off. A `false` from `SetAsync` or [`TryAddAsync`](#icache) can perfectly well coincide with `IsConnected == true` — a serialization failure or a rejected command does that — so reading it afterwards does not recover why the call failed.
+
+**Use this when:** you are reporting or reacting to cache *health* — a readiness probe, a metric, a log line, or backing off writes while a tier is known down. Subscribe to `OnConnectionFailed` / `OnConnectionRestored` for the transitions rather than polling.
 
 ## Telemetry seam
 

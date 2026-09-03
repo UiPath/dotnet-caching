@@ -95,6 +95,16 @@ public class Cache<T> : ICache<T>
     public ValueTask<bool> SetAsync(CacheKey cacheKey, T? value, DateTimeOffset? expiration, CancellationToken token = default) =>
         _cache.SetAsync(GetCacheKey(cacheKey), value, expiration, Policy, token);
 
+    public ValueTask<bool> TryAddAsync(CacheKey cacheKey, T? value, CancellationToken token = default) =>
+        _cache.TryAddAsync(GetCacheKey(cacheKey), value, policy: Policy, token: token);
+
+    public ValueTask<bool> TryAddAsync(CacheKey cacheKey, T? value, TimeSpan? expiration, CancellationToken token = default) =>
+        _cache.TryAddAsync(GetCacheKey(cacheKey), value, expiration, Policy, token);
+
+    public ValueTask<bool> TryAddAsync(CacheKey cacheKey, T? value, DateTimeOffset? expiration, CancellationToken token = default) =>
+        _cache.TryAddAsync(GetCacheKey(cacheKey), value, expiration, Policy, token);
+
+
     public ValueTask<bool> SetAsync(KeyValuePair<CacheKey, T?>[] keyValues, CancellationToken token = default) =>
         _cache.SetAsync(GetKeyValuePairs(keyValues), policy: Policy, token: token);
 

@@ -656,6 +656,124 @@ internal sealed partial class MultilayerCache : MultilayerCacheBase, ICache
         }
     }
 
+    public ValueTask<bool> TryAddAsync<T>(CacheKey cacheKey, T? value, CachePolicy? policy = null, CancellationToken token = default)
+    {
+        policy ??= _defaultPolicy;
+        return TryAddAsync(cacheKey, value, ResolveWriteDuration(policy), policy, token);
+    }
+
+    public ValueTask<bool> TryAddAsync<T>(CacheKey cacheKey, T? value, TimeSpan? expiration = null, CachePolicy? policy = null, CancellationToken token = default)
+    {
+        policy ??= _defaultPolicy;
+        return TryAddAsync(cacheKey, value, _clock.ToDateTimeOffset(ResolveWriteDuration(policy, expiration)), policy, token);
+    }
+
+    /// <summary>
+    /// One path for every provider: take the local lock, probe the local tier, let the L2 decide,
+    /// then populate the local tier — the reverse of <c>SetAsync</c>, which writes both tiers
+    /// unconditionally. The probe is what narrows an L2 that retains nothing, and so grants every
+    /// caller a win, back to one winner per process; where the L2 does arbitrate, a local hit means
+    /// the key was already claimed or read here, so the loss is reported without a round-trip. That
+    /// can cost a win the L2 would have granted, when the local copy outlived the shared one — the
+    /// fail-closed direction the ambiguous <c>false</c> already covers. A disconnected L2 answers
+    /// for itself (<c>RedisCache</c> checks its connection first) rather than being gated on
+    /// <c>GetInnerCacheDisconnected</c>, whose state also covers the broadcast transport: a dead
+    /// topic must not stop a healthy Redis.
+    /// </summary>
+    public async ValueTask<bool> TryAddAsync<T>(CacheKey cacheKey, T? value, DateTimeOffset? expiration = null, CachePolicy? policy = null, CancellationToken token = default)
+    {
+        NotCacheableException.ThrowIfNotCacheable<T>();
+        policy ??= _defaultPolicy;
+        expiration ??= _clock.ToDateTimeOffset(ResolveWriteDuration(policy));
+        var options = _entryBuilder.BuildEntryOptions<T>(cacheKey, expiration, token);
+
+        if (value is null && !_multiLayerCacheOptions.CacheNullValues)
+        {
+            LogTryAddSkippedUnrepresentableValue(options.CacheKey);
+            return false;
+        }
+
+        if (options.Expiration <= _clock.UtcNow)
+        {
+            LogTryAddSkippedExpiredEntry(options.CacheKey, options.Expiration);
+            return false;
+        }
+
+        var localMaxExpiration = policy.LocalExpiration ?? _multiLayerCacheOptions.LocalMaxExpiration;
+        if (localMaxExpiration is { } max && max <= TimeSpan.Zero)
+        {
+            LogTryAddSkippedNonPositiveLocalRetention(options.CacheKey, max);
+            return false;
+        }
+
+        var localLock = await AcquireLocalLockAsync(options.CacheKey, policy.Lock, options.Token).ConfigureAwait(false);
+        if (localLock is null)
+        {
+            LogTryAddLocalLockUnavailable(options.CacheKey);
+            return false;
+        }
+
+        using (localLock)
+        {
+            return await TryAddUnderLocalLockAsync(options, value, policy, localMaxExpiration).ConfigureAwait(false);
+        }
+    }
+
+    /// <summary>
+    /// Probe the local tier, then let the L2 decide. The probe is what narrows a store that retains
+    /// nothing — and therefore grants every caller a win — back to one winner per process; where the
+    /// L2 does arbitrate, a local hit means the key was already claimed or read here, so reporting
+    /// the loss early is both correct and a round-trip saved. It can cost a win the L2 would have
+    /// granted, when the local copy outlived the shared one; that is the fail-closed direction the
+    /// ambiguous <c>false</c> already covers.
+    /// </summary>
+    private async ValueTask<bool> TryAddUnderLocalLockAsync<T>(CacheEntryOptions options, T? value, CachePolicy policy, TimeSpan? localMaxExpiration)
+    {
+        if (_memoryCache.TryGetValue(options.CacheKey, out _))
+        {
+            return false;
+        }
+
+        bool added;
+        try
+        {
+            added = await _innerCache.TryAddAsync<T?>(options.CacheKey, value, options.Expiration, policy, options.Token).ConfigureAwait(false);
+        }
+        catch (Exception ex) when (!(ex is OperationCanceledException && options.Token.IsCancellationRequested))
+        {
+            LogInnerCacheTryAddError(ex, options.CacheKey);
+            return false;
+        }
+
+        if (!added)
+        {
+            return false;
+        }
+
+        // Best-effort after the win: a loss reported here would strand the entry with no owner.
+        try
+        {
+            if (!await _eventPublisher.CacheSetAsync(options).ConfigureAwait(false))
+            {
+                LogTryAddBroadcastNotPublished(options.CacheKey);
+            }
+        }
+        catch (Exception ex)
+        {
+            LogTryAddLocalPropagationFailed(ex, options.CacheKey);
+        }
+
+        try
+        {
+            MemorySet(options, value, localMaxExpiration);
+        }
+        catch (Exception ex)
+        {
+            LogTryAddLocalPropagationFailed(ex, options.CacheKey);
+        }
+
+        return true;
+    }
 
     public ValueTask<bool> SetAsync<T>(KeyValuePair<CacheKey, T?>[] keyValues, CachePolicy? policy = null, CancellationToken token = default)
     {
@@ -1123,6 +1241,27 @@ internal sealed partial class MultilayerCache : MultilayerCacheBase, ICache
 
     [LoggerMessage(Level = LogLevel.Debug, Message = "Batch cache missed. generating {Count} keys for {CacheKey}")]
     private partial void LogBatchCacheMissed(CacheKey cacheKey, int count);
+
+    [LoggerMessage(Level = LogLevel.Debug, Message = "TryAdd skipped for {CacheKey}: a null value cannot be represented unless CacheNullValues is on.")]
+    private partial void LogTryAddSkippedUnrepresentableValue(CacheKey cacheKey);
+
+    [LoggerMessage(Level = LogLevel.Warning, Message = "Inner cache TryAdd for cacheKey {CacheKey}")]
+    private partial void LogInnerCacheTryAddError(Exception ex, CacheKey cacheKey);
+
+    [LoggerMessage(Level = LogLevel.Warning, Message = "TryAdd won cacheKey {CacheKey} in the inner cache but could not broadcast or populate the local tier. The add still stands.")]
+    private partial void LogTryAddLocalPropagationFailed(Exception ex, CacheKey cacheKey);
+
+    [LoggerMessage(Level = LogLevel.Warning, Message = "TryAdd for {CacheKey} reported not-added: the local lock could not be acquired within Lock.LocalLockTimeout, and without it two in-process callers could both be told they added the key. Raise Lock.LocalLockTimeout if this key is contended.")]
+    private partial void LogTryAddLocalLockUnavailable(CacheKey cacheKey);
+
+    [LoggerMessage(Level = LogLevel.Debug, Message = "TryAdd skipped for {CacheKey}: the requested expiration {Expiration} is not in the future, so the entry would retain nothing.")]
+    private partial void LogTryAddSkippedExpiredEntry(CacheKey cacheKey, DateTimeOffset expiration);
+
+    [LoggerMessage(Level = LogLevel.Debug, Message = "TryAdd skipped for {CacheKey}: the effective local retention {LocalMaxExpiration} is not positive, and on this provider it is the only retention.")]
+    private partial void LogTryAddSkippedNonPositiveLocalRetention(CacheKey cacheKey, TimeSpan localMaxExpiration);
+
+    [LoggerMessage(Level = LogLevel.Warning, Message = "TryAdd won cacheKey {CacheKey} but the invalidation broadcast reported not-published. The add still stands; peers may serve a stale copy until it expires.")]
+    private partial void LogTryAddBroadcastNotPublished(CacheKey cacheKey);
 
     [LoggerMessage(Level = LogLevel.Debug, Message = "Replacing cached key {CacheKey}")]
     private partial void LogReplacingCachedKey(CacheKey cacheKey);
