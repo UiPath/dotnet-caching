@@ -1,3 +1,4 @@
+using System.Runtime.CompilerServices;
 using UiPath.Caching.Config;
 using UiPath.Caching.Locking;
 using UiPath.Caching.Telemetry;
@@ -191,6 +192,36 @@ public abstract class MultilayerCacheBase : IDisposable
         var resolved = policy.DistributedExpiration ?? _multiLayerCacheOptions.DefaultExpiration;
         return ApplyJitter(resolved, policy.JitterMaxDuration, _clock.UtcNow);
     }
+
+    /// <summary>
+    /// Validates a caller-supplied duration and pairs it with the deadline it implies. The write path
+    /// needs both: the deadline for the entry options, the duration for the L1 cap and the rehydrate
+    /// trigger. Jitter is deliberately not applied — a caller-supplied lifetime is honored exactly.
+    /// </summary>
+    private protected (DateTimeOffset Expiration, TimeSpan Duration) CallerWrite(TimeSpan expiration, [CallerArgumentExpression(nameof(expiration))] string? paramName = null)
+    {
+        var duration = CacheExpiration.ThrowIfNotPositive(expiration, paramName);
+        return (_clock.UtcNow.Add(duration), duration);
+    }
+
+    /// <inheritdoc cref="CallerWrite(TimeSpan, string)"/>
+    private protected (DateTimeOffset Expiration, TimeSpan Duration) CallerWrite(DateTimeOffset expiration, [CallerArgumentExpression(nameof(expiration))] string? paramName = null)
+    {
+        var now = _clock.UtcNow;
+        return (CacheExpiration.ThrowIfNotFuture(expiration, now, paramName), expiration - now);
+    }
+
+    /// <summary>Write deadline for a call that carried no <c>expiration</c>: the policy's L2 TTL jittered, then the cache default.</summary>
+    private protected DateTimeOffset PolicyDeadline(CachePolicy policy) =>
+        _clock.ToDateTimeOffset(ResolveWriteDuration(policy));
+
+    /// <summary>Write deadline for a caller-supplied duration, validated.</summary>
+    private protected DateTimeOffset CallerDeadline(TimeSpan expiration, [CallerArgumentExpression(nameof(expiration))] string? paramName = null) =>
+        CallerWrite(expiration, paramName).Expiration;
+
+    /// <summary>Write deadline for a caller-supplied deadline, validated.</summary>
+    private protected DateTimeOffset CallerDeadline(DateTimeOffset expiration, [CallerArgumentExpression(nameof(expiration))] string? paramName = null) =>
+        CacheExpiration.ThrowIfNotFuture(expiration, _clock.UtcNow, paramName);
 
     /// <summary>
     /// The local lock alone, for callers that need it for correctness rather than de-duplication.

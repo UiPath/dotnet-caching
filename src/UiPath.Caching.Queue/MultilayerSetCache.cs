@@ -58,12 +58,15 @@ internal sealed class MultilayerSetCache : ISetCache
     }
 
     public ValueTask<long> AddAsync<T>(CacheKey cacheKey, IEnumerable<T> items, CachePolicy? policy, CancellationToken token = default) =>
-        AddAsync(cacheKey, items, expiration: (DateTimeOffset?)null, policy, token);
+        AddCoreAsync<T>(cacheKey, items, expiration: null, policy, token);
 
-    public ValueTask<long> AddAsync<T>(CacheKey cacheKey, IEnumerable<T> items, TimeSpan? expiration, CachePolicy? policy, CancellationToken token = default) =>
-        AddAsync(cacheKey, items, FromTtl(expiration), policy, token);
+    public ValueTask<long> AddAsync<T>(CacheKey cacheKey, IEnumerable<T> items, TimeSpan expiration, CachePolicy? policy, CancellationToken token = default) =>
+        AddCoreAsync<T>(cacheKey, items, DateTimeOffset.UtcNow.Add(CacheExpiration.ThrowIfNotPositive(expiration)), policy, token);
 
-    public async ValueTask<long> AddAsync<T>(CacheKey cacheKey, IEnumerable<T> items, DateTimeOffset? expiration, CachePolicy? policy, CancellationToken token = default)
+    public ValueTask<long> AddAsync<T>(CacheKey cacheKey, IEnumerable<T> items, DateTimeOffset expiration, CachePolicy? policy, CancellationToken token = default) =>
+        AddCoreAsync<T>(cacheKey, items, CacheExpiration.ThrowIfNotFuture(expiration, DateTimeOffset.UtcNow), policy, token);
+
+    private async ValueTask<long> AddCoreAsync<T>(CacheKey cacheKey, IEnumerable<T> items, DateTimeOffset? expiration, CachePolicy? policy, CancellationToken token)
     {
         NotCacheableException.ThrowIfNotCacheable<T>();
         return await InternalAddAsync(cacheKey, Materialize(items), expiration, policy, token).ConfigureAwait(false);
@@ -244,7 +247,11 @@ internal sealed class MultilayerSetCache : ISetCache
         {
             return await _memorySetCache.AddAsync(key, items, LocalWriteExpiration(expiration, policy), token).ConfigureAwait(false);
         }
-        var added = await _inner.AddAsync(cacheKey, items, expiration, policy, token).ConfigureAwait(false);
+        // null here is "no caller expiration": the inner cache resolves it from the policy, which is
+        // the overload that carries no expiration argument.
+        var added = expiration is { } deadline
+            ? await _inner.AddAsync(cacheKey, items, deadline, policy, token).ConfigureAwait(false)
+            : await _inner.AddAsync(cacheKey, items, policy, token).ConfigureAwait(false);
         await _memorySetCache.AddAsync(key, items, CancellationToken.None).ConfigureAwait(false);
         return added;
     }

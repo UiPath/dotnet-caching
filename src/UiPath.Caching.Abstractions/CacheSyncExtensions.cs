@@ -19,10 +19,10 @@ public static class CacheSyncExtensions
     public static T? GetOrAdd<T>(this ICache<T> cache, CacheKey cacheKey, Func<T?> generator, CancellationToken token = default)
         => cache.GetOrAddAsync(cacheKey, _ => Task.FromResult(generator()), token).AsTask().GetAwaiter().GetResult();
 
-    public static T? GetOrAdd<T>(this ICache<T> cache, CacheKey cacheKey, Func<T?> generator, TimeSpan? expiration, CancellationToken token = default)
+    public static T? GetOrAdd<T>(this ICache<T> cache, CacheKey cacheKey, Func<T?> generator, TimeSpan expiration, CancellationToken token = default)
         => cache.GetOrAddAsync(cacheKey, _ => Task.FromResult(generator()), expiration, token).AsTask().GetAwaiter().GetResult();
 
-    public static T? GetOrAdd<T>(this ICache<T> cache, CacheKey cacheKey, Func<T?> generator, DateTimeOffset? expiration, CancellationToken token = default)
+    public static T? GetOrAdd<T>(this ICache<T> cache, CacheKey cacheKey, Func<T?> generator, DateTimeOffset expiration, CancellationToken token = default)
         => cache.GetOrAddAsync(cacheKey, _ => Task.FromResult(generator()), expiration, token).AsTask().GetAwaiter().GetResult();
 
     public static KeyValuePair<CacheKey, T?>[] GetOrAdd<T>(this ICache<T> cache, CacheKey[] cacheKeys, Func<CacheKey[], KeyValuePair<CacheKey, T?>[]> generator, CancellationToken token = default)
@@ -32,7 +32,7 @@ public static class CacheSyncExtensions
                 token)
             .AsTask().GetAwaiter().GetResult();
 
-    public static KeyValuePair<CacheKey, T?>[] GetOrAdd<T>(this ICache<T> cache, CacheKey[] cacheKeys, Func<CacheKey[], KeyValuePair<CacheKey, T?>[]> generator, TimeSpan? expiration, CancellationToken token = default)
+    public static KeyValuePair<CacheKey, T?>[] GetOrAdd<T>(this ICache<T> cache, CacheKey[] cacheKeys, Func<CacheKey[], KeyValuePair<CacheKey, T?>[]> generator, TimeSpan expiration, CancellationToken token = default)
         => cache.GetOrAddAsync(
                 Array.ConvertAll(cacheKeys, k => new KeyValuePair<CacheKey, CacheKey>(k, k)),
                 (keys, _) => Task.FromResult(generator(keys)),
@@ -40,7 +40,7 @@ public static class CacheSyncExtensions
                 token)
             .AsTask().GetAwaiter().GetResult();
 
-    public static KeyValuePair<CacheKey, T?>[] GetOrAdd<T>(this ICache<T> cache, CacheKey[] cacheKeys, Func<CacheKey[], KeyValuePair<CacheKey, T?>[]> generator, DateTimeOffset? expiration, CancellationToken token = default)
+    public static KeyValuePair<CacheKey, T?>[] GetOrAdd<T>(this ICache<T> cache, CacheKey[] cacheKeys, Func<CacheKey[], KeyValuePair<CacheKey, T?>[]> generator, DateTimeOffset expiration, CancellationToken token = default)
         => cache.GetOrAddAsync(
                 Array.ConvertAll(cacheKeys, k => new KeyValuePair<CacheKey, CacheKey>(k, k)),
                 (keys, _) => Task.FromResult(generator(keys)),
@@ -57,40 +57,40 @@ public static class CacheSyncExtensions
     public static bool Set<T>(this ICache<T> cache, CacheKey cacheKey, T? value, CancellationToken token = default)
         => cache.SetAsync(cacheKey, value, token).AsTask().GetAwaiter().GetResult();
 
-    public static bool Set<T>(this ICache<T> cache, CacheKey cacheKey, T? value, TimeSpan? expiration, CancellationToken token = default)
+    public static bool Set<T>(this ICache<T> cache, CacheKey cacheKey, T? value, TimeSpan expiration, CancellationToken token = default)
         => cache.SetAsync(cacheKey, value, expiration, token).AsTask().GetAwaiter().GetResult();
 
-    public static bool Set<T>(this ICache<T> cache, CacheKey cacheKey, T? value, DateTimeOffset? expiration, CancellationToken token = default)
+    public static bool Set<T>(this ICache<T> cache, CacheKey cacheKey, T? value, DateTimeOffset expiration, CancellationToken token = default)
         => cache.SetAsync(cacheKey, value, expiration, token).AsTask().GetAwaiter().GetResult();
 
     public static bool Set<T>(this ICache<T> cache, KeyValuePair<CacheKey, T?>[] keyValues, CancellationToken token = default)
         => cache.SetAsync(keyValues, token).AsTask().GetAwaiter().GetResult();
 
-    public static bool Set<T>(this ICache<T> cache, KeyValuePair<CacheKey, T?>[] keyValues, TimeSpan? expiration = null, CancellationToken token = default)
+    public static bool Set<T>(this ICache<T> cache, KeyValuePair<CacheKey, T?>[] keyValues, TimeSpan expiration, CancellationToken token = default)
         => cache.SetAsync(keyValues, expiration, token).AsTask().GetAwaiter().GetResult();
 
-    public static bool Set<T>(this ICache<T> cache, KeyValuePair<CacheKey, T?>[] keyValues, DateTimeOffset? expiration = null, CancellationToken token = default)
+    public static bool Set<T>(this ICache<T> cache, KeyValuePair<CacheKey, T?>[] keyValues, DateTimeOffset expiration, CancellationToken token = default)
         => cache.SetAsync(keyValues, expiration, token).AsTask().GetAwaiter().GetResult();
 
     /// <inheritdoc cref="ICache{T}.TryAddAsync(CacheKey, T, CancellationToken)"/>
     public static bool TryAdd<T>(this ICache<T> cache, CacheKey cacheKey, T? value, CancellationToken token = default)
         => cache.TryAddAsync(cacheKey, value, token).AsTask().GetAwaiter().GetResult();
 
-    /// <inheritdoc cref="ICache{T}.TryAddAsync(CacheKey, T, TimeSpan?, CancellationToken)"/>
-    public static bool TryAdd<T>(this ICache<T> cache, CacheKey cacheKey, T? value, TimeSpan? expiration, CancellationToken token = default)
+    /// <inheritdoc cref="ICache{T}.TryAddAsync(CacheKey, T, TimeSpan, CancellationToken)"/>
+    public static bool TryAdd<T>(this ICache<T> cache, CacheKey cacheKey, T? value, TimeSpan expiration, CancellationToken token = default)
         => cache.TryAddAsync(cacheKey, value, expiration, token).AsTask().GetAwaiter().GetResult();
 
-    /// <inheritdoc cref="ICache{T}.TryAddAsync(CacheKey, T, TimeSpan?, CancellationToken)"/>
-    public static bool TryAdd<T>(this ICache<T> cache, CacheKey cacheKey, T? value, DateTimeOffset? expiration, CancellationToken token = default)
+    /// <inheritdoc cref="ICache{T}.TryAddAsync(CacheKey, T, TimeSpan, CancellationToken)"/>
+    public static bool TryAdd<T>(this ICache<T> cache, CacheKey cacheKey, T? value, DateTimeOffset expiration, CancellationToken token = default)
         => cache.TryAddAsync(cacheKey, value, expiration, token).AsTask().GetAwaiter().GetResult();
 
     public static bool Refresh<T>(this ICache<T> cache, CacheKey cacheKey, CancellationToken token = default)
         => cache.RefreshAsync(cacheKey, token).AsTask().GetAwaiter().GetResult();
 
-    public static bool Refresh<T>(this ICache<T> cache, CacheKey cacheKey, TimeSpan? expiration, CancellationToken token = default)
+    public static bool Refresh<T>(this ICache<T> cache, CacheKey cacheKey, TimeSpan expiration, CancellationToken token = default)
         => cache.RefreshAsync(cacheKey, expiration, token).AsTask().GetAwaiter().GetResult();
 
-    public static bool Refresh<T>(this ICache<T> cache, CacheKey cacheKey, DateTimeOffset? expiration, CancellationToken token = default)
+    public static bool Refresh<T>(this ICache<T> cache, CacheKey cacheKey, DateTimeOffset expiration, CancellationToken token = default)
         => cache.RefreshAsync(cacheKey, expiration, token).AsTask().GetAwaiter().GetResult();
 
     public static bool Contains<T>(this ICache<T> cache, CacheKey cacheKey, CancellationToken token = default)

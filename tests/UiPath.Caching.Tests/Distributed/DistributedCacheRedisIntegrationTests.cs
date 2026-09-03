@@ -162,14 +162,14 @@ public class DistributedCacheRedisIntegrationTests(RedisContainerFixture fixture
 
         await hash.SetAsync(cacheKey, new Dictionary<string, byte[]?> { ["data"] = [1] }, TimeSpan.FromMinutes(5), null, token);
 
-        var applied = await hash.RefreshAsync<byte[]>(cacheKey, (DateTimeOffset?)DateTimeOffset.UtcNow.AddMinutes(30), null, token);
+        var applied = await hash.RefreshAsync<byte[]>(cacheKey, DateTimeOffset.UtcNow.AddMinutes(30), null, token);
 
         applied.Should().BeTrue("the reply is observed, so the result is meaningful");
         (await database.KeyTimeToLiveAsync(redisKey)).Should()
             .BeGreaterThan(TimeSpan.FromMinutes(10), "no polling needed once the reply is awaited");
 
         var absent = new CacheKey($"{UiPathDistributedCacheOptions.DefaultKeyPrefix}:{Unique()}", CacheKeyCasing.Sensitive);
-        (await hash.RefreshAsync<byte[]>(absent, (DateTimeOffset?)DateTimeOffset.UtcNow.AddMinutes(30), null, token))
+        (await hash.RefreshAsync<byte[]>(absent, DateTimeOffset.UtcNow.AddMinutes(30), null, token))
             .Should().BeFalse("a missing key is now distinguishable from a hit");
 
         await hash.RemoveAsync<byte[]>(cacheKey, token);

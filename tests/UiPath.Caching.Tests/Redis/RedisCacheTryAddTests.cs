@@ -236,18 +236,23 @@ public class RedisCacheTryAddTests(ITestContextAccessor testContextAccessor) : I
         added.Should().BeFalse();
     }
 
+    /// <summary>
+    /// A non-positive lifetime used to return false, which is the same answer as "the key already
+    /// exists". With expiration non-nullable there is no third state to lean on, so the argument is
+    /// rejected rather than answered.
+    /// </summary>
     [Theory]
     [InlineData(0)]
     [InlineData(-5)]
-    public async Task TryAdd_claims_nothing_for_a_non_positive_expiration(int minutes)
+    public async Task TryAdd_rejects_a_non_positive_expiration(int minutes)
     {
-        var added = await Sut.TryAddAsync(
+        var act = async () => await Sut.TryAddAsync(
             _cacheKey,
             _fixture.Create<string>(),
             TimeSpan.FromMinutes(minutes),
             token: testContextAccessor.Current.CancellationToken);
 
-        added.Should().BeFalse();
+        (await act.Should().ThrowAsync<ArgumentOutOfRangeException>()).And.ParamName.Should().Be("expiration");
         await _database.DidNotReceive().StringSetAsync(Arg.Any<RedisKey>(), Arg.Any<RedisValue>(), Arg.Any<TimeSpan?>(), Arg.Any<When>(), Arg.Any<CommandFlags>());
     }
 

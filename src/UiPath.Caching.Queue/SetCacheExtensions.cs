@@ -18,11 +18,11 @@ public static class SetCacheExtensions
         => cache.AddAsync<T>(cacheKey, items, (CachePolicy?)null, token);
 
     /// <inheritdoc cref="ISetCache.AddAsync{T}(CacheKey, T, CachePolicy?, CancellationToken)"/>
-    public static ValueTask<long> AddAsync<T>(this ISetCache cache, CacheKey cacheKey, IEnumerable<T> items, TimeSpan? expiration, CancellationToken token = default)
+    public static ValueTask<long> AddAsync<T>(this ISetCache cache, CacheKey cacheKey, IEnumerable<T> items, TimeSpan expiration, CancellationToken token = default)
         => cache.AddAsync<T>(cacheKey, items, expiration, null, token);
 
     /// <inheritdoc cref="ISetCache.AddAsync{T}(CacheKey, T, CachePolicy?, CancellationToken)"/>
-    public static ValueTask<long> AddAsync<T>(this ISetCache cache, CacheKey cacheKey, IEnumerable<T> items, DateTimeOffset? expiration, CancellationToken token = default)
+    public static ValueTask<long> AddAsync<T>(this ISetCache cache, CacheKey cacheKey, IEnumerable<T> items, DateTimeOffset expiration, CancellationToken token = default)
         => cache.AddAsync<T>(cacheKey, items, expiration, null, token);
 
     /// <inheritdoc cref="ISetCache.PopAsync{T}(CacheKey, CachePolicy?, CancellationToken)"/>

@@ -9,6 +9,9 @@ public class InMemorySetCacheTests
 {
     private static CancellationToken Ct => TestContext.Current.CancellationToken;
 
+    // Hoisted out of the call below so the array is not rebuilt per invocation (CA1861).
+    private static readonly string[] OneItem = ["a"];
+
     private static MultilayerSetCache CreateSut(InMemoryQueueCacheOptions? options = null)
     {
         options ??= new InMemoryQueueCacheOptions();
@@ -182,13 +185,13 @@ public class InMemorySetCacheTests
     }
 
     [Fact]
-    public async Task Add_with_past_expiration_stores_nothing()
+    public async Task Add_with_past_expiration_is_rejected()
     {
         var sut = CreateSut();
 
-        var added = await sut.AddAsync("k", new[] { "a" }, TimeSpan.FromSeconds(-1), null, Ct);
+        var act = async () => await sut.AddAsync("k", OneItem, TimeSpan.FromSeconds(-1), null, Ct);
 
-        added.Should().Be(0);
+        (await act.Should().ThrowAsync<ArgumentOutOfRangeException>()).And.ParamName.Should().Be("expiration");
         (await sut.ContainsAsync<string>("k", Ct)).Should().BeFalse();
     }
 

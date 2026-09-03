@@ -120,6 +120,29 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 
 ### Changed
 
+- **BREAKING:** the per-call `expiration` is no longer nullable. Every write on `ICache`,
+  `ICache<T>`, `IHashCache`, `IHashCache<T>`, `ISetCache`, `ISetCache<T>` and their extension
+  surfaces takes `TimeSpan` / `DateTimeOffset` instead of `TimeSpan?` / `DateTimeOffset?`. The
+  nullable was a redundant third state: each of these members already has a sibling overload with no
+  `expiration` parameter, and passing `null` meant exactly the same thing as not passing it — fall
+  back to `CachePolicy.DistributedExpiration`, then the provider's `DefaultExpiration`. It also made
+  `cache.SetAsync(key, value, null)` ambiguous (`CS0121`) between the `TimeSpan?` and
+  `DateTimeOffset?` overloads, which is why the forwarders had to spell out `(CachePolicy?)null`.
+  Callers passing a real value are unaffected; a caller forwarding its own `TimeSpan?` now branches
+  on it and calls the overload without an expiration for the null case. Nullability stays where it
+  means *inherit* — `CachePolicy.LocalExpiration` / `DistributedExpiration`, the providers'
+  `DefaultExpiration`, `HashCacheEntryOptions.ExpireTime` / `TimeToLive` — and on reads, where
+  `TimeToLiveAsync` / `ExpireTimeAsync` still return `null` for a key with no TTL.
+- **BREAKING:** a per-call `expiration` that cannot be honored is now rejected instead of silently
+  absorbed. A `TimeSpan` that is not strictly positive, or a `DateTimeOffset` at or before the
+  cache's current time, raises `ArgumentOutOfRangeException` (`ParamName` `"expiration"`) and nothing
+  is written. Previously such a value was quietly treated as "no expiration" and, on `TryAddAsync`,
+  answered `false` — the same answer as "somebody else holds the key". With the nullable gone there
+  is no third state left to carry that meaning, so the argument is refused at the boundary. The new
+  public `CacheExpiration` helper (`ThrowIfNotPositive`, `ThrowIfNotFuture`, `ToDuration`) holds the
+  guard for out-of-tree implementations. `TimeSpan.MaxValue` and `DateTimeOffset.MaxValue` remain
+  valid — they are how the providers spell "no TTL". `NullCache`, `NullHashCache` and `NullSetCache`
+  read no argument at all and so enforce nothing, keeping "caching is off, carry on".
 - **BREAKING:** `ICache.Compat.cs`, `IHashCache.Compat.cs` and `ISetCache.Compat.cs` are gone. The
   pre-`CachePolicy` convenience overloads they carried as default interface methods —
   `GetAsync<T>(key, token)`, `SetAsync<T>(key, value, expiration, token)`,

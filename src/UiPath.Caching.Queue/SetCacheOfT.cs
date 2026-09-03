@@ -24,10 +24,10 @@ public class SetCache<T> : ISetCache<T>
     public ValueTask<long> AddAsync(CacheKey cacheKey, IEnumerable<T> items, CancellationToken token = default) =>
         _cache.AddAsync<T>(GetCacheKey(cacheKey), items, policy: Policy, token: token);
 
-    public ValueTask<long> AddAsync(CacheKey cacheKey, IEnumerable<T> items, TimeSpan? expiration, CancellationToken token = default) =>
+    public ValueTask<long> AddAsync(CacheKey cacheKey, IEnumerable<T> items, TimeSpan expiration, CancellationToken token = default) =>
         _cache.AddAsync<T>(GetCacheKey(cacheKey), items, expiration, Policy, token);
 
-    public ValueTask<long> AddAsync(CacheKey cacheKey, IEnumerable<T> items, DateTimeOffset? expiration, CancellationToken token = default) =>
+    public ValueTask<long> AddAsync(CacheKey cacheKey, IEnumerable<T> items, DateTimeOffset expiration, CancellationToken token = default) =>
         _cache.AddAsync<T>(GetCacheKey(cacheKey), items, expiration, Policy, token);
 
     public ValueTask<T?> PopAsync(CacheKey cacheKey, CancellationToken token = default) =>

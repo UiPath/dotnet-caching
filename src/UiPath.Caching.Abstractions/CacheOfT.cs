@@ -46,21 +46,21 @@ public class Cache<T> : ICache<T>
     public ValueTask<T?> GetOrAddAsync(CacheKey cacheKey, Func<CancellationToken, Task<T?>> generator, CancellationToken token = default) =>
         _cache.GetOrAddAsync(GetCacheKey(cacheKey), generator, policy: Policy, token: token);
 
-    public ValueTask<T?> GetOrAddAsync(CacheKey cacheKey, Func<CancellationToken, Task<T?>> generator, TimeSpan? expiration, CancellationToken token = default) =>
+    public ValueTask<T?> GetOrAddAsync(CacheKey cacheKey, Func<CancellationToken, Task<T?>> generator, TimeSpan expiration, CancellationToken token = default) =>
         _cache.GetOrAddAsync(GetCacheKey(cacheKey), generator, expiration, Policy, token);
 
-    public ValueTask<T?> GetOrAddAsync(CacheKey cacheKey, Func<CancellationToken, Task<T?>> generator, DateTimeOffset? expiration, CancellationToken token = default) =>
+    public ValueTask<T?> GetOrAddAsync(CacheKey cacheKey, Func<CancellationToken, Task<T?>> generator, DateTimeOffset expiration, CancellationToken token = default) =>
         _cache.GetOrAddAsync(GetCacheKey(cacheKey), generator, expiration, Policy, token);
 
     public ValueTask<KeyValuePair<TState, T?>[]> GetOrAddAsync<TState>(KeyValuePair<CacheKey, TState>[] entries, Func<TState[], CancellationToken, Task<KeyValuePair<TState, T?>[]>> generator, CancellationToken token = default)
         where TState : notnull =>
         _cache.GetOrAddAsync<T, TState>(MapKeys(entries), generator, policy: Policy, token: token);
 
-    public ValueTask<KeyValuePair<TState, T?>[]> GetOrAddAsync<TState>(KeyValuePair<CacheKey, TState>[] entries, Func<TState[], CancellationToken, Task<KeyValuePair<TState, T?>[]>> generator, TimeSpan? expiration, CancellationToken token = default)
+    public ValueTask<KeyValuePair<TState, T?>[]> GetOrAddAsync<TState>(KeyValuePair<CacheKey, TState>[] entries, Func<TState[], CancellationToken, Task<KeyValuePair<TState, T?>[]>> generator, TimeSpan expiration, CancellationToken token = default)
         where TState : notnull =>
         _cache.GetOrAddAsync<T, TState>(MapKeys(entries), generator, expiration, Policy, token);
 
-    public ValueTask<KeyValuePair<TState, T?>[]> GetOrAddAsync<TState>(KeyValuePair<CacheKey, TState>[] entries, Func<TState[], CancellationToken, Task<KeyValuePair<TState, T?>[]>> generator, DateTimeOffset? expiration, CancellationToken token = default)
+    public ValueTask<KeyValuePair<TState, T?>[]> GetOrAddAsync<TState>(KeyValuePair<CacheKey, TState>[] entries, Func<TState[], CancellationToken, Task<KeyValuePair<TState, T?>[]>> generator, DateTimeOffset expiration, CancellationToken token = default)
         where TState : notnull =>
         _cache.GetOrAddAsync<T, TState>(MapKeys(entries), generator, expiration, Policy, token);
 
@@ -74,10 +74,10 @@ public class Cache<T> : ICache<T>
     public ValueTask<bool> RefreshAsync(CacheKey cacheKey, CancellationToken token = default) =>
         _cache.RefreshAsync<T>(GetCacheKey(cacheKey), policy: Policy, token: token);
 
-    public ValueTask<bool> RefreshAsync(CacheKey cacheKey, TimeSpan? expiration, CancellationToken token = default) =>
+    public ValueTask<bool> RefreshAsync(CacheKey cacheKey, TimeSpan expiration, CancellationToken token = default) =>
         _cache.RefreshAsync<T>(GetCacheKey(cacheKey), expiration, Policy, token);
 
-    public ValueTask<bool> RefreshAsync(CacheKey cacheKey, DateTimeOffset? expiration, CancellationToken token = default) =>
+    public ValueTask<bool> RefreshAsync(CacheKey cacheKey, DateTimeOffset expiration, CancellationToken token = default) =>
         _cache.RefreshAsync<T>(GetCacheKey(cacheKey), expiration, Policy, token);
 
     public ValueTask<bool> RemoveAsync(CacheKey cacheKey, CancellationToken token = default) =>
@@ -89,29 +89,29 @@ public class Cache<T> : ICache<T>
     public ValueTask<bool> SetAsync(CacheKey cacheKey, T? value, CancellationToken token = default) =>
         _cache.SetAsync(GetCacheKey(cacheKey), value, policy: Policy, token: token);
 
-    public ValueTask<bool> SetAsync(CacheKey cacheKey, T? value, TimeSpan? expiration, CancellationToken token = default) =>
+    public ValueTask<bool> SetAsync(CacheKey cacheKey, T? value, TimeSpan expiration, CancellationToken token = default) =>
         _cache.SetAsync(GetCacheKey(cacheKey), value, expiration, Policy, token);
 
-    public ValueTask<bool> SetAsync(CacheKey cacheKey, T? value, DateTimeOffset? expiration, CancellationToken token = default) =>
+    public ValueTask<bool> SetAsync(CacheKey cacheKey, T? value, DateTimeOffset expiration, CancellationToken token = default) =>
         _cache.SetAsync(GetCacheKey(cacheKey), value, expiration, Policy, token);
 
     public ValueTask<bool> TryAddAsync(CacheKey cacheKey, T? value, CancellationToken token = default) =>
         _cache.TryAddAsync(GetCacheKey(cacheKey), value, policy: Policy, token: token);
 
-    public ValueTask<bool> TryAddAsync(CacheKey cacheKey, T? value, TimeSpan? expiration, CancellationToken token = default) =>
+    public ValueTask<bool> TryAddAsync(CacheKey cacheKey, T? value, TimeSpan expiration, CancellationToken token = default) =>
         _cache.TryAddAsync(GetCacheKey(cacheKey), value, expiration, Policy, token);
 
-    public ValueTask<bool> TryAddAsync(CacheKey cacheKey, T? value, DateTimeOffset? expiration, CancellationToken token = default) =>
+    public ValueTask<bool> TryAddAsync(CacheKey cacheKey, T? value, DateTimeOffset expiration, CancellationToken token = default) =>
         _cache.TryAddAsync(GetCacheKey(cacheKey), value, expiration, Policy, token);
 
 
     public ValueTask<bool> SetAsync(KeyValuePair<CacheKey, T?>[] keyValues, CancellationToken token = default) =>
         _cache.SetAsync(GetKeyValuePairs(keyValues), policy: Policy, token: token);
 
-    public ValueTask<bool> SetAsync(KeyValuePair<CacheKey, T?>[] keyValues, TimeSpan? expiration = null, CancellationToken token = default) =>
+    public ValueTask<bool> SetAsync(KeyValuePair<CacheKey, T?>[] keyValues, TimeSpan expiration, CancellationToken token = default) =>
         _cache.SetAsync(GetKeyValuePairs(keyValues), expiration, Policy, token);
 
-    public ValueTask<bool> SetAsync(KeyValuePair<CacheKey, T?>[] keyValues, DateTimeOffset? expiration = null, CancellationToken token = default) =>
+    public ValueTask<bool> SetAsync(KeyValuePair<CacheKey, T?>[] keyValues, DateTimeOffset expiration, CancellationToken token = default) =>
         _cache.SetAsync(GetKeyValuePairs(keyValues), expiration, Policy, token);
  
     public ValueTask<TimeSpan?> TimeToLiveAsync(CacheKey cacheKey, CancellationToken token = default) =>

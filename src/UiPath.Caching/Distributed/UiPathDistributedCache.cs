@@ -116,10 +116,19 @@ internal sealed partial class UiPathDistributedCache : IDistributedCache
         IDictionary<string, byte[]?> fields,
         DateTimeOffset now,
         TimeSpan? ttl,
-        CancellationToken token) =>
-        ttl is null && _allowUnboundedEntries
-            ? _cache.SetAsync(cacheKey, fields, (DateTimeOffset?)DateTimeOffset.MaxValue, _policy, token)
-            : _cache.SetAsync(cacheKey, fields, ttl ?? Clamp(now, _defaultEntryExpiration), _policy, token);
+        CancellationToken token)
+    {
+        if (ttl is null && _allowUnboundedEntries)
+        {
+            return _cache.SetAsync(cacheKey, fields, DateTimeOffset.MaxValue, _policy, token);
+        }
+
+        // Caller TTL, else this adapter's configured default. With neither, the provider's own
+        // default applies — which is what the overload carrying no expiration asks for.
+        return (ttl ?? Clamp(now, _defaultEntryExpiration)) is { } duration
+            ? _cache.SetAsync(cacheKey, fields, duration, _policy, token)
+            : _cache.SetAsync(cacheKey, fields, _policy, token);
+    }
 
     /// <summary>Composes the storage key by running the configured strategy over the validated caller key.</summary>
     private CacheKey Encode(string key)
@@ -216,7 +225,7 @@ internal sealed partial class UiPathDistributedCache : IDistributedCache
             return;
         }
 
-        _ = await _cache.RefreshAsync<byte[]>(cacheKey, (DateTimeOffset?)target, _policy, token).ConfigureAwait(false);
+        _ = await _cache.RefreshAsync<byte[]>(cacheKey, target, _policy, token).ConfigureAwait(false);
     }
 
     /// <summary>Expiration metadata as written, decoded once. Null means the sentinel: that deadline was not set.</summary>

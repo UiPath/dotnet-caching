@@ -21,10 +21,10 @@ public interface ISetCache<T>
     ValueTask<long> AddAsync(CacheKey cacheKey, IEnumerable<T> items, CancellationToken token = default);
 
     /// <inheritdoc cref="AddAsync(CacheKey, T, CancellationToken)"/>
-    ValueTask<long> AddAsync(CacheKey cacheKey, IEnumerable<T> items, TimeSpan? expiration, CancellationToken token = default);
+    ValueTask<long> AddAsync(CacheKey cacheKey, IEnumerable<T> items, TimeSpan expiration, CancellationToken token = default);
 
     /// <inheritdoc cref="AddAsync(CacheKey, T, CancellationToken)"/>
-    ValueTask<long> AddAsync(CacheKey cacheKey, IEnumerable<T> items, DateTimeOffset? expiration, CancellationToken token = default);
+    ValueTask<long> AddAsync(CacheKey cacheKey, IEnumerable<T> items, DateTimeOffset expiration, CancellationToken token = default);
 
     /// <summary>
     /// Removes and returns a random member of the set (Redis SPOP). The set is unordered, so this is

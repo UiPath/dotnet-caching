@@ -72,7 +72,7 @@ public class MultilayerSetCacheTests
         var (sut, l2) = CreateSut();
         SetupMembers(l2, "a");
         // The batch overloads normalize into the DateTimeOffset one before hitting L2.
-        l2.AddAsync<string>(default, default!, default(DateTimeOffset?), default, Ct).ReturnsForAnyArgs(_ => 2L);
+        l2.AddAsync<string>(default, default!, default(DateTimeOffset), default, Ct).ReturnsForAnyArgs(_ => 2L);
 
         await sut.MembersAsync<string>("k", token: Ct);              // primes L1
         await sut.AddAsync("k", (IEnumerable<string>)new[] { "b", "c" }, (CachePolicy?)null, Ct);

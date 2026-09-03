@@ -71,19 +71,21 @@ internal sealed partial class RedisCache : RedisCacheBase, ICache
     }
 
     public ValueTask<T?> GetOrAddAsync<T>(CacheKey cacheKey, Func<CancellationToken, Task<T?>> generator, CachePolicy? policy, CancellationToken token = default) =>
-        GetOrAddAsync(cacheKey, generator, expiration: (TimeSpan?)null, policy, token);
+        GetOrAddCoreAsync(cacheKey, generator, PolicyDuration(policy), policy, token);
 
-    public ValueTask<T?> GetOrAddAsync<T>(CacheKey cacheKey, Func<CancellationToken, Task<T?>> generator, DateTimeOffset? expiration, CachePolicy? policy, CancellationToken token = default) =>
-        GetOrAddAsync(cacheKey, generator, expiration is { } d ? d.Subtract(Clock.UtcNow) : (TimeSpan?)null, policy, token);
+    public ValueTask<T?> GetOrAddAsync<T>(CacheKey cacheKey, Func<CancellationToken, Task<T?>> generator, DateTimeOffset expiration, CachePolicy? policy, CancellationToken token = default) =>
+        GetOrAddCoreAsync(cacheKey, generator, CallerDuration(expiration), policy, token);
 
-    public ValueTask<T?> GetOrAddAsync<T>(CacheKey cacheKey, Func<CancellationToken, Task<T?>> generator, TimeSpan? expiration, CachePolicy? policy, CancellationToken token = default)
+    public ValueTask<T?> GetOrAddAsync<T>(CacheKey cacheKey, Func<CancellationToken, Task<T?>> generator, TimeSpan expiration, CachePolicy? policy, CancellationToken token = default) =>
+        GetOrAddCoreAsync(cacheKey, generator, CallerDuration(expiration), policy, token);
+
+    private ValueTask<T?> GetOrAddCoreAsync<T>(CacheKey cacheKey, Func<CancellationToken, Task<T?>> generator, TimeSpan duration, CachePolicy? policy, CancellationToken token)
     {
         NotCacheableException.ThrowIfNotCacheable<T>();
         ArgumentNullException.ThrowIfNull(generator);
         var redisKey = ToRedisKey(cacheKey, token);
-        var effectiveExpiration = ResolveExpiration(expiration, policy);
         var wrappedGenerator = WrapWithFactoryTimeout(generator, (policy ?? DefaultPolicy)?.FactoryTimeout, cacheKey);
-        return GetOrAddInternalAsync(redisKey, wrappedGenerator, Clock.ToTimeSpan(effectiveExpiration), token);
+        return GetOrAddInternalAsync(redisKey, wrappedGenerator, duration, token);
     }
 
     /// <inheritdoc cref="ICache.GetOrAddAsync{T, TState}(KeyValuePair{CacheKey, TState}[], Func{TState[], CancellationToken, Task{KeyValuePair{TState, T}[]}}, CachePolicy?, CancellationToken)"/>
@@ -96,7 +98,7 @@ internal sealed partial class RedisCache : RedisCacheBase, ICache
     }
 
     /// <inheritdoc cref="ICache.GetOrAddAsync{T, TState}(KeyValuePair{CacheKey, TState}[], Func{TState[], CancellationToken, Task{KeyValuePair{TState, T}[]}}, CachePolicy?, CancellationToken)"/>
-    public ValueTask<KeyValuePair<TState, T?>[]> GetOrAddAsync<T, TState>(KeyValuePair<CacheKey, TState>[] entries, Func<TState[], CancellationToken, Task<KeyValuePair<TState, T?>[]>> generator, TimeSpan? expiration, CachePolicy? policy, CancellationToken token = default)
+    public ValueTask<KeyValuePair<TState, T?>[]> GetOrAddAsync<T, TState>(KeyValuePair<CacheKey, TState>[] entries, Func<TState[], CancellationToken, Task<KeyValuePair<TState, T?>[]>> generator, TimeSpan expiration, CachePolicy? policy, CancellationToken token = default)
         where TState : notnull
     {
         ArgumentNullException.ThrowIfNull(generator);
@@ -105,7 +107,7 @@ internal sealed partial class RedisCache : RedisCacheBase, ICache
     }
 
     /// <inheritdoc cref="ICache.GetOrAddAsync{T, TState}(KeyValuePair{CacheKey, TState}[], Func{TState[], CancellationToken, Task{KeyValuePair{TState, T}[]}}, CachePolicy?, CancellationToken)"/>
-    public ValueTask<KeyValuePair<TState, T?>[]> GetOrAddAsync<T, TState>(KeyValuePair<CacheKey, TState>[] entries, Func<TState[], CancellationToken, Task<KeyValuePair<TState, T?>[]>> generator, DateTimeOffset? expiration, CachePolicy? policy, CancellationToken token = default)
+    public ValueTask<KeyValuePair<TState, T?>[]> GetOrAddAsync<T, TState>(KeyValuePair<CacheKey, TState>[] entries, Func<TState[], CancellationToken, Task<KeyValuePair<TState, T?>[]>> generator, DateTimeOffset expiration, CachePolicy? policy, CancellationToken token = default)
         where TState : notnull
     {
         ArgumentNullException.ThrowIfNull(generator);
@@ -142,16 +144,18 @@ internal sealed partial class RedisCache : RedisCacheBase, ICache
     }
 
     public ValueTask<bool> RefreshAsync<T>(CacheKey cacheKey, CachePolicy? policy, CancellationToken token = default) =>
-        RefreshAsync<T>(cacheKey, expiration: (TimeSpan?)null, policy, token);
+        RefreshCoreAsync<T>(cacheKey, PolicyDeadline(policy), token);
 
-    public ValueTask<bool> RefreshAsync<T>(CacheKey cacheKey, TimeSpan? expiration, CachePolicy? policy, CancellationToken token = default) =>
-        RefreshAsync<T>(cacheKey, Clock.ToDateTimeOffset(ResolveExpiration(expiration, policy)), policy, token);
+    public ValueTask<bool> RefreshAsync<T>(CacheKey cacheKey, TimeSpan expiration, CachePolicy? policy, CancellationToken token = default) =>
+        RefreshCoreAsync<T>(cacheKey, Clock.UtcNow.Add(CallerDuration(expiration)), token);
 
-    public async ValueTask<bool> RefreshAsync<T>(CacheKey cacheKey, DateTimeOffset? expiration, CachePolicy? policy, CancellationToken token = default)
+    public ValueTask<bool> RefreshAsync<T>(CacheKey cacheKey, DateTimeOffset expiration, CachePolicy? policy, CancellationToken token = default) =>
+        RefreshCoreAsync<T>(cacheKey, CallerDeadline(expiration), token);
+
+    private async ValueTask<bool> RefreshCoreAsync<T>(CacheKey cacheKey, DateTimeOffset expiration, CancellationToken token)
     {
         NotCacheableException.ThrowIfNotCacheable<T>();
         var redisKey = ToRedisKey(cacheKey, token);
-        expiration = ResolveExpiration(expiration, policy);
 
         LogRefreshingKey(redisKey, expiration);
         var ret = false;
@@ -171,7 +175,7 @@ internal sealed partial class RedisCache : RedisCacheBase, ICache
                 ret = await _write.ExecuteAsync(async token =>
                 {
                     token.ThrowIfCancellationRequested();
-                    return await Database.KeyExpireAsync(redisKey, expiration.Value.UtcDateTime, RefreshFlags).ConfigureAwait(false);
+                    return await Database.KeyExpireAsync(redisKey, expiration.UtcDateTime, RefreshFlags).ConfigureAwait(false);
                 }, default, token).ConfigureAwait(false);
             }
             operation.Stop();
@@ -201,57 +205,48 @@ internal sealed partial class RedisCache : RedisCacheBase, ICache
     }
 
     public ValueTask<bool> SetAsync<T>(CacheKey cacheKey, T? value, CachePolicy? policy, CancellationToken token = default) =>
-        SetAsync(cacheKey, value, expiration: (TimeSpan?)null, policy, token);
+        SetCoreAsync(cacheKey, value, PolicyDuration(policy), token);
 
-    public ValueTask<bool> SetAsync<T>(CacheKey cacheKey, T? value, TimeSpan? expiration, CachePolicy? policy, CancellationToken token = default)
+    public ValueTask<bool> SetAsync<T>(CacheKey cacheKey, T? value, TimeSpan expiration, CachePolicy? policy, CancellationToken token = default) =>
+        SetCoreAsync(cacheKey, value, CallerDuration(expiration), token);
+
+    public ValueTask<bool> SetAsync<T>(CacheKey cacheKey, T? value, DateTimeOffset expiration, CachePolicy? policy, CancellationToken token = default) =>
+        SetCoreAsync(cacheKey, value, CallerDuration(expiration), token);
+
+    public ValueTask<bool> SetAsync<T>(KeyValuePair<CacheKey, T?>[] keyValues, CachePolicy? policy, CancellationToken token = default) =>
+        SetCoreAsync(keyValues, PolicyDuration(policy), token);
+
+    public ValueTask<bool> SetAsync<T>(KeyValuePair<CacheKey, T?>[] keyValues, TimeSpan expiration, CachePolicy? policy, CancellationToken token = default) =>
+        SetCoreAsync(keyValues, CallerDuration(expiration), token);
+
+    public ValueTask<bool> SetAsync<T>(KeyValuePair<CacheKey, T?>[] keyValues, DateTimeOffset expiration, CachePolicy? policy, CancellationToken token = default) =>
+        SetCoreAsync(keyValues, CallerDuration(expiration), token);
+
+    private ValueTask<bool> SetCoreAsync<T>(CacheKey cacheKey, T? value, TimeSpan duration, CancellationToken token)
     {
         NotCacheableException.ThrowIfNotCacheable<T>();
-        var effective = ResolveExpiration(expiration, policy);
-        return SetInternalAsync(ToRedisKey(cacheKey, token), value, Clock.ToTimeSpan(effective), token);
+        return SetInternalAsync(ToRedisKey(cacheKey, token), value, duration, token);
     }
 
-    public ValueTask<bool> SetAsync<T>(CacheKey cacheKey, T? value, DateTimeOffset? expiration, CachePolicy? policy, CancellationToken token = default)
+    private ValueTask<bool> SetCoreAsync<T>(KeyValuePair<CacheKey, T?>[] keyValues, TimeSpan duration, CancellationToken token)
     {
         NotCacheableException.ThrowIfNotCacheable<T>();
-        var effective = ResolveExpiration(expiration, policy);
-        return SetInternalAsync(ToRedisKey(cacheKey, token), value, Clock.ToTimeSpan(effective), token);
-    }
-
-    public ValueTask<bool> SetAsync<T>(KeyValuePair<CacheKey, T?>[] keyValues, CachePolicy? policy, CancellationToken token = default)
-    {
-        NotCacheableException.ThrowIfNotCacheable<T>();
-        return SetAsync(keyValues, expiration: (TimeSpan?)null, policy, token);
-    }
-
-    public ValueTask<bool> SetAsync<T>(KeyValuePair<CacheKey, T?>[] keyValues, TimeSpan? expiration, CachePolicy? policy, CancellationToken token = default)
-    {
-        NotCacheableException.ThrowIfNotCacheable<T>();
-        var effective = ResolveExpiration(expiration, policy);
-        return SetInternalAsync(keyValues, Clock.ToTimeSpan(effective), token);
-    }
-
-    public ValueTask<bool> SetAsync<T>(KeyValuePair<CacheKey, T?>[] keyValues, DateTimeOffset? expiration, CachePolicy? policy, CancellationToken token = default)
-    {
-        NotCacheableException.ThrowIfNotCacheable<T>();
-        var effective = ResolveExpiration(expiration, policy);
-        return SetInternalAsync(keyValues, Clock.ToTimeSpan(effective), token);
+        return SetInternalAsync(keyValues, duration, token);
     }
 
     public ValueTask<bool> TryAddAsync<T>(CacheKey cacheKey, T? value, CachePolicy? policy, CancellationToken token = default) =>
-        TryAddAsync(cacheKey, value, expiration: (TimeSpan?)null, policy, token);
+        TryAddCoreAsync(cacheKey, value, PolicyDuration(policy), token);
 
-    public ValueTask<bool> TryAddAsync<T>(CacheKey cacheKey, T? value, TimeSpan? expiration, CachePolicy? policy, CancellationToken token = default)
+    public ValueTask<bool> TryAddAsync<T>(CacheKey cacheKey, T? value, TimeSpan expiration, CachePolicy? policy, CancellationToken token = default) =>
+        TryAddCoreAsync(cacheKey, value, CallerDuration(expiration), token);
+
+    public ValueTask<bool> TryAddAsync<T>(CacheKey cacheKey, T? value, DateTimeOffset expiration, CachePolicy? policy, CancellationToken token = default) =>
+        TryAddCoreAsync(cacheKey, value, CallerDuration(expiration), token);
+
+    private ValueTask<bool> TryAddCoreAsync<T>(CacheKey cacheKey, T? value, TimeSpan duration, CancellationToken token)
     {
         NotCacheableException.ThrowIfNotCacheable<T>();
-        var effective = ResolveExpiration(expiration, policy);
-        return TryAddInternalAsync(ToRedisKey(cacheKey, token), value, Clock.ToTimeSpan(effective), token);
-    }
-
-    public ValueTask<bool> TryAddAsync<T>(CacheKey cacheKey, T? value, DateTimeOffset? expiration, CachePolicy? policy, CancellationToken token = default)
-    {
-        NotCacheableException.ThrowIfNotCacheable<T>();
-        var effective = ResolveExpiration(expiration, policy);
-        return TryAddInternalAsync(ToRedisKey(cacheKey, token), value, Clock.ToTimeSpan(effective), token);
+        return TryAddInternalAsync(ToRedisKey(cacheKey, token), value, duration, token);
     }
 
     public async ValueTask<bool> ContainsAsync<T>(CacheKey cacheKey, CancellationToken token = default)

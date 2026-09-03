@@ -237,14 +237,14 @@ public class MultilayerCacheBatchGetOrAddLockTests(ITestContextAccessor testCont
         _innerCache.GetCacheEntryAsync<string>(Arg.Any<CacheKey>(), Arg.Any<CachePolicy?>(), Arg.Any<CancellationToken>())
             .Returns<ICacheEntry<string?>>(c => Entry(c.Arg<CacheKey>()));
 
-        _innerCache.SetAsync<string?>(Arg.Any<KeyValuePair<CacheKey, string?>[]>(), Arg.Any<DateTimeOffset?>(), Arg.Any<CachePolicy?>(), Arg.Any<CancellationToken>())
+        _innerCache.SetAsync<string?>(Arg.Any<KeyValuePair<CacheKey, string?>[]>(), Arg.Any<DateTimeOffset>(), Arg.Any<CachePolicy?>(), Arg.Any<CancellationToken>())
             .Returns(c =>
             {
                 foreach (var pair in c.Arg<KeyValuePair<CacheKey, string?>[]>()!) { _stored[pair.Key] = pair.Value; }
                 return true;
             });
 
-        _innerCache.SetAsync<string?>(Arg.Any<CacheKey>(), Arg.Any<string?>(), Arg.Any<DateTimeOffset?>(), Arg.Any<CachePolicy?>(), Arg.Any<CancellationToken>())
+        _innerCache.SetAsync<string?>(Arg.Any<CacheKey>(), Arg.Any<string?>(), Arg.Any<DateTimeOffset>(), Arg.Any<CachePolicy?>(), Arg.Any<CancellationToken>())
             .Returns(c =>
             {
                 _stored[c.Arg<CacheKey>()] = c.ArgAt<string?>(1);

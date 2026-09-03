@@ -11,9 +11,9 @@ public sealed class NullSetCache : ISetCache
 
     public ValueTask<long> AddAsync<T>(CacheKey cacheKey, IEnumerable<T> items, CachePolicy? policy, CancellationToken token = default) => ReturnZeroAsync<T>();
 
-    public ValueTask<long> AddAsync<T>(CacheKey cacheKey, IEnumerable<T> items, TimeSpan? expiration, CachePolicy? policy, CancellationToken token = default) => ReturnZeroAsync<T>();
+    public ValueTask<long> AddAsync<T>(CacheKey cacheKey, IEnumerable<T> items, TimeSpan expiration, CachePolicy? policy, CancellationToken token = default) => ReturnZeroAsync<T>();
 
-    public ValueTask<long> AddAsync<T>(CacheKey cacheKey, IEnumerable<T> items, DateTimeOffset? expiration, CachePolicy? policy, CancellationToken token = default) => ReturnZeroAsync<T>();
+    public ValueTask<long> AddAsync<T>(CacheKey cacheKey, IEnumerable<T> items, DateTimeOffset expiration, CachePolicy? policy, CancellationToken token = default) => ReturnZeroAsync<T>();
 
     public ValueTask<T?> PopAsync<T>(CacheKey cacheKey, CachePolicy? policy, CancellationToken token = default)
     {

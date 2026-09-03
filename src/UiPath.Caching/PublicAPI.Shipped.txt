@@ -358,6 +358,8 @@ UiPath.Caching.InMemoryCacheProvider.Enabled.get -> bool
 UiPath.Caching.InMemoryCacheProvider.InMemoryCacheProvider(Microsoft.Extensions.Options.IOptions<UiPath.Caching.InMemoryCacheOptions!>! optionsAccessor, Microsoft.Extensions.Options.IOptions<UiPath.Caching.CacheOptions!>! cacheOptionsAccessor, UiPath.Caching.IMemoryCacheFactory! memoryCacheFactory, UiPath.Caching.Broadcast.ICacheEventFactory! cacheEventFactory, UiPath.Caching.Broadcast.IChangeTokenFactory! changeTokenFactory, UiPath.Caching.Broadcast.ITopicFactory! topicFactory, UiPath.Caching.Telemetry.ICachingTelemetryProvider! cachingTelemetryProvider, Microsoft.Extensions.Logging.ILoggerFactory! loggerFactory, UiPath.Caching.Locking.ILocalLock! localLock, UiPath.Caching.ICachePolicyFactory! policyFactory) -> void
 UiPath.Caching.InMemoryCacheProvider.Name.get -> string!
 UiPath.Caching.InMemoryRedisCacheOptions
+UiPath.Caching.InMemoryRedisCacheOptions.BroadcastEnable.get -> bool
+UiPath.Caching.InMemoryRedisCacheOptions.BroadcastEnable.set -> void
 UiPath.Caching.InMemoryRedisCacheOptions.CacheKeyStrategy.get -> UiPath.Caching.ICacheKeyStrategy?
 UiPath.Caching.InMemoryRedisCacheOptions.CacheKeyStrategy.set -> void
 UiPath.Caching.InMemoryRedisCacheOptions.CacheNullValues.get -> bool
@@ -535,8 +537,6 @@ UiPath.Caching.Redis.RedisCacheBase.OnConnectionFailed -> System.EventHandler?
 UiPath.Caching.Redis.RedisCacheBase.OnConnectionRestored -> System.EventHandler?
 UiPath.Caching.Redis.RedisCacheBase.OnReconnected -> System.EventHandler?
 UiPath.Caching.Redis.RedisCacheBase.RedisCacheBase(UiPath.Caching.Redis.IRedisConnector! redis, UiPath.Caching.Telemetry.ICachingTelemetryProvider! telemetryProvider, UiPath.Caching.Redis.RedisCacheOptions! redisCacheOptions, UiPath.Caching.CacheOptions! cacheOptions, UiPath.Caching.ICachePolicyFactory! policyFactory) -> void
-UiPath.Caching.Redis.RedisCacheBase.ResolveExpiration(System.DateTimeOffset? expiration, UiPath.Caching.CachePolicy? policy) -> System.DateTimeOffset
-UiPath.Caching.Redis.RedisCacheBase.ResolveExpiration(System.TimeSpan? expiration, UiPath.Caching.CachePolicy? policy) -> System.TimeSpan?
 UiPath.Caching.Redis.RedisCacheBase.Telemetry.get -> UiPath.Caching.Telemetry.ICachingTelemetryProvider!
 UiPath.Caching.Redis.RedisCacheBase.TrackRead(UiPath.Caching.Telemetry.ITelemetryOperation! operation, bool hit, StackExchange.Redis.RedisKey key) -> void
 UiPath.Caching.Redis.RedisCacheOptions
@@ -759,6 +759,7 @@ static UiPath.Caching.Config.ServiceCollectionExtensions.AddCaching(this Microso
 static UiPath.Caching.Config.ServiceCollectionExtensions.AddCaching(this Microsoft.Extensions.DependencyInjection.IServiceCollection! services, System.Action<UiPath.Caching.Config.ICachingBuilder!>! configure) -> Microsoft.Extensions.DependencyInjection.IServiceCollection!
 static UiPath.Caching.Config.ServiceCollectionExtensions.AddCaching(this Microsoft.Extensions.DependencyInjection.IServiceCollection! services, System.Action<UiPath.Caching.Config.ICachingBuilder!>! configure, System.Action<UiPath.Caching.CacheOptions!>! configureOptions) -> Microsoft.Extensions.DependencyInjection.IServiceCollection!
 static UiPath.Caching.Config.ServiceCollectionExtensions.TryAddMemoryCacheFactory(this Microsoft.Extensions.DependencyInjection.IServiceCollection! services) -> Microsoft.Extensions.DependencyInjection.IServiceCollection!
+static UiPath.Caching.Config.ServiceCollectionExtensions.TryConfigure<TOptions>(this Microsoft.Extensions.DependencyInjection.IServiceCollection! services, System.Action<TOptions!>! configureOptions) -> Microsoft.Extensions.DependencyInjection.IServiceCollection!
 static UiPath.Caching.MemoryCacheExtensions.Monitor(this Microsoft.Extensions.Caching.Memory.IMemoryCache! cache, UiPath.Caching.ICacheOptions! cacheOptions, UiPath.Caching.Telemetry.ICachingTelemetryProvider! telemetryProvider, string! name) -> System.IDisposable!
 static UiPath.Caching.Metrics.GetReadTopicMetricName(string! topicName) -> string!
 static UiPath.Caching.Metrics.GetWriteTopicMetricName(string! topicName) -> string!
@@ -819,6 +820,3 @@ virtual UiPath.Caching.Redis.RedisCacheBase.Dispose(bool disposing) -> void
 ~UiPath.Caching.Config.NullConfigurationSection.this[string key].set -> void
 ~static readonly UiPath.Caching.Config.NullConfiguration.Instance -> Microsoft.Extensions.Configuration.IConfiguration
 ~static readonly UiPath.Caching.Config.NullConfigurationSection.Instance -> Microsoft.Extensions.Configuration.IConfigurationSection
-static UiPath.Caching.Config.ServiceCollectionExtensions.TryConfigure<TOptions>(this Microsoft.Extensions.DependencyInjection.IServiceCollection! services, System.Action<TOptions!>! configureOptions) -> Microsoft.Extensions.DependencyInjection.IServiceCollection!
-UiPath.Caching.InMemoryRedisCacheOptions.BroadcastEnable.get -> bool
-UiPath.Caching.InMemoryRedisCacheOptions.BroadcastEnable.set -> void

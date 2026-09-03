@@ -42,14 +42,14 @@ public class MultilayerCacheTryAddTests(ITestContextAccessor testContextAccessor
     public async Task TryAdd_delegates_the_decision_to_the_inner_cache()
     {
         var value = _fixture.Create<string>();
-        _innerCache.TryAddAsync<string?>(_cacheKey, value, Arg.Any<DateTimeOffset?>(), Arg.Any<CachePolicy?>(), Arg.Any<CancellationToken>())
+        _innerCache.TryAddAsync<string?>(_cacheKey, value, Arg.Any<DateTimeOffset>(), Arg.Any<CachePolicy?>(), Arg.Any<CancellationToken>())
             .Returns(true);
         _topic.PublishAsync(Arg.Any<ICacheEvent>(), Arg.Any<CancellationToken>()).Returns(_ => true);
 
         var added = await Sut.TryAddAsync(_cacheKey, value, policy: null, token: Ct);
 
         added.Should().BeTrue();
-        await _innerCache.Received(1).TryAddAsync<string?>(_cacheKey, value, Arg.Any<DateTimeOffset?>(), Arg.Any<CachePolicy?>(), Arg.Any<CancellationToken>());
+        await _innerCache.Received(1).TryAddAsync<string?>(_cacheKey, value, Arg.Any<DateTimeOffset>(), Arg.Any<CachePolicy?>(), Arg.Any<CancellationToken>());
         _memoryCache.Received(1).CreateEntry(_cacheKey);
     }
 
@@ -66,13 +66,13 @@ public class MultilayerCacheTryAddTests(ITestContextAccessor testContextAccessor
         var added = await Sut.TryAddAsync(_cacheKey, _fixture.Create<string>(), policy: null, token: Ct);
 
         added.Should().BeFalse();
-        await _innerCache.DidNotReceive().TryAddAsync<string?>(_cacheKey, Arg.Any<string?>(), Arg.Any<DateTimeOffset?>(), Arg.Any<CachePolicy?>(), Arg.Any<CancellationToken>());
+        await _innerCache.DidNotReceive().TryAddAsync<string?>(_cacheKey, Arg.Any<string?>(), Arg.Any<DateTimeOffset>(), Arg.Any<CachePolicy?>(), Arg.Any<CancellationToken>());
     }
 
     [Fact]
     public async Task TryAdd_leaves_both_tiers_untouched_when_the_inner_cache_reports_a_loss()
     {
-        _innerCache.TryAddAsync<string?>(_cacheKey, Arg.Any<string?>(), Arg.Any<DateTimeOffset?>(), Arg.Any<CachePolicy?>(), Arg.Any<CancellationToken>())
+        _innerCache.TryAddAsync<string?>(_cacheKey, Arg.Any<string?>(), Arg.Any<DateTimeOffset>(), Arg.Any<CachePolicy?>(), Arg.Any<CancellationToken>())
             .Returns(false);
 
         var added = await Sut.TryAddAsync(_cacheKey, _fixture.Create<string>(), policy: null, token: Ct);
@@ -85,7 +85,7 @@ public class MultilayerCacheTryAddTests(ITestContextAccessor testContextAccessor
     [Fact]
     public async Task TryAdd_broadcasts_after_a_win_so_peers_drop_stale_local_copies()
     {
-        _innerCache.TryAddAsync<string?>(_cacheKey, Arg.Any<string?>(), Arg.Any<DateTimeOffset?>(), Arg.Any<CachePolicy?>(), Arg.Any<CancellationToken>())
+        _innerCache.TryAddAsync<string?>(_cacheKey, Arg.Any<string?>(), Arg.Any<DateTimeOffset>(), Arg.Any<CachePolicy?>(), Arg.Any<CancellationToken>())
             .Returns(true);
         _topic.PublishAsync(Arg.Any<ICacheEvent>(), Arg.Any<CancellationToken>()).Returns(_ => true);
 
@@ -97,7 +97,7 @@ public class MultilayerCacheTryAddTests(ITestContextAccessor testContextAccessor
     [Fact]
     public async Task TryAdd_still_reports_the_win_when_the_broadcast_fails()
     {
-        _innerCache.TryAddAsync<string?>(_cacheKey, Arg.Any<string?>(), Arg.Any<DateTimeOffset?>(), Arg.Any<CachePolicy?>(), Arg.Any<CancellationToken>())
+        _innerCache.TryAddAsync<string?>(_cacheKey, Arg.Any<string?>(), Arg.Any<DateTimeOffset>(), Arg.Any<CachePolicy?>(), Arg.Any<CancellationToken>())
             .Returns(true);
         _topic.PublishAsync(Arg.Any<ICacheEvent>(), Arg.Any<CancellationToken>())
             .ThrowsAsync(new InvalidOperationException("broadcast down"));
@@ -110,7 +110,7 @@ public class MultilayerCacheTryAddTests(ITestContextAccessor testContextAccessor
     [Fact]
     public async Task TryAdd_fails_closed_when_the_inner_cache_throws()
     {
-        _innerCache.TryAddAsync<string?>(_cacheKey, Arg.Any<string?>(), Arg.Any<DateTimeOffset?>(), Arg.Any<CachePolicy?>(), Arg.Any<CancellationToken>())
+        _innerCache.TryAddAsync<string?>(_cacheKey, Arg.Any<string?>(), Arg.Any<DateTimeOffset>(), Arg.Any<CachePolicy?>(), Arg.Any<CancellationToken>())
             .ThrowsAsync(new InvalidOperationException("redis down"));
 
         var added = await Sut.TryAddAsync(_cacheKey, _fixture.Create<string>(), policy: null, token: Ct);
@@ -120,28 +120,50 @@ public class MultilayerCacheTryAddTests(ITestContextAccessor testContextAccessor
     }
 
     [Fact]
-    public async Task TryAdd_claims_nothing_for_an_expiration_that_has_already_passed()
+    public async Task TryAdd_reports_a_loss_when_the_inner_cache_cannot_arbitrate_at_all()
     {
-        var added = await Sut.TryAddAsync(_cacheKey, _fixture.Create<string>(), DateTimeOffset.UtcNow.AddMinutes(-5), token: Ct);
+        _innerCache.TryAddAsync<string?>(_cacheKey, Arg.Any<string?>(), Arg.Any<DateTimeOffset>(), Arg.Any<CachePolicy?>(), Arg.Any<CancellationToken>())
+            .ThrowsAsync(new NotSupportedException("no NX here"));
 
-        added.Should().BeFalse();
-        await _innerCache.DidNotReceive().TryAddAsync<string?>(_cacheKey, Arg.Any<string?>(), Arg.Any<DateTimeOffset?>(), Arg.Any<CachePolicy?>(), Arg.Any<CancellationToken>());
+        var added = await Sut.TryAddAsync(_cacheKey, _fixture.Create<string>(), policy: null, token: Ct);
+
+        added.Should().BeFalse("an inner cache that cannot arbitrate is logged and reported as a loss, which is the fail-closed direction the ambiguous false already covers");
         _memoryCache.DidNotReceive().CreateEntry(_cacheKey);
     }
 
+    /// <summary>
+    /// A deadline that has passed used to be a silent no-op returning false. The expiration is no
+    /// longer nullable, so there is nothing left for such a value to mean and it is rejected at the
+    /// boundary instead of being confused with "somebody else holds the key".
+    /// </summary>
     [Fact]
-    public async Task TryAdd_claims_nothing_for_a_zero_expiration()
+    public async Task TryAdd_rejects_an_expiration_that_has_already_passed()
     {
-        var added = await Sut.TryAddAsync(_cacheKey, _fixture.Create<string>(), TimeSpan.Zero, token: Ct);
+        var act = async () => await Sut.TryAddAsync(_cacheKey, _fixture.Create<string>(), DateTimeOffset.UtcNow.AddMinutes(-5), token: Ct);
 
-        added.Should().BeFalse();
-        await _innerCache.DidNotReceive().TryAddAsync<string?>(_cacheKey, Arg.Any<string?>(), Arg.Any<DateTimeOffset?>(), Arg.Any<CachePolicy?>(), Arg.Any<CancellationToken>());
+        (await act.Should().ThrowAsync<ArgumentOutOfRangeException>()).And.ParamName.Should().Be("expiration");
+        await _innerCache.DidNotReceive().TryAddAsync<string?>(_cacheKey, Arg.Any<string?>(), Arg.Any<DateTimeOffset>(), Arg.Any<CachePolicy?>(), Arg.Any<CancellationToken>());
+        _memoryCache.DidNotReceive().CreateEntry(_cacheKey);
+    }
+
+    /// <inheritdoc cref="TryAdd_rejects_an_expiration_that_has_already_passed"/>
+    [Theory]
+    [InlineData(0)]
+    [InlineData(-5)]
+    public async Task TryAdd_rejects_a_non_positive_expiration(int minutes)
+    {
+        var act = async () => await Sut.TryAddAsync(_cacheKey, _fixture.Create<string>(), TimeSpan.FromMinutes(minutes), token: Ct);
+
+        (await act.Should().ThrowAsync<ArgumentOutOfRangeException>()).And.ParamName.Should().Be("expiration");
+        await _innerCache.DidNotReceive().TryAddAsync<string?>(_cacheKey, Arg.Any<string?>(), Arg.Any<DateTimeOffset>(), Arg.Any<CachePolicy?>(), Arg.Any<CancellationToken>());
     }
 
     [Fact]
     public async Task A_broadcast_that_reports_not_published_still_stands_and_is_logged()
     {
-        _innerCache.TryAddAsync<string?>(_cacheKey, Arg.Any<string?>(), Arg.Any<DateTimeOffset?>(), Arg.Any<CachePolicy?>(), Arg.Any<CancellationToken>())
+        // CacheSetAsync signals an ordinary publish failure with false rather than throwing, so the
+        // catch alone would let it pass unreported.
+        _innerCache.TryAddAsync<string?>(_cacheKey, Arg.Any<string?>(), Arg.Any<DateTimeOffset>(), Arg.Any<CachePolicy?>(), Arg.Any<CancellationToken>())
             .Returns(true);
         _topic.PublishAsync(Arg.Any<ICacheEvent>(), Arg.Any<CancellationToken>()).Returns(_ => false);
 
@@ -159,7 +181,9 @@ public class MultilayerCacheTryAddTests(ITestContextAccessor testContextAccessor
     [Fact]
     public async Task A_failed_broadcast_still_populates_the_local_tier()
     {
-        _innerCache.TryAddAsync<string?>(_cacheKey, Arg.Any<string?>(), Arg.Any<DateTimeOffset?>(), Arg.Any<CachePolicy?>(), Arg.Any<CancellationToken>())
+        // The broadcast and the L1 write are independent best-effort steps after the win; a dead
+        // topic must not cost the winning node its local copy.
+        _innerCache.TryAddAsync<string?>(_cacheKey, Arg.Any<string?>(), Arg.Any<DateTimeOffset>(), Arg.Any<CachePolicy?>(), Arg.Any<CancellationToken>())
             .Returns(true);
         _topic.PublishAsync(Arg.Any<ICacheEvent>(), Arg.Any<CancellationToken>())
             .ThrowsAsync(new InvalidOperationException("broadcast down"));
@@ -175,7 +199,7 @@ public class MultilayerCacheTryAddTests(ITestContextAccessor testContextAccessor
     {
         _options.UseLocalOnlyWhenDisconnected = true;
         _options.ConnectionMonitorEnabled = true;
-        _innerCache.TryAddAsync<string?>(_cacheKey, Arg.Any<string?>(), Arg.Any<DateTimeOffset?>(), Arg.Any<CachePolicy?>(), Arg.Any<CancellationToken>())
+        _innerCache.TryAddAsync<string?>(_cacheKey, Arg.Any<string?>(), Arg.Any<DateTimeOffset>(), Arg.Any<CachePolicy?>(), Arg.Any<CancellationToken>())
             .Returns(false);
         _sut = null;
 
@@ -191,14 +215,14 @@ public class MultilayerCacheTryAddTests(ITestContextAccessor testContextAccessor
         _options.UseLocalOnlyWhenDisconnected = true;
         _options.ConnectionMonitorEnabled = true;
         _topicProvider.IsConnected.Returns(false);
-        _innerCache.TryAddAsync<string?>(_cacheKey, Arg.Any<string?>(), Arg.Any<DateTimeOffset?>(), Arg.Any<CachePolicy?>(), Arg.Any<CancellationToken>())
+        _innerCache.TryAddAsync<string?>(_cacheKey, Arg.Any<string?>(), Arg.Any<DateTimeOffset>(), Arg.Any<CachePolicy?>(), Arg.Any<CancellationToken>())
             .Returns(true);
         _sut = null;
 
         var added = await Sut.TryAddAsync(_cacheKey, _fixture.Create<string>(), policy: null, token: Ct);
 
         added.Should().BeTrue("the aggregate connection state covers the topic too, and broadcast is best-effort after a win");
-        await _innerCache.Received(1).TryAddAsync<string?>(_cacheKey, Arg.Any<string?>(), Arg.Any<DateTimeOffset?>(), Arg.Any<CachePolicy?>(), Arg.Any<CancellationToken>());
+        await _innerCache.Received(1).TryAddAsync<string?>(_cacheKey, Arg.Any<string?>(), Arg.Any<DateTimeOffset>(), Arg.Any<CachePolicy?>(), Arg.Any<CancellationToken>());
     }
 
     [Fact]
@@ -206,7 +230,7 @@ public class MultilayerCacheTryAddTests(ITestContextAccessor testContextAccessor
     {
         using var cts = new CancellationTokenSource();
 #pragma warning disable CA2012
-        _innerCache.TryAddAsync<string?>(_cacheKey, Arg.Any<string?>(), Arg.Any<DateTimeOffset?>(), Arg.Any<CachePolicy?>(), Arg.Any<CancellationToken>())
+        _innerCache.TryAddAsync<string?>(_cacheKey, Arg.Any<string?>(), Arg.Any<DateTimeOffset>(), Arg.Any<CachePolicy?>(), Arg.Any<CancellationToken>())
             .Returns<ValueTask<bool>>(_ =>
             {
                 cts.Cancel();
@@ -218,7 +242,7 @@ public class MultilayerCacheTryAddTests(ITestContextAccessor testContextAccessor
 
         await act.Should().ThrowAsync<OperationCanceledException>(
             "reporting false would say someone else owns the key, which InMemoryRedis must not claim any more than Redis does");
-        await _innerCache.Received(1).TryAddAsync<string?>(_cacheKey, Arg.Any<string?>(), Arg.Any<DateTimeOffset?>(), Arg.Any<CachePolicy?>(), Arg.Any<CancellationToken>());
+        await _innerCache.Received(1).TryAddAsync<string?>(_cacheKey, Arg.Any<string?>(), Arg.Any<DateTimeOffset>(), Arg.Any<CachePolicy?>(), Arg.Any<CancellationToken>());
     }
 
     [Fact]
@@ -232,7 +256,7 @@ public class MultilayerCacheTryAddTests(ITestContextAccessor testContextAccessor
         added.Should().BeFalse();
         _memoryCache.DidNotReceive().Remove(_cacheKey);
         await _innerCache.DidNotReceive().RemoveAsync<string>(_cacheKey, Arg.Any<CancellationToken>());
-        await _innerCache.DidNotReceive().TryAddAsync<string?>(_cacheKey, Arg.Any<string?>(), Arg.Any<DateTimeOffset?>(), Arg.Any<CachePolicy?>(), Arg.Any<CancellationToken>());
+        await _innerCache.DidNotReceive().TryAddAsync<string?>(_cacheKey, Arg.Any<string?>(), Arg.Any<DateTimeOffset>(), Arg.Any<CachePolicy?>(), Arg.Any<CancellationToken>());
     }
 
     [Fact]
@@ -240,21 +264,21 @@ public class MultilayerCacheTryAddTests(ITestContextAccessor testContextAccessor
     {
         _options.CacheNullValues = true;
         _sut = null;
-        _innerCache.TryAddAsync<string?>(_cacheKey, default, Arg.Any<DateTimeOffset?>(), Arg.Any<CachePolicy?>(), Arg.Any<CancellationToken>())
+        _innerCache.TryAddAsync<string?>(_cacheKey, default, Arg.Any<DateTimeOffset>(), Arg.Any<CachePolicy?>(), Arg.Any<CancellationToken>())
             .Returns(true);
         _topic.PublishAsync(Arg.Any<ICacheEvent>(), Arg.Any<CancellationToken>()).Returns(_ => true);
 
         var added = await Sut.TryAddAsync(_cacheKey, default(string), policy: null, token: Ct);
 
         added.Should().BeTrue();
-        await _innerCache.Received(1).TryAddAsync<string?>(_cacheKey, default, Arg.Any<DateTimeOffset?>(), Arg.Any<CachePolicy?>(), Arg.Any<CancellationToken>());
+        await _innerCache.Received(1).TryAddAsync<string?>(_cacheKey, default, Arg.Any<DateTimeOffset>(), Arg.Any<CachePolicy?>(), Arg.Any<CancellationToken>());
     }
 
     [Fact]
     public async Task TryAdd_forwards_the_caller_expiration_to_the_inner_cache()
     {
         var ttl = TimeSpan.FromMinutes(7);
-        _innerCache.TryAddAsync<string?>(_cacheKey, Arg.Any<string?>(), Arg.Any<DateTimeOffset?>(), Arg.Any<CachePolicy?>(), Arg.Any<CancellationToken>())
+        _innerCache.TryAddAsync<string?>(_cacheKey, Arg.Any<string?>(), Arg.Any<DateTimeOffset>(), Arg.Any<CachePolicy?>(), Arg.Any<CancellationToken>())
             .Returns(true);
         _topic.PublishAsync(Arg.Any<ICacheEvent>(), Arg.Any<CancellationToken>()).Returns(_ => true);
 
@@ -263,7 +287,7 @@ public class MultilayerCacheTryAddTests(ITestContextAccessor testContextAccessor
         await _innerCache.Received(1).TryAddAsync<string?>(
             _cacheKey,
             Arg.Any<string?>(),
-            Arg.Is<DateTimeOffset?>(e => e.HasValue && e.Value > DateTimeOffset.UtcNow),
+            Arg.Is<DateTimeOffset>(e => e > DateTimeOffset.UtcNow),
             Arg.Any<CachePolicy?>(),
             Arg.Any<CancellationToken>());
     }
@@ -514,13 +538,14 @@ public class InMemoryCacheTryAddTests
     }
 
     [Fact]
-    public async Task An_expiration_that_has_already_passed_claims_nothing()
+    public async Task An_expiration_that_has_already_passed_is_rejected()
     {
         using var sut = CreateSut();
         var past = DateTimeOffset.UtcNow.AddMinutes(-5);
 
-        (await sut.TryAddAsync("k", "first", past, token: Ct)).Should().BeFalse();
-        (await sut.TryAddAsync("k", "second", past, token: Ct)).Should().BeFalse();
+        var act = async () => await sut.TryAddAsync("k", "first", past, token: Ct);
+
+        (await act.Should().ThrowAsync<ArgumentOutOfRangeException>()).And.ParamName.Should().Be("expiration");
         (await sut.GetAsync<string>("k", policy: null, token: Ct)).Should().BeNull();
     }
 
