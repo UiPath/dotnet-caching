@@ -24,7 +24,7 @@ internal sealed class DictionaryCache : ICache
     public T? Read<T>(CacheKey key) => _store.TryGetValue(key, out var v) ? (T?)v : default;
 
     public ValueTask<KeyValuePair<CacheKey, ICacheEntry<T?>>[]> GetCacheEntriesAsync<T>(
-        CacheKey[] cacheKeys, CachePolicy? policy = null, CancellationToken token = default)
+        CacheKey[] cacheKeys, CachePolicy? policy, CancellationToken token = default)
     {
         GetCacheEntriesCalls++;
         var results = cacheKeys
@@ -37,7 +37,7 @@ internal sealed class DictionaryCache : ICache
         return ValueTask.FromResult(results);
     }
 
-    public ValueTask<bool> SetAsync<T>(KeyValuePair<CacheKey, T?>[] keyValues, CachePolicy? policy = null, CancellationToken token = default)
+    public ValueTask<bool> SetAsync<T>(KeyValuePair<CacheKey, T?>[] keyValues, CachePolicy? policy, CancellationToken token = default)
     {
         SetCalls++;
         SetKeySets.Add(keyValues.Select(kv => kv.Key).ToArray());
@@ -53,42 +53,42 @@ internal sealed class DictionaryCache : ICache
         return ValueTask.FromResult(true);
     }
 
-    public ValueTask<ICacheEntry<T?>> GetCacheEntryAsync<T>(CacheKey cacheKey, CachePolicy? policy = null, CancellationToken token = default) =>
+    public ValueTask<ICacheEntry<T?>> GetCacheEntryAsync<T>(CacheKey cacheKey, CachePolicy? policy, CancellationToken token = default) =>
         ValueTask.FromResult<ICacheEntry<T?>>(_store.TryGetValue(cacheKey, out var v)
             ? new TestCacheEntry<T?> { Value = (T?)v, Expiration = DateTimeOffset.MaxValue, Found = true }
             : new TestCacheEntry<T?> { Value = default, Expiration = DateTimeOffset.MinValue });
 
-    public ValueTask<T?> GetAsync<T>(CacheKey cacheKey, CachePolicy? policy = null, CancellationToken token = default) =>
+    public ValueTask<T?> GetAsync<T>(CacheKey cacheKey, CachePolicy? policy, CancellationToken token = default) =>
         ValueTask.FromResult(Read<T>(cacheKey));
 
-    public ValueTask<KeyValuePair<CacheKey, T?>[]> GetAsync<T>(CacheKey[] cacheKeys, CachePolicy? policy = null, CancellationToken token = default) =>
+    public ValueTask<KeyValuePair<CacheKey, T?>[]> GetAsync<T>(CacheKey[] cacheKeys, CachePolicy? policy, CancellationToken token = default) =>
         ValueTask.FromResult(cacheKeys.Select(k => new KeyValuePair<CacheKey, T?>(k, Read<T>(k))).ToArray());
 
-    public ValueTask<T?> GetOrAddAsync<T>(CacheKey cacheKey, Func<CancellationToken, Task<T?>> generator, CachePolicy? policy = null, CancellationToken token = default) =>
+    public ValueTask<T?> GetOrAddAsync<T>(CacheKey cacheKey, Func<CancellationToken, Task<T?>> generator, CachePolicy? policy, CancellationToken token = default) =>
         throw new NotSupportedException();
 
-    public ValueTask<T?> GetOrAddAsync<T>(CacheKey cacheKey, Func<CancellationToken, Task<T?>> generator, TimeSpan? expiration = null, CachePolicy? policy = null, CancellationToken token = default) =>
+    public ValueTask<T?> GetOrAddAsync<T>(CacheKey cacheKey, Func<CancellationToken, Task<T?>> generator, TimeSpan? expiration, CachePolicy? policy, CancellationToken token = default) =>
         throw new NotSupportedException();
 
-    public ValueTask<T?> GetOrAddAsync<T>(CacheKey cacheKey, Func<CancellationToken, Task<T?>> generator, DateTimeOffset? expiration = null, CachePolicy? policy = null, CancellationToken token = default) =>
+    public ValueTask<T?> GetOrAddAsync<T>(CacheKey cacheKey, Func<CancellationToken, Task<T?>> generator, DateTimeOffset? expiration, CachePolicy? policy, CancellationToken token = default) =>
         throw new NotSupportedException();
 
-    public ValueTask<bool> SetAsync<T>(CacheKey cacheKey, T? value, CachePolicy? policy = null, CancellationToken token = default) =>
+    public ValueTask<bool> SetAsync<T>(CacheKey cacheKey, T? value, CachePolicy? policy, CancellationToken token = default) =>
         SetAsync([new KeyValuePair<CacheKey, T?>(cacheKey, value)], policy, token);
 
-    public ValueTask<bool> SetAsync<T>(CacheKey cacheKey, T? value, TimeSpan? expiration = null, CachePolicy? policy = null, CancellationToken token = default) =>
+    public ValueTask<bool> SetAsync<T>(CacheKey cacheKey, T? value, TimeSpan? expiration, CachePolicy? policy, CancellationToken token = default) =>
         SetAsync([new KeyValuePair<CacheKey, T?>(cacheKey, value)], policy, token);
 
-    public ValueTask<bool> SetAsync<T>(CacheKey cacheKey, T? value, DateTimeOffset? expiration = null, CachePolicy? policy = null, CancellationToken token = default) =>
+    public ValueTask<bool> SetAsync<T>(CacheKey cacheKey, T? value, DateTimeOffset? expiration, CachePolicy? policy, CancellationToken token = default) =>
         SetAsync([new KeyValuePair<CacheKey, T?>(cacheKey, value)], policy, token);
 
-    public ValueTask<bool> SetAsync<T>(KeyValuePair<CacheKey, T?>[] keyValues, TimeSpan? expiration = null, CachePolicy? policy = null, CancellationToken token = default) =>
+    public ValueTask<bool> SetAsync<T>(KeyValuePair<CacheKey, T?>[] keyValues, TimeSpan? expiration, CachePolicy? policy, CancellationToken token = default) =>
         SetAsync(keyValues, policy, token);
 
-    public ValueTask<bool> SetAsync<T>(KeyValuePair<CacheKey, T?>[] keyValues, DateTimeOffset? expiration = null, CachePolicy? policy = null, CancellationToken token = default) =>
+    public ValueTask<bool> SetAsync<T>(KeyValuePair<CacheKey, T?>[] keyValues, DateTimeOffset? expiration, CachePolicy? policy, CancellationToken token = default) =>
         SetAsync(keyValues, policy, token);
 
-    public ValueTask<bool> TryAddAsync<T>(CacheKey cacheKey, T? value, CachePolicy? policy = null, CancellationToken token = default)
+    public ValueTask<bool> TryAddAsync<T>(CacheKey cacheKey, T? value, CachePolicy? policy, CancellationToken token = default)
     {
         TryAddCalls++;
         if (value is null && !CacheNullValues)
@@ -98,10 +98,10 @@ internal sealed class DictionaryCache : ICache
         return ValueTask.FromResult(_store.TryAdd(cacheKey, value));
     }
 
-    public ValueTask<bool> TryAddAsync<T>(CacheKey cacheKey, T? value, TimeSpan? expiration = null, CachePolicy? policy = null, CancellationToken token = default) =>
+    public ValueTask<bool> TryAddAsync<T>(CacheKey cacheKey, T? value, TimeSpan? expiration, CachePolicy? policy, CancellationToken token = default) =>
         TryAddAsync(cacheKey, value, policy, token);
 
-    public ValueTask<bool> TryAddAsync<T>(CacheKey cacheKey, T? value, DateTimeOffset? expiration = null, CachePolicy? policy = null, CancellationToken token = default) =>
+    public ValueTask<bool> TryAddAsync<T>(CacheKey cacheKey, T? value, DateTimeOffset? expiration, CachePolicy? policy, CancellationToken token = default) =>
         TryAddAsync(cacheKey, value, policy, token);
 
     public ValueTask<bool> RemoveAsync<T>(CacheKey cacheKey, CancellationToken token = default) =>
@@ -113,11 +113,11 @@ internal sealed class DictionaryCache : ICache
         return ValueTask.FromResult(true);
     }
 
-    public ValueTask<bool> RefreshAsync<T>(CacheKey cacheKey, CachePolicy? policy = null, CancellationToken token = default) => ValueTask.FromResult(true);
+    public ValueTask<bool> RefreshAsync<T>(CacheKey cacheKey, CachePolicy? policy, CancellationToken token = default) => ValueTask.FromResult(true);
 
-    public ValueTask<bool> RefreshAsync<T>(CacheKey cacheKey, TimeSpan? expiration = null, CachePolicy? policy = null, CancellationToken token = default) => ValueTask.FromResult(true);
+    public ValueTask<bool> RefreshAsync<T>(CacheKey cacheKey, TimeSpan? expiration, CachePolicy? policy, CancellationToken token = default) => ValueTask.FromResult(true);
 
-    public ValueTask<bool> RefreshAsync<T>(CacheKey cacheKey, DateTimeOffset? expiration = null, CachePolicy? policy = null, CancellationToken token = default) => ValueTask.FromResult(true);
+    public ValueTask<bool> RefreshAsync<T>(CacheKey cacheKey, DateTimeOffset? expiration, CachePolicy? policy, CancellationToken token = default) => ValueTask.FromResult(true);
 
     public ValueTask<bool> ContainsAsync<T>(CacheKey cacheKey, CancellationToken token = default) => ValueTask.FromResult(_store.ContainsKey(cacheKey));
 

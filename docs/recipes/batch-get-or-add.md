@@ -87,9 +87,10 @@ takes `CacheKey[]` directly and does this pairing for you — a caller reaching 
 
 The generator signature is `Func<TState[], CancellationToken, Task<KeyValuePair<TState, T?>[]>>` — it
 receives the states of the entries that missed and returns a pair per state it could resolve.
-Parameter order on the call is `entries, generator, [expiration], policy, token`, and every parameter
-after the generator is optional — the same shape as the single-key `GetOrAddAsync`. On `ICache<T>`
-there is no `policy` parameter at all, since `ICache<T>` resolves one at construction.
+Parameter order on the call is `entries, generator, [expiration], policy, token`, and only `token` is
+optional — the same shape as the single-key `GetOrAddAsync`. Callers that do not want to pass a
+`policy` use the `CacheExtensions` overloads instead. On `ICache<T>` there is no `policy` parameter at
+all, since `ICache<T>` resolves one at construction.
 
 - **Return a pair for every state you can resolve.** A state you omit comes back as `default(T)` (i.e.
   `null` for a reference type) and is **not** cached, so the next call retries the source. That is

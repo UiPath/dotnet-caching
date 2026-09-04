@@ -38,7 +38,7 @@ public sealed partial class RedisSetCache : RedisCacheBase, ISetCache
 
     public string Name => KnownCacheProviderNames.Redis;
 
-    public async ValueTask<bool> AddAsync<T>(CacheKey cacheKey, T item, CachePolicy? policy = null, CancellationToken token = default)
+    public async ValueTask<bool> AddAsync<T>(CacheKey cacheKey, T item, CachePolicy? policy, CancellationToken token = default)
     {
         NotCacheableException.ThrowIfNotCacheable<T>();
         var value = _serializer.Serialize(item);
@@ -46,10 +46,10 @@ public sealed partial class RedisSetCache : RedisCacheBase, ISetCache
         return added > 0;
     }
 
-    public ValueTask<long> AddAsync<T>(CacheKey cacheKey, IEnumerable<T> items, CachePolicy? policy = null, CancellationToken token = default) =>
+    public ValueTask<long> AddAsync<T>(CacheKey cacheKey, IEnumerable<T> items, CachePolicy? policy, CancellationToken token = default) =>
         AddAsync(cacheKey, items, expiration: (TimeSpan?)null, policy, token);
 
-    public ValueTask<long> AddAsync<T>(CacheKey cacheKey, IEnumerable<T> items, TimeSpan? expiration = null, CachePolicy? policy = null, CancellationToken token = default)
+    public ValueTask<long> AddAsync<T>(CacheKey cacheKey, IEnumerable<T> items, TimeSpan? expiration, CachePolicy? policy, CancellationToken token = default)
     {
         NotCacheableException.ThrowIfNotCacheable<T>();
         ArgumentNullException.ThrowIfNull(items);
@@ -57,7 +57,7 @@ public sealed partial class RedisSetCache : RedisCacheBase, ISetCache
         return AddManyInnerAsync<T>(cacheKey, values, Clock.ToDateTimeOffset(ResolveExpiration(expiration, policy)), token);
     }
 
-    public ValueTask<long> AddAsync<T>(CacheKey cacheKey, IEnumerable<T> items, DateTimeOffset? expiration = null, CachePolicy? policy = null, CancellationToken token = default)
+    public ValueTask<long> AddAsync<T>(CacheKey cacheKey, IEnumerable<T> items, DateTimeOffset? expiration, CachePolicy? policy, CancellationToken token = default)
     {
         NotCacheableException.ThrowIfNotCacheable<T>();
         ArgumentNullException.ThrowIfNull(items);
@@ -121,7 +121,7 @@ public sealed partial class RedisSetCache : RedisCacheBase, ISetCache
         return ret;
     }
 
-    public async ValueTask<T?> PopAsync<T>(CacheKey cacheKey, CachePolicy? policy = null, CancellationToken token = default)
+    public async ValueTask<T?> PopAsync<T>(CacheKey cacheKey, CachePolicy? policy, CancellationToken token = default)
     {
         NotCacheableException.ThrowIfNotCacheable<T>();
         var redisKey = ToRedisKey(cacheKey, token);
@@ -160,7 +160,7 @@ public sealed partial class RedisSetCache : RedisCacheBase, ISetCache
         return ret;
     }
 
-    public async ValueTask<IReadOnlyCollection<T?>> PopAsync<T>(CacheKey cacheKey, long count, CachePolicy? policy = null, CancellationToken token = default)
+    public async ValueTask<IReadOnlyCollection<T?>> PopAsync<T>(CacheKey cacheKey, long count, CachePolicy? policy, CancellationToken token = default)
     {
         NotCacheableException.ThrowIfNotCacheable<T>();
         if (count <= 0)
@@ -199,7 +199,7 @@ public sealed partial class RedisSetCache : RedisCacheBase, ISetCache
         return ret;
     }
 
-    public async ValueTask<IReadOnlyCollection<T?>> MembersAsync<T>(CacheKey cacheKey, CachePolicy? policy = null, CancellationToken token = default)
+    public async ValueTask<IReadOnlyCollection<T?>> MembersAsync<T>(CacheKey cacheKey, CachePolicy? policy, CancellationToken token = default)
     {
         NotCacheableException.ThrowIfNotCacheable<T>();
         var redisKey = ToRedisKey(cacheKey, token);

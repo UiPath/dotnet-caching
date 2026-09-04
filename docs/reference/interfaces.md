@@ -17,7 +17,7 @@ The library's public interface surface. Each entry shows the namespace, signatur
 **Namespace:** `UiPath.Caching`
 
 ```csharp
-public partial interface ICache<T>
+public interface ICache<T>
 {
     string Name { get; }
 
@@ -73,9 +73,9 @@ public partial interface ICache<T>
 }
 ```
 
-`ICache<T>` is the primary typed cache surface for single-value key/value caching. The type parameter `T` fixes the value type for the lifetime of the cache instance, which lets the library resolve `CachePolicy` by `typeof(T).FullName` and apply a single key strategy per cache. Every operation accepts a `CancellationToken` and returns a `ValueTask`, so callers integrate naturally into async pipelines without heap allocation in the hot path. Sync overloads (`Get`, `GetOrAdd`, `Set`, `Remove`, `Refresh`, `Contains`, `TimeToLive`, `ExpireTime`) are provided as blocking default interface methods for call sites that cannot use `await`; `GetOrAdd` covers both the single-key generator shape and a key-only multi-key shape (see below).
+`ICache<T>` is the primary typed cache surface for single-value key/value caching. The type parameter `T` fixes the value type for the lifetime of the cache instance, which lets the library resolve `CachePolicy` by `typeof(T).FullName` and apply a single key strategy per cache. Every operation accepts a `CancellationToken` and returns a `ValueTask`, so callers integrate naturally into async pipelines without heap allocation in the hot path. Blocking forwarders (`Get`, `GetOrAdd`, `Set`, `TryAdd`, `Remove`, `Refresh`, `Contains`, `TimeToLive`, `ExpireTime`) live on `CacheSyncExtensions` for call sites that cannot use `await`; each blocks on the async member via `.AsTask().GetAwaiter().GetResult()`, so use them only where the thread-blocking cost is acceptable. `GetOrAdd` covers both the single-key generator shape and a key-only multi-key shape (see below).
 
-The multi-key `GetOrAddAsync<TState>` overloads pair each key with an opaque caller state (`TState`) — a database id, a request object, whatever identifies the entry in the caller's own vocabulary. The generator is invoked at most once, with only the states of the entries that missed, and results come back keyed by state. These three overloads are **abstract** on `ICache<T>` — unlike the equivalent members on `ICache`, there is no default body, because `ICache<T>` has no `GetCacheEntriesAsync` and so cannot distinguish a genuine miss from a cached `null` inside a default implementation. A hand-written `ICache<T>` implementation (a test fake, typically) must add all three. There is no key-only convenience overload on the async surface: a caller whose keys are their own identity pairs each key with itself (`TState = CacheKey`). The blocking `GetOrAdd` facade above is the one place that accepts `CacheKey[]` directly and does that pairing for you.
+The multi-key `GetOrAddAsync<TState>` overloads pair each key with an opaque caller state (`TState`) — a database id, a request object, whatever identifies the entry in the caller's own vocabulary. The generator is invoked at most once, with only the states of the entries that missed, and results come back keyed by state. These three overloads are **abstract** on `ICache<T>` — unlike the equivalent members on `ICache`, there is no default body, because `ICache<T>` has no `GetCacheEntriesAsync` and so cannot distinguish a genuine miss from a cached `null` inside a default implementation. A hand-written `ICache<T>` implementation (a test fake, typically) must add all three. There is no key-only convenience overload on the async surface: a caller whose keys are their own identity pairs each key with itself (`TState = CacheKey`). The blocking `CacheSyncExtensions.GetOrAdd` forwarder is the one place that accepts `CacheKey[]` directly and does that pairing for you.
 
 `TryAddAsync` is the conditional-add (create-if-absent) member: it writes only when the key does not already exist, and returns `true` only to the caller that created it. On a Redis-backed cache it maps to StackExchange.Redis `When.NotExists` (`SET key value EX … NX`) — a single atomic round-trip, so exactly one caller across all nodes wins a given key. It is the primitive to reach for when you need at-most-once semantics keyed by something: a dedup marker, an idempotency key, a "who runs this job" election. See [`ICache.TryAddAsync`](#icache) for the full contract, including what a `false` return does and does not tell you.
 
@@ -102,23 +102,23 @@ The multi-key `GetOrAddAsync<TState>` overloads pair each key with an opaque cal
 **Namespace:** `UiPath.Caching`
 
 ```csharp
-public partial interface ICache : IDisposable
+public interface ICache : IDisposable
 {
     string Name { get; }
 
-    ValueTask<T?> GetAsync<T>(CacheKey cacheKey, CachePolicy? policy = null, CancellationToken token = default);
+    ValueTask<T?> GetAsync<T>(CacheKey cacheKey, CachePolicy? policy, CancellationToken token = default);
 
-    ValueTask<KeyValuePair<CacheKey, T?>[]> GetAsync<T>(CacheKey[] cacheKeys, CachePolicy? policy = null, CancellationToken token = default);
+    ValueTask<KeyValuePair<CacheKey, T?>[]> GetAsync<T>(CacheKey[] cacheKeys, CachePolicy? policy, CancellationToken token = default);
 
-    ValueTask<ICacheEntry<T?>> GetCacheEntryAsync<T>(CacheKey cacheKey, CachePolicy? policy = null, CancellationToken token = default);
+    ValueTask<ICacheEntry<T?>> GetCacheEntryAsync<T>(CacheKey cacheKey, CachePolicy? policy, CancellationToken token = default);
 
-    ValueTask<KeyValuePair<CacheKey, ICacheEntry<T?>>[]> GetCacheEntriesAsync<T>(CacheKey[] cacheKeys, CachePolicy? policy = null, CancellationToken token = default);
+    ValueTask<KeyValuePair<CacheKey, ICacheEntry<T?>>[]> GetCacheEntriesAsync<T>(CacheKey[] cacheKeys, CachePolicy? policy, CancellationToken token = default);
 
-    ValueTask<T?> GetOrAddAsync<T>(CacheKey cacheKey, Func<CancellationToken, Task<T?>> generator, CachePolicy? policy = null, CancellationToken token = default);
+    ValueTask<T?> GetOrAddAsync<T>(CacheKey cacheKey, Func<CancellationToken, Task<T?>> generator, CachePolicy? policy, CancellationToken token = default);
 
-    ValueTask<T?> GetOrAddAsync<T>(CacheKey cacheKey, Func<CancellationToken, Task<T?>> generator, TimeSpan? expiration = null, CachePolicy? policy = null, CancellationToken token = default);
+    ValueTask<T?> GetOrAddAsync<T>(CacheKey cacheKey, Func<CancellationToken, Task<T?>> generator, TimeSpan? expiration, CachePolicy? policy, CancellationToken token = default);
 
-    ValueTask<T?> GetOrAddAsync<T>(CacheKey cacheKey, Func<CancellationToken, Task<T?>> generator, DateTimeOffset? expiration = null, CachePolicy? policy = null, CancellationToken token = default);
+    ValueTask<T?> GetOrAddAsync<T>(CacheKey cacheKey, Func<CancellationToken, Task<T?>> generator, DateTimeOffset? expiration, CachePolicy? policy, CancellationToken token = default);
 
     ValueTask<KeyValuePair<TState, T?>[]> GetOrAddAsync<T, TState>(KeyValuePair<CacheKey, TState>[] entries, Func<TState[], CancellationToken, Task<KeyValuePair<TState, T?>[]>> generator, CachePolicy? policy, CancellationToken token = default)
         where TState : notnull
@@ -136,29 +136,29 @@ public partial interface ICache : IDisposable
 
     ValueTask<bool> RemoveAsync<T>(CacheKey[] cacheKey, CancellationToken token = default);
 
-    ValueTask<bool> SetAsync<T>(CacheKey cacheKey, T? value, CachePolicy? policy = null, CancellationToken token = default);
+    ValueTask<bool> SetAsync<T>(CacheKey cacheKey, T? value, CachePolicy? policy, CancellationToken token = default);
 
-    ValueTask<bool> SetAsync<T>(CacheKey cacheKey, T? value, TimeSpan? expiration = null, CachePolicy? policy = null, CancellationToken token = default);
+    ValueTask<bool> SetAsync<T>(CacheKey cacheKey, T? value, TimeSpan? expiration, CachePolicy? policy, CancellationToken token = default);
 
-    ValueTask<bool> SetAsync<T>(CacheKey cacheKey, T? value, DateTimeOffset? expiration = null, CachePolicy? policy = null, CancellationToken token = default);
+    ValueTask<bool> SetAsync<T>(CacheKey cacheKey, T? value, DateTimeOffset? expiration, CachePolicy? policy, CancellationToken token = default);
 
-    ValueTask<bool> SetAsync<T>(KeyValuePair<CacheKey, T?>[] keyValues, CachePolicy? policy = null, CancellationToken token = default);
+    ValueTask<bool> SetAsync<T>(KeyValuePair<CacheKey, T?>[] keyValues, CachePolicy? policy, CancellationToken token = default);
 
-    ValueTask<bool> SetAsync<T>(KeyValuePair<CacheKey, T?>[] keyValues, TimeSpan? expiration = null, CachePolicy? policy = null, CancellationToken token = default);
+    ValueTask<bool> SetAsync<T>(KeyValuePair<CacheKey, T?>[] keyValues, TimeSpan? expiration, CachePolicy? policy, CancellationToken token = default);
 
-    ValueTask<bool> SetAsync<T>(KeyValuePair<CacheKey, T?>[] keyValues, DateTimeOffset? expiration = null, CachePolicy? policy = null, CancellationToken token = default);
+    ValueTask<bool> SetAsync<T>(KeyValuePair<CacheKey, T?>[] keyValues, DateTimeOffset? expiration, CachePolicy? policy, CancellationToken token = default);
 
-    ValueTask<bool> TryAddAsync<T>(CacheKey cacheKey, T? value, CachePolicy? policy = null, CancellationToken token = default);
+    ValueTask<bool> TryAddAsync<T>(CacheKey cacheKey, T? value, CachePolicy? policy, CancellationToken token = default);
 
-    ValueTask<bool> TryAddAsync<T>(CacheKey cacheKey, T? value, TimeSpan? expiration = null, CachePolicy? policy = null, CancellationToken token = default);
+    ValueTask<bool> TryAddAsync<T>(CacheKey cacheKey, T? value, TimeSpan? expiration, CachePolicy? policy, CancellationToken token = default);
 
-    ValueTask<bool> TryAddAsync<T>(CacheKey cacheKey, T? value, DateTimeOffset? expiration = null, CachePolicy? policy = null, CancellationToken token = default);
+    ValueTask<bool> TryAddAsync<T>(CacheKey cacheKey, T? value, DateTimeOffset? expiration, CachePolicy? policy, CancellationToken token = default);
 
-    ValueTask<bool> RefreshAsync<T>(CacheKey cacheKey, CachePolicy? policy = null, CancellationToken token = default);
+    ValueTask<bool> RefreshAsync<T>(CacheKey cacheKey, CachePolicy? policy, CancellationToken token = default);
 
-    ValueTask<bool> RefreshAsync<T>(CacheKey cacheKey, TimeSpan? expiration = null, CachePolicy? policy = null, CancellationToken token = default);
+    ValueTask<bool> RefreshAsync<T>(CacheKey cacheKey, TimeSpan? expiration, CachePolicy? policy, CancellationToken token = default);
 
-    ValueTask<bool> RefreshAsync<T>(CacheKey cacheKey, DateTimeOffset? expiration = null, CachePolicy? policy = null, CancellationToken token = default);
+    ValueTask<bool> RefreshAsync<T>(CacheKey cacheKey, DateTimeOffset? expiration, CachePolicy? policy, CancellationToken token = default);
 
     ValueTask<bool> ContainsAsync<T>(CacheKey cacheKey, CancellationToken token = default);
 
@@ -170,7 +170,20 @@ public partial interface ICache : IDisposable
 
 `ICache` is the dynamic-key, dynamic-type cache surface. Unlike `ICache<T>`, the value type is specified as a generic type argument on each method call rather than fixed at cache-creation time, and a `CachePolicy` can be supplied per call rather than resolved by `typeof(T).FullName`. It also exposes `GetCacheEntryAsync` for callers that need cache-entry metadata (hit/miss status, expiration) in addition to the value. `ICache` implements `IDisposable`, but instances returned by `ICacheFactory.CreateCache(...)` are provider-owned (typically singletons resolved through a `Lazy<>`); their lifetime is managed by the provider and the DI container, so callers should not dispose them per use.
 
-The multi-key `GetOrAddAsync<T, TState>` overloads shown above pair each key with an opaque caller state (`TState`) and are **default interface methods** — each forwards to the shared `BatchGetOrAdd.RunAsync` machinery, so existing `ICache` implementations keep compiling without adding them. The generator is invoked at most once, only with the states of the entries that missed every cache layer, never with keys; results come back keyed by state, one entry per distinct requested state in first-occurrence order. Cache operations de-duplicate by `CacheKey`; results de-duplicate by state — when two states share a key the generator is asked once and the value is reported under both. Their parameter shape matches the single-key `GetOrAddAsync` exactly — `expiration`, `policy` and `token` all optional. `ICache.Compat.cs` carries no token-positional forwarder for them: that file is pre-`CachePolicy` back-compat sugar, and this API predates nothing. There is no key-only convenience overload; a caller whose keys are their own identity pairs each key with itself (`TState = CacheKey`).
+Every policy-bearing member takes `policy` as a **required** parameter — there is no `= null` default on the interface. Call sites that do not want a per-call policy use the `CacheExtensions` overloads instead, which omit `policy` (and, where the interface pairs the two, `expiration`) and forward with `policy: null`:
+
+```csharp
+// Interface: policy is explicit.
+await cache.GetAsync<Order>(key, policy, token);
+
+// CacheExtensions: the same call without a policy.
+await cache.GetAsync<Order>(key, token);
+await cache.SetAsync(key, order, TimeSpan.FromMinutes(5), token);
+```
+
+Two reasons the interface is the strict surface. An implementation cannot silently disagree about what "no policy" means, because it never gets to declare a default. And the extensions only work if the interface is strict: instance members always beat extension members in overload resolution, so while the interface declared `policy = null` an applicable interface overload existed for every short call and the extension was never reached. With `policy` required there is exactly one way to spell each call. The extensions are pure forwarders with no behavior of their own, which is why they carry `[ExcludeFromCodeCoverage]` — the policy-bearing implementations are what the tests exercise.
+
+The multi-key `GetOrAddAsync<T, TState>` overloads shown above pair each key with an opaque caller state (`TState`) and are **default interface methods** — each forwards to the shared `BatchGetOrAdd.RunAsync` machinery, so existing `ICache` implementations keep compiling without adding them. The generator is invoked at most once, only with the states of the entries that missed every cache layer, never with keys; results come back keyed by state, one entry per distinct requested state in first-occurrence order. Cache operations de-duplicate by `CacheKey`; results de-duplicate by state — when two states share a key the generator is asked once and the value is reported under both. Their parameter shape matches the single-key `GetOrAddAsync` exactly — `expiration` and `policy` required, `token` optional. `CacheExtensions` carries no token-positional forwarder for them: those extensions are pre-`CachePolicy` back-compat sugar, and this API predates nothing. There is no key-only convenience overload; a caller whose keys are their own identity pairs each key with itself (`TState = CacheKey`).
 
 `TryAddAsync` writes only if the key is absent — StackExchange.Redis `When.NotExists` (`SET … NX`) on Redis-backed caches, in one atomic command with the TTL applied by the same write. Four points decide whether it fits your problem:
 
@@ -231,7 +244,7 @@ The three overloads are **required** members of `ICache` and `ICache<T>`, not de
 **Namespace:** `UiPath.Caching`
 
 ```csharp
-public partial interface IHashCache<T>
+public interface IHashCache<T>
 {
     string Name { get; }
 
@@ -279,7 +292,7 @@ public partial interface IHashCache<T>
 }
 ```
 
-`IHashCache<T>` is the typed hash-cache surface. Each cache key maps to a dictionary of named fields rather than a single value — the backing store is a Redis hash (or an in-memory equivalent). `GetItemAsync` retrieves a single field by name; `GetAsync` retrieves all fields or a subset. `SetAsync` accepts a `HashCacheEntryOptions` overload for per-write control of expiration, metadata, and write scope — `HashCacheSetOption.HashReplace` merges the given fields into the existing hash, `KeyReplace` drops the key first so the written fields are the whole hash. Note that this is write *scope*, not a precondition: the hash surface has no conditional-add member, and `TryAddAsync` exists only on [`ICache`](#icache) / [`ICache<T>`](#icachet). Metadata (`GetMetadataAsync` / `SetMetadataAsync`) provides a side-channel string dictionary attached to the same key, useful for audit or versioning data. Sync overloads (`Get`, `GetItem`, `GetOrAdd`, `Set`, `Refresh`, `Remove`, `Contains`, etc.) are provided as blocking default interface methods.
+`IHashCache<T>` is the typed hash-cache surface. Each cache key maps to a dictionary of named fields rather than a single value — the backing store is a Redis hash (or an in-memory equivalent). `GetItemAsync` retrieves a single field by name; `GetAsync` retrieves all fields or a subset. `SetAsync` accepts a `HashCacheEntryOptions` overload for per-write control of expiration, metadata, and write scope — `HashCacheSetOption.HashReplace` merges the given fields into the existing hash, `KeyReplace` drops the key first so the written fields are the whole hash. Note that this is write *scope*, not a precondition: the hash surface has no conditional-add member, and `TryAddAsync` exists only on [`ICache`](#icache) / [`ICache<T>`](#icachet). Metadata (`GetMetadataAsync` / `SetMetadataAsync`) provides a side-channel string dictionary attached to the same key, useful for audit or versioning data. Blocking forwarders (`Get`, `GetItem`, `GetOrAdd`, `Set`, `Refresh`, `Remove`, `Contains`, etc.) live on `HashCacheSyncExtensions`, each blocking on the async member via `.AsTask().GetAwaiter().GetResult()`.
 
 > **Typical vs. power-user surface:** `IHashCache<T>` is the standard typed hash surface. If you need to vary the value type per call, use [`IHashCache`](#ihashcache) instead. The two surfaces are different shapes for different problems.
 
@@ -304,41 +317,41 @@ public partial interface IHashCache<T>
 **Namespace:** `UiPath.Caching`
 
 ```csharp
-public partial interface IHashCache : IDisposable
+public interface IHashCache : IDisposable
 {
     string Name { get; }
 
-    ValueTask<T?> GetItemAsync<T>(CacheKey cacheKey, string field, CachePolicy? policy = null, CancellationToken token = default);
+    ValueTask<T?> GetItemAsync<T>(CacheKey cacheKey, string field, CachePolicy? policy, CancellationToken token = default);
 
-    ValueTask<IDictionary<string, T?>> GetAsync<T>(CacheKey cacheKey, CachePolicy? policy = null, CancellationToken token = default);
+    ValueTask<IDictionary<string, T?>> GetAsync<T>(CacheKey cacheKey, CachePolicy? policy, CancellationToken token = default);
 
-    ValueTask<IDictionary<string, T?>> GetAsync<T>(CacheKey cacheKey, string[] fields, CachePolicy? policy = null, CancellationToken token = default);
+    ValueTask<IDictionary<string, T?>> GetAsync<T>(CacheKey cacheKey, string[] fields, CachePolicy? policy, CancellationToken token = default);
 
-    ValueTask<ICacheEntry<IDictionary<string, T?>>> GetCacheEntryAsync<T>(CacheKey cacheKey, CachePolicy? policy = null, CancellationToken token = default);
+    ValueTask<ICacheEntry<IDictionary<string, T?>>> GetCacheEntryAsync<T>(CacheKey cacheKey, CachePolicy? policy, CancellationToken token = default);
 
-    ValueTask<IDictionary<string, T?>> GetOrAddAsync<T>(CacheKey cacheKey, Func<CancellationToken, Task<IDictionary<string, T?>>> generator, CachePolicy? policy = null, CancellationToken token = default);
+    ValueTask<IDictionary<string, T?>> GetOrAddAsync<T>(CacheKey cacheKey, Func<CancellationToken, Task<IDictionary<string, T?>>> generator, CachePolicy? policy, CancellationToken token = default);
 
-    ValueTask<IDictionary<string, T?>> GetOrAddAsync<T>(CacheKey cacheKey, Func<CancellationToken, Task<IDictionary<string, T?>>> generator, TimeSpan? expiration = null, CachePolicy? policy = null, CancellationToken token = default);
+    ValueTask<IDictionary<string, T?>> GetOrAddAsync<T>(CacheKey cacheKey, Func<CancellationToken, Task<IDictionary<string, T?>>> generator, TimeSpan? expiration, CachePolicy? policy, CancellationToken token = default);
 
-    ValueTask<IDictionary<string, T?>> GetOrAddAsync<T>(CacheKey cacheKey, Func<CancellationToken, Task<IDictionary<string, T?>>> generator, DateTimeOffset? expiration = null, CachePolicy? policy = null, CancellationToken token = default);
+    ValueTask<IDictionary<string, T?>> GetOrAddAsync<T>(CacheKey cacheKey, Func<CancellationToken, Task<IDictionary<string, T?>>> generator, DateTimeOffset? expiration, CachePolicy? policy, CancellationToken token = default);
 
-    ValueTask<IDictionary<string, T?>> GetOrAddAsync<T>(CacheKey cacheKey, Func<CancellationToken, Task<IDictionary<string, T?>>> generator, DateTimeOffset? expiration = null, HashCacheSetOption? setOption = null, CachePolicy? policy = null, CancellationToken token = default);
+    ValueTask<IDictionary<string, T?>> GetOrAddAsync<T>(CacheKey cacheKey, Func<CancellationToken, Task<IDictionary<string, T?>>> generator, DateTimeOffset? expiration, HashCacheSetOption? setOption, CachePolicy? policy, CancellationToken token = default);
 
-    ValueTask<bool> SetAsync<T>(CacheKey cacheKey, IDictionary<string, T?> values, CachePolicy? policy = null, CancellationToken token = default);
+    ValueTask<bool> SetAsync<T>(CacheKey cacheKey, IDictionary<string, T?> values, CachePolicy? policy, CancellationToken token = default);
 
-    ValueTask<bool> SetAsync<T>(CacheKey cacheKey, IDictionary<string, T?> values, TimeSpan? expiration = null, CachePolicy? policy = null, CancellationToken token = default);
+    ValueTask<bool> SetAsync<T>(CacheKey cacheKey, IDictionary<string, T?> values, TimeSpan? expiration, CachePolicy? policy, CancellationToken token = default);
 
-    ValueTask<bool> SetAsync<T>(CacheKey cacheKey, IDictionary<string, T?> values, DateTimeOffset? expiration = null, CachePolicy? policy = null, CancellationToken token = default);
+    ValueTask<bool> SetAsync<T>(CacheKey cacheKey, IDictionary<string, T?> values, DateTimeOffset? expiration, CachePolicy? policy, CancellationToken token = default);
 
-    ValueTask<bool> SetAsync<T>(CacheKey cacheKey, IDictionary<string, T?> values, HashCacheEntryOptions options, CachePolicy? policy = null, CancellationToken token = default);
+    ValueTask<bool> SetAsync<T>(CacheKey cacheKey, IDictionary<string, T?> values, HashCacheEntryOptions options, CachePolicy? policy, CancellationToken token = default);
 
-    ValueTask<bool> RefreshAsync<T>(CacheKey cacheKey, CachePolicy? policy = null, CancellationToken token = default);
+    ValueTask<bool> RefreshAsync<T>(CacheKey cacheKey, CachePolicy? policy, CancellationToken token = default);
 
-    ValueTask<bool> RefreshAsync<T>(CacheKey cacheKey, TimeSpan? expiration = null, CachePolicy? policy = null, CancellationToken token = default);
+    ValueTask<bool> RefreshAsync<T>(CacheKey cacheKey, TimeSpan? expiration, CachePolicy? policy, CancellationToken token = default);
 
-    ValueTask<bool> RefreshAsync<T>(CacheKey cacheKey, DateTimeOffset? expiration = null, CachePolicy? policy = null, CancellationToken token = default);
+    ValueTask<bool> RefreshAsync<T>(CacheKey cacheKey, DateTimeOffset? expiration, CachePolicy? policy, CancellationToken token = default);
 
-    ValueTask<bool> RefreshAsync<T>(CacheKey cacheKey, HashCacheEntryOptions options, CachePolicy? policy = null, CancellationToken token = default);
+    ValueTask<bool> RefreshAsync<T>(CacheKey cacheKey, HashCacheEntryOptions options, CachePolicy? policy, CancellationToken token = default);
 
     ValueTask<bool> RemoveAsync<T>(CacheKey cacheKey, CancellationToken token = default);
 
@@ -355,6 +368,8 @@ public partial interface IHashCache : IDisposable
 ```
 
 `IHashCache` is the dynamic-type hash-cache surface. Like [`ICache`](#icache), the value type is specified per method call as a generic type argument, and a `CachePolicy` may be supplied at call time. It extends hash semantics with `GetCacheEntryAsync` for cache-entry metadata inspection. The extra `GetOrAddAsync` overload that accepts `HashCacheSetOption` enables conditional-set semantics (e.g. set-if-not-exists) at the call site. `IHashCache` implements `IDisposable`, but instances returned by `ICacheFactory.CreateHashCache(...)` are provider-owned (typically singletons resolved through a `Lazy<>`); their lifetime is managed by the provider and the DI container, so callers should not dispose them per use.
+
+As on [`ICache`](#icache), `policy` is a **required** parameter on every policy-bearing member; `HashCacheExtensions` supplies the no-policy overloads and forwards with `policy: null`.
 
 > **Typical vs. power-user surface:** `IHashCache` is the power-user hash surface. For most application code with a fixed value type, prefer [`IHashCache<T>`](#ihashcachet) for compile-time safety and automatic policy resolution. The two surfaces are different shapes for different problems.
 

@@ -6,7 +6,7 @@ namespace UiPath.Caching;
 /// insertion order and PopAsync removes a random member (Redis SPOP). Use the dedicated list
 /// caches when order matters.
 /// </summary>
-public partial interface ISetCache : IDisposable
+public interface ISetCache : IDisposable
 {
     string Name { get; }
 
@@ -15,30 +15,30 @@ public partial interface ISetCache : IDisposable
     /// TTL). Every AddAsync call re-applies the resolved expiration, so adding any member resets the
     /// TTL of the entire set.
     /// </remarks>
-    ValueTask<bool> AddAsync<T>(CacheKey cacheKey, T item, CachePolicy? policy = null, CancellationToken token = default);
+    ValueTask<bool> AddAsync<T>(CacheKey cacheKey, T item, CachePolicy? policy, CancellationToken token = default);
 
     /// <inheritdoc cref="AddAsync{T}(CacheKey, T, CachePolicy?, CancellationToken)"/>
-    ValueTask<long> AddAsync<T>(CacheKey cacheKey, IEnumerable<T> items, CachePolicy? policy = null, CancellationToken token = default);
+    ValueTask<long> AddAsync<T>(CacheKey cacheKey, IEnumerable<T> items, CachePolicy? policy, CancellationToken token = default);
 
     /// <inheritdoc cref="AddAsync{T}(CacheKey, T, CachePolicy?, CancellationToken)"/>
-    ValueTask<long> AddAsync<T>(CacheKey cacheKey, IEnumerable<T> items, TimeSpan? expiration = null, CachePolicy? policy = null, CancellationToken token = default);
+    ValueTask<long> AddAsync<T>(CacheKey cacheKey, IEnumerable<T> items, TimeSpan? expiration, CachePolicy? policy, CancellationToken token = default);
 
     /// <inheritdoc cref="AddAsync{T}(CacheKey, T, CachePolicy?, CancellationToken)"/>
-    ValueTask<long> AddAsync<T>(CacheKey cacheKey, IEnumerable<T> items, DateTimeOffset? expiration = null, CachePolicy? policy = null, CancellationToken token = default);
+    ValueTask<long> AddAsync<T>(CacheKey cacheKey, IEnumerable<T> items, DateTimeOffset? expiration, CachePolicy? policy, CancellationToken token = default);
 
     /// <summary>
     /// Removes and returns a random member of the set (Redis SPOP). The set is unordered, so this is
     /// not a FIFO/LIFO dequeue — callers must not assume any insertion order.
     /// </summary>
-    ValueTask<T?> PopAsync<T>(CacheKey cacheKey, CachePolicy? policy = null, CancellationToken token = default);
+    ValueTask<T?> PopAsync<T>(CacheKey cacheKey, CachePolicy? policy, CancellationToken token = default);
 
     /// <summary>
     /// Removes and returns up to count random members of the set (Redis SPOP). The set is unordered,
     /// so this is not a FIFO/LIFO dequeue — callers must not assume any insertion order.
     /// </summary>
-    ValueTask<IReadOnlyCollection<T?>> PopAsync<T>(CacheKey cacheKey, long count, CachePolicy? policy = null, CancellationToken token = default);
+    ValueTask<IReadOnlyCollection<T?>> PopAsync<T>(CacheKey cacheKey, long count, CachePolicy? policy, CancellationToken token = default);
 
-    ValueTask<IReadOnlyCollection<T?>> MembersAsync<T>(CacheKey cacheKey, CachePolicy? policy = null, CancellationToken token = default);
+    ValueTask<IReadOnlyCollection<T?>> MembersAsync<T>(CacheKey cacheKey, CachePolicy? policy, CancellationToken token = default);
 
     ValueTask<bool> ContainsItemAsync<T>(CacheKey cacheKey, T item, CancellationToken token = default);
 

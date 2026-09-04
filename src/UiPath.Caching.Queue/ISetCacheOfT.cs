@@ -6,7 +6,7 @@ namespace UiPath.Caching;
 /// insertion order and PopAsync removes a random member (Redis SPOP). Use the dedicated list caches
 /// when order matters.
 /// </summary>
-public partial interface ISetCache<T>
+public interface ISetCache<T>
 {
     string Name { get; }
 
