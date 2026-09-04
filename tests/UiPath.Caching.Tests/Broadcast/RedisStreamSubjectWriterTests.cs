@@ -314,9 +314,14 @@ public class RedisStreamSubjectWriterTests : IAsyncLifetime
             }
         };
 
+        // Read through Volatile, like `attempts` above: this flag is written by the test thread and
+        // read by the fetch loop's thread, so a plain capture is a data race. Closing it does not
+        // fully de-flake this test — it was still seen failing under parallel load afterwards, with
+        // `recovered` false after the 10s budget — but an unsynchronized cross-thread flag is not
+        // something to leave in place while chasing that.
         var fail = true;
         _database.StreamReadGroupAsync(_context.Topic, _context.ConsumerGroup, _context.ConsumerName, ">", _context.PollBatchSize)
-            .ReturnsForAnyArgs(_ => fail
+            .ReturnsForAnyArgs(_ => Volatile.Read(ref fail)
                 ? throw UnknownCommandError("ERR unknown command 'XREADGROUP'")
                 : Task.FromResult(Array.Empty<StreamEntry>()));
 
@@ -340,7 +345,8 @@ public class RedisStreamSubjectWriterTests : IAsyncLifetime
         await loggedCritical.Task.WaitAsync(WaitTimeout, TestContext.Current.CancellationToken);
 
         // Server now answers XREADGROUP; the reconnect must wake the loop instead of waiting out the backoff.
-        fail = false;
+        // Written before the release below, so a thread that observes the release also observes this.
+        Volatile.Write(ref fail, false);
         connectionState.OnReconnected += Raise.Event<EventHandler>(connectionState, EventArgs.Empty);
 
         var recovered = await WaitUntil(() => recordingLogger.Records.Any(

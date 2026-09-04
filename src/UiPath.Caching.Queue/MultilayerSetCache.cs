@@ -51,25 +51,25 @@ internal sealed class MultilayerSetCache : ISetCache
 
     public string Name => _name;
 
-    public async ValueTask<bool> AddAsync<T>(CacheKey cacheKey, T item, CachePolicy? policy = null, CancellationToken token = default)
+    public async ValueTask<bool> AddAsync<T>(CacheKey cacheKey, T item, CachePolicy? policy, CancellationToken token = default)
     {
         NotCacheableException.ThrowIfNotCacheable<T>();
         return await InternalAddAsync(cacheKey, item, policy, token).ConfigureAwait(false);
     }
 
-    public ValueTask<long> AddAsync<T>(CacheKey cacheKey, IEnumerable<T> items, CachePolicy? policy = null, CancellationToken token = default) =>
+    public ValueTask<long> AddAsync<T>(CacheKey cacheKey, IEnumerable<T> items, CachePolicy? policy, CancellationToken token = default) =>
         AddAsync(cacheKey, items, expiration: (DateTimeOffset?)null, policy, token);
 
-    public ValueTask<long> AddAsync<T>(CacheKey cacheKey, IEnumerable<T> items, TimeSpan? expiration = null, CachePolicy? policy = null, CancellationToken token = default) =>
+    public ValueTask<long> AddAsync<T>(CacheKey cacheKey, IEnumerable<T> items, TimeSpan? expiration, CachePolicy? policy, CancellationToken token = default) =>
         AddAsync(cacheKey, items, FromTtl(expiration), policy, token);
 
-    public async ValueTask<long> AddAsync<T>(CacheKey cacheKey, IEnumerable<T> items, DateTimeOffset? expiration = null, CachePolicy? policy = null, CancellationToken token = default)
+    public async ValueTask<long> AddAsync<T>(CacheKey cacheKey, IEnumerable<T> items, DateTimeOffset? expiration, CachePolicy? policy, CancellationToken token = default)
     {
         NotCacheableException.ThrowIfNotCacheable<T>();
         return await InternalAddAsync(cacheKey, Materialize(items), expiration, policy, token).ConfigureAwait(false);
     }
 
-    public async ValueTask<T?> PopAsync<T>(CacheKey cacheKey, CachePolicy? policy = null, CancellationToken token = default)
+    public async ValueTask<T?> PopAsync<T>(CacheKey cacheKey, CachePolicy? policy, CancellationToken token = default)
     {
         NotCacheableException.ThrowIfNotCacheable<T>();
         var key = Key(cacheKey, token);
@@ -86,7 +86,7 @@ internal sealed class MultilayerSetCache : ISetCache
         return value;
     }
 
-    public async ValueTask<IReadOnlyCollection<T?>> PopAsync<T>(CacheKey cacheKey, long count, CachePolicy? policy = null, CancellationToken token = default)
+    public async ValueTask<IReadOnlyCollection<T?>> PopAsync<T>(CacheKey cacheKey, long count, CachePolicy? policy, CancellationToken token = default)
     {
         NotCacheableException.ThrowIfNotCacheable<T>();
         var key = Key(cacheKey, token);
@@ -102,7 +102,7 @@ internal sealed class MultilayerSetCache : ISetCache
         return values;
     }
 
-    public async ValueTask<IReadOnlyCollection<T?>> MembersAsync<T>(CacheKey cacheKey, CachePolicy? policy = null, CancellationToken token = default)
+    public async ValueTask<IReadOnlyCollection<T?>> MembersAsync<T>(CacheKey cacheKey, CachePolicy? policy, CancellationToken token = default)
     {
         NotCacheableException.ThrowIfNotCacheable<T>();
         var key = Key(cacheKey, token);

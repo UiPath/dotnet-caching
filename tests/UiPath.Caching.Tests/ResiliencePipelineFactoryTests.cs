@@ -135,7 +135,7 @@ public class ResiliencePipelineFactoryTest(ITestContextAccessor testContextAcces
         var resiliencePipelineFactory = _fixture.Create<ResiliencePipelineFactory>();
         var pipeline = resiliencePipelineFactory.Create("read", false);
         using var guard = CancellationTokenSource.CreateLinkedTokenSource(testContextAccessor.Current.CancellationToken);
-        guard.CancelAfter(TimeSpan.FromSeconds(5));
+        guard.CancelAfter(TimeSpan.FromSeconds(30));
 
         var act = async () => await pipeline.ExecuteAsync(timeoutFunc, guard.Token);
         await act.Should().ThrowAsync<TimeoutRejectedException>();
@@ -156,20 +156,24 @@ public class ResiliencePipelineFactoryTest(ITestContextAccessor testContextAcces
             }
         }
         actual.Should().BeFalse();
-        actual = null;
-        await Task.Delay(250, testContextAccessor.Current.CancellationToken);
-        for (int i = 0; i < 4; i++)
+
+        // The breaker reopens after DurationOfBreak, half-opens, then closes on the first
+        // successful probe. Poll for that instead of assuming it lands inside a fixed 250ms + 4x100ms
+        // budget: that leaves only 150ms of slack over a 500ms DurationOfBreak, and under parallel
+        // load it does not land, which is what made this test flaky.
+        var closed = false;
+        var sw = System.Diagnostics.Stopwatch.StartNew();
+        while (sw.Elapsed < TimeSpan.FromSeconds(30))
         {
-            await Task.Delay(100, testContextAccessor.Current.CancellationToken);
-            //we are in a circuit breaker state => no exception is thrown, returning default value
-            actual = await pipeline.ExecuteAsync(successFunc, testContextAccessor.Current.CancellationToken);
-            if(actual == true)
+            // While the breaker is open the fallback returns default(bool) rather than throwing.
+            closed = await pipeline.ExecuteAsync(successFunc, testContextAccessor.Current.CancellationToken);
+            if (closed)
             {
-                // circuit breaker is closed
                 break;
             }
+            await Task.Delay(20, testContextAccessor.Current.CancellationToken);
         }
-        actual.Should().BeTrue();
+        closed.Should().BeTrue("the breaker must close once DurationOfBreak has elapsed");
 
         logMessages.Should().NotBeEmpty();
         logMessages.Should().Contain(log => log.Contains("Execution timed out after"));

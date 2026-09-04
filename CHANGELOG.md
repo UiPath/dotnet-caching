@@ -104,7 +104,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
   overloads. `NullCache` returns `true`, as its `SetAsync` does — the null store retains nothing, so
   no key pre-exists and no caller loses; note that it provides no exclusion at all and is what
   `ICacheFactory.CreateCache` resolves to for an absent or disabled provider, so assert the provider
-  you expect at startup when the `true` branch runs a side effect that must not repeat. `ICache.Compat.cs` carries the token-positional forwarders
+  you expect at startup when the `true` branch runs a side effect that must not repeat. `CacheExtensions` carries the token-positional overloads
   (`TryAddAsync(key, value, token)` and the `TimeSpan?`/`DateTimeOffset?` pairs), matching `SetAsync`.
   No multi-key overload: Redis has no atomic multi-key `NX`, and all-or-nothing versus per-key
   semantics would be a guess. This is a cache primitive, not a lock — no ownership token, no early
@@ -120,6 +120,44 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 
 ### Changed
 
+- **BREAKING:** `ICache.Compat.cs`, `IHashCache.Compat.cs` and `ISetCache.Compat.cs` are gone. The
+  pre-`CachePolicy` convenience overloads they carried as default interface methods —
+  `GetAsync<T>(key, token)`, `SetAsync<T>(key, value, expiration, token)`,
+  `TryAddAsync<T>(key, value, token)`, `AddAsync<T>(key, item, token)`, `PopAsync<T>(key, token)` and
+  the rest — now live as extension methods on the new `CacheExtensions`, `HashCacheExtensions` and
+  `SetCacheExtensions` static classes in the same `UiPath.Caching` namespace (`SetCacheExtensions`
+  ships in `UiPath.Caching.Queue`, alongside `ISetCache`). Call sites are unchanged and need no edit;
+  the interfaces shrink to just the policy-bearing members, so an implementation now has one member to
+  write per operation instead of one plus an inherited forwarder it could accidentally override.
+- **BREAKING:** `ICacheOfT.Sync.cs`, `IHashCacheOfT.Sync.cs` and `ISetCacheOfT.Sync.cs` are gone the
+  same way. The 59 blocking forwarders they carried as default interface methods — `Get`, `GetOrAdd`,
+  `Set`, `TryAdd`, `Refresh`, `Remove`, `Contains`, `TimeToLive`, `ExpireTime`, the hash surface's
+  `GetItem`, `GetCacheEntry`, `GetMetadata` and `SetMetadata`, and the set surface's `Add`, `Pop`,
+  `Members`, `ContainsItem`, `Count`, `RemoveItem` and `RemoveItems` — now live on the new
+  `CacheSyncExtensions`, `HashCacheSyncExtensions` and `SetCacheSyncExtensions` static classes
+  (`SetCacheSyncExtensions` ships in `UiPath.Caching.Queue`). Each still blocks on the async member
+  via `.AsTask().GetAwaiter().GetResult()`; nothing about the blocking behavior changed. `T` becomes a
+  method type parameter inferred from the receiver, so call sites are unchanged, and they stay
+  reachable through the concrete `Cache<T>` / `HashCache<T>` / `SetCache<T>` classes as well as the
+  interfaces. `partial` comes off `ICache<T>`, `IHashCache<T>` and `ISetCache<T>`, which nothing else
+  extends now, leaving all three as pure async contracts: an implementation writes only the members it
+  actually implements, rather than inheriting blocking forwarders it could accidentally override.
+- **BREAKING:** `CachePolicy? policy` is now a **required** parameter on every `ICache`,
+  `IHashCache` and `ISetCache` member that takes one, along with the `expiration` / `setOption`
+  parameters that precede it — the `= null` defaults are removed. `CacheExtensions` /
+  `HashCacheExtensions` / `SetCacheExtensions` supply the short forms, so
+  `cache.GetAsync<T>(key, token)` and `cache.SetAsync(key, value, expiration)` still
+  compile; what no longer compiles is an interface call that relied on the defaults to skip the policy
+  slot positionally. This is also what makes the extensions load-bearing rather than decorative: while
+  the interface still declared `policy = null`, an applicable interface overload existed for every
+  short call and instance members always beat extension members, so `cache.GetAsync<T>(key, token)`
+  kept binding to the interface and the extension was never reached. With `policy` required, no
+  interface overload is applicable to the short forms and there is exactly one way to spell "no
+  policy". Implementations (`MultilayerCache`, `RedisCache`, their hash
+  counterparts, `NullCache`, `NullHashCache`, `MultilayerSetCache`, `RedisSetCache`, `NullSetCache`)
+  drop the defaults too, so behavior is identical whether the call goes through the interface or the
+  concrete type. The typed `ICache<T>` / `IHashCache<T>` / `ISetCache<T>` façades are unchanged —
+  they never had a `policy` parameter, since they resolve one at construction.
 - **BREAKING:** `CacheKey.Equals` and `GetHashCode` are now ordinal rather than
   `InvariantCultureIgnoreCase`. Insensitive keys are still lowercased at construction, so the stored
   key and every comparison between insensitive keys are unchanged; what changes is that equality is

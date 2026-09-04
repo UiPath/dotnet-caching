@@ -42,6 +42,11 @@ public class MultilayerCachePerNameFactoryTimeoutTests(ITestContextAccessor test
     [Fact]
     public async Task GetOrAdd_with_FactoryTimeout_throws_TimeoutException_when_generator_exceeds_budget()
     {
+        // FactoryTimeout only surfaces as TimeoutException while the caller's own token is
+        // uncancelled — see the catch filter in FactoryTimeout.RunAsync. Pass a token this test
+        // owns rather than the ambient one the runner may cancel under load; the 50ms budget is
+        // what bounds the call, so nothing here can hang.
+        using var caller = new CancellationTokenSource();
         var policy = new CachePolicy { FactoryTimeout = TimeSpan.FromMilliseconds(50) };
         Func<CancellationToken, Task<string?>> generator = async ct =>
         {
@@ -49,7 +54,7 @@ public class MultilayerCachePerNameFactoryTimeoutTests(ITestContextAccessor test
             return "v";
         };
 
-        var act = async () => await Sut.GetOrAddAsync(_cacheKey, generator, policy, testContextAccessor.Current.CancellationToken);
+        var act = async () => await Sut.GetOrAddAsync(_cacheKey, generator, policy, caller.Token);
 
         await act.Should().ThrowAsync<TimeoutException>();
     }

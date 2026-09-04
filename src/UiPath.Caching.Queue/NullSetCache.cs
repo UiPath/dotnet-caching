@@ -7,23 +7,23 @@ public sealed class NullSetCache : ISetCache
 
     public string Name => "Null";
 
-    public ValueTask<bool> AddAsync<T>(CacheKey cacheKey, T item, CachePolicy? policy = null, CancellationToken token = default) => ReturnFalseAsync<T>();
+    public ValueTask<bool> AddAsync<T>(CacheKey cacheKey, T item, CachePolicy? policy, CancellationToken token = default) => ReturnFalseAsync<T>();
 
-    public ValueTask<long> AddAsync<T>(CacheKey cacheKey, IEnumerable<T> items, CachePolicy? policy = null, CancellationToken token = default) => ReturnZeroAsync<T>();
+    public ValueTask<long> AddAsync<T>(CacheKey cacheKey, IEnumerable<T> items, CachePolicy? policy, CancellationToken token = default) => ReturnZeroAsync<T>();
 
-    public ValueTask<long> AddAsync<T>(CacheKey cacheKey, IEnumerable<T> items, TimeSpan? expiration = null, CachePolicy? policy = null, CancellationToken token = default) => ReturnZeroAsync<T>();
+    public ValueTask<long> AddAsync<T>(CacheKey cacheKey, IEnumerable<T> items, TimeSpan? expiration, CachePolicy? policy, CancellationToken token = default) => ReturnZeroAsync<T>();
 
-    public ValueTask<long> AddAsync<T>(CacheKey cacheKey, IEnumerable<T> items, DateTimeOffset? expiration = null, CachePolicy? policy = null, CancellationToken token = default) => ReturnZeroAsync<T>();
+    public ValueTask<long> AddAsync<T>(CacheKey cacheKey, IEnumerable<T> items, DateTimeOffset? expiration, CachePolicy? policy, CancellationToken token = default) => ReturnZeroAsync<T>();
 
-    public ValueTask<T?> PopAsync<T>(CacheKey cacheKey, CachePolicy? policy = null, CancellationToken token = default)
+    public ValueTask<T?> PopAsync<T>(CacheKey cacheKey, CachePolicy? policy, CancellationToken token = default)
     {
         NotCacheableException.ThrowIfNotCacheable<T>();
         return ValueTask.FromResult(default(T?));
     }
 
-    public ValueTask<IReadOnlyCollection<T?>> PopAsync<T>(CacheKey cacheKey, long count, CachePolicy? policy = null, CancellationToken token = default) => EmptyAsync<T>();
+    public ValueTask<IReadOnlyCollection<T?>> PopAsync<T>(CacheKey cacheKey, long count, CachePolicy? policy, CancellationToken token = default) => EmptyAsync<T>();
 
-    public ValueTask<IReadOnlyCollection<T?>> MembersAsync<T>(CacheKey cacheKey, CachePolicy? policy = null, CancellationToken token = default) => EmptyAsync<T>();
+    public ValueTask<IReadOnlyCollection<T?>> MembersAsync<T>(CacheKey cacheKey, CachePolicy? policy, CancellationToken token = default) => EmptyAsync<T>();
 
     public ValueTask<bool> ContainsItemAsync<T>(CacheKey cacheKey, T item, CancellationToken token = default) => ReturnFalseAsync<T>();
 

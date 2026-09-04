@@ -755,6 +755,11 @@ public class RedisCacheTests(ITestContextAccessor testContextAccessor) : IAsyncL
     [Fact]
     public async Task GetOrAdd_policy_FactoryTimeout_cancels_slow_generator()
     {
+        // FactoryTimeout only surfaces as TimeoutException while the caller's own token is
+        // uncancelled — see the catch filter in FactoryTimeout.RunAsync. Pass a token this test
+        // owns rather than the ambient one the runner may cancel under load; the 50ms budget is
+        // what bounds the call, so nothing here can hang.
+        using var caller = new CancellationTokenSource();
         var policy = new CachePolicy { FactoryTimeout = TimeSpan.FromMilliseconds(50) };
         Func<CancellationToken, Task<string?>> generator = async ct =>
         {
@@ -762,7 +767,7 @@ public class RedisCacheTests(ITestContextAccessor testContextAccessor) : IAsyncL
             return "never";
         };
 
-        var act = async () => await Sut.GetOrAddAsync(_cacheKey, generator, policy: policy, token: testContextAccessor.Current.CancellationToken);
+        var act = async () => await Sut.GetOrAddAsync(_cacheKey, generator, policy: policy, token: caller.Token);
 
         await act.Should().ThrowAsync<TimeoutException>();
     }
@@ -771,6 +776,12 @@ public class RedisCacheTests(ITestContextAccessor testContextAccessor) : IAsyncL
     public async Task Batch_GetOrAdd_policy_FactoryTimeout_cancels_slow_generator()
     {
         var token = testContextAccessor.Current.CancellationToken;
+        // FactoryTimeout only surfaces as TimeoutException while the caller's own token is
+        // uncancelled — see the catch filter in FactoryTimeout.RunAsync. Pass a token this test
+        // owns rather than the ambient one the runner may cancel under load; the 50ms budget is
+        // what bounds the call, so nothing here can hang. The ambient token still guards the race
+        // below.
+        using var caller = new CancellationTokenSource();
         var policy = new CachePolicy { FactoryTimeout = TimeSpan.FromMilliseconds(50) };
         var entries = new KeyValuePair<CacheKey, string>[] { new(_cacheKey, "one"), new(_multiKey, "two") };
         static async Task<KeyValuePair<string, string?>[]> Generator(string[] _, CancellationToken ct)
@@ -779,7 +790,7 @@ public class RedisCacheTests(ITestContextAccessor testContextAccessor) : IAsyncL
             return [];
         }
 
-        var call = ((ICache)Sut).GetOrAddAsync<string, string>(entries, Generator, policy, token).AsTask();
+        var call = ((ICache)Sut).GetOrAddAsync<string, string>(entries, Generator, policy, caller.Token).AsTask();
 
         var finished = await Task.WhenAny(call, Task.Delay(TimeSpan.FromSeconds(10), token));
         finished.Should().BeSameAs(call, "the batch generator must be bounded by CachePolicy.FactoryTimeout");
