@@ -15,7 +15,7 @@ public sealed class InMemoryRedisQueueCacheProvider : IQueueCacheProvider
     private readonly InMemoryRedisQueueCacheOptions _options;
     private readonly IMemoryCacheFactory _memoryCacheFactory;
     private readonly Lazy<IQueueCacheFactory> _queueCacheFactory;
-    private readonly ISerializerProxy<RedisValue> _serializer;
+    private readonly ISerializerProxy<byte[]> _serializer;
     private readonly ILocalLock _localLock;
     private readonly Lazy<MultilayerSetCache> _setCache;
 
@@ -27,7 +27,7 @@ public sealed class InMemoryRedisQueueCacheProvider : IQueueCacheProvider
         IOptions<InMemoryRedisQueueCacheOptions> optionsAccessor,
         IMemoryCacheFactory memoryCacheFactory,
         Func<IQueueCacheFactory> queueCacheFactoryAccessor,
-        ISerializerProxy<RedisValue> serializer,
+        ISerializerProxy<byte[]> serializer,
         ILocalLock localLock)
     {
         _options = optionsAccessor.Value;

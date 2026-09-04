@@ -1,4 +1,5 @@
 using System.Runtime.CompilerServices;
+using StackExchange.Redis;
 
 namespace UiPath.Caching.Redis;
 
@@ -7,7 +8,7 @@ public sealed partial class RedisSetCache : RedisCacheBase, ISetCache
     private const string RedisSetKeyPrefix = "se";
 
     private readonly ILogger<RedisSetCache> _logger;
-    private readonly ISerializerProxy<RedisValue> _serializer;
+    private readonly ISerializerProxy<byte[]> _serializer;
     private readonly IResiliencePipeline _read;
     private readonly IResiliencePipeline _write;
     private readonly IResiliencePipeline _pop;
@@ -16,7 +17,7 @@ public sealed partial class RedisSetCache : RedisCacheBase, ISetCache
 
     public RedisSetCache(
         IRedisConnector redis,
-        ISerializerProxy<RedisValue> serializer,
+        ISerializerProxy<byte[]> serializer,
         IResiliencePipelineProvider resiliencePipelineProvider,
         ICachingTelemetryProvider telemetryProvider,
         RedisCacheOptions redisCacheOptions,
@@ -52,7 +53,7 @@ public sealed partial class RedisSetCache : RedisCacheBase, ISetCache
     {
         NotCacheableException.ThrowIfNotCacheable<T>();
         ArgumentNullException.ThrowIfNull(items);
-        var values = items.Select(i => _serializer.Serialize(i)).ToArray();
+        var values = items.Select(i => (RedisValue)_serializer.Serialize(i)).ToArray();
         return AddManyInnerAsync<T>(cacheKey, values, Clock.ToDateTimeOffset(ResolveExpiration(expiration, policy)), token);
     }
 
@@ -60,7 +61,7 @@ public sealed partial class RedisSetCache : RedisCacheBase, ISetCache
     {
         NotCacheableException.ThrowIfNotCacheable<T>();
         ArgumentNullException.ThrowIfNull(items);
-        var values = items.Select(i => _serializer.Serialize(i)).ToArray();
+        var values = items.Select(i => (RedisValue)_serializer.Serialize(i)).ToArray();
         return AddManyInnerAsync<T>(cacheKey, values, ResolveExpiration(expiration, policy), token);
     }
 
@@ -323,7 +324,7 @@ public sealed partial class RedisSetCache : RedisCacheBase, ISetCache
         NotCacheableException.ThrowIfNotCacheable<T>();
         ArgumentNullException.ThrowIfNull(items);
         var redisKey = ToRedisKey(cacheKey, token);
-        var values = items.Select(i => _serializer.Serialize(i)).ToArray();
+        var values = items.Select(i => (RedisValue)_serializer.Serialize(i)).ToArray();
         long ret = 0;
         if (values.Length == 0)
         {

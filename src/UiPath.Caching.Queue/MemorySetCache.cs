@@ -6,14 +6,25 @@ namespace UiPath.Caching;
 internal sealed class MemorySetCache(
     string cacheName,
     IMemoryCache memoryCache,
-    ISerializerProxy<RedisValue> serializer,
+    ISerializerProxy<byte[]> serializer,
     ILocalLock localLock,
     IMemoryCacheOptions memoryCacheOptions)
 {
     private readonly bool _trackSize = memoryCacheOptions.SizeLimit.HasValue;
     private readonly string _localLockKeyPrefix = cacheName + ":";
 
-    private sealed record Snapshot(ImmutableHashSet<RedisValue> Members, DateTimeOffset? Expiration);
+    private static readonly ImmutableHashSet<byte[]> EmptyMembers =
+        ImmutableHashSet.Create<byte[]>(ByteArrayEqualityComparer.Instance);
+
+    private sealed record Snapshot(ImmutableHashSet<byte[]> Members, DateTimeOffset? Expiration);
+
+    /// <summary>
+    /// A passthrough serializer such as <see cref="RawByteSerializerProxy"/> hands back the caller's
+    /// own array. The snapshot hashes its members, so a caller mutating that array afterwards would
+    /// change an element's hash while it sits in the set. Only the paths that store need this; the
+    /// lookup paths may compare against the caller's array directly.
+    /// </summary>
+    private static byte[] Owned(byte[] value) => value.Length == 0 ? value : (byte[])value.Clone();
 
     public bool TryGetMembers<T>(string key, [NotNullWhen(true)] out IReadOnlyCollection<T?>? members)
     {
@@ -44,7 +55,7 @@ internal sealed class MemorySetCache(
             contains = false;
             return false;
         }
-        contains = snapshot.Members.Contains(serializer.Serialize(item));
+        contains = snapshot.Members.Contains(serializer.Serialize(item)!);
         return true;
     }
 
@@ -54,7 +65,7 @@ internal sealed class MemorySetCache(
 
     public async ValueTask ReplaceAsync<T>(string key, IEnumerable<T> members, DateTimeOffset? expiration, CancellationToken token)
     {
-        var set = members.Select(m => serializer.Serialize(m)).ToImmutableHashSet();
+        var set = members.Select(m => Owned(serializer.Serialize(m)!)).ToImmutableHashSet(ByteArrayEqualityComparer.Instance);
         using (await localLock.AcquireAsync(_localLockKeyPrefix + key, token).ConfigureAwait(false))
         {
             StoreSnapshot(key, new Snapshot(set, expiration));
@@ -63,7 +74,7 @@ internal sealed class MemorySetCache(
 
     public async ValueTask AddAsync<T>(string key, IEnumerable<T> items, CancellationToken token)
     {
-        var values = items.Select(i => serializer.Serialize(i)).ToArray();
+        var values = items.Select(i => Owned(serializer.Serialize(i)!)).ToArray();
         if (values.Length == 0)
         {
             return;
@@ -79,7 +90,7 @@ internal sealed class MemorySetCache(
 
     public async ValueTask<long> AddAsync<T>(string key, IEnumerable<T> items, DateTimeOffset? expiration, CancellationToken token)
     {
-        var values = items.Select(i => serializer.Serialize(i)).ToArray();
+        var values = items.Select(i => Owned(serializer.Serialize(i)!)).ToArray();
         if (values.Length == 0)
         {
             return 0;
@@ -91,7 +102,7 @@ internal sealed class MemorySetCache(
                 memoryCache.Remove(key);
                 return 0;
             }
-            var members = TryGetSnapshot(key, out var snapshot) ? snapshot.Members : ImmutableHashSet<RedisValue>.Empty;
+            var members = TryGetSnapshot(key, out var snapshot) ? snapshot.Members : EmptyMembers;
             var updated = members.Union(values);
             StoreSnapshot(key, new Snapshot(updated, expiration));
             return updated.Count - members.Count;
@@ -100,7 +111,7 @@ internal sealed class MemorySetCache(
 
     public async ValueTask<long> RemoveAsync<T>(string key, IEnumerable<T> items, CancellationToken token)
     {
-        var values = items.Select(i => serializer.Serialize(i)).ToArray();
+        var values = items.Select(i => serializer.Serialize(i)!).ToArray();
         if (values.Length == 0)
         {
             return 0;
@@ -144,7 +155,7 @@ internal sealed class MemorySetCache(
             }
             var pool = snapshot.Members.ToArray();
             var take = (int)Math.Min(count, pool.Length);
-            var picked = new RedisValue[take];
+            var picked = new byte[take][];
             for (var i = 0; i < take; i++)
             {
                 var j = Random.Shared.Next(i, pool.Length);
@@ -178,7 +189,7 @@ internal sealed class MemorySetCache(
         memoryCache.Set(key, snapshot, options);
     }
 
-    private IReadOnlyCollection<T?> Deserialize<T>(IReadOnlyCollection<RedisValue> values)
+    private List<T?> Deserialize<T>(IReadOnlyCollection<byte[]> values)
     {
         if (values.Count == 0)
         {
@@ -187,7 +198,7 @@ internal sealed class MemorySetCache(
         var list = new List<T?>(values.Count);
         foreach (var value in values)
         {
-            if (value.IsNull)
+            if (value is null)
             {
                 continue;
             }

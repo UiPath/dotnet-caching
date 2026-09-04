@@ -1,3 +1,4 @@
+using System.Text.Json;
 using Microsoft.Extensions.Caching.Distributed;
 using UiPath.Caching.Distributed;
 using UiPath.Caching.Locking;
@@ -310,7 +311,7 @@ public static class DistributedCacheCollectionExtensions
                 differentiator)),
             cacheOptions,
             connector,
-            new RedisValueSerializerProxy(sp.GetRequiredService<ISerializerProxy<byte[]>>()),
+            new RawByteSerializerProxy(sp.GetService<JsonSerializerOptions>()),
             sp.GetRequiredService<IResiliencePipelineProvider>(),
             sp.GetRequiredService<ICachingTelemetryProvider>(),
             sp.GetRequiredService<ILoggerFactory>(),

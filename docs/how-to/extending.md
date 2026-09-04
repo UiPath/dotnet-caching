@@ -11,7 +11,7 @@ Triage what you actually need before reaching for the seams below.
 | Change how keys look on Redis (prefixing, sharding, namespacing) | `ICacheKeyStrategy` — see [telemetry-and-strategies.md](telemetry-and-strategies.md#cache-key-strategies) |
 | Use a different Redis instance, custom multiplexer, or OTel hookup | `IConnectionMultiplexerFactory` — see [recipes/opentelemetry-multiplexer-factory.md](../recipes/opentelemetry-multiplexer-factory.md) |
 | Route telemetry events to a non-OTel surface | `ICachingTelemetryProvider` — see [recipes/custom-telemetry-provider.md](../recipes/custom-telemetry-provider.md) |
-| Change how cache values are serialized to Redis | `ISerializerProxy<RedisValue>` — see [Serializers](#custom-serializer) below |
+| Change how cache values are serialized to Redis | `ISerializerProxy<byte[]>` — see [Serializers](#custom-serializer) below |
 | Add a brand-new storage backend (Memcached, S3, local file, in-memory test fake) | `ICacheProvider` — see [Cache providers](#custom-cache-provider) below |
 | Add a brand-new cross-node broadcast transport (Kafka, NATS, RabbitMQ) | `ITopicProvider` — see [Topic providers](#custom-topic-provider) below |
 | Override the lock backend for cross-node single-flight | `IDistributedLock` — register a custom impl via `services.AddSingleton<IDistributedLock, MyLock>()` |
@@ -208,7 +208,33 @@ Select via configuration:
 
 ## Custom serializer
 
-`ISerializerProxy<T>` is the seam for cache-value serialization. The library ships exactly one implementation — `SystemJsonSerializerProxy` (which implements `ISerializerProxy<RedisValue>`) — and consumers swap it to use MessagePack, ProtoBuf, MemoryPack, or any other format.
+`ISerializerProxy<byte[]>` is the seam for cache-value serialization — one seam for every cache the
+library creates, including the `IDistributedCache` adapter. Consumers swap it to use MessagePack,
+ProtoBuf, MemoryPack, or any other format.
+
+The seam lives in `UiPath.Caching.Abstractions` and names no Redis type, so a custom serializer needs
+no dependency on StackExchange.Redis.
+
+Two implementations ship:
+
+| | Byte payloads | Everything else | Used by |
+|---|---|---|---|
+| `SystemJsonByteSerializerProxy` (default) | base64 inside a JSON string | UTF-8 JSON | every cache, unless you replace it |
+| `RawByteSerializerProxy` | stored verbatim | UTF-8 JSON | the provider `AddDistributedCache` builds |
+
+The default is precisely the format the library has always written, so upgrading moves no cache entry.
+(A null value is the one exception: it now serializes to a null payload rather than the four-byte
+JSON `null` literal, following the contract note below. Both read back as `default`.)
+`RawByteSerializerProxy` exists because an `IDistributedCache`
+payload is caller bytes that the caller has already serialized: base64-ing them would cost a third
+again in size for no benefit, and a consumer who swaps in MessagePack should not have their session
+bytes re-encoded. Neither implementation sniffs the payload — the requested type argument decides.
+
+You can register `RawByteSerializerProxy` app-wide to get raw byte storage everywhere, but that *is*
+a wire-format change: it returns stored bytes as-is rather than base64-decoding them, so a 1.x
+`byte[]` entry would come back as the base64 ASCII, and without throwing — nothing degrades it to a
+cache miss. Relocate the keyspace (a version segment in `AppShortName` or in the cache-key strategy)
+so reads cannot land on entries written the other way.
 
 ### Interface
 
@@ -228,107 +254,12 @@ The two `TryDeserialize` overloads exist so callers can attempt a deserializatio
 
 ### Skeleton implementation
 
+Most binary serializers natively produce `byte[]`, so an implementation is mostly delegation:
+
 ```csharp
 using MessagePack;
-using StackExchange.Redis;
 using UiPath.Caching;
 
-public sealed class MessagePackSerializerProxy : ISerializerProxy<RedisValue>
-{
-    private readonly MessagePackSerializerOptions _options = MessagePackSerializerOptions.Standard;
-
-    public RedisValue Serialize(object? value) =>
-        value is null ? RedisValue.Null : MessagePackSerializer.Serialize(value.GetType(), value, _options);
-
-    public T? Deserialize<T>(RedisValue value) =>
-        value.IsNull ? default : MessagePackSerializer.Deserialize<T>((byte[])value!, _options);
-
-    public bool TryDeserialize<T>(string? value, out T? result)
-    {
-        // MessagePack is a binary format; string inputs aren't expected from RedisValue
-        // (which stores byte[] directly). Return false here so callers route to the
-        // RedisValue overload via the TryDeserialize<T>(object?) entry point.
-        result = default;
-        return false;
-    }
-
-    public bool TryDeserialize<T>(object? value, out T? result) =>
-        value is RedisValue rv ? TryDeserializeRedis(rv, out result) : TryDeserialize(value?.ToString(), out result);
-
-    private bool TryDeserializeRedis<T>(RedisValue value, out T? result)
-    {
-        result = default;
-        if (value.IsNull) return false;
-        try
-        {
-            result = MessagePackSerializer.Deserialize<T>((byte[])value!, _options);
-            return true;
-        }
-        catch
-        {
-            return false;
-        }
-    }
-}
-```
-
-### Registration
-
-```csharp
-services.AddSingleton<ISerializerProxy<RedisValue>, MessagePackSerializerProxy>();
-```
-
-That single registration replaces the default JSON serializer for every cache the library creates.
-
-### Contract notes
-
-- **`Serialize(null)` must round-trip.** Producing a `RedisValue.Null` on input null is the convention; `Deserialize` should return `default` for `RedisValue.Null` input. If you persist null sentinels differently, the cache's `CacheNullValues` flag and the `NullCache` write-path will not behave correctly.
-- **Schema evolution is your problem.** The library does not version cached payloads. If your serializer can't deserialize an older payload after a deploy, `TryDeserialize` should return `false` and the cache will treat that as a miss; the generator will run and write a fresh entry.
-- **Consider `RedisValue` directly.** `RedisValue` can hold strings, bytes, or numbers without conversion. A binary serializer (MessagePack, ProtoBuf, MemoryPack) should write `byte[]` directly via `RedisValue` implicit conversion rather than going through `string`/Base64 — JSON-style proxies can stay string-based.
-
-### Byte-oriented serializers (`ISerializerProxy<byte[]>`)
-
-The distributed cache path (`AddDistributedCache`) serializes through `ISerializerProxy<byte[]>`
-instead of `ISerializerProxy<RedisValue>`. The default, `SystemJsonByteSerializerProxy`, passes
-`byte[]` payloads through raw — no base64, no JSON, no extra encoding layer — and JSON-encodes
-every other type; the requested type argument decides, there is no format sniffing.
-
-The distributed cache stores each entry as a Redis hash with a `data` field plus `absexp`/`sldexp`
-expiration metadata, the conventional layout for this contract, so
-`Refresh` reads the metadata without transferring the payload. Its keyspace is deliberately disjoint
-from the application's own caches, at two overridable levels — `RedisKeyDifferentiator` for the
-physical Redis keyspace, and `CacheKeyStrategy` for the `CacheKey` itself, so an entry cannot be
-reached through the application's own `ICache`/`IHashCache` with the bare caller key:
-
-```csharp
-builder.AddDistributedCache(KnownCacheProviderNames.Redis, o =>
-{
-    o.CacheKeyStrategy = new PrefixCacheKeyStrategy("sessions");
-    o.RedisKeyDifferentiator = "sess";
-});
-```
-
-Both default to values that keep the two keyspaces apart (`"d"` and `"dh"`); overriding them makes
-that separation yours to preserve. A differentiator matching one of the application's own
-`RedisTypePrefixes` is rejected at registration.
-
-For full control of the Redis key — a mandated layout, or a cluster hash-tag scheme —
-`RedisKeyStrategyFactory` replaces the factory the key is built from. It still receives
-`RedisKeyDifferentiator`, and registration proves the composed key differs from what the
-application's caches would produce, so a factory that ignores the differentiator fails at startup
-rather than sharing the keyspace:
-
-```csharp
-o.RedisKeyStrategyFactory = new MyRedisKeyStrategyFactory();   // gets "dh" (or your differentiator)
-```
-
-Left null it inherits the application's own `RedisCacheOptions.RedisKeyStrategyFactory`, so
-`AppShortName`, the separator and sharding behave as they do everywhere else.
-
-Swapping it follows the same pattern as the `RedisValue` proxy — and is simpler, because most
-binary serializers natively produce `byte[]`:
-
-```csharp
 public sealed class MessagePackByteSerializerProxy(MessagePackSerializerOptions? options = null)
     : ISerializerProxy<byte[]>
 {
@@ -374,17 +305,59 @@ public sealed class MessagePackByteSerializerProxy(MessagePackSerializerOptions?
         }
     }
 }
+```
 
+### Registration
+
+```csharp
 services.AddSingleton<ISerializerProxy<byte[]>>(new MessagePackByteSerializerProxy());
 ```
 
-Two rules for custom implementations:
+That single registration replaces the default JSON serializer for the caches the library resolves
+from DI — `ICache`, `IHashCache` and `ISetCache`. It does **not** reach the `IDistributedCache`
+adapter, which constructs its own `RawByteSerializerProxy`; see the contract note below.
 
-1. **Round-trip `byte[]` symmetrically.** The distributed cache stores the caller's payload directly
-   in the hash's `data` field; raw passthrough (recommended) avoids per-entry encoding overhead, but
-   any symmetric encoding also works.
-2. **This does not change the main caches' wire format** — `ICache`/`IHashCache` still serialize
-   through `ISerializerProxy<RedisValue>`. Swap both registrations if you want one format everywhere.
+### Contract notes
+
+- **`Serialize(null)` must return a non-null payload.** A null return reaches StackExchange.Redis as `RedisValue.Null`, which throws `ArgumentException` on `SADD` and on the multi-field `HSET`, and silently stores nothing on the single-value paths. Encode null as a sentinel your own `Deserialize` maps back to `default` — the default proxy uses JSON's four-byte `null` literal. `Deserialize` should also return `default` for a null or empty buffer, except where a raw type argument makes the empty buffer meaningful: `RawByteSerializerProxy.Deserialize<byte[]>` returns the empty array, because an empty payload is a legitimate value there rather than an absent one.
+- **Schema evolution is your problem.** The library does not version cached payloads. If your serializer can't deserialize an older payload after a deploy, `TryDeserialize` should return `false` and the cache will treat that as a miss; the generator will run and write a fresh entry. Note that `Deserialize` is the hot path for reads, and a throw there is caught by the caches and reported as a miss — but a payload your serializer *misreads* without throwing is returned to the caller as-is.
+- **Round-trip `byte[]` symmetrically, and decide deliberately.** Passthrough avoids a per-entry encoding layer; base64 (what the default does) keeps the format the library has always written. Either works, but the two are mutually unreadable and neither can detect the other, so a serializer swap that changes this needs a keyspace relocation, not a compatibility shim.
+- **Only replace the default globally.** `AddDistributedCache` gives its own provider `RawByteSerializerProxy` explicitly rather than resolving one from DI, so replacing the app-wide registration does not change what the `IDistributedCache` adapter stores in its `data` field. That is deliberate: those bytes belong to the caller.
+- **Set members are compared by their serialized bytes.** `ISetCache`'s local tier keys its snapshot on `Serialize` output using structural byte equality, so a serializer must be deterministic: two equal values must serialize identically, or set membership and de-duplication will disagree between the memory and Redis tiers.
+
+### Distributed cache keyspace
+
+The distributed cache stores each entry as a Redis hash with a `data` field plus `absexp`/`sldexp`
+expiration metadata, the conventional layout for this contract, so
+`Refresh` reads the metadata without transferring the payload. Its keyspace is deliberately disjoint
+from the application's own caches, at two overridable levels — `RedisKeyDifferentiator` for the
+physical Redis keyspace, and `CacheKeyStrategy` for the `CacheKey` itself, so an entry cannot be
+reached through the application's own `ICache`/`IHashCache` with the bare caller key:
+
+```csharp
+builder.AddDistributedCache(KnownCacheProviderNames.Redis, o =>
+{
+    o.CacheKeyStrategy = new PrefixCacheKeyStrategy("sessions");
+    o.RedisKeyDifferentiator = "sess";
+});
+```
+
+Both default to values that keep the two keyspaces apart (`"d"` and `"dh"`); overriding them makes
+that separation yours to preserve. A differentiator matching one of the application's own
+`RedisTypePrefixes` is rejected at registration.
+
+For full control of the Redis key — a mandated layout, or a cluster hash-tag scheme —
+`RedisKeyStrategyFactory` replaces the factory the key is built from. It still receives
+`RedisKeyDifferentiator`, and registration proves the composed key differs from what the
+application's caches would produce, so a factory that ignores the differentiator fails at startup
+rather than sharing the keyspace:
+
+```csharp
+o.RedisKeyStrategyFactory = new MyRedisKeyStrategyFactory();   // gets "dh" (or your differentiator)
+```
+
+Left null it inherits the application's own `RedisCacheOptions.RedisKeyStrategyFactory`, so
+`AppShortName`, the separator and sharding behave as they do everywhere else.
 
 ## Swapping the default factories
 

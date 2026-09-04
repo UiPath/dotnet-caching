@@ -42,7 +42,7 @@ public static class InMemoryRedisCollectionExtensions
     {
         builder.RegisterOnCompleteCallback(typeof(InMemoryRedisCollectionExtensions), b =>
         {
-            b.Services.TryAddSingleton<IChangeTokenFactory, ChangeTokenFactory<RedisValue>>();
+            b.Services.TryAddSingleton<IChangeTokenFactory, ChangeTokenFactory<byte[]>>();
             b.Services.TryAddSingleton<IEventFormatterProxy<ICacheEvent>, CacheEventFormatter>();
             b.Services.TryAddSingleton<ICacheEventFactory, CacheEventFactory>();
         });

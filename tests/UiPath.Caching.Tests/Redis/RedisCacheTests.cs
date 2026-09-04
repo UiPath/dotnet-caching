@@ -17,7 +17,7 @@ public class RedisCacheTests(ITestContextAccessor testContextAccessor) : IAsyncL
     private RedisCacheOptions _cacheOptions = default!;
     private IDatabase _database = default!;
     private ITransaction _transaction = default!;
-    private ISerializerProxy<RedisValue> _serializer = default!;
+    private SystemJsonByteSerializerProxy _serializer = default!;
     private DateTimeOffset _now = DateTimeOffset.UtcNow;
     private CacheKey _cacheKey = default!;
     private RedisKey _redisKey = default!;
@@ -1328,8 +1328,8 @@ public class RedisCacheTests(ITestContextAccessor testContextAccessor) : IAsyncL
         _database = _fixture.Freeze<IDatabase>();
         _transaction = _fixture.Freeze<ITransaction>();
         _database.CreateTransaction().Returns(_transaction);
-        _serializer = new SystemJsonSerializerProxy();
-        _fixture.Inject(_serializer);
+        _serializer = new SystemJsonByteSerializerProxy();
+        _fixture.Inject<ISerializerProxy<byte[]>>(_serializer);
         var opt = Options.Create(_cacheOptions);
         _fixture.Inject(opt);
         _fixture.Inject(_cacheOptions);

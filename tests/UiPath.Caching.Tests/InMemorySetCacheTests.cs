@@ -15,7 +15,7 @@ public class InMemorySetCacheTests
         return new MultilayerSetCache(
             KnownCacheProviderNames.InMemory, NullSetCache.Instance,
             new MemoryCacheFactory(null, NullLoggerFactory.Instance),
-            new SystemJsonSerializerProxy(), options,
+            new SystemJsonByteSerializerProxy(), options,
             NullLocalLock.Instance,
             localMaxExpiration: null,
             defaultExpiration: options.DefaultExpiration);
@@ -28,6 +28,50 @@ public class InMemorySetCacheTests
 
     [Fact]
     public void Name_is_InMemory() => CreateSut().Name.Should().Be("InMemory");
+
+    private sealed record Member(int Id, string Name);
+
+    /// <summary>
+    /// The snapshot is keyed on the serializer's <c>byte[]</c> output, which compares by reference.
+    /// A populated local tier is authoritative, so without structural equality the wrong answer is
+    /// never corrected against the backing tier.
+    /// </summary>
+    /// <summary>
+    /// With a passthrough serializer the snapshot would otherwise hold the caller's own array, so
+    /// mutating it after the add would change an element's hash from inside the set.
+    /// </summary>
+    [Fact]
+    public async Task A_member_mutated_after_being_added_does_not_corrupt_the_snapshot()
+    {
+        var sut = new MultilayerSetCache(
+            KnownCacheProviderNames.InMemory, NullSetCache.Instance,
+            new MemoryCacheFactory(null, NullLoggerFactory.Instance),
+            new RawByteSerializerProxy(), new InMemoryQueueCacheOptions(),
+            NullLocalLock.Instance, localMaxExpiration: null, defaultExpiration: null);
+        var payload = new byte[] { 1, 2, 3 };
+
+        (await sut.AddAsync("k", payload, (CachePolicy?)null, Ct)).Should().BeTrue();
+        payload[0] = 9;
+
+        (await sut.ContainsItemAsync("k", new byte[] { 1, 2, 3 }, Ct)).Should().BeTrue();
+        (await sut.CountAsync<byte[]>("k", Ct)).Should().Be(1);
+    }
+
+    [Fact]
+    public async Task Members_are_matched_by_their_serialized_bytes_not_by_reference()
+    {
+        var sut = CreateSut();
+        var stored = new Member(7, "héllo 世界");
+        var equalButDistinctInstance = new Member(7, "héllo 世界");
+
+        (await sut.AddAsync("k", stored, (CachePolicy?)null, Ct)).Should().BeTrue();
+
+        (await sut.ContainsItemAsync("k", equalButDistinctInstance, Ct)).Should().BeTrue();
+        (await sut.AddAsync("k", equalButDistinctInstance, (CachePolicy?)null, Ct)).Should().BeFalse();
+        (await sut.CountAsync<Member>("k", Ct)).Should().Be(1);
+        (await sut.RemoveItemAsync("k", equalButDistinctInstance, Ct)).Should().BeTrue();
+        (await sut.CountAsync<Member>("k", Ct)).Should().Be(0);
+    }
 
     [Fact]
     public async Task Add_single_deduplicates()

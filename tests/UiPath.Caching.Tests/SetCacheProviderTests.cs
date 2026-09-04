@@ -8,7 +8,7 @@ public class InMemoryQueueCacheProviderTests
     private static InMemoryQueueCacheProvider CreateSut(InMemoryQueueCacheOptions? options = null) =>
         new(Options.Create(options ?? new InMemoryQueueCacheOptions()),
             new MemoryCacheFactory(null, NullLoggerFactory.Instance),
-            new SystemJsonSerializerProxy(),
+            new SystemJsonByteSerializerProxy(),
             NullLocalLock.Instance);
 
     [Fact]
@@ -72,7 +72,7 @@ public class InMemoryRedisQueueCacheProviderTests
             Options.Create(new InMemoryRedisQueueCacheOptions()),
             new MemoryCacheFactory(null, NullLoggerFactory.Instance),
             () => factory,
-            new SystemJsonSerializerProxy(),
+            new SystemJsonByteSerializerProxy(),
             NullLocalLock.Instance);
 
         var cache = provider.CreateSetCache();

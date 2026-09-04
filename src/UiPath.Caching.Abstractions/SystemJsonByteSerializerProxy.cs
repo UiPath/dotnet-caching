@@ -2,42 +2,23 @@ using System.Text.Json;
 
 namespace UiPath.Caching;
 
-/// <summary>JSON serializer over <c>byte[]</c>: byte payloads pass through raw, everything else is UTF-8 JSON; the type argument decides, no format sniffing.</summary>
+/// <summary>
+/// The default serializer: UTF-8 JSON for every value, byte payloads included, which means base64
+/// inside a JSON string. That is the wire format the library has always written, so entries survive
+/// an upgrade untouched. Use <see cref="RawByteSerializerProxy"/> to store byte payloads verbatim.
+/// </summary>
 public class SystemJsonByteSerializerProxy(JsonSerializerOptions? options = null) : ISerializerProxy<byte[]>
 {
-    public byte[]? Serialize(object? value) => value switch
-    {
-        null => null,
-        byte[] bytes => bytes,
-        ReadOnlyMemory<byte> memory => memory.ToArray(),
-        Memory<byte> memory => memory.ToArray(),
-        _ => JsonSerializer.SerializeToUtf8Bytes(value, options),
-    };
+    /// <summary>
+    /// Null goes through JSON like everything else, producing the four-byte <c>null</c> literal. A
+    /// null payload would reach StackExchange.Redis as <c>RedisValue.Null</c>, which throws on SADD
+    /// and on the multi-field HSET, and silently stores nothing on the single-value paths.
+    /// </summary>
+    public virtual byte[]? Serialize(object? value) =>
+        JsonSerializer.SerializeToUtf8Bytes(value, options);
 
-    public T? Deserialize<T>(byte[]? value)
-    {
-        if (value is null)
-        {
-            return default;
-        }
-        if (typeof(T) == typeof(byte[]))
-        {
-            return (T)(object)value;
-        }
-        if (typeof(T) == typeof(ReadOnlyMemory<byte>))
-        {
-            return (T)(object)new ReadOnlyMemory<byte>(value);
-        }
-        if (typeof(T) == typeof(Memory<byte>))
-        {
-            return (T)(object)new Memory<byte>(value);
-        }
-        if (value.Length == 0)
-        {
-            return default;
-        }
-        return JsonSerializer.Deserialize<T>(value, options);
-    }
+    public virtual T? Deserialize<T>(byte[]? value) =>
+        value is null or { Length: 0 } ? default : JsonSerializer.Deserialize<T>(value, options);
 
     public bool TryDeserialize<T>(string? value, out T? result)
     {

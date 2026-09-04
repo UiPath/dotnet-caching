@@ -7,7 +7,7 @@ using UiPath.Caching;
 using UiPath.Caching.Policies;
 using UiPath.Caching.Telemetry;
 using UiPath.Caching.Tests.Telemetry;
-using JsonSerializer = UiPath.Caching.SystemJsonSerializerProxy;
+using JsonSerializer = UiPath.Caching.SystemJsonByteSerializerProxy;
 
 namespace UiPath.Caching.Tests.Redis;
 
@@ -19,7 +19,7 @@ public class RedisHashCacheTests(ITestContextAccessor testContextAccessor) : IAs
     private string _prefix = default!;
     private IDatabase _database = default!;
     private ITransaction _transaction = default!;
-    private ISerializerProxy<RedisValue> _serializer = default!;
+    private JsonSerializer _serializer = default!;
     private ISystemClock _clock = default!;
     private RedisCacheOptions _redisCacheOptions = new();
     private DateTimeOffset _now = DateTimeOffset.UtcNow;
@@ -1427,7 +1427,7 @@ public class RedisHashCacheTests(ITestContextAccessor testContextAccessor) : IAs
             RedisKeyStrategyFactory = redisKeyStrategyFactory
         };
         _serializer = new JsonSerializer();
-        _fixture.Inject(_serializer);
+        _fixture.Inject<ISerializerProxy<byte[]>>(_serializer);
         _fixture.Inject<ICachingTelemetryProvider>(_telemetry);
         var opt = Options.Create(_redisCacheOptions);
         _fixture.Inject(opt);

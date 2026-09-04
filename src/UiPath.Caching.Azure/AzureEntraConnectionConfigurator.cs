@@ -1,3 +1,5 @@
+using StackExchange.Redis;
+
 namespace UiPath.Caching.Azure;
 
 /// <summary>Configures a Redis connection to authenticate with Microsoft Entra ID.</summary>

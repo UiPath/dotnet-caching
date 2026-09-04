@@ -19,7 +19,7 @@ public class RedisCacheTryAddTests(ITestContextAccessor testContextAccessor) : I
     private ISystemClock _clock = default!;
     private RedisCacheOptions _cacheOptions = default!;
     private IDatabase _database = default!;
-    private SystemJsonSerializerProxy _serializer = default!;
+    private SystemJsonByteSerializerProxy _serializer = default!;
     private readonly DateTimeOffset _now = DateTimeOffset.UtcNow;
     private CacheKey _cacheKey = default!;
     private RedisKey _redisKey = default!;
@@ -276,8 +276,8 @@ public class RedisCacheTryAddTests(ITestContextAccessor testContextAccessor) : I
         };
 
         _database = _fixture.Freeze<IDatabase>();
-        _serializer = new SystemJsonSerializerProxy();
-        _fixture.Inject<ISerializerProxy<RedisValue>>(_serializer);
+        _serializer = new SystemJsonByteSerializerProxy();
+        _fixture.Inject<ISerializerProxy<byte[]>>(_serializer);
         _fixture.Inject(Options.Create(_cacheOptions));
         _fixture.Inject(_cacheOptions);
         _fixture.Inject<ICachingTelemetryProvider>(_telemetry);

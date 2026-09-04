@@ -57,7 +57,7 @@ public static class QueueCacheCollectionExtensions
     /// <remarks>
     /// Prerequisite: the core caching and Redis services must already be registered (via
     /// <c>AddCaching(... builder.AddRedis())</c>). The provider resolves <see cref="IRedisConnector"/>,
-    /// <see cref="ISerializerProxy{RedisValue}"/>, <see cref="IResiliencePipelineProvider"/>,
+    /// <see cref="ISerializerProxy{byte[]}"/>, <see cref="IResiliencePipelineProvider"/>,
     /// <see cref="ICachingTelemetryProvider"/>, <see cref="ILoggerFactory"/>, the core cache options
     /// and <see cref="ICachePolicyFactory"/> from the container — the same set as the core
     /// <c>RedisCacheProvider</c>; if <c>AddCaching()</c> has not run, resolving

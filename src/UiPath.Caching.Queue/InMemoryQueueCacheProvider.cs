@@ -13,7 +13,7 @@ public sealed class InMemoryQueueCacheProvider : IQueueCacheProvider
 {
     private readonly InMemoryQueueCacheOptions _options;
     private readonly IMemoryCacheFactory _memoryCacheFactory;
-    private readonly ISerializerProxy<RedisValue> _serializer;
+    private readonly ISerializerProxy<byte[]> _serializer;
     private readonly ILocalLock _localLock;
     private readonly Lazy<MultilayerSetCache> _setCache;
 
@@ -24,7 +24,7 @@ public sealed class InMemoryQueueCacheProvider : IQueueCacheProvider
     public InMemoryQueueCacheProvider(
         IOptions<InMemoryQueueCacheOptions> optionsAccessor,
         IMemoryCacheFactory memoryCacheFactory,
-        ISerializerProxy<RedisValue> serializer,
+        ISerializerProxy<byte[]> serializer,
         ILocalLock localLock)
     {
         _options = optionsAccessor.Value;
