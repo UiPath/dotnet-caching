@@ -22,10 +22,10 @@ public static class HashCacheSyncExtensions
     public static IDictionary<string, T?> GetOrAdd<T>(this IHashCache<T> cache, CacheKey cacheKey, Func<IDictionary<string, T?>> generator, CancellationToken token = default)
         => cache.GetOrAddAsync(cacheKey, _ => Task.FromResult(generator()), token).AsTask().GetAwaiter().GetResult();
 
-    public static IDictionary<string, T?> GetOrAdd<T>(this IHashCache<T> cache, CacheKey cacheKey, Func<IDictionary<string, T?>> generator, TimeSpan? expiration, CancellationToken token = default)
+    public static IDictionary<string, T?> GetOrAdd<T>(this IHashCache<T> cache, CacheKey cacheKey, Func<IDictionary<string, T?>> generator, TimeSpan expiration, CancellationToken token = default)
         => cache.GetOrAddAsync(cacheKey, _ => Task.FromResult(generator()), expiration, token).AsTask().GetAwaiter().GetResult();
 
-    public static IDictionary<string, T?> GetOrAdd<T>(this IHashCache<T> cache, CacheKey cacheKey, Func<IDictionary<string, T?>> generator, DateTimeOffset? expiration, CancellationToken token = default)
+    public static IDictionary<string, T?> GetOrAdd<T>(this IHashCache<T> cache, CacheKey cacheKey, Func<IDictionary<string, T?>> generator, DateTimeOffset expiration, CancellationToken token = default)
         => cache.GetOrAddAsync(cacheKey, _ => Task.FromResult(generator()), expiration, token).AsTask().GetAwaiter().GetResult();
 
     public static ICacheEntry<IDictionary<string, T?>> GetCacheEntry<T>(this IHashCache<T> cache, CacheKey cacheKey, CancellationToken token = default)
@@ -34,10 +34,10 @@ public static class HashCacheSyncExtensions
     public static bool Set<T>(this IHashCache<T> cache, CacheKey cacheKey, IDictionary<string, T?> values, CancellationToken token = default)
         => cache.SetAsync(cacheKey, values, token).AsTask().GetAwaiter().GetResult();
 
-    public static bool Set<T>(this IHashCache<T> cache, CacheKey cacheKey, IDictionary<string, T?> values, TimeSpan? expiration, CancellationToken token = default)
+    public static bool Set<T>(this IHashCache<T> cache, CacheKey cacheKey, IDictionary<string, T?> values, TimeSpan expiration, CancellationToken token = default)
         => cache.SetAsync(cacheKey, values, expiration, token).AsTask().GetAwaiter().GetResult();
 
-    public static bool Set<T>(this IHashCache<T> cache, CacheKey cacheKey, IDictionary<string, T?> values, DateTimeOffset? expiration, CancellationToken token = default)
+    public static bool Set<T>(this IHashCache<T> cache, CacheKey cacheKey, IDictionary<string, T?> values, DateTimeOffset expiration, CancellationToken token = default)
         => cache.SetAsync(cacheKey, values, expiration, token).AsTask().GetAwaiter().GetResult();
 
     public static bool Set<T>(this IHashCache<T> cache, CacheKey cacheKey, IDictionary<string, T?> values, HashCacheEntryOptions options, CancellationToken token = default)
@@ -46,10 +46,10 @@ public static class HashCacheSyncExtensions
     public static bool Refresh<T>(this IHashCache<T> cache, CacheKey cacheKey, CancellationToken token = default)
         => cache.RefreshAsync(cacheKey, token).AsTask().GetAwaiter().GetResult();
 
-    public static bool Refresh<T>(this IHashCache<T> cache, CacheKey cacheKey, TimeSpan? expiration, CancellationToken token = default)
+    public static bool Refresh<T>(this IHashCache<T> cache, CacheKey cacheKey, TimeSpan expiration, CancellationToken token = default)
         => cache.RefreshAsync(cacheKey, expiration, token).AsTask().GetAwaiter().GetResult();
 
-    public static bool Refresh<T>(this IHashCache<T> cache, CacheKey cacheKey, DateTimeOffset? expiration, CancellationToken token = default)
+    public static bool Refresh<T>(this IHashCache<T> cache, CacheKey cacheKey, DateTimeOffset expiration, CancellationToken token = default)
         => cache.RefreshAsync(cacheKey, expiration, token).AsTask().GetAwaiter().GetResult();
 
     public static bool Refresh<T>(this IHashCache<T> cache, CacheKey cacheKey, HashCacheEntryOptions options, CancellationToken token = default)

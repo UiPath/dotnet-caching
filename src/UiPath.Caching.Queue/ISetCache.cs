@@ -6,6 +6,15 @@ namespace UiPath.Caching;
 /// insertion order and PopAsync removes a random member (Redis SPOP). Use the dedicated list
 /// caches when order matters.
 /// </summary>
+/// <remarks>
+/// <para><b>Expiration.</b> The <c>expiration</c> parameter is not nullable. A caller with nothing to
+/// say about lifetime calls the overload that has no <c>expiration</c> parameter and gets
+/// <see cref="CachePolicy.DistributedExpiration"/>, then the cache default; a caller that passes one
+/// means it, so a duration that is not positive — or a deadline that has already passed — is
+/// rejected with <see cref="ArgumentOutOfRangeException"/> rather than silently ignored. See
+/// <see cref="CacheExpiration"/>. The no-op implementations in this package read no argument at all
+/// and so enforce nothing.</para>
+/// </remarks>
 public interface ISetCache : IDisposable
 {
     string Name { get; }
@@ -21,10 +30,10 @@ public interface ISetCache : IDisposable
     ValueTask<long> AddAsync<T>(CacheKey cacheKey, IEnumerable<T> items, CachePolicy? policy, CancellationToken token = default);
 
     /// <inheritdoc cref="AddAsync{T}(CacheKey, T, CachePolicy?, CancellationToken)"/>
-    ValueTask<long> AddAsync<T>(CacheKey cacheKey, IEnumerable<T> items, TimeSpan? expiration, CachePolicy? policy, CancellationToken token = default);
+    ValueTask<long> AddAsync<T>(CacheKey cacheKey, IEnumerable<T> items, TimeSpan expiration, CachePolicy? policy, CancellationToken token = default);
 
     /// <inheritdoc cref="AddAsync{T}(CacheKey, T, CachePolicy?, CancellationToken)"/>
-    ValueTask<long> AddAsync<T>(CacheKey cacheKey, IEnumerable<T> items, DateTimeOffset? expiration, CachePolicy? policy, CancellationToken token = default);
+    ValueTask<long> AddAsync<T>(CacheKey cacheKey, IEnumerable<T> items, DateTimeOffset expiration, CachePolicy? policy, CancellationToken token = default);
 
     /// <summary>
     /// Removes and returns a random member of the set (Redis SPOP). The set is unordered, so this is

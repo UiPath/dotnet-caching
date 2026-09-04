@@ -1,4 +1,11 @@
 #nullable enable
+*REMOVED*UiPath.Caching.Redis.RedisCacheProvider.RedisCacheProvider(Microsoft.Extensions.Options.IOptions<UiPath.Caching.Redis.RedisCacheOptions!>! redisCacheOptions, Microsoft.Extensions.Options.IOptions<UiPath.Caching.CacheOptions!>! cacheOptions, UiPath.Caching.Redis.IRedisConnector! redis, UiPath.Caching.ISerializerProxy<StackExchange.Redis.RedisValue>! serializerProxy, UiPath.Caching.Policies.IResiliencePipelineProvider! resiliencePipelineProvider, UiPath.Caching.Telemetry.ICachingTelemetryProvider! cachingTelemetryProvider, Microsoft.Extensions.Logging.ILoggerFactory! loggerFactory, UiPath.Caching.ICachePolicyFactory! policyFactory) -> void
+*REMOVED*UiPath.Caching.SystemJsonSerializerProxy
+*REMOVED*UiPath.Caching.SystemJsonSerializerProxy.Deserialize<T>(StackExchange.Redis.RedisValue value) -> T?
+*REMOVED*UiPath.Caching.SystemJsonSerializerProxy.Serialize(object? value) -> StackExchange.Redis.RedisValue
+*REMOVED*UiPath.Caching.SystemJsonSerializerProxy.SystemJsonSerializerProxy(System.Text.Json.JsonSerializerOptions? options = null) -> void
+*REMOVED*UiPath.Caching.SystemJsonSerializerProxy.TryDeserialize<T>(object? value, out T? result) -> bool
+*REMOVED*UiPath.Caching.SystemJsonSerializerProxy.TryDeserialize<T>(string? value, out T? result) -> bool
 UiPath.Caching.Config.DistributedCacheCollectionExtensions
 UiPath.Caching.Distributed.UiPathDistributedCacheOptions
 UiPath.Caching.Distributed.UiPathDistributedCacheOptions.AllowUnboundedEntries.get -> bool
@@ -14,15 +21,14 @@ UiPath.Caching.Distributed.UiPathDistributedCacheOptions.RedisKeyDifferentiator.
 UiPath.Caching.Distributed.UiPathDistributedCacheOptions.RedisKeyStrategyFactory.get -> UiPath.Caching.Redis.IRedisKeyStrategyFactory?
 UiPath.Caching.Distributed.UiPathDistributedCacheOptions.RedisKeyStrategyFactory.set -> void
 UiPath.Caching.Distributed.UiPathDistributedCacheOptions.UiPathDistributedCacheOptions() -> void
+UiPath.Caching.Redis.RedisCacheBase.CallerDeadline(System.DateTimeOffset expiration, string? paramName = null) -> System.DateTimeOffset
+UiPath.Caching.Redis.RedisCacheBase.CallerDuration(System.DateTimeOffset expiration, string? paramName = null) -> System.TimeSpan
+UiPath.Caching.Redis.RedisCacheBase.OptionsDeadline(System.DateTimeOffset? expireTime, System.TimeSpan? timeToLive, UiPath.Caching.CachePolicy? policy) -> System.DateTimeOffset
+UiPath.Caching.Redis.RedisCacheBase.PolicyDeadline(UiPath.Caching.CachePolicy? policy) -> System.DateTimeOffset
+UiPath.Caching.Redis.RedisCacheBase.PolicyDuration(UiPath.Caching.CachePolicy? policy) -> System.TimeSpan
 UiPath.Caching.Redis.RedisCacheOptions.AwaitRefresh.get -> bool
 UiPath.Caching.Redis.RedisCacheOptions.AwaitRefresh.set -> void
+UiPath.Caching.Redis.RedisCacheProvider.RedisCacheProvider(Microsoft.Extensions.Options.IOptions<UiPath.Caching.Redis.RedisCacheOptions!>! redisCacheOptions, Microsoft.Extensions.Options.IOptions<UiPath.Caching.CacheOptions!>! cacheOptions, UiPath.Caching.Redis.IRedisConnector! redis, UiPath.Caching.ISerializerProxy<byte[]!>! serializerProxy, UiPath.Caching.Policies.IResiliencePipelineProvider! resiliencePipelineProvider, UiPath.Caching.Telemetry.ICachingTelemetryProvider! cachingTelemetryProvider, Microsoft.Extensions.Logging.ILoggerFactory! loggerFactory, UiPath.Caching.ICachePolicyFactory! policyFactory) -> void
 const UiPath.Caching.Config.DistributedCacheCollectionExtensions.DistributedCacheServiceKey = "UiPath.Caching.Distributed" -> string!
 static UiPath.Caching.Config.DistributedCacheCollectionExtensions.AddDistributedCache(this UiPath.Caching.Config.ICachingBuilder! builder, string! providerName, System.Action<UiPath.Caching.Distributed.UiPathDistributedCacheOptions!>? configure = null) -> UiPath.Caching.Config.ICachingBuilder!
-UiPath.Caching.Redis.RedisCacheProvider.RedisCacheProvider(Microsoft.Extensions.Options.IOptions<UiPath.Caching.Redis.RedisCacheOptions!>! redisCacheOptions, Microsoft.Extensions.Options.IOptions<UiPath.Caching.CacheOptions!>! cacheOptions, UiPath.Caching.Redis.IRedisConnector! redis, UiPath.Caching.ISerializerProxy<byte[]!>! serializerProxy, UiPath.Caching.Policies.IResiliencePipelineProvider! resiliencePipelineProvider, UiPath.Caching.Telemetry.ICachingTelemetryProvider! cachingTelemetryProvider, Microsoft.Extensions.Logging.ILoggerFactory! loggerFactory, UiPath.Caching.ICachePolicyFactory! policyFactory) -> void
-*REMOVED*UiPath.Caching.Redis.RedisCacheProvider.RedisCacheProvider(Microsoft.Extensions.Options.IOptions<UiPath.Caching.Redis.RedisCacheOptions!>! redisCacheOptions, Microsoft.Extensions.Options.IOptions<UiPath.Caching.CacheOptions!>! cacheOptions, UiPath.Caching.Redis.IRedisConnector! redis, UiPath.Caching.ISerializerProxy<StackExchange.Redis.RedisValue>! serializerProxy, UiPath.Caching.Policies.IResiliencePipelineProvider! resiliencePipelineProvider, UiPath.Caching.Telemetry.ICachingTelemetryProvider! cachingTelemetryProvider, Microsoft.Extensions.Logging.ILoggerFactory! loggerFactory, UiPath.Caching.ICachePolicyFactory! policyFactory) -> void
-*REMOVED*UiPath.Caching.SystemJsonSerializerProxy
-*REMOVED*UiPath.Caching.SystemJsonSerializerProxy.Deserialize<T>(StackExchange.Redis.RedisValue value) -> T?
-*REMOVED*UiPath.Caching.SystemJsonSerializerProxy.Serialize(object? value) -> StackExchange.Redis.RedisValue
-*REMOVED*UiPath.Caching.SystemJsonSerializerProxy.SystemJsonSerializerProxy(System.Text.Json.JsonSerializerOptions? options = null) -> void
-*REMOVED*UiPath.Caching.SystemJsonSerializerProxy.TryDeserialize<T>(object? value, out T? result) -> bool
-*REMOVED*UiPath.Caching.SystemJsonSerializerProxy.TryDeserialize<T>(string? value, out T? result) -> bool
+static UiPath.Caching.Redis.RedisCacheBase.CallerDuration(System.TimeSpan expiration, string? paramName = null) -> System.TimeSpan

@@ -41,7 +41,7 @@ public class MultilayerCachePerNamePolicyWiringTests : IAsyncLifetime
         await _innerCache.Received(1).SetAsync<string?>(
             _cacheKey,
             "v",
-            Arg.Is<DateTimeOffset?>(d => d.HasValue && d.Value - DateTimeOffset.UtcNow > policyTtl - TimeSpan.FromSeconds(5) && d.Value - DateTimeOffset.UtcNow < policyTtl + TimeSpan.FromSeconds(5)),
+            Arg.Is<DateTimeOffset>(d => d - DateTimeOffset.UtcNow > policyTtl - TimeSpan.FromSeconds(5) && d - DateTimeOffset.UtcNow < policyTtl + TimeSpan.FromSeconds(5)),
             Arg.Any<CachePolicy?>(),
             Arg.Any<CancellationToken>());
     }
@@ -62,7 +62,7 @@ public class MultilayerCachePerNamePolicyWiringTests : IAsyncLifetime
         await _innerCache.Received(1).SetAsync<string?>(
             _cacheKey,
             "v",
-            Arg.Is<DateTimeOffset?>(d => d.HasValue && d.Value - DateTimeOffset.UtcNow > callerTtl - TimeSpan.FromSeconds(5) && d.Value - DateTimeOffset.UtcNow < callerTtl + TimeSpan.FromSeconds(5)),
+            Arg.Is<DateTimeOffset>(d => d - DateTimeOffset.UtcNow > callerTtl - TimeSpan.FromSeconds(5) && d - DateTimeOffset.UtcNow < callerTtl + TimeSpan.FromSeconds(5)),
             Arg.Any<CachePolicy?>(),
             Arg.Any<CancellationToken>());
     }
@@ -87,7 +87,7 @@ public class MultilayerCachePerNamePolicyWiringTests : IAsyncLifetime
         await _innerCache.Received(1).SetAsync<string?>(
             _cacheKey,
             "v",
-            Arg.Is<DateTimeOffset?>(d => d.HasValue && d.Value - DateTimeOffset.UtcNow > defaultTtl - TimeSpan.FromSeconds(5) && d.Value - DateTimeOffset.UtcNow < defaultTtl + TimeSpan.FromSeconds(5)),
+            Arg.Is<DateTimeOffset>(d => d - DateTimeOffset.UtcNow > defaultTtl - TimeSpan.FromSeconds(5) && d - DateTimeOffset.UtcNow < defaultTtl + TimeSpan.FromSeconds(5)),
             Arg.Any<CachePolicy?>(),
             Arg.Any<CancellationToken>());
     }
@@ -111,7 +111,7 @@ public class MultilayerCachePerNamePolicyWiringTests : IAsyncLifetime
         await _innerCache.Received(1).SetAsync<string?>(
             _cacheKey,
             "v",
-            Arg.Is<DateTimeOffset?>(d => d.HasValue && d.Value - DateTimeOffset.UtcNow > optionsTtl - TimeSpan.FromSeconds(5) && d.Value - DateTimeOffset.UtcNow < optionsTtl + TimeSpan.FromSeconds(5)),
+            Arg.Is<DateTimeOffset>(d => d - DateTimeOffset.UtcNow > optionsTtl - TimeSpan.FromSeconds(5) && d - DateTimeOffset.UtcNow < optionsTtl + TimeSpan.FromSeconds(5)),
             Arg.Any<CachePolicy?>(),
             Arg.Any<CancellationToken>());
     }
@@ -125,7 +125,7 @@ public class MultilayerCachePerNamePolicyWiringTests : IAsyncLifetime
         _fixture.Inject(new CacheOptions { DefaultCachePolicy = defaultPolicy, AppShortName = "test" });
         _sut = null;
 
-        _innerCache.SetAsync<string?>(_cacheKey, Arg.Any<string?>(), Arg.Any<DateTimeOffset?>(), Arg.Any<CachePolicy?>(), Arg.Any<CancellationToken>())
+        _innerCache.SetAsync<string?>(_cacheKey, Arg.Any<string?>(), Arg.Any<DateTimeOffset>(), Arg.Any<CachePolicy?>(), Arg.Any<CancellationToken>())
             .Returns(true);
         _topic.PublishAsync(Arg.Any<ICacheEvent>(), Arg.Any<CancellationToken>())
             .Returns(_ => true);
@@ -135,7 +135,7 @@ public class MultilayerCachePerNamePolicyWiringTests : IAsyncLifetime
         await _innerCache.Received(1).SetAsync<string?>(
             _cacheKey,
             "v",
-            Arg.Is<DateTimeOffset?>(d => d.HasValue && d.Value - DateTimeOffset.UtcNow > defaultTtl - TimeSpan.FromSeconds(5) && d.Value - DateTimeOffset.UtcNow < defaultTtl + TimeSpan.FromSeconds(5)),
+            Arg.Is<DateTimeOffset>(d => d - DateTimeOffset.UtcNow > defaultTtl - TimeSpan.FromSeconds(5) && d - DateTimeOffset.UtcNow < defaultTtl + TimeSpan.FromSeconds(5)),
             Arg.Any<CachePolicy?>(),
             Arg.Any<CancellationToken>());
     }
@@ -144,7 +144,7 @@ public class MultilayerCachePerNamePolicyWiringTests : IAsyncLifetime
     public async Task SetAsync_falls_back_to_cache_options_DefaultExpiration_when_policy_omits_TTL()
     {
         // Default policy with no DistributedExpiration → SetAsync uses _multiLayerCacheOptions.DefaultExpiration.
-        _innerCache.SetAsync<string?>(_cacheKey, Arg.Any<string?>(), Arg.Any<DateTimeOffset?>(), Arg.Any<CachePolicy?>(), Arg.Any<CancellationToken>())
+        _innerCache.SetAsync<string?>(_cacheKey, Arg.Any<string?>(), Arg.Any<DateTimeOffset>(), Arg.Any<CachePolicy?>(), Arg.Any<CancellationToken>())
             .Returns(true);
         _topic.PublishAsync(Arg.Any<ICacheEvent>(), Arg.Any<CancellationToken>())
             .Returns(_ => true);
@@ -155,7 +155,7 @@ public class MultilayerCachePerNamePolicyWiringTests : IAsyncLifetime
         await _innerCache.Received(1).SetAsync<string?>(
             _cacheKey,
             "v",
-            Arg.Is<DateTimeOffset?>(d => d.HasValue && d.Value - DateTimeOffset.UtcNow > optionsTtl - TimeSpan.FromSeconds(5) && d.Value - DateTimeOffset.UtcNow < optionsTtl + TimeSpan.FromSeconds(5)),
+            Arg.Is<DateTimeOffset>(d => d - DateTimeOffset.UtcNow > optionsTtl - TimeSpan.FromSeconds(5) && d - DateTimeOffset.UtcNow < optionsTtl + TimeSpan.FromSeconds(5)),
             Arg.Any<CachePolicy?>(),
             Arg.Any<CancellationToken>());
     }
@@ -216,7 +216,7 @@ public class MultilayerCachePerNamePolicyWiringTests : IAsyncLifetime
         _fixture.Inject(new CacheOptions { DefaultCachePolicy = defaultPolicy, AppShortName = "test" });
         _sut = null;
 
-        _innerCache.RefreshAsync<string>(_cacheKey, Arg.Any<DateTimeOffset?>(), Arg.Any<CachePolicy?>(), Arg.Any<CancellationToken>())
+        _innerCache.RefreshAsync<string>(_cacheKey, Arg.Any<DateTimeOffset>(), Arg.Any<CachePolicy?>(), Arg.Any<CancellationToken>())
             .Returns(true);
         _topic.PublishAsync(Arg.Any<ICacheEvent>(), Arg.Any<CancellationToken>())
             .Returns(_ => true);
@@ -225,9 +225,8 @@ public class MultilayerCachePerNamePolicyWiringTests : IAsyncLifetime
 
         await _innerCache.Received(1).RefreshAsync<string>(
             _cacheKey,
-            Arg.Is<DateTimeOffset?>(d => d.HasValue
-                && d.Value - DateTimeOffset.UtcNow > policyTtl - TimeSpan.FromSeconds(5)
-                && d.Value - DateTimeOffset.UtcNow < policyTtl + TimeSpan.FromSeconds(5)), Arg.Any<CachePolicy?>(), Arg.Any<CancellationToken>());
+            Arg.Is<DateTimeOffset>(d => d - DateTimeOffset.UtcNow > policyTtl - TimeSpan.FromSeconds(5)
+                && d - DateTimeOffset.UtcNow < policyTtl + TimeSpan.FromSeconds(5)), Arg.Any<CachePolicy?>(), Arg.Any<CancellationToken>());
     }
 
     [Fact]
@@ -240,7 +239,7 @@ public class MultilayerCachePerNamePolicyWiringTests : IAsyncLifetime
         _fixture.Inject(new CacheOptions { DefaultCachePolicy = defaultPolicy, AppShortName = "test" });
         _sut = null;
 
-        _innerCache.SetAsync<string?>(_cacheKey, Arg.Any<string?>(), Arg.Any<DateTimeOffset?>(), Arg.Any<CachePolicy?>(), Arg.Any<CancellationToken>())
+        _innerCache.SetAsync<string?>(_cacheKey, Arg.Any<string?>(), Arg.Any<DateTimeOffset>(), Arg.Any<CachePolicy?>(), Arg.Any<CancellationToken>())
             .Returns(true);
         _topic.PublishAsync(Arg.Any<ICacheEvent>(), Arg.Any<CancellationToken>())
             .Returns(_ => true);
@@ -250,9 +249,8 @@ public class MultilayerCachePerNamePolicyWiringTests : IAsyncLifetime
         await _innerCache.Received(1).SetAsync<string?>(
             _cacheKey,
             "v",
-            Arg.Is<DateTimeOffset?>(d => d.HasValue
-                && d.Value - DateTimeOffset.UtcNow >= baseTtl - TimeSpan.FromSeconds(5)
-                && d.Value - DateTimeOffset.UtcNow <= baseTtl + maxJitter + TimeSpan.FromSeconds(5)),
+            Arg.Is<DateTimeOffset>(d => d - DateTimeOffset.UtcNow >= baseTtl - TimeSpan.FromSeconds(5)
+                && d - DateTimeOffset.UtcNow <= baseTtl + maxJitter + TimeSpan.FromSeconds(5)),
             Arg.Any<CachePolicy?>(),
             Arg.Any<CancellationToken>());
     }
@@ -267,7 +265,7 @@ public class MultilayerCachePerNamePolicyWiringTests : IAsyncLifetime
 
         var callerTtl = TimeSpan.FromMinutes(2);
 
-        _innerCache.SetAsync<string?>(_cacheKey, Arg.Any<string?>(), Arg.Any<DateTimeOffset?>(), Arg.Any<CachePolicy?>(), Arg.Any<CancellationToken>())
+        _innerCache.SetAsync<string?>(_cacheKey, Arg.Any<string?>(), Arg.Any<DateTimeOffset>(), Arg.Any<CachePolicy?>(), Arg.Any<CancellationToken>())
             .Returns(true);
         _topic.PublishAsync(Arg.Any<ICacheEvent>(), Arg.Any<CancellationToken>())
             .Returns(_ => true);
@@ -277,9 +275,8 @@ public class MultilayerCachePerNamePolicyWiringTests : IAsyncLifetime
         await _innerCache.Received(1).SetAsync<string?>(
             _cacheKey,
             "v",
-            Arg.Is<DateTimeOffset?>(d => d.HasValue
-                && d.Value - DateTimeOffset.UtcNow > callerTtl - TimeSpan.FromSeconds(5)
-                && d.Value - DateTimeOffset.UtcNow < callerTtl + TimeSpan.FromSeconds(5)),
+            Arg.Is<DateTimeOffset>(d => d - DateTimeOffset.UtcNow > callerTtl - TimeSpan.FromSeconds(5)
+                && d - DateTimeOffset.UtcNow < callerTtl + TimeSpan.FromSeconds(5)),
             Arg.Any<CachePolicy?>(),
             Arg.Any<CancellationToken>());
     }
@@ -304,9 +301,8 @@ public class MultilayerCachePerNamePolicyWiringTests : IAsyncLifetime
         await _innerCache.Received(1).SetAsync<string?>(
             _cacheKey,
             "v",
-            Arg.Is<DateTimeOffset?>(d => d.HasValue
-                && d.Value - DateTimeOffset.UtcNow >= baseTtl - TimeSpan.FromSeconds(5)
-                && d.Value - DateTimeOffset.UtcNow <= baseTtl + maxJitter + TimeSpan.FromSeconds(5)),
+            Arg.Is<DateTimeOffset>(d => d - DateTimeOffset.UtcNow >= baseTtl - TimeSpan.FromSeconds(5)
+                && d - DateTimeOffset.UtcNow <= baseTtl + maxJitter + TimeSpan.FromSeconds(5)),
             Arg.Any<CachePolicy?>(),
             Arg.Any<CancellationToken>());
     }
@@ -320,19 +316,18 @@ public class MultilayerCachePerNamePolicyWiringTests : IAsyncLifetime
         _fixture.Inject(new CacheOptions { DefaultCachePolicy = defaultPolicy, AppShortName = "test" });
         _sut = null;
 
-        _innerCache.SetAsync<string?>(_cacheKey, Arg.Any<string?>(), Arg.Any<DateTimeOffset?>(), Arg.Any<CachePolicy?>(), Arg.Any<CancellationToken>())
+        _innerCache.SetAsync<string?>(_cacheKey, Arg.Any<string?>(), Arg.Any<DateTimeOffset>(), Arg.Any<CachePolicy?>(), Arg.Any<CancellationToken>())
             .Returns(true);
         _topic.PublishAsync(Arg.Any<ICacheEvent>(), Arg.Any<CancellationToken>())
             .Returns(_ => true);
 
-        await Sut.SetAsync(_cacheKey, "v", (TimeSpan?)null, policy: null, TestContext.Current.CancellationToken);
+        await Sut.SetAsync(_cacheKey, "v", policy: null, TestContext.Current.CancellationToken);
 
         await _innerCache.Received(1).SetAsync<string?>(
             _cacheKey,
             "v",
-            Arg.Is<DateTimeOffset?>(d => d.HasValue
-                && d.Value - DateTimeOffset.UtcNow >= optionsTtl - TimeSpan.FromSeconds(5)
-                && d.Value - DateTimeOffset.UtcNow <= optionsTtl + maxJitter + TimeSpan.FromSeconds(5)),
+            Arg.Is<DateTimeOffset>(d => d - DateTimeOffset.UtcNow >= optionsTtl - TimeSpan.FromSeconds(5)
+                && d - DateTimeOffset.UtcNow <= optionsTtl + maxJitter + TimeSpan.FromSeconds(5)),
             Arg.Any<CachePolicy?>(),
             Arg.Any<CancellationToken>());
     }
@@ -347,19 +342,18 @@ public class MultilayerCachePerNamePolicyWiringTests : IAsyncLifetime
         _fixture.Inject(new CacheOptions { DefaultCachePolicy = defaultPolicy, AppShortName = "test" });
         _sut = null;
 
-        _innerCache.SetAsync<string?>(_cacheKey, Arg.Any<string?>(), Arg.Any<DateTimeOffset?>(), Arg.Any<CachePolicy?>(), Arg.Any<CancellationToken>())
+        _innerCache.SetAsync<string?>(_cacheKey, Arg.Any<string?>(), Arg.Any<DateTimeOffset>(), Arg.Any<CachePolicy?>(), Arg.Any<CancellationToken>())
             .Returns(true);
         _topic.PublishAsync(Arg.Any<ICacheEvent>(), Arg.Any<CancellationToken>())
             .Returns(_ => true);
 
-        await Sut.SetAsync(_cacheKey, "v", (DateTimeOffset?)null, policy: null, TestContext.Current.CancellationToken);
+        await Sut.SetAsync(_cacheKey, "v", policy: null, TestContext.Current.CancellationToken);
 
         await _innerCache.Received(1).SetAsync<string?>(
             _cacheKey,
             "v",
-            Arg.Is<DateTimeOffset?>(d => d.HasValue
-                && d.Value - DateTimeOffset.UtcNow >= baseTtl - TimeSpan.FromSeconds(5)
-                && d.Value - DateTimeOffset.UtcNow <= baseTtl + maxJitter + TimeSpan.FromSeconds(5)),
+            Arg.Is<DateTimeOffset>(d => d - DateTimeOffset.UtcNow >= baseTtl - TimeSpan.FromSeconds(5)
+                && d - DateTimeOffset.UtcNow <= baseTtl + maxJitter + TimeSpan.FromSeconds(5)),
             Arg.Any<CachePolicy?>(),
             Arg.Any<CancellationToken>());
     }
@@ -374,7 +368,7 @@ public class MultilayerCachePerNamePolicyWiringTests : IAsyncLifetime
         _fixture.Inject(new CacheOptions { DefaultCachePolicy = defaultPolicy, AppShortName = "test" });
         _sut = null;
 
-        _innerCache.SetAsync<string?>(Arg.Any<KeyValuePair<CacheKey, string?>[]>(), Arg.Any<DateTimeOffset?>(), Arg.Any<CachePolicy?>(), Arg.Any<CancellationToken>())
+        _innerCache.SetAsync<string?>(Arg.Any<KeyValuePair<CacheKey, string?>[]>(), Arg.Any<DateTimeOffset>(), Arg.Any<CachePolicy?>(), Arg.Any<CancellationToken>())
             .Returns(true);
         _topic.PublishAsync(Arg.Any<ICacheEvent>(), Arg.Any<CancellationToken>())
             .Returns(_ => true);
@@ -384,9 +378,8 @@ public class MultilayerCachePerNamePolicyWiringTests : IAsyncLifetime
 
         await _innerCache.Received(1).SetAsync<string?>(
             Arg.Any<KeyValuePair<CacheKey, string?>[]>(),
-            Arg.Is<DateTimeOffset?>(d => d.HasValue
-                && d.Value - DateTimeOffset.UtcNow >= baseTtl - TimeSpan.FromSeconds(5)
-                && d.Value - DateTimeOffset.UtcNow <= baseTtl + maxJitter + TimeSpan.FromSeconds(5)),
+            Arg.Is<DateTimeOffset>(d => d - DateTimeOffset.UtcNow >= baseTtl - TimeSpan.FromSeconds(5)
+                && d - DateTimeOffset.UtcNow <= baseTtl + maxJitter + TimeSpan.FromSeconds(5)),
             Arg.Any<CachePolicy?>(),
             Arg.Any<CancellationToken>());
     }
@@ -404,7 +397,7 @@ public class MultilayerCachePerNamePolicyWiringTests : IAsyncLifetime
 
         var ttls = new List<TimeSpan>();
         _innerCache.SetAsync<string?>(_cacheKey, Arg.Any<string?>(),
-                Arg.Do<DateTimeOffset?>(d => { if (d.HasValue) { ttls.Add(d.Value - DateTimeOffset.UtcNow); } }),
+                Arg.Do<DateTimeOffset>(d => ttls.Add(d - DateTimeOffset.UtcNow)),
                 Arg.Any<CachePolicy?>(), Arg.Any<CancellationToken>())
             .Returns(true);
         _topic.PublishAsync(Arg.Any<ICacheEvent>(), Arg.Any<CancellationToken>())
@@ -428,7 +421,7 @@ public class MultilayerCachePerNamePolicyWiringTests : IAsyncLifetime
         _fixture.Inject(new CacheOptions { DefaultCachePolicy = defaultPolicy, AppShortName = "test" });
         _sut = null;
 
-        _innerCache.SetAsync<string?>(_cacheKey, Arg.Any<string?>(), Arg.Any<DateTimeOffset?>(), Arg.Any<CachePolicy?>(), Arg.Any<CancellationToken>())
+        _innerCache.SetAsync<string?>(_cacheKey, Arg.Any<string?>(), Arg.Any<DateTimeOffset>(), Arg.Any<CachePolicy?>(), Arg.Any<CancellationToken>())
             .Returns(true);
         _topic.PublishAsync(Arg.Any<ICacheEvent>(), Arg.Any<CancellationToken>())
             .Returns(_ => true);
@@ -441,7 +434,7 @@ public class MultilayerCachePerNamePolicyWiringTests : IAsyncLifetime
 
         await _innerCache.Received(1).SetAsync<string?>(
             _cacheKey, "v",
-            Arg.Is<DateTimeOffset?>(d => d.HasValue && d.Value <= DateTimeOffset.MaxValue),
+            Arg.Is<DateTimeOffset>(d => d <= DateTimeOffset.MaxValue),
             Arg.Any<CachePolicy?>(), Arg.Any<CancellationToken>());
     }
 

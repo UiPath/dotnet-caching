@@ -79,30 +79,18 @@ internal sealed partial class MultilayerHashCache : MultilayerCacheBase, IHashCa
         return GetOrAddInternalAsync(cacheKey, generator, writeExpiration, duration, HashCacheSetOption.KeyReplace, policy, token);
     }
 
-    public ValueTask<IDictionary<string, T?>> GetOrAddAsync<T>(CacheKey cacheKey, Func<CancellationToken, Task<IDictionary<string, T?>>> generator, TimeSpan? expiration, CachePolicy? policy, CancellationToken token = default)
+    public ValueTask<IDictionary<string, T?>> GetOrAddAsync<T>(CacheKey cacheKey, Func<CancellationToken, Task<IDictionary<string, T?>>> generator, TimeSpan expiration, CachePolicy? policy, CancellationToken token = default)
     {
         ArgumentNullException.ThrowIfNull(generator);
-        policy ??= _defaultPolicy;
-        var duration = expiration ?? policy.DistributedExpiration;
-        return GetOrAddInternalAsync(cacheKey, generator, _clock.ToDateTimeOffset(ResolveWriteDuration(policy, expiration)), duration, HashCacheSetOption.KeyReplace, policy, token);
+        var (writeExpiration, duration) = CallerWrite(expiration);
+        return GetOrAddInternalAsync(cacheKey, generator, writeExpiration, duration, HashCacheSetOption.KeyReplace, policy ?? _defaultPolicy, token);
     }
 
-    public ValueTask<IDictionary<string, T?>> GetOrAddAsync<T>(CacheKey cacheKey, Func<CancellationToken, Task<IDictionary<string, T?>>> generator, DateTimeOffset? expiration, CachePolicy? policy, CancellationToken token = default)
+    public ValueTask<IDictionary<string, T?>> GetOrAddAsync<T>(CacheKey cacheKey, Func<CancellationToken, Task<IDictionary<string, T?>>> generator, DateTimeOffset expiration, CachePolicy? policy, CancellationToken token = default)
     {
         ArgumentNullException.ThrowIfNull(generator);
-        policy ??= _defaultPolicy;
-        TimeSpan? duration;
-        if (expiration.HasValue)
-        {
-            duration = expiration.Value - _clock.UtcNow;
-            if (duration is { } d && d <= TimeSpan.Zero) { duration = null; }
-        }
-        else
-        {
-            duration = policy.DistributedExpiration;
-            expiration = _clock.ToDateTimeOffset(ResolveWriteDuration(policy));
-        }
-        return GetOrAddInternalAsync(cacheKey, generator, expiration, duration, HashCacheSetOption.KeyReplace, policy, token);
+        var (writeExpiration, duration) = CallerWrite(expiration);
+        return GetOrAddInternalAsync(cacheKey, generator, writeExpiration, duration, HashCacheSetOption.KeyReplace, policy ?? _defaultPolicy, token);
     }
 
     /// <summary>
@@ -112,22 +100,11 @@ internal sealed partial class MultilayerHashCache : MultilayerCacheBase, IHashCa
     /// <c>_metadata_</c>-as-empty-marker is present; we collapse that to <see cref="Empty{T}"/> for the
     /// caller, who can always iterate the result without a null check.
     /// </summary>
-    public ValueTask<IDictionary<string, T?>> GetOrAddAsync<T>(CacheKey cacheKey, Func<CancellationToken, Task<IDictionary<string, T?>>> generator, DateTimeOffset? expiration, HashCacheSetOption? setOption, CachePolicy? policy, CancellationToken token = default)
+    public ValueTask<IDictionary<string, T?>> GetOrAddAsync<T>(CacheKey cacheKey, Func<CancellationToken, Task<IDictionary<string, T?>>> generator, DateTimeOffset expiration, HashCacheSetOption? setOption, CachePolicy? policy, CancellationToken token = default)
     {
         ArgumentNullException.ThrowIfNull(generator);
-        policy ??= _defaultPolicy;
-        TimeSpan? duration;
-        if (expiration.HasValue)
-        {
-            duration = expiration.Value - _clock.UtcNow;
-            if (duration is { } d && d <= TimeSpan.Zero) { duration = null; }
-        }
-        else
-        {
-            duration = policy.DistributedExpiration;
-            expiration = _clock.ToDateTimeOffset(ResolveWriteDuration(policy));
-        }
-        return GetOrAddInternalAsync(cacheKey, generator, expiration, duration, setOption ?? HashCacheSetOption.KeyReplace, policy, token);
+        var (writeExpiration, duration) = CallerWrite(expiration);
+        return GetOrAddInternalAsync(cacheKey, generator, writeExpiration, duration, setOption ?? HashCacheSetOption.KeyReplace, policy ?? _defaultPolicy, token);
     }
 
     private async ValueTask<IDictionary<string, T?>> GetOrAddInternalAsync<T>(CacheKey cacheKey, Func<CancellationToken, Task<IDictionary<string, T?>>> generator, DateTimeOffset? expiration, TimeSpan? effectiveDuration, HashCacheSetOption setOption, CachePolicy policy, CancellationToken token)
@@ -210,20 +187,18 @@ internal sealed partial class MultilayerHashCache : MultilayerCacheBase, IHashCa
     public ValueTask<bool> SetAsync<T>(CacheKey cacheKey, IDictionary<string, T?> values, CachePolicy? policy, CancellationToken token = default)
     {
         policy ??= _defaultPolicy;
-        return SetAsync(cacheKey, values, ResolveWriteDuration(policy), policy, token);
+        return SetCoreAsync(cacheKey, values, PolicyDeadline(policy), policy, token);
     }
 
-    public ValueTask<bool> SetAsync<T>(CacheKey cacheKey, IDictionary<string, T?> values, TimeSpan? expiration, CachePolicy? policy, CancellationToken token = default)
-    {
-        policy ??= _defaultPolicy;
-        return SetAsync(cacheKey, values, _clock.ToDateTimeOffset(ResolveWriteDuration(policy, expiration)), policy, token);
-    }
+    public ValueTask<bool> SetAsync<T>(CacheKey cacheKey, IDictionary<string, T?> values, TimeSpan expiration, CachePolicy? policy, CancellationToken token = default) =>
+        SetCoreAsync(cacheKey, values, CallerDeadline(expiration), policy ?? _defaultPolicy, token);
 
-    public async ValueTask<bool> SetAsync<T>(CacheKey cacheKey, IDictionary<string, T?> values, DateTimeOffset? expiration, CachePolicy? policy, CancellationToken token = default)
+    public ValueTask<bool> SetAsync<T>(CacheKey cacheKey, IDictionary<string, T?> values, DateTimeOffset expiration, CachePolicy? policy, CancellationToken token = default) =>
+        SetCoreAsync(cacheKey, values, CallerDeadline(expiration), policy ?? _defaultPolicy, token);
+
+    private async ValueTask<bool> SetCoreAsync<T>(CacheKey cacheKey, IDictionary<string, T?> values, DateTimeOffset expiration, CachePolicy policy, CancellationToken token)
     {
         NotCacheableException.ThrowIfNotCacheable<T>();
-        policy ??= _defaultPolicy;
-        expiration ??= _clock.ToDateTimeOffset(ResolveWriteDuration(policy));
         var options = _entryBuilder.BuildEntryOptions<T>(cacheKey, expiration, token: token);
         if (IsNullOrEmpty(values) && !_multiLayerCacheOptions.CacheNullValues)
         {
@@ -290,20 +265,14 @@ internal sealed partial class MultilayerHashCache : MultilayerCacheBase, IHashCa
         return RemoveAsync<T>(_entryBuilder.BuildEntryOptions<T>(cacheKey, default, token: token));
     }
 
-    public ValueTask<bool> RefreshAsync<T>(CacheKey cacheKey, CachePolicy? policy, CancellationToken token = default)
-    {
-        policy ??= _defaultPolicy;
-        return RefreshAsync<T>(cacheKey, ResolveWriteDuration(policy), policy, token);
-    }
+    public ValueTask<bool> RefreshAsync<T>(CacheKey cacheKey, CachePolicy? policy, CancellationToken token = default) =>
+        RefreshAsync<T>(cacheKey, new HashCacheEntryOptions(), policy, token);
 
-    public ValueTask<bool> RefreshAsync<T>(CacheKey cacheKey, TimeSpan? expiration, CachePolicy? policy, CancellationToken token = default)
-    {
-        policy ??= _defaultPolicy;
-        return RefreshAsync<T>(cacheKey, _clock.ToDateTimeOffset(ResolveWriteDuration(policy, expiration)), policy, token);
-    }
+    public ValueTask<bool> RefreshAsync<T>(CacheKey cacheKey, TimeSpan expiration, CachePolicy? policy, CancellationToken token = default) =>
+        RefreshAsync<T>(cacheKey, new HashCacheEntryOptions(CallerDeadline(expiration)), policy, token);
 
-    public ValueTask<bool> RefreshAsync<T>(CacheKey cacheKey, DateTimeOffset? expiration, CachePolicy? policy, CancellationToken token = default) =>
-        RefreshAsync<T>(cacheKey, new HashCacheEntryOptions(expiration), policy, token);
+    public ValueTask<bool> RefreshAsync<T>(CacheKey cacheKey, DateTimeOffset expiration, CachePolicy? policy, CancellationToken token = default) =>
+        RefreshAsync<T>(cacheKey, new HashCacheEntryOptions(CallerDeadline(expiration)), policy, token);
 
     public async ValueTask<bool> RefreshAsync<T>(CacheKey cacheKey, HashCacheEntryOptions options, CachePolicy? policy, CancellationToken token = default)
     {

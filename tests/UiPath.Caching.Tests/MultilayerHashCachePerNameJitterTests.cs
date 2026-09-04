@@ -99,7 +99,7 @@ public class MultilayerHashCachePerNameJitterTests(ITestContextAccessor testCont
             .Returns(_ => true);
 
         var values = new Dictionary<string, string?> { ["f"] = "v" };
-        await Sut.SetAsync(_cacheKey, values, (TimeSpan?)null, policy: null, token);
+        await Sut.SetAsync(_cacheKey, values, policy: null, token);
 
         await _innerCache.Received(1).SetAsync<string?>(
             _cacheKey,
@@ -127,7 +127,7 @@ public class MultilayerHashCachePerNameJitterTests(ITestContextAccessor testCont
         _topic.PublishAsync(Arg.Any<ICacheEvent>(), Arg.Any<CancellationToken>())
             .Returns(_ => true);
 
-        await Sut.RefreshAsync<string>(_cacheKey, (TimeSpan?)null, policy: null, token);
+        await Sut.RefreshAsync<string>(_cacheKey, policy: null, token);
 
         await _innerCache.Received(1).RefreshAsync<string>(
             _cacheKey,

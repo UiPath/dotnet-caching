@@ -274,7 +274,7 @@ public class MultilayerCacheBatchGetOrAddTests(ITestContextAccessor testContextA
         _innerSetCalls.Should().HaveCount(2);
         await _innerCache.Received(1).SetAsync<string?>(
             Arg.Any<KeyValuePair<CacheKey, string?>[]>(),
-            Arg.Is<DateTimeOffset?>(d => d.HasValue && d.Value == expiration),
+            Arg.Is<DateTimeOffset>(d => d == expiration),
             Arg.Any<CachePolicy?>(),
             Arg.Any<CancellationToken>());
     }
@@ -345,7 +345,7 @@ public class MultilayerCacheBatchGetOrAddTests(ITestContextAccessor testContextA
                         : new TestCacheEntry<string?> { Value = null, Expiration = DateTimeOffset.MinValue }))
                 .ToArray());
 
-        _innerCache.SetAsync<string?>(Arg.Any<KeyValuePair<CacheKey, string?>[]>(), Arg.Any<DateTimeOffset?>(), Arg.Any<CachePolicy?>(), Arg.Any<CancellationToken>())
+        _innerCache.SetAsync<string?>(Arg.Any<KeyValuePair<CacheKey, string?>[]>(), Arg.Any<DateTimeOffset>(), Arg.Any<CachePolicy?>(), Arg.Any<CancellationToken>())
             .Returns(c =>
             {
                 var pairs = c.Arg<KeyValuePair<CacheKey, string?>[]>()!;

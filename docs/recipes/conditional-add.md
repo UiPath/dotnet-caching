@@ -108,9 +108,11 @@ hide which stores can actually arbitrate. An implementation says what its own st
   change either side of the call anyway. `IDistributedLock.TryAcquireAsync` does not either; it
   documents backend-unavailable and already-held as the same `null`. If the two readings need
   different handling, you need a primitive with a richer result than a `bool`.
-- **A non-positive TTL claims nothing.** An expiration that is not in the future returns `false` on
-  every tier rather than a win, because the entry would be evicted on arrival and the next caller
-  would be told it won too.
+- **A non-positive TTL is a bad argument, not a loss.** `expiration` is non-nullable, so a duration
+  that is not strictly positive — or a deadline already past — raises `ArgumentOutOfRangeException`
+  and nothing is written. Returning `false` would be indistinguishable from "somebody else holds the
+  key", which is exactly the confusion the ambiguity above asks you to design around. To inherit the
+  policy's TTL, call the overload that has no `expiration` parameter.
 - **Caching switched off means everyone wins.** `NullCache.TryAddAsync` returns `true` — it retains
   nothing, so no key pre-exists and nobody loses — and it is what `ICacheFactory.CreateCache` falls
   back to when the requested provider is missing or has `Enabled=false`. A mistyped provider name

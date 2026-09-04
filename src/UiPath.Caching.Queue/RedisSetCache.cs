@@ -42,27 +42,25 @@ public sealed partial class RedisSetCache : RedisCacheBase, ISetCache
     {
         NotCacheableException.ThrowIfNotCacheable<T>();
         var value = _serializer.Serialize(item);
-        var added = await AddManyInnerAsync<T>(cacheKey, [value], ResolveExpiration((DateTimeOffset?)null, policy), token).ConfigureAwait(false);
+        var added = await AddManyInnerAsync<T>(cacheKey, [value], PolicyDeadline(policy), token).ConfigureAwait(false);
         return added > 0;
     }
 
     public ValueTask<long> AddAsync<T>(CacheKey cacheKey, IEnumerable<T> items, CachePolicy? policy, CancellationToken token = default) =>
-        AddAsync(cacheKey, items, expiration: (TimeSpan?)null, policy, token);
+        AddCoreAsync<T>(cacheKey, items, PolicyDeadline(policy), token);
 
-    public ValueTask<long> AddAsync<T>(CacheKey cacheKey, IEnumerable<T> items, TimeSpan? expiration, CachePolicy? policy, CancellationToken token = default)
+    public ValueTask<long> AddAsync<T>(CacheKey cacheKey, IEnumerable<T> items, TimeSpan expiration, CachePolicy? policy, CancellationToken token = default) =>
+        AddCoreAsync<T>(cacheKey, items, Clock.UtcNow.Add(CallerDuration(expiration)), token);
+
+    public ValueTask<long> AddAsync<T>(CacheKey cacheKey, IEnumerable<T> items, DateTimeOffset expiration, CachePolicy? policy, CancellationToken token = default) =>
+        AddCoreAsync<T>(cacheKey, items, CallerDeadline(expiration), token);
+
+    private ValueTask<long> AddCoreAsync<T>(CacheKey cacheKey, IEnumerable<T> items, DateTimeOffset expiration, CancellationToken token)
     {
         NotCacheableException.ThrowIfNotCacheable<T>();
         ArgumentNullException.ThrowIfNull(items);
         var values = items.Select(i => (RedisValue)_serializer.Serialize(i)).ToArray();
-        return AddManyInnerAsync<T>(cacheKey, values, Clock.ToDateTimeOffset(ResolveExpiration(expiration, policy)), token);
-    }
-
-    public ValueTask<long> AddAsync<T>(CacheKey cacheKey, IEnumerable<T> items, DateTimeOffset? expiration, CachePolicy? policy, CancellationToken token = default)
-    {
-        NotCacheableException.ThrowIfNotCacheable<T>();
-        ArgumentNullException.ThrowIfNull(items);
-        var values = items.Select(i => (RedisValue)_serializer.Serialize(i)).ToArray();
-        return AddManyInnerAsync<T>(cacheKey, values, ResolveExpiration(expiration, policy), token);
+        return AddManyInnerAsync<T>(cacheKey, values, expiration, token);
     }
 
     private async ValueTask<long> AddManyInnerAsync<T>(CacheKey cacheKey, RedisValue[] values, DateTimeOffset expiration, CancellationToken token)

@@ -46,7 +46,7 @@ public class MultilayerCacheGetOrAddLockTests(ITestContextAccessor testContextAc
         string? storedValue = null;
         _innerCache.GetCacheEntryAsync<string>((CacheKey)cacheKey, Arg.Any<CachePolicy?>(), Arg.Any<CancellationToken>())
             .Returns(_ => new TestCacheEntry<string?> { Value = storedValue });
-        _innerCache.SetAsync<string?>((CacheKey)cacheKey, Arg.Any<string?>(), Arg.Any<DateTimeOffset?>(), Arg.Any<CachePolicy?>(), Arg.Any<CancellationToken>())
+        _innerCache.SetAsync<string?>((CacheKey)cacheKey, Arg.Any<string?>(), Arg.Any<DateTimeOffset>(), Arg.Any<CachePolicy?>(), Arg.Any<CancellationToken>())
             .Returns(c => { storedValue = c.Arg<string?>(); return true; });
 
         var generatorCalls = 0;

@@ -1,3 +1,4 @@
+using System.Runtime.CompilerServices;
 using UiPath.Caching.Config;
 using UiPath.Caching.Telemetry;
 
@@ -53,11 +54,42 @@ public abstract class RedisCacheBase : IConnectionState, IDisposable
 
     protected CacheClock Clock { get; }
 
-    protected TimeSpan? ResolveExpiration(TimeSpan? expiration, CachePolicy? policy) =>
-        expiration ?? policy?.DistributedExpiration ?? DefaultExpiration;
+    /// <summary>
+    /// Write duration for a call that carried no <c>expiration</c>: the policy's L2 TTL, then the
+    /// cache default, then <see cref="TimeSpan.MaxValue"/> for "no TTL".
+    /// </summary>
+    protected TimeSpan PolicyDuration(CachePolicy? policy) =>
+        Clock.ToTimeSpan(policy?.DistributedExpiration ?? DefaultExpiration);
 
-    protected DateTimeOffset ResolveExpiration(DateTimeOffset? expiration, CachePolicy? policy) =>
-        expiration ?? Clock.ToDateTimeOffset(policy?.DistributedExpiration ?? DefaultExpiration);
+    /// <summary>
+    /// Write deadline for a call that carried no <c>expiration</c>, resolved the same way as
+    /// <see cref="PolicyDuration"/> and yielding <see cref="DateTimeOffset.MaxValue"/> for "no TTL".
+    /// </summary>
+    protected DateTimeOffset PolicyDeadline(CachePolicy? policy) =>
+        Clock.ToDateTimeOffset(policy?.DistributedExpiration ?? DefaultExpiration);
+
+    /// <summary>
+    /// Write deadline carried by an entry-options object. <see cref="HashCacheEntryOptions"/> keeps
+    /// its lifetime fields nullable — an options object is the one seam where <c>null</c> still
+    /// means "inherit" — so this resolves <c>ExpireTime</c>, then <c>TimeToLive</c>, then the policy
+    /// and cache defaults.
+    /// </summary>
+    protected DateTimeOffset OptionsDeadline(DateTimeOffset? expireTime, TimeSpan? timeToLive, CachePolicy? policy) =>
+        expireTime.HasValue
+            ? Clock.ToDateTimeOffset(expireTime)
+            : Clock.ToDateTimeOffset(timeToLive ?? policy?.DistributedExpiration ?? DefaultExpiration);
+
+    /// <summary>Validates a caller-supplied duration.</summary>
+    protected static TimeSpan CallerDuration(TimeSpan expiration, [CallerArgumentExpression(nameof(expiration))] string? paramName = null) =>
+        CacheExpiration.ThrowIfNotPositive(expiration, paramName);
+
+    /// <summary>Validates a caller-supplied deadline and turns it into a duration from the cache's now.</summary>
+    protected TimeSpan CallerDuration(DateTimeOffset expiration, [CallerArgumentExpression(nameof(expiration))] string? paramName = null) =>
+        CacheExpiration.ToDuration(expiration, Clock.UtcNow, paramName);
+
+    /// <summary>Validates a caller-supplied deadline.</summary>
+    protected DateTimeOffset CallerDeadline(DateTimeOffset expiration, [CallerArgumentExpression(nameof(expiration))] string? paramName = null) =>
+        CacheExpiration.ThrowIfNotFuture(expiration, Clock.UtcNow, paramName);
 
     public event EventHandler? OnConnectionFailed
     {

@@ -24,22 +24,22 @@ public static class HashCacheExtensions
     public static ValueTask<IDictionary<string, T?>> GetOrAddAsync<T>(this IHashCache cache, CacheKey cacheKey, Func<CancellationToken, Task<IDictionary<string, T?>>> generator, CancellationToken token = default)
         => cache.GetOrAddAsync<T>(cacheKey, generator, (CachePolicy?)null, token);
 
-    public static ValueTask<IDictionary<string, T?>> GetOrAddAsync<T>(this IHashCache cache, CacheKey cacheKey, Func<CancellationToken, Task<IDictionary<string, T?>>> generator, TimeSpan? expiration, CancellationToken token = default)
+    public static ValueTask<IDictionary<string, T?>> GetOrAddAsync<T>(this IHashCache cache, CacheKey cacheKey, Func<CancellationToken, Task<IDictionary<string, T?>>> generator, TimeSpan expiration, CancellationToken token = default)
         => cache.GetOrAddAsync<T>(cacheKey, generator, expiration, null, token);
 
-    public static ValueTask<IDictionary<string, T?>> GetOrAddAsync<T>(this IHashCache cache, CacheKey cacheKey, Func<CancellationToken, Task<IDictionary<string, T?>>> generator, DateTimeOffset? expiration, CancellationToken token = default)
+    public static ValueTask<IDictionary<string, T?>> GetOrAddAsync<T>(this IHashCache cache, CacheKey cacheKey, Func<CancellationToken, Task<IDictionary<string, T?>>> generator, DateTimeOffset expiration, CancellationToken token = default)
         => cache.GetOrAddAsync<T>(cacheKey, generator, expiration, (CachePolicy?)null, token);
 
-    public static ValueTask<IDictionary<string, T?>> GetOrAddAsync<T>(this IHashCache cache, CacheKey cacheKey, Func<CancellationToken, Task<IDictionary<string, T?>>> generator, DateTimeOffset? expiration, HashCacheSetOption? setOption, CancellationToken token = default)
+    public static ValueTask<IDictionary<string, T?>> GetOrAddAsync<T>(this IHashCache cache, CacheKey cacheKey, Func<CancellationToken, Task<IDictionary<string, T?>>> generator, DateTimeOffset expiration, HashCacheSetOption? setOption, CancellationToken token = default)
         => cache.GetOrAddAsync<T>(cacheKey, generator, expiration, setOption, null, token);
 
     public static ValueTask<bool> SetAsync<T>(this IHashCache cache, CacheKey cacheKey, IDictionary<string, T?> values, CancellationToken token = default)
         => cache.SetAsync<T>(cacheKey, values, (CachePolicy?)null, token);
 
-    public static ValueTask<bool> SetAsync<T>(this IHashCache cache, CacheKey cacheKey, IDictionary<string, T?> values, TimeSpan? expiration, CancellationToken token = default)
+    public static ValueTask<bool> SetAsync<T>(this IHashCache cache, CacheKey cacheKey, IDictionary<string, T?> values, TimeSpan expiration, CancellationToken token = default)
         => cache.SetAsync<T>(cacheKey, values, expiration, null, token);
 
-    public static ValueTask<bool> SetAsync<T>(this IHashCache cache, CacheKey cacheKey, IDictionary<string, T?> values, DateTimeOffset? expiration, CancellationToken token = default)
+    public static ValueTask<bool> SetAsync<T>(this IHashCache cache, CacheKey cacheKey, IDictionary<string, T?> values, DateTimeOffset expiration, CancellationToken token = default)
         => cache.SetAsync<T>(cacheKey, values, expiration, null, token);
 
     public static ValueTask<bool> SetAsync<T>(this IHashCache cache, CacheKey cacheKey, IDictionary<string, T?> values, HashCacheEntryOptions options, CancellationToken token = default)
@@ -48,10 +48,10 @@ public static class HashCacheExtensions
     public static ValueTask<bool> RefreshAsync<T>(this IHashCache cache, CacheKey cacheKey, CancellationToken token = default)
         => cache.RefreshAsync<T>(cacheKey, (CachePolicy?)null, token);
 
-    public static ValueTask<bool> RefreshAsync<T>(this IHashCache cache, CacheKey cacheKey, TimeSpan? expiration, CancellationToken token = default)
+    public static ValueTask<bool> RefreshAsync<T>(this IHashCache cache, CacheKey cacheKey, TimeSpan expiration, CancellationToken token = default)
         => cache.RefreshAsync<T>(cacheKey, expiration, null, token);
 
-    public static ValueTask<bool> RefreshAsync<T>(this IHashCache cache, CacheKey cacheKey, DateTimeOffset? expiration, CancellationToken token = default)
+    public static ValueTask<bool> RefreshAsync<T>(this IHashCache cache, CacheKey cacheKey, DateTimeOffset expiration, CancellationToken token = default)
         => cache.RefreshAsync<T>(cacheKey, expiration, null, token);
 
     public static ValueTask<bool> RefreshAsync<T>(this IHashCache cache, CacheKey cacheKey, HashCacheEntryOptions options, CancellationToken token = default)

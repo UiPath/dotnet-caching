@@ -676,11 +676,11 @@ public class RedisCacheTests(ITestContextAccessor testContextAccessor) : IAsyncL
         _cacheOptions.DefaultExpiration = null;
         if (expirationType == typeof(TimeSpan))
         {
-            await Sut.RefreshAsync<string>(_cacheKey, default(TimeSpan?), token: testContextAccessor.Current.CancellationToken);
+            await Sut.RefreshAsync<string>(_cacheKey, policy: null, token: testContextAccessor.Current.CancellationToken);
         }
         else if (expirationType == typeof(DateTimeOffset))
         {
-            await Sut.RefreshAsync<string>(_cacheKey, default(DateTimeOffset?), token: testContextAccessor.Current.CancellationToken);
+            await Sut.RefreshAsync<string>(_cacheKey, policy: null, token: testContextAccessor.Current.CancellationToken);
         }
         else
         {
@@ -701,7 +701,7 @@ public class RedisCacheTests(ITestContextAccessor testContextAccessor) : IAsyncL
                 actualExpiration = ci.Arg<DateTime?>();
                 return _fixture.Create<bool>();
             });
-        await Sut.GetOrAddAsync(_cacheKey, _ => Task.FromResult(_fixture.Create<string?>()), expiration: default(DateTimeOffset?), token: testContextAccessor.Current.CancellationToken);
+        await Sut.GetOrAddAsync(_cacheKey, _ => Task.FromResult(_fixture.Create<string?>()), token: testContextAccessor.Current.CancellationToken);
         var expectedExpiration = _clock.UtcNow.Add(_cacheOptions.DefaultExpiration!.Value).Subtract(_clock.UtcNow);
 
         await _database.Received(1).StringSetAsync(_redisKey, Arg.Any<RedisValue>(), Arg.Is<TimeSpan?>(t => expectedExpiration == t), When.Always, CommandFlags.DemandMaster);
@@ -834,9 +834,9 @@ public class RedisCacheTests(ITestContextAccessor testContextAccessor) : IAsyncL
                 actualExpiration = ci.Arg<DateTime?>();
                 return _fixture.Create<bool>();
             });
-        DateTimeOffset? expiration = _fixture.Create<DateTimeOffset>();
-        await Sut.GetOrAddAsync(_cacheKey, _ => Task.FromResult(_fixture.Create<string?>()), expiration: expiration, token: testContextAccessor.Current.CancellationToken);
-        var expectedExpiration = expiration.Value.Subtract(_clock.UtcNow);
+        var expiration = _clock.UtcNow.AddMinutes(5);
+        await Sut.GetOrAddAsync(_cacheKey, _ => Task.FromResult(_fixture.Create<string?>()), expiration: expiration, policy: null, token: testContextAccessor.Current.CancellationToken);
+        var expectedExpiration = expiration.Subtract(_clock.UtcNow);
         await _database.Received(1).StringSetAsync(_redisKey, Arg.Any<RedisValue>(), Arg.Is<TimeSpan?>(t => expectedExpiration == t), When.Always, CommandFlags.DemandMaster);
     }
 
@@ -845,17 +845,9 @@ public class RedisCacheTests(ITestContextAccessor testContextAccessor) : IAsyncL
     [InlineData(5)]
     public async Task Refresh_redis_exception(int? expirationMinutes)
     {
-        TimeSpan? expiration = null;
-        TimeSpan expectedExpiration;
-        if (expirationMinutes.HasValue)
-        {
-            expiration = TimeSpan.FromMinutes(expirationMinutes.Value);
-            expectedExpiration = expiration.Value;
-        }
-        else
-        {
-            expectedExpiration = _cacheOptions.DefaultExpiration ?? TimeSpan.MinValue;
-        }
+        var expectedExpiration = expirationMinutes.HasValue
+            ? TimeSpan.FromMinutes(expirationMinutes.Value)
+            : _cacheOptions.DefaultExpiration ?? TimeSpan.MinValue;
 
         DateTime? actualExpiration = default;
         _database.KeyExpireAsync(_redisKey, Arg.Any<DateTime?>(), CommandFlags.DemandMaster| CommandFlags.FireAndForget)
@@ -864,7 +856,11 @@ public class RedisCacheTests(ITestContextAccessor testContextAccessor) : IAsyncL
                     actualExpiration = ci.Arg<DateTime?>();
                     return new RedisException("test");
                 });
-        await Sut.RefreshAsync<string>(_cacheKey, expiration, token: testContextAccessor.Current.CancellationToken);
+        // No expiration minutes means the caller omits the argument entirely, which is now the
+        // only way to ask for the policy default.
+        await (expirationMinutes.HasValue
+            ? Sut.RefreshAsync<string>(_cacheKey, TimeSpan.FromMinutes(expirationMinutes.Value), policy: null, testContextAccessor.Current.CancellationToken)
+            : Sut.RefreshAsync<string>(_cacheKey, policy: null, testContextAccessor.Current.CancellationToken));
         actualExpiration.GetValueOrDefault().Subtract(_now.UtcDateTime).Should().BeCloseTo(expectedExpiration, TimeSpan.FromSeconds(10));
     }
 
@@ -1234,16 +1230,23 @@ public class RedisCacheTests(ITestContextAccessor testContextAccessor) : IAsyncL
         await _database.DidNotReceive().StringSetAsync(_redisKey, Arg.Any<RedisValue>(), Arg.Any<TimeSpan?>(), Arg.Any<When>(), Arg.Any<CommandFlags>());
     }
 
+    /// <summary>
+    /// The write used to accept a deadline in the past and turn it into a delete. Expiration is no
+    /// longer nullable, so a past deadline is a bad argument rather than a shorthand, and it is
+    /// rejected before the key is touched at all. (<c>SetInternalAsync</c> still guards a
+    /// non-positive resolved duration — that path is now only reachable from a misconfigured
+    /// provider default, not from a caller.)
+    /// </summary>
     [Fact]
-    public async Task SetAsync_null_with_past_expiration_deletes_even_when_CacheNullValues_true()
+    public async Task SetAsync_rejects_a_past_expiration_even_when_CacheNullValues_true()
     {
         _cacheOptions.CacheNullValues = true;
         var pastExpiration = _clock.UtcNow.AddMinutes(-5);
 
-        var ok = await Sut.SetAsync<string>(_cacheKey, value: null, pastExpiration, token: testContextAccessor.Current.CancellationToken);
+        var act = async () => await Sut.SetAsync<string>(_cacheKey, value: null, pastExpiration, token: testContextAccessor.Current.CancellationToken);
 
-        ok.Should().BeTrue();
-        await _database.Received().KeyDeleteAsync(_redisKey, Arg.Any<CommandFlags>());
+        (await act.Should().ThrowAsync<ArgumentOutOfRangeException>()).And.ParamName.Should().Be("expiration");
+        await _database.DidNotReceive().KeyDeleteAsync(_redisKey, Arg.Any<CommandFlags>());
         await _database.DidNotReceive().StringSetAsync(_redisKey, Arg.Any<RedisValue>(), Arg.Any<TimeSpan?>(), Arg.Any<When>(), Arg.Any<CommandFlags>());
     }
 
@@ -1392,7 +1395,7 @@ public class RedisCacheTests(ITestContextAccessor testContextAccessor) : IAsyncL
         }
         else if (expirationType == typeof(DateTimeOffset))
         {
-            actualResponse = await Sut.SetAsync(_cacheKey, value, _fixture.Create<DateTimeOffset>(), token: testContextAccessor.Current.CancellationToken);
+            actualResponse = await Sut.SetAsync(_cacheKey, value, DateTimeOffset.UtcNow.AddMinutes(5), token: testContextAccessor.Current.CancellationToken);
         }
         else
         {
@@ -1420,7 +1423,7 @@ public class RedisCacheTests(ITestContextAccessor testContextAccessor) : IAsyncL
         }
         else if (expirationType == typeof(DateTimeOffset))
         {
-            actualResponse = await Sut.SetAsync(new KeyValuePair<CacheKey, string?>[] { new(_cacheKey, value), new(_multiKey, value) }, _fixture.Create<DateTimeOffset>(), policy: null, token: testContextAccessor.Current.CancellationToken);
+            actualResponse = await Sut.SetAsync(new KeyValuePair<CacheKey, string?>[] { new(_cacheKey, value), new(_multiKey, value) }, DateTimeOffset.UtcNow.AddMinutes(5), policy: null, token: testContextAccessor.Current.CancellationToken);
         }
         else
         {

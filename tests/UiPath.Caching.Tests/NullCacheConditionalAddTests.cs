@@ -15,15 +15,14 @@ public class NullCacheConditionalAddTests
         (await sut.TryAddAsync("k", "second", policy: null, token: Ct)).Should().BeTrue();
     }
 
-    [Theory]
-    [InlineData(null)]
-    [InlineData(5)]
-    public async Task TryAdd_reports_added_whatever_the_expiration(int? minutes)
+    [Fact]
+    public async Task TryAdd_reports_added_whatever_the_expiration()
     {
-        TimeSpan? ttl = minutes is { } m ? TimeSpan.FromMinutes(m) : null;
+        var ttl = TimeSpan.FromMinutes(5);
 
+        (await NullCache.Instance.TryAddAsync("k", "v", token: Ct)).Should().BeTrue();
         (await NullCache.Instance.TryAddAsync("k", "v", ttl, token: Ct)).Should().BeTrue();
-        (await NullCache.Instance.TryAddAsync("k", "v", ttl.HasValue ? DateTimeOffset.UtcNow.Add(ttl.Value) : null, token: Ct)).Should().BeTrue();
+        (await NullCache.Instance.TryAddAsync("k", "v", DateTimeOffset.UtcNow.Add(ttl), token: Ct)).Should().BeTrue();
     }
 
     [Fact]

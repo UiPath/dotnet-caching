@@ -48,17 +48,17 @@ public sealed class NullCache : ICache
     public ValueTask<T?> GetOrAddAsync<T>(CacheKey cacheKey, Func<CancellationToken, Task<T?>> generator, CachePolicy? policy, CancellationToken token = default) =>
         ReturnGeneratorAsync(generator, token);
 
-    public ValueTask<T?> GetOrAddAsync<T>(CacheKey cacheKey, Func<CancellationToken, Task<T?>> generator, TimeSpan? expiration, CachePolicy? policy, CancellationToken token = default) =>
+    public ValueTask<T?> GetOrAddAsync<T>(CacheKey cacheKey, Func<CancellationToken, Task<T?>> generator, TimeSpan expiration, CachePolicy? policy, CancellationToken token = default) =>
         ReturnGeneratorAsync(generator, token);
 
-    public ValueTask<T?> GetOrAddAsync<T>(CacheKey cacheKey, Func<CancellationToken, Task<T?>> generator, DateTimeOffset? expiration, CachePolicy? policy, CancellationToken token = default) =>
+    public ValueTask<T?> GetOrAddAsync<T>(CacheKey cacheKey, Func<CancellationToken, Task<T?>> generator, DateTimeOffset expiration, CachePolicy? policy, CancellationToken token = default) =>
         ReturnGeneratorAsync(generator, token);
 
     public ValueTask<bool> RefreshAsync<T>(CacheKey cacheKey, CachePolicy? policy, CancellationToken token = default) => ReturnTrueAsync<T>();
 
-    public ValueTask<bool> RefreshAsync<T>(CacheKey cacheKey, TimeSpan? expiration, CachePolicy? policy, CancellationToken token = default) => ReturnTrueAsync<T>();
+    public ValueTask<bool> RefreshAsync<T>(CacheKey cacheKey, TimeSpan expiration, CachePolicy? policy, CancellationToken token = default) => ReturnTrueAsync<T>();
 
-    public ValueTask<bool> RefreshAsync<T>(CacheKey cacheKey, DateTimeOffset? expiration, CachePolicy? policy, CancellationToken token = default) => ReturnTrueAsync<T>();
+    public ValueTask<bool> RefreshAsync<T>(CacheKey cacheKey, DateTimeOffset expiration, CachePolicy? policy, CancellationToken token = default) => ReturnTrueAsync<T>();
 
     public ValueTask<bool> RemoveAsync<T>(CacheKey cacheKey, CancellationToken token = default) => ReturnTrueAsync<T>();
 
@@ -66,15 +66,15 @@ public sealed class NullCache : ICache
 
     public ValueTask<bool> SetAsync<T>(CacheKey cacheKey, T? value, CachePolicy? policy, CancellationToken token = default) => ReturnTrueAsync<T>();
 
-    public ValueTask<bool> SetAsync<T>(CacheKey cacheKey, T? value, TimeSpan? expiration, CachePolicy? policy, CancellationToken token = default) => ReturnTrueAsync<T>();
+    public ValueTask<bool> SetAsync<T>(CacheKey cacheKey, T? value, TimeSpan expiration, CachePolicy? policy, CancellationToken token = default) => ReturnTrueAsync<T>();
 
-    public ValueTask<bool> SetAsync<T>(CacheKey cacheKey, T? value, DateTimeOffset? expiration, CachePolicy? policy, CancellationToken token = default) => ReturnTrueAsync<T>();
+    public ValueTask<bool> SetAsync<T>(CacheKey cacheKey, T? value, DateTimeOffset expiration, CachePolicy? policy, CancellationToken token = default) => ReturnTrueAsync<T>();
 
     public ValueTask<bool> SetAsync<T>(KeyValuePair<CacheKey, T?>[] keyValues, CachePolicy? policy, CancellationToken token = default) => ReturnTrueAsync<T>();
 
-    public ValueTask<bool> SetAsync<T>(KeyValuePair<CacheKey, T?>[] keyValues, TimeSpan? expiration, CachePolicy? policy, CancellationToken token = default) => ReturnTrueAsync<T>();
+    public ValueTask<bool> SetAsync<T>(KeyValuePair<CacheKey, T?>[] keyValues, TimeSpan expiration, CachePolicy? policy, CancellationToken token = default) => ReturnTrueAsync<T>();
 
-    public ValueTask<bool> SetAsync<T>(KeyValuePair<CacheKey, T?>[] keyValues, DateTimeOffset? expiration, CachePolicy? policy, CancellationToken token = default) => ReturnTrueAsync<T>();
+    public ValueTask<bool> SetAsync<T>(KeyValuePair<CacheKey, T?>[] keyValues, DateTimeOffset expiration, CachePolicy? policy, CancellationToken token = default) => ReturnTrueAsync<T>();
 
     /// <summary>
     /// Always <c>true</c>, as <c>SetAsync</c> is here: nothing is retained, so no key pre-exists and
@@ -85,10 +85,10 @@ public sealed class NullCache : ICache
     public ValueTask<bool> TryAddAsync<T>(CacheKey cacheKey, T? value, CachePolicy? policy, CancellationToken token = default) => ReturnTrueAsync<T>();
 
     /// <inheritdoc cref="TryAddAsync{T}(CacheKey, T, CachePolicy, CancellationToken)"/>
-    public ValueTask<bool> TryAddAsync<T>(CacheKey cacheKey, T? value, TimeSpan? expiration, CachePolicy? policy, CancellationToken token = default) => ReturnTrueAsync<T>();
+    public ValueTask<bool> TryAddAsync<T>(CacheKey cacheKey, T? value, TimeSpan expiration, CachePolicy? policy, CancellationToken token = default) => ReturnTrueAsync<T>();
 
     /// <inheritdoc cref="TryAddAsync{T}(CacheKey, T, CachePolicy, CancellationToken)"/>
-    public ValueTask<bool> TryAddAsync<T>(CacheKey cacheKey, T? value, DateTimeOffset? expiration, CachePolicy? policy, CancellationToken token = default) => ReturnTrueAsync<T>();
+    public ValueTask<bool> TryAddAsync<T>(CacheKey cacheKey, T? value, DateTimeOffset expiration, CachePolicy? policy, CancellationToken token = default) => ReturnTrueAsync<T>();
 
     public ValueTask<TimeSpan?> TimeToLiveAsync<T>(CacheKey cacheKey, CancellationToken token = default)
     {

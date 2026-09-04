@@ -19,11 +19,11 @@ public static class SetCacheSyncExtensions
         => cache.AddAsync(cacheKey, items, token).AsTask().GetAwaiter().GetResult();
 
     /// <inheritdoc cref="ISetCache{T}.AddAsync(CacheKey, T, CancellationToken)"/>
-    public static long Add<T>(this ISetCache<T> cache, CacheKey cacheKey, IEnumerable<T> items, TimeSpan? expiration, CancellationToken token = default)
+    public static long Add<T>(this ISetCache<T> cache, CacheKey cacheKey, IEnumerable<T> items, TimeSpan expiration, CancellationToken token = default)
         => cache.AddAsync(cacheKey, items, expiration, token).AsTask().GetAwaiter().GetResult();
 
     /// <inheritdoc cref="ISetCache{T}.AddAsync(CacheKey, T, CancellationToken)"/>
-    public static long Add<T>(this ISetCache<T> cache, CacheKey cacheKey, IEnumerable<T> items, DateTimeOffset? expiration, CancellationToken token = default)
+    public static long Add<T>(this ISetCache<T> cache, CacheKey cacheKey, IEnumerable<T> items, DateTimeOffset expiration, CancellationToken token = default)
         => cache.AddAsync(cacheKey, items, expiration, token).AsTask().GetAwaiter().GetResult();
 
     /// <inheritdoc cref="ISetCache{T}.PopAsync(CacheKey, CancellationToken)"/>

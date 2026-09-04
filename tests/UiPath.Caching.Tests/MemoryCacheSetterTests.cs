@@ -127,7 +127,7 @@ public class MemoryCacheSetterTests : IAsyncLifetime
             .Returns(token);
 
         var cacheEntity = _fixture.Create<ICacheEntry>();
-        cacheEntity.NewEntry(Arg.Any<DateTimeOffset?>(), Arg.Any<IDictionary<string, string?>?>())
+        cacheEntity.NewEntry(Arg.Any<DateTimeOffset>(), Arg.Any<IDictionary<string, string?>?>())
             .Returns(_ => throw new InvalidOperationException("simulated NewEntry failure"));
 
         var x = new InternalHashCacheEntryOptions()

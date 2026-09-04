@@ -450,7 +450,7 @@ public class MultilayerCacheBatchRehydrateTests(ITestContextAccessor testContext
                         : new TestCacheEntry<string?> { Value = null, Expiration = DateTimeOffset.MinValue }))
                 .ToArray());
 
-        _innerCache.SetAsync<string?>(Arg.Any<KeyValuePair<CacheKey, string?>[]>(), Arg.Any<DateTimeOffset?>(), Arg.Any<CachePolicy?>(), Arg.Any<CancellationToken>())
+        _innerCache.SetAsync<string?>(Arg.Any<KeyValuePair<CacheKey, string?>[]>(), Arg.Any<DateTimeOffset>(), Arg.Any<CachePolicy?>(), Arg.Any<CancellationToken>())
             .Returns(c =>
             {
                 var pairs = c.Arg<KeyValuePair<CacheKey, string?>[]>()!;
