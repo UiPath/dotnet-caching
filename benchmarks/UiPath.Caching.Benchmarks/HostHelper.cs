@@ -70,17 +70,22 @@ internal static class SetupHelper
 
 internal static class HostHelper
 {
+    /// <summary>The sample's <c>appsettings.json</c> supplies the Redis connection; found by walking up from the output directory.</summary>
+    private static readonly string SampleFolder = Path.Combine("samples", "UiPath.Caching.Sample");
+
     private static Lazy<string> BasePath = new Lazy<string>(() =>
     {
         var temp = new DirectoryInfo(Directory.GetCurrentDirectory());
-        while (temp is not null && !Directory.Exists(Path.Combine(temp.FullName, "Sample.AspNetCore")))
+        while (temp is not null && !Directory.Exists(Path.Combine(temp.FullName, SampleFolder)))
         {
             temp = temp.Parent;
         }
-        return Path.Combine(temp?.FullName ?? Directory.GetCurrentDirectory(), "Sample.AspNetCore");
+        return Path.Combine(temp?.FullName ?? Directory.GetCurrentDirectory(), SampleFolder);
     });
 
-    public static IHost GetHost(int i, string? cache = null, string? topic = null, IDictionary<string, string?>? extra = null)
+    /// <param name="configure">Runs after the standard tiers are registered, for a benchmark that needs more on the builder — the distributed cache, for one.</param>
+    public static IHost GetHost(
+        int i, string? cache = null, string? topic = null, IDictionary<string, string?>? extra = null, Action<ICachingBuilder>? configure = null)
     {
         var settings = new Dictionary<string, string?>
         {
@@ -110,13 +115,16 @@ internal static class HostHelper
 
         .ConfigureLogging(x => x.AddConsole())
         .ConfigureCaching(x =>
+        {
             x.AddRedisConnection()
             .AddBroadcast()
             .AddRedis()
             .AddInMemoryRedis()
             .AddMemory()
             .AddResilienceStrategies()
-            .AddCloudEvents());
+            .AddCloudEvents();
+            configure?.Invoke(x);
+        });
         return builder.Build();
     }
 }

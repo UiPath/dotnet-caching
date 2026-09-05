@@ -1,3 +1,6 @@
+#if NET9_0_OR_GREATER
+using System.Buffers;
+#endif
 using Microsoft.Extensions.Caching.Distributed;
 using Microsoft.Extensions.DependencyInjection;
 using StackExchange.Redis;
@@ -109,6 +112,59 @@ public class DistributedCacheRedisIntegrationTests(RedisContainerFixture fixture
 
         await cache.RemoveAsync(key, token);
     }
+
+#if NET9_0_OR_GREATER
+    /// <summary>
+    /// The buffer half against real Redis. The point is the wire: a segmented write has to arrive as one
+    /// contiguous <c>data</c> field, or the array half — and any other client — reads a truncated payload.
+    /// </summary>
+    [Fact]
+    public async Task Buffer_half_round_trips_through_redis_on_the_same_wire_layout()
+    {
+        Assert.SkipUnless(fixture.Enabled, "Set RUN_REDIS_INTEGRATION_TESTS=1 (Docker required) to run.");
+        var token = TestContext.Current.CancellationToken;
+        var key = Unique();
+        using var provider = Build(fixture.ConnectionString);
+        var cache = provider.GetRequiredService<IDistributedCache>();
+        var buffered = cache.Should().BeAssignableTo<IBufferDistributedCache>().Subject;
+        await using var multiplexer = await ConnectAsync();
+        var database = multiplexer.GetDatabase();
+        var redisKey = $"{AppShortName}:{UiPathDistributedCacheOptions.DefaultRedisKeyDifferentiator}:{UiPathDistributedCacheOptions.DefaultKeyPrefix}:{key}";
+
+        var payload = new byte[] { 1, 2, 3, 4, 5 };
+        var first = new BufferSegment(payload.AsMemory(0, 2), runningIndex: 0);
+        var second = first.Append(payload.AsMemory(2));
+
+        await buffered.SetAsync(key, new ReadOnlySequence<byte>(first, 0, second, second.Memory.Length),
+            new DistributedCacheEntryOptions { AbsoluteExpirationRelativeToNow = TimeSpan.FromMinutes(10) }, token);
+
+        ((byte[]?)await database.HashGetAsync(redisKey, "data")).Should().Equal(payload, "stored raw and contiguous");
+        (await cache.GetAsync(key, token)).Should().Equal(payload);
+
+        var destination = new ArrayBufferWriter<byte>();
+        (await buffered.TryGetAsync(key, destination, token)).Should().BeTrue();
+        destination.WrittenSpan.ToArray().Should().Equal(payload);
+
+        await cache.RemoveAsync(key, token);
+        (await buffered.TryGetAsync(key, new ArrayBufferWriter<byte>(), token)).Should().BeFalse();
+    }
+
+    private sealed class BufferSegment : ReadOnlySequenceSegment<byte>
+    {
+        public BufferSegment(ReadOnlyMemory<byte> memory, long runningIndex)
+        {
+            Memory = memory;
+            RunningIndex = runningIndex;
+        }
+
+        public BufferSegment Append(ReadOnlyMemory<byte> memory)
+        {
+            var next = new BufferSegment(memory, RunningIndex + Memory.Length);
+            Next = next;
+            return next;
+        }
+    }
+#endif
 
     /// <summary>Refresh extends the TTL without transferring the payload, and the absolute deadline still caps it.</summary>
     [Fact]

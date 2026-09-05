@@ -28,6 +28,21 @@ public class SystemJsonByteSerializerProxyTests
         _proxy.Deserialize<byte[]>(_proxy.Serialize(payload)).Should().Equal(payload);
     }
 
+    /// <summary>
+    /// The memory seam does not change what this serializer writes: memory in is still base64 inside JSON out,
+    /// so a tier asking for memory gets the same bytes it would have got as an array — never the caller's buffer.
+    /// </summary>
+    [Fact]
+    public void SerializeToMemory_is_the_json_bytes_not_the_callers_memory()
+    {
+        ReadOnlyMemory<byte> payload = new byte[] { 0x01, 0x02, 0x03 };
+
+        var memory = _proxy.SerializeToMemory(payload);
+
+        Encoding.UTF8.GetString(memory.Span).Should().Be("\"AQID\"");
+        memory.ToArray().Should().Equal(_proxy.Serialize(payload));
+    }
+
     [Fact]
     public void ReadOnlyMemory_round_trips()
     {

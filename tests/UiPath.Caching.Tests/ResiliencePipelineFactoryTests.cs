@@ -101,6 +101,32 @@ public class ResiliencePipelineFactoryTest(ITestContextAccessor testContextAcces
         component!.GetType().Name.Should().Be("NullComponent");
     }
 
+    /// <summary>
+    /// The pipeline has to wait for a callback that ignores its cancellation token rather than return around
+    /// it. The Redis tier hands the connection borrowed memory that the caller reclaims once the pipeline
+    /// returns (<see cref="IMemorySerializerProxy"/>); a timeout that abandoned a callback still in flight would
+    /// let the connection send a buffer that has since been reused. Polly v8's timeout is cooperative — this
+    /// pins that the shipped pipeline stays so.
+    /// </summary>
+    [Fact]
+    public async Task Timeout_waits_for_a_callback_that_ignores_cancellation()
+    {
+        _resiliencePoliciesOptions.RetryCount = 0;
+        _resiliencePoliciesOptions.RequestTimeout = TimeSpan.FromMilliseconds(50);
+        var completed = false;
+        var pipeline = _fixture.Create<ResiliencePipelineFactory>().Create("write", false);
+
+        var result = await pipeline.ExecuteAsync(async _ =>
+        {
+            await Task.Delay(TimeSpan.FromMilliseconds(300), testContextAccessor.Current.CancellationToken);
+            completed = true;
+            return true;
+        }, testContextAccessor.Current.CancellationToken);
+
+        completed.Should().BeTrue("the pipeline returned only once the callback had finished");
+        result.Should().BeTrue("a callback that completes is not reported as timed out");
+    }
+
     [Fact]
     public async Task Pipeline_works_as_expected()
     {

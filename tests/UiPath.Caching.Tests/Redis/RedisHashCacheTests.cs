@@ -485,6 +485,63 @@ public class RedisHashCacheTests(ITestContextAccessor testContextAccessor) : IAs
         ReadDeps.Should().ContainSingle(d => d.Data == _redisKey.ToString() && d.ResultCode == "Hit");
     }
 
+    /// <summary>
+    /// A serializer that can lend memory is asked for memory, so a <see cref="ReadOnlyMemory{T}"/> value reaches
+    /// the command without the array member ever running — the value on the command is the caller's bytes.
+    /// </summary>
+    [Fact]
+    public async Task Set_asks_a_memory_serializer_for_memory_instead_of_an_array()
+    {
+        var serializer = new RecordingRawSerializer();
+        _fixture.Inject<ISerializerProxy<byte[]>>(serializer);
+        _transaction.ExecuteAsync(Arg.Any<CommandFlags>()).Returns(true);
+        HashEntry[]? captured = null;
+        _transaction.HashSetAsync(_redisKey, Arg.Do<HashEntry[]>(h => captured = h), Arg.Any<CommandFlags>())
+            .Returns(Task.CompletedTask);
+        var payload = new byte[] { 1, 2, 3 };
+        var fields = new Dictionary<string, ReadOnlyMemory<byte>> { ["data"] = payload };
+
+        await Sut.SetAsync(_cacheKey, fields, TimeSpan.FromMinutes(1), policy: null, token: testContextAccessor.Current.CancellationToken);
+
+        serializer.MemoryCalls.Should().Be(1);
+        serializer.ArrayCalls.Should().Be(0, "the memory member is the whole path; no array is materialized");
+        captured.Should().NotBeNull();
+        ((byte[]?)captured![0].Value).Should().Equal(payload);
+    }
+
+    /// <summary>Only a serializer that offers the memory member is asked for memory; any other keeps the array path it always had.</summary>
+    [Fact]
+    public async Task Set_uses_the_array_member_of_a_serializer_without_memory()
+    {
+        var serializer = Substitute.For<ISerializerProxy<byte[]>>();
+        serializer.Serialize(Arg.Any<object?>()).Returns([7]);
+        _fixture.Inject(serializer);
+        _transaction.ExecuteAsync(Arg.Any<CommandFlags>()).Returns(true);
+
+        await Sut.SetAsync(_cacheKey, new Dictionary<string, string?> { ["f"] = "v" }, TimeSpan.FromMinutes(1), policy: null, token: testContextAccessor.Current.CancellationToken);
+
+        serializer.Received(1).Serialize("v");
+    }
+
+    private sealed class RecordingRawSerializer : RawByteSerializerProxy
+    {
+        public int ArrayCalls { get; private set; }
+
+        public int MemoryCalls { get; private set; }
+
+        public override byte[]? Serialize(object? value)
+        {
+            ArrayCalls++;
+            return base.Serialize(value);
+        }
+
+        public override ReadOnlyMemory<byte> SerializeToMemory<T>(T? value) where T : default
+        {
+            MemoryCalls++;
+            return base.SerializeToMemory(value);
+        }
+    }
+
     [Fact]
     public async Task GetOrAdd_empty_result_with_CacheNullValues_writes_metadata_marker()
     {

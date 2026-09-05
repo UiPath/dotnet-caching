@@ -7,7 +7,7 @@ namespace UiPath.Caching;
 /// inside a JSON string. That is the wire format the library has always written, so entries survive
 /// an upgrade untouched. Use <see cref="RawByteSerializerProxy"/> to store byte payloads verbatim.
 /// </summary>
-public class SystemJsonByteSerializerProxy(JsonSerializerOptions? options = null) : ISerializerProxy<byte[]>
+public class SystemJsonByteSerializerProxy(JsonSerializerOptions? options = null) : IMemorySerializerProxy
 {
     /// <summary>
     /// Null goes through JSON like everything else, producing the four-byte <c>null</c> literal. A
@@ -16,6 +16,14 @@ public class SystemJsonByteSerializerProxy(JsonSerializerOptions? options = null
     /// </summary>
     public virtual byte[]? Serialize(object? value) =>
         JsonSerializer.SerializeToUtf8Bytes(value, options);
+
+    /// <summary>
+    /// JSON has no memory to lend, so this is <see cref="Serialize"/> wrapped — a byte payload still comes
+    /// out as base64 inside a JSON string, keeping the wire format one thing regardless of which member the
+    /// tier calls. <see cref="RawByteSerializerProxy"/> is where memory passes through.
+    /// </summary>
+    public virtual ReadOnlyMemory<byte> SerializeToMemory<T>(T? value) =>
+        Serialize(value);
 
     public virtual T? Deserialize<T>(byte[]? value) =>
         value is null or { Length: 0 } ? default : JsonSerializer.Deserialize<T>(value, options);
