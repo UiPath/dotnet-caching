@@ -1,8 +1,8 @@
 namespace UiPath.Caching;
 
-public sealed class MemoryCacheFactory(ICacheClock clock, ILoggerFactory loggerFactory) : IMemoryCacheFactory
+public sealed class MemoryCacheFactory(TimeProvider clock, ILoggerFactory loggerFactory) : IMemoryCacheFactory
 {
-    // MemoryCache reads an ISystemClock; this is the library's one clock in that shape, so the
+    // This MemoryCache reads an ISystemClock; this is the library's one TimeProvider in that shape, so the
     // memory cache judges a deadline against the same "now" it was computed from.
     private readonly ISystemClock _systemClock = new SystemClockAdapter(clock);
 
@@ -27,8 +27,8 @@ public sealed class MemoryCacheFactory(ICacheClock clock, ILoggerFactory loggerF
         return new MemoryCache(Options.Create(memoryCacheOptions), loggerFactory);
     }
 
-    private sealed class SystemClockAdapter(ICacheClock clock) : ISystemClock
+    private sealed class SystemClockAdapter(TimeProvider clock) : ISystemClock
     {
-        public DateTimeOffset UtcNow => clock.UtcNow;
+        public DateTimeOffset UtcNow => clock.GetUtcNow();
     }
 }

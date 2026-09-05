@@ -15,7 +15,7 @@ public sealed class RedisQueueCacheProvider : IQueueCacheProvider
     private readonly ICachingTelemetryProvider _cachingTelemetryProvider;
     private readonly ILoggerFactory _loggerFactory;
     private readonly ICachePolicyFactory _policyFactory;
-    private readonly ICacheClock _clock;
+    private readonly TimeProvider _clock;
     private readonly Lazy<RedisSetCache> _setCache;
 
     public string Name => KnownCacheProviderNames.Redis;
@@ -32,7 +32,7 @@ public sealed class RedisQueueCacheProvider : IQueueCacheProvider
         ICachingTelemetryProvider cachingTelemetryProvider,
         ILoggerFactory loggerFactory,
         ICachePolicyFactory policyFactory,
-        ICacheClock clock)
+        TimeProvider clock)
     {
         _clock = clock;
         _redisCacheOptions = redisCacheOptions.Value;

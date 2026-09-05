@@ -427,19 +427,18 @@ These extension points are documented elsewhere — link out instead of duplicat
 
 ## Controlling time
 
-Every expiration decision in the library reads one clock: the `ICacheClock` that `AddCaching`
-registers. Its default, `CacheClock`, wraps the `ISystemClock` in the container when one is registered
-and the system clock otherwise, and it is also what the in-memory tier's `MemoryCache` judges
-deadlines by, so a deadline is always computed and evaluated against the same "now". Nothing reads
-`DateTimeOffset.UtcNow` and no options object carries a clock of its own.
+Every expiration decision in the library reads one clock: the `System.TimeProvider` that `AddCaching`
+registers, `TimeProvider.System` unless the container already has one. It is also what the in-memory
+tier's `MemoryCache` judges deadlines by, so a deadline is always computed and evaluated against the
+same "now". Nothing reads `DateTimeOffset.UtcNow` and no options object carries a clock of its own.
 
 To drive time in tests or a simulation, register the clock before `AddCaching`:
 
 ```csharp
-services.AddSingleton<ISystemClock>(new FakeClock(start));   // picked up by the default ICacheClock
+services.AddSingleton<TimeProvider>(new FakeTimeProvider(start));
 services.AddCaching(b => b.AddMemory());
 ```
 
-Or register an `ICacheClock` directly. Constructing a cache by hand takes the same `ICacheClock`
-as a constructor argument; `ICacheClock.ToDateTimeOffset(...)` is how a lifetime becomes an
-expiration, and it saturates at `DateTimeOffset.MaxValue` so `TimeSpan.MaxValue` stays "no TTL".
+Constructing a cache by hand takes the same `TimeProvider` as a constructor argument.
+`TimeProviderExtensions.ToDateTimeOffset(...)` turns a lifetime into an expiration, saturating at
+`DateTimeOffset.MaxValue` so `TimeSpan.MaxValue` stays "no TTL".

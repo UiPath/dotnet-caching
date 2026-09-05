@@ -754,7 +754,7 @@ public class MultilayerCacheTests(ITestContextAccessor testContextAccessor) : IA
     public async Task Remove_evict_token_non_active()
     {
         _clock = _fixture.Freeze<ISystemClock>();
-        _fixture.Inject<ICacheClock>(new CacheClock(_clock));
+        _fixture.Inject<TimeProvider>(new SystemClockTimeProvider(_clock));
         var now = DateTimeOffset.UtcNow;
         _clock.UtcNow.Returns(now);
         _memoryCache = new MemoryCache(Options.Create(new MemoryCacheOptions
@@ -869,7 +869,7 @@ public class MultilayerCacheTests(ITestContextAccessor testContextAccessor) : IA
     public async Task Multi_remove_evict_token_non_active()
     {
         _clock = _fixture.Freeze<ISystemClock>();
-        _fixture.Inject<ICacheClock>(new CacheClock(_clock));
+        _fixture.Inject<TimeProvider>(new SystemClockTimeProvider(_clock));
         var now = DateTimeOffset.UtcNow;
         _clock.UtcNow.Returns(now);
         _memoryCache = new MemoryCache(Options.Create(new MemoryCacheOptions

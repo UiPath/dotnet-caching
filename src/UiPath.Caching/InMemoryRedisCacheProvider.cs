@@ -18,7 +18,7 @@ public sealed class InMemoryRedisCacheProvider : ICacheProvider
     private readonly ILocalLock _localLock;
     private readonly IDistributedLock _distributedLock;
     private readonly ICachePolicyFactory _policyFactory;
-    private readonly ICacheClock _clock;
+    private readonly TimeProvider _clock;
     private readonly Lazy<MultilayerCache> _cache;
     private readonly Lazy<MultilayerHashCache> _hashCache;
 
@@ -39,7 +39,7 @@ public sealed class InMemoryRedisCacheProvider : ICacheProvider
         ILocalLock localLock,
         IDistributedLock distributedLock,
         ICachePolicyFactory policyFactory,
-        ICacheClock clock)
+        TimeProvider clock)
     {
         _clock = clock;
         _options = optionsAccessor.Value;

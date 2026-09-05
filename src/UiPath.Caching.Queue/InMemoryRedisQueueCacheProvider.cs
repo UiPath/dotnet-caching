@@ -17,7 +17,7 @@ public sealed class InMemoryRedisQueueCacheProvider : IQueueCacheProvider
     private readonly Lazy<IQueueCacheFactory> _queueCacheFactory;
     private readonly ISerializerProxy<byte[]> _serializer;
     private readonly ILocalLock _localLock;
-    private readonly ICacheClock _clock;
+    private readonly TimeProvider _clock;
     private readonly Lazy<MultilayerSetCache> _setCache;
 
     public string Name => KnownCacheProviderNames.InMemoryRedis;
@@ -30,7 +30,7 @@ public sealed class InMemoryRedisQueueCacheProvider : IQueueCacheProvider
         Func<IQueueCacheFactory> queueCacheFactoryAccessor,
         ISerializerProxy<byte[]> serializer,
         ILocalLock localLock,
-        ICacheClock clock)
+        TimeProvider clock)
     {
         _clock = clock;
         _options = optionsAccessor.Value;

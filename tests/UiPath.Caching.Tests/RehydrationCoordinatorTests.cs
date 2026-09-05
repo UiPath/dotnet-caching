@@ -13,7 +13,7 @@ public class RehydrationCoordinatorTests
         IDistributedLock? distributedLock = null,
         RecordingTelemetryProvider? telemetry = null)
     {
-        var clock = new CacheClock();
+        var clock = TimeProvider.System;
         var lockKeyStrategy = new DefaultDistributedLockKeyStrategy(separator: ':');
         return new RehydrationCoordinator(
             cacheName: "test-cache",

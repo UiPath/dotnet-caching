@@ -4,12 +4,12 @@ internal class HashCacheEntryBuilder
 {
     private readonly ICacheKeyStrategy _cacheKeyStrategy;
     private readonly ITopicKeyStrategy _topicKeyStrategy;
-    private readonly ICacheClock _clock;
+    private readonly TimeProvider _clock;
 
     public HashCacheEntryBuilder(
         ICacheKeyStrategy cacheKeyStrategy,
         ITopicKeyStrategy topicKeyStrategy,
-        ICacheClock clock)
+        TimeProvider clock)
     {
         _cacheKeyStrategy = cacheKeyStrategy;
         _topicKeyStrategy = topicKeyStrategy;

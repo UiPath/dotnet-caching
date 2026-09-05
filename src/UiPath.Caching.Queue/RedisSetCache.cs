@@ -24,7 +24,7 @@ public sealed partial class RedisSetCache : RedisCacheBase, ISetCache
         CacheOptions cacheOptions,
         RedisSetCacheOptions setCacheOptions,
         ICachePolicyFactory policyFactory,
-        ICacheClock clock,
+        TimeProvider clock,
         ILogger<RedisSetCache> logger)
         : base(redis, telemetryProvider, redisCacheOptions, cacheOptions, policyFactory, clock)
     {
@@ -67,7 +67,7 @@ public sealed partial class RedisSetCache : RedisCacheBase, ISetCache
     private async ValueTask<long> AddManyInnerAsync<T>(CacheKey cacheKey, RedisValue[] values, DateTimeOffset expiration, CancellationToken token)
     {
         var redisKey = ToRedisKey(cacheKey, token);
-        var now = Clock.UtcNow;
+        var now = Clock.GetUtcNow();
         long ret = 0;
         if (!IsConnected || values.Length == 0)
         {

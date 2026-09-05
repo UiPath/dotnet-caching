@@ -15,7 +15,7 @@ internal sealed partial class RedisProfiler : IRedisProfiler, IDisposable
     private readonly ProfilingSession? _defaultSession;
     private readonly PeriodicTimer? _timer;
     private readonly Task? _flushWorker;
-    private readonly ICacheClock _clock;
+    private readonly TimeProvider _clock;
     private readonly IProfiledCommandProcessor _profiledCommandProcessor;
     private readonly IProfilingSessionCommandReader _profilingSessionCommandReader;
     private readonly ICachingTelemetryProvider _telemetryProvider;
@@ -28,7 +28,7 @@ internal sealed partial class RedisProfiler : IRedisProfiler, IDisposable
         ICachingTelemetryProvider telemetryProvider,
         ILogger<RedisProfiler> logger,
         IOptions<RedisConnectionOptions> optionsAccessor,
-        ICacheClock clock)
+        TimeProvider clock)
     {
         _options = optionsAccessor.Value;
         if (_options.ProfilerEnabled)
@@ -100,7 +100,7 @@ internal sealed partial class RedisProfiler : IRedisProfiler, IDisposable
         }
         else
         {
-            _sessions.TryAdd(sessionId, new RedisProfileEntry(new ProfilingSession(sessionId), _clock.UtcNow));
+            _sessions.TryAdd(sessionId, new RedisProfileEntry(new ProfilingSession(sessionId), _clock.GetUtcNow()));
             _currentSessionId.Value = sessionId;
             return Disposable.Create((outerSessionId, sessionId), args =>
             {
@@ -151,7 +151,7 @@ internal sealed partial class RedisProfiler : IRedisProfiler, IDisposable
 
             if (!remove && _options.ProfilerSessionMaxLifespan.HasValue)
             {
-                remove = _clock.UtcNow.Subtract(entry.Value.Created) > _options.ProfilerSessionMaxLifespan;
+                remove = _clock.GetUtcNow().Subtract(entry.Value.Created) > _options.ProfilerSessionMaxLifespan;
             }
 
             if (!remove && _options.ProfilerSessionMaxChecks.HasValue)

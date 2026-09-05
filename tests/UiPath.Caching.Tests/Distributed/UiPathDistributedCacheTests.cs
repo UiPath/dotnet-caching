@@ -38,7 +38,7 @@ public class UiPathDistributedCacheTests
             keyStrategy ?? new PrefixCacheKeyStrategy(UiPathDistributedCacheOptions.DefaultKeyPrefix),
             policy: null,
             NullLogger.Instance,
-            new CacheClock(_clock),
+            new SystemClockTimeProvider(_clock),
             slideByRewrite);
 
     private static byte[] Ticks(long? value) =>
@@ -202,7 +202,7 @@ public class UiPathDistributedCacheTests
         var cache = new UiPathDistributedCache(
             _inner, new UiPathDistributedCacheOptions(),
             new PrefixCacheKeyStrategy(UiPathDistributedCacheOptions.DefaultKeyPrefix),
-            policy: null, logger, new CacheClock(_clock));
+            policy: null, logger, new SystemClockTimeProvider(_clock));
         _inner.SetAsync(Arg.Any<CacheKey>(), Arg.Any<IDictionary<string, byte[]?>>(),
             Arg.Any<TimeSpan>(), Arg.Any<CachePolicy?>(), Arg.Any<CancellationToken>()).Returns(false);
 

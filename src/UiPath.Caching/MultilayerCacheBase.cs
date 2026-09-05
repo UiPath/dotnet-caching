@@ -13,7 +13,7 @@ public abstract class MultilayerCacheBase : IDisposable
     protected readonly ICacheEntryFactory _cacheEntryFactory;
     protected readonly IMultilayerCacheOptions _multiLayerCacheOptions;
     protected readonly IDisposable _monitor;
-    protected readonly ICacheClock _clock;
+    protected readonly TimeProvider _clock;
     protected readonly CacheEventPublisher _eventPublisher;
     protected readonly IConnectionState _connectionState;
     protected readonly ITopicProvider _topicProvider;
@@ -63,7 +63,7 @@ public abstract class MultilayerCacheBase : IDisposable
         ILocalLock localLock,
         IDistributedLock distributedLock,
         ICachePolicyFactory policyFactory,
-        ICacheClock clock,
+        TimeProvider clock,
         ILogger logger)
     {
         ArgumentNullException.ThrowIfNull(clock);
@@ -220,7 +220,7 @@ public abstract class MultilayerCacheBase : IDisposable
 
     /// <inheritdoc cref="CallerWrite(TimeSpan, string)"/>
     private protected (DateTimeOffset Expiration, TimeSpan Duration) CallerWrite(DateTimeOffset expiration, [CallerArgumentExpression(nameof(expiration))] string? paramName = null) =>
-        (expiration, CacheExpiration.ToDuration(expiration, _clock.UtcNow, paramName));
+        (expiration, CacheExpiration.ToDuration(expiration, _clock.GetUtcNow(), paramName));
 
     /// <summary>Write expiration for a call that carried no <c>expiration</c>: the policy's L2 TTL jittered, then the cache default.</summary>
     private protected DateTimeOffset GetExpiration(CachePolicy policy) =>
@@ -240,7 +240,7 @@ public abstract class MultilayerCacheBase : IDisposable
 
     /// <summary>Write expiration for a caller-supplied instant, validated.</summary>
     private protected DateTimeOffset GetExpiration(DateTimeOffset expiration, [CallerArgumentExpression(nameof(expiration))] string? paramName = null) =>
-        CacheExpiration.ThrowIfNotFuture(expiration, _clock.UtcNow, paramName);
+        CacheExpiration.ThrowIfNotFuture(expiration, _clock.GetUtcNow(), paramName);
 
     /// <summary>
     /// The local lock alone, for callers that need it for correctness rather than de-duplication.

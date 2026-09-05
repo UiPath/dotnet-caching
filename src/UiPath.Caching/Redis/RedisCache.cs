@@ -25,7 +25,7 @@ internal sealed partial class RedisCache : RedisCacheBase, ICache
         RedisCacheOptions redisCacheOptions,
         CacheOptions cacheOptions,
         ICachePolicyFactory policyFactory,
-        ICacheClock clock,
+        TimeProvider clock,
         ILogger<RedisCache> logger)
         : base(redis, telemetryProvider, redisCacheOptions, cacheOptions, policyFactory, clock)
     {

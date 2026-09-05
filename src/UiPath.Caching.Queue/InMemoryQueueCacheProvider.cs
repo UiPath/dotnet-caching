@@ -15,7 +15,7 @@ public sealed class InMemoryQueueCacheProvider : IQueueCacheProvider
     private readonly IMemoryCacheFactory _memoryCacheFactory;
     private readonly ISerializerProxy<byte[]> _serializer;
     private readonly ILocalLock _localLock;
-    private readonly ICacheClock _clock;
+    private readonly TimeProvider _clock;
     private readonly Lazy<MultilayerSetCache> _setCache;
 
     public string Name => KnownCacheProviderNames.InMemory;
@@ -27,7 +27,7 @@ public sealed class InMemoryQueueCacheProvider : IQueueCacheProvider
         IMemoryCacheFactory memoryCacheFactory,
         ISerializerProxy<byte[]> serializer,
         ILocalLock localLock,
-        ICacheClock clock)
+        TimeProvider clock)
     {
         _clock = clock;
         _options = optionsAccessor.Value;

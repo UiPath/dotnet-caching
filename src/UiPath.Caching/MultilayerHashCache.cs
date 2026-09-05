@@ -24,7 +24,7 @@ internal sealed partial class MultilayerHashCache : MultilayerCacheBase, IHashCa
         ILocalLock localLock,
         IDistributedLock distributedLock,
         ICachePolicyFactory policyFactory,
-        ICacheClock clock,
+        TimeProvider clock,
         ILogger logger)
         : base(cacheName, innerCache, memoryCacheFactory, topicFactory, cacheEventFactory, telemetryProvider, multiLayerCacheOptions, memoryCacheOptions, cacheOptions, localLock, distributedLock, policyFactory, clock, logger)
     {
@@ -309,7 +309,7 @@ internal sealed partial class MultilayerHashCache : MultilayerCacheBase, IHashCa
         NotCacheableException.ThrowIfNotCacheable<T>();
         var cacheEntryOptions = _entryBuilder.BuildEntryOptions<T>(cacheKey, default, token: token);
         return _memoryCache.TryGetValue<ICacheEntry>(cacheEntryOptions.CacheKey, out var value)
-            ? value?.Expiration.Subtract(_clock.UtcNow)
+            ? value?.Expiration.Subtract(_clock.GetUtcNow())
             : await _innerCache.TimeToLiveAsync<T>(cacheEntryOptions.CacheKey, token);
     }
 

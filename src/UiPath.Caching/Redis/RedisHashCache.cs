@@ -26,7 +26,7 @@ internal sealed partial class RedisHashCache : RedisCacheBase, IHashCache
         RedisCacheOptions redisCacheOptions,
         CacheOptions cacheOptions,
         ICachePolicyFactory policyFactory,
-        ICacheClock clock,
+        TimeProvider clock,
         ILogger<RedisHashCache> logger)
         : base(redis, telemetryProvider, redisCacheOptions, cacheOptions, policyFactory, clock)
     {
@@ -274,7 +274,7 @@ internal sealed partial class RedisHashCache : RedisCacheBase, IHashCache
         NotCacheableException.ThrowIfNotCacheable<T>();
         var redisKey = ToRedisKey(cacheKey, token);
         var expiration = GetExpiration(options, policy);
-        var now = Clock.UtcNow;
+        var now = Clock.GetUtcNow();
         var ret = false;
         var operation = StartOperation<T>();
         try
@@ -865,7 +865,7 @@ internal sealed partial class RedisHashCache : RedisCacheBase, IHashCache
 
     private async ValueTask<bool> SetInnerAsync<T>(RedisKey redisKey, HashEntry[] hashEntries, HashCacheSetOption setOption, DateTimeOffset expiration, CancellationToken token)
     {
-        var now = Clock.UtcNow;
+        var now = Clock.GetUtcNow();
         var ret = false;
         token.ThrowIfCancellationRequested();
         if (!IsConnected)

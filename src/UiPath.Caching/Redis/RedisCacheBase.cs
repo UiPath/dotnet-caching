@@ -16,7 +16,7 @@ public abstract class RedisCacheBase : IConnectionState, IDisposable
         RedisCacheOptions redisCacheOptions,
         CacheOptions cacheOptions,
         ICachePolicyFactory policyFactory,
-        ICacheClock clock)
+        TimeProvider clock)
     {
         ArgumentNullException.ThrowIfNull(clock);
         _redis = redis;
@@ -54,7 +54,7 @@ public abstract class RedisCacheBase : IConnectionState, IDisposable
 
     protected TimeSpan? DefaultExpiration { get; }
 
-    protected ICacheClock Clock { get; }
+    protected TimeProvider Clock { get; }
 
     /// <summary>
     /// Write duration for a call that carried no <c>expiration</c>: the policy's L2 TTL, then the
@@ -70,7 +70,7 @@ public abstract class RedisCacheBase : IConnectionState, IDisposable
 
     /// <summary>Validates a caller-supplied expiration and turns it into a duration from the cache's now.</summary>
     protected TimeSpan CallerDuration(DateTimeOffset expiration, [CallerArgumentExpression(nameof(expiration))] string? paramName = null) =>
-        CacheExpiration.ToDuration(expiration, Clock.UtcNow, paramName);
+        CacheExpiration.ToDuration(expiration, Clock.GetUtcNow(), paramName);
 
     /// <summary>
     /// Write expiration for a call that carried no <c>expiration</c>, resolved the same way as
@@ -94,7 +94,7 @@ public abstract class RedisCacheBase : IConnectionState, IDisposable
 
     /// <summary>Validates a caller-supplied expiration.</summary>
     protected DateTimeOffset GetExpiration(DateTimeOffset expiration, [CallerArgumentExpression(nameof(expiration))] string? paramName = null) =>
-        CacheExpiration.ThrowIfNotFuture(expiration, Clock.UtcNow, paramName);
+        CacheExpiration.ThrowIfNotFuture(expiration, Clock.GetUtcNow(), paramName);
 
     public event EventHandler? OnConnectionFailed
     {

@@ -25,7 +25,7 @@ internal sealed partial class UiPathDistributedCache : IDistributedCache
     private readonly TimeSpan? _defaultEntryExpiration;
     private readonly bool _allowUnboundedEntries;
     private readonly bool _slideByRewrite;
-    private readonly ICacheClock _clock;
+    private readonly TimeProvider _clock;
     private readonly ILogger _logger;
 
     /// <param name="keyStrategy">
@@ -40,7 +40,7 @@ internal sealed partial class UiPathDistributedCache : IDistributedCache
         ICacheKeyStrategy keyStrategy,
         CachePolicy? policy,
         ILogger logger,
-        ICacheClock clock,
+        TimeProvider clock,
         bool slideByRewrite = false)
     {
         ArgumentNullException.ThrowIfNull(keyStrategy);
@@ -88,7 +88,7 @@ internal sealed partial class UiPathDistributedCache : IDistributedCache
         ArgumentNullException.ThrowIfNull(options);
 
         var cacheKey = Encode(key);
-        var now = _clock.UtcNow;
+        var now = _clock.GetUtcNow();
         var absolute = ResolveAbsoluteExpiration(now, options);
         var sliding = options.SlidingExpiration;
         var fields = new Dictionary<string, byte[]?>(3, StringComparer.Ordinal)
@@ -165,7 +165,7 @@ internal sealed partial class UiPathDistributedCache : IDistributedCache
             return null;
         }
 
-        var now = _clock.UtcNow;
+        var now = _clock.GetUtcNow();
         if (IsExpired(metadata.AbsoluteExpiration, now))
         {
             return null;

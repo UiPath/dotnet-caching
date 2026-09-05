@@ -1344,7 +1344,7 @@ public class RedisCacheTests(ITestContextAccessor testContextAccessor) : IAsyncL
         _multiKey = _fixture.Create<string>();
         _redisMultiKey = string.Join(':', _prefix, RedisTypePrefixes.String, _multiKey).ToLowerInvariant();
         _clock = _fixture.Freeze<ISystemClock>();
-        _fixture.Inject<ICacheClock>(new CacheClock(_clock));
+        _fixture.Inject<TimeProvider>(new SystemClockTimeProvider(_clock));
         _clock.UtcNow.Returns(c => _now);
         _resiliencePipelineProvider = _fixture.Freeze<IResiliencePipelineProvider>();
         var noOpExecutor = new EmptyResiliencePipeline();

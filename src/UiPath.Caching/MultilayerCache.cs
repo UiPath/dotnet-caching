@@ -23,7 +23,7 @@ internal sealed partial class MultilayerCache : MultilayerCacheBase, ICache
         ILocalLock localLock,
         IDistributedLock distributedLock,
         ICachePolicyFactory policyFactory,
-        ICacheClock clock,
+        TimeProvider clock,
         ILogger logger)
         : base(cacheName, innerCache, memoryCacheFactory, topicFactory, cacheEventFactory, telemetryProvider, multiLayerCacheOptions, memoryCacheOptions, cacheOptions, localLock, distributedLock, policyFactory, clock, logger)
     {
@@ -654,7 +654,7 @@ internal sealed partial class MultilayerCache : MultilayerCacheBase, ICache
             return false;
         }
 
-        if (options.Expiration <= _clock.UtcNow)
+        if (options.Expiration <= _clock.GetUtcNow())
         {
             LogTryAddSkippedExpiredEntry(options.CacheKey, options.Expiration);
             return false;
@@ -890,7 +890,7 @@ internal sealed partial class MultilayerCache : MultilayerCacheBase, ICache
         NotCacheableException.ThrowIfNotCacheable<T>();
         var cacheEntryOptions = _entryBuilder.BuildEntryOptions<T>(cacheKey, default, token);
         return _memoryCache.TryGetValue<ICacheEntry>(cacheEntryOptions.CacheKey, out var value)
-            ? value?.Expiration.Subtract(_clock.UtcNow)
+            ? value?.Expiration.Subtract(_clock.GetUtcNow())
             : await _innerCache.TimeToLiveAsync<T>(cacheEntryOptions.CacheKey, token);
     }
 

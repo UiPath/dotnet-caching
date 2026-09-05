@@ -1,6 +1,4 @@
-﻿using Microsoft.Extensions.Internal;
-
-namespace UiPath.Caching.Tests;
+﻿namespace UiPath.Caching.Tests;
 
 /// <summary>
 /// Turning a resolved duration into a deadline. <see cref="TimeSpan.MaxValue"/> is the configured
@@ -8,16 +6,11 @@ namespace UiPath.Caching.Tests;
 /// so the conversion has to saturate onto <see cref="DateTimeOffset.MaxValue"/> — the sentinel the
 /// providers read as "no TTL" — instead of throwing.
 /// </summary>
-public class CacheClockTests
+public class TimeProviderExtensionsTests
 {
-    private sealed class FakeClock(DateTimeOffset now) : ISystemClock
-    {
-        public DateTimeOffset UtcNow { get; } = now;
-    }
-
     [Fact]
     public void An_unbounded_duration_lands_on_MaxValue_instead_of_overflowing() =>
-        new CacheClock().ToDateTimeOffset(TimeSpan.MaxValue).Should().Be(DateTimeOffset.MaxValue);
+        TimeProvider.System.ToDateTimeOffset(TimeSpan.MaxValue).Should().Be(DateTimeOffset.MaxValue);
 
     /// <summary>
     /// The clock contract is UTC, but a fake can report any offset. Add advances the wall-clock
@@ -32,7 +25,7 @@ public class CacheClockTests
     {
         var now = new DateTimeOffset(DateTime.MaxValue.AddHours(-10), TimeSpan.Zero)
             .ToOffset(TimeSpan.FromHours(offsetHours));
-        var sut = new CacheClock(new FakeClock(now));
+        var sut = new FakeTimeProvider(now);
 
         var act = () => sut.ToDateTimeOffset(TimeSpan.FromHours(9));
 
@@ -43,7 +36,7 @@ public class CacheClockTests
     public void Adds_normally_when_the_result_fits()
     {
         var now = new DateTimeOffset(2026, 1, 1, 0, 0, 0, TimeSpan.FromHours(5));
-        var sut = new CacheClock(new FakeClock(now));
+        var sut = new FakeTimeProvider(now);
 
         sut.ToDateTimeOffset(TimeSpan.FromHours(2)).Should().Be(now.AddHours(2));
     }
@@ -55,7 +48,7 @@ public class CacheClockTests
     [Fact]
     public void Null_reads_as_unbounded()
     {
-        var sut = new CacheClock();
+        var sut = TimeProvider.System;
 
         sut.ToDateTimeOffset(default(TimeSpan?)).Should().Be(DateTimeOffset.MaxValue);
         sut.ToDateTimeOffset(default(DateTimeOffset?)).Should().Be(DateTimeOffset.MaxValue);

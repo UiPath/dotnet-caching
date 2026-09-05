@@ -1429,7 +1429,7 @@ public class RedisHashCacheTests(ITestContextAccessor testContextAccessor) : IAs
         _database = _fixture.Freeze<IDatabase>();
         _transaction = _fixture.Freeze<ITransaction>();
         _clock = _fixture.Freeze<ISystemClock>();
-        _fixture.Inject<ICacheClock>(new CacheClock(_clock));
+        _fixture.Inject<TimeProvider>(new SystemClockTimeProvider(_clock));
         _clock.UtcNow.Returns(c => _now);
         _logger = _fixture.Freeze<ILogger<RedisHashCache>>();
         _logger.IsEnabled(Arg.Any<LogLevel>()).Returns(true);

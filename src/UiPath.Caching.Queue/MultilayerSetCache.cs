@@ -13,7 +13,7 @@ internal sealed class MultilayerSetCache : ISetCache
     private readonly bool _useLocalOnlyWhenDisconnected;
     private readonly TimeSpan? _localMaxExpirationDisconnected;
     private readonly TimeSpan? _defaultExpiration;
-    private readonly ICacheClock _clock;
+    private readonly TimeProvider _clock;
 
     public MultilayerSetCache(
         string name,
@@ -22,7 +22,7 @@ internal sealed class MultilayerSetCache : ISetCache
         ISerializerProxy<byte[]> serializer,
         IMultilayerSetCacheOptions options,
         ILocalLock localLock,
-        ICacheClock clock)
+        TimeProvider clock)
     {
         ArgumentNullException.ThrowIfNull(clock);
         ArgumentNullException.ThrowIfNull(inner);
@@ -62,7 +62,7 @@ internal sealed class MultilayerSetCache : ISetCache
         AddCoreAsync<T>(cacheKey, items, _clock.ToDateTimeOffset(CacheExpiration.ThrowIfNotPositive(expiration)), policy, token);
 
     public ValueTask<long> AddAsync<T>(CacheKey cacheKey, IEnumerable<T> items, DateTimeOffset expiration, CachePolicy? policy, CancellationToken token = default) =>
-        AddCoreAsync<T>(cacheKey, items, CacheExpiration.ThrowIfNotFuture(expiration, _clock.UtcNow), policy, token);
+        AddCoreAsync<T>(cacheKey, items, CacheExpiration.ThrowIfNotFuture(expiration, _clock.GetUtcNow()), policy, token);
 
     private async ValueTask<long> AddCoreAsync<T>(CacheKey cacheKey, IEnumerable<T> items, DateTimeOffset? expiration, CachePolicy? policy, CancellationToken token)
     {

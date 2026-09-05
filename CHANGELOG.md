@@ -129,7 +129,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
   as a property initializer now comes from that one constant, so the value is stated once.
   Unbounded entries are still available and now have to be asked for: configure a lifetime of
   `TimeSpan.MaxValue`, which is what the providers already read as "no TTL" (`SET` with no TTL,
-  `PERSIST` on refresh). `CacheClock` is the single place a duration becomes a deadline, and it
+  `PERSIST` on refresh). `TimeProvider.ToDateTimeOffset` is the single place a duration becomes a deadline, and it
   saturates at `DateTimeOffset.MaxValue` rather than overflowing, so `TimeSpan.MaxValue` reaches the
   providers as the sentinel they read as "no TTL". The memory-only set tier and the rehydrate write
   each did that conversion themselves with a bare `Add` and threw on it; both go through the clock
@@ -143,8 +143,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
   consults a default: a key that genuinely has no TTL in Redis reports `DateTimeOffset.MaxValue`
   rather than a fabricated `now + default`.
   `MultilayerCacheBase.ResolveWriteDuration` returns `TimeSpan` rather than `TimeSpan?` as a result.
-- **BREAKING:** `CacheClock` is the default `ICacheClock` and nothing more. It no longer carries a
-  default expiration and its constructor loses the `defaultExpiration` parameter. Previously a configured `DefaultExpiration`
+- **BREAKING:** `CacheClock` is gone (see **Removed**); the clock is `System.TimeProvider`. No default
+  expiration is carried anywhere near the clock any more. Previously a configured `DefaultExpiration`
   was also filled in on **reads** — `GetCacheEntryAsync` on a key with no TTL in Redis reported
   `now + DefaultExpiration`, while `ExpireTimeAsync` on the same key returned `null` — and the
   fabricated deadline doubled as a hidden L1 cap: the L1 copy of a no-TTL key turned over every
@@ -159,7 +159,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
   threshold and timeout are measured against the configured, unjittered lifetime, so a hit crosses
   the soft-TTL threshold at the same point on every read rather than against a fresh random draw.
   Rehydration is skipped for an unbounded lifetime, which has no deadline to pre-empt.
-- **BREAKING:** every conversion from a duration to a deadline goes through `CacheClock`, so a
+- **BREAKING:** every conversion from a duration to a deadline goes through the `TimeProvider`, so a
   per-call `TimeSpan.MaxValue` means "no TTL" on every surface. It already did on `RedisCache.SetAsync`
   (the driver maps it) and on the set caches, but `MultilayerCache.SetAsync`, `RefreshAsync` and
   `GetOrAddAsync`, `RedisCache.RefreshAsync`, and `RedisHashCache.GetOrAddAsync` / `RefreshAsync` /
@@ -173,17 +173,17 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
   the `IDistributedCache` adapter hands `TimeSpan.MaxValue` to the backing cache untouched.
   `ApplyJitter` is now `(TimeSpan, TimeSpan?) -> TimeSpan`; `RedisCacheBase.GetExpiration(TimeSpan)`
   is added.
-- **BREAKING: one clock.** `ICacheClock` (in `UiPath.Caching.Abstractions`, `UtcNow` only) is the
-  single source of "now". `AddCaching` registers one instance — `CacheClock` over the `ISystemClock`
-  the container has when one is registered, else the system clock — and every provider, cache base
-  class, helper, the profiler and the stream maintainer take it from DI. The per-options `Clock`
+- **BREAKING: one clock.** `System.TimeProvider` is the single source of "now". `AddCaching` registers
+  `TimeProvider.System` unless the container already has a `TimeProvider`, and every provider, cache
+  base class, helper, the profiler and the stream maintainer take it from DI. No library clock type
+  remains: the BCL's own seam is the one, and any `TimeProvider` subclass drives it in tests. The per-options `Clock`
   properties are gone (see **Removed**): they let each cache carry its own clock while the
   `IMemoryCache` judging its deadlines ran on the DI-wide one, so a configured clock made L1 entries
   expire early or late against the ambient clock, and the memory-only set tier read
   `DateTimeOffset.UtcNow` directly and ignored a clock altogether. The conversion from a lifetime to
-  an expiration is `ICacheClock.ToDateTimeOffset(...)`, an extension in the abstractions package, so
-  a test double that fixes `UtcNow` converts exactly like the real clock. To control time, register
-  an `ISystemClock` (or an `ICacheClock`) before `AddCaching`.
+  an expiration is `TimeProviderExtensions.ToDateTimeOffset(...)` in the abstractions package, so a
+  fake converts exactly like the real clock. To control time, register a `TimeProvider` before
+  `AddCaching`; an `ISystemClock` registration is no longer consulted.
 - **`IMultilayerSetCacheOptions`** is what `MultilayerSetCache` reads its settings from — the memory
   tier's knobs through `IMemoryCacheOptions`, plus `DefaultExpiration`, `LocalMaxExpiration`,
   `ConnectionMonitorEnabled`, `ConnectionMonitorPeriod`, `UseLocalOnlyWhenDisconnected` and
@@ -291,14 +291,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 - **BREAKING:** `CacheClock.DefaultDateTimeOffset()`, `CacheClock.ToTimeSpan(DateTimeOffset?)` and
   `CacheClock.ToTimeSpan(TimeSpan?)`. Nothing called them, and the first `ToTimeSpan` was another
   place a configured `TimeSpan.MaxValue` overflowed. `ToDateTimeOffset` is the conversion that remains,
-  now as an `ICacheClock` extension.
+  now as a `TimeProvider` extension.
+- **BREAKING:** `CacheClock` itself. `System.TimeProvider` is the clock; nothing wrapped
+  `Microsoft.Extensions.Internal.ISystemClock` any more, so the type had no job left.
 - **BREAKING:** the per-options `Clock` properties: `ICacheOptions.Clock` and its implementations on
   `InMemoryCacheOptions`, `InMemoryRedisCacheOptions` and `RedisCacheOptions`,
   `RedisConnectionOptions.Clock`, `InMemoryQueueCacheOptions.Clock` and
-  `InMemoryRedisQueueCacheOptions.Clock`. Time comes from the one `ICacheClock` in DI — see
+  `InMemoryRedisQueueCacheOptions.Clock`. Time comes from the one `TimeProvider` in DI — see
   **Changed**. `MemoryCacheFactory`, `UiPathDistributedCache`, the provider constructors,
   `MultilayerCacheBase`, `RedisCacheBase`, `RedisProfiler` and `RedisStreamHealthMaintainer` take an
-  `ICacheClock` instead of an `ISystemClock?` or nothing.
+  `TimeProvider` instead of an `ISystemClock?` or nothing.
 - **BREAKING:** the `[Obsolete]` options properties. The rename aliases `PrimaryMaxExpiration`,
   `PrimaryMaxExpirationDisconnected` and `UsePrimaryOnlyWhenDisconnected` on `IMultilayerCacheOptions`,
   `InMemoryCacheOptions` and `InMemoryRedisCacheOptions` — use `LocalMaxExpiration`,

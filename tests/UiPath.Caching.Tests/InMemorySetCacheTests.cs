@@ -1,4 +1,3 @@
-using Microsoft.Extensions.Internal;
 using Microsoft.Extensions.Logging.Abstractions;
 using UiPath.Caching.Locking;
 
@@ -13,20 +12,15 @@ public class InMemorySetCacheTests
     // Hoisted out of the call below so the array is not rebuilt per invocation (CA1861).
     private static readonly string[] OneItem = ["a"];
 
-    private static MultilayerSetCache CreateSut(InMemoryQueueCacheOptions? options = null, ISystemClock? clock = null)
+    private static MultilayerSetCache CreateSut(InMemoryQueueCacheOptions? options = null, TimeProvider? clock = null)
     {
         options ??= new InMemoryQueueCacheOptions();
-        var cacheClock = new CacheClock(clock);
+        var cacheClock = clock ?? TimeProvider.System;
         return new MultilayerSetCache(
             KnownCacheProviderNames.InMemory, NullSetCache.Instance,
             new MemoryCacheFactory(cacheClock, NullLoggerFactory.Instance),
             new SystemJsonByteSerializerProxy(), options,
             NullLocalLock.Instance, cacheClock);
-    }
-
-    private sealed class FakeClock(DateTimeOffset now) : ISystemClock
-    {
-        public DateTimeOffset UtcNow { get; } = now;
     }
 
     // Casts to IEnumerable<string> so the call binds to the IEnumerable<T> AddAsync overload rather
@@ -53,9 +47,9 @@ public class InMemorySetCacheTests
     {
         var sut = new MultilayerSetCache(
             KnownCacheProviderNames.InMemory, NullSetCache.Instance,
-            new MemoryCacheFactory(new CacheClock(), NullLoggerFactory.Instance),
+            new MemoryCacheFactory(TimeProvider.System, NullLoggerFactory.Instance),
             new RawByteSerializerProxy(), new InMemoryQueueCacheOptions { DefaultExpiration = null },
-            NullLocalLock.Instance, new CacheClock());
+            NullLocalLock.Instance, TimeProvider.System);
         var payload = new byte[] { 1, 2, 3 };
 
         (await sut.AddAsync("k", payload, (CachePolicy?)null, Ct)).Should().BeTrue();
@@ -90,7 +84,7 @@ public class InMemorySetCacheTests
     public async Task Expirations_are_resolved_against_the_configured_clock()
     {
         var now = new DateTimeOffset(2020, 1, 1, 0, 0, 0, TimeSpan.Zero);
-        var sut = CreateSut(clock: new FakeClock(now));
+        var sut = CreateSut(clock: new FakeTimeProvider(now));
 
         var added = await sut.AddAsync("k", (IEnumerable<string>)OneItem, now.AddDays(1), (CachePolicy?)null, Ct);
 

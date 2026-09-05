@@ -112,7 +112,7 @@ public class CacheExpirationGuardTests
         return new MultilayerCache(
             KnownCacheProviderNames.InMemory,
             NullCache.Instance,
-            new MemoryCacheFactory(new CacheClock(), NullLoggerFactory.Instance),
+            new MemoryCacheFactory(TimeProvider.System, NullLoggerFactory.Instance),
             NullChangeTokenFactory.Instance,
             NullTopicFactory.Instance,
             NullCacheEventFactory.Instance,
@@ -123,7 +123,7 @@ public class CacheExpirationGuardTests
             localLock: new AsyncKeyedLocalLock(Options.Create(cacheOptions)),
             distributedLock: NullDistributedLock.Instance,
             policyFactory: NullCachePolicyFactory.Instance,
-            clock: new CacheClock(),
+            clock: TimeProvider.System,
             logger: NullLogger.Instance);
     }
 

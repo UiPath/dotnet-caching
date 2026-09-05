@@ -8,7 +8,7 @@ internal class LocalMemorySetter(
     ITopicProvider topicProvider,
     IMemoryCache memoryCache,
     ILogger logger,
-    ICacheClock clock,
+    TimeProvider clock,
     IMultilayerCacheOptions cacheOptions,
     IMemoryCacheOptions memoryCacheOptions,
     ICachingTelemetryProvider telemetryProvider)

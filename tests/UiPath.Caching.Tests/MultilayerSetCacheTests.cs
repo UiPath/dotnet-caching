@@ -7,7 +7,7 @@ public class MultilayerSetCacheTests
 {
     private static CancellationToken Ct => TestContext.Current.CancellationToken;
 
-    private static IMemoryCacheFactory MemoryFactory() => new MemoryCacheFactory(new CacheClock(), NullLoggerFactory.Instance);
+    private static IMemoryCacheFactory MemoryFactory() => new MemoryCacheFactory(TimeProvider.System, NullLoggerFactory.Instance);
 
     // The inner (L2) is always a real store; the InMemory and InMemoryRedis providers differ only in
     // what they pass as L2. A substitute stands in for it here.
@@ -18,13 +18,8 @@ public class MultilayerSetCacheTests
             KnownCacheProviderNames.InMemoryRedis, l2,
             MemoryFactory(), new SystemJsonByteSerializerProxy(),
             new InMemoryRedisQueueCacheOptions { LocalMaxExpiration = TimeSpan.FromMinutes(5) },
-            NullLocalLock.Instance, new CacheClock());
+            NullLocalLock.Instance, TimeProvider.System);
         return (sut, l2);
-    }
-
-    private sealed class FakeClock(DateTimeOffset now) : Microsoft.Extensions.Internal.ISystemClock
-    {
-        public DateTimeOffset UtcNow { get; } = now;
     }
 
     /// <summary>
@@ -37,7 +32,7 @@ public class MultilayerSetCacheTests
         var now = new DateTimeOffset(2030, 1, 1, 0, 0, 0, TimeSpan.Zero);
         var l2 = Substitute.For<ISetCache>();
         var options = new InMemoryRedisQueueCacheOptions { DefaultExpiration = TimeSpan.FromMinutes(7) };
-        var sut = new MultilayerSetCache(KnownCacheProviderNames.InMemoryRedis, l2, MemoryFactory(), new SystemJsonByteSerializerProxy(), options, NullLocalLock.Instance, new CacheClock(new FakeClock(now)));
+        var sut = new MultilayerSetCache(KnownCacheProviderNames.InMemoryRedis, l2, MemoryFactory(), new SystemJsonByteSerializerProxy(), options, NullLocalLock.Instance, new FakeTimeProvider(now));
 
         await sut.AddAsync("k", "x", (CachePolicy?)null, Ct);
         await sut.AddAsync("k", (IEnumerable<string>)["y"], (CachePolicy?)null, Ct);
@@ -67,7 +62,7 @@ public class MultilayerSetCacheTests
     {
         var now = new DateTimeOffset(2030, 1, 1, 0, 0, 0, TimeSpan.Zero);
         var l2 = Substitute.For<ISetCache>();
-        var clock = new CacheClock(new FakeClock(now));
+        var clock = new FakeTimeProvider(now);
         var sut = new MultilayerSetCache(KnownCacheProviderNames.InMemoryRedis, l2, new MemoryCacheFactory(clock, NullLoggerFactory.Instance), new SystemJsonByteSerializerProxy(), new InMemoryRedisQueueCacheOptions(), NullLocalLock.Instance, clock);
 
         await sut.AddAsync("k", (IEnumerable<string>)["x"], TimeSpan.FromHours(1), (CachePolicy?)null, Ct);
@@ -236,7 +231,7 @@ public class MultilayerSetCacheTests
         var sut = new MultilayerSetCache(
             KnownCacheProviderNames.InMemoryRedis, l2,
             MemoryFactory(), new SystemJsonByteSerializerProxy(), options,
-            NullLocalLock.Instance, new CacheClock());
+            NullLocalLock.Instance, TimeProvider.System);
         return (sut, l2);
     }
 

@@ -18,7 +18,7 @@ public static class AutoFixtureCreator
         fixture.Customizations.Add(new TelemetryProviderCustomization());
         fixture.Customizations.Add(new CachePolicyFactoryCustomization());
         fixture.Customizations.Add(new CacheOptionsCustomization());
-        fixture.Customizations.Add(new CacheClockCustomization());
+        fixture.Customizations.Add(new TimeProviderCustomization());
 
         fixture.Behaviors.OfType<ThrowingRecursionBehavior>().ToList()
             .ForEach(b => fixture.Behaviors.Remove(b));
@@ -30,14 +30,14 @@ public static class AutoFixtureCreator
 }
 
 /// <summary>
-/// The library takes one <see cref="ICacheClock"/> from DI. Left to AutoNSubstitute it would be a mock
-/// whose UtcNow is a random instant, so it defaults to the real clock here; a test that fixes time
-/// injects <c>new CacheClock(frozenSystemClock)</c>, and an injection outranks this builder.
+/// The library takes one <see cref="TimeProvider"/> from DI. Left to AutoNSubstitute it would be a mock
+/// whose GetUtcNow() is a random instant, so it defaults to the system clock here; a test that fixes
+/// time injects a <c>FakeTimeProvider</c> or <c>SystemClockTimeProvider</c>, and an injection outranks this builder.
 /// </summary>
-public class CacheClockCustomization : ISpecimenBuilder
+public class TimeProviderCustomization : ISpecimenBuilder
 {
     public object Create(object request, ISpecimenContext context) =>
-        request is Type type && type == typeof(ICacheClock) ? new CacheClock() : new NoSpecimen();
+        request is Type type && type == typeof(TimeProvider) ? TimeProvider.System : new NoSpecimen();
 }
 
 public class TelemetryProviderCustomization : ISpecimenBuilder

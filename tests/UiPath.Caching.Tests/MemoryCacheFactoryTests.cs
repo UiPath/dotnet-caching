@@ -12,7 +12,7 @@ public class MemoryCacheFactoryTests
     {
         // Arrange
         var clock = _fixture.Freeze<ISystemClock>();
-        var factory = new MemoryCacheFactory(new CacheClock(clock), NullLoggerFactory.Instance);
+        var factory = new MemoryCacheFactory(new SystemClockTimeProvider(clock), NullLoggerFactory.Instance);
         var memoryOptions = new MemoryCacheOptions
         {
             SizeLimit = 1,
@@ -33,7 +33,7 @@ public class MemoryCacheFactoryTests
     {
         // Arrange
         var clock = _fixture.Freeze<ISystemClock>();
-        var factory = new MemoryCacheFactory(new CacheClock(clock), NullLoggerFactory.Instance);
+        var factory = new MemoryCacheFactory(new SystemClockTimeProvider(clock), NullLoggerFactory.Instance);
         var memoryOptions = new MemoryCacheOptions
         {
             SizeLimit = 1,
@@ -55,7 +55,7 @@ public class MemoryCacheFactoryTests
     {
         // Arrange
         var clock = _fixture.Freeze<ISystemClock>();
-        var factory = new MemoryCacheFactory(new CacheClock(clock), NullLoggerFactory.Instance);
+        var factory = new MemoryCacheFactory(new SystemClockTimeProvider(clock), NullLoggerFactory.Instance);
         var memoryOptions = new MemoryCacheOptions
         {
         };
@@ -86,7 +86,7 @@ public class MemoryCacheFactoryTests
 
     private static bool IsLiveUnder(ISystemClock clock)
     {
-        var cache = new MemoryCacheFactory(new CacheClock(clock), NullLoggerFactory.Instance).Get(new MemoryCacheOptions());
+        var cache = new MemoryCacheFactory(new SystemClockTimeProvider(clock), NullLoggerFactory.Instance).Get(new MemoryCacheOptions());
         cache.Set("k", "v", new MemoryCacheEntryOptions { AbsoluteExpiration = Deadline });
         return cache.TryGetValue("k", out _);
     }

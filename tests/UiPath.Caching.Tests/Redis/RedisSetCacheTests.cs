@@ -541,7 +541,7 @@ public class RedisSetCacheTests(ITestContextAccessor testContextAccessor) : IAsy
         _database = _fixture.Freeze<IDatabase>();
         _transaction = _fixture.Freeze<ITransaction>();
         _clock = _fixture.Freeze<ISystemClock>();
-        _fixture.Inject<ICacheClock>(new CacheClock(_clock));
+        _fixture.Inject<TimeProvider>(new SystemClockTimeProvider(_clock));
         _clock.UtcNow.Returns(_ => _now);
         _logger = _fixture.Freeze<ILogger<RedisSetCache>>();
         _logger.IsEnabled(Arg.Any<LogLevel>()).Returns(true);
