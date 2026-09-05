@@ -70,10 +70,7 @@ public static class ServiceCollectionExtensions
         return services;
     }
 
-    /// <summary>
-    /// The library's one clock: <see cref="TimeProvider.System"/> unless the container already has a
-    /// <see cref="TimeProvider"/>. Register one before <c>AddCaching</c> to control time.
-    /// </summary>
+    /// <summary>The library's one clock: <see cref="TimeProvider.System"/> unless the container already has a <see cref="TimeProvider"/>.</summary>
     public static IServiceCollection TryAddTimeProvider(this IServiceCollection services)
     {
         services.TryAddSingleton(TimeProvider.System);

@@ -390,11 +390,7 @@ public class RedisCacheTests(ITestContextAccessor testContextAccessor) : IAsyncL
         await act.Should().ThrowAsync<ArgumentNullException>();
     }
 
-    /// <summary>
-    /// A configured default is a write-side rule. A read reports what storage holds, so a key with
-    /// no TTL reads as unbounded whether or not a default exists — and <c>ExpireTimeAsync</c>, which
-    /// returns the raw <see langword="null"/>, agrees with it.
-    /// </summary>
+    /// <summary>A read reports what storage holds; a default is a write-side rule, and <c>ExpireTimeAsync</c> agrees.</summary>
     [Fact]
     public async Task GetCacheEntry_reports_no_ttl_as_MaxValue_even_when_a_default_is_configured_v7()
     {
@@ -671,11 +667,6 @@ public class RedisCacheTests(ITestContextAccessor testContextAccessor) : IAsyncL
         actualOffset.Should().Be(expected);
     }
 
-    /// <summary>
-    /// An unset provider default no longer reads as "no TTL": the write inherits
-    /// <see cref="CachePolicy.DefaultDistributedExpiration"/>, so the key gets a deadline instead of
-    /// being persisted.
-    /// </summary>
     [Fact]
     public async Task Refresh_with_no_expiration_and_no_default_takes_the_library_default()
     {

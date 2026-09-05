@@ -69,10 +69,6 @@ public class MemoryCacheFactoryTests
         act.Should().NotThrow();
     }
 
-    /// <summary>
-    /// The memory cache judges deadlines on the library's one clock, so a deadline computed on it is
-    /// live or expired by the same "now" — never by the ambient system clock.
-    /// </summary>
     [Fact]
     public void The_memory_cache_judges_deadlines_on_the_injected_clock()
     {

@@ -33,11 +33,9 @@ public abstract class MultilayerCacheBase : IDisposable
     // Hardcoded fallback values for the lock fields. Merged in as the lowest-priority policy
     // (after provider-specific + user DefaultCachePolicy) so every cache instance has a fully
     // resolved Lock — every field non-null — by the time validation runs.
-    //
-    // DistributedExpiration is deliberately NOT floored here. The floor is a write-side rule (see
-    // ResolveWriteDuration); keeping it out of the resolved policy keeps "nothing configured"
-    // observable as null to anything that inspects the policy, and keeps reads honest — a key that
-    // genuinely has no TTL reports DateTimeOffset.MaxValue, never a fabricated now+default.
+    // 
+    // DistributedExpiration is deliberately not floored here: the floor is a write-side rule
+    // (ResolveWriteDuration), and leaving it out keeps "nothing configured" observable as null.
     private static readonly CachePolicy HardcodedDefaults = new()
     {
         Lock = new LockProfile
@@ -171,36 +169,23 @@ public abstract class MultilayerCacheBase : IDisposable
 
     protected static TimeSpan ApplyJitter(TimeSpan duration, TimeSpan? maxJitter)
     {
-        // TimeSpan.MaxValue means "no TTL", and jitter exists to spread an expiry that never comes.
-        // Jittering it would clamp it below the sentinel and put the entry back on the EXPIRE path.
+        // TimeSpan.MaxValue means "no TTL"; jittering it would clamp it under the sentinel and back onto EXPIRE.
         if (duration <= TimeSpan.Zero || duration == TimeSpan.MaxValue || maxJitter is not { } max || max <= TimeSpan.Zero)
         {
             return duration;
         }
-        // The draw is bounded by the room left under the sentinel, so the sum cannot overflow and
-        // cannot land on it by accident. Fitting the result into the DateTime range is the clock's job.
+        // Bounded under the sentinel, so the sum can neither overflow nor land on it; the clock fits it into the DateTime range.
         var bonusTicks = Random.Shared.NextInt64(Math.Min(max.Ticks, TimeSpan.MaxValue.Ticks - duration.Ticks));
         return duration + new TimeSpan(bonusTicks);
     }
 
-    /// <summary>
-    /// Resolves the L2 write duration, applying jitter only when the caller did not pass an explicit
-    /// expiration. Resolves the full fallback chain (<c>policy.DistributedExpiration</c> →
-    /// <c>IMultilayerCacheOptions.DefaultExpiration</c> →
-    /// <see cref="CachePolicy.DefaultDistributedExpiration"/>) BEFORE jittering so the options-default
-    /// path is jittered too — not just the policy path. The last step is what stops "nobody
-    /// configured a lifetime" from meaning "keep this forever"; unbounded has to be asked for, by
-    /// configuring <see cref="TimeSpan.MaxValue"/>.
-    /// </summary>
+    /// <summary>The L2 write lifetime: a caller value as-is, else <see cref="ResolveDuration"/> jittered.</summary>
     protected TimeSpan ResolveWriteDuration(CachePolicy policy, TimeSpan? callerExpiration = null) =>
         callerExpiration ?? ApplyJitter(ResolveDuration(policy), policy.JitterMaxDuration);
 
     /// <summary>
-    /// The configured L2 lifetime, floored and <em>not</em> jittered: <c>policy.DistributedExpiration</c> →
-    /// <c>IMultilayerCacheOptions.DefaultExpiration</c> → <see cref="CachePolicy.DefaultDistributedExpiration"/>.
-    /// This is the duration the rehydrate threshold and timeout are measured against. Jitter is a
-    /// per-write draw, so a read that used a fresh draw would move the soft-TTL threshold on every
-    /// hit; the threshold has to be a function of the configuration alone.
+    /// The configured L2 lifetime, floored and unjittered: policy → options default → <see cref="CachePolicy.DefaultDistributedExpiration"/>.
+    /// The rehydrate threshold measures against this, so it cannot depend on a per-write draw.
     /// </summary>
     protected TimeSpan ResolveDuration(CachePolicy policy) =>
         policy.DistributedExpiration
@@ -222,15 +207,11 @@ public abstract class MultilayerCacheBase : IDisposable
     private protected (DateTimeOffset Expiration, TimeSpan Duration) CallerWrite(DateTimeOffset expiration, [CallerArgumentExpression(nameof(expiration))] string? paramName = null) =>
         (expiration, CacheExpiration.ToDuration(expiration, _clock.GetUtcNow(), paramName));
 
-    /// <summary>Write expiration for a call that carried no <c>expiration</c>: the policy's L2 TTL jittered, then the cache default.</summary>
+    /// <summary>Write expiration from the policy chain, jittered.</summary>
     private protected DateTimeOffset GetExpiration(CachePolicy policy) =>
         _clock.ToDateTimeOffset(ResolveWriteDuration(policy));
 
-    /// <summary>
-    /// Write expiration carried by an entry-options object: <c>ExpireTime</c>, then <c>TimeToLive</c>,
-    /// then <see cref="ResolveWriteDuration"/>. The options object is the one seam where <c>null</c>
-    /// still means "inherit".
-    /// </summary>
+    /// <summary>Write expiration from an options object: <c>ExpireTime</c>, then <c>TimeToLive</c>, then the policy chain.</summary>
     private protected DateTimeOffset GetExpiration(HashCacheEntryOptions options, CachePolicy policy) =>
         options.ExpireTime ?? _clock.ToDateTimeOffset(options.TimeToLive ?? ResolveWriteDuration(policy));
 

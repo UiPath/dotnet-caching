@@ -22,10 +22,6 @@ public class MultilayerSetCacheTests
         return (sut, l2);
     }
 
-    /// <summary>
-    /// Mirrors <c>InMemoryRedisCacheOptions.DefaultExpiration</c>: the multilayer's own default outranks the
-    /// Redis tier's, so a write that names no lifetime reaches L2 with this deadline rather than with none.
-    /// </summary>
     [Fact]
     public async Task Configured_default_reaches_L2_as_the_write_deadline()
     {
@@ -56,7 +52,6 @@ public class MultilayerSetCacheTests
         await l2.DidNotReceiveWithAnyArgs().AddAsync<string>("k", Arg.Any<IEnumerable<string>>(), Arg.Any<DateTimeOffset>(), Arg.Any<CachePolicy?>(), Arg.Any<CancellationToken>());
     }
 
-    /// <summary>Deadlines are computed on the injected clock — the one the memory cache judges them by — not on the ambient system clock.</summary>
     [Fact]
     public async Task Deadlines_are_computed_on_the_injected_clock()
     {

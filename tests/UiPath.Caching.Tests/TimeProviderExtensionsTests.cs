@@ -1,22 +1,13 @@
 ﻿namespace UiPath.Caching.Tests;
 
-/// <summary>
-/// Turning a resolved duration into a deadline. <see cref="TimeSpan.MaxValue"/> is the configured
-/// spelling of "no TTL" and exceeds the remaining <see cref="DateTime"/> range from any modern date,
-/// so the conversion has to saturate onto <see cref="DateTimeOffset.MaxValue"/> — the sentinel the
-/// providers read as "no TTL" — instead of throwing.
-/// </summary>
+/// <summary>The saturating conversion: <see cref="TimeSpan.MaxValue"/> lands on <see cref="DateTimeOffset.MaxValue"/> instead of overflowing.</summary>
 public class TimeProviderExtensionsTests
 {
     [Fact]
     public void An_unbounded_duration_lands_on_MaxValue_instead_of_overflowing() =>
         TimeProvider.System.ToDateTimeOffset(TimeSpan.MaxValue).Should().Be(DateTimeOffset.MaxValue);
 
-    /// <summary>
-    /// The clock contract is UTC, but a fake can report any offset. Add advances the wall-clock
-    /// <see cref="DateTime"/>, so a positive offset leaves less room than the UTC instant suggests;
-    /// normalizing before the headroom check keeps the conversion total whatever the fake does.
-    /// </summary>
+    /// <summary>A fake may report any offset; normalizing to UTC before the headroom check keeps the conversion total.</summary>
     [Theory]
     [InlineData(5)]
     [InlineData(-5)]
@@ -41,10 +32,6 @@ public class TimeProviderExtensionsTests
         sut.ToDateTimeOffset(TimeSpan.FromHours(2)).Should().Be(now.AddHours(2));
     }
 
-    /// <summary>
-    /// The clock fills no default: a key with no TTL in storage reads as "no TTL" rather than a
-    /// fabricated deadline, on both the duration and the deadline overload.
-    /// </summary>
     [Fact]
     public void Null_reads_as_unbounded()
     {

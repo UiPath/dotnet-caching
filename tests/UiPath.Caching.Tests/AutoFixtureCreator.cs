@@ -29,11 +29,7 @@ public static class AutoFixtureCreator
     }
 }
 
-/// <summary>
-/// The library takes one <see cref="TimeProvider"/> from DI. Left to AutoNSubstitute it would be a mock
-/// whose GetUtcNow() is a random instant, so it defaults to the system clock here; a test that fixes
-/// time injects a <c>FakeTimeProvider</c> or <c>SystemClockTimeProvider</c>, and an injection outranks this builder.
-/// </summary>
+/// <summary>Defaults <see cref="TimeProvider"/> to the system clock; a test that fixes time injects its own, which outranks this.</summary>
 public class TimeProviderCustomization : ISpecimenBuilder
 {
     public object Create(object request, ISpecimenContext context) =>

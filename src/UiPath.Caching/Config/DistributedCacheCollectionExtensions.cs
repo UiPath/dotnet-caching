@@ -230,9 +230,7 @@ public static class DistributedCacheCollectionExtensions
             KnownCacheProviderNames.InMemoryRedis => sp.GetRequiredService<IOptions<InMemoryRedisCacheOptions>>().Value.DefaultExpiration,
             _ => sp.GetRequiredService<IOptions<InMemoryCacheOptions>>().Value.DefaultExpiration,
         };
-        // Mirrors the cache's own chain, floor included. An unset default no longer resolves to
-        // "no TTL", so there is nothing left to reject on that account — only a value someone
-        // actually configured non-positive.
+        // Mirrors the cache's chain, floor included: only a value someone configured non-positive is left to reject.
         var resolved = ResolvePolicy(sp, options) is { } named
             ? named.DistributedExpiration ?? tierDefault ?? CachePolicy.DefaultDistributedExpiration
             : tierDefault

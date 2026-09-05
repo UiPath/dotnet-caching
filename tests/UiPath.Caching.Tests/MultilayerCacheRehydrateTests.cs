@@ -89,12 +89,7 @@ public class MultilayerCacheRehydrateTests(ITestContextAccessor testContextAcces
         generatorTcs.TrySetResult("rehydrated");
     }
 
-    /// <summary>
-    /// Jitter is a per-write draw; the threshold is a function of the configured lifetime alone.
-    /// A hit that measured itself against a fresh draw would cross or miss the threshold at random.
-    /// With a draw range far wider than the lifetime, a jittered duration would put this entry —
-    /// nine tenths through its configured ten minutes — nowhere near the threshold.
-    /// </summary>
+    /// <summary>The threshold measures against the configured lifetime, not a jitter draw; a year-wide draw would put this hit nowhere near it.</summary>
     [Fact]
     public async Task Hit_past_threshold_rehydrates_regardless_of_write_jitter()
     {
@@ -134,10 +129,6 @@ public class MultilayerCacheRehydrateTests(ITestContextAccessor testContextAcces
         await WaitForAsync(() => Volatile.Read(ref generatorCalls) > 0, TimeSpan.FromSeconds(5), token);
     }
 
-    /// <summary>
-    /// A caller-supplied lifetime is honored exactly, on the rehydrate write as much as on the first
-    /// one. Only a policy- or default-derived lifetime is jittered.
-    /// </summary>
     [Fact]
     public async Task Rehydrate_write_keeps_a_caller_supplied_lifetime_exact()
     {
@@ -171,11 +162,7 @@ public class MultilayerCacheRehydrateTests(ITestContextAccessor testContextAcces
         written.Should().BeCloseTo(DateTimeOffset.UtcNow.Add(Duration), TimeSpan.FromSeconds(5));
     }
 
-    /// <summary>
-    /// One resolution feeds both the write deadline and the rehydrate threshold. They used to be
-    /// separate chains: the write took the floor while the threshold bottomed out at null, so an
-    /// entry written under the library default expired after an hour and was never rehydrated.
-    /// </summary>
+    /// <summary>The write and the rehydrate threshold used to be separate chains, so an entry written under the library default was never rehydrated.</summary>
     [Fact]
     public async Task Hit_past_threshold_rehydrates_when_only_the_library_default_supplies_the_duration()
     {

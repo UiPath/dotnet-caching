@@ -2,10 +2,7 @@ namespace UiPath.Caching;
 
 public interface ICacheEntry
 {
-    /// <summary>
-    /// When the entry leaves storage. <see cref="DateTimeOffset.MaxValue"/> means the key has no TTL
-    /// there; it is what storage reported, not a default the cache filled in.
-    /// </summary>
+    /// <summary>When the entry leaves storage; <see cref="DateTimeOffset.MaxValue"/> means it has no TTL there.</summary>
     DateTimeOffset Expiration { get; }
 
     IDictionary<string, string?>? Metadata { get; }

@@ -11,17 +11,10 @@ public sealed class InMemoryQueueCacheOptions : IMultilayerSetCacheOptions
     /// <summary>Indicates whether the in-memory set cache is enabled.</summary>
     public bool Enabled { get; set; } = true;
 
-    /// <summary>
-    /// Cap on a stored set's lifetime. <see langword="null"/>, the default: with no backing tier the
-    /// memory cache <em>is</em> the store, so <see cref="DefaultExpiration"/> already bounds every set
-    /// and a second cap would only shorten it.
-    /// </summary>
+    /// <summary><see langword="null"/> by default: with no backing tier, <see cref="DefaultExpiration"/> already bounds every set.</summary>
     public TimeSpan? LocalMaxExpiration { get; set; }
 
-    /// <summary>
-    /// Kept for parity with <see cref="InMemoryRedisQueueCacheOptions"/>. This provider has no backing
-    /// tier whose connection could fail, so the monitor has nothing to observe; leave it off.
-    /// </summary>
+    /// <summary>Parity with <see cref="InMemoryRedisQueueCacheOptions"/>; there is no backing tier to monitor, so leave it off.</summary>
     public bool ConnectionMonitorEnabled { get; set; }
 
     /// <inheritdoc cref="ConnectionMonitorEnabled"/>
@@ -33,13 +26,7 @@ public sealed class InMemoryQueueCacheOptions : IMultilayerSetCacheOptions
     /// <inheritdoc cref="ConnectionMonitorEnabled"/>
     public TimeSpan? LocalMaxExpirationDisconnected { get; set; } = TimeSpan.FromSeconds(30);
 
-    /// <summary>
-    /// Default whole-set lifetime applied when no explicit expiration or <see cref="CachePolicy"/>
-    /// expiration is supplied. <see langword="null"/> means "inherit", which resolves to
-    /// <see cref="CachePolicy.DefaultDistributedExpiration"/>; to keep a set forever, set
-    /// <see cref="TimeSpan.MaxValue"/>. Every add re-applies the resolved expiration, matching
-    /// <see cref="ISetCache"/>.
-    /// </summary>
+    /// <summary>Whole-set lifetime when neither the call nor the policy names one. <see langword="null"/> resolves to <see cref="CachePolicy.DefaultDistributedExpiration"/>; <see cref="TimeSpan.MaxValue"/> keeps the set forever.</summary>
     public TimeSpan? DefaultExpiration { get; set; } = CachePolicy.DefaultDistributedExpiration;
 
     /// <inheritdoc/>

@@ -9,24 +9,10 @@ namespace UiPath.Caching;
 /// </summary>
 public sealed class CachePolicy
 {
-    /// <summary>
-    /// The L2 lifetime a write inherits when nothing else supplies one: the floor under
-    /// <see cref="DistributedExpiration"/> and the providers' <c>DefaultExpiration</c>, applied by
-    /// the write-side resolution so every write carries a bounded lifetime.
-    /// </summary>
+    /// <summary>The floor under <see cref="DistributedExpiration"/> and the providers' <c>DefaultExpiration</c>: the L2 lifetime a write takes when nothing else names one.</summary>
     /// <remarks>
-    /// It exists so that "nobody configured a TTL" cannot mean "keep this forever". An unbounded
-    /// entry in shared storage has to be asked for, by setting a lifetime of
-    /// <see cref="TimeSpan.MaxValue"/> — which is what the providers already read as "no TTL" —
-    /// rather than by leaving a nullable unset. Per-call and per-policy values still win; this only
-    /// answers the case where the whole chain came back empty.
-    /// <para>
-    /// It is deliberately <em>not</em> merged into the resolved default policy alongside the other
-    /// hardcoded defaults. The floor is a write-side rule; the resolved policy keeps "nothing
-    /// configured" observable as <see langword="null"/>, and a <em>read</em> never consults a
-    /// default at all — a key that genuinely has no TTL in storage reports
-    /// <see cref="DateTimeOffset.MaxValue"/>, never a fabricated <c>now + default</c>.
-    /// </para>
+    /// Omission never means "forever"; ask for unbounded with <see cref="TimeSpan.MaxValue"/>. Applied on the write paths and
+    /// not merged into the resolved policy, so "nothing configured" stays observable as <see langword="null"/>.
     /// </remarks>
     public static readonly TimeSpan DefaultDistributedExpiration = TimeSpan.FromHours(1);
 

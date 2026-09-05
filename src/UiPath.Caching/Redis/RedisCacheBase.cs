@@ -56,11 +56,7 @@ public abstract class RedisCacheBase : IConnectionState, IDisposable
 
     protected TimeProvider Clock { get; }
 
-    /// <summary>
-    /// Write duration for a call that carried no <c>expiration</c>: the policy's L2 TTL, then the
-    /// cache default, then <see cref="CachePolicy.DefaultDistributedExpiration"/>. Never unbounded
-    /// by omission — a lifetime of <see cref="TimeSpan.MaxValue"/> has to be configured to get that.
-    /// </summary>
+    /// <summary>Write duration when the call carries none: policy, then cache default, then <see cref="CachePolicy.DefaultDistributedExpiration"/>; never unbounded by omission.</summary>
     protected TimeSpan PolicyDuration(CachePolicy? policy) =>
         policy?.DistributedExpiration ?? DefaultExpiration ?? CachePolicy.DefaultDistributedExpiration;
 
@@ -72,19 +68,11 @@ public abstract class RedisCacheBase : IConnectionState, IDisposable
     protected TimeSpan CallerDuration(DateTimeOffset expiration, [CallerArgumentExpression(nameof(expiration))] string? paramName = null) =>
         CacheExpiration.ToDuration(expiration, Clock.GetUtcNow(), paramName);
 
-    /// <summary>
-    /// Write expiration for a call that carried no <c>expiration</c>, resolved the same way as
-    /// <see cref="PolicyDuration"/>.
-    /// </summary>
+    /// <summary><see cref="PolicyDuration"/> as an expiration.</summary>
     protected DateTimeOffset GetExpiration(CachePolicy? policy) =>
         Clock.ToDateTimeOffset(PolicyDuration(policy));
 
-    /// <summary>
-    /// Write expiration carried by an entry-options object. <see cref="HashCacheEntryOptions"/> keeps
-    /// its lifetime fields nullable — an options object is the one seam where <c>null</c> still
-    /// means "inherit" — so this resolves <c>ExpireTime</c>, then <c>TimeToLive</c>, then the same
-    /// chain as <see cref="PolicyDuration"/>.
-    /// </summary>
+    /// <summary>Write expiration from an options object: <c>ExpireTime</c>, then <c>TimeToLive</c>, then <see cref="PolicyDuration"/>.</summary>
     protected DateTimeOffset GetExpiration(HashCacheEntryOptions options, CachePolicy? policy) =>
         options.ExpireTime ?? Clock.ToDateTimeOffset(options.TimeToLive ?? PolicyDuration(policy));
 

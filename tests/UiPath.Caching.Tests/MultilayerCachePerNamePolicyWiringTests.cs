@@ -116,10 +116,6 @@ public class MultilayerCachePerNamePolicyWiringTests : IAsyncLifetime
             Arg.Any<CancellationToken>());
     }
 
-    /// <summary>
-    /// Nothing in the chain supplies a lifetime, so the write takes
-    /// <see cref="CachePolicy.DefaultDistributedExpiration"/> rather than being stored unbounded.
-    /// </summary>
     [Fact]
     public async Task SetAsync_falls_back_to_the_library_default_when_nothing_configures_a_TTL()
     {
@@ -162,10 +158,7 @@ public class MultilayerCachePerNamePolicyWiringTests : IAsyncLifetime
             _cacheKey, "v", DateTimeOffset.MaxValue, Arg.Any<CachePolicy?>(), Arg.Any<CancellationToken>());
     }
 
-    /// <summary>
-    /// Jitter spreads an expiry that is coming; an unbounded entry has none. Jittering the sentinel
-    /// would clamp it under <see cref="DateTimeOffset.MaxValue"/> and put the key back on EXPIRE.
-    /// </summary>
+    /// <summary>Jittering the unbounded sentinel would clamp it under <see cref="DateTimeOffset.MaxValue"/> and put the key back on EXPIRE.</summary>
     [Fact]
     public async Task SetAsync_keeps_an_unbounded_default_unbounded_when_the_policy_jitters()
     {
@@ -482,10 +475,6 @@ public class MultilayerCachePerNamePolicyWiringTests : IAsyncLifetime
             "across 30 draws with maxJitter=10s, per-call TTL spread should clearly exceed 1s — a no-op ApplyJitter would produce zero spread independent of wall-clock time");
     }
 
-    /// <summary>
-    /// Per-call unbounded has the same spelling as configured unbounded, and reaches L2 as the same
-    /// sentinel rather than overflowing on the way to a deadline.
-    /// </summary>
     [Fact]
     public async Task SetAsync_with_a_per_call_unbounded_duration_stores_unbounded()
     {

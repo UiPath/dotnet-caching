@@ -69,9 +69,7 @@ internal sealed partial class MultilayerCache : MultilayerCacheBase, ICache
     {
         ArgumentNullException.ThrowIfNull(generator);
         policy ??= _defaultPolicy;
-        // One floored resolution feeds both the write and the rehydrate threshold; only the write
-        // is jittered. A hit reuses the configured duration, not a fresh draw, so the soft-TTL
-        // threshold is the same on every read of the same entry.
+        // One floored resolution for the write and the rehydrate threshold; only the write is jittered.
         var duration = ResolveDuration(policy);
         var writeExpiration = _clock.ToDateTimeOffset(ApplyJitter(duration, policy.JitterMaxDuration));
         return GetOrAddInternalAsync(cacheKey, generator, writeExpiration, duration, policy.JitterMaxDuration, policy, token);
@@ -97,9 +95,7 @@ internal sealed partial class MultilayerCache : MultilayerCacheBase, ICache
         ArgumentNullException.ThrowIfNull(entries);
         ArgumentNullException.ThrowIfNull(generator);
         policy ??= _defaultPolicy;
-        // One floored resolution feeds both the write and the rehydrate threshold; only the write
-        // is jittered. A hit reuses the configured duration, not a fresh draw, so the soft-TTL
-        // threshold is the same on every read of the same entry.
+        // One floored resolution for the write and the rehydrate threshold; only the write is jittered.
         var duration = ResolveDuration(policy);
         var writeExpiration = _clock.ToDateTimeOffset(ApplyJitter(duration, policy.JitterMaxDuration));
         return GetOrAddBatchInternalAsync<T, TState>(entries, generator, writeExpiration, duration, policy.JitterMaxDuration, policy, token);

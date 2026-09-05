@@ -75,11 +75,7 @@ public class InMemorySetCacheTests
         (await sut.CountAsync<Member>("k", Ct)).Should().Be(0);
     }
 
-    /// <summary>
-    /// Every expiration decision on this path reads the configured clock, not the ambient one. The
-    /// deadline here is in the past by wall-clock time and in the future by the cache's own time,
-    /// so it is only accepted if both the validation and the L1 store agree to use the latter.
-    /// </summary>
+    /// <summary>The deadline is past by wall-clock time and future by the injected clock; accepted only if every check reads the injected one.</summary>
     [Fact]
     public async Task Expirations_are_resolved_against_the_configured_clock()
     {
@@ -92,10 +88,6 @@ public class InMemorySetCacheTests
         (await sut.MembersAsync<string>("k", token: Ct)).Should().BeEquivalentTo(OneItem);
     }
 
-    /// <summary>
-    /// Memory-only, this tier resolves the whole lifetime, so the configured spelling of unbounded
-    /// has to survive the conversion to a deadline instead of overflowing on the way.
-    /// </summary>
     [Fact]
     public async Task Add_with_an_unbounded_default_expiration_stores_the_item()
     {

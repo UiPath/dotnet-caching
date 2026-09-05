@@ -465,10 +465,6 @@ public class UiPathDistributedCacheTests
         expiration.Should().Be(DateTimeOffset.MaxValue);
     }
 
-    /// <summary>
-    /// The sentinel is handed through untouched: the backing cache is what turns a duration into a
-    /// deadline, and it saturates, so there is nothing for this adapter to pre-clamp.
-    /// </summary>
     [Fact]
     public async Task Unbounded_sliding_window_reaches_the_backing_cache_as_the_sentinel()
     {

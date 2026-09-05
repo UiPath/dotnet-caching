@@ -28,8 +28,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
   what the application's caches would produce. Configurable via
   `UiPathDistributedCacheOptions`: `PolicyName`, `DefaultEntryExpiration`, and
   `AllowUnboundedEntries`. Writes with no caller expiration take a bounded default rather than living
-  forever in shared storage; registration fails fast when no bounded default resolves and
-  `AllowUnboundedEntries` is not set.
+  forever in shared storage; an unset default resolves to `CachePolicy.DefaultDistributedExpiration`,
+  and only `AllowUnboundedEntries` reaches "until removed".
 - **`CacheOptions.KeyCasing`** selects how keys built without an explicit mode are normalized —
   `Insensitive` (trim + lowercase, the historical behavior and the default) or `Sensitive` (preserve
   the caller's casing). `CacheKey` gained a `(string?, CacheKeyCasing)` constructor, a `Casing`

@@ -71,10 +71,6 @@ public class CacheExpirationTests
         CacheExpiration.ToDuration(now.AddMinutes(5), now).Should().Be(TimeSpan.FromMinutes(5));
     }
 
-    /// <summary>
-    /// Measured from now the sentinel would be a finite eight thousand years, which no downstream
-    /// check reads as "no TTL"; it has to come out as the duration-space sentinel.
-    /// </summary>
     [Fact]
     public void ToDuration_keeps_the_unbounded_sentinel_unbounded()
     {

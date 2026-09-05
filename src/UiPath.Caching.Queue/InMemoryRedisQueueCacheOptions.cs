@@ -11,12 +11,7 @@ public sealed class InMemoryRedisQueueCacheOptions : IMultilayerSetCacheOptions
     /// <summary>Indicates whether the multilayer set cache is enabled.</summary>
     public bool Enabled { get; set; } = true;
 
-    /// <summary>
-    /// Whole-set lifetime a write takes when neither the call nor the <see cref="CachePolicy"/> names
-    /// one. A value outranks the Redis tier's own <see cref="Redis.RedisCacheOptions.DefaultExpiration"/>
-    /// for sets written through this provider, as <see cref="InMemoryRedisCacheOptions.DefaultExpiration"/>
-    /// does for the other caches. <see langword="null"/>, the default, inherits the tier's default.
-    /// </summary>
+    /// <summary>Whole-set lifetime when neither the call nor the policy names one; outranks <see cref="Redis.RedisCacheOptions.DefaultExpiration"/> for this provider's writes. <see langword="null"/> inherits the tier's default.</summary>
     public TimeSpan? DefaultExpiration { get; set; }
 
     /// <summary>

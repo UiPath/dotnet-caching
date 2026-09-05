@@ -34,12 +34,7 @@ public class DistributedCacheRegistrationTests
         cache.Get("k").Should().Equal(1);
     }
 
-    /// <summary>
-    /// This used to fail fast: a null provider default meant the adapter would store entries with no
-    /// TTL at all. It resolves to <see cref="CachePolicy.DefaultDistributedExpiration"/> now, so
-    /// there is nothing left to reject and registration succeeds. Unbounded is still available, but
-    /// through <c>AllowUnboundedEntries</c> rather than by leaving a nullable unset.
-    /// </summary>
+    /// <summary>A null provider default resolves to the library floor now, so registration succeeds; unbounded is <c>AllowUnboundedEntries</c>.</summary>
     [Fact]
     public void Null_default_expiration_without_policy_is_bounded_by_the_library_default()
     {

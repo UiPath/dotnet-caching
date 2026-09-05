@@ -222,8 +222,7 @@ internal sealed class MultilayerSetCache : ISetCache
 
     private DateTimeOffset? LocalWriteExpiration(DateTimeOffset? requested, CachePolicy? policy)
     {
-        // Memory-only, this is the whole answer, so the floor applies here too rather than leaving the
-        // set unbounded. With a Redis inner the L2 resolves anything not configured here, and this caps L1.
+        // Memory-only this is the whole answer, so the floor applies here; with a Redis inner it only caps L1.
         requested ??= FromTtl(policy?.DistributedExpiration
             ?? _defaultExpiration
             ?? (_inner is NullSetCache ? CachePolicy.DefaultDistributedExpiration : null));
@@ -251,8 +250,6 @@ internal sealed class MultilayerSetCache : ISetCache
         {
             return await _memorySetCache.AddAsync(key, items, LocalWriteExpiration(expiration, policy), token).ConfigureAwait(false);
         }
-        // With no caller expiration, this provider's own default is the next word; only when it has
-        // none too does the inner cache resolve the lifetime from the policy and its own default.
         var added = (expiration ?? ConfiguredWriteExpiration(policy)) is { } deadline
             ? await _inner.AddAsync(cacheKey, items, deadline, policy, token).ConfigureAwait(false)
             : await _inner.AddAsync(cacheKey, items, policy, token).ConfigureAwait(false);
@@ -260,11 +257,7 @@ internal sealed class MultilayerSetCache : ISetCache
         return added;
     }
 
-    /// <summary>
-    /// This provider's <see cref="IMultilayerSetCacheOptions.DefaultExpiration"/> as a write deadline, when
-    /// neither the caller nor the policy named a lifetime. Mirrors <c>InMemoryRedisCacheOptions.DefaultExpiration</c>:
-    /// the multilayer's default outranks the Redis tier's own.
-    /// </summary>
+    /// <summary>This provider's <see cref="IMultilayerSetCacheOptions.DefaultExpiration"/> as the L2 write deadline when neither the caller nor the policy named one. Memory-only, the inner is a no-op and the local tier resolves it.</summary>
     private DateTimeOffset? ConfiguredWriteExpiration(CachePolicy? policy) =>
         _inner is not NullSetCache && policy?.DistributedExpiration is null && _defaultExpiration is { } configured
             ? _clock.ToDateTimeOffset(configured)
