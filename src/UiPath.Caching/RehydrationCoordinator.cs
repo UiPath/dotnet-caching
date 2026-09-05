@@ -7,7 +7,7 @@ namespace UiPath.Caching;
 
 internal sealed class RehydrationCoordinator(
     string cacheName,
-    CacheClock clock,
+    TimeProvider clock,
     IDistributedLock distributedLock,
     IDistributedLockKeyStrategy lockKeyStrategy,
     ICachingTelemetryProvider telemetry,
@@ -92,7 +92,7 @@ internal sealed class RehydrationCoordinator(
         var reserved = new List<CacheKey>(candidates.Count);
         foreach (var (key, entryExpiration) in candidates)
         {
-            var remaining = entryExpiration - clock.UtcNow;
+            var remaining = entryExpiration - clock.GetUtcNow();
             if (remaining <= TimeSpan.Zero)
             {
                 continue;
@@ -300,7 +300,7 @@ internal sealed class RehydrationCoordinator(
         {
             return 0;
         }
-        var nowTicks = clock.UtcNow.UtcTicks;
+        var nowTicks = clock.GetUtcNow().UtcTicks;
         if (nowTicks - entry.FailedAtTicks > maxCooldown.Ticks)
         {
             _failureCount.TryRemove(new KeyValuePair<string, (int, long)>(key, entry));
@@ -311,7 +311,7 @@ internal sealed class RehydrationCoordinator(
 
     private void IncrementFailureCount(string key)
     {
-        var nowTicks = clock.UtcNow.UtcTicks;
+        var nowTicks = clock.GetUtcNow().UtcTicks;
         _failureCount.AddOrUpdate(
             key,
             static (_, ts) => (1, ts),

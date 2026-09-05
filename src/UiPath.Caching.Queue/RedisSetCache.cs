@@ -24,8 +24,9 @@ public sealed partial class RedisSetCache : RedisCacheBase, ISetCache
         CacheOptions cacheOptions,
         RedisSetCacheOptions setCacheOptions,
         ICachePolicyFactory policyFactory,
+        TimeProvider clock,
         ILogger<RedisSetCache> logger)
-        : base(redis, telemetryProvider, redisCacheOptions, cacheOptions, policyFactory)
+        : base(redis, telemetryProvider, redisCacheOptions, cacheOptions, policyFactory, clock)
     {
         _serializer = serializer;
         _logger = logger;
@@ -42,18 +43,18 @@ public sealed partial class RedisSetCache : RedisCacheBase, ISetCache
     {
         NotCacheableException.ThrowIfNotCacheable<T>();
         var value = _serializer.Serialize(item);
-        var added = await AddManyInnerAsync<T>(cacheKey, [value], PolicyDeadline(policy), token).ConfigureAwait(false);
+        var added = await AddManyInnerAsync<T>(cacheKey, [value], GetExpiration(policy), token).ConfigureAwait(false);
         return added > 0;
     }
 
     public ValueTask<long> AddAsync<T>(CacheKey cacheKey, IEnumerable<T> items, CachePolicy? policy, CancellationToken token = default) =>
-        AddCoreAsync<T>(cacheKey, items, PolicyDeadline(policy), token);
+        AddCoreAsync<T>(cacheKey, items, GetExpiration(policy), token);
 
     public ValueTask<long> AddAsync<T>(CacheKey cacheKey, IEnumerable<T> items, TimeSpan expiration, CachePolicy? policy, CancellationToken token = default) =>
-        AddCoreAsync<T>(cacheKey, items, Clock.UtcNow.Add(CallerDuration(expiration)), token);
+        AddCoreAsync<T>(cacheKey, items, GetExpiration(expiration), token);
 
     public ValueTask<long> AddAsync<T>(CacheKey cacheKey, IEnumerable<T> items, DateTimeOffset expiration, CachePolicy? policy, CancellationToken token = default) =>
-        AddCoreAsync<T>(cacheKey, items, CallerDeadline(expiration), token);
+        AddCoreAsync<T>(cacheKey, items, GetExpiration(expiration), token);
 
     private ValueTask<long> AddCoreAsync<T>(CacheKey cacheKey, IEnumerable<T> items, DateTimeOffset expiration, CancellationToken token)
     {
@@ -66,7 +67,7 @@ public sealed partial class RedisSetCache : RedisCacheBase, ISetCache
     private async ValueTask<long> AddManyInnerAsync<T>(CacheKey cacheKey, RedisValue[] values, DateTimeOffset expiration, CancellationToken token)
     {
         var redisKey = ToRedisKey(cacheKey, token);
-        var now = Clock.UtcNow;
+        var now = Clock.GetUtcNow();
         long ret = 0;
         if (!IsConnected || values.Length == 0)
         {

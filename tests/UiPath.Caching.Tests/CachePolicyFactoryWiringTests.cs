@@ -60,29 +60,6 @@ public class CachePolicyFactoryWiringTests
     }
 
     [Fact]
-    public void Obsolete_PrimaryMax_aliases_still_forward_into_LocalMax_fields()
-    {
-        // Backcompat: master-branch consumers who set the old property names (in code or via
-        // appsettings binding) should see those values land in the new LocalMax* properties.
-        var services = new ServiceCollection();
-        services.AddLogging();
-#pragma warning disable CS0618 // testing the obsolete alias
-        services.AddCaching(builder => builder.AddInMemoryRedis(opt =>
-        {
-            opt.PrimaryMaxExpiration = TimeSpan.FromMinutes(4);
-            opt.PrimaryMaxExpirationDisconnected = TimeSpan.FromSeconds(45);
-            opt.UsePrimaryOnlyWhenDisconnected = true;
-        }));
-#pragma warning restore CS0618
-        using var provider = services.BuildServiceProvider();
-
-        var opts = provider.GetRequiredService<IOptions<InMemoryRedisCacheOptions>>().Value;
-        opts.LocalMaxExpiration.Should().Be(TimeSpan.FromMinutes(4));
-        opts.LocalMaxExpirationDisconnected.Should().Be(TimeSpan.FromSeconds(45));
-        opts.UseLocalOnlyWhenDisconnected.Should().Be(true);
-    }
-
-    [Fact]
     public void CacheOptions_Policies_defaults_to_empty_dictionary()
     {
         new CacheOptions().Policies.Should().BeEmpty();

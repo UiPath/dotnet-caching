@@ -6,10 +6,13 @@ namespace UiPath.Caching;
 /// The Redis tier itself is configured via <see cref="Redis.RedisSetCacheOptions"/> /
 /// <see cref="Redis.RedisCacheOptions"/>.
 /// </summary>
-public sealed class InMemoryRedisQueueCacheOptions : IMemoryCacheOptions
+public sealed class InMemoryRedisQueueCacheOptions : IMultilayerSetCacheOptions
 {
     /// <summary>Indicates whether the multilayer set cache is enabled.</summary>
     public bool Enabled { get; set; } = true;
+
+    /// <summary>Whole-set lifetime when neither the call nor the policy names one; outranks <see cref="Redis.RedisCacheOptions.DefaultExpiration"/> for this provider's writes. <see langword="null"/> inherits the tier's default.</summary>
+    public TimeSpan? DefaultExpiration { get; set; }
 
     /// <summary>
     /// Upper bound on how long a locally-cached set snapshot is served before it is re-fetched from

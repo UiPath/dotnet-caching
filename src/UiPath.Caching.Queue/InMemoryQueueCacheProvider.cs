@@ -15,6 +15,7 @@ public sealed class InMemoryQueueCacheProvider : IQueueCacheProvider
     private readonly IMemoryCacheFactory _memoryCacheFactory;
     private readonly ISerializerProxy<byte[]> _serializer;
     private readonly ILocalLock _localLock;
+    private readonly TimeProvider _clock;
     private readonly Lazy<MultilayerSetCache> _setCache;
 
     public string Name => KnownCacheProviderNames.InMemory;
@@ -25,8 +26,10 @@ public sealed class InMemoryQueueCacheProvider : IQueueCacheProvider
         IOptions<InMemoryQueueCacheOptions> optionsAccessor,
         IMemoryCacheFactory memoryCacheFactory,
         ISerializerProxy<byte[]> serializer,
-        ILocalLock localLock)
+        ILocalLock localLock,
+        TimeProvider clock)
     {
+        _clock = clock;
         _options = optionsAccessor.Value;
         _memoryCacheFactory = memoryCacheFactory;
         _serializer = serializer;
@@ -47,13 +50,5 @@ public sealed class InMemoryQueueCacheProvider : IQueueCacheProvider
     }
 
     private MultilayerSetCache BuildSetCache() =>
-        new(
-            Name,
-            NullSetCache.Instance,
-            _memoryCacheFactory,
-            _serializer,
-            _options,
-            _localLock,
-            localMaxExpiration: null,
-            defaultExpiration: _options.DefaultExpiration);
+        new(Name, NullSetCache.Instance, _memoryCacheFactory, _serializer, _options, _localLock, _clock);
 }

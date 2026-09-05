@@ -17,7 +17,7 @@ public partial class RedisStreamHealthMaintainer : IHostedService
     private readonly CancellationTokenSource _cancellationTokenSource = new();
     private readonly ICachingTelemetryProvider _telemetryProvider;
     private readonly SemaphoreSlim _semaphore;
-    private readonly ISystemClock _clock;
+    private readonly TimeProvider _clock;
     private string _streamsSearchPattern = string.Empty;
     private PeriodicTimer? _timer;
     private RedisKey _lockKey;
@@ -31,7 +31,8 @@ public partial class RedisStreamHealthMaintainer : IHostedService
         IOptions<RedisStreamsTopicOptions> streamOptionsAccessor,
         IOptions<RedisCacheOptions> redisOptionsAccessor,
         IOptions<CacheOptions> cacheOptionsAccessor,
-        ILogger<RedisStreamHealthMaintainer> logger)
+        ILogger<RedisStreamHealthMaintainer> logger,
+        TimeProvider clock)
     {
         _redis = redis;
         _telemetryProvider = telemetryProvider;
@@ -41,7 +42,7 @@ public partial class RedisStreamHealthMaintainer : IHostedService
         _cacheOptions = cacheOptionsAccessor.Value;
         _cancellationToken = _cancellationTokenSource.Token;
         _sourceUri = (_cacheOptions.SourceUri ?? CacheOptions.MachineUri).ToString();
-        _clock = _redisOptions.Clock ?? new SystemClock();
+        _clock = clock;
         _semaphore = new SemaphoreSlim(1);
     }
 
@@ -109,7 +110,7 @@ public partial class RedisStreamHealthMaintainer : IHostedService
                 return;
             }
 
-            var minOffset = _clock.UtcNow.Subtract(_streamOptions.MaintainerTrimInterval);
+            var minOffset = _clock.GetUtcNow().Subtract(_streamOptions.MaintainerTrimInterval);
             var streams = await GetAllStreamsAsync(cancellationToken).ConfigureAwait(false);
             foreach (var stream in streams)
             {
@@ -194,7 +195,7 @@ public partial class RedisStreamHealthMaintainer : IHostedService
     private async Task CheckEmptyStreamAsync(StreamContext context, StreamInfo streamInfo)
     {
         var delete = true;
-        if (TryParseDeliveredIdToDatetimeOffset(streamInfo.LastGeneratedId, out var offset) && offset >= _clock.UtcNow.Subtract(_streamOptions.MaintainerQuarantineInterval))
+        if (TryParseDeliveredIdToDatetimeOffset(streamInfo.LastGeneratedId, out var offset) && offset >= _clock.GetUtcNow().Subtract(_streamOptions.MaintainerQuarantineInterval))
         {
             LogStreamNotDeleted(context.StreamKey, offset);
             delete = false;
@@ -256,7 +257,7 @@ public partial class RedisStreamHealthMaintainer : IHostedService
             else
             {
                 // Not in quarantine - add to quarantine
-                await Database.HashSetAsync(context.QuarantineKey, groupInfo.Name, _clock.UtcNow.ToString("O"), When.Always, CommandFlags.DemandMaster).ConfigureAwait(false);
+                await Database.HashSetAsync(context.QuarantineKey, groupInfo.Name, _clock.GetUtcNow().ToString("O"), When.Always, CommandFlags.DemandMaster).ConfigureAwait(false);
                 _logger.LogWarning("Consumer group {Group} from stream {Stream} added to quarantine due to stale last-delivered-id", groupInfo.Name, context.StreamKey);
             }
 
@@ -287,7 +288,7 @@ public partial class RedisStreamHealthMaintainer : IHostedService
 
         if (quarantineDatetimeOffset.HasValue)
         {
-            if (quarantineDatetimeOffset.Value <= _clock.UtcNow.Subtract(_streamOptions.MaintainerQuarantineInterval))
+            if (quarantineDatetimeOffset.Value <= _clock.GetUtcNow().Subtract(_streamOptions.MaintainerQuarantineInterval))
             {
                 var success = await Database.StreamDeleteConsumerGroupAsync(context.StreamKey, groupInfo.Name, CommandFlags.DemandMaster).ConfigureAwait(false);
                 if (success)
@@ -299,7 +300,7 @@ public partial class RedisStreamHealthMaintainer : IHostedService
         }
         else
         {
-            var success = await Database.HashSetAsync(context.QuarantineKey, groupInfo.Name, _clock.UtcNow.ToString("O"), When.Always, CommandFlags.DemandMaster).ConfigureAwait(false);
+            var success = await Database.HashSetAsync(context.QuarantineKey, groupInfo.Name, _clock.GetUtcNow().ToString("O"), When.Always, CommandFlags.DemandMaster).ConfigureAwait(false);
             if (success)
             {
                 LogConsumerGroupQuarantined(groupInfo.Name, context.StreamKey);

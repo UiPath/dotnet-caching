@@ -8,7 +8,7 @@ internal abstract class MemoryCacheSetter(
     ITopicProvider topicProvider,
     IMemoryCache memoryCache,
     ILogger logger,
-    CacheClock clock,
+    TimeProvider clock,
     IMultilayerCacheOptions cacheOptions,
     IMemoryCacheOptions memoryCacheOptions,
     ICachingTelemetryProvider telemetryProvider
@@ -21,7 +21,7 @@ internal abstract class MemoryCacheSetter(
 
     private ICacheEntrySizeProvider SizeProvider { get; } = memoryCacheOptions.SizeProvider ?? new DefaultCacheEntrySizeProvider();
 
-    protected CacheClock Clock { get; } = clock;
+    protected TimeProvider Clock { get; } = clock;
 
     public bool Set(ICacheEntryOptions options, ICacheEntry item, Type entryType, TimeSpan? maxExpiration)
     {
@@ -111,7 +111,7 @@ internal abstract class MemoryCacheSetter(
     {
         if (maxExpiration.HasValue)
         {
-            var maxExp = Clock.UtcNow.Add(maxExpiration.Value);
+            var maxExp = Clock.ToDateTimeOffset(maxExpiration.Value);
             if (expiration > maxExp)
             {
                 return maxExp;

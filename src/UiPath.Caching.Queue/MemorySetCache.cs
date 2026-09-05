@@ -8,7 +8,8 @@ internal sealed class MemorySetCache(
     IMemoryCache memoryCache,
     ISerializerProxy<byte[]> serializer,
     ILocalLock localLock,
-    IMemoryCacheOptions memoryCacheOptions)
+    IMemoryCacheOptions memoryCacheOptions,
+    TimeProvider clock)
 {
     private readonly bool _trackSize = memoryCacheOptions.SizeLimit.HasValue;
     private readonly string _localLockKeyPrefix = cacheName + ":";
@@ -97,7 +98,7 @@ internal sealed class MemorySetCache(
         }
         using (await localLock.AcquireAsync(_localLockKeyPrefix + key, token).ConfigureAwait(false))
         {
-            if (expiration.HasValue && expiration.Value <= DateTimeOffset.UtcNow)
+            if (expiration.HasValue && expiration.Value <= clock.GetUtcNow())
             {
                 memoryCache.Remove(key);
                 return 0;

@@ -25,8 +25,9 @@ internal sealed partial class RedisCache : RedisCacheBase, ICache
         RedisCacheOptions redisCacheOptions,
         CacheOptions cacheOptions,
         ICachePolicyFactory policyFactory,
+        TimeProvider clock,
         ILogger<RedisCache> logger)
-        : base(redis, telemetryProvider, redisCacheOptions, cacheOptions, policyFactory)
+        : base(redis, telemetryProvider, redisCacheOptions, cacheOptions, policyFactory, clock)
     {
         _logger = logger;
         _serializer = serializer;
@@ -144,13 +145,13 @@ internal sealed partial class RedisCache : RedisCacheBase, ICache
     }
 
     public ValueTask<bool> RefreshAsync<T>(CacheKey cacheKey, CachePolicy? policy, CancellationToken token = default) =>
-        RefreshCoreAsync<T>(cacheKey, PolicyDeadline(policy), token);
+        RefreshCoreAsync<T>(cacheKey, GetExpiration(policy), token);
 
     public ValueTask<bool> RefreshAsync<T>(CacheKey cacheKey, TimeSpan expiration, CachePolicy? policy, CancellationToken token = default) =>
-        RefreshCoreAsync<T>(cacheKey, Clock.UtcNow.Add(CallerDuration(expiration)), token);
+        RefreshCoreAsync<T>(cacheKey, GetExpiration(expiration), token);
 
     public ValueTask<bool> RefreshAsync<T>(CacheKey cacheKey, DateTimeOffset expiration, CachePolicy? policy, CancellationToken token = default) =>
-        RefreshCoreAsync<T>(cacheKey, CallerDeadline(expiration), token);
+        RefreshCoreAsync<T>(cacheKey, GetExpiration(expiration), token);
 
     private async ValueTask<bool> RefreshCoreAsync<T>(CacheKey cacheKey, DateTimeOffset expiration, CancellationToken token)
     {
@@ -323,7 +324,7 @@ internal sealed partial class RedisCache : RedisCacheBase, ICache
             else
             {
                 var timeToLive = await TimeToLiveAsync<T>(cacheKey, token);
-                ret = timeToLive.HasValue ? Clock.UtcNow.Add(timeToLive.Value) : null;
+                ret = timeToLive.HasValue ? Clock.ToDateTimeOffset(timeToLive.Value) : null;
             }
             operation.Stop();
         }

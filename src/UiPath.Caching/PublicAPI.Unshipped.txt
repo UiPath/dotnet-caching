@@ -3,6 +3,31 @@
 *REMOVED*UiPath.Caching.SystemJsonSerializerProxy
 *REMOVED*UiPath.Caching.SystemJsonSerializerProxy.Deserialize<T>(StackExchange.Redis.RedisValue value) -> T?
 *REMOVED*UiPath.Caching.SystemJsonSerializerProxy.Serialize(object? value) -> StackExchange.Redis.RedisValue
+*REMOVED*UiPath.Caching.CacheClock.CacheClock(Microsoft.Extensions.Internal.ISystemClock? clock = null, System.TimeSpan? defaultExpiration = null) -> void
+*REMOVED*UiPath.Caching.CacheClock.DefaultDateTimeOffset() -> System.DateTimeOffset
+*REMOVED*UiPath.Caching.CacheClock.ToTimeSpan(System.DateTimeOffset? dateTimeOffset) -> System.TimeSpan
+*REMOVED*UiPath.Caching.CacheClock.ToTimeSpan(System.TimeSpan? timeSpan) -> System.TimeSpan
+*REMOVED*static UiPath.Caching.MultilayerCacheBase.ApplyJitter(System.TimeSpan? duration, System.TimeSpan? maxJitter, System.DateTimeOffset utcNow) -> System.TimeSpan?
+*REMOVED*UiPath.Caching.IMultilayerCacheOptions.PrimaryMaxExpiration.get -> System.TimeSpan?
+*REMOVED*UiPath.Caching.IMultilayerCacheOptions.PrimaryMaxExpiration.set -> void
+*REMOVED*UiPath.Caching.IMultilayerCacheOptions.PrimaryMaxExpirationDisconnected.get -> System.TimeSpan?
+*REMOVED*UiPath.Caching.IMultilayerCacheOptions.PrimaryMaxExpirationDisconnected.set -> void
+*REMOVED*UiPath.Caching.IMultilayerCacheOptions.UsePrimaryOnlyWhenDisconnected.get -> bool?
+*REMOVED*UiPath.Caching.IMultilayerCacheOptions.UsePrimaryOnlyWhenDisconnected.set -> void
+*REMOVED*UiPath.Caching.InMemoryCacheOptions.PrimaryMaxExpiration.get -> System.TimeSpan?
+*REMOVED*UiPath.Caching.InMemoryCacheOptions.PrimaryMaxExpiration.set -> void
+*REMOVED*UiPath.Caching.InMemoryCacheOptions.PrimaryMaxExpirationDisconnected.get -> System.TimeSpan?
+*REMOVED*UiPath.Caching.InMemoryCacheOptions.PrimaryMaxExpirationDisconnected.set -> void
+*REMOVED*UiPath.Caching.InMemoryCacheOptions.UsePrimaryOnlyWhenDisconnected.get -> bool?
+*REMOVED*UiPath.Caching.InMemoryCacheOptions.UsePrimaryOnlyWhenDisconnected.set -> void
+*REMOVED*UiPath.Caching.InMemoryRedisCacheOptions.PrimaryMaxExpiration.get -> System.TimeSpan?
+*REMOVED*UiPath.Caching.InMemoryRedisCacheOptions.PrimaryMaxExpiration.set -> void
+*REMOVED*UiPath.Caching.InMemoryRedisCacheOptions.PrimaryMaxExpirationDisconnected.get -> System.TimeSpan?
+*REMOVED*UiPath.Caching.InMemoryRedisCacheOptions.PrimaryMaxExpirationDisconnected.set -> void
+*REMOVED*UiPath.Caching.InMemoryRedisCacheOptions.UsePrimaryOnlyWhenDisconnected.get -> bool?
+*REMOVED*UiPath.Caching.InMemoryRedisCacheOptions.UsePrimaryOnlyWhenDisconnected.set -> void
+*REMOVED*UiPath.Caching.Redis.RedisConnectionOptions.ThreadPoolSocketManager.get -> bool?
+*REMOVED*UiPath.Caching.Redis.RedisConnectionOptions.ThreadPoolSocketManager.set -> void
 *REMOVED*UiPath.Caching.SystemJsonSerializerProxy.SystemJsonSerializerProxy(System.Text.Json.JsonSerializerOptions? options = null) -> void
 *REMOVED*UiPath.Caching.SystemJsonSerializerProxy.TryDeserialize<T>(object? value, out T? result) -> bool
 *REMOVED*UiPath.Caching.SystemJsonSerializerProxy.TryDeserialize<T>(string? value, out T? result) -> bool
@@ -21,14 +46,51 @@ UiPath.Caching.Distributed.UiPathDistributedCacheOptions.RedisKeyDifferentiator.
 UiPath.Caching.Distributed.UiPathDistributedCacheOptions.RedisKeyStrategyFactory.get -> UiPath.Caching.Redis.IRedisKeyStrategyFactory?
 UiPath.Caching.Distributed.UiPathDistributedCacheOptions.RedisKeyStrategyFactory.set -> void
 UiPath.Caching.Distributed.UiPathDistributedCacheOptions.UiPathDistributedCacheOptions() -> void
-UiPath.Caching.Redis.RedisCacheBase.CallerDeadline(System.DateTimeOffset expiration, string? paramName = null) -> System.DateTimeOffset
+UiPath.Caching.MultilayerCacheBase.ResolveDuration(UiPath.Caching.CachePolicy! policy) -> System.TimeSpan
+UiPath.Caching.MultilayerCacheBase.ResolveWriteDuration(UiPath.Caching.CachePolicy! policy, System.TimeSpan? callerExpiration = null) -> System.TimeSpan
+UiPath.Caching.Redis.RedisCacheBase.GetExpiration(System.DateTimeOffset expiration, string? paramName = null) -> System.DateTimeOffset
+UiPath.Caching.Redis.RedisCacheBase.GetExpiration(System.TimeSpan expiration, string? paramName = null) -> System.DateTimeOffset
 UiPath.Caching.Redis.RedisCacheBase.CallerDuration(System.DateTimeOffset expiration, string? paramName = null) -> System.TimeSpan
-UiPath.Caching.Redis.RedisCacheBase.OptionsDeadline(System.DateTimeOffset? expireTime, System.TimeSpan? timeToLive, UiPath.Caching.CachePolicy? policy) -> System.DateTimeOffset
-UiPath.Caching.Redis.RedisCacheBase.PolicyDeadline(UiPath.Caching.CachePolicy? policy) -> System.DateTimeOffset
+UiPath.Caching.Redis.RedisCacheBase.GetExpiration(UiPath.Caching.HashCacheEntryOptions options, UiPath.Caching.CachePolicy? policy) -> System.DateTimeOffset
+UiPath.Caching.Redis.RedisCacheBase.GetExpiration(UiPath.Caching.CachePolicy? policy) -> System.DateTimeOffset
 UiPath.Caching.Redis.RedisCacheBase.PolicyDuration(UiPath.Caching.CachePolicy? policy) -> System.TimeSpan
 UiPath.Caching.Redis.RedisCacheOptions.AwaitRefresh.get -> bool
 UiPath.Caching.Redis.RedisCacheOptions.AwaitRefresh.set -> void
-UiPath.Caching.Redis.RedisCacheProvider.RedisCacheProvider(Microsoft.Extensions.Options.IOptions<UiPath.Caching.Redis.RedisCacheOptions!>! redisCacheOptions, Microsoft.Extensions.Options.IOptions<UiPath.Caching.CacheOptions!>! cacheOptions, UiPath.Caching.Redis.IRedisConnector! redis, UiPath.Caching.ISerializerProxy<byte[]!>! serializerProxy, UiPath.Caching.Policies.IResiliencePipelineProvider! resiliencePipelineProvider, UiPath.Caching.Telemetry.ICachingTelemetryProvider! cachingTelemetryProvider, Microsoft.Extensions.Logging.ILoggerFactory! loggerFactory, UiPath.Caching.ICachePolicyFactory! policyFactory) -> void
 const UiPath.Caching.Config.DistributedCacheCollectionExtensions.DistributedCacheServiceKey = "UiPath.Caching.Distributed" -> string!
 static UiPath.Caching.Config.DistributedCacheCollectionExtensions.AddDistributedCache(this UiPath.Caching.Config.ICachingBuilder! builder, string! providerName, System.Action<UiPath.Caching.Distributed.UiPathDistributedCacheOptions!>? configure = null) -> UiPath.Caching.Config.ICachingBuilder!
+static UiPath.Caching.MultilayerCacheBase.ApplyJitter(System.TimeSpan duration, System.TimeSpan? maxJitter) -> System.TimeSpan
 static UiPath.Caching.Redis.RedisCacheBase.CallerDuration(System.TimeSpan expiration, string? paramName = null) -> System.TimeSpan
+
+*REMOVED*UiPath.Caching.Broadcast.Redis.RedisStreamHealthMaintainer.RedisStreamHealthMaintainer(UiPath.Caching.Redis.IRedisConnector! redis, UiPath.Caching.Telemetry.ICachingTelemetryProvider! telemetryProvider, Microsoft.Extensions.Options.IOptions<UiPath.Caching.Broadcast.Redis.RedisStreamsTopicOptions!>! streamOptionsAccessor, Microsoft.Extensions.Options.IOptions<UiPath.Caching.Redis.RedisCacheOptions!>! redisOptionsAccessor, Microsoft.Extensions.Options.IOptions<UiPath.Caching.CacheOptions!>! cacheOptionsAccessor, Microsoft.Extensions.Logging.ILogger<UiPath.Caching.Broadcast.Redis.RedisStreamHealthMaintainer!>! logger) -> void
+*REMOVED*UiPath.Caching.CacheClock.ToDateTimeOffset(System.DateTimeOffset? dateTimeOffset) -> System.DateTimeOffset
+*REMOVED*UiPath.Caching.CacheClock.ToDateTimeOffset(System.TimeSpan? timeSpan) -> System.DateTimeOffset
+*REMOVED*UiPath.Caching.ICacheOptions.Clock.get -> Microsoft.Extensions.Internal.ISystemClock?
+*REMOVED*UiPath.Caching.ICacheOptions.Clock.set -> void
+*REMOVED*UiPath.Caching.InMemoryCacheOptions.Clock.get -> Microsoft.Extensions.Internal.ISystemClock?
+*REMOVED*UiPath.Caching.InMemoryCacheOptions.Clock.set -> void
+*REMOVED*UiPath.Caching.InMemoryCacheProvider.InMemoryCacheProvider(Microsoft.Extensions.Options.IOptions<UiPath.Caching.InMemoryCacheOptions!>! optionsAccessor, Microsoft.Extensions.Options.IOptions<UiPath.Caching.CacheOptions!>! cacheOptionsAccessor, UiPath.Caching.IMemoryCacheFactory! memoryCacheFactory, UiPath.Caching.Broadcast.ICacheEventFactory! cacheEventFactory, UiPath.Caching.Broadcast.IChangeTokenFactory! changeTokenFactory, UiPath.Caching.Broadcast.ITopicFactory! topicFactory, UiPath.Caching.Telemetry.ICachingTelemetryProvider! cachingTelemetryProvider, Microsoft.Extensions.Logging.ILoggerFactory! loggerFactory, UiPath.Caching.Locking.ILocalLock! localLock, UiPath.Caching.ICachePolicyFactory! policyFactory) -> void
+*REMOVED*UiPath.Caching.InMemoryRedisCacheOptions.Clock.get -> Microsoft.Extensions.Internal.ISystemClock?
+*REMOVED*UiPath.Caching.InMemoryRedisCacheOptions.Clock.set -> void
+*REMOVED*UiPath.Caching.InMemoryRedisCacheProvider.InMemoryRedisCacheProvider(Microsoft.Extensions.Options.IOptions<UiPath.Caching.InMemoryRedisCacheOptions!>! optionsAccessor, Microsoft.Extensions.Options.IOptions<UiPath.Caching.CacheOptions!>! cacheOptionsAccessor, UiPath.Caching.IMemoryCacheFactory! memoryCacheFactory, System.Func<UiPath.Caching.ICacheFactory!>! cacheFactoryAccessor, UiPath.Caching.Broadcast.IChangeTokenFactory! changeTokenFactory, UiPath.Caching.Broadcast.ITopicFactory! topicFactory, UiPath.Caching.Broadcast.ICacheEventFactory! cacheEventFactory, UiPath.Caching.Telemetry.ICachingTelemetryProvider! cachingTelemetryProvider, Microsoft.Extensions.Logging.ILoggerFactory! loggerFactory, UiPath.Caching.Locking.ILocalLock! localLock, UiPath.Caching.Locking.IDistributedLock! distributedLock, UiPath.Caching.ICachePolicyFactory! policyFactory) -> void
+*REMOVED*UiPath.Caching.MemoryCacheFactory.MemoryCacheFactory(Microsoft.Extensions.Internal.ISystemClock? clock, Microsoft.Extensions.Logging.ILoggerFactory! loggerFactory) -> void
+*REMOVED*UiPath.Caching.MultilayerCacheBase.MultilayerCacheBase(string! cacheName, object! innerCache, UiPath.Caching.IMemoryCacheFactory! memoryCacheFactory, UiPath.Caching.Broadcast.ITopicFactory! topicFactory, UiPath.Caching.Broadcast.ICacheEventFactory! cacheEventFactory, UiPath.Caching.Telemetry.ICachingTelemetryProvider! telemetryProvider, UiPath.Caching.IMultilayerCacheOptions! multiLayerCacheOptions, UiPath.Caching.IMemoryCacheOptions! memoryOptions, UiPath.Caching.CacheOptions! cacheOptions, UiPath.Caching.Locking.ILocalLock! localLock, UiPath.Caching.Locking.IDistributedLock! distributedLock, UiPath.Caching.ICachePolicyFactory! policyFactory, Microsoft.Extensions.Logging.ILogger! logger) -> void
+*REMOVED*UiPath.Caching.Redis.RedisCacheBase.Clock.get -> UiPath.Caching.CacheClock!
+*REMOVED*UiPath.Caching.Redis.RedisCacheBase.RedisCacheBase(UiPath.Caching.Redis.IRedisConnector! redis, UiPath.Caching.Telemetry.ICachingTelemetryProvider! telemetryProvider, UiPath.Caching.Redis.RedisCacheOptions! redisCacheOptions, UiPath.Caching.CacheOptions! cacheOptions, UiPath.Caching.ICachePolicyFactory! policyFactory) -> void
+*REMOVED*UiPath.Caching.Redis.RedisCacheOptions.Clock.get -> Microsoft.Extensions.Internal.ISystemClock?
+*REMOVED*UiPath.Caching.Redis.RedisCacheOptions.Clock.set -> void
+*REMOVED*UiPath.Caching.Redis.RedisConnectionOptions.Clock.get -> Microsoft.Extensions.Internal.ISystemClock?
+*REMOVED*UiPath.Caching.Redis.RedisConnectionOptions.Clock.set -> void
+*REMOVED*readonly UiPath.Caching.MultilayerCacheBase._clock -> UiPath.Caching.CacheClock!
+
+*REMOVED*UiPath.Caching.CacheClock
+*REMOVED*UiPath.Caching.CacheClock.UtcNow.get -> System.DateTimeOffset
+UiPath.Caching.Broadcast.Redis.RedisStreamHealthMaintainer.RedisStreamHealthMaintainer(UiPath.Caching.Redis.IRedisConnector! redis, UiPath.Caching.Telemetry.ICachingTelemetryProvider! telemetryProvider, Microsoft.Extensions.Options.IOptions<UiPath.Caching.Broadcast.Redis.RedisStreamsTopicOptions!>! streamOptionsAccessor, Microsoft.Extensions.Options.IOptions<UiPath.Caching.Redis.RedisCacheOptions!>! redisOptionsAccessor, Microsoft.Extensions.Options.IOptions<UiPath.Caching.CacheOptions!>! cacheOptionsAccessor, Microsoft.Extensions.Logging.ILogger<UiPath.Caching.Broadcast.Redis.RedisStreamHealthMaintainer!>! logger, System.TimeProvider! clock) -> void
+UiPath.Caching.InMemoryCacheProvider.InMemoryCacheProvider(Microsoft.Extensions.Options.IOptions<UiPath.Caching.InMemoryCacheOptions!>! optionsAccessor, Microsoft.Extensions.Options.IOptions<UiPath.Caching.CacheOptions!>! cacheOptionsAccessor, UiPath.Caching.IMemoryCacheFactory! memoryCacheFactory, UiPath.Caching.Broadcast.ICacheEventFactory! cacheEventFactory, UiPath.Caching.Broadcast.IChangeTokenFactory! changeTokenFactory, UiPath.Caching.Broadcast.ITopicFactory! topicFactory, UiPath.Caching.Telemetry.ICachingTelemetryProvider! cachingTelemetryProvider, Microsoft.Extensions.Logging.ILoggerFactory! loggerFactory, UiPath.Caching.Locking.ILocalLock! localLock, UiPath.Caching.ICachePolicyFactory! policyFactory, System.TimeProvider! clock) -> void
+UiPath.Caching.InMemoryRedisCacheProvider.InMemoryRedisCacheProvider(Microsoft.Extensions.Options.IOptions<UiPath.Caching.InMemoryRedisCacheOptions!>! optionsAccessor, Microsoft.Extensions.Options.IOptions<UiPath.Caching.CacheOptions!>! cacheOptionsAccessor, UiPath.Caching.IMemoryCacheFactory! memoryCacheFactory, System.Func<UiPath.Caching.ICacheFactory!>! cacheFactoryAccessor, UiPath.Caching.Broadcast.IChangeTokenFactory! changeTokenFactory, UiPath.Caching.Broadcast.ITopicFactory! topicFactory, UiPath.Caching.Broadcast.ICacheEventFactory! cacheEventFactory, UiPath.Caching.Telemetry.ICachingTelemetryProvider! cachingTelemetryProvider, Microsoft.Extensions.Logging.ILoggerFactory! loggerFactory, UiPath.Caching.Locking.ILocalLock! localLock, UiPath.Caching.Locking.IDistributedLock! distributedLock, UiPath.Caching.ICachePolicyFactory! policyFactory, System.TimeProvider! clock) -> void
+UiPath.Caching.MemoryCacheFactory.MemoryCacheFactory(System.TimeProvider! clock, Microsoft.Extensions.Logging.ILoggerFactory! loggerFactory) -> void
+UiPath.Caching.MultilayerCacheBase.MultilayerCacheBase(string! cacheName, object! innerCache, UiPath.Caching.IMemoryCacheFactory! memoryCacheFactory, UiPath.Caching.Broadcast.ITopicFactory! topicFactory, UiPath.Caching.Broadcast.ICacheEventFactory! cacheEventFactory, UiPath.Caching.Telemetry.ICachingTelemetryProvider! telemetryProvider, UiPath.Caching.IMultilayerCacheOptions! multiLayerCacheOptions, UiPath.Caching.IMemoryCacheOptions! memoryOptions, UiPath.Caching.CacheOptions! cacheOptions, UiPath.Caching.Locking.ILocalLock! localLock, UiPath.Caching.Locking.IDistributedLock! distributedLock, UiPath.Caching.ICachePolicyFactory! policyFactory, System.TimeProvider! clock, Microsoft.Extensions.Logging.ILogger! logger) -> void
+UiPath.Caching.Redis.RedisCacheBase.Clock.get -> System.TimeProvider!
+UiPath.Caching.Redis.RedisCacheBase.RedisCacheBase(UiPath.Caching.Redis.IRedisConnector! redis, UiPath.Caching.Telemetry.ICachingTelemetryProvider! telemetryProvider, UiPath.Caching.Redis.RedisCacheOptions! redisCacheOptions, UiPath.Caching.CacheOptions! cacheOptions, UiPath.Caching.ICachePolicyFactory! policyFactory, System.TimeProvider! clock) -> void
+UiPath.Caching.Redis.RedisCacheProvider.RedisCacheProvider(Microsoft.Extensions.Options.IOptions<UiPath.Caching.Redis.RedisCacheOptions!>! redisCacheOptions, Microsoft.Extensions.Options.IOptions<UiPath.Caching.CacheOptions!>! cacheOptions, UiPath.Caching.Redis.IRedisConnector! redis, UiPath.Caching.ISerializerProxy<byte[]!>! serializerProxy, UiPath.Caching.Policies.IResiliencePipelineProvider! resiliencePipelineProvider, UiPath.Caching.Telemetry.ICachingTelemetryProvider! cachingTelemetryProvider, Microsoft.Extensions.Logging.ILoggerFactory! loggerFactory, UiPath.Caching.ICachePolicyFactory! policyFactory, System.TimeProvider! clock) -> void
+readonly UiPath.Caching.MultilayerCacheBase._clock -> System.TimeProvider!
+static UiPath.Caching.Config.ServiceCollectionExtensions.TryAddTimeProvider(this Microsoft.Extensions.DependencyInjection.IServiceCollection! services) -> Microsoft.Extensions.DependencyInjection.IServiceCollection!

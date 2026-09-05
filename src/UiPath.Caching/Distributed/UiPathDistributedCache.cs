@@ -16,9 +16,6 @@ internal sealed partial class UiPathDistributedCache : IDistributedCache
     private const string SlidingExpirationField = "sldexp";
     private const long Absent = -1;
 
-    /// <summary>Headroom left for the gap between this clock reading and the slightly later one inside the backing cache.</summary>
-    private static readonly TimeSpan ClockDriftSlack = TimeSpan.FromMinutes(1);
-
     private static readonly string[] MetadataFields = [AbsoluteExpirationField, SlidingExpirationField];
     private static readonly string[] EntryFields = [DataField, AbsoluteExpirationField, SlidingExpirationField];
 
@@ -28,7 +25,7 @@ internal sealed partial class UiPathDistributedCache : IDistributedCache
     private readonly TimeSpan? _defaultEntryExpiration;
     private readonly bool _allowUnboundedEntries;
     private readonly bool _slideByRewrite;
-    private readonly ISystemClock _clock;
+    private readonly TimeProvider _clock;
     private readonly ILogger _logger;
 
     /// <param name="keyStrategy">
@@ -43,7 +40,7 @@ internal sealed partial class UiPathDistributedCache : IDistributedCache
         ICacheKeyStrategy keyStrategy,
         CachePolicy? policy,
         ILogger logger,
-        ISystemClock? clock = null,
+        TimeProvider clock,
         bool slideByRewrite = false)
     {
         ArgumentNullException.ThrowIfNull(keyStrategy);
@@ -54,7 +51,8 @@ internal sealed partial class UiPathDistributedCache : IDistributedCache
         _policy = policy;
         _slideByRewrite = slideByRewrite;
         _logger = logger;
-        _clock = clock ?? new SystemClock();
+        ArgumentNullException.ThrowIfNull(clock);
+        _clock = clock;
     }
 
     public byte[]? Get(string key) =>
@@ -90,7 +88,7 @@ internal sealed partial class UiPathDistributedCache : IDistributedCache
         ArgumentNullException.ThrowIfNull(options);
 
         var cacheKey = Encode(key);
-        var now = _clock.UtcNow;
+        var now = _clock.GetUtcNow();
         var absolute = ResolveAbsoluteExpiration(now, options);
         var sliding = options.SlidingExpiration;
         var fields = new Dictionary<string, byte[]?>(3, StringComparer.Ordinal)
@@ -101,7 +99,7 @@ internal sealed partial class UiPathDistributedCache : IDistributedCache
         };
 
         var ttl = ResolveTimeToLive(now, sliding, absolute);
-        if (!await StoreAsync(cacheKey, fields, now, ttl, token).ConfigureAwait(false))
+        if (!await StoreAsync(cacheKey, fields, ttl, token).ConfigureAwait(false))
         {
             LogWriteNotApplied(key);
         }
@@ -114,7 +112,6 @@ internal sealed partial class UiPathDistributedCache : IDistributedCache
     private ValueTask<bool> StoreAsync(
         CacheKey cacheKey,
         IDictionary<string, byte[]?> fields,
-        DateTimeOffset now,
         TimeSpan? ttl,
         CancellationToken token)
     {
@@ -125,7 +122,7 @@ internal sealed partial class UiPathDistributedCache : IDistributedCache
 
         // Caller TTL, else this adapter's configured default. With neither, the provider's own
         // default applies — which is what the overload carrying no expiration asks for.
-        return (ttl ?? Clamp(now, _defaultEntryExpiration)) is { } duration
+        return (ttl ?? _defaultEntryExpiration) is { } duration
             ? _cache.SetAsync(cacheKey, fields, duration, _policy, token)
             : _cache.SetAsync(cacheKey, fields, _policy, token);
     }
@@ -168,7 +165,7 @@ internal sealed partial class UiPathDistributedCache : IDistributedCache
             return null;
         }
 
-        var now = _clock.UtcNow;
+        var now = _clock.GetUtcNow();
         if (IsExpired(metadata.AbsoluteExpiration, now))
         {
             return null;
@@ -297,25 +294,13 @@ internal sealed partial class UiPathDistributedCache : IDistributedCache
     private static TimeSpan? ResolveTimeToLive(DateTimeOffset now, TimeSpan? sliding, DateTimeOffset? absolute)
     {
         var remaining = absolute is { } cap ? cap - now : (TimeSpan?)null;
-        var resolved = (sliding, remaining) switch
+        return (sliding, remaining) switch
         {
             ({ } window, { } left) => TimeSpan.FromTicks(Math.Min(window.Ticks, left.Ticks)),
             ({ } window, null) => window,
             (null, { } left) => left,
-            _ => (TimeSpan?)null,
+            _ => null,
         };
-        return Clamp(now, resolved);
-    }
-
-    /// <summary>
-    /// Keeps <c>now + ttl</c> representable. The backing cache turns the TTL into a deadline against its own,
-    /// slightly later, clock reading, so clamping to the exact headroom would still overflow there; the
-    /// allowance matches the one <c>MultilayerCacheBase.ApplyJitter</c> makes.
-    /// </summary>
-    private static TimeSpan? Clamp(DateTimeOffset now, TimeSpan? ttl)
-    {
-        var headroom = Math.Max(0, DateTime.MaxValue.Ticks - now.UtcTicks - ClockDriftSlack.Ticks);
-        return ttl is { } value && value.Ticks > headroom ? new TimeSpan(headroom) : ttl;
     }
 
     private static DateTimeOffset? ResolveAbsoluteExpiration(DateTimeOffset now, DistributedCacheEntryOptions options)

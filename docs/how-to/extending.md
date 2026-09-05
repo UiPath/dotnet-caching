@@ -424,3 +424,21 @@ These extension points are documented elsewhere — link out instead of duplicat
 - [concepts.md](../concepts.md) — providers, layers, topics, the surface vocabulary used above.
 - [reference/interfaces.md](../reference/interfaces.md) — full signatures of every interface mentioned on this page.
 - [reference/settings.md](../reference/settings.md) — the `DefaultCache` / `DefaultTopic` settings that select a registered provider.
+
+## Controlling time
+
+Every expiration decision in the library reads one clock: the `System.TimeProvider` that `AddCaching`
+registers, `TimeProvider.System` unless the container already has one. It is also what the in-memory
+tier's `MemoryCache` judges deadlines by, so a deadline is always computed and evaluated against the
+same "now". Nothing reads `DateTimeOffset.UtcNow` and no options object carries a clock of its own.
+
+To drive time in tests or a simulation, register the clock before `AddCaching`:
+
+```csharp
+services.AddSingleton<TimeProvider>(new FakeTimeProvider(start));
+services.AddCaching(b => b.AddMemory());
+```
+
+Constructing a cache by hand takes the same `TimeProvider` as a constructor argument.
+`TimeProviderExtensions.ToDateTimeOffset(...)` turns a lifetime into an expiration, saturating at
+`DateTimeOffset.MaxValue` so `TimeSpan.MaxValue` stays "no TTL".

@@ -12,16 +12,15 @@ public class InMemorySetCacheTests
     // Hoisted out of the call below so the array is not rebuilt per invocation (CA1861).
     private static readonly string[] OneItem = ["a"];
 
-    private static MultilayerSetCache CreateSut(InMemoryQueueCacheOptions? options = null)
+    private static MultilayerSetCache CreateSut(InMemoryQueueCacheOptions? options = null, TimeProvider? clock = null)
     {
         options ??= new InMemoryQueueCacheOptions();
+        var cacheClock = clock ?? TimeProvider.System;
         return new MultilayerSetCache(
             KnownCacheProviderNames.InMemory, NullSetCache.Instance,
-            new MemoryCacheFactory(null, NullLoggerFactory.Instance),
+            new MemoryCacheFactory(cacheClock, NullLoggerFactory.Instance),
             new SystemJsonByteSerializerProxy(), options,
-            NullLocalLock.Instance,
-            localMaxExpiration: null,
-            defaultExpiration: options.DefaultExpiration);
+            NullLocalLock.Instance, cacheClock);
     }
 
     // Casts to IEnumerable<string> so the call binds to the IEnumerable<T> AddAsync overload rather
@@ -48,9 +47,9 @@ public class InMemorySetCacheTests
     {
         var sut = new MultilayerSetCache(
             KnownCacheProviderNames.InMemory, NullSetCache.Instance,
-            new MemoryCacheFactory(null, NullLoggerFactory.Instance),
-            new RawByteSerializerProxy(), new InMemoryQueueCacheOptions(),
-            NullLocalLock.Instance, localMaxExpiration: null, defaultExpiration: null);
+            new MemoryCacheFactory(TimeProvider.System, NullLoggerFactory.Instance),
+            new RawByteSerializerProxy(), new InMemoryQueueCacheOptions { DefaultExpiration = null },
+            NullLocalLock.Instance, TimeProvider.System);
         var payload = new byte[] { 1, 2, 3 };
 
         (await sut.AddAsync("k", payload, (CachePolicy?)null, Ct)).Should().BeTrue();
@@ -74,6 +73,29 @@ public class InMemorySetCacheTests
         (await sut.CountAsync<Member>("k", Ct)).Should().Be(1);
         (await sut.RemoveItemAsync("k", equalButDistinctInstance, Ct)).Should().BeTrue();
         (await sut.CountAsync<Member>("k", Ct)).Should().Be(0);
+    }
+
+    /// <summary>The deadline is past by wall-clock time and future by the injected clock; accepted only if every check reads the injected one.</summary>
+    [Fact]
+    public async Task Expirations_are_resolved_against_the_configured_clock()
+    {
+        var now = new DateTimeOffset(2020, 1, 1, 0, 0, 0, TimeSpan.Zero);
+        var sut = CreateSut(clock: new FakeTimeProvider(now));
+
+        var added = await sut.AddAsync("k", (IEnumerable<string>)OneItem, now.AddDays(1), (CachePolicy?)null, Ct);
+
+        added.Should().Be(1);
+        (await sut.MembersAsync<string>("k", token: Ct)).Should().BeEquivalentTo(OneItem);
+    }
+
+    [Fact]
+    public async Task Add_with_an_unbounded_default_expiration_stores_the_item()
+    {
+        var sut = CreateSut(new InMemoryQueueCacheOptions { DefaultExpiration = TimeSpan.MaxValue });
+
+        (await sut.AddAsync("k", "a", token: Ct)).Should().BeTrue();
+
+        (await sut.MembersAsync<string>("k", token: Ct)).Should().BeEquivalentTo(OneItem);
     }
 
     [Fact]

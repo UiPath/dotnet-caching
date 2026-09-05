@@ -6,7 +6,7 @@ internal class HashLocalMemorySetter(
     ITopicProvider topicProvider,
     IMemoryCache memoryCache,
     ILogger logger,
-    CacheClock clock,
+    TimeProvider clock,
     IMultilayerCacheOptions cacheOptions,
     IMemoryCacheOptions memoryCacheOptions,
     Telemetry.ICachingTelemetryProvider telemetryProvider)
