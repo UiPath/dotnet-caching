@@ -60,6 +60,7 @@ public static class ServiceCollectionExtensions
         services.TryAddTransient(typeof(ICache<>), typeof(Cache<>));
         services.TryAddTransient(typeof(IHashCache<>), typeof(HashCache<>));
 
+        services.TryAddCacheClock();
         var builder = new CachingBuilder(services, configuration)
         {
             Enabled = options.Enabled
@@ -69,10 +70,21 @@ public static class ServiceCollectionExtensions
         return services;
     }
 
+    /// <summary>
+    /// The library's one clock. Built over the <see cref="ISystemClock"/> the container registered when
+    /// there is one, else the system clock; register either before <c>AddCaching</c> to control time.
+    /// </summary>
+    public static IServiceCollection TryAddCacheClock(this IServiceCollection services)
+    {
+        services.TryAddSingleton<ICacheClock>(sp => new CacheClock(sp.GetService<ISystemClock>()));
+        return services;
+    }
+
     public static IServiceCollection TryAddMemoryCacheFactory(this IServiceCollection services)
     {
-        services.TryAddSingleton<IMemoryCacheFactory>(sp => 
-            new MemoryCacheFactory(sp.GetService<ISystemClock>(),
+        services.TryAddCacheClock();
+        services.TryAddSingleton<IMemoryCacheFactory>(sp =>
+            new MemoryCacheFactory(sp.GetRequiredService<ICacheClock>(),
             sp.GetService<ILoggerFactory>() ?? NullLoggerFactory.Instance));
         return services;
     }

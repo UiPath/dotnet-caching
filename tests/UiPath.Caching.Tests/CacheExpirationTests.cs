@@ -71,6 +71,18 @@ public class CacheExpirationTests
         CacheExpiration.ToDuration(now.AddMinutes(5), now).Should().Be(TimeSpan.FromMinutes(5));
     }
 
+    /// <summary>
+    /// Measured from now the sentinel would be a finite eight thousand years, which no downstream
+    /// check reads as "no TTL"; it has to come out as the duration-space sentinel.
+    /// </summary>
+    [Fact]
+    public void ToDuration_keeps_the_unbounded_sentinel_unbounded()
+    {
+        var now = DateTimeOffset.UtcNow;
+
+        CacheExpiration.ToDuration(DateTimeOffset.MaxValue, now).Should().Be(TimeSpan.MaxValue);
+    }
+
     [Fact]
     public void ToDuration_rejects_a_deadline_that_has_passed()
     {
@@ -100,7 +112,7 @@ public class CacheExpirationGuardTests
         return new MultilayerCache(
             KnownCacheProviderNames.InMemory,
             NullCache.Instance,
-            new MemoryCacheFactory(null, NullLoggerFactory.Instance),
+            new MemoryCacheFactory(new CacheClock(), NullLoggerFactory.Instance),
             NullChangeTokenFactory.Instance,
             NullTopicFactory.Instance,
             NullCacheEventFactory.Instance,
@@ -111,6 +123,7 @@ public class CacheExpirationGuardTests
             localLock: new AsyncKeyedLocalLock(Options.Create(cacheOptions)),
             distributedLock: NullDistributedLock.Instance,
             policyFactory: NullCachePolicyFactory.Instance,
+            clock: new CacheClock(),
             logger: NullLogger.Instance);
     }
 

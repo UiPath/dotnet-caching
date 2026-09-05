@@ -67,7 +67,7 @@ public static class DistributedCacheCollectionExtensions
             ResolveCacheKeyStrategy(options),
             ResolvePolicy(sp, options),
             sp.GetRequiredService<ILoggerFactory>().Create<UiPathDistributedCache>(),
-            sp.GetService<ISystemClock>(),
+            sp.GetRequiredService<ICacheClock>(),
             slideByRewrite: providerName == KnownCacheProviderNames.InMemory)));
 
         return builder;
@@ -196,12 +196,14 @@ public static class DistributedCacheCollectionExtensions
     }
 
     /// <summary>
-    /// Writes without a caller expiration take a default TTL; reject configurations where none resolves, or
-    /// resolves non-positive, and unbounded entries are not allowed. The fallback is resolved in the order the
+    /// Writes without a caller expiration take a default TTL; reject configurations where one resolves
+    /// non-positive, so such a write would expire on arrival. The fallback is resolved in the order the
     /// backing cache applies it, which differs by case: a named policy passed per-operation beats the tier
     /// default (<see cref="MultilayerCacheBase"/>), but with no named policy the cache builds its default from
     /// the tier default as the primary and the factory default as the fallback
-    /// (<see cref="CachePolicyMerger"/>), so the tier default wins there.
+    /// (<see cref="CachePolicyMerger"/>), so the tier default wins there — and
+    /// <see cref="CachePolicy.DefaultDistributedExpiration"/> under both, which is why "nothing configured"
+    /// is no longer a rejectable state.
     /// </summary>
     private static void EnsureBoundedWrites(IServiceProvider sp, string providerName, UiPathDistributedCacheOptions options)
     {
@@ -228,22 +230,19 @@ public static class DistributedCacheCollectionExtensions
             KnownCacheProviderNames.InMemoryRedis => sp.GetRequiredService<IOptions<InMemoryRedisCacheOptions>>().Value.DefaultExpiration,
             _ => sp.GetRequiredService<IOptions<InMemoryCacheOptions>>().Value.DefaultExpiration,
         };
-        var fallback = ResolvePolicy(sp, options) is { } named
-            ? named.DistributedExpiration ?? tierDefault
-            : tierDefault ?? sp.GetService<ICachePolicyFactory>()?.Default?.DistributedExpiration;
+        // Mirrors the cache's own chain, floor included. An unset default no longer resolves to
+        // "no TTL", so there is nothing left to reject on that account — only a value someone
+        // actually configured non-positive.
+        var resolved = ResolvePolicy(sp, options) is { } named
+            ? named.DistributedExpiration ?? tierDefault ?? CachePolicy.DefaultDistributedExpiration
+            : tierDefault
+                ?? sp.GetService<ICachePolicyFactory>()?.Default?.DistributedExpiration
+                ?? CachePolicy.DefaultDistributedExpiration;
 
-        if (fallback is { } resolved)
-        {
-            if (resolved <= TimeSpan.Zero)
-            {
-                throw new InvalidOperationException(
-                    $"AddDistributedCache('{providerName}') resolved {resolved} as the expiration for writes without a caller expiration, so they would expire immediately. Correct the provider's DefaultExpiration or the policy's DistributedExpiration, or set UiPathDistributedCacheOptions.DefaultEntryExpiration.");
-            }
-        }
-        else
+        if (resolved <= TimeSpan.Zero)
         {
             throw new InvalidOperationException(
-                $"AddDistributedCache('{providerName}') would store entries without an expiration: the provider's DefaultExpiration is null and no cache policy supplies DistributedExpiration. Set UiPathDistributedCacheOptions.DefaultEntryExpiration, configure the provider's DefaultExpiration, or set AllowUnboundedEntries.");
+                $"AddDistributedCache('{providerName}') resolved {resolved} as the expiration for writes without a caller expiration, so they would expire immediately. Correct the provider's DefaultExpiration or the policy's DistributedExpiration, or set UiPathDistributedCacheOptions.DefaultEntryExpiration.");
         }
     }
 
@@ -264,7 +263,8 @@ public static class DistributedCacheCollectionExtensions
                 sp.GetRequiredService<ILoggerFactory>(),
                 sp.GetRequiredService<ILocalLock>(),
                 sp.GetRequiredService<IDistributedLock>(),
-                sp.GetRequiredService<ICachePolicyFactory>()),
+                sp.GetRequiredService<ICachePolicyFactory>(),
+                sp.GetRequiredService<ICacheClock>()),
             KnownCacheProviderNames.InMemory => new InMemoryCacheProvider(
                 Options.Create(WithNeutralCacheKeyStrategy(sp.GetRequiredService<IOptions<InMemoryCacheOptions>>().Value)),
                 sp.GetRequiredService<IOptions<CacheOptions>>(),
@@ -275,7 +275,8 @@ public static class DistributedCacheCollectionExtensions
                 sp.GetRequiredService<ICachingTelemetryProvider>(),
                 sp.GetRequiredService<ILoggerFactory>(),
                 sp.GetRequiredService<ILocalLock>(),
-                sp.GetRequiredService<ICachePolicyFactory>()),
+                sp.GetRequiredService<ICachePolicyFactory>(),
+                sp.GetRequiredService<ICacheClock>()),
             _ => throw new InvalidOperationException(
                 $"Cache provider '{providerName}' is not supported by AddDistributedCache. " +
                 $"Supported: {KnownCacheProviderNames.Redis}, {KnownCacheProviderNames.InMemoryRedis}, {KnownCacheProviderNames.InMemory}."),
@@ -315,7 +316,8 @@ public static class DistributedCacheCollectionExtensions
             sp.GetRequiredService<IResiliencePipelineProvider>(),
             sp.GetRequiredService<ICachingTelemetryProvider>(),
             sp.GetRequiredService<ILoggerFactory>(),
-            sp.GetRequiredService<ICachePolicyFactory>());
+            sp.GetRequiredService<ICachePolicyFactory>(),
+            sp.GetRequiredService<ICacheClock>());
     }
 
     /// <summary>

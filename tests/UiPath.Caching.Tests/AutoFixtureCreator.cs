@@ -18,6 +18,7 @@ public static class AutoFixtureCreator
         fixture.Customizations.Add(new TelemetryProviderCustomization());
         fixture.Customizations.Add(new CachePolicyFactoryCustomization());
         fixture.Customizations.Add(new CacheOptionsCustomization());
+        fixture.Customizations.Add(new CacheClockCustomization());
 
         fixture.Behaviors.OfType<ThrowingRecursionBehavior>().ToList()
             .ForEach(b => fixture.Behaviors.Remove(b));
@@ -26,6 +27,17 @@ public static class AutoFixtureCreator
 
         return fixture;
     }
+}
+
+/// <summary>
+/// The library takes one <see cref="ICacheClock"/> from DI. Left to AutoNSubstitute it would be a mock
+/// whose UtcNow is a random instant, so it defaults to the real clock here; a test that fixes time
+/// injects <c>new CacheClock(frozenSystemClock)</c>, and an injection outranks this builder.
+/// </summary>
+public class CacheClockCustomization : ISpecimenBuilder
+{
+    public object Create(object request, ISpecimenContext context) =>
+        request is Type type && type == typeof(ICacheClock) ? new CacheClock() : new NoSpecimen();
 }
 
 public class TelemetryProviderCustomization : ISpecimenBuilder
@@ -100,17 +112,6 @@ public class MultilayerCacheOptionsCustomization : ISpecimenBuilder
 
         if (request is System.Reflection.PropertyInfo propertyInfo)
         {
-            // [Obsolete]-marked aliases on IMultilayerCacheOptions (e.g. PrimaryMaxExpiration →
-            // LocalMaxExpiration) forward assignments to the new property. If AutoFixture auto-fills
-            // them with random values they would overwrite the sensible defaults set on the new
-            // property below. Skip ONLY the IMultilayerCacheOptions hierarchy's obsolete forwarders
-            // so we don't accidentally suppress unrelated [Obsolete] properties on other types.
-            if (propertyInfo.DeclaringType is { } declaringType
-                && typeof(IMultilayerCacheOptions).IsAssignableFrom(declaringType)
-                && System.Reflection.CustomAttributeExtensions.GetCustomAttribute<ObsoleteAttribute>(propertyInfo) is not null)
-            {
-                return new OmitSpecimen();
-            }
             if (propertyInfo.Name == nameof(IMultilayerCacheOptions.LocalMaxExpiration))
             {
                 return TimeSpan.FromMinutes(3);

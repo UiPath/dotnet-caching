@@ -7,7 +7,7 @@ public class MultilayerSetCacheTests
 {
     private static CancellationToken Ct => TestContext.Current.CancellationToken;
 
-    private static IMemoryCacheFactory MemoryFactory() => new MemoryCacheFactory(null, NullLoggerFactory.Instance);
+    private static IMemoryCacheFactory MemoryFactory() => new MemoryCacheFactory(new CacheClock(), NullLoggerFactory.Instance);
 
     // The inner (L2) is always a real store; the InMemory and InMemoryRedis providers differ only in
     // what they pass as L2. A substitute stands in for it here.
@@ -16,10 +16,63 @@ public class MultilayerSetCacheTests
         var l2 = Substitute.For<ISetCache>();
         var sut = new MultilayerSetCache(
             KnownCacheProviderNames.InMemoryRedis, l2,
-            MemoryFactory(), new SystemJsonByteSerializerProxy(), new InMemoryRedisQueueCacheOptions(),
-            NullLocalLock.Instance,
-            localMaxExpiration: TimeSpan.FromMinutes(5));
+            MemoryFactory(), new SystemJsonByteSerializerProxy(),
+            new InMemoryRedisQueueCacheOptions { LocalMaxExpiration = TimeSpan.FromMinutes(5) },
+            NullLocalLock.Instance, new CacheClock());
         return (sut, l2);
+    }
+
+    private sealed class FakeClock(DateTimeOffset now) : Microsoft.Extensions.Internal.ISystemClock
+    {
+        public DateTimeOffset UtcNow { get; } = now;
+    }
+
+    /// <summary>
+    /// Mirrors <c>InMemoryRedisCacheOptions.DefaultExpiration</c>: the multilayer's own default outranks the
+    /// Redis tier's, so a write that names no lifetime reaches L2 with this deadline rather than with none.
+    /// </summary>
+    [Fact]
+    public async Task Configured_default_reaches_L2_as_the_write_deadline()
+    {
+        var now = new DateTimeOffset(2030, 1, 1, 0, 0, 0, TimeSpan.Zero);
+        var l2 = Substitute.For<ISetCache>();
+        var options = new InMemoryRedisQueueCacheOptions { DefaultExpiration = TimeSpan.FromMinutes(7) };
+        var sut = new MultilayerSetCache(KnownCacheProviderNames.InMemoryRedis, l2, MemoryFactory(), new SystemJsonByteSerializerProxy(), options, NullLocalLock.Instance, new CacheClock(new FakeClock(now)));
+
+        await sut.AddAsync("k", "x", (CachePolicy?)null, Ct);
+        await sut.AddAsync("k", (IEnumerable<string>)["y"], (CachePolicy?)null, Ct);
+
+        await l2.Received(1).AddAsync<string>("k", Arg.Is<IEnumerable<string>>(i => i.Single() == "x"), now.AddMinutes(7), Arg.Any<CachePolicy?>(), Arg.Any<CancellationToken>());
+        await l2.Received(1).AddAsync<string>("k", Arg.Is<IEnumerable<string>>(i => i.Single() == "y"), now.AddMinutes(7), Arg.Any<CachePolicy?>(), Arg.Any<CancellationToken>());
+        await l2.DidNotReceive().AddAsync<string>("k", Arg.Any<string>(), Arg.Any<CachePolicy?>(), Arg.Any<CancellationToken>());
+    }
+
+    /// <summary>A policy lifetime still wins, and with neither the inner cache resolves it as before.</summary>
+    [Fact]
+    public async Task Without_a_configured_default_L2_resolves_the_lifetime()
+    {
+        var (sut, l2) = CreateSut();
+        var policy = new CachePolicy { DistributedExpiration = TimeSpan.FromMinutes(3) };
+
+        await sut.AddAsync("k", "x", policy, Ct);
+        await sut.AddAsync("k", "x", (CachePolicy?)null, Ct);
+
+        await l2.Received(2).AddAsync<string>("k", "x", Arg.Any<CachePolicy?>(), Arg.Any<CancellationToken>());
+        await l2.DidNotReceiveWithAnyArgs().AddAsync<string>("k", Arg.Any<IEnumerable<string>>(), Arg.Any<DateTimeOffset>(), Arg.Any<CachePolicy?>(), Arg.Any<CancellationToken>());
+    }
+
+    /// <summary>Deadlines are computed on the injected clock — the one the memory cache judges them by — not on the ambient system clock.</summary>
+    [Fact]
+    public async Task Deadlines_are_computed_on_the_injected_clock()
+    {
+        var now = new DateTimeOffset(2030, 1, 1, 0, 0, 0, TimeSpan.Zero);
+        var l2 = Substitute.For<ISetCache>();
+        var clock = new CacheClock(new FakeClock(now));
+        var sut = new MultilayerSetCache(KnownCacheProviderNames.InMemoryRedis, l2, new MemoryCacheFactory(clock, NullLoggerFactory.Instance), new SystemJsonByteSerializerProxy(), new InMemoryRedisQueueCacheOptions(), NullLocalLock.Instance, clock);
+
+        await sut.AddAsync("k", (IEnumerable<string>)["x"], TimeSpan.FromHours(1), (CachePolicy?)null, Ct);
+
+        await l2.Received(1).AddAsync<string>("k", Arg.Any<IEnumerable<string>>(), now.AddHours(1), Arg.Any<CachePolicy?>(), Arg.Any<CancellationToken>());
     }
 
     private static void SetupMembers(ISetCache l2, params string?[] members)
@@ -173,14 +226,17 @@ public class MultilayerSetCacheTests
     {
         var l2 = Substitute.For<ISetCache, IConnectionState>();
         ((IConnectionState)l2).IsConnected.Returns(connected);
+        var options = new InMemoryRedisQueueCacheOptions
+        {
+            LocalMaxExpiration = TimeSpan.FromMinutes(5),
+            ConnectionMonitorEnabled = true,
+            UseLocalOnlyWhenDisconnected = useLocalOnlyWhenDisconnected,
+            LocalMaxExpirationDisconnected = TimeSpan.FromSeconds(30),
+        };
         var sut = new MultilayerSetCache(
             KnownCacheProviderNames.InMemoryRedis, l2,
-            MemoryFactory(), new SystemJsonByteSerializerProxy(), new InMemoryRedisQueueCacheOptions(),
-            NullLocalLock.Instance,
-            localMaxExpiration: TimeSpan.FromMinutes(5),
-            connectionMonitorEnabled: true,
-            useLocalOnlyWhenDisconnected: useLocalOnlyWhenDisconnected,
-            localMaxExpirationDisconnected: TimeSpan.FromSeconds(30));
+            MemoryFactory(), new SystemJsonByteSerializerProxy(), options,
+            NullLocalLock.Instance, new CacheClock());
         return (sut, l2);
     }
 

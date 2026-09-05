@@ -15,7 +15,7 @@ internal sealed partial class RedisProfiler : IRedisProfiler, IDisposable
     private readonly ProfilingSession? _defaultSession;
     private readonly PeriodicTimer? _timer;
     private readonly Task? _flushWorker;
-    private readonly ISystemClock _clock;
+    private readonly ICacheClock _clock;
     private readonly IProfiledCommandProcessor _profiledCommandProcessor;
     private readonly IProfilingSessionCommandReader _profilingSessionCommandReader;
     private readonly ICachingTelemetryProvider _telemetryProvider;
@@ -27,7 +27,8 @@ internal sealed partial class RedisProfiler : IRedisProfiler, IDisposable
         IProfilingSessionCommandReader profilingSessionCommandReader,
         ICachingTelemetryProvider telemetryProvider,
         ILogger<RedisProfiler> logger,
-        IOptions<RedisConnectionOptions> optionsAccessor)
+        IOptions<RedisConnectionOptions> optionsAccessor,
+        ICacheClock clock)
     {
         _options = optionsAccessor.Value;
         if (_options.ProfilerEnabled)
@@ -45,7 +46,7 @@ internal sealed partial class RedisProfiler : IRedisProfiler, IDisposable
             _flushWorker = FlushSessionsAsync();
         }
 
-        _clock = _options.Clock ?? new SystemClock();
+        _clock = clock;
         _profiledCommandProcessor = profiledCommandProcessor;
         _profilingSessionCommandReader = profilingSessionCommandReader;
         _telemetryProvider = telemetryProvider;

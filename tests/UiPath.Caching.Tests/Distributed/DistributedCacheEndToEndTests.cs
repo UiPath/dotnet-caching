@@ -27,7 +27,7 @@ public class DistributedCacheEndToEndTests
         services.AddSingleton<ISystemClock>(clock);
         services.AddCaching(b =>
         {
-            b.AddMemory(o => o.Clock = clock);
+            b.AddMemory();
             b.AddDistributedCache(KnownCacheProviderNames.InMemory);
         });
         return services.BuildServiceProvider();

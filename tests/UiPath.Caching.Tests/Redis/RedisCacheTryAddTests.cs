@@ -262,6 +262,7 @@ public class RedisCacheTryAddTests(ITestContextAccessor testContextAccessor) : I
         _cacheKey = _fixture.Create<string>();
         _redisKey = string.Join(':', prefix, RedisTypePrefixes.String, _cacheKey).ToLowerInvariant();
         _clock = _fixture.Freeze<ISystemClock>();
+        _fixture.Inject<ICacheClock>(new CacheClock(_clock));
         _clock.UtcNow.Returns(_ => _now);
         _pipelineProvider = _fixture.Freeze<IResiliencePipelineProvider>();
         var noOpExecutor = new EmptyResiliencePipeline();
@@ -275,7 +276,6 @@ public class RedisCacheTryAddTests(ITestContextAccessor testContextAccessor) : I
         redisKeyStrategyFactory.Create(Arg.Any<CacheOptions>(), Arg.Any<Type>()).Returns(redisKeyStrategy);
         _cacheOptions = new RedisCacheOptions
         {
-            Clock = _clock,
             CacheKeyStrategy = cacheKeyStrategy,
             RedisKeyStrategyFactory = redisKeyStrategyFactory,
         };

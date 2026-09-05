@@ -552,7 +552,6 @@ public class MultilayerHashCacheTests(ITestContextAccessor testContextAccessor) 
     {
         _memoryCache = new MemoryCache(Options.Create(new MemoryCacheOptions
         {
-            Clock = _clock
         }));
 
         var expected = _fixture.Create<IDictionary<string, string?>>();
@@ -580,7 +579,6 @@ public class MultilayerHashCacheTests(ITestContextAccessor testContextAccessor) 
     {
         _memoryCache = new MemoryCache(Options.Create(new MemoryCacheOptions
         {
-            Clock = _clock
         }));
 
         var expected = _fixture.Create<IDictionary<string, string?>>();
@@ -611,7 +609,6 @@ public class MultilayerHashCacheTests(ITestContextAccessor testContextAccessor) 
     {
         _memoryCache = new MemoryCache(Options.Create(new MemoryCacheOptions
         {
-            Clock = _clock
         }));
 
         var expected = _fixture.Create<IDictionary<string, string?>>();
@@ -659,7 +656,6 @@ public class MultilayerHashCacheTests(ITestContextAccessor testContextAccessor) 
     {
         _memoryCache = new MemoryCache(Options.Create(new MemoryCacheOptions
         {
-            Clock = _clock
         }));
 
         var expected = _fixture.Create<IDictionary<string, string?>>();
@@ -702,7 +698,6 @@ public class MultilayerHashCacheTests(ITestContextAccessor testContextAccessor) 
     {
         _memoryCache = new MemoryCache(Options.Create(new MemoryCacheOptions
         {
-            Clock = _clock
         }));
 
         var expected = _fixture.Create<IDictionary<string, string?>>();
@@ -748,11 +743,11 @@ public class MultilayerHashCacheTests(ITestContextAccessor testContextAccessor) 
     public async Task Remove_evict_token_non_active()
     {
         _clock = _fixture.Freeze<ISystemClock>();
+        _fixture.Inject<ICacheClock>(new CacheClock(_clock));
         var now = DateTimeOffset.UtcNow;
         _clock.UtcNow.Returns(now);
         _memoryCache = new MemoryCache(Options.Create(new MemoryCacheOptions
         {
-            Clock = _clock,
         }));
 
         var expected = _fixture.Create<IDictionary<string, string?>>();
@@ -896,11 +891,11 @@ public class MultilayerHashCacheTests(ITestContextAccessor testContextAccessor) 
     public async Task Read_ExpireTime_For_Key()
     {
         _clock = _fixture.Freeze<ISystemClock>();
+        _fixture.Inject<ICacheClock>(new CacheClock(_clock));
         var now = DateTimeOffset.UtcNow;
         _clock.UtcNow.Returns(now);
         _memoryCache = new MemoryCache(Options.Create(new MemoryCacheOptions
         {
-            Clock = _clock
         }));
         _memoryCacheFactory.Get(Arg.Any<IMemoryCacheOptions>())
             .Returns(c => _memoryCache);
@@ -927,11 +922,11 @@ public class MultilayerHashCacheTests(ITestContextAccessor testContextAccessor) 
     public async Task Read_ExpireTimeToLive_For_Key()
     {
         _clock = _fixture.Freeze<ISystemClock>();
+        _fixture.Inject<ICacheClock>(new CacheClock(_clock));
         var now = DateTimeOffset.UtcNow;
         _clock.UtcNow.Returns(now);
         _memoryCache = new MemoryCache(Options.Create(new MemoryCacheOptions
         {
-            Clock = _clock
         }));
         _memoryCacheFactory.Get(Arg.Any<IMemoryCacheOptions>())
             .Returns(c => _memoryCache);

@@ -64,7 +64,6 @@ Every binding-visible property on every shipped options class, with shipped defa
 | `HangDetectionDueTime` | `TimeSpan?` | `null` | App-wide | Delay before the first hang-detection check; `null` = 30 s library default. |
 | `HangDetectionPeriod` | `TimeSpan?` | `null` | App-wide | Period between hang-detection checks; `null` = library default. |
 | `FailFastBacklogPolicy` | `bool?` | `null` | App-wide | `null` = library default; `true` = fail immediately when the command backlog is full. |
-| `ThreadPoolSocketManager` | `bool?` | `null` | App-wide | `null` = library default; `true` = use the thread-pool socket manager. |
 | `ProfilerEnabled` | `bool` | `false` | App-wide | Enable StackExchange.Redis command profiler. |
 | `ProfilerHasDefaultSession` | `bool` | `true` | App-wide | Start a default profiling session automatically at startup. |
 | `ProfilerFlushInterval` | `TimeSpan` | `00:00:01` | App-wide | How often profiling data is flushed to the sink. |
@@ -74,7 +73,7 @@ Every binding-visible property on every shipped options class, with shipped defa
 | `ConnectionMultiplexerFactoryType` | `string?` | `null` | App-wide | Assembly-qualified type name of a custom `IConnectionMultiplexer` factory; `null` = built-in. See [recipes/opentelemetry-multiplexer-factory.md](../recipes/opentelemetry-multiplexer-factory.md). |
 | `AbortOnConnectFail` | `bool` | `false` | App-wide | `false` = retry in background; `true` = throw on first connect failure. |
 
-*Code-only seams:* `ConnectionFactory`, `ProfilingSessionFactory`, `Clock`.
+*Code-only seams:* `ConnectionFactory`, `ProfilingSessionFactory`.
 
 ---
 
@@ -139,7 +138,7 @@ Per-topic overrides: add entries to `Topics[]` under `Broadcast:RedisPubSub`. Ea
 | Property | Type | Default | Scope | Notes |
 |---|---|---|---|---|
 | `Enabled` | `bool` | `true` | Per-provider | Enable/disable this two-tier (L1 in-memory + L2 Redis) cache provider. |
-| `DefaultExpiration` | `TimeSpan?` | `01:00:00` | Per-provider | Default TTL when no per-call or per-policy expiration is set. |
+| `DefaultExpiration` | `TimeSpan?` | `01:00:00` | Per-provider | Default TTL when no per-call or per-policy expiration is set. `null` means *inherit*, which resolves to `CachePolicy.DefaultDistributedExpiration` (1 h) — it does **not** mean "never expire". For unbounded entries set `TimeSpan.MaxValue`. |
 | `Timeout` | `TimeSpan` | `00:00:01` | Per-provider | Max wait for a cache operation before giving up and falling through. |
 | `TrackStatistics` | `bool` | `true` | Per-provider | Emit hit/miss/eviction counters via the telemetry provider. |
 | `StatisticsFlushInterval` | `TimeSpan` | `00:01:00` | Per-provider | How often statistics are flushed to the telemetry sink. |
@@ -159,7 +158,7 @@ Per-topic overrides: add entries to `Topics[]` under `Broadcast:RedisPubSub`. Ea
 | `DistributedLockTimeout` | `TimeSpan?` | `00:00:00.500` | Per-provider | Max wait to acquire the distributed lock. |
 | `DistributedLockExpiry` | `TimeSpan?` | `00:00:05` | Per-provider | Redis key TTL for the distributed lock (safety expiry to prevent deadlocks). |
 
-*Code-only seams:* `Clock`, `EntryFactory`, `CacheKeyStrategy`, `TopicKeyStrategy`, `SizeProvider`, `LockKeyStrategy`.
+*Code-only seams:* `EntryFactory`, `CacheKeyStrategy`, `TopicKeyStrategy`, `SizeProvider`, `LockKeyStrategy`.
 
 ---
 
@@ -168,7 +167,7 @@ Per-topic overrides: add entries to `Topics[]` under `Broadcast:RedisPubSub`. Ea
 | Property | Type | Default | Scope | Notes |
 |---|---|---|---|---|
 | `Enabled` | `bool` | `true` | Per-provider | Enable/disable the standalone Redis cache provider. |
-| `DefaultExpiration` | `TimeSpan?` | `01:00:00` | Per-provider | Default TTL when no per-call or per-policy expiration is set. |
+| `DefaultExpiration` | `TimeSpan?` | `01:00:00` | Per-provider | Default TTL when no per-call or per-policy expiration is set. `null` means *inherit*, which resolves to `CachePolicy.DefaultDistributedExpiration` (1 h) — it does **not** mean "never expire". For unbounded entries set `TimeSpan.MaxValue`. |
 | `KeyPrefix` | `string` | `""` | Per-provider | Prefix prepended to every Redis key before `AppShortName` and the cache key segments. |
 | `Timeout` | `TimeSpan` | `00:00:01` | Per-provider | Max wait for a cache operation before giving up and falling through. |
 | `ConnectionMonitorEnabled` | `bool?` | `null` | Per-provider | `null` = inherit from `CacheOptions.ConnectionMonitorEnabled`. |
@@ -176,7 +175,7 @@ Per-topic overrides: add entries to `Topics[]` under `Broadcast:RedisPubSub`. Ea
 | `KeyReadTelemetryEnabled` | `bool` | `false` | Per-provider | Opt-in per-key read attribution: each read emits a `Redis` dependency carrying the key in `data` (one per hash key for hash reads), with a `BatchId` shared across the operation. Off by default because raw keys are high-cardinality; the per-operation hit/miss metric is always emitted regardless. |
 | `AwaitRefresh` | `bool` | `false` | Per-provider | Wait for the server to apply a refresh instead of sending `KEYEXPIRE`/`PERSIST` fire-and-forget. Off by default, keeping the round trip off the sliding-expiration path, which runs on every read of a sliding entry. While off, a refresh is unverifiable: `RefreshAsync` returns `false` whether it succeeded, failed or the key was absent; the reply is never seen, so a rejected command is neither logged nor retried by the resilience pipeline, and telemetry records every refresh as unsuccessful; and the new deadline is not yet in effect when the call returns. Turn it on where a lost refresh matters more than a round trip. `AddDistributedCache` sets it for its own provider. |
 
-*Code-only seams:* `Clock`, `EntryFactory`, `CacheKeyStrategy`, `RedisKeyStrategyFactory`.
+*Code-only seams:* `EntryFactory`, `CacheKeyStrategy`, `RedisKeyStrategyFactory`.
 
 ---
 
@@ -185,13 +184,13 @@ Per-topic overrides: add entries to `Topics[]` under `Broadcast:RedisPubSub`. Ea
 | Property | Type | Default | Scope | Notes |
 |---|---|---|---|---|
 | `Enabled` | `bool` | `true` | Per-provider | Enable/disable the in-memory-only cache provider. |
-| `DefaultExpiration` | `TimeSpan?` | `01:00:00` | Per-provider | Default TTL when no per-call or per-policy expiration is set. |
+| `DefaultExpiration` | `TimeSpan?` | `01:00:00` | Per-provider | Default TTL when no per-call or per-policy expiration is set. `null` means *inherit*, which resolves to `CachePolicy.DefaultDistributedExpiration` (1 h) — it does **not** mean "never expire". For unbounded entries set `TimeSpan.MaxValue`. |
 | `Timeout` | `TimeSpan` | `00:00:01` | Per-provider | Max wait for a cache operation before giving up. |
 | `TrackStatistics` | `bool` | `true` | Per-provider | Emit hit/miss/eviction counters via the telemetry provider. |
 | `StatisticsFlushInterval` | `TimeSpan` | `00:01:00` | Per-provider | How often statistics are flushed to the telemetry sink. |
 | `BroadcastEnable` | `bool` | `false` | Per-provider | Enable broadcast invalidation for this in-memory cache instance. |
 | `Topic` | `string?` | `null` | Per-provider | Topic name for invalidation broadcasts; `null` = use `CacheOptions.DefaultTopic`. |
-| `LocalMaxExpiration` | `TimeSpan?` | `01:00:00` | Per-provider | Cap on in-memory TTL; `null` = no cap (falls back to `DefaultExpiration`). |
+| `LocalMaxExpiration` | `TimeSpan?` | `01:00:00` | Per-provider | Cap on in-memory TTL; `null` = no cap (falls back to the resolved `DefaultExpiration`). |
 | `ConnectionMonitorEnabled` | `bool?` | `null` | Per-provider | Inert for this provider (no Redis connection); present to satisfy `IMultilayerCacheOptions`. |
 | `CacheNullValues` | `bool` | `false` | Per-provider | Persist `null`/empty factory returns as sentinels. |
 | `ConnectionMonitorPeriod` | `TimeSpan?` | `00:00:05` | Per-provider | Inert for this provider; present to satisfy `IMultilayerCacheOptions`. |
@@ -205,7 +204,7 @@ Per-topic overrides: add entries to `Topics[]` under `Broadcast:RedisPubSub`. Ea
 | `DistributedLockTimeout` | `TimeSpan?` | `null` | Per-provider | Inert for this provider; present to satisfy `IMultilayerCacheOptions`. |
 | `DistributedLockExpiry` | `TimeSpan?` | `null` | Per-provider | Inert for this provider; present to satisfy `IMultilayerCacheOptions`. |
 
-*Code-only seams:* `Clock`, `EntryFactory`, `CacheKeyStrategy`, `TopicKeyStrategy`, `SizeProvider`, `LockKeyStrategy`.
+*Code-only seams:* `EntryFactory`, `CacheKeyStrategy`, `TopicKeyStrategy`, `SizeProvider`, `LockKeyStrategy`.
 
 ---
 
@@ -221,8 +220,8 @@ extension rather than bound from configuration.
 | `RedisKeyDifferentiator` | `string?` | `null` | Per registration | Fills the slot after `AppShortName` that the application's caches fill with a `RedisTypePrefixes` value. Null uses `DefaultRedisKeyDifferentiator` (`"dh"`). Inert on the `InMemory` tier; a value matching a `RedisTypePrefixes` value is rejected at registration. Prefixes belonging to packages layered on top of `UiPath.Caching` are **not** checked — it cannot see them without depending on them — so avoid those too: `UiPath.Caching.Queue`'s set cache uses `"se"`. |
 | `RedisKeyStrategyFactory` | `IRedisKeyStrategyFactory?` | `null` | Per registration | Builds the Redis key, receiving `RedisKeyDifferentiator`. Null inherits the application's `RedisCacheOptions.RedisKeyStrategyFactory`, keeping its `AppShortName`, separator and sharding conventions. Code-only seam. |
 | `PolicyName` | `string?` | `null` | Per registration | Named `CachePolicy` applied to the adapter's operations; an unregistered name fails fast at startup. |
-| `DefaultEntryExpiration` | `TimeSpan?` | `null` | Per registration | Expiration used when the caller supplies none. `IDistributedCache` treats absent expiration as "until removed"; unless `AllowUnboundedEntries` is set that is mapped to this value, falling back to the backing tier's `DefaultExpiration`. |
-| `AllowUnboundedEntries` | `bool` | `false` | Per registration | Honor "no expiration" literally. Off by default: registration fails when no bounded default can be resolved, so shared storage cannot accumulate keys that never expire. |
+| `DefaultEntryExpiration` | `TimeSpan?` | `null` | Per registration | Expiration used when the caller supplies none. `IDistributedCache` treats absent expiration as "until removed"; unless `AllowUnboundedEntries` is set that is mapped to this value, falling back to the backing tier's `DefaultExpiration` and then to `CachePolicy.DefaultDistributedExpiration`. |
+| `AllowUnboundedEntries` | `bool` | `false` | Per registration | Honor "no expiration" literally. Off by default, and now the only way to reach an unbounded entry through this adapter without naming a lifetime — an unset default resolves to `CachePolicy.DefaultDistributedExpiration` rather than to "until removed". |
 
 Entries are stored as a Redis hash (`data`, `absexp`, `sldexp`) in a keyspace disjoint from the
 application's own caches, so `Refresh` reads only the expiration metadata. Keys are always
@@ -300,7 +299,7 @@ Entries are keyed by string under `Caching:Policies`. `ICache<T>` and `IHashCach
 |---|---|---|---|---|
 | `LocalExpiration` | `TimeSpan?` | `null` | Per-policy | L1 (in-memory) TTL cap for this policy; `null` = inherit from provider `LocalMaxExpiration`. Effective L1 TTL is `min(entry.Expiration, LocalExpiration)`. |
 | `LocalExpirationDisconnected` | `TimeSpan?` | `null` | Per-policy | L1 TTL cap when L2 is disconnected; `null` = inherit from provider `LocalMaxExpirationDisconnected`. |
-| `DistributedExpiration` | `TimeSpan?` | `null` | Per-policy | L2 (Redis) entry lifetime; `null` = use provider `DefaultExpiration`. Per-call expiration arguments still take precedence. |
+| `DistributedExpiration` | `TimeSpan?` | `null` | Per-policy | L2 (Redis) entry lifetime; `null` = use provider `DefaultExpiration`, and under that `CachePolicy.DefaultDistributedExpiration` (1 h). Per-call expiration arguments still take precedence. Set `TimeSpan.MaxValue` for unbounded. |
 | `FactoryTimeout` | `TimeSpan?` | `null` | Per-policy | Max time allowed for the value factory before it is abandoned; `null` = no timeout. |
 | `JitterMaxDuration` | `TimeSpan?` | `null` | Per-policy | Max random duration added to the L2 TTL at write time (uniform in `[0, JitterMaxDuration)`); `null` or `00:00:00` disables jitter. Caller-supplied expiration is honored exactly (no jitter). |
 | `RehydrateEnabled` | `bool?` | `null` | Per-policy | Master switch for proactive background refresh; `null` = inherit (default off). |
@@ -334,15 +333,3 @@ Nested under a `CachePolicy` entry. Field-level merged against the default polic
 | `LocalLockTimeout` | `TimeSpan?` | `null` | Per-policy | `null` = inherit from provider options or default policy. |
 | `DistributedLockTimeout` | `TimeSpan?` | `null` | Per-policy | `null` = inherit from provider options or default policy. |
 | `DistributedLockExpiry` | `TimeSpan?` | `null` | Per-policy | Redis key TTL for the distributed lock; `null` = inherit from provider options or default policy. |
-
----
-
-## Deprecated names (still bind)
-
-These property names were renamed but still bind for backcompat. They forward to the new property. Migrate when convenient.
-
-| Old name | New name | Defined on |
-|---|---|---|
-| `PrimaryMaxExpiration` | `LocalMaxExpiration` | `InMemoryRedisCacheOptions`, `InMemoryCacheOptions` |
-| `PrimaryMaxExpirationDisconnected` | `LocalMaxExpirationDisconnected` | `InMemoryRedisCacheOptions`, `InMemoryCacheOptions` |
-| `UsePrimaryOnlyWhenDisconnected` | `UseLocalOnlyWhenDisconnected` | `InMemoryRedisCacheOptions`, `InMemoryCacheOptions` |

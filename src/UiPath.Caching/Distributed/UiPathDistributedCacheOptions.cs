@@ -44,13 +44,16 @@ public class UiPathDistributedCacheOptions
     /// Expiration applied when the caller supplies none. <see cref="IDistributedCache"/> treats absent
     /// expiration as "until removed"; unless <see cref="AllowUnboundedEntries"/> is set, that is mapped
     /// to this value so shared storage cannot accumulate unbounded keys. Null falls back to the backing
-    /// tier's default expiration.
+    /// tier's default expiration, and under that to
+    /// <see cref="CachePolicy.DefaultDistributedExpiration"/>.
     /// </summary>
     public TimeSpan? DefaultEntryExpiration { get; set; }
 
     /// <summary>
-    /// Honor "no expiration" literally instead of substituting a bounded default. Off by default:
-    /// registration fails when no bounded default can be resolved.
+    /// Honor "no expiration" literally instead of substituting a bounded default. Off by default, and
+    /// now the only way to reach an unbounded entry through this adapter without naming a lifetime: a
+    /// default left unset resolves to <see cref="CachePolicy.DefaultDistributedExpiration"/> rather
+    /// than to "until removed".
     /// </summary>
     public bool AllowUnboundedEntries { get; set; }
 }

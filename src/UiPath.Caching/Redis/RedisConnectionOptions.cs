@@ -44,9 +44,6 @@ public class RedisConnectionOptions
 
     public bool? FailFastBacklogPolicy { get; set; }
 
-    [Obsolete("SocketManager was removed in StackExchange.Redis 3.0; this option no longer has any effect.")]
-    public bool? ThreadPoolSocketManager { get; set; }
-
     public bool ProfilerEnabled { get; set; }
 
     public bool ProfilerHasDefaultSession { get; set; } = true;
@@ -62,8 +59,6 @@ public class RedisConnectionOptions
     public IReadOnlyList<string> ProfilerCommandDenyList { get; set; } = [];
 
     public Func<ProfilingSession?>? ProfilingSessionFactory { get; set; }
-
-    public ISystemClock? Clock { get; set; }
 
     public Func<ConfigurationOptions, IConnectionMultiplexer>? ConnectionFactory { get; set; }
 

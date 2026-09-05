@@ -15,8 +15,10 @@ public abstract class RedisCacheBase : IConnectionState, IDisposable
         ICachingTelemetryProvider telemetryProvider,
         RedisCacheOptions redisCacheOptions,
         CacheOptions cacheOptions,
-        ICachePolicyFactory policyFactory)
+        ICachePolicyFactory policyFactory,
+        ICacheClock clock)
     {
+        ArgumentNullException.ThrowIfNull(clock);
         _redis = redis;
         Telemetry = telemetryProvider;
         var monitorConnection = redisCacheOptions.ConnectionMonitorEnabled ?? cacheOptions.ConnectionMonitorEnabled;
@@ -25,7 +27,7 @@ public abstract class RedisCacheBase : IConnectionState, IDisposable
             new CachePolicy { DistributedExpiration = redisCacheOptions.DefaultExpiration },
             policyFactory.Default);
         DefaultExpiration = DefaultPolicy.DistributedExpiration;
-        Clock = new CacheClock(redisCacheOptions.Clock, DefaultExpiration);
+        Clock = clock;
         KeyReadTelemetryEnabled = redisCacheOptions.KeyReadTelemetryEnabled;
         RefreshFlags = redisCacheOptions.AwaitRefresh
             ? CommandFlags.DemandMaster
@@ -52,43 +54,46 @@ public abstract class RedisCacheBase : IConnectionState, IDisposable
 
     protected TimeSpan? DefaultExpiration { get; }
 
-    protected CacheClock Clock { get; }
+    protected ICacheClock Clock { get; }
 
     /// <summary>
     /// Write duration for a call that carried no <c>expiration</c>: the policy's L2 TTL, then the
-    /// cache default, then <see cref="TimeSpan.MaxValue"/> for "no TTL".
+    /// cache default, then <see cref="CachePolicy.DefaultDistributedExpiration"/>. Never unbounded
+    /// by omission — a lifetime of <see cref="TimeSpan.MaxValue"/> has to be configured to get that.
     /// </summary>
     protected TimeSpan PolicyDuration(CachePolicy? policy) =>
-        Clock.ToTimeSpan(policy?.DistributedExpiration ?? DefaultExpiration);
-
-    /// <summary>
-    /// Write deadline for a call that carried no <c>expiration</c>, resolved the same way as
-    /// <see cref="PolicyDuration"/> and yielding <see cref="DateTimeOffset.MaxValue"/> for "no TTL".
-    /// </summary>
-    protected DateTimeOffset PolicyDeadline(CachePolicy? policy) =>
-        Clock.ToDateTimeOffset(policy?.DistributedExpiration ?? DefaultExpiration);
-
-    /// <summary>
-    /// Write deadline carried by an entry-options object. <see cref="HashCacheEntryOptions"/> keeps
-    /// its lifetime fields nullable — an options object is the one seam where <c>null</c> still
-    /// means "inherit" — so this resolves <c>ExpireTime</c>, then <c>TimeToLive</c>, then the policy
-    /// and cache defaults.
-    /// </summary>
-    protected DateTimeOffset OptionsDeadline(DateTimeOffset? expireTime, TimeSpan? timeToLive, CachePolicy? policy) =>
-        expireTime.HasValue
-            ? Clock.ToDateTimeOffset(expireTime)
-            : Clock.ToDateTimeOffset(timeToLive ?? policy?.DistributedExpiration ?? DefaultExpiration);
+        policy?.DistributedExpiration ?? DefaultExpiration ?? CachePolicy.DefaultDistributedExpiration;
 
     /// <summary>Validates a caller-supplied duration.</summary>
     protected static TimeSpan CallerDuration(TimeSpan expiration, [CallerArgumentExpression(nameof(expiration))] string? paramName = null) =>
         CacheExpiration.ThrowIfNotPositive(expiration, paramName);
 
-    /// <summary>Validates a caller-supplied deadline and turns it into a duration from the cache's now.</summary>
+    /// <summary>Validates a caller-supplied expiration and turns it into a duration from the cache's now.</summary>
     protected TimeSpan CallerDuration(DateTimeOffset expiration, [CallerArgumentExpression(nameof(expiration))] string? paramName = null) =>
         CacheExpiration.ToDuration(expiration, Clock.UtcNow, paramName);
 
-    /// <summary>Validates a caller-supplied deadline.</summary>
-    protected DateTimeOffset CallerDeadline(DateTimeOffset expiration, [CallerArgumentExpression(nameof(expiration))] string? paramName = null) =>
+    /// <summary>
+    /// Write expiration for a call that carried no <c>expiration</c>, resolved the same way as
+    /// <see cref="PolicyDuration"/>.
+    /// </summary>
+    protected DateTimeOffset GetExpiration(CachePolicy? policy) =>
+        Clock.ToDateTimeOffset(PolicyDuration(policy));
+
+    /// <summary>
+    /// Write expiration carried by an entry-options object. <see cref="HashCacheEntryOptions"/> keeps
+    /// its lifetime fields nullable — an options object is the one seam where <c>null</c> still
+    /// means "inherit" — so this resolves <c>ExpireTime</c>, then <c>TimeToLive</c>, then the same
+    /// chain as <see cref="PolicyDuration"/>.
+    /// </summary>
+    protected DateTimeOffset GetExpiration(HashCacheEntryOptions options, CachePolicy? policy) =>
+        options.ExpireTime ?? Clock.ToDateTimeOffset(options.TimeToLive ?? PolicyDuration(policy));
+
+    /// <summary>Validates a caller-supplied duration and turns it into an expiration from the cache's now.</summary>
+    protected DateTimeOffset GetExpiration(TimeSpan expiration, [CallerArgumentExpression(nameof(expiration))] string? paramName = null) =>
+        Clock.ToDateTimeOffset(CallerDuration(expiration, paramName));
+
+    /// <summary>Validates a caller-supplied expiration.</summary>
+    protected DateTimeOffset GetExpiration(DateTimeOffset expiration, [CallerArgumentExpression(nameof(expiration))] string? paramName = null) =>
         CacheExpiration.ThrowIfNotFuture(expiration, Clock.UtcNow, paramName);
 
     public event EventHandler? OnConnectionFailed

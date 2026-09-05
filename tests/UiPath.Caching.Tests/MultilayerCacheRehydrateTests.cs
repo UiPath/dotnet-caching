@@ -89,6 +89,132 @@ public class MultilayerCacheRehydrateTests(ITestContextAccessor testContextAcces
         generatorTcs.TrySetResult("rehydrated");
     }
 
+    /// <summary>
+    /// Jitter is a per-write draw; the threshold is a function of the configured lifetime alone.
+    /// A hit that measured itself against a fresh draw would cross or miss the threshold at random.
+    /// With a draw range far wider than the lifetime, a jittered duration would put this entry —
+    /// nine tenths through its configured ten minutes — nowhere near the threshold.
+    /// </summary>
+    [Fact]
+    public async Task Hit_past_threshold_rehydrates_regardless_of_write_jitter()
+    {
+        var token = testContextAccessor.Current.CancellationToken;
+        var policy = new CachePolicy
+        {
+            DistributedExpiration = Duration,
+            JitterMaxDuration = TimeSpan.FromDays(365),
+            RehydrateEnabled = true,
+            Rehydrate = new RehydrateOptions
+            {
+                Threshold = 0.75,
+                BaseCooldown = TimeSpan.FromSeconds(1),
+                MaxCooldown = TimeSpan.FromMinutes(5),
+                TimeoutFraction = 0.5,
+                Name = "test-profile",
+            },
+        };
+        var aged = new TestCacheEntry<string?> { Value = "cached", Expiration = DateTimeOffset.UtcNow.AddMinutes(1) };
+        _innerCache.GetCacheEntryAsync<string>(_cacheKey, Arg.Any<CachePolicy?>(), Arg.Any<CancellationToken>()).Returns(aged);
+
+        var generatorCalls = 0;
+        Task<string?> Generator(CancellationToken _)
+        {
+            Interlocked.Increment(ref generatorCalls);
+            return Task.FromResult<string?>("rehydrated");
+        }
+        var acquiredLock = Substitute.For<IAsyncDisposable>();
+        _distributedLock.TryAcquireAsync(Arg.Any<string>(), Arg.Any<TimeSpan>(), Arg.Any<CancellationToken>())
+            .Returns(acquiredLock);
+        _innerCache.SetAsync<string?>(_cacheKey, Arg.Any<string?>(), Arg.Any<DateTimeOffset>(), Arg.Any<CachePolicy?>(), Arg.Any<CancellationToken>())
+            .Returns(true);
+
+        var result = await Sut.GetOrAddAsync(_cacheKey, Generator, policy, token);
+
+        result.Should().Be("cached");
+        await WaitForAsync(() => Volatile.Read(ref generatorCalls) > 0, TimeSpan.FromSeconds(5), token);
+    }
+
+    /// <summary>
+    /// A caller-supplied lifetime is honored exactly, on the rehydrate write as much as on the first
+    /// one. Only a policy- or default-derived lifetime is jittered.
+    /// </summary>
+    [Fact]
+    public async Task Rehydrate_write_keeps_a_caller_supplied_lifetime_exact()
+    {
+        var token = testContextAccessor.Current.CancellationToken;
+        var policy = new CachePolicy
+        {
+            JitterMaxDuration = TimeSpan.FromDays(365),
+            RehydrateEnabled = true,
+            Rehydrate = new RehydrateOptions
+            {
+                Threshold = 0.75,
+                BaseCooldown = TimeSpan.FromSeconds(1),
+                MaxCooldown = TimeSpan.FromMinutes(5),
+                TimeoutFraction = 0.5,
+                Name = "test-profile",
+            },
+        };
+        var aged = new TestCacheEntry<string?> { Value = "cached", Expiration = DateTimeOffset.UtcNow.AddMinutes(1) };
+        _innerCache.GetCacheEntryAsync<string>(_cacheKey, Arg.Any<CachePolicy?>(), Arg.Any<CancellationToken>()).Returns(aged);
+        static Task<string?> Generator(CancellationToken _) => Task.FromResult<string?>("rehydrated");
+        var acquiredLock = Substitute.For<IAsyncDisposable>();
+        _distributedLock.TryAcquireAsync(Arg.Any<string>(), Arg.Any<TimeSpan>(), Arg.Any<CancellationToken>())
+            .Returns(acquiredLock);
+        DateTimeOffset? written = null;
+        _innerCache.SetAsync<string?>(_cacheKey, "rehydrated", Arg.Do<DateTimeOffset>(d => written = d), Arg.Any<CachePolicy?>(), Arg.Any<CancellationToken>())
+            .Returns(true);
+
+        await Sut.GetOrAddAsync(_cacheKey, Generator, Duration, policy, token);
+
+        await WaitForAsync(() => written is not null, TimeSpan.FromSeconds(5), token);
+        written.Should().BeCloseTo(DateTimeOffset.UtcNow.Add(Duration), TimeSpan.FromSeconds(5));
+    }
+
+    /// <summary>
+    /// One resolution feeds both the write deadline and the rehydrate threshold. They used to be
+    /// separate chains: the write took the floor while the threshold bottomed out at null, so an
+    /// entry written under the library default expired after an hour and was never rehydrated.
+    /// </summary>
+    [Fact]
+    public async Task Hit_past_threshold_rehydrates_when_only_the_library_default_supplies_the_duration()
+    {
+        var token = testContextAccessor.Current.CancellationToken;
+        _options.DefaultExpiration = null;
+        var policy = new CachePolicy
+        {
+            RehydrateEnabled = true,
+            Rehydrate = new RehydrateOptions
+            {
+                Threshold = 0.75,
+                BaseCooldown = TimeSpan.FromSeconds(1),
+                MaxCooldown = TimeSpan.FromMinutes(5),
+                TimeoutFraction = 0.5,
+                Name = "test-profile",
+            },
+        };
+        // Five minutes left of the one-hour default is inside the last quarter, so past the threshold.
+        var aged = new TestCacheEntry<string?> { Value = "cached", Expiration = DateTimeOffset.UtcNow.AddMinutes(5) };
+        _innerCache.GetCacheEntryAsync<string>(_cacheKey, Arg.Any<CachePolicy?>(), Arg.Any<CancellationToken>()).Returns(aged);
+
+        var generatorCalls = 0;
+        Task<string?> Generator(CancellationToken _)
+        {
+            Interlocked.Increment(ref generatorCalls);
+            return Task.FromResult<string?>("rehydrated");
+        }
+        var acquiredLock = Substitute.For<IAsyncDisposable>();
+        _distributedLock.TryAcquireAsync(Arg.Any<string>(), Arg.Any<TimeSpan>(), Arg.Any<CancellationToken>())
+            .Returns(acquiredLock);
+        _innerCache.SetAsync<string?>(_cacheKey, Arg.Any<string?>(), Arg.Any<DateTimeOffset>(), Arg.Any<CachePolicy?>(), Arg.Any<CancellationToken>())
+            .Returns(true);
+
+        var result = await Sut.GetOrAddAsync(_cacheKey, Generator, policy, token);
+
+        result.Should().Be("cached");
+        await WaitForAsync(() => Volatile.Read(ref generatorCalls) > 0, TimeSpan.FromSeconds(5), token);
+    }
+
     [Fact]
     public async Task Rehydrate_writes_value_back_through_inner_cache_on_success()
     {

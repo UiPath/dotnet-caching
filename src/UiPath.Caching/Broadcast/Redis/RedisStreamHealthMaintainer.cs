@@ -17,7 +17,7 @@ public partial class RedisStreamHealthMaintainer : IHostedService
     private readonly CancellationTokenSource _cancellationTokenSource = new();
     private readonly ICachingTelemetryProvider _telemetryProvider;
     private readonly SemaphoreSlim _semaphore;
-    private readonly ISystemClock _clock;
+    private readonly ICacheClock _clock;
     private string _streamsSearchPattern = string.Empty;
     private PeriodicTimer? _timer;
     private RedisKey _lockKey;
@@ -31,7 +31,8 @@ public partial class RedisStreamHealthMaintainer : IHostedService
         IOptions<RedisStreamsTopicOptions> streamOptionsAccessor,
         IOptions<RedisCacheOptions> redisOptionsAccessor,
         IOptions<CacheOptions> cacheOptionsAccessor,
-        ILogger<RedisStreamHealthMaintainer> logger)
+        ILogger<RedisStreamHealthMaintainer> logger,
+        ICacheClock clock)
     {
         _redis = redis;
         _telemetryProvider = telemetryProvider;
@@ -41,7 +42,7 @@ public partial class RedisStreamHealthMaintainer : IHostedService
         _cacheOptions = cacheOptionsAccessor.Value;
         _cancellationToken = _cancellationTokenSource.Token;
         _sourceUri = (_cacheOptions.SourceUri ?? CacheOptions.MachineUri).ToString();
-        _clock = _redisOptions.Clock ?? new SystemClock();
+        _clock = clock;
         _semaphore = new SemaphoreSlim(1);
     }
 

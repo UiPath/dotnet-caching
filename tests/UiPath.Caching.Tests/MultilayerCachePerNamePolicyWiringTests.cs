@@ -116,6 +116,75 @@ public class MultilayerCachePerNamePolicyWiringTests : IAsyncLifetime
             Arg.Any<CancellationToken>());
     }
 
+    /// <summary>
+    /// Nothing in the chain supplies a lifetime, so the write takes
+    /// <see cref="CachePolicy.DefaultDistributedExpiration"/> rather than being stored unbounded.
+    /// </summary>
+    [Fact]
+    public async Task SetAsync_falls_back_to_the_library_default_when_nothing_configures_a_TTL()
+    {
+        _options.DefaultExpiration = null;
+        _fixture.Inject(new CacheOptions { AppShortName = "test" });
+        _sut = null;
+
+        _innerCache.SetAsync<string?>(_cacheKey, Arg.Any<string?>(), Arg.Any<DateTimeOffset>(), Arg.Any<CachePolicy?>(), Arg.Any<CancellationToken>())
+            .Returns(true);
+        _topic.PublishAsync(Arg.Any<ICacheEvent>(), Arg.Any<CancellationToken>())
+            .Returns(_ => true);
+
+        await Sut.SetAsync(_cacheKey, "v", (CachePolicy?)null, TestContext.Current.CancellationToken);
+
+        var floor = CachePolicy.DefaultDistributedExpiration;
+        await _innerCache.Received(1).SetAsync<string?>(
+            _cacheKey,
+            "v",
+            Arg.Is<DateTimeOffset>(d => d - DateTimeOffset.UtcNow > floor - TimeSpan.FromSeconds(5) && d - DateTimeOffset.UtcNow < floor + TimeSpan.FromSeconds(5)),
+            Arg.Any<CachePolicy?>(),
+            Arg.Any<CancellationToken>());
+    }
+
+    /// <summary>An unbounded lifetime is still reachable, by configuring it rather than omitting it.</summary>
+    [Fact]
+    public async Task SetAsync_stores_unbounded_when_the_default_is_configured_TimeSpan_MaxValue()
+    {
+        _options.DefaultExpiration = TimeSpan.MaxValue;
+        _fixture.Inject(new CacheOptions { AppShortName = "test" });
+        _sut = null;
+
+        _innerCache.SetAsync<string?>(_cacheKey, Arg.Any<string?>(), Arg.Any<DateTimeOffset>(), Arg.Any<CachePolicy?>(), Arg.Any<CancellationToken>())
+            .Returns(true);
+        _topic.PublishAsync(Arg.Any<ICacheEvent>(), Arg.Any<CancellationToken>())
+            .Returns(_ => true);
+
+        await Sut.SetAsync(_cacheKey, "v", (CachePolicy?)null, TestContext.Current.CancellationToken);
+
+        await _innerCache.Received(1).SetAsync<string?>(
+            _cacheKey, "v", DateTimeOffset.MaxValue, Arg.Any<CachePolicy?>(), Arg.Any<CancellationToken>());
+    }
+
+    /// <summary>
+    /// Jitter spreads an expiry that is coming; an unbounded entry has none. Jittering the sentinel
+    /// would clamp it under <see cref="DateTimeOffset.MaxValue"/> and put the key back on EXPIRE.
+    /// </summary>
+    [Fact]
+    public async Task SetAsync_keeps_an_unbounded_default_unbounded_when_the_policy_jitters()
+    {
+        _options.DefaultExpiration = TimeSpan.MaxValue;
+        _fixture.Inject(new CacheOptions { AppShortName = "test" });
+        _sut = null;
+
+        _innerCache.SetAsync<string?>(_cacheKey, Arg.Any<string?>(), Arg.Any<DateTimeOffset>(), Arg.Any<CachePolicy?>(), Arg.Any<CancellationToken>())
+            .Returns(true);
+        _topic.PublishAsync(Arg.Any<ICacheEvent>(), Arg.Any<CancellationToken>())
+            .Returns(_ => true);
+
+        var jittered = new CachePolicy { JitterMaxDuration = TimeSpan.FromMinutes(5) };
+        await Sut.SetAsync(_cacheKey, "v", jittered, TestContext.Current.CancellationToken);
+
+        await _innerCache.Received(1).SetAsync<string?>(
+            _cacheKey, "v", DateTimeOffset.MaxValue, Arg.Any<CachePolicy?>(), Arg.Any<CancellationToken>());
+    }
+
     [Fact]
     public async Task SetAsync_uses_DefaultCachePolicy_DistributedExpiration_when_caller_omits_expiration()
     {
@@ -413,8 +482,56 @@ public class MultilayerCachePerNamePolicyWiringTests : IAsyncLifetime
             "across 30 draws with maxJitter=10s, per-call TTL spread should clearly exceed 1s — a no-op ApplyJitter would produce zero spread independent of wall-clock time");
     }
 
+    /// <summary>
+    /// Per-call unbounded has the same spelling as configured unbounded, and reaches L2 as the same
+    /// sentinel rather than overflowing on the way to a deadline.
+    /// </summary>
     [Fact]
-    public async Task SetAsync_clamps_jitter_when_base_plus_jitter_would_overflow_DateTime()
+    public async Task SetAsync_with_a_per_call_unbounded_duration_stores_unbounded()
+    {
+        _innerCache.SetAsync<string?>(_cacheKey, Arg.Any<string?>(), Arg.Any<DateTimeOffset>(), Arg.Any<CachePolicy?>(), Arg.Any<CancellationToken>())
+            .Returns(true);
+        _topic.PublishAsync(Arg.Any<ICacheEvent>(), Arg.Any<CancellationToken>())
+            .Returns(_ => true);
+
+        await Sut.SetAsync(_cacheKey, "v", TimeSpan.MaxValue, (CachePolicy?)null, TestContext.Current.CancellationToken);
+
+        await _innerCache.Received(1).SetAsync<string?>(
+            _cacheKey, "v", DateTimeOffset.MaxValue, Arg.Any<CachePolicy?>(), Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task GetOrAdd_with_a_per_call_unbounded_duration_stores_unbounded()
+    {
+        static Task<string?> Generator(CancellationToken _) => Task.FromResult<string?>("v");
+        _innerCache.GetCacheEntryAsync<string>(_cacheKey, Arg.Any<CachePolicy?>(), Arg.Any<CancellationToken>())
+            .Returns(new TestCacheEntry<string?> { Value = null });
+
+        await Sut.GetOrAddAsync(_cacheKey, Generator, TimeSpan.MaxValue, policy: null, TestContext.Current.CancellationToken);
+
+        await _innerCache.Received(1).SetAsync<string?>(
+            _cacheKey, "v", DateTimeOffset.MaxValue, Arg.Any<CachePolicy?>(), Arg.Any<CancellationToken>());
+    }
+
+    /// <summary>An L1 cap of "no cap" must not throw on the way to comparing against it.</summary>
+    [Fact]
+    public async Task GetCacheEntry_L2_hit_populates_L1_uncapped_when_LocalMaxExpiration_is_unbounded()
+    {
+        _options.LocalMaxExpiration = TimeSpan.MaxValue;
+        var l2Expiration = DateTimeOffset.UtcNow.AddHours(1);
+
+        var cacheEntry = _fixture.Freeze<Microsoft.Extensions.Caching.Memory.ICacheEntry>();
+        _memoryCache.CreateEntry(Arg.Any<object>()).Returns(cacheEntry);
+        _innerCache.GetCacheEntryAsync<string>(_cacheKey, Arg.Any<CachePolicy?>(), Arg.Any<CancellationToken>())
+            .Returns(new TestCacheEntry<string?> { Value = "v", Found = true, Expiration = l2Expiration });
+
+        _ = await Sut.GetCacheEntryAsync<string>(_cacheKey, policy: null, TestContext.Current.CancellationToken);
+
+        cacheEntry.AbsoluteExpiration.Should().Be(l2Expiration);
+    }
+
+    [Fact]
+    public async Task SetAsync_survives_an_absurd_JitterMaxDuration()
     {
         var baseTtl = TimeSpan.FromHours(1);
         var defaultPolicy = new CachePolicy { DistributedExpiration = baseTtl, JitterMaxDuration = TimeSpan.MaxValue };
@@ -430,7 +547,7 @@ public class MultilayerCachePerNamePolicyWiringTests : IAsyncLifetime
             await Sut.SetAsync(_cacheKey, "v", (CachePolicy?)null, TestContext.Current.CancellationToken);
 
         await act.Should().NotThrowAsync(
-            "ApplyJitter must clamp the result to UtcNow's remaining range so an absurd JitterMaxDuration can't crash writes");
+            "the jitter draw is bounded under TimeSpan.MaxValue and the clock saturates the deadline, so an absurd JitterMaxDuration can't crash writes");
 
         await _innerCache.Received(1).SetAsync<string?>(
             _cacheKey, "v",

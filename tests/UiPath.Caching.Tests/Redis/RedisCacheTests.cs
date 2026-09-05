@@ -390,8 +390,13 @@ public class RedisCacheTests(ITestContextAccessor testContextAccessor) : IAsyncL
         await act.Should().ThrowAsync<ArgumentNullException>();
     }
 
+    /// <summary>
+    /// A configured default is a write-side rule. A read reports what storage holds, so a key with
+    /// no TTL reads as unbounded whether or not a default exists — and <c>ExpireTimeAsync</c>, which
+    /// returns the raw <see langword="null"/>, agrees with it.
+    /// </summary>
     [Fact]
-    public async Task GetCacheEntry_returns_default_expiration_when_remote_has_no_ttl_v7()
+    public async Task GetCacheEntry_reports_no_ttl_as_MaxValue_even_when_a_default_is_configured_v7()
     {
         _version = new(7, 0);
         var expectedValue = _fixture.Create<string>();
@@ -405,8 +410,7 @@ public class RedisCacheTests(ITestContextAccessor testContextAccessor) : IAsyncL
         var entry = await Sut.GetCacheEntryAsync<string>(_cacheKey, policy: null, token: testContextAccessor.Current.CancellationToken);
 
         entry.Value.Should().Be(expectedValue);
-        // Both Redis 6 and Redis 7 paths must converge on UtcNow + DefaultExpiration when the remote has no TTL.
-        entry.Expiration.Should().Be(_clock.UtcNow.Add(TimeSpan.FromHours(1)));
+        entry.Expiration.Should().Be(DateTimeOffset.MaxValue);
     }
 
     [Fact]
@@ -667,25 +671,46 @@ public class RedisCacheTests(ITestContextAccessor testContextAccessor) : IAsyncL
         actualOffset.Should().Be(expected);
     }
 
-    [Theory]
-    [InlineData(typeof(TimeSpan))]
-    [InlineData(typeof(DateTimeOffset))]
-    [InlineData(typeof(object))]
-    public async Task Refresh_no_expiration_no_default(Type expirationType)
+    /// <summary>
+    /// An unset provider default no longer reads as "no TTL": the write inherits
+    /// <see cref="CachePolicy.DefaultDistributedExpiration"/>, so the key gets a deadline instead of
+    /// being persisted.
+    /// </summary>
+    [Fact]
+    public async Task Refresh_with_no_expiration_and_no_default_takes_the_library_default()
     {
         _cacheOptions.DefaultExpiration = null;
-        if (expirationType == typeof(TimeSpan))
-        {
-            await Sut.RefreshAsync<string>(_cacheKey, policy: null, token: testContextAccessor.Current.CancellationToken);
-        }
-        else if (expirationType == typeof(DateTimeOffset))
-        {
-            await Sut.RefreshAsync<string>(_cacheKey, policy: null, token: testContextAccessor.Current.CancellationToken);
-        }
-        else
-        {
-            await Sut.RefreshAsync<string>(_cacheKey, policy: null, token: testContextAccessor.Current.CancellationToken);
-        }
+        DateTime? actualExpiration = default;
+        _database.KeyExpireAsync(_redisKey, Arg.Any<DateTime?>(), Arg.Any<CommandFlags>())
+            .Returns(ci =>
+            {
+                actualExpiration = ci.Arg<DateTime?>();
+                return true;
+            });
+
+        await Sut.RefreshAsync<string>(_cacheKey, policy: null, token: testContextAccessor.Current.CancellationToken);
+
+        await _database.DidNotReceive().KeyPersistAsync(Arg.Any<RedisKey>(), Arg.Any<CommandFlags>());
+        actualExpiration.Should().Be(_now.Add(CachePolicy.DefaultDistributedExpiration).UtcDateTime);
+    }
+
+    /// <summary>Unbounded is still reachable — it just has to be asked for.</summary>
+    [Fact]
+    public async Task Refresh_persists_the_key_when_the_default_is_configured_unbounded()
+    {
+        _cacheOptions.DefaultExpiration = TimeSpan.MaxValue;
+
+        await Sut.RefreshAsync<string>(_cacheKey, policy: null, token: testContextAccessor.Current.CancellationToken);
+
+        await _database.DidNotReceive().KeyExpireAsync(Arg.Any<RedisKey>(), Arg.Any<DateTime?>(), Arg.Any<CommandFlags>());
+        await _database.Received(1).KeyPersistAsync(Arg.Any<RedisKey>(), Arg.Any<CommandFlags>());
+    }
+
+    /// <summary>The per-call spelling of unbounded lands on the same PERSIST as the configured one.</summary>
+    [Fact]
+    public async Task Refresh_persists_the_key_for_a_per_call_unbounded_duration()
+    {
+        await Sut.RefreshAsync<string>(_cacheKey, TimeSpan.MaxValue, policy: null, token: testContextAccessor.Current.CancellationToken);
 
         await _database.DidNotReceive().KeyExpireAsync(Arg.Any<RedisKey>(), Arg.Any<DateTime?>(), Arg.Any<CommandFlags>());
         await _database.Received(1).KeyPersistAsync(Arg.Any<RedisKey>(), Arg.Any<CommandFlags>());
@@ -1319,6 +1344,7 @@ public class RedisCacheTests(ITestContextAccessor testContextAccessor) : IAsyncL
         _multiKey = _fixture.Create<string>();
         _redisMultiKey = string.Join(':', _prefix, RedisTypePrefixes.String, _multiKey).ToLowerInvariant();
         _clock = _fixture.Freeze<ISystemClock>();
+        _fixture.Inject<ICacheClock>(new CacheClock(_clock));
         _clock.UtcNow.Returns(c => _now);
         _resiliencePipelineProvider = _fixture.Freeze<IResiliencePipelineProvider>();
         var noOpExecutor = new EmptyResiliencePipeline();
@@ -1334,7 +1360,6 @@ public class RedisCacheTests(ITestContextAccessor testContextAccessor) : IAsyncL
         _cacheKeyStrategy.GetCacheKey<string>(_cacheKey).Returns(_cacheKey);
         _cacheOptions = new RedisCacheOptions
         {
-            Clock = _clock,
             CacheKeyStrategy = _cacheKeyStrategy,
             RedisKeyStrategyFactory = redisKeyStrategyFactory
         };

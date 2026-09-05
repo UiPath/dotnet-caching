@@ -706,7 +706,6 @@ public class MultilayerCacheTests(ITestContextAccessor testContextAccessor) : IA
     {
         _memoryCache = new MemoryCache(Options.Create(new MemoryCacheOptions
         {
-            Clock = _clock,
             CompactionPercentage = 0.3,
             ExpirationScanFrequency = TimeSpan.FromSeconds(2),
         }));
@@ -732,7 +731,6 @@ public class MultilayerCacheTests(ITestContextAccessor testContextAccessor) : IA
     {
         _memoryCache = new MemoryCache(Options.Create(new MemoryCacheOptions
         {
-            Clock = _clock
         }));
 
         var expected = _fixture.Create<string>();
@@ -756,11 +754,11 @@ public class MultilayerCacheTests(ITestContextAccessor testContextAccessor) : IA
     public async Task Remove_evict_token_non_active()
     {
         _clock = _fixture.Freeze<ISystemClock>();
+        _fixture.Inject<ICacheClock>(new CacheClock(_clock));
         var now = DateTimeOffset.UtcNow;
         _clock.UtcNow.Returns(now);
         _memoryCache = new MemoryCache(Options.Create(new MemoryCacheOptions
         {
-            Clock = _clock,
         }));
 
         var expected = _fixture.Create<string>();
@@ -815,7 +813,6 @@ public class MultilayerCacheTests(ITestContextAccessor testContextAccessor) : IA
     {
         _memoryCache = new MemoryCache(Options.Create(new MemoryCacheOptions
         {
-            Clock = _clock,
             CompactionPercentage = 0.3,
             ExpirationScanFrequency = TimeSpan.FromSeconds(2),
         }));
@@ -846,7 +843,6 @@ public class MultilayerCacheTests(ITestContextAccessor testContextAccessor) : IA
     {
         _memoryCache = new MemoryCache(Options.Create(new MemoryCacheOptions
         {
-            Clock = _clock
         }));
 
         var expected = _fixture.Create<string>();
@@ -873,11 +869,11 @@ public class MultilayerCacheTests(ITestContextAccessor testContextAccessor) : IA
     public async Task Multi_remove_evict_token_non_active()
     {
         _clock = _fixture.Freeze<ISystemClock>();
+        _fixture.Inject<ICacheClock>(new CacheClock(_clock));
         var now = DateTimeOffset.UtcNow;
         _clock.UtcNow.Returns(now);
         _memoryCache = new MemoryCache(Options.Create(new MemoryCacheOptions
         {
-            Clock = _clock,
         }));
 
         var expected = _fixture.Create<string>();
@@ -1020,7 +1016,6 @@ public class MultilayerCacheTests(ITestContextAccessor testContextAccessor) : IA
     {
         _memoryCache = new MemoryCache(Options.Create(new MemoryCacheOptions
         {
-            Clock = _clock
         }));
         var token = new TestChangeToken
         {
@@ -1045,7 +1040,6 @@ public class MultilayerCacheTests(ITestContextAccessor testContextAccessor) : IA
     {
         _memoryCache = new MemoryCache(Options.Create(new MemoryCacheOptions
         {
-            Clock = _clock
         }));
         var token = new TestChangeToken
         {

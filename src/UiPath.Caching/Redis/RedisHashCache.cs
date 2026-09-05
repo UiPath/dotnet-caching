@@ -26,8 +26,9 @@ internal sealed partial class RedisHashCache : RedisCacheBase, IHashCache
         RedisCacheOptions redisCacheOptions,
         CacheOptions cacheOptions,
         ICachePolicyFactory policyFactory,
+        ICacheClock clock,
         ILogger<RedisHashCache> logger)
-        : base(redis, telemetryProvider, redisCacheOptions, cacheOptions, policyFactory)
+        : base(redis, telemetryProvider, redisCacheOptions, cacheOptions, policyFactory, clock)
     {
         _serializer = serializer;
         _logger = logger;
@@ -72,16 +73,16 @@ internal sealed partial class RedisHashCache : RedisCacheBase, IHashCache
     }
 
     public ValueTask<IDictionary<string, T?>> GetOrAddAsync<T>(CacheKey cacheKey, Func<CancellationToken, Task<IDictionary<string, T?>>> generator, CachePolicy? policy, CancellationToken token = default) =>
-        GetOrAddCoreAsync(cacheKey, generator, PolicyDeadline(policy), HashCacheSetOption.KeyReplace, policy, token);
+        GetOrAddCoreAsync(cacheKey, generator, GetExpiration(policy), HashCacheSetOption.KeyReplace, policy, token);
 
     public ValueTask<IDictionary<string, T?>> GetOrAddAsync<T>(CacheKey cacheKey, Func<CancellationToken, Task<IDictionary<string, T?>>> generator, TimeSpan expiration, CachePolicy? policy, CancellationToken token = default) =>
-        GetOrAddCoreAsync(cacheKey, generator, Clock.UtcNow.Add(CallerDuration(expiration)), HashCacheSetOption.KeyReplace, policy, token);
+        GetOrAddCoreAsync(cacheKey, generator, GetExpiration(expiration), HashCacheSetOption.KeyReplace, policy, token);
 
     public ValueTask<IDictionary<string, T?>> GetOrAddAsync<T>(CacheKey cacheKey, Func<CancellationToken, Task<IDictionary<string, T?>>> generator, DateTimeOffset expiration, CachePolicy? policy, CancellationToken token = default) =>
-        GetOrAddCoreAsync(cacheKey, generator, CallerDeadline(expiration), HashCacheSetOption.KeyReplace, policy, token);
+        GetOrAddCoreAsync(cacheKey, generator, GetExpiration(expiration), HashCacheSetOption.KeyReplace, policy, token);
 
     public ValueTask<IDictionary<string, T?>> GetOrAddAsync<T>(CacheKey cacheKey, Func<CancellationToken, Task<IDictionary<string, T?>>> generator, DateTimeOffset expiration, HashCacheSetOption? setOption, CachePolicy? policy, CancellationToken token = default) =>
-        GetOrAddCoreAsync(cacheKey, generator, CallerDeadline(expiration), setOption ?? HashCacheSetOption.KeyReplace, policy, token);
+        GetOrAddCoreAsync(cacheKey, generator, GetExpiration(expiration), setOption ?? HashCacheSetOption.KeyReplace, policy, token);
 
     private async ValueTask<IDictionary<string, T?>> GetOrAddCoreAsync<T>(CacheKey cacheKey, Func<CancellationToken, Task<IDictionary<string, T?>>> generator, DateTimeOffset effectiveExpiration, HashCacheSetOption setOption, CachePolicy? policy, CancellationToken token)
     {
@@ -104,7 +105,7 @@ internal sealed partial class RedisHashCache : RedisCacheBase, IHashCache
         else if (_cacheNullValues)
         {
             var options = new HashCacheEntryOptions(effectiveExpiration, default, default, setOption);
-            await SetEmptyMarkerAsync<T>(cacheKey, options, token).ConfigureAwait(false);
+            await SetEmptyMarkerAsync<T>(cacheKey, options, policy, token).ConfigureAwait(false);
         }
         else
         {
@@ -185,16 +186,14 @@ internal sealed partial class RedisHashCache : RedisCacheBase, IHashCache
         return (found, ret);
     }
 
-    private ValueTask<bool> SetEmptyMarkerAsync<T>(CacheKey cacheKey, HashCacheEntryOptions options, CancellationToken token)
+    private ValueTask<bool> SetEmptyMarkerAsync<T>(CacheKey cacheKey, HashCacheEntryOptions options, CachePolicy? policy, CancellationToken token)
     {
         var redisKey = ToRedisKey(cacheKey, token);
         RedisValue metadata = options.Metadata != null && options.Metadata.Count > 0
             ? _serializer.Serialize(options.Metadata)
             : RedisValue.EmptyString;
         var entries = new[] { new HashEntry(KnownFieldNames.MetadataKey, metadata) };
-        var expiration = options.ExpireTime.HasValue
-            ? Clock.ToDateTimeOffset(options.ExpireTime)
-            : Clock.ToDateTimeOffset(options.TimeToLive);
+        var expiration = GetExpiration(options, policy);
         return SetInnerAsync<T>(redisKey, entries, HashCacheSetOption.KeyReplace, expiration, token);
     }
 
@@ -227,13 +226,13 @@ internal sealed partial class RedisHashCache : RedisCacheBase, IHashCache
     }
 
     public ValueTask<bool> RefreshAsync<T>(CacheKey cacheKey, CachePolicy? policy, CancellationToken token = default) =>
-        RefreshCoreAsync<T>(cacheKey, PolicyDeadline(policy), token);
+        RefreshCoreAsync<T>(cacheKey, GetExpiration(policy), token);
 
     public ValueTask<bool> RefreshAsync<T>(CacheKey cacheKey, TimeSpan expiration, CachePolicy? policy, CancellationToken token = default) =>
-        RefreshCoreAsync<T>(cacheKey, Clock.UtcNow.Add(CallerDuration(expiration)), token);
+        RefreshCoreAsync<T>(cacheKey, GetExpiration(expiration), token);
 
     public ValueTask<bool> RefreshAsync<T>(CacheKey cacheKey, DateTimeOffset expiration, CachePolicy? policy, CancellationToken token = default) =>
-        RefreshCoreAsync<T>(cacheKey, CallerDeadline(expiration), token);
+        RefreshCoreAsync<T>(cacheKey, GetExpiration(expiration), token);
 
     private async ValueTask<bool> RefreshCoreAsync<T>(CacheKey cacheKey, DateTimeOffset localExpiration, CancellationToken token)
     {
@@ -274,7 +273,7 @@ internal sealed partial class RedisHashCache : RedisCacheBase, IHashCache
     {
         NotCacheableException.ThrowIfNotCacheable<T>();
         var redisKey = ToRedisKey(cacheKey, token);
-        var expiration = OptionsDeadline(options.ExpireTime, options.TimeToLive, policy);
+        var expiration = GetExpiration(options, policy);
         var now = Clock.UtcNow;
         var ret = false;
         var operation = StartOperation<T>();
@@ -381,13 +380,13 @@ internal sealed partial class RedisHashCache : RedisCacheBase, IHashCache
     }
 
     public ValueTask<bool> SetAsync<T>(CacheKey cacheKey, IDictionary<string, T?> values, CachePolicy? policy, CancellationToken token = default) =>
-        SetCoreAsync(cacheKey, values, PolicyDeadline(policy), token);
+        SetCoreAsync(cacheKey, values, GetExpiration(policy), token);
 
     public ValueTask<bool> SetAsync<T>(CacheKey cacheKey, IDictionary<string, T?> values, TimeSpan expiration, CachePolicy? policy, CancellationToken token = default) =>
-        SetCoreAsync(cacheKey, values, Clock.UtcNow.Add(CallerDuration(expiration)), token);
+        SetCoreAsync(cacheKey, values, GetExpiration(expiration), token);
 
     public ValueTask<bool> SetAsync<T>(CacheKey cacheKey, IDictionary<string, T?> values, DateTimeOffset expiration, CachePolicy? policy, CancellationToken token = default) =>
-        SetCoreAsync(cacheKey, values, CallerDeadline(expiration), token);
+        SetCoreAsync(cacheKey, values, GetExpiration(expiration), token);
 
     private ValueTask<bool> SetCoreAsync<T>(CacheKey cacheKey, IDictionary<string, T?> values, DateTimeOffset effective, CancellationToken token)
     {
@@ -420,7 +419,7 @@ internal sealed partial class RedisHashCache : RedisCacheBase, IHashCache
             entries[i] = new HashEntry(KnownFieldNames.MetadataKey, _serializer.Serialize(options.Metadata));
         }
 
-        var expiration = OptionsDeadline(options.ExpireTime, options.TimeToLive, policy);
+        var expiration = GetExpiration(options, policy);
         var setOption = values.Count == 0 && _cacheNullValues ? HashCacheSetOption.KeyReplace : options.SetOption;
 
         return SetInnerAsync<T>(redisKey, entries, setOption, expiration, token);
@@ -480,7 +479,7 @@ internal sealed partial class RedisHashCache : RedisCacheBase, IHashCache
             else
             {
                 var timeToLive = await TimeToLiveAsync<T>(cacheKey, token);
-                ret = timeToLive.HasValue ? Clock.UtcNow.Add(timeToLive.Value) : null;
+                ret = timeToLive.HasValue ? Clock.ToDateTimeOffset(timeToLive.Value) : null;
             }
             operation.Stop();
         }

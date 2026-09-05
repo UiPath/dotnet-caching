@@ -34,7 +34,8 @@ public class RedisStreamHealthMaintainerTests(ITestContextAccessor testContextAc
         Options.Create(_streamOptions),
         Options.Create(_redisCacheOptions),
         Options.Create(_cacheOptions),
-        _logger);
+        _logger,
+        new CacheClock());
 
     [Fact]
     public async Task Works_as_expected_when_locked()

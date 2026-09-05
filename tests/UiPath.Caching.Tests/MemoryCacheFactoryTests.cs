@@ -12,7 +12,7 @@ public class MemoryCacheFactoryTests
     {
         // Arrange
         var clock = _fixture.Freeze<ISystemClock>();
-        var factory = new MemoryCacheFactory(clock, NullLoggerFactory.Instance);
+        var factory = new MemoryCacheFactory(new CacheClock(clock), NullLoggerFactory.Instance);
         var memoryOptions = new MemoryCacheOptions
         {
             SizeLimit = 1,
@@ -33,7 +33,7 @@ public class MemoryCacheFactoryTests
     {
         // Arrange
         var clock = _fixture.Freeze<ISystemClock>();
-        var factory = new MemoryCacheFactory(clock, NullLoggerFactory.Instance);
+        var factory = new MemoryCacheFactory(new CacheClock(clock), NullLoggerFactory.Instance);
         var memoryOptions = new MemoryCacheOptions
         {
             SizeLimit = 1,
@@ -55,7 +55,7 @@ public class MemoryCacheFactoryTests
     {
         // Arrange
         var clock = _fixture.Freeze<ISystemClock>();
-        var factory = new MemoryCacheFactory(clock, NullLoggerFactory.Instance);
+        var factory = new MemoryCacheFactory(new CacheClock(clock), NullLoggerFactory.Instance);
         var memoryOptions = new MemoryCacheOptions
         {
         };
@@ -67,6 +67,33 @@ public class MemoryCacheFactoryTests
             AbsoluteExpiration = DateTimeOffset.UtcNow.AddMinutes(5)
         });
         act.Should().NotThrow();
+    }
+
+    /// <summary>
+    /// The memory cache judges deadlines on the library's one clock, so a deadline computed on it is
+    /// live or expired by the same "now" — never by the ambient system clock.
+    /// </summary>
+    [Fact]
+    public void The_memory_cache_judges_deadlines_on_the_injected_clock()
+    {
+        IsLiveUnder(Before).Should().BeTrue("the clock is a year before the deadline");
+        IsLiveUnder(After).Should().BeFalse("the clock is a year past the deadline");
+    }
+
+    private static readonly DateTimeOffset Deadline = new(2025, 1, 1, 0, 0, 0, TimeSpan.Zero);
+    private static readonly ISystemClock Before = new FakeClock(Deadline.AddYears(-1));
+    private static readonly ISystemClock After = new FakeClock(Deadline.AddYears(1));
+
+    private static bool IsLiveUnder(ISystemClock clock)
+    {
+        var cache = new MemoryCacheFactory(new CacheClock(clock), NullLoggerFactory.Instance).Get(new MemoryCacheOptions());
+        cache.Set("k", "v", new MemoryCacheEntryOptions { AbsoluteExpiration = Deadline });
+        return cache.TryGetValue("k", out _);
+    }
+
+    private sealed class FakeClock(DateTimeOffset now) : ISystemClock
+    {
+        public DateTimeOffset UtcNow { get; } = now;
     }
 
     public class MemoryCacheOptions : IMemoryCacheOptions

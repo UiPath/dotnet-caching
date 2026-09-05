@@ -56,7 +56,11 @@ public static class CacheExpiration
     }
 
     /// <summary>Validates a caller deadline against <paramref name="now"/> and returns it as a duration from <paramref name="now"/>.</summary>
+    /// <remarks>
+    /// The sentinel survives the conversion: <see cref="DateTimeOffset.MaxValue"/> measured from any
+    /// modern date is a finite eight thousand years, which nothing downstream reads as "no TTL".
+    /// </remarks>
     /// <exception cref="ArgumentOutOfRangeException"><paramref name="expiration"/> is at or before <paramref name="now"/>.</exception>
     public static TimeSpan ToDuration(DateTimeOffset expiration, DateTimeOffset now, [CallerArgumentExpression(nameof(expiration))] string? paramName = null) =>
-        ThrowIfNotFuture(expiration, now, paramName) - now;
+        ThrowIfNotFuture(expiration, now, paramName) == DateTimeOffset.MaxValue ? TimeSpan.MaxValue : expiration - now;
 }

@@ -2,17 +2,13 @@ using UiPath.Caching.Locking;
 
 namespace UiPath.Caching;
 
-#pragma warning disable S1133 // Backward-compatible aliases are intentionally obsolete during the rename window.
-
 public class InMemoryCacheOptions : IMultilayerCacheOptions, IMemoryCacheOptions
 {
     public bool Enabled { get; set; } = true;
 
-    public TimeSpan? DefaultExpiration { get; set; } = TimeSpan.FromHours(1);
+    public TimeSpan? DefaultExpiration { get; set; } = CachePolicy.DefaultDistributedExpiration;
 
     public TimeSpan Timeout { get; set; } = TimeSpan.FromSeconds(1);
-
-    public ISystemClock? Clock { get; set; }
 
     public ICacheEntryFactory? EntryFactory { get; set; }
 
@@ -27,13 +23,6 @@ public class InMemoryCacheOptions : IMultilayerCacheOptions, IMemoryCacheOptions
     public string? Topic { get; set; }
 
     public TimeSpan? LocalMaxExpiration { get; set; } = TimeSpan.FromHours(1);
-
-    [Obsolete("Renamed to LocalMaxExpiration. The old name still works (assignments forward to the new property) but will be removed in a future release.")]
-    public TimeSpan? PrimaryMaxExpiration
-    {
-        get => LocalMaxExpiration;
-        set => LocalMaxExpiration = value;
-    }
 
     public ITopicKeyStrategy? TopicKeyStrategy { get; set; }
 
@@ -51,21 +40,7 @@ public class InMemoryCacheOptions : IMultilayerCacheOptions, IMemoryCacheOptions
 
     public bool? UseLocalOnlyWhenDisconnected { get; set; }
 
-    [Obsolete("Renamed to UseLocalOnlyWhenDisconnected. The old name still works (assignments forward to the new property) but will be removed in a future release.")]
-    public bool? UsePrimaryOnlyWhenDisconnected
-    {
-        get => UseLocalOnlyWhenDisconnected;
-        set => UseLocalOnlyWhenDisconnected = value;
-    }
-
     public TimeSpan? LocalMaxExpirationDisconnected { get; set; } = TimeSpan.FromSeconds(30);
-
-    [Obsolete("Renamed to LocalMaxExpirationDisconnected. The old name still works (assignments forward to the new property) but will be removed in a future release.")]
-    public TimeSpan? PrimaryMaxExpirationDisconnected
-    {
-        get => LocalMaxExpirationDisconnected;
-        set => LocalMaxExpirationDisconnected = value;
-    }
 
     public bool? LocalLockEnabled { get; set; } = true;
 
@@ -94,4 +69,3 @@ public class InMemoryCacheOptions : IMultilayerCacheOptions, IMemoryCacheOptions
     internal InMemoryCacheOptions ShallowCopy() => (InMemoryCacheOptions)MemberwiseClone();
 }
 
-#pragma warning restore S1133

@@ -189,11 +189,14 @@ That leaves one resolution chain with no redundant state in it:
 | passes `expiration` | exactly that value, no jitter |
 | omits `expiration` | `CachePolicy.DistributedExpiration`, jittered by `CachePolicy.JitterMaxDuration` |
 | omits it, policy has no TTL | the provider's `DefaultExpiration`, jittered |
-| omits it, nothing configured | unbounded — `TimeSpan.MaxValue` / `DateTimeOffset.MaxValue`, which the providers store as "no TTL" |
+| omits it, nothing configured | `CachePolicy.DefaultDistributedExpiration` — **1 hour**, jittered |
+| omits it, a lifetime is configured as `TimeSpan.MaxValue` | unbounded — stored as `DateTimeOffset.MaxValue`, which the providers read as "no TTL" |
+
+The last two rows are the point: **omission never means "keep this forever"**. Every level of the chain is nullable-meaning-*inherit*, and the floor under all of them is a bounded hour, so a provider whose `DefaultExpiration` was left unset — or bound to `null` from configuration — writes an entry that expires rather than one that accumulates in shared storage. Unbounded is still available; it has to be asked for, by configuring a lifetime of `TimeSpan.MaxValue`. The one exception is the `IDistributedCache` adapter, whose `AllowUnboundedEntries` exists to honor that contract's "until removed" literally.
 
 Because the argument can no longer be `null`, there is nothing left for a meaningless value to mean, so it is rejected rather than absorbed: a duration that is not strictly positive, or a deadline at or before the cache's current time, raises `ArgumentOutOfRangeException` with `ParamName` `"expiration"` and nothing is written. `TimeSpan.MaxValue` and `DateTimeOffset.MaxValue` stay valid — they are how the providers spell "no TTL". `CacheExpiration` holds the guard if you need it in your own implementation. The no-op caches (`NullCache`, `NullHashCache`, `NullSetCache`) read no argument at all and so enforce nothing; they keep degrading to "caching is off, carry on".
 
-Nullability stays where it means *inherit*: `CachePolicy.LocalExpiration` / `DistributedExpiration`, the providers' `DefaultExpiration`, and the lifetime fields on `HashCacheEntryOptions`. Reads stay nullable too — `TimeToLiveAsync` and `ExpireTimeAsync` return `null` for a key with no TTL.
+Nullability stays where it means *inherit*: `CachePolicy.LocalExpiration` / `DistributedExpiration`, the providers' `DefaultExpiration`, and the lifetime fields on `HashCacheEntryOptions`. Reads stay nullable too — `TimeToLiveAsync` and `ExpireTimeAsync` return `null` for a key with no TTL, and `ICacheEntry.Expiration` reports the same key as `DateTimeOffset.MaxValue`. A read never fills in a default: the configured `DefaultExpiration` is a write-side rule, and what a read reports is what storage holds.
 
 Every policy-bearing member takes `policy` as a **required** parameter — there is no `= null` default on the interface. Call sites that do not want a per-call policy use the `CacheExtensions` overloads instead, which omit `policy` (and, where the interface pairs the two, `expiration`) and forward with `policy: null`:
 

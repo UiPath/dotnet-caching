@@ -7,7 +7,7 @@ namespace UiPath.Caching;
 
 internal sealed class RehydrationCoordinator(
     string cacheName,
-    CacheClock clock,
+    ICacheClock clock,
     IDistributedLock distributedLock,
     IDistributedLockKeyStrategy lockKeyStrategy,
     ICachingTelemetryProvider telemetry,

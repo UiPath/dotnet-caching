@@ -13,35 +13,33 @@ internal sealed class MultilayerSetCache : ISetCache
     private readonly bool _useLocalOnlyWhenDisconnected;
     private readonly TimeSpan? _localMaxExpirationDisconnected;
     private readonly TimeSpan? _defaultExpiration;
+    private readonly ICacheClock _clock;
 
     public MultilayerSetCache(
         string name,
         ISetCache inner,
         IMemoryCacheFactory memoryCacheFactory,
         ISerializerProxy<byte[]> serializer,
-        IMemoryCacheOptions memoryOptions,
+        IMultilayerSetCacheOptions options,
         ILocalLock localLock,
-        TimeSpan? localMaxExpiration,
-        bool connectionMonitorEnabled = false,
-        TimeSpan? connectionMonitorPeriod = null,
-        bool useLocalOnlyWhenDisconnected = false,
-        TimeSpan? localMaxExpirationDisconnected = null,
-        TimeSpan? defaultExpiration = null)
+        ICacheClock clock)
     {
+        ArgumentNullException.ThrowIfNull(clock);
         ArgumentNullException.ThrowIfNull(inner);
         ArgumentNullException.ThrowIfNull(memoryCacheFactory);
         ArgumentNullException.ThrowIfNull(serializer);
-        ArgumentNullException.ThrowIfNull(memoryOptions);
+        ArgumentNullException.ThrowIfNull(options);
         ArgumentNullException.ThrowIfNull(localLock);
         _name = name;
         _inner = inner;
-        _memoryCache = memoryCacheFactory.Get(memoryOptions);
-        _memorySetCache = new MemorySetCache(name, _memoryCache, serializer, localLock, memoryOptions);
-        _localMaxExpiration = localMaxExpiration;
-        _connectionState = connectionMonitorEnabled ? GetConnectionMonitor(inner, connectionMonitorPeriod) : NullConnectionStateMonitor.Instance;
-        _useLocalOnlyWhenDisconnected = useLocalOnlyWhenDisconnected && connectionMonitorEnabled;
-        _localMaxExpirationDisconnected = localMaxExpirationDisconnected;
-        _defaultExpiration = defaultExpiration;
+        _clock = clock;
+        _memoryCache = memoryCacheFactory.Get(options);
+        _memorySetCache = new MemorySetCache(name, _memoryCache, serializer, localLock, options, _clock);
+        _localMaxExpiration = options.LocalMaxExpiration;
+        _connectionState = options.ConnectionMonitorEnabled ? GetConnectionMonitor(inner, options.ConnectionMonitorPeriod) : NullConnectionStateMonitor.Instance;
+        _useLocalOnlyWhenDisconnected = options.UseLocalOnlyWhenDisconnected && options.ConnectionMonitorEnabled;
+        _localMaxExpirationDisconnected = options.LocalMaxExpirationDisconnected;
+        _defaultExpiration = options.DefaultExpiration;
     }
 
     private static IConnectionState GetConnectionMonitor(ISetCache inner, TimeSpan? period) =>
@@ -61,10 +59,10 @@ internal sealed class MultilayerSetCache : ISetCache
         AddCoreAsync<T>(cacheKey, items, expiration: null, policy, token);
 
     public ValueTask<long> AddAsync<T>(CacheKey cacheKey, IEnumerable<T> items, TimeSpan expiration, CachePolicy? policy, CancellationToken token = default) =>
-        AddCoreAsync<T>(cacheKey, items, DateTimeOffset.UtcNow.Add(CacheExpiration.ThrowIfNotPositive(expiration)), policy, token);
+        AddCoreAsync<T>(cacheKey, items, _clock.ToDateTimeOffset(CacheExpiration.ThrowIfNotPositive(expiration)), policy, token);
 
     public ValueTask<long> AddAsync<T>(CacheKey cacheKey, IEnumerable<T> items, DateTimeOffset expiration, CachePolicy? policy, CancellationToken token = default) =>
-        AddCoreAsync<T>(cacheKey, items, CacheExpiration.ThrowIfNotFuture(expiration, DateTimeOffset.UtcNow), policy, token);
+        AddCoreAsync<T>(cacheKey, items, CacheExpiration.ThrowIfNotFuture(expiration, _clock.UtcNow), policy, token);
 
     private async ValueTask<long> AddCoreAsync<T>(CacheKey cacheKey, IEnumerable<T> items, DateTimeOffset? expiration, CachePolicy? policy, CancellationToken token)
     {
@@ -224,7 +222,11 @@ internal sealed class MultilayerSetCache : ISetCache
 
     private DateTimeOffset? LocalWriteExpiration(DateTimeOffset? requested, CachePolicy? policy)
     {
-        requested ??= FromTtl(policy?.DistributedExpiration ?? (_inner is NullSetCache ? _defaultExpiration : null));
+        // Memory-only, this is the whole answer, so the floor applies here too rather than leaving the
+        // set unbounded. With a Redis inner the L2 resolves anything not configured here, and this caps L1.
+        requested ??= FromTtl(policy?.DistributedExpiration
+            ?? _defaultExpiration
+            ?? (_inner is NullSetCache ? CachePolicy.DefaultDistributedExpiration : null));
         return _inner is NullSetCache ? requested : DisconnectedExpiration(requested);
     }
 
@@ -235,7 +237,9 @@ internal sealed class MultilayerSetCache : ISetCache
         {
             return await _memorySetCache.AddAsync(key, [item], LocalWriteExpiration(null, policy), token).ConfigureAwait(false) > 0;
         }
-        var added = await _inner.AddAsync(cacheKey, item, policy, token).ConfigureAwait(false);
+        var added = ConfiguredWriteExpiration(policy) is { } deadline
+            ? await _inner.AddAsync(cacheKey, [item], deadline, policy, token).ConfigureAwait(false) > 0
+            : await _inner.AddAsync(cacheKey, item, policy, token).ConfigureAwait(false);
         await _memorySetCache.AddAsync(key, [item], CancellationToken.None).ConfigureAwait(false);
         return added;
     }
@@ -247,14 +251,24 @@ internal sealed class MultilayerSetCache : ISetCache
         {
             return await _memorySetCache.AddAsync(key, items, LocalWriteExpiration(expiration, policy), token).ConfigureAwait(false);
         }
-        // null here is "no caller expiration": the inner cache resolves it from the policy, which is
-        // the overload that carries no expiration argument.
-        var added = expiration is { } deadline
+        // With no caller expiration, this provider's own default is the next word; only when it has
+        // none too does the inner cache resolve the lifetime from the policy and its own default.
+        var added = (expiration ?? ConfiguredWriteExpiration(policy)) is { } deadline
             ? await _inner.AddAsync(cacheKey, items, deadline, policy, token).ConfigureAwait(false)
             : await _inner.AddAsync(cacheKey, items, policy, token).ConfigureAwait(false);
         await _memorySetCache.AddAsync(key, items, CancellationToken.None).ConfigureAwait(false);
         return added;
     }
+
+    /// <summary>
+    /// This provider's <see cref="IMultilayerSetCacheOptions.DefaultExpiration"/> as a write deadline, when
+    /// neither the caller nor the policy named a lifetime. Mirrors <c>InMemoryRedisCacheOptions.DefaultExpiration</c>:
+    /// the multilayer's default outranks the Redis tier's own.
+    /// </summary>
+    private DateTimeOffset? ConfiguredWriteExpiration(CachePolicy? policy) =>
+        _inner is not NullSetCache && policy?.DistributedExpiration is null && _defaultExpiration is { } configured
+            ? _clock.ToDateTimeOffset(configured)
+            : null;
 
     private DateTimeOffset? DisconnectedExpiration(DateTimeOffset? requested)
     {
@@ -262,12 +276,12 @@ internal sealed class MultilayerSetCache : ISetCache
         {
             return requested;
         }
-        var cap = DateTimeOffset.UtcNow.Add(_localMaxExpirationDisconnected.Value);
+        var cap = _clock.ToDateTimeOffset(_localMaxExpirationDisconnected.Value);
         return requested.HasValue && requested.Value < cap ? requested.Value : cap;
     }
 
-    private static DateTimeOffset? FromTtl(TimeSpan? ttl) =>
-        ttl.HasValue ? DateTimeOffset.UtcNow.Add(ttl.Value) : null;
+    private DateTimeOffset? FromTtl(TimeSpan? ttl) =>
+        ttl.HasValue ? _clock.ToDateTimeOffset(ttl.Value) : null;
 
     private static IEnumerable<T> Materialize<T>(IEnumerable<T> items)
     {
@@ -276,7 +290,7 @@ internal sealed class MultilayerSetCache : ISetCache
     }
 
     private DateTimeOffset? LocalExpiration() =>
-        _localMaxExpiration.HasValue ? DateTimeOffset.UtcNow.Add(_localMaxExpiration.Value) : null;
+        _localMaxExpiration.HasValue ? _clock.ToDateTimeOffset(_localMaxExpiration.Value) : null;
 
     private static string Key(CacheKey cacheKey, CancellationToken token)
     {

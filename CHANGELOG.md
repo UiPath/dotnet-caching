@@ -120,6 +120,85 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 
 ### Changed
 
+- **BREAKING:** an unset expiration no longer means "keep this forever". `CachePolicy` gained
+  `DefaultDistributedExpiration` (1 hour), applied as the floor under
+  `CachePolicy.DistributedExpiration` and the providers' `DefaultExpiration` on every write that
+  carries no caller expiration. Previously the whole chain was nullable with nothing underneath it,
+  so a provider whose `DefaultExpiration` was set to `null` — in code or bound from configuration —
+  wrote entries with no TTL into shared storage. The 1 hour that four options classes each declared
+  as a property initializer now comes from that one constant, so the value is stated once.
+  Unbounded entries are still available and now have to be asked for: configure a lifetime of
+  `TimeSpan.MaxValue`, which is what the providers already read as "no TTL" (`SET` with no TTL,
+  `PERSIST` on refresh). `CacheClock` is the single place a duration becomes a deadline, and it
+  saturates at `DateTimeOffset.MaxValue` rather than overflowing, so `TimeSpan.MaxValue` reaches the
+  providers as the sentinel they read as "no TTL". The memory-only set tier and the rehydrate write
+  each did that conversion themselves with a bare `Add` and threw on it; both go through the clock
+  now.
+  Jitter leaves that sentinel alone: jitter spreads an expiry that is coming, and clamping an
+  unbounded lifetime would put the key back on the `EXPIRE` path.
+
+  The floor is on the **write** paths only — `MultilayerCacheBase.ResolveWriteDuration`,
+  `RedisCacheBase.PolicyDuration` / `GetExpiration` — deliberately not in the
+  resolved default policy, so "nothing configured" stays observable as `null` and a *read* never
+  consults a default: a key that genuinely has no TTL in Redis reports `DateTimeOffset.MaxValue`
+  rather than a fabricated `now + default`.
+  `MultilayerCacheBase.ResolveWriteDuration` returns `TimeSpan` rather than `TimeSpan?` as a result.
+- **BREAKING:** `CacheClock` is the default `ICacheClock` and nothing more. It no longer carries a
+  default expiration and its constructor loses the `defaultExpiration` parameter. Previously a configured `DefaultExpiration`
+  was also filled in on **reads** — `GetCacheEntryAsync` on a key with no TTL in Redis reported
+  `now + DefaultExpiration`, while `ExpireTimeAsync` on the same key returned `null` — and the
+  fabricated deadline doubled as a hidden L1 cap: the L1 copy of a no-TTL key turned over every
+  `DefaultExpiration`. Reads now report `DateTimeOffset.MaxValue` for such a key, and the L1 copy
+  lives until a broadcast invalidation or `LocalMaxExpiration` evicts it, which is what that knob is
+  for. Write paths are unaffected: every one resolves its lifetime before asking the clock.
+
+  `GetOrAddAsync` resolves the lifetime **once** and uses it for both the write deadline and the
+  rehydrate threshold. These were two separate chains, and the floor would otherwise have applied to
+  only one of them: entries written under the default would expire after an hour while proactive
+  rehydration, still bottoming out at `null`, never fired. Only the write is jittered: the rehydrate
+  threshold and timeout are measured against the configured, unjittered lifetime, so a hit crosses
+  the soft-TTL threshold at the same point on every read rather than against a fresh random draw.
+  Rehydration is skipped for an unbounded lifetime, which has no deadline to pre-empt.
+- **BREAKING:** every conversion from a duration to a deadline goes through `CacheClock`, so a
+  per-call `TimeSpan.MaxValue` means "no TTL" on every surface. It already did on `RedisCache.SetAsync`
+  (the driver maps it) and on the set caches, but `MultilayerCache.SetAsync`, `RefreshAsync` and
+  `GetOrAddAsync`, `RedisCache.RefreshAsync`, and `RedisHashCache.GetOrAddAsync` / `RefreshAsync` /
+  `SetAsync` each added the duration to the clock themselves and threw `ArgumentOutOfRangeException`
+  from `DateTimeOffset.Add` instead; a `LocalMaxExpiration` of `TimeSpan.MaxValue` threw on every L1
+  write. The sentinel now survives the other direction too: a per-call deadline of
+  `DateTimeOffset.MaxValue` becomes a duration of `TimeSpan.MaxValue` rather than a finite eight
+  thousand years, so the rehydrate guard recognizes it. With the downstream add saturating, the two
+  pre-clamps that protected it are gone — `MultilayerCacheBase.ApplyJitter` no longer trims the
+  jittered lifetime to the clock's remaining range (and takes one clock reading per write fewer), and
+  the `IDistributedCache` adapter hands `TimeSpan.MaxValue` to the backing cache untouched.
+  `ApplyJitter` is now `(TimeSpan, TimeSpan?) -> TimeSpan`; `RedisCacheBase.GetExpiration(TimeSpan)`
+  is added.
+- **BREAKING: one clock.** `ICacheClock` (in `UiPath.Caching.Abstractions`, `UtcNow` only) is the
+  single source of "now". `AddCaching` registers one instance — `CacheClock` over the `ISystemClock`
+  the container has when one is registered, else the system clock — and every provider, cache base
+  class, helper, the profiler and the stream maintainer take it from DI. The per-options `Clock`
+  properties are gone (see **Removed**): they let each cache carry its own clock while the
+  `IMemoryCache` judging its deadlines ran on the DI-wide one, so a configured clock made L1 entries
+  expire early or late against the ambient clock, and the memory-only set tier read
+  `DateTimeOffset.UtcNow` directly and ignored a clock altogether. The conversion from a lifetime to
+  an expiration is `ICacheClock.ToDateTimeOffset(...)`, an extension in the abstractions package, so
+  a test double that fixes `UtcNow` converts exactly like the real clock. To control time, register
+  an `ISystemClock` (or an `ICacheClock`) before `AddCaching`.
+- **`IMultilayerSetCacheOptions`** is what `MultilayerSetCache` reads its settings from — the memory
+  tier's knobs through `IMemoryCacheOptions`, plus `DefaultExpiration`, `LocalMaxExpiration`,
+  `ConnectionMonitorEnabled`, `ConnectionMonitorPeriod`, `UseLocalOnlyWhenDisconnected` and
+  `LocalMaxExpirationDisconnected` — instead of each setting as a constructor argument. Both queue
+  options types implement it: `InMemoryRedisQueueCacheOptions` gains `DefaultExpiration`, which — like
+  `InMemoryRedisCacheOptions.DefaultExpiration` — outranks the Redis tier's own default for sets written
+  through the provider (`null`, the default, inherits as before), and `InMemoryQueueCacheOptions` gains
+  the connection and local-cap settings for parity, which have nothing to observe on a provider with no
+  backing tier and default to off.
+- **BREAKING:** `AddDistributedCache` no longer fails at registration when no bounded default
+  resolves, because that state no longer exists — an unset default now resolves to the floor. The
+  `"would store entries without an expiration"` throw is removed; the non-positive check stays,
+  since a value someone configured as zero or negative is still a real misconfiguration.
+  `UiPathDistributedCacheOptions.AllowUnboundedEntries` keeps its meaning and is now the only way
+  to reach an unbounded entry through that adapter without naming a lifetime.
 - **BREAKING:** the per-call `expiration` is no longer nullable. Every write on `ICache`,
   `ICache<T>`, `IHashCache`, `IHashCache<T>`, `ISetCache`, `ISetCache<T>` and their extension
   surfaces takes `TimeSpan` / `DateTimeOffset` instead of `TimeSpan?` / `DateTimeOffset?`. The
@@ -209,6 +288,23 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
   the broadcast path moved to `ReadOnlyMemory<byte>` and both unused — nothing in the library called
   them and no implementation overrode the default bodies. Use `Decode(ReadOnlyMemory<byte>)` and
   `Encode(T)`.
+- **BREAKING:** `CacheClock.DefaultDateTimeOffset()`, `CacheClock.ToTimeSpan(DateTimeOffset?)` and
+  `CacheClock.ToTimeSpan(TimeSpan?)`. Nothing called them, and the first `ToTimeSpan` was another
+  place a configured `TimeSpan.MaxValue` overflowed. `ToDateTimeOffset` is the conversion that remains,
+  now as an `ICacheClock` extension.
+- **BREAKING:** the per-options `Clock` properties: `ICacheOptions.Clock` and its implementations on
+  `InMemoryCacheOptions`, `InMemoryRedisCacheOptions` and `RedisCacheOptions`,
+  `RedisConnectionOptions.Clock`, `InMemoryQueueCacheOptions.Clock` and
+  `InMemoryRedisQueueCacheOptions.Clock`. Time comes from the one `ICacheClock` in DI — see
+  **Changed**. `MemoryCacheFactory`, `UiPathDistributedCache`, the provider constructors,
+  `MultilayerCacheBase`, `RedisCacheBase`, `RedisProfiler` and `RedisStreamHealthMaintainer` take an
+  `ICacheClock` instead of an `ISystemClock?` or nothing.
+- **BREAKING:** the `[Obsolete]` options properties. The rename aliases `PrimaryMaxExpiration`,
+  `PrimaryMaxExpirationDisconnected` and `UsePrimaryOnlyWhenDisconnected` on `IMultilayerCacheOptions`,
+  `InMemoryCacheOptions` and `InMemoryRedisCacheOptions` — use `LocalMaxExpiration`,
+  `LocalMaxExpirationDisconnected` and `UseLocalOnlyWhenDisconnected`, which they forwarded to — and
+  `RedisConnectionOptions.ThreadPoolSocketManager`, a no-op since StackExchange.Redis 3.0. Configuration
+  bound under the old keys is silently ignored by the binder, so rename those keys as well.
 
 ### Fixed
 
