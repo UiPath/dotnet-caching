@@ -30,6 +30,21 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
   `AllowUnboundedEntries`. Writes with no caller expiration take a bounded default rather than living
   forever in shared storage; an unset default resolves to `CachePolicy.DefaultDistributedExpiration`,
   and only `AllowUnboundedEntries` reaches "until removed".
+- **`IBufferDistributedCache`** (`net9.0`+). The adapter registered by `AddDistributedCache` also
+  implements the buffer-based half of the `IDistributedCache` contract, so a caller reads into an
+  `IBufferWriter<byte>` and writes from a `ReadOnlySequence<byte>` instead of trading a fresh array per
+  operation — `HybridCache` as an L2, output caching and session state all take that path once they find
+  it. Discovery is the framework's own: a type check on the resolved `IDistributedCache`, so nothing
+  extra is registered and no consumer code changes. Both halves share one read and write path — same
+  keyspace, expiration, sliding and stored fields — so an entry written through either is readable
+  through the other and by any other client on the conventional layout. `TryGet` reports hit and payload
+  separately, the one thing the array half cannot express: an entry stored empty is a hit that writes no
+  bytes, where `Get` returns an empty array for that and for a miss alike. Writes copy the sequence
+  rather than alias it, so a pooled buffer is safe to return the moment the call completes.
+  `NullDistributedCache` implements it too, so switching caching off does not change which half a
+  consumer discovers. Not present on `net8.0`: that floor pins
+  `Microsoft.Extensions.Caching.Abstractions` to 8.0.0, which predates the interface, and the type check
+  simply comes up empty there.
 - **`CacheOptions.KeyCasing`** selects how keys built without an explicit mode are normalized —
   `Insensitive` (trim + lowercase, the historical behavior and the default) or `Sensitive` (preserve
   the caller's casing). `CacheKey` gained a `(string?, CacheKeyCasing)` constructor, a `Casing`

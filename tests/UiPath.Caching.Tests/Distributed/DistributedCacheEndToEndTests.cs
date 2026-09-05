@@ -1,3 +1,6 @@
+#if NET9_0_OR_GREATER
+using System.Buffers;
+#endif
 using Microsoft.Extensions.Caching.Distributed;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Internal;
@@ -98,6 +101,41 @@ public class DistributedCacheEndToEndTests
             CacheKey.DefaultCasing = CacheKeyCasing.Insensitive;
         }
     }
+
+#if NET9_0_OR_GREATER
+    /// <summary>
+    /// The buffer half over the real tier: what one half writes the other reads, and both are subject to the
+    /// same expiration. This is the shape <c>HybridCache</c> drives once it finds the interface.
+    /// </summary>
+    [Fact]
+    public async Task Buffer_half_interoperates_with_the_array_half()
+    {
+        var clock = new FakeClock(Start);
+        using var provider = Build(clock);
+        var cache = provider.GetRequiredService<IDistributedCache>();
+        var buffered = cache.Should().BeAssignableTo<IBufferDistributedCache>().Subject;
+        var token = TestContext.Current.CancellationToken;
+        var destination = new ArrayBufferWriter<byte>();
+
+        await buffered.SetAsync("AbC", new ReadOnlySequence<byte>([1, 2, 3]), new DistributedCacheEntryOptions
+        {
+            AbsoluteExpirationRelativeToNow = TimeSpan.FromMinutes(30),
+        }, token);
+
+        (await cache.GetAsync("AbC", token)).Should()
+            .Equal(new byte[] { 1, 2, 3 }, "the array half reads what the buffer half wrote");
+
+        await cache.SetAsync("xYz", [4, 5], new DistributedCacheEntryOptions
+        {
+            AbsoluteExpirationRelativeToNow = TimeSpan.FromMinutes(30),
+        }, token);
+        (await buffered.TryGetAsync("xYz", destination, token)).Should().BeTrue();
+        destination.WrittenSpan.ToArray().Should().Equal(4, 5);
+
+        clock.Advance(TimeSpan.FromMinutes(31));
+        (await buffered.TryGetAsync("AbC", new ArrayBufferWriter<byte>(), token)).Should().BeFalse("the entry expired");
+    }
+#endif
 
     /// <summary>Documented deviation: <see cref="CacheKey"/> trims, so " k " and "k" are one key.</summary>
     [Fact]

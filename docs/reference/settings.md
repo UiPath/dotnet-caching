@@ -278,6 +278,22 @@ Entries are stored as a Redis hash (`data`, `absexp`, `sldexp`) in a keyspace di
 application's own caches, so `Refresh` reads only the expiration metadata. Keys are always
 case-sensitive regardless of `CacheOptions.KeyCasing`.
 
+**`IBufferDistributedCache`.** On `net9.0` and later the registered `IDistributedCache` also implements
+[`IBufferDistributedCache`][ibdc], the buffer-based half of the same contract, so a caller reads into an
+`IBufferWriter<byte>` and writes from a `ReadOnlySequence<byte>` instead of trading a fresh array per
+operation. Consumers find it the way the framework's own caches expose it — a type check on the resolved
+`IDistributedCache`, which is what `HybridCache` does — so nothing extra is registered and no code
+changes. Both halves share one read and write path: same keyspace, same expiration and sliding, same
+stored fields, so entries written through either are readable through the other and by any other client
+on the conventional layout. `TryGet` reports hit and payload separately, which is the one thing the array
+half cannot express: an entry stored with an empty payload is a hit that writes no bytes, where
+`Get` returns an empty array for that and for a miss alike. Writes copy the sequence rather than alias
+it, so a pooled buffer is safe to return as soon as the call completes. The `net8.0` floor pins
+`Microsoft.Extensions.Caching.Abstractions` to 8.0.0, which predates the interface; there the type check
+comes up empty and consumers stay on the array path.
+
+[ibdc]: https://learn.microsoft.com/dotnet/api/microsoft.extensions.caching.distributed.ibufferdistributedcache
+
 **Keyspace separation.** A full Redis key carries three independent segments, each answering a
 different question:
 

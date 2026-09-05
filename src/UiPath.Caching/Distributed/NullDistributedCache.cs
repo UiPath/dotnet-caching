@@ -6,7 +6,7 @@ namespace UiPath.Caching.Distributed;
 /// Stand-in used when caching is disabled, so consumers such as <c>AddSession()</c> and DataProtection
 /// still resolve <see cref="IDistributedCache"/> instead of failing at startup. Reads always miss.
 /// </summary>
-internal sealed class NullDistributedCache : IDistributedCache
+internal sealed partial class NullDistributedCache : IDistributedCache
 {
     public static readonly NullDistributedCache Instance = new();
 

@@ -59,7 +59,10 @@ internal sealed partial class UiPathDistributedCache : IDistributedCache
         GetAsync(key).GetAwaiter().GetResult();
 
     public Task<byte[]?> GetAsync(string key, CancellationToken token = default) =>
-        ReadAsync(key, includeData: true, token).AsTask();
+        ReadPayloadAsync(key, token).AsTask();
+
+    private async ValueTask<byte[]?> ReadPayloadAsync(string key, CancellationToken token) =>
+        await ReadAsync(key, includeData: true, token).ConfigureAwait(false) is { } fields ? Payload(fields) : null;
 
     public void Refresh(string key) =>
         RefreshAsync(key).GetAwaiter().GetResult();
@@ -153,8 +156,12 @@ internal sealed partial class UiPathDistributedCache : IDistributedCache
         return composed;
     }
 
-    /// <summary>Shared read path for Get and Refresh: resolves the entry, slides it when due, and returns the payload only when asked for.</summary>
-    private async ValueTask<byte[]?> ReadAsync(string key, bool includeData, CancellationToken token)
+    /// <summary>
+    /// Shared read path for Get, Refresh and TryGet: resolves the entry and slides it when due. Null is a
+    /// miss; a hit hands back the fields that were read, so the caller decides how to shape the payload —
+    /// and a hit whose payload is empty stays distinguishable from a miss.
+    /// </summary>
+    private async ValueTask<IDictionary<string, byte[]?>?> ReadAsync(string key, bool includeData, CancellationToken token)
     {
         var cacheKey = Encode(key);
         var fields = await _cache
@@ -182,7 +189,7 @@ internal sealed partial class UiPathDistributedCache : IDistributedCache
             await SlideAsync(cacheKey, fields, target, token).ConfigureAwait(false);
         }
 
-        return includeData ? Payload(fields) : null;
+        return fields;
     }
 
     /// <summary>
