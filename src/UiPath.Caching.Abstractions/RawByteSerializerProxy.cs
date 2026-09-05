@@ -23,6 +23,27 @@ public class RawByteSerializerProxy(JsonSerializerOptions? options = null)
         _ => base.Serialize(value),
     };
 
+    /// <summary>
+    /// Memory in, the same memory out — no array, no copy. The type tests are on <c>typeof(T)</c> rather
+    /// than a pattern on a boxed value so the JIT resolves them per instantiation and the cast through
+    /// <see cref="object"/> costs nothing. A byte array falls through to <see cref="Serialize"/>, which hands
+    /// back the array itself; everything else is JSON, as it is there. <c>where T : default</c> keeps
+    /// <c>T?</c> the unconstrained annotation the interface declares; in an override it would otherwise read
+    /// as <see cref="Nullable{T}"/>.
+    /// </summary>
+    public override ReadOnlyMemory<byte> SerializeToMemory<T>(T? value) where T : default
+    {
+        if (typeof(T) == typeof(ReadOnlyMemory<byte>))
+        {
+            return (ReadOnlyMemory<byte>)(object)value!;
+        }
+        if (typeof(T) == typeof(Memory<byte>))
+        {
+            return (Memory<byte>)(object)value!;
+        }
+        return base.SerializeToMemory(value);
+    }
+
     /// <remarks>
     /// Declared as <c>T</c>, not <c>T?</c>: an override cannot restate that annotation on an
     /// unconstrained type parameter, so the maybe-null contract comes from the base and the

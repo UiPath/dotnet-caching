@@ -9,6 +9,7 @@ internal sealed partial class RedisHashCache : RedisCacheBase, IHashCache
 {
     private readonly ILogger<RedisHashCache> _logger;
     private readonly ISerializerProxy<byte[]> _serializer;
+    private readonly IMemorySerializerProxy? _memorySerializer;
     private readonly ICacheEntryFactory _cacheEntryFactory;
     private readonly IResiliencePipeline _read;
     private readonly IResiliencePipeline _write;
@@ -31,6 +32,7 @@ internal sealed partial class RedisHashCache : RedisCacheBase, IHashCache
         : base(redis, telemetryProvider, redisCacheOptions, cacheOptions, policyFactory, clock)
     {
         _serializer = serializer;
+        _memorySerializer = serializer as IMemorySerializerProxy;
         _logger = logger;
         _read = resiliencePipelineProvider.Get(ResiliencePipelineNames.Read);
         _write = resiliencePipelineProvider.Get(ResiliencePipelineNames.Write);
@@ -425,13 +427,20 @@ internal sealed partial class RedisHashCache : RedisCacheBase, IHashCache
         return SetInnerAsync<T>(redisKey, entries, setOption, expiration, token);
     }
 
+    /// <summary>
+    /// A serializer that can lend memory does, so a caller's buffer goes to the connection with no array in
+    /// between. The memory is only borrowed, which is safe here because every write awaits its command to
+    /// completion and the connection copies the value into its own buffer when it writes the command.
+    /// </summary>
     private RedisValue SerializeFieldValue<T>(T? value)
     {
         if (_cacheNullValues && IsDefault(value))
         {
             return RedisValue.EmptyString;
         }
-        return _serializer.Serialize(value);
+        return _memorySerializer is { } memory
+            ? (RedisValue)memory.SerializeToMemory(value)
+            : (RedisValue)_serializer.Serialize(value);
     }
 
     public async ValueTask<TimeSpan?> TimeToLiveAsync<T>(CacheKey cacheKey, CancellationToken token = default)

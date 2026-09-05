@@ -1,3 +1,4 @@
+using System.Runtime.InteropServices;
 using System.Text;
 using System.Text.Json;
 
@@ -89,6 +90,42 @@ public class RawByteSerializerProxyTests
         fromText.Should().Be(new Poco("x", 1));
 
         _proxy.TryDeserialize<Poco>(null, out _).Should().BeFalse();
+    }
+
+    /// <summary>The point of the memory seam: the caller's memory is returned, not a copy of it — offset and length included.</summary>
+    [Fact]
+    public void SerializeToMemory_returns_the_callers_memory_itself()
+    {
+        var backing = new byte[] { 0, 1, 2, 3, 4, 5 };
+        ReadOnlyMemory<byte> window = backing.AsMemory(2, 3);
+
+        var memory = _proxy.SerializeToMemory(window);
+
+        MemoryMarshal.TryGetArray(memory, out var segment).Should().BeTrue();
+        segment.Array.Should().BeSameAs(backing);
+        segment.Offset.Should().Be(2);
+        segment.Count.Should().Be(3);
+    }
+
+    [Fact]
+    public void SerializeToMemory_passes_mutable_memory_and_arrays_through_as_well()
+    {
+        var backing = new byte[] { 9, 8, 7 };
+
+        MemoryMarshal.TryGetArray(_proxy.SerializeToMemory<Memory<byte>>(backing), out var fromMemory).Should().BeTrue();
+        fromMemory.Array.Should().BeSameAs(backing);
+
+        MemoryMarshal.TryGetArray(_proxy.SerializeToMemory(backing), out var fromArray).Should().BeTrue();
+        fromArray.Array.Should().BeSameAs(backing);
+    }
+
+    [Fact]
+    public void SerializeToMemory_falls_back_to_json_for_everything_else()
+    {
+        var value = new Poco("x", 42);
+
+        _proxy.SerializeToMemory(value).ToArray().Should().Equal(_proxy.Serialize(value));
+        _proxy.SerializeToMemory<Poco>(null).ToArray().Should().Equal("null"u8.ToArray());
     }
 
     [Fact]

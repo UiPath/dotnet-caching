@@ -33,7 +33,7 @@ internal sealed partial class UiPathDistributedCache : IBufferDistributedCache
             return false;
         }
 
-        destination.Write(Payload(fields));
+        destination.Write(Payload(fields).Span);
         return true;
     }
 
@@ -41,10 +41,36 @@ internal sealed partial class UiPathDistributedCache : IBufferDistributedCache
         SetAsync(key, value, options).AsTask().GetAwaiter().GetResult();
 
     /// <summary>
-    /// The sequence is copied rather than aliased: the memory-backed tiers keep whatever array they are
-    /// handed, and a caller that pooled its buffer returns it as soon as this call completes.
+    /// The sequence is borrowed: a pooled caller reclaims it the moment this returns. Where the tier keeps
+    /// what it is handed, it is copied into an owned array first. Elsewhere a single segment goes straight
+    /// through — Redis copies it into the connection's buffer as the command is written, and the write is
+    /// awaited to completion — and a segmented sequence is flattened into a rented buffer that is returned
+    /// once that await is over.
     /// </summary>
-    public ValueTask SetAsync(string key, ReadOnlySequence<byte> value, DistributedCacheEntryOptions options, CancellationToken token = default) =>
-        new(SetAsync(key, value.ToArray(), options, token));
+    public async ValueTask SetAsync(string key, ReadOnlySequence<byte> value, DistributedCacheEntryOptions options, CancellationToken token = default)
+    {
+        if (_tierRetainsValues)
+        {
+            await WriteAsync(key, value.ToArray(), options, token).ConfigureAwait(false);
+        }
+        else if (value.IsSingleSegment)
+        {
+            await WriteAsync(key, value.First, options, token).ConfigureAwait(false);
+        }
+        else
+        {
+            var length = checked((int)value.Length);
+            var rented = ArrayPool<byte>.Shared.Rent(length);
+            try
+            {
+                value.CopyTo(rented);
+                await WriteAsync(key, rented.AsMemory(0, length), options, token).ConfigureAwait(false);
+            }
+            finally
+            {
+                ArrayPool<byte>.Shared.Return(rented);
+            }
+        }
+    }
 }
 #endif

@@ -287,8 +287,13 @@ changes. Both halves share one read and write path: same keyspace, same expirati
 stored fields, so entries written through either are readable through the other and by any other client
 on the conventional layout. `TryGet` reports hit and payload separately, which is the one thing the array
 half cannot express: an entry stored with an empty payload is a hit that writes no bytes, where
-`Get` returns an empty array for that and for a miss alike. Writes copy the sequence rather than alias
-it, so a pooled buffer is safe to return as soon as the call completes. The `net8.0` floor pins
+`Get` returns an empty array for that and for a miss alike. On a write, what happens to the caller's
+buffer depends on the tier: `Redis` is handed a single-segment sequence as the caller's own memory — no
+array in between, since the connection copies it as the command is written and the write is awaited to
+completion (see [`IMemorySerializerProxy`](../how-to/extending.md#lending-memory-imemoryserializerproxy)) —
+and flattens a segmented one into a rented buffer returned after the await; the memory tiers keep what
+they are handed, so there the sequence is copied into an owned array. Either way a pooled buffer is safe
+to reuse the moment the call returns. The `net8.0` floor pins
 `Microsoft.Extensions.Caching.Abstractions` to 8.0.0, which predates the interface; there the type check
 comes up empty and consumers stay on the array path.
 

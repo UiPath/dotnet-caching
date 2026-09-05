@@ -7,6 +7,7 @@ namespace UiPath.Caching.Redis;
 internal sealed partial class RedisCache : RedisCacheBase, ICache
 {
     private readonly ISerializerProxy<byte[]> _serializer;
+    private readonly IMemorySerializerProxy? _memorySerializer;
     private readonly ILogger<RedisCache> _logger;
     private readonly bool _supportsExpireTime;
     private readonly IResiliencePipeline _read;
@@ -31,6 +32,7 @@ internal sealed partial class RedisCache : RedisCacheBase, ICache
     {
         _logger = logger;
         _serializer = serializer;
+        _memorySerializer = serializer as IMemorySerializerProxy;
         _read = resiliencePipelineProvider.Get(ResiliencePipelineNames.Read);
         _write = resiliencePipelineProvider.Get(ResiliencePipelineNames.Write);
         _supportsExpireTime = RedisUtils.SupportsExpireTime(redis.Version);
@@ -362,6 +364,17 @@ internal sealed partial class RedisCache : RedisCacheBase, ICache
     }
 
     /// <summary>
+    /// The value as the connection will send it. A serializer that can lend memory does, so a caller's buffer
+    /// reaches the wire with no array in between; the memory is only borrowed, which is safe because every
+    /// write awaits its command to completion and the connection copies the value as it writes the command.
+    /// Any other serializer's array converts as it always has.
+    /// </summary>
+    private RedisValue SerializeValue<T>(T? value) =>
+        _memorySerializer is { } memory
+            ? (RedisValue)memory.SerializeToMemory(value)
+            : (RedisValue)_serializer.Serialize(value);
+
+    /// <summary>
     /// Tri-state read: <c>IsNull</c> -> miss; <c>Length == 0</c> -> cached-null hit (only honored when
     /// <c>CacheNullValues</c> is on); non-empty -> deserialize. Legacy round-trip to <c>default(T)</c>
     /// is also treated as a miss when the option is off.
@@ -449,7 +462,7 @@ internal sealed partial class RedisCache : RedisCacheBase, ICache
             else
             {
 
-                var serialized = _serializer.Serialize(value);
+                var serialized = SerializeValue(value);
 
                 ret = await _write.ExecuteAsync(async token =>
                 {
@@ -501,9 +514,7 @@ internal sealed partial class RedisCache : RedisCacheBase, ICache
             }
             else
             {
-                // Both arms have to land on RedisValue: the serializer now yields byte[], which
-                // converts implicitly, but not in a var-typed conditional against EmptyString.
-                RedisValue serialized = isNull ? RedisValue.EmptyString : _serializer.Serialize(value);
+                var serialized = isNull ? RedisValue.EmptyString : SerializeValue(value);
 
                 ret = await _write.ExecuteAsync(async token =>
                 {
@@ -564,7 +575,7 @@ internal sealed partial class RedisCache : RedisCacheBase, ICache
                 }
                 else
                 {
-                    var serialized = _serializer.Serialize(value);
+                    var serialized = SerializeValue(value);
                     _ = transaction.StringSetAsync(redisKey, serialized, expiration, When.Always, CommandFlags.DemandMaster);
                 }
             }
