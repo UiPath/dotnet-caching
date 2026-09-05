@@ -1,6 +1,6 @@
 # Settings reference
 
-Every binding-visible property on every shipped options class, with shipped defaults, scope, and a one-line note. This page mirrors [`Sample.AspNetCore/appsettings.all.json`](../../Sample.AspNetCore/appsettings.all.json) 1:1 — when the JSON drifts, the bind-validation test in `Caching.Tests/AppSettingsAllJsonBindingTests.cs` fails.
+Every binding-visible property on every shipped options class, with shipped defaults, scope, and a one-line note. This page mirrors [`samples/UiPath.Caching.Sample/appsettings.all.json`](../../samples/UiPath.Caching.Sample/appsettings.all.json); keep the two in step.
 
 **Reading the Scope column:**
 
@@ -205,6 +205,57 @@ Per-topic overrides: add entries to `Topics[]` under `Broadcast:RedisPubSub`. Ea
 | `DistributedLockExpiry` | `TimeSpan?` | `null` | Per-provider | Inert for this provider; present to satisfy `IMultilayerCacheOptions`. |
 
 *Code-only seams:* `EntryFactory`, `CacheKeyStrategy`, `TopicKeyStrategy`, `SizeProvider`, `LockKeyStrategy`.
+
+---
+
+## Queue caches (`UiPath.Caching.Queue`)
+
+The queue package's `AddQueueMemory` / `AddQueueRedis` / `AddQueueInMemoryRedis` bind from the **same sections as the core providers** by default — `Caching:InMemory`, `Caching:Redis`, `Caching:InMemoryRedis` — into their own options types. A key both types declare (`Enabled`, `DefaultExpiration`, `LocalMaxExpiration`, …) therefore configures both the core cache and the set cache of that backing; keys one type lacks are ignored by the binder. Pass a section name to any of the three to bind from elsewhere. The Redis tier of the multilayer set cache reuses `RedisCacheOptions` and `RedisSetCacheOptions`.
+
+### Caching:InMemory (InMemoryQueueCacheOptions)
+
+| Property | Type | Default | Scope | Notes |
+|---|---|---|---|---|
+| `Enabled` | `bool` | `true` | Per-provider | Enable/disable the in-memory set cache. |
+| `DefaultExpiration` | `TimeSpan?` | `01:00:00` | Per-provider | Whole-set lifetime when neither the call nor the policy names one; every add re-applies it. `null` resolves to `CachePolicy.DefaultDistributedExpiration` (1 h); `TimeSpan.MaxValue` keeps a set forever. |
+| `LocalMaxExpiration` | `TimeSpan?` | `null` | Per-provider | Cap on a stored set's lifetime. `null` by default: with no backing tier `DefaultExpiration` already bounds every set. |
+| `ConnectionMonitorEnabled` | `bool` | `false` | Per-provider | Inert for this provider (no backing tier); present for parity with `InMemoryRedisQueueCacheOptions`. |
+| `ConnectionMonitorPeriod` | `TimeSpan?` | `00:00:05` | Per-provider | Inert for this provider. |
+| `UseLocalOnlyWhenDisconnected` | `bool` | `false` | Per-provider | Inert for this provider. |
+| `LocalMaxExpirationDisconnected` | `TimeSpan?` | `00:00:30` | Per-provider | Inert for this provider. |
+| `TrackStatistics` | `bool` | `true` | Per-provider | Emit hit/miss/eviction counters via the telemetry provider. |
+| `StatisticsFlushInterval` | `TimeSpan` | `00:01:00` | Per-provider | How often statistics are flushed to the telemetry sink. |
+| `SizeLimit` | `long?` | `null` | Per-provider | Max size for the in-memory store; `null` = unlimited. |
+| `CompactionPercentage` | `double?` | `null` | Per-provider | Fraction of `SizeLimit` to free when the limit is hit; `null` = runtime default (0.05). |
+
+*Code-only seams:* `SizeProvider`.
+
+### Caching:Redis (RedisSetCacheOptions)
+
+| Property | Type | Default | Scope | Notes |
+|---|---|---|---|---|
+| `Enabled` | `bool` | `true` | Per-provider | Enable/disable the Redis set cache. |
+| `ResilienceKeyName` | `string?` | `null` | Per-provider | Name of the resilience pipeline applied to destructive reads (`SPOP`), resolved via `IResiliencePipelineProvider`; `null` or empty runs them with no pipeline. |
+
+Lifetimes and the connection come from `RedisCacheOptions` (`DefaultExpiration`, `ConnectionMonitorEnabled`, …) bound from the same section.
+
+### Caching:InMemoryRedis (InMemoryRedisQueueCacheOptions)
+
+| Property | Type | Default | Scope | Notes |
+|---|---|---|---|---|
+| `Enabled` | `bool` | `true` | Per-provider | Enable/disable the multilayer set cache. |
+| `DefaultExpiration` | `TimeSpan?` | `null` | Per-provider | Whole-set lifetime when neither the call nor the policy names one. A value outranks the Redis tier's `RedisCacheOptions.DefaultExpiration` for sets written through this provider, as `InMemoryRedisCacheOptions.DefaultExpiration` does for the other caches; `null` inherits the tier's default. |
+| `LocalMaxExpiration` | `TimeSpan?` | `00:01:00` | Per-provider | How long a locally cached set snapshot is served before it is re-fetched from Redis. Also bounds the staleness window for mutations made on other nodes — this tier does not subscribe to broadcast invalidation. `null` = no time bound (not recommended multi-node). |
+| `ConnectionMonitorEnabled` | `bool` | `false` | Per-provider | Monitor the Redis tier's connection. Required for `UseLocalOnlyWhenDisconnected`; enabled without it, snapshots are dropped rather than served while Redis is unreachable. |
+| `ConnectionMonitorPeriod` | `TimeSpan?` | `00:00:05` | Per-provider | How often the connection monitor re-evaluates a failed connection. |
+| `UseLocalOnlyWhenDisconnected` | `bool` | `false` | Per-provider | Serve reads and apply mutations on the local snapshot while Redis is unreachable. Requires `ConnectionMonitorEnabled`. |
+| `LocalMaxExpirationDisconnected` | `TimeSpan?` | `00:00:30` | Per-provider | Lifetime cap on local set state written while Redis is unreachable, so it dies quickly once connectivity returns. |
+| `TrackStatistics` | `bool` | `true` | Per-provider | Emit hit/miss/eviction counters via the telemetry provider. |
+| `StatisticsFlushInterval` | `TimeSpan` | `00:01:00` | Per-provider | How often statistics are flushed to the telemetry sink. |
+| `SizeLimit` | `long?` | `null` | Per-provider | Max size for the local snapshot store; `null` = unlimited. |
+| `CompactionPercentage` | `double?` | `null` | Per-provider | Fraction of `SizeLimit` to free when the limit is hit; `null` = runtime default (0.05). |
+
+*Code-only seams:* `SizeProvider`.
 
 ---
 
