@@ -295,10 +295,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 - **BREAKING:** `CacheClock` itself. `System.TimeProvider` is the clock; nothing wrapped
   `Microsoft.Extensions.Internal.ISystemClock` any more, so the type had no job left.
 - **BREAKING:** the per-options `Clock` properties: `ICacheOptions.Clock` and its implementations on
-  `InMemoryCacheOptions`, `InMemoryRedisCacheOptions` and `RedisCacheOptions`,
-  `RedisConnectionOptions.Clock`, `InMemoryQueueCacheOptions.Clock` and
-  `InMemoryRedisQueueCacheOptions.Clock`. Time comes from the one `TimeProvider` in DI — see
-  **Changed**. `MemoryCacheFactory`, `UiPathDistributedCache`, the provider constructors,
+  `InMemoryCacheOptions`, `InMemoryRedisCacheOptions` and `RedisCacheOptions`, and
+  `RedisConnectionOptions.Clock`. Time comes from the one `TimeProvider` in DI — see **Changed**. `MemoryCacheFactory`, `UiPathDistributedCache`, the provider constructors,
   `MultilayerCacheBase`, `RedisCacheBase`, `RedisProfiler` and `RedisStreamHealthMaintainer` take an
   `TimeProvider` instead of an `ISystemClock?` or nothing.
 - **BREAKING:** the `[Obsolete]` options properties. The rename aliases `PrimaryMaxExpiration`,

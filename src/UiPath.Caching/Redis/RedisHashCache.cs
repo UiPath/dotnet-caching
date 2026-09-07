@@ -903,6 +903,11 @@ internal sealed partial class RedisHashCache : RedisCacheBase, IHashCache
                 {
                     await transaction.KeyExpireAsync(redisKey, expiration.UtcDateTime, CommandFlags.DemandMaster | CommandFlags.FireAndForget).ConfigureAwait(false);
                 }
+                else if (setOption == HashCacheSetOption.HashReplace)
+                {
+                    // The key survives a HashReplace, and so would a TTL an earlier write gave it.
+                    _ = transaction.KeyPersistAsync(redisKey, CommandFlags.DemandMaster | CommandFlags.FireAndForget).ConfigureAwait(false);
+                }
 
                 ret = await _write.ExecuteAsync(async token =>
                 {

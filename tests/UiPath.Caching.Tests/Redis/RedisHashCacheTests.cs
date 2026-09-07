@@ -984,6 +984,7 @@ public class RedisHashCacheTests(ITestContextAccessor testContextAccessor) : IAs
         actual.Should().BeTrue();
         await _transaction.Received(1).HashSetAsync(_redisKey, Arg.Any<HashEntry[]>(), CommandFlags.DemandMaster);
         await _transaction.DidNotReceive().KeyExpireAsync(_redisKey, Arg.Any<DateTime?>(), Arg.Any<CommandFlags>());
+        await _transaction.DidNotReceive().KeyPersistAsync(_redisKey, Arg.Any<CommandFlags>());
     }
 
     [Fact]
@@ -1148,6 +1149,21 @@ public class RedisHashCacheTests(ITestContextAccessor testContextAccessor) : IAs
         _database.Received(1).CreateTransaction();
         await _database.DidNotReceive().KeyDeleteAsync(_redisKey, Arg.Any<CommandFlags>());
         await _transaction.Received(1).HashSetAsync(_redisKey, Arg.Any<HashEntry[]>(), Arg.Any<CommandFlags>());
+        await _transaction.Received(1).ExecuteAsync(CommandFlags.DemandMaster);
+    }
+
+    /// <summary>A HashReplace leaves the key, and any TTL an earlier write gave it, in place; unbounded has to clear that TTL.</summary>
+    [Fact]
+    public async Task Set_HashReplace_with_an_unbounded_expiration_persists_the_key()
+    {
+        var values = _fixture.Create<IDictionary<string, string?>>();
+        var options = new HashCacheEntryOptions(DateTimeOffset.MaxValue, default, default, HashCacheSetOption.HashReplace);
+
+        await Sut.SetAsync(_cacheKey, values, options, token: testContextAccessor.Current.CancellationToken);
+
+        await _database.DidNotReceive().KeyDeleteAsync(_redisKey, Arg.Any<CommandFlags>());
+        await _transaction.DidNotReceive().KeyExpireAsync(_redisKey, Arg.Any<DateTime?>(), Arg.Any<CommandFlags>());
+        await _transaction.Received(1).KeyPersistAsync(_redisKey, CommandFlags.DemandMaster | CommandFlags.FireAndForget);
         await _transaction.Received(1).ExecuteAsync(CommandFlags.DemandMaster);
     }
 
