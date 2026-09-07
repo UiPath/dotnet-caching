@@ -7,7 +7,7 @@ public class MultilayerSetCacheTests
 {
     private static CancellationToken Ct => TestContext.Current.CancellationToken;
 
-    private static IMemoryCacheFactory MemoryFactory() => new MemoryCacheFactory(TimeProvider.System, NullLoggerFactory.Instance);
+    private static MemoryCacheFactory MemoryFactory() => new(TimeProvider.System, NullLoggerFactory.Instance);
 
     // The inner (L2) is always a real store; the InMemory and InMemoryRedis providers differ only in
     // what they pass as L2. A substitute stands in for it here.
