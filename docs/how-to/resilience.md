@@ -199,9 +199,11 @@ expiration — per-node only, no cluster-sync concern. A `JitterMaxDuration` lar
 than the typical lifetime.
 
 **Caller-supplied expirations bypass jitter.** Passing an explicit `expiration:` argument to
-`SetAsync` / `GetOrAddAsync` / `RefreshAsync` uses that value exactly; jitter only applies
-when the resolved expiration comes from `CachePolicy.DistributedExpiration` or the provider
-default.
+`SetAsync` / `GetOrAddAsync` / `RefreshAsync` uses that value exactly, on the rehydrate write
+too; jitter only applies when the resolved expiration comes from
+`CachePolicy.DistributedExpiration` or the provider default. The rehydrate threshold is
+measured against the configured lifetime, never the jittered one, so a hit crosses it at the
+same point on every read.
 
 ## Named policies
 

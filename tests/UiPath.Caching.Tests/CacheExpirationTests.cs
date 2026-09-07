@@ -72,6 +72,14 @@ public class CacheExpirationTests
     }
 
     [Fact]
+    public void ToDuration_keeps_the_unbounded_sentinel_unbounded()
+    {
+        var now = DateTimeOffset.UtcNow;
+
+        CacheExpiration.ToDuration(DateTimeOffset.MaxValue, now).Should().Be(TimeSpan.MaxValue);
+    }
+
+    [Fact]
     public void ToDuration_rejects_a_deadline_that_has_passed()
     {
         var now = DateTimeOffset.UtcNow;
@@ -100,7 +108,7 @@ public class CacheExpirationGuardTests
         return new MultilayerCache(
             KnownCacheProviderNames.InMemory,
             NullCache.Instance,
-            new MemoryCacheFactory(null, NullLoggerFactory.Instance),
+            new MemoryCacheFactory(TimeProvider.System, NullLoggerFactory.Instance),
             NullChangeTokenFactory.Instance,
             NullTopicFactory.Instance,
             NullCacheEventFactory.Instance,
@@ -111,6 +119,7 @@ public class CacheExpirationGuardTests
             localLock: new AsyncKeyedLocalLock(Options.Create(cacheOptions)),
             distributedLock: NullDistributedLock.Instance,
             policyFactory: NullCachePolicyFactory.Instance,
+            clock: TimeProvider.System,
             logger: NullLogger.Instance);
     }
 

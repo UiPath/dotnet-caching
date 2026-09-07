@@ -9,6 +9,13 @@ namespace UiPath.Caching;
 /// </summary>
 public sealed class CachePolicy
 {
+    /// <summary>The floor under <see cref="DistributedExpiration"/> and the providers' <c>DefaultExpiration</c>: the L2 lifetime a write takes when nothing else names one.</summary>
+    /// <remarks>
+    /// Omission never means "forever"; ask for unbounded with <see cref="TimeSpan.MaxValue"/>. Applied on the write paths and
+    /// not merged into the resolved policy, so "nothing configured" stays observable as <see langword="null"/>.
+    /// </remarks>
+    public static readonly TimeSpan DefaultDistributedExpiration = TimeSpan.FromHours(1);
+
     /// <summary>
     /// Per-policy L1 (in-memory tier) cap. Applied at <c>SetAsync</c> / <c>GetOrAddAsync</c> write
     /// time when the L2 is connected, falling back to <see cref="IMultilayerCacheOptions.LocalMaxExpiration"/>

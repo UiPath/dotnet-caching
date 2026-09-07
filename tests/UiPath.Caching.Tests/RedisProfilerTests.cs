@@ -159,6 +159,7 @@ public class RedisProfilerTests(ITestContextAccessor testContextAccessor) : IAsy
     public ValueTask InitializeAsync()
     {
         _clock = _fixture.Freeze<ISystemClock>();
+        _fixture.Inject<TimeProvider>(new SystemClockTimeProvider(_clock));
         _now = DateTimeOffset.UtcNow;
         _clock.UtcNow.Returns(callInfo => _now);
         _profiledCommandProcessor = _fixture.Freeze<IProfiledCommandProcessor>();

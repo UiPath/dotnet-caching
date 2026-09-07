@@ -964,10 +964,33 @@ public class RedisHashCacheTests(ITestContextAccessor testContextAccessor) : IAs
         await _transaction.Received(1).ExecuteAsync(CommandFlags.DemandMaster);
     }
 
+    /// <summary>The per-call spelling of unbounded lands on the same PERSIST as the configured one.</summary>
     [Fact]
-    public async Task Refresh_HashCacheEntryOptions_with_extended_props_no_default_expiration()
+    public async Task Refresh_persists_the_key_for_a_per_call_unbounded_duration()
     {
-        _redisCacheOptions.DefaultExpiration = null;
+        await Sut.RefreshAsync<string>(_cacheKey, TimeSpan.MaxValue, policy: null, testContextAccessor.Current.CancellationToken);
+
+        await _database.DidNotReceive().KeyExpireAsync(_redisKey, Arg.Any<DateTime?>(), Arg.Any<CommandFlags>());
+        await _database.Received(1).KeyPersistAsync(_redisKey, Arg.Any<CommandFlags>());
+    }
+
+    [Fact]
+    public async Task Set_with_a_per_call_unbounded_duration_writes_no_expiry()
+    {
+        IDictionary<string, string?> values = new Dictionary<string, string?> { ["f"] = "v" };
+
+        var actual = await Sut.SetAsync(_cacheKey, values, TimeSpan.MaxValue, token: testContextAccessor.Current.CancellationToken);
+
+        actual.Should().BeTrue();
+        await _transaction.Received(1).HashSetAsync(_redisKey, Arg.Any<HashEntry[]>(), CommandFlags.DemandMaster);
+        await _transaction.DidNotReceive().KeyExpireAsync(_redisKey, Arg.Any<DateTime?>(), Arg.Any<CommandFlags>());
+        await _transaction.DidNotReceive().KeyPersistAsync(_redisKey, Arg.Any<CommandFlags>());
+    }
+
+    [Fact]
+    public async Task Refresh_HashCacheEntryOptions_with_extended_props_unbounded_default()
+    {
+        _redisCacheOptions.DefaultExpiration = TimeSpan.MaxValue;
         var metadata = _fixture.Create<IDictionary<string, string?>>();
         var options = new HashCacheEntryOptions(default, default, metadata);
         var actual = await Sut.RefreshAsync<string>(_cacheKey, options, token: testContextAccessor.Current.CancellationToken);
@@ -981,7 +1004,7 @@ public class RedisHashCacheTests(ITestContextAccessor testContextAccessor) : IAs
     [Fact]
     public async Task Refresh_HashCacheEntryOptions_transaction_fail()
     {
-        _redisCacheOptions.DefaultExpiration = null;
+        _redisCacheOptions.DefaultExpiration = TimeSpan.MaxValue;
         var metadata = _fixture.Create<IDictionary<string, string?>>();
         var options = new HashCacheEntryOptions(default, default, metadata);
         _transaction.ExecuteAsync(Arg.Any<CommandFlags>()).Returns(false);
@@ -996,7 +1019,7 @@ public class RedisHashCacheTests(ITestContextAccessor testContextAccessor) : IAs
     [Fact]
     public async Task Refresh_HashCacheEntryOptions_transaction_exception()
     {
-        _redisCacheOptions.DefaultExpiration = null;
+        _redisCacheOptions.DefaultExpiration = TimeSpan.MaxValue;
         var metadata = _fixture.Create<IDictionary<string, string?>>();
         var options = new HashCacheEntryOptions(default, default, metadata);
         _transaction.ExecuteAsync(Arg.Any<CommandFlags>()).ThrowsAsync(new Exception());
@@ -1126,6 +1149,21 @@ public class RedisHashCacheTests(ITestContextAccessor testContextAccessor) : IAs
         _database.Received(1).CreateTransaction();
         await _database.DidNotReceive().KeyDeleteAsync(_redisKey, Arg.Any<CommandFlags>());
         await _transaction.Received(1).HashSetAsync(_redisKey, Arg.Any<HashEntry[]>(), Arg.Any<CommandFlags>());
+        await _transaction.Received(1).ExecuteAsync(CommandFlags.DemandMaster);
+    }
+
+    /// <summary>A HashReplace leaves the key, and any TTL an earlier write gave it, in place; unbounded has to clear that TTL.</summary>
+    [Fact]
+    public async Task Set_HashReplace_with_an_unbounded_expiration_persists_the_key()
+    {
+        var values = _fixture.Create<IDictionary<string, string?>>();
+        var options = new HashCacheEntryOptions(DateTimeOffset.MaxValue, default, default, HashCacheSetOption.HashReplace);
+
+        await Sut.SetAsync(_cacheKey, values, options, token: testContextAccessor.Current.CancellationToken);
+
+        await _database.DidNotReceive().KeyDeleteAsync(_redisKey, Arg.Any<CommandFlags>());
+        await _transaction.DidNotReceive().KeyExpireAsync(_redisKey, Arg.Any<DateTime?>(), Arg.Any<CommandFlags>());
+        await _transaction.Received(1).KeyPersistAsync(_redisKey, CommandFlags.DemandMaster | CommandFlags.FireAndForget);
         await _transaction.Received(1).ExecuteAsync(CommandFlags.DemandMaster);
     }
 
@@ -1407,6 +1445,7 @@ public class RedisHashCacheTests(ITestContextAccessor testContextAccessor) : IAs
         _database = _fixture.Freeze<IDatabase>();
         _transaction = _fixture.Freeze<ITransaction>();
         _clock = _fixture.Freeze<ISystemClock>();
+        _fixture.Inject<TimeProvider>(new SystemClockTimeProvider(_clock));
         _clock.UtcNow.Returns(c => _now);
         _logger = _fixture.Freeze<ILogger<RedisHashCache>>();
         _logger.IsEnabled(Arg.Any<LogLevel>()).Returns(true);
@@ -1425,7 +1464,6 @@ public class RedisHashCacheTests(ITestContextAccessor testContextAccessor) : IAs
         _redisCacheOptions = new RedisCacheOptions
         {
             DefaultExpiration = TimeSpan.FromSeconds(Random.Shared.Next(1, 100)),
-            Clock = _clock,
             EntryFactory = new TestCacheEntryFactory(),
             CacheKeyStrategy = _cacheKeyStrategy,
             RedisKeyStrategyFactory = redisKeyStrategyFactory

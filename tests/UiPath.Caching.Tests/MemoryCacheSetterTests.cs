@@ -24,7 +24,7 @@ public class MemoryCacheSetterTests : IAsyncLifetime
     private InMemoryRedisCacheOptions _options = default!;
     private TopicKey _topicKey = default!;
     private CacheKey _cacheKey = default!;
-    private CacheClock _cacheClock = default!;
+    private TimeProvider _cacheClock = default!;
     private RecordingTelemetryProvider _telemetryProvider = default!;
 
     private HashLocalMemorySetter? _sut = null;
@@ -202,7 +202,7 @@ public class MemoryCacheSetterTests : IAsyncLifetime
             CacheKeyStrategy = _cacheKeyStrategy,
             TopicKeyStrategy = _topicKeyStrategy,
         };
-        _cacheClock = new CacheClock(_clock);
+        _cacheClock = new SystemClockTimeProvider(_clock);
         _fixture.Inject(_cacheClock);
         _topicFactory = _fixture.Freeze<ITopicFactory>();
         _topicProvider = _fixture.Freeze<ITopicProvider>();

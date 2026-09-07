@@ -13,7 +13,7 @@ public abstract class MultilayerCacheBase : IDisposable
     protected readonly ICacheEntryFactory _cacheEntryFactory;
     protected readonly IMultilayerCacheOptions _multiLayerCacheOptions;
     protected readonly IDisposable _monitor;
-    protected readonly CacheClock _clock;
+    protected readonly TimeProvider _clock;
     protected readonly CacheEventPublisher _eventPublisher;
     protected readonly IConnectionState _connectionState;
     protected readonly ITopicProvider _topicProvider;
@@ -29,11 +29,13 @@ public abstract class MultilayerCacheBase : IDisposable
     private readonly bool _localLockEnabled;
     private readonly bool _distributedLockEnabled;
     private protected readonly CachePolicy _defaultPolicy;
-    private static readonly TimeSpan ClockDriftSlack = TimeSpan.FromMinutes(1);
 
     // Hardcoded fallback values for the lock fields. Merged in as the lowest-priority policy
     // (after provider-specific + user DefaultCachePolicy) so every cache instance has a fully
     // resolved Lock — every field non-null — by the time validation runs.
+    // 
+    // DistributedExpiration is deliberately not floored here: the floor is a write-side rule
+    // (ResolveWriteDuration), and leaving it out keeps "nothing configured" observable as null.
     private static readonly CachePolicy HardcodedDefaults = new()
     {
         Lock = new LockProfile
@@ -59,8 +61,10 @@ public abstract class MultilayerCacheBase : IDisposable
         ILocalLock localLock,
         IDistributedLock distributedLock,
         ICachePolicyFactory policyFactory,
+        TimeProvider clock,
         ILogger logger)
     {
+        ArgumentNullException.ThrowIfNull(clock);
         _logger = logger;
         _multiLayerCacheOptions = multiLayerCacheOptions;
         _defaultPolicy = CachePolicyMerger.Merge(
@@ -71,7 +75,7 @@ public abstract class MultilayerCacheBase : IDisposable
         Telemetry = telemetryProvider;
         _cacheEntryFactory = _multiLayerCacheOptions.EntryFactory ?? new CacheEntryFactory();
         _monitor = _memoryCache.Monitor(multiLayerCacheOptions, Telemetry, GetType().Name);
-        _clock = new CacheClock(_multiLayerCacheOptions.Clock, _defaultPolicy.DistributedExpiration);
+        _clock = clock;
         _topicProvider = topicFactory.Get(_multiLayerCacheOptions.Topic);
         _eventPublisher = new CacheEventPublisher(cacheName, _topicProvider, cacheEventFactory, logger);
         var connectionMonitorEnabled = multiLayerCacheOptions.ConnectionMonitorEnabled ?? cacheOptions.ConnectionMonitorEnabled;
@@ -163,35 +167,30 @@ public abstract class MultilayerCacheBase : IDisposable
     private static TimeSpan NonNegativeOrFallback(TimeSpan? value, TimeSpan fallback) =>
         value is { } v && v >= TimeSpan.Zero ? v : fallback;
 
-    protected static TimeSpan? ApplyJitter(TimeSpan? duration, TimeSpan? maxJitter, DateTimeOffset utcNow)
+    protected static TimeSpan ApplyJitter(TimeSpan duration, TimeSpan? maxJitter)
     {
-        if (duration is not { } d || d <= TimeSpan.Zero || maxJitter is not { } max || max <= TimeSpan.Zero)
+        // TimeSpan.MaxValue means "no TTL"; jittering it would clamp it under the sentinel and back onto EXPIRE.
+        if (duration <= TimeSpan.Zero || duration == TimeSpan.MaxValue || maxJitter is not { } max || max <= TimeSpan.Zero)
         {
             return duration;
         }
-        var bonusTicks = Random.Shared.NextInt64(max.Ticks);
-        // Saturate at TimeSpan.MaxValue then at remaining DateTime range. A small slack covers the gap
-        // between this UtcNow and the slightly-later UtcNow inside CacheClock.ToDateTimeOffset.
-        var sumTicks = d.Ticks > TimeSpan.MaxValue.Ticks - bonusTicks ? TimeSpan.MaxValue.Ticks : d.Ticks + bonusTicks;
-        var maxFromNow = DateTime.MaxValue.Ticks - utcNow.UtcTicks - ClockDriftSlack.Ticks;
-        return new TimeSpan(Math.Max(0, Math.Min(sumTicks, maxFromNow)));
+        // Bounded under the sentinel, so the sum can neither overflow nor land on it; the clock fits it into the DateTime range.
+        var bonusTicks = Random.Shared.NextInt64(Math.Min(max.Ticks, TimeSpan.MaxValue.Ticks - duration.Ticks));
+        return duration + new TimeSpan(bonusTicks);
     }
 
+    /// <summary>The L2 write lifetime: a caller value as-is, else <see cref="ResolveDuration"/> jittered.</summary>
+    protected TimeSpan ResolveWriteDuration(CachePolicy policy, TimeSpan? callerExpiration = null) =>
+        callerExpiration ?? ApplyJitter(ResolveDuration(policy), policy.JitterMaxDuration);
+
     /// <summary>
-    /// Resolves the L2 write duration, applying jitter only when the caller did not pass an explicit
-    /// expiration. Resolves the full fallback chain (<c>policy.DistributedExpiration</c> →
-    /// <c>IMultilayerCacheOptions.DefaultExpiration</c>) BEFORE jittering so the options-default path
-    /// is jittered too — not just the policy path.
+    /// The configured L2 lifetime, floored and unjittered: policy → options default → <see cref="CachePolicy.DefaultDistributedExpiration"/>.
+    /// The rehydrate threshold measures against this, so it cannot depend on a per-write draw.
     /// </summary>
-    protected TimeSpan? ResolveWriteDuration(CachePolicy policy, TimeSpan? callerExpiration = null)
-    {
-        if (callerExpiration is not null)
-        {
-            return callerExpiration;
-        }
-        var resolved = policy.DistributedExpiration ?? _multiLayerCacheOptions.DefaultExpiration;
-        return ApplyJitter(resolved, policy.JitterMaxDuration, _clock.UtcNow);
-    }
+    protected TimeSpan ResolveDuration(CachePolicy policy) =>
+        policy.DistributedExpiration
+        ?? _multiLayerCacheOptions.DefaultExpiration
+        ?? CachePolicy.DefaultDistributedExpiration;
 
     /// <summary>
     /// Validates a caller-supplied duration and pairs it with the deadline it implies. The write path
@@ -201,27 +200,28 @@ public abstract class MultilayerCacheBase : IDisposable
     private protected (DateTimeOffset Expiration, TimeSpan Duration) CallerWrite(TimeSpan expiration, [CallerArgumentExpression(nameof(expiration))] string? paramName = null)
     {
         var duration = CacheExpiration.ThrowIfNotPositive(expiration, paramName);
-        return (_clock.UtcNow.Add(duration), duration);
+        return (_clock.ToDateTimeOffset(duration), duration);
     }
 
     /// <inheritdoc cref="CallerWrite(TimeSpan, string)"/>
-    private protected (DateTimeOffset Expiration, TimeSpan Duration) CallerWrite(DateTimeOffset expiration, [CallerArgumentExpression(nameof(expiration))] string? paramName = null)
-    {
-        var now = _clock.UtcNow;
-        return (CacheExpiration.ThrowIfNotFuture(expiration, now, paramName), expiration - now);
-    }
+    private protected (DateTimeOffset Expiration, TimeSpan Duration) CallerWrite(DateTimeOffset expiration, [CallerArgumentExpression(nameof(expiration))] string? paramName = null) =>
+        (expiration, CacheExpiration.ToDuration(expiration, _clock.GetUtcNow(), paramName));
 
-    /// <summary>Write deadline for a call that carried no <c>expiration</c>: the policy's L2 TTL jittered, then the cache default.</summary>
-    private protected DateTimeOffset PolicyDeadline(CachePolicy policy) =>
+    /// <summary>Write expiration from the policy chain, jittered.</summary>
+    private protected DateTimeOffset GetExpiration(CachePolicy policy) =>
         _clock.ToDateTimeOffset(ResolveWriteDuration(policy));
 
-    /// <summary>Write deadline for a caller-supplied duration, validated.</summary>
-    private protected DateTimeOffset CallerDeadline(TimeSpan expiration, [CallerArgumentExpression(nameof(expiration))] string? paramName = null) =>
+    /// <summary>Write expiration from an options object: <c>ExpireTime</c>, then <c>TimeToLive</c>, then the policy chain.</summary>
+    private protected DateTimeOffset GetExpiration(HashCacheEntryOptions options, CachePolicy policy) =>
+        options.ExpireTime ?? _clock.ToDateTimeOffset(options.TimeToLive ?? ResolveWriteDuration(policy));
+
+    /// <summary>Write expiration for a caller-supplied duration, validated.</summary>
+    private protected DateTimeOffset GetExpiration(TimeSpan expiration, [CallerArgumentExpression(nameof(expiration))] string? paramName = null) =>
         CallerWrite(expiration, paramName).Expiration;
 
-    /// <summary>Write deadline for a caller-supplied deadline, validated.</summary>
-    private protected DateTimeOffset CallerDeadline(DateTimeOffset expiration, [CallerArgumentExpression(nameof(expiration))] string? paramName = null) =>
-        CacheExpiration.ThrowIfNotFuture(expiration, _clock.UtcNow, paramName);
+    /// <summary>Write expiration for a caller-supplied instant, validated.</summary>
+    private protected DateTimeOffset GetExpiration(DateTimeOffset expiration, [CallerArgumentExpression(nameof(expiration))] string? paramName = null) =>
+        CacheExpiration.ThrowIfNotFuture(expiration, _clock.GetUtcNow(), paramName);
 
     /// <summary>
     /// The local lock alone, for callers that need it for correctness rather than de-duplication.

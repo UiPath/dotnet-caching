@@ -8,8 +8,6 @@ public interface ICacheOptions
 
     public TimeSpan Timeout { get; set; }
 
-    public ISystemClock? Clock { get; set; }
-
     public ICacheEntryFactory? EntryFactory { get; set; }
 
     public ICacheKeyStrategy? CacheKeyStrategy { get; set; }

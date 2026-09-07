@@ -23,7 +23,7 @@ public class LocalCacheSetterTests : IAsyncLifetime
     private InMemoryRedisCacheOptions _options = default!;
     private TopicKey _topicKey = default!;
     private CacheKey _cacheKey = default!;
-    private CacheClock _cacheClock = default!;
+    private TimeProvider _cacheClock = default!;
 
     private LocalMemorySetter? _sut = null;
 
@@ -161,7 +161,7 @@ public class LocalCacheSetterTests : IAsyncLifetime
         _topicKeyStrategy = _fixture.Create<ITopicKeyStrategy>();
         _cacheKeyStrategy.GetCacheKey<string>(_cacheKey).Returns(_cacheKey);
         _topicKeyStrategy.GetTopicKey<string>().Returns(_topicKey);
-        _cacheClock = new CacheClock(_clock);
+        _cacheClock = new SystemClockTimeProvider(_clock);
         _fixture.Inject(_cacheClock);
         _topicFactory = _fixture.Freeze<ITopicFactory>();
         _topicProvider = _fixture.Freeze<ITopicProvider>();

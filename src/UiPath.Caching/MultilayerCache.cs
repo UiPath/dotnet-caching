@@ -23,8 +23,9 @@ internal sealed partial class MultilayerCache : MultilayerCacheBase, ICache
         ILocalLock localLock,
         IDistributedLock distributedLock,
         ICachePolicyFactory policyFactory,
+        TimeProvider clock,
         ILogger logger)
-        : base(cacheName, innerCache, memoryCacheFactory, topicFactory, cacheEventFactory, telemetryProvider, multiLayerCacheOptions, memoryCacheOptions, cacheOptions, localLock, distributedLock, policyFactory, logger)
+        : base(cacheName, innerCache, memoryCacheFactory, topicFactory, cacheEventFactory, telemetryProvider, multiLayerCacheOptions, memoryCacheOptions, cacheOptions, localLock, distributedLock, policyFactory, clock, logger)
     {
         _innerCache = innerCache;
         var cacheKeyStrategy = _multiLayerCacheOptions.CacheKeyStrategy ?? new DefaultCacheKeyStrategy();
@@ -68,23 +69,24 @@ internal sealed partial class MultilayerCache : MultilayerCacheBase, ICache
     {
         ArgumentNullException.ThrowIfNull(generator);
         policy ??= _defaultPolicy;
-        var duration = policy.DistributedExpiration;
-        var writeExpiration = _clock.ToDateTimeOffset(ResolveWriteDuration(policy));
-        return GetOrAddInternalAsync(cacheKey, generator, writeExpiration, duration, policy, token);
+        // One floored resolution for the write and the rehydrate threshold; only the write is jittered.
+        var duration = ResolveDuration(policy);
+        var writeExpiration = _clock.ToDateTimeOffset(ApplyJitter(duration, policy.JitterMaxDuration));
+        return GetOrAddInternalAsync(cacheKey, generator, writeExpiration, duration, policy.JitterMaxDuration, policy, token);
     }
 
     public ValueTask<T?> GetOrAddAsync<T>(CacheKey cacheKey, Func<CancellationToken, Task<T?>> generator, TimeSpan expiration, CachePolicy? policy, CancellationToken token = default)
     {
         ArgumentNullException.ThrowIfNull(generator);
         var (writeExpiration, duration) = CallerWrite(expiration);
-        return GetOrAddInternalAsync(cacheKey, generator, writeExpiration, duration, policy ?? _defaultPolicy, token);
+        return GetOrAddInternalAsync(cacheKey, generator, writeExpiration, duration, rehydrateJitter: null, policy ?? _defaultPolicy, token);
     }
 
     public ValueTask<T?> GetOrAddAsync<T>(CacheKey cacheKey, Func<CancellationToken, Task<T?>> generator, DateTimeOffset expiration, CachePolicy? policy, CancellationToken token = default)
     {
         ArgumentNullException.ThrowIfNull(generator);
         var (writeExpiration, duration) = CallerWrite(expiration);
-        return GetOrAddInternalAsync(cacheKey, generator, writeExpiration, duration, policy ?? _defaultPolicy, token);
+        return GetOrAddInternalAsync(cacheKey, generator, writeExpiration, duration, rehydrateJitter: null, policy ?? _defaultPolicy, token);
     }
 
     public ValueTask<KeyValuePair<TState, T?>[]> GetOrAddAsync<T, TState>(KeyValuePair<CacheKey, TState>[] entries, Func<TState[], CancellationToken, Task<KeyValuePair<TState, T?>[]>> generator, CachePolicy? policy, CancellationToken token = default)
@@ -93,9 +95,10 @@ internal sealed partial class MultilayerCache : MultilayerCacheBase, ICache
         ArgumentNullException.ThrowIfNull(entries);
         ArgumentNullException.ThrowIfNull(generator);
         policy ??= _defaultPolicy;
-        var duration = policy.DistributedExpiration;
-        var writeExpiration = _clock.ToDateTimeOffset(ResolveWriteDuration(policy));
-        return GetOrAddBatchInternalAsync<T, TState>(entries, generator, writeExpiration, duration, policy, token);
+        // One floored resolution for the write and the rehydrate threshold; only the write is jittered.
+        var duration = ResolveDuration(policy);
+        var writeExpiration = _clock.ToDateTimeOffset(ApplyJitter(duration, policy.JitterMaxDuration));
+        return GetOrAddBatchInternalAsync<T, TState>(entries, generator, writeExpiration, duration, policy.JitterMaxDuration, policy, token);
     }
 
     public ValueTask<KeyValuePair<TState, T?>[]> GetOrAddAsync<T, TState>(KeyValuePair<CacheKey, TState>[] entries, Func<TState[], CancellationToken, Task<KeyValuePair<TState, T?>[]>> generator, TimeSpan expiration, CachePolicy? policy, CancellationToken token = default)
@@ -104,7 +107,7 @@ internal sealed partial class MultilayerCache : MultilayerCacheBase, ICache
         ArgumentNullException.ThrowIfNull(entries);
         ArgumentNullException.ThrowIfNull(generator);
         var (writeExpiration, duration) = CallerWrite(expiration);
-        return GetOrAddBatchInternalAsync<T, TState>(entries, generator, writeExpiration, duration, policy ?? _defaultPolicy, token);
+        return GetOrAddBatchInternalAsync<T, TState>(entries, generator, writeExpiration, duration, rehydrateJitter: null, policy ?? _defaultPolicy, token);
     }
 
     public ValueTask<KeyValuePair<TState, T?>[]> GetOrAddAsync<T, TState>(KeyValuePair<CacheKey, TState>[] entries, Func<TState[], CancellationToken, Task<KeyValuePair<TState, T?>[]>> generator, DateTimeOffset expiration, CachePolicy? policy, CancellationToken token = default)
@@ -113,10 +116,10 @@ internal sealed partial class MultilayerCache : MultilayerCacheBase, ICache
         ArgumentNullException.ThrowIfNull(entries);
         ArgumentNullException.ThrowIfNull(generator);
         var (writeExpiration, duration) = CallerWrite(expiration);
-        return GetOrAddBatchInternalAsync<T, TState>(entries, generator, writeExpiration, duration, policy ?? _defaultPolicy, token);
+        return GetOrAddBatchInternalAsync<T, TState>(entries, generator, writeExpiration, duration, rehydrateJitter: null, policy ?? _defaultPolicy, token);
     }
 
-    private async ValueTask<T?> GetOrAddInternalAsync<T>(CacheKey cacheKey, Func<CancellationToken, Task<T?>> generator, DateTimeOffset? expiration, TimeSpan? effectiveDuration, CachePolicy policy, CancellationToken token)
+    private async ValueTask<T?> GetOrAddInternalAsync<T>(CacheKey cacheKey, Func<CancellationToken, Task<T?>> generator, DateTimeOffset? expiration, TimeSpan effectiveDuration, TimeSpan? rehydrateJitter, CachePolicy policy, CancellationToken token)
     {
         NotCacheableException.ThrowIfNotCacheable<T>();
         var cacheEntryOptions = _entryBuilder.BuildEntryOptions<T>(cacheKey, expiration, token);
@@ -124,7 +127,7 @@ internal sealed partial class MultilayerCache : MultilayerCacheBase, ICache
         var entry = await GetCacheEntryInnerAsync<T>(cacheEntryOptions, policy).ConfigureAwait(false);
         if (entry.Found)
         {
-            TryRehydrate(cacheKey, entry.Expiration, entry.Value, generator, policy, effectiveDuration);
+            TryRehydrate(cacheKey, entry.Expiration, entry.Value, generator, policy, effectiveDuration, rehydrateJitter);
             return entry.Value;
         }
 
@@ -138,7 +141,7 @@ internal sealed partial class MultilayerCache : MultilayerCacheBase, ICache
         return result.Value;
     }
 
-    private void TryRehydrate<T>(CacheKey originalCacheKey, DateTimeOffset entryExpiration, T? currentValue, Func<CancellationToken, Task<T?>> generator, CachePolicy policy, TimeSpan? effectiveDuration)
+    private void TryRehydrate<T>(CacheKey originalCacheKey, DateTimeOffset entryExpiration, T? currentValue, Func<CancellationToken, Task<T?>> generator, CachePolicy policy, TimeSpan duration, TimeSpan? rehydrateJitter)
     {
         if (policy.RehydrateEnabled != true || policy.Rehydrate is null)
         {
@@ -148,8 +151,7 @@ internal sealed partial class MultilayerCache : MultilayerCacheBase, ICache
         {
             return;
         }
-        var resolvedDuration = effectiveDuration ?? policy.DistributedExpiration ?? _multiLayerCacheOptions.DefaultExpiration;
-        if (resolvedDuration is not { } duration || duration <= TimeSpan.Zero)
+        if (duration <= TimeSpan.Zero || duration == TimeSpan.MaxValue)
         {
             return;
         }
@@ -169,7 +171,7 @@ internal sealed partial class MultilayerCache : MultilayerCacheBase, ICache
                 // Factory transitions to null: preserve the original deadline so the null doesn't get a fresh TTL window.
                 var rehydrateExpiration = newValue is null
                     ? entryExpiration
-                    : _clock.UtcNow.Add(duration);
+                    : _clock.ToDateTimeOffset(ApplyJitter(duration, rehydrateJitter));
                 var rehydrateOptions = _entryBuilder.BuildEntryOptions<T>(originalCacheKey, rehydrateExpiration, ct);
                 var innerCacheDisconnected = GetInnerCacheDisconnected();
                 var fired = innerCacheDisconnected || await _eventPublisher.CacheSetAsync(rehydrateOptions).ConfigureAwait(false);
@@ -189,15 +191,15 @@ internal sealed partial class MultilayerCache : MultilayerCacheBase, ICache
         List<(CacheKey CallerKey, TState State, CacheEntryOptions Options, DateTimeOffset Expiration, T? Value)> hits,
         Func<TState[], CancellationToken, Task<KeyValuePair<TState, T?>[]>> generator,
         CachePolicy policy,
-        TimeSpan? effectiveDuration)
+        TimeSpan duration,
+        TimeSpan? rehydrateJitter)
         where TState : notnull
     {
         if (policy.RehydrateEnabled != true || policy.Rehydrate is null)
         {
             return;
         }
-        var resolvedDuration = effectiveDuration ?? policy.DistributedExpiration ?? _multiLayerCacheOptions.DefaultExpiration;
-        if (resolvedDuration is not { } duration || duration <= TimeSpan.Zero)
+        if (duration <= TimeSpan.Zero || duration == TimeSpan.MaxValue)
         {
             return;
         }
@@ -214,7 +216,7 @@ internal sealed partial class MultilayerCache : MultilayerCacheBase, ICache
             duration,
             kind: "cache",
             rehydrateAsync: (rehydrateKeys, ct) =>
-                RehydrateReservedAsync<T, TState>(rehydrateKeys, stateByCallerKey, byState, generator, policy, duration, ct));
+                RehydrateReservedAsync<T, TState>(rehydrateKeys, stateByCallerKey, byState, generator, policy, duration, rehydrateJitter, ct));
     }
 
     /// <summary>The hits worth rehydrating, plus the two lookups the background callback needs.</summary>
@@ -246,13 +248,14 @@ internal sealed partial class MultilayerCache : MultilayerCacheBase, ICache
         Func<TState[], CancellationToken, Task<KeyValuePair<TState, T?>[]>> generator,
         CachePolicy policy,
         TimeSpan duration,
+        TimeSpan? rehydrateJitter,
         CancellationToken token)
         where TState : notnull
     {
         var rehydrateStates = MapReservedKeysToStates(reservedKeys, stateByCallerKey);
         var produced = await generator(rehydrateStates, token).ConfigureAwait(false);
 
-        var groups = GroupRehydratedByExpiration<T, TState>(produced, rehydrateStates, byState, duration);
+        var groups = GroupRehydratedByExpiration<T, TState>(produced, rehydrateStates, byState, duration, rehydrateJitter);
         if (groups.Count == 0)
         {
             return;
@@ -278,13 +281,14 @@ internal sealed partial class MultilayerCache : MultilayerCacheBase, ICache
         KeyValuePair<TState, T?>[]? produced,
         TState[] rehydrateStates,
         Dictionary<TState, RehydrateTarget> byState,
-        TimeSpan duration)
+        TimeSpan duration,
+        TimeSpan? rehydrateJitter)
         where TState : notnull
     {
         var requested = new HashSet<TState>(rehydrateStates);
         var seen = new HashSet<TState>(rehydrateStates.Length);
 
-        var freshExpiration = _clock.UtcNow.Add(duration);
+        var freshExpiration = _clock.ToDateTimeOffset(ApplyJitter(duration, rehydrateJitter));
         var groups = new Dictionary<DateTimeOffset, List<(CacheEntryValue<T> Entry, CacheKey CallerKey)>>();
         foreach (var pair in produced ?? [])
         {
@@ -363,7 +367,8 @@ internal sealed partial class MultilayerCache : MultilayerCacheBase, ICache
         KeyValuePair<CacheKey, TState>[] entries,
         Func<TState[], CancellationToken, Task<KeyValuePair<TState, T?>[]>> generator,
         DateTimeOffset? expiration,
-        TimeSpan? effectiveDuration,
+        TimeSpan effectiveDuration,
+        TimeSpan? rehydrateJitter,
         CachePolicy policy,
         CancellationToken token)
         where TState : notnull
@@ -396,7 +401,7 @@ internal sealed partial class MultilayerCache : MultilayerCacheBase, ICache
 
         if (hits.Count > 0)
         {
-            TryRehydrateBatch(hits, generator, policy, effectiveDuration);
+            TryRehydrateBatch(hits, generator, policy, effectiveDuration, rehydrateJitter);
         }
 
         if (missIndices.Count == 0)
@@ -598,14 +603,14 @@ internal sealed partial class MultilayerCache : MultilayerCacheBase, ICache
     public ValueTask<bool> SetAsync<T>(CacheKey cacheKey, T? value, CachePolicy? policy, CancellationToken token = default)
     {
         policy ??= _defaultPolicy;
-        return SetCoreAsync(cacheKey, value, PolicyDeadline(policy), policy, token);
+        return SetCoreAsync(cacheKey, value, GetExpiration(policy), policy, token);
     }
 
     public ValueTask<bool> SetAsync<T>(CacheKey cacheKey, T? value, TimeSpan expiration, CachePolicy? policy, CancellationToken token = default) =>
-        SetCoreAsync(cacheKey, value, CallerDeadline(expiration), policy ?? _defaultPolicy, token);
+        SetCoreAsync(cacheKey, value, GetExpiration(expiration), policy ?? _defaultPolicy, token);
 
     public ValueTask<bool> SetAsync<T>(CacheKey cacheKey, T? value, DateTimeOffset expiration, CachePolicy? policy, CancellationToken token = default) =>
-        SetCoreAsync(cacheKey, value, CallerDeadline(expiration), policy ?? _defaultPolicy, token);
+        SetCoreAsync(cacheKey, value, GetExpiration(expiration), policy ?? _defaultPolicy, token);
 
 
     /// <summary>
@@ -623,16 +628,16 @@ internal sealed partial class MultilayerCache : MultilayerCacheBase, ICache
     public ValueTask<bool> TryAddAsync<T>(CacheKey cacheKey, T? value, CachePolicy? policy, CancellationToken token = default)
     {
         policy ??= _defaultPolicy;
-        return TryAddCoreAsync(cacheKey, value, PolicyDeadline(policy), policy, token);
+        return TryAddCoreAsync(cacheKey, value, GetExpiration(policy), policy, token);
     }
 
     /// <inheritdoc cref="TryAddAsync{T}(CacheKey, T, CachePolicy, CancellationToken)"/>
     public ValueTask<bool> TryAddAsync<T>(CacheKey cacheKey, T? value, TimeSpan expiration, CachePolicy? policy, CancellationToken token = default) =>
-        TryAddCoreAsync(cacheKey, value, CallerDeadline(expiration), policy ?? _defaultPolicy, token);
+        TryAddCoreAsync(cacheKey, value, GetExpiration(expiration), policy ?? _defaultPolicy, token);
 
     /// <inheritdoc cref="TryAddAsync{T}(CacheKey, T, CachePolicy, CancellationToken)"/>
     public ValueTask<bool> TryAddAsync<T>(CacheKey cacheKey, T? value, DateTimeOffset expiration, CachePolicy? policy, CancellationToken token = default) =>
-        TryAddCoreAsync(cacheKey, value, CallerDeadline(expiration), policy ?? _defaultPolicy, token);
+        TryAddCoreAsync(cacheKey, value, GetExpiration(expiration), policy ?? _defaultPolicy, token);
 
     private async ValueTask<bool> TryAddCoreAsync<T>(CacheKey cacheKey, T? value, DateTimeOffset expiration, CachePolicy policy, CancellationToken token)
     {
@@ -645,7 +650,7 @@ internal sealed partial class MultilayerCache : MultilayerCacheBase, ICache
             return false;
         }
 
-        if (options.Expiration <= _clock.UtcNow)
+        if (options.Expiration <= _clock.GetUtcNow())
         {
             LogTryAddSkippedExpiredEntry(options.CacheKey, options.Expiration);
             return false;
@@ -730,14 +735,14 @@ internal sealed partial class MultilayerCache : MultilayerCacheBase, ICache
     public ValueTask<bool> SetAsync<T>(KeyValuePair<CacheKey, T?>[] keyValues, CachePolicy? policy, CancellationToken token = default)
     {
         policy ??= _defaultPolicy;
-        return SetCoreAsync(keyValues, PolicyDeadline(policy), policy, token);
+        return SetCoreAsync(keyValues, GetExpiration(policy), policy, token);
     }
 
     public ValueTask<bool> SetAsync<T>(KeyValuePair<CacheKey, T?>[] keyValues, TimeSpan expiration, CachePolicy? policy, CancellationToken token = default) =>
-        SetCoreAsync(keyValues, CallerDeadline(expiration), policy ?? _defaultPolicy, token);
+        SetCoreAsync(keyValues, GetExpiration(expiration), policy ?? _defaultPolicy, token);
 
     public ValueTask<bool> SetAsync<T>(KeyValuePair<CacheKey, T?>[] keyValues, DateTimeOffset expiration, CachePolicy? policy, CancellationToken token = default) =>
-        SetCoreAsync(keyValues, CallerDeadline(expiration), policy ?? _defaultPolicy, token);
+        SetCoreAsync(keyValues, GetExpiration(expiration), policy ?? _defaultPolicy, token);
 
     private async ValueTask<bool> SetCoreAsync<T>(CacheKey cacheKey, T? value, DateTimeOffset expiration, CachePolicy policy, CancellationToken token)
     {
@@ -833,14 +838,14 @@ internal sealed partial class MultilayerCache : MultilayerCacheBase, ICache
     public ValueTask<bool> RefreshAsync<T>(CacheKey cacheKey, CachePolicy? policy, CancellationToken token = default)
     {
         policy ??= _defaultPolicy;
-        return RefreshCoreAsync<T>(cacheKey, PolicyDeadline(policy), policy, token);
+        return RefreshCoreAsync<T>(cacheKey, GetExpiration(policy), policy, token);
     }
 
     public ValueTask<bool> RefreshAsync<T>(CacheKey cacheKey, TimeSpan expiration, CachePolicy? policy, CancellationToken token = default) =>
-        RefreshCoreAsync<T>(cacheKey, CallerDeadline(expiration), policy ?? _defaultPolicy, token);
+        RefreshCoreAsync<T>(cacheKey, GetExpiration(expiration), policy ?? _defaultPolicy, token);
 
     public ValueTask<bool> RefreshAsync<T>(CacheKey cacheKey, DateTimeOffset expiration, CachePolicy? policy, CancellationToken token = default) =>
-        RefreshCoreAsync<T>(cacheKey, CallerDeadline(expiration), policy ?? _defaultPolicy, token);
+        RefreshCoreAsync<T>(cacheKey, GetExpiration(expiration), policy ?? _defaultPolicy, token);
 
     private async ValueTask<bool> RefreshCoreAsync<T>(CacheKey cacheKey, DateTimeOffset expiration, CachePolicy policy, CancellationToken token)
     {
@@ -881,7 +886,7 @@ internal sealed partial class MultilayerCache : MultilayerCacheBase, ICache
         NotCacheableException.ThrowIfNotCacheable<T>();
         var cacheEntryOptions = _entryBuilder.BuildEntryOptions<T>(cacheKey, default, token);
         return _memoryCache.TryGetValue<ICacheEntry>(cacheEntryOptions.CacheKey, out var value)
-            ? value?.Expiration.Subtract(_clock.UtcNow)
+            ? value?.Expiration.Subtract(_clock.GetUtcNow())
             : await _innerCache.TimeToLiveAsync<T>(cacheEntryOptions.CacheKey, token);
     }
 

@@ -38,7 +38,7 @@ public class UiPathDistributedCacheTests
             keyStrategy ?? new PrefixCacheKeyStrategy(UiPathDistributedCacheOptions.DefaultKeyPrefix),
             policy: null,
             NullLogger.Instance,
-            _clock,
+            new SystemClockTimeProvider(_clock),
             slideByRewrite);
 
     private static byte[] Ticks(long? value) =>
@@ -202,7 +202,7 @@ public class UiPathDistributedCacheTests
         var cache = new UiPathDistributedCache(
             _inner, new UiPathDistributedCacheOptions(),
             new PrefixCacheKeyStrategy(UiPathDistributedCacheOptions.DefaultKeyPrefix),
-            policy: null, logger, _clock);
+            policy: null, logger, new SystemClockTimeProvider(_clock));
         _inner.SetAsync(Arg.Any<CacheKey>(), Arg.Any<IDictionary<string, byte[]?>>(),
             Arg.Any<TimeSpan>(), Arg.Any<CachePolicy?>(), Arg.Any<CancellationToken>()).Returns(false);
 
@@ -466,7 +466,7 @@ public class UiPathDistributedCacheTests
     }
 
     [Fact]
-    public async Task Absurd_sliding_write_clamps_the_ttl()
+    public async Task Unbounded_sliding_window_reaches_the_backing_cache_as_the_sentinel()
     {
         TimeSpan? ttl = null;
         await _inner.SetAsync(Arg.Any<CacheKey>(), Arg.Any<IDictionary<string, byte[]?>>(),
@@ -475,9 +475,7 @@ public class UiPathDistributedCacheTests
         await _cache.SetAsync("k", Payload,
             new DistributedCacheEntryOptions { SlidingExpiration = TimeSpan.MaxValue }, TestContext.Current.CancellationToken);
 
-        ttl.Should().NotBeNull();
-        // Against a later clock reading than the adapter's, which is what the backing cache actually adds to.
-        FluentActions.Invoking(() => Now.AddSeconds(30).Add(ttl!.Value)).Should().NotThrow();
+        ttl.Should().Be(TimeSpan.MaxValue);
     }
 
     /// <summary>
@@ -498,7 +496,7 @@ public class UiPathDistributedCacheTests
     }
 
     [Fact]
-    public async Task Absurd_default_entry_expiration_is_clamped()
+    public async Task Unbounded_default_entry_expiration_reaches_the_backing_cache_as_the_sentinel()
     {
         TimeSpan? ttl = null;
         await _inner.SetAsync(Arg.Any<CacheKey>(), Arg.Any<IDictionary<string, byte[]?>>(),
@@ -507,9 +505,7 @@ public class UiPathDistributedCacheTests
 
         await cache.SetAsync("k", Payload, new DistributedCacheEntryOptions(), TestContext.Current.CancellationToken);
 
-        ttl.Should().NotBeNull();
-        // Against a later clock reading than the adapter's, which is what the backing cache actually adds to.
-        FluentActions.Invoking(() => Now.AddSeconds(30).Add(ttl!.Value)).Should().NotThrow();
+        ttl.Should().Be(TimeSpan.MaxValue);
     }
 
     private const string FieldOmitted = "\0omitted";

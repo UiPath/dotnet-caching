@@ -225,3 +225,8 @@ static UiPath.Caching.HashCacheSyncExtensions.SetMetadata<T>(this UiPath.Caching
 static UiPath.Caching.HashCacheSyncExtensions.TimeToLive<T>(this UiPath.Caching.IHashCache<T>! cache, UiPath.Caching.CacheKey cacheKey, System.Threading.CancellationToken token = default(System.Threading.CancellationToken)) -> System.TimeSpan?
 virtual UiPath.Caching.SystemJsonByteSerializerProxy.Deserialize<T>(byte[]? value) -> T?
 virtual UiPath.Caching.SystemJsonByteSerializerProxy.Serialize(object? value) -> byte[]?
+static readonly UiPath.Caching.CachePolicy.DefaultDistributedExpiration -> System.TimeSpan
+
+UiPath.Caching.TimeProviderExtensions
+static UiPath.Caching.TimeProviderExtensions.ToDateTimeOffset(this System.TimeProvider! clock, System.DateTimeOffset? dateTimeOffset) -> System.DateTimeOffset
+static UiPath.Caching.TimeProviderExtensions.ToDateTimeOffset(this System.TimeProvider! clock, System.TimeSpan? timeSpan) -> System.DateTimeOffset

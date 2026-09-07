@@ -122,6 +122,21 @@ public class RedisSetCacheTests(ITestContextAccessor testContextAccessor) : IAsy
         await _transaction.Received(1).KeyExpireAsync(_redisKey, Arg.Any<DateTime?>(), CommandFlags.DemandMaster | CommandFlags.FireAndForget);
     }
 
+    /// <summary>The per-call spelling of unbounded lands on PERSIST rather than overflowing into a deadline.</summary>
+    [Fact]
+    public async Task Add_many_with_an_unbounded_duration_persists_the_key()
+    {
+        var items = _fixture.CreateMany<TestDto>().ToArray();
+        _transaction.SetAddAsync(_redisKey, Arg.Any<RedisValue[]>(), CommandFlags.DemandMaster).Returns(items.Length);
+        _transaction.ExecuteAsync(Arg.Any<CommandFlags>()).Returns(true);
+
+        var actual = await Sut.AddAsync<TestDto>(_cacheKey, items, TimeSpan.MaxValue, policy: null, token: testContextAccessor.Current.CancellationToken);
+
+        actual.Should().Be(items.Length);
+        await _transaction.DidNotReceive().KeyExpireAsync(_redisKey, Arg.Any<DateTime?>(), Arg.Any<CommandFlags>());
+        await _transaction.Received(1).KeyPersistAsync(_redisKey, CommandFlags.DemandMaster | CommandFlags.FireAndForget);
+    }
+
     [Fact]
     public async Task Add_many_empty_returns_zero_without_transaction()
     {
@@ -526,6 +541,7 @@ public class RedisSetCacheTests(ITestContextAccessor testContextAccessor) : IAsy
         _database = _fixture.Freeze<IDatabase>();
         _transaction = _fixture.Freeze<ITransaction>();
         _clock = _fixture.Freeze<ISystemClock>();
+        _fixture.Inject<TimeProvider>(new SystemClockTimeProvider(_clock));
         _clock.UtcNow.Returns(_ => _now);
         _logger = _fixture.Freeze<ILogger<RedisSetCache>>();
         _logger.IsEnabled(Arg.Any<LogLevel>()).Returns(true);
@@ -546,7 +562,6 @@ public class RedisSetCacheTests(ITestContextAccessor testContextAccessor) : IAsy
         _redisCacheOptions = new RedisCacheOptions
         {
             DefaultExpiration = TimeSpan.FromSeconds(Random.Shared.Next(1, 100)),
-            Clock = _clock,
             CacheKeyStrategy = _cacheKeyStrategy,
             RedisKeyStrategyFactory = _redisKeyStrategyFactory
         };

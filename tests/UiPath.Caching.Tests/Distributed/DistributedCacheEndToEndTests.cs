@@ -24,10 +24,10 @@ public class DistributedCacheEndToEndTests
     private static ServiceProvider Build(FakeClock clock)
     {
         var services = new ServiceCollection();
-        services.AddSingleton<ISystemClock>(clock);
+        services.AddSingleton<TimeProvider>(new SystemClockTimeProvider(clock));
         services.AddCaching(b =>
         {
-            b.AddMemory(o => o.Clock = clock);
+            b.AddMemory();
             b.AddDistributedCache(KnownCacheProviderNames.InMemory);
         });
         return services.BuildServiceProvider();

@@ -4,13 +4,11 @@ public class RedisCacheOptions : ICacheOptions
 {
     public bool Enabled { get; set; } = true;
 
-    public TimeSpan? DefaultExpiration { get; set; } = TimeSpan.FromHours(1);
+    public TimeSpan? DefaultExpiration { get; set; } = CachePolicy.DefaultDistributedExpiration;
 
     public string KeyPrefix { get; set; } = string.Empty;
 
     public TimeSpan Timeout { get; set; } = TimeSpan.FromSeconds(1);
-
-    public ISystemClock? Clock { get; set; }
 
     public ICacheEntryFactory? EntryFactory { get; set; }
 
