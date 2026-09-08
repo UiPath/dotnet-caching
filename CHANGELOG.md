@@ -366,6 +366,17 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 
 ### Fixed
 
+- **Stale endpoint detection works under the default `allowAdmin=false`.** The membership check
+  issued `CLUSTER NODES`, which StackExchange.Redis refuses client-side unless admin mode is on, so on
+  a default connection every scan recorded a `RedisCommandException` and never reconnected. The scan
+  now refreshes the client's own cluster topology (`IConnectionMultiplexer.ConfigureAsync`, whose
+  `CLUSTER NODES` is an internal call) and reads the `ClusterConfiguration` it records on the
+  configured endpoints, judging only once the refresh has replaced it. When a refreshed node has none
+  on three consecutive refreshes — a non-cluster server, or a Redis user that may not run
+  `CLUSTER NODES` — the scan emits one `Redis.StaleEndpointScanDisabled` event and stops, instead of
+  reporting the same failure every interval. A down node the topology still lists is re-checked only
+  once per threshold and reported once through `Redis.StaleEndpointStillAMember`; a refresh that keeps
+  throwing backs off exponentially, up to an hour between attempts.
 - **`RefreshAsync` on Redis reported nothing.** Both Redis caches sent their standalone
   `KEYEXPIRE`/`PERSIST` fire-and-forget, so the call returned `false` whether the refresh succeeded, failed
   or the key did not exist, the server's reply was never seen — a rejected command was neither logged nor

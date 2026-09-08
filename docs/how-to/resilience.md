@@ -423,7 +423,7 @@ old one (`Redis.ForcedReconnect` event, `OnReconnected` raised).
 |---|---|---|
 | Hang detection | More than 100 commands awaiting a reply on the primary with no read or write for `LastWrite/ReadIntervalThresholdMilliseconds` | `EnableHangDetection`, `HangDetectionDueTime`, `HangDetectionPeriod` |
 | Planned maintenance | `NodeMaintenanceStarting` on the `AzureRedisEvents` channel; probes with a write every second for 10 minutes and reconnects on failure | `PlannedMaintenanceEnabled` |
-| Stale endpoint detection | A topology-discovered node has been disconnected for `StaleEndpointThreshold` and is no longer listed by `CLUSTER NODES` | `EnableStaleEndpointDetection`, `StaleEndpointThreshold`, `StaleEndpointScanInterval` |
+| Stale endpoint detection | A topology-discovered node has been disconnected for `StaleEndpointThreshold` and is no longer in the cluster topology the client refreshes | `EnableStaleEndpointDetection`, `StaleEndpointThreshold`, `StaleEndpointScanInterval` |
 
 **Stale endpoints** are the clustered-cache failure mode. StackExchange.Redis discovers the
 node addresses behind the endpoint you configure and then never forgets one. When a provider
@@ -432,9 +432,29 @@ the old ones — the retired address stays in the multiplexer and is retried on 
 policy forever, logging `It was not possible to connect to the redis server(s) <ip:port>` at
 `Error` every few seconds. Commands still flow to the surviving nodes, so nothing else trips.
 The scan only judges endpoints the multiplexer discovered (never the ones in your connection
-string), only after they have been down for the threshold, and only when a connected server
-confirms the node is gone. A node that is down but still a cluster member is left alone. On a
-non-cluster server the membership query fails and the scan does nothing.
+string), only after they have been down for the threshold, and only when the cluster topology
+confirms the node is gone. The membership check re-runs the client's own connection handshake
+(`IConnectionMultiplexer.ConfigureAsync`) and reads the `ClusterConfiguration` it records on the
+configured endpoints, the only ones that handshake refreshes. The configuration counts only if the
+refresh replaced it, since a landed re-read installs a new instance; if it did not, or the refresh
+was skipped because another reconfiguration was running, or no configured endpoint is connected,
+the scan judges nothing and tries again next interval. That handshake issues `CLUSTER NODES` as an
+internal call, so the scan works under the default `allowAdmin=false` and needs no permission
+beyond what StackExchange.Redis already needs to run against a cluster. A node the cluster still
+lists as reachable is left alone. One the cluster has flagged `fail` is treated like a departed
+one: the client drops such nodes from the topology it exposes and from the endpoints it dials, so
+a rebuilt connection would not retry it either. A down node the topology confirms as a member — one
+unreachable from this client but healthy in the cluster — is asked about again only once per
+`StaleEndpointThreshold`, and its first confirmation emits one `Redis.StaleEndpointStillAMember`
+event naming the endpoints, so the condition is visible without a topology refresh every interval.
+When the refresh itself throws (a handshake that never completes, say), the exception is tracked
+and the scan backs off, doubling the intervals it skips up to an hour, so a persistent fault yields
+a handful of tracked exceptions a day rather than one per interval.
+When a refreshed node reports no cluster configuration — a non-cluster server, or a Redis user
+that may not run `CLUSTER NODES` — membership can never be judged: after three consecutive such
+refreshes, so that a single lost topology reply is retried instead, the scan emits one
+`Redis.StaleEndpointScanDisabled` event and stops for the lifetime of the connector, rather than
+reporting the same failure every interval.
 
 **Which Azure offering sends maintenance events.** The `AzureRedisEvents` channel exists on
 Azure Cache for Redis Basic, Standard and Premium only. Azure Managed Redis (`*.redis.azure.net`)
