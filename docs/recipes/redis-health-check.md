@@ -34,6 +34,10 @@ app.MapHealthChecks("/healthz");
 
 A 3-second timeout is the conventional value — longer than a typical ping (sub-100 ms) but short enough that a hung Redis doesn't keep the probe waiting indefinitely.
 
+The healthy result carries the multiplexer's `IsConnected`, `IsConnecting`, `OperationCount`, `Status` and `DisconnectedEndPoints` (a `;`-joined `host:port` list) in its data, so a probe that is green can still show a node the multiplexer cannot reach. A discovered node that stays in that list after a cluster patch is what [stale endpoint detection](../how-to/resilience.md#redis-connection-self-healing) removes by rebuilding the connection; the health check does not need to fail for that to happen.
+
+`IRedisPlannedMaintenance.InProgress` only ever becomes `true` on Azure Cache for Redis Basic/Standard/Premium, the tiers that publish the `AzureRedisEvents` channel. On Azure Managed Redis the check behaves as if no maintenance tracker were registered.
+
 ## When not to use
 
 - Services that use `AddMemory()` only (no Redis) — `IRedisConnector` isn't registered. Use the standard `Microsoft.Extensions.Diagnostics.HealthChecks` ping or a no-op check instead.

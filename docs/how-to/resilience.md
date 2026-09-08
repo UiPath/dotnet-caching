@@ -412,6 +412,37 @@ cache support.
 }
 ```
 
+## Redis connection self-healing
+
+`RedisConnector` owns one `ConnectionMultiplexer` and lets StackExchange.Redis reconnect on its
+own. Three watchdogs cover the cases where that is not enough; each ends in
+`IRedisConnector.ForceReconnect()`, which builds a fresh multiplexer, swaps it in, and closes the
+old one (`Redis.ForcedReconnect` event, `OnReconnected` raised).
+
+| Watchdog | Trigger | Settings |
+|---|---|---|
+| Hang detection | More than 100 commands awaiting a reply on the primary with no read or write for `LastWrite/ReadIntervalThresholdMilliseconds` | `EnableHangDetection`, `HangDetectionDueTime`, `HangDetectionPeriod` |
+| Planned maintenance | `NodeMaintenanceStarting` on the `AzureRedisEvents` channel; probes with a write every second for 10 minutes and reconnects on failure | `PlannedMaintenanceEnabled` |
+| Stale endpoint detection | A topology-discovered node has been disconnected for `StaleEndpointThreshold` and is no longer listed by `CLUSTER NODES` | `EnableStaleEndpointDetection`, `StaleEndpointThreshold`, `StaleEndpointScanInterval` |
+
+**Stale endpoints** are the clustered-cache failure mode. StackExchange.Redis discovers the
+node addresses behind the endpoint you configure and then never forgets one. When a provider
+replaces a node — an Azure Managed Redis patch creates new VMs, migrates the shards, and deletes
+the old ones — the retired address stays in the multiplexer and is retried on the reconnect
+policy forever, logging `It was not possible to connect to the redis server(s) <ip:port>` at
+`Error` every few seconds. Commands still flow to the surviving nodes, so nothing else trips.
+The scan only judges endpoints the multiplexer discovered (never the ones in your connection
+string), only after they have been down for the threshold, and only when a connected server
+confirms the node is gone. A node that is down but still a cluster member is left alone. On a
+non-cluster server the membership query fails and the scan does nothing.
+
+**Which Azure offering sends maintenance events.** The `AzureRedisEvents` channel exists on
+Azure Cache for Redis Basic, Standard and Premium only. Azure Managed Redis (`*.redis.azure.net`)
+does not publish it, so on that service `PlannedMaintenanceEnabled` never fires and the
+planned-maintenance state never reports in-progress; the stale-endpoint scan and hang detection
+are what recover a connection there. Microsoft's own guidance for Azure Managed Redis is the same
+ForceReconnect pattern: recreate the multiplexer when errors persist past a threshold.
+
 ### Don't roll your own
 
 If you're reaching for `IRedisConnector.Database` directly — manual `StringSet` + JSON,
@@ -432,6 +463,7 @@ Use this table to pick the right knob for a given problem.
 | Redis goes slow or unavailable and callers queue up waiting | Polly circuit-breaker | `AddResilienceStrategies()` + `ExceptionsAllowedBeforeBreaking` |
 | Some caches need different TTLs or rehydrate settings than others | Named policies | `Policies["MyApp.Models.Order"]` |
 | Need per-call TTL overrides without a separate cache instance | Per-call expiration | `expiration:` argument on `GetOrAddAsync` / `SetAsync` |
+| `It was not possible to connect to the redis server(s) <ip:port>` logged every few seconds after a cluster patch | Stale endpoint detection | `EnableStaleEndpointDetection: true` (default), `StaleEndpointThreshold` |
 
 ## Common pitfalls
 

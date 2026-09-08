@@ -13,12 +13,17 @@ public sealed class RedisConnector : IRedisConnector
     private readonly IConnectionMultiplexerFactory _connectionMultiplexerFactory;
     private readonly IEnumerable<IRedisConnectionConfigurator>? _configurators;
     private readonly Timer? _hangDetectionTimer;
+    private readonly ITimer? _staleEndpointTimer;
+    private readonly TimeSpan _staleEndpointThreshold;
+    private readonly TimeProvider _clock;
+    private readonly Dictionary<EndPoint, long> _disconnectedSince = [];
     private readonly Lazy<Version> _version;
     private readonly object _swapLock = new();
 
     private volatile Lazy<Task<IConnectionMultiplexer>> _lazyCacheConnectionMultiplexer;
     private volatile bool _disposed;
     private int _reconnecting;
+    private int _staleScanRunning;
     private ReadWriteStatus? _lastMasterMetrics;
 
     public RedisConnector(ICachingTelemetryProvider telemetryProvider,
@@ -26,6 +31,16 @@ public sealed class RedisConnector : IRedisConnector
         IConnectionMultiplexerFactory connectionMultiplexerFactory,
         IOptions<RedisConnectionOptions> redisOptions,
         IEnumerable<IRedisConnectionConfigurator>? configurators = null)
+        : this(telemetryProvider, redisConfigurationOptionsProvider, connectionMultiplexerFactory, redisOptions, configurators, null)
+    {
+    }
+
+    public RedisConnector(ICachingTelemetryProvider telemetryProvider,
+        IRedisConfigurationOptionsProvider redisConfigurationOptionsProvider,
+        IConnectionMultiplexerFactory connectionMultiplexerFactory,
+        IOptions<RedisConnectionOptions> redisOptions,
+        IEnumerable<IRedisConnectionConfigurator>? configurators,
+        TimeProvider? clock)
     {
         _redisOptions = redisOptions.Value;
 
@@ -35,11 +50,18 @@ public sealed class RedisConnector : IRedisConnector
         _redisConfigurationOptionsProvider = redisConfigurationOptionsProvider;
         _connectionMultiplexerFactory = connectionMultiplexerFactory;
         _configurators = configurators;
+        _clock = clock ?? TimeProvider.System;
         if (_redisOptions.EnableHangDetection)
         {
             var hangDetectionDueTime = _redisOptions.HangDetectionDueTime ?? TimeSpan.FromSeconds(30);
             var hangDetectionPeriod = _redisOptions.HangDetectionPeriod ?? TimeSpan.FromSeconds(5);
             _hangDetectionTimer = new Timer(_ => OnHangScan(), null, hangDetectionDueTime, hangDetectionPeriod);
+        }
+        _staleEndpointThreshold = _redisOptions.StaleEndpointThreshold > TimeSpan.Zero ? _redisOptions.StaleEndpointThreshold : TimeSpan.FromMinutes(5);
+        if (_redisOptions.EnableStaleEndpointDetection)
+        {
+            var scanInterval = _redisOptions.StaleEndpointScanInterval > TimeSpan.Zero ? _redisOptions.StaleEndpointScanInterval : TimeSpan.FromSeconds(30);
+            _staleEndpointTimer = _clock.CreateTimer(state => _ = ScanStaleEndpointsAsync(), null, scanInterval, scanInterval);
         }
         _version = new Lazy<Version>(GetVersion);
     }
@@ -114,14 +136,15 @@ public sealed class RedisConnector : IRedisConnector
             : [];
     }
 
-    public void ForceReconnect()
+    public void ForceReconnect() => ForceReconnect(_lazyCacheConnectionMultiplexer);
+
+    private void ForceReconnect(Lazy<Task<IConnectionMultiplexer>> current)
     {
-        if (_disposed)
+        if (_disposed || !ReferenceEquals(_lazyCacheConnectionMultiplexer, current))
         {
             return;
         }
 
-        var current = _lazyCacheConnectionMultiplexer;
         if (!current.IsValueCreated || !current.Value.IsCompleted)
         {
             return;
@@ -307,8 +330,181 @@ public sealed class RedisConnector : IRedisConnector
             }
 
             _hangDetectionTimer?.Dispose();
+            _staleEndpointTimer?.Dispose();
         }
     }
+
+    /// <summary>Only topology-discovered endpoints can go stale; configured ones are left to StackExchange.Redis.</summary>
+    internal async Task ScanStaleEndpointsAsync()
+    {
+        if (_disposed || Volatile.Read(ref _reconnecting) > 0)
+        {
+            return;
+        }
+
+        var lazy = _lazyCacheConnectionMultiplexer;
+        if (!lazy.IsValueCreated || !lazy.Value.IsCompletedSuccessfully)
+        {
+            return;
+        }
+
+        if (Interlocked.CompareExchange(ref _staleScanRunning, 1, 0) != 0)
+        {
+            return;
+        }
+
+        try
+        {
+            var stale = await FindStaleEndpointsAsync(lazy.Value.Result).ConfigureAwait(false);
+            if (stale.Count == 0 || !ReferenceEquals(_lazyCacheConnectionMultiplexer, lazy))
+            {
+                return;
+            }
+
+            _telemetryProvider.TrackEvent(
+                "Redis.StaleEndpointDetected",
+                [
+                    new("EndPoints", string.Join(";", stale.Select(FormatEndPoint))),
+                    new("Threshold", _staleEndpointThreshold.ToString()),
+                ]);
+            ForceReconnect(lazy); // the timestamps stay until a scan of the new multiplexer prunes them, so a failed rebuild is retried next scan
+        }
+        catch (Exception ex)
+        {
+            _telemetryProvider.TrackException(ex);
+        }
+        finally
+        {
+            Interlocked.Exchange(ref _staleScanRunning, 0);
+        }
+    }
+
+    private async Task<List<EndPoint>> FindStaleEndpointsAsync(IConnectionMultiplexer multiplexer)
+    {
+        var now = _clock.GetTimestamp();
+        var configured = multiplexer.GetEndPoints(configuredOnly: true);
+        IServer? connected = null;
+        var disconnected = new List<IServer>();
+        foreach (var server in multiplexer.GetServers())
+        {
+            if (server.IsConnected)
+            {
+                connected ??= server;
+            }
+            else if (Array.IndexOf(configured, server.EndPoint) < 0)
+            {
+                disconnected.Add(server);
+            }
+        }
+
+        foreach (var endpoint in _disconnectedSince.Keys.Where(e => !disconnected.Exists(s => s.EndPoint.Equals(e))).ToArray())
+        {
+            _disconnectedSince.Remove(endpoint);
+        }
+
+        var overdue = new List<EndPoint>();
+        foreach (var endpoint in disconnected.Select(s => s.EndPoint))
+        {
+            if (!_disconnectedSince.TryGetValue(endpoint, out var since))
+            {
+                _disconnectedSince[endpoint] = now;
+            }
+            else if (_clock.GetElapsedTime(since, now) >= _staleEndpointThreshold)
+            {
+                overdue.Add(endpoint);
+            }
+        }
+
+        if (overdue.Count == 0 || connected is null)
+        {
+            return [];
+        }
+
+        var members = await GetClusterMemberAddressesAsync(connected).ConfigureAwait(false);
+        return members is null ? [] : overdue.Where(ep => !members.Contains(FormatEndPoint(ep))).ToList();
+    }
+
+    private static async Task<HashSet<string>?> GetClusterMemberAddressesAsync(IServer server)
+    {
+        try
+        {
+            var members = ParseClusterNodeAddresses(await server.ClusterNodesRawAsync().ConfigureAwait(false));
+            return members.Count == 0 ? null : members; // a real reply lists at least the answering node
+        }
+        catch (RedisServerException ex) when (IsNotACluster(ex))
+        {
+            return null;
+        }
+    }
+
+    private static bool IsNotACluster(RedisServerException ex) =>
+        ex.Message.Contains("cluster support disabled", StringComparison.OrdinalIgnoreCase)
+        || ex.Message.StartsWith("ERR unknown command", StringComparison.OrdinalIgnoreCase)
+        || ex.Message.StartsWith("ERR unknown subcommand", StringComparison.OrdinalIgnoreCase);
+
+    internal static HashSet<string> ParseClusterNodeAddresses(string? clusterNodes)
+    {
+        var addresses = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        if (string.IsNullOrWhiteSpace(clusterNodes))
+        {
+            return addresses;
+        }
+
+        foreach (var line in clusterNodes.Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+        {
+            AddNodeAddresses(line, addresses);
+        }
+
+        return addresses;
+    }
+
+    private static void AddNodeAddresses(string line, HashSet<string> addresses)
+    {
+        var fields = line.Split(' ');
+        if (fields.Length < 3 || fields[2].Contains("noaddr", StringComparison.OrdinalIgnoreCase))
+        {
+            return;
+        }
+
+        // <ip:port@cport[,hostname[,aux=value...]]>
+        var address = fields[1].AsSpan();
+        var at = address.IndexOf('@');
+        var hostPort = at < 0 ? address : address[..at];
+        var portSeparator = hostPort.LastIndexOf(':');
+        if (portSeparator < 0)
+        {
+            return;
+        }
+
+        var port = hostPort[(portSeparator + 1)..];
+        addresses.Add(IPAddress.TryParse(hostPort[..portSeparator], out var ip) ? $"{ip}:{port}" : hostPort.ToString()); // canonical spelling, as FormatEndPoint produces
+        var hostname = HostnameSegment(at < 0 ? default : address[(at + 1)..]);
+        if (!hostname.IsEmpty)
+        {
+            addresses.Add($"{hostname}:{port}");
+        }
+    }
+
+    /// <summary>The hostname is the first comma-separated segment after the cluster port; anything after it is auxiliary.</summary>
+    private static ReadOnlySpan<char> HostnameSegment(ReadOnlySpan<char> afterAt)
+    {
+        var comma = afterAt.IndexOf(',');
+        if (comma < 0)
+        {
+            return default;
+        }
+
+        var hostname = afterAt[(comma + 1)..];
+        var next = hostname.IndexOf(',');
+        return next < 0 ? hostname : hostname[..next];
+    }
+
+    internal static string FormatEndPoint(EndPoint endPoint) => endPoint switch
+    {
+        IPEndPoint ip => $"{ip.Address}:{ip.Port}",
+        DnsEndPoint dns => $"{dns.Host}:{dns.Port}",
+        _ => endPoint.ToString() ?? string.Empty,
+    };
 
     private void TryDisposeMultiplexer(IConnectionMultiplexer multiplexer)
     {

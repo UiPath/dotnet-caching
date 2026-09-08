@@ -94,3 +94,10 @@ UiPath.Caching.Redis.RedisCacheBase.RedisCacheBase(UiPath.Caching.Redis.IRedisCo
 UiPath.Caching.Redis.RedisCacheProvider.RedisCacheProvider(Microsoft.Extensions.Options.IOptions<UiPath.Caching.Redis.RedisCacheOptions!>! redisCacheOptions, Microsoft.Extensions.Options.IOptions<UiPath.Caching.CacheOptions!>! cacheOptions, UiPath.Caching.Redis.IRedisConnector! redis, UiPath.Caching.ISerializerProxy<byte[]!>! serializerProxy, UiPath.Caching.Policies.IResiliencePipelineProvider! resiliencePipelineProvider, UiPath.Caching.Telemetry.ICachingTelemetryProvider! cachingTelemetryProvider, Microsoft.Extensions.Logging.ILoggerFactory! loggerFactory, UiPath.Caching.ICachePolicyFactory! policyFactory, System.TimeProvider! clock) -> void
 readonly UiPath.Caching.MultilayerCacheBase._clock -> System.TimeProvider!
 static UiPath.Caching.Config.ServiceCollectionExtensions.TryAddTimeProvider(this Microsoft.Extensions.DependencyInjection.IServiceCollection! services) -> Microsoft.Extensions.DependencyInjection.IServiceCollection!
+UiPath.Caching.Redis.RedisConnector.RedisConnector(UiPath.Caching.Telemetry.ICachingTelemetryProvider! telemetryProvider, UiPath.Caching.Redis.IRedisConfigurationOptionsProvider! redisConfigurationOptionsProvider, UiPath.Caching.Redis.IConnectionMultiplexerFactory! connectionMultiplexerFactory, Microsoft.Extensions.Options.IOptions<UiPath.Caching.Redis.RedisConnectionOptions!>! redisOptions, System.Collections.Generic.IEnumerable<UiPath.Caching.Redis.IRedisConnectionConfigurator!>? configurators, System.TimeProvider? clock) -> void
+UiPath.Caching.Redis.RedisConnectionOptions.EnableStaleEndpointDetection.get -> bool
+UiPath.Caching.Redis.RedisConnectionOptions.EnableStaleEndpointDetection.set -> void
+UiPath.Caching.Redis.RedisConnectionOptions.StaleEndpointThreshold.get -> System.TimeSpan
+UiPath.Caching.Redis.RedisConnectionOptions.StaleEndpointThreshold.set -> void
+UiPath.Caching.Redis.RedisConnectionOptions.StaleEndpointScanInterval.get -> System.TimeSpan
+UiPath.Caching.Redis.RedisConnectionOptions.StaleEndpointScanInterval.set -> void

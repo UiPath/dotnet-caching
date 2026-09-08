@@ -117,6 +117,20 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
   fire on exceptions only, and re-issuing `NX` is harmless, since an attempt whose reply was lost is
   refused by the key it just wrote and reports the same `false` the exception would have, while an
   attempt that never reached Redis is recovered as the `true` it should have been.
+- **Stale cluster endpoint detection.** `RedisConnector` now rebuilds the multiplexer when a cluster
+  node it discovered has left the cluster but is still being retried. StackExchange.Redis never forgets
+  a server it has seen, so when a node is replaced — an Azure Managed Redis patch swaps the node VMs
+  and retires their endpoints — the old address is retried and logged as an error every few seconds
+  for the life of the process; only a fresh multiplexer re-reads the topology. Every
+  `StaleEndpointScanInterval` (default 30 s) the connector notes which topology-discovered servers are
+  disconnected; one that stays down for `StaleEndpointThreshold` (default 5 min) is checked against
+  `CLUSTER NODES` on a connected server, and if it is no longer a member the connector emits
+  `Redis.StaleEndpointDetected` and calls `ForceReconnect()`. Configured endpoints are never judged
+  stale, a node that is down but still in the cluster is left to StackExchange.Redis, and a
+  non-cluster server is ignored. Opt out with `EnableStaleEndpointDetection = false`. `RedisConnector`
+  gains a constructor overload that takes a `TimeProvider`; the existing one keeps using `TimeProvider.System`.
+  `RedisHealthCheck` reports the disconnected endpoints under
+  `ConnectionMultiplexer.DisconnectedEndPoints`.
 
 ### Changed
 

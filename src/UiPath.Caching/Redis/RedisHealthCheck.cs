@@ -31,6 +31,7 @@ public class RedisHealthCheck : IHealthCheck
                     { "ConnectionMultiplexer.IsConnecting",  _redisConnector.Database.Multiplexer ?.IsConnecting ?? false },
                     { "ConnectionMultiplexer.OperationCount",  _redisConnector.Database.Multiplexer?.OperationCount ?? -1 },
                     { "ConnectionMultiplexer.Status",  _redisConnector.Database.Multiplexer?.GetStatus() ?? "N/A" },
+                    { "ConnectionMultiplexer.DisconnectedEndPoints", DisconnectedEndPoints(_redisConnector.Database.Multiplexer) },
                 });
         }
         catch (Exception ex)
@@ -38,4 +39,9 @@ public class RedisHealthCheck : IHealthCheck
             return new HealthCheckResult(context.Registration.FailureStatus, exception: ex);
         }
     }
+
+    private static string DisconnectedEndPoints(IConnectionMultiplexer? multiplexer) =>
+        multiplexer is null
+            ? "N/A"
+            : string.Join(";", multiplexer.GetServers().Where(s => !s.IsConnected).Select(s => RedisConnector.FormatEndPoint(s.EndPoint)));
 }
