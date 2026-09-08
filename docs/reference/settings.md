@@ -63,7 +63,7 @@ Every binding-visible property on every shipped options class, with shipped defa
 | `DefaultVersion` | `string?` | `"6.0"` | App-wide | Redis server version hint passed to StackExchange.Redis for command compatibility. |
 | `HangDetectionDueTime` | `TimeSpan?` | `null` | App-wide | Delay before the first hang-detection check; `null` = 30 s library default. |
 | `HangDetectionPeriod` | `TimeSpan?` | `null` | App-wide | Period between hang-detection checks; `null` = library default. |
-| `EnableStaleEndpointDetection` | `bool` | `true` | App-wide | Rebuild the connection when a cluster node the multiplexer discovered has left the cluster but is still being retried (see [Redis connection self-healing](../how-to/resilience.md#redis-connection-self-healing)). |
+| `EnableStaleEndpointDetection` | `bool` | `true` | App-wide | Rebuild the connection when a cluster node the multiplexer discovered has left the cluster but is still being retried (see [Redis connection self-healing](../how-to/resilience.md#redis-connection-self-healing)). Works under the default `allowAdmin=false`; emits one `Redis.StaleEndpointScanDisabled` event and stops when no refreshed node reports a cluster configuration. |
 | `StaleEndpointThreshold` | `TimeSpan` | `00:05:00` | App-wide | How long a discovered endpoint must stay disconnected before its cluster membership is checked; non-positive falls back to the default. |
 | `StaleEndpointScanInterval` | `TimeSpan` | `00:00:30` | App-wide | Period between stale-endpoint scans; non-positive falls back to the default. |
 | `FailFastBacklogPolicy` | `bool?` | `null` | App-wide | `null` = library default; `true` = fail immediately when the command backlog is full. |

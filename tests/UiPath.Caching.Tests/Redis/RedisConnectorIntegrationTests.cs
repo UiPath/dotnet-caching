@@ -1,3 +1,4 @@
+using System.Globalization;
 using Microsoft.Extensions.Logging.Abstractions;
 using StackExchange.Redis;
 using UiPath.Caching.Redis;
@@ -48,6 +49,39 @@ public class RedisConnectorIntegrationTests(RedisContainerFixture fixture)
         connector.IsConnected.Should().BeTrue();
         await connector.Database.StringSetAsync("k2", "v2");
         (await connector.Database.StringGetAsync("k2")).ToString().Should().Be("v2");
+    }
+
+    [Fact]
+    public async Task RefreshClusterMembership_ReachesTheServer_UnderTheDefaultConnectionString()
+    {
+        Assert.SkipUnless(fixture.Enabled, "Set RUN_REDIS_INTEGRATION_TESTS=1 (Docker required) to run.");
+        Assert.SkipWhen(ConfigurationOptions.Parse(fixture.ConnectionString).AllowAdmin, "The point is the default allowAdmin=false.");
+
+        using var connector = NewConnector();
+        await using var multiplexer = await ConnectionMultiplexer.ConnectAsync(fixture.ConnectionString);
+        await using var observer = await ConnectionMultiplexer.ConnectAsync(fixture.ConnectionString + ",allowAdmin=true");
+        var clusterCallsBefore = await ClusterCommandCallsAsync(observer);
+
+        var memberships = new List<ClusterMembership>();
+        for (var refreshes = 0; refreshes < RedisConnector.NullTopologyRefreshLimit; refreshes++)
+        {
+            memberships.Add(await connector.RefreshClusterMembershipAsync(multiplexer));
+        }
+
+        memberships.Take(RedisConnector.NullTopologyRefreshLimit - 1).Should().AllSatisfy(m => m.Conclusive.Should().BeFalse("one missing configuration could still be a lost reply"));
+        memberships[^1].Conclusive.Should().BeTrue();
+        memberships[^1].Members.Should().BeNull("a standalone server has no cluster configuration");
+        (await ClusterCommandCallsAsync(observer) - clusterCallsBefore).Should().BeGreaterThanOrEqualTo(
+            RedisConnector.NullTopologyRefreshLimit, "each refresh must carry the client's own CLUSTER NODES to the server");
+    }
+
+    /// <summary>Server-side count of CLUSTER commands, which the client only ever sends from its handshake.</summary>
+    private static async Task<long> ClusterCommandCallsAsync(ConnectionMultiplexer observer)
+    {
+        var sections = await observer.GetServer(observer.GetEndPoints()[0]).InfoAsync("commandstats");
+        return sections.SelectMany(section => section)
+            .Where(stat => stat.Key.StartsWith("cmdstat_cluster", StringComparison.OrdinalIgnoreCase))
+            .Sum(stat => long.Parse(stat.Value.Split(',')[0]["calls=".Length..], CultureInfo.InvariantCulture));
     }
 
     [Fact]

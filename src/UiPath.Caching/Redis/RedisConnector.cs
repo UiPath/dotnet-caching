@@ -7,6 +7,12 @@ namespace UiPath.Caching.Redis;
 
 public sealed class RedisConnector : IRedisConnector
 {
+    /// <summary>Consecutive refreshes a node may report no configuration before the scan concludes it never will.</summary>
+    internal const int NullTopologyRefreshLimit = 3;
+
+    /// <summary>Most scan intervals skipped after a failing refresh: an hour at the default interval.</summary>
+    internal const int MaxScanBackoff = 120;
+
     private readonly RedisConnectionOptions _redisOptions;
     private readonly ICachingTelemetryProvider _telemetryProvider;
     private readonly IRedisConfigurationOptionsProvider _redisConfigurationOptionsProvider;
@@ -17,13 +23,20 @@ public sealed class RedisConnector : IRedisConnector
     private readonly TimeSpan _staleEndpointThreshold;
     private readonly TimeProvider _clock;
     private readonly Dictionary<EndPoint, long> _disconnectedSince = [];
+    private readonly Dictionary<EndPoint, long> _memberConfirmedAt = [];
+    private readonly IClusterTopologyReader _topologyReader;
     private readonly Lazy<Version> _version;
     private readonly object _swapLock = new();
 
     private volatile Lazy<Task<IConnectionMultiplexer>> _lazyCacheConnectionMultiplexer;
     private volatile bool _disposed;
+    private volatile bool _staleScanDisabled;
     private int _reconnecting;
     private int _staleScanRunning;
+    private int _nullTopologyRefreshes;
+    private IConnectionMultiplexer? _nullTopologyMultiplexer;
+    private int _scanFailures;
+    private int _scansToSkip;
     private ReadWriteStatus? _lastMasterMetrics;
 
     public RedisConnector(ICachingTelemetryProvider telemetryProvider,
@@ -41,6 +54,17 @@ public sealed class RedisConnector : IRedisConnector
         IOptions<RedisConnectionOptions> redisOptions,
         IEnumerable<IRedisConnectionConfigurator>? configurators,
         TimeProvider? clock)
+        : this(telemetryProvider, redisConfigurationOptionsProvider, connectionMultiplexerFactory, redisOptions, configurators, clock, null)
+    {
+    }
+
+    internal RedisConnector(ICachingTelemetryProvider telemetryProvider,
+        IRedisConfigurationOptionsProvider redisConfigurationOptionsProvider,
+        IConnectionMultiplexerFactory connectionMultiplexerFactory,
+        IOptions<RedisConnectionOptions> redisOptions,
+        IEnumerable<IRedisConnectionConfigurator>? configurators,
+        TimeProvider? clock,
+        IClusterTopologyReader? topologyReader)
     {
         _redisOptions = redisOptions.Value;
 
@@ -51,6 +75,7 @@ public sealed class RedisConnector : IRedisConnector
         _connectionMultiplexerFactory = connectionMultiplexerFactory;
         _configurators = configurators;
         _clock = clock ?? TimeProvider.System;
+        _topologyReader = topologyReader ?? ClusterConfigurationReader.Instance;
         if (_redisOptions.EnableHangDetection)
         {
             var hangDetectionDueTime = _redisOptions.HangDetectionDueTime ?? TimeSpan.FromSeconds(30);
@@ -337,7 +362,7 @@ public sealed class RedisConnector : IRedisConnector
     /// <summary>Only topology-discovered endpoints can go stale; configured ones are left to StackExchange.Redis.</summary>
     internal async Task ScanStaleEndpointsAsync()
     {
-        if (_disposed || Volatile.Read(ref _reconnecting) > 0)
+        if (_disposed || _staleScanDisabled || Volatile.Read(ref _reconnecting) > 0)
         {
             return;
         }
@@ -355,8 +380,26 @@ public sealed class RedisConnector : IRedisConnector
 
         try
         {
+            if (_scansToSkip > 0)
+            {
+                _scansToSkip--;
+                return;
+            }
+
             var stale = await FindStaleEndpointsAsync(lazy.Value.Result).ConfigureAwait(false);
-            if (stale.Count == 0 || !ReferenceEquals(_lazyCacheConnectionMultiplexer, lazy))
+            _scanFailures = 0;
+            if (!ReferenceEquals(_lazyCacheConnectionMultiplexer, lazy))
+            {
+                return;
+            }
+
+            if (stale is null)
+            {
+                DisableStaleEndpointScan(lazy);
+                return;
+            }
+
+            if (stale.Count == 0)
             {
                 return;
             }
@@ -371,6 +414,7 @@ public sealed class RedisConnector : IRedisConnector
         }
         catch (Exception ex)
         {
+            _scansToSkip = Math.Min(1 << Math.Min(++_scanFailures, 7), MaxScanBackoff); // a handshake that never completes fails every refresh; back off instead of tracking it every interval
             _telemetryProvider.TrackException(ex);
         }
         finally
@@ -379,7 +423,8 @@ public sealed class RedisConnector : IRedisConnector
         }
     }
 
-    private async Task<List<EndPoint>> FindStaleEndpointsAsync(IConnectionMultiplexer multiplexer)
+    /// <returns>Null when no connected node carries a cluster configuration, so membership can never be judged.</returns>
+    private async Task<List<EndPoint>?> FindStaleEndpointsAsync(IConnectionMultiplexer multiplexer)
     {
         var now = _clock.GetTimestamp();
         var configured = multiplexer.GetEndPoints(configuredOnly: true);
@@ -400,6 +445,7 @@ public sealed class RedisConnector : IRedisConnector
         foreach (var endpoint in _disconnectedSince.Keys.Where(e => !disconnected.Exists(s => s.EndPoint.Equals(e))).ToArray())
         {
             _disconnectedSince.Remove(endpoint);
+            _memberConfirmedAt.Remove(endpoint);
         }
 
         var overdue = new List<EndPoint>();
@@ -409,7 +455,7 @@ public sealed class RedisConnector : IRedisConnector
             {
                 _disconnectedSince[endpoint] = now;
             }
-            else if (_clock.GetElapsedTime(since, now) >= _staleEndpointThreshold)
+            else if (_clock.GetElapsedTime(since, now) >= _staleEndpointThreshold && !IsRecentlyConfirmedMember(endpoint, now))
             {
                 overdue.Add(endpoint);
             }
@@ -420,83 +466,111 @@ public sealed class RedisConnector : IRedisConnector
             return [];
         }
 
-        var members = await GetClusterMemberAddressesAsync(connected).ConfigureAwait(false);
-        return members is null ? [] : overdue.Where(ep => !members.Contains(FormatEndPoint(ep))).ToList();
-    }
-
-    private static async Task<HashSet<string>?> GetClusterMemberAddressesAsync(IServer server)
-    {
-        try
+        var membership = await RefreshClusterMembershipAsync(multiplexer).ConfigureAwait(false);
+        if (!membership.Conclusive)
         {
-            var members = ParseClusterNodeAddresses(await server.ClusterNodesRawAsync().ConfigureAwait(false));
-            return members.Count == 0 ? null : members; // a real reply lists at least the answering node
+            return [];
         }
-        catch (RedisServerException ex) when (IsNotACluster(ex))
+
+        if (membership.Members is null)
         {
             return null;
         }
+
+        var confirmed = overdue.Where(membership.Members.Contains).ToList();
+        RecordConfirmedMembers(confirmed, now);
+        return overdue.Except(confirmed).ToList();
     }
 
-    private static bool IsNotACluster(RedisServerException ex) =>
-        ex.Message.Contains("cluster support disabled", StringComparison.OrdinalIgnoreCase)
-        || ex.Message.StartsWith("ERR unknown command", StringComparison.OrdinalIgnoreCase)
-        || ex.Message.StartsWith("ERR unknown subcommand", StringComparison.OrdinalIgnoreCase);
-
-    internal static HashSet<string> ParseClusterNodeAddresses(string? clusterNodes)
+    /// <summary>A member the cluster still lists is asked about again only once per threshold, and reported the first time.</summary>
+    private void RecordConfirmedMembers(List<EndPoint> confirmed, long now)
     {
-        var addresses = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-        if (string.IsNullOrWhiteSpace(clusterNodes))
+        var firstTime = confirmed.Where(endpoint => !_memberConfirmedAt.ContainsKey(endpoint)).ToList();
+        foreach (var endpoint in confirmed)
         {
-            return addresses;
+            _memberConfirmedAt[endpoint] = now;
         }
 
-        foreach (var line in clusterNodes.Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+        if (firstTime.Count > 0)
         {
-            AddNodeAddresses(line, addresses);
-        }
-
-        return addresses;
-    }
-
-    private static void AddNodeAddresses(string line, HashSet<string> addresses)
-    {
-        var fields = line.Split(' ');
-        if (fields.Length < 3 || fields[2].Contains("noaddr", StringComparison.OrdinalIgnoreCase))
-        {
-            return;
-        }
-
-        // <ip:port@cport[,hostname[,aux=value...]]>
-        var address = fields[1].AsSpan();
-        var at = address.IndexOf('@');
-        var hostPort = at < 0 ? address : address[..at];
-        var portSeparator = hostPort.LastIndexOf(':');
-        if (portSeparator < 0)
-        {
-            return;
-        }
-
-        var port = hostPort[(portSeparator + 1)..];
-        addresses.Add(IPAddress.TryParse(hostPort[..portSeparator], out var ip) ? $"{ip}:{port}" : hostPort.ToString()); // canonical spelling, as FormatEndPoint produces
-        var hostname = HostnameSegment(at < 0 ? default : address[(at + 1)..]);
-        if (!hostname.IsEmpty)
-        {
-            addresses.Add($"{hostname}:{port}");
+            _telemetryProvider.TrackEvent(
+                "Redis.StaleEndpointStillAMember",
+                [
+                    new("EndPoints", string.Join(";", firstTime.Select(FormatEndPoint))),
+                    new("Threshold", _staleEndpointThreshold.ToString()),
+                ]);
         }
     }
 
-    /// <summary>The hostname is the first comma-separated segment after the cluster port; anything after it is auxiliary.</summary>
-    private static ReadOnlySpan<char> HostnameSegment(ReadOnlySpan<char> afterAt)
+    private bool IsRecentlyConfirmedMember(EndPoint endpoint, long now) =>
+        _memberConfirmedAt.TryGetValue(endpoint, out var confirmedAt) && _clock.GetElapsedTime(confirmedAt, now) < _staleEndpointThreshold;
+
+    internal async Task<ClusterMembership> RefreshClusterMembershipAsync(IConnectionMultiplexer multiplexer)
     {
-        var comma = afterAt.IndexOf(',');
-        if (comma < 0)
+        // A non-initial reconfigure re-handshakes the configured endpoints only, so only their configuration can become current.
+        var configured = multiplexer.GetEndPoints(configuredOnly: true);
+        var candidates = multiplexer.GetServers()
+            .Where(server => server.IsConnected && Array.IndexOf(configured, server.EndPoint) >= 0)
+            .Select(server => (Server: server, Before: _topologyReader.GetConfiguration(server)))
+            .ToList();
+
+        // The client's own handshake reads CLUSTER NODES as an internal call, so AllowAdmin does not apply; false means another reconfiguration held the guard.
+        if (candidates.Count == 0 || !await multiplexer.ConfigureAsync().ConfigureAwait(false))
         {
-            return default;
+            return ClusterMembership.Inconclusive;
         }
 
-        var hostname = afterAt[(comma + 1)..];
-        var next = hostname.IndexOf(',');
-        return next < 0 ? hostname : hostname[..next];
+        var unchanged = false;
+        var neverConfigured = false;
+        foreach (var (server, before) in candidates)
+        {
+            var after = _topologyReader.GetConfiguration(server);
+            if (after is null)
+            {
+                neverConfigured |= before is null && server.IsConnected;
+            }
+            else if (ReferenceEquals(after, before))
+            {
+                unchanged = true; // a landed re-read installs a new instance, so the same one means this node's refresh failed
+            }
+            else if (server.IsConnected)
+            {
+                _nullTopologyRefreshes = 0;
+                return new(Conclusive: true, _topologyReader.GetMembers(after));
+            }
+        }
+
+        if (unchanged || !neverConfigured)
+        {
+            _nullTopologyRefreshes = 0;
+            return ClusterMembership.Inconclusive;
+        }
+
+        // A node with no configuration may have lost only the topology reply; a persistent absence means it cannot answer it.
+        // The streak belongs to the multiplexer it was observed on, so a rebuilt one starts over.
+        if (!ReferenceEquals(_nullTopologyMultiplexer, multiplexer))
+        {
+            _nullTopologyMultiplexer = multiplexer;
+            _nullTopologyRefreshes = 0;
+        }
+
+        return ++_nullTopologyRefreshes >= NullTopologyRefreshLimit ? new(Conclusive: true, Members: null) : ClusterMembership.Inconclusive;
+    }
+
+    private void DisableStaleEndpointScan(Lazy<Task<IConnectionMultiplexer>> judged)
+    {
+        lock (_swapLock)
+        {
+            if (_disposed || !ReferenceEquals(_lazyCacheConnectionMultiplexer, judged))
+            {
+                return;
+            }
+
+            _staleScanDisabled = true;
+        }
+
+        _staleEndpointTimer?.Dispose();
+        _telemetryProvider.TrackEvent("Redis.StaleEndpointScanDisabled", [new("Reason", "NoClusterConfiguration")]);
     }
 
     internal static string FormatEndPoint(EndPoint endPoint) => endPoint switch
