@@ -442,10 +442,10 @@ public class RedisConnectorStaleEndpointTests
         h.Telemetry.Events.Should().BeEmpty();
 
         h.Multiplexer.ConfigureAsync(Arg.Any<TextWriter?>()).Returns(_ => h.Topology.Refreshed());
-        for (var i = 0; i < 8 && h.Factory.CreateCount == 1; i++)
+        for (var i = 0; i < 8 && !h.Telemetry.Events.Contains("Redis.StaleEndpointDetected"); i++)
         {
             h.Clock.Advance(TimeSpan.FromSeconds(30));
-            await h.Connector.ScanStaleEndpointsAsync(); // the remaining skipped intervals run out, then the refresh lands
+            await h.Connector.ScanStaleEndpointsAsync(); // the remaining skipped intervals run out, then the refresh lands; the event is recorded before the rebuild is queued
         }
         await h.OldDisposed.Task.WaitAsync(TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken);
 
