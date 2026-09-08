@@ -82,7 +82,7 @@ public class RedisConnectorLifecycleTests
         return new RedisConnector(telemetry ?? NullTelemetryProvider.Instance, optionsProvider, factory, options);
     }
 
-    private static RedisConnectionException ConnectFailure() => new(ConnectionFailureType.UnableToConnect, "boom");
+    private static RedisConnectionException ConnectFailure() => new(ConnectionFailureType.UnableToConnect, CommandFlags.None, "boom");
 
     [Fact]
     public async Task Dispose_DisposesMultiplexer_WhenConnected()

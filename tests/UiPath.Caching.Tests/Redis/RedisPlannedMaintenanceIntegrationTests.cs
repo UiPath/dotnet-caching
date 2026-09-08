@@ -47,7 +47,7 @@ public class RedisPlannedMaintenanceIntegrationTests(RedisContainerFixture fixtu
 
             return new ValueTask<IConnectionMultiplexer>(
                 Task.FromException<IConnectionMultiplexer>(
-                    new RedisConnectionException(ConnectionFailureType.UnableToConnect, "boom")));
+                    new RedisConnectionException(ConnectionFailureType.UnableToConnect, CommandFlags.None, "boom")));
         }
     }
 

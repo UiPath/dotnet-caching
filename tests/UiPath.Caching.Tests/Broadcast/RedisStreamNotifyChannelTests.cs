@@ -59,7 +59,7 @@ public class RedisStreamNotifyChannelTests
                 }
                 if (n == 1)
                 {
-                    throw new RedisConnectionException(ConnectionFailureType.SocketFailure, "boom");
+                    throw new RedisConnectionException(ConnectionFailureType.SocketFailure, CommandFlags.None, "boom");
                 }
             });
 
@@ -197,7 +197,7 @@ public class RedisStreamNotifyChannelTests
         subscriber.When(s => s.Subscribe(channel, Arg.Any<Action<RedisChannel, RedisValue>>()))
             .Do(_ => subscribed.TrySetResult(true));
         subscriber.When(s => s.Unsubscribe(channel, Arg.Any<Action<RedisChannel, RedisValue>>(), Arg.Any<CommandFlags>()))
-            .Do(_ => throw new RedisConnectionException(ConnectionFailureType.SocketFailure, "down"));
+            .Do(_ => throw new RedisConnectionException(ConnectionFailureType.SocketFailure, CommandFlags.None, "down"));
 
         using var waiter = new SignalingFetchWaiter(5.Seconds());
         var sut = new RedisStreamNotifyChannel(channel, redis, _fixture.Create<ILogger>(), waiter, null, 10.Milliseconds());
@@ -257,7 +257,7 @@ public class RedisStreamNotifyChannelTests
                 if (n >= 2) secondSubscribed.TrySetResult(true);
             });
         subscriber.When(s => s.Unsubscribe(channel, Arg.Any<Action<RedisChannel, RedisValue>>(), Arg.Any<CommandFlags>()))
-            .Do(_ => throw new RedisConnectionException(ConnectionFailureType.SocketFailure, "stale"));
+            .Do(_ => throw new RedisConnectionException(ConnectionFailureType.SocketFailure, CommandFlags.None, "stale"));
 
         using var waiter = new SignalingFetchWaiter(5.Seconds());
         using var sut = new RedisStreamNotifyChannel(channel, redis, _fixture.Create<ILogger>(), waiter, 60.Seconds(), 10.Milliseconds());
