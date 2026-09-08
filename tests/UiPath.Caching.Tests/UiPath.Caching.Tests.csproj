@@ -6,6 +6,8 @@
     <SonarQubeTestProject>true</SonarQubeTestProject>
     <!-- AutoFixture.AutoNSubstitute 4.18.1 caps NSubstitute at <6, but 6.2.0 is used and passes; the pin is intentional. -->
     <NoWarn>$(NoWarn);NU1608</NoWarn>
+    <!-- SER305 flags awaiting a queued ITransaction command; here those awaits are NSubstitute Received() checks on a mock. -->
+    <NoWarn>$(NoWarn);SER305</NoWarn>
   </PropertyGroup>
 
   <ItemGroup>
