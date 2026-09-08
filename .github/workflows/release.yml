@@ -59,7 +59,7 @@ jobs:
         run: dotnet build UiPath.Caching.slnx -c Release --no-restore /p:Version=${{ steps.version.outputs.value }}
 
       - name: Test
-        run: dotnet test UiPath.Caching.slnx -c Release --no-build
+        run: dotnet test --solution UiPath.Caching.slnx -c Release --no-build
 
       - name: FOSSA analyze (upload)
         if: env.FOSSA_API_KEY != ''
