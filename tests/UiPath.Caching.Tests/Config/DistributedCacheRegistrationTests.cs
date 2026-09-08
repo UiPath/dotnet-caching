@@ -186,7 +186,7 @@ public class DistributedCacheRegistrationTests
         services.AddCaching(
             b =>
             {
-                b.AddRedisConnection(o => o.ConnectionString = "localhost:6379,abortConnect=false");
+                b.AddRedisConnection(o => o.ConnectionString = "localhost:6379,abortConnect=false,connectTimeout=1000,syncTimeout=1000");
                 b.AddRedis(_ => { });
                 b.AddDistributedCache(KnownCacheProviderNames.Redis, o => o.RedisKeyStrategyFactory = factory);
             },
@@ -210,7 +210,7 @@ public class DistributedCacheRegistrationTests
         services.AddCaching(
             b =>
             {
-                b.AddRedisConnection(o => o.ConnectionString = "localhost:6379,abortConnect=false");
+                b.AddRedisConnection(o => o.ConnectionString = "localhost:6379,abortConnect=false,connectTimeout=1000,syncTimeout=1000");
                 b.AddRedis(_ => { });
                 b.AddDistributedCache(KnownCacheProviderNames.Redis,
                     o => o.RedisKeyStrategyFactory = new ApplicationHashImpersonatingFactory());
@@ -249,7 +249,7 @@ public class DistributedCacheRegistrationTests
         services.AddCaching(
             b =>
             {
-                b.AddRedisConnection(o => o.ConnectionString = "localhost:6379,abortConnect=false");
+                b.AddRedisConnection(o => o.ConnectionString = "localhost:6379,abortConnect=false,connectTimeout=1000,syncTimeout=1000");
                 b.AddRedis(o => o.RedisKeyStrategyFactory = new FixedRedisKeyStrategyFactory());
                 b.AddDistributedCache(KnownCacheProviderNames.Redis);
             },
@@ -272,7 +272,7 @@ public class DistributedCacheRegistrationTests
         services.AddCaching(
             b =>
             {
-                b.AddRedisConnection(o => o.ConnectionString = "localhost:6379,abortConnect=false");
+                b.AddRedisConnection(o => o.ConnectionString = "localhost:6379,abortConnect=false,connectTimeout=1000,syncTimeout=1000");
                 b.AddRedis(_ => { });
                 b.AddDistributedCache(KnownCacheProviderNames.Redis,
                     o => o.RedisKeyStrategyFactory = new FixedRedisKeyStrategyFactory());
@@ -319,7 +319,7 @@ public class DistributedCacheRegistrationTests
         services.AddCaching(
             b =>
             {
-                b.AddRedisConnection(o => o.ConnectionString = "localhost:6379,abortConnect=false");
+                b.AddRedisConnection(o => o.ConnectionString = "localhost:6379,abortConnect=false,connectTimeout=1000,syncTimeout=1000");
                 if (distributedFirst)
                 {
                     b.AddDistributedCache(KnownCacheProviderNames.InMemoryRedis);
@@ -351,7 +351,7 @@ public class DistributedCacheRegistrationTests
         services.AddCaching(
             b =>
             {
-                b.AddRedisConnection(o => o.ConnectionString = "localhost:6379,abortConnect=false");
+                b.AddRedisConnection(o => o.ConnectionString = "localhost:6379,abortConnect=false,connectTimeout=1000,syncTimeout=1000");
                 b.AddInMemoryRedis(o => o.BroadcastEnable = providerBroadcast);
                 b.AddDistributedCache(KnownCacheProviderNames.InMemoryRedis);
             },
@@ -375,7 +375,7 @@ public class DistributedCacheRegistrationTests
         services.AddCaching(
             b =>
             {
-                b.AddRedisConnection(o => o.ConnectionString = "localhost:6379,abortConnect=false");
+                b.AddRedisConnection(o => o.ConnectionString = "localhost:6379,abortConnect=false,connectTimeout=1000,syncTimeout=1000");
                 b.AddDistributedCache(KnownCacheProviderNames.InMemoryRedis);
             },
             o => o.AppShortName = "app");
@@ -397,7 +397,7 @@ public class DistributedCacheRegistrationTests
         services.AddCaching(
             b =>
             {
-                b.AddRedisConnection(o => o.ConnectionString = "localhost:6379,abortConnect=false");
+                b.AddRedisConnection(o => o.ConnectionString = "localhost:6379,abortConnect=false,connectTimeout=1000,syncTimeout=1000");
                 b.AddRedis(_ => { });
                 b.AddDistributedCache(KnownCacheProviderNames.Redis);
             },
@@ -428,7 +428,7 @@ public class DistributedCacheRegistrationTests
         services.AddCaching(
             b =>
             {
-                b.AddRedisConnection(o => o.ConnectionString = "localhost:6379,abortConnect=false");
+                b.AddRedisConnection(o => o.ConnectionString = "localhost:6379,abortConnect=false,connectTimeout=1000,syncTimeout=1000");
                 b.AddRedis(o => o.AwaitRefresh = awaitRefresh);
             },
             o => o.AppShortName = "app");
@@ -553,7 +553,7 @@ public class DistributedCacheRegistrationTests
         services.AddCaching(
             b =>
             {
-                b.AddRedisConnection(o => o.ConnectionString = "localhost:6379,abortConnect=false");
+                b.AddRedisConnection(o => o.ConnectionString = "localhost:6379,abortConnect=false,connectTimeout=1000,syncTimeout=1000");
                 b.AddInMemoryRedis(o => o.CacheKeyStrategy = new LowercasingCacheKeyStrategy());
                 b.AddMemory(o => o.CacheKeyStrategy = new LowercasingCacheKeyStrategy());
                 b.AddDistributedCache(providerName);
