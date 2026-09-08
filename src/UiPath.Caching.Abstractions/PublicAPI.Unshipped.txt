@@ -127,6 +127,8 @@ UiPath.Caching.NullHashCache.SetAsync<T>(UiPath.Caching.CacheKey cacheKey, Syste
 UiPath.Caching.NullHashCache.SetAsync<T>(UiPath.Caching.CacheKey cacheKey, System.Collections.Generic.IDictionary<string!, T?>! values, System.TimeSpan expiration, UiPath.Caching.CachePolicy? policy, System.Threading.CancellationToken token = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.ValueTask<bool>
 UiPath.Caching.NullHashCache.SetAsync<T>(UiPath.Caching.CacheKey cacheKey, System.Collections.Generic.IDictionary<string!, T?>! values, UiPath.Caching.CachePolicy? policy, System.Threading.CancellationToken token = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.ValueTask<bool>
 UiPath.Caching.NullHashCache.SetAsync<T>(UiPath.Caching.CacheKey cacheKey, System.Collections.Generic.IDictionary<string!, T?>! values, UiPath.Caching.HashCacheEntryOptions options, UiPath.Caching.CachePolicy? policy, System.Threading.CancellationToken token = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.ValueTask<bool>
+UiPath.Caching.IMemorySerializerProxy
+UiPath.Caching.IMemorySerializerProxy.SerializeToMemory<T>(T? value) -> System.ReadOnlyMemory<byte>
 UiPath.Caching.RawByteSerializerProxy
 UiPath.Caching.RawByteSerializerProxy.RawByteSerializerProxy(System.Text.Json.JsonSerializerOptions? options = null) -> void
 UiPath.Caching.SystemJsonByteSerializerProxy
@@ -135,6 +137,7 @@ UiPath.Caching.SystemJsonByteSerializerProxy.TryDeserialize<T>(object? value, ou
 UiPath.Caching.SystemJsonByteSerializerProxy.TryDeserialize<T>(string? value, out T? result) -> bool
 override UiPath.Caching.RawByteSerializerProxy.Deserialize<T>(byte[]? value) -> T
 override UiPath.Caching.RawByteSerializerProxy.Serialize(object? value) -> byte[]?
+override UiPath.Caching.RawByteSerializerProxy.SerializeToMemory<T>(T? value) -> System.ReadOnlyMemory<byte>
 static UiPath.Caching.CacheExpiration.ThrowIfNotFuture(System.DateTimeOffset expiration, System.DateTimeOffset now, string? paramName = null) -> System.DateTimeOffset
 static UiPath.Caching.CacheExpiration.ThrowIfNotPositive(System.TimeSpan expiration, string? paramName = null) -> System.TimeSpan
 static UiPath.Caching.CacheExpiration.ToDuration(System.DateTimeOffset expiration, System.DateTimeOffset now, string? paramName = null) -> System.TimeSpan
@@ -225,6 +228,7 @@ static UiPath.Caching.HashCacheSyncExtensions.SetMetadata<T>(this UiPath.Caching
 static UiPath.Caching.HashCacheSyncExtensions.TimeToLive<T>(this UiPath.Caching.IHashCache<T>! cache, UiPath.Caching.CacheKey cacheKey, System.Threading.CancellationToken token = default(System.Threading.CancellationToken)) -> System.TimeSpan?
 virtual UiPath.Caching.SystemJsonByteSerializerProxy.Deserialize<T>(byte[]? value) -> T?
 virtual UiPath.Caching.SystemJsonByteSerializerProxy.Serialize(object? value) -> byte[]?
+virtual UiPath.Caching.SystemJsonByteSerializerProxy.SerializeToMemory<T>(T? value) -> System.ReadOnlyMemory<byte>
 static readonly UiPath.Caching.CachePolicy.DefaultDistributedExpiration -> System.TimeSpan
 
 UiPath.Caching.TimeProviderExtensions

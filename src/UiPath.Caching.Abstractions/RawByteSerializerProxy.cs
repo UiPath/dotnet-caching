@@ -23,6 +23,20 @@ public class RawByteSerializerProxy(JsonSerializerOptions? options = null)
         _ => base.Serialize(value),
     };
 
+    /// <summary>Returns the caller's memory as-is. <c>where T : default</c> keeps <c>T?</c> the unconstrained annotation the interface declares.</summary>
+    public override ReadOnlyMemory<byte> SerializeToMemory<T>(T? value) where T : default
+    {
+        if (typeof(T) == typeof(ReadOnlyMemory<byte>))
+        {
+            return (ReadOnlyMemory<byte>)(object)value!;
+        }
+        if (typeof(T) == typeof(Memory<byte>))
+        {
+            return (Memory<byte>)(object)value!;
+        }
+        return base.SerializeToMemory(value);
+    }
+
     /// <remarks>
     /// Declared as <c>T</c>, not <c>T?</c>: an override cannot restate that annotation on an
     /// unconstrained type parameter, so the maybe-null contract comes from the base and the

@@ -1220,6 +1220,43 @@ public class RedisCacheTests(ITestContextAccessor testContextAccessor) : IAsyncL
     }
 
     [Fact]
+    public async Task SetAsync_asks_a_memory_serializer_for_memory_instead_of_an_array()
+    {
+        var serializer = new RecordingRawSerializer();
+        _fixture.Inject<ISerializerProxy<byte[]>>(serializer);
+        RedisValue? captured = null;
+        _database.StringSetAsync(_redisKey, Arg.Do<RedisValue>(v => captured = v), Arg.Any<TimeSpan?>(), When.Always, Arg.Any<CommandFlags>())
+            .Returns(true);
+        ReadOnlyMemory<byte> payload = new byte[] { 1, 2, 3 };
+
+        var ok = await Sut.SetAsync(_cacheKey, payload, TimeSpan.FromMinutes(1), policy: null, token: testContextAccessor.Current.CancellationToken);
+
+        ok.Should().BeTrue();
+        serializer.MemoryCalls.Should().Be(1);
+        serializer.ArrayCalls.Should().Be(0);
+        ((byte[]?)captured!.Value).Should().Equal(1, 2, 3);
+    }
+
+    private sealed class RecordingRawSerializer : RawByteSerializerProxy
+    {
+        public int ArrayCalls { get; private set; }
+
+        public int MemoryCalls { get; private set; }
+
+        public override byte[]? Serialize(object? value)
+        {
+            ArrayCalls++;
+            return base.Serialize(value);
+        }
+
+        public override ReadOnlyMemory<byte> SerializeToMemory<T>(T? value) where T : default
+        {
+            MemoryCalls++;
+            return base.SerializeToMemory(value);
+        }
+    }
+
+    [Fact]
     public async Task SetAsync_writes_empty_value_when_CacheNullValues_true_and_value_is_null()
     {
         _cacheOptions.CacheNullValues = true;

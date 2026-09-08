@@ -29,6 +29,17 @@ public class SystemJsonByteSerializerProxyTests
     }
 
     [Fact]
+    public void SerializeToMemory_is_the_json_bytes_not_the_callers_memory()
+    {
+        ReadOnlyMemory<byte> payload = new byte[] { 0x01, 0x02, 0x03 };
+
+        var memory = _proxy.SerializeToMemory(payload);
+
+        Encoding.UTF8.GetString(memory.Span).Should().Be("\"AQID\"");
+        memory.ToArray().Should().Equal(_proxy.Serialize(payload));
+    }
+
+    [Fact]
     public void ReadOnlyMemory_round_trips()
     {
         ReadOnlyMemory<byte> memory = new byte[] { 1, 2, 3 };

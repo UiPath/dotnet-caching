@@ -68,7 +68,8 @@ public static class DistributedCacheCollectionExtensions
             ResolvePolicy(sp, options),
             sp.GetRequiredService<ILoggerFactory>().Create<UiPathDistributedCache>(),
             sp.GetRequiredService<TimeProvider>(),
-            slideByRewrite: providerName == KnownCacheProviderNames.InMemory)));
+            slideByRewrite: providerName == KnownCacheProviderNames.InMemory,
+            tierRetainsValues: providerName is KnownCacheProviderNames.InMemory or KnownCacheProviderNames.InMemoryRedis)));
 
         return builder;
     }

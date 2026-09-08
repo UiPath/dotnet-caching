@@ -236,6 +236,38 @@ a wire-format change: it returns stored bytes as-is rather than base64-decoding 
 cache miss. Relocate the keyspace (a version segment in `AppShortName` or in the cache-key strategy)
 so reads cannot land on entries written the other way.
 
+### Lending memory: `IMemorySerializerProxy`
+
+`IMemorySerializerProxy` refines `ISerializerProxy<byte[]>` with one member:
+
+```csharp
+ReadOnlyMemory<byte> SerializeToMemory<T>(T? value);
+```
+
+It exists for a serializer that can hand back memory *without* materializing an array — above all a
+caller's own `ReadOnlyMemory<byte>`, returned as-is. `RedisCache` and `RedisHashCache` call it instead of
+`Serialize` when the configured serializer offers it, which is how a buffer the `IDistributedCache` adapter
+is handed reaches the wire with no array in between. Both shipped serializers implement it:
+`SystemJsonByteSerializerProxy` returns its array output wrapped (a byte payload is still base64 inside
+JSON — the wire format does not depend on which member a tier calls), and `RawByteSerializerProxy` passes
+`ReadOnlyMemory<byte>` and `Memory<byte>` through untouched. The member is generic so that a struct value
+is not boxed on the way in.
+
+Implementing it is optional; a serializer that only implements `ISerializerProxy<byte[]>` keeps the array
+path everywhere. If you do implement it, the memory you return is **borrowed**: it may alias the input,
+and the caller reclaims it as soon as the operation completes. The Redis tier never retains it — the
+connection copies the value into its own buffer as the command is written, and the write is awaited to
+completion before the caller is told it is done. That await is also a contract on `IResiliencePipeline`:
+`ExecuteAsync` must not complete before its callback has, so a timeout has to be cooperative. The Polly
+pipeline this library ships is; a custom pipeline that returned around a callback still in flight would
+let the connection send a buffer that has since been reused.
+
+`ReadOnlyMemory<byte>` is itself a cacheable value type for the same reason the raw serializer can pass
+it through: its default is empty memory, which the tiers already read as absent. An empty value is
+therefore indistinguishable from a miss, as a zero-length payload is. The memory tiers keep whatever value
+they are handed, exactly as they keep a `byte[]`, so a caller writing a pooled buffer to one of them copies
+it first — the adapter does.
+
 ### Interface
 
 ```csharp

@@ -9,6 +9,7 @@ internal sealed partial class RedisHashCache : RedisCacheBase, IHashCache
 {
     private readonly ILogger<RedisHashCache> _logger;
     private readonly ISerializerProxy<byte[]> _serializer;
+    private readonly IMemorySerializerProxy? _memorySerializer;
     private readonly ICacheEntryFactory _cacheEntryFactory;
     private readonly IResiliencePipeline _read;
     private readonly IResiliencePipeline _write;
@@ -31,6 +32,7 @@ internal sealed partial class RedisHashCache : RedisCacheBase, IHashCache
         : base(redis, telemetryProvider, redisCacheOptions, cacheOptions, policyFactory, clock)
     {
         _serializer = serializer;
+        _memorySerializer = serializer as IMemorySerializerProxy;
         _logger = logger;
         _read = resiliencePipelineProvider.Get(ResiliencePipelineNames.Read);
         _write = resiliencePipelineProvider.Get(ResiliencePipelineNames.Write);
@@ -425,13 +427,16 @@ internal sealed partial class RedisHashCache : RedisCacheBase, IHashCache
         return SetInnerAsync<T>(redisKey, entries, setOption, expiration, token);
     }
 
+    /// <summary>Borrowed memory is safe here because every write awaits its command and the connection copies the value while writing it.</summary>
     private RedisValue SerializeFieldValue<T>(T? value)
     {
         if (_cacheNullValues && IsDefault(value))
         {
             return RedisValue.EmptyString;
         }
-        return _serializer.Serialize(value);
+        return _memorySerializer is { } memory
+            ? (RedisValue)memory.SerializeToMemory(value)
+            : (RedisValue)_serializer.Serialize(value);
     }
 
     public async ValueTask<TimeSpan?> TimeToLiveAsync<T>(CacheKey cacheKey, CancellationToken token = default)

@@ -5,7 +5,7 @@ namespace UiPath.Caching;
 public class NotCacheableException : Exception
 {
     public NotCacheableException(Type type)
-        : base($"Type {type} is not cacheable. Use class or nullable struct")
+        : base($"Type {type} is not cacheable. Use a class, a nullable struct, or ReadOnlyMemory<byte>")
     {
     }
 
@@ -28,7 +28,7 @@ public class NotCacheableException : Exception
     [DebuggerStepThrough]
     public static void ThrowIfNotCacheable(Type type)
     {
-        if(!IsNullable(type))
+        if(!IsCacheable(type))
         {
             Throw(type);
         }
@@ -37,5 +37,7 @@ public class NotCacheableException : Exception
     [DoesNotReturn]
     private static void Throw(Type type) => throw new NotCacheableException(type);
 
-    private static bool IsNullable(Type type) => !type.IsValueType || Nullable.GetUnderlyingType(type) != null;
+    /// <summary>A value type is cacheable only if its default can stand for "absent"; <see cref="ReadOnlyMemory{T}"/> of bytes qualifies because empty memory already reads as a miss.</summary>
+    private static bool IsCacheable(Type type) =>
+        !type.IsValueType || Nullable.GetUnderlyingType(type) != null || type == typeof(ReadOnlyMemory<byte>);
 }

@@ -44,15 +44,15 @@ public class UiPathDistributedCacheTests
     private static byte[] Ticks(long? value) =>
         Encoding.UTF8.GetBytes((value ?? -1).ToString(CultureInfo.InvariantCulture));
 
-    private static Dictionary<string, byte[]?> Entry(long? slidingTicks = null, DateTimeOffset? absolute = null) => new()
+    private static Dictionary<string, ReadOnlyMemory<byte>> Entry(long? slidingTicks = null, DateTimeOffset? absolute = null) => new()
     {
         [DataField] = Payload,
         [AbsoluteExpirationField] = Ticks(absolute?.UtcTicks),
         [SlidingExpirationField] = Ticks(slidingTicks),
     };
 
-    private void StoredEntry(Dictionary<string, byte[]?> fields) =>
-        _inner.GetAsync<byte[]>(Arg.Any<CacheKey>(), Arg.Any<string[]>(), Arg.Any<CachePolicy?>(), Arg.Any<CancellationToken>())
+    private void StoredEntry(Dictionary<string, ReadOnlyMemory<byte>> fields) =>
+        _inner.GetAsync<ReadOnlyMemory<byte>>(Arg.Any<CacheKey>(), Arg.Any<string[]>(), Arg.Any<CachePolicy?>(), Arg.Any<CancellationToken>())
             .Returns(fields);
 
 
@@ -63,7 +63,7 @@ public class UiPathDistributedCacheTests
     /// </summary>
     private static string Key(string callerKey) =>
         new PrefixCacheKeyStrategy(UiPathDistributedCacheOptions.DefaultKeyPrefix)
-            .GetCacheKey<byte[]>(new CacheKey(callerKey, CacheKeyCasing.Sensitive)).Name;
+            .GetCacheKey<ReadOnlyMemory<byte>>(new CacheKey(callerKey, CacheKeyCasing.Sensitive)).Name;
 
     /// <summary>Pinned literally, because changing the default relocates every stored entry.</summary>
     [Fact]
@@ -71,7 +71,7 @@ public class UiPathDistributedCacheTests
     {
         StoredEntry(Entry());
         await _cache.GetAsync("AbC-9xQ", TestContext.Current.CancellationToken);
-        await _inner.Received(1).GetAsync<byte[]>(
+        await _inner.Received(1).GetAsync<ReadOnlyMemory<byte>>(
             Arg.Is<CacheKey>(k => k.Name == "d:AbC-9xQ"),
             Arg.Any<string[]>(), Arg.Any<CachePolicy?>(), Arg.Any<CancellationToken>());
     }
@@ -82,7 +82,7 @@ public class UiPathDistributedCacheTests
         StoredEntry(Entry());
         var expected = Key("AbC-9xQ");
         await _cache.GetAsync("AbC-9xQ", TestContext.Current.CancellationToken);
-        await _inner.Received(1).GetAsync<byte[]>(
+        await _inner.Received(1).GetAsync<ReadOnlyMemory<byte>>(
             Arg.Is<CacheKey>(k => k.Name == expected && k.Casing == CacheKeyCasing.Sensitive),
             Arg.Any<string[]>(), Arg.Any<CachePolicy?>(), Arg.Any<CancellationToken>());
     }
@@ -100,13 +100,13 @@ public class UiPathDistributedCacheTests
         await _cache.RemoveAsync("AbC", token);
 
         expected.Should().NotBe("AbC");
-        await _inner.Received(1).GetAsync<byte[]>(
+        await _inner.Received(1).GetAsync<ReadOnlyMemory<byte>>(
             Arg.Is<CacheKey>(k => k.Name == expected),
             Arg.Any<string[]>(), Arg.Any<CachePolicy?>(), Arg.Any<CancellationToken>());
         await _inner.Received(1).SetAsync(
             Arg.Is<CacheKey>(k => k.Name == expected),
-            Arg.Any<IDictionary<string, byte[]?>>(), Arg.Any<CachePolicy?>(), Arg.Any<CancellationToken>());
-        await _inner.Received(1).RemoveAsync<byte[]>(
+            Arg.Any<IDictionary<string, ReadOnlyMemory<byte>>>(), Arg.Any<CachePolicy?>(), Arg.Any<CancellationToken>());
+        await _inner.Received(1).RemoveAsync<ReadOnlyMemory<byte>>(
             Arg.Is<CacheKey>(k => k.Name == expected), Arg.Any<CancellationToken>());
     }
 
@@ -116,7 +116,7 @@ public class UiPathDistributedCacheTests
         StoredEntry(Entry());
         var custom = Build(keyStrategy: new PrefixCacheKeyStrategy("mine", '/'));
         await custom.GetAsync("AbC", TestContext.Current.CancellationToken);
-        await _inner.Received(1).GetAsync<byte[]>(
+        await _inner.Received(1).GetAsync<ReadOnlyMemory<byte>>(
             Arg.Is<CacheKey>(k => k.Name == "mine/AbC" && k.Casing == CacheKeyCasing.Sensitive),
             Arg.Any<string[]>(), Arg.Any<CachePolicy?>(), Arg.Any<CancellationToken>());
     }
@@ -128,7 +128,7 @@ public class UiPathDistributedCacheTests
         StoredEntry(Entry());
         var suffixed = Build(keyStrategy: new SuffixKeyStrategy(":d"));
         await suffixed.GetAsync("AbC", TestContext.Current.CancellationToken);
-        await _inner.Received(1).GetAsync<byte[]>(
+        await _inner.Received(1).GetAsync<ReadOnlyMemory<byte>>(
             Arg.Is<CacheKey>(k => k.Name == "AbC:d" && k.Casing == CacheKeyCasing.Sensitive),
             Arg.Any<string[]>(), Arg.Any<CachePolicy?>(), Arg.Any<CancellationToken>());
     }
@@ -139,7 +139,7 @@ public class UiPathDistributedCacheTests
         StoredEntry(Entry());
         var bare = Build(keyStrategy: new DefaultCacheKeyStrategy());
         await bare.GetAsync("AbC", TestContext.Current.CancellationToken);
-        await _inner.Received(1).GetAsync<byte[]>(
+        await _inner.Received(1).GetAsync<ReadOnlyMemory<byte>>(
             Arg.Is<CacheKey>(k => k.Name == "AbC"),
             Arg.Any<string[]>(), Arg.Any<CachePolicy?>(), Arg.Any<CancellationToken>());
     }
@@ -203,7 +203,7 @@ public class UiPathDistributedCacheTests
             _inner, new UiPathDistributedCacheOptions(),
             new PrefixCacheKeyStrategy(UiPathDistributedCacheOptions.DefaultKeyPrefix),
             policy: null, logger, new SystemClockTimeProvider(_clock));
-        _inner.SetAsync(Arg.Any<CacheKey>(), Arg.Any<IDictionary<string, byte[]?>>(),
+        _inner.SetAsync(Arg.Any<CacheKey>(), Arg.Any<IDictionary<string, ReadOnlyMemory<byte>>>(),
             Arg.Any<TimeSpan>(), Arg.Any<CachePolicy?>(), Arg.Any<CancellationToken>()).Returns(false);
 
         await cache.SetAsync(key, Payload, new DistributedCacheEntryOptions(), TestContext.Current.CancellationToken);
@@ -249,7 +249,7 @@ public class UiPathDistributedCacheTests
 
         (await _cache.GetAsync("k", TestContext.Current.CancellationToken)).Should().Equal(Payload);
 
-        await _inner.Received(1).RefreshAsync<byte[]>(
+        await _inner.Received(1).RefreshAsync<ReadOnlyMemory<byte>>(
             Arg.Any<CacheKey>(), Now.Add(sliding), Arg.Any<CachePolicy?>(), Arg.Any<CancellationToken>());
     }
 
@@ -258,7 +258,7 @@ public class UiPathDistributedCacheTests
     {
         StoredEntry(Entry());
         await _cache.GetAsync("k", TestContext.Current.CancellationToken);
-        await _inner.Received(1).GetAsync<byte[]>(
+        await _inner.Received(1).GetAsync<ReadOnlyMemory<byte>>(
             Arg.Any<CacheKey>(), Arg.Is<string[]>(f => f != null && f.Contains(DataField)),
             Arg.Any<CachePolicy?>(), Arg.Any<CancellationToken>());
     }
@@ -271,7 +271,7 @@ public class UiPathDistributedCacheTests
 
         await _cache.GetAsync("k", TestContext.Current.CancellationToken);
 
-        await _inner.Received(1).RefreshAsync<byte[]>(
+        await _inner.Received(1).RefreshAsync<ReadOnlyMemory<byte>>(
             Arg.Any<CacheKey>(), absolute, Arg.Any<CachePolicy?>(), Arg.Any<CancellationToken>());
     }
 
@@ -282,7 +282,7 @@ public class UiPathDistributedCacheTests
 
         (await _cache.GetAsync("k", TestContext.Current.CancellationToken)).Should().Equal(Payload);
 
-        await _inner.DidNotReceiveWithAnyArgs().RefreshAsync<byte[]>(default, default(DateTimeOffset), null, TestContext.Current.CancellationToken);
+        await _inner.DidNotReceiveWithAnyArgs().RefreshAsync<ReadOnlyMemory<byte>>(default, default(DateTimeOffset), null, TestContext.Current.CancellationToken);
     }
 
     [Fact]
@@ -292,14 +292,14 @@ public class UiPathDistributedCacheTests
 
         (await _cache.GetAsync("k", TestContext.Current.CancellationToken)).Should().Equal(Payload);
 
-        await _inner.Received(1).RefreshAsync<byte[]>(
+        await _inner.Received(1).RefreshAsync<ReadOnlyMemory<byte>>(
             Arg.Any<CacheKey>(), DateTimeOffset.MaxValue, Arg.Any<CachePolicy?>(), Arg.Any<CancellationToken>());
     }
 
     [Fact]
     public async Task Unrecognized_entry_is_a_miss()
     {
-        StoredEntry(new Dictionary<string, byte[]?> { ["something-else"] = [9] });
+        StoredEntry(new Dictionary<string, ReadOnlyMemory<byte>> { ["something-else"] = new byte[] { 9 } });
 
         (await _cache.GetAsync("k", TestContext.Current.CancellationToken)).Should().BeNull();
     }
@@ -311,8 +311,8 @@ public class UiPathDistributedCacheTests
 
         (await _cache.GetAsync("k", TestContext.Current.CancellationToken)).Should().BeNull();
 
-        await _inner.DidNotReceiveWithAnyArgs().RemoveAsync<byte[]>(default, TestContext.Current.CancellationToken);
-        await _inner.DidNotReceiveWithAnyArgs().RefreshAsync<byte[]>(default, default(DateTimeOffset), null, TestContext.Current.CancellationToken);
+        await _inner.DidNotReceiveWithAnyArgs().RemoveAsync<ReadOnlyMemory<byte>>(default, TestContext.Current.CancellationToken);
+        await _inner.DidNotReceiveWithAnyArgs().RefreshAsync<ReadOnlyMemory<byte>>(default, default(DateTimeOffset), null, TestContext.Current.CancellationToken);
     }
 
 
@@ -320,25 +320,25 @@ public class UiPathDistributedCacheTests
     public async Task Set_writes_payload_and_metadata_fields()
     {
         var sliding = TimeSpan.FromMinutes(20);
-        IDictionary<string, byte[]?>? written = null;
+        IDictionary<string, ReadOnlyMemory<byte>>? written = null;
         TimeSpan? ttl = null;
-        await _inner.SetAsync(Arg.Any<CacheKey>(), Arg.Do<IDictionary<string, byte[]?>>(v => written = v),
+        await _inner.SetAsync(Arg.Any<CacheKey>(), Arg.Do<IDictionary<string, ReadOnlyMemory<byte>>>(v => written = v),
             Arg.Do<TimeSpan>(t => ttl = t), Arg.Any<CachePolicy?>(), Arg.Any<CancellationToken>());
 
         await _cache.SetAsync("k", Payload, new DistributedCacheEntryOptions { SlidingExpiration = sliding }, TestContext.Current.CancellationToken);
 
         ttl.Should().Be(sliding);
         written.Should().NotBeNull();
-        written![DataField].Should().Equal(Payload);
-        Encoding.UTF8.GetString(written[SlidingExpirationField]!).Should().Be(sliding.Ticks.ToString(CultureInfo.InvariantCulture));
-        Encoding.UTF8.GetString(written[AbsoluteExpirationField]!).Should().Be("-1");
+        written![DataField].ToArray().Should().Equal(Payload);
+        Encoding.UTF8.GetString(written[SlidingExpirationField].Span).Should().Be(sliding.Ticks.ToString(CultureInfo.InvariantCulture));
+        Encoding.UTF8.GetString(written[AbsoluteExpirationField].Span).Should().Be("-1");
     }
 
     [Fact]
     public async Task Set_with_both_uses_min_of_sliding_and_remaining_absolute()
     {
         TimeSpan? ttl = null;
-        await _inner.SetAsync(Arg.Any<CacheKey>(), Arg.Any<IDictionary<string, byte[]?>>(),
+        await _inner.SetAsync(Arg.Any<CacheKey>(), Arg.Any<IDictionary<string, ReadOnlyMemory<byte>>>(),
             Arg.Do<TimeSpan>(t => ttl = t), Arg.Any<CachePolicy?>(), Arg.Any<CancellationToken>());
 
         await _cache.SetAsync("k", Payload, new DistributedCacheEntryOptions
@@ -353,8 +353,8 @@ public class UiPathDistributedCacheTests
     [Fact]
     public async Task Set_with_relative_absolute_records_the_deadline()
     {
-        IDictionary<string, byte[]?>? written = null;
-        await _inner.SetAsync(Arg.Any<CacheKey>(), Arg.Do<IDictionary<string, byte[]?>>(v => written = v),
+        IDictionary<string, ReadOnlyMemory<byte>>? written = null;
+        await _inner.SetAsync(Arg.Any<CacheKey>(), Arg.Do<IDictionary<string, ReadOnlyMemory<byte>>>(v => written = v),
             Arg.Any<TimeSpan>(), Arg.Any<CachePolicy?>(), Arg.Any<CancellationToken>());
 
         await _cache.SetAsync("k", Payload, new DistributedCacheEntryOptions
@@ -362,7 +362,7 @@ public class UiPathDistributedCacheTests
             AbsoluteExpirationRelativeToNow = TimeSpan.FromMinutes(30),
         }, TestContext.Current.CancellationToken);
 
-        Encoding.UTF8.GetString(written![AbsoluteExpirationField]!)
+        Encoding.UTF8.GetString(written![AbsoluteExpirationField].Span)
             .Should().Be(Now.AddMinutes(30).UtcTicks.ToString(CultureInfo.InvariantCulture));
     }
 
@@ -370,7 +370,7 @@ public class UiPathDistributedCacheTests
     public async Task Set_with_no_expiration_uses_the_configured_default()
     {
         TimeSpan? ttl = null;
-        await _inner.SetAsync(Arg.Any<CacheKey>(), Arg.Any<IDictionary<string, byte[]?>>(),
+        await _inner.SetAsync(Arg.Any<CacheKey>(), Arg.Any<IDictionary<string, ReadOnlyMemory<byte>>>(),
             Arg.Do<TimeSpan>(t => ttl = t), Arg.Any<CachePolicy?>(), Arg.Any<CancellationToken>());
         var bounded = Build(new UiPathDistributedCacheOptions { DefaultEntryExpiration = TimeSpan.FromHours(2) });
 
@@ -387,9 +387,9 @@ public class UiPathDistributedCacheTests
         // The write carries no expiration argument at all, which is the only way left to ask the
         // tier for its own default.
         await _inner.Received(1).SetAsync(
-            Arg.Any<CacheKey>(), Arg.Any<IDictionary<string, byte[]?>>(), Arg.Any<CachePolicy?>(), Arg.Any<CancellationToken>());
+            Arg.Any<CacheKey>(), Arg.Any<IDictionary<string, ReadOnlyMemory<byte>>>(), Arg.Any<CachePolicy?>(), Arg.Any<CancellationToken>());
         await _inner.DidNotReceive().SetAsync(
-            Arg.Any<CacheKey>(), Arg.Any<IDictionary<string, byte[]?>>(), Arg.Any<TimeSpan>(), Arg.Any<CachePolicy?>(), Arg.Any<CancellationToken>());
+            Arg.Any<CacheKey>(), Arg.Any<IDictionary<string, ReadOnlyMemory<byte>>>(), Arg.Any<TimeSpan>(), Arg.Any<CachePolicy?>(), Arg.Any<CancellationToken>());
     }
 
     [Fact]
@@ -409,10 +409,10 @@ public class UiPathDistributedCacheTests
 
         await _cache.RefreshAsync("k", TestContext.Current.CancellationToken);
 
-        await _inner.Received(1).GetAsync<byte[]>(
+        await _inner.Received(1).GetAsync<ReadOnlyMemory<byte>>(
             Arg.Any<CacheKey>(), Arg.Is<string[]>(f => f != null && !f.Contains(DataField)),
             Arg.Any<CachePolicy?>(), Arg.Any<CancellationToken>());
-        await _inner.Received(1).RefreshAsync<byte[]>(
+        await _inner.Received(1).RefreshAsync<ReadOnlyMemory<byte>>(
             Arg.Any<CacheKey>(), Now.Add(sliding), Arg.Any<CachePolicy?>(), Arg.Any<CancellationToken>());
     }
 
@@ -421,7 +421,7 @@ public class UiPathDistributedCacheTests
     {
         var expected = Key("AbC");
         await _cache.RemoveAsync("AbC", TestContext.Current.CancellationToken);
-        await _inner.Received(1).RemoveAsync<byte[]>(
+        await _inner.Received(1).RemoveAsync<ReadOnlyMemory<byte>>(
             Arg.Is<CacheKey>(k => k.Name == expected), Arg.Any<CancellationToken>());
     }
 
@@ -431,8 +431,8 @@ public class UiPathDistributedCacheTests
     {
         var sliding = TimeSpan.FromMinutes(20);
         StoredEntry(Entry(sliding.Ticks));
-        IDictionary<string, byte[]?>? written = null;
-        await _inner.SetAsync(Arg.Any<CacheKey>(), Arg.Do<IDictionary<string, byte[]?>>(v => written = v),
+        IDictionary<string, ReadOnlyMemory<byte>>? written = null;
+        await _inner.SetAsync(Arg.Any<CacheKey>(), Arg.Do<IDictionary<string, ReadOnlyMemory<byte>>>(v => written = v),
             Arg.Any<HashCacheEntryOptions>(), Arg.Any<CachePolicy?>(), Arg.Any<CancellationToken>());
         var rewriting = Build(slideByRewrite: true);
 
@@ -440,8 +440,8 @@ public class UiPathDistributedCacheTests
 
         written.Should().NotBeNull();
         written!.Should().ContainKey(SlidingExpirationField);
-        written[DataField].Should().Equal(Payload);
-        await _inner.DidNotReceiveWithAnyArgs().RefreshAsync<byte[]>(default, default(DateTimeOffset), null, TestContext.Current.CancellationToken);
+        written[DataField].ToArray().Should().Equal(Payload);
+        await _inner.DidNotReceiveWithAnyArgs().RefreshAsync<ReadOnlyMemory<byte>>(default, default(DateTimeOffset), null, TestContext.Current.CancellationToken);
     }
 
 
@@ -456,7 +456,7 @@ public class UiPathDistributedCacheTests
     public async Task Unbounded_entries_persist_instead_of_taking_a_default()
     {
         DateTimeOffset? expiration = null;
-        await _inner.SetAsync(Arg.Any<CacheKey>(), Arg.Any<IDictionary<string, byte[]?>>(),
+        await _inner.SetAsync(Arg.Any<CacheKey>(), Arg.Any<IDictionary<string, ReadOnlyMemory<byte>>>(),
             Arg.Do<DateTimeOffset>(e => expiration = e), Arg.Any<CachePolicy?>(), Arg.Any<CancellationToken>());
         var unbounded = Build(new UiPathDistributedCacheOptions { AllowUnboundedEntries = true });
 
@@ -469,7 +469,7 @@ public class UiPathDistributedCacheTests
     public async Task Unbounded_sliding_window_reaches_the_backing_cache_as_the_sentinel()
     {
         TimeSpan? ttl = null;
-        await _inner.SetAsync(Arg.Any<CacheKey>(), Arg.Any<IDictionary<string, byte[]?>>(),
+        await _inner.SetAsync(Arg.Any<CacheKey>(), Arg.Any<IDictionary<string, ReadOnlyMemory<byte>>>(),
             Arg.Do<TimeSpan>(t => ttl = t), Arg.Any<CachePolicy?>(), Arg.Any<CancellationToken>());
 
         await _cache.SetAsync("k", Payload,
@@ -485,9 +485,9 @@ public class UiPathDistributedCacheTests
     [Fact]
     public async Task Empty_payload_reads_back_as_empty_not_a_miss()
     {
-        StoredEntry(new Dictionary<string, byte[]?>
+        StoredEntry(new Dictionary<string, ReadOnlyMemory<byte>>
         {
-            [DataField] = null,
+            [DataField] = default,
             [AbsoluteExpirationField] = Ticks(null),
             [SlidingExpirationField] = Ticks(null),
         });
@@ -499,7 +499,7 @@ public class UiPathDistributedCacheTests
     public async Task Unbounded_default_entry_expiration_reaches_the_backing_cache_as_the_sentinel()
     {
         TimeSpan? ttl = null;
-        await _inner.SetAsync(Arg.Any<CacheKey>(), Arg.Any<IDictionary<string, byte[]?>>(),
+        await _inner.SetAsync(Arg.Any<CacheKey>(), Arg.Any<IDictionary<string, ReadOnlyMemory<byte>>>(),
             Arg.Do<TimeSpan>(t => ttl = t), Arg.Any<CachePolicy?>(), Arg.Any<CancellationToken>());
         var cache = Build(new UiPathDistributedCacheOptions { DefaultEntryExpiration = TimeSpan.MaxValue });
 
@@ -517,7 +517,7 @@ public class UiPathDistributedCacheTests
     /// </summary>
     public static TheoryData<string?> RejectedMetadataValues() =>
     [
-        (string?)null,            // field present, null value — the shape a Redis miss returns
+        (string?)null,            // field present, empty value — the shape a Redis miss returns
         FieldOmitted,             // field absent entirely
         "",
         " ",
@@ -542,7 +542,7 @@ public class UiPathDistributedCacheTests
 
     private async Task AssertMetadataIsRejected(string field, string? value)
     {
-        var entry = new Dictionary<string, byte[]?>(StringComparer.Ordinal)
+        var entry = new Dictionary<string, ReadOnlyMemory<byte>>(StringComparer.Ordinal)
         {
             [DataField] = Payload,
             [AbsoluteExpirationField] = Ticks(null),
@@ -555,7 +555,7 @@ public class UiPathDistributedCacheTests
         }
         else
         {
-            entry[field] = value is null ? null : Encoding.UTF8.GetBytes(value);
+            entry[field] = value is null ? default(ReadOnlyMemory<byte>) : Encoding.UTF8.GetBytes(value);
         }
 
         StoredEntry(entry);
@@ -573,7 +573,7 @@ public class UiPathDistributedCacheTests
         var token = TestContext.Current.CancellationToken;
         var beyondDateTime = Encoding.UTF8.GetBytes((DateTime.MaxValue.Ticks + 1).ToString(CultureInfo.InvariantCulture));
 
-        StoredEntry(new Dictionary<string, byte[]?>(StringComparer.Ordinal)
+        StoredEntry(new Dictionary<string, ReadOnlyMemory<byte>>(StringComparer.Ordinal)
         {
             [DataField] = Payload,
             [AbsoluteExpirationField] = beyondDateTime,
@@ -581,7 +581,7 @@ public class UiPathDistributedCacheTests
         });
         (await _cache.GetAsync("k", token)).Should().BeNull("an absolute deadline past DateTime.MaxValue cannot be decoded");
 
-        StoredEntry(new Dictionary<string, byte[]?>(StringComparer.Ordinal)
+        StoredEntry(new Dictionary<string, ReadOnlyMemory<byte>>(StringComparer.Ordinal)
         {
             [DataField] = Payload,
             [AbsoluteExpirationField] = Ticks(null),
@@ -624,16 +624,16 @@ public class UiPathDistributedCacheTests
             AbsoluteExpiration = absoluteExpiration,
         };
         var token = TestContext.Current.CancellationToken;
-        IDictionary<string, byte[]?>? written = null;
-        await _inner.SetAsync(Arg.Any<CacheKey>(), Arg.Do<IDictionary<string, byte[]?>>(v => written = v),
+        IDictionary<string, ReadOnlyMemory<byte>>? written = null;
+        await _inner.SetAsync(Arg.Any<CacheKey>(), Arg.Do<IDictionary<string, ReadOnlyMemory<byte>>>(v => written = v),
             Arg.Any<TimeSpan>(), Arg.Any<CachePolicy?>(), Arg.Any<CancellationToken>());
-        await _inner.SetAsync(Arg.Any<CacheKey>(), Arg.Do<IDictionary<string, byte[]?>>(v => written = v),
+        await _inner.SetAsync(Arg.Any<CacheKey>(), Arg.Do<IDictionary<string, ReadOnlyMemory<byte>>>(v => written = v),
             Arg.Any<CachePolicy?>(), Arg.Any<CancellationToken>());
 
         await _cache.SetAsync("k", Payload, options, token);
 
         written.Should().NotBeNull();
-        StoredEntry(new Dictionary<string, byte[]?>(written!, StringComparer.Ordinal));
+        StoredEntry(new Dictionary<string, ReadOnlyMemory<byte>>(written!, StringComparer.Ordinal));
 
         (await _cache.GetAsync("k", token)).Should().Equal(Payload);
     }
@@ -645,11 +645,11 @@ public class UiPathDistributedCacheTests
     [Fact]
     public async Task Redis_shaped_miss_is_a_miss_not_an_empty_payload()
     {
-        StoredEntry(new Dictionary<string, byte[]?>
+        StoredEntry(new Dictionary<string, ReadOnlyMemory<byte>>
         {
-            [DataField] = null,
-            [AbsoluteExpirationField] = null,
-            [SlidingExpirationField] = null,
+            [DataField] = default,
+            [AbsoluteExpirationField] = default,
+            [SlidingExpirationField] = default,
         });
 
         (await _cache.GetAsync("k", TestContext.Current.CancellationToken)).Should().BeNull();
