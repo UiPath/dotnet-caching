@@ -287,7 +287,7 @@ public class KeyedSubjectTests
         var barrier = new Barrier(3);
 
         var ct = TestContext.Current.CancellationToken;
-        var subscribeTask = Task.Run(() =>
+        var subscribeTask = OnDedicatedThread(() =>
         {
             barrier.SignalAndWait();
             var subs = new List<IDisposable>();
@@ -298,7 +298,7 @@ public class KeyedSubjectTests
             return subs;
         }, ct);
 
-        var dispatchTask = Task.Run(() =>
+        var dispatchTask = OnDedicatedThread(() =>
         {
             barrier.SignalAndWait();
             for (var i = 0; i < iterations; i++)
@@ -307,7 +307,7 @@ public class KeyedSubjectTests
             }
         }, ct);
 
-        var unsubscribeTask = Task.Run(() =>
+        var unsubscribeTask = OnDedicatedThread(() =>
         {
             barrier.SignalAndWait();
             for (var i = 0; i < iterations; i++)
@@ -341,7 +341,7 @@ public class KeyedSubjectTests
 
         var survivors = new ConcurrentBag<(TestKeyedObserver observer, IDisposable subscription)>();
 
-        var tasks = Enumerable.Range(0, threadCount).Select(_ => Task.Run(() =>
+        var tasks = Enumerable.Range(0, threadCount).Select(_ => OnDedicatedThread(() =>
         {
             barrier.SignalAndWait();
             for (var i = 0; i < iterationsPerThread; i++)
@@ -353,7 +353,7 @@ public class KeyedSubjectTests
             var final_obs = new TestKeyedObserver(key);
             var final_sub = _sut.Subscribe(final_obs);
             survivors.Add((final_obs, final_sub));
-        })).ToArray();
+        }, CancellationToken.None)).ToArray();
 
         await Task.WhenAll(tasks);
 
@@ -424,7 +424,7 @@ public class KeyedSubjectTests
 
         var lateObservers = new ConcurrentBag<TestKeyedObserver>();
         var ct = TestContext.Current.CancellationToken;
-        var lateTask = Task.Run(() =>
+        var lateTask = OnDedicatedThread(() =>
         {
             barrier.SignalAndWait();
             for (var i = 0; i < 50; i++)
@@ -435,7 +435,7 @@ public class KeyedSubjectTests
             }
         }, ct);
 
-        var dispatchTask = Task.Run(() =>
+        var dispatchTask = OnDedicatedThread(() =>
         {
             barrier.SignalAndWait();
             for (var i = 0; i < eventCount; i++)
@@ -461,7 +461,7 @@ public class KeyedSubjectTests
         const int keyCount = 10;
         var barrier = new Barrier(threadCount);
 
-        var tasks = Enumerable.Range(0, threadCount).Select(t => Task.Run(() =>
+        var tasks = Enumerable.Range(0, threadCount).Select(t => OnDedicatedThread(() =>
         {
             barrier.SignalAndWait();
             for (var i = 0; i < opsPerThread; i++)
@@ -472,7 +472,7 @@ public class KeyedSubjectTests
                 _sut.OnNext(CreateEvent(key));
                 sub.Dispose();
             }
-        })).ToArray();
+        }, CancellationToken.None)).ToArray();
 
         await Task.WhenAll(tasks);
     }
@@ -523,6 +523,13 @@ public class KeyedSubjectTests
         public void OnError(Exception error) { }
         public void OnCompleted() => throw new InvalidOperationException("boom on completed");
     }
+
+    // Barrier participants on pool threads park the pool until it grows, starving every other test's timers and continuations.
+    private static Task OnDedicatedThread(Action action, CancellationToken token) =>
+        Task.Factory.StartNew(action, token, TaskCreationOptions.LongRunning, TaskScheduler.Default);
+
+    private static Task<T> OnDedicatedThread<T>(Func<T> function, CancellationToken token) =>
+        Task.Factory.StartNew(function, token, TaskCreationOptions.LongRunning, TaskScheduler.Default);
 
     private sealed class ThrowingBroadcastObserver : IObserver<ICacheEvent>
     {

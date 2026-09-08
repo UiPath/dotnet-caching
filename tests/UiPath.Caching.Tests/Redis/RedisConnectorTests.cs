@@ -1,4 +1,5 @@
 using Microsoft.Extensions.Logging.Abstractions;
+using StackExchange.Redis;
 using UiPath.Caching.Telemetry;
 
 namespace UiPath.Caching.Tests.Redis;
@@ -7,7 +8,6 @@ public class RedisConnectorTests : IAsyncLifetime
 {
     private readonly IFixture _fixture = AutoFixtureCreator.NSubstitute();
     private ICachingTelemetryProvider _telemetryProvider = default!;
-    private IRedisProfiler _profiler = default!;
     private IOptions<RedisConnectionOptions> _redisOptions = default!;
     private IRedisConfigurationOptionsProvider _redisConfigurationOptionsProvider = default!;
     private IConnectionMultiplexerFactory _connectionMultiplexerFactory = default!;
@@ -64,10 +64,15 @@ public class RedisConnectorTests : IAsyncLifetime
         return ValueTask.CompletedTask;
     }
 
+    private sealed class SubstituteMultiplexerFactory : IConnectionMultiplexerFactory
+    {
+        public ValueTask<IConnectionMultiplexer> CreateAsync(ConfigurationOptions configuration, CancellationToken cancellationToken = default) =>
+            new(Substitute.For<IConnectionMultiplexer>());
+    }
+
     public ValueTask InitializeAsync()
     {
         _telemetryProvider = _fixture.Create<ICachingTelemetryProvider>();
-        _profiler = _fixture.Create<IRedisProfiler>();
         _redisOptions = Options.Create(new RedisConnectionOptions
         {
             ConnectionString = _connectionString
@@ -75,7 +80,7 @@ public class RedisConnectorTests : IAsyncLifetime
         _fixture.Inject(_redisOptions);
         _redisConfigurationOptionsProvider = new RedisConfigurationOptionsProvider(NullLoggerFactory.Instance, _redisOptions);
         _fixture.Inject(_redisConfigurationOptionsProvider);
-        _connectionMultiplexerFactory = new ConnectionMultiplexerFactory(_redisOptions, _profiler);
+        _connectionMultiplexerFactory = new SubstituteMultiplexerFactory();
         _fixture.Inject(_connectionMultiplexerFactory);
         return ValueTask.CompletedTask;
     }
