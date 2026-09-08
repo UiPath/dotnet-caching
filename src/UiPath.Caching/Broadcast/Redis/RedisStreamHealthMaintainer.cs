@@ -84,11 +84,11 @@ public partial class RedisStreamHealthMaintainer : IHostedService
     {
         _timer = new PeriodicTimer(_streamOptions.MaintainerCheckInterval);
         var keyFactory = _redisOptions.RedisKeyStrategyFactory ?? new DefaultRedisKeyStrategyFactory();
-        var stringKeyStrategy = keyFactory.Create(_cacheOptions, RedisTypePrefixes.String);
-        var hashKeyStrategy = keyFactory.Create(_cacheOptions, RedisTypePrefixes.Hash);
+        var stringKeyStrategy = keyFactory.Create(_cacheOptions, RedisKeyspaces.String);
+        var hashKeyStrategy = keyFactory.Create(_cacheOptions, RedisKeyspaces.Hash);
         if (string.IsNullOrWhiteSpace(_streamOptions.MaintainerSearchPattern))
         {
-            var redisStreamKeyStrategy = _streamOptions.RedisStreamKeyStrategy ?? new PrefixStrategy(RedisTypePrefixes.Streams, _cacheOptions);
+            var redisStreamKeyStrategy = _streamOptions.RedisStreamKeyStrategy ?? new PrefixStrategy(RedisKeyspaces.Streams, _cacheOptions);
             _streamsSearchPattern = redisStreamKeyStrategy.GetRedisKey("*").ToString();
         }
         else

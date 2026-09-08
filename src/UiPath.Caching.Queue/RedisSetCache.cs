@@ -5,7 +5,7 @@ namespace UiPath.Caching.Redis;
 
 public sealed partial class RedisSetCache : RedisCacheBase, ISetCache
 {
-    private const string RedisSetKeyPrefix = "se";
+    internal const string RedisSetKeyspace = "se";
 
     private readonly ILogger<RedisSetCache> _logger;
     private readonly ISerializerProxy<byte[]> _serializer;
@@ -34,7 +34,7 @@ public sealed partial class RedisSetCache : RedisCacheBase, ISetCache
         _write = resiliencePipelineProvider.Get(ResiliencePipelineNames.Write);
         _pop = resiliencePipelineProvider.Get(setCacheOptions.ResilienceKeyName);
         _cacheOptions = cacheOptions;
-        _redisKeyStrategy = (redisCacheOptions.RedisKeyStrategyFactory ?? new DefaultRedisKeyStrategyFactory()).Create(_cacheOptions, RedisSetKeyPrefix);
+        _redisKeyStrategy = (redisCacheOptions.RedisKeyStrategyFactory ?? new DefaultRedisKeyStrategyFactory()).Create(_cacheOptions, RedisSetKeyspace);
     }
 
     public string Name => KnownCacheProviderNames.Redis;

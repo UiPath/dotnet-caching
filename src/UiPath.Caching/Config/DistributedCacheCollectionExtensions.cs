@@ -12,20 +12,6 @@ public static class DistributedCacheCollectionExtensions
     /// <summary>Service key of the distributed cache's private <see cref="ICacheProvider"/> and <see cref="IHashCache"/> registrations.</summary>
     public const string DistributedCacheServiceKey = "UiPath.Caching.Distributed";
 
-    /// <summary>
-    /// The application's own caches fill the differentiator slot with a <see cref="RedisTypePrefixes"/>
-    /// value, so a distributed differentiator matching one of them would merge the two keyspaces. Only this
-    /// assembly's prefixes are listed: a package layered on top of it defines its own, which this assembly
-    /// cannot see without depending on it the wrong way round.
-    /// </summary>
-    private static readonly string[] ApplicationTypePrefixes =
-    [
-        RedisTypePrefixes.String,
-        RedisTypePrefixes.Hash,
-        RedisTypePrefixes.PubSub,
-        RedisTypePrefixes.Streams,
-    ];
-
     /// <summary>Registers an <see cref="IDistributedCache"/> backed by a dedicated case-sensitive cache instance in its own keyspace. <paramref name="providerName"/> selects the backing tier: Redis (recommended), InMemoryRedis, or InMemory.</summary>
     public static ICachingBuilder AddDistributedCache(
         this ICachingBuilder builder,
@@ -35,21 +21,27 @@ public static class DistributedCacheCollectionExtensions
         Guard.NotNullOrWhiteSpace(providerName, nameof(providerName));
         var options = new UiPathDistributedCacheOptions();
         configure?.Invoke(options);
-        EnsureKeyspaceIsolation(options);
+        EnsureDifferentiatorIsNotBlank(options);
 
-        if (builder.Services.Any(d => d.IsKeyedService
-            && Equals(d.ServiceKey, DistributedCacheServiceKey)
-            && d.ServiceType == typeof(IHashCache)))
+        // Read from the reservation rather than from the registered adapter: a disabled call registers no
+        // adapter, and the two paths have to agree on what "already called" means.
+        if (builder.Services.HasDistributedCacheRedisKeyspace())
         {
             throw new InvalidOperationException(
                 "AddDistributedCache has already been called. Registering it twice would build the adapter from the first call's options over the second call's backing tier; call it once.");
         }
+
+        // The differentiator occupies a keyspace like any package's, so reserving it is the whole check:
+        // it fails on a keyspace already taken, and makes a later package's reservation fail. Done before
+        // the Enabled short-circuit, because a collision is a configuration error either way.
+        builder.Services.ReserveDistributedCacheRedisKeyspace(ResolveRedisKeyDifferentiator(options));
 
         if (!builder.Enabled)
         {
             RegisterNullAdapter(builder);
             return builder;
         }
+
 
         if (providerName is KnownCacheProviderNames.InMemory or KnownCacheProviderNames.InMemoryRedis)
         {
@@ -151,28 +143,12 @@ public static class DistributedCacheCollectionExtensions
     private static string ResolveRedisKeyDifferentiator(UiPathDistributedCacheOptions options) =>
         options.RedisKeyDifferentiator ?? UiPathDistributedCacheOptions.DefaultRedisKeyDifferentiator;
 
-    /// <summary>
-    /// Both keyspace seams are overridable, so reject values that would merge them back into the application's.
-    /// The prefix comparison ignores case because <see cref="PrefixRedisKeyStrategy"/> lowercases what it is
-    /// given: <c>"H"</c> composes the application's <c>"h"</c> keyspace, which an ordinal match would wave through.
-    /// </summary>
-    private static void EnsureKeyspaceIsolation(UiPathDistributedCacheOptions options)
+    private static void EnsureDifferentiatorIsNotBlank(UiPathDistributedCacheOptions options)
     {
-        if (options.RedisKeyDifferentiator is not { } differentiator)
-        {
-            return;
-        }
-
-        if (string.IsNullOrWhiteSpace(differentiator))
+        if (options.RedisKeyDifferentiator is { } differentiator && string.IsNullOrWhiteSpace(differentiator))
         {
             throw new InvalidOperationException(
                 "UiPathDistributedCacheOptions.RedisKeyDifferentiator must be a non-empty value, or null to use the default.");
-        }
-
-        if (ApplicationTypePrefixes.Contains(differentiator, StringComparer.OrdinalIgnoreCase))
-        {
-            throw new InvalidOperationException(
-                $"UiPathDistributedCacheOptions.RedisKeyDifferentiator '{differentiator}' is one of the type prefixes the application's own caches use, which would put the distributed cache in the same Redis keyspace. Choose another value.");
         }
     }
 
@@ -308,7 +284,8 @@ public static class DistributedCacheCollectionExtensions
                 sp.GetRequiredService<IOptions<RedisCacheOptions>>().Value,
                 options,
                 cacheOptions.Value,
-                differentiator)),
+                differentiator,
+                sp.GetServices<IReservedRedisKeyspace>().ValidatedFor(cacheOptions.Value.Separator))),
             cacheOptions,
             connector,
             new RawByteSerializerProxy(sp.GetService<JsonSerializerOptions>()),
@@ -327,12 +304,13 @@ public static class DistributedCacheCollectionExtensions
         RedisCacheOptions source,
         UiPathDistributedCacheOptions options,
         CacheOptions cacheOptions,
-        string differentiator)
+        string differentiator,
+        IEnumerable<IReservedRedisKeyspace> reserved)
     {
         var applicationFactory = source.RedisKeyStrategyFactory ?? new DefaultRedisKeyStrategyFactory();
         var distributedFactory = options.RedisKeyStrategyFactory ?? applicationFactory;
         EnsureDifferentiatedKeyspace(
-            distributedFactory, applicationFactory, cacheOptions, differentiator, ResolveCacheKeyStrategy(options));
+            distributedFactory, applicationFactory, cacheOptions, differentiator, ResolveCacheKeyStrategy(options), reserved);
 
         var copy = source.ShallowCopy();
         copy.RedisKeyStrategyFactory = new DistributedRedisKeyStrategyFactory(distributedFactory, differentiator);
@@ -380,17 +358,18 @@ public static class DistributedCacheCollectionExtensions
         IRedisKeyStrategyFactory applicationFactory,
         CacheOptions cacheOptions,
         string differentiator,
-        ICacheKeyStrategy keyStrategy)
+        ICacheKeyStrategy keyStrategy,
+        IEnumerable<IReservedRedisKeyspace> reserved)
     {
         var probe = keyStrategy.GetCacheKey<byte[]>(new CacheKey("probe", CacheKeyCasing.Sensitive));
         var distributed = distributedFactory.Create(cacheOptions, differentiator).GetRedisKey(probe);
 
-        foreach (var (description, applicationKey) in ApplicationProbes(applicationFactory, cacheOptions, probe))
+        foreach (var (description, applicationKey) in ApplicationProbes(applicationFactory, cacheOptions, probe, reserved))
         {
             if (applicationKey == distributed)
             {
                 throw new InvalidOperationException(
-                    $"The Redis key strategy maps distributed entries onto the same key as the application's {description} caches, so the two would share one keyspace. Either the differentiator '{differentiator}' is not distinct, or the configured IRedisKeyStrategyFactory ignores the differentiator it is given.");
+                    $"The Redis key strategy maps distributed entries onto the same key as {description}, so the two would share one keyspace. Either the differentiator '{differentiator}' is not distinct, or the configured IRedisKeyStrategyFactory ignores the differentiator it is given.");
             }
         }
     }
@@ -399,18 +378,62 @@ public static class DistributedCacheCollectionExtensions
     /// The keys the application's own Redis caches would produce. <c>RedisCache</c> and <c>RedisHashCache</c>
     /// resolve their strategy through the <see cref="Type"/> overload, so the probe has to use it too: a custom
     /// factory may implement the two overloads differently, and comparing only the string one would let a
-    /// colliding layout through. The string overload is still probed, for a factory that only implements that.
+    /// colliding layout through. The string overload is probed for every reserved keyspace, for a factory that
+    /// only implements that and for the packages layered on top, whose cache types this assembly cannot name.
+    /// <para>Every reserved keyspace is rendered through the application's factory, which is exact for caches
+    /// and approximate for anything that composes its keys elsewhere — broadcast streams, for one, go through
+    /// <c>RedisStreamKeyStrategy</c>. Catching those exactly would mean each reservation carrying its own
+    /// renderer.</para>
     /// </summary>
     private static IEnumerable<(string Description, RedisKey Key)> ApplicationProbes(
-        IRedisKeyStrategyFactory inner, CacheOptions cacheOptions, CacheKey probe)
+        IRedisKeyStrategyFactory inner, CacheOptions cacheOptions, CacheKey probe, IEnumerable<IReservedRedisKeyspace> reserved)
     {
-        yield return ($"'{RedisTypePrefixes.String}' (ICache)", inner.Create(cacheOptions, typeof(RedisCache)).GetRedisKey(probe));
-        yield return ($"'{RedisTypePrefixes.Hash}' (IHashCache)", inner.Create(cacheOptions, typeof(RedisHashCache)).GetRedisKey(probe));
-
-        foreach (var applicationPrefix in ApplicationTypePrefixes)
+        var seen = new HashSet<RedisKey>();
+        var cacheKey = inner.Create(cacheOptions, typeof(RedisCache)).GetRedisKey(probe);
+        if (seen.Add(cacheKey))
         {
-            yield return ($"'{applicationPrefix}'", inner.Create(cacheOptions, applicationPrefix).GetRedisKey(probe));
+            yield return ($"'{RedisKeyspaces.String}' (ICache)", cacheKey);
         }
+
+        var hashKey = inner.Create(cacheOptions, typeof(RedisHashCache)).GetRedisKey(probe);
+        if (seen.Add(hashKey))
+        {
+            yield return ($"'{RedisKeyspaces.Hash}' (IHashCache)", hashKey);
+        }
+
+        foreach (var keyspace in reserved)
+        {
+            // Its own reservation is the key under test, and a factory that refuses to build a key for
+            // someone else's keyspace cannot land on it either.
+            if (keyspace.IsDistributedCache() || !TryProbe(inner, cacheOptions, probe, keyspace.Keyspace, out var key))
+            {
+                continue;
+            }
+
+            if (seen.Add(key))
+            {
+                yield return ($"'{keyspace.Keyspace}' ({keyspace.Owner})", key);
+            }
+        }
+    }
+
+    /// <summary>Only a refused keyspace is skipped: a strategy that builds but then fails on the probe key is a real fault, so it surfaces.</summary>
+    private static bool TryProbe(
+        IRedisKeyStrategyFactory inner, CacheOptions cacheOptions, CacheKey probe, string keyspace, out RedisKey key)
+    {
+        IRedisKeyStrategy strategy;
+        try
+        {
+            strategy = inner.Create(cacheOptions, keyspace);
+        }
+        catch (Exception)
+        {
+            key = default;
+            return false;
+        }
+
+        key = strategy.GetRedisKey(probe);
+        return true;
     }
 
     /// <summary>

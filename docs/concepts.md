@@ -57,10 +57,10 @@ there is no L1, cross-node invalidation via topics is also unnecessary for a
 `Redis`-only deployment, though the broadcast infrastructure remains available
 if you want it for other purposes.
 
-Every Redis key the lib writes carries a short *Redis type prefix* between
+Every Redis key the lib writes carries a short *Redis keyspace* segment between
 `AppShortName` and the logical key — `s` for `ICache` STRING values, `h` for
 `IHashCache` HASH values, `st` for Stream keys, `ps` for Pub/Sub channels (the
-constants live on `RedisTypePrefixes`). The prefix prevents type-collision
+constants live on `RedisKeyspaces`). The keyspace prevents type-collision
 errors when the same logical key is used by caches of different types: an
 `ICache<User>` write at `user:42` becomes `my-service:s:user:42` on Redis while
 an `IHashCache<UserField>` write at the same logical key becomes
@@ -584,7 +584,7 @@ rather than disabling the tier underneath it. Options bind from the same
 `Caching:InMemory` / `Caching:Redis` / `Caching:InMemoryRedis` sections as the core providers; see
 [reference/settings.md](reference/settings.md#queue-caches-uipathcachingqueue).
 
-On Redis the set cache keeps its own key namespace: the type-prefix slot holds `se`, where the
+On Redis the set cache keeps its own key namespace: the keyspace slot holds `se`, where the
 single-value cache holds `s` and the hash cache holds `h`, so a set and a string cache can share a
 key name without colliding. Writes are pinned to the master, reads prefer a replica, and an add is a
 transaction that applies `SADD` and the key's expiry together. Like the core Redis caches, a Redis

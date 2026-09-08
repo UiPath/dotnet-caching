@@ -34,7 +34,7 @@ public class RedisPubSubTopicProvider : RedisTopicProviderBase
         _resiliencePipelineProvider = resiliencePipelineProvider;
         _logger = loggerFactory.Create<RedisPubSubTopicProvider>();
         _sourceUri = cacheOptions.SourceUri ?? CacheOptions.MachineUri;
-        _defaultChannelStrategy = _options.RedisChannelStrategy ?? new PrefixStrategy(RedisTypePrefixes.PubSub, cacheOptions);
+        _defaultChannelStrategy = _options.RedisChannelStrategy ?? new PrefixStrategy(RedisKeyspaces.PubSub, cacheOptions);
         Enabled = _options.Enabled;
     }
 

@@ -58,7 +58,7 @@ public sealed partial class RedisStreamsTopic<T> : ITopic<T>
         _cachingTelemetryProvider = cachingTelemetryProvider;
         _streamOptions = streamOptions;
         _subject = subjectFactory();
-        _redisStreamKeyStrategy = streamOptions.RedisStreamKeyStrategy ?? new PrefixStrategy(RedisTypePrefixes.Streams, cacheOptions);
+        _redisStreamKeyStrategy = streamOptions.RedisStreamKeyStrategy ?? new PrefixStrategy(RedisKeyspaces.Streams, cacheOptions);
         if (_streamOptions.NotifyEnabled)
         {
             var notifyChannelStrategy = streamOptions.NotifyChannelStrategy

@@ -4,29 +4,29 @@ public sealed class DefaultRedisKeyStrategyFactory : IRedisKeyStrategyFactory
 {
     public IRedisKeyStrategy Create(CacheOptions options, Type cacheType)
     {
-        string typePrefix;
+        string keyspace;
 
         if (typeof(ICache).IsAssignableFrom(cacheType))
         {
-            typePrefix = RedisTypePrefixes.String;
+            keyspace = RedisKeyspaces.String;
         }
         else if (typeof(IHashCache).IsAssignableFrom(cacheType))
         {
-            typePrefix = RedisTypePrefixes.Hash;
+            keyspace = RedisKeyspaces.Hash;
         }
         else
         {
             throw new ArgumentException($"Cache type {cacheType} is not supported by {nameof(DefaultRedisKeyStrategyFactory)}");
         }
 
-        return Create(options, typePrefix);
+        return Create(options, keyspace);
     }
 
     public IRedisKeyStrategy Create(CacheOptions options, string differentiator)
     {
-        var typePrefix = Guard.NotNullOrWhiteSpace(differentiator, nameof(differentiator));
+        var keyspace = Guard.NotNullOrWhiteSpace(differentiator, nameof(differentiator));
         var separator = Guard.NotWhiteSpace(options.Separator, nameof(options.Separator));
-        var prefix = string.Join(separator, Guard.NotNullOrWhiteSpace(options.AppShortName, nameof(options.AppShortName)), typePrefix);
+        var prefix = string.Join(separator, Guard.NotNullOrWhiteSpace(options.AppShortName, nameof(options.AppShortName)), keyspace);
         return options.ShardKeyEnabled ? new ShardPrefixRedisKeyStrategy(prefix, separator) : new PrefixRedisKeyStrategy(prefix, separator);
     }
 }

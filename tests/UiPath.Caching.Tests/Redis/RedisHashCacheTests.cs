@@ -1492,7 +1492,7 @@ public class RedisHashCacheTests(ITestContextAccessor testContextAccessor) : IAs
     {
         _prefix = _fixture.Create<string>();
         _cacheKey = _fixture.Create<string>();
-        _redisKey = string.Join(':', _prefix, RedisTypePrefixes.Hash, _cacheKey).ToLowerInvariant();
+        _redisKey = string.Join(':', _prefix, RedisKeyspaces.Hash, _cacheKey).ToLowerInvariant();
 
         _database = _fixture.Freeze<IDatabase>();
         _transaction = _fixture.Freeze<ITransaction>();

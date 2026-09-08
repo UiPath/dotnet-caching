@@ -1,6 +1,6 @@
 namespace UiPath.Caching.Redis;
 
-public static class RedisTypePrefixes
+public static class RedisKeyspaces
 {
     public const string String = "s";
     

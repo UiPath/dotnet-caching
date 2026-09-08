@@ -14,6 +14,8 @@ namespace UiPath.Caching.Queue.Config;
 [ExcludeFromCodeCoverage]
 public static class QueueCacheCollectionExtensions
 {
+    private const string SetCacheKeyspaceOwner = "ISetCache (UiPath.Caching.Queue)";
+
     public static ICachingBuilder AddQueueMemory(this ICachingBuilder builder) =>
         builder.AddQueueMemory(KnownCacheProviderNames.InMemory);
 
@@ -70,6 +72,7 @@ public static class QueueCacheCollectionExtensions
         var options = new RedisSetCacheOptions();
         configureOptions.Invoke(options);
         builder.Services.TryConfigure(configureOptions);
+        builder.Services.ReserveRedisKeyspace(RedisSetCache.RedisSetKeyspace, SetCacheKeyspaceOwner);
         if (!builder.Enabled || !options.Enabled)
         {
             builder.Services.AddNullQueueCache();
@@ -102,6 +105,7 @@ public static class QueueCacheCollectionExtensions
         var options = new InMemoryRedisQueueCacheOptions();
         configureOptions.Invoke(options);
         builder.Services.TryConfigure(configureOptions);
+        builder.Services.ReserveRedisKeyspace(RedisSetCache.RedisSetKeyspace, SetCacheKeyspaceOwner);
         if (!builder.Enabled || !options.Enabled)
         {
             builder.Services.AddNullQueueCache();
@@ -118,7 +122,7 @@ public static class QueueCacheCollectionExtensions
         return builder;
     }
     
-    private static IServiceCollection AddQueueCacheCore(this IServiceCollection services)
+    private static void AddQueueCacheCore(this IServiceCollection services)
     {
         services.TryAddSingleton<IQueueCacheFactory>(sp =>
             new QueueCacheFactory(sp.GetRequiredService<IOptions<CacheOptions>>(), sp.GetServices<IQueueCacheProvider>()));
@@ -127,14 +131,12 @@ public static class QueueCacheCollectionExtensions
         services.TryAddTransient<Func<IQueueCacheFactory>>(sp => () => sp.GetRequiredService<IQueueCacheFactory>());
         services.TryAddSingleton<ISetCache>(sp => sp.GetRequiredService<IQueueCacheFactory>().CreateSetCache());
         services.TryAddTransient(typeof(ISetCache<>), typeof(SetCache<>));
-        return services;
     }
 
-    private static IServiceCollection AddNullQueueCache(this IServiceCollection services)
+    private static void AddNullQueueCache(this IServiceCollection services)
     {
         services.TryAddSingleton<ISetCache>(NullSetCache.Instance);
         services.TryAddSingleton<IQueueCacheFactory>(NullQueueCacheFactory.Instance);
         services.TryAddTransient(typeof(ISetCache<>), typeof(SetCache<>));
-        return services;
     }
 }

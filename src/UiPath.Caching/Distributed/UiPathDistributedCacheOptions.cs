@@ -19,10 +19,10 @@ public class UiPathDistributedCacheOptions
     public ICacheKeyStrategy? CacheKeyStrategy { get; set; }
 
     /// <summary>
-    /// Differentiator handed to the Redis key strategy, placed after <c>AppShortName</c>, in the slot the
-    /// application's own caches fill with a <see cref="RedisTypePrefixes"/> value. Null uses <c>"dh"</c>.
-    /// Inert on the InMemory tier, and a value matching one of the application's type prefixes is rejected
-    /// at registration.
+    /// Value placed after <c>AppShortName</c>, in the slot the application's caches fill with a
+    /// <see cref="RedisKeyspaces"/> value. Null uses <c>"dh"</c>; inert on the InMemory tier. One segment of
+    /// letters and digits, like every reserved keyspace. A value any package reserved is rejected at
+    /// registration, in either order and even when caching is disabled.
     /// </summary>
     public string? RedisKeyDifferentiator { get; set; }
 
@@ -30,10 +30,12 @@ public class UiPathDistributedCacheOptions
     /// Builds the Redis key from the composed <see cref="CacheKey"/>, receiving
     /// <see cref="RedisKeyDifferentiator"/>. Null uses the one the application configured on
     /// <see cref="RedisCacheOptions.RedisKeyStrategyFactory"/>, so the distributed cache inherits its
-    /// <c>AppShortName</c>, separator and sharding conventions. Set this to take over the layout entirely —
-    /// for a mandated key shape, or a cluster hash-tag scheme. Registration proves the resulting keys differ
-    /// from the application's, so a factory that ignores the differentiator is rejected rather than silently
-    /// sharing the keyspace.
+    /// <c>AppShortName</c>, separator and sharding conventions. Set this to take over the layout entirely.
+    /// A layout that lands on the application's own keys, or on a reserved keyspace, is rejected when
+    /// <c>IDistributedCache</c> is first resolved, which is startup only if something resolves it there.
+    /// Ignoring the differentiator is fine as long as the keys stay disjoint. The check is a probe rather
+    /// than a proof: reserved keyspaces are rendered through the application's factory, so a keyspace whose
+    /// owner composes keys elsewhere, as broadcast streams do, is only approximated.
     /// </summary>
     public IRedisKeyStrategyFactory? RedisKeyStrategyFactory { get; set; }
 
