@@ -6,6 +6,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 
 ## [Unreleased]
 
+## [2.0.0-preview.1] - 2026-09-08
+
+Preview of the 2.0 line. The public API surface below stays in `PublicAPI.Unshipped.txt` until
+2.0.0 ships, so it may still change between previews.
+
 ### Added
 
 - **`IDistributedCache` adapter.** `builder.AddDistributedCache(providerName)` registers a
