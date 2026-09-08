@@ -30,6 +30,50 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
   `AllowUnboundedEntries`. Writes with no caller expiration take a bounded default rather than living
   forever in shared storage; an unset default resolves to `CachePolicy.DefaultDistributedExpiration`,
   and only `AllowUnboundedEntries` reaches "until removed".
+- **`IBufferDistributedCache`** (`net9.0`+). The adapter registered by `AddDistributedCache` also
+  implements the buffer-based half of the `IDistributedCache` contract, so a caller reads into an
+  `IBufferWriter<byte>` and writes from a `ReadOnlySequence<byte>` instead of trading a fresh array per
+  operation — `HybridCache` as an L2, output caching and session state all take that path once they find
+  it. Discovery is the framework's own: a type check on the resolved `IDistributedCache`, so nothing
+  extra is registered and no consumer code changes. Both halves share one read and write path — same
+  keyspace, expiration, sliding and stored fields — so an entry written through either is readable
+  through the other and by any other client on the conventional layout. `TryGet` reports hit and payload
+  separately, the one thing the array half cannot express: an entry stored empty is a hit that writes no
+  bytes, where `Get` returns an empty array for that and for a miss alike. What happens to the caller's
+  buffer on a write depends on the tier: on `Redis` a single-segment sequence is handed to the connection
+  as the caller's own memory — no array in between — and a segmented one is flattened into a rented
+  buffer that is returned once the write has been awaited; the memory tiers keep what they are handed, so
+  there the sequence is copied into an owned array. Either way a pooled buffer is safe to reuse the moment
+  the call returns. The adapter's values travel as `ReadOnlyMemory<byte>` throughout, and its expiration
+  fields are parsed and formatted straight from UTF-8 with no intermediate string.
+  `NullDistributedCache` implements it too, so switching caching off does not change which half a
+  consumer discovers. Not present on `net8.0`: that floor pins
+  `Microsoft.Extensions.Caching.Abstractions` to 8.0.0, which predates the interface, and the type check
+  simply comes up empty there.
+- **`IMemorySerializerProxy`**, an optional refinement of `ISerializerProxy<byte[]>` for a serializer that
+  can hand back memory without materializing an array: `ReadOnlyMemory<byte> SerializeToMemory<T>(T? value)`.
+  `SystemJsonByteSerializerProxy` implements it as its array output wrapped — a byte payload is still
+  base64 inside JSON, so the wire format is one thing whichever member a tier calls — and
+  `RawByteSerializerProxy` passes a `ReadOnlyMemory<byte>` or `Memory<byte>` through untouched. `RedisCache`
+  and `RedisHashCache` ask for memory when the configured serializer offers it. The memory is borrowed: it
+  may alias the value it came from and is valid only until the operation completes, which the Redis tier
+  honors by copying it into the connection's buffer as the command is written and awaiting the write to
+  completion. That last part is a contract on `IResiliencePipeline` too — its `ExecuteAsync` must not
+  complete before the callback has — and the Polly pipeline this library ships awaits throughout.
+- **`ReadOnlyMemory<byte>` is a cacheable value type.** `NotCacheableException` admits it alongside classes
+  and nullable structs: its default is empty memory, which the storage tiers already read as absent, so a
+  miss has something to return. The raw serializer had special-cased the type in both directions without
+  any cache being able to reach it. Like a zero-length payload, an empty `ReadOnlyMemory<byte>` value is
+  indistinguishable from absent. `Memory<byte>` stays out — a cache must not hand back a window it can be
+  written through.
+- **Topic keys are computed once per type.** `DefaultTopicKeyStrategy` memoizes the key it derives from a
+  value type. It runs on every operation of the memory-backed tiers, and for a generic value type — a
+  `List<T>`, and now the distributed adapter's `ReadOnlyMemory<byte>` — the friendly name was rebuilt with a
+  `StringBuilder` each time, about 260 bytes per call; a non-generic type's name was a cached lookup, so the
+  cost went unnoticed. The keys themselves are unchanged.
+- **Benchmarks.** `DistributedCacheBenchmark` covers both halves of the contract per tier and payload size
+  with allocation columns; the harness now finds the sample's `appsettings.json` under `samples/`, which had
+  moved from under it.
 - **`CacheOptions.KeyCasing`** selects how keys built without an explicit mode are normalized —
   `Insensitive` (trim + lowercase, the historical behavior and the default) or `Sensitive` (preserve
   the caller's casing). `CacheKey` gained a `(string?, CacheKeyCasing)` constructor, a `Casing`
