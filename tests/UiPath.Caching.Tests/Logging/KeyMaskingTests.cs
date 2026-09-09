@@ -92,7 +92,7 @@ public class KeyMaskingTests
         Render(policy, "cosmin", composed: null, valueType: typeof(int));
 
         policy.Last.Key.Should().Be("cosmin");
-        policy.Last.ValueType.Should().Be(typeof(int));
+        policy.Last.ValueType.Should().Be<int>();
         policy.Last.CacheName.Should().Be(KnownCacheProviderNames.Redis);
     }
 

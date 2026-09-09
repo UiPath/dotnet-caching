@@ -68,7 +68,8 @@ public class MaskedLogSiteTests
             loggerFactory.CreateLogger<ChangeToken<byte[]>>(),
             NullTelemetryProvider.Instance,
             acceptedEvents: null,
-            new KeyMasker(new PrefixKeyMaskingPolicy(), KnownCacheProviderNames.InMemoryRedis));
+            new KeyMasker(new PrefixKeyMaskingPolicy(), KnownCacheProviderNames.InMemoryRedis),
+            entryType: typeof(byte[]));
 
         logs.Lines.Should().Contain(l => l.Contains("ses****")).And.NotContain(l => l.Contains(SecretKey));
     }

@@ -340,15 +340,16 @@ The cache-key strategy is applied by the adapter rather than by the backing prov
 `ICacheOptions.CacheKeyStrategy`, which `RedisHashCache` does not consult — routing it through the
 provider would make the stored key depend on which tier is configured.
 
-> **Keys appear in logs.** `IDistributedCache` keys are chosen by the consumer and can be secrets — under
-> ASP.NET Core session the key is the session id. This adapter names the key in its two own messages (a failed
-> write at `Warning`, a no-op remove at `Debug`), and the composed key is passed to the backing cache, which
-> logs it in its own diagnostics too: `MultilayerHashCache` includes the `CacheKey` in five `LogLevel.Warning` messages (raised on
-> inner-cache exceptions) and in several Debug/Trace ones, and `RedisHashCache` includes the physical key in
-> `LogLargeValueDetected` (Warning) and `LogRefreshingKey` (Trace). Keys stored verbatim for parity with
-> the conventional layout also means they appear in `KEYS`/`SCAN` output and RDB
-> snapshots. Treat logs and Redis dumps for this provider as containing session identifiers, or filter the
-> `UiPath.Caching` log categories accordingly.
+> **Keys are masked in logs, verbatim in Redis.** `IDistributedCache` keys are chosen by the consumer and can be
+> secrets — under ASP.NET Core session the key is the session id — so this adapter and the private tiers it builds
+> mask keys in every line they write, whatever the application registered, and independently of
+> `AddKeyMasking`. That covers the adapter's own two messages (a failed write at `Warning`, a no-op remove at
+> `Debug`) and the backing cache's diagnostics: `MultilayerHashCache` names the `CacheKey` in five
+> `LogLevel.Warning` messages (raised on inner-cache exceptions) and in several Debug/Trace ones, and
+> `RedisHashCache` names the physical key in `LogLargeValueDetected` (Warning) and `LogRefreshingKey` (Trace).
+> Storage is a different matter: keys stored verbatim for parity with the conventional layout appear in
+> `KEYS`/`SCAN` output and RDB snapshots, so treat Redis dumps for this provider as containing session
+> identifiers even though the logs no longer do.
 
 **`Refresh` waits for the server on this provider.** `AddDistributedCache` sets
 `RedisCacheOptions.AwaitRefresh` on the private provider it builds, so `IDistributedCache.Refresh` — and the

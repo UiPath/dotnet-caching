@@ -6,6 +6,7 @@ public sealed partial class ChangeToken<T> : ICacheChangeToken, IKeyedObserver<I
 {
     private readonly string _key;
     private readonly KeyMasker _masker;
+    private readonly Type? _entryType;
     private readonly TopicKey _topic;
     private readonly Uri? _source;
     private readonly ISerializerProxy<T> _serializer;
@@ -16,7 +17,7 @@ public sealed partial class ChangeToken<T> : ICacheChangeToken, IKeyedObserver<I
 
     private readonly List<(Action<object?> callback, object? state)> _callbacks = [];
 
-    private LoggedKey Logged(string? key) => LoggedKey.For(_masker, key ?? string.Empty);
+    private LoggedKey Logged(string? key) => LoggedKey.For(_masker, key ?? string.Empty, _entryType);
 
     public ChangeToken(
         string key,
@@ -26,7 +27,7 @@ public sealed partial class ChangeToken<T> : ICacheChangeToken, IKeyedObserver<I
         ILogger<ChangeToken<T>> logger,
         ICachingTelemetryProvider telemetryProvider,
         ISet<string>? acceptedEvents = null)
-        : this(key, topic, source, serializer, logger, telemetryProvider, acceptedEvents, KeyMasker.Off)
+        : this(key, topic, source, serializer, logger, telemetryProvider, acceptedEvents, KeyMasker.Off, entryType: null)
     {
     }
 
@@ -38,9 +39,11 @@ public sealed partial class ChangeToken<T> : ICacheChangeToken, IKeyedObserver<I
         ILogger<ChangeToken<T>> logger,
         ICachingTelemetryProvider telemetryProvider,
         ISet<string>? acceptedEvents,
-        KeyMasker masker)
+        KeyMasker masker,
+        Type? entryType)
     {
         _masker = masker;
+        _entryType = entryType;
         _key = key;
         _topic = topic.TopicKey;
         _source = source;

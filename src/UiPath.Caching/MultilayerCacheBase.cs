@@ -103,6 +103,17 @@ public abstract class MultilayerCacheBase : IDisposable
     /// <summary>The key as a log line should show it. Nothing is rendered unless the line is written.</summary>
     private protected LoggedKey Logged(CacheKey key, Type? valueType = null) => LoggedKey.For(_masker, key, valueType);
 
+    /// <summary>Shows the composed key but judges, and masks, the caller's own key inside it.</summary>
+    private protected LoggedKey Logged(CacheEntryOptions options, Type? valueType = null) =>
+        LoggedKey.For(_masker, options.CallerKey, options.CacheKey.Name, valueType);
+
+    /// <inheritdoc cref="Logged(CacheEntryOptions, Type?)"/>
+    private protected LoggedKeys Logged(IReadOnlyCollection<CacheEntryOptions> options, Type? valueType = null) => new(_masker, options, valueType);
+
+    /// <inheritdoc cref="Logged(CacheEntryOptions, Type?)"/>
+    private protected LoggedKey Logged(InternalHashCacheEntryOptions options, Type? valueType = null) =>
+        LoggedKey.For(_masker, options.CallerKey, options.CacheKey.Name, valueType);
+
     /// <inheritdoc cref="Logged(CacheKey, Type?)"/>
     private protected LoggedKeys Logged(IReadOnlyCollection<CacheKey> keys, Type? valueType = null) => new(_masker, keys, valueType);
 

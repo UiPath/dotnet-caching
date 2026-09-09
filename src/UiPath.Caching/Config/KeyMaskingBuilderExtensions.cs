@@ -5,7 +5,7 @@ namespace UiPath.Caching.Config;
 /// <summary>Turns key masking on; without one of these the container resolves <see cref="NullKeyMaskingPolicy"/>.</summary>
 public static class KeyMaskingBuilderExtensions
 {
-    /// <summary>Masks the keys starting with one of <paramref name="maskedKeyPrefixes"/>, or every key when none is given.</summary>
+    /// <summary>Masks the keys starting with one of <paramref name="maskedKeyPrefixes"/>, or every key that is not a plain identifier when none is given.</summary>
     public static ICachingBuilder AddKeyMasking(this ICachingBuilder builder, params string[] maskedKeyPrefixes)
     {
         ArgumentNullException.ThrowIfNull(builder);

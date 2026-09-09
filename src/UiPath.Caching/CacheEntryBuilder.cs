@@ -28,6 +28,7 @@ internal class CacheEntryBuilder
         return new CacheEntryOptions
         {
             CacheKey = entryCacheKey,
+            CallerKey = cacheKey,
             TopicKey = topicKey,
             Token = token,
             Expiration = _clock.ToDateTimeOffset(expiration)

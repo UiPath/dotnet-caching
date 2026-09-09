@@ -184,7 +184,9 @@ builder.Services.AddCaching(section, b => b
     .AddKeyMasking("session:", "user:"));   // these prefixes are secrets
 ```
 
-`AddKeyMasking()` with no prefix masks every key. A masked key keeps its first three characters, enough to correlate
+`AddKeyMasking()` with no prefix masks every key the built-in policy does not read as a plain identifier; a number or a
+GUID stays readable either way, so only `AddKeyMasking<AlwaysMaskKeyMaskingPolicy>()` masks literally every key. A masked
+key keeps its first three characters, enough to correlate
 two lines about the same entry and not enough to replay it. A key of three characters or fewer keeps none, since
 there would be nothing left to hide:
 

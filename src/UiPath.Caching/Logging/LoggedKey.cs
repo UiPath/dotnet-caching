@@ -44,7 +44,8 @@ internal readonly struct LoggedKey
 internal readonly struct LoggedKeys
 {
     private readonly KeyMasker _masker;
-    private readonly IReadOnlyCollection<CacheKey> _keys;
+    private readonly IReadOnlyCollection<CacheKey>? _keys;
+    private readonly IReadOnlyCollection<CacheEntryOptions>? _entries;
     private readonly Type? _valueType;
 
     public LoggedKeys(KeyMasker masker, IReadOnlyCollection<CacheKey> keys, Type? valueType = null)
@@ -54,10 +55,20 @@ internal readonly struct LoggedKeys
         _valueType = valueType;
     }
 
+    /// <summary>Shows each composed key but judges, and masks, the caller's own key inside it.</summary>
+    public LoggedKeys(KeyMasker masker, IReadOnlyCollection<CacheEntryOptions> entries, Type? valueType = null)
+    {
+        _masker = masker;
+        _entries = entries;
+        _valueType = valueType;
+    }
+
     public override string ToString()
     {
         var masker = _masker;
         var valueType = _valueType;
-        return string.Join(',', _keys.Select(key => masker.Render(key.Name ?? string.Empty, composed: null, valueType)));
+        return _entries is not null
+            ? string.Join(',', _entries.Select(e => masker.Render(e.CallerKey.Name ?? string.Empty, e.CacheKey.Name, valueType)))
+            : string.Join(',', (_keys ?? []).Select(key => masker.Render(key.Name ?? string.Empty, composed: null, valueType)));
     }
 }

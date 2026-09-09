@@ -1,8 +1,9 @@
+using System.Collections.Concurrent;
 using UiPath.Caching.Telemetry;
 
 namespace UiPath.Caching.Broadcast;
 
-public sealed partial class ChangeTokenFactory<T> : IChangeTokenFactory
+public sealed partial class ChangeTokenFactory<T> : IChangeTokenFactory, IMaskedChangeTokenFactory
 {
 #pragma warning disable IDE1006 // Naming Styles
     private readonly ISet<string> MemoryAcceptedEvents = new HashSet<string>([KnownEventTypes.CacheRemoved, KnownEventTypes.CacheRefreshed], StringComparer.InvariantCultureIgnoreCase);
@@ -14,6 +15,7 @@ public sealed partial class ChangeTokenFactory<T> : IChangeTokenFactory
     private readonly Uri? _sourceUri;
     private readonly ICachingTelemetryProvider _telemetryProvider;
     private readonly IKeyMaskingPolicy? _keyMaskingPolicy;
+    private readonly ConcurrentDictionary<string, KeyMasker> _maskers = new(StringComparer.Ordinal);
 
     public ChangeTokenFactory(IOptions<CacheOptions> optionsAccessor, ISerializerProxy<T> serializer, ILoggerFactory loggerFactory, ICachingTelemetryProvider telemetryProvider)
         : this(optionsAccessor, serializer, loggerFactory, telemetryProvider, keyMaskingPolicy: null)
@@ -30,16 +32,22 @@ public sealed partial class ChangeTokenFactory<T> : IChangeTokenFactory
         _telemetryProvider = telemetryProvider;
     }
 
-    public ICacheChangeToken Create(string token, ITopic<ICacheEvent> topic, string cacheName, Type entryType)
+    public ICacheChangeToken Create(string token, ITopic<ICacheEvent> topic, string cacheName, Type entryType) =>
+        CreateCore(token, topic, cacheName, entryType, _maskers.GetOrAdd(cacheName, name => KeyMasker.For(_keyMaskingPolicy, name)));
+
+    /// <summary>A tier built with its own policy, such as a private cache behind the distributed adapter, passes the masker it was given.</summary>
+    ICacheChangeToken IMaskedChangeTokenFactory.Create(string token, ITopic<ICacheEvent> topic, string cacheName, Type entryType, KeyMasker masker) =>
+        CreateCore(token, topic, cacheName, entryType, masker);
+
+    private ICacheChangeToken CreateCore(string token, ITopic<ICacheEvent> topic, string cacheName, Type entryType, KeyMasker masker)
     {
-        var masker = KeyMasker.For(_keyMaskingPolicy, cacheName);
         if (_logger.IsEnabled(LogLevel.Trace))
         {
-            LogCreateChangeToken(topic.TopicKey, LoggedKey.For(masker, token), _sourceUri);
+            LogCreateChangeToken(topic.TopicKey, LoggedKey.For(masker, token, entryType), _sourceUri);
         }
 
         var acceptedEvents = KnownCacheProviderNames.InMemory.Equals(cacheName, StringComparison.OrdinalIgnoreCase) ? MemoryAcceptedEvents : null;
-        return new ChangeToken<T>(token, topic, _sourceUri, _serializer, _loggerFactory.CreateLogger<ChangeToken<T>>(), _telemetryProvider, acceptedEvents, masker);
+        return new ChangeToken<T>(token, topic, _sourceUri, _serializer, _loggerFactory.CreateLogger<ChangeToken<T>>(), _telemetryProvider, acceptedEvents, masker, entryType);
     }
 
     [LoggerMessage(Level = LogLevel.Trace, Message = "Create change token. topic {TopicKey} token {Token} source {SourceUri}")]
