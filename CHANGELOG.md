@@ -366,6 +366,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 
 ### Fixed
 
+- **Multi-key `RemoveAsync` honors its cancellation token again.** The `CacheKey[]` overload built
+  each entry's options without the token, so an already-cancelled call did the work anyway and only
+  noticed at the removal itself. It now forwards the token, matching the single-key overload. The
+  rest of this change is build-warning cleanup with no behavior change: the periodic-timer loops in
+  `CacheMemoryMonitor` and the stream health maintainer, and the planned-maintenance probe task, now
+  say explicitly that they opt out of token propagation, each with the reason — disposal is what
+  stops the loops, and the probe delegate must always run so its `finally` clears the in-progress
+  flag. Test fakes moved off the obsolete `RedisServerException(string)` constructor.
+
 - **Stale endpoint detection works under the default `allowAdmin=false`.** The membership check
   issued `CLUSTER NODES`, which StackExchange.Redis refuses client-side unless admin mode is on, so on
   a default connection every scan recorded a `RedisCommandException` and never reconnected. The scan

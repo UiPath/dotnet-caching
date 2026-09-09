@@ -9,6 +9,8 @@
     <NoWarn>$(NoWarn);NU1608</NoWarn>
     <!-- SER305/SER306 flag awaiting a queued or fire-and-forget command; here those awaits are NSubstitute Received() checks on a mock. -->
     <NoWarn>$(NoWarn);SER305;SER306</NoWarn>
+    <!-- SER007 marks RedisErrorKind experimental; the non-obsolete RedisServerException ctor needs it, and these are test fakes. -->
+    <NoWarn>$(NoWarn);SER007</NoWarn>
   </PropertyGroup>
 
   <ItemGroup>

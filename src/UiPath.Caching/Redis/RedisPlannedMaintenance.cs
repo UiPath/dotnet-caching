@@ -263,6 +263,8 @@ public sealed class RedisPlannedMaintenance : IRedisPlannedMaintenance, IHostedS
                     InProgress = false;
                     _telemetryProvider.TrackEvent("Redis.MaintenanceEnded");
                 }
-            });
+            },
+            // Never skip the delegate: its finally disposes the linked source and clears InProgress.
+            CancellationToken.None);
     }
 }
