@@ -16,6 +16,7 @@ internal sealed partial class RedisStreamNotifyChannel : IDisposable
     private readonly ManualResetEventSlim _subscribingDone = new(initialState: true);
     private Action? _unsubscribe;
     private int _subscribing;
+    private int _resubscribeRequested;
     private volatile bool _disposed;
 
     public RedisStreamNotifyChannel(
@@ -47,8 +48,10 @@ internal sealed partial class RedisStreamNotifyChannel : IDisposable
         }
         if (Interlocked.CompareExchange(ref _subscribing, 1, 0) != 0)
         {
+            // The attempt already in flight re-arms the timer for whoever asked, so this one can drop out.
             return;
         }
+        Volatile.Write(ref _resubscribeRequested, 0);
         try
         {
             _subscribingDone.Reset();
@@ -88,7 +91,11 @@ internal sealed partial class RedisStreamNotifyChannel : IDisposable
             }
             try
             {
-                _subscribeTimer.Change(Timeout.Infinite, Timeout.Infinite);
+                // A reconnect that arrived while this attempt was in flight subscribed against the old
+                // connection, so it has to run again rather than sleep until the next reconnect.
+                _subscribeTimer.Change(
+                    Volatile.Read(ref _resubscribeRequested) == 0 ? Timeout.InfiniteTimeSpan : _timerDueTime,
+                    _timerPeriod);
             }
             catch (ObjectDisposedException)
             {
@@ -121,6 +128,7 @@ internal sealed partial class RedisStreamNotifyChannel : IDisposable
         {
             return;
         }
+        Volatile.Write(ref _resubscribeRequested, 1);
         try
         {
             _subscribeTimer.Change(_timerDueTime, _timerPeriod);
