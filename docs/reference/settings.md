@@ -20,7 +20,7 @@ Every binding-visible property on every shipped options class, with shipped defa
 | `Enabled` | `bool` | `true` | App-wide | Master on/off switch for the caching subsystem. |
 | `TelemetryEnabled` | `bool` | `true` | App-wide | Gates the `ICachingTelemetryProvider` seam; set to `false` to silence all cache metrics. |
 | `BroadcastEnabled` | `bool` | `true` | App-wide | Gates the `ITopicFactory` wiring; set to `false` to disable all invalidation broadcasts. |
-| `ShardKeyEnabled` | `bool` | `false` | App-wide | Enable for Redis Cluster deployments that span multiple shards. |
+| `ShardKeyEnabled` | `bool` | `false` | App-wide | Enable for Redis Cluster deployments that span multiple shards. Wraps the cache key in a `{...}` hash tag so only the key, not `AppShortName` or the keyspace, picks the slot. A key that already carries a valid hash tag is left as it is, so a caller that placed its own `{tag}` keeps the slot it chose. |
 | `AuditEnabled` | `bool` | `true` | App-wide | Log writes whose serialized size exceeds `LargeValueThreshold` bytes. |
 | `DefaultCache` | `string` | `"InMemoryRedis"` | App-wide | Provider name resolved when no explicit provider is requested; values: `InMemory`, `Redis`, `InMemoryRedis`. |
 | `DefaultTopic` | `string` | `"RedisStreams"` | App-wide | Topic provider used when no explicit topic is requested; values: `RedisStreams`, `RedisPubSub`. |

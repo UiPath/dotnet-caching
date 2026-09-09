@@ -358,6 +358,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
   one-line type change; `AddCaching` now throws at startup if a leftover
   `ISerializerProxy<RedisValue>` registration is present, rather than ignoring it and silently
   falling back to JSON.
+- **Multi-key commands are checked against the Redis Cluster slot map before they run.** `GetAsync(CacheKey[])`, `GetCacheEntriesAsync`, the multi-key `SetAsync` and `RemoveAsync(CacheKey[])` each reach Redis as one command on one node, so a batch whose keys span slots is answered with an error, which the caches log and report as a miss: migrating an app onto a cluster turned a working batch read into a cache that never hits, with nothing thrown to say so. Each of those paths now compares the slots first and throws `CrossSlotKeysException`, naming the two keys that disagree and how to fix it. A non-clustered server maps every key to the same slot, so nothing changes off a cluster, and a disconnected cache skips the check and keeps answering from its own disconnected branch.
+- **`ShardKeyEnabled` leaves a key that already carries a hash tag alone.** The shard strategy used
+  to wrap every key in braces, so a caller who had placed its own `{tag}` in the key ended up with
+  `app:s:{authz_{orgid}_groups_1}` — Redis hashes from the first `{` to the next `}`, so the tag was
+  the accidental `authz_{orgid` rather than the org the caller asked for. A key with a valid hash tag
+  (non-empty content between the first `{` and the next `}`) is now prefixed and left as-is, so the
+  caller's tag alone picks the slot and multi-key commands land where the caller intended. Keys with
+  no braces, or with braces that do not form a valid tag, are wrapped exactly as before. This
+  relocates existing entries only for apps that run `ShardKeyEnabled: true` *and* put braces in
+  their keys.
 
 ### Removed
 

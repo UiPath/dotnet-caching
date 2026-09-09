@@ -153,3 +153,7 @@ UiPath.Caching.CacheEventPublisher.CacheRefreshedAsync(UiPath.Caching.ICacheEntr
 UiPath.Caching.CacheEventPublisher.CacheRemovedAsync(UiPath.Caching.ICacheEntryOptions! options, System.Type? entryType) -> System.Threading.Tasks.ValueTask<bool>
 UiPath.Caching.CacheEventPublisher.CacheSetAsync(UiPath.Caching.ICacheEntryOptions! options, System.Type? entryType) -> System.Threading.Tasks.ValueTask<bool>
 UiPath.Caching.CacheEventPublisher.MetadataUpdatedAsync(UiPath.Caching.ICacheEntryOptions! options, System.Type? entryType) -> System.Threading.Tasks.ValueTask<bool>
+UiPath.Caching.Redis.CrossSlotKeysException
+UiPath.Caching.Redis.CrossSlotKeysException.CrossSlotKeysException() -> void
+UiPath.Caching.Redis.CrossSlotKeysException.CrossSlotKeysException(string? message) -> void
+UiPath.Caching.Redis.CrossSlotKeysException.CrossSlotKeysException(string? message, System.Exception? innerException) -> void

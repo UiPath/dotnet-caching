@@ -205,7 +205,7 @@ internal sealed partial class RedisCache : RedisCacheBase, ICache
 
     public ValueTask<bool> RemoveAsync<T>(CacheKey[] cacheKey, CancellationToken token = default)
     {
-        return RemoveAsync<T>(cacheKey.Select(k => ToRedisKey(k, token)).ToArray(), token);
+        return RemoveAsync<T>(cacheKey, cacheKey.Select(k => ToRedisKey(k, token)).ToArray(), token);
     }
 
     public ValueTask<bool> SetAsync<T>(CacheKey cacheKey, T? value, CachePolicy? policy, CancellationToken token = default) =>
@@ -543,7 +543,8 @@ internal sealed partial class RedisCache : RedisCacheBase, ICache
     {
         bool ret = default;
         token.ThrowIfCancellationRequested();
-        
+        var redisKeys = keyValues.Select(kv => ToRedisKey(kv.Key, token)).ToArray();
+
         if (!IsConnected)
         {
             return false;
@@ -552,12 +553,13 @@ internal sealed partial class RedisCache : RedisCacheBase, ICache
         var operation = StartOperation<T>(nameof(SetAsync));
         try
         {
+            ThrowIfCrossSlot(Array.ConvertAll(keyValues, kv => kv.Key), redisKeys, typeof(T), nameof(SetAsync));
             var transaction = Database.CreateTransaction(asyncState: null);
 
-            foreach (var keyValue in keyValues)
+            for (var i = 0; i < keyValues.Length; i++)
             {
-                var redisKey = ToRedisKey(keyValue.Key, token);
-                var value = keyValue.Value;
+                var redisKey = redisKeys[i];
+                var value = keyValues[i].Value;
                 if (IsDefault(value))
                 {
                     if (_cacheNullValues && expiration > TimeSpan.Zero)
@@ -583,6 +585,12 @@ internal sealed partial class RedisCache : RedisCacheBase, ICache
             }, default, token).ConfigureAwait(false);
 
             operation.Stop();
+        }
+        catch (CrossSlotKeysException)
+        {
+            // A batch the caller has to fix, not a Redis failure to report as a miss.
+            operation.Stop();
+            throw;
         }
         catch (Exception ex)
         {
@@ -625,13 +633,14 @@ internal sealed partial class RedisCache : RedisCacheBase, ICache
         return ret;
     }
 
-    private async ValueTask<bool> RemoveAsync<T>(RedisKey[] redisKey, CancellationToken token)
+    private async ValueTask<bool> RemoveAsync<T>(CacheKey[] cacheKeys, RedisKey[] redisKey, CancellationToken token)
     {
         bool ret = default;
         token.ThrowIfCancellationRequested();
         var operation = StartOperation<T>();
         try
         {
+            ThrowIfCrossSlot(cacheKeys, redisKey, typeof(T), nameof(RemoveAsync));
             var response = await _write.ExecuteAsync(async token =>
             {
                 token.ThrowIfCancellationRequested();
@@ -639,6 +648,12 @@ internal sealed partial class RedisCache : RedisCacheBase, ICache
             }, -1, token).ConfigureAwait(false);
             operation.Stop();
             ret = response > -1;
+        }
+        catch (CrossSlotKeysException)
+        {
+            // A batch the caller has to fix, not a Redis failure to report as a miss.
+            operation.Stop();
+            throw;
         }
         catch (Exception ex)
         {
@@ -707,6 +722,7 @@ internal sealed partial class RedisCache : RedisCacheBase, ICache
         var reads = InitReads(redisKeys);
         try
         {
+            ThrowIfCrossSlot(keys, redisKeys, typeof(T), nameof(GetAsync));
             var values = await _read.ExecuteAsync(async token =>
             {
                 token.ThrowIfCancellationRequested();
@@ -728,6 +744,12 @@ internal sealed partial class RedisCache : RedisCacheBase, ICache
                 retValues = GetDefaultValues<T>(keys);
             }
             operation.Stop();
+        }
+        catch (CrossSlotKeysException)
+        {
+            // A batch the caller has to fix, not a Redis failure to report as a miss.
+            operation.Stop();
+            throw;
         }
         catch (Exception ex)
         {
@@ -829,6 +851,7 @@ internal sealed partial class RedisCache : RedisCacheBase, ICache
         var reads = InitReads(redisKeys);
         try
         {
+            ThrowIfCrossSlot(keys, redisKeys, typeof(T), nameof(GetCacheEntriesAsync));
             var transaction = Database.CreateTransaction();
             var mgetTask = transaction.StringGetAsync(redisKeys, CommandFlags.PreferReplica).ConfigureAwait(false);
             var (expireTimeTasks, ttlTasks) = StartExpirationFetches(transaction, redisKeys);
@@ -864,6 +887,12 @@ internal sealed partial class RedisCache : RedisCacheBase, ICache
                     _cacheEntryFactory.Create<T?>(deserialized, Clock.ToDateTimeOffset(expiration)));
             }
             operation.Stop();
+        }
+        catch (CrossSlotKeysException)
+        {
+            // A batch the caller has to fix, not a Redis failure to report as a miss.
+            operation.Stop();
+            throw;
         }
         catch (Exception ex)
         {
