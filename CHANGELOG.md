@@ -23,9 +23,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
   distributed entry cannot be reached through the application's own `ICache`/`IHashCache` with the bare
   caller key, and `RedisKeyDifferentiator` plus `RedisKeyStrategyFactory` separate the physical Redis
   keyspace (`dh` by default, inheriting the application's factory). A differentiator matching one of the
-  application's own type prefixes is rejected at registration, and because a differentiator only
-  separates anything if the factory honors it, registration also proves the composed key differs from
-  what the application's caches would produce. Configurable via
+  application's own reserved keyspaces is rejected at registration, and because a differentiator only
+  separates anything if the factory honors it, resolving the cache also proves the composed key differs
+  from what the application's caches would produce. Configurable via
   `UiPathDistributedCacheOptions`: `PolicyName`, `DefaultEntryExpiration`, and
   `AllowUnboundedEntries`. Writes with no caller expiration take a bounded default rather than living
   forever in shared storage; an unset default resolves to `CachePolicy.DefaultDistributedExpiration`,
@@ -178,6 +178,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 
 ### Changed
 
+- **BREAKING: `RedisTypePrefixes` is now `RedisKeyspaces`.** The library called the same thing two
+  names — the short segment between `AppShortName` and the cache key was a "type prefix" in the core
+  and a "keyspace" in the reservation API that packages register against. It is a keyspace
+  everywhere now: the class, the error messages, and the docs. Only the type rename is a break;
+  `IReservedRedisKeyspace` ships for the first time in this release, so its `Keyspace` member had no
+  earlier spelling to migrate from. The constant values are
+  untouched (`"s"`, `"h"`, `"ps"`, `"st"`), so no Redis key changes and no data moves; only the
+  identifiers do. Replace `RedisTypePrefixes` with `RedisKeyspaces` at the call site. "Prefix" now
+  means only what it says: `UiPathDistributedCacheOptions.CacheKeyStrategy`'s key prefix,
+  `PrefixStrategy`, and StackExchange's own `KeyPrefix`.
 - **BREAKING:** an unset expiration no longer means "keep this forever". `CachePolicy` gained
   `DefaultDistributedExpiration` (1 hour), applied as the floor under
   `CachePolicy.DistributedExpiration` and the providers' `DefaultExpiration` on every write that
@@ -375,6 +385,23 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
   stops the loops, and the probe delegate must always run so its `finally` clears the in-progress
   flag. Test fakes moved off the obsolete `RedisServerException(string)` constructor.
 
+- **Reserved Redis keyspaces are extensible across packages (#130).** `AddDistributedCache` used to
+  compare `RedisKeyDifferentiator` against a hardcoded list of the core's Redis keyspaces, so a
+  package layered on top — `UiPath.Caching.Queue`'s set cache on `"se"` — was invisible to it and a
+  differentiator landing on those keys was accepted. Packages now declare the keyspaces they occupy
+  through `IServiceCollection.ReserveRedisKeyspace` (`IReservedRedisKeyspace`); the core reserves its
+  four and `AddQueueRedis` / `AddQueueInMemoryRedis` reserve `"se"`, whether or not that backing is
+  enabled. `AddDistributedCache` reserves its own differentiator the same way, so one registry answers
+  every case: the second party to claim a keyspace is rejected whichever it is, in either order, across
+  separate `AddCaching` calls, and even when `CacheOptions.Enabled` is false — a collision is a
+  configuration error rather than a runtime condition. Two packages claiming one keyspace is rejected
+  too, where before the later reservation was silently dropped; a repeat by the same owner is still
+  ignored. A keyspace, `RedisKeyDifferentiator` included, must be one segment of letters and digits, so
+  none can span segments under a punctuation separator; `CacheOptions.Separator` may itself be
+  alphanumeric, so one keyspace nesting inside another under the configured separator is rejected when the
+  options resolve. The resolution-time probe that guards a custom `IRedisKeyStrategyFactory` enumerates the
+  same reservations, skipping any the factory refuses to build a key for, and the default
+  differentiator is checked too in case a package reserves it.
 - **Stale endpoint detection works under the default `allowAdmin=false`.** The membership check
   issued `CLUSTER NODES`, which StackExchange.Redis refuses client-side unless admin mode is on, so on
   a default connection every scan recorded a `RedisCommandException` and never reconnected. The scan

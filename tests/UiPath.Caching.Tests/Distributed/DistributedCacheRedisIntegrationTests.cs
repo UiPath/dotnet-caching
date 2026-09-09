@@ -86,7 +86,7 @@ public class DistributedCacheRedisIntegrationTests(RedisContainerFixture fixture
         (await database.KeyTimeToLiveAsync(redisKey)).Should().NotBeNull();
 
         // Nothing lands in the application's own hash keyspace.
-        var applicationKey = $"{AppShortName}:{RedisTypePrefixes.Hash}:{key}";
+        var applicationKey = $"{AppShortName}:{RedisKeyspaces.Hash}:{key}";
         (await database.KeyExistsAsync(applicationKey)).Should().BeFalse();
 
         await cache.RemoveAsync(key, token);

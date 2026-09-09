@@ -258,7 +258,7 @@ Stream keys that contain `{`/`}` but do not form a valid non-empty hash tag (e.g
 
 ### Setting a custom search pattern
 
-For services that use a non-default stream key strategy, set `MaintainerSearchPattern` to scope the SCAN to only the keys your app owns. Without it the maintainer derives a pattern from `RedisStreamKeyStrategy` (defaulting to `PrefixStrategy` with `RedisTypePrefixes.Streams`), which covers the standard key layout but may pick up keys from other apps sharing the same Redis instance if the key prefix is not unique enough.
+For services that use a non-default stream key strategy, set `MaintainerSearchPattern` to scope the SCAN to only the keys your app owns. Without it the maintainer derives a pattern from `RedisStreamKeyStrategy` (defaulting to `PrefixStrategy` with `RedisKeyspaces.Streams`), which covers the standard key layout but may pick up keys from other apps sharing the same Redis instance if the key prefix is not unique enough.
 
 Example — a service using `PrefixStrategy` can derive the scan pattern at startup and stamp it onto the options before binding:
 
@@ -267,7 +267,7 @@ void Configure(ICachingBuilder builder) => builder
     .AddRedisStreams(opt =>
     {
         var cacheOptions = new CacheOptions { AppShortName = appShortName };
-        var keyFactory = new PrefixStrategy(RedisTypePrefixes.Streams, cacheOptions);
+        var keyFactory = new PrefixStrategy(RedisKeyspaces.Streams, cacheOptions);
         opt.MaintainerSearchPattern = keyFactory.GetRedisKey("*").ToString();
     });
 ```

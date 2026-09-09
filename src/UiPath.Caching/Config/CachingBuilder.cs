@@ -19,6 +19,10 @@ public class CachingBuilder(IServiceCollection services, IConfiguration? configu
 
     internal void Complete()
     {
+        // Before the switch: a keyspace collision is a configuration error, not a runtime condition.
+        Services.TryAddEnumerable(
+            ServiceDescriptor.Singleton<IValidateOptions<CacheOptions>, ReservedRedisKeyspaceValidator>());
+
         if(!Enabled)
         {
             return;

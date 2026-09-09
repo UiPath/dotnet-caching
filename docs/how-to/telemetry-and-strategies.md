@@ -176,25 +176,25 @@ When `RedisCacheOptions.KeyReadTelemetryEnabled` is set, read paths additionally
 Three segments are stitched together by the default `IRedisKeyStrategyFactory` before a key hits Redis:
 
 ```
-<AppShortName>:<RedisTypePrefix>:<your key after ICacheKeyStrategy>
+<AppShortName>:<RedisKeyspace>:<your key after ICacheKeyStrategy>
 ```
 
-`<RedisTypePrefix>` is a short literal from `UiPath.Caching.Redis.RedisTypePrefixes` that identifies the Redis data type the key holds:
+`<RedisKeyspace>` is a short literal from `UiPath.Caching.Redis.RedisKeyspaces` that identifies the Redis data type the key holds:
 
 | Constant | Value | Used for |
 |---|---|---|
-| `RedisTypePrefixes.String` | `s` | `ICache` / `ICache<T>` (Redis STRING via `SET`/`GET`) |
-| `RedisTypePrefixes.Hash` | `h` | `IHashCache` / `IHashCache<T>` (Redis HASH via `HSET`/`HGET`) |
-| `RedisTypePrefixes.Streams` | `st` | Redis Streams topic keys (`XADD` / `XREADGROUP`) |
-| `RedisTypePrefixes.PubSub` | `ps` | Pub/Sub channel names |
+| `RedisKeyspaces.String` | `s` | `ICache` / `ICache<T>` (Redis STRING via `SET`/`GET`) |
+| `RedisKeyspaces.Hash` | `h` | `IHashCache` / `IHashCache<T>` (Redis HASH via `HSET`/`HGET`) |
+| `RedisKeyspaces.Streams` | `st` | Redis Streams topic keys (`XADD` / `XREADGROUP`) |
+| `RedisKeyspaces.PubSub` | `ps` | Pub/Sub channel names |
 
 Worked example. With `AppShortName: "my-service"`, separator `:`, and an `ICacheFactory` extension that wraps `ICache<User>` in a `PrefixCacheKeyStrategy("user")`, the call `cache.SetAsync("42", user, ...)` produces the Redis key `my-service:s:user:42`. The corresponding `IHashCache<UserField>` extension produces `my-service:h:user:42`. **They cannot collide**: the same logical key in code resolves to a different Redis key per cache type, so an `ICache<T>` write (STRING) and an `IHashCache<T>` write (HASH) never produce a `WRONGTYPE` error against the same Redis key. Stream keys (`my-service:st:<topic>`) and Pub/Sub channels (`my-service:ps:<channel>`) live in their own segments for the same reason.
 
-The type prefix is inserted by `DefaultRedisKeyStrategyFactory` based on whether the registered cache implements `ICache` or `IHashCache`. Overriding `RedisCacheOptions.RedisKeyStrategyFactory` lets you replace this behavior wholesale, but the default is the right call for almost every consumer — opt out only when you have a legacy Redis layout you must match.
+The keyspace segment is inserted by `DefaultRedisKeyStrategyFactory` based on whether the registered cache implements `ICache` or `IHashCache`. Overriding `RedisCacheOptions.RedisKeyStrategyFactory` lets you replace this behavior wholesale, but the default is the right call for almost every consumer — opt out only when you have a legacy Redis layout you must match.
 
 ### The `ICacheKeyStrategy` seam
 
-`ICacheKeyStrategy` rewrites the *logical* key (the third segment above) before the Redis key factory adds the type-prefix and app-prefix segments. Two built-ins are provided:
+`ICacheKeyStrategy` rewrites the *logical* key (the third segment above) before the Redis key factory adds the keyspace and app-prefix segments. Two built-ins are provided:
 
 - `DefaultCacheKeyStrategy` — pass-through; the key reaches the store unmodified (apart from any `AppShortName` / `KeyPrefix` prepended by the provider).
 - `PrefixCacheKeyStrategy(prefix, separator)` — prepends `prefix + separator` to every key. Used as the default for typed caches constructed via `Cache<T>(provider, strategy)`.
@@ -243,7 +243,7 @@ Four code-only seams shape how the library names things on Redis. None bind from
 
 | Seam | Interface | Purpose | Set on |
 |---|---|---|---|
-| Redis key factory | `IRedisKeyStrategyFactory` | Builds the function combining `AppShortName + differentiator + cache key` into the final Redis key string. Default handles `ICache` (string type prefix) and `IHashCache` (hash type prefix), with optional shard-key support. | `RedisCacheOptions.RedisKeyStrategyFactory` |
+| Redis key factory | `IRedisKeyStrategyFactory` | Builds the function combining `AppShortName + differentiator + cache key` into the final Redis key string. Default handles `ICache` (the string keyspace) and `IHashCache` (the hash keyspace), with optional shard-key support. | `RedisCacheOptions.RedisKeyStrategyFactory` |
 | Streams key | `IRedisStreamKeyStrategy` | Builds the Redis key for a Streams topic (the key of the stream itself). | `RedisStreamsTopicOptions.RedisStreamKeyStrategy` |
 | Pub/Sub channel | `IRedisChannelStrategy` | Builds the channel name for a Pub/Sub topic or the streams notify doorbell. | `RedisPubSubTopicOptions.RedisChannelStrategy` / `RedisStreamsTopicOptions.NotifyChannelStrategy` |
 | Distributed lock key | `IDistributedLockKeyStrategy` | Builds the lock key for `RedisDistributedLock`. Default appends `":lck"` (separator + `"lck"`) to `CacheKey.Name`. | `IMultilayerCacheOptions.LockKeyStrategy` |

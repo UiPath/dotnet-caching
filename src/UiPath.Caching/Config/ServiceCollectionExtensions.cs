@@ -61,6 +61,10 @@ public static class ServiceCollectionExtensions
         services.TryAddTransient(typeof(IHashCache<>), typeof(HashCache<>));
 
         services.TryAddTimeProvider();
+        services.ReserveRedisKeyspace(RedisKeyspaces.String, "ICache");
+        services.ReserveRedisKeyspace(RedisKeyspaces.Hash, "IHashCache");
+        services.ReserveRedisKeyspace(RedisKeyspaces.PubSub, "broadcast pub/sub channels");
+        services.ReserveRedisKeyspace(RedisKeyspaces.Streams, "broadcast streams");
         var builder = new CachingBuilder(services, configuration)
         {
             Enabled = options.Enabled

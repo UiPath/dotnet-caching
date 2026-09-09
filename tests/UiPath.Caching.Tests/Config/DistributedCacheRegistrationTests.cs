@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using Microsoft.Extensions.Caching.Distributed;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Options;
@@ -165,17 +166,441 @@ public class DistributedCacheRegistrationTests
     }
 
     [Theory]
-    [InlineData(RedisTypePrefixes.String)]
-    [InlineData(RedisTypePrefixes.Hash)]
-    [InlineData(RedisTypePrefixes.PubSub)]
-    [InlineData(RedisTypePrefixes.Streams)]
+    [InlineData(RedisKeyspaces.String)]
+    [InlineData(RedisKeyspaces.Hash)]
+    [InlineData(RedisKeyspaces.PubSub)]
+    [InlineData(RedisKeyspaces.Streams)]
     [InlineData("H")]
     [InlineData("ST")]
-    public void Redis_key_differentiator_colliding_with_an_application_prefix_fails_fast(string differentiator)
+    public void Redis_key_differentiator_colliding_with_an_application_keyspace_fails_fast(string differentiator)
     {
         var act = () => Build(KnownCacheProviderNames.InMemory, o => o.RedisKeyDifferentiator = differentiator);
 
         act.Should().Throw<InvalidOperationException>().WithMessage("*same Redis keyspace*");
+    }
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public void Redis_key_differentiator_colliding_with_a_package_keyspace_fails_fast(bool packageRegisteredFirst)
+    {
+        var services = new ServiceCollection();
+
+        var act = () => services.AddCaching(b =>
+        {
+            b.AddMemory(_ => { });
+            if (packageRegisteredFirst)
+            {
+                b.Services.ReserveRedisKeyspace("zz", "IListCache (Some.Package)");
+            }
+            b.AddDistributedCache(KnownCacheProviderNames.InMemory, o => o.RedisKeyDifferentiator = "ZZ");
+            if (!packageRegisteredFirst)
+            {
+                b.Services.ReserveRedisKeyspace("zz", "IListCache (Some.Package)");
+            }
+        });
+
+        act.Should().Throw<InvalidOperationException>().WithMessage("*reserved by IListCache (Some.Package)*same Redis keyspace*");
+    }
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public void Reservation_and_differentiator_collide_across_separate_AddCaching_calls(bool packageRegisteredFirst)
+    {
+        var services = new ServiceCollection();
+
+        var act = () =>
+        {
+            if (packageRegisteredFirst)
+            {
+                services.ReserveRedisKeyspace("zz", "Some.Package");
+                services.AddCaching(b =>
+                {
+                    b.AddMemory(_ => { });
+                    b.AddDistributedCache(KnownCacheProviderNames.InMemory, o => o.RedisKeyDifferentiator = "zz");
+                });
+            }
+            else
+            {
+                services.AddCaching(b =>
+                {
+                    b.AddMemory(_ => { });
+                    b.AddDistributedCache(KnownCacheProviderNames.InMemory, o => o.RedisKeyDifferentiator = "zz");
+                });
+                services.ReserveRedisKeyspace("zz", "Some.Package");
+            }
+        };
+
+        act.Should().Throw<InvalidOperationException>().WithMessage("*same Redis keyspace*");
+    }
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public void Collision_is_reported_even_when_caching_is_disabled(bool distributedFirst)
+    {
+        var services = new ServiceCollection();
+
+        var act = () =>
+        {
+            if (distributedFirst)
+            {
+                services.AddCaching(
+                    b =>
+                    {
+                        b.AddMemory(_ => { });
+                        b.AddDistributedCache(KnownCacheProviderNames.InMemory, o => o.RedisKeyDifferentiator = "zz");
+                    },
+                    o => o.Enabled = false);
+                services.ReserveRedisKeyspace("zz", "Some.Package");
+            }
+            else
+            {
+                services.ReserveRedisKeyspace("zz", "Some.Package");
+                services.AddCaching(
+                    b =>
+                    {
+                        b.AddMemory(_ => { });
+                        b.AddDistributedCache(KnownCacheProviderNames.InMemory, o => o.RedisKeyDifferentiator = "zz");
+                    },
+                    o => o.Enabled = false);
+            }
+        };
+
+        act.Should().Throw<InvalidOperationException>().WithMessage("*same Redis keyspace*");
+    }
+
+    [Fact]
+    public void Reservation_landing_on_the_distributed_differentiator_reports_the_same_collision()
+    {
+        var services = new ServiceCollection();
+        services.AddCaching(b =>
+        {
+            b.AddMemory(_ => { });
+            b.AddDistributedCache(KnownCacheProviderNames.InMemory, o => o.RedisKeyDifferentiator = "se");
+        });
+
+        var act = () => services.ReserveRedisKeyspace("SE", "SomePackage");
+
+        act.Should().Throw<InvalidOperationException>()
+            .WithMessage("*RedisKeyDifferentiator 'se' is the Redis keyspace reserved by SomePackage*same Redis keyspace*");
+    }
+
+    [Fact]
+    public void Layered_package_keyspace_is_free_while_that_package_is_not_registered()
+    {
+        using var provider = Build(KnownCacheProviderNames.InMemory, o => o.RedisKeyDifferentiator = "se");
+
+        provider.GetRequiredService<IDistributedCache>().Should().NotBeNull();
+    }
+
+    [Fact]
+    public void Default_redis_key_differentiator_reserved_by_a_package_fails_fast()
+    {
+        var services = new ServiceCollection();
+
+        var act = () => services.AddCaching(b =>
+        {
+            b.Services.ReserveRedisKeyspace(UiPathDistributedCacheOptions.DefaultRedisKeyDifferentiator, "SomePackage");
+            b.AddMemory(_ => { });
+            b.AddDistributedCache(KnownCacheProviderNames.InMemory);
+        });
+
+        act.Should().Throw<InvalidOperationException>().WithMessage("*reserved by SomePackage*");
+    }
+
+    [Fact]
+    public void Reserving_a_keyspace_again_for_the_same_owner_is_ignored()
+    {
+        var services = new ServiceCollection();
+
+        services.ReserveRedisKeyspace("x", "First").ReserveRedisKeyspace("X", "First");
+
+        services.Where(d => d.ServiceType == typeof(IReservedRedisKeyspace)).Should().ContainSingle()
+            .Which.ImplementationInstance.Should().BeAssignableTo<IReservedRedisKeyspace>()
+            .Which.Owner.Should().Be("First");
+    }
+
+    [Fact]
+    public void Package_naming_itself_after_the_distributed_cache_does_not_mask_the_collision()
+    {
+        var services = new ServiceCollection();
+        services.ReserveRedisKeyspace("zz", "AddDistributedCache");
+
+        var act = () => services.AddCaching(b =>
+        {
+            b.AddMemory(_ => { });
+            b.AddDistributedCache(KnownCacheProviderNames.InMemory, o => o.RedisKeyDifferentiator = "zz");
+        });
+
+        act.Should().Throw<InvalidOperationException>().WithMessage("*same Redis keyspace*");
+    }
+
+    [Fact]
+    public void Reserving_an_occupied_keyspace_for_another_owner_fails_fast()
+    {
+        var services = new ServiceCollection();
+        services.ReserveRedisKeyspace("x", "First");
+
+        var act = () => services.ReserveRedisKeyspace("X", "Second");
+
+        act.Should().Throw<InvalidOperationException>()
+            .WithMessage("*Second reserves the Redis keyspace 'X', which First already occupies*");
+    }
+
+    [Fact]
+    public void Second_AddDistributedCache_is_rejected_even_when_the_first_had_caching_disabled()
+    {
+        var services = new ServiceCollection();
+        services.AddCaching(
+            b =>
+            {
+                b.AddMemory(_ => { });
+                b.AddDistributedCache(KnownCacheProviderNames.InMemory, o => o.RedisKeyDifferentiator = "zz");
+            },
+            o => o.Enabled = false);
+
+        var act = () => services.AddCaching(b =>
+        {
+            b.AddMemory(_ => { });
+            b.AddDistributedCache(KnownCacheProviderNames.InMemory);
+        });
+
+        act.Should().Throw<InvalidOperationException>().WithMessage("*AddDistributedCache has already been called*");
+    }
+
+    [Fact]
+    public void Reservation_from_a_foreign_implementation_is_reported()
+    {
+        var services = new ServiceCollection();
+        services.AddSingleton<IReservedRedisKeyspace>(new ForeignKeyspace());
+
+        var act = () => services.ReserveRedisKeyspace("x", "First");
+
+        act.Should().Throw<InvalidOperationException>().WithMessage("*ReserveRedisKeyspace*");
+    }
+
+    private sealed class ForeignKeyspace : IReservedRedisKeyspace
+    {
+        public string Keyspace => "zz";
+
+        public string Owner => "Some.Package";
+    }
+
+    [Fact]
+    public void Reservation_registered_without_an_instance_is_reported()
+    {
+        var services = new ServiceCollection();
+        services.AddSingleton<IReservedRedisKeyspace>(_ => throw new UnreachableException());
+
+        var act = () => services.ReserveRedisKeyspace("x", "First");
+
+        act.Should().Throw<InvalidOperationException>().WithMessage("*ReserveRedisKeyspace*");
+    }
+
+    [Fact]
+    public void Key_strategy_that_rejects_another_packages_keyspace_does_not_fail_the_probe()
+    {
+        var services = new ServiceCollection();
+        services.AddCaching(
+            b =>
+            {
+                b.Services.ReserveRedisKeyspace("zz", "Some.Package");
+                b.AddRedisConnection(o => o.ConnectionString = "localhost:6379,abortConnect=false,connectTimeout=1000,syncTimeout=1000");
+                b.AddRedis(o => o.RedisKeyStrategyFactory = new PickyRedisKeyStrategyFactory("zz"));
+                b.AddDistributedCache(KnownCacheProviderNames.Redis);
+            },
+            o => o.AppShortName = "app");
+        using var provider = services.BuildServiceProvider();
+
+        var act = () => provider.GetRequiredService<IDistributedCache>();
+
+        act.Should().NotThrow();
+    }
+
+    [Fact]
+    public void Key_strategy_that_fails_to_render_a_reserved_keyspace_surfaces()
+    {
+        var services = new ServiceCollection();
+        services.AddCaching(
+            b =>
+            {
+                b.Services.ReserveRedisKeyspace("zz", "Some.Package");
+                b.AddRedisConnection(o => o.ConnectionString = "localhost:6379,abortConnect=false,connectTimeout=1000,syncTimeout=1000");
+                b.AddRedis(o => o.RedisKeyStrategyFactory = new UnrenderableRedisKeyStrategyFactory("zz"));
+                b.AddDistributedCache(KnownCacheProviderNames.Redis);
+            },
+            o => o.AppShortName = "app");
+        using var provider = services.BuildServiceProvider();
+
+        var act = () => provider.GetRequiredService<IDistributedCache>();
+
+        act.Should().Throw<InvalidOperationException>().WithMessage("*cannot render*");
+    }
+
+    /// <summary>Builds a strategy for the keyspace but cannot render a key with it, which is a fault rather than a refusal.</summary>
+    private sealed class UnrenderableRedisKeyStrategyFactory(string unrenderable) : IRedisKeyStrategyFactory
+    {
+        private readonly DefaultRedisKeyStrategyFactory _inner = new();
+
+        public IRedisKeyStrategy Create(CacheOptions options, Type cacheType) => _inner.Create(options, cacheType);
+
+        public IRedisKeyStrategy Create(CacheOptions options, string differentiator) =>
+            string.Equals(differentiator, unrenderable, StringComparison.OrdinalIgnoreCase)
+                ? new ThrowingRedisKeyStrategy(differentiator)
+                : _inner.Create(options, differentiator);
+
+        private sealed class ThrowingRedisKeyStrategy(string keyspace) : IRedisKeyStrategy
+        {
+            public RedisKey GetRedisKey(CacheKey cacheKey) =>
+                throw new InvalidOperationException($"cannot render a key for {keyspace}");
+        }
+    }
+
+    /// <summary>Refuses to build a key for a keyspace it does not know, the shape the extending guide encourages.</summary>
+    private sealed class PickyRedisKeyStrategyFactory(string rejected) : IRedisKeyStrategyFactory
+    {
+        private readonly DefaultRedisKeyStrategyFactory _inner = new();
+
+        public IRedisKeyStrategy Create(CacheOptions options, Type cacheType) => _inner.Create(options, cacheType);
+
+        public IRedisKeyStrategy Create(CacheOptions options, string differentiator) =>
+            string.Equals(differentiator, rejected, StringComparison.OrdinalIgnoreCase)
+                ? throw new ArgumentException($"unknown keyspace {differentiator}", nameof(differentiator))
+                : _inner.Create(options, differentiator);
+    }
+
+    [Fact]
+    public void Nested_keyspaces_are_rejected_even_when_caching_is_disabled()
+    {
+        var services = new ServiceCollection();
+        services.AddCaching(
+            b =>
+            {
+                b.Services.ReserveRedisKeyspace("a", "Outer.Package");
+                b.Services.ReserveRedisKeyspace("axb", "Inner.Package");
+            },
+            o =>
+            {
+                o.AppShortName = "app";
+                o.Separator = 'x';
+                o.Enabled = false;
+            });
+        using var provider = services.BuildServiceProvider();
+
+        var act = () => provider.GetRequiredService<IOptions<CacheOptions>>().Value;
+
+        act.Should().Throw<OptionsValidationException>().WithMessage("*sits inside*Outer.Package*");
+    }
+
+    [Fact]
+    public void Nested_keyspaces_are_rejected_without_a_distributed_cache_registration()
+    {
+        var services = new ServiceCollection();
+        services.AddCaching(
+            b =>
+            {
+                b.Services.ReserveRedisKeyspace("a", "Outer.Package");
+                b.Services.ReserveRedisKeyspace("axb", "Inner.Package");
+                b.AddMemory(_ => { });
+            },
+            o =>
+            {
+                o.AppShortName = "app";
+                o.Separator = 'x';
+            });
+        using var provider = services.BuildServiceProvider();
+
+        var act = () => provider.GetRequiredService<IOptions<CacheOptions>>().Value;
+
+        act.Should().Throw<OptionsValidationException>().WithMessage("*sits inside*Outer.Package*");
+    }
+
+    [Fact]
+    public void Keyspaces_that_nest_under_an_alphanumeric_separator_are_rejected_when_resolved()
+    {
+        var services = new ServiceCollection();
+        services.AddCaching(
+            b =>
+            {
+                b.Services.ReserveRedisKeyspace("a", "Outer.Package");
+                b.Services.ReserveRedisKeyspace("axb", "Inner.Package");
+                b.AddRedisConnection(o => o.ConnectionString = "localhost:6379,abortConnect=false,connectTimeout=1000,syncTimeout=1000");
+                b.AddRedis(_ => { });
+                b.AddDistributedCache(KnownCacheProviderNames.Redis);
+            },
+            o =>
+            {
+                o.AppShortName = "app";
+                o.Separator = 'x';
+            });
+        using var provider = services.BuildServiceProvider();
+
+        var act = () => provider.GetRequiredService<IDistributedCache>();
+
+        act.Should().Throw<OptionsValidationException>().WithMessage("*sits inside*Outer.Package*");
+    }
+
+    [Theory]
+    [InlineData("x:y")]
+    [InlineData("x y")]
+    [InlineData("x-y")]
+    public void Reservation_spanning_more_than_one_segment_is_rejected(string keyspace)
+    {
+        var services = new ServiceCollection();
+
+        var act = () => services.ReserveRedisKeyspace(keyspace, "Some.Package");
+
+        act.Should().Throw<ArgumentException>().WithMessage("*single segment of letters and digits*");
+    }
+
+    [Fact]
+    public void Redis_key_differentiator_spanning_more_than_one_segment_is_rejected()
+    {
+        var act = () => Build(KnownCacheProviderNames.InMemory, o => o.RedisKeyDifferentiator = "d:h");
+
+        act.Should().Throw<ArgumentException>().WithMessage("*single segment of letters and digits*");
+    }
+
+    [Fact]
+    public void Blank_reservation_is_rejected()
+    {
+        var services = new ServiceCollection();
+
+        var act = () => services.ReserveRedisKeyspace(" ", "SomePackage");
+
+        act.Should().Throw<ArgumentException>();
+    }
+
+    [Fact]
+    public void Redis_key_strategy_landing_on_a_package_keyspace_is_rejected_when_resolved()
+    {
+        var services = new ServiceCollection();
+        services.AddCaching(
+            b =>
+            {
+                b.AddRedisConnection(o => o.ConnectionString = "localhost:6379,abortConnect=false,connectTimeout=1000,syncTimeout=1000");
+                b.AddRedis(_ => { });
+                b.Services.ReserveRedisKeyspace("zz", "IListCache (Some.Package)");
+                b.AddDistributedCache(KnownCacheProviderNames.Redis, o => o.RedisKeyStrategyFactory = new FixedDifferentiatorRedisKeyStrategyFactory("zz"));
+            },
+            o => o.AppShortName = "app");
+        using var provider = services.BuildServiceProvider();
+
+        var act = () => provider.GetRequiredService<IDistributedCache>();
+
+        act.Should().Throw<InvalidOperationException>().WithMessage("*IListCache (Some.Package)*share one keyspace*");
+    }
+
+    /// <summary>A factory that ignores the differentiator it is given and lands on a fixed one.</summary>
+    private sealed class FixedDifferentiatorRedisKeyStrategyFactory(string differentiator) : IRedisKeyStrategyFactory
+    {
+        private readonly DefaultRedisKeyStrategyFactory _inner = new();
+
+        public IRedisKeyStrategy Create(CacheOptions options, Type cacheType) => _inner.Create(options, cacheType);
+
+        public IRedisKeyStrategy Create(CacheOptions options, string _) => _inner.Create(options, differentiator);
     }
 
     [Fact]
@@ -235,7 +660,7 @@ public class DistributedCacheRegistrationTests
             _inner.Create(options, "elsewhere");
 
         public IRedisKeyStrategy Create(CacheOptions options, string differentiator) =>
-            _inner.Create(options, RedisTypePrefixes.Hash);
+            _inner.Create(options, RedisKeyspaces.Hash);
     }
 
     /// <summary>
@@ -580,7 +1005,7 @@ public class DistributedCacheRegistrationTests
         var services = new ServiceCollection();
 
         var act = () => services.AddCaching(b => b.AddDistributedCache(
-            KnownCacheProviderNames.Redis, o => o.RedisKeyDifferentiator = RedisTypePrefixes.Hash));
+            KnownCacheProviderNames.Redis, o => o.RedisKeyDifferentiator = RedisKeyspaces.Hash));
 
         act.Should().Throw<InvalidOperationException>();
     }

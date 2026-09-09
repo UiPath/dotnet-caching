@@ -1368,9 +1368,9 @@ public class RedisCacheTests(ITestContextAccessor testContextAccessor) : IAsyncL
     {
         _prefix = "test";
         _cacheKey = _fixture.Create<string>();
-        _redisKey = string.Join(':', _prefix, RedisTypePrefixes.String, _cacheKey).ToLowerInvariant();
+        _redisKey = string.Join(':', _prefix, RedisKeyspaces.String, _cacheKey).ToLowerInvariant();
         _multiKey = _fixture.Create<string>();
-        _redisMultiKey = string.Join(':', _prefix, RedisTypePrefixes.String, _multiKey).ToLowerInvariant();
+        _redisMultiKey = string.Join(':', _prefix, RedisKeyspaces.String, _multiKey).ToLowerInvariant();
         _clock = _fixture.Freeze<ISystemClock>();
         _fixture.Inject<TimeProvider>(new SystemClockTimeProvider(_clock));
         _clock.UtcNow.Returns(c => _now);

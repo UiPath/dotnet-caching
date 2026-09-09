@@ -271,7 +271,7 @@ extension rather than bound from configuration.
 | Property | Type | Default | Scope | Notes |
 |---|---|---|---|---|
 | `CacheKeyStrategy` | `ICacheKeyStrategy?` | `null` | Per registration | Composes the stored key from the caller key. Null applies `PrefixCacheKeyStrategy` with `DefaultKeyPrefix` (`"d"`); pass `new PrefixCacheKeyStrategy("d:sess")` to sub-namespace while keeping that prefix, or `DefaultCacheKeyStrategy` to opt out of prefixing entirely. Code-only seam. |
-| `RedisKeyDifferentiator` | `string?` | `null` | Per registration | Fills the slot after `AppShortName` that the application's caches fill with a `RedisTypePrefixes` value. Null uses `DefaultRedisKeyDifferentiator` (`"dh"`). Inert on the `InMemory` tier; a value matching a `RedisTypePrefixes` value is rejected at registration. Prefixes belonging to packages layered on top of `UiPath.Caching` are **not** checked — it cannot see them without depending on them — so avoid those too: `UiPath.Caching.Queue`'s set cache uses `"se"`. |
+| `RedisKeyDifferentiator` | `string?` | `null` | Per registration | Fills the slot after `AppShortName` that the application's caches fill with a `RedisKeyspaces` value. Null uses `DefaultRedisKeyDifferentiator` (`"dh"`). Inert on the `InMemory` tier. A value matching a keyspace any registered package reserved is rejected at registration, in whichever order the two were registered, from separate `AddCaching` calls, and even with `Enabled` false: the core's `RedisKeyspaces`, and `"se"` once `AddQueueRedis` / `AddQueueInMemoryRedis` is on the builder, enabled or not. Packages declare theirs with `IServiceCollection.ReserveRedisKeyspace`. |
 | `RedisKeyStrategyFactory` | `IRedisKeyStrategyFactory?` | `null` | Per registration | Builds the Redis key, receiving `RedisKeyDifferentiator`. Null inherits the application's `RedisCacheOptions.RedisKeyStrategyFactory`, keeping its `AppShortName`, separator and sharding conventions. Code-only seam. |
 | `PolicyName` | `string?` | `null` | Per registration | Named `CachePolicy` applied to the adapter's operations; an unregistered name fails fast at startup. |
 | `DefaultEntryExpiration` | `TimeSpan?` | `null` | Per registration | Expiration used when the caller supplies none. `IDistributedCache` treats absent expiration as "until removed"; unless `AllowUnboundedEntries` is set that is mapped to this value, falling back to the backing tier's `DefaultExpiration` and then to `CachePolicy.DefaultDistributedExpiration`. |
@@ -318,10 +318,16 @@ prefixes the `CacheKey` itself, so a distributed entry cannot be reached through
 `ICache`/`IHashCache` with the bare caller key, and the memory tiers' local lock keyspace (keyed by
 provider name plus cache key) stays separate too — neither of which a Redis-key-level segment can do.
 `RedisKeyDifferentiator` and `RedisKeyStrategyFactory` separate the physical Redis keyspace, taking the
-slot the application's caches fill with a `RedisTypePrefixes` value. Because a differentiator only separates anything if the factory
-honors it, registration composes a probe key both ways and fails when the distributed key matches what
-the application's own caches would produce — so a factory that ignores its differentiator argument is
-rejected instead of quietly sharing the keyspace.
+slot the application's caches fill with a `RedisKeyspaces` value. A differentiator landing on a
+keyspace some package reserved — the core's own, or `"se"` from `UiPath.Caching.Queue` — is rejected at
+registration, in whichever order the two were registered and even from separate `AddCaching` calls.
+Because a differentiator only separates anything if the factory honors it, a second check composes a
+probe key both ways and fails when the distributed key matches what the application's caches or any
+reserved keyspace would produce, so a factory landing on one is rejected instead of quietly sharing
+the keyspace. That one runs when the Redis-backed cache is resolved, which is startup only if
+something resolves `IDistributedCache` there. It renders each reserved keyspace through the
+application's factory, so it is exact for the caches and approximate for keyspaces whose owner
+composes keys elsewhere, such as broadcast streams.
 
 The cache-key strategy is applied by the adapter rather than by the backing provider's own
 `ICacheOptions.CacheKeyStrategy`, which `RedisHashCache` does not consult — routing it through the

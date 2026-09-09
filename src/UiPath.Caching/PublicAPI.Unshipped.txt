@@ -101,3 +101,18 @@ UiPath.Caching.Redis.RedisConnectionOptions.StaleEndpointThreshold.get -> System
 UiPath.Caching.Redis.RedisConnectionOptions.StaleEndpointThreshold.set -> void
 UiPath.Caching.Redis.RedisConnectionOptions.StaleEndpointScanInterval.get -> System.TimeSpan
 UiPath.Caching.Redis.RedisConnectionOptions.StaleEndpointScanInterval.set -> void
+UiPath.Caching.Redis.IReservedRedisKeyspace
+UiPath.Caching.Redis.IReservedRedisKeyspace.Owner.get -> string!
+UiPath.Caching.Redis.IReservedRedisKeyspace.Keyspace.get -> string!
+UiPath.Caching.Redis.ReservedRedisKeyspaceExtensions
+static UiPath.Caching.Redis.ReservedRedisKeyspaceExtensions.ReserveRedisKeyspace(this Microsoft.Extensions.DependencyInjection.IServiceCollection! services, string! keyspace, string! owner) -> Microsoft.Extensions.DependencyInjection.IServiceCollection!
+*REMOVED*UiPath.Caching.Redis.RedisTypePrefixes
+*REMOVED*const UiPath.Caching.Redis.RedisTypePrefixes.Hash = "h" -> string!
+*REMOVED*const UiPath.Caching.Redis.RedisTypePrefixes.PubSub = "ps" -> string!
+*REMOVED*const UiPath.Caching.Redis.RedisTypePrefixes.Streams = "st" -> string!
+*REMOVED*const UiPath.Caching.Redis.RedisTypePrefixes.String = "s" -> string!
+UiPath.Caching.Redis.RedisKeyspaces
+const UiPath.Caching.Redis.RedisKeyspaces.Hash = "h" -> string!
+const UiPath.Caching.Redis.RedisKeyspaces.PubSub = "ps" -> string!
+const UiPath.Caching.Redis.RedisKeyspaces.Streams = "st" -> string!
+const UiPath.Caching.Redis.RedisKeyspaces.String = "s" -> string!

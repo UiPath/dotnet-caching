@@ -260,7 +260,7 @@ public class RedisCacheTryAddTests(ITestContextAccessor testContextAccessor) : I
     {
         const string prefix = "test";
         _cacheKey = _fixture.Create<string>();
-        _redisKey = string.Join(':', prefix, RedisTypePrefixes.String, _cacheKey).ToLowerInvariant();
+        _redisKey = string.Join(':', prefix, RedisKeyspaces.String, _cacheKey).ToLowerInvariant();
         _clock = _fixture.Freeze<ISystemClock>();
         _fixture.Inject<TimeProvider>(new SystemClockTimeProvider(_clock));
         _clock.UtcNow.Returns(_ => _now);

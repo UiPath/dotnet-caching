@@ -375,14 +375,39 @@ builder.AddDistributedCache(KnownCacheProviderNames.Redis, o =>
 ```
 
 Both default to values that keep the two keyspaces apart (`"d"` and `"dh"`); overriding them makes
-that separation yours to preserve. A differentiator matching one of the application's own
-`RedisTypePrefixes` is rejected at registration.
+that separation yours to preserve. A differentiator matching a keyspace any registered package has
+reserved is rejected at registration, whichever order the two were added in, whether or not they came
+from the same `AddCaching` call, and even when `CacheOptions.Enabled` is false, since a collision is a
+configuration error rather than a runtime condition: the core reserves its `RedisKeyspaces`, and
+`UiPath.Caching.Queue` reserves `"se"` for its set cache from both `AddQueueRedis` and
+`AddQueueInMemoryRedis`, including when the backing is disabled. A custom provider that occupies a
+keyspace of its own should declare it the same way, from its registration extension, so the check
+covers it wherever it was added:
+
+```csharp
+builder.Services.ReserveRedisKeyspace("li", "IListCache (My.Package)");
+```
+
+The keyspace is one segment of letters and digits, so no reservation can span segments under a
+punctuation separator. `CacheOptions.Separator` may itself be alphanumeric, which that rule cannot
+anticipate, so one keyspace nesting inside another under the configured separator is rejected when
+the options are resolved.
+The owner string names you in the error and is what a repeat reservation is matched on, so a package
+can reserve from several registration methods. Qualify it with the package name: two packages sharing
+one owner string on one keyspace read as one package reserving twice.
 
 For full control of the Redis key — a mandated layout, or a cluster hash-tag scheme —
 `RedisKeyStrategyFactory` replaces the factory the key is built from. It still receives
-`RedisKeyDifferentiator`, and registration proves the composed key differs from what the
-application's caches would produce, so a factory that ignores the differentiator fails at startup
-rather than sharing the keyspace:
+`RedisKeyDifferentiator`, and resolving the cache proves the composed key differs from what the
+application's caches and every reserved keyspace would produce, so a factory that lands on one fails
+instead of sharing the keyspace. That check runs when `IDistributedCache` is first resolved, which is
+at startup only if something resolves it then — otherwise on the first request that does. Resolve it
+during startup if you want the failure there.
+
+It is a probe, not a proof. Each reserved keyspace is rendered through the application's factory,
+which is exact for the caches and approximate for anything that composes its keys elsewhere, such as
+broadcast streams going through `RedisStreamKeyStrategy`. A custom factory that lands on one of those
+layouts without matching the probed one is not caught:
 
 ```csharp
 o.RedisKeyStrategyFactory = new MyRedisKeyStrategyFactory();   // gets "dh" (or your differentiator)

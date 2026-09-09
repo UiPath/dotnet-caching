@@ -1,6 +1,7 @@
 ﻿using Microsoft.Extensions.DependencyInjection;
 using UiPath.Caching.Config;
 using UiPath.Caching.Queue.Config;
+using UiPath.Caching.Redis;
 
 namespace UiPath.Caching.Tests;
 
@@ -98,5 +99,30 @@ public class QueueCacheCollectionExtensionsTests
         services.Should().Contain(d =>
             d.ServiceType == typeof(IQueueCacheProvider) &&
             d.ImplementationType == typeof(RedisQueueCacheProvider));
+    }
+
+    [Theory]
+    [InlineData(false, true)]
+    [InlineData(false, false)]
+    [InlineData(true, true)]
+    [InlineData(true, false)]
+    public void Queue_registrations_reserve_the_set_keyspace_whether_or_not_the_backing_is_enabled(bool multilayer, bool backingEnabled)
+    {
+        var services = new ServiceCollection();
+        services.AddCaching(b =>
+        {
+            if (multilayer)
+            {
+                b.AddQueueInMemoryRedis(o => o.Enabled = backingEnabled);
+            }
+            else
+            {
+                b.AddQueueRedis(o => o.Enabled = backingEnabled);
+            }
+        });
+
+        var act = () => services.ReserveRedisKeyspace(RedisSetCache.RedisSetKeyspace, "Some.Package");
+
+        act.Should().Throw<InvalidOperationException>().WithMessage("*ISetCache (UiPath.Caching.Queue) already occupies*");
     }
 }
