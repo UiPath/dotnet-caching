@@ -831,7 +831,7 @@ internal sealed partial class MultilayerCache : MultilayerCacheBase, ICache
     public ValueTask<bool> RemoveAsync<T>(CacheKey[] cacheKey, CancellationToken token = default)
     {
         NotCacheableException.ThrowIfNotCacheable<T>();
-        var options = cacheKey.Select(k => _entryBuilder.BuildEntryOptions<T>(k, default)).ToArray();
+        var options = cacheKey.Select(k => _entryBuilder.BuildEntryOptions<T>(k, default, token)).ToArray();
         return RemoveAsync<T>(options, token);
     }
 

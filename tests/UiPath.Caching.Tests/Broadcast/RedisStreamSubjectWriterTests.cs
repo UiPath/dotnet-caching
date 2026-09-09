@@ -232,7 +232,7 @@ public class RedisStreamSubjectWriterTests : IAsyncLifetime
         _database.StreamReadGroupAsync(_context.Topic, _context.ConsumerGroup, _context.ConsumerName, ">", _context.PollBatchSize)
             .ThrowsAsyncForAnyArgs(_ => throw new RedisException("NOGROUP unknown group"));
         _database.StreamCreateConsumerGroupAsync(_context.Topic, _context.ConsumerGroup, Arg.Any<RedisValue?>())
-            .ThrowsAsyncForAnyArgs(_ => { createCalled.TrySetResult(); throw new RedisServerException(BusyGroupMessage); });
+            .ThrowsAsyncForAnyArgs(_ => { createCalled.TrySetResult(); throw new RedisServerException(RedisErrorKind.None, CommandFlags.None, BusyGroupMessage); });
         _database.ClearReceivedCalls();
 
         var fetchTask = Sut.FetchTask;

@@ -71,7 +71,10 @@ public partial class RedisStreamHealthMaintainer : IHostedService
 
     private async Task Start()
     {
-        while (!_cancellationToken.IsCancellationRequested && await _timer!.WaitForNextTickAsync() && await _semaphore.WaitAsync(0))
+        // Disposing the timer in StopAsync is what ends this loop, without an OperationCanceledException.
+        while (!_cancellationToken.IsCancellationRequested
+            && await _timer!.WaitForNextTickAsync(CancellationToken.None)
+            && await _semaphore.WaitAsync(0, CancellationToken.None))
         {
             await CheckStreamsAsync(_cancellationToken).ConfigureAwait(false);
         }

@@ -30,7 +30,8 @@ internal sealed class CacheMemoryMonitor : IDisposable
 
     private async Task StartMonitor()
     {
-        while (!(_disposed || _cancelationToken.IsCancellationRequested) && await _timer.WaitForNextTickAsync())
+        // Disposing the timer in Dispose is what ends this loop, without an OperationCanceledException.
+        while (!(_disposed || _cancelationToken.IsCancellationRequested) && await _timer.WaitForNextTickAsync(CancellationToken.None))
         {
             var currentStats = _memoryCache.GetCurrentStatistics();
             if (currentStats == null)
