@@ -92,10 +92,16 @@ internal sealed partial class RedisStreamNotifyChannel : IDisposable
             try
             {
                 // A reconnect that arrived while this attempt was in flight subscribed against the old
-                // connection, so it has to run again rather than sleep until the next reconnect.
+                // connection, so it has to run again rather than sleep until the next reconnect. Read
+                // once, idle the timer, then read again: a reconnect that lands in between either set
+                // the flag before the second read or armed the timer after the idle.
                 _subscribeTimer.Change(
                     Volatile.Read(ref _resubscribeRequested) == 0 ? Timeout.InfiniteTimeSpan : _timerDueTime,
                     _timerPeriod);
+                if (Volatile.Read(ref _resubscribeRequested) != 0)
+                {
+                    _subscribeTimer.Change(_timerDueTime, _timerPeriod);
+                }
             }
             catch (ObjectDisposedException)
             {

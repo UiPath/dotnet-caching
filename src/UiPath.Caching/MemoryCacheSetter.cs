@@ -34,7 +34,7 @@ internal abstract class MemoryCacheSetter(
             var token = changeTokenFactory is IMaskedChangeTokenFactory masked
                 ? masked.Create(options.CacheKey, topic, cacheName, entryType, _masker, options.CallerKey)
                 : changeTokenFactory.Create(options.CacheKey, topic, cacheName, entryType);
-            var state = new RefreshMetadataState(options.CacheKey, options.TopicKey, item, token, entryType, maxExpiration);
+            var state = new RefreshMetadataState(options.CacheKey, options.TopicKey, item, token, entryType, maxExpiration, options.CallerKey);
             token.RegisterChangeCallback(RefreshMetadata, state);
             var memOptions = new MemoryCacheEntryOptions();
             var expiration = GetCacheExpiration(options.Expiration, maxExpiration);
@@ -93,7 +93,7 @@ internal abstract class MemoryCacheSetter(
         }
         catch (Exception ex)
         {
-            logger.LogWarning(ex, "Unable to refresh cache cacheKey {CacheKey}", LoggedKey.For(_masker, metadataState.CacheKey, metadataState.EntryType));
+            logger.LogWarning(ex, "Unable to refresh cache cacheKey {CacheKey}", LoggedKey.For(_masker, metadataState.CallerKey, metadataState.CacheKey.Name, metadataState.EntryType));
         }
         finally
         {

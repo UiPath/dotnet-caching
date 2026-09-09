@@ -21,6 +21,7 @@ internal class LocalMemorySetter(
         return new CacheEntryOptions
         {
             CacheKey = metadataState.CacheKey,
+            CallerKey = metadataState.CallerKey,
             TopicKey = metadataState.TopicKey,
             Token = cancellationToken,
             Expiration = Clock.ToDateTimeOffset(token.Expiration),
