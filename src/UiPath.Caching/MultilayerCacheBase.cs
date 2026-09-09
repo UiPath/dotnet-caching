@@ -114,6 +114,9 @@ public abstract class MultilayerCacheBase : IDisposable
     private protected LoggedKey Logged(InternalHashCacheEntryOptions options, Type? valueType = null) =>
         LoggedKey.For(_masker, options.CallerKey, options.CacheKey.Name, valueType);
 
+    /// <inheritdoc cref="Logged(CacheKey, Type?)"/>
+    private protected LoggedKeys Logged(IReadOnlyCollection<CacheKey> keys, Type? valueType = null) => new(_masker, keys, valueType);
+
     /// <summary>A key the site only has in composed form; with no caller key to judge it is masked whole.</summary>
     private protected LoggedKey LoggedComposed(CacheKey composed, Type? valueType = null) =>
         LoggedKey.Composed(_masker, composed.Name, valueType);
@@ -121,9 +124,6 @@ public abstract class MultilayerCacheBase : IDisposable
     /// <inheritdoc cref="LoggedComposed(CacheKey, Type?)"/>
     private protected LoggedKeys LoggedComposed(IReadOnlyCollection<CacheKey> composed, Type? valueType = null) =>
         new(_masker, composed, valueType, composedOnly: true);
-
-    /// <inheritdoc cref="Logged(CacheKey, Type?)"/>
-    private protected LoggedKeys Logged(IReadOnlyCollection<CacheKey> keys, Type? valueType = null) => new(_masker, keys, valueType);
 
     protected async ValueTask<TResult> RunUnderLocksAsync<TResult>(
         CacheKey cacheKey,

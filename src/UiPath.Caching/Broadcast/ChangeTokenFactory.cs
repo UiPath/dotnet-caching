@@ -39,7 +39,7 @@ public sealed partial class ChangeTokenFactory<T> : IChangeTokenFactory, IMasked
     ICacheChangeToken IMaskedChangeTokenFactory.Create(string token, ITopic<ICacheEvent> topic, string cacheName, Type entryType, KeyMasker masker, CacheKey callerKey) =>
         CreateCore(token, topic, cacheName, entryType, masker, callerKey);
 
-    private ICacheChangeToken CreateCore(string token, ITopic<ICacheEvent> topic, string cacheName, Type entryType, KeyMasker masker, CacheKey callerKey)
+    private ChangeToken<T> CreateCore(string token, ITopic<ICacheEvent> topic, string cacheName, Type entryType, KeyMasker masker, CacheKey callerKey)
     {
         if (_logger.IsEnabled(LogLevel.Trace))
         {
