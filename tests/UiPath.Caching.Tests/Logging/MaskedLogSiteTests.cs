@@ -69,7 +69,8 @@ public class MaskedLogSiteTests
             NullTelemetryProvider.Instance,
             acceptedEvents: null,
             new KeyMasker(new PrefixKeyMaskingPolicy(), KnownCacheProviderNames.InMemoryRedis),
-            entryType: typeof(byte[]));
+            entryType: typeof(byte[]),
+            callerKey: SecretKey);
 
         logs.Lines.Should().Contain(l => l.Contains("ses****")).And.NotContain(l => l.Contains(SecretKey));
     }

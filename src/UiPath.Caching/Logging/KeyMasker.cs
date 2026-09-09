@@ -26,9 +26,16 @@ internal sealed class KeyMasker
         policy is null or NullKeyMaskingPolicy ? Off : new KeyMasker(policy, cacheName);
 
     /// <summary>Splices the caller's key out of <paramref name="composed"/> wherever it sits; a composed key it is not part of is masked whole.</summary>
-    public string Render(string key, string? composed, Type? valueType)
+    public string Render(string? key, string? composed, Type? valueType)
     {
-        var shown = composed ?? key;
+        var shown = composed ?? key ?? string.Empty;
+        if (key is null)
+        {
+            // Only the composed key: a policy configured against caller keys cannot judge it, and a key
+            // from another node has no caller key at all, so masking is on or off rather than decided.
+            return IsMasking ? Mask(shown) : shown;
+        }
+
         if (!ShouldMask(key, valueType))
         {
             return shown;
@@ -44,9 +51,12 @@ internal sealed class KeyMasker
     }
 
     /// <summary>A policy is application code running inside log formatting: a throwing one masks rather than escapes.</summary>
+    /// <summary>Whether a policy is installed at all; what a composed key with no caller key falls back to.</summary>
+    public bool IsMasking => !ReferenceEquals(_policy, NullKeyMaskingPolicy.Instance);
+
     private bool ShouldMask(string key, Type? valueType)
     {
-        if (ReferenceEquals(_policy, NullKeyMaskingPolicy.Instance))
+        if (!IsMasking)
         {
             return false;
         }

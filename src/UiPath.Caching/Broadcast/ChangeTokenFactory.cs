@@ -33,21 +33,21 @@ public sealed partial class ChangeTokenFactory<T> : IChangeTokenFactory, IMasked
     }
 
     public ICacheChangeToken Create(string token, ITopic<ICacheEvent> topic, string cacheName, Type entryType) =>
-        CreateCore(token, topic, cacheName, entryType, _maskers.GetOrAdd(cacheName, name => KeyMasker.For(_keyMaskingPolicy, name)));
+        CreateCore(token, topic, cacheName, entryType, _maskers.GetOrAdd(cacheName, name => KeyMasker.For(_keyMaskingPolicy, name)), callerKey: token);
 
     /// <summary>A tier built with its own policy, such as a private cache behind the distributed adapter, passes the masker it was given.</summary>
-    ICacheChangeToken IMaskedChangeTokenFactory.Create(string token, ITopic<ICacheEvent> topic, string cacheName, Type entryType, KeyMasker masker) =>
-        CreateCore(token, topic, cacheName, entryType, masker);
+    ICacheChangeToken IMaskedChangeTokenFactory.Create(string token, ITopic<ICacheEvent> topic, string cacheName, Type entryType, KeyMasker masker, CacheKey callerKey) =>
+        CreateCore(token, topic, cacheName, entryType, masker, callerKey);
 
-    private ICacheChangeToken CreateCore(string token, ITopic<ICacheEvent> topic, string cacheName, Type entryType, KeyMasker masker)
+    private ICacheChangeToken CreateCore(string token, ITopic<ICacheEvent> topic, string cacheName, Type entryType, KeyMasker masker, CacheKey callerKey)
     {
         if (_logger.IsEnabled(LogLevel.Trace))
         {
-            LogCreateChangeToken(topic.TopicKey, LoggedKey.For(masker, token, entryType), _sourceUri);
+            LogCreateChangeToken(topic.TopicKey, LoggedKey.For(masker, callerKey, token, entryType), _sourceUri);
         }
 
         var acceptedEvents = KnownCacheProviderNames.InMemory.Equals(cacheName, StringComparison.OrdinalIgnoreCase) ? MemoryAcceptedEvents : null;
-        return new ChangeToken<T>(token, topic, _sourceUri, _serializer, _loggerFactory.CreateLogger<ChangeToken<T>>(), _telemetryProvider, acceptedEvents, masker, entryType);
+        return new ChangeToken<T>(token, topic, _sourceUri, _serializer, _loggerFactory.CreateLogger<ChangeToken<T>>(), _telemetryProvider, acceptedEvents, masker, entryType, callerKey);
     }
 
     [LoggerMessage(Level = LogLevel.Trace, Message = "Create change token. topic {TopicKey} token {Token} source {SourceUri}")]

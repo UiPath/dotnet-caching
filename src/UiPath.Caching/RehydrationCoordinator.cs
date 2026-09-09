@@ -43,28 +43,32 @@ internal sealed class RehydrationCoordinator(
         CachePolicy? policy,
         TimeSpan duration,
         string kind,
-        Func<CancellationToken, ValueTask> rehydrateAsync) =>
+        Func<CancellationToken, ValueTask> rehydrateAsync,
+        Type? entryType = null) =>
         TryTriggerCore(
             [(cacheKey, entryExpiration)],
             policy,
             duration,
             kind,
-            (_, ct) => rehydrateAsync(ct));
+            (_, ct) => rehydrateAsync(ct),
+            entryType);
 
     public bool TryTriggerBatch(
         IReadOnlyList<(CacheKey Key, DateTimeOffset Expiration)> candidates,
         CachePolicy? policy,
         TimeSpan duration,
         string kind,
-        Func<CacheKey[], CancellationToken, ValueTask> rehydrateAsync) =>
-        TryTriggerCore(candidates, policy, duration, kind, rehydrateAsync);
+        Func<CacheKey[], CancellationToken, ValueTask> rehydrateAsync,
+        Type? entryType = null) =>
+        TryTriggerCore(candidates, policy, duration, kind, rehydrateAsync, entryType);
 
     private bool TryTriggerCore(
         IReadOnlyList<(CacheKey Key, DateTimeOffset Expiration)> candidates,
         CachePolicy? policy,
         TimeSpan duration,
         string kind,
-        Func<CacheKey[], CancellationToken, ValueTask> rehydrateAsync)
+        Func<CacheKey[], CancellationToken, ValueTask> rehydrateAsync,
+        Type? entryType)
     {
         if (policy?.RehydrateEnabled != true || policy.Rehydrate is null)
         {
@@ -82,7 +86,7 @@ internal sealed class RehydrationCoordinator(
         }
 
         var reservedKeys = reserved.ToArray();
-        _ = SpawnAsync(reservedKeys, policy.Rehydrate, duration, kind, rehydrateAsync);
+        _ = SpawnAsync(reservedKeys, policy.Rehydrate, duration, kind, rehydrateAsync, entryType);
         return true;
     }
 
@@ -119,7 +123,8 @@ internal sealed class RehydrationCoordinator(
         RehydrateOptions options,
         TimeSpan duration,
         string kind,
-        Func<CacheKey[], CancellationToken, ValueTask> rehydrateAsync)
+        Func<CacheKey[], CancellationToken, ValueTask> rehydrateAsync,
+        Type? entryType)
     {
         var profile = options.Name ?? string.Empty;
         var groupKey = CompositeCacheKey.For(reservedKeys);
@@ -135,7 +140,7 @@ internal sealed class RehydrationCoordinator(
             // gives BaseCooldown/MaxCooldown real retry-cadence control regardless of factory outcome.
             var lockExpiry = SafeAdd(factoryTimeout, cooldown);
 
-            (keys, handles) = await AcquirePerKeyLocksAsync(reservedKeys, lockExpiry, factoryTimeout).ConfigureAwait(false);
+            (keys, handles) = await AcquirePerKeyLocksAsync(reservedKeys, lockExpiry, factoryTimeout, entryType).ConfigureAwait(false);
             if (keys.Length == 0)
             {
                 telemetry.TrackEvent(EventDeduped, Tags(KeyValuePair.Create(TagReason, ReasonNotAcquired)));
@@ -151,7 +156,7 @@ internal sealed class RehydrationCoordinator(
                 await rehydrateAsync(keys, cts.Token).ConfigureAwait(false);
                 ClearFailureCounts(keys);
                 telemetry.TrackEvent(EventSucceeded, Tags());
-                await ReleaseLocksAsync(handles, groupKey).ConfigureAwait(false);
+                await ReleaseLocksAsync(handles, groupKey, entryType).ConfigureAwait(false);
                 handles = null;
             }
             catch (OperationCanceledException) when (cts.IsCancellationRequested)
@@ -169,14 +174,14 @@ internal sealed class RehydrationCoordinator(
         }
         catch (Exception ex)
         {
-            logger.LogError(ex, "Rehydrate spawn failed for cache key {CacheKey}", LoggedKey.For(_masker, groupKey));
+            logger.LogError(ex, "Rehydrate spawn failed for cache key {CacheKey}", LoggedKey.For(_masker, groupKey, entryType));
         }
         finally
         {
             ReleaseInFlight(reservedKeys);
             if (handles is not null)
             {
-                await ReleaseLocksAsync(handles, groupKey).ConfigureAwait(false);
+                await ReleaseLocksAsync(handles, groupKey, entryType).ConfigureAwait(false);
             }
         }
 
@@ -203,12 +208,13 @@ internal sealed class RehydrationCoordinator(
     private async Task<(CacheKey[] Keys, List<IAsyncDisposable> Handles)> AcquirePerKeyLocksAsync(
         CacheKey[] reservedKeys,
         TimeSpan lockExpiry,
-        TimeSpan factoryTimeout)
+        TimeSpan factoryTimeout,
+        Type? entryType)
     {
         var attempts = new Task<IAsyncDisposable?>[reservedKeys.Length];
         for (var i = 0; i < reservedKeys.Length; i++)
         {
-            attempts[i] = TryAcquireOneAsync(reservedKeys[i], lockExpiry, factoryTimeout);
+            attempts[i] = TryAcquireOneAsync(reservedKeys[i], lockExpiry, factoryTimeout, entryType);
         }
         var results = await Task.WhenAll(attempts).ConfigureAwait(false);
 
@@ -225,7 +231,7 @@ internal sealed class RehydrationCoordinator(
         return (keys.ToArray(), handles);
     }
 
-    private async Task<IAsyncDisposable?> TryAcquireOneAsync(CacheKey key, TimeSpan lockExpiry, TimeSpan factoryTimeout)
+    private async Task<IAsyncDisposable?> TryAcquireOneAsync(CacheKey key, TimeSpan lockExpiry, TimeSpan factoryTimeout, Type? entryType)
     {
         var lockKey = LockKeyPrefix + lockKeyStrategy.GetLockKey(key);
         try
@@ -245,16 +251,16 @@ internal sealed class RehydrationCoordinator(
         }
         catch (Exception ex)
         {
-            logger.LogError(ex, "Rehydrate lock acquire failed for cache key {CacheKey}", LoggedKey.For(_masker, key));
+            logger.LogError(ex, "Rehydrate lock acquire failed for cache key {CacheKey}", LoggedKey.For(_masker, key, entryType));
             return null;
         }
     }
 
-    private async ValueTask ReleaseLocksAsync(List<IAsyncDisposable> handles, CacheKey groupKey)
+    private async ValueTask ReleaseLocksAsync(List<IAsyncDisposable> handles, CacheKey groupKey, Type? entryType)
     {
         foreach (var handle in handles)
         {
-            await DisposeLockQuietlyAsync(handle, groupKey).ConfigureAwait(false);
+            await DisposeLockQuietlyAsync(handle, groupKey, entryType).ConfigureAwait(false);
         }
     }
 
@@ -282,7 +288,7 @@ internal sealed class RehydrationCoordinator(
         }
     }
 
-    private async ValueTask DisposeLockQuietlyAsync(IAsyncDisposable handle, CacheKey groupKey)
+    private async ValueTask DisposeLockQuietlyAsync(IAsyncDisposable handle, CacheKey groupKey, Type? entryType)
     {
         try
         {
@@ -290,7 +296,7 @@ internal sealed class RehydrationCoordinator(
         }
         catch (Exception ex)
         {
-            logger.LogError(ex, "Rehydrate cleanup dispose failed for cache key {CacheKey}", LoggedKey.For(_masker, groupKey));
+            logger.LogError(ex, "Rehydrate cleanup dispose failed for cache key {CacheKey}", LoggedKey.For(_masker, groupKey, entryType));
         }
     }
 

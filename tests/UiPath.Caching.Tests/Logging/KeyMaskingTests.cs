@@ -79,6 +79,24 @@ public class KeyMaskingTests
     }
 
     [Fact]
+    public void A_composed_key_with_no_caller_key_is_masked_whole()
+    {
+        // A prefix policy cannot judge a composed key, and one off the wire has no caller key at all,
+        // so masking is all or nothing rather than a decision the policy gets wrong.
+        new KeyMasker(new PrefixKeyMaskingPolicy("session:"), KnownCacheProviderNames.Redis)
+            .Render(key: null, "myapp:s:session:cosmin", valueType: null)
+            .Should().Be("mya****");
+    }
+
+    [Fact]
+    public void A_composed_key_with_no_caller_key_stays_readable_without_a_policy()
+    {
+        new KeyMasker(NullKeyMaskingPolicy.Instance, KnownCacheProviderNames.Redis)
+            .Render(key: null, "myapp:s:session:cosmin", valueType: null)
+            .Should().Be("myapp:s:session:cosmin");
+    }
+
+    [Fact]
     public void A_throwing_policy_masks_rather_than_escaping_the_log_call()
     {
         Render(new ThrowingPolicy(), "cosmin", "myapp:s:cosmin").Should().Be("myapp:s:cos****");

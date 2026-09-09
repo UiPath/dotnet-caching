@@ -32,7 +32,7 @@ internal abstract class MemoryCacheSetter(
         {
             var topic = topicProvider.Create(options.TopicKey);
             var token = changeTokenFactory is IMaskedChangeTokenFactory masked
-                ? masked.Create(options.CacheKey, topic, cacheName, entryType, _masker)
+                ? masked.Create(options.CacheKey, topic, cacheName, entryType, _masker, options.CallerKey)
                 : changeTokenFactory.Create(options.CacheKey, topic, cacheName, entryType);
             var state = new RefreshMetadataState(options.CacheKey, options.TopicKey, item, token, entryType, maxExpiration);
             token.RegisterChangeCallback(RefreshMetadata, state);
@@ -51,7 +51,7 @@ internal abstract class MemoryCacheSetter(
         catch (Exception ex)
         {
             memoryCache.Remove(options.CacheKey);
-            logger.LogWarning(ex, "Unable to set local memory for {CacheKey}", LoggedKey.For(_masker, options.CacheKey, entryType));
+            logger.LogWarning(ex, "Unable to set local memory for {CacheKey}", LoggedKey.For(_masker, options.CallerKey, options.CacheKey.Name, entryType));
             return false;
         }
     }

@@ -164,13 +164,14 @@ internal sealed partial class MultilayerHashCache : MultilayerCacheBase, IHashCa
                     : _clock.ToDateTimeOffset(ApplyJitter(duration, rehydrateJitter));
                 var rehydrateOptions = _entryBuilder.BuildEntryOptions<T>(originalCacheKey, rehydrateExpiration, HashCacheSetOption.KeyReplace, ct);
                 var innerCacheDisconnected = GetInnerCacheDisconnected();
-                var fired = innerCacheDisconnected || await _eventPublisher.CacheSetAsync(rehydrateOptions).ConfigureAwait(false);
+                var fired = innerCacheDisconnected || await _eventPublisher.CacheSetAsync(rehydrateOptions, typeof(T)).ConfigureAwait(false);
                 var written = fired && await InternalSetAsync(rehydrateOptions, newValue ?? Empty<T>(), innerCacheDisconnected, policy).ConfigureAwait(false);
                 if (!written)
                 {
                     throw new RehydrateWriteFailedException(originalCacheKey.Name);
                 }
-            });
+            },
+            entryType: typeof(T));
     }
 
     private async ValueTask<ICacheEntry<IDictionary<string, T?>>> RunHashGeneratorAndStoreEntryAsync<T>(InternalHashCacheEntryOptions cacheEntryOptions, Func<CancellationToken, Task<IDictionary<string, T?>>> generator, CachePolicy policy, CancellationToken token)
@@ -218,7 +219,7 @@ internal sealed partial class MultilayerHashCache : MultilayerCacheBase, IHashCa
         }
         else
         {
-            var fired = await _eventPublisher.CacheSetAsync(options).ConfigureAwait(false);
+            var fired = await _eventPublisher.CacheSetAsync(options, typeof(T)).ConfigureAwait(false);
             return fired && await InternalSetAsync(options, values, innerCacheDisconnected, policy).ConfigureAwait(false);
         }
     }
@@ -244,7 +245,7 @@ internal sealed partial class MultilayerHashCache : MultilayerCacheBase, IHashCa
             return await InternalSetAsync(cacheEntryOptions, values, innerCacheDisconnected, policy).ConfigureAwait(false);
         }
 
-        var fired = await _eventPublisher.CacheSetAsync(cacheEntryOptions).ConfigureAwait(false);
+        var fired = await _eventPublisher.CacheSetAsync(cacheEntryOptions, typeof(T)).ConfigureAwait(false);
         return fired && await InternalSetAsync(cacheEntryOptions, values, innerCacheDisconnected, policy).ConfigureAwait(false);
     }
 
@@ -276,7 +277,7 @@ internal sealed partial class MultilayerHashCache : MultilayerCacheBase, IHashCa
         LogRefreshingInnerCacheKey(Logged(cacheEntryOptions, typeof(T)), cacheEntryOptions.Expiration);
         try
         {
-            var fired = await _eventPublisher.CacheRefreshedAsync(cacheEntryOptions).ConfigureAwait(false);
+            var fired = await _eventPublisher.CacheRefreshedAsync(cacheEntryOptions, typeof(T)).ConfigureAwait(false);
             // Forward the multilayer-resolved expiration so the inner write uses the same TTL the broadcast announced.
             var innerOptions = options with { ExpireTime = expiration, TimeToLive = null };
             return fired && await _innerCache.RefreshAsync<T>(cacheEntryOptions.CacheKey, innerOptions, policy, token).ConfigureAwait(false);
@@ -355,7 +356,7 @@ internal sealed partial class MultilayerHashCache : MultilayerCacheBase, IHashCa
             }
 
             cacheEntryOptions.Metadata = metadata;
-            return await _eventPublisher.MetadataUpdatedAsync(cacheEntryOptions).ConfigureAwait(false);
+            return await _eventPublisher.MetadataUpdatedAsync(cacheEntryOptions, typeof(T)).ConfigureAwait(false);
         }
         catch (Exception ex)
         {
@@ -372,7 +373,7 @@ internal sealed partial class MultilayerHashCache : MultilayerCacheBase, IHashCa
         {
             _memoryCache.Remove(options.CacheKey);
             var removed = await _innerCache.RemoveAsync<T>(options.CacheKey, options.Token).ConfigureAwait(false);
-            var eventFired = await _eventPublisher.CacheRemovedAsync(options).ConfigureAwait(false);
+            var eventFired = await _eventPublisher.CacheRemovedAsync(options, typeof(T)).ConfigureAwait(false);
             return removed && eventFired;
         }
         catch (Exception ex)
