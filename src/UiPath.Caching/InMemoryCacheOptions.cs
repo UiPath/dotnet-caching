@@ -30,6 +30,12 @@ public class InMemoryCacheOptions : IMultilayerCacheOptions, IMemoryCacheOptions
 
     public bool CacheNullValues { get; set; }
 
+    public bool MaskKeys { get; set; }
+
+    public List<string> MaskedKeyPrefixes { get; set; } = [];
+
+    IReadOnlyList<string> ICacheOptions.MaskedKeyPrefixes => MaskedKeyPrefixes;
+
     public TimeSpan? ConnectionMonitorPeriod { get; set; } = TimeSpan.FromSeconds(5);
 
     public long? SizeLimit { get; set; }

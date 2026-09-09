@@ -116,3 +116,18 @@ const UiPath.Caching.Redis.RedisKeyspaces.Hash = "h" -> string!
 const UiPath.Caching.Redis.RedisKeyspaces.PubSub = "ps" -> string!
 const UiPath.Caching.Redis.RedisKeyspaces.Streams = "st" -> string!
 const UiPath.Caching.Redis.RedisKeyspaces.String = "s" -> string!
+UiPath.Caching.ICacheOptions.MaskKeys.get -> bool
+UiPath.Caching.ICacheOptions.MaskKeys.set -> void
+UiPath.Caching.ICacheOptions.MaskedKeyPrefixes.get -> System.Collections.Generic.IReadOnlyList<string!>!
+UiPath.Caching.InMemoryCacheOptions.MaskKeys.get -> bool
+UiPath.Caching.InMemoryCacheOptions.MaskKeys.set -> void
+UiPath.Caching.InMemoryCacheOptions.MaskedKeyPrefixes.get -> System.Collections.Generic.List<string!>!
+UiPath.Caching.InMemoryCacheOptions.MaskedKeyPrefixes.set -> void
+UiPath.Caching.InMemoryRedisCacheOptions.MaskKeys.get -> bool
+UiPath.Caching.InMemoryRedisCacheOptions.MaskKeys.set -> void
+UiPath.Caching.InMemoryRedisCacheOptions.MaskedKeyPrefixes.get -> System.Collections.Generic.List<string!>!
+UiPath.Caching.InMemoryRedisCacheOptions.MaskedKeyPrefixes.set -> void
+UiPath.Caching.Redis.RedisCacheOptions.MaskKeys.get -> bool
+UiPath.Caching.Redis.RedisCacheOptions.MaskKeys.set -> void
+UiPath.Caching.Redis.RedisCacheOptions.MaskedKeyPrefixes.get -> System.Collections.Generic.List<string!>!
+UiPath.Caching.Redis.RedisCacheOptions.MaskedKeyPrefixes.set -> void

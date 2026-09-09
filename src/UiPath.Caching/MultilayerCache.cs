@@ -804,7 +804,7 @@ internal sealed partial class MultilayerCache : MultilayerCacheBase, ICache
         {
             if (_logger.IsEnabled(LogLevel.Trace))
             {
-                LogSettingLocalOnlyForCacheKeys(string.Join(",", setEntries.Select(o => o.CacheEntry.CacheKey)));
+                LogSettingLocalOnlyForCacheKeys(Logged(setEntries.Select(o => o.CacheEntry.CacheKey)));
             }
             return true;
         }
@@ -947,7 +947,7 @@ internal sealed partial class MultilayerCache : MultilayerCacheBase, ICache
         {
             if (_logger.IsEnabled(LogLevel.Warning))
             {
-                LogInnerCacheRemoveKeysError(ex, string.Join(",", options.Select(o => o.CacheKey)));
+                LogInnerCacheRemoveKeysError(ex, Logged(options.Select(o => o.CacheKey)));
             }
             return false;
         }
@@ -1168,7 +1168,7 @@ internal sealed partial class MultilayerCache : MultilayerCacheBase, ICache
             {
                 if (_logger.IsEnabled(LogLevel.Trace))
                 {
-                    LogSettingLocalOnlyForCacheKeys(string.Join(",", cacheEntries.Select(o => o.CacheEntry.CacheKey)));
+                    LogSettingLocalOnlyForCacheKeys(Logged(cacheEntries.Select(o => o.CacheEntry.CacheKey)));
                 }
                 return MemSet(policy.LocalExpirationDisconnected ?? _multiLayerCacheOptions.LocalMaxExpirationDisconnected);
             }
@@ -1185,7 +1185,7 @@ internal sealed partial class MultilayerCache : MultilayerCacheBase, ICache
         {
             if (_logger.IsEnabled(LogLevel.Warning))
             {
-                LogInnerCacheSetKeysError(ex, string.Join(",", cacheEntries.Select(o => o.CacheEntry.CacheKey)));
+                LogInnerCacheSetKeysError(ex, Logged(cacheEntries.Select(o => o.CacheEntry.CacheKey)));
             }
             return false;
         }
@@ -1217,77 +1217,103 @@ internal sealed partial class MultilayerCache : MultilayerCacheBase, ICache
     }
 
     [LoggerMessage(Level = LogLevel.Debug, Message = "Cache missed. generating new {CacheKey}")]
-    private partial void LogCacheMissed(CacheKey cacheKey);
+    private partial void LogCacheMissedCore(LoggedKey cacheKey);
 
     [LoggerMessage(Level = LogLevel.Debug, Message = "Batch cache missed. generating {Count} keys for {CacheKey}")]
-    private partial void LogBatchCacheMissed(CacheKey cacheKey, int count);
+    private partial void LogBatchCacheMissedCore(LoggedKey cacheKey, int count);
 
     [LoggerMessage(Level = LogLevel.Debug, Message = "TryAdd skipped for {CacheKey}: a null value cannot be represented unless CacheNullValues is on.")]
-    private partial void LogTryAddSkippedUnrepresentableValue(CacheKey cacheKey);
+    private partial void LogTryAddSkippedUnrepresentableValueCore(LoggedKey cacheKey);
 
     [LoggerMessage(Level = LogLevel.Warning, Message = "Inner cache TryAdd for cacheKey {CacheKey}")]
-    private partial void LogInnerCacheTryAddError(Exception ex, CacheKey cacheKey);
+    private partial void LogInnerCacheTryAddErrorCore(Exception ex, LoggedKey cacheKey);
 
     [LoggerMessage(Level = LogLevel.Warning, Message = "TryAdd won cacheKey {CacheKey} in the inner cache but could not broadcast or populate the local tier. The add still stands.")]
-    private partial void LogTryAddLocalPropagationFailed(Exception ex, CacheKey cacheKey);
+    private partial void LogTryAddLocalPropagationFailedCore(Exception ex, LoggedKey cacheKey);
 
     [LoggerMessage(Level = LogLevel.Warning, Message = "TryAdd for {CacheKey} reported not-added: the local lock could not be acquired within Lock.LocalLockTimeout, and without it two in-process callers could both be told they added the key. Raise Lock.LocalLockTimeout if this key is contended.")]
-    private partial void LogTryAddLocalLockUnavailable(CacheKey cacheKey);
+    private partial void LogTryAddLocalLockUnavailableCore(LoggedKey cacheKey);
 
     [LoggerMessage(Level = LogLevel.Debug, Message = "TryAdd skipped for {CacheKey}: the requested expiration {Expiration} is not in the future, so the entry would retain nothing.")]
-    private partial void LogTryAddSkippedExpiredEntry(CacheKey cacheKey, DateTimeOffset expiration);
+    private partial void LogTryAddSkippedExpiredEntryCore(LoggedKey cacheKey, DateTimeOffset expiration);
 
     [LoggerMessage(Level = LogLevel.Debug, Message = "TryAdd skipped for {CacheKey}: the effective local retention {LocalMaxExpiration} is not positive, and on this provider it is the only retention.")]
-    private partial void LogTryAddSkippedNonPositiveLocalRetention(CacheKey cacheKey, TimeSpan localMaxExpiration);
+    private partial void LogTryAddSkippedNonPositiveLocalRetentionCore(LoggedKey cacheKey, TimeSpan localMaxExpiration);
 
     [LoggerMessage(Level = LogLevel.Warning, Message = "TryAdd won cacheKey {CacheKey} but the invalidation broadcast reported not-published. The add still stands; peers may serve a stale copy until it expires.")]
-    private partial void LogTryAddBroadcastNotPublished(CacheKey cacheKey);
+    private partial void LogTryAddBroadcastNotPublishedCore(LoggedKey cacheKey);
 
     [LoggerMessage(Level = LogLevel.Debug, Message = "Replacing cached key {CacheKey}")]
-    private partial void LogReplacingCachedKey(CacheKey cacheKey);
+    private partial void LogReplacingCachedKeyCore(LoggedKey cacheKey);
 
     [LoggerMessage(Level = LogLevel.Trace, Message = "Inner cache is not connected. Setting local only for cacheKey {CacheKey}")]
-    private partial void LogSettingLocalOnly(CacheKey cacheKey);
+    private partial void LogSettingLocalOnlyCore(LoggedKey cacheKey);
 
     [LoggerMessage(Level = LogLevel.Trace, Message = "Inner cache is not connected. Setting local only for cacheKeys {CacheKeys}")]
     private partial void LogSettingLocalOnlyForCacheKeys(string cacheKeys);
 
     [LoggerMessage(Level = LogLevel.Debug, Message = "Clearing cached. Key {CacheKey}")]
-    private partial void LogClearingCached(CacheKey cacheKey);
+    private partial void LogClearingCachedCore(LoggedKey cacheKey);
 
     [LoggerMessage(Level = LogLevel.Trace, Message = "Refreshing inner cache key {CacheKey} at expiration {Expiration}")]
-    private partial void LogRefreshingInnerCacheKey(CacheKey cacheKey, DateTimeOffset? expiration);
+    private partial void LogRefreshingInnerCacheKeyCore(LoggedKey cacheKey, DateTimeOffset? expiration);
 
     [LoggerMessage(Level = LogLevel.Warning, Message = "Inner cache refresh value for cacheKey {CacheKey}")]
-    private partial void LogInnerCacheRefreshError(Exception ex, CacheKey cacheKey);
+    private partial void LogInnerCacheRefreshErrorCore(Exception ex, LoggedKey cacheKey);
 
     [LoggerMessage(Level = LogLevel.Warning, Message = "Inner cache contains for cacheKey {CacheKey}")]
-    private partial void LogInnerCacheContainsError(Exception ex, CacheKey cacheKey);
+    private partial void LogInnerCacheContainsErrorCore(Exception ex, LoggedKey cacheKey);
 
     [LoggerMessage(Level = LogLevel.Debug, Message = "Clearing local cached. cacheKey {CacheKey}")]
-    private partial void LogClearingLocalCached(CacheKey cacheKey);
+    private partial void LogClearingLocalCachedCore(LoggedKey cacheKey);
 
     [LoggerMessage(Level = LogLevel.Warning, Message = "Inner cache remove cacheKey {CacheKey}")]
-    private partial void LogInnerCacheRemoveError(Exception ex, CacheKey cacheKey);
+    private partial void LogInnerCacheRemoveErrorCore(Exception ex, LoggedKey cacheKey);
 
     [LoggerMessage(Level = LogLevel.Warning, Message = "Inner cache remove cacheKeys {CacheKeys}")]
     private partial void LogInnerCacheRemoveKeysError(Exception ex, string cacheKeys);
 
     [LoggerMessage(Level = LogLevel.Trace, Message = "Found local. {CacheKey}")]
-    private partial void LogFoundLocal(CacheKey cacheKey);
+    private partial void LogFoundLocalCore(LoggedKey cacheKey);
 
     [LoggerMessage(Level = LogLevel.Trace, Message = "Using primary only when disconnected. Returning local for cacheKey {CacheKey}")]
-    private partial void LogUsingPrimaryOnlyWhenDisconnected(CacheKey cacheKey);
+    private partial void LogUsingPrimaryOnlyWhenDisconnectedCore(LoggedKey cacheKey);
 
     [LoggerMessage(Level = LogLevel.Trace, Message = "Inner cache is not connected. Returning default for cacheKey {CacheKey}")]
-    private partial void LogReturningDefaultDisconnected(CacheKey cacheKey);
+    private partial void LogReturningDefaultDisconnectedCore(LoggedKey cacheKey);
 
     [LoggerMessage(Level = LogLevel.Trace, Message = "Found inner cache copy at cacheKey {CacheKey}")]
-    private partial void LogFoundInnerCacheCopy(CacheKey cacheKey);
+    private partial void LogFoundInnerCacheCopyCore(LoggedKey cacheKey);
 
     [LoggerMessage(Level = LogLevel.Warning, Message = "Inner cache set value for {CacheKey}")]
-    private partial void LogInnerCacheSetError(Exception ex, CacheKey cacheKey);
+    private partial void LogInnerCacheSetErrorCore(Exception ex, LoggedKey cacheKey);
 
     [LoggerMessage(Level = LogLevel.Warning, Message = "Inner cache set value for {CacheKeys}")]
     private partial void LogInnerCacheSetKeysError(Exception ex, string cacheKeys);
+
+    // The generated methods take a LoggedKey, so a raw key cannot reach them without going through LogKeys.
+#pragma warning disable CA1873 // LoggedKey defers the digest to ToString, which the generated method calls only when the level is enabled
+    private void LogBatchCacheMissed(CacheKey cacheKey, int count) => LogBatchCacheMissedCore(Logged(cacheKey), count);
+    private void LogCacheMissed(CacheKey cacheKey) => LogCacheMissedCore(Logged(cacheKey));
+    private void LogClearingCached(CacheKey cacheKey) => LogClearingCachedCore(Logged(cacheKey));
+    private void LogClearingLocalCached(CacheKey cacheKey) => LogClearingLocalCachedCore(Logged(cacheKey));
+    private void LogFoundInnerCacheCopy(CacheKey cacheKey) => LogFoundInnerCacheCopyCore(Logged(cacheKey));
+    private void LogFoundLocal(CacheKey cacheKey) => LogFoundLocalCore(Logged(cacheKey));
+    private void LogInnerCacheContainsError(Exception ex, CacheKey cacheKey) => LogInnerCacheContainsErrorCore(ex, Logged(cacheKey));
+    private void LogInnerCacheRefreshError(Exception ex, CacheKey cacheKey) => LogInnerCacheRefreshErrorCore(ex, Logged(cacheKey));
+    private void LogInnerCacheRemoveError(Exception ex, CacheKey cacheKey) => LogInnerCacheRemoveErrorCore(ex, Logged(cacheKey));
+    private void LogInnerCacheSetError(Exception ex, CacheKey cacheKey) => LogInnerCacheSetErrorCore(ex, Logged(cacheKey));
+    private void LogInnerCacheTryAddError(Exception ex, CacheKey cacheKey) => LogInnerCacheTryAddErrorCore(ex, Logged(cacheKey));
+    private void LogRefreshingInnerCacheKey(CacheKey cacheKey, DateTimeOffset? expiration) => LogRefreshingInnerCacheKeyCore(Logged(cacheKey), expiration);
+    private void LogReplacingCachedKey(CacheKey cacheKey) => LogReplacingCachedKeyCore(Logged(cacheKey));
+    private void LogReturningDefaultDisconnected(CacheKey cacheKey) => LogReturningDefaultDisconnectedCore(Logged(cacheKey));
+    private void LogSettingLocalOnly(CacheKey cacheKey) => LogSettingLocalOnlyCore(Logged(cacheKey));
+    private void LogTryAddBroadcastNotPublished(CacheKey cacheKey) => LogTryAddBroadcastNotPublishedCore(Logged(cacheKey));
+    private void LogTryAddLocalLockUnavailable(CacheKey cacheKey) => LogTryAddLocalLockUnavailableCore(Logged(cacheKey));
+    private void LogTryAddLocalPropagationFailed(Exception ex, CacheKey cacheKey) => LogTryAddLocalPropagationFailedCore(ex, Logged(cacheKey));
+    private void LogTryAddSkippedExpiredEntry(CacheKey cacheKey, DateTimeOffset expiration) => LogTryAddSkippedExpiredEntryCore(Logged(cacheKey), expiration);
+    private void LogTryAddSkippedNonPositiveLocalRetention(CacheKey cacheKey, TimeSpan localMaxExpiration) => LogTryAddSkippedNonPositiveLocalRetentionCore(Logged(cacheKey), localMaxExpiration);
+    private void LogTryAddSkippedUnrepresentableValue(CacheKey cacheKey) => LogTryAddSkippedUnrepresentableValueCore(Logged(cacheKey));
+    private void LogUsingPrimaryOnlyWhenDisconnected(CacheKey cacheKey) => LogUsingPrimaryOnlyWhenDisconnectedCore(Logged(cacheKey));
+#pragma warning restore CA1873
 }

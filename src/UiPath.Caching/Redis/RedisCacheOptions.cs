@@ -20,6 +20,12 @@ public class RedisCacheOptions : ICacheOptions
 
     public bool CacheNullValues { get; set; }
 
+    public bool MaskKeys { get; set; }
+
+    public List<string> MaskedKeyPrefixes { get; set; } = [];
+
+    IReadOnlyList<string> ICacheOptions.MaskedKeyPrefixes => MaskedKeyPrefixes;
+
     public bool KeyReadTelemetryEnabled { get; set; }
 
     /// <summary>

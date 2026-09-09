@@ -376,6 +376,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 
 ### Fixed
 
+- **Cache keys can be masked in logs (#129).** `ICacheOptions.MaskKeys` (default `false`) and
+  `MaskedKeyPrefixes` on `InMemoryCacheOptions`, `InMemoryRedisCacheOptions` and `RedisCacheOptions`. On,
+  every log line that named a key — the multilayer caches' Warning-level inner-cache failures and their
+  Debug/Trace diagnostics, `RedisCache`/`RedisHashCache`'s large-value and miss lines, the broadcast
+  publisher — leaves a number or GUID key in full, and masks any other key under a listed prefix to that
+  prefix plus its first three characters (`myapp:s:session:cos****`); the masking runs only when the line is
+  actually written. `AddDistributedCache` turns it on for its own provider with its own prefix listed and
+  masks the key in its own two messages, because `IDistributedCache` keys are the consumer's and can be
+  secrets (ASP.NET Core session ids, API keys). Keys stay verbatim in Redis.
+
 - **Multi-key `RemoveAsync` honors its cancellation token again.** The `CacheKey[]` overload built
   each entry's options without the token, so an already-cancelled call did the work anyway and only
   noticed at the removal itself. It now forwards the token, matching the single-key overload. The

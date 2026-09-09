@@ -38,6 +38,7 @@ internal sealed partial class RedisCache : RedisCacheBase, ICache
         _supportsExpireTime = RedisUtils.SupportsExpireTime(redis.Version);
         _largeValueThreshold = cacheOptions.LargeValueThreshold;
         _redisKeyStrategy = (redisCacheOptions.RedisKeyStrategyFactory ?? new DefaultRedisKeyStrategyFactory()).Create(cacheOptions, GetType());
+        RedisKeyLogPrefix = KeyMasking.PrefixOf(_redisKeyStrategy);
         _cacheEntryFactory = redisCacheOptions.EntryFactory ?? new CacheEntryFactory();
         _cacheNullValues = redisCacheOptions.CacheNullValues;
 
@@ -958,20 +959,29 @@ internal sealed partial class RedisCache : RedisCacheBase, ICache
     }
 
     [LoggerMessage(Level = LogLevel.Trace, Message = "Refreshing key {RedisKey} at expiration {Expiration}")]
-    private partial void LogRefreshingKey(RedisKey redisKey, DateTimeOffset? expiration);
+    private partial void LogRefreshingKeyCore(LoggedKey redisKey, DateTimeOffset? expiration);
 
     [LoggerMessage(Level = LogLevel.Debug, Message = "TryAdd skipped for {RedisKey}: a default value cannot be represented unless CacheNullValues is on.")]
-    private partial void LogTryAddSkippedUnrepresentableValue(RedisKey redisKey);
+    private partial void LogTryAddSkippedUnrepresentableValueCore(LoggedKey redisKey);
 
     [LoggerMessage(Level = LogLevel.Debug, Message = "TryAdd skipped for {RedisKey}: the requested expiration {Expiration} is not positive, so the entry would retain nothing.")]
-    private partial void LogTryAddSkippedExpiredEntry(RedisKey redisKey, TimeSpan expiration);
+    private partial void LogTryAddSkippedExpiredEntryCore(LoggedKey redisKey, TimeSpan expiration);
 
     [LoggerMessage(Level = LogLevel.Warning, Message = "RedisCache exception.")]
     private partial void LogRedisCacheException(Exception ex);
 
     [LoggerMessage(Level = LogLevel.Debug, Message = "Cache missed. generating new {RedisKey}")]
-    private partial void LogCacheMissed(RedisKey redisKey);
+    private partial void LogCacheMissedCore(LoggedKey redisKey);
 
     [LoggerMessage(Level = LogLevel.Warning, Message = "Redis large value detected for key {RedisKey}, length {Length}")]
-    private partial void LogLargeValueDetected(RedisKey redisKey, long length);
+    private partial void LogLargeValueDetectedCore(LoggedKey redisKey, long length);
+
+    // The generated methods take a LoggedKey, so a raw key cannot reach them without going through LogKeys.
+#pragma warning disable CA1873 // LoggedKey defers the digest to ToString, which the generated method calls only when the level is enabled
+    private void LogCacheMissed(RedisKey redisKey) => LogCacheMissedCore(Logged(redisKey));
+    private void LogLargeValueDetected(RedisKey redisKey, long length) => LogLargeValueDetectedCore(Logged(redisKey), length);
+    private void LogRefreshingKey(RedisKey redisKey, DateTimeOffset? expiration) => LogRefreshingKeyCore(Logged(redisKey), expiration);
+    private void LogTryAddSkippedExpiredEntry(RedisKey redisKey, TimeSpan expiration) => LogTryAddSkippedExpiredEntryCore(Logged(redisKey), expiration);
+    private void LogTryAddSkippedUnrepresentableValue(RedisKey redisKey) => LogTryAddSkippedUnrepresentableValueCore(Logged(redisKey));
+#pragma warning restore CA1873
 }

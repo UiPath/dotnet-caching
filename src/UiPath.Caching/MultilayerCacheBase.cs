@@ -12,6 +12,7 @@ public abstract class MultilayerCacheBase : IDisposable
     protected readonly IMemoryCache _memoryCache;
     protected readonly ICacheEntryFactory _cacheEntryFactory;
     protected readonly IMultilayerCacheOptions _multiLayerCacheOptions;
+    private readonly KeyMasking _keyMasking;
     protected readonly IDisposable _monitor;
     protected readonly TimeProvider _clock;
     protected readonly CacheEventPublisher _eventPublisher;
@@ -77,7 +78,8 @@ public abstract class MultilayerCacheBase : IDisposable
         _monitor = _memoryCache.Monitor(multiLayerCacheOptions, Telemetry, GetType().Name);
         _clock = clock;
         _topicProvider = topicFactory.Get(_multiLayerCacheOptions.Topic);
-        _eventPublisher = new CacheEventPublisher(cacheName, _topicProvider, cacheEventFactory, logger);
+        _keyMasking = KeyMasking.For(multiLayerCacheOptions);
+        _eventPublisher = new CacheEventPublisher(cacheName, _topicProvider, cacheEventFactory, logger, _keyMasking);
         var connectionMonitorEnabled = multiLayerCacheOptions.ConnectionMonitorEnabled ?? cacheOptions.ConnectionMonitorEnabled;
         _connectionState = connectionMonitorEnabled ? GetConnectionMonitor(innerCache, _topicProvider) : NullConnectionStateMonitor.Instance;
         _useLocalOnlyWhenDisconnected = (multiLayerCacheOptions.UseLocalOnlyWhenDisconnected ?? false) && connectionMonitorEnabled;
@@ -291,4 +293,7 @@ public abstract class MultilayerCacheBase : IDisposable
         }
     }
 
+    private protected LoggedKey Logged(CacheKey cacheKey) => new(cacheKey.Name, layerPrefix: null, _keyMasking);
+
+    private protected string Logged(IEnumerable<CacheKey> cacheKeys) => LoggedKey.Join(cacheKeys, _keyMasking);
 }

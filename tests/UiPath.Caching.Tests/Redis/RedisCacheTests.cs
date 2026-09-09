@@ -1,3 +1,4 @@
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Internal;
 using NSubstitute.ExceptionExtensions;
 using NSubstitute.ReceivedExtensions;
@@ -767,6 +768,37 @@ public class RedisCacheTests(ITestContextAccessor testContextAccessor) : IAsyncL
             When.Always,
             CommandFlags.DemandMaster);
     }
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task Miss_log_line_follows_MaskKeys(bool maskKeys)
+    {
+        var logger = _fixture.Freeze<ILogger<RedisCache>>();
+        logger.IsEnabled(Arg.Any<LogLevel>()).Returns(true);
+        _cacheOptions.MaskKeys = maskKeys;
+        _cacheOptions.MaskedKeyPrefixes = [""];
+        _sut = null;
+
+        await Sut.GetOrAddAsync(_cacheKey, _ => Task.FromResult<string?>("generated"), policy: null, token: testContextAccessor.Current.CancellationToken);
+
+        var line = LoggedLines(logger).Should().ContainSingle(m => m.Contains("Cache missed")).Subject;
+        var redisKey = _redisKey.ToString();
+        if (maskKeys)
+        {
+            line.Should().Contain("****").And.NotContain(_cacheKey.Name);
+        }
+        else
+        {
+            line.Should().Contain(redisKey);
+        }
+    }
+
+    private static List<string> LoggedLines(ILogger logger) =>
+        logger.ReceivedCalls()
+            .Where(c => c.GetMethodInfo().Name == nameof(ILogger.Log))
+            .Select(c => c.GetArguments()[2]!.ToString()!)
+            .ToList();
 
     [Fact]
     public async Task GetOrAdd_policy_FactoryTimeout_cancels_slow_generator()

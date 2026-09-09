@@ -227,7 +227,7 @@ public static class DistributedCacheCollectionExtensions
         {
             KnownCacheProviderNames.Redis => CreateRedisProvider(sp, options, differentiator),
             KnownCacheProviderNames.InMemoryRedis => new InMemoryRedisCacheProvider(
-                Options.Create(WithNeutralCacheKeyStrategy(sp.GetRequiredService<IOptions<InMemoryRedisCacheOptions>>().Value)),
+                Options.Create(WithNeutralCacheKeyStrategy(sp.GetRequiredService<IOptions<InMemoryRedisCacheOptions>>().Value, options)),
                 sp.GetRequiredService<IOptions<CacheOptions>>(),
                 sp.GetRequiredService<IMemoryCacheFactory>(),
                 () => CreatePrivateRedisFactory(sp, options, differentiator),
@@ -241,7 +241,7 @@ public static class DistributedCacheCollectionExtensions
                 sp.GetRequiredService<ICachePolicyFactory>(),
                 sp.GetRequiredService<TimeProvider>()),
             KnownCacheProviderNames.InMemory => new InMemoryCacheProvider(
-                Options.Create(WithNeutralCacheKeyStrategy(sp.GetRequiredService<IOptions<InMemoryCacheOptions>>().Value)),
+                Options.Create(WithNeutralCacheKeyStrategy(sp.GetRequiredService<IOptions<InMemoryCacheOptions>>().Value, options)),
                 sp.GetRequiredService<IOptions<CacheOptions>>(),
                 sp.GetRequiredService<IMemoryCacheFactory>(),
                 sp.GetRequiredService<ICacheEventFactory>(),
@@ -316,30 +316,58 @@ public static class DistributedCacheCollectionExtensions
         copy.RedisKeyStrategyFactory = new DistributedRedisKeyStrategyFactory(distributedFactory, differentiator);
         copy.CacheKeyStrategy = new DefaultCacheKeyStrategy();
         copy.AwaitRefresh = true;
+        MaskDistributedKeys(copy, options);
         return copy;
     }
 
     /// <summary>
-    /// Copy of the tier's options with the cache-key strategy neutralized. The multilayer caches apply
+    /// Copy of the tier's options with the cache-key strategy neutralized and key masking on. The multilayer caches apply
     /// <c>ICacheOptions.CacheKeyStrategy</c> (<c>HashCacheEntryBuilder</c>) on top of the key the adapter has
     /// already composed, so an application strategy configured on the tier would transform these keys a second
     /// time — making the stored key tier-dependent, and letting a lossy or ambient-insensitive strategy undo
     /// the adapter's case-sensitivity. The distributed cache composes its key through
     /// <see cref="UiPathDistributedCacheOptions.CacheKeyStrategy"/> instead. The DI singleton is left untouched.
     /// </summary>
-    private static InMemoryCacheOptions WithNeutralCacheKeyStrategy(InMemoryCacheOptions source)
+    private static InMemoryCacheOptions WithNeutralCacheKeyStrategy(InMemoryCacheOptions source, UiPathDistributedCacheOptions options)
     {
         var copy = source.ShallowCopy();
         copy.CacheKeyStrategy = new DefaultCacheKeyStrategy();
+        MaskDistributedKeys(copy, options);
         return copy;
     }
 
-    /// <inheritdoc cref="WithNeutralCacheKeyStrategy(InMemoryCacheOptions)"/>
-    private static InMemoryRedisCacheOptions WithNeutralCacheKeyStrategy(InMemoryRedisCacheOptions source)
+    /// <inheritdoc cref="WithNeutralCacheKeyStrategy(InMemoryCacheOptions, UiPathDistributedCacheOptions)"/>
+    private static InMemoryRedisCacheOptions WithNeutralCacheKeyStrategy(InMemoryRedisCacheOptions source, UiPathDistributedCacheOptions options)
     {
         var copy = source.ShallowCopy();
         copy.CacheKeyStrategy = new DefaultCacheKeyStrategy();
+        MaskDistributedKeys(copy, options);
         return copy;
+    }
+
+    /// <summary>
+    /// These keys are the consumer's and can be secrets, so the tier masks every key under the adapter's own
+    /// prefix; with a strategy that composes no recognizable prefix, every key. A fresh list, because the copy
+    /// still shares the application's.
+    /// </summary>
+    private static void MaskDistributedKeys(ICacheOptions copy, UiPathDistributedCacheOptions options)
+    {
+        var prefixes = new List<string> { KeyMasking.PrefixOf(ResolveCacheKeyStrategy(options)) ?? string.Empty };
+        switch (copy)
+        {
+            case RedisCacheOptions redis:
+                redis.MaskKeys = true;
+                redis.MaskedKeyPrefixes = prefixes;
+                break;
+            case InMemoryRedisCacheOptions inMemoryRedis:
+                inMemoryRedis.MaskKeys = true;
+                inMemoryRedis.MaskedKeyPrefixes = prefixes;
+                break;
+            case InMemoryCacheOptions inMemory:
+                inMemory.MaskKeys = true;
+                inMemory.MaskedKeyPrefixes = prefixes;
+                break;
+        }
     }
 
     /// <summary>

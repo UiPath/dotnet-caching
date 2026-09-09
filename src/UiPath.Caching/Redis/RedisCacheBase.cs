@@ -7,6 +7,7 @@ namespace UiPath.Caching.Redis;
 public abstract class RedisCacheBase : IConnectionState, IDisposable
 {
     private readonly IRedisConnector _redis;
+    private readonly KeyMasking _keyMasking;
     private readonly IConnectionState _connectionState;
     private bool _disposed;
 
@@ -29,6 +30,7 @@ public abstract class RedisCacheBase : IConnectionState, IDisposable
         DefaultExpiration = DefaultPolicy.DistributedExpiration;
         Clock = clock;
         KeyReadTelemetryEnabled = redisCacheOptions.KeyReadTelemetryEnabled;
+        _keyMasking = KeyMasking.For(redisCacheOptions);
         RefreshFlags = redisCacheOptions.AwaitRefresh
             ? CommandFlags.DemandMaster
             : CommandFlags.DemandMaster | CommandFlags.FireAndForget;
@@ -37,6 +39,13 @@ public abstract class RedisCacheBase : IConnectionState, IDisposable
     protected ICachingTelemetryProvider Telemetry { get; }
 
     protected bool KeyReadTelemetryEnabled { get; }
+
+    /// <summary>What the Redis key strategy puts in front of a key; set by the cache once it has built the strategy.</summary>
+    private protected string? RedisKeyLogPrefix { get; set; }
+
+    private protected LoggedKey Logged(RedisKey key) => new(key.ToString(), RedisKeyLogPrefix, _keyMasking);
+
+    private protected LoggedKey Logged(CacheKey key) => new(key.Name, layerPrefix: null, _keyMasking);
 
     /// <summary>Flags for a standalone TTL write, shared by both caches so the option cannot be honored in one and not the other.</summary>
     internal CommandFlags RefreshFlags { get; }

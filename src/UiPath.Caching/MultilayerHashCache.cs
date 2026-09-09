@@ -466,50 +466,70 @@ internal sealed partial class MultilayerHashCache : MultilayerCacheBase, IHashCa
         ImmutableDictionary<string, T?>.Empty;
 
     [LoggerMessage(Level = LogLevel.Debug, Message = "Cache missed. generating new {CacheKey}")]
-    private partial void LogCacheMissed(CacheKey cacheKey);
+    private partial void LogCacheMissedCore(LoggedKey cacheKey);
 
     [LoggerMessage(Level = LogLevel.Debug, Message = "Replacing cached cacheKey {CacheKey}")]
-    private partial void LogReplacingCachedKey(CacheKey cacheKey);
+    private partial void LogReplacingCachedKeyCore(LoggedKey cacheKey);
 
     [LoggerMessage(Level = LogLevel.Trace, Message = "Inner cache is not connected. Setting local only for cacheKey {CacheKey}")]
-    private partial void LogSettingLocalOnly(CacheKey cacheKey);
+    private partial void LogSettingLocalOnlyCore(LoggedKey cacheKey);
 
     [LoggerMessage(Level = LogLevel.Debug, Message = "Clearing cached. cacheKey {CacheKey}")]
-    private partial void LogClearingCached(CacheKey cacheKey);
+    private partial void LogClearingCachedCore(LoggedKey cacheKey);
 
     [LoggerMessage(Level = LogLevel.Trace, Message = "Refreshing inner cache cacheKey {CacheKey} at expiration {Expiration}")]
-    private partial void LogRefreshingInnerCacheKey(CacheKey cacheKey, DateTimeOffset? expiration);
+    private partial void LogRefreshingInnerCacheKeyCore(LoggedKey cacheKey, DateTimeOffset? expiration);
 
     [LoggerMessage(Level = LogLevel.Warning, Message = "Inner cache refresh value for cacheKey {CacheKey}")]
-    private partial void LogInnerCacheRefreshError(Exception ex, CacheKey cacheKey);
+    private partial void LogInnerCacheRefreshErrorCore(Exception ex, LoggedKey cacheKey);
 
     [LoggerMessage(Level = LogLevel.Warning, Message = "Inner cache contains for cacheKey {CacheKey}")]
-    private partial void LogInnerCacheContainsError(Exception ex, CacheKey cacheKey);
+    private partial void LogInnerCacheContainsErrorCore(Exception ex, LoggedKey cacheKey);
 
     [LoggerMessage(Level = LogLevel.Trace, Message = "Set metadata for cacheKey {CacheKey}")]
-    private partial void LogSetMetadata(CacheKey cacheKey);
+    private partial void LogSetMetadataCore(LoggedKey cacheKey);
 
     [LoggerMessage(Level = LogLevel.Warning, Message = "Inner cache set metadata for cacheKey {CacheKey} failed")]
-    private partial void LogInnerCacheSetMetadataFailed(CacheKey cacheKey);
+    private partial void LogInnerCacheSetMetadataFailedCore(LoggedKey cacheKey);
 
     [LoggerMessage(Level = LogLevel.Debug, Message = "Clearing local cached. cacheKey {CacheKey}")]
-    private partial void LogClearingLocalCached(CacheKey cacheKey);
+    private partial void LogClearingLocalCachedCore(LoggedKey cacheKey);
 
     [LoggerMessage(Level = LogLevel.Warning, Message = "Inner cache remove cacheKey {CacheKey}")]
-    private partial void LogInnerCacheRemoveError(Exception ex, CacheKey cacheKey);
+    private partial void LogInnerCacheRemoveErrorCore(Exception ex, LoggedKey cacheKey);
 
     [LoggerMessage(Level = LogLevel.Trace, Message = "Found local. {CacheKey}")]
-    private partial void LogFoundLocal(CacheKey cacheKey);
+    private partial void LogFoundLocalCore(LoggedKey cacheKey);
 
     [LoggerMessage(Level = LogLevel.Trace, Message = "Inner cache is not connected. Using local copy for cacheKey {CacheKey}")]
-    private partial void LogUsingLocalCopyDisconnected(CacheKey cacheKey);
+    private partial void LogUsingLocalCopyDisconnectedCore(LoggedKey cacheKey);
 
     [LoggerMessage(Level = LogLevel.Trace, Message = "Inner cache is not connected. Returning default for cacheKey {CacheKey}")]
-    private partial void LogReturningDefaultDisconnected(CacheKey cacheKey);
+    private partial void LogReturningDefaultDisconnectedCore(LoggedKey cacheKey);
 
     [LoggerMessage(Level = LogLevel.Trace, Message = "Found inner copy at cacheKey {CacheKey}")]
-    private partial void LogFoundInnerCopy(CacheKey cacheKey);
+    private partial void LogFoundInnerCopyCore(LoggedKey cacheKey);
 
     [LoggerMessage(Level = LogLevel.Warning, Message = "Inner cache set value for {CacheKey}")]
-    private partial void LogInnerCacheSetError(Exception ex, CacheKey cacheKey);
+    private partial void LogInnerCacheSetErrorCore(Exception ex, LoggedKey cacheKey);
+
+    // The generated methods take a LoggedKey, so a raw key cannot reach them without going through LogKeys.
+#pragma warning disable CA1873 // LoggedKey defers the digest to ToString, which the generated method calls only when the level is enabled
+    private void LogCacheMissed(CacheKey cacheKey) => LogCacheMissedCore(Logged(cacheKey));
+    private void LogClearingCached(CacheKey cacheKey) => LogClearingCachedCore(Logged(cacheKey));
+    private void LogClearingLocalCached(CacheKey cacheKey) => LogClearingLocalCachedCore(Logged(cacheKey));
+    private void LogFoundInnerCopy(CacheKey cacheKey) => LogFoundInnerCopyCore(Logged(cacheKey));
+    private void LogFoundLocal(CacheKey cacheKey) => LogFoundLocalCore(Logged(cacheKey));
+    private void LogInnerCacheContainsError(Exception ex, CacheKey cacheKey) => LogInnerCacheContainsErrorCore(ex, Logged(cacheKey));
+    private void LogInnerCacheRefreshError(Exception ex, CacheKey cacheKey) => LogInnerCacheRefreshErrorCore(ex, Logged(cacheKey));
+    private void LogInnerCacheRemoveError(Exception ex, CacheKey cacheKey) => LogInnerCacheRemoveErrorCore(ex, Logged(cacheKey));
+    private void LogInnerCacheSetError(Exception ex, CacheKey cacheKey) => LogInnerCacheSetErrorCore(ex, Logged(cacheKey));
+    private void LogInnerCacheSetMetadataFailed(CacheKey cacheKey) => LogInnerCacheSetMetadataFailedCore(Logged(cacheKey));
+    private void LogRefreshingInnerCacheKey(CacheKey cacheKey, DateTimeOffset? expiration) => LogRefreshingInnerCacheKeyCore(Logged(cacheKey), expiration);
+    private void LogReplacingCachedKey(CacheKey cacheKey) => LogReplacingCachedKeyCore(Logged(cacheKey));
+    private void LogReturningDefaultDisconnected(CacheKey cacheKey) => LogReturningDefaultDisconnectedCore(Logged(cacheKey));
+    private void LogSetMetadata(CacheKey cacheKey) => LogSetMetadataCore(Logged(cacheKey));
+    private void LogSettingLocalOnly(CacheKey cacheKey) => LogSettingLocalOnlyCore(Logged(cacheKey));
+    private void LogUsingLocalCopyDisconnected(CacheKey cacheKey) => LogUsingLocalCopyDisconnectedCore(Logged(cacheKey));
+#pragma warning restore CA1873
 }

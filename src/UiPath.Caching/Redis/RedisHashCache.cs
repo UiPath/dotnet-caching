@@ -40,6 +40,7 @@ internal sealed partial class RedisHashCache : RedisCacheBase, IHashCache
         _cacheEntryFactory = redisCacheOptions.EntryFactory ?? new CacheEntryFactory();
         _supportsExpireTime = RedisUtils.SupportsExpireTime(redis.Version);
         _redisKeyStrategy = (redisCacheOptions.RedisKeyStrategyFactory ?? new DefaultRedisKeyStrategyFactory()).Create(_cacheOptions, GetType());
+        RedisKeyLogPrefix = KeyMasking.PrefixOf(_redisKeyStrategy);
         _cacheNullValues = redisCacheOptions.CacheNullValues;
         if (_cacheOptions.AuditEnabled)
         {
@@ -1022,10 +1023,10 @@ internal sealed partial class RedisHashCache : RedisCacheBase, IHashCache
     private ICacheEntry<IDictionary<string, T?>> Default<T>() => _cacheEntryFactory.Create(Empty<T?>(), DateTimeOffset.MinValue);
 
     [LoggerMessage(Level = LogLevel.Debug, Message = "Cache missed. generating new {CacheKey}")]
-    private partial void LogCacheMissed(CacheKey cacheKey);
+    private partial void LogCacheMissedCore(LoggedKey cacheKey);
 
     [LoggerMessage(Level = LogLevel.Trace, Message = "Refreshing key {RedisKey} at expiration {LocalExpiration}")]
-    private partial void LogRefreshingKey(RedisKey redisKey, DateTimeOffset localExpiration);
+    private partial void LogRefreshingKeyCore(LoggedKey redisKey, DateTimeOffset localExpiration);
 
     [LoggerMessage(Level = LogLevel.Warning, Message = "RedisHashCache exception.")]
     private partial void LogRedisHashCacheException(Exception ex);
@@ -1034,5 +1035,12 @@ internal sealed partial class RedisHashCache : RedisCacheBase, IHashCache
     private partial void LogRedisTransactionFailed();
 
     [LoggerMessage(Level = LogLevel.Warning, Message = "Redis large value detected for key {RedisKey}, field {Field}, length {Length}")]
-    private partial void LogLargeValueDetected(RedisKey redisKey, string field, long length);
+    private partial void LogLargeValueDetectedCore(LoggedKey redisKey, string field, long length);
+
+    // The generated methods take a LoggedKey, so a raw key cannot reach them without going through LogKeys.
+#pragma warning disable CA1873 // LoggedKey defers the digest to ToString, which the generated method calls only when the level is enabled
+    private void LogCacheMissed(CacheKey cacheKey) => LogCacheMissedCore(Logged(cacheKey));
+    private void LogLargeValueDetected(RedisKey redisKey, string field, long length) => LogLargeValueDetectedCore(Logged(redisKey), field, length);
+    private void LogRefreshingKey(RedisKey redisKey, DateTimeOffset localExpiration) => LogRefreshingKeyCore(Logged(redisKey), localExpiration);
+#pragma warning restore CA1873
 }

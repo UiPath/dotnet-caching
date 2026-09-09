@@ -772,6 +772,41 @@ public class RedisHashCacheTests(ITestContextAccessor testContextAccessor) : IAs
         actual.Should().Be(expected, "before this PR _expiration_ was a regular user field name (only _metadata_ was reserved); legacy data writing it must remain readable");
     }
 
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task Miss_log_line_follows_MaskKeys(bool maskKeys)
+    {
+        _logger.IsEnabled(Arg.Any<LogLevel>()).Returns(true);
+        _redisCacheOptions.MaskKeys = maskKeys;
+        _redisCacheOptions.MaskedKeyPrefixes = [""];
+        // Not the fixture key: that one is a GUID, which masking deliberately leaves readable.
+        _cacheKey = "session:cosmin";
+        _redisKey = string.Join(':', _prefix, RedisKeyspaces.Hash, _cacheKey).ToLowerInvariant();
+        _sut = null;
+        _database.KeyExistsAsync(_redisKey, CommandFlags.PreferReplica).Returns(_ => true);
+        _transaction.HashGetAllAsync(_redisKey, CommandFlags.PreferReplica).Returns(Array.Empty<HashEntry>());
+        _transaction.KeyExpireTimeAsync(_redisKey, CommandFlags.PreferReplica).Returns((DateTime?)_now.AddMinutes(5).UtcDateTime);
+        _transaction.ExecuteAsync(Arg.Any<CommandFlags>()).Returns(true);
+        Task<IDictionary<string, string?>> generator(CancellationToken _) => Task.FromResult<IDictionary<string, string?>>(new Dictionary<string, string?> { ["f"] = "v" });
+
+        await Sut.GetOrAddAsync(_cacheKey, generator, TimeSpan.FromMinutes(5), token: testContextAccessor.Current.CancellationToken);
+
+        var lines = _logger.ReceivedCalls()
+            .Where(c => c.GetMethodInfo().Name == nameof(ILogger.Log))
+            .Select(c => c.GetArguments()[2]!.ToString()!)
+            .ToList();
+        var line = lines.Should().ContainSingle(m => m.Contains("Cache missed")).Subject;
+        if (maskKeys)
+        {
+            line.Should().Contain("****").And.NotContain(_cacheKey.Name);
+        }
+        else
+        {
+            line.Should().Contain(_cacheKey.Name);
+        }
+    }
+
     [Fact]
     public async Task GetCacheEntry_with_empty_hashEntries_returns_miss()
     {

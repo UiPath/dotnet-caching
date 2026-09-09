@@ -83,9 +83,11 @@ internal sealed partial class UiPathDistributedCache : IDistributedCache
     public async Task RemoveAsync(string key, CancellationToken token = default)
     {
         var cacheKey = Encode(key);
-        if (!await _cache.RemoveAsync<ReadOnlyMemory<byte>>(cacheKey, token).ConfigureAwait(false))
+        var removed = await _cache.RemoveAsync<ReadOnlyMemory<byte>>(cacheKey, token).ConfigureAwait(false);
+        if (!removed && _logger.IsEnabled(LogLevel.Debug))
         {
-            LogRemoveNotApplied(key);
+            var maskedKey = KeyMasking.MaskValue(key);
+            LogRemoveNotApplied(maskedKey);
         }
     }
 
@@ -116,7 +118,7 @@ internal sealed partial class UiPathDistributedCache : IDistributedCache
         var ttl = ResolveTimeToLive(now, sliding, absolute);
         if (!await StoreAsync(cacheKey, fields, ttl, token).ConfigureAwait(false))
         {
-            LogWriteNotApplied(key);
+            LogWriteNotApplied(KeyMasking.MaskValue(key));
         }
     }
 
@@ -348,6 +350,7 @@ internal sealed partial class UiPathDistributedCache : IDistributedCache
         return options.AbsoluteExpirationRelativeToNow is { } relative ? AddClamped(now, relative.Ticks) : null;
     }
 
+    // These keys are the consumer's and can be secrets (a session id), so they are masked before they get here.
     [LoggerMessage(Level = LogLevel.Warning, Message = "Distributed cache write for key {Key} was not applied by the backing cache.")]
     private partial void LogWriteNotApplied(string key);
 

@@ -150,6 +150,8 @@ Per-topic overrides: add entries to `Topics[]` under `Broadcast:RedisPubSub`. Ea
 | `LocalMaxExpiration` | `TimeSpan?` | `null` | Per-provider | Cap on the L1 (in-memory) TTL while L2 is connected; `null` = no cap beyond `DefaultExpiration`. |
 | `ConnectionMonitorEnabled` | `bool?` | `null` | Per-provider | `null` = inherit from `CacheOptions.ConnectionMonitorEnabled`. |
 | `CacheNullValues` | `bool` | `false` | Per-provider | Persist `null`/empty factory returns as sentinels to suppress thundering-herd on missing keys. |
+| `MaskKeys` | `bool` | `false` | Per-provider | Mask keys in log lines. Off, keys are logged in full. On, a key that is a number or a GUID is still logged in full; any other key that starts with one of `MaskedKeyPrefixes` keeps that prefix and shows only its first three characters (`myapp:s:session:cos****`). `AddDistributedCache` turns it on for its own provider. |
+| `MaskedKeyPrefixes` | `string[]` | `[]` | Per-provider | Key prefixes under which keys are secrets, compared case-insensitively. An empty entry matches every key. Only read when `MaskKeys` is on. |
 | `ConnectionMonitorPeriod` | `TimeSpan?` | `00:00:05` | Per-provider | How often the connection monitor probes Redis health. |
 | `SizeLimit` | `long?` | `null` | Per-provider | Max bytes for the in-memory tier; `null` = unlimited. |
 | `CompactionPercentage` | `double?` | `null` | Per-provider | Fraction of `SizeLimit` to free when the limit is hit; `null` = runtime default (0.05). |
@@ -175,6 +177,8 @@ Per-topic overrides: add entries to `Topics[]` under `Broadcast:RedisPubSub`. Ea
 | `Timeout` | `TimeSpan` | `00:00:01` | Per-provider | Max wait for a cache operation before giving up and falling through. |
 | `ConnectionMonitorEnabled` | `bool?` | `null` | Per-provider | `null` = inherit from `CacheOptions.ConnectionMonitorEnabled`. |
 | `CacheNullValues` | `bool` | `false` | Per-provider | Persist `null`/empty factory returns as sentinels to suppress thundering-herd on missing keys. |
+| `MaskKeys` | `bool` | `false` | Per-provider | Mask keys in log lines. Off, keys are logged in full. On, a key that is a number or a GUID is still logged in full; any other key that starts with one of `MaskedKeyPrefixes` keeps that prefix and shows only its first three characters (`myapp:s:session:cos****`). `AddDistributedCache` turns it on for its own provider. |
+| `MaskedKeyPrefixes` | `string[]` | `[]` | Per-provider | Key prefixes under which keys are secrets, compared case-insensitively. An empty entry matches every key. Only read when `MaskKeys` is on. |
 | `KeyReadTelemetryEnabled` | `bool` | `false` | Per-provider | Opt-in per-key read attribution: each read emits a `Redis` dependency carrying the key in `data` (one per hash key for hash reads), with a `BatchId` shared across the operation. Off by default because raw keys are high-cardinality; the per-operation hit/miss metric is always emitted regardless. |
 | `AwaitRefresh` | `bool` | `false` | Per-provider | Wait for the server to apply a refresh instead of sending `KEYEXPIRE`/`PERSIST` fire-and-forget. Off by default, keeping the round trip off the sliding-expiration path, which runs on every read of a sliding entry. While off, a refresh is unverifiable: `RefreshAsync` returns `false` whether it succeeded, failed or the key was absent; the reply is never seen, so a rejected command is neither logged nor retried by the resilience pipeline, and telemetry records every refresh as unsuccessful; and the new deadline is not yet in effect when the call returns. Turn it on where a lost refresh matters more than a round trip. `AddDistributedCache` sets it for its own provider. |
 
@@ -196,6 +200,8 @@ Per-topic overrides: add entries to `Topics[]` under `Broadcast:RedisPubSub`. Ea
 | `LocalMaxExpiration` | `TimeSpan?` | `01:00:00` | Per-provider | Cap on in-memory TTL; `null` = no cap (falls back to the resolved `DefaultExpiration`). |
 | `ConnectionMonitorEnabled` | `bool?` | `null` | Per-provider | Inert for this provider (no Redis connection); present to satisfy `IMultilayerCacheOptions`. |
 | `CacheNullValues` | `bool` | `false` | Per-provider | Persist `null`/empty factory returns as sentinels. |
+| `MaskKeys` | `bool` | `false` | Per-provider | Mask keys in log lines. Off, keys are logged in full. On, a key that is a number or a GUID is still logged in full; any other key that starts with one of `MaskedKeyPrefixes` keeps that prefix and shows only its first three characters (`myapp:s:session:cos****`). `AddDistributedCache` turns it on for its own provider. |
+| `MaskedKeyPrefixes` | `string[]` | `[]` | Per-provider | Key prefixes under which keys are secrets, compared case-insensitively. An empty entry matches every key. Only read when `MaskKeys` is on. |
 | `ConnectionMonitorPeriod` | `TimeSpan?` | `00:00:05` | Per-provider | Inert for this provider; present to satisfy `IMultilayerCacheOptions`. |
 | `SizeLimit` | `long?` | `null` | Per-provider | Max bytes for the in-memory store; `null` = unlimited. |
 | `CompactionPercentage` | `double?` | `null` | Per-provider | Fraction of `SizeLimit` to free when the limit is hit; `null` = runtime default (0.05). |
@@ -333,15 +339,15 @@ The cache-key strategy is applied by the adapter rather than by the backing prov
 `ICacheOptions.CacheKeyStrategy`, which `RedisHashCache` does not consult — routing it through the
 provider would make the stored key depend on which tier is configured.
 
-> **Keys appear in logs.** `IDistributedCache` keys are chosen by the consumer and can be secrets — under
-> ASP.NET Core session the key is the session id. This adapter names the key in its two own messages (a failed
-> write at `Warning`, a no-op remove at `Debug`), and the composed key is passed to the backing cache, which
-> logs it in its own diagnostics too: `MultilayerHashCache` includes the `CacheKey` in five `LogLevel.Warning` messages (raised on
-> inner-cache exceptions) and in several Debug/Trace ones, and `RedisHashCache` includes the physical key in
-> `LogLargeValueDetected` (Warning) and `LogRefreshingKey` (Trace). Keys stored verbatim for parity with
-> the conventional layout also means they appear in `KEYS`/`SCAN` output and RDB
-> snapshots. Treat logs and Redis dumps for this provider as containing session identifiers, or filter the
-> `UiPath.Caching` log categories accordingly.
+> **Keys are masked in this provider's logs.** `IDistributedCache` keys are chosen by the consumer and can be
+> secrets — under ASP.NET Core session the key is the session id. The adapter masks the key in its two own
+> messages (a failed write at `Warning`, a no-op remove at `Debug`), and turns `MaskKeys` on for the private
+> copy of the backing tier's options with its own prefix listed, so every backing-cache line keeps the
+> composed prefixes and masks the consumer's key to its first three characters: `d:ses****` at the cache
+> layer, `myapp:dh:d:ses****` at the Redis layer. A GUID session id is masked too, because behind the `d:`
+> prefix it is a string, not a bare identifier. Keys are still stored verbatim in Redis, for parity with the
+> conventional layout, so they appear in `KEYS`/`SCAN` output and RDB snapshots; treat Redis dumps for this
+> provider as containing session identifiers.
 
 **`Refresh` waits for the server on this provider.** `AddDistributedCache` sets
 `RedisCacheOptions.AwaitRefresh` on the private provider it builds, so `IDistributedCache.Refresh` — and the

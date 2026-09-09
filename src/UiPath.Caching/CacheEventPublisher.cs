@@ -6,18 +6,32 @@ public sealed partial class CacheEventPublisher
     private readonly ITopicProvider _topicProvider;
     private readonly ICacheEventFactory _cacheEventFactory;
     private readonly ILogger _logger;
+    private readonly KeyMasking _keyMasking;
 
     public CacheEventPublisher(
         string cacheName,
         ITopicProvider topicProvider,
         ICacheEventFactory cacheEventFactory,
         ILogger logger)
+        : this(cacheName, topicProvider, cacheEventFactory, logger, KeyMasking.Off)
+    {
+    }
+
+    internal CacheEventPublisher(
+        string cacheName,
+        ITopicProvider topicProvider,
+        ICacheEventFactory cacheEventFactory,
+        ILogger logger,
+        KeyMasking keyMasking)
     {
         _cacheName = cacheName;
         _topicProvider = topicProvider;
         _cacheEventFactory = cacheEventFactory;
         _logger = logger;
+        _keyMasking = keyMasking;
     }
+
+    private LoggedKey Logged(CacheKey cacheKey) => new(cacheKey.Name, layerPrefix: null, _keyMasking);
 
     public ValueTask<bool> MetadataUpdatedAsync(ICacheEntryOptions options)
     {
@@ -57,5 +71,10 @@ public sealed partial class CacheEventPublisher
     }
 
     [LoggerMessage(Level = LogLevel.Debug, Message = "Raise {EventType} on topicKey {TopicKey} for key {CacheKey}")]
-    private partial void LogRaiseEvent(string eventType, TopicKey topicKey, CacheKey cacheKey);
+    private partial void LogRaiseEventCore(string eventType, TopicKey topicKey, LoggedKey cacheKey);
+
+    // The generated methods take a LoggedKey, so a raw key cannot reach them without going through LogKeys.
+#pragma warning disable CA1873 // LoggedKey defers the digest to ToString, which the generated method calls only when the level is enabled
+    private void LogRaiseEvent(string eventType, TopicKey topicKey, CacheKey cacheKey) => LogRaiseEventCore(eventType, topicKey, Logged(cacheKey));
+#pragma warning restore CA1873
 }

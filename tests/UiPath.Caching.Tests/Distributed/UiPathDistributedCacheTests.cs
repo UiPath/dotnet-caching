@@ -208,7 +208,7 @@ public class UiPathDistributedCacheTests
 
         await cache.SetAsync(key, Payload, new DistributedCacheEntryOptions(), TestContext.Current.CancellationToken);
 
-        logger.Messages.Should().ContainSingle().Which.Should().Contain(key);
+        logger.Messages.Should().ContainSingle().Which.Should().Contain(KeyMasking.MaskValue(key)).And.NotContain(key);
     }
 
     private sealed class CapturingLogger : ILogger
