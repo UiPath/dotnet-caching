@@ -9,6 +9,7 @@ global using Microsoft.Extensions.Logging.Abstractions;
 global using Microsoft.Extensions.Options;
 global using StackExchange.Redis;
 global using UiPath.Caching.Broadcast;
+global using UiPath.Caching.Logging;
 global using UiPath.Caching.Redis;
 global using static UiPath.Caching.CacheValueHelpers;
 

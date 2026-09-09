@@ -11,8 +11,11 @@ internal sealed class RehydrationCoordinator(
     IDistributedLock distributedLock,
     IDistributedLockKeyStrategy lockKeyStrategy,
     ICachingTelemetryProvider telemetry,
-    ILogger logger)
+    ILogger logger,
+    KeyMasker? masker = null)
 {
+    private readonly KeyMasker _masker = masker ?? KeyMasker.Off;
+
     private const string EventTriggered = "cache.rehydrate.triggered";
     private const string EventSucceeded = "cache.rehydrate.succeeded";
     private const string EventFailed = "cache.rehydrate.failed";
@@ -166,7 +169,7 @@ internal sealed class RehydrationCoordinator(
         }
         catch (Exception ex)
         {
-            logger.LogError(ex, "Rehydrate spawn failed for cache key {CacheKey}", groupKey.Name);
+            logger.LogError(ex, "Rehydrate spawn failed for cache key {CacheKey}", LoggedKey.For(_masker, groupKey));
         }
         finally
         {
@@ -242,7 +245,7 @@ internal sealed class RehydrationCoordinator(
         }
         catch (Exception ex)
         {
-            logger.LogError(ex, "Rehydrate lock acquire failed for cache key {CacheKey}", key.Name);
+            logger.LogError(ex, "Rehydrate lock acquire failed for cache key {CacheKey}", LoggedKey.For(_masker, key));
             return null;
         }
     }
@@ -287,7 +290,7 @@ internal sealed class RehydrationCoordinator(
         }
         catch (Exception ex)
         {
-            logger.LogError(ex, "Rehydrate cleanup dispose failed for cache key {CacheKey}", groupKey.Name);
+            logger.LogError(ex, "Rehydrate cleanup dispose failed for cache key {CacheKey}", LoggedKey.For(_masker, groupKey));
         }
     }
 

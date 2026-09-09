@@ -6,13 +6,25 @@ public sealed partial class CacheEventPublisher
     private readonly ITopicProvider _topicProvider;
     private readonly ICacheEventFactory _cacheEventFactory;
     private readonly ILogger _logger;
+    private readonly KeyMasker _masker;
 
     public CacheEventPublisher(
         string cacheName,
         ITopicProvider topicProvider,
         ICacheEventFactory cacheEventFactory,
         ILogger logger)
+        : this(cacheName, topicProvider, cacheEventFactory, logger, KeyMasker.Off)
     {
+    }
+
+    internal CacheEventPublisher(
+        string cacheName,
+        ITopicProvider topicProvider,
+        ICacheEventFactory cacheEventFactory,
+        ILogger logger,
+        KeyMasker masker)
+    {
+        _masker = masker;
         _cacheName = cacheName;
         _topicProvider = topicProvider;
         _cacheEventFactory = cacheEventFactory;
@@ -46,7 +58,7 @@ public sealed partial class CacheEventPublisher
 
     private async ValueTask<bool> RaiseEventAsync(TopicKey topicKey, CacheKey cacheKey, string eventType, IDictionary<string, object?>? properties = null)
     {
-        LogRaiseEvent(eventType, topicKey, cacheKey);
+        LogRaiseEvent(eventType, topicKey, LoggedKey.For(_masker, cacheKey));
         var data = new CacheEventData(cacheKey)
         {
             Properties = properties
@@ -57,5 +69,5 @@ public sealed partial class CacheEventPublisher
     }
 
     [LoggerMessage(Level = LogLevel.Debug, Message = "Raise {EventType} on topicKey {TopicKey} for key {CacheKey}")]
-    private partial void LogRaiseEvent(string eventType, TopicKey topicKey, CacheKey cacheKey);
+    private partial void LogRaiseEvent(string eventType, TopicKey topicKey, LoggedKey cacheKey);
 }

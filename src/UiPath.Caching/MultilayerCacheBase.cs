@@ -29,6 +29,7 @@ public abstract class MultilayerCacheBase : IDisposable
     private readonly bool _localLockEnabled;
     private readonly bool _distributedLockEnabled;
     private protected readonly CachePolicy _defaultPolicy;
+    private protected readonly KeyMasker _masker;
 
     // Hardcoded fallback values for the lock fields. Merged in as the lowest-priority policy
     // (after provider-specific + user DefaultCachePolicy) so every cache instance has a fully
@@ -62,9 +63,11 @@ public abstract class MultilayerCacheBase : IDisposable
         IDistributedLock distributedLock,
         ICachePolicyFactory policyFactory,
         TimeProvider clock,
-        ILogger logger)
+        ILogger logger,
+        IKeyMaskingPolicy? keyMaskingPolicy = null)
     {
         ArgumentNullException.ThrowIfNull(clock);
+        _masker = KeyMasker.For(keyMaskingPolicy, cacheName);
         _logger = logger;
         _multiLayerCacheOptions = multiLayerCacheOptions;
         _defaultPolicy = CachePolicyMerger.Merge(
@@ -77,7 +80,7 @@ public abstract class MultilayerCacheBase : IDisposable
         _monitor = _memoryCache.Monitor(multiLayerCacheOptions, Telemetry, GetType().Name);
         _clock = clock;
         _topicProvider = topicFactory.Get(_multiLayerCacheOptions.Topic);
-        _eventPublisher = new CacheEventPublisher(cacheName, _topicProvider, cacheEventFactory, logger);
+        _eventPublisher = new CacheEventPublisher(cacheName, _topicProvider, cacheEventFactory, logger, _masker);
         var connectionMonitorEnabled = multiLayerCacheOptions.ConnectionMonitorEnabled ?? cacheOptions.ConnectionMonitorEnabled;
         _connectionState = connectionMonitorEnabled ? GetConnectionMonitor(innerCache, _topicProvider) : NullConnectionStateMonitor.Instance;
         _useLocalOnlyWhenDisconnected = (multiLayerCacheOptions.UseLocalOnlyWhenDisconnected ?? false) && connectionMonitorEnabled;
@@ -92,10 +95,16 @@ public abstract class MultilayerCacheBase : IDisposable
         _localLockEnabled = defaultLock.LocalLockEnabled!.Value;
         _distributedLockEnabled = defaultLock.DistributedLockEnabled!.Value;
         Name = cacheName;
-        _rehydrator = new RehydrationCoordinator(cacheName, _clock, distributedLock, _lockKeyStrategy, telemetryProvider, logger);
+        _rehydrator = new RehydrationCoordinator(cacheName, _clock, distributedLock, _lockKeyStrategy, telemetryProvider, logger, _masker);
     }
 
     public string Name { get; }
+
+    /// <summary>The key as a log line should show it. Nothing is rendered unless the line is written.</summary>
+    private protected LoggedKey Logged(CacheKey key, Type? valueType = null) => LoggedKey.For(_masker, key, valueType);
+
+    /// <inheritdoc cref="Logged(CacheKey, Type?)"/>
+    private protected LoggedKeys Logged(IReadOnlyCollection<CacheKey> keys, Type? valueType = null) => new(_masker, keys, valueType);
 
     protected async ValueTask<TResult> RunUnderLocksAsync<TResult>(
         CacheKey cacheKey,

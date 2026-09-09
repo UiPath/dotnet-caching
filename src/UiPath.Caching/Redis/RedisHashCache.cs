@@ -28,8 +28,9 @@ internal sealed partial class RedisHashCache : RedisCacheBase, IHashCache
         CacheOptions cacheOptions,
         ICachePolicyFactory policyFactory,
         TimeProvider clock,
-        ILogger<RedisHashCache> logger)
-        : base(redis, telemetryProvider, redisCacheOptions, cacheOptions, policyFactory, clock)
+        ILogger<RedisHashCache> logger,
+        IKeyMaskingPolicy? keyMaskingPolicy = null)
+        : base(redis, telemetryProvider, redisCacheOptions, cacheOptions, policyFactory, clock, keyMaskingPolicy)
     {
         _serializer = serializer;
         _memorySerializer = serializer as IMemorySerializerProxy;
@@ -96,7 +97,7 @@ internal sealed partial class RedisHashCache : RedisCacheBase, IHashCache
             return cached;
         }
 
-        LogCacheMissed(cacheKey);
+        LogCacheMissed(Logged(cacheKey, typeof(T)));
         var wrappedGenerator = WrapWithFactoryTimeout(generator, (policy ?? DefaultPolicy)?.FactoryTimeout, cacheKey);
         var ret = await wrappedGenerator(token).ConfigureAwait(false);
         if (ret.Count > 0)
@@ -240,7 +241,7 @@ internal sealed partial class RedisHashCache : RedisCacheBase, IHashCache
     {
         NotCacheableException.ThrowIfNotCacheable<T>();
         var redisKey = ToRedisKey(cacheKey, token);
-        LogRefreshingKey(redisKey, localExpiration);
+        LogRefreshingKey(Logged(cacheKey, redisKey, typeof(T)), localExpiration);
         var ret = false;
         var operation = StartOperation<T>();
         try
@@ -963,7 +964,7 @@ internal sealed partial class RedisHashCache : RedisCacheBase, IHashCache
         var valueLen = value.Length();
         if (valueLen > _cacheOptions.LargeValueThreshold)
         {
-            LogLargeValueDetected(key, field, valueLen);
+            LogLargeValueDetected(Logged(key), field, valueLen);
         }
     }
 
@@ -1022,10 +1023,10 @@ internal sealed partial class RedisHashCache : RedisCacheBase, IHashCache
     private ICacheEntry<IDictionary<string, T?>> Default<T>() => _cacheEntryFactory.Create(Empty<T?>(), DateTimeOffset.MinValue);
 
     [LoggerMessage(Level = LogLevel.Debug, Message = "Cache missed. generating new {CacheKey}")]
-    private partial void LogCacheMissed(CacheKey cacheKey);
+    private partial void LogCacheMissed(LoggedKey cacheKey);
 
     [LoggerMessage(Level = LogLevel.Trace, Message = "Refreshing key {RedisKey} at expiration {LocalExpiration}")]
-    private partial void LogRefreshingKey(RedisKey redisKey, DateTimeOffset localExpiration);
+    private partial void LogRefreshingKey(LoggedKey redisKey, DateTimeOffset localExpiration);
 
     [LoggerMessage(Level = LogLevel.Warning, Message = "RedisHashCache exception.")]
     private partial void LogRedisHashCacheException(Exception ex);
@@ -1034,5 +1035,5 @@ internal sealed partial class RedisHashCache : RedisCacheBase, IHashCache
     private partial void LogRedisTransactionFailed();
 
     [LoggerMessage(Level = LogLevel.Warning, Message = "Redis large value detected for key {RedisKey}, field {Field}, length {Length}")]
-    private partial void LogLargeValueDetected(RedisKey redisKey, string field, long length);
+    private partial void LogLargeValueDetected(LoggedKey redisKey, string field, long length);
 }

@@ -27,8 +27,9 @@ internal sealed partial class RedisCache : RedisCacheBase, ICache
         CacheOptions cacheOptions,
         ICachePolicyFactory policyFactory,
         TimeProvider clock,
-        ILogger<RedisCache> logger)
-        : base(redis, telemetryProvider, redisCacheOptions, cacheOptions, policyFactory, clock)
+        ILogger<RedisCache> logger,
+        IKeyMaskingPolicy? keyMaskingPolicy = null)
+        : base(redis, telemetryProvider, redisCacheOptions, cacheOptions, policyFactory, clock, keyMaskingPolicy)
     {
         _logger = logger;
         _serializer = serializer;
@@ -88,7 +89,7 @@ internal sealed partial class RedisCache : RedisCacheBase, ICache
         ArgumentNullException.ThrowIfNull(generator);
         var redisKey = ToRedisKey(cacheKey, token);
         var wrappedGenerator = WrapWithFactoryTimeout(generator, (policy ?? DefaultPolicy)?.FactoryTimeout, cacheKey);
-        return GetOrAddInternalAsync(redisKey, wrappedGenerator, duration, token);
+        return GetOrAddInternalAsync(cacheKey, redisKey, wrappedGenerator, duration, token);
     }
 
     /// <inheritdoc cref="ICache.GetOrAddAsync{T, TState}(KeyValuePair{CacheKey, TState}[], Func{TState[], CancellationToken, Task{KeyValuePair{TState, T}[]}}, CachePolicy?, CancellationToken)"/>
@@ -160,7 +161,7 @@ internal sealed partial class RedisCache : RedisCacheBase, ICache
         NotCacheableException.ThrowIfNotCacheable<T>();
         var redisKey = ToRedisKey(cacheKey, token);
 
-        LogRefreshingKey(redisKey, expiration);
+        LogRefreshingKey(Logged(cacheKey, redisKey, typeof(T)), expiration);
         var ret = false;
         var operation = StartOperation<T>();
         try
@@ -249,7 +250,7 @@ internal sealed partial class RedisCache : RedisCacheBase, ICache
     private ValueTask<bool> TryAddCoreAsync<T>(CacheKey cacheKey, T? value, TimeSpan duration, CancellationToken token)
     {
         NotCacheableException.ThrowIfNotCacheable<T>();
-        return TryAddInternalAsync(ToRedisKey(cacheKey, token), value, duration, token);
+        return TryAddInternalAsync(cacheKey, ToRedisKey(cacheKey, token), value, duration, token);
     }
 
     public async ValueTask<bool> ContainsAsync<T>(CacheKey cacheKey, CancellationToken token = default)
@@ -343,7 +344,7 @@ internal sealed partial class RedisCache : RedisCacheBase, ICache
         return ret;
     }
 
-    private async ValueTask<T?> GetOrAddInternalAsync<T>(RedisKey redisKey, Func<CancellationToken, Task<T?>> generator, TimeSpan expiration, CancellationToken token)
+    private async ValueTask<T?> GetOrAddInternalAsync<T>(CacheKey cacheKey, RedisKey redisKey, Func<CancellationToken, Task<T?>> generator, TimeSpan expiration, CancellationToken token)
     {
         NotCacheableException.ThrowIfNotCacheable<T>();
         var (found, cached) = await ReadGetOrAddProbeAsync<T>(redisKey, token).ConfigureAwait(false);
@@ -352,7 +353,7 @@ internal sealed partial class RedisCache : RedisCacheBase, ICache
             return cached;
         }
 
-        LogCacheMissed(redisKey);
+        LogCacheMissed(Logged(cacheKey, redisKey, typeof(T)));
         var ret = await generator(token).ConfigureAwait(false);
 
         if (!IsDefault(ret) || _cacheNullValues)
@@ -485,7 +486,7 @@ internal sealed partial class RedisCache : RedisCacheBase, ICache
     /// Safe to retry — an attempt whose reply was lost is refused by the key it just wrote, and
     /// reports the same <c>false</c> the exception would have.
     /// </summary>
-    private async ValueTask<bool> TryAddInternalAsync<T>(RedisKey redisKey, T? value, TimeSpan expiration, CancellationToken token)
+    private async ValueTask<bool> TryAddInternalAsync<T>(CacheKey cacheKey, RedisKey redisKey, T? value, TimeSpan expiration, CancellationToken token)
     {
         bool ret = default;
         token.ThrowIfCancellationRequested();
@@ -501,11 +502,11 @@ internal sealed partial class RedisCache : RedisCacheBase, ICache
             var isNull = IsDefault(value);
             if (expiration <= TimeSpan.Zero)
             {
-                LogTryAddSkippedExpiredEntry(redisKey, expiration);
+                LogTryAddSkippedExpiredEntry(Logged(cacheKey, redisKey, typeof(T)), expiration);
             }
             else if (isNull && !_cacheNullValues)
             {
-                LogTryAddSkippedUnrepresentableValue(redisKey);
+                LogTryAddSkippedUnrepresentableValue(Logged(cacheKey, redisKey, typeof(T)));
             }
             else
             {
@@ -953,25 +954,25 @@ internal sealed partial class RedisCache : RedisCacheBase, ICache
         var valueLen = value.Length();
         if (valueLen > _largeValueThreshold)
         {
-            LogLargeValueDetected(key, valueLen);
+            LogLargeValueDetected(Logged(key), valueLen);
         }
     }
 
     [LoggerMessage(Level = LogLevel.Trace, Message = "Refreshing key {RedisKey} at expiration {Expiration}")]
-    private partial void LogRefreshingKey(RedisKey redisKey, DateTimeOffset? expiration);
+    private partial void LogRefreshingKey(LoggedKey redisKey, DateTimeOffset? expiration);
 
     [LoggerMessage(Level = LogLevel.Debug, Message = "TryAdd skipped for {RedisKey}: a default value cannot be represented unless CacheNullValues is on.")]
-    private partial void LogTryAddSkippedUnrepresentableValue(RedisKey redisKey);
+    private partial void LogTryAddSkippedUnrepresentableValue(LoggedKey redisKey);
 
     [LoggerMessage(Level = LogLevel.Debug, Message = "TryAdd skipped for {RedisKey}: the requested expiration {Expiration} is not positive, so the entry would retain nothing.")]
-    private partial void LogTryAddSkippedExpiredEntry(RedisKey redisKey, TimeSpan expiration);
+    private partial void LogTryAddSkippedExpiredEntry(LoggedKey redisKey, TimeSpan expiration);
 
     [LoggerMessage(Level = LogLevel.Warning, Message = "RedisCache exception.")]
     private partial void LogRedisCacheException(Exception ex);
 
     [LoggerMessage(Level = LogLevel.Debug, Message = "Cache missed. generating new {RedisKey}")]
-    private partial void LogCacheMissed(RedisKey redisKey);
+    private partial void LogCacheMissed(LoggedKey redisKey);
 
     [LoggerMessage(Level = LogLevel.Warning, Message = "Redis large value detected for key {RedisKey}, length {Length}")]
-    private partial void LogLargeValueDetected(RedisKey redisKey, long length);
+    private partial void LogLargeValueDetected(LoggedKey redisKey, long length);
 }

@@ -9,8 +9,9 @@ internal class HashLocalMemorySetter(
     TimeProvider clock,
     IMultilayerCacheOptions cacheOptions,
     IMemoryCacheOptions memoryCacheOptions,
-    Telemetry.ICachingTelemetryProvider telemetryProvider)
-    : MemoryCacheSetter(cacheName, changeTokenFactory, topicProvider, memoryCache, logger, clock, cacheOptions, memoryCacheOptions, telemetryProvider)
+    Telemetry.ICachingTelemetryProvider telemetryProvider,
+    KeyMasker? masker = null)
+    : MemoryCacheSetter(cacheName, changeTokenFactory, topicProvider, memoryCache, logger, clock, cacheOptions, memoryCacheOptions, telemetryProvider, masker)
 {
     protected override ICacheEntryOptions CreateEntry(RefreshMetadataState metadataState, CancellationToken cancellationToken)
     {

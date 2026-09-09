@@ -13,9 +13,16 @@ public sealed partial class ChangeTokenFactory<T> : IChangeTokenFactory
     private readonly ILogger<ChangeTokenFactory<T>> _logger;
     private readonly Uri? _sourceUri;
     private readonly ICachingTelemetryProvider _telemetryProvider;
+    private readonly IKeyMaskingPolicy? _keyMaskingPolicy;
 
     public ChangeTokenFactory(IOptions<CacheOptions> optionsAccessor, ISerializerProxy<T> serializer, ILoggerFactory loggerFactory, ICachingTelemetryProvider telemetryProvider)
+        : this(optionsAccessor, serializer, loggerFactory, telemetryProvider, keyMaskingPolicy: null)
     {
+    }
+
+    public ChangeTokenFactory(IOptions<CacheOptions> optionsAccessor, ISerializerProxy<T> serializer, ILoggerFactory loggerFactory, ICachingTelemetryProvider telemetryProvider, IKeyMaskingPolicy? keyMaskingPolicy)
+    {
+        _keyMaskingPolicy = keyMaskingPolicy;
         _sourceUri = optionsAccessor.Value.SourceUri;
         _serializer = serializer;
         _loggerFactory = loggerFactory;
@@ -25,11 +32,16 @@ public sealed partial class ChangeTokenFactory<T> : IChangeTokenFactory
 
     public ICacheChangeToken Create(string token, ITopic<ICacheEvent> topic, string cacheName, Type entryType)
     {
-        LogCreateChangeToken(topic.TopicKey, token, _sourceUri);
+        var masker = KeyMasker.For(_keyMaskingPolicy, cacheName);
+        if (_logger.IsEnabled(LogLevel.Trace))
+        {
+            LogCreateChangeToken(topic.TopicKey, LoggedKey.For(masker, token), _sourceUri);
+        }
+
         var acceptedEvents = KnownCacheProviderNames.InMemory.Equals(cacheName, StringComparison.OrdinalIgnoreCase) ? MemoryAcceptedEvents : null;
-        return new ChangeToken<T>(token, topic, _sourceUri, _serializer, _loggerFactory.CreateLogger<ChangeToken<T>>(), _telemetryProvider, acceptedEvents);
+        return new ChangeToken<T>(token, topic, _sourceUri, _serializer, _loggerFactory.CreateLogger<ChangeToken<T>>(), _telemetryProvider, acceptedEvents, masker);
     }
 
     [LoggerMessage(Level = LogLevel.Trace, Message = "Create change token. topic {TopicKey} token {Token} source {SourceUri}")]
-    private partial void LogCreateChangeToken(TopicKey topicKey, string token, Uri? sourceUri);
+    private partial void LogCreateChangeToken(TopicKey topicKey, LoggedKey token, Uri? sourceUri);
 }

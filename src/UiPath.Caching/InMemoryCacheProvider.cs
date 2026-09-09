@@ -16,6 +16,7 @@ public sealed class InMemoryCacheProvider : ICacheProvider
     private readonly ILocalLock _localLock;
     private readonly ICachePolicyFactory _policyFactory;
     private readonly TimeProvider _clock;
+    private readonly IKeyMaskingPolicy? _keyMaskingPolicy;
 
     private readonly Lazy<MultilayerCache> _cache;
     private readonly Lazy<MultilayerHashCache> _hashCache;
@@ -35,8 +36,10 @@ public sealed class InMemoryCacheProvider : ICacheProvider
         ILoggerFactory loggerFactory,
         ILocalLock localLock,
         ICachePolicyFactory policyFactory,
-        TimeProvider clock)
+        TimeProvider clock,
+        IKeyMaskingPolicy? keyMaskingPolicy = null)
     {
+        _keyMaskingPolicy = keyMaskingPolicy;
         _clock = clock;
         _options = optionsAccessor.Value;
         _cacheOptions = cacheOptionsAccessor.Value;
@@ -105,7 +108,8 @@ public sealed class InMemoryCacheProvider : ICacheProvider
             distributedLock: NullDistributedLock.Instance,
             policyFactory: _policyFactory,
             clock: _clock,
-            logger: _loggerFactory.CreateLogger($"{Name}.Cache"));
+            logger: _loggerFactory.CreateLogger($"{Name}.Cache"),
+            keyMaskingPolicy: _keyMaskingPolicy);
 
     private MultilayerHashCache BuildHashCache() =>
         new(
@@ -123,5 +127,6 @@ public sealed class InMemoryCacheProvider : ICacheProvider
             distributedLock: NullDistributedLock.Instance,
             policyFactory: _policyFactory,
             clock: _clock,
-            logger: _loggerFactory.CreateLogger($"{Name}.HashCache"));
+            logger: _loggerFactory.CreateLogger($"{Name}.HashCache"),
+            keyMaskingPolicy: _keyMaskingPolicy);
 }

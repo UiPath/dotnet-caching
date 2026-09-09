@@ -11,8 +11,9 @@ internal class LocalMemorySetter(
     TimeProvider clock,
     IMultilayerCacheOptions cacheOptions,
     IMemoryCacheOptions memoryCacheOptions,
-    ICachingTelemetryProvider telemetryProvider)
-    : MemoryCacheSetter(cacheName, changeTokenFactory, topicProvider, memoryCache, logger, clock, cacheOptions, memoryCacheOptions, telemetryProvider)
+    ICachingTelemetryProvider telemetryProvider,
+    KeyMasker? masker = null)
+    : MemoryCacheSetter(cacheName, changeTokenFactory, topicProvider, memoryCache, logger, clock, cacheOptions, memoryCacheOptions, telemetryProvider, masker)
 {
     protected override ICacheEntryOptions CreateEntry(RefreshMetadataState metadataState, CancellationToken cancellationToken)
     {

@@ -85,7 +85,7 @@ internal sealed partial class UiPathDistributedCache : IDistributedCache
         var cacheKey = Encode(key);
         if (!await _cache.RemoveAsync<ReadOnlyMemory<byte>>(cacheKey, token).ConfigureAwait(false))
         {
-            LogRemoveNotApplied(key);
+            LogRemoveNotApplied(LoggedKey.Secret(key));
         }
     }
 
@@ -116,7 +116,7 @@ internal sealed partial class UiPathDistributedCache : IDistributedCache
         var ttl = ResolveTimeToLive(now, sliding, absolute);
         if (!await StoreAsync(cacheKey, fields, ttl, token).ConfigureAwait(false))
         {
-            LogWriteNotApplied(key);
+            LogWriteNotApplied(LoggedKey.Secret(key));
         }
     }
 
@@ -349,8 +349,8 @@ internal sealed partial class UiPathDistributedCache : IDistributedCache
     }
 
     [LoggerMessage(Level = LogLevel.Warning, Message = "Distributed cache write for key {Key} was not applied by the backing cache.")]
-    private partial void LogWriteNotApplied(string key);
+    private partial void LogWriteNotApplied(LoggedKey key);
 
     [LoggerMessage(Level = LogLevel.Debug, Message = "Distributed cache remove for key {Key} reported no change.")]
-    private partial void LogRemoveNotApplied(string key);
+    private partial void LogRemoveNotApplied(LoggedKey key);
 }

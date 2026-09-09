@@ -262,6 +262,13 @@ Lifetimes and the connection come from `RedisCacheOptions` (`DefaultExpiration`,
 
 ---
 
+## Key masking
+
+Masking is a registration, not a setting: `builder.AddKeyMasking(prefixes)` or `AddKeyMasking<TPolicy>()`. Without one,
+the container resolves `NullKeyMaskingPolicy` and keys are logged verbatim. There is no per-provider switch, because a
+policy is asked which tier is logging and can answer differently. See
+[how-to/telemetry-and-strategies.md](../how-to/telemetry-and-strategies.md#masking-keys-in-logs).
+
 ## Caching:Distributed (UiPathDistributedCacheOptions)
 
 Registered in code via `builder.AddDistributedCache(providerName)`; the backing tier is a required

@@ -5,6 +5,7 @@ namespace UiPath.Caching.Broadcast;
 public sealed partial class ChangeToken<T> : ICacheChangeToken, IKeyedObserver<ICacheEvent>, IDisposable
 {
     private readonly string _key;
+    private readonly KeyMasker _masker;
     private readonly TopicKey _topic;
     private readonly Uri? _source;
     private readonly ISerializerProxy<T> _serializer;
@@ -15,6 +16,8 @@ public sealed partial class ChangeToken<T> : ICacheChangeToken, IKeyedObserver<I
 
     private readonly List<(Action<object?> callback, object? state)> _callbacks = [];
 
+    private LoggedKey Logged(string? key) => LoggedKey.For(_masker, key ?? string.Empty);
+
     public ChangeToken(
         string key,
         ITopic<ICacheEvent> topic,
@@ -23,14 +26,28 @@ public sealed partial class ChangeToken<T> : ICacheChangeToken, IKeyedObserver<I
         ILogger<ChangeToken<T>> logger,
         ICachingTelemetryProvider telemetryProvider,
         ISet<string>? acceptedEvents = null)
+        : this(key, topic, source, serializer, logger, telemetryProvider, acceptedEvents, KeyMasker.Off)
     {
+    }
+
+    internal ChangeToken(
+        string key,
+        ITopic<ICacheEvent> topic,
+        Uri? source,
+        ISerializerProxy<T> serializer,
+        ILogger<ChangeToken<T>> logger,
+        ICachingTelemetryProvider telemetryProvider,
+        ISet<string>? acceptedEvents,
+        KeyMasker masker)
+    {
+        _masker = masker;
         _key = key;
         _topic = topic.TopicKey;
         _source = source;
         _serializer = serializer;
         _logger = logger;
         _acceptedEvents = acceptedEvents;
-        LogWaitingForMessage(_key, _topic);
+        LogWaitingForMessage(Logged(_key), _topic);
         _telemetryProvider = telemetryProvider;
         _unsubscriber = topic.Subscribe(this);
     }
@@ -50,11 +67,11 @@ public sealed partial class ChangeToken<T> : ICacheChangeToken, IKeyedObserver<I
     public string? TransportId { get; private set; }
 
     public void OnCompleted() =>
-        LogOnCompleted(_key, _topic);
+        LogOnCompleted(Logged(_key), _topic);
 
     public void OnError(Exception error)
     {
-        LogClearLocalCacheOnError(error, _key, _topic);
+        LogClearLocalCacheOnError(error, Logged(_key), _topic);
         Notify();
     }
 
@@ -64,13 +81,22 @@ public sealed partial class ChangeToken<T> : ICacheChangeToken, IKeyedObserver<I
         if (IsAcceptedEvent(cacheEvent))
         {
             TransportId = cacheEvent.TransportId;
-            LogClearLocalCacheKey(_key, _topic, cacheEvent.Id, cacheEvent.Source);
+            LogClearLocalCacheKey(Logged(_key), _topic, cacheEvent.Id, cacheEvent.Source);
             Notify(data);
             _telemetryProvider.TrackTopicReadMetric(_topic, TransportId);
         }
         else
         {
-            LogEventIgnoredWithKey(data?.Key, _topic, cacheEvent.Id, cacheEvent.Source);
+            // No key to name when the event carried no data; saying so beats logging an empty one.
+            if (data?.Key is { } ignoredKey)
+            {
+                LogEventIgnoredWithKey(Logged(ignoredKey), _topic, cacheEvent.Id, cacheEvent.Source);
+            }
+            else
+            {
+                LogEventIgnored(_topic, cacheEvent.Id, cacheEvent.Source);
+            }
+
             _telemetryProvider.TrackTopicReadMetric(_topic, cacheEvent.TransportId);
         }
     }
@@ -101,7 +127,16 @@ public sealed partial class ChangeToken<T> : ICacheChangeToken, IKeyedObserver<I
 
         if (!string.Equals(data?.Key, _key, StringComparison.OrdinalIgnoreCase))
         {
-            LogEventIgnoredWithKey(data?.Key, _topic, cacheEvent.Id, cacheEvent.Source);
+            // No key to name when the event carried no data; saying so beats logging an empty one.
+            if (data?.Key is { } ignoredKey)
+            {
+                LogEventIgnoredWithKey(Logged(ignoredKey), _topic, cacheEvent.Id, cacheEvent.Source);
+            }
+            else
+            {
+                LogEventIgnored(_topic, cacheEvent.Id, cacheEvent.Source);
+            }
+
             return false;
         }
 
@@ -151,20 +186,20 @@ public sealed partial class ChangeToken<T> : ICacheChangeToken, IKeyedObserver<I
         }
     }
 
-    [LoggerMessage(Level = LogLevel.Trace, Message = "Waiting from message {Key} on topic {Topic}")]
-    private partial void LogWaitingForMessage(string key, TopicKey topic);
+    [LoggerMessage(Level = LogLevel.Trace, Message = "Waiting for message {Key} on topic {Topic}")]
+    private partial void LogWaitingForMessage(LoggedKey key, TopicKey topic);
 
     [LoggerMessage(Level = LogLevel.Trace, Message = "OnCompleted {Key},{Topic}")]
-    private partial void LogOnCompleted(string key, TopicKey topic);
+    private partial void LogOnCompleted(LoggedKey key, TopicKey topic);
 
     [LoggerMessage(Level = LogLevel.Debug, Message = "Clear local cache {Key},{Topic}")]
-    private partial void LogClearLocalCacheOnError(Exception error, string key, TopicKey topic);
+    private partial void LogClearLocalCacheOnError(Exception error, LoggedKey key, TopicKey topic);
 
     [LoggerMessage(Level = LogLevel.Debug, Message = "Clear local cache key {Key}. Topic:{Topic}, Id {EventId}, Source:{EventSource}")]
-    private partial void LogClearLocalCacheKey(string key, TopicKey topic, string? eventId, Uri? eventSource);
+    private partial void LogClearLocalCacheKey(LoggedKey key, TopicKey topic, string? eventId, Uri? eventSource);
 
     [LoggerMessage(Level = LogLevel.Debug, Message = "Event ignored. Key {Key}, Topic:{Topic}, Id {EventId}, Source:{EventSource}")]
-    private partial void LogEventIgnoredWithKey(string? key, TopicKey topic, string? eventId, Uri? eventSource);
+    private partial void LogEventIgnoredWithKey(LoggedKey key, TopicKey topic, string? eventId, Uri? eventSource);
 
     [LoggerMessage(Level = LogLevel.Debug, Message = "Event ignored. Topic:{Topic}, Id {EventId}, Source:{EventSource}")]
     private partial void LogEventIgnored(TopicKey topic, string? eventId, Uri? eventSource);

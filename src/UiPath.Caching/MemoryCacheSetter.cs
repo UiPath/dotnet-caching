@@ -11,9 +11,12 @@ internal abstract class MemoryCacheSetter(
     TimeProvider clock,
     IMultilayerCacheOptions cacheOptions,
     IMemoryCacheOptions memoryCacheOptions,
-    ICachingTelemetryProvider telemetryProvider
+    ICachingTelemetryProvider telemetryProvider,
+    KeyMasker? masker = null
         )
 {
+    private readonly KeyMasker _masker = masker ?? KeyMasker.Off;
+
     private const string EventRefreshMetadataFailed = "Caching." + nameof(MemoryCacheSetter) + "." + nameof(RefreshMetadata) + ".Failed";
     private const string PropCacheKey = "CacheKey";
     private const string PropTopicKey = "TopicKey";
@@ -46,7 +49,7 @@ internal abstract class MemoryCacheSetter(
         catch (Exception ex)
         {
             memoryCache.Remove(options.CacheKey);
-            logger.LogWarning(ex, "Unable to set local memory for {CacheKey}", options.CacheKey);
+            logger.LogWarning(ex, "Unable to set local memory for {CacheKey}", LoggedKey.For(_masker, options.CacheKey));
             return false;
         }
     }
@@ -88,7 +91,7 @@ internal abstract class MemoryCacheSetter(
         }
         catch (Exception ex)
         {
-            logger.LogWarning(ex, "Unable to refresh cache cacheKey {CacheKey}", metadataState.CacheKey);
+            logger.LogWarning(ex, "Unable to refresh cache cacheKey {CacheKey}", LoggedKey.For(_masker, metadataState.CacheKey));
         }
         finally
         {
