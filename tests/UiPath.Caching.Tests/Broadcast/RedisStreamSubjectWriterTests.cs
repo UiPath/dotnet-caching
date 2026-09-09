@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using System.Threading.Channels;
 using Microsoft.Extensions.Logging;
 using NSubstitute.ExceptionExtensions;
@@ -549,7 +550,11 @@ public class RedisStreamSubjectWriterTests : IAsyncLifetime
 
     private sealed class RecordingLogger : ILogger
     {
-        public List<(LogLevel Level, string Message)> Records { get; } = [];
+        private readonly ConcurrentQueue<(LogLevel Level, string Message)> _records = new();
+
+        /// <summary>A snapshot: the writer logs from its fetch loop while the test reads.</summary>
+        public IReadOnlyList<(LogLevel Level, string Message)> Records => [.. _records];
+
         public Action<(LogLevel Level, string Message)>? OnRecord { get; set; }
 
         public IDisposable BeginScope<TState>(TState state) where TState : notnull => NullScope.Instance;
@@ -557,7 +562,7 @@ public class RedisStreamSubjectWriterTests : IAsyncLifetime
         public void Log<TState>(LogLevel logLevel, EventId eventId, TState state, Exception? exception, Func<TState, Exception?, string> formatter)
         {
             var record = (logLevel, formatter(state, exception));
-            Records.Add(record);
+            _records.Enqueue(record);
             OnRecord?.Invoke(record);
         }
 
