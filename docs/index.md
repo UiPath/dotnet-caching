@@ -11,6 +11,8 @@ UiPath's internal multilayer caching library. L1 in-memory + L2 Redis, cross-nod
 | `UiPath.Caching.Polly` | Resilience pipelines around cache ops. Recommended. |
 | `UiPath.Caching.CloudEvents` | CNCF CloudEvents wrapper around broadcast events. Recommended. |
 | `UiPath.Caching.OpenTelemetry` | OpenTelemetry wiring for `ICachingTelemetryProvider` (`ActivitySource` + `Meter` named `UiPath.Caching`). |
+| `UiPath.Caching.Azure` | Microsoft Entra ID authentication for Azure Managed Redis / Azure Cache for Redis. |
+| `UiPath.Caching.Queue` | Set ("queue") caches on Redis sets — `ISetCache` / `ISetCache<T>`. |
 
 ## Pick your path
 
@@ -25,6 +27,8 @@ UiPath's internal multilayer caching library. L1 in-memory + L2 Redis, cross-nod
 - Per-field caching, side-channel metadata, bundled GET+TTL → [how-to/hash-cache.md](how-to/hash-cache.md).
 - OpenTelemetry adapter + Redis instrumentation, custom key/channel strategies → [how-to/telemetry-and-strategies.md](how-to/telemetry-and-strategies.md).
 - Adding a new cache provider, topic provider, or serializer → [how-to/extending.md](how-to/extending.md).
+- Set ("queue") caches: what they are, how they stay coherent → [concepts.md#set-caches](concepts.md#set-caches), [reference/settings.md#queue-caches-uipathcachingqueue](reference/settings.md#queue-caches-uipathcachingqueue).
+- Passwordless Azure Managed Redis → [recipes/azure-entra-authentication.md](recipes/azure-entra-authentication.md).
 
 **I need a short pattern I can paste.** → [recipes/](recipes/):
 
@@ -39,6 +43,7 @@ UiPath's internal multilayer caching library. L1 in-memory + L2 Redis, cross-nod
 - [custom-telemetry-provider.md](recipes/custom-telemetry-provider.md) — bridge `ICachingTelemetryProvider` to a host telemetry surface.
 - [opentelemetry-multiplexer-factory.md](recipes/opentelemetry-multiplexer-factory.md) — register OTel Redis instrumentation.
 - [redis-health-check.md](recipes/redis-health-check.md) — wire `RedisHealthCheck` into the ASP.NET health probe.
+- [azure-entra-authentication.md](recipes/azure-entra-authentication.md) — passwordless Azure Managed Redis via Entra ID, and the custom-auth seam.
 - [avoid-raw-iredisconnector.md](recipes/avoid-raw-iredisconnector.md) — three anti-patterns and their supported alternatives.
 
 **I need the full settings reference.** → [reference/settings.md](reference/settings.md) (one table per options class), [reference/interfaces.md](reference/interfaces.md) (public API surface), [reference/glossary.md](reference/glossary.md) (alphabetical term lookup).
