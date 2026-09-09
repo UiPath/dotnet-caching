@@ -91,17 +91,9 @@ internal sealed partial class RedisStreamNotifyChannel : IDisposable
             }
             try
             {
-                // A reconnect that arrived while this attempt was in flight subscribed against the old
-                // connection, so it has to run again rather than sleep until the next reconnect. Read
-                // once, idle the timer, then read again: a reconnect that lands in between either set
-                // the flag before the second read or armed the timer after the idle.
-                _subscribeTimer.Change(
-                    Volatile.Read(ref _resubscribeRequested) == 0 ? Timeout.InfiniteTimeSpan : _timerDueTime,
-                    _timerPeriod);
-                if (Volatile.Read(ref _resubscribeRequested) != 0)
-                {
-                    _subscribeTimer.Change(_timerDueTime, _timerPeriod);
-                }
+                // Idle until something asks for another attempt. A reconnect that raced this one is
+                // honored below, once the interlock is free and a fresh callback can get through.
+                _subscribeTimer.Change(Timeout.InfiniteTimeSpan, _timerPeriod);
             }
             catch (ObjectDisposedException)
             {
@@ -117,6 +109,19 @@ internal sealed partial class RedisStreamNotifyChannel : IDisposable
         finally
         {
             Interlocked.Exchange(ref _subscribing, 0);
+            // Only now can a scheduled callback get past the contention check, so a reconnect that
+            // arrived during this attempt — or one whose own callback bailed on it — is armed here.
+            if (Volatile.Read(ref _resubscribeRequested) != 0)
+            {
+                try
+                {
+                    _subscribeTimer.Change(_timerDueTime, _timerPeriod);
+                }
+                catch (ObjectDisposedException)
+                {
+                    // Disposed concurrently; nothing left to reschedule.
+                }
+            }
             try
             {
                 _subscribingDone.Set();
