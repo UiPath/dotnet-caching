@@ -57,6 +57,39 @@ Minimum `appsettings.json`:
 
 That's it. Everything else has a sensible default. Five-minute onboarding lives in [docs/quickstart.md](docs/quickstart.md); the full settings reference is in [docs/reference/settings.md](docs/reference/settings.md).
 
+### Optional add-ons
+
+Two packages plug into the same builder callback — Entra ID authentication for Azure Managed Redis, and set ("queue") caches:
+
+```bash
+dotnet add package UiPath.Caching.Azure
+dotnet add package UiPath.Caching.Queue
+```
+
+```csharp
+using UiPath.Caching.Queue.Config; // on top of the usings above; Entra auth needs no extra namespace
+
+builder.Services.AddCaching(
+    section,
+    b => b.AddRedisConnection().AddAzureEntraAuthentication()  // passwordless Redis, tokens auto-refreshed
+          .AddBroadcast().AddRedis().AddInMemoryRedis().AddMemory()
+          .AddQueueInMemoryRedis()                             // ISetCache / ISetCache<T>
+          .AddResilienceStrategies().AddCloudEvents(),
+    o => { section.Bind(o); o.AppShortName = "my-service"; });
+```
+
+With Entra the connection string is the endpoint alone, no access key: `"myamr.region.redis.azure.net:10000"`. An empty `Caching:AzureEntra` section uses `DefaultAzureCredential`; set `ManagedIdentityClientId` for a user-assigned identity. Set caches are injected like any other cache:
+
+```csharp
+public class InviteService(ISetCache<string> pending)
+{
+    public ValueTask<bool> TrackAsync(string tenant, string email, CancellationToken ct) =>
+        pending.AddAsync($"invites:{tenant}", email, ct);
+}
+```
+
+Details: [Entra recipe](docs/recipes/azure-entra-authentication.md), [set-cache settings](docs/reference/settings.md#queue-caches-uipathcachingqueue).
+
 ## Features
 
 **Resiliency**
@@ -71,8 +104,10 @@ That's it. Everything else has a sensible default. Five-minute onboarding lives 
 - **Per-topic options** — fine-grained overrides for fan-out, polling, backpressure, and the streams notify doorbell.
 - **Sharded Pub/Sub doorbell** (Redis 7+) — `NotifyEnabled` + `NotifyShardedPubSub` drop publish-to-deliver latency from `PollInterval` to network RTT without leaving the shard.
 - **Redis Cluster aware** — shard-key routing, master/replica split (writes to master, reads from replicas).
+- **Azure Managed Redis with Entra ID** — passwordless auth via managed identity, workload identity, or any `TokenCredential` (`UiPath.Caching.Azure`, `AddAzureEntraAuthentication()`). Tokens refresh automatically; TLS and RESP3 on by default. Other schemes (AWS IAM, a custom token source) plug into the same `IRedisConnectionConfigurator` seam without an Azure reference.
 
 **Advanced**
+- **Set caches (`ISetCache` / `ISetCache<T>`)** — Redis-set collections next to the key-value caches (`SADD` / `SPOP` / `SMEMBERS` / `SREM`), in `UiPath.Caching.Queue`, with memory, Redis, and multilayer backings. Despite the package name a set is unordered: `PopAsync` removes a random member, not the oldest.
 - **`IHashCache<T>`** — one entry, many fields, one TTL. Subset reads via `HMGET`; side-channel metadata via `HashCacheEntryOptions`. Bundled `GET + TTL` in a single transaction for hydrating-cache math.
 - **Named cache policies** — per-`ICache<T>` settings keyed by `typeof(T).FullName` (TTLs, jitter, rehydration, lock profile). Inherits from `DefaultCachePolicy` with `null`-means-inherit semantics.
 - **L2 jitter** — `JitterMaxDuration` spreads cluster-wide expirations after bulk writes.
@@ -106,7 +141,9 @@ flowchart LR
 | `UiPath.Caching` | Always — providers, topics, locks. |
 | `UiPath.Caching.Polly` | Resilience pipelines. Recommended. |
 | `UiPath.Caching.CloudEvents` | CloudEvents envelope for broadcast events. Recommended. |
-| `UiPath.Caching.Queue` | Set ("queue") support — `ISetCache`, registered per backing via `AddQueueMemory` / `AddQueueRedis` / `AddQueueInMemoryRedis`. |
+| `UiPath.Caching.OpenTelemetry` | OpenTelemetry adapter for `ICachingTelemetryProvider` — `ActivitySource` + `Meter` named `UiPath.Caching`. |
+| `UiPath.Caching.Azure` | Microsoft Entra ID authentication for Azure Managed Redis / Azure Cache for Redis. Adds `AddAzureEntraAuthentication()`. |
+| `UiPath.Caching.Queue` | Set ("queue") caches — `ISetCache` / `ISetCache<T>`, registered per backing via `AddQueueMemory` / `AddQueueRedis` / `AddQueueInMemoryRedis`. |
 
 ## Documentation
 
@@ -118,6 +155,9 @@ flowchart LR
 | Broadcast (per-topic, notify doorbell, sharded Pub/Sub) | [docs/how-to/broadcast.md](docs/how-to/broadcast.md) |
 | Hash cache (metadata, bundled GET+TTL) | [docs/how-to/hash-cache.md](docs/how-to/hash-cache.md) |
 | Telemetry + custom strategies | [docs/how-to/telemetry-and-strategies.md](docs/how-to/telemetry-and-strategies.md) |
+| Azure Managed Redis with Entra ID (and custom auth) | [docs/recipes/azure-entra-authentication.md](docs/recipes/azure-entra-authentication.md) |
+| Set ("queue") caches — model, coherence, pitfalls | [docs/concepts.md#set-caches](docs/concepts.md#set-caches) |
+| Set ("queue") caches — registration & settings | [docs/reference/settings.md#queue-caches-uipathcachingqueue](docs/reference/settings.md#queue-caches-uipathcachingqueue) |
 | Short copy-paste patterns | [docs/recipes/](docs/recipes/) |
 | Settings reference (every option, every default) | [docs/reference/settings.md](docs/reference/settings.md) |
 | Public interface surface | [docs/reference/interfaces.md](docs/reference/interfaces.md) |
@@ -129,6 +169,7 @@ flowchart LR
 
 - **.NET** — 8.0 and 10.0.
 - **Redis** — 6.0+. Redis 7.0+ required for sharded Pub/Sub (`SPUBLISH`/`SSUBSCRIBE`) on the streams notify doorbell.
+- **Azure Managed Redis / Azure Cache for Redis** — supported, with key-based or Entra ID authentication (`UiPath.Caching.Azure`).
 - **StackExchange.Redis** — pulled transitively; no direct dependency needed in consumers.
 
 ## License

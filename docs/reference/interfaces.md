@@ -416,6 +416,124 @@ As on [`ICache`](#icache), `policy` is a **required** parameter on every policy-
 
 ---
 
+## Set surface
+
+### `ISetCache<T>`
+
+**Namespace:** `UiPath.Caching` — package `UiPath.Caching.Queue`
+
+```csharp
+public interface ISetCache<T>
+{
+    string Name { get; }
+
+    ValueTask<bool> AddAsync(CacheKey cacheKey, T item, CancellationToken token = default);
+
+    ValueTask<long> AddAsync(CacheKey cacheKey, IEnumerable<T> items, CancellationToken token = default);
+
+    ValueTask<long> AddAsync(CacheKey cacheKey, IEnumerable<T> items, TimeSpan expiration, CancellationToken token = default);
+
+    ValueTask<long> AddAsync(CacheKey cacheKey, IEnumerable<T> items, DateTimeOffset expiration, CancellationToken token = default);
+
+    ValueTask<T?> PopAsync(CacheKey cacheKey, CancellationToken token = default);
+
+    ValueTask<IReadOnlyCollection<T?>> PopAsync(CacheKey cacheKey, long count, CancellationToken token = default);
+
+    ValueTask<IReadOnlyCollection<T?>> MembersAsync(CacheKey cacheKey, CancellationToken token = default);
+
+    ValueTask<bool> ContainsItemAsync(CacheKey cacheKey, T item, CancellationToken token = default);
+
+    ValueTask<long> CountAsync(CacheKey cacheKey, CancellationToken token = default);
+
+    ValueTask<bool> RemoveItemAsync(CacheKey cacheKey, T item, CancellationToken token = default);
+
+    ValueTask<long> RemoveItemsAsync(CacheKey cacheKey, IEnumerable<T> items, CancellationToken token = default);
+
+    ValueTask<bool> RemoveAsync(CacheKey cacheKey, CancellationToken token = default);
+
+    ValueTask<bool> ContainsAsync(CacheKey cacheKey, CancellationToken token = default);
+}
+```
+
+`ISetCache<T>` is the typed set surface: one cache key holds an unordered collection of **unique** members, backed by a Redis set (`SADD` / `SPOP` / `SMEMBERS` / `SISMEMBER` / `SCARD` / `SREM`, plus `DEL` and `EXISTS` for the key itself). It is the third data shape in the library, next to the single-value [`ICache<T>`](#icachet) and the field-addressable [`IHashCache<T>`](#ihashcachet), and it ships in its own opt-in package.
+
+**Despite the `Caching.Queue` package name, a set is not a queue.** Members have no insertion order, and `PopAsync` removes a *random* member (`SPOP`), not the oldest or the newest. Code that needs FIFO or LIFO ordering must not be built on this surface.
+
+Uniqueness and membership are decided on the **serialized** form of a member, so `T` must serialize deterministically: two equal values that serialize to different bytes are both stored, and the memory and Redis tiers then disagree about membership. See [how-to/extending.md](../how-to/extending.md) on serializers.
+
+Like the other typed surfaces, `SetCache<T>` resolves its `CachePolicy` by `typeof(T).FullName` and applies an `ICacheKeyStrategy` to every key. Only `CachePolicy.DistributedExpiration` participates: Redis sets carry no per-member TTL, so expiration always applies to the whole key, and **every add that carries at least one member re-applies it** — adding one member resets the lifetime of the entire set, while an add with an empty collection returns before the write and refreshes nothing. The `expiration` parameters are non-nullable and taken at face value: a duration that is not strictly positive, or a deadline that has already passed, raises `ArgumentOutOfRangeException` rather than being ignored. Blocking forwarders (`Add`, `Pop`, `Members`, `Count`, `Remove`, …) live on `SetCacheSyncExtensions`.
+
+DI registers `ISetCache<T>` as transient over the **default** provider (`CacheOptions.DefaultCache`). To reach a specific backing, go through [`IQueueCacheFactory`](#iqueuecachefactory).
+
+**Use this when:**
+
+- You need set semantics in the cache: de-duplication, membership tests, or "claim one of these" distribution where order does not matter.
+- You want compile-time type safety and automatic `CachePolicy` resolution for the member type.
+
+**Don't use this when:**
+
+- You need ordering, or delivery with acknowledgement and redelivery — this is a cache primitive, not a message queue. Use the broadcast topics or a real queue.
+- One key maps to one value ([`ICache<T>`](#icachet)) or to named fields ([`IHashCache<T>`](#ihashcachet)).
+- The member type varies per call — use [`ISetCache`](#isetcache).
+
+**See also:** [`ISetCache`](#isetcache), [`IQueueCacheFactory`](#iqueuecachefactory), [Concepts: set caches](../concepts.md#set-caches), [Settings: queue caches](settings.md#queue-caches-uipathcachingqueue)
+
+---
+
+### `ISetCache`
+
+**Namespace:** `UiPath.Caching` — package `UiPath.Caching.Queue`
+
+```csharp
+public interface ISetCache : IDisposable
+{
+    string Name { get; }
+
+    ValueTask<bool> AddAsync<T>(CacheKey cacheKey, T item, CachePolicy? policy, CancellationToken token = default);
+
+    ValueTask<long> AddAsync<T>(CacheKey cacheKey, IEnumerable<T> items, CachePolicy? policy, CancellationToken token = default);
+
+    ValueTask<long> AddAsync<T>(CacheKey cacheKey, IEnumerable<T> items, TimeSpan expiration, CachePolicy? policy, CancellationToken token = default);
+
+    ValueTask<long> AddAsync<T>(CacheKey cacheKey, IEnumerable<T> items, DateTimeOffset expiration, CachePolicy? policy, CancellationToken token = default);
+
+    ValueTask<T?> PopAsync<T>(CacheKey cacheKey, CachePolicy? policy, CancellationToken token = default);
+
+    ValueTask<IReadOnlyCollection<T?>> PopAsync<T>(CacheKey cacheKey, long count, CachePolicy? policy, CancellationToken token = default);
+
+    ValueTask<IReadOnlyCollection<T?>> MembersAsync<T>(CacheKey cacheKey, CachePolicy? policy, CancellationToken token = default);
+
+    ValueTask<bool> ContainsItemAsync<T>(CacheKey cacheKey, T item, CancellationToken token = default);
+
+    ValueTask<long> CountAsync<T>(CacheKey cacheKey, CancellationToken token = default);
+
+    ValueTask<bool> RemoveItemAsync<T>(CacheKey cacheKey, T item, CancellationToken token = default);
+
+    ValueTask<long> RemoveItemsAsync<T>(CacheKey cacheKey, IEnumerable<T> items, CancellationToken token = default);
+
+    ValueTask<bool> RemoveAsync<T>(CacheKey cacheKey, CancellationToken token = default);
+
+    ValueTask<bool> ContainsAsync<T>(CacheKey cacheKey, CancellationToken token = default);
+}
+```
+
+`ISetCache` is the dynamic-member-type counterpart of [`ISetCache<T>`](#isetcachet). The member type is a method-level generic, and the `CachePolicy` is passed per call — `null` means "no policy", so the provider's configured defaults apply. `SetCacheExtensions` supplies overloads without the `policy` parameter for the common case. DI registers it as a singleton over the default provider; the typed wrapper is a thin adapter over this interface.
+
+The no-op implementation is `NullSetCache`: reads report empty and writes report nothing written. You get it when caching is disabled, and when neither the requested provider nor `CacheOptions.DefaultCache` resolves to an enabled one — asking for a disabled backing by name falls back to the default provider rather than to a no-op. It still rejects a member type the library refuses to cache, throwing `NotCacheableException` on every member, but validates nothing else — expirations in particular pass unchecked.
+
+**Use this when:**
+
+- Framework-level glue stores members whose type is not known until call time.
+- You are implementing or decorating a set-cache provider.
+
+**Don't use this when:**
+
+- The member type is fixed — [`ISetCache<T>`](#isetcachet) gives you policy resolution and a key strategy for free.
+
+**See also:** [`ISetCache<T>`](#isetcachet), [`IQueueCacheFactory`](#iqueuecachefactory), [Concepts: set caches](../concepts.md#set-caches)
+
+---
+
 ## Factory surface
 
 ### `ICacheFactory`
@@ -453,6 +571,37 @@ public interface ICacheFactory : IDisposable
 - You need broadcast (pub/sub) functionality — use [`ITopicFactory`](#itopicfactory) instead.
 
 **See also:** [`ICacheProvider`](../concepts.md), [`ITopicFactory`](#itopicfactory), [Quickstart](../quickstart.md), [Concepts](../concepts.md)
+
+---
+
+### `IQueueCacheFactory`
+
+**Namespace:** `UiPath.Caching` — package `UiPath.Caching.Queue`
+
+```csharp
+public interface IQueueCacheFactory : IDisposable
+{
+    IEnumerable<string> ProviderNames { get; }
+
+    ISetCache CreateSetCache(string? providerName = null);
+
+    void AddProvider(IQueueCacheProvider provider);
+}
+```
+
+`IQueueCacheFactory` is the queue package's counterpart to [`ICacheFactory`](#icachefactory): the same shape over a separate provider registry, because set support is opt-in and the core factory knows nothing about it. `CreateSetCache` returns the untyped [`ISetCache`](#isetcache) for a named provider; the `CreateSetCache<T>` extension method wraps it as [`ISetCache<T>`](#isetcachet). A provider name that is omitted, unregistered, or registered but disabled falls back to `CacheOptions.DefaultCache`, and then to `NullSetCache` when that one is missing or disabled too. Read `ISetCache.Name` to see which provider you actually got. One configuration makes resolution throw rather than fall back: `AddQueueInMemoryRedis()` followed by a disabled `AddQueueRedis()`, with `DefaultCache` at `InMemoryRedis`. The multilayer provider's request for `Redis` resolves to the default, which is itself, and its lazy initializer throws on re-entry. See [Concepts: set caches](../concepts.md#set-caches) for the reverse order, which fails differently.
+
+**Use this when:**
+
+- You need a set cache from a specific backing rather than the default one.
+- A test or multi-tenant scenario registers providers at runtime via `AddProvider`.
+
+**Don't use this when:**
+
+- You already hold an injected `ISetCache<T>` on the default provider.
+- You need the single-value or hash surfaces — those come from [`ICacheFactory`](#icachefactory).
+
+**See also:** [`ICacheFactory`](#icachefactory), [`ISetCache<T>`](#isetcachet), [Settings: queue caches](settings.md#queue-caches-uipathcachingqueue)
 
 ---
 

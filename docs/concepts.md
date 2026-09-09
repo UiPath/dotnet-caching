@@ -7,14 +7,16 @@ moving parts in action; this page explains why they are shaped the way they are.
 Each section closes with a pointer to the place that carries the operational
 detail.
 
-The eight concepts covered here — providers, layers, topics, locks, policies,
-telemetry, the two API surfaces, and batch get-or-add — are largely independent
-of one another, but they compose. A single `GetOrAddAsync` call can touch all of them: the
-provider resolves which tiers to read and write, the layers determine what is
-already in memory vs. Redis, topics keep remote nodes in sync after the write,
-locks prevent redundant generator runs, the policy governs TTLs and rehydration,
-and telemetry records the outcome. Understanding each piece individually makes
-the composed behavior predictable.
+The nine concepts covered here — providers, layers, topics, locks, policies,
+telemetry, the two API surfaces, batch get-or-add, and set caches — are largely independent
+of one another, but they compose. A single `GetOrAddAsync` call can touch all of
+the first eight: the provider resolves which tiers to read and write, the layers
+determine what is already in memory vs. Redis, topics keep remote nodes in sync
+after the write, locks prevent redundant generator runs, the policy governs TTLs
+and rehydration, and telemetry records the outcome. Set caches stand apart — a
+separate package and a separate API shape, reusing the provider names and the
+options sections but taking no part in get-or-add. Understanding each piece
+individually makes the composed behavior predictable.
 
 ---
 
@@ -522,3 +524,134 @@ Callers whose keys already are their identity can skip the state pairing via a k
 method — see [recipes/batch-get-or-add.md](recipes/batch-get-or-add.md#keys-you-already-own).
 
 See also: [reference/interfaces.md](reference/interfaces.md), [recipes/batch-get-or-add.md](recipes/batch-get-or-add.md), [how-to/resilience.md#stampede-protection](how-to/resilience.md#stampede-protection).
+
+---
+
+## Set caches
+
+Everything above describes one key mapping to one value (`ICache<T>`) or to a bag of named fields
+(`IHashCache<T>`). There is a third data shape: a key mapping to an **unordered collection of unique
+members**, backed by a Redis set. It lives in the opt-in `UiPath.Caching.Queue` package and is
+reached through `ISetCache<T>` / `ISetCache`, created by `IQueueCacheFactory` rather than
+`ICacheFactory`.
+
+**The package name is misleading: a set is not a queue.** Members have no insertion order, and
+`PopAsync` removes a *random* member (`SPOP`), not the oldest. Nothing here delivers, acknowledges,
+or redelivers work items. It is a cache primitive for de-duplication, membership tests, and
+"claim any one of these" distribution.
+
+### Registration and backings
+
+The three registration methods mirror the core ones and share their configuration sections. Add the
+one that matches your backing — registering more than one is legal, and the factory then selects
+between them by provider name:
+
+```csharp
+b.AddQueueMemory();        // L1 only, no Redis prerequisite
+b.AddQueueRedis();         // L2 only; requires the core Redis services
+b.AddQueueInMemoryRedis(); // multilayer; also registers the Redis backing it uses as L2
+```
+
+Each one registers the `IQueueCacheProvider` for its backing, plus `IQueueCacheFactory`, `ISetCache`
+and `ISetCache<T>`. `AddQueueInMemoryRedis` contributes two providers rather than one, because the
+multilayer provider resolves its L2 tier through the Redis one — so `InMemoryRedis` and `Redis` both
+show up in `ProviderNames`. The factory picks a provider by `CacheOptions.DefaultCache`, exactly like the core
+cache factory, so a memory-only service must point `DefaultCache` at `InMemory`. When caching is
+off, or the backing you registered is disabled, the registration degrades to `NullSetCache` — reads
+report empty, writes report nothing written — so call sites need no conditional wiring. Resolution
+by name is looser than it looks, though: asking the factory for a provider that is unregistered or
+disabled does not hand back a no-op, it hands back whatever `CacheOptions.DefaultCache` resolves to,
+and only when that is missing or disabled too do you get `NullSetCache`. Disabling the `Redis`
+backing therefore does not, on its own, make an explicit `CreateSetCache("Redis")` inert.
+
+One combination to avoid outright: registering both queue backings with `DefaultCache` left at
+`InMemoryRedis` and the `Redis` one disabled. What you get depends on registration order, and
+neither outcome is the one you wanted.
+
+- `AddQueueInMemoryRedis()` followed by `AddQueueRedis()` throws on first use —
+  `InvalidOperationException`, *ValueFactory attempted to access the Value property of this
+  instance*. The multilayer provider builds its L2 by asking the factory for `Redis`; the disabled
+  provider sends that request on to the default, which is the multilayer provider itself, and it
+  re-enters its own lazy initializer.
+- `AddQueueRedis()` followed by `AddQueueInMemoryRedis()` turns the whole queue surface into no-ops.
+  The disabled registration installs the null factory first, and the later multilayer registration
+  cannot displace it.
+
+Registering `AddQueueInMemoryRedis()` on its own is unaffected, because `Caching:Redis:Enabled` binds
+`RedisSetCacheOptions` only when `AddQueueRedis` runs: the Redis tier that the multilayer backing
+co-registers stays enabled. If you want the Redis set cache off, leave the multilayer backing out
+rather than disabling the tier underneath it. Options bind from the same
+`Caching:InMemory` / `Caching:Redis` / `Caching:InMemoryRedis` sections as the core providers; see
+[reference/settings.md](reference/settings.md#queue-caches-uipathcachingqueue).
+
+On Redis the set cache keeps its own key namespace: the type-prefix slot holds `se`, where the
+single-value cache holds `s` and the hash cache holds `h`, so a set and a string cache can share a
+key name without colliding. Writes are pinned to the master, reads prefer a replica, and an add is a
+transaction that applies `SADD` and the key's expiry together. Like the core Redis caches, a Redis
+failure is logged and swallowed rather than thrown: reads report empty and writes report nothing
+written. Adds, pops and full-member reads check the connection first and return that same empty
+answer without issuing a command; the membership, count, remove and key-existence calls always
+issue theirs and reach the same catch when the connection is down.
+
+### Expiration applies to the key, not the member
+
+Redis sets have no per-member TTL. Every expiration — from the caller, from
+`CachePolicy.DistributedExpiration`, from the provider's `DefaultExpiration`, and finally from
+`CachePolicy.DefaultDistributedExpiration` — applies to the whole key, and **every add that carries
+at least one member re-applies it**, so adding one member resets the lifetime of the entire set.
+Usually that extends it; a caller who passes a deadline earlier than the current one shortens it
+instead. An add with an empty collection returns before the write, so it is not a way to refresh a
+set's time to live. On the Redis backing that chain
+always resolves to some deadline: a set never lives forever by default. Expiration arguments are non-nullable and taken at face value: a non-positive duration, or a
+deadline already in the past, raises `ArgumentOutOfRangeException` instead of being ignored.
+
+### What the multilayer set cache actually caches
+
+`AddQueueInMemoryRedis` puts an in-process snapshot in front of the Redis set, and its coherence
+model is **not** the one used by the key-value caches. There is no backplane here: no Streams
+message, no Pub/Sub invalidation. Local state is kept in step by three rules instead.
+
+- **A snapshot is created only by a full read that returns something.** `MembersAsync` on a local
+  miss fetches the set from Redis and stores the whole thing, bounded by `LocalMaxExpiration`; a
+  fetch that comes back empty stores nothing. While the connection is up, adds and removes update a
+  snapshot that already exists but never create one, so a write-only node keeps nothing locally.
+  Local-only mode is the exception: with `UseLocalOnlyWhenDisconnected` in force, adds do create
+  local state, capped by `LocalMaxExpirationDisconnected`.
+- **Reads are answered locally when a snapshot exists.** `MembersAsync`, `CountAsync`,
+  `ContainsItemAsync` and `ContainsAsync` are served from it and never reach Redis.
+- **Pops always go to Redis** while the connection is up, then remove what they popped from the
+  local snapshot. Two nodes therefore never pop the same member because one of them held a stale
+  view.
+
+The consequence worth internalizing: **another node's adds and removes are invisible to this node
+until its snapshot expires.** `LocalMaxExpiration` is the staleness bound, and it is the only one.
+It defaults to one minute, and it is nullable: `null` stores snapshots with no time bound at all,
+which leaves cross-node staleness unbounded and is the wrong setting for a multi-node deployment.
+If a set is written by many nodes and read for accuracy rather than for a hint, either keep that
+window short or use the `Redis` backing directly.
+
+When the connection monitor is enabled and Redis is unreachable, behavior follows the same options
+as the core multilayer cache: with `UseLocalOnlyWhenDisconnected` the snapshot keeps serving reads
+and absorbs writes; without it the snapshot is dropped and reads report empty rather than serving
+data that cannot be refreshed. Both switches are off by default. Note what
+`LocalMaxExpirationDisconnected` (thirty seconds) actually bounds: the local state a *disconnected
+add* writes, so that it dies soon after Redis returns. It does not shorten a snapshot fetched while
+connected, and disconnected pops and removes leave that deadline alone — an outage is not capped at
+thirty seconds of stale reads.
+
+### Retries and serialization
+
+Popping is destructive and not idempotent: a retried `SPOP` removes a *second* member, and the first
+one is lost with the failed reply. So pops do not share the `Write` pipeline. They run on the
+pipeline named by `RedisSetCacheOptions.ResilienceKeyName`, which defaults to none — opt in
+deliberately, and only where losing a member is acceptable. Everything else uses the standard
+`Read` and `Write` pipelines.
+
+Membership is decided on serialized bytes, in both tiers, which makes the serializer part of the
+contract: two equal values must serialize identically, or the same logical member is stored twice
+and the tiers disagree about what the set contains. Deterministic serialization matters here in a
+way it does not for the single-value caches.
+
+See also: [reference/interfaces.md](reference/interfaces.md#set-surface),
+[reference/settings.md](reference/settings.md#queue-caches-uipathcachingqueue),
+[how-to/resilience.md](how-to/resilience.md), [how-to/extending.md](how-to/extending.md).
