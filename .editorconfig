@@ -443,6 +443,10 @@ dotnet_diagnostic.S107.severity = none
 dotnet_diagnostic.CA1016.severity = none
 dotnet_diagnostic.S3904.severity = none
 
+# S4136: All method overloads should be adjacent. The caches group each set of overloads with the private
+# Core helper they delegate to, so single-key and batch groups of the same name are deliberately apart.
+dotnet_diagnostic.S4136.severity = none
+
 csharp_using_directive_placement = outside_namespace:silent
 csharp_prefer_simple_using_statement = true:suggestion
 csharp_style_prefer_method_group_conversion = true:silent
