@@ -21,11 +21,11 @@ internal sealed class StreamSuffixShardedChannelStrategy : IRedisChannelStrategy
 
     private static string ResolveChannelBase(string streamKey)
     {
-        if (HasValidHashTag(streamKey))
+        if (RedisHashTag.HasValidTag(streamKey))
         {
             return streamKey;
         }
-        if (ContainsNoBraces(streamKey))
+        if (RedisHashTag.ContainsNoBraces(streamKey))
         {
             return "{" + streamKey + "}";
         }
@@ -34,18 +34,4 @@ internal sealed class StreamSuffixShardedChannelStrategy : IRedisChannelStrategy
             "The stream key must either contain a valid hash tag (non-empty content between '{' and '}', e.g. 'app:st:{topic}') " +
             "or contain no '{' or '}' characters at all.");
     }
-
-    private static bool HasValidHashTag(string key)
-    {
-        var open = key.IndexOf('{');
-        if (open < 0)
-        {
-            return false;
-        }
-        var close = key.IndexOf('}', open + 1);
-        return close > open + 1;
-    }
-
-    private static bool ContainsNoBraces(string key) =>
-        key.IndexOf('{') < 0 && key.IndexOf('}') < 0;
 }

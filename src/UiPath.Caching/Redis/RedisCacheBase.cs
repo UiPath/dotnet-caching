@@ -118,6 +118,36 @@ public abstract class RedisCacheBase : IConnectionState, IDisposable
 
     public bool IsConnected => _connectionState.IsConnected;
 
+    /// <summary>
+    /// Redis answers a cross-slot command with an error the caches log and report as a miss, so a batch
+    /// spanning slots would read as a cache that never hits. Call it inside the command's own try, since
+    /// reading a slot resolves the connection, and let <see cref="CrossSlotKeysException"/> back out past
+    /// the catch that turns a Redis failure into a miss.
+    /// </summary>
+    private protected void ThrowIfCrossSlot(CacheKey[] cacheKeys, RedisKey[] redisKeys, Type? valueType, [CallerMemberName] string? operation = null)
+    {
+        if (redisKeys.Length < 2)
+        {
+            return;
+        }
+
+        var multiplexer = Database.Multiplexer;
+        var slot = multiplexer.GetHashSlot(redisKeys[0]);
+        for (var i = 1; i < redisKeys.Length; i++)
+        {
+            if (multiplexer.GetHashSlot(redisKeys[i]) == slot)
+            {
+                continue;
+            }
+            throw new CrossSlotKeysException(
+                $"{operation} was given {redisKeys.Length} keys that Redis Cluster maps to different slots, " +
+                $"starting with '{Logged(cacheKeys[0], redisKeys[0], valueType)}' and '{Logged(cacheKeys[i], redisKeys[i], valueType)}'. " +
+                "A multi-key command runs on one node: give the keys a shared hash tag (non-empty content " +
+                "between '{' and '}', e.g. 'app:s:{org1}:groups_1') so they hash together, or split the batch " +
+                "into one call per group of keys that already share a tag.");
+        }
+    }
+
     protected IDatabase Database => _redis.Database;
 
     public void Dispose()

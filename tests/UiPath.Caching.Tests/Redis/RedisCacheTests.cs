@@ -85,6 +85,59 @@ public class RedisCacheTests(ITestContextAccessor testContextAccessor) : IAsyncL
     }
 
     [Fact]
+    public async Task Multi_get_throws_when_keys_span_slots()
+    {
+        GiveKeysDifferentSlots();
+        var act = () => Sut.GetAsync<string>(new CacheKey[] { _cacheKey, _multiKey }, policy: null, token: testContextAccessor.Current.CancellationToken).AsTask();
+        (await act.Should().ThrowAsync<CrossSlotKeysException>()).And.Message.Should().Contain("GetAsync");
+        await _database.DidNotReceive().StringGetAsync(Arg.Any<RedisKey[]>(), Arg.Any<CommandFlags>());
+    }
+
+    [Fact]
+    public async Task Multi_get_cache_entries_throws_when_keys_span_slots()
+    {
+        GiveKeysDifferentSlots();
+        var act = () => Sut.GetCacheEntriesAsync<string>(new CacheKey[] { _cacheKey, _multiKey }, policy: null, token: testContextAccessor.Current.CancellationToken).AsTask();
+        await act.Should().ThrowAsync<CrossSlotKeysException>();
+        _database.DidNotReceive().CreateTransaction();
+    }
+
+    [Fact]
+    public async Task Multi_remove_throws_when_keys_span_slots()
+    {
+        GiveKeysDifferentSlots();
+        var act = () => Sut.RemoveAsync<string>(new CacheKey[] { _cacheKey, _multiKey }, testContextAccessor.Current.CancellationToken).AsTask();
+        await act.Should().ThrowAsync<CrossSlotKeysException>();
+        await _database.DidNotReceive().KeyDeleteAsync(Arg.Any<RedisKey[]>(), Arg.Any<CommandFlags>());
+    }
+
+    [Fact]
+    public async Task Multi_set_throws_when_keys_span_slots()
+    {
+        GiveKeysDifferentSlots();
+        var value = _fixture.Create<string>();
+        var act = () => Sut.SetAsync(new KeyValuePair<CacheKey, string?>[] { new(_cacheKey, value), new(_multiKey, value) }, _fixture.Create<TimeSpan>(), policy: null, token: testContextAccessor.Current.CancellationToken).AsTask();
+        await act.Should().ThrowAsync<CrossSlotKeysException>();
+        _database.DidNotReceive().CreateTransaction(Arg.Any<object?>());
+    }
+
+    [Fact]
+    public async Task Multi_get_still_reports_a_miss_when_the_connection_cannot_be_resolved()
+    {
+        // The slot check reads the multiplexer, so a Redis that cannot be reached must not turn a
+        // graceful miss into a thrown connection error.
+        _connector.Database.Throws(new RedisException("test"));
+        var actual = await Sut.GetAsync<string>(new CacheKey[] { _cacheKey, _multiKey }, policy: null, token: testContextAccessor.Current.CancellationToken);
+        actual.Should().BeEquivalentTo(new KeyValuePair<CacheKey, string?>[] { new(_cacheKey, null), new(_multiKey, null) });
+    }
+
+    private void GiveKeysDifferentSlots()
+    {
+        _database.Multiplexer.GetHashSlot(_redisKey).Returns(1);
+        _database.Multiplexer.GetHashSlot(_redisMultiKey).Returns(2);
+    }
+
+    [Fact]
     public async Task Multi_get_has_no_redis_exceptions()
     {
         _database.StringGetAsync(Arg.Any<RedisKey[]>(), Arg.Any<CommandFlags>())
@@ -1393,6 +1446,8 @@ public class RedisCacheTests(ITestContextAccessor testContextAccessor) : IAsyncL
         };
 
         _database = _fixture.Freeze<IDatabase>();
+        // A non-clustered server answers every key with the same slot; the fixture's auto-values would hand each one a random slot.
+        _database.Multiplexer.GetHashSlot(Arg.Any<RedisKey>()).Returns(0);
         _transaction = _fixture.Freeze<ITransaction>();
         _database.CreateTransaction().Returns(_transaction);
         _serializer = new SystemJsonByteSerializerProxy();

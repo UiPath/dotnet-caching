@@ -329,7 +329,7 @@ When `NotifyShardedPubSub` is `true` on `RedisStreamsTopicOptions`, the stream k
 
 ### When to reach for these seams
 
-Most consumers never override any of these seams. The built-in `DefaultRedisKeyStrategyFactory` covers `ICache` and `IHashCache` and handles shard-key routing automatically when `CacheOptions.ShardKeyEnabled` is `true`. Reasons to override:
+Most consumers never override any of these seams. The built-in `DefaultRedisKeyStrategyFactory` covers `ICache` and `IHashCache` and handles shard-key routing automatically when `CacheOptions.ShardKeyEnabled` is `true`: the key is wrapped in a `{...}` hash tag so the slot follows the key alone, and a key that already carries a valid hash tag is left as it is. Reasons to override:
 
 - **Tenant/region shard routing** — you want Redis keys to encode tenant or region info as a Redis Cluster hash tag (`{tag}`) so related keys cluster to the same slot and cross-slot multi-key commands work correctly.
 - **Legacy key layout compatibility** — you are sharing a Redis instance with an existing system that has a fixed key schema you must match. Overriding the factory lets you produce keys that match the legacy layout without changing the cache call sites.
