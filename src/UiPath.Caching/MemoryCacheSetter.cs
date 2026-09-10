@@ -16,13 +16,12 @@ internal abstract class MemoryCacheSetter(
         )
 {
     private readonly KeyMasker _masker = masker ?? KeyMasker.Off;
+    private readonly ICacheEntrySizeProvider _sizeProvider = memoryCacheOptions.SizeProvider ?? new DefaultCacheEntrySizeProvider();
 
     private const string EventRefreshMetadataFailed = "Caching." + nameof(MemoryCacheSetter) + "." + nameof(RefreshMetadata) + ".Failed";
     private const string PropCacheKey = "CacheKey";
     private const string PropTopicKey = "TopicKey";
     private const string PropTransportId = "TransportId";
-
-    private ICacheEntrySizeProvider SizeProvider { get; } = memoryCacheOptions.SizeProvider ?? new DefaultCacheEntrySizeProvider();
 
     protected TimeProvider Clock { get; } = clock;
 
@@ -43,7 +42,7 @@ internal abstract class MemoryCacheSetter(
             memOptions.RegisterPostEvictionCallback(PostEviction, token);
             if(memoryCacheOptions.SizeLimit.HasValue)
             {
-                memOptions.SetSize(SizeProvider.GetSize(item));
+                memOptions.SetSize(_sizeProvider.GetSize(item));
             }
             memoryCache.Set(options.CacheKey, item, memOptions);
             return true;
