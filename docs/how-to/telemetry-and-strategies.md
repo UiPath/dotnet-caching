@@ -169,6 +169,73 @@ The lib tracks cache operations via `ITelemetryOperation`. Each `StartOperation`
 
 When `RedisCacheOptions.KeyReadTelemetryEnabled` is set, read paths additionally emit a per-key `Redis` dependency (key in `data`, hit/miss via `resultCode`, a `BatchId` shared across the operation), so per-key read attribution is available even when batched `MGET`+TTL reads — bundled into one `MULTI`/`EXEC` transaction — no longer surface the individual keys on the wire. It is opt-in because raw keys are high-cardinality. Hash reads emit one dependency per hash key, never per field.
 
+## Masking keys in logs
+
+A cache key is chosen by the caller, so it can be a secret: a session id, a token, an email. The library names keys in
+log lines throughout, which is what makes those lines useful and also what puts the key in your log store. Masking
+decides, per key, whether the line shows it.
+
+Nothing is masked until you say so. Until then the container resolves `NullKeyMaskingPolicy` and every line reads as
+it always did.
+
+```csharp
+builder.Services.AddCaching(section, b => b
+    .AddRedisConnection().AddRedis().AddInMemoryRedis()
+    .AddKeyMasking("session:", "user:"));   // these prefixes are secrets
+```
+
+`AddKeyMasking()` with no prefix masks every key the built-in policy does not read as a plain identifier; a number or a
+GUID stays readable either way, so only `AddKeyMasking(AlwaysMaskKeyMaskingPolicy.Instance)` masks literally every key. A masked
+key keeps its first three characters, enough to correlate
+two lines about the same entry and not enough to replay it. A key of three characters or fewer keeps none, since
+there would be nothing left to hide:
+
+```
+Cache missed. generating new myapp:s:session:cos****
+```
+
+The prefixes are matched against the key as the caller spelled it, before `RedisKeyStrategy` composes the physical
+key around it. `ICacheKeyStrategy` is the exception, because it rewrites the key itself rather than the layout around
+it: a multilayer cache hands the tier below the key its strategy produced, so with `PrefixCacheKeyStrategy("v2")` the
+Redis tier's own lines are judged on `v2:session:...`. The default `DefaultCacheKeyStrategy` returns the key
+unchanged, so this only applies if you install one that rewrites. When you do, configure the prefixes as the strategy
+spells them (`AddKeyMasking("v2:session:")`), or register a policy of your own that recognizes both.
+
+Two things are deliberately left readable. Everything the key strategy composed around your key stays, so the line
+still tells you which application and which keyspace it came from. And a key that is plainly an identifier, a number
+or a GUID, stays whole, because a row id in a log line is not a secret and removing it makes the line useless.
+
+### Your own policy
+
+A prefix is not always what separates a secret from an id. Decide it in code instead:
+
+```csharp
+public sealed class ByValueTypeMasking : IKeyMaskingPolicy
+{
+    public bool ShouldMask(in MaskingContext context) => context.ValueType == typeof(SessionData);
+}
+
+b.AddKeyMasking<ByValueTypeMasking>();
+```
+
+The context carries the caller's key, what the cache holds when the call site knows it, and which provider is logging,
+so one policy can answer differently per tier. It returns a bool rather than a string: rendering stays with the
+library, so a policy cannot leak the value it was asked to judge, and a policy that throws masks rather than taking
+the log call down with it.
+
+### What it costs
+
+Nothing on a disabled log level. The generated log methods take a wrapper that renders in `ToString`, so a `Trace`
+line that is not written never consults the policy, never masks, and never converts a Redis key to text.
+
+### Where it reaches
+
+Every component that names a key: both caches on every tier, the multilayer local setter, the rehydration
+coordinator, the broadcast change token, and the cache event publisher.
+
+`AddDistributedCache` is not subject to your policy. `IDistributedCache` keys belong to the consumer, so the adapter
+and the private tiers it configures always mask, whatever the application registered.
+
 ## Cache key strategies
 
 ### Final key shape on Redis

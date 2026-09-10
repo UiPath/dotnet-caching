@@ -41,6 +41,7 @@ public class CachingBuilder(IServiceCollection services, IConfiguration? configu
         Services.TryAddSingleton<IChangeTokenFactory>(NullChangeTokenFactory.Instance);
         Services.TryAddSingleton<ITopicFactory>(NullTopicFactory.Instance);
         Services.TryAddSingleton<ICachingTelemetryProvider>(NullTelemetryProvider.Instance);
+        Services.TryAddSingleton<IKeyMaskingPolicy>(NullKeyMaskingPolicy.Instance);
         Services.TryAddSingleton<ICacheEventFactory>(NullCacheEventFactory.Instance);
         Services.TryAddSingleton<ILoggerFactory>(NullLoggerFactory.Instance);
         Services.TryAddSingleton<IRedisProfiler>(NullRedisProfiler.Instance);

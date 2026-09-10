@@ -16,6 +16,7 @@ internal sealed partial class RedisStreamNotifyChannel : IDisposable
     private readonly ManualResetEventSlim _subscribingDone = new(initialState: true);
     private Action? _unsubscribe;
     private int _subscribing;
+    private int _resubscribeRequested;
     private volatile bool _disposed;
 
     public RedisStreamNotifyChannel(
@@ -47,8 +48,10 @@ internal sealed partial class RedisStreamNotifyChannel : IDisposable
         }
         if (Interlocked.CompareExchange(ref _subscribing, 1, 0) != 0)
         {
+            // The attempt already in flight re-arms the timer for whoever asked, so this one can drop out.
             return;
         }
+        Volatile.Write(ref _resubscribeRequested, 0);
         try
         {
             _subscribingDone.Reset();
@@ -88,7 +91,9 @@ internal sealed partial class RedisStreamNotifyChannel : IDisposable
             }
             try
             {
-                _subscribeTimer.Change(Timeout.Infinite, Timeout.Infinite);
+                // Idle until something asks for another attempt. A reconnect that raced this one is
+                // honored below, once the interlock is free and a fresh callback can get through.
+                _subscribeTimer.Change(Timeout.InfiniteTimeSpan, _timerPeriod);
             }
             catch (ObjectDisposedException)
             {
@@ -104,6 +109,19 @@ internal sealed partial class RedisStreamNotifyChannel : IDisposable
         finally
         {
             Interlocked.Exchange(ref _subscribing, 0);
+            // Only now can a scheduled callback get past the contention check, so a reconnect that
+            // arrived during this attempt — or one whose own callback bailed on it — is armed here.
+            if (Volatile.Read(ref _resubscribeRequested) != 0)
+            {
+                try
+                {
+                    _subscribeTimer.Change(_timerDueTime, _timerPeriod);
+                }
+                catch (ObjectDisposedException)
+                {
+                    // Disposed concurrently; nothing left to reschedule.
+                }
+            }
             try
             {
                 _subscribingDone.Set();
@@ -121,6 +139,7 @@ internal sealed partial class RedisStreamNotifyChannel : IDisposable
         {
             return;
         }
+        Volatile.Write(ref _resubscribeRequested, 1);
         try
         {
             _subscribeTimer.Change(_timerDueTime, _timerPeriod);

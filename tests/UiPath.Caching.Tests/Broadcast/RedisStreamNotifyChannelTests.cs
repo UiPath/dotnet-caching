@@ -155,6 +155,42 @@ public class RedisStreamNotifyChannelTests
     }
 
     [Fact]
+    public async Task Reconnect_during_a_subscribe_is_not_lost_with_the_timer()
+    {
+        var token = TestContext.Current.CancellationToken;
+        var channel = RedisChannel.Literal("notify:test");
+        var redis = _fixture.Freeze<IRedisConnector>();
+        var subscriber = _fixture.Freeze<ISubscriber>();
+        var multiplexer = _fixture.Freeze<IConnectionMultiplexer>();
+        multiplexer.TimeoutMilliseconds.Returns(5000);
+        subscriber.Multiplexer.Returns(multiplexer);
+        redis.Subscriber.Returns(subscriber);
+
+        var calls = 0;
+        var secondCall = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+        subscriber.When(s => s.Subscribe(channel, Arg.Any<Action<RedisChannel, RedisValue>>()))
+            .Do(_ =>
+            {
+                var n = Interlocked.Increment(ref calls);
+                if (n == 1)
+                {
+                    // Mid-attempt, before it disables its own timer: this subscribe is against the old connection.
+                    redis.OnReconnected += Raise.Event();
+                }
+                if (n >= 2)
+                {
+                    secondCall.TrySetResult(true);
+                }
+            });
+
+        using var waiter = new SignalingFetchWaiter(5.Seconds());
+        using var sut = new RedisStreamNotifyChannel(channel, redis, _fixture.Create<ILogger>(), waiter, 60.Seconds(), 10.Milliseconds());
+
+        await secondCall.Task.WaitAsync(30.Seconds(), token);
+        Volatile.Read(ref calls).Should().BeGreaterThanOrEqualTo(2);
+    }
+
+    [Fact]
     public async Task Dispose_is_idempotent()
     {
         var token = TestContext.Current.CancellationToken;

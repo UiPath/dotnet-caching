@@ -205,6 +205,11 @@ dotnet_diagnostic.CA1812.severity = none
 # Properties should not return arrays
 dotnet_diagnostic.CA1819.severity = none
 
+# Evaluation of this argument may be expensive and unnecessary if logging is disabled.
+# Every log site here passes a LoggedKey or LoggedKeys, a struct that copies the key and leaves the
+# masking policy and the rendering to ToString, which the logger calls only once the level is enabled.
+dotnet_diagnostic.CA1873.severity = none
+
 # Do not directly await a Task without calling ConfigureAwait
 dotnet_diagnostic.CA2007.severity = none
 

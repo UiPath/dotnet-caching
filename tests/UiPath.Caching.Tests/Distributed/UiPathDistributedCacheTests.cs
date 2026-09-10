@@ -195,7 +195,7 @@ public class UiPathDistributedCacheTests
 
     /// <summary>A failed write has to name the entry, or the message cannot be acted on.</summary>
     [Fact]
-    public async Task Failed_write_logs_the_key()
+    public async Task Failed_write_masks_the_key()
     {
         const string key = "Session-AbC";
         var logger = new CapturingLogger();
@@ -208,7 +208,8 @@ public class UiPathDistributedCacheTests
 
         await cache.SetAsync(key, Payload, new DistributedCacheEntryOptions(), TestContext.Current.CancellationToken);
 
-        logger.Messages.Should().ContainSingle().Which.Should().Contain(key);
+        // The adapter's keys are the consumer's, so they are masked whatever the application configured.
+        logger.Messages.Should().ContainSingle().Which.Should().Contain("Ses****").And.NotContain(key);
     }
 
     private sealed class CapturingLogger : ILogger

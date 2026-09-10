@@ -34,6 +34,7 @@ internal class HashCacheEntryBuilder
         var topicKey = _topicKeyStrategy.GetTopicKey<T>();
         return new InternalHashCacheEntryOptions { 
             CacheKey = entryCacheKey,
+            CallerKey = cacheKey,
             Fields = fields,
             TopicKey = topicKey,
             Token = token,

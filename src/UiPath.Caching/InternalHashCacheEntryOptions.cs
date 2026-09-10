@@ -2,7 +2,16 @@ namespace UiPath.Caching;
 
 internal record struct InternalHashCacheEntryOptions : ICacheEntryOptions
 {
+    private readonly CacheKey _callerKey;
+
     public CacheKey CacheKey { get; init; }
+
+    /// <summary>The key the caller passed, before <see cref="ICacheKeyStrategy"/> composed <see cref="CacheKey"/> from it.</summary>
+    public CacheKey CallerKey
+    {
+        get => _callerKey.IsNull ? CacheKey : _callerKey;
+        init => _callerKey = value;
+    }
 
     public string[]? Fields { get; init; }
 

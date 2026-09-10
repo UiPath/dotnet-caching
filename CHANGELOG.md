@@ -8,6 +8,18 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 
 ### Added
 
+- **Key masking in logs (#129).** A cache key is the caller's, so it can be a secret; the library names keys in log
+  lines throughout. `builder.AddKeyMasking(prefixes)` turns masking on, and `AddKeyMasking<TPolicy>()` takes an
+  `IKeyMaskingPolicy` of your own, which is asked whether one key is secret and is given the key, what the cache holds
+  when the site knows it, and which provider is logging. A masked key keeps its first three characters, so two lines
+  about one entry still correlate; a key of three characters or fewer keeps none. Whatever the key strategy composed around the key stays readable, and a key that is
+  plainly an identifier, a number or a GUID, is left alone. Off by default: the container resolves
+  `NullKeyMaskingPolicy` and nothing changes. Nothing is rendered, masked, or even converted to text unless the line is
+  actually written, so a disabled level costs nothing. It reaches every component that names a key, including the
+  multilayer local setter, the rehydration coordinator, the broadcast change token and the event publisher, not only
+  the caches. `AddDistributedCache` is not subject to the application's policy: `IDistributedCache` keys belong to the
+  consumer, so the adapter and the private tiers it configures always mask.
+
 - **`IDistributedCache` adapter.** `builder.AddDistributedCache(providerName)` registers a
   `Microsoft.Extensions.Caching.Distributed.IDistributedCache` backed by this library's pipeline —
   shared Redis connection, resilience, telemetry — so consumers that require it (ASP.NET Core session

@@ -239,7 +239,8 @@ public static class DistributedCacheCollectionExtensions
                 sp.GetRequiredService<ILocalLock>(),
                 sp.GetRequiredService<IDistributedLock>(),
                 sp.GetRequiredService<ICachePolicyFactory>(),
-                sp.GetRequiredService<TimeProvider>()),
+                sp.GetRequiredService<TimeProvider>(),
+                AlwaysMaskKeyMaskingPolicy.Instance),
             KnownCacheProviderNames.InMemory => new InMemoryCacheProvider(
                 Options.Create(WithNeutralCacheKeyStrategy(sp.GetRequiredService<IOptions<InMemoryCacheOptions>>().Value)),
                 sp.GetRequiredService<IOptions<CacheOptions>>(),
@@ -251,7 +252,8 @@ public static class DistributedCacheCollectionExtensions
                 sp.GetRequiredService<ILoggerFactory>(),
                 sp.GetRequiredService<ILocalLock>(),
                 sp.GetRequiredService<ICachePolicyFactory>(),
-                sp.GetRequiredService<TimeProvider>()),
+                sp.GetRequiredService<TimeProvider>(),
+                AlwaysMaskKeyMaskingPolicy.Instance),
             _ => throw new InvalidOperationException(
                 $"Cache provider '{providerName}' is not supported by AddDistributedCache. " +
                 $"Supported: {KnownCacheProviderNames.Redis}, {KnownCacheProviderNames.InMemoryRedis}, {KnownCacheProviderNames.InMemory}."),
@@ -293,7 +295,9 @@ public static class DistributedCacheCollectionExtensions
             sp.GetRequiredService<ICachingTelemetryProvider>(),
             sp.GetRequiredService<ILoggerFactory>(),
             sp.GetRequiredService<ICachePolicyFactory>(),
-            sp.GetRequiredService<TimeProvider>());
+            sp.GetRequiredService<TimeProvider>(),
+            // Not the application's policy: these keys are the consumer's, and can be secrets whatever the app configured.
+            AlwaysMaskKeyMaskingPolicy.Instance);
     }
 
     /// <summary>

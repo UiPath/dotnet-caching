@@ -14,6 +14,7 @@ public sealed class RedisCacheProvider : ICacheProvider
     private readonly ILoggerFactory _loggerFactory;
     private readonly ICachePolicyFactory _policyFactory;
     private readonly TimeProvider _clock;
+    private readonly IKeyMaskingPolicy? _keyMaskingPolicy;
     private readonly Lazy<RedisCache> _cache;
     private readonly Lazy<RedisHashCache> _hashCache;
 
@@ -30,8 +31,10 @@ public sealed class RedisCacheProvider : ICacheProvider
         ICachingTelemetryProvider cachingTelemetryProvider,
         ILoggerFactory loggerFactory,
         ICachePolicyFactory policyFactory,
-        TimeProvider clock)
+        TimeProvider clock,
+        IKeyMaskingPolicy? keyMaskingPolicy = null)
     {
+        _keyMaskingPolicy = keyMaskingPolicy;
         _clock = clock;
         _redisCacheOptions = redisCacheOptions.Value;
         _cacheOptions = cacheOptions.Value;
@@ -75,7 +78,8 @@ public sealed class RedisCacheProvider : ICacheProvider
             _cacheOptions,
             _policyFactory,
             _clock,
-            _loggerFactory.Create<RedisCache>());
+            _loggerFactory.Create<RedisCache>(),
+            _keyMaskingPolicy);
 
     private RedisHashCache BuildHashCache() =>
         new(
@@ -87,5 +91,6 @@ public sealed class RedisCacheProvider : ICacheProvider
             _cacheOptions,
             _policyFactory,
             _clock,
-            _loggerFactory.Create<RedisHashCache>());
+            _loggerFactory.Create<RedisHashCache>(),
+            _keyMaskingPolicy);
 }

@@ -11,9 +11,12 @@ internal abstract class MemoryCacheSetter(
     TimeProvider clock,
     IMultilayerCacheOptions cacheOptions,
     IMemoryCacheOptions memoryCacheOptions,
-    ICachingTelemetryProvider telemetryProvider
+    ICachingTelemetryProvider telemetryProvider,
+    KeyMasker? masker = null
         )
 {
+    private readonly KeyMasker _masker = masker ?? KeyMasker.Off;
+
     private const string EventRefreshMetadataFailed = "Caching." + nameof(MemoryCacheSetter) + "." + nameof(RefreshMetadata) + ".Failed";
     private const string PropCacheKey = "CacheKey";
     private const string PropTopicKey = "TopicKey";
@@ -28,8 +31,10 @@ internal abstract class MemoryCacheSetter(
         try
         {
             var topic = topicProvider.Create(options.TopicKey);
-            var token = changeTokenFactory.Create(options.CacheKey, topic, cacheName, entryType);
-            var state = new RefreshMetadataState(options.CacheKey, options.TopicKey, item, token, entryType, maxExpiration);
+            var token = changeTokenFactory is IMaskedChangeTokenFactory masked
+                ? masked.Create(options.CacheKey, topic, cacheName, entryType, _masker, options.CallerKey)
+                : changeTokenFactory.Create(options.CacheKey, topic, cacheName, entryType);
+            var state = new RefreshMetadataState(options.CacheKey, options.TopicKey, item, token, entryType, maxExpiration, options.CallerKey);
             token.RegisterChangeCallback(RefreshMetadata, state);
             var memOptions = new MemoryCacheEntryOptions();
             var expiration = GetCacheExpiration(options.Expiration, maxExpiration);
@@ -46,7 +51,7 @@ internal abstract class MemoryCacheSetter(
         catch (Exception ex)
         {
             memoryCache.Remove(options.CacheKey);
-            logger.LogWarning(ex, "Unable to set local memory for {CacheKey}", options.CacheKey);
+            logger.LogWarning(ex, "Unable to set local memory for {CacheKey}", LoggedKey.For(_masker, options.CallerKey, options.CacheKey.Name, entryType));
             return false;
         }
     }
@@ -88,7 +93,7 @@ internal abstract class MemoryCacheSetter(
         }
         catch (Exception ex)
         {
-            logger.LogWarning(ex, "Unable to refresh cache cacheKey {CacheKey}", metadataState.CacheKey);
+            logger.LogWarning(ex, "Unable to refresh cache cacheKey {CacheKey}", LoggedKey.For(_masker, metadataState.CallerKey, metadataState.CacheKey.Name, metadataState.EntryType));
         }
         finally
         {

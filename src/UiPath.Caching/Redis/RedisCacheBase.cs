@@ -8,6 +8,7 @@ public abstract class RedisCacheBase : IConnectionState, IDisposable
 {
     private readonly IRedisConnector _redis;
     private readonly IConnectionState _connectionState;
+    private readonly KeyMasker _masker;
     private bool _disposed;
 
     protected RedisCacheBase(
@@ -16,9 +17,11 @@ public abstract class RedisCacheBase : IConnectionState, IDisposable
         RedisCacheOptions redisCacheOptions,
         CacheOptions cacheOptions,
         ICachePolicyFactory policyFactory,
-        TimeProvider clock)
+        TimeProvider clock,
+        IKeyMaskingPolicy? keyMaskingPolicy = null)
     {
         ArgumentNullException.ThrowIfNull(clock);
+        _masker = KeyMasker.For(keyMaskingPolicy, KnownCacheProviderNames.Redis);
         _redis = redis;
         Telemetry = telemetryProvider;
         var monitorConnection = redisCacheOptions.ConnectionMonitorEnabled ?? cacheOptions.ConnectionMonitorEnabled;
@@ -35,6 +38,17 @@ public abstract class RedisCacheBase : IConnectionState, IDisposable
     }
 
     protected ICachingTelemetryProvider Telemetry { get; }
+
+    /// <summary>The key as a log line should show it. Nothing is rendered unless the line is written.</summary>
+    private protected LoggedKey Logged(CacheKey key, RedisKey composed, Type? valueType = null) =>
+        LoggedKey.For(_masker, key, composed, valueType);
+
+    /// <inheritdoc cref="Logged(CacheKey, RedisKey, Type?)"/>
+    private protected LoggedKey Logged(CacheKey key, Type? valueType = null) => LoggedKey.For(_masker, key, valueType);
+
+    /// <summary>For the sites that only hold the composed key; it is judged, and masked, whole.</summary>
+    private protected LoggedKey Logged(RedisKey composed, Type? valueType = null) =>
+        LoggedKey.Composed(_masker, composed, valueType);
 
     protected bool KeyReadTelemetryEnabled { get; }
 
