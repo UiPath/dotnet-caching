@@ -42,7 +42,7 @@ public class ResiliencePipelineFactory(
                 {
                     logger.LogWarning("OnFallback. Operation key {OperationKey}", args.Context.OperationKey);
                     return default;
-                }
+                },
             });
         }
 
@@ -67,7 +67,7 @@ public class ResiliencePipelineFactory(
                 {
                     logger.LogWarning("CircuitBreaker OnOpened. Operation key {OperationKey}. Breaking the circuit for {DurationOfBreak}!", args.Context.OperationKey, resilienceOptions.DurationOfBreak);
                     return default;
-                }
+                },
             });
         }
 
@@ -83,7 +83,7 @@ public class ResiliencePipelineFactory(
                 {
                     logger.LogWarning("OnRetry, Attempt: {AttemptNumber}. Operation key {OperationKey}", args.AttemptNumber, args.Context.OperationKey);
                     return default;
-                }
+                },
             });
         }
 
@@ -96,7 +96,7 @@ public class ResiliencePipelineFactory(
                 {
                     logger.LogWarning("Execution timed out after {TotalMilliseconds} ms. Operation key {OperationKey}", args.Timeout.TotalMilliseconds, args.Context.OperationKey);
                     return default;
-                }
+                },
             });
         }
 

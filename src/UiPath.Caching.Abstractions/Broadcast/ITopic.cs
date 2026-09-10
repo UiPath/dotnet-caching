@@ -5,9 +5,9 @@ public interface ITopic<T> : IDisposable
 {
     TopicKey TopicKey { get; }
 
+    EventHandler? OnDisposed { get; set; }
+
     IDisposable Subscribe(IObserver<T> observer);
 
     ValueTask<bool> PublishAsync(T @event, CancellationToken token = default);
-
-    EventHandler? OnDisposed { get; set; }
 }

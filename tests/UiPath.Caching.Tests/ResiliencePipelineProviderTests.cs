@@ -7,16 +7,6 @@ public class ResiliencePipelineProviderTests
 {
     private readonly IFixture _fixture = AutoFixtureCreator.NSubstitute();
 
-    private ResiliencePipelineProvider CreateSut(params string[] registered)
-    {
-        var registry = new ResiliencePipelineRegistry();
-        foreach (var name in registered)
-        {
-            registry.Add(name);
-        }
-        return new(_fixture.Freeze<IResiliencePipelineFactory>(), registry);
-    }
-
     [Theory]
     [InlineData(ResiliencePipelineNames.Read)]
     [InlineData(ResiliencePipelineNames.Write)]
@@ -48,5 +38,15 @@ public class ResiliencePipelineProviderTests
         var sut = CreateSut(ResiliencePipelineNames.Read);
 
         sut.Get(name).Should().BeOfType<EmptyResiliencePipeline>();
+    }
+
+    private ResiliencePipelineProvider CreateSut(params string[] registered)
+    {
+        var registry = new ResiliencePipelineRegistry();
+        foreach (var name in registered)
+        {
+            registry.Add(name);
+        }
+        return new(_fixture.Freeze<IResiliencePipelineFactory>(), registry);
     }
 }

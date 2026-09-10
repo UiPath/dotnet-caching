@@ -46,6 +46,12 @@ public sealed class RedisPlannedMaintenance : IRedisPlannedMaintenance, IHostedS
         _connectionRetryDelay = retryDelay <= TimeSpan.Zero ? TimeSpan.FromSeconds(1) : retryDelay;
     }
 
+    public bool InProgress
+    {
+        get => Interlocked.Read(ref _maintenanceInProgress) == 1;
+        set => Interlocked.Exchange(ref _maintenanceInProgress, value ? 1 : 0);
+    }
+
     public Task StartAsync(CancellationToken cancellationToken)
     {
         _ = Task.Run(() => InitializeAsync(_cancellationTokenSource.Token), _cancellationTokenSource.Token);
@@ -56,20 +62,6 @@ public sealed class RedisPlannedMaintenance : IRedisPlannedMaintenance, IHostedS
     {
         Cancel();
         return Task.CompletedTask;
-    }
-
-    private void Cancel()
-    {
-        if (Interlocked.Exchange(ref _stopped, 1) == 0)
-        {
-            _cancellationTokenSource.Cancel();
-        }
-    }
-
-    public bool InProgress
-    {
-        get => Interlocked.Read(ref _maintenanceInProgress) == 1;
-        set => Interlocked.Exchange(ref _maintenanceInProgress, value ? 1 : 0);
     }
 
     public void Dispose()
@@ -93,6 +85,14 @@ public sealed class RedisPlannedMaintenance : IRedisPlannedMaintenance, IHostedS
         if (multiplexer is not null)
         {
             TryDisposeMultiplexer(multiplexer);
+        }
+    }
+
+    private void Cancel()
+    {
+        if (Interlocked.Exchange(ref _stopped, 1) == 0)
+        {
+            _cancellationTokenSource.Cancel();
         }
     }
 

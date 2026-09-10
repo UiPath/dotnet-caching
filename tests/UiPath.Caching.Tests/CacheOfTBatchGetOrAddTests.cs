@@ -4,17 +4,9 @@ namespace UiPath.Caching.Tests;
 
 public class CacheOfTBatchGetOrAddTests(ITestContextAccessor testContextAccessor)
 {
-    /// <summary>Prefixes every key.</summary>
-    private sealed class PrefixStrategy : ICacheKeyStrategy
-    {
-        public CacheKey GetCacheKey<T>(CacheKey key) => "p:" + key.Name;
-    }
 
     private static readonly long[] States2 = [2L];
     private static readonly long[] States1And2 = [1L, 2L];
-
-    private static KeyValuePair<CacheKey, long>[] Entries(params long[] ids) =>
-        ids.Select(id => new KeyValuePair<CacheKey, long>((CacheKey)$"user:{id}", id)).ToArray();
 
     [Fact]
     public async Task State_passes_through_the_key_strategy_untouched()
@@ -70,11 +62,6 @@ public class CacheOfTBatchGetOrAddTests(ITestContextAccessor testContextAccessor
         result.Select(r => r.Value).Should().Equal("shared", "shared");
     }
 
-    private sealed class CollapsingStrategy : ICacheKeyStrategy
-    {
-        public CacheKey GetCacheKey<T>(CacheKey key) => "collapsed";
-    }
-
     [Fact]
     public async Task Expiration_overloads_are_callable()
     {
@@ -104,5 +91,18 @@ public class CacheOfTBatchGetOrAddTests(ITestContextAccessor testContextAccessor
             testContextAccessor.Current.CancellationToken);
 
         result.Select(r => r.Value).Should().Equal("v:a", "v:b");
+    }
+
+    private static KeyValuePair<CacheKey, long>[] Entries(params long[] ids) =>
+        ids.Select(id => new KeyValuePair<CacheKey, long>((CacheKey)$"user:{id}", id)).ToArray();
+    /// <summary>Prefixes every key.</summary>
+    private sealed class PrefixStrategy : ICacheKeyStrategy
+    {
+        public CacheKey GetCacheKey<T>(CacheKey key) => "p:" + key.Name;
+    }
+
+    private sealed class CollapsingStrategy : ICacheKeyStrategy
+    {
+        public CacheKey GetCacheKey<T>(CacheKey key) => "collapsed";
     }
 }

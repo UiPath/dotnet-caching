@@ -14,7 +14,7 @@ public class CacheCloudEventWrapperTests
             Type = _fixture.Create<string>(),
             Id = _fixture.Create<string>(),
             Source = new Uri("urn:" + _fixture.Create<string>()),
-            Data = _fixture.Create<CacheEventData>()
+            Data = _fixture.Create<CacheEventData>(),
         };
         var sut = new CacheCloudEventWrapper(cloudEvent);
         sut.Type.Should().BeEquivalentTo(cloudEvent.Type);
@@ -36,7 +36,7 @@ public class CacheCloudEventWrapperTests
             Type = _fixture.Create<string>(),
             Id = _fixture.Create<string>(),
             Source = new Uri("urn:" + _fixture.Create<string>()),
-            Data = key == null ? null : new CacheEventData(key)
+            Data = key == null ? null : new CacheEventData(key),
         };
         var sut = new CacheCloudEventWrapper(cloudEvent);
         sut.IsValid().Should().BeFalse();

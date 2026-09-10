@@ -22,12 +22,12 @@ public static class Metrics
     private static readonly ConcurrentDictionary<string, string> _topicWriteMetricNames = new();
     private static readonly ConcurrentDictionary<string, string> _topicReadMetricNames = new();
 
-    private static string GetMetricName(string topicName, ConcurrentDictionary<string, string> metricDictionary, string operationType)
-        => metricDictionary.GetOrAdd(topicName, tn => $"{Topic}{tn}{operationType}");
-
     public static string GetWriteTopicMetricName(string topicName)
         => GetMetricName(topicName, _topicWriteMetricNames, Write);
 
     public static string GetReadTopicMetricName(string topicName) =>
         GetMetricName(topicName, _topicReadMetricNames, Read);
+
+    private static string GetMetricName(string topicName, ConcurrentDictionary<string, string> metricDictionary, string operationType)
+        => metricDictionary.GetOrAdd(topicName, tn => $"{Topic}{tn}{operationType}");
 }

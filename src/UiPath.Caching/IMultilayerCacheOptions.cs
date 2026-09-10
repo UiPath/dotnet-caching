@@ -4,20 +4,20 @@ namespace UiPath.Caching;
 
 public interface IMultilayerCacheOptions : ICacheOptions
 {
-    public string? Topic { get; set; }
+    string? Topic { get; set; }
 
-    public ITopicKeyStrategy? TopicKeyStrategy { get; set; }
+    ITopicKeyStrategy? TopicKeyStrategy { get; set; }
 
     /// <summary>L1 (in-memory tier) cap on entry lifetime. Aligns with .NET HybridCache's `LocalCacheExpiration` naming.</summary>
-    public TimeSpan? LocalMaxExpiration { get; set; }
+    TimeSpan? LocalMaxExpiration { get; set; }
 
-    public TimeSpan? ConnectionMonitorPeriod { get; set; }
+    TimeSpan? ConnectionMonitorPeriod { get; set; }
 
     /// <summary>Serve from L1 only (without falling back to default) when the L2 connection is unhealthy. Aligns with Local/Distributed tier naming.</summary>
-    public bool? UseLocalOnlyWhenDisconnected { get; set; }
+    bool? UseLocalOnlyWhenDisconnected { get; set; }
 
     /// <summary>L1 cap on entry lifetime while the L2 connection is unhealthy (paired with <see cref="UseLocalOnlyWhenDisconnected"/>).</summary>
-    public TimeSpan? LocalMaxExpirationDisconnected { get; set; }
+    TimeSpan? LocalMaxExpirationDisconnected { get; set; }
 
     /// <summary>
     /// Enables the per-key in-process lock that serializes the cache-miss generator across
@@ -28,7 +28,7 @@ public interface IMultilayerCacheOptions : ICacheOptions
     /// for the same key, and the distributed lock's contention timeout (rather than the local
     /// lock) becomes the only bound on how many generators run.
     /// </summary>
-    public bool? LocalLockEnabled { get; set; }
+    bool? LocalLockEnabled { get; set; }
 
     /// <summary>
     /// How long a caller blocks trying to acquire the per-key in-process lock before giving up
@@ -38,14 +38,14 @@ public interface IMultilayerCacheOptions : ICacheOptions
     /// above your p99 generator runtime plus <see cref="DistributedLockTimeout"/> if distributed
     /// locking is also enabled.
     /// </summary>
-    public TimeSpan? LocalLockTimeout { get; set; }
+    TimeSpan? LocalLockTimeout { get; set; }
 
     /// <summary>
     /// Enables the distributed (cross-node) lock around the cache-miss generator. Has no effect
     /// on cache providers that don't supply a real <see cref="IDistributedLock"/> implementation
     /// (e.g. the in-memory-only provider, which always passes <see cref="NullDistributedLock"/>).
     /// </summary>
-    public bool? DistributedLockEnabled { get; set; }
+    bool? DistributedLockEnabled { get; set; }
 
     /// <summary>
     /// How long a waiter blocks trying to acquire the distributed lock before giving up and
@@ -53,7 +53,7 @@ public interface IMultilayerCacheOptions : ICacheOptions
     /// re-stampedes the generator across nodes — pick a value that comfortably exceeds your
     /// generator's typical runtime.
     /// </summary>
-    public TimeSpan? DistributedLockTimeout { get; set; }
+    TimeSpan? DistributedLockTimeout { get; set; }
 
     /// <summary>
     /// TTL for the Redis lock. Acts as a safety net so a crashed holder doesn't deadlock the
@@ -63,7 +63,7 @@ public interface IMultilayerCacheOptions : ICacheOptions
     /// acquire it, which can produce duplicate generator invocations under load. Set above your
     /// p99 generator runtime, or accept the partial herd as a trade-off.
     /// </summary>
-    public TimeSpan? DistributedLockExpiry { get; set; }
+    TimeSpan? DistributedLockExpiry { get; set; }
 
     /// <summary>
     /// Strategy that derives the Redis distributed-lock key from a cache key. The default
@@ -74,6 +74,6 @@ public interface IMultilayerCacheOptions : ICacheOptions
     /// a non-trivial cache-key strategy (e.g. <see cref="PrefixCacheKeyStrategy"/>), supply
     /// a matching lock-key strategy here too.
     /// </summary>
-    public IDistributedLockKeyStrategy? LockKeyStrategy { get; set; }
+    IDistributedLockKeyStrategy? LockKeyStrategy { get; set; }
 }
 

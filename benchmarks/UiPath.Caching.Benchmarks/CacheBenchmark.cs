@@ -9,6 +9,8 @@ namespace UiPath.Caching.Benchmarks;
 [HtmlExporter]
 public class CacheBenchmark
 {
+
+    private const int _batchSize = 50;
     private Entry<CustomObject>[] _entries = default!;
 
     [Params(500, 2_500)]
@@ -25,7 +27,7 @@ public class CacheBenchmark
 
     protected Func<CustomObject> CreateRandomObject { get; set; } = default!;
 
-    private const int _batchSize = 50;
+    private ICache<CustomObject> RandomCache => _entries[Random.Shared.Next(0, _entries.Length)].Cache;
 
     [GlobalSetup]
     public void Setup()
@@ -35,12 +37,10 @@ public class CacheBenchmark
             "Small" => CustomObject.RandomSmall,
             "Medium" => CustomObject.RandomMedium,
             "Large" => CustomObject.RandomLarge,
-            _ => throw new NotSupportedException(ObjectSize)
+            _ => throw new NotSupportedException(ObjectSize),
         };
         _entries = SetupHelper.Setup(2, Cache, $"Redis{Topic}", NumKeys, CreateRandomObject);
     }
-
-    private ICache<CustomObject> RandomCache => _entries[Random.Shared.Next(0, _entries.Length)].Cache;
 
 
     [GlobalCleanup]

@@ -7,9 +7,6 @@ internal sealed class CacheCloudEventWrapper : ICacheEvent
         CloudEvent = cloudEvent;
         Data = CloudEvent.Data as CacheEventData;
     }
-    internal CloudEvent CloudEvent { get; }
-
-    public bool IsValid() => CloudEvent.IsValid && !string.IsNullOrWhiteSpace(Data?.Key);
 
     public string? Id => CloudEvent.Id;
 
@@ -22,6 +19,9 @@ internal sealed class CacheCloudEventWrapper : ICacheEvent
     public string? TransportId { get; private set; }
 
     public string? Key => Data?.Key;
+    internal CloudEvent CloudEvent { get; }
+
+    public bool IsValid() => CloudEvent.IsValid && !string.IsNullOrWhiteSpace(Data?.Key);
 
     public void AttachTransportId(string? transportId)
     {

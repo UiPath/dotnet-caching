@@ -1,4 +1,4 @@
-﻿using UiPath.Caching.Locking;
+using UiPath.Caching.Locking;
 using UiPath.Caching.Telemetry;
 
 namespace UiPath.Caching;
@@ -22,10 +22,6 @@ public sealed class InMemoryRedisCacheProvider : ICacheProvider
     private readonly IKeyMaskingPolicy? _keyMaskingPolicy;
     private readonly Lazy<MultilayerCache> _cache;
     private readonly Lazy<MultilayerHashCache> _hashCache;
-
-    public string Name => KnownCacheProviderNames.InMemoryRedis;
-
-    public bool Enabled { get; }
 
     public InMemoryRedisCacheProvider(
         IOptions<InMemoryRedisCacheOptions> optionsAccessor,
@@ -70,6 +66,10 @@ public sealed class InMemoryRedisCacheProvider : ICacheProvider
         _hashCache = new Lazy<MultilayerHashCache>(() => BuildHashCache());
         Enabled = _options.Enabled;
     }
+
+    public string Name => KnownCacheProviderNames.InMemoryRedis;
+
+    public bool Enabled { get; }
 
     public ICache CreateCache() =>
         _cache.Value;

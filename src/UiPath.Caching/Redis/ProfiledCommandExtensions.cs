@@ -9,6 +9,8 @@ namespace UiPath.Caching.Redis;
 [ExcludeFromCodeCoverage]
 public static class ProfiledCommandExtensions
 {
+
+    internal static Lazy<RedisProfileFetcher> FetcherLazy { get; set; } = new(FetcherFactory);
     public static string GetCommandName(this IProfiledCommand profiledCommand)
     {
         var name = GetCommand(profiledCommand);
@@ -32,8 +34,6 @@ public static class ProfiledCommandExtensions
             _ => null,
         };
 
-    internal static Lazy<RedisProfileFetcher> FetcherLazy { get; set; } = new(FetcherFactory);
-
     private static RedisProfileFetcher FetcherFactory()
     {
         var messageType = Type.GetType("StackExchange.Redis.Message,StackExchange.Redis", false);
@@ -50,7 +50,7 @@ public static class ProfiledCommandExtensions
                 {
                     Message = _messageFetcher,
                     CommandAndKey = _commandAndKeyFetcher,
-                    ProfiledCommandType = profiledCommandType
+                    ProfiledCommandType = profiledCommandType,
                 };
             }
         }
@@ -93,7 +93,9 @@ public static class ProfiledCommandExtensions
     {
         var fetcher = FetcherLazy.Value;
         if (profiledCommand.GetType() != fetcher.ProfiledCommandType || fetcher.Message == null)
+        {
             return null;
+        }
 
         var message = fetcher.Message.Invoke(profiledCommand);
         return fetcher.CommandAndKey?.Invoke(message) as string;

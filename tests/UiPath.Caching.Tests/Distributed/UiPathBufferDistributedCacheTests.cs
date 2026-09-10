@@ -1,4 +1,4 @@
-#if NET9_0_OR_GREATER
+﻿#if NET9_0_OR_GREATER
 using System.Buffers;
 using System.Globalization;
 using System.Runtime.InteropServices;
@@ -27,72 +27,6 @@ public class UiPathBufferDistributedCacheTests
     {
         _clock.UtcNow.Returns(Now);
         _cache = Build();
-    }
-
-    private UiPathDistributedCache Build(UiPathDistributedCacheOptions? options = null, bool tierRetainsValues = false) =>
-        new(_inner,
-            options ?? new UiPathDistributedCacheOptions(),
-            new PrefixCacheKeyStrategy(UiPathDistributedCacheOptions.DefaultKeyPrefix),
-            policy: null,
-            NullLogger.Instance,
-            new SystemClockTimeProvider(_clock),
-            tierRetainsValues: tierRetainsValues);
-
-    private static byte[] Ticks(long? value) =>
-        Encoding.UTF8.GetBytes((value ?? -1).ToString(CultureInfo.InvariantCulture));
-
-    private static Dictionary<string, ReadOnlyMemory<byte>> Entry(
-        byte[]? payload = null, long? slidingTicks = null, DateTimeOffset? absolute = null) => new()
-        {
-            [DataField] = payload ?? Payload,
-            [AbsoluteExpirationField] = Ticks(absolute?.UtcTicks),
-            [SlidingExpirationField] = Ticks(slidingTicks),
-        };
-
-    private void StoredEntry(Dictionary<string, ReadOnlyMemory<byte>> fields) =>
-        _inner.GetAsync<ReadOnlyMemory<byte>>(Arg.Any<CacheKey>(), Arg.Any<string[]>(), Arg.Any<CachePolicy?>(), Arg.Any<CancellationToken>())
-            .Returns(fields);
-
-    /// <summary>Copies at capture time: on the pass-through shape the payload memory is only valid during the call.</summary>
-    private async Task<Dictionary<string, byte[]>> CaptureWriteAsync(Func<Task> write)
-    {
-        Dictionary<string, byte[]>? written = null;
-        await _inner.SetAsync(Arg.Any<CacheKey>(),
-            Arg.Do<IDictionary<string, ReadOnlyMemory<byte>>>(v => written = v.ToDictionary(p => p.Key, p => p.Value.ToArray())),
-            Arg.Any<TimeSpan>(), Arg.Any<CachePolicy?>(), Arg.Any<CancellationToken>());
-        await write();
-        written.Should().NotBeNull();
-        return written!;
-    }
-
-    private static byte[] BackingArray(ReadOnlyMemory<byte> memory)
-    {
-        MemoryMarshal.TryGetArray(memory, out var segment).Should().BeTrue();
-        return segment.Array!;
-    }
-
-    /// <summary>Two segments, the shape a pooled writer produces.</summary>
-    private static ReadOnlySequence<byte> Segmented(byte[] payload, int split)
-    {
-        var first = new Segment(payload.AsMemory(0, split), runningIndex: 0);
-        var second = first.Append(payload.AsMemory(split));
-        return new ReadOnlySequence<byte>(first, 0, second, second.Memory.Length);
-    }
-
-    private sealed class Segment : ReadOnlySequenceSegment<byte>
-    {
-        public Segment(ReadOnlyMemory<byte> memory, long runningIndex)
-        {
-            Memory = memory;
-            RunningIndex = runningIndex;
-        }
-
-        public Segment Append(ReadOnlyMemory<byte> memory)
-        {
-            var next = new Segment(memory, RunningIndex + Memory.Length);
-            Next = next;
-            return next;
-        }
     }
 
     [Fact]
@@ -148,7 +82,8 @@ public class UiPathBufferDistributedCacheTests
         await _inner.Received(1).GetAsync<ReadOnlyMemory<byte>>(
             Arg.Is<CacheKey>(k => k.Name == "d:AbC-9xQ" && k.Casing == CacheKeyCasing.Sensitive),
             Arg.Is<string[]>(f => f != null && f.Contains(DataField)),
-            Arg.Any<CachePolicy?>(), Arg.Any<CancellationToken>());
+            Arg.Any<CachePolicy?>(),
+            Arg.Any<CancellationToken>());
     }
 
     [Fact]
@@ -210,11 +145,16 @@ public class UiPathBufferDistributedCacheTests
     {
         var sliding = TimeSpan.FromMinutes(20);
         TimeSpan? ttl = null;
-        await _inner.SetAsync(Arg.Any<CacheKey>(), Arg.Any<IDictionary<string, ReadOnlyMemory<byte>>>(),
-            Arg.Do<TimeSpan>(t => ttl = t), Arg.Any<CachePolicy?>(), Arg.Any<CancellationToken>());
+        await _inner.SetAsync(Arg.Any<CacheKey>(),
+            Arg.Any<IDictionary<string, ReadOnlyMemory<byte>>>(),
+            Arg.Do<TimeSpan>(t => ttl = t),
+            Arg.Any<CachePolicy?>(),
+            Arg.Any<CancellationToken>());
 
-        var written = await CaptureWriteAsync(() => _cache.SetAsync("k", Segmented([1, 2, 3, 4, 5], split: 2),
-            new DistributedCacheEntryOptions { SlidingExpiration = sliding }, TestContext.Current.CancellationToken).AsTask());
+        var written = await CaptureWriteAsync(() => _cache.SetAsync("k",
+            Segmented([1, 2, 3, 4, 5], split: 2),
+            new DistributedCacheEntryOptions { SlidingExpiration = sliding },
+            TestContext.Current.CancellationToken).AsTask());
 
         ttl.Should().Be(sliding);
         written[DataField].Should().Equal(1, 2, 3, 4, 5);
@@ -229,11 +169,15 @@ public class UiPathBufferDistributedCacheTests
         ReadOnlyMemory<byte> handed = default;
         await _inner.SetAsync(Arg.Any<CacheKey>(),
             Arg.Do<IDictionary<string, ReadOnlyMemory<byte>>>(v => handed = v[DataField]),
-            Arg.Any<TimeSpan>(), Arg.Any<CachePolicy?>(), Arg.Any<CancellationToken>());
+            Arg.Any<TimeSpan>(),
+            Arg.Any<CachePolicy?>(),
+            Arg.Any<CancellationToken>());
         var buffer = new byte[] { 1, 2, 3 };
 
-        await retaining.SetAsync("k", new ReadOnlySequence<byte>(buffer),
-            new DistributedCacheEntryOptions { SlidingExpiration = TimeSpan.FromMinutes(5) }, TestContext.Current.CancellationToken);
+        await retaining.SetAsync("k",
+            new ReadOnlySequence<byte>(buffer),
+            new DistributedCacheEntryOptions { SlidingExpiration = TimeSpan.FromMinutes(5) },
+            TestContext.Current.CancellationToken);
         buffer[0] = 99;
 
         BackingArray(handed).Should().NotBeSameAs(buffer);
@@ -246,11 +190,15 @@ public class UiPathBufferDistributedCacheTests
         ReadOnlyMemory<byte> handed = default;
         await _inner.SetAsync(Arg.Any<CacheKey>(),
             Arg.Do<IDictionary<string, ReadOnlyMemory<byte>>>(v => handed = v[DataField]),
-            Arg.Any<TimeSpan>(), Arg.Any<CachePolicy?>(), Arg.Any<CancellationToken>());
+            Arg.Any<TimeSpan>(),
+            Arg.Any<CachePolicy?>(),
+            Arg.Any<CancellationToken>());
         var buffer = new byte[] { 1, 2, 3 };
 
-        await _cache.SetAsync("k", new ReadOnlySequence<byte>(buffer),
-            new DistributedCacheEntryOptions { SlidingExpiration = TimeSpan.FromMinutes(5) }, TestContext.Current.CancellationToken);
+        await _cache.SetAsync("k",
+            new ReadOnlySequence<byte>(buffer),
+            new DistributedCacheEntryOptions { SlidingExpiration = TimeSpan.FromMinutes(5) },
+            TestContext.Current.CancellationToken);
 
         BackingArray(handed).Should().BeSameAs(buffer);
     }
@@ -258,8 +206,10 @@ public class UiPathBufferDistributedCacheTests
     [Fact]
     public async Task Segmented_set_on_a_pass_through_tier_writes_the_flattened_bytes()
     {
-        var written = await CaptureWriteAsync(() => _cache.SetAsync("k", Segmented([1, 2, 3, 4, 5, 6, 7], split: 3),
-            new DistributedCacheEntryOptions { SlidingExpiration = TimeSpan.FromMinutes(5) }, TestContext.Current.CancellationToken).AsTask());
+        var written = await CaptureWriteAsync(() => _cache.SetAsync("k",
+            Segmented([1, 2, 3, 4, 5, 6, 7], split: 3),
+            new DistributedCacheEntryOptions { SlidingExpiration = TimeSpan.FromMinutes(5) },
+            TestContext.Current.CancellationToken).AsTask());
 
         written[DataField].Should().Equal(1, 2, 3, 4, 5, 6, 7);
     }
@@ -267,8 +217,10 @@ public class UiPathBufferDistributedCacheTests
     [Fact]
     public async Task Empty_sequence_writes_an_empty_payload()
     {
-        var written = await CaptureWriteAsync(() => _cache.SetAsync("k", ReadOnlySequence<byte>.Empty,
-            new DistributedCacheEntryOptions { SlidingExpiration = TimeSpan.FromMinutes(5) }, TestContext.Current.CancellationToken).AsTask());
+        var written = await CaptureWriteAsync(() => _cache.SetAsync("k",
+            ReadOnlySequence<byte>.Empty,
+            new DistributedCacheEntryOptions { SlidingExpiration = TimeSpan.FromMinutes(5) },
+            TestContext.Current.CancellationToken).AsTask());
 
         written[DataField].Should().BeEmpty();
         Encoding.UTF8.GetString(written[SlidingExpirationField]).Should().NotBe("-1", "the metadata is what marks the entry as ours");
@@ -288,8 +240,10 @@ public class UiPathBufferDistributedCacheTests
     [Fact]
     public async Task Set_with_a_past_absolute_expiration_throws()
     {
-        await FluentActions.Awaiting(() => _cache.SetAsync("k", new ReadOnlySequence<byte>(Payload),
-                new DistributedCacheEntryOptions { AbsoluteExpiration = Now.AddMinutes(-1) }, TestContext.Current.CancellationToken).AsTask())
+        await FluentActions.Awaiting(() => _cache.SetAsync("k",
+            new ReadOnlySequence<byte>(Payload),
+                new DistributedCacheEntryOptions { AbsoluteExpiration = Now.AddMinutes(-1) },
+            TestContext.Current.CancellationToken).AsTask())
             .Should().ThrowAsync<ArgumentOutOfRangeException>();
     }
 
@@ -315,6 +269,74 @@ public class UiPathBufferDistributedCacheTests
         cache.Set("k", new ReadOnlySequence<byte>(Payload), new DistributedCacheEntryOptions());
 
         destination.WrittenCount.Should().Be(0);
+    }
+
+    private static byte[] Ticks(long? value) =>
+        Encoding.UTF8.GetBytes((value ?? -1).ToString(CultureInfo.InvariantCulture));
+
+    private static Dictionary<string, ReadOnlyMemory<byte>> Entry(
+        byte[]? payload = null, long? slidingTicks = null, DateTimeOffset? absolute = null) => new()
+        {
+            [DataField] = payload ?? Payload,
+            [AbsoluteExpirationField] = Ticks(absolute?.UtcTicks),
+            [SlidingExpirationField] = Ticks(slidingTicks),
+        };
+
+    private static byte[] BackingArray(ReadOnlyMemory<byte> memory)
+    {
+        MemoryMarshal.TryGetArray(memory, out var segment).Should().BeTrue();
+        return segment.Array!;
+    }
+
+    /// <summary>Two segments, the shape a pooled writer produces.</summary>
+    private static ReadOnlySequence<byte> Segmented(byte[] payload, int split)
+    {
+        var first = new Segment(payload.AsMemory(0, split), runningIndex: 0);
+        var second = first.Append(payload.AsMemory(split));
+        return new ReadOnlySequence<byte>(first, 0, second, second.Memory.Length);
+    }
+
+    private UiPathDistributedCache Build(UiPathDistributedCacheOptions? options = null, bool tierRetainsValues = false) =>
+        new(_inner,
+            options ?? new UiPathDistributedCacheOptions(),
+            new PrefixCacheKeyStrategy(UiPathDistributedCacheOptions.DefaultKeyPrefix),
+            policy: null,
+            NullLogger.Instance,
+            new SystemClockTimeProvider(_clock),
+            tierRetainsValues: tierRetainsValues);
+
+    private void StoredEntry(Dictionary<string, ReadOnlyMemory<byte>> fields) =>
+        _inner.GetAsync<ReadOnlyMemory<byte>>(Arg.Any<CacheKey>(), Arg.Any<string[]>(), Arg.Any<CachePolicy?>(), Arg.Any<CancellationToken>())
+            .Returns(fields);
+
+    /// <summary>Copies at capture time: on the pass-through shape the payload memory is only valid during the call.</summary>
+    private async Task<Dictionary<string, byte[]>> CaptureWriteAsync(Func<Task> write)
+    {
+        Dictionary<string, byte[]>? written = null;
+        await _inner.SetAsync(Arg.Any<CacheKey>(),
+            Arg.Do<IDictionary<string, ReadOnlyMemory<byte>>>(v => written = v.ToDictionary(p => p.Key, p => p.Value.ToArray())),
+            Arg.Any<TimeSpan>(),
+            Arg.Any<CachePolicy?>(),
+            Arg.Any<CancellationToken>());
+        await write();
+        written.Should().NotBeNull();
+        return written!;
+    }
+
+    private sealed class Segment : ReadOnlySequenceSegment<byte>
+    {
+        public Segment(ReadOnlyMemory<byte> memory, long runningIndex)
+        {
+            Memory = memory;
+            RunningIndex = runningIndex;
+        }
+
+        public Segment Append(ReadOnlyMemory<byte> memory)
+        {
+            var next = new Segment(memory, RunningIndex + Memory.Length);
+            Next = next;
+            return next;
+        }
     }
 }
 #endif

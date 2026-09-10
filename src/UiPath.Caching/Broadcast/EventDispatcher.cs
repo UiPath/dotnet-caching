@@ -30,6 +30,17 @@ internal sealed partial class EventDispatcher<T> : IDisposable
 
     internal Task ConsumeTask { get; }
 
+    public void Dispose()
+    {
+        if (_disposed)
+        {
+            return;
+        }
+        _disposed = true;
+        _stopTokenSource?.Cancel();
+        _stopTokenSource?.Dispose();
+    }
+
     private async Task Consume()
     {
         while (await _reader.WaitToReadAsync(_cancellationToken).ConfigureAwait(false))
@@ -47,17 +58,6 @@ internal sealed partial class EventDispatcher<T> : IDisposable
             }
         }
         LogStoppedConsuming(_topicKey);
-    }
-
-    public void Dispose()
-    {
-        if (_disposed)
-        {
-            return;
-        }
-        _disposed = true;
-        _stopTokenSource?.Cancel();
-        _stopTokenSource?.Dispose();
     }
 
     [LoggerMessage(Level = LogLevel.Debug, Message = "Stopped consuming from topic {TopicKey}")]

@@ -1,8 +1,8 @@
 using System.Collections.Concurrent;
 using System.Globalization;
-using UiPath.Caching.Benchmarks;
 using Microsoft.Extensions.DependencyInjection;
 using StackExchange.Redis;
+using UiPath.Caching.Benchmarks;
 using UiPath.Caching.Redis;
 
 namespace UiPath.Caching.Benchmarks;
@@ -31,6 +31,8 @@ namespace UiPath.Caching.Benchmarks;
 // Run with:  dotnet run -c Release --framework net8.0 -- doorbell [durationSec] [writeHz]
 internal static class StreamNotifyDoorbellHarness
 {
+
+    private const string TimestampPrefix = "ts:";
     public static async Task RunAsync(int durationSec = 20, int writeHz = 5)
     {
         var cells = new (bool NotifyEnabled, string PollInterval)[]
@@ -170,6 +172,4 @@ internal static class StreamNotifyDoorbellHarness
             // Hosts dispose via 'using'.
         }
     }
-
-    private const string TimestampPrefix = "ts:";
 }

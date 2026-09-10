@@ -7,8 +7,6 @@ public class SystemJsonByteSerializerProxyTests
 {
     private readonly SystemJsonByteSerializerProxy _proxy = new();
 
-    private sealed record Poco(string Name, int Count);
-
     [Fact]
     public void Byte_array_is_base64_encoded_inside_json()
     {
@@ -179,4 +177,6 @@ public class SystemJsonByteSerializerProxyTests
 
         _proxy.Deserialize<Memory<byte>>(stored).ToArray().Should().Equal(4, 5, 6);
     }
+
+    private sealed record Poco(string Name, int Count);
 }

@@ -1,4 +1,4 @@
-﻿using System.Collections.Concurrent;
+using System.Collections.Concurrent;
 using Microsoft.Extensions.Caching.Memory;
 using UiPath.Caching.Locking;
 using UiPath.Caching.Tests.Broadcast;
@@ -7,13 +7,17 @@ namespace UiPath.Caching.Tests.Locking;
 
 public class MultilayerCacheBatchGetOrAddLockTests(ITestContextAccessor testContextAccessor) : IAsyncLifetime
 {
-    private readonly IFixture _fixture = AutoFixtureCreator.NSubstitute();
 
     private static readonly long[] States1 = [1L];
     private static readonly long[] States2 = [2L];
     private static readonly long[] States1And2 = [1L, 2L];
     private static readonly string?[] V1AndV2 = ["v:1", "v:2"];
     private static readonly string?[] RefilledAAndGen2 = ["refilled:a", "gen:2"];
+    private readonly IFixture _fixture = AutoFixtureCreator.NSubstitute();
+
+    private readonly object _sutLock = new();
+
+    private readonly ConcurrentDictionary<CacheKey, string?> _stored = new();
 
     private ICache _innerCache = default!;
     private MemoryCache _memoryCache = default!;
@@ -29,18 +33,18 @@ public class MultilayerCacheBatchGetOrAddLockTests(ITestContextAccessor testCont
     private InMemoryRedisCacheOptions _options = default!;
     private TopicKey _topicKey = default!;
     private MultilayerCache? _sut;
-
-    private readonly object _sutLock = new();
     private MultilayerCache Sut
     {
         get
         {
-            if (_sut is not null) return _sut;
+            if (_sut is not null)
+            {
+                return _sut;
+            }
+
             lock (_sutLock) { return _sut ??= _fixture.Create<MultilayerCache>(); }
         }
     }
-
-    private readonly ConcurrentDictionary<CacheKey, string?> _stored = new();
 
     [Fact]
     public async Task Concurrent_identical_batches_invoke_the_generator_once()
@@ -57,7 +61,11 @@ public class MultilayerCacheBatchGetOrAddLockTests(ITestContextAccessor testCont
         {
             var inside = Interlocked.Increment(ref concurrent);
             int observed;
-            do { observed = Volatile.Read(ref maxConcurrent); if (inside <= observed) break; }
+            do { observed = Volatile.Read(ref maxConcurrent); if (inside <= observed)
+                {
+                    break;
+                }
+            }
             while (Interlocked.CompareExchange(ref maxConcurrent, inside, observed) != observed);
             firstEntered.TrySetResult();
             await release.Task.WaitAsync(TimeSpan.FromSeconds(30), ct);
@@ -165,7 +173,11 @@ public class MultilayerCacheBatchGetOrAddLockTests(ITestContextAccessor testCont
         {
             var inside = Interlocked.Increment(ref concurrent);
             int observed;
-            do { observed = Volatile.Read(ref maxConcurrent); if (inside <= observed) break; }
+            do { observed = Volatile.Read(ref maxConcurrent); if (inside <= observed)
+                {
+                    break;
+                }
+            }
             while (Interlocked.CompareExchange(ref maxConcurrent, inside, observed) != observed);
             if (Interlocked.Increment(ref started) == 2) { bothStarted.TrySetResult(); }
             await Task.WhenAny(bothStarted.Task, Task.Delay(TimeSpan.FromSeconds(2), ct)).ConfigureAwait(false);
@@ -175,11 +187,13 @@ public class MultilayerCacheBatchGetOrAddLockTests(ITestContextAccessor testCont
         var batch = Task.Run(async () => await Sut.GetOrAddAsync<string, long>(
             [new((CacheKey)"a", 1L)],
             async (ids, ct) => { await Track(ct); return ids.Select(id => new KeyValuePair<long, string?>(id, "v")).ToArray(); },
-            (CachePolicy?)null, token));
+            (CachePolicy?)null,
+            token));
         var single = Task.Run(async () => await Sut.GetOrAddAsync<string>(
             (CacheKey)"a",
             async ct => { await Track(ct); return "v"; },
-            (CachePolicy?)null, token));
+            (CachePolicy?)null,
+            token));
 
         await Task.WhenAll(batch, single);
 
@@ -254,11 +268,6 @@ public class MultilayerCacheBatchGetOrAddLockTests(ITestContextAccessor testCont
         return ValueTask.CompletedTask;
     }
 
-    private TestCacheEntry<string?> Entry(CacheKey key) =>
-        _stored.TryGetValue(key, out var value)
-            ? new TestCacheEntry<string?> { Value = value, Expiration = DateTimeOffset.UtcNow.AddMinutes(10), Found = true }
-            : new TestCacheEntry<string?> { Value = null, Expiration = DateTimeOffset.MinValue };
-
     public ValueTask DisposeAsync()
     {
         _locker?.Dispose();
@@ -266,4 +275,9 @@ public class MultilayerCacheBatchGetOrAddLockTests(ITestContextAccessor testCont
         GC.SuppressFinalize(this);
         return ValueTask.CompletedTask;
     }
+
+    private TestCacheEntry<string?> Entry(CacheKey key) =>
+        _stored.TryGetValue(key, out var value)
+            ? new TestCacheEntry<string?> { Value = value, Expiration = DateTimeOffset.UtcNow.AddMinutes(10), Found = true }
+            : new TestCacheEntry<string?> { Value = null, Expiration = DateTimeOffset.MinValue };
 }

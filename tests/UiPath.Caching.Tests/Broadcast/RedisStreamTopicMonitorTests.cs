@@ -260,7 +260,7 @@ public class RedisStreamHealthMaintainerTests(ITestContextAccessor testContextAc
         {
             TrackStatistics = true,
             MaintainerEnabled = true,
-            MaintainerCheckInterval = TimeSpan.FromMilliseconds(100)
+            MaintainerCheckInterval = TimeSpan.FromMilliseconds(100),
         };
         _redisCacheOptions = new RedisCacheOptions
         {

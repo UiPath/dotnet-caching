@@ -5,12 +5,6 @@ namespace UiPath.Caching.Tests;
 
 public class InMemoryQueueCacheProviderTests
 {
-    private static InMemoryQueueCacheProvider CreateSut(InMemoryQueueCacheOptions? options = null) =>
-        new(Options.Create(options ?? new InMemoryQueueCacheOptions()),
-            new MemoryCacheFactory(TimeProvider.System, NullLoggerFactory.Instance),
-            new SystemJsonByteSerializerProxy(),
-            NullLocalLock.Instance,
-            TimeProvider.System);
 
     [Fact]
     public void Creates_in_memory_set_cache()
@@ -55,6 +49,12 @@ public class InMemoryQueueCacheProviderTests
         var act = () => sut.Dispose();
         act.Should().NotThrow();
     }
+    private static InMemoryQueueCacheProvider CreateSut(InMemoryQueueCacheOptions? options = null) =>
+        new(Options.Create(options ?? new InMemoryQueueCacheOptions()),
+            new MemoryCacheFactory(TimeProvider.System, NullLoggerFactory.Instance),
+            new SystemJsonByteSerializerProxy(),
+            NullLocalLock.Instance,
+            TimeProvider.System);
 }
 
 public class InMemoryRedisQueueCacheProviderTests
@@ -90,14 +90,6 @@ public class InMemoryRedisQueueCacheProviderTests
 
 public class QueueCacheFactoryProviderSelectionTests
 {
-    private static IQueueCacheProvider Provider(string name, ISetCache cache, bool enabled = true)
-    {
-        var provider = Substitute.For<IQueueCacheProvider>();
-        provider.Name.Returns(name);
-        provider.Enabled.Returns(enabled);
-        provider.CreateSetCache().Returns(cache);
-        return provider;
-    }
 
     [Fact]
     public void Selects_default_provider_then_by_name()
@@ -209,5 +201,13 @@ public class QueueCacheFactoryProviderSelectionTests
 
         act.Should().NotThrow();
         provider.Received(1).Dispose();
+    }
+    private static IQueueCacheProvider Provider(string name, ISetCache cache, bool enabled = true)
+    {
+        var provider = Substitute.For<IQueueCacheProvider>();
+        provider.Name.Returns(name);
+        provider.Enabled.Returns(enabled);
+        provider.CreateSetCache().Returns(cache);
+        return provider;
     }
 }

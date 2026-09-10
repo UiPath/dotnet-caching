@@ -18,10 +18,6 @@ public sealed partial class RedisPubSubTopic<T> : ITopic<T>
     private readonly RedisPubSubTopicOptions _options;
     private bool _disposed;
 
-    public TopicKey TopicKey { get; }
-
-    public EventHandler? OnDisposed { get; set; }
-
     public RedisPubSubTopic(
         TopicKey topicKey,
         Uri sourceUri,
@@ -50,10 +46,12 @@ public sealed partial class RedisPubSubTopic<T> : ITopic<T>
         _dispatcher = new EventDispatcher<T>(topicKey, channel, _subject, _logger, _stopTokenSource.Token);
     }
 
+    public TopicKey TopicKey { get; }
+
+    public EventHandler? OnDisposed { get; set; }
+
     public IDisposable Subscribe(IObserver<T> observer) =>
         _subject.Subscribe(observer);
-
-    internal RedisPubSubTopicOptions GetResolvedOptionsForTests() => _options;
 
     public async ValueTask<bool> PublishAsync(T @event, CancellationToken token = default)
     {
@@ -72,7 +70,9 @@ public sealed partial class RedisPubSubTopic<T> : ITopic<T>
             {
                 token.ThrowIfCancellationRequested();
                 return await _redis.Database.PublishAsync(_redisChannel, message, CommandFlags.DemandMaster).ConfigureAwait(false);
-            }, defaultValue: -1, token).ConfigureAwait(false);
+            },
+            defaultValue: -1,
+            token).ConfigureAwait(false);
             return response >= 0;
         }
         catch (Exception ex)
@@ -96,6 +96,8 @@ public sealed partial class RedisPubSubTopic<T> : ITopic<T>
         _subscriber.Dispose();
         OnDisposed?.Invoke(this, EventArgs.Empty);
     }
+
+    internal RedisPubSubTopicOptions GetResolvedOptionsForTests() => _options;
 
     [LoggerMessage(Level = LogLevel.Trace, Message = "Publishing to topic {TopicKey} event {EventId}")]
     private partial void LogPublishing(TopicKey topicKey, string? eventId);

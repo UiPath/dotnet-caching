@@ -1,9 +1,6 @@
 namespace UiPath.Caching.Redis;
 internal struct StreamId
 {
-    public long Timestamp { get; private set; }
-    public long Sequence { get; private set; }
-    public bool Valid { get; private set; }
     public static readonly StreamId Invalid = new StreamId();
     public StreamId()
     {
@@ -17,4 +14,7 @@ internal struct StreamId
         Sequence = sequence;
         Valid = true;
     }
+    public long Timestamp { get; private set; }
+    public long Sequence { get; private set; }
+    public bool Valid { get; private set; }
 }

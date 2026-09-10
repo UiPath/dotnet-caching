@@ -8,6 +8,8 @@ public class ChangeTokenTests : IAsyncLifetime
 {
     private readonly IFixture _fixture = AutoFixtureCreator.NSubstitute();
 
+    private readonly RecordingTelemetryProvider _telemetryProvider = new();
+
     private string _key = default!;
     private TopicKey _topicKey = default!;
     private ITopic<ICacheEvent> _topic = default!;
@@ -15,10 +17,47 @@ public class ChangeTokenTests : IAsyncLifetime
     private Uri? _source = null;
     private ISet<string>? _acceptedEvents = null;
     private SystemJsonByteSerializerProxy _serializer = default!;
-
-    private readonly RecordingTelemetryProvider _telemetryProvider = new();
     private ChangeToken<byte[]>? _sut = null;
     private ChangeToken<byte[]> Sut => _sut ??= new ChangeToken<byte[]>(_key, _topic, _source, _serializer, _fixture.Freeze<ILogger<ChangeToken<byte[]>>>(), _telemetryProvider, _acceptedEvents);
+
+    public static IEnumerable<object[]> InvalidEvents() => new TestCacheEvent[]
+    {
+        new TestCacheEvent
+        {
+            Id = Guid.NewGuid().ToString(),
+            Data = new CacheEventData(Guid.NewGuid().ToString()),
+        },
+        new TestCacheEvent
+        {
+            Id = Guid.NewGuid().ToString(),
+            Source = new Uri("urn:machine"),
+            Data = new CacheEventData(Guid.NewGuid().ToString()),
+        },
+        new TestCacheEvent
+        {
+            Id = Guid.NewGuid().ToString(),
+            Source = new Uri("urn:machine"),
+            Data = null,
+        },
+        new TestCacheEvent
+        {
+            Id = Guid.NewGuid().ToString(),
+            Source = new Uri("urn:machine"),
+        },
+        new TestCacheEvent
+        {
+            Id = Guid.NewGuid().ToString(),
+            Source = new Uri("urn:machine"),
+            Data = new CacheEventData(Guid.NewGuid().ToString()),
+        },
+
+        new TestCacheEvent
+        {
+            Id = Guid.NewGuid().ToString(),
+            Source = new Uri("urn:machine"),
+            Data = null,
+        },
+    }.Select(cv => new object[] { cv });
 
     [Fact]
     public void Verify_ActiveChangeCallbacks()
@@ -70,7 +109,7 @@ public class ChangeTokenTests : IAsyncLifetime
         {
             Id = Guid.NewGuid().ToString(),
             Source = new Uri("urn:machine"),
-            Data = new CacheEventData(_key)
+            Data = new CacheEventData(_key),
         };
         Sut.OnNext(cloudEVent);
         Sut.HasChanged.Should().Be(hasChanged);
@@ -123,7 +162,7 @@ public class ChangeTokenTests : IAsyncLifetime
             Id = Guid.NewGuid().ToString(),
             Source = new Uri("urn:machine"),
             Data = new CacheEventData(_key),
-            Type = _fixture.Create<string>()
+            Type = _fixture.Create<string>(),
         });
         Sut.HasChanged.Should().BeFalse();
 
@@ -132,7 +171,7 @@ public class ChangeTokenTests : IAsyncLifetime
             Id = Guid.NewGuid().ToString(),
             Source = new Uri("urn:machine"),
             Data = new CacheEventData(_key),
-            Type = _acceptedEvents.First()
+            Type = _acceptedEvents.First(),
         });
         Sut.HasChanged.Should().BeTrue();
     }
@@ -150,7 +189,7 @@ public class ChangeTokenTests : IAsyncLifetime
                 ["_metadata_"] = new Dictionary<string, string?>
                 {
                     ["key"] = _key,
-                }
+                },
             }),
             Type = _fixture.Create<string>(),
             
@@ -175,7 +214,7 @@ public class ChangeTokenTests : IAsyncLifetime
                 ["_metadata_"] = new Dictionary<string, string?>
                 {
                     ["key"] = _key,
-                }
+                },
             }),
             Type = _fixture.Create<string>(),
 
@@ -202,7 +241,7 @@ public class ChangeTokenTests : IAsyncLifetime
                 ["_metadata_"] = new Dictionary<string, string?>
                 {
                     ["key"] = _key,
-                }
+                },
             }),
             Type = _fixture.Create<string>(),
 
@@ -239,43 +278,4 @@ public class ChangeTokenTests : IAsyncLifetime
         _fixture.Inject<IEventFormatterProxy<ICacheEvent>>(_formatter);
         return ValueTask.CompletedTask;
     }
-
-    public static IEnumerable<object[]> InvalidEvents() => new TestCacheEvent[]
-    {
-        new TestCacheEvent
-        {
-            Id = Guid.NewGuid().ToString(),
-            Data = new CacheEventData(Guid.NewGuid().ToString())
-        },
-        new TestCacheEvent
-        {
-            Id = Guid.NewGuid().ToString(),
-            Source = new Uri("urn:machine"),
-            Data = new CacheEventData(Guid.NewGuid().ToString())
-        },
-        new TestCacheEvent
-        {
-            Id = Guid.NewGuid().ToString(),
-            Source = new Uri("urn:machine"),
-            Data = null
-        },
-        new TestCacheEvent
-        {
-            Id = Guid.NewGuid().ToString(),
-            Source = new Uri("urn:machine"),
-        },
-        new TestCacheEvent
-        {
-            Id = Guid.NewGuid().ToString(),
-            Source = new Uri("urn:machine"),
-            Data = new CacheEventData(Guid.NewGuid().ToString())
-        },
-
-        new TestCacheEvent
-        {
-            Id = Guid.NewGuid().ToString(),
-            Source = new Uri("urn:machine"),
-            Data = null
-        }
-    }.Select(cv => new object[] { cv });
 }

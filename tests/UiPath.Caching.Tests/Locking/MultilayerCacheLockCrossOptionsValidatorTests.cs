@@ -4,8 +4,6 @@ namespace UiPath.Caching.Tests.Locking;
 
 public class MultilayerCacheLockCrossOptionsValidatorTests
 {
-    private static MultilayerCacheLockCrossOptionsValidator<InMemoryRedisCacheOptions> NewSut(CacheOptions? cacheOptions = null) =>
-        new(Options.Create(cacheOptions ?? new CacheOptions()));
 
     [Fact]
     public void Succeeds_for_default_options()
@@ -73,4 +71,6 @@ public class MultilayerCacheLockCrossOptionsValidatorTests
         });
         result.Succeeded.Should().BeTrue();
     }
+    private static MultilayerCacheLockCrossOptionsValidator<InMemoryRedisCacheOptions> NewSut(CacheOptions? cacheOptions = null) =>
+        new(Options.Create(cacheOptions ?? new CacheOptions()));
 }

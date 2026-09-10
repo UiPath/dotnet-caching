@@ -11,16 +11,6 @@ namespace UiPath.Caching.Tests.Config;
 
 public class DistributedCacheRegistrationTests
 {
-    private static ServiceProvider Build(string providerName, Action<UiPathDistributedCacheOptions>? configure = null)
-    {
-        var services = new ServiceCollection();
-        services.AddCaching(b =>
-        {
-            b.AddMemory(_ => { });
-            b.AddDistributedCache(providerName, configure);
-        });
-        return services.BuildServiceProvider();
-    }
 
     [Fact]
     public void InMemory_tier_works_without_AddMemory()
@@ -381,13 +371,6 @@ public class DistributedCacheRegistrationTests
         act.Should().Throw<InvalidOperationException>().WithMessage("*ReserveRedisKeyspace*");
     }
 
-    private sealed class ForeignKeyspace : IReservedRedisKeyspace
-    {
-        public string Keyspace => "zz";
-
-        public string Owner => "Some.Package";
-    }
-
     [Fact]
     public void Reservation_registered_without_an_instance_is_reported()
     {
@@ -437,38 +420,6 @@ public class DistributedCacheRegistrationTests
         var act = () => provider.GetRequiredService<IDistributedCache>();
 
         act.Should().Throw<InvalidOperationException>().WithMessage("*cannot render*");
-    }
-
-    /// <summary>Builds a strategy for the keyspace but cannot render a key with it, which is a fault rather than a refusal.</summary>
-    private sealed class UnrenderableRedisKeyStrategyFactory(string unrenderable) : IRedisKeyStrategyFactory
-    {
-        private readonly DefaultRedisKeyStrategyFactory _inner = new();
-
-        public IRedisKeyStrategy Create(CacheOptions options, Type cacheType) => _inner.Create(options, cacheType);
-
-        public IRedisKeyStrategy Create(CacheOptions options, string differentiator) =>
-            string.Equals(differentiator, unrenderable, StringComparison.OrdinalIgnoreCase)
-                ? new ThrowingRedisKeyStrategy(differentiator)
-                : _inner.Create(options, differentiator);
-
-        private sealed class ThrowingRedisKeyStrategy(string keyspace) : IRedisKeyStrategy
-        {
-            public RedisKey GetRedisKey(CacheKey cacheKey) =>
-                throw new InvalidOperationException($"cannot render a key for {keyspace}");
-        }
-    }
-
-    /// <summary>Refuses to build a key for a keyspace it does not know, the shape the extending guide encourages.</summary>
-    private sealed class PickyRedisKeyStrategyFactory(string rejected) : IRedisKeyStrategyFactory
-    {
-        private readonly DefaultRedisKeyStrategyFactory _inner = new();
-
-        public IRedisKeyStrategy Create(CacheOptions options, Type cacheType) => _inner.Create(options, cacheType);
-
-        public IRedisKeyStrategy Create(CacheOptions options, string differentiator) =>
-            string.Equals(differentiator, rejected, StringComparison.OrdinalIgnoreCase)
-                ? throw new ArgumentException($"unknown keyspace {differentiator}", nameof(differentiator))
-                : _inner.Create(options, differentiator);
     }
 
     [Fact]
@@ -593,16 +544,6 @@ public class DistributedCacheRegistrationTests
         act.Should().Throw<InvalidOperationException>().WithMessage("*IListCache (Some.Package)*share one keyspace*");
     }
 
-    /// <summary>A factory that ignores the differentiator it is given and lands on a fixed one.</summary>
-    private sealed class FixedDifferentiatorRedisKeyStrategyFactory(string differentiator) : IRedisKeyStrategyFactory
-    {
-        private readonly DefaultRedisKeyStrategyFactory _inner = new();
-
-        public IRedisKeyStrategy Create(CacheOptions options, Type cacheType) => _inner.Create(options, cacheType);
-
-        public IRedisKeyStrategy Create(CacheOptions options, string _) => _inner.Create(options, differentiator);
-    }
-
     [Fact]
     public void Custom_redis_key_strategy_factory_is_used_over_the_applications()
     {
@@ -649,21 +590,6 @@ public class DistributedCacheRegistrationTests
     }
 
     /// <summary>
-    /// Composes the application's hash keyspace whatever differentiator it is handed, while its own type
-    /// overloads answer differently — so only comparing against the application's factory catches it.
-    /// </summary>
-    private sealed class ApplicationHashImpersonatingFactory : IRedisKeyStrategyFactory
-    {
-        private readonly DefaultRedisKeyStrategyFactory _inner = new();
-
-        public IRedisKeyStrategy Create(CacheOptions options, Type cacheType) =>
-            _inner.Create(options, "elsewhere");
-
-        public IRedisKeyStrategy Create(CacheOptions options, string differentiator) =>
-            _inner.Create(options, RedisKeyspaces.Hash);
-    }
-
-    /// <summary>
     /// The application's own factory is inherited when the distributed cache does not override it, so one that
     /// composes the same key whatever differentiator it is handed puts both caches on one keyspace.
     /// </summary>
@@ -706,29 +632,6 @@ public class DistributedCacheRegistrationTests
         using var provider = services.BuildServiceProvider();
 
         provider.GetRequiredService<IDistributedCache>().Should().NotBeNull();
-    }
-
-    private sealed class RecordingRedisKeyStrategyFactory : IRedisKeyStrategyFactory
-    {
-        private readonly DefaultRedisKeyStrategyFactory _inner = new();
-
-        public List<string> Differentiators { get; } = [];
-
-        public IRedisKeyStrategy Create(CacheOptions options, Type cacheType) => _inner.Create(options, cacheType);
-
-        public IRedisKeyStrategy Create(CacheOptions options, string differentiator)
-        {
-            Differentiators.Add(differentiator);
-            return _inner.Create(options, differentiator);
-        }
-    }
-
-    private sealed class FixedRedisKeyStrategyFactory : IRedisKeyStrategyFactory
-    {
-        public IRedisKeyStrategy Create(CacheOptions options, Type cacheType) => Create(options, "ignored");
-
-        public IRedisKeyStrategy Create(CacheOptions options, string differentiator) =>
-            new PrefixRedisKeyStrategy("fixed", options.Separator);
     }
 
     /// <summary>
@@ -993,11 +896,6 @@ public class DistributedCacheRegistrationTests
         cache.Get("abc").Should().BeNull();
     }
 
-    private sealed class LowercasingCacheKeyStrategy : ICacheKeyStrategy
-    {
-        public CacheKey GetCacheKey<T>(CacheKey key) => new(key.Name, CacheKeyCasing.Insensitive);
-    }
-
     /// <summary>Registration-time, not resolve-time: a typo must not survive until the first cache hit.</summary>
     [Fact]
     public void Redis_key_differentiator_is_validated_before_the_container_is_built()
@@ -1008,5 +906,107 @@ public class DistributedCacheRegistrationTests
             KnownCacheProviderNames.Redis, o => o.RedisKeyDifferentiator = RedisKeyspaces.Hash));
 
         act.Should().Throw<InvalidOperationException>();
+    }
+    private static ServiceProvider Build(string providerName, Action<UiPathDistributedCacheOptions>? configure = null)
+    {
+        var services = new ServiceCollection();
+        services.AddCaching(b =>
+        {
+            b.AddMemory(_ => { });
+            b.AddDistributedCache(providerName, configure);
+        });
+        return services.BuildServiceProvider();
+    }
+
+    private sealed class ForeignKeyspace : IReservedRedisKeyspace
+    {
+        public string Keyspace => "zz";
+
+        public string Owner => "Some.Package";
+    }
+
+    /// <summary>Builds a strategy for the keyspace but cannot render a key with it, which is a fault rather than a refusal.</summary>
+    private sealed class UnrenderableRedisKeyStrategyFactory(string unrenderable) : IRedisKeyStrategyFactory
+    {
+        private readonly DefaultRedisKeyStrategyFactory _inner = new();
+
+        public IRedisKeyStrategy Create(CacheOptions options, Type cacheType) => _inner.Create(options, cacheType);
+
+        public IRedisKeyStrategy Create(CacheOptions options, string differentiator) =>
+            string.Equals(differentiator, unrenderable, StringComparison.OrdinalIgnoreCase)
+                ? new ThrowingRedisKeyStrategy(differentiator)
+                : _inner.Create(options, differentiator);
+
+        private sealed class ThrowingRedisKeyStrategy(string keyspace) : IRedisKeyStrategy
+        {
+            public RedisKey GetRedisKey(CacheKey cacheKey) =>
+                throw new InvalidOperationException($"cannot render a key for {keyspace}");
+        }
+    }
+
+    /// <summary>Refuses to build a key for a keyspace it does not know, the shape the extending guide encourages.</summary>
+    private sealed class PickyRedisKeyStrategyFactory(string rejected) : IRedisKeyStrategyFactory
+    {
+        private readonly DefaultRedisKeyStrategyFactory _inner = new();
+
+        public IRedisKeyStrategy Create(CacheOptions options, Type cacheType) => _inner.Create(options, cacheType);
+
+        public IRedisKeyStrategy Create(CacheOptions options, string differentiator) =>
+            string.Equals(differentiator, rejected, StringComparison.OrdinalIgnoreCase)
+                ? throw new ArgumentException($"unknown keyspace {differentiator}", nameof(differentiator))
+                : _inner.Create(options, differentiator);
+    }
+
+    /// <summary>A factory that ignores the differentiator it is given and lands on a fixed one.</summary>
+    private sealed class FixedDifferentiatorRedisKeyStrategyFactory(string differentiator) : IRedisKeyStrategyFactory
+    {
+        private readonly DefaultRedisKeyStrategyFactory _inner = new();
+
+        public IRedisKeyStrategy Create(CacheOptions options, Type cacheType) => _inner.Create(options, cacheType);
+
+        public IRedisKeyStrategy Create(CacheOptions options, string _) => _inner.Create(options, differentiator);
+    }
+
+    /// <summary>
+    /// Composes the application's hash keyspace whatever differentiator it is handed, while its own type
+    /// overloads answer differently — so only comparing against the application's factory catches it.
+    /// </summary>
+    private sealed class ApplicationHashImpersonatingFactory : IRedisKeyStrategyFactory
+    {
+        private readonly DefaultRedisKeyStrategyFactory _inner = new();
+
+        public IRedisKeyStrategy Create(CacheOptions options, Type cacheType) =>
+            _inner.Create(options, "elsewhere");
+
+        public IRedisKeyStrategy Create(CacheOptions options, string differentiator) =>
+            _inner.Create(options, RedisKeyspaces.Hash);
+    }
+
+    private sealed class RecordingRedisKeyStrategyFactory : IRedisKeyStrategyFactory
+    {
+        private readonly DefaultRedisKeyStrategyFactory _inner = new();
+
+        public List<string> Differentiators { get; } = [];
+
+        public IRedisKeyStrategy Create(CacheOptions options, Type cacheType) => _inner.Create(options, cacheType);
+
+        public IRedisKeyStrategy Create(CacheOptions options, string differentiator)
+        {
+            Differentiators.Add(differentiator);
+            return _inner.Create(options, differentiator);
+        }
+    }
+
+    private sealed class FixedRedisKeyStrategyFactory : IRedisKeyStrategyFactory
+    {
+        public IRedisKeyStrategy Create(CacheOptions options, Type cacheType) => Create(options, "ignored");
+
+        public IRedisKeyStrategy Create(CacheOptions options, string differentiator) =>
+            new PrefixRedisKeyStrategy("fixed", options.Separator);
+    }
+
+    private sealed class LowercasingCacheKeyStrategy : ICacheKeyStrategy
+    {
+        public CacheKey GetCacheKey<T>(CacheKey key) => new(key.Name, CacheKeyCasing.Insensitive);
     }
 }

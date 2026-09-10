@@ -10,7 +10,7 @@ public sealed class MemoryCacheFactory(TimeProvider clock, ILoggerFactory logger
         var memoryCacheOptions = new MemoryCacheOptions
         {
             TrackStatistics = memoryOptions.TrackStatistics,
-            Clock = _systemClock
+            Clock = _systemClock,
         };
 
         if (memoryOptions.SizeLimit > 0)

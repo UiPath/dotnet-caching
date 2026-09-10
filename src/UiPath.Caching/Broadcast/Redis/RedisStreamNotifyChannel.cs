@@ -40,6 +40,27 @@ internal sealed partial class RedisStreamNotifyChannel : IDisposable
         _subscribeTimer = new Timer(Subscribe, null, _timerDueTime, _timerPeriod);
     }
 
+    public void Dispose()
+    {
+        if (_disposed)
+        {
+            return;
+        }
+        _disposed = true;
+        _redis.OnReconnected -= OnReconnected;
+        _subscribeTimer.Dispose();
+        _subscribingDone.Wait(DisposeDrainTimeout);
+        try
+        {
+            _unsubscribe?.Invoke();
+        }
+        catch (Exception ex)
+        {
+            LogUnsubscribeError(ex, _channel);
+        }
+        _subscribingDone.Dispose();
+    }
+
     private void Subscribe(object? state)
     {
         if (_disposed)
@@ -148,27 +169,6 @@ internal sealed partial class RedisStreamNotifyChannel : IDisposable
         {
             // Disposed concurrently with reconnect notification — nothing to reschedule.
         }
-    }
-
-    public void Dispose()
-    {
-        if (_disposed)
-        {
-            return;
-        }
-        _disposed = true;
-        _redis.OnReconnected -= OnReconnected;
-        _subscribeTimer.Dispose();
-        _subscribingDone.Wait(DisposeDrainTimeout);
-        try
-        {
-            _unsubscribe?.Invoke();
-        }
-        catch (Exception ex)
-        {
-            LogUnsubscribeError(ex, _channel);
-        }
-        _subscribingDone.Dispose();
     }
 
     [LoggerMessage(Level = LogLevel.Debug, Message = "Stream notify subscribed: {Channel}")]

@@ -18,10 +18,6 @@ public sealed class RedisCacheProvider : ICacheProvider
     private readonly Lazy<RedisCache> _cache;
     private readonly Lazy<RedisHashCache> _hashCache;
 
-    public string Name => KnownCacheProviderNames.Redis;
-
-    public bool Enabled { get; }
-
     public RedisCacheProvider(
         IOptions<RedisCacheOptions> redisCacheOptions,
         IOptions<CacheOptions> cacheOptions,
@@ -48,6 +44,10 @@ public sealed class RedisCacheProvider : ICacheProvider
         _hashCache = new Lazy<RedisHashCache>(() => BuildHashCache());
         Enabled = _redisCacheOptions.Enabled;
     }
+
+    public string Name => KnownCacheProviderNames.Redis;
+
+    public bool Enabled { get; }
 
     public ICache CreateCache() =>
         _cache.Value;

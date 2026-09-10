@@ -1,4 +1,4 @@
-#if NET9_0_OR_GREATER
+﻿#if NET9_0_OR_GREATER
 using System.Buffers;
 #endif
 using Microsoft.Extensions.Caching.Distributed;
@@ -22,23 +22,6 @@ public class DistributedCacheRedisIntegrationTests(RedisContainerFixture fixture
 {
     private const string AppShortName = "dcit";
 
-    private static ServiceProvider Build(string connectionString) =>
-        new ServiceCollection()
-            .AddCaching(
-                b =>
-                {
-                    b.AddRedisConnection(o => o.ConnectionString = connectionString);
-                    b.AddRedis(_ => { });
-                    b.AddDistributedCache(KnownCacheProviderNames.Redis);
-                },
-                o => o.AppShortName = AppShortName)
-            .BuildServiceProvider();
-
-    private static string Unique() => $"it-{Guid.NewGuid():N}";
-
-    private Task<ConnectionMultiplexer> ConnectAsync() =>
-        ConnectionMultiplexer.ConnectAsync(fixture.ConnectionString);
-
     [Fact]
     public async Task Round_trips_a_payload_through_redis()
     {
@@ -48,10 +31,13 @@ public class DistributedCacheRedisIntegrationTests(RedisContainerFixture fixture
         using var provider = Build(fixture.ConnectionString);
         var cache = provider.GetRequiredService<IDistributedCache>();
 
-        await cache.SetAsync(key, [1, 2, 3], new DistributedCacheEntryOptions
+        await cache.SetAsync(key,
+            [1, 2, 3],
+            new DistributedCacheEntryOptions
         {
             AbsoluteExpirationRelativeToNow = TimeSpan.FromMinutes(10),
-        }, token);
+        },
+            token);
 
         (await cache.GetAsync(key, token)).Should().Equal(1, 2, 3);
         (await cache.GetAsync(key.ToUpperInvariant(), token)).Should().BeNull("keys are case-sensitive");
@@ -72,11 +58,14 @@ public class DistributedCacheRedisIntegrationTests(RedisContainerFixture fixture
         await using var multiplexer = await ConnectAsync();
         var database = multiplexer.GetDatabase();
 
-        await cache.SetAsync(key, [7, 8], new DistributedCacheEntryOptions
+        await cache.SetAsync(key,
+            [7, 8],
+            new DistributedCacheEntryOptions
         {
             SlidingExpiration = TimeSpan.FromMinutes(20),
             AbsoluteExpirationRelativeToNow = TimeSpan.FromHours(2),
-        }, token);
+        },
+            token);
 
         var redisKey = $"{AppShortName}:{UiPathDistributedCacheOptions.DefaultRedisKeyDifferentiator}:{UiPathDistributedCacheOptions.DefaultKeyPrefix}:{key}";
         (await database.KeyTypeAsync(redisKey)).Should().Be(RedisType.Hash);
@@ -103,64 +92,18 @@ public class DistributedCacheRedisIntegrationTests(RedisContainerFixture fixture
         using var provider = Build(fixture.ConnectionString);
         var cache = provider.GetRequiredService<IDistributedCache>();
 
-        await cache.SetAsync(key, [], new DistributedCacheEntryOptions
+        await cache.SetAsync(key,
+            [],
+            new DistributedCacheEntryOptions
         {
             AbsoluteExpirationRelativeToNow = TimeSpan.FromMinutes(5),
-        }, token);
+        },
+            token);
 
         (await cache.GetAsync(key, token)).Should().NotBeNull().And.BeEmpty();
 
         await cache.RemoveAsync(key, token);
     }
-
-#if NET9_0_OR_GREATER
-    [Fact]
-    public async Task Buffer_half_round_trips_through_redis_on_the_same_wire_layout()
-    {
-        Assert.SkipUnless(fixture.Enabled, "Set RUN_REDIS_INTEGRATION_TESTS=1 (Docker required) to run.");
-        var token = TestContext.Current.CancellationToken;
-        var key = Unique();
-        using var provider = Build(fixture.ConnectionString);
-        var cache = provider.GetRequiredService<IDistributedCache>();
-        var buffered = cache.Should().BeAssignableTo<IBufferDistributedCache>().Subject;
-        await using var multiplexer = await ConnectAsync();
-        var database = multiplexer.GetDatabase();
-        var redisKey = $"{AppShortName}:{UiPathDistributedCacheOptions.DefaultRedisKeyDifferentiator}:{UiPathDistributedCacheOptions.DefaultKeyPrefix}:{key}";
-
-        var payload = new byte[] { 1, 2, 3, 4, 5 };
-        var first = new BufferSegment(payload.AsMemory(0, 2), runningIndex: 0);
-        var second = first.Append(payload.AsMemory(2));
-
-        await buffered.SetAsync(key, new ReadOnlySequence<byte>(first, 0, second, second.Memory.Length),
-            new DistributedCacheEntryOptions { AbsoluteExpirationRelativeToNow = TimeSpan.FromMinutes(10) }, token);
-
-        ((byte[]?)await database.HashGetAsync(redisKey, "data")).Should().Equal(payload, "stored raw and contiguous");
-        (await cache.GetAsync(key, token)).Should().Equal(payload);
-
-        var destination = new ArrayBufferWriter<byte>();
-        (await buffered.TryGetAsync(key, destination, token)).Should().BeTrue();
-        destination.WrittenSpan.ToArray().Should().Equal(payload);
-
-        await cache.RemoveAsync(key, token);
-        (await buffered.TryGetAsync(key, new ArrayBufferWriter<byte>(), token)).Should().BeFalse();
-    }
-
-    private sealed class BufferSegment : ReadOnlySequenceSegment<byte>
-    {
-        public BufferSegment(ReadOnlyMemory<byte> memory, long runningIndex)
-        {
-            Memory = memory;
-            RunningIndex = runningIndex;
-        }
-
-        public BufferSegment Append(ReadOnlyMemory<byte> memory)
-        {
-            var next = new BufferSegment(memory, RunningIndex + Memory.Length);
-            Next = next;
-            return next;
-        }
-    }
-#endif
 
     /// <summary>Refresh extends the TTL without transferring the payload, and the absolute deadline still caps it.</summary>
     [Fact]
@@ -175,11 +118,14 @@ public class DistributedCacheRedisIntegrationTests(RedisContainerFixture fixture
         var database = multiplexer.GetDatabase();
         var redisKey = $"{AppShortName}:{UiPathDistributedCacheOptions.DefaultRedisKeyDifferentiator}:{UiPathDistributedCacheOptions.DefaultKeyPrefix}:{key}";
 
-        await cache.SetAsync(key, [1], new DistributedCacheEntryOptions
+        await cache.SetAsync(key,
+            [1],
+            new DistributedCacheEntryOptions
         {
             SlidingExpiration = TimeSpan.FromMinutes(30),
             AbsoluteExpirationRelativeToNow = TimeSpan.FromMinutes(45),
-        }, token);
+        },
+            token);
 
         await database.KeyExpireAsync(redisKey, TimeSpan.FromMinutes(5));
         (await database.KeyTimeToLiveAsync(redisKey)).Should().BeCloseTo(TimeSpan.FromMinutes(5), TimeSpan.FromSeconds(30));
@@ -226,4 +172,75 @@ public class DistributedCacheRedisIntegrationTests(RedisContainerFixture fixture
 
         await hash.RemoveAsync<byte[]>(cacheKey, token);
     }
+
+#if NET9_0_OR_GREATER
+    [Fact]
+    public async Task Buffer_half_round_trips_through_redis_on_the_same_wire_layout()
+    {
+        Assert.SkipUnless(fixture.Enabled, "Set RUN_REDIS_INTEGRATION_TESTS=1 (Docker required) to run.");
+        var token = TestContext.Current.CancellationToken;
+        var key = Unique();
+        using var provider = Build(fixture.ConnectionString);
+        var cache = provider.GetRequiredService<IDistributedCache>();
+        var buffered = cache.Should().BeAssignableTo<IBufferDistributedCache>().Subject;
+        await using var multiplexer = await ConnectAsync();
+        var database = multiplexer.GetDatabase();
+        var redisKey = $"{AppShortName}:{UiPathDistributedCacheOptions.DefaultRedisKeyDifferentiator}:{UiPathDistributedCacheOptions.DefaultKeyPrefix}:{key}";
+
+        var payload = new byte[] { 1, 2, 3, 4, 5 };
+        var first = new BufferSegment(payload.AsMemory(0, 2), runningIndex: 0);
+        var second = first.Append(payload.AsMemory(2));
+
+        await buffered.SetAsync(key,
+            new ReadOnlySequence<byte>(first, 0, second, second.Memory.Length),
+            new DistributedCacheEntryOptions { AbsoluteExpirationRelativeToNow = TimeSpan.FromMinutes(10) },
+            token);
+
+        ((byte[]?)await database.HashGetAsync(redisKey, "data")).Should().Equal(payload, "stored raw and contiguous");
+        (await cache.GetAsync(key, token)).Should().Equal(payload);
+
+        var destination = new ArrayBufferWriter<byte>();
+        (await buffered.TryGetAsync(key, destination, token)).Should().BeTrue();
+        destination.WrittenSpan.ToArray().Should().Equal(payload);
+
+        await cache.RemoveAsync(key, token);
+        (await buffered.TryGetAsync(key, new ArrayBufferWriter<byte>(), token)).Should().BeFalse();
+    }
+#endif
+
+    private static ServiceProvider Build(string connectionString) =>
+        new ServiceCollection()
+            .AddCaching(
+                b =>
+                {
+                    b.AddRedisConnection(o => o.ConnectionString = connectionString);
+                    b.AddRedis(_ => { });
+                    b.AddDistributedCache(KnownCacheProviderNames.Redis);
+                },
+                o => o.AppShortName = AppShortName)
+            .BuildServiceProvider();
+
+    private static string Unique() => $"it-{Guid.NewGuid():N}";
+
+    private Task<ConnectionMultiplexer> ConnectAsync() =>
+        ConnectionMultiplexer.ConnectAsync(fixture.ConnectionString);
+
+#if NET9_0_OR_GREATER
+    private sealed class BufferSegment : ReadOnlySequenceSegment<byte>
+    {
+        public BufferSegment(ReadOnlyMemory<byte> memory, long runningIndex)
+        {
+            Memory = memory;
+            RunningIndex = runningIndex;
+        }
+
+        public BufferSegment Append(ReadOnlyMemory<byte> memory)
+        {
+            var next = new BufferSegment(memory, RunningIndex + Memory.Length);
+            Next = next;
+            return next;
+        }
+    }
+#endif
+
 }

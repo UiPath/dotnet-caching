@@ -42,11 +42,6 @@ internal sealed class MultilayerSetCache : ISetCache
         _defaultExpiration = options.DefaultExpiration;
     }
 
-    private static IConnectionState GetConnectionMonitor(ISetCache inner, TimeSpan? period) =>
-        inner is IConnectionState state
-            ? new ConnectionStateMonitor(NullTelemetryProvider.Instance, period ?? TimeSpan.FromSeconds(5), state)
-            : NullConnectionStateMonitor.Instance;
-
     public string Name => _name;
 
     public async ValueTask<bool> AddAsync<T>(CacheKey cacheKey, T item, CachePolicy? policy, CancellationToken token = default)
@@ -63,12 +58,6 @@ internal sealed class MultilayerSetCache : ISetCache
 
     public ValueTask<long> AddAsync<T>(CacheKey cacheKey, IEnumerable<T> items, DateTimeOffset expiration, CachePolicy? policy, CancellationToken token = default) =>
         AddCoreAsync<T>(cacheKey, items, CacheExpiration.ThrowIfNotFuture(expiration, _clock.GetUtcNow()), policy, token);
-
-    private async ValueTask<long> AddCoreAsync<T>(CacheKey cacheKey, IEnumerable<T> items, DateTimeOffset? expiration, CachePolicy? policy, CancellationToken token)
-    {
-        NotCacheableException.ThrowIfNotCacheable<T>();
-        return await InternalAddAsync(cacheKey, Materialize(items), expiration, policy, token).ConfigureAwait(false);
-    }
 
     public async ValueTask<T?> PopAsync<T>(CacheKey cacheKey, CachePolicy? policy, CancellationToken token = default)
     {
@@ -218,6 +207,33 @@ internal sealed class MultilayerSetCache : ISetCache
         }
     }
 
+    private static IConnectionState GetConnectionMonitor(ISetCache inner, TimeSpan? period) =>
+        inner is IConnectionState state
+            ? new ConnectionStateMonitor(NullTelemetryProvider.Instance, period ?? TimeSpan.FromSeconds(5), state)
+            : NullConnectionStateMonitor.Instance;
+
+    private static IEnumerable<T> Materialize<T>(IEnumerable<T> items)
+    {
+        ArgumentNullException.ThrowIfNull(items);
+        return items as IReadOnlyCollection<T> ?? items.ToArray();
+    }
+
+    private static string Key(CacheKey cacheKey, CancellationToken token)
+    {
+        if (cacheKey.IsNull)
+        {
+            throw new ArgumentNullException(nameof(cacheKey));
+        }
+        token.ThrowIfCancellationRequested();
+        return cacheKey.Name;
+    }
+
+    private async ValueTask<long> AddCoreAsync<T>(CacheKey cacheKey, IEnumerable<T> items, DateTimeOffset? expiration, CachePolicy? policy, CancellationToken token)
+    {
+        NotCacheableException.ThrowIfNotCacheable<T>();
+        return await InternalAddAsync(cacheKey, Materialize(items), expiration, policy, token).ConfigureAwait(false);
+    }
+
     private bool GetInnerCacheDisconnected() => _inner is NullSetCache || (_useLocalOnlyWhenDisconnected && !_connectionState.IsConnected);
 
     private DateTimeOffset? LocalWriteExpiration(DateTimeOffset? requested, CachePolicy? policy)
@@ -276,22 +292,6 @@ internal sealed class MultilayerSetCache : ISetCache
     private DateTimeOffset? FromTtl(TimeSpan? ttl) =>
         ttl.HasValue ? _clock.ToDateTimeOffset(ttl.Value) : null;
 
-    private static IEnumerable<T> Materialize<T>(IEnumerable<T> items)
-    {
-        ArgumentNullException.ThrowIfNull(items);
-        return items as IReadOnlyCollection<T> ?? items.ToArray();
-    }
-
     private DateTimeOffset? LocalExpiration() =>
         _localMaxExpiration.HasValue ? _clock.ToDateTimeOffset(_localMaxExpiration.Value) : null;
-
-    private static string Key(CacheKey cacheKey, CancellationToken token)
-    {
-        if (cacheKey.IsNull)
-        {
-            throw new ArgumentNullException(nameof(cacheKey));
-        }
-        token.ThrowIfCancellationRequested();
-        return cacheKey.Name;
-    }
 }

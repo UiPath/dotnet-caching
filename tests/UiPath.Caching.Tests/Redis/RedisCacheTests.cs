@@ -12,6 +12,7 @@ namespace UiPath.Caching.Tests.Redis;
 public class RedisCacheTests(ITestContextAccessor testContextAccessor) : IAsyncLifetime
 {
     private readonly IFixture _fixture = AutoFixtureCreator.NSubstitute();
+    private readonly RecordingTelemetryProvider _telemetry = new();
     private ISystemClock _clock = default!;
     private IResiliencePipelineProvider _resiliencePipelineProvider = default!;
     private RedisCacheOptions _cacheOptions = default!;
@@ -29,10 +30,13 @@ public class RedisCacheTests(ITestContextAccessor testContextAccessor) : IAsyncL
     private IRedisConnector _connector = default!;
     private bool _isConnected = true;
     private Version _version = new(6, 0);
-    private readonly RecordingTelemetryProvider _telemetry = new();
     private RedisCache? _sut = null;
 
     private RedisCache Sut => _sut ??= _fixture.Create<RedisCache>();
+
+    private int HitCount => _telemetry.Metrics.Count(m => m.Name.Contains(".Hits."));
+    private int MissCount => _telemetry.Metrics.Count(m => m.Name.Contains(".Misses."));
+    private IEnumerable<DependencyRecord> ReadDeps => _telemetry.Dependencies.Where(d => d.Type == TelemetryOperation.DependencyType);
 
     [Fact]
     public async Task Get_works_as_expected()
@@ -131,12 +135,6 @@ public class RedisCacheTests(ITestContextAccessor testContextAccessor) : IAsyncL
         actual.Should().BeEquivalentTo(new KeyValuePair<CacheKey, string?>[] { new(_cacheKey, null), new(_multiKey, null) });
     }
 
-    private void GiveKeysDifferentSlots()
-    {
-        _database.Multiplexer.GetHashSlot(_redisKey).Returns(1);
-        _database.Multiplexer.GetHashSlot(_redisMultiKey).Returns(2);
-    }
-
     [Fact]
     public async Task Multi_get_has_no_redis_exceptions()
     {
@@ -145,10 +143,6 @@ public class RedisCacheTests(ITestContextAccessor testContextAccessor) : IAsyncL
         var actualValue = await Sut.GetAsync<int?>(new CacheKey[] { _cacheKey, _multiKey }, policy: null, token: testContextAccessor.Current.CancellationToken);
         actualValue.Should().BeEquivalentTo(new KeyValuePair<CacheKey, int?>[] { new(_cacheKey, default), new(_multiKey, default) });
     }
-
-    private int HitCount => _telemetry.Metrics.Count(m => m.Name.Contains(".Hits."));
-    private int MissCount => _telemetry.Metrics.Count(m => m.Name.Contains(".Misses."));
-    private IEnumerable<DependencyRecord> ReadDeps => _telemetry.Dependencies.Where(d => d.Type == TelemetryOperation.DependencyType);
 
     [Fact]
     public async Task Multi_get_returns_defaults_without_redis_or_telemetry_when_disconnected()
@@ -1290,25 +1284,6 @@ public class RedisCacheTests(ITestContextAccessor testContextAccessor) : IAsyncL
         ((byte[]?)captured!.Value).Should().Equal(1, 2, 3);
     }
 
-    private sealed class RecordingRawSerializer : RawByteSerializerProxy
-    {
-        public int ArrayCalls { get; private set; }
-
-        public int MemoryCalls { get; private set; }
-
-        public override byte[]? Serialize(object? value)
-        {
-            ArrayCalls++;
-            return base.Serialize(value);
-        }
-
-        public override ReadOnlyMemory<byte> SerializeToMemory<T>(T? value) where T : default
-        {
-            MemoryCalls++;
-            return base.SerializeToMemory(value);
-        }
-    }
-
     [Fact]
     public async Task SetAsync_writes_empty_value_when_CacheNullValues_true_and_value_is_null()
     {
@@ -1442,7 +1417,7 @@ public class RedisCacheTests(ITestContextAccessor testContextAccessor) : IAsyncL
         _cacheOptions = new RedisCacheOptions
         {
             CacheKeyStrategy = _cacheKeyStrategy,
-            RedisKeyStrategyFactory = redisKeyStrategyFactory
+            RedisKeyStrategyFactory = redisKeyStrategyFactory,
         };
 
         _database = _fixture.Freeze<IDatabase>();
@@ -1463,6 +1438,12 @@ public class RedisCacheTests(ITestContextAccessor testContextAccessor) : IAsyncL
         _connector.Version.Returns(_ => _version);
         _connector.IsConnected.Returns(ctx => _isConnected);
         return ValueTask.CompletedTask;
+    }
+
+    private void GiveKeysDifferentSlots()
+    {
+        _database.Multiplexer.GetHashSlot(_redisKey).Returns(1);
+        _database.Multiplexer.GetHashSlot(_redisMultiKey).Returns(2);
     }
 
     private async Task GetOrAdd_works_as_expected(string? redisReturn, string? generatorReturn, bool expectedGeneratorCall, int stringSetCalls, Type expirationType)
@@ -1541,5 +1522,24 @@ public class RedisCacheTests(ITestContextAccessor testContextAccessor) : IAsyncL
         actualResponse.Should().Be(expectedResponse);
         await _transaction.Received(1).StringSetAsync(_redisKey, Arg.Any<RedisValue>(), Arg.Any<TimeSpan?>(), Arg.Any<When>(), Arg.Is<CommandFlags>(f => f.HasFlag(CommandFlags.DemandMaster)));
         await _transaction.Received(1).StringSetAsync(_redisMultiKey, Arg.Any<RedisValue>(), Arg.Any<TimeSpan?>(), Arg.Any<When>(), Arg.Is<CommandFlags>(f => f.HasFlag(CommandFlags.DemandMaster)));
+    }
+
+    private sealed class RecordingRawSerializer : RawByteSerializerProxy
+    {
+        public int ArrayCalls { get; private set; }
+
+        public int MemoryCalls { get; private set; }
+
+        public override byte[]? Serialize(object? value)
+        {
+            ArrayCalls++;
+            return base.Serialize(value);
+        }
+
+        public override ReadOnlyMemory<byte> SerializeToMemory<T>(T? value) where T : default
+        {
+            MemoryCalls++;
+            return base.SerializeToMemory(value);
+        }
     }
 }

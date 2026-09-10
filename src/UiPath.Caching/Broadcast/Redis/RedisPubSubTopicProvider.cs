@@ -60,9 +60,6 @@ public class RedisPubSubTopicProvider : RedisTopicProviderBase
             _stopTokenSource.Token);
     }
 
-    private RedisPubSubTopicOptions? ResolveOptions(TopicKey topicKey) =>
-        _registry.Resolve(topicKey, _options.Clone, _logger);
-
     protected override void Dispose(bool disposing)
     {
         if (!_disposed)
@@ -78,4 +75,7 @@ public class RedisPubSubTopicProvider : RedisTopicProviderBase
 
         base.Dispose(disposing);
     }
+
+    private RedisPubSubTopicOptions? ResolveOptions(TopicKey topicKey) =>
+        _registry.Resolve(topicKey, _options.Clone, _logger);
 }

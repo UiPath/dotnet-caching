@@ -36,7 +36,7 @@ public class MemoryCacheSetterTests : IAsyncLifetime
     {
         _memoryCache = new MemoryCache(Options.Create(new MemoryCacheOptions
         {
-            Clock = _clock
+            Clock = _clock,
         }));
         _fixture.Inject(_memoryCache);
 
@@ -45,7 +45,7 @@ public class MemoryCacheSetterTests : IAsyncLifetime
             ActiveChangeCallbacks = true,
             HasChanged = false,
             Expiration = _clock.UtcNow.AddDays(1),
-            TransportId = "1234567890"
+            TransportId = "1234567890",
         };
         _changeTokenFactory.Create(Arg.Any<string>(), Arg.Any<ITopic<ICacheEvent>>(), Arg.Any<string>(), Arg.Any<Type>())
             .Returns(c => token, c=> throw new Exception());
@@ -66,7 +66,7 @@ public class MemoryCacheSetterTests : IAsyncLifetime
     {
         _memoryCache = new MemoryCache(Options.Create(new MemoryCacheOptions
         {
-            Clock = _clock
+            Clock = _clock,
         }));
         _fixture.Inject(_memoryCache);
 
@@ -113,7 +113,7 @@ public class MemoryCacheSetterTests : IAsyncLifetime
     {
         _memoryCache = new MemoryCache(Options.Create(new MemoryCacheOptions
         {
-            Clock = _clock
+            Clock = _clock,
         }));
         _fixture.Inject(_memoryCache);
 
@@ -152,7 +152,7 @@ public class MemoryCacheSetterTests : IAsyncLifetime
     {
         _memoryCache = new MemoryCache(Options.Create(new MemoryCacheOptions
         {
-            Clock = _clock
+            Clock = _clock,
         }));
         _fixture.Inject(_memoryCache);
 

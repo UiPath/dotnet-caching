@@ -6,6 +6,8 @@ namespace UiPath.Caching.Tests;
 
 public class MultilayerCacheRehydrateTests(ITestContextAccessor testContextAccessor) : IAsyncLifetime
 {
+
+    private static readonly TimeSpan Duration = TimeSpan.FromMinutes(10);
     private readonly IFixture _fixture = AutoFixtureCreator.NSubstitute();
 
     private ICache _innerCache = default!;
@@ -26,22 +28,6 @@ public class MultilayerCacheRehydrateTests(ITestContextAccessor testContextAcces
     private MultilayerCache? _sut;
 
     private MultilayerCache Sut => _sut ??= _fixture.Create<MultilayerCache>();
-
-    private static readonly TimeSpan Duration = TimeSpan.FromMinutes(10);
-
-    private static CachePolicy RehydratePolicy(double threshold = 0.75) => new()
-    {
-        DistributedExpiration = Duration,
-        RehydrateEnabled = true,
-        Rehydrate = new RehydrateOptions
-        {
-            Threshold = threshold,
-            BaseCooldown = TimeSpan.FromSeconds(1),
-            MaxCooldown = TimeSpan.FromMinutes(5),
-            TimeoutFraction = 0.5,
-            Name = "test-profile",
-        },
-    };
 
     [Fact]
     public async Task Hit_before_threshold_does_not_trigger_rehydrate()
@@ -452,20 +438,6 @@ public class MultilayerCacheRehydrateTests(ITestContextAccessor testContextAcces
                 "single-key rehydrate telemetry must be unchanged by the set refactor"));
     }
 
-    private static async Task WaitForAsync(Func<bool> predicate, TimeSpan timeout, CancellationToken token)
-    {
-        var sw = System.Diagnostics.Stopwatch.StartNew();
-        while (sw.Elapsed < timeout)
-        {
-            if (predicate())
-            {
-                return;
-            }
-            await Task.Delay(10, token);
-        }
-        throw new TimeoutException($"WaitForAsync timed out after {timeout} — predicate never became true. Background rehydrate path likely never ran.");
-    }
-
     public ValueTask DisposeAsync() => ValueTask.CompletedTask;
 
     public ValueTask InitializeAsync()
@@ -501,5 +473,33 @@ public class MultilayerCacheRehydrateTests(ITestContextAccessor testContextAcces
         _memoryCacheFactory.Get(Arg.Any<IMemoryCacheOptions>()).Returns(_memoryCache);
         _cacheEventFactory = _fixture.Freeze<ICacheEventFactory>();
         return ValueTask.CompletedTask;
+    }
+
+    private static CachePolicy RehydratePolicy(double threshold = 0.75) => new()
+    {
+        DistributedExpiration = Duration,
+        RehydrateEnabled = true,
+        Rehydrate = new RehydrateOptions
+        {
+            Threshold = threshold,
+            BaseCooldown = TimeSpan.FromSeconds(1),
+            MaxCooldown = TimeSpan.FromMinutes(5),
+            TimeoutFraction = 0.5,
+            Name = "test-profile",
+        },
+    };
+
+    private static async Task WaitForAsync(Func<bool> predicate, TimeSpan timeout, CancellationToken token)
+    {
+        var sw = System.Diagnostics.Stopwatch.StartNew();
+        while (sw.Elapsed < timeout)
+        {
+            if (predicate())
+            {
+                return;
+            }
+            await Task.Delay(10, token);
+        }
+        throw new TimeoutException($"WaitForAsync timed out after {timeout} — predicate never became true. Background rehydrate path likely never ran.");
     }
 }

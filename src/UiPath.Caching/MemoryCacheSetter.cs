@@ -1,4 +1,4 @@
-﻿using UiPath.Caching.Telemetry;
+using UiPath.Caching.Telemetry;
 
 namespace UiPath.Caching;
 
@@ -15,16 +15,16 @@ internal abstract class MemoryCacheSetter(
     KeyMasker? masker = null
         )
 {
-    private readonly KeyMasker _masker = masker ?? KeyMasker.Off;
 
     private const string EventRefreshMetadataFailed = "Caching." + nameof(MemoryCacheSetter) + "." + nameof(RefreshMetadata) + ".Failed";
     private const string PropCacheKey = "CacheKey";
     private const string PropTopicKey = "TopicKey";
     private const string PropTransportId = "TransportId";
-
-    private ICacheEntrySizeProvider SizeProvider { get; } = memoryCacheOptions.SizeProvider ?? new DefaultCacheEntrySizeProvider();
+    private readonly KeyMasker _masker = masker ?? KeyMasker.Off;
 
     protected TimeProvider Clock { get; } = clock;
+
+    private ICacheEntrySizeProvider SizeProvider { get; } = memoryCacheOptions.SizeProvider ?? new DefaultCacheEntrySizeProvider();
 
     public bool Set(ICacheEntryOptions options, ICacheEntry item, Type entryType, TimeSpan? maxExpiration)
     {
@@ -56,19 +56,21 @@ internal abstract class MemoryCacheSetter(
         }
     }
 
-    static void PostEviction(object key, object? value, EvictionReason reason, object? state)
-    {
-        if (state is IDisposable disposable)
-        {
-            disposable.Dispose();
-        }
-    }
-
     internal void RefreshMetadata(object? state)
     {
         if (state is RefreshMetadataState metadataState)
         {
             RefreshMetadata(metadataState);
+        }
+    }
+
+    protected abstract ICacheEntryOptions CreateEntry(RefreshMetadataState metadataState, CancellationToken cancellationToken);
+
+    private static void PostEviction(object key, object? value, EvictionReason reason, object? state)
+    {
+        if (state is IDisposable disposable)
+        {
+            disposable.Dispose();
         }
     }
 
@@ -109,8 +111,6 @@ internal abstract class MemoryCacheSetter(
         }
 
     }
-
-    protected abstract ICacheEntryOptions CreateEntry(RefreshMetadataState metadataState, CancellationToken cancellationToken);
 
     private DateTimeOffset GetCacheExpiration(DateTimeOffset expiration, TimeSpan? maxExpiration)
     {

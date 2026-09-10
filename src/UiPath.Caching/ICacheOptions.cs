@@ -2,17 +2,17 @@ namespace UiPath.Caching;
 
 public interface ICacheOptions
 {
-    public bool Enabled { get; }
+    bool Enabled { get; }
 
-    public TimeSpan? DefaultExpiration { get; }
+    TimeSpan? DefaultExpiration { get; }
 
-    public TimeSpan Timeout { get; set; }
+    TimeSpan Timeout { get; set; }
 
-    public ICacheEntryFactory? EntryFactory { get; set; }
+    ICacheEntryFactory? EntryFactory { get; set; }
 
-    public ICacheKeyStrategy? CacheKeyStrategy { get; set; }
+    ICacheKeyStrategy? CacheKeyStrategy { get; set; }
 
-    public bool? ConnectionMonitorEnabled { get; set; }
+    bool? ConnectionMonitorEnabled { get; set; }
 
     /// <summary>
     /// When true, <c>GetOrAddAsync</c> caches a generator's null / empty result instead of re-invoking the
@@ -20,5 +20,5 @@ public interface ICacheOptions
     /// likewise persist the sentinel instead of removing the entry. Default false preserves legacy
     /// behavior for callers that haven't opted in.
     /// </summary>
-    public bool CacheNullValues { get => false; set => _ = value; }
+    bool CacheNullValues { get => false; set => _ = value; }
 }

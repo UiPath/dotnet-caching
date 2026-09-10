@@ -140,8 +140,15 @@ public class RedisStreamNotifyChannelTests
             .Do(_ =>
             {
                 var n = Interlocked.Increment(ref calls);
-                if (n == 1) firstCall.TrySetResult(true);
-                if (n >= 2) secondCall.TrySetResult(true);
+                if (n == 1)
+                {
+                    firstCall.TrySetResult(true);
+                }
+
+                if (n >= 2)
+                {
+                    secondCall.TrySetResult(true);
+                }
             });
 
         using var waiter = new SignalingFetchWaiter(5.Seconds());
@@ -289,8 +296,15 @@ public class RedisStreamNotifyChannelTests
             .Do(_ =>
             {
                 var n = Interlocked.Increment(ref subscribeCalls);
-                if (n == 1) firstSubscribed.TrySetResult(true);
-                if (n >= 2) secondSubscribed.TrySetResult(true);
+                if (n == 1)
+                {
+                    firstSubscribed.TrySetResult(true);
+                }
+
+                if (n >= 2)
+                {
+                    secondSubscribed.TrySetResult(true);
+                }
             });
         subscriber.When(s => s.Unsubscribe(channel, Arg.Any<Action<RedisChannel, RedisValue>>(), Arg.Any<CommandFlags>()))
             .Do(_ => throw new RedisConnectionException(ConnectionFailureType.SocketFailure, CommandFlags.None, "stale"));

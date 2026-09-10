@@ -101,8 +101,13 @@ jobs:
       - name: Restore
         run: dotnet restore UiPath.Caching.slnx
 
+      # -warnaserror is what keeps the analyzer rules in .editorconfig from drifting back:
+      # TreatWarningsAsErrors stays false so a local build still compiles while you work. It rides
+      # on this job alone. build-linux builds under the SonarScanner, whose analyzer package is not
+      # pinned here, so a new Sonar rule would fail the build instead of reporting; the analyzers
+      # this repo does pin run identically on both jobs, so gating one catches the same drift.
       - name: Build
-        run: dotnet build UiPath.Caching.slnx -c Release --no-restore
+        run: dotnet build UiPath.Caching.slnx -c Release --no-restore -warnaserror
 
       # Redis-backed integration tests run on the Linux job (service containers are Linux-only).
       # Windows is build-only to validate cross-platform compilation.

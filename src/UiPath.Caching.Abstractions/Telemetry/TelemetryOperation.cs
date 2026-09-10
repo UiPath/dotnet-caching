@@ -5,9 +5,6 @@ namespace UiPath.Caching.Telemetry;
 
 public sealed class TelemetryOperation(string providerName, string callerMethod, Type cacheObjectType, ICachingTelemetryProvider telemetryProvider) : ITelemetryOperation
 {
-    private const string Prefix = "Caching.Stats.";
-    private const string Hits = Prefix + "Hits.";
-    private const string Misses = Prefix + "Misses.";
 
     public const string DependencyType = "Redis";
     public const string OutcomeTag = "Outcome";
@@ -16,6 +13,9 @@ public sealed class TelemetryOperation(string providerName, string callerMethod,
     public const string TypeTag = "Type";
     public const string KeysTag = "Keys";
     public const string BatchIdTag = "BatchId";
+    private const string Prefix = "Caching.Stats.";
+    private const string Hits = Prefix + "Hits.";
+    private const string Misses = Prefix + "Misses.";
     private const string HitOutcome = "Hit";
     private const string MissOutcome = "Miss";
 

@@ -34,6 +34,10 @@ public class MultilayerCacheTryAddTests(ITestContextAccessor testContextAccessor
 
     private MultilayerCache? _sut;
 
+    public interface ITopicProviderWithConnectionState : ITopicProvider, IConnectionState
+    {
+    }
+
     private MultilayerCache Sut => _sut ??= _fixture.Create<MultilayerCache>();
 
     private CancellationToken Ct => testContextAccessor.Current.CancellationToken;
@@ -304,28 +308,6 @@ public class MultilayerCacheTryAddTests(ITestContextAccessor testContextAccessor
         added.Should().BeTrue("the L2 granted the claim, and the outer cache does not second-guess it");
     }
 
-    private static MultilayerCache CreateInMemorySut()
-    {
-        var options = new InMemoryCacheOptions();
-        var cacheOptions = new CacheOptions { AppShortName = "test" };
-        return new MultilayerCache(
-            KnownCacheProviderNames.InMemory,
-            NullCache.Instance,
-            new MemoryCacheFactory(TimeProvider.System, NullLoggerFactory.Instance),
-            NullChangeTokenFactory.Instance,
-            NullTopicFactory.Instance,
-            NullCacheEventFactory.Instance,
-            NullTelemetryProvider.Instance,
-            options,
-            options,
-            cacheOptions,
-            localLock: new AsyncKeyedLocalLock(Options.Create(cacheOptions)),
-            distributedLock: NullDistributedLock.Instance,
-            policyFactory: NullCachePolicyFactory.Instance,
-            clock: TimeProvider.System,
-            logger: NullLogger.Instance);
-    }
-
     [Fact]
     public async Task TryAdd_rejects_a_null_key()
     {
@@ -386,26 +368,9 @@ public class MultilayerCacheTryAddTests(ITestContextAccessor testContextAccessor
         return ValueTask.CompletedTask;
     }
 
-    public interface ITopicProviderWithConnectionState : ITopicProvider, IConnectionState
+    private static MultilayerCache CreateInMemorySut()
     {
-    }
-}
-
-/// <summary>
-/// The memory-only provider: a real <see cref="MultilayerCache"/> over <see cref="NullCache"/>, so
-/// the local tier is the storage <em>and</em> the arbiter. Exclusion here is in-process only, which
-/// is the honest ceiling for a cache with no shared store — these tests pin that it is at least
-/// correct within the process.
-/// </summary>
-public class InMemoryCacheTryAddTests
-{
-    private static CancellationToken Ct => TestContext.Current.CancellationToken;
-
-    private static MultilayerCache CreateSut(
-        InMemoryCacheOptions? options = null,
-        ILocalLock? localLock = null)
-    {
-        options ??= new InMemoryCacheOptions();
+        var options = new InMemoryCacheOptions();
         var cacheOptions = new CacheOptions { AppShortName = "test" };
         return new MultilayerCache(
             KnownCacheProviderNames.InMemory,
@@ -418,12 +383,23 @@ public class InMemoryCacheTryAddTests
             options,
             options,
             cacheOptions,
-            localLock: localLock ?? new AsyncKeyedLocalLock(Options.Create(cacheOptions)),
+            localLock: new AsyncKeyedLocalLock(Options.Create(cacheOptions)),
             distributedLock: NullDistributedLock.Instance,
             policyFactory: NullCachePolicyFactory.Instance,
             clock: TimeProvider.System,
             logger: NullLogger.Instance);
     }
+}
+
+/// <summary>
+/// The memory-only provider: a real <see cref="MultilayerCache"/> over <see cref="NullCache"/>, so
+/// the local tier is the storage <em>and</em> the arbiter. Exclusion here is in-process only, which
+/// is the honest ceiling for a cache with no shared store — these tests pin that it is at least
+/// correct within the process.
+/// </summary>
+public class InMemoryCacheTryAddTests
+{
+    private static CancellationToken Ct => TestContext.Current.CancellationToken;
 
     [Fact]
     public async Task First_caller_adds_and_the_second_loses()
@@ -521,11 +497,6 @@ public class InMemoryCacheTryAddTests
         (await sut.TryAddAsync("k", "second", policy: null, token: Ct)).Should().BeTrue();
     }
 
-    private sealed class OversizedEntryProvider : ICacheEntrySizeProvider
-    {
-        public long GetSize(ICacheEntry entry) => long.MaxValue;
-    }
-
     [Theory]
     [InlineData(0)]
     [InlineData(-1)]
@@ -549,6 +520,35 @@ public class InMemoryCacheTryAddTests
 
         (await act.Should().ThrowAsync<ArgumentOutOfRangeException>()).And.ParamName.Should().Be("expiration");
         (await sut.GetAsync<string>("k", policy: null, token: Ct)).Should().BeNull();
+    }
+
+    private static MultilayerCache CreateSut(
+        InMemoryCacheOptions? options = null,
+        ILocalLock? localLock = null)
+    {
+        options ??= new InMemoryCacheOptions();
+        var cacheOptions = new CacheOptions { AppShortName = "test" };
+        return new MultilayerCache(
+            KnownCacheProviderNames.InMemory,
+            NullCache.Instance,
+            new MemoryCacheFactory(TimeProvider.System, NullLoggerFactory.Instance),
+            NullChangeTokenFactory.Instance,
+            NullTopicFactory.Instance,
+            NullCacheEventFactory.Instance,
+            NullTelemetryProvider.Instance,
+            options,
+            options,
+            cacheOptions,
+            localLock: localLock ?? new AsyncKeyedLocalLock(Options.Create(cacheOptions)),
+            distributedLock: NullDistributedLock.Instance,
+            policyFactory: NullCachePolicyFactory.Instance,
+            clock: TimeProvider.System,
+            logger: NullLogger.Instance);
+    }
+
+    private sealed class OversizedEntryProvider : ICacheEntrySizeProvider
+    {
+        public long GetSize(ICacheEntry entry) => long.MaxValue;
     }
 
     /// <summary>

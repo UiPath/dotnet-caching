@@ -104,7 +104,218 @@ public sealed class RedisConnector : IRedisConnector
     [ExcludeFromCodeCoverage(Justification = "Lazy resolves through GetVersion, which is itself excluded as live-multiplexer-only.")]
     public Version Version => _version.Value;
 
+    public bool IsConnected
+    {
+        get
+        {
+            var lazy = _lazyCacheConnectionMultiplexer;
+            return lazy.IsValueCreated
+                && lazy.Value.IsCompletedSuccessfully
+                && lazy.Value.Result.IsConnected;
+        }
+    }
+
     private IConnectionMultiplexer ConnectionMultiplexer => GetConnectionTask().GetAwaiter().GetResult();
+
+    public EndPoint[] GetEndPoints(bool configuredOnly = false)
+    {
+        var lazy = _lazyCacheConnectionMultiplexer;
+        return lazy.IsValueCreated && lazy.Value.IsCompletedSuccessfully
+            ? lazy.Value.Result.GetEndPoints(configuredOnly)
+            : [];
+    }
+
+    public void ForceReconnect() => ForceReconnect(_lazyCacheConnectionMultiplexer);
+
+    public async ValueTask ConnectAsync(CancellationToken cancellationToken = default)
+    {
+        var task = GetConnectionTask();
+        _ = task.ContinueWith(static t => _ = t.Exception, CancellationToken.None, TaskContinuationOptions.OnlyOnFaulted | TaskContinuationOptions.ExecuteSynchronously, TaskScheduler.Default);
+        await task.WaitAsync(cancellationToken).ConfigureAwait(false);
+    }
+
+    public void Dispose()
+    {
+        Dispose(true);
+        GC.SuppressFinalize(this);
+    }
+
+    internal static string FormatEndPoint(EndPoint endPoint) => endPoint switch
+    {
+        IPEndPoint ip => $"{ip.Address}:{ip.Port}",
+        DnsEndPoint dns => $"{dns.Host}:{dns.Port}",
+        _ => endPoint.ToString() ?? string.Empty,
+    };
+
+    internal static bool IsHangDetected(int awaitingResponseCount, int now, int lastWrite, int writeStatus, int lastRead, int lastWriteThresholdMs, int lastReadThresholdMs) =>
+        awaitingResponseCount > 100
+        && now - lastWrite > lastWriteThresholdMs
+        && writeStatus == 3
+        && now - lastRead > lastReadThresholdMs;
+
+    /// <summary>Only topology-discovered endpoints can go stale; configured ones are left to StackExchange.Redis.</summary>
+    internal async Task ScanStaleEndpointsAsync()
+    {
+        if (_disposed || _staleScanDisabled || Volatile.Read(ref _reconnecting) > 0)
+        {
+            return;
+        }
+
+        var lazy = _lazyCacheConnectionMultiplexer;
+        if (!lazy.IsValueCreated || !lazy.Value.IsCompletedSuccessfully)
+        {
+            return;
+        }
+
+        if (Interlocked.CompareExchange(ref _staleScanRunning, 1, 0) != 0)
+        {
+            return;
+        }
+
+        try
+        {
+            if (_scansToSkip > 0)
+            {
+                _scansToSkip--;
+                return;
+            }
+
+            var stale = await FindStaleEndpointsAsync(lazy.Value.Result).ConfigureAwait(false);
+            _scanFailures = 0;
+            if (!ReferenceEquals(_lazyCacheConnectionMultiplexer, lazy))
+            {
+                return;
+            }
+
+            if (stale is null)
+            {
+                DisableStaleEndpointScan(lazy);
+                return;
+            }
+
+            if (stale.Count == 0)
+            {
+                return;
+            }
+
+            _telemetryProvider.TrackEvent(
+                "Redis.StaleEndpointDetected",
+                [
+                    new("EndPoints", string.Join(";", stale.Select(FormatEndPoint))),
+                    new("Threshold", _staleEndpointThreshold.ToString()),
+                ]);
+            ForceReconnect(lazy); // the timestamps stay until a scan of the new multiplexer prunes them, so a failed rebuild is retried next scan
+        }
+        catch (Exception ex)
+        {
+            _scansToSkip = Math.Min(1 << Math.Min(++_scanFailures, 7), MaxScanBackoff); // a handshake that never completes fails every refresh; back off instead of tracking it every interval
+            _telemetryProvider.TrackException(ex);
+        }
+        finally
+        {
+            Interlocked.Exchange(ref _staleScanRunning, 0);
+        }
+    }
+
+    internal async Task<ClusterMembership> RefreshClusterMembershipAsync(IConnectionMultiplexer multiplexer)
+    {
+        // A non-initial reconfigure re-handshakes the configured endpoints only, so only their configuration can become current.
+        var configured = multiplexer.GetEndPoints(configuredOnly: true);
+        var candidates = multiplexer.GetServers()
+            .Where(server => server.IsConnected && Array.IndexOf(configured, server.EndPoint) >= 0)
+            .Select(server => (Server: server, Before: _topologyReader.GetConfiguration(server)))
+            .ToList();
+
+        // The client's own handshake reads CLUSTER NODES as an internal call, so AllowAdmin does not apply; false means another reconfiguration held the guard.
+        if (candidates.Count == 0 || !await multiplexer.ConfigureAsync().ConfigureAwait(false))
+        {
+            return ClusterMembership.Inconclusive;
+        }
+
+        var unchanged = false;
+        var neverConfigured = false;
+        foreach (var (server, before) in candidates)
+        {
+            var after = _topologyReader.GetConfiguration(server);
+            if (after is null)
+            {
+                neverConfigured |= before is null && server.IsConnected;
+            }
+            else if (ReferenceEquals(after, before))
+            {
+                unchanged = true; // a landed re-read installs a new instance, so the same one means this node's refresh failed
+            }
+            else if (server.IsConnected)
+            {
+                _nullTopologyRefreshes = 0;
+                return new(Conclusive: true, _topologyReader.GetMembers(after));
+            }
+        }
+
+        if (unchanged || !neverConfigured)
+        {
+            _nullTopologyRefreshes = 0;
+            return ClusterMembership.Inconclusive;
+        }
+
+        // A node with no configuration may have lost only the topology reply; a persistent absence means it cannot answer it.
+        // The streak belongs to the multiplexer it was observed on, so a rebuilt one starts over.
+        if (!ReferenceEquals(_nullTopologyMultiplexer, multiplexer))
+        {
+            _nullTopologyMultiplexer = multiplexer;
+            _nullTopologyRefreshes = 0;
+        }
+
+        return ++_nullTopologyRefreshes >= NullTopologyRefreshLimit ? new(Conclusive: true, Members: null) : ClusterMembership.Inconclusive;
+    }
+
+#pragma warning disable IDE0079 // Remove unnecessary suppression
+    [SuppressMessage("SonarQube", "S3011:Reflection should not be used to create instances of types", Justification = "By design")]
+#pragma warning restore IDE0079 // Remove unnecessary suppression
+    [ExcludeFromCodeCoverage(Justification = "Reflects into StackExchange.Redis private fields (server/interactive/physical) — values only exist on a live multiplexer with established physical connections.")]
+    internal ReadWriteStatus? GetMasterPhysicalConnectionMetrics(IConnectionMultiplexer multiplexer)
+    {
+        if (multiplexer.GetEndPoints().Select(x => multiplexer.GetServer(x)).FirstOrDefault(x => !x.IsReplica && x.IsConnected) is not IServer master)
+        {
+            return null;
+        }
+
+        try
+        {
+#pragma warning disable CS8602 // Dereference of a possibly null reference.
+            var serverEndpoint = master.GetType().GetField("server", BindingFlags.NonPublic | BindingFlags.Instance).GetValue(master);
+            var interactivePhysicalBridge = serverEndpoint.GetType().GetField("interactive", BindingFlags.NonPublic | BindingFlags.Instance).GetValue(serverEndpoint);
+            var physicalConnection = interactivePhysicalBridge.GetType().GetField("physical", BindingFlags.NonPublic | BindingFlags.Instance).GetValue(interactivePhysicalBridge);
+            var lastWriteTickCount = physicalConnection.GetType().GetField("lastWriteTickCount", BindingFlags.NonPublic | BindingFlags.Instance).GetValue(physicalConnection);
+            var writeStatus = physicalConnection.GetType().GetField("_writeStatus", BindingFlags.NonPublic | BindingFlags.Instance).GetValue(physicalConnection);
+            var lastReadTickCount = physicalConnection.GetType().GetField("lastReadTickCount", BindingFlags.NonPublic | BindingFlags.Instance).GetValue(physicalConnection);
+            var readStatus = physicalConnection.GetType().GetField("_readStatus", BindingFlags.NonPublic | BindingFlags.Instance).GetValue(physicalConnection);
+            var awaitingResponseCount = physicalConnection.GetType().GetMethod("GetSentAwaitingResponseCount", BindingFlags.NonPublic | BindingFlags.Instance).Invoke(physicalConnection, []);
+#pragma warning restore CS8602 // Dereference of a possibly null reference.
+
+            return new ReadWriteStatus(
+                master.EndPoint,
+                Convert.ToInt32(awaitingResponseCount, CultureInfo.InvariantCulture),
+                Convert.ToInt32(lastWriteTickCount, CultureInfo.InvariantCulture),
+                Convert.ToInt32(writeStatus, CultureInfo.InvariantCulture),
+                Convert.ToInt32(lastReadTickCount, CultureInfo.InvariantCulture),
+                Convert.ToInt32(readStatus, CultureInfo.InvariantCulture));
+        }
+        catch (Exception ex)
+        {
+            _telemetryProvider.TrackException(ex);
+            return null;
+        }
+    }
+
+    [ExcludeFromCodeCoverage(Justification = "Only called from the excluded OnInternalConnection* event handlers.")]
+    private static KeyValuePair<string, string>[] GetEventProperties(ConnectionFailedEventArgs e) =>
+    [
+        new(nameof(e.EndPoint), e.EndPoint?.ToString() ?? string.Empty),
+        new(nameof(e.FailureType), e.FailureType.ToString()),
+        new("ExceptionMessage", e.Exception?.Message ?? string.Empty),
+        new("ExceptionType", e.Exception?.GetType()?.FullName ?? string.Empty),
+    ];
 
     private Lazy<Task<IConnectionMultiplexer>> CreateLazyConnection() =>
         new(() =>
@@ -141,27 +352,6 @@ public sealed class RedisConnector : IRedisConnector
             return _lazyCacheConnectionMultiplexer.Value;
         }
     }
-
-    public bool IsConnected
-    {
-        get
-        {
-            var lazy = _lazyCacheConnectionMultiplexer;
-            return lazy.IsValueCreated
-                && lazy.Value.IsCompletedSuccessfully
-                && lazy.Value.Result.IsConnected;
-        }
-    }
-
-    public EndPoint[] GetEndPoints(bool configuredOnly = false)
-    {
-        var lazy = _lazyCacheConnectionMultiplexer;
-        return lazy.IsValueCreated && lazy.Value.IsCompletedSuccessfully
-            ? lazy.Value.Result.GetEndPoints(configuredOnly)
-            : [];
-    }
-
-    public void ForceReconnect() => ForceReconnect(_lazyCacheConnectionMultiplexer);
 
     private void ForceReconnect(Lazy<Task<IConnectionMultiplexer>> current)
     {
@@ -257,13 +447,6 @@ public sealed class RedisConnector : IRedisConnector
         }
     }
 
-    public async ValueTask ConnectAsync(CancellationToken cancellationToken = default)
-    {
-        var task = GetConnectionTask();
-        _ = task.ContinueWith(static t => _ = t.Exception, CancellationToken.None, TaskContinuationOptions.OnlyOnFaulted | TaskContinuationOptions.ExecuteSynchronously, TaskScheduler.Default);
-        await task.WaitAsync(cancellationToken).ConfigureAwait(false);
-    }
-
     [ExcludeFromCodeCoverage(Justification = "Reads server.Version off a live IConnectionMultiplexer endpoint — needs a real Redis to exercise.")]
     private Version GetVersion()
     {
@@ -310,12 +493,6 @@ public sealed class RedisConnector : IRedisConnector
         }
     }
 
-    public void Dispose()
-    {
-        Dispose(true);
-        GC.SuppressFinalize(this);
-    }
-
     private void Dispose(bool disposing)
     {
         if (disposing)
@@ -356,70 +533,6 @@ public sealed class RedisConnector : IRedisConnector
 
             _hangDetectionTimer?.Dispose();
             _staleEndpointTimer?.Dispose();
-        }
-    }
-
-    /// <summary>Only topology-discovered endpoints can go stale; configured ones are left to StackExchange.Redis.</summary>
-    internal async Task ScanStaleEndpointsAsync()
-    {
-        if (_disposed || _staleScanDisabled || Volatile.Read(ref _reconnecting) > 0)
-        {
-            return;
-        }
-
-        var lazy = _lazyCacheConnectionMultiplexer;
-        if (!lazy.IsValueCreated || !lazy.Value.IsCompletedSuccessfully)
-        {
-            return;
-        }
-
-        if (Interlocked.CompareExchange(ref _staleScanRunning, 1, 0) != 0)
-        {
-            return;
-        }
-
-        try
-        {
-            if (_scansToSkip > 0)
-            {
-                _scansToSkip--;
-                return;
-            }
-
-            var stale = await FindStaleEndpointsAsync(lazy.Value.Result).ConfigureAwait(false);
-            _scanFailures = 0;
-            if (!ReferenceEquals(_lazyCacheConnectionMultiplexer, lazy))
-            {
-                return;
-            }
-
-            if (stale is null)
-            {
-                DisableStaleEndpointScan(lazy);
-                return;
-            }
-
-            if (stale.Count == 0)
-            {
-                return;
-            }
-
-            _telemetryProvider.TrackEvent(
-                "Redis.StaleEndpointDetected",
-                [
-                    new("EndPoints", string.Join(";", stale.Select(FormatEndPoint))),
-                    new("Threshold", _staleEndpointThreshold.ToString()),
-                ]);
-            ForceReconnect(lazy); // the timestamps stay until a scan of the new multiplexer prunes them, so a failed rebuild is retried next scan
-        }
-        catch (Exception ex)
-        {
-            _scansToSkip = Math.Min(1 << Math.Min(++_scanFailures, 7), MaxScanBackoff); // a handshake that never completes fails every refresh; back off instead of tracking it every interval
-            _telemetryProvider.TrackException(ex);
-        }
-        finally
-        {
-            Interlocked.Exchange(ref _staleScanRunning, 0);
         }
     }
 
@@ -505,58 +618,6 @@ public sealed class RedisConnector : IRedisConnector
     private bool IsRecentlyConfirmedMember(EndPoint endpoint, long now) =>
         _memberConfirmedAt.TryGetValue(endpoint, out var confirmedAt) && _clock.GetElapsedTime(confirmedAt, now) < _staleEndpointThreshold;
 
-    internal async Task<ClusterMembership> RefreshClusterMembershipAsync(IConnectionMultiplexer multiplexer)
-    {
-        // A non-initial reconfigure re-handshakes the configured endpoints only, so only their configuration can become current.
-        var configured = multiplexer.GetEndPoints(configuredOnly: true);
-        var candidates = multiplexer.GetServers()
-            .Where(server => server.IsConnected && Array.IndexOf(configured, server.EndPoint) >= 0)
-            .Select(server => (Server: server, Before: _topologyReader.GetConfiguration(server)))
-            .ToList();
-
-        // The client's own handshake reads CLUSTER NODES as an internal call, so AllowAdmin does not apply; false means another reconfiguration held the guard.
-        if (candidates.Count == 0 || !await multiplexer.ConfigureAsync().ConfigureAwait(false))
-        {
-            return ClusterMembership.Inconclusive;
-        }
-
-        var unchanged = false;
-        var neverConfigured = false;
-        foreach (var (server, before) in candidates)
-        {
-            var after = _topologyReader.GetConfiguration(server);
-            if (after is null)
-            {
-                neverConfigured |= before is null && server.IsConnected;
-            }
-            else if (ReferenceEquals(after, before))
-            {
-                unchanged = true; // a landed re-read installs a new instance, so the same one means this node's refresh failed
-            }
-            else if (server.IsConnected)
-            {
-                _nullTopologyRefreshes = 0;
-                return new(Conclusive: true, _topologyReader.GetMembers(after));
-            }
-        }
-
-        if (unchanged || !neverConfigured)
-        {
-            _nullTopologyRefreshes = 0;
-            return ClusterMembership.Inconclusive;
-        }
-
-        // A node with no configuration may have lost only the topology reply; a persistent absence means it cannot answer it.
-        // The streak belongs to the multiplexer it was observed on, so a rebuilt one starts over.
-        if (!ReferenceEquals(_nullTopologyMultiplexer, multiplexer))
-        {
-            _nullTopologyMultiplexer = multiplexer;
-            _nullTopologyRefreshes = 0;
-        }
-
-        return ++_nullTopologyRefreshes >= NullTopologyRefreshLimit ? new(Conclusive: true, Members: null) : ClusterMembership.Inconclusive;
-    }
-
     private void DisableStaleEndpointScan(Lazy<Task<IConnectionMultiplexer>> judged)
     {
         lock (_swapLock)
@@ -572,13 +633,6 @@ public sealed class RedisConnector : IRedisConnector
         _staleEndpointTimer?.Dispose();
         _telemetryProvider.TrackEvent("Redis.StaleEndpointScanDisabled", [new("Reason", "NoClusterConfiguration")]);
     }
-
-    internal static string FormatEndPoint(EndPoint endPoint) => endPoint switch
-    {
-        IPEndPoint ip => $"{ip.Address}:{ip.Port}",
-        DnsEndPoint dns => $"{dns.Host}:{dns.Port}",
-        _ => endPoint.ToString() ?? string.Empty,
-    };
 
     private void TryDisposeMultiplexer(IConnectionMultiplexer multiplexer)
     {
@@ -597,60 +651,6 @@ public sealed class RedisConnector : IRedisConnector
         var multiplexer = await CreateMultiplexerAsync(cancellationToken).ConfigureAwait(false);
         return ConfigureMultiplexerEvents(multiplexer);
     }
-
-    [ExcludeFromCodeCoverage(Justification = "Only called from the excluded OnInternalConnection* event handlers.")]
-    private static KeyValuePair<string, string>[] GetEventProperties(ConnectionFailedEventArgs e) =>
-    [
-        new(nameof(e.EndPoint), e.EndPoint?.ToString() ?? string.Empty),
-        new(nameof(e.FailureType), e.FailureType.ToString()),
-        new("ExceptionMessage", e.Exception?.Message ?? string.Empty),
-        new("ExceptionType", e.Exception?.GetType()?.FullName ?? string.Empty),
-    ];
-
-#pragma warning disable IDE0079 // Remove unnecessary suppression
-    [SuppressMessage("SonarQube", "S3011:Reflection should not be used to create instances of types", Justification = "By design")]
-#pragma warning restore IDE0079 // Remove unnecessary suppression
-    [ExcludeFromCodeCoverage(Justification = "Reflects into StackExchange.Redis private fields (server/interactive/physical) — values only exist on a live multiplexer with established physical connections.")]
-    internal ReadWriteStatus? GetMasterPhysicalConnectionMetrics(IConnectionMultiplexer multiplexer)
-    {
-        if (multiplexer.GetEndPoints().Select(x => multiplexer.GetServer(x)).FirstOrDefault(x => !x.IsReplica && x.IsConnected) is not IServer master)
-        {
-            return null;
-        }
-
-        try
-        {
-#pragma warning disable CS8602 // Dereference of a possibly null reference.
-            var serverEndpoint = master.GetType().GetField("server", BindingFlags.NonPublic | BindingFlags.Instance).GetValue(master);
-            var interactivePhysicalBridge = serverEndpoint.GetType().GetField("interactive", BindingFlags.NonPublic | BindingFlags.Instance).GetValue(serverEndpoint);
-            var physicalConnection = interactivePhysicalBridge.GetType().GetField("physical", BindingFlags.NonPublic | BindingFlags.Instance).GetValue(interactivePhysicalBridge);
-            var lastWriteTickCount = physicalConnection.GetType().GetField("lastWriteTickCount", BindingFlags.NonPublic | BindingFlags.Instance).GetValue(physicalConnection);
-            var writeStatus = physicalConnection.GetType().GetField("_writeStatus", BindingFlags.NonPublic | BindingFlags.Instance).GetValue(physicalConnection);
-            var lastReadTickCount = physicalConnection.GetType().GetField("lastReadTickCount", BindingFlags.NonPublic | BindingFlags.Instance).GetValue(physicalConnection);
-            var readStatus = physicalConnection.GetType().GetField("_readStatus", BindingFlags.NonPublic | BindingFlags.Instance).GetValue(physicalConnection);
-            var awaitingResponseCount = physicalConnection.GetType().GetMethod("GetSentAwaitingResponseCount", BindingFlags.NonPublic | BindingFlags.Instance).Invoke(physicalConnection, []);
-#pragma warning restore CS8602 // Dereference of a possibly null reference.
-
-            return new ReadWriteStatus(
-                master.EndPoint,
-                Convert.ToInt32(awaitingResponseCount, CultureInfo.InvariantCulture),
-                Convert.ToInt32(lastWriteTickCount, CultureInfo.InvariantCulture),
-                Convert.ToInt32(writeStatus, CultureInfo.InvariantCulture),
-                Convert.ToInt32(lastReadTickCount, CultureInfo.InvariantCulture),
-                Convert.ToInt32(readStatus, CultureInfo.InvariantCulture));
-        }
-        catch (Exception ex)
-        {
-            _telemetryProvider.TrackException(ex);
-            return null;
-        }
-    }
-
-    internal static bool IsHangDetected(int awaitingResponseCount, int now, int lastWrite, int writeStatus, int lastRead, int lastWriteThresholdMs, int lastReadThresholdMs) =>
-        awaitingResponseCount > 100
-        && now - lastWrite > lastWriteThresholdMs
-        && writeStatus == 3
-        && now - lastRead > lastReadThresholdMs;
 
     [ExcludeFromCodeCoverage(Justification = "Timer callback driven by hang-detection on live multiplexer metrics — depends on GetMasterPhysicalConnectionMetrics reflection output that only exists on a real Redis connection.")]
     private void OnHangScan()

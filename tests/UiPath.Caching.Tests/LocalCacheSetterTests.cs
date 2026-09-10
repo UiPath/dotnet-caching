@@ -34,7 +34,7 @@ public class LocalCacheSetterTests : IAsyncLifetime
     {
         _memoryCache = new MemoryCache(Options.Create(new MemoryCacheOptions
         {
-            Clock = _clock
+            Clock = _clock,
         }));
         _fixture.Inject(_memoryCache);
 
@@ -63,7 +63,7 @@ public class LocalCacheSetterTests : IAsyncLifetime
     {
         _memoryCache = new MemoryCache(Options.Create(new MemoryCacheOptions
         {
-            Clock = _clock
+            Clock = _clock,
         }));
         _fixture.Inject(_memoryCache);
 

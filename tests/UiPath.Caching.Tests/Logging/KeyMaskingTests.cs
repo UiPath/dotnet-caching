@@ -8,8 +8,6 @@ namespace UiPath.Caching.Tests.Logging;
 
 public class KeyMaskingTests
 {
-    private static string Render(IKeyMaskingPolicy policy, string key, string? composed = null, Type? valueType = null) =>
-        new KeyMasker(policy, KnownCacheProviderNames.Redis).Render(key, composed, valueType);
 
     [Fact]
     public void Nothing_is_masked_without_a_policy()
@@ -143,6 +141,8 @@ public class KeyMaskingTests
 
         provider.GetRequiredService<IKeyMaskingPolicy>().Should().BeOfType<RecordingPolicy>();
     }
+    private static string Render(IKeyMaskingPolicy policy, string key, string? composed = null, Type? valueType = null) =>
+        new KeyMasker(policy, KnownCacheProviderNames.Redis).Render(key, composed, valueType);
 
     private sealed class ThrowingPolicy : IKeyMaskingPolicy
     {

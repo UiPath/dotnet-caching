@@ -21,7 +21,7 @@ public class PrefixStrategyTests
         _prefix = prefix;
         _cacheOptions = new CacheOptions {
             Separator = separator,
-            AppShortName = appShortName
+            AppShortName = appShortName,
         };
 
         var act = () => Sut;
@@ -38,7 +38,7 @@ public class PrefixStrategyTests
         _cacheOptions = new CacheOptions
         {
             Separator = separator,
-            AppShortName = appShortName
+            AppShortName = appShortName,
         };
 
         var actual = Sut.GetRedisKey(key);

@@ -7,8 +7,6 @@ public interface ICacheEntry
 
     IDictionary<string, string?>? Metadata { get; }
 
-    ICacheEntry NewEntry(DateTimeOffset? expiration = null, IDictionary<string, string?>? metadata = null);
-
     object? Value { get; }
 
     /// <summary>
@@ -17,4 +15,6 @@ public interface ICacheEntry
     /// if your implementation populates a real expiration on miss.
     /// </summary>
     bool Found => Expiration > DateTimeOffset.MinValue;
+
+    ICacheEntry NewEntry(DateTimeOffset? expiration = null, IDictionary<string, string?>? metadata = null);
 }

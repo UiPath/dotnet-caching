@@ -11,21 +11,11 @@ public abstract class RedisTopicProviderBase(
     bool connectionMonitorEnabled)
     : ITopicProvider, IConnectionState
 {
-    private bool _disposed;
 
     private readonly ConcurrentDictionary<TopicKey, Lazy<ITopic<ICacheEvent>>> _topics = new();
 
     private readonly CancellationTokenSource _stopTokenSource = new();
-
-    protected IRedisConnector Redis { get; } = redis;
-
-    protected IConnectionState ConnectionState { get; } = connectionMonitorEnabled ? redis : NullConnectionStateMonitor.Instance;
-
-    protected ICachingTelemetryProvider Telemetry { get; } = telemetryProvider;
-
-    protected IRedisProfiler Profiler { get; } = redisProfiler;
-
-    protected ILoggerFactory LoggerFactory { get; } = loggerFactory;
+    private bool _disposed;
 
     public event EventHandler? OnConnectionFailed
     {
@@ -52,6 +42,16 @@ public abstract class RedisTopicProviderBase(
     public abstract bool Enabled { get; }
 
     public ICollection<TopicKey> Keys => _topics.Keys;
+
+    protected IRedisConnector Redis { get; } = redis;
+
+    protected IConnectionState ConnectionState { get; } = connectionMonitorEnabled ? redis : NullConnectionStateMonitor.Instance;
+
+    protected ICachingTelemetryProvider Telemetry { get; } = telemetryProvider;
+
+    protected IRedisProfiler Profiler { get; } = redisProfiler;
+
+    protected ILoggerFactory LoggerFactory { get; } = loggerFactory;
 
     public ITopic<ICacheEvent> Create(TopicKey topicKey) =>
         _topics.GetOrAdd(topicKey, tk => new Lazy<ITopic<ICacheEvent>>(() => {
@@ -90,6 +90,8 @@ public abstract class RedisTopicProviderBase(
         }
     }
 
+    protected abstract ITopic<ICacheEvent> CreateInternalTopic(TopicKey topicKey);
+
     private void RemoveTopic(object? sender, EventArgs e)
     {
         if (sender is ITopic<ICacheEvent> topic)
@@ -97,6 +99,4 @@ public abstract class RedisTopicProviderBase(
             Remove(topic.TopicKey);
         }
     }
-
-    protected abstract ITopic<ICacheEvent> CreateInternalTopic(TopicKey topicKey);
 }

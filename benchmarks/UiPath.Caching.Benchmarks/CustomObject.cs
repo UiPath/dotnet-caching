@@ -18,7 +18,7 @@ public class CustomObject
             Property2 = GenerateRandomString(1_000),
             Property3 = GenerateRandomDoubleArray(10_000),
             UtcDateTime = DateTime.UtcNow,
-            GuidList = GenerateRandomGuidList(5_000)
+            GuidList = GenerateRandomGuidList(5_000),
         };
 
         return customObject;
@@ -32,7 +32,7 @@ public class CustomObject
             Property2 = GenerateRandomString(100),
             Property3 = GenerateRandomDoubleArray(10),
             UtcDateTime = DateTime.UtcNow,
-            GuidList = GenerateRandomGuidList(10)
+            GuidList = GenerateRandomGuidList(10),
         };
 
         return customObject;

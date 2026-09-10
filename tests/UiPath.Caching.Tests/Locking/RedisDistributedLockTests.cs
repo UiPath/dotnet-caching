@@ -12,13 +12,6 @@ public class RedisDistributedLockTests(ITestContextAccessor testContextAccessor)
 
     private readonly IFixture _fixture = AutoFixtureCreator.NSubstitute();
 
-    private RedisDistributedLock NewLock(IRedisConnector? redis = null, CacheOptions? options = null, ICachingTelemetryProvider? telemetry = null)
-    {
-        redis ??= _fixture.Freeze<IRedisConnector>();
-        var opts = Options.Create(options ?? new CacheOptions());
-        return new RedisDistributedLock(redis, opts, telemetry ?? NullTelemetryProvider.Instance);
-    }
-
     [Fact]
     public async Task Acquire_returns_disposable_when_LockTake_succeeds()
     {
@@ -379,5 +372,12 @@ public class RedisDistributedLockTests(ITestContextAccessor testContextAccessor)
         });
         act.Should().Throw<ArgumentOutOfRangeException>()
             .Which.ParamName.Should().Be("cacheOptions.DistributedLockMaxPollInterval");
+    }
+
+    private RedisDistributedLock NewLock(IRedisConnector? redis = null, CacheOptions? options = null, ICachingTelemetryProvider? telemetry = null)
+    {
+        redis ??= _fixture.Freeze<IRedisConnector>();
+        var opts = Options.Create(options ?? new CacheOptions());
+        return new RedisDistributedLock(redis, opts, telemetry ?? NullTelemetryProvider.Instance);
     }
 }

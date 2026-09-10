@@ -45,7 +45,7 @@ builder.Services.AddSwaggerGen();
 builder.Services.AddRequestTimeouts(opt => opt.DefaultPolicy = new Microsoft.AspNetCore.Http.Timeouts.RequestTimeoutPolicy
 {
     Timeout = TimeSpan.FromMilliseconds(100),
-    TimeoutStatusCode = 503
+    TimeoutStatusCode = 503,
 });
 
 var app = builder.Build();

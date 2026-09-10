@@ -37,7 +37,7 @@ public class CacheFactoryTests : IAsyncLifetime
     }
 
     [Fact]
-    public void empty_factory()
+    public void Empty_factory()
     {
         _sut = new CacheFactory(Options.Create(_cacheOptions));
         Sut.CreateCache(_fixture.Create<string>()).Should().Be(NullCache.Instance);

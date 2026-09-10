@@ -37,22 +37,6 @@ internal sealed class DictionaryCache : ICache
         return ValueTask.FromResult(results);
     }
 
-    public ValueTask<bool> SetAsync<T>(KeyValuePair<CacheKey, T?>[] keyValues, CachePolicy? policy, CancellationToken token = default)
-    {
-        SetCalls++;
-        SetKeySets.Add(keyValues.Select(kv => kv.Key).ToArray());
-        foreach (var kv in keyValues)
-        {
-            if (kv.Value is null && !CacheNullValues)
-            {
-                _store.Remove(kv.Key);
-                continue;
-            }
-            _store[kv.Key] = kv.Value;
-        }
-        return ValueTask.FromResult(true);
-    }
-
     public ValueTask<ICacheEntry<T?>> GetCacheEntryAsync<T>(CacheKey cacheKey, CachePolicy? policy, CancellationToken token = default) =>
         ValueTask.FromResult<ICacheEntry<T?>>(_store.TryGetValue(cacheKey, out var v)
             ? new TestCacheEntry<T?> { Value = (T?)v, Expiration = DateTimeOffset.MaxValue, Found = true }
@@ -87,6 +71,22 @@ internal sealed class DictionaryCache : ICache
 
     public ValueTask<bool> SetAsync<T>(KeyValuePair<CacheKey, T?>[] keyValues, DateTimeOffset expiration, CachePolicy? policy, CancellationToken token = default) =>
         SetAsync(keyValues, policy, token);
+
+    public ValueTask<bool> SetAsync<T>(KeyValuePair<CacheKey, T?>[] keyValues, CachePolicy? policy, CancellationToken token = default)
+    {
+        SetCalls++;
+        SetKeySets.Add(keyValues.Select(kv => kv.Key).ToArray());
+        foreach (var kv in keyValues)
+        {
+            if (kv.Value is null && !CacheNullValues)
+            {
+                _store.Remove(kv.Key);
+                continue;
+            }
+            _store[kv.Key] = kv.Value;
+        }
+        return ValueTask.FromResult(true);
+    }
 
     public ValueTask<bool> TryAddAsync<T>(CacheKey cacheKey, T? value, CachePolicy? policy, CancellationToken token = default)
     {

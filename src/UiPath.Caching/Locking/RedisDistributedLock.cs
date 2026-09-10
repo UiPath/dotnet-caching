@@ -116,20 +116,10 @@ internal sealed class RedisDistributedLock : IDistributedLock
         return acquired ? BuildAcquiredLease(redisKey, lockToken, key, contended: false) : null;
     }
 
-    private string BuildLockToken() =>
-        string.Create(_tokenPrefix.Length + 32, _tokenPrefix, static (span, prefix) =>
-        {
-            prefix.AsSpan().CopyTo(span);
-            Guid.NewGuid().TryFormat(span[prefix.Length..], out _, "N");
-        });
-
     internal static TimeSpan NextPollInterval(TimeSpan current, TimeSpan max) =>
         current < max
             ? TimeSpan.FromTicks(Math.Min(current.Ticks * 2, max.Ticks))
             : max;
-
-    private static TimeSpan ComputeRetryDelay(bool hasDeadline, long startTimestamp, TimeSpan waitTimeout, TimeSpan pollInterval) =>
-        ComputeRetryDelayWithJitter(hasDeadline, startTimestamp, waitTimeout, pollInterval, Random.Shared.NextDouble());
 
     internal static TimeSpan ComputeRetryDelayWithJitter(bool hasDeadline, long startTimestamp, TimeSpan waitTimeout, TimeSpan pollInterval, double jitterUnit)
     {
@@ -146,6 +136,16 @@ internal sealed class RedisDistributedLock : IDistributedLock
         var jittered = TimeSpan.FromTicks((long)(pollInterval.Ticks * jitterFactor));
         return jittered < remaining ? jittered : remaining;
     }
+
+    private static TimeSpan ComputeRetryDelay(bool hasDeadline, long startTimestamp, TimeSpan waitTimeout, TimeSpan pollInterval) =>
+        ComputeRetryDelayWithJitter(hasDeadline, startTimestamp, waitTimeout, pollInterval, Random.Shared.NextDouble());
+
+    private string BuildLockToken() =>
+        string.Create(_tokenPrefix.Length + 32, _tokenPrefix, static (span, prefix) =>
+        {
+            prefix.AsSpan().CopyTo(span);
+            Guid.NewGuid().TryFormat(span[prefix.Length..], out _, "N");
+        });
 
     private Releaser BuildAcquiredLease(RedisKey redisKey, RedisValue lockToken, string key, bool contended)
     {

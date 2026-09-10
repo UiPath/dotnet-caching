@@ -242,7 +242,8 @@ public class MultilayerCachePerNamePolicyWiringTests : IAsyncLifetime
         _ = await Sut.GetCacheEntryAsync<string>(_cacheKey, policy: null, token: TestContext.Current.CancellationToken);
 
         var nowPlusPolicyCap = DateTimeOffset.UtcNow.Add(policyCap);
-        cacheEntry.AbsoluteExpiration.Should().BeCloseTo(nowPlusPolicyCap, TimeSpan.FromSeconds(5),
+        cacheEntry.AbsoluteExpiration.Should().BeCloseTo(nowPlusPolicyCap,
+            TimeSpan.FromSeconds(5),
             "the L1 entry's absolute expiration must come from policy.LocalExpiration, not from LocalMaxExpiration or the L2 entry's 1-hour TTL");
     }
 
@@ -263,7 +264,8 @@ public class MultilayerCachePerNamePolicyWiringTests : IAsyncLifetime
         _ = await Sut.GetCacheEntryAsync<string>(_cacheKey, callerPolicy, TestContext.Current.CancellationToken);
 
         var nowPlusCallerCap = DateTimeOffset.UtcNow.Add(callerPolicyCap);
-        cacheEntry.AbsoluteExpiration.Should().BeCloseTo(nowPlusCallerCap, TimeSpan.FromSeconds(5),
+        cacheEntry.AbsoluteExpiration.Should().BeCloseTo(nowPlusCallerCap,
+            TimeSpan.FromSeconds(5),
             "the L1 entry's absolute expiration must come from the CALLER-supplied policy.LocalExpiration, not from LocalMaxExpiration or the L2 entry's 1-hour TTL");
     }
 
@@ -288,7 +290,9 @@ public class MultilayerCachePerNamePolicyWiringTests : IAsyncLifetime
         await _innerCache.Received(1).RefreshAsync<string>(
             _cacheKey,
             Arg.Is<DateTimeOffset>(d => d - DateTimeOffset.UtcNow > policyTtl - TimeSpan.FromSeconds(5)
-                && d - DateTimeOffset.UtcNow < policyTtl + TimeSpan.FromSeconds(5)), Arg.Any<CachePolicy?>(), Arg.Any<CancellationToken>());
+                && d - DateTimeOffset.UtcNow < policyTtl + TimeSpan.FromSeconds(5)),
+                Arg.Any<CachePolicy?>(),
+                Arg.Any<CancellationToken>());
     }
 
     [Fact]
@@ -458,9 +462,11 @@ public class MultilayerCachePerNamePolicyWiringTests : IAsyncLifetime
         _sut = null;
 
         var ttls = new List<TimeSpan>();
-        _innerCache.SetAsync<string?>(_cacheKey, Arg.Any<string?>(),
+        _innerCache.SetAsync<string?>(_cacheKey,
+            Arg.Any<string?>(),
                 Arg.Do<DateTimeOffset>(d => ttls.Add(d - DateTimeOffset.UtcNow)),
-                Arg.Any<CachePolicy?>(), Arg.Any<CancellationToken>())
+                Arg.Any<CachePolicy?>(),
+            Arg.Any<CancellationToken>())
             .Returns(true);
         _topic.PublishAsync(Arg.Any<ICacheEvent>(), Arg.Any<CancellationToken>())
             .Returns(_ => true);
@@ -539,9 +545,11 @@ public class MultilayerCachePerNamePolicyWiringTests : IAsyncLifetime
             "the jitter draw is bounded under TimeSpan.MaxValue and the clock saturates the deadline, so an absurd JitterMaxDuration can't crash writes");
 
         await _innerCache.Received(1).SetAsync<string?>(
-            _cacheKey, "v",
+            _cacheKey,
+            "v",
             Arg.Is<DateTimeOffset>(d => d <= DateTimeOffset.MaxValue),
-            Arg.Any<CachePolicy?>(), Arg.Any<CancellationToken>());
+            Arg.Any<CachePolicy?>(),
+            Arg.Any<CancellationToken>());
     }
 
     public ValueTask DisposeAsync() => ValueTask.CompletedTask;

@@ -110,83 +110,6 @@ internal sealed partial class MultilayerHashCache : MultilayerCacheBase, IHashCa
         return GetOrAddInternalAsync(cacheKey, generator, writeExpiration, duration, rehydrateJitter: null, setOption ?? HashCacheSetOption.KeyReplace, policy ?? _defaultPolicy, token);
     }
 
-    private async ValueTask<IDictionary<string, T?>> GetOrAddInternalAsync<T>(CacheKey cacheKey, Func<CancellationToken, Task<IDictionary<string, T?>>> generator, DateTimeOffset? expiration, TimeSpan effectiveDuration, TimeSpan? rehydrateJitter, HashCacheSetOption setOption, CachePolicy policy, CancellationToken token)
-    {
-        NotCacheableException.ThrowIfNotCacheable<T>();
-        var cacheEntryOptions = _entryBuilder.BuildEntryOptions<T>(cacheKey, expiration, setOption, token);
-        var cacheEntry = await GetCacheEntryAsync<T>(cacheEntryOptions, policy).ConfigureAwait(false);
-        if (cacheEntry.Found)
-        {
-            TryHashRehydrate(cacheKey, cacheEntry.Expiration, cacheEntry.Value, generator, policy, effectiveDuration, rehydrateJitter);
-            return cacheEntry.Value ?? Empty<T>();
-        }
-
-        var result = await RunUnderLocksAsync<ICacheEntry<IDictionary<string, T?>>>(
-            cacheEntryOptions.CacheKey,
-            () => GetCacheEntryAsync<T>(cacheEntryOptions, policy),
-            e => e.Found,
-            ct => RunHashGeneratorAndStoreEntryAsync(cacheEntryOptions, generator, policy, ct),
-            token,
-            policyLock: policy.Lock).ConfigureAwait(false);
-        return result.Value ?? Empty<T>();
-    }
-
-    private void TryHashRehydrate<T>(CacheKey originalCacheKey, DateTimeOffset entryExpiration, IDictionary<string, T?>? currentValue, Func<CancellationToken, Task<IDictionary<string, T?>>> generator, CachePolicy policy, TimeSpan duration, TimeSpan? rehydrateJitter)
-    {
-        if (policy.RehydrateEnabled != true || policy.Rehydrate is null)
-        {
-            return;
-        }
-        if (IsNullOrEmpty(currentValue) && _multiLayerCacheOptions.CacheNullValues)
-        {
-            return;
-        }
-        if (duration <= TimeSpan.Zero || duration == TimeSpan.MaxValue)
-        {
-            return;
-        }
-        _rehydrator.TryTrigger(
-            originalCacheKey,
-            entryExpiration,
-            policy,
-            duration,
-            kind: "hash",
-            rehydrateAsync: async ct =>
-            {
-                var newValue = await generator(ct).ConfigureAwait(false);
-                if (IsNullOrEmpty(newValue) && !_multiLayerCacheOptions.CacheNullValues)
-                {
-                    return;
-                }
-                // Factory transitions to empty: preserve the original deadline so the marker doesn't get a fresh TTL window.
-                var rehydrateExpiration = IsNullOrEmpty(newValue)
-                    ? entryExpiration
-                    : _clock.ToDateTimeOffset(ApplyJitter(duration, rehydrateJitter));
-                var rehydrateOptions = _entryBuilder.BuildEntryOptions<T>(originalCacheKey, rehydrateExpiration, HashCacheSetOption.KeyReplace, ct);
-                var innerCacheDisconnected = GetInnerCacheDisconnected();
-                var fired = innerCacheDisconnected || await _eventPublisher.CacheSetAsync(rehydrateOptions, typeof(T)).ConfigureAwait(false);
-                var written = fired && await InternalSetAsync(rehydrateOptions, newValue ?? Empty<T>(), innerCacheDisconnected, policy).ConfigureAwait(false);
-                if (!written)
-                {
-                    throw new RehydrateWriteFailedException(originalCacheKey.Name);
-                }
-            },
-            entryType: typeof(T));
-    }
-
-    private async ValueTask<ICacheEntry<IDictionary<string, T?>>> RunHashGeneratorAndStoreEntryAsync<T>(InternalHashCacheEntryOptions cacheEntryOptions, Func<CancellationToken, Task<IDictionary<string, T?>>> generator, CachePolicy policy, CancellationToken token)
-    {
-        LogCacheMissed(Logged(cacheEntryOptions, typeof(T)));
-        var ret = await InvokeFactoryAsync(cacheEntryOptions.CacheKey, generator, policy.FactoryTimeout, token).ConfigureAwait(false);
-
-        if (!IsNullOrEmpty(ret) || _multiLayerCacheOptions.CacheNullValues)
-        {
-            var innerCacheDisconnected = GetInnerCacheDisconnected();
-            await InternalSetAsync(cacheEntryOptions, ret ?? Empty<T>(), innerCacheDisconnected, policy).ConfigureAwait(false);
-        }
-        return _cacheEntryFactory.Create<IDictionary<string, T?>>(ret ?? Empty<T>(), cacheEntryOptions.Expiration, cacheEntryOptions.Metadata);
-    }
-
     public ValueTask<bool> SetAsync<T>(CacheKey cacheKey, IDictionary<string, T?> values, CachePolicy? policy, CancellationToken token = default)
     {
         policy ??= _defaultPolicy;
@@ -198,31 +121,6 @@ internal sealed partial class MultilayerHashCache : MultilayerCacheBase, IHashCa
 
     public ValueTask<bool> SetAsync<T>(CacheKey cacheKey, IDictionary<string, T?> values, DateTimeOffset expiration, CachePolicy? policy, CancellationToken token = default) =>
         SetCoreAsync(cacheKey, values, GetExpiration(expiration), policy ?? _defaultPolicy, token);
-
-    private async ValueTask<bool> SetCoreAsync<T>(CacheKey cacheKey, IDictionary<string, T?> values, DateTimeOffset expiration, CachePolicy policy, CancellationToken token)
-    {
-        NotCacheableException.ThrowIfNotCacheable<T>();
-        var options = _entryBuilder.BuildEntryOptions<T>(cacheKey, expiration, token: token);
-        if (IsNullOrEmpty(values) && !_multiLayerCacheOptions.CacheNullValues)
-        {
-            return await RemoveAsync<T>(options).ConfigureAwait(false);
-        }
-
-        values ??= new Dictionary<string, T?>();
-
-        LogReplacingCachedKey(Logged(options, typeof(T)));
-        var innerCacheDisconnected = GetInnerCacheDisconnected();
-        if (innerCacheDisconnected)
-        {
-            LogSettingLocalOnly(Logged(options, typeof(T)));
-            return await InternalSetAsync(options, values, innerCacheDisconnected, policy).ConfigureAwait(false);
-        }
-        else
-        {
-            var fired = await _eventPublisher.CacheSetAsync(options, typeof(T)).ConfigureAwait(false);
-            return fired && await InternalSetAsync(options, values, innerCacheDisconnected, policy).ConfigureAwait(false);
-        }
-    }
 
     public async ValueTask<bool> SetAsync<T>(CacheKey cacheKey, IDictionary<string, T?> values, HashCacheEntryOptions options, CachePolicy? policy, CancellationToken token = default)
     {
@@ -366,6 +264,114 @@ internal sealed partial class MultilayerHashCache : MultilayerCacheBase, IHashCa
         }
     }
 
+    private static bool IsNullOrEmpty<T>(IDictionary<string, T?>? value) =>
+        value is null || value.Count == 0;
+
+    private static ImmutableDictionary<string, T?> Empty<T>() =>
+        ImmutableDictionary<string, T?>.Empty;
+
+    private async ValueTask<IDictionary<string, T?>> GetOrAddInternalAsync<T>(CacheKey cacheKey, Func<CancellationToken, Task<IDictionary<string, T?>>> generator, DateTimeOffset? expiration, TimeSpan effectiveDuration, TimeSpan? rehydrateJitter, HashCacheSetOption setOption, CachePolicy policy, CancellationToken token)
+    {
+        NotCacheableException.ThrowIfNotCacheable<T>();
+        var cacheEntryOptions = _entryBuilder.BuildEntryOptions<T>(cacheKey, expiration, setOption, token);
+        var cacheEntry = await GetCacheEntryAsync<T>(cacheEntryOptions, policy).ConfigureAwait(false);
+        if (cacheEntry.Found)
+        {
+            TryHashRehydrate(cacheKey, cacheEntry.Expiration, cacheEntry.Value, generator, policy, effectiveDuration, rehydrateJitter);
+            return cacheEntry.Value ?? Empty<T>();
+        }
+
+        var result = await RunUnderLocksAsync<ICacheEntry<IDictionary<string, T?>>>(
+            cacheEntryOptions.CacheKey,
+            () => GetCacheEntryAsync<T>(cacheEntryOptions, policy),
+            e => e.Found,
+            ct => RunHashGeneratorAndStoreEntryAsync(cacheEntryOptions, generator, policy, ct),
+            token,
+            policyLock: policy.Lock).ConfigureAwait(false);
+        return result.Value ?? Empty<T>();
+    }
+
+    private void TryHashRehydrate<T>(CacheKey originalCacheKey, DateTimeOffset entryExpiration, IDictionary<string, T?>? currentValue, Func<CancellationToken, Task<IDictionary<string, T?>>> generator, CachePolicy policy, TimeSpan duration, TimeSpan? rehydrateJitter)
+    {
+        if (policy.RehydrateEnabled != true || policy.Rehydrate is null)
+        {
+            return;
+        }
+        if (IsNullOrEmpty(currentValue) && _multiLayerCacheOptions.CacheNullValues)
+        {
+            return;
+        }
+        if (duration <= TimeSpan.Zero || duration == TimeSpan.MaxValue)
+        {
+            return;
+        }
+        _rehydrator.TryTrigger(
+            originalCacheKey,
+            entryExpiration,
+            policy,
+            duration,
+            kind: "hash",
+            rehydrateAsync: async ct =>
+            {
+                var newValue = await generator(ct).ConfigureAwait(false);
+                if (IsNullOrEmpty(newValue) && !_multiLayerCacheOptions.CacheNullValues)
+                {
+                    return;
+                }
+                // Factory transitions to empty: preserve the original deadline so the marker doesn't get a fresh TTL window.
+                var rehydrateExpiration = IsNullOrEmpty(newValue)
+                    ? entryExpiration
+                    : _clock.ToDateTimeOffset(ApplyJitter(duration, rehydrateJitter));
+                var rehydrateOptions = _entryBuilder.BuildEntryOptions<T>(originalCacheKey, rehydrateExpiration, HashCacheSetOption.KeyReplace, ct);
+                var innerCacheDisconnected = GetInnerCacheDisconnected();
+                var fired = innerCacheDisconnected || await _eventPublisher.CacheSetAsync(rehydrateOptions, typeof(T)).ConfigureAwait(false);
+                var written = fired && await InternalSetAsync(rehydrateOptions, newValue ?? Empty<T>(), innerCacheDisconnected, policy).ConfigureAwait(false);
+                if (!written)
+                {
+                    throw new RehydrateWriteFailedException(originalCacheKey.Name);
+                }
+            },
+            entryType: typeof(T));
+    }
+
+    private async ValueTask<ICacheEntry<IDictionary<string, T?>>> RunHashGeneratorAndStoreEntryAsync<T>(InternalHashCacheEntryOptions cacheEntryOptions, Func<CancellationToken, Task<IDictionary<string, T?>>> generator, CachePolicy policy, CancellationToken token)
+    {
+        LogCacheMissed(Logged(cacheEntryOptions, typeof(T)));
+        var ret = await InvokeFactoryAsync(cacheEntryOptions.CacheKey, generator, policy.FactoryTimeout, token).ConfigureAwait(false);
+
+        if (!IsNullOrEmpty(ret) || _multiLayerCacheOptions.CacheNullValues)
+        {
+            var innerCacheDisconnected = GetInnerCacheDisconnected();
+            await InternalSetAsync(cacheEntryOptions, ret ?? Empty<T>(), innerCacheDisconnected, policy).ConfigureAwait(false);
+        }
+        return _cacheEntryFactory.Create<IDictionary<string, T?>>(ret ?? Empty<T>(), cacheEntryOptions.Expiration, cacheEntryOptions.Metadata);
+    }
+
+    private async ValueTask<bool> SetCoreAsync<T>(CacheKey cacheKey, IDictionary<string, T?> values, DateTimeOffset expiration, CachePolicy policy, CancellationToken token)
+    {
+        NotCacheableException.ThrowIfNotCacheable<T>();
+        var options = _entryBuilder.BuildEntryOptions<T>(cacheKey, expiration, token: token);
+        if (IsNullOrEmpty(values) && !_multiLayerCacheOptions.CacheNullValues)
+        {
+            return await RemoveAsync<T>(options).ConfigureAwait(false);
+        }
+
+        values ??= new Dictionary<string, T?>();
+
+        LogReplacingCachedKey(Logged(options, typeof(T)));
+        var innerCacheDisconnected = GetInnerCacheDisconnected();
+        if (innerCacheDisconnected)
+        {
+            LogSettingLocalOnly(Logged(options, typeof(T)));
+            return await InternalSetAsync(options, values, innerCacheDisconnected, policy).ConfigureAwait(false);
+        }
+        else
+        {
+            var fired = await _eventPublisher.CacheSetAsync(options, typeof(T)).ConfigureAwait(false);
+            return fired && await InternalSetAsync(options, values, innerCacheDisconnected, policy).ConfigureAwait(false);
+        }
+    }
+
     private async ValueTask<bool> RemoveAsync<T>(InternalHashCacheEntryOptions options)
     {
         LogClearingLocalCached(Logged(options, typeof(T)));
@@ -460,12 +466,6 @@ internal sealed partial class MultilayerHashCache : MultilayerCacheBase, IHashCa
 
     private ICacheEntry<IDictionary<string, T?>> CreateEntry<T>(IDictionary<string, T?> values, InternalHashCacheEntryOptions options) =>
         _cacheEntryFactory.Create<IDictionary<string, T?>>(values.ToImmutableDictionary(), options.Expiration, options.Metadata?.ToImmutableDictionary());
-
-    private static bool IsNullOrEmpty<T>(IDictionary<string, T?>? value) =>
-        value is null || value.Count == 0;
-
-    private static ImmutableDictionary<string, T?> Empty<T>() =>
-        ImmutableDictionary<string, T?>.Empty;
 
     [LoggerMessage(Level = LogLevel.Debug, Message = "Cache missed. generating new {CacheKey}")]
     private partial void LogCacheMissed(LoggedKey cacheKey);

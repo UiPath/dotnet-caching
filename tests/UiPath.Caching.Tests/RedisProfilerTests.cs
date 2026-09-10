@@ -118,7 +118,10 @@ public class RedisProfilerTests(ITestContextAccessor testContextAccessor) : IAsy
     public void Dispose_twice()
     {
         Sut.Dispose();
-        Sut.Dispose();
+
+        Action act = () => Sut.Dispose();
+
+        act.Should().NotThrow("a second Dispose must be a no-op");
     }
 
     [Fact]
@@ -170,7 +173,7 @@ public class RedisProfilerTests(ITestContextAccessor testContextAccessor) : IAsy
         {
             ProfilerEnabled = true,
             ProfilerFlushInterval = TimeSpan.FromMilliseconds(100),
-            ProfilerHasDefaultSession = true
+            ProfilerHasDefaultSession = true,
         };
         _fixture.Inject(Options.Create(_redisConnectionOptions));
         return ValueTask.CompletedTask;

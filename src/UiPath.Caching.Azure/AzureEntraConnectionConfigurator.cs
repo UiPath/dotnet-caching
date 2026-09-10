@@ -36,6 +36,11 @@ public class AzureEntraConnectionConfigurator : IRedisConnectionConfigurator
         await ApplyAzureAuthenticationAsync(configuration, _credential.Value).ConfigureAwait(false);
     }
 
+    /// <summary>Applies Entra authentication via Microsoft.Azure.StackExchangeRedis. Virtual for testability.</summary>
+    [ExcludeFromCodeCoverage(Justification = "Acquires a live Entra token via Microsoft.Azure.StackExchangeRedis — needs Azure to exercise.")]
+    protected virtual Task ApplyAzureAuthenticationAsync(ConfigurationOptions configuration, TokenCredential credential) =>
+        configuration.ConfigureForAzureWithTokenCredentialAsync(credential);
+
     private static TokenCredential CreateCredential(AzureEntraOptions options, IAzureEntraCredentialFactory credentialFactory)
     {
         if (options.Credential is not null)
@@ -52,9 +57,4 @@ public class AzureEntraConnectionConfigurator : IRedisConnectionConfigurator
             ? credentialFactory.CreateDefaultCredential()
             : credentialFactory.CreateManagedIdentityCredential(options.ManagedIdentityClientId);
     }
-
-    /// <summary>Applies Entra authentication via Microsoft.Azure.StackExchangeRedis. Virtual for testability.</summary>
-    [ExcludeFromCodeCoverage(Justification = "Acquires a live Entra token via Microsoft.Azure.StackExchangeRedis — needs Azure to exercise.")]
-    protected virtual Task ApplyAzureAuthenticationAsync(ConfigurationOptions configuration, TokenCredential credential) =>
-        configuration.ConfigureForAzureWithTokenCredentialAsync(credential);
 }

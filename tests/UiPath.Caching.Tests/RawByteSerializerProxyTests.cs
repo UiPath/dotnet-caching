@@ -8,8 +8,6 @@ public class RawByteSerializerProxyTests
 {
     private readonly RawByteSerializerProxy _proxy = new();
 
-    private sealed record Poco(string Name, int Count);
-
     [Fact]
     public void Byte_array_passes_through_by_reference()
     {
@@ -180,4 +178,6 @@ public class RawByteSerializerProxyTests
         stored.Should().Equal(4, 5, 6);
         _proxy.Deserialize<Memory<byte>>(stored).ToArray().Should().Equal(4, 5, 6);
     }
+
+    private sealed record Poco(string Name, int Count);
 }

@@ -7,6 +7,7 @@ namespace UiPath.Caching.Tests.Locking;
 public class MultilayerHashCacheGetOrAddLockTests(ITestContextAccessor testContextAccessor) : IAsyncLifetime
 {
     private readonly IFixture _fixture = AutoFixtureCreator.NSubstitute();
+    private readonly object _sutLock = new();
 
     private IHashCache _innerCache = default!;
     private IChangeTokenFactory _changeTokenFactory = default!;
@@ -23,12 +24,15 @@ public class MultilayerHashCacheGetOrAddLockTests(ITestContextAccessor testConte
     private AsyncKeyedLocalLock _locker = default!;
 
     private MultilayerHashCache? _sut;
-    private readonly object _sutLock = new();
     private MultilayerHashCache Sut
     {
         get
         {
-            if (_sut is not null) return _sut;
+            if (_sut is not null)
+            {
+                return _sut;
+            }
+
             lock (_sutLock) { return _sut ??= _fixture.Create<MultilayerHashCache>(); }
         }
     }
@@ -65,7 +69,11 @@ public class MultilayerHashCacheGetOrAddLockTests(ITestContextAccessor testConte
         {
             var inside = Interlocked.Increment(ref concurrentInGenerator);
             int observed;
-            do { observed = Volatile.Read(ref maxConcurrent); if (inside <= observed) break; }
+            do { observed = Volatile.Read(ref maxConcurrent); if (inside <= observed)
+                {
+                    break;
+                }
+            }
             while (Interlocked.CompareExchange(ref maxConcurrent, inside, observed) != observed);
             firstEntered.TrySetResult();
             await release.Task.WaitAsync(TimeSpan.FromSeconds(30), ct);
@@ -111,7 +119,11 @@ public class MultilayerHashCacheGetOrAddLockTests(ITestContextAccessor testConte
         {
             var inside = Interlocked.Increment(ref concurrentInGenerator);
             int observed;
-            do { observed = Volatile.Read(ref maxConcurrent); if (inside <= observed) break; }
+            do { observed = Volatile.Read(ref maxConcurrent); if (inside <= observed)
+                {
+                    break;
+                }
+            }
             while (Interlocked.CompareExchange(ref maxConcurrent, inside, observed) != observed);
 
             if (Interlocked.Increment(ref startedCount) == 2)
@@ -154,7 +166,11 @@ public class MultilayerHashCacheGetOrAddLockTests(ITestContextAccessor testConte
         {
             var inside = Interlocked.Increment(ref concurrentInGenerator);
             int observed;
-            do { observed = Volatile.Read(ref maxConcurrent); if (inside <= observed) break; }
+            do { observed = Volatile.Read(ref maxConcurrent); if (inside <= observed)
+                {
+                    break;
+                }
+            }
             while (Interlocked.CompareExchange(ref maxConcurrent, inside, observed) != observed);
 
             if (Interlocked.Increment(ref startedCount) == concurrentCallers)

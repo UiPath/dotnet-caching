@@ -5,11 +5,11 @@ public sealed class NullCacheEventFactory : ICacheEventFactory
 {
     private static ICacheEvent NullEvent = new NullCacheEvent();
 
-    public static NullCacheEventFactory Instance { get; } = new NullCacheEventFactory();
-
     private NullCacheEventFactory()
     {
     }
+
+    public static NullCacheEventFactory Instance { get; } = new NullCacheEventFactory();
 
     public ICacheEvent Create(string cacheName, string eventType, CacheEventData eventData, string? id = null) =>
         NullEvent;

@@ -22,6 +22,10 @@ public class MultilayerCachePerNameLockTests(ITestContextAccessor testContextAcc
     private TopicKey _topicKey = default!;
     private MultilayerCache? _sut;
 
+    public interface ITopicProviderWithConnectionState : ITopicProvider, IConnectionState
+    {
+    }
+
     private MultilayerCache Sut => _sut ??= _fixture.Create<MultilayerCache>();
 
     [Fact]
@@ -142,9 +146,5 @@ public class MultilayerCachePerNameLockTests(ITestContextAccessor testContextAcc
         _memoryCacheFactory.Get(Arg.Any<IMemoryCacheOptions>()).Returns(_memoryCache);
         _cacheEventFactory = _fixture.Freeze<ICacheEventFactory>();
         return ValueTask.CompletedTask;
-    }
-
-    public interface ITopicProviderWithConnectionState : ITopicProvider, IConnectionState
-    {
     }
 }

@@ -16,6 +16,8 @@ public class UiPathDistributedCacheTests
     private const string AbsoluteExpirationField = "absexp";
     private const string SlidingExpirationField = "sldexp";
 
+    private const string FieldOmitted = "\0omitted";
+
     private static readonly DateTimeOffset Now = new(2026, 8, 13, 10, 0, 0, TimeSpan.Zero);
     private static readonly byte[] Payload = [1, 2, 3];
 
@@ -29,41 +31,42 @@ public class UiPathDistributedCacheTests
         _cache = Build();
     }
 
-    private UiPathDistributedCache Build(
-        UiPathDistributedCacheOptions? options = null,
-        bool slideByRewrite = false,
-        ICacheKeyStrategy? keyStrategy = null) =>
-        new(_inner,
-            options ?? new UiPathDistributedCacheOptions(),
-            keyStrategy ?? new PrefixCacheKeyStrategy(UiPathDistributedCacheOptions.DefaultKeyPrefix),
-            policy: null,
-            NullLogger.Instance,
-            new SystemClockTimeProvider(_clock),
-            slideByRewrite);
-
-    private static byte[] Ticks(long? value) =>
-        Encoding.UTF8.GetBytes((value ?? -1).ToString(CultureInfo.InvariantCulture));
-
-    private static Dictionary<string, ReadOnlyMemory<byte>> Entry(long? slidingTicks = null, DateTimeOffset? absolute = null) => new()
-    {
-        [DataField] = Payload,
-        [AbsoluteExpirationField] = Ticks(absolute?.UtcTicks),
-        [SlidingExpirationField] = Ticks(slidingTicks),
-    };
-
-    private void StoredEntry(Dictionary<string, ReadOnlyMemory<byte>> fields) =>
-        _inner.GetAsync<ReadOnlyMemory<byte>>(Arg.Any<CacheKey>(), Arg.Any<string[]>(), Arg.Any<CachePolicy?>(), Arg.Any<CancellationToken>())
-            .Returns(fields);
-
+    /// <summary>
+    /// Values no write can produce, per field. Each is a miss: serving one would hand back the payload with its
+    /// expiration silently dropped — as an entry that never expires — which is the failure this decode exists to
+    /// prevent. Whitespace padding is included because the writer never emits it.
+    /// </summary>
+    public static TheoryData<string?> RejectedMetadataValues() =>
+    [
+        (string?)null,            // field present, empty value — the shape a Redis miss returns
+        FieldOmitted,             // field absent entirely
+        "",
+        " ",
+        "garbage",
+        "1.5",
+        "1e3",
+        " 1 ",
+        "0",                      // parses, but is skipped downstream rather than applied
+        "-2",                     // not the sentinel
+        "9223372036854775808",    // one past long.MaxValue: does not parse
+    ];
 
     /// <summary>
-    /// The storage key the default strategy produces. Tests whose subject is not the key's shape go
-    /// through this, so "prefix plus separator" is asserted in one place — as the default, not as the
-    /// contract — rather than restated in every expectation.
+    /// The expiration shapes a caller can write, as serializable parts rather than a
+    /// <see cref="DistributedCacheEntryOptions"/> — the options type is not serializable, so passing it
+    /// directly leaves the runner unable to enumerate the rows individually.
     /// </summary>
-    private static string Key(string callerKey) =>
-        new PrefixCacheKeyStrategy(UiPathDistributedCacheOptions.DefaultKeyPrefix)
-            .GetCacheKey<ReadOnlyMemory<byte>>(new CacheKey(callerKey, CacheKeyCasing.Sensitive)).Name;
+    public static TheoryData<TimeSpan?, TimeSpan?, DateTimeOffset?> WriteShapes() => new()
+    {
+        { null, null, null },
+        { TimeSpan.FromMinutes(20), null, null },
+        { TimeSpan.FromTicks(1), null, null },
+        { TimeSpan.MaxValue, null, null },
+        { null, TimeSpan.FromHours(2), null },
+        { null, TimeSpan.MaxValue, null },
+        { null, null, Now.AddDays(1) },
+        { TimeSpan.FromMinutes(20), TimeSpan.FromHours(2), null },
+    };
 
     /// <summary>Pinned literally, because changing the default relocates every stored entry.</summary>
     [Fact]
@@ -73,7 +76,9 @@ public class UiPathDistributedCacheTests
         await _cache.GetAsync("AbC-9xQ", TestContext.Current.CancellationToken);
         await _inner.Received(1).GetAsync<ReadOnlyMemory<byte>>(
             Arg.Is<CacheKey>(k => k.Name == "d:AbC-9xQ"),
-            Arg.Any<string[]>(), Arg.Any<CachePolicy?>(), Arg.Any<CancellationToken>());
+            Arg.Any<string[]>(),
+            Arg.Any<CachePolicy?>(),
+            Arg.Any<CancellationToken>());
     }
 
     [Fact]
@@ -84,7 +89,9 @@ public class UiPathDistributedCacheTests
         await _cache.GetAsync("AbC-9xQ", TestContext.Current.CancellationToken);
         await _inner.Received(1).GetAsync<ReadOnlyMemory<byte>>(
             Arg.Is<CacheKey>(k => k.Name == expected && k.Casing == CacheKeyCasing.Sensitive),
-            Arg.Any<string[]>(), Arg.Any<CachePolicy?>(), Arg.Any<CancellationToken>());
+            Arg.Any<string[]>(),
+            Arg.Any<CachePolicy?>(),
+            Arg.Any<CancellationToken>());
     }
 
     /// <summary>The application's own <see cref="IHashCache"/> asking for the caller key must never land on these entries.</summary>
@@ -102,10 +109,14 @@ public class UiPathDistributedCacheTests
         expected.Should().NotBe("AbC");
         await _inner.Received(1).GetAsync<ReadOnlyMemory<byte>>(
             Arg.Is<CacheKey>(k => k.Name == expected),
-            Arg.Any<string[]>(), Arg.Any<CachePolicy?>(), Arg.Any<CancellationToken>());
+            Arg.Any<string[]>(),
+            Arg.Any<CachePolicy?>(),
+            Arg.Any<CancellationToken>());
         await _inner.Received(1).SetAsync(
             Arg.Is<CacheKey>(k => k.Name == expected),
-            Arg.Any<IDictionary<string, ReadOnlyMemory<byte>>>(), Arg.Any<CachePolicy?>(), Arg.Any<CancellationToken>());
+            Arg.Any<IDictionary<string, ReadOnlyMemory<byte>>>(),
+            Arg.Any<CachePolicy?>(),
+            Arg.Any<CancellationToken>());
         await _inner.Received(1).RemoveAsync<ReadOnlyMemory<byte>>(
             Arg.Is<CacheKey>(k => k.Name == expected), Arg.Any<CancellationToken>());
     }
@@ -118,7 +129,9 @@ public class UiPathDistributedCacheTests
         await custom.GetAsync("AbC", TestContext.Current.CancellationToken);
         await _inner.Received(1).GetAsync<ReadOnlyMemory<byte>>(
             Arg.Is<CacheKey>(k => k.Name == "mine/AbC" && k.Casing == CacheKeyCasing.Sensitive),
-            Arg.Any<string[]>(), Arg.Any<CachePolicy?>(), Arg.Any<CancellationToken>());
+            Arg.Any<string[]>(),
+            Arg.Any<CachePolicy?>(),
+            Arg.Any<CancellationToken>());
     }
 
     /// <summary>The seam only transforms the key, so nothing downstream assumes where the marker sits.</summary>
@@ -130,7 +143,9 @@ public class UiPathDistributedCacheTests
         await suffixed.GetAsync("AbC", TestContext.Current.CancellationToken);
         await _inner.Received(1).GetAsync<ReadOnlyMemory<byte>>(
             Arg.Is<CacheKey>(k => k.Name == "AbC:d" && k.Casing == CacheKeyCasing.Sensitive),
-            Arg.Any<string[]>(), Arg.Any<CachePolicy?>(), Arg.Any<CancellationToken>());
+            Arg.Any<string[]>(),
+            Arg.Any<CachePolicy?>(),
+            Arg.Any<CancellationToken>());
     }
 
     [Fact]
@@ -141,7 +156,9 @@ public class UiPathDistributedCacheTests
         await bare.GetAsync("AbC", TestContext.Current.CancellationToken);
         await _inner.Received(1).GetAsync<ReadOnlyMemory<byte>>(
             Arg.Is<CacheKey>(k => k.Name == "AbC"),
-            Arg.Any<string[]>(), Arg.Any<CachePolicy?>(), Arg.Any<CancellationToken>());
+            Arg.Any<string[]>(),
+            Arg.Any<CachePolicy?>(),
+            Arg.Any<CancellationToken>());
     }
 
     [Fact]
@@ -162,21 +179,6 @@ public class UiPathDistributedCacheTests
         var lossy = Build(keyStrategy: new AmbientCasingKeyStrategy());
         (await FluentActions.Awaiting(() => lossy.GetAsync("AbC", TestContext.Current.CancellationToken))
             .Should().ThrowAsync<InvalidOperationException>()).WithMessage("*case-significant*WithName*");
-    }
-
-    private sealed class SuffixKeyStrategy(string suffix) : ICacheKeyStrategy
-    {
-        public CacheKey GetCacheKey<T>(CacheKey key) => key.WithName(key.Name + suffix);
-    }
-
-    private sealed class AmbientCasingKeyStrategy : ICacheKeyStrategy
-    {
-        public CacheKey GetCacheKey<T>(CacheKey key) => new(key.Name, CacheKeyCasing.Insensitive);
-    }
-
-    private sealed class EmptyKeyStrategy : ICacheKeyStrategy
-    {
-        public CacheKey GetCacheKey<T>(CacheKey key) => default;
     }
 
     [Fact]
@@ -200,28 +202,22 @@ public class UiPathDistributedCacheTests
         const string key = "Session-AbC";
         var logger = new CapturingLogger();
         var cache = new UiPathDistributedCache(
-            _inner, new UiPathDistributedCacheOptions(),
+            _inner,
+            new UiPathDistributedCacheOptions(),
             new PrefixCacheKeyStrategy(UiPathDistributedCacheOptions.DefaultKeyPrefix),
-            policy: null, logger, new SystemClockTimeProvider(_clock));
-        _inner.SetAsync(Arg.Any<CacheKey>(), Arg.Any<IDictionary<string, ReadOnlyMemory<byte>>>(),
-            Arg.Any<TimeSpan>(), Arg.Any<CachePolicy?>(), Arg.Any<CancellationToken>()).Returns(false);
+            policy: null,
+            logger,
+            new SystemClockTimeProvider(_clock));
+        _inner.SetAsync(Arg.Any<CacheKey>(),
+            Arg.Any<IDictionary<string, ReadOnlyMemory<byte>>>(),
+            Arg.Any<TimeSpan>(),
+            Arg.Any<CachePolicy?>(),
+            Arg.Any<CancellationToken>()).Returns(false);
 
         await cache.SetAsync(key, Payload, new DistributedCacheEntryOptions(), TestContext.Current.CancellationToken);
 
         // The adapter's keys are the consumer's, so they are masked whatever the application configured.
         logger.Messages.Should().ContainSingle().Which.Should().Contain("Ses****").And.NotContain(key);
-    }
-
-    private sealed class CapturingLogger : ILogger
-    {
-        public List<string> Messages { get; } = [];
-
-        public IDisposable? BeginScope<TState>(TState state) where TState : notnull => null;
-
-        public bool IsEnabled(LogLevel logLevel) => true;
-
-        public void Log<TState>(LogLevel logLevel, EventId eventId, TState state, Exception? exception, Func<TState, Exception?, string> formatter) =>
-            Messages.Add(formatter(state, exception));
     }
 
     /// <summary>The prefix the strategy adds must not make an empty caller key look valid.</summary>
@@ -260,8 +256,10 @@ public class UiPathDistributedCacheTests
         StoredEntry(Entry());
         await _cache.GetAsync("k", TestContext.Current.CancellationToken);
         await _inner.Received(1).GetAsync<ReadOnlyMemory<byte>>(
-            Arg.Any<CacheKey>(), Arg.Is<string[]>(f => f != null && f.Contains(DataField)),
-            Arg.Any<CachePolicy?>(), Arg.Any<CancellationToken>());
+            Arg.Any<CacheKey>(),
+            Arg.Is<string[]>(f => f != null && f.Contains(DataField)),
+            Arg.Any<CachePolicy?>(),
+            Arg.Any<CancellationToken>());
     }
 
     [Fact]
@@ -323,8 +321,11 @@ public class UiPathDistributedCacheTests
         var sliding = TimeSpan.FromMinutes(20);
         IDictionary<string, ReadOnlyMemory<byte>>? written = null;
         TimeSpan? ttl = null;
-        await _inner.SetAsync(Arg.Any<CacheKey>(), Arg.Do<IDictionary<string, ReadOnlyMemory<byte>>>(v => written = v),
-            Arg.Do<TimeSpan>(t => ttl = t), Arg.Any<CachePolicy?>(), Arg.Any<CancellationToken>());
+        await _inner.SetAsync(Arg.Any<CacheKey>(),
+            Arg.Do<IDictionary<string, ReadOnlyMemory<byte>>>(v => written = v),
+            Arg.Do<TimeSpan>(t => ttl = t),
+            Arg.Any<CachePolicy?>(),
+            Arg.Any<CancellationToken>());
 
         await _cache.SetAsync("k", Payload, new DistributedCacheEntryOptions { SlidingExpiration = sliding }, TestContext.Current.CancellationToken);
 
@@ -339,14 +340,20 @@ public class UiPathDistributedCacheTests
     public async Task Set_with_both_uses_min_of_sliding_and_remaining_absolute()
     {
         TimeSpan? ttl = null;
-        await _inner.SetAsync(Arg.Any<CacheKey>(), Arg.Any<IDictionary<string, ReadOnlyMemory<byte>>>(),
-            Arg.Do<TimeSpan>(t => ttl = t), Arg.Any<CachePolicy?>(), Arg.Any<CancellationToken>());
+        await _inner.SetAsync(Arg.Any<CacheKey>(),
+            Arg.Any<IDictionary<string, ReadOnlyMemory<byte>>>(),
+            Arg.Do<TimeSpan>(t => ttl = t),
+            Arg.Any<CachePolicy?>(),
+            Arg.Any<CancellationToken>());
 
-        await _cache.SetAsync("k", Payload, new DistributedCacheEntryOptions
+        await _cache.SetAsync("k",
+            Payload,
+            new DistributedCacheEntryOptions
         {
             SlidingExpiration = TimeSpan.FromMinutes(20),
             AbsoluteExpiration = Now.AddMinutes(5),
-        }, TestContext.Current.CancellationToken);
+        },
+            TestContext.Current.CancellationToken);
 
         ttl.Should().Be(TimeSpan.FromMinutes(5));
     }
@@ -355,13 +362,19 @@ public class UiPathDistributedCacheTests
     public async Task Set_with_relative_absolute_records_the_deadline()
     {
         IDictionary<string, ReadOnlyMemory<byte>>? written = null;
-        await _inner.SetAsync(Arg.Any<CacheKey>(), Arg.Do<IDictionary<string, ReadOnlyMemory<byte>>>(v => written = v),
-            Arg.Any<TimeSpan>(), Arg.Any<CachePolicy?>(), Arg.Any<CancellationToken>());
+        await _inner.SetAsync(Arg.Any<CacheKey>(),
+            Arg.Do<IDictionary<string, ReadOnlyMemory<byte>>>(v => written = v),
+            Arg.Any<TimeSpan>(),
+            Arg.Any<CachePolicy?>(),
+            Arg.Any<CancellationToken>());
 
-        await _cache.SetAsync("k", Payload, new DistributedCacheEntryOptions
+        await _cache.SetAsync("k",
+            Payload,
+            new DistributedCacheEntryOptions
         {
             AbsoluteExpirationRelativeToNow = TimeSpan.FromMinutes(30),
-        }, TestContext.Current.CancellationToken);
+        },
+            TestContext.Current.CancellationToken);
 
         Encoding.UTF8.GetString(written![AbsoluteExpirationField].Span)
             .Should().Be(Now.AddMinutes(30).UtcTicks.ToString(CultureInfo.InvariantCulture));
@@ -371,8 +384,11 @@ public class UiPathDistributedCacheTests
     public async Task Set_with_no_expiration_uses_the_configured_default()
     {
         TimeSpan? ttl = null;
-        await _inner.SetAsync(Arg.Any<CacheKey>(), Arg.Any<IDictionary<string, ReadOnlyMemory<byte>>>(),
-            Arg.Do<TimeSpan>(t => ttl = t), Arg.Any<CachePolicy?>(), Arg.Any<CancellationToken>());
+        await _inner.SetAsync(Arg.Any<CacheKey>(),
+            Arg.Any<IDictionary<string, ReadOnlyMemory<byte>>>(),
+            Arg.Do<TimeSpan>(t => ttl = t),
+            Arg.Any<CachePolicy?>(),
+            Arg.Any<CancellationToken>());
         var bounded = Build(new UiPathDistributedCacheOptions { DefaultEntryExpiration = TimeSpan.FromHours(2) });
 
         await bounded.SetAsync("k", Payload, new DistributedCacheEntryOptions(), TestContext.Current.CancellationToken);
@@ -396,8 +412,10 @@ public class UiPathDistributedCacheTests
     [Fact]
     public async Task Set_with_past_absolute_expiration_throws()
     {
-        await FluentActions.Awaiting(() => _cache.SetAsync("k", Payload,
-                new DistributedCacheEntryOptions { AbsoluteExpiration = Now.AddMinutes(-1) }, TestContext.Current.CancellationToken))
+        await FluentActions.Awaiting(() => _cache.SetAsync("k",
+            Payload,
+                new DistributedCacheEntryOptions { AbsoluteExpiration = Now.AddMinutes(-1) },
+            TestContext.Current.CancellationToken))
             .Should().ThrowAsync<ArgumentOutOfRangeException>();
     }
 
@@ -411,8 +429,10 @@ public class UiPathDistributedCacheTests
         await _cache.RefreshAsync("k", TestContext.Current.CancellationToken);
 
         await _inner.Received(1).GetAsync<ReadOnlyMemory<byte>>(
-            Arg.Any<CacheKey>(), Arg.Is<string[]>(f => f != null && !f.Contains(DataField)),
-            Arg.Any<CachePolicy?>(), Arg.Any<CancellationToken>());
+            Arg.Any<CacheKey>(),
+            Arg.Is<string[]>(f => f != null && !f.Contains(DataField)),
+            Arg.Any<CachePolicy?>(),
+            Arg.Any<CancellationToken>());
         await _inner.Received(1).RefreshAsync<ReadOnlyMemory<byte>>(
             Arg.Any<CacheKey>(), Now.Add(sliding), Arg.Any<CachePolicy?>(), Arg.Any<CancellationToken>());
     }
@@ -433,8 +453,11 @@ public class UiPathDistributedCacheTests
         var sliding = TimeSpan.FromMinutes(20);
         StoredEntry(Entry(sliding.Ticks));
         IDictionary<string, ReadOnlyMemory<byte>>? written = null;
-        await _inner.SetAsync(Arg.Any<CacheKey>(), Arg.Do<IDictionary<string, ReadOnlyMemory<byte>>>(v => written = v),
-            Arg.Any<HashCacheEntryOptions>(), Arg.Any<CachePolicy?>(), Arg.Any<CancellationToken>());
+        await _inner.SetAsync(Arg.Any<CacheKey>(),
+            Arg.Do<IDictionary<string, ReadOnlyMemory<byte>>>(v => written = v),
+            Arg.Any<HashCacheEntryOptions>(),
+            Arg.Any<CachePolicy?>(),
+            Arg.Any<CancellationToken>());
         var rewriting = Build(slideByRewrite: true);
 
         (await rewriting.GetAsync("k", TestContext.Current.CancellationToken)).Should().Equal(Payload);
@@ -457,8 +480,11 @@ public class UiPathDistributedCacheTests
     public async Task Unbounded_entries_persist_instead_of_taking_a_default()
     {
         DateTimeOffset? expiration = null;
-        await _inner.SetAsync(Arg.Any<CacheKey>(), Arg.Any<IDictionary<string, ReadOnlyMemory<byte>>>(),
-            Arg.Do<DateTimeOffset>(e => expiration = e), Arg.Any<CachePolicy?>(), Arg.Any<CancellationToken>());
+        await _inner.SetAsync(Arg.Any<CacheKey>(),
+            Arg.Any<IDictionary<string, ReadOnlyMemory<byte>>>(),
+            Arg.Do<DateTimeOffset>(e => expiration = e),
+            Arg.Any<CachePolicy?>(),
+            Arg.Any<CancellationToken>());
         var unbounded = Build(new UiPathDistributedCacheOptions { AllowUnboundedEntries = true });
 
         await unbounded.SetAsync("k", Payload, new DistributedCacheEntryOptions(), TestContext.Current.CancellationToken);
@@ -470,11 +496,16 @@ public class UiPathDistributedCacheTests
     public async Task Unbounded_sliding_window_reaches_the_backing_cache_as_the_sentinel()
     {
         TimeSpan? ttl = null;
-        await _inner.SetAsync(Arg.Any<CacheKey>(), Arg.Any<IDictionary<string, ReadOnlyMemory<byte>>>(),
-            Arg.Do<TimeSpan>(t => ttl = t), Arg.Any<CachePolicy?>(), Arg.Any<CancellationToken>());
+        await _inner.SetAsync(Arg.Any<CacheKey>(),
+            Arg.Any<IDictionary<string, ReadOnlyMemory<byte>>>(),
+            Arg.Do<TimeSpan>(t => ttl = t),
+            Arg.Any<CachePolicy?>(),
+            Arg.Any<CancellationToken>());
 
-        await _cache.SetAsync("k", Payload,
-            new DistributedCacheEntryOptions { SlidingExpiration = TimeSpan.MaxValue }, TestContext.Current.CancellationToken);
+        await _cache.SetAsync("k",
+            Payload,
+            new DistributedCacheEntryOptions { SlidingExpiration = TimeSpan.MaxValue },
+            TestContext.Current.CancellationToken);
 
         ttl.Should().Be(TimeSpan.MaxValue);
     }
@@ -500,36 +531,17 @@ public class UiPathDistributedCacheTests
     public async Task Unbounded_default_entry_expiration_reaches_the_backing_cache_as_the_sentinel()
     {
         TimeSpan? ttl = null;
-        await _inner.SetAsync(Arg.Any<CacheKey>(), Arg.Any<IDictionary<string, ReadOnlyMemory<byte>>>(),
-            Arg.Do<TimeSpan>(t => ttl = t), Arg.Any<CachePolicy?>(), Arg.Any<CancellationToken>());
+        await _inner.SetAsync(Arg.Any<CacheKey>(),
+            Arg.Any<IDictionary<string, ReadOnlyMemory<byte>>>(),
+            Arg.Do<TimeSpan>(t => ttl = t),
+            Arg.Any<CachePolicy?>(),
+            Arg.Any<CancellationToken>());
         var cache = Build(new UiPathDistributedCacheOptions { DefaultEntryExpiration = TimeSpan.MaxValue });
 
         await cache.SetAsync("k", Payload, new DistributedCacheEntryOptions(), TestContext.Current.CancellationToken);
 
         ttl.Should().Be(TimeSpan.MaxValue);
     }
-
-    private const string FieldOmitted = "\0omitted";
-
-    /// <summary>
-    /// Values no write can produce, per field. Each is a miss: serving one would hand back the payload with its
-    /// expiration silently dropped — as an entry that never expires — which is the failure this decode exists to
-    /// prevent. Whitespace padding is included because the writer never emits it.
-    /// </summary>
-    public static TheoryData<string?> RejectedMetadataValues() =>
-    [
-        (string?)null,            // field present, empty value — the shape a Redis miss returns
-        FieldOmitted,             // field absent entirely
-        "",
-        " ",
-        "garbage",
-        "1.5",
-        "1e3",
-        " 1 ",
-        "0",                      // parses, but is skipped downstream rather than applied
-        "-2",                     // not the sentinel
-        "9223372036854775808",    // one past long.MaxValue: does not parse
-    ];
 
     [Theory]
     [MemberData(nameof(RejectedMetadataValues))]
@@ -540,29 +552,6 @@ public class UiPathDistributedCacheTests
     [MemberData(nameof(RejectedMetadataValues))]
     public async Task Rejected_sliding_expiration_is_a_miss(string? value) =>
         await AssertMetadataIsRejected(SlidingExpirationField, value);
-
-    private async Task AssertMetadataIsRejected(string field, string? value)
-    {
-        var entry = new Dictionary<string, ReadOnlyMemory<byte>>(StringComparer.Ordinal)
-        {
-            [DataField] = Payload,
-            [AbsoluteExpirationField] = Ticks(null),
-            [SlidingExpirationField] = Ticks(null),
-        };
-
-        if (value == FieldOmitted)
-        {
-            entry.Remove(field);
-        }
-        else
-        {
-            entry[field] = value is null ? default(ReadOnlyMemory<byte>) : Encoding.UTF8.GetBytes(value);
-        }
-
-        StoredEntry(entry);
-
-        (await _cache.GetAsync("k", TestContext.Current.CancellationToken)).Should().BeNull();
-    }
 
     /// <summary>
     /// The two fields carry different quantities, so their ranges differ: an absolute deadline is a
@@ -592,23 +581,6 @@ public class UiPathDistributedCacheTests
     }
 
     /// <summary>
-    /// The expiration shapes a caller can write, as serializable parts rather than a
-    /// <see cref="DistributedCacheEntryOptions"/> — the options type is not serializable, so passing it
-    /// directly leaves the runner unable to enumerate the rows individually.
-    /// </summary>
-    public static TheoryData<TimeSpan?, TimeSpan?, DateTimeOffset?> WriteShapes() => new()
-    {
-        { null, null, null },
-        { TimeSpan.FromMinutes(20), null, null },
-        { TimeSpan.FromTicks(1), null, null },
-        { TimeSpan.MaxValue, null, null },
-        { null, TimeSpan.FromHours(2), null },
-        { null, TimeSpan.MaxValue, null },
-        { null, null, Now.AddDays(1) },
-        { TimeSpan.FromMinutes(20), TimeSpan.FromHours(2), null },
-    };
-
-    /// <summary>
     /// Whatever a write produces must decode as a hit. This is the property that keeps the accepted set and the
     /// producible set in step: validating and decoding separately let the two rule sets drift, which is what
     /// turned malformed metadata into a never-expiring entry.
@@ -626,10 +598,15 @@ public class UiPathDistributedCacheTests
         };
         var token = TestContext.Current.CancellationToken;
         IDictionary<string, ReadOnlyMemory<byte>>? written = null;
-        await _inner.SetAsync(Arg.Any<CacheKey>(), Arg.Do<IDictionary<string, ReadOnlyMemory<byte>>>(v => written = v),
-            Arg.Any<TimeSpan>(), Arg.Any<CachePolicy?>(), Arg.Any<CancellationToken>());
-        await _inner.SetAsync(Arg.Any<CacheKey>(), Arg.Do<IDictionary<string, ReadOnlyMemory<byte>>>(v => written = v),
-            Arg.Any<CachePolicy?>(), Arg.Any<CancellationToken>());
+        await _inner.SetAsync(Arg.Any<CacheKey>(),
+            Arg.Do<IDictionary<string, ReadOnlyMemory<byte>>>(v => written = v),
+            Arg.Any<TimeSpan>(),
+            Arg.Any<CachePolicy?>(),
+            Arg.Any<CancellationToken>());
+        await _inner.SetAsync(Arg.Any<CacheKey>(),
+            Arg.Do<IDictionary<string, ReadOnlyMemory<byte>>>(v => written = v),
+            Arg.Any<CachePolicy?>(),
+            Arg.Any<CancellationToken>());
 
         await _cache.SetAsync("k", Payload, options, token);
 
@@ -654,5 +631,91 @@ public class UiPathDistributedCacheTests
         });
 
         (await _cache.GetAsync("k", TestContext.Current.CancellationToken)).Should().BeNull();
+    }
+
+    private static byte[] Ticks(long? value) =>
+        Encoding.UTF8.GetBytes((value ?? -1).ToString(CultureInfo.InvariantCulture));
+
+    private static Dictionary<string, ReadOnlyMemory<byte>> Entry(long? slidingTicks = null, DateTimeOffset? absolute = null) => new()
+    {
+        [DataField] = Payload,
+        [AbsoluteExpirationField] = Ticks(absolute?.UtcTicks),
+        [SlidingExpirationField] = Ticks(slidingTicks),
+    };
+
+
+    /// <summary>
+    /// The storage key the default strategy produces. Tests whose subject is not the key's shape go
+    /// through this, so "prefix plus separator" is asserted in one place — as the default, not as the
+    /// contract — rather than restated in every expectation.
+    /// </summary>
+    private static string Key(string callerKey) =>
+        new PrefixCacheKeyStrategy(UiPathDistributedCacheOptions.DefaultKeyPrefix)
+            .GetCacheKey<ReadOnlyMemory<byte>>(new CacheKey(callerKey, CacheKeyCasing.Sensitive)).Name;
+
+    private UiPathDistributedCache Build(
+        UiPathDistributedCacheOptions? options = null,
+        bool slideByRewrite = false,
+        ICacheKeyStrategy? keyStrategy = null) =>
+        new(_inner,
+            options ?? new UiPathDistributedCacheOptions(),
+            keyStrategy ?? new PrefixCacheKeyStrategy(UiPathDistributedCacheOptions.DefaultKeyPrefix),
+            policy: null,
+            NullLogger.Instance,
+            new SystemClockTimeProvider(_clock),
+            slideByRewrite);
+
+    private void StoredEntry(Dictionary<string, ReadOnlyMemory<byte>> fields) =>
+        _inner.GetAsync<ReadOnlyMemory<byte>>(Arg.Any<CacheKey>(), Arg.Any<string[]>(), Arg.Any<CachePolicy?>(), Arg.Any<CancellationToken>())
+            .Returns(fields);
+
+    private async Task AssertMetadataIsRejected(string field, string? value)
+    {
+        var entry = new Dictionary<string, ReadOnlyMemory<byte>>(StringComparer.Ordinal)
+        {
+            [DataField] = Payload,
+            [AbsoluteExpirationField] = Ticks(null),
+            [SlidingExpirationField] = Ticks(null),
+        };
+
+        if (value == FieldOmitted)
+        {
+            entry.Remove(field);
+        }
+        else
+        {
+            entry[field] = value is null ? default(ReadOnlyMemory<byte>) : Encoding.UTF8.GetBytes(value);
+        }
+
+        StoredEntry(entry);
+
+        (await _cache.GetAsync("k", TestContext.Current.CancellationToken)).Should().BeNull();
+    }
+
+    private sealed class SuffixKeyStrategy(string suffix) : ICacheKeyStrategy
+    {
+        public CacheKey GetCacheKey<T>(CacheKey key) => key.WithName(key.Name + suffix);
+    }
+
+    private sealed class AmbientCasingKeyStrategy : ICacheKeyStrategy
+    {
+        public CacheKey GetCacheKey<T>(CacheKey key) => new(key.Name, CacheKeyCasing.Insensitive);
+    }
+
+    private sealed class EmptyKeyStrategy : ICacheKeyStrategy
+    {
+        public CacheKey GetCacheKey<T>(CacheKey key) => default;
+    }
+
+    private sealed class CapturingLogger : ILogger
+    {
+        public List<string> Messages { get; } = [];
+
+        public IDisposable? BeginScope<TState>(TState state) where TState : notnull => null;
+
+        public bool IsEnabled(LogLevel logLevel) => true;
+
+        public void Log<TState>(LogLevel logLevel, EventId eventId, TState state, Exception? exception, Func<TState, Exception?, string> formatter) =>
+            Messages.Add(formatter(state, exception));
     }
 }

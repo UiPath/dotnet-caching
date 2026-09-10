@@ -69,17 +69,6 @@ public partial class RedisStreamHealthMaintainer : IHostedService
         return Task.CompletedTask;
     }
 
-    private async Task Start()
-    {
-        // Disposing the timer in StopAsync is what ends this loop, without an OperationCanceledException.
-        while (!_cancellationToken.IsCancellationRequested
-            && await _timer!.WaitForNextTickAsync(CancellationToken.None)
-            && await _semaphore.WaitAsync(0, CancellationToken.None))
-        {
-            await CheckStreamsAsync(_cancellationToken).ConfigureAwait(false);
-        }
-    }
-
     internal void Initialize()
     {
         _timer = new PeriodicTimer(_streamOptions.MaintainerCheckInterval);
@@ -138,6 +127,53 @@ public partial class RedisStreamHealthMaintainer : IHostedService
         finally
         {
             _semaphore.Release();
+        }
+    }
+
+    private static bool TryParseDeliveredIdToDatetimeOffset(string? entryId, out DateTimeOffset? dateTimeOffset)
+    {
+        dateTimeOffset = null;
+        if (string.IsNullOrWhiteSpace(entryId))
+        {
+            return false;
+        }
+
+        ReadOnlySpan<char> span = entryId.AsSpan();
+        int separatorIndex = span.IndexOf('-');
+        ReadOnlySpan<char> timestampPart = separatorIndex < 0 ? span : span[..separatorIndex];
+
+        try
+        {
+            if (long.TryParse(timestampPart, NumberStyles.None, CultureInfo.InvariantCulture, out long result) && result > 0)
+            {
+                dateTimeOffset = DateTimeOffset.FromUnixTimeMilliseconds(result);
+                return true;
+            }
+
+            return false;
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
+    private static void AddProp(List<KeyValuePair<string, string>> properties, string key, string? value)
+    {
+        if (!string.IsNullOrWhiteSpace(key) && !string.IsNullOrWhiteSpace(value))
+        {
+            properties.Add(new(key, value));
+        }
+    }
+
+    private async Task Start()
+    {
+        // Disposing the timer in StopAsync is what ends this loop, without an OperationCanceledException.
+        while (!_cancellationToken.IsCancellationRequested
+            && await _timer!.WaitForNextTickAsync(CancellationToken.None)
+            && await _semaphore.WaitAsync(0, CancellationToken.None))
+        {
+            await CheckStreamsAsync(_cancellationToken).ConfigureAwait(false);
         }
     }
 
@@ -387,42 +423,6 @@ public partial class RedisStreamHealthMaintainer : IHostedService
         _telemetryProvider.TrackMetric(Metrics.StreamGroup, groupInfo.Lag.GetValueOrDefault(), CollectionsMarshal.AsSpan(props));
     }
 
-    private static bool TryParseDeliveredIdToDatetimeOffset(string? entryId, out DateTimeOffset? dateTimeOffset)
-    {
-        dateTimeOffset = null;
-        if (string.IsNullOrWhiteSpace(entryId))
-        {
-            return false;
-        }
-
-        ReadOnlySpan<char> span = entryId.AsSpan();
-        int separatorIndex = span.IndexOf('-');
-        ReadOnlySpan<char> timestampPart = separatorIndex < 0 ? span : span[..separatorIndex];
-
-        try
-        {
-            if (long.TryParse(timestampPart, NumberStyles.None, CultureInfo.InvariantCulture, out long result) && result > 0)
-            {
-                dateTimeOffset = DateTimeOffset.FromUnixTimeMilliseconds(result);
-                return true;
-            }
-
-            return false;
-        }
-        catch
-        {
-            return false;
-        }
-    }
-
-    private static void AddProp(List<KeyValuePair<string, string>> properties, string key, string? value)
-    {
-        if (!string.IsNullOrWhiteSpace(key) && !string.IsNullOrWhiteSpace(value))
-        {
-            properties.Add(new(key, value));
-        }
-    }
-
     private (ulong pointer, List<RedisKey> keys) ParseStreamScan(RedisResult result)
     {
         if (result.IsNull || result.Length == 0)
@@ -459,8 +459,6 @@ public partial class RedisStreamHealthMaintainer : IHostedService
         return (pointer, lst);
     }
 
-    private sealed record StreamContext(RedisKey StreamKey, RedisKey QuarantineKey);
-
     [LoggerMessage(Level = LogLevel.Error, Message = "Redis stream monitor")]
     private partial void LogRedisStreamMonitorError(Exception ex);
 
@@ -481,4 +479,6 @@ public partial class RedisStreamHealthMaintainer : IHostedService
 
     [LoggerMessage(Level = LogLevel.Warning, Message = "Consumer group {Group} from stream {Stream} added in quarantine")]
     private partial void LogConsumerGroupQuarantined(string group, RedisKey stream);
+
+    private sealed record StreamContext(RedisKey StreamKey, RedisKey QuarantineKey);
 }

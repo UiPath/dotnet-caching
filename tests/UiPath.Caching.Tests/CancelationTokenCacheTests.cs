@@ -64,6 +64,8 @@ public abstract class CancelationTokenCacheTests
             await sut.ContainsAsync<string>(Fixture.Create<string>(), token);
         });
 
+    protected abstract ICache CreateSut();
+
     private async Task ValidateCancellationToken(Func<ICache, CancellationToken, Task> act)
     {
         var sut = CreateSut();
@@ -72,6 +74,4 @@ public abstract class CancelationTokenCacheTests
         cancelSource.Cancel();
         await Assert.ThrowsAsync<OperationCanceledException>(() => act(sut, token));
     }
-
-    protected abstract ICache CreateSut();
 }

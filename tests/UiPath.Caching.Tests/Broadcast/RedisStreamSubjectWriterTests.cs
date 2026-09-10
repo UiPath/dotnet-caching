@@ -13,6 +13,8 @@ public class RedisStreamSubjectWriterTests : IAsyncLifetime
     private static readonly TimeSpan DefaultPollInterval = TimeSpan.FromMilliseconds(50);
     private static readonly TimeSpan WaitTimeout = TimeSpan.FromSeconds(10);
 
+    private static readonly TimeSpan NogroupPollTimeout = TimeSpan.FromSeconds(30);
+
     private readonly IFixture _fixture = AutoFixtureCreator.NSubstitute();
 
     private IEventFormatterProxy<ICacheEvent> _formatter = default!;
@@ -222,6 +224,8 @@ public class RedisStreamSubjectWriterTests : IAsyncLifetime
         await createCalled.Task.WaitAsync(NogroupPollTimeout, TestContext.Current.CancellationToken);
         _cancellationTokenSource.Cancel();
         try { await fetchTask.WaitAsync(WaitTimeout, TestContext.Current.CancellationToken); } catch (OperationCanceledException) { }
+
+        await _database.ReceivedWithAnyArgs().StreamCreateConsumerGroupAsync(_context.Topic, _context.ConsumerGroup, Arg.Any<RedisValue?>());
     }
 
     [Fact]
@@ -240,6 +244,8 @@ public class RedisStreamSubjectWriterTests : IAsyncLifetime
         await createCalled.Task.WaitAsync(NogroupPollTimeout, TestContext.Current.CancellationToken);
         _cancellationTokenSource.Cancel();
         try { await fetchTask.WaitAsync(WaitTimeout, TestContext.Current.CancellationToken); } catch (OperationCanceledException) { }
+
+        fetchTask.IsFaulted.Should().BeFalse("BUSYGROUP only means the group is already there, so recovery must swallow it and leave the fetch loop running");
     }
 
     [Fact]
@@ -256,9 +262,9 @@ public class RedisStreamSubjectWriterTests : IAsyncLifetime
         await createCalled.Task.WaitAsync(NogroupPollTimeout, TestContext.Current.CancellationToken);
         _cancellationTokenSource.Cancel();
         try { await fetchTask.WaitAsync(WaitTimeout, TestContext.Current.CancellationToken); } catch (OperationCanceledException) { }
-    }
 
-    private static readonly TimeSpan NogroupPollTimeout = TimeSpan.FromSeconds(30);
+        fetchTask.IsFaulted.Should().BeFalse("an unexpected StreamCreate failure must be logged and the fetch loop kept alive, not surfaced as a fault");
+    }
 
     [Theory]
     [InlineData("ERR unknown command 'XREADGROUP'")]
@@ -360,21 +366,6 @@ public class RedisStreamSubjectWriterTests : IAsyncLifetime
         try { await sut.FetchTask.WaitAsync(WaitTimeout, TestContext.Current.CancellationToken); } catch (OperationCanceledException) { }
     }
 
-    private static async Task<bool> WaitUntil(Func<bool> condition)
-    {
-        var deadline = DateTime.UtcNow + WaitTimeout;
-        while (DateTime.UtcNow < deadline)
-        {
-            if (condition())
-            {
-                return true;
-            }
-            await Task.Delay(20, TestContext.Current.CancellationToken);
-        }
-
-        return false;
-    }
-
     [Fact]
     public async Task ProcessEvent_swallows_formatter_exception()
     {
@@ -445,7 +436,7 @@ public class RedisStreamSubjectWriterTests : IAsyncLifetime
         channel.Writer.Complete();
         var recordingLogger = new RecordingLogger();
         var loggedClosed = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
-        recordingLogger.OnRecord = r => { if (r.Message.Contains("Channel closed during dispatch")) loggedClosed.TrySetResult(true); };
+        recordingLogger.OnRecord = r => { if (r.Message.Contains("Channel closed during dispatch")) { loggedClosed.TrySetResult(true); } };
         var entries = new[] { new StreamEntry(_fixture.Create<string>(), [new NameValueEntry(_fieldName, _fixture.Create<string>())]) };
         _formatter.Decode(Arg.Any<ReadOnlyMemory<byte>>()).Returns(new TestCacheEvent { Valid = true, Source = new Uri("urn:other-source") });
         SetupSingleBatch(entries);
@@ -515,6 +506,62 @@ public class RedisStreamSubjectWriterTests : IAsyncLifetime
         await _database.DidNotReceiveWithAnyArgs().StreamAcknowledgeAsync(default, default, default(RedisValue[])!);
     }
 
+    public ValueTask DisposeAsync()
+    {
+        return ValueTask.CompletedTask;
+    }
+
+    public ValueTask InitializeAsync()
+    {
+        _topic = _fixture.Create<string>();
+        _fieldName = _fixture.Create<string>();
+        _consumerName = _fixture.Create<string>();
+        _consumerGroup = _fixture.Create<string>();
+        _sourceUri = new Uri("urn:" + _fixture.Create<string>());
+        _pollBatchSize = _fixture.Create<int>();
+        _pollInterval = DefaultPollInterval;
+        _context = new RedisStreamContext(_topic, _fieldName, _consumerName, _consumerGroup, _sourceUri, _pollBatchSize, _pollInterval, false, true);
+        _fixture.Inject(_context);
+        _cancellationTokenSource = new CancellationTokenSource();
+        _fixture.Inject(_cancellationTokenSource.Token);
+        _database = _fixture.Freeze<IDatabase>();
+        _logger = _fixture.Freeze<ILogger>();
+        _formatter = _fixture.Freeze<IEventFormatterProxy<ICacheEvent>>();
+
+        var connectionState = _fixture.Freeze<IConnectionState>();
+        connectionState.IsConnected.Returns(true);
+
+        var redisConnector = _fixture.Freeze<IRedisConnector>();
+        redisConnector.Database.Returns(_database);
+
+        _fixture.Inject(_formatter);
+        _fixture.Inject<IFetchWaiter>(new TimedFetchWaiter(_pollInterval));
+        return ValueTask.CompletedTask;
+    }
+
+    private static async Task<bool> WaitUntil(Func<bool> condition)
+    {
+        var deadline = DateTime.UtcNow + WaitTimeout;
+        while (DateTime.UtcNow < deadline)
+        {
+            if (condition())
+            {
+                return true;
+            }
+            await Task.Delay(20, TestContext.Current.CancellationToken);
+        }
+
+        return false;
+    }
+
+    // RedisServerException(string) is obsolete as of StackExchange.Redis 3.1 and slated for removal in 3.2.
+    // Its replacement takes RedisErrorKind, which upstream still marks [Experimental] (SER007), so the
+    // suppression is centralized here rather than repeated at each call site.
+#pragma warning disable SER007 // RedisErrorKind is for evaluation purposes only
+    private static RedisServerException UnknownCommandError(string message) =>
+        new(RedisErrorKind.UnknownCommand, CommandFlags.None, message);
+#pragma warning restore SER007
+
     private void SetupSingleBatch(StreamEntry[] entries)
     {
         var emitted = 0;
@@ -572,45 +619,4 @@ public class RedisStreamSubjectWriterTests : IAsyncLifetime
             public void Dispose() { }
         }
     }
-
-    public ValueTask DisposeAsync()
-    {
-        return ValueTask.CompletedTask;
-    }
-
-    public ValueTask InitializeAsync()
-    {
-        _topic = _fixture.Create<string>();
-        _fieldName = _fixture.Create<string>();
-        _consumerName = _fixture.Create<string>();
-        _consumerGroup = _fixture.Create<string>();
-        _sourceUri = new Uri("urn:" + _fixture.Create<string>());
-        _pollBatchSize = _fixture.Create<int>();
-        _pollInterval = DefaultPollInterval;
-        _context = new RedisStreamContext(_topic, _fieldName, _consumerName, _consumerGroup, _sourceUri, _pollBatchSize, _pollInterval, false, true);
-        _fixture.Inject(_context);
-        _cancellationTokenSource = new CancellationTokenSource();
-        _fixture.Inject(_cancellationTokenSource.Token);
-        _database = _fixture.Freeze<IDatabase>();
-        _logger = _fixture.Freeze<ILogger>();
-        _formatter = _fixture.Freeze<IEventFormatterProxy<ICacheEvent>>();
-
-        var connectionState = _fixture.Freeze<IConnectionState>();
-        connectionState.IsConnected.Returns(true);
-
-        var redisConnector = _fixture.Freeze<IRedisConnector>();
-        redisConnector.Database.Returns(_database);
-
-        _fixture.Inject(_formatter);
-        _fixture.Inject<IFetchWaiter>(new TimedFetchWaiter(_pollInterval));
-        return ValueTask.CompletedTask;
-    }
-
-    // RedisServerException(string) is obsolete as of StackExchange.Redis 3.1 and slated for removal in 3.2.
-    // Its replacement takes RedisErrorKind, which upstream still marks [Experimental] (SER007), so the
-    // suppression is centralized here rather than repeated at each call site.
-#pragma warning disable SER007 // RedisErrorKind is for evaluation purposes only
-    private static RedisServerException UnknownCommandError(string message) =>
-        new(RedisErrorKind.UnknownCommand, CommandFlags.None, message);
-#pragma warning restore SER007
 }

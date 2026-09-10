@@ -23,7 +23,7 @@ public class RedisConfigurationOptionsProvider(ILoggerFactory loggerFactory, IOp
         {
             return new ConfigurationOptions
             {
-                LoggerFactory = loggerFactory
+                LoggerFactory = loggerFactory,
             };
         }
 

@@ -9,38 +9,6 @@ public class RehydrationCoordinatorTests
 {
     private static readonly TimeSpan Duration = TimeSpan.FromMinutes(10);
 
-    private static RehydrationCoordinator NewCoordinator(
-        IDistributedLock? distributedLock = null,
-        RecordingTelemetryProvider? telemetry = null)
-    {
-        var clock = TimeProvider.System;
-        var lockKeyStrategy = new DefaultDistributedLockKeyStrategy(separator: ':');
-        return new RehydrationCoordinator(
-            cacheName: "test-cache",
-            clock,
-            distributedLock ?? NullDistributedLock.Instance,
-            lockKeyStrategy,
-            telemetry ?? new RecordingTelemetryProvider(),
-            NullLogger.Instance);
-    }
-
-    private static CachePolicy RehydratePolicy(
-        double threshold = 0.5,
-        double timeoutFraction = 0.5,
-        TimeSpan? baseCooldown = null) => new()
-    {
-        DistributedExpiration = Duration,
-        RehydrateEnabled = true,
-        Rehydrate = new RehydrateOptions
-        {
-            Threshold = threshold,
-            BaseCooldown = baseCooldown ?? TimeSpan.FromSeconds(1),
-            MaxCooldown = TimeSpan.FromMinutes(5),
-            TimeoutFraction = timeoutFraction,
-            Name = "test",
-        },
-    };
-
     [Fact]
     public void TryTrigger_returns_false_when_RehydrateEnabled_is_null()
     {
@@ -369,6 +337,38 @@ public class RehydrationCoordinatorTests
 
         Assert.Fail("\"failing\" never left the in-flight set, so the max-failure-count path was never exercised.");
     }
+
+    private static RehydrationCoordinator NewCoordinator(
+        IDistributedLock? distributedLock = null,
+        RecordingTelemetryProvider? telemetry = null)
+    {
+        var clock = TimeProvider.System;
+        var lockKeyStrategy = new DefaultDistributedLockKeyStrategy(separator: ':');
+        return new RehydrationCoordinator(
+            cacheName: "test-cache",
+            clock,
+            distributedLock ?? NullDistributedLock.Instance,
+            lockKeyStrategy,
+            telemetry ?? new RecordingTelemetryProvider(),
+            NullLogger.Instance);
+    }
+
+    private static CachePolicy RehydratePolicy(
+        double threshold = 0.5,
+        double timeoutFraction = 0.5,
+        TimeSpan? baseCooldown = null) => new()
+    {
+        DistributedExpiration = Duration,
+        RehydrateEnabled = true,
+        Rehydrate = new RehydrateOptions
+        {
+            Threshold = threshold,
+            BaseCooldown = baseCooldown ?? TimeSpan.FromSeconds(1),
+            MaxCooldown = TimeSpan.FromMinutes(5),
+            TimeoutFraction = timeoutFraction,
+            Name = "test",
+        },
+    };
 
     private static async Task WaitForCallAsync(Func<bool> predicate, TimeSpan timeout)
     {

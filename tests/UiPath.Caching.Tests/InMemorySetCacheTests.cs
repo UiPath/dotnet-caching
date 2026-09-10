@@ -7,31 +7,13 @@ namespace UiPath.Caching.Tests;
 // tier is the storage — the set analog of InMemoryCacheProvider serving MultilayerCache over NullCache.
 public class InMemorySetCacheTests
 {
-    private static CancellationToken Ct => TestContext.Current.CancellationToken;
 
     // Hoisted out of the call below so the array is not rebuilt per invocation (CA1861).
     private static readonly string[] OneItem = ["a"];
-
-    private static MultilayerSetCache CreateSut(InMemoryQueueCacheOptions? options = null, TimeProvider? clock = null)
-    {
-        options ??= new InMemoryQueueCacheOptions();
-        var cacheClock = clock ?? TimeProvider.System;
-        return new MultilayerSetCache(
-            KnownCacheProviderNames.InMemory, NullSetCache.Instance,
-            new MemoryCacheFactory(cacheClock, NullLoggerFactory.Instance),
-            new SystemJsonByteSerializerProxy(), options,
-            NullLocalLock.Instance, cacheClock);
-    }
-
-    // Casts to IEnumerable<string> so the call binds to the IEnumerable<T> AddAsync overload rather
-    // than the single-item AddAsync<T>(..., T item, ...) overload (T = string[]).
-    private static ValueTask<long> AddMany(MultilayerSetCache sut, CacheKey key, params string[] items) =>
-        sut.AddAsync(key, (IEnumerable<string>)items, (CachePolicy?)null, Ct);
+    private static CancellationToken Ct => TestContext.Current.CancellationToken;
 
     [Fact]
     public void Name_is_InMemory() => CreateSut().Name.Should().Be("InMemory");
-
-    private sealed record Member(int Id, string Name);
 
     /// <summary>
     /// The snapshot is keyed on the serializer's <c>byte[]</c> output, which compares by reference.
@@ -46,10 +28,13 @@ public class InMemorySetCacheTests
     public async Task A_member_mutated_after_being_added_does_not_corrupt_the_snapshot()
     {
         var sut = new MultilayerSetCache(
-            KnownCacheProviderNames.InMemory, NullSetCache.Instance,
+            KnownCacheProviderNames.InMemory,
+            NullSetCache.Instance,
             new MemoryCacheFactory(TimeProvider.System, NullLoggerFactory.Instance),
-            new RawByteSerializerProxy(), new InMemoryQueueCacheOptions { DefaultExpiration = null },
-            NullLocalLock.Instance, TimeProvider.System);
+            new RawByteSerializerProxy(),
+            new InMemoryQueueCacheOptions { DefaultExpiration = null },
+            NullLocalLock.Instance,
+            TimeProvider.System);
         var payload = new byte[] { 1, 2, 3 };
 
         (await sut.AddAsync("k", payload, (CachePolicy?)null, Ct)).Should().BeTrue();
@@ -245,4 +230,25 @@ public class InMemorySetCacheTests
         var act = () => sut.Dispose();
         act.Should().NotThrow();
     }
+
+    private static MultilayerSetCache CreateSut(InMemoryQueueCacheOptions? options = null, TimeProvider? clock = null)
+    {
+        options ??= new InMemoryQueueCacheOptions();
+        var cacheClock = clock ?? TimeProvider.System;
+        return new MultilayerSetCache(
+            KnownCacheProviderNames.InMemory,
+            NullSetCache.Instance,
+            new MemoryCacheFactory(cacheClock, NullLoggerFactory.Instance),
+            new SystemJsonByteSerializerProxy(),
+            options,
+            NullLocalLock.Instance,
+            cacheClock);
+    }
+
+    // Casts to IEnumerable<string> so the call binds to the IEnumerable<T> AddAsync overload rather
+    // than the single-item AddAsync<T>(..., T item, ...) overload (T = string[]).
+    private static ValueTask<long> AddMany(MultilayerSetCache sut, CacheKey key, params string[] items) =>
+        sut.AddAsync(key, (IEnumerable<string>)items, (CachePolicy?)null, Ct);
+
+    private sealed record Member(int Id, string Name);
 }

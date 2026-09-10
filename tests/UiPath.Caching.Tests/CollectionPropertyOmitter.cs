@@ -13,7 +13,9 @@ public class CollectionPropertyOmitter : ISpecimenBuilder
         if (pi != null
             && pi.PropertyType.IsGenericType
             && pi.PropertyType.GetGenericTypeDefinition() == typeof(ICollection<>))
+        {
             return new OmitSpecimen();
+        }
 
         return new NoSpecimen();
     }

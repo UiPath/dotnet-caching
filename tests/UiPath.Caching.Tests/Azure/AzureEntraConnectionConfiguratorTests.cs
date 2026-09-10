@@ -7,30 +7,6 @@ namespace UiPath.Caching.Tests.Azure;
 
 public class AzureEntraConnectionConfiguratorTests
 {
-    private sealed class CapturingConfigurator : AzureEntraConnectionConfigurator
-    {
-        public CapturingConfigurator(IOptions<AzureEntraOptions> options)
-            : base(options)
-        {
-        }
-
-        public CapturingConfigurator(IOptions<AzureEntraOptions> options, IAzureEntraCredentialFactory credentialFactory)
-            : base(options, credentialFactory)
-        {
-        }
-
-        public bool Applied { get; private set; }
-        public bool SslAtApplyTime { get; private set; }
-        public TokenCredential? CapturedCredential { get; private set; }
-
-        protected override Task ApplyAzureAuthenticationAsync(ConfigurationOptions configuration, TokenCredential credential)
-        {
-            Applied = true;
-            SslAtApplyTime = configuration.Ssl;
-            CapturedCredential = credential;
-            return Task.CompletedTask;
-        }
-    }
 
     private enum CredentialFactoryCall
     {
@@ -38,52 +14,6 @@ public class AzureEntraConnectionConfiguratorTests
         Default,
         ManagedIdentityClientId,
         ManagedIdentityOptions,
-    }
-
-    private sealed class CapturingCredentialFactory(TokenCredential credential) : IAzureEntraCredentialFactory
-    {
-        public CredentialFactoryCall Call { get; private set; }
-        public int CallCount { get; private set; }
-        public string? ClientId { get; private set; }
-        public ManagedIdentityCredentialOptions? Options { get; private set; }
-
-        public TokenCredential CreateDefaultCredential()
-        {
-            CallCount++;
-            Call = CredentialFactoryCall.Default;
-            return credential;
-        }
-
-        public TokenCredential CreateManagedIdentityCredential(string clientId)
-        {
-            CallCount++;
-            Call = CredentialFactoryCall.ManagedIdentityClientId;
-            ClientId = clientId;
-            return credential;
-        }
-
-        public TokenCredential CreateManagedIdentityCredential(ManagedIdentityCredentialOptions options)
-        {
-            CallCount++;
-            Call = CredentialFactoryCall.ManagedIdentityOptions;
-            Options = options;
-            return credential;
-        }
-    }
-
-    private sealed class FakeCredential : TokenCredential
-    {
-        public override AccessToken GetToken(TokenRequestContext requestContext, CancellationToken cancellationToken) => default;
-
-        public override ValueTask<AccessToken> GetTokenAsync(TokenRequestContext requestContext, CancellationToken cancellationToken) => default;
-    }
-
-    private static CapturingConfigurator Create(AzureEntraOptions options, IAzureEntraCredentialFactory? credentialFactory = null)
-    {
-        var configuredOptions = Options.Create(options);
-        return credentialFactory is null
-            ? new CapturingConfigurator(configuredOptions)
-            : new CapturingConfigurator(configuredOptions, credentialFactory);
     }
 
     [Fact]
@@ -201,7 +131,8 @@ public class AzureEntraConnectionConfiguratorTests
         {
             ManagedIdentityClientId = "managed-identity-client-id",
             ManagedIdentityOptions = options,
-        }, factory);
+        },
+        factory);
 
         await sut.ConfigureAsync(new ConfigurationOptions(), TestContext.Current.CancellationToken);
 
@@ -232,5 +163,75 @@ public class AzureEntraConnectionConfiguratorTests
         factory.CreateDefaultCredential().Should().BeOfType<DefaultAzureCredential>();
         factory.CreateManagedIdentityCredential("managed-identity-client-id").Should().BeOfType<ManagedIdentityCredential>();
         factory.CreateManagedIdentityCredential(new ManagedIdentityCredentialOptions()).Should().BeOfType<ManagedIdentityCredential>();
+    }
+
+    private static CapturingConfigurator Create(AzureEntraOptions options, IAzureEntraCredentialFactory? credentialFactory = null)
+    {
+        var configuredOptions = Options.Create(options);
+        return credentialFactory is null
+            ? new CapturingConfigurator(configuredOptions)
+            : new CapturingConfigurator(configuredOptions, credentialFactory);
+    }
+    private sealed class CapturingConfigurator : AzureEntraConnectionConfigurator
+    {
+        public CapturingConfigurator(IOptions<AzureEntraOptions> options)
+            : base(options)
+        {
+        }
+
+        public CapturingConfigurator(IOptions<AzureEntraOptions> options, IAzureEntraCredentialFactory credentialFactory)
+            : base(options, credentialFactory)
+        {
+        }
+
+        public bool Applied { get; private set; }
+        public bool SslAtApplyTime { get; private set; }
+        public TokenCredential? CapturedCredential { get; private set; }
+
+        protected override Task ApplyAzureAuthenticationAsync(ConfigurationOptions configuration, TokenCredential credential)
+        {
+            Applied = true;
+            SslAtApplyTime = configuration.Ssl;
+            CapturedCredential = credential;
+            return Task.CompletedTask;
+        }
+    }
+
+    private sealed class CapturingCredentialFactory(TokenCredential credential) : IAzureEntraCredentialFactory
+    {
+        public CredentialFactoryCall Call { get; private set; }
+        public int CallCount { get; private set; }
+        public string? ClientId { get; private set; }
+        public ManagedIdentityCredentialOptions? Options { get; private set; }
+
+        public TokenCredential CreateDefaultCredential()
+        {
+            CallCount++;
+            Call = CredentialFactoryCall.Default;
+            return credential;
+        }
+
+        public TokenCredential CreateManagedIdentityCredential(string clientId)
+        {
+            CallCount++;
+            Call = CredentialFactoryCall.ManagedIdentityClientId;
+            ClientId = clientId;
+            return credential;
+        }
+
+        public TokenCredential CreateManagedIdentityCredential(ManagedIdentityCredentialOptions options)
+        {
+            CallCount++;
+            Call = CredentialFactoryCall.ManagedIdentityOptions;
+            Options = options;
+            return credential;
+        }
+    }
+
+    private sealed class FakeCredential : TokenCredential
+    {
+        public override AccessToken GetToken(TokenRequestContext requestContext, CancellationToken cancellationToken) => default;
+
+        public override ValueTask<AccessToken> GetTokenAsync(TokenRequestContext requestContext, CancellationToken cancellationToken) => default;
     }
 }

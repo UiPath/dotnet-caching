@@ -40,7 +40,7 @@ internal class HashCacheEntryBuilder
             Token = token,
             Expiration = _clock.ToDateTimeOffset(expiration),
             SetOption = setOption,
-            Metadata = default
+            Metadata = default,
         };
     }
 }

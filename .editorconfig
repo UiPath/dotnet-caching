@@ -40,7 +40,7 @@ dotnet_style_parentheses_in_relational_binary_operators = always_for_clarity:sil
 dotnet_style_parentheses_in_other_binary_operators = always_for_clarity:silent
 dotnet_style_parentheses_in_other_operators = never_if_unnecessary:silent
 # Modifier preferences
-dotnet_style_require_accessibility_modifiers = for_non_interface_members:silent
+dotnet_style_require_accessibility_modifiers = for_non_interface_members:warning
 dotnet_style_readonly_field = true:suggestion
 # Expression-level preferences
 dotnet_style_object_initializer = true:suggestion
@@ -113,7 +113,7 @@ csharp_style_conditional_delegate_call = true:suggestion
 # Modifier preferences
 csharp_preferred_modifier_order = public,private,protected,internal,static,extern,new,virtual,abstract,sealed,override,readonly,unsafe,volatile,async:suggestion
 # Expression-level preferences
-csharp_prefer_braces = true:silent
+csharp_prefer_braces = true:warning
 csharp_style_deconstructed_variable_declaration = true:suggestion
 csharp_prefer_simple_default_expression = true:suggestion
 csharp_style_prefer_local_over_anonymous_function = true:suggestion
@@ -245,11 +245,12 @@ dotnet_diagnostic.SA1309.severity = none
 # Tuple element names should use correct casing
 dotnet_diagnostic.SA1316.severity = none
 
-# File may only contain a single class
-dotnet_diagnostic.SA1402.severity = suggestion
+# File may only contain a single class. Off by default and warning for src alone, at the bottom
+# of this file: tests, samples and benchmarks keep their small helper types next to what uses them.
+dotnet_diagnostic.SA1402.severity = none
 
 # Braces must not be omitted
-dotnet_diagnostic.SA1503.severity = suggestion
+dotnet_diagnostic.SA1503.severity = warning
 
 # ElementsMustBeDocumented
 dotnet_diagnostic.SA1600.severity = none
@@ -421,13 +422,13 @@ dotnet_diagnostic.SA1208.severity = none
 dotnet_diagnostic.SA1135.severity = none
 
 # SA1413: Use trailing comma in multi-line initializers
-dotnet_diagnostic.SA1413.severity = suggestion
+dotnet_diagnostic.SA1413.severity = warning
 
 # SA1300: Element should begin with upper-case letter
-dotnet_diagnostic.SA1300.severity = suggestion
+dotnet_diagnostic.SA1300.severity = warning
 
 # SA1117: Parameters should be on same line or separate lines
-dotnet_diagnostic.SA1117.severity = suggestion
+dotnet_diagnostic.SA1117.severity = warning
 
 # CS8600: Converting null literal or possible null value to non-nullable type.
 dotnet_diagnostic.CS8600.severity = error
@@ -471,3 +472,41 @@ dotnet_diagnostic.RS0041.severity = none
 dotnet_diagnostic.RS0026.severity = none
 dotnet_diagnostic.RS0027.severity = none
 
+# StyleCop.Analyzers ships ~5000 warnings' worth of rules. Every category below is off except
+# OrderingRules. A rule id beats its category here, so anything an exact id further up had already
+# switched off has to be named again to apply: SA1204 and SA1208 are, SA1200 and SA1649 are not.
+dotnet_analyzer_diagnostic.category-StyleCop.CSharp.SpecialRules.severity = none
+dotnet_analyzer_diagnostic.category-StyleCop.CSharp.SpacingRules.severity = none
+dotnet_analyzer_diagnostic.category-StyleCop.CSharp.ReadabilityRules.severity = none
+dotnet_analyzer_diagnostic.category-StyleCop.CSharp.NamingRules.severity = none
+dotnet_analyzer_diagnostic.category-StyleCop.CSharp.MaintainabilityRules.severity = none
+dotnet_analyzer_diagnostic.category-StyleCop.CSharp.LayoutRules.severity = none
+dotnet_analyzer_diagnostic.category-StyleCop.CSharp.DocumentationRules.severity = none
+
+# SA1649 (file name should match the first type) is already none further up, and stays that way:
+# it does not recognise the OfT suffix this repo uses for generic types, so it would ask to
+# rename CacheOfT.cs, ICacheOfT.cs and five more to Cache{T}.cs.
+#
+# SX1309, which asks every field to begin with an underscore, is already warning further up and
+# stays that way: it is this repo's field convention, and SA1309 is off above for the same reason.
+# Referencing the package is what makes it report, so the five fields that broke it are fixed.
+
+# SA1204 (static before instance) and SA1208 (System usings first) are none further up. A specific
+# id beats the category below, so each has to be named here to actually apply; the pass satisfies
+# both. SA1200 stays none: this repo puts using directives above the file-scoped namespace.
+dotnet_diagnostic.SA1204.severity = warning
+dotnet_diagnostic.SA1208.severity = warning
+
+# Ordering: the whole category, so SA1201 order by kind, SA1202 order by access, SA1204 static
+# first, SA1203 constants first, SA1214 readonly first and SA1210 (usings sorted) all apply
+# without a list of ids to maintain. Nothing off the shelf applies these: neither dotnet format nor
+# the Roslynator CLI can drive StyleCop's fixer — both answer that no code fix was found — and
+# Rider's layout engine ranks constants and statics above accessibility, which moves SA1202 the
+# wrong way. The tree was brought into line by a one-off Roslyn pass instead, and is clean now.
+dotnet_analyzer_diagnostic.category-StyleCop.CSharp.OrderingRules.severity = warning
+
+[src/**.cs]
+# One top-level type per file, for the shipped surface only. topLevelTypes in stylecop.json widens
+# SA1402 past its default of class alone. Tests, samples and benchmarks keep their small helper
+# types next to what uses them: 17 files would otherwise have to be broken up.
+dotnet_diagnostic.SA1402.severity = warning

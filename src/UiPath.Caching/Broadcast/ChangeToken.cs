@@ -18,12 +18,6 @@ public sealed partial class ChangeToken<T> : ICacheChangeToken, IKeyedObserver<I
 
     private readonly List<(Action<object?> callback, object? state)> _callbacks = [];
 
-    /// <summary>This token's own key: the caller's, rendered inside the composed key it subscribes with.</summary>
-    private LoggedKey Logged() => LoggedKey.For(_masker, _callerKey, _key, _entryType);
-
-    /// <summary>A key off the wire has no caller key to judge, so it is masked whole when masking is on.</summary>
-    private LoggedKey LoggedForeign(string key) => LoggedKey.Composed(_masker, key, _entryType);
-
     public ChangeToken(
         string key,
         ITopic<ICacheEvent> topic,
@@ -66,8 +60,6 @@ public sealed partial class ChangeToken<T> : ICacheChangeToken, IKeyedObserver<I
 
     public bool MetadataHasChanged { get; private set; }
 
-    string IKeyedObserver<ICacheEvent>.Key => _key;
-
     public bool ActiveChangeCallbacks => true;
 
     public DateTimeOffset? Expiration { get; private set; }
@@ -75,6 +67,8 @@ public sealed partial class ChangeToken<T> : ICacheChangeToken, IKeyedObserver<I
     public IDictionary<string, string?>? Metadata  { get; private set; }
 
     public string? TransportId { get; private set; }
+
+    string IKeyedObserver<ICacheEvent>.Key => _key;
 
     public void OnCompleted() =>
         LogOnCompleted(Logged(), _topic);
@@ -111,6 +105,23 @@ public sealed partial class ChangeToken<T> : ICacheChangeToken, IKeyedObserver<I
         }
     }
 
+
+
+    public IDisposable RegisterChangeCallback(Action<object?> callback, object? state)
+    {
+        _callbacks.Add(new(callback, state));
+        return this;
+    }
+
+    public void Dispose() =>
+        _unsubscriber?.Dispose();
+
+    /// <summary>This token's own key: the caller's, rendered inside the composed key it subscribes with.</summary>
+    private LoggedKey Logged() => LoggedKey.For(_masker, _callerKey, _key, _entryType);
+
+    /// <summary>A key off the wire has no caller key to judge, so it is masked whole when masking is on.</summary>
+    private LoggedKey LoggedForeign(string key) => LoggedKey.Composed(_masker, key, _entryType);
+
     private void Notify(CacheEventData? data = default)
     {
         HasChanged = true;
@@ -121,14 +132,6 @@ public sealed partial class ChangeToken<T> : ICacheChangeToken, IKeyedObserver<I
         }
 
         _callbacks.ForEach(kv => kv.callback(kv.state));
-    }
-
-
-
-    public IDisposable RegisterChangeCallback(Action<object?> callback, object? state)
-    {
-        _callbacks.Add(new(callback, state));
-        return this;
     }
 
     private bool IsAcceptedEvent(ICacheEvent cacheEvent)
@@ -164,9 +167,6 @@ public sealed partial class ChangeToken<T> : ICacheChangeToken, IKeyedObserver<I
 
         return true;
     }
-
-    public void Dispose() =>
-        _unsubscriber?.Dispose();
 
     private void ExtractMetadata(IDictionary<string, object?> properties)
     {

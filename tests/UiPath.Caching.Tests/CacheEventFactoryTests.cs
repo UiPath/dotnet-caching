@@ -70,7 +70,7 @@ public class CacheEventFactoryTests : IAsyncLifetime
     [InlineData("CacheRemoved", true)]
     [InlineData("CACHESET", true)]
     [InlineData("cacherefreshed", true)]
-    public void known_events(string? eventType, bool isKnown)
+    public void Known_events(string? eventType, bool isKnown)
     {
         var actual = Sut.IsKnown(eventType);
         actual.Should().Be(isKnown);

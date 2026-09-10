@@ -45,19 +45,23 @@ internal static class MetricExtensions
         var streamIdValue = streamId.GetStreamIdFromRedisValue();
         if (streamIdValue.Valid)
         {
-            cachingTelemetryProvider.TrackMetric(metricName, streamIdValue.Timestamp,
-            [
-                new(Metrics.TopicName, topicName),
-                new(Metrics.SequenceNumber, streamIdValue.Sequence.ToString(CultureInfo.InvariantCulture)),
-            ]);
+            cachingTelemetryProvider.TrackMetric(
+                metricName,
+                streamIdValue.Timestamp,
+                [
+                    new(Metrics.TopicName, topicName),
+                    new(Metrics.SequenceNumber, streamIdValue.Sequence.ToString(CultureInfo.InvariantCulture)),
+                ]);
         }
         else
         {
-            cachingTelemetryProvider.TrackMetric(metricName, 0,
-            [
-                new(Metrics.TopicName, topicName),
-                new(Metrics.SequenceNumber, Metrics.Invalid),
-            ]);
+            cachingTelemetryProvider.TrackMetric(
+                metricName,
+                0,
+                [
+                    new(Metrics.TopicName, topicName),
+                    new(Metrics.SequenceNumber, Metrics.Invalid),
+                ]);
         }
     }
 }

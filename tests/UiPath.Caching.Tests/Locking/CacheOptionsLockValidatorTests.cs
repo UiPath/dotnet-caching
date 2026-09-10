@@ -4,13 +4,6 @@ namespace UiPath.Caching.Tests.Locking;
 
 public class CacheOptionsLockValidatorTests
 {
-    private static CacheOptions Valid() => new()
-    {
-        LocalLockPoolSize = 100,
-        LocalLockPoolInitialFill = 10,
-        DistributedLockPollInterval = TimeSpan.FromMilliseconds(50),
-        DistributedLockMaxPollInterval = TimeSpan.FromMilliseconds(500),
-    };
 
     [Fact]
     public void Succeeds_for_valid_options()
@@ -85,4 +78,11 @@ public class CacheOptionsLockValidatorTests
         result.Failed.Should().BeTrue();
         result.FailureMessage.Should().Contain(nameof(CacheOptions.DistributedLockMaxPollInterval));
     }
+    private static CacheOptions Valid() => new()
+    {
+        LocalLockPoolSize = 100,
+        LocalLockPoolInitialFill = 10,
+        DistributedLockPollInterval = TimeSpan.FromMilliseconds(50),
+        DistributedLockMaxPollInterval = TimeSpan.FromMilliseconds(500),
+    };
 }

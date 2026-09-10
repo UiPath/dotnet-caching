@@ -1,4 +1,4 @@
-﻿using UiPath.Caching.Locking;
+using UiPath.Caching.Locking;
 using UiPath.Caching.Telemetry;
 
 namespace UiPath.Caching;
@@ -20,10 +20,6 @@ public sealed class InMemoryCacheProvider : ICacheProvider
 
     private readonly Lazy<MultilayerCache> _cache;
     private readonly Lazy<MultilayerHashCache> _hashCache;
-
-    public string Name => KnownCacheProviderNames.InMemory;
-
-    public bool Enabled => _options.Enabled;
 
     public InMemoryCacheProvider(
         IOptions<InMemoryCacheOptions> optionsAccessor,
@@ -72,6 +68,10 @@ public sealed class InMemoryCacheProvider : ICacheProvider
         _cache = new Lazy<MultilayerCache>(BuildCache);
         _hashCache = new Lazy<MultilayerHashCache>(BuildHashCache);
     }
+
+    public string Name => KnownCacheProviderNames.InMemory;
+
+    public bool Enabled => _options.Enabled;
 
     public ICache CreateCache() =>
         _cache.Value;

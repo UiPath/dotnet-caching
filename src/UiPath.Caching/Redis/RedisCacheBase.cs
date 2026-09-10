@@ -37,23 +37,50 @@ public abstract class RedisCacheBase : IConnectionState, IDisposable
             : CommandFlags.DemandMaster | CommandFlags.FireAndForget;
     }
 
-    protected ICachingTelemetryProvider Telemetry { get; }
+    public event EventHandler? OnConnectionFailed
+    {
+        add => _connectionState.OnConnectionFailed += value;
+        remove => _connectionState.OnConnectionFailed -= value;
+    }
 
-    /// <summary>The key as a log line should show it. Nothing is rendered unless the line is written.</summary>
-    private protected LoggedKey Logged(CacheKey key, RedisKey composed, Type? valueType = null) =>
-        LoggedKey.For(_masker, key, composed, valueType);
+    public event EventHandler? OnConnectionRestored
+    {
+        add => _connectionState.OnConnectionRestored += value;
+        remove => _connectionState.OnConnectionRestored -= value;
+    }
 
-    /// <inheritdoc cref="Logged(CacheKey, RedisKey, Type?)"/>
-    private protected LoggedKey Logged(CacheKey key, Type? valueType = null) => LoggedKey.For(_masker, key, valueType);
+    public event EventHandler? OnReconnected
+    {
+        add => _connectionState.OnReconnected += value;
+        remove => _connectionState.OnReconnected -= value;
+    }
 
-    /// <summary>For the sites that only hold the composed key; it is judged, and masked, whole.</summary>
-    private protected LoggedKey Logged(RedisKey composed, Type? valueType = null) =>
-        LoggedKey.Composed(_masker, composed, valueType);
-
-    protected bool KeyReadTelemetryEnabled { get; }
+    public bool IsConnected => _connectionState.IsConnected;
 
     /// <summary>Flags for a standalone TTL write, shared by both caches so the option cannot be honored in one and not the other.</summary>
     internal CommandFlags RefreshFlags { get; }
+
+    protected ICachingTelemetryProvider Telemetry { get; }
+
+    protected bool KeyReadTelemetryEnabled { get; }
+
+    protected CachePolicy DefaultPolicy { get; }
+
+    protected TimeSpan? DefaultExpiration { get; }
+
+    protected TimeProvider Clock { get; }
+
+    protected IDatabase Database => _redis.Database;
+
+    public void Dispose()
+    {
+        Dispose(true);
+        GC.SuppressFinalize(this);
+    }
+
+    /// <summary>Validates a caller-supplied duration.</summary>
+    protected static TimeSpan CallerDuration(TimeSpan expiration, [CallerArgumentExpression(nameof(expiration))] string? paramName = null) =>
+        CacheExpiration.ThrowIfNotPositive(expiration, paramName);
 
     protected void TrackRead(ITelemetryOperation operation, bool hit, RedisKey key)
     {
@@ -64,19 +91,9 @@ public abstract class RedisCacheBase : IConnectionState, IDisposable
         }
     }
 
-    protected CachePolicy DefaultPolicy { get; }
-
-    protected TimeSpan? DefaultExpiration { get; }
-
-    protected TimeProvider Clock { get; }
-
     /// <summary>Write duration when the call carries none: policy, then cache default, then <see cref="CachePolicy.DefaultDistributedExpiration"/>; never unbounded by omission.</summary>
     protected TimeSpan PolicyDuration(CachePolicy? policy) =>
         policy?.DistributedExpiration ?? DefaultExpiration ?? CachePolicy.DefaultDistributedExpiration;
-
-    /// <summary>Validates a caller-supplied duration.</summary>
-    protected static TimeSpan CallerDuration(TimeSpan expiration, [CallerArgumentExpression(nameof(expiration))] string? paramName = null) =>
-        CacheExpiration.ThrowIfNotPositive(expiration, paramName);
 
     /// <summary>Validates a caller-supplied expiration and turns it into a duration from the cache's now.</summary>
     protected TimeSpan CallerDuration(DateTimeOffset expiration, [CallerArgumentExpression(nameof(expiration))] string? paramName = null) =>
@@ -98,25 +115,28 @@ public abstract class RedisCacheBase : IConnectionState, IDisposable
     protected DateTimeOffset GetExpiration(DateTimeOffset expiration, [CallerArgumentExpression(nameof(expiration))] string? paramName = null) =>
         CacheExpiration.ThrowIfNotFuture(expiration, Clock.GetUtcNow(), paramName);
 
-    public event EventHandler? OnConnectionFailed
+    protected virtual void Dispose(bool disposing)
     {
-        add => _connectionState.OnConnectionFailed += value;
-        remove => _connectionState.OnConnectionFailed -= value;
+        if (!_disposed)
+        {
+            if (disposing)
+            {
+                // Dispose managed resources
+            }
+            _disposed = true;
+        }
     }
 
-    public event EventHandler? OnConnectionRestored
-    {
-        add => _connectionState.OnConnectionRestored += value;
-        remove => _connectionState.OnConnectionRestored -= value;
-    }
+    /// <summary>The key as a log line should show it. Nothing is rendered unless the line is written.</summary>
+    private protected LoggedKey Logged(CacheKey key, RedisKey composed, Type? valueType = null) =>
+        LoggedKey.For(_masker, key, composed, valueType);
 
-    public event EventHandler? OnReconnected
-    {
-        add => _connectionState.OnReconnected += value;
-        remove => _connectionState.OnReconnected -= value;
-    }
+    /// <inheritdoc cref="Logged(CacheKey, RedisKey, Type?)"/>
+    private protected LoggedKey Logged(CacheKey key, Type? valueType = null) => LoggedKey.For(_masker, key, valueType);
 
-    public bool IsConnected => _connectionState.IsConnected;
+    /// <summary>For the sites that only hold the composed key; it is judged, and masked, whole.</summary>
+    private protected LoggedKey Logged(RedisKey composed, Type? valueType = null) =>
+        LoggedKey.Composed(_masker, composed, valueType);
 
     /// <summary>
     /// Redis answers a cross-slot command with an error the caches log and report as a miss, so a batch
@@ -145,26 +165,6 @@ public abstract class RedisCacheBase : IConnectionState, IDisposable
                 "A multi-key command runs on one node: give the keys a shared hash tag (non-empty content " +
                 "between '{' and '}', e.g. 'app:s:{org1}:groups_1') so they hash together, or split the batch " +
                 "into one call per group of keys that already share a tag.");
-        }
-    }
-
-    protected IDatabase Database => _redis.Database;
-
-    public void Dispose()
-    {
-        Dispose(true);
-        GC.SuppressFinalize(this);
-    }
-
-    protected virtual void Dispose(bool disposing)
-    {
-        if (!_disposed)
-        {
-            if (disposing)
-            {
-                // Dispose managed resources
-            }
-            _disposed = true;
         }
     }
 }

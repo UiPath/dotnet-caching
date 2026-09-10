@@ -11,25 +11,6 @@ public class MaskedLogSiteTests
 {
     private const string SecretKey = "session:cosmin";
 
-    private static ServiceProvider BuildContainer(bool masked, CapturingLoggerProvider logs) =>
-        new ServiceCollection()
-            .AddLogging(b => b.AddProvider(logs).SetMinimumLevel(LogLevel.Trace))
-            .AddCaching(
-                b =>
-                {
-                    b.AddMemory(_ => { });
-                    if (masked)
-                    {
-                        b.AddKeyMasking();
-                    }
-                },
-                o =>
-                {
-                    o.AppShortName = "app";
-                    o.DefaultCache = KnownCacheProviderNames.InMemory;
-                })
-            .BuildServiceProvider();
-
     [Theory]
     [InlineData(true)]
     [InlineData(false)]
@@ -74,6 +55,25 @@ public class MaskedLogSiteTests
 
         logs.Lines.Should().Contain(l => l.Contains("ses****")).And.NotContain(l => l.Contains(SecretKey));
     }
+
+    private static ServiceProvider BuildContainer(bool masked, CapturingLoggerProvider logs) =>
+        new ServiceCollection()
+            .AddLogging(b => b.AddProvider(logs).SetMinimumLevel(LogLevel.Trace))
+            .AddCaching(
+                b =>
+                {
+                    b.AddMemory(_ => { });
+                    if (masked)
+                    {
+                        b.AddKeyMasking();
+                    }
+                },
+                o =>
+                {
+                    o.AppShortName = "app";
+                    o.DefaultCache = KnownCacheProviderNames.InMemory;
+                })
+            .BuildServiceProvider();
 
     private sealed class CapturingLoggerProvider : ILoggerProvider
     {

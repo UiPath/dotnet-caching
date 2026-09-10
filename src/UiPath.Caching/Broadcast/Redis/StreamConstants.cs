@@ -2,7 +2,6 @@ namespace UiPath.Caching.Broadcast.Redis;
 
 internal static class StreamConstants
 {
-    internal static readonly RedisValue UndeliveredMessages = ">";
     internal const string ConsumerGroupNameExistsErrorMessage = "BUSYGROUP Consumer Group name already exists";
 
     /// <summary>
@@ -21,9 +20,10 @@ internal static class StreamConstants
     /// </summary>
     internal const string UnknownCommandErrorMessage = "unknown command";
 
-    /// <summary>Upper bound for the exponential backoff applied after consecutive fetch failures.</summary>
-    internal static readonly TimeSpan MaxErrorBackoff = TimeSpan.FromSeconds(30);
-
     /// <summary>Consecutive failures tolerated at the poll interval before backoff starts growing.</summary>
     internal const int ErrorBackoffThreshold = 3;
+    internal static readonly RedisValue UndeliveredMessages = ">";
+
+    /// <summary>Upper bound for the exponential backoff applied after consecutive fetch failures.</summary>
+    internal static readonly TimeSpan MaxErrorBackoff = TimeSpan.FromSeconds(30);
 }

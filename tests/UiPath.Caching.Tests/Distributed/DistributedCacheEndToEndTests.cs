@@ -11,30 +11,8 @@ namespace UiPath.Caching.Tests.Distributed;
 [Collection("CacheKeyDefaultCasing")]   // mutates CacheKey.DefaultCasing — serialized collection
 public class DistributedCacheEndToEndTests
 {
-    /// <summary>
-    /// Drives both the adapter and the backing memory cache, so expiration can be advanced
-    /// deterministically instead of racing the wall clock.
-    /// </summary>
-    private sealed class FakeClock(DateTimeOffset now) : ISystemClock
-    {
-        public DateTimeOffset UtcNow { get; private set; } = now;
-
-        public void Advance(TimeSpan delta) => UtcNow = UtcNow.Add(delta);
-    }
 
     private static readonly DateTimeOffset Start = new(2026, 8, 19, 12, 0, 0, TimeSpan.Zero);
-
-    private static ServiceProvider Build(FakeClock clock)
-    {
-        var services = new ServiceCollection();
-        services.AddSingleton<TimeProvider>(new SystemClockTimeProvider(clock));
-        services.AddCaching(b =>
-        {
-            b.AddMemory();
-            b.AddDistributedCache(KnownCacheProviderNames.InMemory);
-        });
-        return services.BuildServiceProvider();
-    }
 
     /// <summary>Each touch falls inside the sliding window, so the entry survives well past one window — until the absolute cap passes.</summary>
     [Fact]
@@ -45,11 +23,14 @@ public class DistributedCacheEndToEndTests
         var cache = provider.GetRequiredService<IDistributedCache>();
         var token = TestContext.Current.CancellationToken;
 
-        await cache.SetAsync("Session-AbC", [1], new DistributedCacheEntryOptions
+        await cache.SetAsync("Session-AbC",
+            [1],
+            new DistributedCacheEntryOptions
         {
             SlidingExpiration = TimeSpan.FromMinutes(20),
             AbsoluteExpirationRelativeToNow = TimeSpan.FromHours(2),
-        }, token);
+        },
+            token);
 
         for (var i = 0; i < 4; i++)
         {
@@ -113,18 +94,24 @@ public class DistributedCacheEndToEndTests
         var token = TestContext.Current.CancellationToken;
         var destination = new ArrayBufferWriter<byte>();
 
-        await buffered.SetAsync("AbC", new ReadOnlySequence<byte>([1, 2, 3]), new DistributedCacheEntryOptions
+        await buffered.SetAsync("AbC",
+            new ReadOnlySequence<byte>([1, 2, 3]),
+            new DistributedCacheEntryOptions
         {
             AbsoluteExpirationRelativeToNow = TimeSpan.FromMinutes(30),
-        }, token);
+        },
+            token);
 
         (await cache.GetAsync("AbC", token)).Should()
             .Equal(new byte[] { 1, 2, 3 }, "the array half reads what the buffer half wrote");
 
-        await cache.SetAsync("xYz", [4, 5], new DistributedCacheEntryOptions
+        await cache.SetAsync("xYz",
+            [4, 5],
+            new DistributedCacheEntryOptions
         {
             AbsoluteExpirationRelativeToNow = TimeSpan.FromMinutes(30),
-        }, token);
+        },
+            token);
         (await buffered.TryGetAsync("xYz", destination, token)).Should().BeTrue();
         destination.WrittenSpan.ToArray().Should().Equal(4, 5);
 
@@ -144,5 +131,27 @@ public class DistributedCacheEndToEndTests
 
         await cache.SetAsync(" k ", [1], new DistributedCacheEntryOptions(), token);
         (await cache.GetAsync("k", token)).Should().Equal(1);
+    }
+
+    private static ServiceProvider Build(FakeClock clock)
+    {
+        var services = new ServiceCollection();
+        services.AddSingleton<TimeProvider>(new SystemClockTimeProvider(clock));
+        services.AddCaching(b =>
+        {
+            b.AddMemory();
+            b.AddDistributedCache(KnownCacheProviderNames.InMemory);
+        });
+        return services.BuildServiceProvider();
+    }
+    /// <summary>
+    /// Drives both the adapter and the backing memory cache, so expiration can be advanced
+    /// deterministically instead of racing the wall clock.
+    /// </summary>
+    private sealed class FakeClock(DateTimeOffset now) : ISystemClock
+    {
+        public DateTimeOffset UtcNow { get; private set; } = now;
+
+        public void Advance(TimeSpan delta) => UtcNow = UtcNow.Add(delta);
     }
 }

@@ -32,7 +32,7 @@ public class TopicFactoryTests : IAsyncLifetime
     }
 
     [Fact]
-    public void empty_factory()
+    public void Empty_factory()
     {
         _sut = new TopicFactory(Options.Create(_cacheOptions));
         Sut.Get(_fixture.Create<string>()).Should().BeOfType<NullTopicProvider>();

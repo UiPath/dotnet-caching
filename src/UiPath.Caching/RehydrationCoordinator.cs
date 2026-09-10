@@ -14,7 +14,6 @@ internal sealed class RehydrationCoordinator(
     ILogger logger,
     KeyMasker? masker = null)
 {
-    private readonly KeyMasker _masker = masker ?? KeyMasker.Off;
 
     private const string EventTriggered = "cache.rehydrate.triggered";
     private const string EventSucceeded = "cache.rehydrate.succeeded";
@@ -32,6 +31,7 @@ internal sealed class RehydrationCoordinator(
     private const string LockKeyPrefix = "rehydrate:";
     private const double MinTimeoutMs = 1000.0;
     private const int MaxBackoffShift = 30;
+    private readonly KeyMasker _masker = masker ?? KeyMasker.Off;
     private readonly ConcurrentDictionary<string, byte> _inFlight = new(StringComparer.Ordinal);
     // Timestamp lets us evict entries older than MaxCooldown so the dictionary can't grow
     // unbounded for high-cardinality caches where a key fails once and never recurs.
@@ -61,6 +61,26 @@ internal sealed class RehydrationCoordinator(
         Func<CacheKey[], CancellationToken, ValueTask> rehydrateAsync,
         Type? entryType = null) =>
         TryTriggerCore(candidates, policy, duration, kind, rehydrateAsync, entryType);
+
+    private static TimeSpan SafeAdd(TimeSpan a, TimeSpan b) =>
+        a.Ticks > TimeSpan.MaxValue.Ticks - b.Ticks ? TimeSpan.MaxValue : a + b;
+
+    private static TimeSpan ComputeCooldown(TimeSpan baseCooldown, TimeSpan maxCooldown, int failureCount)
+    {
+        if (failureCount <= 0)
+        {
+            return TimeSpan.FromTicks(Math.Min(baseCooldown.Ticks, maxCooldown.Ticks));
+        }
+        var shift = Math.Min(failureCount, MaxBackoffShift);
+        var multiplier = 1L << shift;
+        var ticks = baseCooldown.Ticks;
+        if (ticks > 0 && multiplier > long.MaxValue / ticks)
+        {
+            return maxCooldown;
+        }
+        var product = ticks * multiplier;
+        return TimeSpan.FromTicks(Math.Min(product, maxCooldown.Ticks));
+    }
 
     private bool TryTriggerCore(
         IReadOnlyList<(CacheKey Key, DateTimeOffset Expiration)> candidates,
@@ -300,9 +320,6 @@ internal sealed class RehydrationCoordinator(
         }
     }
 
-    private static TimeSpan SafeAdd(TimeSpan a, TimeSpan b) =>
-        a.Ticks > TimeSpan.MaxValue.Ticks - b.Ticks ? TimeSpan.MaxValue : a + b;
-
     private int ReadFailureCount(string key, TimeSpan maxCooldown)
     {
         if (!_failureCount.TryGetValue(key, out var entry))
@@ -326,22 +343,5 @@ internal sealed class RehydrationCoordinator(
             static (_, ts) => (1, ts),
             static (_, current, ts) => (current.Count + 1, ts),
             nowTicks);
-    }
-
-    private static TimeSpan ComputeCooldown(TimeSpan baseCooldown, TimeSpan maxCooldown, int failureCount)
-    {
-        if (failureCount <= 0)
-        {
-            return TimeSpan.FromTicks(Math.Min(baseCooldown.Ticks, maxCooldown.Ticks));
-        }
-        var shift = Math.Min(failureCount, MaxBackoffShift);
-        var multiplier = 1L << shift;
-        var ticks = baseCooldown.Ticks;
-        if (ticks > 0 && multiplier > long.MaxValue / ticks)
-        {
-            return maxCooldown;
-        }
-        var product = ticks * multiplier;
-        return TimeSpan.FromTicks(Math.Min(product, maxCooldown.Ticks));
     }
 }

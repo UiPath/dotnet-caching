@@ -30,8 +30,6 @@ internal sealed partial class UiPathDistributedCache : IDistributedCache
     private readonly TimeProvider _clock;
     private readonly ILogger _logger;
 
-    internal bool TierRetainsValues { get; }
-
     /// <param name="keyStrategy">
     /// Applied to every composed key — <see cref="UiPathDistributedCacheOptions.CacheKeyStrategy"/> as resolved
     /// by registration. Applied here rather than through the backing provider's own
@@ -62,14 +60,13 @@ internal sealed partial class UiPathDistributedCache : IDistributedCache
         _clock = clock;
     }
 
+    internal bool TierRetainsValues { get; }
+
     public byte[]? Get(string key) =>
         GetAsync(key).GetAwaiter().GetResult();
 
     public Task<byte[]?> GetAsync(string key, CancellationToken token = default) =>
         ReadPayloadAsync(key, token).AsTask();
-
-    private async ValueTask<byte[]?> ReadPayloadAsync(string key, CancellationToken token) =>
-        await ReadAsync(key, includeData: true, token).ConfigureAwait(false) is { } fields ? AsArray(Payload(fields)) : null;
 
     public void Refresh(string key) =>
         RefreshAsync(key).GetAwaiter().GetResult();
@@ -97,6 +94,129 @@ internal sealed partial class UiPathDistributedCache : IDistributedCache
         ArgumentNullException.ThrowIfNull(value);
         return WriteAsync(key, value, options, token).AsTask();
     }
+
+    /// <summary>
+    /// Past its absolute deadline. Reported as a miss and left to expire on its own: deleting it here would
+    /// race a writer that has just replaced the value.
+    /// </summary>
+    private static bool IsExpired(DateTimeOffset? absolute, DateTimeOffset now) =>
+        absolute is { } cap && cap <= now;
+
+    /// <summary>
+    /// The stored payload. Metadata without a data field is a hit with an empty payload, because the hash
+    /// layer reports a zero-length value as absent.
+    /// </summary>
+    private static ReadOnlyMemory<byte> Payload(IDictionary<string, ReadOnlyMemory<byte>> fields) =>
+        fields.TryGetValue(DataField, out var data) ? data : default;
+
+    private static byte[] AsArray(ReadOnlyMemory<byte> payload) =>
+        MemoryMarshal.TryGetArray(payload, out var segment)
+            && segment.Array is { } array
+            && segment.Offset == 0
+            && segment.Count == array.Length
+            ? array
+            : payload.ToArray();
+
+    /// <summary>
+    /// Decodes both expiration fields, or reports a miss. The accepted values are exactly the ones a write can
+    /// produce, so a stored entry always round-trips and anything else — a field the hash layer returned empty
+    /// because the key is absent, text that does not parse, or a number outside the field's range — is a miss.
+    /// Presence and meaning are settled in this one pass on purpose: deciding them separately let a value
+    /// satisfy the presence test and then decode to "no expiration", which serves the payload as an entry that
+    /// never expires.
+    /// </summary>
+    private static bool TryDecodeMetadata(IDictionary<string, ReadOnlyMemory<byte>> fields, out EntryMetadata metadata)
+    {
+        metadata = default;
+        if (!TryDecodeTicks(fields, AbsoluteExpirationField, DateTime.MaxValue.Ticks, out var absoluteTicks)
+            || !TryDecodeTicks(fields, SlidingExpirationField, TimeSpan.MaxValue.Ticks, out var slidingTicks))
+        {
+            return false;
+        }
+
+        metadata = new EntryMetadata(
+            absoluteTicks is { } deadline ? new DateTimeOffset(deadline, TimeSpan.Zero) : null,
+            slidingTicks is { } window ? new TimeSpan(window) : null);
+        return true;
+    }
+
+    /// <summary>
+    /// One field. True with a value, true with null for the <see cref="Absent"/> sentinel, false when the field
+    /// holds something no write could have produced. A write emits either the sentinel or a strictly positive
+    /// tick count within the field's range: an absolute deadline is required to be in the future, and
+    /// <see cref="DistributedCacheEntryOptions.SlidingExpiration"/> only permits positive durations. Parsed
+    /// straight from the bytes: only a leading sign is tolerated around the digits, because that is all
+    /// <see cref="EncodeTicks"/> emits, and the whole field has to be consumed.
+    /// </summary>
+    private static bool TryDecodeTicks(IDictionary<string, ReadOnlyMemory<byte>> fields, string field, long maxTicks, out long? ticks)
+    {
+        ticks = null;
+        if (!fields.TryGetValue(field, out var raw)
+            || raw.IsEmpty
+            || !Utf8Parser.TryParse(raw.Span, out long value, out var consumed)
+            || consumed != raw.Length)
+        {
+            return false;
+        }
+
+        if (value == Absent)
+        {
+            return true;
+        }
+
+        if (value < 1 || value > maxTicks)
+        {
+            return false;
+        }
+
+        ticks = value;
+        return true;
+    }
+
+    private static ReadOnlyMemory<byte> EncodeTicks(long? ticks)
+    {
+        if (ticks is not { } value)
+        {
+            return AbsentTicks;
+        }
+
+        Span<byte> digits = stackalloc byte[20];   // long.MinValue is 20 characters
+        Utf8Formatter.TryFormat(value, digits, out var written);
+        return digits[..written].ToArray();
+    }
+
+    private static DateTimeOffset AddClamped(DateTimeOffset now, long ticks)
+    {
+        var remaining = DateTimeOffset.MaxValue.UtcTicks - now.UtcTicks;
+        return ticks >= remaining ? DateTimeOffset.MaxValue : now.AddTicks(ticks);
+    }
+
+    private static TimeSpan? ResolveTimeToLive(DateTimeOffset now, TimeSpan? sliding, DateTimeOffset? absolute)
+    {
+        var remaining = absolute is { } cap ? cap - now : (TimeSpan?)null;
+        return (sliding, remaining) switch
+        {
+            ({ } window, { } left) => TimeSpan.FromTicks(Math.Min(window.Ticks, left.Ticks)),
+            ({ } window, null) => window,
+            (null, { } left) => left,
+            _ => null,
+        };
+    }
+
+    private static DateTimeOffset? ResolveAbsoluteExpiration(DateTimeOffset now, DistributedCacheEntryOptions options)
+    {
+        if (options.AbsoluteExpiration is { } absolute)
+        {
+            return absolute <= now
+                ? throw new ArgumentOutOfRangeException(nameof(options), absolute, "The absolute expiration must be in the future.")
+                : absolute;
+        }
+
+        return options.AbsoluteExpirationRelativeToNow is { } relative ? AddClamped(now, relative.Ticks) : null;
+    }
+
+    private async ValueTask<byte[]?> ReadPayloadAsync(string key, CancellationToken token) =>
+        await ReadAsync(key, includeData: true, token).ConfigureAwait(false) is { } fields ? AsArray(Payload(fields)) : null;
 
     private async ValueTask WriteAsync(string key, ReadOnlyMemory<byte> value, DistributedCacheEntryOptions options, CancellationToken token)
     {
@@ -207,28 +327,6 @@ internal sealed partial class UiPathDistributedCache : IDistributedCache
         includeData || _slideByRewrite ? EntryFields : MetadataFields;
 
     /// <summary>
-    /// Past its absolute deadline. Reported as a miss and left to expire on its own: deleting it here would
-    /// race a writer that has just replaced the value.
-    /// </summary>
-    private static bool IsExpired(DateTimeOffset? absolute, DateTimeOffset now) =>
-        absolute is { } cap && cap <= now;
-
-    /// <summary>
-    /// The stored payload. Metadata without a data field is a hit with an empty payload, because the hash
-    /// layer reports a zero-length value as absent.
-    /// </summary>
-    private static ReadOnlyMemory<byte> Payload(IDictionary<string, ReadOnlyMemory<byte>> fields) =>
-        fields.TryGetValue(DataField, out var data) ? data : default;
-
-    private static byte[] AsArray(ReadOnlyMemory<byte> payload) =>
-        MemoryMarshal.TryGetArray(payload, out var segment)
-            && segment.Array is { } array
-            && segment.Offset == 0
-            && segment.Count == array.Length
-            ? array
-            : payload.ToArray();
-
-    /// <summary>
     /// Extends the entry's deadline. Memory-backed tiers write it back instead of refreshing, because their
     /// refresh evicts the local entry and the inner cache cannot restore it.
     /// </summary>
@@ -247,110 +345,12 @@ internal sealed partial class UiPathDistributedCache : IDistributedCache
         _ = await _cache.RefreshAsync<ReadOnlyMemory<byte>>(cacheKey, target, _policy, token).ConfigureAwait(false);
     }
 
-    /// <summary>Expiration metadata as written, decoded once. Null means the sentinel: that deadline was not set.</summary>
-    private readonly record struct EntryMetadata(DateTimeOffset? AbsoluteExpiration, TimeSpan? SlidingExpiration);
-
-    /// <summary>
-    /// Decodes both expiration fields, or reports a miss. The accepted values are exactly the ones a write can
-    /// produce, so a stored entry always round-trips and anything else — a field the hash layer returned empty
-    /// because the key is absent, text that does not parse, or a number outside the field's range — is a miss.
-    /// Presence and meaning are settled in this one pass on purpose: deciding them separately let a value
-    /// satisfy the presence test and then decode to "no expiration", which serves the payload as an entry that
-    /// never expires.
-    /// </summary>
-    private static bool TryDecodeMetadata(IDictionary<string, ReadOnlyMemory<byte>> fields, out EntryMetadata metadata)
-    {
-        metadata = default;
-        if (!TryDecodeTicks(fields, AbsoluteExpirationField, DateTime.MaxValue.Ticks, out var absoluteTicks)
-            || !TryDecodeTicks(fields, SlidingExpirationField, TimeSpan.MaxValue.Ticks, out var slidingTicks))
-        {
-            return false;
-        }
-
-        metadata = new EntryMetadata(
-            absoluteTicks is { } deadline ? new DateTimeOffset(deadline, TimeSpan.Zero) : null,
-            slidingTicks is { } window ? new TimeSpan(window) : null);
-        return true;
-    }
-
-    /// <summary>
-    /// One field. True with a value, true with null for the <see cref="Absent"/> sentinel, false when the field
-    /// holds something no write could have produced. A write emits either the sentinel or a strictly positive
-    /// tick count within the field's range: an absolute deadline is required to be in the future, and
-    /// <see cref="DistributedCacheEntryOptions.SlidingExpiration"/> only permits positive durations. Parsed
-    /// straight from the bytes: only a leading sign is tolerated around the digits, because that is all
-    /// <see cref="EncodeTicks"/> emits, and the whole field has to be consumed.
-    /// </summary>
-    private static bool TryDecodeTicks(IDictionary<string, ReadOnlyMemory<byte>> fields, string field, long maxTicks, out long? ticks)
-    {
-        ticks = null;
-        if (!fields.TryGetValue(field, out var raw)
-            || raw.IsEmpty
-            || !Utf8Parser.TryParse(raw.Span, out long value, out var consumed)
-            || consumed != raw.Length)
-        {
-            return false;
-        }
-
-        if (value == Absent)
-        {
-            return true;
-        }
-
-        if (value < 1 || value > maxTicks)
-        {
-            return false;
-        }
-
-        ticks = value;
-        return true;
-    }
-
-    private static ReadOnlyMemory<byte> EncodeTicks(long? ticks)
-    {
-        if (ticks is not { } value)
-        {
-            return AbsentTicks;
-        }
-
-        Span<byte> digits = stackalloc byte[20];   // long.MinValue is 20 characters
-        Utf8Formatter.TryFormat(value, digits, out var written);
-        return digits[..written].ToArray();
-    }
-
-    private static DateTimeOffset AddClamped(DateTimeOffset now, long ticks)
-    {
-        var remaining = DateTimeOffset.MaxValue.UtcTicks - now.UtcTicks;
-        return ticks >= remaining ? DateTimeOffset.MaxValue : now.AddTicks(ticks);
-    }
-
-    private static TimeSpan? ResolveTimeToLive(DateTimeOffset now, TimeSpan? sliding, DateTimeOffset? absolute)
-    {
-        var remaining = absolute is { } cap ? cap - now : (TimeSpan?)null;
-        return (sliding, remaining) switch
-        {
-            ({ } window, { } left) => TimeSpan.FromTicks(Math.Min(window.Ticks, left.Ticks)),
-            ({ } window, null) => window,
-            (null, { } left) => left,
-            _ => null,
-        };
-    }
-
-    private static DateTimeOffset? ResolveAbsoluteExpiration(DateTimeOffset now, DistributedCacheEntryOptions options)
-    {
-        if (options.AbsoluteExpiration is { } absolute)
-        {
-            return absolute <= now
-                ? throw new ArgumentOutOfRangeException(nameof(options), absolute, "The absolute expiration must be in the future.")
-                : absolute;
-        }
-
-        return options.AbsoluteExpirationRelativeToNow is { } relative ? AddClamped(now, relative.Ticks) : null;
-    }
-
     [LoggerMessage(Level = LogLevel.Warning, Message = "Distributed cache write for key {Key} was not applied by the backing cache.")]
     private partial void LogWriteNotApplied(LoggedKey key);
 
     [LoggerMessage(Level = LogLevel.Debug, Message = "Distributed cache remove for key {Key} reported no change.")]
     private partial void LogRemoveNotApplied(LoggedKey key);
+
+    /// <summary>Expiration metadata as written, decoded once. Null means the sentinel: that deadline was not set.</summary>
+    private readonly record struct EntryMetadata(DateTimeOffset? AbsoluteExpiration, TimeSpan? SlidingExpiration);
 }

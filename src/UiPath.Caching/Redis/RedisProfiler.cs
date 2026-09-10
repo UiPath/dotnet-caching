@@ -114,6 +114,23 @@ internal sealed partial class RedisProfiler : IRedisProfiler, IDisposable
         }
     }
 
+    public void Dispose()
+    {
+        if (_disposed)
+        {
+            return;
+        }
+        _disposed = true;
+        _timer?.Dispose();
+        if (_flushWorker is not null)
+        {
+            _flushWorker.Wait(_options.ProfilerFlushInterval.Multiply(10));
+            _flushWorker.Dispose();
+        }
+        DrainAllSessions();
+        GC.SuppressFinalize(this);
+    }
+
     private async Task FlushSessionsAsync()
     {
         while (!_disposed && await _timer!.WaitForNextTickAsync())
@@ -184,22 +201,11 @@ internal sealed partial class RedisProfiler : IRedisProfiler, IDisposable
 
     }
 
-    public void Dispose()
-    {
-        if (_disposed)
-        {
-            return;
-        }
-        _disposed = true;
-        _timer?.Dispose();
-        if (_flushWorker is not null)
-        {
-            _flushWorker.Wait(_options.ProfilerFlushInterval.Multiply(10));
-            _flushWorker.Dispose();
-        }
-        DrainAllSessions();
-        GC.SuppressFinalize(this);
-    }
+    [LoggerMessage(Level = LogLevel.Trace, Message = "Disposing profiling session {SessionId}. Count:{Count}")]
+    private partial void LogDisposingProfilingSession(string? sessionId, int count);
+
+    [LoggerMessage(Level = LogLevel.Warning, Message = "Failed to process redis profiled commands in {SessionId}")]
+    private partial void LogFailedToProcessProfiledCommands(Exception ex, string? sessionId);
 
     private sealed record RedisProfileEntry
     {
@@ -214,10 +220,4 @@ internal sealed partial class RedisProfiler : IRedisProfiler, IDisposable
 
         public int Count { get; set; }
     }
-
-    [LoggerMessage(Level = LogLevel.Trace, Message = "Disposing profiling session {SessionId}. Count:{Count}")]
-    private partial void LogDisposingProfilingSession(string? sessionId, int count);
-
-    [LoggerMessage(Level = LogLevel.Warning, Message = "Failed to process redis profiled commands in {SessionId}")]
-    private partial void LogFailedToProcessProfiledCommands(Exception ex, string? sessionId);
 }
