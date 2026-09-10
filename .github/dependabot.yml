@@ -16,8 +16,12 @@ updates:
       # Microsoft.Extensions.* versions are framework-aligned via TFM-conditional
       # ItemGroups in Directory.Packages.props (net8 -> 8.x, net10 -> 10.x).
       # Block major bumps so Dependabot can't push 10.x onto the net8 target;
-      # cross-major moves are managed by hand. Not sufficient on its own: a same-major bump
-      # can still land on the wrong floor, so PackageVersionFloorTests is the guard.
+      # cross-major moves are managed by hand. Not sufficient on its own: Dependabot does not
+      # evaluate the conditions, so it reads one version per ID (the highest, i.e. the net10 one)
+      # and a 10.x patch does not look major to this rule at all. What keeps it off the net8 floor
+      # is the layout: the net10 group is declared first, so the line it edits is that one, and its
+      # versions come from $(MEVersion10). PackageVersionFloorTests guards the order, the property
+      # and both majors.
       - dependency-name: "Microsoft.Extensions.*"
         update-types: ["version-update:semver-major"]
   - package-ecosystem: "github-actions"
