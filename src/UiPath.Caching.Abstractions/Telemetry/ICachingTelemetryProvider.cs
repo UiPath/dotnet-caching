@@ -2,7 +2,7 @@ namespace UiPath.Caching.Telemetry;
 
 public interface ICachingTelemetryProvider
 {
-    public ITelemetryOperation StartOperation(string providerName, Type cacheObject, string methodName = "")
+    ITelemetryOperation StartOperation(string providerName, Type cacheObject, string methodName = "")
     {
         var ret = new TelemetryOperation(providerName, methodName, cacheObject, this);
         ret.Start();

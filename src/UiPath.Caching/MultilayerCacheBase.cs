@@ -7,7 +7,6 @@ namespace UiPath.Caching;
 
 public abstract class MultilayerCacheBase : IDisposable
 {
-    private bool _disposed;
     protected readonly ILogger _logger;
     protected readonly IMemoryCache _memoryCache;
     protected readonly ICacheEntryFactory _cacheEntryFactory;
@@ -18,16 +17,7 @@ public abstract class MultilayerCacheBase : IDisposable
     protected readonly IConnectionState _connectionState;
     protected readonly ITopicProvider _topicProvider;
     protected readonly bool _useLocalOnlyWhenDisconnected;
-    private readonly ILocalLock _localLock;
-    private readonly IDistributedLock _distributedLock;
-    private readonly IDistributedLockKeyStrategy _lockKeyStrategy;
     private protected readonly RehydrationCoordinator _rehydrator;
-    private readonly string _localLockKeyPrefix;
-    private readonly TimeSpan _distributedLockExpiry;
-    private readonly TimeSpan _distributedLockTimeout;
-    private readonly TimeSpan _localLockTimeout;
-    private readonly bool _localLockEnabled;
-    private readonly bool _distributedLockEnabled;
     private protected readonly CachePolicy _defaultPolicy;
     private protected readonly KeyMasker _masker;
 
@@ -48,6 +38,16 @@ public abstract class MultilayerCacheBase : IDisposable
             DistributedLockExpiry = TimeSpan.FromSeconds(5),
         },
     };
+    private readonly ILocalLock _localLock;
+    private readonly IDistributedLock _distributedLock;
+    private readonly IDistributedLockKeyStrategy _lockKeyStrategy;
+    private readonly string _localLockKeyPrefix;
+    private readonly TimeSpan _distributedLockExpiry;
+    private readonly TimeSpan _distributedLockTimeout;
+    private readonly TimeSpan _localLockTimeout;
+    private readonly bool _localLockEnabled;
+    private readonly bool _distributedLockEnabled;
+    private bool _disposed;
 
     protected MultilayerCacheBase(
         string cacheName,
@@ -100,30 +100,24 @@ public abstract class MultilayerCacheBase : IDisposable
 
     public string Name { get; }
 
-    /// <summary>The key as a log line should show it. Nothing is rendered unless the line is written.</summary>
-    private protected LoggedKey Logged(CacheKey key, Type? valueType = null) => LoggedKey.For(_masker, key, valueType);
+    protected ICachingTelemetryProvider Telemetry { get; }
+    public void Dispose()
+    {
+        Dispose(true);
+        GC.SuppressFinalize(this);
+    }
 
-    /// <summary>Shows the composed key but judges, and masks, the caller's own key inside it.</summary>
-    private protected LoggedKey Logged(CacheEntryOptions options, Type? valueType = null) =>
-        LoggedKey.For(_masker, options.CallerKey, options.CacheKey.Name, valueType);
-
-    /// <inheritdoc cref="Logged(CacheEntryOptions, Type?)"/>
-    private protected LoggedKeys Logged(IReadOnlyCollection<CacheEntryOptions> options, Type? valueType = null) => new(_masker, options, valueType);
-
-    /// <inheritdoc cref="Logged(CacheEntryOptions, Type?)"/>
-    private protected LoggedKey Logged(InternalHashCacheEntryOptions options, Type? valueType = null) =>
-        LoggedKey.For(_masker, options.CallerKey, options.CacheKey.Name, valueType);
-
-    /// <inheritdoc cref="Logged(CacheKey, Type?)"/>
-    private protected LoggedKeys Logged(IReadOnlyCollection<CacheKey> keys, Type? valueType = null) => new(_masker, keys, valueType);
-
-    /// <summary>A key the site only has in composed form; with no caller key to judge it is masked whole.</summary>
-    private protected LoggedKey LoggedComposed(CacheKey composed, Type? valueType = null) =>
-        LoggedKey.Composed(_masker, composed.Name, valueType);
-
-    /// <inheritdoc cref="LoggedComposed(CacheKey, Type?)"/>
-    private protected LoggedKeys LoggedComposed(IReadOnlyCollection<CacheKey> composed, Type? valueType = null) =>
-        new(_masker, composed, valueType, composedOnly: true);
+    protected static TimeSpan ApplyJitter(TimeSpan duration, TimeSpan? maxJitter)
+    {
+        // TimeSpan.MaxValue means "no TTL"; jittering it would clamp it under the sentinel and back onto EXPIRE.
+        if (duration <= TimeSpan.Zero || duration == TimeSpan.MaxValue || maxJitter is not { } max || max <= TimeSpan.Zero)
+        {
+            return duration;
+        }
+        // Bounded under the sentinel, so the sum can neither overflow nor land on it; the clock fits it into the DateTime range.
+        var bonusTicks = Random.Shared.NextInt64(Math.Min(max.Ticks, TimeSpan.MaxValue.Ticks - duration.Ticks));
+        return duration + new TimeSpan(bonusTicks);
+    }
 
     protected async ValueTask<TResult> RunUnderLocksAsync<TResult>(
         CacheKey cacheKey,
@@ -189,24 +183,6 @@ public abstract class MultilayerCacheBase : IDisposable
         CancellationToken token) =>
         FactoryTimeout.RunAsync(factory, factoryTimeout, cacheKey, Name, Telemetry, token);
 
-    private static TimeSpan PositiveOrFallback(TimeSpan? value, TimeSpan fallback) =>
-        value is { } v && v > TimeSpan.Zero ? v : fallback;
-
-    private static TimeSpan NonNegativeOrFallback(TimeSpan? value, TimeSpan fallback) =>
-        value is { } v && v >= TimeSpan.Zero ? v : fallback;
-
-    protected static TimeSpan ApplyJitter(TimeSpan duration, TimeSpan? maxJitter)
-    {
-        // TimeSpan.MaxValue means "no TTL"; jittering it would clamp it under the sentinel and back onto EXPIRE.
-        if (duration <= TimeSpan.Zero || duration == TimeSpan.MaxValue || maxJitter is not { } max || max <= TimeSpan.Zero)
-        {
-            return duration;
-        }
-        // Bounded under the sentinel, so the sum can neither overflow nor land on it; the clock fits it into the DateTime range.
-        var bonusTicks = Random.Shared.NextInt64(Math.Min(max.Ticks, TimeSpan.MaxValue.Ticks - duration.Ticks));
-        return duration + new TimeSpan(bonusTicks);
-    }
-
     /// <summary>The L2 write lifetime: a caller value as-is, else <see cref="ResolveDuration"/> jittered.</summary>
     protected TimeSpan ResolveWriteDuration(CachePolicy policy, TimeSpan? callerExpiration = null) =>
         callerExpiration ?? ApplyJitter(ResolveDuration(policy), policy.JitterMaxDuration);
@@ -219,6 +195,50 @@ public abstract class MultilayerCacheBase : IDisposable
         policy.DistributedExpiration
         ?? _multiLayerCacheOptions.DefaultExpiration
         ?? CachePolicy.DefaultDistributedExpiration;
+
+    protected bool GetInnerCacheDisconnected() => _useLocalOnlyWhenDisconnected && !_connectionState.IsConnected;
+
+    protected virtual void Dispose(bool disposing)
+    {
+        if (!_disposed)
+        {
+            if (disposing)
+            {
+                _monitor.Dispose();
+                _memoryCache.Dispose();
+                if (_connectionState is IDisposable connectionState)
+                {
+                    connectionState.Dispose();
+                }
+            }
+            _disposed = true;
+        }
+    }
+
+    /// <summary>The key as a log line should show it. Nothing is rendered unless the line is written.</summary>
+    private protected LoggedKey Logged(CacheKey key, Type? valueType = null) => LoggedKey.For(_masker, key, valueType);
+
+    /// <summary>Shows the composed key but judges, and masks, the caller's own key inside it.</summary>
+    private protected LoggedKey Logged(CacheEntryOptions options, Type? valueType = null) =>
+        LoggedKey.For(_masker, options.CallerKey, options.CacheKey.Name, valueType);
+
+    /// <inheritdoc cref="Logged(CacheEntryOptions, Type?)"/>
+    private protected LoggedKeys Logged(IReadOnlyCollection<CacheEntryOptions> options, Type? valueType = null) => new(_masker, options, valueType);
+
+    /// <inheritdoc cref="Logged(CacheEntryOptions, Type?)"/>
+    private protected LoggedKey Logged(InternalHashCacheEntryOptions options, Type? valueType = null) =>
+        LoggedKey.For(_masker, options.CallerKey, options.CacheKey.Name, valueType);
+
+    /// <inheritdoc cref="Logged(CacheKey, Type?)"/>
+    private protected LoggedKeys Logged(IReadOnlyCollection<CacheKey> keys, Type? valueType = null) => new(_masker, keys, valueType);
+
+    /// <summary>A key the site only has in composed form; with no caller key to judge it is masked whole.</summary>
+    private protected LoggedKey LoggedComposed(CacheKey composed, Type? valueType = null) =>
+        LoggedKey.Composed(_masker, composed.Name, valueType);
+
+    /// <inheritdoc cref="LoggedComposed(CacheKey, Type?)"/>
+    private protected LoggedKeys LoggedComposed(IReadOnlyCollection<CacheKey> composed, Type? valueType = null) =>
+        new(_masker, composed, valueType, composedOnly: true);
 
     /// <summary>
     /// Validates a caller-supplied duration and pairs it with the deadline it implies. The write path
@@ -260,6 +280,12 @@ public abstract class MultilayerCacheBase : IDisposable
     private protected ValueTask<IDisposable?> AcquireLocalLockAsync(CacheKey cacheKey, LockProfile? policyLock, CancellationToken token) =>
         TryAcquireLocalLockAsync(cacheKey, ResolveLocalLock(policyLock).Timeout, token);
 
+    private static TimeSpan PositiveOrFallback(TimeSpan? value, TimeSpan fallback) =>
+        value is { } v && v > TimeSpan.Zero ? v : fallback;
+
+    private static TimeSpan NonNegativeOrFallback(TimeSpan? value, TimeSpan fallback) =>
+        value is { } v && v >= TimeSpan.Zero ? v : fallback;
+
     /// <summary>
     /// One place for the local-lock policy: a per-call <see cref="LockProfile"/> wins over the
     /// options. It bypasses the options validators, so the timeout falls back when out of range.
@@ -287,36 +313,10 @@ public abstract class MultilayerCacheBase : IDisposable
         }
     }
 
-    protected ICachingTelemetryProvider Telemetry { get; }
-
-    protected bool GetInnerCacheDisconnected() => _useLocalOnlyWhenDisconnected && !_connectionState.IsConnected;
-
     private IConnectionState GetConnectionMonitor(params object[] connectionStates)
     {
         var lst = connectionStates.OfType<IConnectionState>().ToArray();
         return lst.Length == 0 ? NullConnectionStateMonitor.Instance : new ConnectionStateMonitor(Telemetry, _multiLayerCacheOptions.ConnectionMonitorPeriod ?? TimeSpan.FromSeconds(5), lst);
-    }
-    public void Dispose()
-    {
-        Dispose(true);
-        GC.SuppressFinalize(this);
-    }
-
-    protected virtual void Dispose(bool disposing)
-    {
-        if (!_disposed)
-        {
-            if (disposing)
-            {
-                _monitor.Dispose();
-                _memoryCache.Dispose();
-                if (_connectionState is IDisposable connectionState)
-                {
-                    connectionState.Dispose();
-                }
-            }
-            _disposed = true;
-        }
     }
 
 }

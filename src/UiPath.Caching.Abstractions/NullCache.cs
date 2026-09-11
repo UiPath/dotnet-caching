@@ -96,6 +96,11 @@ public sealed class NullCache : ICache
         return ValueTask.FromResult(default(TimeSpan?));
     }
 
+    public void Dispose()
+    {
+        // Nothing to dispose
+    }
+
     private static ValueTask<bool> ReturnTrueAsync<T>()
     {
         NotCacheableException.ThrowIfNotCacheable<T>();
@@ -108,11 +113,6 @@ public sealed class NullCache : ICache
         return await generator(token).ConfigureAwait(false);
     }
 
-    public void Dispose()
-    {
-        // Nothing to dispose
-    }
-
     private sealed record NullCacheEntry<T> : ICacheEntry<T>
     {
         [SuppressMessage("SonarLint.Rule", "S3218:Inner class members should not shadow outer class names")]
@@ -120,11 +120,11 @@ public sealed class NullCache : ICache
 
         public T? Value => default;
 
-        object? ICacheEntry.Value => default;
-
         public DateTimeOffset Expiration => DateTimeOffset.MinValue;
 
         public IDictionary<string, string?>? Metadata => default;
+
+        object? ICacheEntry.Value => default;
 
         public ICacheEntry NewEntry(DateTimeOffset? expiration = null, IDictionary<string, string?>? metadata = null) =>
             NullCacheEntry<T>.Instance;

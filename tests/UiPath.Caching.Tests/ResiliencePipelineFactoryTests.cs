@@ -115,7 +115,8 @@ public class ResiliencePipelineFactoryTest(ITestContextAccessor testContextAcces
             await Task.Delay(TimeSpan.FromMilliseconds(300), testContextAccessor.Current.CancellationToken);
             completed = true;
             return true;
-        }, testContextAccessor.Current.CancellationToken);
+        },
+        testContextAccessor.Current.CancellationToken);
 
         completed.Should().BeTrue("the pipeline returned only once the callback had finished");
         result.Should().BeTrue("a callback that completes is not reported as timed out");
@@ -204,17 +205,6 @@ public class ResiliencePipelineFactoryTest(ITestContextAccessor testContextAcces
         logMessages.Should().Contain(log => log.Contains("OnHalfOpened"));
     }
 
-    private void AssertStrategies(int count)
-    {
-        var resiliencePipelineFactory = _fixture.Create<ResiliencePipelineFactory>();
-        var pipeline = resiliencePipelineFactory.Create("read", false);
-        var x = typeof(ResiliencePipeline<bool>).GetProperty("Component", BindingFlags.Instance | BindingFlags.NonPublic);
-        var component = x!.GetValue(pipeline);
-        var strategies = component!.GetType().GetProperty("Components", BindingFlags.Instance | BindingFlags.Public)!.GetValue(component) as IEnumerable<object>;
-        strategies.Should().NotBeNull().And.HaveCount(count);
-        pipeline.Should().NotBeNull();
-    }
-
     public ValueTask DisposeAsync()
     {
         return ValueTask.CompletedTask;
@@ -235,5 +225,16 @@ public class ResiliencePipelineFactoryTest(ITestContextAccessor testContextAcces
         _boolLogger = _fixture.Freeze<ILogger<ResiliencePipeline<bool>>>();
         _loggerFactory.CreateLogger(Arg.Any<string>()).ReturnsForAnyArgs(_boolLogger);
         return ValueTask.CompletedTask;
+    }
+
+    private void AssertStrategies(int count)
+    {
+        var resiliencePipelineFactory = _fixture.Create<ResiliencePipelineFactory>();
+        var pipeline = resiliencePipelineFactory.Create("read", false);
+        var x = typeof(ResiliencePipeline<bool>).GetProperty("Component", BindingFlags.Instance | BindingFlags.NonPublic);
+        var component = x!.GetValue(pipeline);
+        var strategies = component!.GetType().GetProperty("Components", BindingFlags.Instance | BindingFlags.Public)!.GetValue(component) as IEnumerable<object>;
+        strategies.Should().NotBeNull().And.HaveCount(count);
+        pipeline.Should().NotBeNull();
     }
 }

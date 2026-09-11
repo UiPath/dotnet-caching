@@ -55,14 +55,46 @@ public class OptionsCloneTests
 
     private static object? MakeNonDefault(Type type, object? current)
     {
-        if (type == typeof(bool)) return !(bool)(current ?? false);
-        if (type == typeof(bool?)) return !(((bool?)current) ?? false);
-        if (type == typeof(int)) return ((int?)current ?? 0) + 17;
-        if (type == typeof(long)) return ((long?)current ?? 0L) + 31L;
-        if (type == typeof(long?)) return (((long?)current) ?? 0L) + 31L;
-        if (type == typeof(string)) return Guid.NewGuid().ToString("N");
-        if (type == typeof(TimeSpan)) return ((TimeSpan?)current ?? TimeSpan.Zero) + TimeSpan.FromSeconds(7);
-        if (type == typeof(TimeSpan?)) return (((TimeSpan?)current) ?? TimeSpan.Zero) + TimeSpan.FromSeconds(7);
+        if (type == typeof(bool))
+        {
+            return !(bool)(current ?? false);
+        }
+
+        if (type == typeof(bool?))
+        {
+            return !(((bool?)current) ?? false);
+        }
+
+        if (type == typeof(int))
+        {
+            return ((int?)current ?? 0) + 17;
+        }
+
+        if (type == typeof(long))
+        {
+            return ((long?)current ?? 0L) + 31L;
+        }
+
+        if (type == typeof(long?))
+        {
+            return (((long?)current) ?? 0L) + 31L;
+        }
+
+        if (type == typeof(string))
+        {
+            return Guid.NewGuid().ToString("N");
+        }
+
+        if (type == typeof(TimeSpan))
+        {
+            return ((TimeSpan?)current ?? TimeSpan.Zero) + TimeSpan.FromSeconds(7);
+        }
+
+        if (type == typeof(TimeSpan?))
+        {
+            return (((TimeSpan?)current) ?? TimeSpan.Zero) + TimeSpan.FromSeconds(7);
+        }
+
         if (type == typeof(System.Threading.Channels.BoundedChannelFullMode))
         {
             var cur = (System.Threading.Channels.BoundedChannelFullMode)(current ?? System.Threading.Channels.BoundedChannelFullMode.Wait);
@@ -70,8 +102,16 @@ public class OptionsCloneTests
                 ? System.Threading.Channels.BoundedChannelFullMode.DropOldest
                 : System.Threading.Channels.BoundedChannelFullMode.Wait;
         }
-        if (type == typeof(IRedisStreamKeyStrategy)) return Substitute.For<IRedisStreamKeyStrategy>();
-        if (type == typeof(IRedisChannelStrategy)) return Substitute.For<IRedisChannelStrategy>();
+        if (type == typeof(IRedisStreamKeyStrategy))
+        {
+            return Substitute.For<IRedisStreamKeyStrategy>();
+        }
+
+        if (type == typeof(IRedisChannelStrategy))
+        {
+            return Substitute.For<IRedisChannelStrategy>();
+        }
+
         throw new NotSupportedException($"Add a non-default factory for {type.FullName}");
     }
 }

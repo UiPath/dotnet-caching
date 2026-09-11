@@ -1,17 +1,9 @@
-﻿using StackExchange.Redis;
+using StackExchange.Redis;
 
 namespace UiPath.Caching.Tests.Redis;
 
 public class RedisConnectionConfiguratorTests
 {
-    private sealed class ClientNameConfigurator(string name) : IRedisConnectionConfigurator
-    {
-        public ValueTask ConfigureAsync(ConfigurationOptions configuration, CancellationToken cancellationToken = default)
-        {
-            configuration.ClientName = name;
-            return ValueTask.CompletedTask;
-        }
-    }
 
     [Fact]
     public async Task ApplyAsync_AppliesConfigurators()
@@ -51,5 +43,13 @@ public class RedisConnectionConfiguratorTests
         await RedisConnectionConfigurators.ApplyAsync(config, null, TestContext.Current.CancellationToken);
 
         config.ClientName.Should().BeNull();
+    }
+    private sealed class ClientNameConfigurator(string name) : IRedisConnectionConfigurator
+    {
+        public ValueTask ConfigureAsync(ConfigurationOptions configuration, CancellationToken cancellationToken = default)
+        {
+            configuration.ClientName = name;
+            return ValueTask.CompletedTask;
+        }
     }
 }

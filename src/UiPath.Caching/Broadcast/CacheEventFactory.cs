@@ -25,7 +25,7 @@ public sealed class CacheEventFactory : ICacheEventFactory
             Id = id ?? Guid.NewGuid().ToString(),
             Type = eventType.Trim(),
             Source = _sourceUri,
-            Data = eventData
+            Data = eventData,
         };
     }
 

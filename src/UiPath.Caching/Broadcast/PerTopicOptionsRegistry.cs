@@ -45,7 +45,11 @@ public sealed class PerTopicOptionsRegistry<TOptions> where TOptions : class
 
     public IReadOnlyList<Action<TOptions>> GetActions(string topicName)
     {
-        if (string.IsNullOrWhiteSpace(topicName)) return [];
+        if (string.IsNullOrWhiteSpace(topicName))
+        {
+            return [];
+        }
+
         return _configures.TryGetValue(topicName.Trim(), out var actions) ? actions : [];
     }
 

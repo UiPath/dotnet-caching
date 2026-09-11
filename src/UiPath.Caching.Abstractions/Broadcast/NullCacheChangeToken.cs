@@ -4,11 +4,11 @@ namespace UiPath.Caching.Broadcast;
 [ExcludeFromCodeCoverage]
 public class NullCacheChangeToken : ICacheChangeToken
 {
-    public static NullCacheChangeToken Instance { get; } = new NullCacheChangeToken();
 
     private NullCacheChangeToken()
     {
     }
+    public static NullCacheChangeToken Instance { get; } = new NullCacheChangeToken();
 
     public bool HasChanged => false;
 

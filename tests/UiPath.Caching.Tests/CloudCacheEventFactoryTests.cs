@@ -70,7 +70,7 @@ public class CloudCacheEventFactoryTests : IAsyncLifetime
     [InlineData("CacheRemoved")]
     [InlineData("CACHESET")]
     [InlineData("cacherefreshed")]
-    public void known_event_types(string? eventType)
+    public void Known_event_types(string? eventType)
     {
         var actual = Sut.IsKnown(eventType);
         actual.Should().BeTrue();
@@ -80,7 +80,7 @@ public class CloudCacheEventFactoryTests : IAsyncLifetime
     [InlineData("  ")]
     [InlineData("")]
     [InlineData(null)]
-    public void unknown_event_types(string? eventType)
+    public void Unknown_event_types(string? eventType)
     {
         var actual = Sut.IsKnown(eventType);
         actual.Should().BeFalse();

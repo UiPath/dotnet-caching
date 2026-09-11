@@ -27,7 +27,7 @@ public class CloudCacheEventFactory : ICacheEventFactory
             Type = eventType.Trim(),
             Source = _sourceUri,
             DataContentType = MediaTypeNames.Application.Json,
-            Data = eventData
+            Data = eventData,
         });
     }
 

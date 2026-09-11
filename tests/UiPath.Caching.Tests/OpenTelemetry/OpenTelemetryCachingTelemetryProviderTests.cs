@@ -9,41 +9,12 @@ namespace UiPath.Caching.Tests.OpenTelemetry;
 
 public class OpenTelemetryCachingTelemetryProviderTests
 {
-    private static List<(double Value, Dictionary<string, object?> Tags)> RecordDouble(string instrumentName, Action<CachingTelemetryProvider> act)
-    {
-        using var provider = new CachingTelemetryProvider();
-        var measurements = new List<(double, Dictionary<string, object?>)>();
-        using var listener = new MeterListener
-        {
-            InstrumentPublished = (instrument, l) =>
-            {
-                if (instrument.Meter.Name == CachingTelemetryProvider.MeterName && instrument.Name == instrumentName)
-                {
-                    l.EnableMeasurementEvents(instrument);
-                }
-            },
-        };
-        listener.SetMeasurementEventCallback<double>((_, value, tags, _) =>
-        {
-            var dict = new Dictionary<string, object?>();
-            foreach (var t in tags) dict[t.Key] = t.Value;
-            measurements.Add((value, dict));
-        });
-        listener.SetMeasurementEventCallback<long>((_, value, tags, _) =>
-        {
-            var dict = new Dictionary<string, object?>();
-            foreach (var t in tags) dict[t.Key] = t.Value;
-            measurements.Add((value, dict));
-        });
-        listener.Start();
-        act(provider);
-        return measurements;
-    }
 
     [Fact]
     public void TrackMetric_records_value_and_tags_to_meter()
     {
-        var m = RecordDouble("uipath.caching.metric", p =>
+        var m = RecordDouble("uipath.caching.metric",
+            p =>
             p.TrackMetric("hits.test", 42.5, new[] { new KeyValuePair<string, string>("region", "eu") }));
 
         m.Should().ContainSingle();
@@ -85,8 +56,14 @@ public class OpenTelemetryCachingTelemetryProviderTests
         };
         ActivitySource.AddActivityListener(listener);
 
-        provider.TrackDependency("redis", "localhost", "GET", "GET key",
-            DateTimeOffset.UtcNow, TimeSpan.FromMilliseconds(5), "OK", success: true);
+        provider.TrackDependency("redis",
+            "localhost",
+            "GET",
+            "GET key",
+            DateTimeOffset.UtcNow,
+            TimeSpan.FromMilliseconds(5),
+            "OK",
+            success: true);
 
         activities.Should().ContainSingle();
         activities[0].OperationName.Should().Be("GET");
@@ -117,5 +94,43 @@ public class OpenTelemetryCachingTelemetryProviderTests
 
         var provider = services.BuildServiceProvider().GetRequiredService<ICachingTelemetryProvider>();
         provider.Should().BeOfType<NullTelemetryProvider>();
+    }
+    private static List<(double Value, Dictionary<string, object?> Tags)> RecordDouble(string instrumentName, Action<CachingTelemetryProvider> act)
+    {
+        using var provider = new CachingTelemetryProvider();
+        var measurements = new List<(double, Dictionary<string, object?>)>();
+        using var listener = new MeterListener
+        {
+            InstrumentPublished = (instrument, l) =>
+            {
+                if (instrument.Meter.Name == CachingTelemetryProvider.MeterName && instrument.Name == instrumentName)
+                {
+                    l.EnableMeasurementEvents(instrument);
+                }
+            },
+        };
+        listener.SetMeasurementEventCallback<double>((_, value, tags, _) =>
+        {
+            var dict = new Dictionary<string, object?>();
+            foreach (var t in tags)
+            {
+                dict[t.Key] = t.Value;
+            }
+
+            measurements.Add((value, dict));
+        });
+        listener.SetMeasurementEventCallback<long>((_, value, tags, _) =>
+        {
+            var dict = new Dictionary<string, object?>();
+            foreach (var t in tags)
+            {
+                dict[t.Key] = t.Value;
+            }
+
+            measurements.Add((value, dict));
+        });
+        listener.Start();
+        act(provider);
+        return measurements;
     }
 }

@@ -7,82 +7,6 @@ namespace UiPath.Caching.Tests.Redis;
 
 public class RedisConnectorLifecycleTests
 {
-    private sealed class SequenceFactory : IConnectionMultiplexerFactory
-    {
-        private readonly Queue<IConnectionMultiplexer> _multiplexers;
-        public int CreateCount { get; private set; }
-        public SequenceFactory(params IConnectionMultiplexer[] multiplexers) => _multiplexers = new Queue<IConnectionMultiplexer>(multiplexers);
-        public ValueTask<IConnectionMultiplexer> CreateAsync(ConfigurationOptions configuration, CancellationToken cancellationToken = default)
-        {
-            CreateCount++;
-            return new ValueTask<IConnectionMultiplexer>(_multiplexers.Dequeue());
-        }
-    }
-
-    private sealed class GatedFactory(IConnectionMultiplexer multiplexer, Task gate) : IConnectionMultiplexerFactory
-    {
-        public int CreateAsyncCount;
-        public async ValueTask<IConnectionMultiplexer> CreateAsync(ConfigurationOptions configuration, CancellationToken cancellationToken = default)
-        {
-            Interlocked.Increment(ref CreateAsyncCount);
-            await gate.ConfigureAwait(false);
-            return multiplexer;
-        }
-    }
-
-    private sealed class ThreadCapturingFactory : IConnectionMultiplexerFactory
-    {
-        private readonly IConnectionMultiplexer _multiplexer = Substitute.For<IConnectionMultiplexer>();
-
-        public ThreadCapturingFactory()
-        {
-            _multiplexer.GetDatabase(Arg.Any<int>(), Arg.Any<object?>()).Returns(Database);
-        }
-
-        public IDatabase Database { get; } = Substitute.For<IDatabase>();
-
-        public int? CreateThreadId { get; private set; }
-
-        public SynchronizationContext? CreateSynchronizationContext { get; private set; }
-
-        public ValueTask<IConnectionMultiplexer> CreateAsync(ConfigurationOptions configuration, CancellationToken cancellationToken = default)
-        {
-            CreateThreadId = Environment.CurrentManagedThreadId;
-            CreateSynchronizationContext = SynchronizationContext.Current;
-            return new ValueTask<IConnectionMultiplexer>(_multiplexer);
-        }
-    }
-
-    private sealed class ScriptedFactory(params Func<IConnectionMultiplexer>[] steps) : IConnectionMultiplexerFactory
-    {
-        private int _index;
-        public int CreateCount { get; private set; }
-        public async ValueTask<IConnectionMultiplexer> CreateAsync(ConfigurationOptions configuration, CancellationToken cancellationToken = default)
-        {
-            CreateCount++;
-            var step = steps[Math.Min(_index, steps.Length - 1)];
-            _index++;
-            await Task.Yield();
-            return step();
-        }
-    }
-
-    private sealed class SignalingTelemetry : ICachingTelemetryProvider
-    {
-        private readonly TaskCompletionSource _exceptionTracked = new(TaskCreationOptions.RunContinuationsAsynchronously);
-        public Task ExceptionTracked => _exceptionTracked.Task;
-        public void TrackException(Exception ex, ReadOnlySpan<KeyValuePair<string, string>> properties = default, ReadOnlySpan<KeyValuePair<string, double>> metrics = default) => _exceptionTracked.TrySetResult();
-        public void TrackEvent(string eventName, ReadOnlySpan<KeyValuePair<string, string>> properties = default, ReadOnlySpan<KeyValuePair<string, double>> metrics = default) { }
-    }
-
-    private static RedisConnector NewConnector(IConnectionMultiplexerFactory factory, ICachingTelemetryProvider? telemetry = null)
-    {
-        var options = Options.Create(new RedisConnectionOptions { ConnectionString = "localhost:6379", EnableHangDetection = false });
-        var optionsProvider = new RedisConfigurationOptionsProvider(NullLoggerFactory.Instance, options);
-        return new RedisConnector(telemetry ?? NullTelemetryProvider.Instance, optionsProvider, factory, options);
-    }
-
-    private static RedisConnectionException ConnectFailure() => new(ConnectionFailureType.UnableToConnect, CommandFlags.None, "boom");
 
     [Fact]
     public async Task Dispose_DisposesMultiplexer_WhenConnected()
@@ -405,5 +329,81 @@ public class RedisConnectorLifecycleTests
 
         dispose.Should().NotThrow();
         multiplexer.Received(1).Dispose();
+    }
+
+    private static RedisConnector NewConnector(IConnectionMultiplexerFactory factory, ICachingTelemetryProvider? telemetry = null)
+    {
+        var options = Options.Create(new RedisConnectionOptions { ConnectionString = "localhost:6379", EnableHangDetection = false });
+        var optionsProvider = new RedisConfigurationOptionsProvider(NullLoggerFactory.Instance, options);
+        return new RedisConnector(telemetry ?? NullTelemetryProvider.Instance, optionsProvider, factory, options);
+    }
+
+    private static RedisConnectionException ConnectFailure() => new(ConnectionFailureType.UnableToConnect, CommandFlags.None, "boom");
+    private sealed class SequenceFactory : IConnectionMultiplexerFactory
+    {
+        private readonly Queue<IConnectionMultiplexer> _multiplexers;
+        public SequenceFactory(params IConnectionMultiplexer[] multiplexers) => _multiplexers = new Queue<IConnectionMultiplexer>(multiplexers);
+        public int CreateCount { get; private set; }
+        public ValueTask<IConnectionMultiplexer> CreateAsync(ConfigurationOptions configuration, CancellationToken cancellationToken = default)
+        {
+            CreateCount++;
+            return new ValueTask<IConnectionMultiplexer>(_multiplexers.Dequeue());
+        }
+    }
+
+    private sealed class GatedFactory(IConnectionMultiplexer multiplexer, Task gate) : IConnectionMultiplexerFactory
+    {
+        public int CreateAsyncCount;
+        public async ValueTask<IConnectionMultiplexer> CreateAsync(ConfigurationOptions configuration, CancellationToken cancellationToken = default)
+        {
+            Interlocked.Increment(ref CreateAsyncCount);
+            await gate.ConfigureAwait(false);
+            return multiplexer;
+        }
+    }
+
+    private sealed class ThreadCapturingFactory : IConnectionMultiplexerFactory
+    {
+        private readonly IConnectionMultiplexer _multiplexer = Substitute.For<IConnectionMultiplexer>();
+
+        public ThreadCapturingFactory()
+        {
+            _multiplexer.GetDatabase(Arg.Any<int>(), Arg.Any<object?>()).Returns(Database);
+        }
+
+        public IDatabase Database { get; } = Substitute.For<IDatabase>();
+
+        public int? CreateThreadId { get; private set; }
+
+        public SynchronizationContext? CreateSynchronizationContext { get; private set; }
+
+        public ValueTask<IConnectionMultiplexer> CreateAsync(ConfigurationOptions configuration, CancellationToken cancellationToken = default)
+        {
+            CreateThreadId = Environment.CurrentManagedThreadId;
+            CreateSynchronizationContext = SynchronizationContext.Current;
+            return new ValueTask<IConnectionMultiplexer>(_multiplexer);
+        }
+    }
+
+    private sealed class ScriptedFactory(params Func<IConnectionMultiplexer>[] steps) : IConnectionMultiplexerFactory
+    {
+        private int _index;
+        public int CreateCount { get; private set; }
+        public async ValueTask<IConnectionMultiplexer> CreateAsync(ConfigurationOptions configuration, CancellationToken cancellationToken = default)
+        {
+            CreateCount++;
+            var step = steps[Math.Min(_index, steps.Length - 1)];
+            _index++;
+            await Task.Yield();
+            return step();
+        }
+    }
+
+    private sealed class SignalingTelemetry : ICachingTelemetryProvider
+    {
+        private readonly TaskCompletionSource _exceptionTracked = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public Task ExceptionTracked => _exceptionTracked.Task;
+        public void TrackException(Exception ex, ReadOnlySpan<KeyValuePair<string, string>> properties = default, ReadOnlySpan<KeyValuePair<string, double>> metrics = default) => _exceptionTracked.TrySetResult();
+        public void TrackEvent(string eventName, ReadOnlySpan<KeyValuePair<string, string>> properties = default, ReadOnlySpan<KeyValuePair<string, double>> metrics = default) { }
     }
 }

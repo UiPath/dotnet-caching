@@ -62,24 +62,6 @@ internal sealed partial class KeyedSubject<T> : IEventSubject<T> where T : IEven
         }
     }
 
-    private void SafeOnNext(IObserver<T> observer, T value)
-    {
-        var start = Stopwatch.GetTimestamp();
-        try
-        {
-            observer.OnNext(value);
-        }
-        catch (Exception ex)
-        {
-            LogObserverOnNextFailed(ex, value.Id);
-        }
-        var elapsed = Stopwatch.GetElapsedTime(start);
-        if (elapsed > _slowObserverThreshold)
-        {
-            LogObserverSlow(observer.GetType().FullName, elapsed.TotalMilliseconds, value.Id);
-        }
-    }
-
     public void OnCompleted()
     {
         _completed = true;
@@ -101,6 +83,26 @@ internal sealed partial class KeyedSubject<T> : IEventSubject<T> where T : IEven
         _broadcastObservers.Clear();
     }
 
+    public void Dispose() => OnCompleted();
+
+    private void SafeOnNext(IObserver<T> observer, T value)
+    {
+        var start = Stopwatch.GetTimestamp();
+        try
+        {
+            observer.OnNext(value);
+        }
+        catch (Exception ex)
+        {
+            LogObserverOnNextFailed(ex, value.Id);
+        }
+        var elapsed = Stopwatch.GetElapsedTime(start);
+        if (elapsed > _slowObserverThreshold)
+        {
+            LogObserverSlow(observer.GetType().FullName, elapsed.TotalMilliseconds, value.Id);
+        }
+    }
+
     private void SafeOnCompleted(IObserver<T> observer)
     {
         try
@@ -112,8 +114,6 @@ internal sealed partial class KeyedSubject<T> : IEventSubject<T> where T : IEven
             LogObserverOnCompletedFailed(ex);
         }
     }
-
-    public void Dispose() => OnCompleted();
 
     private void Unsubscribe(string? key, IObserver<T> observer)
     {
@@ -137,6 +137,15 @@ internal sealed partial class KeyedSubject<T> : IEventSubject<T> where T : IEven
         }
     }
 
+    [LoggerMessage(Level = LogLevel.Warning, Message = "Observer threw in OnNext for event {EventId}; continuing with remaining observers.")]
+    private partial void LogObserverOnNextFailed(Exception ex, string? eventId);
+
+    [LoggerMessage(Level = LogLevel.Warning, Message = "Observer threw in OnCompleted; continuing.")]
+    private partial void LogObserverOnCompletedFailed(Exception ex);
+
+    [LoggerMessage(Level = LogLevel.Warning, Message = "Slow observer {Observer} took {ElapsedMs} ms in OnNext for event {EventId}.")]
+    private partial void LogObserverSlow(string? observer, double elapsedMs, string? eventId);
+
     private sealed class Subscription(KeyedSubject<T> subject, string? key, IObserver<T> observer) : IDisposable
     {
         private KeyedSubject<T>? _subject = subject;
@@ -146,13 +155,4 @@ internal sealed partial class KeyedSubject<T> : IEventSubject<T> where T : IEven
             Interlocked.Exchange(ref _subject, null)?.Unsubscribe(key, observer);
         }
     }
-
-    [LoggerMessage(Level = LogLevel.Warning, Message = "Observer threw in OnNext for event {EventId}; continuing with remaining observers.")]
-    private partial void LogObserverOnNextFailed(Exception ex, string? eventId);
-
-    [LoggerMessage(Level = LogLevel.Warning, Message = "Observer threw in OnCompleted; continuing.")]
-    private partial void LogObserverOnCompletedFailed(Exception ex);
-
-    [LoggerMessage(Level = LogLevel.Warning, Message = "Slow observer {Observer} took {ElapsedMs} ms in OnNext for event {EventId}.")]
-    private partial void LogObserverSlow(string? observer, double elapsedMs, string? eventId);
 }

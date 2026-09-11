@@ -57,9 +57,6 @@ public class RedisStreamsTopicProvider : RedisTopicProviderBase
             _stopTokenSource.Token);
     }
 
-    private RedisStreamsTopicOptions? ResolveOptions(TopicKey topicKey) =>
-        _registry.Resolve(topicKey, _redisStreamsTopicOptions.Clone, _logger);
-
     protected override void Dispose(bool disposing)
     {
         if (!_disposed)
@@ -75,4 +72,7 @@ public class RedisStreamsTopicProvider : RedisTopicProviderBase
 
         base.Dispose(disposing);
     }
+
+    private RedisStreamsTopicOptions? ResolveOptions(TopicKey topicKey) =>
+        _registry.Resolve(topicKey, _redisStreamsTopicOptions.Clone, _logger);
 }

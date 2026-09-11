@@ -9,38 +9,6 @@ namespace UiPath.Caching.Tests.Redis;
 
 public class RedisConnectionWarmupTests
 {
-    private sealed class CapturingTelemetry : ICachingTelemetryProvider
-    {
-        private readonly TaskCompletionSource _exceptionTracked = new(TaskCreationOptions.RunContinuationsAsynchronously);
-        public Task ExceptionTracked => _exceptionTracked.Task;
-        public void TrackException(Exception ex, ReadOnlySpan<KeyValuePair<string, string>> properties = default, ReadOnlySpan<KeyValuePair<string, double>> metrics = default) => _exceptionTracked.TrySetResult();
-    }
-
-    private sealed class FakeConnector(Func<ValueTask>? onConnect = null) : IRedisConnector
-    {
-        private int _connectCount;
-        public int ConnectCount => Volatile.Read(ref _connectCount);
-
-        public async ValueTask ConnectAsync(CancellationToken cancellationToken = default)
-        {
-            Interlocked.Increment(ref _connectCount);
-            if (onConnect is not null)
-            {
-                await onConnect().ConfigureAwait(false);
-            }
-        }
-
-        public bool IsConnected => false;
-        public Version Version => new(6, 0);
-        public IDatabase Database => throw new NotSupportedException();
-        public ISubscriber Subscriber => throw new NotSupportedException();
-        public EndPoint[] GetEndPoints(bool configuredOnly = false) => [];
-        public void ForceReconnect() { }
-        public void Dispose() { }
-        public event EventHandler? OnConnectionFailed { add { } remove { } }
-        public event EventHandler? OnConnectionRestored { add { } remove { } }
-        public event EventHandler? OnReconnected { add { } remove { } }
-    }
 
     [Fact]
     public async Task StartAsync_TriggersConnect()
@@ -111,5 +79,37 @@ public class RedisConnectionWarmupTests
         builder.AddRedisConnection(o => o.WarmUpOnStart = warmUpOnStart);
 
         services.Any(d => d.ImplementationType == typeof(RedisConnectionWarmup)).Should().Be(warmUpOnStart);
+    }
+    private sealed class CapturingTelemetry : ICachingTelemetryProvider
+    {
+        private readonly TaskCompletionSource _exceptionTracked = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public Task ExceptionTracked => _exceptionTracked.Task;
+        public void TrackException(Exception ex, ReadOnlySpan<KeyValuePair<string, string>> properties = default, ReadOnlySpan<KeyValuePair<string, double>> metrics = default) => _exceptionTracked.TrySetResult();
+    }
+
+    private sealed class FakeConnector(Func<ValueTask>? onConnect = null) : IRedisConnector
+    {
+        private int _connectCount;
+        public event EventHandler? OnConnectionFailed { add { } remove { } }
+        public event EventHandler? OnConnectionRestored { add { } remove { } }
+        public event EventHandler? OnReconnected { add { } remove { } }
+        public int ConnectCount => Volatile.Read(ref _connectCount);
+
+        public bool IsConnected => false;
+        public Version Version => new(6, 0);
+        public IDatabase Database => throw new NotSupportedException();
+        public ISubscriber Subscriber => throw new NotSupportedException();
+
+        public async ValueTask ConnectAsync(CancellationToken cancellationToken = default)
+        {
+            Interlocked.Increment(ref _connectCount);
+            if (onConnect is not null)
+            {
+                await onConnect().ConfigureAwait(false);
+            }
+        }
+        public EndPoint[] GetEndPoints(bool configuredOnly = false) => [];
+        public void ForceReconnect() { }
+        public void Dispose() { }
     }
 }

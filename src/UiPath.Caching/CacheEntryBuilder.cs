@@ -31,7 +31,7 @@ internal class CacheEntryBuilder
             CallerKey = cacheKey,
             TopicKey = topicKey,
             Token = token,
-            Expiration = _clock.ToDateTimeOffset(expiration)
+            Expiration = _clock.ToDateTimeOffset(expiration),
         };
     }
 }

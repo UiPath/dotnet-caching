@@ -1,4 +1,4 @@
-﻿using System.Collections.Immutable;
+using System.Collections.Immutable;
 using UiPath.Caching.Locking;
 
 namespace UiPath.Caching;
@@ -11,21 +11,11 @@ internal sealed class MemorySetCache(
     IMemoryCacheOptions memoryCacheOptions,
     TimeProvider clock)
 {
-    private readonly bool _trackSize = memoryCacheOptions.SizeLimit.HasValue;
-    private readonly string _localLockKeyPrefix = cacheName + ":";
 
     private static readonly ImmutableHashSet<byte[]> EmptyMembers =
         ImmutableHashSet.Create<byte[]>(ByteArrayEqualityComparer.Instance);
-
-    private sealed record Snapshot(ImmutableHashSet<byte[]> Members, DateTimeOffset? Expiration);
-
-    /// <summary>
-    /// A passthrough serializer such as <see cref="RawByteSerializerProxy"/> hands back the caller's
-    /// own array. The snapshot hashes its members, so a caller mutating that array afterwards would
-    /// change an element's hash while it sits in the set. Only the paths that store need this; the
-    /// lookup paths may compare against the caller's array directly.
-    /// </summary>
-    private static byte[] Owned(byte[] value) => value.Length == 0 ? value : (byte[])value.Clone();
+    private readonly bool _trackSize = memoryCacheOptions.SizeLimit.HasValue;
+    private readonly string _localLockKeyPrefix = cacheName + ":";
 
     public bool TryGetMembers<T>(string key, [NotNullWhen(true)] out IReadOnlyCollection<T?>? members)
     {
@@ -168,6 +158,14 @@ internal sealed class MemorySetCache(
         }
     }
 
+    /// <summary>
+    /// A passthrough serializer such as <see cref="RawByteSerializerProxy"/> hands back the caller's
+    /// own array. The snapshot hashes its members, so a caller mutating that array afterwards would
+    /// change an element's hash while it sits in the set. Only the paths that store need this; the
+    /// lookup paths may compare against the caller's array directly.
+    /// </summary>
+    private static byte[] Owned(byte[] value) => value.Length == 0 ? value : (byte[])value.Clone();
+
     private bool TryGetSnapshot(string key, [NotNullWhen(true)] out Snapshot? snapshot) =>
         memoryCache.TryGetValue(key, out snapshot) && snapshot is not null;
 
@@ -207,4 +205,6 @@ internal sealed class MemorySetCache(
         }
         return list;
     }
+
+    private sealed record Snapshot(ImmutableHashSet<byte[]> Members, DateTimeOffset? Expiration);
 }

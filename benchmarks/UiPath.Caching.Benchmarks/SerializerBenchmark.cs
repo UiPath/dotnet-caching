@@ -11,11 +11,11 @@ namespace UiPath.Caching.Benchmarks;
 [CategoriesColumn]
 public class SerializerBenchmark
 {
-    [Params("Small", "Medium", "Large")]
-    public string Size { get; set; } = "Medium";
 
     private CustomObject _obj = default!;
     private RedisValue _payload;
+    [Params("Small", "Medium", "Large")]
+    public string Size { get; set; } = "Medium";
 
     [GlobalSetup]
     public void Setup()

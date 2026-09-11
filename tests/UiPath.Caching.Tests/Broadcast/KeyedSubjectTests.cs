@@ -296,7 +296,8 @@ public class KeyedSubjectTests
                 subs.Add(_sut.Subscribe(new TestKeyedObserver($"key{i}")));
             }
             return subs;
-        }, ct);
+        },
+        ct);
 
         var dispatchTask = OnDedicatedThread(() =>
         {
@@ -305,7 +306,8 @@ public class KeyedSubjectTests
             {
                 _sut.OnNext(CreateEvent($"key{i}"));
             }
-        }, ct);
+        },
+        ct);
 
         var unsubscribeTask = OnDedicatedThread(() =>
         {
@@ -315,9 +317,13 @@ public class KeyedSubjectTests
                 var sub = _sut.Subscribe(new TestKeyedObserver($"temp{i}"));
                 sub.Dispose();
             }
-        }, ct);
+        },
+        ct);
 
         await Task.WhenAll(subscribeTask, dispatchTask, unsubscribeTask);
+
+        (await subscribeTask).Should().HaveCount(iterations,
+            "every concurrent Subscribe must return a live subscription, none lost to a racing dispatch or unsubscribe");
     }
 
     [Fact]
@@ -353,7 +359,8 @@ public class KeyedSubjectTests
             var final_obs = new TestKeyedObserver(key);
             var final_sub = _sut.Subscribe(final_obs);
             survivors.Add((final_obs, final_sub));
-        }, CancellationToken.None)).ToArray();
+        },
+        CancellationToken.None)).ToArray();
 
         await Task.WhenAll(tasks);
 
@@ -386,7 +393,8 @@ public class KeyedSubjectTests
                 var sub = _sut.Subscribe(obs);
                 sub.Dispose();
             }
-        }, ct);
+        },
+        ct);
 
         var dispatchTask = Task.Run(() =>
         {
@@ -395,7 +403,8 @@ public class KeyedSubjectTests
                 _sut.OnNext(CreateEvent(key));
                 Interlocked.Increment(ref eventCount);
             }
-        }, ct);
+        },
+        ct);
 
         await Task.WhenAll(churnTask, dispatchTask);
 
@@ -433,7 +442,8 @@ public class KeyedSubjectTests
                 _sut.Subscribe(obs);
                 lateObservers.Add(obs);
             }
-        }, ct);
+        },
+        ct);
 
         var dispatchTask = OnDedicatedThread(() =>
         {
@@ -442,7 +452,8 @@ public class KeyedSubjectTests
             {
                 _sut.OnNext(CreateEvent(key));
             }
-        }, ct);
+        },
+        ct);
 
         await Task.WhenAll(lateTask, dispatchTask);
 
@@ -472,9 +483,13 @@ public class KeyedSubjectTests
                 _sut.OnNext(CreateEvent(key));
                 sub.Dispose();
             }
-        }, CancellationToken.None)).ToArray();
+        },
+        CancellationToken.None)).ToArray();
 
         await Task.WhenAll(tasks);
+
+        tasks.Should().OnlyContain(t => t.IsCompletedSuccessfully,
+            "no worker may fault under concurrent subscribe, dispatch and dispose");
     }
 
     private static ICacheEvent CreateEvent(string? key)
@@ -483,9 +498,16 @@ public class KeyedSubjectTests
         {
             Id = Guid.NewGuid().ToString(),
             Source = new Uri("urn:test"),
-            Data = key != null ? new CacheEventData(key) : null
+            Data = key != null ? new CacheEventData(key) : null,
         };
     }
+
+    // Barrier participants on pool threads park the pool until it grows, starving every other test's timers and continuations.
+    private static Task OnDedicatedThread(Action action, CancellationToken token) =>
+        Task.Factory.StartNew(action, token, TaskCreationOptions.LongRunning, TaskScheduler.Default);
+
+    private static Task<T> OnDedicatedThread<T>(Func<T> function, CancellationToken token) =>
+        Task.Factory.StartNew(function, token, TaskCreationOptions.LongRunning, TaskScheduler.Default);
 
     private sealed class TestKeyedObserver(string key) : IKeyedObserver<ICacheEvent>
     {
@@ -523,13 +545,6 @@ public class KeyedSubjectTests
         public void OnError(Exception error) { }
         public void OnCompleted() => throw new InvalidOperationException("boom on completed");
     }
-
-    // Barrier participants on pool threads park the pool until it grows, starving every other test's timers and continuations.
-    private static Task OnDedicatedThread(Action action, CancellationToken token) =>
-        Task.Factory.StartNew(action, token, TaskCreationOptions.LongRunning, TaskScheduler.Default);
-
-    private static Task<T> OnDedicatedThread<T>(Func<T> function, CancellationToken token) =>
-        Task.Factory.StartNew(function, token, TaskCreationOptions.LongRunning, TaskScheduler.Default);
 
     private sealed class ThrowingBroadcastObserver : IObserver<ICacheEvent>
     {

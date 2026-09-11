@@ -79,7 +79,7 @@ public sealed partial class CacheEventPublisher
         LogRaiseEvent(eventType, topicKey, LoggedKey.For(_masker, options.CallerKey, cacheKey.Name, entryType));
         var data = new CacheEventData(cacheKey)
         {
-            Properties = properties
+            Properties = properties,
         };
         var ev = _cacheEventFactory.Create(_cacheName, eventType, data);
         var topic = _topicProvider.Create(topicKey);

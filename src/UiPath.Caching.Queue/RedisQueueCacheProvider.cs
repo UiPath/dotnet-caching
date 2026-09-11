@@ -18,10 +18,6 @@ public sealed class RedisQueueCacheProvider : IQueueCacheProvider
     private readonly TimeProvider _clock;
     private readonly Lazy<RedisSetCache> _setCache;
 
-    public string Name => KnownCacheProviderNames.Redis;
-
-    public bool Enabled { get; }
-
     public RedisQueueCacheProvider(
         IOptions<RedisCacheOptions> redisCacheOptions,
         IOptions<CacheOptions> cacheOptions,
@@ -47,6 +43,10 @@ public sealed class RedisQueueCacheProvider : IQueueCacheProvider
         _setCache = new Lazy<RedisSetCache>(() => BuildSetCache());
         Enabled = _setCacheOptions.Enabled;
     }
+
+    public string Name => KnownCacheProviderNames.Redis;
+
+    public bool Enabled { get; }
 
     public ISetCache CreateSetCache() =>
         _setCache.Value;

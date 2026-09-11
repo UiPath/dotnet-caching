@@ -7,21 +7,6 @@ public class MultilayerSetCacheTests
 {
     private static CancellationToken Ct => TestContext.Current.CancellationToken;
 
-    private static MemoryCacheFactory MemoryFactory() => new(TimeProvider.System, NullLoggerFactory.Instance);
-
-    // The inner (L2) is always a real store; the InMemory and InMemoryRedis providers differ only in
-    // what they pass as L2. A substitute stands in for it here.
-    private static (MultilayerSetCache Sut, ISetCache L2) CreateSut()
-    {
-        var l2 = Substitute.For<ISetCache>();
-        var sut = new MultilayerSetCache(
-            KnownCacheProviderNames.InMemoryRedis, l2,
-            MemoryFactory(), new SystemJsonByteSerializerProxy(),
-            new InMemoryRedisQueueCacheOptions { LocalMaxExpiration = TimeSpan.FromMinutes(5) },
-            NullLocalLock.Instance, TimeProvider.System);
-        return (sut, l2);
-    }
-
     [Fact]
     public async Task Configured_default_reaches_L2_as_the_write_deadline()
     {
@@ -63,13 +48,6 @@ public class MultilayerSetCacheTests
         await sut.AddAsync("k", (IEnumerable<string>)["x"], TimeSpan.FromHours(1), (CachePolicy?)null, Ct);
 
         await l2.Received(1).AddAsync<string>("k", Arg.Any<IEnumerable<string>>(), now.AddHours(1), Arg.Any<CachePolicy?>(), Arg.Any<CancellationToken>());
-    }
-
-    private static void SetupMembers(ISetCache l2, params string?[] members)
-    {
-        IReadOnlyCollection<string?> snapshot = members.ToList();
-        l2.MembersAsync<string>(default, default, Ct)
-            .ReturnsForAnyArgs<IReadOnlyCollection<string?>>(_ => snapshot);
     }
 
     [Fact]
@@ -210,26 +188,6 @@ public class MultilayerSetCacheTests
         await l2.ReceivedWithAnyArgs(1).CountAsync<string>(default, Ct);
     }
 
-    // Inner implementing IConnectionState is picked up by the connection monitor, mirroring how
-    // MultilayerCacheBase resolves the monitor from its inner cache.
-    private static (MultilayerSetCache Sut, ISetCache L2) CreateMonitoredSut(bool connected, bool useLocalOnlyWhenDisconnected)
-    {
-        var l2 = Substitute.For<ISetCache, IConnectionState>();
-        ((IConnectionState)l2).IsConnected.Returns(connected);
-        var options = new InMemoryRedisQueueCacheOptions
-        {
-            LocalMaxExpiration = TimeSpan.FromMinutes(5),
-            ConnectionMonitorEnabled = true,
-            UseLocalOnlyWhenDisconnected = useLocalOnlyWhenDisconnected,
-            LocalMaxExpirationDisconnected = TimeSpan.FromSeconds(30),
-        };
-        var sut = new MultilayerSetCache(
-            KnownCacheProviderNames.InMemoryRedis, l2,
-            MemoryFactory(), new SystemJsonByteSerializerProxy(), options,
-            NullLocalLock.Instance, TimeProvider.System);
-        return (sut, l2);
-    }
-
     [Fact]
     public async Task Disconnected_add_with_local_only_writes_to_L1_and_skips_inner()
     {
@@ -280,5 +238,54 @@ public class MultilayerSetCacheTests
         (await sut.AddAsync("k", "x", token: Ct)).Should().BeTrue();
 
         await l2.ReceivedWithAnyArgs(1).AddAsync<string>(default, default(string)!, default, Ct);
+    }
+
+    private static MemoryCacheFactory MemoryFactory() => new(TimeProvider.System, NullLoggerFactory.Instance);
+
+    // The inner (L2) is always a real store; the InMemory and InMemoryRedis providers differ only in
+    // what they pass as L2. A substitute stands in for it here.
+    private static (MultilayerSetCache Sut, ISetCache L2) CreateSut()
+    {
+        var l2 = Substitute.For<ISetCache>();
+        var sut = new MultilayerSetCache(
+            KnownCacheProviderNames.InMemoryRedis,
+            l2,
+            MemoryFactory(),
+            new SystemJsonByteSerializerProxy(),
+            new InMemoryRedisQueueCacheOptions { LocalMaxExpiration = TimeSpan.FromMinutes(5) },
+            NullLocalLock.Instance,
+            TimeProvider.System);
+        return (sut, l2);
+    }
+
+    private static void SetupMembers(ISetCache l2, params string?[] members)
+    {
+        IReadOnlyCollection<string?> snapshot = members.ToList();
+        l2.MembersAsync<string>(default, default, Ct)
+            .ReturnsForAnyArgs<IReadOnlyCollection<string?>>(_ => snapshot);
+    }
+
+    // Inner implementing IConnectionState is picked up by the connection monitor, mirroring how
+    // MultilayerCacheBase resolves the monitor from its inner cache.
+    private static (MultilayerSetCache Sut, ISetCache L2) CreateMonitoredSut(bool connected, bool useLocalOnlyWhenDisconnected)
+    {
+        var l2 = Substitute.For<ISetCache, IConnectionState>();
+        ((IConnectionState)l2).IsConnected.Returns(connected);
+        var options = new InMemoryRedisQueueCacheOptions
+        {
+            LocalMaxExpiration = TimeSpan.FromMinutes(5),
+            ConnectionMonitorEnabled = true,
+            UseLocalOnlyWhenDisconnected = useLocalOnlyWhenDisconnected,
+            LocalMaxExpirationDisconnected = TimeSpan.FromSeconds(30),
+        };
+        var sut = new MultilayerSetCache(
+            KnownCacheProviderNames.InMemoryRedis,
+            l2,
+            MemoryFactory(),
+            new SystemJsonByteSerializerProxy(),
+            options,
+            NullLocalLock.Instance,
+            TimeProvider.System);
+        return (sut, l2);
     }
 }

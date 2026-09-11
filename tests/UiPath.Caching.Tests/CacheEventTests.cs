@@ -16,7 +16,7 @@ public class CacheEventTests
             Id = id,
             Source = url == null ? null : new Uri(url),
             Type = type,
-            Data = key == null ? null : new CacheEventData(key)
+            Data = key == null ? null : new CacheEventData(key),
         };
         sut.IsValid().Should().Be(isValid);
     }

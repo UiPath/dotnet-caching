@@ -1,4 +1,4 @@
-﻿using System.Text.Json;
+using System.Text.Json;
 using StackExchange.Redis;
 
 namespace UiPath.Caching.Tests;
@@ -9,17 +9,8 @@ namespace UiPath.Caching.Tests;
 /// </summary>
 public class LegacySerializerWireCompatTests
 {
-    private sealed record Sample(int Id, string Name, int[] Values);
 
     private readonly SystemJsonByteSerializerProxy _proxy = new();
-
-    /// <summary>The 1.x proxy's own output: <c>JsonSerializer.SerializeToUtf8Bytes</c>.</summary>
-    private static byte[] WrittenByLegacyProxy(object? value) =>
-        JsonSerializer.SerializeToUtf8Bytes(value);
-
-    /// <summary>A custom 1.x serializer returning a string-backed <c>RedisValue</c>, as the docs blessed.</summary>
-    private static byte[] WrittenByLegacyStringPath(object? value) =>
-        ((byte[]?)(RedisValue)JsonSerializer.Serialize(value))!;
 
     [Fact]
     public void Poco_written_by_the_legacy_proxy_still_reads()
@@ -103,4 +94,13 @@ public class LegacySerializerWireCompatTests
 
         act.Should().Throw<JsonException>();
     }
+
+    /// <summary>The 1.x proxy's own output: <c>JsonSerializer.SerializeToUtf8Bytes</c>.</summary>
+    private static byte[] WrittenByLegacyProxy(object? value) =>
+        JsonSerializer.SerializeToUtf8Bytes(value);
+
+    /// <summary>A custom 1.x serializer returning a string-backed <c>RedisValue</c>, as the docs blessed.</summary>
+    private static byte[] WrittenByLegacyStringPath(object? value) =>
+        ((byte[]?)(RedisValue)JsonSerializer.Serialize(value))!;
+    private sealed record Sample(int Id, string Name, int[] Values);
 }

@@ -38,15 +38,15 @@ public static class RedisCollectionExtensions
 
     public static ICachingBuilder AddRedisConnection(this ICachingBuilder builder, string sectionName, Action<RedisConnectionOptions> configure)
     {
-        void configureOptions(RedisConnectionOptions opt)
+        void ConfigureOptions(RedisConnectionOptions opt)
         {
             builder.Configuration.GetSection(sectionName).Bind(opt);
             configure(opt);
         }
 
         RedisConnectionOptions redisConnectionOptions = new RedisConnectionOptions();
-        configureOptions(redisConnectionOptions);
-        builder.Services.Configure((Action<RedisConnectionOptions>)configureOptions);
+        ConfigureOptions(redisConnectionOptions);
+        builder.Services.Configure((Action<RedisConnectionOptions>)ConfigureOptions);
         return builder.AddRedisConnection(redisConnectionOptions);
     }
 
@@ -61,6 +61,35 @@ public static class RedisCollectionExtensions
     {
         ArgumentNullException.ThrowIfNull(factory);
         builder.Services.Replace(ServiceDescriptor.Transient(factory));
+        return builder;
+    }
+
+    public static ICachingBuilder AddRedisProfiler(this ICachingBuilder builder, bool enabled)
+    {
+        if (enabled)
+        {
+            builder.Services.TryAddSingleton<IProfiledCommandProcessor, ProfiledCommandProcessor>();
+            builder.Services.TryAddSingleton<IProfilingSessionCommandReader, ProfilingSessionCommandReader>();
+            builder.Services.TryAddSingleton<IRedisProfiler, RedisProfiler>();
+        }
+        else
+        {
+            builder.Services.TryAddSingleton<IRedisProfiler>(sp => NullRedisProfiler.Instance);
+        }
+        return builder;
+    }
+
+    public static ICachingBuilder AddIRedisPlannedMaintenance(this ICachingBuilder builder, bool enabled)
+    {
+        if (enabled)
+        {
+            builder.Services.TryAddSingleton<RedisPlannedMaintenance>();
+            builder.Services.TryAddSingleton<IRedisPlannedMaintenance>(sp => sp.GetRequiredService<RedisPlannedMaintenance>());
+            if (builder.Enabled)
+            {
+                builder.Services.TryAddEnumerable(ServiceDescriptor.Singleton<IHostedService, RedisPlannedMaintenance>(sp => sp.GetRequiredService<RedisPlannedMaintenance>()));
+            }
+        }
         return builder;
     }
 
@@ -95,35 +124,6 @@ public static class RedisCollectionExtensions
             builder.Services.TryAddEnumerable(ServiceDescriptor.Singleton<IHostedService, RedisConnectionWarmup>());
         }
 
-        return builder;
-    }
-
-    public static ICachingBuilder AddRedisProfiler(this ICachingBuilder builder, bool enabled)
-    {
-        if (enabled)
-        {
-            builder.Services.TryAddSingleton<IProfiledCommandProcessor, ProfiledCommandProcessor>();
-            builder.Services.TryAddSingleton<IProfilingSessionCommandReader, ProfilingSessionCommandReader>();
-            builder.Services.TryAddSingleton<IRedisProfiler, RedisProfiler>();
-        }
-        else
-        {
-            builder.Services.TryAddSingleton<IRedisProfiler>(sp => NullRedisProfiler.Instance);
-        }
-        return builder;
-    }
-
-    public static ICachingBuilder AddIRedisPlannedMaintenance(this ICachingBuilder builder, bool enabled)
-    {
-        if (enabled)
-        {
-            builder.Services.TryAddSingleton<RedisPlannedMaintenance>();
-            builder.Services.TryAddSingleton<IRedisPlannedMaintenance>(sp => sp.GetRequiredService<RedisPlannedMaintenance>());
-            if (builder.Enabled)
-            {
-                builder.Services.TryAddEnumerable(ServiceDescriptor.Singleton<IHostedService, RedisPlannedMaintenance>(sp => sp.GetRequiredService<RedisPlannedMaintenance>()));
-            }
-        }
         return builder;
     }
 }

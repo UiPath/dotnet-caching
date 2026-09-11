@@ -10,13 +10,6 @@ namespace UiPath.Caching.Tests.Redis;
 [Trait("Category", "Integration")]
 public class RedisConnectorIntegrationTests(RedisContainerFixture fixture)
 {
-    private RedisConnector NewConnector()
-    {
-        var options = Options.Create(new RedisConnectionOptions { ConnectionString = fixture.ConnectionString, EnableHangDetection = false });
-        var optionsProvider = new RedisConfigurationOptionsProvider(NullLoggerFactory.Instance, options);
-        var factory = new ConnectionMultiplexerFactory(options, NullRedisProfiler.Instance);
-        return new RedisConnector(NullTelemetryProvider.Instance, optionsProvider, factory, options);
-    }
 
     [Fact]
     public async Task Connects_And_RoundTrips()
@@ -75,15 +68,6 @@ public class RedisConnectorIntegrationTests(RedisContainerFixture fixture)
             RedisConnector.NullTopologyRefreshLimit, "each refresh must carry the client's own CLUSTER NODES to the server");
     }
 
-    /// <summary>Server-side count of CLUSTER commands, which the client only ever sends from its handshake.</summary>
-    private static async Task<long> ClusterCommandCallsAsync(ConnectionMultiplexer observer)
-    {
-        var sections = await observer.GetServer(observer.GetEndPoints()[0]).InfoAsync("commandstats");
-        return sections.SelectMany(section => section)
-            .Where(stat => stat.Key.StartsWith("cmdstat_cluster", StringComparison.OrdinalIgnoreCase))
-            .Sum(stat => long.Parse(stat.Value.Split(',')[0]["calls=".Length..], CultureInfo.InvariantCulture));
-    }
-
     [Fact]
     public async Task GetMasterPhysicalConnectionMetrics_ReturnsData_OnLiveConnection()
     {
@@ -101,5 +85,21 @@ public class RedisConnectorIntegrationTests(RedisContainerFixture fixture)
         metrics.Should().NotBeNull();
         metrics!.EndPoint.Should().BeOneOf(multiplexer.GetEndPoints());
         metrics.AwaitingResponseCount.Should().BeGreaterThanOrEqualTo(0);
+    }
+
+    /// <summary>Server-side count of CLUSTER commands, which the client only ever sends from its handshake.</summary>
+    private static async Task<long> ClusterCommandCallsAsync(ConnectionMultiplexer observer)
+    {
+        var sections = await observer.GetServer(observer.GetEndPoints()[0]).InfoAsync("commandstats");
+        return sections.SelectMany(section => section)
+            .Where(stat => stat.Key.StartsWith("cmdstat_cluster", StringComparison.OrdinalIgnoreCase))
+            .Sum(stat => long.Parse(stat.Value.Split(',')[0]["calls=".Length..], CultureInfo.InvariantCulture));
+    }
+    private RedisConnector NewConnector()
+    {
+        var options = Options.Create(new RedisConnectionOptions { ConnectionString = fixture.ConnectionString, EnableHangDetection = false });
+        var optionsProvider = new RedisConfigurationOptionsProvider(NullLoggerFactory.Instance, options);
+        var factory = new ConnectionMultiplexerFactory(options, NullRedisProfiler.Instance);
+        return new RedisConnector(NullTelemetryProvider.Instance, optionsProvider, factory, options);
     }
 }

@@ -33,6 +33,10 @@ public class MultilayerCacheTests(ITestContextAccessor testContextAccessor) : IA
 
     private MultilayerCache? _sut = null;
 
+    public interface ITopicProviderWithConnectionState : ITopicProvider, IConnectionState
+    {
+    }
+
     private MultilayerCache Sut => _sut ??= _fixture.Create<MultilayerCache>();
 
     [Fact]
@@ -71,7 +75,7 @@ public class MultilayerCacheTests(ITestContextAccessor testContextAccessor) : IA
             .Returns(new KeyValuePair<CacheKey, ICacheEntry<string?>>[]
             {
                 new(_innerCacheKey, new TestCacheEntry<string?> { Value = expected, Expiration = _fixture.Create<DateTimeOffset>() }),
-                new(_innerMultiKey, new TestCacheEntry<string?> { Value = expected, Expiration = _fixture.Create<DateTimeOffset>() })
+                new(_innerMultiKey, new TestCacheEntry<string?> { Value = expected, Expiration = _fixture.Create<DateTimeOffset>() }),
             });
 
         await Sut.GetAsync<string>(new CacheKey[] { _cacheKey, _multiKey }, policy: null, token: testContextAccessor.Current.CancellationToken);
@@ -114,7 +118,7 @@ public class MultilayerCacheTests(ITestContextAccessor testContextAccessor) : IA
             .Returns(new KeyValuePair<CacheKey, ICacheEntry<string?>>[]
             {
                 new(_innerCacheKey, new TestCacheEntry<string?> { Value = expected }),
-                new(_innerMultiKey, new TestCacheEntry<string?> { Value = expected })
+                new(_innerMultiKey, new TestCacheEntry<string?> { Value = expected }),
             });
 
         var actual = await Sut.GetAsync<string>(new CacheKey[] { _cacheKey, _multiKey }, policy: null, token: testContextAccessor.Current.CancellationToken);
@@ -169,7 +173,7 @@ public class MultilayerCacheTests(ITestContextAccessor testContextAccessor) : IA
         _innerCache.GetCacheEntriesAsync<string>(Arg.Is<CacheKey[]>(k => k != null && k.Length == 1 && k.Contains(_innerMultiKey)), Arg.Any<CachePolicy?>(), Arg.Any<CancellationToken>())
             .Returns(new KeyValuePair<CacheKey, ICacheEntry<string?>>[]
             {
-                new(_innerMultiKey, new TestCacheEntry<string?> { Value = remoteValue })
+                new(_innerMultiKey, new TestCacheEntry<string?> { Value = remoteValue }),
             });
 
         var entries = await Sut.GetCacheEntriesAsync<string>(new CacheKey[] { _cacheKey, _multiKey }, policy: null, token: testContextAccessor.Current.CancellationToken);
@@ -198,7 +202,7 @@ public class MultilayerCacheTests(ITestContextAccessor testContextAccessor) : IA
         _innerCache.GetCacheEntriesAsync<string>(Arg.Any<CacheKey[]>(), Arg.Any<CachePolicy?>(), Arg.Any<CancellationToken>())
             .Returns(new KeyValuePair<CacheKey, ICacheEntry<string?>>[]
             {
-                new(_innerMultiKey, new TestCacheEntry<string?> { Value = default })
+                new(_innerMultiKey, new TestCacheEntry<string?> { Value = default }),
             });
 
         var entries = await Sut.GetCacheEntriesAsync<string>(new CacheKey[] { _cacheKey, _multiKey }, policy: null, token: testContextAccessor.Current.CancellationToken);
@@ -530,7 +534,9 @@ public class MultilayerCacheTests(ITestContextAccessor testContextAccessor) : IA
         await _innerCache.DidNotReceive().RemoveAsync<string>(Arg.Any<CacheKey[]>(), Arg.Any<CancellationToken>());
         await _innerCache.Received(1).SetAsync<string?>(
             Arg.Is<KeyValuePair<CacheKey, string?>[]>(p => p != null && p.Length == 2 && p.Any(kv => kv.Value == null)),
-            Arg.Any<DateTimeOffset>(), Arg.Any<CachePolicy?>(), Arg.Any<CancellationToken>());
+            Arg.Any<DateTimeOffset>(),
+            Arg.Any<CachePolicy?>(),
+            Arg.Any<CancellationToken>());
     }
 
     [Fact]
@@ -551,7 +557,9 @@ public class MultilayerCacheTests(ITestContextAccessor testContextAccessor) : IA
 
         await _innerCache.Received(1).SetAsync<string?>(
             Arg.Any<KeyValuePair<CacheKey, string?>[]>(),
-            Arg.Is<DateTimeOffset>(exp => exp > _clock.UtcNow), Arg.Any<CachePolicy?>(), Arg.Any<CancellationToken>());
+            Arg.Is<DateTimeOffset>(exp => exp > _clock.UtcNow),
+            Arg.Any<CachePolicy?>(),
+            Arg.Any<CancellationToken>());
     }
 
     [Fact]
@@ -716,7 +724,7 @@ public class MultilayerCacheTests(ITestContextAccessor testContextAccessor) : IA
         var token = new TestChangeToken
         {
             ActiveChangeCallbacks = true,
-            HasChanged = false
+            HasChanged = false,
         };
         _changeTokenFactory.Create(_innerCacheKey, Arg.Any<ITopic<ICacheEvent>>(), Arg.Any<string>(), Arg.Any<Type>())
             .Returns(c => token);
@@ -740,7 +748,7 @@ public class MultilayerCacheTests(ITestContextAccessor testContextAccessor) : IA
         var token = new TestChangeToken
         {
             ActiveChangeCallbacks = true,
-            HasChanged = false
+            HasChanged = false,
         };
         _changeTokenFactory.Create(_innerCacheKey, Arg.Any<ITopic<ICacheEvent>>(), Arg.Any<string>(), Arg.Any<Type>())
             .Returns(c => token);
@@ -767,7 +775,7 @@ public class MultilayerCacheTests(ITestContextAccessor testContextAccessor) : IA
         var token = new TestChangeToken
         {
             ActiveChangeCallbacks = false,
-            HasChanged = false
+            HasChanged = false,
         };
 
         _changeTokenFactory.Create(_innerCacheKey, Arg.Any<ITopic<ICacheEvent>>(), Arg.Any<string>(), Arg.Any<Type>())
@@ -821,14 +829,14 @@ public class MultilayerCacheTests(ITestContextAccessor testContextAccessor) : IA
         _innerCache.GetCacheEntriesAsync<string>(Arg.Is<CacheKey[]>(k => k != null && k.Contains(_innerCacheKey)), Arg.Any<CachePolicy?>(), Arg.Any<CancellationToken>())
             .Returns(new KeyValuePair<CacheKey, ICacheEntry<string?>>[]
             {
-                new(_innerCacheKey, new TestCacheEntry<string?> { Value = expected })
+                new(_innerCacheKey, new TestCacheEntry<string?> { Value = expected }),
             });
         _innerCache.RemoveAsync<string>(Arg.Any<CacheKey[]>(), Arg.Any<CancellationToken>())
             .Returns(true);
         var token = new TestChangeToken
         {
             ActiveChangeCallbacks = true,
-            HasChanged = false
+            HasChanged = false,
         };
         _changeTokenFactory.Create(_innerCacheKey, Arg.Any<ITopic<ICacheEvent>>(), Arg.Any<string>(), Arg.Any<Type>())
             .Returns(c => token);
@@ -850,12 +858,12 @@ public class MultilayerCacheTests(ITestContextAccessor testContextAccessor) : IA
         _innerCache.GetCacheEntriesAsync<string>(Arg.Is<CacheKey[]>(k => k != null && k.Contains(_innerCacheKey)), Arg.Any<CachePolicy?>(), Arg.Any<CancellationToken>())
             .Returns(new KeyValuePair<CacheKey, ICacheEntry<string?>>[]
             {
-                new(_innerCacheKey, new TestCacheEntry<string?> { Value = expected, Expiration = _clock.UtcNow.AddDays(1) })
+                new(_innerCacheKey, new TestCacheEntry<string?> { Value = expected, Expiration = _clock.UtcNow.AddDays(1) }),
             });
         var token = new TestChangeToken
         {
             ActiveChangeCallbacks = true,
-            HasChanged = false
+            HasChanged = false,
         };
         _changeTokenFactory.Create(_innerCacheKey, Arg.Any<ITopic<ICacheEvent>>(), Arg.Any<string>(), Arg.Any<Type>())
             .Returns(c => token);
@@ -880,12 +888,12 @@ public class MultilayerCacheTests(ITestContextAccessor testContextAccessor) : IA
         _innerCache.GetCacheEntriesAsync<string>(Arg.Is<CacheKey[]>(k => k != null && k.Contains(_innerCacheKey)), Arg.Any<CachePolicy?>(), Arg.Any<CancellationToken>())
             .Returns(new KeyValuePair<CacheKey, ICacheEntry<string?>>[]
             {
-                new(_innerCacheKey, new TestCacheEntry<string?> { Value = expected, Expiration = now.AddDays(1) })
+                new(_innerCacheKey, new TestCacheEntry<string?> { Value = expected, Expiration = now.AddDays(1) }),
             });
         var token = new TestChangeToken
         {
             ActiveChangeCallbacks = false,
-            HasChanged = false
+            HasChanged = false,
         };
 
         _changeTokenFactory.Create(_innerCacheKey, Arg.Any<ITopic<ICacheEvent>>(), Arg.Any<string>(), Arg.Any<Type>())
@@ -1020,7 +1028,7 @@ public class MultilayerCacheTests(ITestContextAccessor testContextAccessor) : IA
         var token = new TestChangeToken
         {
             ActiveChangeCallbacks = true,
-            HasChanged = false
+            HasChanged = false,
         };
         _changeTokenFactory.Create(Arg.Any<string>(), Arg.Any<ITopic<ICacheEvent>>(), Arg.Any<string>(), Arg.Any<Type>())
             .Returns(token);
@@ -1044,7 +1052,7 @@ public class MultilayerCacheTests(ITestContextAccessor testContextAccessor) : IA
         var token = new TestChangeToken
         {
             ActiveChangeCallbacks = true,
-            HasChanged = false
+            HasChanged = false,
         };
 
         _changeTokenFactory.Create(Arg.Any<string>(), Arg.Any<ITopic<ICacheEvent>>(), Arg.Any<string>(), Arg.Any<Type>())
@@ -1063,7 +1071,7 @@ public class MultilayerCacheTests(ITestContextAccessor testContextAccessor) : IA
     public async Task When_no_inner_cache_expire_time_use_max()
     {
         var expected = _fixture.Create<string>();
-        Task<string?> generator(CancellationToken token) => Task.FromResult((string?)expected);
+        Task<string?> Generator(CancellationToken token) => Task.FromResult((string?)expected);
         var cacheEntry = _fixture.Freeze<Microsoft.Extensions.Caching.Memory.ICacheEntry>();
         _memoryCache.CreateEntry(Arg.Any<object>())
             .Returns(cacheEntry);
@@ -1071,7 +1079,7 @@ public class MultilayerCacheTests(ITestContextAccessor testContextAccessor) : IA
         _innerCache.GetCacheEntryAsync<string>(_innerCacheKey, Arg.Any<CachePolicy?>(), Arg.Any<CancellationToken>())
             .Returns(new TestCacheEntry<string?> { Value = expected, Expiration = DateTimeOffset.MaxValue });
         _options.DefaultExpiration = null;
-        _ = await Sut.GetOrAddAsync(_cacheKey, generator, token: testContextAccessor.Current.CancellationToken);
+        _ = await Sut.GetOrAddAsync(_cacheKey, Generator, token: testContextAccessor.Current.CancellationToken);
         cacheEntry.AbsoluteExpiration.Should().Be(DateTimeOffset.MaxValue);
     }
 
@@ -1450,9 +1458,5 @@ public class MultilayerCacheTests(ITestContextAccessor testContextAccessor) : IA
     protected virtual CacheKey ToInnerCacheKey<T>(CacheKey key)
     {
         return key;
-    }
-
-    public interface ITopicProviderWithConnectionState : ITopicProvider, IConnectionState
-    {
     }
 }

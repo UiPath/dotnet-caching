@@ -1,4 +1,4 @@
-﻿namespace UiPath.Caching.Config;
+namespace UiPath.Caching.Config;
 
 [ExcludeFromCodeCoverage]
 public static class ServiceCollectionExtensions
@@ -67,7 +67,7 @@ public static class ServiceCollectionExtensions
         services.ReserveRedisKeyspace(RedisKeyspaces.Streams, "broadcast streams");
         var builder = new CachingBuilder(services, configuration)
         {
-            Enabled = options.Enabled
+            Enabled = options.Enabled,
         };
         configure?.Invoke(builder);
         builder.Complete();
@@ -90,6 +90,16 @@ public static class ServiceCollectionExtensions
         return services;
     }
 
+    public static IServiceCollection TryConfigure<TOptions>(this IServiceCollection services, Action<TOptions> configureOptions)
+         where TOptions : class
+    {
+        if (!services.Any(d => d.ServiceType == typeof(IConfigureOptions<TOptions>)))
+        {
+            services.Configure(configureOptions);
+        }
+        return services;
+    }
+
     /// <summary>
     /// Validates the casing and seeds <see cref="CacheKey.DefaultCasing"/>. Called eagerly from
     /// <c>AddCaching</c>, because a key built before anything resolves <see cref="IOptions{CacheOptions}"/>
@@ -107,15 +117,5 @@ public static class ServiceCollectionExtensions
         }
 
         CacheKey.DefaultCasing = options.KeyCasing;
-    }
-
-    public static IServiceCollection TryConfigure<TOptions>(this IServiceCollection services, Action<TOptions> configureOptions)
-         where TOptions : class
-    {
-        if (!services.Any(d => d.ServiceType == typeof(IConfigureOptions<TOptions>)))
-        {
-            services.Configure(configureOptions);
-        }
-        return services;
     }
 }

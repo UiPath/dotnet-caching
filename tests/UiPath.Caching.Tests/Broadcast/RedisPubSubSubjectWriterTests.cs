@@ -8,25 +8,17 @@ namespace UiPath.Caching.Tests.Broadcast;
 public class RedisPubSubSubjectWriterTests(ITestContextAccessor testContextAccessor) : IAsyncLifetime
 {
     private readonly IFixture _fixture = AutoFixtureCreator.NSubstitute();
+    private readonly TimeSpan _delay = 50.Milliseconds();
+    private readonly TaskCompletionSource _subscribeCalled = new(TaskCreationOptions.RunContinuationsAsynchronously);
 
     private ISubscriber _subscriber = default!;
     private Channel<ICacheEvent> _channel = default!;
     private IEventFormatterProxy<ICacheEvent> _formatter = default!;
     private RedisChannel _redisChannel = default!;
     private RedisPubSubTopicOptions _options = default!;
-    private readonly TimeSpan _delay = 50.Milliseconds();
     private Action<RedisChannel, RedisValue>? _capturedAction;
-    private readonly TaskCompletionSource _subscribeCalled = new(TaskCreationOptions.RunContinuationsAsynchronously);
 
     private RedisPubSubSubjectWriter<ICacheEvent>? _sut = null;
-
-    private RedisPubSubSubjectWriter<ICacheEvent> Sut() =>
-        _sut ??= _fixture.Create<RedisPubSubSubjectWriter<ICacheEvent>>();
-
-    private Task<Action<RedisChannel, RedisValue>> WaitForSubscribeAsync() =>
-        _subscribeCalled.Task
-            .WaitAsync(TimeSpan.FromSeconds(30), testContextAccessor.Current.CancellationToken)
-            .ContinueWith(_ => _capturedAction!, TaskContinuationOptions.OnlyOnRanToCompletion);
 
     [Fact]
     public async Task Receive_redis_null()
@@ -107,9 +99,17 @@ public class RedisPubSubSubjectWriterTests(ITestContextAccessor testContextAcces
         _options = new RedisPubSubTopicOptions
         {
             SubscriberTimeout = _delay,
-            SubscriberDueTime = TimeSpan.Zero
+            SubscriberDueTime = TimeSpan.Zero,
         };
         _fixture.Inject(_options);
         return ValueTask.CompletedTask;
     }
+
+    private RedisPubSubSubjectWriter<ICacheEvent> Sut() =>
+        _sut ??= _fixture.Create<RedisPubSubSubjectWriter<ICacheEvent>>();
+
+    private Task<Action<RedisChannel, RedisValue>> WaitForSubscribeAsync() =>
+        _subscribeCalled.Task
+            .WaitAsync(TimeSpan.FromSeconds(30), testContextAccessor.Current.CancellationToken)
+            .ContinueWith(_ => _capturedAction!, TaskContinuationOptions.OnlyOnRanToCompletion);
 }

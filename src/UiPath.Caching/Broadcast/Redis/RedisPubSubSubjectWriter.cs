@@ -5,7 +5,6 @@ namespace UiPath.Caching.Broadcast.Redis;
 internal sealed partial class RedisPubSubSubjectWriter<T> : IDisposable
     where T : IEvent
 {
-    private bool _disposed;
     private readonly Uri _sourceUri;
     private readonly RedisChannel _redisChannel;
     private readonly IRedisConnector _redis;
@@ -16,6 +15,7 @@ internal sealed partial class RedisPubSubSubjectWriter<T> : IDisposable
     private readonly TimeSpan _timerPeriod;
     private readonly TimeSpan _timerDueTime;
     private readonly Timer _subscribeTimer;
+    private bool _disposed;
     private Action? _unsubscribe;
     private int _subscribing;
 
@@ -39,6 +39,17 @@ internal sealed partial class RedisPubSubSubjectWriter<T> : IDisposable
         _timerPeriod = options.SubscriberTimeout > TimeSpan.Zero ? options.SubscriberTimeout.Value : TimeSpan.FromMilliseconds(_redis.Subscriber.Multiplexer.TimeoutMilliseconds);
         _timerDueTime = options.SubscriberDueTime == null ? _timerPeriod.Multiply(0.5) : options.SubscriberDueTime.Value;
         _subscribeTimer = new Timer(Subscribe, null, _timerDueTime, _timerPeriod);
+    }
+
+    public void Dispose()
+    {
+        if (!_disposed)
+        {
+            _redis.OnReconnected -= OnReconnected;
+            _subscribeTimer.Dispose();
+            Unsubscribe();
+        }
+        _disposed = true;
     }
 
     private void Subscribe(object? state)
@@ -76,17 +87,6 @@ internal sealed partial class RedisPubSubSubjectWriter<T> : IDisposable
         }
 
         _subscribeTimer.Change(_timerDueTime, _timerPeriod);
-    }
-
-    public void Dispose()
-    {
-        if (!_disposed)
-        {
-            _redis.OnReconnected -= OnReconnected;
-            _subscribeTimer.Dispose();
-            Unsubscribe();
-        }
-        _disposed = true;
     }
 
     private void OnMessage(RedisValue value)

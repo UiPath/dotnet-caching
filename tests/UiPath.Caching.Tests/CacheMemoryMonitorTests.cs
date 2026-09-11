@@ -49,7 +49,7 @@ public class CacheMemoryMonitorTests : IAsyncLifetime
         {
             TrackStatistics = true,
             TrackLinkedCacheEntries = true,
-            Clock = new SystemClock()
+            Clock = new SystemClock(),
         }));
         return ValueTask.CompletedTask;
     }

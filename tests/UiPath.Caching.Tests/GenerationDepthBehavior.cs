@@ -1,15 +1,20 @@
-using System.Collections;
+﻿using System.Collections;
 using System.Diagnostics;
 using AutoFixture.Kernel;
 
 namespace UiPath.Caching.Tests;
 #nullable disable
+public interface IGenerationDepthHandler
+{
+    object HandleGenerationDepthLimitRequest(object request, IEnumerable<object> recordedRequests, int depth);
+}
+
 // from https://stackoverflow.com/questions/19951272/controlling-the-depth-of-generation-of-an-object-tree-with-autofixture/50118981#50118981
 [DebuggerStepThrough]
 public class GenerationDepthBehavior : ISpecimenBuilderTransformation
 {
     private const int DefaultGenerationDepth = 1;
-    private readonly int generationDepth;
+    private readonly int _generationDepth;
 
     public GenerationDepthBehavior() : this(DefaultGenerationDepth)
     {
@@ -18,34 +23,24 @@ public class GenerationDepthBehavior : ISpecimenBuilderTransformation
     public GenerationDepthBehavior(int generationDepth)
     {
         if (generationDepth < 1)
+        {
             throw new ArgumentOutOfRangeException(nameof(generationDepth), "Generation depth must be greater than 0.");
+        }
 
-        this.generationDepth = generationDepth;
+        _generationDepth = generationDepth;
     }
 
     public ISpecimenBuilderNode Transform(ISpecimenBuilder builder)
     {
-        if (builder == null) throw new ArgumentNullException(nameof(builder));
+        ArgumentNullException.ThrowIfNull(builder);
 
-        return new GenerationDepthGuard(builder, new GenerationDepthHandler(), generationDepth);
+        return new GenerationDepthGuard(builder, new GenerationDepthHandler(), _generationDepth);
     }
-}
-
-public interface IGenerationDepthHandler
-{
-    object HandleGenerationDepthLimitRequest(object request, IEnumerable<object> recordedRequests, int depth);
 }
 
 [DebuggerStepThrough]
 public class DepthSeededRequest : SeededRequest
 {
-    public int Depth { get; }
-
-    public int MaxDepth { get; set; }
-
-    public bool ContinueSeed { get; }
-
-    public int GenerationLevel { get; private set; }
 
     public DepthSeededRequest(object request, object seed, int depth) : base(request, seed)
     {
@@ -65,6 +60,13 @@ public class DepthSeededRequest : SeededRequest
             }
         }
     }
+    public int Depth { get; }
+
+    public int MaxDepth { get; set; }
+
+    public bool ContinueSeed { get; }
+
+    public int GenerationLevel { get; private set; }
 
     private int GetGenerationLevel(Type innerRequest)
     {
@@ -92,10 +94,8 @@ public class DepthSeededRequest : SeededRequest
 [DebuggerStepThrough]
 public class GenerationDepthGuard : ISpecimenBuilderNode
 {
-    private readonly ThreadLocal<Stack<DepthSeededRequest>> requestsByThread
+    private readonly ThreadLocal<Stack<DepthSeededRequest>> _requestsByThread
         = new ThreadLocal<Stack<DepthSeededRequest>>(() => new Stack<DepthSeededRequest>());
-
-    private Stack<DepthSeededRequest> GetMonitoredRequestsForCurrentThread() => requestsByThread.Value;
 
     public GenerationDepthGuard(ISpecimenBuilder builder)
         : this(builder, EqualityComparer<object>.Default)
@@ -150,11 +150,16 @@ public class GenerationDepthGuard : ISpecimenBuilderNode
         IEqualityComparer comparer,
         int generationDepth)
     {
-        if (builder == null) throw new ArgumentNullException(nameof(builder));
-        if (depthHandler == null) throw new ArgumentNullException(nameof(depthHandler));
-        if (comparer == null) throw new ArgumentNullException(nameof(comparer));
+        ArgumentNullException.ThrowIfNull(builder);
+
+        ArgumentNullException.ThrowIfNull(depthHandler);
+
+        ArgumentNullException.ThrowIfNull(comparer);
+
         if (generationDepth < 1)
+        {
             throw new ArgumentOutOfRangeException(nameof(generationDepth), "Generation depth must be greater than 0.");
+        }
 
         Builder = builder;
         GenerationDepthHandler = depthHandler;
@@ -178,7 +183,8 @@ public class GenerationDepthGuard : ISpecimenBuilderNode
     {
         return GenerationDepthHandler.HandleGenerationDepthLimitRequest(
             request,
-            GetMonitoredRequestsForCurrentThread(), currentDepth);
+            GetMonitoredRequestsForCurrentThread(),
+            currentDepth);
     }
 
     public object Create(object request, ISpecimenContext context)
@@ -236,6 +242,16 @@ public class GenerationDepthGuard : ISpecimenBuilderNode
             GenerationDepth);
     }
 
+    public virtual IEnumerator<ISpecimenBuilder> GetEnumerator()
+    {
+        yield return Builder;
+    }
+
+    IEnumerator IEnumerable.GetEnumerator()
+    {
+        return GetEnumerator();
+    }
+
     internal static ISpecimenBuilder ComposeIfMultiple(IEnumerable<ISpecimenBuilder> builders)
     {
         ISpecimenBuilder singleItem = null;
@@ -274,15 +290,7 @@ public class GenerationDepthGuard : ISpecimenBuilderNode
         return new CompositeSpecimenBuilder(multipleItems);
     }
 
-    public virtual IEnumerator<ISpecimenBuilder> GetEnumerator()
-    {
-        yield return Builder;
-    }
-
-    IEnumerator IEnumerable.GetEnumerator()
-    {
-        return GetEnumerator();
-    }
+    private Stack<DepthSeededRequest> GetMonitoredRequestsForCurrentThread() => _requestsByThread.Value;
 }
 
 [DebuggerStepThrough]
@@ -290,7 +298,8 @@ public class GenerationDepthHandler : IGenerationDepthHandler
 {
     public object HandleGenerationDepthLimitRequest(
         object request,
-        IEnumerable<object> recordedRequests, int depth)
+        IEnumerable<object> recordedRequests,
+        int depth)
     {
         return new OmitSpecimen();
     }

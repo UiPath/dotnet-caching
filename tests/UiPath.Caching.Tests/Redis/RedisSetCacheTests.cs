@@ -1,4 +1,4 @@
-using Microsoft.Extensions.Internal;
+﻿using Microsoft.Extensions.Internal;
 using Microsoft.Extensions.Logging;
 using NSubstitute.ExceptionExtensions;
 using StackExchange.Redis;
@@ -8,6 +8,8 @@ namespace UiPath.Caching.Tests.Redis;
 
 public class RedisSetCacheTests(ITestContextAccessor testContextAccessor) : IAsyncLifetime
 {
+    private const string PopResilienceKeyName = "set-pop";
+    private readonly RedisSetCacheOptions _setCacheOptions = new() { ResilienceKeyName = PopResilienceKeyName };
     private readonly IFixture _fixture = AutoFixtureCreator.NSubstitute();
 
     private string _prefix = default!;
@@ -15,9 +17,7 @@ public class RedisSetCacheTests(ITestContextAccessor testContextAccessor) : IAsy
     private ITransaction _transaction = default!;
     private SystemJsonByteSerializerProxy _serializer = default!;
     private ISystemClock _clock = default!;
-    private const string PopResilienceKeyName = "set-pop";
     private RedisCacheOptions _redisCacheOptions = new();
-    private readonly RedisSetCacheOptions _setCacheOptions = new() { ResilienceKeyName = PopResilienceKeyName };
     private DateTimeOffset _now = DateTimeOffset.UtcNow;
     private IResiliencePipelineProvider _pipelineProvider = default!;
     private CacheKey _cacheKey = default!;
@@ -519,17 +519,6 @@ public class RedisSetCacheTests(ITestContextAccessor testContextAccessor) : IAsy
         act.Should().NotThrow();
     }
 
-    private sealed class CountingPipeline : IResiliencePipeline
-    {
-        public int Calls { get; private set; }
-
-        public ValueTask<TResult> ExecuteAsync<TResult>(Func<CancellationToken, ValueTask<TResult>> callback, TResult defaultValue, CancellationToken cancellationToken = default)
-        {
-            Calls++;
-            return callback(cancellationToken);
-        }
-    }
-
     public ValueTask DisposeAsync() => ValueTask.CompletedTask;
 
     public ValueTask InitializeAsync()
@@ -563,7 +552,7 @@ public class RedisSetCacheTests(ITestContextAccessor testContextAccessor) : IAsy
         {
             DefaultExpiration = TimeSpan.FromSeconds(Random.Shared.Next(1, 100)),
             CacheKeyStrategy = _cacheKeyStrategy,
-            RedisKeyStrategyFactory = _redisKeyStrategyFactory
+            RedisKeyStrategyFactory = _redisKeyStrategyFactory,
         };
         _serializer = new SystemJsonByteSerializerProxy();
         _fixture.Inject<ISerializerProxy<byte[]>>(_serializer);
@@ -574,5 +563,16 @@ public class RedisSetCacheTests(ITestContextAccessor testContextAccessor) : IAsy
         _connector.Database.Returns(_ => _database);
         _connector.IsConnected.Returns(_ => _isConnected);
         return ValueTask.CompletedTask;
+    }
+
+    private sealed class CountingPipeline : IResiliencePipeline
+    {
+        public int Calls { get; private set; }
+
+        public ValueTask<TResult> ExecuteAsync<TResult>(Func<CancellationToken, ValueTask<TResult>> callback, TResult defaultValue, CancellationToken cancellationToken = default)
+        {
+            Calls++;
+            return callback(cancellationToken);
+        }
     }
 }

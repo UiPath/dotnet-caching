@@ -9,5 +9,5 @@ public enum HashCacheSetOption
     ///<summary>
     /// Option to remove the entire specified hash key and set the specified fields to their respective values in the hash stored at key.
     /// </summary>
-    KeyReplace
+    KeyReplace,
 }

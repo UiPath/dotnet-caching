@@ -18,10 +18,6 @@ public sealed class InMemoryQueueCacheProvider : IQueueCacheProvider
     private readonly TimeProvider _clock;
     private readonly Lazy<MultilayerSetCache> _setCache;
 
-    public string Name => KnownCacheProviderNames.InMemory;
-
-    public bool Enabled { get; }
-
     public InMemoryQueueCacheProvider(
         IOptions<InMemoryQueueCacheOptions> optionsAccessor,
         IMemoryCacheFactory memoryCacheFactory,
@@ -37,6 +33,10 @@ public sealed class InMemoryQueueCacheProvider : IQueueCacheProvider
         _setCache = new Lazy<MultilayerSetCache>(() => BuildSetCache());
         Enabled = _options.Enabled;
     }
+
+    public string Name => KnownCacheProviderNames.InMemory;
+
+    public bool Enabled { get; }
 
     public ISetCache CreateSetCache() =>
         _setCache.Value;

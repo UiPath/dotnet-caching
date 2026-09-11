@@ -7,9 +7,9 @@ public sealed class NullCachePolicyFactory : ICachePolicyFactory
 
     private NullCachePolicyFactory() { }
 
-    public CachePolicy? Resolve(string policyName) => default;
-
     public CachePolicy? Default => null;
 
     public IEnumerable<string> Keys => Array.Empty<string>();
+
+    public CachePolicy? Resolve(string policyName) => default;
 }

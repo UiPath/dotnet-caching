@@ -73,19 +73,6 @@ public class PackageVersionFloorTests
             "a Microsoft.Extensions.* package that a shipped project references without a per-TFM floor resolves 10.x for net8.0 consumers too, which is what the floors exist to avoid; Logging.Abstractions is the documented exception, forced by StackExchange.Redis 3.x asking for 10.0.5 or later on every target");
     }
 
-    private static IEnumerable<string> ShippedPackageReferences()
-    {
-        var src = new DirectoryInfo(Path.Combine(RepositoryRoot().FullName, "src"));
-        src.Exists.Should().BeTrue("the shipped projects live under src");
-
-        return src.EnumerateFiles("*.csproj", SearchOption.AllDirectories)
-            .SelectMany(f => XDocument.Load(f.FullName).Descendants("PackageReference"))
-            .Select(e => e.Attribute("Include")?.Value)
-            .Where(id => id is not null)
-            .Select(id => id!)
-            .Distinct(StringComparer.OrdinalIgnoreCase);
-    }
-
     [Fact]
     public void TheNet10FloorIsDeclaredFirst()
     {
@@ -106,6 +93,19 @@ public class PackageVersionFloorTests
     {
         FloorGroup("net10.0").Select(e => e.Attribute("Version")!.Value).Should().AllBe("$(MEVersion10)",
             "the net10 family ships in lockstep, so a bump should have one line to change and no way to leave the group disagreeing");
+    }
+
+    private static IEnumerable<string> ShippedPackageReferences()
+    {
+        var src = new DirectoryInfo(Path.Combine(RepositoryRoot().FullName, "src"));
+        src.Exists.Should().BeTrue("the shipped projects live under src");
+
+        return src.EnumerateFiles("*.csproj", SearchOption.AllDirectories)
+            .SelectMany(f => XDocument.Load(f.FullName).Descendants("PackageReference"))
+            .Select(e => e.Attribute("Include")?.Value)
+            .Where(id => id is not null)
+            .Select(id => id!)
+            .Distinct(StringComparer.OrdinalIgnoreCase);
     }
 
     private static Predicate<XElement> IsFloor(string tfm) =>

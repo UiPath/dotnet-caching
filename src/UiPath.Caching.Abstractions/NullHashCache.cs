@@ -113,11 +113,11 @@ public sealed class NullHashCache : IHashCache
 
         public T? Value => default;
 
-        object? ICacheEntry.Value => default;
-
         public DateTimeOffset Expiration => DateTimeOffset.MinValue;
 
         public IDictionary<string, string?>? Metadata => default;
+
+        object? ICacheEntry.Value => default;
 
         public ICacheEntry NewEntry(DateTimeOffset? expiration = null, IDictionary<string, string?>? metadata = null) =>
             NullCacheEntry<T>.Instance;

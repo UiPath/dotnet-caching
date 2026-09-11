@@ -11,64 +11,6 @@ namespace UiPath.Caching.Tests.Redis;
 [Trait("Category", "Integration")]
 public class RedisPlannedMaintenanceIntegrationTests(RedisContainerFixture fixture)
 {
-    private sealed class CapturingLogger<T> : ILogger<T>
-    {
-        public ConcurrentQueue<string> Warnings { get; } = new();
-
-        public IDisposable? BeginScope<TState>(TState state) where TState : notnull => null;
-
-        public bool IsEnabled(LogLevel logLevel) => true;
-
-        public void Log<TState>(LogLevel logLevel, EventId eventId, TState state, Exception? exception, Func<TState, Exception?, string> formatter)
-        {
-            if (logLevel == LogLevel.Warning)
-            {
-                Warnings.Enqueue(formatter(state, exception));
-            }
-        }
-    }
-
-    private sealed class ThrowingConnectionMultiplexerFactory(int expectedAttempts) : IConnectionMultiplexerFactory
-    {
-        private readonly TaskCompletionSource _expectedAttemptsReached = new(TaskCreationOptions.RunContinuationsAsynchronously);
-        private int _createCount;
-
-        public int CreateCount => Volatile.Read(ref _createCount);
-
-        public Task ExpectedAttemptsReached => _expectedAttemptsReached.Task;
-
-        public ValueTask<IConnectionMultiplexer> CreateAsync(ConfigurationOptions configuration, CancellationToken cancellationToken = default)
-        {
-            var createCount = Interlocked.Increment(ref _createCount);
-            if (createCount >= expectedAttempts)
-            {
-                _expectedAttemptsReached.TrySetResult();
-            }
-
-            return new ValueTask<IConnectionMultiplexer>(
-                Task.FromException<IConnectionMultiplexer>(
-                    new RedisConnectionException(ConnectionFailureType.UnableToConnect, CommandFlags.None, "boom")));
-        }
-    }
-
-    private static RedisPlannedMaintenance NewMaintenance(
-        RedisConnectionOptions connectionOptions,
-        CapturingLogger<RedisPlannedMaintenance> logger,
-        IConnectionMultiplexerFactory? factory = null)
-    {
-        var options = Options.Create(connectionOptions);
-        var optionsProvider = new RedisConfigurationOptionsProvider(NullLoggerFactory.Instance, options);
-        factory ??= new ConnectionMultiplexerFactory(options, NullRedisProfiler.Instance);
-        return new RedisPlannedMaintenance(NullTelemetryProvider.Instance, Substitute.For<IRedisConnector>(), optionsProvider, factory, logger, options);
-    }
-
-    private static async Task WaitForWarningsAsync(CapturingLogger<RedisPlannedMaintenance> logger, int count, CancellationToken cancellationToken)
-    {
-        for (var i = 0; i < 200 && logger.Warnings.Count < count; i++)
-        {
-            await Task.Delay(50, cancellationToken);
-        }
-    }
 
     [Fact]
     public async Task StartAsync_SubscribesWithoutWarnings_AgainstLiveRedis()
@@ -188,5 +130,63 @@ public class RedisPlannedMaintenanceIntegrationTests(RedisContainerFixture fixtu
         await Task.Delay(TimeSpan.FromSeconds(1), TestContext.Current.CancellationToken);
 
         (logger.Warnings.Count - countAtStop).Should().BeLessThanOrEqualTo(2);
+    }
+
+    private static RedisPlannedMaintenance NewMaintenance(
+        RedisConnectionOptions connectionOptions,
+        CapturingLogger<RedisPlannedMaintenance> logger,
+        IConnectionMultiplexerFactory? factory = null)
+    {
+        var options = Options.Create(connectionOptions);
+        var optionsProvider = new RedisConfigurationOptionsProvider(NullLoggerFactory.Instance, options);
+        factory ??= new ConnectionMultiplexerFactory(options, NullRedisProfiler.Instance);
+        return new RedisPlannedMaintenance(NullTelemetryProvider.Instance, Substitute.For<IRedisConnector>(), optionsProvider, factory, logger, options);
+    }
+
+    private static async Task WaitForWarningsAsync(CapturingLogger<RedisPlannedMaintenance> logger, int count, CancellationToken cancellationToken)
+    {
+        for (var i = 0; i < 200 && logger.Warnings.Count < count; i++)
+        {
+            await Task.Delay(50, cancellationToken);
+        }
+    }
+    private sealed class CapturingLogger<T> : ILogger<T>
+    {
+        public ConcurrentQueue<string> Warnings { get; } = new();
+
+        public IDisposable? BeginScope<TState>(TState state) where TState : notnull => null;
+
+        public bool IsEnabled(LogLevel logLevel) => true;
+
+        public void Log<TState>(LogLevel logLevel, EventId eventId, TState state, Exception? exception, Func<TState, Exception?, string> formatter)
+        {
+            if (logLevel == LogLevel.Warning)
+            {
+                Warnings.Enqueue(formatter(state, exception));
+            }
+        }
+    }
+
+    private sealed class ThrowingConnectionMultiplexerFactory(int expectedAttempts) : IConnectionMultiplexerFactory
+    {
+        private readonly TaskCompletionSource _expectedAttemptsReached = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private int _createCount;
+
+        public int CreateCount => Volatile.Read(ref _createCount);
+
+        public Task ExpectedAttemptsReached => _expectedAttemptsReached.Task;
+
+        public ValueTask<IConnectionMultiplexer> CreateAsync(ConfigurationOptions configuration, CancellationToken cancellationToken = default)
+        {
+            var createCount = Interlocked.Increment(ref _createCount);
+            if (createCount >= expectedAttempts)
+            {
+                _expectedAttemptsReached.TrySetResult();
+            }
+
+            return new ValueTask<IConnectionMultiplexer>(
+                Task.FromException<IConnectionMultiplexer>(
+                    new RedisConnectionException(ConnectionFailureType.UnableToConnect, CommandFlags.None, "boom")));
+        }
     }
 }

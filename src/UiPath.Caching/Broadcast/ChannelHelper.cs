@@ -16,7 +16,7 @@ internal static class ChannelHelper
                 FullMode = fullMode,
                 SingleReader = true,
                 SingleWriter = true,
-                AllowSynchronousContinuations = false
+                AllowSynchronousContinuations = false,
             });
 
     public static int CalculateBoundedCapacity(int consumerCapacity, int pollBatchSize) =>

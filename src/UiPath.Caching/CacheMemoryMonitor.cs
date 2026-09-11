@@ -28,6 +28,18 @@ internal sealed class CacheMemoryMonitor : IDisposable
 
     internal Task MonitorTask { get; }
 
+    public void Dispose()
+    {
+        if (_disposed)
+        {
+            return;
+        }
+        _disposed = true;
+        _cancellationTokenSource?.Cancel();
+        _cancellationTokenSource?.Dispose();
+        _timer.Dispose();
+    }
+
     private async Task StartMonitor()
     {
         // Disposing the timer in Dispose is what ends this loop, without an OperationCanceledException.
@@ -39,7 +51,8 @@ internal sealed class CacheMemoryMonitor : IDisposable
                 continue;
             }
 
-            _telemetryProvider.TrackMetric(_name, currentStats.CurrentEntryCount,
+            _telemetryProvider.TrackMetric(_name,
+                currentStats.CurrentEntryCount,
             [
                 new("CurrentEntryCount", currentStats.CurrentEntryCount.ToString(CultureInfo.InvariantCulture)),
                 new("CurrentEstimatedSize", currentStats.CurrentEstimatedSize.GetValueOrDefault().ToString(CultureInfo.InvariantCulture)),
@@ -48,17 +61,5 @@ internal sealed class CacheMemoryMonitor : IDisposable
                 new("name", _name),
             ]);
         }
-    }
-
-    public void Dispose()
-    {
-        if (_disposed)
-        {
-            return;
-        }
-        _disposed = true;
-        _cancellationTokenSource?.Cancel();
-        _cancellationTokenSource?.Dispose();
-        _timer.Dispose();
     }
 }

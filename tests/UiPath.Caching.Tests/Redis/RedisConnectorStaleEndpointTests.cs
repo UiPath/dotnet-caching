@@ -11,152 +11,6 @@ public class RedisConnectorStaleEndpointTests
     private static readonly IPEndPoint Live = new(IPAddress.Parse("4.195.18.22"), 8500);
     private static readonly IPEndPoint Retired = new(IPAddress.Parse("4.195.18.22"), 8502);
 
-    private sealed class AdvancingTimeProvider : TimeProvider
-    {
-        private readonly List<FakeTimer> _timers = [];
-        private DateTimeOffset _now = new(2026, 9, 3, 23, 36, 0, TimeSpan.Zero);
-
-        public override DateTimeOffset GetUtcNow() => _now;
-        public override long GetTimestamp() => _now.UtcTicks;
-        public override long TimestampFrequency => TimeSpan.TicksPerSecond;
-
-        public override ITimer CreateTimer(TimerCallback callback, object? state, TimeSpan dueTime, TimeSpan period)
-        {
-            var timer = new FakeTimer(callback, state, _now + dueTime, period);
-            _timers.Add(timer);
-            return timer;
-        }
-
-        public void Advance(TimeSpan by)
-        {
-            var target = _now + by;
-            while (_timers.Where(t => t.Due <= target).MinBy(t => t.Due) is { } next)
-            {
-                _now = next.Due!.Value;
-                next.Fire();
-            }
-            _now = target;
-        }
-
-        private sealed class FakeTimer(TimerCallback callback, object? state, DateTimeOffset due, TimeSpan period) : ITimer
-        {
-            public DateTimeOffset? Due { get; private set; } = due;
-
-            public void Fire()
-            {
-                Due = period > TimeSpan.Zero ? Due + period : null;
-                callback(state);
-            }
-
-            public bool Change(TimeSpan dueTime, TimeSpan period) => false;
-            public void Dispose() => Due = null;
-            public ValueTask DisposeAsync()
-            {
-                Due = null;
-                return ValueTask.CompletedTask;
-            }
-        }
-    }
-
-    private sealed class SequenceFactory(params IConnectionMultiplexer[] multiplexers) : IConnectionMultiplexerFactory
-    {
-        private readonly Queue<IConnectionMultiplexer> _multiplexers = new(multiplexers);
-        public int CreateCount { get; private set; }
-        public ValueTask<IConnectionMultiplexer> CreateAsync(ConfigurationOptions configuration, CancellationToken cancellationToken = default)
-        {
-            CreateCount++;
-            return new ValueTask<IConnectionMultiplexer>(_multiplexers.Dequeue());
-        }
-    }
-
-    private sealed class RecordingTelemetry : ICachingTelemetryProvider
-    {
-        public List<string> Events { get; } = [];
-        public List<Exception> Exceptions { get; } = [];
-        public void TrackException(Exception ex, ReadOnlySpan<KeyValuePair<string, string>> properties = default, ReadOnlySpan<KeyValuePair<string, double>> metrics = default) => Exceptions.Add(ex);
-        public void TrackEvent(string eventName, ReadOnlySpan<KeyValuePair<string, string>> properties = default, ReadOnlySpan<KeyValuePair<string, double>> metrics = default) => Events.Add(eventName);
-    }
-
-    private sealed class FakeTopology : IClusterTopologyReader
-    {
-        private object _configuration = new();
-
-        public HashSet<EndPoint>? Members { get; set; }
-        public bool RefreshLands { get; set; } = true;
-        public int Reads { get; private set; }
-
-        public object? GetConfiguration(IServer server) => Members is null ? null : _configuration;
-
-        public HashSet<EndPoint> GetMembers(object configuration)
-        {
-            Reads++;
-            return Members!;
-        }
-
-        public Task<bool> Refreshed()
-        {
-            if (RefreshLands)
-            {
-                _configuration = new();
-            }
-
-            return Task.FromResult(true);
-        }
-    }
-
-    private sealed class Harness
-    {
-        public AdvancingTimeProvider Clock { get; } = new();
-        public RecordingTelemetry Telemetry { get; } = new();
-        public IConnectionMultiplexer Multiplexer { get; } = Substitute.For<IConnectionMultiplexer>();
-        public IConnectionMultiplexer Replacement { get; } = Substitute.For<IConnectionMultiplexer>();
-        public IServer LiveServer { get; }
-        public IServer RetiredServer { get; } = Server(Retired, connected: false);
-        public FakeTopology Topology { get; } = new();
-        public SequenceFactory Factory { get; }
-        public RedisConnector Connector { get; }
-        public TaskCompletionSource OldDisposed { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
-
-        public Harness(bool retiredIsMember = false, bool clusterConfigurationKnown = true, bool retiredIsConfigured = false, bool replacementAvailable = true, bool timerDriven = false, bool connectedNodeIsConfigured = true)
-        {
-            LiveServer = Server(connectedNodeIsConfigured ? Seed : Live, connected: true); // only the configured endpoints are re-handshaked by the refresh
-            Topology.Members = clusterConfigurationKnown ? (retiredIsMember ? [Live, Retired] : [Live]) : null;
-            Multiplexer.GetEndPoints(true).Returns(retiredIsConfigured ? [Seed, Retired] : [Seed]);
-            Multiplexer.GetServers().Returns([LiveServer, RetiredServer]);
-            Multiplexer.ConfigureAsync(Arg.Any<TextWriter?>()).Returns(_ => Topology.Refreshed());
-            Multiplexer.CloseAsync(Arg.Any<bool>()).Returns(Task.CompletedTask);
-            Multiplexer.When(m => m.Dispose()).Do(_ => OldDisposed.TrySetResult());
-
-            Factory = replacementAvailable ? new SequenceFactory(Multiplexer, Replacement) : new SequenceFactory(Multiplexer);
-            var options = Options.Create(new RedisConnectionOptions
-            {
-                ConnectionString = "redis.example.net:10000",
-                EnableHangDetection = false,
-                EnableStaleEndpointDetection = timerDriven, // otherwise the test calls the scan itself
-                StaleEndpointThreshold = TimeSpan.FromMinutes(5),
-                StaleEndpointScanInterval = TimeSpan.FromSeconds(30),
-            });
-            var optionsProvider = new RedisConfigurationOptionsProvider(NullLoggerFactory.Instance, options);
-            Connector = new RedisConnector(Telemetry, optionsProvider, Factory, options, configurators: null, clock: Clock, topologyReader: Topology);
-        }
-
-        public async Task ScanTwiceAcrossThresholdAsync()
-        {
-            await Connector.ConnectAsync(TestContext.Current.CancellationToken);
-            await Connector.ScanStaleEndpointsAsync();
-            Clock.Advance(TimeSpan.FromMinutes(5));
-            await Connector.ScanStaleEndpointsAsync();
-        }
-
-        private static IServer Server(EndPoint endPoint, bool connected)
-        {
-            var server = Substitute.For<IServer>();
-            server.EndPoint.Returns(endPoint);
-            server.IsConnected.Returns(connected);
-            return server;
-        }
-    }
-
     [Fact]
     public async Task Scan_ForcesReconnect_WhenDiscoveredEndpointLeftClusterAndStayedDownPastThreshold()
     {
@@ -594,5 +448,151 @@ public class RedisConnectorStaleEndpointTests
     {
         RedisConnector.FormatEndPoint(Live).Should().Be("4.195.18.22:8500");
         RedisConnector.FormatEndPoint(Seed).Should().Be("redis.example.net:10000");
+    }
+
+    private sealed class AdvancingTimeProvider : TimeProvider
+    {
+        private readonly List<FakeTimer> _timers = [];
+        private DateTimeOffset _now = new(2026, 9, 3, 23, 36, 0, TimeSpan.Zero);
+        public override long TimestampFrequency => TimeSpan.TicksPerSecond;
+
+        public override DateTimeOffset GetUtcNow() => _now;
+        public override long GetTimestamp() => _now.UtcTicks;
+
+        public override ITimer CreateTimer(TimerCallback callback, object? state, TimeSpan dueTime, TimeSpan period)
+        {
+            var timer = new FakeTimer(callback, state, _now + dueTime, period);
+            _timers.Add(timer);
+            return timer;
+        }
+
+        public void Advance(TimeSpan by)
+        {
+            var target = _now + by;
+            while (_timers.Where(t => t.Due <= target).MinBy(t => t.Due) is { } next)
+            {
+                _now = next.Due!.Value;
+                next.Fire();
+            }
+            _now = target;
+        }
+
+        private sealed class FakeTimer(TimerCallback callback, object? state, DateTimeOffset due, TimeSpan period) : ITimer
+        {
+            public DateTimeOffset? Due { get; private set; } = due;
+
+            public void Fire()
+            {
+                Due = period > TimeSpan.Zero ? Due + period : null;
+                callback(state);
+            }
+
+            public bool Change(TimeSpan dueTime, TimeSpan period) => false;
+            public void Dispose() => Due = null;
+            public ValueTask DisposeAsync()
+            {
+                Due = null;
+                return ValueTask.CompletedTask;
+            }
+        }
+    }
+
+    private sealed class SequenceFactory(params IConnectionMultiplexer[] multiplexers) : IConnectionMultiplexerFactory
+    {
+        private readonly Queue<IConnectionMultiplexer> _multiplexers = new(multiplexers);
+        public int CreateCount { get; private set; }
+        public ValueTask<IConnectionMultiplexer> CreateAsync(ConfigurationOptions configuration, CancellationToken cancellationToken = default)
+        {
+            CreateCount++;
+            return new ValueTask<IConnectionMultiplexer>(_multiplexers.Dequeue());
+        }
+    }
+
+    private sealed class RecordingTelemetry : ICachingTelemetryProvider
+    {
+        public List<string> Events { get; } = [];
+        public List<Exception> Exceptions { get; } = [];
+        public void TrackException(Exception ex, ReadOnlySpan<KeyValuePair<string, string>> properties = default, ReadOnlySpan<KeyValuePair<string, double>> metrics = default) => Exceptions.Add(ex);
+        public void TrackEvent(string eventName, ReadOnlySpan<KeyValuePair<string, string>> properties = default, ReadOnlySpan<KeyValuePair<string, double>> metrics = default) => Events.Add(eventName);
+    }
+
+    private sealed class FakeTopology : IClusterTopologyReader
+    {
+        private object _configuration = new();
+
+        public HashSet<EndPoint>? Members { get; set; }
+        public bool RefreshLands { get; set; } = true;
+        public int Reads { get; private set; }
+
+        public object? GetConfiguration(IServer server) => Members is null ? null : _configuration;
+
+        public HashSet<EndPoint> GetMembers(object configuration)
+        {
+            Reads++;
+            return Members!;
+        }
+
+        public Task<bool> Refreshed()
+        {
+            if (RefreshLands)
+            {
+                _configuration = new();
+            }
+
+            return Task.FromResult(true);
+        }
+    }
+
+    private sealed class Harness
+    {
+
+        public Harness(bool retiredIsMember = false, bool clusterConfigurationKnown = true, bool retiredIsConfigured = false, bool replacementAvailable = true, bool timerDriven = false, bool connectedNodeIsConfigured = true)
+        {
+            LiveServer = Server(connectedNodeIsConfigured ? Seed : Live, connected: true); // only the configured endpoints are re-handshaked by the refresh
+            Topology.Members = clusterConfigurationKnown ? (retiredIsMember ? [Live, Retired] : [Live]) : null;
+            Multiplexer.GetEndPoints(true).Returns(retiredIsConfigured ? [Seed, Retired] : [Seed]);
+            Multiplexer.GetServers().Returns([LiveServer, RetiredServer]);
+            Multiplexer.ConfigureAsync(Arg.Any<TextWriter?>()).Returns(_ => Topology.Refreshed());
+            Multiplexer.CloseAsync(Arg.Any<bool>()).Returns(Task.CompletedTask);
+            Multiplexer.When(m => m.Dispose()).Do(_ => OldDisposed.TrySetResult());
+
+            Factory = replacementAvailable ? new SequenceFactory(Multiplexer, Replacement) : new SequenceFactory(Multiplexer);
+            var options = Options.Create(new RedisConnectionOptions
+            {
+                ConnectionString = "redis.example.net:10000",
+                EnableHangDetection = false,
+                EnableStaleEndpointDetection = timerDriven, // otherwise the test calls the scan itself
+                StaleEndpointThreshold = TimeSpan.FromMinutes(5),
+                StaleEndpointScanInterval = TimeSpan.FromSeconds(30),
+            });
+            var optionsProvider = new RedisConfigurationOptionsProvider(NullLoggerFactory.Instance, options);
+            Connector = new RedisConnector(Telemetry, optionsProvider, Factory, options, configurators: null, clock: Clock, topologyReader: Topology);
+        }
+        public AdvancingTimeProvider Clock { get; } = new();
+        public RecordingTelemetry Telemetry { get; } = new();
+        public IConnectionMultiplexer Multiplexer { get; } = Substitute.For<IConnectionMultiplexer>();
+        public IConnectionMultiplexer Replacement { get; } = Substitute.For<IConnectionMultiplexer>();
+        public IServer LiveServer { get; }
+        public IServer RetiredServer { get; } = Server(Retired, connected: false);
+        public FakeTopology Topology { get; } = new();
+        public SequenceFactory Factory { get; }
+        public RedisConnector Connector { get; }
+        public TaskCompletionSource OldDisposed { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public async Task ScanTwiceAcrossThresholdAsync()
+        {
+            await Connector.ConnectAsync(TestContext.Current.CancellationToken);
+            await Connector.ScanStaleEndpointsAsync();
+            Clock.Advance(TimeSpan.FromMinutes(5));
+            await Connector.ScanStaleEndpointsAsync();
+        }
+
+        private static IServer Server(EndPoint endPoint, bool connected)
+        {
+            var server = Substitute.For<IServer>();
+            server.EndPoint.Returns(endPoint);
+            server.IsConnected.Returns(connected);
+            return server;
+        }
     }
 }

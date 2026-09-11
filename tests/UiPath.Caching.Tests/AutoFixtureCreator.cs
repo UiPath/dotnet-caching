@@ -85,7 +85,7 @@ public class MultilayerCacheOptionsCustomization : ISpecimenBuilder
                 return new InMemoryRedisCacheOptions
                 {
                     LocalMaxExpiration = TimeSpan.FromMinutes(3),
-                    LocalMaxExpirationDisconnected = TimeSpan.FromSeconds(30)
+                    LocalMaxExpirationDisconnected = TimeSpan.FromSeconds(30),
                 };
             }
             if (type == typeof(InMemoryCacheOptions))
@@ -93,7 +93,7 @@ public class MultilayerCacheOptionsCustomization : ISpecimenBuilder
                 return new InMemoryCacheOptions
                 {
                     LocalMaxExpiration = TimeSpan.FromMinutes(3),
-                    LocalMaxExpirationDisconnected = TimeSpan.FromSeconds(30)
+                    LocalMaxExpirationDisconnected = TimeSpan.FromSeconds(30),
                 };
             }
             if (typeof(IMultilayerCacheOptions).IsAssignableFrom(type))
@@ -101,7 +101,7 @@ public class MultilayerCacheOptionsCustomization : ISpecimenBuilder
                 return new InMemoryRedisCacheOptions
                 {
                     LocalMaxExpiration = TimeSpan.FromMinutes(3),
-                    LocalMaxExpirationDisconnected = TimeSpan.FromSeconds(30)
+                    LocalMaxExpirationDisconnected = TimeSpan.FromSeconds(30),
                 };
             }
         }

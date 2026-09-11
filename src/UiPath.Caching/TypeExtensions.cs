@@ -21,7 +21,7 @@ public static class TypeExtensions
         {typeof(ulong), "ulong"},
         {typeof(short), "short"},
         {typeof(ushort), "ushort"},
-        {typeof(string), "string"}
+        {typeof(string), "string"},
     }.ToFrozenDictionary();
 
     public static List<T> GetAllPublicConstantValues<T>(this Type type) =>

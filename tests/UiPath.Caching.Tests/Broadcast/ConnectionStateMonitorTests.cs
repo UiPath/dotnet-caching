@@ -41,20 +41,6 @@ public class ConnectionStateMonitorTests(ITestContextAccessor testContextAccesso
         await WaitUntilAsync(() => Sut.IsConnected, TimeSpan.FromSeconds(30), testContextAccessor.Current.CancellationToken);
     }
 
-    private static async Task WaitUntilAsync(Func<bool> predicate, TimeSpan timeout, CancellationToken token)
-    {
-        var sw = System.Diagnostics.Stopwatch.StartNew();
-        while (sw.Elapsed < timeout)
-        {
-            if (predicate())
-            {
-                return;
-            }
-            await Task.Delay(20, token);
-        }
-        throw new TimeoutException($"Predicate was not satisfied within {timeout}.");
-    }
-
     [Fact]
     public void Dispose_works_as_expected()
     {
@@ -73,6 +59,20 @@ public class ConnectionStateMonitorTests(ITestContextAccessor testContextAccesso
         _fixture.Inject(_connectionStates);
         _fixture.Inject(TimeSpan.FromMilliseconds(100));
         return ValueTask.CompletedTask;
+    }
+
+    private static async Task WaitUntilAsync(Func<bool> predicate, TimeSpan timeout, CancellationToken token)
+    {
+        var sw = System.Diagnostics.Stopwatch.StartNew();
+        while (sw.Elapsed < timeout)
+        {
+            if (predicate())
+            {
+                return;
+            }
+            await Task.Delay(20, token);
+        }
+        throw new TimeoutException($"Predicate was not satisfied within {timeout}.");
     }
 }
 

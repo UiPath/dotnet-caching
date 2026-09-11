@@ -64,13 +64,6 @@ public class Cache<T> : ICache<T>
         where TState : notnull =>
         _cache.GetOrAddAsync<T, TState>(MapKeys(entries), generator, expiration, Policy, token);
 
-    /// <summary>Applies the key strategy to each entry's key and leaves its state alone.</summary>
-    private KeyValuePair<CacheKey, TState>[] MapKeys<TState>(KeyValuePair<CacheKey, TState>[] entries)
-    {
-        ArgumentNullException.ThrowIfNull(entries);
-        return Array.ConvertAll(entries, e => new KeyValuePair<CacheKey, TState>(GetCacheKey(e.Key), e.Value));
-    }
-
     public ValueTask<bool> RefreshAsync(CacheKey cacheKey, CancellationToken token = default) =>
         _cache.RefreshAsync<T>(GetCacheKey(cacheKey), policy: Policy, token: token);
 
@@ -95,6 +88,15 @@ public class Cache<T> : ICache<T>
     public ValueTask<bool> SetAsync(CacheKey cacheKey, T? value, DateTimeOffset expiration, CancellationToken token = default) =>
         _cache.SetAsync(GetCacheKey(cacheKey), value, expiration, Policy, token);
 
+    public ValueTask<bool> SetAsync(KeyValuePair<CacheKey, T?>[] keyValues, CancellationToken token = default) =>
+        _cache.SetAsync(GetKeyValuePairs(keyValues), policy: Policy, token: token);
+
+    public ValueTask<bool> SetAsync(KeyValuePair<CacheKey, T?>[] keyValues, TimeSpan expiration, CancellationToken token = default) =>
+        _cache.SetAsync(GetKeyValuePairs(keyValues), expiration, Policy, token);
+
+    public ValueTask<bool> SetAsync(KeyValuePair<CacheKey, T?>[] keyValues, DateTimeOffset expiration, CancellationToken token = default) =>
+        _cache.SetAsync(GetKeyValuePairs(keyValues), expiration, Policy, token);
+
     public ValueTask<bool> TryAddAsync(CacheKey cacheKey, T? value, CancellationToken token = default) =>
         _cache.TryAddAsync(GetCacheKey(cacheKey), value, policy: Policy, token: token);
 
@@ -105,20 +107,18 @@ public class Cache<T> : ICache<T>
         _cache.TryAddAsync(GetCacheKey(cacheKey), value, expiration, Policy, token);
 
 
-    public ValueTask<bool> SetAsync(KeyValuePair<CacheKey, T?>[] keyValues, CancellationToken token = default) =>
-        _cache.SetAsync(GetKeyValuePairs(keyValues), policy: Policy, token: token);
-
-    public ValueTask<bool> SetAsync(KeyValuePair<CacheKey, T?>[] keyValues, TimeSpan expiration, CancellationToken token = default) =>
-        _cache.SetAsync(GetKeyValuePairs(keyValues), expiration, Policy, token);
-
-    public ValueTask<bool> SetAsync(KeyValuePair<CacheKey, T?>[] keyValues, DateTimeOffset expiration, CancellationToken token = default) =>
-        _cache.SetAsync(GetKeyValuePairs(keyValues), expiration, Policy, token);
- 
     public ValueTask<TimeSpan?> TimeToLiveAsync(CacheKey cacheKey, CancellationToken token = default) =>
         _cache.TimeToLiveAsync<T>(GetCacheKey(cacheKey), token);
 
     public ValueTask<DateTimeOffset?> ExpireTimeAsync(CacheKey cacheKey, CancellationToken token = default) =>
         _cache.ExpireTimeAsync<T>(GetCacheKey(cacheKey), token);
+
+    /// <summary>Applies the key strategy to each entry's key and leaves its state alone.</summary>
+    private KeyValuePair<CacheKey, TState>[] MapKeys<TState>(KeyValuePair<CacheKey, TState>[] entries)
+    {
+        ArgumentNullException.ThrowIfNull(entries);
+        return Array.ConvertAll(entries, e => new KeyValuePair<CacheKey, TState>(GetCacheKey(e.Key), e.Value));
+    }
 
     private CacheKey GetCacheKey(CacheKey cacheKey) =>
         _cacheKeyStrategy.GetCacheKey<T>(cacheKey);

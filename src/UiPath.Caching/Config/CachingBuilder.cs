@@ -17,6 +17,17 @@ public class CachingBuilder(IServiceCollection services, IConfiguration? configu
 
     public bool Enabled { get; set; } = true;
 
+    public void RegisterOnCompleteCallback(object key, Action<ICachingBuilder> callback)
+    {
+        ArgumentNullException.ThrowIfNull(key);
+        ArgumentNullException.ThrowIfNull(callback);
+
+        if (_registeredKeys.Add(key))
+        {
+            _callbacks.Add(callback);
+        }
+    }
+
     internal void Complete()
     {
         // Before the switch: a keyspace collision is a configuration error, not a runtime condition.
@@ -67,17 +78,6 @@ public class CachingBuilder(IServiceCollection services, IConfiguration? configu
                 $"as ISerializerProxy<byte[]> (see docs/how-to/extending.md#custom-serializer). Note that " +
                 $"{nameof(SystemJsonByteSerializerProxy)} keeps the wire format unchanged, while " +
                 $"{nameof(RawByteSerializerProxy)} stores byte payloads verbatim.");
-        }
-    }
-
-    public void RegisterOnCompleteCallback(object key, Action<ICachingBuilder> callback)
-    {
-        ArgumentNullException.ThrowIfNull(key);
-        ArgumentNullException.ThrowIfNull(callback);
-
-        if (_registeredKeys.Add(key))
-        {
-            _callbacks.Add(callback);
         }
     }
 }

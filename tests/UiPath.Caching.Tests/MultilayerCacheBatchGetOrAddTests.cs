@@ -1,11 +1,10 @@
-﻿using Microsoft.Extensions.Caching.Memory;
+using Microsoft.Extensions.Caching.Memory;
 using UiPath.Caching.Locking;
 
 namespace UiPath.Caching.Tests;
 
 public class MultilayerCacheBatchGetOrAddTests(ITestContextAccessor testContextAccessor) : IAsyncLifetime
 {
-    private readonly IFixture _fixture = AutoFixtureCreator.NSubstitute();
 
     private static readonly long[] States1 = [1L];
     private static readonly long[] States7 = [7L];
@@ -19,6 +18,11 @@ public class MultilayerCacheBatchGetOrAddTests(ITestContextAccessor testContextA
     private static readonly string?[] Gen1Twice = ["gen:1", "gen:1"];
     private static readonly int[] SeededOfTen = [2, 5, 9];
     private static readonly long[] MissingOfTen = [1L, 3L, 4L, 6L, 7L, 8L, 10L];
+    private readonly IFixture _fixture = AutoFixtureCreator.NSubstitute();
+
+    private readonly Dictionary<CacheKey, string?> _stored = [];
+    private readonly List<long[]> _generatorCalls = [];
+    private readonly List<CacheKey[]> _innerSetCalls = [];
 
     private ICache _innerCache = default!;
     private MemoryCache _memoryCache = default!;
@@ -36,16 +40,6 @@ public class MultilayerCacheBatchGetOrAddTests(ITestContextAccessor testContextA
     private MultilayerCache? _sut;
 
     private MultilayerCache Sut => _sut ??= _fixture.Create<MultilayerCache>();
-
-    private readonly Dictionary<CacheKey, string?> _stored = [];
-    private readonly List<long[]> _generatorCalls = [];
-    private readonly List<CacheKey[]> _innerSetCalls = [];
-
-    private Task<KeyValuePair<long, string?>[]> Generate(long[] states, CancellationToken _)
-    {
-        _generatorCalls.Add(states);
-        return Task.FromResult(states.Select(s => new KeyValuePair<long, string?>(s, "gen:" + s)).ToArray());
-    }
 
     [Fact]
     public async Task Generator_receives_only_missing_states_and_runs_once()
@@ -363,5 +357,11 @@ public class MultilayerCacheBatchGetOrAddTests(ITestContextAccessor testContextA
         _memoryCache?.Dispose();
         GC.SuppressFinalize(this);
         return ValueTask.CompletedTask;
+    }
+
+    private Task<KeyValuePair<long, string?>[]> Generate(long[] states, CancellationToken _)
+    {
+        _generatorCalls.Add(states);
+        return Task.FromResult(states.Select(s => new KeyValuePair<long, string?>(s, "gen:" + s)).ToArray());
     }
 }

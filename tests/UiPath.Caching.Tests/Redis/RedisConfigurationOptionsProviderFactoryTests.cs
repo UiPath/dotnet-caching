@@ -7,10 +7,6 @@ namespace UiPath.Caching.Tests.Redis;
 
 public class RedisConfigurationOptionsProviderFactoryTests
 {
-    private sealed class FakeConfigurationOptionsProvider : IRedisConfigurationOptionsProvider
-    {
-        public ConfigurationOptions GetConfiguration() => new();
-    }
 
     [Fact]
     public void Factory_provider_wins_when_registered_after_AddRedisConnection()
@@ -59,5 +55,9 @@ public class RedisConfigurationOptionsProviderFactoryTests
         var act = () => services.AddCaching(builder => builder.AddRedisConfigurationOptionsProvider(null!));
 
         act.Should().Throw<ArgumentNullException>();
+    }
+    private sealed class FakeConfigurationOptionsProvider : IRedisConfigurationOptionsProvider
+    {
+        public ConfigurationOptions GetConfiguration() => new();
     }
 }

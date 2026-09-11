@@ -7,11 +7,11 @@ namespace UiPath.Caching.Tests.Redis;
 public class RedisConnectorTests : IAsyncLifetime
 {
     private readonly IFixture _fixture = AutoFixtureCreator.NSubstitute();
+    private readonly string _connectionString = "localhost:6379";
     private ICachingTelemetryProvider _telemetryProvider = default!;
     private IOptions<RedisConnectionOptions> _redisOptions = default!;
     private IRedisConfigurationOptionsProvider _redisConfigurationOptionsProvider = default!;
     private IConnectionMultiplexerFactory _connectionMultiplexerFactory = default!;
-    private readonly string _connectionString = "localhost:6379";
 
     [Fact]
     public void NotNullConnection()
@@ -29,7 +29,7 @@ public class RedisConnectorTests : IAsyncLifetime
         var opt = new RedisConnectionOptions
         {
             ConnectionString = "localhost:6379,ssl=True,abortConnect=True,connectTimeout=1001",
-            ConnectionStringExtraParams = "allowAdmin=true,abortConnect=false,connectRetry=2,keepAlive=30,name=test,syncTimeout=250,connectTimeout=1000"
+            ConnectionStringExtraParams = "allowAdmin=true,abortConnect=false,connectRetry=2,keepAlive=30,name=test,syncTimeout=250,connectTimeout=1000",
         };
         var sut = new RedisConfigurationOptionsProvider(NullLoggerFactory.Instance, Options.Create(opt));
         var connection = sut.GetConfiguration();
@@ -52,7 +52,7 @@ public class RedisConnectorTests : IAsyncLifetime
         var opt = new RedisConnectionOptions
         {
             ConnectionString = connectionString,
-            ConnectionStringExtraParams = extraParams
+            ConnectionStringExtraParams = extraParams,
         };
         var sut = new RedisConfigurationOptionsProvider(NullLoggerFactory.Instance, Options.Create(opt));
         var cnn = sut.GetConfiguration().ToString();
@@ -64,18 +64,12 @@ public class RedisConnectorTests : IAsyncLifetime
         return ValueTask.CompletedTask;
     }
 
-    private sealed class SubstituteMultiplexerFactory : IConnectionMultiplexerFactory
-    {
-        public ValueTask<IConnectionMultiplexer> CreateAsync(ConfigurationOptions configuration, CancellationToken cancellationToken = default) =>
-            new(Substitute.For<IConnectionMultiplexer>());
-    }
-
     public ValueTask InitializeAsync()
     {
         _telemetryProvider = _fixture.Create<ICachingTelemetryProvider>();
         _redisOptions = Options.Create(new RedisConnectionOptions
         {
-            ConnectionString = _connectionString
+            ConnectionString = _connectionString,
         });
         _fixture.Inject(_redisOptions);
         _redisConfigurationOptionsProvider = new RedisConfigurationOptionsProvider(NullLoggerFactory.Instance, _redisOptions);
@@ -83,5 +77,11 @@ public class RedisConnectorTests : IAsyncLifetime
         _connectionMultiplexerFactory = new SubstituteMultiplexerFactory();
         _fixture.Inject(_connectionMultiplexerFactory);
         return ValueTask.CompletedTask;
+    }
+
+    private sealed class SubstituteMultiplexerFactory : IConnectionMultiplexerFactory
+    {
+        public ValueTask<IConnectionMultiplexer> CreateAsync(ConfigurationOptions configuration, CancellationToken cancellationToken = default) =>
+            new(Substitute.For<IConnectionMultiplexer>());
     }
 }

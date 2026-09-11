@@ -4,8 +4,6 @@ namespace UiPath.Caching.Tests.Locking;
 
 public class AsyncKeyedLocalLockTests(ITestContextAccessor testContextAccessor)
 {
-    private static AsyncKeyedLocalLock NewLocker() =>
-        new(Options.Create(new CacheOptions()));
 
     [Fact]
     public async Task Acquire_returns_disposable_that_releases_on_dispose()
@@ -55,7 +53,10 @@ public class AsyncKeyedLocalLockTests(ITestContextAccessor testContextAccessor)
             do
             {
                 observedSnapshot = Volatile.Read(ref maxObserved);
-                if (current <= observedSnapshot) break;
+                if (current <= observedSnapshot)
+                {
+                    break;
+                }
             }
             while (Interlocked.CompareExchange(ref maxObserved, current, observedSnapshot) != observedSnapshot);
 
@@ -171,4 +172,6 @@ public class AsyncKeyedLocalLockTests(ITestContextAccessor testContextAccessor)
 
         holder.Dispose();
     }
+    private static AsyncKeyedLocalLock NewLocker() =>
+        new(Options.Create(new CacheOptions()));
 }

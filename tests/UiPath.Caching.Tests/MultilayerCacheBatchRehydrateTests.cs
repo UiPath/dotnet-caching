@@ -1,4 +1,4 @@
-﻿using System.Collections.Concurrent;
+using System.Collections.Concurrent;
 using Microsoft.Extensions.Caching.Memory;
 using UiPath.Caching.Locking;
 using UiPath.Caching.Telemetry;
@@ -8,12 +8,19 @@ namespace UiPath.Caching.Tests;
 
 public class MultilayerCacheBatchRehydrateTests(ITestContextAccessor testContextAccessor) : IAsyncLifetime
 {
-    private readonly IFixture _fixture = AutoFixtureCreator.NSubstitute();
 
     private static readonly long[] States1 = [1L];
     private static readonly long[] States2 = [2L];
     private static readonly long[] States1And2 = [1L, 2L];
     private static readonly string?[] AAndB = ["A", "B"];
+
+    private static readonly TimeSpan Duration = TimeSpan.FromMinutes(10);
+    private readonly IFixture _fixture = AutoFixtureCreator.NSubstitute();
+
+    private readonly ConcurrentDictionary<CacheKey, string?> _stored = new();
+    private readonly ConcurrentQueue<CacheKey[]> _innerSetCalls = new();
+    private readonly ConcurrentQueue<DateTimeOffset?> _innerSetExpirations = new();
+    private readonly HashSet<CacheKey> _agedKeys = [];
 
     private ICache _innerCache = default!;
     private MemoryCache _memoryCache = default!;
@@ -33,34 +40,6 @@ public class MultilayerCacheBatchRehydrateTests(ITestContextAccessor testContext
     private MultilayerCache? _sut;
 
     private MultilayerCache Sut => _sut ??= _fixture.Create<MultilayerCache>();
-
-    private static readonly TimeSpan Duration = TimeSpan.FromMinutes(10);
-
-    private readonly ConcurrentDictionary<CacheKey, string?> _stored = new();
-    private readonly ConcurrentQueue<CacheKey[]> _innerSetCalls = new();
-    private readonly ConcurrentQueue<DateTimeOffset?> _innerSetExpirations = new();
-    private readonly HashSet<CacheKey> _agedKeys = [];
-
-    private static CachePolicy RehydratePolicy(double threshold = 0.75) => new()
-    {
-        DistributedExpiration = Duration,
-        RehydrateEnabled = true,
-        Rehydrate = new RehydrateOptions
-        {
-            Threshold = threshold,
-            BaseCooldown = TimeSpan.FromSeconds(1),
-            MaxCooldown = TimeSpan.FromMinutes(5),
-            TimeoutFraction = 0.5,
-            Name = "test-profile",
-        },
-    };
-
-    /// <summary>Seeds a hit past the rehydrate threshold.</summary>
-    private void SeedAged(CacheKey key, string? value)
-    {
-        _agedKeys.Add(key);
-        _stored[key] = value;
-    }
 
     [Fact]
     public async Task Hits_past_threshold_are_rehydrated_in_one_background_call()
@@ -332,11 +311,6 @@ public class MultilayerCacheBatchRehydrateTests(ITestContextAccessor testContext
             "the group key must be derived from the RESERVED set, so a batch that refreshes only `a` takes the same lock single-key rehydration of `a` takes");
     }
 
-    private sealed class PrefixingLockKeyStrategy : IDistributedLockKeyStrategy
-    {
-        public string GetLockKey(CacheKey cacheKey) => "lck:" + cacheKey.Name;
-    }
-
     [Fact]
     public async Task Batch_rehydrate_tags_telemetry_with_the_group_size()
     {
@@ -367,25 +341,6 @@ public class MultilayerCacheBatchRehydrateTests(ITestContextAccessor testContext
             .ToArray();
         sizes.Should().NotBeEmpty("a multi-key rehydrate must tag its telemetry with the group size");
         sizes.Should().AllBe("2", "the coalesced set had exactly two keys");
-    }
-
-    private static List<long[]> Snapshot(List<long[]> calls)
-    {
-        lock (calls) { return [.. calls]; }
-    }
-
-    private static async Task WaitForAsync(Func<bool> predicate, TimeSpan timeout, CancellationToken token)
-    {
-        var sw = System.Diagnostics.Stopwatch.StartNew();
-        while (sw.Elapsed < timeout)
-        {
-            if (predicate())
-            {
-                return;
-            }
-            await Task.Delay(10, token);
-        }
-        throw new TimeoutException($"WaitForAsync timed out after {timeout} — predicate never became true. Background batch rehydrate likely never ran.");
     }
 
     public ValueTask InitializeAsync()
@@ -469,5 +424,50 @@ public class MultilayerCacheBatchRehydrateTests(ITestContextAccessor testContext
         _memoryCache?.Dispose();
         GC.SuppressFinalize(this);
         return ValueTask.CompletedTask;
+    }
+
+    private static CachePolicy RehydratePolicy(double threshold = 0.75) => new()
+    {
+        DistributedExpiration = Duration,
+        RehydrateEnabled = true,
+        Rehydrate = new RehydrateOptions
+        {
+            Threshold = threshold,
+            BaseCooldown = TimeSpan.FromSeconds(1),
+            MaxCooldown = TimeSpan.FromMinutes(5),
+            TimeoutFraction = 0.5,
+            Name = "test-profile",
+        },
+    };
+
+    private static List<long[]> Snapshot(List<long[]> calls)
+    {
+        lock (calls) { return [.. calls]; }
+    }
+
+    private static async Task WaitForAsync(Func<bool> predicate, TimeSpan timeout, CancellationToken token)
+    {
+        var sw = System.Diagnostics.Stopwatch.StartNew();
+        while (sw.Elapsed < timeout)
+        {
+            if (predicate())
+            {
+                return;
+            }
+            await Task.Delay(10, token);
+        }
+        throw new TimeoutException($"WaitForAsync timed out after {timeout} — predicate never became true. Background batch rehydrate likely never ran.");
+    }
+
+    /// <summary>Seeds a hit past the rehydrate threshold.</summary>
+    private void SeedAged(CacheKey key, string? value)
+    {
+        _agedKeys.Add(key);
+        _stored[key] = value;
+    }
+
+    private sealed class PrefixingLockKeyStrategy : IDistributedLockKeyStrategy
+    {
+        public string GetLockKey(CacheKey cacheKey) => "lck:" + cacheKey.Name;
     }
 }

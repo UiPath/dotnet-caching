@@ -16,17 +16,17 @@ namespace UiPath.Caching.Tests.Redis;
 public class RedisCacheTryAddTests(ITestContextAccessor testContextAccessor) : IAsyncLifetime
 {
     private readonly IFixture _fixture = AutoFixtureCreator.NSubstitute();
+    private readonly DateTimeOffset _now = DateTimeOffset.UtcNow;
+    private readonly RecordingTelemetryProvider _telemetry = new();
     private ISystemClock _clock = default!;
     private RedisCacheOptions _cacheOptions = default!;
     private IDatabase _database = default!;
     private SystemJsonByteSerializerProxy _serializer = default!;
-    private readonly DateTimeOffset _now = DateTimeOffset.UtcNow;
     private CacheKey _cacheKey = default!;
     private RedisKey _redisKey = default!;
     private IRedisConnector _connector = default!;
     private IResiliencePipelineProvider _pipelineProvider = default!;
     private bool _isConnected = true;
-    private readonly RecordingTelemetryProvider _telemetry = new();
     private RedisCache? _sut;
 
     private RedisCache Sut => _sut ??= _fixture.Create<RedisCache>();

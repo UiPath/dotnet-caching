@@ -12,21 +12,6 @@ public class BatchGetOrAddTests(ITestContextAccessor testContextAccessor)
     private static readonly long[] States3Then1Then2 = [3L, 1L, 2L];
     private static readonly string?[] Gen1Twice = ["gen:1", "gen:1"];
 
-    private static KeyValuePair<CacheKey, long>[] Entries(params long[] ids) =>
-        ids.Select(id => new KeyValuePair<CacheKey, long>((CacheKey)$"user:{id}", id)).ToArray();
-
-    private static Func<long[], CancellationToken, Task<KeyValuePair<long, string?>[]>> Generator(
-        List<long[]> observed, Func<long, string?>? produce = null, params long[] omit)
-    {
-        produce ??= id => "gen:" + id;
-        return (ids, _) =>
-        {
-            observed.Add(ids);
-            return Task.FromResult(ids.Where(id => !omit.Contains(id))
-                .Select(id => new KeyValuePair<long, string?>(id, produce(id))).ToArray());
-        };
-    }
-
     [Fact]
     public async Task Generator_receives_states_not_keys()
     {
@@ -247,5 +232,20 @@ public class BatchGetOrAddTests(ITestContextAccessor testContextAccessor)
 
         observed.Single().Should().Equal(States1And2);
         result.Select(r => r.Value).Should().Equal("gen:1", "gen:2");
+    }
+
+    private static KeyValuePair<CacheKey, long>[] Entries(params long[] ids) =>
+        ids.Select(id => new KeyValuePair<CacheKey, long>((CacheKey)$"user:{id}", id)).ToArray();
+
+    private static Func<long[], CancellationToken, Task<KeyValuePair<long, string?>[]>> Generator(
+        List<long[]> observed, Func<long, string?>? produce = null, params long[] omit)
+    {
+        produce ??= id => "gen:" + id;
+        return (ids, _) =>
+        {
+            observed.Add(ids);
+            return Task.FromResult(ids.Where(id => !omit.Contains(id))
+                .Select(id => new KeyValuePair<long, string?>(id, produce(id))).ToArray());
+        };
     }
 }

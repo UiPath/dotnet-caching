@@ -97,38 +97,11 @@ public class CacheExpirationTests
 /// </summary>
 public class CacheExpirationGuardTests
 {
-    private static CancellationToken Ct => TestContext.Current.CancellationToken;
 
     private static readonly TimeSpan[] NonPositive = [TimeSpan.Zero, TimeSpan.FromMinutes(-5)];
-
-    private static MultilayerCache CreateSut()
-    {
-        var options = new InMemoryCacheOptions();
-        var cacheOptions = new CacheOptions { AppShortName = "test" };
-        return new MultilayerCache(
-            KnownCacheProviderNames.InMemory,
-            NullCache.Instance,
-            new MemoryCacheFactory(TimeProvider.System, NullLoggerFactory.Instance),
-            NullChangeTokenFactory.Instance,
-            NullTopicFactory.Instance,
-            NullCacheEventFactory.Instance,
-            NullTelemetryProvider.Instance,
-            options,
-            options,
-            cacheOptions,
-            localLock: new AsyncKeyedLocalLock(Options.Create(cacheOptions)),
-            distributedLock: NullDistributedLock.Instance,
-            policyFactory: NullCachePolicyFactory.Instance,
-            clock: TimeProvider.System,
-            logger: NullLogger.Instance);
-    }
+    private static CancellationToken Ct => TestContext.Current.CancellationToken;
 
     private static DateTimeOffset Past => DateTimeOffset.UtcNow.AddMinutes(-5);
-
-    private static async Task Rejects(Func<Task> write)
-    {
-        (await write.Should().ThrowAsync<ArgumentOutOfRangeException>()).And.ParamName.Should().Be("expiration");
-    }
 
     [Fact]
     public async Task SetAsync_rejects_a_non_positive_duration()
@@ -180,14 +153,14 @@ public class CacheExpirationGuardTests
     {
         using var sut = CreateSut();
         var called = false;
-        Task<string?> generator(CancellationToken _)
+        Task<string?> Generator(CancellationToken _)
         {
             called = true;
             return Task.FromResult<string?>("v");
         }
 
-        await Rejects(async () => await sut.GetOrAddAsync("k", generator, TimeSpan.Zero, policy: null, Ct));
-        await Rejects(async () => await sut.GetOrAddAsync("k", generator, Past, policy: null, Ct));
+        await Rejects(async () => await sut.GetOrAddAsync("k", Generator, TimeSpan.Zero, policy: null, Ct));
+        await Rejects(async () => await sut.GetOrAddAsync("k", Generator, Past, policy: null, Ct));
 
         called.Should().BeFalse();
     }
@@ -212,5 +185,32 @@ public class CacheExpirationGuardTests
 
         (await sut.SetAsync("k", "v", policy: null, Ct)).Should().BeTrue();
         (await sut.GetAsync<string>("k", policy: null, token: Ct)).Should().Be("v");
+    }
+
+    private static MultilayerCache CreateSut()
+    {
+        var options = new InMemoryCacheOptions();
+        var cacheOptions = new CacheOptions { AppShortName = "test" };
+        return new MultilayerCache(
+            KnownCacheProviderNames.InMemory,
+            NullCache.Instance,
+            new MemoryCacheFactory(TimeProvider.System, NullLoggerFactory.Instance),
+            NullChangeTokenFactory.Instance,
+            NullTopicFactory.Instance,
+            NullCacheEventFactory.Instance,
+            NullTelemetryProvider.Instance,
+            options,
+            options,
+            cacheOptions,
+            localLock: new AsyncKeyedLocalLock(Options.Create(cacheOptions)),
+            distributedLock: NullDistributedLock.Instance,
+            policyFactory: NullCachePolicyFactory.Instance,
+            clock: TimeProvider.System,
+            logger: NullLogger.Instance);
+    }
+
+    private static async Task Rejects(Func<Task> write)
+    {
+        (await write.Should().ThrowAsync<ArgumentOutOfRangeException>()).And.ParamName.Should().Be("expiration");
     }
 }

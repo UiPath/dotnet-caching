@@ -13,8 +13,8 @@ public sealed class ConnectionStateMonitor : IConnectionState, IDisposable
     private const string PropConnected = "connected";
 
     private readonly IConnectionState[] _connectionStates;
-    private Lazy<bool> _isConnected = default!;
     private readonly ICachingTelemetryProvider _telemetryProvider;
+    private Lazy<bool> _isConnected = default!;
     private Timer? _timer;
     private TimeSpan _monitorInterval;
 

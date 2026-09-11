@@ -13,11 +13,6 @@ namespace UiPath.Caching;
 /// </remarks>
 public interface ICachePolicyFactory
 {
-    /// <summary>
-    /// Resolves the named cache policy. Returns <c>null</c> when no specific policy is registered
-    /// for <paramref name="policyName"/>.
-    /// </summary>
-    CachePolicy? Resolve(string policyName);
 
     /// <summary>
     /// The user-configured default policy. Returns <c>null</c> when no default is configured —
@@ -32,4 +27,9 @@ public interface ICachePolicyFactory
     /// statically may return an empty sequence and opt out of validation.
     /// </summary>
     IEnumerable<string> Keys { get; }
+    /// <summary>
+    /// Resolves the named cache policy. Returns <c>null</c> when no specific policy is registered
+    /// for <paramref name="policyName"/>.
+    /// </summary>
+    CachePolicy? Resolve(string policyName);
 }

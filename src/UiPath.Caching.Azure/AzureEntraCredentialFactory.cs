@@ -2,11 +2,11 @@ namespace UiPath.Caching.Azure;
 
 internal sealed class AzureEntraCredentialFactory : IAzureEntraCredentialFactory
 {
-    public static AzureEntraCredentialFactory Instance { get; } = new();
 
     private AzureEntraCredentialFactory()
     {
     }
+    public static AzureEntraCredentialFactory Instance { get; } = new();
 
     public TokenCredential CreateDefaultCredential() => new DefaultAzureCredential();
 

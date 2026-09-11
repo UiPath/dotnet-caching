@@ -5,11 +5,6 @@ namespace UiPath.Caching.Tests;
 
 public class PropagateCacheNullValuesFromMultilayerTests
 {
-    private static PropagateCacheNullValuesFromMultilayer Create(bool sourceCacheNullValues)
-    {
-        var source = Options.Create(new InMemoryRedisCacheOptions { CacheNullValues = sourceCacheNullValues });
-        return new PropagateCacheNullValuesFromMultilayer(source, NullLoggerFactory.Instance);
-    }
 
     [Fact]
     public void PostConfigure_forces_target_on_when_source_on()
@@ -47,5 +42,10 @@ public class PropagateCacheNullValuesFromMultilayerTests
         Create(sourceCacheNullValues: true).PostConfigure(namedKey, target);
 
         target.CacheNullValues.Should().BeFalse();
+    }
+    private static PropagateCacheNullValuesFromMultilayer Create(bool sourceCacheNullValues)
+    {
+        var source = Options.Create(new InMemoryRedisCacheOptions { CacheNullValues = sourceCacheNullValues });
+        return new PropagateCacheNullValuesFromMultilayer(source, NullLoggerFactory.Instance);
     }
 }

@@ -6,8 +6,6 @@ internal class TestCacheEntry<T> : ICacheEntry<T>
 
     public T? Value { get; set; }
 
-    object? ICacheEntry.Value => Value;
-
     public DateTimeOffset Expiration { get; set; } = DateTimeOffset.MaxValue;
 
     public IDictionary<string, string?>? Metadata { get; set; }
@@ -21,6 +19,8 @@ internal class TestCacheEntry<T> : ICacheEntry<T>
         get => _foundOverride ?? (Expiration > DateTimeOffset.MinValue && Value is not null);
         init => _foundOverride = value;
     }
+
+    object? ICacheEntry.Value => Value;
 
     public ICacheEntry NewEntry(DateTimeOffset? expiration = null, IDictionary<string, string?>? metadata = null) =>
         _foundOverride.HasValue

@@ -1,4 +1,4 @@
-﻿using System.Threading.Channels;
+using System.Threading.Channels;
 using UiPath.Caching.Telemetry;
 
 namespace UiPath.Caching.Broadcast.Redis;
@@ -11,8 +11,6 @@ internal sealed partial class RedisStreamSubjectWriter<T> : IDisposable
     private const string PropTopicKey = "TopicKey";
     private const string PropTransportId = "TransportId";
     private const string PropEventId = "EventId";
-
-    private bool _disposed;
     private readonly RedisStreamContext _context;
     private readonly IRedisConnector _redis;
     private readonly IConnectionState _connectionState;
@@ -24,8 +22,10 @@ internal sealed partial class RedisStreamSubjectWriter<T> : IDisposable
     private readonly CancellationTokenSource _stopTokenSource;
     private readonly CancellationToken _cancelationToken;
     private readonly IFetchWaiter _waiter;
-    private RedisValue _lastId = StreamPosition.NewMessages;
     private readonly SemaphoreSlim _retryGate = new(0, 1);
+
+    private bool _disposed;
+    private RedisValue _lastId = StreamPosition.NewMessages;
     private int _consecutiveFailures;
     private volatile bool _unsupportedCommand;
 
@@ -57,6 +57,10 @@ internal sealed partial class RedisStreamSubjectWriter<T> : IDisposable
         FetchTask = Task.Run(FetchLoop, _cancelationToken);
     }
 
+    internal Task FetchTask { get; }
+
+    private bool ContinueLoop => !(_disposed || _cancelationToken.IsCancellationRequested);
+
     public void Dispose()
     {
         if (_disposed)
@@ -71,6 +75,11 @@ internal sealed partial class RedisStreamSubjectWriter<T> : IDisposable
         _retryGate.Dispose();
         _writer.TryComplete();
     }
+
+    private static bool IsUnsupportedCommand(Exception ex) =>
+        ex is RedisCommandException ||
+        (ex is RedisServerException &&
+         ex.Message.Contains(StreamConstants.UnknownCommandErrorMessage, StringComparison.OrdinalIgnoreCase));
 
     private void OnConnectionRecovered(object? sender, EventArgs e) => ReleaseRetryGate();
 
@@ -94,10 +103,6 @@ internal sealed partial class RedisStreamSubjectWriter<T> : IDisposable
             // Disposed concurrently; there is no loop left to wake.
         }
     }
-
-    internal Task FetchTask { get; }
-
-    private bool ContinueLoop => !(_disposed || _cancelationToken.IsCancellationRequested);
 
     private async Task FetchLoop()
     {
@@ -217,11 +222,6 @@ internal sealed partial class RedisStreamSubjectWriter<T> : IDisposable
         return true;
     }
 
-    private static bool IsUnsupportedCommand(Exception ex) =>
-        ex is RedisCommandException ||
-        (ex is RedisServerException &&
-         ex.Message.Contains(StreamConstants.UnknownCommandErrorMessage, StringComparison.OrdinalIgnoreCase));
-
     private Task BackoffAsync()
     {
         var failures = ++_consecutiveFailures;
@@ -294,7 +294,7 @@ internal sealed partial class RedisStreamSubjectWriter<T> : IDisposable
             if (ev.SameSource(_context.SourceUri))
             {
                 LogEventFromCurrentSource(ev.Id, _context.Topic, @event.Id);
-                _cachingTelemetryProvider.TrackTopicReadMetric(_context.Topic!, @event.Id);
+                _cachingTelemetryProvider.TrackTopicReadMetric(_context.Topic.ToString(), @event.Id);
                 TraceReceipt(ev);
                 ids.Add(@event.Id);
                 return default;
@@ -343,8 +343,8 @@ internal sealed partial class RedisStreamSubjectWriter<T> : IDisposable
     {
         _cachingTelemetryProvider.TrackEvent(EventInvalid,
         [
-            new(PropTopicKey, _context.Topic!),
-            new(PropTransportId, @event.Id!),
+            new(PropTopicKey, _context.Topic.ToString()),
+            new(PropTransportId, @event.Id.ToString()),
         ]);
         LogEventInvalid(ev.Id, _context.Topic, @event.Id);
         ids.Add(@event.Id);
@@ -359,7 +359,7 @@ internal sealed partial class RedisStreamSubjectWriter<T> : IDisposable
             _cachingTelemetryProvider.TrackEvent(EventReceived,
             [
                 new(PropEventId, ev.Id!),
-                new(PropTopicKey, _context.Topic!),
+                new(PropTopicKey, _context.Topic.ToString()),
                 new(PropTransportId, ev.TransportId!),
             ]);
         }

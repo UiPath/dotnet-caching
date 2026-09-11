@@ -9,12 +9,15 @@ public class RedisPubSubTopicTests(ITestContextAccessor testContextAccessor) : I
 {
     private readonly IFixture _fixture = AutoFixtureCreator.NSubstitute();
     private readonly List<ICacheEvent> _onNextMessages = [];
+    private readonly TimeSpan _delay = 50.Milliseconds();
+    private readonly TaskCompletionSource _subscribeCalled = new(TaskCreationOptions.RunContinuationsAsynchronously);
+    private readonly TaskCompletionSource _unsubscribeCalled = new(TaskCreationOptions.RunContinuationsAsynchronously);
 
     private TopicKey _topicKey;
     private ISubscriber _subscriber = default!;
     private IObserver<ICacheEvent> _observer = default!;
     private bool _onCompleted = false;
-    Action<RedisChannel, RedisValue>? _handler;
+    private Action<RedisChannel, RedisValue>? _handler;
     private TestCacheEventFormatterProxy _formatter = default!;
     private IDatabase _database = default!;
     private IRedisConnector _redisConnector = default!;
@@ -24,25 +27,9 @@ public class RedisPubSubTopicTests(ITestContextAccessor testContextAccessor) : I
     private IResiliencePipelineProvider _resiliencePipelineProvider = default!;
     private RedisPubSubTopicOptions _options = default!;
     private string? _actualRedisChannel;
-    private readonly TimeSpan _delay = 50.Milliseconds();
     private bool _isConnected = true;
 
     private RedisPubSubTopic<ICacheEvent>? _sut;
-    private readonly TaskCompletionSource _subscribeCalled = new(TaskCreationOptions.RunContinuationsAsynchronously);
-    private readonly TaskCompletionSource _unsubscribeCalled = new(TaskCreationOptions.RunContinuationsAsynchronously);
-    private async Task<RedisPubSubTopic<ICacheEvent>> Sut(int delayMultiplier = 2)
-    {
-        if (_sut != null)
-        {
-            return _sut;
-        }
-        _sut = _fixture.Create<RedisPubSubTopic<ICacheEvent>>();
-        await Task.Delay(_delay.Multiply(delayMultiplier), testContextAccessor.Current.CancellationToken);
-        return _sut;
-    }
-
-    private Task WaitForSubscribeAsync() =>
-        _subscribeCalled.Task.WaitAsync(TimeSpan.FromSeconds(30), testContextAccessor.Current.CancellationToken);
 
     [Fact]
     public async Task Publish_WhenDisconnected()
@@ -74,7 +61,7 @@ public class RedisPubSubTopicTests(ITestContextAccessor testContextAccessor) : I
         var cloudEvent = new TestCacheEvent
         {
             Id = Guid.NewGuid().ToString(),
-            Source = new Uri($"urn:{machineName}")
+            Source = new Uri($"urn:{machineName}"),
         };
         var bytes = _formatter.Encode(cloudEvent);
         var message = Encoding.UTF8.GetString(bytes.Span);
@@ -162,7 +149,7 @@ public class RedisPubSubTopicTests(ITestContextAccessor testContextAccessor) : I
         var cloudEvent = new TestCacheEvent
         {
             Id = Guid.NewGuid().ToString(),
-            Source = new Uri("urn:machine")
+            Source = new Uri("urn:machine"),
         };
         _database.ClearReceivedCalls();
         var executed = false;
@@ -185,7 +172,7 @@ public class RedisPubSubTopicTests(ITestContextAccessor testContextAccessor) : I
         var cloudEvent = new TestCacheEvent
         {
             Id = Guid.NewGuid().ToString(),
-            Source = new Uri("urn:machine")
+            Source = new Uri("urn:machine"),
         };
         var cancelSource = new CancellationTokenSource();
         var token = cancelSource.Token;
@@ -202,7 +189,7 @@ public class RedisPubSubTopicTests(ITestContextAccessor testContextAccessor) : I
         var cloudEvent = new TestCacheEvent
         {
             Id = Guid.NewGuid().ToString(),
-            Source = new Uri("urn:machine")
+            Source = new Uri("urn:machine"),
         };
         _database.ClearReceivedCalls();
         _database.PublishAsync(Arg.Any<RedisChannel>(), Arg.Any<RedisValue>(), Arg.Any<CommandFlags>())
@@ -262,7 +249,7 @@ public class RedisPubSubTopicTests(ITestContextAccessor testContextAccessor) : I
         {
             SubscriberTimeout = _delay,
             SubscriberDueTime = TimeSpan.Zero,
-            ConnectionMonitorEnabled = true
+            ConnectionMonitorEnabled = true,
         };
         _fixture.Inject(_options);
 
@@ -275,4 +262,17 @@ public class RedisPubSubTopicTests(ITestContextAccessor testContextAccessor) : I
 
         return ValueTask.CompletedTask;
     }
+    private async Task<RedisPubSubTopic<ICacheEvent>> Sut(int delayMultiplier = 2)
+    {
+        if (_sut != null)
+        {
+            return _sut;
+        }
+        _sut = _fixture.Create<RedisPubSubTopic<ICacheEvent>>();
+        await Task.Delay(_delay.Multiply(delayMultiplier), testContextAccessor.Current.CancellationToken);
+        return _sut;
+    }
+
+    private Task WaitForSubscribeAsync() =>
+        _subscribeCalled.Task.WaitAsync(TimeSpan.FromSeconds(30), testContextAccessor.Current.CancellationToken);
 }

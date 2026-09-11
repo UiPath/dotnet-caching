@@ -30,10 +30,6 @@ public sealed partial class RedisStreamsTopic<T> : ITopic<T>
     private bool _disposed;
     private volatile bool _consumerGroupCreated;
 
-    public TopicKey TopicKey { get; }
-
-    public EventHandler? OnDisposed { get; set; }
-
     public RedisStreamsTopic(
         TopicKey topicKey,
         IConnectionState connectionState,
@@ -85,7 +81,9 @@ public sealed partial class RedisStreamsTopic<T> : ITopic<T>
         _dispatcher = new EventDispatcher<T>(topicKey, channel, _subject, _logger, _stopTokenSource.Token);
     }
 
-    internal RedisStreamsTopicOptions GetResolvedOptionsForTests() => _streamOptions;
+    public TopicKey TopicKey { get; }
+
+    public EventHandler? OnDisposed { get; set; }
 
     public IDisposable Subscribe(IObserver<T> observer)
     {
@@ -116,8 +114,10 @@ public sealed partial class RedisStreamsTopic<T> : ITopic<T>
                     maxLength: _streamOptions.MaxLength,
                     useApproximateMaxLength: true,
                     flags: CommandFlags.DemandMaster).ConfigureAwait(false);
-            }, defaultValue: RedisValue.Null, token).ConfigureAwait(false);
-            _cachingTelemetryProvider.TrackTopicWriteMetric(_context.Topic!, id);
+            },
+            defaultValue: RedisValue.Null,
+            token).ConfigureAwait(false);
+            _cachingTelemetryProvider.TrackTopicWriteMetric(_context.Topic.ToString(), id);
             if (_notifyRedisChannel.HasValue && !id.IsNull)
             {
                 try
@@ -156,6 +156,8 @@ public sealed partial class RedisStreamsTopic<T> : ITopic<T>
         _waiter.Dispose();
         OnDisposed?.Invoke(this, EventArgs.Empty);
     }
+
+    internal RedisStreamsTopicOptions GetResolvedOptionsForTests() => _streamOptions;
 
     private void CreateConsumerGroup()
     {

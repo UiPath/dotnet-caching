@@ -80,7 +80,7 @@ public class ProfiledCommandProcessorTest : IAsyncLifetime
         {
             CommandAndKey = cmd => _fixture.Create<string>(),
             Message = cmd => _fixture.Create<string>(),
-            ProfiledCommandType = _profiledCommand.GetType()
+            ProfiledCommandType = _profiledCommand.GetType(),
         });
         return ValueTask.CompletedTask;
     }

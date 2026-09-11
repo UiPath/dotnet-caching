@@ -31,6 +31,10 @@ public class MultilayerHashCacheTests(ITestContextAccessor testContextAccessor) 
     private CacheKey _innerCacheKey = default!;
 
     private MultilayerHashCache? _sut = null;
+
+    public interface ITopicProviderWithConnectionState : ITopicProvider, IConnectionState
+    {
+    }
     private MultilayerHashCache Sut => _sut ??= _fixture.Create<MultilayerHashCache>();
 
 
@@ -40,7 +44,7 @@ public class MultilayerHashCacheTests(ITestContextAccessor testContextAccessor) 
         var expected = _fixture.Create<IDictionary<string, string?>>();
         ICacheEntry<IDictionary<string, string?>> expectedCacheEntry = new TestCacheEntry<IDictionary<string, string?>>
         {
-            Value = expected
+            Value = expected,
         };
         _innerCache.GetCacheEntryAsync<string>(_innerCacheKey, Arg.Any<CachePolicy?>(), Arg.Any<CancellationToken>())
             .Returns(expectedCacheEntry);
@@ -58,7 +62,7 @@ public class MultilayerHashCacheTests(ITestContextAccessor testContextAccessor) 
         ICacheEntry<IDictionary<string, string?>> expectedCacheEntry = new TestCacheEntry<IDictionary<string, string?>>
         {
             Value = expected,
-            Expiration = _fixture.Create<DateTimeOffset>()
+            Expiration = _fixture.Create<DateTimeOffset>(),
         };
         _innerCache.GetCacheEntryAsync<string>(_innerCacheKey, Arg.Any<CachePolicy?>(), Arg.Any<CancellationToken>())
             .Returns(expectedCacheEntry);
@@ -74,7 +78,7 @@ public class MultilayerHashCacheTests(ITestContextAccessor testContextAccessor) 
     {
         ICacheEntry<IDictionary<string, string?>> expectedCacheEntry = new TestCacheEntry<IDictionary<string, string?>>
         {
-            Value = null
+            Value = null,
         };
         _innerCache.GetCacheEntryAsync<string>(_cacheKey, Arg.Any<CachePolicy?>(), Arg.Any<CancellationToken>())
             .Returns(expectedCacheEntry);
@@ -89,7 +93,7 @@ public class MultilayerHashCacheTests(ITestContextAccessor testContextAccessor) 
         var expected = _fixture.Create<IDictionary<string, string?>>();
         ICacheEntry<IDictionary<string, string?>> expectedCacheEntry = new TestCacheEntry<IDictionary<string, string?>>
         {
-            Value = expected
+            Value = expected,
         };
         _innerCache.GetCacheEntryAsync<string>(_innerCacheKey, Arg.Any<CachePolicy?>(), Arg.Any<CancellationToken>())
             .Returns(expectedCacheEntry);
@@ -106,7 +110,7 @@ public class MultilayerHashCacheTests(ITestContextAccessor testContextAccessor) 
         var field = expected.Keys.First();
         ICacheEntry<IDictionary<string, string?>> expectedCacheEntry = new TestCacheEntry<IDictionary<string, string?>>
         {
-            Value = expected
+            Value = expected,
         };
         _innerCache.GetCacheEntryAsync<string>(_innerCacheKey, Arg.Any<CachePolicy?>(), Arg.Any<CancellationToken>())
             .ReturnsForAnyArgs(_ => expectedCacheEntry);
@@ -123,7 +127,7 @@ public class MultilayerHashCacheTests(ITestContextAccessor testContextAccessor) 
         var expected = _fixture.Create<IDictionary<string, string?>>();
         ICacheEntry<IDictionary<string, string?>> expectedCacheEntry = new TestCacheEntry<IDictionary<string, string?>>
         {
-            Value = expected
+            Value = expected,
         };
         _innerCache.GetCacheEntryAsync<string>(_cacheKey, Arg.Any<CachePolicy?>(), Arg.Any<CancellationToken>())
             .Returns(expectedCacheEntry);
@@ -139,7 +143,7 @@ public class MultilayerHashCacheTests(ITestContextAccessor testContextAccessor) 
     {
         ICacheEntry<IDictionary<string, string?>> expectedCacheEntry = new TestCacheEntry<IDictionary<string, string?>>
         {
-            Value = null
+            Value = null,
         };
         _innerCache.GetCacheEntryAsync<string>(_cacheKey, Arg.Any<CachePolicy?>(), Arg.Any<CancellationToken>())
             .Returns(expectedCacheEntry);
@@ -154,7 +158,7 @@ public class MultilayerHashCacheTests(ITestContextAccessor testContextAccessor) 
         var expected = _fixture.Create<IDictionary<string, string?>>();
         var expectedCacheEntry = new TestCacheEntry<IDictionary<string, string?>>
         {
-            Value = expected
+            Value = expected,
         };
 
         _memoryCache.TryGetValue(Arg.Any<object>(), out Arg.Any<object?>())
@@ -174,7 +178,7 @@ public class MultilayerHashCacheTests(ITestContextAccessor testContextAccessor) 
         var expected = _fixture.Create<IDictionary<string, string?>>();
         ICacheEntry<IDictionary<string, string?>> expectedCacheEntry = new TestCacheEntry<IDictionary<string, string?>>
         {
-            Value = expected
+            Value = expected,
         };
         var generatorExpected = _fixture.Create<IDictionary<string, string?>>();
         var generatorWasCalled = false;
@@ -199,11 +203,11 @@ public class MultilayerHashCacheTests(ITestContextAccessor testContextAccessor) 
         var expected = _fixture.Create<IDictionary<string, string?>>();
         ICacheEntry<IDictionary<string, string?>> expectedCacheEntry = new TestCacheEntry<IDictionary<string, string?>>
         {
-            Value = expected
+            Value = expected,
         };
         var generatorExpected = _fixture.Create<IDictionary<string, string?>>();
         var generatorWasCalled = false;
-        Task<IDictionary<string, string?>> generator(CancellationToken token)
+        Task<IDictionary<string, string?>> Generator(CancellationToken token)
         {
             generatorWasCalled = true;
             return Task.FromResult(generatorExpected);
@@ -211,7 +215,7 @@ public class MultilayerHashCacheTests(ITestContextAccessor testContextAccessor) 
         _innerCache.GetCacheEntryAsync<string>(_innerCacheKey, Arg.Any<CachePolicy?>(), Arg.Any<CancellationToken>())
             .Returns(expectedCacheEntry);
 
-        var actual = await Sut.GetOrAddAsync(_cacheKey, generator, expiration: DateTimeOffset.UtcNow.AddMinutes(5), setOption: hashCacheSetOption, token: testContextAccessor.Current.CancellationToken);
+        var actual = await Sut.GetOrAddAsync(_cacheKey, Generator, expiration: DateTimeOffset.UtcNow.AddMinutes(5), setOption: hashCacheSetOption, token: testContextAccessor.Current.CancellationToken);
         generatorWasCalled.Should().BeFalse();
         actual.Should().BeEquivalentTo(expected);
     }
@@ -222,11 +226,11 @@ public class MultilayerHashCacheTests(ITestContextAccessor testContextAccessor) 
         var expected = _fixture.Create<IDictionary<string, string?>>();
         ICacheEntry<IDictionary<string, string?>> expectedCacheEntry = new TestCacheEntry<IDictionary<string, string?>>
         {
-            Value = expected
+            Value = expected,
         };
         var generatorExpected = _fixture.Create<IDictionary<string, string?>>();
         var generatorWasCalled = false;
-        Task<IDictionary<string, string?>> generator(CancellationToken token)
+        Task<IDictionary<string, string?>> Generator(CancellationToken token)
         {
             generatorWasCalled = true;
             return Task.FromResult(generatorExpected);
@@ -234,7 +238,7 @@ public class MultilayerHashCacheTests(ITestContextAccessor testContextAccessor) 
         _innerCache.GetCacheEntryAsync<string>(_innerCacheKey, Arg.Any<CachePolicy?>(), Arg.Any<CancellationToken>())
             .Returns(expectedCacheEntry);
 
-        var actual = await Sut.GetOrAddAsync(_cacheKey, generator, DateTimeOffset.UtcNow.AddMinutes(5), (CachePolicy?)null, testContextAccessor.Current.CancellationToken);
+        var actual = await Sut.GetOrAddAsync(_cacheKey, Generator, DateTimeOffset.UtcNow.AddMinutes(5), (CachePolicy?)null, testContextAccessor.Current.CancellationToken);
         generatorWasCalled.Should().BeFalse();
         actual.Should().BeEquivalentTo(expected);
     }
@@ -245,7 +249,7 @@ public class MultilayerHashCacheTests(ITestContextAccessor testContextAccessor) 
         var expected = _fixture.Create<IDictionary<string, string?>>();
         ICacheEntry<IDictionary<string, string?>> expectedCacheEntry = new TestCacheEntry<IDictionary<string, string?>>
         {
-            Value = expected
+            Value = expected,
         };
         var generatorExpected = _fixture.Create<IDictionary<string, string?>>();
         var generatorWasCalled = false;
@@ -425,13 +429,16 @@ public class MultilayerHashCacheTests(ITestContextAccessor testContextAccessor) 
         await Sut.SetAsync(
             _cacheKey,
             new Dictionary<string, string?>(),
-            new HashCacheEntryOptions(TimeToLive: _fixture.Create<TimeSpan>(), Metadata: metadata), token: testContextAccessor.Current.CancellationToken);
+            new HashCacheEntryOptions(TimeToLive: _fixture.Create<TimeSpan>(), Metadata: metadata),
+            token: testContextAccessor.Current.CancellationToken);
 
         await _innerCache.DidNotReceive().RemoveAsync<string>(_innerCacheKey, Arg.Any<CancellationToken>());
         await _innerCache.Received(1).SetAsync(
             _innerCacheKey,
             Arg.Is<IDictionary<string, string?>>(d => d != null && d.Count == 0),
-            Arg.Is<HashCacheEntryOptions>(o => o.Metadata == metadata), Arg.Any<CachePolicy?>(), Arg.Any<CancellationToken>());
+            Arg.Is<HashCacheEntryOptions>(o => o.Metadata == metadata),
+            Arg.Any<CachePolicy?>(),
+            Arg.Any<CancellationToken>());
     }
 
     [Fact]
@@ -557,7 +564,7 @@ public class MultilayerHashCacheTests(ITestContextAccessor testContextAccessor) 
         var expected = _fixture.Create<IDictionary<string, string?>>();
         ICacheEntry<IDictionary<string, string?>> expectedCacheEntry = new TestCacheEntry<IDictionary<string, string?>>
         {
-            Value = expected
+            Value = expected,
         };
 
         _innerCache.GetCacheEntryAsync<string>(_innerCacheKey, Arg.Any<CachePolicy?>(), Arg.Any<CancellationToken>())
@@ -565,7 +572,7 @@ public class MultilayerHashCacheTests(ITestContextAccessor testContextAccessor) 
         var token = new TestChangeToken
         {
             ActiveChangeCallbacks = true,
-            HasChanged = false
+            HasChanged = false,
         };
         _changeTokenFactory.Create(Arg.Any<string>(), Arg.Any<ITopic<ICacheEvent>>(), Arg.Any<string>(), Arg.Any<Type>())
             .Returns(c => token);
@@ -584,7 +591,7 @@ public class MultilayerHashCacheTests(ITestContextAccessor testContextAccessor) 
         var expected = _fixture.Create<IDictionary<string, string?>>();
         ICacheEntry<IDictionary<string, string?>> expectedCacheEntry = new TestCacheEntry<IDictionary<string, string?>>
         {
-            Value = expected
+            Value = expected,
         };
 
         _innerCache.GetCacheEntryAsync<string>(_cacheKey, Arg.Any<CachePolicy?>(), Arg.Any<CancellationToken>())
@@ -594,7 +601,7 @@ public class MultilayerHashCacheTests(ITestContextAccessor testContextAccessor) 
         var token = new TestChangeToken
         {
             ActiveChangeCallbacks = true,
-            HasChanged = false
+            HasChanged = false,
         };
         _changeTokenFactory.Create(Arg.Any<string>(), Arg.Any<ITopic<ICacheEvent>>(), Arg.Any<string>(), Arg.Any<Type>())
             .Returns(c => token);
@@ -705,7 +712,7 @@ public class MultilayerHashCacheTests(ITestContextAccessor testContextAccessor) 
         {
             Value = expected,
             Metadata = _fixture.Create<IDictionary<string, string?>>(),
-            Expiration = _clock.UtcNow.AddDays(1)
+            Expiration = _clock.UtcNow.AddDays(1),
         };
 
         TestChangeToken? token = default;
@@ -716,7 +723,7 @@ public class MultilayerHashCacheTests(ITestContextAccessor testContextAccessor) 
                 {
                     ActiveChangeCallbacks = true,
                     HasChanged = false,
-                    MetadataHasChanged = false
+                    MetadataHasChanged = false,
                 };
                 return token;
             });
@@ -754,7 +761,7 @@ public class MultilayerHashCacheTests(ITestContextAccessor testContextAccessor) 
         ICacheEntry<IDictionary<string, string?>> expectedCacheEntry = new TestCacheEntry<IDictionary<string, string?>>
         {
             Value = expected,
-            Expiration = _clock.UtcNow.AddDays(1)
+            Expiration = _clock.UtcNow.AddDays(1),
         };
         _innerCache.GetCacheEntryAsync<string>(_innerCacheKey, Arg.Any<CachePolicy?>(), Arg.Any<CancellationToken>())
             .Returns(expectedCacheEntry);
@@ -763,7 +770,7 @@ public class MultilayerHashCacheTests(ITestContextAccessor testContextAccessor) 
         var token = new TestChangeToken
         {
             ActiveChangeCallbacks = false,
-            HasChanged = false
+            HasChanged = false,
         };
         _changeTokenFactory.Create(Arg.Any<string>(), Arg.Any<ITopic<ICacheEvent>>(), Arg.Any<string>(), Arg.Any<Type>())
             .Returns(c => token);
@@ -903,7 +910,7 @@ public class MultilayerHashCacheTests(ITestContextAccessor testContextAccessor) 
         IChangeToken? token = new TestChangeToken
         {
             ActiveChangeCallbacks = true,
-            HasChanged = false
+            HasChanged = false,
         };
         _changeTokenFactory.Create(Arg.Any<string>(), Arg.Any<ITopic<ICacheEvent>>(), Arg.Any<string>(), Arg.Any<Type>())
             .Returns(token);
@@ -934,7 +941,7 @@ public class MultilayerHashCacheTests(ITestContextAccessor testContextAccessor) 
         var token = new TestChangeToken
         {
             ActiveChangeCallbacks = true,
-            HasChanged = false
+            HasChanged = false,
         };
         _changeTokenFactory.Create(Arg.Any<string>(), Arg.Any<ITopic<ICacheEvent>>(), Arg.Any<string>(), Arg.Any<Type>())
             .Returns(_ => token);
@@ -958,7 +965,7 @@ public class MultilayerHashCacheTests(ITestContextAccessor testContextAccessor) 
         var expectedCacheEntry = new TestCacheEntry<IDictionary<string, string?>>
         {
             Value = _fixture.Create<IDictionary<string, string?>>(),
-            Metadata = expected
+            Metadata = expected,
         };
 
         _memoryCache.TryGetValue(Arg.Any<object>(), out Arg.Any<object?>())
@@ -982,7 +989,7 @@ public class MultilayerHashCacheTests(ITestContextAccessor testContextAccessor) 
         var expectedCacheEntry = new TestCacheEntry<IDictionary<string, string?>>
         {
             Value = _fixture.Create<IDictionary<string, string?>>(),
-            Metadata = expected
+            Metadata = expected,
         };
 
         _innerCache.GetMetadataAsync<string>(_innerCacheKey, Arg.Any<CancellationToken>())
@@ -1008,7 +1015,7 @@ public class MultilayerHashCacheTests(ITestContextAccessor testContextAccessor) 
         var expectedCacheEntry = new TestCacheEntry<IDictionary<string, string?>>
         {
             Value = _fixture.Create<IDictionary<string, string?>>(),
-            Metadata = expected
+            Metadata = expected,
         };
 
         _innerCache.GetMetadataAsync<string>(_cacheKey, Arg.Any<CancellationToken>())
@@ -1036,7 +1043,7 @@ public class MultilayerHashCacheTests(ITestContextAccessor testContextAccessor) 
         var expectedCacheEntry = new TestCacheEntry<IDictionary<string, string?>>
         {
             Value = _fixture.Create<IDictionary<string, string?>>(),
-            Metadata = expected
+            Metadata = expected,
         };
 
         _innerCache.SetMetadataAsync<string>(_innerCacheKey, Arg.Any<IDictionary<string, string?>>(), Arg.Any<CancellationToken>())
@@ -1075,7 +1082,7 @@ public class MultilayerHashCacheTests(ITestContextAccessor testContextAccessor) 
         var expectedCacheEntry = new TestCacheEntry<IDictionary<string, string?>>
         {
             Value = expected,
-            Expiration = _clock.UtcNow.AddSeconds(10)
+            Expiration = _clock.UtcNow.AddSeconds(10),
         };
 
         _memoryCache.TryGetValue(Arg.Any<object>(), out Arg.Any<object?>())
@@ -1094,7 +1101,7 @@ public class MultilayerHashCacheTests(ITestContextAccessor testContextAccessor) 
     public async Task When_inner_cache_returns_max_expiration_local_uses_max()
     {
         var expected = _fixture.Create<IDictionary<string, string?>>();
-        Task<IDictionary<string, string?>> generator(CancellationToken token) => Task.FromResult(expected);
+        Task<IDictionary<string, string?>> Generator(CancellationToken token) => Task.FromResult(expected);
 
         _innerCache.GetCacheEntryAsync<string>(_innerCacheKey, Arg.Any<CachePolicy?>(), Arg.Any<CancellationToken>())
             .Returns(new TestCacheEntry<IDictionary<string, string?>> { Value = expected, Expiration = DateTimeOffset.MaxValue });
@@ -1104,7 +1111,7 @@ public class MultilayerHashCacheTests(ITestContextAccessor testContextAccessor) 
             .Returns(cacheEntry);
 
         _options.DefaultExpiration = null;
-        _ = await Sut.GetOrAddAsync(_cacheKey, generator, (CachePolicy?)null, testContextAccessor.Current.CancellationToken);
+        _ = await Sut.GetOrAddAsync(_cacheKey, Generator, (CachePolicy?)null, testContextAccessor.Current.CancellationToken);
         cacheEntry.AbsoluteExpiration.Should().Be(DateTimeOffset.MaxValue);
     }
 
@@ -1114,7 +1121,7 @@ public class MultilayerHashCacheTests(ITestContextAccessor testContextAccessor) 
         var expected = _fixture.Create<IDictionary<string, string?>>();
         var expectedCacheEntry = new TestCacheEntry<IDictionary<string, string?>>
         {
-            Value = expected
+            Value = expected,
         };
         _options.UseLocalOnlyWhenDisconnected = true;
         _topicProvider.IsConnected.Returns(false);
@@ -1136,7 +1143,7 @@ public class MultilayerHashCacheTests(ITestContextAccessor testContextAccessor) 
         var expected = _fixture.Create<IDictionary<string, string?>>();
         var expectedCacheEntry = new TestCacheEntry<IDictionary<string, string?>>
         {
-            Value = expected
+            Value = expected,
         };
         _options.UseLocalOnlyWhenDisconnected = false;
         _options.ConnectionMonitorEnabled = true;
@@ -1221,7 +1228,7 @@ public class MultilayerHashCacheTests(ITestContextAccessor testContextAccessor) 
         var expected = _fixture.Create<IDictionary<string, string?>>();
         var expectedCacheEntry = new TestCacheEntry<IDictionary<string, string?>>
         {
-            Value = expected
+            Value = expected,
         };
         _options.UseLocalOnlyWhenDisconnected = true;
         _topicProvider.IsConnected.Returns(false);
@@ -1245,7 +1252,7 @@ public class MultilayerHashCacheTests(ITestContextAccessor testContextAccessor) 
         var field = expected.Keys.First();
         var expectedCacheEntry = new TestCacheEntry<IDictionary<string, string?>>
         {
-            Value = expected
+            Value = expected,
         };
         _options.UseLocalOnlyWhenDisconnected = true;
         _topicProvider.IsConnected.Returns(false);
@@ -1486,9 +1493,5 @@ public class MultilayerHashCacheTests(ITestContextAccessor testContextAccessor) 
     protected virtual CacheKey ToInnerCacheKey<T>(CacheKey key)
     {
         return key;
-    }
-
-    public interface ITopicProviderWithConnectionState : ITopicProvider, IConnectionState
-    {
     }
 }

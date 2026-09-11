@@ -20,10 +20,6 @@ public sealed class InMemoryRedisQueueCacheProvider : IQueueCacheProvider
     private readonly TimeProvider _clock;
     private readonly Lazy<MultilayerSetCache> _setCache;
 
-    public string Name => KnownCacheProviderNames.InMemoryRedis;
-
-    public bool Enabled { get; }
-
     public InMemoryRedisQueueCacheProvider(
         IOptions<InMemoryRedisQueueCacheOptions> optionsAccessor,
         IMemoryCacheFactory memoryCacheFactory,
@@ -41,6 +37,10 @@ public sealed class InMemoryRedisQueueCacheProvider : IQueueCacheProvider
         _setCache = new Lazy<MultilayerSetCache>(() => BuildSetCache());
         Enabled = _options.Enabled;
     }
+
+    public string Name => KnownCacheProviderNames.InMemoryRedis;
+
+    public bool Enabled { get; }
 
     public ISetCache CreateSetCache() =>
         _setCache.Value;
