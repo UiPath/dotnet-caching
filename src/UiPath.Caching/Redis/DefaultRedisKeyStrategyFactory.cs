@@ -27,6 +27,8 @@ public sealed class DefaultRedisKeyStrategyFactory : IRedisKeyStrategyFactory
         var keyspace = Guard.NotNullOrWhiteSpace(differentiator, nameof(differentiator));
         var separator = Guard.NotWhiteSpace(options.Separator, nameof(options.Separator));
         var prefix = string.Join(separator, Guard.NotNullOrWhiteSpace(options.AppShortName, nameof(options.AppShortName)), keyspace);
+#pragma warning disable CS0618 // Still honored; see CacheOptions.ShardKeyEnabled.
         return options.ShardKeyEnabled ? new ShardPrefixRedisKeyStrategy(prefix, separator) : new PrefixRedisKeyStrategy(prefix, separator);
+#pragma warning restore CS0618
     }
 }

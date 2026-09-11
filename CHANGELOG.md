@@ -373,10 +373,26 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
   `app:s:{authz_{orgid}_groups_1}` — Redis hashes from the first `{` to the next `}`, so the tag was
   the accidental `authz_{orgid` rather than the org the caller asked for. A key with a valid hash tag
   (non-empty content between the first `{` and the next `}`) is now prefixed and left as-is, so the
-  caller's tag alone picks the slot and multi-key commands land where the caller intended. Keys with
-  no braces, or with braces that do not form a valid tag, are wrapped exactly as before. This
-  relocates existing entries only for apps that run `ShardKeyEnabled: true` *and* put braces in
-  their keys.
+  caller's tag picks the slot and multi-key commands land where the caller intended. Non-empty keys with no
+  braces are wrapped exactly as before; keys whose braces form no valid tag were wrapped by this change too, and
+  are refused outright by *A cache key that cannot carry a hash tag is refused rather than wrapped* later in this
+  release. This relocates existing entries only for apps
+  that run `ShardKeyEnabled: true` *and* put braces in their keys.
+
+### Deprecated
+
+- **`CacheOptions.ShardKeyEnabled`.** It wraps a brace-free cache key in a `{...}` hash tag so the slot follows
+  the key rather than `AppShortName` and the differentiator. That changes *which* keys share a slot and nothing
+  else: the tag becomes the whole key, unique per key just as the untagged key was, so it spreads no better, and
+  it cannot make a multi-key batch land on one node. A key that already carries a valid `{tag}` is rendered
+  identically on either setting, so the flag makes no difference to batching in either direction; a key whose
+  braces form no valid tag is refused outright when it is set. What it does do is co-locate one key across every
+  cache that renders through `DefaultRedisKeyStrategyFactory`, and across apps with a different `AppShortName` —
+  neither of which anyone asked for. What does matter on a cluster is unconditional: a caller's own tag survives,
+  and a cross-slot batch is refused with a message naming the two keys that disagree. The property is still read,
+  because a deployment that set it would relocate every brace-free key if it stopped being honored; to batch
+  across keys on a cluster, give the keys a shared hash tag yourself. All of this assumes `AppShortName`,
+  `Separator` and the differentiator are brace-free, since braces there change which span Redis hashes.
 
 ### Removed
 

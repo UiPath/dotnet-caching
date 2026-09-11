@@ -92,7 +92,9 @@ Remove-Item Env:SampleAspNetCore__UseShardedRedis
 ```
 
 Shard mode sets `Caching:ShardKeyEnabled=true` for both sample instances and
-exposes Redis node ports `6379` through `6384`. With Redis Insight enabled, the
+exposes Redis node ports `6379` through `6384`. That setting is
+[deprecated](../../docs/reference/settings.md) and shard mode sets it only to
+exercise the layout it produces. With Redis Insight enabled, the
 AppHost exposes Redis Insight on `http://localhost:8001` and
 `http://localhost:8002`.
 
