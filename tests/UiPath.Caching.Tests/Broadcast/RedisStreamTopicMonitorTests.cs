@@ -61,7 +61,7 @@ public class RedisStreamHealthMaintainerTests(ITestContextAccessor testContextAc
         Sut.Initialize();
         _lastGeneratedId = $"{DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()}-0";
         await Sut.CheckStreamsAsync(testContextAccessor.Current.CancellationToken);
-        await _database.DidNotReceive().KeyDeleteAsync(Arg.Any<RedisKey[]>(), Arg.Any<CommandFlags>());
+        await _database.DidNotReceive().KeyDeleteAsync(Arg.Any<RedisKey>(), Arg.Any<CommandFlags>());
         await _database.DidNotReceive().StreamGroupInfoAsync(Arg.Any<RedisKey>(), CommandFlags.DemandMaster);
     }
 
@@ -71,8 +71,96 @@ public class RedisStreamHealthMaintainerTests(ITestContextAccessor testContextAc
         Sut.Initialize();
         _lastGeneratedId = $"{DateTimeOffset.UtcNow.Subtract(_streamOptions.MaintainerQuarantineInterval).Subtract(TimeSpan.FromMinutes(1)).ToUnixTimeMilliseconds()}-0";
         await Sut.CheckStreamsAsync(testContextAccessor.Current.CancellationToken);
-        await _database.Received().KeyDeleteAsync(Arg.Any<RedisKey[]>(), Arg.Any<CommandFlags>());
+        await _database.Received().KeyDeleteAsync(Arg.Any<RedisKey>(), Arg.Any<CommandFlags>());
         await _database.DidNotReceive().StreamGroupInfoAsync(Arg.Any<RedisKey>(), CommandFlags.DemandMaster);
+    }
+
+    [Theory]
+    [InlineData(false, "stream1", "tst:h:caching:meta:stream$stream1$")]
+    [InlineData(true, "stream1", "tst:h:{caching:meta:stream$stream1$}")]
+    [InlineData(false, "tst:st:{topicA}", "tst:h:caching:meta:stream$tst:st:%7BtopicA%7D$")]
+    [InlineData(true, "tst:st:{topicA}", "tst:h:{caching:meta:stream$tst:st:%7BtopicA%7D$}")]
+    [InlineData(true, "tst:st:{}topicA", "tst:h:{caching:meta:stream$tst:st:%7B%7DtopicA$}")]
+    [InlineData(true, "tst:st:100%", "tst:h:{caching:meta:stream$tst:st:100%25$}")]
+    public void Quarantine_key_is_rendered_as_one_whole_key(bool shardKeyEnabled, string stream, string expected)
+    {
+        // Composing a rendered prefix instead put every quarantine hash under one tag, and so on one slot.
+        _cacheOptions.ShardKeyEnabled = shardKeyEnabled;
+
+        Sut.Initialize();
+
+        Sut.QuarantineKey(stream).ToString().Should().Be(expected);
+    }
+
+    [Theory]
+    [InlineData("stream1", "stream2")]
+    [InlineData("tst:st:{topicA}", "tst:st:{topicB}")]
+    [InlineData("tst:st:%7BtopicA%7D", "tst:st:{topicA}")]
+    [InlineData("tst:st:a%b", "tst:st:a%25b")]
+    [InlineData("stream1", "stream1 ")]
+    [InlineData("stream1", " stream1")]
+    public void Quarantine_key_is_distinct_for_distinct_streams(string first, string second)
+    {
+        // CacheKey trims its name even under sensitive casing, so the composed key must not end in the
+        // stream key itself or two streams differing only by surrounding whitespace would share one hash.
+        Sut.Initialize();
+
+        Sut.QuarantineKey(first).Should().NotBe(Sut.QuarantineKey(second));
+    }
+
+    [Fact]
+    public async Task An_empty_stream_and_its_quarantine_hash_are_deleted_one_key_at_a_time()
+    {
+        // A multi-key delete would need both keys on one Redis Cluster slot, which the configured
+        // IRedisKeyStrategy and any connection key prefix are free to prevent.
+        _streams = ["stream1"];
+        _lastGeneratedId = $"{DateTimeOffset.UtcNow.Subtract(_streamOptions.MaintainerQuarantineInterval).Subtract(TimeSpan.FromMinutes(1)).ToUnixTimeMilliseconds()}-0";
+        _database.KeyExistsAsync(Arg.Any<RedisKey>(), Arg.Any<CommandFlags>()).Returns(true);
+
+        Sut.Initialize();
+        await Sut.CheckStreamsAsync(testContextAccessor.Current.CancellationToken);
+
+        await _database.DidNotReceive().KeyDeleteAsync(Arg.Any<RedisKey[]>(), Arg.Any<CommandFlags>());
+        Received.InOrder(() =>
+        {
+            // The quarantine hash first: deleting the stream is what makes the pair undiscoverable by the
+            // next SCAN, so a failure after that would strand the hash.
+            _database.KeyDeleteAsync(Arg.Is<RedisKey>(k => k == Sut.QuarantineKey("stream1")), CommandFlags.DemandMaster);
+            _database.KeyDeleteAsync(Arg.Is<RedisKey>(k => k == "stream1"), CommandFlags.DemandMaster);
+        });
+    }
+
+    [Fact]
+    public void Quarantine_key_survives_a_separator_that_is_itself_a_brace()
+    {
+        // Separator only has to be non-whitespace, so it can be '{' -- which puts braces in the marker, not
+        // just in the stream key, and would reach EnsureTag from there.
+        _cacheOptions.Separator = '{';
+        _cacheOptions.ShardKeyEnabled = true;
+
+        // Initialize composes the lock key the same way, so it has to survive the separator too.
+        var initialize = () => Sut.Initialize();
+        initialize.Should().NotThrow();
+
+        var act = () => Sut.QuarantineKey("stream1");
+        act.Should().NotThrow();
+        Sut.QuarantineKey("stream1").Should().NotBe(Sut.QuarantineKey("stream2"));
+    }
+
+    [Fact]
+    public async Task A_stream_key_whose_braces_form_no_tag_does_not_abort_the_pass()
+    {
+        // Under ShardKeyEnabled the composed name goes through EnsureTag, which refuses braces that form no
+        // tag; escaping them keeps every stream maintainable instead of losing the whole pass to one of them.
+        _cacheOptions.ShardKeyEnabled = true;
+        _streams = ["tst:st:{}bad", "stream1"];
+        _database.KeyExistsAsync(Arg.Any<RedisKey>(), Arg.Any<CommandFlags>()).Returns(true);
+
+        Sut.Initialize();
+        await Sut.CheckStreamsAsync(testContextAccessor.Current.CancellationToken);
+
+        await _database.Received().KeyExistsAsync(Arg.Is<RedisKey>(k => k == "tst:st:{}bad"), CommandFlags.DemandMaster);
+        await _database.Received().KeyExistsAsync(Arg.Is<RedisKey>(k => k == "stream1"), CommandFlags.DemandMaster);
     }
 
     [Fact]
