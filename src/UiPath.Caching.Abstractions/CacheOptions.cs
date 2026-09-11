@@ -17,7 +17,7 @@ public class CacheOptions
     [SuppressMessage("Major Code Smell",
         "S1133:Deprecated code should be removed",
         Justification = "Still read, so removing it would relocate every brace-free key.")]
-    [Obsolete("Changes which keys co-locate, nothing more. Flipping it relocates every brace-free entry.")]
+    [Obsolete("Changes which keys co-locate, not how well they spread, and refuses a key whose braces form no valid tag. Flipping it relocates every brace-free entry.")]
     public bool ShardKeyEnabled { get; set; }
 
     public bool AuditEnabled { get; set; } = true;
