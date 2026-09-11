@@ -7,6 +7,8 @@ namespace UiPath.Caching.Broadcast.Redis;
 
 public partial class RedisStreamHealthMaintainer : IHostedService
 {
+    private const string StreamKeyTerminator = "$";
+
     private readonly IRedisConnector _redis;
     private readonly RedisStreamsTopicOptions _streamOptions;
     private readonly RedisCacheOptions _redisOptions;
@@ -21,7 +23,8 @@ public partial class RedisStreamHealthMaintainer : IHostedService
     private string _streamsSearchPattern = string.Empty;
     private PeriodicTimer? _timer;
     private RedisKey _lockKey;
-    private RedisKey _quarantineKeyPrefix;
+    private IRedisKeyStrategy _hashKeyStrategy = default!;
+    private string _quarantineMarker = string.Empty;
 
     private Lazy<bool> _supportsXtrimMinId = new(() => false);
 
@@ -85,8 +88,9 @@ public partial class RedisStreamHealthMaintainer : IHostedService
             _streamsSearchPattern = _streamOptions.MaintainerSearchPattern;
         }
 
-        _lockKey = stringKeyStrategy.GetRedisKey(string.Join(_cacheOptions.Separator, nameof(RedisStreamHealthMaintainer), "Lock2"));
-        _quarantineKeyPrefix = hashKeyStrategy.GetRedisKey(string.Join(_cacheOptions.Separator, "caching", "meta", "stream") + "$");
+        _lockKey = stringKeyStrategy.GetRedisKey(EscapeBraces(string.Join(_cacheOptions.Separator, nameof(RedisStreamHealthMaintainer), "Lock2")));
+        _hashKeyStrategy = hashKeyStrategy;
+        _quarantineMarker = string.Join(_cacheOptions.Separator, "caching", "meta", "stream") + "$";
         _supportsXtrimMinId = new Lazy<bool>(() => _redis.Version >= Version.Parse("6.2.0"));
     }
 
@@ -129,6 +133,26 @@ public partial class RedisStreamHealthMaintainer : IHostedService
             _semaphore.Release();
         }
     }
+
+    // Built as one whole key so the strategy renders it once: composing a rendered prefix instead left every
+    // quarantine hash under one tag, and so on one slot. Sensitive casing preserves the stream key's own case,
+    // and the terminator keeps CacheKey's trim -- which runs in both casings -- from collapsing two stream keys
+    // that differ only by surrounding whitespace.
+    internal RedisKey QuarantineKey(RedisKey streamKey) =>
+        _hashKeyStrategy.GetRedisKey(new CacheKey(
+            EscapeBraces(_quarantineMarker + streamKey.ToString()) + StreamKeyTerminator,
+            CacheKeyCasing.Sensitive));
+
+    // The composed name goes through the configured strategy, which under ShardKeyEnabled refuses a name whose
+    // braces form no tag -- so a single stream named 'app:st:{}topic' would abort the pass for every other
+    // stream. The quarantine hash has no need of the stream's tag, the two being deleted one command at a time,
+    // so the braces are escaped away. The whole name, not just the stream key: CacheOptions.Separator is only
+    // required to be non-whitespace, so the marker can carry braces too. Escaping '%' first keeps this injective.
+    private static string EscapeBraces(string streamKey) =>
+        streamKey
+            .Replace("%", "%25", StringComparison.Ordinal)
+            .Replace("{", "%7B", StringComparison.Ordinal)
+            .Replace("}", "%7D", StringComparison.Ordinal);
 
     private static bool TryParseDeliveredIdToDatetimeOffset(string? entryId, out DateTimeOffset? dateTimeOffset)
     {
@@ -243,7 +267,12 @@ public partial class RedisStreamHealthMaintainer : IHostedService
         if (delete)
         {
             LogStreamDeleted(context.StreamKey);
-            await Database.KeyDeleteAsync([context.StreamKey, context.QuarantineKey], CommandFlags.DemandMaster).ConfigureAwait(false);
+            // One key per command. A multi-key delete would need both on one Redis Cluster slot, which the
+            // configured IRedisKeyStrategy and any connection key prefix are free to prevent. The quarantine
+            // hash goes first: deleting the stream is what makes the pair undiscoverable by the next SCAN, so
+            // failing after that would strand the hash, which may carry no TTL yet.
+            await Database.KeyDeleteAsync(context.QuarantineKey, CommandFlags.DemandMaster).ConfigureAwait(false);
+            await Database.KeyDeleteAsync(context.StreamKey, CommandFlags.DemandMaster).ConfigureAwait(false);
         }
     }
 
@@ -369,7 +398,7 @@ public partial class RedisStreamHealthMaintainer : IHostedService
             (ulong tempPointer, List<RedisKey> keys) = ParseStreamScan(result);
             foreach (var key in keys)
             {
-                ret.Add(new StreamContext(key, string.Concat(_quarantineKeyPrefix, key)));
+                ret.Add(new StreamContext(key, QuarantineKey(key)));
             }
 
             if (tempPointer == 0)

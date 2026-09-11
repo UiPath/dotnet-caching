@@ -19,19 +19,6 @@ internal sealed class StreamSuffixShardedChannelStrategy : IRedisChannelStrategy
         return RedisChannel.Sharded(string.Join(_separator, channelBase, _name));
     }
 
-    private static string ResolveChannelBase(string streamKey)
-    {
-        if (RedisHashTag.HasValidTag(streamKey))
-        {
-            return streamKey;
-        }
-        if (RedisHashTag.ContainsNoBraces(streamKey))
-        {
-            return "{" + streamKey + "}";
-        }
-        throw new InvalidOperationException(
-            $"Sharded notify channel cannot guarantee Redis Cluster slot affinity for stream key '{streamKey}'. " +
-            "The stream key must either contain a valid hash tag (non-empty content between '{' and '}', e.g. 'app:st:{topic}') " +
-            "or contain no '{' or '}' characters at all.");
-    }
+    private static string ResolveChannelBase(string streamKey) =>
+        RedisHashTag.EnsureTag(streamKey, "Sharded notify channel");
 }

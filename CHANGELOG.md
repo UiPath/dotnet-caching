@@ -190,6 +190,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 
 ### Changed
 
+- **A cache key that cannot carry a hash tag is refused rather than wrapped.** `ShardPrefixRedisKeyStrategy` used
+  to wrap any key without a valid tag, but wrapping one that already holds a brace pairs the added `{` with it: the
+  tag Redis reads is then only a prefix of the key, so unrelated keys quietly collapse onto one slot — `bla{}bla`
+  wrapped to `{bla{}bla}` hashes as `bla{`. Such a key now throws `InvalidOperationException` naming the strategy,
+  which is the rule `StreamSuffixShardedChannelStrategy` already applied to stream keys; both go through one helper
+  now. `bla{bla` previously wrapped to a correct tag by accident and now throws as well, as does an empty key,
+  which wrapped to `{}` — a brace pair Redis reads as no tag at all. Non-empty keys with no braces, and keys with
+  a valid tag, are unaffected.
+
 - **BREAKING: `RedisTypePrefixes` is now `RedisKeyspaces`.** The library called the same thing two
   names — the short segment between `AppShortName` and the cache key was a "type prefix" in the core
   and a "keyspace" in the reservation API that packages register against. It is a keyspace
@@ -397,6 +406,23 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
   bound under the old keys is silently ignored by the binder, so rename those keys as well.
 
 ### Fixed
+
+- **The streams maintainer no longer depends on its quarantine hash sharing a Redis Cluster slot with the stream.**
+  Two faults, one cause. The maintainer built its quarantine key by rendering a *prefix* through
+  `IRedisKeyStrategy.GetRedisKey` and concatenating the stream key onto it, but that method renders a complete
+  key: with `ShardKeyEnabled` the rendered prefix carried its own `{...}`, so every quarantine hash inherited one
+  constant tag and all of them landed on a single slot. And `CheckEmptyStreamAsync` deleted the stream and its
+  quarantine hash in one multi-key `KeyDelete`, which Redis Cluster answers with `CROSSSLOT` unless both keys hash
+  to the same slot — so the empty-stream cleanup never completed on a cluster. The key is built in one call now,
+  so it spreads with the stream key that names it, and the pair is deleted one command at a time. Co-locating them
+  instead would not have been sound: the configured `IRedisKeyStrategy` and any connection key prefix both shape
+  the key that reaches Redis, and either can put the two on different slots whatever the library composes. A
+  trailing terminator keeps `CacheKey`'s trim — which runs even under sensitive casing — from collapsing two
+  stream keys that differ only by surrounding whitespace. Quarantine entries written under the old key are
+  orphaned. Most carry the TTL the maintainer attaches, `MaintainerQuarantineInterval` × 10, and expire on their
+  own; one created after its stream's last expiry-attaching pass carries none — the transaction's empty `HashSet`
+  creates no key for the adjacent `KeyExpire` to land on, and the per-group `HashSet` that does create the hash
+  sets no expiry — and has to be deleted by hand.
 
 - **Multi-key `RemoveAsync` honors its cancellation token again.** The `CacheKey[]` overload built
   each entry's options without the token, so an already-cancelled call did the work anyway and only
