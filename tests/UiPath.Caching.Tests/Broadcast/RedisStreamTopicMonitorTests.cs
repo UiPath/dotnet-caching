@@ -85,7 +85,7 @@ public class RedisStreamHealthMaintainerTests(ITestContextAccessor testContextAc
     public void Quarantine_key_is_rendered_as_one_whole_key(bool shardKeyEnabled, string stream, string expected)
     {
         // Composing a rendered prefix instead put every quarantine hash under one tag, and so on one slot.
-        _cacheOptions.ShardKeyEnabled = shardKeyEnabled;
+        ShardKeyEnabled(shardKeyEnabled);
 
         Sut.Initialize();
 
@@ -136,7 +136,7 @@ public class RedisStreamHealthMaintainerTests(ITestContextAccessor testContextAc
         // Separator only has to be non-whitespace, so it can be '{' -- which puts braces in the marker, not
         // just in the stream key, and would reach EnsureTag from there.
         _cacheOptions.Separator = '{';
-        _cacheOptions.ShardKeyEnabled = true;
+        ShardKeyEnabled(true);
 
         // Initialize composes the lock key the same way, so it has to survive the separator too.
         var initialize = () => Sut.Initialize();
@@ -152,7 +152,7 @@ public class RedisStreamHealthMaintainerTests(ITestContextAccessor testContextAc
     {
         // Under ShardKeyEnabled the composed name goes through EnsureTag, which refuses braces that form no
         // tag; escaping them keeps every stream maintainable instead of losing the whole pass to one of them.
-        _cacheOptions.ShardKeyEnabled = true;
+        ShardKeyEnabled(true);
         _streams = ["tst:st:{}bad", "stream1"];
         _database.KeyExistsAsync(Arg.Any<RedisKey>(), Arg.Any<CommandFlags>()).Returns(true);
 
@@ -392,6 +392,10 @@ public class RedisStreamHealthMaintainerTests(ITestContextAccessor testContextAc
         _transaction.ExecuteAsync().Returns(c => _transactionSuccess);
         return ValueTask.CompletedTask;
     }
+
+#pragma warning disable CS0618 // Deprecated but still honored, and the key shape it selects is what these tests cover.
+    private void ShardKeyEnabled(bool enabled) => _cacheOptions.ShardKeyEnabled = enabled;
+#pragma warning restore CS0618
 
     private StreamInfo GenerateStreamInfo(int? groupsCount = null)
     {

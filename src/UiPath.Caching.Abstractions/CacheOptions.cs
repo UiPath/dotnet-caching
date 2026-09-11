@@ -14,6 +14,10 @@ public class CacheOptions
 
     public bool BroadcastEnabled { get; set; } = true;
 
+    [SuppressMessage("Major Code Smell",
+        "S1133:Deprecated code should be removed",
+        Justification = "Still read, so removing it would relocate every brace-free key.")]
+    [Obsolete("Changes which keys co-locate, nothing more. Flipping it relocates every brace-free entry.")]
     public bool ShardKeyEnabled { get; set; }
 
     public bool AuditEnabled { get; set; } = true;
