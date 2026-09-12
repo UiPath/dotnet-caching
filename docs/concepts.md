@@ -32,6 +32,11 @@ and resolved by name at runtime, so you can register multiple providers and
 let individual caches opt into a non-default one by passing a provider name to
 the factory.
 
+Providers share one Redis connection. A *named caching stack*
+(`AddNamedCaching`) is the other axis: the whole set of providers, locks and
+topics again, on a second Redis connection, reached through keyed services under
+the stack's name. See [recipes/second-redis-connection.md](recipes/second-redis-connection.md).
+
 `InMemoryRedis` is the default and the right choice for most services. It
 combines an in-process memory tier (L1) with a shared Redis tier (L2), and it
 wires up cross-node L1 invalidation automatically via topics. When a service

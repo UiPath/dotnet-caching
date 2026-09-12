@@ -90,6 +90,21 @@ public class InviteService(ISetCache<string> pending)
 
 Details: [Entra recipe](docs/recipes/azure-entra-authentication.md), [set-cache settings](docs/reference/settings.md#queue-caches-uipathcachingqueue).
 
+### A second Redis connection
+
+A named caching stack is the whole thing again on another server: caches, set caches, locks, topics, warm-up. It reads the same `Caching` section; only `Connections:<name>` differs, and consumers pick it by key.
+
+```csharp
+// The configuration root, not the section: AddNamedCaching takes the same sectionName as AddCaching ("Caching" by default).
+builder.Services
+    .AddNamedCaching("SecondaryRedis", builder.Configuration, b => b.AddBroadcast().AddRedis().AddInMemoryRedis().AddQueueInMemoryRedis())
+    .ExposeQueueCaches();
+
+public class ColdReports([FromKeyedServices("SecondaryRedis")] ICacheFactory cold) { ... }
+```
+
+Details: [second Redis connection recipe](docs/recipes/second-redis-connection.md).
+
 ## Features
 
 **Resiliency**

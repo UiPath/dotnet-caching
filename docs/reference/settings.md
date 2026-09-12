@@ -78,6 +78,10 @@ Every binding-visible property on every shipped options class, with shipped defa
 
 *Code-only seams:* `ConnectionFactory`, `ProfilingSessionFactory`.
 
+### Caching:Connections:{name} (named caching stacks)
+
+The connection of a second, complete caching stack registered with `AddNamedCaching(name, …)`; see [recipes/second-redis-connection.md](../recipes/second-redis-connection.md). Same shape as `Connections:Redis` (any `RedisConnectionOptions` property), at least a `ConnectionString`; the section is bound *over* `Connections:Redis`, so a key left unset here keeps the primary connection's value. Registration fails when the section is empty. Everything else the stack uses (`Caching:*`, the provider and queue options) is the same section as the primary, unless `AddNamedCaching` is given another `sectionName`. The sample's second stack is named `SecondaryRedis`.
+
 ---
 
 ## Caching:Broadcast:RedisStreams (RedisStreamsTopicOptions)

@@ -8,6 +8,22 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 
 ### Added
 
+- **Named caching stacks: a second Redis connection.** `services.AddNamedCaching(name, configuration, chain)` registers a
+  complete second caching stack on its own Redis server: `ICache`, `IHashCache`, `ICache<T>`, `IHashCache<T>`,
+  `IDistributedLock`, `ILocalLock`, broadcast topics, warm-up and planned maintenance, all again, reached through keyed
+  services under the stack's name (`[FromKeyedServices(name)]`), the stack's `ICacheKeyStrategy` and
+  `ICachePolicyFactory` included, so its typed caches address the same keys as its unkeyed ones. The stack reads the same `Caching` section as the
+  primary, so every cache option is shared, and its connection is `Connections:{name}` laid over `Connections:Redis`, so
+  a connection key it leaves unset is inherited. It has its own L1 memory caches, locks and hosted services; logging,
+  telemetry, the clock and key masking are shared with the application. `INamedCaching.Expose<T>()` reaches anything
+  else the chain registers; the Queue package's `ExposeQueueCaches()` adds `ISetCache`, `ISetCache<T>` and
+  `IQueueCacheFactory`. Registration refuses a stack with no `ConnectionString` of its own unless `configureConnection`
+  supplies one, the name `Redis`, and a duplicate name; first resolution refuses a chain that adds its own connection, a
+  connection that resolves to nothing or to the application's primary one, and a `KeyCasing` that differs from the
+  application's, wherever it was set. Recipe:
+  [docs/recipes/second-redis-connection.md](docs/recipes/second-redis-connection.md). The sample app runs two stacks
+  against two Redis containers provisioned by the Aspire host.
+
 - **Key masking in logs (#129).** A cache key is the caller's, so it can be a secret; the library names keys in log
   lines throughout. `builder.AddKeyMasking(prefixes)` turns masking on, and `AddKeyMasking<TPolicy>()` takes an
   `IKeyMaskingPolicy` of your own, which is asked whether one key is secret and is given the key, what the cache holds
