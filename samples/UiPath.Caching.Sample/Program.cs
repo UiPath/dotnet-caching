@@ -5,6 +5,7 @@ using UiPath.Caching.CloudEvents;
 using UiPath.Caching.Config;
 using UiPath.Caching.OpenTelemetry;
 using UiPath.Caching.Polly;
+using UiPath.Caching.Queue.Config;
 using UiPath.Caching.Redis;
 using UiPath.Caching.Sample;
 
@@ -33,10 +34,14 @@ builder.Host
             .AddRedis()
             .AddInMemoryRedis()
             .AddMemory()
+            .AddQueueInMemoryRedis()
             .AddResilienceStrategies()
             .AddCloudEvents()
             .AddOpenTelemetry();
     });
+
+// A second, independent caching stack on its own Redis server (see SecondaryCaching.cs).
+builder.Services.AddSecondaryCaching(builder.Configuration);
 
 builder.Services.AddControllers();
 builder.Services.AddEndpointsApiExplorer();

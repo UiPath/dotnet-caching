@@ -43,6 +43,7 @@ UiPath's internal multilayer caching library. L1 in-memory + L2 Redis, cross-nod
 - [custom-telemetry-provider.md](recipes/custom-telemetry-provider.md) — bridge `ICachingTelemetryProvider` to a host telemetry surface.
 - [opentelemetry-multiplexer-factory.md](recipes/opentelemetry-multiplexer-factory.md) — register OTel Redis instrumentation.
 - [redis-health-check.md](recipes/redis-health-check.md) — wire `RedisHealthCheck` into the ASP.NET health probe.
+- [second-redis-connection.md](recipes/second-redis-connection.md) — a complete second caching stack (caches, sets, locks, broadcast) on its own Redis server.
 - [azure-entra-authentication.md](recipes/azure-entra-authentication.md) — passwordless Azure Managed Redis via Entra ID, and the custom-auth seam.
 - [avoid-raw-iredisconnector.md](recipes/avoid-raw-iredisconnector.md) — three anti-patterns and their supported alternatives.
 
