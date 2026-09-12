@@ -8,6 +8,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 
 ### Added
 
+- **Second Redis connection recipe.** [docs/recipes/second-redis-connection.md](docs/recipes/second-redis-connection.md)
+  shows how to run a complete second caching stack (`ICache`, `IHashCache`, `ISetCache`, `IDistributedLock`, broadcast,
+  warm-up, planned maintenance) on its own Redis server, by running `AddCaching` in a child container over the same
+  `Caching` section with only `Connections:Redis` replaced, and exposing it as keyed services. The sample app wires it
+  against a second Redis container provisioned by the Aspire host. No library API changes.
+
 - **Key masking in logs (#129).** A cache key is the caller's, so it can be a secret; the library names keys in log
   lines throughout. `builder.AddKeyMasking(prefixes)` turns masking on, and `AddKeyMasking<TPolicy>()` takes an
   `IKeyMaskingPolicy` of your own, which is asked whether one key is secret and is given the key, what the cache holds

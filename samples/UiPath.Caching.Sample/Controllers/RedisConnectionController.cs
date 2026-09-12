@@ -3,9 +3,7 @@ using UiPath.Caching.Redis;
 
 namespace UiPath.Caching.Sample.Controllers;
 
-[ApiController]
-[Route("[controller]")]
-public class RedisConnectionController(IRedisConnector redis) : ControllerBase
+public abstract class RedisConnectionBaseController(IRedisConnector redis) : ControllerBase
 {
     [HttpPost]
     public IActionResult ForceReconnect()
@@ -26,4 +24,17 @@ public class RedisConnectionController(IRedisConnector redis) : ControllerBase
             return StatusCode(424);
         }
     }
+}
+
+[ApiController]
+[Route("[controller]")]
+public class RedisConnectionController(IRedisConnector redis) : RedisConnectionBaseController(redis)
+{
+}
+
+[ApiController]
+[Route("[controller]")]
+public class SecondaryRedisConnectionController([FromKeyedServices(SecondaryCaching.Key)] IRedisConnector redis)
+    : RedisConnectionBaseController(redis)
+{
 }
