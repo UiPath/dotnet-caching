@@ -157,3 +157,10 @@ UiPath.Caching.Redis.CrossSlotKeysException
 UiPath.Caching.Redis.CrossSlotKeysException.CrossSlotKeysException() -> void
 UiPath.Caching.Redis.CrossSlotKeysException.CrossSlotKeysException(string? message) -> void
 UiPath.Caching.Redis.CrossSlotKeysException.CrossSlotKeysException(string? message, System.Exception? innerException) -> void
+UiPath.Caching.Config.INamedCaching
+UiPath.Caching.Config.INamedCaching.Expose<TService>() -> UiPath.Caching.Config.INamedCaching!
+UiPath.Caching.Config.INamedCaching.Expose<TService>(System.Func<System.IServiceProvider!, TService!>! resolve) -> UiPath.Caching.Config.INamedCaching!
+UiPath.Caching.Config.INamedCaching.Name.get -> string!
+UiPath.Caching.Config.INamedCaching.Services.get -> Microsoft.Extensions.DependencyInjection.IServiceCollection!
+UiPath.Caching.Config.NamedCachingCollectionExtensions
+static UiPath.Caching.Config.NamedCachingCollectionExtensions.AddNamedCaching(this Microsoft.Extensions.DependencyInjection.IServiceCollection! services, string! name, Microsoft.Extensions.Configuration.IConfiguration! configuration, System.Action<UiPath.Caching.Config.ICachingBuilder!>! configure, string! sectionName = "Caching", System.Action<UiPath.Caching.Redis.RedisConnectionOptions!>? configureConnection = null, System.Action<Microsoft.Extensions.DependencyInjection.IServiceCollection!, System.IServiceProvider!>? configureServices = null) -> UiPath.Caching.Config.INamedCaching!

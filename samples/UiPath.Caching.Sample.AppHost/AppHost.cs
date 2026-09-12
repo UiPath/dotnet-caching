@@ -2,6 +2,7 @@ using Microsoft.Extensions.Configuration;
 
 const string RedisConnectionStringKey = "Caching__Connections__Redis__ConnectionString";
 const string RedisConnectionStringExtraParamsKey = "Caching__Connections__Redis__ConnectionStringExtraParams";
+const string SecondaryRedisConnectionStringKey = "Caching__Connections__SecondaryRedis__ConnectionString";
 const string ShardKeyEnabledKey = "Caching__ShardKeyEnabled";
 const string ShardedPubSubKey = "Caching__Broadcast__RedisStreams__NotifyShardedPubSub";
 const string UseOpenTelemetryKey = "SampleAspNetCore__UseOpenTelemetry";
@@ -18,13 +19,24 @@ var singleRedisExtraParams = builder.Configuration["SampleAspNetCore:SingleRedis
 var shardedRedisExtraParams = builder.Configuration["SampleAspNetCore:ShardedRedisConnectionStringExtraParams"]
     ?? "allowAdmin=true,abortConnect=false,connectRetry=2,keepAlive=30,name=test,syncTimeout=2500,connectTimeout=2500";
 
+// The sample's second caching stack (SecondaryCaching.cs) always runs on its own single-node Redis.
+var secondaryCache = builder.AddRedis("cache-secondary")
+    .WithDataVolume()
+    .WithPersistence(TimeSpan.FromSeconds(20), keysChangedThreshold: 1);
+
+if (useRedisInsight)
+{
+    secondaryCache.WithRedisInsight();
+}
+
 if (useShardedRedis)
 {
     var redis = AddShardedRedis(builder, useRedisInsight);
 
-    foreach (var sampleMachine in AddSampleMachines(builder, redis.ConnectionString, shardedRedisExtraParams, shardKeyEnabled: true, useShardedPubSub: useShardedPubSub, useOpenTelemetry: useOpenTelemetry, useSingleMachine: useSingleMachine))
+    foreach (var sampleMachine in AddSampleMachines(builder, redis.ConnectionString, secondaryCache.Resource.ConnectionStringExpression, shardedRedisExtraParams, shardKeyEnabled: true, useShardedPubSub: useShardedPubSub, useOpenTelemetry: useOpenTelemetry, useSingleMachine: useSingleMachine))
     {
         sampleMachine
+            .WaitFor(secondaryCache)
             .WaitFor(redis.Master1)
             .WaitFor(redis.Slave1Master1)
             .WaitFor(redis.Slave2Master1)
@@ -45,9 +57,9 @@ else
         cache.WithRedisInsight();
     }
 
-    foreach (var sampleMachine in AddSampleMachines(builder, cache.Resource.ConnectionStringExpression, singleRedisExtraParams, shardKeyEnabled: false, useShardedPubSub: false, useOpenTelemetry: useOpenTelemetry, useSingleMachine: useSingleMachine))
+    foreach (var sampleMachine in AddSampleMachines(builder, cache.Resource.ConnectionStringExpression, secondaryCache.Resource.ConnectionStringExpression, singleRedisExtraParams, shardKeyEnabled: false, useShardedPubSub: false, useOpenTelemetry: useOpenTelemetry, useSingleMachine: useSingleMachine))
     {
-        sampleMachine.WaitFor(cache);
+        sampleMachine.WaitFor(cache).WaitFor(secondaryCache);
     }
 }
 
@@ -56,20 +68,21 @@ builder.Build().Run();
 static IEnumerable<IResourceBuilder<ProjectResource>> AddSampleMachines(
     IDistributedApplicationBuilder builder,
     ReferenceExpression redisConnectionString,
+    ReferenceExpression secondaryRedisConnectionString,
     string redisConnectionStringExtraParams,
     bool shardKeyEnabled,
     bool useShardedPubSub,
     bool useOpenTelemetry,
     bool useSingleMachine)
 {
-    yield return AddSampleMachine(builder, "sample-aspnetcore-machine1", "Machine1", redisConnectionString, redisConnectionStringExtraParams, shardKeyEnabled, useShardedPubSub, useOpenTelemetry);
+    yield return AddSampleMachine(builder, "sample-aspnetcore-machine1", "Machine1", redisConnectionString, secondaryRedisConnectionString, redisConnectionStringExtraParams, shardKeyEnabled, useShardedPubSub, useOpenTelemetry);
 
     if (useSingleMachine)
     {
         yield break;
     }
 
-    yield return AddSampleMachine(builder, "sample-aspnetcore-machine2", "Machine2", redisConnectionString, redisConnectionStringExtraParams, shardKeyEnabled, useShardedPubSub, useOpenTelemetry);
+    yield return AddSampleMachine(builder, "sample-aspnetcore-machine2", "Machine2", redisConnectionString, secondaryRedisConnectionString, redisConnectionStringExtraParams, shardKeyEnabled, useShardedPubSub, useOpenTelemetry);
 }
 
 static IResourceBuilder<ProjectResource> AddSampleMachine(
@@ -77,6 +90,7 @@ static IResourceBuilder<ProjectResource> AddSampleMachine(
     string resourceName,
     string launchProfileName,
     ReferenceExpression redisConnectionString,
+    ReferenceExpression secondaryRedisConnectionString,
     string redisConnectionStringExtraParams,
     bool shardKeyEnabled,
     bool useShardedPubSub,
@@ -85,6 +99,7 @@ static IResourceBuilder<ProjectResource> AddSampleMachine(
     return builder.AddProject<Projects.UiPath_Caching_Sample>(resourceName, launchProfileName)
         .WithEnvironment(RedisConnectionStringKey, redisConnectionString)
         .WithEnvironment(RedisConnectionStringExtraParamsKey, redisConnectionStringExtraParams)
+        .WithEnvironment(SecondaryRedisConnectionStringKey, secondaryRedisConnectionString)
         .WithEnvironment(ShardKeyEnabledKey, shardKeyEnabled ? "true" : "false")
         .WithEnvironment(ShardedPubSubKey, useShardedPubSub ? "true" : "false")
         .WithEnvironment(UseOpenTelemetryKey, useOpenTelemetry ? "true" : "false")
