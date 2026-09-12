@@ -3,8 +3,12 @@ namespace UiPath.Caching.Config;
 [ExcludeFromCodeCoverage]
 public static class InMemoryRedisCollectionExtensions
 {
-    public static ICachingBuilder AddInMemoryRedis(this ICachingBuilder builder, string sectionName = KnownCacheProviderNames.InMemoryRedis) =>
-        builder.AddInMemoryRedis(opt => builder.Configuration.GetSection(sectionName).Bind(opt));
+    public static ICachingBuilder AddInMemoryRedis(this ICachingBuilder builder, string sectionName = KnownCacheProviderNames.InMemoryRedis)
+    {
+        var section = builder.Configuration.GetSection(sectionName);
+        RemovedConfigurationKeys.ThrowIfPresent(section, RemovedConfigurationKeys.Multilayer);
+        return builder.AddInMemoryRedis(opt => section.Bind(opt));
+    }
 
     public static ICachingBuilder AddInMemoryRedis(this ICachingBuilder builder, Action<InMemoryRedisCacheOptions> configure)
     {

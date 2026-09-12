@@ -317,9 +317,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
   `TryAddAsync<T>(key, value, token)`, `AddAsync<T>(key, item, token)`, `PopAsync<T>(key, token)` and
   the rest — now live as extension methods on the new `CacheExtensions`, `HashCacheExtensions` and
   `SetCacheExtensions` static classes in the same `UiPath.Caching` namespace (`SetCacheExtensions`
-  ships in `UiPath.Caching.Queue`, alongside `ISetCache`). Call sites are unchanged and need no edit;
-  the interfaces shrink to just the policy-bearing members, so an implementation now has one member to
-  write per operation instead of one plus an inherited forwarder it could accidentally override.
+  ships in `UiPath.Caching.Queue`, alongside `ISetCache`). Production call sites are unchanged and need
+  no edit; the interfaces shrink to just the policy-bearing members, so an implementation now has one
+  member to write per operation instead of one plus an inherited forwarder it could accidentally
+  override. **Moq tests that mock the short forms do break, and not at compile time:** Moq reads the
+  `Setup`/`Verify` expression and refuses a call to a static method, so `GetAsync<T>(key, token)` or
+  `SetAsync(key, value, expiration, token)` inside one throws `NotSupportedException` when the test
+  runs. Re-target the setup at the member the extension forwards to, with `It.IsAny<CachePolicy>()` in
+  the new slot, since the extension passes `null` there. NSubstitute is unaffected: it records the call
+  the extension actually makes on the substitute, so `Returns` and `Received()` on the short form keep
+  working. See [Upgrading to 2.0](docs/upgrade-to-2.0.md#tests-that-mock-icache).
 - **BREAKING:** `ICacheOfT.Sync.cs`, `IHashCacheOfT.Sync.cs` and `ISetCacheOfT.Sync.cs` are gone the
   same way. The 59 blocking forwarders they carried as default interface methods — `Get`, `GetOrAdd`,
   `Set`, `TryAdd`, `Refresh`, `Remove`, `Contains`, `TimeToLive`, `ExpireTime`, the hash surface's
@@ -355,9 +362,19 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
   now consistent with `GetHashCode` (the previous pairing could report two keys equal while hashing
   them into different buckets) and that keys built with `CacheKeyCasing.Sensitive` compare
   case-sensitively.
-- **`Microsoft.Extensions.*` dependency floor for `net10.0` raised to 10.0.11** (from 10.0.10).
-  The `net8.0` floor is unchanged at 8.0.x.
-- **OpenTelemetry packages moved to 1.18.0** (`OpenTelemetry.Instrumentation.StackExchangeRedis` to 1.18.0-beta.1).
+- **Dependency floors.** What a consumer's restore has to satisfy, taken from `Directory.Packages.props`
+  rather than from memory — an earlier draft of this entry said 10.0.11 and left StackExchange.Redis out:
+
+  | Package | 1.3.0 | 2.0.0 |
+  |---|---|---|
+  | `StackExchange.Redis` | 3.1.13 | 3.1.31 |
+  | `Microsoft.Extensions.*` (`net10.0` group) | 10.0.10 | 10.0.12 |
+  | `Microsoft.Extensions.Logging.Abstractions` (both TFMs) | 10.0.11 | 10.0.12 |
+
+  The `net8.0` group is unchanged at 8.0.x. `UiPath.Caching.OpenTelemetry` references no OpenTelemetry
+  package, so the 1.18.0 family this repository's samples moved to is a pin of the samples, not a floor
+  on consumers; `OpenTelemetry.Instrumentation.StackExchangeRedis` only needs to be a version without an
+  upper bound on StackExchange.Redis 3.x.
 - **BREAKING (source, not data):** every cache now serializes through `ISerializerProxy<byte[]>`.
   `RedisCache`, `RedisHashCache`, `RedisSetCache`, the memory set tier and all four providers take
   `ISerializerProxy<byte[]>` in place of `ISerializerProxy<RedisValue>`, and the broadcast change
@@ -366,7 +383,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
   Consumers who pass these constructors a serializer directly, or who register a custom one, need a
   one-line type change; `AddCaching` now throws at startup if a leftover
   `ISerializerProxy<RedisValue>` registration is present, rather than ignoring it and silently
-  falling back to JSON.
+  falling back to JSON. The check runs whether or not `CacheOptions.Enabled` is set, so a disabled
+  test profile reports the same leftover the production profile would.
 - **Multi-key commands are checked against the Redis Cluster slot map before they run.** `GetAsync(CacheKey[])`, `GetCacheEntriesAsync`, the multi-key `SetAsync` and `RemoveAsync(CacheKey[])` each reach Redis as one command on one node, so a batch whose keys span slots is answered with an error, which the caches log and report as a miss: migrating an app onto a cluster turned a working batch read into a cache that never hits, with nothing thrown to say so. Each of those paths now compares the slots first and throws `CrossSlotKeysException`, naming the two keys that disagree and how to fix it. A non-clustered server maps every key to the same slot, so nothing changes off a cluster, and a disconnected cache skips the check and keeps answering from its own disconnected branch.
 - **`ShardKeyEnabled` leaves a key that already carries a hash tag alone.** The shard strategy used
   to wrap every key in braces, so a caller who had placed its own `{tag}` in the key ended up with
@@ -418,8 +436,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
   `PrimaryMaxExpirationDisconnected` and `UsePrimaryOnlyWhenDisconnected` on `IMultilayerCacheOptions`,
   `InMemoryCacheOptions` and `InMemoryRedisCacheOptions` — use `LocalMaxExpiration`,
   `LocalMaxExpirationDisconnected` and `UseLocalOnlyWhenDisconnected`, which they forwarded to — and
-  `RedisConnectionOptions.ThreadPoolSocketManager`, a no-op since StackExchange.Redis 3.0. Configuration
-  bound under the old keys is silently ignored by the binder, so rename those keys as well.
+  `RedisConnectionOptions.ThreadPoolSocketManager`, a no-op since StackExchange.Redis 3.0. The binder
+  skips a key it cannot place without a word, so a `PrimaryMaxExpiration` left in `appsettings.json`
+  would not fail the build, startup or a log line — the L1 cap would simply be gone. The section-bound
+  overloads (`AddMemory(sectionName)`, `AddInMemoryRedis(sectionName)`, `AddRedisConnection(sectionName)`
+  and the `(sectionName, configure)` form) therefore **throw `InvalidOperationException` at registration**
+  when one of the four removed keys is present under the section, naming the section, every offending key
+  and its replacement. The check runs whether or not the provider is enabled, since a disabled profile is
+  usually the non-production copy of one that is on elsewhere. The code-only overloads are not checked:
+  the property no longer exists to assign.
 
 ### Fixed
 

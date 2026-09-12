@@ -18,6 +18,8 @@ UiPath's internal multilayer caching library. L1 in-memory + L2 Redis, cross-nod
 
 **I'm new.** → [quickstart.md](quickstart.md). Five minutes from `dotnet add package` to `ICache<MyDto>` injected.
 
+**I'm on 1.x and moving to 2.0.** → [upgrade-to-2.0.md](upgrade-to-2.0.md). Every source, test and configuration change in one checklist, and what does not change (stored entries).
+
 **I'm building the mental model.** → [concepts.md](concepts.md). Architecture overview: providers, layers, topics, locks, policies, telemetry, and the two surfaces (`ICache<T>` vs `ICache`).
 
 **I need to solve X.**

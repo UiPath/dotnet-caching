@@ -34,19 +34,25 @@ public class CachingBuilder(IServiceCollection services, IConfiguration? configu
         Services.TryAddEnumerable(
             ServiceDescriptor.Singleton<IValidateOptions<CacheOptions>, ReservedRedisKeyspaceValidator>());
 
+        if (Enabled)
+        {
+            foreach (var callback in _callbacks)
+            {
+                callback(this);
+            }
+        }
+
+        // After the callbacks, which may register services, and before the switch: a disabled profile is
+        // usually the test copy of one that is on, and should report the same dead registration.
+        ThrowIfLegacySerializerRegistered();
+
         if(!Enabled)
         {
             return;
         }
 
-        foreach (var callback in _callbacks)
-        {
-            callback(this);
-        }
-
         Services.TryAddEnumerable(
             ServiceDescriptor.Singleton<IValidateOptions<CacheOptions>, CacheKeyCasingSeeder>());
-        ThrowIfLegacySerializerRegistered();
         Services.TryAddSingleton<ISerializerProxy<byte[]>>(sp => new SystemJsonByteSerializerProxy(sp.GetService<JsonSerializerOptions>()));
         Services.TryAddSingleton<IResiliencePipelineProvider>(EmptyResiliencePipelineProvider.Instance);
         Services.TryAddSingleton<IChangeTokenFactory>(NullChangeTokenFactory.Instance);
