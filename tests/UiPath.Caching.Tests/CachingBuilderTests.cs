@@ -23,6 +23,31 @@ public class CachingBuilderTests
     }
 
     [Fact]
+    public void A_leftover_RedisValue_serializer_registration_fails_the_build_even_when_caching_is_disabled()
+    {
+        var services = new ServiceCollection();
+        services.AddSingleton(Substitute.For<ISerializerProxy<RedisValue>>());
+
+        var act = () => new CachingBuilder(services) { Enabled = false }.Complete();
+
+        act.Should().Throw<InvalidOperationException>("a disabled profile is usually the test copy of one that is on elsewhere")
+            .WithMessage("*ISerializerProxy<RedisValue>*");
+    }
+
+    [Fact]
+    public void A_RedisValue_serializer_registered_by_a_completion_callback_fails_the_build()
+    {
+        var builder = new CachingBuilder(new ServiceCollection());
+        builder.RegisterOnCompleteCallback(typeof(CachingBuilderTests),
+            b => b.Services.AddSingleton(Substitute.For<ISerializerProxy<RedisValue>>()));
+
+        var act = () => builder.Complete();
+
+        act.Should().Throw<InvalidOperationException>("callbacks run before the check, so what they register is seen")
+            .WithMessage("*ISerializerProxy<RedisValue>*");
+    }
+
+    [Fact]
     public void A_byte_serializer_registration_is_honored_over_the_default()
     {
         var services = new ServiceCollection();

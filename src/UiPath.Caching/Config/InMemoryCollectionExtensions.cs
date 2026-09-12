@@ -3,8 +3,12 @@ namespace UiPath.Caching.Config;
 [ExcludeFromCodeCoverage]
 public static class InMemoryCollectionExtensions
 {
-    public static ICachingBuilder AddMemory(this ICachingBuilder builder, string sectionName = KnownCacheProviderNames.InMemory) =>
-        builder.AddMemory(opt => builder.Configuration.GetSection(sectionName).Bind(opt));
+    public static ICachingBuilder AddMemory(this ICachingBuilder builder, string sectionName = KnownCacheProviderNames.InMemory)
+    {
+        var section = builder.Configuration.GetSection(sectionName);
+        RemovedConfigurationKeys.ThrowIfPresent(section, RemovedConfigurationKeys.Multilayer);
+        return builder.AddMemory(opt => section.Bind(opt));
+    }
 
     public static ICachingBuilder AddMemory(this ICachingBuilder builder, Action<InMemoryCacheOptions> configure)
     {

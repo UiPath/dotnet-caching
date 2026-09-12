@@ -25,8 +25,12 @@ public static class RedisCollectionExtensions
         return builder;
     }
 
-    public static ICachingBuilder AddRedisConnection(this ICachingBuilder builder, string sectionName = Connections) =>
-        builder.AddRedisConnection(opt => builder.Configuration.GetSection(sectionName).Bind(opt));
+    public static ICachingBuilder AddRedisConnection(this ICachingBuilder builder, string sectionName = Connections)
+    {
+        var section = builder.Configuration.GetSection(sectionName);
+        RemovedConfigurationKeys.ThrowIfPresent(section, RemovedConfigurationKeys.RedisConnection);
+        return builder.AddRedisConnection(opt => section.Bind(opt));
+    }
 
     public static ICachingBuilder AddRedisConnection(this ICachingBuilder builder, Action<RedisConnectionOptions> configure)
     {
@@ -38,6 +42,8 @@ public static class RedisCollectionExtensions
 
     public static ICachingBuilder AddRedisConnection(this ICachingBuilder builder, string sectionName, Action<RedisConnectionOptions> configure)
     {
+        RemovedConfigurationKeys.ThrowIfPresent(builder.Configuration.GetSection(sectionName), RemovedConfigurationKeys.RedisConnection);
+
         void ConfigureOptions(RedisConnectionOptions opt)
         {
             builder.Configuration.GetSection(sectionName).Bind(opt);

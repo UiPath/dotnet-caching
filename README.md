@@ -150,6 +150,7 @@ flowchart LR
 | Topic | Doc |
 |---|---|
 | 5-minute onboarding | [docs/quickstart.md](docs/quickstart.md) |
+| Upgrading from 1.x to 2.0 | [docs/upgrade-to-2.0.md](docs/upgrade-to-2.0.md) |
 | Architecture & mental model | [docs/concepts.md](docs/concepts.md) |
 | Resilience (single-flight, hydrating, jitter, Polly) | [docs/how-to/resilience.md](docs/how-to/resilience.md) |
 | Broadcast (per-topic, notify doorbell, sharded Pub/Sub) | [docs/how-to/broadcast.md](docs/how-to/broadcast.md) |

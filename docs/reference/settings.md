@@ -43,6 +43,8 @@ Every binding-visible property on every shipped options class, with shipped defa
 
 ## Caching:Connections:Redis (RedisConnectionOptions)
 
+> `ThreadPoolSocketManager` was removed in 2.0 (a no-op since StackExchange.Redis 3.0). A section that still carries it fails `AddRedisConnection` at startup; delete the key. See [Upgrading to 2.0](../upgrade-to-2.0.md#configuration-keys).
+
 | Property | Type | Default | Scope | Notes |
 |---|---|---|---|---|
 | `ConnectionString` | `string` | _required_ | App-wide | StackExchange.Redis connection string; apps fail at startup without a valid value. Use `"localhost:6379"` as a local placeholder. |
@@ -138,6 +140,8 @@ Per-topic overrides: add entries to `Topics[]` under `Broadcast:RedisPubSub`. Ea
 
 ## Caching:InMemoryRedis (InMemoryRedisCacheOptions)
 
+> The 1.x aliases `PrimaryMaxExpiration`, `PrimaryMaxExpirationDisconnected` and `UsePrimaryOnlyWhenDisconnected` were removed in 2.0. A section that still carries one fails `AddInMemoryRedis` at startup; rename to the `Local*` keys below. See [Upgrading to 2.0](../upgrade-to-2.0.md#configuration-keys).
+
 | Property | Type | Default | Scope | Notes |
 |---|---|---|---|---|
 | `Enabled` | `bool` | `true` | Per-provider | Enable/disable this two-tier (L1 in-memory + L2 Redis) cache provider. |
@@ -183,6 +187,8 @@ Per-topic overrides: add entries to `Topics[]` under `Broadcast:RedisPubSub`. Ea
 ---
 
 ## Caching:InMemory (InMemoryCacheOptions)
+
+> The 1.x aliases `PrimaryMaxExpiration`, `PrimaryMaxExpirationDisconnected` and `UsePrimaryOnlyWhenDisconnected` were removed in 2.0. A section that still carries one fails `AddMemory` at startup; rename to the `Local*` keys below. See [Upgrading to 2.0](../upgrade-to-2.0.md#configuration-keys).
 
 | Property | Type | Default | Scope | Notes |
 |---|---|---|---|---|
