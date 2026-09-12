@@ -78,6 +78,10 @@ Every binding-visible property on every shipped options class, with shipped defa
 
 *Code-only seams:* `ConnectionFactory`, `ProfilingSessionFactory`.
 
+### Caching:Connections:SecondaryRedis (a second connection)
+
+Not read by the library itself. The sample app and [recipes/second-redis-connection.md](../recipes/second-redis-connection.md) run a second, complete caching stack in a child container over the same `Caching` section, with `Connections:Redis` replaced key by key by this section. Same shape as `Connections:Redis` (any `RedisConnectionOptions` property), at least a `ConnectionString`; a key left unset here keeps the value from `Connections:Redis`.
+
 ---
 
 ## Caching:Broadcast:RedisStreams (RedisStreamsTopicOptions)
