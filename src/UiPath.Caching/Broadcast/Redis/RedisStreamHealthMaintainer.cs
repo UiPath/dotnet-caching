@@ -387,13 +387,40 @@ public partial class RedisStreamHealthMaintainer : IHostedService
         _telemetryProvider.TrackMetric(Metrics.StreamConsumer, groupInfo.Lag.GetValueOrDefault(), CollectionsMarshal.AsSpan(props));
     }
 
+    // SCAN carries no key, so the client has nothing to route it by: sent on the database it reaches whichever
+    // single server the multiplexer picks, and its cursor walks only that server's keyspace. On a cluster every
+    // stream whose slot lives on another primary is then never discovered, and so never trimmed, group-reaped
+    // or deleted -- it is held only by the MAXLEN the writer puts on each XADD. Scan every primary instead.
+    // Each one keeps its own cursor. The database remains the fallback for a connector that cannot enumerate
+    // them -- a custom IRedisConnector, or a connection not yet established -- which is the single-server
+    // behavior this replaces.
     private async Task<List<StreamContext>> GetAllStreamsAsync(CancellationToken cancellationToken)
     {
         var ret = new List<StreamContext>();
+        var scannedAnyPrimary = false;
+        foreach (var primary in _redis.GetPrimaries())
+        {
+            scannedAnyPrimary = true;
+            await ScanStreamsAsync((command, args, flags) => primary.ExecuteAsync(command, args, flags), ret, cancellationToken).ConfigureAwait(false);
+        }
+
+        if (!scannedAnyPrimary)
+        {
+            await ScanStreamsAsync((command, args, flags) => Database.ExecuteAsync(command, args, flags), ret, cancellationToken).ConfigureAwait(false);
+        }
+
+        return ret;
+    }
+
+    private async Task ScanStreamsAsync(
+        Func<string, ICollection<object>, CommandFlags, Task<RedisResult>> executeAsync,
+        List<StreamContext> ret,
+        CancellationToken cancellationToken)
+    {
         ulong pointer = 0;
         while (!cancellationToken.IsCancellationRequested)
         {
-            var result = await Database.ExecuteAsync("SCAN", [pointer.ToString(), "MATCH", _streamsSearchPattern, "COUNT", 100, "TYPE", "stream"], CommandFlags.DemandMaster).ConfigureAwait(false);
+            var result = await executeAsync("SCAN", [pointer.ToString(), "MATCH", _streamsSearchPattern, "COUNT", 100, "TYPE", "stream"], CommandFlags.DemandMaster).ConfigureAwait(false);
 
             (ulong tempPointer, List<RedisKey> keys) = ParseStreamScan(result);
             foreach (var key in keys)
@@ -408,8 +435,6 @@ public partial class RedisStreamHealthMaintainer : IHostedService
 
             pointer = tempPointer;
         }
-
-        return ret;
     }
 
     private void TrackStream(RedisKey stream, StreamInfo streamInfo)

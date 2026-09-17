@@ -125,6 +125,14 @@ public sealed class RedisConnector : IRedisConnector
             : [];
     }
 
+    public IEnumerable<IServer> GetPrimaries()
+    {
+        var lazy = _lazyCacheConnectionMultiplexer;
+        return lazy.IsValueCreated && lazy.Value.IsCompletedSuccessfully
+            ? lazy.Value.Result.GetServers().Where(static server => !server.IsReplica && server.IsConnected).ToArray()
+            : [];
+    }
+
     public void ForceReconnect() => ForceReconnect(_lazyCacheConnectionMultiplexer);
 
     public async ValueTask ConnectAsync(CancellationToken cancellationToken = default)

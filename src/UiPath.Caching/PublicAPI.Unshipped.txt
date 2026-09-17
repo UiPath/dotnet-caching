@@ -1,1 +1,3 @@
 #nullable enable
+UiPath.Caching.Redis.IRedisConnector.GetPrimaries() -> System.Collections.Generic.IEnumerable<StackExchange.Redis.IServer!>!
+UiPath.Caching.Redis.RedisConnector.GetPrimaries() -> System.Collections.Generic.IEnumerable<StackExchange.Redis.IServer!>!
