@@ -318,10 +318,6 @@ public class RedisStreamHealthMaintainerTests(ITestContextAccessor testContextAc
     [Fact]
     public async Task Every_primary_is_scanned_so_streams_on_other_shards_are_discovered()
     {
-        // SCAN carries no key, so a single call walks only the keyspace of the one server it reaches. On a
-        // cluster the maintainer has to scan each primary, or a stream whose slot lives on another one is
-        // never discovered -- and so never trimmed, group-reaped or deleted. Two primaries holding disjoint
-        // keyspaces: both streams must be checked, and the routed database must not be scanned at all.
         var firstPrimary = StubPrimaryHolding("shard1-stream");
         var secondPrimary = StubPrimaryHolding("shard2-stream");
         _redisConnector.GetPrimaries().Returns([firstPrimary, secondPrimary]);
@@ -340,8 +336,6 @@ public class RedisStreamHealthMaintainerTests(ITestContextAccessor testContextAc
     [Fact]
     public async Task No_enumerable_primary_falls_back_to_the_routed_database()
     {
-        // A custom IRedisConnector that does not override GetPrimaries, or a connection not yet established,
-        // reports none. The maintainer must still scan rather than silently stop maintaining anything.
         _redisConnector.GetPrimaries().Returns([]);
 
         Sut.Initialize();
@@ -377,9 +371,6 @@ public class RedisStreamHealthMaintainerTests(ITestContextAccessor testContextAc
         _database = _fixture.Freeze<IDatabase>();
         _redisConnector.Database.Returns(_database);
 
-        // Left unconfigured, the auto-mocked connector hands back generated servers whose SCAN answers with
-        // nothing, so every stream would go undiscovered. No primaries is the single-server default these
-        // tests assert against; the cluster case configures its own.
         _redisConnector.GetPrimaries().Returns([]);
 
         _telemetryProvider = new RecordingTelemetryProvider();
@@ -433,8 +424,6 @@ public class RedisStreamHealthMaintainerTests(ITestContextAccessor testContextAc
         return ValueTask.CompletedTask;
     }
 
-    // A primary whose SCAN answers with one stream key and a zero cursor, so its keyspace is disjoint from
-    // every other primary's -- which is what makes a skipped shard show up as a stream that never gets checked.
     private static IServer StubPrimaryHolding(RedisValue streamKey)
     {
         var primary = Substitute.For<IServer>();
