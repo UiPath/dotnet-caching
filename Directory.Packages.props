@@ -65,7 +65,7 @@
     <PackageVersion Include="AsyncKeyedLock" Version="8.0.2" />
     <PackageVersion Include="CloudNative.CloudEvents" Version="$(CloudEvents)" />
     <PackageVersion Include="CloudNative.CloudEvents.SystemTextJson" Version="$(CloudEvents)" />
-    <PackageVersion Include="Polly.Core" Version="8.7.0" />
+    <PackageVersion Include="Polly.Core" Version="8.8.0" />
     <PackageVersion Include="Polly.Extensions" Version="8.7.0" />
     <PackageVersion Include="OpenTelemetry" Version="1.18.0" />
     <PackageVersion Include="OpenTelemetry.Exporter.OpenTelemetryProtocol" Version="1.18.0" />
