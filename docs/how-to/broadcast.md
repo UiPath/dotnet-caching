@@ -256,6 +256,20 @@ Stream keys that contain `{`/`}` but do not form a valid non-empty hash tag (e.g
 2. **Quarantines** consumer groups with zero consumers by recording them with a timestamp in a hash key. On the next cycle, groups that have been quarantined for longer than `MaintainerQuarantineInterval` (default 1 h) are permanently deleted. Groups that regain consumers between cycles are removed from quarantine automatically.
 3. **Deletes** streams with no consumer groups if the stream has not received a new entry within `MaintainerQuarantineInterval`.
 
+### How streams are discovered
+
+`SCAN` is server-scoped: its cursor walks the keyspace of the one server it is sent to, and it carries no key for the
+client to route by. The maintainer therefore sends a scan to **every connected primary**, each on its own cursor, and
+merges the results — on a Redis Cluster that is the only way to see a stream whose slot lives on another shard. The
+scans run concurrently, so a pass costs the slowest shard rather than the sum of all of them, and a primary that
+cannot be reached costs only its own streams for that cycle instead of aborting the pass. Everything after discovery
+(`XINFO`, `XTRIM`, the quarantine hash, the deletes) is keyed, so the client already routes it to the owning shard.
+
+Primaries come from `IRedisConnector.GetPrimaries()`. It is a defaulted interface member returning an empty sequence,
+so a custom `IRedisConnector` that does not override it keeps the older behaviour of scanning only the routed server —
+correct on a single server, but on a cluster it reaches one shard. The maintainer logs a warning whenever it takes that
+path, and an error naming the endpoint whenever a primary cannot be scanned.
+
 ### Setting a custom search pattern
 
 For services that use a non-default stream key strategy, set `MaintainerSearchPattern` to scope the SCAN to only the keys your app owns. Without it the maintainer derives a pattern from `RedisStreamKeyStrategy` (defaulting to `PrefixStrategy` with `RedisKeyspaces.Streams`), which covers the standard key layout but may pick up keys from other apps sharing the same Redis instance if the key prefix is not unique enough.
@@ -347,6 +361,15 @@ The stream key contains `{` or `}` but not a valid non-empty hash tag. Either fi
 **Stream maintainer is not trimming old entries.**
 
 Confirm `MaintainerEnabled: true` and that `StartAsync` was called (the service host calls it on startup). Check that `MaintainerTrimInterval` is set appropriately — the default is 1 hour; entries must be older than this to be trimmed. On Redis < 6.2, `XTRIM MINID` is not available and trimming falls back to a less efficient path; consider upgrading Redis.
+
+**Some streams are trimmed and others are not, on the same cluster and the same options.**
+
+Versions before the per-primary scan (2.0.0 and earlier) discovered streams with a single server-scoped `SCAN`, which
+reached one primary only. On a Redis Cluster every stream whose slot lived on another shard was never trimmed, never
+group-reaped and never deleted; its size was held only by the `MAXLEN` each `XADD` carries, so it retained the last
+`MaxLength` entries (32,768 by default) rather than `MaintainerTrimInterval`, on a key with no TTL. Which streams were
+affected moved whenever the cluster was resized and slots were remapped. Upgrade to a version with the per-primary
+scan; there is no configuration that works around it.
 
 **Consumer groups from decommissioned pods accumulate.**
 

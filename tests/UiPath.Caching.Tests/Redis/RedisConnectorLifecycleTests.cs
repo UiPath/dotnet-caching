@@ -331,6 +331,62 @@ public class RedisConnectorLifecycleTests
         multiplexer.Received(1).Dispose();
     }
 
+    [Fact]
+    public void GetPrimaries_IsEmpty_BeforeConnect_DoesNotTriggerConnect()
+    {
+        var factory = new SequenceFactory();
+
+        var connector = NewConnector(factory);
+
+        connector.GetPrimaries().Should().BeEmpty();
+        factory.CreateCount.Should().Be(0);
+        connector.Dispose();
+    }
+
+    [Fact]
+    public async Task GetPrimaries_KeepsOnlyConnectedPrimaries_AfterConnect()
+    {
+        var primary = StubServer(isReplica: false, isConnected: true);
+        var replica = StubServer(isReplica: true, isConnected: true);
+        var unreachablePrimary = StubServer(isReplica: false, isConnected: false);
+        var multiplexer = Substitute.For<IConnectionMultiplexer>();
+        multiplexer.GetServers().Returns([replica, primary, unreachablePrimary]);
+        var connector = NewConnector(new SequenceFactory(multiplexer));
+        await connector.ConnectAsync(TestContext.Current.CancellationToken);
+
+        // A replica refuses a DemandMaster SCAN, and an unreachable node cannot answer one; both would cost the
+        // whole pass if they reached the maintainer.
+        connector.GetPrimaries().Should().ContainSingle().Which.Should().BeSameAs(primary);
+        connector.Dispose();
+    }
+
+    [Fact]
+    public async Task GetPrimaries_IsEmpty_WhileInitialConnectInFlight()
+    {
+        var primary = StubServer(isReplica: false, isConnected: true);
+        var multiplexer = Substitute.For<IConnectionMultiplexer>();
+        multiplexer.GetServers().Returns([primary]);
+        var gate = new TaskCompletionSource();
+        var connector = NewConnector(new GatedFactory(multiplexer, gate.Task));
+
+        var warmUp = connector.ConnectAsync(TestContext.Current.CancellationToken);
+
+        connector.GetPrimaries().Should().BeEmpty();
+
+        gate.SetResult();
+        await warmUp;
+        connector.GetPrimaries().Should().ContainSingle();
+        connector.Dispose();
+    }
+
+    private static IServer StubServer(bool isReplica, bool isConnected)
+    {
+        var server = Substitute.For<IServer>();
+        server.IsReplica.Returns(isReplica);
+        server.IsConnected.Returns(isConnected);
+        return server;
+    }
+
     private static RedisConnector NewConnector(IConnectionMultiplexerFactory factory, ICachingTelemetryProvider? telemetry = null)
     {
         var options = Options.Create(new RedisConnectionOptions { ConnectionString = "localhost:6379", EnableHangDetection = false });

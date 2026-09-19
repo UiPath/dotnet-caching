@@ -6,6 +6,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 
 ## [Unreleased]
 
+### Added
+
+- `IRedisConnector.GetPrimaries()`, the connected primaries a server-scoped command such as `SCAN` has to be sent to
+  one by one. Defaulted to an empty sequence, so an existing implementer neither breaks nor changes behaviour.
+
 ### Fixed
 
 - **Stream maintenance reached only one shard.** `RedisStreamHealthMaintainer` discovered streams with a keyless
@@ -15,10 +20,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
   never group-reaped and never deleted — held only by the `MAXLEN` each `XADD` carries, which leaves the last
   `MaxLength` entries (32,768 by default) in place of the intended window, on a key that has no TTL and so is not
   reclaimable under a `volatile-*` eviction policy. The maintainer now scans every connected primary, each with its own
-  cursor. `IRedisConnector` gains `GetPrimaries()` for it, defaulted to empty so no existing implementer breaks; a
-  connector that reports none keeps the previous single-server scan. Present since the maintainer was first added and
-  invisible on a single-shard server, which is why it went unnoticed — and because the slot-to-shard mapping moves when
-  a cluster is resized, which streams went unmaintained moved with it.
+  cursor, each scan carrying the configured database so it reaches the same keyspace the routed one did. The scans run
+  concurrently, so a pass costs the slowest shard rather than the sum of them, and their results are merged as a set,
+  so a slot caught mid-migration on both its source and its target primary is still maintained once. A connector that
+  reports no primary keeps the previous single-server scan, and a primary that cannot be reached costs only its own
+  shard that cycle instead of aborting the pass. Present since the maintainer was first added and invisible on a
+  single-shard server, which is why it went unnoticed — and because the slot-to-shard mapping moves when a cluster is
+  resized, which streams went unmaintained moved with it.
 ## [2.0.1] - 2026-09-21
 
 ### Changed
