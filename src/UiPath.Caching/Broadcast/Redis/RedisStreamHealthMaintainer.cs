@@ -310,24 +310,24 @@ public partial class RedisStreamHealthMaintainer : IHostedService
                 lastDeliveredOffset.Value.ToString("O"),
                 minOffset.ToString("O"));
 
-            // Check quarantine before deleting
-            var quarantineValue = await Database.HashGetAsync(context.QuarantineKey, groupInfo.Name, CommandFlags.PreferReplica).ConfigureAwait(false);
-
-            if (quarantineValue.HasValue)
+            var quarantinedAt = await GetQuarantinedAtAsync(context, groupInfo).ConfigureAwait(false);
+            if (quarantinedAt is null)
             {
-                // Exists in quarantine - delete the consumer group
-                var success = await Database.StreamDeleteConsumerGroupAsync(context.StreamKey, groupInfo.Name, CommandFlags.DemandMaster).ConfigureAwait(false);
-                if (success)
-                {
-                    await Database.HashDeleteAsync(context.QuarantineKey, groupInfo.Name, CommandFlags.DemandMaster).ConfigureAwait(false);
-                    _logger.LogWarning("Consumer group {Group} from stream {Stream} deleted due to stale last-delivered-id (was in quarantine)", groupInfo.Name, context.StreamKey);
-                }
-            }
-            else
-            {
-                // Not in quarantine - add to quarantine
                 await Database.HashSetAsync(context.QuarantineKey, groupInfo.Name, _clock.GetUtcNow().ToString("O"), When.Always, CommandFlags.DemandMaster).ConfigureAwait(false);
                 _logger.LogWarning("Consumer group {Group} from stream {Stream} added to quarantine due to stale last-delivered-id", groupInfo.Name, context.StreamKey);
+                return;
+            }
+
+            if (!QuarantineElapsed(quarantinedAt.Value))
+            {
+                return;
+            }
+
+            var deleted = await Database.StreamDeleteConsumerGroupAsync(context.StreamKey, groupInfo.Name, CommandFlags.DemandMaster).ConfigureAwait(false);
+            if (deleted)
+            {
+                await Database.HashDeleteAsync(context.QuarantineKey, groupInfo.Name, CommandFlags.DemandMaster).ConfigureAwait(false);
+                _logger.LogWarning("Consumer group {Group} from stream {Stream} deleted due to stale last-delivered-id (quarantined since {QuarantinedAt:O})", groupInfo.Name, context.StreamKey, quarantinedAt.Value);
             }
 
             return;
@@ -348,34 +348,46 @@ public partial class RedisStreamHealthMaintainer : IHostedService
     private async Task CheckEmptyStreamGroupAsync(StreamContext context, StreamGroupInfo groupInfo, CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
-        var value = await Database.HashGetAsync(context.QuarantineKey, groupInfo.Name, CommandFlags.PreferReplica).ConfigureAwait(false);
-        DateTimeOffset? quarantineDatetimeOffset = null;
-        if (value.HasValue)
+        var quarantinedAt = await GetQuarantinedAtAsync(context, groupInfo).ConfigureAwait(false);
+        if (quarantinedAt is null)
         {
-            quarantineDatetimeOffset = DateTimeOffset.TryParse(value.ToString(), CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind, out var result) ? result : null;
-        }
-
-        if (quarantineDatetimeOffset.HasValue)
-        {
-            if (quarantineDatetimeOffset.Value <= _clock.GetUtcNow().Subtract(_streamOptions.MaintainerQuarantineInterval))
-            {
-                var success = await Database.StreamDeleteConsumerGroupAsync(context.StreamKey, groupInfo.Name, CommandFlags.DemandMaster).ConfigureAwait(false);
-                if (success)
-                {
-                    await Database.HashDeleteAsync(context.QuarantineKey, groupInfo.Name, CommandFlags.DemandMaster).ConfigureAwait(false);
-                    LogConsumerGroupDeleted(groupInfo.Name, context.StreamKey);
-                }
-            }
-        }
-        else
-        {
-            var success = await Database.HashSetAsync(context.QuarantineKey, groupInfo.Name, _clock.GetUtcNow().ToString("O"), When.Always, CommandFlags.DemandMaster).ConfigureAwait(false);
-            if (success)
+            var quarantined = await Database.HashSetAsync(context.QuarantineKey, groupInfo.Name, _clock.GetUtcNow().ToString("O"), When.Always, CommandFlags.DemandMaster).ConfigureAwait(false);
+            if (quarantined)
             {
                 LogConsumerGroupQuarantined(groupInfo.Name, context.StreamKey);
             }
+
+            return;
+        }
+
+        if (!QuarantineElapsed(quarantinedAt.Value))
+        {
+            return;
+        }
+
+        var deleted = await Database.StreamDeleteConsumerGroupAsync(context.StreamKey, groupInfo.Name, CommandFlags.DemandMaster).ConfigureAwait(false);
+        if (deleted)
+        {
+            await Database.HashDeleteAsync(context.QuarantineKey, groupInfo.Name, CommandFlags.DemandMaster).ConfigureAwait(false);
+            LogConsumerGroupDeleted(groupInfo.Name, context.StreamKey);
         }
     }
+
+    // A record means the wait has started, not that it is over: the lock expires on MaintainerCheckInterval
+    // rather than on the pass finishing, so two overlapping passes could write and delete in the same cycle.
+    private async Task<DateTimeOffset?> GetQuarantinedAtAsync(StreamContext context, StreamGroupInfo groupInfo)
+    {
+        // From the primary, like every write to this hash: a replica that has not caught up reports a
+        // timestamp the primary already deleted, and the group is reaped without serving its wait.
+        var value = await Database.HashGetAsync(context.QuarantineKey, groupInfo.Name, CommandFlags.DemandMaster).ConfigureAwait(false);
+        return value.HasValue
+            && DateTimeOffset.TryParse(value.ToString(), CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind, out var quarantinedAt)
+                ? quarantinedAt
+                : null;
+    }
+
+    private bool QuarantineElapsed(DateTimeOffset quarantinedAt) =>
+        quarantinedAt <= _clock.GetUtcNow().Subtract(_streamOptions.MaintainerQuarantineInterval);
 
     private void CheckConsumer(RedisKey stream, StreamGroupInfo groupInfo, StreamConsumerInfo consumerInfo)
     {

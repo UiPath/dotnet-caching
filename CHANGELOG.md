@@ -30,6 +30,18 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 
 ### Fixed
 
+- **A consumer group with a stale last-delivered-id skipped its quarantine.** The maintainer quarantines such a group
+  by recording the instant in a hash field and deleting it once `MaintainerQuarantineInterval` has passed — which is
+  what `CheckEmptyStreamGroupAsync` does for a group with no consumers. The stale-last-delivered-id path wrote the
+  same timestamp but never read it back, deleting on the field's mere presence. Two maintenance passes that overlap —
+  which the distributed lock permits, since it expires on `MaintainerCheckInterval` rather than when the pass
+  finishes — therefore collapsed the wait to nothing: one pass wrote the record, the other deleted the group on it in
+  the same cycle. Even without an overlap the wait was `MaintainerCheckInterval` (30 min by default) rather than the
+  documented `MaintainerQuarantineInterval` (1 h). Both paths now read the recorded instant through one helper, so a
+  group is deleted only once it has actually served the interval. The timestamp is read from the primary, like every
+  other command this maintainer issues: a replica that had not caught up could report one the primary had
+  already deleted, and the group would be reaped without serving any wait at all.
+
 - **Stream maintenance reached only one shard.** `RedisStreamHealthMaintainer` discovered streams with a keyless
   `SCAN` sent on `IDatabase`. A keyless command carries no slot for the client to route by, so it reaches whichever
   single server the multiplexer picks, and its cursor walks that server's keyspace alone. On a cluster every broadcast

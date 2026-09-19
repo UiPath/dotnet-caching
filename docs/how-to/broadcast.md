@@ -253,7 +253,7 @@ Stream keys that contain `{`/`}` but do not form a valid non-empty hash tag (e.g
 `RedisStreamHealthMaintainer` is a singleton hosted service that wakes on a `PeriodicTimer` every `MaintainerCheckInterval` (default 30 min). On each cycle it acquires a distributed lock — so only one instance in the cluster does the work — then:
 
 1. **Trims** entries older than `MaintainerTrimInterval` (default 1 h) using `XTRIM MINID` on Redis 6.2+ or falls back to timestamp-based `XDEL` on older versions. Set `MaintainerTrimInterval` to a value greater than `InMemoryRedis.LocalMaxExpiration`; trimming entries before all consumer groups have read them can cause missed invalidations on slow consumers.
-2. **Quarantines** consumer groups with zero consumers by recording them with a timestamp in a hash key. On the next cycle, groups that have been quarantined for longer than `MaintainerQuarantineInterval` (default 1 h) are permanently deleted. Groups that regain consumers between cycles are removed from quarantine automatically.
+2. **Quarantines** consumer groups by recording them with a timestamp in a hash key, and permanently deletes them once they have been quarantined for longer than `MaintainerQuarantineInterval` (default 1 h). Two conditions quarantine a group: having no consumers at all, and having consumers whose last-delivered-id is older than `MaintainerTrimInterval`. Both serve the same interval, measured from the recorded timestamp rather than from the pass that observes it, so overlapping passes cannot shorten it. Groups that recover between cycles are removed from quarantine automatically.
 3. **Deletes** streams with no consumer groups if the stream has not received a new entry within `MaintainerQuarantineInterval`.
 
 ### How streams are discovered
