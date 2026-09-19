@@ -11,6 +11,23 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 - `IRedisConnector.GetPrimaries()`, the connected primaries a server-scoped command such as `SCAN` has to be sent to
   one by one. Defaulted to an empty sequence, so an existing implementer neither breaks nor changes behaviour.
 
+### Changed
+
+- Bumped `StackExchange.Redis` from 3.2.1 to 3.3.0. No public API change here, and nothing in this repository calls
+  an API 3.2.15 or 3.3.0 altered. Three things in the range are worth knowing:
+  - `SwitchPrimary` now retires the servers its rebuild drops (upstream #3225). They previously stayed in the server
+    snapshot — connected and selectable — and the snapshot is what `IConnectionMultiplexer.GetServers()` reports, so
+    on a Sentinel-managed connection `IRedisConnector.GetPrimaries()` could hand the stream maintainer a node no
+    longer part of the service, and occasionally the same address twice.
+  - `IServer.Execute` supplies the configured default database rather than refusing a database-specific command
+    (upstream #3237). The maintainer passes the database explicitly regardless, so it does not depend on this.
+  - Server-native maintenance notifications arrive as opt-in (`maintNotifications=Auto`, or
+    `ConfigurationOptions.MaintenanceNotifications`). Left off: `RedisPlannedMaintenance` continues to drive itself
+    from `ServerMaintenanceEvent`/`AzureMaintenanceEvent`, which is unchanged, and adopting the native path is a
+    behavioural decision rather than part of a version bump.
+- Dropped the `SER007` suppression in `RedisStreamSubjectWriterTests`. `RedisErrorKind` is no longer marked
+  `[Experimental]` in 3.3.0, so the pragma suppressed a diagnostic that is no longer raised.
+
 ### Fixed
 
 - **Stream maintenance reached only one shard.** `RedisStreamHealthMaintainer` discovered streams with a keyless

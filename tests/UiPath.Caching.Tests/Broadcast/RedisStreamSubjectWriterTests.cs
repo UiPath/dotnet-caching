@@ -554,13 +554,8 @@ public class RedisStreamSubjectWriterTests : IAsyncLifetime
         return false;
     }
 
-    // RedisServerException(string) is obsolete as of StackExchange.Redis 3.1 and slated for removal in 3.2.
-    // Its replacement takes RedisErrorKind, which upstream still marks [Experimental] (SER007), so the
-    // suppression is centralized here rather than repeated at each call site.
-#pragma warning disable SER007 // RedisErrorKind is for evaluation purposes only
     private static RedisServerException UnknownCommandError(string message) =>
         new(RedisErrorKind.UnknownCommand, CommandFlags.None, message);
-#pragma warning restore SER007
 
     private void SetupSingleBatch(StreamEntry[] entries)
     {
