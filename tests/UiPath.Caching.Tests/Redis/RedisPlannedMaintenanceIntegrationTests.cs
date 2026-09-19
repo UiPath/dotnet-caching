@@ -1,4 +1,6 @@
 using System.Collections.Concurrent;
+using System.Net;
+using System.Net.Sockets;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using StackExchange.Redis;
@@ -33,11 +35,12 @@ public class RedisPlannedMaintenanceIntegrationTests(RedisContainerFixture fixtu
     [Fact]
     public async Task StartAsync_RetriesAndWarns_WhenConnectionFails()
     {
+        using var unreachable = new UnresponsiveRedisEndpoint();
         var logger = new CapturingLogger<RedisPlannedMaintenance>();
         using var maintenance = NewMaintenance(
             new RedisConnectionOptions
             {
-                ConnectionString = "127.0.0.1:6399,connectTimeout=200,connectRetry=1",
+                ConnectionString = unreachable.ConnectionString,
                 AbortOnConnectFail = true,
                 EnableHangDetection = false,
                 PlannedMaintenanceConnectionRetryCount = 2,
@@ -86,11 +89,12 @@ public class RedisPlannedMaintenanceIntegrationTests(RedisContainerFixture fixtu
     [Fact]
     public async Task StartAsync_ClampsNegativeRetryDelay_WhenConnectionFails()
     {
+        using var unreachable = new UnresponsiveRedisEndpoint();
         var logger = new CapturingLogger<RedisPlannedMaintenance>();
         using var maintenance = NewMaintenance(
             new RedisConnectionOptions
             {
-                ConnectionString = "127.0.0.1:6399,connectTimeout=200,connectRetry=1",
+                ConnectionString = unreachable.ConnectionString,
                 AbortOnConnectFail = true,
                 EnableHangDetection = false,
                 PlannedMaintenanceConnectionRetryCount = 2,
@@ -109,11 +113,12 @@ public class RedisPlannedMaintenanceIntegrationTests(RedisContainerFixture fixtu
     [Fact]
     public async Task StopAsync_HaltsRetryLoop_WhenConnectionFails()
     {
+        using var unreachable = new UnresponsiveRedisEndpoint();
         var logger = new CapturingLogger<RedisPlannedMaintenance>();
         using var maintenance = NewMaintenance(
             new RedisConnectionOptions
             {
-                ConnectionString = "127.0.0.1:6399,connectTimeout=200,connectRetry=1",
+                ConnectionString = unreachable.ConnectionString,
                 AbortOnConnectFail = true,
                 EnableHangDetection = false,
                 PlannedMaintenanceConnectionRetryCount = 100,
@@ -123,6 +128,8 @@ public class RedisPlannedMaintenanceIntegrationTests(RedisContainerFixture fixtu
 
         await maintenance.StartAsync(TestContext.Current.CancellationToken);
         await WaitForWarningsAsync(logger, 2, TestContext.Current.CancellationToken);
+
+        logger.Warnings.Count.Should().BeGreaterThanOrEqualTo(2, "StopAsync can only be shown to halt a loop that is running");
 
         await maintenance.StopAsync(TestContext.Current.CancellationToken);
         var countAtStop = logger.Warnings.Count;
@@ -165,6 +172,27 @@ public class RedisPlannedMaintenanceIntegrationTests(RedisContainerFixture fixtu
                 Warnings.Enqueue(formatter(state, exception));
             }
         }
+    }
+
+    /// <summary>
+    /// An endpoint that completes the TCP handshake and then never speaks RESP, so a real connection attempt fails on
+    /// its own <c>connectTimeout</c>. The port is bound by the test, so unlike a hard-coded one it cannot be answered
+    /// by a Redis someone happens to be running.
+    /// </summary>
+    private sealed class UnresponsiveRedisEndpoint : IDisposable
+    {
+        private readonly TcpListener _listener;
+
+        public UnresponsiveRedisEndpoint()
+        {
+            _listener = new TcpListener(IPAddress.Loopback, 0);
+            _listener.Start();
+        }
+
+        public string ConnectionString =>
+            $"127.0.0.1:{((IPEndPoint)_listener.LocalEndpoint).Port},connectTimeout=200,connectRetry=1";
+
+        public void Dispose() => _listener.Stop();
     }
 
     private sealed class ThrowingConnectionMultiplexerFactory(int expectedAttempts) : IConnectionMultiplexerFactory
