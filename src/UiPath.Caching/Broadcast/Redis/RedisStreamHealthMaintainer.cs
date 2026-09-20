@@ -390,8 +390,7 @@ public partial class RedisStreamHealthMaintainer : IHostedService
 
     private async Task<List<StreamContext>> GetAllStreamsAsync(CancellationToken cancellationToken)
     {
-        // A set, not a list: a slot in migration answers on both its source and its target primary, and one stream
-        // processed twice in a pass double-counts its telemetry and deletes a key the first visit already removed.
+        // A set: a slot in migration answers on both its source and its target primary.
         var discovered = new HashSet<RedisKey>();
         var primaries = _redis.GetPrimaries().ToList();
         if (primaries.Count == 0)
@@ -401,8 +400,7 @@ public partial class RedisStreamHealthMaintainer : IHostedService
         }
         else
         {
-            // The shards share nothing but this merge, so the pass costs the slowest one rather than their sum --
-            // which is what keeps it inside the lock it holds for MaintainerCheckInterval as shard counts grow.
+            // In parallel, so the pass costs the slowest shard rather than their sum and stays inside the lock.
             foreach (var keys in await Task.WhenAll(primaries.Select(primary => ScanPrimaryAsync(primary, cancellationToken))).ConfigureAwait(false))
             {
                 discovered.UnionWith(keys);
@@ -423,8 +421,8 @@ public partial class RedisStreamHealthMaintainer : IHostedService
         var keys = new HashSet<RedisKey>();
         try
         {
-            // The database-scoped overload: the three-argument one builds the message with db -1, and SCAN is a
-            // database-specific command, so StackExchange.Redis refuses it before it reaches the wire.
+            // The database-scoped overload: the three-argument one builds the message with db -1, which
+            // StackExchange.Redis refuses for SCAN before it reaches the wire.
             await ScanStreamsAsync((command, args, flags) => primary.ExecuteAsync(null, command, args, flags), keys, cancellationToken).ConfigureAwait(false);
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
@@ -443,7 +441,7 @@ public partial class RedisStreamHealthMaintainer : IHostedService
         ulong pointer = 0;
         while (!cancellationToken.IsCancellationRequested)
         {
-            var result = await executeAsync("SCAN", [pointer.ToString(), "MATCH", _streamsSearchPattern, "COUNT", 100, "TYPE", "stream"], CommandFlags.DemandMaster).ConfigureAwait(false);
+            var result = await executeAsync("SCAN", [pointer.ToString(CultureInfo.InvariantCulture), "MATCH", _streamsSearchPattern, "COUNT", 100, "TYPE", "stream"], CommandFlags.DemandMaster).ConfigureAwait(false);
 
             (ulong tempPointer, List<RedisKey> keys) = ParseStreamScan(result);
             discovered.UnionWith(keys);

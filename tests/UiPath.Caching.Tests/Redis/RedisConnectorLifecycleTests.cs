@@ -354,8 +354,7 @@ public class RedisConnectorLifecycleTests
         var connector = NewConnector(new SequenceFactory(multiplexer));
         await connector.ConnectAsync(TestContext.Current.CancellationToken);
 
-        // A replica refuses a DemandMaster SCAN, and an unreachable node cannot answer one; both would cost the
-        // whole pass if they reached the maintainer.
+        // A replica refuses a DemandMaster SCAN and an unreachable node cannot answer one.
         connector.GetPrimaries().Should().ContainSingle().Which.Should().BeSameAs(primary);
         connector.Dispose();
     }

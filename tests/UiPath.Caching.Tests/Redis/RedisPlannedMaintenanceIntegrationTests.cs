@@ -175,9 +175,8 @@ public class RedisPlannedMaintenanceIntegrationTests(RedisContainerFixture fixtu
     }
 
     /// <summary>
-    /// An endpoint that completes the TCP handshake and then never speaks RESP, so a real connection attempt fails on
-    /// its own <c>connectTimeout</c>. The port is bound by the test, so unlike a hard-coded one it cannot be answered
-    /// by a Redis someone happens to be running.
+    /// An endpoint that completes the TCP handshake and never speaks RESP, so a connection attempt fails on its own
+    /// <c>connectTimeout</c>. The port is bound by the test, so no Redis someone is running can answer it.
     /// </summary>
     private sealed class UnresponsiveRedisEndpoint : IDisposable
     {

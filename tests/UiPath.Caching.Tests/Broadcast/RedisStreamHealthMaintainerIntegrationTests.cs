@@ -10,8 +10,7 @@ namespace UiPath.Caching.Tests.Broadcast;
 [Trait("Category", "Integration")]
 public class RedisStreamHealthMaintainerIntegrationTests(RedisContainerFixture fixture)
 {
-    // A mocked IServer cannot model how StackExchange.Redis builds the message, which is where stream discovery
-    // was refused before it reached the wire; only a live server answers that.
+    // A mocked IServer cannot model how StackExchange.Redis builds the message, which is where this failed.
     [Fact]
     public async Task A_stream_is_discovered_through_the_per_primary_scan()
     {

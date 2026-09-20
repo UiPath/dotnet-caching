@@ -388,8 +388,7 @@ public class RedisStreamHealthMaintainerTests(ITestContextAccessor testContextAc
         _database = _fixture.Freeze<IDatabase>();
         _redisConnector.Database.Returns(_database);
 
-        // A real connector reports its primaries, so that is what the behaviour tests run against; the routed-database
-        // fallback is a branch only a connector that reports none ever takes, and has its own test.
+        // A real connector reports its primaries; the routed-database fallback has its own test.
         _primary = Substitute.For<IServer>();
         _primary.EndPoint.Returns(new DnsEndPoint("primary", 6379));
         _primary.ExecuteAsync(Arg.Any<int?>(), Arg.Is<string>(command => command == "SCAN"), Arg.Any<ICollection<object>>(), Arg.Any<CommandFlags>())
