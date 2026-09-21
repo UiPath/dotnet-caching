@@ -100,8 +100,8 @@ public class RedisCacheTests(ITestContextAccessor testContextAccessor) : IAsyncL
     [Fact]
     public async Task Multi_get_does_not_throw_when_the_key_prefix_puts_the_keys_in_one_slot()
     {
-        // The connector's IDatabase prepends KeyPrefix to every command, so a hash tag there is what
-        // the server hashes; the composed keys alone say nothing about the slot.
+        // KeyPrefix mirrors the prefix the application's connector applies with WithKeyPrefix, so a hash
+        // tag there is what the server hashes; the composed keys alone say nothing about the slot.
         _cacheOptions.KeyPrefix = "{tag}:";
         GiveKeysDifferentSlots();
         _database.Multiplexer.GetHashSlot(_redisKey.Prepend(_cacheOptions.KeyPrefix)).Returns(7);

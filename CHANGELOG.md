@@ -8,13 +8,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 
 ### Fixed
 
-- **The cluster slot check honors `RedisCacheOptions.KeyPrefix`.** The connector's `IDatabase` prepends that prefix
-  to every command, so the key the server hashes is the prefixed one — but the check hashed the composed key without
-  it. An application whose prefix carries the hash tag, which is how a deployment keeps its whole keyspace on one
-  slot, had every multi-key batch refused with `CrossSlotKeysException` although Redis would have run it: found on an
-  Azure Managed Redis (OSS cluster policy) where a `{tag}:` prefix turned `GetCacheEntriesAsync` into a 500. The check
-  now hashes the key as it is sent. Nothing changes when the prefix is empty, and a batch that genuinely spans slots
-  is still refused.
+- **The cluster slot check honors `RedisCacheOptions.KeyPrefix`.** An `IRedisConnector` whose `IDatabase` is wrapped
+  with `WithKeyPrefix` prepends that prefix to every command, so the key the server hashes is the prefixed one — but
+  the check hashed the composed key without it. An application whose prefix carries the hash tag, which is how a
+  deployment keeps its whole keyspace on one slot, had every multi-key batch refused with `CrossSlotKeysException`
+  although Redis would have run it: found on an Azure Managed Redis (OSS cluster policy) where a `{tag}:` prefix turned
+  `GetCacheEntriesAsync` into a 500. The check now hashes the key as it is sent. Nothing changes when the prefix is
+  empty, and a batch that genuinely spans slots is still refused.
 
 ## [2.0.0] - 2026-09-15
 

@@ -154,10 +154,10 @@ public abstract class RedisCacheBase : IConnectionState, IDisposable
         }
 
         var multiplexer = Database.Multiplexer;
-        var slot = multiplexer.GetHashSlot(Sent(redisKeys[0]));
+        var slot = multiplexer.GetHashSlot(WithConnectorPrefix(redisKeys[0]));
         for (var i = 1; i < redisKeys.Length; i++)
         {
-            if (multiplexer.GetHashSlot(Sent(redisKeys[i])) == slot)
+            if (multiplexer.GetHashSlot(WithConnectorPrefix(redisKeys[i])) == slot)
             {
                 continue;
             }
@@ -170,6 +170,6 @@ public abstract class RedisCacheBase : IConnectionState, IDisposable
         }
     }
 
-    /// <summary>The key as the server sees it: the connector's <see cref="IDatabase"/> prepends <see cref="RedisCacheOptions.KeyPrefix"/> to every command, and a hash tag there decides the slot.</summary>
-    private RedisKey Sent(RedisKey key) => _keyPrefix.Length == 0 ? key : key.Prepend(_keyPrefix);
+    /// <summary>The key as the server hashes it: <see cref="RedisCacheOptions.KeyPrefix"/> mirrors the prefix the application's <see cref="IRedisConnector"/> already applies to its <see cref="IDatabase"/> with <c>WithKeyPrefix</c>.</summary>
+    private RedisKey WithConnectorPrefix(RedisKey key) => _keyPrefix.Length == 0 ? key : key.Prepend(_keyPrefix);
 }
