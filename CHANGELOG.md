@@ -8,11 +8,40 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 
 ### Added
 
+- **Maintenance notifications from either source.** `RedisPlannedMaintenance` recognised only
+  `AzureMaintenanceEvent`, the pub/sub notifications Azure Cache for Redis publishes, and returned on anything else —
+  so the RESP3 push notifications Redis Enterprise and Redis Cloud send as `PushMaintenanceEvent` were discarded —
+  as will Azure Managed Redis be, once its rollout lands and the option is set for it. Both are handled now, and a source neither of them models is recorded from
+  the base event rather than dropped, so a provider added upstream is visible rather than silent.
+  `RedisConnectionOptions.MaintenanceNotifications` opts in, defaulting to the client's own behaviour. It takes
+  `RedisMaintenanceNotifications`, a neutral enum of this library's own, because the StackExchange type is marked
+  experimental and would otherwise raise `SER010` in every consumer that set the option. A value outside the
+  enum is refused with an `InvalidOperationException` — it arrives from configuration, not as an argument. A notification is recorded
+  whichever connection delivered it, the one carrying commands reaching this through the new
+  `IRedisConnector.ServerMaintenance`, and it can be delivered more than once -- Azure's is a broadcast every
+  connection receives, and a push frame is replayed to a connection that reconnects. A copy matching one recorded in
+  the last 30 seconds is therefore dropped, on the notification's own identity rather than on which connection ought
+  to have had it. They are recorded rather than acted on — the client relaxes timeouts and hands the connection off itself, and probing would force a reconnect
+  against that — so `InProgress` is still driven by the Azure route alone.
+
+- `IRedisConnector.ServerMaintenance`, the maintenance the server announced on the connection carrying commands.
+  Defaulted to never raising, so an existing implementer is unaffected. It exists because the connector is what
+  rebuilds that connection, so one subscription here survives a `ForceReconnect` where subscribing to the
+  multiplexer directly would not.
 - `IRedisConnector.GetPrimaries()`, the connected primaries a server-scoped command such as `SCAN` has to be sent to
   one by one. Defaulted to an empty sequence, so an existing implementer neither breaks nor changes behaviour.
 
 ### Changed
 
+- **A maintenance handoff is no longer reported as a connection failure.** When the client moves off an endpoint the
+  server said is going away, it raises `ConnectionFailed` with `ConnectionFailureType.MaintenanceHandoff`. That was
+  tracked as `Redis.ConnectionFailed` — by `RedisConnector` and again by `ConnectionStateMonitor` — which would
+  alert on exactly the event advance notice exists to make uneventful. Both now track it as
+  `Redis.MaintenanceHandoff`. The event is still raised to subscribers — the connection did drop — and only the
+  telemetry name distinguishes them.
+- `RedisHealthCheck` reports "Redis maintenance in progress" rather than naming Azure Cache for Redis. The wording
+  is provider-neutral in readiness for the push route; the state behind it is not yet, since only the Azure route
+  opens it here.
 - Bumped `StackExchange.Redis` from 3.2.1 to 3.3.0. No public API change here, and nothing in this repository calls
   an API 3.2.15 or 3.3.0 altered. Three things in the range are worth knowing:
   - `SwitchPrimary` now retires the servers its rebuild drops (upstream #3225). They previously stayed in the server
@@ -21,14 +50,77 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
     longer part of the service, and occasionally the same address twice.
   - `IServer.Execute` supplies the configured default database rather than refusing a database-specific command
     (upstream #3237). The maintainer passes the database explicitly regardless, so it does not depend on this.
-  - Server-native maintenance notifications arrive as opt-in (`maintNotifications=Auto`, or
-    `ConfigurationOptions.MaintenanceNotifications`). Left off: `RedisPlannedMaintenance` continues to drive itself
-    from `ServerMaintenanceEvent`/`AzureMaintenanceEvent`, which is unchanged, and adopting the native path is a
-    behavioural decision rather than part of a version bump.
+  - Server-native maintenance notifications arrive as opt-in, through `maintNotifications` on the connection string
+    or `ConfigurationOptions.MaintenanceNotifications`. Surfacing them is a behavioural decision rather than part of
+    a version bump, and is covered by the `MaintenanceNotifications` entry under **Added** above.
 - Dropped the `SER007` suppression in `RedisStreamSubjectWriterTests`. `RedisErrorKind` is no longer marked
   `[Experimental]` in 3.3.0, so the pragma suppressed a diagnostic that is no longer raised.
 
 ### Fixed
+
+- **A throwing subscriber cost the remaining ones their notification.** `RedisConnector` and
+  `ConnectionStateMonitor` raised their connection events with a plain multicast invoke, which stops at the first
+  handler that throws; `ForceReconnect` caught the exception, but around the whole invocation list rather than around
+  each handler, so the outcome was the same. Reconnection is how the pub/sub writer, the stream notify channel and the
+  stream subject writer re-subscribe, and the pub/sub writer's handler can throw `ObjectDisposedException` when a
+  dispose races the notification — one such throw left every subscriber after it in the list detached until the next
+  reconnect. Handlers are now invoked one at a time with per-handler tracking, on every event of both types. This also
+  covers the new `ServerMaintenance`, which the client raises on its own dispatch thread and which had no guard at
+  all, and `ConnectionStateMonitor`, whose own re-multicast to `IConnectionState` subscribers sits inside the
+  connector's — so a throw from one of those aborted the connector's list as well. `RedisPlannedMaintenance`'s own
+  maintenance connection is guarded too: its handler is attached straight to the client rather than reaching this
+  class through the connector, so nothing else would have kept a throw off that dispatch path. Reporting the
+  caught failure is itself guarded, since a sink that cannot take the report would otherwise put the exception
+  back on the path the boundary exists to keep clear.
+
+- **A notification whose recording threw was suppressed for the next 30 seconds.** `RedisPlannedMaintenance`
+  claimed a notification's identity in its deduplication set before handling it, so a handler that threw --
+  starting the Azure probe loop, or emitting the `Redis.Maintenance` event -- recorded nothing while every
+  matching copy was collapsed into a record that did not exist. The claim is still taken up front, so a
+  concurrent copy from the other route still collapses, but it is committed to the retention queue only once
+  the recording succeeded and released otherwise. It is timestamped on commit rather than on claim, so the
+  queue stays ordered by expiry when two routes record concurrently. Cancelling the service is guarded the same
+  way: `CancellationTokenSource.Cancel` runs its registrations inline, so it raises what a caller's callback
+  threw, and that left `StopReacting` before the maintenance connection had been let go of. A probe run now marks
+  itself started only once `Redis.MaintenanceStarted` has been emitted, so a run that could not announce its
+  start no longer emits `Redis.MaintenanceEnded` against nothing, and clears `InProgress` ahead of the rest of
+  its cleanup, since leaving it set would make the guard refuse every later run. Reporting a failed probe no
+  longer precedes the `ForceReconnect` it must not cost, and neither interval announcement can end the run:
+  a sink that refused `Redis.MaintenanceStarted` used to kill the worker before it reached the probe loop,
+  so the Azure route stopped recovering at all.
+
+- **A rejected connection candidate stayed the newest multiplexer.** `RedisConnector` marks each candidate as
+  the incoming generation before its handlers go on, so a `MOVING` arriving before the swap is still taken.
+  A candidate the swap then rejected — a disposal or a newer reconnect won the race — was disposed without
+  clearing that marker, leaving a disposed multiplexer referenced until the next reconnect replaced it. The
+  marker is now compare-and-cleared as that instance is disposed, before its handlers come off. The maintenance
+  handler also closes over the connection it was attached to rather than reading the event's sender, since a
+  composite multiplexer can attach it to its children and raise with a child, which belongs to no generation
+  the connector knows about — a `MOVING` for the connection carrying commands would have been dropped. The
+  raiser is still used, for the opposite question: a group attaches the handler to every member, so a `MOVING`
+  is taken only when it came from the member currently carrying commands. `IConnectionGroup.ActiveMember` is
+  public but `ConnectionGroupMember.Multiplexer` is not, so that link is read reflectively and the check is
+  skipped whenever it cannot be made — a spare notice costs a record, a lost one costs the handoff.
+
+- **A refused telemetry report could defeat the catch that made it.** Every `catch` in `RedisConnector` and
+  `RedisPlannedMaintenance` exists so the surrounding work carries on, and each reported through the sink
+  directly — so a sink that threw took the recovery with it. They report through the guarded helper now. The
+  worst of them was `GetVersion`, the factory behind a `Lazy<Version>`: a `Lazy` caches what its factory threw,
+  so `IRedisConnector.Version` would have thrown for the life of the process instead of falling back once.
+  The same holds for recording an event where recovery follows it: a refused `Redis.ForcedReconnect` skipped
+  both the `OnReconnected` multicast and disposal of the retired connection, and a refused
+  `Redis.StaleEndpointDetected` or `Redis.HangDetected` skipped the `ForceReconnect` it exists to announce.
+  Every record raised on StackExchange.Redis's own dispatch thread is guarded for the same reason, and
+  `ConnectionStateMonitor` guards its records in one place, since each precedes both a state reset and a
+  multicast to its own subscribers.
+
+- **Azure notifications the client could not parse shared one identity.** Such a payload leaves every field at
+  its default, `RawMessage` included, so the deduplication key was the same for all of them and two unrelated
+  ones arriving within the retention window collapsed into one record. They are recorded individually now, the
+  way a push frame whose sequence could not be read already was. A notification whose *type* is unrecognised
+  but whose other fields parsed still has an identity and still collapses. `Redis.Maintenance` also records
+  `ReceivedTimeUtc` and `StartTimeUtc` in the round-trip format on every route, rather than the general
+  invariant pattern on two of the three, so a query over the field does not have to guess which route wrote it.
 
 - **A consumer group with a stale last-delivered-id skipped its quarantine.** The maintainer quarantines such a group
   by recording the instant in a hash field and deleting it once `MaintainerQuarantineInterval` has passed — which is

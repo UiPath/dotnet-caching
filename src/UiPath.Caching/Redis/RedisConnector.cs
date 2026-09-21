@@ -1,6 +1,9 @@
 using System.Globalization;
 using System.Net;
 using System.Reflection;
+using System.Runtime.CompilerServices;
+using StackExchange.Redis.Availability;
+using StackExchange.Redis.Maintenance;
 using UiPath.Caching.Telemetry;
 
 namespace UiPath.Caching.Redis;
@@ -13,8 +16,11 @@ public sealed class RedisConnector : IRedisConnector
     /// <summary>Most scan intervals skipped after a failing refresh: an hour at the default interval.</summary>
     internal const int MaxScanBackoff = 120;
 
+    private static PropertyInfo? _memberConnection;
+
     private readonly RedisConnectionOptions _redisOptions;
     private readonly ICachingTelemetryProvider _telemetryProvider;
+
     private readonly IRedisConfigurationOptionsProvider _redisConfigurationOptionsProvider;
     private readonly IConnectionMultiplexerFactory _connectionMultiplexerFactory;
     private readonly IEnumerable<IRedisConnectionConfigurator>? _configurators;
@@ -28,7 +34,16 @@ public sealed class RedisConnector : IRedisConnector
     private readonly Lazy<Version> _version;
     private readonly object _swapLock = new();
 
+    // The handler closes over the multiplexer it was attached to, and unsubscribing needs that same delegate.
+    private readonly ConditionalWeakTable<IConnectionMultiplexer, EventHandler<ServerMaintenanceEvent>> _maintenanceHandlers = [];
+
     private volatile Lazy<Task<IConnectionMultiplexer>> _lazyCacheConnectionMultiplexer;
+    private IConnectionMultiplexer? _newestMultiplexer;
+
+    // Swapped in tests: the reflective default cannot be driven from outside, because a member's connection is
+    // a sealed ConnectionMultiplexer that cannot be substituted.
+    private Func<IConnectionGroup, object?> _activeMemberConnection = ResolveActiveMemberConnection;
+
     private volatile bool _disposed;
     private volatile bool _staleScanDisabled;
     private int _reconnecting;
@@ -92,6 +107,8 @@ public sealed class RedisConnector : IRedisConnector
     }
 
     public event EventHandler? OnConnectionFailed;
+
+    public event EventHandler<ServerMaintenanceEvent>? ServerMaintenance;
 
     public event EventHandler? OnConnectionRestored;
 
@@ -206,7 +223,7 @@ public sealed class RedisConnector : IRedisConnector
                 return;
             }
 
-            _telemetryProvider.TrackEvent(
+            _telemetryProvider.TryTrackEvent(
                 "Redis.StaleEndpointDetected",
                 [
                     new("EndPoints", string.Join(";", stale.Select(FormatEndPoint))),
@@ -217,7 +234,7 @@ public sealed class RedisConnector : IRedisConnector
         catch (Exception ex)
         {
             _scansToSkip = Math.Min(1 << Math.Min(++_scanFailures, 7), MaxScanBackoff); // a handshake that never completes fails every refresh; back off instead of tracking it every interval
-            _telemetryProvider.TrackException(ex);
+            _telemetryProvider.TryTrackException(ex);
         }
         finally
         {
@@ -277,6 +294,9 @@ public sealed class RedisConnector : IRedisConnector
         return ++_nullTopologyRefreshes >= NullTopologyRefreshLimit ? new(Conclusive: true, Members: null) : ClusterMembership.Inconclusive;
     }
 
+    /// <summary>Test seam: a member's connection is a sealed type that cannot be substituted.</summary>
+    internal void SetActiveMemberConnectionResolver(Func<IConnectionGroup, object?> resolver) => _activeMemberConnection = resolver;
+
 #pragma warning disable IDE0079 // Remove unnecessary suppression
     [SuppressMessage("SonarQube", "S3011:Reflection should not be used to create instances of types", Justification = "By design")]
 #pragma warning restore IDE0079 // Remove unnecessary suppression
@@ -311,12 +331,29 @@ public sealed class RedisConnector : IRedisConnector
         }
         catch (Exception ex)
         {
-            _telemetryProvider.TrackException(ex);
+            _telemetryProvider.TryTrackException(ex);
             return null;
         }
     }
 
     [ExcludeFromCodeCoverage(Justification = "Only called from the excluded OnInternalConnection* event handlers.")]
+#pragma warning disable IDE0079 // Remove unnecessary suppression
+    [SuppressMessage("SonarQube", "S3011:Reflection should not be used to create instances of types", Justification = "By design")]
+#pragma warning restore IDE0079 // Remove unnecessary suppression
+    private static object? ResolveActiveMemberConnection(IConnectionGroup group)
+    {
+        if (group.ActiveMember is not { } member)
+        {
+            return null;
+        }
+
+        // ConnectionGroupMember.Multiplexer is internal upstream; raised with StackExchange.Redis.
+        var accessor = _memberConnection ??= member.GetType().GetProperty(
+            "Multiplexer",
+            BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
+        return accessor?.GetValue(member);
+    }
+
     private static KeyValuePair<string, string>[] GetEventProperties(ConnectionFailedEventArgs e) =>
     [
         new(nameof(e.EndPoint), e.EndPoint?.ToString() ?? string.Empty),
@@ -389,7 +426,7 @@ public sealed class RedisConnector : IRedisConnector
                 }
                 catch (Exception ex)
                 {
-                    _telemetryProvider.TrackException(ex);
+                    _telemetryProvider.TryTrackException(ex);
                     return;
                 }
 
@@ -408,16 +445,10 @@ public sealed class RedisConnector : IRedisConnector
                     _lazyCacheConnectionMultiplexer = swapped;
                 }
 
-                _telemetryProvider.TrackEvent("Redis.ForcedReconnect");
+                // A refused record must not cost the reconnect: the multicast and the retired connection follow.
+                _telemetryProvider.TryTrackEvent("Redis.ForcedReconnect");
 
-                try
-                {
-                    OnReconnected?.Invoke(this, EventArgs.Empty);
-                }
-                catch (Exception ex)
-                {
-                    _telemetryProvider.TrackException(ex);
-                }
+                OnReconnected.TryRaise(_telemetryProvider, handler => handler(this, EventArgs.Empty));
 
                 await CloseAndDisposeAsync(previousTask).ConfigureAwait(false);
             }
@@ -437,7 +468,7 @@ public sealed class RedisConnector : IRedisConnector
         }
         catch (Exception ex)
         {
-            _telemetryProvider.TrackException(ex);
+            _telemetryProvider.TryTrackException(ex);
             return;
         }
 
@@ -447,7 +478,7 @@ public sealed class RedisConnector : IRedisConnector
         }
         catch (Exception ex)
         {
-            _telemetryProvider.TrackException(ex);
+            _telemetryProvider.TryTrackException(ex);
         }
         finally
         {
@@ -496,7 +527,7 @@ public sealed class RedisConnector : IRedisConnector
         }
         catch (Exception ex)
         {
-            _telemetryProvider.TrackException(ex);
+            _telemetryProvider.TryTrackException(ex);
             return DefaultVersion();
         }
     }
@@ -650,7 +681,7 @@ public sealed class RedisConnector : IRedisConnector
         }
         catch (Exception ex)
         {
-            _telemetryProvider.TrackException(ex);
+            _telemetryProvider.TryTrackException(ex);
         }
     }
 
@@ -706,7 +737,7 @@ public sealed class RedisConnector : IRedisConnector
                 _redisOptions.LastWriteIntervalThresholdMilliseconds,
                 _redisOptions.LastReadIntervalThresholdMilliseconds))
         {
-            _telemetryProvider.TrackEvent(
+            _telemetryProvider.TryTrackEvent(
                 "Redis.HangDetected",
                 [
                     new("Now", now.ToString(CultureInfo.InvariantCulture)),
@@ -723,8 +754,16 @@ public sealed class RedisConnector : IRedisConnector
     [ExcludeFromCodeCoverage(Justification = "Wires multiplexer event handlers (ConnectionFailed/Restored/InternalError/ErrorMessage) — fires only from real StackExchange.Redis multiplexer events.")]
     private IConnectionMultiplexer ConfigureMultiplexerEvents(IConnectionMultiplexer multiplexer)
     {
+        // Before the handlers go on, not after the swap: a MOVING arriving while the retired one is still
+        // current says where this connection is going, and the server never replays it.
+        Volatile.Write(ref _newestMultiplexer, multiplexer);
         multiplexer.ConnectionFailed += OnInternalConnectionFailed;
         multiplexer.ConnectionRestored += OnInternalConnectionRestored;
+        // Closed over the multiplexer rather than reading the sender: a composite connection can attach this
+        // to its children and raise with a child, which belongs to no generation this knows about.
+        var maintenanceHandler = new EventHandler<ServerMaintenanceEvent>((raisedBy, e) => OnInternalServerMaintenance(multiplexer, raisedBy, e));
+        _maintenanceHandlers.AddOrUpdate(multiplexer, maintenanceHandler);
+        multiplexer.ServerMaintenanceEvent += maintenanceHandler;
 
         if (_redisOptions.LogConnectionFailedEvents)
         {
@@ -738,8 +777,16 @@ public sealed class RedisConnector : IRedisConnector
     [ExcludeFromCodeCoverage(Justification = "Unwires multiplexer event handlers and disposes — only reached from ForceReconnect against a live multiplexer.")]
     private void DisposeMultiplexer(IConnectionMultiplexer multiplexer)
     {
+        // Before the handlers come off, so a candidate the swap rejected stops counting as incoming rather than
+        // staying the marker until the next one replaces it. Compare-and-clear: a newer candidate may own it.
+        Interlocked.CompareExchange(ref _newestMultiplexer, null, multiplexer);
         multiplexer.ConnectionFailed -= OnInternalConnectionFailed;
         multiplexer.ConnectionRestored -= OnInternalConnectionRestored;
+        if (_maintenanceHandlers.TryGetValue(multiplexer, out var maintenanceHandler))
+        {
+            multiplexer.ServerMaintenanceEvent -= maintenanceHandler;
+            _maintenanceHandlers.Remove(multiplexer);
+        }
 
         if (_redisOptions.LogConnectionFailedEvents)
         {
@@ -753,7 +800,7 @@ public sealed class RedisConnector : IRedisConnector
     [ExcludeFromCodeCoverage(Justification = "Handler for IConnectionMultiplexer.InternalError — fires only from real Redis transport errors.")]
     private void OnInternalError(object? send, InternalErrorEventArgs e)
     {
-        _telemetryProvider.TrackEvent(
+        _telemetryProvider.TryTrackEvent(
             "Redis.InternalError",
             [
                 new("Endpoint", e.EndPoint?.ToString() ?? string.Empty),
@@ -766,7 +813,7 @@ public sealed class RedisConnector : IRedisConnector
     [ExcludeFromCodeCoverage(Justification = "Handler for IConnectionMultiplexer.ErrorMessage — fires only from real Redis-side error replies.")]
     private void OnInternalErrorMessage(object? send, RedisErrorEventArgs e)
     {
-        _telemetryProvider.TrackEvent(
+        _telemetryProvider.TryTrackEvent(
             "Redis.ErrorMessage",
             [
                 new("Endpoint", e.EndPoint?.ToString() ?? string.Empty),
@@ -777,20 +824,77 @@ public sealed class RedisConnector : IRedisConnector
     [ExcludeFromCodeCoverage(Justification = "Handler for IConnectionMultiplexer.ConnectionRestored — fires only from a real reconnect event.")]
     private void OnInternalConnectionRestored(object? sender, ConnectionFailedEventArgs e)
     {
-        OnConnectionRestored?.Invoke(sender, e);
+        OnConnectionRestored.TryRaise(_telemetryProvider, handler => handler(sender, e));
         if (_redisOptions.LogConnectionRestoredEvents)
         {
-            _telemetryProvider.TrackEvent("Redis.ConnectionRestored", GetEventProperties(e));
+            _telemetryProvider.TryTrackEvent("Redis.ConnectionRestored", GetEventProperties(e));
         }
+    }
+
+    private void OnInternalServerMaintenance(IConnectionMultiplexer owner, object? raisedBy, ServerMaintenanceEvent e)
+    {
+        // Only a MOVING is scoped to the connection it arrived on, naming that connection's replacement. The
+        // rest are broadcast to every node, and a retired connection may be the only one that observed one --
+        // so filtering those by generation could lose it, where letting them through costs at worst a duplicate.
+#pragma warning disable SER010 // Server-native maintenance notifications are for evaluation purposes only
+        var connectionScoped = e is PushMaintenanceEvent { NotificationType: MaintenanceNotificationType.Moving };
+#pragma warning restore SER010
+        if (connectionScoped && (!IsCurrentOrIncoming(owner) || !IsFromTheActiveGroupMember(owner, raisedBy)))
+        {
+            return;
+        }
+
+        ServerMaintenance.TryRaise(_telemetryProvider, handler => handler(owner, e));
+    }
+
+    // A group hands our handler to each of its members, so a MOVING can arrive from one the cache is not using.
+    // Which member is active is public; the connection behind it is not, so it is read reflectively and the
+    // check is skipped whenever that fails -- a spare notice costs a record, a lost one costs the handoff.
+    private bool IsFromTheActiveGroupMember(IConnectionMultiplexer owner, object? raisedBy)
+    {
+        if (owner is not IConnectionGroup group)
+        {
+            return true;
+        }
+
+        try
+        {
+            var active = _activeMemberConnection(group);
+            return active is null || ReferenceEquals(active, raisedBy);
+        }
+        catch (Exception ex)
+        {
+            _telemetryProvider.TryTrackException(ex);
+            return true;
+        }
+    }
+
+
+    // The generation carrying commands, or the one about to: the replacement is subscribed before it is published.
+    private bool IsCurrentOrIncoming(object? sender)
+    {
+        if (ReferenceEquals(Volatile.Read(ref _newestMultiplexer), sender))
+        {
+            return true;
+        }
+
+        var lazy = _lazyCacheConnectionMultiplexer;
+        return lazy.IsValueCreated
+            && lazy.Value.IsCompletedSuccessfully
+            && ReferenceEquals(lazy.Value.Result, sender);
     }
 
     [ExcludeFromCodeCoverage(Justification = "Handler for IConnectionMultiplexer.ConnectionFailed — fires only from a real connection-drop event.")]
     private void OnInternalConnectionFailed(object? sender, ConnectionFailedEventArgs e)
     {
-        OnConnectionFailed?.Invoke(sender, e);
+        // Still raised, since the connection did drop; only the telemetry separates a handoff from a failure,
+        // so planned maintenance does not raise the alert it exists to avoid.
+        OnConnectionFailed.TryRaise(_telemetryProvider, handler => handler(sender, e));
         if (_redisOptions.LogConnectionFailedEvents)
         {
-            _telemetryProvider.TrackEvent("Redis.ConnectionFailed", GetEventProperties(e));
+            _telemetryProvider.TryTrackEvent(
+                e.FailureType == ConnectionFailureType.MaintenanceHandoff ? "Redis.MaintenanceHandoff" : "Redis.ConnectionFailed",
+                GetEventProperties(e));
         }
     }
 

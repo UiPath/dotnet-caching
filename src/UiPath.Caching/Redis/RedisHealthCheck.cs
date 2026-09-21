@@ -19,7 +19,7 @@ public class RedisHealthCheck : IHealthCheck
         {
             if (_redisPlannedMaintenance?.InProgress ?? false)
             {
-                return new HealthCheckResult(HealthStatus.Healthy, "Azure Cache for Redis maintenance in progress");
+                return new HealthCheckResult(HealthStatus.Healthy, "Redis maintenance in progress");
             }
 
             var latency = await _redisConnector.Database.PingAsync();

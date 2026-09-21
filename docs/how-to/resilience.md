@@ -423,6 +423,7 @@ old one (`Redis.ForcedReconnect` event, `OnReconnected` raised).
 |---|---|---|
 | Hang detection | More than 100 commands awaiting a reply on the primary with no read or write for `LastWrite/ReadIntervalThresholdMilliseconds` | `EnableHangDetection`, `HangDetectionDueTime`, `HangDetectionPeriod` |
 | Planned maintenance | `NodeMaintenanceStarting` on the `AzureRedisEvents` channel; probes with a write every second for 10 minutes and reconnects on failure | `PlannedMaintenanceEnabled` |
+| Announced maintenance | RESP3 push notifications on the command connection, from Redis Enterprise and Redis Cloud (Azure Managed Redis once its rollout lands); recorded, while the client relaxes timeouts and hands the connection off | `PlannedMaintenanceEnabled`, `MaintenanceNotifications` |
 | Stale endpoint detection | A topology-discovered node has been disconnected for `StaleEndpointThreshold` and is no longer in the cluster topology the client refreshes | `EnableStaleEndpointDetection`, `StaleEndpointThreshold`, `StaleEndpointScanInterval` |
 
 **Stale endpoints** are the clustered-cache failure mode. StackExchange.Redis discovers the
@@ -456,12 +457,41 @@ refreshes, so that a single lost topology reply is retried instead, the scan emi
 `Redis.StaleEndpointScanDisabled` event and stops for the lifetime of the connector, rather than
 reporting the same failure every interval.
 
-**Which Azure offering sends maintenance events.** The `AzureRedisEvents` channel exists on
-Azure Cache for Redis Basic, Standard and Premium only. Azure Managed Redis (`*.redis.azure.net`)
-does not publish it, so on that service `PlannedMaintenanceEnabled` never fires and the
-planned-maintenance state never reports in-progress; the stale-endpoint scan and hang detection
-are what recover a connection there. Microsoft's own guidance for Azure Managed Redis is the same
-ForceReconnect pattern: recreate the multiplexer when errors persist past a threshold.
+**Which offering sends maintenance events, and how.** There are two routes, and the difference
+decides what this library does about them.
+
+Azure Cache for Redis Basic, Standard and Premium publish on the `AzureRedisEvents` pub/sub
+channel. The server announces that a node is going away but hands nothing off, so
+`NodeMaintenanceStarting` starts the probe loop above: write every second for ten minutes, and
+force a reconnect when a write fails.
+
+Redis Enterprise and Redis Cloud instead send RESP3 push notifications on the connection carrying
+your commands, and none of them publish `AzureRedisEvents`. The client acts on these itself —
+relaxing timeouts, re-reading topology, moving off a departing endpoint — so this library records
+them and leaves the recovery alone: probing force-reconnects on a failed write, which would fight
+the handoff. Azure Managed Redis (`*.redis.azure.net`) is recognised as a provider but nothing
+turns the request on for it, so `MaintenanceNotifications` below is what asks. Reporting the
+disruption through `InProgress` is a separate change.
+
+A notification can arrive more than once: Azure's is a broadcast every connection receives, and a
+push frame is replayed to a connection that reconnects, which the client collapses only within the
+multiplexer that received it. So both routes record, and a copy matching one seen in the last 30
+seconds is dropped — keyed on the notification's own identity (the fields parsed from Azure's
+payload, or a push frame's type and sequence id) and measured on timestamps rather than the wall
+clock. Two kinds are never collapsed, a duplicate costing less than a loss: a frame whose sequence
+could not be read, reported as zero and told apart from a genuine zero by the `seq=?` in its
+description; and a source this library does not model, whose payload carries no uniqueness
+contract.
+
+Two asymmetries remain. A push frame on the planned-maintenance connection is ignored, since that
+connection carries no commands. And only a `MOVING` is tied to a connection generation — the one
+carrying commands or the one about to, since a rebuild subscribes the replacement before
+publishing it and the server never replays a `MOVING`.
+
+A handoff surfaces as a `ConnectionFailed` event with
+`ConnectionFailureType.MaintenanceHandoff`. It is tracked as `Redis.MaintenanceHandoff` rather
+than `Redis.ConnectionFailed`, so planned maintenance does not raise a failure alert, but it is
+still raised to subscribers of `OnConnectionFailed` — the connection did drop.
 
 ### Don't roll your own
 

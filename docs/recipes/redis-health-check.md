@@ -36,7 +36,7 @@ A 3-second timeout is the conventional value — longer than a typical ping (sub
 
 The healthy result carries the multiplexer's `IsConnected`, `IsConnecting`, `OperationCount`, `Status` and `DisconnectedEndPoints` (a `;`-joined `host:port` list) in its data, so a probe that is green can still show a node the multiplexer cannot reach. A discovered node that stays in that list after a cluster patch is what [stale endpoint detection](../how-to/resilience.md#redis-connection-self-healing) removes by rebuilding the connection; the health check does not need to fail for that to happen.
 
-`IRedisPlannedMaintenance.InProgress` only ever becomes `true` on Azure Cache for Redis Basic/Standard/Premium, the tiers that publish the `AzureRedisEvents` channel. On Azure Managed Redis the check behaves as if no maintenance tracker were registered.
+`IRedisPlannedMaintenance.InProgress` becomes `true` on one route only. Azure Cache for Redis Basic/Standard/Premium publish the `AzureRedisEvents` channel, and a node going away there starts the probe loop that holds the state open. Redis Enterprise and Redis Cloud instead send RESP3 push notifications on the connection carrying commands; those are recorded but do not yet move this state, so on that route the check behaves as if no maintenance tracker were registered. Azure Managed Redis is recognised as a push provider but its servers do not emit these yet either.
 
 ## When not to use
 

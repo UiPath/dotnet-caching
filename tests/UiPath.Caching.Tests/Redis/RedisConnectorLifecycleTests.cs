@@ -1,7 +1,12 @@
+using System.Net;
+using System.Reflection;
 using Microsoft.Extensions.Logging.Abstractions;
 using StackExchange.Redis;
+using StackExchange.Redis.Availability;
+using StackExchange.Redis.Maintenance;
 using UiPath.Caching.Redis;
 using UiPath.Caching.Telemetry;
+using UiPath.Caching.Tests.Telemetry;
 
 namespace UiPath.Caching.Tests.Redis;
 
@@ -265,6 +270,215 @@ public class RedisConnectorLifecycleTests
     }
 
     [Fact]
+    public async Task ForceReconnect_ReachesEveryOnReconnectedHandler_WhenOneThrows()
+    {
+        // Subscribers re-subscribe from this handler, so a multicast that stops at the first throw detaches the rest.
+        var telemetry = new RecordingTelemetryProvider();
+        var oldMultiplexer = Substitute.For<IConnectionMultiplexer>();
+        var newMultiplexer = Substitute.For<IConnectionMultiplexer>();
+        oldMultiplexer.CloseAsync(Arg.Any<bool>()).Returns(Task.CompletedTask);
+        var disposed = new TaskCompletionSource();
+        oldMultiplexer.When(m => m.Dispose()).Do(_ => disposed.TrySetResult());
+        var connector = NewConnector(new SequenceFactory(oldMultiplexer, newMultiplexer), telemetry);
+        await connector.ConnectAsync(TestContext.Current.CancellationToken);
+        var boom = new InvalidOperationException("handler boom");
+        var reached = 0;
+        connector.OnReconnected += (_, _) => throw boom;
+        connector.OnReconnected += (_, _) => Interlocked.Increment(ref reached);
+
+        connector.ForceReconnect();
+        await disposed.Task.WaitAsync(TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken);
+
+        Volatile.Read(ref reached).Should().Be(1, "a throwing subscriber must not cost the rest their notification");
+        telemetry.Exceptions.Should().ContainSingle().Which.Exception.Should().BeSameAs(boom);
+        connector.Dispose();
+    }
+
+    [Fact]
+    public async Task ServerMaintenance_ReachesEveryHandler_WhenOneThrows()
+    {
+        var (connector, multiplexer, telemetry) = await ConnectedAsync();
+        var boom = new InvalidOperationException("handler boom");
+        var reached = 0;
+        connector.ServerMaintenance += (_, _) => throw boom;
+        connector.ServerMaintenance += (_, _) => reached++;
+
+        var raise = () => multiplexer.ServerMaintenanceEvent += Raise.Event<EventHandler<ServerMaintenanceEvent>>(multiplexer, MaintenanceEvent());
+
+        raise.Should().NotThrow("this is raised on the client's own dispatch, which must not see our subscribers throw");
+        reached.Should().Be(1, "a throwing subscriber must not cost the rest their notification");
+        telemetry.Exceptions.Should().ContainSingle().Which.Exception.Should().BeSameAs(boom);
+        connector.Dispose();
+    }
+
+    [Fact]
+    public async Task OnConnectionFailed_ReachesEveryHandler_WhenOneThrows()
+    {
+        var (connector, multiplexer, telemetry) = await ConnectedAsync();
+        var boom = new InvalidOperationException("handler boom");
+        var reached = 0;
+        connector.OnConnectionFailed += (_, _) => throw boom;
+        connector.OnConnectionFailed += (_, _) => reached++;
+
+        var raise = () => multiplexer.ConnectionFailed += Raise.EventWith(multiplexer, FailedArgs(ConnectionFailureType.SocketFailure));
+
+        raise.Should().NotThrow("this is raised on the client's own dispatch, which must not see our subscribers throw");
+        reached.Should().Be(1, "a throwing subscriber must not cost the rest their notification");
+        telemetry.Exceptions.Should().ContainSingle().Which.Exception.Should().BeSameAs(boom);
+        connector.Dispose();
+    }
+
+    [Fact]
+    public async Task OnConnectionRestored_ReachesEveryHandler_WhenOneThrows()
+    {
+        var (connector, multiplexer, telemetry) = await ConnectedAsync();
+        var boom = new InvalidOperationException("handler boom");
+        var reached = 0;
+        connector.OnConnectionRestored += (_, _) => throw boom;
+        connector.OnConnectionRestored += (_, _) => reached++;
+
+        var raise = () => multiplexer.ConnectionRestored += Raise.EventWith(multiplexer, FailedArgs(ConnectionFailureType.SocketFailure));
+
+        raise.Should().NotThrow("this is raised on the client's own dispatch, which must not see our subscribers throw");
+        reached.Should().Be(1, "a throwing subscriber must not cost the rest their notification");
+        telemetry.Exceptions.Should().ContainSingle().Which.Exception.Should().BeSameAs(boom);
+        connector.Dispose();
+    }
+
+    [Fact]
+    public async Task Version_FallsBack_WhenReadingItAndReportingTheFailureBothThrow()
+    {
+        // _version is a Lazy, and a Lazy caches a factory exception for the life of the process -- a sink that
+        // refuses the report would make Version throw for good rather than fall back once.
+        var multiplexer = Substitute.For<IConnectionMultiplexer>();
+        multiplexer.GetEndPoints(Arg.Any<bool>()).Returns(_ => throw ConnectFailure());
+        var connector = NewConnector(new SequenceFactory(multiplexer), new ThrowingSinkTelemetryProvider());
+        await connector.ConnectAsync(TestContext.Current.CancellationToken);
+
+        var read = () => connector.Version;
+
+        read.Should().NotThrow();
+        read.Should().NotThrow("a Lazy caches what its factory threw, so the second read would throw too");
+        connector.Dispose();
+    }
+
+    [Fact]
+    public async Task ServerMaintenance_IsRoutedByTheSubscribedMultiplexer_NotTheSender()
+    {
+        // A composite multiplexer can attach our handler to its children and raise with the child as sender, so
+        // the generation has to be the connection we subscribed to, not whatever arrives in the argument.
+        var (connector, multiplexer, _) = await ConnectedAsync();
+        var seen = new List<ServerMaintenanceEvent>();
+        connector.ServerMaintenance += (_, e) => seen.Add(e);
+
+        var moving = PushEvent();
+        multiplexer.ServerMaintenanceEvent += Raise.Event<EventHandler<ServerMaintenanceEvent>>(new object(), moving);
+
+        seen.Should().ContainSingle("a MOVING on the current connection is not dropped because a child raised it")
+            .Which.Should().BeSameAs(moving);
+        connector.Dispose();
+    }
+
+    [Theory]
+    [InlineData(true, 1)]
+    [InlineData(false, 0)]
+    public async Task AMoving_FromAGroup_IsTakenOnlyFromTheActiveMember(bool fromActive, int expected)
+    {
+        // A group attaches our handler to every member, so the raiser tells us which one saw it -- and only the
+        // member carrying commands has a replacement the cache cares about.
+        var group = Substitute.For<IConnectionGroup>();
+        var activeMember = new object();
+        var connector = NewConnector(new SequenceFactory(group));
+        connector.SetActiveMemberConnectionResolver(_ => activeMember);
+        await connector.ConnectAsync(TestContext.Current.CancellationToken);
+        var seen = new List<ServerMaintenanceEvent>();
+        connector.ServerMaintenance += (_, e) => seen.Add(e);
+
+        group.ServerMaintenanceEvent += Raise.Event<EventHandler<ServerMaintenanceEvent>>(fromActive ? activeMember : new object(), PushEvent());
+
+        seen.Should().HaveCount(expected);
+        connector.Dispose();
+    }
+
+    [Fact]
+    public async Task AMoving_FromAGroup_IsTaken_WhenTheActiveMemberCannotBeRead()
+    {
+        // The member's connection is read reflectively, so an upstream rename has to cost a spare record rather
+        // than the handoff notice.
+        var telemetry = new RecordingTelemetryProvider();
+        var group = Substitute.For<IConnectionGroup>();
+        var connector = NewConnector(new SequenceFactory(group), telemetry);
+        var boom = new InvalidOperationException("no such property");
+        connector.SetActiveMemberConnectionResolver(_ => throw boom);
+        await connector.ConnectAsync(TestContext.Current.CancellationToken);
+        var seen = new List<ServerMaintenanceEvent>();
+        connector.ServerMaintenance += (_, e) => seen.Add(e);
+
+        group.ServerMaintenanceEvent += Raise.Event<EventHandler<ServerMaintenanceEvent>>(new object(), PushEvent());
+
+        seen.Should().ContainSingle("a check that cannot be made must not drop the notice");
+        telemetry.Exceptions.Should().ContainSingle().Which.Exception.Should().BeSameAs(boom);
+        connector.Dispose();
+    }
+
+    [Fact]
+    public async Task ABroadcast_FromAGroup_IsTaken_WhicheverMemberSawIt()
+    {
+        // Only a MOVING is scoped to a member; a broadcast may have been seen by just one of them.
+        var group = Substitute.For<IConnectionGroup>();
+        var connector = NewConnector(new SequenceFactory(group));
+        connector.SetActiveMemberConnectionResolver(_ => new object());
+        await connector.ConnectAsync(TestContext.Current.CancellationToken);
+        var seen = new List<ServerMaintenanceEvent>();
+        connector.ServerMaintenance += (_, e) => seen.Add(e);
+
+        group.ServerMaintenanceEvent += Raise.Event<EventHandler<ServerMaintenanceEvent>>(new object(), BroadcastPushEvent());
+
+        seen.Should().ContainSingle("a broadcast is not scoped to the member that received it");
+        connector.Dispose();
+    }
+
+    [Fact]
+    public async Task ForceReconnect_Completes_WhenRecordingTheEventThrows()
+    {
+        // The record sits between the swap and the two things that finish the reconnect, so a refusing sink
+        // would leave every subscriber unnotified and the retired connection undisposed.
+        var oldMultiplexer = Substitute.For<IConnectionMultiplexer>();
+        var newMultiplexer = Substitute.For<IConnectionMultiplexer>();
+        oldMultiplexer.CloseAsync(Arg.Any<bool>()).Returns(Task.CompletedTask);
+        var disposed = new TaskCompletionSource();
+        oldMultiplexer.When(m => m.Dispose()).Do(_ => disposed.TrySetResult());
+        var connector = NewConnector(new SequenceFactory(oldMultiplexer, newMultiplexer), new ThrowOnEventTelemetryProvider("Redis.ForcedReconnect"));
+        await connector.ConnectAsync(TestContext.Current.CancellationToken);
+        var reconnected = 0;
+        connector.OnReconnected += (_, _) => Interlocked.Increment(ref reconnected);
+
+        connector.ForceReconnect();
+        await disposed.Task.WaitAsync(TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken);
+
+        Volatile.Read(ref reconnected).Should().Be(1, "subscribers re-subscribe on this event");
+        oldMultiplexer.Received(1).Dispose();
+        connector.Dispose();
+    }
+
+    [Fact]
+    public async Task AHandoff_DoesNotFaultTheClientDispatch_WhenRecordingItThrows()
+    {
+        // Raised by StackExchange.Redis on its own thread, so nothing here may let a refused record reach it.
+        var multiplexer = Substitute.For<IConnectionMultiplexer>();
+        var connector = NewConnector(new SequenceFactory(multiplexer), new ThrowOnEventTelemetryProvider("Redis.MaintenanceHandoff"));
+        await connector.ConnectAsync(TestContext.Current.CancellationToken);
+        var forwarded = 0;
+        connector.OnConnectionFailed += (_, _) => forwarded++;
+
+        var raise = () => multiplexer.ConnectionFailed += Raise.EventWith(multiplexer, FailedArgs(ConnectionFailureType.MaintenanceHandoff));
+
+        raise.Should().NotThrow();
+        forwarded.Should().Be(1, "the connection did drop, so subscribers still hear about it");
+        connector.Dispose();
+    }
+
+    [Fact]
     public async Task ForceReconnect_DisposesOld_WhenCloseAsyncThrows()
     {
         var oldMultiplexer = Substitute.For<IConnectionMultiplexer>();
@@ -332,6 +546,130 @@ public class RedisConnectorLifecycleTests
     }
 
     [Fact]
+    public async Task ServerMaintenance_IsForwarded_FromTheCurrentMultiplexer_AcrossAReconnect()
+    {
+        // The routing tests substitute IRedisConnector, so nothing else covers the wiring: without this they
+        // would all pass while production received nothing.
+        var first = Substitute.For<IConnectionMultiplexer>();
+        var replacement = Substitute.For<IConnectionMultiplexer>();
+        var connector = NewConnector(new SequenceFactory(first, replacement));
+        await connector.ConnectAsync(TestContext.Current.CancellationToken);
+
+        var seen = new List<ServerMaintenanceEvent>();
+        connector.ServerMaintenance += (_, e) => seen.Add(e);
+
+        var onFirst = MaintenanceEvent();
+        first.ServerMaintenanceEvent += Raise.Event<EventHandler<ServerMaintenanceEvent>>(first, onFirst);
+        seen.Should().ContainSingle().Which.Should().BeSameAs(onFirst);
+
+        // Closing the retired multiplexer detaches its handler, and OnReconnected fires just before that -- so
+        // without this gate the assertions below race teardown and the first would pass for the wrong reason.
+        var closing = new TaskCompletionSource();
+        first.CloseAsync(Arg.Any<bool>()).Returns(closing.Task);
+
+        var reconnected = new TaskCompletionSource();
+        connector.OnReconnected += (_, _) => reconnected.TrySetResult();
+        connector.ForceReconnect();
+        await reconnected.Task.WaitAsync(TimeSpan.FromSeconds(30), TestContext.Current.CancellationToken);
+
+        var onReplacement = MaintenanceEvent();
+        replacement.ServerMaintenanceEvent += Raise.Event<EventHandler<ServerMaintenanceEvent>>(replacement, onReplacement);
+
+        seen.Should().HaveCount(2, "the replacement multiplexer must be wired too");
+        seen[1].Should().BeSameAs(onReplacement);
+
+        // The positive side of the filter.
+        var onCurrent = PushEvent();
+        replacement.ServerMaintenanceEvent += Raise.Event<EventHandler<ServerMaintenanceEvent>>(replacement, onCurrent);
+        seen.Should().HaveCount(3, "a push frame from the current connection describes the endpoint in use");
+        seen[2].Should().BeSameAs(onCurrent);
+
+        first.DidNotReceive().Dispose();
+
+        // Still subscribed, so these reach the filter rather than an absent handler. A retired generation's
+        // MOVING names an endpoint the cache has left.
+        first.ServerMaintenanceEvent += Raise.Event<EventHandler<ServerMaintenanceEvent>>(first, PushEvent());
+        seen.Should().HaveCount(3, "a retired connection's MOVING names an endpoint the cache has left");
+
+        // Broadcast kinds stay: the retired connection may be the only one that observed this.
+        var migrating = BroadcastPushEvent();
+        first.ServerMaintenanceEvent += Raise.Event<EventHandler<ServerMaintenanceEvent>>(first, migrating);
+        seen.Should().HaveCount(4, "a broadcast push frame is not scoped to the connection that received it");
+        seen[3].Should().BeSameAs(migrating);
+
+        // Azure's is pub/sub, which the client does not collapse, and the retired connection may be the only
+        // one that was subscribed when it went out.
+        var broadcast = AzureEvent();
+        first.ServerMaintenanceEvent += Raise.Event<EventHandler<ServerMaintenanceEvent>>(first, broadcast);
+        seen.Should().HaveCount(5, "an Azure broadcast is true whichever connection received it");
+        seen[4].Should().BeSameAs(broadcast);
+
+        closing.SetResult();
+        connector.Dispose();
+    }
+
+    [Fact]
+    public async Task AMoving_IsForwarded_FromTheReplacementBeforeItBecomesCurrent()
+    {
+        // The replacement is subscribed before it is published, and the server never replays a MOVING -- so one
+        // arriving in between has to be taken. Raised from inside the subscription, which is exactly that interval.
+        var first = Substitute.For<IConnectionMultiplexer>();
+        var replacement = Substitute.For<IConnectionMultiplexer>();
+        var moving = PushEvent();
+        var raised = false;
+        replacement.When(m => m.ServerMaintenanceEvent += Arg.Any<EventHandler<ServerMaintenanceEvent>>())
+            .Do(call =>
+            {
+                if (raised)
+                {
+                    return;
+                }
+
+                raised = true;
+                call.Arg<EventHandler<ServerMaintenanceEvent>>().Invoke(replacement, moving);
+            });
+
+        var connector = NewConnector(new SequenceFactory(first, replacement));
+        await connector.ConnectAsync(TestContext.Current.CancellationToken);
+
+        var seen = new List<ServerMaintenanceEvent>();
+        connector.ServerMaintenance += (_, e) => seen.Add(e);
+
+        var reconnected = new TaskCompletionSource();
+        connector.OnReconnected += (_, _) => reconnected.TrySetResult();
+        connector.ForceReconnect();
+        await reconnected.Task.WaitAsync(TimeSpan.FromSeconds(30), TestContext.Current.CancellationToken);
+
+        seen.Should().ContainSingle("the generation about to carry commands is the one a MOVING describes")
+            .Which.Should().BeSameAs(moving);
+
+        connector.Dispose();
+    }
+
+    [Fact]
+    public async Task AMaintenanceHandoff_IsNotReportedAsAConnectionFailure()
+    {
+        // ConnectionStateMonitorHandoffTests raises on a fake source, so it never reaches this branch.
+        var telemetry = new RecordingTelemetryProvider();
+        var multiplexer = Substitute.For<IConnectionMultiplexer>();
+        var connector = NewConnector(new SequenceFactory(multiplexer), telemetry);
+        await connector.ConnectAsync(TestContext.Current.CancellationToken);
+        var forwarded = 0;
+        connector.OnConnectionFailed += (_, _) => forwarded++;
+
+        multiplexer.ConnectionFailed += Raise.EventWith(multiplexer, FailedArgs(ConnectionFailureType.MaintenanceHandoff));
+
+        forwarded.Should().Be(1, "the connection did drop, so subscribers still need to hear about it");
+        telemetry.Events.Should().Contain(e => e.Name == "Redis.MaintenanceHandoff");
+        telemetry.Events.Should().NotContain(e => e.Name == "Redis.ConnectionFailed");
+
+        multiplexer.ConnectionFailed += Raise.EventWith(multiplexer, FailedArgs(ConnectionFailureType.SocketFailure));
+        telemetry.Events.Should().Contain(e => e.Name == "Redis.ConnectionFailed");
+
+        connector.Dispose();
+    }
+
+    [Fact]
     public void GetPrimaries_IsEmpty_BeforeConnect_DoesNotTriggerConnect()
     {
         var factory = new SequenceFactory();
@@ -386,6 +724,48 @@ public class RedisConnectorLifecycleTests
         return server;
     }
 
+    private static ConnectionFailedEventArgs FailedArgs(ConnectionFailureType failureType) =>
+        (ConnectionFailedEventArgs)Activator.CreateInstance(
+            typeof(ConnectionFailedEventArgs),
+            BindingFlags.Instance | BindingFlags.NonPublic,
+            null,
+            [null, null, new System.Net.DnsEndPoint("node", 6379), ConnectionType.Interactive, failureType, null, null],
+            null)!;
+
+#pragma warning disable SER010 // Server-native maintenance notifications are for evaluation purposes only
+    /// <summary>A push frame every node broadcasts, rather than a MOVING.</summary>
+    private static PushMaintenanceEvent BroadcastPushEvent() => PushEvent(MaintenanceNotificationType.Migrating);
+
+    private static PushMaintenanceEvent PushEvent(MaintenanceNotificationType type = MaintenanceNotificationType.Moving) =>
+        (PushMaintenanceEvent)Activator.CreateInstance(
+            typeof(PushMaintenanceEvent),
+            BindingFlags.Instance | BindingFlags.NonPublic,
+            null,
+            [type, 1L, (EndPoint)new DnsEndPoint("node", 6379), (TimeSpan?)null, (EndPoint?)null, "payload", $">{type} 1 payload", Array.Empty<ClusterSlotMigration>()],
+            null)!;
+#pragma warning restore SER010
+
+    private static AzureMaintenanceEvent AzureEvent() =>
+        (AzureMaintenanceEvent)Activator.CreateInstance(
+            typeof(AzureMaintenanceEvent),
+            BindingFlags.Instance | BindingFlags.NonPublic,
+            null,
+            ["NotificationType|NodeMaintenanceStarting|StartTimeInUTC|2026-09-19T00:00:00|IsReplica|False|IPAddress|127.0.0.1|SSLPort|6380|NonSSLPort|6379"],
+            null)!;
+
+    private static ServerMaintenanceEvent MaintenanceEvent() =>
+        (ServerMaintenanceEvent)Activator.CreateInstance(
+            typeof(ServerMaintenanceEvent), BindingFlags.Instance | BindingFlags.NonPublic, null, null, null)!;
+
+    private static async Task<(RedisConnector Connector, IConnectionMultiplexer Multiplexer, RecordingTelemetryProvider Telemetry)> ConnectedAsync()
+    {
+        var telemetry = new RecordingTelemetryProvider();
+        var multiplexer = Substitute.For<IConnectionMultiplexer>();
+        var connector = NewConnector(new SequenceFactory(multiplexer), telemetry);
+        await connector.ConnectAsync(TestContext.Current.CancellationToken);
+        return (connector, multiplexer, telemetry);
+    }
+
     private static RedisConnector NewConnector(IConnectionMultiplexerFactory factory, ICachingTelemetryProvider? telemetry = null)
     {
         var options = Options.Create(new RedisConnectionOptions { ConnectionString = "localhost:6379", EnableHangDetection = false });
@@ -394,6 +774,25 @@ public class RedisConnectorLifecycleTests
     }
 
     private static RedisConnectionException ConnectFailure() => new(ConnectionFailureType.UnableToConnect, CommandFlags.None, "boom");
+    /// <summary>A sink that refuses one named event and takes everything else.</summary>
+    private sealed class ThrowOnEventTelemetryProvider(string failingEvent) : ICachingTelemetryProvider
+    {
+        public void TrackEvent(string eventName, ReadOnlySpan<KeyValuePair<string, string>> properties = default, ReadOnlySpan<KeyValuePair<string, double>> metrics = default)
+        {
+            if (eventName == failingEvent)
+            {
+                throw new InvalidOperationException("sink boom");
+            }
+        }
+    }
+
+    /// <summary>A sink that refuses every report, leaving a catch with nowhere to put what it caught.</summary>
+    private sealed class ThrowingSinkTelemetryProvider : ICachingTelemetryProvider
+    {
+        public void TrackException(Exception ex, ReadOnlySpan<KeyValuePair<string, string>> properties = default, ReadOnlySpan<KeyValuePair<string, double>> metrics = default) =>
+            throw new InvalidOperationException("sink boom");
+    }
+
     private sealed class SequenceFactory : IConnectionMultiplexerFactory
     {
         private readonly Queue<IConnectionMultiplexer> _multiplexers;

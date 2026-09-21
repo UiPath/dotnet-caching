@@ -59,6 +59,63 @@ public class RedisConnectorTests : IAsyncLifetime
         cnn.Should().Be(expected);
     }
 
+#pragma warning disable SER010 // Server-native maintenance notifications are for evaluation purposes only
+    [Theory]
+    [InlineData(RedisMaintenanceNotifications.Auto, MaintenanceNotificationMode.Auto)]
+    [InlineData(RedisMaintenanceNotifications.Required, MaintenanceNotificationMode.Enabled)]
+    [InlineData(RedisMaintenanceNotifications.Disabled, MaintenanceNotificationMode.Disabled)]
+    public void MaintenanceNotifications_MapsOntoTheClientMode(RedisMaintenanceNotifications configured, MaintenanceNotificationMode expected)
+    {
+        // Required maps to Enabled, not a same-named member, so a reversed arm would silently do nothing.
+        var opt = new RedisConnectionOptions
+        {
+            ConnectionString = "localhost:6379",
+            MaintenanceNotifications = configured,
+        };
+        var sut = new RedisConfigurationOptionsProvider(NullLoggerFactory.Instance, Options.Create(opt));
+
+        sut.GetConfiguration().MaintenanceNotifications.Should().Be(expected);
+    }
+
+    [Fact]
+    public void MaintenanceNotifications_AppliesWithoutAConnectionString()
+    {
+        // With no connection string these options are what a supplied ConnectionFactory is handed.
+        var opt = new RedisConnectionOptions { MaintenanceNotifications = RedisMaintenanceNotifications.Auto };
+        var sut = new RedisConfigurationOptionsProvider(NullLoggerFactory.Instance, Options.Create(opt));
+
+        sut.GetConfiguration().MaintenanceNotifications.Should().Be(MaintenanceNotificationMode.Auto);
+    }
+
+    [Fact]
+    public void MaintenanceNotifications_RejectsAnUnsupportedValue()
+    {
+        // Configuration binds enums from numbers, and folding an unknown one into Disabled would be
+        // indistinguishable from asking and being refused.
+        var opt = new RedisConnectionOptions
+        {
+            ConnectionString = "localhost:6379",
+            MaintenanceNotifications = (RedisMaintenanceNotifications)3,
+        };
+        var sut = new RedisConfigurationOptionsProvider(NullLoggerFactory.Instance, Options.Create(opt));
+
+        // Invalid configuration rather than a bad argument: the value reaches this from the options, not
+        // from a parameter of the method that rejects it.
+        sut.Invoking(p => p.GetConfiguration()).Should().Throw<InvalidOperationException>()
+            .WithMessage("*RedisMaintenanceNotifications*");
+    }
+
+    [Fact]
+    public void MaintenanceNotifications_LeavesTheClientDefault_WhenUnset()
+    {
+        var opt = new RedisConnectionOptions { ConnectionString = "localhost:6379" };
+        var sut = new RedisConfigurationOptionsProvider(NullLoggerFactory.Instance, Options.Create(opt));
+
+        sut.GetConfiguration().MaintenanceNotifications
+            .Should().Be(new ConfigurationOptions().MaintenanceNotifications, "null must not overwrite what the client itself decides");
+    }
+#pragma warning restore SER010
+
     public ValueTask DisposeAsync()
     {
         return ValueTask.CompletedTask;

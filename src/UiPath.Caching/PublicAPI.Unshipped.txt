@@ -1,3 +1,12 @@
 #nullable enable
 UiPath.Caching.Redis.IRedisConnector.GetPrimaries() -> System.Collections.Generic.IEnumerable<StackExchange.Redis.IServer!>!
+UiPath.Caching.Redis.IRedisConnector.ServerMaintenance -> System.EventHandler<StackExchange.Redis.Maintenance.ServerMaintenanceEvent!>?
+UiPath.Caching.Redis.RedisConnectionOptions.MaintenanceNotifications.get -> UiPath.Caching.Redis.RedisMaintenanceNotifications?
+UiPath.Caching.Redis.RedisConnectionOptions.MaintenanceNotifications.set -> void
 UiPath.Caching.Redis.RedisConnector.GetPrimaries() -> System.Collections.Generic.IEnumerable<StackExchange.Redis.IServer!>!
+UiPath.Caching.Redis.RedisConnector.ServerMaintenance -> System.EventHandler<StackExchange.Redis.Maintenance.ServerMaintenanceEvent!>?
+UiPath.Caching.Redis.RedisMaintenanceNotifications
+UiPath.Caching.Redis.RedisMaintenanceNotifications.Auto = 1 -> UiPath.Caching.Redis.RedisMaintenanceNotifications
+UiPath.Caching.Redis.RedisMaintenanceNotifications.Disabled = 0 -> UiPath.Caching.Redis.RedisMaintenanceNotifications
+UiPath.Caching.Redis.RedisMaintenanceNotifications.Required = 2 -> UiPath.Caching.Redis.RedisMaintenanceNotifications
+UiPath.Caching.Redis.RedisPlannedMaintenance.RedisPlannedMaintenance(UiPath.Caching.Telemetry.ICachingTelemetryProvider! telemetryProvider, UiPath.Caching.Redis.IRedisConnector! redisConnector, UiPath.Caching.Redis.IRedisConfigurationOptionsProvider! redisConfigurationOptionsProvider, UiPath.Caching.Redis.IConnectionMultiplexerFactory! connectionMultiplexerFactory, Microsoft.Extensions.Logging.ILogger<UiPath.Caching.Redis.RedisPlannedMaintenance!>! logger, Microsoft.Extensions.Options.IOptions<UiPath.Caching.Redis.RedisConnectionOptions!>! options, System.Collections.Generic.IEnumerable<UiPath.Caching.Redis.IRedisConnectionConfigurator!>? configurators, System.TimeProvider! clock) -> void

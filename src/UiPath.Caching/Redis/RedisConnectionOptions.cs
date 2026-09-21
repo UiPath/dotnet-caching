@@ -22,6 +22,9 @@ public class RedisConnectionOptions
 
     public bool PlannedMaintenanceEnabled { get; set; } = true;
 
+    /// <summary>Ask the server for advance notice of maintenance; null leaves the client's own default.</summary>
+    public RedisMaintenanceNotifications? MaintenanceNotifications { get; set; }
+
     public int PlannedMaintenanceConnectionRetryCount { get; set; } = 5;
 
     public TimeSpan PlannedMaintenanceConnectionRetryDelay { get; set; } = TimeSpan.FromSeconds(5);

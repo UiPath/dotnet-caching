@@ -21,10 +21,14 @@ public class RedisConfigurationOptionsProvider(ILoggerFactory loggerFactory, IOp
 
         if (sb.Length == 0)
         {
-            return new ConfigurationOptions
+            // With no connection string these options are what a supplied ConnectionFactory is handed, so the
+            // mapping still has to run.
+            var supplied = new ConfigurationOptions
             {
                 LoggerFactory = loggerFactory,
             };
+            ApplyMaintenanceNotifications(supplied);
+            return supplied;
         }
 
         var config = ConfigurationOptions.Parse(sb.ToString());
@@ -39,6 +43,8 @@ public class RedisConfigurationOptionsProvider(ILoggerFactory loggerFactory, IOp
         {
             config.ReconnectRetryPolicy = new ExponentialRetry(_options.BackOffMilliseconds);
         }
+
+        ApplyMaintenanceNotifications(config);
 
         if (_options.HeartbeatConsistencyChecks.HasValue)
         {
@@ -57,4 +63,24 @@ public class RedisConfigurationOptionsProvider(ILoggerFactory loggerFactory, IOp
 
         return config;
     }
+    private void ApplyMaintenanceNotifications(ConfigurationOptions config)
+    {
+        if (_options.MaintenanceNotifications is not { } notifications)
+        {
+            return;
+        }
+
+        // The suppression stops here: SER010 rides on the type, so exposing StackExchange's enum would raise it
+        // in every consumer that sets the option.
+#pragma warning disable SER010 // Server-native maintenance notifications are for evaluation purposes only
+        config.MaintenanceNotifications = notifications switch
+        {
+            RedisMaintenanceNotifications.Disabled => MaintenanceNotificationMode.Disabled,
+            RedisMaintenanceNotifications.Auto => MaintenanceNotificationMode.Auto,
+            RedisMaintenanceNotifications.Required => MaintenanceNotificationMode.Enabled,
+            _ => throw new InvalidOperationException($"Unsupported {nameof(RedisMaintenanceNotifications)} value '{notifications}'."),
+        };
+#pragma warning restore SER010
+    }
+
 }

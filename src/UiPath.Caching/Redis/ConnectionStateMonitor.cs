@@ -7,6 +7,7 @@ public sealed class ConnectionStateMonitor : IConnectionState, IDisposable
 {
     private const string EventConnectionRestored = "Redis.ConnectionRestored";
     private const string EventConnectionFailed = "Redis.ConnectionFailed";
+    private const string EventMaintenanceHandoff = "Redis.MaintenanceHandoff";
     private const string EventReconnected = "Redis.Reconnected";
     private const string EventEvaluateConnected = "Redis.EvaluateConnected";
     private const string PropNow = "Now";
@@ -58,21 +59,24 @@ public sealed class ConnectionStateMonitor : IConnectionState, IDisposable
     {
         TrackEvent(EventConnectionRestored);
         ResetIsConnected();
-        OnConnectionRestored?.Invoke(this, EventArgs.Empty);
+        OnConnectionRestored.TryRaise(_telemetryProvider, handler => handler(this, EventArgs.Empty));
     }
 
     private void InternalOnConnectionFailed(object? sender, EventArgs e)
     {
-        TrackEvent(EventConnectionFailed);
+        // Classified again here: the monitor sees the same args on the way to subscribers.
+        TrackEvent(e is ConnectionFailedEventArgs { FailureType: ConnectionFailureType.MaintenanceHandoff }
+            ? EventMaintenanceHandoff
+            : EventConnectionFailed);
         ResetIsConnected();
-        OnConnectionFailed?.Invoke(sender, e);
+        OnConnectionFailed.TryRaise(_telemetryProvider, handler => handler(sender, e));
     }
 
     private void InternalOnReconnected(object? sender, EventArgs e)
     {
         TrackEvent(EventReconnected);
         ResetIsConnected();
-        OnReconnected?.Invoke(sender, e);
+        OnReconnected.TryRaise(_telemetryProvider, handler => handler(sender, e));
     }
     private void ResetIsConnected(bool addTimer = true)
     {
@@ -106,6 +110,8 @@ public sealed class ConnectionStateMonitor : IConnectionState, IDisposable
         var properties = new KeyValuePair<string, string>[data.Length + 1];
         properties[0] = new(PropNow, Environment.TickCount.ToString(CultureInfo.InvariantCulture));
         Array.Copy(data, 0, properties, 1, data.Length);
-        _telemetryProvider.TrackEvent(eventName, properties);
+        // Guarded here rather than at each call site: every one of them is followed by state to reset and
+        // subscribers to notify, and one of them runs inside the connector's own multicast.
+        _telemetryProvider.TryTrackEvent(eventName, properties);
     }
 }
