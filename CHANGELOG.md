@@ -6,6 +6,21 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 
 ## [Unreleased]
 
+## [2.0.1] - 2026-09-21
+
+### Changed
+
+- **Dependency floors.** What a consumer's restore has to satisfy, taken from `Directory.Packages.props`:
+
+  | Package | 2.0.0 | 2.0.1 |
+  |---|---|---|
+  | `StackExchange.Redis` (`UiPath.Caching`, `UiPath.Caching.Queue`) | 3.1.31 | 3.2.1 |
+  | `Polly.Core`, `Polly.Extensions` (`UiPath.Caching.Polly`) | 8.7.0 | 8.8.0 |
+
+  The `Microsoft.Extensions.*` groups are unchanged. `Aspire.Hosting.Redis`, `Microsoft.Testing.Extensions.CodeCoverage`
+  and `OpenTelemetry.Instrumentation.StackExchangeRedis` also moved, but only tests and samples reference them, so they
+  are pins of this repository, not floors on consumers.
+
 ### Fixed
 
 - **The cluster slot check honors `RedisCacheOptions.KeyPrefix`.** An `IRedisConnector` whose `IDatabase` is wrapped
