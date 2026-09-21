@@ -1,4 +1,4 @@
-using Microsoft.Extensions.Internal;
+﻿using Microsoft.Extensions.Internal;
 using NSubstitute.ExceptionExtensions;
 using NSubstitute.ReceivedExtensions;
 using StackExchange.Redis;
@@ -94,6 +94,37 @@ public class RedisCacheTests(ITestContextAccessor testContextAccessor) : IAsyncL
         GiveKeysDifferentSlots();
         var act = () => Sut.GetAsync<string>(new CacheKey[] { _cacheKey, _multiKey }, policy: null, token: testContextAccessor.Current.CancellationToken).AsTask();
         (await act.Should().ThrowAsync<CrossSlotKeysException>()).And.Message.Should().Contain("GetAsync");
+        await _database.DidNotReceive().StringGetAsync(Arg.Any<RedisKey[]>(), Arg.Any<CommandFlags>());
+    }
+
+    [Fact]
+    public async Task Multi_get_does_not_throw_when_the_key_prefix_puts_the_keys_in_one_slot()
+    {
+        // The connector's IDatabase prepends KeyPrefix to every command, so a hash tag there is what
+        // the server hashes; the composed keys alone say nothing about the slot.
+        _cacheOptions.KeyPrefix = "{tag}:";
+        GiveKeysDifferentSlots();
+        _database.Multiplexer.GetHashSlot(_redisKey.Prepend(_cacheOptions.KeyPrefix)).Returns(7);
+        _database.Multiplexer.GetHashSlot(_redisMultiKey.Prepend(_cacheOptions.KeyPrefix)).Returns(7);
+        var expectedValue = _fixture.Create<string>();
+        _database.StringGetAsync(Arg.Is<RedisKey[]>(k => k != null && k.Contains(_redisKey) && k.Contains(_redisMultiKey)), CommandFlags.PreferReplica)
+            .Returns(_ => new RedisValue[] { _serializer.Serialize(expectedValue), _serializer.Serialize(expectedValue) });
+
+        var actualValue = await Sut.GetAsync<string>(new CacheKey[] { _cacheKey, _multiKey }, policy: null, token: testContextAccessor.Current.CancellationToken);
+
+        actualValue.Should().BeEquivalentTo(new KeyValuePair<CacheKey, string>[] { new(_cacheKey, expectedValue), new(_multiKey, expectedValue) });
+    }
+
+    [Fact]
+    public async Task Multi_get_throws_when_the_prefixed_keys_span_slots()
+    {
+        _cacheOptions.KeyPrefix = "prefix:";
+        _database.Multiplexer.GetHashSlot(_redisKey.Prepend(_cacheOptions.KeyPrefix)).Returns(1);
+        _database.Multiplexer.GetHashSlot(_redisMultiKey.Prepend(_cacheOptions.KeyPrefix)).Returns(2);
+
+        var act = () => Sut.GetAsync<string>(new CacheKey[] { _cacheKey, _multiKey }, policy: null, token: testContextAccessor.Current.CancellationToken).AsTask();
+
+        await act.Should().ThrowAsync<CrossSlotKeysException>();
         await _database.DidNotReceive().StringGetAsync(Arg.Any<RedisKey[]>(), Arg.Any<CommandFlags>());
     }
 

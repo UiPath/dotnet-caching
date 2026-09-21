@@ -179,7 +179,7 @@ Per-topic overrides: add entries to `Topics[]` under `Broadcast:RedisPubSub`. Ea
 |---|---|---|---|---|
 | `Enabled` | `bool` | `true` | Per-provider | Enable/disable the standalone Redis cache provider. |
 | `DefaultExpiration` | `TimeSpan?` | `01:00:00` | Per-provider | Default TTL when no per-call or per-policy expiration is set. `null` means *inherit*, which resolves to `CachePolicy.DefaultDistributedExpiration` (1 h) — it does **not** mean "never expire". For unbounded entries set `TimeSpan.MaxValue`. |
-| `KeyPrefix` | `string` | `""` | Per-provider | Prefix prepended to every Redis key before `AppShortName` and the cache key segments. |
+| `KeyPrefix` | `string` | `""` | Per-provider | Prefix prepended to every Redis key before `AppShortName` and the cache key segments, by the connector's `IDatabase`. The cluster slot check hashes the prefixed key, so a hash tag here keeps multi-key batches on one slot. |
 | `Timeout` | `TimeSpan` | `00:00:01` | Per-provider | Max wait for a cache operation before giving up and falling through. |
 | `ConnectionMonitorEnabled` | `bool?` | `null` | Per-provider | `null` = inherit from `CacheOptions.ConnectionMonitorEnabled`. |
 | `CacheNullValues` | `bool` | `false` | Per-provider | Persist `null`/empty factory returns as sentinels to suppress thundering-herd on missing keys. |

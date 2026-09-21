@@ -9,6 +9,7 @@ public abstract class RedisCacheBase : IConnectionState, IDisposable
     private readonly IRedisConnector _redis;
     private readonly IConnectionState _connectionState;
     private readonly KeyMasker _masker;
+    private readonly string _keyPrefix;
     private bool _disposed;
 
     protected RedisCacheBase(
@@ -22,6 +23,7 @@ public abstract class RedisCacheBase : IConnectionState, IDisposable
     {
         ArgumentNullException.ThrowIfNull(clock);
         _masker = KeyMasker.For(keyMaskingPolicy, KnownCacheProviderNames.Redis);
+        _keyPrefix = redisCacheOptions.KeyPrefix ?? string.Empty;
         _redis = redis;
         Telemetry = telemetryProvider;
         var monitorConnection = redisCacheOptions.ConnectionMonitorEnabled ?? cacheOptions.ConnectionMonitorEnabled;
@@ -152,10 +154,10 @@ public abstract class RedisCacheBase : IConnectionState, IDisposable
         }
 
         var multiplexer = Database.Multiplexer;
-        var slot = multiplexer.GetHashSlot(redisKeys[0]);
+        var slot = multiplexer.GetHashSlot(Sent(redisKeys[0]));
         for (var i = 1; i < redisKeys.Length; i++)
         {
-            if (multiplexer.GetHashSlot(redisKeys[i]) == slot)
+            if (multiplexer.GetHashSlot(Sent(redisKeys[i])) == slot)
             {
                 continue;
             }
@@ -167,4 +169,7 @@ public abstract class RedisCacheBase : IConnectionState, IDisposable
                 "into one call per group of keys that already share a tag.");
         }
     }
+
+    /// <summary>The key as the server sees it: the connector's <see cref="IDatabase"/> prepends <see cref="RedisCacheOptions.KeyPrefix"/> to every command, and a hash tag there decides the slot.</summary>
+    private RedisKey Sent(RedisKey key) => _keyPrefix.Length == 0 ? key : key.Prepend(_keyPrefix);
 }
