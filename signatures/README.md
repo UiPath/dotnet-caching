@@ -32,15 +32,30 @@ that company's agreement (set `type: "corporate"` and the company name in `entit
 
 ## Adding a signatory
 
-Entries are added **only after a CODEOWNER has verified with UiPath legal that the
-signed CLA is on file.** Additions go through a pull request and are gated by
-[`CODEOWNERS`](../.github/CODEOWNERS) on this directory, so they require maintainer
-approval and leave an audit trail.
+An entry means "UiPath legal has a valid signed CLA on file for this person or entity",
+and it is what turns a `cla-required` pull request's `legal/cla` check green. Treat it as
+a legal-record write: be precise, and never fill a field with a guess.
 
-Maintainers: use the `cla-add-signer` skill (in `.claude/skills/`) to do this, or
-edit `cla.json` by hand following the schema above. After the addition merges,
-re-trigger the contributor's `legal/cla` check (toggle the `cla-required` label off
-and on, or have them push) so it re-evaluates against the updated registry.
+**Prerequisite.** Confirm out of band that legal has recorded the signed CLA, and obtain
+the `legalRef` for it. Without that confirmation, stop — do not add the entry. This is the
+one step nothing in the repository can check for you.
+
+For maintainers, in order:
+
+1. **Gather the fields** from the schema above. `legalRef` comes from legal, not from you;
+   `date` is the date the signed CLA was recorded. Verify the GitHub login exists
+   (`gh api users/<name>`), since the check matches on it.
+2. **Check it is not already there.** Match `githubUsername` case-insensitively — if it is
+   present, the contributor is already covered and there is nothing to add.
+3. **Append to `signatories`** in `cla.json`, leaving existing entries untouched, and
+   confirm the file still parses (`python -m json.tool signatures/cla.json`).
+4. **Open a pull request — never commit to `main`.** This directory is gated by
+   [`CODEOWNERS`](../.github/CODEOWNERS), so the addition gets a second pair of eyes and an
+   audit trail. Sign off the commit (`git commit -s`). In the PR body, state the legal
+   reference and that legal confirmation was obtained — **do not paste the CLA document or
+   personal contact details beyond what the schema needs.**
+5. **Re-trigger the contributor's check** once the addition merges; it does not re-evaluate
+   on its own. Toggle the `cla-required` label off and back on, or have them push a commit.
 
 The CLA covers a contributor's present and future contributions, so a signatory
 stays in this file permanently (unless they change employer — see clause 5.3 of the

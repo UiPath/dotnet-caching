@@ -255,3 +255,6 @@ BenchmarkDotNet.Artifacts/
 
 # Local-only design notes (specs/plans); never committed
 docs/superpowers/
+
+# Agent scratch worktrees
+.claude/worktrees/
