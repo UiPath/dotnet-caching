@@ -6,6 +6,7 @@ using StackExchange.Redis;
 using UiPath.Caching;
 using UiPath.Caching.Policies;
 using UiPath.Caching.Telemetry;
+using UiPath.Caching.Tests.Fakes;
 using UiPath.Caching.Tests.Telemetry;
 using JsonSerializer = UiPath.Caching.SystemJsonByteSerializerProxy;
 
@@ -255,6 +256,27 @@ public class RedisHashCacheTests(ITestContextAccessor testContextAccessor) : IAs
             .Returns((DateTime?)expireTime.UtcDateTime);
         _transaction.ExecuteAsync(Arg.Any<CommandFlags>()).Returns(true);
         var actual = await Sut.GetCacheEntryAsync<string>(_cacheKey, policy: null, token: testContextAccessor.Current.CancellationToken);
+        actual.Value.Should().BeEquivalentTo(expected);
+    }
+
+    [Fact]
+    public async Task Get_cache_entry_rebuilds_the_transaction_when_the_read_is_retried()
+    {
+        _pipelineProvider.Get(ResiliencePipelineNames.Read).Returns(new RetryOnceResiliencePipeline());
+        var expected = _fixture.Create<IDictionary<string, string?>>();
+        var entries = expected.Select(kv => new HashEntry(kv.Key, JsonConvert.SerializeObject(kv.Value))).ToArray();
+        var retried = Substitute.For<ITransaction>();
+        _database.CreateTransaction().Returns(_transaction, retried);
+        _database.KeyExistsAsync(_redisKey, CommandFlags.PreferReplica).Returns(true);
+        _transaction.HashGetAllAsync(_redisKey, CommandFlags.PreferReplica).Returns(Task.FromException<HashEntry[]>(new RedisException("lost")));
+        _transaction.KeyTimeToLiveAsync(_redisKey, CommandFlags.PreferReplica).Returns(Task.FromException<TimeSpan?>(new RedisException("lost")));
+        _transaction.ExecuteAsync(Arg.Any<CommandFlags>()).Returns(Task.FromException<bool>(new RedisException("timed out")), Task.FromResult(true));
+        retried.HashGetAllAsync(_redisKey, CommandFlags.PreferReplica).Returns(entries);
+        retried.KeyTimeToLiveAsync(_redisKey, CommandFlags.PreferReplica).Returns(TimeSpan.FromMinutes(15));
+        retried.ExecuteAsync(Arg.Any<CommandFlags>()).Returns(true);
+
+        var actual = await Sut.GetCacheEntryAsync<string>(_cacheKey, policy: null, token: testContextAccessor.Current.CancellationToken);
+
         actual.Value.Should().BeEquivalentTo(expected);
     }
 

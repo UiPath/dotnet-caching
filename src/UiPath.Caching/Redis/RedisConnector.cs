@@ -410,7 +410,7 @@ public sealed class RedisConnector : IRedisConnector
             return;
         }
 
-        _ = Task.Run(async () =>
+        Task.Run(async () =>
         {
             if (Interlocked.CompareExchange(ref _reconnecting, 1, 0) != 0)
             {
@@ -456,7 +456,7 @@ public sealed class RedisConnector : IRedisConnector
             {
                 Interlocked.Exchange(ref _reconnecting, 0);
             }
-        });
+        }).Forget();
     }
 
     private async Task CloseAndDisposeAsync(Task<IConnectionMultiplexer> multiplexerTask)
@@ -901,7 +901,7 @@ public sealed class RedisConnector : IRedisConnector
     private async ValueTask<IConnectionMultiplexer> CreateMultiplexerAsync(CancellationToken cancellationToken)
     {
         var configuration = _redisConfigurationOptionsProvider.GetConfiguration();
-        await RedisConnectionConfigurators.ApplyAsync(configuration, _configurators, cancellationToken).ConfigureAwait(false);
+        await RedisConnectionConfigurators.ApplyAsync(configuration, _configurators, _redisConfigurationOptionsProvider, cancellationToken).ConfigureAwait(false);
         return await _connectionMultiplexerFactory.CreateAsync(configuration, cancellationToken).ConfigureAwait(false);
     }
 

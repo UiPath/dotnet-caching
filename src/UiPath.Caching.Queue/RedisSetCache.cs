@@ -32,6 +32,12 @@ public sealed partial class RedisSetCache : RedisCacheBase, ISetCache
         _logger = logger;
         _read = resiliencePipelineProvider.Get(ResiliencePipelineNames.Read);
         _write = resiliencePipelineProvider.Get(ResiliencePipelineNames.Write);
+        if (string.Equals(setCacheOptions.ResilienceKeyName, ResiliencePipelineNames.Read, StringComparison.Ordinal))
+        {
+            throw new InvalidOperationException(
+                $"{nameof(RedisSetCacheOptions)}.{nameof(RedisSetCacheOptions.ResilienceKeyName)} cannot be '{ResiliencePipelineNames.Read}': that pipeline abandons calls at its timeout, and a destructive read such as SPOP would lose the items it popped. Register a pipeline of your own.");
+        }
+
         _pop = resiliencePipelineProvider.Get(setCacheOptions.ResilienceKeyName);
         _cacheOptions = cacheOptions;
         _redisKeyStrategy = (redisCacheOptions.RedisKeyStrategyFactory ?? new DefaultRedisKeyStrategyFactory()).Create(_cacheOptions, RedisSetKeyspace);
@@ -367,10 +373,10 @@ public sealed partial class RedisSetCache : RedisCacheBase, ISetCache
     {
         if (expiration != DateTimeOffset.MaxValue)
         {
-            _ = transaction.KeyExpireAsync(redisKey, expiration.UtcDateTime, CommandFlags.DemandMaster | CommandFlags.FireAndForget).ConfigureAwait(false);
+            transaction.KeyExpireAsync(redisKey, expiration.UtcDateTime, CommandFlags.DemandMaster | CommandFlags.FireAndForget).Forget();
             return;
         }
-        _ = transaction.KeyPersistAsync(redisKey, CommandFlags.DemandMaster | CommandFlags.FireAndForget).ConfigureAwait(false);
+        transaction.KeyPersistAsync(redisKey, CommandFlags.DemandMaster | CommandFlags.FireAndForget).Forget();
     }
 
     private ValueTask<long> AddCoreAsync<T>(CacheKey cacheKey, IEnumerable<T> items, DateTimeOffset expiration, CancellationToken token)
@@ -408,6 +414,9 @@ public sealed partial class RedisSetCache : RedisCacheBase, ISetCache
         {
             var transaction = Database.CreateTransaction();
             var addTask = transaction.SetAddAsync(redisKey, values, CommandFlags.DemandMaster);
+
+            // Observed now: an uncommitted transaction leaves it unawaited.
+            addTask.Forget();
             QueueExpirationUpdate(transaction, redisKey, expiration);
 
             var committed = await _write.ExecuteAsync(async token =>

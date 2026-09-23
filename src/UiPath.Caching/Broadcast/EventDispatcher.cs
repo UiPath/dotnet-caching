@@ -26,6 +26,7 @@ internal sealed partial class EventDispatcher<T> : IDisposable
         _stopTokenSource = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         _cancellationToken = _stopTokenSource.Token;
         ConsumeTask = Task.Run(Consume, _cancellationToken);
+        ConsumeTask.Forget();
     }
 
     internal Task ConsumeTask { get; }

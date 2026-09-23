@@ -55,6 +55,7 @@ internal sealed partial class RedisStreamSubjectWriter<T> : IDisposable
         _connectionState.OnReconnected += OnConnectionRecovered;
         _connectionState.OnConnectionRestored += OnConnectionRecovered;
         FetchTask = Task.Run(FetchLoop, _cancelationToken);
+        FetchTask.Forget();
     }
 
     internal Task FetchTask { get; }

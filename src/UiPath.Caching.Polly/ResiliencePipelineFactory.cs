@@ -2,15 +2,26 @@ using Polly.CircuitBreaker;
 using Polly.Fallback;
 using Polly.Retry;
 using Polly.Telemetry;
+using Polly.Timeout;
+using UiPath.Caching.Policies;
 
 namespace UiPath.Caching.Polly;
 
 public class ResiliencePipelineFactory(
     ILoggerFactory loggerFactory,
     TelemetryOptions? telemetryOptions,
-    IOptionsMonitor<ResiliencePoliciesOptions> optionsAccessor)
+    IOptionsMonitor<ResiliencePoliciesOptions> optionsAccessor,
+    IDisruptionState? disruptionState)
     : IResiliencePipelineFactory
 {
+    public ResiliencePipelineFactory(
+        ILoggerFactory loggerFactory,
+        TelemetryOptions? telemetryOptions,
+        IOptionsMonitor<ResiliencePoliciesOptions> optionsAccessor)
+        : this(loggerFactory, telemetryOptions, optionsAccessor, null)
+    {
+    }
+
     protected ResiliencePoliciesOptions ResilienceOptions => optionsAccessor.CurrentValue;
 
     protected ILoggerFactory LoggerFactory => loggerFactory;
@@ -50,7 +61,7 @@ public class ResiliencePipelineFactory(
         {
             builder.AddCircuitBreaker(new CircuitBreakerStrategyOptions<TResult>
             {
-                ShouldHandle = new PredicateBuilder<TResult>().Handle<Exception>(),
+                ShouldHandle = args => ValueTask.FromResult(IsFailure(args.Outcome.Exception, args.Context)),
                 BreakDuration = resilienceOptions.DurationOfBreak,
                 MinimumThroughput = resilienceOptions.ExceptionsAllowedBeforeBreaking,
                 OnHalfOpened = args =>
@@ -75,7 +86,8 @@ public class ResiliencePipelineFactory(
         {
             builder.AddRetry(new RetryStrategyOptions<TResult>
             {
-                ShouldHandle = new PredicateBuilder<TResult>().Handle<Exception>(),
+                // Not a timeout: the abandoned read is still in flight.
+                ShouldHandle = args => ValueTask.FromResult(args.Outcome.Exception is not TimeoutRejectedException && IsFailure(args.Outcome.Exception, args.Context)),
                 MaxRetryAttempts = resilienceOptions.RetryCount!.Value,
                 BackoffType = DelayBackoffType.Constant,
                 DelayGenerator = args => ValueTask.FromResult<TimeSpan?>(TimeSpan.FromMilliseconds(args.AttemptNumber * 100)),
@@ -89,9 +101,15 @@ public class ResiliencePipelineFactory(
 
         if (resilienceOptions.RequestTimeout.GetValueOrDefault() > TimeSpan.Zero)
         {
+            var requestTimeout = resilienceOptions.RequestTimeout.GetValueOrDefault();
             builder.AddTimeout(new TimeoutStrategyOptions
             {
-                Timeout = resilienceOptions.RequestTimeout.GetValueOrDefault(),
+                Timeout = requestTimeout,
+
+                // Per execution: a window can open after the pipeline is built.
+                TimeoutGenerator = disruptionState is null
+                    ? null
+                    : _ => ValueTask.FromResult(ResolveTimeout(disruptionState, resilienceOptions, requestTimeout)),
                 OnTimeout = args =>
                 {
                     logger.LogWarning("Execution timed out after {TotalMilliseconds} ms. Operation key {OperationKey}", args.Timeout.TotalMilliseconds, args.Context.OperationKey);
@@ -107,5 +125,20 @@ public class ResiliencePipelineFactory(
         }
 
         return builder;
+    }
+
+    private static bool IsFailure(Exception? exception, ResilienceContext context) =>
+        exception is not null && !(exception is OperationCanceledException && context.CancellationToken.IsCancellationRequested);
+
+    private static TimeSpan ResolveTimeout(IDisruptionState disruptionState, ResiliencePoliciesOptions resilienceOptions, TimeSpan requestTimeout)
+    {
+        // Announced windows only: the Azure probe run outlasts the maintenance.
+        if (disruptionState.SuggestedTimeout is not { } suggested)
+        {
+            return requestTimeout;
+        }
+
+        var widened = resilienceOptions.DisruptionRequestTimeout ?? suggested;
+        return widened > requestTimeout ? widened : requestTimeout;
     }
 }

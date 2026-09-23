@@ -10,7 +10,7 @@ internal sealed class RedisConnectionWarmup(IRedisConnector connector, ICachingT
 
     public Task StartAsync(CancellationToken cancellationToken)
     {
-        _ = Task.Run(() => WarmUpAsync(_cancellationTokenSource.Token), _cancellationTokenSource.Token);
+        Task.Run(() => WarmUpAsync(_cancellationTokenSource.Token), _cancellationTokenSource.Token).Forget();
         return Task.CompletedTask;
     }
 

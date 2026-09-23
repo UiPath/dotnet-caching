@@ -62,6 +62,7 @@ public partial class RedisStreamHealthMaintainer : IHostedService
         }
         Initialize();
         Task = Task.Run(Start, _cancellationToken);
+        Task.Forget();
         return Task.CompletedTask;
     }
 
@@ -230,8 +231,8 @@ public partial class RedisStreamHealthMaintainer : IHostedService
     {
         var groupInfos = await Database.StreamGroupInfoAsync(context.StreamKey, CommandFlags.DemandMaster).ConfigureAwait(false);
         var transaction = Database.CreateTransaction();
-        _ = transaction.HashSetAsync(context.QuarantineKey, [], CommandFlags.DemandMaster).ConfigureAwait(false);
-        _ = transaction.KeyExpireAsync(context.QuarantineKey, _streamOptions.MaintainerQuarantineInterval.Multiply(10), CommandFlags.DemandMaster).ConfigureAwait(false);
+        transaction.HashSetAsync(context.QuarantineKey, [], CommandFlags.DemandMaster).Forget();
+        transaction.KeyExpireAsync(context.QuarantineKey, _streamOptions.MaintainerQuarantineInterval.Multiply(10), CommandFlags.DemandMaster).Forget();
         var success = await transaction.ExecuteAsync();
         if (!success)
         {

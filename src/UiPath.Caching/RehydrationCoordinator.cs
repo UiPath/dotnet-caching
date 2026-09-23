@@ -106,7 +106,7 @@ internal sealed class RehydrationCoordinator(
         }
 
         var reservedKeys = reserved.ToArray();
-        _ = SpawnAsync(reservedKeys, policy.Rehydrate, duration, kind, rehydrateAsync, entryType);
+        SpawnAsync(reservedKeys, policy.Rehydrate, duration, kind, rehydrateAsync, entryType).Forget();
         return true;
     }
 

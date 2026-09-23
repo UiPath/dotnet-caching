@@ -36,6 +36,17 @@ public class RedisSetCacheTests(ITestContextAccessor testContextAccessor) : IAsy
     public void Name_is_Redis() => Sut.Name.Should().Be("Redis");
 
     [Fact]
+    public void The_read_pipeline_is_refused_for_destructive_reads()
+    {
+        _setCacheOptions.ResilienceKeyName = ResiliencePipelineNames.Read;
+
+        var act = () => Sut;
+
+        act.Should().Throw<Exception>().Which.GetBaseException().Should().BeOfType<InvalidOperationException>()
+            .Which.Message.Should().Contain(nameof(RedisSetCacheOptions.ResilienceKeyName));
+    }
+
+    [Fact]
     public void Uses_se_key_prefix()
     {
         _ = Sut;
@@ -92,6 +103,37 @@ public class RedisSetCacheTests(ITestContextAccessor testContextAccessor) : IAsy
 
         actual.Should().BeFalse();
         _logger.ReceivedCalls().Should().Contain(c => c.GetMethodInfo().Name == "Log" && (LogLevel)c.GetArguments()[0]! == LogLevel.Warning);
+    }
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task A_failed_add_leaves_no_unobserved_result(bool throws)
+    {
+        var marker = "unobserved-" + Guid.NewGuid().ToString("N");
+        var unobserved = 0;
+        void OnUnobserved(object? sender, UnobservedTaskExceptionEventArgs e)
+        {
+            if (e.Exception.Flatten().InnerExceptions.Any(ex => ex.Message == marker))
+            {
+                Interlocked.Increment(ref unobserved);
+            }
+        }
+
+        TaskScheduler.UnobservedTaskException += OnUnobserved;
+        try
+        {
+            await AddThroughAFailingTransactionAsync(marker, throws);
+            GC.Collect();
+            GC.WaitForPendingFinalizers();
+            GC.Collect();
+        }
+        finally
+        {
+            TaskScheduler.UnobservedTaskException -= OnUnobserved;
+        }
+
+        unobserved.Should().Be(0);
     }
 
     [Fact]
@@ -563,6 +605,15 @@ public class RedisSetCacheTests(ITestContextAccessor testContextAccessor) : IAsy
         _connector.Database.Returns(_ => _database);
         _connector.IsConnected.Returns(_ => _isConnected);
         return ValueTask.CompletedTask;
+    }
+
+    [System.Runtime.CompilerServices.MethodImpl(System.Runtime.CompilerServices.MethodImplOptions.NoInlining)]
+    private async Task AddThroughAFailingTransactionAsync(string marker, bool throws)
+    {
+        _transaction.SetAddAsync(_redisKey, Arg.Any<RedisValue[]>(), CommandFlags.DemandMaster).Returns(_ => Task.FromException<long>(new RedisException(marker)));
+        _transaction.ExecuteAsync(Arg.Any<CommandFlags>()).Returns(_ => throws ? Task.FromException<bool>(new RedisException("transaction failed")) : Task.FromResult(false));
+
+        await Sut.AddAsync(_cacheKey, _fixture.Create<TestDto>(), policy: null, token: testContextAccessor.Current.CancellationToken);
     }
 
     private sealed class CountingPipeline : IResiliencePipeline

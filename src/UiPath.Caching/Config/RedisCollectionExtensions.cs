@@ -91,6 +91,7 @@ public static class RedisCollectionExtensions
         {
             builder.Services.TryAddSingleton<RedisPlannedMaintenance>();
             builder.Services.TryAddSingleton<IRedisPlannedMaintenance>(sp => sp.GetRequiredService<RedisPlannedMaintenance>());
+            builder.Services.TryAddSingleton<UiPath.Caching.Policies.IDisruptionState>(sp => sp.GetRequiredService<RedisPlannedMaintenance>());
             if (builder.Enabled)
             {
                 builder.Services.TryAddEnumerable(ServiceDescriptor.Singleton<IHostedService, RedisPlannedMaintenance>(sp => sp.GetRequiredService<RedisPlannedMaintenance>()));

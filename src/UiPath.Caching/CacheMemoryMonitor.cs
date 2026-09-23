@@ -24,6 +24,7 @@ internal sealed class CacheMemoryMonitor : IDisposable
         _timer = new PeriodicTimer(statisticsFlushInterval);
         _cancelationToken = _cancellationTokenSource.Token;
         MonitorTask = Task.Run(StartMonitor, _cancelationToken);
+        MonitorTask.Forget();
     }
 
     internal Task MonitorTask { get; }

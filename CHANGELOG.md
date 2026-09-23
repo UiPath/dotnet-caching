@@ -8,6 +8,18 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 
 ### Added
 
+- **`ResiliencePoliciesOptions.DisruptionRequestTimeout`.** Replaces `RequestTimeout` while an announced
+  window is open, so a cap tight enough to fall through to another tier does not cut short a window the
+  client is deliberately relaxing its own timeouts for. Resolved per operation through Polly's timeout generator
+  rather than read at build time, so a window opening after startup is honoured. Left unset, the tier's own
+  suggestion applies — `IDisruptionState.SuggestedTimeout`, which the Redis tier offers only for an announced
+  push window, since the Azure probe route opens no native relaxation. The Azure route does not widen the cap
+  either: its probe run lasts ten minutes whatever the maintenance did. Neither can shorten `RequestTimeout`, and
+  with no `IDisruptionState` registered one timeout applies throughout.
+
+- `IDisruptionState`, the two-member seam the pipeline asks whether the tier behind it is disrupted and what it is
+  relaxing to. Without a registration, behaviour is unchanged.
+
 - **Maintenance notifications from either source.** `RedisPlannedMaintenance` recognised only
   `AzureMaintenanceEvent`, the pub/sub notifications Azure Cache for Redis publishes, and returned on anything else —
   so the RESP3 push notifications Redis Enterprise and Redis Cloud send as `PushMaintenanceEvent` were discarded —
@@ -20,10 +32,17 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
   whichever connection delivered it, the one carrying commands reaching this through the new
   `IRedisConnector.ServerMaintenance`, and it can be delivered more than once -- Azure's is a broadcast every
   connection receives, and a push frame is replayed to a connection that reconnects. A copy matching one recorded in
-  the last 30 seconds is therefore dropped, on the notification's own identity rather than on which connection ought
-  to have had it. They are recorded rather than acted on — the client relaxes timeouts and hands the connection off itself, and probing would force a reconnect
-  against that — so `InProgress` is still driven by the Azure route alone.
-
+  the retention window is therefore dropped, on the notification's own identity rather than on which connection
+  ought to have had it. The retention is the maximum window plus its post-event tail, floored at 30 seconds --
+  see the fix below for why a fixed interval was not enough. A push notification opens a maintenance window rather than probing — the client hands the
+  connection off itself, and probing would force a reconnect against it — for as long as the server announced,
+  clamped to the range the client relaxes its own timeouts over (`MaintenanceRelaxedTimeout` to
+  `MaintenanceRelaxedWindowMax`) and held through `MaintenancePostEventRelaxedDuration` after a completion, so the
+  two agree by construction; and tracked per operation family, so one completion cannot close another's window. The
+  bounds are read from the connection that delivered the notification, configurators included, so a window is sized
+  right from the first notice rather than by defaults until this service's own connection is up. The
+  two routes report one pair of `Redis.MaintenanceStarted`/`Ended` events between them rather than one pair each,
+  since they can overlap.
 - `IRedisConnector.ServerMaintenance`, the maintenance the server announced on the connection carrying commands.
   Defaulted to never raising, so an existing implementer is unaffected. It exists because the connector is what
   rebuilds that connection, so one subscription here survives a `ForceReconnect` where subscribing to the
@@ -33,15 +52,34 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 
 ### Changed
 
+- **The read pipeline now returns at `RequestTimeout`.** Polly's timeout is cooperative: it bounds a callback that
+  observes the token it arms, and the Redis client takes no cancellation token, so on those paths `RequestTimeout`
+  bounded nothing and the retry, breaker and fallback downstream never saw a failure to act on. The read pipeline
+  now races the callback against that token, which carries the request timeout and the caller's own token alike,
+  so control returns to the caller when either fires. This is fixed rather than configurable, and only the read
+  pipeline does it: a write can carry memory the caller reclaims on return, and a custom pipeline can guard a
+  destructive read such as `SPOP`. The abandoned call still runs underneath and its later failure is observed.
+  A timeout is no longer retried, since the abandoned command is still in flight, and a caller's own cancellation
+  no longer counts toward the circuit breaker. **This changes caller-visible timing on reads:** an operation that
+  previously ran past `RequestTimeout` now returns at it.
+
+- **`RedisConnectionOptions.FailFastBacklogPolicy` now defaults to `true`.** Queuing while disconnected makes a
+  command wait out the connection's timeout with nothing to wait for. Set `false` to restore
+  `BacklogPolicy.Default`. **This changes behaviour for disconnected commands**: they now fail fast rather than
+  queue. `null` no longer means the library default: it fails fast like `true`, and so does a JSON `null`, as the
+  shipped `appsettings.all.json` had it, whether the binder leaves the new default or writes `null`. Only `false`
+  restores queuing. The Azure maintenance probe allows for this: a probe rejected while the client is reconnecting
+  on its own no longer forces a reconnect, unless the disconnect outlasts the ten-second hanging time.
+
+
 - **A maintenance handoff is no longer reported as a connection failure.** When the client moves off an endpoint the
   server said is going away, it raises `ConnectionFailed` with `ConnectionFailureType.MaintenanceHandoff`. That was
   tracked as `Redis.ConnectionFailed` — by `RedisConnector` and again by `ConnectionStateMonitor` — which would
   alert on exactly the event advance notice exists to make uneventful. Both now track it as
   `Redis.MaintenanceHandoff`. The event is still raised to subscribers — the connection did drop — and only the
   telemetry name distinguishes them.
-- `RedisHealthCheck` reports "Redis maintenance in progress" rather than naming Azure Cache for Redis. The wording
-  is provider-neutral in readiness for the push route; the state behind it is not yet, since only the Azure route
-  opens it here.
+- `RedisHealthCheck` reports "Redis maintenance in progress" rather than naming Azure Cache for Redis, now that
+  either route can open the window.
 - Bumped `StackExchange.Redis` from 3.2.1 to 3.3.0. No public API change here, and nothing in this repository calls
   an API 3.2.15 or 3.3.0 altered. Three things in the range are worth knowing:
   - `SwitchPrimary` now retires the servers its rebuild drops (upstream #3225). They previously stayed in the server
@@ -57,6 +95,30 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
   `[Experimental]` in 3.3.0, so the pragma suppressed a diagnostic that is no longer raised.
 
 ### Fixed
+
+- **No task the library lets go of can surface as an unobserved exception.** Commands queued on a transaction,
+  background loops, fire-and-forget work and probes abandoned at their timeout were discarded without anything
+  observing a later failure, which `TaskScheduler.UnobservedTaskException` then reported. Each now observes its own.
+
+- **A refused `Redis.Maintenance` record no longer releases the notification's deduplication claim.**
+  Recording a notification also opens and closes health windows, so releasing the claim when the record
+  failed let a replayed frame apply the same state change twice — a second operation no single completion
+  closes, or a close while maintenance is still running. The record is guarded instead: a refused one is
+  reported and dropped, and the claim stands. Losing an event is the lesser harm.
+- **`MaintenanceRelaxedWindowMax` caps a larger `MaintenanceRelaxedTimeout`.** The floor was applied after
+  the maximum, so an announcement below the floor returned the floor even when it exceeded the documented
+  cap, and health suppression outlived the window the client actually relaxes over.
+- **A replayed push frame could open a second operation or close someone else's.** The deduplication claim
+  was retained for a fixed 30 seconds while an announced window can run far longer, so a frame replayed to a
+  reconnecting connection after the claim lapsed was taken as new: a starter appended an operation the one
+  real completion could not close, and a completion removed another operation still running. The retention
+  now covers `MaintenanceRelaxedWindowMax` plus `MaintenancePostEventRelaxedDuration`, the full span over which
+  a window can still be holding the state, whenever that exceeds the 30-second floor.
+- **An explicit `maintRelaxedTimeout` in the connection string is no longer derived over.** With the typed
+  option unset, the derived value replaced whatever the string supplied — while `maintRelaxedWindowMax` in
+  the same string was preserved. A value from either input now counts as configured, detected by the key's
+  presence rather than its value — an explicit setting that happens to equal the client's default is still
+  a setting.
 
 - **A throwing subscriber cost the remaining ones their notification.** `RedisConnector` and
   `ConnectionStateMonitor` raised their connection events with a plain multicast invoke, which stops at the first

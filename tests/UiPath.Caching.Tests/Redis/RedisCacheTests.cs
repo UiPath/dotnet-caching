@@ -5,6 +5,7 @@ using StackExchange.Redis;
 using UiPath.Caching;
 using UiPath.Caching.Policies;
 using UiPath.Caching.Telemetry;
+using UiPath.Caching.Tests.Fakes;
 using UiPath.Caching.Tests.Telemetry;
 
 namespace UiPath.Caching.Tests.Redis;
@@ -389,6 +390,89 @@ public class RedisCacheTests(ITestContextAccessor testContextAccessor) : IAsyncL
         await _database.DidNotReceive().StringGetAsync(_redisKey, Arg.Any<CommandFlags>());
         await _database.DidNotReceive().KeyTimeToLiveAsync(_redisKey, Arg.Any<CommandFlags>());
         await _database.DidNotReceive().KeyExpireTimeAsync(_redisKey, Arg.Any<CommandFlags>());
+    }
+
+    [Fact]
+    public async Task GetCacheEntry_rebuilds_the_transaction_when_the_read_is_retried()
+    {
+        _resiliencePipelineProvider.Get(ResiliencePipelineNames.Read).Returns(new RetryOnceResiliencePipeline());
+        var expected = _fixture.Create<string>();
+        var retried = Substitute.For<ITransaction>();
+        _database.CreateTransaction().Returns(_transaction, retried);
+        _transaction.StringGetAsync(_redisKey, CommandFlags.PreferReplica).Returns(Task.FromException<RedisValue>(new RedisException("lost")));
+        _transaction.KeyTimeToLiveAsync(_redisKey, CommandFlags.PreferReplica).Returns(Task.FromException<TimeSpan?>(new RedisException("lost")));
+        _transaction.ExecuteAsync(Arg.Any<CommandFlags>()).Returns(Task.FromException<bool>(new RedisException("timed out")), Task.FromResult(true));
+        retried.StringGetAsync(_redisKey, CommandFlags.PreferReplica).Returns(_serializer.Serialize(expected));
+        retried.KeyTimeToLiveAsync(_redisKey, CommandFlags.PreferReplica).Returns(TimeSpan.FromMinutes(15));
+        retried.ExecuteAsync(Arg.Any<CommandFlags>()).Returns(true);
+
+        var entry = await Sut.GetCacheEntryAsync<string>(_cacheKey, policy: null, token: testContextAccessor.Current.CancellationToken);
+
+        entry.Value.Should().Be(expected);
+    }
+
+    [Fact]
+    public async Task Transactional_reads_run_the_read_pipeline_as_bool()
+    {
+        // One breaker per result type, so any other type would trip on its own.
+        var pipeline = new RecordingResiliencePipeline();
+        _resiliencePipelineProvider.Get(ResiliencePipelineNames.Read).Returns(pipeline);
+        _transaction.ExecuteAsync(Arg.Any<CommandFlags>()).Returns(true);
+
+        await Sut.GetCacheEntryAsync<string>(_cacheKey, policy: null, token: testContextAccessor.Current.CancellationToken);
+        await Sut.GetCacheEntriesAsync<string>(new CacheKey[] { _cacheKey, _multiKey }, policy: null, token: testContextAccessor.Current.CancellationToken);
+
+        pipeline.ResultTypes.Should().OnlyContain(t => t == typeof(bool)).And.HaveCount(2);
+    }
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task A_failed_transaction_leaves_no_unobserved_result(bool throws)
+    {
+        var marker = "unobserved-" + Guid.NewGuid().ToString("N");
+        var unobserved = 0;
+        void OnUnobserved(object? sender, UnobservedTaskExceptionEventArgs e)
+        {
+            if (e.Exception.Flatten().InnerExceptions.Any(ex => ex.Message == marker))
+            {
+                Interlocked.Increment(ref unobserved);
+            }
+        }
+
+        TaskScheduler.UnobservedTaskException += OnUnobserved;
+        try
+        {
+            await ReadThroughAFailingTransactionAsync(marker, throws);
+            GC.Collect();
+            GC.WaitForPendingFinalizers();
+            GC.Collect();
+        }
+        finally
+        {
+            TaskScheduler.UnobservedTaskException -= OnUnobserved;
+        }
+
+        unobserved.Should().Be(0);
+    }
+
+    [Fact]
+    public async Task GetCacheEntries_rebuilds_the_transaction_when_the_read_is_retried()
+    {
+        _resiliencePipelineProvider.Get(ResiliencePipelineNames.Read).Returns(new RetryOnceResiliencePipeline());
+        var expected = _fixture.Create<string>();
+        var retried = Substitute.For<ITransaction>();
+        _database.CreateTransaction().Returns(_transaction, retried);
+        _transaction.StringGetAsync(Arg.Any<RedisKey[]>(), CommandFlags.PreferReplica).Returns(Task.FromException<RedisValue[]>(new RedisException("lost")));
+        _transaction.KeyTimeToLiveAsync(Arg.Any<RedisKey>(), CommandFlags.PreferReplica).Returns(Task.FromException<TimeSpan?>(new RedisException("lost")));
+        _transaction.ExecuteAsync(Arg.Any<CommandFlags>()).Returns(Task.FromException<bool>(new RedisException("timed out")), Task.FromResult(true));
+        retried.StringGetAsync(Arg.Any<RedisKey[]>(), CommandFlags.PreferReplica).Returns(new RedisValue[] { _serializer.Serialize(expected), RedisValue.Null });
+        retried.KeyTimeToLiveAsync(Arg.Any<RedisKey>(), CommandFlags.PreferReplica).Returns(TimeSpan.FromMinutes(15));
+        retried.ExecuteAsync(Arg.Any<CommandFlags>()).Returns(true);
+
+        var entries = await Sut.GetCacheEntriesAsync<string>(new CacheKey[] { _cacheKey, _multiKey }, policy: null, token: testContextAccessor.Current.CancellationToken);
+
+        entries[0].Value.Value.Should().Be(expected);
     }
 
     [Fact]
@@ -1469,6 +1553,17 @@ public class RedisCacheTests(ITestContextAccessor testContextAccessor) : IAsyncL
         _connector.Version.Returns(_ => _version);
         _connector.IsConnected.Returns(ctx => _isConnected);
         return ValueTask.CompletedTask;
+    }
+
+    [System.Runtime.CompilerServices.MethodImpl(System.Runtime.CompilerServices.MethodImplOptions.NoInlining)]
+    private async Task ReadThroughAFailingTransactionAsync(string marker, bool throws)
+    {
+        _version = new(6, 0);
+        _transaction.StringGetAsync(_redisKey, CommandFlags.PreferReplica).Returns(_ => Task.FromException<RedisValue>(new RedisException(marker)));
+        _transaction.KeyTimeToLiveAsync(_redisKey, CommandFlags.PreferReplica).Returns(_ => Task.FromException<TimeSpan?>(new RedisException(marker)));
+        _transaction.ExecuteAsync(Arg.Any<CommandFlags>()).Returns(_ => throws ? Task.FromException<bool>(new RedisException("transaction failed")) : Task.FromResult(false));
+
+        await Sut.GetCacheEntryAsync<string>(_cacheKey, policy: null, token: testContextAccessor.Current.CancellationToken);
     }
 
     private void GiveKeysDifferentSlots()

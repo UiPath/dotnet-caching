@@ -1,1 +1,4 @@
 #nullable enable
+UiPath.Caching.Policies.IDisruptionState
+UiPath.Caching.Policies.IDisruptionState.InProgress.get -> bool
+UiPath.Caching.Policies.IDisruptionState.SuggestedTimeout.get -> System.TimeSpan?

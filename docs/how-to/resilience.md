@@ -311,8 +311,9 @@ See [reference/settings.md](../reference/settings.md) for the full reference.
 
 ### Retries and non-idempotent operations
 
-`RetryCount` defaults to `1` and the retry strategy handles **every** exception, including the
-per-attempt `RequestTimeout` (`TimeoutRejectedException`). For idempotent commands this is safe —
+`RetryCount` defaults to `1` and the retry strategy handles every exception except the per-attempt
+`RequestTimeout` (`TimeoutRejectedException`), whose command is still in flight, and a cancellation the
+caller asked for. For idempotent commands this is safe —
 replaying `SADD`/`SREM`/`SET`/`DEL`/`EXPIRE` converges to the same end state (only the returned
 count may differ). It is **not** safe for destructive-read commands like `SPOP` (and the planned
 `LPOP`/`RPOP`): if the server executed the pop but the response was lost to a timeout or a
@@ -321,7 +322,8 @@ silent data loss.
 
 Such operations therefore do **not** go through the retrying `Write` pipeline. The set cache
 resolves a configurable pipeline via `IResiliencePipelineProvider.Get(RedisSetCacheOptions.ResilienceKeyName)`.
-Register your own pipeline for that name and point the set cache at it:
+Register your own pipeline for that name and point the set cache at it. The built-in `read` pipeline is refused, since it
+abandons a call at its timeout and an abandoned `SPOP` loses what it popped:
 
 ```csharp
 builder
@@ -423,7 +425,7 @@ old one (`Redis.ForcedReconnect` event, `OnReconnected` raised).
 |---|---|---|
 | Hang detection | More than 100 commands awaiting a reply on the primary with no read or write for `LastWrite/ReadIntervalThresholdMilliseconds` | `EnableHangDetection`, `HangDetectionDueTime`, `HangDetectionPeriod` |
 | Planned maintenance | `NodeMaintenanceStarting` on the `AzureRedisEvents` channel; probes with a write every second for 10 minutes and reconnects on failure | `PlannedMaintenanceEnabled` |
-| Announced maintenance | RESP3 push notifications on the command connection, from Redis Enterprise and Redis Cloud (Azure Managed Redis once its rollout lands); recorded, while the client relaxes timeouts and hands the connection off | `PlannedMaintenanceEnabled`, `MaintenanceNotifications` |
+| Announced maintenance | RESP3 push notifications on the command connection, from Redis Enterprise and Redis Cloud (Azure Managed Redis once its rollout lands); opens a health window while the client relaxes timeouts and hands the connection off | `PlannedMaintenanceEnabled`, `MaintenanceNotifications` |
 | Stale endpoint detection | A topology-discovered node has been disconnected for `StaleEndpointThreshold` and is no longer in the cluster topology the client refreshes | `EnableStaleEndpointDetection`, `StaleEndpointThreshold`, `StaleEndpointScanInterval` |
 
 **Stale endpoints** are the clustered-cache failure mode. StackExchange.Redis discovers the
@@ -469,9 +471,9 @@ Redis Enterprise and Redis Cloud instead send RESP3 push notifications on the co
 your commands, and none of them publish `AzureRedisEvents`. The client acts on these itself —
 relaxing timeouts, re-reading topology, moving off a departing endpoint — so this library records
 them and leaves the recovery alone: probing force-reconnects on a failed write, which would fight
-the handoff. Azure Managed Redis (`*.redis.azure.net`) is recognised as a provider but nothing
-turns the request on for it, so `MaintenanceNotifications` below is what asks. Reporting the
-disruption through `InProgress` is a separate change.
+the handoff. It opens a maintenance window instead, so health reporting does not call the handoff a
+fault while it is in progress. Azure Managed Redis (`*.redis.azure.net`) is recognised as a
+provider but nothing turns the request on for it, so `MaintenanceNotifications` below is what asks.
 
 A notification can arrive more than once: Azure's is a broadcast every connection receives, and a
 push frame is replayed to a connection that reconnects, which the client collapses only within the
@@ -487,6 +489,32 @@ Two asymmetries remain. A push frame on the planned-maintenance connection is ig
 connection carries no commands. And only a `MOVING` is tied to a connection generation — the one
 carrying commands or the one about to, since a rebuild subscribes the replacement before
 publishing it and the server never replays a `MOVING`.
+
+The command route is also the only one that opens a window, for the same reason: it is the
+connection whose disruption the cache would feel.
+
+A window lasts as long as the server announced, clamped to the range the client relaxes its own
+timeouts over — `maintRelaxedTimeout` to `maintRelaxedWindowMax` — and a completion hands over to
+`maintPostEventRelaxed` rather than closing at once, because the client keeps treating failures as
+maintenance for that tail. Health reporting therefore stays quiet for exactly as long as the client
+stays patient, and follows those settings if you change them.
+The clamp matters because durations of a couple of seconds have been observed, which is not long
+enough to cover a reconnect, and a client that trusted one would stop being patient exactly when
+it mattered. Each
+operation is tracked by family, so a `MIGRATED` closes the migration it started and not a
+failover still in flight. `MOVING` has no completion at all and can only lapse.
+
+The push route is opt-in. Set `MaintenanceNotifications` to `Auto` to ask for it and connect
+normally if the server does not offer it, or `Required` to refuse a connection that will not
+deliver them — useful for proving the feature is live in staging.
+
+`Auto` is the safe default everywhere: on a server that does not emit these — Redis Open Source,
+Valkey, and Azure Managed Redis until its rollout lands — the opt-in is simply refused and the
+connection carries on. `Required` on such a server **rejects the connection**, so keep it to
+environments where you know the server emits them. It needs RESP3, which is
+negotiated by default. Forcing RESP2, or a `DefaultVersion` below 6.0, takes RESP3 away: under
+`Auto` that disables the notifications silently, while `Required` rejects the connection
+outright, which is the other reason to reach for it in staging.
 
 A handoff surfaces as a `ConnectionFailed` event with
 `ConnectionFailureType.MaintenanceHandoff`. It is tracked as `Redis.MaintenanceHandoff` rather

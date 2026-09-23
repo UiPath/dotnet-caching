@@ -15,4 +15,7 @@ public class ResiliencePoliciesOptions
     public bool TelemetryEnabled { get; set; } = true;
 
     public bool RethrowCircuitBreakerExceptions { get; set; }
+
+    /// <summary>Replaces <see cref="RequestTimeout"/> during an announced window; unset uses the tier's suggestion.</summary>
+    public TimeSpan? DisruptionRequestTimeout { get; set; }
 }

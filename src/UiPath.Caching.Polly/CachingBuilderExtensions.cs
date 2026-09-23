@@ -39,7 +39,7 @@ public static class CachingBuilderExtensions
                 ? sp.GetRequiredService<IOptions<TelemetryOptions>>().Value
                 : null;
 
-            return new ResiliencePipelineFactory(loggerFactory, telemetryOptions, resilienceOptions);
+            return new ResiliencePipelineFactory(loggerFactory, telemetryOptions, resilienceOptions, sp.GetService<IDisruptionState>());
         });
 
         // Predefined pipelines, seeded with the same base configuration.

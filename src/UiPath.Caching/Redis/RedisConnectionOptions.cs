@@ -25,6 +25,12 @@ public class RedisConnectionOptions
     /// <summary>Ask the server for advance notice of maintenance; null leaves the client's own default.</summary>
     public RedisMaintenanceNotifications? MaintenanceNotifications { get; set; }
 
+    /// <summary>Command timeout during an announced window; unset derives twice the async timeout.</summary>
+    public TimeSpan? MaintenanceRelaxedTimeout { get; set; }
+
+    /// <summary>Caps an announced window; unset lets the client derive it.</summary>
+    public TimeSpan? MaintenanceRelaxedWindowMax { get; set; }
+
     public int PlannedMaintenanceConnectionRetryCount { get; set; } = 5;
 
     public TimeSpan PlannedMaintenanceConnectionRetryDelay { get; set; } = TimeSpan.FromSeconds(5);
@@ -52,7 +58,7 @@ public class RedisConnectionOptions
 
     public TimeSpan StaleEndpointScanInterval { get; set; } = TimeSpan.FromSeconds(30);
 
-    public bool? FailFastBacklogPolicy { get; set; }
+    public bool? FailFastBacklogPolicy { get; set; } = true;
 
     public bool ProfilerEnabled { get; set; }
 

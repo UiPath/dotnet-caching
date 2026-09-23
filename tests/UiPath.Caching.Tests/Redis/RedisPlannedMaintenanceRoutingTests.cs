@@ -15,22 +15,25 @@ namespace UiPath.Caching.Tests.Redis;
 public class RedisPlannedMaintenanceRoutingTests : IDisposable
 {
     private readonly List<RedisPlannedMaintenance> _started = [];
-    private readonly MovableClock _clock = new();
 
     private readonly RecordingTelemetryProvider _telemetry = new();
     private readonly IConnectionMultiplexer _multiplexer = Substitute.For<IConnectionMultiplexer>();
     private readonly IRedisConnector _connector = Substitute.For<IRedisConnector>();
+    private readonly AdvanceableClock _clock = new(DateTimeOffset.UtcNow);
+    private readonly TaskCompletionSource _connectGate = new(TaskCreationOptions.RunContinuationsAsynchronously);
+    private IConnectionMultiplexer? _commandConnection;
 
     [Fact]
-    public async Task An_announced_disruption_is_recorded_without_reconnecting()
+    public async Task An_announced_disruption_opens_the_window_without_reconnecting()
     {
         // The client hands the connection off itself, and probing force-reconnects on a failed write.
         var sut = await StartedAsync();
 
         RaiseOnCommandConnection(PushEvent(MaintenanceNotificationType.Migrating));
 
+        sut.InProgress.Should().BeTrue();
         _connector.DidNotReceive().ForceReconnect();
-        sut.InProgress.Should().BeFalse();
+        _telemetry.Events.Should().Contain(e => e.Name == "Redis.MaintenanceStarted");
     }
 
     [Theory]
@@ -149,6 +152,459 @@ public class RedisPlannedMaintenanceRoutingTests : IDisposable
         RaiseMaintenance(PushEvent(MaintenanceNotificationType.Moving));
 
         _telemetry.Events.Should().NotContain(e => e.Name == "Redis.Maintenance");
+    }
+
+    [Fact]
+    public async Task Only_the_matching_family_closes_its_window()
+    {
+        // No tail, so only the outstanding failover can hold it open.
+        var sut = await StartedAsync("localhost:6379,maintPostEventRelaxed=0");
+        RaiseOnCommandConnection(PushEvent(MaintenanceNotificationType.Migrating));
+        RaiseOnCommandConnection(PushEvent(MaintenanceNotificationType.FailingOver));
+
+        RaiseOnCommandConnection(PushEvent(MaintenanceNotificationType.Migrated));
+
+        sut.InProgress.Should().BeTrue("the failover is still outstanding");
+        _telemetry.Events.Should().NotContain(e => e.Name == "Redis.MaintenanceEnded");
+
+        RaiseOnCommandConnection(PushEvent(MaintenanceNotificationType.FailedOver));
+
+        sut.InProgress.Should().BeFalse();
+        _telemetry.Events.Should().Contain(e => e.Name == "Redis.MaintenanceEnded");
+    }
+
+    [Fact]
+    public async Task An_interval_whose_start_was_refused_announces_no_end()
+    {
+        var telemetry = new ThrowOnMaintenanceEventProvider { FailingEvent = "Redis.MaintenanceStarted" };
+        var sut = await StartedAsync("localhost:6379,maintPostEventRelaxed=0", telemetry);
+
+        RaiseOnCommandConnection(PushEvent(MaintenanceNotificationType.FailingOver));
+        sut.InProgress.Should().BeTrue("the window is open whether or not the start could be announced");
+
+        RaiseOnCommandConnection(PushEvent(MaintenanceNotificationType.FailedOver));
+
+        sut.InProgress.Should().BeFalse();
+        telemetry.Events.Should().NotContain("Redis.MaintenanceEnded", "no start was ever announced");
+    }
+
+    [Fact]
+    public async Task The_Azure_probe_route_suggests_no_timeout()
+    {
+        var sut = await StartedAsync();
+
+        RaiseMaintenance(AzureEvent());
+
+        sut.InProgress.Should().BeTrue("the probe loop is running");
+        sut.SuggestedTimeout.Should().BeNull("the connection is not relaxing its own timeouts on this route");
+    }
+
+    [Fact]
+    public async Task An_announced_window_suggests_what_the_client_relaxes_to()
+    {
+        var sut = await StartedAsync("localhost:6379,maintPostEventRelaxed=0");
+
+        RaiseOnCommandConnection(PushEvent(MaintenanceNotificationType.FailingOver));
+
+        sut.InProgress.Should().BeTrue();
+        sut.SuggestedTimeout.Should().NotBeNull("this route is one the client relaxes its own timeouts for");
+    }
+
+    [Fact]
+    public async Task A_window_is_sized_by_the_connection_it_arrived_on()
+    {
+        // Raised while this service's own connect is still inside the configurator pass.
+        var sut = await StartedWithGatedConfiguratorAsync(TimeSpan.FromSeconds(30));
+
+        RaiseOnCommandConnection(PushEvent(MaintenanceNotificationType.FailingOver), DeliveredBy("localhost:6379,asyncTimeout=500,maintRelaxedTimeout=1,maintPostEventRelaxed=0"));
+
+        sut.InProgress.Should().BeTrue();
+        sut.SuggestedTimeout.Should().Be(TimeSpan.FromSeconds(1));
+    }
+
+    [Fact]
+    public async Task A_connection_is_resized_by_its_own_bounds_after_another_was_adopted()
+    {
+        var sut = await StartedAsync();
+        var first = DeliveredBy("localhost:6379,maintRelaxedTimeout=1,maintPostEventRelaxed=0");
+        RaiseOnCommandConnection(PushEvent(MaintenanceNotificationType.FailingOver, sequenceId: 1), first);
+        RaiseOnCommandConnection(PushEvent(MaintenanceNotificationType.FailingOver, sequenceId: 2), DeliveredBy("localhost:6379,maintRelaxedTimeout=60,maintPostEventRelaxed=0"));
+        sut.SuggestedTimeout.Should().Be(TimeSpan.FromSeconds(60));
+
+        RaiseOnCommandConnection(PushEvent(MaintenanceNotificationType.FailingOver, sequenceId: 3), first);
+
+        sut.SuggestedTimeout.Should().Be(TimeSpan.FromSeconds(1));
+    }
+
+    [Fact]
+    public async Task Notices_from_two_connections_are_handled_one_at_a_time()
+    {
+        // The first notice is held inside its record while the second arrives.
+        var telemetry = new BlockingFirstRecordProvider();
+        await StartedAsync(telemetry: telemetry);
+        var first = Task.Run(() => RaiseOnCommandConnection(PushEvent(MaintenanceNotificationType.Migrating, sequenceId: 1), DeliveredBy("localhost:6379,maintRelaxedTimeout=1")), TestContext.Current.CancellationToken);
+        await telemetry.Blocked.WaitAsync(TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken);
+
+        var second = Task.Run(() => RaiseOnCommandConnection(PushEvent(MaintenanceNotificationType.FailingOver, sequenceId: 2), DeliveredBy("localhost:6379,maintRelaxedTimeout=60")), TestContext.Current.CancellationToken);
+        await Task.Delay(300, TestContext.Current.CancellationToken);
+
+        second.IsCompleted.Should().BeFalse("the second notice waits for the first to finish");
+        telemetry.Release();
+        await Task.WhenAll(first, second).WaitAsync(TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken);
+    }
+
+    [Fact]
+    public async Task The_maintenance_connection_does_not_resize_a_window_its_sender_sized()
+    {
+        var sut = await StartedWithGatedConfiguratorAsync(TimeSpan.FromSeconds(60));
+        RaiseOnCommandConnection(PushEvent(MaintenanceNotificationType.Migrating), DeliveredBy("localhost:6379,maintRelaxedTimeout=1,maintPostEventRelaxed=0"));
+
+        _connectGate.TrySetResult();
+        await WaitForConnectedAsync(sut);
+
+        sut.SuggestedTimeout.Should().Be(TimeSpan.FromSeconds(1));
+    }
+
+    [Fact]
+    public async Task A_replay_from_a_retired_connection_does_not_resize_the_window()
+    {
+        var sut = await StartedAsync();
+        var frame = PushEvent(MaintenanceNotificationType.Migrating, sequenceId: 7);
+        RaiseOnCommandConnection(frame, DeliveredBy("localhost:6379,maintRelaxedTimeout=60,maintPostEventRelaxed=0"));
+        _clock.Advance(TimeSpan.FromSeconds(5));
+
+        RaiseOnCommandConnection(frame, DeliveredBy("localhost:6379,maintRelaxedTimeout=1,maintPostEventRelaxed=0"));
+
+        sut.InProgress.Should().BeTrue();
+        sut.SuggestedTimeout.Should().Be(TimeSpan.FromSeconds(60));
+    }
+
+    [Fact]
+    public async Task A_window_is_not_cut_short_before_this_service_connects()
+    {
+        // Sized by the client default, it would lapse at 10s.
+        var sut = await StartedWithGatedConfiguratorAsync(TimeSpan.FromSeconds(60));
+
+        RaiseOnCommandConnection(PushEvent(MaintenanceNotificationType.Migrating), DeliveredBy("localhost:6379,maintRelaxedTimeout=60,maintPostEventRelaxed=0"));
+        _clock.Advance(TimeSpan.FromSeconds(15));
+        _connectGate.TrySetResult();
+        await WaitForConnectedAsync(sut);
+
+        sut.InProgress.Should().BeTrue();
+        _telemetry.Events.Count(e => e.Name == "Redis.MaintenanceStarted").Should().Be(1);
+        _telemetry.Events.Should().NotContain(e => e.Name == "Redis.MaintenanceEnded");
+    }
+
+    [Fact]
+    public async Task A_configuration_that_will_not_parse_keeps_the_bounds_and_the_notice()
+    {
+        var sut = await StartedAsync("localhost:6379,maintPostEventRelaxed=0");
+
+        RaiseOnCommandConnection(PushEvent(MaintenanceNotificationType.FailingOver), DeliveredBy("localhost:6379,notAKnownKey=1"));
+
+        sut.InProgress.Should().BeTrue();
+        _telemetry.Events.Should().Contain(e => e.Name == "Redis.Maintenance");
+    }
+
+    [Fact]
+    public async Task A_probe_rejected_while_disconnected_leaves_the_client_to_reconnect()
+    {
+        _connector.IsConnected.Returns(false);
+        FailProbes(ConnectionFailureType.UnableToConnect);
+        await StartedAsync();
+
+        RaiseMaintenance(AzureEvent());
+        await Task.Delay(TimeSpan.FromSeconds(2.5), TestContext.Current.CancellationToken);
+
+        _connector.DidNotReceive().ForceReconnect();
+    }
+
+    [Fact]
+    public async Task A_disconnect_that_outlasts_the_hanging_time_still_forces_a_reconnect()
+    {
+        _connector.IsConnected.Returns(false);
+        FailProbes(ConnectionFailureType.UnableToConnect);
+        await StartedAsync();
+
+        RaiseMaintenance(AzureEvent());
+        await Task.Delay(TimeSpan.FromSeconds(1.5), TestContext.Current.CancellationToken);
+        _clock.Advance(TimeSpan.FromSeconds(11));
+
+        await WaitForAsync(() => _connector.ReceivedCalls().Any(c => c.GetMethodInfo().Name == nameof(IRedisConnector.ForceReconnect)));
+    }
+
+    [Fact]
+    public async Task A_probe_failing_while_connected_forces_a_reconnect_at_once()
+    {
+        _connector.IsConnected.Returns(true);
+        FailProbes(ConnectionFailureType.SocketFailure);
+        await StartedAsync();
+
+        RaiseMaintenance(AzureEvent());
+
+        await WaitForAsync(() => _connector.ReceivedCalls().Any(c => c.GetMethodInfo().Name == nameof(IRedisConnector.ForceReconnect)));
+    }
+
+    [Fact]
+    public async Task A_frame_replayed_later_in_a_long_window_is_still_collapsed()
+    {
+        var sut = await StartedAsync("localhost:6379,maintRelaxedTimeout=60,maintRelaxedWindowMax=120,maintPostEventRelaxed=0");
+        var starter = PushEvent(MaintenanceNotificationType.FailingOver, announced: TimeSpan.FromSeconds(100));
+
+        RaiseOnCommandConnection(starter);
+        _clock.Advance(TimeSpan.FromSeconds(45));
+        RaiseOnCommandConnection(starter);
+
+        RaiseOnCommandConnection(PushEvent(MaintenanceNotificationType.FailedOver));
+
+        sut.InProgress.Should().BeFalse("the replay was collapsed, so one completion closes the one operation");
+    }
+
+    [Fact]
+    public async Task Every_live_completion_earns_a_tail_not_just_the_last()
+    {
+        // The first completion's tail outlasts the second operation.
+        var sut = await StartedAsync("localhost:6379,maintRelaxedTimeout=10,maintRelaxedWindowMax=200,maintPostEventRelaxed=60");
+
+        RaiseOnCommandConnection(PushEvent(MaintenanceNotificationType.FailingOver, sequenceId: 1, announced: TimeSpan.FromSeconds(20)));
+        RaiseOnCommandConnection(PushEvent(MaintenanceNotificationType.FailingOver, sequenceId: 2, announced: TimeSpan.FromSeconds(30)));
+
+        RaiseOnCommandConnection(PushEvent(MaintenanceNotificationType.FailedOver, sequenceId: 3));
+        _clock.Advance(TimeSpan.FromSeconds(40));
+
+        sut.InProgress.Should().BeTrue("the completed operation's 60s tail outlives the 30s one still running");
+    }
+
+    [Fact]
+    public async Task The_window_maximum_caps_a_relaxed_timeout_above_it()
+    {
+        var sut = await StartedAsync("localhost:6379,maintRelaxedTimeout=10,maintRelaxedWindowMax=1,maintPostEventRelaxed=0");
+
+        RaiseOnCommandConnection(PushEvent(MaintenanceNotificationType.Migrating, announced: TimeSpan.FromSeconds(2)));
+        sut.InProgress.Should().BeTrue();
+
+        _clock.Advance(TimeSpan.FromSeconds(2));
+
+        sut.InProgress.Should().BeFalse("1s is the documented cap, whatever the floor says");
+    }
+
+    [Fact]
+    public async Task A_refused_record_does_not_release_the_claim_that_opened_a_window()
+    {
+        var telemetry = new ThrowOnMaintenanceEventProvider { FailingEvent = "Redis.Maintenance" };
+        var sut = await StartedAsync("localhost:6379,maintPostEventRelaxed=0", telemetry);
+        var moving = PushEvent(MaintenanceNotificationType.FailingOver);
+
+        RaiseOnCommandConnection(moving);
+        RaiseOnCommandConnection(moving);
+
+        sut.InProgress.Should().BeTrue("the window is open");
+
+        RaiseOnCommandConnection(PushEvent(MaintenanceNotificationType.FailedOver));
+
+        sut.InProgress.Should().BeFalse("one completion closes the one operation the replay must not have doubled");
+    }
+
+    [Fact]
+    public async Task A_window_is_resized_when_its_connection_brings_longer_bounds()
+    {
+        var sut = await StartedAsync();
+        RaiseOnCommandConnection(PushEvent(MaintenanceNotificationType.Migrating), DeliveredBy("localhost:6379,maintRelaxedTimeout=10,maintPostEventRelaxed=0"));
+        _clock.Advance(TimeSpan.FromSeconds(5));
+
+        RaiseOnCommandConnection(UnmodelledEvent("longer bounds"), DeliveredBy("localhost:6379,maintRelaxedTimeout=60,maintPostEventRelaxed=0"));
+        _clock.Advance(TimeSpan.FromSeconds(30));
+
+        sut.InProgress.Should().BeTrue("60s is what the connection now relaxes to, so the open window runs to that");
+    }
+
+    [Fact]
+    public async Task Shortened_bounds_close_an_open_window_at_once_rather_than_at_the_old_deadline()
+    {
+        var sut = await StartedAsync();
+        RaiseOnCommandConnection(PushEvent(MaintenanceNotificationType.Migrating), DeliveredBy("localhost:6379,maintRelaxedTimeout=10,maintPostEventRelaxed=0"));
+        _clock.Advance(TimeSpan.FromSeconds(5));
+
+        RaiseOnCommandConnection(UnmodelledEvent("shorter bounds"), DeliveredBy("localhost:6379,maintRelaxedTimeout=1,maintPostEventRelaxed=0"));
+
+        sut.InProgress.Should().BeFalse("1s is what the connection now relaxes to, and 5s have passed");
+        await WaitForAsync(() => _telemetry.Events.Any(e => e.Name == "Redis.MaintenanceEnded"));
+    }
+
+    [Fact]
+    public async Task Stopping_does_not_announce_an_interval_a_pending_probe_left_behind()
+    {
+        // Stopped before the queued probe worker runs, with the flag set and nothing announced.
+        var sut = await StartedAsync();
+        sut.InProgress = true;
+
+        await sut.StopAsync(TestContext.Current.CancellationToken);
+
+        _telemetry.Events.Should().NotContain(e => e.Name == "Redis.MaintenanceStarted");
+        _telemetry.Events.Should().NotContain(e => e.Name == "Redis.MaintenanceEnded");
+    }
+
+    [Fact]
+    public async Task A_wall_clock_correction_forward_does_not_close_an_open_window()
+    {
+        var sut = await StartedAsync();
+        RaiseOnCommandConnection(PushEvent(MaintenanceNotificationType.SlotMigrating, announced: TimeSpan.FromSeconds(30)));
+
+        _clock.CorrectWallClock(TimeSpan.FromMinutes(10));
+
+        sut.InProgress.Should().BeTrue("no time has actually elapsed, whatever the wall clock now reads");
+    }
+
+    [Fact]
+    public async Task A_wall_clock_correction_backward_does_not_hold_a_window_past_its_duration()
+    {
+        var sut = await StartedAsync("localhost:6379,maintPostEventRelaxed=0");
+        RaiseOnCommandConnection(PushEvent(MaintenanceNotificationType.SlotMigrating, announced: TimeSpan.FromSeconds(30)));
+
+        _clock.CorrectWallClock(TimeSpan.FromMinutes(-10));
+        _clock.Advance(TimeSpan.FromSeconds(31));
+
+        sut.InProgress.Should().BeFalse("30 seconds elapsed however far back the wall clock was set");
+    }
+
+    [Fact]
+    public async Task A_shorter_overlapping_operation_does_not_shorten_a_longer_one()
+    {
+        var sut = await StartedAsync("localhost:6379,maintPostEventRelaxed=0");
+        RaiseOnCommandConnection(PushEvent(MaintenanceNotificationType.SlotMigrating, sequenceId: 16, announced: TimeSpan.FromSeconds(30)));
+        RaiseOnCommandConnection(PushEvent(MaintenanceNotificationType.SlotMigrating, sequenceId: 18, announced: TimeSpan.FromSeconds(5)));
+
+        _clock.Advance(TimeSpan.FromSeconds(15));
+
+        sut.InProgress.Should().BeTrue("the 30s migration is still running, whatever the later one announced");
+    }
+
+    [Fact]
+    public async Task A_late_completion_does_not_release_a_longer_operation_still_running()
+    {
+        var sut = await StartedAsync("localhost:6379,maintPostEventRelaxed=0,maintRelaxedTimeout=5,maintRelaxedWindowMax=120");
+        RaiseOnCommandConnection(PushEvent(MaintenanceNotificationType.SlotMigrating, sequenceId: 16, announced: TimeSpan.FromSeconds(60)));
+        RaiseOnCommandConnection(PushEvent(MaintenanceNotificationType.SlotMigrating, sequenceId: 18, announced: TimeSpan.FromSeconds(2)));
+        _clock.Advance(TimeSpan.FromSeconds(10));
+        RaiseOnCommandConnection(PushEvent(MaintenanceNotificationType.FailedOver, sequenceId: 20));
+
+        RaiseOnCommandConnection(PushEvent(MaintenanceNotificationType.SlotMigrated, sequenceId: 19));
+
+        sut.InProgress.Should().BeTrue("the completion may be the lapsed operation's, and the 60s one is still running");
+    }
+
+    [Fact]
+    public async Task A_replay_after_its_claim_aged_out_does_not_add_to_a_family_still_running()
+    {
+        // Starters at 0s and 30s keep the family alive past the first claim at 60s.
+        var sut = await StartedAsync("localhost:6379,maintPostEventRelaxed=0,maintRelaxedTimeout=5,maintRelaxedWindowMax=60");
+        var first = PushEvent(MaintenanceNotificationType.Migrating, sequenceId: 1, announced: TimeSpan.FromSeconds(60));
+        RaiseOnCommandConnection(first);
+        _clock.Advance(TimeSpan.FromSeconds(30));
+        RaiseOnCommandConnection(PushEvent(MaintenanceNotificationType.Migrating, sequenceId: 2, announced: TimeSpan.FromSeconds(60)));
+        _clock.Advance(TimeSpan.FromSeconds(31));
+
+        RaiseOnCommandConnection(first);
+        RaiseOnCommandConnection(PushEvent(MaintenanceNotificationType.Migrated, sequenceId: 3));
+        RaiseOnCommandConnection(PushEvent(MaintenanceNotificationType.Migrated, sequenceId: 4));
+
+        sut.InProgress.Should().BeFalse("two operations ran and two completed; the replay added none");
+    }
+
+    [Fact]
+    public async Task Overlapping_operations_of_one_family_each_hold_the_window()
+    {
+        // A completion has its own sequence id, so nothing pairs it with a starter.
+        var sut = await StartedAsync("localhost:6379,maintPostEventRelaxed=0");
+        RaiseOnCommandConnection(PushEvent(MaintenanceNotificationType.SlotMigrating, sequenceId: 16));
+        RaiseOnCommandConnection(PushEvent(MaintenanceNotificationType.SlotMigrating, sequenceId: 18));
+
+        RaiseOnCommandConnection(PushEvent(MaintenanceNotificationType.SlotMigrated, sequenceId: 17));
+
+        sut.InProgress.Should().BeTrue("the second migration is still running");
+
+        RaiseOnCommandConnection(PushEvent(MaintenanceNotificationType.SlotMigrated, sequenceId: 19));
+
+        sut.InProgress.Should().BeFalse("both have completed");
+    }
+
+    [Fact]
+    public async Task A_completion_hands_over_to_the_tail_the_client_stays_relaxed_for()
+    {
+        var sut = await StartedAsync();
+        RaiseOnCommandConnection(PushEvent(MaintenanceNotificationType.Migrating));
+
+        RaiseOnCommandConnection(PushEvent(MaintenanceNotificationType.Migrated));
+
+        sut.InProgress.Should().BeTrue("the client is still relaxed for maintPostEventRelaxed");
+
+        _clock.Advance(TimeSpan.FromSeconds(21));
+
+        sut.InProgress.Should().BeFalse();
+    }
+
+    [Fact]
+    public async Task A_completion_arriving_after_its_window_lapsed_does_not_reopen_it()
+    {
+        var sut = await StartedAsync();
+        RaiseOnCommandConnection(PushEvent(MaintenanceNotificationType.Migrating, announced: TimeSpan.FromSeconds(15)));
+
+        // Without firing the timer, so the lapsed entry is still present.
+        _clock.AdvanceWithoutFiringTimers(TimeSpan.FromSeconds(16));
+        sut.InProgress.Should().BeFalse();
+
+        RaiseOnCommandConnection(PushEvent(MaintenanceNotificationType.Migrated));
+
+        sut.InProgress.Should().BeFalse("a lapsed window is over, and its completion cannot restart it");
+        _telemetry.Events.Count(e => e.Name == "Redis.MaintenanceStarted").Should().Be(1, "one disruption is one interval");
+    }
+
+    [Fact]
+    public async Task A_new_operation_does_not_discard_the_tail_an_earlier_one_earned()
+    {
+        var sut = await StartedAsync();
+        RaiseOnCommandConnection(PushEvent(MaintenanceNotificationType.Migrating));
+        RaiseOnCommandConnection(PushEvent(MaintenanceNotificationType.Migrated));
+
+        RaiseOnCommandConnection(PushEvent(MaintenanceNotificationType.Migrating));
+        _clock.Advance(TimeSpan.FromSeconds(15));
+
+        sut.InProgress.Should().BeTrue("the 20s tail outlives the 10s window the new operation opened");
+    }
+
+    [Fact]
+    public async Task A_completion_closes_at_once_when_there_is_no_tail()
+    {
+        var sut = await StartedAsync("localhost:6379,maintPostEventRelaxed=0");
+        RaiseOnCommandConnection(PushEvent(MaintenanceNotificationType.FailingOver));
+
+        RaiseOnCommandConnection(PushEvent(MaintenanceNotificationType.FailedOver));
+
+        sut.InProgress.Should().BeFalse("nothing is left relaxed, so nothing is left to suppress");
+    }
+
+    [Fact]
+    public async Task A_window_whose_completion_never_arrives_lapses()
+    {
+        var sut = await StartedAsync();
+        RaiseOnCommandConnection(PushEvent(MaintenanceNotificationType.Moving, announced: TimeSpan.FromSeconds(15)));
+        sut.InProgress.Should().BeTrue();
+
+        _clock.Advance(TimeSpan.FromSeconds(16));
+
+        sut.InProgress.Should().BeFalse();
+        await WaitForAsync(() => _telemetry.Events.Any(e => e.Name == "Redis.MaintenanceEnded"));
+    }
+
+    [Fact]
+    public async Task An_announced_duration_shorter_than_a_reconnect_is_widened()
+    {
+        var sut = await StartedAsync();
+        RaiseOnCommandConnection(PushEvent(MaintenanceNotificationType.Migrating, announced: TimeSpan.FromSeconds(2)));
+
+        _clock.Advance(TimeSpan.FromSeconds(5));
+
+        sut.InProgress.Should().BeTrue();
     }
 
     [Fact]
@@ -303,7 +759,7 @@ public class RedisPlannedMaintenanceRoutingTests : IDisposable
     {
         // Attached straight to the client, unlike the command route, so nothing else keeps throws off its dispatch.
         var telemetry = new ThrowOnMaintenanceEventProvider();
-        await StartedAsync(telemetry);
+        await StartedAsync(telemetry: telemetry);
 
         var raise = () => RaiseMaintenance(AzureEvent());
 
@@ -316,7 +772,7 @@ public class RedisPlannedMaintenanceRoutingTests : IDisposable
     {
         // A sink that cannot take the report leaves nowhere to put it, and it still must not reach the dispatch thread.
         var telemetry = new ThrowOnMaintenanceEventProvider { ReportingThrows = true };
-        await StartedAsync(telemetry);
+        await StartedAsync(telemetry: telemetry);
 
         var raise = () => RaiseMaintenance(AzureEvent());
 
@@ -324,18 +780,17 @@ public class RedisPlannedMaintenanceRoutingTests : IDisposable
     }
 
     [Fact]
-    public async Task A_notification_whose_recording_threw_is_recorded_when_it_arrives_again()
+    public async Task A_refused_record_is_reported_and_not_retried()
     {
-        // A handler that threw recorded nothing, so holding its claim would lose the notification for the window.
         var telemetry = new ThrowOnMaintenanceEventProvider(failures: 1);
-        await StartedAsync(telemetry);
+        await StartedAsync(telemetry: telemetry);
         var azure = AzureEvent();
 
         RaiseMaintenance(azure);
         RaiseMaintenance(azure);
 
-        telemetry.Exceptions.Should().Contain(ThrowOnMaintenanceEventProvider.Failure);
-        telemetry.Events.Count(e => e == "Redis.Maintenance").Should().Be(1, "the retry recorded what the failed attempt did not");
+        telemetry.Exceptions.Should().Contain(ThrowOnMaintenanceEventProvider.Failure, "the refusal is reported");
+        telemetry.Events.Should().NotContain("Redis.Maintenance", "the copy is collapsed, so nothing re-records it");
     }
 
     [Fact]
@@ -344,7 +799,7 @@ public class RedisPlannedMaintenanceRoutingTests : IDisposable
         // Cancel runs the probe loop's registrations, so it can throw what a caller did; the rest of Dispose
         // still has a subscribed connection to let go of.
         var telemetry = new ThrowOnMaintenanceEventProvider { ReportingThrows = true };
-        var sut = await StartedAsync(telemetry);
+        var sut = await StartedAsync(telemetry: telemetry);
         var source = (CancellationTokenSource)typeof(RedisPlannedMaintenance)
             .GetField("_cancellationTokenSource", BindingFlags.Instance | BindingFlags.NonPublic)!
             .GetValue(sut)!;
@@ -362,7 +817,7 @@ public class RedisPlannedMaintenanceRoutingTests : IDisposable
         // Announcing is not what the run is for: losing the event must not cost the probing and the ForceReconnect
         // that are the Azure route's whole recovery.
         var telemetry = new ThrowOnMaintenanceEventProvider { FailingEvent = "Redis.MaintenanceStarted" };
-        var sut = await StartedAsync(telemetry);
+        var sut = await StartedAsync(telemetry: telemetry);
 
         RaiseMaintenance(AzureEvent());
         await WaitForRefusalAsync(telemetry);
@@ -378,7 +833,7 @@ public class RedisPlannedMaintenanceRoutingTests : IDisposable
     public async Task A_probe_run_whose_end_could_not_be_announced_reports_that_rather_than_faulting()
     {
         var telemetry = new ThrowOnMaintenanceEventProvider { FailingEvent = "Redis.MaintenanceEnded" };
-        var sut = await StartedAsync(telemetry);
+        var sut = await StartedAsync(telemetry: telemetry);
 
         RaiseMaintenance(AzureEvent());
         for (var i = 0; i < 500 && !telemetry.Events.Contains("Redis.MaintenanceStarted"); i++)
@@ -485,6 +940,28 @@ public class RedisPlannedMaintenanceRoutingTests : IDisposable
             null,
             [$"NotificationType|NodeMaintenanceStarting|StartTimeInUTC|{startTime}|IsReplica|False|IPAddress|127.0.0.1|SSLPort|6380|NonSSLPort|6379"],
             null)!;
+    private static async Task WaitForConnectedAsync(RedisPlannedMaintenance sut)
+    {
+        // Assigned once the connect has finished.
+        var field = typeof(RedisPlannedMaintenance).GetField("_multiplexer", BindingFlags.Instance | BindingFlags.NonPublic)!;
+        for (var i = 0; i < 200 && field.GetValue(sut) is null; i++)
+        {
+            await Task.Delay(10, TestContext.Current.CancellationToken);
+        }
+
+        field.GetValue(sut).Should().NotBeNull();
+    }
+
+    private static async Task WaitForAsync(Func<bool> condition)
+    {
+        // The delay continuation runs off the advancing thread.
+        for (var i = 0; i < 200 && !condition(); i++)
+        {
+            await Task.Delay(10, TestContext.Current.CancellationToken);
+        }
+
+        condition().Should().BeTrue("the lapsed window must record its end, not just stop reporting");
+    }
 
     /// <summary>A connection attempt that never succeeds, but that ends when the service is disposed.</summary>
     private static Task<IConnectionMultiplexer> NeverConnects(CancellationToken cancellationToken)
@@ -503,6 +980,14 @@ public class RedisPlannedMaintenanceRoutingTests : IDisposable
         typeof(ServerMaintenanceEvent).GetProperty(nameof(ServerMaintenanceEvent.RawMessage))!
             .SetValue(unmodelled, rawMessage);
         return unmodelled;
+    }
+
+    /// <summary>A command connection built with <paramref name="configuration"/>, as the connector reports it.</summary>
+    private static IConnectionMultiplexer DeliveredBy(string configuration)
+    {
+        var multiplexer = Substitute.For<IConnectionMultiplexer>();
+        multiplexer.Configuration.Returns(configuration);
+        return multiplexer;
     }
 
     /// <summary>Null <paramref name="sequenceId"/> is a frame whose sequence could not be read: zero, described as unknown.</summary>
@@ -525,7 +1010,8 @@ public class RedisPlannedMaintenanceRoutingTests : IDisposable
 
     private static async Task WaitForRefusalAsync(ThrowOnMaintenanceEventProvider telemetry)
     {
-        for (var i = 0; i < 500 && telemetry.RefusedAttempts == 0; i++)
+        // The count rises inside the throw, before the catch has reported it.
+        for (var i = 0; i < 500 && (telemetry.RefusedAttempts == 0 || telemetry.Exceptions.Length == 0); i++)
         {
             await Task.Delay(10, TestContext.Current.CancellationToken);
         }
@@ -538,18 +1024,43 @@ public class RedisPlannedMaintenanceRoutingTests : IDisposable
         _multiplexer.ServerMaintenanceEvent += Raise.Event<EventHandler<ServerMaintenanceEvent>>(_multiplexer, e);
 
     /// <summary>As the connection carrying commands sees it — the route push frames are taken from.</summary>
-    private void RaiseOnCommandConnection(ServerMaintenanceEvent e) =>
-        _connector.ServerMaintenance += Raise.Event<EventHandler<ServerMaintenanceEvent>>(_connector, e);
+    private void RaiseOnCommandConnection(ServerMaintenanceEvent e, object? sender = null) =>
+        _connector.ServerMaintenance += Raise.Event<EventHandler<ServerMaintenanceEvent>>(sender ?? _commandConnection ?? (object)_connector, e);
+
+    /// <summary>The command connection the connector would build from <paramref name="connectionString"/>.</summary>
+    private void UseCommandConnection(string connectionString)
+    {
+        var provider = new RedisConfigurationOptionsProvider(NullLoggerFactory.Instance, Options.Create(new RedisConnectionOptions { ConnectionString = connectionString }));
+        var configuration = provider.GetConfiguration();
+        provider.ReapplyDerivedBounds(configuration);
+        _commandConnection = DeliveredBy(configuration.ToString());
+    }
+
+    /// <summary>Fails every probe write, whichever overload the probe binds to.</summary>
+    private void FailProbes(ConnectionFailureType failure)
+    {
+        Task<bool> Fail() => Task.FromException<bool>(new RedisConnectionException(failure, CommandFlags.None, "probe"));
+        _connector.Database.StringSetAsync(Arg.Any<RedisKey>(), Arg.Any<RedisValue>(), Arg.Any<Expiration>(), Arg.Any<ValueCondition>(), Arg.Any<CommandFlags>()).Returns(_ => Fail());
+        _connector.Database.StringSetAsync(Arg.Any<RedisKey>(), Arg.Any<RedisValue>(), Arg.Any<TimeSpan?>(), Arg.Any<When>()).Returns(_ => Fail());
+        _connector.Database.StringSetAsync(Arg.Any<RedisKey>(), Arg.Any<RedisValue>(), Arg.Any<TimeSpan?>(), Arg.Any<When>(), Arg.Any<CommandFlags>()).Returns(_ => Fail());
+        _connector.Database.StringSetAsync(Arg.Any<RedisKey>(), Arg.Any<RedisValue>(), Arg.Any<TimeSpan?>(), Arg.Any<bool>(), Arg.Any<When>(), Arg.Any<CommandFlags>()).Returns(_ => Fail());
+    }
 
     private async Task<RedisPlannedMaintenance> StartedWithoutMaintenanceConnectionAsync()
     {
+        UseCommandConnection("localhost:6379");
         var options = Options.Create(new RedisConnectionOptions { ConnectionString = "localhost:6379" });
         var factory = Substitute.For<IConnectionMultiplexerFactory>();
         // CA2012: arranging a ValueTask-returning member with NSubstitute means calling it and handing the
         // result to Returns. There is no shape of this that awaits it, and nothing ever consumes it.
 #pragma warning disable CA2012
+        var creating = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         factory.CreateAsync(Arg.Any<ConfigurationOptions>(), Arg.Any<CancellationToken>())
-            .Returns(call => new ValueTask<IConnectionMultiplexer>(NeverConnects(call.Arg<CancellationToken>())));
+            .Returns(call =>
+            {
+                creating.TrySetResult();
+                return new ValueTask<IConnectionMultiplexer>(NeverConnects(call.Arg<CancellationToken>()));
+            });
 #pragma warning restore CA2012
 
         var sut = new RedisPlannedMaintenance(
@@ -564,12 +1075,17 @@ public class RedisPlannedMaintenanceRoutingTests : IDisposable
 
         _started.Add(sut);
         await sut.StartAsync(TestContext.Current.CancellationToken);
+
+        // Created once the connect has passed the configurators.
+        await creating.Task.WaitAsync(TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken);
         return sut;
     }
 
-    private async Task<RedisPlannedMaintenance> StartedAsync(ICachingTelemetryProvider? telemetry = null)
+    private async Task<RedisPlannedMaintenance> StartedWithGatedConfiguratorAsync(TimeSpan relaxedTimeout, string connectionString = "localhost:6379", ICachingTelemetryProvider? telemetry = null)
     {
-        var options = Options.Create(new RedisConnectionOptions { ConnectionString = "localhost:6379" });
+        UseCommandConnection(connectionString);
+        var configurator = new RelaxedTimeoutConfigurator(relaxedTimeout, _connectGate.Task);
+        var options = Options.Create(new RedisConnectionOptions { ConnectionString = connectionString });
         var factory = Substitute.For<IConnectionMultiplexerFactory>();
         // CA2012: arranging a ValueTask-returning member with NSubstitute means calling it and handing the
         // result to Returns. There is no shape of this that awaits it, and nothing ever consumes it.
@@ -585,11 +1101,39 @@ public class RedisPlannedMaintenanceRoutingTests : IDisposable
             factory,
             NullLogger<RedisPlannedMaintenance>.Instance,
             options,
+            [configurator],
+            _clock);
+
+        _started.Add(sut);
+        await sut.StartAsync(TestContext.Current.CancellationToken);
+        return sut;
+    }
+
+    private async Task<RedisPlannedMaintenance> StartedAsync(string connectionString = "localhost:6379", ICachingTelemetryProvider? telemetry = null)
+    {
+        UseCommandConnection(connectionString);
+        var options = Options.Create(new RedisConnectionOptions { ConnectionString = connectionString });
+        var factory = Substitute.For<IConnectionMultiplexerFactory>();
+        // CA2012: arranging a ValueTask-returning member with NSubstitute means calling it and handing the
+        // result to Returns. There is no shape of this that awaits it, and nothing ever consumes it.
+#pragma warning disable CA2012
+        factory.CreateAsync(Arg.Any<ConfigurationOptions>(), Arg.Any<CancellationToken>())
+            .Returns(_ => new ValueTask<IConnectionMultiplexer>(_connectGate.Task.ContinueWith(_ => _multiplexer, TaskScheduler.Default)));
+#pragma warning restore CA2012
+
+        var sut = new RedisPlannedMaintenance(
+            telemetry ?? _telemetry,
+            _connector,
+            new RedisConfigurationOptionsProvider(NullLoggerFactory.Instance, options),
+            factory,
+            NullLogger<RedisPlannedMaintenance>.Instance,
+            options,
             null,
             _clock);
 
         _started.Add(sut);
         await sut.StartAsync(TestContext.Current.CancellationToken);
+        _connectGate.TrySetResult();
 
         // StartAsync subscribes on a background task. The multiplexer field is assigned after the handler is
         // attached, so seeing it set means an event raised now will be delivered.
@@ -604,6 +1148,31 @@ public class RedisPlannedMaintenanceRoutingTests : IDisposable
     }
 
     /// <summary>Fails the recording step, the way a telemetry sink under load would.</summary>
+    /// <summary>Holds the first <c>Redis.Maintenance</c> record until released.</summary>
+    private sealed class BlockingFirstRecordProvider : ICachingTelemetryProvider
+    {
+        private readonly TaskCompletionSource _blocked = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private readonly ManualResetEventSlim _release = new();
+        private int _records;
+
+        public Task Blocked => _blocked.Task;
+
+        public void Release() => _release.Set();
+
+        public void TrackEvent(string eventName, ReadOnlySpan<KeyValuePair<string, string>> properties = default, ReadOnlySpan<KeyValuePair<string, double>> metrics = default)
+        {
+            if (eventName == "Redis.Maintenance" && Interlocked.Increment(ref _records) == 1)
+            {
+                _blocked.TrySetResult();
+                _release.Wait(TimeSpan.FromSeconds(10));
+            }
+        }
+
+        public void TrackException(Exception ex, ReadOnlySpan<KeyValuePair<string, string>> properties = default, ReadOnlySpan<KeyValuePair<string, double>> metrics = default)
+        {
+        }
+    }
+
     private sealed class ThrowOnMaintenanceEventProvider(int failures = int.MaxValue) : ICachingTelemetryProvider
     {
         public static readonly InvalidOperationException Failure = new("telemetry boom");
@@ -622,9 +1191,9 @@ public class RedisPlannedMaintenanceRoutingTests : IDisposable
         /// <summary>Counts the attempts that were refused, so a test can wait for one without racing it.</summary>
         public int RefusedAttempts => Volatile.Read(ref _refused);
 
-        public IReadOnlyList<Exception> Exceptions => Snapshot(_exceptions);
+        public Exception[] Exceptions => Snapshot(_exceptions);
 
-        public IReadOnlyList<string> Events => Snapshot(_events);
+        public string[] Events => Snapshot(_events);
 
         public void TrackEvent(string eventName, ReadOnlySpan<KeyValuePair<string, string>> properties = default, ReadOnlySpan<KeyValuePair<string, double>> metrics = default)
         {
@@ -662,24 +1231,128 @@ public class RedisPlannedMaintenanceRoutingTests : IDisposable
         }
     }
 
-    /// <summary>A clock whose timestamps move only when a test moves them, and whose wall reading can disagree.</summary>
-    private sealed class MovableClock : TimeProvider
-    {
-        private long _timestamp = 1_000_000;
-        private TimeSpan _wallOffset;
-
-        public override long TimestampFrequency => TimeSpan.TicksPerSecond;
-
-        public override DateTimeOffset GetUtcNow() =>
-            new DateTimeOffset(2026, 9, 19, 0, 0, 0, TimeSpan.Zero).AddTicks(_timestamp) + _wallOffset;
-
-        public override long GetTimestamp() => _timestamp;
-
-        public void Advance(TimeSpan by) => _timestamp += by.Ticks;
-
-        /// <summary>What an NTP correction does to the wall clock and not to the timestamps.</summary>
-        public void CorrectWallClock(TimeSpan by) => _wallOffset += by;
-    }
 }
 
 #pragma warning restore SER010
+
+/// <summary>A clock a test moves; its timers fire on an advance.</summary>
+internal sealed class AdvanceableClock(DateTimeOffset now) : TimeProvider
+{
+    private readonly List<FakeTimer> _timers = [];
+    private DateTimeOffset _now = now;
+    private TimeSpan _wallOffset;
+
+    public override long TimestampFrequency => TimeSpan.TicksPerSecond;
+
+    public override DateTimeOffset GetUtcNow()
+    {
+        lock (_timers)
+        {
+            return _now + _wallOffset;
+        }
+    }
+
+    public override long GetTimestamp()
+    {
+        lock (_timers)
+        {
+            return _now.UtcTicks;
+        }
+    }
+
+    /// <summary>Moves the wall clock only.</summary>
+    public void CorrectWallClock(TimeSpan by)
+    {
+        lock (_timers)
+        {
+            _wallOffset += by;
+        }
+    }
+
+    public override ITimer CreateTimer(TimerCallback callback, object? state, TimeSpan dueTime, TimeSpan period)
+    {
+        var timer = new FakeTimer(this, callback, state);
+        timer.Schedule(dueTime);
+        lock (_timers)
+        {
+            _timers.Add(timer);
+        }
+
+        return timer;
+    }
+
+    public void Advance(TimeSpan by)
+    {
+        FakeTimer[] due;
+        lock (_timers)
+        {
+            _now = _now.Add(by);
+            due = _timers.Where(timer => timer.IsDue(_now.UtcTicks)).ToArray();
+        }
+
+        foreach (var timer in due)
+        {
+            timer.Fire();
+        }
+    }
+
+    /// <summary>Moves time without running the timers now due.</summary>
+    public void AdvanceWithoutFiringTimers(TimeSpan by)
+    {
+        lock (_timers)
+        {
+            _now = _now.Add(by);
+        }
+    }
+
+    internal void Forget(FakeTimer timer)
+    {
+        lock (_timers)
+        {
+            _timers.Remove(timer);
+        }
+    }
+
+    internal sealed class FakeTimer(AdvanceableClock clock, TimerCallback callback, object? state) : ITimer
+    {
+        private long? _dueTicks;
+
+        public bool Change(TimeSpan dueTime, TimeSpan period)
+        {
+            Schedule(dueTime);
+            return true;
+        }
+
+        public void Dispose() => clock.Forget(this);
+
+        public ValueTask DisposeAsync()
+        {
+            Dispose();
+            return ValueTask.CompletedTask;
+        }
+
+        // Monotonic, so a wall-clock correction cannot move an armed timer.
+        internal void Schedule(TimeSpan dueTime) =>
+            _dueTicks = dueTime == Timeout.InfiniteTimeSpan ? null : clock.GetTimestamp() + dueTime.Ticks;
+
+        internal bool IsDue(long nowTicks) => _dueTicks is { } due && due <= nowTicks;
+
+        internal void Fire()
+        {
+            _dueTicks = null;
+            callback(state);
+        }
+    }
+}
+
+/// <summary>Sets the relaxed timeout once the gate opens.</summary>
+internal sealed class RelaxedTimeoutConfigurator(TimeSpan relaxedTimeout, Task gate) : IRedisConnectionConfigurator
+{
+    public async ValueTask ConfigureAsync(ConfigurationOptions configuration, CancellationToken cancellationToken = default)
+    {
+        await gate.ConfigureAwait(false);
+#pragma warning disable SER010 // Server-native maintenance notifications are for evaluation purposes only
+        configuration.MaintenanceRelaxedTimeout = relaxedTimeout;
+#pragma warning restore SER010
+    }
+}

@@ -1,15 +1,19 @@
 using System.Globalization;
 using Microsoft.Extensions.Hosting;
 using StackExchange.Redis.Maintenance;
+using UiPath.Caching.Policies;
 using UiPath.Caching.Telemetry;
 
 namespace UiPath.Caching.Redis;
 
 [ExcludeFromCodeCoverage(Justification = "Wires up StackExchange.Redis ServerMaintenanceEvent — exercised only by real Azure Cache for Redis planned-maintenance notifications.")]
-public sealed class RedisPlannedMaintenance : IRedisPlannedMaintenance, IHostedService
+public sealed class RedisPlannedMaintenance : IRedisPlannedMaintenance, IHostedService, IDisruptionState
 {
     /// <summary>How long a notification stays recognisable as one already recorded, and so what bounds the set.</summary>
-    private static readonly TimeSpan SeenRetention = TimeSpan.FromSeconds(30);
+    private static readonly TimeSpan MinSeenRetention = TimeSpan.FromSeconds(30);
+#pragma warning disable SER010 // Server-native maintenance notifications are for evaluation purposes only
+    private static readonly ConfigurationOptions MaintenanceDefaults = new();
+#pragma warning restore SER010
 
     private readonly ICachingTelemetryProvider _telemetryProvider;
     private readonly IRedisConnector _redisConnector;
@@ -26,10 +30,34 @@ public sealed class RedisPlannedMaintenance : IRedisPlannedMaintenance, IHostedS
     private readonly object _stateLock = new();
     private readonly object _seenLock = new();
     private readonly object _cancelLock = new();
+
+    // Taken first: a notice adopts bounds and updates its window as one step.
+    private readonly object _noticeLock = new();
     private readonly Queue<(string Raw, long At)> _seen = new();
     private readonly HashSet<string> _seenIdentities = new(StringComparer.Ordinal);
+    private readonly object _windowLock = new();
+#pragma warning disable SER010 // Server-native maintenance notifications are for evaluation purposes only
+    private readonly Dictionary<MaintenanceNotificationType, List<AnnouncedWindow>> _outstanding = [];
+
+    // Per live family, so a replay cannot change it after its claim expires.
+    private readonly Dictionary<MaintenanceNotificationType, HashSet<string>> _familyIdentities = [];
+#pragma warning restore SER010
     private readonly TimeProvider _clock;
     private readonly CancellationTokenSource _cancellationTokenSource = new();
+    private CancellationTokenSource? _windowTimer;
+    private bool _reportedInProgress;
+#pragma warning disable SER010 // Server-native maintenance notifications are for evaluation purposes only
+    private TimeSpan _relaxedTimeout = MaintenanceDefaults.MaintenanceRelaxedTimeout;
+    private TimeSpan _relaxedWindowMax = MaintenanceDefaults.MaintenanceRelaxedWindowMax;
+    private TimeSpan _postEventRelaxed = MaintenanceDefaults.MaintenancePostEventRelaxedDuration;
+    private long _seenRetentionTicks = RetentionTicks(MaintenanceDefaults.MaintenanceRelaxedWindowMax, MaintenanceDefaults.MaintenancePostEventRelaxedDuration);
+    private long _relaxedTimeoutTicks = MaintenanceDefaults.MaintenanceRelaxedTimeout.Ticks;
+#pragma warning restore SER010
+
+    // Written under _windowLock, read without it on every Redis operation.
+    private long _openUntil = long.MinValue;
+    private string? _adoptedConfiguration;
+    private long? _disconnectedSince;
     private IConnectionMultiplexer? _multiplexer;
     private volatile bool _disposed;
     private bool _cancellationDisposed;
@@ -72,15 +100,23 @@ public sealed class RedisPlannedMaintenance : IRedisPlannedMaintenance, IHostedS
 
     public bool InProgress
     {
-        get => Interlocked.Read(ref _maintenanceInProgress) == 1;
+        get => Interlocked.Read(ref _maintenanceInProgress) == 1 || AnnouncedWindowOpen;
         set => Interlocked.Exchange(ref _maintenanceInProgress, value ? 1 : 0);
     }
+
+    /// <summary>The relaxed timeout while an announced window is open.</summary>
+    public TimeSpan? SuggestedTimeout => AnnouncedWindowOpen ? new TimeSpan(Volatile.Read(ref _relaxedTimeoutTicks)) : null;
+
+    // A window plus its tail, published as one word so both bounds are read together.
+    private TimeSpan SeenRetention => new(Volatile.Read(ref _seenRetentionTicks));
+
+    private bool AnnouncedWindowOpen => _clock.GetTimestamp() < Volatile.Read(ref _openUntil);
 
     public Task StartAsync(CancellationToken cancellationToken)
     {
         // Via the connector, so one subscription survives a ForceReconnect; the multiplexer's own would not.
         _redisConnector.ServerMaintenance += OnServerMaintenance;
-        _ = Task.Run(() => InitializeAsync(_cancellationTokenSource.Token), _cancellationTokenSource.Token);
+        Task.Run(() => InitializeAsync(_cancellationTokenSource.Token), _cancellationTokenSource.Token).Forget();
         return Task.CompletedTask;
     }
 
@@ -115,6 +151,22 @@ public sealed class RedisPlannedMaintenance : IRedisPlannedMaintenance, IHostedS
         }
     }
 
+#pragma warning disable SER010 // Server-native maintenance notifications are for evaluation purposes only
+    private static long RetentionTicks(TimeSpan relaxedWindowMax, TimeSpan postEventRelaxed)
+    {
+        var horizon = relaxedWindowMax + postEventRelaxed;
+        return (horizon > MinSeenRetention ? horizon : MinSeenRetention).Ticks;
+    }
+
+    private static MaintenanceNotificationType? StarterFor(MaintenanceNotificationType completion) => completion switch
+    {
+        MaintenanceNotificationType.Migrated => MaintenanceNotificationType.Migrating,
+        MaintenanceNotificationType.FailedOver => MaintenanceNotificationType.FailingOver,
+        MaintenanceNotificationType.SlotMigrated => MaintenanceNotificationType.SlotMigrating,
+        _ => null,
+    };
+#pragma warning restore SER010
+
     /// <summary>Stops the service reacting further; both the stop and the dispose path run it.</summary>
     private void StopReacting(IConnectionMultiplexer? multiplexer = null)
     {
@@ -136,6 +188,88 @@ public sealed class RedisPlannedMaintenance : IRedisPlannedMaintenance, IHostedS
             multiplexer.ServerMaintenanceEvent -= OnMaintenanceConnectionEvent;
         }
 
+        CloseAllAnnouncedWindows();
+    }
+
+    /// <summary>One transition for both routes, which can overlap.</summary>
+    private void ReportAggregateState()
+    {
+        lock (_windowLock)
+        {
+            var open = InProgress;
+
+            // No start while stopping, but still close an open one.
+            if (open && (_disposed || Volatile.Read(ref _stopped) == 1))
+            {
+                return;
+            }
+
+            if (open == _reportedInProgress)
+            {
+                return;
+            }
+
+            // Only once announced, or an end would pair with nothing.
+            if (TryAnnounce(open ? "Redis.MaintenanceStarted" : "Redis.MaintenanceEnded"))
+            {
+                _reportedInProgress = open;
+            }
+        }
+    }
+
+    private void PublishSeenRetention() =>
+        Volatile.Write(ref _seenRetentionTicks, RetentionTicks(_relaxedWindowMax, _postEventRelaxed));
+
+    private void AdoptMaintenanceBounds(ConfigurationOptions configuration, string rendered)
+    {
+        lock (_windowLock)
+        {
+            // With the bounds, so the marker always names them.
+            _adoptedConfiguration = rendered;
+#pragma warning disable SER010 // Server-native maintenance notifications are for evaluation purposes only
+            _relaxedTimeout = configuration.MaintenanceRelaxedTimeout;
+            _relaxedWindowMax = configuration.MaintenanceRelaxedWindowMax;
+            _postEventRelaxed = configuration.MaintenancePostEventRelaxedDuration;
+#pragma warning restore SER010
+            Volatile.Write(ref _relaxedTimeoutTicks, _relaxedTimeout.Ticks);
+            PublishSeenRetention();
+
+            // Shortened bounds can move a deadline into the past.
+            ReevaluateWindow();
+        }
+    }
+
+    // The sending connection was built with the configurators, so its bounds are the real ones.
+    private void AdoptBoundsOf(object? sender)
+    {
+        if (sender is not IConnectionMultiplexer multiplexer)
+        {
+            return;
+        }
+
+        try
+        {
+            var rendered = multiplexer.Configuration;
+            if (string.IsNullOrWhiteSpace(rendered))
+            {
+                return;
+            }
+
+            lock (_windowLock)
+            {
+                if (string.Equals(rendered, _adoptedConfiguration, StringComparison.Ordinal))
+                {
+                    return;
+                }
+            }
+
+            AdoptMaintenanceBounds(ConfigurationOptions.Parse(rendered), rendered);
+        }
+        catch (Exception ex)
+        {
+            // Keep the current bounds; the notice is still recorded.
+            _telemetryProvider.TryTrackException(ex);
+        }
     }
 
     private void Cancel()
@@ -244,7 +378,9 @@ public sealed class RedisPlannedMaintenance : IRedisPlannedMaintenance, IHostedS
     private async Task TryConnectAsync(CancellationToken cancellationToken)
     {
         var configuration = _redisConfigurationOptionsProvider.GetConfiguration();
-        await RedisConnectionConfigurators.ApplyAsync(configuration, _configurators, cancellationToken).ConfigureAwait(false);
+        await RedisConnectionConfigurators.ApplyAsync(configuration, _configurators, _redisConfigurationOptionsProvider, cancellationToken).ConfigureAwait(false);
+
+        // Not adopted: this connection relaxes nothing.
 
         var multiplexer = await _connectionMultiplexerFactory.CreateAsync(configuration, cancellationToken).ConfigureAwait(false);
 
@@ -392,24 +528,30 @@ public sealed class RedisPlannedMaintenance : IRedisPlannedMaintenance, IHostedS
 
     private void OnServerMaintenance(object? sender, ServerMaintenanceEvent e)
     {
-        if (!TryClaim(e, out var claim))
+        lock (_noticeLock)
         {
-            return;
-        }
+            // Claim first, so a copy from a retired connection cannot resize the window.
+            if (!TryClaim(e, out var claim))
+            {
+                return;
+            }
 
-        var recorded = false;
-        try
-        {
-            Record(e);
-            recorded = true;
-        }
-        finally
-        {
-            Settle(claim, recorded);
+            AdoptBoundsOf(sender);
+
+            var recorded = false;
+            try
+            {
+                Record(e, claim);
+                recorded = true;
+            }
+            finally
+            {
+                Settle(claim, recorded);
+            }
         }
     }
 
-    private void Record(ServerMaintenanceEvent e)
+    private void Record(ServerMaintenanceEvent e, string? identity)
     {
 #pragma warning disable SER010 // Server-native maintenance notifications are for evaluation purposes only
         switch (e)
@@ -418,11 +560,11 @@ public sealed class RedisPlannedMaintenance : IRedisPlannedMaintenance, IHostedS
                 OnAzureMaintenance(azureEvent);
                 break;
             case PushMaintenanceEvent pushEvent:
-                OnPushMaintenance(pushEvent);
+                OnPushMaintenance(pushEvent, identity);
                 break;
             default:
                 // Recording the base properties keeps a source we do not model visible, rather than silent.
-                _telemetryProvider.TrackEvent(
+                _telemetryProvider.TryTrackEvent(
                     "Redis.Maintenance",
                     [
                         new("Source", e.GetType().Name),
@@ -444,7 +586,7 @@ public sealed class RedisPlannedMaintenance : IRedisPlannedMaintenance, IHostedS
             StartConnectionProbing();
         }
 
-        _telemetryProvider.TrackEvent(
+        _telemetryProvider.TryTrackEvent(
             "Redis.Maintenance",
             [
                 new("Source", nameof(AzureMaintenanceEvent)),
@@ -459,11 +601,27 @@ public sealed class RedisPlannedMaintenance : IRedisPlannedMaintenance, IHostedS
     }
 
 #pragma warning disable SER010 // Server-native maintenance notifications are for evaluation purposes only
-    private void OnPushMaintenance(PushMaintenanceEvent pushEvent)
+    private void OnPushMaintenance(PushMaintenanceEvent pushEvent, string? identity)
     {
-        // Recorded, not acted on: the client handles the handoff itself, and probing force-reconnects on a
-        // failed write, which would fight it.
-        _telemetryProvider.TrackEvent(
+        // No probing: it force-reconnects, fighting the client's handoff.
+        switch (pushEvent.NotificationType)
+        {
+            case MaintenanceNotificationType.Moving:
+            case MaintenanceNotificationType.Migrating:
+            case MaintenanceNotificationType.FailingOver:
+            case MaintenanceNotificationType.SlotMigrating:
+                OpenAnnouncedWindow(pushEvent.NotificationType, pushEvent.Time, identity);
+                break;
+            case MaintenanceNotificationType.Migrated:
+            case MaintenanceNotificationType.FailedOver:
+            case MaintenanceNotificationType.SlotMigrated:
+                CloseAnnouncedWindow(pushEvent.NotificationType, identity);
+                break;
+            default:
+                break;
+        }
+
+        _telemetryProvider.TryTrackEvent(
             "Redis.Maintenance",
             [
                 new("Source", nameof(PushMaintenanceEvent)),
@@ -478,8 +636,184 @@ public sealed class RedisPlannedMaintenance : IRedisPlannedMaintenance, IHostedS
             ]);
     }
 #pragma warning restore SER010
+
     /// <summary>Announces an interval boundary, reporting a sink that refuses rather than ending the run.</summary>
     private bool TryAnnounce(string eventName) => _telemetryProvider.TryTrackEvent(eventName);
+
+#pragma warning disable SER010 // Server-native maintenance notifications are for evaluation purposes only
+    // The announced duration is a hint; two-second windows have been seen.
+    private TimeSpan RemainingOf(AnnouncedWindow window, long now) =>
+        (window.Tail ? _postEventRelaxed : WindowFor(window.Announced)) - _clock.GetElapsedTime(window.At, now);
+
+    private TimeSpan WindowFor(TimeSpan? announced)
+    {
+        var window = announced is { } duration && duration > TimeSpan.Zero ? duration : _relaxedTimeout;
+
+        // Floor, then cap, so the cap always wins.
+        if (window < _relaxedTimeout)
+        {
+            window = _relaxedTimeout;
+        }
+
+        return window > _relaxedWindowMax ? _relaxedWindowMax : window;
+    }
+
+    private void OpenAnnouncedWindow(MaintenanceNotificationType starter, TimeSpan? announced, string? identity)
+    {
+        lock (_windowLock)
+        {
+            // Under the lock StopAsync clears with.
+            if (_disposed || Volatile.Read(ref _stopped) == 1 || !AdmitToFamily(starter, identity))
+            {
+                return;
+            }
+
+            // One entry per operation, so a shorter one cannot shorten a longer.
+            var announcedWindow = new AnnouncedWindow(_clock.GetTimestamp(), announced, Tail: false);
+            if (_outstanding.TryGetValue(starter, out var family))
+            {
+                family.Add(announcedWindow);
+            }
+            else
+            {
+                _outstanding[starter] = [announcedWindow];
+            }
+
+            ReevaluateWindow();
+        }
+    }
+
+    private void CloseAllAnnouncedWindows()
+    {
+        lock (_windowLock)
+        {
+            _outstanding.Clear();
+            _familyIdentities.Clear();
+            ReevaluateWindow();
+        }
+    }
+
+    private void CloseAnnouncedWindow(MaintenanceNotificationType completion, string? identity)
+    {
+        lock (_windowLock)
+        {
+            // Moving only lapses; other completions leave a tail, as the client does.
+            if (StarterFor(completion) is { } starter && _outstanding.TryGetValue(starter, out var family) && family.Count > 0
+                && AdmitToFamily(starter, identity))
+            {
+                // Which operation finished is unknowable, so release the one expiring first.
+                var now = _clock.GetTimestamp();
+                var running = family.Where(window => !window.Tail).ToList();
+                if (running.Count > 0)
+                {
+                    var finished = running.OrderBy(window => RemainingOf(window, now)).First();
+                    family.Remove(finished);
+
+                    // Every live completion earns a tail, as the client relaxes on each.
+                    if (_postEventRelaxed > TimeSpan.Zero
+                        && RemainingOf(finished, now) > TimeSpan.Zero)
+                    {
+                        family.Add(new AnnouncedWindow(now, Announced: null, Tail: true));
+                    }
+                }
+
+                if (family.Count == 0)
+                {
+                    RemoveFamily(starter);
+                }
+            }
+
+            ReevaluateWindow();
+        }
+    }
+
+    /// <summary>False when the family already applied this notice.</summary>
+    private bool AdmitToFamily(MaintenanceNotificationType starter, string? identity)
+    {
+        if (identity is null)
+        {
+            return true;
+        }
+
+        if (!_familyIdentities.TryGetValue(starter, out var applied))
+        {
+            applied = new HashSet<string>(StringComparer.Ordinal);
+            _familyIdentities[starter] = applied;
+        }
+
+        return applied.Add(identity);
+    }
+
+    private void RemoveFamily(MaintenanceNotificationType starter)
+    {
+        _outstanding.Remove(starter);
+        _familyIdentities.Remove(starter);
+    }
+
+    private void ReevaluateWindow()
+    {
+        var now = _clock.GetTimestamp();
+        foreach (var (starter, family) in _outstanding.ToList())
+        {
+            // Keep a lapsed operation while a live one could have its late completion taken.
+            var live = family.Exists(window => !window.Tail && RemainingOf(window, now) > TimeSpan.Zero);
+            family.RemoveAll(window => RemainingOf(window, now) <= TimeSpan.Zero && (window.Tail || !live));
+            if (family.Count == 0)
+            {
+                RemoveFamily(starter);
+            }
+        }
+
+        _windowTimer?.Cancel();
+        _windowTimer?.Dispose();
+        _windowTimer = null;
+
+        var pending = _outstanding.Values.SelectMany(family => family).Select(window => RemainingOf(window, now)).Where(remaining => remaining > TimeSpan.Zero).ToList();
+
+        // Before reporting, which reads it through InProgress.
+        Volatile.Write(ref _openUntil, pending.Count == 0 ? long.MinValue : now + ToTimestampTicks(pending.Max()));
+        ReportAggregateState();
+
+        if (pending.Count == 0 || _disposed)
+        {
+            return;
+        }
+
+        // A completion can be lost, so the earliest deadline is re-armed here.
+        var next = pending.Min();
+        CancellationTokenSource timer;
+        try
+        {
+            timer = CancellationTokenSource.CreateLinkedTokenSource(_cancellationTokenSource.Token);
+        }
+        catch (ObjectDisposedException)
+        {
+            return;
+        }
+
+        _windowTimer = timer;
+
+        // Inline, so the timer is armed before this returns.
+        CloseWhenElapsedAsync(next, timer).Forget();
+    }
+#pragma warning restore SER010
+
+    private async Task CloseWhenElapsedAsync(TimeSpan next, CancellationTokenSource timer)
+    {
+        try
+        {
+            await Task.Delay(next, _clock, timer.Token).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException)
+        {
+            return;
+        }
+
+        lock (_windowLock)
+        {
+            ReevaluateWindow();
+        }
+    }
 
     private void StartConnectionProbing()
     {
@@ -505,7 +839,9 @@ public sealed class RedisPlannedMaintenance : IRedisPlannedMaintenance, IHostedS
         }
         catch (ObjectDisposedException)
         {
+            // Through the aggregate, so a started push window still gets its end.
             InProgress = false;
+            ReportAggregateState();
             return;
         }
 
@@ -513,12 +849,11 @@ public sealed class RedisPlannedMaintenance : IRedisPlannedMaintenance, IHostedS
         var token = tokenSource.Token;
 
         // Never skip the delegate: its finally disposes the linked source and clears InProgress.
-        _ = Task.Run(() => ProbeUntilCancelledAsync(tokenSource, token), CancellationToken.None);
+        Task.Run(() => ProbeUntilCancelledAsync(tokenSource, token), CancellationToken.None).Forget();
     }
 
     private async Task ProbeUntilCancelledAsync(CancellationTokenSource tokenSource, CancellationToken token)
     {
-        var started = false;
         try
         {
             // Queued after the lock was released, so StopAsync can have completed in between; a worker that
@@ -529,13 +864,9 @@ public sealed class RedisPlannedMaintenance : IRedisPlannedMaintenance, IHostedS
                 {
                     return;
                 }
-
-                // Under the same lock that cleared the guard: outside it, a shutdown landing between the two
-                // would let this worker announce an interval that starts after the service stopped. A refused
-                // announcement must not end the run -- probing is what it is for -- and leaves started false,
-                // so there is no end to announce either.
-                started = TryAnnounce("Redis.MaintenanceStarted");
             }
+
+            ReportAggregateState();
 
             while (!token.IsCancellationRequested)
             {
@@ -547,34 +878,43 @@ public sealed class RedisPlannedMaintenance : IRedisPlannedMaintenance, IHostedS
         }
         finally
         {
-            // Cleared first: left set, the CompareExchange guard would refuse every later probe run.
+            // Cleared first, or the CompareExchange guard refuses every later run.
             InProgress = false;
+            ReportAggregateState();
             tokenSource.Dispose();
-            if (started)
-            {
-                _ = TryAnnounce("Redis.MaintenanceEnded");
-            }
         }
     }
 
     /// <summary>One probe and the wait after it; false once the run should stop.</summary>
     private async Task<bool> ProbeOnceAsync(CancellationToken token)
     {
+        Task? probeTask = null;
         try
         {
-            var probeTask = _redisConnector.Database.StringSetAsync("probeRedis_" + Environment.MachineName, DateTime.UtcNow.ToString(CultureInfo.InvariantCulture), expiry: TimeSpan.FromDays(1));
+            probeTask = _redisConnector.Database.StringSetAsync("probeRedis_" + Environment.MachineName, DateTime.UtcNow.ToString(CultureInfo.InvariantCulture), expiry: TimeSpan.FromDays(1));
 
             await probeTask.WaitAsync(_hangingTime, token).ConfigureAwait(false);
+            _disconnectedSince = null;
         }
         catch (OperationCanceledException) when (token.IsCancellationRequested)
         {
+            probeTask?.Forget();
             return false;
         }
         catch (Exception ex)
         {
+            // WaitAsync stops observing the probe.
+            probeTask?.Forget();
+
             // Reporting must not cost the reconnect: that call is the whole point of probing.
             _telemetryProvider.TryTrackException(ex);
-            _redisConnector.ForceReconnect();
+
+            // Fail-fast rejects while the client reconnects; rebuild only if that outlasts the hanging time.
+            if (ex is not RedisConnectionException || _redisConnector.IsConnected || DisconnectedFor() >= _hangingTime)
+            {
+                _disconnectedSince = null;
+                _redisConnector.ForceReconnect();
+            }
         }
 
         try
@@ -588,4 +928,17 @@ public sealed class RedisPlannedMaintenance : IRedisPlannedMaintenance, IHostedS
 
         return true;
     }
+
+    private TimeSpan DisconnectedFor()
+    {
+        var now = _clock.GetTimestamp();
+        _disconnectedSince ??= now;
+        return _clock.GetElapsedTime(_disconnectedSince.Value, now);
+    }
+
+    private long ToTimestampTicks(TimeSpan duration) =>
+        (long)Math.Ceiling(duration.Ticks * (double)_clock.TimestampFrequency / TimeSpan.TicksPerSecond);
+
+    /// <summary>What was announced and when, so later bounds can move its deadline.</summary>
+    private readonly record struct AnnouncedWindow(long At, TimeSpan? Announced, bool Tail);
 }

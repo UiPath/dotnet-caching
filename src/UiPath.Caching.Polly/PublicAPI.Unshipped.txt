@@ -1,1 +1,4 @@
 #nullable enable
+UiPath.Caching.Polly.ResiliencePipelineFactory.ResiliencePipelineFactory(Microsoft.Extensions.Logging.ILoggerFactory! loggerFactory, Polly.Telemetry.TelemetryOptions? telemetryOptions, Microsoft.Extensions.Options.IOptionsMonitor<UiPath.Caching.Polly.ResiliencePoliciesOptions!>! optionsAccessor, UiPath.Caching.Policies.IDisruptionState? disruptionState) -> void
+UiPath.Caching.Polly.ResiliencePoliciesOptions.DisruptionRequestTimeout.get -> System.TimeSpan?
+UiPath.Caching.Polly.ResiliencePoliciesOptions.DisruptionRequestTimeout.set -> void

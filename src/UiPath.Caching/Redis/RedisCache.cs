@@ -535,17 +535,17 @@ internal sealed partial class RedisCache : RedisCacheBase, ICache
                 {
                     if (_cacheNullValues && expiration > TimeSpan.Zero)
                     {
-                        _ = transaction.StringSetAsync(redisKey, RedisValue.EmptyString, expiration, When.Always, CommandFlags.DemandMaster);
+                        transaction.StringSetAsync(redisKey, RedisValue.EmptyString, expiration, When.Always, CommandFlags.DemandMaster).Forget();
                     }
                     else
                     {
-                        _ = transaction.KeyDeleteAsync(redisKey, CommandFlags.DemandMaster);
+                        transaction.KeyDeleteAsync(redisKey, CommandFlags.DemandMaster).Forget();
                     }
                 }
                 else
                 {
                     var serialized = SerializeValue(value);
-                    _ = transaction.StringSetAsync(redisKey, serialized, expiration, When.Always, CommandFlags.DemandMaster);
+                    transaction.StringSetAsync(redisKey, serialized, expiration, When.Always, CommandFlags.DemandMaster).Forget();
                 }
             }
 
@@ -820,34 +820,36 @@ internal sealed partial class RedisCache : RedisCacheBase, ICache
         ICacheEntry<T?> ret = DefaultEntry<T>();
         try
         {
-            var transaction = Database.CreateTransaction();
-            var valueTask = transaction.StringGetAsync(redisKey, CommandFlags.PreferReplica).ConfigureAwait(false);
-            ConfiguredTaskAwaitable<DateTime?>? expireTimeTask = default;
-            ConfiguredTaskAwaitable<TimeSpan?>? ttlTask = default;
-            if (_supportsExpireTime)
-            {
-                expireTimeTask = transaction.KeyExpireTimeAsync(redisKey, CommandFlags.PreferReplica).ConfigureAwait(false);
-            }
-            else
-            {
-                ttlTask = transaction.KeyTimeToLiveAsync(redisKey, CommandFlags.PreferReplica).ConfigureAwait(false);
-            }
-
-            var transactionResult = await _read.ExecuteAsync(async token =>
+            // Per attempt, since a retry cannot re-run a drained transaction; boxed so the pipeline stays bool.
+            StrongBox<(RedisValue Value, DateTimeOffset? Expiration)>? read = null;
+            var committed = await _read.ExecuteAsync(async token =>
             {
                 token.ThrowIfCancellationRequested();
-                return await transaction.ExecuteAsync(CommandFlags.PreferReplica).ConfigureAwait(false);
+                var transaction = Database.CreateTransaction();
+                var valueTask = transaction.StringGetAsync(redisKey, CommandFlags.PreferReplica);
+                var expirationTask = FetchExpirationAsync(transaction, redisKey);
+
+                // Observed now: an uncommitted transaction leaves them unawaited.
+                valueTask.Forget();
+                expirationTask.Forget();
+                if (!await transaction.ExecuteAsync(CommandFlags.PreferReplica).ConfigureAwait(false))
+                {
+                    return false;
+                }
+
+                Interlocked.CompareExchange(ref read, new((await valueTask.ConfigureAwait(false), await expirationTask.ConfigureAwait(false))), null);
+                return true;
             },
             default,
             token).ConfigureAwait(false);
 
-            if (!transactionResult)
+            if (!committed || read is null)
             {
                 operation.Stop();
                 return ret;
             }
 
-            var value = await valueTask;
+            var (value, expiration) = read.Value;
             _auditKeySize?.Invoke(Logged(cacheKey, redisKey, typeof(T)), value);
 
             var (found, deserialized) = InterpretReadResult<T>(value);
@@ -857,9 +859,6 @@ internal sealed partial class RedisCache : RedisCacheBase, ICache
                 return ret;
             }
 
-            DateTimeOffset? expiration = _supportsExpireTime
-                ? (DateTimeOffset?)await expireTimeTask!.Value
-                : Clock.ToDateTimeOffset(await ttlTask!.Value);
             ret = _cacheEntryFactory.Create<T?>(deserialized, Clock.ToDateTimeOffset(expiration));
             operation.Stop();
         }
@@ -895,25 +894,33 @@ internal sealed partial class RedisCache : RedisCacheBase, ICache
         try
         {
             ThrowIfCrossSlot(keys, redisKeys, typeof(T), nameof(GetCacheEntriesAsync));
-            var transaction = Database.CreateTransaction();
-            var mgetTask = transaction.StringGetAsync(redisKeys, CommandFlags.PreferReplica).ConfigureAwait(false);
-            var (expireTimeTasks, ttlTasks) = StartExpirationFetches(transaction, redisKeys);
-
-            var transactionResult = await _read.ExecuteAsync(async token =>
+            StrongBox<(RedisValue[] Values, DateTimeOffset?[] Expirations)>? read = null;
+            var committed = await _read.ExecuteAsync(async token =>
             {
                 token.ThrowIfCancellationRequested();
-                return await transaction.ExecuteAsync(CommandFlags.PreferReplica).ConfigureAwait(false);
+                var transaction = Database.CreateTransaction();
+                var mgetTask = transaction.StringGetAsync(redisKeys, CommandFlags.PreferReplica);
+                var expirationTasks = redisKeys.Select(k => FetchExpirationAsync(transaction, k)).ToArray();
+                mgetTask.Forget();
+                Array.ForEach(expirationTasks, TaskObservation.Forget);
+                if (!await transaction.ExecuteAsync(CommandFlags.PreferReplica).ConfigureAwait(false))
+                {
+                    return false;
+                }
+
+                Interlocked.CompareExchange(ref read, new((await mgetTask.ConfigureAwait(false), await Task.WhenAll(expirationTasks).ConfigureAwait(false))), null);
+                return true;
             },
             default,
             token).ConfigureAwait(false);
 
-            if (!transactionResult)
+            if (!committed || read is null)
             {
                 operation.Stop();
                 return retValues;
             }
 
-            var values = await mgetTask;
+            var (values, expirations) = read.Value;
             for (int i = 0; i < redisKeys.Length; i++)
             {
                 var value = values[i];
@@ -923,13 +930,10 @@ internal sealed partial class RedisCache : RedisCacheBase, ICache
                 {
                     continue;
                 }
-                DateTimeOffset? expiration = _supportsExpireTime
-                    ? (DateTimeOffset?)await expireTimeTasks![i]
-                    : Clock.ToDateTimeOffset(await ttlTasks![i]);
                 reads[i].Hit = true;
                 retValues[i] = new KeyValuePair<CacheKey, ICacheEntry<T?>>(
                     keys[i],
-                    _cacheEntryFactory.Create<T?>(deserialized, Clock.ToDateTimeOffset(expiration)));
+                    _cacheEntryFactory.Create<T?>(deserialized, Clock.ToDateTimeOffset(expirations[i])));
             }
             operation.Stop();
         }
@@ -954,20 +958,14 @@ internal sealed partial class RedisCache : RedisCacheBase, ICache
         return retValues;
     }
 
-    private (ConfiguredTaskAwaitable<DateTime?>[]? ExpireTimeTasks, ConfiguredTaskAwaitable<TimeSpan?>[]? TtlTasks)
-        StartExpirationFetches(ITransaction transaction, RedisKey[] redisKeys)
+    private async Task<DateTimeOffset?> FetchExpirationAsync(ITransaction transaction, RedisKey redisKey)
     {
         if (_supportsExpireTime)
         {
-            var expireTimeTasks = redisKeys
-                .Select(k => transaction.KeyExpireTimeAsync(k, CommandFlags.PreferReplica).ConfigureAwait(false))
-                .ToArray();
-            return (expireTimeTasks, null);
+            return await transaction.KeyExpireTimeAsync(redisKey, CommandFlags.PreferReplica).ConfigureAwait(false);
         }
-        var ttlTasks = redisKeys
-            .Select(k => transaction.KeyTimeToLiveAsync(k, CommandFlags.PreferReplica).ConfigureAwait(false))
-            .ToArray();
-        return (null, ttlTasks);
+
+        return Clock.ToDateTimeOffset(await transaction.KeyTimeToLiveAsync(redisKey, CommandFlags.PreferReplica).ConfigureAwait(false));
     }
 
     private ICacheEntry<T?> DefaultEntry<T>() =>

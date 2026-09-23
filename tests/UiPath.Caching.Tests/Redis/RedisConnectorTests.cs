@@ -59,6 +59,187 @@ public class RedisConnectorTests : IAsyncLifetime
         cnn.Should().Be(expected);
     }
 
+    // On the rendered string: the option travels as whole seconds.
+    [Theory]
+    [InlineData("localhost:6379,asyncTimeout=3000", "maintRelaxedTimeout=6")]
+    [InlineData("localhost:6379,syncTimeout=3000", "maintRelaxedTimeout=6")]
+    // 500ms renders as zero without rounding up.
+    [InlineData("localhost:6379,asyncTimeout=250", "maintRelaxedTimeout=1")]
+    [InlineData("localhost:6379,asyncTimeout=400000", "maintRelaxedTimeout=600")]
+    public void MaintenanceRelaxedTimeout_IsDerived_FromTheAsyncTimeout(string connectionString, string expected)
+    {
+        var opt = new RedisConnectionOptions { ConnectionString = connectionString };
+        var sut = new RedisConfigurationOptionsProvider(NullLoggerFactory.Instance, Options.Create(opt));
+        var config = sut.GetConfiguration();
+
+        sut.ReapplyDerivedBounds(config);
+
+        config.ToString().Should().Contain(expected);
+    }
+
+    [Fact]
+    public void MaintenanceRelaxedTimeout_TakesTheConfiguredValue_OverTheDerivedOne()
+    {
+        var opt = new RedisConnectionOptions
+        {
+            ConnectionString = "localhost:6379,asyncTimeout=3000",
+            MaintenanceRelaxedTimeout = TimeSpan.FromSeconds(42),
+        };
+        var sut = new RedisConfigurationOptionsProvider(NullLoggerFactory.Instance, Options.Create(opt));
+
+        sut.GetConfiguration().ToString().Should().Contain("maintRelaxedTimeout=42");
+    }
+
+    [Theory]
+    [InlineData(0.5, "maintRelaxedWindowMax=1")]
+    [InlineData(45d, "maintRelaxedWindowMax=45")]
+    [InlineData(900d, "maintRelaxedWindowMax=600")]
+    public void MaintenanceRelaxedWindowMax_IsAppliedInWholeSeconds(double configuredSeconds, string expected)
+    {
+        var opt = new RedisConnectionOptions
+        {
+            ConnectionString = "localhost:6379,asyncTimeout=3000",
+            MaintenanceRelaxedWindowMax = TimeSpan.FromSeconds(configuredSeconds),
+        };
+        var sut = new RedisConfigurationOptionsProvider(NullLoggerFactory.Instance, Options.Create(opt));
+
+        sut.GetConfiguration().ToString().Should().Contain(expected);
+    }
+
+    [Fact]
+    public void MaintenanceRelaxedWindowMax_IsLeftToTheClient_WhenNotConfigured()
+    {
+        var opt = new RedisConnectionOptions { ConnectionString = "localhost:6379,asyncTimeout=3000" };
+        var sut = new RedisConfigurationOptionsProvider(NullLoggerFactory.Instance, Options.Create(opt));
+
+        sut.GetConfiguration().ToString().Should().NotContain("maintRelaxedWindowMax");
+    }
+
+    [Fact]
+    public void MaintenanceRelaxedTimeout_RoundsUpAConfiguredSubSecondValue()
+    {
+        var opt = new RedisConnectionOptions
+        {
+            ConnectionString = "localhost:6379,asyncTimeout=3000",
+            MaintenanceRelaxedTimeout = TimeSpan.FromMilliseconds(500),
+        };
+        var sut = new RedisConfigurationOptionsProvider(NullLoggerFactory.Instance, Options.Create(opt));
+
+        sut.GetConfiguration().ToString().Should().Contain("maintRelaxedTimeout=1");
+    }
+
+    [Fact]
+    public void MaintenanceRelaxedTimeout_IsNotDerived_WithoutAConnectionString()
+    {
+        var opt = new RedisConnectionOptions { ConnectionString = string.Empty };
+        var sut = new RedisConfigurationOptionsProvider(NullLoggerFactory.Instance, Options.Create(opt));
+
+        sut.GetConfiguration().ToString().Should().NotContain("maintRelaxedTimeout");
+    }
+
+    [Fact]
+    public void MaintenanceRelaxedTimeout_IsStillApplied_WithoutAConnectionString_WhenConfigured()
+    {
+        var opt = new RedisConnectionOptions
+        {
+            ConnectionString = string.Empty,
+            MaintenanceRelaxedTimeout = TimeSpan.FromSeconds(42),
+        };
+        var sut = new RedisConfigurationOptionsProvider(NullLoggerFactory.Instance, Options.Create(opt));
+
+        sut.GetConfiguration().ToString().Should().Contain("maintRelaxedTimeout=42");
+    }
+
+    [Theory]
+    [InlineData(null, true)]
+    [InlineData(true, true)]
+    [InlineData(false, false)]
+    public void FailFastBacklogPolicy_DefaultsToFailingFast(bool? configured, bool expectFailFast)
+    {
+        // Assigned even when null, or the initializer would be tested instead.
+        var opt = new RedisConnectionOptions { ConnectionString = "localhost:6379", FailFastBacklogPolicy = configured };
+        var sut = new RedisConfigurationOptionsProvider(NullLoggerFactory.Instance, Options.Create(opt));
+
+        var policy = sut.GetConfiguration().BacklogPolicy;
+
+        policy.Should().BeSameAs(expectFailFast ? BacklogPolicy.FailFast : BacklogPolicy.Default);
+    }
+
+    [Fact]
+    public void AnExplicitMaintRelaxedTimeout_InTheConnectionString_IsNotDerivedOver()
+    {
+        var opt = new RedisConnectionOptions { ConnectionString = "localhost:6379,asyncTimeout=5000,maintRelaxedTimeout=42" };
+        var sut = new RedisConfigurationOptionsProvider(NullLoggerFactory.Instance, Options.Create(opt));
+
+        sut.GetConfiguration().ToString().Should().Contain("maintRelaxedTimeout=42");
+
+        // Equal to the client default, so only presence can tell it was set.
+        var sameAsDefault = new RedisConnectionOptions { ConnectionString = "localhost:6379,asyncTimeout=1000,maintRelaxedTimeout=10" };
+        var provider = new RedisConfigurationOptionsProvider(NullLoggerFactory.Instance, Options.Create(sameAsDefault));
+
+        provider.GetConfiguration().ToString().Should().Contain("maintRelaxedTimeout=10");
+    }
+
+    [Fact]
+    public void TheRelaxedTimeout_IsDerivedFromTheAsyncTimeout_AConfiguratorLeftBehind()
+    {
+        var opt = new RedisConnectionOptions { ConnectionString = "localhost:6379,asyncTimeout=1000" };
+        var sut = new RedisConfigurationOptionsProvider(NullLoggerFactory.Instance, Options.Create(opt));
+        var config = sut.GetConfiguration();
+
+        config.AsyncTimeout = 30000;
+        sut.ReapplyDerivedBounds(config);
+
+        config.ToString().Should().Contain("maintRelaxedTimeout=60", "the bound follows the timeout the connection ends up with");
+    }
+
+    [Fact]
+    public void ReapplyDerivedBounds_HandlesAConnectionBuiltWithoutAConnectionString()
+    {
+        var sut = new RedisConfigurationOptionsProvider(NullLoggerFactory.Instance, Options.Create(new RedisConnectionOptions { ConnectionString = null! }));
+        var config = sut.GetConfiguration();
+
+        var act = () => sut.ReapplyDerivedBounds(config);
+
+        act.Should().NotThrow();
+        config.ToString().Should().NotContain("maintRelaxedTimeout", "there is no configured timeout to derive from");
+    }
+
+    [Fact]
+    public void ReapplyDerivedBounds_FollowsASyncTimeoutAConfiguratorSetWithoutAConnectionString()
+    {
+        var sut = new RedisConfigurationOptionsProvider(NullLoggerFactory.Instance, Options.Create(new RedisConnectionOptions { ConnectionString = null! }));
+        var config = sut.GetConfiguration();
+
+        config.SyncTimeout = 4000;
+        sut.ReapplyDerivedBounds(config);
+
+        config.ToString().Should().Contain("maintRelaxedTimeout=8");
+    }
+
+    [Fact]
+    public void ReapplyDerivedBounds_LeavesASuppliedRelaxedTimeoutAlone()
+    {
+        var opt = new RedisConnectionOptions { ConnectionString = "localhost:6379,asyncTimeout=1000,maintRelaxedTimeout=42" };
+        var sut = new RedisConfigurationOptionsProvider(NullLoggerFactory.Instance, Options.Create(opt));
+        var config = sut.GetConfiguration();
+
+        config.AsyncTimeout = 30000;
+        sut.ReapplyDerivedBounds(config);
+
+        config.ToString().Should().Contain("maintRelaxedTimeout=42", "it was supplied, not derived");
+    }
+
+    [Fact]
+    public void FailFastBacklogPolicy_ReachesAConnectionBuiltWithoutAConnectionString()
+    {
+        var sut = new RedisConfigurationOptionsProvider(NullLoggerFactory.Instance, Options.Create(new RedisConnectionOptions()));
+
+        var policy = sut.GetConfiguration().BacklogPolicy;
+
+        policy.Should().BeSameAs(BacklogPolicy.FailFast);
+    }
+
 #pragma warning disable SER010 // Server-native maintenance notifications are for evaluation purposes only
     [Theory]
     [InlineData(RedisMaintenanceNotifications.Auto, MaintenanceNotificationMode.Auto)]
