@@ -294,10 +294,11 @@ internal sealed partial class RedisStreamSubjectWriter<T> : IDisposable
 
             if (ev.SameSource(_context.SourceUri))
             {
+                // Acknowledged first, so a throw below cannot leave the entry pending.
+                ids.Add(@event.Id);
                 LogEventFromCurrentSource(ev.Id, _context.Topic, @event.Id);
                 _cachingTelemetryProvider.TrackTopicReadMetric(_context.Topic.ToString(), @event.Id);
                 TraceReceipt(ev);
-                ids.Add(@event.Id);
                 return default;
             }
 
@@ -342,13 +343,14 @@ internal sealed partial class RedisStreamSubjectWriter<T> : IDisposable
 
     private void HandleInvalidEvent(T ev, StreamEntry @event, List<RedisValue> ids)
     {
-        _cachingTelemetryProvider.TrackEvent(EventInvalid,
+        // Acknowledged first, so a throw below cannot leave the entry pending.
+        ids.Add(@event.Id);
+        _cachingTelemetryProvider.TryTrackEvent(EventInvalid,
         [
             new(PropTopicKey, _context.Topic.ToString()),
             new(PropTransportId, @event.Id.ToString()),
         ]);
         LogEventInvalid(ev.Id, _context.Topic, @event.Id);
-        ids.Add(@event.Id);
     }
 
     private void TraceReceipt(T ev)
@@ -357,7 +359,7 @@ internal sealed partial class RedisStreamSubjectWriter<T> : IDisposable
 
         if (_context.EmitStreamReceivedEvent)
         {
-            _cachingTelemetryProvider.TrackEvent(EventReceived,
+            _cachingTelemetryProvider.TryTrackEvent(EventReceived,
             [
                 new(PropEventId, ev.Id!),
                 new(PropTopicKey, _context.Topic.ToString()),

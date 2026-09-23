@@ -148,6 +148,44 @@ public class MemoryCacheSetterTests : IAsyncLifetime
     }
 
     [Fact]
+    public void RefreshMetadata_callback_does_not_throw_when_the_telemetry_sink_refuses_the_failure_event()
+    {
+        var telemetry = new RefusingTelemetryProvider($"Caching.{nameof(MemoryCacheSetter)}.{nameof(MemoryCacheSetter.RefreshMetadata)}.Failed");
+        _fixture.Inject<ICachingTelemetryProvider>(telemetry);
+        _memoryCache = new MemoryCache(Options.Create(new MemoryCacheOptions
+        {
+            Clock = _clock,
+        }));
+        _fixture.Inject(_memoryCache);
+
+        var token = new TestChangeToken
+        {
+            ActiveChangeCallbacks = true,
+            HasChanged = false,
+            Expiration = _clock.UtcNow.AddDays(1),
+        };
+        _changeTokenFactory.Create(Arg.Any<string>(), Arg.Any<ITopic<ICacheEvent>>(), Arg.Any<string>(), Arg.Any<Type>())
+            .Returns(token);
+
+        var cacheEntity = _fixture.Create<ICacheEntry>();
+        cacheEntity.NewEntry(Arg.Any<DateTimeOffset>(), Arg.Any<IDictionary<string, string?>?>())
+            .Returns(_ => throw new InvalidOperationException("simulated NewEntry failure"));
+
+        var x = new InternalHashCacheEntryOptions()
+        {
+            CacheKey = _cacheKey,
+            TopicKey = _topicKey,
+            Expiration = _clock.UtcNow.AddDays(1),
+        };
+
+        Sut.Set(x, cacheEntity, _fixture.Create<Type>(), TimeSpan.FromMinutes(1));
+        Action act = () => token.InvokeCallbacks();
+
+        act.Should().NotThrow();
+        telemetry.Exceptions.Should().Contain(RefusingTelemetryProvider.Failure);
+    }
+
+    [Fact]
     public void Setter_max_duration()
     {
         _memoryCache = new MemoryCache(Options.Create(new MemoryCacheOptions

@@ -72,8 +72,8 @@ internal sealed class RedisDistributedLock : IDistributedLock
             catch (Exception ex)
             {
                 var contendedStr = contended.ToString();
-                _telemetry.TrackException(ex, [new(PropOperation, OperationAcquire), new(PropKey, key), new(PropContended, contendedStr)]);
-                _telemetry.TrackEvent(EventUnavailable, [new(PropKey, key), new(PropContended, contendedStr)]);
+                _telemetry.TryTrackException(ex, [new(PropOperation, OperationAcquire), new(PropKey, key), new(PropContended, contendedStr)]);
+                _telemetry.TryTrackEvent(EventUnavailable, [new(PropKey, key), new(PropContended, contendedStr)]);
                 return NoOpAsyncDisposable.Instance;
             }
 
@@ -108,8 +108,8 @@ internal sealed class RedisDistributedLock : IDistributedLock
         }
         catch (Exception ex)
         {
-            _telemetry.TrackException(ex, [new(PropOperation, OperationAcquire), new(PropKey, key), new(PropContended, bool.FalseString)]);
-            _telemetry.TrackEvent(EventUnavailable, [new(PropKey, key), new(PropContended, bool.FalseString)]);
+            _telemetry.TryTrackException(ex, [new(PropOperation, OperationAcquire), new(PropKey, key), new(PropContended, bool.FalseString)]);
+            _telemetry.TryTrackEvent(EventUnavailable, [new(PropKey, key), new(PropContended, bool.FalseString)]);
             return null;
         }
 
@@ -149,13 +149,13 @@ internal sealed class RedisDistributedLock : IDistributedLock
 
     private Releaser BuildAcquiredLease(RedisKey redisKey, RedisValue lockToken, string key, bool contended)
     {
-        _telemetry.TrackEvent(EventAcquired, [new(PropKey, key), new(PropContended, contended.ToString())]);
+        _telemetry.TryTrackEvent(EventAcquired, [new(PropKey, key), new(PropContended, contended.ToString())]);
         return new Releaser(_redis, _telemetry, redisKey, lockToken);
     }
 
     private NoOpAsyncDisposable TrackTimeoutNoOp(string key)
     {
-        _telemetry.TrackEvent(EventTimeout, [new(PropKey, key), new(PropContended, bool.TrueString)]);
+        _telemetry.TryTrackEvent(EventTimeout, [new(PropKey, key), new(PropContended, bool.TrueString)]);
         return NoOpAsyncDisposable.Instance;
     }
 
@@ -176,7 +176,7 @@ internal sealed class RedisDistributedLock : IDistributedLock
             }
             catch (Exception ex)
             {
-                telemetry.TrackException(ex, [new(PropOperation, OperationRelease), new(PropKey, redisKey.ToString())]);
+                telemetry.TryTrackException(ex, [new(PropOperation, OperationRelease), new(PropKey, redisKey.ToString())]);
             }
         }
     }

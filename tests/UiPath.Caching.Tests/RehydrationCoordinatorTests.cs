@@ -1,6 +1,8 @@
 using System.Collections.Concurrent;
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using UiPath.Caching.Locking;
+using UiPath.Caching.Telemetry;
 using UiPath.Caching.Tests.Telemetry;
 
 namespace UiPath.Caching.Tests;
@@ -338,9 +340,101 @@ public class RehydrationCoordinatorTests
         Assert.Fail("\"failing\" never left the in-flight set, so the max-failure-count path was never exercised.");
     }
 
+    [Fact]
+    public async Task SpawnAsync_still_rehydrates_when_the_telemetry_sink_refuses_the_triggered_event()
+    {
+        var distributedLock = Substitute.For<IDistributedLock>();
+        distributedLock.TryAcquireAsync(Arg.Any<string>(), Arg.Any<TimeSpan>(), Arg.Any<CancellationToken>())
+            .Returns(Substitute.For<IAsyncDisposable>());
+
+        var telemetry = new RefusingTelemetryProvider("cache.rehydrate.triggered");
+        var sut = NewCoordinator(distributedLock, telemetry);
+        var rehydrated = new TaskCompletionSource();
+
+        var triggered = sut.TryTrigger(
+            (CacheKey)"k",
+            DateTimeOffset.UtcNow.Add(TimeSpan.FromSeconds(1)),
+            RehydratePolicy(),
+            Duration,
+            "cache",
+            _ =>
+            {
+                rehydrated.TrySetResult();
+                return ValueTask.CompletedTask;
+            });
+
+        triggered.Should().BeTrue();
+        await rehydrated.Task.WaitAsync(TimeSpan.FromSeconds(30), TestContext.Current.CancellationToken);
+        telemetry.Exceptions.Should().Contain(RefusingTelemetryProvider.Failure, "the refusal is reported rather than swallowed");
+    }
+
+    [Theory]
+    [InlineData("cache.rehydrate.timed_out")]
+    [InlineData("cache.rehydrate.failed")]
+    public async Task SpawnAsync_keeps_the_locks_for_the_cooldown_when_the_telemetry_sink_refuses_the_outcome_event(string refusedEvent)
+    {
+        // The draining probe gets its own handle, or it would dispose the one under test.
+        var handle = Substitute.For<IAsyncDisposable>();
+        var distributedLock = Substitute.For<IDistributedLock>();
+        distributedLock.TryAcquireAsync(Arg.Any<string>(), Arg.Any<TimeSpan>(), Arg.Any<CancellationToken>())
+            .Returns(handle, Substitute.For<IAsyncDisposable>());
+
+        var telemetry = new RefusingTelemetryProvider(refusedEvent);
+        var logger = new CapturingLogger();
+        var sut = NewCoordinator(distributedLock, telemetry, logger);
+        var policy = RehydratePolicy(timeoutFraction: 0.001, baseCooldown: TimeSpan.FromMilliseconds(50));
+
+        var triggered = sut.TryTrigger(
+            (CacheKey)"k",
+            DateTimeOffset.UtcNow.Add(TimeSpan.FromSeconds(1)),
+            policy,
+            Duration,
+            "cache",
+            refusedEvent == "cache.rehydrate.failed"
+                ? _ => ValueTask.FromException(new InvalidOperationException("factory failed"))
+                : async ct => await Task.Delay(TimeSpan.FromSeconds(30), ct));
+
+        triggered.Should().BeTrue();
+        await WaitForRefusalAsync(telemetry);
+
+        // Same key, since _inFlight is keyed by name. An escaped refusal is logged before the finally clears the
+        // reservation, so once it clears the outer catch has already run.
+        await WaitForReservationReleaseAsync(sut, policy);
+
+        logger.Errors.Should().BeEmpty("a refused report must not reach the outer catch, which is what lets the finally release the locks");
+        await handle.DidNotReceive().DisposeAsync();
+    }
+
+    private static async Task WaitForReservationReleaseAsync(RehydrationCoordinator sut, CachePolicy policy)
+    {
+        for (var i = 0; i < 3000; i++)
+        {
+            if (!sut.TryTrigger((CacheKey)"k", DateTimeOffset.UtcNow.Add(TimeSpan.FromSeconds(1)), policy, Duration, "cache", _ => ValueTask.CompletedTask))
+            {
+                await Task.Delay(10, TestContext.Current.CancellationToken);
+                continue;
+            }
+
+            return;
+        }
+
+        throw new InvalidOperationException("the first spawn never released its in-flight reservation");
+    }
+
+    private static async Task WaitForRefusalAsync(RefusingTelemetryProvider telemetry)
+    {
+        for (var i = 0; i < 3000 && telemetry.Exceptions.Count == 0; i++)
+        {
+            await Task.Delay(10, TestContext.Current.CancellationToken);
+        }
+
+        telemetry.Exceptions.Should().Contain(RefusingTelemetryProvider.Failure);
+    }
+
     private static RehydrationCoordinator NewCoordinator(
         IDistributedLock? distributedLock = null,
-        RecordingTelemetryProvider? telemetry = null)
+        ICachingTelemetryProvider? telemetry = null,
+        ILogger? logger = null)
     {
         var clock = TimeProvider.System;
         var lockKeyStrategy = new DefaultDistributedLockKeyStrategy(separator: ':');
@@ -350,7 +444,7 @@ public class RehydrationCoordinatorTests
             distributedLock ?? NullDistributedLock.Instance,
             lockKeyStrategy,
             telemetry ?? new RecordingTelemetryProvider(),
-            NullLogger.Instance);
+            logger ?? NullLogger.Instance);
     }
 
     private static CachePolicy RehydratePolicy(
@@ -396,5 +490,25 @@ public class RehydrationCoordinatorTests
             await Task.Delay(10);
         }
         throw new TimeoutException($"Event '{eventName}' was not emitted within {timeout}.");
+    }
+
+    private sealed class CapturingLogger : ILogger
+    {
+        private readonly ConcurrentQueue<string> _errors = new();
+
+        public IReadOnlyCollection<string> Errors => _errors;
+
+        public IDisposable? BeginScope<TState>(TState state)
+            where TState : notnull => null;
+
+        public bool IsEnabled(LogLevel logLevel) => true;
+
+        public void Log<TState>(LogLevel logLevel, EventId eventId, TState state, Exception? exception, Func<TState, Exception?, string> formatter)
+        {
+            if (logLevel >= LogLevel.Error)
+            {
+                _errors.Enqueue(formatter(state, exception));
+            }
+        }
     }
 }

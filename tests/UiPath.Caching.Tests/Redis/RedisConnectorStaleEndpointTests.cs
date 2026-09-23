@@ -128,6 +128,21 @@ public class RedisConnectorStaleEndpointTests
     }
 
     [Fact]
+    public async Task A_refused_member_report_does_not_back_off_the_next_scan()
+    {
+        // Thrown into the scan's catch, a refusal would count as a failed scan and skip the next one.
+        var h = new Harness(retiredIsMember: true);
+        h.Telemetry.Refuse = "Redis.StaleEndpointStillAMember";
+        await h.ScanTwiceAcrossThresholdAsync();
+
+        h.Clock.Advance(TimeSpan.FromMinutes(5));
+        await h.Connector.ScanStaleEndpointsAsync();
+
+        await h.Multiplexer.Received(2).ConfigureAsync(Arg.Any<TextWriter?>());
+        h.Connector.Dispose();
+    }
+
+    [Fact]
     public async Task Scan_DisablesItself_OnlyAfterANodeKeepsReportingNoConfiguration()
     {
         var h = new Harness(clusterConfigurationKnown: false);
@@ -512,8 +527,17 @@ public class RedisConnectorStaleEndpointTests
     {
         public List<string> Events { get; } = [];
         public List<Exception> Exceptions { get; } = [];
+        public string? Refuse { get; set; }
         public void TrackException(Exception ex, ReadOnlySpan<KeyValuePair<string, string>> properties = default, ReadOnlySpan<KeyValuePair<string, double>> metrics = default) => Exceptions.Add(ex);
-        public void TrackEvent(string eventName, ReadOnlySpan<KeyValuePair<string, string>> properties = default, ReadOnlySpan<KeyValuePair<string, double>> metrics = default) => Events.Add(eventName);
+        public void TrackEvent(string eventName, ReadOnlySpan<KeyValuePair<string, string>> properties = default, ReadOnlySpan<KeyValuePair<string, double>> metrics = default)
+        {
+            if (eventName == Refuse)
+            {
+                throw new InvalidOperationException("telemetry sink refused");
+            }
+
+            Events.Add(eventName);
+        }
     }
 
     private sealed class FakeTopology : IClusterTopologyReader

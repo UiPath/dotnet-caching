@@ -44,11 +44,11 @@ internal static class TelemetrySafeguards
     }
 
     /// <summary>Reports a caught failure; a sink that refuses it leaves nowhere else to put it.</summary>
-    public static void TryTrackException(this ICachingTelemetryProvider telemetryProvider, Exception ex)
+    public static void TryTrackException(this ICachingTelemetryProvider telemetryProvider, Exception ex, ReadOnlySpan<KeyValuePair<string, string>> properties = default)
     {
         try
         {
-            telemetryProvider.TrackException(ex);
+            telemetryProvider.TrackException(ex, properties);
         }
         catch (Exception)
         {

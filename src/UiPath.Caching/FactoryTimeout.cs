@@ -37,7 +37,7 @@ internal static class FactoryTimeout
         }
         catch (OperationCanceledException) when (linkedCts.IsCancellationRequested && !token.IsCancellationRequested)
         {
-            telemetry.TrackEvent(EventName,
+            telemetry.TryTrackEvent(EventName,
             [
                 new(TagCacheName, cacheName),
                 new(TagCacheKey, cacheKey.Name),

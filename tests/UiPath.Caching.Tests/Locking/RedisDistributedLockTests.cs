@@ -374,6 +374,97 @@ public class RedisDistributedLockTests(ITestContextAccessor testContextAccessor)
             .Which.ParamName.Should().Be("cacheOptions.DistributedLockMaxPollInterval");
     }
 
+    [Fact]
+    public async Task Acquire_returns_the_lease_when_the_telemetry_sink_refuses_the_acquired_event()
+    {
+        var redis = _fixture.Freeze<IRedisConnector>();
+        redis.Database
+            .LockTakeAsync(Arg.Any<RedisKey>(), Arg.Any<RedisValue>(), Arg.Any<TimeSpan>(), Arg.Any<CommandFlags>())
+            .Returns(true);
+
+        var telemetry = new RefusingTelemetryProvider("cache.distributedlock.acquired");
+        var sut = NewLock(redis, telemetry: telemetry);
+        var token = testContextAccessor.Current.CancellationToken;
+
+        var lease = await sut.AcquireAsync("k", TimeSpan.FromSeconds(5), TimeSpan.Zero, token);
+
+        lease.Should().NotBeSameAs(NoOpAsyncDisposable.Instance, "Redis granted the lock, so the caller must get the releaser");
+        telemetry.Exceptions.Should().Contain(RefusingTelemetryProvider.Failure);
+
+        await lease!.DisposeAsync();
+        await redis.Database.Received().LockReleaseAsync(Arg.Any<RedisKey>(), Arg.Any<RedisValue>(), Arg.Any<CommandFlags>());
+    }
+
+    [Fact]
+    public async Task Acquire_returns_the_no_op_lease_when_the_telemetry_sink_refuses_the_timeout_event()
+    {
+        var redis = _fixture.Freeze<IRedisConnector>();
+        redis.Database
+            .LockTakeAsync(Arg.Any<RedisKey>(), Arg.Any<RedisValue>(), Arg.Any<TimeSpan>(), Arg.Any<CommandFlags>())
+            .Returns(false);
+
+        var telemetry = new RefusingTelemetryProvider("cache.distributedlock.timeout");
+        var sut = NewLock(redis, new CacheOptions { DistributedLockPollInterval = TimeSpan.FromMilliseconds(1) }, telemetry);
+        var token = testContextAccessor.Current.CancellationToken;
+
+        var lease = await sut.AcquireAsync("k", TimeSpan.FromSeconds(5), TimeSpan.FromMilliseconds(5), token);
+
+        lease.Should().BeSameAs(NoOpAsyncDisposable.Instance, "waiting out the deadline degrades to the no-op lease");
+        telemetry.Exceptions.Should().Contain(RefusingTelemetryProvider.Failure);
+    }
+
+    [Fact]
+    public async Task Acquire_returns_the_no_op_lease_when_the_telemetry_sink_refuses_the_failure_reports()
+    {
+        var redis = _fixture.Freeze<IRedisConnector>();
+        redis.Database
+            .LockTakeAsync(Arg.Any<RedisKey>(), Arg.Any<RedisValue>(), Arg.Any<TimeSpan>(), Arg.Any<CommandFlags>())
+            .Returns<Task<bool>>(_ => throw new RedisException("down"));
+
+        var telemetry = new RefusingTelemetryProvider("cache.distributedlock.unavailable", refuseExceptions: true);
+        var sut = NewLock(redis, telemetry: telemetry);
+
+        var lease = await sut.AcquireAsync("k", TimeSpan.FromSeconds(5), TimeSpan.Zero, testContextAccessor.Current.CancellationToken);
+
+        lease.Should().BeSameAs(NoOpAsyncDisposable.Instance);
+    }
+
+    [Fact]
+    public async Task TryAcquire_returns_null_when_the_telemetry_sink_refuses_the_failure_reports()
+    {
+        var redis = _fixture.Freeze<IRedisConnector>();
+        redis.Database
+            .LockTakeAsync(Arg.Any<RedisKey>(), Arg.Any<RedisValue>(), Arg.Any<TimeSpan>(), Arg.Any<CommandFlags>())
+            .Returns<Task<bool>>(_ => throw new RedisException("down"));
+
+        var telemetry = new RefusingTelemetryProvider("cache.distributedlock.unavailable", refuseExceptions: true);
+        var sut = NewLock(redis, telemetry: telemetry);
+
+        var lease = await sut.TryAcquireAsync("k", TimeSpan.FromSeconds(5), testContextAccessor.Current.CancellationToken);
+
+        lease.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task Release_does_not_throw_when_the_telemetry_sink_refuses_the_failure_report()
+    {
+        var redis = _fixture.Freeze<IRedisConnector>();
+        redis.Database
+            .LockTakeAsync(Arg.Any<RedisKey>(), Arg.Any<RedisValue>(), Arg.Any<TimeSpan>(), Arg.Any<CommandFlags>())
+            .Returns(true);
+        redis.Database
+            .LockReleaseAsync(Arg.Any<RedisKey>(), Arg.Any<RedisValue>(), Arg.Any<CommandFlags>())
+            .Returns<Task<bool>>(_ => throw new RedisException("down"));
+
+        var telemetry = new RefusingTelemetryProvider("none", refuseExceptions: true);
+        var sut = NewLock(redis, telemetry: telemetry);
+        var lease = await sut.AcquireAsync("k", TimeSpan.FromSeconds(5), TimeSpan.Zero, testContextAccessor.Current.CancellationToken);
+
+        var release = async () => await lease.DisposeAsync();
+
+        await release.Should().NotThrowAsync();
+    }
+
     private RedisDistributedLock NewLock(IRedisConnector? redis = null, CacheOptions? options = null, ICachingTelemetryProvider? telemetry = null)
     {
         redis ??= _fixture.Freeze<IRedisConnector>();

@@ -5,6 +5,7 @@ using NSubstitute.ExceptionExtensions;
 using NSubstitute.ReceivedExtensions;
 using StackExchange.Redis;
 using UiPath.Caching.Telemetry;
+using UiPath.Caching.Tests.Telemetry;
 
 namespace UiPath.Caching.Tests.Broadcast;
 
@@ -408,6 +409,76 @@ public class RedisStreamSubjectWriterTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task Invalid_event_is_acknowledged_when_the_telemetry_sink_refuses_the_record()
+    {
+        var channel = Channel.CreateBounded<ICacheEvent>(new BoundedChannelOptions(10));
+        var acked = new TaskCompletionSource<RedisValue[]>(TaskCreationOptions.RunContinuationsAsynchronously);
+        _database.StreamAcknowledgeAsync(Arg.Any<RedisKey>(), Arg.Any<RedisValue>(), Arg.Any<RedisValue[]>())
+            .Returns(call => { acked.TrySetResult(call.Arg<RedisValue[]>()); return Task.FromResult(1L); });
+        var id = _fixture.Create<string>();
+        var entries = new[] { new StreamEntry(id, [new NameValueEntry(_fieldName, _fixture.Create<string>())]) };
+        _formatter.Decode(Arg.Any<ReadOnlyMemory<byte>>()).Returns(new TestCacheEvent { Valid = false });
+        SetupSingleBatch(entries);
+        var telemetry = new RefusingTelemetryProvider("Caching.RedisStreamSubjectWriter.DispatchEventsAsync.InvalidEvent");
+
+        using var sut = CreateSut(channel.Writer, _logger, telemetry);
+
+        var ids = await acked.Task.WaitAsync(WaitTimeout, TestContext.Current.CancellationToken);
+        _cancellationTokenSource.Cancel();
+        await sut.FetchTask.WaitAsync(WaitTimeout, TestContext.Current.CancellationToken);
+
+        ids.Select(v => v.ToString()).Should().Contain(id, "the poison entry must still be acknowledged");
+        telemetry.Exceptions.Should().Contain(RefusingTelemetryProvider.Failure, "the refusal is reported rather than swallowed");
+    }
+
+    [Fact]
+    public async Task SameSource_event_is_acknowledged_when_the_telemetry_sink_refuses_the_receipt()
+    {
+        var channel = Channel.CreateBounded<ICacheEvent>(new BoundedChannelOptions(10));
+        var acked = new TaskCompletionSource<RedisValue[]>(TaskCreationOptions.RunContinuationsAsynchronously);
+        _database.StreamAcknowledgeAsync(Arg.Any<RedisKey>(), Arg.Any<RedisValue>(), Arg.Any<RedisValue[]>())
+            .Returns(call => { acked.TrySetResult(call.Arg<RedisValue[]>()); return Task.FromResult(1L); });
+        var id = _fixture.Create<string>();
+        var entries = new[] { new StreamEntry(id, [new NameValueEntry(_fieldName, _fixture.Create<string>())]) };
+        _formatter.Decode(Arg.Any<ReadOnlyMemory<byte>>()).Returns(new TestCacheEvent { Valid = true, Source = _sourceUri });
+        SetupSingleBatch(entries);
+        // Metrics too: TrackTopicReadMetric also runs on this path.
+        var telemetry = new RefusingTelemetryProvider("Caching.RedisStreamSubjectWriter.DispatchEventsAsync.EventReceived", refuseMetrics: true);
+
+        using var sut = CreateSut(channel.Writer, _logger, telemetry);
+
+        var ids = await acked.Task.WaitAsync(WaitTimeout, TestContext.Current.CancellationToken);
+        _cancellationTokenSource.Cancel();
+        await sut.FetchTask.WaitAsync(WaitTimeout, TestContext.Current.CancellationToken);
+
+        ids.Select(v => v.ToString()).Should().Contain(id, "the entry must still be acknowledged");
+    }
+
+    [Fact]
+    public async Task Valid_event_is_dispatched_and_acknowledged_when_the_telemetry_sink_refuses_the_receipt()
+    {
+        var channel = Channel.CreateBounded<ICacheEvent>(new BoundedChannelOptions(10));
+        var acked = new TaskCompletionSource<RedisValue[]>(TaskCreationOptions.RunContinuationsAsynchronously);
+        _database.StreamAcknowledgeAsync(Arg.Any<RedisKey>(), Arg.Any<RedisValue>(), Arg.Any<RedisValue[]>())
+            .Returns(call => { acked.TrySetResult(call.Arg<RedisValue[]>()); return Task.FromResult(1L); });
+        var id = _fixture.Create<string>();
+        var entries = new[] { new StreamEntry(id, [new NameValueEntry(_fieldName, _fixture.Create<string>())]) };
+        _formatter.Decode(Arg.Any<ReadOnlyMemory<byte>>()).Returns(new TestCacheEvent { Valid = true, Source = new Uri("urn:other-source") });
+        SetupSingleBatch(entries);
+        var telemetry = new RefusingTelemetryProvider("Caching.RedisStreamSubjectWriter.DispatchEventsAsync.EventReceived");
+
+        using var sut = CreateSut(channel.Writer, _logger, telemetry);
+
+        var ids = await acked.Task.WaitAsync(WaitTimeout, TestContext.Current.CancellationToken);
+        _cancellationTokenSource.Cancel();
+        await sut.FetchTask.WaitAsync(WaitTimeout, TestContext.Current.CancellationToken);
+
+        channel.Reader.TryRead(out _).Should().BeTrue("the event must still reach the dispatcher");
+        ids.Select(v => v.ToString()).Should().Contain(id);
+        telemetry.Exceptions.Should().Contain(RefusingTelemetryProvider.Failure);
+    }
+
+    [Fact]
     public async Task Valid_event_is_written_to_channel_and_acknowledged()
     {
         var channel = Channel.CreateBounded<ICacheEvent>(new BoundedChannelOptions(10));
@@ -564,7 +635,7 @@ public class RedisStreamSubjectWriterTests : IAsyncLifetime
             .ReturnsForAnyArgs(_ => ++emitted == 1 ? entries : []);
     }
 
-    private RedisStreamSubjectWriter<ICacheEvent> CreateSut(ChannelWriter<ICacheEvent> writer, ILogger logger)
+    private RedisStreamSubjectWriter<ICacheEvent> CreateSut(ChannelWriter<ICacheEvent> writer, ILogger logger, ICachingTelemetryProvider? telemetry = null)
     {
         var connectionState = _fixture.Create<IConnectionState>();
         connectionState.IsConnected.Returns(true);
@@ -577,7 +648,7 @@ public class RedisStreamSubjectWriterTests : IAsyncLifetime
             writer,
             _formatter,
             logger,
-            _fixture.Create<ICachingTelemetryProvider>(),
+            telemetry ?? _fixture.Create<ICachingTelemetryProvider>(),
             _fixture.Create<IRedisProfiler>(),
             new TimedFetchWaiter(_pollInterval),
             _cancellationTokenSource.Token);

@@ -645,7 +645,7 @@ public sealed class RedisConnector : IRedisConnector
 
         if (firstTime.Count > 0)
         {
-            _telemetryProvider.TrackEvent(
+            _telemetryProvider.TryTrackEvent(
                 "Redis.StaleEndpointStillAMember",
                 [
                     new("EndPoints", string.Join(";", firstTime.Select(FormatEndPoint))),
@@ -670,7 +670,7 @@ public sealed class RedisConnector : IRedisConnector
         }
 
         _staleEndpointTimer?.Dispose();
-        _telemetryProvider.TrackEvent("Redis.StaleEndpointScanDisabled", [new("Reason", "NoClusterConfiguration")]);
+        _telemetryProvider.TryTrackEvent("Redis.StaleEndpointScanDisabled", [new("Reason", "NoClusterConfiguration")]);
     }
 
     private void TryDisposeMultiplexer(IConnectionMultiplexer multiplexer)

@@ -41,7 +41,7 @@ internal sealed class RedisConnectionWarmup(IRedisConnector connector, ICachingT
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
-            telemetryProvider.TrackException(ex);
+            telemetryProvider.TryTrackException(ex);
         }
     }
 }

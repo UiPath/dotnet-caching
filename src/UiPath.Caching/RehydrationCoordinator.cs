@@ -163,32 +163,32 @@ internal sealed class RehydrationCoordinator(
             (keys, handles) = await AcquirePerKeyLocksAsync(reservedKeys, lockExpiry, factoryTimeout, entryType).ConfigureAwait(false);
             if (keys.Length == 0)
             {
-                telemetry.TrackEvent(EventDeduped, Tags(KeyValuePair.Create(TagReason, ReasonNotAcquired)));
+                telemetry.TryTrackEvent(EventDeduped, Tags(KeyValuePair.Create(TagReason, ReasonNotAcquired)));
                 return;
             }
             groupKey = CompositeCacheKey.For(keys);
 
-            telemetry.TrackEvent(EventTriggered, Tags());
+            telemetry.TryTrackEvent(EventTriggered, Tags());
 
             using var cts = new CancellationTokenSource(factoryTimeout);
             try
             {
                 await rehydrateAsync(keys, cts.Token).ConfigureAwait(false);
                 ClearFailureCounts(keys);
-                telemetry.TrackEvent(EventSucceeded, Tags());
+                telemetry.TryTrackEvent(EventSucceeded, Tags());
                 await ReleaseLocksAsync(handles, groupKey, entryType).ConfigureAwait(false);
                 handles = null;
             }
             catch (OperationCanceledException) when (cts.IsCancellationRequested)
             {
                 IncrementFailureCounts(keys);
-                telemetry.TrackEvent(EventTimedOut, Tags());
+                telemetry.TryTrackEvent(EventTimedOut, Tags());
                 handles = null;
             }
             catch (Exception ex)
             {
                 IncrementFailureCounts(keys);
-                telemetry.TrackEvent(EventFailed, Tags(KeyValuePair.Create(TagExceptionType, ex.GetType().Name)));
+                telemetry.TryTrackEvent(EventFailed, Tags(KeyValuePair.Create(TagExceptionType, ex.GetType().Name)));
                 handles = null;
             }
         }

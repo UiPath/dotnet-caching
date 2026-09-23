@@ -101,7 +101,7 @@ internal abstract class MemoryCacheSetter(
         {
             if (!set)
             {
-                telemetryProvider.TrackEvent(EventRefreshMetadataFailed,
+                telemetryProvider.TryTrackEvent(EventRefreshMetadataFailed,
                 [
                     new(PropCacheKey, metadataState.CacheKey),
                     new(PropTopicKey, metadataState.TopicKey),
