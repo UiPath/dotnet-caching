@@ -85,6 +85,19 @@ Every binding-visible property on every shipped options class, with shipped defa
 
 The connection of a second, complete caching stack registered with `AddNamedCaching(name, …)`; see [recipes/second-redis-connection.md](../recipes/second-redis-connection.md). Same shape as `Connections:Redis` (any `RedisConnectionOptions` property), at least a `ConnectionString`; the section is bound *over* `Connections:Redis`, so a key left unset here keeps the primary connection's value. Registration fails when the section is empty. Everything else the stack uses (`Caching:*`, the provider and queue options) is the same section as the primary, unless `AddNamedCaching` is given another `sectionName`. The sample's second stack is named `SecondaryRedis`.
 
+## Caching:AzureEntra (AzureEntraOptions)
+
+Bound by `AddAzureEntraAuthentication()` from the `UiPath.Caching.Azure` package; see [recipes/azure-entra-authentication.md](../recipes/azure-entra-authentication.md).
+
+| Property | Type | Default | Scope | Notes |
+|---|---|---|---|---|
+| `ManagedIdentityClientId` | `string?` | `null` | App-wide | Client id of a user-assigned managed identity. With neither this nor `ManagedIdentityOptions` set, and no `Credential`, `DefaultAzureCredential` is used. |
+| `ManagedIdentityOptions` | `ManagedIdentityCredentialOptions?` | `null` | App-wide | Options for the managed identity credential; wins over `ManagedIdentityClientId`. Binding sets tuning such as `AuthorityHost`, but not the target identity, which is fixed at construction, so a user-assigned identity with custom options is configured in code. |
+| `RequireSsl` | `bool` | `true` | App-wide | Force TLS on the connection. |
+| `RequireResp3` | `bool` | `true` | App-wide | Negotiate RESP3 so Entra pub/sub stays on the re-authenticated connection. |
+
+*Code-only seams:* `Credential`.
+
 ---
 
 ## Caching:Broadcast:RedisStreams (RedisStreamsTopicOptions)
@@ -224,7 +237,7 @@ Per-topic overrides: add entries to `Topics[]` under `Broadcast:RedisPubSub`. Ea
 
 ## Queue caches (`UiPath.Caching.Queue`)
 
-The queue package's `AddQueueMemory` / `AddQueueRedis` / `AddQueueInMemoryRedis` bind from the **same sections as the core providers** by default — `Caching:InMemory`, `Caching:Redis`, `Caching:InMemoryRedis` — into their own options types. A key both types declare (`Enabled`, `DefaultExpiration`, `LocalMaxExpiration`, …) therefore configures both the core cache and the set cache of that backing; keys one type lacks are ignored by the binder. Pass a section name to any of the three to bind from elsewhere. The Redis tier of the multilayer set cache reuses `RedisCacheOptions` and `RedisSetCacheOptions`.
+The queue package's `AddQueueMemory` / `AddQueueRedis` / `AddQueueInMemoryRedis` bind from the **same sections as the core providers** by default — `Caching:InMemory`, `Caching:Redis`, `Caching:InMemoryRedis` — into their own options types. A key both types declare (`Enabled`, `DefaultExpiration`, `LocalMaxExpiration`, …) therefore configures both the core cache and the set cache of that backing; keys one type lacks are ignored by the binder. Pass a section name to any of the three to bind from elsewhere — `appsettings.all.json` lists them under a `Caching:Queue` section of their own for that reason, so each set of keys is visible separately from the core provider it would otherwise share a section with. The Redis tier of the multilayer set cache reuses `RedisCacheOptions` and `RedisSetCacheOptions`, but `AddQueueInMemoryRedis` binds neither: `RedisSetCacheOptions` is bound only by an `AddQueueRedis` call, so a layout that moves it to `Caching:Queue:Redis` needs `AddQueueRedis("Queue:Redis")` alongside the multilayer registration.
 
 ### Caching:InMemory (InMemoryQueueCacheOptions)
 
@@ -251,7 +264,7 @@ The queue package's `AddQueueMemory` / `AddQueueRedis` / `AddQueueInMemoryRedis`
 | `Enabled` | `bool` | `true` | Per-provider | Enable/disable the Redis set cache. |
 | `ResilienceKeyName` | `string?` | `null` | Per-provider | Name of the resilience pipeline applied to destructive reads (`SPOP`), resolved via `IResiliencePipelineProvider`; `null` or empty runs them with no pipeline. The built-in `read` pipeline is refused: it abandons a call at its timeout, and an abandoned `SPOP` loses what it popped. |
 
-Lifetimes and the connection come from `RedisCacheOptions` (`DefaultExpiration`, `ConnectionMonitorEnabled`, …) bound from the same section.
+Lifetimes and the connection come from `RedisCacheOptions` (`DefaultExpiration`, `ConnectionMonitorEnabled`, …), which `AddRedis` binds (`Caching:Redis` by default) whatever section `AddQueueRedis` is given.
 
 ### Caching:InMemoryRedis (InMemoryRedisQueueCacheOptions)
 
