@@ -673,27 +673,30 @@ public sealed class RedisPlannedMaintenance : IRedisPlannedMaintenance, IHostedS
             }
         }
 
+        // On the injected clock, and a token rather than a check between probes, so the deadline also ends one in flight.
+        var deadline = new CancellationTokenSource(_probingTime, _clock);
         CancellationTokenSource tokenSource;
         try
         {
-            tokenSource = CancellationTokenSource.CreateLinkedTokenSource(_cancellationTokenSource.Token);
+            tokenSource = CancellationTokenSource.CreateLinkedTokenSource(_cancellationTokenSource.Token, deadline.Token);
         }
         catch (ObjectDisposedException)
         {
+            deadline.Dispose();
+
             // Through the aggregate, so a started push window still gets its end.
             InProgress = false;
             ReportAggregateState();
             return;
         }
 
-        tokenSource.CancelAfter(_probingTime);
         var token = tokenSource.Token;
 
-        // Never skip the delegate: its finally disposes the linked source and clears InProgress.
-        Task.Run(() => ProbeUntilCancelledAsync(tokenSource, token), CancellationToken.None).Forget();
+        // Never skip the delegate: its finally disposes both sources and clears InProgress.
+        Task.Run(() => ProbeUntilCancelledAsync(tokenSource, deadline, token), CancellationToken.None).Forget();
     }
 
-    private async Task ProbeUntilCancelledAsync(CancellationTokenSource tokenSource, CancellationToken token)
+    private async Task ProbeUntilCancelledAsync(CancellationTokenSource tokenSource, CancellationTokenSource deadline, CancellationToken token)
     {
         try
         {
@@ -709,6 +712,8 @@ public sealed class RedisPlannedMaintenance : IRedisPlannedMaintenance, IHostedS
 
             ReportAggregateState();
 
+            // Its own count, so a run that ended mid-disconnect does not spend the next one's grace.
+            _disconnectedSince = null;
             while (!token.IsCancellationRequested)
             {
                 if (!await ProbeOnceAsync(token).ConfigureAwait(false))
@@ -723,6 +728,7 @@ public sealed class RedisPlannedMaintenance : IRedisPlannedMaintenance, IHostedS
             InProgress = false;
             ReportAggregateState();
             tokenSource.Dispose();
+            deadline.Dispose();
         }
     }
 
@@ -750,8 +756,11 @@ public sealed class RedisPlannedMaintenance : IRedisPlannedMaintenance, IHostedS
             // Reporting must not cost the reconnect: that call is the whole point of probing.
             _telemetryProvider.TryTrackException(ex);
 
-            // Fail-fast rejects while the client reconnects; rebuild only if that outlasts the hanging time.
-            if (ex is not RedisConnectionException || _redisConnector.IsConnected || DisconnectedFor() >= _hangingTime)
+            // Fail-fast rejects while the client reconnects, and on a cluster that can be the probe key's node alone,
+            // with IsConnected still true; rebuild only if that outlasts the hanging time.
+            var reconnecting = ex is RedisConnectionException rejection
+                && (rejection.FailureType == ConnectionFailureType.UnableToResolvePhysicalConnection || !_redisConnector.IsConnected);
+            if (!reconnecting || DisconnectedFor() >= _hangingTime)
             {
                 _disconnectedSince = null;
                 _redisConnector.ForceReconnect();

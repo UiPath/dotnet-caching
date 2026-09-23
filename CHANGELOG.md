@@ -69,7 +69,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
   queue. `null` no longer means the library default: it fails fast like `true`, and so does a JSON `null`, as the
   shipped `appsettings.all.json` had it, whether the binder leaves the new default or writes `null`. Only `false`
   restores queuing. The Azure maintenance probe allows for this: a probe rejected while the client is reconnecting
-  on its own no longer forces a reconnect, unless the disconnect outlasts the ten-second hanging time.
+  on its own no longer forces a reconnect, unless the disconnect outlasts the ten-second hanging time. That holds on a
+  cluster where only the probe key's node is away, when the connection as a whole still reports connected, and each
+  probe run counts the disconnect afresh. The ten-minute run is measured on the injected `TimeProvider`.
 
 
 - **A maintenance handoff is no longer reported as a connection failure.** When the client moves off an endpoint the

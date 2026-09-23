@@ -270,6 +270,79 @@ public class RedisPlannedMaintenanceRoutingTests : IDisposable
     }
 
     [Fact]
+    public async Task A_probe_rejected_for_its_own_node_while_others_are_connected_leaves_the_client_to_reconnect()
+    {
+        // On a cluster IsConnected means any node, so the node the probe key lives on can be the one away;
+        // UnableToResolvePhysicalConnection is what the client raises for a fail-fast rejection.
+        _connector.IsConnected.Returns(true);
+        FailProbes(ConnectionFailureType.UnableToResolvePhysicalConnection);
+        await StartedAsync();
+
+        RaiseOnCommandConnection(AzureEvent());
+        await Task.Delay(TimeSpan.FromSeconds(2.5), TestContext.Current.CancellationToken);
+
+        _connector.DidNotReceive().ForceReconnect();
+    }
+
+    [Fact]
+    public async Task A_rejection_for_its_own_node_that_outlasts_the_hanging_time_still_forces_a_reconnect()
+    {
+        _connector.IsConnected.Returns(true);
+        FailProbes(ConnectionFailureType.UnableToResolvePhysicalConnection);
+        await StartedAsync();
+
+        RaiseOnCommandConnection(AzureEvent());
+        await Task.Delay(TimeSpan.FromSeconds(1.5), TestContext.Current.CancellationToken);
+        _clock.Advance(TimeSpan.FromSeconds(11));
+
+        await WaitForAsync(() => _connector.ReceivedCalls().Any(c => c.GetMethodInfo().Name == nameof(IRedisConnector.ForceReconnect)));
+    }
+
+    [Fact]
+    public async Task A_probe_run_ends_once_its_ten_minutes_have_passed_on_the_clock()
+    {
+        var sut = await StartedAsync();
+        RaiseOnCommandConnection(AzureEvent());
+        sut.InProgress.Should().BeTrue();
+
+        _clock.Advance(TimeSpan.FromMinutes(10));
+
+        await WaitForAsync(() => !sut.InProgress);
+    }
+
+    [Fact]
+    public async Task A_probe_run_ends_at_its_deadline_with_a_probe_in_flight()
+    {
+        HangProbes();
+        var sut = await StartedAsync();
+        RaiseOnCommandConnection(AzureEvent());
+        await Task.Delay(200, TestContext.Current.CancellationToken);
+
+        _clock.Advance(TimeSpan.FromMinutes(10));
+
+        await WaitForAsync(() => !sut.InProgress);
+    }
+
+    [Fact]
+    public async Task A_new_probe_run_does_not_inherit_the_last_ones_disconnect()
+    {
+        // The first run ends mid-disconnect, before the hanging time has run out on it.
+        _connector.IsConnected.Returns(false);
+        FailProbes(ConnectionFailureType.UnableToResolvePhysicalConnection);
+        var sut = await StartedAsync();
+        RaiseOnCommandConnection(AzureEvent());
+        await Task.Delay(TimeSpan.FromSeconds(1.5), TestContext.Current.CancellationToken);
+        _clock.Advance(TimeSpan.FromMinutes(10));
+        await WaitForAsync(() => !sut.InProgress);
+        _connector.ClearReceivedCalls();
+
+        RaiseOnCommandConnection(AzureEvent("2026-09-19T01:00:00"));
+        await Task.Delay(TimeSpan.FromSeconds(2.5), TestContext.Current.CancellationToken);
+
+        _connector.DidNotReceive().ForceReconnect();
+    }
+
+    [Fact]
     public async Task A_frame_replayed_later_in_a_long_window_is_still_collapsed()
     {
         var sut = await StartedAsync("localhost:6379,maintRelaxedTimeout=60,maintRelaxedWindowMax=120,maintPostEventRelaxed=0");
@@ -871,6 +944,16 @@ public class RedisPlannedMaintenanceRoutingTests : IDisposable
         var configuration = provider.GetConfiguration();
         provider.ReapplyDerivedBounds(configuration);
         _commandConnection = DeliveredBy(configuration.ToString());
+    }
+
+    /// <summary>Leaves every probe write in flight, whichever overload the probe binds to.</summary>
+    private void HangProbes()
+    {
+        var never = new TaskCompletionSource<bool>().Task;
+        _connector.Database.StringSetAsync(Arg.Any<RedisKey>(), Arg.Any<RedisValue>(), Arg.Any<Expiration>(), Arg.Any<ValueCondition>(), Arg.Any<CommandFlags>()).Returns(never);
+        _connector.Database.StringSetAsync(Arg.Any<RedisKey>(), Arg.Any<RedisValue>(), Arg.Any<TimeSpan?>(), Arg.Any<When>()).Returns(never);
+        _connector.Database.StringSetAsync(Arg.Any<RedisKey>(), Arg.Any<RedisValue>(), Arg.Any<TimeSpan?>(), Arg.Any<When>(), Arg.Any<CommandFlags>()).Returns(never);
+        _connector.Database.StringSetAsync(Arg.Any<RedisKey>(), Arg.Any<RedisValue>(), Arg.Any<TimeSpan?>(), Arg.Any<bool>(), Arg.Any<When>(), Arg.Any<CommandFlags>()).Returns(never);
     }
 
     /// <summary>Fails every probe write, whichever overload the probe binds to.</summary>
