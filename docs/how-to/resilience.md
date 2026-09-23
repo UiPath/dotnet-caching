@@ -436,7 +436,14 @@ policy forever, logging `It was not possible to connect to the redis server(s) <
 `Error` every few seconds. Commands still flow to the surviving nodes, so nothing else trips.
 The scan only judges endpoints the multiplexer discovered (never the ones in your connection
 string), only after they have been down for the threshold, and only when the cluster topology
-confirms the node is gone. The membership check re-runs the client's own connection handshake
+confirms the node is gone. A reconfiguration the client reports through `ConfigurationChanged` —
+a node restoring, or a `MOVED` naming one it does not know — is the moment a departure becomes
+visible, so the scan also runs five seconds after the last of a burst, judging every down endpoint
+without waiting out the threshold or a recent member confirmation. A change stays pending until a
+scan actually judges it, so one the scheduled scan could not run is taken by the next interval's. The scan's own membership refresh reconfigures
+too, so a change reported within one scan interval of that refresh is not taken as news.
+`HashSlotMoved` is not used: it fires once per slot, and a node still migrating slots is still a
+member. The membership check re-runs the client's own connection handshake
 (`IConnectionMultiplexer.ConfigureAsync`) and reads the `ClusterConfiguration` it records on the
 configured endpoints, the only ones that handshake refreshes. The configuration counts only if the
 refresh replaced it, since a landed re-read installs a new instance; if it did not, or the refresh

@@ -50,7 +50,7 @@ public class RedisConnectionOptions
     /// <summary>Rebuild the connection when a discovered cluster node has left the cluster; StackExchange.Redis retries a retired node forever.</summary>
     public bool EnableStaleEndpointDetection { get; set; } = true;
 
-    public TimeSpan StaleEndpointThreshold { get; set; } = TimeSpan.FromMinutes(5);
+    public TimeSpan StaleEndpointThreshold { get; set; } = TimeSpan.FromMinutes(1);
 
     public TimeSpan StaleEndpointScanInterval { get; set; } = TimeSpan.FromSeconds(30);
 

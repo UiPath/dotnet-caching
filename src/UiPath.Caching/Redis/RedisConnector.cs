@@ -16,6 +16,11 @@ public sealed class RedisConnector : IRedisConnector
     /// <summary>Most scan intervals skipped after a failing refresh: an hour at the default interval.</summary>
     internal const int MaxScanBackoff = 120;
 
+    /// <summary>How long a topology change is left to settle before the scan judges it.</summary>
+    internal static readonly TimeSpan TopologyChangeSettleTime = TimeSpan.FromSeconds(5);
+
+    private const long NoTopologyChange = long.MinValue;
+
     private static PropertyInfo? _memberConnection;
 
     private readonly RedisConnectionOptions _redisOptions;
@@ -27,6 +32,7 @@ public sealed class RedisConnector : IRedisConnector
     private readonly Timer? _hangDetectionTimer;
     private readonly ITimer? _staleEndpointTimer;
     private readonly TimeSpan _staleEndpointThreshold;
+    private readonly TimeSpan _staleEndpointScanInterval;
     private readonly TimeProvider _clock;
     private readonly Dictionary<EndPoint, long> _disconnectedSince = [];
     private readonly Dictionary<EndPoint, long> _memberConfirmedAt = [];
@@ -48,6 +54,11 @@ public sealed class RedisConnector : IRedisConnector
     private volatile bool _staleScanDisabled;
     private int _reconnecting;
     private int _staleScanRunning;
+    private int _topologyScanScheduled;
+
+    // The latest change not yet judged; it stays pending until a scan evaluates it, not merely until one is attempted.
+    private long _topologyChangedAt = NoTopologyChange;
+    private long _ownRefreshQuietUntil = long.MinValue;
     private int _nullTopologyRefreshes;
     private IConnectionMultiplexer? _nullTopologyMultiplexer;
     private int _scanFailures;
@@ -97,11 +108,11 @@ public sealed class RedisConnector : IRedisConnector
             var hangDetectionPeriod = _redisOptions.HangDetectionPeriod ?? TimeSpan.FromSeconds(5);
             _hangDetectionTimer = new Timer(_ => OnHangScan(), null, hangDetectionDueTime, hangDetectionPeriod);
         }
-        _staleEndpointThreshold = _redisOptions.StaleEndpointThreshold > TimeSpan.Zero ? _redisOptions.StaleEndpointThreshold : TimeSpan.FromMinutes(5);
+        _staleEndpointThreshold = _redisOptions.StaleEndpointThreshold > TimeSpan.Zero ? _redisOptions.StaleEndpointThreshold : TimeSpan.FromMinutes(1);
+        _staleEndpointScanInterval = _redisOptions.StaleEndpointScanInterval > TimeSpan.Zero ? _redisOptions.StaleEndpointScanInterval : TimeSpan.FromSeconds(30);
         if (_redisOptions.EnableStaleEndpointDetection)
         {
-            var scanInterval = _redisOptions.StaleEndpointScanInterval > TimeSpan.Zero ? _redisOptions.StaleEndpointScanInterval : TimeSpan.FromSeconds(30);
-            _staleEndpointTimer = _clock.CreateTimer(state => _ = ScanStaleEndpointsAsync(), null, scanInterval, scanInterval);
+            _staleEndpointTimer = _clock.CreateTimer(state => _ = ScanStaleEndpointsAsync(), null, _staleEndpointScanInterval, _staleEndpointScanInterval);
         }
         _version = new Lazy<Version>(GetVersion);
     }
@@ -179,7 +190,7 @@ public sealed class RedisConnector : IRedisConnector
         && now - lastRead > lastReadThresholdMs;
 
     /// <summary>Only topology-discovered endpoints can go stale; configured ones are left to StackExchange.Redis.</summary>
-    internal async Task ScanStaleEndpointsAsync()
+    internal async Task ScanStaleEndpointsAsync(bool triggered = false)
     {
         if (_disposed || _staleScanDisabled || Volatile.Read(ref _reconnecting) > 0)
         {
@@ -201,15 +212,22 @@ public sealed class RedisConnector : IRedisConnector
         {
             if (_scansToSkip > 0)
             {
-                _scansToSkip--;
+                // Only the interval counts down the backoff, so a burst of changes cannot cut it short.
+                if (!triggered)
+                {
+                    _scansToSkip--;
+                }
+
                 return;
             }
 
-            var stale = await FindStaleEndpointsAsync(lazy.Value.Result).ConfigureAwait(false);
+            var changedAt = Volatile.Read(ref _topologyChangedAt);
+            var topologyChanged = changedAt != NoTopologyChange && _clock.GetElapsedTime(changedAt) >= TopologyChangeSettleTime;
+            var (stale, judged) = await FindStaleEndpointsAsync(lazy.Value.Result, topologyChanged).ConfigureAwait(false);
             _scanFailures = 0;
             if (!ReferenceEquals(_lazyCacheConnectionMultiplexer, lazy))
             {
-                return;
+                return; // judged a connection since replaced, so the change stays for the replacement
             }
 
             if (stale is null)
@@ -220,6 +238,7 @@ public sealed class RedisConnector : IRedisConnector
 
             if (stale.Count == 0)
             {
+                ForgetTopologyChange(topologyChanged && judged, changedAt);
                 return;
             }
 
@@ -251,8 +270,17 @@ public sealed class RedisConnector : IRedisConnector
             .Select(server => (Server: server, Before: _topologyReader.GetConfiguration(server)))
             .ToList();
 
+        if (candidates.Count == 0)
+        {
+            return ClusterMembership.Inconclusive;
+        }
+
         // The client's own handshake reads CLUSTER NODES as an internal call, so AllowAdmin does not apply; false means another reconfiguration held the guard.
-        if (candidates.Count == 0 || !await multiplexer.ConfigureAsync().ConfigureAwait(false))
+        // Quiet on both sides: the client reports this reconfiguration later, on a worker, and taking it for news would loop.
+        QuietTopologyChanges();
+        var refreshed = await multiplexer.ConfigureAsync().ConfigureAwait(false);
+        QuietTopologyChanges();
+        if (!refreshed)
         {
             return ClusterMembership.Inconclusive;
         }
@@ -575,8 +603,8 @@ public sealed class RedisConnector : IRedisConnector
         }
     }
 
-    /// <returns>Null when no connected node carries a cluster configuration, so membership can never be judged.</returns>
-    private async Task<List<EndPoint>?> FindStaleEndpointsAsync(IConnectionMultiplexer multiplexer)
+    /// <returns>Null stale endpoints when no connected node carries a cluster configuration, so membership can never be judged; judged false when this refresh could not decide.</returns>
+    private async Task<(List<EndPoint>? Stale, bool Judged)> FindStaleEndpointsAsync(IConnectionMultiplexer multiplexer, bool topologyChanged)
     {
         var now = _clock.GetTimestamp();
         var configured = multiplexer.GetEndPoints(configuredOnly: true);
@@ -600,38 +628,54 @@ public sealed class RedisConnector : IRedisConnector
             _memberConfirmedAt.Remove(endpoint);
         }
 
-        var overdue = new List<EndPoint>();
-        foreach (var endpoint in disconnected.Select(s => s.EndPoint))
+        var overdue = SelectOverdue(disconnected, now, topologyChanged);
+        if (overdue.Count == 0)
         {
-            if (!_disconnectedSince.TryGetValue(endpoint, out var since))
-            {
-                _disconnectedSince[endpoint] = now;
-            }
-            else if (_clock.GetElapsedTime(since, now) >= _staleEndpointThreshold && !IsRecentlyConfirmedMember(endpoint, now))
-            {
-                overdue.Add(endpoint);
-            }
+            return ([], true);
         }
 
-        if (overdue.Count == 0 || connected is null)
+        if (connected is null)
         {
-            return [];
+            return ([], false);
         }
 
         var membership = await RefreshClusterMembershipAsync(multiplexer).ConfigureAwait(false);
         if (!membership.Conclusive)
         {
-            return [];
+            return ([], false);
         }
 
         if (membership.Members is null)
         {
-            return null;
+            return (null, true);
         }
 
         var confirmed = overdue.Where(membership.Members.Contains).ToList();
         RecordConfirmedMembers(confirmed, now);
-        return overdue.Except(confirmed).ToList();
+        return (overdue.Except(confirmed).ToList(), true);
+    }
+
+    private List<EndPoint> SelectOverdue(List<IServer> disconnected, long now, bool topologyChanged)
+    {
+        var overdue = new List<EndPoint>();
+        foreach (var endpoint in disconnected.Select(s => s.EndPoint))
+        {
+            var firstSeen = !_disconnectedSince.TryGetValue(endpoint, out var since);
+            if (firstSeen)
+            {
+                _disconnectedSince[endpoint] = now;
+            }
+
+            // A topology change is the evidence both the threshold and a recent confirmation wait for; membership
+            // still decides, and a node confirmed a moment ago may be the one that has just left.
+            if (topologyChanged
+                || (!firstSeen && _clock.GetElapsedTime(since, now) >= _staleEndpointThreshold && !IsRecentlyConfirmedMember(endpoint, now)))
+            {
+                overdue.Add(endpoint);
+            }
+        }
+
+        return overdue;
     }
 
     /// <summary>A member the cluster still lists is asked about again only once per threshold, and reported the first time.</summary>
@@ -764,6 +808,10 @@ public sealed class RedisConnector : IRedisConnector
         var maintenanceHandler = new EventHandler<ServerMaintenanceEvent>((raisedBy, e) => OnInternalServerMaintenance(multiplexer, raisedBy, e));
         _maintenanceHandlers.AddOrUpdate(multiplexer, maintenanceHandler);
         multiplexer.ServerMaintenanceEvent += maintenanceHandler;
+        if (_redisOptions.EnableStaleEndpointDetection)
+        {
+            multiplexer.ConfigurationChanged += OnInternalConfigurationChanged;
+        }
 
         if (_redisOptions.LogConnectionFailedEvents)
         {
@@ -787,6 +835,8 @@ public sealed class RedisConnector : IRedisConnector
             multiplexer.ServerMaintenanceEvent -= maintenanceHandler;
             _maintenanceHandlers.Remove(multiplexer);
         }
+
+        multiplexer.ConfigurationChanged -= OnInternalConfigurationChanged;
 
         if (_redisOptions.LogConnectionFailedEvents)
         {
@@ -830,6 +880,71 @@ public sealed class RedisConnector : IRedisConnector
             _telemetryProvider.TryTrackEvent("Redis.ConnectionRestored", GetEventProperties(e));
         }
     }
+
+    // The client reconfigures when a node restores or a MOVED names one it does not know, so this is the moment a
+    // departure becomes visible. Coalesced over the settle time, since one move reconfigures several times.
+    private void OnInternalConfigurationChanged(object? sender, EndPointEventArgs e)
+    {
+        var now = _clock.GetTimestamp();
+        if (_disposed || _staleScanDisabled || now < Volatile.Read(ref _ownRefreshQuietUntil))
+        {
+            return;
+        }
+
+        Volatile.Write(ref _topologyChangedAt, now);
+        if (Interlocked.CompareExchange(ref _topologyScanScheduled, 1, 0) == 0)
+        {
+            ScanOnceTopologySettlesAsync().Forget();
+        }
+    }
+
+    private async Task ScanOnceTopologySettlesAsync()
+    {
+        while (true)
+        {
+            try
+            {
+                // Settled from the latest change, so a burst is judged once it is over.
+                TimeSpan remaining;
+                while ((remaining = UntilTopologySettles()) > TimeSpan.Zero)
+                {
+                    await Task.Delay(remaining, _clock).ConfigureAwait(false);
+                }
+            }
+            finally
+            {
+                Interlocked.Exchange(ref _topologyScanScheduled, 0);
+            }
+
+            // A change landing after the last read but before the flag cleared could not schedule a worker of its own.
+            if (UntilTopologySettles() <= TimeSpan.Zero || Interlocked.CompareExchange(ref _topologyScanScheduled, 1, 0) != 0)
+            {
+                break;
+            }
+        }
+
+        // A scan it cannot take leaves the change pending, and the next interval's scan judges it.
+        await ScanStaleEndpointsAsync(triggered: true).ConfigureAwait(false);
+    }
+
+    // Only once the current connection was judged clean: an inconclusive refresh, a rebuild still to prove itself,
+    // or a newer change arriving meanwhile each leave it pending.
+    private void ForgetTopologyChange(bool judgedClean, long changedAt)
+    {
+        if (judgedClean)
+        {
+            Interlocked.CompareExchange(ref _topologyChangedAt, NoTopologyChange, changedAt);
+        }
+    }
+
+    private TimeSpan UntilTopologySettles()
+    {
+        var changedAt = Volatile.Read(ref _topologyChangedAt);
+        return changedAt == NoTopologyChange ? TimeSpan.Zero : TopologyChangeSettleTime - _clock.GetElapsedTime(changedAt);
+    }
+
+    private void QuietTopologyChanges() =>
+        Volatile.Write(ref _ownRefreshQuietUntil, _clock.GetTimestamp() + (long)Math.Ceiling(_staleEndpointScanInterval.Ticks * (double)_clock.TimestampFrequency / TimeSpan.TicksPerSecond));
 
     private void OnInternalServerMaintenance(IConnectionMultiplexer owner, object? raisedBy, ServerMaintenanceEvent e)
     {

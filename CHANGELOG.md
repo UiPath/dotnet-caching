@@ -74,6 +74,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
   probe run counts the disconnect afresh. The ten-minute run is measured on the injected `TimeProvider`.
 
 
+- **A departed cluster node is dropped in about a minute rather than six.** `StaleEndpointThreshold` defaults to one
+  minute instead of five, and a reconfiguration the client reports through `ConfigurationChanged` runs the scan five
+  seconds later without waiting the threshold out. Neither loosens what decides a rebuild: the node must still be
+  absent from, or flagged failed in, the topology the client refreshes. That check is the only gate other clients
+  use — Lettuce and ioredis close connections to nodes the refreshed topology no longer lists — and cloud guidance
+  for them refreshes every 5 to 60 seconds. A burst of reconfigurations is judged once, and the scan's own refresh,
+  which the client reports later on a worker, is not taken for a change.
+
 - **A maintenance handoff is no longer reported as a connection failure.** When the client moves off an endpoint the
   server said is going away, it raises `ConnectionFailed` with `ConnectionFailureType.MaintenanceHandoff`. That was
   tracked as `Redis.ConnectionFailed` — by `RedisConnector` and again by `ConnectionStateMonitor` — which would

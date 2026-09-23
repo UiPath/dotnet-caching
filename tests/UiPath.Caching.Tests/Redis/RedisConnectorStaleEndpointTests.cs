@@ -459,6 +459,186 @@ public class RedisConnectorStaleEndpointTests
     }
 
     [Fact]
+    public async Task A_topology_change_judges_a_departed_node_without_waiting_out_the_threshold()
+    {
+        var h = new Harness(timerDriven: true);
+        await h.Connector.ConnectAsync(TestContext.Current.CancellationToken);
+
+        h.RaiseConfigurationChanged();
+        h.Clock.Advance(RedisConnector.TopologyChangeSettleTime);
+        await h.OldDisposed.Task.WaitAsync(TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken);
+
+        h.Telemetry.Events.Should().ContainInOrder("Redis.StaleEndpointDetected", "Redis.ForcedReconnect");
+        h.Connector.Dispose();
+    }
+
+    [Fact]
+    public async Task A_topology_change_leaves_a_node_the_cluster_still_lists()
+    {
+        var h = new Harness(retiredIsMember: true, timerDriven: true);
+        await h.Connector.ConnectAsync(TestContext.Current.CancellationToken);
+
+        h.RaiseConfigurationChanged();
+        h.Clock.Advance(RedisConnector.TopologyChangeSettleTime);
+        await h.WaitForRefreshesAsync(1);
+
+        h.Factory.CreateCount.Should().Be(1);
+        h.Telemetry.Events.Should().Equal("Redis.StaleEndpointStillAMember");
+        h.Connector.Dispose();
+    }
+
+    [Fact]
+    public async Task A_topology_change_re_asks_about_a_node_confirmed_moments_ago()
+    {
+        var h = new Harness(retiredIsMember: true, timerDriven: true);
+        await h.Connector.ConnectAsync(TestContext.Current.CancellationToken);
+        h.RaiseConfigurationChanged();
+        h.Clock.Advance(RedisConnector.TopologyChangeSettleTime);
+        await h.WaitForRefreshesAsync(1); // still listed, so confirmed
+        h.Topology.Members = [Live];
+        h.Clock.Advance(TimeSpan.FromSeconds(31)); // past the quiet window of that refresh
+
+        h.RaiseConfigurationChanged();
+        h.Clock.Advance(RedisConnector.TopologyChangeSettleTime);
+
+        await h.OldDisposed.Task.WaitAsync(TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken);
+        h.Connector.Dispose();
+    }
+
+    [Fact]
+    public async Task A_topology_change_its_own_scan_could_not_take_is_judged_by_the_next_one()
+    {
+        var h = new Harness(timerDriven: true);
+        h.Topology.RefreshLands = false;
+        var refresh = new TaskCompletionSource<bool>();
+        h.Multiplexer.ConfigureAsync(Arg.Any<TextWriter?>()).Returns(_ => refresh.Task, _ => h.Topology.Refreshed());
+        await h.Connector.ConnectAsync(TestContext.Current.CancellationToken);
+        h.RaiseConfigurationChanged();
+        h.Clock.Advance(RedisConnector.TopologyChangeSettleTime);
+        await h.WaitForRefreshesAsync(1); // that scan now holds the guard
+        h.Clock.Advance(TimeSpan.FromSeconds(31));
+
+        h.RaiseConfigurationChanged();
+        h.Clock.Advance(RedisConnector.TopologyChangeSettleTime); // the scan this schedules finds the guard held
+        h.Topology.RefreshLands = true;
+        h.Topology.Members = [Live];
+        refresh.SetResult(true);
+        await Task.Delay(200, TestContext.Current.CancellationToken);
+        h.Clock.Advance(TimeSpan.FromSeconds(30)); // the next interval, well inside the threshold
+
+        await h.OldDisposed.Task.WaitAsync(TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken);
+        h.Connector.Dispose();
+    }
+
+    [Fact]
+    public async Task A_topology_change_judged_inconclusively_is_judged_again_next_interval()
+    {
+        var h = new Harness(timerDriven: true);
+        h.Multiplexer.ConfigureAsync(Arg.Any<TextWriter?>()).Returns(_ => Task.FromResult(false), _ => h.Topology.Refreshed());
+        await h.Connector.ConnectAsync(TestContext.Current.CancellationToken);
+        h.RaiseConfigurationChanged();
+        h.Clock.Advance(RedisConnector.TopologyChangeSettleTime); // the refresh is skipped, so nothing was judged
+        await h.WaitForRefreshesAsync(1);
+
+        h.Clock.Advance(TimeSpan.FromSeconds(30)); // the next interval, well inside the threshold
+
+        await h.OldDisposed.Task.WaitAsync(TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken);
+        h.Connector.Dispose();
+    }
+
+    [Fact]
+    public async Task A_topology_change_whose_rebuild_failed_is_retried_next_interval()
+    {
+        var h = new Harness(replacementAvailable: false, timerDriven: true);
+        await h.Connector.ConnectAsync(TestContext.Current.CancellationToken);
+        h.RaiseConfigurationChanged();
+        h.Clock.Advance(RedisConnector.TopologyChangeSettleTime);
+        await h.WaitForCreatesAsync(2); // the rebuild fails
+
+        h.Clock.Advance(TimeSpan.FromSeconds(30)); // the next interval, well inside the threshold
+
+        await h.WaitForCreatesAsync(3);
+        h.Connector.Dispose();
+    }
+
+    [Fact]
+    public async Task A_burst_of_topology_changes_is_judged_once()
+    {
+        var h = new Harness(timerDriven: true);
+        h.Topology.RefreshLands = false; // inconclusive, so every scan that got this far would refresh
+        await h.Connector.ConnectAsync(TestContext.Current.CancellationToken);
+
+        h.RaiseConfigurationChanged();
+        h.RaiseConfigurationChanged();
+        h.RaiseConfigurationChanged();
+        h.Clock.Advance(RedisConnector.TopologyChangeSettleTime);
+        await h.WaitForRefreshesAsync(1);
+        await Task.Delay(200, TestContext.Current.CancellationToken);
+
+        await h.Multiplexer.Received(1).ConfigureAsync(Arg.Any<TextWriter?>());
+        h.Connector.Dispose();
+    }
+
+    [Fact]
+    public async Task The_scans_own_refresh_is_not_taken_for_a_topology_change()
+    {
+        // The client reports a reconfiguration on a worker, after ConfigureAsync has returned.
+        var h = new Harness(timerDriven: true);
+        h.Topology.RefreshLands = false;
+        await h.Connector.ConnectAsync(TestContext.Current.CancellationToken);
+        h.RaiseConfigurationChanged();
+        h.Clock.Advance(RedisConnector.TopologyChangeSettleTime);
+        await h.WaitForRefreshesAsync(1);
+
+        h.RaiseConfigurationChanged();
+        h.Clock.Advance(RedisConnector.TopologyChangeSettleTime);
+        await Task.Delay(200, TestContext.Current.CancellationToken);
+
+        await h.Multiplexer.Received(1).ConfigureAsync(Arg.Any<TextWriter?>());
+        h.Connector.Dispose();
+    }
+
+    [Fact]
+    public async Task A_slow_refresh_is_still_not_taken_for_a_topology_change()
+    {
+        var h = new Harness(timerDriven: true);
+        var refresh = new TaskCompletionSource<bool>();
+        h.Multiplexer.ConfigureAsync(Arg.Any<TextWriter?>()).Returns(refresh.Task);
+        await h.Connector.ConnectAsync(TestContext.Current.CancellationToken);
+        h.RaiseConfigurationChanged();
+        h.Clock.Advance(RedisConnector.TopologyChangeSettleTime);
+        await h.WaitForRefreshesAsync(1);
+        h.Clock.Advance(TimeSpan.FromSeconds(31)); // longer than the window opened before the refresh
+        refresh.SetResult(true);
+        await Task.Delay(200, TestContext.Current.CancellationToken);
+
+        h.RaiseConfigurationChanged();
+        h.Clock.Advance(RedisConnector.TopologyChangeSettleTime);
+        await Task.Delay(200, TestContext.Current.CancellationToken);
+
+        await h.Multiplexer.Received(1).ConfigureAsync(Arg.Any<TextWriter?>());
+        h.Connector.Dispose();
+    }
+
+    [Fact]
+    public async Task A_topology_change_after_the_quiet_window_is_judged_again()
+    {
+        var h = new Harness(timerDriven: true);
+        h.Topology.RefreshLands = false;
+        await h.Connector.ConnectAsync(TestContext.Current.CancellationToken);
+        h.RaiseConfigurationChanged();
+        h.Clock.Advance(RedisConnector.TopologyChangeSettleTime);
+        await h.WaitForRefreshesAsync(1);
+
+        h.Clock.Advance(TimeSpan.FromSeconds(31));
+        h.RaiseConfigurationChanged();
+        h.Clock.Advance(RedisConnector.TopologyChangeSettleTime);
+
+        await h.WaitForRefreshesAsync(2);
+        h.Connector.Dispose();
+    }
+
+    [Fact]
     public void FormatEndPoint_MatchesClusterNodesAddressShape()
     {
         RedisConnector.FormatEndPoint(Live).Should().Be("4.195.18.22:8500");
@@ -602,6 +782,32 @@ public class RedisConnectorStaleEndpointTests
         public SequenceFactory Factory { get; }
         public RedisConnector Connector { get; }
         public TaskCompletionSource OldDisposed { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public void RaiseConfigurationChanged() =>
+            Multiplexer.ConfigurationChanged += Raise.EventWith(Multiplexer, new EndPointEventArgs(Multiplexer, Seed));
+
+        public async Task WaitForRefreshesAsync(int count)
+        {
+            bool Reached() => Multiplexer.ReceivedCalls().Count(c => c.GetMethodInfo().Name == nameof(IConnectionMultiplexer.ConfigureAsync)) >= count;
+            for (var i = 0; i < 500 && !Reached(); i++)
+            {
+                await Task.Delay(10, TestContext.Current.CancellationToken);
+            }
+
+            Reached().Should().BeTrue($"{count} membership refresh(es) should have run");
+        }
+
+        public async Task WaitForCreatesAsync(int count)
+        {
+            // A rebuild runs on the pool and clears its guard after the attempt, so wait for both.
+            for (var i = 0; i < 500 && (Factory.CreateCount < count || Telemetry.Exceptions.Count < count - 1); i++)
+            {
+                await Task.Delay(10, TestContext.Current.CancellationToken);
+            }
+
+            Factory.CreateCount.Should().BeGreaterThanOrEqualTo(count);
+            await Task.Delay(100, TestContext.Current.CancellationToken);
+        }
 
         public async Task ScanTwiceAcrossThresholdAsync()
         {
