@@ -460,7 +460,8 @@ refreshes, so that a single lost topology reply is retried instead, the scan emi
 reporting the same failure every interval.
 
 **Which offering sends maintenance events, and how.** There are two routes, and the difference
-decides what this library does about them.
+decides what this library does about them. Both arrive on the connection carrying your commands:
+planned maintenance opens none of its own, so the rebuild above carries its subscription along.
 
 Azure Cache for Redis Basic, Standard and Premium publish on the `AzureRedisEvents` pub/sub
 channel. The server announces that a node is going away but hands nothing off, so
@@ -475,9 +476,9 @@ the handoff. It opens a maintenance window instead, so health reporting does not
 fault while it is in progress. Azure Managed Redis (`*.redis.azure.net`) is recognised as a
 provider but nothing turns the request on for it, so `MaintenanceNotifications` below is what asks.
 
-A notification can arrive more than once: Azure's is a broadcast every connection receives, and a
-push frame is replayed to a connection that reconnects, which the client collapses only within the
-multiplexer that received it. So both routes record, and a copy matching one seen in the last 30
+A notification can arrive more than once: Azure's is a broadcast a retiring connection still
+forwards alongside its replacement, and a push frame is replayed to a connection that reconnects,
+which the client collapses only within the multiplexer that received it. So a copy matching one seen in the last 30
 seconds is dropped — keyed on the notification's own identity (the fields parsed from Azure's
 payload, or a push frame's type and sequence id) and measured on timestamps rather than the wall
 clock. Two kinds are never collapsed, a duplicate costing less than a loss: a frame whose sequence
@@ -485,13 +486,9 @@ could not be read, reported as zero and told apart from a genuine zero by the `s
 description; and a source this library does not model, whose payload carries no uniqueness
 contract.
 
-Two asymmetries remain. A push frame on the planned-maintenance connection is ignored, since that
-connection carries no commands. And only a `MOVING` is tied to a connection generation — the one
-carrying commands or the one about to, since a rebuild subscribes the replacement before
-publishing it and the server never replays a `MOVING`.
-
-The command route is also the only one that opens a window, for the same reason: it is the
-connection whose disruption the cache would feel.
+One asymmetry remains: only a `MOVING` is tied to a connection generation — the one carrying
+commands or the one about to, since a rebuild subscribes the replacement before publishing it and
+the server never replays a `MOVING`.
 
 A window lasts as long as the server announced, clamped to the range the client relaxes its own
 timeouts over — `maintRelaxedTimeout` to `maintRelaxedWindowMax` — and a completion hands over to

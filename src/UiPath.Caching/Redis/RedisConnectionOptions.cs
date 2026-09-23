@@ -31,10 +31,6 @@ public class RedisConnectionOptions
     /// <summary>Caps an announced window; unset lets the client derive it.</summary>
     public TimeSpan? MaintenanceRelaxedWindowMax { get; set; }
 
-    public int PlannedMaintenanceConnectionRetryCount { get; set; } = 5;
-
-    public TimeSpan PlannedMaintenanceConnectionRetryDelay { get; set; } = TimeSpan.FromSeconds(5);
-
     public bool LogConnectionFailedEvents { get; set; } = true;
 
     public bool LogConnectionRestoredEvents { get; set; } = true;

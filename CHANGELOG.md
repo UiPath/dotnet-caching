@@ -28,10 +28,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
   `RedisConnectionOptions.MaintenanceNotifications` opts in, defaulting to the client's own behaviour. It takes
   `RedisMaintenanceNotifications`, a neutral enum of this library's own, because the StackExchange type is marked
   experimental and would otherwise raise `SER010` in every consumer that set the option. A value outside the
-  enum is refused with an `InvalidOperationException` — it arrives from configuration, not as an argument. A notification is recorded
-  whichever connection delivered it, the one carrying commands reaching this through the new
-  `IRedisConnector.ServerMaintenance`, and it can be delivered more than once -- Azure's is a broadcast every
-  connection receives, and a push frame is replayed to a connection that reconnects. A copy matching one recorded in
+  enum is refused with an `InvalidOperationException` — it arrives from configuration, not as an argument. Notifications
+  arrive from the connection carrying commands, through the new `IRedisConnector.ServerMaintenance`, and one can be
+  delivered more than once -- Azure's is a broadcast a retiring connection still forwards alongside its replacement,
+  and a push frame is replayed to a connection that reconnects. A copy matching one recorded in
   the retention window is therefore dropped, on the notification's own identity rather than on which connection
   ought to have had it. The retention is the maximum window plus its post-event tail, floored at 30 seconds --
   see the fix below for why a fixed interval was not enough. A push notification opens a maintenance window rather than probing — the client hands the
@@ -40,7 +40,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
   `MaintenanceRelaxedWindowMax`) and held through `MaintenancePostEventRelaxedDuration` after a completion, so the
   two agree by construction; and tracked per operation family, so one completion cannot close another's window. The
   bounds are read from the connection that delivered the notification, configurators included, so a window is sized
-  right from the first notice rather than by defaults until this service's own connection is up. The
+  right from the first notice. The
   two routes report one pair of `Redis.MaintenanceStarted`/`Ended` events between them rather than one pair each,
   since they can overlap.
 - `IRedisConnector.ServerMaintenance`, the maintenance the server announced on the connection carrying commands.
@@ -94,7 +94,27 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 - Dropped the `SER007` suppression in `RedisStreamSubjectWriterTests`. `RedisErrorKind` is no longer marked
   `[Experimental]` in 3.3.0, so the pragma suppressed a diagnostic that is no longer raised.
 
+### Removed
+
+- **`RedisPlannedMaintenance`'s constructors.** It takes `(ICachingTelemetryProvider, IRedisConnector, TimeProvider)`
+  now; the configuration provider, multiplexer factory, logger, options and configurators went with the connection
+  they built. Resolving it from the container is unaffected. **Binary-breaking** for code that constructs it directly.
+- **`RedisConnectionOptions.PlannedMaintenanceConnectionRetryCount` and `PlannedMaintenanceConnectionRetryDelay`**,
+  shipped in 1.1.0. They tuned the connection planned maintenance no longer opens. Configuration that still sets them
+  binds without error and is ignored; code that sets them no longer compiles.
+
 ### Fixed
+
+- **Planned maintenance kept a second Redis connection that retried departed nodes forever.**
+  `RedisPlannedMaintenance` opened a multiplexer of its own at startup to listen for Azure's maintenance broadcast.
+  When a cluster moves a shard to another node, every connection keeps the node that left, and StackExchange.Redis
+  retries it for the life of the process, logging each refused handshake as an error. The stale-endpoint scan
+  rebuilds only the connector's connection, so this one went on retrying each departed node every twenty seconds
+  until the process restarted. Notices now come only through `IRedisConnector.ServerMaintenance`, from the
+  connection carrying commands, which already delivered Azure's broadcast as well as push frames, so the rebuild
+  covers everything the service listens on. It opens no connection, so with `WarmUpOnStart` off the first
+  connection, and any Entra token, waits for the first cache use again. A custom `IRedisConnector` that leaves
+  `ServerMaintenance` at its never-raising default now delivers no notices at all.
 
 - **No task the library lets go of can surface as an unobserved exception.** Commands queued on a transaction,
   background loops, fire-and-forget work and probes abandoned at their timeout were discarded without anything
@@ -129,9 +149,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
   reconnect. Handlers are now invoked one at a time with per-handler tracking, on every event of both types. This also
   covers the new `ServerMaintenance`, which the client raises on its own dispatch thread and which had no guard at
   all, and `ConnectionStateMonitor`, whose own re-multicast to `IConnectionState` subscribers sits inside the
-  connector's — so a throw from one of those aborted the connector's list as well. `RedisPlannedMaintenance`'s own
-  maintenance connection is guarded too: its handler is attached straight to the client rather than reaching this
-  class through the connector, so nothing else would have kept a throw off that dispatch path. Reporting the
+  connector's — so a throw from one of those aborted the connector's list as well. Reporting the
   caught failure is itself guarded, since a sink that cannot take the report would otherwise put the exception
   back on the path the boundary exists to keep clear.
 
@@ -139,11 +157,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
   claimed a notification's identity in its deduplication set before handling it, so a handler that threw --
   starting the Azure probe loop, or emitting the `Redis.Maintenance` event -- recorded nothing while every
   matching copy was collapsed into a record that did not exist. The claim is still taken up front, so a
-  concurrent copy from the other route still collapses, but it is committed to the retention queue only once
+  concurrent copy from another connection still collapses, but it is committed to the retention queue only once
   the recording succeeded and released otherwise. It is timestamped on commit rather than on claim, so the
-  queue stays ordered by expiry when two routes record concurrently. Cancelling the service is guarded the same
+  queue stays ordered by expiry when two copies record concurrently. Cancelling the service is guarded the same
   way: `CancellationTokenSource.Cancel` runs its registrations inline, so it raises what a caller's callback
-  threw, and that left `StopReacting` before the maintenance connection had been let go of. A probe run now marks
+  threw, and that left `StopReacting` before its open windows had been closed. A probe run now marks
   itself started only once `Redis.MaintenanceStarted` has been emitted, so a run that could not announce its
   start no longer emits `Redis.MaintenanceEnded` against nothing, and clears `InProgress` ahead of the rest of
   its cleanup, since leaving it set would make the guard refuse every later run. Reporting a failed probe no

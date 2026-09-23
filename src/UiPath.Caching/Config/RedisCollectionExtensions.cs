@@ -89,6 +89,7 @@ public static class RedisCollectionExtensions
     {
         if (enabled)
         {
+            builder.Services.TryAddTimeProvider();
             builder.Services.TryAddSingleton<RedisPlannedMaintenance>();
             builder.Services.TryAddSingleton<IRedisPlannedMaintenance>(sp => sp.GetRequiredService<RedisPlannedMaintenance>());
             builder.Services.TryAddSingleton<UiPath.Caching.Policies.IDisruptionState>(sp => sp.GetRequiredService<RedisPlannedMaintenance>());
