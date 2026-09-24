@@ -72,7 +72,8 @@ public class RedisConnectionOptions
 
     public Func<ProfilingSession?>? ProfilingSessionFactory { get; set; }
 
-    public Func<ConfigurationOptions, IConnectionMultiplexer>? ConnectionFactory { get; set; }
+    /// <summary>Creates the connection in place of <c>ConnectionMultiplexer.ConnectAsync</c>; awaited, so it may connect asynchronously.</summary>
+    public Func<ConfigurationOptions, CancellationToken, ValueTask<IConnectionMultiplexer>>? ConnectionFactory { get; set; }
 
     public string? ConnectionMultiplexerFactoryType { get; set; }
 

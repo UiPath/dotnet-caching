@@ -52,6 +52,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 
 ### Changed
 
+- **`RedisConnectionOptions.ConnectionFactory` is asynchronous.** It is now
+  `Func<ConfigurationOptions, CancellationToken, ValueTask<IConnectionMultiplexer>>` and is awaited. The synchronous
+  `Func<ConfigurationOptions, IConnectionMultiplexer>` was called from inside the async connect, so a factory that
+  needed async work, such as acquiring a token or retrying `ConnectAsync`, had to block a thread-pool thread for
+  the whole attempt. The token is the connector's lifetime: one connection serves every caller, so it is cancelled
+  when the connector is disposed rather than by any one caller. **Breaking**: a factory assigned in code no longer
+  compiles; use an async lambda, for example
+  `async (options, token) => await ConnectionMultiplexer.ConnectAsync(options)`. For Entra authentication,
+  `AddAzureEntraAuthentication()` needs no factory at all.
+
 - **The read pipeline now returns at `RequestTimeout`.** Polly's timeout is cooperative: it bounds a callback that
   observes the token it arms, and the Redis client takes no cancellation token, so on those paths `RequestTimeout`
   bounded nothing and the retry, breaker and fallback downstream never saw a failure to act on. The read pipeline

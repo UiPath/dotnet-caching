@@ -91,6 +91,126 @@ public class RedisConnectorLifecycleTests
     }
 
     [Fact]
+    public async Task Dispose_CancelsTheTokenAnInFlightConnectWasGiven()
+    {
+        var factory = new TokenCapturingFactory();
+        var connector = NewConnector(factory);
+        var connecting = connector.ConnectAsync(TestContext.Current.CancellationToken).AsTask();
+        var token = await factory.Token.WaitAsync(TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken);
+        token.IsCancellationRequested.Should().BeFalse();
+
+        connector.Dispose();
+
+        token.IsCancellationRequested.Should().BeTrue();
+        await connecting.Invoking(t => t).Should().ThrowAsync<OperationCanceledException>();
+    }
+
+    [Fact]
+    public async Task Dispose_ReportsAFactoryCallbackThatThrowsOnCancellation_RatherThanThrowing()
+    {
+        var telemetry = new RecordingTelemetryProvider();
+        var factory = new TokenCapturingFactory(onToken: token => token.Register(() => throw new InvalidOperationException("callback boom")));
+        var connector = NewConnector(factory, telemetry);
+        _ = connector.ConnectAsync(TestContext.Current.CancellationToken).AsTask();
+        await factory.Token.WaitAsync(TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken);
+
+        var dispose = () => connector.Dispose();
+
+        dispose.Should().NotThrow();
+        telemetry.Exceptions.Should().ContainSingle().Which.Exception.Should().BeOfType<AggregateException>();
+    }
+
+    [Fact]
+    public async Task Dispose_CancelsTheTokenAnInFlightReconnectWasGiven()
+    {
+        var factory = new TokenCapturingFactory(first: Substitute.For<IConnectionMultiplexer>());
+        var connector = NewConnector(factory);
+        await connector.ConnectAsync(TestContext.Current.CancellationToken);
+        connector.ForceReconnect();
+        var token = await factory.Token.WaitAsync(TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken);
+
+        connector.Dispose();
+
+        token.IsCancellationRequested.Should().BeTrue();
+    }
+
+    [Fact]
+    public async Task A_factory_can_still_wait_on_its_token_after_Dispose()
+    {
+        // Held open, or the factory can finish inline inside Cancel and the source is rightly disposed.
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var factory = new TokenCapturingFactory(holdUntil: release.Task);
+        var connector = NewConnector(factory);
+        var connecting = connector.ConnectAsync(TestContext.Current.CancellationToken).AsTask();
+        var token = await factory.Token.WaitAsync(TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken);
+
+        connector.Dispose();
+
+        token.WaitHandle.WaitOne(0).Should().BeTrue("a factory still running must see cancellation, not a disposed source");
+        release.SetResult();
+        await connecting.Invoking(t => t).Should().ThrowAsync<OperationCanceledException>();
+    }
+
+    [Fact]
+    public void Dispose_DisposesTheLifetimeSource_WhenNothingIsConnecting()
+    {
+        var connector = NewConnector(new SequenceFactory());
+
+        connector.Dispose();
+
+        IsLifetimeDisposed(connector).Should().BeTrue();
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task The_lifetime_source_is_disposed_once_the_last_connect_settles(bool reconnect)
+    {
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var factory = new TokenCapturingFactory(first: reconnect ? Substitute.For<IConnectionMultiplexer>() : null, holdUntil: release.Task);
+        var connector = NewConnector(factory);
+        var connecting = connector.ConnectAsync(TestContext.Current.CancellationToken).AsTask();
+        if (reconnect)
+        {
+            await connecting;
+            connector.ForceReconnect();
+        }
+
+        await factory.Token.WaitAsync(TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken);
+
+        connector.Dispose();
+        IsLifetimeDisposed(connector).Should().BeFalse("a factory is still running with its token");
+        release.SetResult();
+        for (var i = 0; i < 500 && !IsLifetimeDisposed(connector); i++)
+        {
+            await Task.Delay(10, TestContext.Current.CancellationToken);
+        }
+
+        IsLifetimeDisposed(connector).Should().BeTrue("the factory has seen the cancellation and returned");
+    }
+
+    [Fact]
+    public async Task Dispose_DoesNotReportTheReconnectItCancelled()
+    {
+        var telemetry = new RecordingTelemetryProvider();
+        var factory = new TokenCapturingFactory(first: Substitute.For<IConnectionMultiplexer>());
+        var connector = NewConnector(factory, telemetry);
+        await connector.ConnectAsync(TestContext.Current.CancellationToken);
+        connector.ForceReconnect();
+        await factory.Token.WaitAsync(TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken);
+
+        connector.Dispose();
+        var reconnecting = typeof(RedisConnector).GetField("_reconnecting", BindingFlags.Instance | BindingFlags.NonPublic)!;
+        for (var i = 0; i < 500 && (int)reconnecting.GetValue(connector)! != 0; i++)
+        {
+            await Task.Delay(10, TestContext.Current.CancellationToken);
+        }
+
+        ((int)reconnecting.GetValue(connector)!).Should().Be(0, "the reconnect has finished");
+        telemetry.Exceptions.Should().BeEmpty("a shutdown is not a failed reconnect");
+    }
+
+    [Fact]
     public async Task IsConnected_False_WhileInitialConnectInFlight()
     {
         var multiplexer = Substitute.For<IConnectionMultiplexer>();
@@ -508,10 +628,10 @@ public class RedisConnectorLifecycleTests
         var factory = new GatedFactory(multiplexer, gate.Task);
         var connector = NewConnector(factory);
 
-        var warmUp = connector.ConnectAsync(TestContext.Current.CancellationToken);
+        var warmUp = connector.ConnectAsync(TestContext.Current.CancellationToken).AsTask();
         connector.Dispose();
         gate.SetResult();
-        await warmUp;
+        await warmUp.Invoking(t => t).Should().ThrowAsync<ObjectDisposedException>("the connection it made was disposed, not handed back");
         await disposed.Task.WaitAsync(TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken);
 
         multiplexer.Received(1).Dispose();
@@ -766,6 +886,20 @@ public class RedisConnectorLifecycleTests
         return (connector, multiplexer, telemetry);
     }
 
+    private static bool IsLifetimeDisposed(RedisConnector connector)
+    {
+        var source = (CancellationTokenSource)typeof(RedisConnector).GetField("_lifetime", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(connector)!;
+        try
+        {
+            _ = source.Token;
+            return false;
+        }
+        catch (ObjectDisposedException)
+        {
+            return true;
+        }
+    }
+
     private static RedisConnector NewConnector(IConnectionMultiplexerFactory factory, ICachingTelemetryProvider? telemetry = null)
     {
         var options = Options.Create(new RedisConnectionOptions { ConnectionString = "localhost:6379", EnableHangDetection = false });
@@ -813,6 +947,33 @@ public class RedisConnectorLifecycleTests
             Interlocked.Increment(ref CreateAsyncCount);
             await gate.ConfigureAwait(false);
             return multiplexer;
+        }
+    }
+
+    private sealed class TokenCapturingFactory(IConnectionMultiplexer? first = null, Action<CancellationToken>? onToken = null, Task? holdUntil = null) : IConnectionMultiplexerFactory
+    {
+        private readonly TaskCompletionSource<CancellationToken> _token = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private int _calls;
+
+        public Task<CancellationToken> Token => _token.Task;
+
+        public async ValueTask<IConnectionMultiplexer> CreateAsync(ConfigurationOptions configuration, CancellationToken cancellationToken = default)
+        {
+            if (first is not null && Interlocked.Increment(ref _calls) == 1)
+            {
+                return first;
+            }
+
+            onToken?.Invoke(cancellationToken);
+            _token.TrySetResult(cancellationToken);
+            if (holdUntil is not null)
+            {
+                await holdUntil.ConfigureAwait(false);
+                cancellationToken.ThrowIfCancellationRequested();
+            }
+
+            await Task.Delay(Timeout.Infinite, cancellationToken).ConfigureAwait(false);
+            throw new InvalidOperationException("unreachable");
         }
     }
 

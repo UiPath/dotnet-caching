@@ -19,10 +19,12 @@ public class OpenTelemetryConnectionMultiplexerFactory(
     IOptions<RedisConnectionOptions> redisOptions,
     IServiceProvider serviceProvider) : IConnectionMultiplexerFactory
 {
-    public IConnectionMultiplexer Create(ConfigurationOptions configuration)
+    public async ValueTask<IConnectionMultiplexer> CreateAsync(ConfigurationOptions configuration, CancellationToken cancellationToken = default)
     {
-        var connection = redisOptions.Value.ConnectionFactory?.Invoke(configuration)
-                         ?? ConnectionMultiplexer.Connect(configuration);
+        cancellationToken.ThrowIfCancellationRequested();
+        var connection = redisOptions.Value.ConnectionFactory is { } factory
+            ? await factory(configuration, cancellationToken)
+            : await ConnectionMultiplexer.ConnectAsync(configuration);
         serviceProvider.GetService<StackExchangeRedisInstrumentation>()
             ?.AddConnection(connection);
         return connection;
@@ -76,7 +78,7 @@ The factory is called once per multiplexer the lib creates. Most apps have one c
 
 `StackExchangeRedisInstrumentation` is resolved via `IServiceProvider.GetService<>(...)` so the factory works even if OTel hasn't been registered yet (the `?.AddConnection(...)` short-circuits). In practice OTel is always registered before the caching builder runs, but the null-safe pattern guards against startup-order bugs.
 
-The custom factory delegates to `redisOptions.Value.ConnectionFactory` if set (rare; typically null), then falls back to `ConnectionMultiplexer.Connect(configuration)`. This means you can layer additional connection customization via the `ConnectionFactory` hook without giving up OTel instrumentation.
+The custom factory delegates to `redisOptions.Value.ConnectionFactory` if set (rare; typically null), then falls back to `ConnectionMultiplexer.ConnectAsync(configuration)`. This means you can layer additional connection customization via the `ConnectionFactory` hook without giving up OTel instrumentation.
 
 The `ConnectionMultiplexerFactoryType` appsettings string is parsed via `Type.GetType(string)`, so it must be the **assembly-qualified name** of your factory class — e.g. `MyApp.Telemetry.OpenTelemetryConnectionMultiplexerFactory, MyApp.Telemetry`. Plain `MyApp.Telemetry.X` without the assembly name won't resolve.
 

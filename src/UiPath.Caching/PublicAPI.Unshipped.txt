@@ -1,4 +1,6 @@
 #nullable enable
+*REMOVED*UiPath.Caching.Redis.RedisConnectionOptions.ConnectionFactory.get -> System.Func<StackExchange.Redis.ConfigurationOptions!, StackExchange.Redis.IConnectionMultiplexer!>?
+UiPath.Caching.Redis.RedisConnectionOptions.ConnectionFactory.get -> System.Func<StackExchange.Redis.ConfigurationOptions!, System.Threading.CancellationToken, System.Threading.Tasks.ValueTask<StackExchange.Redis.IConnectionMultiplexer!>>?
 UiPath.Caching.Redis.IRedisConfigurationOptionsProvider.ReapplyDerivedBounds(StackExchange.Redis.ConfigurationOptions! configuration) -> void
 UiPath.Caching.Redis.IRedisConnector.GetPrimaries() -> System.Collections.Generic.IEnumerable<StackExchange.Redis.IServer!>!
 UiPath.Caching.Redis.IRedisConnector.ServerMaintenance -> System.EventHandler<StackExchange.Redis.Maintenance.ServerMaintenanceEvent!>?

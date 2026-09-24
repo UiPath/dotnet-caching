@@ -8,8 +8,10 @@ public class ConnectionMultiplexerFactory(IOptions<RedisConnectionOptions> redis
     public async ValueTask<IConnectionMultiplexer> CreateAsync(ConfigurationOptions configuration, CancellationToken cancellationToken = default)
     {
         cancellationToken.ThrowIfCancellationRequested();
-        return RegisterProfilerIfEnabled(redisOptions.Value.ConnectionFactory?.Invoke(configuration)
-            ?? await ConnectionMultiplexer.ConnectAsync(configuration).ConfigureAwait(false));
+        var multiplexer = redisOptions.Value.ConnectionFactory is { } factory
+            ? await factory(configuration, cancellationToken).ConfigureAwait(false)
+            : await ConnectionMultiplexer.ConnectAsync(configuration).ConfigureAwait(false);
+        return RegisterProfilerIfEnabled(multiplexer);
     }
 
     private IConnectionMultiplexer RegisterProfilerIfEnabled(IConnectionMultiplexer connectionMultiplexer)

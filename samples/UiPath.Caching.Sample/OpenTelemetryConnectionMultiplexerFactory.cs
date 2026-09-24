@@ -10,7 +10,9 @@ public class OpenTelemetryConnectionMultiplexerFactory(IOptions<RedisConnectionO
     public async ValueTask<IConnectionMultiplexer> CreateAsync(ConfigurationOptions configuration, CancellationToken cancellationToken = default)
     {
         cancellationToken.ThrowIfCancellationRequested();
-        var cnn = redisOptions.Value.ConnectionFactory?.Invoke(configuration) ?? await ConnectionMultiplexer.ConnectAsync(configuration);
+        var cnn = redisOptions.Value.ConnectionFactory is { } factory
+            ? await factory(configuration, cancellationToken)
+            : await ConnectionMultiplexer.ConnectAsync(configuration);
         var instrumentation = serviceProvider.GetService<StackExchangeRedisInstrumentation>();
         instrumentation?.AddConnection(cnn);
         return cnn;

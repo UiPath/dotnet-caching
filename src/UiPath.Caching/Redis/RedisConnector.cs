@@ -40,6 +40,12 @@ public sealed class RedisConnector : IRedisConnector
     private readonly Lazy<Version> _version;
     private readonly object _swapLock = new();
 
+    // Cancelled on Dispose, and disposed once no connect or reconnect still holds its token: a factory still
+    // running may wait on the token's WaitHandle, which a disposed source would fail.
+    private readonly CancellationTokenSource _lifetime = new();
+    private readonly CancellationToken _lifetimeToken;
+    private readonly object _lifetimeLock = new();
+
     // The handler closes over the multiplexer it was attached to, and unsubscribing needs that same delegate.
     private readonly ConditionalWeakTable<IConnectionMultiplexer, EventHandler<ServerMaintenanceEvent>> _maintenanceHandlers = [];
 
@@ -54,6 +60,8 @@ public sealed class RedisConnector : IRedisConnector
     private volatile bool _staleScanDisabled;
     private int _reconnecting;
     private int _staleScanRunning;
+    private int _lifetimeHolders;
+    private bool _lifetimeEnded;
     private int _topologyScanScheduled;
 
     // The latest change not yet judged; it stays pending until a scan evaluates it, not merely until one is attempted.
@@ -93,6 +101,7 @@ public sealed class RedisConnector : IRedisConnector
         IClusterTopologyReader? topologyReader)
     {
         _redisOptions = redisOptions.Value;
+        _lifetimeToken = _lifetime.Token;
 
         _lazyCacheConnectionMultiplexer = CreateLazyConnection();
 
@@ -393,15 +402,50 @@ public sealed class RedisConnector : IRedisConnector
     private Lazy<Task<IConnectionMultiplexer>> CreateLazyConnection() =>
         new(() =>
         {
+            if (!TryHoldLifetime())
+            {
+                return Task.FromException<IConnectionMultiplexer>(new ObjectDisposedException(nameof(RedisConnector)));
+            }
+
             try
             {
-                return Task.Run(async () => await CreateConnectionMultiplexerAsync(CancellationToken.None).ConfigureAwait(false));
+                // Started even if Dispose has run, so the connection a requested connect makes is still disposed.
+                return Task.Run(ConnectOwnedAsync, CancellationToken.None);
             }
             catch (Exception ex)
             {
+                ReleaseLifetime();
                 return Task.FromException<IConnectionMultiplexer>(ex);
             }
         });
+
+    private async Task<IConnectionMultiplexer> ConnectOwnedAsync()
+    {
+        IConnectionMultiplexer multiplexer;
+        try
+        {
+            multiplexer = await CreateConnectionMultiplexerAsync(_lifetimeToken).ConfigureAwait(false);
+        }
+        finally
+        {
+            ReleaseLifetime();
+        }
+
+        bool disposed;
+        lock (_swapLock)
+        {
+            disposed = _disposed;
+        }
+
+        if (disposed)
+        {
+            // Dispose can run before this task is published, and then has nothing to dispose it through.
+            TryDisposeMultiplexer(multiplexer);
+            throw new ObjectDisposedException(nameof(RedisConnector));
+        }
+
+        return multiplexer;
+    }
 
     private Task<IConnectionMultiplexer> GetConnectionTask()
     {
@@ -438,53 +482,13 @@ public sealed class RedisConnector : IRedisConnector
             return;
         }
 
-        Task.Run(async () =>
+        if (!TryHoldLifetime())
         {
-            if (Interlocked.CompareExchange(ref _reconnecting, 1, 0) != 0)
-            {
-                return;
-            }
+            return;
+        }
 
-            try
-            {
-                IConnectionMultiplexer newMultiplexer;
-                try
-                {
-                    newMultiplexer = await CreateConnectionMultiplexerAsync(CancellationToken.None).ConfigureAwait(false);
-                }
-                catch (Exception ex)
-                {
-                    _telemetryProvider.TryTrackException(ex);
-                    return;
-                }
-
-                Task<IConnectionMultiplexer> previousTask;
-                lock (_swapLock)
-                {
-                    if (_disposed || !ReferenceEquals(_lazyCacheConnectionMultiplexer, current))
-                    {
-                        TryDisposeMultiplexer(newMultiplexer);
-                        return;
-                    }
-
-                    previousTask = current.Value;
-                    var swapped = new Lazy<Task<IConnectionMultiplexer>>(() => Task.FromResult(newMultiplexer));
-                    _ = swapped.Value;
-                    _lazyCacheConnectionMultiplexer = swapped;
-                }
-
-                // A refused record must not cost the reconnect: the multicast and the retired connection follow.
-                _telemetryProvider.TryTrackEvent("Redis.ForcedReconnect");
-
-                OnReconnected.TryRaise(_telemetryProvider, handler => handler(this, EventArgs.Empty));
-
-                await CloseAndDisposeAsync(previousTask).ConfigureAwait(false);
-            }
-            finally
-            {
-                Interlocked.Exchange(ref _reconnecting, 0);
-            }
-        }).Forget();
+        // Not cancellable: the body has to run to release the hold it was queued with.
+        Task.Run(() => ReconnectAsync(current), CancellationToken.None).Forget();
     }
 
     private async Task CloseAndDisposeAsync(Task<IConnectionMultiplexer> multiplexerTask)
@@ -565,42 +569,164 @@ public sealed class RedisConnector : IRedisConnector
         if (disposing)
         {
             Lazy<Task<IConnectionMultiplexer>> lazy;
+            bool first;
             lock (_swapLock)
             {
+                first = !_disposed;
                 _disposed = true;
                 lazy = _lazyCacheConnectionMultiplexer;
             }
 
-            if (lazy.IsValueCreated)
+            if (first)
             {
-                var multiplexerTask = lazy.Value;
-                if (multiplexerTask.IsCompletedSuccessfully)
-                {
-                    TryDisposeMultiplexer(multiplexerTask.Result);
-                }
-                else
-                {
-                    _ = multiplexerTask.ContinueWith(
-                        t =>
-                        {
-                            if (t.IsCompletedSuccessfully)
-                            {
-                                TryDisposeMultiplexer(t.Result);
-                            }
-                            else
-                            {
-                                _ = t.Exception;
-                            }
-                        },
-                        CancellationToken.None,
-                        TaskContinuationOptions.ExecuteSynchronously,
-                        TaskScheduler.Default);
-                }
+                EndLifetime();
             }
 
+            DisposeWhenCreated(lazy);
             _hangDetectionTimer?.Dispose();
             _staleEndpointTimer?.Dispose();
         }
+    }
+
+    /// <summary>Stops a connection factory still retrying or acquiring a token.</summary>
+    private async Task ReconnectAsync(Lazy<Task<IConnectionMultiplexer>> current)
+    {
+        try
+        {
+            if (Interlocked.CompareExchange(ref _reconnecting, 1, 0) != 0)
+            {
+                return;
+            }
+
+            try
+            {
+                IConnectionMultiplexer newMultiplexer;
+                try
+                {
+                    newMultiplexer = await CreateConnectionMultiplexerAsync(_lifetimeToken).ConfigureAwait(false);
+                }
+                catch (OperationCanceledException) when (_lifetimeToken.IsCancellationRequested)
+                {
+                    return;
+                }
+                catch (Exception ex)
+                {
+                    _telemetryProvider.TryTrackException(ex);
+                    return;
+                }
+
+                Task<IConnectionMultiplexer> previousTask;
+                lock (_swapLock)
+                {
+                    if (_disposed || !ReferenceEquals(_lazyCacheConnectionMultiplexer, current))
+                    {
+                        TryDisposeMultiplexer(newMultiplexer);
+                        return;
+                    }
+
+                    previousTask = current.Value;
+                    var swapped = new Lazy<Task<IConnectionMultiplexer>>(() => Task.FromResult(newMultiplexer));
+                    _ = swapped.Value;
+                    _lazyCacheConnectionMultiplexer = swapped;
+                }
+
+                // A refused record must not cost the reconnect: the multicast and the retired connection follow.
+                _telemetryProvider.TryTrackEvent("Redis.ForcedReconnect");
+
+                OnReconnected.TryRaise(_telemetryProvider, handler => handler(this, EventArgs.Empty));
+
+                await CloseAndDisposeAsync(previousTask).ConfigureAwait(false);
+            }
+            finally
+            {
+                Interlocked.Exchange(ref _reconnecting, 0);
+            }
+        }
+        finally
+        {
+            ReleaseLifetime();
+        }
+    }
+
+    private void EndLifetime()
+    {
+        try
+        {
+            _lifetime.Cancel();
+        }
+        catch (AggregateException ex)
+        {
+            _telemetryProvider.TryTrackException(ex);
+        }
+
+        lock (_lifetimeLock)
+        {
+            _lifetimeEnded = true;
+            DisposeLifetimeWhenReleased();
+        }
+    }
+
+    /// <summary>False once Dispose has run, so no connect starts with a token whose source may be gone.</summary>
+    private bool TryHoldLifetime()
+    {
+        lock (_lifetimeLock)
+        {
+            if (_lifetimeEnded)
+            {
+                return false;
+            }
+
+            _lifetimeHolders++;
+            return true;
+        }
+    }
+
+    private void ReleaseLifetime()
+    {
+        lock (_lifetimeLock)
+        {
+            _lifetimeHolders--;
+            DisposeLifetimeWhenReleased();
+        }
+    }
+
+    private void DisposeLifetimeWhenReleased()
+    {
+        if (_lifetimeEnded && _lifetimeHolders == 0)
+        {
+            _lifetime.Dispose();
+        }
+    }
+
+    private void DisposeWhenCreated(Lazy<Task<IConnectionMultiplexer>> lazy)
+    {
+        if (!lazy.IsValueCreated)
+        {
+            return;
+        }
+
+        var multiplexerTask = lazy.Value;
+        if (multiplexerTask.IsCompletedSuccessfully)
+        {
+            TryDisposeMultiplexer(multiplexerTask.Result);
+            return;
+        }
+
+        _ = multiplexerTask.ContinueWith(
+            t =>
+            {
+                if (t.IsCompletedSuccessfully)
+                {
+                    TryDisposeMultiplexer(t.Result);
+                }
+                else
+                {
+                    _ = t.Exception;
+                }
+            },
+            CancellationToken.None,
+            TaskContinuationOptions.ExecuteSynchronously,
+            TaskScheduler.Default);
     }
 
     /// <returns>Null stale endpoints when no connected node carries a cluster configuration, so membership can never be judged; judged false when this refresh could not decide.</returns>
@@ -908,7 +1034,7 @@ public sealed class RedisConnector : IRedisConnector
                 TimeSpan remaining;
                 while ((remaining = UntilTopologySettles()) > TimeSpan.Zero)
                 {
-                    await Task.Delay(remaining, _clock).ConfigureAwait(false);
+                    await Task.Delay(remaining, _clock, _lifetimeToken).ConfigureAwait(false);
                 }
             }
             finally
