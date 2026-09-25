@@ -275,6 +275,7 @@ public class RedisStreamsTopicProviderTests(ITestContextAccessor testContextAcce
 
     public ValueTask DisposeAsync()
     {
+        _sut?.Dispose();
         return ValueTask.CompletedTask;
     }
 
@@ -314,6 +315,7 @@ public class RedisStreamsTopicProviderTests(ITestContextAccessor testContextAcce
         var registry = new PerTopicOptionsRegistry<RedisStreamsTopicOptions>(configuration.GetSection("Broadcast:RedisStreams:Topics"));
         configureRegistry?.Invoke(registry);
         _fixture.Inject(registry);
+        _sut?.Dispose();
         _sut = null; // force fixture to rebuild Sut with the new injected registry
     }
 }

@@ -64,6 +64,7 @@ jobs:
         run: dotnet build UiPath.Caching.slnx -c Release --no-restore
 
       - name: Test
+        timeout-minutes: 10
         env:
           RUN_REDIS_INTEGRATION_TESTS: '1'
           REDIS_CONNECTION_STRING: 'localhost:6379'
@@ -109,8 +110,18 @@ jobs:
       - name: Build
         run: dotnet build UiPath.Caching.slnx -c Release --no-restore -warnaserror
 
-      # Redis-backed integration tests run on the Linux job (service containers are Linux-only).
-      # Windows is build-only to validate cross-platform compilation.
+      # Redis-backed integration tests run on the Linux job (service containers are Linux-only),
+      # so here they skip and the rest of the suite runs.
+      - name: Test
+        timeout-minutes: 10
+        run: dotnet test --solution UiPath.Caching.slnx -c Release --no-build -- --results-directory TestResults --report-xunit-trx
+
+      - name: Upload test results
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7
+        with:
+          name: test-results-windows-latest
+          path: TestResults
 
   # FOSSA runs as its own parallel job (push to main only) so it doesn't delay the build.
   fossa:
