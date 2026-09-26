@@ -24,3 +24,21 @@ UiPath.Caching.Redis.RedisPlannedMaintenance.SuggestedTimeout.get -> System.Time
 *REMOVED*UiPath.Caching.Redis.RedisConnectionOptions.PlannedMaintenanceConnectionRetryCount.set -> void
 *REMOVED*UiPath.Caching.Redis.RedisConnectionOptions.PlannedMaintenanceConnectionRetryDelay.get -> System.TimeSpan
 *REMOVED*UiPath.Caching.Redis.RedisConnectionOptions.PlannedMaintenanceConnectionRetryDelay.set -> void
+*REMOVED*UiPath.Caching.Redis.PrefixRedisKeyStrategy.Prefix.set -> void
+*REMOVED*UiPath.Caching.Redis.PrefixRedisKeyStrategy.Separator.set -> void
+*REMOVED*UiPath.Caching.Redis.RedisCacheBase.TrackRead(UiPath.Caching.Telemetry.ITelemetryOperation! operation, bool hit, StackExchange.Redis.RedisKey key) -> void
+UiPath.Caching.Redis.RedisCacheBase.TrackRead(UiPath.Caching.Telemetry.TelemetryScope operation, bool hit, StackExchange.Redis.RedisKey key) -> void
+UiPath.Caching.Telemetry.TelemetryScope
+UiPath.Caching.Telemetry.TelemetryScope.IsEnabled.get -> bool
+UiPath.Caching.Telemetry.TelemetryScope.Stop() -> void
+UiPath.Caching.Telemetry.TelemetryScope.TelemetryScope() -> void
+UiPath.Caching.Telemetry.TelemetryScope.TelemetryScope(UiPath.Caching.Telemetry.ICachingTelemetryProvider! provider, System.TimeProvider! clock, string! providerName, string! callerMethod, System.Type! cacheObjectType) -> void
+UiPath.Caching.Telemetry.TelemetryScope.Track(bool hit, int keyCount = 1) -> void
+UiPath.Caching.Telemetry.TelemetryScope.TrackKeyReads((string! Key, bool Hit)[]! reads) -> void
+const UiPath.Caching.Telemetry.TelemetryScope.BatchIdTag = "BatchId" -> string!
+const UiPath.Caching.Telemetry.TelemetryScope.DependencyType = "Redis" -> string!
+const UiPath.Caching.Telemetry.TelemetryScope.KeysTag = "Keys" -> string!
+const UiPath.Caching.Telemetry.TelemetryScope.MethodTag = "Method" -> string!
+const UiPath.Caching.Telemetry.TelemetryScope.OutcomeTag = "Outcome" -> string!
+const UiPath.Caching.Telemetry.TelemetryScope.ProviderTag = "Provider" -> string!
+const UiPath.Caching.Telemetry.TelemetryScope.TypeTag = "Type" -> string!

@@ -114,8 +114,6 @@ Skip `.AddOpenTelemetry()` on the caching builder — the two are mutually exclu
 ```csharp
 public interface ICachingTelemetryProvider
 {
-    ITelemetryOperation StartOperation(string providerName, Type cacheObject, string methodName = "");
-
     void TrackDependency(string type, string target, string name, string data,
         DateTimeOffset startTime, TimeSpan duration, string resultCode, bool success,
         ReadOnlySpan<KeyValuePair<string, string>> properties = default,
@@ -165,7 +163,7 @@ public sealed class MyBridge(IMyMetricsSink sink) : ICachingTelemetryProvider
 
 ### What the lib emits
 
-The lib tracks cache operations via `ITelemetryOperation`. Each `StartOperation` call wraps a `Stopwatch`; the operation emits a metric named `Caching.Stats.Hits.<provider>.<method>.<type>` (on a hit) or `Caching.Stats.Misses.<provider>.<method>.<type>` (on a miss), with the elapsed time as the value. The metric is emitted **once per operation** (a multi-key read is a hit when any key hit) and carries a `Keys` dimension with the operation's key count. These hit/miss counters are one category of signal the lib emits through `ICachingTelemetryProvider`; the runtime also calls `TrackEvent` and `TrackException` directly for rehydration outcomes, distributed-lock acquire/release, Redis connection-monitor state changes, and stream receipt events. Redis command telemetry (timing, command text, slot, etc.) is captured by the OTel Redis instrumentation via the multiplexer-factory hook, not by `ICachingTelemetryProvider`.
+The lib times each cache operation with a `TelemetryScope`, a struct that reads the cache's `TimeProvider` timestamps, so timing allocates nothing; the operation emits a metric named `Caching.Stats.Hits.<provider>.<method>.<type>` (on a hit) or `Caching.Stats.Misses.<provider>.<method>.<type>` (on a miss), with the elapsed time as the value. The metric is emitted **once per operation** (a multi-key read is a hit when any key hit) and carries a `Keys` dimension with the operation's key count. These hit/miss counters are one category of signal the lib emits through `ICachingTelemetryProvider`; the runtime also calls `TrackEvent` and `TrackException` directly for rehydration outcomes, distributed-lock acquire/release, Redis connection-monitor state changes, and stream receipt events. Redis command telemetry (timing, command text, slot, etc.) is captured by the OTel Redis instrumentation via the multiplexer-factory hook, not by `ICachingTelemetryProvider`.
 
 When `RedisCacheOptions.KeyReadTelemetryEnabled` is set, read paths additionally emit a per-key `Redis` dependency (key in `data`, hit/miss via `resultCode`, a `BatchId` shared across the operation), so per-key read attribution is available even when batched `MGET`+TTL reads — bundled into one `MULTI`/`EXEC` transaction — no longer surface the individual keys on the wire. It is opt-in because raw keys are high-cardinality. Hash reads emit one dependency per hash key, never per field.
 

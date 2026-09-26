@@ -37,7 +37,7 @@ public class RedisCacheTests(ITestContextAccessor testContextAccessor) : IAsyncL
 
     private int HitCount => _telemetry.Metrics.Count(m => m.Name.Contains(".Hits."));
     private int MissCount => _telemetry.Metrics.Count(m => m.Name.Contains(".Misses."));
-    private IEnumerable<DependencyRecord> ReadDeps => _telemetry.Dependencies.Where(d => d.Type == TelemetryOperation.DependencyType);
+    private IEnumerable<DependencyRecord> ReadDeps => _telemetry.Dependencies.Where(d => d.Type == TelemetryScope.DependencyType);
 
     [Fact]
     public async Task Get_works_as_expected()
@@ -284,7 +284,7 @@ public class RedisCacheTests(ITestContextAccessor testContextAccessor) : IAsyncL
 
         HitCount.Should().Be(1);
         MissCount.Should().Be(0);
-        _telemetry.Metrics.Should().ContainSingle(m => m.Name.Contains(".Hits.") && m.Properties![TelemetryOperation.KeysTag] == "2");
+        _telemetry.Metrics.Should().ContainSingle(m => m.Name.Contains(".Hits.") && m.Properties![TelemetryScope.KeysTag] == "2");
     }
 
     [Fact]
@@ -297,7 +297,7 @@ public class RedisCacheTests(ITestContextAccessor testContextAccessor) : IAsyncL
 
         HitCount.Should().Be(0);
         MissCount.Should().Be(1);
-        _telemetry.Metrics.Should().ContainSingle(m => m.Name.Contains(".Misses.") && m.Properties![TelemetryOperation.KeysTag] == "2");
+        _telemetry.Metrics.Should().ContainSingle(m => m.Name.Contains(".Misses.") && m.Properties![TelemetryScope.KeysTag] == "2");
     }
 
     [Fact]
@@ -321,7 +321,7 @@ public class RedisCacheTests(ITestContextAccessor testContextAccessor) : IAsyncL
 
         await Sut.SetAsync(new KeyValuePair<CacheKey, string?>[] { new(_cacheKey, "a"), new(_multiKey, "b") }, policy: null, token: testContextAccessor.Current.CancellationToken);
 
-        _telemetry.Metrics.Should().Contain(m => m.Name.Contains(".Hits.") && m.Properties![TelemetryOperation.KeysTag] == "2");
+        _telemetry.Metrics.Should().Contain(m => m.Name.Contains(".Hits.") && m.Properties![TelemetryScope.KeysTag] == "2");
     }
 
     [Fact]
@@ -349,7 +349,7 @@ public class RedisCacheTests(ITestContextAccessor testContextAccessor) : IAsyncL
 
         HitCount.Should().Be(1);
         MissCount.Should().Be(0);
-        _telemetry.Metrics.Should().ContainSingle(m => m.Name.Contains(".Hits.") && m.Properties![TelemetryOperation.KeysTag] == "2");
+        _telemetry.Metrics.Should().ContainSingle(m => m.Name.Contains(".Hits.") && m.Properties![TelemetryScope.KeysTag] == "2");
     }
 
     [Fact]

@@ -34,6 +34,30 @@ public sealed class ConnectorKeyPrefixTests : IDisposable
     }
 
     [Fact]
+    public void A_WithKeyPrefix_database_yields_its_prefix_as_key_bytes()
+    {
+        NewPrefix().GetKey(_multiplexer.GetDatabase().WithKeyPrefix("{app}:"), configured: string.Empty, configuredKey: default, _logger)
+            .Should().Be((RedisKey)"{app}:");
+    }
+
+    [Fact]
+    public void A_skipped_connector_prefix_yields_the_configured_key()
+    {
+        RedisKey configuredKey = System.Text.Encoding.UTF8.GetBytes("configured:");
+
+        NewPrefix().GetKey(_multiplexer.GetDatabase().WithKeyPrefix(new byte[] { 0xFF, (byte)':' }), "configured:", configuredKey, _logger)
+            .Should().Be(configuredKey);
+    }
+
+    [Fact]
+    public void No_prefix_yields_a_key_that_leaves_a_key_unchanged()
+    {
+        var prefix = NewPrefix().GetKey(_multiplexer.GetDatabase(), configured: "stale:", configuredKey: (RedisKey)"stale:", _logger);
+
+        ((RedisKey)"k").Prepend(prefix).Should().Be((RedisKey)"k");
+    }
+
+    [Fact]
     public void The_reflection_read_recognizes_the_current_StackExchange_Redis_wrapper()
     {
         // A StackExchange.Redis bump that renames the wrapper would fall back to the probe silently; fail here instead.
