@@ -524,7 +524,7 @@ internal sealed partial class RedisCache : RedisCacheBase, ICache
         var operation = StartOperation<T>(nameof(SetAsync));
         try
         {
-            ThrowIfCrossSlot(Array.ConvertAll(keyValues, kv => kv.Key), redisKeys, typeof(T), nameof(SetAsync));
+            ThrowIfCrossSlot(Array.ConvertAll(keyValues, kv => kv.Key), redisKeys, typeof(T), _logger, nameof(SetAsync));
             var transaction = Database.CreateTransaction(asyncState: null);
 
             for (var i = 0; i < keyValues.Length; i++)
@@ -675,7 +675,7 @@ internal sealed partial class RedisCache : RedisCacheBase, ICache
         var operation = StartOperation<T>();
         try
         {
-            ThrowIfCrossSlot(cacheKeys, redisKey, typeof(T), nameof(RemoveAsync));
+            ThrowIfCrossSlot(cacheKeys, redisKey, typeof(T), _logger, nameof(RemoveAsync));
             var response = await _write.ExecuteAsync(async token =>
             {
                 token.ThrowIfCancellationRequested();
@@ -761,7 +761,7 @@ internal sealed partial class RedisCache : RedisCacheBase, ICache
         var reads = InitReads(redisKeys);
         try
         {
-            ThrowIfCrossSlot(keys, redisKeys, typeof(T), nameof(GetAsync));
+            ThrowIfCrossSlot(keys, redisKeys, typeof(T), _logger, nameof(GetAsync));
             var values = await _read.ExecuteAsync(async token =>
             {
                 token.ThrowIfCancellationRequested();
@@ -893,7 +893,7 @@ internal sealed partial class RedisCache : RedisCacheBase, ICache
         var reads = InitReads(redisKeys);
         try
         {
-            ThrowIfCrossSlot(keys, redisKeys, typeof(T), nameof(GetCacheEntriesAsync));
+            ThrowIfCrossSlot(keys, redisKeys, typeof(T), _logger, nameof(GetCacheEntriesAsync));
             StrongBox<(RedisValue[] Values, DateTimeOffset?[] Expirations)>? read = null;
             var committed = await _read.ExecuteAsync(async token =>
             {

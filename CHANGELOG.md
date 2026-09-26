@@ -125,6 +125,18 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 
 ### Fixed
 
+- **The key prefix no longer depends on `RedisCacheOptions.KeyPrefix` being set.** A connector whose `IDatabase` is
+  wrapped with `WithKeyPrefix` stores every key under that prefix, and two places need it: the stream maintainer, to
+  scan for and strip it, and the cluster slot check, to hash the key the server receives. Both relied on `KeyPrefix`
+  repeating the value, so a deployment that left it empty had a maintainer that found none of its streams, since the
+  default SCAN pattern named keys without the prefix. The prefix is now read from the connector's database: directly
+  from StackExchange.Redis's own wrapper, or, behind a decorator, by sending `ECHO` with a key argument once per
+  connector, which the wrapper prefixes. `KeyPrefix` remains the fallback when neither answers, and an error is logged
+  once when a configured value disagrees with the connector. A connector prefix that is not UTF-8 or
+  holds a SCAN glob character (`*`, `?`, `[`, `]`, `\`) is skipped with a warning, and `KeyPrefix` is used instead.
+  A `KeyPrefix` holding one of those glob characters is skipped the same way, and no prefix is assumed, since `*` or `?`
+  would widen the maintainer's SCAN to other keyspaces. An explicit `MaintainerSearchPattern` is still used as written.
+
 - **Planned maintenance kept a second Redis connection that retried departed nodes forever.**
   `RedisPlannedMaintenance` opened a multiplexer of its own at startup to listen for Azure's maintenance broadcast.
   When a cluster moves a shard to another node, every connection keeps the node that left, and StackExchange.Redis
