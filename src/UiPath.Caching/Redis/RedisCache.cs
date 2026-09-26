@@ -9,7 +9,7 @@ internal sealed partial class RedisCache : RedisCacheBase, ICache
     private readonly ISerializerProxy<byte[]> _serializer;
     private readonly IMemorySerializerProxy? _memorySerializer;
     private readonly ILogger<RedisCache> _logger;
-    private readonly bool _supportsExpireTime;
+    private readonly Action<Exception> _logFailure;
     private readonly IResiliencePipeline _read;
     private readonly IResiliencePipeline _write;
     private readonly IRedisKeyStrategy _redisKeyStrategy;
@@ -32,11 +32,11 @@ internal sealed partial class RedisCache : RedisCacheBase, ICache
         : base(redis, telemetryProvider, redisCacheOptions, cacheOptions, policyFactory, clock, keyMaskingPolicy)
     {
         _logger = logger;
+        _logFailure = LogRedisCacheException;
         _serializer = serializer;
         _memorySerializer = serializer as IMemorySerializerProxy;
         _read = resiliencePipelineProvider.Get(ResiliencePipelineNames.Read);
         _write = resiliencePipelineProvider.Get(ResiliencePipelineNames.Write);
-        _supportsExpireTime = RedisUtils.SupportsExpireTime(redis.Version);
         _largeValueThreshold = cacheOptions.LargeValueThreshold;
         _redisKeyStrategy = (redisCacheOptions.RedisKeyStrategyFactory ?? new DefaultRedisKeyStrategyFactory()).Create(cacheOptions, GetType());
         _cacheEntryFactory = redisCacheOptions.EntryFactory ?? new CacheEntryFactory();
@@ -127,7 +127,7 @@ internal sealed partial class RedisCache : RedisCacheBase, ICache
 
     public ValueTask<bool> RemoveAsync<T>(CacheKey[] cacheKey, CancellationToken token = default)
     {
-        return RemoveAsync<T>(cacheKey, cacheKey.Select(k => ToRedisKey(k, token)).ToArray(), token);
+        return RemoveAsync<T>(cacheKey, Array.ConvertAll(cacheKey, k => ToRedisKey(k, token)), token);
     }
 
     public ValueTask<bool> SetAsync<T>(CacheKey cacheKey, T? value, CachePolicy? policy, CancellationToken token = default) =>
@@ -157,101 +157,23 @@ internal sealed partial class RedisCache : RedisCacheBase, ICache
     public ValueTask<bool> TryAddAsync<T>(CacheKey cacheKey, T? value, DateTimeOffset expiration, CachePolicy? policy, CancellationToken token = default) =>
         TryAddCoreAsync(cacheKey, value, CallerDuration(expiration), token);
 
-    public async ValueTask<bool> ContainsAsync<T>(CacheKey cacheKey, CancellationToken token = default)
+    public ValueTask<bool> ContainsAsync<T>(CacheKey cacheKey, CancellationToken token = default)
     {
         NotCacheableException.ThrowIfNotCacheable<T>();
         var redisKey = ToRedisKey(cacheKey, token);
-        var ret = false;
-        var operation = StartOperation<T>();
-
-        try
-        {
-            ret = await _read.ExecuteAsync(async token =>
-            {
-                token.ThrowIfCancellationRequested();
-                return await Database.KeyExistsAsync(redisKey, CommandFlags.PreferReplica).ConfigureAwait(false);
-            },
-            default,
-            token).ConfigureAwait(false);
-            operation.Stop();
-        }
-        catch (Exception ex)
-        {
-            operation.Stop();
-            LogRedisCacheException(ex);
-        }
-        finally
-        {
-            operation.Track(ret);
-        }
-
-        return ret;
+        return RunAsync(_read, StartOperation<T>(), token => Database.KeyExistsAsync(redisKey, CommandFlags.PreferReplica).AsValueTask(), false, static hit => hit, _logFailure, token);
     }
 
-    public async ValueTask<TimeSpan?> TimeToLiveAsync<T>(CacheKey cacheKey, CancellationToken token = default)
+    public ValueTask<TimeSpan?> TimeToLiveAsync<T>(CacheKey cacheKey, CancellationToken token = default)
     {
         NotCacheableException.ThrowIfNotCacheable<T>();
-        TimeSpan? ret = default;
-        var operation = StartOperation<T>();
-        try
-        {
-            ret = await _read.ExecuteAsync(async token =>
-            {
-                token.ThrowIfCancellationRequested();
-                return await Database.KeyTimeToLiveAsync(ToRedisKey(cacheKey, token), CommandFlags.PreferReplica).ConfigureAwait(false);
-            },
-            default,
-            token).ConfigureAwait(false);
-            operation.Stop();
-        }
-        catch (Exception ex)
-        {
-            operation.Stop();
-            LogRedisCacheException(ex);
-        }
-        finally
-        {
-            operation.Track(ret != null);
-        }
-
-        return ret;
+        return KeyTimeToLiveAsync(_read, StartOperation<T>(), _redisKeyStrategy, cacheKey, _logFailure, token);
     }
 
-    public async ValueTask<DateTimeOffset?> ExpireTimeAsync<T>(CacheKey cacheKey, CancellationToken token = default)
+    public ValueTask<DateTimeOffset?> ExpireTimeAsync<T>(CacheKey cacheKey, CancellationToken token = default)
     {
         NotCacheableException.ThrowIfNotCacheable<T>();
-        DateTimeOffset? ret = default;
-        var operation = StartOperation<T>();
-        try
-        {
-            if (_supportsExpireTime)
-            {
-                ret = await _read.ExecuteAsync(async token =>
-                {
-                    token.ThrowIfCancellationRequested();
-                    return await Database.KeyExpireTimeAsync(ToRedisKey(cacheKey, token), CommandFlags.PreferReplica).ConfigureAwait(false);
-                },
-                default,
-                token).ConfigureAwait(false);
-            }
-            else
-            {
-                var timeToLive = await TimeToLiveAsync<T>(cacheKey, token);
-                ret = timeToLive.HasValue ? Clock.ToDateTimeOffset(timeToLive.Value) : null;
-            }
-            operation.Stop();
-        }
-        catch (Exception ex)
-        {
-            operation.Stop();
-            LogRedisCacheException(ex);
-        }
-        finally
-        {
-            operation.Track(ret.HasValue);
-        }
-
-        return ret;
+        return KeyExpireTimeAsync(_read, StartOperation<T>(), _redisKeyStrategy, cacheKey, _logFailure, token);
     }
 
     private static (RedisKey Key, bool Hit)[] InitReads(RedisKey[] redisKeys)
@@ -307,20 +229,20 @@ internal sealed partial class RedisCache : RedisCacheBase, ICache
         {
             if (expiration == DateTimeOffset.MaxValue)
             {
-                ret = await _write.ExecuteAsync(async token =>
+                ret = await _write.ExecuteAsync(token =>
                 {
                     token.ThrowIfCancellationRequested();
-                    return await Database.KeyPersistAsync(redisKey, RefreshFlags).ConfigureAwait(false);
+                    return Database.KeyPersistAsync(redisKey, RefreshFlags).AsValueTask();
                 },
                 default,
                 token).ConfigureAwait(false);
             }
             else
             {
-                ret = await _write.ExecuteAsync(async token =>
+                ret = await _write.ExecuteAsync(token =>
                 {
                     token.ThrowIfCancellationRequested();
-                    return await Database.KeyExpireAsync(redisKey, expiration.UtcDateTime, RefreshFlags).ConfigureAwait(false);
+                    return Database.KeyExpireAsync(redisKey, expiration.UtcDateTime, RefreshFlags).AsValueTask();
                 },
                 default,
                 token).ConfigureAwait(false);
@@ -426,10 +348,10 @@ internal sealed partial class RedisCache : RedisCacheBase, ICache
         T? deserialized = default;
         try
         {
-            var value = await _read.ExecuteAsync(async token =>
+            var value = await _read.ExecuteAsync(token =>
             {
                 token.ThrowIfCancellationRequested();
-                return await Database.StringGetAsync(redisKey, CommandFlags.PreferReplica).ConfigureAwait(false);
+                return Database.StringGetAsync(redisKey, CommandFlags.PreferReplica).AsValueTask();
             },
             RedisValue.Null,
             token).ConfigureAwait(false);
@@ -468,10 +390,10 @@ internal sealed partial class RedisCache : RedisCacheBase, ICache
             {
                 if (_cacheNullValues && expiration > TimeSpan.Zero)
                 {
-                    ret = await _write.ExecuteAsync(async token =>
+                    ret = await _write.ExecuteAsync(token =>
                     {
                         token.ThrowIfCancellationRequested();
-                        return await Database.StringSetAsync(redisKey, RedisValue.EmptyString, expiration, When.Always, CommandFlags.DemandMaster).ConfigureAwait(false);
+                        return Database.StringSetAsync(redisKey, RedisValue.EmptyString, expiration, When.Always, CommandFlags.DemandMaster).AsValueTask();
                     },
                     default,
                     token).ConfigureAwait(false);
@@ -487,10 +409,10 @@ internal sealed partial class RedisCache : RedisCacheBase, ICache
 
                 var serialized = SerializeValue(value);
 
-                ret = await _write.ExecuteAsync(async token =>
+                ret = await _write.ExecuteAsync(token =>
                 {
                     token.ThrowIfCancellationRequested();
-                    return await Database.StringSetAsync(redisKey, serialized, expiration, When.Always, CommandFlags.DemandMaster).ConfigureAwait(false);
+                    return Database.StringSetAsync(redisKey, serialized, expiration, When.Always, CommandFlags.DemandMaster).AsValueTask();
                 },
                 default,
                 token).ConfigureAwait(false);
@@ -514,7 +436,7 @@ internal sealed partial class RedisCache : RedisCacheBase, ICache
     {
         bool ret = default;
         token.ThrowIfCancellationRequested();
-        var redisKeys = keyValues.Select(kv => ToRedisKey(kv.Key, token)).ToArray();
+        var redisKeys = Array.ConvertAll(keyValues, kv => ToRedisKey(kv.Key, token));
 
         if (!IsConnected)
         {
@@ -549,10 +471,10 @@ internal sealed partial class RedisCache : RedisCacheBase, ICache
                 }
             }
 
-            ret = await _write.ExecuteAsync(async token =>
+            ret = await _write.ExecuteAsync(token =>
             {
                 token.ThrowIfCancellationRequested();
-                return await transaction.ExecuteAsync(CommandFlags.DemandMaster).ConfigureAwait(false);
+                return transaction.ExecuteAsync(CommandFlags.DemandMaster).AsValueTask();
             },
             default,
             token).ConfigureAwait(false);
@@ -609,10 +531,10 @@ internal sealed partial class RedisCache : RedisCacheBase, ICache
             {
                 var serialized = isNull ? RedisValue.EmptyString : SerializeValue(value);
 
-                ret = await _write.ExecuteAsync(async token =>
+                ret = await _write.ExecuteAsync(token =>
                 {
                     token.ThrowIfCancellationRequested();
-                    return await Database.StringSetAsync(redisKey, serialized, expiration, When.NotExists, CommandFlags.DemandMaster).ConfigureAwait(false);
+                    return Database.StringSetAsync(redisKey, serialized, expiration, When.NotExists, CommandFlags.DemandMaster).AsValueTask();
                 },
                 default,
                 token).ConfigureAwait(false);
@@ -676,10 +598,10 @@ internal sealed partial class RedisCache : RedisCacheBase, ICache
         try
         {
             ThrowIfCrossSlot(cacheKeys, redisKey, typeof(T), _logger, nameof(RemoveAsync));
-            var response = await _write.ExecuteAsync(async token =>
+            var response = await _write.ExecuteAsync(token =>
             {
                 token.ThrowIfCancellationRequested();
-                return await Database.KeyDeleteAsync(redisKey, CommandFlags.DemandMaster).ConfigureAwait(false);
+                return Database.KeyDeleteAsync(redisKey, CommandFlags.DemandMaster).AsValueTask();
             },
             -1,
             token).ConfigureAwait(false);
@@ -720,10 +642,10 @@ internal sealed partial class RedisCache : RedisCacheBase, ICache
 
         try
         {
-            var value = await _read.ExecuteAsync(async token =>
+            var value = await _read.ExecuteAsync(token =>
             {
                 token.ThrowIfCancellationRequested();
-                return await Database.StringGetAsync(redisKey, CommandFlags.PreferReplica).ConfigureAwait(false);
+                return Database.StringGetAsync(redisKey, CommandFlags.PreferReplica).AsValueTask();
             },
             RedisValue.Null,
             token).ConfigureAwait(false);
@@ -752,7 +674,7 @@ internal sealed partial class RedisCache : RedisCacheBase, ICache
         {
             return retValues;
         }
-        var redisKeys = keys.Select(k => ToRedisKey(k, token)).ToArray();
+        var redisKeys = Array.ConvertAll(keys, k => ToRedisKey(k, token));
         if (!IsConnected)
         {
             return GetDefaultValues<T>(keys);
@@ -762,10 +684,10 @@ internal sealed partial class RedisCache : RedisCacheBase, ICache
         try
         {
             ThrowIfCrossSlot(keys, redisKeys, typeof(T), _logger, nameof(GetAsync));
-            var values = await _read.ExecuteAsync(async token =>
+            var values = await _read.ExecuteAsync(token =>
             {
                 token.ThrowIfCancellationRequested();
-                return await Database.StringGetAsync(redisKeys, CommandFlags.PreferReplica);
+                return Database.StringGetAsync(redisKeys, CommandFlags.PreferReplica).AsValueTask();
             },
             [],
             token).ConfigureAwait(false);
@@ -882,7 +804,7 @@ internal sealed partial class RedisCache : RedisCacheBase, ICache
         {
             return [];
         }
-        var redisKeys = keys.Select(k => ToRedisKey(k, token)).ToArray();
+        var redisKeys = Array.ConvertAll(keys, k => ToRedisKey(k, token));
         if (!IsConnected)
         {
             return GetDefaultEntries<T>(keys);
@@ -960,7 +882,7 @@ internal sealed partial class RedisCache : RedisCacheBase, ICache
 
     private async Task<DateTimeOffset?> FetchExpirationAsync(ITransaction transaction, RedisKey redisKey)
     {
-        if (_supportsExpireTime)
+        if (SupportsExpireTime)
         {
             return await transaction.KeyExpireTimeAsync(redisKey, CommandFlags.PreferReplica).ConfigureAwait(false);
         }

@@ -1367,6 +1367,27 @@ public class RedisHashCacheTests(ITestContextAccessor testContextAccessor) : IAs
     }
 
     [Fact]
+    public async Task TimeToLive_for_a_null_key_is_answered_as_a_miss()
+    {
+        var actual = await Sut.TimeToLiveAsync<string>(CacheKey.Null, testContextAccessor.Current.CancellationToken);
+
+        actual.Should().BeNull();
+        await _database.DidNotReceive().KeyTimeToLiveAsync(Arg.Any<RedisKey>(), Arg.Any<CommandFlags>());
+        _telemetry.Metrics.Should().ContainSingle(m => m.Name.Contains(".Misses."));
+    }
+
+    [Fact]
+    public async Task ExpireTime_with_a_cancelled_token_is_answered_as_a_miss()
+    {
+        var actual = await Sut.ExpireTimeAsync<string>(_cacheKey, new CancellationToken(canceled: true));
+
+        actual.Should().BeNull();
+        await _database.DidNotReceive().KeyTimeToLiveAsync(Arg.Any<RedisKey>(), Arg.Any<CommandFlags>());
+        await _database.DidNotReceive().KeyExpireTimeAsync(Arg.Any<RedisKey>(), Arg.Any<CommandFlags>());
+        _telemetry.Metrics.Should().ContainSingle(m => m.Name.Contains(".Misses."));
+    }
+
+    [Fact]
     public async Task Read_TimeToLive_throws_Exception()
     {
         _database.KeyTimeToLiveAsync(_redisKey, Arg.Any<CommandFlags>())

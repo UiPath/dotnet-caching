@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.Globalization;
 
@@ -19,28 +20,48 @@ public sealed class TelemetryOperation(string providerName, string callerMethod,
     private const string HitOutcome = "Hit";
     private const string MissOutcome = "Miss";
 
-    private readonly string _scope = string.Join('.', providerName, callerMethod, cacheObjectType.Name);
-    private readonly Stopwatch _stopWatch = new();
+    private static readonly ConcurrentDictionary<(string Provider, string Method, string TypeName), (string Hit, string Miss)> MetricNames = new();
+
+    private readonly (string Hit, string Miss) _metricNames = MetricNames.GetOrAdd((providerName, callerMethod, cacheObjectType.Name), static scope =>
+    {
+        var name = string.Join('.', scope.Provider, scope.Method, scope.TypeName);
+        return (Hits + name, Misses + name);
+    });
+
     private DateTimeOffset? _startedAt;
+    private long _runningSince;
+    private long _accumulated;
+
+    private TimeSpan Elapsed =>
+        Stopwatch.GetElapsedTime(0, _accumulated + (_runningSince == 0 ? 0 : Stopwatch.GetTimestamp() - _runningSince));
 
     public void Start()
     {
         _startedAt = DateTimeOffset.UtcNow;
-        _stopWatch.Start();
+        if (_runningSince == 0)
+        {
+            _runningSince = Stopwatch.GetTimestamp();
+        }
     }
 
-    public void Stop() =>
-        _stopWatch.Stop();
+    public void Stop()
+    {
+        if (_runningSince != 0)
+        {
+            _accumulated += Stopwatch.GetTimestamp() - _runningSince;
+            _runningSince = 0;
+        }
+    }
 
     public void Track(bool hit) =>
         Track(hit, 1);
 
     public void Track(bool hit, int keyCount) =>
-        telemetryProvider.TrackMetric(MetricName(hit), _stopWatch.Elapsed.TotalMilliseconds, [new(KeysTag, keyCount.ToString(CultureInfo.InvariantCulture))]);
+        telemetryProvider.TrackMetric(hit ? _metricNames.Hit : _metricNames.Miss, Elapsed.TotalMilliseconds, [new(KeysTag, keyCount.ToString(CultureInfo.InvariantCulture))]);
 
     public void TrackKeyReads((string Key, bool Hit)[] reads)
     {
-        var elapsed = _stopWatch.Elapsed;
+        var elapsed = Elapsed;
         var startTime = _startedAt ?? (DateTimeOffset.UtcNow - elapsed);
         var batchId = Guid.NewGuid().ToString();
         var hitProperties = Properties(true, batchId);
@@ -68,7 +89,4 @@ public sealed class TelemetryOperation(string providerName, string callerMethod,
         new(TypeTag, cacheObjectType.Name),
         new(BatchIdTag, batchId),
     ];
-
-    private string MetricName(bool hit) =>
-        $"{(hit ? Hits : Misses)}{_scope}";
 }

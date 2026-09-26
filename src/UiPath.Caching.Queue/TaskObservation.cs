@@ -9,4 +9,7 @@ internal static class TaskObservation
             CancellationToken.None,
             TaskContinuationOptions.OnlyOnFaulted | TaskContinuationOptions.ExecuteSynchronously,
             TaskScheduler.Default);
+
+    /// <summary>Hands a client task to a <see cref="ValueTask{TResult}"/> callback without an async state machine around it.</summary>
+    public static ValueTask<TResult> AsValueTask<TResult>(this Task<TResult> task) => new(task);
 }

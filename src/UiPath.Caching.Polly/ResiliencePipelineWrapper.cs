@@ -5,7 +5,8 @@ namespace UiPath.Caching.Polly;
 
 internal sealed class ResiliencePipelineWrapper(IResiliencePipelineFactory factory, string? scope) : IResiliencePipeline
 {
-    private readonly ConcurrentDictionary<(Type,object?), object> _cachePipeline = new();
+    // One typed map per result type: a lookup neither boxes the default nor allocates a factory closure.
+    private readonly ConcurrentDictionary<Type, object> _pipelinesByType = new();
 
     // Reads only: abandoning a write or an SPOP would lose data.
     private readonly bool _abandonOnCancellation = string.Equals(scope, ResiliencePipelineNames.Read, StringComparison.Ordinal);
@@ -15,7 +16,7 @@ internal sealed class ResiliencePipelineWrapper(IResiliencePipelineFactory facto
     {
         var pipeline = GetPipeline(defaultValue);
         return _abandonOnCancellation
-            ? pipeline.ExecuteAsync(token => RaceCancellation(callback, token), cancellationToken)
+            ? pipeline.ExecuteAsync(static (callback, token) => RaceCancellation(callback, token), callback, cancellationToken)
             : pipeline.ExecuteAsync(callback, cancellationToken);
     }
 
@@ -47,8 +48,15 @@ internal sealed class ResiliencePipelineWrapper(IResiliencePipelineFactory facto
 
     private ResiliencePipeline<TResult> GetPipeline<TResult>(TResult defaultValue)
     {
-        var key = (typeof(TResult), defaultValue);
-        var pipeline = _cachePipeline.GetOrAdd(key, _ => factory.Create(scope, defaultValue));
-        return pipeline is ResiliencePipeline<TResult> p ? p : throw new InvalidOperationException($"Pipeline for {typeof(TResult)} not found.");
+        var pipelines = (ConcurrentDictionary<DefaultValue<TResult>, ResiliencePipeline<TResult>>)_pipelinesByType.GetOrAdd(
+            typeof(TResult),
+            static _ => new ConcurrentDictionary<DefaultValue<TResult>, ResiliencePipeline<TResult>>());
+        return pipelines.GetOrAdd(
+            new DefaultValue<TResult>(defaultValue),
+            static (key, state) => state.Factory.Create(state.Scope, key.Value),
+            (Factory: factory, Scope: scope));
     }
+
+    // Wrapped so a null default can still key the map.
+    private readonly record struct DefaultValue<TResult>(TResult Value);
 }

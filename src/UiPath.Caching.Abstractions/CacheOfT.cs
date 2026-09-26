@@ -124,9 +124,9 @@ public class Cache<T> : ICache<T>
         _cacheKeyStrategy.GetCacheKey<T>(cacheKey);
 
     private CacheKey[] GetCacheKeys(CacheKey[] cacheKeys) =>
-        cacheKeys.Select(GetCacheKey).ToArray();
+        Array.ConvertAll(cacheKeys, GetCacheKey);
 
     private KeyValuePair<CacheKey, T?>[] GetKeyValuePairs(KeyValuePair<CacheKey, T?>[] keyValues) =>
-        keyValues.Select(kv => new KeyValuePair<CacheKey, T?>(GetCacheKey(kv.Key), kv.Value)).ToArray();
+        Array.ConvertAll(keyValues, kv => new KeyValuePair<CacheKey, T?>(GetCacheKey(kv.Key), kv.Value));
 }
 

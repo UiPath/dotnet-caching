@@ -1,5 +1,6 @@
 using System.Runtime.CompilerServices;
 using UiPath.Caching.Config;
+using UiPath.Caching.Policies;
 using UiPath.Caching.Telemetry;
 
 namespace UiPath.Caching.Redis;
@@ -36,6 +37,7 @@ public abstract class RedisCacheBase : IConnectionState, IDisposable
         DefaultExpiration = DefaultPolicy.DistributedExpiration;
         Clock = clock;
         KeyReadTelemetryEnabled = redisCacheOptions.KeyReadTelemetryEnabled;
+        SupportsExpireTime = RedisUtils.SupportsExpireTime(redis.Version);
         RefreshFlags = redisCacheOptions.AwaitRefresh
             ? CommandFlags.DemandMaster
             : CommandFlags.DemandMaster | CommandFlags.FireAndForget;
@@ -68,6 +70,9 @@ public abstract class RedisCacheBase : IConnectionState, IDisposable
 
     protected bool KeyReadTelemetryEnabled { get; }
 
+    /// <summary>EXPIRETIME arrived in Redis 7; before it, an expiration is the TTL added to now.</summary>
+    protected bool SupportsExpireTime { get; }
+
     protected CachePolicy DefaultPolicy { get; }
 
     protected TimeSpan? DefaultExpiration { get; }
@@ -86,6 +91,36 @@ public abstract class RedisCacheBase : IConnectionState, IDisposable
     protected static TimeSpan CallerDuration(TimeSpan expiration, [CallerArgumentExpression(nameof(expiration))] string? paramName = null) =>
         CacheExpiration.ThrowIfNotPositive(expiration, paramName);
 
+    /// <summary>One command under <paramref name="pipeline"/>: timed by <paramref name="operation"/>, tracked as a hit by <paramref name="isHit"/>, and on failure logged through <paramref name="logFailure"/> and answered with <paramref name="fallback"/>.</summary>
+    protected static async ValueTask<TResult> RunAsync<TResult>(
+        IResiliencePipeline pipeline,
+        ITelemetryOperation operation,
+        Func<CancellationToken, ValueTask<TResult>> command,
+        TResult fallback,
+        Func<TResult, bool> isHit,
+        Action<Exception> logFailure,
+        CancellationToken token)
+    {
+        var ret = fallback;
+        try
+        {
+            token.ThrowIfCancellationRequested();
+            ret = await pipeline.ExecuteAsync(command, fallback, token).ConfigureAwait(false);
+            operation.Stop();
+        }
+        catch (Exception ex)
+        {
+            operation.Stop();
+            logFailure(ex);
+        }
+        finally
+        {
+            operation.Track(isHit(ret));
+        }
+
+        return ret;
+    }
+
     protected void TrackRead(ITelemetryOperation operation, bool hit, RedisKey key)
     {
         operation.Track(hit, 1);
@@ -93,6 +128,22 @@ public abstract class RedisCacheBase : IConnectionState, IDisposable
         {
             operation.TrackKeyReads([(key.ToString(), hit)]);
         }
+    }
+
+    /// <summary>The key's TTL, or null when it has none, the key is invalid or the command failed.</summary>
+    protected ValueTask<TimeSpan?> KeyTimeToLiveAsync(IResiliencePipeline pipeline, ITelemetryOperation operation, IRedisKeyStrategy keyStrategy, CacheKey cacheKey, Action<Exception> logFailure, CancellationToken token) =>
+        RunAsync(pipeline, operation, token => Database.KeyTimeToLiveAsync(ToRedisKey(keyStrategy, cacheKey, token), CommandFlags.PreferReplica).AsValueTask(), (TimeSpan?)null, static timeToLive => timeToLive != null, logFailure, token);
+
+    /// <summary>The key's expiration: EXPIRETIME on Redis 7, else the TTL added to now, under the same operation.</summary>
+    protected async ValueTask<DateTimeOffset?> KeyExpireTimeAsync(IResiliencePipeline pipeline, ITelemetryOperation operation, IRedisKeyStrategy keyStrategy, CacheKey cacheKey, Action<Exception> logFailure, CancellationToken token)
+    {
+        if (!SupportsExpireTime)
+        {
+            var timeToLive = await KeyTimeToLiveAsync(pipeline, operation, keyStrategy, cacheKey, logFailure, token).ConfigureAwait(false);
+            return timeToLive.HasValue ? Clock.ToDateTimeOffset(timeToLive.Value) : null;
+        }
+
+        return await RunAsync(pipeline, operation, token => Database.KeyExpireTimeAsync(ToRedisKey(keyStrategy, cacheKey, token), CommandFlags.PreferReplica).AsValueTask(), (DateTime?)null, static expireTime => expireTime.HasValue, logFailure, token).ConfigureAwait(false);
     }
 
     /// <summary>Write duration when the call carries none: policy, then cache default, then <see cref="CachePolicy.DefaultDistributedExpiration"/>; never unbounded by omission.</summary>
@@ -177,4 +228,16 @@ public abstract class RedisCacheBase : IConnectionState, IDisposable
 
     /// <summary>The key as the server hashes it, with the prefix the connector's <see cref="IDatabase"/> applies through <c>WithKeyPrefix</c>.</summary>
     private static RedisKey WithConnectorPrefix(string prefix, RedisKey key) => prefix.Length == 0 ? key : key.Prepend(prefix);
+
+    /// <summary>Runs inside the command, so a null key or a cancelled token is logged and answered like any other failed read.</summary>
+    private static RedisKey ToRedisKey(IRedisKeyStrategy keyStrategy, CacheKey cacheKey, CancellationToken token)
+    {
+        token.ThrowIfCancellationRequested();
+        if (cacheKey.IsNull)
+        {
+            throw new ArgumentNullException(nameof(cacheKey));
+        }
+
+        return keyStrategy.GetRedisKey(cacheKey);
+    }
 }

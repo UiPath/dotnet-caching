@@ -46,7 +46,7 @@ internal sealed partial class MultilayerCache : MultilayerCacheBase, ICache
     {
         NotCacheableException.ThrowIfNotCacheable<T>();
         policy ??= _defaultPolicy;
-        var options = cacheKeys.Select(k => _entryBuilder.BuildEntryOptions<T>(k, default, token)).ToArray();
+        var options = Array.ConvertAll(cacheKeys, k => _entryBuilder.BuildEntryOptions<T>(k, default, token));
         return GetInnerAsync<T>(options, policy, token);
     }
 
@@ -62,7 +62,7 @@ internal sealed partial class MultilayerCache : MultilayerCacheBase, ICache
     {
         NotCacheableException.ThrowIfNotCacheable<T>();
         policy ??= _defaultPolicy;
-        var options = cacheKeys.Select(k => _entryBuilder.BuildEntryOptions<T>(k, default, token)).ToArray();
+        var options = Array.ConvertAll(cacheKeys, k => _entryBuilder.BuildEntryOptions<T>(k, default, token));
         return await GetCacheEntriesInnerAsync<T>(options, policy, token).ConfigureAwait(false);
     }
 
@@ -180,7 +180,7 @@ internal sealed partial class MultilayerCache : MultilayerCacheBase, ICache
     public ValueTask<bool> RemoveAsync<T>(CacheKey[] cacheKey, CancellationToken token = default)
     {
         NotCacheableException.ThrowIfNotCacheable<T>();
-        var options = cacheKey.Select(k => _entryBuilder.BuildEntryOptions<T>(k, default, token)).ToArray();
+        var options = Array.ConvertAll(cacheKey, k => _entryBuilder.BuildEntryOptions<T>(k, default, token));
         return RemoveAsync<T>(options, token);
     }
 

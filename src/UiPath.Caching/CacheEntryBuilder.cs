@@ -1,6 +1,6 @@
 namespace UiPath.Caching;
 
-internal class CacheEntryBuilder
+internal sealed class CacheEntryBuilder
 {
     private readonly ICacheKeyStrategy _cacheKeyStrategy;
     private readonly ITopicKeyStrategy _topicKeyStrategy;

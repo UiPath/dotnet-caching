@@ -6,6 +6,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 
 ## [Unreleased]
 
+### Added
+
+- **`RedisCacheBase.RunAsync`, `KeyTimeToLiveAsync`, `KeyExpireTimeAsync` and `SupportsExpireTime`.** The
+  one-command shape the Redis caches repeat, in one place: a pipeline call timed by a telemetry operation, tracked
+  as a hit by a predicate, and on failure logged and answered with a fallback. The thirteen single-command members
+  of `RedisCache`, `RedisHashCache` and `RedisSetCache` forward to it; the TTL and expiration reads, with the
+  pre-Redis-7 fallback from TTL to expiration, live in the base once instead of in each cache; and `RedisHashCache`
+  reads a hash's fields in one method instead of two copies of the loop. Protected, for a subclass that adds a
+  command of its own.
+
 ### Fixed
 
 - **The key prefix no longer depends on `RedisCacheOptions.KeyPrefix` being set.** A connector whose `IDatabase` is
