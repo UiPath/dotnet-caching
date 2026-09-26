@@ -107,6 +107,7 @@ public class InMemoryCacheProviderTests(ITestContextAccessor testContextAccessor
             .Without(x => x.SizeProvider)
             .Without(x => x.LocalLockEnabled)
             .Without(x => x.DistributedLockEnabled)
+            .Without(x => x.CacheKeyStrategy)
             .Create();
         _fixture.Inject(Options.Create(_options));
 

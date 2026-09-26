@@ -17,6 +17,11 @@ public interface ICache : IDisposable
 
     ValueTask<T?> GetAsync<T>(CacheKey cacheKey, CachePolicy? policy, CancellationToken token = default);
 
+    /// <summary>Reads by the key's text, normalized as <c>new CacheKey(text)</c> normalizes it, so an implementation can serve a local hit without allocating; this default builds the key.</summary>
+    /// <remarks>Takes a <c>Span&lt;char&gt;</c>: a <c>ReadOnlySpan&lt;char&gt;</c> overload would make a call with a string ambiguous against the <see cref="CacheKey"/> overload.</remarks>
+    ValueTask<T?> GetAsync<T>(Span<char> cacheKey, CachePolicy? policy, CancellationToken token = default) =>
+        GetAsync<T>(new CacheKey(cacheKey), policy, token);
+
     ValueTask<KeyValuePair<CacheKey, T?>[]> GetAsync<T>(CacheKey[] cacheKeys, CachePolicy? policy, CancellationToken token = default);
 
     ValueTask<ICacheEntry<T?>> GetCacheEntryAsync<T>(CacheKey cacheKey, CachePolicy? policy, CancellationToken token = default);

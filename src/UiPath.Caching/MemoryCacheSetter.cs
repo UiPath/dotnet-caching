@@ -36,21 +36,22 @@ internal abstract class MemoryCacheSetter(
                 : changeTokenFactory.Create(options.CacheKey, topic, cacheName, entryType);
             var state = new RefreshMetadataState(options.CacheKey, options.TopicKey, item, token, entryType, maxExpiration, options.CallerKey);
             token.RegisterChangeCallback(RefreshMetadata, state);
-            var memOptions = new MemoryCacheEntryOptions();
-            var expiration = GetCacheExpiration(options.Expiration, maxExpiration);
-            memOptions.SetAbsoluteExpiration(expiration);
-            memOptions.ExpirationTokens.Add(token);
-            memOptions.RegisterPostEvictionCallback(PostEviction, token);
-            if(memoryCacheOptions.SizeLimit.HasValue)
+            // Filled in place rather than through MemoryCacheEntryOptions, which is copied into the entry and discarded.
+            // The entry is committed when disposed, and only once its value is set, so a throw before that stores nothing.
+            using var entry = memoryCache.CreateEntry(options.CacheKey.Name);
+            entry.AbsoluteExpiration = GetCacheExpiration(options.Expiration, maxExpiration);
+            entry.ExpirationTokens.Add(token);
+            entry.RegisterPostEvictionCallback(PostEviction, token);
+            if (memoryCacheOptions.SizeLimit.HasValue)
             {
-                memOptions.SetSize(SizeProvider.GetSize(item));
+                entry.Size = SizeProvider.GetSize(item);
             }
-            memoryCache.Set(options.CacheKey, item, memOptions);
+            entry.Value = item;
             return true;
         }
         catch (Exception ex)
         {
-            memoryCache.Remove(options.CacheKey);
+            memoryCache.Remove(options.CacheKey.Name);
             logger.LogWarning(ex, "Unable to set local memory for {CacheKey}", LoggedKey.For(_masker, options.CallerKey, options.CacheKey.Name, entryType));
             return false;
         }

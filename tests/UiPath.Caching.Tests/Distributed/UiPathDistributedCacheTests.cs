@@ -695,16 +695,34 @@ public class UiPathDistributedCacheTests
     private sealed class SuffixKeyStrategy(string suffix) : ICacheKeyStrategy
     {
         public CacheKey GetCacheKey<T>(CacheKey key) => key.WithName(key.Name + suffix);
+
+        public bool TryGetCacheKey<T>(ReadOnlySpan<char> key, Span<char> destination, out int written)
+        {
+            written = 0;
+            return false;
+        }
     }
 
     private sealed class AmbientCasingKeyStrategy : ICacheKeyStrategy
     {
         public CacheKey GetCacheKey<T>(CacheKey key) => new(key.Name, CacheKeyCasing.Insensitive);
+
+        public bool TryGetCacheKey<T>(ReadOnlySpan<char> key, Span<char> destination, out int written)
+        {
+            written = 0;
+            return false;
+        }
     }
 
     private sealed class EmptyKeyStrategy : ICacheKeyStrategy
     {
         public CacheKey GetCacheKey<T>(CacheKey key) => default;
+
+        public bool TryGetCacheKey<T>(ReadOnlySpan<char> key, Span<char> destination, out int written)
+        {
+            written = 0;
+            return false;
+        }
     }
 
     private sealed class CapturingLogger : ILogger

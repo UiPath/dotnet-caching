@@ -99,10 +99,22 @@ public class CacheOfTBatchGetOrAddTests(ITestContextAccessor testContextAccessor
     private sealed class PrefixStrategy : ICacheKeyStrategy
     {
         public CacheKey GetCacheKey<T>(CacheKey key) => "p:" + key.Name;
+
+        public bool TryGetCacheKey<T>(ReadOnlySpan<char> key, Span<char> destination, out int written)
+        {
+            written = 0;
+            return false;
+        }
     }
 
     private sealed class CollapsingStrategy : ICacheKeyStrategy
     {
         public CacheKey GetCacheKey<T>(CacheKey key) => "collapsed";
+
+        public bool TryGetCacheKey<T>(ReadOnlySpan<char> key, Span<char> destination, out int written)
+        {
+            written = 0;
+            return false;
+        }
     }
 }

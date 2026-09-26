@@ -42,6 +42,18 @@ internal sealed partial class MultilayerCache : MultilayerCacheBase, ICache
         return GetInnerAsync<T>(_entryBuilder.BuildEntryOptions<T>(cacheKey, _clock.ToDateTimeOffset(_multiLayerCacheOptions.DefaultExpiration), token), policy);
     }
 
+    public ValueTask<T?> GetAsync<T>(Span<char> cacheKey, CachePolicy? policy, CancellationToken token = default)
+    {
+        NotCacheableException.ThrowIfNotCacheable<T>();
+#if NET9_0_OR_GREATER
+        if (TryGetLocal<T>(cacheKey, token, out var value))
+        {
+            return new ValueTask<T?>(value);
+        }
+#endif
+        return GetAsync<T>(new CacheKey(cacheKey), policy, token);
+    }
+
     public ValueTask<KeyValuePair<CacheKey, T?>[]> GetAsync<T>(CacheKey[] cacheKeys, CachePolicy? policy, CancellationToken token = default)
     {
         NotCacheableException.ThrowIfNotCacheable<T>();
@@ -202,7 +214,7 @@ internal sealed partial class MultilayerCache : MultilayerCacheBase, ICache
         var cacheEntryOptions = _entryBuilder.BuildEntryOptions<T>(cacheKey, default, token);
         try
         {
-            return _memoryCache.TryGetValue(cacheEntryOptions.CacheKey, out _) || await _innerCache.ContainsAsync<T>(cacheEntryOptions.CacheKey, cacheEntryOptions.Token).ConfigureAwait(false);
+            return _memoryCache.TryGetValue(cacheEntryOptions.CacheKey.Name, out _) || await _innerCache.ContainsAsync<T>(cacheEntryOptions.CacheKey, cacheEntryOptions.Token).ConfigureAwait(false);
         }
         catch (Exception ex)
         {
@@ -215,7 +227,7 @@ internal sealed partial class MultilayerCache : MultilayerCacheBase, ICache
     {
         NotCacheableException.ThrowIfNotCacheable<T>();
         var cacheEntryOptions = _entryBuilder.BuildEntryOptions<T>(cacheKey, default, token);
-        return _memoryCache.TryGetValue<ICacheEntry>(cacheEntryOptions.CacheKey, out var value)
+        return _memoryCache.TryGetValue<ICacheEntry>(cacheEntryOptions.CacheKey.Name, out var value)
             ? value?.Expiration.Subtract(_clock.GetUtcNow())
             : await _innerCache.TimeToLiveAsync<T>(cacheEntryOptions.CacheKey, token);
     }
@@ -225,7 +237,7 @@ internal sealed partial class MultilayerCache : MultilayerCacheBase, ICache
         NotCacheableException.ThrowIfNotCacheable<T>();
         var cacheEntryOptions = _entryBuilder.BuildEntryOptions<T>(cacheKey, default, token);
 
-        return _memoryCache.TryGetValue<ICacheEntry>(cacheEntryOptions.CacheKey, out var value)
+        return _memoryCache.TryGetValue<ICacheEntry>(cacheEntryOptions.CacheKey.Name, out var value)
             ? value?.Expiration
             : await _innerCache.ExpireTimeAsync<T>(cacheEntryOptions.CacheKey, token);
     }
@@ -766,7 +778,7 @@ internal sealed partial class MultilayerCache : MultilayerCacheBase, ICache
     /// </summary>
     private async ValueTask<bool> TryAddUnderLocalLockAsync<T>(CacheEntryOptions options, T? value, CachePolicy policy, TimeSpan? localMaxExpiration)
     {
-        if (_memoryCache.TryGetValue(options.CacheKey, out _))
+        if (_memoryCache.TryGetValue(options.CacheKey.Name, out _))
         {
             return false;
         }
@@ -895,7 +907,7 @@ internal sealed partial class MultilayerCache : MultilayerCacheBase, ICache
         NotCacheableException.ThrowIfNotCacheable<T>();
         var cacheEntryOptions = _entryBuilder.BuildEntryOptions<T>(cacheKey, expiration, token);
         LogClearingCached(Logged(cacheEntryOptions, typeof(T)));
-        _memoryCache.Remove(cacheEntryOptions.CacheKey);
+        _memoryCache.Remove(cacheEntryOptions.CacheKey.Name);
         LogRefreshingInnerCacheKey(Logged(cacheEntryOptions, typeof(T)), cacheEntryOptions.Expiration);
         try
         {
@@ -914,7 +926,7 @@ internal sealed partial class MultilayerCache : MultilayerCacheBase, ICache
         LogClearingLocalCached(Logged(options, typeof(T)));
         try
         {
-            _memoryCache.Remove(options.CacheKey);
+            _memoryCache.Remove(options.CacheKey.Name);
             var removed = await _innerCache.RemoveAsync<T>(options.CacheKey, options.Token).ConfigureAwait(false);
             var eventFired = await _eventPublisher.CacheRemovedAsync(options, typeof(T)).ConfigureAwait(false);
             return removed && eventFired;
@@ -938,7 +950,7 @@ internal sealed partial class MultilayerCache : MultilayerCacheBase, ICache
 
             foreach (var option in options)
             {
-                _memoryCache.Remove(option.CacheKey);
+                _memoryCache.Remove(option.CacheKey.Name);
             }
 
             foreach (var option in options)
@@ -968,7 +980,7 @@ internal sealed partial class MultilayerCache : MultilayerCacheBase, ICache
         List<CacheEntryOptions> cacheEntriesToFetch = [];
         foreach (var option in options)
         {
-            if (_memoryCache.TryGetValue<ICacheEntry<T>>(option.CacheKey, out var entry))
+            if (_memoryCache.TryGetValue<ICacheEntry<T>>(option.CacheKey.Name, out var entry))
             {
                 LogFoundLocal(Logged(option, typeof(T)));
                 if (_connectionState.IsConnected)
@@ -983,7 +995,7 @@ internal sealed partial class MultilayerCache : MultilayerCacheBase, ICache
                 else
                 {
                     LogReturningDefaultDisconnected(Logged(option, typeof(T)));
-                    _memoryCache.Remove(option.CacheKey);
+                    _memoryCache.Remove(option.CacheKey.Name);
                 }
             }
             else
@@ -1022,7 +1034,7 @@ internal sealed partial class MultilayerCache : MultilayerCacheBase, ICache
 
     private async ValueTask<T?> GetInnerAsync<T>(CacheEntryOptions options, CachePolicy policy)
     {
-        if (_memoryCache.TryGetValue<ICacheEntry<T>>(options.CacheKey, out var entry))
+        if (_memoryCache.TryGetValue<ICacheEntry<T>>(options.CacheKey.Name, out var entry))
         {
             LogFoundLocal(Logged(options, typeof(T)));
             if(_connectionState.IsConnected)
@@ -1037,7 +1049,7 @@ internal sealed partial class MultilayerCache : MultilayerCacheBase, ICache
             else
             {
                 LogReturningDefaultDisconnected(Logged(options, typeof(T)));
-                _memoryCache.Remove(options.CacheKey);
+                _memoryCache.Remove(options.CacheKey.Name);
                 return default;
             }
         }
@@ -1063,7 +1075,7 @@ internal sealed partial class MultilayerCache : MultilayerCacheBase, ICache
         for (int i = 0; i < options.Length; i++)
         {
             var option = options[i];
-            if (_memoryCache.TryGetValue<ICacheEntry<T?>>(option.CacheKey, out var entry))
+            if (_memoryCache.TryGetValue<ICacheEntry<T?>>(option.CacheKey.Name, out var entry))
             {
                 LogFoundLocal(Logged(option, typeof(T)));
                 if (_connectionState.IsConnected || _useLocalOnlyWhenDisconnected)
@@ -1077,7 +1089,7 @@ internal sealed partial class MultilayerCache : MultilayerCacheBase, ICache
                 }
 
                 LogReturningDefaultDisconnected(Logged(option, typeof(T)));
-                _memoryCache.Remove(option.CacheKey);
+                _memoryCache.Remove(option.CacheKey.Name);
                 results[i] = new KeyValuePair<CacheKey, ICacheEntry<T?>>(option.CacheKey, _cacheEntryFactory.Create<T?>(default, DateTimeOffset.MinValue));
                 continue;
             }
@@ -1117,7 +1129,7 @@ internal sealed partial class MultilayerCache : MultilayerCacheBase, ICache
 
     private async ValueTask<ICacheEntry<T?>> GetCacheEntryInnerAsync<T>(CacheEntryOptions options, CachePolicy policy)
     {
-        if (_memoryCache.TryGetValue<ICacheEntry<T?>>(options.CacheKey, out var entry))
+        if (_memoryCache.TryGetValue<ICacheEntry<T?>>(options.CacheKey.Name, out var entry))
         {
             LogFoundLocal(Logged(options, typeof(T)));
             if (_connectionState.IsConnected || _useLocalOnlyWhenDisconnected)
@@ -1130,7 +1142,7 @@ internal sealed partial class MultilayerCache : MultilayerCacheBase, ICache
             }
 
             LogReturningDefaultDisconnected(Logged(options, typeof(T)));
-            _memoryCache.Remove(options.CacheKey);
+            _memoryCache.Remove(options.CacheKey.Name);
             return _cacheEntryFactory.Create<T?>(default, DateTimeOffset.MinValue);
         }
 
@@ -1218,6 +1230,29 @@ internal sealed partial class MultilayerCache : MultilayerCacheBase, ICache
         var item = _cacheEntryFactory.Create(value, options.Expiration);
         return _localMemorySetter.Set(options, item, typeof(T), maxExpiration);
     }
+
+#if NET9_0_OR_GREATER
+    /// <summary>A local hit by span, or false whenever the string path is needed: another <see cref="IMemoryCache"/>, a strategy that declines, an empty or overlong key, a disconnected inner tier not served locally, or Trace logging, which renders the key. Cancellation is observed where <see cref="CacheEntryBuilder"/> observes it: once the key is known non-empty, before the strategy.</summary>
+    private bool TryGetLocal<T>(ReadOnlySpan<char> cacheKey, CancellationToken token, out T? value)
+    {
+        value = default;
+        if (_memoryCache is not MemoryCache memoryCache || !(_connectionState.IsConnected || _useLocalOnlyWhenDisconnected) || _logger.IsEnabled(LogLevel.Trace))
+        {
+            return false;
+        }
+
+        Span<char> composed = stackalloc char[SpanKey.MaxLength];
+        if (!SpanKey.TryCompose<T>(_entryBuilder.KeyStrategy, cacheKey, composed, out var written, token)
+            || !memoryCache.TryGetValue(composed[..written], out var cached)
+            || cached is not ICacheEntry<T> entry)
+        {
+            return false;
+        }
+
+        value = entry.Value;
+        return true;
+    }
+#endif
 
     [LoggerMessage(Level = LogLevel.Debug, Message = "Cache missed. generating new {CacheKey}")]
     private partial void LogCacheMissed(LoggedKey cacheKey);

@@ -92,3 +92,15 @@ BenchmarkDotNet from rebuilding the solution per case:
 docker run -d --rm --name caching-redis -p 6379:6379 redis:7
 dotnet run --project benchmarks/UiPath.Caching.Benchmarks/UiPath.Caching.Benchmarks.csproj --framework net10.0 -c Release -- --filter '*DistributedCacheBenchmark*' --job short --inProcess
 ```
+
+## Local Hit Benchmark
+
+`LocalHitBenchmark` reads one entry that the in-memory tier holds, through `ICache<string>`: by a prebuilt
+`CacheKey`, by a string, by a string formatted per call, and by a `Span<char>` formatted on the stack, under
+the default key strategy and under a `PrefixCacheKeyStrategy`; and it writes the same entry. The allocation
+column is the point: the span read is the one that stays at zero when the key has to be composed per call.
+The host is the same as above, so a local Redis is still needed for it to start:
+
+```powershell
+dotnet run --project benchmarks/UiPath.Caching.Benchmarks/UiPath.Caching.Benchmarks.csproj --framework net10.0 -c Release -- --filter '*LocalHitBenchmark*' --job short --inProcess
+```

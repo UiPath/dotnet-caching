@@ -126,3 +126,7 @@ static UiPath.Caching.CacheExpiration.ThrowIfNotPositive(System.TimeSpan expirat
 static UiPath.Caching.CacheExpiration.ToDuration(System.DateTimeOffset expiration, System.DateTimeOffset now, string? paramName = null) -> System.TimeSpan
 static UiPath.Caching.CacheFactoryExtensions.CreateCache<T>(this UiPath.Caching.ICacheFactory! factory, string? providerName = null) -> UiPath.Caching.ICache<T>!
 static UiPath.Caching.CacheFactoryExtensions.CreateHashCache<T>(this UiPath.Caching.ICacheFactory! factory, string? providerName = null) -> UiPath.Caching.IHashCache<T>!
+UiPath.Caching.Cache<T>.GetAsync(System.Span<char> cacheKey, System.Threading.CancellationToken token = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.ValueTask<T?>
+UiPath.Caching.HashCache<T>.GetAsync(System.Span<char> cacheKey, System.Threading.CancellationToken token = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.ValueTask<System.Collections.Generic.IDictionary<string!, T?>!>
+UiPath.Caching.HashCache<T>.GetItemAsync(System.Span<char> cacheKey, string! field, System.Threading.CancellationToken token = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.ValueTask<T?>
+UiPath.Caching.PrefixCacheKeyStrategy.TryGetCacheKey<T>(System.ReadOnlySpan<char> key, System.Span<char> destination, out int written) -> bool

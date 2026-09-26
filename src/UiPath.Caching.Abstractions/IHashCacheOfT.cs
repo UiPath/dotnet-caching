@@ -6,7 +6,15 @@ public interface IHashCache<T>
 
     ValueTask<T?> GetItemAsync(CacheKey cacheKey, string field, CancellationToken token = default);
 
+    /// <inheritdoc cref="ICache.GetAsync{T}(Span{char}, CachePolicy, CancellationToken)"/>
+    ValueTask<T?> GetItemAsync(Span<char> cacheKey, string field, CancellationToken token = default) =>
+        GetItemAsync(new CacheKey(cacheKey), field, token);
+
     ValueTask<IDictionary<string, T?>> GetAsync(CacheKey cacheKey, CancellationToken token = default);
+
+    /// <inheritdoc cref="ICache.GetAsync{T}(Span{char}, CachePolicy, CancellationToken)"/>
+    ValueTask<IDictionary<string, T?>> GetAsync(Span<char> cacheKey, CancellationToken token = default) =>
+        GetAsync(new CacheKey(cacheKey), token);
 
     ValueTask<IDictionary<string, T?>> GetAsync(CacheKey cacheKey, string[] fields, CancellationToken token = default);
 

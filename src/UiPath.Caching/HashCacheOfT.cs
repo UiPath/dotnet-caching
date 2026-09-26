@@ -37,8 +37,34 @@ public class HashCache<T> : IHashCache<T>
     public ValueTask<T?> GetItemAsync(CacheKey cacheKey, string field, CancellationToken token = default) =>
         _cache.GetItemAsync<T>(GetCacheKey(cacheKey), field, Policy, token);
 
+    public ValueTask<T?> GetItemAsync(Span<char> cacheKey, string field, CancellationToken token = default)
+    {
+        if (_cacheKeyStrategy is DefaultCacheKeyStrategy)
+        {
+            return _cache.GetItemAsync<T>(cacheKey, field, Policy, token);
+        }
+
+        Span<char> composed = stackalloc char[SpanKey.MaxLength];
+        return SpanKey.TryCompose<T>(_cacheKeyStrategy, cacheKey, composed, out var written)
+            ? _cache.GetItemAsync<T>(composed[..written], field, Policy, token)
+            : GetItemAsync(new CacheKey(cacheKey), field, token);
+    }
+
     public ValueTask<IDictionary<string, T?>> GetAsync(CacheKey cacheKey, CancellationToken token = default) =>
         _cache.GetAsync<T>(GetCacheKey(cacheKey), policy: Policy, token: token);
+
+    public ValueTask<IDictionary<string, T?>> GetAsync(Span<char> cacheKey, CancellationToken token = default)
+    {
+        if (_cacheKeyStrategy is DefaultCacheKeyStrategy)
+        {
+            return _cache.GetAsync<T>(cacheKey, Policy, token);
+        }
+
+        Span<char> composed = stackalloc char[SpanKey.MaxLength];
+        return SpanKey.TryCompose<T>(_cacheKeyStrategy, cacheKey, composed, out var written)
+            ? _cache.GetAsync<T>(composed[..written], Policy, token)
+            : GetAsync(new CacheKey(cacheKey), token);
+    }
 
     public ValueTask<IDictionary<string, T?>> GetAsync(CacheKey cacheKey, string[] fields, CancellationToken token = default) =>
         _cache.GetAsync<T>(GetCacheKey(cacheKey), fields, Policy, token);

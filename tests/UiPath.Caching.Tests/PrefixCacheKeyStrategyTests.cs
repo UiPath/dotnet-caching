@@ -57,4 +57,30 @@ public class PrefixCacheKeyStrategyTests
         var result = strategy.GetCacheKey<string>(new CacheKey("AbC"));
         result.Name.Should().Be("myapp:abc");
     }
+
+    [Theory]
+    [InlineData("app", null, "key", "app:key")]
+    [InlineData("xxx", '$', "bla", "xxx$bla")]
+    [InlineData("aa", 'B', "ccc", "aabccc")]
+    public void Writes_the_composed_key_into_a_span(string prefix, char? separator, string key, string expected)
+    {
+        _prefix = prefix;
+        _separator = separator;
+        Span<char> buffer = stackalloc char[16];
+
+        Sut.TryGetCacheKey<string>(key, buffer, out var written).Should().BeTrue();
+
+        buffer[..written].ToString().Should().Be(expected);
+    }
+
+    [Fact]
+    public void A_span_too_small_for_the_composed_key_is_refused()
+    {
+        _prefix = "app";
+        Span<char> buffer = stackalloc char[6];
+
+        Sut.TryGetCacheKey<string>("key", buffer, out var written).Should().BeFalse();
+
+        written.Should().Be(0);
+    }
 }

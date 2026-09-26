@@ -1008,5 +1008,11 @@ public class DistributedCacheRegistrationTests
     private sealed class LowercasingCacheKeyStrategy : ICacheKeyStrategy
     {
         public CacheKey GetCacheKey<T>(CacheKey key) => new(key.Name, CacheKeyCasing.Insensitive);
+
+        public bool TryGetCacheKey<T>(ReadOnlySpan<char> key, Span<char> destination, out int written)
+        {
+            written = 0;
+            return false;
+        }
     }
 }
