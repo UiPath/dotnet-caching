@@ -188,6 +188,25 @@ public class BatchGetOrAddTests(ITestContextAccessor testContextAccessor)
     }
 
     [Fact]
+    public async Task RunAsync_rejects_a_null_cache_and_a_null_writer_before_touching_the_cache()
+    {
+        var fake = new DictionaryCache();
+        fake.Seed<string>("user:1", "A");
+        var observed = new List<long[]>();
+        var token = testContextAccessor.Current.CancellationToken;
+        Func<KeyValuePair<CacheKey, string?>[], CancellationToken, ValueTask<bool>> write = (pairs, t) => fake.SetAsync(pairs, null, t);
+
+        await Assert.ThrowsAsync<ArgumentNullException>(async () =>
+            await BatchGetOrAdd.RunAsync<string, long>(null!, Entries(1), Generator(observed), write, null, token));
+        // Every entry hits, so nothing would be written; the writer is required all the same.
+        await Assert.ThrowsAsync<ArgumentNullException>(async () =>
+            await BatchGetOrAdd.RunAsync<string, long>(fake, Entries(1), Generator(observed), null!, null, token));
+
+        fake.GetCacheEntriesCalls.Should().Be(0);
+        observed.Should().BeEmpty();
+    }
+
+    [Fact]
     public async Task Cancellation_token_reaches_the_generator()
     {
         var fake = new DictionaryCache();
@@ -233,6 +252,38 @@ public class BatchGetOrAddTests(ITestContextAccessor testContextAccessor)
         observed.Single().Should().Equal(States1And2);
         result.Select(r => r.Value).Should().Equal("gen:1", "gen:2");
     }
+
+    [Fact]
+    public async Task NullCache_answers_as_BatchGetOrAdd_does_over_a_cache_that_never_hits()
+    {
+        KeyValuePair<CacheKey, string>[] entries =
+        [
+            new((CacheKey)"k1", "a"),
+            new((CacheKey)"k1", "b"),
+            new((CacheKey)"k2", "a"),
+            new((CacheKey)"k3", "c"),
+            new((CacheKey)"k4", "d"),
+        ];
+        var viaNull = new List<string[]>();
+        var viaBatch = new List<string[]>();
+        var token = testContextAccessor.Current.CancellationToken;
+
+        var fromNull = await NullCache.Instance.GetOrAddAsync<string, string>(entries, Answer(viaNull), null, token);
+        var fromBatch = await BatchGetOrAdd.RunAsync<string, string>(NullCache.Instance, entries, Answer(viaBatch), (_, _) => ValueTask.FromResult(true), null, token);
+
+        viaNull.Single().Should().Equal("a", "c", "d").And.Equal(viaBatch.Single());
+        fromNull.Should().Equal(new("a", "gen:a"), new("b", "gen:a"), new("c", "gen:c"), new KeyValuePair<string, string?>("d", null))
+            .And.Equal(fromBatch);
+    }
+
+    /// <summary>Out of order, a second answer for "a", answers for states nobody asked about, and none for "d".</summary>
+    private static Func<string[], CancellationToken, Task<KeyValuePair<string, string?>[]>> Answer(List<string[]> observed) =>
+        (states, _) =>
+        {
+            observed.Add(states);
+            return Task.FromResult<KeyValuePair<string, string?>[]>(
+                [new("c", "gen:c"), new("a", "gen:a"), new("a", "second"), new("b", "unasked"), new("z", "unasked")]);
+        };
 
     private static KeyValuePair<CacheKey, long>[] Entries(params long[] ids) =>
         ids.Select(id => new KeyValuePair<CacheKey, long>((CacheKey)$"user:{id}", id)).ToArray();

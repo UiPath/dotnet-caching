@@ -215,7 +215,7 @@ ProtoBuf, MemoryPack, or any other format.
 The seam lives in `UiPath.Caching.Abstractions` and names no Redis type, so a custom serializer needs
 no dependency on StackExchange.Redis.
 
-Two implementations ship:
+Two implementations ship in `UiPath.Caching`:
 
 | | Byte payloads | Everything else | Used by |
 |---|---|---|---|

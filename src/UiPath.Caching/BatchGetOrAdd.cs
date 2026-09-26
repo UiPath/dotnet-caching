@@ -1,9 +1,10 @@
 namespace UiPath.Caching;
 
-/// <summary>Shared body for the batch <c>GetOrAddAsync</c> default interface methods on <see cref="ICache"/>.</summary>
-internal static class BatchGetOrAdd
+/// <summary>The batch <c>GetOrAddAsync</c> of <see cref="ICache"/>, for an implementation to forward its three overloads to.</summary>
+public static class BatchGetOrAdd
 {
-    internal static async ValueTask<KeyValuePair<TState, T?>[]> RunAsync<T, TState>(
+    /// <summary>Validates every argument synchronously, before the cache is touched, then runs the batch.</summary>
+    public static ValueTask<KeyValuePair<TState, T?>[]> RunAsync<T, TState>(
         ICache cache,
         KeyValuePair<CacheKey, TState>[] entries,
         Func<TState[], CancellationToken, Task<KeyValuePair<TState, T?>[]>> generator,
@@ -12,10 +13,23 @@ internal static class BatchGetOrAdd
         CancellationToken token)
         where TState : notnull
     {
+        ArgumentNullException.ThrowIfNull(cache);
         ArgumentNullException.ThrowIfNull(entries);
         ArgumentNullException.ThrowIfNull(generator);
+        ArgumentNullException.ThrowIfNull(setAsync);
         NotCacheableException.ThrowIfNotCacheable<T>();
+        return RunCoreAsync(cache, entries, generator, setAsync, policy, token);
+    }
 
+    private static async ValueTask<KeyValuePair<TState, T?>[]> RunCoreAsync<T, TState>(
+        ICache cache,
+        KeyValuePair<CacheKey, TState>[] entries,
+        Func<TState[], CancellationToken, Task<KeyValuePair<TState, T?>[]>> generator,
+        Func<KeyValuePair<CacheKey, T?>[], CancellationToken, ValueTask<bool>> setAsync,
+        CachePolicy? policy,
+        CancellationToken token)
+        where TState : notnull
+    {
         var (states, keys, representative, probeKeys) = DistinctEntries(entries);
         if (states.Count == 0)
         {

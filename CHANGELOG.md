@@ -69,6 +69,21 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
   Only writes use it: the write pipeline never abandons a command, so a buffer is never returned while the client
   may still be sending it.
 
+- **Implementation classes moved to `UiPath.Caching`.** `SystemJsonByteSerializerProxy`, `RawByteSerializerProxy`,
+  `Cache<T>`, `HashCache<T>`, `CacheFactoryExtensions`, `CacheExpiration`, `CacheKeyComparer`, `TelemetryTags` and
+  `BatchGetOrAdd`, which is now public. The abstractions package keeps to interfaces, null implementations, DTOs and
+  the extensions over them. Namespaces are unchanged. **Breaking** for code that references only
+  `UiPath.Caching.Abstractions` and uses one of them: add a `UiPath.Caching` reference, or inject `ICache<T>` and
+  `IHashCache<T>`, which `AddCaching` registers, instead of calling `CreateCache<T>`. A binary compiled against the
+  old location fails with `TypeLoadException`, since the abstractions package cannot forward types to a package that
+  depends on it.
+
+- **`ICache`'s batch `GetOrAddAsync<T, TState>` overloads have no default implementation.** The default called
+  `BatchGetOrAdd`, which left the abstractions package with the other implementations. `NullCache` implements them
+  with the result `BatchGetOrAdd` gives over a cache that never hits. **Breaking** for an `ICache` implementation
+  outside the library: implement the three overloads, forwarding to `BatchGetOrAdd.RunAsync` for the behavior the
+  default had. An implementation compiled against the old interface fails to load with `TypeLoadException`.
+
 - **`RedisConnectionOptions.ConnectionFactory` is asynchronous.** It is now
   `Func<ConfigurationOptions, CancellationToken, ValueTask<IConnectionMultiplexer>>` and is awaited. The synchronous
   `Func<ConfigurationOptions, IConnectionMultiplexer>` was called from inside the async connect, so a factory that

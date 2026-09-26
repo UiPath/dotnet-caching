@@ -54,6 +54,18 @@ public sealed class NullCache : ICache
     public ValueTask<T?> GetOrAddAsync<T>(CacheKey cacheKey, Func<CancellationToken, Task<T?>> generator, DateTimeOffset expiration, CachePolicy? policy, CancellationToken token = default) =>
         ReturnGeneratorAsync(generator, token);
 
+    public ValueTask<KeyValuePair<TState, T?>[]> GetOrAddAsync<T, TState>(KeyValuePair<CacheKey, TState>[] entries, Func<TState[], CancellationToken, Task<KeyValuePair<TState, T?>[]>> generator, CachePolicy? policy, CancellationToken token = default)
+        where TState : notnull
+        => ReturnGeneratorAsync(entries, generator, token);
+
+    public ValueTask<KeyValuePair<TState, T?>[]> GetOrAddAsync<T, TState>(KeyValuePair<CacheKey, TState>[] entries, Func<TState[], CancellationToken, Task<KeyValuePair<TState, T?>[]>> generator, TimeSpan expiration, CachePolicy? policy, CancellationToken token = default)
+        where TState : notnull
+        => ReturnGeneratorAsync(entries, generator, token);
+
+    public ValueTask<KeyValuePair<TState, T?>[]> GetOrAddAsync<T, TState>(KeyValuePair<CacheKey, TState>[] entries, Func<TState[], CancellationToken, Task<KeyValuePair<TState, T?>[]>> generator, DateTimeOffset expiration, CachePolicy? policy, CancellationToken token = default)
+        where TState : notnull
+        => ReturnGeneratorAsync(entries, generator, token);
+
     public ValueTask<bool> RefreshAsync<T>(CacheKey cacheKey, CachePolicy? policy, CancellationToken token = default) => ReturnTrueAsync<T>();
 
     public ValueTask<bool> RefreshAsync<T>(CacheKey cacheKey, TimeSpan expiration, CachePolicy? policy, CancellationToken token = default) => ReturnTrueAsync<T>();
@@ -111,6 +123,31 @@ public sealed class NullCache : ICache
     {
         NotCacheableException.ThrowIfNotCacheable<T>();
         return await generator(token).ConfigureAwait(false);
+    }
+
+    /// <summary>What <c>BatchGetOrAdd</c> returns over a cache that never hits: the generator answers each key's first state, states on the same key share that answer, and a key it skips gets the default.</summary>
+    private static async ValueTask<KeyValuePair<TState, T?>[]> ReturnGeneratorAsync<T, TState>(
+        KeyValuePair<CacheKey, TState>[] entries,
+        Func<TState[], CancellationToken, Task<KeyValuePair<TState, T?>[]>> generator,
+        CancellationToken token)
+        where TState : notnull
+    {
+        ArgumentNullException.ThrowIfNull(entries);
+        ArgumentNullException.ThrowIfNull(generator);
+        NotCacheableException.ThrowIfNotCacheable<T>();
+
+        var distinct = entries.DistinctBy(e => e.Value).ToArray();
+        if (distinct.Length == 0)
+        {
+            return [];
+        }
+        var requests = distinct.DistinctBy(e => e.Key).ToArray();
+        var keyOfRequest = requests.ToDictionary(e => e.Value, e => e.Key);
+        var answers = (await generator(Array.ConvertAll(requests, e => e.Value), token).ConfigureAwait(false) ?? [])
+            .Where(a => keyOfRequest.ContainsKey(a.Key))
+            .DistinctBy(a => a.Key)
+            .ToDictionary(a => keyOfRequest[a.Key], a => a.Value);
+        return Array.ConvertAll(distinct, e => new KeyValuePair<TState, T?>(e.Value, answers.GetValueOrDefault(e.Key)));
     }
 
     private sealed record NullCacheEntry<T> : ICacheEntry<T>
