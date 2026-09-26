@@ -6,7 +6,7 @@ namespace UiPath.Caching.Broadcast;
 public sealed partial class ChangeTokenFactory<T> : IChangeTokenFactory, IMaskedChangeTokenFactory
 {
 #pragma warning disable IDE1006, SX1309 // reads as a constant, so it keeps its PascalCase name
-    private readonly ISet<string> MemoryAcceptedEvents = new HashSet<string>([KnownEventTypes.CacheRemoved, KnownEventTypes.CacheRefreshed], StringComparer.InvariantCultureIgnoreCase);
+    private readonly ISet<string> MemoryAcceptedEvents = new HashSet<string>([KnownEventTypes.CacheRemoved, KnownEventTypes.CacheRefreshed], StringComparer.OrdinalIgnoreCase);
     private readonly ISerializerProxy<T> _serializer;
 #pragma warning restore IDE1006, SX1309
 

@@ -1,6 +1,6 @@
 namespace UiPath.Caching;
 
-internal class HashLocalMemorySetter(
+internal sealed class HashLocalMemorySetter(
     string cacheName,
     IChangeTokenFactory changeTokenFactory,
     ITopicProvider topicProvider,
