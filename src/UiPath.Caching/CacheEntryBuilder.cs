@@ -16,6 +16,8 @@ internal sealed class CacheEntryBuilder
         _clock = clock;
     }
 
+    public ICacheKeyStrategy KeyStrategy => _cacheKeyStrategy;
+
     public CacheEntryOptions BuildEntryOptions<T>(CacheKey cacheKey, DateTimeOffset? expiration = null, CancellationToken token = default)
     {
         if (cacheKey.IsNull)
@@ -24,6 +26,11 @@ internal sealed class CacheEntryBuilder
         }
         token.ThrowIfCancellationRequested();
         var entryCacheKey = _cacheKeyStrategy.GetCacheKey<T>(cacheKey);
+        if (entryCacheKey.IsNull)
+        {
+            throw new InvalidOperationException($"The cache key strategy {_cacheKeyStrategy.GetType().FullName} returned an empty key.");
+        }
+
         var topicKey = _topicKeyStrategy.GetTopicKey<T>();
         return new CacheEntryOptions
         {

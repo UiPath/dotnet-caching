@@ -1,9 +1,13 @@
+using System.Buffers;
 using System.Globalization;
 
 namespace UiPath.Caching;
 
 public readonly struct CacheKey : IEquatable<CacheKey>
 {
+    /// <summary>Longest name normalized on the stack; a longer one rents a buffer.</summary>
+    private const int StackBufferLength = 256;
+
     private static CacheKeyCasing _defaultCasing = CacheKeyCasing.Insensitive;
 
     public CacheKey()
@@ -28,6 +32,23 @@ public readonly struct CacheKey : IEquatable<CacheKey>
         {
             CacheKeyCasing.Insensitive => name?.Trim().ToLowerInvariant() ?? string.Empty,
             CacheKeyCasing.Sensitive => name?.Trim() ?? string.Empty,
+            _ => throw new ArgumentOutOfRangeException(nameof(casing), casing, $"Unsupported {nameof(CacheKeyCasing)} value."),
+        };
+    }
+
+    /// <summary>Builds a key from text that is not yet a string, normalized as the string constructor normalizes it, into one new string.</summary>
+    public CacheKey(ReadOnlySpan<char> name)
+    : this(name, DefaultCasing)
+    {
+    }
+
+    /// <inheritdoc cref="CacheKey(ReadOnlySpan{char})"/>
+    public CacheKey(ReadOnlySpan<char> name, CacheKeyCasing casing)
+    {
+        Casing = casing;
+        Name = casing switch
+        {
+            CacheKeyCasing.Insensitive or CacheKeyCasing.Sensitive => Normalize(name, casing),
             _ => throw new ArgumentOutOfRangeException(nameof(casing), casing, $"Unsupported {nameof(CacheKeyCasing)} value."),
         };
     }
@@ -96,4 +117,47 @@ public readonly struct CacheKey : IEquatable<CacheKey>
 
     public override int GetHashCode() =>
         HashCode.Combine(Name, IsNull);
+
+    /// <summary>Trims <paramref name="name"/>, lowercasing it for <see cref="CacheKeyCasing.Insensitive"/>, into <paramref name="destination"/>; false when it does not fit.</summary>
+    internal static bool TryNormalize(ReadOnlySpan<char> name, Span<char> destination, CacheKeyCasing casing, out int written)
+    {
+        name = name.Trim();
+        if (name.Length > destination.Length)
+        {
+            written = 0;
+            return false;
+        }
+
+        if (casing == CacheKeyCasing.Sensitive)
+        {
+            name.CopyTo(destination);
+            written = name.Length;
+        }
+        else
+        {
+            written = name.ToLowerInvariant(destination);
+        }
+
+        return true;
+    }
+
+    private static string Normalize(ReadOnlySpan<char> name, CacheKeyCasing casing)
+    {
+        name = name.Trim();
+        if (name.IsEmpty)
+        {
+            return string.Empty;
+        }
+
+        char[]? rented = null;
+        Span<char> buffer = name.Length <= StackBufferLength ? stackalloc char[StackBufferLength] : (rented = ArrayPool<char>.Shared.Rent(name.Length));
+        TryNormalize(name, buffer, casing, out var written);
+        var normalized = new string(buffer[..written]);
+        if (rented is not null)
+        {
+            ArrayPool<char>.Shared.Return(rented);
+        }
+
+        return normalized;
+    }
 }

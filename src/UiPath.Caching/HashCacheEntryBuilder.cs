@@ -16,6 +16,7 @@ internal sealed class HashCacheEntryBuilder
         _clock = clock;
     }
 
+    internal ICacheKeyStrategy KeyStrategy => _cacheKeyStrategy;
 
     internal InternalHashCacheEntryOptions BuildEntryOptions<T>(CacheKey cacheKey, CancellationToken token = default)
         => BuildEntryOptions<T>(cacheKey, default, token: token);
@@ -31,8 +32,13 @@ internal sealed class HashCacheEntryBuilder
             throw new ArgumentNullException(nameof(cacheKey));
         }
         var entryCacheKey = _cacheKeyStrategy.GetCacheKey<T>(cacheKey);
+        if (entryCacheKey.IsNull)
+        {
+            throw new InvalidOperationException($"The cache key strategy {_cacheKeyStrategy.GetType().FullName} returned an empty key.");
+        }
+
         var topicKey = _topicKeyStrategy.GetTopicKey<T>();
-        return new InternalHashCacheEntryOptions { 
+        return new InternalHashCacheEntryOptions {
             CacheKey = entryCacheKey,
             CallerKey = cacheKey,
             Fields = fields,

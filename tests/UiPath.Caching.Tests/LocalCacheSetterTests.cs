@@ -55,7 +55,7 @@ public class LocalCacheSetterTests : IAsyncLifetime
 
         Sut.Set(x, _fixture.Create<ICacheEntry>(), _fixture.Create<Type>(), _fixture.Create<TimeSpan?>());
         token.InvokeCallbacks();
-        _memoryCache.TryGetValue(_cacheKey, out _).Should().BeFalse();
+        _memoryCache.TryGetValue(_cacheKey.Name, out _).Should().BeFalse();
     }
 
     [Fact]
@@ -84,7 +84,28 @@ public class LocalCacheSetterTests : IAsyncLifetime
 
         Sut.Set(x, _fixture.Create<ICacheEntry>(), _fixture.Create<Type>(), TimeSpan.FromMinutes(1));
         token.InvokeCallbacks();
-        _memoryCache.TryGetValue(_cacheKey, out _).Should().BeTrue();
+        _memoryCache.TryGetValue(_cacheKey.Name, out _).Should().BeTrue();
+    }
+
+    [Fact]
+    public void Set_stores_the_entry_under_the_name_string()
+    {
+        _memoryCache = new MemoryCache(Options.Create(new MemoryCacheOptions()));
+        _fixture.Inject(_memoryCache);
+        _changeTokenFactory.Create(Arg.Any<string>(), Arg.Any<ITopic<ICacheEvent>>(), Arg.Any<string>(), Arg.Any<Type>())
+            .Returns(new TestChangeToken { Expiration = _clock.UtcNow.AddDays(1) });
+        var item = _fixture.Create<ICacheEntry>();
+        var x = new CacheEntryOptions()
+        {
+            CacheKey = _cacheKey,
+            TopicKey = _topicKey,
+            Expiration = _clock.UtcNow.AddDays(1),
+        };
+
+        Sut.Set(x, item, _fixture.Create<Type>(), null).Should().BeTrue();
+
+        _memoryCache.TryGetValue(_cacheKey.Name, out var stored).Should().BeTrue();
+        stored.Should().BeSameAs(item);
     }
 
     [Fact]
@@ -109,7 +130,7 @@ public class LocalCacheSetterTests : IAsyncLifetime
         };
         var actual = Sut.Set(x, _fixture.Create<ICacheEntry>(), _fixture.Create<Type>(), null);
         actual.Should().BeFalse();
-        _memoryCache.TryGetValue(_cacheKey, out _).Should().BeFalse();
+        _memoryCache.TryGetValue(_cacheKey.Name, out _).Should().BeFalse();
     }
 
     [Fact]
@@ -134,7 +155,7 @@ public class LocalCacheSetterTests : IAsyncLifetime
         };
         var actual = Sut.Set(x, _fixture.Create<ICacheEntry>(), _fixture.Create<Type>(), null);
         actual.Should().BeFalse();
-        _memoryCache.TryGetValue(_cacheKey, out _).Should().BeFalse();
+        _memoryCache.TryGetValue(_cacheKey.Name, out _).Should().BeFalse();
     }
 
     public ValueTask DisposeAsync()
