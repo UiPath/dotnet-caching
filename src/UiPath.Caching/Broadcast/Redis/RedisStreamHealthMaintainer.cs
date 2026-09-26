@@ -11,6 +11,7 @@ public partial class RedisStreamHealthMaintainer : IHostedService
     private const string StreamKeyTerminator = "$";
 
     private readonly IRedisConnector _redis;
+    private readonly ConnectorKeyPrefix _connectorPrefix;
     private readonly RedisStreamsTopicOptions _streamOptions;
     private readonly RedisCacheOptions _redisOptions;
     private readonly CacheOptions _cacheOptions;
@@ -22,6 +23,7 @@ public partial class RedisStreamHealthMaintainer : IHostedService
     private readonly SemaphoreSlim _semaphore;
     private readonly TimeProvider _clock;
     private string _streamsSearchPattern = string.Empty;
+    private bool _searchPatternIsDerived;
     private PeriodicTimer? _timer;
     private RedisKey _lockKey;
     private IRedisKeyStrategy _hashKeyStrategy = default!;
@@ -39,6 +41,7 @@ public partial class RedisStreamHealthMaintainer : IHostedService
         TimeProvider clock)
     {
         _redis = redis;
+        _connectorPrefix = ConnectorKeyPrefix.For(redis);
         _telemetryProvider = telemetryProvider;
         _logger = logger;
         _streamOptions = streamOptionsAccessor.Value;
@@ -84,6 +87,7 @@ public partial class RedisStreamHealthMaintainer : IHostedService
         {
             var redisStreamKeyStrategy = _streamOptions.RedisStreamKeyStrategy ?? new PrefixStrategy(RedisKeyspaces.Streams, _cacheOptions);
             _streamsSearchPattern = redisStreamKeyStrategy.GetRedisKey("*").ToString();
+            _searchPatternIsDerived = true;
         }
         else
         {
@@ -190,6 +194,40 @@ public partial class RedisStreamHealthMaintainer : IHostedService
         {
             properties.Add(new(key, value));
         }
+    }
+
+    private static (ulong pointer, List<RedisKey> keys) ParseStreamScan(RedisResult result, string keyPrefix)
+    {
+        if (result.IsNull || result.Length == 0)
+        {
+            return (0, []);
+        }
+
+        var pointer = Convert.ToUInt64(result[0].ToString(), CultureInfo.InvariantCulture);
+        var lst = new List<RedisKey>();
+
+        if (result.Length == 2 && result[1].Length > 0)
+        {
+            var arr = result[1];
+            for (int i = 0; i < arr.Length; i++)
+            {
+                var key = arr[i];
+                if (key != null && !key.IsNull)
+                {
+                    var keyString = key.ToString();
+
+                    // Strip the connector's prefix: the keys go back through its database, which adds it again.
+                    if (!string.IsNullOrEmpty(keyPrefix) && keyString.StartsWith(keyPrefix, StringComparison.Ordinal))
+                    {
+                        keyString = keyString[keyPrefix.Length..];
+                    }
+
+                    lst.Add((RedisKey)keyString);
+                }
+            }
+        }
+
+        return (pointer, lst);
     }
 
     private async Task Start()
@@ -405,16 +443,18 @@ public partial class RedisStreamHealthMaintainer : IHostedService
     {
         // A set: a slot in migration answers on both its source and its target primary.
         var discovered = new HashSet<RedisKey>();
+        // SCAN answers with the keys as stored, so both the pattern and the parse need what the connector prepends.
+        var keyPrefix = await _connectorPrefix.GetAsync(Database, _redisOptions.KeyPrefix ?? string.Empty, _logger, cancellationToken).ConfigureAwait(false);
         var primaries = _redis.GetPrimaries().ToList();
         if (primaries.Count == 0)
         {
             LogNoPrimariesToScan();
-            await ScanStreamsAsync((command, args, flags) => Database.ExecuteAsync(command, args, flags), discovered, cancellationToken).ConfigureAwait(false);
+            await ScanStreamsAsync((command, args, flags) => Database.ExecuteAsync(command, args, flags), keyPrefix, discovered, cancellationToken).ConfigureAwait(false);
         }
         else
         {
             // In parallel, so the pass costs the slowest shard rather than their sum and stays inside the lock.
-            foreach (var keys in await Task.WhenAll(primaries.Select(primary => ScanPrimaryAsync(primary, cancellationToken))).ConfigureAwait(false))
+            foreach (var keys in await Task.WhenAll(primaries.Select(primary => ScanPrimaryAsync(primary, keyPrefix, cancellationToken))).ConfigureAwait(false))
             {
                 discovered.UnionWith(keys);
             }
@@ -429,14 +469,14 @@ public partial class RedisStreamHealthMaintainer : IHostedService
         return ret;
     }
 
-    private async Task<HashSet<RedisKey>> ScanPrimaryAsync(IServer primary, CancellationToken cancellationToken)
+    private async Task<HashSet<RedisKey>> ScanPrimaryAsync(IServer primary, string keyPrefix, CancellationToken cancellationToken)
     {
         var keys = new HashSet<RedisKey>();
         try
         {
             // The database-scoped overload: the three-argument one builds the message with db -1, which
             // StackExchange.Redis refuses for SCAN before it reaches the wire.
-            await ScanStreamsAsync((command, args, flags) => primary.ExecuteAsync(null, command, args, flags), keys, cancellationToken).ConfigureAwait(false);
+            await ScanStreamsAsync((command, args, flags) => primary.ExecuteAsync(null, command, args, flags), keyPrefix, keys, cancellationToken).ConfigureAwait(false);
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
@@ -448,15 +488,18 @@ public partial class RedisStreamHealthMaintainer : IHostedService
 
     private async Task ScanStreamsAsync(
         Func<string, ICollection<object>, CommandFlags, Task<RedisResult>> executeAsync,
+        string keyPrefix,
         HashSet<RedisKey> discovered,
         CancellationToken cancellationToken)
     {
+        // An explicit MaintainerSearchPattern is taken as written; the derived one names keys before the prefix.
+        var pattern = _searchPatternIsDerived ? keyPrefix + _streamsSearchPattern : _streamsSearchPattern;
         ulong pointer = 0;
         while (!cancellationToken.IsCancellationRequested)
         {
-            var result = await executeAsync("SCAN", [pointer.ToString(CultureInfo.InvariantCulture), "MATCH", _streamsSearchPattern, "COUNT", 100, "TYPE", "stream"], CommandFlags.DemandMaster).ConfigureAwait(false);
+            var result = await executeAsync("SCAN", [pointer.ToString(CultureInfo.InvariantCulture), "MATCH", pattern, "COUNT", 100, "TYPE", "stream"], CommandFlags.DemandMaster).ConfigureAwait(false);
 
-            (ulong tempPointer, List<RedisKey> keys) = ParseStreamScan(result);
+            (ulong tempPointer, List<RedisKey> keys) = ParseStreamScan(result, keyPrefix);
             discovered.UnionWith(keys);
 
             if (tempPointer == 0)
@@ -506,42 +549,6 @@ public partial class RedisStreamHealthMaintainer : IHostedService
         }
 
         _telemetryProvider.TrackMetric(Metrics.StreamGroup, groupInfo.Lag.GetValueOrDefault(), CollectionsMarshal.AsSpan(props));
-    }
-
-    private (ulong pointer, List<RedisKey> keys) ParseStreamScan(RedisResult result)
-    {
-        if (result.IsNull || result.Length == 0)
-        {
-            return (0, []);
-        }
-
-        var pointer = Convert.ToUInt64(result[0].ToString(), CultureInfo.InvariantCulture);
-        var lst = new List<RedisKey>();
-
-        var keyPrefix = _redisOptions.KeyPrefix;
-
-        if (result.Length == 2 && result[1].Length > 0)
-        {
-            var arr = result[1];
-            for (int i = 0; i < arr.Length; i++)
-            {
-                var key = arr[i];
-                if (key != null && !key.IsNull)
-                {
-                    var keyString = key.ToString();
-
-                    // Strip the AppShortName prefix so built-in Database methods (which use WithKeyPrefix) work correctly
-                    if (!string.IsNullOrEmpty(keyPrefix) && keyString.StartsWith(keyPrefix, StringComparison.Ordinal))
-                    {
-                        keyString = keyString[keyPrefix.Length..];
-                    }
-
-                    lst.Add((RedisKey)keyString);
-                }
-            }
-        }
-
-        return (pointer, lst);
     }
 
     [LoggerMessage(Level = LogLevel.Error, Message = "Redis stream monitor")]
