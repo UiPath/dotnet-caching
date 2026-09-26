@@ -22,7 +22,7 @@ internal sealed partial class ConnectorKeyPrefix
     private static readonly char[] GlobCharacters = ['*', '?', '[', ']', '\\'];
 
     private readonly object _gate = new();
-    private string? _prefix;
+    private Resolved? _resolved;
     private string? _skipped;
     private Task<bool>? _probe;
     private int _attempts;
@@ -49,7 +49,7 @@ internal sealed partial class ConnectorKeyPrefix
         else
         {
             var probe = Probe(database, logger, configured, configuredUsable, fallback);
-            prefix = probe.IsCompletedSuccessfully && probe.Result ? Volatile.Read(ref _prefix) ?? fallback : fallback;
+            prefix = probe.IsCompletedSuccessfully && probe.Result ? Volatile.Read(ref _resolved)?.Text ?? fallback : fallback;
         }
 
         Report(logger, configured, configuredUsable, prefix);
@@ -68,7 +68,7 @@ internal sealed partial class ConnectorKeyPrefix
         }
         else if (await Probe(database, logger, configured, configuredUsable, fallback).WaitAsync(cancellationToken).ConfigureAwait(false))
         {
-            prefix = Volatile.Read(ref _prefix) ?? fallback;
+            prefix = Volatile.Read(ref _resolved)?.Text ?? fallback;
         }
         else
         {
@@ -77,6 +77,18 @@ internal sealed partial class ConnectorKeyPrefix
 
         Report(logger, configured, configuredUsable, prefix);
         return prefix;
+    }
+
+    /// <summary><see cref="Get"/> as the bytes the server sees, for hashing a key; <paramref name="configuredKey"/> is <paramref name="configured"/> already encoded.</summary>
+    public RedisKey GetKey(IDatabase database, string configured, RedisKey configuredKey, ILogger logger)
+    {
+        var prefix = Get(database, configured, logger);
+        if (prefix.Length == 0)
+        {
+            return default;
+        }
+
+        return Volatile.Read(ref _resolved) is { } resolved && ReferenceEquals(resolved.Text, prefix) ? resolved.Key : configuredKey;
     }
 
     /// <summary>Recognizes StackExchange.Redis's own databases; a decorator around one reads as unknown.</summary>
@@ -185,7 +197,7 @@ internal sealed partial class ConnectorKeyPrefix
                 LogKeyPrefixSkipped(logger, skipped, configuredUsable ? configured : string.Empty);
             }
         }
-        else if (configuredUsable && configured.Length > 0 && Volatile.Read(ref _prefix) is not null
+        else if (configuredUsable && configured.Length > 0 && Volatile.Read(ref _resolved) is not null
             && !string.Equals(configured, prefix, StringComparison.Ordinal)
             && Interlocked.Exchange(ref _mismatchLogged, 1) == 0)
         {
@@ -195,9 +207,9 @@ internal sealed partial class ConnectorKeyPrefix
 
     private bool TryGetKnown(IDatabase database, string configured, out string prefix)
     {
-        if (Volatile.Read(ref _prefix) is { } kept)
+        if (Volatile.Read(ref _resolved) is { } kept)
         {
-            prefix = kept;
+            prefix = kept.Text;
             return true;
         }
 
@@ -209,7 +221,7 @@ internal sealed partial class ConnectorKeyPrefix
 
         if (TryRead(database, out var read))
         {
-            prefix = Accept(read) ? Volatile.Read(ref _prefix)! : configured;
+            prefix = Accept(read) ? Volatile.Read(ref _resolved)!.Text : configured;
             return true;
         }
 
@@ -222,7 +234,7 @@ internal sealed partial class ConnectorKeyPrefix
     {
         if (TryDecode(prefix, out var text))
         {
-            Interlocked.CompareExchange(ref _prefix, text, null);
+            Interlocked.CompareExchange(ref _resolved, new Resolved(text, prefix), null);
             return true;
         }
 
@@ -240,7 +252,10 @@ internal sealed partial class ConnectorKeyPrefix
             Accept(prefix!);
         }
 
-        Report(logger, configured, configuredUsable, answered ? Volatile.Read(ref _prefix) ?? fallback : fallback);
+        Report(logger, configured, configuredUsable, answered ? Volatile.Read(ref _resolved)?.Text ?? fallback : fallback);
         return answered;
     }
+
+    /// <summary>The text and the bytes it was decoded from, published together.</summary>
+    private sealed record Resolved(string Text, RedisKey Key);
 }

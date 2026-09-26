@@ -47,6 +47,14 @@ public class RedisSetCacheTests(ITestContextAccessor testContextAccessor) : IAsy
     }
 
     [Fact]
+    public void Construction_does_not_resolve_the_server_version()
+    {
+        _ = Sut;
+
+        _ = _connector.DidNotReceive().Version;
+    }
+
+    [Fact]
     public void Uses_se_key_prefix()
     {
         _ = Sut;

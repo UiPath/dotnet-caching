@@ -1,4 +1,5 @@
 using System.Runtime.CompilerServices;
+using System.Text;
 using UiPath.Caching.Config;
 using UiPath.Caching.Policies;
 using UiPath.Caching.Telemetry;
@@ -11,7 +12,9 @@ public abstract class RedisCacheBase : IConnectionState, IDisposable
     private readonly IConnectionState _connectionState;
     private readonly KeyMasker _masker;
     private readonly string _keyPrefix;
+    private readonly RedisKey _keyPrefixKey;
     private readonly ConnectorKeyPrefix _connectorPrefix;
+    private bool? _supportsExpireTime;
     private bool _disposed;
 
     protected RedisCacheBase(
@@ -26,6 +29,7 @@ public abstract class RedisCacheBase : IConnectionState, IDisposable
         ArgumentNullException.ThrowIfNull(clock);
         _masker = KeyMasker.For(keyMaskingPolicy, KnownCacheProviderNames.Redis);
         _keyPrefix = redisCacheOptions.KeyPrefix ?? string.Empty;
+        _keyPrefixKey = _keyPrefix.Length == 0 ? default : Encoding.UTF8.GetBytes(_keyPrefix);
         _connectorPrefix = ConnectorKeyPrefix.For(redis);
         _redis = redis;
         Telemetry = telemetryProvider;
@@ -37,7 +41,6 @@ public abstract class RedisCacheBase : IConnectionState, IDisposable
         DefaultExpiration = DefaultPolicy.DistributedExpiration;
         Clock = clock;
         KeyReadTelemetryEnabled = redisCacheOptions.KeyReadTelemetryEnabled;
-        SupportsExpireTime = RedisUtils.SupportsExpireTime(redis.Version);
         RefreshFlags = redisCacheOptions.AwaitRefresh
             ? CommandFlags.DemandMaster
             : CommandFlags.DemandMaster | CommandFlags.FireAndForget;
@@ -70,8 +73,8 @@ public abstract class RedisCacheBase : IConnectionState, IDisposable
 
     protected bool KeyReadTelemetryEnabled { get; }
 
-    /// <summary>EXPIRETIME arrived in Redis 7; before it, an expiration is the TTL added to now.</summary>
-    protected bool SupportsExpireTime { get; }
+    /// <summary>EXPIRETIME arrived in Redis 7; before it, an expiration is the TTL added to now. Read on first use, since resolving the server version connects.</summary>
+    protected bool SupportsExpireTime => _supportsExpireTime ??= RedisUtils.SupportsExpireTime(_redis.Version);
 
     protected CachePolicy DefaultPolicy { get; }
 
@@ -91,11 +94,12 @@ public abstract class RedisCacheBase : IConnectionState, IDisposable
     protected static TimeSpan CallerDuration(TimeSpan expiration, [CallerArgumentExpression(nameof(expiration))] string? paramName = null) =>
         CacheExpiration.ThrowIfNotPositive(expiration, paramName);
 
-    /// <summary>One command under <paramref name="pipeline"/>: timed by <paramref name="operation"/>, tracked as a hit by <paramref name="isHit"/>, and on failure logged through <paramref name="logFailure"/> and answered with <paramref name="fallback"/>.</summary>
-    protected static async ValueTask<TResult> RunAsync<TResult>(
+    /// <summary>One command under <paramref name="pipeline"/>, handed <paramref name="state"/> so it needs no closure: timed by <paramref name="operation"/>, tracked as a hit by <paramref name="isHit"/>, and on failure logged through <paramref name="logFailure"/> and answered with <paramref name="fallback"/>.</summary>
+    protected static async ValueTask<TResult> RunAsync<TState, TResult>(
         IResiliencePipeline pipeline,
-        ITelemetryOperation operation,
-        Func<CancellationToken, ValueTask<TResult>> command,
+        TelemetryScope operation,
+        Func<TState, CancellationToken, ValueTask<TResult>> command,
+        TState state,
         TResult fallback,
         Func<TResult, bool> isHit,
         Action<Exception> logFailure,
@@ -105,7 +109,7 @@ public abstract class RedisCacheBase : IConnectionState, IDisposable
         try
         {
             token.ThrowIfCancellationRequested();
-            ret = await pipeline.ExecuteAsync(command, fallback, token).ConfigureAwait(false);
+            ret = await pipeline.ExecuteAsync(command, state, fallback, token).ConfigureAwait(false);
             operation.Stop();
         }
         catch (Exception ex)
@@ -121,21 +125,21 @@ public abstract class RedisCacheBase : IConnectionState, IDisposable
         return ret;
     }
 
-    protected void TrackRead(ITelemetryOperation operation, bool hit, RedisKey key)
+    protected void TrackRead(TelemetryScope operation, bool hit, RedisKey key)
     {
         operation.Track(hit, 1);
-        if (KeyReadTelemetryEnabled)
+        if (KeyReadTelemetryEnabled && operation.IsEnabled)
         {
             operation.TrackKeyReads([(key.ToString(), hit)]);
         }
     }
 
     /// <summary>The key's TTL, or null when it has none, the key is invalid or the command failed.</summary>
-    protected ValueTask<TimeSpan?> KeyTimeToLiveAsync(IResiliencePipeline pipeline, ITelemetryOperation operation, IRedisKeyStrategy keyStrategy, CacheKey cacheKey, Action<Exception> logFailure, CancellationToken token) =>
-        RunAsync(pipeline, operation, token => Database.KeyTimeToLiveAsync(ToRedisKey(keyStrategy, cacheKey, token), CommandFlags.PreferReplica).AsValueTask(), (TimeSpan?)null, static timeToLive => timeToLive != null, logFailure, token);
+    protected ValueTask<TimeSpan?> KeyTimeToLiveAsync(IResiliencePipeline pipeline, TelemetryScope operation, IRedisKeyStrategy keyStrategy, CacheKey cacheKey, Action<Exception> logFailure, CancellationToken token) =>
+        RunAsync(pipeline, operation, static (s, token) => s.Self.Database.KeyTimeToLiveAsync(ToRedisKey(s.Strategy, s.Key, token), CommandFlags.PreferReplica).AsValueTask(), (Self: this, Strategy: keyStrategy, Key: cacheKey), (TimeSpan?)null, static timeToLive => timeToLive != null, logFailure, token);
 
     /// <summary>The key's expiration: EXPIRETIME on Redis 7, else the TTL added to now, under the same operation.</summary>
-    protected async ValueTask<DateTimeOffset?> KeyExpireTimeAsync(IResiliencePipeline pipeline, ITelemetryOperation operation, IRedisKeyStrategy keyStrategy, CacheKey cacheKey, Action<Exception> logFailure, CancellationToken token)
+    protected async ValueTask<DateTimeOffset?> KeyExpireTimeAsync(IResiliencePipeline pipeline, TelemetryScope operation, IRedisKeyStrategy keyStrategy, CacheKey cacheKey, Action<Exception> logFailure, CancellationToken token)
     {
         if (!SupportsExpireTime)
         {
@@ -143,7 +147,7 @@ public abstract class RedisCacheBase : IConnectionState, IDisposable
             return timeToLive.HasValue ? Clock.ToDateTimeOffset(timeToLive.Value) : null;
         }
 
-        return await RunAsync(pipeline, operation, token => Database.KeyExpireTimeAsync(ToRedisKey(keyStrategy, cacheKey, token), CommandFlags.PreferReplica).AsValueTask(), (DateTime?)null, static expireTime => expireTime.HasValue, logFailure, token).ConfigureAwait(false);
+        return await RunAsync(pipeline, operation, static (s, token) => s.Self.Database.KeyExpireTimeAsync(ToRedisKey(s.Strategy, s.Key, token), CommandFlags.PreferReplica).AsValueTask(), (Self: this, Strategy: keyStrategy, Key: cacheKey), (DateTime?)null, static expireTime => expireTime.HasValue, logFailure, token).ConfigureAwait(false);
     }
 
     /// <summary>Write duration when the call carries none: policy, then cache default, then <see cref="CachePolicy.DefaultDistributedExpiration"/>; never unbounded by omission.</summary>
@@ -209,7 +213,7 @@ public abstract class RedisCacheBase : IConnectionState, IDisposable
         var database = Database;
         var multiplexer = database.Multiplexer;
         // Outside the pipeline's latency cap, so this never waits on the probe.
-        var prefix = _connectorPrefix.Get(database, _keyPrefix, logger);
+        var prefix = _connectorPrefix.GetKey(database, _keyPrefix, _keyPrefixKey, logger);
         var slot = multiplexer.GetHashSlot(WithConnectorPrefix(prefix, redisKeys[0]));
         for (var i = 1; i < redisKeys.Length; i++)
         {
@@ -227,7 +231,7 @@ public abstract class RedisCacheBase : IConnectionState, IDisposable
     }
 
     /// <summary>The key as the server hashes it, with the prefix the connector's <see cref="IDatabase"/> applies through <c>WithKeyPrefix</c>.</summary>
-    private static RedisKey WithConnectorPrefix(string prefix, RedisKey key) => prefix.Length == 0 ? key : key.Prepend(prefix);
+    private static RedisKey WithConnectorPrefix(RedisKey prefix, RedisKey key) => key.Prepend(prefix);
 
     /// <summary>Runs inside the command, so a null key or a cancelled token is logged and answered like any other failed read.</summary>
     private static RedisKey ToRedisKey(IRedisKeyStrategy keyStrategy, CacheKey cacheKey, CancellationToken token)

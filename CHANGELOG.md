@@ -8,13 +8,47 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 
 ### Added
 
+- **`IResiliencePipeline.ExecuteAsync<TResult, TState>`.** Hands a state value to a static callback, so a Redis
+  command no longer allocates a closure and a delegate. The Polly pipeline boxes the state once instead, since Polly
+  copies its state into each strategy's state machine. Its default implementation forwards to the existing overload,
+  so a custom pipeline keeps compiling; implement it to drop the closure there too.
+
 - **`RedisCacheBase.RunAsync`, `KeyTimeToLiveAsync`, `KeyExpireTimeAsync` and `SupportsExpireTime`.** The
   one-command shape the Redis caches repeat, in one place: a pipeline call timed by a telemetry operation, tracked
   as a hit by a predicate, and on failure logged and answered with a fallback. The thirteen single-command members
   of `RedisCache`, `RedisHashCache` and `RedisSetCache` forward to it; the TTL and expiration reads, with the
   pre-Redis-7 fallback from TTL to expiration, live in the base once instead of in each cache; and `RedisHashCache`
   reads a hash's fields in one method instead of two copies of the loop. Protected, for a subclass that adds a
-  command of its own.
+  command of its own. `SupportsExpireTime` resolves the server version on first use, so constructing a cache
+  that never reads an expiration, such as `RedisSetCache`, does not connect.
+
+### Changed
+
+- **`PrefixRedisKeyStrategy` carries its prefix as the key's byte prefix.** `GetRedisKey` no longer concatenates a
+  string per key: the prefix is encoded once and StackExchange.Redis writes it next to the key name. The key the server
+  receives and its cluster slot are unchanged. **Breaking**: the protected `Prefix` and `Separator` setters are
+  removed, since changing them would no longer change the keys, and a surrogate `separator` throws
+  `ArgumentException`, since encoded apart from the name it could no longer pair with a name that starts with its
+  low half.
+
+- **The Redis caches write through a pooled buffer.** With the built-in JSON serializer, a value is serialized
+  into a buffer rented from `ArrayPool<byte>.Shared` and returned once the write has completed, instead of an array
+  the size of the payload for every write. The bytes match `Serialize`, custom `JsonSerializerOptions` included. A
+  subclass of it, like any other serializer, keeps lending its own memory.
+  Only writes use it: the write pipeline never abandons a command, so a buffer is never returned while the client
+  may still be sending it.
+
+### Removed
+
+- **`ITelemetryOperation`, `TelemetryOperation`, `NullTelemetryOperation` and `ICachingTelemetryProvider.StartOperation`.**
+  The caches time each operation with `TelemetryScope`, a struct read from the cache's `TimeProvider`, instead of
+  allocating an operation object per call with telemetry on. It reports through the provider's `TrackMetric` and
+  `TrackDependency` with the same metric names and tags, so a provider that implements those, as a provider
+  normally does, needs no change. **Breaking** for code that calls `StartOperation`, overrides it, or references
+  the removed types: time an operation with `new TelemetryScope(provider, timeProvider, providerName, method, type)`
+  instead. `TelemetryScope` ships in `UiPath.Caching`, since the abstractions package holds no implementations. The tag
+  constants moved from `TelemetryOperation` to `TelemetryScope`, and `NullTelemetryProvider` lost its
+  `StartOperation` overloads.
 
 ### Fixed
 

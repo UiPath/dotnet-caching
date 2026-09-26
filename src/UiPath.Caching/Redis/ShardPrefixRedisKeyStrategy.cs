@@ -7,5 +7,5 @@ public class ShardPrefixRedisKeyStrategy : PrefixRedisKeyStrategy
     }
 
     public override RedisKey GetRedisKey(CacheKey key) =>
-        $"{Prefix}{Separator}{RedisHashTag.EnsureTag(key.Name, nameof(ShardPrefixRedisKeyStrategy))}";
+        ((RedisKey)RedisHashTag.EnsureTag(key.Name, nameof(ShardPrefixRedisKeyStrategy))).Prepend(KeyPrefix);
 }
