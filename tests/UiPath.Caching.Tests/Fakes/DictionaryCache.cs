@@ -1,6 +1,6 @@
 namespace UiPath.Caching.Tests.Fakes;
 
-/// <summary>Minimal in-memory <see cref="ICache"/> exercising the batch <c>GetOrAddAsync</c> default interface methods.</summary>
+/// <summary>Minimal in-memory <see cref="ICache"/> whose batch <c>GetOrAddAsync</c> overloads forward to <see cref="BatchGetOrAdd"/>, as an implementation outside the library would.</summary>
 internal sealed class DictionaryCache : ICache
 {
     private readonly Dictionary<CacheKey, object?> _store = [];
@@ -56,6 +56,18 @@ internal sealed class DictionaryCache : ICache
 
     public ValueTask<T?> GetOrAddAsync<T>(CacheKey cacheKey, Func<CancellationToken, Task<T?>> generator, DateTimeOffset expiration, CachePolicy? policy, CancellationToken token = default) =>
         throw new NotSupportedException();
+
+    public ValueTask<KeyValuePair<TState, T?>[]> GetOrAddAsync<T, TState>(KeyValuePair<CacheKey, TState>[] entries, Func<TState[], CancellationToken, Task<KeyValuePair<TState, T?>[]>> generator, CachePolicy? policy, CancellationToken token = default)
+        where TState : notnull
+        => BatchGetOrAdd.RunAsync(this, entries, generator, (pairs, t) => SetAsync(pairs, policy, t), policy, token);
+
+    public ValueTask<KeyValuePair<TState, T?>[]> GetOrAddAsync<T, TState>(KeyValuePair<CacheKey, TState>[] entries, Func<TState[], CancellationToken, Task<KeyValuePair<TState, T?>[]>> generator, TimeSpan expiration, CachePolicy? policy, CancellationToken token = default)
+        where TState : notnull
+        => BatchGetOrAdd.RunAsync(this, entries, generator, (pairs, t) => SetAsync(pairs, expiration, policy, t), policy, token);
+
+    public ValueTask<KeyValuePair<TState, T?>[]> GetOrAddAsync<T, TState>(KeyValuePair<CacheKey, TState>[] entries, Func<TState[], CancellationToken, Task<KeyValuePair<TState, T?>[]>> generator, DateTimeOffset expiration, CachePolicy? policy, CancellationToken token = default)
+        where TState : notnull
+        => BatchGetOrAdd.RunAsync(this, entries, generator, (pairs, t) => SetAsync(pairs, expiration, policy, t), policy, token);
 
     public ValueTask<bool> SetAsync<T>(CacheKey cacheKey, T? value, CachePolicy? policy, CancellationToken token = default) =>
         SetAsync([new KeyValuePair<CacheKey, T?>(cacheKey, value)], policy, token);

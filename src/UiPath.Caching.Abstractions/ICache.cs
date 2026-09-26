@@ -6,8 +6,10 @@ namespace UiPath.Caching;
 /// <see cref="CachePolicy.DistributedExpiration"/>, then the cache default; a caller that passes one
 /// means it, so a duration that is not positive — or a deadline that has already passed — is
 /// rejected with <see cref="ArgumentOutOfRangeException"/> rather than silently ignored. See
-/// <see cref="CacheExpiration"/>. The no-op implementations in this package read no argument at all
+/// <c>CacheExpiration</c>. The no-op implementations in this package read no argument at all
 /// and so enforce nothing.</para>
+/// <para><b>Batch GetOrAdd.</b> An implementation outside the library can forward the batch
+/// <c>GetOrAddAsync</c> overloads to <c>BatchGetOrAdd.RunAsync</c> in <c>UiPath.Caching</c>.</para>
 /// </remarks>
 public interface ICache : IDisposable
 {
@@ -28,16 +30,13 @@ public interface ICache : IDisposable
     ValueTask<T?> GetOrAddAsync<T>(CacheKey cacheKey, Func<CancellationToken, Task<T?>> generator, DateTimeOffset expiration, CachePolicy? policy, CancellationToken token = default);
 
     ValueTask<KeyValuePair<TState, T?>[]> GetOrAddAsync<T, TState>(KeyValuePair<CacheKey, TState>[] entries, Func<TState[], CancellationToken, Task<KeyValuePair<TState, T?>[]>> generator, CachePolicy? policy, CancellationToken token = default)
-        where TState : notnull
-        => BatchGetOrAdd.RunAsync(this, entries, generator, (pairs, t) => SetAsync(pairs, policy, t), policy, token);
+        where TState : notnull;
 
     ValueTask<KeyValuePair<TState, T?>[]> GetOrAddAsync<T, TState>(KeyValuePair<CacheKey, TState>[] entries, Func<TState[], CancellationToken, Task<KeyValuePair<TState, T?>[]>> generator, TimeSpan expiration, CachePolicy? policy, CancellationToken token = default)
-        where TState : notnull
-        => BatchGetOrAdd.RunAsync(this, entries, generator, (pairs, t) => SetAsync(pairs, expiration, policy, t), policy, token);
+        where TState : notnull;
 
     ValueTask<KeyValuePair<TState, T?>[]> GetOrAddAsync<T, TState>(KeyValuePair<CacheKey, TState>[] entries, Func<TState[], CancellationToken, Task<KeyValuePair<TState, T?>[]>> generator, DateTimeOffset expiration, CachePolicy? policy, CancellationToken token = default)
-        where TState : notnull
-        => BatchGetOrAdd.RunAsync(this, entries, generator, (pairs, t) => SetAsync(pairs, expiration, policy, t), policy, token);
+        where TState : notnull;
 
     ValueTask<bool> RemoveAsync<T>(CacheKey cacheKey, CancellationToken token = default);
 
