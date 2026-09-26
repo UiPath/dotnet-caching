@@ -50,6 +50,7 @@ internal sealed partial class RedisCache : RedisCacheBase, ICache
 
     public string Name => KnownCacheProviderNames.Redis;
 
+    [OverloadResolutionPriority(1)]
     public ValueTask<T?> GetAsync<T>(CacheKey cacheKey, CachePolicy? policy, CancellationToken token = default)
     {
         NotCacheableException.ThrowIfNotCacheable<T>();

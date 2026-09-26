@@ -37,8 +37,22 @@ public class Cache<T> : ICache<T>
     public ValueTask<bool> ContainsAsync(CacheKey cacheKey, CancellationToken token = default) =>
         _cache.ContainsAsync<T>(GetCacheKey(cacheKey), token);
 
+    [OverloadResolutionPriority(1)]
     public ValueTask<T?> GetAsync(CacheKey cacheKey, CancellationToken token = default) =>
         _cache.GetAsync<T>(GetCacheKey(cacheKey), policy: Policy, token: token);
+
+    public ValueTask<T?> GetAsync(Span<char> cacheKey, CancellationToken token = default)
+    {
+        if (_cacheKeyStrategy is DefaultCacheKeyStrategy)
+        {
+            return _cache.GetAsync<T>(cacheKey, Policy, token);
+        }
+
+        Span<char> composed = stackalloc char[SpanKey.MaxLength];
+        return SpanKey.TryCompose<T>(_cacheKeyStrategy, cacheKey, composed, out var written, CancellationToken.None)
+            ? _cache.GetAsync<T>(composed[..written], Policy, token)
+            : GetAsync(new CacheKey(cacheKey), token);
+    }
 
     public ValueTask<KeyValuePair<CacheKey, T?>[]> GetAsync(CacheKey[] cacheKeys, CancellationToken token = default) =>
         _cache.GetAsync<T>(GetCacheKeys(cacheKeys), policy: Policy, token: token);

@@ -479,6 +479,12 @@ public class NamedCachingTests
     private sealed class ThrowingCacheKeyStrategy : ICacheKeyStrategy
     {
         public CacheKey GetCacheKey<T>(CacheKey key) => throw new NotSupportedException($"strategy reached for '{key}'");
+
+        public bool TryGetCacheKey<T>(ReadOnlySpan<char> key, Span<char> destination, out int written)
+        {
+            written = 0;
+            return false;
+        }
     }
 
     private sealed class ThrowingHostedProbe : IHostedService

@@ -54,13 +54,13 @@ public class MultilayerCacheTryAddTests(ITestContextAccessor testContextAccessor
 
         added.Should().BeTrue();
         await _innerCache.Received(1).TryAddAsync<string?>(_cacheKey, value, Arg.Any<DateTimeOffset>(), Arg.Any<CachePolicy?>(), Arg.Any<CancellationToken>());
-        _memoryCache.Received(1).CreateEntry(_cacheKey);
+        _memoryCache.Received(1).CreateEntry(_cacheKey.Name);
     }
 
     [Fact]
     public async Task A_local_hit_reports_the_loss_without_asking_the_L2()
     {
-        _memoryCache.TryGetValue(_cacheKey, out Arg.Any<object?>())
+        _memoryCache.TryGetValue(_cacheKey.Name, out Arg.Any<object?>())
             .Returns(x =>
             {
                 x[1] = new TestCacheEntry<string?> { Value = _fixture.Create<string>() };
@@ -82,7 +82,7 @@ public class MultilayerCacheTryAddTests(ITestContextAccessor testContextAccessor
         var added = await Sut.TryAddAsync(_cacheKey, _fixture.Create<string>(), policy: null, token: Ct);
 
         added.Should().BeFalse();
-        _memoryCache.DidNotReceive().CreateEntry(_cacheKey);
+        _memoryCache.DidNotReceive().CreateEntry(_cacheKey.Name);
         await _topic.DidNotReceive().PublishAsync(Arg.Any<ICacheEvent>(), Arg.Any<CancellationToken>());
     }
 
@@ -120,7 +120,7 @@ public class MultilayerCacheTryAddTests(ITestContextAccessor testContextAccessor
         var added = await Sut.TryAddAsync(_cacheKey, _fixture.Create<string>(), policy: null, token: Ct);
 
         added.Should().BeFalse();
-        _memoryCache.DidNotReceive().CreateEntry(_cacheKey);
+        _memoryCache.DidNotReceive().CreateEntry(_cacheKey.Name);
     }
 
     [Fact]
@@ -132,7 +132,7 @@ public class MultilayerCacheTryAddTests(ITestContextAccessor testContextAccessor
         var added = await Sut.TryAddAsync(_cacheKey, _fixture.Create<string>(), policy: null, token: Ct);
 
         added.Should().BeFalse("an inner cache that cannot arbitrate is logged and reported as a loss, which is the fail-closed direction the ambiguous false already covers");
-        _memoryCache.DidNotReceive().CreateEntry(_cacheKey);
+        _memoryCache.DidNotReceive().CreateEntry(_cacheKey.Name);
     }
 
     /// <summary>
@@ -147,7 +147,7 @@ public class MultilayerCacheTryAddTests(ITestContextAccessor testContextAccessor
 
         (await act.Should().ThrowAsync<ArgumentOutOfRangeException>()).And.ParamName.Should().Be("expiration");
         await _innerCache.DidNotReceive().TryAddAsync<string?>(_cacheKey, Arg.Any<string?>(), Arg.Any<DateTimeOffset>(), Arg.Any<CachePolicy?>(), Arg.Any<CancellationToken>());
-        _memoryCache.DidNotReceive().CreateEntry(_cacheKey);
+        _memoryCache.DidNotReceive().CreateEntry(_cacheKey.Name);
     }
 
     /// <inheritdoc cref="TryAdd_rejects_an_expiration_that_has_already_passed"/>
@@ -195,7 +195,7 @@ public class MultilayerCacheTryAddTests(ITestContextAccessor testContextAccessor
         var added = await Sut.TryAddAsync(_cacheKey, _fixture.Create<string>(), policy: null, token: Ct);
 
         added.Should().BeTrue();
-        _memoryCache.Received(1).CreateEntry(_cacheKey);
+        _memoryCache.Received(1).CreateEntry(_cacheKey.Name);
     }
 
     [Fact]
@@ -210,7 +210,7 @@ public class MultilayerCacheTryAddTests(ITestContextAccessor testContextAccessor
         var added = await Sut.TryAddAsync(_cacheKey, _fixture.Create<string>(), policy: null, token: Ct);
 
         added.Should().BeFalse("a local-only claim would be granted to every node independently");
-        _memoryCache.DidNotReceive().CreateEntry(_cacheKey);
+        _memoryCache.DidNotReceive().CreateEntry(_cacheKey.Name);
     }
 
     [Fact]
@@ -258,7 +258,7 @@ public class MultilayerCacheTryAddTests(ITestContextAccessor testContextAccessor
         var added = await Sut.TryAddAsync(_cacheKey, default(string), policy: null, token: Ct);
 
         added.Should().BeFalse();
-        _memoryCache.DidNotReceive().Remove(_cacheKey);
+        _memoryCache.DidNotReceive().Remove(_cacheKey.Name);
         await _innerCache.DidNotReceive().RemoveAsync<string>(_cacheKey, Arg.Any<CancellationToken>());
         await _innerCache.DidNotReceive().TryAddAsync<string?>(_cacheKey, Arg.Any<string?>(), Arg.Any<DateTimeOffset>(), Arg.Any<CachePolicy?>(), Arg.Any<CancellationToken>());
     }

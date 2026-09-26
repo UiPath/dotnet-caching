@@ -50,6 +50,7 @@ internal sealed partial class RedisHashCache : RedisCacheBase, IHashCache
 
     public string Name => KnownCacheProviderNames.Redis;
 
+    [OverloadResolutionPriority(1)]
     public async ValueTask<T?> GetItemAsync<T>(CacheKey cacheKey, string field, CachePolicy? policy, CancellationToken token = default)
     {
         NotCacheableException.ThrowIfNotCacheable<T>();
@@ -57,6 +58,7 @@ internal sealed partial class RedisHashCache : RedisCacheBase, IHashCache
         return await GetInnerAsync<T?>(cacheKey, field, token);
     }
 
+    [OverloadResolutionPriority(1)]
     public async ValueTask<IDictionary<string, T?>> GetAsync<T>(CacheKey cacheKey, CachePolicy? policy, CancellationToken token = default)
     {
         NotCacheableException.ThrowIfNotCacheable<T>();
