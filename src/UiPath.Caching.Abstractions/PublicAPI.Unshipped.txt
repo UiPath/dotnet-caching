@@ -2,3 +2,4 @@
 UiPath.Caching.Policies.IDisruptionState
 UiPath.Caching.Policies.IDisruptionState.InProgress.get -> bool
 UiPath.Caching.Policies.IDisruptionState.SuggestedTimeout.get -> System.TimeSpan?
+UiPath.Caching.Telemetry.NullTelemetryProvider.StartOperation(string! providerName, System.Type! cacheObject, string! methodName = "") -> UiPath.Caching.Telemetry.ITelemetryOperation!

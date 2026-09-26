@@ -11,7 +11,7 @@ public class CloudCacheEventFactory : ICacheEventFactory
     public CloudCacheEventFactory(IOptions<CacheOptions> optionsAccessor)
     {
         _sourceUri = optionsAccessor.Value.SourceUri ?? CacheOptions.MachineUri;
-        _knownEventTypes = typeof(KnownEventTypes).GetAllPublicConstantValues<string>().ToImmutableHashSet(StringComparer.InvariantCultureIgnoreCase);
+        _knownEventTypes = typeof(KnownEventTypes).GetAllPublicConstantValues<string>().ToImmutableHashSet(StringComparer.OrdinalIgnoreCase);
     }
 
     public ICacheEvent Create(string cacheName, string eventType, CacheEventData eventData, string? id = null)
