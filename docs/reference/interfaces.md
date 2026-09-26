@@ -877,8 +877,6 @@ What it is *not*: a way to explain a negative result. It is a cached snapshot re
 ```csharp
 public interface ICachingTelemetryProvider
 {
-    ITelemetryOperation StartOperation(string providerName, Type cacheObject, string methodName = "");
-
     void TrackDependency(string type, string target, string name, string data,
         DateTimeOffset startTime, TimeSpan duration, string resultCode, bool success,
         ReadOnlySpan<KeyValuePair<string, string>> properties = default,
@@ -897,7 +895,7 @@ public interface ICachingTelemetryProvider
 }
 ```
 
-`ICachingTelemetryProvider` is the single seam through which the cache runtime emits all observability signals: dependency traces, custom events, exceptions, and metrics. The `properties` and `metrics` parameters use `ReadOnlySpan<KeyValuePair<...>>` — a zero-allocation, stack-allocated tag list — to avoid heap pressure on hot paths. Default no-op implementations are provided for all methods so implementers can override only the signals they care about. `StartOperation` returns an `ITelemetryOperation` scope that wraps a dependency trace; the runtime calls it automatically around each cache operation.
+`ICachingTelemetryProvider` is the single seam through which the cache runtime emits all observability signals: dependency traces, custom events, exceptions, and metrics. The `properties` and `metrics` parameters use `ReadOnlySpan<KeyValuePair<...>>` — a zero-allocation, stack-allocated tag list — to avoid heap pressure on hot paths. Default no-op implementations are provided for all methods so implementers can override only the signals they care about. The runtime times each cache operation with a `TelemetryScope` and reports it through `TrackMetric`, and through `TrackDependency` when per-key read telemetry is on.
 
 **Use this when:**
 

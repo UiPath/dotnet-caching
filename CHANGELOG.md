@@ -8,6 +8,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 
 ### Added
 
+- **`IResiliencePipeline.ExecuteAsync<TResult, TState>`.** Hands a state value to a static callback, so a Redis
+  command no longer allocates a closure and a delegate. The Polly pipeline boxes the state once instead, since Polly
+  copies its state into each strategy's state machine. Its default implementation forwards to the existing overload,
+  so a custom pipeline keeps compiling; implement it to drop the closure there too.
+
 - **`ResiliencePoliciesOptions.DisruptionRequestTimeout`.** Replaces `RequestTimeout` while an announced
   window is open, so a cap tight enough to fall through to another tier does not cut short a window the
   client is deliberately relaxing its own timeouts for. Resolved per operation through Polly's timeout generator
@@ -51,6 +56,18 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
   one by one. Defaulted to an empty sequence, so an existing implementer neither breaks nor changes behaviour.
 
 ### Changed
+
+- **`PrefixRedisKeyStrategy` carries its prefix as the key's byte prefix.** `GetRedisKey` no longer concatenates a
+  string per key: the prefix is encoded once and StackExchange.Redis writes it next to the key name. The key the server
+  receives and its cluster slot are unchanged. **Breaking**: the protected `Prefix` and `Separator` setters are
+  removed, since changing them would no longer change the keys.
+
+- **The Redis caches write through a pooled buffer.** With the built-in JSON serializer, a value is serialized
+  into a buffer rented from `ArrayPool<byte>.Shared` and returned once the write has completed, instead of an array
+  the size of the payload for every write. The bytes match `Serialize`, custom `JsonSerializerOptions` included. A
+  subclass of it, like any other serializer, keeps lending its own memory.
+  Only writes use it: the write pipeline never abandons a command, so a buffer is never returned while the client
+  may still be sending it.
 
 - **`RedisConnectionOptions.ConnectionFactory` is asynchronous.** It is now
   `Func<ConfigurationOptions, CancellationToken, ValueTask<IConnectionMultiplexer>>` and is awaited. The synchronous
@@ -115,6 +132,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
   `[Experimental]` in 3.3.0, so the pragma suppressed a diagnostic that is no longer raised.
 
 ### Removed
+
+- **`ITelemetryOperation`, `TelemetryOperation`, `NullTelemetryOperation` and `ICachingTelemetryProvider.StartOperation`.**
+  The caches time each operation with `TelemetryScope`, a struct read from the cache's `TimeProvider`, instead of
+  allocating an operation object per call with telemetry on. It reports through the provider's `TrackMetric` and
+  `TrackDependency` with the same metric names and tags, so a provider that implements those, as a provider
+  normally does, needs no change. **Breaking** for code that calls `StartOperation`, overrides it, or references
+  the removed types: time an operation with `new TelemetryScope(provider, timeProvider, providerName, method, type)`
+  instead. `TelemetryScope` ships in `UiPath.Caching`, since the abstractions package holds no implementations. The tag
+  constants moved from `TelemetryOperation` to `TelemetryScope`, and `NullTelemetryProvider` lost its
+  `StartOperation` overloads.
 
 - **`RedisPlannedMaintenance`'s constructors.** It takes `(ICachingTelemetryProvider, IRedisConnector, TimeProvider)`
   now; the configuration provider, multiplexer factory, logger, options and configurators went with the connection

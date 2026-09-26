@@ -38,7 +38,7 @@ public class RedisHashCacheTests(ITestContextAccessor testContextAccessor) : IAs
 
     private RedisHashCache Sut => _sut ??= _fixture.Create<RedisHashCache>();
 
-    private IEnumerable<DependencyRecord> ReadDeps => _telemetry.Dependencies.Where(d => d.Type == TelemetryOperation.DependencyType);
+    private IEnumerable<DependencyRecord> ReadDeps => _telemetry.Dependencies.Where(d => d.Type == TelemetryScope.DependencyType);
 
     [Fact]
     public async Task Get_data_from_cacheKey_cache()
@@ -870,6 +870,68 @@ public class RedisHashCacheTests(ITestContextAccessor testContextAccessor) : IAs
         captured!.Should().ContainSingle()
             .Which.Name.Should().Be((RedisValue)KnownFieldNames.MetadataKey);
         captured![0].Value.Length().Should().BeGreaterThan(0, "metadata serialized into the marker field, not lost");
+    }
+
+    [Fact]
+    public async Task SetAsync_with_metadata_writes_the_bytes_Serialize_writes()
+    {
+        var metadata = new Dictionary<string, string?> { ["owner"] = "a", ["version"] = "2" };
+        byte[]? written = null;
+        // Copied during the call: the buffer goes back to the pool once the write completes.
+        _transaction.HashSetAsync(_redisKey, Arg.Do<HashEntry[]>(h => written = ((ReadOnlyMemory<byte>)h.Single(e => e.Name == KnownFieldNames.MetadataKey).Value).ToArray()), Arg.Any<CommandFlags>())
+            .Returns(Task.CompletedTask);
+        _transaction.ExecuteAsync(Arg.Any<CommandFlags>()).Returns(true);
+
+        await Sut.SetAsync(
+            _cacheKey,
+            new Dictionary<string, string?> { ["field"] = "value" },
+            new HashCacheEntryOptions(TimeToLive: TimeSpan.FromMinutes(1), Metadata: metadata),
+            token: testContextAccessor.Current.CancellationToken);
+
+        written.Should().Equal(_serializer.Serialize(metadata));
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task SetMetadataAsync_writes_the_bytes_Serialize_writes(bool cacheNullValues)
+    {
+        _redisCacheOptions.CacheNullValues = cacheNullValues;
+        _sut = null;
+        var metadata = new Dictionary<string, string?> { ["owner"] = "a", ["version"] = "2" };
+        byte[]? written = null;
+        _database.KeyExistsAsync(_redisKey, Arg.Any<CommandFlags>()).Returns(true);
+        // Copied during the call: the buffer goes back to the pool once the write completes.
+        _database.HashSetAsync(_redisKey, Arg.Any<RedisValue>(), Arg.Do<RedisValue>(v => written = ((ReadOnlyMemory<byte>)v).ToArray()), Arg.Any<When>(), Arg.Any<CommandFlags>())
+            .Returns(true);
+        _transaction.HashSetAsync(_redisKey, Arg.Any<RedisValue>(), Arg.Do<RedisValue>(v => written = ((ReadOnlyMemory<byte>)v).ToArray()), Arg.Any<When>(), Arg.Any<CommandFlags>())
+            .Returns(true);
+        // AutoFixture cannot build a ConditionResult, and the cache discards it.
+        _transaction.AddCondition(Arg.Any<Condition>()).Returns((ConditionResult)null!);
+        _transaction.ExecuteAsync(Arg.Any<CommandFlags>()).Returns(true);
+
+        await Sut.SetMetadataAsync<string>(_cacheKey, metadata, testContextAccessor.Current.CancellationToken);
+
+        written.Should().Equal(_serializer.Serialize(metadata));
+    }
+
+    [Fact]
+    public async Task RefreshAsync_with_metadata_writes_the_bytes_Serialize_writes()
+    {
+        var metadata = new Dictionary<string, string?> { ["owner"] = "a", ["version"] = "2" };
+        byte[]? written = null;
+        // Copied during the call: the buffer goes back to the pool once the transaction has executed.
+        _transaction.HashSetAsync(_redisKey, Arg.Do<HashEntry[]>(h => written = ((ReadOnlyMemory<byte>)h.Single(e => e.Name == KnownFieldNames.MetadataKey).Value).ToArray()), Arg.Any<CommandFlags>())
+            .Returns(Task.CompletedTask);
+        _transaction.ExecuteAsync(Arg.Any<CommandFlags>()).Returns(true);
+
+        await Sut.RefreshAsync<string>(
+            _cacheKey,
+            new HashCacheEntryOptions(TimeToLive: TimeSpan.FromMinutes(1), Metadata: metadata),
+            null,
+            testContextAccessor.Current.CancellationToken);
+
+        written.Should().Equal(_serializer.Serialize(metadata));
     }
 
     [Fact]

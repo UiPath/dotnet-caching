@@ -2,4 +2,38 @@
 UiPath.Caching.Policies.IDisruptionState
 UiPath.Caching.Policies.IDisruptionState.InProgress.get -> bool
 UiPath.Caching.Policies.IDisruptionState.SuggestedTimeout.get -> System.TimeSpan?
-UiPath.Caching.Telemetry.NullTelemetryProvider.StartOperation(string! providerName, System.Type! cacheObject, string! methodName = "") -> UiPath.Caching.Telemetry.ITelemetryOperation!
+UiPath.Caching.Policies.EmptyResiliencePipeline.ExecuteAsync<TResult, TState>(System.Func<TState, System.Threading.CancellationToken, System.Threading.Tasks.ValueTask<TResult>>! callback, TState state, TResult defaultValue, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.ValueTask<TResult>
+UiPath.Caching.Policies.IResiliencePipeline.ExecuteAsync<TResult, TState>(System.Func<TState, System.Threading.CancellationToken, System.Threading.Tasks.ValueTask<TResult>>! callback, TState state, TResult defaultValue, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.ValueTask<TResult>
+*REMOVED*UiPath.Caching.Telemetry.ICachingTelemetryProvider.StartOperation(string! providerName, System.Type! cacheObject, string! methodName = "") -> UiPath.Caching.Telemetry.ITelemetryOperation!
+*REMOVED*UiPath.Caching.Telemetry.ITelemetryOperation
+*REMOVED*UiPath.Caching.Telemetry.ITelemetryOperation.Start() -> void
+*REMOVED*UiPath.Caching.Telemetry.ITelemetryOperation.Stop() -> void
+*REMOVED*UiPath.Caching.Telemetry.ITelemetryOperation.Track(bool hit) -> void
+*REMOVED*UiPath.Caching.Telemetry.ITelemetryOperation.Track(bool hit, int keyCount) -> void
+*REMOVED*UiPath.Caching.Telemetry.ITelemetryOperation.TrackKeyReads((string! Key, bool Hit)[]! reads) -> void
+*REMOVED*UiPath.Caching.Telemetry.NullTelemetryOperation
+*REMOVED*UiPath.Caching.Telemetry.NullTelemetryOperation.NullTelemetryOperation() -> void
+*REMOVED*UiPath.Caching.Telemetry.NullTelemetryOperation.Start() -> void
+*REMOVED*UiPath.Caching.Telemetry.NullTelemetryOperation.Stop() -> void
+*REMOVED*UiPath.Caching.Telemetry.NullTelemetryOperation.Track(bool hit) -> void
+*REMOVED*UiPath.Caching.Telemetry.NullTelemetryOperation.Track(bool hit, int keyCount) -> void
+*REMOVED*UiPath.Caching.Telemetry.NullTelemetryOperation.TrackKeyReads((string! Key, bool Hit)[]! reads) -> void
+*REMOVED*UiPath.Caching.Telemetry.NullTelemetryProvider.StartOperation(System.Type! cacheClass, System.Type? cacheObject, string! methodName = "") -> UiPath.Caching.Telemetry.ITelemetryOperation!
+*REMOVED*UiPath.Caching.Telemetry.NullTelemetryProvider.StartOperation(System.Type! cacheClass, string! methodName = "") -> UiPath.Caching.Telemetry.ITelemetryOperation!
+*REMOVED*UiPath.Caching.Telemetry.NullTelemetryProvider.StartOperation<TCache, TSource>(string! methodName = "") -> UiPath.Caching.Telemetry.ITelemetryOperation!
+*REMOVED*UiPath.Caching.Telemetry.NullTelemetryProvider.StartOperation<TCache>(string! methodName = "") -> UiPath.Caching.Telemetry.ITelemetryOperation!
+*REMOVED*UiPath.Caching.Telemetry.TelemetryOperation
+*REMOVED*UiPath.Caching.Telemetry.TelemetryOperation.Start() -> void
+*REMOVED*UiPath.Caching.Telemetry.TelemetryOperation.Stop() -> void
+*REMOVED*UiPath.Caching.Telemetry.TelemetryOperation.TelemetryOperation(string! providerName, string! callerMethod, System.Type! cacheObjectType, UiPath.Caching.Telemetry.ICachingTelemetryProvider! telemetryProvider) -> void
+*REMOVED*UiPath.Caching.Telemetry.TelemetryOperation.Track(bool hit) -> void
+*REMOVED*UiPath.Caching.Telemetry.TelemetryOperation.Track(bool hit, int keyCount) -> void
+*REMOVED*UiPath.Caching.Telemetry.TelemetryOperation.TrackKeyReads((string! Key, bool Hit)[]! reads) -> void
+*REMOVED*const UiPath.Caching.Telemetry.TelemetryOperation.BatchIdTag = "BatchId" -> string!
+*REMOVED*const UiPath.Caching.Telemetry.TelemetryOperation.DependencyType = "Redis" -> string!
+*REMOVED*const UiPath.Caching.Telemetry.TelemetryOperation.KeysTag = "Keys" -> string!
+*REMOVED*const UiPath.Caching.Telemetry.TelemetryOperation.MethodTag = "Method" -> string!
+*REMOVED*const UiPath.Caching.Telemetry.TelemetryOperation.OutcomeTag = "Outcome" -> string!
+*REMOVED*const UiPath.Caching.Telemetry.TelemetryOperation.ProviderTag = "Provider" -> string!
+*REMOVED*const UiPath.Caching.Telemetry.TelemetryOperation.TypeTag = "Type" -> string!
+*REMOVED*static readonly UiPath.Caching.Telemetry.NullTelemetryOperation.Instance -> UiPath.Caching.Telemetry.NullTelemetryOperation!

@@ -1,4 +1,5 @@
 using System.Runtime.CompilerServices;
+using System.Text;
 using UiPath.Caching.Config;
 using UiPath.Caching.Telemetry;
 
@@ -10,6 +11,7 @@ public abstract class RedisCacheBase : IConnectionState, IDisposable
     private readonly IConnectionState _connectionState;
     private readonly KeyMasker _masker;
     private readonly string _keyPrefix;
+    private readonly RedisKey _keyPrefixKey;
     private readonly ConnectorKeyPrefix _connectorPrefix;
     private bool _disposed;
 
@@ -25,6 +27,7 @@ public abstract class RedisCacheBase : IConnectionState, IDisposable
         ArgumentNullException.ThrowIfNull(clock);
         _masker = KeyMasker.For(keyMaskingPolicy, KnownCacheProviderNames.Redis);
         _keyPrefix = redisCacheOptions.KeyPrefix ?? string.Empty;
+        _keyPrefixKey = _keyPrefix.Length == 0 ? default : Encoding.UTF8.GetBytes(_keyPrefix);
         _connectorPrefix = ConnectorKeyPrefix.For(redis);
         _redis = redis;
         Telemetry = telemetryProvider;
@@ -86,10 +89,10 @@ public abstract class RedisCacheBase : IConnectionState, IDisposable
     protected static TimeSpan CallerDuration(TimeSpan expiration, [CallerArgumentExpression(nameof(expiration))] string? paramName = null) =>
         CacheExpiration.ThrowIfNotPositive(expiration, paramName);
 
-    protected void TrackRead(ITelemetryOperation operation, bool hit, RedisKey key)
+    protected void TrackRead(TelemetryScope operation, bool hit, RedisKey key)
     {
         operation.Track(hit, 1);
-        if (KeyReadTelemetryEnabled)
+        if (KeyReadTelemetryEnabled && operation.IsEnabled)
         {
             operation.TrackKeyReads([(key.ToString(), hit)]);
         }
@@ -158,7 +161,7 @@ public abstract class RedisCacheBase : IConnectionState, IDisposable
         var database = Database;
         var multiplexer = database.Multiplexer;
         // Outside the pipeline's latency cap, so this never waits on the probe.
-        var prefix = _connectorPrefix.Get(database, _keyPrefix, logger);
+        var prefix = _connectorPrefix.GetKey(database, _keyPrefix, _keyPrefixKey, logger);
         var slot = multiplexer.GetHashSlot(WithConnectorPrefix(prefix, redisKeys[0]));
         for (var i = 1; i < redisKeys.Length; i++)
         {
@@ -176,5 +179,5 @@ public abstract class RedisCacheBase : IConnectionState, IDisposable
     }
 
     /// <summary>The key as the server hashes it, with the prefix the connector's <see cref="IDatabase"/> applies through <c>WithKeyPrefix</c>.</summary>
-    private static RedisKey WithConnectorPrefix(string prefix, RedisKey key) => prefix.Length == 0 ? key : key.Prepend(prefix);
+    private static RedisKey WithConnectorPrefix(RedisKey prefix, RedisKey key) => key.Prepend(prefix);
 }

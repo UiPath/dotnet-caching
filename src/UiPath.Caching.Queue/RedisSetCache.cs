@@ -76,11 +76,12 @@ public sealed partial class RedisSetCache : RedisCacheBase, ISetCache
         var operation = StartOperation<T>();
         try
         {
-            var value = await _pop.ExecuteAsync(token =>
+            var value = await _pop.ExecuteAsync(static (s, token) =>
             {
                 token.ThrowIfCancellationRequested();
-                return Database.SetPopAsync(redisKey, CommandFlags.DemandMaster).AsValueTask();
+                return s.Self.Database.SetPopAsync(s.Key, CommandFlags.DemandMaster).AsValueTask();
             },
+            (Self: this, Key: redisKey),
             RedisValue.Null,
             token).ConfigureAwait(false);
             if (!value.IsNull)
@@ -121,11 +122,12 @@ public sealed partial class RedisSetCache : RedisCacheBase, ISetCache
         var operation = StartOperation<T>();
         try
         {
-            var values = await _pop.ExecuteAsync(token =>
+            var values = await _pop.ExecuteAsync(static (s, token) =>
             {
                 token.ThrowIfCancellationRequested();
-                return Database.SetPopAsync(redisKey, count, CommandFlags.DemandMaster).AsValueTask();
+                return s.Self.Database.SetPopAsync(s.Key, s.Count, CommandFlags.DemandMaster).AsValueTask();
             },
+            (Self: this, Key: redisKey, Count: count),
             Array.Empty<RedisValue>(),
             token).ConfigureAwait(false);
             ret = Deserialize<T>(values);
@@ -157,11 +159,12 @@ public sealed partial class RedisSetCache : RedisCacheBase, ISetCache
         var operation = StartOperation<T>();
         try
         {
-            var values = await _read.ExecuteAsync(token =>
+            var values = await _read.ExecuteAsync(static (s, token) =>
             {
                 token.ThrowIfCancellationRequested();
-                return Database.SetMembersAsync(redisKey, CommandFlags.PreferReplica).AsValueTask();
+                return s.Self.Database.SetMembersAsync(s.Key, CommandFlags.PreferReplica).AsValueTask();
             },
+            (Self: this, Key: redisKey),
             Array.Empty<RedisValue>(),
             token).ConfigureAwait(false);
             ret = Deserialize<T>(values);
@@ -189,11 +192,12 @@ public sealed partial class RedisSetCache : RedisCacheBase, ISetCache
         var operation = StartOperation<T>();
         try
         {
-            ret = await _read.ExecuteAsync(token =>
+            ret = await _read.ExecuteAsync(static (s, token) =>
             {
                 token.ThrowIfCancellationRequested();
-                return Database.SetContainsAsync(redisKey, value, CommandFlags.PreferReplica).AsValueTask();
+                return s.Self.Database.SetContainsAsync(s.Key, s.Value, CommandFlags.PreferReplica).AsValueTask();
             },
+            (Self: this, Key: redisKey, Value: value),
             default,
             token).ConfigureAwait(false);
             operation.Stop();
@@ -219,11 +223,12 @@ public sealed partial class RedisSetCache : RedisCacheBase, ISetCache
         var operation = StartOperation<T>();
         try
         {
-            ret = await _read.ExecuteAsync(token =>
+            ret = await _read.ExecuteAsync(static (s, token) =>
             {
                 token.ThrowIfCancellationRequested();
-                return Database.SetLengthAsync(redisKey, CommandFlags.PreferReplica).AsValueTask();
+                return s.Self.Database.SetLengthAsync(s.Key, CommandFlags.PreferReplica).AsValueTask();
             },
+            (Self: this, Key: redisKey),
             default,
             token).ConfigureAwait(false);
             operation.Stop();
@@ -250,11 +255,12 @@ public sealed partial class RedisSetCache : RedisCacheBase, ISetCache
         var operation = StartOperation<T>();
         try
         {
-            ret = await _write.ExecuteAsync(token =>
+            ret = await _write.ExecuteAsync(static (s, token) =>
             {
                 token.ThrowIfCancellationRequested();
-                return Database.SetRemoveAsync(redisKey, value, CommandFlags.DemandMaster).AsValueTask();
+                return s.Self.Database.SetRemoveAsync(s.Key, s.Value, CommandFlags.DemandMaster).AsValueTask();
             },
+            (Self: this, Key: redisKey, Value: value),
             default,
             token).ConfigureAwait(false);
             operation.Stop();
@@ -287,11 +293,12 @@ public sealed partial class RedisSetCache : RedisCacheBase, ISetCache
         var operation = StartOperation<T>();
         try
         {
-            ret = await _write.ExecuteAsync(token =>
+            ret = await _write.ExecuteAsync(static (s, token) =>
             {
                 token.ThrowIfCancellationRequested();
-                return Database.SetRemoveAsync(redisKey, values, CommandFlags.DemandMaster).AsValueTask();
+                return s.Self.Database.SetRemoveAsync(s.Key, s.Values, CommandFlags.DemandMaster).AsValueTask();
             },
+            (Self: this, Key: redisKey, Values: values),
             default,
             token).ConfigureAwait(false);
             operation.Stop();
@@ -317,11 +324,12 @@ public sealed partial class RedisSetCache : RedisCacheBase, ISetCache
         var operation = StartOperation<T>();
         try
         {
-            ret = await _write.ExecuteAsync(token =>
+            ret = await _write.ExecuteAsync(static (s, token) =>
             {
                 token.ThrowIfCancellationRequested();
-                return Database.KeyDeleteAsync(redisKey, CommandFlags.DemandMaster).AsValueTask();
+                return s.Self.Database.KeyDeleteAsync(s.Key, CommandFlags.DemandMaster).AsValueTask();
             },
+            (Self: this, Key: redisKey),
             default,
             token).ConfigureAwait(false);
             operation.Stop();
@@ -347,11 +355,12 @@ public sealed partial class RedisSetCache : RedisCacheBase, ISetCache
         var operation = StartOperation<T>();
         try
         {
-            ret = await _read.ExecuteAsync(token =>
+            ret = await _read.ExecuteAsync(static (s, token) =>
             {
                 token.ThrowIfCancellationRequested();
-                return Database.KeyExistsAsync(redisKey, CommandFlags.PreferReplica).AsValueTask();
+                return s.Self.Database.KeyExistsAsync(s.Key, CommandFlags.PreferReplica).AsValueTask();
             },
+            (Self: this, Key: redisKey),
             default,
             token).ConfigureAwait(false);
             operation.Stop();
@@ -399,11 +408,12 @@ public sealed partial class RedisSetCache : RedisCacheBase, ISetCache
 
         if (expiration < now)
         {
-            _ = await _write.ExecuteAsync(token =>
+            _ = await _write.ExecuteAsync(static (s, token) =>
             {
                 token.ThrowIfCancellationRequested();
-                return Database.KeyDeleteAsync(redisKey, CommandFlags.DemandMaster).AsValueTask();
+                return s.Self.Database.KeyDeleteAsync(s.Key, CommandFlags.DemandMaster).AsValueTask();
             },
+            (Self: this, Key: redisKey),
             default,
             token).ConfigureAwait(false);
             return ret;
@@ -419,11 +429,12 @@ public sealed partial class RedisSetCache : RedisCacheBase, ISetCache
             addTask.Forget();
             QueueExpirationUpdate(transaction, redisKey, expiration);
 
-            var committed = await _write.ExecuteAsync(token =>
+            var committed = await _write.ExecuteAsync(static (s, token) =>
             {
                 token.ThrowIfCancellationRequested();
-                return transaction.ExecuteAsync(CommandFlags.DemandMaster).AsValueTask();
+                return s.ExecuteAsync(CommandFlags.DemandMaster).AsValueTask();
             },
+            transaction,
             default,
             token).ConfigureAwait(false);
 
@@ -478,8 +489,8 @@ public sealed partial class RedisSetCache : RedisCacheBase, ISetCache
         return _redisKeyStrategy.GetRedisKey(cacheKey);
     }
 
-    private ITelemetryOperation StartOperation<T>([CallerMemberName] string methodName = "") =>
-        Telemetry.StartOperation(Name, typeof(T), methodName);
+    private TelemetryScope StartOperation<T>([CallerMemberName] string methodName = "") =>
+        new(Telemetry, Clock, Name, methodName, typeof(T));
 
     [LoggerMessage(Level = LogLevel.Warning, Message = "RedisSetCache exception.")]
     private partial void LogRedisSetCacheException(Exception ex);

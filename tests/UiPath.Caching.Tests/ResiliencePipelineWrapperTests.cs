@@ -279,6 +279,28 @@ public class ResiliencePipelineWrapperTests(ITestContextAccessor testContextAcce
         result.Should().BeTrue("an open circuit would have returned the fallback default instead");
     }
 
+    [Fact]
+    public async Task The_state_overload_hands_its_state_to_the_callback()
+    {
+        var sut = CreateTimedSut(ResiliencePipelineNames.Write);
+
+        var result = await sut.ExecuteAsync(static (state, _) => new ValueTask<int>(state + 1), 41, 0, testContextAccessor.Current.CancellationToken);
+
+        result.Should().Be(42);
+    }
+
+    [Fact]
+    public async Task The_read_pipeline_abandons_a_state_callback_that_ignores_the_token()
+    {
+        var sut = CreateTimedSut(ResiliencePipelineNames.Read);
+        var elapsed = Stopwatch.StartNew();
+
+        var act = async () => await sut.ExecuteAsync(static (_, token) => IgnoresTheToken(token), 0, false, testContextAccessor.Current.CancellationToken);
+
+        await act.Should().ThrowAsync<TimeoutRejectedException>();
+        elapsed.Elapsed.Should().BeLessThan(CallbackDuration);
+    }
+
     private static ValueTask<bool> IgnoresTheToken(CancellationToken token) => RunIgnoringCancellation();
 
     private static async ValueTask<bool> RunIgnoringCancellation()
