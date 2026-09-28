@@ -117,6 +117,67 @@ public class RedisCacheTests(ITestContextAccessor testContextAccessor) : IAsyncL
     }
 
     [Fact]
+    public async Task Multi_get_hashes_the_prefix_the_connector_applies_when_KeyPrefix_is_not_set()
+    {
+        _cacheOptions.KeyPrefix = string.Empty;
+        _database.ExecuteAsync("ECHO", Arg.Any<ICollection<object>>(), Arg.Any<CommandFlags>())
+            .Returns(RedisResult.Create((RedisValue)("{tag}:" + ConnectorKeyPrefix.ProbeMarker)));
+        GiveKeysDifferentSlots();
+        _database.Multiplexer.GetHashSlot(_redisKey.Prepend("{tag}:")).Returns(7);
+        _database.Multiplexer.GetHashSlot(_redisMultiKey.Prepend("{tag}:")).Returns(7);
+        _database.StringGetAsync(Arg.Is<RedisKey[]>(k => k != null && k.Contains(_redisKey) && k.Contains(_redisMultiKey)), CommandFlags.PreferReplica)
+            .Returns(_ => new RedisValue[] { RedisValue.Null, RedisValue.Null });
+
+        var act = () => Sut.GetAsync<string>(new CacheKey[] { _cacheKey, _multiKey }, policy: null, token: testContextAccessor.Current.CancellationToken).AsTask();
+
+        await act.Should().NotThrowAsync<CrossSlotKeysException>();
+    }
+
+    [Fact]
+    public async Task A_multi_get_does_not_wait_for_a_connector_probe_still_in_flight()
+    {
+        // The slot check runs outside the pipeline's latency cap, so the configured prefix stands in rather than a wait;
+        // a wait bounded by Timeout would take the full minute.
+        _cacheOptions.KeyPrefix = "{tag}:";
+        _cacheOptions.Timeout = TimeSpan.FromMinutes(1);
+        _database.ExecuteAsync("ECHO", Arg.Any<ICollection<object>>(), Arg.Any<CommandFlags>())
+            .Returns(new TaskCompletionSource<RedisResult>().Task);
+        GiveKeysDifferentSlots();
+        _database.Multiplexer.GetHashSlot(_redisKey.Prepend("{tag}:")).Returns(7);
+        _database.Multiplexer.GetHashSlot(_redisMultiKey.Prepend("{tag}:")).Returns(7);
+        _database.StringGetAsync(Arg.Any<RedisKey[]>(), CommandFlags.PreferReplica)
+            .Returns(_ => new RedisValue[] { RedisValue.Null, RedisValue.Null });
+
+        var act = () => Sut.GetAsync<string>(new CacheKey[] { _cacheKey, _multiKey }, policy: null, token: testContextAccessor.Current.CancellationToken).AsTask();
+
+        var elapsed = System.Diagnostics.Stopwatch.StartNew();
+        await act.Should().NotThrowAsync();
+        elapsed.Elapsed.Should().BeLessThan(TimeSpan.FromSeconds(5));
+    }
+
+    [Fact]
+    public async Task A_fallback_prefix_is_not_kept_while_the_connector_probe_can_still_answer()
+    {
+        _cacheOptions.KeyPrefix = string.Empty;
+        _database.ExecuteAsync("ECHO", Arg.Any<ICollection<object>>(), Arg.Any<CommandFlags>())
+            .Returns(
+                _ => Task.FromException<RedisResult>(new RedisException("not yet")),
+                _ => Task.FromResult(RedisResult.Create((RedisValue)("{tag}:" + ConnectorKeyPrefix.ProbeMarker))));
+        GiveKeysDifferentSlots();
+        _database.Multiplexer.GetHashSlot(_redisKey.Prepend("{tag}:")).Returns(7);
+        _database.Multiplexer.GetHashSlot(_redisMultiKey.Prepend("{tag}:")).Returns(7);
+        _database.StringGetAsync(Arg.Any<RedisKey[]>(), CommandFlags.PreferReplica)
+            .Returns(_ => new RedisValue[] { RedisValue.Null, RedisValue.Null });
+        var keys = new CacheKey[] { _cacheKey, _multiKey };
+
+        var first = () => Sut.GetAsync<string>(keys, policy: null, token: testContextAccessor.Current.CancellationToken).AsTask();
+        await first.Should().ThrowAsync<CrossSlotKeysException>("the probe has not answered, so the configured empty prefix stands in");
+
+        var second = () => Sut.GetAsync<string>(keys, policy: null, token: testContextAccessor.Current.CancellationToken).AsTask();
+        await second.Should().NotThrowAsync<CrossSlotKeysException>();
+    }
+
+    [Fact]
     public async Task Multi_get_throws_when_the_prefixed_keys_span_slots()
     {
         _cacheOptions.KeyPrefix = "prefix:";
