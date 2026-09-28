@@ -2,7 +2,7 @@ using UiPath.Caching.Telemetry;
 
 namespace UiPath.Caching;
 
-internal class LocalMemorySetter(
+internal sealed class LocalMemorySetter(
     string cacheName,
     IChangeTokenFactory changeTokenFactory,
     ITopicProvider topicProvider,

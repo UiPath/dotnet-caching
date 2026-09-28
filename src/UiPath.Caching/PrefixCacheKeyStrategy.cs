@@ -12,5 +12,5 @@ public sealed class PrefixCacheKeyStrategy : ICacheKeyStrategy
     }
     
     public CacheKey GetCacheKey<T>(CacheKey key) =>
-        key.WithName(string.Join(_separator, _prefix, key.Name));
+        key.WithName($"{_prefix}{_separator}{key.Name}");
 }

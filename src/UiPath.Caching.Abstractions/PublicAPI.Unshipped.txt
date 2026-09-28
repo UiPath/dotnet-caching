@@ -1,1 +1,2 @@
 #nullable enable
+UiPath.Caching.Telemetry.NullTelemetryProvider.StartOperation(string! providerName, System.Type! cacheObject, string! methodName = "") -> UiPath.Caching.Telemetry.ITelemetryOperation!

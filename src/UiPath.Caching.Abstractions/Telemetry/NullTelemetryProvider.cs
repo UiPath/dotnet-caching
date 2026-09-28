@@ -22,6 +22,9 @@ public sealed class NullTelemetryProvider : ICachingTelemetryProvider
 
     public ITelemetryOperation StartOperation(Type cacheClass, Type? cacheObject, string methodName = "")
         => NullTelemetryOperation.Instance;
+
+    public ITelemetryOperation StartOperation(string providerName, Type cacheObject, string methodName = "")
+        => NullTelemetryOperation.Instance;
 #pragma warning restore S2325 // Methods and properties that don't access instance data should be static
 #pragma warning restore S2326 // Unused type parameters should be removed
 #pragma warning restore CA1822 // Mark members as static

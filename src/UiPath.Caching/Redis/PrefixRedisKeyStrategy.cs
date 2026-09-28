@@ -12,5 +12,5 @@ public class PrefixRedisKeyStrategy : IRedisKeyStrategy
     protected char Separator { get; set; }
 
     public virtual RedisKey GetRedisKey(CacheKey key) =>
-        string.Join(Separator, Prefix, key);
+        $"{Prefix}{Separator}{key.Name}";
 }

@@ -39,7 +39,7 @@ public readonly struct TopicKey : IEquatable<TopicKey>
         obj is TopicKey topicKey && Equals(topicKey);
 
     public bool Equals(TopicKey other) =>
-        string.Equals(Name, other.Name, StringComparison.InvariantCultureIgnoreCase);
+        string.Equals(Name, other.Name, StringComparison.Ordinal);
 
 
     public override string ToString() =>

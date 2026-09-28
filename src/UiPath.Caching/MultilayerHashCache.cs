@@ -459,9 +459,16 @@ internal sealed partial class MultilayerHashCache : MultilayerCacheBase, IHashCa
         {
             return cacheEntry;
         }
-        var allFields = options.Fields.ToHashSet(StringComparer.InvariantCultureIgnoreCase);
-        var values = cacheEntry.Value.Where(kv => allFields.Contains(kv.Key)).ToImmutableDictionary(kv => kv.Key, kv => kv.Value);
-        return CreateEntry(values, options);
+        var allFields = options.Fields.ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var values = ImmutableDictionary.CreateBuilder<string, T?>();
+        foreach (var (field, value) in cacheEntry.Value)
+        {
+            if (allFields.Contains(field))
+            {
+                values.Add(field, value);
+            }
+        }
+        return CreateEntry(values.ToImmutable(), options);
     }
 
     private ICacheEntry<IDictionary<string, T?>> CreateEntry<T>(IDictionary<string, T?> values, InternalHashCacheEntryOptions options) =>
