@@ -6,6 +6,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 
 ## [Unreleased]
 
+## [2.1.0] - 2026-09-28
+
 ### Added
 
 - **`ResiliencePoliciesOptions.DisruptionRequestTimeout`.** Replaces `RequestTimeout` while an announced
@@ -51,6 +53,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
   one by one. Defaulted to an empty sequence, so an existing implementer neither breaks nor changes behaviour.
 
 ### Changed
+
+- **Dependency floors.** What a consumer's restore has to satisfy, taken from `Directory.Packages.props`:
+
+  | Package | 2.0.1 | 2.1.0 |
+  |---|---|---|
+  | `StackExchange.Redis` (`UiPath.Caching`, `UiPath.Caching.Queue`) | 3.2.1 | 3.3.0 |
+  | `AsyncKeyedLock` (`UiPath.Caching`) | 8.0.2 | 8.1.2 |
+
+  The `Microsoft.Extensions.*` and Polly groups are unchanged. The `OpenTelemetry` packages also moved, but only tests
+  and samples reference them, so they are pins of this repository, not floors on consumers.
 
 - **`RedisConnectionOptions.ConnectionFactory` is asynchronous.** It is now
   `Func<ConfigurationOptions, CancellationToken, ValueTask<IConnectionMultiplexer>>` and is awaited. The synchronous

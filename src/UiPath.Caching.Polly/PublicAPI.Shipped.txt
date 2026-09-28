@@ -29,3 +29,6 @@ static UiPath.Caching.Polly.CachingBuilderExtensions.AddResilienceStrategies(thi
 static UiPath.Caching.Polly.CachingBuilderExtensions.AddResilienceStrategies(this UiPath.Caching.Config.ICachingBuilder! builder, string! sectionName) -> UiPath.Caching.Config.ICachingBuilder!
 virtual UiPath.Caching.Polly.ResiliencePipelineFactory.Create<TResult>(string? scope, TResult defaultValue) -> Polly.ResiliencePipeline<TResult>!
 virtual UiPath.Caching.Polly.ResiliencePipelineFactory.GetBuilder<TResult>(Microsoft.Extensions.Logging.ILogger! logger, UiPath.Caching.Polly.ResiliencePoliciesOptions! resilienceOptions, TResult defaultValue) -> Polly.ResiliencePipelineBuilder<TResult>!
+UiPath.Caching.Polly.ResiliencePipelineFactory.ResiliencePipelineFactory(Microsoft.Extensions.Logging.ILoggerFactory! loggerFactory, Polly.Telemetry.TelemetryOptions? telemetryOptions, Microsoft.Extensions.Options.IOptionsMonitor<UiPath.Caching.Polly.ResiliencePoliciesOptions!>! optionsAccessor, UiPath.Caching.Policies.IDisruptionState? disruptionState) -> void
+UiPath.Caching.Polly.ResiliencePoliciesOptions.DisruptionRequestTimeout.get -> System.TimeSpan?
+UiPath.Caching.Polly.ResiliencePoliciesOptions.DisruptionRequestTimeout.set -> void

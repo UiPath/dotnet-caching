@@ -535,7 +535,6 @@ UiPath.Caching.Redis.RedisConnectionOptions.AbortOnConnectFail.get -> bool
 UiPath.Caching.Redis.RedisConnectionOptions.AbortOnConnectFail.set -> void
 UiPath.Caching.Redis.RedisConnectionOptions.BackOffMilliseconds.get -> int
 UiPath.Caching.Redis.RedisConnectionOptions.BackOffMilliseconds.set -> void
-UiPath.Caching.Redis.RedisConnectionOptions.ConnectionFactory.get -> System.Func<StackExchange.Redis.ConfigurationOptions!, StackExchange.Redis.IConnectionMultiplexer!>?
 UiPath.Caching.Redis.RedisConnectionOptions.ConnectionFactory.set -> void
 UiPath.Caching.Redis.RedisConnectionOptions.ConnectionMultiplexerFactoryType.get -> string?
 UiPath.Caching.Redis.RedisConnectionOptions.ConnectionMultiplexerFactoryType.set -> void
@@ -565,10 +564,6 @@ UiPath.Caching.Redis.RedisConnectionOptions.LogConnectionFailedEvents.get -> boo
 UiPath.Caching.Redis.RedisConnectionOptions.LogConnectionFailedEvents.set -> void
 UiPath.Caching.Redis.RedisConnectionOptions.LogConnectionRestoredEvents.get -> bool
 UiPath.Caching.Redis.RedisConnectionOptions.LogConnectionRestoredEvents.set -> void
-UiPath.Caching.Redis.RedisConnectionOptions.PlannedMaintenanceConnectionRetryCount.get -> int
-UiPath.Caching.Redis.RedisConnectionOptions.PlannedMaintenanceConnectionRetryCount.set -> void
-UiPath.Caching.Redis.RedisConnectionOptions.PlannedMaintenanceConnectionRetryDelay.get -> System.TimeSpan
-UiPath.Caching.Redis.RedisConnectionOptions.PlannedMaintenanceConnectionRetryDelay.set -> void
 UiPath.Caching.Redis.RedisConnectionOptions.PlannedMaintenanceEnabled.get -> bool
 UiPath.Caching.Redis.RedisConnectionOptions.PlannedMaintenanceEnabled.set -> void
 UiPath.Caching.Redis.RedisConnectionOptions.ProfilerCommandDenyList.get -> System.Collections.Generic.IReadOnlyList<string!>!
@@ -612,7 +607,6 @@ UiPath.Caching.Redis.RedisPlannedMaintenance
 UiPath.Caching.Redis.RedisPlannedMaintenance.Dispose() -> void
 UiPath.Caching.Redis.RedisPlannedMaintenance.InProgress.get -> bool
 UiPath.Caching.Redis.RedisPlannedMaintenance.InProgress.set -> void
-UiPath.Caching.Redis.RedisPlannedMaintenance.RedisPlannedMaintenance(UiPath.Caching.Telemetry.ICachingTelemetryProvider! telemetryProvider, UiPath.Caching.Redis.IRedisConnector! redisConnector, UiPath.Caching.Redis.IRedisConfigurationOptionsProvider! redisConfigurationOptionsProvider, UiPath.Caching.Redis.IConnectionMultiplexerFactory! connectionMultiplexerFactory, Microsoft.Extensions.Logging.ILogger<UiPath.Caching.Redis.RedisPlannedMaintenance!>! logger, Microsoft.Extensions.Options.IOptions<UiPath.Caching.Redis.RedisConnectionOptions!>! options, System.Collections.Generic.IEnumerable<UiPath.Caching.Redis.IRedisConnectionConfigurator!>? configurators = null) -> void
 UiPath.Caching.Redis.RedisPlannedMaintenance.StartAsync(System.Threading.CancellationToken cancellationToken) -> System.Threading.Tasks.Task!
 UiPath.Caching.Redis.RedisPlannedMaintenance.StopAsync(System.Threading.CancellationToken cancellationToken) -> System.Threading.Tasks.Task!
 UiPath.Caching.Redis.ShardPrefixRedisKeyStrategy
@@ -864,3 +858,22 @@ UiPath.Caching.Config.INamedCaching.Name.get -> string!
 UiPath.Caching.Config.INamedCaching.Services.get -> Microsoft.Extensions.DependencyInjection.IServiceCollection!
 UiPath.Caching.Config.NamedCachingCollectionExtensions
 static UiPath.Caching.Config.NamedCachingCollectionExtensions.AddNamedCaching(this Microsoft.Extensions.DependencyInjection.IServiceCollection! services, string! name, Microsoft.Extensions.Configuration.IConfiguration! configuration, System.Action<UiPath.Caching.Config.ICachingBuilder!>! configure, string! sectionName = "Caching", System.Action<UiPath.Caching.Redis.RedisConnectionOptions!>? configureConnection = null, System.Action<Microsoft.Extensions.DependencyInjection.IServiceCollection!, System.IServiceProvider!>? configureServices = null) -> UiPath.Caching.Config.INamedCaching!
+UiPath.Caching.Redis.RedisConnectionOptions.ConnectionFactory.get -> System.Func<StackExchange.Redis.ConfigurationOptions!, System.Threading.CancellationToken, System.Threading.Tasks.ValueTask<StackExchange.Redis.IConnectionMultiplexer!>>?
+UiPath.Caching.Redis.IRedisConfigurationOptionsProvider.ReapplyDerivedBounds(StackExchange.Redis.ConfigurationOptions! configuration) -> void
+UiPath.Caching.Redis.IRedisConnector.GetPrimaries() -> System.Collections.Generic.IEnumerable<StackExchange.Redis.IServer!>!
+UiPath.Caching.Redis.IRedisConnector.ServerMaintenance -> System.EventHandler<StackExchange.Redis.Maintenance.ServerMaintenanceEvent!>?
+UiPath.Caching.Redis.RedisConfigurationOptionsProvider.ReapplyDerivedBounds(StackExchange.Redis.ConfigurationOptions! configuration) -> void
+UiPath.Caching.Redis.RedisConnectionOptions.MaintenanceNotifications.get -> UiPath.Caching.Redis.RedisMaintenanceNotifications?
+UiPath.Caching.Redis.RedisConnectionOptions.MaintenanceNotifications.set -> void
+UiPath.Caching.Redis.RedisConnectionOptions.MaintenanceRelaxedTimeout.get -> System.TimeSpan?
+UiPath.Caching.Redis.RedisConnectionOptions.MaintenanceRelaxedTimeout.set -> void
+UiPath.Caching.Redis.RedisConnectionOptions.MaintenanceRelaxedWindowMax.get -> System.TimeSpan?
+UiPath.Caching.Redis.RedisConnectionOptions.MaintenanceRelaxedWindowMax.set -> void
+UiPath.Caching.Redis.RedisConnector.GetPrimaries() -> System.Collections.Generic.IEnumerable<StackExchange.Redis.IServer!>!
+UiPath.Caching.Redis.RedisConnector.ServerMaintenance -> System.EventHandler<StackExchange.Redis.Maintenance.ServerMaintenanceEvent!>?
+UiPath.Caching.Redis.RedisMaintenanceNotifications
+UiPath.Caching.Redis.RedisMaintenanceNotifications.Auto = 1 -> UiPath.Caching.Redis.RedisMaintenanceNotifications
+UiPath.Caching.Redis.RedisMaintenanceNotifications.Disabled = 0 -> UiPath.Caching.Redis.RedisMaintenanceNotifications
+UiPath.Caching.Redis.RedisMaintenanceNotifications.Required = 2 -> UiPath.Caching.Redis.RedisMaintenanceNotifications
+UiPath.Caching.Redis.RedisPlannedMaintenance.RedisPlannedMaintenance(UiPath.Caching.Telemetry.ICachingTelemetryProvider! telemetryProvider, UiPath.Caching.Redis.IRedisConnector! redisConnector, System.TimeProvider! clock) -> void
+UiPath.Caching.Redis.RedisPlannedMaintenance.SuggestedTimeout.get -> System.TimeSpan?

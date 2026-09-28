@@ -718,3 +718,6 @@ static readonly UiPath.Caching.CachePolicy.DefaultDistributedExpiration -> Syste
 UiPath.Caching.TimeProviderExtensions
 static UiPath.Caching.TimeProviderExtensions.ToDateTimeOffset(this System.TimeProvider! clock, System.DateTimeOffset? dateTimeOffset) -> System.DateTimeOffset
 static UiPath.Caching.TimeProviderExtensions.ToDateTimeOffset(this System.TimeProvider! clock, System.TimeSpan? timeSpan) -> System.DateTimeOffset
+UiPath.Caching.Policies.IDisruptionState
+UiPath.Caching.Policies.IDisruptionState.InProgress.get -> bool
+UiPath.Caching.Policies.IDisruptionState.SuggestedTimeout.get -> System.TimeSpan?
