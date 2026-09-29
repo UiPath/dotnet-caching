@@ -16,14 +16,23 @@ internal sealed class ResiliencePipelineWrapper(IResiliencePipelineFactory facto
     {
         var pipeline = GetPipeline(defaultValue);
         return _abandonOnCancellation
-            ? pipeline.ExecuteAsync(static (callback, token) => RaceCancellation(callback, token), callback, cancellationToken)
+            ? pipeline.ExecuteAsync(static (callback, token) => RaceCancellation(callback(token), token), callback, cancellationToken)
             : pipeline.ExecuteAsync(callback, cancellationToken);
     }
 
-    /// <summary>Returns when the token fires, leaving the callback running.</summary>
-    private static async ValueTask<TResult> RaceCancellation<TResult>(Func<CancellationToken, ValueTask<TResult>> callback, CancellationToken token)
+    public ValueTask<TResult> ExecuteAsync<TResult, TState>(Func<TState, CancellationToken, ValueTask<TResult>> callback, TState state, TResult defaultValue, CancellationToken cancellationToken = default)
     {
-        var pending = callback(token);
+        var pipeline = GetPipeline(defaultValue);
+        // Boxed once: Polly copies its state into each strategy's async state machine, where a wide struct costs more than this.
+        var call = new Call<TResult, TState>(callback, state);
+        return _abandonOnCancellation
+            ? pipeline.ExecuteAsync(static (call, token) => RaceCancellation(call.Invoke(token), token), call, cancellationToken)
+            : pipeline.ExecuteAsync(static (call, token) => call.Invoke(token), call, cancellationToken);
+    }
+
+    /// <summary>Returns when the token fires, leaving the callback running.</summary>
+    private static async ValueTask<TResult> RaceCancellation<TResult>(ValueTask<TResult> pending, CancellationToken token)
+    {
         if (pending.IsCompleted || !token.CanBeCanceled)
         {
             return await pending.ConfigureAwait(false);
@@ -59,4 +68,9 @@ internal sealed class ResiliencePipelineWrapper(IResiliencePipelineFactory facto
 
     // Wrapped so a null default can still key the map.
     private readonly record struct DefaultValue<TResult>(TResult Value);
+
+    private sealed class Call<TResult, TState>(Func<TState, CancellationToken, ValueTask<TResult>> callback, TState state)
+    {
+        public ValueTask<TResult> Invoke(CancellationToken token) => callback(state, token);
+    }
 }

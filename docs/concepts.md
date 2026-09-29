@@ -392,7 +392,7 @@ design means the caching library is useful in any service regardless of which
 observability infrastructure the service uses — OpenTelemetry,
 a proprietary internal system, or a test double that records calls for assertions.
 
-Cache hit/miss outcomes are tracked through `ITelemetryOperation.Track(hit: bool)`
+Cache hit/miss outcomes are tracked through `TelemetryScope.Track(hit)`
 and surface as metrics named `Caching.Stats.Hits.<provider>.<method>.<type>` /
 `Caching.Stats.Misses.<provider>.<method>.<type>` (the elapsed time of the op is
 the metric value). `TrackEvent` fires on other signals — rehydration outcomes,

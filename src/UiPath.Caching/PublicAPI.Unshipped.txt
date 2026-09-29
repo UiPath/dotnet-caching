@@ -1,5 +1,23 @@
 #nullable enable
-static UiPath.Caching.Redis.RedisCacheBase.RunAsync<TResult>(UiPath.Caching.Policies.IResiliencePipeline! pipeline, UiPath.Caching.Telemetry.ITelemetryOperation! operation, System.Func<System.Threading.CancellationToken, System.Threading.Tasks.ValueTask<TResult>>! command, TResult fallback, System.Func<TResult, bool>! isHit, System.Action<System.Exception!>! logFailure, System.Threading.CancellationToken token) -> System.Threading.Tasks.ValueTask<TResult>
-UiPath.Caching.Redis.RedisCacheBase.KeyExpireTimeAsync(UiPath.Caching.Policies.IResiliencePipeline! pipeline, UiPath.Caching.Telemetry.ITelemetryOperation! operation, UiPath.Caching.Redis.IRedisKeyStrategy! keyStrategy, UiPath.Caching.CacheKey cacheKey, System.Action<System.Exception!>! logFailure, System.Threading.CancellationToken token) -> System.Threading.Tasks.ValueTask<System.DateTimeOffset?>
-UiPath.Caching.Redis.RedisCacheBase.KeyTimeToLiveAsync(UiPath.Caching.Policies.IResiliencePipeline! pipeline, UiPath.Caching.Telemetry.ITelemetryOperation! operation, UiPath.Caching.Redis.IRedisKeyStrategy! keyStrategy, UiPath.Caching.CacheKey cacheKey, System.Action<System.Exception!>! logFailure, System.Threading.CancellationToken token) -> System.Threading.Tasks.ValueTask<System.TimeSpan?>
 UiPath.Caching.Redis.RedisCacheBase.SupportsExpireTime.get -> bool
+*REMOVED*UiPath.Caching.Redis.PrefixRedisKeyStrategy.Prefix.set -> void
+*REMOVED*UiPath.Caching.Redis.PrefixRedisKeyStrategy.Separator.set -> void
+*REMOVED*UiPath.Caching.Redis.RedisCacheBase.TrackRead(UiPath.Caching.Telemetry.ITelemetryOperation! operation, bool hit, StackExchange.Redis.RedisKey key) -> void
+UiPath.Caching.Redis.RedisCacheBase.TrackRead(UiPath.Caching.Telemetry.TelemetryScope operation, bool hit, StackExchange.Redis.RedisKey key) -> void
+UiPath.Caching.Telemetry.TelemetryScope
+UiPath.Caching.Telemetry.TelemetryScope.IsEnabled.get -> bool
+UiPath.Caching.Telemetry.TelemetryScope.Stop() -> void
+UiPath.Caching.Telemetry.TelemetryScope.TelemetryScope() -> void
+UiPath.Caching.Telemetry.TelemetryScope.TelemetryScope(UiPath.Caching.Telemetry.ICachingTelemetryProvider! provider, System.TimeProvider! clock, string! providerName, string! callerMethod, System.Type! cacheObjectType) -> void
+UiPath.Caching.Telemetry.TelemetryScope.Track(bool hit, int keyCount = 1) -> void
+UiPath.Caching.Telemetry.TelemetryScope.TrackKeyReads((string! Key, bool Hit)[]! reads) -> void
+const UiPath.Caching.Telemetry.TelemetryScope.BatchIdTag = "BatchId" -> string!
+const UiPath.Caching.Telemetry.TelemetryScope.DependencyType = "Redis" -> string!
+const UiPath.Caching.Telemetry.TelemetryScope.KeysTag = "Keys" -> string!
+const UiPath.Caching.Telemetry.TelemetryScope.MethodTag = "Method" -> string!
+const UiPath.Caching.Telemetry.TelemetryScope.OutcomeTag = "Outcome" -> string!
+const UiPath.Caching.Telemetry.TelemetryScope.ProviderTag = "Provider" -> string!
+const UiPath.Caching.Telemetry.TelemetryScope.TypeTag = "Type" -> string!
+static UiPath.Caching.Redis.RedisCacheBase.RunAsync<TState, TResult>(UiPath.Caching.Policies.IResiliencePipeline! pipeline, UiPath.Caching.Telemetry.TelemetryScope operation, System.Func<TState, System.Threading.CancellationToken, System.Threading.Tasks.ValueTask<TResult>>! command, TState state, TResult fallback, System.Func<TResult, bool>! isHit, System.Action<System.Exception!>! logFailure, System.Threading.CancellationToken token) -> System.Threading.Tasks.ValueTask<TResult>
+UiPath.Caching.Redis.RedisCacheBase.KeyExpireTimeAsync(UiPath.Caching.Policies.IResiliencePipeline! pipeline, UiPath.Caching.Telemetry.TelemetryScope operation, UiPath.Caching.Redis.IRedisKeyStrategy! keyStrategy, UiPath.Caching.CacheKey cacheKey, System.Action<System.Exception!>! logFailure, System.Threading.CancellationToken token) -> System.Threading.Tasks.ValueTask<System.DateTimeOffset?>
+UiPath.Caching.Redis.RedisCacheBase.KeyTimeToLiveAsync(UiPath.Caching.Policies.IResiliencePipeline! pipeline, UiPath.Caching.Telemetry.TelemetryScope operation, UiPath.Caching.Redis.IRedisKeyStrategy! keyStrategy, UiPath.Caching.CacheKey cacheKey, System.Action<System.Exception!>! logFailure, System.Threading.CancellationToken token) -> System.Threading.Tasks.ValueTask<System.TimeSpan?>

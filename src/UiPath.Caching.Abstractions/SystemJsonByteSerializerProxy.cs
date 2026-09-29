@@ -9,6 +9,8 @@ namespace UiPath.Caching;
 /// </summary>
 public class SystemJsonByteSerializerProxy(JsonSerializerOptions? options = null) : IMemorySerializerProxy
 {
+    internal JsonSerializerOptions? Options => options;
+
     /// <summary>
     /// Null goes through JSON like everything else, producing the four-byte <c>null</c> literal. A
     /// null payload would reach StackExchange.Redis as <c>RedisValue.Null</c>, which throws on SADD
