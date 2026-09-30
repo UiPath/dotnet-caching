@@ -58,7 +58,7 @@ public class MemoryCacheSetterTests : IAsyncLifetime
 
         Sut.Set(x, _fixture.Create<ICacheEntry>(), _fixture.Create<Type>(), _fixture.Create<TimeSpan?>());
         token.InvokeCallbacks();
-        _memoryCache.TryGetValue(_cacheKey, out _).Should().BeFalse();
+        _memoryCache.TryGetValue(_cacheKey.Name, out _).Should().BeFalse();
     }
 
     [Fact]
@@ -211,7 +211,7 @@ public class MemoryCacheSetterTests : IAsyncLifetime
 
         Sut.Set(x, _fixture.Create<ICacheEntry>(), _fixture.Create<Type>(), TimeSpan.FromMinutes(1));
         token.InvokeCallbacks();
-        _memoryCache.TryGetValue(_cacheKey, out _).Should().BeTrue();
+        _memoryCache.TryGetValue(_cacheKey.Name, out _).Should().BeTrue();
     }
 
     public ValueTask DisposeAsync()

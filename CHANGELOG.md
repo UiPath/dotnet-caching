@@ -8,6 +8,19 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 
 ### Added
 
+- **Reads by `Span<char>`.** `ICache.GetAsync<T>`, `ICache<T>.GetAsync`, and `GetItemAsync` and `GetAsync` on
+  `IHashCache` and `IHashCache<T>` gain an overload that reads by the key's text without building a `CacheKey`.
+  The text is normalized as `new CacheKey(text)` normalizes it. Over the in-memory tier on .NET 9 and later, under
+  a key strategy that composes by span, as both built-ins do, a local hit allocates nothing; every other case builds
+  the key and takes the ordinary path. Default interface bodies keep outside implementations compiling. The parameter is `Span<char>`
+  rather than `ReadOnlySpan<char>`: a read-only span overload would make a call with a string ambiguous against the
+  `CacheKey` overload. A bare `default` key, as in `cache.GetAsync<T>(default, policy)`, still binds to the `CacheKey`
+  overload under a C# 13 compiler (.NET 9 SDK or later). Under an older compiler it is ambiguous (CS0121); cast it
+  to `CacheKey`.
+
+- **`CacheKey(ReadOnlySpan<char>)`** and `CacheKey(ReadOnlySpan<char>, CacheKeyCasing)` build a key from text that
+  is not yet a string, normalizing while copying, so a key formatted on the stack costs one string rather than two.
+
 - **`IResiliencePipeline.ExecuteAsync<TResult, TState>`.** Hands a state value to a static callback, so a Redis
   command no longer allocates a closure and a delegate. The Polly pipeline boxes the state once instead, since Polly
   copies its state into each strategy's state machine. Its default implementation forwards to the existing overload,
@@ -23,6 +36,24 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
   that never reads an expiration, such as `RedisSetCache`, does not connect.
 
 ### Changed
+
+- **`ICacheKeyStrategy` gains `TryGetCacheKey<T>(ReadOnlySpan<char>, Span<char>, out int)`.** The span form of the
+  composition, behind the `Span<char>` reads: the text arrives normalized, the strategy writes what `GetCacheKey`
+  would build, and the library normalizes the result as `CacheKey.WithName` would. It has no default body.
+  **Breaking** for a strategy outside the library, which must add it; returning `false` keeps its reads on the string
+  path and changes nothing else.
+
+- **The local tier is keyed by the key's text.** `IMemoryCache` receives `CacheKey.Name` rather than the boxed
+  struct: no box per lookup, one object less per resident entry, and `MemoryCache`'s string-keyed dictionary
+  instead of its object-keyed one. Observable only through a custom `IMemoryCacheFactory` that shares one
+  `IMemoryCache` with other string-keyed entries, which can now collide on equal text. A key strategy that returns
+  an empty key is refused with `InvalidOperationException` before any tier is touched; the local tier used to file
+  every such key under one nameless entry.
+
+- **A local write fills its entry in place.** The expiration, change token, eviction callback, size and value are
+  set on the entry `CreateEntry` returns, instead of on a `MemoryCacheEntryOptions` that was copied into the entry
+  and discarded, lists included. `PrefixCacheKeyStrategy` concatenates its prefix and separator, computed once,
+  instead of interpolating them per key.
 
 - **`PrefixRedisKeyStrategy` carries its prefix as the key's byte prefix.** `GetRedisKey` no longer concatenates a
   string per key: the prefix is encoded once and StackExchange.Redis writes it next to the key name. The key the server

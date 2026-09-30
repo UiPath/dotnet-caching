@@ -273,6 +273,31 @@ builder.Host.ConfigureCaching(b => b
 
 For an app-wide default, set `CacheKeyStrategy` on each provider's options (`RedisCacheOptions`, `InMemoryRedisCacheOptions`, `InMemoryCacheOptions`) in the builder action — the library does not honor a single global key-strategy factory.
 
+Both built-ins also implement `TryGetCacheKey<T>`, the span form of the composition behind the `Span<char>` reads. A custom strategy has to implement it too. The text arrives normalized and the library normalizes the result again, so the span body only has to produce the characters `GetCacheKey` would, casing aside; the smallest correct body returns `false`, and the read builds the key as before:
+
+```csharp
+public sealed class TenantKeyStrategy(string tenant) : ICacheKeyStrategy
+{
+    private readonly string _prefix = tenant + CacheOptions.KeySeparator;
+
+    public CacheKey GetCacheKey<T>(CacheKey key) => key.WithName(_prefix + key.Name);
+
+    public bool TryGetCacheKey<T>(ReadOnlySpan<char> key, Span<char> destination, out int written)
+    {
+        written = _prefix.Length + key.Length;
+        if (written > destination.Length)
+        {
+            written = 0;
+            return false;
+        }
+
+        _prefix.CopyTo(destination);
+        key.CopyTo(destination[_prefix.Length..]);
+        return true;
+    }
+}
+```
+
 ### App-version prefix
 
 A `PrefixCacheKeyStrategy` that bakes the assembly version into the prefix gives you free deploy invalidation — old keys cannot collide with new keys because the version segment in the key changes with every deploy.

@@ -13,9 +13,19 @@ public interface IHashCache : IDisposable
 {
     string Name { get; }
 
+    [OverloadResolutionPriority(1)]
     ValueTask<T?> GetItemAsync<T>(CacheKey cacheKey, string field, CachePolicy? policy, CancellationToken token = default);
 
+    /// <inheritdoc cref="ICache.GetAsync{T}(Span{char}, CachePolicy, CancellationToken)"/>
+    ValueTask<T?> GetItemAsync<T>(Span<char> cacheKey, string field, CachePolicy? policy, CancellationToken token = default) =>
+        GetItemAsync<T>(new CacheKey(cacheKey), field, policy, token);
+
+    [OverloadResolutionPriority(1)]
     ValueTask<IDictionary<string, T?>> GetAsync<T>(CacheKey cacheKey, CachePolicy? policy, CancellationToken token = default);
+
+    /// <inheritdoc cref="ICache.GetAsync{T}(Span{char}, CachePolicy, CancellationToken)"/>
+    ValueTask<IDictionary<string, T?>> GetAsync<T>(Span<char> cacheKey, CachePolicy? policy, CancellationToken token = default) =>
+        GetAsync<T>(new CacheKey(cacheKey), policy, token);
 
     ValueTask<IDictionary<string, T?>> GetAsync<T>(CacheKey cacheKey, string[] fields, CachePolicy? policy, CancellationToken token = default);
 
