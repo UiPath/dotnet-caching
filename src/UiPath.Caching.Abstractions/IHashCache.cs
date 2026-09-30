@@ -6,7 +6,7 @@ namespace UiPath.Caching;
 /// <see cref="CachePolicy.DistributedExpiration"/>, then the cache default; a caller that passes one
 /// means it, so a duration that is not positive — or a deadline that has already passed — is
 /// rejected with <see cref="ArgumentOutOfRangeException"/> rather than silently ignored. See
-/// <see cref="CacheExpiration"/>. The no-op implementations in this package read no argument at all
+/// <c>CacheExpiration</c>. The no-op implementations in this package read no argument at all
 /// and so enforce nothing.</para>
 /// </remarks>
 public interface IHashCache : IDisposable

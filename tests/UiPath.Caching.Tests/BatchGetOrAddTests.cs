@@ -16,11 +16,10 @@ public class BatchGetOrAddTests(ITestContextAccessor testContextAccessor)
     public async Task Generator_receives_states_not_keys()
     {
         var fake = new DictionaryCache();
-        ICache cache = fake;
         fake.Seed<string>("user:1", "A");
         var observed = new List<long[]>();
 
-        var result = await cache.GetOrAddAsync<string, long>(
+        var result = await fake.GetOrAddAsync<string, long>(
             Entries(1, 2, 3), Generator(observed), null, testContextAccessor.Current.CancellationToken);
 
         observed.Single().Should().Equal(States2And3, "only the states of missing entries reach the generator");
@@ -34,12 +33,11 @@ public class BatchGetOrAddTests(ITestContextAccessor testContextAccessor)
     public async Task All_hits_do_not_invoke_the_generator()
     {
         var fake = new DictionaryCache();
-        ICache cache = fake;
         fake.Seed<string>("user:1", "A");
         fake.Seed<string>("user:2", "B");
         var observed = new List<long[]>();
 
-        var result = await cache.GetOrAddAsync<string, long>(
+        var result = await fake.GetOrAddAsync<string, long>(
             Entries(1, 2), Generator(observed), null, testContextAccessor.Current.CancellationToken);
 
         observed.Should().BeEmpty();
@@ -51,10 +49,9 @@ public class BatchGetOrAddTests(ITestContextAccessor testContextAccessor)
     public async Task Duplicate_states_collapse_and_order_is_first_occurrence()
     {
         var fake = new DictionaryCache();
-        ICache cache = fake;
         var observed = new List<long[]>();
 
-        var result = await cache.GetOrAddAsync<string, long>(
+        var result = await fake.GetOrAddAsync<string, long>(
             Entries(3, 1, 3, 2), Generator(observed), null, testContextAccessor.Current.CancellationToken);
 
         result.Select(r => r.Key).Should().Equal(States3Then1Then2);
@@ -65,7 +62,6 @@ public class BatchGetOrAddTests(ITestContextAccessor testContextAccessor)
     public async Task Two_states_sharing_one_key_both_get_the_value_but_the_generator_is_asked_once()
     {
         var fake = new DictionaryCache();
-        ICache cache = fake;
         var observed = new List<long[]>();
 
         KeyValuePair<CacheKey, long>[] entries =
@@ -74,7 +70,7 @@ public class BatchGetOrAddTests(ITestContextAccessor testContextAccessor)
             new((CacheKey)"shared", 2L),
         ];
 
-        var result = await cache.GetOrAddAsync<string, long>(
+        var result = await fake.GetOrAddAsync<string, long>(
             entries, Generator(observed), null, testContextAccessor.Current.CancellationToken);
 
         observed.Single().Should().Equal(States1, "one request per distinct KEY, carrying the first state for it");
@@ -87,7 +83,6 @@ public class BatchGetOrAddTests(ITestContextAccessor testContextAccessor)
     public async Task One_state_under_two_keys_keeps_the_first_key_and_drops_the_second()
     {
         var fake = new DictionaryCache();
-        ICache cache = fake;
         var observed = new List<long[]>();
 
         KeyValuePair<CacheKey, long>[] entries =
@@ -96,7 +91,7 @@ public class BatchGetOrAddTests(ITestContextAccessor testContextAccessor)
             new((CacheKey)"other:7", 7L),
         ];
 
-        var result = await cache.GetOrAddAsync<string, long>(
+        var result = await fake.GetOrAddAsync<string, long>(
             entries, Generator(observed), null, testContextAccessor.Current.CancellationToken);
 
         result.Select(r => r.Key).Should().Equal(States7, "one result per distinct STATE");
@@ -109,16 +104,15 @@ public class BatchGetOrAddTests(ITestContextAccessor testContextAccessor)
     public async Task State_omitted_by_the_generator_returns_default_and_is_not_cached()
     {
         var fake = new DictionaryCache();
-        ICache cache = fake;
         var observed = new List<long[]>();
         var token = testContextAccessor.Current.CancellationToken;
 
-        var result = await cache.GetOrAddAsync<string, long>(
+        var result = await fake.GetOrAddAsync<string, long>(
             Entries(1, 2), Generator(observed, omit: 2L), null, token);
 
         result.Single(r => r.Key == 2L).Value.Should().BeNull();
         fake.Contains("user:2").Should().BeFalse("an omitted state must not be written");
-        await cache.GetOrAddAsync<string, long>(Entries(2), Generator(observed), null, token);
+        await fake.GetOrAddAsync<string, long>(Entries(2), Generator(observed), null, token);
         observed.Should().HaveCount(2, "the omitted entry must miss again on the next call");
     }
 
@@ -126,10 +120,9 @@ public class BatchGetOrAddTests(ITestContextAccessor testContextAccessor)
     public async Task Explicit_null_from_the_generator_is_handed_to_SetAsync()
     {
         var fake = new DictionaryCache { CacheNullValues = false };
-        ICache cache = fake;
         var observed = new List<long[]>();
 
-        var result = await cache.GetOrAddAsync<string, long>(
+        var result = await fake.GetOrAddAsync<string, long>(
             Entries(1), Generator(observed, produce: _ => null), null, testContextAccessor.Current.CancellationToken);
 
         result.Single().Value.Should().BeNull();
@@ -142,9 +135,8 @@ public class BatchGetOrAddTests(ITestContextAccessor testContextAccessor)
     public async Task States_the_generator_returns_but_was_not_asked_for_are_ignored()
     {
         var fake = new DictionaryCache();
-        ICache cache = fake;
 
-        var result = await cache.GetOrAddAsync<string, long>(
+        var result = await fake.GetOrAddAsync<string, long>(
             Entries(1),
             (_, _) => Task.FromResult<KeyValuePair<long, string?>[]>([new(1L, "A"), new(99L, "rogue")]),
             null,
@@ -159,10 +151,9 @@ public class BatchGetOrAddTests(ITestContextAccessor testContextAccessor)
     public async Task Empty_entries_short_circuits()
     {
         var fake = new DictionaryCache();
-        ICache cache = fake;
         var observed = new List<long[]>();
 
-        var result = await cache.GetOrAddAsync<string, long>(
+        var result = await fake.GetOrAddAsync<string, long>(
             [], Generator(observed), null, testContextAccessor.Current.CancellationToken);
 
         result.Should().BeEmpty();
@@ -174,28 +165,45 @@ public class BatchGetOrAddTests(ITestContextAccessor testContextAccessor)
     public async Task Null_arguments_and_non_cacheable_types_throw()
     {
         var fake = new DictionaryCache();
-        ICache cache = fake;
         var observed = new List<long[]>();
         var token = testContextAccessor.Current.CancellationToken;
 
         await Assert.ThrowsAsync<ArgumentNullException>(async () =>
-            await cache.GetOrAddAsync<string, long>(null!, Generator(observed), null, token));
+            await fake.GetOrAddAsync<string, long>(null!, Generator(observed), null, token));
         await Assert.ThrowsAsync<ArgumentNullException>(async () =>
-            await cache.GetOrAddAsync<string, long>(Entries(1), null!, null, token));
+            await fake.GetOrAddAsync<string, long>(Entries(1), null!, null, token));
         await Assert.ThrowsAsync<NotCacheableException>(async () =>
-            await cache.GetOrAddAsync<int, long>(
+            await fake.GetOrAddAsync<int, long>(
                 Entries(1), (_, _) => Task.FromResult<KeyValuePair<long, int>[]>([]), null, token));
+    }
+
+    [Fact]
+    public async Task RunAsync_rejects_a_null_cache_and_a_null_writer_before_touching_the_cache()
+    {
+        var fake = new DictionaryCache();
+        fake.Seed<string>("user:1", "A");
+        var observed = new List<long[]>();
+        var token = testContextAccessor.Current.CancellationToken;
+        ValueTask<bool> Write(KeyValuePair<CacheKey, string?>[] pairs, CancellationToken t) => fake.SetAsync(pairs, null, t);
+
+        await Assert.ThrowsAsync<ArgumentNullException>(async () =>
+            await BatchGetOrAdd.RunAsync<string, long>(null!, Entries(1), Generator(observed), Write, null, token));
+        // Every entry hits, so nothing would be written; the writer is required all the same.
+        await Assert.ThrowsAsync<ArgumentNullException>(async () =>
+            await BatchGetOrAdd.RunAsync<string, long>(fake, Entries(1), Generator(observed), null!, null, token));
+
+        fake.GetCacheEntriesCalls.Should().Be(0);
+        observed.Should().BeEmpty();
     }
 
     [Fact]
     public async Task Cancellation_token_reaches_the_generator()
     {
         var fake = new DictionaryCache();
-        ICache cache = fake;
         using var cts = new CancellationTokenSource();
         CancellationToken observedToken = default;
 
-        await cache.GetOrAddAsync<string, long>(
+        await fake.GetOrAddAsync<string, long>(
             Entries(1),
             (ids, ct) => { observedToken = ct; return Task.FromResult(ids.Select(id => new KeyValuePair<long, string?>(id, "v")).ToArray()); },
             null,
@@ -208,12 +216,11 @@ public class BatchGetOrAddTests(ITestContextAccessor testContextAccessor)
     public async Task Cancellation_from_the_generator_propagates_to_the_caller()
     {
         var fake = new DictionaryCache();
-        ICache cache = fake;
         using var cts = new CancellationTokenSource();
         await cts.CancelAsync();
 
         await Assert.ThrowsAnyAsync<OperationCanceledException>(async () =>
-            await cache.GetOrAddAsync<string, long>(
+            await fake.GetOrAddAsync<string, long>(
                 Entries(1),
                 (_, ct) => Task.FromException<KeyValuePair<long, string?>[]>(new OperationCanceledException(ct)),
                 null,
@@ -233,6 +240,38 @@ public class BatchGetOrAddTests(ITestContextAccessor testContextAccessor)
         observed.Single().Should().Equal(States1And2);
         result.Select(r => r.Value).Should().Equal("gen:1", "gen:2");
     }
+
+    [Fact]
+    public async Task NullCache_answers_as_BatchGetOrAdd_does_over_a_cache_that_never_hits()
+    {
+        KeyValuePair<CacheKey, string>[] entries =
+        [
+            new((CacheKey)"k1", "a"),
+            new((CacheKey)"k1", "b"),
+            new((CacheKey)"k2", "a"),
+            new((CacheKey)"k3", "c"),
+            new((CacheKey)"k4", "d"),
+        ];
+        var viaNull = new List<string[]>();
+        var viaBatch = new List<string[]>();
+        var token = testContextAccessor.Current.CancellationToken;
+
+        var fromNull = await NullCache.Instance.GetOrAddAsync<string, string>(entries, Answer(viaNull), null, token);
+        var fromBatch = await BatchGetOrAdd.RunAsync<string, string>(NullCache.Instance, entries, Answer(viaBatch), (_, _) => ValueTask.FromResult(true), null, token);
+
+        viaNull.Single().Should().Equal("a", "c", "d").And.Equal(viaBatch.Single());
+        fromNull.Should().Equal(new("a", "gen:a"), new("b", "gen:a"), new("c", "gen:c"), new KeyValuePair<string, string?>("d", null))
+            .And.Equal(fromBatch);
+    }
+
+    /// <summary>Out of order, a second answer for "a", answers for states nobody asked about, and none for "d".</summary>
+    private static Func<string[], CancellationToken, Task<KeyValuePair<string, string?>[]>> Answer(List<string[]> observed) =>
+        (states, _) =>
+        {
+            observed.Add(states);
+            return Task.FromResult<KeyValuePair<string, string?>[]>(
+                [new("c", "gen:c"), new("a", "gen:a"), new("a", "second"), new("b", "unasked"), new("z", "unasked")]);
+        };
 
     private static KeyValuePair<CacheKey, long>[] Entries(params long[] ids) =>
         ids.Select(id => new KeyValuePair<CacheKey, long>((CacheKey)$"user:{id}", id)).ToArray();
