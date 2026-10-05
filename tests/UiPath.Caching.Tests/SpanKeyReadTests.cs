@@ -112,12 +112,47 @@ public class SpanKeyReadTests
     }
 
     [Fact]
-    public async Task An_outside_implementation_reads_by_span_through_the_default_body()
+    public async Task An_outside_implementation_reads_by_span_through_its_CacheKey_overload()
     {
         var cache = new DictionaryCache();
         (await cache.SetAsync<string>("k", "v", policy: null, Ct)).Should().BeTrue();
 
         SpanReads.Read<string>(cache, " K ", Ct).Should().Be("v");
+    }
+
+    [Fact]
+    public void A_proxied_cache_serves_a_span_read_through_its_CacheKey_overload()
+    {
+        var cache = Substitute.For<ICache>();
+        var typed = Substitute.For<ICache<string>>();
+        var hash = Substitute.For<IHashCache>();
+        var typedHash = Substitute.For<IHashCache<string>>();
+        IDictionary<string, string?> all = new Dictionary<string, string?> { ["f"] = "v" };
+        cache.GetAsync<string>(new CacheKey("k"), null, Ct).Returns("v");
+        typed.GetAsync(new CacheKey("k"), Ct).Returns("v");
+        hash.GetItemAsync<string>(new CacheKey("k"), "f", null, Ct).Returns("v");
+        hash.GetAsync<string>(new CacheKey("k"), null, Ct).Returns(all);
+        typedHash.GetItemAsync(new CacheKey("k"), "f", Ct).Returns("v");
+        typedHash.GetAsync(new CacheKey("k"), Ct).Returns(all);
+
+        SpanReads.Read<string>(cache, " K ", Ct).Should().Be("v");
+        SpanReads.Read(typed, " K ", Ct).Should().Be("v");
+        SpanReads.ReadItem<string>(hash, " K ", "f", Ct).Should().Be("v");
+        SpanReads.ReadAll<string>(hash, " K ", Ct).Should().BeSameAs(all);
+        SpanReads.ReadItem(typedHash, " K ", "f", Ct).Should().Be("v");
+        SpanReads.ReadAll(typedHash, " K ", Ct).Should().BeSameAs(all);
+    }
+
+    [Fact]
+    public void A_typed_cache_over_a_proxied_cache_serves_a_span_read_through_the_composed_CacheKey()
+    {
+        var inner = Substitute.For<ICache>();
+        var innerHash = Substitute.For<IHashCache>();
+        inner.GetAsync<string>(new CacheKey("app:k"), Arg.Any<CachePolicy?>(), Ct).Returns("v");
+        innerHash.GetItemAsync<string>(new CacheKey("app:k"), "f", Arg.Any<CachePolicy?>(), Ct).Returns("v");
+
+        SpanReads.Read(new Cache<string>(inner, new PrefixCacheKeyStrategy("app")), "k", Ct).Should().Be("v");
+        SpanReads.ReadItem(new HashCache<string>(innerHash, new PrefixCacheKeyStrategy("app")), "k", "f", Ct).Should().Be("v");
     }
 
     [Fact]

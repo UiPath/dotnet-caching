@@ -3,7 +3,7 @@ using UiPath.Caching.Telemetry;
 
 namespace UiPath.Caching;
 
-internal sealed partial class MultilayerCache : MultilayerCacheBase, ICache
+internal sealed partial class MultilayerCache : MultilayerCacheBase, ICache, ISpanKeyCache
 {
     private readonly ICache _innerCache;
     private readonly CacheEntryBuilder _entryBuilder;

@@ -1,7 +1,7 @@
 namespace UiPath.Caching;
 
 [ExcludeFromCodeCoverage]
-public class Cache<T> : ICache<T>
+public class Cache<T> : ICache<T>, ISpanKeyCache<T>
 {
     private readonly ICache _cache;
     private readonly ICacheKeyStrategy _cacheKeyStrategy;

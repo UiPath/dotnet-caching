@@ -1,7 +1,7 @@
 namespace UiPath.Caching;
 
 [ExcludeFromCodeCoverage]
-public sealed class NullCache : ICache
+public sealed class NullCache : ICache, ISpanKeyCache
 {
     public static readonly NullCache Instance = new();
 

@@ -6,9 +6,6 @@ public interface ICache<T>
     [OverloadResolutionPriority(1)]
     ValueTask<T?> GetAsync(CacheKey cacheKey, CancellationToken token = default);
 
-    /// <inheritdoc cref="ICache.GetAsync{T}(Span{char}, CachePolicy, CancellationToken)"/>
-    ValueTask<T?> GetAsync(Span<char> cacheKey, CancellationToken token = default) =>
-        GetAsync(new CacheKey(cacheKey), token);
 
     ValueTask<KeyValuePair<CacheKey, T?>[]> GetAsync(CacheKey[] cacheKeys, CancellationToken token = default);
 
