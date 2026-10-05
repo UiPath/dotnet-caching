@@ -129,7 +129,7 @@ Details: [second Redis connection recipe](docs/recipes/second-redis-connection.m
 - **Large-value auditing** — `AuditEnabled` + `LargeValueThreshold` log writes over a byte threshold.
 
 **Observability**
-- **`ICachingTelemetryProvider`** seam with span-based tag bags (allocation-free when telemetry is off). An OpenTelemetry adapter (`ActivitySource` + `Meter`) ships as `UiPath.Caching.OpenTelemetry`; OpenTelemetry Redis instrumentation wires up via the `IConnectionMultiplexerFactory` hook (see the sample).
+- **`ICachingTelemetryProvider`** seam with struct tag bags (`TelemetryTags<T>`; allocation-free when telemetry is off, and mockable). An OpenTelemetry adapter (`ActivitySource` + `Meter`) ships as `UiPath.Caching.OpenTelemetry`; OpenTelemetry Redis instrumentation wires up via the `IConnectionMultiplexerFactory` hook (see the sample).
 - **CloudEvents** — broadcast events wrapped in the CNCF CloudEvents envelope (`UiPath.Caching.CloudEvents`).
 
 ## Architecture

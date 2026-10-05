@@ -428,8 +428,9 @@ up the Redis-command instrumentation.
 Registering a custom `ICachingTelemetryProvider` implementation directly is also
 first-class: if your service has its own telemetry surface, implement
 the interface and register it in the DI container instead of calling
-`.AddOpenTelemetry()`. The interface is small — four methods with default no-op
-bodies — so custom implementations are straightforward to write and easy to test.
+`.AddOpenTelemetry()`. The interface is small — four methods, each implemented,
+with an empty body for a signal the service drops — so custom implementations are
+straightforward to write, and Moq or NSubstitute can mock it in tests.
 
 See also: [how-to/telemetry-and-strategies.md](how-to/telemetry-and-strategies.md).
 

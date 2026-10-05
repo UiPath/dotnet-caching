@@ -4,7 +4,7 @@ Two telemetry paths and five customization seams. The two telemetry paths are co
 
 ## OpenTelemetry adapter
 
-Default. `.AddOpenTelemetry()` on the caching builder registers `UiPath.Caching.OpenTelemetry.CachingTelemetryProvider` as the `ICachingTelemetryProvider` implementation. The provider is backed by a `System.Diagnostics.ActivitySource` and a `Meter`, both named **`UiPath.Caching`**: every `TrackDependency` / `TrackEvent` / `TrackException` call starts (or annotates) an `Activity` on that source, and `TrackMetric` plus the hit/miss counters record on instruments from that `Meter`. Tag bags arrive as `ReadOnlySpan<KeyValuePair>` and are materialized only when non-empty, so no allocation occurs on the hot path when the span is empty.
+Default. `.AddOpenTelemetry()` on the caching builder registers `UiPath.Caching.OpenTelemetry.CachingTelemetryProvider` as the `ICachingTelemetryProvider` implementation. The provider is backed by a `System.Diagnostics.ActivitySource` and a `Meter`, both named **`UiPath.Caching`**: every `TrackDependency` / `TrackEvent` / `TrackException` call starts (or annotates) an `Activity` on that source, and `TrackMetric` plus the hit/miss counters record on instruments from that `Meter`. Tag bags arrive as `TelemetryTags<T>` and are enumerated directly into the activity or measurement, so no allocation occurs on the hot path when there are no tags.
 
 You collect these signals the same way you collect any other OTel source — add the source and meter to your tracer/meter providers by name:
 
@@ -159,7 +159,7 @@ public sealed class MyBridge(IMyMetricsSink sink) : ICachingTelemetryProvider
 }
 ```
 
-`TelemetryTags.ToDictionaryOrNull` is in `UiPath.Caching.Telemetry`. This is the same helper the OpenTelemetry adapter's `CachingTelemetryProvider` uses when materializing tag bags.
+`TelemetryTags.ToDictionaryOrNull` is in `UiPath.Caching.Telemetry`.
 
 ### What the lib emits
 

@@ -901,7 +901,7 @@ public interface ICachingTelemetryProvider
 }
 ```
 
-`ICachingTelemetryProvider` is the single seam through which the cache runtime emits all observability signals: dependency traces, custom events, exceptions, and metrics. The `properties` and `metrics` parameters use `ReadOnlySpan<KeyValuePair<...>>` — a zero-allocation, stack-allocated tag list — to avoid heap pressure on hot paths. Default no-op implementations are provided for all methods so implementers can override only the signals they care about. The runtime times each cache operation with a `TelemetryScope` and reports it through `TrackMetric`, and through `TrackDependency` when per-key read telemetry is on.
+`ICachingTelemetryProvider` is the single seam through which the cache runtime emits all observability signals: dependency traces, custom events, exceptions, and metrics. The `properties` and `metrics` parameters use `TelemetryTags<T>` — a struct holding up to nine pairs inline, built from a collection expression, a span or an array — to avoid heap pressure on hot paths. It is a struct rather than a `ReadOnlySpan` so the interface stays mockable, and it compares by value, so a mock matches the tags it received. The interface has no default bodies: an implementer writes all four methods, with an empty body for a signal it drops. The runtime times each cache operation with a `TelemetryScope` and reports it through `TrackMetric`, and through `TrackDependency` when per-key read telemetry is on.
 
 **Use this when:**
 
