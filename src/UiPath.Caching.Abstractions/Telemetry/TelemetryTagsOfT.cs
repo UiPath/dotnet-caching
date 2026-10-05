@@ -127,6 +127,8 @@ public readonly struct TelemetryTags<TValue> : IReadOnlyList<KeyValuePair<string
     [InlineArray(InlineCapacity)]
     private struct InlineTags
     {
+#pragma warning disable S1144 // the one field an [InlineArray] struct declares; the runtime repeats it as the buffer
         private KeyValuePair<string, TValue> _element;
+#pragma warning restore S1144
     }
 }

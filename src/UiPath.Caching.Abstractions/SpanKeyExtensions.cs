@@ -22,26 +22,26 @@ public static class SpanKeyExtensions
             : cache.GetAsync(new CacheKey(cacheKey), token);
 
     /// <inheritdoc cref="GetAsync{T}(ICache, Span{char}, CachePolicy, CancellationToken)"/>
-    public static ValueTask<T?> GetItemAsync<T>(this IHashCache cache, Span<char> cacheKey, string field, CachePolicy? policy, CancellationToken token = default) =>
-        cache is ISpanKeyHashCache spanKeyCache
-            ? spanKeyCache.GetItemAsync<T>(cacheKey, field, policy, token)
-            : cache.GetItemAsync<T>(new CacheKey(cacheKey), field, policy, token);
-
-    /// <inheritdoc cref="GetAsync{T}(ICache, Span{char}, CachePolicy, CancellationToken)"/>
     public static ValueTask<IDictionary<string, T?>> GetAsync<T>(this IHashCache cache, Span<char> cacheKey, CachePolicy? policy, CancellationToken token = default) =>
         cache is ISpanKeyHashCache spanKeyCache
             ? spanKeyCache.GetAsync<T>(cacheKey, policy, token)
             : cache.GetAsync<T>(new CacheKey(cacheKey), policy, token);
 
     /// <inheritdoc cref="GetAsync{T}(ICache, Span{char}, CachePolicy, CancellationToken)"/>
-    public static ValueTask<T?> GetItemAsync<T>(this IHashCache<T> cache, Span<char> cacheKey, string field, CancellationToken token = default) =>
-        cache is ISpanKeyHashCache<T> spanKeyCache
-            ? spanKeyCache.GetItemAsync(cacheKey, field, token)
-            : cache.GetItemAsync(new CacheKey(cacheKey), field, token);
-
-    /// <inheritdoc cref="GetAsync{T}(ICache, Span{char}, CachePolicy, CancellationToken)"/>
     public static ValueTask<IDictionary<string, T?>> GetAsync<T>(this IHashCache<T> cache, Span<char> cacheKey, CancellationToken token = default) =>
         cache is ISpanKeyHashCache<T> spanKeyCache
             ? spanKeyCache.GetAsync(cacheKey, token)
             : cache.GetAsync(new CacheKey(cacheKey), token);
+
+    /// <inheritdoc cref="GetAsync{T}(ICache, Span{char}, CachePolicy, CancellationToken)"/>
+    public static ValueTask<T?> GetItemAsync<T>(this IHashCache cache, Span<char> cacheKey, string field, CachePolicy? policy, CancellationToken token = default) =>
+        cache is ISpanKeyHashCache spanKeyCache
+            ? spanKeyCache.GetItemAsync<T>(cacheKey, field, policy, token)
+            : cache.GetItemAsync<T>(new CacheKey(cacheKey), field, policy, token);
+
+    /// <inheritdoc cref="GetAsync{T}(ICache, Span{char}, CachePolicy, CancellationToken)"/>
+    public static ValueTask<T?> GetItemAsync<T>(this IHashCache<T> cache, Span<char> cacheKey, string field, CancellationToken token = default) =>
+        cache is ISpanKeyHashCache<T> spanKeyCache
+            ? spanKeyCache.GetItemAsync(cacheKey, field, token)
+            : cache.GetItemAsync(new CacheKey(cacheKey), field, token);
 }
