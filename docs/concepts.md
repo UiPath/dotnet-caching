@@ -408,7 +408,7 @@ refresh.
 
 All four methods accept tag-bag parameters as `TelemetryTags<string>`
 (and `TelemetryTags<double>` for metric dimensions), a struct that holds up to
-eight pairs inline, so the hot path stays allocation-free: when telemetry is
+nine pairs inline, so the hot path stays allocation-free: when telemetry is
 disabled or a no-op provider is registered, passing empty tags costs nothing and
 no dictionary is heap-allocated on each call. The interface has no default
 bodies, which keeps it mockable: a provider implements all four methods.

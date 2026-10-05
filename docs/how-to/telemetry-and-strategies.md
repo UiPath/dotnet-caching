@@ -132,7 +132,7 @@ public interface ICachingTelemetryProvider
 }
 ```
 
-All four tracking methods accept tag bags as `TelemetryTags<string>` and `TelemetryTags<double>`: a struct holding up to eight pairs inline and more in one array, built from a collection expression such as `[new("key", value)]`, a span or an array. `NullTelemetryProvider` (the default when no `ICachingTelemetryProvider` is registered) is a true no-op, so there is zero allocation when telemetry is disabled.
+All four tracking methods accept tag bags as `TelemetryTags<string>` and `TelemetryTags<double>`: a struct holding up to nine pairs inline and more in one array, built from a collection expression such as `[new("key", value)]`, a span or an array. `NullTelemetryProvider` (the default when no `ICachingTelemetryProvider` is registered) is a true no-op, so there is zero allocation when telemetry is disabled.
 
 The methods have no default bodies: an implementation writes all four, with an empty body for a signal it drops. A struct rather than a `ReadOnlySpan` keeps the interface mockable — a proxy generator emits invalid IL for a method that takes a span — and `TelemetryTags<T>` compares by value, so a mock matches the tags a test expects.
 

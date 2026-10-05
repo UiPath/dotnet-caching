@@ -43,7 +43,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 
 - **`ICachingTelemetryProvider` takes `TelemetryTags<T>` and has no default bodies.** `TrackDependency`, `TrackEvent`,
   `TrackException` and `TrackMetric` take `TelemetryTags<string>` properties and `TelemetryTags<double>` metrics in
-  place of `ReadOnlySpan<KeyValuePair<…>>`. The struct holds up to eight pairs inline and more in one array, so the
+  place of `ReadOnlySpan<KeyValuePair<…>>`. The struct holds up to nine pairs inline and more in one array, so the
   call stays allocation-free for the tags the library sends; a collection expression, a span or an array builds it
   implicitly, and it compares by value. With a span parameter, a Moq or NSubstitute mock of the interface threw
   `InvalidProgramException` on the first call and could not match the tags it received; now both work.

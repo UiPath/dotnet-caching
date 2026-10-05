@@ -7,8 +7,8 @@ public class TelemetryTagsTests
     [Theory]
     [InlineData(0)]
     [InlineData(1)]
-    [InlineData(8)]
     [InlineData(9)]
+    [InlineData(10)]
     [InlineData(20)]
     public void Tags_read_back_in_order_inline_or_overflowed(int count)
     {
@@ -20,6 +20,23 @@ public class TelemetryTagsTests
         tags.IsEmpty.Should().Be(count == 0);
         Enumerable.Range(0, count).Select(i => tags[i]).Should().Equal(source);
         tags.Should().Equal(source);
+    }
+
+    [Fact]
+    public void Nine_tags_from_a_collection_expression_allocate_nothing()
+    {
+        static int Build() => Tags().Count;
+        static TelemetryTags<string> Tags() =>
+            [new("a", "1"), new("b", "2"), new("c", "3"), new("d", "4"), new("e", "5"), new("f", "6"), new("g", "7"), new("h", "8"), new("i", "9")];
+
+        Build().Should().Be(9);
+        var before = GC.GetAllocatedBytesForCurrentThread();
+        for (var i = 0; i < 1_000; i++)
+        {
+            Build();
+        }
+
+        (GC.GetAllocatedBytesForCurrentThread() - before).Should().Be(0, "the library's largest call site sends nine tags");
     }
 
     [Fact]

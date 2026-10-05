@@ -3,7 +3,7 @@ using System.Runtime.CompilerServices;
 
 namespace UiPath.Caching.Telemetry;
 
-/// <summary>The properties or metrics of one telemetry call: up to eight held inline, more in one array.</summary>
+/// <summary>The properties or metrics of one telemetry call: up to nine held inline, as many as any call in the library sends, more in one array.</summary>
 /// <remarks>
 /// <para>A struct rather than a <c>ReadOnlySpan&lt;KeyValuePair&lt;string, TValue&gt;&gt;</c> so <see cref="ICachingTelemetryProvider"/>
 /// can be mocked: a proxy generator emits invalid IL for a method that takes a span, and an argument matcher cannot
@@ -13,7 +13,7 @@ namespace UiPath.Caching.Telemetry;
 [CollectionBuilder(typeof(TelemetryTagsBuilder), nameof(TelemetryTagsBuilder.Create))]
 public readonly struct TelemetryTags<TValue> : IReadOnlyList<KeyValuePair<string, TValue>>, IEquatable<TelemetryTags<TValue>>
 {
-    private const int InlineCapacity = 8;
+    private const int InlineCapacity = 9;
 
     private readonly InlineTags _inline;
     private readonly KeyValuePair<string, TValue>[]? _overflow;

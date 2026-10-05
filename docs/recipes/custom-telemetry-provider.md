@@ -76,7 +76,7 @@ services.AddCaching(
 
 `IHostTelemetry` is a placeholder for your service's actual telemetry interface — adapt the method names to your host's API.
 
-The interface takes tag bags as `TelemetryTags<T>`, a struct that holds up to eight pairs inline, so the hot path is allocation-free when telemetry is disabled. Materializing the tags into a `Dictionary` is only paid when you actually forward the event. If your host telemetry can enumerate `KeyValuePair` pairs directly, skip the dict materialization entirely.
+The interface takes tag bags as `TelemetryTags<T>`, a struct that holds up to nine pairs inline, so the hot path is allocation-free when telemetry is disabled. Materializing the tags into a `Dictionary` is only paid when you actually forward the event. If your host telemetry can enumerate `KeyValuePair` pairs directly, skip the dict materialization entirely.
 
 The `eventName` parameter on `TrackEvent` is the library's event name (e.g. `cache.miss`, `cache.write`, `cache.distributedlock.unavailable`). Filter by name if you only want a subset of events forwarded.
 
