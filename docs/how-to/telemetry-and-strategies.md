@@ -155,7 +155,35 @@ public sealed class MyBridge(IMyMetricsSink sink) : ICachingTelemetryProvider
             TelemetryTags.ToDictionaryOrNull(metrics));
     }
 
-    // implement TrackDependency, TrackException, TrackMetric similarly
+    public void TrackMetric(
+        string name,
+        double value,
+        TelemetryTags<string> properties = default)
+    {
+        sink.Emit(name,
+            TelemetryTags.ToDictionaryOrNull(properties),
+            new Dictionary<string, double> { [name] = value });
+    }
+
+    public void TrackException(
+        Exception ex,
+        TelemetryTags<string> properties = default,
+        TelemetryTags<double> metrics = default)
+    {
+        sink.Emit(ex.GetType().Name,
+            TelemetryTags.ToDictionaryOrNull(properties),
+            TelemetryTags.ToDictionaryOrNull(metrics));
+    }
+
+    public void TrackDependency(
+        string type, string target, string name, string data,
+        DateTimeOffset startTime, TimeSpan duration,
+        string resultCode, bool success,
+        TelemetryTags<string> properties = default,
+        TelemetryTags<double> metrics = default)
+    {
+        // This sink has no dependency signal; the method still has to exist.
+    }
 }
 ```
 
