@@ -406,13 +406,12 @@ occur inside resilience pipelines, such as a generator timeout or a Redis
 command failure during a background
 refresh.
 
-All four methods accept tag-bag parameters as `ReadOnlySpan<KeyValuePair<string, string>>`
-(and `ReadOnlySpan<KeyValuePair<string, double>>` for metric dimensions). Using
-`ReadOnlySpan` keeps the hot path allocation-free: when telemetry is disabled or
-when a no-op provider is registered, passing an empty span costs nothing and no
-dictionary is heap-allocated on each call. The default implementations on the
-interface are no-ops, so a partial custom provider only needs to override the
-methods it cares about.
+All four methods accept tag-bag parameters as `TelemetryTags<string>`
+(and `TelemetryTags<double>` for metric dimensions), a struct that holds up to
+eight pairs inline, so the hot path stays allocation-free: when telemetry is
+disabled or a no-op provider is registered, passing empty tags costs nothing and
+no dictionary is heap-allocated on each call. The interface has no default
+bodies, which keeps it mockable: a provider implements all four methods.
 
 The default integration path is OpenTelemetry. Calling `.AddOpenTelemetry()` on
 the cache builder registers `UiPath.Caching.OpenTelemetry.CachingTelemetryProvider`,

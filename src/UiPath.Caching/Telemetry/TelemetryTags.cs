@@ -2,13 +2,13 @@ namespace UiPath.Caching.Telemetry;
 
 public static class TelemetryTags
 {
-    public static Dictionary<string, string>? ToDictionaryOrNull(ReadOnlySpan<KeyValuePair<string, string>> tags)
+    public static Dictionary<string, string>? ToDictionaryOrNull(TelemetryTags<string> tags)
     {
         if (tags.IsEmpty)
         {
             return null;
         }
-        var dict = new Dictionary<string, string>(tags.Length);
+        var dict = new Dictionary<string, string>(tags.Count);
         foreach (var tag in tags)
         {
             dict[tag.Key] = tag.Value;
@@ -16,13 +16,13 @@ public static class TelemetryTags
         return dict;
     }
 
-    public static Dictionary<string, double>? ToDictionaryOrNull(ReadOnlySpan<KeyValuePair<string, double>> tags)
+    public static Dictionary<string, double>? ToDictionaryOrNull(TelemetryTags<double> tags)
     {
         if (tags.IsEmpty)
         {
             return null;
         }
-        var dict = new Dictionary<string, double>(tags.Length);
+        var dict = new Dictionary<string, double>(tags.Count);
         foreach (var tag in tags)
         {
             dict[tag.Key] = tag.Value;

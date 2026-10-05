@@ -692,7 +692,7 @@ public class UiPathDistributedCacheTests
         (await _cache.GetAsync("k", TestContext.Current.CancellationToken)).Should().BeNull();
     }
 
-    private sealed class SuffixKeyStrategy(string suffix) : ICacheKeyStrategy
+    private sealed class SuffixKeyStrategy(string suffix) : ICacheKeyStrategy, ISpanCacheKeyStrategy
     {
         public CacheKey GetCacheKey<T>(CacheKey key) => key.WithName(key.Name + suffix);
 
@@ -703,7 +703,7 @@ public class UiPathDistributedCacheTests
         }
     }
 
-    private sealed class AmbientCasingKeyStrategy : ICacheKeyStrategy
+    private sealed class AmbientCasingKeyStrategy : ICacheKeyStrategy, ISpanCacheKeyStrategy
     {
         public CacheKey GetCacheKey<T>(CacheKey key) => new(key.Name, CacheKeyCasing.Insensitive);
 
@@ -714,7 +714,7 @@ public class UiPathDistributedCacheTests
         }
     }
 
-    private sealed class EmptyKeyStrategy : ICacheKeyStrategy
+    private sealed class EmptyKeyStrategy : ICacheKeyStrategy, ISpanCacheKeyStrategy
     {
         public CacheKey GetCacheKey<T>(CacheKey key) => default;
 

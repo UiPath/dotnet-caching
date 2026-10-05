@@ -96,7 +96,7 @@ public class CacheOfTBatchGetOrAddTests(ITestContextAccessor testContextAccessor
     private static KeyValuePair<CacheKey, long>[] Entries(params long[] ids) =>
         ids.Select(id => new KeyValuePair<CacheKey, long>((CacheKey)$"user:{id}", id)).ToArray();
     /// <summary>Prefixes every key.</summary>
-    private sealed class PrefixStrategy : ICacheKeyStrategy
+    private sealed class PrefixStrategy : ICacheKeyStrategy, ISpanCacheKeyStrategy
     {
         public CacheKey GetCacheKey<T>(CacheKey key) => "p:" + key.Name;
 
@@ -107,7 +107,7 @@ public class CacheOfTBatchGetOrAddTests(ITestContextAccessor testContextAccessor
         }
     }
 
-    private sealed class CollapsingStrategy : ICacheKeyStrategy
+    private sealed class CollapsingStrategy : ICacheKeyStrategy, ISpanCacheKeyStrategy
     {
         public CacheKey GetCacheKey<T>(CacheKey key) => "collapsed";
 

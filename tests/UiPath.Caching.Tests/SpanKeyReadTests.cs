@@ -144,6 +144,18 @@ public class SpanKeyReadTests
     }
 
     [Fact]
+    public async Task A_typed_cache_with_a_proxied_strategy_reads_by_span_through_GetCacheKey()
+    {
+        using var cache = InMemoryMultilayer.Cache(new InMemoryCacheOptions());
+        var strategy = Substitute.For<ICacheKeyStrategy>();
+        strategy.GetCacheKey<string>(Arg.Any<CacheKey>()).Returns(c => new CacheKey("app:" + c.Arg<CacheKey>().Name));
+        var typed = new Cache<string>(cache, strategy);
+        (await typed.SetAsync("k", "v", Ct)).Should().BeTrue();
+
+        SpanReads.Read(typed, "k", Ct).Should().Be("v");
+    }
+
+    [Fact]
     public void A_typed_cache_over_a_proxied_cache_serves_a_span_read_through_the_composed_CacheKey()
     {
         var inner = Substitute.For<ICache>();
@@ -340,7 +352,7 @@ public class SpanKeyReadTests
 #endif
 
     /// <summary>Appends an upper-case suffix; the key path lowercases it through <c>WithName</c>, the span path through the library.</summary>
-    private sealed class SuffixStrategy : ICacheKeyStrategy
+    private sealed class SuffixStrategy : ICacheKeyStrategy, ISpanCacheKeyStrategy
     {
         public CacheKey GetCacheKey<T>(CacheKey key) => key.WithName(key.Name + "#S");
 
@@ -360,7 +372,7 @@ public class SpanKeyReadTests
     }
 
     /// <summary>Runs a callback while composing, which is after the read has sampled the connection and before it probes the local tier.</summary>
-    private sealed class DroppingStrategy(Action onCompose) : ICacheKeyStrategy
+    private sealed class DroppingStrategy(Action onCompose) : ICacheKeyStrategy, ISpanCacheKeyStrategy
     {
         public CacheKey GetCacheKey<T>(CacheKey key) => key;
 
@@ -373,14 +385,14 @@ public class SpanKeyReadTests
         }
     }
 
-    private sealed class ThrowingStrategy : ICacheKeyStrategy
+    private sealed class ThrowingStrategy : ICacheKeyStrategy, ISpanCacheKeyStrategy
     {
         public CacheKey GetCacheKey<T>(CacheKey key) => throw new NotSupportedException("the strategy was reached");
 
         public bool TryGetCacheKey<T>(ReadOnlySpan<char> key, Span<char> destination, out int written) => throw new NotSupportedException("the strategy was reached");
     }
 
-    private sealed class DecliningStrategy : ICacheKeyStrategy
+    private sealed class DecliningStrategy : ICacheKeyStrategy, ISpanCacheKeyStrategy
     {
         public CacheKey GetCacheKey<T>(CacheKey key) => key.WithName(key.Name + "#d");
 

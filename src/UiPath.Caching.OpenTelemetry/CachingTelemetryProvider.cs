@@ -28,7 +28,7 @@ public sealed class CachingTelemetryProvider : ICachingTelemetryProvider, IDispo
         _exceptions = _meter.CreateCounter<long>("uipath.caching.exception");
     }
 
-    public void TrackMetric(string name, double value, ReadOnlySpan<KeyValuePair<string, string>> properties = default)
+    public void TrackMetric(string name, double value, TelemetryTags<string> properties = default)
     {
         var tags = new TagList { { "metric.name", name } };
         foreach (var p in properties)
@@ -38,7 +38,7 @@ public sealed class CachingTelemetryProvider : ICachingTelemetryProvider, IDispo
         _metric.Record(value, tags);
     }
 
-    public void TrackEvent(string eventName, ReadOnlySpan<KeyValuePair<string, string>> properties = default, ReadOnlySpan<KeyValuePair<string, double>> metrics = default)
+    public void TrackEvent(string eventName, TelemetryTags<string> properties = default, TelemetryTags<double> metrics = default)
     {
         var tags = new TagList { { "event.name", eventName } };
         foreach (var p in properties)
@@ -52,7 +52,7 @@ public sealed class CachingTelemetryProvider : ICachingTelemetryProvider, IDispo
         }
     }
 
-    public void TrackException(Exception ex, ReadOnlySpan<KeyValuePair<string, string>> properties = default, ReadOnlySpan<KeyValuePair<string, double>> metrics = default)
+    public void TrackException(Exception ex, TelemetryTags<string> properties = default, TelemetryTags<double> metrics = default)
     {
         var tags = new TagList { { "exception.type", ex.GetType().FullName ?? string.Empty } };
         foreach (var p in properties)
@@ -71,7 +71,7 @@ public sealed class CachingTelemetryProvider : ICachingTelemetryProvider, IDispo
         }));
     }
 
-    public void TrackDependency(string type, string target, string name, string data, DateTimeOffset startTime, TimeSpan duration, string resultCode, bool success, ReadOnlySpan<KeyValuePair<string, string>> properties = default, ReadOnlySpan<KeyValuePair<string, double>> metrics = default)
+    public void TrackDependency(string type, string target, string name, string data, DateTimeOffset startTime, TimeSpan duration, string resultCode, bool success, TelemetryTags<string> properties = default, TelemetryTags<double> metrics = default)
     {
         var tags = new ActivityTagsCollection
         {

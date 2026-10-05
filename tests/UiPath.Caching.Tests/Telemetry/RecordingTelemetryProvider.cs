@@ -16,16 +16,16 @@ internal sealed class RecordingTelemetryProvider : ICachingTelemetryProvider
     public IReadOnlyList<DependencyRecord> Dependencies => Snapshot(_dependencies);
     public IReadOnlyList<ExceptionRecord> Exceptions => Snapshot(_exceptions);
 
-    public void TrackDependency(string type, string target, string name, string data, DateTimeOffset startTime, TimeSpan duration, string resultCode, bool success, ReadOnlySpan<KeyValuePair<string, string>> properties = default, ReadOnlySpan<KeyValuePair<string, double>> metrics = default) =>
+    public void TrackDependency(string type, string target, string name, string data, DateTimeOffset startTime, TimeSpan duration, string resultCode, bool success, TelemetryTags<string> properties = default, TelemetryTags<double> metrics = default) =>
         Record(_dependencies, new(type, target, name, data, startTime, duration, resultCode, success, TelemetryTags.ToDictionaryOrNull(properties), TelemetryTags.ToDictionaryOrNull(metrics)));
 
-    public void TrackEvent(string eventName, ReadOnlySpan<KeyValuePair<string, string>> properties = default, ReadOnlySpan<KeyValuePair<string, double>> metrics = default) =>
+    public void TrackEvent(string eventName, TelemetryTags<string> properties = default, TelemetryTags<double> metrics = default) =>
         Record(_events, new(eventName, TelemetryTags.ToDictionaryOrNull(properties), TelemetryTags.ToDictionaryOrNull(metrics)));
 
-    public void TrackException(Exception ex, ReadOnlySpan<KeyValuePair<string, string>> properties = default, ReadOnlySpan<KeyValuePair<string, double>> metrics = default) =>
+    public void TrackException(Exception ex, TelemetryTags<string> properties = default, TelemetryTags<double> metrics = default) =>
         Record(_exceptions, new(ex, TelemetryTags.ToDictionaryOrNull(properties), TelemetryTags.ToDictionaryOrNull(metrics)));
 
-    public void TrackMetric(string name, double value, ReadOnlySpan<KeyValuePair<string, string>> properties = default) =>
+    public void TrackMetric(string name, double value, TelemetryTags<string> properties = default) =>
         Record(_metrics, new(name, value, TelemetryTags.ToDictionaryOrNull(properties)));
 
     private void Record<T>(List<T> target, T record)

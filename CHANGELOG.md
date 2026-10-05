@@ -41,11 +41,21 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 
 ### Changed
 
-- **`ICacheKeyStrategy` gains `TryGetCacheKey<T>(ReadOnlySpan<char>, Span<char>, out int)`.** The span form of the
+- **`ICachingTelemetryProvider` takes `TelemetryTags<T>` and has no default bodies.** `TrackDependency`, `TrackEvent`,
+  `TrackException` and `TrackMetric` take `TelemetryTags<string>` properties and `TelemetryTags<double>` metrics in
+  place of `ReadOnlySpan<KeyValuePair<…>>`. The struct holds up to eight pairs inline and more in one array, so the
+  call stays allocation-free for the tags the library sends; a collection expression, a span or an array builds it
+  implicitly, and it compares by value. With a span parameter, a Moq or NSubstitute mock of the interface threw
+  `InvalidProgramException` on the first call and could not match the tags it received; now both work.
+  `TelemetryTags.ToDictionaryOrNull` takes the struct. **Breaking** for every provider outside the library: change
+  the parameter types, and implement all four methods, since the no-op default bodies are gone.
+
+- **`ISpanCacheKeyStrategy.TryGetCacheKey<T>(ReadOnlySpan<char>, Span<char>, out int)`.** The span form of the
   composition, behind the `Span<char>` reads: the text arrives normalized, the strategy writes what `GetCacheKey`
-  would build, and the library normalizes the result as `CacheKey.WithName` would. It has no default body.
-  **Breaking** for a strategy outside the library, which must add it; returning `false` keeps its reads on the string
-  path and changes nothing else.
+  would build, and the library normalizes the result as `CacheKey.WithName` would. `DefaultCacheKeyStrategy` and
+  `PrefixCacheKeyStrategy` implement it. A strategy outside the library implements it to keep a span read's local
+  hit allocation-free; one that does not is read through `GetCacheKey`, as before. It is apart from
+  `ICacheKeyStrategy` so a mock of the strategy never has to proxy a span.
 
 - **The local tier is keyed by the key's text.** `IMemoryCache` receives `CacheKey.Name` rather than the boxed
   struct: no box per lookup, one object less per resident entry, and `MemoryCache`'s string-keyed dictionary

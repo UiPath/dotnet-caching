@@ -476,7 +476,7 @@ public class NamedCachingTests
     }
 
     /// <summary>Throws where a real strategy would compose the key, before the cache reaches Redis.</summary>
-    private sealed class ThrowingCacheKeyStrategy : ICacheKeyStrategy
+    private sealed class ThrowingCacheKeyStrategy : ICacheKeyStrategy, ISpanCacheKeyStrategy
     {
         public CacheKey GetCacheKey<T>(CacheKey key) => throw new NotSupportedException($"strategy reached for '{key}'");
 

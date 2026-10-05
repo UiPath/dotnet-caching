@@ -683,14 +683,17 @@ public interface ITopicFactory
 public interface ICacheKeyStrategy
 {
     CacheKey GetCacheKey<T>(CacheKey key);
+}
 
+public interface ISpanCacheKeyStrategy
+{
     bool TryGetCacheKey<T>(ReadOnlySpan<char> key, Span<char> destination, out int written);
 }
 ```
 
 `ICacheKeyStrategy` is the pluggable seam for transforming a caller-supplied `CacheKey` into the key actually stored in the backing store. The type parameter `T` carries the cached value type so that implementations can inject the type name, tenant identifier, or other ambient context into the final key. `DefaultCacheKeyStrategy` returns the key unchanged; `PrefixCacheKeyStrategy` prepends a prefix and separator. A custom strategy is set on a provider's options (`CacheKeyStrategy`), where it applies to every cache built from that provider, or passed to `Cache<T>` / `HashCache<T>` for one typed cache.
 
-`TryGetCacheKey<T>` is the same composition without a string, behind the `Span<char>` reads. The caller's text arrives normalized as `CacheKey` normalizes it; the strategy writes into `destination` the characters `GetCacheKey` would build; the library normalizes the result as `CacheKey.WithName` would before probing the local tier, so casing is not the strategy's concern. Return `false` when the text does not fit, or when the strategy cannot compose by span (a hash, a lookup): the read then builds the key and takes the ordinary path, so declining is always correct and costs only the allocation. The member has no default body, so a strategy that never composes by span says so in one line rather than silently keeping every span read off the fast path.
+`ISpanCacheKeyStrategy.TryGetCacheKey<T>` is the same composition without a string, behind the `Span<char>` reads; both built-ins implement it. The caller's text arrives normalized as `CacheKey` normalizes it; the strategy writes into `destination` the characters `GetCacheKey` would build; the library normalizes the result as `CacheKey.WithName` would before probing the local tier, so casing is not the strategy's concern. Return `false` when the text does not fit, or when the strategy cannot compose by span (a hash, a lookup): the read then builds the key and takes the ordinary path, so declining is always correct and costs only the allocation. A strategy that does not implement it is treated as declining. It sits apart from `ICacheKeyStrategy` so a mock of the strategy never has to proxy a span: a proxy generator emits invalid IL for such a method.
 
 **Use this when:**
 
@@ -882,19 +885,19 @@ public interface ICachingTelemetryProvider
 {
     void TrackDependency(string type, string target, string name, string data,
         DateTimeOffset startTime, TimeSpan duration, string resultCode, bool success,
-        ReadOnlySpan<KeyValuePair<string, string>> properties = default,
-        ReadOnlySpan<KeyValuePair<string, double>> metrics = default);
+        TelemetryTags<string> properties = default,
+        TelemetryTags<double> metrics = default);
 
     void TrackEvent(string eventName,
-        ReadOnlySpan<KeyValuePair<string, string>> properties = default,
-        ReadOnlySpan<KeyValuePair<string, double>> metrics = default);
+        TelemetryTags<string> properties = default,
+        TelemetryTags<double> metrics = default);
 
     void TrackException(Exception ex,
-        ReadOnlySpan<KeyValuePair<string, string>> properties = default,
-        ReadOnlySpan<KeyValuePair<string, double>> metrics = default);
+        TelemetryTags<string> properties = default,
+        TelemetryTags<double> metrics = default);
 
     void TrackMetric(string name, double value,
-        ReadOnlySpan<KeyValuePair<string, string>> properties = default);
+        TelemetryTags<string> properties = default);
 }
 ```
 

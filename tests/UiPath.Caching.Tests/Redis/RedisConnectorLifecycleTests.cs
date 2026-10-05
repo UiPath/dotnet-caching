@@ -911,20 +911,44 @@ public class RedisConnectorLifecycleTests
     /// <summary>A sink that refuses one named event and takes everything else.</summary>
     private sealed class ThrowOnEventTelemetryProvider(string failingEvent) : ICachingTelemetryProvider
     {
-        public void TrackEvent(string eventName, ReadOnlySpan<KeyValuePair<string, string>> properties = default, ReadOnlySpan<KeyValuePair<string, double>> metrics = default)
+        public void TrackEvent(string eventName, TelemetryTags<string> properties = default, TelemetryTags<double> metrics = default)
         {
             if (eventName == failingEvent)
             {
                 throw new InvalidOperationException("sink boom");
             }
         }
+
+        public void TrackDependency(string type, string target, string name, string data, DateTimeOffset startTime, TimeSpan duration, string resultCode, bool success, TelemetryTags<string> properties = default, TelemetryTags<double> metrics = default)
+        {
+        }
+
+        public void TrackException(Exception ex, TelemetryTags<string> properties = default, TelemetryTags<double> metrics = default)
+        {
+        }
+
+        public void TrackMetric(string name, double value, TelemetryTags<string> properties = default)
+        {
+        }
     }
 
     /// <summary>A sink that refuses every report, leaving a catch with nowhere to put what it caught.</summary>
     private sealed class ThrowingSinkTelemetryProvider : ICachingTelemetryProvider
     {
-        public void TrackException(Exception ex, ReadOnlySpan<KeyValuePair<string, string>> properties = default, ReadOnlySpan<KeyValuePair<string, double>> metrics = default) =>
+        public void TrackException(Exception ex, TelemetryTags<string> properties = default, TelemetryTags<double> metrics = default) =>
             throw new InvalidOperationException("sink boom");
+
+        public void TrackDependency(string type, string target, string name, string data, DateTimeOffset startTime, TimeSpan duration, string resultCode, bool success, TelemetryTags<string> properties = default, TelemetryTags<double> metrics = default)
+        {
+        }
+
+        public void TrackEvent(string eventName, TelemetryTags<string> properties = default, TelemetryTags<double> metrics = default)
+        {
+        }
+
+        public void TrackMetric(string name, double value, TelemetryTags<string> properties = default)
+        {
+        }
     }
 
     private sealed class SequenceFactory : IConnectionMultiplexerFactory
@@ -1018,7 +1042,15 @@ public class RedisConnectorLifecycleTests
     {
         private readonly TaskCompletionSource _exceptionTracked = new(TaskCreationOptions.RunContinuationsAsynchronously);
         public Task ExceptionTracked => _exceptionTracked.Task;
-        public void TrackException(Exception ex, ReadOnlySpan<KeyValuePair<string, string>> properties = default, ReadOnlySpan<KeyValuePair<string, double>> metrics = default) => _exceptionTracked.TrySetResult();
-        public void TrackEvent(string eventName, ReadOnlySpan<KeyValuePair<string, string>> properties = default, ReadOnlySpan<KeyValuePair<string, double>> metrics = default) { }
+        public void TrackException(Exception ex, TelemetryTags<string> properties = default, TelemetryTags<double> metrics = default) => _exceptionTracked.TrySetResult();
+        public void TrackEvent(string eventName, TelemetryTags<string> properties = default, TelemetryTags<double> metrics = default) { }
+
+        public void TrackDependency(string type, string target, string name, string data, DateTimeOffset startTime, TimeSpan duration, string resultCode, bool success, TelemetryTags<string> properties = default, TelemetryTags<double> metrics = default)
+        {
+        }
+
+        public void TrackMetric(string name, double value, TelemetryTags<string> properties = default)
+        {
+        }
     }
 }

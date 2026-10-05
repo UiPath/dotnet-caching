@@ -1,6 +1,6 @@
 namespace UiPath.Caching;
 
-public sealed class DefaultCacheKeyStrategy : ICacheKeyStrategy
+public sealed class DefaultCacheKeyStrategy : ICacheKeyStrategy, ISpanCacheKeyStrategy
 {
     public CacheKey GetCacheKey<T>(CacheKey key) => key;
 

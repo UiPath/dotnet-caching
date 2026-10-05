@@ -116,29 +116,29 @@ public interface ICachingTelemetryProvider
 {
     void TrackDependency(string type, string target, string name, string data,
         DateTimeOffset startTime, TimeSpan duration, string resultCode, bool success,
-        ReadOnlySpan<KeyValuePair<string, string>> properties = default,
-        ReadOnlySpan<KeyValuePair<string, double>> metrics = default);
+        TelemetryTags<string> properties = default,
+        TelemetryTags<double> metrics = default);
 
     void TrackEvent(string eventName,
-        ReadOnlySpan<KeyValuePair<string, string>> properties = default,
-        ReadOnlySpan<KeyValuePair<string, double>> metrics = default);
+        TelemetryTags<string> properties = default,
+        TelemetryTags<double> metrics = default);
 
     void TrackException(Exception ex,
-        ReadOnlySpan<KeyValuePair<string, string>> properties = default,
-        ReadOnlySpan<KeyValuePair<string, double>> metrics = default);
+        TelemetryTags<string> properties = default,
+        TelemetryTags<double> metrics = default);
 
     void TrackMetric(string name, double value,
-        ReadOnlySpan<KeyValuePair<string, string>> properties = default);
+        TelemetryTags<string> properties = default);
 }
 ```
 
-All four tracking methods accept tag bags as `ReadOnlySpan<KeyValuePair<string, string>>` and `ReadOnlySpan<KeyValuePair<string, double>>`. This is intentional: `NullTelemetryProvider` (the default when no `ICachingTelemetryProvider` is registered) is a true no-op — the compiler elides the span parameters when the receiver is sealed and has empty method bodies, so there is zero allocation when telemetry is disabled.
+All four tracking methods accept tag bags as `TelemetryTags<string>` and `TelemetryTags<double>`: a struct holding up to eight pairs inline and more in one array, built from a collection expression such as `[new("key", value)]`, a span or an array. `NullTelemetryProvider` (the default when no `ICachingTelemetryProvider` is registered) is a true no-op, so there is zero allocation when telemetry is disabled.
 
-The interface methods carry a `[ExcludeFromCodeCoverage]` no-op default body on the interface itself (required because Castle.Proxies cannot generate mocks for ref-struct parameters). Implementations override only the methods they want to handle; un-overridden methods inherit the no-op default.
+The methods have no default bodies: an implementation writes all four, with an empty body for a signal it drops. A struct rather than a `ReadOnlySpan` keeps the interface mockable — a proxy generator emits invalid IL for a method that takes a span — and `TelemetryTags<T>` compares by value, so a mock matches the tags a test expects.
 
-### Materializing spans in bridge implementations
+### Materializing tags in bridge implementations
 
-When implementing a bridge that forwards to a downstream API expecting `IDictionary<string, string>`, use `TelemetryTags.ToDictionaryOrNull` to materialize the span. The helper returns `null` (no allocation) for empty spans, and allocates a `Dictionary<TKey, TValue>` only when there are entries:
+When implementing a bridge that forwards to a downstream API expecting `IDictionary<string, string>`, use `TelemetryTags.ToDictionaryOrNull` to materialize the tags. The helper returns `null` (no allocation) for empty tags, and allocates a `Dictionary<TKey, TValue>` only when there are entries:
 
 ```csharp
 using UiPath.Caching.Telemetry;
@@ -147,8 +147,8 @@ public sealed class MyBridge(IMyMetricsSink sink) : ICachingTelemetryProvider
 {
     public void TrackEvent(
         string eventName,
-        ReadOnlySpan<KeyValuePair<string, string>> properties = default,
-        ReadOnlySpan<KeyValuePair<string, double>> metrics = default)
+        TelemetryTags<string> properties = default,
+        TelemetryTags<double> metrics = default)
     {
         sink.Emit(eventName,
             TelemetryTags.ToDictionaryOrNull(properties),
@@ -273,10 +273,10 @@ builder.Host.ConfigureCaching(b => b
 
 For an app-wide default, set `CacheKeyStrategy` on each provider's options (`RedisCacheOptions`, `InMemoryRedisCacheOptions`, `InMemoryCacheOptions`) in the builder action — the library does not honor a single global key-strategy factory.
 
-Both built-ins also implement `TryGetCacheKey<T>`, the span form of the composition behind the `Span<char>` reads. A custom strategy has to implement it too. The text arrives normalized and the library normalizes the result again, so the span body only has to produce the characters `GetCacheKey` would, casing aside; the smallest correct body returns `false`, and the read builds the key as before:
+Both built-ins also implement `ISpanCacheKeyStrategy.TryGetCacheKey<T>`, the span form of the composition behind the `Span<char>` reads. A custom strategy implements it to keep a span read's local hit allocation-free; one that does not still works, and its span reads build the key. The text arrives normalized and the library normalizes the result again, so the span body only has to produce the characters `GetCacheKey` would, casing aside:
 
 ```csharp
-public sealed class TenantKeyStrategy(string tenant) : ICacheKeyStrategy
+public sealed class TenantKeyStrategy(string tenant) : ICacheKeyStrategy, ISpanCacheKeyStrategy
 {
     private readonly string _prefix = tenant + CacheOptions.KeySeparator;
 

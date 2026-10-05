@@ -35,7 +35,7 @@ public class ComposedKeyValidationTests
         itemBySpan.Should().Throw<InvalidOperationException>();
     }
 
-    private sealed class EmptyStrategy : ICacheKeyStrategy
+    private sealed class EmptyStrategy : ICacheKeyStrategy, ISpanCacheKeyStrategy
     {
         public CacheKey GetCacheKey<T>(CacheKey key) => default;
 

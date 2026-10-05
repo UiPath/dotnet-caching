@@ -29,7 +29,7 @@ internal static class TelemetrySafeguards
     }
 
     /// <summary>Records an event, reporting a sink that refuses rather than abandoning what follows.</summary>
-    public static bool TryTrackEvent(this ICachingTelemetryProvider telemetryProvider, string eventName, ReadOnlySpan<KeyValuePair<string, string>> properties = default)
+    public static bool TryTrackEvent(this ICachingTelemetryProvider telemetryProvider, string eventName, TelemetryTags<string> properties = default)
     {
         try
         {
@@ -44,7 +44,7 @@ internal static class TelemetrySafeguards
     }
 
     /// <summary>Reports a caught failure; a sink that refuses it leaves nowhere else to put it.</summary>
-    public static void TryTrackException(this ICachingTelemetryProvider telemetryProvider, Exception ex, ReadOnlySpan<KeyValuePair<string, string>> properties = default)
+    public static void TryTrackException(this ICachingTelemetryProvider telemetryProvider, Exception ex, TelemetryTags<string> properties = default)
     {
         try
         {
