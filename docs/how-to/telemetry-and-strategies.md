@@ -301,7 +301,7 @@ builder.Host.ConfigureCaching(b => b
 
 For an app-wide default, set `CacheKeyStrategy` on each provider's options (`RedisCacheOptions`, `InMemoryRedisCacheOptions`, `InMemoryCacheOptions`) in the builder action — the library does not honor a single global key-strategy factory.
 
-Both built-ins also implement `ISpanCacheKeyStrategy.TryGetCacheKey<T>`, the span form of the composition behind the `Span<char>` reads. A custom strategy implements it to keep a span read's local hit allocation-free; one that does not still works, and its span reads build the key. The text arrives normalized and the library normalizes the result again, so the span body only has to produce the characters `GetCacheKey` would, casing aside:
+Both built-ins also implement `ISpanCacheKeyStrategy.TryGetCacheKey<T>`, the span form of the composition behind the `Span<char>` reads and, on .NET 9 and later, behind a typed cache's `CacheKey` reads too. A custom strategy implements it to keep a local hit allocation-free on either; one that does not still works, and its reads build the key. The text arrives normalized and the library normalizes the result again, so the span body only has to produce the characters `GetCacheKey` would, casing aside:
 
 ```csharp
 public sealed class TenantKeyStrategy(string tenant) : ICacheKeyStrategy, ISpanCacheKeyStrategy

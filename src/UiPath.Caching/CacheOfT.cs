@@ -34,12 +34,50 @@ public class Cache<T> : ICache<T>, ISpanKeyCache<T>
     /// </summary>
     public CachePolicy? Policy { get; }
 
-    public ValueTask<bool> ContainsAsync(CacheKey cacheKey, CancellationToken token = default) =>
-        _cache.ContainsAsync<T>(GetCacheKey(cacheKey), token);
+    [OverloadResolutionPriority(1)]
+    public ValueTask<bool> ContainsAsync(CacheKey cacheKey, CancellationToken token = default)
+    {
+#if NET9_0_OR_GREATER
+        if (ReadsByText(cacheKey))
+        {
+            Span<char> composed = stackalloc char[SpanKey.MaxLength];
+            if (SpanKey.TryCompose<T>(_cacheKeyStrategy, cacheKey.Name, composed, out var written, CancellationToken.None))
+            {
+                return _cache.ContainsAsync<T>(composed[..written], token);
+            }
+        }
+#endif
+        return _cache.ContainsAsync<T>(GetCacheKey(cacheKey), token);
+    }
+
+    public ValueTask<bool> ContainsAsync(Span<char> cacheKey, CancellationToken token = default)
+    {
+        if (_cacheKeyStrategy is DefaultCacheKeyStrategy)
+        {
+            return _cache.ContainsAsync<T>(cacheKey, token);
+        }
+
+        Span<char> composed = stackalloc char[SpanKey.MaxLength];
+        return SpanKey.TryCompose<T>(_cacheKeyStrategy, cacheKey, composed, out var written, CancellationToken.None)
+            ? _cache.ContainsAsync<T>(composed[..written], token)
+            : ContainsAsync(new CacheKey(cacheKey), token);
+    }
 
     [OverloadResolutionPriority(1)]
-    public ValueTask<T?> GetAsync(CacheKey cacheKey, CancellationToken token = default) =>
-        _cache.GetAsync<T>(GetCacheKey(cacheKey), policy: Policy, token: token);
+    public ValueTask<T?> GetAsync(CacheKey cacheKey, CancellationToken token = default)
+    {
+#if NET9_0_OR_GREATER
+        if (ReadsByText(cacheKey))
+        {
+            Span<char> composed = stackalloc char[SpanKey.MaxLength];
+            if (SpanKey.TryCompose<T>(_cacheKeyStrategy, cacheKey.Name, composed, out var written, CancellationToken.None))
+            {
+                return _cache.GetAsync<T>(composed[..written], Policy, token);
+            }
+        }
+#endif
+        return _cache.GetAsync<T>(GetCacheKey(cacheKey), Policy, token);
+    }
 
     public ValueTask<T?> GetAsync(Span<char> cacheKey, CancellationToken token = default)
     {
@@ -57,14 +95,92 @@ public class Cache<T> : ICache<T>, ISpanKeyCache<T>
     public ValueTask<KeyValuePair<CacheKey, T?>[]> GetAsync(CacheKey[] cacheKeys, CancellationToken token = default) =>
         _cache.GetAsync<T>(GetCacheKeys(cacheKeys), policy: Policy, token: token);
 
-    public ValueTask<T?> GetOrAddAsync(CacheKey cacheKey, Func<CancellationToken, Task<T?>> generator, CancellationToken token = default) =>
-        _cache.GetOrAddAsync(GetCacheKey(cacheKey), generator, policy: Policy, token: token);
+    [OverloadResolutionPriority(1)]
+    public ValueTask<T?> GetOrAddAsync(CacheKey cacheKey, Func<CancellationToken, Task<T?>> generator, CancellationToken token = default)
+    {
+#if NET9_0_OR_GREATER
+        if (ReadsByText(cacheKey))
+        {
+            Span<char> composed = stackalloc char[SpanKey.MaxLength];
+            if (SpanKey.TryCompose<T>(_cacheKeyStrategy, cacheKey.Name, composed, out var written, CancellationToken.None))
+            {
+                return _cache.GetOrAddAsync(composed[..written], generator, Policy, token);
+            }
+        }
+#endif
+        return _cache.GetOrAddAsync(GetCacheKey(cacheKey), generator, Policy, token);
+    }
 
-    public ValueTask<T?> GetOrAddAsync(CacheKey cacheKey, Func<CancellationToken, Task<T?>> generator, TimeSpan expiration, CancellationToken token = default) =>
-        _cache.GetOrAddAsync(GetCacheKey(cacheKey), generator, expiration, Policy, token);
+    [OverloadResolutionPriority(1)]
+    public ValueTask<T?> GetOrAddAsync(CacheKey cacheKey, Func<CancellationToken, Task<T?>> generator, TimeSpan expiration, CancellationToken token = default)
+    {
+#if NET9_0_OR_GREATER
+        if (ReadsByText(cacheKey))
+        {
+            Span<char> composed = stackalloc char[SpanKey.MaxLength];
+            if (SpanKey.TryCompose<T>(_cacheKeyStrategy, cacheKey.Name, composed, out var written, CancellationToken.None))
+            {
+                return _cache.GetOrAddAsync(composed[..written], generator, expiration, Policy, token);
+            }
+        }
+#endif
+        return _cache.GetOrAddAsync(GetCacheKey(cacheKey), generator, expiration, Policy, token);
+    }
 
-    public ValueTask<T?> GetOrAddAsync(CacheKey cacheKey, Func<CancellationToken, Task<T?>> generator, DateTimeOffset expiration, CancellationToken token = default) =>
-        _cache.GetOrAddAsync(GetCacheKey(cacheKey), generator, expiration, Policy, token);
+    [OverloadResolutionPriority(1)]
+    public ValueTask<T?> GetOrAddAsync(CacheKey cacheKey, Func<CancellationToken, Task<T?>> generator, DateTimeOffset expiration, CancellationToken token = default)
+    {
+#if NET9_0_OR_GREATER
+        if (ReadsByText(cacheKey))
+        {
+            Span<char> composed = stackalloc char[SpanKey.MaxLength];
+            if (SpanKey.TryCompose<T>(_cacheKeyStrategy, cacheKey.Name, composed, out var written, CancellationToken.None))
+            {
+                return _cache.GetOrAddAsync(composed[..written], generator, expiration, Policy, token);
+            }
+        }
+#endif
+        return _cache.GetOrAddAsync(GetCacheKey(cacheKey), generator, expiration, Policy, token);
+    }
+
+    public ValueTask<T?> GetOrAddAsync(Span<char> cacheKey, Func<CancellationToken, Task<T?>> generator, CancellationToken token = default)
+    {
+        if (_cacheKeyStrategy is DefaultCacheKeyStrategy)
+        {
+            return _cache.GetOrAddAsync(cacheKey, generator, Policy, token);
+        }
+
+        Span<char> composed = stackalloc char[SpanKey.MaxLength];
+        return SpanKey.TryCompose<T>(_cacheKeyStrategy, cacheKey, composed, out var written, CancellationToken.None)
+            ? _cache.GetOrAddAsync(composed[..written], generator, Policy, token)
+            : GetOrAddAsync(new CacheKey(cacheKey), generator, token);
+    }
+
+    public ValueTask<T?> GetOrAddAsync(Span<char> cacheKey, Func<CancellationToken, Task<T?>> generator, TimeSpan expiration, CancellationToken token = default)
+    {
+        if (_cacheKeyStrategy is DefaultCacheKeyStrategy)
+        {
+            return _cache.GetOrAddAsync(cacheKey, generator, expiration, Policy, token);
+        }
+
+        Span<char> composed = stackalloc char[SpanKey.MaxLength];
+        return SpanKey.TryCompose<T>(_cacheKeyStrategy, cacheKey, composed, out var written, CancellationToken.None)
+            ? _cache.GetOrAddAsync(composed[..written], generator, expiration, Policy, token)
+            : GetOrAddAsync(new CacheKey(cacheKey), generator, expiration, token);
+    }
+
+    public ValueTask<T?> GetOrAddAsync(Span<char> cacheKey, Func<CancellationToken, Task<T?>> generator, DateTimeOffset expiration, CancellationToken token = default)
+    {
+        if (_cacheKeyStrategy is DefaultCacheKeyStrategy)
+        {
+            return _cache.GetOrAddAsync(cacheKey, generator, expiration, Policy, token);
+        }
+
+        Span<char> composed = stackalloc char[SpanKey.MaxLength];
+        return SpanKey.TryCompose<T>(_cacheKeyStrategy, cacheKey, composed, out var written, CancellationToken.None)
+            ? _cache.GetOrAddAsync(composed[..written], generator, expiration, Policy, token)
+            : GetOrAddAsync(new CacheKey(cacheKey), generator, expiration, token);
+    }
 
     public ValueTask<KeyValuePair<TState, T?>[]> GetOrAddAsync<TState>(KeyValuePair<CacheKey, TState>[] entries, Func<TState[], CancellationToken, Task<KeyValuePair<TState, T?>[]>> generator, CancellationToken token = default)
         where TState : notnull =>
@@ -133,6 +249,12 @@ public class Cache<T> : ICache<T>, ISpanKeyCache<T>
         ArgumentNullException.ThrowIfNull(entries);
         return Array.ConvertAll(entries, e => new KeyValuePair<CacheKey, TState>(GetCacheKey(e.Key), e.Value));
     }
+
+#if NET9_0_OR_GREATER
+    /// <summary>True when the key's text composes to what <see cref="GetCacheKey"/> builds: a strategy that changes it, over a key with the default casing the span path normalizes with.</summary>
+    private bool ReadsByText(CacheKey cacheKey) =>
+        _cacheKeyStrategy is not DefaultCacheKeyStrategy && cacheKey.Casing == CacheKey.DefaultCasing;
+#endif
 
     private CacheKey GetCacheKey(CacheKey cacheKey) =>
         _cacheKeyStrategy.GetCacheKey<T>(cacheKey);

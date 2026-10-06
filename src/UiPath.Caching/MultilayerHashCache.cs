@@ -40,6 +40,11 @@ internal sealed partial class MultilayerHashCache : MultilayerCacheBase, IHashCa
     public async ValueTask<T?> GetItemAsync<T>(CacheKey cacheKey, string field, CachePolicy? policy, CancellationToken token = default)
     {
         NotCacheableException.ThrowIfNotCacheable<T>();
+        if (!token.IsCancellationRequested && TryGetLocal<T>(cacheKey, out var local) && TryGetItem(local, field, out var item))
+        {
+            return item;
+        }
+
         policy ??= _defaultPolicy;
         var cacheEntry = await GetCacheEntryAsync<T>(_entryBuilder.BuildEntryOptions<T>(cacheKey, new[] { field }, default, token: token), policy);
         if (cacheEntry.Value == null)
@@ -55,13 +60,11 @@ internal sealed partial class MultilayerHashCache : MultilayerCacheBase, IHashCa
         NotCacheableException.ThrowIfNotCacheable<T>();
         // The hash key path observes cancellation first, before the key and the strategy.
         token.ThrowIfCancellationRequested();
-#if NET9_0_OR_GREATER
-        // Only over the dictionary the local tier built itself: its ordinal keys make this the lookup Filter ends in.
-        if (TryGetLocal<T>(cacheKey, out var entry) && entry.Value is ImmutableDictionary<string, T?> { KeyComparer: var comparer } values && ReferenceEquals(comparer, EqualityComparer<string>.Default))
+        if (TryGetLocal<T>(cacheKey, out var local) && TryGetItem(local, field, out var item))
         {
-            return new ValueTask<T?>(values.TryGetValue(field, out var value) ? value : default);
+            return new ValueTask<T?>(item);
         }
-#endif
+
         return GetItemAsync<T>(new CacheKey(cacheKey), field, policy, token);
     }
 
@@ -69,6 +72,11 @@ internal sealed partial class MultilayerHashCache : MultilayerCacheBase, IHashCa
     public async ValueTask<IDictionary<string, T?>> GetAsync<T>(CacheKey cacheKey, CachePolicy? policy, CancellationToken token = default)
     {
         NotCacheableException.ThrowIfNotCacheable<T>();
+        if (!token.IsCancellationRequested && TryGetLocal<T>(cacheKey, out var local))
+        {
+            return local.Value ?? Empty<T>();
+        }
+
         policy ??= _defaultPolicy;
         var cacheEntry = await GetCacheEntryAsync<T>(_entryBuilder.BuildEntryOptions<T>(cacheKey, token), policy);
         return cacheEntry.Value ?? Empty<T>();
@@ -78,12 +86,11 @@ internal sealed partial class MultilayerHashCache : MultilayerCacheBase, IHashCa
     {
         NotCacheableException.ThrowIfNotCacheable<T>();
         token.ThrowIfCancellationRequested();
-#if NET9_0_OR_GREATER
-        if (TryGetLocal<T>(cacheKey, out var entry))
+        if (TryGetLocal<T>(cacheKey, out var local))
         {
-            return new ValueTask<IDictionary<string, T?>>(entry.Value ?? Empty<T>());
+            return new ValueTask<IDictionary<string, T?>>(local.Value ?? Empty<T>());
         }
-#endif
+
         return GetAsync<T>(new CacheKey(cacheKey), policy, token);
     }
 
@@ -95,13 +102,32 @@ internal sealed partial class MultilayerHashCache : MultilayerCacheBase, IHashCa
         return cacheEntry?.Value ?? Empty<T>();
     }
 
+    [OverloadResolutionPriority(1)]
     public ValueTask<ICacheEntry<IDictionary<string, T?>>> GetCacheEntryAsync<T>(CacheKey cacheKey, CachePolicy? policy, CancellationToken token = default)
     {
         NotCacheableException.ThrowIfNotCacheable<T>();
+        if (!token.IsCancellationRequested && TryGetLocal<T>(cacheKey, out var local))
+        {
+            return new ValueTask<ICacheEntry<IDictionary<string, T?>>>(local);
+        }
+
         policy ??= _defaultPolicy;
         return GetCacheEntryAsync<T>(_entryBuilder.BuildEntryOptions<T>(cacheKey, token), policy);
     }
 
+    public ValueTask<ICacheEntry<IDictionary<string, T?>>> GetCacheEntryAsync<T>(Span<char> cacheKey, CachePolicy? policy, CancellationToken token = default)
+    {
+        NotCacheableException.ThrowIfNotCacheable<T>();
+        token.ThrowIfCancellationRequested();
+        if (TryGetLocal<T>(cacheKey, out var local))
+        {
+            return new ValueTask<ICacheEntry<IDictionary<string, T?>>>(local);
+        }
+
+        return GetCacheEntryAsync<T>(new CacheKey(cacheKey), policy, token);
+    }
+
+    [OverloadResolutionPriority(1)]
     public ValueTask<IDictionary<string, T?>> GetOrAddAsync<T>(CacheKey cacheKey, Func<CancellationToken, Task<IDictionary<string, T?>>> generator, CachePolicy? policy, CancellationToken token = default)
     {
         ArgumentNullException.ThrowIfNull(generator);
@@ -112,6 +138,7 @@ internal sealed partial class MultilayerHashCache : MultilayerCacheBase, IHashCa
         return GetOrAddInternalAsync(cacheKey, generator, writeExpiration, duration, policy.JitterMaxDuration, HashCacheSetOption.KeyReplace, policy, token);
     }
 
+    [OverloadResolutionPriority(1)]
     public ValueTask<IDictionary<string, T?>> GetOrAddAsync<T>(CacheKey cacheKey, Func<CancellationToken, Task<IDictionary<string, T?>>> generator, TimeSpan expiration, CachePolicy? policy, CancellationToken token = default)
     {
         ArgumentNullException.ThrowIfNull(generator);
@@ -119,6 +146,7 @@ internal sealed partial class MultilayerHashCache : MultilayerCacheBase, IHashCa
         return GetOrAddInternalAsync(cacheKey, generator, writeExpiration, duration, rehydrateJitter: null, HashCacheSetOption.KeyReplace, policy ?? _defaultPolicy, token);
     }
 
+    [OverloadResolutionPriority(1)]
     public ValueTask<IDictionary<string, T?>> GetOrAddAsync<T>(CacheKey cacheKey, Func<CancellationToken, Task<IDictionary<string, T?>>> generator, DateTimeOffset expiration, CachePolicy? policy, CancellationToken token = default)
     {
         ArgumentNullException.ThrowIfNull(generator);
@@ -133,11 +161,44 @@ internal sealed partial class MultilayerHashCache : MultilayerCacheBase, IHashCa
     /// <c>_metadata_</c>-as-empty-marker is present; we collapse that to <see cref="Empty{T}"/> for the
     /// caller, who can always iterate the result without a null check.
     /// </summary>
+    [OverloadResolutionPriority(1)]
     public ValueTask<IDictionary<string, T?>> GetOrAddAsync<T>(CacheKey cacheKey, Func<CancellationToken, Task<IDictionary<string, T?>>> generator, DateTimeOffset expiration, HashCacheSetOption? setOption, CachePolicy? policy, CancellationToken token = default)
     {
         ArgumentNullException.ThrowIfNull(generator);
         var (writeExpiration, duration) = CallerWrite(expiration);
         return GetOrAddInternalAsync(cacheKey, generator, writeExpiration, duration, rehydrateJitter: null, setOption ?? HashCacheSetOption.KeyReplace, policy ?? _defaultPolicy, token);
+    }
+
+    public ValueTask<IDictionary<string, T?>> GetOrAddAsync<T>(Span<char> cacheKey, Func<CancellationToken, Task<IDictionary<string, T?>>> generator, CachePolicy? policy, CancellationToken token = default)
+    {
+        ArgumentNullException.ThrowIfNull(generator);
+        return TryGetOrAddLocal<T>(cacheKey, policy ?? _defaultPolicy, token, out var values)
+            ? new ValueTask<IDictionary<string, T?>>(values)
+            : GetOrAddAsync(new CacheKey(cacheKey), generator, policy, token);
+    }
+
+    public ValueTask<IDictionary<string, T?>> GetOrAddAsync<T>(Span<char> cacheKey, Func<CancellationToken, Task<IDictionary<string, T?>>> generator, TimeSpan expiration, CachePolicy? policy, CancellationToken token = default)
+    {
+        ArgumentNullException.ThrowIfNull(generator);
+        return TryGetOrAddLocal<T>(cacheKey, policy ?? _defaultPolicy, token, out var values)
+            ? new ValueTask<IDictionary<string, T?>>(values)
+            : GetOrAddAsync(new CacheKey(cacheKey), generator, expiration, policy, token);
+    }
+
+    public ValueTask<IDictionary<string, T?>> GetOrAddAsync<T>(Span<char> cacheKey, Func<CancellationToken, Task<IDictionary<string, T?>>> generator, DateTimeOffset expiration, CachePolicy? policy, CancellationToken token = default)
+    {
+        ArgumentNullException.ThrowIfNull(generator);
+        return TryGetOrAddLocal<T>(cacheKey, policy ?? _defaultPolicy, token, out var values)
+            ? new ValueTask<IDictionary<string, T?>>(values)
+            : GetOrAddAsync(new CacheKey(cacheKey), generator, expiration, policy, token);
+    }
+
+    public ValueTask<IDictionary<string, T?>> GetOrAddAsync<T>(Span<char> cacheKey, Func<CancellationToken, Task<IDictionary<string, T?>>> generator, DateTimeOffset expiration, HashCacheSetOption? setOption, CachePolicy? policy, CancellationToken token = default)
+    {
+        ArgumentNullException.ThrowIfNull(generator);
+        return TryGetOrAddLocal<T>(cacheKey, policy ?? _defaultPolicy, token, out var values)
+            ? new ValueTask<IDictionary<string, T?>>(values)
+            : GetOrAddAsync(new CacheKey(cacheKey), generator, expiration, setOption, policy, token);
     }
 
     public ValueTask<bool> SetAsync<T>(CacheKey cacheKey, IDictionary<string, T?> values, CachePolicy? policy, CancellationToken token = default)
@@ -217,9 +278,15 @@ internal sealed partial class MultilayerHashCache : MultilayerCacheBase, IHashCa
         }
     }
 
+    [OverloadResolutionPriority(1)]
     public async ValueTask<bool> ContainsAsync<T>(CacheKey cacheKey, CancellationToken token = default)
     {
         NotCacheableException.ThrowIfNotCacheable<T>();
+        if (!token.IsCancellationRequested && TryGetLocal<T>(cacheKey, out _))
+        {
+            return true;
+        }
+
         var cacheEntryOptions = _entryBuilder.BuildEntryOptions<T>(cacheKey, default, token: token);
         try
         {
@@ -230,6 +297,14 @@ internal sealed partial class MultilayerHashCache : MultilayerCacheBase, IHashCa
             LogInnerCacheContainsError(ex, Logged(cacheEntryOptions, typeof(T)));
             return false;
         }
+    }
+
+    public ValueTask<bool> ContainsAsync<T>(Span<char> cacheKey, CancellationToken token = default)
+    {
+        NotCacheableException.ThrowIfNotCacheable<T>();
+        return !token.IsCancellationRequested && TryGetLocal<T>(cacheKey, out _)
+            ? new ValueTask<bool>(true)
+            : ContainsAsync<T>(new CacheKey(cacheKey), token);
     }
 
     public async ValueTask<TimeSpan?> TimeToLiveAsync<T>(CacheKey cacheKey, CancellationToken token = default)
@@ -300,7 +375,19 @@ internal sealed partial class MultilayerHashCache : MultilayerCacheBase, IHashCa
     private static ImmutableDictionary<string, T?> Empty<T>() =>
         ImmutableDictionary<string, T?>.Empty;
 
-    private async ValueTask<IDictionary<string, T?>> GetOrAddInternalAsync<T>(CacheKey cacheKey, Func<CancellationToken, Task<IDictionary<string, T?>>> generator, DateTimeOffset? expiration, TimeSpan effectiveDuration, TimeSpan? rehydrateJitter, HashCacheSetOption setOption, CachePolicy policy, CancellationToken token)
+    private ValueTask<IDictionary<string, T?>> GetOrAddInternalAsync<T>(CacheKey cacheKey, Func<CancellationToken, Task<IDictionary<string, T?>>> generator, DateTimeOffset? expiration, TimeSpan effectiveDuration, TimeSpan? rehydrateJitter, HashCacheSetOption setOption, CachePolicy policy, CancellationToken token)
+    {
+        // Not async: the miss path's lock delegates capture these parameters, and an async method would build that closure on a hit too.
+        if (!token.IsCancellationRequested && TryGetLocal<T>(cacheKey, out var local) && local.Found)
+        {
+            TryHashRehydrate(cacheKey, local.Expiration, local.Value, generator, policy, effectiveDuration, rehydrateJitter);
+            return new ValueTask<IDictionary<string, T?>>(local.Value ?? Empty<T>());
+        }
+
+        return GetOrAddCoreAsync(cacheKey, generator, expiration, effectiveDuration, rehydrateJitter, setOption, policy, token);
+    }
+
+    private async ValueTask<IDictionary<string, T?>> GetOrAddCoreAsync<T>(CacheKey cacheKey, Func<CancellationToken, Task<IDictionary<string, T?>>> generator, DateTimeOffset? expiration, TimeSpan effectiveDuration, TimeSpan? rehydrateJitter, HashCacheSetOption setOption, CachePolicy policy, CancellationToken token)
     {
         NotCacheableException.ThrowIfNotCacheable<T>();
         var cacheEntryOptions = _entryBuilder.BuildEntryOptions<T>(cacheKey, expiration, setOption, token);
@@ -335,6 +422,12 @@ internal sealed partial class MultilayerHashCache : MultilayerCacheBase, IHashCa
         {
             return;
         }
+        TriggerHashRehydrate(originalCacheKey, entryExpiration, generator, policy, duration, rehydrateJitter);
+    }
+
+    /// <summary>Hands the rehydration to the coordinator; apart from <see cref="TryHashRehydrate{T}"/> so its early returns do not allocate the closure.</summary>
+    private void TriggerHashRehydrate<T>(CacheKey originalCacheKey, DateTimeOffset entryExpiration, Func<CancellationToken, Task<IDictionary<string, T?>>> generator, CachePolicy policy, TimeSpan duration, TimeSpan? rehydrateJitter)
+    {
         _rehydrator.TryTrigger(
             originalCacheKey,
             entryExpiration,

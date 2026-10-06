@@ -1,9 +1,24 @@
-#if NET9_0_OR_GREATER
+using System.Collections.Immutable;
+
 namespace UiPath.Caching;
 
 internal sealed partial class MultilayerHashCache
 {
-    /// <inheritdoc cref="MultilayerCache.TryGetLocal{T}(ReadOnlySpan{char}, out T)"/>
+    /// <summary>The field from a local entry, only over the dictionary the local tier built itself: its ordinal keys make this the lookup <c>Filter</c> ends in.</summary>
+    private static bool TryGetItem<T>(ICacheEntry<IDictionary<string, T?>> entry, string field, out T? value)
+    {
+        if (entry.Value is ImmutableDictionary<string, T?> { KeyComparer: var comparer } values && ReferenceEquals(comparer, EqualityComparer<string>.Default))
+        {
+            value = values.TryGetValue(field, out var found) ? found : default;
+            return true;
+        }
+
+        value = default;
+        return false;
+    }
+
+#if NET9_0_OR_GREATER
+    /// <inheritdoc cref="MultilayerCache.TryGetLocal{T}(ReadOnlySpan{char}, CancellationToken, out ICacheEntry{T})"/>
     private bool TryGetLocal<T>(ReadOnlySpan<char> cacheKey, [MaybeNullWhen(false)] out ICacheEntry<IDictionary<string, T?>> entry)
     {
         entry = default;
@@ -24,5 +39,33 @@ internal sealed partial class MultilayerHashCache
         entry = found;
         return true;
     }
-}
+#else
+    /// <summary>Always false: <see cref="MemoryCache"/> looks a key up by span only on .NET 9 and later.</summary>
+    [SuppressMessage("Style", "IDE0060:Remove unused parameter", Justification = "Mirrors the .NET 9 signature so callers need no conditional code.")]
+    private static bool TryGetLocal<T>(ReadOnlySpan<char> cacheKey, [MaybeNullWhen(false)] out ICacheEntry<IDictionary<string, T?>> entry)
+    {
+        entry = default;
+        return false;
+    }
 #endif
+
+    /// <inheritdoc cref="MultilayerCache.TryGetLocal{T}(CacheKey, CancellationToken, out ICacheEntry{T})"/>
+    private bool TryGetLocal<T>(CacheKey cacheKey, [MaybeNullWhen(false)] out ICacheEntry<IDictionary<string, T?>> entry)
+    {
+        entry = default;
+        return cacheKey.Casing == CacheKey.DefaultCasing && TryGetLocal(cacheKey.Name.AsSpan(), out entry);
+    }
+
+    /// <summary>A local hit that <see cref="GetOrAddInternalAsync{T}"/> would return as found. False under a rehydrating policy, which needs the <see cref="CacheKey"/>, and for a cancelled token, which the key path reports through its task.</summary>
+    private bool TryGetOrAddLocal<T>(ReadOnlySpan<char> cacheKey, CachePolicy policy, CancellationToken token, [MaybeNullWhen(false)] out IDictionary<string, T?> values)
+    {
+        values = default;
+        if ((policy.RehydrateEnabled == true && policy.Rehydrate is not null) || token.IsCancellationRequested || !TryGetLocal<T>(cacheKey, out var entry) || !entry.Found)
+        {
+            return false;
+        }
+
+        values = entry.Value ?? Empty<T>();
+        return true;
+    }
+}

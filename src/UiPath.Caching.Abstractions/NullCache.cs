@@ -7,11 +7,15 @@ public sealed class NullCache : ICache, ISpanKeyCache
 
     public string Name => "Null";
 
+    [OverloadResolutionPriority(1)]
     public ValueTask<bool> ContainsAsync<T>(CacheKey cacheKey, CancellationToken token = default)
     {
         NotCacheableException.ThrowIfNotCacheable<T>();
         return ValueTask.FromResult(false);
     }
+
+    public ValueTask<bool> ContainsAsync<T>(Span<char> cacheKey, CancellationToken token = default) =>
+        ContainsAsync<T>(CacheKey.Null, token);
 
     public ValueTask<DateTimeOffset?> ExpireTimeAsync<T>(CacheKey cacheKey, CancellationToken token = default)
     {
@@ -38,11 +42,15 @@ public sealed class NullCache : ICache, ISpanKeyCache
         return ValueTask.FromResult(cacheKeys.Select(k => new KeyValuePair<CacheKey, T?>(k, default(T?))).ToArray());
     }
 
+    [OverloadResolutionPriority(1)]
     public ValueTask<ICacheEntry<T?>> GetCacheEntryAsync<T>(CacheKey cacheKey, CachePolicy? policy, CancellationToken token = default)
     {
         NotCacheableException.ThrowIfNotCacheable<T>();
         return ValueTask.FromResult(NullCacheEntry<T?>.Instance);
     }
+
+    public ValueTask<ICacheEntry<T?>> GetCacheEntryAsync<T>(Span<char> cacheKey, CachePolicy? policy, CancellationToken token = default) =>
+        GetCacheEntryAsync<T>(CacheKey.Null, policy, token);
 
     public ValueTask<KeyValuePair<CacheKey, ICacheEntry<T?>>[]> GetCacheEntriesAsync<T>(CacheKey[] cacheKeys, CachePolicy? policy, CancellationToken token = default)
     {
@@ -52,13 +60,25 @@ public sealed class NullCache : ICache, ISpanKeyCache
             .ToArray());
     }
 
+    [OverloadResolutionPriority(1)]
     public ValueTask<T?> GetOrAddAsync<T>(CacheKey cacheKey, Func<CancellationToken, Task<T?>> generator, CachePolicy? policy, CancellationToken token = default) =>
         ReturnGeneratorAsync(generator, token);
 
+    [OverloadResolutionPriority(1)]
     public ValueTask<T?> GetOrAddAsync<T>(CacheKey cacheKey, Func<CancellationToken, Task<T?>> generator, TimeSpan expiration, CachePolicy? policy, CancellationToken token = default) =>
         ReturnGeneratorAsync(generator, token);
 
+    [OverloadResolutionPriority(1)]
     public ValueTask<T?> GetOrAddAsync<T>(CacheKey cacheKey, Func<CancellationToken, Task<T?>> generator, DateTimeOffset expiration, CachePolicy? policy, CancellationToken token = default) =>
+        ReturnGeneratorAsync(generator, token);
+
+    public ValueTask<T?> GetOrAddAsync<T>(Span<char> cacheKey, Func<CancellationToken, Task<T?>> generator, CachePolicy? policy, CancellationToken token = default) =>
+        ReturnGeneratorAsync(generator, token);
+
+    public ValueTask<T?> GetOrAddAsync<T>(Span<char> cacheKey, Func<CancellationToken, Task<T?>> generator, TimeSpan expiration, CachePolicy? policy, CancellationToken token = default) =>
+        ReturnGeneratorAsync(generator, token);
+
+    public ValueTask<T?> GetOrAddAsync<T>(Span<char> cacheKey, Func<CancellationToken, Task<T?>> generator, DateTimeOffset expiration, CachePolicy? policy, CancellationToken token = default) =>
         ReturnGeneratorAsync(generator, token);
 
     public ValueTask<KeyValuePair<TState, T?>[]> GetOrAddAsync<T, TState>(KeyValuePair<CacheKey, TState>[] entries, Func<TState[], CancellationToken, Task<KeyValuePair<TState, T?>[]>> generator, CachePolicy? policy, CancellationToken token = default)
