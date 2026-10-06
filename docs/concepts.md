@@ -406,13 +406,12 @@ occur inside resilience pipelines, such as a generator timeout or a Redis
 command failure during a background
 refresh.
 
-All four methods accept tag-bag parameters as `ReadOnlySpan<KeyValuePair<string, string>>`
-(and `ReadOnlySpan<KeyValuePair<string, double>>` for metric dimensions). Using
-`ReadOnlySpan` keeps the hot path allocation-free: when telemetry is disabled or
-when a no-op provider is registered, passing an empty span costs nothing and no
-dictionary is heap-allocated on each call. The default implementations on the
-interface are no-ops, so a partial custom provider only needs to override the
-methods it cares about.
+All four methods accept tag-bag parameters as `TelemetryTags<string>`
+(and `TelemetryTags<double>` for metric dimensions), a struct that holds up to
+nine pairs inline, so the hot path stays allocation-free: when telemetry is
+disabled or a no-op provider is registered, passing empty tags costs nothing and
+no dictionary is heap-allocated on each call. The interface has no default
+bodies, which keeps it mockable: a provider implements all four methods.
 
 The default integration path is OpenTelemetry. Calling `.AddOpenTelemetry()` on
 the cache builder registers `UiPath.Caching.OpenTelemetry.CachingTelemetryProvider`,
@@ -429,8 +428,9 @@ up the Redis-command instrumentation.
 Registering a custom `ICachingTelemetryProvider` implementation directly is also
 first-class: if your service has its own telemetry surface, implement
 the interface and register it in the DI container instead of calling
-`.AddOpenTelemetry()`. The interface is small — four methods with default no-op
-bodies — so custom implementations are straightforward to write and easy to test.
+`.AddOpenTelemetry()`. The interface is small — four methods, each implemented,
+with an empty body for a signal the service drops — so custom implementations are
+straightforward to write, and Moq or NSubstitute can mock it in tests.
 
 See also: [how-to/telemetry-and-strategies.md](how-to/telemetry-and-strategies.md).
 

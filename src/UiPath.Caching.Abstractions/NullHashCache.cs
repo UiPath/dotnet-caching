@@ -3,7 +3,7 @@ using System.Collections.Immutable;
 namespace UiPath.Caching;
 
 [ExcludeFromCodeCoverage]
-public sealed class NullHashCache : IHashCache
+public sealed class NullHashCache : IHashCache, ISpanKeyHashCache
 {
     public static readonly NullHashCache Instance = new();
 

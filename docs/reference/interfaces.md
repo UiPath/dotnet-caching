@@ -23,8 +23,6 @@ public interface ICache<T>
 
     ValueTask<T?> GetAsync(CacheKey cacheKey, CancellationToken token = default);
 
-    ValueTask<T?> GetAsync(Span<char> cacheKey, CancellationToken token = default);
-
     ValueTask<KeyValuePair<CacheKey, T?>[]> GetAsync(CacheKey[] cacheKeys, CancellationToken token = default);
 
     ValueTask<T?> GetOrAddAsync(CacheKey cacheKey, Func<CancellationToken, Task<T?>> generator, CancellationToken token = default);
@@ -109,8 +107,6 @@ public interface ICache : IDisposable
     string Name { get; }
 
     ValueTask<T?> GetAsync<T>(CacheKey cacheKey, CachePolicy? policy, CancellationToken token = default);
-
-    ValueTask<T?> GetAsync<T>(Span<char> cacheKey, CachePolicy? policy, CancellationToken token = default);
 
     ValueTask<KeyValuePair<CacheKey, T?>[]> GetAsync<T>(CacheKey[] cacheKeys, CachePolicy? policy, CancellationToken token = default);
 
@@ -214,7 +210,7 @@ Two reasons the interface is the strict surface. An implementation cannot silent
 
 The multi-key `GetOrAddAsync<T, TState>` overloads shown above pair each key with an opaque caller state (`TState`). The implementations in this library forward to the public `BatchGetOrAdd.RunAsync`, and an implementation outside it can do the same. The generator is invoked at most once, only with the states of the entries that missed every cache layer, never with keys; results come back keyed by state, one entry per distinct requested state in first-occurrence order. Cache operations de-duplicate by `CacheKey`; results de-duplicate by state — when two states share a key the generator is asked once and the value is reported under both. Their parameter shape matches the single-key `GetOrAddAsync` exactly — `expiration` and `policy` required, `token` optional. `CacheExtensions` carries no token-positional forwarder for them: those extensions are pre-`CachePolicy` back-compat sugar, and this API predates nothing. There is no key-only convenience overload; a caller whose keys are their own identity pairs each key with itself (`TState = CacheKey`).
 
-The `Span<char>` overloads — `GetAsync` here, `GetItemAsync` and `GetAsync` on the hash surfaces — read by the key's text without a `CacheKey`. The text is normalized as `new CacheKey(text)` normalizes it, so a key formatted on the stack with `TryWrite` finds the entry a string would. Over the in-memory tier on .NET 9 and later, under a key strategy whose `TryGetCacheKey` composes by span, as both built-ins do, a local hit allocates nothing; every other case — a strategy that declines, a miss, a key over 256 characters, .NET 8 — builds the key and takes the ordinary path, so the answer is the same either way. Default interface bodies do that too, so an implementation outside the library keeps compiling. The parameter is `Span<char>` rather than `ReadOnlySpan<char>` because a `ReadOnlySpan<char>` overload would make `GetAsync("literal")` ambiguous against the `CacheKey` overload; a caller holding a `ReadOnlySpan<char>` writes `new CacheKey(span)`, which normalizes while copying into one string.
+The `Span<char>` reads — `GetAsync` over `ICache` and `ICache<T>`, `GetItemAsync` and `GetAsync` over the hash surfaces — are extensions in `SpanKeyExtensions`, not interface members, and read by the key's text without a `CacheKey`. The text is normalized as `new CacheKey(text)` normalizes it, so a key formatted on the stack with `TryWrite` finds the entry a string would. A cache that implements `ISpanKeyCache`, `ISpanKeyCache<T>`, `ISpanKeyHashCache` or `ISpanKeyHashCache<T>` serves the read itself, as the library's caches do: over the in-memory tier on .NET 9 and later, under a key strategy whose `TryGetCacheKey` composes by span, as both built-ins do, a local hit allocates nothing; every other case — a strategy that declines, a miss, a key over 256 characters, .NET 8 — builds the key and takes the ordinary path, so the answer is the same either way. Any other cache is read through its `CacheKey` overload. That covers an implementation outside the library, which opts into the allocation-free read by implementing the capability interface, and a Moq or NSubstitute proxy, which answers the span read from the `CacheKey` setup it already has: the reads stay off the interfaces because a proxy generator emits invalid IL for a method that takes a `Span<char>`. The parameter is `Span<char>` rather than `ReadOnlySpan<char>` because a `ReadOnlySpan<char>` overload on the capability interfaces would make `GetAsync("literal")` ambiguous against the `CacheKey` overload; a caller holding a `ReadOnlySpan<char>` writes `new CacheKey(span)`, which normalizes while copying into one string.
 
 Every multi-key method on the Redis-backed caches runs as one command against one node: `GetAsync(CacheKey[])` is an `MGET`, `RemoveAsync(CacheKey[])` one `DEL`, and `GetCacheEntriesAsync` and the multi-key `SetAsync` a single `MULTI`/`EXEC`. On Redis Cluster that requires every key in the batch to hash to one slot, so the caches check the slots first and throw `CrossSlotKeysException` when they differ, naming the two keys that disagree. Redis itself answers a cross-slot command with an error, which the caches log and report as a miss, so without the check a batch spanning slots would read as a cache that never hits. Give the keys a shared hash tag (`app:s:{org1}:groups_1`) so they hash together, or split the batch into one call per tag. The slot is read from the key as it is sent, including the prefix the connector's database adds with `WithKeyPrefix`, so a tag in the prefix counts. Behind a decorator that hides StackExchange.Redis's wrapper, the prefix is learned from a one-off `ECHO`, and the check does not wait for it: until it answers, the check hashes with `RedisCacheOptions.KeyPrefix`, so keep that value mirrored when the first batches must pass. A non-clustered server maps every key to the same slot, so the check never fires there, and a disconnected cache skips it and answers from its own disconnected branch.
 
@@ -283,11 +279,7 @@ public interface IHashCache<T>
 
     ValueTask<T?> GetItemAsync(CacheKey cacheKey, string field, CancellationToken token = default);
 
-    ValueTask<T?> GetItemAsync(Span<char> cacheKey, string field, CancellationToken token = default);
-
     ValueTask<IDictionary<string, T?>> GetAsync(CacheKey cacheKey, CancellationToken token = default);
-
-    ValueTask<IDictionary<string, T?>> GetAsync(Span<char> cacheKey, CancellationToken token = default);
 
     ValueTask<IDictionary<string, T?>> GetAsync(CacheKey cacheKey, string[] fields, CancellationToken token = default);
 
@@ -360,11 +352,7 @@ public interface IHashCache : IDisposable
 
     ValueTask<T?> GetItemAsync<T>(CacheKey cacheKey, string field, CachePolicy? policy, CancellationToken token = default);
 
-    ValueTask<T?> GetItemAsync<T>(Span<char> cacheKey, string field, CachePolicy? policy, CancellationToken token = default);
-
     ValueTask<IDictionary<string, T?>> GetAsync<T>(CacheKey cacheKey, CachePolicy? policy, CancellationToken token = default);
-
-    ValueTask<IDictionary<string, T?>> GetAsync<T>(Span<char> cacheKey, CachePolicy? policy, CancellationToken token = default);
 
     ValueTask<IDictionary<string, T?>> GetAsync<T>(CacheKey cacheKey, string[] fields, CachePolicy? policy, CancellationToken token = default);
 
@@ -695,14 +683,17 @@ public interface ITopicFactory
 public interface ICacheKeyStrategy
 {
     CacheKey GetCacheKey<T>(CacheKey key);
+}
 
+public interface ISpanCacheKeyStrategy
+{
     bool TryGetCacheKey<T>(ReadOnlySpan<char> key, Span<char> destination, out int written);
 }
 ```
 
 `ICacheKeyStrategy` is the pluggable seam for transforming a caller-supplied `CacheKey` into the key actually stored in the backing store. The type parameter `T` carries the cached value type so that implementations can inject the type name, tenant identifier, or other ambient context into the final key. `DefaultCacheKeyStrategy` returns the key unchanged; `PrefixCacheKeyStrategy` prepends a prefix and separator. A custom strategy is set on a provider's options (`CacheKeyStrategy`), where it applies to every cache built from that provider, or passed to `Cache<T>` / `HashCache<T>` for one typed cache.
 
-`TryGetCacheKey<T>` is the same composition without a string, behind the `Span<char>` reads. The caller's text arrives normalized as `CacheKey` normalizes it; the strategy writes into `destination` the characters `GetCacheKey` would build; the library normalizes the result as `CacheKey.WithName` would before probing the local tier, so casing is not the strategy's concern. Return `false` when the text does not fit, or when the strategy cannot compose by span (a hash, a lookup): the read then builds the key and takes the ordinary path, so declining is always correct and costs only the allocation. The member has no default body, so a strategy that never composes by span says so in one line rather than silently keeping every span read off the fast path.
+`ISpanCacheKeyStrategy.TryGetCacheKey<T>` is the same composition without a string, behind the `Span<char>` reads; both built-ins implement it. The caller's text arrives normalized as `CacheKey` normalizes it; the strategy writes into `destination` the characters `GetCacheKey` would build; the library normalizes the result as `CacheKey.WithName` would before probing the local tier, so casing is not the strategy's concern. Return `false` when the text does not fit, or when the strategy cannot compose by span (a hash, a lookup): the read then builds the key and takes the ordinary path, so declining is always correct and costs only the allocation. A strategy that does not implement it is treated as declining. It sits apart from `ICacheKeyStrategy` so a mock of the strategy never has to proxy a span: a proxy generator emits invalid IL for such a method.
 
 **Use this when:**
 
@@ -894,23 +885,23 @@ public interface ICachingTelemetryProvider
 {
     void TrackDependency(string type, string target, string name, string data,
         DateTimeOffset startTime, TimeSpan duration, string resultCode, bool success,
-        ReadOnlySpan<KeyValuePair<string, string>> properties = default,
-        ReadOnlySpan<KeyValuePair<string, double>> metrics = default);
+        TelemetryTags<string> properties = default,
+        TelemetryTags<double> metrics = default);
 
     void TrackEvent(string eventName,
-        ReadOnlySpan<KeyValuePair<string, string>> properties = default,
-        ReadOnlySpan<KeyValuePair<string, double>> metrics = default);
+        TelemetryTags<string> properties = default,
+        TelemetryTags<double> metrics = default);
 
     void TrackException(Exception ex,
-        ReadOnlySpan<KeyValuePair<string, string>> properties = default,
-        ReadOnlySpan<KeyValuePair<string, double>> metrics = default);
+        TelemetryTags<string> properties = default,
+        TelemetryTags<double> metrics = default);
 
     void TrackMetric(string name, double value,
-        ReadOnlySpan<KeyValuePair<string, string>> properties = default);
+        TelemetryTags<string> properties = default);
 }
 ```
 
-`ICachingTelemetryProvider` is the single seam through which the cache runtime emits all observability signals: dependency traces, custom events, exceptions, and metrics. The `properties` and `metrics` parameters use `ReadOnlySpan<KeyValuePair<...>>` — a zero-allocation, stack-allocated tag list — to avoid heap pressure on hot paths. Default no-op implementations are provided for all methods so implementers can override only the signals they care about. The runtime times each cache operation with a `TelemetryScope` and reports it through `TrackMetric`, and through `TrackDependency` when per-key read telemetry is on.
+`ICachingTelemetryProvider` is the single seam through which the cache runtime emits all observability signals: dependency traces, custom events, exceptions, and metrics. The `properties` and `metrics` parameters use `TelemetryTags<T>` — a struct holding up to nine pairs inline, built from a collection expression, a span or an array — to avoid heap pressure on hot paths. It is a struct rather than a `ReadOnlySpan` so the interface stays mockable, and it compares by value, so a mock matches the tags it received. The interface has no default bodies: an implementer writes all four methods, with an empty body for a signal it drops. The runtime times each cache operation with a `TelemetryScope` and reports it through `TrackMetric`, and through `TrackDependency` when per-key read telemetry is on.
 
 **Use this when:**
 

@@ -1005,7 +1005,7 @@ public class DistributedCacheRegistrationTests
             new PrefixRedisKeyStrategy("fixed", options.Separator);
     }
 
-    private sealed class LowercasingCacheKeyStrategy : ICacheKeyStrategy
+    private sealed class LowercasingCacheKeyStrategy : ICacheKeyStrategy, ISpanCacheKeyStrategy
     {
         public CacheKey GetCacheKey<T>(CacheKey key) => new(key.Name, CacheKeyCasing.Insensitive);
 

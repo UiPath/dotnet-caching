@@ -8,13 +8,17 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 
 ### Added
 
-- **Reads by `Span<char>`.** `ICache.GetAsync<T>`, `ICache<T>.GetAsync`, and `GetItemAsync` and `GetAsync` on
-  `IHashCache` and `IHashCache<T>` gain an overload that reads by the key's text without building a `CacheKey`.
-  The text is normalized as `new CacheKey(text)` normalizes it. Over the in-memory tier on .NET 9 and later, under
-  a key strategy that composes by span, as both built-ins do, a local hit allocates nothing; every other case builds
-  the key and takes the ordinary path. Default interface bodies keep outside implementations compiling. The parameter is `Span<char>`
-  rather than `ReadOnlySpan<char>`: a read-only span overload would make a call with a string ambiguous against the
-  `CacheKey` overload. A bare `default` key, as in `cache.GetAsync<T>(default, policy)`, still binds to the `CacheKey`
+- **Reads by `Span<char>`.** `SpanKeyExtensions` adds `GetAsync` over `ICache` and `ICache<T>`, and `GetItemAsync`
+  and `GetAsync` over `IHashCache` and `IHashCache<T>`, reading by the key's text without building a `CacheKey`.
+  The text is normalized as `new CacheKey(text)` normalizes it. A cache that implements `ISpanKeyCache`,
+  `ISpanKeyCache<T>`, `ISpanKeyHashCache` or `ISpanKeyHashCache<T>` serves the read itself, as the library's caches
+  do: over the in-memory tier on .NET 9 and later, under a key strategy that composes by span, as both built-ins do,
+  a local hit allocates nothing. Any other cache, an outside implementation or a Moq or NSubstitute proxy, is read
+  through its `CacheKey` overload, so a test that sets that overload up answers the span read too. The reads are
+  extensions rather than interface members because a proxy generator emits invalid IL for a method that takes a
+  `Span<char>`. The parameter is `Span<char>` rather than `ReadOnlySpan<char>`: a read-only span overload on the
+  capability interfaces would make a call with a string ambiguous against the `CacheKey` overload. Through a
+  library class, a bare `default` key, as in `cache.GetAsync<T>(default, policy)`, still binds to the `CacheKey`
   overload under a C# 13 compiler (.NET 9 SDK or later). Under an older compiler it is ambiguous (CS0121); cast it
   to `CacheKey`.
 
@@ -37,11 +41,21 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 
 ### Changed
 
-- **`ICacheKeyStrategy` gains `TryGetCacheKey<T>(ReadOnlySpan<char>, Span<char>, out int)`.** The span form of the
+- **`ICachingTelemetryProvider` takes `TelemetryTags<T>` and has no default bodies.** `TrackDependency`, `TrackEvent`,
+  `TrackException` and `TrackMetric` take `TelemetryTags<string>` properties and `TelemetryTags<double>` metrics in
+  place of `ReadOnlySpan<KeyValuePair<…>>`. The struct holds up to nine pairs inline and more in one array, so the
+  call stays allocation-free for the tags the library sends; a collection expression, a span or an array builds it
+  implicitly, and it compares by value. With a span parameter, a Moq or NSubstitute mock of the interface threw
+  `InvalidProgramException` on the first call and could not match the tags it received; now both work.
+  `TelemetryTags.ToDictionaryOrNull` takes the struct. **Breaking** for every provider outside the library: change
+  the parameter types, and implement all four methods, since the no-op default bodies are gone.
+
+- **`ISpanCacheKeyStrategy.TryGetCacheKey<T>(ReadOnlySpan<char>, Span<char>, out int)`.** The span form of the
   composition, behind the `Span<char>` reads: the text arrives normalized, the strategy writes what `GetCacheKey`
-  would build, and the library normalizes the result as `CacheKey.WithName` would. It has no default body.
-  **Breaking** for a strategy outside the library, which must add it; returning `false` keeps its reads on the string
-  path and changes nothing else.
+  would build, and the library normalizes the result as `CacheKey.WithName` would. `DefaultCacheKeyStrategy` and
+  `PrefixCacheKeyStrategy` implement it. A strategy outside the library implements it to keep a span read's local
+  hit allocation-free; one that does not is read through `GetCacheKey`, as before. It is apart from
+  `ICacheKeyStrategy` so a mock of the strategy never has to proxy a span.
 
 - **The local tier is keyed by the key's text.** `IMemoryCache` receives `CacheKey.Name` rather than the boxed
   struct: no box per lookup, one object less per resident entry, and `MemoryCache`'s string-keyed dictionary

@@ -8,22 +8,22 @@ public sealed class NullTelemetryProvider : ICachingTelemetryProvider
     public static readonly NullTelemetryProvider Instance = new();
 #pragma warning restore IDE1006 // Naming Styles
 
-    public void TrackDependency(string type, string target, string name, string data, DateTimeOffset startTime, TimeSpan duration, string resultCode, bool success, ReadOnlySpan<KeyValuePair<string, string>> properties = default, ReadOnlySpan<KeyValuePair<string, double>> metrics = default)
+    public void TrackDependency(string type, string target, string name, string data, DateTimeOffset startTime, TimeSpan duration, string resultCode, bool success, TelemetryTags<string> properties = default, TelemetryTags<double> metrics = default)
     {
         // noop
     }
 
-    public void TrackEvent(string eventName, ReadOnlySpan<KeyValuePair<string, string>> properties = default, ReadOnlySpan<KeyValuePair<string, double>> metrics = default)
+    public void TrackEvent(string eventName, TelemetryTags<string> properties = default, TelemetryTags<double> metrics = default)
     {
         // noop
     }
 
-    public void TrackException(Exception ex, ReadOnlySpan<KeyValuePair<string, string>> properties = default, ReadOnlySpan<KeyValuePair<string, double>> metrics = default)
+    public void TrackException(Exception ex, TelemetryTags<string> properties = default, TelemetryTags<double> metrics = default)
     {
         // noop
     }
 
-    public void TrackMetric(string name, double value, ReadOnlySpan<KeyValuePair<string, string>> properties = default)
+    public void TrackMetric(string name, double value, TelemetryTags<string> properties = default)
     {
         // noop
     }

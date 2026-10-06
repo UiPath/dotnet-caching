@@ -16,8 +16,8 @@ public class HostTelemetryBridge(IHostTelemetry hostTelemetry) : ICachingTelemet
 {
     public void TrackEvent(
         string eventName,
-        ReadOnlySpan<KeyValuePair<string, string>> properties = default,
-        ReadOnlySpan<KeyValuePair<string, double>> metrics = default)
+        TelemetryTags<string> properties = default,
+        TelemetryTags<double> metrics = default)
     {
         if (!hostTelemetry.IsEnabled(eventName)) return;
         hostTelemetry.Emit(eventName, ToDict(properties));
@@ -26,28 +26,28 @@ public class HostTelemetryBridge(IHostTelemetry hostTelemetry) : ICachingTelemet
     public void TrackMetric(
         string name,
         double value,
-        ReadOnlySpan<KeyValuePair<string, string>> properties = default) =>
+        TelemetryTags<string> properties = default) =>
         hostTelemetry.EmitMetric(name, value, ToDict(properties));
 
     public void TrackException(
         Exception ex,
-        ReadOnlySpan<KeyValuePair<string, string>> properties = default,
-        ReadOnlySpan<KeyValuePair<string, double>> metrics = default) =>
+        TelemetryTags<string> properties = default,
+        TelemetryTags<double> metrics = default) =>
         hostTelemetry.EmitException(ex, ToDict(properties));
 
     public void TrackDependency(
         string type, string target, string name, string data,
         DateTimeOffset startTime, TimeSpan duration,
         string resultCode, bool success,
-        ReadOnlySpan<KeyValuePair<string, string>> properties = default,
-        ReadOnlySpan<KeyValuePair<string, double>> metrics = default) =>
+        TelemetryTags<string> properties = default,
+        TelemetryTags<double> metrics = default) =>
         hostTelemetry.EmitDependency(name, data, startTime, duration, success, ToDict(properties));
 
     private static Dictionary<string, string>? ToDict(
-        ReadOnlySpan<KeyValuePair<string, string>> tags)
+        TelemetryTags<string> tags)
     {
         if (tags.IsEmpty) return null;
-        var dict = new Dictionary<string, string>(tags.Length);
+        var dict = new Dictionary<string, string>(tags.Count);
         foreach (var kv in tags) dict[kv.Key] = kv.Value;
         return dict;
     }
@@ -76,11 +76,11 @@ services.AddCaching(
 
 `IHostTelemetry` is a placeholder for your service's actual telemetry interface — adapt the method names to your host's API.
 
-The interface takes tag bags as `ReadOnlySpan<KeyValuePair>` so the hot path is allocation-free when telemetry is disabled. Materializing the span into a `Dictionary` is only paid when you actually forward the event. If your host telemetry can accept `KeyValuePair[]` or a span-shaped API directly, skip the dict materialization entirely.
+The interface takes tag bags as `TelemetryTags<T>`, a struct that holds up to nine pairs inline, so the hot path is allocation-free when telemetry is disabled. Materializing the tags into a `Dictionary` is only paid when you actually forward the event. If your host telemetry can enumerate `KeyValuePair` pairs directly, skip the dict materialization entirely.
 
 The `eventName` parameter on `TrackEvent` is the library's event name (e.g. `cache.miss`, `cache.write`, `cache.distributedlock.unavailable`). Filter by name if you only want a subset of events forwarded.
 
-The interface has default no-op implementations for every method, so you only need to override the ones you care about. The default bodies exist to guard against Castle.Proxies mock-gen issues with `ref struct` parameters — they are intentionally not virtual.
+Implement all four methods; a method you do not forward gets an empty body. The interface has no default bodies, so Moq and NSubstitute can mock it, and a test can match the tags it receives, `[new("key", "value")]` included, because `TelemetryTags<T>` compares by value.
 
 ## When not to use
 

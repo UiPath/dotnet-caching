@@ -1,6 +1,6 @@
 namespace UiPath.Caching;
 
-public sealed class PrefixCacheKeyStrategy : ICacheKeyStrategy
+public sealed class PrefixCacheKeyStrategy : ICacheKeyStrategy, ISpanCacheKeyStrategy
 {
     private readonly string _prefixWithSeparator;
 

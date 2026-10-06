@@ -75,8 +75,20 @@ public class ConnectionStateMonitorMulticastTests
     /// <summary>Refuses every record, the way a saturated sink would.</summary>
     private sealed class RefusingTelemetryProvider : ICachingTelemetryProvider
     {
-        public void TrackEvent(string eventName, ReadOnlySpan<KeyValuePair<string, string>> properties = default, ReadOnlySpan<KeyValuePair<string, double>> metrics = default) =>
+        public void TrackEvent(string eventName, TelemetryTags<string> properties = default, TelemetryTags<double> metrics = default) =>
             throw new InvalidOperationException("sink boom");
+
+        public void TrackDependency(string type, string target, string name, string data, DateTimeOffset startTime, TimeSpan duration, string resultCode, bool success, TelemetryTags<string> properties = default, TelemetryTags<double> metrics = default)
+        {
+        }
+
+        public void TrackException(Exception ex, TelemetryTags<string> properties = default, TelemetryTags<double> metrics = default)
+        {
+        }
+
+        public void TrackMetric(string name, double value, TelemetryTags<string> properties = default)
+        {
+        }
     }
 
     private sealed class FakeConnectionState : IConnectionState

@@ -708,8 +708,8 @@ public class RedisConnectorStaleEndpointTests
         public List<string> Events { get; } = [];
         public List<Exception> Exceptions { get; } = [];
         public string? Refuse { get; set; }
-        public void TrackException(Exception ex, ReadOnlySpan<KeyValuePair<string, string>> properties = default, ReadOnlySpan<KeyValuePair<string, double>> metrics = default) => Exceptions.Add(ex);
-        public void TrackEvent(string eventName, ReadOnlySpan<KeyValuePair<string, string>> properties = default, ReadOnlySpan<KeyValuePair<string, double>> metrics = default)
+        public void TrackException(Exception ex, TelemetryTags<string> properties = default, TelemetryTags<double> metrics = default) => Exceptions.Add(ex);
+        public void TrackEvent(string eventName, TelemetryTags<string> properties = default, TelemetryTags<double> metrics = default)
         {
             if (eventName == Refuse)
             {
@@ -717,6 +717,14 @@ public class RedisConnectorStaleEndpointTests
             }
 
             Events.Add(eventName);
+        }
+
+        public void TrackDependency(string type, string target, string name, string data, DateTimeOffset startTime, TimeSpan duration, string resultCode, bool success, TelemetryTags<string> properties = default, TelemetryTags<double> metrics = default)
+        {
+        }
+
+        public void TrackMetric(string name, double value, TelemetryTags<string> properties = default)
+        {
         }
     }
 

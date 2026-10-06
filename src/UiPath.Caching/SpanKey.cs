@@ -18,7 +18,8 @@ internal static class SpanKey
 
         token.ThrowIfCancellationRequested();
         Span<char> composed = stackalloc char[MaxLength];
-        return strategy.TryGetCacheKey<T>(normalized[..length], composed, out var composedLength) && composedLength > 0
+        return strategy is ISpanCacheKeyStrategy spanStrategy
+            && spanStrategy.TryGetCacheKey<T>(normalized[..length], composed, out var composedLength) && composedLength > 0
             && CacheKey.TryNormalize(composed[..composedLength], destination, CacheKey.DefaultCasing, out written) && written > 0;
     }
 }
