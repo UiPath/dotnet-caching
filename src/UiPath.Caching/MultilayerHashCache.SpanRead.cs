@@ -61,6 +61,7 @@ internal sealed partial class MultilayerHashCache
     /// <summary>A local hit that <see cref="GetOrAddInternalAsync{T}"/> would return as found. False under a rehydrating policy, which needs the <see cref="CacheKey"/>, and for a cancelled token, which the key path reports through its task.</summary>
     private bool TryGetOrAddLocal<T>(ReadOnlySpan<char> cacheKey, CachePolicy policy, CancellationToken token, [MaybeNullWhen(false)] out IDictionary<string, T?> values)
     {
+        NotCacheableException.ThrowIfNotCacheable<T>();
         values = default;
         if ((policy.RehydrateEnabled == true && policy.Rehydrate is not null) || token.IsCancellationRequested || !TryGetLocal<T>(cacheKey, out var entry) || !entry.Found)
         {

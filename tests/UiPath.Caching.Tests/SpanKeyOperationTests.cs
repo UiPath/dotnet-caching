@@ -191,6 +191,26 @@ public class SpanKeyOperationTests
     }
 
     [Fact]
+    public async Task Get_or_add_rejects_a_type_that_is_not_cacheable_by_key_and_by_span()
+    {
+        using var cache = InMemoryMultilayer.Cache();
+        using var hash = InMemoryMultilayer.HashCache();
+
+        Func<Task>[] calls =
+        [
+            async () => await cache.GetOrAddAsync<int>("user:42", static _ => Task.FromResult(1), policy: null, Ct),
+            async () => await BySpan(k => cache.GetOrAddAsync<int>(k, static _ => Task.FromResult(1), policy: null, Ct)),
+            async () => await hash.GetOrAddAsync<int>("user:42", static _ => Task.FromResult<IDictionary<string, int>>(new Dictionary<string, int>()), policy: null, Ct),
+            async () => await BySpan(k => hash.GetOrAddAsync<int>(k, static _ => Task.FromResult<IDictionary<string, int>>(new Dictionary<string, int>()), policy: null, Ct)),
+        ];
+
+        foreach (var call in calls)
+        {
+            await call.Should().ThrowAsync<NotCacheableException>();
+        }
+    }
+
+    [Fact]
     public async Task A_hash_cache_reads_a_case_sensitive_key_by_its_own_entry()
     {
         using var cache = InMemoryMultilayer.HashCache();

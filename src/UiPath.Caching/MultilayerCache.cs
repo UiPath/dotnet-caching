@@ -348,6 +348,7 @@ internal sealed partial class MultilayerCache : MultilayerCacheBase, ICache, ISp
     private ValueTask<T?> GetOrAddInternalAsync<T>(CacheKey cacheKey, Func<CancellationToken, Task<T?>> generator, DateTimeOffset? expiration, TimeSpan effectiveDuration, TimeSpan? rehydrateJitter, CachePolicy policy, CancellationToken token)
     {
         // Not async: the miss path's lock delegates capture these parameters, and an async method would build that closure on a hit too.
+        NotCacheableException.ThrowIfNotCacheable<T>();
         if (!token.IsCancellationRequested && TryGetLocal<T?>(cacheKey, token, out var local) && local.Found)
         {
             TryRehydrate(cacheKey, local.Expiration, local.Value, generator, policy, effectiveDuration, rehydrateJitter);
