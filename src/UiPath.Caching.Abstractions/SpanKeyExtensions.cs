@@ -44,4 +44,124 @@ public static class SpanKeyExtensions
         cache is ISpanKeyHashCache<T> spanKeyCache
             ? spanKeyCache.GetItemAsync(cacheKey, field, token)
             : cache.GetItemAsync(new CacheKey(cacheKey), field, token);
+
+    /// <inheritdoc cref="GetAsync{T}(ICache, Span{char}, CachePolicy, CancellationToken)"/>
+    public static ValueTask<ICacheEntry<T?>> GetCacheEntryAsync<T>(this ICache cache, Span<char> cacheKey, CachePolicy? policy, CancellationToken token = default) =>
+        cache is ISpanKeyCache spanKeyCache
+            ? spanKeyCache.GetCacheEntryAsync<T>(cacheKey, policy, token)
+            : cache.GetCacheEntryAsync<T>(new CacheKey(cacheKey), policy, token);
+
+    /// <inheritdoc cref="GetAsync{T}(ICache, Span{char}, CachePolicy, CancellationToken)"/>
+    public static ValueTask<ICacheEntry<IDictionary<string, T?>>> GetCacheEntryAsync<T>(this IHashCache cache, Span<char> cacheKey, CachePolicy? policy, CancellationToken token = default) =>
+        cache is ISpanKeyHashCache spanKeyCache
+            ? spanKeyCache.GetCacheEntryAsync<T>(cacheKey, policy, token)
+            : cache.GetCacheEntryAsync<T>(new CacheKey(cacheKey), policy, token);
+
+    /// <inheritdoc cref="GetAsync{T}(ICache, Span{char}, CachePolicy, CancellationToken)"/>
+    public static ValueTask<ICacheEntry<IDictionary<string, T?>>> GetCacheEntryAsync<T>(this IHashCache<T> cache, Span<char> cacheKey, CancellationToken token = default) =>
+        cache is ISpanKeyHashCache<T> spanKeyCache
+            ? spanKeyCache.GetCacheEntryAsync(cacheKey, token)
+            : cache.GetCacheEntryAsync(new CacheKey(cacheKey), token);
+
+    /// <summary>Reads by the key's text as <see cref="GetAsync{T}(ICache, Span{char}, CachePolicy, CancellationToken)"/> does; a miss builds the key and takes the <see cref="CacheKey"/> path, so the generator runs as it would there.</summary>
+    public static ValueTask<T?> GetOrAddAsync<T>(this ICache cache, Span<char> cacheKey, Func<CancellationToken, Task<T?>> generator, CachePolicy? policy, CancellationToken token = default) =>
+        cache is ISpanKeyCache spanKeyCache
+            ? spanKeyCache.GetOrAddAsync(cacheKey, generator, policy, token)
+            : cache.GetOrAddAsync(new CacheKey(cacheKey), generator, policy, token);
+
+    /// <inheritdoc cref="GetOrAddAsync{T}(ICache, Span{char}, Func{CancellationToken, Task{T}}, CachePolicy, CancellationToken)"/>
+    public static ValueTask<T?> GetOrAddAsync<T>(this ICache cache, Span<char> cacheKey, Func<CancellationToken, Task<T?>> generator, TimeSpan expiration, CachePolicy? policy, CancellationToken token = default) =>
+        cache is ISpanKeyCache spanKeyCache
+            ? spanKeyCache.GetOrAddAsync(cacheKey, generator, expiration, policy, token)
+            : cache.GetOrAddAsync(new CacheKey(cacheKey), generator, expiration, policy, token);
+
+    /// <inheritdoc cref="GetOrAddAsync{T}(ICache, Span{char}, Func{CancellationToken, Task{T}}, CachePolicy, CancellationToken)"/>
+    public static ValueTask<T?> GetOrAddAsync<T>(this ICache cache, Span<char> cacheKey, Func<CancellationToken, Task<T?>> generator, DateTimeOffset expiration, CachePolicy? policy, CancellationToken token = default) =>
+        cache is ISpanKeyCache spanKeyCache
+            ? spanKeyCache.GetOrAddAsync(cacheKey, generator, expiration, policy, token)
+            : cache.GetOrAddAsync(new CacheKey(cacheKey), generator, expiration, policy, token);
+
+    /// <inheritdoc cref="GetOrAddAsync{T}(ICache, Span{char}, Func{CancellationToken, Task{T}}, CachePolicy, CancellationToken)"/>
+    public static ValueTask<T?> GetOrAddAsync<T>(this ICache<T> cache, Span<char> cacheKey, Func<CancellationToken, Task<T?>> generator, CancellationToken token = default) =>
+        cache is ISpanKeyCache<T> spanKeyCache
+            ? spanKeyCache.GetOrAddAsync(cacheKey, generator, token)
+            : cache.GetOrAddAsync(new CacheKey(cacheKey), generator, token);
+
+    /// <inheritdoc cref="GetOrAddAsync{T}(ICache, Span{char}, Func{CancellationToken, Task{T}}, CachePolicy, CancellationToken)"/>
+    public static ValueTask<T?> GetOrAddAsync<T>(this ICache<T> cache, Span<char> cacheKey, Func<CancellationToken, Task<T?>> generator, TimeSpan expiration, CancellationToken token = default) =>
+        cache is ISpanKeyCache<T> spanKeyCache
+            ? spanKeyCache.GetOrAddAsync(cacheKey, generator, expiration, token)
+            : cache.GetOrAddAsync(new CacheKey(cacheKey), generator, expiration, token);
+
+    /// <inheritdoc cref="GetOrAddAsync{T}(ICache, Span{char}, Func{CancellationToken, Task{T}}, CachePolicy, CancellationToken)"/>
+    public static ValueTask<T?> GetOrAddAsync<T>(this ICache<T> cache, Span<char> cacheKey, Func<CancellationToken, Task<T?>> generator, DateTimeOffset expiration, CancellationToken token = default) =>
+        cache is ISpanKeyCache<T> spanKeyCache
+            ? spanKeyCache.GetOrAddAsync(cacheKey, generator, expiration, token)
+            : cache.GetOrAddAsync(new CacheKey(cacheKey), generator, expiration, token);
+
+    /// <inheritdoc cref="GetOrAddAsync{T}(ICache, Span{char}, Func{CancellationToken, Task{T}}, CachePolicy, CancellationToken)"/>
+    public static ValueTask<IDictionary<string, T?>> GetOrAddAsync<T>(this IHashCache cache, Span<char> cacheKey, Func<CancellationToken, Task<IDictionary<string, T?>>> generator, CachePolicy? policy, CancellationToken token = default) =>
+        cache is ISpanKeyHashCache spanKeyCache
+            ? spanKeyCache.GetOrAddAsync(cacheKey, generator, policy, token)
+            : cache.GetOrAddAsync(new CacheKey(cacheKey), generator, policy, token);
+
+    /// <inheritdoc cref="GetOrAddAsync{T}(ICache, Span{char}, Func{CancellationToken, Task{T}}, CachePolicy, CancellationToken)"/>
+    public static ValueTask<IDictionary<string, T?>> GetOrAddAsync<T>(this IHashCache cache, Span<char> cacheKey, Func<CancellationToken, Task<IDictionary<string, T?>>> generator, TimeSpan expiration, CachePolicy? policy, CancellationToken token = default) =>
+        cache is ISpanKeyHashCache spanKeyCache
+            ? spanKeyCache.GetOrAddAsync(cacheKey, generator, expiration, policy, token)
+            : cache.GetOrAddAsync(new CacheKey(cacheKey), generator, expiration, policy, token);
+
+    /// <inheritdoc cref="GetOrAddAsync{T}(ICache, Span{char}, Func{CancellationToken, Task{T}}, CachePolicy, CancellationToken)"/>
+    public static ValueTask<IDictionary<string, T?>> GetOrAddAsync<T>(this IHashCache cache, Span<char> cacheKey, Func<CancellationToken, Task<IDictionary<string, T?>>> generator, DateTimeOffset expiration, CachePolicy? policy, CancellationToken token = default) =>
+        cache is ISpanKeyHashCache spanKeyCache
+            ? spanKeyCache.GetOrAddAsync(cacheKey, generator, expiration, policy, token)
+            : cache.GetOrAddAsync(new CacheKey(cacheKey), generator, expiration, policy, token);
+
+    /// <inheritdoc cref="GetOrAddAsync{T}(ICache, Span{char}, Func{CancellationToken, Task{T}}, CachePolicy, CancellationToken)"/>
+    public static ValueTask<IDictionary<string, T?>> GetOrAddAsync<T>(this IHashCache cache, Span<char> cacheKey, Func<CancellationToken, Task<IDictionary<string, T?>>> generator, DateTimeOffset expiration, HashCacheSetOption? setOption, CachePolicy? policy, CancellationToken token = default) =>
+        cache is ISpanKeyHashCache spanKeyCache
+            ? spanKeyCache.GetOrAddAsync(cacheKey, generator, expiration, setOption, policy, token)
+            : cache.GetOrAddAsync(new CacheKey(cacheKey), generator, expiration, setOption, policy, token);
+
+    /// <inheritdoc cref="GetOrAddAsync{T}(ICache, Span{char}, Func{CancellationToken, Task{T}}, CachePolicy, CancellationToken)"/>
+    public static ValueTask<IDictionary<string, T?>> GetOrAddAsync<T>(this IHashCache<T> cache, Span<char> cacheKey, Func<CancellationToken, Task<IDictionary<string, T?>>> generator, CancellationToken token = default) =>
+        cache is ISpanKeyHashCache<T> spanKeyCache
+            ? spanKeyCache.GetOrAddAsync(cacheKey, generator, token)
+            : cache.GetOrAddAsync(new CacheKey(cacheKey), generator, token);
+
+    /// <inheritdoc cref="GetOrAddAsync{T}(ICache, Span{char}, Func{CancellationToken, Task{T}}, CachePolicy, CancellationToken)"/>
+    public static ValueTask<IDictionary<string, T?>> GetOrAddAsync<T>(this IHashCache<T> cache, Span<char> cacheKey, Func<CancellationToken, Task<IDictionary<string, T?>>> generator, TimeSpan expiration, CancellationToken token = default) =>
+        cache is ISpanKeyHashCache<T> spanKeyCache
+            ? spanKeyCache.GetOrAddAsync(cacheKey, generator, expiration, token)
+            : cache.GetOrAddAsync(new CacheKey(cacheKey), generator, expiration, token);
+
+    /// <inheritdoc cref="GetOrAddAsync{T}(ICache, Span{char}, Func{CancellationToken, Task{T}}, CachePolicy, CancellationToken)"/>
+    public static ValueTask<IDictionary<string, T?>> GetOrAddAsync<T>(this IHashCache<T> cache, Span<char> cacheKey, Func<CancellationToken, Task<IDictionary<string, T?>>> generator, DateTimeOffset expiration, CancellationToken token = default) =>
+        cache is ISpanKeyHashCache<T> spanKeyCache
+            ? spanKeyCache.GetOrAddAsync(cacheKey, generator, expiration, token)
+            : cache.GetOrAddAsync(new CacheKey(cacheKey), generator, expiration, token);
+
+    /// <inheritdoc cref="GetAsync{T}(ICache, Span{char}, CachePolicy, CancellationToken)"/>
+    public static ValueTask<bool> ContainsAsync<T>(this ICache cache, Span<char> cacheKey, CancellationToken token = default) =>
+        cache is ISpanKeyCache spanKeyCache
+            ? spanKeyCache.ContainsAsync<T>(cacheKey, token)
+            : cache.ContainsAsync<T>(new CacheKey(cacheKey), token);
+
+    /// <inheritdoc cref="GetAsync{T}(ICache, Span{char}, CachePolicy, CancellationToken)"/>
+    public static ValueTask<bool> ContainsAsync<T>(this ICache<T> cache, Span<char> cacheKey, CancellationToken token = default) =>
+        cache is ISpanKeyCache<T> spanKeyCache
+            ? spanKeyCache.ContainsAsync(cacheKey, token)
+            : cache.ContainsAsync(new CacheKey(cacheKey), token);
+
+    /// <inheritdoc cref="GetAsync{T}(ICache, Span{char}, CachePolicy, CancellationToken)"/>
+    public static ValueTask<bool> ContainsAsync<T>(this IHashCache cache, Span<char> cacheKey, CancellationToken token = default) =>
+        cache is ISpanKeyHashCache spanKeyCache
+            ? spanKeyCache.ContainsAsync<T>(cacheKey, token)
+            : cache.ContainsAsync<T>(new CacheKey(cacheKey), token);
+
+    /// <inheritdoc cref="GetAsync{T}(ICache, Span{char}, CachePolicy, CancellationToken)"/>
+    public static ValueTask<bool> ContainsAsync<T>(this IHashCache<T> cache, Span<char> cacheKey, CancellationToken token = default) =>
+        cache is ISpanKeyHashCache<T> spanKeyCache
+            ? spanKeyCache.ContainsAsync(cacheKey, token)
+            : cache.ContainsAsync(new CacheKey(cacheKey), token);
 }

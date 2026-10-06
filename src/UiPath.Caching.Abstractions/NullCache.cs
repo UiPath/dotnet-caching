@@ -19,14 +19,7 @@ public sealed class NullCache : ICache, ISpanKeyCache
         return ValueTask.FromResult(default(DateTimeOffset?));
     }
 
-    [OverloadResolutionPriority(1)]
     public ValueTask<T?> GetAsync<T>(CacheKey cacheKey, CachePolicy? policy, CancellationToken token = default)
-    {
-        NotCacheableException.ThrowIfNotCacheable<T>();
-        return ValueTask.FromResult(default(T?));
-    }
-
-    public ValueTask<T?> GetAsync<T>(Span<char> cacheKey, CachePolicy? policy, CancellationToken token = default)
     {
         NotCacheableException.ThrowIfNotCacheable<T>();
         return ValueTask.FromResult(default(T?));
@@ -114,6 +107,29 @@ public sealed class NullCache : ICache, ISpanKeyCache
         NotCacheableException.ThrowIfNotCacheable<T>();
         return ValueTask.FromResult(default(TimeSpan?));
     }
+
+    ValueTask<T?> ISpanKeyCache.GetAsync<T>(Span<char> cacheKey, CachePolicy? policy, CancellationToken token)
+        where T : default =>
+        GetAsync<T>(CacheKey.Null, policy, token);
+
+    ValueTask<ICacheEntry<T?>> ISpanKeyCache.GetCacheEntryAsync<T>(Span<char> cacheKey, CachePolicy? policy, CancellationToken token)
+        where T : default =>
+        GetCacheEntryAsync<T>(CacheKey.Null, policy, token);
+
+    ValueTask<T?> ISpanKeyCache.GetOrAddAsync<T>(Span<char> cacheKey, Func<CancellationToken, Task<T?>> generator, CachePolicy? policy, CancellationToken token)
+        where T : default =>
+        ReturnGeneratorAsync(generator, token);
+
+    ValueTask<T?> ISpanKeyCache.GetOrAddAsync<T>(Span<char> cacheKey, Func<CancellationToken, Task<T?>> generator, TimeSpan expiration, CachePolicy? policy, CancellationToken token)
+        where T : default =>
+        ReturnGeneratorAsync(generator, token);
+
+    ValueTask<T?> ISpanKeyCache.GetOrAddAsync<T>(Span<char> cacheKey, Func<CancellationToken, Task<T?>> generator, DateTimeOffset expiration, CachePolicy? policy, CancellationToken token)
+        where T : default =>
+        ReturnGeneratorAsync(generator, token);
+
+    ValueTask<bool> ISpanKeyCache.ContainsAsync<T>(Span<char> cacheKey, CancellationToken token) =>
+        ContainsAsync<T>(CacheKey.Null, token);
 
     public void Dispose()
     {

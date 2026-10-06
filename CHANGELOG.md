@@ -8,8 +8,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 
 ### Added
 
-- **Reads by `Span<char>`.** `SpanKeyExtensions` adds `GetAsync` over `ICache` and `ICache<T>`, and `GetItemAsync`
-  and `GetAsync` over `IHashCache` and `IHashCache<T>`, reading by the key's text without building a `CacheKey`.
+- **Reads by `Span<char>`.** `SpanKeyExtensions` adds `GetAsync`, `ContainsAsync` and `GetOrAddAsync` over `ICache`,
+  `ICache<T>`, `IHashCache` and `IHashCache<T>`, `GetCacheEntryAsync` over `ICache`, `IHashCache` and
+  `IHashCache<T>`, and `GetItemAsync` over the hash surfaces, reading by the key's text without building a `CacheKey`.
+  `GetOrAddAsync` builds the key only on a miss, or when the policy rehydrates, since rehydration keeps the key; the
+  generator then runs exactly as it would on the `CacheKey` path.
+  `NullCache` and `NullHashCache` implement the capability interfaces explicitly, so their public surface keeps only
+  the `CacheKey` overloads; a span read reaches them through the extensions.
   The text is normalized as `new CacheKey(text)` normalizes it. A cache that implements `ISpanKeyCache`,
   `ISpanKeyCache<T>`, `ISpanKeyHashCache` or `ISpanKeyHashCache<T>` serves the read itself, as the library's caches
   do: over the in-memory tier on .NET 9 and later, under a key strategy that composes by span, as both built-ins do,
@@ -40,6 +45,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
   that never reads an expiration, such as `RedisSetCache`, does not connect.
 
 ### Changed
+
+- **A string key reads the local tier by its text.** On .NET 9 and later, `GetAsync`, `GetItemAsync`,
+  `ContainsAsync`, `GetCacheEntryAsync` and `GetOrAddAsync` with a `CacheKey` look the in-memory tier up as the span
+  reads do, and `Cache<T>` and `HashCache<T>` compose their strategy's key on the stack instead of through
+  `GetCacheKey`. A local hit through a typed cache with a prefix strategy, the common shape, no longer allocates the
+  prefixed key, its entry options or, for `GetOrAddAsync`, the rehydration closure, with no change at the call site.
+  A key built with a casing other than `CacheKey.DefaultCasing`, a strategy that declines `TryGetCacheKey`, a miss
+  and .NET 8 take the path they took before.
 
 - **`ICachingTelemetryProvider` takes `TelemetryTags<T>` and has no default bodies.** `TrackDependency`, `TrackEvent`,
   `TrackException` and `TrackMetric` take `TelemetryTags<string>` properties and `TelemetryTags<double>` metrics in
