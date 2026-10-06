@@ -13,6 +13,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
   `IHashCache<T>`, and `GetItemAsync` over the hash surfaces, reading by the key's text without building a `CacheKey`.
   `GetOrAddAsync` builds the key only on a miss, or when the policy rehydrates, since rehydration keeps the key; the
   generator then runs exactly as it would on the `CacheKey` path.
+  `NullCache` and `NullHashCache` implement the capability interfaces explicitly, so their public surface keeps only
+  the `CacheKey` overloads; a span read reaches them through the extensions.
   The text is normalized as `new CacheKey(text)` normalizes it. A cache that implements `ISpanKeyCache`,
   `ISpanKeyCache<T>`, `ISpanKeyHashCache` or `ISpanKeyHashCache<T>` serves the read itself, as the library's caches
   do: over the in-memory tier on .NET 9 and later, under a key strategy that composes by span, as both built-ins do,
