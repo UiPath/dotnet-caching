@@ -8,7 +8,7 @@ public class SpanKeyOperationTests
     private static readonly Func<CancellationToken, Task<string?>> Unexpected = static _ => throw new InvalidOperationException("the generator ran on a hit");
     private static readonly Func<CancellationToken, Task<IDictionary<string, string?>>> UnexpectedHash = static _ => throw new InvalidOperationException("the generator ran on a hit");
 
-    private delegate void SpanCall(Span<char> key);
+    private delegate ValueTask<TResult> SpanCall<TResult>(Span<char> key);
 
     private static CancellationToken Ct => TestContext.Current.CancellationToken;
 
@@ -79,21 +79,21 @@ public class SpanKeyOperationTests
         (await typedHash.SetAsync("user:42", new Dictionary<string, string?> { ["f"] = "v" }, Ct)).Should().BeTrue();
         var past = DateTimeOffset.UtcNow.AddMinutes(-1);
 
-        Action[] calls =
+        Func<Task>[] calls =
         [
-            () => BySpan(k => cache.GetOrAddAsync(k, Unexpected, TimeSpan.Zero, policy: null, Ct)),
-            () => BySpan(k => cache.GetOrAddAsync(k, Unexpected, past, policy: null, Ct)),
-            () => typed.GetOrAddAsync("user:42", Unexpected, TimeSpan.Zero, Ct),
-            () => typed.GetOrAddAsync("user:42", Unexpected, past, Ct),
-            () => BySpan(k => hash.GetOrAddAsync(k, UnexpectedHash, TimeSpan.Zero, policy: null, Ct)),
-            () => BySpan(k => hash.GetOrAddAsync(k, UnexpectedHash, past, policy: null, Ct)),
-            () => BySpan(k => hash.GetOrAddAsync(k, UnexpectedHash, past, HashCacheSetOption.KeyReplace, policy: null, Ct)),
-            () => typedHash.GetOrAddAsync("user:42", UnexpectedHash, TimeSpan.Zero, Ct),
+            async () => await BySpan(k => cache.GetOrAddAsync(k, Unexpected, TimeSpan.Zero, policy: null, Ct)),
+            async () => await BySpan(k => cache.GetOrAddAsync(k, Unexpected, past, policy: null, Ct)),
+            async () => await typed.GetOrAddAsync("user:42", Unexpected, TimeSpan.Zero, Ct),
+            async () => await typed.GetOrAddAsync("user:42", Unexpected, past, Ct),
+            async () => await BySpan(k => hash.GetOrAddAsync(k, UnexpectedHash, TimeSpan.Zero, policy: null, Ct)),
+            async () => await BySpan(k => hash.GetOrAddAsync(k, UnexpectedHash, past, policy: null, Ct)),
+            async () => await BySpan(k => hash.GetOrAddAsync(k, UnexpectedHash, past, HashCacheSetOption.KeyReplace, policy: null, Ct)),
+            async () => await typedHash.GetOrAddAsync("user:42", UnexpectedHash, TimeSpan.Zero, Ct),
         ];
 
         foreach (var call in calls)
         {
-            call.Should().Throw<ArgumentOutOfRangeException>().Which.ParamName.Should().Be("expiration");
+            (await call.Should().ThrowAsync<ArgumentOutOfRangeException>()).Which.ParamName.Should().Be("expiration");
         }
     }
 
@@ -246,15 +246,15 @@ public class SpanKeyOperationTests
         };
         (await cache.SetAsync<string>("user:42", "aged", TimeSpan.FromMinutes(1), policy: null, Ct)).Should().BeTrue();
         var rehydrated = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        Func<CancellationToken, Task<string?>> generator = _ =>
+        Task<string?> Generator(CancellationToken _)
         {
             rehydrated.TrySetResult();
             return Task.FromResult<string?>("fresh");
-        };
+        }
 
         var value = bySpan
-            ? SpanReads.GetOrAdd(cache, "user:42", generator, policy, Ct)
-            : await cache.GetOrAddAsync("user:42", generator, policy, Ct);
+            ? SpanReads.GetOrAdd(cache, "user:42", Generator, policy, Ct)
+            : await cache.GetOrAddAsync("user:42", Generator, policy, Ct);
 
         value.Should().Be("aged");
         await rehydrated.Task.WaitAsync(TimeSpan.FromSeconds(5), Ct);
@@ -274,15 +274,15 @@ public class SpanKeyOperationTests
         };
         (await cache.SetAsync<string>("user:42", new Dictionary<string, string?> { ["f"] = "aged" }, TimeSpan.FromMinutes(1), policy: null, Ct)).Should().BeTrue();
         var rehydrated = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        Func<CancellationToken, Task<IDictionary<string, string?>>> generator = _ =>
+        Task<IDictionary<string, string?>> Generator(CancellationToken _)
         {
             rehydrated.TrySetResult();
             return Task.FromResult<IDictionary<string, string?>>(new Dictionary<string, string?> { ["f"] = "fresh" });
-        };
+        }
 
         var values = bySpan
-            ? SpanReads.GetOrAdd(cache, "user:42", generator, policy, Ct)
-            : await cache.GetOrAddAsync("user:42", generator, policy, Ct);
+            ? SpanReads.GetOrAdd(cache, "user:42", Generator, policy, Ct)
+            : await cache.GetOrAddAsync("user:42", Generator, policy, Ct);
 
         values.Should().ContainKey("f").WhoseValue.Should().Be("aged");
         await rehydrated.Task.WaitAsync(TimeSpan.FromSeconds(5), Ct);
@@ -312,9 +312,9 @@ public class SpanKeyOperationTests
         var typed = new Cache<string>(cache, new PrefixCacheKeyStrategy("app"));
         (await typed.SetAsync("user:42", "v", Ct)).Should().BeTrue();
 
-        AllocatedBy(() => typed.GetAsync("user:42").GetAwaiter().GetResult()).Should().Be(0);
-        AllocatedBy(() => typed.ContainsAsync("user:42").GetAwaiter().GetResult()).Should().Be(0);
-        AllocatedBy(() => typed.GetOrAddAsync("user:42", Unexpected).GetAwaiter().GetResult()).Should().Be(0);
+        AllocatedBy(() => Completed(typed.GetAsync("user:42"))).Should().Be(0);
+        AllocatedBy(() => Completed(typed.ContainsAsync("user:42"))).Should().Be(0);
+        AllocatedBy(() => Completed(typed.GetOrAddAsync("user:42", Unexpected))).Should().Be(0);
     }
 
     [Fact]
@@ -323,10 +323,10 @@ public class SpanKeyOperationTests
         using var cache = InMemoryMultilayer.Cache(new InMemoryCacheOptions { CacheKeyStrategy = new PrefixCacheKeyStrategy("tier") });
         (await cache.SetAsync<string>("user:42", "v", policy: null, Ct)).Should().BeTrue();
 
-        AllocatedBy(() => cache.GetAsync<string>("user:42", policy: null).GetAwaiter().GetResult()).Should().Be(0);
-        AllocatedBy(() => cache.GetCacheEntryAsync<string>("user:42", policy: null).GetAwaiter().GetResult()).Should().Be(0);
-        AllocatedBy(() => cache.ContainsAsync<string>("user:42").GetAwaiter().GetResult()).Should().Be(0);
-        AllocatedBy(() => cache.GetOrAddAsync("user:42", Unexpected, policy: null).GetAwaiter().GetResult()).Should().Be(0);
+        AllocatedBy(() => Completed(cache.GetAsync<string>("user:42", policy: null))).Should().Be(0);
+        AllocatedBy(() => Completed(cache.GetCacheEntryAsync<string>("user:42", policy: null))).Should().Be(0);
+        AllocatedBy(() => Completed(cache.ContainsAsync<string>("user:42"))).Should().Be(0);
+        AllocatedBy(() => Completed(cache.GetOrAddAsync("user:42", Unexpected, policy: null))).Should().Be(0);
     }
 
     [Fact]
@@ -336,13 +336,13 @@ public class SpanKeyOperationTests
         var typed = new HashCache<string>(cache, new PrefixCacheKeyStrategy("app"));
         (await typed.SetAsync("user:42", new Dictionary<string, string?> { ["f"] = "v" }, Ct)).Should().BeTrue();
 
-        AllocatedBy(() => typed.GetItemAsync("user:42", "f").GetAwaiter().GetResult()).Should().Be(0);
-        AllocatedBy(() => typed.GetAsync("user:42").GetAwaiter().GetResult()).Should().Be(0);
-        AllocatedBy(() => typed.GetCacheEntryAsync("user:42").GetAwaiter().GetResult()).Should().Be(0);
-        AllocatedBy(() => typed.ContainsAsync("user:42").GetAwaiter().GetResult()).Should().Be(0);
-        AllocatedBy(() => typed.GetOrAddAsync("user:42", UnexpectedHash).GetAwaiter().GetResult()).Should().Be(0);
-        AllocatedBy(() => cache.GetItemAsync<string>("app:user:42", "f", policy: null).GetAwaiter().GetResult()).Should().Be(0);
-        AllocatedBy(() => cache.GetOrAddAsync("app:user:42", UnexpectedHash, policy: null).GetAwaiter().GetResult()).Should().Be(0);
+        AllocatedBy(() => Completed(typed.GetItemAsync("user:42", "f"))).Should().Be(0);
+        AllocatedBy(() => Completed(typed.GetAsync("user:42"))).Should().Be(0);
+        AllocatedBy(() => Completed(typed.GetCacheEntryAsync("user:42"))).Should().Be(0);
+        AllocatedBy(() => Completed(typed.ContainsAsync("user:42"))).Should().Be(0);
+        AllocatedBy(() => Completed(typed.GetOrAddAsync("user:42", UnexpectedHash))).Should().Be(0);
+        AllocatedBy(() => Completed(cache.GetItemAsync<string>("app:user:42", "f", policy: null))).Should().Be(0);
+        AllocatedBy(() => Completed(cache.GetOrAddAsync("app:user:42", UnexpectedHash, policy: null))).Should().Be(0);
     }
 
     [Fact]
@@ -366,6 +366,10 @@ public class SpanKeyOperationTests
         AllocatedBy(() => SpanReads.GetOrAdd(typedHash, "user:42", UnexpectedHash)).Should().Be(0);
     }
 
+    /// <summary>The result of a read that must complete synchronously, as a warm local hit does.</summary>
+    private static TResult Completed<TResult>(ValueTask<TResult> read) =>
+        read.IsCompletedSuccessfully ? read.Result : throw new InvalidOperationException("a warm read went asynchronous");
+
     /// <summary>Bytes the current thread allocates across a thousand warm calls.</summary>
     private static long AllocatedBy(Action read)
     {
@@ -385,11 +389,11 @@ public class SpanKeyOperationTests
 #endif
 
     /// <summary>Runs <paramref name="call"/> with <c>user:42</c> on the stack.</summary>
-    private static void BySpan(SpanCall call)
+    private static ValueTask<TResult> BySpan<TResult>(SpanCall<TResult> call)
     {
         Span<char> key = stackalloc char[7];
         "user:42".CopyTo(key);
-        call(key);
+        return call(key);
     }
 
     private static ValueTask<string?> GetOrAddBySpan(ICache cache, string key, TimeSpan expiration)

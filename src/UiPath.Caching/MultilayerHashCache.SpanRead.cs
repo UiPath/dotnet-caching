@@ -42,7 +42,9 @@ internal sealed partial class MultilayerHashCache
 #else
     /// <summary>Always false: <see cref="MemoryCache"/> looks a key up by span only on .NET 9 and later.</summary>
     [SuppressMessage("Style", "IDE0060:Remove unused parameter", Justification = "Mirrors the .NET 9 signature so callers need no conditional code.")]
-    private static bool TryGetLocal<T>(ReadOnlySpan<char> cacheKey, [MaybeNullWhen(false)] out ICacheEntry<IDictionary<string, T?>> entry)
+    [SuppressMessage("Performance", "CA1822:Mark members as static", Justification = "An instance member like the .NET 9 one, so its callers stay instance members on every target.")]
+    [SuppressMessage("Minor Code Smell", "S2325:Methods and properties that don't access instance data should be static", Justification = "An instance member like the .NET 9 one, so its callers stay instance members on every target.")]
+    private bool TryGetLocal<T>(ReadOnlySpan<char> cacheKey, [MaybeNullWhen(false)] out ICacheEntry<IDictionary<string, T?>> entry)
     {
         entry = default;
         return false;
