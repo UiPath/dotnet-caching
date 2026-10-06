@@ -8,6 +8,8 @@ public class SpanKeyOperationTests
     private static readonly Func<CancellationToken, Task<string?>> Unexpected = static _ => throw new InvalidOperationException("the generator ran on a hit");
     private static readonly Func<CancellationToken, Task<IDictionary<string, string?>>> UnexpectedHash = static _ => throw new InvalidOperationException("the generator ran on a hit");
 
+    private delegate void SpanCall(Span<char> key);
+
     private static CancellationToken Ct => TestContext.Current.CancellationToken;
 
     [Fact]
@@ -62,6 +64,37 @@ public class SpanKeyOperationTests
 
         calls.Should().Be(1);
         (await cache.GetAsync<string>("user:42", policy: null, Ct)).Should().Be("fresh");
+    }
+
+    [Fact]
+    public async Task A_warm_get_or_add_rejects_an_expiration_the_key_form_rejects()
+    {
+        using var cache = InMemoryMultilayer.Cache();
+        var typed = new Cache<string>(cache, new PrefixCacheKeyStrategy("app"));
+        using var hash = InMemoryMultilayer.HashCache();
+        var typedHash = new HashCache<string>(hash, new PrefixCacheKeyStrategy("app"));
+        (await cache.SetAsync<string>("user:42", "v", policy: null, Ct)).Should().BeTrue();
+        (await typed.SetAsync("user:42", "v", Ct)).Should().BeTrue();
+        (await hash.SetAsync<string>("user:42", new Dictionary<string, string?> { ["f"] = "v" }, policy: null, Ct)).Should().BeTrue();
+        (await typedHash.SetAsync("user:42", new Dictionary<string, string?> { ["f"] = "v" }, Ct)).Should().BeTrue();
+        var past = DateTimeOffset.UtcNow.AddMinutes(-1);
+
+        Action[] calls =
+        [
+            () => BySpan(k => cache.GetOrAddAsync(k, Unexpected, TimeSpan.Zero, policy: null, Ct)),
+            () => BySpan(k => cache.GetOrAddAsync(k, Unexpected, past, policy: null, Ct)),
+            () => typed.GetOrAddAsync("user:42", Unexpected, TimeSpan.Zero, Ct),
+            () => typed.GetOrAddAsync("user:42", Unexpected, past, Ct),
+            () => BySpan(k => hash.GetOrAddAsync(k, UnexpectedHash, TimeSpan.Zero, policy: null, Ct)),
+            () => BySpan(k => hash.GetOrAddAsync(k, UnexpectedHash, past, policy: null, Ct)),
+            () => BySpan(k => hash.GetOrAddAsync(k, UnexpectedHash, past, HashCacheSetOption.KeyReplace, policy: null, Ct)),
+            () => typedHash.GetOrAddAsync("user:42", UnexpectedHash, TimeSpan.Zero, Ct),
+        ];
+
+        foreach (var call in calls)
+        {
+            call.Should().Throw<ArgumentOutOfRangeException>().Which.ParamName.Should().Be("expiration");
+        }
     }
 
     [Fact]
@@ -350,6 +383,14 @@ public class SpanKeyOperationTests
         return GC.GetAllocatedBytesForCurrentThread() - before;
     }
 #endif
+
+    /// <summary>Runs <paramref name="call"/> with <c>user:42</c> on the stack.</summary>
+    private static void BySpan(SpanCall call)
+    {
+        Span<char> key = stackalloc char[7];
+        "user:42".CopyTo(key);
+        call(key);
+    }
 
     private static ValueTask<string?> GetOrAddBySpan(ICache cache, string key, TimeSpan expiration)
     {

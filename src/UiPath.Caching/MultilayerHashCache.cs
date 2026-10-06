@@ -180,25 +180,28 @@ internal sealed partial class MultilayerHashCache : MultilayerCacheBase, IHashCa
     public ValueTask<IDictionary<string, T?>> GetOrAddAsync<T>(Span<char> cacheKey, Func<CancellationToken, Task<IDictionary<string, T?>>> generator, TimeSpan expiration, CachePolicy? policy, CancellationToken token = default)
     {
         ArgumentNullException.ThrowIfNull(generator);
+        var (writeExpiration, duration) = CallerWrite(expiration);
         return TryGetOrAddLocal<T>(cacheKey, policy ?? _defaultPolicy, token, out var values)
             ? new ValueTask<IDictionary<string, T?>>(values)
-            : GetOrAddAsync(new CacheKey(cacheKey), generator, expiration, policy, token);
+            : GetOrAddInternalAsync(new CacheKey(cacheKey), generator, writeExpiration, duration, rehydrateJitter: null, HashCacheSetOption.KeyReplace, policy ?? _defaultPolicy, token);
     }
 
     public ValueTask<IDictionary<string, T?>> GetOrAddAsync<T>(Span<char> cacheKey, Func<CancellationToken, Task<IDictionary<string, T?>>> generator, DateTimeOffset expiration, CachePolicy? policy, CancellationToken token = default)
     {
         ArgumentNullException.ThrowIfNull(generator);
+        var (writeExpiration, duration) = CallerWrite(expiration);
         return TryGetOrAddLocal<T>(cacheKey, policy ?? _defaultPolicy, token, out var values)
             ? new ValueTask<IDictionary<string, T?>>(values)
-            : GetOrAddAsync(new CacheKey(cacheKey), generator, expiration, policy, token);
+            : GetOrAddInternalAsync(new CacheKey(cacheKey), generator, writeExpiration, duration, rehydrateJitter: null, HashCacheSetOption.KeyReplace, policy ?? _defaultPolicy, token);
     }
 
     public ValueTask<IDictionary<string, T?>> GetOrAddAsync<T>(Span<char> cacheKey, Func<CancellationToken, Task<IDictionary<string, T?>>> generator, DateTimeOffset expiration, HashCacheSetOption? setOption, CachePolicy? policy, CancellationToken token = default)
     {
         ArgumentNullException.ThrowIfNull(generator);
+        var (writeExpiration, duration) = CallerWrite(expiration);
         return TryGetOrAddLocal<T>(cacheKey, policy ?? _defaultPolicy, token, out var values)
             ? new ValueTask<IDictionary<string, T?>>(values)
-            : GetOrAddAsync(new CacheKey(cacheKey), generator, expiration, setOption, policy, token);
+            : GetOrAddInternalAsync(new CacheKey(cacheKey), generator, writeExpiration, duration, rehydrateJitter: null, setOption ?? HashCacheSetOption.KeyReplace, policy ?? _defaultPolicy, token);
     }
 
     public ValueTask<bool> SetAsync<T>(CacheKey cacheKey, IDictionary<string, T?> values, CachePolicy? policy, CancellationToken token = default)

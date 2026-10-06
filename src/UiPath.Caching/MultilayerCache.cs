@@ -138,17 +138,19 @@ internal sealed partial class MultilayerCache : MultilayerCacheBase, ICache, ISp
     public ValueTask<T?> GetOrAddAsync<T>(Span<char> cacheKey, Func<CancellationToken, Task<T?>> generator, TimeSpan expiration, CachePolicy? policy, CancellationToken token = default)
     {
         ArgumentNullException.ThrowIfNull(generator);
+        var (writeExpiration, duration) = CallerWrite(expiration);
         return TryGetOrAddLocal<T>(cacheKey, policy ?? _defaultPolicy, token, out var value)
             ? new ValueTask<T?>(value)
-            : GetOrAddAsync(new CacheKey(cacheKey), generator, expiration, policy, token);
+            : GetOrAddInternalAsync(new CacheKey(cacheKey), generator, writeExpiration, duration, rehydrateJitter: null, policy ?? _defaultPolicy, token);
     }
 
     public ValueTask<T?> GetOrAddAsync<T>(Span<char> cacheKey, Func<CancellationToken, Task<T?>> generator, DateTimeOffset expiration, CachePolicy? policy, CancellationToken token = default)
     {
         ArgumentNullException.ThrowIfNull(generator);
+        var (writeExpiration, duration) = CallerWrite(expiration);
         return TryGetOrAddLocal<T>(cacheKey, policy ?? _defaultPolicy, token, out var value)
             ? new ValueTask<T?>(value)
-            : GetOrAddAsync(new CacheKey(cacheKey), generator, expiration, policy, token);
+            : GetOrAddInternalAsync(new CacheKey(cacheKey), generator, writeExpiration, duration, rehydrateJitter: null, policy ?? _defaultPolicy, token);
     }
 
     public ValueTask<KeyValuePair<TState, T?>[]> GetOrAddAsync<T, TState>(KeyValuePair<CacheKey, TState>[] entries, Func<TState[], CancellationToken, Task<KeyValuePair<TState, T?>[]>> generator, CachePolicy? policy, CancellationToken token = default)
