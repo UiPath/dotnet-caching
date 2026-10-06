@@ -111,11 +111,20 @@ public readonly struct TelemetryTags<TValue> : IReadOnlyList<KeyValuePair<string
             _index = -1;
         }
 
-        public readonly KeyValuePair<string, TValue> Current => _tags[_index];
+        public readonly KeyValuePair<string, TValue> Current =>
+            (uint)_index < (uint)_tags.Count ? _tags[_index] : throw new InvalidOperationException("The enumerator is before the first tag or past the last.");
 
         readonly object IEnumerator.Current => Current;
 
-        public bool MoveNext() => ++_index < _tags.Count;
+        public bool MoveNext()
+        {
+            if (_index < _tags.Count)
+            {
+                _index++;
+            }
+
+            return _index < _tags.Count;
+        }
 
         public void Reset() => _index = -1;
 

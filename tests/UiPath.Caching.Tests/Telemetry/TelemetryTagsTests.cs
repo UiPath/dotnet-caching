@@ -1,3 +1,4 @@
+using System.Collections;
 using UiPath.Caching.Telemetry;
 
 namespace UiPath.Caching.Tests.Telemetry;
@@ -88,6 +89,24 @@ public class TelemetryTagsTests
         var read = () => tags[index];
 
         read.Should().Throw<ArgumentOutOfRangeException>();
+    }
+
+    [Fact]
+    public void Current_outside_the_tags_throws_InvalidOperationException()
+    {
+        TelemetryTags<string> tags = [new("a", "1")];
+        var enumerator = tags.GetEnumerator();
+
+        var beforeFirst = () => enumerator.Current;
+        beforeFirst.Should().Throw<InvalidOperationException>();
+
+        enumerator.MoveNext().Should().BeTrue();
+        enumerator.Current.Key.Should().Be("a");
+        enumerator.MoveNext().Should().BeFalse();
+        enumerator.MoveNext().Should().BeFalse();
+
+        var pastLast = () => ((IEnumerator)enumerator).Current;
+        pastLast.Should().Throw<InvalidOperationException>();
     }
 
     [Theory]
