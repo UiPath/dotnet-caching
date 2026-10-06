@@ -2,7 +2,7 @@ using UiPath.Caching.Telemetry;
 
 namespace UiPath.Caching.Broadcast;
 
-public sealed partial class ChangeToken<T> : ICacheChangeToken, IKeyedObserver<ICacheEvent>, IDisposable
+public sealed partial class ChangeToken<T> : ICacheChangeToken, IKeyedObserver<ICacheEvent>, IMissedEventsObserver, IDisposable
 {
     private readonly string _key;
     private readonly KeyMasker _masker;
@@ -16,7 +16,20 @@ public sealed partial class ChangeToken<T> : ICacheChangeToken, IKeyedObserver<I
     private readonly IDisposable _unsubscriber;
     private readonly ICachingTelemetryProvider _telemetryProvider;
 
+    // Set for a cache that turned ClearLocalOnReconnect off: it keeps entries over a subscription gap, but not over a known loss.
+    private readonly bool _ignoreSubscriptionGaps;
+
     private readonly List<(Action<object?> callback, object? state)> _callbacks = [];
+
+    // An event and a loss report can arrive on different threads; each notification and registration takes its turn.
+#if NET9_0_OR_GREATER
+    private readonly Lock _notifyLock = new();
+#else
+    private readonly object _notifyLock = new();
+#endif
+
+    // Set once a removal, a loss or an error expired the entry: a refresh the dispatcher delivers after it would re-insert the old value.
+    private bool _expired;
 
     public ChangeToken(
         string key,
@@ -40,8 +53,10 @@ public sealed partial class ChangeToken<T> : ICacheChangeToken, IKeyedObserver<I
         ISet<string>? acceptedEvents,
         KeyMasker masker,
         Type? entryType,
-        CacheKey callerKey)
+        CacheKey callerKey,
+        bool ignoreSubscriptionGaps = false)
     {
+        _ignoreSubscriptionGaps = ignoreSubscriptionGaps;
         _masker = masker;
         _entryType = entryType;
         _callerKey = callerKey;
@@ -105,11 +120,34 @@ public sealed partial class ChangeToken<T> : ICacheChangeToken, IKeyedObserver<I
         }
     }
 
+    void IMissedEventsObserver.OnEventsMissed(MissedEventsReason reason)
+    {
+        if (reason == MissedEventsReason.SubscriptionGap && _ignoreSubscriptionGaps)
+        {
+            return;
+        }
+
+        LogClearLocalCacheOnLoss(Logged(), _topic);
+        Notify();
+    }
+
 
 
     public IDisposable RegisterChangeCallback(Action<object?> callback, object? state)
     {
-        _callbacks.Add(new(callback, state));
+        lock (_notifyLock)
+        {
+            // A token can change while it subscribes, before its holder registers: a late registration runs at once.
+            if (HasChanged)
+            {
+                callback(state);
+            }
+            else
+            {
+                _callbacks.Add(new(callback, state));
+            }
+        }
+
         return this;
     }
 
@@ -124,14 +162,25 @@ public sealed partial class ChangeToken<T> : ICacheChangeToken, IKeyedObserver<I
 
     private void Notify(CacheEventData? data = default)
     {
-        HasChanged = true;
-        if(data?.Properties != null)
+        lock (_notifyLock)
         {
-            ExtractExpiration(data.Properties);
-            ExtractMetadata(data.Properties);
-        }
+            HasChanged = true;
+            if (data?.Properties != null && !_expired)
+            {
+                ExtractExpiration(data.Properties);
+                ExtractMetadata(data.Properties);
+            }
+            else
+            {
+                // A removal or a loss carries nothing to refresh with: what an earlier refresh left would re-insert the value.
+                _expired = true;
+                Expiration = null;
+                Metadata = null;
+                MetadataHasChanged = false;
+            }
 
-        _callbacks.ForEach(kv => kv.callback(kv.state));
+            _callbacks.ForEach(kv => kv.callback(kv.state));
+        }
     }
 
     private bool IsAcceptedEvent(ICacheEvent cacheEvent)
@@ -204,6 +253,9 @@ public sealed partial class ChangeToken<T> : ICacheChangeToken, IKeyedObserver<I
 
     [LoggerMessage(Level = LogLevel.Debug, Message = "Clear local cache {Key},{Topic}")]
     private partial void LogClearLocalCacheOnError(Exception error, LoggedKey key, TopicKey topic);
+
+    [LoggerMessage(Level = LogLevel.Debug, Message = "Clear local cache {Key}: topic {Topic} lost invalidations")]
+    private partial void LogClearLocalCacheOnLoss(LoggedKey key, TopicKey topic);
 
     [LoggerMessage(Level = LogLevel.Debug, Message = "Clear local cache key {Key}. Topic:{Topic}, Id {EventId}, Source:{EventSource}")]
     private partial void LogClearLocalCacheKey(LoggedKey key, TopicKey topic, string? eventId, Uri? eventSource);

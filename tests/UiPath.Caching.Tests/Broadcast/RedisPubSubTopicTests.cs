@@ -201,6 +201,54 @@ public class RedisPubSubTopicTests(ITestContextAccessor testContextAccessor) : I
     }
 
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task An_observer_joining_while_the_first_subscription_goes_in_place_is_expired(bool throws)
+    {
+        var subject = new HeldSubject();
+        _fixture.Inject<Func<IEventSubject<ICacheEvent>>>(() => subject);
+        _options.SubscriberDueTime = TimeSpan.FromSeconds(1);
+        var sut = await Sut();
+        var entry = new KeptEntry { Throws = throws };
+
+        var joining = Task.Run(() => sut.Subscribe(entry), testContextAccessor.Current.CancellationToken);
+        subject.Joining.Wait(TimeSpan.FromSeconds(10), testContextAccessor.Current.CancellationToken).Should().BeTrue();
+        await WaitForSubscribeAsync();
+        await Task.Delay(_delay.Multiply(2), testContextAccessor.Current.CancellationToken);
+        subject.Release.Set();
+        (await joining).Dispose();
+
+        entry.Missed.Task.IsCompleted.Should().BeTrue("the subscription went in place after the mark but before this observer joined");
+    }
+
+    [Fact]
+    public async Task A_restored_connection_expires_what_the_topic_keeps()
+    {
+        var sut = await Sut();
+        await WaitForSubscribeAsync();
+        var entry = new KeptEntry();
+        using var subscription = sut.Subscribe(entry);
+
+        _redisConnector.OnConnectionFailed += Raise.Event<EventHandler>(_redisConnector, EventArgs.Empty);
+        _redisConnector.OnConnectionRestored += Raise.Event<EventHandler>(_redisConnector, EventArgs.Empty);
+
+        await entry.Missed.Awaiting(m => m.Task).Should().CompleteWithinAsync(TimeSpan.FromSeconds(10), "the topic expires its entries itself, on whatever local tier holds them");
+    }
+
+    [Fact]
+    public async Task A_resubscribe_after_a_reconnect_expires_what_the_topic_keeps()
+    {
+        var sut = await Sut();
+        await WaitForSubscribeAsync();
+        var entry = new KeptEntry();
+        using var subscription = sut.Subscribe(entry);
+
+        _redisConnector.OnReconnected += Raise.Event<EventHandler>(_redisConnector, EventArgs.Empty);
+
+        await entry.Missed.Awaiting(m => m.Task).Should().CompleteWithinAsync(TimeSpan.FromSeconds(10), "publications between the swap and the new subscription never arrived");
+    }
+
     public ValueTask DisposeAsync()
     {
         return ValueTask.CompletedTask;
@@ -275,4 +323,59 @@ public class RedisPubSubTopicTests(ITestContextAccessor testContextAccessor) : I
 
     private Task WaitForSubscribeAsync() =>
         _subscribeCalled.Task.WaitAsync(TimeSpan.FromSeconds(30), testContextAccessor.Current.CancellationToken);
+
+    /// <summary>A subject whose next subscription waits, mid-join, until released.</summary>
+    private sealed class HeldSubject : IEventSubject<ICacheEvent>
+    {
+        private readonly KeyedSubject<ICacheEvent> _inner = new(Microsoft.Extensions.Logging.Abstractions.NullLogger.Instance);
+
+        public ManualResetEventSlim Joining { get; } = new();
+
+        public ManualResetEventSlim Release { get; } = new();
+
+        public IDisposable Subscribe(IObserver<ICacheEvent> observer)
+        {
+            Joining.Set();
+            Release.Wait(TimeSpan.FromSeconds(10));
+            return _inner.Subscribe(observer);
+        }
+
+        public void OnNext(ICacheEvent value) => _inner.OnNext(value);
+
+        public void OnCompleted() => _inner.OnCompleted();
+
+        public void Invalidate(MissedEventsReason reason) => _inner.Invalidate(reason);
+
+        public void Dispose() => _inner.Dispose();
+    }
+
+    private sealed class KeptEntry : IKeyedObserver<ICacheEvent>, IMissedEventsObserver
+    {
+        public TaskCompletionSource Missed { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public string Key => "order:1";
+
+        public bool Throws { get; init; }
+
+        public void OnNext(ICacheEvent value)
+        {
+        }
+
+        public void OnError(Exception error)
+        {
+        }
+
+        public void OnCompleted()
+        {
+        }
+
+        public void OnEventsMissed(MissedEventsReason reason)
+        {
+            Missed.TrySetResult();
+            if (Throws)
+            {
+                throw new InvalidOperationException("boom");
+            }
+        }
+    }
 }

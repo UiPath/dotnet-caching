@@ -492,6 +492,68 @@ public class KeyedSubjectTests
             "no worker may fault under concurrent subscribe, dispatch and dispose");
     }
 
+    [Fact]
+    public void Invalidate_notifies_every_missed_events_observer_and_keeps_them_subscribed()
+    {
+        var keyed = new TestKeyedObserver("myKey");
+        var broadcast = new TestBroadcastObserver();
+        var plain = Substitute.For<IObserver<ICacheEvent>>();
+        _sut.Subscribe(keyed);
+        _sut.Subscribe(broadcast);
+        _sut.Subscribe(plain);
+
+        _sut.Invalidate(MissedEventsReason.Lost);
+        _sut.OnNext(CreateEvent("myKey"));
+
+        keyed.Invalidations.Should().Be(1);
+        broadcast.Invalidations.Should().Be(1);
+        plain.DidNotReceive().OnError(Arg.Any<Exception>());
+        keyed.Events.Should().ContainSingle();
+        keyed.Completed.Should().BeFalse();
+    }
+
+    [Fact]
+    public void Invalidate_continues_past_an_observer_that_throws()
+    {
+        var keyed = new TestKeyedObserver("myKey");
+        _sut.Subscribe(new ThrowingBroadcastObserver());
+        _sut.Subscribe(keyed);
+
+        _sut.Invalidate(MissedEventsReason.Lost);
+
+        keyed.Invalidations.Should().Be(1);
+    }
+
+    [Fact]
+    public async Task A_subscriber_racing_completion_is_completed_exactly_once()
+    {
+        for (var round = 0; round < 50; round++)
+        {
+            var sut = new KeyedSubject<ICacheEvent>(Microsoft.Extensions.Logging.Abstractions.NullLogger.Instance);
+            var observers = new ConcurrentBag<TestKeyedObserver>();
+            using var start = new Barrier(5);
+            void SubscribeMany()
+            {
+                start.SignalAndWait(TestContext.Current.CancellationToken);
+                for (var i = 0; i < 20_000; i++)
+                {
+                    var observer = new TestKeyedObserver($"key{i % 16}");
+                    observers.Add(observer);
+                    sut.Subscribe(observer);
+                }
+            }
+
+            var subscribers = Enumerable.Range(0, 4).Select(_ => OnDedicatedThread(SubscribeMany, TestContext.Current.CancellationToken)).ToArray();
+
+            start.SignalAndWait(TestContext.Current.CancellationToken);
+            Thread.SpinWait(20_000);
+            sut.OnCompleted();
+            await Task.WhenAll(subscribers);
+
+            observers.Should().OnlyContain(o => o.Completions == 1, "round {0}: completion and a late subscriber may both see it, but only one completes it", round);
+        }
+    }
+
     private static ICacheEvent CreateEvent(string? key)
     {
         return new TestCacheEvent
@@ -509,25 +571,40 @@ public class KeyedSubjectTests
     private static Task<T> OnDedicatedThread<T>(Func<T> function, CancellationToken token) =>
         Task.Factory.StartNew(function, token, TaskCreationOptions.LongRunning, TaskScheduler.Default);
 
-    private sealed class TestKeyedObserver(string key) : IKeyedObserver<ICacheEvent>
+    private sealed class TestKeyedObserver(string key) : IKeyedObserver<ICacheEvent>, IMissedEventsObserver
     {
+        private int _completions;
+
         public string Key { get; } = key;
         public List<ICacheEvent> Events { get; } = [];
         public bool Completed { get; private set; }
 
+        public int Invalidations { get; private set; }
+
+        public int Completions => Volatile.Read(ref _completions);
+
         public void OnNext(ICacheEvent value) => Events.Add(value);
         public void OnError(Exception error) { }
-        public void OnCompleted() => Completed = true;
+        public void OnCompleted()
+        {
+            Completed = true;
+            Interlocked.Increment(ref _completions);
+        }
+
+        public void OnEventsMissed(MissedEventsReason reason) => Invalidations++;
     }
 
-    private sealed class TestBroadcastObserver : IObserver<ICacheEvent>
+    private sealed class TestBroadcastObserver : IObserver<ICacheEvent>, IMissedEventsObserver
     {
         public List<ICacheEvent> Events { get; } = [];
         public bool Completed { get; private set; }
 
+        public int Invalidations { get; private set; }
+
         public void OnNext(ICacheEvent value) => Events.Add(value);
         public void OnError(Exception error) { }
         public void OnCompleted() => Completed = true;
+        public void OnEventsMissed(MissedEventsReason reason) => Invalidations++;
     }
 
     private sealed class NoOpKeyedObserver(string key) : IKeyedObserver<ICacheEvent>
@@ -546,11 +623,12 @@ public class KeyedSubjectTests
         public void OnCompleted() => throw new InvalidOperationException("boom on completed");
     }
 
-    private sealed class ThrowingBroadcastObserver : IObserver<ICacheEvent>
+    private sealed class ThrowingBroadcastObserver : IObserver<ICacheEvent>, IMissedEventsObserver
     {
         public void OnNext(ICacheEvent value) => throw new InvalidOperationException("boom on next");
         public void OnError(Exception error) { }
         public void OnCompleted() => throw new InvalidOperationException("boom on completed");
+        public void OnEventsMissed(MissedEventsReason reason) => throw new InvalidOperationException("boom on events missed");
     }
 
     private sealed class DelayingKeyedObserver(string key, TimeSpan delay) : IKeyedObserver<ICacheEvent>

@@ -1,11 +1,12 @@
 using System.Runtime.CompilerServices;
+using UiPath.Caching.Broadcast.Redis;
 using UiPath.Caching.Config;
 using UiPath.Caching.Locking;
 using UiPath.Caching.Telemetry;
 
 namespace UiPath.Caching;
 
-public abstract class MultilayerCacheBase : IDisposable
+public abstract partial class MultilayerCacheBase : IDisposable
 {
     protected readonly ILogger _logger;
     protected readonly IMemoryCache _memoryCache;
@@ -17,6 +18,7 @@ public abstract class MultilayerCacheBase : IDisposable
     protected readonly IConnectionState _connectionState;
     protected readonly ITopicProvider _topicProvider;
     protected readonly bool _useLocalOnlyWhenDisconnected;
+    private protected readonly bool _clearLocalOnReconnect;
     private protected readonly RehydrationCoordinator _rehydrator;
     private protected readonly CachePolicy _defaultPolicy;
     private protected readonly KeyMasker _masker;
@@ -83,7 +85,8 @@ public abstract class MultilayerCacheBase : IDisposable
         _eventPublisher = new CacheEventPublisher(cacheName, _topicProvider, cacheEventFactory, logger, _masker);
         var connectionMonitorEnabled = multiLayerCacheOptions.ConnectionMonitorEnabled ?? cacheOptions.ConnectionMonitorEnabled;
         _connectionState = connectionMonitorEnabled ? GetConnectionMonitor(innerCache, _topicProvider) : NullConnectionStateMonitor.Instance;
-        _useLocalOnlyWhenDisconnected = (multiLayerCacheOptions.UseLocalOnlyWhenDisconnected ?? false) && connectionMonitorEnabled;
+        _useLocalOnlyWhenDisconnected = (multiLayerCacheOptions.UseLocalOnlyWhenDisconnected ?? true) && connectionMonitorEnabled;
+        _clearLocalOnReconnect = (multiLayerCacheOptions.ClearLocalOnReconnect ?? true) && connectionMonitorEnabled;
         _localLock = localLock;
         _distributedLock = distributedLock;
         _lockKeyStrategy = multiLayerCacheOptions.LockKeyStrategy ?? new DefaultDistributedLockKeyStrategy(cacheOptions.Separator);
@@ -215,6 +218,30 @@ public abstract class MultilayerCacheBase : IDisposable
         }
     }
 
+    /// <summary>How long a hit read from the inner tier stays local: the disconnected cap while the tier reads as down, perhaps only its broadcast.</summary>
+    private protected TimeSpan? LocalLifetime(CachePolicy policy) =>
+        GetInnerCacheDisconnected()
+            ? policy.LocalExpirationDisconnected ?? _multiLayerCacheOptions.LocalMaxExpirationDisconnected
+            : policy.LocalExpiration ?? _multiLayerCacheOptions.LocalMaxExpiration;
+
+    /// <summary>Writes locally after an inner write: for the normal lifetime when the inner tier took it, and with <paramref name="keepRefused"/> for the disconnected cap when it refused it.</summary>
+    private protected bool KeepAfterInnerWrite<TState>(bool written, bool keepRefused, CachePolicy policy, TState state, Func<TState, TimeSpan?, bool> memorySet, CancellationToken token)
+    {
+        if (written)
+        {
+            return memorySet(state, policy.LocalExpiration ?? _multiLayerCacheOptions.LocalMaxExpiration);
+        }
+
+        // The Redis setters answer a canceled write with false, so the caller's token tells a refusal from a cancellation.
+        if (keepRefused && !token.IsCancellationRequested)
+        {
+            // Kept as a disconnected write is kept, so the callers waiting on the local lock reuse it.
+            memorySet(state, policy.LocalExpirationDisconnected ?? _multiLayerCacheOptions.LocalMaxExpirationDisconnected);
+        }
+
+        return false;
+    }
+
     /// <summary>The key as a log line should show it. Nothing is rendered unless the line is written.</summary>
     private protected LoggedKey Logged(CacheKey key, Type? valueType = null) => LoggedKey.For(_masker, key, valueType);
 
@@ -318,5 +345,4 @@ public abstract class MultilayerCacheBase : IDisposable
         var lst = connectionStates.OfType<IConnectionState>().ToArray();
         return lst.Length == 0 ? NullConnectionStateMonitor.Instance : new ConnectionStateMonitor(Telemetry, _multiLayerCacheOptions.ConnectionMonitorPeriod ?? TimeSpan.FromSeconds(5), lst);
     }
-
 }

@@ -415,7 +415,8 @@ public class MultilayerCacheTests(ITestContextAccessor testContextAccessor) : IA
 
         var actual = await Sut.GetOrAddAsync(_cacheKey, generator, _fixture.Create<TimeSpan>(), token: testContextAccessor.Current.CancellationToken);
         generatorWasCalled.Should().BeTrue();
-        _memoryCache.Received(innerCacheSet ? 1 : 0).CreateEntry(_innerCacheKey.Name);
+        // A value the inner tier refused is still kept locally, for the disconnected lifetime, so waiters on the lock reuse it.
+        _memoryCache.Received(1).CreateEntry(_innerCacheKey.Name);
         await _innerCache.Received(1).SetAsync(_innerCacheKey, Arg.Any<string>(), Arg.Any<DateTimeOffset>(), Arg.Any<CachePolicy?>(), Arg.Any<CancellationToken>());
         actual.Should().Be(generatorExpected);
         _logger.ReceivedCalls().Should().Contain(c => c.GetMethodInfo().Name == "Log" && (LogLevel)c.GetArguments()[0]! == LogLevel.Debug);
@@ -1460,6 +1461,8 @@ public class MultilayerCacheTests(ITestContextAccessor testContextAccessor) : IA
         _clock = new SystemClock();
         _options = new()
         {
+            // These tests assume a tier that is never seen as disconnected; the ones about disconnection turn the monitor on.
+            ConnectionMonitorEnabled = false,
             DefaultExpiration = TimeSpan.FromMinutes(10),
             EntryFactory = new TestCacheEntryFactory(),
         };

@@ -56,6 +56,8 @@ public class InMemoryRedisCacheOptions : IMultilayerCacheOptions, IMemoryCacheOp
 
     public bool? UseLocalOnlyWhenDisconnected { get; set; }
 
+    public bool? ClearLocalOnReconnect { get; set; }
+
     public TimeSpan? LocalMaxExpirationDisconnected { get; set; } = TimeSpan.FromSeconds(30);
 
     public bool? LocalLockEnabled { get; set; } = true;

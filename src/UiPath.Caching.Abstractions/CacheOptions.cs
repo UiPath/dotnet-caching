@@ -37,7 +37,7 @@ public class CacheOptions
 
     public int LargeValueThreshold { get; set; } = 20_000;
 
-    public bool ConnectionMonitorEnabled { get; set; }
+    public bool ConnectionMonitorEnabled { get; set; } = true;
 
 
     /// <summary>

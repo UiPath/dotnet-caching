@@ -1,4 +1,5 @@
 using NSubstitute.ExceptionExtensions;
+using NSubstitute.Extensions;
 using StackExchange.Redis;
 using UiPath.Caching.Policies;
 
@@ -244,6 +245,95 @@ public class RedisStreamsTopicTests(ITestContextAccessor testContextAccessor) : 
         ok.Should().BeTrue();
     }
 
+    [Fact]
+    public async Task A_stream_removed_while_in_use_invalidates_the_subject()
+    {
+        _database.StreamReadGroupAsync((RedisKey)"stream", "group", "consumer", ">", 1)
+            .ReturnsForAnyArgs(
+                Task.FromResult(Array.Empty<StreamEntry>()),
+                Task.FromException<StreamEntry[]>(new RedisException("NOGROUP No such key or consumer group")),
+                Task.FromResult(Array.Empty<StreamEntry>()));
+        _redisStreamsTopicOptions.PollInterval = TimeSpan.FromMilliseconds(20);
+        _redisStreamsTopicOptions.NotifyEnabled = false;
+        _ = Sut;
+
+        var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(10);
+        while (DateTime.UtcNow < deadline && !_subject.ReceivedCalls().Any(c => c.GetMethodInfo().Name == nameof(IEventSubject<ICacheEvent>.Invalidate)))
+        {
+            await Task.Delay(20, testContextAccessor.Current.CancellationToken);
+        }
+
+        _subject.Received(1).Invalidate(MissedEventsReason.Lost);
+    }
+
+    [Fact]
+    public async Task A_stream_removed_after_a_subscribe_but_before_the_first_read_invalidates_the_subject()
+    {
+        var subscribed = false;
+        var readsSinceSubscribed = 0;
+        _database.StreamReadGroupAsync((RedisKey)"stream", "group", "consumer", ">", 1)
+            .ReturnsForAnyArgs(_ => !Volatile.Read(ref subscribed) || Interlocked.Increment(ref readsSinceSubscribed) == 1
+                ? Task.FromException<StreamEntry[]>(new RedisException("NOGROUP No such key or consumer group"))
+                : Task.FromResult(Array.Empty<StreamEntry>()));
+        _redisStreamsTopicOptions.PollInterval = TimeSpan.FromMilliseconds(20);
+        _redisStreamsTopicOptions.NotifyEnabled = false;
+
+        using var subscription = Sut.Subscribe(_observer);
+        Volatile.Write(ref subscribed, true);
+
+        var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(10);
+        while (DateTime.UtcNow < deadline && Volatile.Read(ref readsSinceSubscribed) < 3)
+        {
+            await Task.Delay(20, testContextAccessor.Current.CancellationToken);
+        }
+
+        _subject.Received(1).Invalidate(MissedEventsReason.Lost);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task An_observer_joining_while_a_loss_is_reported_is_told_itself(bool throws)
+    {
+        var lose = false;
+        var lost = 0;
+        _database.StreamReadGroupAsync((RedisKey)"stream", "group", "consumer", ">", 1)
+            .ReturnsForAnyArgs(_ => Volatile.Read(ref lose) && Interlocked.Increment(ref lost) == 1
+                ? Task.FromException<StreamEntry[]>(new RedisException("NOGROUP No such key or consumer group"))
+                : Task.FromResult(Array.Empty<StreamEntry>()));
+        _redisStreamsTopicOptions.PollInterval = TimeSpan.FromMilliseconds(20);
+        _redisStreamsTopicOptions.NotifyEnabled = false;
+        using var joining = new ManualResetEventSlim();
+        using var release = new ManualResetEventSlim();
+        _subject.Subscribe(Arg.Any<IObserver<ICacheEvent>>()).Returns(_ =>
+        {
+            joining.Set();
+            release.Wait(TimeSpan.FromSeconds(10));
+            return Substitute.For<IDisposable>();
+        });
+        var entry = Substitute.For<IObserver<ICacheEvent>, IMissedEventsObserver>();
+        if (throws)
+        {
+            ((IMissedEventsObserver)entry).When(e => e.OnEventsMissed(Arg.Any<MissedEventsReason>())).Do(_ => throw new InvalidOperationException("boom"));
+        }
+
+        _ = Sut;
+
+        var subscribing = Task.Run(() => Sut.Subscribe(entry), testContextAccessor.Current.CancellationToken);
+        joining.Wait(TimeSpan.FromSeconds(10), testContextAccessor.Current.CancellationToken).Should().BeTrue();
+        Volatile.Write(ref lose, true);
+        var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(10);
+        while (DateTime.UtcNow < deadline && !_subject.ReceivedCalls().Any(c => c.GetMethodInfo().Name == nameof(IEventSubject<ICacheEvent>.Invalidate)))
+        {
+            await Task.Delay(20, testContextAccessor.Current.CancellationToken);
+        }
+
+        release.Set();
+        (await subscribing).Dispose();
+
+        ((IMissedEventsObserver)entry).Received(1).OnEventsMissed(MissedEventsReason.Lost);
+    }
+
     public ValueTask DisposeAsync()
     {
         _sut?.Dispose();
@@ -254,6 +344,13 @@ public class RedisStreamsTopicTests(ITestContextAccessor testContextAccessor) : 
     public ValueTask InitializeAsync()
     {
         _database = _fixture.Freeze<IDatabase>();
+
+        // Reads go apart from the gap check, so these tests drive them through StreamReadGroupAsync.
+        _database.Configure().ScriptEvaluateAsync(Arg.Any<string>(), Arg.Any<RedisKey[]>(), Arg.Any<RedisValue[]>(), Arg.Any<CommandFlags>())
+            .ReturnsForAnyArgs(Task.FromException<RedisResult>(new RedisCommandException("scripts are disabled")));
+        _database.Configure().StreamInfo(Arg.Any<RedisKey>()).ReturnsForAnyArgs(default(StreamInfo));
+        _database.Configure().StreamInfoAsync(Arg.Any<RedisKey>()).ReturnsForAnyArgs(Task.FromResult(default(StreamInfo)));
+        _database.Configure().StreamGroupInfoAsync(Arg.Any<RedisKey>()).ReturnsForAnyArgs(Task.FromResult(Array.Empty<StreamGroupInfo>()));
         _subject = _fixture.Freeze<IEventSubject<ICacheEvent>>();
         _observer = _fixture.Freeze<IObserver<ICacheEvent>>();
         _connectionState = _fixture.Freeze<IConnectionState>();

@@ -145,10 +145,12 @@ public sealed class RedisConnector : IRedisConnector
     {
         get
         {
+            // Down only when a multiplexer exists and says so; it reconnects on its own. Until one exists, whether the first
+            // connect has not started, is pending or faulted, a command must go through: it waits for the connect or retries it.
             var lazy = _lazyCacheConnectionMultiplexer;
-            return lazy.IsValueCreated
-                && lazy.Value.IsCompletedSuccessfully
-                && lazy.Value.Result.IsConnected;
+            return !_disposed && (!lazy.IsValueCreated
+                || !lazy.Value.IsCompletedSuccessfully
+                || lazy.Value.Result.IsConnected);
         }
     }
 

@@ -8,6 +8,7 @@ internal sealed partial class KeyedSubject<T> : IEventSubject<T> where T : IEven
     private readonly ConcurrentDictionary<string, ConcurrentDictionary<IObserver<T>, byte>> _keyedObservers = new(StringComparer.OrdinalIgnoreCase);
     private readonly ConcurrentDictionary<IObserver<T>, byte> _broadcastObservers = new();
     private readonly object _keyedLock = new();
+
     private readonly ILogger _logger;
     private readonly TimeSpan _slowObserverThreshold;
     private volatile bool _completed;
@@ -26,18 +27,21 @@ internal sealed partial class KeyedSubject<T> : IEventSubject<T> where T : IEven
             return Disposable.Empty;
         }
 
+        // Completion may run while this registers: checked again after, and whoever removes the observer completes it, once.
         if (observer is IKeyedObserver<T> keyed)
         {
+            ConcurrentDictionary<IObserver<T>, byte> inner;
             lock (_keyedLock)
             {
-                var inner = _keyedObservers.GetOrAdd(keyed.Key, _ => new ConcurrentDictionary<IObserver<T>, byte>());
+                inner = _keyedObservers.GetOrAdd(keyed.Key, _ => new ConcurrentDictionary<IObserver<T>, byte>());
                 inner.TryAdd(observer, 0);
             }
-            return new Subscription(this, keyed.Key, observer);
+
+            return CompletedMeanwhile(inner, observer) ? Disposable.Empty : new Subscription(this, keyed.Key, observer);
         }
 
         _broadcastObservers.TryAdd(observer, 0);
-        return new Subscription(this, null, observer);
+        return CompletedMeanwhile(_broadcastObservers, observer) ? Disposable.Empty : new Subscription(this, null, observer);
     }
 
     public void OnNext(T value)
@@ -70,20 +74,60 @@ internal sealed partial class KeyedSubject<T> : IEventSubject<T> where T : IEven
         {
             foreach (var kvp in inner)
             {
-                SafeOnCompleted(kvp.Key);
+                CompleteIfRemoved(inner, kvp.Key);
             }
         }
 
         foreach (var kvp in _broadcastObservers)
         {
-            SafeOnCompleted(kvp.Key);
+            CompleteIfRemoved(_broadcastObservers, kvp.Key);
         }
 
         _keyedObservers.Clear();
-        _broadcastObservers.Clear();
     }
 
     public void Dispose() => OnCompleted();
+
+    /// <summary>Expires every <see cref="IMissedEventsObserver"/> observer and keeps it subscribed.</summary>
+    public void Invalidate(MissedEventsReason reason)
+    {
+        if (_completed)
+        {
+            return;
+        }
+
+        foreach (var inner in _keyedObservers.Values)
+        {
+            foreach (var kvp in inner)
+            {
+                SafeInvalidate(kvp.Key, reason);
+            }
+        }
+
+        foreach (var kvp in _broadcastObservers)
+        {
+            SafeInvalidate(kvp.Key, reason);
+        }
+    }
+
+    private bool CompletedMeanwhile(ConcurrentDictionary<IObserver<T>, byte> observers, IObserver<T> observer)
+    {
+        if (!_completed)
+        {
+            return false;
+        }
+
+        CompleteIfRemoved(observers, observer);
+        return true;
+    }
+
+    private void CompleteIfRemoved(ConcurrentDictionary<IObserver<T>, byte> observers, IObserver<T> observer)
+    {
+        if (observers.TryRemove(observer, out _))
+        {
+            SafeOnCompleted(observer);
+        }
+    }
 
     private void SafeOnNext(IObserver<T> observer, T value)
     {
@@ -100,6 +144,23 @@ internal sealed partial class KeyedSubject<T> : IEventSubject<T> where T : IEven
         if (elapsed > _slowObserverThreshold)
         {
             LogObserverSlow(observer.GetType().FullName, elapsed.TotalMilliseconds, value.Id);
+        }
+    }
+
+    private void SafeInvalidate(IObserver<T> observer, MissedEventsReason reason)
+    {
+        if (observer is not IMissedEventsObserver missed)
+        {
+            return;
+        }
+
+        try
+        {
+            missed.OnEventsMissed(reason);
+        }
+        catch (Exception ex)
+        {
+            LogObserverInvalidateFailed(ex);
         }
     }
 
@@ -142,6 +203,9 @@ internal sealed partial class KeyedSubject<T> : IEventSubject<T> where T : IEven
 
     [LoggerMessage(Level = LogLevel.Warning, Message = "Observer threw in OnCompleted; continuing.")]
     private partial void LogObserverOnCompletedFailed(Exception ex);
+
+    [LoggerMessage(Level = LogLevel.Warning, Message = "Observer threw in OnEventsMissed; continuing.")]
+    private partial void LogObserverInvalidateFailed(Exception ex);
 
     [LoggerMessage(Level = LogLevel.Warning, Message = "Slow observer {Observer} took {ElapsedMs} ms in OnNext for event {EventId}.")]
     private partial void LogObserverSlow(string? observer, double elapsedMs, string? eventId);

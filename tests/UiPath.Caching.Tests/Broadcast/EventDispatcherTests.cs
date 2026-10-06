@@ -87,6 +87,7 @@ public class EventDispatcherTests
         }
 
         public void OnCompleted() { }
+        public void Invalidate(MissedEventsReason reason) { }
         public void Dispose() { }
 
         private sealed class Disposable : IDisposable

@@ -62,7 +62,7 @@ public sealed partial class CacheEventPublisher
         {
             [KnownFieldNames.ExpirationKey] = options.Expiration,
         };
-        return RaiseEventAsync(options, KnownEventTypes.CacheRemoved, entryType, properties);
+        return RaiseEventAsync(options, KnownEventTypes.CacheRefreshed, entryType, properties);
     }
 
     public ValueTask<bool> CacheRemovedAsync(ICacheEntryOptions options) =>

@@ -269,7 +269,7 @@ public class SpanKeyReadTests
             state.IsConnected.Returns(false);
             state.OnConnectionFailed += Raise.Event<EventHandler>(state, EventArgs.Empty);
         });
-        using var cache = InMemoryMultilayer.Cache(new InMemoryCacheOptions { CacheKeyStrategy = strategy }, inner, connectionMonitor: true);
+        using var cache = InMemoryMultilayer.Cache(new InMemoryCacheOptions { CacheKeyStrategy = strategy, UseLocalOnlyWhenDisconnected = false }, inner, connectionMonitor: true);
         (await cache.SetAsync<string>("user:42", "v", policy: null, Ct)).Should().BeTrue();
 
         SpanReads.Read<string>(cache, "user:42", Ct).Should().BeNull("the key path removes a local entry once the tier is disconnected, and the span path must reach that decision too");
@@ -287,7 +287,7 @@ public class SpanKeyReadTests
             state.IsConnected.Returns(false);
             state.OnConnectionFailed += Raise.Event<EventHandler>(state, EventArgs.Empty);
         });
-        using var cache = InMemoryMultilayer.HashCache(new InMemoryCacheOptions { CacheKeyStrategy = strategy }, inner, connectionMonitor: true);
+        using var cache = InMemoryMultilayer.HashCache(new InMemoryCacheOptions { CacheKeyStrategy = strategy, UseLocalOnlyWhenDisconnected = false }, inner, connectionMonitor: true);
         (await cache.SetAsync<string>("user:42", new Dictionary<string, string?> { ["f"] = "v" }, policy: null, Ct)).Should().BeTrue();
 
         SpanReads.ReadItem<string>(cache, "user:42", "f", Ct).Should().BeNull("the key path removes a local entry once the tier is disconnected, and the span path must reach that decision too");
