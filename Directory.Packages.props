@@ -10,7 +10,7 @@
     <MEVersion10>10.0.12</MEVersion10>
   </PropertyGroup>
   <ItemGroup>
-    <PackageVersion Include="MessagePack" Version="3.1.8" />
+    <PackageVersion Include="MessagePack" Version="3.1.10" />
   </ItemGroup>
   <!-- Per-TFM dependency floors: keep both groups in sync ID-for-ID, each on its own major.
        Order matters. Dependabot does not evaluate the conditions, so it sees one version per ID and
