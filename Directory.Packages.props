@@ -9,9 +9,6 @@
          has a single line to change instead of eleven that must agree. -->
     <MEVersion10>10.0.12</MEVersion10>
   </PropertyGroup>
-  <ItemGroup>
-    <PackageVersion Include="MessagePack" Version="3.1.8" />
-  </ItemGroup>
   <!-- Per-TFM dependency floors: keep both groups in sync ID-for-ID, each on its own major.
        Order matters. Dependabot does not evaluate the conditions, so it sees one version per ID and
        edits the first PackageVersion line it finds for it: the net10 group is declared first so that
