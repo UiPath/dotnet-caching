@@ -41,8 +41,9 @@ public sealed partial class RedisPubSubTopic<T> : ITopic<T>
         _logger = logger;
         _options = options;
         _subject = subjectFactory();
-        var channel = ChannelHelper.Create<T>(options.ConsumerCapacity < 1, options.ConsumerCapacity, options.FullMode);
-        _subscriber = new RedisPubSubSubjectWriter<T>(sourceUri, _redisChannel, _redis, channel, _formatter, options, _logger);
+        var dropped = new DroppedEvents(topicKey, () => _subject.Invalidate(MissedEventsReason.Lost), _logger);
+        var channel = ChannelHelper.Create<T>(options.ConsumerCapacity < 1, options.ConsumerCapacity, options.FullMode, _ => dropped.Dropped());
+        _subscriber = new RedisPubSubSubjectWriter<T>(sourceUri, _redisChannel, _redis, channel, _formatter, options, _logger, () => _subject.Invalidate(MissedEventsReason.SubscriptionGap), dropped.Dropped);
         _dispatcher = new EventDispatcher<T>(topicKey, channel, _subject, _logger, _stopTokenSource.Token);
     }
 
@@ -50,8 +51,20 @@ public sealed partial class RedisPubSubTopic<T> : ITopic<T>
 
     public EventHandler? OnDisposed { get; set; }
 
-    public IDisposable Subscribe(IObserver<T> observer) =>
-        _subject.Subscribe(observer);
+    public IDisposable Subscribe(IObserver<T> observer)
+    {
+        // Publications are missed while the Redis subscription is not in place, so the mark makes the next one that goes in
+        // place expire this observer too. One that went in place while the observer was being added expired the others
+        // before reaching it, so this observer is told here.
+        var mark = _subscriber.MarkSubscribed();
+        var subscription = _subject.Subscribe(observer);
+        if (_subscriber.ActivatedSince(mark) && observer is IMissedEventsObserver missed)
+        {
+            TellMissed(missed, MissedEventsReason.SubscriptionGap);
+        }
+
+        return subscription;
+    }
 
     public async ValueTask<bool> PublishAsync(T @event, CancellationToken token = default)
     {
@@ -100,8 +113,24 @@ public sealed partial class RedisPubSubTopic<T> : ITopic<T>
 
     internal RedisPubSubTopicOptions GetResolvedOptionsForTests() => _options;
 
+    /// <summary>Tells an observer that joined as the subscription went in place that it may hold stale entries; what it throws is logged, not passed to Subscribe.</summary>
+    private void TellMissed(IMissedEventsObserver missed, MissedEventsReason reason)
+    {
+        try
+        {
+            missed.OnEventsMissed(reason);
+        }
+        catch (Exception ex)
+        {
+            LogObserverMissedEventsFailed(ex, TopicKey);
+        }
+    }
+
     [LoggerMessage(Level = LogLevel.Trace, Message = "Publishing to topic {TopicKey} event {EventId}")]
     private partial void LogPublishing(TopicKey topicKey, string? eventId);
+
+    [LoggerMessage(Level = LogLevel.Warning, Message = "Observer threw in OnEventsMissed on topic {TopicKey}; it stays subscribed.")]
+    private partial void LogObserverMissedEventsFailed(Exception ex, TopicKey topicKey);
 
     [LoggerMessage(Level = LogLevel.Warning, Message = "Error when publishing to Topic {TopicKey}")]
     private partial void LogPublishError(Exception ex, TopicKey topicKey);

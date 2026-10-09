@@ -36,10 +36,10 @@ public sealed partial class ChangeTokenFactory<T> : IChangeTokenFactory, IMasked
         CreateCore(token, topic, cacheName, entryType, _maskers.GetOrAdd(cacheName, name => KeyMasker.For(_keyMaskingPolicy, name)), callerKey: token);
 
     /// <summary>A tier built with its own policy, such as a private cache behind the distributed adapter, passes the masker it was given.</summary>
-    ICacheChangeToken IMaskedChangeTokenFactory.Create(string token, ITopic<ICacheEvent> topic, string cacheName, Type entryType, KeyMasker masker, CacheKey callerKey) =>
-        CreateCore(token, topic, cacheName, entryType, masker, callerKey);
+    ICacheChangeToken IMaskedChangeTokenFactory.Create(string token, ITopic<ICacheEvent> topic, string cacheName, Type entryType, KeyMasker masker, CacheKey callerKey, bool ignoreSubscriptionGaps) =>
+        CreateCore(token, topic, cacheName, entryType, masker, callerKey, ignoreSubscriptionGaps);
 
-    private ChangeToken<T> CreateCore(string token, ITopic<ICacheEvent> topic, string cacheName, Type entryType, KeyMasker masker, CacheKey callerKey)
+    private ChangeToken<T> CreateCore(string token, ITopic<ICacheEvent> topic, string cacheName, Type entryType, KeyMasker masker, CacheKey callerKey, bool ignoreSubscriptionGaps = false)
     {
         if (_logger.IsEnabled(LogLevel.Trace))
         {
@@ -47,7 +47,7 @@ public sealed partial class ChangeTokenFactory<T> : IChangeTokenFactory, IMasked
         }
 
         var acceptedEvents = KnownCacheProviderNames.InMemory.Equals(cacheName, StringComparison.OrdinalIgnoreCase) ? MemoryAcceptedEvents : null;
-        return new ChangeToken<T>(token, topic, _sourceUri, _serializer, _loggerFactory.CreateLogger<ChangeToken<T>>(), _telemetryProvider, acceptedEvents, masker, entryType, callerKey);
+        return new ChangeToken<T>(token, topic, _sourceUri, _serializer, _loggerFactory.CreateLogger<ChangeToken<T>>(), _telemetryProvider, acceptedEvents, masker, entryType, callerKey, ignoreSubscriptionGaps);
     }
 
     [LoggerMessage(Level = LogLevel.Trace, Message = "Create change token. topic {TopicKey} token {Token} source {SourceUri}")]

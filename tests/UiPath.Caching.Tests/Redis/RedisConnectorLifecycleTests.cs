@@ -63,13 +63,23 @@ public class RedisConnectorLifecycleTests
     }
 
     [Fact]
-    public void IsConnected_False_BeforeConnect_DoesNotTriggerConnect()
+    public void IsConnected_False_OnceDisposed_EvenBeforeConnect()
+    {
+        var connector = NewConnector(new SequenceFactory());
+
+        connector.Dispose();
+
+        connector.IsConnected.Should().BeFalse("every command now fails, so none should go to the store");
+    }
+
+    [Fact]
+    public void IsConnected_True_BeforeConnect_DoesNotTriggerConnect()
     {
         var factory = new SequenceFactory();
 
         var connector = NewConnector(factory);
 
-        connector.IsConnected.Should().BeFalse();
+        connector.IsConnected.Should().BeTrue("not created yet is no outage: a monitored cache must still send its first command, which connects");
         connector.GetEndPoints().Should().BeEmpty();
         factory.CreateCount.Should().Be(0);
         connector.Dispose();
@@ -211,7 +221,7 @@ public class RedisConnectorLifecycleTests
     }
 
     [Fact]
-    public async Task IsConnected_False_WhileInitialConnectInFlight()
+    public async Task IsConnected_True_WhileInitialConnectInFlight()
     {
         var multiplexer = Substitute.For<IConnectionMultiplexer>();
         multiplexer.IsConnected.Returns(true);
@@ -221,7 +231,7 @@ public class RedisConnectorLifecycleTests
 
         var warmUp = connector.ConnectAsync(TestContext.Current.CancellationToken);
 
-        connector.IsConnected.Should().BeFalse();
+        connector.IsConnected.Should().BeTrue("a command sent now must wait for the pending connect rather than be refused");
         connector.GetEndPoints().Should().BeEmpty();
 
         gate.SetResult();
@@ -316,6 +326,7 @@ public class RedisConnectorLifecycleTests
         var connector = NewConnector(factory);
 
         await Assert.ThrowsAnyAsync<Exception>(async () => await connector.ConnectAsync(TestContext.Current.CancellationToken));
+        connector.IsConnected.Should().BeTrue("a faulted first connect must let the next command through, or nothing would ever retry it");
 
         await connector.ConnectAsync(TestContext.Current.CancellationToken);
 

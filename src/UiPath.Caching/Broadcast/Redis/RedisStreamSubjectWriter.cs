@@ -6,6 +6,32 @@ namespace UiPath.Caching.Broadcast.Redis;
 internal sealed partial class RedisStreamSubjectWriter<T> : IDisposable
     where T : IEvent
 {
+    // Runs on every read, so it returns only what the check needs: XINFO STREAM carries the first and last entries whole.
+    private const string CheckAndReadScript = """
+        local info = redis.call('XINFO', 'STREAM', KEYS[1])
+        local stream = {}
+        for i = 1, #info, 2 do
+            local field = info[i]
+            if field == 'length' or field == 'last-generated-id' or field == 'max-deleted-entry-id' or field == 'entries-added' then
+                stream[#stream + 1] = field
+                stream[#stream + 1] = info[i + 1]
+            elseif field == 'first-entry' and info[i + 1] then
+                stream[#stream + 1] = field
+                stream[#stream + 1] = { info[i + 1][1] }
+            end
+        end
+        local groups = {}
+        for _, group in ipairs(redis.call('XINFO', 'GROUPS', KEYS[1])) do
+            for i = 1, #group, 2 do
+                if group[i] == 'name' and group[i + 1] == ARGV[1] then
+                    groups[1] = group
+                end
+            end
+        end
+        local entries = redis.call('XREADGROUP', 'GROUP', ARGV[1], ARGV[2], 'COUNT', ARGV[3], 'STREAMS', KEYS[1], '>')
+        return { stream, groups, entries }
+        """;
+
     private const string EventInvalid = "Caching." + nameof(RedisStreamSubjectWriter<T>) + "." + nameof(DispatchEventsAsync) + ".InvalidEvent";
     private const string EventReceived = "Caching." + nameof(RedisStreamSubjectWriter<T>) + "." + nameof(DispatchEventsAsync) + ".EventReceived";
     private const string PropTopicKey = "TopicKey";
@@ -23,11 +49,22 @@ internal sealed partial class RedisStreamSubjectWriter<T> : IDisposable
     private readonly CancellationToken _cancelationToken;
     private readonly IFetchWaiter _waiter;
     private readonly SemaphoreSlim _retryGate = new(0, 1);
+    private readonly Action _onMessagesMissed;
 
     private bool _disposed;
     private RedisValue _lastId = StreamPosition.NewMessages;
     private int _consecutiveFailures;
     private volatile bool _unsupportedCommand;
+    private volatile bool _checkForGap;
+    // Set once the topic has subscribers or the group has been read: only then can a loss leave a local entry stale.
+    private volatile bool _inUse;
+    private bool _noScripts;
+    private bool _gapCheckDenied;
+
+    // An empty read cannot move the group past a trim, so every later check finds the gap this one reported.
+    private StreamGap? _reportedGap;
+    private ReadCount? _readCount;
+    private int _losses;
 
     public RedisStreamSubjectWriter(
         RedisStreamContext context,
@@ -39,6 +76,7 @@ internal sealed partial class RedisStreamSubjectWriter<T> : IDisposable
         ICachingTelemetryProvider cachingTelemetryProvider,
         IRedisProfiler redisProfiler,
         IFetchWaiter waiter,
+        Action onMessagesMissed,
         CancellationToken stopToken)
     {
         _context = context;
@@ -50,6 +88,7 @@ internal sealed partial class RedisStreamSubjectWriter<T> : IDisposable
         _cachingTelemetryProvider = cachingTelemetryProvider;
         _redisProfiler = redisProfiler;
         _waiter = waiter;
+        _onMessagesMissed = onMessagesMissed;
         _stopTokenSource = CancellationTokenSource.CreateLinkedTokenSource(stopToken);
         _cancelationToken = _stopTokenSource.Token;
         _connectionState.OnReconnected += OnConnectionRecovered;
@@ -77,12 +116,57 @@ internal sealed partial class RedisStreamSubjectWriter<T> : IDisposable
         _writer.TryComplete();
     }
 
+    /// <summary>The topic is gaining a subscriber, whose entry a loss can leave stale before this group is ever read.</summary>
+    /// <returns>A mark for <see cref="LostSince"/>.</returns>
+    internal int MarkSubscribed()
+    {
+        // Read before publishing _inUse: a loss before it cannot reach this subscriber, and one after it moves the mark.
+        var mark = Volatile.Read(ref _losses);
+        _inUse = true;
+        return mark;
+    }
+
+    /// <summary>Whether a loss was reported since <paramref name="mark"/>, expiring the subscribers already there.</summary>
+    internal bool LostSince(int mark) => Volatile.Read(ref _losses) != mark;
+
+    /// <summary>Expires what the topic keeps for a loss that was not a trim, such as an event dropped at a full channel.</summary>
+    internal void ReportLoss()
+    {
+        // Counted first, so a subscriber joining while the others are told sees it and is told itself.
+        Interlocked.Increment(ref _losses);
+        _onMessagesMissed();
+    }
+
+    private static bool IsDenied(Exception ex) =>
+        ex is RedisServerException && ex.Message.StartsWith("NOPERM", StringComparison.OrdinalIgnoreCase);
+
     private static bool IsUnsupportedCommand(Exception ex) =>
         ex is RedisCommandException ||
         (ex is RedisServerException &&
          ex.Message.Contains(StreamConstants.UnknownCommandErrorMessage, StringComparison.OrdinalIgnoreCase));
 
-    private void OnConnectionRecovered(object? sender, EventArgs e) => ReleaseRetryGate();
+    private void ReportMessagesMissed()
+    {
+        LogMessagesMissed(_context.Topic, _context.ConsumerGroup);
+        ReportLoss();
+    }
+
+    private void ReportGap(StreamGap? gap)
+    {
+        if (gap is not { } found || _reportedGap == found)
+        {
+            return;
+        }
+
+        _reportedGap = found;
+        ReportMessagesMissed();
+    }
+
+    private void OnConnectionRecovered(object? sender, EventArgs e)
+    {
+        _checkForGap = true;
+        ReleaseRetryGate();
+    }
 
     private void ReleaseRetryGate()
     {
@@ -145,18 +229,37 @@ internal sealed partial class RedisStreamSubjectWriter<T> : IDisposable
     {
         if (!_connectionState.IsConnected)
         {
+            // IsConnected turns true before the restored event fires, so the next read may come first.
+            _checkForGap = true;
             await _waiter.WaitAsync(_cancelationToken).ConfigureAwait(false);
             return;
         }
 
-        StreamEntry[] events = await _redis.Database.StreamReadGroupAsync(
-            _context.Topic,
-            _context.ConsumerGroup,
-            _context.ConsumerName,
-            StreamConstants.UndeliveredMessages,
-            _context.PollBatchSize).ConfigureAwait(false);
+        // A trim can reach unread entries between any two polls, so every read the group's position matters for is checked.
+        StreamEntry[] events;
+        if (_inUse && !_noScripts)
+        {
+            events = await CheckAndReadAsync().ConfigureAwait(false);
+        }
+        else
+        {
+            // Without XINFO a loss cannot be ruled out, so only a reconnect reports one rather than every read.
+            if (_inUse && (_checkForGap || !_gapCheckDenied))
+            {
+                // A recovery raised during a check needs its own before the read moves the group past the evidence.
+                do
+                {
+                    await CheckForGapAsync().ConfigureAwait(false);
+                }
+                while (_checkForGap && _inUse);
+            }
+
+            events = await ReadAsync().ConfigureAwait(false);
+        }
 
         _consecutiveFailures = 0;
+        _inUse = true;
+
         if (_unsupportedCommand)
         {
             _unsupportedCommand = false;
@@ -193,16 +296,26 @@ internal sealed partial class RedisStreamSubjectWriter<T> : IDisposable
             return true;
         }
 
-        if (ex.Message.StartsWith("NOGROUP", StringComparison.OrdinalIgnoreCase))
+        if (ex.Message.Contains("NOGROUP", StringComparison.OrdinalIgnoreCase))
         {
             if(id != StreamPosition.NewMessages)
             {
                 LogRecreatingTopic(_context.Topic, _context.ConsumerGroup, id);
             }
 
+            if (_inUse)
+            {
+                // The group or the whole stream was removed while in use, so what it held past the last read is gone.
+                _inUse = false;
+                _checkForGap = false;
+                _reportedGap = null;
+                _readCount = null;
+                ReportMessagesMissed();
+            }
+
             try
             {
-                await _redis.Database.StreamCreateConsumerGroupAsync(_context.Topic, _context.ConsumerGroup, id).ConfigureAwait(false);
+                await ConsumerGroups.CreateAsync(_redis.Database, _context.Topic, _context.ConsumerGroup, id).ConfigureAwait(false);
             }
             catch (RedisServerException rex) when (rex.Message == StreamConstants.ConsumerGroupNameExistsErrorMessage)
             {
@@ -216,7 +329,8 @@ internal sealed partial class RedisStreamSubjectWriter<T> : IDisposable
         }
         else
         {
-           LogFetchLoopError(ex);
+            _checkForGap = true;
+            LogFetchLoopError(ex);
         }
 
         await BackoffAsync().ConfigureAwait(false);
@@ -247,6 +361,78 @@ internal sealed partial class RedisStreamSubjectWriter<T> : IDisposable
         catch (ObjectDisposedException)
         {
             // Disposed concurrently with the wait; treat as a wake-up so the loop observes disposal.
+        }
+    }
+
+    private Task<StreamEntry[]> ReadAsync() => _redis.Database.StreamReadGroupAsync(
+        _context.Topic,
+        _context.ConsumerGroup,
+        _context.ConsumerName,
+        StreamConstants.UndeliveredMessages,
+        _context.PollBatchSize);
+
+    /// <summary>Checks for a gap and reads in one script, so a trim cannot land between the check and the read.</summary>
+    private async Task<StreamEntry[]> CheckAndReadAsync()
+    {
+        _checkForGap = false;
+        RedisResult reply;
+        try
+        {
+            reply = await _redis.Database.ScriptEvaluateAsync(
+                CheckAndReadScript,
+                [_context.Topic],
+                [_context.ConsumerGroup, _context.ConsumerName, _context.PollBatchSize]).ConfigureAwait(false);
+        }
+        catch (RedisServerException ex) when (ex.Message.Contains("no such key", StringComparison.OrdinalIgnoreCase))
+        {
+            // A missing stream fails the read with NOGROUP, which reports the loss.
+            return await ReadAsync().ConfigureAwait(false);
+        }
+        catch (Exception ex) when (IsUnsupportedCommand(ex) || IsDenied(ex))
+        {
+            // Scripts are off on this server: check and read apart from now on.
+            LogScriptsUnavailable(ex, _context.Topic);
+            _noScripts = true;
+            _checkForGap = true;
+            return [];
+        }
+
+        var parts = StreamIds.Items(reply);
+        ReportGap(StreamIds.Gap(parts[0], parts[1], _context.ConsumerGroup, ref _readCount));
+
+        return StreamIds.Entries(parts[2]);
+    }
+
+    /// <summary>Entries trimmed before the group read them were never delivered.</summary>
+    private async Task CheckForGapAsync()
+    {
+        // Cleared first, so a recovery raised while the check awaits arms the next one.
+        _checkForGap = false;
+        StreamInfo stream;
+        StreamGroupInfo[] groups;
+        try
+        {
+            stream = await _redis.Database.StreamInfoAsync(_context.Topic).ConfigureAwait(false);
+            groups = await _redis.Database.StreamGroupInfoAsync(_context.Topic).ConfigureAwait(false);
+        }
+        catch (RedisServerException ex) when (ex.Message.StartsWith("ERR no such key", StringComparison.OrdinalIgnoreCase))
+        {
+            // A missing stream fails the read with NOGROUP, which reports the loss.
+            return;
+        }
+        catch (Exception ex) when (IsUnsupportedCommand(ex) || IsDenied(ex))
+        {
+            // XINFO is denied or renamed away, so a loss cannot be ruled out: report one rather than retry a check that cannot succeed.
+            LogGapCheckDenied(ex, _context.Topic);
+            _gapCheckDenied = true;
+            ReportMessagesMissed();
+            return;
+        }
+
+        var group = Array.Find(groups, g => g.Name == _context.ConsumerGroup);
+        if (group.Name is not null)
+        {
+            ReportGap(StreamIds.Gap(stream, group, ref _readCount));
         }
     }
 
@@ -315,7 +501,11 @@ internal sealed partial class RedisStreamSubjectWriter<T> : IDisposable
     {
         try
         {
-            await _writer.WriteAsync(ev, _cancelationToken).ConfigureAwait(false);
+            if (!_writer.TryWrite(ev))
+            {
+                await _writer.WriteAsync(ev, _cancelationToken).ConfigureAwait(false);
+            }
+
             ids.Add(@event.Id);
             TraceReceipt(ev);
         }
@@ -383,6 +573,9 @@ internal sealed partial class RedisStreamSubjectWriter<T> : IDisposable
     [LoggerMessage(Level = LogLevel.Debug, Message = "On Topic {Topic} consumer group {ConsumerGroup} already exists")]
     private partial void LogConsumerGroupExists(RedisKey topic, RedisValue consumerGroup);
 
+    [LoggerMessage(Level = LogLevel.Warning, Message = "Topic {Topic}, consumer group {ConsumerGroup}: entries were removed before they were read, so their invalidations were missed")]
+    private partial void LogMessagesMissed(RedisKey topic, RedisValue consumerGroup);
+
     [LoggerMessage(Level = LogLevel.Error, Message = "Recreating topic exception.")]
     private partial void LogRecreatingTopicException(Exception ex);
 
@@ -417,6 +610,12 @@ internal sealed partial class RedisStreamSubjectWriter<T> : IDisposable
 
     [LoggerMessage(Level = LogLevel.Debug, Message = "Dispatched {Length} messages. Topic : {Topic}")]
     private partial void LogDispatched(int length, RedisKey topic);
+
+    [LoggerMessage(Level = LogLevel.Warning, Message = "XINFO is unavailable for stream {Topic}; a reconnect is reported as a loss")]
+    private partial void LogGapCheckDenied(Exception ex, RedisKey topic);
+
+    [LoggerMessage(Level = LogLevel.Warning, Message = "Scripts are unavailable for stream {Topic}; gap checks and reads now run apart")]
+    private partial void LogScriptsUnavailable(Exception ex, RedisKey topic);
 
     [LoggerMessage(Level = LogLevel.Trace, Message = "Event received. Id {EventId}  Topic : {Topic}, StreamId: {StreamId}")]
     private partial void LogEventReceived(string? eventId, RedisKey topic, string? streamId);

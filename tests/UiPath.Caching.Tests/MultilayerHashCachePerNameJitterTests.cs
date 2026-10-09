@@ -248,6 +248,8 @@ public class MultilayerHashCachePerNameJitterTests(ITestContextAccessor testCont
         _distributedLock = _fixture.Freeze<IDistributedLock>();
         _options = new InMemoryRedisCacheOptions
         {
+            // These tests assume a tier that is never seen as disconnected; the ones about disconnection turn the monitor on.
+            ConnectionMonitorEnabled = false,
             DefaultExpiration = TimeSpan.FromMinutes(10),
             EntryFactory = new TestCacheEntryFactory(),
             LocalLockEnabled = false,

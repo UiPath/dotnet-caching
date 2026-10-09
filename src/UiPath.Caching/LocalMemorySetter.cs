@@ -12,8 +12,9 @@ internal sealed class LocalMemorySetter(
     IMultilayerCacheOptions cacheOptions,
     IMemoryCacheOptions memoryCacheOptions,
     ICachingTelemetryProvider telemetryProvider,
-    KeyMasker? masker = null)
-    : MemoryCacheSetter(cacheName, changeTokenFactory, topicProvider, memoryCache, logger, clock, cacheOptions, memoryCacheOptions, telemetryProvider, masker)
+    KeyMasker? masker = null,
+    bool ignoreSubscriptionGaps = false)
+    : MemoryCacheSetter(cacheName, changeTokenFactory, topicProvider, memoryCache, logger, clock, cacheOptions, memoryCacheOptions, telemetryProvider, masker, ignoreSubscriptionGaps)
 {
     protected override ICacheEntryOptions CreateEntry(RefreshMetadataState metadataState, CancellationToken cancellationToken)
     {

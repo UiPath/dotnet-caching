@@ -29,7 +29,7 @@ Every binding-visible property on every shipped options class, with shipped defa
 | `AppShortName` | `string` | _required_ | App-wide | Short application name prefixed to every cache key; apps throw at startup if blank or missing. |
 | `KeyCasing` | `CacheKeyCasing` | `Insensitive` | App-wide | Key case folding applied when a key is built without an explicit mode, including every implicit `string` -> `CacheKey` conversion. `Insensitive` trims and lowercases (historical behavior); `Sensitive` preserves the caller's casing. **Changing this relocates every cache key** — existing entries become unreachable and are rewritten under the new spelling. The distributed cache always uses `Sensitive` and is unaffected. Scope is the **process**, not the container: `CacheKey` is a struct built by callers without access to DI, so the setting is seeded into the static `CacheKey.DefaultCasing`. Hosting two differently-configured containers in one process is therefore unsupported — the last `AddCaching` wins for both. |
 | `LargeValueThreshold` | `int` | `20000` | App-wide | Byte threshold for audit logging; writes whose payload exceeds this are logged when `AuditEnabled` is `true`. |
-| `ConnectionMonitorEnabled` | `bool` | `false` | App-wide | Enable Redis health-check polling app-wide; provider-level `ConnectionMonitorEnabled` inherits this when `null`. |
+| `ConnectionMonitorEnabled` | `bool` | `true` | App-wide | Enable Redis health-check polling app-wide; provider-level `ConnectionMonitorEnabled` inherits this when `null`. |
 | `LocalLockPoolSize` | `int` | `100` | App-wide | Semaphore pool size for the default local lock — allocation hint, not a hard concurrency cap. |
 | `LocalLockPoolInitialFill` | `int` | `10` | App-wide | Semaphores pre-allocated at startup; must be in `[0, LocalLockPoolSize]`. |
 | `DistributedLockPollInterval` | `TimeSpan` | `00:00:00.050` | App-wide | Initial wait between distributed-lock acquire retries; doubles per attempt up to `DistributedLockMaxPollInterval`. |
@@ -175,7 +175,8 @@ Per-topic overrides: add entries to `Topics[]` under `Broadcast:RedisPubSub`. Ea
 | `ConnectionMonitorPeriod` | `TimeSpan?` | `00:00:05` | Per-provider | How often the connection monitor probes Redis health. |
 | `SizeLimit` | `long?` | `null` | Per-provider | Max bytes for the in-memory tier; `null` = unlimited. |
 | `CompactionPercentage` | `double?` | `null` | Per-provider | Fraction of `SizeLimit` to free when the limit is hit; `null` = runtime default (0.05). |
-| `UseLocalOnlyWhenDisconnected` | `bool?` | `null` | Per-provider | `null` = `false`; `true` = serve L1-only responses when L2 is disconnected. |
+| `UseLocalOnlyWhenDisconnected` | `bool?` | `null` | Per-provider | `null` = `true`: serve and keep L1-only while L2 is disconnected; `false` = drop the local entry and answer a miss. |
+| `ClearLocalOnReconnect` | `bool?` | `null` | Per-provider | `null` = `true`: clear L1 when a `RedisPubSub` broadcast reconnects, since invalidations published while it was down never arrived. Inert over `RedisStreams`, which replay them and expire a topic's entries themselves when entries were lost. |
 | `LocalMaxExpirationDisconnected` | `TimeSpan?` | `00:00:30` | Per-provider | L1 TTL cap while L2 is disconnected; limits the stale-read window. |
 | `LocalLockEnabled` | `bool?` | `true` | Per-provider | Acquire a local (in-process) lock before calling the value factory. |
 | `LocalLockTimeout` | `TimeSpan?` | `00:00:00.500` | Per-provider | Max wait to acquire the local lock before bypassing it. |
@@ -218,13 +219,14 @@ Per-topic overrides: add entries to `Topics[]` under `Broadcast:RedisPubSub`. Ea
 | `BroadcastEnable` | `bool` | `false` | Per-provider | Enable broadcast invalidation for this in-memory cache instance. |
 | `Topic` | `string?` | `null` | Per-provider | Topic name for invalidation broadcasts; `null` = use `CacheOptions.DefaultTopic`. |
 | `LocalMaxExpiration` | `TimeSpan?` | `01:00:00` | Per-provider | Cap on in-memory TTL; `null` = no cap (falls back to the resolved `DefaultExpiration`). |
-| `ConnectionMonitorEnabled` | `bool?` | `null` | Per-provider | Inert for this provider (no Redis connection); present to satisfy `IMultilayerCacheOptions`. |
+| `ConnectionMonitorEnabled` | `bool?` | `null` | Per-provider | Applies only when broadcast runs over Redis: `null` = inherit from `CacheOptions.ConnectionMonitorEnabled`; off turns off `UseLocalOnlyWhenDisconnected` and `ClearLocalOnReconnect` too. Inert otherwise. |
 | `CacheNullValues` | `bool` | `false` | Per-provider | Persist `null`/empty factory returns as sentinels. |
-| `ConnectionMonitorPeriod` | `TimeSpan?` | `00:00:05` | Per-provider | Inert for this provider; present to satisfy `IMultilayerCacheOptions`. |
+| `ConnectionMonitorPeriod` | `TimeSpan?` | `00:00:05` | Per-provider | Applies only when broadcast runs over Redis: how often the monitor polls the broadcast connection while it reads as down. Inert otherwise. |
 | `SizeLimit` | `long?` | `null` | Per-provider | Max bytes for the in-memory store; `null` = unlimited. |
 | `CompactionPercentage` | `double?` | `null` | Per-provider | Fraction of `SizeLimit` to free when the limit is hit; `null` = runtime default (0.05). |
-| `UseLocalOnlyWhenDisconnected` | `bool?` | `null` | Per-provider | Inert for this provider; present to satisfy `IMultilayerCacheOptions`. |
-| `LocalMaxExpirationDisconnected` | `TimeSpan?` | `00:00:30` | Per-provider | Inert for this provider; present to satisfy `IMultilayerCacheOptions`. |
+| `UseLocalOnlyWhenDisconnected` | `bool?` | `null` | Per-provider | Applies only when broadcast runs over Redis: `null` = `true`, keep serving L1 while the broadcast connection is down. Inert otherwise. |
+| `ClearLocalOnReconnect` | `bool?` | `null` | Per-provider | Applies only when broadcast runs over `RedisPubSub`: `null` = `true`, clear L1 once the broadcast connection recovers, since invalidations sent meanwhile were missed. Inert otherwise. |
+| `LocalMaxExpirationDisconnected` | `TimeSpan?` | `00:00:30` | Per-provider | Applies only when broadcast runs over Redis: the L1 lifetime cap for values written while the broadcast connection is down. Inert otherwise. |
 | `LocalLockEnabled` | `bool?` | `true` | Per-provider | Acquire a local (in-process) lock before calling the value factory. |
 | `LocalLockTimeout` | `TimeSpan?` | `00:00:00.500` | Per-provider | Max wait to acquire the local lock before bypassing it. |
 | `DistributedLockEnabled` | `bool?` | `null` | Per-provider | Inert for this provider; present to satisfy `IMultilayerCacheOptions`. Startup validation still applies. |

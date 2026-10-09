@@ -138,10 +138,35 @@ expire relatively quickly so that as soon as connectivity is restored the proces
 re-populates from a fresh L2 rather than serving stale data for the full
 `LocalMaxExpiration` window.
 
-`UseLocalOnlyWhenDisconnected` changes the disconnected behavior further: when
-true, an unhealthy L2 means reads are served from L1 only and no L2 round-trip
-is attempted. This is appropriate when you would rather serve potentially stale
-data than accumulate timeout latency on every cache miss during a Redis outage.
+`UseLocalOnlyWhenDisconnected`, on by default, changes the disconnected behavior
+further: while L2 is unhealthy, an L1 hit is served and writes are kept in L1
+only, capped at `LocalMaxExpirationDisconnected`. That serves potentially stale
+data rather than losing the local copy during a Redis outage. Set it to `false` to
+drop the local entry and answer a miss instead. An L1 miss still asks L2: the
+monitor also tracks the broadcast connection, so "unhealthy" can mean only that one
+is down, and with the fail-fast backlog policy a read on a dead data connection
+fails at once rather than waiting for its timeout.
+
+`ClearLocalOnReconnect`, also on by default, expires a `RedisPubSub` topic's
+L1 entries when its connection is restored, through their change tokens, so on
+any local tier. Invalidations published while the connection was down never
+reached this node, so an entry cached before the outage could otherwise outlive a
+change made during it. `RedisStreams` needs no clear: the consumer group resumes
+after its last delivery and replays what the outage held back. When entries past
+it were trimmed first, or the group or stream was removed while in use, the topic
+expires every local entry it invalidates, whatever `ClearLocalOnReconnect` says.
+Below Redis 7.0, which does not count the entries a group read, any trim past this
+node's last delivery counts as a loss, even one that removed only entries it had
+read. Concurrent single-key reads of one key share a single L2
+read when they read the same value type with the same `LocalExpiration` and
+`LocalExpirationDisconnected`, so the refill after a clear costs one read per key
+per node for each such combination; reads that differ in any of them, and
+multi-key reads, read L2 themselves.
+
+A `GetOrAddAsync` miss runs its generator under the local lock, and the callers
+waiting on the lock read the stored value once it is written. When L2 refuses the
+write, the generated value is kept in L1 for `LocalMaxExpirationDisconnected`, so
+those waiters reuse it instead of each running the generator again.
 
 Why split into two tiers at all? L1 eliminates Redis latency and bandwidth on
 the hot path — for a busy service, removing the network hop from cache reads can
@@ -152,11 +177,11 @@ tradeoff is that each node's L1 can drift from L2 when another node writes a new
 value. Topics solve that problem, and their relationship to layers is explained
 in the next section.
 
-It is worth noting that all three of these disconnected-scenario options
-(`LocalMaxExpiration`, `LocalMaxExpirationDisconnected`,
-`UseLocalOnlyWhenDisconnected`) require the connection monitor to be active —
-either by setting `ConnectionMonitorEnabled` to `true` on `CacheOptions`, or by
-setting it on `InMemoryRedisCacheOptions` directly. Without the monitor the cache
+It is worth noting that these disconnected-scenario options
+(`LocalMaxExpirationDisconnected`, `UseLocalOnlyWhenDisconnected`,
+`ClearLocalOnReconnect`) require the connection monitor to be active;
+`LocalMaxExpiration` caps every L1 entry and does not. It is on by default (`CacheOptions.ConnectionMonitorEnabled`),
+and `InMemoryRedisCacheOptions.ConnectionMonitorEnabled` overrides it per provider. Without the monitor the cache
 cannot distinguish "connected" from "disconnected" and the disconnected behavior
 never triggers.
 

@@ -868,11 +868,11 @@ public interface IConnectionState
 }
 ```
 
-A non-blocking snapshot of whether the backing store is reachable, plus the transitions as events. `IsConnected` never blocks and never throws. Implemented by `RedisCacheBase`, so `Redis`-provider caches expose it; the multilayer caches and `NullCache` do not, and neither does `Cache<T>`, which holds its underlying `ICache` privately.
+A non-blocking snapshot of whether commands should go to the backing store, plus the transitions as events. `IsConnected` never blocks and never throws. For `RedisConnector` it is `false` only once a connection exists and reports itself down: before the first connect, while it is pending, and after it faulted, it is `true`, so a command goes through and opens or retries the connection. Implemented by `RedisCacheBase`, so `Redis`-provider caches expose it; the multilayer caches and `NullCache` do not, and neither does `Cache<T>`, which holds its underlying `ICache` privately.
 
 What it is *not*: a way to explain a negative result. It is a cached snapshot refreshed on connection events and a timer, it says nothing about whether any particular command succeeded, and it is `true` both where there is nothing to disconnect from and where `ConnectionMonitorEnabled` is off. A `false` from `SetAsync` or [`TryAddAsync`](#icache) can perfectly well coincide with `IsConnected == true` — a serialization failure or a rejected command does that — so reading it afterwards does not recover why the call failed.
 
-**Use this when:** you are reporting or reacting to cache *health* — a readiness probe, a metric, a log line, or backing off writes while a tier is known down. Subscribe to `OnConnectionFailed` / `OnConnectionRestored` for the transitions rather than polling.
+**Use this when:** you are reacting to a tier known to be down — a metric, a log line, or backing off writes. Subscribe to `OnConnectionFailed` / `OnConnectionRestored` for the transitions rather than polling. For a readiness probe, use `RedisHealthCheck`, which asks the server: `IsConnected` is `true` while a first connection is still failing.
 
 ## Telemetry seam
 

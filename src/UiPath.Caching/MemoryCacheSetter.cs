@@ -12,7 +12,8 @@ internal abstract class MemoryCacheSetter(
     IMultilayerCacheOptions cacheOptions,
     IMemoryCacheOptions memoryCacheOptions,
     ICachingTelemetryProvider telemetryProvider,
-    KeyMasker? masker = null
+    KeyMasker? masker = null,
+    bool ignoreSubscriptionGaps = false
         )
 {
 
@@ -21,6 +22,9 @@ internal abstract class MemoryCacheSetter(
     private const string PropTopicKey = "TopicKey";
     private const string PropTransportId = "TransportId";
     private readonly KeyMasker _masker = masker ?? KeyMasker.Off;
+
+    // A custom factory cannot be told the cache keeps entries over a subscription gap, so it is handed a topic that hides one.
+    private readonly System.Runtime.CompilerServices.ConditionalWeakTable<ITopic<ICacheEvent>, ITopic<ICacheEvent>> _gapFiltered = [];
 
     protected TimeProvider Clock { get; } = clock;
 
@@ -32,8 +36,8 @@ internal abstract class MemoryCacheSetter(
         {
             var topic = topicProvider.Create(options.TopicKey);
             var token = changeTokenFactory is IMaskedChangeTokenFactory masked
-                ? masked.Create(options.CacheKey, topic, cacheName, entryType, _masker, options.CallerKey)
-                : changeTokenFactory.Create(options.CacheKey, topic, cacheName, entryType);
+                ? masked.Create(options.CacheKey, topic, cacheName, entryType, _masker, options.CallerKey, ignoreSubscriptionGaps)
+                : changeTokenFactory.Create(options.CacheKey, TopicForCustomFactory(topic), cacheName, entryType);
             var state = new RefreshMetadataState(options.CacheKey, options.TopicKey, item, token, entryType, maxExpiration, options.CallerKey);
             token.RegisterChangeCallback(RefreshMetadata, state);
             // Filled in place rather than through MemoryCacheEntryOptions, which is copied into the entry and discarded.
@@ -74,6 +78,9 @@ internal abstract class MemoryCacheSetter(
             disposable.Dispose();
         }
     }
+
+    private ITopic<ICacheEvent> TopicForCustomFactory(ITopic<ICacheEvent> topic) =>
+        ignoreSubscriptionGaps ? _gapFiltered.GetValue(topic, static t => new GapFilteringTopic(t)) : topic;
 
     private void RefreshMetadata(RefreshMetadataState metadataState)
     {

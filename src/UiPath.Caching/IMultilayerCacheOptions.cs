@@ -13,8 +13,11 @@ public interface IMultilayerCacheOptions : ICacheOptions
 
     TimeSpan? ConnectionMonitorPeriod { get; set; }
 
-    /// <summary>Serve from L1 only (without falling back to default) when the L2 connection is unhealthy. Aligns with Local/Distributed tier naming.</summary>
+    /// <summary>Serve from L1 only (without falling back to default) when the L2 connection is unhealthy. Defaults to true; needs the connection monitor.</summary>
     bool? UseLocalOnlyWhenDisconnected { get; set; }
+
+    /// <summary>Clear L1 when a Redis Pub/Sub broadcast reconnects, since invalidations sent while it was down never arrived. Defaults to true; needs the connection monitor.</summary>
+    bool? ClearLocalOnReconnect { get; set; }
 
     /// <summary>L1 cap on entry lifetime while the L2 connection is unhealthy (paired with <see cref="UseLocalOnlyWhenDisconnected"/>).</summary>
     TimeSpan? LocalMaxExpirationDisconnected { get; set; }

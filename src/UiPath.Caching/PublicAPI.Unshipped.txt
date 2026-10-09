@@ -1,4 +1,10 @@
 #nullable enable
+UiPath.Caching.Broadcast.IEventSubject<T>.Invalidate(UiPath.Caching.Broadcast.MissedEventsReason reason) -> void
+UiPath.Caching.Broadcast.IMissedEventsObserver
+UiPath.Caching.Broadcast.IMissedEventsObserver.OnEventsMissed(UiPath.Caching.Broadcast.MissedEventsReason reason) -> void
+UiPath.Caching.Broadcast.MissedEventsReason
+UiPath.Caching.Broadcast.MissedEventsReason.Lost = 0 -> UiPath.Caching.Broadcast.MissedEventsReason
+UiPath.Caching.Broadcast.MissedEventsReason.SubscriptionGap = 1 -> UiPath.Caching.Broadcast.MissedEventsReason
 UiPath.Caching.Redis.RedisCacheBase.SupportsExpireTime.get -> bool
 *REMOVED*UiPath.Caching.Redis.PrefixRedisKeyStrategy.Prefix.set -> void
 *REMOVED*UiPath.Caching.Redis.PrefixRedisKeyStrategy.Separator.set -> void
@@ -118,3 +124,9 @@ UiPath.Caching.HashCache<T>.GetCacheEntryAsync(System.Span<char> cacheKey, Syste
 UiPath.Caching.HashCache<T>.GetOrAddAsync(System.Span<char> cacheKey, System.Func<System.Threading.CancellationToken, System.Threading.Tasks.Task<System.Collections.Generic.IDictionary<string!, T?>!>!>! generator, System.DateTimeOffset expiration, System.Threading.CancellationToken token = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.ValueTask<System.Collections.Generic.IDictionary<string!, T?>!>
 UiPath.Caching.HashCache<T>.GetOrAddAsync(System.Span<char> cacheKey, System.Func<System.Threading.CancellationToken, System.Threading.Tasks.Task<System.Collections.Generic.IDictionary<string!, T?>!>!>! generator, System.Threading.CancellationToken token = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.ValueTask<System.Collections.Generic.IDictionary<string!, T?>!>
 UiPath.Caching.HashCache<T>.GetOrAddAsync(System.Span<char> cacheKey, System.Func<System.Threading.CancellationToken, System.Threading.Tasks.Task<System.Collections.Generic.IDictionary<string!, T?>!>!>! generator, System.TimeSpan expiration, System.Threading.CancellationToken token = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.ValueTask<System.Collections.Generic.IDictionary<string!, T?>!>
+UiPath.Caching.IMultilayerCacheOptions.ClearLocalOnReconnect.get -> bool?
+UiPath.Caching.IMultilayerCacheOptions.ClearLocalOnReconnect.set -> void
+UiPath.Caching.InMemoryCacheOptions.ClearLocalOnReconnect.get -> bool?
+UiPath.Caching.InMemoryCacheOptions.ClearLocalOnReconnect.set -> void
+UiPath.Caching.InMemoryRedisCacheOptions.ClearLocalOnReconnect.get -> bool?
+UiPath.Caching.InMemoryRedisCacheOptions.ClearLocalOnReconnect.set -> void

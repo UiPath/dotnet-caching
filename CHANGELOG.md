@@ -46,6 +46,38 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 
 ### Changed
 
+- **A Redis outage is served from the local tier by default.** `CacheOptions.ConnectionMonitorEnabled` and
+  `UseLocalOnlyWhenDisconnected` now default to `true`: while the inner tier is disconnected, reads are served from
+  the local tier and writes kept there, capped at `LocalMaxExpirationDisconnected` (30 seconds by default). The new
+  `ClearLocalOnReconnect`, also `true` by default, expires the local entries of a Redis Pub/Sub topic when its
+  connection is restored, since the invalidations sent while it was down never arrived. The topic expires them through
+  their change tokens, so it works on any local tier, a custom `IMemoryCacheFactory` one included. A forced reconnect counts too: swapping the connection
+  can drop publications although it never read as down. A Pub/Sub topic also subscribes only after a delay, at first
+  and after a reconnect, so once its subscription is in place it expires the entries cached before then; a cache with
+  `ClearLocalOnReconnect` off keeps them. Redis Streams replay what was sent meanwhile, so their local tier is kept.
+  The monitor setting is app-wide, so the broadcast providers' connection monitor turns on too. **Breaking** for an app that relied on a disconnected tier answering
+  misses: set `UseLocalOnlyWhenDisconnected` to `false`, or `ConnectionMonitorEnabled` to `false` for the previous
+  behavior. **Breaking** too for a custom `IMultilayerCacheOptions` implementation, which must add
+  `ClearLocalOnReconnect`.
+
+- **`RedisConnector.IsConnected` is `false` only when a connection exists and reports itself down.** Before the
+  first connect, while it is pending and after it faulted, it is now `true`, so a command goes through and opens or
+  retries the connection; it used to be `false`, and the operations that check it first, L2 reads and every
+  `ISetCache` call, did nothing until a write had connected. Observable to code that reads `IRedisConnector.IsConnected`
+  directly, such as a status endpoint: use `RedisHealthCheck` to learn whether the server is reachable.
+
+- **Concurrent single-key reads share one inner read.** On a local miss, concurrent single-key `GetAsync`,
+  `GetCacheEntryAsync` and hash reads of one key, and the read `GetOrAddAsync` makes before its lock, wait for a
+  single inner-tier read and share its result or failure. Reads share only when they read the same value type with
+  the same `LocalExpiration` and `LocalExpirationDisconnected`, since the shared read keeps its hit for those
+  lifetimes; reads that differ in any of them read separately. Multi-key reads still read every missing key
+  themselves. A caller that cancels stops waiting; the shared read is cancelled only once every caller waiting on it
+  has cancelled.
+
+- **`GetOrAddAsync` keeps a value the inner tier refused.** When the inner write fails or throws, the generated value
+  is kept in the local tier for `LocalMaxExpirationDisconnected`, by the batch overload too, so the callers waiting on
+  the local lock reuse it instead of each running the generator again.
+
 - **A string key reads the local tier by its text.** On .NET 9 and later, `GetAsync`, `GetItemAsync`,
   `ContainsAsync`, `GetCacheEntryAsync` and `GetOrAddAsync` with a `CacheKey` look the in-memory tier up as the span
   reads do, and `Cache<T>` and `HashCache<T>` compose their strategy's key on the stack instead of through
@@ -124,6 +156,45 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
   `StartOperation` overloads.
 
 ### Fixed
+
+- **Events dropped at a full dispatcher channel expire what the topic keeps.** A Redis Pub/Sub topic whose channel
+  was full in `Wait` mode discarded the event, and the drop modes (`DropOldest`, `DropNewest`, `DropWrite`) discarded
+  one silently on either transport; the invalidation it carried was lost. Each drop now expires the topic's local
+  entries, coalesced to one expiry at a time.
+
+- **A removal after a refresh expires the local entry.** A change token kept the metadata and expiration of an earlier
+  refresh, so a later removal or loss, which carries neither, re-inserted the old value under a fresh token. It now
+  clears them first, and a refresh delivered after the removal or loss no longer brings them back.
+
+- **A refresh is broadcast as `CacheRefreshed`.** `CacheEventPublisher.CacheRefreshedAsync`, which `RefreshAsync`
+  raises, sent the `CacheRemoved` type. The library's own receivers treat both alike, so only a subscriber that
+  filters by event type sees the difference.
+
+- **A Redis Streams topic that loses entries before this node reads them expires what it kept.** Before each read
+  the consumer checks whether entries past its last delivery were trimmed (`MaxLength`, or the maintainer's trim) or deleted,
+  since a trim can reach unread entries between any two polls, and a consumer group or stream removed while in use
+  counts as a loss too. The check and the read run in one script, so a trim cannot land between them; where scripts
+  are refused, they run apart, and where `XINFO` is denied, each reconnect counts as a loss. A gap is reported
+  once: until the group reads past it or more entries are trimmed, later checks find the same one. The local entries on that topic then
+  expire, in every cache that uses it, whatever `ClearLocalOnReconnect` says. They used to be kept, so a change
+  whose invalidation was trimmed was served stale until the entry expired. Below Redis 7.0, which does not count
+  the entries a group read, any trim past this node's last delivery counts as a loss, even one that removed only
+  entries this node had read. From 7.0, the consumer group is created with the count of entries before it
+  (`ENTRIESREAD`), so a trim before its first read shows and entries trimmed before it existed do not count.
+  Where Redis cannot tell the count, as after a read past a deleted entry, the count last found at the same
+  position stands in; with none found, a trim past the last delivery counts as a loss. The topic
+  signals the loss through the new
+  `IEventSubject<T>.Invalidate(MissedEventsReason)`: `Lost` for a Streams loss, which every cache honors, and
+  `SubscriptionGap` for the Pub/Sub delay above. **Breaking** for a custom subject passed to the `RedisPubSubTopic` or
+  `RedisStreamsTopic` constructor: implement `Invalidate` to expire what its observers keep. The library's change
+  tokens implement the new public `IMissedEventsObserver`, so such a subject calls `OnEventsMissed(reason)` on each
+  observer that implements it. A custom `IChangeTokenFactory` needs no change: for a cache that keeps its entries
+  over a subscription gap, it is handed a view of the topic whose observers do not hear the gap.
+
+- **Multi-key reads keep a usable local copy.** `GetAsync` and `GetCacheEntriesAsync` over several keys stored each
+  inner-tier hit locally as a key-value pair rather than as the value, so no later read found it and every one went
+  back to the inner tier. A hit is now kept as a single-key read keeps it, for `LocalMaxExpirationDisconnected` while
+  the inner tier is disconnected.
 
 - **The key prefix no longer depends on `RedisCacheOptions.KeyPrefix` being set.** A connector whose `IDatabase` is
   wrapped with `WithKeyPrefix` stores every key under that prefix, and two places need it: the stream maintainer, to

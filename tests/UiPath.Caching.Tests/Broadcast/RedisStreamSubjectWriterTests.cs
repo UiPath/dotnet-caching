@@ -2,6 +2,7 @@ using System.Collections.Concurrent;
 using System.Threading.Channels;
 using Microsoft.Extensions.Logging;
 using NSubstitute.ExceptionExtensions;
+using NSubstitute.Extensions;
 using NSubstitute.ReceivedExtensions;
 using StackExchange.Redis;
 using UiPath.Caching.Telemetry;
@@ -230,6 +231,289 @@ public class RedisStreamSubjectWriterTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task A_group_lost_after_it_was_read_reports_missed_messages_once()
+    {
+        ScriptsUnavailable();
+        var reads = 0;
+        _database.StreamReadGroupAsync(_context.Topic, _context.ConsumerGroup, _context.ConsumerName, ">", _context.PollBatchSize)
+            .ReturnsForAnyArgs(_ => Interlocked.Increment(ref reads) == 1
+                ? Task.FromResult(Array.Empty<StreamEntry>())
+                : Task.FromException<StreamEntry[]>(new RedisException("NOGROUP No such key or consumer group")));
+        _database.StreamCreateConsumerGroupAsync(_context.Topic, _context.ConsumerGroup, Arg.Any<RedisValue?>()).ReturnsForAnyArgs(false);
+        var missed = 0;
+
+        using var sut = CreateSut(Channel.CreateUnbounded<ICacheEvent>().Writer, _logger, onMessagesMissed: () => Interlocked.Increment(ref missed));
+
+        (await WaitUntil(() => Volatile.Read(ref reads) >= 4)).Should().BeTrue();
+        Volatile.Read(ref missed).Should().Be(1, "the group is not read again in between");
+    }
+
+    [Fact]
+    public async Task A_connection_seen_down_is_checked_for_a_gap_before_the_next_read()
+    {
+        var connected = 1;
+        var offlineChecks = 0;
+        var readsAfterOutage = 0;
+        var gapChecks = 0;
+        var checkedFirst = false;
+        _database.StreamReadGroupAsync(_context.Topic, _context.ConsumerGroup, _context.ConsumerName, ">", _context.PollBatchSize)
+            .ReturnsForAnyArgs(_ =>
+            {
+                if (Volatile.Read(ref offlineChecks) > 0 && Interlocked.Increment(ref readsAfterOutage) == 1)
+                {
+                    Volatile.Write(ref checkedFirst, Volatile.Read(ref gapChecks) > 0);
+                }
+
+                return Task.FromResult(Array.Empty<StreamEntry>());
+            });
+        _database.Configure().StreamInfoAsync(_context.Topic).ReturnsForAnyArgs(_ =>
+            {
+                Interlocked.Increment(ref gapChecks);
+                return Task.FromResult(default(StreamInfo));
+            });
+        _database.Configure().StreamGroupInfoAsync(_context.Topic).ReturnsForAnyArgs(Task.FromResult(Array.Empty<StreamGroupInfo>()));
+        ScriptsUnavailable();
+        var connectionState = _fixture.Create<IConnectionState>();
+        connectionState.IsConnected.Returns(_ =>
+        {
+            if (Volatile.Read(ref connected) == 1)
+            {
+                return true;
+            }
+
+            Interlocked.Increment(ref offlineChecks);
+            return false;
+        });
+        var redis = _fixture.Create<IRedisConnector>();
+        redis.Database.Returns(_database);
+
+        using var sut = new RedisStreamSubjectWriter<ICacheEvent>(
+            _context,
+            connectionState,
+            redis,
+            Channel.CreateUnbounded<ICacheEvent>().Writer,
+            _formatter,
+            _logger,
+            _fixture.Create<ICachingTelemetryProvider>(),
+            _fixture.Create<IRedisProfiler>(),
+            new TimedFetchWaiter(_pollInterval),
+            () => { },
+            _cancellationTokenSource.Token);
+
+        (await WaitUntil(() => _database.ReceivedCalls().Any(c => c.GetMethodInfo().Name == nameof(IDatabase.StreamReadGroupAsync)))).Should().BeTrue();
+        Volatile.Write(ref connected, 0);
+        (await WaitUntil(() => Volatile.Read(ref offlineChecks) > 0)).Should().BeTrue();
+        Volatile.Write(ref connected, 1);
+
+        (await WaitUntil(() => Volatile.Read(ref readsAfterOutage) > 0)).Should().BeTrue();
+        Volatile.Read(ref checkedFirst).Should().BeTrue("the restored event may not have fired yet");
+    }
+
+    [Fact]
+    public async Task A_recovery_raised_during_a_gap_check_is_checked_before_the_next_read()
+    {
+        var gapChecks = 0;
+        var readBetweenChecks = false;
+        var connectionState = _fixture.Create<IConnectionState>();
+        connectionState.IsConnected.Returns(true);
+        _database.StreamReadGroupAsync(_context.Topic, _context.ConsumerGroup, _context.ConsumerName, ">", _context.PollBatchSize)
+            .ReturnsForAnyArgs(_ =>
+            {
+                if (Volatile.Read(ref gapChecks) == 1)
+                {
+                    Volatile.Write(ref readBetweenChecks, true);
+                }
+
+                return Task.FromResult(Array.Empty<StreamEntry>());
+            });
+        _database.Configure().StreamInfoAsync(_context.Topic).ReturnsForAnyArgs(_ =>
+        {
+            if (Interlocked.Increment(ref gapChecks) == 1)
+            {
+                connectionState.OnConnectionRestored += Raise.Event<EventHandler>(connectionState, EventArgs.Empty);
+            }
+
+            return Task.FromResult(default(StreamInfo));
+        });
+        _database.Configure().StreamGroupInfoAsync(_context.Topic).ReturnsForAnyArgs(Task.FromResult(Array.Empty<StreamGroupInfo>()));
+        ScriptsUnavailable();
+        var redis = _fixture.Create<IRedisConnector>();
+        redis.Database.Returns(_database);
+
+        using var sut = new RedisStreamSubjectWriter<ICacheEvent>(
+            _context,
+            connectionState,
+            redis,
+            Channel.CreateUnbounded<ICacheEvent>().Writer,
+            _formatter,
+            _logger,
+            _fixture.Create<ICachingTelemetryProvider>(),
+            _fixture.Create<IRedisProfiler>(),
+            new TimedFetchWaiter(_pollInterval),
+            () => { },
+            _cancellationTokenSource.Token);
+
+        (await WaitUntil(() => _database.ReceivedCalls().Any(c => c.GetMethodInfo().Name == nameof(IDatabase.StreamReadGroupAsync)))).Should().BeTrue();
+        connectionState.OnConnectionRestored += Raise.Event<EventHandler>(connectionState, EventArgs.Empty);
+
+        (await WaitUntil(() => Volatile.Read(ref gapChecks) >= 2)).Should().BeTrue("the second recovery came after the first check began");
+        Volatile.Read(ref readBetweenChecks).Should().BeFalse("a read in between moves the group past the entries the second check compares");
+    }
+
+    [Theory]
+    [InlineData("NOPERM this user has no permissions to run the 'xinfo|stream' command")]
+    [InlineData("ERR unknown command 'XINFO'")]
+    public async Task A_denied_gap_check_reports_a_loss_and_keeps_reading(string error)
+    {
+        var connectionState = _fixture.Create<IConnectionState>();
+        connectionState.IsConnected.Returns(true);
+        var reads = 0;
+        _database.StreamReadGroupAsync(_context.Topic, _context.ConsumerGroup, _context.ConsumerName, ">", _context.PollBatchSize)
+            .ReturnsForAnyArgs(_ =>
+            {
+                Interlocked.Increment(ref reads);
+                return Task.FromResult(Array.Empty<StreamEntry>());
+            });
+        ScriptsUnavailable();
+        _database.Configure().StreamInfoAsync(_context.Topic).ReturnsForAnyArgs(Task.FromException<StreamInfo>(error.StartsWith("ERR", StringComparison.Ordinal) ? UnknownCommandError(error) : new RedisServerException(RedisErrorKind.None, CommandFlags.None, error)));
+        var redis = _fixture.Create<IRedisConnector>();
+        redis.Database.Returns(_database);
+        var missed = 0;
+
+        using var sut = new RedisStreamSubjectWriter<ICacheEvent>(
+            _context,
+            connectionState,
+            redis,
+            Channel.CreateUnbounded<ICacheEvent>().Writer,
+            _formatter,
+            _logger,
+            _fixture.Create<ICachingTelemetryProvider>(),
+            _fixture.Create<IRedisProfiler>(),
+            new TimedFetchWaiter(_pollInterval),
+            () => Interlocked.Increment(ref missed),
+            _cancellationTokenSource.Token);
+
+        (await WaitUntil(() => Volatile.Read(ref reads) > 0)).Should().BeTrue();
+        connectionState.OnConnectionRestored += Raise.Event<EventHandler>(connectionState, EventArgs.Empty);
+        (await WaitUntil(() => Volatile.Read(ref missed) == 1)).Should().BeTrue("a loss cannot be ruled out without XINFO");
+        var readsAfterLoss = Volatile.Read(ref reads);
+
+        (await WaitUntil(() => Volatile.Read(ref reads) > readsAfterLoss + 2)).Should().BeTrue("the denied check must not stop consumption");
+        Volatile.Read(ref missed).Should().Be(1);
+    }
+
+    [Fact]
+    public async Task Scripts_refused_by_the_client_fall_back_to_checking_and_reading_apart()
+    {
+        var connectionState = _fixture.Create<IConnectionState>();
+        connectionState.IsConnected.Returns(true);
+        _database.StreamReadGroupAsync(_context.Topic, _context.ConsumerGroup, _context.ConsumerName, ">", _context.PollBatchSize)
+            .ReturnsForAnyArgs(Task.FromResult(Array.Empty<StreamEntry>()));
+        _database.Configure().ScriptEvaluateAsync(Arg.Any<string>(), Arg.Any<RedisKey[]>(), Arg.Any<RedisValue[]>(), Arg.Any<CommandFlags>())
+            .ReturnsForAnyArgs(Task.FromException<RedisResult>(new RedisCommandException("This operation has been disabled in the command-map and cannot be used: EVALSHA")));
+        var infos = 0;
+        _database.Configure().StreamInfoAsync(_context.Topic).ReturnsForAnyArgs(_ =>
+        {
+            Interlocked.Increment(ref infos);
+            return Task.FromResult(default(StreamInfo));
+        });
+        _database.Configure().StreamGroupInfoAsync(_context.Topic).ReturnsForAnyArgs(Task.FromResult(Array.Empty<StreamGroupInfo>()));
+        var redis = _fixture.Create<IRedisConnector>();
+        redis.Database.Returns(_database);
+
+        using var sut = new RedisStreamSubjectWriter<ICacheEvent>(
+            _context,
+            connectionState,
+            redis,
+            Channel.CreateUnbounded<ICacheEvent>().Writer,
+            _formatter,
+            _logger,
+            _fixture.Create<ICachingTelemetryProvider>(),
+            _fixture.Create<IRedisProfiler>(),
+            new TimedFetchWaiter(_pollInterval),
+            () => { },
+            _cancellationTokenSource.Token);
+
+        (await WaitUntil(() => _database.ReceivedCalls().Any(c => c.GetMethodInfo().Name == nameof(IDatabase.StreamReadGroupAsync)))).Should().BeTrue();
+        connectionState.OnConnectionRestored += Raise.Event<EventHandler>(connectionState, EventArgs.Empty);
+
+        (await WaitUntil(() => Volatile.Read(ref infos) > 0)).Should().BeTrue("a command map that disables scripts must not stop the gap check");
+    }
+
+    [Fact]
+    public async Task A_read_after_a_partial_batch_is_checked_for_a_gap()
+    {
+        _formatter.Decode(Arg.Any<ReadOnlyMemory<byte>>()).Returns(_ => new TestCacheEvent { Valid = true, Source = new Uri("urn:other") });
+        SetupSingleBatch([new StreamEntry("1-0", [new NameValueEntry(_fieldName, "a")])]);
+        var scripts = 0;
+        _database.Configure().ScriptEvaluateAsync(Arg.Any<string>(), Arg.Any<RedisKey[]>(), Arg.Any<RedisValue[]>(), Arg.Any<CommandFlags>())
+            .ReturnsForAnyArgs(_ =>
+            {
+                Interlocked.Increment(ref scripts);
+                return Task.FromResult(UntrimmedReply());
+            });
+
+        using var sut = CreateSut(Channel.CreateUnbounded<ICacheEvent>().Writer, _logger);
+
+        (await WaitUntil(() => Volatile.Read(ref scripts) > 0)).Should().BeTrue("a trim can reach unread entries between any two polls");
+    }
+
+    [Fact]
+    public async Task A_pending_gap_check_reads_in_the_same_script()
+    {
+        var connectionState = _fixture.Create<IConnectionState>();
+        connectionState.IsConnected.Returns(true);
+        _database.StreamReadGroupAsync(_context.Topic, _context.ConsumerGroup, _context.ConsumerName, ">", _context.PollBatchSize)
+            .ReturnsForAnyArgs(Task.FromResult(Array.Empty<StreamEntry>()));
+        var scripts = 0;
+        _database.Configure().ScriptEvaluateAsync(Arg.Any<string>(), Arg.Any<RedisKey[]>(), Arg.Any<RedisValue[]>(), Arg.Any<CommandFlags>())
+            .ReturnsForAnyArgs(_ =>
+            {
+                Interlocked.Increment(ref scripts);
+                return Task.FromResult(UntrimmedReply());
+            });
+        var redis = _fixture.Create<IRedisConnector>();
+        redis.Database.Returns(_database);
+
+        using var sut = new RedisStreamSubjectWriter<ICacheEvent>(
+            _context,
+            connectionState,
+            redis,
+            Channel.CreateUnbounded<ICacheEvent>().Writer,
+            _formatter,
+            _logger,
+            _fixture.Create<ICachingTelemetryProvider>(),
+            _fixture.Create<IRedisProfiler>(),
+            new TimedFetchWaiter(_pollInterval),
+            () => { },
+            _cancellationTokenSource.Token);
+
+        (await WaitUntil(() => _database.ReceivedCalls().Any(c => c.GetMethodInfo().Name == nameof(IDatabase.StreamReadGroupAsync)))).Should().BeTrue();
+        connectionState.OnConnectionRestored += Raise.Event<EventHandler>(connectionState, EventArgs.Empty);
+
+        (await WaitUntil(() => Volatile.Read(ref scripts) > 0)).Should().BeTrue();
+        _database.ReceivedCalls().Should().NotContain(c => c.GetMethodInfo().Name == nameof(IDatabase.StreamInfoAsync), "a trim must not land between a check and the read it guards");
+    }
+
+    [Fact]
+    public async Task A_group_missing_before_the_first_read_reports_nothing()
+    {
+        var reads = 0;
+        _database.StreamReadGroupAsync(_context.Topic, _context.ConsumerGroup, _context.ConsumerName, ">", _context.PollBatchSize)
+            .ReturnsForAnyArgs(_ =>
+            {
+                Interlocked.Increment(ref reads);
+                return Task.FromException<StreamEntry[]>(new RedisException("NOGROUP No such key or consumer group"));
+            });
+        var missed = 0;
+
+        using var sut = CreateSut(Channel.CreateUnbounded<ICacheEvent>().Writer, _logger, onMessagesMissed: () => Interlocked.Increment(ref missed));
+
+        (await WaitUntil(() => Volatile.Read(ref reads) >= 3)).Should().BeTrue();
+        Volatile.Read(ref missed).Should().Be(0, "nothing was read through the group yet");
+    }
+
+    [Fact]
     public async Task NOGROUP_recovery_swallows_BUSYGROUP_when_group_already_exists()
     {
         const string BusyGroupMessage = "BUSYGROUP Consumer Group name already exists";
@@ -348,6 +632,7 @@ public class RedisStreamSubjectWriterTests : IAsyncLifetime
             _fixture.Create<ICachingTelemetryProvider>(),
             _fixture.Create<IRedisProfiler>(),
             new TimedFetchWaiter(_pollInterval),
+            () => { },
             _cancellationTokenSource.Token);
 
         await loggedCritical.Task.WaitAsync(WaitTimeout, TestContext.Current.CancellationToken);
@@ -589,7 +874,7 @@ public class RedisStreamSubjectWriterTests : IAsyncLifetime
         _consumerName = _fixture.Create<string>();
         _consumerGroup = _fixture.Create<string>();
         _sourceUri = new Uri("urn:" + _fixture.Create<string>());
-        _pollBatchSize = _fixture.Create<int>();
+        _pollBatchSize = 100;
         _pollInterval = DefaultPollInterval;
         _context = new RedisStreamContext(_topic, _fieldName, _consumerName, _consumerGroup, _sourceUri, _pollBatchSize, _pollInterval, false, true);
         _fixture.Inject(_context);
@@ -607,6 +892,10 @@ public class RedisStreamSubjectWriterTests : IAsyncLifetime
 
         _fixture.Inject(_formatter);
         _fixture.Inject<IFetchWaiter>(new TimedFetchWaiter(_pollInterval));
+        _database.Configure().ScriptEvaluateAsync(Arg.Any<string>(), Arg.Any<RedisKey[]>(), Arg.Any<RedisValue[]>(), Arg.Any<CommandFlags>())
+            .ReturnsForAnyArgs(_ => Task.FromResult(UntrimmedReply()));
+        _database.Configure().StreamInfoAsync(Arg.Any<RedisKey>()).ReturnsForAnyArgs(Task.FromResult(default(StreamInfo)));
+        _database.Configure().StreamGroupInfoAsync(Arg.Any<RedisKey>()).ReturnsForAnyArgs(Task.FromResult(Array.Empty<StreamGroupInfo>()));
         return ValueTask.CompletedTask;
     }
 
@@ -628,6 +917,13 @@ public class RedisStreamSubjectWriterTests : IAsyncLifetime
     private static RedisServerException UnknownCommandError(string message) =>
         new(RedisErrorKind.UnknownCommand, CommandFlags.None, message);
 
+    private static RedisResult UntrimmedReply() => RedisResult.Create(
+    [
+        RedisResult.Create(new RedisValue[] { "length", 0, "last-generated-id", "1-0", "entries-added", 1 }),
+        RedisResult.Create([RedisResult.Create(new RedisValue[] { "name", "group", "last-delivered-id", "1-0", "entries-read", 1 })]),
+        RedisResult.Create(RedisValue.Null),
+    ]);
+
     private void SetupSingleBatch(StreamEntry[] entries)
     {
         var emitted = 0;
@@ -635,7 +931,11 @@ public class RedisStreamSubjectWriterTests : IAsyncLifetime
             .ReturnsForAnyArgs(_ => ++emitted == 1 ? entries : []);
     }
 
-    private RedisStreamSubjectWriter<ICacheEvent> CreateSut(ChannelWriter<ICacheEvent> writer, ILogger logger, ICachingTelemetryProvider? telemetry = null)
+    private void ScriptsUnavailable() =>
+        _database.Configure().ScriptEvaluateAsync(Arg.Any<string>(), Arg.Any<RedisKey[]>(), Arg.Any<RedisValue[]>(), Arg.Any<CommandFlags>())
+            .ReturnsForAnyArgs(Task.FromException<RedisResult>(UnknownCommandError("ERR unknown command 'EVALSHA'")));
+
+    private RedisStreamSubjectWriter<ICacheEvent> CreateSut(ChannelWriter<ICacheEvent> writer, ILogger logger, ICachingTelemetryProvider? telemetry = null, Action? onMessagesMissed = null)
     {
         var connectionState = _fixture.Create<IConnectionState>();
         connectionState.IsConnected.Returns(true);
@@ -651,6 +951,7 @@ public class RedisStreamSubjectWriterTests : IAsyncLifetime
             telemetry ?? _fixture.Create<ICachingTelemetryProvider>(),
             _fixture.Create<IRedisProfiler>(),
             new TimedFetchWaiter(_pollInterval),
+            onMessagesMissed ?? (() => { }),
             _cancellationTokenSource.Token);
     }
 

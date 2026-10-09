@@ -76,8 +76,10 @@ public sealed partial class RedisStreamsTopic<T> : ITopic<T>
         }
         _context = GetContext(topicKey, cacheOptions, streamOptions);
         var capacity = ChannelHelper.CalculateBoundedCapacity(streamOptions.ConsumerCapacity, streamOptions.PollBatchSize);
-        var channel = ChannelHelper.Create<T>(streamOptions.ConsumerCapacity < 0, capacity, streamOptions.FullMode);
-        _subscriber = new RedisStreamSubjectWriter<T>(_context, _connectionState, _redis, channel, _formatter, _logger, _cachingTelemetryProvider, redisProfiler, _waiter, _stopTokenSource.Token);
+        // Run later on the pool, by which time the writer the drop reports through is in place.
+        var dropped = new DroppedEvents(topicKey, () => _subscriber!.ReportLoss(), _logger);
+        var channel = ChannelHelper.Create<T>(streamOptions.ConsumerCapacity < 0, capacity, streamOptions.FullMode, _ => dropped.Dropped());
+        _subscriber = new RedisStreamSubjectWriter<T>(_context, _connectionState, _redis, channel, _formatter, _logger, _cachingTelemetryProvider, redisProfiler, _waiter, () => _subject.Invalidate(MissedEventsReason.Lost), _stopTokenSource.Token);
         _dispatcher = new EventDispatcher<T>(topicKey, channel, _subject, _logger, _stopTokenSource.Token);
     }
 
@@ -89,7 +91,17 @@ public sealed partial class RedisStreamsTopic<T> : ITopic<T>
     {
         this.ThrowIfDisposed(_disposed);
         CreateConsumerGroup();
-        return _subject.Subscribe(observer);
+
+        // Marked first, so a loss reported next expires this observer too; one reported while it joined may have expired
+        // the others before it, so it is told itself.
+        var mark = _subscriber.MarkSubscribed();
+        var subscription = _subject.Subscribe(observer);
+        if (_subscriber.LostSince(mark) && observer is IMissedEventsObserver missed)
+        {
+            TellMissed(missed, MissedEventsReason.Lost);
+        }
+
+        return subscription;
     }
 
     public async ValueTask<bool> PublishAsync(T @event, CancellationToken token = default)
@@ -160,6 +172,19 @@ public sealed partial class RedisStreamsTopic<T> : ITopic<T>
 
     internal RedisStreamsTopicOptions GetResolvedOptionsForTests() => _streamOptions;
 
+    /// <summary>Isolated like the subject's own notifications, so a throwing observer cannot fail the subscribe that registered it.</summary>
+    private void TellMissed(IMissedEventsObserver missed, MissedEventsReason reason)
+    {
+        try
+        {
+            missed.OnEventsMissed(reason);
+        }
+        catch (Exception ex)
+        {
+            LogObserverMissedEventsFailed(ex, TopicKey);
+        }
+    }
+
     private void CreateConsumerGroup()
     {
         if (!_consumerGroupCreated)
@@ -184,10 +209,7 @@ public sealed partial class RedisStreamsTopic<T> : ITopic<T>
     {
         try
         {
-            return _redis.Database.StreamCreateConsumerGroup(
-                _context.Topic,
-                _context.ConsumerGroup,
-                StreamPosition.NewMessages);
+            return ConsumerGroups.Create(_redis.Database, _context.Topic, _context.ConsumerGroup, StreamPosition.NewMessages);
         }
         catch (RedisServerException ex) when (ex.Message == StreamConstants.ConsumerGroupNameExistsErrorMessage)
         {
@@ -218,6 +240,9 @@ public sealed partial class RedisStreamsTopic<T> : ITopic<T>
 
     [LoggerMessage(Level = LogLevel.Debug, Message = "Published to topic {TopicKey} event {EventId} stream id {StreamId}")]
     private partial void LogPublished(TopicKey topicKey, string? eventId, RedisValue streamId);
+
+    [LoggerMessage(Level = LogLevel.Warning, Message = "Observer threw in OnEventsMissed on topic {TopicKey}; it stays subscribed.")]
+    private partial void LogObserverMissedEventsFailed(Exception ex, TopicKey topicKey);
 
     [LoggerMessage(Level = LogLevel.Warning, Message = "Error when publishing to topic {TopicKey} event {EventId}")]
     private partial void LogPublishError(Exception ex, TopicKey topicKey, string? eventId);
