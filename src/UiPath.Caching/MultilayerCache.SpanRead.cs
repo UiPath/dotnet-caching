@@ -40,8 +40,33 @@ internal sealed partial class MultilayerCache
     private bool TryGetLocal<T>(CacheKey cacheKey, CancellationToken token, [MaybeNullWhen(false)] out ICacheEntry<T> entry)
     {
         entry = default;
+#if NET9_0_OR_GREATER
         return cacheKey.Casing == CacheKey.DefaultCasing && TryGetLocal(cacheKey.Name.AsSpan(), token, out entry);
+#else
+        return TryGetLocalByName(cacheKey, out entry);
+#endif
     }
+
+#if !NET9_0_OR_GREATER
+    /// <summary>The same hit by the key's text, for .NET 8, which cannot look a span up: only under <see cref="DefaultCacheKeyStrategy"/>, which composes no new string, so a hit allocates nothing and binds no state.</summary>
+    private bool TryGetLocalByName<T>(CacheKey cacheKey, [MaybeNullWhen(false)] out ICacheEntry<T> entry)
+    {
+        entry = default;
+        if (cacheKey.IsNull
+            || cacheKey.Casing != CacheKey.DefaultCasing
+            || _entryBuilder.KeyStrategy is not DefaultCacheKeyStrategy
+            || !(_connectionState.IsConnected || _useLocalOnlyWhenDisconnected)
+            || _logger.IsEnabled(LogLevel.Trace)
+            || !_memoryCache.TryGetValue(cacheKey.Name, out var cached)
+            || cached is not ICacheEntry<T> found)
+        {
+            return false;
+        }
+
+        entry = found;
+        return true;
+    }
+#endif
 
     /// <summary>A local hit that <see cref="GetOrAddInternalAsync{T}"/> would return as found. False under a rehydrating policy, which needs the <see cref="CacheKey"/>, and for a cancelled token, which the key path reports through its task.</summary>
     private bool TryGetOrAddLocal<T>(ReadOnlySpan<char> cacheKey, CachePolicy policy, CancellationToken token, out T? value)

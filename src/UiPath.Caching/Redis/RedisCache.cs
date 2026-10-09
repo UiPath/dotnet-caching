@@ -4,7 +4,7 @@ using UiPath.Caching.Telemetry;
 
 namespace UiPath.Caching.Redis;
 
-internal sealed partial class RedisCache : RedisCacheBase, ICache
+internal sealed partial class RedisCache : RedisCacheBase, ICache, IStatefulCache, IGeneratedExpirationCache
 {
     private readonly ISerializerProxy<byte[]> _serializer;
     private readonly IMemorySerializerProxy? _memorySerializer;
@@ -17,6 +17,7 @@ internal sealed partial class RedisCache : RedisCacheBase, ICache
     private readonly Action<LoggedKey, RedisValue>? _auditKeySize;
     private readonly int _largeValueThreshold;
     private readonly bool _cacheNullValues;
+    private readonly InFlight<InFlightKey, object?> _generations = new();
 
     public RedisCache(
         IRedisConnector redis,
@@ -35,8 +36,8 @@ internal sealed partial class RedisCache : RedisCacheBase, ICache
         _logFailure = LogRedisCacheException;
         _serializer = serializer;
         _memorySerializer = serializer as IMemorySerializerProxy;
-        _read = resiliencePipelineProvider.Get(ResiliencePipelineNames.Read);
-        _write = resiliencePipelineProvider.Get(ResiliencePipelineNames.Write);
+        _read = new ConnectingPipeline(redis, resiliencePipelineProvider.Get(ResiliencePipelineNames.Read));
+        _write = new ConnectingPipeline(redis, resiliencePipelineProvider.Get(ResiliencePipelineNames.Write));
         _largeValueThreshold = cacheOptions.LargeValueThreshold;
         _redisKeyStrategy = (redisCacheOptions.RedisKeyStrategyFactory ?? new DefaultRedisKeyStrategyFactory()).Create(cacheOptions, GetType());
         _cacheEntryFactory = redisCacheOptions.EntryFactory ?? new CacheEntryFactory();
@@ -75,14 +76,32 @@ internal sealed partial class RedisCache : RedisCacheBase, ICache
         return GetCacheEntriesInternalAsync<T>(cacheKeys, token);
     }
 
-    public ValueTask<T?> GetOrAddAsync<T>(CacheKey cacheKey, Func<CancellationToken, Task<T?>> generator, CachePolicy? policy, CancellationToken token = default) =>
-        GetOrAddCoreAsync(cacheKey, generator, PolicyDuration(policy), policy, token);
+    public ValueTask<T?> GetOrAddAsync<T>(CacheKey cacheKey, Func<CancellationToken, Task<T?>> generator, CachePolicy? policy, CancellationToken token = default)
+    {
+        ArgumentNullException.ThrowIfNull(generator);
+        return GetOrAddCoreAsync<T, Func<CancellationToken, Task<T?>>>(cacheKey, generator, static (g, ct) => g(ct), PolicyDuration(policy), policy, token);
+    }
 
-    public ValueTask<T?> GetOrAddAsync<T>(CacheKey cacheKey, Func<CancellationToken, Task<T?>> generator, DateTimeOffset expiration, CachePolicy? policy, CancellationToken token = default) =>
-        GetOrAddCoreAsync(cacheKey, generator, CallerDuration(expiration), policy, token);
+    public ValueTask<T?> GetOrAddAsync<T>(CacheKey cacheKey, Func<CancellationToken, Task<T?>> generator, DateTimeOffset expiration, CachePolicy? policy, CancellationToken token = default)
+    {
+        ArgumentNullException.ThrowIfNull(generator);
+        return GetOrAddCoreAsync<T, Func<CancellationToken, Task<T?>>>(cacheKey, generator, static (g, ct) => g(ct), CallerDuration(expiration), policy, token);
+    }
 
-    public ValueTask<T?> GetOrAddAsync<T>(CacheKey cacheKey, Func<CancellationToken, Task<T?>> generator, TimeSpan expiration, CachePolicy? policy, CancellationToken token = default) =>
-        GetOrAddCoreAsync(cacheKey, generator, CallerDuration(expiration), policy, token);
+    public ValueTask<T?> GetOrAddAsync<T>(CacheKey cacheKey, Func<CancellationToken, Task<T?>> generator, TimeSpan expiration, CachePolicy? policy, CancellationToken token = default)
+    {
+        ArgumentNullException.ThrowIfNull(generator);
+        return GetOrAddCoreAsync<T, Func<CancellationToken, Task<T?>>>(cacheKey, generator, static (g, ct) => g(ct), CallerDuration(expiration), policy, token);
+    }
+
+    public ValueTask<T?> GetOrAddAsync<T, TState>(CacheKey cacheKey, TState state, Func<TState, CancellationToken, Task<T?>> generator, CachePolicy? policy, CancellationToken token = default) =>
+        GetOrAddCoreAsync(cacheKey, state, generator, PolicyDuration(policy), policy, token);
+
+    public ValueTask<T?> GetOrAddAsync<T, TState>(CacheKey cacheKey, TState state, Func<TState, CancellationToken, Task<T?>> generator, TimeSpan expiration, CachePolicy? policy, CancellationToken token = default) =>
+        GetOrAddCoreAsync(cacheKey, state, generator, CallerDuration(expiration), policy, token);
+
+    public ValueTask<T?> GetOrAddAsync<T, TState>(CacheKey cacheKey, TState state, Func<TState, CancellationToken, Task<T?>> generator, DateTimeOffset expiration, CachePolicy? policy, CancellationToken token = default) =>
+        GetOrAddCoreAsync(cacheKey, state, generator, CallerDuration(expiration), policy, token);
 
     /// <inheritdoc cref="ICache.GetOrAddAsync{T, TState}(KeyValuePair{CacheKey, TState}[], Func{TState[], CancellationToken, Task{KeyValuePair{TState, T}[]}}, CachePolicy?, CancellationToken)"/>
     public ValueTask<KeyValuePair<TState, T?>[]> GetOrAddAsync<T, TState>(KeyValuePair<CacheKey, TState>[] entries, Func<TState[], CancellationToken, Task<KeyValuePair<TState, T?>[]>> generator, CachePolicy? policy, CancellationToken token = default)
@@ -109,6 +128,13 @@ internal sealed partial class RedisCache : RedisCacheBase, ICache
         ArgumentNullException.ThrowIfNull(generator);
         var wrappedGenerator = WrapBatchWithFactoryTimeout<T, TState>(entries, generator, (policy ?? DefaultPolicy)?.FactoryTimeout);
         return BatchGetOrAdd.RunAsync<T, TState>(this, entries, wrappedGenerator, (pairs, t) => SetAsync(pairs, expiration, policy, t), policy, token);
+    }
+
+    public ValueTask<T?> GetOrAddWithExpirationAsync<T>(CacheKey cacheKey, Func<CancellationToken, Task<GeneratedValue<T>>> generator, CachePolicy? policy, CancellationToken token = default)
+    {
+        NotCacheableException.ThrowIfNotCacheable<T>();
+        ArgumentNullException.ThrowIfNull(generator);
+        return GetOrAddGeneratedAsync(cacheKey, ToRedisKey(cacheKey, token), generator, policy, token);
     }
 
     public ValueTask<bool> RefreshAsync<T>(CacheKey cacheKey, CachePolicy? policy, CancellationToken token = default) =>
@@ -189,15 +215,6 @@ internal sealed partial class RedisCache : RedisCacheBase, ICache
 
     private static KeyValuePair<CacheKey, T?>[] GetDefaultValues<T>(CacheKey[] keys) =>
         [.. keys.Select(k => new KeyValuePair<CacheKey, T?>(k, default))];
-
-    private Func<CancellationToken, Task<T?>> WrapWithFactoryTimeout<T>(Func<CancellationToken, Task<T?>> generator, TimeSpan? factoryTimeout, CacheKey cacheKey)
-    {
-        if (factoryTimeout is null || factoryTimeout.Value <= TimeSpan.Zero)
-        {
-            return generator;
-        }
-        return token => FactoryTimeout.RunAsync(generator, factoryTimeout, cacheKey, Name, Telemetry, token);
-    }
 
     private Func<TState[], CancellationToken, Task<KeyValuePair<TState, T?>[]>> WrapBatchWithFactoryTimeout<T, TState>(
         KeyValuePair<CacheKey, TState>[] entries,
@@ -283,18 +300,27 @@ internal sealed partial class RedisCache : RedisCacheBase, ICache
         return TryAddInternalAsync(cacheKey, ToRedisKey(cacheKey, token), value, duration, token);
     }
 
-    private ValueTask<T?> GetOrAddCoreAsync<T>(CacheKey cacheKey, Func<CancellationToken, Task<T?>> generator, TimeSpan duration, CachePolicy? policy, CancellationToken token)
+    private ValueTask<T?> GetOrAddCoreAsync<T, TState>(CacheKey cacheKey, TState state, Func<TState, CancellationToken, Task<T?>> generator, TimeSpan duration, CachePolicy? policy, CancellationToken token)
     {
         NotCacheableException.ThrowIfNotCacheable<T>();
         ArgumentNullException.ThrowIfNull(generator);
         var redisKey = ToRedisKey(cacheKey, token);
-        var wrappedGenerator = WrapWithFactoryTimeout(generator, (policy ?? DefaultPolicy)?.FactoryTimeout, cacheKey);
-        return GetOrAddInternalAsync(cacheKey, redisKey, wrappedGenerator, duration, token);
+        return GetOrAddInternalAsync(cacheKey, redisKey, state, generator, (policy ?? DefaultPolicy)?.FactoryTimeout, duration, token);
     }
 
-    private async ValueTask<T?> GetOrAddInternalAsync<T>(CacheKey cacheKey, RedisKey redisKey, Func<CancellationToken, Task<T?>> generator, TimeSpan expiration, CancellationToken token)
+    private ValueTask<T?> GetOrAddInternalAsync<T, TState>(CacheKey cacheKey, RedisKey redisKey, TState state, Func<TState, CancellationToken, Task<T?>> generator, TimeSpan? factoryTimeout, TimeSpan expiration, CancellationToken token)
     {
         NotCacheableException.ThrowIfNotCacheable<T>();
+        return ShareGenerationAsync<T, T?, (RedisCache Cache, CacheKey Key, RedisKey RedisKey, TState State, Func<TState, CancellationToken, Task<T?>> Generator, TimeSpan? FactoryTimeout, TimeSpan Expiration)>(
+            redisKey,
+            (this, cacheKey, redisKey, state, generator, factoryTimeout, expiration),
+            static (args, ct) => args.Cache.GenerateAndStoreAsync(args.Key, args.RedisKey, args.State, args.Generator, args.FactoryTimeout, args.Expiration, ct),
+            token);
+    }
+
+    private async ValueTask<T?> GenerateAndStoreAsync<T, TState>(CacheKey cacheKey, RedisKey redisKey, TState state, Func<TState, CancellationToken, Task<T?>> generator, TimeSpan? factoryTimeout, TimeSpan expiration, CancellationToken token)
+    {
+        // The one read of the run: every caller of the key shares it, a hit or a miss.
         var (found, cached) = await ReadGetOrAddProbeAsync<T>(cacheKey, redisKey, token).ConfigureAwait(false);
         if (found)
         {
@@ -302,7 +328,7 @@ internal sealed partial class RedisCache : RedisCacheBase, ICache
         }
 
         LogCacheMissed(Logged(cacheKey, redisKey, typeof(T)));
-        var ret = await generator(token).ConfigureAwait(false);
+        var ret = await RunGeneratorAsync(cacheKey, state, generator, factoryTimeout, token).ConfigureAwait(false);
 
         if (!IsDefault(ret) || _cacheNullValues)
         {
@@ -311,6 +337,57 @@ internal sealed partial class RedisCache : RedisCacheBase, ICache
 
         return ret;
     }
+
+    /// <summary>One run per key and type: concurrent callers join the run in progress, which reads Redis once and generates only on a miss, and share its result or failure; it runs on its own token, cancelled once every caller has cancelled.</summary>
+    private async ValueTask<TResult> ShareGenerationAsync<T, TResult, TArgs>(RedisKey redisKey, TArgs args, Func<TArgs, CancellationToken, ValueTask<TResult>> work, CancellationToken token) =>
+        (TResult)(await _generations.RunAsync(
+            new InFlightKey(redisKey.ToString(), typeof(T), null, null),
+            (Args: args, Work: work),
+            static async (state, run) => await state.Work(state.Args, run.Token).ConfigureAwait(false),
+            token).ConfigureAwait(false))!;
+
+    private ValueTask<T?> GetOrAddGeneratedAsync<T>(CacheKey cacheKey, RedisKey redisKey, Func<CancellationToken, Task<GeneratedValue<T>>> generator, CachePolicy? policy, CancellationToken token) =>
+        ShareGenerationAsync<T, T?, (RedisCache Cache, CacheKey Key, RedisKey RedisKey, Func<CancellationToken, Task<GeneratedValue<T>>> Generator, CachePolicy? Policy)>(
+            redisKey,
+            (this, cacheKey, redisKey, generator, policy),
+            static (args, ct) => args.Cache.GenerateExpiringAndStoreAsync(args.Key, args.RedisKey, args.Generator, args.Policy, ct),
+            token);
+
+    private async ValueTask<T?> GenerateExpiringAndStoreAsync<T>(CacheKey cacheKey, RedisKey redisKey, Func<CancellationToken, Task<GeneratedValue<T>>> generator, CachePolicy? policy, CancellationToken token)
+    {
+        var (found, cached) = await ReadGetOrAddProbeAsync<T>(cacheKey, redisKey, token).ConfigureAwait(false);
+        if (found)
+        {
+            return cached;
+        }
+
+        LogCacheMissed(Logged(cacheKey, redisKey, typeof(T)));
+        var generated = await RunGeneratorAsync(cacheKey, generator, static (g, ct) => g(ct), (policy ?? DefaultPolicy)?.FactoryTimeout, token).ConfigureAwait(false);
+
+        var duration = generated.Expiration is { } expiration ? Remaining(expiration) : PolicyDuration(policy);
+        if (duration is { } lifetime && (!IsDefault(generated.Value) || _cacheNullValues))
+        {
+            await SetInternalAsync(redisKey, generated.Value, lifetime, token).ConfigureAwait(false);
+        }
+
+        return generated.Value;
+    }
+
+    private TimeSpan? Remaining(DateTimeOffset expiration)
+    {
+        if (expiration == DateTimeOffset.MaxValue)
+        {
+            return TimeSpan.MaxValue;
+        }
+
+        var remaining = expiration - Clock.GetUtcNow();
+        return remaining > TimeSpan.Zero ? remaining : null;
+    }
+
+    private Task<TResult> RunGeneratorAsync<TResult, TState>(CacheKey cacheKey, TState state, Func<TState, CancellationToken, Task<TResult>> generator, TimeSpan? factoryTimeout, CancellationToken token) =>
+        factoryTimeout is null || factoryTimeout.Value <= TimeSpan.Zero
+            ? generator(state, token)
+            : FactoryTimeout.RunAsync(ct => generator(state, ct), factoryTimeout, cacheKey, Name, Telemetry, token);
 
     /// <summary>Borrowed memory is safe here because every write awaits its command and the connection copies the value while writing it; pooled memory goes back only then.</summary>
     private (RedisValue Value, SerializedPayload Payload) SerializeValue<T>(T? value)
@@ -459,6 +536,7 @@ internal sealed partial class RedisCache : RedisCacheBase, ICache
         var payloads = new SerializedPayload[keyValues.Length];
         try
         {
+            await EnsureConnectedAsync(token).ConfigureAwait(false);
             ThrowIfCrossSlot(Array.ConvertAll(keyValues, kv => kv.Key), redisKeys, typeof(T), _logger, nameof(SetAsync));
             var transaction = Database.CreateTransaction(asyncState: null);
 
@@ -619,6 +697,7 @@ internal sealed partial class RedisCache : RedisCacheBase, ICache
         var operation = StartOperation<T>();
         try
         {
+            await EnsureConnectedAsync(token).ConfigureAwait(false);
             ThrowIfCrossSlot(cacheKeys, redisKey, typeof(T), _logger, nameof(RemoveAsync));
             var response = await _write.ExecuteAsync(static (s, token) =>
             {
@@ -707,6 +786,7 @@ internal sealed partial class RedisCache : RedisCacheBase, ICache
         var reads = InitReads(redisKeys);
         try
         {
+            await EnsureConnectedAsync(token).ConfigureAwait(false);
             ThrowIfCrossSlot(keys, redisKeys, typeof(T), _logger, nameof(GetAsync));
             var values = await _read.ExecuteAsync(static (s, token) =>
             {
@@ -841,6 +921,7 @@ internal sealed partial class RedisCache : RedisCacheBase, ICache
         var reads = InitReads(redisKeys);
         try
         {
+            await EnsureConnectedAsync(token).ConfigureAwait(false);
             ThrowIfCrossSlot(keys, redisKeys, typeof(T), _logger, nameof(GetCacheEntriesAsync));
             var read = new StrongBox<StrongBox<(RedisValue[] Values, DateTimeOffset?[] Expirations)>?>();
             var committed = await _read.ExecuteAsync(static async (s, token) =>

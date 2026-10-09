@@ -8,6 +8,7 @@ internal sealed partial class MultilayerHashCache : MultilayerCacheBase, IHashCa
 {
     private readonly IHashCache _innerCache;
     private readonly InFlight<InFlightKey, object?> _innerReads = new();
+    private readonly InFlight<InFlightKey, object?> _generations = new();
     private readonly HashCacheEntryBuilder _entryBuilder;
     private readonly HashLocalMemorySetter _localMemorySetter;
 
@@ -403,13 +404,16 @@ internal sealed partial class MultilayerHashCache : MultilayerCacheBase, IHashCa
             return cacheEntry.Value ?? Empty<T>();
         }
 
-        var result = await RunUnderLocksAsync<ICacheEntry<IDictionary<string, T?>>>(
+        var lifetime = new LockLifetime();
+        var result = await RunUnderLocksAsync(
             cacheEntryOptions.CacheKey,
-            () => GetCacheEntryAsync<T>(cacheEntryOptions, policy),
-            e => e.Found,
-            ct => RunHashGeneratorAndStoreEntryAsync(cacheEntryOptions, generator, policy, ct),
+            (Cache: this, Options: cacheEntryOptions, Generator: generator, Policy: policy, Lifetime: lifetime),
+            static s => s.Cache.GetCacheEntryAsync<T>(s.Options, s.Policy),
+            static e => e.Found,
+            static (s, ct) => s.Cache.RunSharedAsync(s.Options, s.Generator, s.Policy, s.Lifetime, ct),
             token,
-            policyLock: policy.Lock).ConfigureAwait(false);
+            policy.Lock,
+            lifetime).ConfigureAwait(false);
         return result.Value ?? Empty<T>();
     }
 
@@ -462,12 +466,48 @@ internal sealed partial class MultilayerHashCache : MultilayerCacheBase, IHashCa
             entryType: typeof(T));
     }
 
-    private async ValueTask<ICacheEntry<IDictionary<string, T?>>> RunHashGeneratorAndStoreEntryAsync<T>(InternalHashCacheEntryOptions cacheEntryOptions, Func<CancellationToken, Task<IDictionary<string, T?>>> generator, CachePolicy policy, CancellationToken token)
+    /// <summary>Runs the generation as one run per key: a caller whose wait for the local lock timed out, or that arrives while it runs, joins it rather than starting another. Only the generator runs on the shared token; the write keeps the starting caller's. The starting caller's locks stay held until the run ends, even if that caller stops waiting first.</summary>
+    private async ValueTask<ICacheEntry<IDictionary<string, T?>>> RunSharedAsync<T>(InternalHashCacheEntryOptions options, Func<CancellationToken, Task<IDictionary<string, T?>>> generator, CachePolicy policy, LockLifetime lifetime, CancellationToken token)
+    {
+        if (!ResolveLocalLock(policy.Lock).Enabled)
+        {
+            return (ICacheEntry<IDictionary<string, T?>>)(await RunHashGeneratorAndStoreEntryAsync(options, generator, policy, new GenerationScope(token, null)).ConfigureAwait(false))!;
+        }
+
+        return (ICacheEntry<IDictionary<string, T?>>)(await _generations.RunAsync(
+            new InFlightKey(options.CacheKey.Name, typeof(T), null, null),
+            (Cache: this, Options: options, Generator: generator, Policy: policy, Lifetime: lifetime),
+            static (state, run) =>
+            {
+                state.Lifetime.Run = run;
+
+                // A run that ended in this process since the caller read the key left its value in the local tier, which it writes before it leaves the table.
+                return state.Cache.TryGetLocalEntry<T>(state.Options, out var current)
+                    ? new ValueTask<object?>(current)
+                    : state.Cache.RunHashGeneratorAndStoreEntryAsync(state.Options, state.Generator, state.Policy, new GenerationScope(run.Token, run));
+            },
+            token).ConfigureAwait(false))!;
+    }
+
+    /// <summary>A local hit only, never the inner tier: for a caller that has just taken a key, where the only thing that can have changed is a run of this process.</summary>
+    private bool TryGetLocalEntry<T>(InternalHashCacheEntryOptions options, [MaybeNullWhen(false)] out ICacheEntry<IDictionary<string, T?>> entry)
+    {
+        if ((_connectionState.IsConnected || _useLocalOnlyWhenDisconnected) && _memoryCache.TryGetValue(options.CacheKey.Name, out entry) && entry!.Found)
+        {
+            return true;
+        }
+
+        entry = default;
+        return false;
+    }
+
+    private async ValueTask<object?> RunHashGeneratorAndStoreEntryAsync<T>(InternalHashCacheEntryOptions cacheEntryOptions, Func<CancellationToken, Task<IDictionary<string, T?>>> generator, CachePolicy policy, GenerationScope scope)
     {
         LogCacheMissed(Logged(cacheEntryOptions, typeof(T)));
-        var ret = await InvokeFactoryAsync(cacheEntryOptions.CacheKey, generator, policy.FactoryTimeout, token).ConfigureAwait(false);
+        var ret = await InvokeFactoryAsync(cacheEntryOptions.CacheKey, generator, policy.FactoryTimeout, scope.Token).ConfigureAwait(false);
 
-        if (!IsNullOrEmpty(ret) || _multiLayerCacheOptions.CacheNullValues)
+        // A generator that ignores its token can finish after every caller left and a newer run took the key: its value must not replace theirs.
+        if ((!IsNullOrEmpty(ret) || _multiLayerCacheOptions.CacheNullValues) && !scope.IsAbandoned)
         {
             var innerCacheDisconnected = GetInnerCacheDisconnected();
             await InternalSetAsync(cacheEntryOptions, ret ?? Empty<T>(), innerCacheDisconnected, policy, keepRefused: true).ConfigureAwait(false);
@@ -551,11 +591,16 @@ internal sealed partial class MultilayerHashCache : MultilayerCacheBase, IHashCa
     }
 
     /// <summary>Reads the whole entry from the inner tier and keeps a hit locally; concurrent reads of one key share one inner read, and each caller filters its own fields.</summary>
-    private async ValueTask<ICacheEntry<IDictionary<string, T?>>> FetchInnerAsync<T>(InternalHashCacheEntryOptions options, CachePolicy policy) =>
+    private ValueTask<ICacheEntry<IDictionary<string, T?>>> FetchInnerAsync<T>(InternalHashCacheEntryOptions options, CachePolicy policy) =>
+        _innerCache is NullHashCache
+            ? _innerCache.GetCacheEntryAsync<T>(options.CacheKey, policy, options.Token)
+            : FetchSharedInnerAsync<T>(options, policy);
+
+    private async ValueTask<ICacheEntry<IDictionary<string, T?>>> FetchSharedInnerAsync<T>(InternalHashCacheEntryOptions options, CachePolicy policy) =>
         (ICacheEntry<IDictionary<string, T?>>)(await _innerReads.RunAsync(
             new InFlightKey(options.CacheKey.Name, typeof(T), policy.LocalExpiration, policy.LocalExpirationDisconnected),
             (Cache: this, Options: options, Policy: policy),
-            static async (state, run) => await state.Cache.FetchAndKeepAsync<T>(state.Options with { Token = run.Token }, state.Policy, run).ConfigureAwait(false),
+            static (state, run) => state.Cache.FetchAndKeepAsync<T>(state.Options.Token == run.Token ? state.Options : state.Options with { Token = run.Token }, state.Policy, run),
             options.Token).ConfigureAwait(false))!;
 
     private async ValueTask<object?> FetchAndKeepAsync<T>(InternalHashCacheEntryOptions options, CachePolicy policy, IInFlightRun run)

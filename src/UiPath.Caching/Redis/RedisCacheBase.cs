@@ -141,7 +141,7 @@ public abstract class RedisCacheBase : IConnectionState, IDisposable
     /// <summary>The key's expiration: EXPIRETIME on Redis 7, else the TTL added to now, under the same operation.</summary>
     protected async ValueTask<DateTimeOffset?> KeyExpireTimeAsync(IResiliencePipeline pipeline, TelemetryScope operation, IRedisKeyStrategy keyStrategy, CacheKey cacheKey, Action<Exception> logFailure, CancellationToken token)
     {
-        if (!SupportsExpireTime)
+        if (!await SupportsExpireTimeAsync(token).ConfigureAwait(false))
         {
             var timeToLive = await KeyTimeToLiveAsync(pipeline, operation, keyStrategy, cacheKey, logFailure, token).ConfigureAwait(false);
             return timeToLive.HasValue ? Clock.ToDateTimeOffset(timeToLive.Value) : null;
@@ -184,6 +184,24 @@ public abstract class RedisCacheBase : IConnectionState, IDisposable
             }
             _disposed = true;
         }
+    }
+
+    /// <summary>Waits for the first connect without blocking a thread; free once connected.</summary>
+    private protected ValueTask EnsureConnectedAsync(CancellationToken token) => _redis.ConnectAsync(token);
+
+    /// <summary>Waits for the first connect without blocking, since reading the server version connects; a connect that fails is left to the command, which logs it.</summary>
+    private protected async ValueTask<bool> SupportsExpireTimeAsync(CancellationToken token)
+    {
+        try
+        {
+            await _redis.ConnectAsync(token).ConfigureAwait(false);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            // GetVersion falls back to the configured version.
+        }
+
+        return SupportsExpireTime;
     }
 
     /// <summary>The key as a log line should show it. Nothing is rendered unless the line is written.</summary>

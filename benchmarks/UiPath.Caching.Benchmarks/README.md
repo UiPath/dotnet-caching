@@ -104,3 +104,23 @@ The host is the same as above, so a local Redis is still needed for it to start:
 ```powershell
 dotnet run --project benchmarks/UiPath.Caching.Benchmarks/UiPath.Caching.Benchmarks.csproj --framework net10.0 -c Release -- --filter '*LocalHitBenchmark*' --job short --inProcess
 ```
+
+## GetOrAdd Same-Key Benchmark
+
+`GetOrAddSameKeyBenchmark` calls `GetOrAddAsync` repeatedly on one key the local tier already holds, per tier
+(`InMemory`, `InMemoryRedis`), so the generator never runs and the cost is the call itself: by a constant string,
+by a string composed per call, by a `Span<char>` composed on the stack, with a capturing lambda, and with state
+and a static lambda, and through `GetOrAddWithExpirationAsync`. The allocation column is the point: the span key and the stateful overload are the ones
+that stay at zero where the string key and the closure allocate. A local Redis is needed for the host to start:
+
+```powershell
+dotnet run --project benchmarks/UiPath.Caching.Benchmarks/UiPath.Caching.Benchmarks.csproj --framework net10.0 -c Release -- --filter '*GetOrAddSameKeyBenchmark*' --job short --inProcess
+```
+
+`GetOrAddColdMissBenchmark` is the other end: one caller on a key the cache does not hold, `GetOrAddAsync` (and
+`GetOrAddWithExpirationAsync`) right after a `RemoveAsync`, so every call runs the generator and writes.
+`RemoveOnly` is the cost of the removal to subtract:
+
+```powershell
+dotnet run --project benchmarks/UiPath.Caching.Benchmarks/UiPath.Caching.Benchmarks.csproj --framework net10.0 -c Release -- --filter '*GetOrAddColdMissBenchmark*' --job short --inProcess
+```

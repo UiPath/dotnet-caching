@@ -26,6 +26,36 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
   library class, a bare `default` key, as in `cache.GetAsync<T>(default, policy)`, still binds to the `CacheKey`
   overload under a C# 13 compiler (.NET 9 SDK or later). Under an older compiler it is ambiguous (CS0121); cast it
   to `CacheKey`.
+  On a cache of a nullable value type, such as `ICache<Guid?>`, a generator that returns the non-nullable type fails to
+  infer (CS1503); pass the type argument, `GetOrAddAsync<Guid?>(...)`, or return `(Guid?)` from the generator.
+
+- **`GetOrAddAsync` with generator state.** `GetOrAddAsync<T, TState>(key, state, (state, ct) => ..., ...)` over `ICache`
+  and `ICache<T>`, by `CacheKey` or `Span<char>`, with the same expiration variants as the closure overloads. A static
+  lambda and its state replace a capturing lambda, so a call that hits the local tier allocates no closure and no
+  delegate. The built-in caches implement the new `IStatefulCache` and `IStatefulCache<T>`, and `ISpanKeyCache` and
+  `ISpanKeyCache<T>` gain the span forms; `StatefulCacheExtensions` and `SpanKeyExtensions` prefer them and otherwise
+  close over the state and call the existing overload, so a mock or an outside `ICache` keeps working. The Redis
+  provider builds the factory-timeout wrapper only on a miss.
+
+- **`RemoveAsync` by `Span<char>`.** `SpanKeyExtensions.RemoveAsync` over `ICache`, `ICache<T>`, `IHashCache` and
+  `IHashCache<T>` removes by the key's text, normalized as `new CacheKey(text)` normalizes it, so a caller that
+  formats its key on the stack need not build the `CacheKey` itself. Every tier needs the key as a string, so the
+  extension builds it and calls the `CacheKey` overload; there is no capability interface to implement.
+
+- **A generator that returns its value's expiration.** `GetOrAddWithExpirationAsync` takes a
+  `Func<CancellationToken, Task<GeneratedValue<T>>>`; `GeneratedValue<T>(Value, Expiration)` carries the instant the
+  value stops being valid, for a token whose lifetime is in the token. The entry is stored until that instant; a null
+  `Expiration` takes the policy's lifetime, and one that has already passed returns the value without storing it.
+  Single-flight, the locks and `FactoryTimeout` apply as they do to `GetOrAddAsync`; rehydration does not, since there
+  is no configured lifetime to measure a threshold against. It is a separate method name because `GetOrAddAsync<T>`
+  on `ICache` would bind first and cache the `GeneratedValue<T>` itself. The built-in caches implement
+  `IGeneratedExpirationCache` and `IGeneratedExpirationCache<T>`. On a cache that does not (a mock, an outside
+  implementation) the extension reads, and on a miss runs the generator and sets its value with the returned
+  expiration, or with the policy's lifetime when there is none; it does not coalesce. A cached default value (`0`,
+  `false`, a cached `null`) is a hit on `ICache`; the typed `ICache<T>` has no entry read, so it asks
+  `ContainsAsync` when the value reads as the default. It has no clock to tell that an
+  expiration has passed, so a set that rejects it with `ArgumentOutOfRangeException` leaves the value returned and not
+  stored, as the capable caches do. Moq and NSubstitute proxies take this path.
 
 - **`CacheKey(ReadOnlySpan<char>)`** and `CacheKey(ReadOnlySpan<char>, CacheKeyCasing)` build a key from text that
   is not yet a string, normalizing while copying, so a key formatted on the stack costs one string rather than two.
@@ -45,6 +75,50 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
   that never reads an expiration, such as `RedisSetCache`, does not connect.
 
 ### Changed
+
+- **The first Redis connect no longer blocks a thread.** `RedisConnector.Database` waits for the first connect
+  synchronously, so on a new instance every concurrent first call held a thread-pool thread until it finished. The Redis
+  caches, the distributed lock and the health check now wait for the connector with `ConnectAsync` before they read
+  `Database`; the cache commands do it inside the resilience pipeline, so the wait is cancellable and bounded by the
+  request timeout, like the command. `RedisConnector.ConnectAsync` costs nothing once connected. The synchronous
+  `Database` and `Subscriber` accessors are unchanged for other callers. `WarmUpOnStart` stays `false`: it opens a
+  connection, and runs any authentication configurator, at every host start, which a consumer that never reaches Redis
+  should not pay; with the wait asynchronous, the first call no longer needs it to stay off the thread pool.
+
+- **The Redis provider's `GetOrAddAsync` reads Redis once and runs one generator per key at a time.** Concurrent
+  misses on one key in a process each ran the generator, since the Redis provider has no lock, and every caller read
+  the key first. Every caller now goes straight to one run per key: the run reads Redis once, returns what it finds
+  (concurrent hits share that one read), and on a miss generates and writes once. Callers that arrive meanwhile join
+  the run and take its result or its failure. The run is on its own token, cancelled once every caller has cancelled,
+  and `FactoryTimeout` applies to it. The first caller's generator and expiration are the ones used. N concurrent
+  callers on a key send one `GET` (and one `SET` on a miss) instead of N, and a read that failed counts as a miss for all of
+  them, as before. The hit and miss counts record the reads sent, one per run, not one per caller. This also holds while
+  Redis is unreachable, when every call is a miss. The Redis provider takes no distributed lock, so none is involved;
+  the multilayer provider's `Lock` settings are unchanged.
+
+- **A caller whose wait for the local lock times out joins the generator in flight.** `GetOrAddAsync` on the multilayer
+  and hash caches used to run the caller's own generator once `LocalLockTimeout` (500 ms by default) expired, so a
+  loader slower than that was run by every caller that arrived while it did. The caller now re-reads the cache as before
+  and then joins the load running for the key, sharing its result or its failure, and starts its own only when none is
+  running. The shared load runs on its own token: a caller that cancels stops waiting, and the load is cancelled once
+  every caller has. **Breaking** in what it observes: callers that waited out the lock no longer run separate
+  generators, so a generator that failed for one of them now fails them all, and the generator that runs is the first
+  caller's, with its expiration and policy. With `LocalLockEnabled` off nothing is shared, as before. Batch
+  `GetOrAddAsync` does the same per key: a key whose generator run is in flight, from a single-key call or another
+  batch, is joined, including by a batch that only partly overlaps it, and the generator receives only the keys no run
+  covers. A joined key shares the run's failure; if the batch that started the run cancels, its joiners re-read the
+  cache and take the key over together, one of them generating it for the rest. A single-key call joins a batch's run
+  for its key the same way, and a batch and a single-key call never generate one key twice. A caller that takes a
+  key looks it up once more in the local tier, and only there, so a key another run of this process finished since the
+  caller's read is returned, to its joiners too, and not generated; a batch generates only the keys still missing. A run
+  writes the local tier before it leaves the table, which is what makes that lookup enough. With the local tier
+  disabled or the entry evicted the lookup finds nothing and the key is generated once more, after the earlier run, never
+  beside it. The Redis-only provider has no local tier; it reads Redis once per run instead. The starting caller's locks
+  stay held until the shared load ends, even when that caller cancels and stops waiting, in the hash cache as in the
+  multilayer cache. A load every caller has left does not store its result, so a generator that ignores its
+  cancellation cannot overwrite what a newer load wrote. A batch that stops early, whether it failed or was
+  cancelled, stops counting as a waiter on the loads it joined, so they are cancelled once nobody else waits. The hash
+  cache has no batch overload.
 
 - **A Redis outage is served from the local tier by default.** `CacheOptions.ConnectionMonitorEnabled` and
   `UseLocalOnlyWhenDisconnected` now default to `true`: while the inner tier is disconnected, reads are served from
