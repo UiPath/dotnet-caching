@@ -174,11 +174,13 @@ public sealed class RedisConnector : IRedisConnector
 
     public void ForceReconnect() => ForceReconnect(_lazyCacheConnectionMultiplexer);
 
-    public async ValueTask ConnectAsync(CancellationToken cancellationToken = default)
+    public ValueTask ConnectAsync(CancellationToken cancellationToken = default)
     {
-        var task = GetConnectionTask();
-        _ = task.ContinueWith(static t => _ = t.Exception, CancellationToken.None, TaskContinuationOptions.OnlyOnFaulted | TaskContinuationOptions.ExecuteSynchronously, TaskScheduler.Default);
-        await task.WaitAsync(cancellationToken).ConfigureAwait(false);
+        // Every command passes through here, so a connected connector must cost nothing.
+        var lazy = _lazyCacheConnectionMultiplexer;
+        return !_disposed && lazy.IsValueCreated && lazy.Value.IsCompletedSuccessfully
+            ? ValueTask.CompletedTask
+            : WaitForConnectionAsync(cancellationToken);
     }
 
     public void Dispose()
@@ -447,6 +449,13 @@ public sealed class RedisConnector : IRedisConnector
         }
 
         return multiplexer;
+    }
+
+    private async ValueTask WaitForConnectionAsync(CancellationToken cancellationToken)
+    {
+        var task = GetConnectionTask();
+        _ = task.ContinueWith(static t => _ = t.Exception, CancellationToken.None, TaskContinuationOptions.OnlyOnFaulted | TaskContinuationOptions.ExecuteSynchronously, TaskScheduler.Default);
+        await task.WaitAsync(cancellationToken).ConfigureAwait(false);
     }
 
     private Task<IConnectionMultiplexer> GetConnectionTask()

@@ -26,6 +26,11 @@ internal abstract class MemoryCacheSetter(
     // A custom factory cannot be told the cache keeps entries over a subscription gap, so it is handed a topic that hides one.
     private readonly System.Runtime.CompilerServices.ConditionalWeakTable<ITopic<ICacheEvent>, ITopic<ICacheEvent>> _gapFiltered = [];
 
+    private long _writes;
+
+    /// <summary>How many local writes have committed, counted as each one returns: a caller that read it before its own read of the tier, and missed a value, sees it move once that value's write has returned.</summary>
+    internal long Writes => Volatile.Read(ref _writes);
+
     protected TimeProvider Clock { get; } = clock;
 
     private ICacheEntrySizeProvider SizeProvider { get; } = memoryCacheOptions.SizeProvider ?? new DefaultCacheEntrySizeProvider();
@@ -42,15 +47,20 @@ internal abstract class MemoryCacheSetter(
             token.RegisterChangeCallback(RefreshMetadata, state);
             // Filled in place rather than through MemoryCacheEntryOptions, which is copied into the entry and discarded.
             // The entry is committed when disposed, and only once its value is set, so a throw before that stores nothing.
-            using var entry = memoryCache.CreateEntry(options.CacheKey.Name);
-            entry.AbsoluteExpiration = GetCacheExpiration(options.Expiration, maxExpiration);
-            entry.ExpirationTokens.Add(token);
-            entry.RegisterPostEvictionCallback(PostEviction, token);
-            if (memoryCacheOptions.SizeLimit.HasValue)
+            using (var entry = memoryCache.CreateEntry(options.CacheKey.Name))
             {
-                entry.Size = SizeProvider.GetSize(item);
+                entry.AbsoluteExpiration = GetCacheExpiration(options.Expiration, maxExpiration);
+                entry.ExpirationTokens.Add(token);
+                entry.RegisterPostEvictionCallback(PostEviction, token);
+                if (memoryCacheOptions.SizeLimit.HasValue)
+                {
+                    entry.Size = SizeProvider.GetSize(item);
+                }
+                entry.Value = item;
             }
-            entry.Value = item;
+
+            // After the commit, not before: a write that began before a reader counted, and committed after the reader missed it, must still move the count.
+            Interlocked.Increment(ref _writes);
             return true;
         }
         catch (Exception ex)

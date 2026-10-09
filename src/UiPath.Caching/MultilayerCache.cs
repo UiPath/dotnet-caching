@@ -1,12 +1,14 @@
+using System.Collections.Concurrent;
 using UiPath.Caching.Locking;
 using UiPath.Caching.Telemetry;
 
 namespace UiPath.Caching;
 
-internal sealed partial class MultilayerCache : MultilayerCacheBase, ICache, ISpanKeyCache
+internal sealed partial class MultilayerCache : MultilayerCacheBase, ICache, ISpanKeyCache, IStatefulCache, IGeneratedExpirationCache
 {
     private readonly ICache _innerCache;
     private readonly InFlight<InFlightKey, object?> _innerReads = new();
+    private readonly InFlight<InFlightKey, object?> _generations = new();
     private readonly CacheEntryBuilder _entryBuilder;
     private readonly LocalMemorySetter _localMemorySetter;
 
@@ -109,7 +111,7 @@ internal sealed partial class MultilayerCache : MultilayerCacheBase, ICache, ISp
         // One floored resolution for the write and the rehydrate threshold; only the write is jittered.
         var duration = ResolveDuration(policy);
         var writeExpiration = _clock.ToDateTimeOffset(ApplyJitter(duration, policy.JitterMaxDuration));
-        return GetOrAddInternalAsync(cacheKey, generator, writeExpiration, duration, policy.JitterMaxDuration, policy, token);
+        return GetOrAddInternalAsync(cacheKey, generator, writeExpiration, duration, policy.JitterMaxDuration, policy, _localMemorySetter.Writes, localMissed: false, token);
     }
 
     [OverloadResolutionPriority(1)]
@@ -117,7 +119,7 @@ internal sealed partial class MultilayerCache : MultilayerCacheBase, ICache, ISp
     {
         ArgumentNullException.ThrowIfNull(generator);
         var (writeExpiration, duration) = CallerWrite(expiration);
-        return GetOrAddInternalAsync(cacheKey, generator, writeExpiration, duration, rehydrateJitter: null, policy ?? _defaultPolicy, token);
+        return GetOrAddInternalAsync(cacheKey, generator, writeExpiration, duration, rehydrateJitter: null, policy ?? _defaultPolicy, _localMemorySetter.Writes, localMissed: false, token);
     }
 
     [OverloadResolutionPriority(1)]
@@ -125,33 +127,94 @@ internal sealed partial class MultilayerCache : MultilayerCacheBase, ICache, ISp
     {
         ArgumentNullException.ThrowIfNull(generator);
         var (writeExpiration, duration) = CallerWrite(expiration);
-        return GetOrAddInternalAsync(cacheKey, generator, writeExpiration, duration, rehydrateJitter: null, policy ?? _defaultPolicy, token);
+        return GetOrAddInternalAsync(cacheKey, generator, writeExpiration, duration, rehydrateJitter: null, policy ?? _defaultPolicy, _localMemorySetter.Writes, localMissed: false, token);
     }
 
     public ValueTask<T?> GetOrAddAsync<T>(Span<char> cacheKey, Func<CancellationToken, Task<T?>> generator, CachePolicy? policy, CancellationToken token = default)
     {
         ArgumentNullException.ThrowIfNull(generator);
-        return TryGetOrAddLocal<T>(cacheKey, policy ?? _defaultPolicy, token, out var value)
+        var seen = _localMemorySetter.Writes;
+        var probe = ProbeGetOrAddLocal<T>(cacheKey, policy ?? _defaultPolicy, token, out var value);
+        return probe == LocalProbe.Hit
             ? new ValueTask<T?>(value)
-            : GetOrAddAsync(new CacheKey(cacheKey), generator, policy, token);
+            : GetOrAddResolvedAsync(new CacheKey(cacheKey), generator, policy, seen, probe == LocalProbe.Miss, token);
     }
 
     public ValueTask<T?> GetOrAddAsync<T>(Span<char> cacheKey, Func<CancellationToken, Task<T?>> generator, TimeSpan expiration, CachePolicy? policy, CancellationToken token = default)
     {
         ArgumentNullException.ThrowIfNull(generator);
         var (writeExpiration, duration) = CallerWrite(expiration);
-        return TryGetOrAddLocal<T>(cacheKey, policy ?? _defaultPolicy, token, out var value)
+        var seen = _localMemorySetter.Writes;
+        var probe = ProbeGetOrAddLocal<T>(cacheKey, policy ?? _defaultPolicy, token, out var value);
+        return probe == LocalProbe.Hit
             ? new ValueTask<T?>(value)
-            : GetOrAddInternalAsync(new CacheKey(cacheKey), generator, writeExpiration, duration, rehydrateJitter: null, policy ?? _defaultPolicy, token);
+            : GetOrAddInternalAsync(new CacheKey(cacheKey), generator, writeExpiration, duration, rehydrateJitter: null, policy ?? _defaultPolicy, seen, probe == LocalProbe.Miss, token);
     }
 
     public ValueTask<T?> GetOrAddAsync<T>(Span<char> cacheKey, Func<CancellationToken, Task<T?>> generator, DateTimeOffset expiration, CachePolicy? policy, CancellationToken token = default)
     {
         ArgumentNullException.ThrowIfNull(generator);
         var (writeExpiration, duration) = CallerWrite(expiration);
-        return TryGetOrAddLocal<T>(cacheKey, policy ?? _defaultPolicy, token, out var value)
+        var seen = _localMemorySetter.Writes;
+        var probe = ProbeGetOrAddLocal<T>(cacheKey, policy ?? _defaultPolicy, token, out var value);
+        return probe == LocalProbe.Hit
             ? new ValueTask<T?>(value)
-            : GetOrAddInternalAsync(new CacheKey(cacheKey), generator, writeExpiration, duration, rehydrateJitter: null, policy ?? _defaultPolicy, token);
+            : GetOrAddInternalAsync(new CacheKey(cacheKey), generator, writeExpiration, duration, rehydrateJitter: null, policy ?? _defaultPolicy, seen, probe == LocalProbe.Miss, token);
+    }
+
+    public ValueTask<T?> GetOrAddAsync<T, TState>(CacheKey cacheKey, TState state, Func<TState, CancellationToken, Task<T?>> generator, CachePolicy? policy, CancellationToken token = default)
+    {
+        ArgumentNullException.ThrowIfNull(generator);
+        policy ??= _defaultPolicy;
+        var duration = ResolveDuration(policy);
+        var writeExpiration = _clock.ToDateTimeOffset(ApplyJitter(duration, policy.JitterMaxDuration));
+        return GetOrAddInternalAsync(cacheKey, state, generator, writeExpiration, duration, policy.JitterMaxDuration, policy, _localMemorySetter.Writes, localMissed: false, token);
+    }
+
+    public ValueTask<T?> GetOrAddAsync<T, TState>(CacheKey cacheKey, TState state, Func<TState, CancellationToken, Task<T?>> generator, TimeSpan expiration, CachePolicy? policy, CancellationToken token = default)
+    {
+        ArgumentNullException.ThrowIfNull(generator);
+        var (writeExpiration, duration) = CallerWrite(expiration);
+        return GetOrAddInternalAsync(cacheKey, state, generator, writeExpiration, duration, rehydrateJitter: null, policy ?? _defaultPolicy, _localMemorySetter.Writes, localMissed: false, token);
+    }
+
+    public ValueTask<T?> GetOrAddAsync<T, TState>(CacheKey cacheKey, TState state, Func<TState, CancellationToken, Task<T?>> generator, DateTimeOffset expiration, CachePolicy? policy, CancellationToken token = default)
+    {
+        ArgumentNullException.ThrowIfNull(generator);
+        var (writeExpiration, duration) = CallerWrite(expiration);
+        return GetOrAddInternalAsync(cacheKey, state, generator, writeExpiration, duration, rehydrateJitter: null, policy ?? _defaultPolicy, _localMemorySetter.Writes, localMissed: false, token);
+    }
+
+    public ValueTask<T?> GetOrAddAsync<T, TState>(Span<char> cacheKey, TState state, Func<TState, CancellationToken, Task<T?>> generator, CachePolicy? policy, CancellationToken token = default)
+    {
+        ArgumentNullException.ThrowIfNull(generator);
+        var seen = _localMemorySetter.Writes;
+        var probe = ProbeGetOrAddLocal<T>(cacheKey, policy ?? _defaultPolicy, token, out var value);
+        return probe == LocalProbe.Hit
+            ? new ValueTask<T?>(value)
+            : GetOrAddResolvedAsync(new CacheKey(cacheKey), state, generator, policy, seen, probe == LocalProbe.Miss, token);
+    }
+
+    public ValueTask<T?> GetOrAddAsync<T, TState>(Span<char> cacheKey, TState state, Func<TState, CancellationToken, Task<T?>> generator, TimeSpan expiration, CachePolicy? policy, CancellationToken token = default)
+    {
+        ArgumentNullException.ThrowIfNull(generator);
+        var (writeExpiration, duration) = CallerWrite(expiration);
+        var seen = _localMemorySetter.Writes;
+        var probe = ProbeGetOrAddLocal<T>(cacheKey, policy ?? _defaultPolicy, token, out var value);
+        return probe == LocalProbe.Hit
+            ? new ValueTask<T?>(value)
+            : GetOrAddInternalAsync(new CacheKey(cacheKey), state, generator, writeExpiration, duration, rehydrateJitter: null, policy ?? _defaultPolicy, seen, probe == LocalProbe.Miss, token);
+    }
+
+    public ValueTask<T?> GetOrAddAsync<T, TState>(Span<char> cacheKey, TState state, Func<TState, CancellationToken, Task<T?>> generator, DateTimeOffset expiration, CachePolicy? policy, CancellationToken token = default)
+    {
+        ArgumentNullException.ThrowIfNull(generator);
+        var (writeExpiration, duration) = CallerWrite(expiration);
+        var seen = _localMemorySetter.Writes;
+        var probe = ProbeGetOrAddLocal<T>(cacheKey, policy ?? _defaultPolicy, token, out var value);
+        return probe == LocalProbe.Hit
+            ? new ValueTask<T?>(value)
+            : GetOrAddInternalAsync(new CacheKey(cacheKey), state, generator, writeExpiration, duration, rehydrateJitter: null, policy ?? _defaultPolicy, seen, probe == LocalProbe.Miss, token);
     }
 
     public ValueTask<KeyValuePair<TState, T?>[]> GetOrAddAsync<T, TState>(KeyValuePair<CacheKey, TState>[] entries, Func<TState[], CancellationToken, Task<KeyValuePair<TState, T?>[]>> generator, CachePolicy? policy, CancellationToken token = default)
@@ -182,6 +245,12 @@ internal sealed partial class MultilayerCache : MultilayerCacheBase, ICache, ISp
         ArgumentNullException.ThrowIfNull(generator);
         var (writeExpiration, duration) = CallerWrite(expiration);
         return GetOrAddBatchInternalAsync<T, TState>(entries, generator, writeExpiration, duration, rehydrateJitter: null, policy ?? _defaultPolicy, token);
+    }
+
+    public ValueTask<T?> GetOrAddWithExpirationAsync<T>(CacheKey cacheKey, Func<CancellationToken, Task<GeneratedValue<T>>> generator, CachePolicy? policy, CancellationToken token = default)
+    {
+        ArgumentNullException.ThrowIfNull(generator);
+        return GetOrAddGeneratedAsync(cacheKey, generator, policy ?? _defaultPolicy, token);
     }
 
     public ValueTask<bool> SetAsync<T>(CacheKey cacheKey, T? value, CachePolicy? policy, CancellationToken token = default)
@@ -308,6 +377,56 @@ internal sealed partial class MultilayerCache : MultilayerCacheBase, ICache, ISp
             : await _innerCache.ExpireTimeAsync<T>(cacheEntryOptions.CacheKey, token);
     }
 
+    private static Func<CancellationToken, Task<T?>> Bind<T, TState>(TState state, Func<TState, CancellationToken, Task<T?>> generator) =>
+        token => generator(state, token);
+
+    /// <summary>Stops every join counting as a waiter, so a shared run no caller still wants is cancelled, and observes the failure of one nobody awaits.</summary>
+    private static void WithdrawAll<T>(List<BatchJoin<T>> joined)
+    {
+        foreach (var join in joined)
+        {
+            join.Join.Withdraw();
+            join.Run.Forget();
+        }
+    }
+
+    /// <summary>Waits for the runs this call joined; the indexes whose run was given up come back for another try.</summary>
+    private static async ValueTask<List<int>> AwaitJoinedAsync<T>(List<BatchJoin<T>> joined, CacheEntryOptions[] missOptions, KeyValuePair<CacheKey, ICacheEntry<T?>>[] result)
+    {
+        var abandoned = new List<int>();
+        try
+        {
+            foreach (var (index, _, run) in joined)
+            {
+                try
+                {
+                    result[index] = new KeyValuePair<CacheKey, ICacheEntry<T?>>(missOptions[index].CacheKey, await run.ConfigureAwait(false));
+                }
+                catch (InFlightAbandonedException)
+                {
+                    abandoned.Add(index);
+                }
+            }
+        }
+        catch (Exception)
+        {
+            WithdrawAll(joined);
+            throw;
+        }
+
+        return abandoned;
+    }
+
+    private static void EndOwned(List<BatchRun> owned, Exception failure)
+    {
+        foreach (var run in owned)
+        {
+            run.Run.Fail(failure);
+        }
+    }
+
+    private static async Task<ICacheEntry<T?>> AsEntryAsync<T>(Task<object?> run) => (ICacheEntry<T?>)(await run.ConfigureAwait(false))!;
+
     /// <summary>Translates the reserved caller keys back into the generator's states.</summary>
     private static TState[] MapReservedKeysToStates<TState>(CacheKey[] reservedKeys, Dictionary<CacheKey, TState> stateByCallerKey)
         where TState : notnull
@@ -346,56 +465,112 @@ internal sealed partial class MultilayerCache : MultilayerCacheBase, ICache, ISp
         return results;
     }
 
-    private ValueTask<T?> GetOrAddInternalAsync<T>(CacheKey cacheKey, Func<CancellationToken, Task<T?>> generator, DateTimeOffset? expiration, TimeSpan effectiveDuration, TimeSpan? rehydrateJitter, CachePolicy policy, CancellationToken token)
+    /// <summary>A local hit only, never the inner tier: for a caller that has just taken a key, where the only thing that can have changed is a run of this process.</summary>
+    private bool TryGetLocalEntry<T>(CacheEntryOptions options, [MaybeNullWhen(false)] out ICacheEntry<T?> entry)
+    {
+        if ((_connectionState.IsConnected || _useLocalOnlyWhenDisconnected) && _memoryCache.TryGetValue(options.CacheKey.Name, out entry) && entry!.Found)
+        {
+            return true;
+        }
+
+        entry = default;
+        return false;
+    }
+
+    private ValueTask<T?> GetOrAddResolvedAsync<T>(CacheKey cacheKey, Func<CancellationToken, Task<T?>> generator, CachePolicy? policy, long seen, bool localMissed, CancellationToken token)
+    {
+        policy ??= _defaultPolicy;
+        var duration = ResolveDuration(policy);
+        var writeExpiration = _clock.ToDateTimeOffset(ApplyJitter(duration, policy.JitterMaxDuration));
+        return GetOrAddInternalAsync(cacheKey, generator, writeExpiration, duration, policy.JitterMaxDuration, policy, seen, localMissed, token);
+    }
+
+    private ValueTask<T?> GetOrAddResolvedAsync<T, TState>(CacheKey cacheKey, TState state, Func<TState, CancellationToken, Task<T?>> generator, CachePolicy? policy, long seen, bool localMissed, CancellationToken token)
+    {
+        policy ??= _defaultPolicy;
+        var duration = ResolveDuration(policy);
+        var writeExpiration = _clock.ToDateTimeOffset(ApplyJitter(duration, policy.JitterMaxDuration));
+        return GetOrAddInternalAsync(cacheKey, state, generator, writeExpiration, duration, policy.JitterMaxDuration, policy, seen, localMissed, token);
+    }
+
+    /// <param name="seen">The local writes counter, read before the caller's first read of the local tier.</param>
+    /// <param name="localMissed">True when that read found nothing under the key, so the miss path need not read it again.</param>
+    private ValueTask<T?> GetOrAddInternalAsync<T>(CacheKey cacheKey, Func<CancellationToken, Task<T?>> generator, DateTimeOffset? expiration, TimeSpan effectiveDuration, TimeSpan? rehydrateJitter, CachePolicy policy, long seen, bool localMissed, CancellationToken token)
     {
         // Not async: the miss path's lock delegates capture these parameters, and an async method would build that closure on a hit too.
         NotCacheableException.ThrowIfNotCacheable<T>();
-        if (!token.IsCancellationRequested && TryGetLocal<T?>(cacheKey, token, out var local) && local.Found)
+        if (!localMissed && !token.IsCancellationRequested)
         {
-            TryRehydrate(cacheKey, local.Expiration, local.Value, generator, policy, effectiveDuration, rehydrateJitter);
-            return new ValueTask<T?>(local.Value);
+            var probe = ProbeLocal<T?>(cacheKey, token, out var local);
+            if (probe == LocalProbe.Hit && local!.Found)
+            {
+                TryRehydrate(cacheKey, local.Expiration, local.Value, generator, policy, effectiveDuration, rehydrateJitter);
+                return new ValueTask<T?>(local.Value);
+            }
+
+            localMissed = probe == LocalProbe.Miss;
         }
 
-        return GetOrAddCoreAsync(cacheKey, generator, expiration, effectiveDuration, rehydrateJitter, policy, token);
+        return GetOrAddCoreAsync(cacheKey, generator, expiration, effectiveDuration, rehydrateJitter, policy, seen, localMissed, token);
     }
 
-    private async ValueTask<T?> GetOrAddCoreAsync<T>(CacheKey cacheKey, Func<CancellationToken, Task<T?>> generator, DateTimeOffset? expiration, TimeSpan effectiveDuration, TimeSpan? rehydrateJitter, CachePolicy policy, CancellationToken token)
+    private ValueTask<T?> GetOrAddInternalAsync<T, TState>(CacheKey cacheKey, TState state, Func<TState, CancellationToken, Task<T?>> generator, DateTimeOffset? expiration, TimeSpan effectiveDuration, TimeSpan? rehydrateJitter, CachePolicy policy, long seen, bool localMissed, CancellationToken token)
+    {
+        // Binds the state to a delegate only where one is needed, so a hit builds no closure.
+        NotCacheableException.ThrowIfNotCacheable<T>();
+        if (!localMissed && !token.IsCancellationRequested)
+        {
+            var probe = ProbeLocal<T?>(cacheKey, token, out var local);
+            if (probe == LocalProbe.Hit && local!.Found)
+            {
+                if (ShouldRehydrate(local.Value, policy, effectiveDuration))
+                {
+                    TriggerRehydrate(cacheKey, local.Expiration, Bind(state, generator), policy, effectiveDuration, rehydrateJitter);
+                }
+                return new ValueTask<T?>(local.Value);
+            }
+
+            localMissed = probe == LocalProbe.Miss;
+        }
+
+        return GetOrAddCoreAsync(cacheKey, Bind(state, generator), expiration, effectiveDuration, rehydrateJitter, policy, seen, localMissed, token);
+    }
+
+    private async ValueTask<T?> GetOrAddCoreAsync<T>(CacheKey cacheKey, Func<CancellationToken, Task<T?>> generator, DateTimeOffset? expiration, TimeSpan effectiveDuration, TimeSpan? rehydrateJitter, CachePolicy policy, long seen, bool localMissed, CancellationToken token)
     {
         NotCacheableException.ThrowIfNotCacheable<T>();
         var cacheEntryOptions = _entryBuilder.BuildEntryOptions<T>(cacheKey, expiration, token);
 
-        var entry = await GetCacheEntryInnerAsync<T>(cacheEntryOptions, policy).ConfigureAwait(false);
+        var entry = await (localMissed ? FetchInnerAsync<T>(cacheEntryOptions, policy) : GetCacheEntryInnerAsync<T>(cacheEntryOptions, policy)).ConfigureAwait(false);
         if (entry.Found)
         {
             TryRehydrate(cacheKey, entry.Expiration, entry.Value, generator, policy, effectiveDuration, rehydrateJitter);
             return entry.Value;
         }
 
-        var result = await RunUnderLocksAsync<ICacheEntry<T?>>(
-            cacheEntryOptions.CacheKey,
-            () => GetCacheEntryInnerAsync<T>(cacheEntryOptions, policy),
-            e => e.Found,
-            ct => RunGeneratorAndStoreEntryAsync(cacheEntryOptions, generator, policy, ct),
-            token,
-            policyLock: policy.Lock).ConfigureAwait(false);
+        var result = await GetOrGenerateEntryAsync<T, Func<CancellationToken, Task<T?>>>(cacheEntryOptions, generator, policy, static (cache, options, g, p, scope) => cache.RunGeneratorAndStoreEntryAsync(options, g, p, scope), seen, token).ConfigureAwait(false);
         return result.Value;
     }
 
     private void TryRehydrate<T>(CacheKey originalCacheKey, DateTimeOffset entryExpiration, T? currentValue, Func<CancellationToken, Task<T?>> generator, CachePolicy policy, TimeSpan duration, TimeSpan? rehydrateJitter)
     {
+        if (ShouldRehydrate(currentValue, policy, duration))
+        {
+            TriggerRehydrate(originalCacheKey, entryExpiration, generator, policy, duration, rehydrateJitter);
+        }
+    }
+
+    private bool ShouldRehydrate<T>(T? currentValue, CachePolicy policy, TimeSpan duration)
+    {
         if (policy.RehydrateEnabled != true || policy.Rehydrate is null)
         {
-            return;
+            return false;
         }
         if (currentValue is null && _multiLayerCacheOptions.CacheNullValues)
         {
-            return;
+            return false;
         }
-        if (duration <= TimeSpan.Zero || duration == TimeSpan.MaxValue)
-        {
-            return;
-        }
-        TriggerRehydrate(originalCacheKey, entryExpiration, generator, policy, duration, rehydrateJitter);
+        return duration > TimeSpan.Zero && duration != TimeSpan.MaxValue;
     }
 
     /// <summary>Hands the rehydration to the coordinator; apart from <see cref="TryRehydrate{T}"/> so its early returns do not allocate the closure.</summary>
@@ -583,17 +758,116 @@ internal sealed partial class MultilayerCache : MultilayerCacheBase, ICache, ISp
         return true;
     }
 
-    private async ValueTask<ICacheEntry<T?>> RunGeneratorAndStoreEntryAsync<T>(CacheEntryOptions cacheEntryOptions, Func<CancellationToken, Task<T?>> generator, CachePolicy policy, CancellationToken token)
+    private ValueTask<ICacheEntry<T?>> GetOrGenerateEntryAsync<T, TGenerator>(
+        CacheEntryOptions options,
+        TGenerator generator,
+        CachePolicy policy,
+        Func<MultilayerCache, CacheEntryOptions, TGenerator, CachePolicy, GenerationScope, ValueTask<object?>> generate,
+        long seen,
+        CancellationToken token)
+    {
+        var lifetime = new LockLifetime();
+        return RunUnderLocksAsync(
+            options.CacheKey,
+            (Cache: this, Options: options, Generator: generator, Policy: policy, Generate: generate, Lifetime: lifetime, Seen: seen),
+            static s => s.Cache.GetCacheEntryInnerAsync<T>(s.Options, s.Policy),
+            static (ICacheEntry<T?> e) => e.Found,
+            static (s, ct) => s.Cache.RunSharedAsync<T, TGenerator>(s.Options, s.Generator, s.Policy, s.Generate, s.Lifetime, s.Seen, ct),
+            token,
+            policy.Lock,
+            lifetime);
+    }
+
+    /// <summary>Runs the generation as one run per key: a caller whose wait for the local lock timed out, or that arrives while it runs, joins it, or the batch run covering its key, rather than starting another. Only the generator runs on the shared token; the write keeps the starting caller's, so that caller's cancellation is still told from a refusal. The starting caller's locks stay held until the run ends, even if that caller stops waiting first.</summary>
+    private async ValueTask<ICacheEntry<T?>> RunSharedAsync<T, TGenerator>(
+        CacheEntryOptions options,
+        TGenerator generator,
+        CachePolicy policy,
+        Func<MultilayerCache, CacheEntryOptions, TGenerator, CachePolicy, GenerationScope, ValueTask<object?>> generate,
+        LockLifetime lifetime,
+        long seen,
+        CancellationToken token)
+    {
+        if (!ResolveLocalLock(policy.Lock).Enabled)
+        {
+            return (ICacheEntry<T?>)(await generate(this, options, generator, policy, new GenerationScope(null, token)).ConfigureAwait(false))!;
+        }
+
+        var key = new InFlightKey(options.CacheKey.Name, typeof(T), null, null);
+        while (true)
+        {
+            try
+            {
+                return (ICacheEntry<T?>)(await _generations.RunAsync(
+                    key,
+                    (Cache: this, Options: options, Generator: generator, Policy: policy, Generate: generate, Lifetime: lifetime, Seen: seen),
+                    static (state, run) =>
+                    {
+                        state.Lifetime.Run = run;
+
+                        // A write in this process since the caller read the key may have left its value in the local tier, which a run writes before it leaves the table.
+                        return state.Cache._localMemorySetter.Writes != state.Seen && state.Cache.TryGetLocalEntry<T>(state.Options, out var current)
+                            ? new ValueTask<object?>(current)
+                            : state.Generate(state.Cache, state.Options, state.Generator, state.Policy, new GenerationScope(run, run.Token));
+                    },
+                    token).ConfigureAwait(false))!;
+            }
+            catch (InFlightAbandonedException)
+            {
+                // The batch that held the key was cancelled: the key is up for taking again.
+            }
+        }
+    }
+
+    private async ValueTask<object?> RunGeneratorAndStoreEntryAsync<T>(CacheEntryOptions cacheEntryOptions, Func<CancellationToken, Task<T?>> generator, CachePolicy policy, GenerationScope scope)
     {
         LogCacheMissed(Logged(cacheEntryOptions, typeof(T)));
-        var ret = await InvokeFactoryAsync(cacheEntryOptions.CacheKey, generator, policy.FactoryTimeout, token).ConfigureAwait(false);
+        var ret = await InvokeFactoryAsync(cacheEntryOptions.CacheKey, generator, policy.FactoryTimeout, scope.Token).ConfigureAwait(false);
+        return await StoreGeneratedEntryAsync(cacheEntryOptions, ret, policy, scope).ConfigureAwait(false);
+    }
 
-        if (ret is not null || _multiLayerCacheOptions.CacheNullValues)
+    private async ValueTask<ICacheEntry<T?>> StoreGeneratedEntryAsync<T>(CacheEntryOptions cacheEntryOptions, T? ret, CachePolicy policy, GenerationScope scope)
+    {
+        // A generator that ignores its token can finish after every caller left and a newer run took the key: its value must not replace theirs.
+        if ((ret is not null || _multiLayerCacheOptions.CacheNullValues) && !scope.IsAbandoned)
         {
             var innerCacheDisconnected = GetInnerCacheDisconnected();
             await InternalSetAsync(cacheEntryOptions, ret, innerCacheDisconnected, policy, keepRefused: true).ConfigureAwait(false);
         }
         return _cacheEntryFactory.Create<T?>(ret, cacheEntryOptions.Expiration);
+    }
+
+    private async ValueTask<T?> GetOrAddGeneratedAsync<T>(CacheKey cacheKey, Func<CancellationToken, Task<GeneratedValue<T>>> generator, CachePolicy policy, CancellationToken token)
+    {
+        NotCacheableException.ThrowIfNotCacheable<T>();
+        var seen = _localMemorySetter.Writes;
+        var cacheEntryOptions = _entryBuilder.BuildEntryOptions<T>(cacheKey, GetExpiration(policy), token);
+
+        var entry = await GetCacheEntryInnerAsync<T>(cacheEntryOptions, policy).ConfigureAwait(false);
+        if (entry.Found)
+        {
+            return entry.Value;
+        }
+
+        var result = await GetOrGenerateEntryAsync<T, Func<CancellationToken, Task<GeneratedValue<T>>>>(cacheEntryOptions, generator, policy, static (cache, options, g, p, scope) => cache.RunGeneratedAndStoreEntryAsync(options, g, p, scope), seen, token).ConfigureAwait(false);
+        return result.Value;
+    }
+
+    private async ValueTask<object?> RunGeneratedAndStoreEntryAsync<T>(CacheEntryOptions cacheEntryOptions, Func<CancellationToken, Task<GeneratedValue<T>>> generator, CachePolicy policy, GenerationScope scope)
+    {
+        LogCacheMissed(Logged(cacheEntryOptions, typeof(T)));
+        var generated = await InvokeFactoryAsync(cacheEntryOptions.CacheKey, generator, policy.FactoryTimeout, scope.Token).ConfigureAwait(false);
+
+        if (generated.Expiration is { } expiration)
+        {
+            cacheEntryOptions.Expiration = expiration;
+            if (expiration <= _clock.GetUtcNow())
+            {
+                return _cacheEntryFactory.Create<T?>(generated.Value, expiration);
+            }
+        }
+
+        return await StoreGeneratedEntryAsync(cacheEntryOptions, generated.Value, policy, scope).ConfigureAwait(false);
     }
 
     private async ValueTask<KeyValuePair<TState, T?>[]> GetOrAddBatchInternalAsync<T, TState>(
@@ -615,6 +889,7 @@ internal sealed partial class MultilayerCache : MultilayerCacheBase, ICache, ISp
             return [];
         }
 
+        var seen = _localMemorySetter.Writes;
         var probe = await GetCacheEntriesInnerAsync<T>(options, policy, token).ConfigureAwait(false);
 
         var values = new T?[options.Length];
@@ -664,7 +939,7 @@ internal sealed partial class MultilayerCache : MultilayerCacheBase, ICache, ISp
                 return latest;
             },
             probed => Array.TrueForAll(probed, e => e.Value.Found),
-            ct => RunBatchGeneratorAndStoreAsync(missOptions, missStates, latest, generator, policy, ct),
+            ct => RunBatchSharedAsync(missOptions, missStates, latest, generator, policy, seen, ct),
             token,
             policyLock: policy.Lock).ConfigureAwait(false);
 
@@ -674,6 +949,137 @@ internal sealed partial class MultilayerCache : MultilayerCacheBase, ICache, ISp
         }
 
         return Project(states, keyIndexOfState, values);
+    }
+
+    /// <summary>Joins the keys whose generator run is in flight, a single-key run or another batch, and runs one batch generator for the rest, which others in turn can join.</summary>
+    private async ValueTask<KeyValuePair<CacheKey, ICacheEntry<T?>>[]> RunBatchSharedAsync<T, TState>(
+        CacheEntryOptions[] missOptions,
+        TState[] missStates,
+        KeyValuePair<CacheKey, ICacheEntry<T?>>[] probe,
+        Func<TState[], CancellationToken, Task<KeyValuePair<TState, T?>[]>> generator,
+        CachePolicy policy,
+        long seen,
+        CancellationToken token)
+        where TState : notnull
+    {
+        if (!ResolveLocalLock(policy.Lock).Enabled)
+        {
+            return await RunBatchGeneratorAndStoreAsync(missOptions, missStates, probe, generator, policy, token).ConfigureAwait(false);
+        }
+
+        var result = (KeyValuePair<CacheKey, ICacheEntry<T?>>[])probe.Clone();
+        var owned = new List<BatchRun>();
+        var joined = new List<BatchJoin<T>>();
+        try
+        {
+            ReserveBatchKeys(missOptions, probe, owned, joined, token);
+            if (owned.Count > 0)
+            {
+                await RunOwnedAsync(owned, missOptions, missStates, probe, generator, policy, seen, result, token).ConfigureAwait(false);
+            }
+        }
+        catch (OperationCanceledException) when (token.IsCancellationRequested)
+        {
+            EndOwned(owned, new InFlightAbandonedException());
+            WithdrawAll(joined);
+            throw;
+        }
+        catch (Exception ex)
+        {
+            EndOwned(owned, ex);
+            WithdrawAll(joined);
+            throw;
+        }
+
+        var abandoned = await AwaitJoinedAsync(joined, missOptions, result).ConfigureAwait(false);
+        if (abandoned.Count > 0)
+        {
+            await RetryAbandonedAsync(abandoned, missOptions, missStates, generator, policy, result, token).ConfigureAwait(false);
+        }
+
+        return result;
+    }
+
+    private void ReserveBatchKeys<T>(CacheEntryOptions[] missOptions, KeyValuePair<CacheKey, ICacheEntry<T?>>[] probe, List<BatchRun> owned, List<BatchJoin<T>> joined, CancellationToken token)
+    {
+        for (var i = 0; i < missOptions.Length; i++)
+        {
+            if (!probe[i].Value.Found)
+            {
+                ReserveOrJoin(i, new InFlightKey(missOptions[i].CacheKey.Name, typeof(T), null, null), owned, joined, token);
+            }
+        }
+    }
+
+    /// <summary>Runs one batch generator for the keys this call took, and ends each reservation with its entry.</summary>
+    private async ValueTask RunOwnedAsync<T, TState>(
+        List<BatchRun> owned,
+        CacheEntryOptions[] missOptions,
+        TState[] missStates,
+        KeyValuePair<CacheKey, ICacheEntry<T?>>[] probe,
+        Func<TState[], CancellationToken, Task<KeyValuePair<TState, T?>[]>> generator,
+        CachePolicy policy,
+        long seen,
+        KeyValuePair<CacheKey, ICacheEntry<T?>>[] result,
+        CancellationToken token)
+        where TState : notnull
+    {
+        // A write in this process since the caller probed may have left values in the local tier, which a run writes before it leaves the table.
+        var rewritten = _localMemorySetter.Writes != seen;
+        var current = owned.Select(o => rewritten && TryGetLocalEntry<T>(missOptions[o.Index], out var local) ? new KeyValuePair<CacheKey, ICacheEntry<T?>>(missOptions[o.Index].CacheKey, local) : probe[o.Index]).ToArray();
+        var produced = await RunBatchGeneratorAndStoreAsync(
+            owned.Select(o => missOptions[o.Index]).ToArray(),
+            owned.Select(o => missStates[o.Index]).ToArray(),
+            current,
+            generator,
+            policy,
+            token).ConfigureAwait(false);
+        for (var i = 0; i < owned.Count; i++)
+        {
+            result[owned[i].Index] = produced[i];
+            owned[i].Run.Complete(produced[i].Value);
+        }
+    }
+
+    private async ValueTask RetryAbandonedAsync<T, TState>(
+        List<int> abandoned,
+        CacheEntryOptions[] missOptions,
+        TState[] missStates,
+        Func<TState[], CancellationToken, Task<KeyValuePair<TState, T?>[]>> generator,
+        CachePolicy policy,
+        KeyValuePair<CacheKey, ICacheEntry<T?>>[] result,
+        CancellationToken token)
+        where TState : notnull
+    {
+        var retryOptions = abandoned.Select(i => missOptions[i]).ToArray();
+        var freshSeen = _localMemorySetter.Writes;
+        var fresh = await GetCacheEntriesInnerAsync<T>(retryOptions, policy, token).ConfigureAwait(false);
+        var again = await RunBatchSharedAsync(retryOptions, abandoned.Select(i => missStates[i]).ToArray(), fresh, generator, policy, freshSeen, token).ConfigureAwait(false);
+        for (var i = 0; i < abandoned.Count; i++)
+        {
+            result[abandoned[i]] = again[i];
+        }
+    }
+
+    private void ReserveOrJoin<T>(int index, InFlightKey key, List<BatchRun> owned, List<BatchJoin<T>> joined, CancellationToken token)
+    {
+        while (true)
+        {
+            token.ThrowIfCancellationRequested();
+            if (_generations.TryReserve(key, out var reservation))
+            {
+                owned.Add(new BatchRun(index, reservation));
+                return;
+            }
+
+            if (_generations.TryJoin(key, token, out var shared))
+            {
+                joined.Add(new BatchJoin<T>(index, shared, AsEntryAsync<T>(shared.Result)));
+                return;
+            }
+
+            // The run ended between the two, so the key is free again.
+        }
     }
 
     private async ValueTask<KeyValuePair<CacheKey, ICacheEntry<T?>>[]> RunBatchGeneratorAndStoreAsync<T, TState>(
@@ -1225,12 +1631,17 @@ internal sealed partial class MultilayerCache : MultilayerCacheBase, ICache, ISp
         return await FetchInnerAsync<T>(options, policy).ConfigureAwait(false);
     }
 
-    /// <summary>Reads the inner tier and keeps a hit locally; concurrent reads of one key share one inner read.</summary>
-    private async ValueTask<ICacheEntry<T?>> FetchInnerAsync<T>(CacheEntryOptions options, CachePolicy policy) =>
+    /// <summary>Reads the inner tier and keeps a hit locally; concurrent reads of one key share one inner read. The null inner tier has nothing to share or keep.</summary>
+    private ValueTask<ICacheEntry<T?>> FetchInnerAsync<T>(CacheEntryOptions options, CachePolicy policy) =>
+        _innerCache is NullCache
+            ? _innerCache.GetCacheEntryAsync<T>(options.CacheKey, policy, options.Token)
+            : FetchSharedInnerAsync<T>(options, policy);
+
+    private async ValueTask<ICacheEntry<T?>> FetchSharedInnerAsync<T>(CacheEntryOptions options, CachePolicy policy) =>
         (ICacheEntry<T?>)(await _innerReads.RunAsync(
             new InFlightKey(options.CacheKey.Name, typeof(T), policy.LocalExpiration, policy.LocalExpirationDisconnected),
             (Cache: this, Options: options, Policy: policy),
-            static async (state, run) => await state.Cache.FetchAndKeepAsync<T>(state.Options with { Token = run.Token }, state.Policy, run).ConfigureAwait(false),
+            static (state, run) => state.Cache.FetchAndKeepAsync<T>(state.Options.Token == run.Token ? state.Options : state.Options with { Token = run.Token }, state.Policy, run),
             options.Token).ConfigureAwait(false))!;
 
     private async ValueTask<object?> FetchAndKeepAsync<T>(CacheEntryOptions options, CachePolicy policy, IInFlightRun run)
@@ -1422,4 +1833,8 @@ internal sealed partial class MultilayerCache : MultilayerCacheBase, ICache, ISp
         public CacheEntryOptions CacheEntry { get; init; } = cacheEntry;
         public T? Value { get; init; } = value;
     }
+
+    private sealed record BatchRun(int Index, IInFlightReservation<object?> Run);
+
+    private sealed record BatchJoin<T>(int Index, InFlight<InFlightKey, object?>.Joined Join, Task<ICacheEntry<T?>> Run);
 }

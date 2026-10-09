@@ -22,6 +22,7 @@ public class RedisHealthCheck : IHealthCheck
                 return new HealthCheckResult(HealthStatus.Healthy, "Redis maintenance in progress");
             }
 
+            await _redisConnector.ConnectAsync(cancellationToken).ConfigureAwait(false);
             var latency = await _redisConnector.Database.PingAsync();
 
             return HealthCheckResult.Healthy(data: new Dictionary<string, object>

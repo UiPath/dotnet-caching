@@ -67,6 +67,7 @@ internal sealed class RedisDistributedLock : IDistributedLock
             bool acquired;
             try
             {
+                await _redis.ConnectAsync(token).ConfigureAwait(false);
                 acquired = await _redis.Database.LockTakeAsync(redisKey, lockToken, expiry, CommandFlags.DemandMaster).ConfigureAwait(false);
             }
             catch (Exception ex)
@@ -104,6 +105,7 @@ internal sealed class RedisDistributedLock : IDistributedLock
         bool acquired;
         try
         {
+            await _redis.ConnectAsync(token).ConfigureAwait(false);
             acquired = await _redis.Database.LockTakeAsync(redisKey, lockToken, expiry, CommandFlags.DemandMaster).ConfigureAwait(false);
         }
         catch (Exception ex)

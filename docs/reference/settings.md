@@ -179,7 +179,7 @@ Per-topic overrides: add entries to `Topics[]` under `Broadcast:RedisPubSub`. Ea
 | `ClearLocalOnReconnect` | `bool?` | `null` | Per-provider | `null` = `true`: clear L1 when a `RedisPubSub` broadcast reconnects, since invalidations published while it was down never arrived. Inert over `RedisStreams`, which replay them and expire a topic's entries themselves when entries were lost. |
 | `LocalMaxExpirationDisconnected` | `TimeSpan?` | `00:00:30` | Per-provider | L1 TTL cap while L2 is disconnected; limits the stale-read window. |
 | `LocalLockEnabled` | `bool?` | `true` | Per-provider | Acquire a local (in-process) lock before calling the value factory. |
-| `LocalLockTimeout` | `TimeSpan?` | `00:00:00.500` | Per-provider | Max wait to acquire the local lock before bypassing it. |
+| `LocalLockTimeout` | `TimeSpan?` | `00:00:00.500` | Per-provider | Max wait to acquire the local lock; a caller that times out re-reads the cache, then joins the generator already running for the key, or runs its own if none is. |
 | `DistributedLockEnabled` | `bool?` | `null` | Per-provider | Acquire a distributed (Redis) lock before calling the value factory; `null` = not configured. |
 | `DistributedLockTimeout` | `TimeSpan?` | `00:00:00.500` | Per-provider | Max wait to acquire the distributed lock. |
 | `DistributedLockExpiry` | `TimeSpan?` | `00:00:05` | Per-provider | Redis key TTL for the distributed lock (safety expiry to prevent deadlocks). |
@@ -228,7 +228,7 @@ Per-topic overrides: add entries to `Topics[]` under `Broadcast:RedisPubSub`. Ea
 | `ClearLocalOnReconnect` | `bool?` | `null` | Per-provider | Applies only when broadcast runs over `RedisPubSub`: `null` = `true`, clear L1 once the broadcast connection recovers, since invalidations sent meanwhile were missed. Inert otherwise. |
 | `LocalMaxExpirationDisconnected` | `TimeSpan?` | `00:00:30` | Per-provider | Applies only when broadcast runs over Redis: the L1 lifetime cap for values written while the broadcast connection is down. Inert otherwise. |
 | `LocalLockEnabled` | `bool?` | `true` | Per-provider | Acquire a local (in-process) lock before calling the value factory. |
-| `LocalLockTimeout` | `TimeSpan?` | `00:00:00.500` | Per-provider | Max wait to acquire the local lock before bypassing it. |
+| `LocalLockTimeout` | `TimeSpan?` | `00:00:00.500` | Per-provider | Max wait to acquire the local lock; a caller that times out re-reads the cache, then joins the generator already running for the key, or runs its own if none is. |
 | `DistributedLockEnabled` | `bool?` | `null` | Per-provider | Inert for this provider; present to satisfy `IMultilayerCacheOptions`. Startup validation still applies. |
 | `DistributedLockTimeout` | `TimeSpan?` | `null` | Per-provider | Inert for this provider; present to satisfy `IMultilayerCacheOptions`. |
 | `DistributedLockExpiry` | `TimeSpan?` | `null` | Per-provider | Inert for this provider; present to satisfy `IMultilayerCacheOptions`. |
