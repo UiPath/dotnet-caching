@@ -7,21 +7,66 @@ namespace UiPath.Caching;
 internal sealed class InFlight<TKey, TResult>
     where TKey : notnull
 {
-    private readonly ConcurrentDictionary<TKey, Flight> _flights = new();
+    private readonly ConcurrentDictionary<TKey, Flight> _flights;
+
+    public InFlight(IEqualityComparer<TKey>? comparer = null) => _flights = new ConcurrentDictionary<TKey, Flight>(comparer);
 
     /// <summary>Runs in the table, for tests.</summary>
     internal int Count => _flights.Count;
 
-    public async ValueTask<TResult> RunAsync<TState>(TKey key, TState state, Func<TState, IInFlightRun, ValueTask<TResult>> work, CancellationToken token)
+    public ValueTask<TResult> RunAsync<TState>(TKey key, TState state, Func<TState, IInFlightRun, ValueTask<TResult>> work, CancellationToken token)
     {
         // A caller cancelled before it arrives starts no work and joins none.
         token.ThrowIfCancellationRequested();
-        var flight = Join(key, state, work);
-        if (!token.CanBeCanceled)
+        return WaitAsync(Join(key, state, work, token.CanBeCanceled), joined: null, token);
+    }
+
+    /// <summary>Joins the run in progress for <paramref name="key"/>; false when none is, starting nothing. The caller that stops waiting for any reason other than its token must <see cref="Joined.Withdraw"/>, or it keeps counting as a waiter.</summary>
+    public bool TryJoin(TKey key, CancellationToken token, [NotNullWhen(true)] out Joined? joined)
+    {
+        token.ThrowIfCancellationRequested();
+        if (_flights.TryGetValue(key, out var running) && running.TryJoin())
         {
-            return await flight.Result.ConfigureAwait(false);
+            joined = new Joined(running);
+            joined.Result = WaitAsync(running, joined, token).AsTask();
+            return true;
         }
 
+        joined = null;
+        return false;
+    }
+
+    /// <summary>Takes the key for work the caller runs itself, for several keys at once; false when a run holds it. Callers can join it, and it ends only through the reservation.</summary>
+    public bool TryReserve(TKey key, [NotNullWhen(true)] out IInFlightReservation<TResult>? reservation)
+    {
+        var flight = new Flight(this, key, reserved: true);
+        if (_flights.TryAdd(key, flight))
+        {
+            reservation = flight;
+            return true;
+        }
+
+        flight.Dispose();
+        reservation = null;
+        return false;
+    }
+
+    /// <summary>When each run in progress ends, for tests.</summary>
+    internal Task[] Completions() => [.. _flights.Values.Select(f => f.Completion)];
+
+    private static ValueTask<TResult> WaitAsync(Flight flight, Joined? joined, CancellationToken token)
+    {
+        // A run that finished before its caller came to wait needs no task.
+        if (flight.TryGetValue(out var value))
+        {
+            return new ValueTask<TResult>(value);
+        }
+
+        return token.CanBeCanceled ? WaitCancellableAsync(flight, joined, token) : new ValueTask<TResult>(flight.Result);
+    }
+
+    private static async ValueTask<TResult> WaitCancellableAsync(Flight flight, Joined? joined, CancellationToken token)
+    {
         try
         {
             return await flight.Result.WaitAsync(token).ConfigureAwait(false);
@@ -29,12 +74,20 @@ internal sealed class InFlight<TKey, TResult>
         catch (OperationCanceledException) when (token.IsCancellationRequested)
         {
             // Left here rather than from a token callback: WaitAsync's own callback can resume this caller before a registration of ours would run.
-            flight.Leave();
+            if (joined is null)
+            {
+                flight.Leave();
+            }
+            else
+            {
+                joined.Withdraw();
+            }
+
             throw;
         }
     }
 
-    private Flight Join<TState>(TKey key, TState state, Func<TState, IInFlightRun, ValueTask<TResult>> work)
+    private Flight Join<TState>(TKey key, TState state, Func<TState, IInFlightRun, ValueTask<TResult>> work, bool starterCanCancel)
     {
         while (true)
         {
@@ -50,10 +103,11 @@ internal sealed class InFlight<TKey, TResult>
                 continue;
             }
 
-            var started = new Flight(this, key);
+            // A starter that cannot cancel never leaves, so nothing can cancel the run, and it needs no source.
+            var started = new Flight(this, key, cancellable: starterCanCancel);
             if (_flights.TryAdd(key, started))
             {
-                _ = started.RunAsync(state, work);
+                started.Run(state, work);
                 return started;
             }
 
@@ -61,20 +115,107 @@ internal sealed class InFlight<TKey, TResult>
         }
     }
 
-    private sealed class Flight(InFlight<TKey, TResult> owner, TKey key) : IInFlightRun, IDisposable
+    /// <summary>A caller waiting on a run it did not start, which can stop waiting without cancelling its token.</summary>
+    internal sealed class Joined
     {
-        private readonly CancellationTokenSource _cancellation = new();
-        private readonly TaskCompletionSource<TResult> _result = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private readonly Flight _flight;
+        private int _left;
+
+        internal Joined(Flight flight) => _flight = flight;
+
+        public Task<TResult> Result { get; internal set; } = null!;
+
+        /// <summary>Stops counting as a waiter, once; the run is cancelled when none is left.</summary>
+        public void Withdraw()
+        {
+            if (Interlocked.Exchange(ref _left, 1) == 0)
+            {
+                _flight.Leave();
+            }
+        }
+    }
+
+    internal sealed class Flight(InFlight<TKey, TResult> owner, TKey key, bool reserved = false, bool cancellable = true) : IInFlightRun, IInFlightReservation<TResult>, IDisposable
+    {
+        private readonly CancellationTokenSource? _cancellation = reserved || !cancellable ? null : new();
         private readonly object _gate = new();
         private int _waiting = 1;
+        private TaskCompletionSource<TResult>? _source;
+        private int _state;
+        private TResult? _value;
+        private Exception? _failure;
+        private CancellationToken _canceledBy;
 
-        public Task<TResult> Result => _result.Task;
+        private enum Outcome
+        {
+            Running,
+            Succeeded,
+            Failed,
+            Canceled,
+        }
 
-        public CancellationToken Token => _cancellation.Token;
+        /// <summary>The run's task, made when a caller first needs one: a run that finishes before its starter waits never builds it.</summary>
+        public Task<TResult> Result
+        {
+            get
+            {
+                lock (_gate)
+                {
+                    if (_source is null)
+                    {
+                        _source = new TaskCompletionSource<TResult>(TaskCreationOptions.RunContinuationsAsynchronously);
+                        if (Current != Outcome.Running)
+                        {
+                            Publish(_source);
+                        }
+                    }
+
+                    return _source.Task;
+                }
+            }
+        }
+
+        public Task Completion => Result;
+
+        public bool IsCompleted => Current != Outcome.Running;
+
+        /// <summary>True once every caller has left: the work no longer has anyone to commit for.</summary>
+        public bool IsAbandoned
+        {
+            get
+            {
+                lock (_gate)
+                {
+                    return !reserved && _waiting == 0;
+                }
+            }
+        }
+
+        public CancellationToken Token => _cancellation?.Token ?? default;
+
+        private Outcome Current => (Outcome)Volatile.Read(ref _state);
+
+        /// <summary>The value of a run that has already succeeded.</summary>
+        public bool TryGetValue([MaybeNullWhen(false)] out TResult value)
+        {
+            if (Current == Outcome.Succeeded)
+            {
+                value = _value!;
+                return true;
+            }
+
+            value = default;
+            return false;
+        }
 
         /// <summary>False once every caller has left, since the work may already be cancelled.</summary>
         public bool TryJoin()
         {
+            if (reserved)
+            {
+                return true;
+            }
+
             lock (_gate)
             {
                 if (_waiting == 0)
@@ -89,6 +230,11 @@ internal sealed class InFlight<TKey, TResult>
 
         public void Leave()
         {
+            if (reserved)
+            {
+                return;
+            }
+
             lock (_gate)
             {
                 if (--_waiting > 0)
@@ -102,7 +248,7 @@ internal sealed class InFlight<TKey, TResult>
 
             try
             {
-                _cancellation.Cancel();
+                _cancellation?.Cancel();
             }
             catch (ObjectDisposedException)
             {
@@ -125,40 +271,118 @@ internal sealed class InFlight<TKey, TResult>
             }
         }
 
-        public void Dispose() => _cancellation.Dispose();
+        public void Dispose() => _cancellation?.Dispose();
 
-        public async Task RunAsync<TState>(TState state, Func<TState, IInFlightRun, ValueTask<TResult>> work)
+        void IInFlightReservation<TResult>.Complete(TResult result)
+        {
+            owner._flights.TryRemove(new KeyValuePair<TKey, Flight>(key, this));
+            Settle(Outcome.Succeeded, result, null);
+            Dispose();
+        }
+
+        void IInFlightReservation<TResult>.Fail(Exception failure)
+        {
+            owner._flights.TryRemove(new KeyValuePair<TKey, Flight>(key, this));
+            Settle(Outcome.Failed, default, failure);
+            Dispose();
+        }
+
+        /// <summary>Starts the work. One that finishes before it first yields completes here, without the state machine an async method would build.</summary>
+        public void Run<TState>(TState state, Func<TState, IInFlightRun, ValueTask<TResult>> work)
+        {
+            ValueTask<TResult> pending;
+            try
+            {
+                pending = work(state, this);
+            }
+            catch (Exception ex)
+            {
+                Finish(default!, ex);
+                return;
+            }
+
+            if (pending.IsCompletedSuccessfully)
+            {
+                Finish(pending.Result, null);
+                return;
+            }
+
+            _ = FinishAsync(pending);
+        }
+
+        private async Task FinishAsync(ValueTask<TResult> pending)
         {
             TResult result = default!;
             Exception? failure = null;
             try
             {
-                result = await work(state, this).ConfigureAwait(false);
+                result = await pending.ConfigureAwait(false);
             }
             catch (Exception ex)
             {
                 failure = ex;
             }
 
+            Finish(result, failure);
+        }
+
+        private void Finish(TResult result, Exception? failure)
+        {
             // Out of the table before anyone sees the outcome, so a caller that arrives next starts a fresh run.
             owner._flights.TryRemove(new KeyValuePair<TKey, Flight>(key, this));
-            if (failure is OperationCanceledException && _cancellation.IsCancellationRequested)
+            if (failure is OperationCanceledException && _cancellation is { IsCancellationRequested: true })
             {
-                _result.TrySetCanceled(_cancellation.Token);
+                Settle(Outcome.Canceled, default, failure);
             }
             else if (failure is not null)
             {
-                _result.TrySetException(failure);
-
-                // Every caller may have left already, leaving nothing to observe the failure.
-                _result.Task.Forget();
+                Settle(Outcome.Failed, default, failure);
             }
             else
             {
-                _result.TrySetResult(result);
+                Settle(Outcome.Succeeded, result, null);
             }
 
             Dispose();
+        }
+
+        private void Settle(Outcome outcome, TResult? value, Exception? failure)
+        {
+            lock (_gate)
+            {
+                if (Current != Outcome.Running)
+                {
+                    return;
+                }
+
+                _value = value;
+                _failure = failure;
+                _canceledBy = outcome == Outcome.Canceled ? _cancellation?.Token ?? default : default;
+                Volatile.Write(ref _state, (int)outcome);
+                if (_source is not null)
+                {
+                    Publish(_source);
+                }
+            }
+        }
+
+        private void Publish(TaskCompletionSource<TResult> source)
+        {
+            switch (Current)
+            {
+                case Outcome.Succeeded:
+                    source.TrySetResult(_value!);
+                    break;
+                case Outcome.Canceled:
+                    source.TrySetCanceled(_canceledBy);
+                    break;
+                default:
+                    source.TrySetException(_failure!);
+
+                    // Every caller may have left already, leaving nothing to observe the failure.
+                    source.Task.Forget();
+                    break;
+            }
         }
     }
 }

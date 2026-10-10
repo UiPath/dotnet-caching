@@ -122,6 +122,6 @@ internal static class SpanReads
         return Complete(cache.GetOrAddAsync(buffer[..key.Length], generator, token));
     }
 
-    private static TResult Complete<TResult>(ValueTask<TResult> read) =>
+    public static TResult Complete<TResult>(ValueTask<TResult> read) =>
         read.IsCompletedSuccessfully ? read.Result : read.AsTask().GetAwaiter().GetResult();
 }

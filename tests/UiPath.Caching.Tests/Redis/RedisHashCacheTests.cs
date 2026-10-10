@@ -43,6 +43,66 @@ public class RedisHashCacheTests(ITestContextAccessor testContextAccessor) : IAs
     private IEnumerable<DependencyRecord> ReadDeps => _telemetry.Dependencies.Where(d => d.Type == TelemetryScope.DependencyType);
 
     [Fact]
+    public async Task Every_command_waits_for_the_first_connect_asynchronously_and_never_reads_the_database_before_it()
+    {
+        var token = testContextAccessor.Current.CancellationToken;
+        var gate = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var connected = false;
+        var earlyReads = 0;
+        ValueTaskStubs.Returns(_connector.ConnectAsync(Arg.Any<CancellationToken>()), _ => WaitForConnectAsync());
+        _connector.Database.Returns(_ =>
+        {
+            if (!Volatile.Read(ref connected))
+            {
+                Interlocked.Increment(ref earlyReads);
+            }
+
+            return _database;
+        });
+        _connector.Version.Returns(_ =>
+        {
+            if (!Volatile.Read(ref connected))
+            {
+                Interlocked.Increment(ref earlyReads);
+            }
+
+            return _version;
+        });
+        _database.HashGetAllAsync(Arg.Any<RedisKey>(), Arg.Any<CommandFlags>()).Returns([new HashEntry("f", "\"v\"")]);
+        _database.KeyDeleteAsync(Arg.Any<RedisKey>(), Arg.Any<CommandFlags>()).Returns(true);
+        _database.KeyExistsAsync(Arg.Any<RedisKey>(), Arg.Any<CommandFlags>()).Returns(true);
+        _transaction.ExecuteAsync(Arg.Any<CommandFlags>()).Returns(true);
+        var values = new Dictionary<string, string?> { ["f"] = "v" };
+
+        var calls = new Task[]
+        {
+            Sut.GetAsync<string>(_cacheKey, policy: null, token).AsTask(),
+            Sut.GetItemAsync<string>(_cacheKey, "f", policy: null, token).AsTask(),
+            Sut.GetCacheEntryAsync<string>(_cacheKey, policy: null, token).AsTask(),
+            Sut.SetAsync(_cacheKey, values, TimeSpan.FromMinutes(1), policy: null, token).AsTask(),
+            Sut.SetAsync(_cacheKey, values, new HashCacheEntryOptions { TimeToLive = TimeSpan.FromMinutes(1) }, policy: null, token).AsTask(),
+            Sut.GetOrAddAsync<string>(_cacheKey, _ => Task.FromResult<IDictionary<string, string?>>(values), TimeSpan.FromMinutes(1), policy: null, token).AsTask(),
+            Sut.RemoveAsync<string>(_cacheKey, token).AsTask(),
+            Sut.ContainsAsync<string>(_cacheKey, token).AsTask(),
+            Sut.RefreshAsync<string>(_cacheKey, TimeSpan.FromMinutes(1), policy: null, token).AsTask(),
+            Sut.TimeToLiveAsync<string>(_cacheKey, token).AsTask(),
+            Sut.ExpireTimeAsync<string>(_cacheKey, token).AsTask(),
+        };
+        await Task.Delay(100, token);
+        earlyReads.Should().Be(0, "the library waits for the connect without reading the blocking database accessor");
+        gate.SetResult();
+        await Task.WhenAll(calls);
+
+        earlyReads.Should().Be(0);
+
+        async ValueTask WaitForConnectAsync()
+        {
+            await gate.Task;
+            Volatile.Write(ref connected, true);
+        }
+    }
+
+    [Fact]
     public async Task Get_data_from_cacheKey_cache()
     {
         var field = _fixture.Create<string>();

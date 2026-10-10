@@ -1,7 +1,7 @@
 namespace UiPath.Caching;
 
 [ExcludeFromCodeCoverage]
-public sealed class NullCache : ICache, ISpanKeyCache
+public sealed class NullCache : ICache, ISpanKeyCache, IGeneratedExpirationCache
 {
     public static readonly NullCache Instance = new();
 
@@ -127,6 +127,25 @@ public sealed class NullCache : ICache, ISpanKeyCache
     ValueTask<T?> ISpanKeyCache.GetOrAddAsync<T>(Span<char> cacheKey, Func<CancellationToken, Task<T?>> generator, DateTimeOffset expiration, CachePolicy? policy, CancellationToken token)
         where T : default =>
         ReturnGeneratorAsync(generator, token);
+
+    ValueTask<T?> ISpanKeyCache.GetOrAddAsync<T, TState>(Span<char> cacheKey, TState state, Func<TState, CancellationToken, Task<T?>> generator, CachePolicy? policy, CancellationToken token)
+        where T : default =>
+        ReturnGeneratorAsync(ct => generator(state, ct), token);
+
+    ValueTask<T?> ISpanKeyCache.GetOrAddAsync<T, TState>(Span<char> cacheKey, TState state, Func<TState, CancellationToken, Task<T?>> generator, TimeSpan expiration, CachePolicy? policy, CancellationToken token)
+        where T : default =>
+        ReturnGeneratorAsync(ct => generator(state, ct), token);
+
+    ValueTask<T?> ISpanKeyCache.GetOrAddAsync<T, TState>(Span<char> cacheKey, TState state, Func<TState, CancellationToken, Task<T?>> generator, DateTimeOffset expiration, CachePolicy? policy, CancellationToken token)
+        where T : default =>
+        ReturnGeneratorAsync(ct => generator(state, ct), token);
+
+    async ValueTask<T?> IGeneratedExpirationCache.GetOrAddWithExpirationAsync<T>(CacheKey cacheKey, Func<CancellationToken, Task<GeneratedValue<T>>> generator, CachePolicy? policy, CancellationToken token)
+        where T : default
+    {
+        NotCacheableException.ThrowIfNotCacheable<T>();
+        return (await generator(token).ConfigureAwait(false)).Value;
+    }
 
     ValueTask<bool> ISpanKeyCache.ContainsAsync<T>(Span<char> cacheKey, CancellationToken token) =>
         ContainsAsync<T>(CacheKey.Null, token);

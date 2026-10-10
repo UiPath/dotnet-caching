@@ -88,7 +88,7 @@ public class MultilayerCacheBatchGetOrAddLockTests(ITestContextAccessor testCont
     }
 
     [Fact]
-    public async Task Disjoint_miss_sets_take_different_composite_locks()
+    public async Task Disjoint_miss_sets_take_different_composite_locks_and_the_overlap_joins_the_run_in_flight()
     {
         var token = testContextAccessor.Current.CancellationToken;
         var observed = new List<long[]>();
@@ -111,15 +111,19 @@ public class MultilayerCacheBatchGetOrAddLockTests(ITestContextAccessor testCont
 
         var first = Task.Run(async () => await Sut.GetOrAddAsync<string, long>([new((CacheKey)"a", 1L)], Blocking, (CachePolicy?)null, token));
         await firstEntered.Task.WaitAsync(TimeSpan.FromSeconds(10), token);
-        var second = await Sut.GetOrAddAsync<string, long>([new((CacheKey)"a", 1L), new((CacheKey)"b", 2L)], Fast, (CachePolicy?)null, token);
+        var second = Task.Run(async () => await Sut.GetOrAddAsync<string, long>([new((CacheKey)"a", 1L), new((CacheKey)"b", 2L)], Fast, (CachePolicy?)null, token));
+        while (!second.IsCompleted && observed.Count < 2)
+        {
+            await Task.Delay(10, token);
+        }
+
         release.TrySetResult();
         await first;
 
-        second.Select(p => p.Value).Should().Equal(V1AndV2);
-        observed.Should().HaveCount(2, "disjoint miss sets take different locks — the documented limitation");
+        (await second).Select(p => p.Value).Should().Equal(V1AndV2);
+        observed.Should().HaveCount(2, "disjoint miss sets take different locks");
         observed[0].Should().Equal(States1, "the first caller's only miss is 'a'");
-        observed[1].Should().Equal(States1And2,
-            "the second caller took a different lock, so 'a' was still missing when its generator ran");
+        observed[1].Should().BeEquivalentTo(States2, "the second caller took a different lock, but joins the run already generating 'a' and generates only 'b'");
     }
 
     [Fact]

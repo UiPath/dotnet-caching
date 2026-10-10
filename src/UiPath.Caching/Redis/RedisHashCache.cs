@@ -36,8 +36,8 @@ internal sealed partial class RedisHashCache : RedisCacheBase, IHashCache
         _memorySerializer = serializer as IMemorySerializerProxy;
         _logger = logger;
         _logFailure = LogRedisHashCacheException;
-        _read = resiliencePipelineProvider.Get(ResiliencePipelineNames.Read);
-        _write = resiliencePipelineProvider.Get(ResiliencePipelineNames.Write);
+        _read = new ConnectingPipeline(redis, resiliencePipelineProvider.Get(ResiliencePipelineNames.Read));
+        _write = new ConnectingPipeline(redis, resiliencePipelineProvider.Get(ResiliencePipelineNames.Write));
         _cacheOptions = cacheOptions;
         _cacheEntryFactory = redisCacheOptions.EntryFactory ?? new CacheEntryFactory();
         _redisKeyStrategy = (redisCacheOptions.RedisKeyStrategyFactory ?? new DefaultRedisKeyStrategyFactory()).Create(_cacheOptions, GetType());
@@ -128,6 +128,7 @@ internal sealed partial class RedisHashCache : RedisCacheBase, IHashCache
             }
             else
             {
+                await EnsureConnectedAsync(token).ConfigureAwait(false);
                 var transaction = Database.CreateTransaction();
                 using (QueueMetadataWrite(transaction, redisKey, options.Metadata))
                 {
@@ -913,6 +914,7 @@ internal sealed partial class RedisHashCache : RedisCacheBase, IHashCache
                 }
                 else
                 {
+                    await EnsureConnectedAsync(token).ConfigureAwait(false);
                     var transaction = Database.CreateTransaction();
                     if (setOption == HashCacheSetOption.KeyReplace)
                     {

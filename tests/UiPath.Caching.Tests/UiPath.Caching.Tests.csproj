@@ -22,6 +22,7 @@
     <PackageReference Include="Microsoft.Testing.Extensions.CodeCoverage" />
     <PackageReference Include="AwesomeAssertions" />
     <PackageReference Include="NSubstitute" />
+    <PackageReference Include="Moq" />
     <PackageReference Include="AutoFixture.Xunit3" />
     <PackageReference Include="AutoFixture.AutoNSubstitute" />
     <PackageReference Include="AwesomeAssertions.Json" />

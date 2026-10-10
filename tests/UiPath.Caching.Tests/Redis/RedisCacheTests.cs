@@ -822,6 +822,366 @@ public class RedisCacheTests(ITestContextAccessor testContextAccessor) : IAsyncL
     }
 
     [Fact]
+    public async Task GetOrAdd_stateful_generator_receives_its_state_on_a_miss_and_is_stored()
+    {
+        var token = testContextAccessor.Current.CancellationToken;
+        var calls = 0;
+
+        var actual = await ((ICache)Sut).GetOrAddAsync<string, string>(_cacheKey, "state", (state, _) => { calls++; return Task.FromResult<string?>(state + "!"); }, TimeSpan.FromSeconds(5), policy: null, token);
+
+        actual.Should().Be("state!");
+        calls.Should().Be(1);
+        await _database.Received(1).StringSetAsync(_redisKey, Arg.Any<RedisValue>(), Arg.Any<TimeSpan?>(), Arg.Any<When>(), Arg.Any<CommandFlags>());
+    }
+
+    [Fact]
+    public async Task GetOrAdd_stateful_generator_does_not_run_on_a_hit()
+    {
+        var token = testContextAccessor.Current.CancellationToken;
+        _database.StringGetAsync(_redisKey, CommandFlags.PreferReplica).Returns(_serializer.Serialize("cached"));
+
+        var actual = await ((ICache)Sut).GetOrAddAsync<string, string>(_cacheKey, "state", static (_, _) => throw new InvalidOperationException("the generator ran on a hit"), policy: null, token);
+
+        actual.Should().Be("cached");
+    }
+
+    [Fact]
+    public async Task GetOrAdd_stateful_policy_FactoryTimeout_cancels_slow_generator()
+    {
+        using var caller = new CancellationTokenSource();
+        var policy = new CachePolicy { FactoryTimeout = TimeSpan.FromMilliseconds(50) };
+
+        var act = async () => await ((ICache)Sut).GetOrAddAsync<string, int>(_cacheKey, 1, SlowGenerator, policy, caller.Token);
+
+        await act.Should().ThrowAsync<TimeoutException>();
+
+        async Task<string?> SlowGenerator(int state, CancellationToken ct)
+        {
+            await Task.Delay(TimeSpan.FromSeconds(5), ct);
+            return "never";
+        }
+    }
+
+    [Fact]
+    public async Task GetOrAddWithExpiration_stores_for_the_time_left_until_the_returned_expiration()
+    {
+        var token = testContextAccessor.Current.CancellationToken;
+        var deadline = _now.AddMinutes(10);
+
+        var actual = await ((ICache)Sut).GetOrAddWithExpirationAsync<string>(_cacheKey, _ => Task.FromResult(new GeneratedValue<string>("jwt", deadline)), policy: null, token);
+
+        actual.Should().Be("jwt");
+        await _database.Received(1).StringSetAsync(_redisKey, Arg.Any<RedisValue>(), TimeSpan.FromMinutes(10), When.Always, CommandFlags.DemandMaster);
+    }
+
+    [Fact]
+    public async Task GetOrAddWithExpiration_without_an_expiration_stores_for_the_policy_lifetime()
+    {
+        var token = testContextAccessor.Current.CancellationToken;
+        var policy = new CachePolicy { DistributedExpiration = TimeSpan.FromMinutes(30) };
+
+        await ((ICache)Sut).GetOrAddWithExpirationAsync<string>(_cacheKey, _ => Task.FromResult(new GeneratedValue<string>("jwt")), policy, token);
+
+        await _database.Received(1).StringSetAsync(_redisKey, Arg.Any<RedisValue>(), TimeSpan.FromMinutes(30), When.Always, CommandFlags.DemandMaster);
+    }
+
+    [Fact]
+    public async Task GetOrAddWithExpiration_does_not_store_a_value_that_has_already_expired()
+    {
+        var token = testContextAccessor.Current.CancellationToken;
+
+        var actual = await ((ICache)Sut).GetOrAddWithExpirationAsync<string>(_cacheKey, _ => Task.FromResult(new GeneratedValue<string>("jwt", _now.AddMinutes(-1))), policy: null, token);
+
+        actual.Should().Be("jwt");
+        await _database.DidNotReceiveWithAnyArgs().StringSetAsync(default, default, (TimeSpan?)null, default, default);
+    }
+
+    [Fact]
+    public async Task GetOrAddWithExpiration_does_not_run_the_generator_on_a_hit()
+    {
+        var token = testContextAccessor.Current.CancellationToken;
+        _database.StringGetAsync(_redisKey, CommandFlags.PreferReplica).Returns(_serializer.Serialize("cached"));
+
+        var actual = await ((ICache)Sut).GetOrAddWithExpirationAsync<string>(_cacheKey, _ => throw new InvalidOperationException("the generator ran on a hit"), policy: null, token);
+
+        actual.Should().Be("cached");
+    }
+
+    [Fact]
+    public async Task GetOrAdd_concurrent_misses_on_one_key_share_one_generator_run_and_one_write()
+    {
+        var token = testContextAccessor.Current.CancellationToken;
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var started = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var calls = 0;
+        async Task<string?> Generate(CancellationToken _)
+        {
+            Interlocked.Increment(ref calls);
+            started.TrySetResult();
+            await release.Task;
+            return "loaded";
+        }
+
+        var first = Sut.GetOrAddAsync(_cacheKey, Generate, TimeSpan.FromSeconds(5), policy: null, token).AsTask();
+        await started.Task.WaitAsync(TimeSpan.FromSeconds(10), token);
+        var others = Enumerable.Range(0, 9).Select(_ => Sut.GetOrAddAsync(_cacheKey, Generate, TimeSpan.FromSeconds(5), policy: null, token).AsTask()).ToArray();
+        await Task.Delay(100, token);
+        release.SetResult();
+
+        (await Task.WhenAll(others.Append(first))).Should().AllBe("loaded");
+        calls.Should().Be(1);
+        await _database.Received(1).StringGetAsync(_redisKey, Arg.Any<CommandFlags>());
+        await _database.Received(1).StringSetAsync(_redisKey, Arg.Any<RedisValue>(), Arg.Any<TimeSpan?>(), Arg.Any<When>(), Arg.Any<CommandFlags>());
+    }
+
+    [Fact]
+    public async Task GetOrAdd_concurrent_callers_on_a_cached_key_share_one_read_and_run_no_generator()
+    {
+        var token = testContextAccessor.Current.CancellationToken;
+        var release = new TaskCompletionSource<RedisValue>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var reads = 0;
+        _database.StringGetAsync(_redisKey, Arg.Any<CommandFlags>()).Returns(_ =>
+        {
+            Interlocked.Increment(ref reads);
+            return release.Task;
+        });
+        var generated = 0;
+        Task<string?> Generate(CancellationToken _)
+        {
+            Interlocked.Increment(ref generated);
+            return Task.FromResult<string?>("generated");
+        }
+
+        var callers = Enumerable.Range(0, 10).Select(_ => Sut.GetOrAddAsync(_cacheKey, Generate, TimeSpan.FromSeconds(5), policy: null, token).AsTask()).ToArray();
+        await Task.Delay(100, token);
+        release.SetResult(_serializer.Serialize("cached"));
+
+        (await Task.WhenAll(callers)).Should().AllBe("cached");
+        reads.Should().Be(1);
+        generated.Should().Be(0);
+    }
+
+    [Fact]
+    public async Task GetOrAdd_sequential_callers_read_once_each()
+    {
+        var token = testContextAccessor.Current.CancellationToken;
+        _database.StringGetAsync(_redisKey, Arg.Any<CommandFlags>()).Returns(_serializer.Serialize("cached"));
+
+        Task<string?> Generate(CancellationToken _) => throw new InvalidOperationException("the generator ran on a hit");
+
+        for (var i = 0; i < 3; i++)
+        {
+            (await Sut.GetOrAddAsync(_cacheKey, Generate, TimeSpan.FromSeconds(5), policy: null, token)).Should().Be("cached");
+        }
+
+        await _database.Received(3).StringGetAsync(_redisKey, Arg.Any<CommandFlags>());
+    }
+
+    [Fact]
+    public async Task GetOrAdd_a_caller_after_a_run_ended_reads_once_and_finds_the_written_value()
+    {
+        var token = testContextAccessor.Current.CancellationToken;
+        var reads = 0;
+        _database.StringGetAsync(_redisKey, Arg.Any<CommandFlags>()).Returns(_ =>
+            Interlocked.Increment(ref reads) == 1 ? RedisValue.Null : (RedisValue)_serializer.Serialize("written"));
+        var calls = 0;
+        Task<string?> Generate(CancellationToken _)
+        {
+            calls++;
+            return Task.FromResult<string?>("written");
+        }
+
+        (await Sut.GetOrAddAsync(_cacheKey, Generate, TimeSpan.FromSeconds(5), policy: null, token)).Should().Be("written");
+        (await Sut.GetOrAddAsync(_cacheKey, Generate, TimeSpan.FromSeconds(5), policy: null, token)).Should().Be("written");
+
+        calls.Should().Be(1);
+        reads.Should().Be(2);
+    }
+
+    [Fact]
+    public async Task GetOrAdd_a_failed_read_is_one_read_and_one_generator_run_for_every_joiner()
+    {
+        var token = testContextAccessor.Current.CancellationToken;
+        var release = new TaskCompletionSource<RedisValue>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var reads = 0;
+        _database.StringGetAsync(_redisKey, Arg.Any<CommandFlags>()).Returns(_ =>
+        {
+            Interlocked.Increment(ref reads);
+            return release.Task;
+        });
+        var generated = 0;
+        Task<string?> Generate(CancellationToken _)
+        {
+            Interlocked.Increment(ref generated);
+            return Task.FromResult<string?>("generated");
+        }
+
+        var callers = Enumerable.Range(0, 5).Select(_ => Sut.GetOrAddAsync(_cacheKey, Generate, TimeSpan.FromSeconds(5), policy: null, token).AsTask()).ToArray();
+        await Task.Delay(100, token);
+        release.SetException(new InvalidOperationException("read failed"));
+
+        (await Task.WhenAll(callers)).Should().AllBe("generated");
+        reads.Should().Be(1);
+        generated.Should().Be(1);
+    }
+
+    [Fact]
+    public async Task GetOrAdd_the_expiring_generator_shares_one_read_between_concurrent_callers()
+    {
+        var token = testContextAccessor.Current.CancellationToken;
+        var release = new TaskCompletionSource<RedisValue>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var reads = 0;
+        _database.StringGetAsync(_redisKey, Arg.Any<CommandFlags>()).Returns(_ =>
+        {
+            Interlocked.Increment(ref reads);
+            return release.Task;
+        });
+
+        var callers = Enumerable.Range(0, 10)
+            .Select(_ => ((ICache)Sut).GetOrAddWithExpirationAsync<string>(_cacheKey, _ => throw new InvalidOperationException("the generator ran on a hit"), policy: null, token).AsTask())
+            .ToArray();
+        await Task.Delay(100, token);
+        release.SetResult(_serializer.Serialize("cached"));
+
+        (await Task.WhenAll(callers)).Should().AllBe("cached");
+        reads.Should().Be(1);
+    }
+
+    [Fact]
+    public async Task GetOrAdd_misses_on_different_keys_do_not_share_a_run()
+    {
+        var token = testContextAccessor.Current.CancellationToken;
+        var calls = 0;
+        Task<string?> Generate(CancellationToken _)
+        {
+            Interlocked.Increment(ref calls);
+            return Task.FromResult<string?>("loaded");
+        }
+
+        await Task.WhenAll(
+            Sut.GetOrAddAsync(_cacheKey, Generate, TimeSpan.FromSeconds(5), policy: null, token).AsTask(),
+            Sut.GetOrAddAsync(_multiKey, Generate, TimeSpan.FromSeconds(5), policy: null, token).AsTask());
+
+        calls.Should().Be(2);
+    }
+
+    [Fact]
+    public async Task GetOrAdd_a_caller_that_cancels_stops_waiting_and_the_run_is_cancelled_once_all_have()
+    {
+        var token = testContextAccessor.Current.CancellationToken;
+        using var firstCancellation = CancellationTokenSource.CreateLinkedTokenSource(token);
+        using var secondCancellation = CancellationTokenSource.CreateLinkedTokenSource(token);
+        var started = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var cancelled = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        async Task<string?> Generate(CancellationToken ct)
+        {
+            started.TrySetResult();
+            using var registration = ct.Register(() => cancelled.TrySetResult());
+            await Task.Delay(Timeout.Infinite, ct);
+            return "never";
+        }
+
+        var first = Sut.GetOrAddAsync(_cacheKey, Generate, TimeSpan.FromSeconds(5), policy: null, firstCancellation.Token).AsTask();
+        await started.Task.WaitAsync(TimeSpan.FromSeconds(10), token);
+        var second = Sut.GetOrAddAsync(_cacheKey, Generate, TimeSpan.FromSeconds(5), policy: null, secondCancellation.Token).AsTask();
+
+        await firstCancellation.CancelAsync();
+        await ((Func<Task>)(() => first)).Should().ThrowAsync<OperationCanceledException>();
+        cancelled.Task.IsCompleted.Should().BeFalse("a caller still waits for the run");
+        await secondCancellation.CancelAsync();
+        await ((Func<Task>)(() => second)).Should().ThrowAsync<OperationCanceledException>();
+        await cancelled.Task.WaitAsync(TimeSpan.FromSeconds(10), token);
+    }
+
+    [Fact]
+    public async Task GetOrAdd_a_failed_run_fails_the_callers_that_joined_it_and_the_next_call_starts_a_new_one()
+    {
+        var token = testContextAccessor.Current.CancellationToken;
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var started = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        async Task<string?> Failing(CancellationToken _)
+        {
+            started.TrySetResult();
+            await release.Task;
+            throw new InvalidOperationException("the load failed");
+        }
+
+        var first = Sut.GetOrAddAsync(_cacheKey, Failing, TimeSpan.FromSeconds(5), policy: null, token).AsTask();
+        await started.Task.WaitAsync(TimeSpan.FromSeconds(10), token);
+        var second = Sut.GetOrAddAsync(_cacheKey, Failing, TimeSpan.FromSeconds(5), policy: null, token).AsTask();
+        release.SetResult();
+
+        await ((Func<Task>)(() => first)).Should().ThrowAsync<InvalidOperationException>();
+        await ((Func<Task>)(() => second)).Should().ThrowAsync<InvalidOperationException>();
+        (await Sut.GetOrAddAsync(_cacheKey, _ => Task.FromResult<string?>("again"), TimeSpan.FromSeconds(5), policy: null, token)).Should().Be("again");
+    }
+
+    [Fact]
+    public async Task Every_command_waits_for_the_first_connect_asynchronously_and_never_reads_the_database_before_it()
+    {
+        var token = testContextAccessor.Current.CancellationToken;
+        var gate = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var connected = false;
+        var earlyReads = 0;
+        ValueTaskStubs.Returns(_connector.ConnectAsync(Arg.Any<CancellationToken>()), _ => WaitForConnectAsync());
+        _connector.Database.Returns(_ =>
+        {
+            if (!Volatile.Read(ref connected))
+            {
+                Interlocked.Increment(ref earlyReads);
+            }
+
+            return _database;
+        });
+        _connector.Version.Returns(_ =>
+        {
+            if (!Volatile.Read(ref connected))
+            {
+                Interlocked.Increment(ref earlyReads);
+            }
+
+            return _version;
+        });
+        _database.StringGetAsync(Arg.Any<RedisKey>(), Arg.Any<CommandFlags>()).Returns(_ => (RedisValue)_serializer.Serialize("v"));
+        _database.StringSetAsync(Arg.Any<RedisKey>(), Arg.Any<RedisValue>(), Arg.Any<TimeSpan?>(), Arg.Any<When>(), Arg.Any<CommandFlags>()).Returns(true);
+        _database.KeyDeleteAsync(Arg.Any<RedisKey>(), Arg.Any<CommandFlags>()).Returns(true);
+        _database.KeyExistsAsync(Arg.Any<RedisKey>(), Arg.Any<CommandFlags>()).Returns(true);
+        _transaction.ExecuteAsync(Arg.Any<CommandFlags>()).Returns(true);
+        CacheKey[] keys = [_cacheKey, _multiKey];
+        KeyValuePair<CacheKey, string?>[] pairs = [new(_cacheKey, "a"), new(_multiKey, "b")];
+
+        var calls = new Task[]
+        {
+            Sut.GetAsync<string>(_cacheKey, policy: null, token).AsTask(),
+            Sut.GetAsync<string>(keys, policy: null, token).AsTask(),
+            Sut.GetCacheEntryAsync<string>(_cacheKey, policy: null, token).AsTask(),
+            Sut.GetCacheEntriesAsync<string>(keys, policy: null, token).AsTask(),
+            Sut.GetOrAddAsync(_cacheKey, _ => Task.FromResult<string?>("g"), TimeSpan.FromMinutes(1), policy: null, token).AsTask(),
+            Sut.SetAsync<string>(_cacheKey, "a", TimeSpan.FromMinutes(1), policy: null, token).AsTask(),
+            Sut.SetAsync(pairs, TimeSpan.FromMinutes(1), policy: null, token).AsTask(),
+            Sut.TryAddAsync<string>(_cacheKey, "a", TimeSpan.FromMinutes(1), policy: null, token).AsTask(),
+            Sut.RemoveAsync<string>(_cacheKey, token).AsTask(),
+            Sut.RemoveAsync<string>(keys, token).AsTask(),
+            Sut.ContainsAsync<string>(_cacheKey, token).AsTask(),
+            Sut.RefreshAsync<string>(_cacheKey, TimeSpan.FromMinutes(1), policy: null, token).AsTask(),
+            Sut.TimeToLiveAsync<string>(_cacheKey, token).AsTask(),
+            Sut.ExpireTimeAsync<string>(_cacheKey, token).AsTask(),
+        };
+        await Task.Delay(100, token);
+        earlyReads.Should().Be(0, "the library waits for the connect without reading the blocking database accessor");
+        gate.SetResult();
+        await Task.WhenAll(calls);
+
+        earlyReads.Should().Be(0);
+
+        async ValueTask WaitForConnectAsync()
+        {
+            await gate.Task;
+            Volatile.Write(ref connected, true);
+        }
+    }
+
+    [Fact]
     public async Task GetOrAdd_when_disconnected_runs_generator_without_redis_probe()
     {
         _isConnected = false;

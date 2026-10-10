@@ -5,6 +5,14 @@ internal interface IInFlightRun
 {
     CancellationToken Token { get; }
 
+    /// <summary>Completes when the work ends, whichever caller is still waiting.</summary>
+    Task Completion { get; }
+
+    bool IsCompleted { get; }
+
+    /// <summary>True once every caller has left, so the work must not store its result over a newer one.</summary>
+    bool IsAbandoned { get; }
+
     /// <summary>Runs <paramref name="commit"/> unless every caller has left; false when it did not.</summary>
     bool TryCommit<TArg>(TArg arg, Action<TArg> commit);
 }
