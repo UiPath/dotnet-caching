@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using System.Runtime.CompilerServices;
 using UiPath.Caching.Policies;
 using UiPath.Caching.Telemetry;
@@ -17,7 +18,7 @@ internal sealed partial class RedisCache : RedisCacheBase, ICache, IStatefulCach
     private readonly Action<LoggedKey, RedisValue>? _auditKeySize;
     private readonly int _largeValueThreshold;
     private readonly bool _cacheNullValues;
-    private readonly InFlight<InFlightKey, object?> _generations = new();
+    private readonly ConcurrentDictionary<Type, object> _generations = new();
 
     public RedisCache(
         IRedisConnector redis,
@@ -311,7 +312,7 @@ internal sealed partial class RedisCache : RedisCacheBase, ICache, IStatefulCach
     private ValueTask<T?> GetOrAddInternalAsync<T, TState>(CacheKey cacheKey, RedisKey redisKey, TState state, Func<TState, CancellationToken, Task<T?>> generator, TimeSpan? factoryTimeout, TimeSpan expiration, CancellationToken token)
     {
         NotCacheableException.ThrowIfNotCacheable<T>();
-        return ShareGenerationAsync<T, T?, (RedisCache Cache, CacheKey Key, RedisKey RedisKey, TState State, Func<TState, CancellationToken, Task<T?>> Generator, TimeSpan? FactoryTimeout, TimeSpan Expiration)>(
+        return ShareGenerationAsync<T, (RedisCache Cache, CacheKey Key, RedisKey RedisKey, TState State, Func<TState, CancellationToken, Task<T?>> Generator, TimeSpan? FactoryTimeout, TimeSpan Expiration)>(
             redisKey,
             (this, cacheKey, redisKey, state, generator, factoryTimeout, expiration),
             static (args, ct) => args.Cache.GenerateAndStoreAsync(args.Key, args.RedisKey, args.State, args.Generator, args.FactoryTimeout, args.Expiration, ct),
@@ -338,16 +339,16 @@ internal sealed partial class RedisCache : RedisCacheBase, ICache, IStatefulCach
         return ret;
     }
 
-    /// <summary>One run per key and type: concurrent callers join the run in progress, which reads Redis once and generates only on a miss, and share its result or failure; it runs on its own token, cancelled once every caller has cancelled.</summary>
-    private async ValueTask<TResult> ShareGenerationAsync<T, TResult, TArgs>(RedisKey redisKey, TArgs args, Func<TArgs, CancellationToken, ValueTask<TResult>> work, CancellationToken token) =>
-        (TResult)(await _generations.RunAsync(
-            new InFlightKey(redisKey.ToString(), typeof(T), null, null),
-            (Args: args, Work: work),
-            static async (state, run) => await state.Work(state.Args, run.Token).ConfigureAwait(false),
-            token).ConfigureAwait(false))!;
+    /// <summary>One run per Redis key and type: concurrent callers join the run in progress, which reads Redis once and generates only on a miss, and share its result or failure; it runs on its own token, cancelled once every caller has cancelled. Keyed by the Redis key, not the cache key, which a strategy may map to different Redis keys, and by value, so a prefixed key is never rendered to a string.</summary>
+    private ValueTask<T?> ShareGenerationAsync<T, TArgs>(RedisKey redisKey, TArgs args, Func<TArgs, CancellationToken, ValueTask<T?>> work, CancellationToken token) =>
+        GenerationsOf<T>().RunAsync(redisKey, (Args: args, Work: work), static (state, run) => state.Work(state.Args, run.Token), token);
+
+    /// <summary>The runs of one value type, so a result needs no box and no cast.</summary>
+    private InFlight<RedisKey, T?> GenerationsOf<T>() =>
+        (InFlight<RedisKey, T?>)_generations.GetOrAdd(typeof(T), static _ => new InFlight<RedisKey, T?>());
 
     private ValueTask<T?> GetOrAddGeneratedAsync<T>(CacheKey cacheKey, RedisKey redisKey, Func<CancellationToken, Task<GeneratedValue<T>>> generator, CachePolicy? policy, CancellationToken token) =>
-        ShareGenerationAsync<T, T?, (RedisCache Cache, CacheKey Key, RedisKey RedisKey, Func<CancellationToken, Task<GeneratedValue<T>>> Generator, CachePolicy? Policy)>(
+        ShareGenerationAsync<T, (RedisCache Cache, CacheKey Key, RedisKey RedisKey, Func<CancellationToken, Task<GeneratedValue<T>>> Generator, CachePolicy? Policy)>(
             redisKey,
             (this, cacheKey, redisKey, generator, policy),
             static (args, ct) => args.Cache.GenerateExpiringAndStoreAsync(args.Key, args.RedisKey, args.Generator, args.Policy, ct),

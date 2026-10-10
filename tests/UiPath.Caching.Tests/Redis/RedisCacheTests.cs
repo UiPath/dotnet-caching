@@ -935,6 +935,75 @@ public class RedisCacheTests(ITestContextAccessor testContextAccessor) : IAsyncL
     }
 
     [Fact]
+    public async Task GetOrAdd_calls_whose_redis_keys_differ_for_one_cache_key_do_not_share_a_run()
+    {
+        var token = testContextAccessor.Current.CancellationToken;
+        var tenant = new AsyncLocal<string?>();
+        RedisKey tenantA = "tenant-a:" + _cacheKey;
+        RedisKey tenantB = "tenant-b:" + _cacheKey;
+        _redisKeyStrategy.GetRedisKey(_cacheKey).Returns(_ => tenant.Value == "a" ? tenantA : tenantB);
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var started = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var calls = 0;
+        Func<CancellationToken, Task<string?>> Generate(string value) => async _ =>
+        {
+            Interlocked.Increment(ref calls);
+            started.TrySetResult();
+            await release.Task;
+            return value;
+        };
+
+        tenant.Value = "a";
+        var first = Sut.GetOrAddAsync(_cacheKey, Generate("from-a"), TimeSpan.FromSeconds(5), policy: null, token).AsTask();
+        await started.Task.WaitAsync(TimeSpan.FromSeconds(10), token);
+        tenant.Value = "b";
+        var second = Sut.GetOrAddAsync(_cacheKey, Generate("from-b"), TimeSpan.FromSeconds(5), policy: null, token).AsTask();
+        await Task.Delay(100, token);
+        release.SetResult();
+
+        (await first).Should().Be("from-a");
+        (await second).Should().Be("from-b");
+        calls.Should().Be(2);
+        await _database.Received(1).StringGetAsync(tenantA, Arg.Any<CommandFlags>());
+        await _database.Received(1).StringGetAsync(tenantB, Arg.Any<CommandFlags>());
+        await _database.Received(1).StringSetAsync(tenantA, Arg.Any<RedisValue>(), Arg.Any<TimeSpan?>(), Arg.Any<When>(), Arg.Any<CommandFlags>());
+        await _database.Received(1).StringSetAsync(tenantB, Arg.Any<RedisValue>(), Arg.Any<TimeSpan?>(), Arg.Any<When>(), Arg.Any<CommandFlags>());
+    }
+
+    [Fact]
+    public async Task GetOrAdd_calls_for_one_redis_key_with_different_value_types_do_not_share_a_run()
+    {
+        var token = testContextAccessor.Current.CancellationToken;
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var started = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var calls = 0;
+        async Task<string?> GenerateText(CancellationToken _)
+        {
+            Interlocked.Increment(ref calls);
+            started.TrySetResult();
+            await release.Task;
+            return "text";
+        }
+
+        async Task<int?> GenerateNumber(CancellationToken _)
+        {
+            Interlocked.Increment(ref calls);
+            await release.Task;
+            return 42;
+        }
+
+        var text = Sut.GetOrAddAsync(_cacheKey, GenerateText, TimeSpan.FromSeconds(5), policy: null, token).AsTask();
+        await started.Task.WaitAsync(TimeSpan.FromSeconds(10), token);
+        var number = Sut.GetOrAddAsync<int?>(_cacheKey, GenerateNumber, TimeSpan.FromSeconds(5), policy: null, token).AsTask();
+        await Task.Delay(100, token);
+        release.SetResult();
+
+        (await text).Should().Be("text");
+        (await number).Should().Be(42);
+        calls.Should().Be(2);
+    }
+
+    [Fact]
     public async Task GetOrAdd_concurrent_callers_on_a_cached_key_share_one_read_and_run_no_generator()
     {
         var token = testContextAccessor.Current.CancellationToken;
