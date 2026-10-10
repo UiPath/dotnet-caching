@@ -1,4 +1,5 @@
 using System.Collections.Concurrent;
+using System.Runtime.ExceptionServices;
 
 namespace UiPath.Caching;
 
@@ -18,7 +19,15 @@ internal sealed class InFlight<TKey, TResult>
     {
         // A caller cancelled before it arrives starts no work and joins none.
         token.ThrowIfCancellationRequested();
-        return WaitAsync(Join(key, state, work, token.CanBeCanceled), joined: null, token);
+        var flight = Join(key, state, work, token.CanBeCanceled, out var started);
+
+        // The caller that started the work waits on the work itself: the shared task would resume it through a thread-pool hop.
+        if (started && flight.Starter is { } own)
+        {
+            return token.CanBeCanceled ? WaitStarterCancellableAsync(flight, own, token) : new ValueTask<TResult>(own);
+        }
+
+        return WaitAsync(flight, joined: null, token);
     }
 
     /// <summary>Joins the run in progress for <paramref name="key"/>; false when none is, starting nothing. The caller that stops waiting for any reason other than its token must <see cref="Joined.Withdraw"/>, or it keeps counting as a waiter.</summary>
@@ -87,8 +96,24 @@ internal sealed class InFlight<TKey, TResult>
         }
     }
 
-    private Flight Join<TState>(TKey key, TState state, Func<TState, IInFlightRun, ValueTask<TResult>> work, bool starterCanCancel)
+    private static async ValueTask<TResult> WaitStarterCancellableAsync(Flight flight, Task<TResult> own, CancellationToken token)
     {
+        try
+        {
+            return await own.WaitAsync(token).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) when (token.IsCancellationRequested)
+        {
+            // The run goes on for the callers that joined it, and a failure of it that nothing awaits any more is observed.
+            own.Forget();
+            flight.Leave();
+            throw;
+        }
+    }
+
+    private Flight Join<TState>(TKey key, TState state, Func<TState, IInFlightRun, ValueTask<TResult>> work, bool starterCanCancel, out bool startedHere)
+    {
+        startedHere = false;
         while (true)
         {
             if (_flights.TryGetValue(key, out var running))
@@ -108,6 +133,7 @@ internal sealed class InFlight<TKey, TResult>
             if (_flights.TryAdd(key, started))
             {
                 started.Run(state, work);
+                startedHere = true;
                 return started;
             }
 
@@ -192,6 +218,9 @@ internal sealed class InFlight<TKey, TResult>
         }
 
         public CancellationToken Token => _cancellation?.Token ?? default;
+
+        /// <summary>The work as its starter awaits it, ending with the work's own failure; null when the work finished before it first yielded.</summary>
+        public Task<TResult>? Starter { get; private set; }
 
         private Outcome Current => (Outcome)Volatile.Read(ref _state);
 
@@ -307,10 +336,10 @@ internal sealed class InFlight<TKey, TResult>
                 return;
             }
 
-            _ = FinishAsync(pending);
+            Starter = FinishAsync(pending);
         }
 
-        private async Task FinishAsync(ValueTask<TResult> pending)
+        private async Task<TResult> FinishAsync(ValueTask<TResult> pending)
         {
             TResult result = default!;
             Exception? failure = null;
@@ -324,6 +353,12 @@ internal sealed class InFlight<TKey, TResult>
             }
 
             Finish(result, failure);
+            if (failure is not null)
+            {
+                ExceptionDispatchInfo.Capture(failure).Throw();
+            }
+
+            return result;
         }
 
         private void Finish(TResult result, Exception? failure)
