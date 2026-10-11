@@ -135,9 +135,9 @@ public abstract partial class MultilayerCacheBase : IDisposable
             static s => s.Read(),
             isHit,
             static (s, ct) => s.Run(ct),
-            token,
             policyLock,
-            lifetime: null);
+            lifetime: null,
+            token);
 
     protected Task<TResult> InvokeFactoryAsync<TResult>(
         CacheKey cacheKey,
@@ -185,9 +185,9 @@ public abstract partial class MultilayerCacheBase : IDisposable
         Func<TState, ValueTask<TResult>> readCachedAsync,
         Func<TResult, bool> isHit,
         Func<TState, CancellationToken, ValueTask<TResult>> runGeneratorAndStoreAsync,
-        CancellationToken token,
         LockProfile? policyLock,
-        LockLifetime? lifetime)
+        LockLifetime? lifetime,
+        CancellationToken token)
     {
         var (localLockEnabled, localLockTimeout) = ResolveLocalLock(policyLock);
         var distributedLockEnabled = policyLock?.DistributedLockEnabled ?? _distributedLockEnabled;

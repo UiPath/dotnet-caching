@@ -2,7 +2,6 @@ namespace UiPath.Caching;
 
 internal sealed partial class MultilayerCache
 {
-#if NET9_0_OR_GREATER
     /// <summary>A local hit by span, or false whenever the string path is needed: another <see cref="IMemoryCache"/>, a strategy that declines, an empty or overlong key, a disconnected inner tier not served locally, or Trace logging, which renders the key. Cancellation is observed where <see cref="CacheEntryBuilder"/> observes it: once the key is known non-empty, before the strategy.</summary>
     private bool TryGetLocal<T>(ReadOnlySpan<char> cacheKey, CancellationToken token, [MaybeNullWhen(false)] out ICacheEntry<T> entry)
     {
@@ -11,6 +10,15 @@ internal sealed partial class MultilayerCache
         return probe == LocalProbe.Hit;
     }
 
+    /// <summary>A local hit by the key's text, for a key that <see cref="SpanKey.TryCompose{T}"/> would normalize as it was built: one with the default casing.</summary>
+    private bool TryGetLocal<T>(CacheKey cacheKey, CancellationToken token, [MaybeNullWhen(false)] out ICacheEntry<T> entry)
+    {
+        var probe = ProbeLocal<T>(cacheKey, token, out var found);
+        entry = found!;
+        return probe == LocalProbe.Hit;
+    }
+
+#if NET9_0_OR_GREATER
     /// <summary>The read behind <see cref="TryGetLocal{T}(ReadOnlySpan{char}, CancellationToken, out ICacheEntry{T})"/>, which also says when the tier definitively holds nothing.</summary>
     private LocalProbe ProbeLocal<T>(ReadOnlySpan<char> cacheKey, CancellationToken token, out ICacheEntry<T>? entry)
     {
@@ -40,17 +48,6 @@ internal sealed partial class MultilayerCache
         return LocalProbe.Hit;
     }
 #else
-    /// <summary>Always false: <see cref="MemoryCache"/> looks a key up by span only on .NET 9 and later.</summary>
-    [SuppressMessage("Style", "IDE0060:Remove unused parameter", Justification = "Mirrors the .NET 9 signature so callers need no conditional code.")]
-    [SuppressMessage("Performance", "CA1822:Mark members as static", Justification = "An instance member like the .NET 9 one, so its callers stay instance members on every target.")]
-    [SuppressMessage("Minor Code Smell", "S2325:Methods and properties that don't access instance data should be static", Justification = "An instance member like the .NET 9 one, so its callers stay instance members on every target.")]
-    [SuppressMessage("Major Code Smell", "S1172:Unused method parameters should be removed", Justification = "Mirrors the .NET 9 signature so callers need no conditional code.")]
-    private bool TryGetLocal<T>(ReadOnlySpan<char> cacheKey, CancellationToken token, [MaybeNullWhen(false)] out ICacheEntry<T> entry)
-    {
-        entry = default;
-        return false;
-    }
-
     /// <summary>Always <see cref="LocalProbe.Unavailable"/>: <see cref="MemoryCache"/> looks a key up by span only on .NET 9 and later.</summary>
     [SuppressMessage("Style", "IDE0060:Remove unused parameter", Justification = "Mirrors the .NET 9 signature so callers need no conditional code.")]
     [SuppressMessage("Performance", "CA1822:Mark members as static", Justification = "An instance member like the .NET 9 one, so its callers stay instance members on every target.")]
@@ -62,14 +59,6 @@ internal sealed partial class MultilayerCache
         return LocalProbe.Unavailable;
     }
 #endif
-
-    /// <summary>A local hit by the key's text, for a key that <see cref="SpanKey.TryCompose{T}"/> would normalize as it was built: one with the default casing.</summary>
-    private bool TryGetLocal<T>(CacheKey cacheKey, CancellationToken token, [MaybeNullWhen(false)] out ICacheEntry<T> entry)
-    {
-        var probe = ProbeLocal<T>(cacheKey, token, out var found);
-        entry = found!;
-        return probe == LocalProbe.Hit;
-    }
 
     /// <summary>The read behind <see cref="TryGetLocal{T}(CacheKey, CancellationToken, out ICacheEntry{T})"/>, which also says when the tier definitively holds nothing.</summary>
     private LocalProbe ProbeLocal<T>(CacheKey cacheKey, CancellationToken token, out ICacheEntry<T>? entry)
@@ -85,11 +74,7 @@ internal sealed partial class MultilayerCache
             return ProbeLocalByName(cacheKey, out entry);
         }
 
-#if NET9_0_OR_GREATER
         return ProbeLocal(cacheKey.Name.AsSpan(), token, out entry);
-#else
-        return LocalProbe.Unavailable;
-#endif
     }
 
     /// <summary>The read by the key's text, which <see cref="DefaultCacheKeyStrategy"/> leaves as the tier stores it: no composing, so a miss costs one lookup and a hit allocates nothing and binds no state.</summary>

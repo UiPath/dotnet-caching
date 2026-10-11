@@ -541,7 +541,9 @@ internal sealed partial class MultilayerCache : MultilayerCacheBase, ICache, ISp
         NotCacheableException.ThrowIfNotCacheable<T>();
         var cacheEntryOptions = _entryBuilder.BuildEntryOptions<T>(cacheKey, expiration, token);
 
-        var entry = await (localMissed ? FetchInnerAsync<T>(cacheEntryOptions, policy) : GetCacheEntryInnerAsync<T>(cacheEntryOptions, policy)).ConfigureAwait(false);
+        var entry = localMissed
+            ? await FetchInnerAsync<T>(cacheEntryOptions, policy).ConfigureAwait(false)
+            : await GetCacheEntryInnerAsync<T>(cacheEntryOptions, policy).ConfigureAwait(false);
         if (entry.Found)
         {
             TryRehydrate(cacheKey, entry.Expiration, entry.Value, generator, policy, effectiveDuration, rehydrateJitter);
@@ -773,9 +775,9 @@ internal sealed partial class MultilayerCache : MultilayerCacheBase, ICache, ISp
             static s => s.Cache.GetCacheEntryInnerAsync<T>(s.Options, s.Policy),
             static (ICacheEntry<T?> e) => e.Found,
             static (s, ct) => s.Cache.RunSharedAsync<T, TGenerator>(s.Options, s.Generator, s.Policy, s.Generate, s.Lifetime, s.Seen, ct),
-            token,
             policy.Lock,
-            lifetime);
+            lifetime,
+            token);
     }
 
     /// <summary>Runs the generation as one run per key: a caller whose wait for the local lock timed out, or that arrives while it runs, joins it, or the batch run covering its key, rather than starting another. Only the generator runs on the shared token; the write keeps the starting caller's, so that caller's cancellation is still told from a refusal. The starting caller's locks stay held until the run ends, even if that caller stops waiting first.</summary>

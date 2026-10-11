@@ -1,3 +1,4 @@
+#pragma warning disable CA2012 // NSubstitute setups call the ValueTask-returning members without consuming the result.
 using UiPath.Caching.Tests.Fakes;
 
 namespace UiPath.Caching.Tests;

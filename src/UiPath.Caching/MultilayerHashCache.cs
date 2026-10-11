@@ -435,9 +435,9 @@ internal sealed partial class MultilayerHashCache : MultilayerCacheBase, IHashCa
             static s => s.Cache.GetCacheEntryAsync<T>(s.Options, s.Policy, false),
             static e => e.Found,
             static (s, ct) => s.Cache.RunSharedAsync(s.Options, s.Generator, s.Policy, s.Lifetime, s.Seen, ct),
-            token,
             policy.Lock,
-            lifetime).ConfigureAwait(false);
+            lifetime,
+            token).ConfigureAwait(false);
         return result.Value ?? Empty<T>();
     }
 
@@ -583,8 +583,7 @@ internal sealed partial class MultilayerHashCache : MultilayerCacheBase, IHashCa
 
     private async ValueTask<ICacheEntry<IDictionary<string, T?>>> GetCacheEntryAsync<T>(InternalHashCacheEntryOptions options, CachePolicy policy, bool localMissed = false)
     {
-        ICacheEntry<IDictionary<string, T?>>? cacheEntry = null;
-        if (!localMissed && _memoryCache.TryGetValue<ICacheEntry<IDictionary<string, T?>>>(options.CacheKey.Name, out cacheEntry))
+        if (!localMissed && _memoryCache.TryGetValue<ICacheEntry<IDictionary<string, T?>>>(options.CacheKey.Name, out var cacheEntry))
         {
             LogFoundLocal(Logged(options, typeof(T)));
             if (_connectionState.IsConnected)
@@ -604,15 +603,15 @@ internal sealed partial class MultilayerHashCache : MultilayerCacheBase, IHashCa
             }
         }
 
-        cacheEntry = await FetchInnerAsync<T>(options, policy).ConfigureAwait(false);
-        if (!cacheEntry.Found)
+        var fetched = await FetchInnerAsync<T>(options, policy).ConfigureAwait(false);
+        if (!fetched.Found)
         {
-            return cacheEntry!;
+            return fetched;
         }
 
-        options.Expiration = cacheEntry.Expiration;
-        options.Metadata = cacheEntry.Metadata;
-        return Filter(cacheEntry!, options);
+        options.Expiration = fetched.Expiration;
+        options.Metadata = fetched.Metadata;
+        return Filter(fetched, options);
     }
 
     /// <summary>Reads the whole entry from the inner tier and keeps a hit locally; concurrent reads of one key share one inner read, and each caller filters its own fields.</summary>
