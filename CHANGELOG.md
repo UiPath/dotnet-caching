@@ -178,7 +178,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 
 - **The Redis provider shares a run by Redis key and value type, and builds less per call.** The run table is keyed by
   the `RedisKey` itself, per value type, instead of the key's rendered text, so a prefixed key is no longer turned
-  into a string on every `GetOrAddAsync`, and the run's result is neither boxed nor cast. Two calls share a run only
+  into a string on every `GetOrAddAsync`, and the run's result is neither boxed nor cast. As before, two calls share a run only
   when the key strategy maps them to the same Redis key, so a strategy that reads ambient state, such as a tenant, and
   maps one cache key to different Redis keys keeps them apart. The two async frames wrapped around the run are gone.
 
