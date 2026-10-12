@@ -174,6 +174,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
   resume asynchronously as before. A starter that cancels still gets a `TaskCanceledException`, and a failure of the
   work still reaches it, and every joiner, as the exception the work threw.
 
+- **The write, remove and broadcast paths allocate less.** The local setter and the event publisher take the entry
+  options as they are, unboxed; the null change token is not wired to the local entry, so a replace or remove no
+  longer queues a thread-pool work item for its eviction callback; a factory with no timeout hands back its own task;
+  no event is built for the null topic; a key's observers live in an array instead of a dictionary per key; and the
+  local tier keeps the entry built for the caller. On net10, a remove then re-add on the in-memory cache drops from
+  1.6-2.2 us and 1416 B to 0.84 us and 616 B, a fresh in-memory miss from 1.27 KB to 688 B, and a miss on the
+  in-memory tier over Redis from 10.45 KB to 8.5-9.2 KB. With `TrackStatistics` on, the memory cache now counts one
+  extra hit per local write, from the lookup that tells whether it kept the entry (see Fixed).
+
 - **The Redis provider shares a run by Redis key and value type, and builds less per call.** The run table is keyed by
   the `RedisKey` itself, per value type, instead of the key's rendered text, so a prefixed key is no longer turned
   into a string on every `GetOrAddAsync`, and the run's result is neither boxed nor cast. As before, two calls share a run only
@@ -295,6 +304,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
   `StartOperation` overloads.
 
 ### Fixed
+
+- **A key rewritten from many threads no longer piles up change-token subscriptions.** A local write whose entry the
+  memory cache did not keep, because a concurrent write to the key committed after it or it expired on insert, kept
+  its change token subscribed until the cache's eviction callback ran on the thread pool, and a write that threw kept
+  it until the topic closed. With 64 threads rewriting one key that reached hundreds of thousands of subscriptions on
+  the key. The write now releases the token before it returns; the peak measured is 47.
 
 - **Events dropped at a full dispatcher channel expire what the topic keeps.** A Redis Pub/Sub topic whose channel
   was full in `Wait` mode discarded the event, and the drop modes (`DropOldest`, `DropNewest`, `DropWrite`) discarded
