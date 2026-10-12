@@ -28,6 +28,9 @@ internal abstract class MemoryCacheSetter(
 
     private long _writes;
 
+    // Bound once: a method group allocates a delegate at every conversion.
+    private Action<object?>? _refreshMetadata;
+
     /// <summary>How many local writes have committed, counted as each one returns: a caller that read it before its own read of the tier, and missed a value, sees it move once that value's write has returned.</summary>
     internal long Writes => Volatile.Read(ref _writes);
 
@@ -45,15 +48,25 @@ internal abstract class MemoryCacheSetter(
             var token = changeTokenFactory is IMaskedChangeTokenFactory masked
                 ? masked.Create(options.CacheKey, topic, cacheName, entryType, _masker, options.CallerKey, ignoreSubscriptionGaps)
                 : changeTokenFactory.Create(options.CacheKey, TopicForCustomFactory(topic), cacheName, entryType);
-            var state = new RefreshMetadataState(options.CacheKey, options.TopicKey, item, token, entryType, maxExpiration, options.CallerKey);
-            token.RegisterChangeCallback(RefreshMetadata, state);
+            // The null token never changes and owns nothing to dispose, so it is not wired to the entry: the wiring costs a token list, a callback list and a thread-pool task per eviction.
+            var wired = !ReferenceEquals(token, NullCacheChangeToken.Instance);
+            if (wired)
+            {
+                var state = new RefreshMetadataState(options.CacheKey, options.TopicKey, item, token, entryType, maxExpiration, options.CallerKey);
+                token.RegisterChangeCallback(_refreshMetadata ??= RefreshMetadata, state);
+            }
+
             // Filled in place rather than through MemoryCacheEntryOptions, which is copied into the entry and discarded.
             // The entry is committed when disposed, and only once its value is set, so a throw before that stores nothing.
             using (var entry = memoryCache.CreateEntry(options.CacheKey.Name))
             {
                 entry.AbsoluteExpiration = GetCacheExpiration(options.Expiration, maxExpiration);
-                entry.ExpirationTokens.Add(token);
-                entry.RegisterPostEvictionCallback(PostEviction, token);
+                if (wired)
+                {
+                    entry.ExpirationTokens.Add(token);
+                    entry.RegisterPostEvictionCallback(PostEviction, token);
+                }
+
                 if (memoryCacheOptions.SizeLimit.HasValue)
                 {
                     entry.Size = SizeProvider.GetSize(item);
