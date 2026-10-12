@@ -88,6 +88,49 @@ public class MultilayerCacheBatchGetOrAddLockTests(ITestContextAccessor testCont
     }
 
     [Fact]
+    public async Task A_batch_that_arrives_while_another_takes_its_keys_joins_every_key()
+    {
+        var token = testContextAccessor.Current.CancellationToken;
+        using var window = new ManualResetEventSlim();
+        var gated = new GatedMissEntry(window);
+        var reads = 0;
+        _innerCache.GetCacheEntriesAsync<string>(Arg.Any<CacheKey[]>(), Arg.Any<CachePolicy?>(), Arg.Any<CancellationToken>())
+            .Returns(c =>
+            {
+                var first = Interlocked.Increment(ref reads) == 1;
+                return c.Arg<CacheKey[]>()!
+                    .Select(k => new KeyValuePair<CacheKey, ICacheEntry<string?>>(k, first && k == (CacheKey)"b" ? gated : Entry(k)))
+                    .ToArray();
+            });
+        var calls = new ConcurrentQueue<long[]>();
+        var generatorEntered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        async Task<KeyValuePair<long, string?>[]> Generator(long[] requested, CancellationToken ct)
+        {
+            calls.Enqueue(requested);
+            generatorEntered.TrySetResult();
+            await release.Task.WaitAsync(TimeSpan.FromSeconds(30), ct);
+            return requested.Select(id => new KeyValuePair<long, string?>(id, "v:" + id)).ToArray();
+        }
+
+        KeyValuePair<CacheKey, long>[] entries = [new((CacheKey)"a", 1L), new((CacheKey)"b", 2L)];
+        var first = Task.Run(async () => await Sut.GetOrAddAsync<string, long>(entries, Generator, (CachePolicy?)null, token), token);
+        await gated.InWindow.Task.WaitAsync(TimeSpan.FromSeconds(10), token);
+
+        // The first batch has taken "a" and is about to take "b"; a second batch must not take "b" in between.
+        var second = Task.Run(async () => await Sut.GetOrAddAsync<string, long>(entries, Generator, (CachePolicy?)null, token), token);
+        await Task.WhenAny(generatorEntered.Task, Task.Delay(TimeSpan.FromSeconds(1), token));
+        window.Set();
+        await generatorEntered.Task.WaitAsync(TimeSpan.FromSeconds(10), token);
+        release.TrySetResult();
+        var results = await Task.WhenAll(first, second);
+
+        calls.Should().ContainSingle().Which.Should().Equal(States1And2);
+        results.Should().AllSatisfy(r => r.Select(p => p.Value).Should().Equal(V1AndV2));
+    }
+
+    [Fact]
     public async Task Disjoint_miss_sets_take_different_composite_locks_and_the_overlap_joins_the_run_in_flight()
     {
         var token = testContextAccessor.Current.CancellationToken;
@@ -129,7 +172,9 @@ public class MultilayerCacheBatchGetOrAddLockTests(ITestContextAccessor testCont
     [Fact]
     public async Task Re_probe_under_the_lock_shrinks_the_generator_key_set()
     {
+        // Only a batch that takes the composite lock, as it does under a distributed lock, probes again once it holds it.
         var token = testContextAccessor.Current.CancellationToken;
+        var policy = new CachePolicy { Lock = new LockProfile { DistributedLockEnabled = true } };
 
         var probeRounds = 0;
         _innerCache.GetCacheEntriesAsync<string>(Arg.Any<CacheKey[]>(), Arg.Any<CachePolicy?>(), Arg.Any<CancellationToken>())
@@ -154,14 +199,45 @@ public class MultilayerCacheBatchGetOrAddLockTests(ITestContextAccessor testCont
                 observed.Add(requested);
                 return Task.FromResult(requested.Select(id => new KeyValuePair<long, string?>(id, "gen:" + id)).ToArray());
             },
-            (CachePolicy?)null,
+            policy,
             token);
 
-        probeRounds.Should().Be(2, "one pre-lock probe and one re-probe under the lock");
+        probeRounds.Should().Be(3, "one pre-lock probe, and a re-probe under each of the two locks");
         observed.Single().Should().Equal(States2,
             "the re-probe found 'a', so the generator must be narrowed to the states whose keys are still missing");
         result.Select(r => r.Key).Should().Equal(States1And2);
         result.Select(r => r.Value).Should().Equal(RefilledAAndGen2);
+    }
+
+    [Fact]
+    public async Task Without_a_distributed_lock_a_batch_probes_once_and_generates_every_missing_key()
+    {
+        var token = testContextAccessor.Current.CancellationToken;
+
+        var probeRounds = 0;
+        _innerCache.GetCacheEntriesAsync<string>(Arg.Any<CacheKey[]>(), Arg.Any<CachePolicy?>(), Arg.Any<CancellationToken>())
+            .Returns(c =>
+            {
+                Interlocked.Increment(ref probeRounds);
+                return c.Arg<CacheKey[]>()!
+                    .Select(k => new KeyValuePair<CacheKey, ICacheEntry<string?>>(k, new TestCacheEntry<string?> { Value = null, Expiration = DateTimeOffset.MinValue }))
+                    .ToArray();
+            });
+        var observed = new List<long[]>();
+
+        var result = await Sut.GetOrAddAsync<string, long>(
+            [new((CacheKey)"a", 1L), new((CacheKey)"b", 2L)],
+            (requested, _) =>
+            {
+                observed.Add(requested);
+                return Task.FromResult(requested.Select(id => new KeyValuePair<long, string?>(id, "gen:" + id)).ToArray());
+            },
+            (CachePolicy?)null,
+            token);
+
+        probeRounds.Should().Be(1, "the batch takes its keys in the run table instead of a lock, so there is no second probe after one");
+        observed.Single().Should().Equal(States1And2);
+        result.Select(r => r.Value).Should().Equal("gen:1", "gen:2");
     }
 
     [Fact]
@@ -284,4 +360,37 @@ public class MultilayerCacheBatchGetOrAddLockTests(ITestContextAccessor testCont
         _stored.TryGetValue(key, out var value)
             ? new TestCacheEntry<string?> { Value = value, Expiration = DateTimeOffset.UtcNow.AddMinutes(10), Found = true }
             : new TestCacheEntry<string?> { Value = null, Expiration = DateTimeOffset.MinValue };
+
+    /// <summary>A miss whose third <see cref="Found"/> read, the one the batch makes as it takes the key, waits for the test: the inner read and the split of hits from misses read it first.</summary>
+    private sealed class GatedMissEntry(ManualResetEventSlim window) : ICacheEntry<string?>
+    {
+        private int _reads;
+
+        public TaskCompletionSource InWindow { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public string? Value => null;
+
+        object? ICacheEntry.Value => null;
+
+        public DateTimeOffset Expiration => DateTimeOffset.MinValue;
+
+        public IDictionary<string, string?>? Metadata => null;
+
+        public bool Found
+        {
+            get
+            {
+                if (Interlocked.Increment(ref _reads) == 3)
+                {
+                    InWindow.TrySetResult();
+                    window.Wait(TimeSpan.FromSeconds(10));
+                }
+
+                return false;
+            }
+        }
+
+        public ICacheEntry NewEntry(DateTimeOffset? expiration = null, IDictionary<string, string?>? metadata = null) =>
+            new TestCacheEntry<string?> { Expiration = expiration ?? DateTimeOffset.MaxValue, Metadata = metadata };
+    }
 }

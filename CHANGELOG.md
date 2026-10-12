@@ -182,6 +182,27 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
   when the key strategy maps them to the same Redis key, so a strategy that reads ambient state, such as a tenant, and
   maps one cache key to different Redis keys keeps them apart. The two async frames wrapped around the run are gone.
 
+- **A miss takes its key before any lock when no distributed lock is held.** With the local lock on, the default, and
+  `DistributedLockEnabled` off, the default, `GetOrAddAsync` on the multilayer and hash caches takes the key's run in
+  the process first and runs the generator in the caller that took it; a caller that arrives while it runs joins it at
+  once. The keyed local lock, the read under it, its lock key and its async frames are not used on this path, and a
+  miss that never waits builds no async state machine, so a miss costs one read of the local tier, and of the inner
+  tier, instead of two. Batch `GetOrAddAsync` takes its keys the same way, per key, with no composite lock key and no
+  second probe, and copies nothing when every key is its own. With a distributed lock enabled the lock path is unchanged.
+  **Breaking** in what it observes: `LocalLockTimeout` no longer bounds a `GetOrAddAsync` wait on this path, since a
+  caller that arrives while a run is in flight joins it however long it takes, and stops waiting only through its token,
+  where it used to wait for the lock up to `LocalLockTimeout` and only then join; a generator that fails now fails
+  every caller that arrived while it ran, where the callers queued on the lock each ran their own generator in turn
+  and only those that timed out shared the failure; and `GetOrAddAsync` no longer excludes `TryAddAsync` through the
+  lock. `TryAddAsync` keeps the exclusion in the process by taking the key's run for the length of its add: it waits up
+  to `LocalLockTimeout` for a run that holds the key, as it waited for the lock, and loses if one still does, and a
+  `GetOrAddAsync` that arrives during an add joins it and takes its value, or takes the key over if the add lost. A
+  generator therefore does not store over a value `TryAddAsync` added in the same process while the local tier still
+  holds it; a miss whose inner read began before the add and whose local copy of the added value is gone by the time
+  its run starts, after an eviction or a short `LocalMaxExpiration`, can still generate and store over it, as the lock
+  path's second inner read used to prevent. A failed add leaves nothing held. Across processes nothing changes: only the inner tier arbitrates there. A load every caller has left still
+  does not store its result.
+
 - **`ICachingTelemetryProvider` takes `TelemetryTags<T>` and has no default bodies.** `TrackDependency`, `TrackEvent`,
   `TrackException` and `TrackMetric` take `TelemetryTags<string>` properties and `TelemetryTags<double>` metrics in
   place of `ReadOnlySpan<KeyValuePair<…>>`. The struct holds up to nine pairs inline and more in one array, so the

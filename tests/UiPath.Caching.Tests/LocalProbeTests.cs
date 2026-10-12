@@ -22,14 +22,26 @@ public class LocalProbeTests
     }
 
     [Fact]
-    public async Task A_miss_reads_the_local_tier_for_the_front_and_again_under_the_local_lock()
+    public async Task A_miss_reads_the_local_tier_once_with_the_local_lock_and_no_distributed_lock()
     {
         var memory = new CountingMemoryCacheFactory();
         using var cache = InMemoryMultilayer.Cache(memory: memory);
 
         (await cache.GetOrAddAsync<string>("k", Generate, policy: null, Ct)).Should().Be("generated");
 
-        memory.Lookups.Should().Be(2);
+        memory.Lookups.Should().Be(1);
+    }
+
+    [Fact]
+    public async Task A_miss_reads_the_local_tier_for_the_front_and_again_under_each_lock()
+    {
+        var memory = new CountingMemoryCacheFactory();
+        using var cache = InMemoryMultilayer.Cache(memory: memory);
+        var policy = new CachePolicy { Lock = new LockProfile { DistributedLockEnabled = true } };
+
+        (await cache.GetOrAddAsync<string>("k", Generate, policy, Ct)).Should().Be("generated");
+
+        memory.Lookups.Should().Be(3);
     }
 
     [Fact]
