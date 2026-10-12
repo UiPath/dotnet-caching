@@ -6,14 +6,15 @@ public class InFlightTests
 
     private static CancellationToken Ct => TestContext.Current.CancellationToken;
 
-    public static TheoryData<Func<Exception>, bool> StarterFailures() => new()
+    // The exception type, not a factory: a delegate does not serialize, so each row would not show on its own.
+    public static TheoryData<Type, bool> StarterFailures() => new()
     {
-        { () => new InvalidOperationException("boom"), false },
-        { () => new InvalidOperationException("boom"), true },
-        { () => new OperationCanceledException("not ours"), false },
-        { () => new OperationCanceledException("not ours"), true },
-        { () => new TaskCanceledException("not ours"), false },
-        { () => new TaskCanceledException("not ours"), true },
+        { typeof(InvalidOperationException), false },
+        { typeof(InvalidOperationException), true },
+        { typeof(OperationCanceledException), false },
+        { typeof(OperationCanceledException), true },
+        { typeof(TaskCanceledException), false },
+        { typeof(TaskCanceledException), true },
     };
 
     [Fact]
@@ -221,12 +222,12 @@ public class InFlightTests
 
     [Theory]
     [MemberData(nameof(StarterFailures))]
-    public async Task A_starter_surfaces_the_exception_its_work_failed_with(Func<Exception> failure, bool cancellableToken)
+    public async Task A_starter_surfaces_the_exception_its_work_failed_with(Type failure, bool cancellableToken)
     {
         var flights = new InFlight<string, int>();
         var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         using var source = new CancellationTokenSource();
-        var expected = failure();
+        var expected = (Exception)Activator.CreateInstance(failure, "not ours")!;
         async ValueTask<int> FailLate(TaskCompletionSource gate, IInFlightRun run)
         {
             await gate.Task;
@@ -242,12 +243,12 @@ public class InFlightTests
 
     [Theory]
     [MemberData(nameof(StarterFailures))]
-    public async Task A_joiner_surfaces_the_exception_the_starters_work_failed_with(Func<Exception> failure, bool cancellableToken)
+    public async Task A_joiner_surfaces_the_exception_the_starters_work_failed_with(Type failure, bool cancellableToken)
     {
         var flights = new InFlight<string, int>();
         var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         using var source = new CancellationTokenSource();
-        var expected = failure();
+        var expected = (Exception)Activator.CreateInstance(failure, "not ours")!;
         async ValueTask<int> FailLate(TaskCompletionSource gate, IInFlightRun run)
         {
             await gate.Task;
