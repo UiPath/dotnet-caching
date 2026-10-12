@@ -5,7 +5,8 @@ namespace UiPath.Caching.Broadcast;
 
 internal sealed partial class KeyedSubject<T> : IEventSubject<T> where T : IEvent
 {
-    private readonly ConcurrentDictionary<string, ConcurrentDictionary<IObserver<T>, byte>> _keyedObservers = new(StringComparer.OrdinalIgnoreCase);
+    // Per key, its observers as an array replaced whole on every change under the keyed lock: readers take the array as it is. One token per entry is the norm, and a dictionary per key weighed more than the entry.
+    private readonly ConcurrentDictionary<string, IObserver<T>[]> _keyedObservers = new(StringComparer.OrdinalIgnoreCase);
     private readonly ConcurrentDictionary<IObserver<T>, byte> _broadcastObservers = new();
     private readonly Lock _keyedLock = new();
 
@@ -30,18 +31,20 @@ internal sealed partial class KeyedSubject<T> : IEventSubject<T> where T : IEven
         // Completion may run while this registers: checked again after, and whoever removes the observer completes it, once.
         if (observer is IKeyedObserver<T> keyed)
         {
-            ConcurrentDictionary<IObserver<T>, byte> inner;
             lock (_keyedLock)
             {
-                inner = _keyedObservers.GetOrAdd(keyed.Key, _ => new ConcurrentDictionary<IObserver<T>, byte>());
-                inner.TryAdd(observer, 0);
+                _keyedObservers.AddOrUpdate(
+                    keyed.Key,
+                    static (_, added) => [added],
+                    static (_, current, added) => Array.IndexOf(current, added) >= 0 ? current : [.. current, added],
+                    observer);
             }
 
-            return CompletedMeanwhile(inner, observer) ? Disposable.Empty : new Subscription(this, keyed.Key, observer);
+            return CompletedMeanwhile(keyed.Key, observer) ? Disposable.Empty : new Subscription(this, keyed.Key, observer);
         }
 
         _broadcastObservers.TryAdd(observer, 0);
-        return CompletedMeanwhile(_broadcastObservers, observer) ? Disposable.Empty : new Subscription(this, null, observer);
+        return CompletedMeanwhile(null, observer) ? Disposable.Empty : new Subscription(this, null, observer);
     }
 
     public void OnNext(T value)
@@ -54,9 +57,9 @@ internal sealed partial class KeyedSubject<T> : IEventSubject<T> where T : IEven
         var key = value.Key;
         if (key != null && _keyedObservers.TryGetValue(key, out var observers))
         {
-            foreach (var kvp in observers)
+            foreach (var observer in observers)
             {
-                SafeOnNext(kvp.Key, value);
+                SafeOnNext(observer, value);
             }
         }
 
@@ -70,20 +73,26 @@ internal sealed partial class KeyedSubject<T> : IEventSubject<T> where T : IEven
     {
         _completed = true;
 
-        foreach (var inner in _keyedObservers.Values)
+        // Taken and cleared in one step under the keyed lock, so the observers taken are this call's to complete. One registered before is taken here; one registered after sees the flag and completes itself.
+        KeyValuePair<string, IObserver<T>[]>[] keyed;
+        lock (_keyedLock)
         {
-            foreach (var kvp in inner)
+            keyed = _keyedObservers.ToArray();
+            _keyedObservers.Clear();
+        }
+
+        foreach (var (_, observers) in keyed)
+        {
+            foreach (var observer in observers)
             {
-                CompleteIfRemoved(inner, kvp.Key);
+                SafeOnCompleted(observer);
             }
         }
 
         foreach (var kvp in _broadcastObservers)
         {
-            CompleteIfRemoved(_broadcastObservers, kvp.Key);
+            CompleteIfRemoved(null, kvp.Key);
         }
-
-        _keyedObservers.Clear();
     }
 
     public void Dispose() => OnCompleted();
@@ -96,11 +105,11 @@ internal sealed partial class KeyedSubject<T> : IEventSubject<T> where T : IEven
             return;
         }
 
-        foreach (var inner in _keyedObservers.Values)
+        foreach (var observers in _keyedObservers.Values)
         {
-            foreach (var kvp in inner)
+            foreach (var observer in observers)
             {
-                SafeInvalidate(kvp.Key, reason);
+                SafeInvalidate(observer, reason);
             }
         }
 
@@ -110,20 +119,20 @@ internal sealed partial class KeyedSubject<T> : IEventSubject<T> where T : IEven
         }
     }
 
-    private bool CompletedMeanwhile(ConcurrentDictionary<IObserver<T>, byte> observers, IObserver<T> observer)
+    private bool CompletedMeanwhile(string? key, IObserver<T> observer)
     {
         if (!_completed)
         {
             return false;
         }
 
-        CompleteIfRemoved(observers, observer);
+        CompleteIfRemoved(key, observer);
         return true;
     }
 
-    private void CompleteIfRemoved(ConcurrentDictionary<IObserver<T>, byte> observers, IObserver<T> observer)
+    private void CompleteIfRemoved(string? key, IObserver<T> observer)
     {
-        if (observers.TryRemove(observer, out _))
+        if (TryRemove(key, observer))
         {
             SafeOnCompleted(observer);
         }
@@ -176,25 +185,40 @@ internal sealed partial class KeyedSubject<T> : IEventSubject<T> where T : IEven
         }
     }
 
-    private void Unsubscribe(string? key, IObserver<T> observer)
+    /// <summary>True when the observer was subscribed, so whoever removes it owns its completion.</summary>
+    private bool TryRemove(string? key, IObserver<T> observer)
     {
-        if (key != null)
+        if (key is null)
         {
-            lock (_keyedLock)
-            {
-                if (_keyedObservers.TryGetValue(key, out var inner))
-                {
-                    inner.TryRemove(observer, out _);
-                    if (inner.IsEmpty)
-                    {
-                        _keyedObservers.TryRemove(key, out _);
-                    }
-                }
-            }
+            return _broadcastObservers.TryRemove(observer, out _);
         }
-        else
+
+        lock (_keyedLock)
         {
-            _broadcastObservers.TryRemove(observer, out _);
+            if (!_keyedObservers.TryGetValue(key, out var current))
+            {
+                return false;
+            }
+
+            var index = Array.IndexOf(current, observer);
+            if (index < 0)
+            {
+                return false;
+            }
+
+            if (current.Length == 1)
+            {
+                _keyedObservers.TryRemove(key, out _);
+            }
+            else
+            {
+                var rest = new IObserver<T>[current.Length - 1];
+                Array.Copy(current, rest, index);
+                Array.Copy(current, index + 1, rest, index, rest.Length - index);
+                _keyedObservers[key] = rest;
+            }
+
+            return true;
         }
     }
 
@@ -216,7 +240,7 @@ internal sealed partial class KeyedSubject<T> : IEventSubject<T> where T : IEven
 
         public void Dispose()
         {
-            Interlocked.Exchange(ref _subject, null)?.Unsubscribe(key, observer);
+            Interlocked.Exchange(ref _subject, null)?.TryRemove(key, observer);
         }
     }
 }
