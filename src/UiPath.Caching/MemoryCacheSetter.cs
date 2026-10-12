@@ -35,7 +35,9 @@ internal abstract class MemoryCacheSetter(
 
     private ICacheEntrySizeProvider SizeProvider { get; } = memoryCacheOptions.SizeProvider ?? new DefaultCacheEntrySizeProvider();
 
-    public bool Set(ICacheEntryOptions options, ICacheEntry item, Type entryType, TimeSpan? maxExpiration)
+    /// <summary>Generic over the options so the caches' option structs come in as they are, not boxed into the interface.</summary>
+    public bool Set<TOptions>(TOptions options, ICacheEntry item, Type entryType, TimeSpan? maxExpiration)
+        where TOptions : ICacheEntryOptions
     {
         try
         {
