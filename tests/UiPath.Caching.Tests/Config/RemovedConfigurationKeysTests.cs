@@ -51,6 +51,17 @@ public class RemovedConfigurationKeysTests
             .Which.Message.Should().Contain("ThreadPoolSocketManager");
     }
 
+    [Theory]
+    [InlineData("LocalLockPoolSize")]
+    [InlineData("LocalLockPoolInitialFill")]
+    public void AddCaching_from_configuration_throws_on_a_removed_lock_pool_key(string old)
+    {
+        var act = () => Register(_ => { }, $"Caching:{old}", "64");
+
+        act.Should().Throw<InvalidOperationException>()
+            .Which.Message.Should().Contain(old).And.Contain("delete it");
+    }
+
     [Fact]
     public void A_removed_key_with_a_null_value_is_refused()
     {

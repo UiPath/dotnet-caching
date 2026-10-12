@@ -14,49 +14,6 @@ public class CacheOptionsLockValidatorTests
     }
 
     [Fact]
-    public void Fails_when_LocalLockPoolSize_is_zero()
-    {
-        var opts = Valid();
-        opts.LocalLockPoolSize = 0;
-        var sut = new CacheOptionsLockValidator();
-        var result = sut.Validate(name: null, opts);
-        result.Failed.Should().BeTrue();
-        result.FailureMessage.Should().Contain(nameof(CacheOptions.LocalLockPoolSize));
-    }
-
-    [Fact]
-    public void Fails_when_LocalLockPoolSize_is_negative()
-    {
-        var opts = Valid();
-        opts.LocalLockPoolSize = -1;
-        var sut = new CacheOptionsLockValidator();
-        var result = sut.Validate(name: null, opts);
-        result.Failed.Should().BeTrue();
-    }
-
-    [Fact]
-    public void Fails_when_LocalLockPoolInitialFill_is_negative()
-    {
-        var opts = Valid();
-        opts.LocalLockPoolInitialFill = -1;
-        var sut = new CacheOptionsLockValidator();
-        var result = sut.Validate(name: null, opts);
-        result.Failed.Should().BeTrue();
-        result.FailureMessage.Should().Contain(nameof(CacheOptions.LocalLockPoolInitialFill));
-    }
-
-    [Fact]
-    public void Fails_when_LocalLockPoolInitialFill_exceeds_LocalLockPoolSize()
-    {
-        var opts = Valid();
-        opts.LocalLockPoolSize = 10;
-        opts.LocalLockPoolInitialFill = 11;
-        var sut = new CacheOptionsLockValidator();
-        var result = sut.Validate(name: null, opts);
-        result.Failed.Should().BeTrue();
-    }
-
-    [Fact]
     public void Fails_when_DistributedLockPollInterval_is_zero()
     {
         var opts = Valid();
@@ -80,8 +37,6 @@ public class CacheOptionsLockValidatorTests
     }
     private static CacheOptions Valid() => new()
     {
-        LocalLockPoolSize = 100,
-        LocalLockPoolInitialFill = 10,
         DistributedLockPollInterval = TimeSpan.FromMilliseconds(50),
         DistributedLockMaxPollInterval = TimeSpan.FromMilliseconds(500),
     };

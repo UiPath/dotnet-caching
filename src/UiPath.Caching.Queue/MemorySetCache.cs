@@ -1,13 +1,10 @@
 using System.Collections.Immutable;
-using UiPath.Caching.Locking;
 
 namespace UiPath.Caching;
 
 internal sealed class MemorySetCache(
-    string cacheName,
     IMemoryCache memoryCache,
     ISerializerProxy<byte[]> serializer,
-    ILocalLock localLock,
     IMemoryCacheOptions memoryCacheOptions,
     TimeProvider clock)
 {
@@ -15,7 +12,7 @@ internal sealed class MemorySetCache(
     private static readonly ImmutableHashSet<byte[]> EmptyMembers =
         ImmutableHashSet.Create<byte[]>(ByteArrayEqualityComparer.Instance);
     private readonly bool _trackSize = memoryCacheOptions.SizeLimit.HasValue;
-    private readonly string _localLockKeyPrefix = cacheName + ":";
+    private readonly StripedLocks _locks = new();
 
     public bool TryGetMembers<T>(string key, [NotNullWhen(true)] out IReadOnlyCollection<T?>? members)
     {
@@ -54,99 +51,138 @@ internal sealed class MemorySetCache(
 
     public void Remove(string key) => memoryCache.Remove(key);
 
-    public async ValueTask ReplaceAsync<T>(string key, IEnumerable<T> members, DateTimeOffset? expiration, CancellationToken token)
+    public ValueTask ReplaceAsync<T>(string key, IEnumerable<T> members, DateTimeOffset? expiration, CancellationToken token)
     {
+        if (token.IsCancellationRequested)
+        {
+            return ValueTask.FromCanceled(token);
+        }
+
         var set = members.Select(m => Owned(serializer.Serialize(m)!)).ToImmutableHashSet(ByteArrayEqualityComparer.Instance);
-        using (await localLock.AcquireAsync(_localLockKeyPrefix + key, token).ConfigureAwait(false))
+        lock (_locks.For(key))
         {
             StoreSnapshot(key, new Snapshot(set, expiration));
         }
+
+        return ValueTask.CompletedTask;
     }
 
-    public async ValueTask AddAsync<T>(string key, IEnumerable<T> items, CancellationToken token)
+    public ValueTask AddAsync<T>(string key, IEnumerable<T> items, CancellationToken token)
     {
+        if (token.IsCancellationRequested)
+        {
+            return ValueTask.FromCanceled(token);
+        }
+
         var values = items.Select(i => Owned(serializer.Serialize(i)!)).ToArray();
         if (values.Length == 0)
         {
-            return;
+            return ValueTask.CompletedTask;
         }
-        using (await localLock.AcquireAsync(_localLockKeyPrefix + key, token).ConfigureAwait(false))
+
+        lock (_locks.For(key))
         {
             if (TryGetSnapshot(key, out var snapshot))
             {
                 StoreSnapshot(key, snapshot with { Members = snapshot.Members.Union(values) });
             }
         }
+
+        return ValueTask.CompletedTask;
     }
 
-    public async ValueTask<long> AddAsync<T>(string key, IEnumerable<T> items, DateTimeOffset? expiration, CancellationToken token)
+    public ValueTask<long> AddAsync<T>(string key, IEnumerable<T> items, DateTimeOffset? expiration, CancellationToken token)
     {
+        if (token.IsCancellationRequested)
+        {
+            return ValueTask.FromCanceled<long>(token);
+        }
+
         var values = items.Select(i => Owned(serializer.Serialize(i)!)).ToArray();
         if (values.Length == 0)
         {
-            return 0;
+            return new ValueTask<long>(0);
         }
-        using (await localLock.AcquireAsync(_localLockKeyPrefix + key, token).ConfigureAwait(false))
+
+        lock (_locks.For(key))
         {
             if (expiration.HasValue && expiration.Value <= clock.GetUtcNow())
             {
                 memoryCache.Remove(key);
-                return 0;
+                return new ValueTask<long>(0);
             }
             var members = TryGetSnapshot(key, out var snapshot) ? snapshot.Members : EmptyMembers;
             var updated = members.Union(values);
             StoreSnapshot(key, new Snapshot(updated, expiration));
-            return updated.Count - members.Count;
+            return new ValueTask<long>(updated.Count - members.Count);
         }
     }
 
-    public async ValueTask<long> RemoveAsync<T>(string key, IEnumerable<T> items, CancellationToken token)
+    public ValueTask<long> RemoveAsync<T>(string key, IEnumerable<T> items, CancellationToken token)
     {
+        if (token.IsCancellationRequested)
+        {
+            return ValueTask.FromCanceled<long>(token);
+        }
+
         var values = items.Select(i => serializer.Serialize(i)!).ToArray();
         if (values.Length == 0)
         {
-            return 0;
+            return new ValueTask<long>(0);
         }
-        using (await localLock.AcquireAsync(_localLockKeyPrefix + key, token).ConfigureAwait(false))
+
+        lock (_locks.For(key))
         {
             if (!TryGetSnapshot(key, out var snapshot))
             {
-                return 0;
+                return new ValueTask<long>(0);
             }
             var updated = snapshot.Members.Except(values);
             StoreSnapshot(key, snapshot with { Members = updated });
-            return snapshot.Members.Count - updated.Count;
+            return new ValueTask<long>(snapshot.Members.Count - updated.Count);
         }
     }
 
-    public async ValueTask<bool> RemoveKeyAsync(string key, CancellationToken token)
+    public ValueTask<bool> RemoveKeyAsync(string key, CancellationToken token)
     {
-        using (await localLock.AcquireAsync(_localLockKeyPrefix + key, token).ConfigureAwait(false))
+        if (token.IsCancellationRequested)
+        {
+            return ValueTask.FromCanceled<bool>(token);
+        }
+
+        lock (_locks.For(key))
         {
             if (!TryGetSnapshot(key, out _))
             {
-                return false;
+                return new ValueTask<bool>(false);
             }
             memoryCache.Remove(key);
-            return true;
+            return new ValueTask<bool>(true);
         }
     }
 
-    public async ValueTask<IReadOnlyCollection<T?>> PopAsync<T>(string key, long count, CancellationToken token)
+    public ValueTask<IReadOnlyCollection<T?>> PopAsync<T>(string key, long count, CancellationToken token)
     {
+        if (token.IsCancellationRequested)
+        {
+            return ValueTask.FromCanceled<IReadOnlyCollection<T?>>(token);
+        }
+
         if (count <= 0)
         {
-            return [];
+            return new ValueTask<IReadOnlyCollection<T?>>([]);
         }
-        using (await localLock.AcquireAsync(_localLockKeyPrefix + key, token).ConfigureAwait(false))
+
+        byte[][] picked;
+        lock (_locks.For(key))
         {
             if (!TryGetSnapshot(key, out var snapshot) || snapshot.Members.IsEmpty)
             {
-                return [];
+                return new ValueTask<IReadOnlyCollection<T?>>([]);
             }
             var pool = snapshot.Members.ToArray();
             var take = (int)Math.Min(count, pool.Length);
-            var picked = new byte[take][];
+            picked = new byte[take][];
             for (var i = 0; i < take; i++)
             {
                 var j = Random.Shared.Next(i, pool.Length);
@@ -154,8 +190,10 @@ internal sealed class MemorySetCache(
                 picked[i] = pool[i];
             }
             StoreSnapshot(key, snapshot with { Members = snapshot.Members.Except(picked) });
-            return Deserialize<T>(picked);
         }
+
+        // Outside the stripe: the picked members are this call's alone, and a large pop must not hold up the keys that share it.
+        return new ValueTask<IReadOnlyCollection<T?>>(Deserialize<T>(picked));
     }
 
     /// <summary>
@@ -207,4 +245,25 @@ internal sealed class MemorySetCache(
     }
 
     private sealed record Snapshot(ImmutableHashSet<byte[]> Members, DateTimeOffset? Expiration);
+
+    /// <summary>A fixed set of locks picked by the key's hash, so writers of one key exclude each other and writers of other keys rarely meet. Every section under one holds no await.</summary>
+    private sealed class StripedLocks
+    {
+        // A power of two, so the hash picks a stripe with a mask; 128 keeps a collision between two hot keys rare and costs about 3 KB per cache.
+        private const int Stripes = 128;
+        private readonly Lock[] _locks = Create();
+
+        public Lock For(string key) => _locks[(uint)key.GetHashCode() & (Stripes - 1)];
+
+        private static Lock[] Create()
+        {
+            var locks = new Lock[Stripes];
+            for (var i = 0; i < locks.Length; i++)
+            {
+                locks[i] = new Lock();
+            }
+
+            return locks;
+        }
+    }
 }

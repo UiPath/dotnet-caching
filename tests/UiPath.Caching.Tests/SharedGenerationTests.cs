@@ -104,7 +104,7 @@ public class SharedGenerationTests
     [Fact]
     public async Task Joiners_of_a_cancelled_batch_regenerate_its_key_once()
     {
-        using var cache = InMemoryMultilayer.Cache(new InMemoryCacheOptions { LocalLockTimeout = TimeSpan.FromMilliseconds(5) });
+        using var cache = InMemoryMultilayer.Cache(new InMemoryCacheOptions { LocalSingleFlightTimeout = TimeSpan.FromMilliseconds(5) });
         using var starterCancellation = CancellationTokenSource.CreateLinkedTokenSource(Ct);
         var started = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var starter = cache.GetOrAddAsync<string, string>(
@@ -161,12 +161,12 @@ public class SharedGenerationTests
     [Fact]
     public async Task A_cancelled_starter_keeps_the_distributed_lease_until_the_shared_load_ends()
     {
-        using var cache = InMemoryMultilayer.Cache(new InMemoryCacheOptions { LocalLockTimeout = TimeSpan.FromMilliseconds(5) });
+        using var cache = InMemoryMultilayer.Cache(new InMemoryCacheOptions { LocalSingleFlightTimeout = TimeSpan.FromMilliseconds(5) });
         var distributed = Substitute.For<IDistributedLock>();
         var lease = new RecordingLease();
         ValueTaskStubs.Returns(distributed.AcquireAsync(Arg.Any<string>(), Arg.Any<TimeSpan>(), Arg.Any<TimeSpan>(), Arg.Any<CancellationToken>()), new ValueTask<IAsyncDisposable>(lease), new ValueTask<IAsyncDisposable>(NoOpAsyncDisposable.Instance));
         typeof(MultilayerCacheBase).GetField("_distributedLock", BindingFlags.Instance | BindingFlags.NonPublic)!.SetValue(cache, distributed);
-        var policy = new CachePolicy { Lock = new LockProfile { DistributedLockEnabled = true, LocalLockTimeout = TimeSpan.FromMilliseconds(5) } };
+        var policy = new CachePolicy { Lock = new LockProfile { DistributedLockEnabled = true, LocalSingleFlightTimeout = TimeSpan.FromMilliseconds(5) } };
         using var cancellation = CancellationTokenSource.CreateLinkedTokenSource(Ct);
         var started = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -266,6 +266,42 @@ public class SharedGenerationTests
 
         (await call).Should().Be("generated");
         generated.Should().Be(1);
+    }
+
+    [Fact]
+    public async Task A_batch_whose_run_is_held_inside_its_local_write_is_joined_and_a_caller_after_it_reads_the_local_tier()
+    {
+        var tokens = new GatedChangeTokenFactory();
+        using var cache = InMemoryMultilayer.Cache(tokens: tokens);
+        var generated = 0;
+        var running = 0;
+        var overlapped = false;
+        Task<KeyValuePair<string, string?>[]> Generate(string[] states, CancellationToken token)
+        {
+            if (Interlocked.Increment(ref running) > 1)
+            {
+                overlapped = true;
+            }
+
+            Interlocked.Increment(ref generated);
+            Interlocked.Decrement(ref running);
+            return Task.FromResult(states.Select(x => new KeyValuePair<string, string?>(x, "generated")).ToArray());
+        }
+
+        KeyValuePair<CacheKey, string>[] entries = [new("a", "a"), new("b", "b")];
+        var first = Task.Run(async () => await cache.GetOrAddAsync<string, string>(entries, Generate, policy: null, Ct), Ct);
+        tokens.WaitUntilEntered(TimeSpan.FromSeconds(10), Ct).Should().BeTrue();
+        var joiner = Task.Run(async () => await cache.GetOrAddAsync<string, string>(entries, Generate, policy: null, Ct), Ct);
+        await Task.Delay(100, Ct);
+        tokens.Release();
+
+        (await first).Select(p => p.Value).Should().Equal("generated", "generated");
+        (await joiner).Select(p => p.Value).Should().Equal("generated", "generated");
+        var late = await cache.GetOrAddAsync<string, string>(entries, Generate, policy: null, Ct);
+
+        late.Select(p => p.Value).Should().Equal("generated", "generated");
+        generated.Should().Be(1, "the run leaves the table only after its values are in the local tier");
+        overlapped.Should().BeFalse();
     }
 
     [Fact]
@@ -449,7 +485,7 @@ public class SharedGenerationTests
     [Fact]
     public async Task An_abandoned_run_does_not_store_over_a_newer_value()
     {
-        using var cache = InMemoryMultilayer.Cache(new InMemoryCacheOptions { LocalLockTimeout = TimeSpan.FromMilliseconds(5) });
+        using var cache = InMemoryMultilayer.Cache(new InMemoryCacheOptions { LocalSingleFlightTimeout = TimeSpan.FromMilliseconds(5) });
         var generations = ReplaceGenerations(cache, null);
         using var cancellation = CancellationTokenSource.CreateLinkedTokenSource(Ct);
         var started = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -477,7 +513,7 @@ public class SharedGenerationTests
     [Fact]
     public async Task An_abandoned_hash_run_does_not_store_over_a_newer_value()
     {
-        using var cache = InMemoryMultilayer.HashCache(new InMemoryCacheOptions { LocalLockTimeout = TimeSpan.FromMilliseconds(5) });
+        using var cache = InMemoryMultilayer.HashCache(new InMemoryCacheOptions { LocalSingleFlightTimeout = TimeSpan.FromMilliseconds(5) });
         var generations = new InFlight<InFlightKey, object?>();
         typeof(MultilayerHashCache).GetField("_generations", BindingFlags.Instance | BindingFlags.NonPublic)!.SetValue(cache, generations);
         using var cancellation = CancellationTokenSource.CreateLinkedTokenSource(Ct);
@@ -569,12 +605,12 @@ public class SharedGenerationTests
     [Fact]
     public async Task A_cancelled_hash_starter_keeps_the_distributed_lease_until_the_shared_load_ends()
     {
-        using var cache = InMemoryMultilayer.HashCache(new InMemoryCacheOptions { LocalLockTimeout = TimeSpan.FromMilliseconds(5) });
+        using var cache = InMemoryMultilayer.HashCache(new InMemoryCacheOptions { LocalSingleFlightTimeout = TimeSpan.FromMilliseconds(5) });
         var distributed = Substitute.For<IDistributedLock>();
         var lease = new RecordingLease();
         ValueTaskStubs.Returns(distributed.AcquireAsync(Arg.Any<string>(), Arg.Any<TimeSpan>(), Arg.Any<TimeSpan>(), Arg.Any<CancellationToken>()), new ValueTask<IAsyncDisposable>(lease), new ValueTask<IAsyncDisposable>(NoOpAsyncDisposable.Instance));
         typeof(MultilayerCacheBase).GetField("_distributedLock", BindingFlags.Instance | BindingFlags.NonPublic)!.SetValue(cache, distributed);
-        var policy = new CachePolicy { Lock = new LockProfile { DistributedLockEnabled = true, LocalLockTimeout = TimeSpan.FromMilliseconds(5) } };
+        var policy = new CachePolicy { Lock = new LockProfile { DistributedLockEnabled = true, LocalSingleFlightTimeout = TimeSpan.FromMilliseconds(5) } };
         using var cancellation = CancellationTokenSource.CreateLinkedTokenSource(Ct);
         var started = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);

@@ -10,7 +10,7 @@ public class LockTimeoutJoinTests
 
     private static CancellationToken Ct => TestContext.Current.CancellationToken;
 
-    private static InMemoryCacheOptions Options => new() { LocalLockTimeout = LockTimeout };
+    private static InMemoryCacheOptions Options => new() { LocalSingleFlightTimeout = LockTimeout };
 
     [Fact]
     public async Task A_waiter_that_times_out_waits_for_the_running_generator_instead_of_running_its_own()
@@ -182,7 +182,7 @@ public class LockTimeoutJoinTests
     [Fact]
     public async Task Without_the_local_lock_callers_still_run_their_own_generators()
     {
-        using var cache = InMemoryMultilayer.Cache(new InMemoryCacheOptions { LocalLockEnabled = false });
+        using var cache = InMemoryMultilayer.Cache(new InMemoryCacheOptions { LocalSingleFlightEnabled = false });
         var holder = new Slow("holder");
 
         var first = Run(cache, "k", holder.Generate, Ct);

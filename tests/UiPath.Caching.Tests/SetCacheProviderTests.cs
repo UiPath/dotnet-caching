@@ -53,7 +53,6 @@ public class InMemoryQueueCacheProviderTests
         new(Options.Create(options ?? new InMemoryQueueCacheOptions()),
             new MemoryCacheFactory(TimeProvider.System, NullLoggerFactory.Instance),
             new SystemJsonByteSerializerProxy(),
-            NullLocalLock.Instance,
             TimeProvider.System);
 }
 
@@ -74,7 +73,6 @@ public class InMemoryRedisQueueCacheProviderTests
             new MemoryCacheFactory(TimeProvider.System, NullLoggerFactory.Instance),
             () => factory,
             new SystemJsonByteSerializerProxy(),
-            NullLocalLock.Instance,
             TimeProvider.System);
 
         var cache = provider.CreateSetCache();

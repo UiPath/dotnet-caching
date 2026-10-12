@@ -134,16 +134,16 @@ hide which stores can actually arbitrate. An implementation says what its own st
   `IDistributedLock` for long critical sections.
 - **It is not a lock.** No ownership token, no early release, and a later `SetAsync`/`RemoveAsync` on
   the key silently overwrites the claim. If a bug elsewhere writes that key, exclusion is gone with no
-  error. On the `InMemory` provider the reverse also holds: the local lock serializes conditional adds
-  against each other, but `SetAsync` takes no lock, so a set landing between the probe and the write
+  error. On the `InMemory` provider the reverse also holds: conditional adds exclude each other through the key's run,
+  but `SetAsync` takes nothing, so a set landing between the probe and the write
   is overwritten by the claim, which still reports `true`. Redis has no such gap — `NX` is atomic
   against a concurrent `SET`.
 - **In-memory-only caches exclude in-process only.** With the `InMemory` provider there is no shared
-  store to arbitrate, so the local tier does — serialized by the local lock, which a conditional add
-  takes whatever `Lock.LocalLockEnabled` says, because here it *is* the guarantee rather than a
-  single-flight optimization. A caller that cannot acquire it within `Lock.LocalLockTimeout` is told
-  it lost. Two processes still both win. `InMemoryRedis` and `Redis` are cross-node correct.
-- **Both tiers contribute, in one sequence:** the local tier is probed under the local lock, then
+  store to arbitrate, so the local tier does — serialized by taking the key's run, which a conditional add
+  does whatever `Lock.LocalSingleFlightEnabled` says, because here it *is* the guarantee rather than a
+  single-flight optimization. A caller that still finds a generator holding the key after
+  `Lock.LocalSingleFlightTimeout` is told it lost. Two processes still both win. `InMemoryRedis` and `Redis` are cross-node correct.
+- **Both tiers contribute, in one sequence:** the local tier is probed while the key's run is held, then
   the L2 decides, then L1 is populated on a win. The probe bounds exclusion at one winner per
   process — the only thing doing so when the L2 retains nothing — and reports a local hit as a loss
   without asking the L2, which is fail-closed but costs a win the L2 would have granted if the local

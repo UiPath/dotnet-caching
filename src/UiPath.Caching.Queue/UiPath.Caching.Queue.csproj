@@ -18,4 +18,8 @@
   <ItemGroup>
     <ProjectReference Include="..\UiPath.Caching\UiPath.Caching.csproj" />
   </ItemGroup>
+  <ItemGroup>
+    <!-- The .NET 8 stand-in for System.Threading.Lock; this assembly cannot see the Abstractions copy. -->
+    <Compile Include="..\UiPath.Caching.Abstractions\Lock.cs" Link="Lock.cs" />
+  </ItemGroup>
 </Project>

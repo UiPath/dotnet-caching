@@ -15,7 +15,6 @@ public sealed class InMemoryRedisCacheProvider : ICacheProvider
     private readonly ICachingTelemetryProvider _cachingTelemetryProvider;
     private readonly ILoggerFactory _loggerFactory;
     private readonly Lazy<ICacheFactory> _cacheFactory;
-    private readonly ILocalLock _localLock;
     private readonly IDistributedLock _distributedLock;
     private readonly ICachePolicyFactory _policyFactory;
     private readonly TimeProvider _clock;
@@ -33,7 +32,6 @@ public sealed class InMemoryRedisCacheProvider : ICacheProvider
         ICacheEventFactory cacheEventFactory,
         ICachingTelemetryProvider cachingTelemetryProvider,
         ILoggerFactory loggerFactory,
-        ILocalLock localLock,
         IDistributedLock distributedLock,
         ICachePolicyFactory policyFactory,
         TimeProvider clock,
@@ -59,7 +57,6 @@ public sealed class InMemoryRedisCacheProvider : ICacheProvider
         }
         _cachingTelemetryProvider = cachingTelemetryProvider;
         _loggerFactory = loggerFactory;
-        _localLock = localLock;
         _distributedLock = distributedLock;
         _policyFactory = policyFactory;
         _cache = new Lazy<MultilayerCache>(() => BuildCache());
@@ -102,7 +99,6 @@ public sealed class InMemoryRedisCacheProvider : ICacheProvider
             _options,
             _options,
             _cacheOptions,
-            localLock: _localLock,
             distributedLock: _distributedLock,
             policyFactory: _policyFactory,
             clock: _clock,
@@ -121,7 +117,6 @@ public sealed class InMemoryRedisCacheProvider : ICacheProvider
             _options,
             _options,
             _cacheOptions,
-            localLock: _localLock,
             distributedLock: _distributedLock,
             policyFactory: _policyFactory,
             clock: _clock,

@@ -4,6 +4,7 @@ using Microsoft.Extensions.Logging;
 using NSubstitute.ExceptionExtensions;
 using UiPath.Caching;
 using UiPath.Caching.Tests.Broadcast;
+using UiPath.Caching.Tests.Fakes;
 
 namespace UiPath.Caching.Tests;
 
@@ -37,7 +38,7 @@ public class MultilayerCacheTests(ITestContextAccessor testContextAccessor) : IA
     {
     }
 
-    private MultilayerCache Sut => _sut ??= _fixture.Create<MultilayerCache>();
+    private MultilayerCache Sut => _sut ??= RunTables.Track(_fixture.Create<MultilayerCache>());
 
     [Fact]
     public async Task Get_data_from_inner_cache()
@@ -1276,7 +1277,7 @@ public class MultilayerCacheTests(ITestContextAccessor testContextAccessor) : IA
         _options.LocalMaxExpiration = TimeSpan.FromMinutes(5);
         _options.LocalMaxExpirationDisconnected = TimeSpan.FromMinutes(10);
 
-        Action act = () => _fixture.Create<MultilayerCache>();
+        Action act = () => RunTables.Track(_fixture.Create<MultilayerCache>());
 
         act.Should().Throw<Exception>()
             .Which.GetBaseException()
@@ -1292,7 +1293,7 @@ public class MultilayerCacheTests(ITestContextAccessor testContextAccessor) : IA
         _options.LocalMaxExpiration = TimeSpan.FromMinutes(5);
         _options.LocalMaxExpirationDisconnected = TimeSpan.FromMinutes(5);
 
-        Action act = () => _fixture.Create<MultilayerCache>();
+        Action act = () => RunTables.Track(_fixture.Create<MultilayerCache>());
 
         act.Should().NotThrow();
     }
@@ -1303,7 +1304,7 @@ public class MultilayerCacheTests(ITestContextAccessor testContextAccessor) : IA
         _options.LocalMaxExpiration = TimeSpan.FromMinutes(10);
         _options.LocalMaxExpirationDisconnected = TimeSpan.FromMinutes(5);
 
-        Action act = () => _fixture.Create<MultilayerCache>();
+        Action act = () => RunTables.Track(_fixture.Create<MultilayerCache>());
 
         act.Should().NotThrow();
     }
@@ -1314,7 +1315,7 @@ public class MultilayerCacheTests(ITestContextAccessor testContextAccessor) : IA
         _options.LocalMaxExpiration = null;
         _options.LocalMaxExpirationDisconnected = TimeSpan.FromMinutes(5);
 
-        Action act = () => _fixture.Create<MultilayerCache>();
+        Action act = () => RunTables.Track(_fixture.Create<MultilayerCache>());
 
         act.Should().NotThrow();
     }
@@ -1325,7 +1326,7 @@ public class MultilayerCacheTests(ITestContextAccessor testContextAccessor) : IA
         _options.LocalMaxExpiration = TimeSpan.FromMinutes(5);
         _options.LocalMaxExpirationDisconnected = null;
 
-        Action act = () => _fixture.Create<MultilayerCache>();
+        Action act = () => RunTables.Track(_fixture.Create<MultilayerCache>());
 
         act.Should().NotThrow();
     }

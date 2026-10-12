@@ -6,9 +6,9 @@ internal sealed class MultilayerCacheLockOptionsValidator<TOptions> : IValidateO
     public ValidateOptionsResult Validate(string? name, TOptions options) =>
         LockSettingsValidator.Validate(
             scope: string.Empty,
-            options.LocalLockEnabled,
+            options.LocalSingleFlightEnabled,
             options.DistributedLockEnabled,
-            options.LocalLockTimeout,
+            options.LocalSingleFlightTimeout,
             options.DistributedLockTimeout,
             options.DistributedLockExpiry);
 }

@@ -112,7 +112,7 @@ And select it by name in `appsettings.json`:
 - **Singleton scope.** Providers are stored on the `ICacheFactory`, which is a singleton. Implement `IDisposable` carefully — the provider lives for the application's lifetime, and its caches must outlive any consumer.
 - **Thread safety.** Both `CreateCache` and `CreateHashCache` may be called concurrently. Cache the inner instances behind `Lazy<>` (as above) or another lock-free pattern.
 - **The `Enabled` flag is a hard gate at the factory.** `CacheFactory.GetProvider(name)` returns `null` for any registered provider whose `Enabled` is `false`. `CreateCache(name)` then falls back to the `DefaultCache` provider, and if that one is also disabled it falls back to `NullCache.Instance`. Your provider's `CreateCache()` / `CreateHashCache()` are not called when `Enabled` is `false` — there is no "graceful no-op inside the provider" code path to write.
-- **Match the integration points.** A provider that wants to participate in cross-node L1 invalidation must consume an `ITopic<ICacheEvent>` and broadcast cache events on writes — see how `InMemoryRedisCacheProvider` does it in `Caching.Runtime`. A provider that wants single-flight should accept `ILocalLock` / `IDistributedLock` in its constructor and route `GetOrAddAsync` through them.
+- **Match the integration points.** A provider that wants to participate in cross-node L1 invalidation must consume an `ITopic<ICacheEvent>` and broadcast cache events on writes — see how `InMemoryRedisCacheProvider` does it in `Caching.Runtime`. A provider that wants single-flight should accept `IDistributedLock` in its constructor and route `GetOrAddAsync` through it.
 
 ## Custom topic provider
 

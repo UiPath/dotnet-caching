@@ -28,9 +28,11 @@ public static class InMemoryCollectionExtensions
                 validation.Failures);
         }
         builder.Services.TryAddMemoryCacheFactory();
-        builder.AddLocalLock();
         builder.Services
             .TryAddEnumerable(ServiceDescriptor.Singleton<IValidateOptions<InMemoryCacheOptions>, MultilayerCacheLockOptionsValidator<InMemoryCacheOptions>>());
+        // The policy validator checks lock timeouts against these intervals, so they are checked at start even with no distributed lock registered.
+        builder.Services
+            .TryAddEnumerable(ServiceDescriptor.Singleton<IValidateOptions<CacheOptions>, CacheOptionsLockValidator>());
         builder.Services
             .TryAddEnumerable(ServiceDescriptor.Singleton<ICacheProvider, InMemoryCacheProvider>());
 

@@ -202,7 +202,6 @@ public class CacheExpirationGuardTests
             options,
             options,
             cacheOptions,
-            localLock: new AsyncKeyedLocalLock(Options.Create(cacheOptions)),
             distributedLock: NullDistributedLock.Instance,
             policyFactory: NullCachePolicyFactory.Instance,
             clock: TimeProvider.System,

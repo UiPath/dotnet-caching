@@ -20,16 +20,16 @@ public sealed class RedisPlannedMaintenance : IRedisPlannedMaintenance, IHostedS
     private readonly TimeSpan _probingTime = TimeSpan.FromMinutes(10);
     private readonly TimeSpan _probeInterval = TimeSpan.FromSeconds(1);
     private readonly TimeSpan _hangingTime = TimeSpan.FromSeconds(10);
-    private readonly object _lock = new();
-    private readonly object _stateLock = new();
-    private readonly object _seenLock = new();
-    private readonly object _cancelLock = new();
+    private readonly Lock _lock = new();
+    private readonly Lock _stateLock = new();
+    private readonly Lock _seenLock = new();
+    private readonly Lock _cancelLock = new();
 
     // Taken first: a notice adopts bounds and updates its window as one step.
-    private readonly object _noticeLock = new();
+    private readonly Lock _noticeLock = new();
     private readonly Queue<(string Raw, long At)> _seen = new();
     private readonly HashSet<string> _seenIdentities = new(StringComparer.Ordinal);
-    private readonly object _windowLock = new();
+    private readonly Lock _windowLock = new();
 #pragma warning disable SER010 // Server-native maintenance notifications are for evaluation purposes only
     private readonly Dictionary<MaintenanceNotificationType, List<AnnouncedWindow>> _outstanding = [];
 

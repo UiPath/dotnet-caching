@@ -13,7 +13,7 @@ public class InnerTierOutageTests
     private static CancellationToken Ct => TestContext.Current.CancellationToken;
 
     // A waiter past the lock timeout runs the generator itself, which a loaded machine would otherwise reach.
-    private static InMemoryCacheOptions WaitingOutTheGenerator => new() { LocalLockTimeout = TimeSpan.FromSeconds(30) };
+    private static InMemoryCacheOptions WaitingOutTheGenerator => new() { LocalSingleFlightTimeout = TimeSpan.FromSeconds(30) };
 
     [Fact]
     public async Task Concurrent_cold_reads_of_one_key_share_one_inner_read()

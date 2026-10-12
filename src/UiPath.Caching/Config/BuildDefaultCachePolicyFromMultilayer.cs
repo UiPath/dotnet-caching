@@ -15,8 +15,8 @@ internal static class CachePolicyFromMultilayerOptions
             DistributedExpiration = src.DefaultExpiration,
             Lock = new LockProfile
             {
-                LocalLockEnabled = src.LocalLockEnabled,
-                LocalLockTimeout = src.LocalLockTimeout,
+                LocalSingleFlightEnabled = src.LocalSingleFlightEnabled,
+                LocalSingleFlightTimeout = src.LocalSingleFlightTimeout,
                 DistributedLockEnabled = src.DistributedLockEnabled,
                 DistributedLockTimeout = src.DistributedLockTimeout,
                 DistributedLockExpiry = src.DistributedLockExpiry,

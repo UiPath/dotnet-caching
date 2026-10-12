@@ -1,4 +1,5 @@
 using UiPath.Caching.Locking;
+using UiPath.Caching.Tests.Fakes;
 
 namespace UiPath.Caching.Tests;
 
@@ -15,14 +16,13 @@ public class MultilayerHashCachePerNameFactoryTimeoutTests(ITestContextAccessor 
     private ITopic<ICacheEvent> _topic = default!;
     private global::UiPath.Caching.IMemoryCacheFactory _memoryCacheFactory = default!;
     private ICacheEventFactory _cacheEventFactory = default!;
-    private ILocalLock _localLock = default!;
     private IDistributedLock _distributedLock = default!;
     private InMemoryRedisCacheOptions _options = default!;
     private CacheKey _cacheKey = default!;
     private TopicKey _topicKey = default!;
     private MultilayerHashCache? _sut;
 
-    private MultilayerHashCache Sut => _sut ??= _fixture.Create<MultilayerHashCache>();
+    private MultilayerHashCache Sut => _sut ??= RunTables.Track(_fixture.Create<MultilayerHashCache>());
 
     [Fact]
     public async Task GetOrAdd_with_null_FactoryTimeout_runs_generator_to_completion()
@@ -96,13 +96,12 @@ public class MultilayerHashCachePerNameFactoryTimeoutTests(ITestContextAccessor 
         _topicKey = _fixture.Create<string>();
         _innerCache = _fixture.Freeze<IHashCache>();
         _memoryCache = _fixture.Freeze<global::Microsoft.Extensions.Caching.Memory.IMemoryCache>();
-        _localLock = _fixture.Freeze<ILocalLock>();
         _distributedLock = _fixture.Freeze<IDistributedLock>();
         _options = new InMemoryRedisCacheOptions
         {
             DefaultExpiration = TimeSpan.FromMinutes(10),
             EntryFactory = new TestCacheEntryFactory(),
-            LocalLockEnabled = false,
+            LocalSingleFlightEnabled = false,
             DistributedLockEnabled = false,
         };
         _fixture.Inject<IMultilayerCacheOptions>(_options);

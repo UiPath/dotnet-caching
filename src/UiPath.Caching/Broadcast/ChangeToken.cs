@@ -22,11 +22,7 @@ public sealed partial class ChangeToken<T> : ICacheChangeToken, IKeyedObserver<I
     private readonly List<(Action<object?> callback, object? state)> _callbacks = [];
 
     // An event and a loss report can arrive on different threads; each notification and registration takes its turn.
-#if NET9_0_OR_GREATER
     private readonly Lock _notifyLock = new();
-#else
-    private readonly object _notifyLock = new();
-#endif
 
     // Set once a removal, a loss or an error expired the entry: a refresh the dispatcher delivers after it would re-insert the old value.
     private bool _expired;

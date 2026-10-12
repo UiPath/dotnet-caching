@@ -76,7 +76,7 @@ public sealed class CachePolicy
 
     /// <summary>
     /// Lock settings. Merged field-level against the default policy's <see cref="LockProfile"/> —
-    /// a named policy can override individual fields (e.g. <see cref="LockProfile.LocalLockEnabled"/>)
+    /// a named policy can override individual fields (e.g. <see cref="LockProfile.LocalSingleFlightEnabled"/>)
     /// while inheriting the rest. (Compare with <see cref="Rehydrate"/>, which is replaced wholesale.)
     /// </summary>
     public LockProfile? Lock { get; init; }

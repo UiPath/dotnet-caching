@@ -23,13 +23,12 @@ internal sealed partial class MultilayerHashCache : MultilayerCacheBase, IHashCa
         IMultilayerCacheOptions multiLayerCacheOptions,
         IMemoryCacheOptions memoryCacheOptions,
         CacheOptions cacheOptions,
-        ILocalLock localLock,
         IDistributedLock distributedLock,
         ICachePolicyFactory policyFactory,
         TimeProvider clock,
         ILogger logger,
         IKeyMaskingPolicy? keyMaskingPolicy = null)
-        : base(cacheName, innerCache, memoryCacheFactory, topicFactory, cacheEventFactory, telemetryProvider, multiLayerCacheOptions, memoryCacheOptions, cacheOptions, localLock, distributedLock, policyFactory, clock, logger, keyMaskingPolicy)
+        : base(cacheName, innerCache, memoryCacheFactory, topicFactory, cacheEventFactory, telemetryProvider, multiLayerCacheOptions, memoryCacheOptions, cacheOptions, distributedLock, policyFactory, clock, logger, keyMaskingPolicy)
     {
         _innerCache = innerCache;
         var cacheKeyStrategy = _multiLayerCacheOptions.CacheKeyStrategy ?? new DefaultCacheKeyStrategy();
@@ -37,6 +36,9 @@ internal sealed partial class MultilayerHashCache : MultilayerCacheBase, IHashCa
         _entryBuilder = new HashCacheEntryBuilder(cacheKeyStrategy, topicKeyStrategy, _clock);
         _localMemorySetter = new HashLocalMemorySetter(cacheName, changeTokenFactory, _topicProvider, _memoryCache, logger, _clock, _multiLayerCacheOptions, memoryCacheOptions, telemetryProvider, _masker, !_clearLocalOnReconnect);
     }
+
+    /// <summary>Runs and inner reads still in the tables; tests check they drain once callers are done.</summary>
+    internal int RunsInFlight => _innerReads.Count + _generations.Count;
 
     [OverloadResolutionPriority(1)]
     public async ValueTask<T?> GetItemAsync<T>(CacheKey cacheKey, string field, CachePolicy? policy, CancellationToken token = default)
@@ -428,26 +430,27 @@ internal sealed partial class MultilayerHashCache : MultilayerCacheBase, IHashCa
             return cacheEntry.Value ?? Empty<T>();
         }
 
-        if (ReservesFirst(policy.Lock))
-        {
-            var first = await RunFirstAsync(cacheEntryOptions, generator, policy, seen, token).ConfigureAwait(false);
-            return first.Value ?? Empty<T>();
-        }
-
-        var lifetime = new LockLifetime();
-        var result = await RunUnderLocksAsync(
-            cacheEntryOptions.CacheKey,
-            (Cache: this, Options: cacheEntryOptions, Generator: generator, Policy: policy, Lifetime: lifetime, Seen: seen),
-            static s => s.Cache.GetCacheEntryAsync<T>(s.Options, s.Policy, false),
-            static e => e.Found,
-            static (s, ct) => s.Cache.RunSharedAsync(s.Options, s.Generator, s.Policy, s.Lifetime, s.Seen, ct),
-            policy.Lock,
-            lifetime,
-            token).ConfigureAwait(false);
+        var result = SharesRuns(policy.Lock)
+            ? await RunFirstAsync(cacheEntryOptions, generator, policy, seen, token).ConfigureAwait(false)
+            : (ICacheEntry<IDictionary<string, T?>>)(await GenerateGuardedAsync<T>(cacheEntryOptions, generator, policy, new GenerationScope(null, token)).ConfigureAwait(false))!;
         return result.Value ?? Empty<T>();
     }
 
-    /// <summary>Takes the key's run before anything else and runs the generator inline in the caller that took it: a caller that arrives meanwhile joins the run at once, with no lock to wait for or time out of.</summary>
+    /// <summary>The generation itself: under the key's distributed lock when one is enabled, which the caller that runs it takes, holds until the run ends, and follows with a read of both tiers that may find what another process stored; otherwise the generator at once.</summary>
+    private ValueTask<object?> GenerateGuardedAsync<T>(InternalHashCacheEntryOptions options, Func<CancellationToken, Task<IDictionary<string, T?>>> generator, CachePolicy policy, GenerationScope scope) =>
+        DistributedLockOn(policy.Lock)
+            ? GenerateUnderDistributedLockAsync(options, generator, policy, scope)
+            : RunHashGeneratorAndStoreEntryAsync(options, generator, policy, scope);
+
+    private async ValueTask<object?> GenerateUnderDistributedLockAsync<T>(InternalHashCacheEntryOptions options, Func<CancellationToken, Task<IDictionary<string, T?>>> generator, CachePolicy policy, GenerationScope scope)
+    {
+        await using var lease = await AcquireDistributedLockAsync(options.CacheKey, policy.Lock, scope.Token).ConfigureAwait(false);
+        // Read on the run's token: the starter may have left while callers that joined still wait for this.
+        var current = await GetCacheEntryAsync<T>(options with { Token = scope.Token }, policy, false).ConfigureAwait(false);
+        return current.Found ? current : await RunHashGeneratorAndStoreEntryAsync(options, generator, policy, scope).ConfigureAwait(false);
+    }
+
+    /// <summary>Takes the key's run before anything else and runs the generator inline in the caller that took it: a caller that arrives meanwhile joins the run at once; only the caller that runs it takes the distributed lock, if one is enabled.</summary>
     private async ValueTask<ICacheEntry<IDictionary<string, T?>>> RunFirstAsync<T>(InternalHashCacheEntryOptions options, Func<CancellationToken, Task<IDictionary<string, T?>>> generator, CachePolicy policy, long seen, CancellationToken token) =>
         (ICacheEntry<IDictionary<string, T?>>)(await _generations.RunAsync(
             new InFlightKey(options.CacheKey.Name, typeof(T), null, null),
@@ -456,7 +459,7 @@ internal sealed partial class MultilayerHashCache : MultilayerCacheBase, IHashCa
                 // A write in this process since the caller read the key may have left its value in the local tier, which a run writes before it leaves the table.
                 state.Cache._localMemorySetter.Writes != state.Seen && state.Cache.TryGetLocalEntry<T>(state.Options, out var current)
                     ? new ValueTask<object?>(current)
-                    : state.Cache.RunHashGeneratorAndStoreEntryAsync(state.Options, state.Generator, state.Policy, new GenerationScope(run, run.Token)),
+                    : state.Cache.GenerateGuardedAsync<T>(state.Options, state.Generator, state.Policy, new GenerationScope(run, run.Token)),
             token).ConfigureAwait(false))!;
 
     private void TryHashRehydrate<T>(CacheKey originalCacheKey, DateTimeOffset entryExpiration, IDictionary<string, T?>? currentValue, Func<CancellationToken, Task<IDictionary<string, T?>>> generator, CachePolicy policy, TimeSpan duration, TimeSpan? rehydrateJitter)
@@ -506,29 +509,6 @@ internal sealed partial class MultilayerHashCache : MultilayerCacheBase, IHashCa
                 }
             },
             entryType: typeof(T));
-    }
-
-    /// <summary>Runs the generation as one run per key: a caller whose wait for the local lock timed out, or that arrives while it runs, joins it rather than starting another. Only the generator runs on the shared token; the write keeps the starting caller's, unless it cancelled while callers that joined still wait. The starting caller's locks stay held until the run ends, even if that caller stops waiting first.</summary>
-    private async ValueTask<ICacheEntry<IDictionary<string, T?>>> RunSharedAsync<T>(InternalHashCacheEntryOptions options, Func<CancellationToken, Task<IDictionary<string, T?>>> generator, CachePolicy policy, LockLifetime lifetime, long seen, CancellationToken token)
-    {
-        if (!ResolveLocalLock(policy.Lock).Enabled)
-        {
-            return (ICacheEntry<IDictionary<string, T?>>)(await RunHashGeneratorAndStoreEntryAsync(options, generator, policy, new GenerationScope(null, token)).ConfigureAwait(false))!;
-        }
-
-        return (ICacheEntry<IDictionary<string, T?>>)(await _generations.RunAsync(
-            new InFlightKey(options.CacheKey.Name, typeof(T), null, null),
-            (Cache: this, Options: options, Generator: generator, Policy: policy, Lifetime: lifetime, Seen: seen),
-            static (state, run) =>
-            {
-                state.Lifetime.Run = run;
-
-                // A write in this process since the caller read the key may have left its value in the local tier, which a run writes before it leaves the table.
-                return state.Cache._localMemorySetter.Writes != state.Seen && state.Cache.TryGetLocalEntry<T>(state.Options, out var current)
-                    ? new ValueTask<object?>(current)
-                    : state.Cache.RunHashGeneratorAndStoreEntryAsync(state.Options, state.Generator, state.Policy, new GenerationScope(run, run.Token));
-            },
-            token).ConfigureAwait(false))!;
     }
 
     /// <summary>A local hit only, never the inner tier: for a caller that has just taken a key, where the only thing that can have changed is a run of this process.</summary>

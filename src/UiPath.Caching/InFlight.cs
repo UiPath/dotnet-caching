@@ -166,7 +166,7 @@ internal sealed class InFlight<TKey, TResult>
     internal sealed class Flight(InFlight<TKey, TResult> owner, TKey key, bool reserved = false, bool cancellable = true) : IInFlightRun, IInFlightReservation<TResult>, IDisposable
     {
         private readonly CancellationTokenSource? _cancellation = reserved || !cancellable ? null : new();
-        private readonly object _gate = new();
+        private readonly Lock _gate = new();
         private int _waiting = 1;
         private TaskCompletionSource<TResult>? _source;
         private int _state;

@@ -62,7 +62,6 @@ public class AppSettingsAllJsonBindingTests
 
         opts.Should().NotBeNull();
         opts!.AppShortName.Should().Be("app");
-        opts.LocalLockPoolSize.Should().Be(100);
     }
 
     // The binder ignores unknown keys and defaults missing ones, so only comparing key sets catches drift.

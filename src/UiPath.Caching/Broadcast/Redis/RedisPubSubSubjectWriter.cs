@@ -18,7 +18,7 @@ internal sealed partial class RedisPubSubSubjectWriter<T> : IDisposable
     private readonly Timer _subscribeTimer;
     private readonly Action _onSubscriptionGap;
     private readonly Action _onDropped;
-    private readonly object _gate = new();
+    private readonly Lock _gate = new();
 
     // Under _gate: the subscription connections down now.
     private readonly HashSet<EndPoint?> _subscriptionsDown = [];

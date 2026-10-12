@@ -23,7 +23,6 @@ public class NamedCachingTests
         root.GetRequiredKeyedService<ICacheFactory>(Name).Should().NotBeSameAs(root.GetRequiredService<ICacheFactory>());
         root.GetRequiredKeyedService<IQueueCacheFactory>(Name).Should().NotBeSameAs(root.GetRequiredService<IQueueCacheFactory>());
         root.GetRequiredKeyedService<IDistributedLock>(Name).Should().NotBeSameAs(root.GetRequiredService<IDistributedLock>());
-        root.GetRequiredKeyedService<ILocalLock>(Name).Should().NotBeSameAs(root.GetRequiredService<ILocalLock>());
         root.GetRequiredKeyedService<ICache>(Name).Should().NotBeSameAs(root.GetRequiredService<ICacheFactory>().CreateCache());
         root.GetRequiredKeyedService<IHashCache>(Name).Should().NotBeSameAs(root.GetRequiredService<ICacheFactory>().CreateHashCache());
         root.GetRequiredKeyedService<ISetCache>(Name).Should().NotBeSameAs(root.GetRequiredService<ISetCache>());
@@ -393,7 +392,6 @@ public class NamedCachingTests
             root.GetRequiredKeyedService<IQueueCacheFactory>(Name),
             root.GetRequiredKeyedService<IRedisConnector>(Name),
             root.GetRequiredKeyedService<IDistributedLock>(Name),
-            root.GetRequiredKeyedService<ILocalLock>(Name),
             root.GetRequiredKeyedService<ITopicFactory>(Name),
             root.GetRequiredKeyedService<ICache>(Name),
             root.GetRequiredKeyedService<IHashCache>(Name),
@@ -410,10 +408,10 @@ public class NamedCachingTests
         NamedCachingContainer.Of(root, name).Provider;
 
     private static void RootChain(ICachingBuilder b) =>
-        b.AddRedisConnection().AddRedis().AddMemory().AddRedisDistributedLock().AddLocalLock().AddQueueRedis();
+        b.AddRedisConnection().AddRedis().AddMemory().AddRedisDistributedLock().AddQueueRedis();
 
     private static void NamedChain(ICachingBuilder b) =>
-        b.AddRedis().AddMemory().AddRedisDistributedLock().AddLocalLock().AddQueueRedis();
+        b.AddRedis().AddMemory().AddRedisDistributedLock().AddQueueRedis();
 
     private static ServiceProvider Build(params (string Path, string? Value)[] settings) =>
         Build(register: null, settings);

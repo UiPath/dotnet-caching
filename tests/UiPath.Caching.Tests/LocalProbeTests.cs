@@ -6,7 +6,7 @@ namespace UiPath.Caching.Tests;
 /// <summary>How many times a call reads the local tier: a miss that has just read it does not read it again to decide to go on.</summary>
 public class LocalProbeTests
 {
-    private static readonly CachePolicy NoLocalLock = new() { Lock = new LockProfile { LocalLockEnabled = false } };
+    private static readonly CachePolicy NoLocalLock = new() { Lock = new LockProfile { LocalSingleFlightEnabled = false } };
 
     private static CancellationToken Ct => TestContext.Current.CancellationToken;
 
@@ -33,7 +33,7 @@ public class LocalProbeTests
     }
 
     [Fact]
-    public async Task A_miss_reads_the_local_tier_for_the_front_and_again_under_each_lock()
+    public async Task A_miss_reads_the_local_tier_for_the_front_and_again_under_the_distributed_lock()
     {
         var memory = new CountingMemoryCacheFactory();
         using var cache = InMemoryMultilayer.Cache(memory: memory);
@@ -41,7 +41,7 @@ public class LocalProbeTests
 
         (await cache.GetOrAddAsync<string>("k", Generate, policy, Ct)).Should().Be("generated");
 
-        memory.Lookups.Should().Be(3);
+        memory.Lookups.Should().Be(2);
     }
 
     [Fact]

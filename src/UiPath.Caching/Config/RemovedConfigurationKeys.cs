@@ -1,7 +1,7 @@
 namespace UiPath.Caching.Config;
 
 /// <summary>
-/// Refuses configuration still written under an options key 2.0 removed. The binder skips a key it
+/// Refuses configuration still written under an options key a major release removed. The binder skips a key it
 /// cannot place without a word, so a leftover alias would quietly turn into the default: an L1 cap
 /// gone, not renamed.
 /// </summary>
@@ -12,6 +12,13 @@ internal static class RemovedConfigurationKeys
         ("PrimaryMaxExpiration", "LocalMaxExpiration"),
         ("PrimaryMaxExpirationDisconnected", "LocalMaxExpirationDisconnected"),
         ("UsePrimaryOnlyWhenDisconnected", "UseLocalOnlyWhenDisconnected"),
+    ];
+
+    /// <summary>The cache-wide section: the local lock's semaphore pool went with the lock in 3.0.</summary>
+    internal static readonly IReadOnlyList<(string Old, string? New)> Caching =
+    [
+        ("LocalLockPoolSize", null),
+        ("LocalLockPoolInitialFill", null),
     ];
 
     internal static readonly IReadOnlyList<(string Old, string? New)> RedisConnection =
@@ -46,7 +53,7 @@ internal static class RemovedConfigurationKeys
         }
 
         throw new InvalidOperationException(
-            $"Configuration section '{section.Path}' uses keys that UiPath.Caching 2.0 removed. The binder would " +
+            $"Configuration section '{section.Path}' uses keys that UiPath.Caching removed. The binder would " +
             $"ignore them without error, so the values would silently fall back to their defaults: " +
             string.Join("; ", found) + ".");
     }

@@ -1,6 +1,7 @@
 using Microsoft.Extensions.Caching.Memory;
 using UiPath.Caching.Locking;
 using UiPath.Caching.Tests.Broadcast;
+using UiPath.Caching.Tests.Fakes;
 
 namespace UiPath.Caching.Tests.Locking;
 
@@ -21,7 +22,6 @@ public class MultilayerCacheGetOrAddLockTests(ITestContextAccessor testContextAc
     private IMemoryCacheFactory _memoryCacheFactory = default!;
     private InMemoryRedisCacheOptions _options = default!;
     private TopicKey _topicKey = default!;
-    private AsyncKeyedLocalLock _locker = default!;
 
     private MultilayerCache? _sut;
     private MultilayerCache Sut
@@ -33,14 +33,14 @@ public class MultilayerCacheGetOrAddLockTests(ITestContextAccessor testContextAc
                 return _sut;
             }
 
-            lock (_sutLock) { return _sut ??= _fixture.Create<MultilayerCache>(); }
+            lock (_sutLock) { return _sut ??= RunTables.Track(_fixture.Create<MultilayerCache>()); }
         }
     }
 
     [Fact]
     public async Task GetOrAddAsync_serializes_concurrent_generator_invocations_for_the_same_key()
     {
-        _options.LocalLockTimeout = TimeSpan.FromMinutes(1);
+        _options.LocalSingleFlightTimeout = TimeSpan.FromMinutes(1);
         _sut = null;
 
         var token = testContextAccessor.Current.CancellationToken;
@@ -139,7 +139,7 @@ public class MultilayerCacheGetOrAddLockTests(ITestContextAccessor testContextAc
     }
 
     [Fact]
-    public async Task GetOrAddAsync_skips_distributed_lock_when_post_local_lock_re_read_hits()
+    public async Task GetOrAddAsync_does_not_generate_when_the_read_under_the_distributed_lock_hits()
     {
         var distributedLock = Substitute.For<IDistributedLock>();
         _fixture.Inject(distributedLock);
@@ -166,62 +166,15 @@ public class MultilayerCacheGetOrAddLockTests(ITestContextAccessor testContextAc
         var result = await Sut.GetOrAddAsync(cacheKey, Generator, (CachePolicy?)null, token);
 
         result.Should().Be("populated");
-        generatorCalls.Should().Be(0, "post-local-lock re-read hits — the generator must not run");
-        await distributedLock.DidNotReceive().AcquireAsync(
+        generatorCalls.Should().Be(0, "the read under the distributed lock hits — the generator must not run");
+        await distributedLock.Received(1).AcquireAsync(
             Arg.Any<string>(), Arg.Any<TimeSpan>(), Arg.Any<TimeSpan>(), Arg.Any<CancellationToken>());
-    }
-
-    [Fact]
-    public async Task GetOrAddAsync_re_reads_cache_after_local_lock_timeout_then_joins_the_generator_in_flight()
-    {
-        // Under a distributed lock a caller still queues for the local lock, so it is the one that waits, times out, re-reads and joins.
-        _options.LocalLockTimeout = TimeSpan.FromMilliseconds(200);
-        _options.DistributedLockEnabled = true;
-        _sut = null;
-
-        var token = testContextAccessor.Current.CancellationToken;
-        var cacheKey = _fixture.Create<string>();
-        _cacheKeyStrategy.GetCacheKey<string>(cacheKey).Returns((CacheKey)cacheKey);
-        _innerCache.GetCacheEntryAsync<string>((CacheKey)cacheKey, Arg.Any<CachePolicy?>(), Arg.Any<CancellationToken>())
-            .Returns(new TestCacheEntry<string?> { Value = null });
-
-        var holderAcquired = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        var holderRelease = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-
-        async Task<string?> Holder(CancellationToken ct)
-        {
-            holderAcquired.TrySetResult();
-            await holderRelease.Task.WaitAsync(ct);
-            return "holder";
-        }
-        var secondCalls = 0;
-        Task<string?> Second(CancellationToken ct)
-        {
-            Interlocked.Increment(ref secondCalls);
-            return Task.FromResult<string?>("second");
-        }
-
-        var holderTask = Task.Run(async () => await Sut.GetOrAddAsync(cacheKey, Holder, (CachePolicy?)null, token));
-        await holderAcquired.Task.WaitAsync(TimeSpan.FromSeconds(30), token);
-
-        var readsBeforeSecond = _innerCache.ReceivedCalls().Count(c => c.GetMethodInfo().Name == nameof(ICache.GetCacheEntryAsync));
-        var secondTask = Task.Run(async () => await Sut.GetOrAddAsync(cacheKey, Second, (CachePolicy?)null, token));
-        await WaitForAsync(() => _innerCache.ReceivedCalls().Count(c => c.GetMethodInfo().Name == nameof(ICache.GetCacheEntryAsync)) >= readsBeforeSecond + 2, TimeSpan.FromSeconds(10), token);
-
-        secondTask.IsCompleted.Should().BeFalse("the second caller joins the generator in flight rather than starting its own");
-        holderRelease.TrySetResult();
-
-        (await holderTask).Should().Be("holder");
-        (await secondTask).Should().Be("holder");
-        secondCalls.Should().Be(0);
-        _innerCache.ReceivedCalls().Count(c => c.GetMethodInfo().Name == nameof(ICache.GetCacheEntryAsync)).Should().BeGreaterThanOrEqualTo(readsBeforeSecond + 2,
-            "second caller should do an initial read + a post-timeout re-read; without the re-read on timeout the call joins the generator without checking whether another node populated L2 during the wait");
     }
 
     [Fact]
     public async Task GetOrAddAsync_without_a_distributed_lock_joins_the_generator_in_flight_at_once_and_reads_the_cache_once()
     {
-        _options.LocalLockTimeout = TimeSpan.FromMilliseconds(200);
+        _options.LocalSingleFlightTimeout = TimeSpan.FromMilliseconds(200);
         _sut = null;
 
         var token = testContextAccessor.Current.CancellationToken;
@@ -264,8 +217,7 @@ public class MultilayerCacheGetOrAddLockTests(ITestContextAccessor testContextAc
     [Fact]
     public async Task GetOrAddAsync_falls_through_to_generator_when_local_lock_is_disabled()
     {
-        _fixture.Inject<ILocalLock>(NullLocalLock.Instance);
-        _options.LocalLockEnabled = false;
+        _options.LocalSingleFlightEnabled = false;
         _sut = null;
 
         var token = testContextAccessor.Current.CancellationToken;
@@ -334,28 +286,28 @@ public class MultilayerCacheGetOrAddLockTests(ITestContextAccessor testContextAc
     }
 
     [Fact]
-    public void Ctor_throws_when_LocalLockTimeout_is_zero_or_negative()
+    public void Ctor_throws_when_LocalSingleFlightTimeout_is_zero_or_negative()
     {
-        _options.LocalLockTimeout = TimeSpan.Zero;
+        _options.LocalSingleFlightTimeout = TimeSpan.Zero;
         _sut = null;
         var act = () => _ = Sut;
         act.Should().Throw<Exception>()
             .Which.GetBaseException()
             .Should().BeOfType<OptionsValidationException>()
-            .Which.Message.Should().Contain(nameof(IMultilayerCacheOptions.LocalLockTimeout));
+            .Which.Message.Should().Contain(nameof(IMultilayerCacheOptions.LocalSingleFlightTimeout));
     }
 
     [Fact]
-    public void Ctor_throws_when_LocalLockEnabled_false_with_DistributedLockEnabled_true()
+    public void Ctor_throws_when_LocalSingleFlightEnabled_false_with_DistributedLockEnabled_true()
     {
-        _options.LocalLockEnabled = false;
+        _options.LocalSingleFlightEnabled = false;
         _options.DistributedLockEnabled = true;
         _sut = null;
         var act = () => _ = Sut;
         act.Should().Throw<Exception>()
             .Which.GetBaseException()
             .Should().BeOfType<OptionsValidationException>()
-            .Which.Message.Should().Contain(nameof(IMultilayerCacheOptions.LocalLockEnabled));
+            .Which.Message.Should().Contain(nameof(IMultilayerCacheOptions.LocalSingleFlightEnabled));
     }
 
     public ValueTask InitializeAsync()
@@ -372,7 +324,6 @@ public class MultilayerCacheGetOrAddLockTests(ITestContextAccessor testContextAc
             DefaultExpiration = TimeSpan.FromMinutes(10),
             EntryFactory = new TestCacheEntryFactory(),
         };
-        _locker = new AsyncKeyedLocalLock(Options.Create(new CacheOptions()));
 
         _cacheKeyStrategy = _fixture.Create<ICacheKeyStrategy>();
         _topicKeyStrategy = _fixture.Create<ITopicKeyStrategy>();
@@ -386,7 +337,6 @@ public class MultilayerCacheGetOrAddLockTests(ITestContextAccessor testContextAc
         _memoryCacheFactory.Get(Arg.Any<IMemoryCacheOptions>()).Returns(_ => _memoryCache);
         _fixture.Inject<IMultilayerCacheOptions>(_options);
         _fixture.Inject<IMemoryCacheOptions>(_options);
-        _fixture.Inject<ILocalLock>(_locker);
         _cacheEventFactory = _fixture.Freeze<ICacheEventFactory>();
         _cacheEventFactory.Create(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CacheEventData>(), Arg.Any<string?>())
             .Returns(c => new TestCacheEvent
@@ -400,7 +350,6 @@ public class MultilayerCacheGetOrAddLockTests(ITestContextAccessor testContextAc
 
     public ValueTask DisposeAsync()
     {
-        _locker?.Dispose();
         _memoryCache?.Dispose();
         return ValueTask.CompletedTask;
     }

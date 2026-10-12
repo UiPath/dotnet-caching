@@ -108,7 +108,7 @@ Details: [second Redis connection recipe](docs/recipes/second-redis-connection.m
 ## Features
 
 **Resiliency**
-- **Single-flight stampede protection** — one factory runs per key on a cache miss; other callers coalesce. In-process via `ILocalLock` (default on); cross-node via `IDistributedLock` (`AddInMemoryRedis()` registers the impl automatically — opt in with `DistributedLockEnabled: true`; `AddMemory()`-only or custom wiring needs an explicit `.AddRedisDistributedLock()`).
+- **Single-flight stampede protection** — one factory runs per key on a cache miss; other callers coalesce. In-process through a shared run per key (default on); cross-node via `IDistributedLock` (`AddInMemoryRedis()` registers the impl automatically — opt in with `DistributedLockEnabled: true`; `AddMemory()`-only or custom wiring needs an explicit `.AddRedisDistributedLock()`).
 - **Hydrating cache** — proactive background refresh before a key expires (`CachePolicy.RehydrateEnabled` + `RehydrateOptions`). Avoids the expiry-miss path on hot keys so reads against still-live entries don't pay the factory cost. First-time misses still run the factory on the foreground caller.
 - **Polly pipelines** — retry + circuit-breaker around every cache op (`AddResilienceStrategies`). Configurable per-op timeout, break duration, and rethrow behavior.
 - **Connection-aware L1 fallback** — `UseLocalOnlyWhenDisconnected` + `LocalMaxExpirationDisconnected` keep the cache useful when Redis blips.

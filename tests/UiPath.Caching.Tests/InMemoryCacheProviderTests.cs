@@ -105,7 +105,7 @@ public class InMemoryCacheProviderTests(ITestContextAccessor testContextAccessor
             .Without(x => x.SizeLimit)
             .Without(x => x.CompactionPercentage)
             .Without(x => x.SizeProvider)
-            .Without(x => x.LocalLockEnabled)
+            .Without(x => x.LocalSingleFlightEnabled)
             .Without(x => x.DistributedLockEnabled)
             .Without(x => x.CacheKeyStrategy)
             .Create();

@@ -163,10 +163,10 @@ read when they read the same value type with the same `LocalExpiration` and
 per node for each such combination; reads that differ in any of them, and
 multi-key reads, read L2 themselves.
 
-A `GetOrAddAsync` miss runs its generator under the local lock, and the callers
-waiting on the lock read the stored value once it is written. When L2 refuses the
+A `GetOrAddAsync` miss takes the key's run and runs its generator, and the callers
+that arrive meanwhile join the run and share its value. When L2 refuses the
 write, the generated value is kept in L1 for `LocalMaxExpirationDisconnected`, so
-those waiters reuse it instead of each running the generator again.
+callers that come after reuse it instead of each running the generator again.
 
 Why split into two tiers at all? L1 eliminates Redis latency and bandwidth on
 the hot path — for a busy service, removing the network hop from cache reads can
@@ -250,15 +250,12 @@ See also: [how-to/broadcast.md](how-to/broadcast.md), [reference/settings.md#cac
 `MultilayerCache.GetOrAddAsync` can deduplicate concurrent generator calls using
 two cooperating lock abstractions.
 
-`ILocalLock` is an in-process single-flight keyed on the cache key. The default
-implementation is `AsyncKeyedLocalLock`, which wraps `AsyncKeyedLocker` with a
-pre-allocated semaphore pool (size and initial fill controlled by
-`CacheOptions.LocalLockPoolSize` and `LocalLockPoolInitialFill`). When N
-concurrent callers on the same node all miss the cache for the same key, the
-local lock ensures only one of them runs the generator; the rest wait and then
-receive the result that the winner fetched. The local lock is cheap — it never
-leaves the process — and it is on by default for `InMemoryRedis` and `InMemory`
-providers (`LocalLockEnabled` defaults to `true` on `InMemoryRedisCacheOptions`).
+The in-process single-flight is a table of runs keyed on the cache key
+(`LocalSingleFlightEnabled`, on by default for the `InMemoryRedis` and `InMemory` providers).
+When N concurrent callers on the same node all miss the cache for the same key, the
+first takes the key's run and runs the generator; the rest join the run and receive
+the result it produced. Nobody waits on a lock, so there is no timeout to tune; a
+caller stops waiting only through its cancellation token.
 
 `IDistributedLock` extends single-flight across nodes using Redis `SET NX`. The
 default implementation is `RedisDistributedLock`. When a node acquires the
@@ -291,9 +288,10 @@ an explicit release, use `IDistributedLock`; when you need an atomic, expiring
 [the interfaces reference](reference/interfaces.md#icache) for the per-provider
 behavior, including why it fails closed when the L2 is disconnected.
 
-When both locks are enabled, `GetOrAddAsync` takes the local lock first (cheap,
-in-process) and then — under a double-checked read to avoid redundant generator
-runs after waiting — attempts the distributed lock. A failure to acquire the
+When the distributed lock is enabled, `GetOrAddAsync` takes the key's run first
+(cheap, in-process) and the caller that runs the generator then attempts the
+distributed lock, reading both tiers again once it holds it; callers that join the
+run never touch Redis. A failure to acquire the
 distributed lock (because it is contended or Redis is unavailable) degrades
 gracefully: the call falls back to per-node single-flight only. Callers are
 never stalled indefinitely by lock failures. The degradation is intentional:
@@ -302,14 +300,14 @@ exactly-once generator execution.
 
 `NullDistributedLock` is the default no-op shim when the distributed lock is not
 registered. Single-node deployments and local-development configurations are
-perfectly fine with it: the local lock still coalesces concurrent callers within
+perfectly fine with it: the shared run still coalesces concurrent callers within
 the same process. For multi-node deployments, wiring `RedisDistributedLock` is
 advisable when the generator is expensive and simultaneous cluster-wide cold
 misses would be problematic.
 
 Per-cache-instance tuning is available via the `Lock` member on `CachePolicy`
 (of type `LockProfile?`). `LockProfile` mirrors the lock fields on the cache-wide
-options (`LocalLockEnabled`, `DistributedLockEnabled`, `LocalLockTimeout`,
+options (`LocalSingleFlightEnabled`, `DistributedLockEnabled`, `LocalSingleFlightTimeout`,
 `DistributedLockTimeout`, `DistributedLockExpiry`) and is merged field-by-field
 against the default policy, so a named policy can override one field while
 inheriting the rest. This is one of the two places in `CachePolicy` where

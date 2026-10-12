@@ -7,7 +7,7 @@ internal sealed partial class KeyedSubject<T> : IEventSubject<T> where T : IEven
 {
     private readonly ConcurrentDictionary<string, ConcurrentDictionary<IObserver<T>, byte>> _keyedObservers = new(StringComparer.OrdinalIgnoreCase);
     private readonly ConcurrentDictionary<IObserver<T>, byte> _broadcastObservers = new();
-    private readonly object _keyedLock = new();
+    private readonly Lock _keyedLock = new();
 
     private readonly ILogger _logger;
     private readonly TimeSpan _slowObserverThreshold;

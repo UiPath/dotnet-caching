@@ -22,11 +22,7 @@ public sealed partial class RedisStreamsTopic<T> : ITopic<T>
     private readonly RedisStreamNotifyChannel? _notifyChannel;
     private readonly RedisChannel? _notifyRedisChannel;
     private readonly IFetchWaiter _waiter;
-#if NET9_0_OR_GREATER
     private readonly Lock _syncObj = new();
-#else
-    private readonly object _syncObj = new();
-#endif
     private bool _disposed;
     private volatile bool _consumerGroupCreated;
 
@@ -189,11 +185,7 @@ public sealed partial class RedisStreamsTopic<T> : ITopic<T>
     {
         if (!_consumerGroupCreated)
         {
-#if NET9_0_OR_GREATER
-            using (_syncObj.EnterScope())
-#else
             lock (_syncObj)
-#endif
             {
 #pragma warning disable S2589 // double-checked locking with a volatile field; outer check is racy by design
                 if (!_consumerGroupCreated)

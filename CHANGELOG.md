@@ -165,9 +165,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
   straight to the inner tier instead of reading the local tier again, and a span key's miss no longer reads it a
   second time on the way to the `CacheKey` path; the hash cache likewise. After a caller takes its key it looks the
   local tier up once more only when something in the process wrote that tier since the caller's first read, counted
-  per cache, instead of on every miss. The built-in local lock is taken without a cancellation source or timer, and
-  released without an async frame when no distributed lock is held; `LocalLockTimeout` behaves as before, and a custom
-  `ILocalLock` is still bounded by a cancellation source of its own.
+  per cache, instead of on every miss.
 
 - **The caller that starts a shared run waits on the work, not on the run's published task.** A miss that starts the
   generator used to resume through a thread-pool hop, since the shared task completes its continuations asynchronously
@@ -188,7 +186,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
   once. The keyed local lock, the read under it, its lock key and its async frames are not used on this path, and a
   miss that never waits builds no async state machine, so a miss costs one read of the local tier, and of the inner
   tier, instead of two. Batch `GetOrAddAsync` takes its keys the same way, per key, with no composite lock key and no
-  second probe, and copies nothing when every key is its own. With a distributed lock enabled the lock path is unchanged.
+  second probe, and copies nothing when every key is its own. With a distributed lock enabled the caller that takes the run takes the lock; see the next entry.
   **Breaking** in what it observes: `LocalLockTimeout` no longer bounds a `GetOrAddAsync` wait on this path, since a
   caller that arrives while a run is in flight joins it however long it takes, and stops waiting only through its token,
   where it used to wait for the lock up to `LocalLockTimeout` and only then join; a generator that fails now fails
@@ -202,6 +200,30 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
   its run starts, after an eviction or a short `LocalMaxExpiration`, can still generate and store over it, as the lock
   path's second inner read used to prevent. A failed add leaves nothing held. Across processes nothing changes: only the inner tier arbitrates there. A load every caller has left still
   does not store its result.
+
+- **The in-process lock is gone; `ILocalLock`, `AsyncKeyedLocalLock` and `NullLocalLock` are removed.** One run per key
+  in the process, the run table, does what the local lock did, without making a caller wait. `GetOrAddAsync` on the
+  multilayer and hash caches, single key and batch, takes the key's run first and, when a distributed lock is enabled,
+  only the caller that runs the generator takes it: after the run is reserved, it reads both tiers again under the
+  lock, runs the generator on a miss and releases the lock when the run ends, even if that caller has stopped waiting.
+  Callers that join the run never touch the Redis lock, so N concurrent callers take it once instead of N times, and a
+  batch takes one lock over the keys it runs. `TryAddAsync` no longer takes any lock; it keeps the run reservation
+  described above. `Lock.LocalLockEnabled` and `Lock.LocalLockTimeout` are renamed to `Lock.LocalSingleFlightEnabled`
+  ("callers of one process share a run per key") and `Lock.LocalSingleFlightTimeout` ("how long `TryAddAsync` waits for
+  a run that holds its key"), with the same defaults, on the provider options, `IMultilayerCacheOptions` and
+  `LockProfile`. The old names stay as `[Obsolete]` aliases, in code and in configuration, that read and write the new
+  ones; when both keys are configured the new one wins. A per-call profile still overrides them.
+  `LocalSingleFlightEnabled=false` with `DistributedLockEnabled=true` is still rejected: with no shared run every caller
+  of the process competes for the Redis lock. With a distributed lock, a timeout or failure taking it now fails every
+  caller that joined the run, where each caller used to take the lock itself and fail alone. The set and queue
+  caches' in-memory tier serialises writers of one key with a striped monitor (128 stripes chosen by the key's hash)
+  instead of an async lock; their critical sections never await. **Breaking**: remove `ILocalLock` registrations and
+  `AddLocalLock()` calls (they are unused), the `MultilayerCacheBase`, `InMemoryCacheProvider`,
+  `InMemoryRedisCacheProvider`, `InMemoryQueueCacheProvider` and `InMemoryRedisQueueCacheProvider` constructors lose
+  their `ILocalLock` parameter, `CacheOptions.LocalLockPoolSize` and `LocalLockPoolInitialFill` are removed (delete them
+  from configuration: `AddCaching` now refuses to start while the `Caching` section still sets either), and the `AsyncKeyedLock` package is no longer a
+  dependency. A subclass of `MultilayerCacheBase` that calls the protected `RunUnderLocksAsync` gets the distributed
+  lock only, with no pre-read when none is enabled.
 
 - **`ICachingTelemetryProvider` takes `TelemetryTags<T>` and has no default bodies.** `TrackDependency`, `TrackEvent`,
   `TrackException` and `TrackMetric` take `TelemetryTags<string>` properties and `TelemetryTags<double>` metrics in

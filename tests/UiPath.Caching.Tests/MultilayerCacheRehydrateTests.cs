@@ -1,5 +1,6 @@
 using UiPath.Caching.Locking;
 using UiPath.Caching.Telemetry;
+using UiPath.Caching.Tests.Fakes;
 using UiPath.Caching.Tests.Telemetry;
 
 namespace UiPath.Caching.Tests;
@@ -19,7 +20,6 @@ public class MultilayerCacheRehydrateTests(ITestContextAccessor testContextAcces
     private ITopic<ICacheEvent> _topic = default!;
     private global::UiPath.Caching.IMemoryCacheFactory _memoryCacheFactory = default!;
     private ICacheEventFactory _cacheEventFactory = default!;
-    private ILocalLock _localLock = default!;
     private IDistributedLock _distributedLock = default!;
     private InMemoryRedisCacheOptions _options = default!;
     private CacheKey _cacheKey = default!;
@@ -27,7 +27,7 @@ public class MultilayerCacheRehydrateTests(ITestContextAccessor testContextAcces
     private RecordingTelemetryProvider _telemetry = default!;
     private MultilayerCache? _sut;
 
-    private MultilayerCache Sut => _sut ??= _fixture.Create<MultilayerCache>();
+    private MultilayerCache Sut => _sut ??= RunTables.Track(_fixture.Create<MultilayerCache>());
 
     [Fact]
     public async Task Hit_before_threshold_does_not_trigger_rehydrate()
@@ -446,7 +446,6 @@ public class MultilayerCacheRehydrateTests(ITestContextAccessor testContextAcces
         _topicKey = _fixture.Create<string>();
         _innerCache = _fixture.Freeze<ICache>();
         _memoryCache = _fixture.Freeze<global::Microsoft.Extensions.Caching.Memory.IMemoryCache>();
-        _localLock = _fixture.Freeze<ILocalLock>();
         _distributedLock = _fixture.Freeze<IDistributedLock>();
         _telemetry = new RecordingTelemetryProvider();
         _fixture.Inject<ICachingTelemetryProvider>(_telemetry);
@@ -454,7 +453,7 @@ public class MultilayerCacheRehydrateTests(ITestContextAccessor testContextAcces
         {
             DefaultExpiration = Duration,
             EntryFactory = new TestCacheEntryFactory(),
-            LocalLockEnabled = false,
+            LocalSingleFlightEnabled = false,
             DistributedLockEnabled = false,
         };
         _fixture.Inject<IMultilayerCacheOptions>(_options);

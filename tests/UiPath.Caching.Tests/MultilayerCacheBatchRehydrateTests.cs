@@ -2,6 +2,7 @@ using System.Collections.Concurrent;
 using Microsoft.Extensions.Caching.Memory;
 using UiPath.Caching.Locking;
 using UiPath.Caching.Telemetry;
+using UiPath.Caching.Tests.Fakes;
 using UiPath.Caching.Tests.Telemetry;
 
 namespace UiPath.Caching.Tests;
@@ -33,13 +34,12 @@ public class MultilayerCacheBatchRehydrateTests(ITestContextAccessor testContext
     private IMemoryCacheFactory _memoryCacheFactory = default!;
     private ICacheEventFactory _cacheEventFactory = default!;
     private IDistributedLock _distributedLock = default!;
-    private AsyncKeyedLocalLock _locker = default!;
     private InMemoryRedisCacheOptions _options = default!;
     private TopicKey _topicKey = default!;
     private RecordingTelemetryProvider _telemetry = default!;
     private MultilayerCache? _sut;
 
-    private MultilayerCache Sut => _sut ??= _fixture.Create<MultilayerCache>();
+    private MultilayerCache Sut => _sut ??= RunTables.Track(_fixture.Create<MultilayerCache>());
 
     [Fact]
     public async Task Hits_past_threshold_are_rehydrated_in_one_background_call()
@@ -359,7 +359,6 @@ public class MultilayerCacheBatchRehydrateTests(ITestContextAccessor testContext
             EntryFactory = new TestCacheEntryFactory(),
             CacheNullValues = true,
         };
-        _locker = new AsyncKeyedLocalLock(Options.Create(new CacheOptions()));
 
         _cacheKeyStrategy = _fixture.Create<ICacheKeyStrategy>();
         _cacheKeyStrategy.GetCacheKey<string>(Arg.Any<CacheKey>()).Returns(c => c.Arg<CacheKey>());
@@ -381,7 +380,6 @@ public class MultilayerCacheBatchRehydrateTests(ITestContextAccessor testContext
             .Returns(_ => Substitute.For<IAsyncDisposable>());
         _fixture.Inject<IMultilayerCacheOptions>(_options);
         _fixture.Inject<IMemoryCacheOptions>(_options);
-        _fixture.Inject<ILocalLock>(_locker);
         _cacheEventFactory = _fixture.Freeze<ICacheEventFactory>();
         _cacheEventFactory.Create(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CacheEventData>(), Arg.Any<string?>())
             .Returns(c => new Broadcast.TestCacheEvent
@@ -420,7 +418,6 @@ public class MultilayerCacheBatchRehydrateTests(ITestContextAccessor testContext
 
     public ValueTask DisposeAsync()
     {
-        _locker?.Dispose();
         _memoryCache?.Dispose();
         GC.SuppressFinalize(this);
         return ValueTask.CompletedTask;

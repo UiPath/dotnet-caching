@@ -1,5 +1,6 @@
 using UiPath.Caching.Config;
 using UiPath.Caching.Locking;
+using UiPath.Caching.Tests.Fakes;
 
 namespace UiPath.Caching.Tests;
 
@@ -16,14 +17,13 @@ public class MultilayerCachePerNamePolicyWiringTests : IAsyncLifetime
     private ITopic<ICacheEvent> _topic = default!;
     private global::UiPath.Caching.IMemoryCacheFactory _memoryCacheFactory = default!;
     private ICacheEventFactory _cacheEventFactory = default!;
-    private ILocalLock _localLock = default!;
     private IDistributedLock _distributedLock = default!;
     private InMemoryRedisCacheOptions _options = default!;
     private CacheKey _cacheKey = default!;
     private TopicKey _topicKey = default!;
     private MultilayerCache? _sut;
 
-    private MultilayerCache Sut => _sut ??= _fixture.Create<MultilayerCache>();
+    private MultilayerCache Sut => _sut ??= RunTables.Track(_fixture.Create<MultilayerCache>());
 
     [Fact]
     public async Task GetOrAdd_uses_policy_DistributedExpiration_when_caller_omits_expiration()
@@ -96,7 +96,7 @@ public class MultilayerCachePerNamePolicyWiringTests : IAsyncLifetime
     public async Task GetOrAdd_falls_back_to_cache_options_DefaultExpiration_when_policy_omits_TTL()
     {
         var token = TestContext.Current.CancellationToken;
-        var defaultPolicy = new CachePolicy { Lock = new LockProfile { LocalLockEnabled = false } };
+        var defaultPolicy = new CachePolicy { Lock = new LockProfile { LocalSingleFlightEnabled = false } };
         _fixture.Inject(new CacheOptions { DefaultCachePolicy = defaultPolicy, AppShortName = "test" });
         _sut = null;
 
@@ -560,7 +560,6 @@ public class MultilayerCachePerNamePolicyWiringTests : IAsyncLifetime
         _topicKey = _fixture.Create<string>();
         _innerCache = _fixture.Freeze<ICache>();
         _memoryCache = _fixture.Freeze<global::Microsoft.Extensions.Caching.Memory.IMemoryCache>();
-        _localLock = _fixture.Freeze<ILocalLock>();
         _distributedLock = _fixture.Freeze<IDistributedLock>();
         _options = new InMemoryRedisCacheOptions
         {
@@ -568,7 +567,7 @@ public class MultilayerCachePerNamePolicyWiringTests : IAsyncLifetime
             ConnectionMonitorEnabled = false,
             DefaultExpiration = TimeSpan.FromMinutes(10),
             EntryFactory = new TestCacheEntryFactory(),
-            LocalLockEnabled = false,
+            LocalSingleFlightEnabled = false,
             DistributedLockEnabled = false,
         };
         _fixture.Inject<IMultilayerCacheOptions>(_options);

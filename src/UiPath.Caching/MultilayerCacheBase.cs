@@ -33,17 +33,15 @@ public abstract partial class MultilayerCacheBase : IDisposable
     {
         Lock = new LockProfile
         {
-            LocalLockEnabled = true,
+            LocalSingleFlightEnabled = true,
             DistributedLockEnabled = false,
-            LocalLockTimeout = TimeSpan.FromMilliseconds(500),
+            LocalSingleFlightTimeout = TimeSpan.FromMilliseconds(500),
             DistributedLockTimeout = TimeSpan.FromMilliseconds(500),
             DistributedLockExpiry = TimeSpan.FromSeconds(5),
         },
     };
-    private readonly ILocalLock _localLock;
     private readonly IDistributedLock _distributedLock;
     private readonly IDistributedLockKeyStrategy _lockKeyStrategy;
-    private readonly string _localLockKeyPrefix;
     private readonly TimeSpan _distributedLockExpiry;
     private readonly TimeSpan _distributedLockTimeout;
     private readonly TimeSpan _localLockTimeout;
@@ -61,7 +59,6 @@ public abstract partial class MultilayerCacheBase : IDisposable
         IMultilayerCacheOptions multiLayerCacheOptions,
         IMemoryCacheOptions memoryOptions,
         CacheOptions cacheOptions,
-        ILocalLock localLock,
         IDistributedLock distributedLock,
         ICachePolicyFactory policyFactory,
         TimeProvider clock,
@@ -87,15 +84,13 @@ public abstract partial class MultilayerCacheBase : IDisposable
         _connectionState = connectionMonitorEnabled ? GetConnectionMonitor(innerCache, _topicProvider) : NullConnectionStateMonitor.Instance;
         _useLocalOnlyWhenDisconnected = (multiLayerCacheOptions.UseLocalOnlyWhenDisconnected ?? true) && connectionMonitorEnabled;
         _clearLocalOnReconnect = (multiLayerCacheOptions.ClearLocalOnReconnect ?? true) && connectionMonitorEnabled;
-        _localLock = localLock;
         _distributedLock = distributedLock;
         _lockKeyStrategy = multiLayerCacheOptions.LockKeyStrategy ?? new DefaultDistributedLockKeyStrategy(cacheOptions.Separator);
-        _localLockKeyPrefix = cacheName + cacheOptions.Separator;
         var defaultLock = _defaultPolicy.Lock!;
         _distributedLockExpiry = defaultLock.DistributedLockExpiry!.Value;
         _distributedLockTimeout = defaultLock.DistributedLockTimeout!.Value;
-        _localLockTimeout = defaultLock.LocalLockTimeout!.Value;
-        _localLockEnabled = defaultLock.LocalLockEnabled!.Value;
+        _localLockTimeout = defaultLock.LocalSingleFlightTimeout!.Value;
+        _localLockEnabled = defaultLock.LocalSingleFlightEnabled!.Value;
         _distributedLockEnabled = defaultLock.DistributedLockEnabled!.Value;
         Name = cacheName;
         _rehydrator = new RehydrationCoordinator(cacheName, _clock, distributedLock, _lockKeyStrategy, telemetryProvider, logger, _masker);
@@ -122,22 +117,24 @@ public abstract partial class MultilayerCacheBase : IDisposable
         return duration + new TimeSpan(bonusTicks);
     }
 
-    protected ValueTask<TResult> RunUnderLocksAsync<TResult>(
+    /// <summary>Runs <paramref name="runGeneratorAndStoreAsync"/>, under the key's distributed lock when one is enabled: the lock is taken, the cache read again, and the generator run only on a miss. With no distributed lock it runs the generator at once; de-duplicating callers of one process is the run table's job, not a lock's.</summary>
+    protected async ValueTask<TResult> RunUnderLocksAsync<TResult>(
         CacheKey cacheKey,
         Func<ValueTask<TResult>> readCachedAsync,
         Func<TResult, bool> isHit,
         Func<CancellationToken, ValueTask<TResult>> runGeneratorAndStoreAsync,
         CancellationToken token,
-        LockProfile? policyLock = null) =>
-        RunUnderLocksAsync(
-            cacheKey,
-            (Read: readCachedAsync, Run: runGeneratorAndStoreAsync),
-            static s => s.Read(),
-            isHit,
-            static (s, ct) => s.Run(ct),
-            policyLock,
-            lifetime: null,
-            token);
+        LockProfile? policyLock = null)
+    {
+        if (!DistributedLockOn(policyLock))
+        {
+            return await runGeneratorAndStoreAsync(token).ConfigureAwait(false);
+        }
+
+        await using var lease = await AcquireDistributedLockAsync(cacheKey, policyLock, token).ConfigureAwait(false);
+        var fromCache = await readCachedAsync().ConfigureAwait(false);
+        return isHit(fromCache) ? fromCache : await runGeneratorAndStoreAsync(token).ConfigureAwait(false);
+    }
 
     protected Task<TResult> InvokeFactoryAsync<TResult>(
         CacheKey cacheKey,
@@ -178,70 +175,9 @@ public abstract partial class MultilayerCacheBase : IDisposable
         }
     }
 
-    /// <summary>A timeout a cancellation source takes: <c>CancelAfter</c> throws beyond <see cref="int.MaxValue"/> milliseconds, so a misconfigured <c>Lock.LocalLockTimeout</c> degrades to that.</summary>
+    /// <summary>A timeout a cancellation source takes: <c>CancelAfter</c> throws beyond <see cref="int.MaxValue"/> milliseconds, so a misconfigured <c>Lock.LocalSingleFlightTimeout</c> degrades to that.</summary>
     private protected static TimeSpan BoundedTimeout(TimeSpan timeout) =>
         timeout.TotalMilliseconds > int.MaxValue ? TimeSpan.FromMilliseconds(int.MaxValue) : timeout;
-
-    /// <summary>The same as the delegate overload with the callers' captured state passed in, so a call allocates no closure.</summary>
-    private protected async ValueTask<TResult> RunUnderLocksAsync<TResult, TState>(
-        CacheKey cacheKey,
-        TState state,
-        Func<TState, ValueTask<TResult>> readCachedAsync,
-        Func<TResult, bool> isHit,
-        Func<TState, CancellationToken, ValueTask<TResult>> runGeneratorAndStoreAsync,
-        LockProfile? policyLock,
-        LockLifetime? lifetime,
-        CancellationToken token)
-    {
-        var (localLockEnabled, localLockTimeout) = ResolveLocalLock(policyLock);
-        var distributedLockEnabled = policyLock?.DistributedLockEnabled ?? _distributedLockEnabled;
-        // Per-call LockProfile bypasses options validators; mirror LockSettingsValidator's accepted ranges and fall back when out-of-range.
-        var distributedLockTimeout = NonNegativeOrFallback(policyLock?.DistributedLockTimeout, _distributedLockTimeout);
-        var distributedLockExpiry = PositiveOrFallback(policyLock?.DistributedLockExpiry, _distributedLockExpiry);
-
-        IDisposable? localLock = null;
-        IAsyncDisposable? distributedLock = null;
-        try
-        {
-            if (localLockEnabled)
-            {
-                localLock = await TryAcquireLocalLockAsync(cacheKey, localLockTimeout, token).ConfigureAwait(false);
-                var fromCache = await readCachedAsync(state).ConfigureAwait(false);
-                if (isHit(fromCache))
-                {
-                    return fromCache;
-                }
-            }
-
-            if (distributedLockEnabled)
-            {
-                var lockKey = _lockKeyStrategy.GetLockKey(cacheKey);
-                distributedLock = await _distributedLock.AcquireAsync(lockKey, distributedLockExpiry, distributedLockTimeout, token).ConfigureAwait(false);
-                var fromCache = await readCachedAsync(state).ConfigureAwait(false);
-                if (isHit(fromCache))
-                {
-                    return fromCache;
-                }
-            }
-
-            return await runGeneratorAndStoreAsync(state, token).ConfigureAwait(false);
-        }
-        finally
-        {
-            if (lifetime?.Run is { IsCompleted: false } run)
-            {
-                ReleaseAfterAsync(run.Completion, distributedLock, localLock).Forget();
-            }
-            else if (distributedLock is null)
-            {
-                localLock?.Dispose();
-            }
-            else
-            {
-                await ReleaseAsync(distributedLock, localLock).ConfigureAwait(false);
-            }
-        }
-    }
 
     /// <summary>How long a hit read from the inner tier stays local: the disconnected cap while the tier reads as down, perhaps only its broadcast.</summary>
     private protected TimeSpan? LocalLifetime(CachePolicy policy) =>
@@ -324,73 +260,33 @@ public abstract partial class MultilayerCacheBase : IDisposable
         CacheExpiration.ThrowIfNotFuture(expiration, _clock.GetUtcNow(), paramName);
 
     /// <summary>
-    /// The local lock alone, for callers that need it for correctness rather than de-duplication.
-    /// Taken regardless of <c>Lock.LocalLockEnabled</c>, which only trades single-flight for
-    /// throughput on <c>GetOrAddAsync</c>; <c>null</c> means the acquire timed out, and the caller
-    /// must fail closed.
-    /// </summary>
-    private protected ValueTask<IDisposable?> AcquireLocalLockAsync(CacheKey cacheKey, LockProfile? policyLock, CancellationToken token) =>
-        TryAcquireLocalLockAsync(cacheKey, ResolveLocalLock(policyLock).Timeout, token);
-
-    /// <summary>
-    /// One place for the local-lock policy: a per-call <see cref="LockProfile"/> wins over the
-    /// options. It bypasses the options validators, so the timeout falls back when out of range.
+    /// One place for the in-process policy: a per-call <see cref="LockProfile"/> wins over the
+    /// options. <c>Enabled</c> turns the shared run per key on; <c>Timeout</c> is how long a
+    /// <c>TryAddAsync</c> waits for a run that holds its key. It bypasses the options validators,
+    /// so the timeout falls back when out of range.
     /// </summary>
     private protected (bool Enabled, TimeSpan Timeout) ResolveLocalLock(LockProfile? policyLock) =>
-        (policyLock?.LocalLockEnabled ?? _localLockEnabled,
-         PositiveOrFallback(policyLock?.LocalLockTimeout, _localLockTimeout));
+        (policyLock?.LocalSingleFlightEnabled ?? _localLockEnabled,
+         PositiveOrFallback(policyLock?.LocalSingleFlightTimeout, _localLockTimeout));
 
-    /// <summary>Whether a miss takes its key in the run table before any lock: the local lock then only de-duplicates, which the run table does without making a caller wait, and no distributed lock needs holding.</summary>
-    private protected bool ReservesFirst(LockProfile? policyLock) =>
-        ResolveLocalLock(policyLock).Enabled && !(policyLock?.DistributedLockEnabled ?? _distributedLockEnabled);
+    /// <summary>Whether callers of one process share a run per key: <c>Lock.LocalSingleFlightEnabled</c>.</summary>
+    private protected bool SharesRuns(LockProfile? policyLock) => ResolveLocalLock(policyLock).Enabled;
 
-    private static async Task ReleaseAfterAsync(Task until, IAsyncDisposable? distributedLock, IDisposable? localLock)
-    {
-        _ = await Task.WhenAny(until).ConfigureAwait(false);
-        await ReleaseAsync(distributedLock, localLock).ConfigureAwait(false);
-    }
+    private protected bool DistributedLockOn(LockProfile? policyLock) => policyLock?.DistributedLockEnabled ?? _distributedLockEnabled;
 
-    private static async Task ReleaseAsync(IAsyncDisposable? distributedLock, IDisposable? localLock)
-    {
-        try
-        {
-            if (distributedLock is not null)
-            {
-                await distributedLock.DisposeAsync().ConfigureAwait(false);
-            }
-        }
-        finally
-        {
-            localLock?.Dispose();
-        }
-    }
+    /// <summary>The key's distributed lock, with the timeout and expiry of the call's profile. Per-call profiles bypass the options validators, so a value out of range falls back to the cache-wide one.</summary>
+    private protected ValueTask<IAsyncDisposable> AcquireDistributedLockAsync(CacheKey cacheKey, LockProfile? policyLock, CancellationToken token) =>
+        _distributedLock.AcquireAsync(
+            _lockKeyStrategy.GetLockKey(cacheKey),
+            PositiveOrFallback(policyLock?.DistributedLockExpiry, _distributedLockExpiry),
+            NonNegativeOrFallback(policyLock?.DistributedLockTimeout, _distributedLockTimeout),
+            token);
 
     private static TimeSpan PositiveOrFallback(TimeSpan? value, TimeSpan fallback) =>
         value is { } v && v > TimeSpan.Zero ? v : fallback;
 
     private static TimeSpan NonNegativeOrFallback(TimeSpan? value, TimeSpan fallback) =>
         value is { } v && v >= TimeSpan.Zero ? v : fallback;
-
-    private ValueTask<IDisposable?> TryAcquireLocalLockAsync(CacheKey cacheKey, TimeSpan localLockTimeout, CancellationToken token) =>
-        _localLock is AsyncKeyedLocalLock keyed
-            ? keyed.TryAcquireAsync(_localLockKeyPrefix, cacheKey.Name, localLockTimeout, token)
-            : TryAcquireCustomLocalLockAsync(cacheKey, localLockTimeout, token);
-
-    /// <summary>For a lock of the caller's own, which only takes a token: the timeout is a cancellation of its own.</summary>
-    private async ValueTask<IDisposable?> TryAcquireCustomLocalLockAsync(CacheKey cacheKey, TimeSpan localLockTimeout, CancellationToken token)
-    {
-        var lockKey = _localLockKeyPrefix + cacheKey.Name;
-        using var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(token);
-        linkedCts.CancelAfter(BoundedTimeout(localLockTimeout));
-        try
-        {
-            return await _localLock.AcquireAsync(lockKey, linkedCts.Token).ConfigureAwait(false);
-        }
-        catch (OperationCanceledException) when (linkedCts.IsCancellationRequested && !token.IsCancellationRequested)
-        {
-            return null;
-        }
-    }
 
     private IConnectionState GetConnectionMonitor(params object[] connectionStates)
     {

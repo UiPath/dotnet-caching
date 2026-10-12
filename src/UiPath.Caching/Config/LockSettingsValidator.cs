@@ -22,12 +22,12 @@ internal static class LockSettingsValidator
         }
         if (localLockTimeout is { } localTimeout && localTimeout <= TimeSpan.Zero)
         {
-            return ValidateOptionsResult.Fail($"{scope}{nameof(LockProfile.LocalLockTimeout)} must be greater than zero.");
+            return ValidateOptionsResult.Fail($"{scope}{nameof(LockProfile.LocalSingleFlightTimeout)} must be greater than zero.");
         }
         if (localLockEnabled == false && distributedLockEnabled == true)
         {
             return ValidateOptionsResult.Fail(
-                $"{scope}{nameof(LockProfile.LocalLockEnabled)}=false with " +
+                $"{scope}{nameof(LockProfile.LocalSingleFlightEnabled)}=false with " +
                 $"{nameof(LockProfile.DistributedLockEnabled)}=true weakens single-flight: " +
                 "every local caller competes independently for the distributed lock, multiplying " +
                 "LockTakeAsync round-trips per node. Enable both or disable both.");

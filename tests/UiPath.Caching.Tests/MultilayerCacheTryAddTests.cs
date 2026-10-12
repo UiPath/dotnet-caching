@@ -8,6 +8,7 @@ using UiPath.Caching.Config;
 using UiPath.Caching.Locking;
 using UiPath.Caching.Telemetry;
 using UiPath.Caching.Tests.Broadcast;
+using UiPath.Caching.Tests.Fakes;
 
 namespace UiPath.Caching.Tests;
 
@@ -38,7 +39,7 @@ public class MultilayerCacheTryAddTests(ITestContextAccessor testContextAccessor
     {
     }
 
-    private MultilayerCache Sut => _sut ??= _fixture.Create<MultilayerCache>();
+    private MultilayerCache Sut => _sut ??= RunTables.Track(_fixture.Create<MultilayerCache>());
 
     private CancellationToken Ct => testContextAccessor.Current.CancellationToken;
 
@@ -301,7 +302,7 @@ public class MultilayerCacheTryAddTests(ITestContextAccessor testContextAccessor
     {
         var inner = CreateInMemorySut();
         _fixture.Inject<ICache>(inner);
-        using var sut = _fixture.Create<MultilayerCache>();
+        using var sut = RunTables.Track(_fixture.Create<MultilayerCache>());
 
         var added = await sut.TryAddAsync(_cacheKey, _fixture.Create<string>(), policy: null, token: Ct);
 
@@ -346,7 +347,6 @@ public class MultilayerCacheTryAddTests(ITestContextAccessor testContextAccessor
         _memoryCacheFactory = _fixture.Freeze<IMemoryCacheFactory>();
         _memoryCacheFactory.Get(Arg.Any<IMemoryCacheOptions>()).Returns(_ => _memoryCache);
         _fixture.Inject<IMultilayerCacheOptions>(_options);
-        _fixture.Inject<ILocalLock>(new AsyncKeyedLocalLock(Options.Create(new CacheOptions { AppShortName = "test" })));
         _memoryCache.TryGetValue(Arg.Any<object>(), out Arg.Any<object?>()).Returns(false);
         _fixture.Inject<IMemoryCacheOptions>(_options);
         _fixture.Inject<IEventFormatterProxy<ICacheEvent>>(new CacheClearEventFormatterProxy());
@@ -383,7 +383,6 @@ public class MultilayerCacheTryAddTests(ITestContextAccessor testContextAccessor
             options,
             options,
             cacheOptions,
-            localLock: new AsyncKeyedLocalLock(Options.Create(cacheOptions)),
             distributedLock: NullDistributedLock.Instance,
             policyFactory: NullCachePolicyFactory.Instance,
             clock: TimeProvider.System,
@@ -467,7 +466,7 @@ public class InMemoryCacheTryAddTests
     [Fact]
     public async Task Exactly_one_caller_still_wins_with_the_local_lock_disabled()
     {
-        using var sut = CreateSut(new InMemoryCacheOptions { LocalLockEnabled = false });
+        using var sut = CreateSut(new InMemoryCacheOptions { LocalSingleFlightEnabled = false });
         const int callers = 32;
 
         var results = await Task.WhenAll(Enumerable.Range(0, callers).Select(i =>
@@ -477,15 +476,28 @@ public class InMemoryCacheTryAddTests
     }
 
     [Fact]
-    public async Task A_caller_that_cannot_take_the_local_lock_is_told_it_lost()
+    public async Task A_caller_whose_key_a_generator_still_holds_after_the_timeout_is_told_it_lost()
     {
-        var options = new InMemoryCacheOptions { LocalLockTimeout = TimeSpan.FromMilliseconds(50) };
-        using var sut = CreateSut(options, localLock: new NeverGrantingLocalLock());
+        var options = new InMemoryCacheOptions { LocalSingleFlightTimeout = TimeSpan.FromMilliseconds(50) };
+        using var sut = CreateSut(options);
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var started = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        async Task<string?> Hold(CancellationToken _)
+        {
+            started.TrySetResult();
+            await release.Task;
+            return null;
+        }
+
+        var holder = sut.GetOrAddAsync<string>("k", Hold, policy: null, token: Ct).AsTask();
+        await started.Task.WaitAsync(TimeSpan.FromSeconds(10), Ct);
 
         var added = await sut.TryAddAsync("k", "first", policy: null, token: Ct);
 
         added.Should().BeFalse();
         (await sut.GetAsync<string>("k", policy: null, token: Ct)).Should().BeNull("a loss must not write anything either");
+        release.SetResult();
+        await holder;
     }
 
     [Fact]
@@ -523,8 +535,7 @@ public class InMemoryCacheTryAddTests
     }
 
     private static MultilayerCache CreateSut(
-        InMemoryCacheOptions? options = null,
-        ILocalLock? localLock = null)
+        InMemoryCacheOptions? options = null)
     {
         options ??= new InMemoryCacheOptions();
         var cacheOptions = new CacheOptions { AppShortName = "test" };
@@ -539,7 +550,6 @@ public class InMemoryCacheTryAddTests
             options,
             options,
             cacheOptions,
-            localLock: localLock ?? new AsyncKeyedLocalLock(Options.Create(cacheOptions)),
             distributedLock: NullDistributedLock.Instance,
             policyFactory: NullCachePolicyFactory.Instance,
             clock: TimeProvider.System,
@@ -549,18 +559,5 @@ public class InMemoryCacheTryAddTests
     private sealed class OversizedEntryProvider : ICacheEntrySizeProvider
     {
         public long GetSize(ICacheEntry entry) => long.MaxValue;
-    }
-
-    /// <summary>
-    /// Stands in for a local lock held by someone else for longer than the acquire budget: the wait is
-    /// abandoned by the linked timeout, which is the only way <c>AcquireLocalLockAsync</c> answers null.
-    /// </summary>
-    private sealed class NeverGrantingLocalLock : ILocalLock
-    {
-        public async ValueTask<IDisposable> AcquireAsync(string key, CancellationToken token)
-        {
-            await Task.Delay(Timeout.Infinite, token).ConfigureAwait(false);
-            throw new InvalidOperationException("unreachable: the delay above only ever cancels");
-        }
     }
 }

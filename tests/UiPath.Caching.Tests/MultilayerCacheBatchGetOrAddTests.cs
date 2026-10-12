@@ -1,5 +1,6 @@
 using Microsoft.Extensions.Caching.Memory;
 using UiPath.Caching.Locking;
+using UiPath.Caching.Tests.Fakes;
 
 namespace UiPath.Caching.Tests;
 
@@ -34,12 +35,11 @@ public class MultilayerCacheBatchGetOrAddTests(ITestContextAccessor testContextA
     private IChangeTokenFactory _changeTokenFactory = default!;
     private IMemoryCacheFactory _memoryCacheFactory = default!;
     private ICacheEventFactory _cacheEventFactory = default!;
-    private AsyncKeyedLocalLock _locker = default!;
     private InMemoryRedisCacheOptions _options = default!;
     private TopicKey _topicKey = default!;
     private MultilayerCache? _sut;
 
-    private MultilayerCache Sut => _sut ??= _fixture.Create<MultilayerCache>();
+    private MultilayerCache Sut => _sut ??= RunTables.Track(_fixture.Create<MultilayerCache>());
 
     [Fact]
     public async Task Generator_receives_only_missing_states_and_runs_once()
@@ -302,7 +302,6 @@ public class MultilayerCacheBatchGetOrAddTests(ITestContextAccessor testContextA
             EntryFactory = new TestCacheEntryFactory(),
             CacheNullValues = true,
         };
-        _locker = new AsyncKeyedLocalLock(Options.Create(new CacheOptions()));
 
         _cacheKeyStrategy = _fixture.Create<ICacheKeyStrategy>();
         _cacheKeyStrategy.GetCacheKey<string>(Arg.Any<CacheKey>()).Returns(c => c.Arg<CacheKey>());
@@ -320,7 +319,6 @@ public class MultilayerCacheBatchGetOrAddTests(ITestContextAccessor testContextA
         _memoryCacheFactory.Get(Arg.Any<IMemoryCacheOptions>()).Returns(_ => _memoryCache);
         _fixture.Inject<IMultilayerCacheOptions>(_options);
         _fixture.Inject<IMemoryCacheOptions>(_options);
-        _fixture.Inject<ILocalLock>(_locker);
         _cacheEventFactory = _fixture.Freeze<ICacheEventFactory>();
         _cacheEventFactory.Create(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CacheEventData>(), Arg.Any<string?>())
             .Returns(c => new Broadcast.TestCacheEvent
@@ -353,7 +351,6 @@ public class MultilayerCacheBatchGetOrAddTests(ITestContextAccessor testContextA
 
     public ValueTask DisposeAsync()
     {
-        _locker?.Dispose();
         _memoryCache?.Dispose();
         GC.SuppressFinalize(this);
         return ValueTask.CompletedTask;
