@@ -22,12 +22,14 @@ internal sealed class InFlight<TKey, TResult>
         var flight = Join(key, state, work, token.CanBeCanceled, out var started);
 
         // The caller that started the work waits on the work itself: the shared task would resume it through a thread-pool hop.
-        if (started && flight.Starter is { } own)
+        // A joiner has no work of its own to wait on, and neither has a starter whose work finished before it first yielded.
+        var ownWork = started ? flight.Starter : null;
+        if (ownWork is null)
         {
-            return token.CanBeCanceled ? WaitStarterCancellableAsync(flight, own, token) : new ValueTask<TResult>(own);
+            return WaitAsync(flight, joined: null, token);
         }
 
-        return WaitAsync(flight, joined: null, token);
+        return token.CanBeCanceled ? WaitStarterCancellableAsync(flight, ownWork, token) : new ValueTask<TResult>(ownWork);
     }
 
     /// <summary>Joins the run in progress for <paramref name="key"/>; false when none is, starting nothing. The caller that stops waiting for any reason other than its token must <see cref="Joined.Withdraw"/>, or it keeps counting as a waiter.</summary>
