@@ -64,7 +64,7 @@ public class MultilayerHashCacheTests(ITestContextAccessor testContextAccessor) 
 
         await Sut.GetAsync<string>(_cacheKey, policy: null, token: testContextAccessor.Current.CancellationToken);
 
-        _memoryCache.Received(1).TryGetValue(_innerCacheKey.Name, out Arg.Any<object?>());
+        _memoryCache.Received().TryGetValue(_innerCacheKey.Name, out Arg.Any<object?>());
         _memoryCache.Received(1).CreateEntry(_innerCacheKey.Name);
     }
 
