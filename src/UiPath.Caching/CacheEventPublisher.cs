@@ -114,6 +114,12 @@ public sealed partial class CacheEventPublisher
             var topicKey = options.TopicKey;
             var cacheKey = options.CacheKey;
             LogRaiseEvent(eventType, topicKey, LoggedKey.For(_masker, options.CallerKey, cacheKey.Name, entryType));
+            if (_topicProvider is NullTopicProvider)
+            {
+                // Broadcast is off: its topic takes anything and keeps nothing, so the event is not built.
+                return new ValueTask<bool>(true);
+            }
+
             var data = new CacheEventData(cacheKey)
             {
                 Properties = properties,
