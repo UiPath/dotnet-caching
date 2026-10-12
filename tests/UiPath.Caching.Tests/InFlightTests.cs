@@ -6,6 +6,17 @@ public class InFlightTests
 
     private static CancellationToken Ct => TestContext.Current.CancellationToken;
 
+    // The exception type, not a factory: a delegate does not serialize, so each row would not show on its own.
+    public static TheoryData<Type, bool> StarterFailures() => new()
+    {
+        { typeof(InvalidOperationException), false },
+        { typeof(InvalidOperationException), true },
+        { typeof(OperationCanceledException), false },
+        { typeof(OperationCanceledException), true },
+        { typeof(TaskCanceledException), false },
+        { typeof(TaskCanceledException), true },
+    };
+
     [Fact]
     public async Task Concurrent_callers_for_one_key_share_one_run()
     {
@@ -207,6 +218,124 @@ public class InFlightTests
         var fresh = await flights.RunAsync("k", 0, (_, _) => new ValueTask<int>(Interlocked.Increment(ref runs)), Ct);
 
         fresh.Should().Be(2);
+    }
+
+    [Theory]
+    [MemberData(nameof(StarterFailures))]
+    public async Task A_starter_surfaces_the_exception_its_work_failed_with(Type failure, bool cancellableToken)
+    {
+        var flights = new InFlight<string, int>();
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        using var source = new CancellationTokenSource();
+        var expected = (Exception)Activator.CreateInstance(failure, "not ours")!;
+        async ValueTask<int> FailLate(TaskCompletionSource gate, IInFlightRun run)
+        {
+            await gate.Task;
+            throw expected;
+        }
+
+        var starter = flights.RunAsync("k", release, FailLate, cancellableToken ? source.Token : CancellationToken.None).AsTask();
+        release.SetResult();
+
+        var thrown = await starter.Invoking(t => t).Should().ThrowAsync<Exception>();
+        thrown.Which.Should().BeSameAs(expected);
+    }
+
+    [Theory]
+    [MemberData(nameof(StarterFailures))]
+    public async Task A_joiner_surfaces_the_exception_the_starters_work_failed_with(Type failure, bool cancellableToken)
+    {
+        var flights = new InFlight<string, int>();
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        using var source = new CancellationTokenSource();
+        var expected = (Exception)Activator.CreateInstance(failure, "not ours")!;
+        async ValueTask<int> FailLate(TaskCompletionSource gate, IInFlightRun run)
+        {
+            await gate.Task;
+            throw expected;
+        }
+
+        var token = cancellableToken ? source.Token : CancellationToken.None;
+        var starter = flights.RunAsync("k", release, FailLate, token).AsTask();
+        var joiner = flights.RunAsync("k", release, FailLate, token).AsTask();
+        release.SetResult();
+
+        (await starter.Invoking(t => t).Should().ThrowAsync<Exception>()).Which.Should().BeSameAs(expected);
+        (await joiner.Invoking(t => t).Should().ThrowAsync<Exception>()).Which.Should().BeSameAs(expected);
+    }
+
+    [Fact]
+    public async Task A_starter_that_cancels_while_waiting_surfaces_a_TaskCanceledException_and_the_joiner_gets_the_value()
+    {
+        var flights = new InFlight<string, int>();
+        var release = new TaskCompletionSource<int>(TaskCreationOptions.RunContinuationsAsynchronously);
+        using var leaving = new CancellationTokenSource();
+
+        var starter = flights.RunAsync("k", release, static (r, _) => new ValueTask<int>(r.Task), leaving.Token).AsTask();
+        var joiner = flights.RunAsync("k", release, static (r, _) => new ValueTask<int>(r.Task), Ct).AsTask();
+        await leaving.CancelAsync();
+
+        await starter.Invoking(t => t).Should().ThrowExactlyAsync<TaskCanceledException>();
+        release.SetResult(9);
+        (await joiner).Should().Be(9);
+    }
+
+    [Fact]
+    public async Task A_starter_that_cancels_while_alone_surfaces_a_TaskCanceledException()
+    {
+        var flights = new InFlight<string, int>();
+        var release = new TaskCompletionSource<int>(TaskCreationOptions.RunContinuationsAsynchronously);
+        using var leaving = new CancellationTokenSource();
+
+        var starter = flights.RunAsync("k", release, static (r, _) => new ValueTask<int>(r.Task), leaving.Token).AsTask();
+        await leaving.CancelAsync();
+
+        await starter.Invoking(t => t).Should().ThrowExactlyAsync<TaskCanceledException>();
+        flights.Count.Should().Be(0);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task A_starter_whose_work_ends_asynchronously_resumes_on_the_thread_that_ended_it(bool cancellableToken)
+    {
+        var flights = new InFlight<string, int>();
+        const int Rounds = 100;
+        var inline = 0;
+        for (var i = 0; i < Rounds; i++)
+        {
+            // The work's continuation runs inside SetResult, and the starter's after it unless the run queues it.
+            var release = new TaskCompletionSource<int>();
+            var resumedOn = 0;
+            async Task Resume()
+            {
+                await flights.RunAsync("k", release, static (r, _) => new ValueTask<int>(r.Task), cancellableToken ? Ct : CancellationToken.None).ConfigureAwait(false);
+                Volatile.Write(ref resumedOn, Environment.CurrentManagedThreadId);
+            }
+
+            var starter = Task.Run(Resume, Ct);
+            var waiting = System.Diagnostics.Stopwatch.StartNew();
+            while (flights.Count == 0)
+            {
+                // Bounded, so a round whose starter never runs fails here instead of holding the job.
+                if (waiting.Elapsed > TimeSpan.FromSeconds(5))
+                {
+                    throw new TimeoutException($"Round {i}: the starter did not reserve its run within 5 s.");
+                }
+
+                Ct.ThrowIfCancellationRequested();
+                await Task.Yield();
+            }
+
+            await Task.Delay(10, Ct);
+            var endedOn = Environment.CurrentManagedThreadId;
+            release.SetResult(1);
+            inline += Volatile.Read(ref resumedOn) == endedOn ? 1 : 0;
+            await starter;
+        }
+
+        // A starter that was not yet waiting when the work ended resumes on its own thread, which a busy machine does now and then; a hop makes it every round.
+        inline.Should().BeGreaterThan(Rounds * 9 / 10, "a starter waits on the work it started, not on a task the run publishes through a thread-pool hop");
     }
 
     // Not inlined, so nothing in the calling frame keeps the flight reachable when the test collects.

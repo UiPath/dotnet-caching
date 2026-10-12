@@ -169,6 +169,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
   released without an async frame when no distributed lock is held; `LocalLockTimeout` behaves as before, and a custom
   `ILocalLock` is still bounded by a cancellation source of its own.
 
+- **The caller that starts a shared run waits on the work, not on the run's published task.** A miss that starts the
+  generator used to resume through a thread-pool hop, since the shared task completes its continuations asynchronously
+  so that a joined caller never runs another caller's code inline. The starter now resumes where the work ends, as an
+  awaited call does, which saves the hop and the shared task: a run nobody joins builds none. Callers that join the run
+  resume asynchronously as before. A starter that cancels still gets a `TaskCanceledException`, and a failure of the
+  work still reaches it, and every joiner, as the exception the work threw.
+
 - **`ICachingTelemetryProvider` takes `TelemetryTags<T>` and has no default bodies.** `TrackDependency`, `TrackEvent`,
   `TrackException` and `TrackMetric` take `TelemetryTags<string>` properties and `TelemetryTags<double>` metrics in
   place of `ReadOnlySpan<KeyValuePair<…>>`. The struct holds up to nine pairs inline and more in one array, so the
