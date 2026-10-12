@@ -30,7 +30,6 @@ public static class InMemoryRedisCollectionExtensions
         builder.Services
             .TryAddEnumerable(ServiceDescriptor.Singleton<IPostConfigureOptions<RedisCacheOptions>, PropagateCacheNullValuesFromMultilayer>());
         builder.Services.TryAddMemoryCacheFactory();
-        builder.AddLocalLock();
         builder.AddRedisDistributedLock();
         builder.Services
             .TryAddEnumerable(ServiceDescriptor.Singleton<IValidateOptions<InMemoryRedisCacheOptions>, MultilayerCacheLockOptionsValidator<InMemoryRedisCacheOptions>>());

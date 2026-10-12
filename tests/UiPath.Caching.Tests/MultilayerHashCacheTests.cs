@@ -6,6 +6,7 @@ using NSubstitute.ClearExtensions;
 using NSubstitute.ExceptionExtensions;
 using UiPath.Caching;
 using UiPath.Caching.Tests.Broadcast;
+using UiPath.Caching.Tests.Fakes;
 
 namespace UiPath.Caching.Tests;
 
@@ -35,7 +36,7 @@ public class MultilayerHashCacheTests(ITestContextAccessor testContextAccessor) 
     public interface ITopicProviderWithConnectionState : ITopicProvider, IConnectionState
     {
     }
-    private MultilayerHashCache Sut => _sut ??= _fixture.Create<MultilayerHashCache>();
+    private MultilayerHashCache Sut => _sut ??= RunTables.Track(_fixture.Create<MultilayerHashCache>());
 
 
     [Fact]
@@ -1287,7 +1288,7 @@ public class MultilayerHashCacheTests(ITestContextAccessor testContextAccessor) 
         _options.LocalMaxExpiration = TimeSpan.FromMinutes(5);
         _options.LocalMaxExpirationDisconnected = TimeSpan.FromMinutes(10);
 
-        Action act = () => _fixture.Create<MultilayerHashCache>();
+        Action act = () => RunTables.Track(_fixture.Create<MultilayerHashCache>());
 
         act.Should().Throw<Exception>()
             .Which.GetBaseException()
@@ -1303,7 +1304,7 @@ public class MultilayerHashCacheTests(ITestContextAccessor testContextAccessor) 
         _options.LocalMaxExpiration = TimeSpan.FromMinutes(5);
         _options.LocalMaxExpirationDisconnected = TimeSpan.FromMinutes(5);
 
-        Action act = () => _fixture.Create<MultilayerHashCache>();
+        Action act = () => RunTables.Track(_fixture.Create<MultilayerHashCache>());
 
         act.Should().NotThrow();
     }
@@ -1314,7 +1315,7 @@ public class MultilayerHashCacheTests(ITestContextAccessor testContextAccessor) 
         _options.LocalMaxExpiration = TimeSpan.FromMinutes(10);
         _options.LocalMaxExpirationDisconnected = TimeSpan.FromMinutes(5);
 
-        Action act = () => _fixture.Create<MultilayerHashCache>();
+        Action act = () => RunTables.Track(_fixture.Create<MultilayerHashCache>());
 
         act.Should().NotThrow();
     }
@@ -1325,7 +1326,7 @@ public class MultilayerHashCacheTests(ITestContextAccessor testContextAccessor) 
         _options.LocalMaxExpiration = null;
         _options.LocalMaxExpirationDisconnected = TimeSpan.FromMinutes(5);
 
-        Action act = () => _fixture.Create<MultilayerHashCache>();
+        Action act = () => RunTables.Track(_fixture.Create<MultilayerHashCache>());
 
         act.Should().NotThrow();
     }
@@ -1336,7 +1337,7 @@ public class MultilayerHashCacheTests(ITestContextAccessor testContextAccessor) 
         _options.LocalMaxExpiration = TimeSpan.FromMinutes(5);
         _options.LocalMaxExpirationDisconnected = null;
 
-        Action act = () => _fixture.Create<MultilayerHashCache>();
+        Action act = () => RunTables.Track(_fixture.Create<MultilayerHashCache>());
 
         act.Should().NotThrow();
     }

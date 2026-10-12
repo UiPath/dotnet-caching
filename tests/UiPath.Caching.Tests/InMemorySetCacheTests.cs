@@ -33,7 +33,6 @@ public class InMemorySetCacheTests
             new MemoryCacheFactory(TimeProvider.System, NullLoggerFactory.Instance),
             new RawByteSerializerProxy(),
             new InMemoryQueueCacheOptions { DefaultExpiration = null },
-            NullLocalLock.Instance,
             TimeProvider.System);
         var payload = new byte[] { 1, 2, 3 };
 
@@ -241,7 +240,6 @@ public class InMemorySetCacheTests
             new MemoryCacheFactory(cacheClock, NullLoggerFactory.Instance),
             new SystemJsonByteSerializerProxy(),
             options,
-            NullLocalLock.Instance,
             cacheClock);
     }
 

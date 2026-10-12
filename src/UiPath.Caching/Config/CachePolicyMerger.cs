@@ -39,9 +39,9 @@ public static class CachePolicyMerger
         }
         return new LockProfile
         {
-            LocalLockEnabled = primary.LocalLockEnabled ?? fallback.LocalLockEnabled,
+            LocalSingleFlightEnabled = primary.LocalSingleFlightEnabled ?? fallback.LocalSingleFlightEnabled,
             DistributedLockEnabled = primary.DistributedLockEnabled ?? fallback.DistributedLockEnabled,
-            LocalLockTimeout = primary.LocalLockTimeout ?? fallback.LocalLockTimeout,
+            LocalSingleFlightTimeout = primary.LocalSingleFlightTimeout ?? fallback.LocalSingleFlightTimeout,
             DistributedLockTimeout = primary.DistributedLockTimeout ?? fallback.DistributedLockTimeout,
             DistributedLockExpiry = primary.DistributedLockExpiry ?? fallback.DistributedLockExpiry,
         };

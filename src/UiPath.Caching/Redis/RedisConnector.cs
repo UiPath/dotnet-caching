@@ -38,13 +38,13 @@ public sealed class RedisConnector : IRedisConnector
     private readonly Dictionary<EndPoint, long> _memberConfirmedAt = [];
     private readonly IClusterTopologyReader _topologyReader;
     private readonly Lazy<Version> _version;
-    private readonly object _swapLock = new();
+    private readonly Lock _swapLock = new();
 
     // Cancelled on Dispose, and disposed once no connect or reconnect still holds its token: a factory still
     // running may wait on the token's WaitHandle, which a disposed source would fail.
     private readonly CancellationTokenSource _lifetime = new();
     private readonly CancellationToken _lifetimeToken;
-    private readonly object _lifetimeLock = new();
+    private readonly Lock _lifetimeLock = new();
 
     // The handler closes over the multiplexer it was attached to, and unsubscribing needs that same delegate.
     private readonly ConditionalWeakTable<IConnectionMultiplexer, EventHandler<ServerMaintenanceEvent>> _maintenanceHandlers = [];

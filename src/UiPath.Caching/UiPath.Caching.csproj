@@ -15,7 +15,6 @@
     <PackageReference Include="Microsoft.Extensions.Caching.Memory" />
     <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" />
     <PackageReference Include="StackExchange.Redis" />
-    <PackageReference Include="AsyncKeyedLock" />
 
   </ItemGroup>
   <ItemGroup>

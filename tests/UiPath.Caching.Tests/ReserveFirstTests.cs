@@ -1,123 +1,18 @@
 using System.Reflection;
+using UiPath.Caching.Locking;
 using UiPath.Caching.Tests.Fakes;
 
 namespace UiPath.Caching.Tests;
 
-/// <summary>With the local lock on and no distributed lock, a miss takes its key in the run table instead of a lock: callers join the run at once, however long it takes, and TryAdd takes the same key.</summary>
+/// <summary>A miss takes its key in the run table before any lock: callers join the run at once, however long it takes, and TryAdd takes the same key.</summary>
 public class ReserveFirstTests
 {
-    private static readonly CachePolicy WithDistributedLock = new() { Lock = new LockProfile { DistributedLockEnabled = true } };
-    private static readonly KeyValuePair<CacheKey, string>[] OneEntry = [new("k", "k")];
-
     private static CancellationToken Ct => TestContext.Current.CancellationToken;
-
-    [Fact]
-    public async Task A_miss_takes_no_local_lock()
-    {
-        var local = new RecordingLocalLock();
-        var distributed = new RecordingDistributedLock();
-        using var cache = InMemoryMultilayer.Cache(localLock: local, distributedLock: distributed);
-
-        (await cache.GetOrAddAsync<string>("k", Generated, policy: null, Ct)).Should().Be("generated");
-
-        local.Acquisitions.Should().Be(0);
-        distributed.Acquisitions.Should().Be(0);
-    }
-
-    [Fact]
-    public async Task A_batch_miss_takes_no_local_lock()
-    {
-        var local = new RecordingLocalLock();
-        var distributed = new RecordingDistributedLock();
-        using var cache = InMemoryMultilayer.Cache(localLock: local, distributedLock: distributed);
-
-        var result = await cache.GetOrAddAsync<string, string>(OneEntry, GeneratedBatch, policy: null, Ct);
-
-        result.Single().Value.Should().Be("generated");
-        local.Acquisitions.Should().Be(0);
-        distributed.Acquisitions.Should().Be(0);
-    }
-
-    [Fact]
-    public async Task A_hash_cache_miss_takes_no_local_lock()
-    {
-        var local = new RecordingLocalLock();
-        var distributed = new RecordingDistributedLock();
-        using var cache = InMemoryMultilayer.HashCache(localLock: local, distributedLock: distributed);
-
-        var values = await cache.GetOrAddAsync<string>("k", GeneratedHash, policy: null, Ct);
-
-        values["f"].Should().Be("generated");
-        local.Acquisitions.Should().Be(0);
-        distributed.Acquisitions.Should().Be(0);
-    }
-
-    [Fact]
-    public async Task A_miss_with_a_distributed_lock_takes_both_locks()
-    {
-        var local = new RecordingLocalLock();
-        var distributed = new RecordingDistributedLock();
-        using var cache = InMemoryMultilayer.Cache(localLock: local, distributedLock: distributed);
-
-        (await cache.GetOrAddAsync<string>("k", Generated, WithDistributedLock, Ct)).Should().Be("generated");
-
-        local.Acquisitions.Should().Be(1);
-        distributed.Acquisitions.Should().Be(1);
-    }
-
-    [Fact]
-    public async Task A_batch_miss_with_a_distributed_lock_takes_both_locks()
-    {
-        var local = new RecordingLocalLock();
-        var distributed = new RecordingDistributedLock();
-        using var cache = InMemoryMultilayer.Cache(localLock: local, distributedLock: distributed);
-
-        (await cache.GetOrAddAsync<string, string>(OneEntry, GeneratedBatch, WithDistributedLock, Ct)).Single().Value.Should().Be("generated");
-
-        local.Acquisitions.Should().Be(1);
-        distributed.Acquisitions.Should().Be(1);
-    }
-
-    [Fact]
-    public async Task A_hash_cache_miss_with_a_distributed_lock_takes_both_locks()
-    {
-        var local = new RecordingLocalLock();
-        var distributed = new RecordingDistributedLock();
-        using var cache = InMemoryMultilayer.HashCache(localLock: local, distributedLock: distributed);
-
-        (await cache.GetOrAddAsync<string>("k", GeneratedHash, WithDistributedLock, Ct))["f"].Should().Be("generated");
-
-        local.Acquisitions.Should().Be(1);
-        distributed.Acquisitions.Should().Be(1);
-    }
-
-    [Fact]
-    public async Task A_miss_with_the_local_lock_off_takes_no_lock_and_shares_nothing()
-    {
-        var local = new RecordingLocalLock();
-        using var cache = InMemoryMultilayer.Cache(localLock: local);
-        var policy = new CachePolicy { Lock = new LockProfile { LocalLockEnabled = false } };
-        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        var calls = 0;
-        async Task<string?> Slow(CancellationToken _)
-        {
-            Interlocked.Increment(ref calls);
-            await release.Task;
-            return "slow";
-        }
-
-        var callers = Enumerable.Range(0, 4).Select(_ => cache.GetOrAddAsync<string>("k", Slow, policy, Ct).AsTask()).ToArray();
-        release.SetResult();
-        await Task.WhenAll(callers);
-
-        calls.Should().Be(4);
-        local.Acquisitions.Should().Be(0);
-    }
 
     [Fact]
     public async Task Callers_join_a_run_for_longer_than_the_local_lock_timeout()
     {
-        using var cache = InMemoryMultilayer.Cache(new InMemoryCacheOptions { LocalLockTimeout = TimeSpan.FromMilliseconds(20) });
+        using var cache = InMemoryMultilayer.Cache(new InMemoryCacheOptions { LocalSingleFlightTimeout = TimeSpan.FromMilliseconds(20) });
         var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var started = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var calls = 0;
@@ -299,7 +194,7 @@ public class ReserveFirstTests
     [Fact]
     public async Task TryAdd_while_a_run_generates_the_key_loses_after_the_wait_and_the_generated_value_stands()
     {
-        using var cache = InMemoryMultilayer.Cache(new InMemoryCacheOptions { LocalLockTimeout = TimeSpan.FromMilliseconds(50) });
+        using var cache = InMemoryMultilayer.Cache(new InMemoryCacheOptions { LocalSingleFlightTimeout = TimeSpan.FromMilliseconds(50) });
         var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var started = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         async Task<string?> Slow(CancellationToken _)
@@ -322,7 +217,7 @@ public class ReserveFirstTests
     [Fact]
     public async Task TryAdd_waits_for_a_run_that_ends_within_the_local_lock_timeout_and_then_finds_the_key()
     {
-        using var cache = InMemoryMultilayer.Cache(new InMemoryCacheOptions { LocalLockTimeout = TimeSpan.FromSeconds(30) });
+        using var cache = InMemoryMultilayer.Cache(new InMemoryCacheOptions { LocalSingleFlightTimeout = TimeSpan.FromSeconds(30) });
         var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var started = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         async Task<string?> Slow(CancellationToken _)
@@ -347,7 +242,7 @@ public class ReserveFirstTests
     [Fact]
     public async Task TryAdd_wins_when_a_run_that_stored_nothing_ends_while_it_waits()
     {
-        using var cache = InMemoryMultilayer.Cache(new InMemoryCacheOptions { LocalLockTimeout = TimeSpan.FromSeconds(30) });
+        using var cache = InMemoryMultilayer.Cache(new InMemoryCacheOptions { LocalSingleFlightTimeout = TimeSpan.FromSeconds(30) });
         var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var started = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         async Task<string?> Nothing(CancellationToken _)
@@ -476,6 +371,24 @@ public class ReserveFirstTests
         (await cache.GetOrAddAsync<string>("k", Generated, policy: null, Ct)).Should().Be("generated");
     }
 
+    [Fact]
+    public async Task A_starter_that_cancels_while_its_run_waits_for_the_distributed_lock_does_not_fail_the_callers_that_joined()
+    {
+        var policy = new CachePolicy { Lock = new LockProfile { DistributedLockEnabled = true } };
+        var gate = new GatedDistributedLock();
+        using var cache = InMemoryMultilayer.Cache(inner: MissingInner(), distributedLock: gate);
+        using var leaving = new CancellationTokenSource();
+
+        var starter = cache.GetOrAddAsync<string>("k", Generated, policy, leaving.Token).AsTask();
+        await gate.Waiting.Task.WaitAsync(TimeSpan.FromSeconds(10), Ct);
+        var joiner = cache.GetOrAddAsync<string>("k", Generated, policy, Ct).AsTask();
+        await leaving.CancelAsync();
+        await starter.Invoking(t => t).Should().ThrowAsync<OperationCanceledException>();
+        gate.Release.SetResult();
+
+        (await joiner.WaitAsync(TimeSpan.FromSeconds(10), Ct)).Should().Be("generated", "the read under the lock runs for the run, not for the caller that left");
+    }
+
     private static async Task<bool> UntilCancelled(CancellationToken token)
     {
         await Task.Delay(Timeout.Infinite, token);
@@ -502,4 +415,19 @@ public class ReserveFirstTests
 
     private static InFlight<InFlightKey, object?> Generations(MultilayerCache cache) =>
         (InFlight<InFlightKey, object?>)typeof(MultilayerCache).GetField("_generations", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(cache)!;
+
+    /// <summary>A distributed lock granted only once the test releases it.</summary>
+    private sealed class GatedDistributedLock : IDistributedLock
+    {
+        public TaskCompletionSource Waiting { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public TaskCompletionSource Release { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public async ValueTask<IAsyncDisposable> AcquireAsync(string key, TimeSpan expiry, TimeSpan waitTimeout, CancellationToken token)
+        {
+            Waiting.TrySetResult();
+            await Release.Task.WaitAsync(token);
+            return await NullDistributedLock.Instance.AcquireAsync(key, expiry, waitTimeout, token);
+        }
+    }
 }

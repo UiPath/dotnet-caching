@@ -20,9 +20,9 @@ public class CachePolicyTests
     {
         var profile = new LockProfile();
 
-        profile.LocalLockEnabled.Should().BeNull();
+        profile.LocalSingleFlightEnabled.Should().BeNull();
         profile.DistributedLockEnabled.Should().BeNull();
-        profile.LocalLockTimeout.Should().BeNull();
+        profile.LocalSingleFlightTimeout.Should().BeNull();
         profile.DistributedLockTimeout.Should().BeNull();
         profile.DistributedLockExpiry.Should().BeNull();
     }
@@ -36,13 +36,13 @@ public class CachePolicyTests
             DistributedExpiration = TimeSpan.FromMinutes(5),
             FactoryTimeout = TimeSpan.FromSeconds(2),
             RehydrateEnabled = true,
-            Lock = new LockProfile { LocalLockEnabled = false },
+            Lock = new LockProfile { LocalSingleFlightEnabled = false },
         };
 
         policy.LocalExpiration.Should().Be(TimeSpan.FromMinutes(1));
         policy.DistributedExpiration.Should().Be(TimeSpan.FromMinutes(5));
         policy.FactoryTimeout.Should().Be(TimeSpan.FromSeconds(2));
         policy.RehydrateEnabled.Should().BeTrue();
-        policy.Lock!.LocalLockEnabled.Should().BeFalse();
+        policy.Lock!.LocalSingleFlightEnabled.Should().BeFalse();
     }
 }

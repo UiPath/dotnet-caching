@@ -41,21 +41,6 @@ public class CacheOptions
 
 
     /// <summary>
-    /// Size of the reusable semaphore pool inside the default local lock implementation.
-    /// This is an allocation hint, not a hard concurrency cap — when the pool is exhausted the
-    /// underlying <c>AsyncKeyedLocker</c> allocates fresh semaphores, so increasing this value
-    /// only reduces GC pressure under high cold-miss concurrency, it does not throttle callers.
-    /// Defaults to 100.
-    /// </summary>
-    public int LocalLockPoolSize { get; set; } = 100;
-
-    /// <summary>
-    /// Number of semaphores pre-allocated at startup for the default local lock pool.
-    /// Must be in [0, <see cref="LocalLockPoolSize"/>]. Defaults to 10.
-    /// </summary>
-    public int LocalLockPoolInitialFill { get; set; } = 10;
-
-    /// <summary>
     /// Initial wait between distributed-lock acquire retries when the lock is contended.
     /// The interval doubles after every failed attempt up to <see cref="DistributedLockMaxPollInterval"/>.
     /// Actual delays vary ±20% due to jitter applied at each step to de-synchronize concurrent waiters.

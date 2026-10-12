@@ -30,8 +30,6 @@ Every binding-visible property on every shipped options class, with shipped defa
 | `KeyCasing` | `CacheKeyCasing` | `Insensitive` | App-wide | Key case folding applied when a key is built without an explicit mode, including every implicit `string` -> `CacheKey` conversion. `Insensitive` trims and lowercases (historical behavior); `Sensitive` preserves the caller's casing. **Changing this relocates every cache key** — existing entries become unreachable and are rewritten under the new spelling. The distributed cache always uses `Sensitive` and is unaffected. Scope is the **process**, not the container: `CacheKey` is a struct built by callers without access to DI, so the setting is seeded into the static `CacheKey.DefaultCasing`. Hosting two differently-configured containers in one process is therefore unsupported — the last `AddCaching` wins for both. |
 | `LargeValueThreshold` | `int` | `20000` | App-wide | Byte threshold for audit logging; writes whose payload exceeds this are logged when `AuditEnabled` is `true`. |
 | `ConnectionMonitorEnabled` | `bool` | `true` | App-wide | Enable Redis health-check polling app-wide; provider-level `ConnectionMonitorEnabled` inherits this when `null`. |
-| `LocalLockPoolSize` | `int` | `100` | App-wide | Semaphore pool size for the default local lock — allocation hint, not a hard concurrency cap. |
-| `LocalLockPoolInitialFill` | `int` | `10` | App-wide | Semaphores pre-allocated at startup; must be in `[0, LocalLockPoolSize]`. |
 | `DistributedLockPollInterval` | `TimeSpan` | `00:00:00.050` | App-wide | Initial wait between distributed-lock acquire retries; doubles per attempt up to `DistributedLockMaxPollInterval`. |
 | `DistributedLockMaxPollInterval` | `TimeSpan` | `00:00:00.500` | App-wide | Upper bound for the exponential-backoff retry interval used by the distributed lock. |
 | `Policies` | `IDictionary<string, CachePolicy>` | `{}` | App-wide | Named per-cache policies; see [Policies\[\<name\>\] (CachePolicy)](#policiesname-cachepolicy). |
@@ -178,8 +176,8 @@ Per-topic overrides: add entries to `Topics[]` under `Broadcast:RedisPubSub`. Ea
 | `UseLocalOnlyWhenDisconnected` | `bool?` | `null` | Per-provider | `null` = `true`: serve and keep L1-only while L2 is disconnected; `false` = drop the local entry and answer a miss. |
 | `ClearLocalOnReconnect` | `bool?` | `null` | Per-provider | `null` = `true`: clear L1 when a `RedisPubSub` broadcast reconnects, since invalidations published while it was down never arrived. Inert over `RedisStreams`, which replay them and expire a topic's entries themselves when entries were lost. |
 | `LocalMaxExpirationDisconnected` | `TimeSpan?` | `00:00:30` | Per-provider | L1 TTL cap while L2 is disconnected; limits the stale-read window. |
-| `LocalLockEnabled` | `bool?` | `true` | Per-provider | Acquire a local (in-process) lock before calling the value factory. |
-| `LocalLockTimeout` | `TimeSpan?` | `00:00:00.500` | Per-provider | Max wait to acquire the local lock; a caller that times out re-reads the cache, then joins the generator already running for the key, or runs its own if none is. |
+| `LocalSingleFlightEnabled` | `bool?` | `true` | Per-provider | Callers of one process share a run per key: the first runs the value factory and the rest join it. Formerly `LocalLockEnabled`, which still binds; the new key wins when both are set. |
+| `LocalSingleFlightTimeout` | `TimeSpan?` | `00:00:00.500` | Per-provider | How long `TryAddAsync` waits for a run that holds its key before it is told it lost; `GetOrAddAsync` callers join a run without waiting on it. Formerly `LocalLockTimeout`, which still binds; the new key wins when both are set. |
 | `DistributedLockEnabled` | `bool?` | `null` | Per-provider | Acquire a distributed (Redis) lock before calling the value factory; `null` = not configured. |
 | `DistributedLockTimeout` | `TimeSpan?` | `00:00:00.500` | Per-provider | Max wait to acquire the distributed lock. |
 | `DistributedLockExpiry` | `TimeSpan?` | `00:00:05` | Per-provider | Redis key TTL for the distributed lock (safety expiry to prevent deadlocks). |
@@ -227,8 +225,8 @@ Per-topic overrides: add entries to `Topics[]` under `Broadcast:RedisPubSub`. Ea
 | `UseLocalOnlyWhenDisconnected` | `bool?` | `null` | Per-provider | Applies only when broadcast runs over Redis: `null` = `true`, keep serving L1 while the broadcast connection is down. Inert otherwise. |
 | `ClearLocalOnReconnect` | `bool?` | `null` | Per-provider | Applies only when broadcast runs over `RedisPubSub`: `null` = `true`, clear L1 once the broadcast connection recovers, since invalidations sent meanwhile were missed. Inert otherwise. |
 | `LocalMaxExpirationDisconnected` | `TimeSpan?` | `00:00:30` | Per-provider | Applies only when broadcast runs over Redis: the L1 lifetime cap for values written while the broadcast connection is down. Inert otherwise. |
-| `LocalLockEnabled` | `bool?` | `true` | Per-provider | Acquire a local (in-process) lock before calling the value factory. |
-| `LocalLockTimeout` | `TimeSpan?` | `00:00:00.500` | Per-provider | Max wait to acquire the local lock; a caller that times out re-reads the cache, then joins the generator already running for the key, or runs its own if none is. |
+| `LocalSingleFlightEnabled` | `bool?` | `true` | Per-provider | Callers of one process share a run per key: the first runs the value factory and the rest join it. Formerly `LocalLockEnabled`, which still binds; the new key wins when both are set. |
+| `LocalSingleFlightTimeout` | `TimeSpan?` | `00:00:00.500` | Per-provider | How long `TryAddAsync` waits for a run that holds its key before it is told it lost; `GetOrAddAsync` callers join a run without waiting on it. Formerly `LocalLockTimeout`, which still binds; the new key wins when both are set. |
 | `DistributedLockEnabled` | `bool?` | `null` | Per-provider | Inert for this provider; present to satisfy `IMultilayerCacheOptions`. Startup validation still applies. |
 | `DistributedLockTimeout` | `TimeSpan?` | `null` | Per-provider | Inert for this provider; present to satisfy `IMultilayerCacheOptions`. |
 | `DistributedLockExpiry` | `TimeSpan?` | `null` | Per-provider | Inert for this provider; present to satisfy `IMultilayerCacheOptions`. |
@@ -348,7 +346,7 @@ app  :  dh  :  d:  <caller key>
 
 `AppShortName` is required and app-wide, so it is never this registration's job. `CacheKeyStrategy`
 prefixes the `CacheKey` itself, so a distributed entry cannot be reached through the application's own
-`ICache`/`IHashCache` with the bare caller key, and the memory tiers' local lock keyspace (keyed by
+`ICache`/`IHashCache` with the bare caller key, and the memory tiers' in-process keyspace (keyed by
 provider name plus cache key) stays separate too — neither of which a Redis-key-level segment can do.
 `RedisKeyDifferentiator` and `RedisKeyStrategyFactory` separate the physical Redis keyspace, taking the
 slot the application's caches fill with a `RedisKeyspaces` value. A differentiator landing on a
@@ -444,8 +442,8 @@ Nested under a `CachePolicy` entry. Field-level merged against the default polic
 
 | Property | Type | Default | Scope | Notes |
 |---|---|---|---|---|
-| `LocalLockEnabled` | `bool?` | `null` | Per-policy | `null` = inherit from provider options or default policy. |
+| `LocalSingleFlightEnabled` | `bool?` | `null` | Per-policy | `null` = inherit from provider options or default policy. Formerly `LocalLockEnabled`, which still binds; the new key wins when both are set. |
 | `DistributedLockEnabled` | `bool?` | `null` | Per-policy | `null` = inherit from provider options or default policy. |
-| `LocalLockTimeout` | `TimeSpan?` | `null` | Per-policy | `null` = inherit from provider options or default policy. |
+| `LocalSingleFlightTimeout` | `TimeSpan?` | `null` | Per-policy | `null` = inherit from provider options or default policy. Formerly `LocalLockTimeout`, which still binds; the new key wins when both are set. |
 | `DistributedLockTimeout` | `TimeSpan?` | `null` | Per-policy | `null` = inherit from provider options or default policy. |
 | `DistributedLockExpiry` | `TimeSpan?` | `null` | Per-policy | Redis key TTL for the distributed lock; `null` = inherit from provider options or default policy. |

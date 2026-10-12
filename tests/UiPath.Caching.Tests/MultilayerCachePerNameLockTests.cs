@@ -1,4 +1,5 @@
 using UiPath.Caching.Locking;
+using UiPath.Caching.Tests.Fakes;
 
 namespace UiPath.Caching.Tests;
 
@@ -15,7 +16,6 @@ public class MultilayerCachePerNameLockTests(ITestContextAccessor testContextAcc
     private ITopic<ICacheEvent> _topic = default!;
     private global::UiPath.Caching.IMemoryCacheFactory _memoryCacheFactory = default!;
     private ICacheEventFactory _cacheEventFactory = default!;
-    private ILocalLock _localLock = default!;
     private IDistributedLock _distributedLock = default!;
     private InMemoryRedisCacheOptions _options = default!;
     private CacheKey _cacheKey = default!;
@@ -26,26 +26,25 @@ public class MultilayerCachePerNameLockTests(ITestContextAccessor testContextAcc
     {
     }
 
-    private MultilayerCache Sut => _sut ??= _fixture.Create<MultilayerCache>();
+    private MultilayerCache Sut => _sut ??= RunTables.Track(_fixture.Create<MultilayerCache>());
 
     [Fact]
-    public async Task GetOrAdd_with_null_policy_and_cache_wide_local_lock_only_takes_no_lock()
+    public async Task GetOrAdd_with_null_policy_and_no_distributed_lock_takes_no_lock()
     {
-        // The local lock only de-duplicates, and the run table does that without a lock, so with no distributed lock the cache-wide local setting takes none.
-        _options.LocalLockEnabled = true;
+        // Callers of one process share a run per key, which takes no lock; only the distributed lock is one.
+        _options.LocalSingleFlightEnabled = true;
         _options.DistributedLockEnabled = false;
         Func<CancellationToken, Task<string?>> generator = _ => Task.FromResult<string?>("v");
 
         await Sut.GetOrAddAsync(_cacheKey, generator, policy: null, testContextAccessor.Current.CancellationToken);
 
-        await _localLock.DidNotReceiveWithAnyArgs().AcquireAsync(default!, Arg.Any<CancellationToken>());
         await _distributedLock.DidNotReceiveWithAnyArgs().AcquireAsync(default!, default, default, Arg.Any<CancellationToken>());
     }
 
     [Fact]
-    public async Task GetOrAdd_with_null_policy_uses_cache_wide_lock_settings_when_a_distributed_lock_is_on()
+    public async Task GetOrAdd_with_null_policy_uses_the_cache_wide_distributed_lock_setting()
     {
-        _options.LocalLockEnabled = true;
+        _options.LocalSingleFlightEnabled = true;
         _options.DistributedLockEnabled = true;
         _innerCache.GetCacheEntryAsync<string>(Arg.Any<CacheKey>(), Arg.Any<CachePolicy?>(), Arg.Any<CancellationToken>())
             .Returns(new TestCacheEntry<string?> { Value = null });
@@ -53,19 +52,18 @@ public class MultilayerCachePerNameLockTests(ITestContextAccessor testContextAcc
 
         await Sut.GetOrAddAsync(_cacheKey, Generator, policy: null, testContextAccessor.Current.CancellationToken);
 
-        await _localLock.ReceivedWithAnyArgs().AcquireAsync(default!, Arg.Any<CancellationToken>());
         await _distributedLock.ReceivedWithAnyArgs().AcquireAsync(default!, default, default, Arg.Any<CancellationToken>());
     }
 
     [Fact]
-    public async Task GetOrAdd_with_policy_LocalLockEnabled_false_skips_local_lock()
+    public async Task GetOrAdd_with_policy_LocalSingleFlightEnabled_false_takes_no_distributed_lock_either()
     {
-        var policy = new CachePolicy { Lock = new LockProfile { LocalLockEnabled = false, DistributedLockEnabled = false } };
+        var policy = new CachePolicy { Lock = new LockProfile { LocalSingleFlightEnabled = false, DistributedLockEnabled = false } };
         Func<CancellationToken, Task<string?>> generator = _ => Task.FromResult<string?>("v");
 
         await Sut.GetOrAddAsync(_cacheKey, generator, policy, testContextAccessor.Current.CancellationToken);
 
-        await _localLock.DidNotReceiveWithAnyArgs().AcquireAsync(default!, Arg.Any<CancellationToken>());
+        await _distributedLock.DidNotReceiveWithAnyArgs().AcquireAsync(default!, default, default, Arg.Any<CancellationToken>());
     }
 
     [Fact]
@@ -77,7 +75,7 @@ public class MultilayerCachePerNameLockTests(ITestContextAccessor testContextAcc
         {
             Lock = new LockProfile
             {
-                LocalLockEnabled = false,
+                LocalSingleFlightEnabled = false,
                 DistributedLockEnabled = true,
                 DistributedLockExpiry = expiry,
                 DistributedLockTimeout = timeout,
@@ -105,7 +103,7 @@ public class MultilayerCachePerNameLockTests(ITestContextAccessor testContextAcc
         {
             Lock = new LockProfile
             {
-                LocalLockEnabled = false,
+                LocalSingleFlightEnabled = false,
                 DistributedLockEnabled = true,
                 DistributedLockExpiry = TimeSpan.Zero,
                 DistributedLockTimeout = TimeSpan.FromSeconds(-5),
@@ -121,14 +119,13 @@ public class MultilayerCachePerNameLockTests(ITestContextAccessor testContextAcc
     [Fact]
     public async Task GetOrAdd_policy_with_null_Lock_falls_back_to_cache_wide()
     {
-        _options.LocalLockEnabled = false;
+        _options.LocalSingleFlightEnabled = false;
         _options.DistributedLockEnabled = false;
         var policy = new CachePolicy { LocalExpiration = TimeSpan.FromMinutes(1) };
         Func<CancellationToken, Task<string?>> generator = _ => Task.FromResult<string?>("v");
 
         await Sut.GetOrAddAsync(_cacheKey, generator, policy, testContextAccessor.Current.CancellationToken);
 
-        await _localLock.DidNotReceiveWithAnyArgs().AcquireAsync(default!, Arg.Any<CancellationToken>());
         await _distributedLock.DidNotReceiveWithAnyArgs().AcquireAsync(default!, default, default, Arg.Any<CancellationToken>());
     }
 
@@ -140,7 +137,6 @@ public class MultilayerCachePerNameLockTests(ITestContextAccessor testContextAcc
         _topicKey = _fixture.Create<string>();
         _innerCache = _fixture.Freeze<ICache>();
         _memoryCache = _fixture.Freeze<global::Microsoft.Extensions.Caching.Memory.IMemoryCache>();
-        _localLock = _fixture.Freeze<ILocalLock>();
         _distributedLock = _fixture.Freeze<IDistributedLock>();
         _options = new InMemoryRedisCacheOptions
         {

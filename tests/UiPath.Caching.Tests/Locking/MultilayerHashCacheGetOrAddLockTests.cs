@@ -1,6 +1,7 @@
 using Microsoft.Extensions.Caching.Memory;
 using UiPath.Caching.Locking;
 using UiPath.Caching.Tests.Broadcast;
+using UiPath.Caching.Tests.Fakes;
 
 namespace UiPath.Caching.Tests.Locking;
 
@@ -21,7 +22,6 @@ public class MultilayerHashCacheGetOrAddLockTests(ITestContextAccessor testConte
     private IMemoryCacheFactory _memoryCacheFactory = default!;
     private InMemoryRedisCacheOptions _options = default!;
     private TopicKey _topicKey = default!;
-    private AsyncKeyedLocalLock _locker = default!;
 
     private MultilayerHashCache? _sut;
     private MultilayerHashCache Sut
@@ -33,14 +33,14 @@ public class MultilayerHashCacheGetOrAddLockTests(ITestContextAccessor testConte
                 return _sut;
             }
 
-            lock (_sutLock) { return _sut ??= _fixture.Create<MultilayerHashCache>(); }
+            lock (_sutLock) { return _sut ??= RunTables.Track(_fixture.Create<MultilayerHashCache>()); }
         }
     }
 
     [Fact]
     public async Task GetOrAddAsync_runs_generator_exactly_once_under_concurrent_callers_for_the_same_key()
     {
-        _options.LocalLockTimeout = TimeSpan.FromMinutes(1);
+        _options.LocalSingleFlightTimeout = TimeSpan.FromMinutes(1);
         _sut = null;
 
         var token = testContextAccessor.Current.CancellationToken;
@@ -146,8 +146,7 @@ public class MultilayerHashCacheGetOrAddLockTests(ITestContextAccessor testConte
     [Fact]
     public async Task GetOrAddAsync_falls_through_to_generator_when_local_lock_is_disabled()
     {
-        _fixture.Inject<ILocalLock>(NullLocalLock.Instance);
-        _options.LocalLockEnabled = false;
+        _options.LocalSingleFlightEnabled = false;
         _sut = null;
 
         var token = testContextAccessor.Current.CancellationToken;
@@ -205,7 +204,6 @@ public class MultilayerHashCacheGetOrAddLockTests(ITestContextAccessor testConte
             DefaultExpiration = TimeSpan.FromMinutes(10),
             EntryFactory = new TestCacheEntryFactory(),
         };
-        _locker = new AsyncKeyedLocalLock(Options.Create(new CacheOptions()));
 
         _cacheKeyStrategy = _fixture.Create<ICacheKeyStrategy>();
         _topicKeyStrategy = _fixture.Create<ITopicKeyStrategy>();
@@ -219,7 +217,6 @@ public class MultilayerHashCacheGetOrAddLockTests(ITestContextAccessor testConte
         _memoryCacheFactory.Get(Arg.Any<IMemoryCacheOptions>()).Returns(_ => _memoryCache);
         _fixture.Inject<IMultilayerCacheOptions>(_options);
         _fixture.Inject<IMemoryCacheOptions>(_options);
-        _fixture.Inject<ILocalLock>(_locker);
         _cacheEventFactory = _fixture.Freeze<ICacheEventFactory>();
         _cacheEventFactory.Create(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CacheEventData>(), Arg.Any<string?>())
             .Returns(c => new TestCacheEvent
@@ -233,7 +230,6 @@ public class MultilayerHashCacheGetOrAddLockTests(ITestContextAccessor testConte
 
     public ValueTask DisposeAsync()
     {
-        _locker?.Dispose();
         _memoryCache?.Dispose();
         return ValueTask.CompletedTask;
     }

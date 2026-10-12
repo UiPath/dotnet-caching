@@ -26,7 +26,7 @@ Alphabetical lookup for terms used across the docs.
 
 **L1 / L2** — In-memory tier (L1) and Redis tier (L2) of the multilayer cache. `InMemoryRedis` provider only.
 
-**Local lock** — In-process single-flight per cache key via `ILocalLock`. Default impl `AsyncKeyedLocalLock`.
+**Shared run** — In-process single-flight per cache key: the first caller runs the generator, the others join it. Switched by `LocalSingleFlightEnabled`.
 
 **Multilayer cache** — The `InMemoryRedis` provider; reads L1 → L2; writes pass through both.
 
@@ -36,7 +36,7 @@ Alphabetical lookup for terms used across the docs.
 
 **Separator** — `CacheOptions.Separator`, default `:`. Joins prefix segments in keys, channel names, and stream keys.
 
-**Single-flight** — One generator runs per key on a cache miss; other callers wait for or coalesce on its result. Implemented via `ILocalLock` (per node) and `IDistributedLock` (cross node).
+**Single-flight** — One generator runs per key on a cache miss; other callers wait for or coalesce on its result. Implemented by the shared run (per node) and `IDistributedLock` (cross node).
 
 **SourceUri** — `CacheOptions.SourceUri`, default `urn:<MachineName>`. Identifies the machine/pod in cross-node sync events.
 

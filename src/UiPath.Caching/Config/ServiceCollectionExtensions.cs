@@ -13,8 +13,11 @@ public static class ServiceCollectionExtensions
     /// positionally it lands on the <c>configure</c> parameter instead, where it type-checks as
     /// <c>Action&lt;ICachingBuilder&gt;</c> and leaves the section unread.
     /// </summary>
-    public static IServiceCollection AddCaching(this IServiceCollection services, IConfigurationSection configuration) =>
-        services.AddCaching(configuration, configure: null, configureOptions: opt => configuration.Bind(opt));
+    public static IServiceCollection AddCaching(this IServiceCollection services, IConfigurationSection configuration)
+    {
+        RemovedConfigurationKeys.ThrowIfPresent(configuration, RemovedConfigurationKeys.Caching);
+        return services.AddCaching(configuration, configure: null, configureOptions: opt => configuration.Bind(opt));
+    }
 
     public static IServiceCollection AddCaching(this IServiceCollection services, Action<ICachingBuilder> configure) =>
         services.AddCaching(null, configure);
@@ -22,6 +25,7 @@ public static class ServiceCollectionExtensions
     public static IServiceCollection AddCaching(this IServiceCollection services, IConfiguration configuration, Action<ICachingBuilder>? configure = null, string sectionName = DefaultSectionName)
     {
         IConfigurationSection section = configuration.GetSection(sectionName);
+        RemovedConfigurationKeys.ThrowIfPresent(section, RemovedConfigurationKeys.Caching);
         return services.AddCaching(section, configure, opt => section.Bind(opt));
     }
 

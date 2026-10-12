@@ -21,7 +21,7 @@ internal sealed partial class ConnectorKeyPrefix
     // SCAN MATCH reads these as glob syntax, and the maintainer composes its pattern from the prefix.
     private static readonly char[] GlobCharacters = ['*', '?', '[', ']', '\\'];
 
-    private readonly object _gate = new();
+    private readonly Lock _gate = new();
     private Resolved? _resolved;
     private string? _skipped;
     private Task<bool>? _probe;

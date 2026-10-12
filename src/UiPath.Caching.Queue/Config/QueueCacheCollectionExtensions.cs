@@ -43,7 +43,6 @@ public static class QueueCacheCollectionExtensions
         }
 
         builder.Services.TryAddMemoryCacheFactory();
-        builder.AddLocalLock();
         builder.Services.TryAddEnumerable(ServiceDescriptor.Singleton<IQueueCacheProvider, InMemoryQueueCacheProvider>());
         builder.Services.AddQueueCacheCore();
         return builder;
@@ -113,7 +112,6 @@ public static class QueueCacheCollectionExtensions
         }
 
         builder.Services.TryAddMemoryCacheFactory();
-        builder.AddLocalLock();
         // The multilayer provider resolves its Redis L2 through the factory, so the Redis provider
         // must be present. TryAddEnumerable makes this idempotent with an explicit AddQueueRedis.
         builder.Services.TryAddEnumerable(ServiceDescriptor.Singleton<IQueueCacheProvider, RedisQueueCacheProvider>());

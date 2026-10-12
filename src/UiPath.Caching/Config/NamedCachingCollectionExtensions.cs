@@ -64,7 +64,6 @@ public static class NamedCachingCollectionExtensions
             .Expose<IRedisConnector>()
             .Expose<IRedisPlannedMaintenance>()
             .Expose<IDistributedLock>()
-            .Expose<ILocalLock>()
             .Expose<ITopicFactory>()
             .Expose(child => child.GetRequiredService<ICacheFactory>().CreateCache())
             .Expose(child => child.GetRequiredService<ICacheFactory>().CreateHashCache());

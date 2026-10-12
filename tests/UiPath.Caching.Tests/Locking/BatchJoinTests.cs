@@ -9,7 +9,7 @@ public class BatchJoinTests
 
     private static CancellationToken Ct => TestContext.Current.CancellationToken;
 
-    private static InMemoryCacheOptions Options => new() { LocalLockTimeout = LockTimeout };
+    private static InMemoryCacheOptions Options => new() { LocalSingleFlightTimeout = LockTimeout };
 
     [Fact]
     public async Task A_batch_whose_keys_overlap_a_running_batch_joins_the_shared_keys_and_generates_the_rest()
@@ -212,7 +212,7 @@ public class BatchJoinTests
     [Fact]
     public async Task Without_the_local_lock_batches_still_generate_their_own_keys()
     {
-        using var cache = InMemoryMultilayer.Cache(new InMemoryCacheOptions { LocalLockEnabled = false });
+        using var cache = InMemoryMultilayer.Cache(new InMemoryCacheOptions { LocalSingleFlightEnabled = false });
         var first = new SlowBatch();
         var second = new SlowBatch { Releasing = true };
 

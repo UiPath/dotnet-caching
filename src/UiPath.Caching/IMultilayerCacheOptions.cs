@@ -22,26 +22,24 @@ public interface IMultilayerCacheOptions : ICacheOptions
     /// <summary>L1 cap on entry lifetime while the L2 connection is unhealthy (paired with <see cref="UseLocalOnlyWhenDisconnected"/>).</summary>
     TimeSpan? LocalMaxExpirationDisconnected { get; set; }
 
-    /// <summary>
-    /// Enables the per-key in-process lock that serializes the cache-miss generator across
-    /// local callers. Defaults to true.
-    /// Note: disabling this while <see cref="DistributedLockEnabled"/> is on weakens single-flight
-    /// more than it appears — every local caller competes independently for the distributed lock,
-    /// so under concurrent load the same node can issue multiple <c>LockTakeAsync</c> round-trips
-    /// for the same key, and the distributed lock's contention timeout (rather than the local
-    /// lock) becomes the only bound on how many generators run.
-    /// </summary>
-    bool? LocalLockEnabled { get; set; }
+    [Obsolete("Use LocalSingleFlightEnabled; the in-process lock it named is gone.")]
+    bool? LocalLockEnabled { get => LocalSingleFlightEnabled; set => LocalSingleFlightEnabled = value; }
+
+    [Obsolete("Use LocalSingleFlightTimeout; the in-process lock it named is gone.")]
+    TimeSpan? LocalLockTimeout { get => LocalSingleFlightTimeout; set => LocalSingleFlightTimeout = value; }
 
     /// <summary>
-    /// How long a caller blocks trying to acquire the per-key in-process lock before giving up
-    /// and running the generator anyway. Defaults to 500 ms (matches <see cref="DistributedLockTimeout"/>).
-    /// Mirrors the distributed lock's fail-open posture: on timeout the caller proceeds without
-    /// the local lock, trading single-flight for liveness when a generator stalls. Pick a value
-    /// above your p99 generator runtime plus <see cref="DistributedLockTimeout"/> if distributed
-    /// locking is also enabled.
+    /// Callers of one process share one generator run per key: the first runs it and the rest join
+    /// it. Defaults to true. Turning it off with <see cref="DistributedLockEnabled"/> on makes every
+    /// local caller take the distributed lock for itself.
     /// </summary>
-    TimeSpan? LocalLockTimeout { get; set; }
+    bool? LocalSingleFlightEnabled { get; set; }
+
+    /// <summary>
+    /// How long <c>TryAddAsync</c> waits for a run that holds its key before it is told it lost;
+    /// <c>GetOrAddAsync</c> callers join a run without waiting on it. Defaults to 500 ms.
+    /// </summary>
+    TimeSpan? LocalSingleFlightTimeout { get; set; }
 
     /// <summary>
     /// Enables the distributed (cross-node) lock around the cache-miss generator. Has no effect

@@ -7,11 +7,17 @@ namespace UiPath.Caching;
 /// </summary>
 public sealed class LockProfile
 {
-    public bool? LocalLockEnabled { get; init; }
+    [Obsolete("Use LocalSingleFlightEnabled; the in-process lock it named is gone.")]
+    public bool? LocalLockEnabled { get => LocalSingleFlightEnabled; init => LocalSingleFlightEnabled = value; }
+
+    [Obsolete("Use LocalSingleFlightTimeout; the in-process lock it named is gone.")]
+    public TimeSpan? LocalLockTimeout { get => LocalSingleFlightTimeout; init => LocalSingleFlightTimeout = value; }
+
+    public bool? LocalSingleFlightEnabled { get; init; }
 
     public bool? DistributedLockEnabled { get; init; }
 
-    public TimeSpan? LocalLockTimeout { get; init; }
+    public TimeSpan? LocalSingleFlightTimeout { get; init; }
 
     public TimeSpan? DistributedLockTimeout { get; init; }
 

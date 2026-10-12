@@ -67,7 +67,7 @@ public static class CachePolicyFactoryValidator
             }
             var mergedLock = CachePolicyMerger.MergeLock(namedLock, effectiveDefaultLock)!;
             var lockScope = $"Policies['{name}'].Lock: ";
-            Throw(LockSettingsValidator.Validate(lockScope, mergedLock.LocalLockEnabled, mergedLock.DistributedLockEnabled, mergedLock.LocalLockTimeout, mergedLock.DistributedLockTimeout, mergedLock.DistributedLockExpiry));
+            Throw(LockSettingsValidator.Validate(lockScope, mergedLock.LocalSingleFlightEnabled, mergedLock.DistributedLockEnabled, mergedLock.LocalSingleFlightTimeout, mergedLock.DistributedLockTimeout, mergedLock.DistributedLockExpiry));
             Throw(LockSettingsValidator.ValidateCross(lockScope, distributedLockPollInterval, mergedLock.DistributedLockTimeout));
         }
     }
@@ -83,7 +83,7 @@ public static class CachePolicyFactoryValidator
         if (policy.Lock is { } lockProfile)
         {
             var lockScope = $"{scope}.Lock: ";
-            Throw(LockSettingsValidator.Validate(lockScope, lockProfile.LocalLockEnabled, lockProfile.DistributedLockEnabled, lockProfile.LocalLockTimeout, lockProfile.DistributedLockTimeout, lockProfile.DistributedLockExpiry));
+            Throw(LockSettingsValidator.Validate(lockScope, lockProfile.LocalSingleFlightEnabled, lockProfile.DistributedLockEnabled, lockProfile.LocalSingleFlightTimeout, lockProfile.DistributedLockTimeout, lockProfile.DistributedLockExpiry));
             Throw(LockSettingsValidator.ValidateCross(lockScope, pollInterval, lockProfile.DistributedLockTimeout));
         }
         if (policy.JitterMaxDuration is { } jitter && jitter < TimeSpan.Zero)

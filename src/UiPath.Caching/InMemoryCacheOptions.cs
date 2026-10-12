@@ -44,9 +44,16 @@ public class InMemoryCacheOptions : IMultilayerCacheOptions, IMemoryCacheOptions
 
     public TimeSpan? LocalMaxExpirationDisconnected { get; set; } = TimeSpan.FromSeconds(30);
 
-    public bool? LocalLockEnabled { get; set; } = true;
+    // Declared before the new pair: the configuration binder sets properties in declaration order, so the new key wins when both are set.
+    [Obsolete("Use LocalSingleFlightEnabled; the in-process lock it named is gone.")]
+    public bool? LocalLockEnabled { get => LocalSingleFlightEnabled; set => LocalSingleFlightEnabled = value; }
 
-    public TimeSpan? LocalLockTimeout { get; set; } = TimeSpan.FromMilliseconds(500);
+    [Obsolete("Use LocalSingleFlightTimeout; the in-process lock it named is gone.")]
+    public TimeSpan? LocalLockTimeout { get => LocalSingleFlightTimeout; set => LocalSingleFlightTimeout = value; }
+
+    public bool? LocalSingleFlightEnabled { get; set; } = true;
+
+    public TimeSpan? LocalSingleFlightTimeout { get; set; } = TimeSpan.FromMilliseconds(500);
 
     /// <summary>
     /// The following four properties (<see cref="DistributedLockEnabled"/>,
@@ -56,7 +63,7 @@ public class InMemoryCacheOptions : IMultilayerCacheOptions, IMemoryCacheOptions
     /// <see cref="IMultilayerCacheOptions"/> contract; setting them does not change cache behavior.
     /// Note: shape and cross-property validation still applies at registration time, so
     /// out-of-range values (e.g. negative <see cref="DistributedLockTimeout"/>) and contradictory
-    /// combinations (<see cref="LocalLockEnabled"/>=false with <see cref="DistributedLockEnabled"/>=true)
+    /// combinations (<see cref="LocalSingleFlightEnabled"/>=false with <see cref="DistributedLockEnabled"/>=true)
     /// will fail startup even though they would otherwise be no-ops here.
     /// </summary>
     public bool? DistributedLockEnabled { get; set; }

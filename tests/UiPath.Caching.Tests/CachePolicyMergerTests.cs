@@ -52,16 +52,16 @@ public class CachePolicyMergerTests
     [Fact]
     public void Lock_merges_field_by_field_when_both_present()
     {
-        var named = new CachePolicy { Lock = new LockProfile { LocalLockEnabled = false } };
+        var named = new CachePolicy { Lock = new LockProfile { LocalSingleFlightEnabled = false } };
         var defaults = new CachePolicy
         {
-            Lock = new LockProfile { LocalLockTimeout = TimeSpan.FromMilliseconds(500), DistributedLockEnabled = true },
+            Lock = new LockProfile { LocalSingleFlightTimeout = TimeSpan.FromMilliseconds(500), DistributedLockEnabled = true },
         };
 
         var merged = CachePolicyMerger.Merge(named, defaults);
 
-        merged.Lock!.LocalLockEnabled.Should().BeFalse();
-        merged.Lock.LocalLockTimeout.Should().Be(TimeSpan.FromMilliseconds(500));
+        merged.Lock!.LocalSingleFlightEnabled.Should().BeFalse();
+        merged.Lock.LocalSingleFlightTimeout.Should().Be(TimeSpan.FromMilliseconds(500));
         merged.Lock.DistributedLockEnabled.Should().BeTrue();
     }
 
@@ -69,7 +69,7 @@ public class CachePolicyMergerTests
     public void Lock_inherits_whole_object_when_named_has_no_lock()
     {
         var named = new CachePolicy { LocalExpiration = TimeSpan.FromMinutes(1) };
-        var defaults = new CachePolicy { Lock = new LockProfile { LocalLockEnabled = false } };
+        var defaults = new CachePolicy { Lock = new LockProfile { LocalSingleFlightEnabled = false } };
 
         var merged = CachePolicyMerger.Merge(named, defaults);
 
@@ -79,7 +79,7 @@ public class CachePolicyMergerTests
     [Fact]
     public void Lock_keeps_named_when_default_has_no_lock()
     {
-        var named = new CachePolicy { Lock = new LockProfile { LocalLockEnabled = false } };
+        var named = new CachePolicy { Lock = new LockProfile { LocalSingleFlightEnabled = false } };
         var defaults = new CachePolicy { LocalExpiration = TimeSpan.FromMinutes(5) };
 
         var merged = CachePolicyMerger.Merge(named, defaults);

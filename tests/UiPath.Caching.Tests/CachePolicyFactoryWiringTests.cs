@@ -41,13 +41,13 @@ public class CachePolicyFactoryWiringTests
     [Fact]
     public void Cache_construction_throws_when_named_policy_merged_with_effective_default_lock_is_invalid()
     {
-        // Provider-derived effective default has LocalLockEnabled=false; the named policy flips
+        // Provider-derived effective default has LocalSingleFlightEnabled=false; the named policy flips
         // DistributedLockEnabled=true. Cross-validation runs in MultilayerCacheBase.ctor against
         // the cache's effective default lock — surfaces when the cache is first resolved.
         var services = new ServiceCollection();
         services.AddLogging();
         services.AddCaching(
-            builder => builder.AddMemory(opt => opt.LocalLockEnabled = false),
+            builder => builder.AddMemory(opt => opt.LocalSingleFlightEnabled = false),
             opt => opt.Policies["named"] = new CachePolicy { Lock = new LockProfile { DistributedLockEnabled = true } });
         using var provider = services.BuildServiceProvider();
 
@@ -56,7 +56,7 @@ public class CachePolicyFactoryWiringTests
         var act = () => cacheProvider.CreateCache();
 
         act.Should().Throw<OptionsValidationException>()
-            .Which.Failures.Should().Contain(f => f.Contains("named") && f.Contains(nameof(LockProfile.LocalLockEnabled)));
+            .Which.Failures.Should().Contain(f => f.Contains("named") && f.Contains(nameof(LockProfile.LocalSingleFlightEnabled)));
     }
 
     [Fact]

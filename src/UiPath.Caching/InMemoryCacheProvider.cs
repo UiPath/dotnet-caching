@@ -13,7 +13,6 @@ public sealed class InMemoryCacheProvider : ICacheProvider
     private readonly ICacheEventFactory _cacheEventFactory;
     private readonly ICachingTelemetryProvider _cachingTelemetryProvider;
     private readonly ILoggerFactory _loggerFactory;
-    private readonly ILocalLock _localLock;
     private readonly ICachePolicyFactory _policyFactory;
     private readonly TimeProvider _clock;
     private readonly IKeyMaskingPolicy? _keyMaskingPolicy;
@@ -30,7 +29,6 @@ public sealed class InMemoryCacheProvider : ICacheProvider
         ITopicFactory topicFactory,
         ICachingTelemetryProvider cachingTelemetryProvider,
         ILoggerFactory loggerFactory,
-        ILocalLock localLock,
         ICachePolicyFactory policyFactory,
         TimeProvider clock,
         IKeyMaskingPolicy? keyMaskingPolicy = null)
@@ -63,7 +61,6 @@ public sealed class InMemoryCacheProvider : ICacheProvider
 
         _cachingTelemetryProvider = cachingTelemetryProvider;
         _loggerFactory = loggerFactory;
-        _localLock = localLock;
         _policyFactory = policyFactory;
         _cache = new Lazy<MultilayerCache>(BuildCache);
         _hashCache = new Lazy<MultilayerHashCache>(BuildHashCache);
@@ -104,7 +101,6 @@ public sealed class InMemoryCacheProvider : ICacheProvider
             _options,
             _options,
             _cacheOptions,
-            localLock: _localLock,
             distributedLock: NullDistributedLock.Instance,
             policyFactory: _policyFactory,
             clock: _clock,
@@ -123,7 +119,6 @@ public sealed class InMemoryCacheProvider : ICacheProvider
             _options,
             _options,
             _cacheOptions,
-            localLock: _localLock,
             distributedLock: NullDistributedLock.Instance,
             policyFactory: _policyFactory,
             clock: _clock,

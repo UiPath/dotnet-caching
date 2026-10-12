@@ -2,6 +2,7 @@ using System.Collections.Concurrent;
 using Microsoft.Extensions.Caching.Memory;
 using UiPath.Caching.Locking;
 using UiPath.Caching.Tests.Broadcast;
+using UiPath.Caching.Tests.Fakes;
 
 namespace UiPath.Caching.Tests.Locking;
 
@@ -29,7 +30,6 @@ public class MultilayerCacheBatchGetOrAddLockTests(ITestContextAccessor testCont
     private IChangeTokenFactory _changeTokenFactory = default!;
     private IMemoryCacheFactory _memoryCacheFactory = default!;
     private ICacheEventFactory _cacheEventFactory = default!;
-    private AsyncKeyedLocalLock _locker = default!;
     private InMemoryRedisCacheOptions _options = default!;
     private TopicKey _topicKey = default!;
     private MultilayerCache? _sut;
@@ -42,7 +42,7 @@ public class MultilayerCacheBatchGetOrAddLockTests(ITestContextAccessor testCont
                 return _sut;
             }
 
-            lock (_sutLock) { return _sut ??= _fixture.Create<MultilayerCache>(); }
+            lock (_sutLock) { return _sut ??= RunTables.Track(_fixture.Create<MultilayerCache>()); }
         }
     }
 
@@ -172,7 +172,7 @@ public class MultilayerCacheBatchGetOrAddLockTests(ITestContextAccessor testCont
     [Fact]
     public async Task Re_probe_under_the_lock_shrinks_the_generator_key_set()
     {
-        // Only a batch that takes the composite lock, as it does under a distributed lock, probes again once it holds it.
+        // Only a batch that takes the distributed lock probes again once it holds it.
         var token = testContextAccessor.Current.CancellationToken;
         var policy = new CachePolicy { Lock = new LockProfile { DistributedLockEnabled = true } };
 
@@ -202,7 +202,7 @@ public class MultilayerCacheBatchGetOrAddLockTests(ITestContextAccessor testCont
             policy,
             token);
 
-        probeRounds.Should().Be(3, "one pre-lock probe, and a re-probe under each of the two locks");
+        probeRounds.Should().Be(2, "one probe before the lock, and a re-probe under the distributed lock");
         observed.Single().Should().Equal(States2,
             "the re-probe found 'a', so the generator must be narrowed to the states whose keys are still missing");
         result.Select(r => r.Key).Should().Equal(States1And2);
@@ -293,9 +293,8 @@ public class MultilayerCacheBatchGetOrAddLockTests(ITestContextAccessor testCont
             DefaultExpiration = TimeSpan.FromMinutes(10),
             EntryFactory = new TestCacheEntryFactory(),
             CacheNullValues = true,
-            LocalLockTimeout = TimeSpan.FromMinutes(1),
+            LocalSingleFlightTimeout = TimeSpan.FromMinutes(1),
         };
-        _locker = new AsyncKeyedLocalLock(Options.Create(new CacheOptions()));
 
         _cacheKeyStrategy = _fixture.Create<ICacheKeyStrategy>();
         _cacheKeyStrategy.GetCacheKey<string>(Arg.Any<CacheKey>()).Returns(c => c.Arg<CacheKey>());
@@ -313,7 +312,6 @@ public class MultilayerCacheBatchGetOrAddLockTests(ITestContextAccessor testCont
         _memoryCacheFactory.Get(Arg.Any<IMemoryCacheOptions>()).Returns(_ => _memoryCache);
         _fixture.Inject<IMultilayerCacheOptions>(_options);
         _fixture.Inject<IMemoryCacheOptions>(_options);
-        _fixture.Inject<ILocalLock>(_locker);
         _cacheEventFactory = _fixture.Freeze<ICacheEventFactory>();
         _cacheEventFactory.Create(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CacheEventData>(), Arg.Any<string?>())
             .Returns(c => new TestCacheEvent
@@ -350,7 +348,6 @@ public class MultilayerCacheBatchGetOrAddLockTests(ITestContextAccessor testCont
 
     public ValueTask DisposeAsync()
     {
-        _locker?.Dispose();
         _memoryCache?.Dispose();
         GC.SuppressFinalize(this);
         return ValueTask.CompletedTask;

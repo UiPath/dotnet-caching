@@ -121,7 +121,7 @@ public class MultilayerCacheOptionsCustomization : ISpecimenBuilder
             // Leave them null so the validator treats them as unset.
             if (propertyInfo.Name is nameof(IMultilayerCacheOptions.DistributedLockTimeout)
                 or nameof(IMultilayerCacheOptions.DistributedLockExpiry)
-                or nameof(IMultilayerCacheOptions.LocalLockTimeout))
+                or nameof(IMultilayerCacheOptions.LocalSingleFlightTimeout))
             {
                 return new OmitSpecimen();
             }

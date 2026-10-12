@@ -276,3 +276,13 @@ static UiPath.Caching.GeneratedExpirationExtensions.GetOrAddWithExpirationAsync<
 static UiPath.Caching.GeneratedExpirationExtensions.GetOrAddWithExpirationAsync<T>(this UiPath.Caching.ICache<T>! cache, UiPath.Caching.CacheKey cacheKey, System.Func<System.Threading.CancellationToken, System.Threading.Tasks.Task<UiPath.Caching.GeneratedValue<T>>!>! generator, System.Threading.CancellationToken token = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.ValueTask<T?>
 UiPath.Caching.IGeneratedExpirationCache<T>.GetOrAddWithExpirationAsync(UiPath.Caching.CacheKey cacheKey, System.Func<System.Threading.CancellationToken, System.Threading.Tasks.Task<UiPath.Caching.GeneratedValue<T>>!>! generator, System.Threading.CancellationToken token = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.ValueTask<T?>
 UiPath.Caching.IGeneratedExpirationCache.GetOrAddWithExpirationAsync<T>(UiPath.Caching.CacheKey cacheKey, System.Func<System.Threading.CancellationToken, System.Threading.Tasks.Task<UiPath.Caching.GeneratedValue<T>>!>! generator, UiPath.Caching.CachePolicy? policy, System.Threading.CancellationToken token = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.ValueTask<T?>
+*REMOVED*UiPath.Caching.CacheOptions.LocalLockPoolInitialFill.get -> int
+*REMOVED*UiPath.Caching.CacheOptions.LocalLockPoolInitialFill.set -> void
+*REMOVED*UiPath.Caching.CacheOptions.LocalLockPoolSize.get -> int
+*REMOVED*UiPath.Caching.CacheOptions.LocalLockPoolSize.set -> void
+*REMOVED*UiPath.Caching.Locking.ILocalLock
+*REMOVED*UiPath.Caching.Locking.ILocalLock.AcquireAsync(string! key, System.Threading.CancellationToken token) -> System.Threading.Tasks.ValueTask<System.IDisposable!>
+UiPath.Caching.LockProfile.LocalSingleFlightEnabled.get -> bool?
+UiPath.Caching.LockProfile.LocalSingleFlightEnabled.init -> void
+UiPath.Caching.LockProfile.LocalSingleFlightTimeout.get -> System.TimeSpan?
+UiPath.Caching.LockProfile.LocalSingleFlightTimeout.init -> void

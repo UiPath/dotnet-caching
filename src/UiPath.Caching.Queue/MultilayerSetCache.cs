@@ -21,7 +21,6 @@ internal sealed class MultilayerSetCache : ISetCache
         IMemoryCacheFactory memoryCacheFactory,
         ISerializerProxy<byte[]> serializer,
         IMultilayerSetCacheOptions options,
-        ILocalLock localLock,
         TimeProvider clock)
     {
         ArgumentNullException.ThrowIfNull(clock);
@@ -29,12 +28,11 @@ internal sealed class MultilayerSetCache : ISetCache
         ArgumentNullException.ThrowIfNull(memoryCacheFactory);
         ArgumentNullException.ThrowIfNull(serializer);
         ArgumentNullException.ThrowIfNull(options);
-        ArgumentNullException.ThrowIfNull(localLock);
         _name = name;
         _inner = inner;
         _clock = clock;
         _memoryCache = memoryCacheFactory.Get(options);
-        _memorySetCache = new MemorySetCache(name, _memoryCache, serializer, localLock, options, _clock);
+        _memorySetCache = new MemorySetCache(_memoryCache, serializer, options, _clock);
         _localMaxExpiration = options.LocalMaxExpiration;
         _connectionState = options.ConnectionMonitorEnabled ? GetConnectionMonitor(inner, options.ConnectionMonitorPeriod) : NullConnectionStateMonitor.Instance;
         _useLocalOnlyWhenDisconnected = options.UseLocalOnlyWhenDisconnected && options.ConnectionMonitorEnabled;

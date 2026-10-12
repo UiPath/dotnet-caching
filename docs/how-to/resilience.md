@@ -1,8 +1,7 @@
 # Resilience
 
 Every reliability knob the library ships. **Local single-flight is on by default** for the
-`InMemoryRedis` and `InMemory` providers (`LocalLockEnabled = true`, and `AddInMemoryRedis()` /
-`AddMemory()` register `ILocalLock` automatically). Everything else on this page —
+`InMemoryRedis` and `InMemory` providers (`LocalSingleFlightEnabled = true`). Everything else on this page —
 distributed lock, hydrating cache, jitter, named policies, Polly resilience — is opt-in
 via `CachePolicy` or explicit builder extensions. If you're hitting Redis under load,
 single-flight and hydrating-cache will move latency more than any other change.
@@ -11,9 +10,10 @@ single-flight and hydrating-cache will move latency more than any other change.
 
 Two layers:
 
-- **Local lock** (`ILocalLock`, default impl `AsyncKeyedLocalLock`) — in-process
-  single-flight per cache key. **Default on** for `InMemoryRedis` and `InMemory` providers;
-  disable via `LocalLockEnabled: false`.
+- **Shared run** (`LocalSingleFlightEnabled`) — in-process single-flight per cache key: the first
+  caller runs the generator and the others join it. **Default on** for `InMemoryRedis` and
+  `InMemory` providers; disable via `LocalSingleFlightEnabled: false`. `LocalSingleFlightTimeout` is how long
+  a conditional add (`TryAddAsync`) waits for a run that holds its key.
 - **Distributed lock** (`IDistributedLock`, default impl `RedisDistributedLock`) —
   cross-node single-flight via Redis `SET NX`. **Default off**; `AddInMemoryRedis()` registers
   the implementation automatically, so the only opt-in is flipping `DistributedLockEnabled: true`
@@ -23,8 +23,8 @@ Two layers:
   `.AddRedisDistributedLock()` explicitly on the builder. `CachingBuilder.Complete()` falls back
   to `NullDistributedLock` when no real implementation was registered.
 
-When both are enabled, `MultilayerCache.GetOrAddAsync` takes the local lock first (cheap),
-then the distributed lock under double-checked reads. A failure to acquire the distributed
+When both are enabled, `MultilayerCache.GetOrAddAsync` takes the key's run first (cheap),
+and the caller that runs the generator takes the distributed lock, reading again under it. A failure to acquire the distributed
 lock degrades to thundering-herd (per-node single-flight only) rather than stalling.
 
 **Minimum enablement (appsettings):**
@@ -42,8 +42,8 @@ lock degrades to thundering-herd (per-node single-flight only) rather than stall
 ```jsonc
 "Caching": {
   "InMemoryRedis": {
-    "LocalLockEnabled": true,                  // default true
-    "LocalLockTimeout": "0:00:00.500",
+    "LocalSingleFlightEnabled": true,                  // default true
+    "LocalSingleFlightTimeout": "0:00:00.500",
     "DistributedLockEnabled": true,            // opt in
     "DistributedLockTimeout": "0:00:00.500",   // wait at most 500ms for the Redis lock
     "DistributedLockExpiry": "0:00:05"         // Redis lock TTL — size to at least the P99 generator runtime so the lock never expires mid-factory. RehydrationCoordinator overlays this with factoryTimeout + cooldown for rehydrate-only locks.
@@ -52,20 +52,6 @@ lock degrades to thundering-herd (per-node single-flight only) rather than stall
   "DistributedLockMaxPollInterval": "0:00:00.500"   // max backoff
 }
 ```
-
-### Local lock pool
-
-`LocalLockPoolSize` (default 100) is a semaphore-pool allocation hint, not a hard
-concurrency cap. When the pool is exhausted under high cold-miss concurrency, the underlying
-`AsyncKeyedLocker` allocates fresh semaphores on demand — increasing `LocalLockPoolSize`
-only reduces GC pressure from semaphore churn, it does not throttle callers or prevent new
-locks from being granted.
-
-`LocalLockPoolInitialFill` (default 10) controls how many semaphores are pre-allocated at
-startup, so the first wave of requests does not pay allocation costs. A sensible value is
-your expected P99 concurrent cold-miss concurrency at startup. Leave `LocalLockPoolSize` at
-the default unless profiling shows GC pressure from semaphore allocation in heap snapshots
-or allocation traces.
 
 ### Distributed lock retry semantics
 
@@ -249,7 +235,7 @@ await cache.SetAsync(key, value, expiration: TimeSpan.FromHours(1), token);
 ```
 
 **Field-level vs whole-object merge:** `Lock` merges field-by-field against
-`DefaultCachePolicy.Lock` (a named policy can override `LocalLockEnabled` while inheriting
+`DefaultCachePolicy.Lock` (a named policy can override `LocalSingleFlightEnabled` while inheriting
 the rest). `Rehydrate` is whole-object — a named policy that sets `Rehydrate` replaces the
 default's `Rehydrate` entirely. To override a single rehydrate field, redeclare the whole
 `RehydrateOptions` block.
@@ -538,7 +524,7 @@ Use this table to pick the right knob for a given problem.
 
 | Symptom | Recommended feature | Key setting |
 |---|---|---|
-| Cache miss storm after deploy or after a key expires under load | Stampede protection — local lock | `LocalLockEnabled: true` (default) |
+| Cache miss storm after deploy or after a key expires under load | Stampede protection — shared run | `LocalSingleFlightEnabled: true` (default) |
 | Cross-node miss storms when multiple pods hit the same cold key simultaneously | Stampede protection — distributed lock | `DistributedLockEnabled: true` (the lock impl is already registered by `AddInMemoryRedis()`) |
 | Foreground callers occasionally block while waiting for a slow factory | Hydrating cache | `RehydrateEnabled: true` + `Rehydrate.Threshold` |
 | All keys written in a batch expire at the same time, causing periodic spikes | Jitter | `JitterMaxDuration` |
@@ -588,5 +574,5 @@ must be set.
 ## See also
 
 - [reference/settings.md](../reference/settings.md) — full property reference for all options classes.
-- [reference/interfaces.md](../reference/interfaces.md) — `IDistributedLock`, `ILocalLock`, `ICachePolicyFactory`.
+- [reference/interfaces.md](../reference/interfaces.md) — `IDistributedLock`, `ICachePolicyFactory`.
 - [concepts.md](../concepts.md) — cache tiers, lifetime model, and the broadcast layer.

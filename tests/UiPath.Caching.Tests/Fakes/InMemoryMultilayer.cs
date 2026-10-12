@@ -8,12 +8,12 @@ namespace UiPath.Caching.Tests.Fakes;
 /// <summary>Real multilayer caches over a real <c>MemoryCache</c> and the null inner tier, as the in-memory provider builds them.</summary>
 internal static class InMemoryMultilayer
 {
-    public static MultilayerCache Cache(InMemoryCacheOptions? options = null, ICache? inner = null, bool connectionMonitor = false, TimeProvider? clock = null, ITopicFactory? topics = null, IChangeTokenFactory? tokens = null, IMemoryCacheFactory? memory = null, ILocalLock? localLock = null, IDistributedLock? distributedLock = null)
+    public static MultilayerCache Cache(InMemoryCacheOptions? options = null, ICache? inner = null, bool connectionMonitor = false, TimeProvider? clock = null, ITopicFactory? topics = null, IChangeTokenFactory? tokens = null, IMemoryCacheFactory? memory = null, IDistributedLock? distributedLock = null)
     {
         clock ??= TimeProvider.System;
         options ??= new InMemoryCacheOptions();
         var cacheOptions = new CacheOptions { AppShortName = "test", ConnectionMonitorEnabled = connectionMonitor };
-        return new MultilayerCache(
+        return RunTables.Track(new MultilayerCache(
             KnownCacheProviderNames.InMemory,
             inner ?? NullCache.Instance,
             memory ?? new MemoryCacheFactory(clock, NullLoggerFactory.Instance),
@@ -24,18 +24,17 @@ internal static class InMemoryMultilayer
             options,
             options,
             cacheOptions,
-            localLock: localLock ?? new AsyncKeyedLocalLock(Options.Create(cacheOptions)),
             distributedLock: distributedLock ?? NullDistributedLock.Instance,
             policyFactory: NullCachePolicyFactory.Instance,
             clock: clock,
-            logger: NullLogger.Instance);
+            logger: NullLogger.Instance));
     }
 
-    public static MultilayerHashCache HashCache(InMemoryCacheOptions? options = null, IHashCache? inner = null, bool connectionMonitor = false, IMemoryCacheFactory? memory = null, ILocalLock? localLock = null, IDistributedLock? distributedLock = null)
+    public static MultilayerHashCache HashCache(InMemoryCacheOptions? options = null, IHashCache? inner = null, bool connectionMonitor = false, IMemoryCacheFactory? memory = null, IDistributedLock? distributedLock = null)
     {
         options ??= new InMemoryCacheOptions();
         var cacheOptions = new CacheOptions { AppShortName = "test", ConnectionMonitorEnabled = connectionMonitor };
-        return new MultilayerHashCache(
+        return RunTables.Track(new MultilayerHashCache(
             KnownCacheProviderNames.InMemory,
             inner ?? NullHashCache.Instance,
             memory ?? new MemoryCacheFactory(TimeProvider.System, NullLoggerFactory.Instance),
@@ -46,10 +45,9 @@ internal static class InMemoryMultilayer
             options,
             options,
             cacheOptions,
-            localLock: localLock ?? new AsyncKeyedLocalLock(Options.Create(cacheOptions)),
             distributedLock: distributedLock ?? NullDistributedLock.Instance,
             policyFactory: NullCachePolicyFactory.Instance,
             clock: TimeProvider.System,
-            logger: NullLogger.Instance);
+            logger: NullLogger.Instance));
     }
 }

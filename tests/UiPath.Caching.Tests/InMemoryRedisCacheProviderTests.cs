@@ -97,7 +97,7 @@ public class InMemoryRedisCacheProviderTests : IAsyncLifetime
     public ValueTask InitializeAsync()
     {
         _options = _fixture.Build<InMemoryRedisCacheOptions>()
-            .Without(x => x.LocalLockEnabled)
+            .Without(x => x.LocalSingleFlightEnabled)
             .Without(x => x.DistributedLockEnabled)
             .Without(x => x.CacheKeyStrategy)
             .Create();

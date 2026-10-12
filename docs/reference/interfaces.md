@@ -221,14 +221,14 @@ Every multi-key method on the Redis-backed caches runs as one command against on
 - **It is a cache primitive, not a lock.** The entry expires on its own TTL, there is no ownership token, and any later `SetAsync`/`RemoveAsync` on the key ignores the claim. For mutual exclusion with a fencing token and explicit release, use [`IDistributedLock`](#idistributedlock).
 - **An expiration that is not in the future is rejected**, not answered. `expiration` is non-nullable, so a non-positive duration or a deadline already past is a bad argument and raises `ArgumentOutOfRangeException` — reporting `false` would be indistinguishable from "somebody else holds the key". See [Expiration](#expiration).
 
-Every provider runs the same sequence: take the local lock, probe the local tier, ask the L2, then populate the local tier on a win. Two tiers therefore contribute — the probe bounds exclusion at one winner per process, and the L2 decides how much further than that it reaches:
+Every provider runs the same sequence: take the key's run, probe the local tier, ask the L2, then populate the local tier on a win. Two tiers therefore contribute — the probe bounds exclusion at one winner per process, and the L2 decides how much further than that it reaches:
 
 | Provider | Who decides | Scope of exclusion |
 | --- | --- | --- |
 | `Redis` | Redis (`SET … NX`) | Cross-node |
 | `InMemoryRedis` | L2 Redis, after a local probe that reports a hit as a loss; L1 populated only after a win, best-effort, plus an invalidation broadcast | Cross-node |
 | `InMemoryRedis`, L2 disconnected | Nobody — returns `false` | None (fails closed rather than granting a claim every node would also get) |
-| `InMemory` | The local probe, since `NullCache` as the L2 tells every caller it added the key. Serialized by the local lock — taken regardless of `Lock.LocalLockEnabled`, since here it *is* the guarantee; a caller that cannot acquire it within `Lock.LocalLockTimeout` is told it lost | In-process only, and against other conditional adds only: `SetAsync` takes no lock, so a set interleaved between the probe and the write is overwritten by the claim |
+| `InMemory` | The local probe, since `NullCache` as the L2 tells every caller it added the key. Serialized by taking the key's run, whatever `Lock.LocalSingleFlightEnabled` says, since here it *is* the guarantee; a caller that still finds a generator holding the key after `Lock.LocalSingleFlightTimeout` is told it lost | In-process only, and against other conditional adds only: `SetAsync` takes nothing, so a set interleaved between the probe and the write is overwritten by the claim |
 | `NullCache` | Nobody — returns `true` for every caller | None |
 | Any other provider whose L2 resolved to `NullCache` | Whatever that L2 answers, so `true` for every caller. Which tier arbitrates is stated by the provider composing the cache — only `InMemory` arbitrates locally; every other provider asks its L2 and takes the answer as given | None |
 
@@ -785,40 +785,13 @@ public interface IDistributedLockKeyStrategy
 **Don't use this when:**
 
 - You need to customize cache (not lock) key mapping — use [`ICacheKeyStrategy`](#icachekeystrategy) instead.
-- You are using only in-process locking — [`ILocalLock`](#ilocallock) does not use this strategy.
+- You only need in-process coordination — the shared run per key needs no lock and does not use this strategy.
 
 **See also:** [`ICacheKeyStrategy`](#icachekeystrategy), [`IDistributedLock`](#idistributedlock), [How-to: telemetry and strategies](../how-to/telemetry-and-strategies.md)
 
 ---
 
 ## Lock seams
-
-### `ILocalLock`
-
-**Namespace:** `UiPath.Caching.Locking`
-
-```csharp
-public interface ILocalLock
-{
-    ValueTask<IDisposable> AcquireAsync(string key, CancellationToken token);
-}
-```
-
-`ILocalLock` is the in-process mutual-exclusion seam used internally by the cache runtime to serialize concurrent `GetOrAdd` calls for the same key within a single process. The returned `IDisposable` lease releases the lock when disposed. Because the lock is in-process only, it does not protect against concurrent writes from multiple nodes — for cross-node coordination, see [`IDistributedLock`](#idistributedlock). Consumers rarely need to call `ILocalLock` directly; the runtime acquires it automatically when `CachePolicy.LocalLockEnabled` is set.
-
-**Use this when:**
-
-- You are implementing a custom cache provider and need to plug in a different in-process lock mechanism (e.g. a `SemaphoreSlim`-backed implementation for testing).
-- You need to instrument or mock in-process lock acquisition in integration tests.
-
-**Don't use this when:**
-
-- You need cross-node locking — use [`IDistributedLock`](#idistributedlock) instead.
-- You are writing application code — configure `CachePolicy.LocalLockEnabled = true` and let the runtime manage `ILocalLock` automatically.
-
-**See also:** [`IDistributedLock`](#idistributedlock), [Reference: settings](settings.md), [Concepts](../concepts.md)
-
----
 
 ### `IDistributedLock`
 
@@ -844,10 +817,10 @@ public interface IDistributedLock
 
 **Don't use this when:**
 
-- You only need in-process coordination — use [`ILocalLock`](#ilocallock) instead.
+- You only need in-process coordination — the shared run per key does that without a lock.
 - You are writing application code — configure `CachePolicy.DistributedLockEnabled = true` and let the runtime manage `IDistributedLock` automatically.
 
-**See also:** [`ILocalLock`](#ilocallock), [`IDistributedLockKeyStrategy`](#idistributedlockkeystrategy), [Reference: settings](settings.md), [Concepts](../concepts.md)
+**See also:** [`IDistributedLockKeyStrategy`](#idistributedlockkeystrategy), [Reference: settings](settings.md), [Concepts](../concepts.md)
 
 ---
 
@@ -937,7 +910,7 @@ public interface ICachingBuilder
 }
 ```
 
-`ICachingBuilder` is the fluent configuration handle passed to the `services.AddCaching(...)` lambda. It exposes the `IServiceCollection` and `IConfiguration` so the builder extensions that ship in the library — `AddRedisConnection()`, `AddBroadcast()`, `AddRedis()`, `AddInMemoryRedis()`, `AddMemory()`, `AddResilienceStrategies()`, `AddCloudEvents()`, `AddOpenTelemetry()`, `AddRedisDistributedLock()`, `AddLocalLock()` — can register services, bind options, and wire up providers against the same DI container. `Enabled` acts as a feature flag — setting it to `false` causes the builder to skip provider registration, which is useful for conditional configuration (e.g. disabling caching in integration-test hosts). `RegisterOnCompleteCallback` defers arbitrary builder actions until all `AddCaching` calls in the startup chain have run, allowing later registrations to override earlier ones without ordering constraints.
+`ICachingBuilder` is the fluent configuration handle passed to the `services.AddCaching(...)` lambda. It exposes the `IServiceCollection` and `IConfiguration` so the builder extensions that ship in the library — `AddRedisConnection()`, `AddBroadcast()`, `AddRedis()`, `AddInMemoryRedis()`, `AddMemory()`, `AddResilienceStrategies()`, `AddCloudEvents()`, `AddOpenTelemetry()`, `AddRedisDistributedLock()` — can register services, bind options, and wire up providers against the same DI container. `Enabled` acts as a feature flag — setting it to `false` causes the builder to skip provider registration, which is useful for conditional configuration (e.g. disabling caching in integration-test hosts). `RegisterOnCompleteCallback` defers arbitrary builder actions until all `AddCaching` calls in the startup chain have run, allowing later registrations to override earlier ones without ordering constraints.
 
 **Use this when:**
 
