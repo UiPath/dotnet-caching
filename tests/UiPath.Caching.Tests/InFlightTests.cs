@@ -313,8 +313,16 @@ public class InFlightTests
             }
 
             var starter = Task.Run(Resume, Ct);
+            var waiting = System.Diagnostics.Stopwatch.StartNew();
             while (flights.Count == 0)
             {
+                // Bounded, so a round whose starter never runs fails here instead of holding the job.
+                if (waiting.Elapsed > TimeSpan.FromSeconds(5))
+                {
+                    throw new TimeoutException($"Round {i}: the starter did not reserve its run within 5 s.");
+                }
+
+                Ct.ThrowIfCancellationRequested();
                 await Task.Yield();
             }
 
