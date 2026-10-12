@@ -8,7 +8,7 @@ namespace UiPath.Caching.Tests.Fakes;
 /// <summary>Real multilayer caches over a real <c>MemoryCache</c> and the null inner tier, as the in-memory provider builds them.</summary>
 internal static class InMemoryMultilayer
 {
-    public static MultilayerCache Cache(InMemoryCacheOptions? options = null, ICache? inner = null, bool connectionMonitor = false, TimeProvider? clock = null, ITopicFactory? topics = null, IChangeTokenFactory? tokens = null)
+    public static MultilayerCache Cache(InMemoryCacheOptions? options = null, ICache? inner = null, bool connectionMonitor = false, TimeProvider? clock = null, ITopicFactory? topics = null, IChangeTokenFactory? tokens = null, IMemoryCacheFactory? memory = null)
     {
         clock ??= TimeProvider.System;
         options ??= new InMemoryCacheOptions();
@@ -16,7 +16,7 @@ internal static class InMemoryMultilayer
         return new MultilayerCache(
             KnownCacheProviderNames.InMemory,
             inner ?? NullCache.Instance,
-            new MemoryCacheFactory(clock, NullLoggerFactory.Instance),
+            memory ?? new MemoryCacheFactory(clock, NullLoggerFactory.Instance),
             tokens ?? NullChangeTokenFactory.Instance,
             topics ?? NullTopicFactory.Instance,
             NullCacheEventFactory.Instance,
@@ -31,14 +31,14 @@ internal static class InMemoryMultilayer
             logger: NullLogger.Instance);
     }
 
-    public static MultilayerHashCache HashCache(InMemoryCacheOptions? options = null, IHashCache? inner = null, bool connectionMonitor = false)
+    public static MultilayerHashCache HashCache(InMemoryCacheOptions? options = null, IHashCache? inner = null, bool connectionMonitor = false, IMemoryCacheFactory? memory = null)
     {
         options ??= new InMemoryCacheOptions();
         var cacheOptions = new CacheOptions { AppShortName = "test", ConnectionMonitorEnabled = connectionMonitor };
         return new MultilayerHashCache(
             KnownCacheProviderNames.InMemory,
             inner ?? NullHashCache.Instance,
-            new MemoryCacheFactory(TimeProvider.System, NullLoggerFactory.Instance),
+            memory ?? new MemoryCacheFactory(TimeProvider.System, NullLoggerFactory.Instance),
             NullChangeTokenFactory.Instance,
             NullTopicFactory.Instance,
             NullCacheEventFactory.Instance,

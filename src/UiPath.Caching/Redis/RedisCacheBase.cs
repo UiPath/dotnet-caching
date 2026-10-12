@@ -141,7 +141,7 @@ public abstract class RedisCacheBase : IConnectionState, IDisposable
     /// <summary>The key's expiration: EXPIRETIME on Redis 7, else the TTL added to now, under the same operation.</summary>
     protected async ValueTask<DateTimeOffset?> KeyExpireTimeAsync(IResiliencePipeline pipeline, TelemetryScope operation, IRedisKeyStrategy keyStrategy, CacheKey cacheKey, Action<Exception> logFailure, CancellationToken token)
     {
-        if (!SupportsExpireTime)
+        if (!await SupportsExpireTimeAsync(token).ConfigureAwait(false))
         {
             var timeToLive = await KeyTimeToLiveAsync(pipeline, operation, keyStrategy, cacheKey, logFailure, token).ConfigureAwait(false);
             return timeToLive.HasValue ? Clock.ToDateTimeOffset(timeToLive.Value) : null;
@@ -184,6 +184,54 @@ public abstract class RedisCacheBase : IConnectionState, IDisposable
             }
             _disposed = true;
         }
+    }
+
+    /// <summary>Waits for the first connect without blocking a thread, before a step that must run ahead of the command, such as the cross-slot check; free once connected.</summary>
+    /// <remarks>The wait runs inside <paramref name="pipeline"/>, which connects first, so its timeout, retries and circuit bound it as they bound the command. A pipeline that gives up throws, and the caller handles that as a failed command.</remarks>
+    private protected ValueTask EnsureConnectedAsync(IResiliencePipeline pipeline, CancellationToken token)
+    {
+        var connect = _redis.ConnectAsync(token);
+        if (connect.IsCompletedSuccessfully)
+        {
+            return ValueTask.CompletedTask;
+        }
+
+        // The pipeline may give up before it awaits this wait, so its fault is observed here.
+        var pending = connect.AsTask();
+        _ = pending.ContinueWith(static t => _ = t.Exception, CancellationToken.None, TaskContinuationOptions.OnlyOnFaulted | TaskContinuationOptions.ExecuteSynchronously, TaskScheduler.Default);
+        return WaitAsync(pipeline, pending, token);
+
+        static async ValueTask WaitAsync(IResiliencePipeline pipeline, Task pending, CancellationToken token)
+        {
+            var connected = await pipeline.ExecuteAsync(
+                static async (wait, _) =>
+                {
+                    await wait.ConfigureAwait(false);
+                    return true;
+                },
+                pending,
+                false,
+                token).ConfigureAwait(false);
+            if (!connected)
+            {
+                throw new TimeoutException("Redis did not connect within the resilience pipeline's bounds.");
+            }
+        }
+    }
+
+    /// <summary>Waits for the first connect without blocking, since reading the server version connects; a connect that fails is left to the command, which logs it.</summary>
+    private protected async ValueTask<bool> SupportsExpireTimeAsync(CancellationToken token)
+    {
+        try
+        {
+            await _redis.ConnectAsync(token).ConfigureAwait(false);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            // GetVersion falls back to the configured version.
+        }
+
+        return SupportsExpireTime;
     }
 
     /// <summary>The key as a log line should show it. Nothing is rendered unless the line is written.</summary>

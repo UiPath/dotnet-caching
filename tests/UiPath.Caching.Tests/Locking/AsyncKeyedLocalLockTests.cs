@@ -172,6 +172,115 @@ public class AsyncKeyedLocalLockTests(ITestContextAccessor testContextAccessor)
 
         holder.Dispose();
     }
+
+    [Fact]
+    public async Task TryAcquire_returns_a_lease_that_excludes_the_key_until_it_is_disposed()
+    {
+        using var sut = NewLocker();
+        var token = testContextAccessor.Current.CancellationToken;
+
+        var lease = await sut.TryAcquireAsync("cache:", "k", TimeSpan.FromSeconds(5), token);
+        lease.Should().NotBeNull();
+
+        var blocked = await sut.TryAcquireAsync("cache:", "k", TimeSpan.FromMilliseconds(30), token);
+        blocked.Should().BeNull();
+
+        lease!.Dispose();
+        var after = await sut.TryAcquireAsync("cache:", "k", TimeSpan.FromSeconds(5), token);
+        after.Should().NotBeNull();
+        after!.Dispose();
+    }
+
+    [Fact]
+    public async Task TryAcquire_returns_null_and_leaves_no_slot_held_when_the_holder_outlasts_the_timeout()
+    {
+        using var sut = NewLocker();
+        var token = testContextAccessor.Current.CancellationToken;
+        var holder = await sut.TryAcquireAsync("cache:", "k", TimeSpan.FromSeconds(5), token);
+
+        (await sut.TryAcquireAsync("cache:", "k", TimeSpan.FromMilliseconds(30), token)).Should().BeNull();
+        (await sut.TryAcquireAsync("cache:", "k", TimeSpan.FromMilliseconds(30), token)).Should().BeNull();
+        holder!.Dispose();
+
+        var next = await sut.TryAcquireAsync("cache:", "k", TimeSpan.FromSeconds(5), token);
+        next.Should().NotBeNull("a waiter that timed out must not have kept the slot");
+        next!.Dispose();
+    }
+
+    [Fact]
+    public async Task TryAcquire_throws_instead_of_returning_null_when_the_caller_cancels_while_waiting()
+    {
+        using var sut = NewLocker();
+        var token = testContextAccessor.Current.CancellationToken;
+        var holder = await sut.TryAcquireAsync("cache:", "k", TimeSpan.FromSeconds(5), token);
+
+        using var cts = new CancellationTokenSource(TimeSpan.FromMilliseconds(50));
+        var act = async () => await sut.TryAcquireAsync("cache:", "k", TimeSpan.FromSeconds(30), cts.Token);
+
+        await act.Should().ThrowAsync<OperationCanceledException>();
+        holder!.Dispose();
+    }
+
+    [Fact]
+    public async Task TryAcquire_throws_for_a_token_cancelled_before_the_call_even_when_the_key_is_free()
+    {
+        using var sut = NewLocker();
+        using var cts = new CancellationTokenSource();
+        await cts.CancelAsync();
+
+        var act = async () => await sut.TryAcquireAsync("cache:", "free", TimeSpan.FromSeconds(5), cts.Token);
+
+        await act.Should().ThrowAsync<OperationCanceledException>();
+    }
+
+    [Fact]
+    public async Task TryAcquire_and_AcquireAsync_exclude_each_other_on_the_same_key()
+    {
+        using var sut = NewLocker();
+        var token = testContextAccessor.Current.CancellationToken;
+        var held = await sut.AcquireAsync("k", token);
+
+        (await sut.TryAcquireAsync(string.Empty, "k", TimeSpan.FromMilliseconds(30), token)).Should().BeNull();
+        held.Dispose();
+
+        var lease = await sut.TryAcquireAsync(string.Empty, "k", TimeSpan.FromSeconds(5), token);
+        using var second = new CancellationTokenSource(TimeSpan.FromMilliseconds(30));
+        var act = async () => await sut.AcquireAsync("k", second.Token);
+        await act.Should().ThrowAsync<OperationCanceledException>();
+        lease!.Dispose();
+    }
+
+    [Fact]
+    public async Task TryAcquire_does_not_block_across_prefixes_or_keys()
+    {
+        using var sut = NewLocker();
+        var token = testContextAccessor.Current.CancellationToken;
+        var a = await sut.TryAcquireAsync("a:", "k", TimeSpan.FromSeconds(5), token);
+
+        var otherPrefix = await sut.TryAcquireAsync("b:", "k", TimeSpan.FromMilliseconds(200), token);
+        var otherKey = await sut.TryAcquireAsync("a:", "j", TimeSpan.FromMilliseconds(200), token);
+
+        otherPrefix.Should().NotBeNull();
+        otherKey.Should().NotBeNull();
+        a!.Dispose();
+        otherPrefix!.Dispose();
+        otherKey!.Dispose();
+    }
+
+    [Fact]
+    public async Task TryAcquire_waits_on_a_held_key_for_a_timeout_beyond_what_a_timer_takes()
+    {
+        using var sut = NewLocker();
+        var token = testContextAccessor.Current.CancellationToken;
+        var holder = await sut.TryAcquireAsync("cache:", "k", TimeSpan.FromSeconds(5), token);
+
+        using var cts = new CancellationTokenSource(TimeSpan.FromMilliseconds(50));
+        var act = async () => await sut.TryAcquireAsync("cache:", "k", TimeSpan.FromDays(100), cts.Token);
+
+        await act.Should().ThrowAsync<OperationCanceledException>();
+        holder!.Dispose();
+    }
+
     private static AsyncKeyedLocalLock NewLocker() =>
         new(Options.Create(new CacheOptions()));
 }
