@@ -128,7 +128,7 @@ internal sealed partial class RedisHashCache : RedisCacheBase, IHashCache
             }
             else
             {
-                await EnsureConnectedAsync(token).ConfigureAwait(false);
+                await EnsureConnectedAsync(_write, token).ConfigureAwait(false);
                 var transaction = Database.CreateTransaction();
                 using (QueueMetadataWrite(transaction, redisKey, options.Metadata))
                 {
@@ -914,7 +914,7 @@ internal sealed partial class RedisHashCache : RedisCacheBase, IHashCache
                 }
                 else
                 {
-                    await EnsureConnectedAsync(token).ConfigureAwait(false);
+                    await EnsureConnectedAsync(_write, token).ConfigureAwait(false);
                     var transaction = Database.CreateTransaction();
                     if (setOption == HashCacheSetOption.KeyReplace)
                     {

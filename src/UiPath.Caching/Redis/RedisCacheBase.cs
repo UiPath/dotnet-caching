@@ -186,8 +186,38 @@ public abstract class RedisCacheBase : IConnectionState, IDisposable
         }
     }
 
-    /// <summary>Waits for the first connect without blocking a thread; free once connected.</summary>
-    private protected ValueTask EnsureConnectedAsync(CancellationToken token) => _redis.ConnectAsync(token);
+    /// <summary>Waits for the first connect without blocking a thread, before a step that must run ahead of the command, such as the cross-slot check; free once connected.</summary>
+    /// <remarks>The wait runs inside <paramref name="pipeline"/>, which connects first, so its timeout, retries and circuit bound it as they bound the command. A pipeline that gives up throws, and the caller handles that as a failed command.</remarks>
+    private protected ValueTask EnsureConnectedAsync(IResiliencePipeline pipeline, CancellationToken token)
+    {
+        var connect = _redis.ConnectAsync(token);
+        if (connect.IsCompletedSuccessfully)
+        {
+            return ValueTask.CompletedTask;
+        }
+
+        // The pipeline may give up before it awaits this wait, so its fault is observed here.
+        var pending = connect.AsTask();
+        _ = pending.ContinueWith(static t => _ = t.Exception, CancellationToken.None, TaskContinuationOptions.OnlyOnFaulted | TaskContinuationOptions.ExecuteSynchronously, TaskScheduler.Default);
+        return WaitAsync(pipeline, pending, token);
+
+        static async ValueTask WaitAsync(IResiliencePipeline pipeline, Task pending, CancellationToken token)
+        {
+            var connected = await pipeline.ExecuteAsync(
+                static async (wait, _) =>
+                {
+                    await wait.ConfigureAwait(false);
+                    return true;
+                },
+                pending,
+                false,
+                token).ConfigureAwait(false);
+            if (!connected)
+            {
+                throw new TimeoutException("Redis did not connect within the resilience pipeline's bounds.");
+            }
+        }
+    }
 
     /// <summary>Waits for the first connect without blocking, since reading the server version connects; a connect that fails is left to the command, which logs it.</summary>
     private protected async ValueTask<bool> SupportsExpireTimeAsync(CancellationToken token)

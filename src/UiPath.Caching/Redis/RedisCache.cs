@@ -536,7 +536,7 @@ internal sealed partial class RedisCache : RedisCacheBase, ICache, IStatefulCach
         var payloads = new SerializedPayload[keyValues.Length];
         try
         {
-            await EnsureConnectedAsync(token).ConfigureAwait(false);
+            await EnsureConnectedAsync(_write, token).ConfigureAwait(false);
             ThrowIfCrossSlot(Array.ConvertAll(keyValues, kv => kv.Key), redisKeys, typeof(T), _logger, nameof(SetAsync));
             var transaction = Database.CreateTransaction(asyncState: null);
 
@@ -697,7 +697,7 @@ internal sealed partial class RedisCache : RedisCacheBase, ICache, IStatefulCach
         var operation = StartOperation<T>();
         try
         {
-            await EnsureConnectedAsync(token).ConfigureAwait(false);
+            await EnsureConnectedAsync(_write, token).ConfigureAwait(false);
             ThrowIfCrossSlot(cacheKeys, redisKey, typeof(T), _logger, nameof(RemoveAsync));
             var response = await _write.ExecuteAsync(static (s, token) =>
             {
@@ -786,7 +786,7 @@ internal sealed partial class RedisCache : RedisCacheBase, ICache, IStatefulCach
         var reads = InitReads(redisKeys);
         try
         {
-            await EnsureConnectedAsync(token).ConfigureAwait(false);
+            await EnsureConnectedAsync(_read, token).ConfigureAwait(false);
             ThrowIfCrossSlot(keys, redisKeys, typeof(T), _logger, nameof(GetAsync));
             var values = await _read.ExecuteAsync(static (s, token) =>
             {
@@ -921,7 +921,7 @@ internal sealed partial class RedisCache : RedisCacheBase, ICache, IStatefulCach
         var reads = InitReads(redisKeys);
         try
         {
-            await EnsureConnectedAsync(token).ConfigureAwait(false);
+            await EnsureConnectedAsync(_read, token).ConfigureAwait(false);
             ThrowIfCrossSlot(keys, redisKeys, typeof(T), _logger, nameof(GetCacheEntriesAsync));
             var read = new StrongBox<StrongBox<(RedisValue[] Values, DateTimeOffset?[] Expirations)>?>();
             var committed = await _read.ExecuteAsync(static async (s, token) =>

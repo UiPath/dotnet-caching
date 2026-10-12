@@ -1182,6 +1182,30 @@ public class RedisCacheTests(ITestContextAccessor testContextAccessor) : IAsyncL
     }
 
     [Fact]
+    public async Task A_multi_key_command_gives_up_on_a_pending_first_connect_when_the_pipeline_does()
+    {
+        var token = testContextAccessor.Current.CancellationToken;
+        var never = new TaskCompletionSource();
+        ValueTaskStubs.Returns(_connector.ConnectAsync(Arg.Any<CancellationToken>()), _ => new ValueTask(never.Task));
+        var givingUp = new GivingUpPipeline(TimeSpan.FromMilliseconds(50));
+        _resiliencePipelineProvider.Get(ResiliencePipelineNames.Read).Returns(givingUp);
+        _resiliencePipelineProvider.Get(ResiliencePipelineNames.Write).Returns(givingUp);
+        CacheKey[] keys = [_cacheKey, _multiKey];
+        KeyValuePair<CacheKey, string?>[] pairs = [new(_cacheKey, "a"), new(_multiKey, "b")];
+
+        // A wait outside the pipeline would hold every call for as long as the connect takes, here forever.
+        var reads = Sut.GetAsync<string>(keys, policy: null, token).AsTask().WaitAsync(TimeSpan.FromSeconds(10), token);
+        var entries = Sut.GetCacheEntriesAsync<string>(keys, policy: null, token).AsTask().WaitAsync(TimeSpan.FromSeconds(10), token);
+        var set = Sut.SetAsync(pairs, TimeSpan.FromMinutes(1), policy: null, token).AsTask().WaitAsync(TimeSpan.FromSeconds(10), token);
+        var removed = Sut.RemoveAsync<string>(keys, token).AsTask().WaitAsync(TimeSpan.FromSeconds(10), token);
+
+        (await reads).Should().OnlyContain(kv => kv.Value == null);
+        (await entries).Should().OnlyContain(kv => !kv.Value.Found);
+        (await set).Should().BeFalse();
+        (await removed).Should().BeFalse();
+    }
+
+    [Fact]
     public async Task GetOrAdd_when_disconnected_runs_generator_without_redis_probe()
     {
         _isConnected = false;
@@ -2108,6 +2132,24 @@ public class RedisCacheTests(ITestContextAccessor testContextAccessor) : IAsyncL
         {
             MemoryCalls++;
             return base.SerializeToMemory(value);
+        }
+    }
+
+    /// <summary>Gives up on a callback that outlasts its timeout and returns the default, as a timeout behind a fallback does.</summary>
+    private sealed class GivingUpPipeline(TimeSpan timeout) : IResiliencePipeline
+    {
+        public async ValueTask<TResult> ExecuteAsync<TResult>(Func<CancellationToken, ValueTask<TResult>> callback, TResult defaultValue, CancellationToken cancellationToken = default)
+        {
+            using var cts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+            cts.CancelAfter(timeout);
+            try
+            {
+                return await callback(cts.Token).AsTask().WaitAsync(cts.Token);
+            }
+            catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
+            {
+                return defaultValue;
+            }
         }
     }
 }
