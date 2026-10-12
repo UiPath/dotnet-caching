@@ -174,6 +174,53 @@ public class MultilayerCacheGetOrAddLockTests(ITestContextAccessor testContextAc
     [Fact]
     public async Task GetOrAddAsync_re_reads_cache_after_local_lock_timeout_then_joins_the_generator_in_flight()
     {
+        // Under a distributed lock a caller still queues for the local lock, so it is the one that waits, times out, re-reads and joins.
+        _options.LocalLockTimeout = TimeSpan.FromMilliseconds(200);
+        _options.DistributedLockEnabled = true;
+        _sut = null;
+
+        var token = testContextAccessor.Current.CancellationToken;
+        var cacheKey = _fixture.Create<string>();
+        _cacheKeyStrategy.GetCacheKey<string>(cacheKey).Returns((CacheKey)cacheKey);
+        _innerCache.GetCacheEntryAsync<string>((CacheKey)cacheKey, Arg.Any<CachePolicy?>(), Arg.Any<CancellationToken>())
+            .Returns(new TestCacheEntry<string?> { Value = null });
+
+        var holderAcquired = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var holderRelease = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        async Task<string?> Holder(CancellationToken ct)
+        {
+            holderAcquired.TrySetResult();
+            await holderRelease.Task.WaitAsync(ct);
+            return "holder";
+        }
+        var secondCalls = 0;
+        Task<string?> Second(CancellationToken ct)
+        {
+            Interlocked.Increment(ref secondCalls);
+            return Task.FromResult<string?>("second");
+        }
+
+        var holderTask = Task.Run(async () => await Sut.GetOrAddAsync(cacheKey, Holder, (CachePolicy?)null, token));
+        await holderAcquired.Task.WaitAsync(TimeSpan.FromSeconds(30), token);
+
+        var readsBeforeSecond = _innerCache.ReceivedCalls().Count(c => c.GetMethodInfo().Name == nameof(ICache.GetCacheEntryAsync));
+        var secondTask = Task.Run(async () => await Sut.GetOrAddAsync(cacheKey, Second, (CachePolicy?)null, token));
+        await WaitForAsync(() => _innerCache.ReceivedCalls().Count(c => c.GetMethodInfo().Name == nameof(ICache.GetCacheEntryAsync)) >= readsBeforeSecond + 2, TimeSpan.FromSeconds(10), token);
+
+        secondTask.IsCompleted.Should().BeFalse("the second caller joins the generator in flight rather than starting its own");
+        holderRelease.TrySetResult();
+
+        (await holderTask).Should().Be("holder");
+        (await secondTask).Should().Be("holder");
+        secondCalls.Should().Be(0);
+        _innerCache.ReceivedCalls().Count(c => c.GetMethodInfo().Name == nameof(ICache.GetCacheEntryAsync)).Should().BeGreaterThanOrEqualTo(readsBeforeSecond + 2,
+            "second caller should do an initial read + a post-timeout re-read; without the re-read on timeout the call joins the generator without checking whether another node populated L2 during the wait");
+    }
+
+    [Fact]
+    public async Task GetOrAddAsync_without_a_distributed_lock_joins_the_generator_in_flight_at_once_and_reads_the_cache_once()
+    {
         _options.LocalLockTimeout = TimeSpan.FromMilliseconds(200);
         _sut = null;
 
@@ -203,16 +250,15 @@ public class MultilayerCacheGetOrAddLockTests(ITestContextAccessor testContextAc
         await holderAcquired.Task.WaitAsync(TimeSpan.FromSeconds(30), token);
 
         var secondTask = Task.Run(async () => await Sut.GetOrAddAsync(cacheKey, Second, (CachePolicy?)null, token));
-        await WaitForAsync(() => _innerCache.ReceivedCalls().Count(c => c.GetMethodInfo().Name == nameof(ICache.GetCacheEntryAsync)) >= 4, TimeSpan.FromSeconds(10), token);
+        await Task.Delay(TimeSpan.FromMilliseconds(600), token);
 
-        secondTask.IsCompleted.Should().BeFalse("the second caller joins the generator in flight rather than starting its own");
+        secondTask.IsCompleted.Should().BeFalse("the second caller joins the generator in flight, and keeps waiting for it past the local lock timeout, which no longer bounds the wait");
         holderRelease.TrySetResult();
 
         (await holderTask).Should().Be("holder");
         (await secondTask).Should().Be("holder");
         secondCalls.Should().Be(0);
-        _innerCache.ReceivedCalls().Count(c => c.GetMethodInfo().Name == nameof(ICache.GetCacheEntryAsync)).Should().BeGreaterThanOrEqualTo(4,
-            "second caller should do an initial read + a post-timeout re-read; without the re-read on timeout the call joins the generator without checking whether another node populated L2 during the wait");
+        _innerCache.ReceivedCalls().Count(c => c.GetMethodInfo().Name == nameof(ICache.GetCacheEntryAsync)).Should().Be(2, "one read per caller, with no re-read after a lock wait");
     }
 
     [Fact]
@@ -316,6 +362,9 @@ public class MultilayerCacheGetOrAddLockTests(ITestContextAccessor testContextAc
     {
         _topicKey = _fixture.Create<string>();
         _changeTokenFactory = _fixture.Freeze<IChangeTokenFactory>();
+        // A token that never reports a change, so an entry the local tier takes stays there; an auto-made one reports one at random and the entry is gone at once.
+        _changeTokenFactory.Create(Arg.Any<string>(), Arg.Any<ITopic<ICacheEvent>>(), Arg.Any<string>(), Arg.Any<Type>())
+            .Returns(_ => new TestChangeToken { ActiveChangeCallbacks = true, HasChanged = false });
         _memoryCache = new MemoryCache(Options.Create(new MemoryCacheOptions()));
         _innerCache = _fixture.Freeze<ICache>();
         _options = new InMemoryRedisCacheOptions

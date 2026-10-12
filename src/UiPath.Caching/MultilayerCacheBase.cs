@@ -178,6 +178,10 @@ public abstract partial class MultilayerCacheBase : IDisposable
         }
     }
 
+    /// <summary>A timeout a cancellation source takes: <c>CancelAfter</c> throws beyond <see cref="int.MaxValue"/> milliseconds, so a misconfigured <c>Lock.LocalLockTimeout</c> degrades to that.</summary>
+    private protected static TimeSpan BoundedTimeout(TimeSpan timeout) =>
+        timeout.TotalMilliseconds > int.MaxValue ? TimeSpan.FromMilliseconds(int.MaxValue) : timeout;
+
     /// <summary>The same as the delegate overload with the callers' captured state passed in, so a call allocates no closure.</summary>
     private protected async ValueTask<TResult> RunUnderLocksAsync<TResult, TState>(
         CacheKey cacheKey,
@@ -336,6 +340,10 @@ public abstract partial class MultilayerCacheBase : IDisposable
         (policyLock?.LocalLockEnabled ?? _localLockEnabled,
          PositiveOrFallback(policyLock?.LocalLockTimeout, _localLockTimeout));
 
+    /// <summary>Whether a miss takes its key in the run table before any lock: the local lock then only de-duplicates, which the run table does without making a caller wait, and no distributed lock needs holding.</summary>
+    private protected bool ReservesFirst(LockProfile? policyLock) =>
+        ResolveLocalLock(policyLock).Enabled && !(policyLock?.DistributedLockEnabled ?? _distributedLockEnabled);
+
     private static async Task ReleaseAfterAsync(Task until, IAsyncDisposable? distributedLock, IDisposable? localLock)
     {
         _ = await Task.WhenAny(until).ConfigureAwait(false);
@@ -373,11 +381,7 @@ public abstract partial class MultilayerCacheBase : IDisposable
     {
         var lockKey = _localLockKeyPrefix + cacheKey.Name;
         using var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(token);
-        // CancelAfter throws on > Int32.MaxValue ms; clamp so misconfigured Lock.LocalLockTimeout degrades gracefully.
-        var clampedTimeout = localLockTimeout.TotalMilliseconds > int.MaxValue
-            ? TimeSpan.FromMilliseconds(int.MaxValue)
-            : localLockTimeout;
-        linkedCts.CancelAfter(clampedTimeout);
+        linkedCts.CancelAfter(BoundedTimeout(localLockTimeout));
         try
         {
             return await _localLock.AcquireAsync(lockKey, linkedCts.Token).ConfigureAwait(false);

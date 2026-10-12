@@ -428,6 +428,12 @@ internal sealed partial class MultilayerHashCache : MultilayerCacheBase, IHashCa
             return cacheEntry.Value ?? Empty<T>();
         }
 
+        if (ReservesFirst(policy.Lock))
+        {
+            var first = await RunFirstAsync(cacheEntryOptions, generator, policy, seen, token).ConfigureAwait(false);
+            return first.Value ?? Empty<T>();
+        }
+
         var lifetime = new LockLifetime();
         var result = await RunUnderLocksAsync(
             cacheEntryOptions.CacheKey,
@@ -440,6 +446,18 @@ internal sealed partial class MultilayerHashCache : MultilayerCacheBase, IHashCa
             token).ConfigureAwait(false);
         return result.Value ?? Empty<T>();
     }
+
+    /// <summary>Takes the key's run before anything else and runs the generator inline in the caller that took it: a caller that arrives meanwhile joins the run at once, with no lock to wait for or time out of.</summary>
+    private async ValueTask<ICacheEntry<IDictionary<string, T?>>> RunFirstAsync<T>(InternalHashCacheEntryOptions options, Func<CancellationToken, Task<IDictionary<string, T?>>> generator, CachePolicy policy, long seen, CancellationToken token) =>
+        (ICacheEntry<IDictionary<string, T?>>)(await _generations.RunAsync(
+            new InFlightKey(options.CacheKey.Name, typeof(T), null, null),
+            (Cache: this, Options: options, Generator: generator, Policy: policy, Seen: seen),
+            static (state, run) =>
+                // A write in this process since the caller read the key may have left its value in the local tier, which a run writes before it leaves the table.
+                state.Cache._localMemorySetter.Writes != state.Seen && state.Cache.TryGetLocalEntry<T>(state.Options, out var current)
+                    ? new ValueTask<object?>(current)
+                    : state.Cache.RunHashGeneratorAndStoreEntryAsync(state.Options, state.Generator, state.Policy, new GenerationScope(run, run.Token)),
+            token).ConfigureAwait(false))!;
 
     private void TryHashRehydrate<T>(CacheKey originalCacheKey, DateTimeOffset entryExpiration, IDictionary<string, T?>? currentValue, Func<CancellationToken, Task<IDictionary<string, T?>>> generator, CachePolicy policy, TimeSpan duration, TimeSpan? rehydrateJitter)
     {
@@ -490,7 +508,7 @@ internal sealed partial class MultilayerHashCache : MultilayerCacheBase, IHashCa
             entryType: typeof(T));
     }
 
-    /// <summary>Runs the generation as one run per key: a caller whose wait for the local lock timed out, or that arrives while it runs, joins it rather than starting another. Only the generator runs on the shared token; the write keeps the starting caller's. The starting caller's locks stay held until the run ends, even if that caller stops waiting first.</summary>
+    /// <summary>Runs the generation as one run per key: a caller whose wait for the local lock timed out, or that arrives while it runs, joins it rather than starting another. Only the generator runs on the shared token; the write keeps the starting caller's, unless it cancelled while callers that joined still wait. The starting caller's locks stay held until the run ends, even if that caller stops waiting first.</summary>
     private async ValueTask<ICacheEntry<IDictionary<string, T?>>> RunSharedAsync<T>(InternalHashCacheEntryOptions options, Func<CancellationToken, Task<IDictionary<string, T?>>> generator, CachePolicy policy, LockLifetime lifetime, long seen, CancellationToken token)
     {
         if (!ResolveLocalLock(policy.Lock).Enabled)
@@ -534,7 +552,9 @@ internal sealed partial class MultilayerHashCache : MultilayerCacheBase, IHashCa
         if ((!IsNullOrEmpty(ret) || _multiLayerCacheOptions.CacheNullValues) && !scope.IsAbandoned)
         {
             var innerCacheDisconnected = GetInnerCacheDisconnected();
-            await InternalSetAsync(cacheEntryOptions, ret ?? Empty<T>(), innerCacheDisconnected, policy, keepRefused: true).ConfigureAwait(false);
+            // The starter's token, unless it cancelled while callers that joined still wait for the value: then the run's, which outlives it.
+            var store = cacheEntryOptions.Token.IsCancellationRequested && !scope.IsAbandoned ? cacheEntryOptions with { Token = scope.Token } : cacheEntryOptions;
+            await InternalSetAsync(store, ret ?? Empty<T>(), innerCacheDisconnected, policy, keepRefused: true).ConfigureAwait(false);
         }
         return _cacheEntryFactory.Create<IDictionary<string, T?>>(ret ?? Empty<T>(), cacheEntryOptions.Expiration, cacheEntryOptions.Metadata);
     }

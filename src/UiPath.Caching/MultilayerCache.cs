@@ -1,4 +1,5 @@
 using System.Collections.Concurrent;
+using System.Runtime.ExceptionServices;
 using UiPath.Caching.Locking;
 using UiPath.Caching.Telemetry;
 
@@ -9,6 +10,11 @@ internal sealed partial class MultilayerCache : MultilayerCacheBase, ICache, ISp
     private readonly ICache _innerCache;
     private readonly InFlight<InFlightKey, object?> _innerReads = new();
     private readonly InFlight<InFlightKey, object?> _generations = new();
+#if NET9_0_OR_GREATER
+    private readonly Lock _batchReserveGate = new();
+#else
+    private readonly object _batchReserveGate = new();
+#endif
     private readonly CacheEntryBuilder _entryBuilder;
     private readonly LocalMemorySetter _localMemorySetter;
 
@@ -377,6 +383,17 @@ internal sealed partial class MultilayerCache : MultilayerCacheBase, ICache, ISp
             : await _innerCache.ExpireTimeAsync<T>(cacheEntryOptions.CacheKey, token);
     }
 
+    private static async ValueTask<T?> ValueOfAsync<T>(ValueTask<ICacheEntry<T?>> entry) =>
+        (await entry.ConfigureAwait(false)).Value;
+
+    /// <summary>Reports a failure through the task, as an async method does, for the methods that are not async.</summary>
+    private static async ValueTask<T?> FailedAsync<T>(Exception failure)
+    {
+        await Task.CompletedTask.ConfigureAwait(false);
+        ExceptionDispatchInfo.Throw(failure);
+        return default;
+    }
+
     private static Func<CancellationToken, Task<T?>> Bind<T, TState>(TState state, Func<TState, CancellationToken, Task<T?>> generator) =>
         token => generator(state, token);
 
@@ -536,23 +553,50 @@ internal sealed partial class MultilayerCache : MultilayerCacheBase, ICache, ISp
         return GetOrAddCoreAsync(cacheKey, Bind(state, generator), expiration, effectiveDuration, rehydrateJitter, policy, seen, localMissed, token);
     }
 
-    private async ValueTask<T?> GetOrAddCoreAsync<T>(CacheKey cacheKey, Func<CancellationToken, Task<T?>> generator, DateTimeOffset? expiration, TimeSpan effectiveDuration, TimeSpan? rehydrateJitter, CachePolicy policy, long seen, bool localMissed, CancellationToken token)
+    private ValueTask<T?> GetOrAddCoreAsync<T>(CacheKey cacheKey, Func<CancellationToken, Task<T?>> generator, DateTimeOffset? expiration, TimeSpan effectiveDuration, TimeSpan? rehydrateJitter, CachePolicy policy, long seen, bool localMissed, CancellationToken token)
     {
-        NotCacheableException.ThrowIfNotCacheable<T>();
-        var cacheEntryOptions = _entryBuilder.BuildEntryOptions<T>(cacheKey, expiration, token);
+        // Not async: a miss that never waits builds no state machine, and one that waits builds one, where an async method here would build one for the wait at every step.
+        try
+        {
+            var options = _entryBuilder.BuildEntryOptions<T>(cacheKey, expiration, token);
+            var fetch = localMissed ? FetchInnerAsync<T>(options, policy) : GetCacheEntryInnerAsync<T>(options, policy);
+            var miss = new Miss<T>(cacheKey, options, generator, effectiveDuration, rehydrateJitter, policy, seen);
+            if (fetch.IsCompletedSuccessfully)
+            {
+                return GenerateOnMissAsync(miss, fetch.Result, token);
+            }
 
-        var entry = localMissed
-            ? await FetchInnerAsync<T>(cacheEntryOptions, policy).ConfigureAwait(false)
-            : await GetCacheEntryInnerAsync<T>(cacheEntryOptions, policy).ConfigureAwait(false);
+            return AwaitFetchAsync(miss, fetch, token);
+        }
+        catch (Exception ex)
+        {
+            return FailedAsync<T>(ex);
+        }
+    }
+
+    private ValueTask<T?> GenerateOnMissAsync<T>(Miss<T> miss, ICacheEntry<T?> entry, CancellationToken token)
+    {
         if (entry.Found)
         {
-            TryRehydrate(cacheKey, entry.Expiration, entry.Value, generator, policy, effectiveDuration, rehydrateJitter);
-            return entry.Value;
+            TryRehydrate(miss.Key, entry.Expiration, entry.Value, miss.Generator, miss.Policy, miss.Duration, miss.RehydrateJitter);
+            return new ValueTask<T?>(entry.Value);
         }
 
-        var result = await GetOrGenerateEntryAsync<T, Func<CancellationToken, Task<T?>>>(cacheEntryOptions, generator, policy, static (cache, options, g, p, scope) => cache.RunGeneratorAndStoreEntryAsync(options, g, p, scope), seen, token).ConfigureAwait(false);
-        return result.Value;
+        var generated = GetOrGenerateEntryAsync<T, Func<CancellationToken, Task<T?>>>(miss.Options, miss.Generator, miss.Policy, static (cache, options, g, p, scope) => cache.RunGeneratorAndStoreEntryAsync(options, g, p, scope), miss.Seen, token);
+        if (generated.IsCompletedSuccessfully)
+        {
+            return new ValueTask<T?>(generated.Result.Value);
+        }
+
+        return ValueOfAsync(generated);
     }
+
+    private async ValueTask<T?> AwaitFetchAsync<T>(Miss<T> miss, ValueTask<ICacheEntry<T?>> fetch, CancellationToken token)
+    {
+        var entry = await fetch.ConfigureAwait(false);
+        return await GenerateOnMissAsync(miss, entry, token).ConfigureAwait(false);
+    }
+
 
     private void TryRehydrate<T>(CacheKey originalCacheKey, DateTimeOffset entryExpiration, T? currentValue, Func<CancellationToken, Task<T?>> generator, CachePolicy policy, TimeSpan duration, TimeSpan? rehydrateJitter)
     {
@@ -768,6 +812,11 @@ internal sealed partial class MultilayerCache : MultilayerCacheBase, ICache, ISp
         long seen,
         CancellationToken token)
     {
+        if (ReservesFirst(policy.Lock))
+        {
+            return RunFirstAsync<T, TGenerator>(options, generator, policy, generate, seen, token);
+        }
+
         var lifetime = new LockLifetime();
         return RunUnderLocksAsync(
             options.CacheKey,
@@ -780,7 +829,7 @@ internal sealed partial class MultilayerCache : MultilayerCacheBase, ICache, ISp
             token);
     }
 
-    /// <summary>Runs the generation as one run per key: a caller whose wait for the local lock timed out, or that arrives while it runs, joins it, or the batch run covering its key, rather than starting another. Only the generator runs on the shared token; the write keeps the starting caller's, so that caller's cancellation is still told from a refusal. The starting caller's locks stay held until the run ends, even if that caller stops waiting first.</summary>
+    /// <summary>Runs the generation as one run per key: a caller whose wait for the local lock timed out, or that arrives while it runs, joins it, or the batch run covering its key, rather than starting another. Only the generator runs on the shared token; the write keeps the starting caller's, so that caller's cancellation is still told from a refusal, unless it cancelled while callers that joined still wait. The starting caller's locks stay held until the run ends, even if that caller stops waiting first.</summary>
     private async ValueTask<ICacheEntry<T?>> RunSharedAsync<T, TGenerator>(
         CacheEntryOptions options,
         TGenerator generator,
@@ -821,6 +870,64 @@ internal sealed partial class MultilayerCache : MultilayerCacheBase, ICache, ISp
         }
     }
 
+    /// <summary>Takes the key's run before anything else, and runs the generator inline in the caller that took it: a caller that arrives meanwhile joins the run at once, with no lock to wait for or time out of.</summary>
+    private ValueTask<ICacheEntry<T?>> RunFirstAsync<T, TGenerator>(
+        CacheEntryOptions options,
+        TGenerator generator,
+        CachePolicy policy,
+        Func<MultilayerCache, CacheEntryOptions, TGenerator, CachePolicy, GenerationScope, ValueTask<object?>> generate,
+        long seen,
+        CancellationToken token)
+    {
+        var pending = StartRun<T, TGenerator>(options, generator, policy, generate, seen, token);
+        if (pending.IsCompletedSuccessfully)
+        {
+            return new ValueTask<ICacheEntry<T?>>((ICacheEntry<T?>)pending.Result!);
+        }
+
+        return AwaitRunAsync<T, TGenerator>(pending, options, generator, policy, generate, seen, token);
+    }
+
+    private async ValueTask<ICacheEntry<T?>> AwaitRunAsync<T, TGenerator>(
+        ValueTask<object?> pending,
+        CacheEntryOptions options,
+        TGenerator generator,
+        CachePolicy policy,
+        Func<MultilayerCache, CacheEntryOptions, TGenerator, CachePolicy, GenerationScope, ValueTask<object?>> generate,
+        long seen,
+        CancellationToken token)
+    {
+        while (true)
+        {
+            try
+            {
+                return (ICacheEntry<T?>)(await pending.ConfigureAwait(false))!;
+            }
+            catch (InFlightAbandonedException)
+            {
+                // The batch or TryAdd that held the key gave it up: it is up for taking again.
+                pending = StartRun<T, TGenerator>(options, generator, policy, generate, seen, token);
+            }
+        }
+    }
+
+    private ValueTask<object?> StartRun<T, TGenerator>(
+        CacheEntryOptions options,
+        TGenerator generator,
+        CachePolicy policy,
+        Func<MultilayerCache, CacheEntryOptions, TGenerator, CachePolicy, GenerationScope, ValueTask<object?>> generate,
+        long seen,
+        CancellationToken token) =>
+        _generations.RunAsync(
+            new InFlightKey(options.CacheKey.Name, typeof(T), null, null),
+            (Cache: this, Options: options, Generator: generator, Policy: policy, Generate: generate, Seen: seen),
+            static (state, run) =>
+                // A write in this process since the caller read the key may have left its value in the local tier, which a run writes before it leaves the table.
+                state.Cache._localMemorySetter.Writes != state.Seen && state.Cache.TryGetLocalEntry<T>(state.Options, out var current)
+                    ? new ValueTask<object?>(current)
+                    : state.Generate(state.Cache, state.Options, state.Generator, state.Policy, new GenerationScope(run, run.Token)),
+            token);
+
     private async ValueTask<object?> RunGeneratorAndStoreEntryAsync<T>(CacheEntryOptions cacheEntryOptions, Func<CancellationToken, Task<T?>> generator, CachePolicy policy, GenerationScope scope)
     {
         LogCacheMissed(Logged(cacheEntryOptions, typeof(T)));
@@ -834,7 +941,9 @@ internal sealed partial class MultilayerCache : MultilayerCacheBase, ICache, ISp
         if ((ret is not null || _multiLayerCacheOptions.CacheNullValues) && !scope.IsAbandoned)
         {
             var innerCacheDisconnected = GetInnerCacheDisconnected();
-            await InternalSetAsync(cacheEntryOptions, ret, innerCacheDisconnected, policy, keepRefused: true).ConfigureAwait(false);
+            // The starter's token, unless it cancelled while callers that joined still wait for the value: then the run's, which outlives it.
+            var store = cacheEntryOptions.Token.IsCancellationRequested && !scope.IsAbandoned ? cacheEntryOptions with { Token = scope.Token } : cacheEntryOptions;
+            await InternalSetAsync(store, ret, innerCacheDisconnected, policy, keepRefused: true).ConfigureAwait(false);
         }
         return _cacheEntryFactory.Create<T?>(ret, cacheEntryOptions.Expiration);
     }
@@ -930,10 +1039,32 @@ internal sealed partial class MultilayerCache : MultilayerCacheBase, ICache, ISp
             missProbe[i] = probe[index];
         }
 
+        var resolved = ReservesFirst(policy.Lock)
+            ? await RunBatchSharedAsync(missOptions, missStates, missProbe, generator, policy, seen, token).ConfigureAwait(false)
+            : await RunBatchUnderLocksAsync(missOptions, missStates, missProbe, generator, policy, seen, token).ConfigureAwait(false);
+
+        for (var i = 0; i < missIndices.Count; i++)
+        {
+            values[missIndices[i]] = resolved[i].Value.Value;
+        }
+
+        return Project(states, keyIndexOfState, values);
+    }
+
+    private async ValueTask<KeyValuePair<CacheKey, ICacheEntry<T?>>[]> RunBatchUnderLocksAsync<T, TState>(
+        CacheEntryOptions[] missOptions,
+        TState[] missStates,
+        KeyValuePair<CacheKey, ICacheEntry<T?>>[] missProbe,
+        Func<TState[], CancellationToken, Task<KeyValuePair<TState, T?>[]>> generator,
+        CachePolicy policy,
+        long seen,
+        CancellationToken token)
+        where TState : notnull
+    {
         var lockKey = CompositeCacheKey.For(Array.ConvertAll(missOptions, o => o.CacheKey));
 
         var latest = missProbe;
-        var resolved = await RunUnderLocksAsync(
+        return await RunUnderLocksAsync(
             lockKey,
             async () =>
             {
@@ -944,13 +1075,6 @@ internal sealed partial class MultilayerCache : MultilayerCacheBase, ICache, ISp
             ct => RunBatchSharedAsync(missOptions, missStates, latest, generator, policy, seen, ct),
             token,
             policyLock: policy.Lock).ConfigureAwait(false);
-
-        for (var i = 0; i < missIndices.Count; i++)
-        {
-            values[missIndices[i]] = resolved[i].Value.Value;
-        }
-
-        return Project(states, keyIndexOfState, values);
     }
 
     /// <summary>Joins the keys whose generator run is in flight, a single-key run or another batch, and runs one batch generator for the rest, which others in turn can join.</summary>
@@ -1004,11 +1128,15 @@ internal sealed partial class MultilayerCache : MultilayerCacheBase, ICache, ISp
 
     private void ReserveBatchKeys<T>(CacheEntryOptions[] missOptions, KeyValuePair<CacheKey, ICacheEntry<T?>>[] probe, List<BatchRun> owned, List<BatchJoin<T>> joined, CancellationToken token)
     {
-        for (var i = 0; i < missOptions.Length; i++)
+        // Under one gate, so two batches over the same keys cannot each take some of them: the first takes every free key, the next joins them all. Nothing in it waits.
+        lock (_batchReserveGate)
         {
-            if (!probe[i].Value.Found)
+            for (var i = 0; i < missOptions.Length; i++)
             {
-                ReserveOrJoin(i, new InFlightKey(missOptions[i].CacheKey.Name, typeof(T), null, null), owned, joined, token);
+                if (!probe[i].Value.Found)
+                {
+                    ReserveOrJoin(i, new InFlightKey(missOptions[i].CacheKey.Name, typeof(T), null, null), owned, joined, token);
+                }
             }
         }
     }
@@ -1028,14 +1156,15 @@ internal sealed partial class MultilayerCache : MultilayerCacheBase, ICache, ISp
     {
         // A write in this process since the caller probed may have left values in the local tier, which a run writes before it leaves the table.
         var rewritten = _localMemorySetter.Writes != seen;
-        var current = owned.Select(o => rewritten && TryGetLocalEntry<T>(missOptions[o.Index], out var local) ? new KeyValuePair<CacheKey, ICacheEntry<T?>>(missOptions[o.Index].CacheKey, local) : probe[o.Index]).ToArray();
-        var produced = await RunBatchGeneratorAndStoreAsync(
-            owned.Select(o => missOptions[o.Index]).ToArray(),
-            owned.Select(o => missStates[o.Index]).ToArray(),
-            current,
-            generator,
-            policy,
-            token).ConfigureAwait(false);
+
+        // Every key is ours, none joined, so the arrays already are the owned set and need no copy.
+        var all = owned.Count == missOptions.Length;
+        var ownedOptions = all ? missOptions : owned.Select(o => missOptions[o.Index]).ToArray();
+        var ownedStates = all ? missStates : owned.Select(o => missStates[o.Index]).ToArray();
+        var current = all && !rewritten
+            ? probe
+            : owned.Select(o => rewritten && TryGetLocalEntry<T>(missOptions[o.Index], out var local) ? new KeyValuePair<CacheKey, ICacheEntry<T?>>(missOptions[o.Index].CacheKey, local) : probe[o.Index]).ToArray();
+        var produced = await RunBatchGeneratorAndStoreAsync(ownedOptions, ownedStates, current, generator, policy, token).ConfigureAwait(false);
         for (var i = 0; i < owned.Count; i++)
         {
             result[owned[i].Index] = produced[i];
@@ -1257,7 +1386,70 @@ internal sealed partial class MultilayerCache : MultilayerCacheBase, ICache, ISp
 
         using (localLock)
         {
-            return await TryAddUnderLocalLockAsync(options, value, policy, localMaxExpiration).ConfigureAwait(false);
+            return await TryAddUnderRunAsync(options, value, policy, localMaxExpiration).ConfigureAwait(false);
+        }
+    }
+
+    /// <summary>Takes the key's run for the add, so a miss does not generate the key, and a generator does not store over the added value, between the add's check and its write. A run that holds the key is waited for as long as the local lock would have been; one that still holds it then makes the add lose, as a lock not acquired in time did.</summary>
+    private async ValueTask<bool> TryAddUnderRunAsync<T>(CacheEntryOptions options, T? value, CachePolicy policy, TimeSpan? localMaxExpiration)
+    {
+        var key = new InFlightKey(options.CacheKey.Name, typeof(T), null, null);
+        if (!_generations.TryReserve(key, out var reservation)
+            && (!await WaitForRunAsync(key, ResolveLocalLock(policy.Lock).Timeout, options.Token).ConfigureAwait(false) || !_generations.TryReserve(key, out reservation)))
+        {
+            LogTryAddKeyBusy(Logged(options, typeof(T)));
+            return false;
+        }
+
+        var added = false;
+        try
+        {
+            added = await TryAddUnderLocalLockAsync(options, value, policy, localMaxExpiration).ConfigureAwait(false);
+            return added;
+        }
+        finally
+        {
+            // Callers that joined the add take its value, or take the key over when it lost.
+            if (added)
+            {
+                reservation.Complete(_cacheEntryFactory.Create<T?>(value, options.Expiration));
+            }
+            else
+            {
+                reservation.Fail(new InFlightAbandonedException());
+            }
+        }
+    }
+
+    /// <summary>True when the run that held the key has ended, whether it stored or failed, and false when it still holds it after <paramref name="timeout"/>.</summary>
+    private async ValueTask<bool> WaitForRunAsync(InFlightKey key, TimeSpan timeout, CancellationToken token)
+    {
+        if (!_generations.TryJoin(key, token, out var joined))
+        {
+            return true;
+        }
+
+        using var bounded = CancellationTokenSource.CreateLinkedTokenSource(token);
+        bounded.CancelAfter(BoundedTimeout(timeout));
+        try
+        {
+            await joined.Result.WaitAsync(bounded.Token).ConfigureAwait(false);
+            return true;
+        }
+        catch (OperationCanceledException) when (bounded.IsCancellationRequested && !token.IsCancellationRequested)
+        {
+            return false;
+        }
+        catch (Exception) when (!token.IsCancellationRequested)
+        {
+            // The run failed, so it holds the key no longer.
+            return true;
+        }
+        finally
+        {
+            joined.Withdraw();
+            // Left behind on a timeout or a cancellation, the wait still ends with the run's failure: observed here, not reported unobserved.
+            joined.Result.Forget();
         }
     }
 
@@ -1770,6 +1962,9 @@ internal sealed partial class MultilayerCache : MultilayerCacheBase, ICache, ISp
     [LoggerMessage(Level = LogLevel.Warning, Message = "TryAdd for {CacheKey} reported not-added: the local lock could not be acquired within Lock.LocalLockTimeout, and without it two in-process callers could both be told they added the key. Raise Lock.LocalLockTimeout if this key is contended.")]
     private partial void LogTryAddLocalLockUnavailable(LoggedKey cacheKey);
 
+    [LoggerMessage(Level = LogLevel.Warning, Message = "TryAdd for {CacheKey} reported not-added: a generator for the key was still running after Lock.LocalLockTimeout, and without waiting for it two in-process callers could both be told they added the key, or the generated value could replace the added one. Raise Lock.LocalLockTimeout if this key is contended.")]
+    private partial void LogTryAddKeyBusy(LoggedKey cacheKey);
+
     [LoggerMessage(Level = LogLevel.Debug, Message = "TryAdd skipped for {CacheKey}: the requested expiration {Expiration} is not in the future, so the entry would retain nothing.")]
     private partial void LogTryAddSkippedExpiredEntry(LoggedKey cacheKey, DateTimeOffset expiration);
 
@@ -1835,6 +2030,8 @@ internal sealed partial class MultilayerCache : MultilayerCacheBase, ICache, ISp
         public CacheEntryOptions CacheEntry { get; init; } = cacheEntry;
         public T? Value { get; init; } = value;
     }
+
+    private readonly record struct Miss<T>(CacheKey Key, CacheEntryOptions Options, Func<CancellationToken, Task<T?>> Generator, TimeSpan Duration, TimeSpan? RehydrateJitter, CachePolicy Policy, long Seen);
 
     private sealed record BatchRun(int Index, IInFlightReservation<object?> Run);
 
