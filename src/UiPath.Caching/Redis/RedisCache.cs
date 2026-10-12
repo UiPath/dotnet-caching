@@ -856,16 +856,37 @@ internal sealed partial class RedisCache : RedisCacheBase, ICache, IStatefulCach
                 var transaction = s.Self.Database.CreateTransaction();
                 var valueTask = transaction.StringGetAsync(s.Key, CommandFlags.PreferReplica);
                 var expirationTask = s.Self.FetchExpirationAsync(transaction, s.Key);
-
-                // Observed now: an uncommitted transaction leaves them unawaited.
-                valueTask.Forget();
-                expirationTask.Forget();
-                if (!await transaction.ExecuteAsync(CommandFlags.PreferReplica).ConfigureAwait(false))
+                bool committed;
+                try
                 {
+                    committed = await transaction.ExecuteAsync(CommandFlags.PreferReplica).ConfigureAwait(false);
+                }
+                catch
+                {
+                    // Observed once the transaction has settled, which settles what it queued first: an uncommitted one leaves them unawaited, and a continuation per command would allocate on every read.
+                    valueTask.Observe();
+                    expirationTask.Observe();
+                    throw;
+                }
+
+                if (!committed)
+                {
+                    valueTask.Observe();
+                    expirationTask.Observe();
                     return false;
                 }
 
-                Interlocked.CompareExchange(ref s.Read.Value, new((await valueTask.ConfigureAwait(false), await expirationTask.ConfigureAwait(false))), null);
+                try
+                {
+                    Interlocked.CompareExchange(ref s.Read.Value, new((await valueTask.ConfigureAwait(false), await expirationTask.ConfigureAwait(false))), null);
+                }
+                catch
+                {
+                    // A read that failed inside a committed transaction leaves the expiration unawaited.
+                    expirationTask.Observe();
+                    throw;
+                }
+
                 return true;
             },
             (Self: this, Key: redisKey, Read: read),
@@ -931,14 +952,36 @@ internal sealed partial class RedisCache : RedisCacheBase, ICache, IStatefulCach
                 var transaction = s.Self.Database.CreateTransaction();
                 var mgetTask = transaction.StringGetAsync(s.Keys, CommandFlags.PreferReplica);
                 var expirationTasks = s.Keys.Select(k => s.Self.FetchExpirationAsync(transaction, k)).ToArray();
-                mgetTask.Forget();
-                Array.ForEach(expirationTasks, TaskObservation.Forget);
-                if (!await transaction.ExecuteAsync(CommandFlags.PreferReplica).ConfigureAwait(false))
+                bool committed;
+                try
                 {
+                    committed = await transaction.ExecuteAsync(CommandFlags.PreferReplica).ConfigureAwait(false);
+                }
+                catch
+                {
+                    mgetTask.Observe();
+                    Array.ForEach(expirationTasks, TaskObservation.Observe);
+                    throw;
+                }
+
+                if (!committed)
+                {
+                    mgetTask.Observe();
+                    Array.ForEach(expirationTasks, TaskObservation.Observe);
                     return false;
                 }
 
-                Interlocked.CompareExchange(ref s.Read.Value, new((await mgetTask.ConfigureAwait(false), await Task.WhenAll(expirationTasks).ConfigureAwait(false))), null);
+                try
+                {
+                    Interlocked.CompareExchange(ref s.Read.Value, new((await mgetTask.ConfigureAwait(false), await Task.WhenAll(expirationTasks).ConfigureAwait(false))), null);
+                }
+                catch
+                {
+                    // A read that failed inside a committed transaction leaves the expirations unawaited.
+                    Array.ForEach(expirationTasks, TaskObservation.Observe);
+                    throw;
+                }
+
                 return true;
             },
             (Self: this, Keys: redisKeys, Read: read),

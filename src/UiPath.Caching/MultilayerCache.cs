@@ -926,15 +926,18 @@ internal sealed partial class MultilayerCache : MultilayerCacheBase, ICache, ISp
 
     private async ValueTask<ICacheEntry<T?>> StoreGeneratedEntryAsync<T>(CacheEntryOptions cacheEntryOptions, T? ret, CachePolicy policy, GenerationScope scope)
     {
+        // One entry for the local tier and the caller: both see the same value and deadline.
+        var entry = _cacheEntryFactory.Create<T?>(ret, cacheEntryOptions.Expiration);
+
         // A generator that ignores its token can finish after every caller left and a newer run took the key: its value must not replace theirs.
         if ((ret is not null || _multiLayerCacheOptions.CacheNullValues) && !scope.IsAbandoned)
         {
             var innerCacheDisconnected = GetInnerCacheDisconnected();
             // The starter's token, unless it cancelled while callers that joined still wait for the value: then the run's, which outlives it.
             var store = cacheEntryOptions.Token.IsCancellationRequested && !scope.IsAbandoned ? cacheEntryOptions with { Token = scope.Token } : cacheEntryOptions;
-            await InternalSetAsync(store, ret, innerCacheDisconnected, policy, keepRefused: true).ConfigureAwait(false);
+            await InternalSetAsync(store, ret, innerCacheDisconnected, policy, keepRefused: true, entry).ConfigureAwait(false);
         }
-        return _cacheEntryFactory.Create<T?>(ret, cacheEntryOptions.Expiration);
+        return entry;
     }
 
     private async ValueTask<T?> GetOrAddGeneratedAsync<T>(CacheKey cacheKey, Func<CancellationToken, Task<GeneratedValue<T>>> generator, CachePolicy policy, CancellationToken token)
@@ -1825,14 +1828,15 @@ internal sealed partial class MultilayerCache : MultilayerCacheBase, ICache, ISp
         MemorySet(options, fetched.Value, LocalLifetime(policy));
     }
 
-    private async ValueTask<bool> InternalSetAsync<T>(CacheEntryOptions options, T? value, bool innerCacheDisconnected, CachePolicy policy, bool keepRefused = false)
+    /// <param name="entry">The entry to keep locally, when the caller already built one for <paramref name="value"/>.</param>
+    private async ValueTask<bool> InternalSetAsync<T>(CacheEntryOptions options, T? value, bool innerCacheDisconnected, CachePolicy policy, bool keepRefused = false, ICacheEntry<T?>? entry = null)
     {
         try
         {
             if (innerCacheDisconnected)
             {
                 LogSettingLocalOnly(Logged(options, typeof(T)));
-                return MemorySet(options, value, policy.LocalExpirationDisconnected ?? _multiLayerCacheOptions.LocalMaxExpirationDisconnected);
+                return MemorySet(options, value, policy.LocalExpirationDisconnected ?? _multiLayerCacheOptions.LocalMaxExpirationDisconnected, entry);
             }
 
             bool ret;
@@ -1846,7 +1850,7 @@ internal sealed partial class MultilayerCache : MultilayerCacheBase, ICache, ISp
                 ret = false;
             }
 
-            return KeepAfterInnerWrite(ret, keepRefused, policy, (Cache: this, Options: options, Value: value), static (s, max) => s.Cache.MemorySet(s.Options, s.Value, max), options.Token);
+            return KeepAfterInnerWrite(ret, keepRefused, policy, (Cache: this, Options: options, Value: value, Entry: entry), static (s, max) => s.Cache.MemorySet(s.Options, s.Value, max, s.Entry), options.Token);
         }
         catch (Exception ex)
         {
@@ -1906,9 +1910,9 @@ internal sealed partial class MultilayerCache : MultilayerCacheBase, ICache, ISp
     private bool MemorySet<T>(CacheEntryValue<T>[] cacheEntries, TimeSpan? maxExpiration) =>
         Array.TrueForAll(cacheEntries, e => MemorySet(e.CacheEntry, e.Value, maxExpiration));
 
-    private bool MemorySet<T>(CacheEntryOptions options, T value, TimeSpan? maxExpiration)
+    private bool MemorySet<T>(CacheEntryOptions options, T value, TimeSpan? maxExpiration, ICacheEntry<T>? item = null)
     {
-        var item = _cacheEntryFactory.Create(value, options.Expiration);
+        item ??= _cacheEntryFactory.Create(value, options.Expiration);
         return _localMemorySetter.Set(options, item, typeof(T), maxExpiration);
     }
 

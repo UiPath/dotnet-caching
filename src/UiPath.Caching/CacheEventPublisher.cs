@@ -72,18 +72,65 @@ public sealed partial class CacheEventPublisher
     public ValueTask<bool> CacheRemovedAsync(ICacheEntryOptions options, Type? entryType) =>
         RaiseEventAsync(options, KnownEventTypes.CacheRemoved, entryType);
 
-    private async ValueTask<bool> RaiseEventAsync(ICacheEntryOptions options, string eventType, Type? entryType, IDictionary<string, object?>? properties = null)
+    /// <summary>For the caches' own option structs, which come in as they are rather than boxed into the interface.</summary>
+    internal ValueTask<bool> MetadataUpdatedAsync<TOptions>(TOptions options, Type? entryType)
+        where TOptions : struct, ICacheEntryOptions
     {
-        var topicKey = options.TopicKey;
-        var cacheKey = options.CacheKey;
-        LogRaiseEvent(eventType, topicKey, LoggedKey.For(_masker, options.CallerKey, cacheKey.Name, entryType));
-        var data = new CacheEventData(cacheKey)
+        Dictionary<string, object?> properties = new()
         {
-            Properties = properties,
+            [KnownFieldNames.MetadataKey] = options.Metadata,
+            [KnownFieldNames.ExpirationKey] = options.Expiration,
         };
-        var ev = _cacheEventFactory.Create(_cacheName, eventType, data);
-        var topic = _topicProvider.Create(topicKey);
-        return await topic.PublishAsync(ev, CancellationToken.None).ConfigureAwait(false);
+        return RaiseEventAsync(options, KnownEventTypes.CacheRefreshed, entryType, properties);
+    }
+
+    /// <inheritdoc cref="MetadataUpdatedAsync{TOptions}(TOptions, Type?)"/>
+    internal ValueTask<bool> CacheSetAsync<TOptions>(TOptions options, Type? entryType)
+        where TOptions : struct, ICacheEntryOptions =>
+        RaiseEventAsync(options, KnownEventTypes.CacheSet, entryType);
+
+    /// <inheritdoc cref="MetadataUpdatedAsync{TOptions}(TOptions, Type?)"/>
+    internal ValueTask<bool> CacheRefreshedAsync<TOptions>(TOptions options, Type? entryType)
+        where TOptions : struct, ICacheEntryOptions
+    {
+        Dictionary<string, object?> properties = new()
+        {
+            [KnownFieldNames.ExpirationKey] = options.Expiration,
+        };
+        return RaiseEventAsync(options, KnownEventTypes.CacheRefreshed, entryType, properties);
+    }
+
+    /// <inheritdoc cref="MetadataUpdatedAsync{TOptions}(TOptions, Type?)"/>
+    internal ValueTask<bool> CacheRemovedAsync<TOptions>(TOptions options, Type? entryType)
+        where TOptions : struct, ICacheEntryOptions =>
+        RaiseEventAsync(options, KnownEventTypes.CacheRemoved, entryType);
+
+    private ValueTask<bool> RaiseEventAsync<TOptions>(TOptions options, string eventType, Type? entryType, IDictionary<string, object?>? properties = null)
+        where TOptions : ICacheEntryOptions
+    {
+        // Not async: nothing is awaited before the publish, whose task is handed back as it is; a failure before it is reported through the task, as the async method reported it.
+        try
+        {
+            var topicKey = options.TopicKey;
+            var cacheKey = options.CacheKey;
+            LogRaiseEvent(eventType, topicKey, LoggedKey.For(_masker, options.CallerKey, cacheKey.Name, entryType));
+            if (_topicProvider is NullTopicProvider)
+            {
+                // Broadcast is off: its topic takes anything and keeps nothing, so the event is not built.
+                return new ValueTask<bool>(true);
+            }
+
+            var data = new CacheEventData(cacheKey)
+            {
+                Properties = properties,
+            };
+            var ev = _cacheEventFactory.Create(_cacheName, eventType, data);
+            return _topicProvider.Create(topicKey).PublishAsync(ev, CancellationToken.None);
+        }
+        catch (Exception ex)
+        {
+            return ValueTask.FromException<bool>(ex);
+        }
     }
 
     [LoggerMessage(Level = LogLevel.Debug, Message = "Raise {EventType} on topicKey {TopicKey} for key {CacheKey}")]

@@ -28,6 +28,9 @@ internal abstract class MemoryCacheSetter(
 
     private long _writes;
 
+    // Bound once: a method group allocates a delegate at every conversion.
+    private Action<object?>? _refreshMetadata;
+
     /// <summary>How many local writes have committed, counted as each one returns: a caller that read it before its own read of the tier, and missed a value, sees it move once that value's write has returned.</summary>
     internal long Writes => Volatile.Read(ref _writes);
 
@@ -35,28 +38,47 @@ internal abstract class MemoryCacheSetter(
 
     private ICacheEntrySizeProvider SizeProvider { get; } = memoryCacheOptions.SizeProvider ?? new DefaultCacheEntrySizeProvider();
 
-    public bool Set(ICacheEntryOptions options, ICacheEntry item, Type entryType, TimeSpan? maxExpiration)
+    /// <summary>Generic over the options so the caches' option structs come in as they are, not boxed into the interface.</summary>
+    public bool Set<TOptions>(TOptions options, ICacheEntry item, Type entryType, TimeSpan? maxExpiration)
+        where TOptions : ICacheEntryOptions
     {
+        ICacheChangeToken? token = null;
         try
         {
             var topic = topicProvider.Create(options.TopicKey);
-            var token = changeTokenFactory is IMaskedChangeTokenFactory masked
+            token = changeTokenFactory is IMaskedChangeTokenFactory masked
                 ? masked.Create(options.CacheKey, topic, cacheName, entryType, _masker, options.CallerKey, ignoreSubscriptionGaps)
                 : changeTokenFactory.Create(options.CacheKey, TopicForCustomFactory(topic), cacheName, entryType);
-            var state = new RefreshMetadataState(options.CacheKey, options.TopicKey, item, token, entryType, maxExpiration, options.CallerKey);
-            token.RegisterChangeCallback(RefreshMetadata, state);
+            // The null token never changes and owns nothing to dispose, so it is not wired to the entry: the wiring costs a token list, a callback list and a thread-pool task per eviction.
+            var wired = !ReferenceEquals(token, NullCacheChangeToken.Instance);
+            if (wired)
+            {
+                var state = new RefreshMetadataState(options.CacheKey, options.TopicKey, item, token, entryType, maxExpiration, options.CallerKey);
+                token.RegisterChangeCallback(_refreshMetadata ??= RefreshMetadata, state);
+            }
+
             // Filled in place rather than through MemoryCacheEntryOptions, which is copied into the entry and discarded.
             // The entry is committed when disposed, and only once its value is set, so a throw before that stores nothing.
             using (var entry = memoryCache.CreateEntry(options.CacheKey.Name))
             {
                 entry.AbsoluteExpiration = GetCacheExpiration(options.Expiration, maxExpiration);
-                entry.ExpirationTokens.Add(token);
-                entry.RegisterPostEvictionCallback(PostEviction, token);
+                if (wired)
+                {
+                    entry.ExpirationTokens.Add(token);
+                    entry.RegisterPostEvictionCallback(PostEviction, token);
+                }
+
                 if (memoryCacheOptions.SizeLimit.HasValue)
                 {
                     entry.Size = SizeProvider.GetSize(item);
                 }
                 entry.Value = item;
+            }
+
+            // The cache detaches, and so disposes, the token of an entry it replaces or removes. An entry that lost the commit to a concurrent write, or expired on insert, is released only by its eviction callback on the thread pool, and a rewritten key piles those up while the pool is busy: released here instead.
+            if (wired && !(memoryCache.TryGetValue(options.CacheKey.Name, out var current) && ReferenceEquals(current, item)))
+            {
+                Release(token);
             }
 
             // After the commit, not before: a write that began before a reader counted, and committed after the reader missed it, must still move the count.
@@ -65,6 +87,7 @@ internal abstract class MemoryCacheSetter(
         }
         catch (Exception ex)
         {
+            Release(token);
             memoryCache.Remove(options.CacheKey.Name);
             logger.LogWarning(ex, "Unable to set local memory for {CacheKey}", LoggedKey.For(_masker, options.CallerKey, options.CacheKey.Name, entryType));
             return false;
@@ -81,9 +104,13 @@ internal abstract class MemoryCacheSetter(
 
     protected abstract ICacheEntryOptions CreateEntry(RefreshMetadataState metadataState, CancellationToken cancellationToken);
 
-    private static void PostEviction(object key, object? value, EvictionReason reason, object? state)
+    private static void PostEviction(object key, object? value, EvictionReason reason, object? state) =>
+        Release(state);
+
+    /// <summary>Unsubscribes the token. Disposing it again, as its eviction callback will, is a no-op.</summary>
+    private static void Release(object? token)
     {
-        if (state is IDisposable disposable)
+        if (token is IDisposable disposable)
         {
             disposable.Dispose();
         }

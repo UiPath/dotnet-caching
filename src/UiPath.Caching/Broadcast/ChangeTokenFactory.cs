@@ -10,7 +10,6 @@ public sealed partial class ChangeTokenFactory<T> : IChangeTokenFactory, IMasked
     private readonly ISerializerProxy<T> _serializer;
 #pragma warning restore IDE1006, SX1309
 
-    private readonly ILoggerFactory _loggerFactory;
     private readonly ILogger<ChangeTokenFactory<T>> _logger;
     private readonly Uri? _sourceUri;
     private readonly ICachingTelemetryProvider _telemetryProvider;
@@ -27,10 +26,14 @@ public sealed partial class ChangeTokenFactory<T> : IChangeTokenFactory, IMasked
         _keyMaskingPolicy = keyMaskingPolicy;
         _sourceUri = optionsAccessor.Value.SourceUri;
         _serializer = serializer;
-        _loggerFactory = loggerFactory;
         _logger = loggerFactory.CreateLogger<ChangeTokenFactory<T>>();
+        TokenLogger = loggerFactory.CreateLogger<ChangeToken<T>>();
         _telemetryProvider = telemetryProvider;
     }
+
+    // One logger for every token: resolving one builds its category name, per token otherwise. A property, since the log generator wants one logger field.
+    [SuppressMessage("Minor Code Smell", "S6669:Logger field or property name should comply with a naming convention", Justification = "The factory's own logger is _logger; this one is handed to every token it creates.")]
+    private ILogger<ChangeToken<T>> TokenLogger { get; }
 
     public ICacheChangeToken Create(string token, ITopic<ICacheEvent> topic, string cacheName, Type entryType) =>
         CreateCore(token, topic, cacheName, entryType, _maskers.GetOrAdd(cacheName, name => KeyMasker.For(_keyMaskingPolicy, name)), callerKey: token);
@@ -47,7 +50,7 @@ public sealed partial class ChangeTokenFactory<T> : IChangeTokenFactory, IMasked
         }
 
         var acceptedEvents = KnownCacheProviderNames.InMemory.Equals(cacheName, StringComparison.OrdinalIgnoreCase) ? MemoryAcceptedEvents : null;
-        return new ChangeToken<T>(token, topic, _sourceUri, _serializer, _loggerFactory.CreateLogger<ChangeToken<T>>(), _telemetryProvider, acceptedEvents, masker, entryType, callerKey, ignoreSubscriptionGaps);
+        return new ChangeToken<T>(token, topic, _sourceUri, _serializer, TokenLogger, _telemetryProvider, acceptedEvents, masker, entryType, callerKey, ignoreSubscriptionGaps);
     }
 
     [LoggerMessage(Level = LogLevel.Trace, Message = "Create change token. topic {TopicKey} token {Token} source {SourceUri}")]
