@@ -1,7 +1,7 @@
 namespace UiPath.Caching;
 
 /// <summary>Reads with a generator that returns its value's expiration; a cache that does not implement <see cref="IGeneratedExpirationCache"/> is read, and on a miss the generator runs and its value is set, without coalescing.</summary>
-/// <remarks>The fallback has no clock to tell that an expiration has passed, so it leaves that to the cache: a set that rejects the deadline with <see cref="ArgumentOutOfRangeException"/> leaves the value returned and not stored, as the capable caches do.</remarks>
+/// <remarks>A set that rejects a deadline that has passed, by the system clock, with <see cref="ArgumentOutOfRangeException"/> leaves the value returned and not stored, as the capable caches do; any other rejection reaches the caller.</remarks>
 public static class GeneratedExpirationExtensions
 {
     /// <inheritdoc cref="IGeneratedExpirationCache.GetOrAddWithExpirationAsync{T}(CacheKey, Func{CancellationToken, Task{GeneratedValue{T}}}, CachePolicy, CancellationToken)"/>
@@ -36,9 +36,9 @@ public static class GeneratedExpirationExtensions
                 ? await cache.SetAsync<T>(cacheKey, generated.Value, expiration, policy, token).ConfigureAwait(false)
                 : await cache.SetAsync<T>(cacheKey, generated.Value, policy, token).ConfigureAwait(false);
         }
-        catch (ArgumentOutOfRangeException) when (generated.Expiration is not null)
+        catch (ArgumentOutOfRangeException) when (generated.Expiration <= DateTimeOffset.UtcNow)
         {
-            // An expiration the cache will not take, because it has passed: the value is still the answer.
+            // An expiration the cache will not take because it has passed: the value is still the answer. Any other rejection would leave the key unstored and the generator running on every call, unseen.
         }
 
         return generated.Value;
@@ -62,9 +62,9 @@ public static class GeneratedExpirationExtensions
                 ? await cache.SetAsync(cacheKey, generated.Value, expiration, token).ConfigureAwait(false)
                 : await cache.SetAsync(cacheKey, generated.Value, token).ConfigureAwait(false);
         }
-        catch (ArgumentOutOfRangeException) when (generated.Expiration is not null)
+        catch (ArgumentOutOfRangeException) when (generated.Expiration <= DateTimeOffset.UtcNow)
         {
-            // An expiration the cache will not take, because it has passed: the value is still the answer.
+            // An expiration the cache will not take because it has passed: the value is still the answer. Any other rejection would leave the key unstored and the generator running on every call, unseen.
         }
 
         return generated.Value;

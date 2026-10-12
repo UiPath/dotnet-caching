@@ -200,6 +200,25 @@ public class GeneratedExpirationTests
     }
 
     [Fact]
+    public async Task A_cache_without_the_capability_that_rejects_a_deadline_still_ahead_fails_the_call()
+    {
+        var cache = Substitute.For<ICache>();
+        ValueTaskStubs.Returns(cache.GetCacheEntryAsync<string>(Arg.Any<CacheKey>(), Arg.Any<CachePolicy?>(), Arg.Any<CancellationToken>()), new ValueTask<ICacheEntry<string?>>(new TestCacheEntry<string?> { Expiration = DateTimeOffset.MinValue }));
+        ValueTaskStubs.Returns(
+            cache.SetAsync<string>(Arg.Any<CacheKey>(), Arg.Any<string?>(), Arg.Any<DateTimeOffset>(), Arg.Any<CachePolicy?>(), Arg.Any<CancellationToken>()),
+            _ => throw new ArgumentOutOfRangeException("expiration"));
+        var typed = Substitute.For<ICache<string>>();
+        ValueTaskStubs.Returns(
+            typed.SetAsync(Arg.Any<CacheKey>(), Arg.Any<string?>(), Arg.Any<DateTimeOffset>(), Arg.Any<CancellationToken>()),
+            _ => throw new ArgumentOutOfRangeException("expiration"));
+        var ahead = new GeneratedValue<string>("jwt", DateTimeOffset.UtcNow.AddYears(50));
+
+        // Swallowed, the key would never be stored and every call would run the generator again.
+        await FluentActions.Awaiting(async () => await cache.GetOrAddWithExpirationAsync<string>("a", _ => Task.FromResult(ahead), Ct)).Should().ThrowAsync<ArgumentOutOfRangeException>();
+        await FluentActions.Awaiting(async () => await typed.GetOrAddWithExpirationAsync("a", _ => Task.FromResult(ahead), Ct)).Should().ThrowAsync<ArgumentOutOfRangeException>();
+    }
+
+    [Fact]
     public async Task A_moq_proxy_is_read_then_set_too()
     {
         var deadline = DateTimeOffset.UtcNow.AddMinutes(7);
