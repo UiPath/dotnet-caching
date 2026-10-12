@@ -12,7 +12,7 @@ internal static class FactoryTimeout
     private const string TagCacheKey = "cache.key";
     private const string TagSource = "source";
 
-    public static async Task<T> RunAsync<T>(
+    public static Task<T> RunAsync<T>(
         Func<CancellationToken, Task<T>> factory,
         TimeSpan? factoryTimeout,
         CacheKey cacheKey,
@@ -21,15 +21,36 @@ internal static class FactoryTimeout
         CancellationToken token,
         string source = SourceForeground)
     {
-        if (factoryTimeout is null || factoryTimeout.Value <= TimeSpan.Zero)
+        if (factoryTimeout is not null && factoryTimeout.Value > TimeSpan.Zero)
         {
-            return await factory(token).ConfigureAwait(false);
+            return RunWithTimeoutAsync(factory, factoryTimeout.Value, cacheKey, cacheName, telemetry, source, token);
         }
+
+        // Nothing to time, so the factory's own task is handed back: an async wrapper would allocate a second one per run. A throw before it yields stays on the task, as the wrapper reported it.
+        try
+        {
+            return factory(token);
+        }
+        catch (Exception ex)
+        {
+            return Task.FromException<T>(ex);
+        }
+    }
+
+    private static async Task<T> RunWithTimeoutAsync<T>(
+        Func<CancellationToken, Task<T>> factory,
+        TimeSpan factoryTimeout,
+        CacheKey cacheKey,
+        string cacheName,
+        ICachingTelemetryProvider telemetry,
+        string source,
+        CancellationToken token)
+    {
         using var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(token);
         // CancelAfter throws when the delay exceeds Int32.MaxValue ms; clamp so misconfigured values degrade gracefully.
-        var clampedTimeout = factoryTimeout.Value.TotalMilliseconds > int.MaxValue
+        var clampedTimeout = factoryTimeout.TotalMilliseconds > int.MaxValue
             ? TimeSpan.FromMilliseconds(int.MaxValue)
-            : factoryTimeout.Value;
+            : factoryTimeout;
         linkedCts.CancelAfter(clampedTimeout);
         try
         {
