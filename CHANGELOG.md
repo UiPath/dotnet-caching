@@ -176,6 +176,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
   resume asynchronously as before. A starter that cancels still gets a `TaskCanceledException`, and a failure of the
   work still reaches it, and every joiner, as the exception the work threw.
 
+- **The Redis provider shares a run by Redis key and value type, and builds less per call.** The run table is keyed by
+  the `RedisKey` itself, per value type, instead of the key's rendered text, so a prefixed key is no longer turned
+  into a string on every `GetOrAddAsync`, and the run's result is neither boxed nor cast. As before, two calls share a run only
+  when the key strategy maps them to the same Redis key, so a strategy that reads ambient state, such as a tenant, and
+  maps one cache key to different Redis keys keeps them apart. The two async frames wrapped around the run are gone.
+
 - **`ICachingTelemetryProvider` takes `TelemetryTags<T>` and has no default bodies.** `TrackDependency`, `TrackEvent`,
   `TrackException` and `TrackMetric` take `TelemetryTags<string>` properties and `TelemetryTags<double>` metrics in
   place of `ReadOnlySpan<KeyValuePair<…>>`. The struct holds up to nine pairs inline and more in one array, so the
