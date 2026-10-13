@@ -312,13 +312,16 @@ public class RedisHashCacheTests(ITestContextAccessor testContextAccessor) : IAs
             .ToArray();
         _database.KeyExistsAsync(_redisKey, CommandFlags.PreferReplica)
             .Returns(ci => true);
-        _transaction.HashGetAllAsync(_redisKey, CommandFlags.PreferReplica)
-            .Returns(entries);
-        _transaction.KeyExpireTimeAsync(_redisKey, CommandFlags.PreferReplica)
-            .Returns((DateTime?)expireTime.UtcDateTime);
-        _transaction.ExecuteAsync(Arg.Any<CommandFlags>()).Returns(true);
+        _database.ScriptEvaluateReadOnlyAsync(Arg.Any<string>(), Arg.Is<RedisKey[]?>(k => k != null && k.Length == 1 && k[0] == _redisKey), Arg.Any<RedisValue[]?>(), CommandFlags.PreferReplica)
+            .Returns(RedisResult.Create(
+            [
+                RedisResult.Create([.. entries.SelectMany(e => new[] { e.Name, e.Value })]),
+                RedisResult.Create((RedisValue)expireTime.ToUnixTimeMilliseconds()),
+            ]));
         var actual = await Sut.GetCacheEntryAsync<string>(_cacheKey, policy: null, token: testContextAccessor.Current.CancellationToken);
         actual.Value.Should().BeEquivalentTo(expected);
+        actual.Expiration.Should().BeCloseTo(expireTime, TimeSpan.FromMilliseconds(1));
+        _database.DidNotReceive().CreateTransaction();
     }
 
     [Fact]
@@ -1710,6 +1713,7 @@ public class RedisHashCacheTests(ITestContextAccessor testContextAccessor) : IAs
             EntryFactory = new TestCacheEntryFactory(),
             CacheKeyStrategy = _cacheKeyStrategy,
             RedisKeyStrategyFactory = redisKeyStrategyFactory,
+            ReadScriptsEnabled = true,
         };
         _serializer = new JsonSerializer();
         _fixture.Inject<ISerializerProxy<byte[]>>(_serializer);

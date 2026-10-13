@@ -7,10 +7,17 @@ namespace UiPath.Caching.Redis;
 
 internal sealed partial class RedisCache : RedisCacheBase, ICache, IStatefulCache, IGeneratedExpirationCache
 {
+    /// <summary>Value and absolute expiration in one atomic read-only call.</summary>
+    private const string ReadWithExpirationScript = "local v = redis.call('GET', KEYS[1]) if not v then return false end return {v, redis.call('PEXPIRETIME', KEYS[1])}";
+
+    /// <summary>Each key's value and absolute expiration, flat: a missing key answers a null value and -2.</summary>
+    private const string ReadManyWithExpirationScript = "local r = {} for i, k in ipairs(KEYS) do r[2 * i - 1] = redis.call('GET', k) r[2 * i] = redis.call('PEXPIRETIME', k) end return r";
+
     private readonly ISerializerProxy<byte[]> _serializer;
     private readonly IMemorySerializerProxy? _memorySerializer;
     private readonly ILogger<RedisCache> _logger;
     private readonly Action<Exception> _logFailure;
+    private readonly Action<Exception> _logReadScriptUnavailable;
     private readonly IResiliencePipeline _read;
     private readonly IResiliencePipeline _write;
     private readonly IRedisKeyStrategy _redisKeyStrategy;
@@ -35,6 +42,7 @@ internal sealed partial class RedisCache : RedisCacheBase, ICache, IStatefulCach
     {
         _logger = logger;
         _logFailure = LogRedisCacheException;
+        _logReadScriptUnavailable = LogReadScriptUnavailable;
         _serializer = serializer;
         _memorySerializer = serializer as IMemorySerializerProxy;
         _read = new ConnectingPipeline(redis, resiliencePipelineProvider.Get(ResiliencePipelineNames.Read));
@@ -212,6 +220,80 @@ internal sealed partial class RedisCache : RedisCacheBase, ICache, IStatefulCach
             reads[i] = (redisKeys[i], false);
         }
         return reads;
+    }
+
+    private static (RedisValue Value, DateTimeOffset? Expiration) ReadReply(RedisResult reply)
+    {
+        if (reply.IsNull)
+        {
+            return (RedisValue.Null, null);
+        }
+
+        var parts = ((RedisResult[]?)reply)!;
+        var expireAt = (long)parts[1];
+        // PEXPIRETIME answers -1 for a key without a TTL, as EXPIRETIME does for KeyExpireTimeAsync.
+        return ((RedisValue)parts[0], expireAt < 0 ? null : DateTimeOffset.FromUnixTimeMilliseconds(expireAt));
+    }
+
+    private static (RedisValue[] Values, DateTimeOffset?[] Expirations) ReadManyReply(RedisResult reply, int count)
+    {
+        var parts = ((RedisResult[]?)reply)!;
+        var values = new RedisValue[count];
+        var expirations = new DateTimeOffset?[count];
+        for (var i = 0; i < count; i++)
+        {
+            values[i] = (RedisValue)parts[2 * i];
+            var expireAt = (long)parts[(2 * i) + 1];
+            expirations[i] = expireAt < 0 ? null : DateTimeOffset.FromUnixTimeMilliseconds(expireAt);
+        }
+
+        return (values, expirations);
+    }
+
+    /// <summary>One attempt at a batch read: the script, or a transaction rebuilt per attempt since a retry cannot re-run a drained one.</summary>
+    private static async ValueTask<bool> ReadManyAsync((RedisCache Self, RedisKey[] Keys, StrongBox<StrongBox<(RedisValue[] Values, DateTimeOffset?[] Expirations)>?> Read) s, CancellationToken token)
+    {
+        token.ThrowIfCancellationRequested();
+        if (await s.Self.TryReadScriptAsync(ReadManyWithExpirationScript, s.Keys, s.Self._logReadScriptUnavailable).ConfigureAwait(false) is { } reply)
+        {
+            Interlocked.CompareExchange(ref s.Read.Value, new(ReadManyReply(reply, s.Keys.Length)), null);
+            return true;
+        }
+
+        var transaction = s.Self.Database.CreateTransaction();
+        var mgetTask = transaction.StringGetAsync(s.Keys, CommandFlags.PreferReplica);
+        var expirationTasks = s.Keys.Select(k => s.Self.FetchExpirationAsync(transaction, k)).ToArray();
+        bool committed;
+        try
+        {
+            committed = await transaction.ExecuteAsync(CommandFlags.PreferReplica).ConfigureAwait(false);
+        }
+        catch
+        {
+            mgetTask.Observe();
+            Array.ForEach(expirationTasks, TaskObservation.Observe);
+            throw;
+        }
+
+        if (!committed)
+        {
+            mgetTask.Observe();
+            Array.ForEach(expirationTasks, TaskObservation.Observe);
+            return false;
+        }
+
+        try
+        {
+            Interlocked.CompareExchange(ref s.Read.Value, new((await mgetTask.ConfigureAwait(false), await Task.WhenAll(expirationTasks).ConfigureAwait(false))), null);
+        }
+        catch
+        {
+            // A read that failed inside a committed transaction leaves the expirations unawaited.
+            Array.ForEach(expirationTasks, TaskObservation.Observe);
+            throw;
+        }
+
+        return true;
     }
 
     private static KeyValuePair<CacheKey, T?>[] GetDefaultValues<T>(CacheKey[] keys) =>
@@ -853,6 +935,12 @@ internal sealed partial class RedisCache : RedisCacheBase, ICache, IStatefulCach
             var committed = await _read.ExecuteAsync(static async (s, token) =>
             {
                 token.ThrowIfCancellationRequested();
+                if (await s.Self.TryReadScriptAsync(ReadWithExpirationScript, [s.Key], s.Self._logReadScriptUnavailable).ConfigureAwait(false) is { } reply)
+                {
+                    Interlocked.CompareExchange(ref s.Read.Value, new(ReadReply(reply)), null);
+                    return true;
+                }
+
                 var transaction = s.Self.Database.CreateTransaction();
                 var valueTask = transaction.StringGetAsync(s.Key, CommandFlags.PreferReplica);
                 var expirationTask = s.Self.FetchExpirationAsync(transaction, s.Key);
@@ -946,44 +1034,8 @@ internal sealed partial class RedisCache : RedisCacheBase, ICache, IStatefulCach
             await EnsureConnectedAsync(_read, token).ConfigureAwait(false);
             ThrowIfCrossSlot(keys, redisKeys, typeof(T), _logger, nameof(GetCacheEntriesAsync));
             var read = new StrongBox<StrongBox<(RedisValue[] Values, DateTimeOffset?[] Expirations)>?>();
-            var committed = await _read.ExecuteAsync(static async (s, token) =>
-            {
-                token.ThrowIfCancellationRequested();
-                var transaction = s.Self.Database.CreateTransaction();
-                var mgetTask = transaction.StringGetAsync(s.Keys, CommandFlags.PreferReplica);
-                var expirationTasks = s.Keys.Select(k => s.Self.FetchExpirationAsync(transaction, k)).ToArray();
-                bool committed;
-                try
-                {
-                    committed = await transaction.ExecuteAsync(CommandFlags.PreferReplica).ConfigureAwait(false);
-                }
-                catch
-                {
-                    mgetTask.Observe();
-                    Array.ForEach(expirationTasks, TaskObservation.Observe);
-                    throw;
-                }
-
-                if (!committed)
-                {
-                    mgetTask.Observe();
-                    Array.ForEach(expirationTasks, TaskObservation.Observe);
-                    return false;
-                }
-
-                try
-                {
-                    Interlocked.CompareExchange(ref s.Read.Value, new((await mgetTask.ConfigureAwait(false), await Task.WhenAll(expirationTasks).ConfigureAwait(false))), null);
-                }
-                catch
-                {
-                    // A read that failed inside a committed transaction leaves the expirations unawaited.
-                    Array.ForEach(expirationTasks, TaskObservation.Observe);
-                    throw;
-                }
-
-                return true;
-            },
+            var committed = await _read.ExecuteAsync(
+            ReadManyAsync,
             (Self: this, Keys: redisKeys, Read: read),
             default,
             token).ConfigureAwait(false);
@@ -1099,6 +1151,9 @@ internal sealed partial class RedisCache : RedisCacheBase, ICache, IStatefulCach
 
     [LoggerMessage(Level = LogLevel.Debug, Message = "TryAdd skipped for {RedisKey}: the requested expiration {Expiration} is not positive, so the entry would retain nothing.")]
     private partial void LogTryAddSkippedExpiredEntry(LoggedKey redisKey, TimeSpan expiration);
+
+    [LoggerMessage(Level = LogLevel.Warning, Message = "Scripts are unavailable; cache reads now use a transaction")]
+    private partial void LogReadScriptUnavailable(Exception ex);
 
     [LoggerMessage(Level = LogLevel.Warning, Message = "RedisCache exception.")]
     private partial void LogRedisCacheException(Exception ex);

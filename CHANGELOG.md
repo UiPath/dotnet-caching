@@ -76,6 +76,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 
 ### Changed
 
+- **`RedisCacheOptions.ReadScriptsEnabled` reads with one read-only script.** Opt-in, off by default. On Redis 7
+  or later, `RedisCache` and `RedisHashCache` then read a value (or all hash fields) and its expiration with one
+  `EVAL_RO` script instead of a MULTI/EXEC transaction, still atomically and still from a replica when one is
+  preferred; a batch read runs one script for all its keys. A miss through the in-memory and Redis tiers allocates about
+  2.5 KB less (8.7 KB to 6.2 KB on net10), a miss under the distributed lock about 5 KB less and a hash hit about
+  1.9 KB less; round trips are unchanged. The connection's user needs `@scripting`. Before Redis 7, if the first script
+  fails for any reason, or once the server refuses one as unknown or not permitted, reads use the transaction; the
+  switch is logged as a warning. After a script has worked, timeouts and connection errors do not switch it.
+
 - **The first Redis connect no longer blocks a thread.** `RedisConnector.Database` waits for the first connect
   synchronously, so on a new instance every concurrent first call held a thread-pool thread until it finished. The Redis
   caches, the distributed lock and the health check now wait for the connector with `ConnectAsync` before they read

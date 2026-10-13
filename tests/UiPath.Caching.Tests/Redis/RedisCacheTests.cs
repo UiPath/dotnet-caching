@@ -537,23 +537,133 @@ public class RedisCacheTests(ITestContextAccessor testContextAccessor) : IAsyncL
     }
 
     [Fact]
-    public async Task GetCacheEntry_uses_KeyExpireTimeAsync_on_redis_v7()
+    public async Task GetCacheEntry_reads_value_and_expire_time_in_one_script_on_redis_v7()
     {
         _version = new(7, 0);
         var expectedValue = _fixture.Create<string>();
         var expectedExpiration = DateTimeOffset.UtcNow.AddMinutes(15);
+        StubReadScript(_serializer.Serialize(expectedValue), expectedExpiration.ToUnixTimeMilliseconds());
+
+        var entry = await Sut.GetCacheEntryAsync<string>(_cacheKey, policy: null, token: testContextAccessor.Current.CancellationToken);
+
+        entry.Value.Should().Be(expectedValue);
+        entry.Expiration.Should().BeCloseTo(expectedExpiration, TimeSpan.FromMilliseconds(1));
+        _database.DidNotReceive().CreateTransaction();
+    }
+
+    [Fact]
+    public async Task GetCacheEntry_misses_when_the_script_finds_no_key_v7()
+    {
+        _version = new(7, 0);
+        _database.ScriptEvaluateReadOnlyAsync(Arg.Any<string>(), Arg.Any<RedisKey[]?>(), Arg.Any<RedisValue[]?>(), Arg.Any<CommandFlags>())
+            .Returns(RedisResult.Create(RedisValue.Null));
+
+        var entry = await Sut.GetCacheEntryAsync<string>(_cacheKey, policy: null, token: testContextAccessor.Current.CancellationToken);
+
+        entry.Found.Should().BeFalse();
+        MissCount.Should().Be(1);
+    }
+
+    [Fact]
+    public async Task GetCacheEntry_falls_back_to_a_transaction_for_good_when_scripts_are_denied_v7()
+    {
+        _version = new(7, 0);
+        var expectedValue = _fixture.Create<string>();
+        var expectedExpiration = DateTimeOffset.UtcNow.AddMinutes(15);
+        _database.ScriptEvaluateReadOnlyAsync(Arg.Any<string>(), Arg.Any<RedisKey[]?>(), Arg.Any<RedisValue[]?>(), Arg.Any<CommandFlags>())
+            .ThrowsAsync(new RedisServerException(RedisErrorKind.None, CommandFlags.None, "NOPERM this user has no permissions to run the 'eval_ro' command"));
         _transaction.StringGetAsync(_redisKey, CommandFlags.PreferReplica)
             .Returns(_serializer.Serialize(expectedValue));
         _transaction.KeyExpireTimeAsync(_redisKey, CommandFlags.PreferReplica)
             .Returns(expectedExpiration.UtcDateTime);
         _transaction.ExecuteAsync(Arg.Any<CommandFlags>()).Returns(true);
 
-        var entry = await Sut.GetCacheEntryAsync<string>(_cacheKey, policy: null, token: testContextAccessor.Current.CancellationToken);
+        var first = await Sut.GetCacheEntryAsync<string>(_cacheKey, policy: null, token: testContextAccessor.Current.CancellationToken);
+        var second = await Sut.GetCacheEntryAsync<string>(_cacheKey, policy: null, token: testContextAccessor.Current.CancellationToken);
 
-        entry.Value.Should().Be(expectedValue);
-        entry.Expiration.Should().BeCloseTo(expectedExpiration, TimeSpan.FromSeconds(1));
-        await _transaction.Received(1).KeyExpireTimeAsync(_redisKey, Arg.Any<CommandFlags>());
-        await _transaction.DidNotReceive().KeyTimeToLiveAsync(_redisKey, Arg.Any<CommandFlags>());
+        first.Value.Should().Be(expectedValue);
+        second.Value.Should().Be(expectedValue);
+        first.Expiration.Should().BeCloseTo(expectedExpiration, TimeSpan.FromSeconds(1));
+        await _database.Received(1).ScriptEvaluateReadOnlyAsync(Arg.Any<string>(), Arg.Any<RedisKey[]?>(), Arg.Any<RedisValue[]?>(), Arg.Any<CommandFlags>());
+        _database.Received(2).CreateTransaction();
+    }
+
+    [Fact]
+    public void Read_scripts_are_opt_in() => new RedisCacheOptions().ReadScriptsEnabled.Should().BeFalse();
+
+    [Fact]
+    public async Task GetCacheEntry_uses_a_transaction_when_read_scripts_are_turned_off_v7()
+    {
+        _version = new(7, 0);
+        _cacheOptions.ReadScriptsEnabled = false;
+        _transaction.StringGetAsync(_redisKey, CommandFlags.PreferReplica).Returns(RedisValue.Null);
+        _transaction.ExecuteAsync(Arg.Any<CommandFlags>()).Returns(true);
+
+        (await Sut.GetCacheEntryAsync<string>(_cacheKey, policy: null, token: testContextAccessor.Current.CancellationToken)).Found.Should().BeFalse();
+
+        _database.Received(1).CreateTransaction();
+        await _database.DidNotReceive().ScriptEvaluateReadOnlyAsync(Arg.Any<string>(), Arg.Any<RedisKey[]?>(), Arg.Any<RedisValue[]?>(), Arg.Any<CommandFlags>());
+    }
+
+    [Fact]
+    public async Task GetCacheEntry_keeps_scripts_after_a_timeout_once_a_script_has_worked_v7()
+    {
+        _version = new(7, 0);
+        var expectedValue = _fixture.Create<string>();
+        var hit = RedisResult.Create([RedisResult.Create((RedisValue)_serializer.Serialize(expectedValue)), RedisResult.Create((RedisValue)(-1))]);
+        _database.ScriptEvaluateReadOnlyAsync(Arg.Any<string>(), Arg.Any<RedisKey[]?>(), Arg.Any<RedisValue[]?>(), Arg.Any<CommandFlags>())
+            .Returns(
+                Task.FromResult(hit),
+                Task.FromException<RedisResult>(new RedisTimeoutException(CommandFlags.None, "timed out", CommandStatus.Sent)),
+                Task.FromResult(hit));
+
+        var first = await Sut.GetCacheEntryAsync<string>(_cacheKey, policy: null, token: testContextAccessor.Current.CancellationToken);
+        var second = await Sut.GetCacheEntryAsync<string>(_cacheKey, policy: null, token: testContextAccessor.Current.CancellationToken);
+        var third = await Sut.GetCacheEntryAsync<string>(_cacheKey, policy: null, token: testContextAccessor.Current.CancellationToken);
+
+        first.Value.Should().Be(expectedValue);
+        second.Found.Should().BeFalse();
+        third.Value.Should().Be(expectedValue);
+        _database.DidNotReceive().CreateTransaction();
+    }
+
+    [Theory]
+    [InlineData("ERR unsupported by this proxy")]
+    [InlineData("timeout")]
+    public async Task GetCacheEntry_falls_back_to_a_transaction_for_good_when_the_first_script_fails_for_any_reason_v7(string failure)
+    {
+        _version = new(7, 0);
+        var expectedValue = _fixture.Create<string>();
+        Exception error = failure == "timeout"
+            ? new RedisTimeoutException(CommandFlags.None, "timed out", CommandStatus.Sent)
+            : new RedisServerException(RedisErrorKind.None, CommandFlags.None, failure);
+        _database.ScriptEvaluateReadOnlyAsync(Arg.Any<string>(), Arg.Any<RedisKey[]?>(), Arg.Any<RedisValue[]?>(), Arg.Any<CommandFlags>())
+            .ThrowsAsync(error);
+        _transaction.StringGetAsync(_redisKey, CommandFlags.PreferReplica).Returns(_serializer.Serialize(expectedValue));
+        _transaction.KeyExpireTimeAsync(_redisKey, CommandFlags.PreferReplica).Returns(DateTime.UtcNow.AddMinutes(5));
+        _transaction.ExecuteAsync(Arg.Any<CommandFlags>()).Returns(true);
+
+        var first = await Sut.GetCacheEntryAsync<string>(_cacheKey, policy: null, token: testContextAccessor.Current.CancellationToken);
+        var second = await Sut.GetCacheEntryAsync<string>(_cacheKey, policy: null, token: testContextAccessor.Current.CancellationToken);
+
+        first.Value.Should().Be(expectedValue);
+        second.Value.Should().Be(expectedValue);
+        await _database.Received(1).ScriptEvaluateReadOnlyAsync(Arg.Any<string>(), Arg.Any<RedisKey[]?>(), Arg.Any<RedisValue[]?>(), Arg.Any<CommandFlags>());
+        _database.Received(2).CreateTransaction();
+    }
+
+    [Fact]
+    public async Task GetCacheEntry_falls_back_to_a_transaction_when_the_script_command_is_unknown_v7()
+    {
+        _version = new(7, 0);
+        _database.ScriptEvaluateReadOnlyAsync(Arg.Any<string>(), Arg.Any<RedisKey[]?>(), Arg.Any<RedisValue[]?>(), Arg.Any<CommandFlags>())
+            .ThrowsAsync(new RedisCommandException("This operation has been disabled in the command-map and cannot be used: EVAL_RO"));
+        _transaction.StringGetAsync(_redisKey, CommandFlags.PreferReplica).Returns(RedisValue.Null);
+        _transaction.ExecuteAsync(Arg.Any<CommandFlags>()).Returns(true);
+
+        (await Sut.GetCacheEntryAsync<string>(_cacheKey, policy: null, token: testContextAccessor.Current.CancellationToken)).Found.Should().BeFalse();
+
+        _database.Received(1).CreateTransaction();
     }
 
     [Fact]
@@ -620,11 +730,7 @@ public class RedisCacheTests(ITestContextAccessor testContextAccessor) : IAsyncL
         _version = new(7, 0);
         var expectedValue = _fixture.Create<string>();
         _cacheOptions.DefaultExpiration = TimeSpan.FromHours(1);
-        _transaction.StringGetAsync(_redisKey, CommandFlags.PreferReplica)
-            .Returns(_serializer.Serialize(expectedValue));
-        _transaction.KeyExpireTimeAsync(_redisKey, CommandFlags.PreferReplica)
-            .Returns(default(DateTime?));
-        _transaction.ExecuteAsync(Arg.Any<CommandFlags>()).Returns(true);
+        StubReadScript(_serializer.Serialize(expectedValue), -1);
 
         var entry = await Sut.GetCacheEntryAsync<string>(_cacheKey, policy: null, token: testContextAccessor.Current.CancellationToken);
 
@@ -638,11 +744,7 @@ public class RedisCacheTests(ITestContextAccessor testContextAccessor) : IAsyncL
         _version = new(7, 0);
         var expectedValue = _fixture.Create<string>();
         _cacheOptions.DefaultExpiration = null;
-        _transaction.StringGetAsync(_redisKey, CommandFlags.PreferReplica)
-            .Returns(_serializer.Serialize(expectedValue));
-        _transaction.KeyExpireTimeAsync(_redisKey, CommandFlags.PreferReplica)
-            .Returns(default(DateTime?));
-        _transaction.ExecuteAsync(Arg.Any<CommandFlags>()).Returns(true);
+        StubReadScript(_serializer.Serialize(expectedValue), -1);
 
         var entry = await Sut.GetCacheEntryAsync<string>(_cacheKey, policy: null, token: testContextAccessor.Current.CancellationToken);
 
@@ -721,11 +823,37 @@ public class RedisCacheTests(ITestContextAccessor testContextAccessor) : IAsyncL
     }
 
     [Fact]
-    public async Task GetCacheEntries_uses_KeyExpireTimeAsync_on_redis_v7()
+    public async Task GetCacheEntries_reads_values_and_expirations_with_one_script_v7()
     {
         _version = new(7, 0);
         var expected = _fixture.Create<string>();
         var expectedExpiration = DateTimeOffset.UtcNow.AddMinutes(15);
+        _database.ScriptEvaluateReadOnlyAsync(Arg.Any<string>(), Arg.Is<RedisKey[]?>(k => k != null && k.Length == 2), Arg.Any<RedisValue[]?>(), CommandFlags.PreferReplica)
+            .Returns(RedisResult.Create(
+            [
+                RedisResult.Create((RedisValue)_serializer.Serialize(expected)),
+                RedisResult.Create((RedisValue)expectedExpiration.ToUnixTimeMilliseconds()),
+                RedisResult.Create(RedisValue.Null, ResultType.BulkString),
+                RedisResult.Create((RedisValue)(-2)),
+            ]));
+
+        var entries = await Sut.GetCacheEntriesAsync<string>(new CacheKey[] { _cacheKey, _multiKey }, policy: null, token: testContextAccessor.Current.CancellationToken);
+
+        entries.Should().HaveCount(2);
+        entries[0].Value.Value.Should().Be(expected);
+        entries[0].Value.Expiration.Should().BeCloseTo(expectedExpiration, TimeSpan.FromMilliseconds(1));
+        entries[1].Value.Found.Should().BeFalse();
+        _database.DidNotReceive().CreateTransaction();
+    }
+
+    [Fact]
+    public async Task GetCacheEntries_falls_back_to_a_transaction_when_scripts_are_denied_v7()
+    {
+        _version = new(7, 0);
+        var expected = _fixture.Create<string>();
+        var expectedExpiration = DateTimeOffset.UtcNow.AddMinutes(15);
+        _database.ScriptEvaluateReadOnlyAsync(Arg.Any<string>(), Arg.Any<RedisKey[]?>(), Arg.Any<RedisValue[]?>(), Arg.Any<CommandFlags>())
+            .ThrowsAsync(new RedisServerException(RedisErrorKind.None, CommandFlags.None, "NOPERM this user has no permissions to run the 'eval_ro' command"));
         _transaction.StringGetAsync(Arg.Is<RedisKey[]>(k => k != null && k.Contains(_redisKey) && k.Contains(_redisMultiKey)), CommandFlags.PreferReplica)
             .Returns(new RedisValue[] { _serializer.Serialize(expected), _serializer.Serialize(expected) });
         _transaction.KeyExpireTimeAsync(Arg.Any<RedisKey>(), CommandFlags.PreferReplica)
@@ -734,12 +862,9 @@ public class RedisCacheTests(ITestContextAccessor testContextAccessor) : IAsyncL
 
         var entries = await Sut.GetCacheEntriesAsync<string>(new CacheKey[] { _cacheKey, _multiKey }, policy: null, token: testContextAccessor.Current.CancellationToken);
 
-        entries.Should().HaveCount(2);
-        entries[0].Value.Value.Should().Be(expected);
-        entries[1].Value.Value.Should().Be(expected);
+        entries.Should().AllSatisfy(kv => kv.Value.Value.Should().Be(expected));
         entries[0].Value.Expiration.Should().BeCloseTo(expectedExpiration, TimeSpan.FromSeconds(1));
         await _transaction.Received(1).KeyExpireTimeAsync(_redisKey, Arg.Any<CommandFlags>());
-        await _transaction.Received(1).KeyExpireTimeAsync(_redisMultiKey, Arg.Any<CommandFlags>());
         await _transaction.DidNotReceive().KeyTimeToLiveAsync(Arg.Any<RedisKey>(), Arg.Any<CommandFlags>());
     }
 
@@ -2099,6 +2224,7 @@ public class RedisCacheTests(ITestContextAccessor testContextAccessor) : IAsyncL
         {
             CacheKeyStrategy = _cacheKeyStrategy,
             RedisKeyStrategyFactory = redisKeyStrategyFactory,
+            ReadScriptsEnabled = true,
         };
 
         _database = _fixture.Freeze<IDatabase>();
@@ -2131,6 +2257,10 @@ public class RedisCacheTests(ITestContextAccessor testContextAccessor) : IAsyncL
 
         await Sut.GetCacheEntryAsync<string>(_cacheKey, policy: null, token: testContextAccessor.Current.CancellationToken);
     }
+
+    private void StubReadScript(RedisValue value, long expireAtMilliseconds) =>
+        _database.ScriptEvaluateReadOnlyAsync(Arg.Any<string>(), Arg.Is<RedisKey[]?>(k => k != null && k.Length == 1 && k[0] == _redisKey), Arg.Any<RedisValue[]?>(), CommandFlags.PreferReplica)
+            .Returns(RedisResult.Create([RedisResult.Create(value), RedisResult.Create((RedisValue)expireAtMilliseconds)]));
 
     private void GiveKeysDifferentSlots()
     {

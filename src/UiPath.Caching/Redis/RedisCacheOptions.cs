@@ -30,6 +30,14 @@ public class RedisCacheOptions : ICacheOptions
     /// </summary>
     public bool AwaitRefresh { get; set; }
 
+    /// <summary>
+    /// Read a value and its expiration with one read-only script (<c>EVAL_RO</c>) on Redis 7 and later, which allocates
+    /// less than a MULTI/EXEC transaction. Off by default: the server must allow scripts. Once on, reads switch back to the
+    /// transaction for good, with a warning, if the first script fails for any reason, or later if the server refuses one
+    /// as unknown or not permitted.
+    /// </summary>
+    public bool ReadScriptsEnabled { get; set; }
+
     /// <summary>Member-wise copy, so a caller can vary one setting without mutating the DI singleton.</summary>
     internal RedisCacheOptions ShallowCopy() => (RedisCacheOptions)MemberwiseClone();
 }

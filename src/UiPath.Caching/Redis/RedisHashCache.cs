@@ -7,8 +7,12 @@ namespace UiPath.Caching.Redis;
 
 internal sealed partial class RedisHashCache : RedisCacheBase, IHashCache
 {
+    /// <summary>All fields and the absolute expiration in one atomic read-only call.</summary>
+    private const string ReadWithExpirationScript = "return {redis.call('HGETALL', KEYS[1]), redis.call('PEXPIRETIME', KEYS[1])}";
+
     private readonly ILogger<RedisHashCache> _logger;
     private readonly Action<Exception> _logFailure;
+    private readonly Action<Exception> _logReadScriptUnavailable;
     private readonly ISerializerProxy<byte[]> _serializer;
     private readonly IMemorySerializerProxy? _memorySerializer;
     private readonly ICacheEntryFactory _cacheEntryFactory;
@@ -36,6 +40,7 @@ internal sealed partial class RedisHashCache : RedisCacheBase, IHashCache
         _memorySerializer = serializer as IMemorySerializerProxy;
         _logger = logger;
         _logFailure = LogRedisHashCacheException;
+        _logReadScriptUnavailable = LogReadScriptUnavailable;
         _read = new ConnectingPipeline(redis, resiliencePipelineProvider.Get(ResiliencePipelineNames.Read));
         _write = new ConnectingPipeline(redis, resiliencePipelineProvider.Get(ResiliencePipelineNames.Write));
         _cacheOptions = cacheOptions;
@@ -367,6 +372,21 @@ internal sealed partial class RedisHashCache : RedisCacheBase, IHashCache
 
     private static ImmutableDictionary<string, T?> Empty<T>() => ImmutableDictionary<string, T?>.Empty;
 
+    private static (HashEntry[] Entries, DateTimeOffset? Expiration) ReadReply(RedisResult reply)
+    {
+        var parts = ((RedisResult[]?)reply)!;
+        var fields = ((RedisValue[]?)parts[0])!;
+        var entries = new HashEntry[fields.Length / 2];
+        for (var i = 0; i < entries.Length; i++)
+        {
+            entries[i] = new HashEntry(fields[2 * i], fields[(2 * i) + 1]);
+        }
+
+        var expireAt = (long)parts[1];
+        // PEXPIRETIME answers -1 for a key without a TTL and -2 for a missing one.
+        return (entries, expireAt < 0 ? null : DateTimeOffset.FromUnixTimeMilliseconds(expireAt));
+    }
+
     private static void Release(SerializedPayload[] payloads)
     {
         foreach (var payload in payloads)
@@ -604,6 +624,12 @@ internal sealed partial class RedisHashCache : RedisCacheBase, IHashCache
         var committed = await _read.ExecuteAsync(static async (s, token) =>
         {
             token.ThrowIfCancellationRequested();
+            if (await s.Self.TryReadScriptAsync(ReadWithExpirationScript, [s.Key], s.Self._logReadScriptUnavailable).ConfigureAwait(false) is { } reply)
+            {
+                Interlocked.CompareExchange(ref s.Read.Value, new(ReadReply(reply)), null);
+                return true;
+            }
+
             var transaction = s.Self.Database.CreateTransaction();
             var hashEntriesTask = transaction.HashGetAllAsync(s.Key, CommandFlags.PreferReplica);
             Task<DateTime?>? expireTimeTask = s.Self.SupportsExpireTime ? transaction.KeyExpireTimeAsync(s.Key, CommandFlags.PreferReplica) : null;
@@ -1027,6 +1053,9 @@ internal sealed partial class RedisHashCache : RedisCacheBase, IHashCache
 
     [LoggerMessage(Level = LogLevel.Trace, Message = "Refreshing key {RedisKey} at expiration {LocalExpiration}")]
     private partial void LogRefreshingKey(LoggedKey redisKey, DateTimeOffset localExpiration);
+
+    [LoggerMessage(Level = LogLevel.Warning, Message = "Scripts are unavailable; hash cache reads now use a transaction")]
+    private partial void LogReadScriptUnavailable(Exception ex);
 
     [LoggerMessage(Level = LogLevel.Warning, Message = "RedisHashCache exception.")]
     private partial void LogRedisHashCacheException(Exception ex);

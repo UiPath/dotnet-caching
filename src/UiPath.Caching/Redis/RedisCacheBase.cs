@@ -15,6 +15,10 @@ public abstract class RedisCacheBase : IConnectionState, IDisposable
     private readonly RedisKey _keyPrefixKey;
     private readonly ConnectorKeyPrefix _connectorPrefix;
     private bool? _supportsExpireTime;
+    // Set once scripts turn out to be disabled or denied on this server; reads then use a transaction.
+    private bool _noReadScript;
+    // Set by the first script that succeeds; until then any failure of a script turns scripts off.
+    private bool _readScriptWorked;
     private bool _disposed;
 
     protected RedisCacheBase(
@@ -41,6 +45,7 @@ public abstract class RedisCacheBase : IConnectionState, IDisposable
         DefaultExpiration = DefaultPolicy.DistributedExpiration;
         Clock = clock;
         KeyReadTelemetryEnabled = redisCacheOptions.KeyReadTelemetryEnabled;
+        _noReadScript = !redisCacheOptions.ReadScriptsEnabled;
         RefreshFlags = redisCacheOptions.AwaitRefresh
             ? CommandFlags.DemandMaster
             : CommandFlags.DemandMaster | CommandFlags.FireAndForget;
@@ -232,6 +237,34 @@ public abstract class RedisCacheBase : IConnectionState, IDisposable
         }
 
         return SupportsExpireTime;
+    }
+
+    /// <summary>
+    /// Runs a read-only script when the server has PEXPIRETIME (Redis 7) and has not refused scripts; a MULTI/EXEC pair allocates about three times as much per read in StackExchange.Redis.
+    /// Null tells the caller to read with a transaction: scripts are off, or the server just refused one, which turns them off for good.
+    /// Until one script has succeeded, any failure counts as a refusal, so a server or proxy that cannot run them, whatever it answers, never turns reads into misses;
+    /// after that, only a refusal (unknown or not permitted) does, and other errors propagate to the read pipeline.
+    /// </summary>
+    [AsyncMethodBuilder(typeof(PoolingAsyncValueTaskMethodBuilder<>))]
+    private protected async ValueTask<RedisResult?> TryReadScriptAsync(string script, RedisKey[] keys, Action<Exception> logUnavailable)
+    {
+        if (!SupportsExpireTime || _noReadScript)
+        {
+            return null;
+        }
+
+        try
+        {
+            var reply = await Database.ScriptEvaluateReadOnlyAsync(script, keys, flags: CommandFlags.PreferReplica).ConfigureAwait(false);
+            _readScriptWorked = true;
+            return reply;
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException && (!_readScriptWorked || RedisUtils.IsUnsupportedCommand(ex) || RedisUtils.IsDenied(ex)))
+        {
+            _noReadScript = true;
+            logUnavailable(ex);
+            return null;
+        }
     }
 
     /// <summary>The key as a log line should show it. Nothing is rendered unless the line is written.</summary>

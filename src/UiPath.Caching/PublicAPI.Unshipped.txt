@@ -6,6 +6,8 @@ UiPath.Caching.Broadcast.MissedEventsReason
 UiPath.Caching.Broadcast.MissedEventsReason.Lost = 0 -> UiPath.Caching.Broadcast.MissedEventsReason
 UiPath.Caching.Broadcast.MissedEventsReason.SubscriptionGap = 1 -> UiPath.Caching.Broadcast.MissedEventsReason
 UiPath.Caching.Redis.RedisCacheBase.SupportsExpireTime.get -> bool
+UiPath.Caching.Redis.RedisCacheOptions.ReadScriptsEnabled.get -> bool
+UiPath.Caching.Redis.RedisCacheOptions.ReadScriptsEnabled.set -> void
 *REMOVED*UiPath.Caching.Redis.PrefixRedisKeyStrategy.Prefix.set -> void
 *REMOVED*UiPath.Caching.Redis.PrefixRedisKeyStrategy.Separator.set -> void
 *REMOVED*UiPath.Caching.Redis.RedisCacheBase.TrackRead(UiPath.Caching.Telemetry.ITelemetryOperation! operation, bool hit, StackExchange.Redis.RedisKey key) -> void
