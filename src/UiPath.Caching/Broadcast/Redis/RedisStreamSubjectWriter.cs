@@ -137,14 +137,6 @@ internal sealed partial class RedisStreamSubjectWriter<T> : IDisposable
         _onMessagesMissed();
     }
 
-    private static bool IsDenied(Exception ex) =>
-        ex is RedisServerException && ex.Message.StartsWith("NOPERM", StringComparison.OrdinalIgnoreCase);
-
-    private static bool IsUnsupportedCommand(Exception ex) =>
-        ex is RedisCommandException ||
-        (ex is RedisServerException &&
-         ex.Message.Contains(StreamConstants.UnknownCommandErrorMessage, StringComparison.OrdinalIgnoreCase));
-
     private void ReportMessagesMissed()
     {
         LogMessagesMissed(_context.Topic, _context.ConsumerGroup);
@@ -284,7 +276,7 @@ internal sealed partial class RedisStreamSubjectWriter<T> : IDisposable
             return false;
         }
 
-        if (IsUnsupportedCommand(ex))
+        if (RedisUtils.IsUnsupportedCommand(ex))
         {
             if (!_unsupportedCommand)
             {
@@ -388,7 +380,7 @@ internal sealed partial class RedisStreamSubjectWriter<T> : IDisposable
             // A missing stream fails the read with NOGROUP, which reports the loss.
             return await ReadAsync().ConfigureAwait(false);
         }
-        catch (Exception ex) when (IsUnsupportedCommand(ex) || IsDenied(ex))
+        catch (Exception ex) when (RedisUtils.IsUnsupportedCommand(ex) || RedisUtils.IsDenied(ex))
         {
             // Scripts are off on this server: check and read apart from now on.
             LogScriptsUnavailable(ex, _context.Topic);
@@ -420,7 +412,7 @@ internal sealed partial class RedisStreamSubjectWriter<T> : IDisposable
             // A missing stream fails the read with NOGROUP, which reports the loss.
             return;
         }
-        catch (Exception ex) when (IsUnsupportedCommand(ex) || IsDenied(ex))
+        catch (Exception ex) when (RedisUtils.IsUnsupportedCommand(ex) || RedisUtils.IsDenied(ex))
         {
             // XINFO is denied or renamed away, so a loss cannot be ruled out: report one rather than retry a check that cannot succeed.
             LogGapCheckDenied(ex, _context.Topic);
