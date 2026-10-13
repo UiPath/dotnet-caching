@@ -6,6 +6,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 
 ## [Unreleased]
 
+## [3.0.0] - 2026-10-13
+
 ### Added
 
 - **Reads by `Span<char>`.** `SpanKeyExtensions` adds `GetAsync`, `ContainsAsync` and `GetOrAddAsync` over `ICache`,
@@ -75,6 +77,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
   that never reads an expiration, such as `RedisSetCache`, does not connect.
 
 ### Changed
+
+- **Dependency floors.** What a consumer's restore has to satisfy, taken from `Directory.Packages.props`:
+
+  | Package | 2.1.0 | 3.0.0 |
+  |---|---|---|
+  | `StackExchange.Redis` (`UiPath.Caching`, `UiPath.Caching.Queue`) | 3.3.0 | 3.3.1 |
+  | `AsyncKeyedLock` (`UiPath.Caching`) | 8.1.2 | no longer referenced |
+
+  The `Microsoft.Extensions.*`, Polly and `Microsoft.Azure.StackExchangeRedis` floors are unchanged.
 
 - **`RedisCacheOptions.ReadScriptsEnabled` reads with one read-only script.** Opt-in, off by default. On Redis 7
   or later, `RedisCache` and `RedisHashCache` then read a value (or all hash fields) and its expiration with one

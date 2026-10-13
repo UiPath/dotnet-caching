@@ -393,9 +393,6 @@ UiPath.Caching.Locking.NullDistributedLock
 UiPath.Caching.Locking.NullDistributedLock.AcquireAsync(string! key, System.TimeSpan expiry, System.TimeSpan waitTimeout, System.Threading.CancellationToken token) -> System.Threading.Tasks.ValueTask<System.IAsyncDisposable!>
 UiPath.Caching.Locking.NullDistributedLock.NullDistributedLock() -> void
 UiPath.Caching.Locking.NullDistributedLock.TryAcquireAsync(string! key, System.TimeSpan expiry, System.Threading.CancellationToken token) -> System.Threading.Tasks.ValueTask<System.IAsyncDisposable?>
-UiPath.Caching.Locking.NullLocalLock
-UiPath.Caching.Locking.NullLocalLock.AcquireAsync(string! key, System.Threading.CancellationToken token) -> System.Threading.Tasks.ValueTask<System.IDisposable!>
-UiPath.Caching.Locking.NullLocalLock.NullLocalLock() -> void
 UiPath.Caching.MemoryCacheExtensions
 UiPath.Caching.MemoryCacheFactory
 UiPath.Caching.MemoryCacheFactory.Get(UiPath.Caching.IMemoryCacheOptions! memoryOptions) -> Microsoft.Extensions.Caching.Memory.IMemoryCache!
@@ -465,10 +462,8 @@ UiPath.Caching.Redis.NullRedisProfiler.GetSession() -> StackExchange.Redis.Profi
 UiPath.Caching.Redis.NullRedisProfiler.NullRedisProfiler() -> void
 UiPath.Caching.Redis.PrefixRedisKeyStrategy
 UiPath.Caching.Redis.PrefixRedisKeyStrategy.Prefix.get -> string!
-UiPath.Caching.Redis.PrefixRedisKeyStrategy.Prefix.set -> void
 UiPath.Caching.Redis.PrefixRedisKeyStrategy.PrefixRedisKeyStrategy(string! prefix, char separator) -> void
 UiPath.Caching.Redis.PrefixRedisKeyStrategy.Separator.get -> char
-UiPath.Caching.Redis.PrefixRedisKeyStrategy.Separator.set -> void
 UiPath.Caching.Redis.ProfileInfo
 UiPath.Caching.Redis.ProfileInfo.<Clone>$() -> UiPath.Caching.Redis.ProfileInfo!
 UiPath.Caching.Redis.ProfileInfo.Commands.get -> System.Collections.Generic.IEnumerable<StackExchange.Redis.Profiling.IProfiledCommand!>!
@@ -498,7 +493,6 @@ UiPath.Caching.Redis.RedisCacheBase.OnConnectionFailed -> System.EventHandler?
 UiPath.Caching.Redis.RedisCacheBase.OnConnectionRestored -> System.EventHandler?
 UiPath.Caching.Redis.RedisCacheBase.OnReconnected -> System.EventHandler?
 UiPath.Caching.Redis.RedisCacheBase.Telemetry.get -> UiPath.Caching.Telemetry.ICachingTelemetryProvider!
-UiPath.Caching.Redis.RedisCacheBase.TrackRead(UiPath.Caching.Telemetry.ITelemetryOperation! operation, bool hit, StackExchange.Redis.RedisKey key) -> void
 UiPath.Caching.Redis.RedisCacheOptions
 UiPath.Caching.Redis.RedisCacheOptions.CacheKeyStrategy.get -> UiPath.Caching.ICacheKeyStrategy?
 UiPath.Caching.Redis.RedisCacheOptions.CacheKeyStrategy.set -> void
@@ -677,7 +671,6 @@ static UiPath.Caching.Config.InMemoryCollectionExtensions.AddMemory(this UiPath.
 static UiPath.Caching.Config.InMemoryCollectionExtensions.AddMemory(this UiPath.Caching.Config.ICachingBuilder! builder, string! sectionName = "InMemory") -> UiPath.Caching.Config.ICachingBuilder!
 static UiPath.Caching.Config.InMemoryRedisCollectionExtensions.AddInMemoryRedis(this UiPath.Caching.Config.ICachingBuilder! builder, System.Action<UiPath.Caching.InMemoryRedisCacheOptions!>! configure) -> UiPath.Caching.Config.ICachingBuilder!
 static UiPath.Caching.Config.InMemoryRedisCollectionExtensions.AddInMemoryRedis(this UiPath.Caching.Config.ICachingBuilder! builder, string! sectionName = "InMemoryRedis") -> UiPath.Caching.Config.ICachingBuilder!
-static UiPath.Caching.Config.LockCollectionExtensions.AddLocalLock(this UiPath.Caching.Config.ICachingBuilder! builder) -> UiPath.Caching.Config.ICachingBuilder!
 static UiPath.Caching.Config.LockCollectionExtensions.AddRedisDistributedLock(this UiPath.Caching.Config.ICachingBuilder! builder) -> UiPath.Caching.Config.ICachingBuilder!
 static UiPath.Caching.Config.RedisCollectionExtensions.AddIRedisPlannedMaintenance(this UiPath.Caching.Config.ICachingBuilder! builder, bool enabled) -> UiPath.Caching.Config.ICachingBuilder!
 static UiPath.Caching.Config.RedisCollectionExtensions.AddRedis(this UiPath.Caching.Config.ICachingBuilder! builder, System.Action<UiPath.Caching.Redis.RedisCacheOptions!>! configure) -> UiPath.Caching.Config.ICachingBuilder!
@@ -731,7 +724,6 @@ static UiPath.Caching.Redis.ProfiledCommandProcessor.UnknownTarget.get -> string
 static UiPath.Caching.Redis.ProfiledCommandProcessor.UnknownTarget.set -> void
 static UiPath.Caching.TypeExtensions.GetAllPublicConstantValues<T>(this System.Type! type) -> System.Collections.Generic.List<T>!
 static readonly UiPath.Caching.Locking.NullDistributedLock.Instance -> UiPath.Caching.Locking.NullDistributedLock!
-static readonly UiPath.Caching.Locking.NullLocalLock.Instance -> UiPath.Caching.Locking.NullLocalLock!
 static readonly UiPath.Caching.Redis.NullConnectionStateMonitor.Instance -> UiPath.Caching.Redis.NullConnectionStateMonitor!
 static readonly UiPath.Caching.Redis.NullRedisProfiler.Instance -> UiPath.Caching.Redis.NullRedisProfiler!
 virtual UiPath.Caching.Broadcast.Redis.RedisTopicProviderBase.Dispose(bool disposing) -> void
@@ -838,10 +830,7 @@ static readonly UiPath.Caching.Logging.NullKeyMaskingPolicy.Instance -> UiPath.C
 ~override UiPath.Caching.Logging.MaskingContext.ToString() -> string
 UiPath.Caching.Redis.RedisCacheBase.RedisCacheBase(UiPath.Caching.Redis.IRedisConnector! redis, UiPath.Caching.Telemetry.ICachingTelemetryProvider! telemetryProvider, UiPath.Caching.Redis.RedisCacheOptions! redisCacheOptions, UiPath.Caching.CacheOptions! cacheOptions, UiPath.Caching.ICachePolicyFactory! policyFactory, System.TimeProvider! clock, UiPath.Caching.Logging.IKeyMaskingPolicy? keyMaskingPolicy = null) -> void
 UiPath.Caching.Redis.RedisCacheProvider.RedisCacheProvider(Microsoft.Extensions.Options.IOptions<UiPath.Caching.Redis.RedisCacheOptions!>! redisCacheOptions, Microsoft.Extensions.Options.IOptions<UiPath.Caching.CacheOptions!>! cacheOptions, UiPath.Caching.Redis.IRedisConnector! redis, UiPath.Caching.ISerializerProxy<byte[]!>! serializerProxy, UiPath.Caching.Policies.IResiliencePipelineProvider! resiliencePipelineProvider, UiPath.Caching.Telemetry.ICachingTelemetryProvider! cachingTelemetryProvider, Microsoft.Extensions.Logging.ILoggerFactory! loggerFactory, UiPath.Caching.ICachePolicyFactory! policyFactory, System.TimeProvider! clock, UiPath.Caching.Logging.IKeyMaskingPolicy? keyMaskingPolicy = null) -> void
-UiPath.Caching.MultilayerCacheBase.MultilayerCacheBase(string! cacheName, object! innerCache, UiPath.Caching.IMemoryCacheFactory! memoryCacheFactory, UiPath.Caching.Broadcast.ITopicFactory! topicFactory, UiPath.Caching.Broadcast.ICacheEventFactory! cacheEventFactory, UiPath.Caching.Telemetry.ICachingTelemetryProvider! telemetryProvider, UiPath.Caching.IMultilayerCacheOptions! multiLayerCacheOptions, UiPath.Caching.IMemoryCacheOptions! memoryOptions, UiPath.Caching.CacheOptions! cacheOptions, UiPath.Caching.Locking.ILocalLock! localLock, UiPath.Caching.Locking.IDistributedLock! distributedLock, UiPath.Caching.ICachePolicyFactory! policyFactory, System.TimeProvider! clock, Microsoft.Extensions.Logging.ILogger! logger, UiPath.Caching.Logging.IKeyMaskingPolicy? keyMaskingPolicy = null) -> void
 UiPath.Caching.Broadcast.ChangeTokenFactory<T>.ChangeTokenFactory(Microsoft.Extensions.Options.IOptions<UiPath.Caching.CacheOptions!>! optionsAccessor, UiPath.Caching.ISerializerProxy<T>! serializer, Microsoft.Extensions.Logging.ILoggerFactory! loggerFactory, UiPath.Caching.Telemetry.ICachingTelemetryProvider! telemetryProvider, UiPath.Caching.Logging.IKeyMaskingPolicy? keyMaskingPolicy) -> void
-UiPath.Caching.InMemoryCacheProvider.InMemoryCacheProvider(Microsoft.Extensions.Options.IOptions<UiPath.Caching.InMemoryCacheOptions!>! optionsAccessor, Microsoft.Extensions.Options.IOptions<UiPath.Caching.CacheOptions!>! cacheOptionsAccessor, UiPath.Caching.IMemoryCacheFactory! memoryCacheFactory, UiPath.Caching.Broadcast.ICacheEventFactory! cacheEventFactory, UiPath.Caching.Broadcast.IChangeTokenFactory! changeTokenFactory, UiPath.Caching.Broadcast.ITopicFactory! topicFactory, UiPath.Caching.Telemetry.ICachingTelemetryProvider! cachingTelemetryProvider, Microsoft.Extensions.Logging.ILoggerFactory! loggerFactory, UiPath.Caching.Locking.ILocalLock! localLock, UiPath.Caching.ICachePolicyFactory! policyFactory, System.TimeProvider! clock, UiPath.Caching.Logging.IKeyMaskingPolicy? keyMaskingPolicy = null) -> void
-UiPath.Caching.InMemoryRedisCacheProvider.InMemoryRedisCacheProvider(Microsoft.Extensions.Options.IOptions<UiPath.Caching.InMemoryRedisCacheOptions!>! optionsAccessor, Microsoft.Extensions.Options.IOptions<UiPath.Caching.CacheOptions!>! cacheOptionsAccessor, UiPath.Caching.IMemoryCacheFactory! memoryCacheFactory, System.Func<UiPath.Caching.ICacheFactory!>! cacheFactoryAccessor, UiPath.Caching.Broadcast.IChangeTokenFactory! changeTokenFactory, UiPath.Caching.Broadcast.ITopicFactory! topicFactory, UiPath.Caching.Broadcast.ICacheEventFactory! cacheEventFactory, UiPath.Caching.Telemetry.ICachingTelemetryProvider! cachingTelemetryProvider, Microsoft.Extensions.Logging.ILoggerFactory! loggerFactory, UiPath.Caching.Locking.ILocalLock! localLock, UiPath.Caching.Locking.IDistributedLock! distributedLock, UiPath.Caching.ICachePolicyFactory! policyFactory, System.TimeProvider! clock, UiPath.Caching.Logging.IKeyMaskingPolicy? keyMaskingPolicy = null) -> void
 UiPath.Caching.ICacheEntryOptions.CallerKey.get -> UiPath.Caching.CacheKey
 UiPath.Caching.CacheEventPublisher.CacheRefreshedAsync(UiPath.Caching.ICacheEntryOptions! options, System.Type? entryType) -> System.Threading.Tasks.ValueTask<bool>
 UiPath.Caching.CacheEventPublisher.CacheRemovedAsync(UiPath.Caching.ICacheEntryOptions! options, System.Type? entryType) -> System.Threading.Tasks.ValueTask<bool>
@@ -877,3 +866,155 @@ UiPath.Caching.Redis.RedisMaintenanceNotifications.Disabled = 0 -> UiPath.Cachin
 UiPath.Caching.Redis.RedisMaintenanceNotifications.Required = 2 -> UiPath.Caching.Redis.RedisMaintenanceNotifications
 UiPath.Caching.Redis.RedisPlannedMaintenance.RedisPlannedMaintenance(UiPath.Caching.Telemetry.ICachingTelemetryProvider! telemetryProvider, UiPath.Caching.Redis.IRedisConnector! redisConnector, System.TimeProvider! clock) -> void
 UiPath.Caching.Redis.RedisPlannedMaintenance.SuggestedTimeout.get -> System.TimeSpan?
+UiPath.Caching.Broadcast.IEventSubject<T>.Invalidate(UiPath.Caching.Broadcast.MissedEventsReason reason) -> void
+UiPath.Caching.Broadcast.IMissedEventsObserver
+UiPath.Caching.Broadcast.IMissedEventsObserver.OnEventsMissed(UiPath.Caching.Broadcast.MissedEventsReason reason) -> void
+UiPath.Caching.Broadcast.MissedEventsReason
+UiPath.Caching.Broadcast.MissedEventsReason.Lost = 0 -> UiPath.Caching.Broadcast.MissedEventsReason
+UiPath.Caching.Broadcast.MissedEventsReason.SubscriptionGap = 1 -> UiPath.Caching.Broadcast.MissedEventsReason
+UiPath.Caching.Redis.RedisCacheBase.SupportsExpireTime.get -> bool
+UiPath.Caching.Redis.RedisCacheOptions.ReadScriptsEnabled.get -> bool
+UiPath.Caching.Redis.RedisCacheOptions.ReadScriptsEnabled.set -> void
+UiPath.Caching.Redis.RedisCacheBase.TrackRead(UiPath.Caching.Telemetry.TelemetryScope operation, bool hit, StackExchange.Redis.RedisKey key) -> void
+UiPath.Caching.Telemetry.TelemetryScope
+UiPath.Caching.Telemetry.TelemetryScope.IsEnabled.get -> bool
+UiPath.Caching.Telemetry.TelemetryScope.Stop() -> void
+UiPath.Caching.Telemetry.TelemetryScope.TelemetryScope() -> void
+UiPath.Caching.Telemetry.TelemetryScope.TelemetryScope(UiPath.Caching.Telemetry.ICachingTelemetryProvider! provider, System.TimeProvider! clock, string! providerName, string! callerMethod, System.Type! cacheObjectType) -> void
+UiPath.Caching.Telemetry.TelemetryScope.Track(bool hit, int keyCount = 1) -> void
+UiPath.Caching.Telemetry.TelemetryScope.TrackKeyReads((string! Key, bool Hit)[]! reads) -> void
+const UiPath.Caching.Telemetry.TelemetryScope.BatchIdTag = "BatchId" -> string!
+const UiPath.Caching.Telemetry.TelemetryScope.DependencyType = "Redis" -> string!
+const UiPath.Caching.Telemetry.TelemetryScope.KeysTag = "Keys" -> string!
+const UiPath.Caching.Telemetry.TelemetryScope.MethodTag = "Method" -> string!
+const UiPath.Caching.Telemetry.TelemetryScope.OutcomeTag = "Outcome" -> string!
+const UiPath.Caching.Telemetry.TelemetryScope.ProviderTag = "Provider" -> string!
+const UiPath.Caching.Telemetry.TelemetryScope.TypeTag = "Type" -> string!
+static UiPath.Caching.Redis.RedisCacheBase.RunAsync<TState, TResult>(UiPath.Caching.Policies.IResiliencePipeline! pipeline, UiPath.Caching.Telemetry.TelemetryScope operation, System.Func<TState, System.Threading.CancellationToken, System.Threading.Tasks.ValueTask<TResult>>! command, TState state, TResult fallback, System.Func<TResult, bool>! isHit, System.Action<System.Exception!>! logFailure, System.Threading.CancellationToken token) -> System.Threading.Tasks.ValueTask<TResult>
+UiPath.Caching.Redis.RedisCacheBase.KeyExpireTimeAsync(UiPath.Caching.Policies.IResiliencePipeline! pipeline, UiPath.Caching.Telemetry.TelemetryScope operation, UiPath.Caching.Redis.IRedisKeyStrategy! keyStrategy, UiPath.Caching.CacheKey cacheKey, System.Action<System.Exception!>! logFailure, System.Threading.CancellationToken token) -> System.Threading.Tasks.ValueTask<System.DateTimeOffset?>
+UiPath.Caching.Redis.RedisCacheBase.KeyTimeToLiveAsync(UiPath.Caching.Policies.IResiliencePipeline! pipeline, UiPath.Caching.Telemetry.TelemetryScope operation, UiPath.Caching.Redis.IRedisKeyStrategy! keyStrategy, UiPath.Caching.CacheKey cacheKey, System.Action<System.Exception!>! logFailure, System.Threading.CancellationToken token) -> System.Threading.Tasks.ValueTask<System.TimeSpan?>
+UiPath.Caching.CacheKeyComparer
+UiPath.Caching.CacheKeyComparer.CacheKeyComparer() -> void
+UiPath.Caching.RawByteSerializerProxy
+UiPath.Caching.RawByteSerializerProxy.RawByteSerializerProxy(System.Text.Json.JsonSerializerOptions? options = null) -> void
+UiPath.Caching.SystemJsonByteSerializerProxy
+UiPath.Caching.SystemJsonByteSerializerProxy.SystemJsonByteSerializerProxy(System.Text.Json.JsonSerializerOptions? options = null) -> void
+UiPath.Caching.SystemJsonByteSerializerProxy.TryDeserialize<T>(object? value, out T? result) -> bool
+UiPath.Caching.SystemJsonByteSerializerProxy.TryDeserialize<T>(string? value, out T? result) -> bool
+UiPath.Caching.Telemetry.TelemetryTags
+override UiPath.Caching.RawByteSerializerProxy.Deserialize<T>(byte[]? value) -> T
+override UiPath.Caching.RawByteSerializerProxy.Serialize(object? value) -> byte[]?
+override UiPath.Caching.RawByteSerializerProxy.SerializeToMemory<T>(T? value) -> System.ReadOnlyMemory<byte>
+static UiPath.Caching.CacheKeyComparer.Insensitive.get -> UiPath.Caching.CacheKeyComparer!
+static UiPath.Caching.CacheKeyComparer.Sensitive.get -> UiPath.Caching.CacheKeyComparer!
+virtual UiPath.Caching.SystemJsonByteSerializerProxy.Deserialize<T>(byte[]? value) -> T?
+virtual UiPath.Caching.SystemJsonByteSerializerProxy.Serialize(object? value) -> byte[]?
+virtual UiPath.Caching.SystemJsonByteSerializerProxy.SerializeToMemory<T>(T? value) -> System.ReadOnlyMemory<byte>
+UiPath.Caching.BatchGetOrAdd
+UiPath.Caching.Cache<T>
+UiPath.Caching.Cache<T>.Cache(UiPath.Caching.ICache! cache, UiPath.Caching.ICacheKeyStrategy? cacheKeyStrategy = null, UiPath.Caching.CachePolicy? policy = null) -> void
+UiPath.Caching.Cache<T>.Cache(UiPath.Caching.ICacheFactory! cacheFactory, UiPath.Caching.ICacheKeyStrategy? cacheKeyStrategy = null, UiPath.Caching.ICachePolicyFactory? policyFactory = null, string? policyName = null) -> void
+UiPath.Caching.Cache<T>.ContainsAsync(UiPath.Caching.CacheKey cacheKey, System.Threading.CancellationToken token = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.ValueTask<bool>
+UiPath.Caching.Cache<T>.ExpireTimeAsync(UiPath.Caching.CacheKey cacheKey, System.Threading.CancellationToken token = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.ValueTask<System.DateTimeOffset?>
+UiPath.Caching.Cache<T>.GetAsync(UiPath.Caching.CacheKey cacheKey, System.Threading.CancellationToken token = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.ValueTask<T?>
+UiPath.Caching.Cache<T>.GetAsync(UiPath.Caching.CacheKey[]! cacheKeys, System.Threading.CancellationToken token = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.ValueTask<System.Collections.Generic.KeyValuePair<UiPath.Caching.CacheKey, T?>[]!>
+UiPath.Caching.Cache<T>.GetOrAddAsync(UiPath.Caching.CacheKey cacheKey, System.Func<System.Threading.CancellationToken, System.Threading.Tasks.Task<T?>!>! generator, System.DateTimeOffset expiration, System.Threading.CancellationToken token = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.ValueTask<T?>
+UiPath.Caching.Cache<T>.GetOrAddAsync(UiPath.Caching.CacheKey cacheKey, System.Func<System.Threading.CancellationToken, System.Threading.Tasks.Task<T?>!>! generator, System.Threading.CancellationToken token = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.ValueTask<T?>
+UiPath.Caching.Cache<T>.GetOrAddAsync(UiPath.Caching.CacheKey cacheKey, System.Func<System.Threading.CancellationToken, System.Threading.Tasks.Task<T?>!>! generator, System.TimeSpan expiration, System.Threading.CancellationToken token = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.ValueTask<T?>
+UiPath.Caching.Cache<T>.GetOrAddAsync<TState>(System.Collections.Generic.KeyValuePair<UiPath.Caching.CacheKey, TState>[]! entries, System.Func<TState[]!, System.Threading.CancellationToken, System.Threading.Tasks.Task<System.Collections.Generic.KeyValuePair<TState, T?>[]!>!>! generator, System.DateTimeOffset expiration, System.Threading.CancellationToken token = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.ValueTask<System.Collections.Generic.KeyValuePair<TState, T?>[]!>
+UiPath.Caching.Cache<T>.GetOrAddAsync<TState>(System.Collections.Generic.KeyValuePair<UiPath.Caching.CacheKey, TState>[]! entries, System.Func<TState[]!, System.Threading.CancellationToken, System.Threading.Tasks.Task<System.Collections.Generic.KeyValuePair<TState, T?>[]!>!>! generator, System.Threading.CancellationToken token = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.ValueTask<System.Collections.Generic.KeyValuePair<TState, T?>[]!>
+UiPath.Caching.Cache<T>.GetOrAddAsync<TState>(System.Collections.Generic.KeyValuePair<UiPath.Caching.CacheKey, TState>[]! entries, System.Func<TState[]!, System.Threading.CancellationToken, System.Threading.Tasks.Task<System.Collections.Generic.KeyValuePair<TState, T?>[]!>!>! generator, System.TimeSpan expiration, System.Threading.CancellationToken token = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.ValueTask<System.Collections.Generic.KeyValuePair<TState, T?>[]!>
+UiPath.Caching.Cache<T>.Name.get -> string!
+UiPath.Caching.Cache<T>.Policy.get -> UiPath.Caching.CachePolicy?
+UiPath.Caching.Cache<T>.RefreshAsync(UiPath.Caching.CacheKey cacheKey, System.DateTimeOffset expiration, System.Threading.CancellationToken token = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.ValueTask<bool>
+UiPath.Caching.Cache<T>.RefreshAsync(UiPath.Caching.CacheKey cacheKey, System.Threading.CancellationToken token = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.ValueTask<bool>
+UiPath.Caching.Cache<T>.RefreshAsync(UiPath.Caching.CacheKey cacheKey, System.TimeSpan expiration, System.Threading.CancellationToken token = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.ValueTask<bool>
+UiPath.Caching.Cache<T>.RemoveAsync(UiPath.Caching.CacheKey cacheKey, System.Threading.CancellationToken token = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.ValueTask<bool>
+UiPath.Caching.Cache<T>.RemoveAsync(UiPath.Caching.CacheKey[]! cacheKeys, System.Threading.CancellationToken token = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.ValueTask<bool>
+UiPath.Caching.Cache<T>.SetAsync(System.Collections.Generic.KeyValuePair<UiPath.Caching.CacheKey, T?>[]! keyValues, System.DateTimeOffset expiration, System.Threading.CancellationToken token = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.ValueTask<bool>
+UiPath.Caching.Cache<T>.SetAsync(System.Collections.Generic.KeyValuePair<UiPath.Caching.CacheKey, T?>[]! keyValues, System.Threading.CancellationToken token = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.ValueTask<bool>
+UiPath.Caching.Cache<T>.SetAsync(System.Collections.Generic.KeyValuePair<UiPath.Caching.CacheKey, T?>[]! keyValues, System.TimeSpan expiration, System.Threading.CancellationToken token = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.ValueTask<bool>
+UiPath.Caching.Cache<T>.SetAsync(UiPath.Caching.CacheKey cacheKey, T? value, System.DateTimeOffset expiration, System.Threading.CancellationToken token = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.ValueTask<bool>
+UiPath.Caching.Cache<T>.SetAsync(UiPath.Caching.CacheKey cacheKey, T? value, System.Threading.CancellationToken token = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.ValueTask<bool>
+UiPath.Caching.Cache<T>.SetAsync(UiPath.Caching.CacheKey cacheKey, T? value, System.TimeSpan expiration, System.Threading.CancellationToken token = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.ValueTask<bool>
+UiPath.Caching.Cache<T>.TimeToLiveAsync(UiPath.Caching.CacheKey cacheKey, System.Threading.CancellationToken token = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.ValueTask<System.TimeSpan?>
+UiPath.Caching.Cache<T>.TryAddAsync(UiPath.Caching.CacheKey cacheKey, T? value, System.DateTimeOffset expiration, System.Threading.CancellationToken token = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.ValueTask<bool>
+UiPath.Caching.Cache<T>.TryAddAsync(UiPath.Caching.CacheKey cacheKey, T? value, System.Threading.CancellationToken token = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.ValueTask<bool>
+UiPath.Caching.Cache<T>.TryAddAsync(UiPath.Caching.CacheKey cacheKey, T? value, System.TimeSpan expiration, System.Threading.CancellationToken token = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.ValueTask<bool>
+UiPath.Caching.CacheExpiration
+UiPath.Caching.CacheFactoryExtensions
+UiPath.Caching.HashCache<T>
+UiPath.Caching.HashCache<T>.ContainsAsync(UiPath.Caching.CacheKey cacheKey, System.Threading.CancellationToken token = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.ValueTask<bool>
+UiPath.Caching.HashCache<T>.ExpireTimeAsync(UiPath.Caching.CacheKey cacheKey, System.Threading.CancellationToken token = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.ValueTask<System.DateTimeOffset?>
+UiPath.Caching.HashCache<T>.GetAsync(UiPath.Caching.CacheKey cacheKey, System.Threading.CancellationToken token = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.ValueTask<System.Collections.Generic.IDictionary<string!, T?>!>
+UiPath.Caching.HashCache<T>.GetAsync(UiPath.Caching.CacheKey cacheKey, string![]! fields, System.Threading.CancellationToken token = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.ValueTask<System.Collections.Generic.IDictionary<string!, T?>!>
+UiPath.Caching.HashCache<T>.GetCacheEntryAsync(UiPath.Caching.CacheKey cacheKey, System.Threading.CancellationToken token = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.ValueTask<UiPath.Caching.ICacheEntry<System.Collections.Generic.IDictionary<string!, T?>!>!>
+UiPath.Caching.HashCache<T>.GetItemAsync(UiPath.Caching.CacheKey cacheKey, string! field, System.Threading.CancellationToken token = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.ValueTask<T?>
+UiPath.Caching.HashCache<T>.GetMetadataAsync(UiPath.Caching.CacheKey cacheKey, System.Threading.CancellationToken token = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.ValueTask<System.Collections.Generic.IDictionary<string!, string?>?>
+UiPath.Caching.HashCache<T>.GetOrAddAsync(UiPath.Caching.CacheKey cacheKey, System.Func<System.Threading.CancellationToken, System.Threading.Tasks.Task<System.Collections.Generic.IDictionary<string!, T?>!>!>! generator, System.DateTimeOffset expiration, System.Threading.CancellationToken token = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.ValueTask<System.Collections.Generic.IDictionary<string!, T?>!>
+UiPath.Caching.HashCache<T>.GetOrAddAsync(UiPath.Caching.CacheKey cacheKey, System.Func<System.Threading.CancellationToken, System.Threading.Tasks.Task<System.Collections.Generic.IDictionary<string!, T?>!>!>! generator, System.Threading.CancellationToken token = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.ValueTask<System.Collections.Generic.IDictionary<string!, T?>!>
+UiPath.Caching.HashCache<T>.GetOrAddAsync(UiPath.Caching.CacheKey cacheKey, System.Func<System.Threading.CancellationToken, System.Threading.Tasks.Task<System.Collections.Generic.IDictionary<string!, T?>!>!>! generator, System.TimeSpan expiration, System.Threading.CancellationToken token = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.ValueTask<System.Collections.Generic.IDictionary<string!, T?>!>
+UiPath.Caching.HashCache<T>.HashCache(UiPath.Caching.ICacheFactory! cacheFactory, UiPath.Caching.ICacheKeyStrategy? cacheKeyStrategy = null, UiPath.Caching.ICachePolicyFactory? policyFactory = null, string? policyName = null) -> void
+UiPath.Caching.HashCache<T>.HashCache(UiPath.Caching.IHashCache! cache, UiPath.Caching.ICacheKeyStrategy? cacheKeyStrategy = null, UiPath.Caching.CachePolicy? policy = null) -> void
+UiPath.Caching.HashCache<T>.Name.get -> string!
+UiPath.Caching.HashCache<T>.Policy.get -> UiPath.Caching.CachePolicy?
+UiPath.Caching.HashCache<T>.RefreshAsync(UiPath.Caching.CacheKey cacheKey, System.DateTimeOffset expiration, System.Threading.CancellationToken token = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.ValueTask<bool>
+UiPath.Caching.HashCache<T>.RefreshAsync(UiPath.Caching.CacheKey cacheKey, System.Threading.CancellationToken token = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.ValueTask<bool>
+UiPath.Caching.HashCache<T>.RefreshAsync(UiPath.Caching.CacheKey cacheKey, System.TimeSpan expiration, System.Threading.CancellationToken token = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.ValueTask<bool>
+UiPath.Caching.HashCache<T>.RefreshAsync(UiPath.Caching.CacheKey cacheKey, UiPath.Caching.HashCacheEntryOptions options, System.Threading.CancellationToken token = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.ValueTask<bool>
+UiPath.Caching.HashCache<T>.RemoveAsync(UiPath.Caching.CacheKey cacheKey, System.Threading.CancellationToken token = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.ValueTask<bool>
+UiPath.Caching.HashCache<T>.SetAsync(UiPath.Caching.CacheKey cacheKey, System.Collections.Generic.IDictionary<string!, T?>! values, System.DateTimeOffset expiration, System.Threading.CancellationToken token = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.ValueTask<bool>
+UiPath.Caching.HashCache<T>.SetAsync(UiPath.Caching.CacheKey cacheKey, System.Collections.Generic.IDictionary<string!, T?>! values, System.Threading.CancellationToken token = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.ValueTask<bool>
+UiPath.Caching.HashCache<T>.SetAsync(UiPath.Caching.CacheKey cacheKey, System.Collections.Generic.IDictionary<string!, T?>! values, System.TimeSpan expiration, System.Threading.CancellationToken token = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.ValueTask<bool>
+UiPath.Caching.HashCache<T>.SetAsync(UiPath.Caching.CacheKey cacheKey, System.Collections.Generic.IDictionary<string!, T?>! values, UiPath.Caching.HashCacheEntryOptions options, System.Threading.CancellationToken token = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.ValueTask<bool>
+UiPath.Caching.HashCache<T>.SetMetadataAsync(UiPath.Caching.CacheKey cacheKey, System.Collections.Generic.IDictionary<string!, string?>! metadata, System.Threading.CancellationToken token = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.ValueTask<bool>
+UiPath.Caching.HashCache<T>.TimeToLiveAsync(UiPath.Caching.CacheKey cacheKey, System.Threading.CancellationToken token = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.ValueTask<System.TimeSpan?>
+static UiPath.Caching.BatchGetOrAdd.RunAsync<T, TState>(UiPath.Caching.ICache! cache, System.Collections.Generic.KeyValuePair<UiPath.Caching.CacheKey, TState>[]! entries, System.Func<TState[]!, System.Threading.CancellationToken, System.Threading.Tasks.Task<System.Collections.Generic.KeyValuePair<TState, T?>[]!>!>! generator, System.Func<System.Collections.Generic.KeyValuePair<UiPath.Caching.CacheKey, T?>[]!, System.Threading.CancellationToken, System.Threading.Tasks.ValueTask<bool>>! setAsync, UiPath.Caching.CachePolicy? policy, System.Threading.CancellationToken token) -> System.Threading.Tasks.ValueTask<System.Collections.Generic.KeyValuePair<TState, T?>[]!>
+static UiPath.Caching.CacheExpiration.ThrowIfNotFuture(System.DateTimeOffset expiration, System.DateTimeOffset now, string? paramName = null) -> System.DateTimeOffset
+static UiPath.Caching.CacheExpiration.ThrowIfNotPositive(System.TimeSpan expiration, string? paramName = null) -> System.TimeSpan
+static UiPath.Caching.CacheExpiration.ToDuration(System.DateTimeOffset expiration, System.DateTimeOffset now, string? paramName = null) -> System.TimeSpan
+static UiPath.Caching.CacheFactoryExtensions.CreateCache<T>(this UiPath.Caching.ICacheFactory! factory, string? providerName = null) -> UiPath.Caching.ICache<T>!
+static UiPath.Caching.CacheFactoryExtensions.CreateHashCache<T>(this UiPath.Caching.ICacheFactory! factory, string? providerName = null) -> UiPath.Caching.IHashCache<T>!
+UiPath.Caching.Cache<T>.GetAsync(System.Span<char> cacheKey, System.Threading.CancellationToken token = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.ValueTask<T?>
+UiPath.Caching.HashCache<T>.GetAsync(System.Span<char> cacheKey, System.Threading.CancellationToken token = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.ValueTask<System.Collections.Generic.IDictionary<string!, T?>!>
+UiPath.Caching.HashCache<T>.GetItemAsync(System.Span<char> cacheKey, string! field, System.Threading.CancellationToken token = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.ValueTask<T?>
+UiPath.Caching.PrefixCacheKeyStrategy.TryGetCacheKey<T>(System.ReadOnlySpan<char> key, System.Span<char> destination, out int written) -> bool
+static UiPath.Caching.Telemetry.TelemetryTags.ToDictionaryOrNull(UiPath.Caching.Telemetry.TelemetryTags<double> tags) -> System.Collections.Generic.Dictionary<string!, double>?
+static UiPath.Caching.Telemetry.TelemetryTags.ToDictionaryOrNull(UiPath.Caching.Telemetry.TelemetryTags<string!> tags) -> System.Collections.Generic.Dictionary<string!, string!>?
+UiPath.Caching.Cache<T>.ContainsAsync(System.Span<char> cacheKey, System.Threading.CancellationToken token = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.ValueTask<bool>
+UiPath.Caching.Cache<T>.GetOrAddAsync(System.Span<char> cacheKey, System.Func<System.Threading.CancellationToken, System.Threading.Tasks.Task<T?>!>! generator, System.DateTimeOffset expiration, System.Threading.CancellationToken token = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.ValueTask<T?>
+UiPath.Caching.Cache<T>.GetOrAddAsync(System.Span<char> cacheKey, System.Func<System.Threading.CancellationToken, System.Threading.Tasks.Task<T?>!>! generator, System.Threading.CancellationToken token = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.ValueTask<T?>
+UiPath.Caching.Cache<T>.GetOrAddAsync(System.Span<char> cacheKey, System.Func<System.Threading.CancellationToken, System.Threading.Tasks.Task<T?>!>! generator, System.TimeSpan expiration, System.Threading.CancellationToken token = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.ValueTask<T?>
+UiPath.Caching.HashCache<T>.ContainsAsync(System.Span<char> cacheKey, System.Threading.CancellationToken token = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.ValueTask<bool>
+UiPath.Caching.HashCache<T>.GetCacheEntryAsync(System.Span<char> cacheKey, System.Threading.CancellationToken token = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.ValueTask<UiPath.Caching.ICacheEntry<System.Collections.Generic.IDictionary<string!, T?>!>!>
+UiPath.Caching.HashCache<T>.GetOrAddAsync(System.Span<char> cacheKey, System.Func<System.Threading.CancellationToken, System.Threading.Tasks.Task<System.Collections.Generic.IDictionary<string!, T?>!>!>! generator, System.DateTimeOffset expiration, System.Threading.CancellationToken token = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.ValueTask<System.Collections.Generic.IDictionary<string!, T?>!>
+UiPath.Caching.HashCache<T>.GetOrAddAsync(System.Span<char> cacheKey, System.Func<System.Threading.CancellationToken, System.Threading.Tasks.Task<System.Collections.Generic.IDictionary<string!, T?>!>!>! generator, System.Threading.CancellationToken token = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.ValueTask<System.Collections.Generic.IDictionary<string!, T?>!>
+UiPath.Caching.HashCache<T>.GetOrAddAsync(System.Span<char> cacheKey, System.Func<System.Threading.CancellationToken, System.Threading.Tasks.Task<System.Collections.Generic.IDictionary<string!, T?>!>!>! generator, System.TimeSpan expiration, System.Threading.CancellationToken token = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.ValueTask<System.Collections.Generic.IDictionary<string!, T?>!>
+UiPath.Caching.IMultilayerCacheOptions.ClearLocalOnReconnect.get -> bool?
+UiPath.Caching.IMultilayerCacheOptions.ClearLocalOnReconnect.set -> void
+UiPath.Caching.InMemoryCacheOptions.ClearLocalOnReconnect.get -> bool?
+UiPath.Caching.InMemoryCacheOptions.ClearLocalOnReconnect.set -> void
+UiPath.Caching.InMemoryRedisCacheOptions.ClearLocalOnReconnect.get -> bool?
+UiPath.Caching.InMemoryRedisCacheOptions.ClearLocalOnReconnect.set -> void
+UiPath.Caching.Cache<T>.GetOrAddAsync<TState>(UiPath.Caching.CacheKey cacheKey, TState state, System.Func<TState, System.Threading.CancellationToken, System.Threading.Tasks.Task<T?>!>! generator, System.Threading.CancellationToken token = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.ValueTask<T?>
+UiPath.Caching.Cache<T>.GetOrAddAsync<TState>(UiPath.Caching.CacheKey cacheKey, TState state, System.Func<TState, System.Threading.CancellationToken, System.Threading.Tasks.Task<T?>!>! generator, System.TimeSpan expiration, System.Threading.CancellationToken token = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.ValueTask<T?>
+UiPath.Caching.Cache<T>.GetOrAddAsync<TState>(UiPath.Caching.CacheKey cacheKey, TState state, System.Func<TState, System.Threading.CancellationToken, System.Threading.Tasks.Task<T?>!>! generator, System.DateTimeOffset expiration, System.Threading.CancellationToken token = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.ValueTask<T?>
+UiPath.Caching.Cache<T>.GetOrAddAsync<TState>(System.Span<char> cacheKey, TState state, System.Func<TState, System.Threading.CancellationToken, System.Threading.Tasks.Task<T?>!>! generator, System.Threading.CancellationToken token = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.ValueTask<T?>
+UiPath.Caching.Cache<T>.GetOrAddAsync<TState>(System.Span<char> cacheKey, TState state, System.Func<TState, System.Threading.CancellationToken, System.Threading.Tasks.Task<T?>!>! generator, System.TimeSpan expiration, System.Threading.CancellationToken token = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.ValueTask<T?>
+UiPath.Caching.Cache<T>.GetOrAddAsync<TState>(System.Span<char> cacheKey, TState state, System.Func<TState, System.Threading.CancellationToken, System.Threading.Tasks.Task<T?>!>! generator, System.DateTimeOffset expiration, System.Threading.CancellationToken token = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.ValueTask<T?>
+UiPath.Caching.Cache<T>.GetOrAddWithExpirationAsync(UiPath.Caching.CacheKey cacheKey, System.Func<System.Threading.CancellationToken, System.Threading.Tasks.Task<UiPath.Caching.GeneratedValue<T>>!>! generator, System.Threading.CancellationToken token = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.ValueTask<T?>
+UiPath.Caching.MultilayerCacheBase.MultilayerCacheBase(string! cacheName, object! innerCache, UiPath.Caching.IMemoryCacheFactory! memoryCacheFactory, UiPath.Caching.Broadcast.ITopicFactory! topicFactory, UiPath.Caching.Broadcast.ICacheEventFactory! cacheEventFactory, UiPath.Caching.Telemetry.ICachingTelemetryProvider! telemetryProvider, UiPath.Caching.IMultilayerCacheOptions! multiLayerCacheOptions, UiPath.Caching.IMemoryCacheOptions! memoryOptions, UiPath.Caching.CacheOptions! cacheOptions, UiPath.Caching.Locking.IDistributedLock! distributedLock, UiPath.Caching.ICachePolicyFactory! policyFactory, System.TimeProvider! clock, Microsoft.Extensions.Logging.ILogger! logger, UiPath.Caching.Logging.IKeyMaskingPolicy? keyMaskingPolicy = null) -> void
+UiPath.Caching.InMemoryCacheProvider.InMemoryCacheProvider(Microsoft.Extensions.Options.IOptions<UiPath.Caching.InMemoryCacheOptions!>! optionsAccessor, Microsoft.Extensions.Options.IOptions<UiPath.Caching.CacheOptions!>! cacheOptionsAccessor, UiPath.Caching.IMemoryCacheFactory! memoryCacheFactory, UiPath.Caching.Broadcast.ICacheEventFactory! cacheEventFactory, UiPath.Caching.Broadcast.IChangeTokenFactory! changeTokenFactory, UiPath.Caching.Broadcast.ITopicFactory! topicFactory, UiPath.Caching.Telemetry.ICachingTelemetryProvider! cachingTelemetryProvider, Microsoft.Extensions.Logging.ILoggerFactory! loggerFactory, UiPath.Caching.ICachePolicyFactory! policyFactory, System.TimeProvider! clock, UiPath.Caching.Logging.IKeyMaskingPolicy? keyMaskingPolicy = null) -> void
+UiPath.Caching.InMemoryRedisCacheProvider.InMemoryRedisCacheProvider(Microsoft.Extensions.Options.IOptions<UiPath.Caching.InMemoryRedisCacheOptions!>! optionsAccessor, Microsoft.Extensions.Options.IOptions<UiPath.Caching.CacheOptions!>! cacheOptionsAccessor, UiPath.Caching.IMemoryCacheFactory! memoryCacheFactory, System.Func<UiPath.Caching.ICacheFactory!>! cacheFactoryAccessor, UiPath.Caching.Broadcast.IChangeTokenFactory! changeTokenFactory, UiPath.Caching.Broadcast.ITopicFactory! topicFactory, UiPath.Caching.Broadcast.ICacheEventFactory! cacheEventFactory, UiPath.Caching.Telemetry.ICachingTelemetryProvider! cachingTelemetryProvider, Microsoft.Extensions.Logging.ILoggerFactory! loggerFactory, UiPath.Caching.Locking.IDistributedLock! distributedLock, UiPath.Caching.ICachePolicyFactory! policyFactory, System.TimeProvider! clock, UiPath.Caching.Logging.IKeyMaskingPolicy? keyMaskingPolicy = null) -> void
+UiPath.Caching.IMultilayerCacheOptions.LocalSingleFlightEnabled.get -> bool?
+UiPath.Caching.IMultilayerCacheOptions.LocalSingleFlightEnabled.set -> void
+UiPath.Caching.IMultilayerCacheOptions.LocalSingleFlightTimeout.get -> System.TimeSpan?
+UiPath.Caching.IMultilayerCacheOptions.LocalSingleFlightTimeout.set -> void
+UiPath.Caching.InMemoryCacheOptions.LocalSingleFlightEnabled.get -> bool?
+UiPath.Caching.InMemoryCacheOptions.LocalSingleFlightEnabled.set -> void
+UiPath.Caching.InMemoryCacheOptions.LocalSingleFlightTimeout.get -> System.TimeSpan?
+UiPath.Caching.InMemoryCacheOptions.LocalSingleFlightTimeout.set -> void
+UiPath.Caching.InMemoryRedisCacheOptions.LocalSingleFlightEnabled.get -> bool?
+UiPath.Caching.InMemoryRedisCacheOptions.LocalSingleFlightEnabled.set -> void
+UiPath.Caching.InMemoryRedisCacheOptions.LocalSingleFlightTimeout.get -> System.TimeSpan?
+UiPath.Caching.InMemoryRedisCacheOptions.LocalSingleFlightTimeout.set -> void
