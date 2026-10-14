@@ -1598,27 +1598,30 @@ internal sealed partial class MultilayerCache : MultilayerCacheBase, ICache, ISp
     {
         try
         {
-            var removeInnerResult = await _innerCache.RemoveAsync<T>(options.Select(o => o.CacheKey).ToArray(), token).ConfigureAwait(false);
-            if (!removeInnerResult)
-            {
-                return false;
-            }
-
+            // As the single-key remove does: the local entries go first, so a failed inner delete cannot leave them here.
             foreach (var option in options)
             {
                 _memoryCache.Remove(option.CacheKey.Name);
             }
 
+            var removed = await _innerCache.RemoveAsync<T>(Array.ConvertAll(options, static o => o.CacheKey), token).ConfigureAwait(false);
+
+            // Each key's invalidation is sent on its own, so one that fails does not keep the others from the other nodes.
+            var published = true;
             foreach (var option in options)
             {
-                var removedEventPublished = await _eventPublisher.CacheRemovedAsync(option, typeof(T)).ConfigureAwait(false);
-                if (!removedEventPublished)
+                try
                 {
-                    return false;
+                    published &= await _eventPublisher.CacheRemovedAsync(option, typeof(T)).ConfigureAwait(false);
+                }
+                catch (Exception ex)
+                {
+                    LogInnerCacheRemoveError(ex, Logged(option, typeof(T)));
+                    published = false;
                 }
             }
 
-            return true;
+            return removed && published;
         }
         catch (Exception ex)
         {
