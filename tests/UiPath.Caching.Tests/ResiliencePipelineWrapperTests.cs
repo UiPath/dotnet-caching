@@ -11,6 +11,9 @@ public class ResiliencePipelineWrapperTests(ITestContextAccessor testContextAcce
     private static readonly TimeSpan PipelineTimeout = TimeSpan.FromMilliseconds(100);
     private static readonly TimeSpan CallbackDuration = TimeSpan.FromSeconds(1);
 
+    // Only a regression waits this long: the callback it would wait for never finishes on its own.
+    private static readonly TimeSpan ReleaseBound = TimeSpan.FromSeconds(30);
+
     private readonly IFixture _fixture = AutoFixtureCreator.NSubstitute();
     private IResiliencePipelineFactory _resiliencePipelineFactory = default!;
     private int _boolCallCount = 0;
@@ -59,12 +62,21 @@ public class ResiliencePipelineWrapperTests(ITestContextAccessor testContextAcce
     public async Task The_read_pipeline_abandons_a_callback_that_ignores_the_token()
     {
         var sut = CreateTimedSut(ResiliencePipelineNames.Read);
-        var elapsed = Stopwatch.StartNew();
+        var callback = new HeldCallback();
 
-        var act = async () => await sut.ExecuteAsync(IgnoresTheToken, false, testContextAccessor.Current.CancellationToken);
+        try
+        {
+            var pending = sut.ExecuteAsync(callback.RunAsync, false, testContextAccessor.Current.CancellationToken).AsTask();
 
-        await act.Should().ThrowAsync<TimeoutRejectedException>();
-        elapsed.Elapsed.Should().BeLessThan(CallbackDuration);
+            (await Task.WhenAny(pending, Task.Delay(ReleaseBound, testContextAccessor.Current.CancellationToken))).Should().BeSameAs(pending, "the timeout releases the caller while the callback still runs");
+            var act = async () => await pending;
+            await act.Should().ThrowAsync<TimeoutRejectedException>();
+            callback.Finished.Should().BeFalse("it did not wait for the callback to finish");
+        }
+        finally
+        {
+            callback.Release();
+        }
     }
 
     [Theory]
@@ -197,27 +209,27 @@ public class ResiliencePipelineWrapperTests(ITestContextAccessor testContextAcce
     public async Task Caller_cancellation_also_abandons_the_callback()
     {
         // A long timeout, so only the caller's token can release it.
-        var sut = CreateTimedSut(ResiliencePipelineNames.Read, requestTimeout: TimeSpan.FromSeconds(30));
+        var sut = CreateTimedSut(ResiliencePipelineNames.Read, requestTimeout: TimeSpan.FromMinutes(5));
         using var caller = new CancellationTokenSource();
-        var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var callback = new HeldCallback();
 
-        // Cancelled once running, or Polly would refuse the call up front.
-        var pending = sut.ExecuteAsync(
-            async _ =>
-            {
-                entered.TrySetResult();
-                await Task.Delay(CallbackDuration, CancellationToken.None).ConfigureAwait(false);
-                return true;
-            },
-            false,
-            caller.Token).AsTask();
-        await entered.Task.WaitAsync(TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken);
+        try
+        {
+            var pending = sut.ExecuteAsync(callback.RunAsync, false, caller.Token).AsTask();
+            // Cancelled once running, or Polly would refuse the call up front.
+            await callback.Entered.WaitAsync(TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken);
 
-        var elapsed = Stopwatch.StartNew();
-        await caller.CancelAsync();
-        var act = async () => await pending;
-        await act.Should().ThrowAsync<OperationCanceledException>("the caller is released rather than waiting out the callback");
-        elapsed.Elapsed.Should().BeLessThan(CallbackDuration, "it did not wait for the callback to finish");
+            await caller.CancelAsync();
+
+            (await Task.WhenAny(pending, Task.Delay(ReleaseBound, TestContext.Current.CancellationToken))).Should().BeSameAs(pending, "the caller is released while the callback still runs");
+            var act = async () => await pending;
+            await act.Should().ThrowAsync<OperationCanceledException>("the caller is released rather than waiting out the callback");
+            callback.Finished.Should().BeFalse("it did not wait for the callback to finish");
+        }
+        finally
+        {
+            callback.Release();
+        }
     }
 
     [Fact]
@@ -327,5 +339,27 @@ public class ResiliencePipelineWrapperTests(ITestContextAccessor testContextAcce
         state.SuggestedTimeout.Returns(suggestedTimeout);
 
         return new(new ResiliencePipelineFactory(NullLoggerFactory.Instance, null, monitor, state), scope);
+    }
+
+    /// <summary>A callback that ignores its token and runs until the test releases it, so "the caller did not wait for it" is checked by state, not by a clock a busy machine can stretch.</summary>
+    private sealed class HeldCallback
+    {
+        private readonly TaskCompletionSource _entered = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private readonly TaskCompletionSource _release = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private volatile bool _finished;
+
+        public Task Entered => _entered.Task;
+
+        public bool Finished => _finished;
+
+        public async ValueTask<bool> RunAsync(CancellationToken token)
+        {
+            _entered.TrySetResult();
+            await _release.Task.ConfigureAwait(false);
+            _finished = true;
+            return true;
+        }
+
+        public void Release() => _release.TrySetResult();
     }
 }
