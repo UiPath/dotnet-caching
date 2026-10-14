@@ -237,6 +237,25 @@ public class GeneratedExpirationTests
     }
 
     [Fact]
+    public async Task A_mock_with_no_entry_read_set_up_reads_as_a_miss()
+    {
+        var moq = new Mock<ICache>();
+        var substitute = Substitute.For<ICache>();
+        var generated = 0;
+        Task<GeneratedValue<string>> Generate(CancellationToken _)
+        {
+            generated++;
+            return Task.FromResult(new GeneratedValue<string>("jwt", DateTimeOffset.UtcNow.AddMinutes(7)));
+        }
+
+        (await moq.Object.GetOrAddWithExpirationAsync<string>("a", Generate, Ct)).Should().Be("jwt");
+        (await substitute.GetOrAddWithExpirationAsync<string>("a", Generate, Ct)).Should().Be("jwt");
+        (await new Cache<string>(moq.Object).GetOrAddWithExpirationAsync("a", Generate, Ct)).Should().Be("jwt");
+
+        generated.Should().Be(3);
+    }
+
+    [Fact]
     public async Task A_cache_without_the_capability_keeps_a_cached_default_value()
     {
         var cache = Substitute.For<ICache>();

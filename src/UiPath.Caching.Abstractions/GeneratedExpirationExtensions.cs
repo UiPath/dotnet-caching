@@ -24,7 +24,8 @@ public static class GeneratedExpirationExtensions
     {
         ArgumentNullException.ThrowIfNull(generator);
         var cached = await cache.GetCacheEntryAsync<T>(cacheKey, policy, token).ConfigureAwait(false);
-        if (cached.Found)
+        // A null entry is a miss: no cache returns one, but a mock answers a read it was not set up for with null.
+        if (cached is { Found: true })
         {
             return cached.Value;
         }
