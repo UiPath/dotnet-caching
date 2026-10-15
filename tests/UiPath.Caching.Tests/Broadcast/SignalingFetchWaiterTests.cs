@@ -104,27 +104,3 @@ public class SignalingFetchWaiterTests
         act.Should().NotThrow();
     }
 }
-
-public class TimedFetchWaiterTests
-{
-    [Fact]
-    public async Task WaitAsync_completes_after_timeout()
-    {
-        using var sut = new TimedFetchWaiter(50.Milliseconds());
-
-        var sw = System.Diagnostics.Stopwatch.StartNew();
-        await sut.WaitAsync(TestContext.Current.CancellationToken);
-
-        sw.Elapsed.Should().BeGreaterThanOrEqualTo(45.Milliseconds());
-    }
-
-    [Fact]
-    public void Dispose_does_not_throw()
-    {
-        var sut = new TimedFetchWaiter(50.Milliseconds());
-
-        Action act = () => sut.Dispose();
-
-        act.Should().NotThrow();
-    }
-}

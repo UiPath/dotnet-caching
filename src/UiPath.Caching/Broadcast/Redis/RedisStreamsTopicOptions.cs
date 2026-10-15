@@ -11,6 +11,7 @@ public class RedisStreamsTopicOptions
     /// </summary>
     public bool Enabled { get; set; } = true;
 
+    /// <summary>Entries kept on the stream (<c>XADD MAXLEN ~</c>); <c>null</c> never trims.</summary>
     public long? MaxLength { get; set; } = 32_768;
 
     public long? Limit { get; set; } = 1_024;
@@ -47,7 +48,8 @@ public class RedisStreamsTopicOptions
 
     public bool EmitStreamReceivedEvent { get; set; }
 
-    public bool NotifyEnabled { get; set; }
+    /// <summary>Publishes a Pub/Sub doorbell after every <c>XADD</c> so consumers read at once instead of at the next <see cref="PollInterval"/>.</summary>
+    public bool NotifyEnabled { get; set; } = true;
 
     public IRedisChannelStrategy? NotifyChannelStrategy { get; set; }
 

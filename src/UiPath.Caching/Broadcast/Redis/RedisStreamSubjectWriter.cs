@@ -7,6 +7,7 @@ internal sealed partial class RedisStreamSubjectWriter<T> : IDisposable
     where T : IEvent
 {
     // Runs on every read, so it returns only what the check needs: XINFO STREAM carries the first and last entries whole.
+    // XINFO GROUPS grows with the number of groups, so a wake (ARGV[4] = 0) checks against the stream alone.
     private const string CheckAndReadScript = """
         local info = redis.call('XINFO', 'STREAM', KEYS[1])
         local stream = {}
@@ -21,10 +22,12 @@ internal sealed partial class RedisStreamSubjectWriter<T> : IDisposable
             end
         end
         local groups = {}
-        for _, group in ipairs(redis.call('XINFO', 'GROUPS', KEYS[1])) do
-            for i = 1, #group, 2 do
-                if group[i] == 'name' and group[i + 1] == ARGV[1] then
-                    groups[1] = group
+        if ARGV[4] == '1' then
+            for _, group in ipairs(redis.call('XINFO', 'GROUPS', KEYS[1])) do
+                for i = 1, #group, 2 do
+                    if group[i] == 'name' and group[i + 1] == ARGV[1] then
+                        groups[1] = group
+                    end
                 end
             end
         end
@@ -58,8 +61,17 @@ internal sealed partial class RedisStreamSubjectWriter<T> : IDisposable
     private volatile bool _checkForGap;
     // Set once the topic has subscribers or the group has been read: only then can a loss leave a local entry stale.
     private volatile bool _inUse;
+    // _inUse when the read in flight was issued.
+    private bool _readInUse;
     private bool _noScripts;
     private bool _gapCheckDenied;
+    // The last read returned fewer entries than asked: the group is at the head.
+    private bool _caughtUp;
+    // Environment.TickCount64 of the last check with XINFO GROUPS; 0 = never.
+    private long _checkedAt;
+    // The group's last-delivered id, from that check or the last read; Null until either. A wake is checked against it,
+    // with the count _readCount holds for it.
+    private RedisValue _position = RedisValue.Null;
 
     // An empty read cannot move the group past a trim, so every later check finds the gap this one reported.
     private StreamGap? _reportedGap;
@@ -227,30 +239,11 @@ internal sealed partial class RedisStreamSubjectWriter<T> : IDisposable
             return;
         }
 
-        // A trim can reach unread entries between any two polls, so every read the group's position matters for is checked.
-        StreamEntry[] events;
-        if (_inUse && !_noScripts)
-        {
-            events = await CheckAndReadAsync().ConfigureAwait(false);
-        }
-        else
-        {
-            // Without XINFO a loss cannot be ruled out, so only a reconnect reports one rather than every read.
-            if (_inUse && (_checkForGap || !_gapCheckDenied))
-            {
-                // A recovery raised during a check needs its own before the read moves the group past the evidence.
-                do
-                {
-                    await CheckForGapAsync().ConfigureAwait(false);
-                }
-                while (_checkForGap && _inUse);
-            }
-
-            events = await ReadAsync().ConfigureAwait(false);
-        }
+        var events = await ReadBatchAsync().ConfigureAwait(false);
 
         _consecutiveFailures = 0;
         _inUse = true;
+        _caughtUp = events.Length < _context.PollBatchSize;
 
         if (_unsupportedCommand)
         {
@@ -262,9 +255,43 @@ internal sealed partial class RedisStreamSubjectWriter<T> : IDisposable
         {
             await DispatchEventsAsync(events).ConfigureAwait(false);
             _lastId = events[^1].Id;
-            return;
+            _position = _lastId;
+            if (!_caughtUp)
+            {
+                return;
+            }
         }
+        // At the head: a read now would find nothing.
         await _waiter.WaitAsync(_cancelationToken).ConfigureAwait(false);
+    }
+
+    /// <summary>Every read the group's position matters for is checked; the one with XINFO GROUPS keeps the poll's cadence.</summary>
+    private async Task<StreamEntry[]> ReadBatchAsync()
+    {
+        _readInUse = _inUse;
+        if (!_readInUse)
+        {
+            return await ReadAsync().ConfigureAwait(false);
+        }
+
+        if (!_noScripts)
+        {
+            var full = _checkForGap || !_caughtUp || _checkedAt == 0 || Environment.TickCount64 - _checkedAt >= (long)_context.PollInterval.TotalMilliseconds;
+            return await CheckAndReadAsync(full).ConfigureAwait(false);
+        }
+
+        // Without XINFO a loss cannot be ruled out, so only a reconnect reports one rather than every read.
+        if (_checkForGap || !_gapCheckDenied)
+        {
+            // A recovery raised during a check needs its own before the read moves the group past the evidence.
+            do
+            {
+                await CheckForGapAsync().ConfigureAwait(false);
+            }
+            while (_checkForGap && _inUse);
+        }
+
+        return await ReadAsync().ConfigureAwait(false);
     }
 
     private async Task<bool> ProcessException(Exception ex)
@@ -290,33 +317,9 @@ internal sealed partial class RedisStreamSubjectWriter<T> : IDisposable
 
         if (ex.Message.Contains("NOGROUP", StringComparison.OrdinalIgnoreCase))
         {
-            if(id != StreamPosition.NewMessages)
+            if (await RecreateGroupAsync(id).ConfigureAwait(false))
             {
-                LogRecreatingTopic(_context.Topic, _context.ConsumerGroup, id);
-            }
-
-            if (_inUse)
-            {
-                // The group or the whole stream was removed while in use, so what it held past the last read is gone.
-                _inUse = false;
-                _checkForGap = false;
-                _reportedGap = null;
-                _readCount = null;
-                ReportMessagesMissed();
-            }
-
-            try
-            {
-                await ConsumerGroups.CreateAsync(_redis.Database, _context.Topic, _context.ConsumerGroup, id).ConfigureAwait(false);
-            }
-            catch (RedisServerException rex) when (rex.Message == StreamConstants.ConsumerGroupNameExistsErrorMessage)
-            {
-                LogConsumerGroupExists(_context.Topic, _context.ConsumerGroup);
                 return true;
-            }
-            catch (Exception ex2)
-            {
-                LogRecreatingTopicException(ex2);
             }
         }
         else
@@ -327,6 +330,55 @@ internal sealed partial class RedisStreamSubjectWriter<T> : IDisposable
 
         await BackoffAsync().ConfigureAwait(false);
         return true;
+    }
+
+    /// <summary>Recreates the group a read found missing; <c>true</c> when it was there after all, so the next read need not wait.</summary>
+    private async Task<bool> RecreateGroupAsync(RedisValue id)
+    {
+        if (id != StreamPosition.NewMessages)
+        {
+            LogRecreatingTopic(_context.Topic, _context.ConsumerGroup, id);
+        }
+
+        // Judged as of the read: a subscriber that joined while it was in flight created the group it did not find.
+        if (_readInUse)
+        {
+            ReportGroupLost();
+        }
+
+        try
+        {
+            var created = await ConsumerGroups.CreateAsync(_redis.Database, _context.Topic, _context.ConsumerGroup, id).ConfigureAwait(false);
+            // That group is gone too, or this one would not have been made: what the subscriber cached since is stale.
+            if (created && !_readInUse && _inUse)
+            {
+                ReportGroupLost();
+            }
+        }
+        catch (RedisServerException rex) when (rex.Message == StreamConstants.ConsumerGroupNameExistsErrorMessage)
+        {
+            LogConsumerGroupExists(_context.Topic, _context.ConsumerGroup);
+            return true;
+        }
+        catch (Exception ex2)
+        {
+            LogRecreatingTopicException(ex2);
+        }
+
+        return false;
+    }
+
+    /// <summary>The group or the whole stream was removed while in use, so what it held past the last read is gone.</summary>
+    private void ReportGroupLost()
+    {
+        _inUse = false;
+        _checkForGap = false;
+        _reportedGap = null;
+        _readCount = null;
+        _position = RedisValue.Null;
+        // The recreated group's position comes from its first check.
+        _checkedAt = 0;
+        ReportMessagesMissed();
     }
 
     private Task BackoffAsync()
@@ -364,7 +416,8 @@ internal sealed partial class RedisStreamSubjectWriter<T> : IDisposable
         _context.PollBatchSize);
 
     /// <summary>Checks for a gap and reads in one script, so a trim cannot land between the check and the read.</summary>
-    private async Task<StreamEntry[]> CheckAndReadAsync()
+    /// <param name="full">Take the group's position from the server; otherwise check against the last one known.</param>
+    private async Task<StreamEntry[]> CheckAndReadAsync(bool full)
     {
         _checkForGap = false;
         RedisResult reply;
@@ -373,7 +426,7 @@ internal sealed partial class RedisStreamSubjectWriter<T> : IDisposable
             reply = await _redis.Database.ScriptEvaluateAsync(
                 CheckAndReadScript,
                 [_context.Topic],
-                [_context.ConsumerGroup, _context.ConsumerName, _context.PollBatchSize]).ConfigureAwait(false);
+                [_context.ConsumerGroup, _context.ConsumerName, _context.PollBatchSize, full ? 1 : 0]).ConfigureAwait(false);
         }
         catch (RedisServerException ex) when (ex.Message.Contains("no such key", StringComparison.OrdinalIgnoreCase))
         {
@@ -390,9 +443,29 @@ internal sealed partial class RedisStreamSubjectWriter<T> : IDisposable
         }
 
         var parts = StreamIds.Items(reply);
-        ReportGap(StreamIds.Gap(parts[0], parts[1], _context.ConsumerGroup, ref _readCount));
+        var stream = StreamIds.Parse(parts[0]);
+        if (full)
+        {
+            _checkedAt = Environment.TickCount64;
+            if (StreamIds.Group(parts[1], _context.ConsumerGroup) is { } group)
+            {
+                _position = group.LastDelivered;
+                ReportGap(StreamIds.Gap(stream, group.LastDelivered, group.EntriesRead, ref _readCount));
+            }
+        }
+        else if (!_position.IsNull)
+        {
+            ReportGap(StreamIds.Gap(stream, _position, null, ref _readCount));
+        }
 
-        return StreamIds.Entries(parts[2]);
+        var entries = StreamIds.Entries(parts[2]);
+        if (entries.Length > 0 && entries.Length < _context.PollBatchSize)
+        {
+            // The read reached the head: the group's count is every entry added, whatever a trim took on the way.
+            _readCount = new(entries[^1].Id, stream.EntriesAdded);
+        }
+
+        return entries;
     }
 
     /// <summary>Entries trimmed before the group read them were never delivered.</summary>
@@ -421,6 +494,7 @@ internal sealed partial class RedisStreamSubjectWriter<T> : IDisposable
             return;
         }
 
+        _checkedAt = Environment.TickCount64;
         var group = Array.Find(groups, g => g.Name == _context.ConsumerGroup);
         if (group.Name is not null)
         {

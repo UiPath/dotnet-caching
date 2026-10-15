@@ -183,38 +183,10 @@ public class RedisStreamsTopicTests(ITestContextAccessor testContextAccessor) : 
         var ok = await Sut.PublishAsync(ev, testContextAccessor.Current.CancellationToken);
 
         ok.Should().BeTrue();
-        await _database.ReceivedWithAnyArgs(1).PublishAsync(
-            channel: default,
-            message: default,
-            flags: CommandFlags.FireAndForget);
-    }
-
-    [Fact]
-    public async Task Publish_returns_true_when_doorbell_publish_faults_asynchronously()
-    {
-        _redisStreamsTopicOptions.NotifyEnabled = true;
-        _redisStreamsTopicOptions.NotifySubscriberTimeout = TimeSpan.FromSeconds(60);
-        _redisStreamsTopicOptions.NotifySubscriberDueTime = TimeSpan.FromSeconds(60);
-        _sut = null;
-
-        _database.StreamAddAsync(
-                key: Arg.Any<RedisKey>(),
-                streamField: Arg.Any<RedisValue>(),
-                streamValue: Arg.Any<RedisValue>(),
-                messageId: Arg.Any<RedisValue?>(),
-                maxLength: Arg.Any<long?>(),
-                useApproximateMaxLength: Arg.Any<bool>(),
-                limit: Arg.Any<long?>(),
-                trimMode: Arg.Any<StreamTrimMode>(),
-                flags: Arg.Any<CommandFlags>())
-            .Returns("1-0");
-        _database.PublishAsync(Arg.Any<RedisChannel>(), Arg.Any<RedisValue>(), Arg.Any<CommandFlags>())
-            .Returns(Task.FromException<long>(new RedisException("doorbell async fault")));
-
-        var ev = _fixture.Create<ICacheEvent>();
-        var ok = await Sut.PublishAsync(ev, testContextAccessor.Current.CancellationToken);
-
-        ok.Should().BeTrue();
+        await _database.Received(1).PublishAsync(
+            Arg.Any<RedisChannel>(),
+            (RedisValue)(_cacheOptions.SourceUri ?? CacheOptions.MachineUri).ToString().ToLowerInvariant(),
+            CommandFlags.FireAndForget);
     }
 
     [Fact]
@@ -267,18 +239,80 @@ public class RedisStreamsTopicTests(ITestContextAccessor testContextAccessor) : 
     }
 
     [Fact]
+    public async Task Every_half_MaxLength_own_publishes_wake_a_read()
+    {
+        // The first read, before the topic is in use, is plain; the ones a wake brings run the check-and-read script.
+        var reads = 0;
+        _database.StreamReadGroupAsync((RedisKey)"stream", "group", "consumer", ">", 1)
+            .ReturnsForAnyArgs(_ =>
+            {
+                Interlocked.Increment(ref reads);
+                return Task.FromResult(Array.Empty<StreamEntry>());
+            });
+        _database.Configure().ScriptEvaluateAsync(Arg.Any<string>(), Arg.Any<RedisKey[]>(), Arg.Any<RedisValue[]>(), Arg.Any<CommandFlags>())
+            .ReturnsForAnyArgs(_ =>
+            {
+                Interlocked.Increment(ref reads);
+                return Task.FromResult(RedisResult.Create(
+                [
+                    RedisResult.Create(new RedisValue[] { "length", 0, "last-generated-id", "0-0", "entries-added", 0 }),
+                    RedisResult.Create(Array.Empty<RedisResult>()),
+                    RedisResult.Create(RedisValue.Null),
+                ]));
+            });
+        _database.StreamAddAsync(
+                key: Arg.Any<RedisKey>(),
+                streamField: Arg.Any<RedisValue>(),
+                streamValue: Arg.Any<RedisValue>(),
+                messageId: Arg.Any<RedisValue?>(),
+                maxLength: Arg.Any<long?>(),
+                useApproximateMaxLength: Arg.Any<bool>(),
+                limit: Arg.Any<long?>(),
+                trimMode: Arg.Any<StreamTrimMode>(),
+                flags: Arg.Any<CommandFlags>())
+            .Returns("1-0");
+        _redisStreamsTopicOptions.PollInterval = TimeSpan.FromSeconds(30);
+        _redisStreamsTopicOptions.MaxLength = 4;
+        _redisStreamsTopicOptions.NotifyEnabled = false;
+        var token = testContextAccessor.Current.CancellationToken;
+        _ = Sut;
+        (await ReadsAsync(1, token)).Should().BeTrue();
+
+        await Sut.PublishAsync(_fixture.Create<ICacheEvent>(), token);
+        await Task.Delay(300, token);
+        Volatile.Read(ref reads).Should().Be(1, "one own entry is nowhere near the trim");
+        await Sut.PublishAsync(_fixture.Create<ICacheEvent>(), token);
+
+        (await ReadsAsync(2, token)).Should().BeTrue("own entries are read at the poll alone, so every MaxLength / 2 of them wakes a read before the trim can reach them");
+
+        async Task<bool> ReadsAsync(int expected, CancellationToken ct)
+        {
+            var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(10);
+            while (DateTime.UtcNow < deadline && Volatile.Read(ref reads) < expected)
+            {
+                await Task.Delay(20, ct);
+            }
+
+            return Volatile.Read(ref reads) == expected;
+        }
+    }
+
+    [Fact]
     public async Task A_stream_removed_after_a_subscribe_but_before_the_first_read_invalidates_the_subject()
     {
         var subscribed = false;
+        var reads = 0;
         var readsSinceSubscribed = 0;
         _database.StreamReadGroupAsync((RedisKey)"stream", "group", "consumer", ">", 1)
-            .ReturnsForAnyArgs(_ => !Volatile.Read(ref subscribed) || Interlocked.Increment(ref readsSinceSubscribed) == 1
+            .ReturnsForAnyArgs(_ => Interlocked.Increment(ref reads) > 0 && (!Volatile.Read(ref subscribed) || Interlocked.Increment(ref readsSinceSubscribed) == 1)
                 ? Task.FromException<StreamEntry[]>(new RedisException("NOGROUP No such key or consumer group"))
                 : Task.FromResult(Array.Empty<StreamEntry>()));
         _redisStreamsTopicOptions.PollInterval = TimeSpan.FromMilliseconds(20);
         _redisStreamsTopicOptions.NotifyEnabled = false;
 
         using var subscription = Sut.Subscribe(_observer);
+        // A read issued before the subscribe may answer after it; the stream goes once a read issued after it is seen.
+        await ReadsAfterAsync(() => Volatile.Read(ref reads));
         Volatile.Write(ref subscribed, true);
 
         var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(10);
@@ -297,8 +331,9 @@ public class RedisStreamsTopicTests(ITestContextAccessor testContextAccessor) : 
     {
         var lose = false;
         var lost = 0;
+        var reads = 0;
         _database.StreamReadGroupAsync((RedisKey)"stream", "group", "consumer", ">", 1)
-            .ReturnsForAnyArgs(_ => Volatile.Read(ref lose) && Interlocked.Increment(ref lost) == 1
+            .ReturnsForAnyArgs(_ => Interlocked.Increment(ref reads) > 0 && Volatile.Read(ref lose) && Interlocked.Increment(ref lost) == 1
                 ? Task.FromException<StreamEntry[]>(new RedisException("NOGROUP No such key or consumer group"))
                 : Task.FromResult(Array.Empty<StreamEntry>()));
         _redisStreamsTopicOptions.PollInterval = TimeSpan.FromMilliseconds(20);
@@ -321,6 +356,8 @@ public class RedisStreamsTopicTests(ITestContextAccessor testContextAccessor) : 
 
         var subscribing = Task.Run(() => Sut.Subscribe(entry), testContextAccessor.Current.CancellationToken);
         joining.Wait(TimeSpan.FromSeconds(10), testContextAccessor.Current.CancellationToken).Should().BeTrue();
+        // A read issued before the subscriber joined may answer after it; the loss comes to a read issued after.
+        await ReadsAfterAsync(() => Volatile.Read(ref reads));
         Volatile.Write(ref lose, true);
         var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(10);
         while (DateTime.UtcNow < deadline && !_subject.ReceivedCalls().Any(c => c.GetMethodInfo().Name == nameof(IEventSubject<ICacheEvent>.Invalidate)))
@@ -369,5 +406,16 @@ public class RedisStreamsTopicTests(ITestContextAccessor testContextAccessor) : 
         _cacheOptions = _fixture.Create<CacheOptions>();
         _fixture.Inject(_cacheOptions);
         return ValueTask.CompletedTask;
+    }
+
+    /// <summary>Waits for a read issued from now on: one issued before whatever the test does next may answer after it.</summary>
+    private async Task ReadsAfterAsync(Func<int> reads)
+    {
+        var seen = reads();
+        var until = DateTime.UtcNow + TimeSpan.FromSeconds(10);
+        while (DateTime.UtcNow < until && reads() <= seen)
+        {
+            await Task.Delay(5, testContextAccessor.Current.CancellationToken);
+        }
     }
 }

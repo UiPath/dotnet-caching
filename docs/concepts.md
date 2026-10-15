@@ -211,13 +211,13 @@ The library ships two topic transports, named in `KnownTopicNames`.
 for publishing and XREADGROUP for consuming — with a consumer group per process.
 Delivery is at-least-once and durable: events are retained in the stream and can
 be replayed if a consumer falls behind or restarts. The consumer polls the stream
-at `PollInterval` (default 250 ms), so worst-case invalidation latency under
-normal conditions is approximately one polling interval. To reduce
-publish-to-deliver latency further, `RedisStreamsTopic` supports an optional
-Pub/Sub notify channel that acts as a doorbell: a cheap PUBLISH message wakes
-the poll loop immediately so that delivery approaches a single Redis RTT in the
-common case while stream durability is preserved for lagging or restarted
-consumers. You get the low latency of Pub/Sub and the reliability of Streams.
+at `PollInterval` (default 250 ms), and by default (`NotifyEnabled`) the
+publisher also rings a Pub/Sub notify channel that acts as a doorbell: a cheap
+PUBLISH message wakes the poll loop immediately, so delivery takes a few Redis
+round trips in the common case while stream durability is preserved for lagging
+or restarted consumers. Without the doorbell, worst-case invalidation latency is
+one polling interval. You get the low latency of Pub/Sub and the reliability of
+Streams.
 
 `RedisPubSub` (`"RedisPubSub"`) uses Redis Pub/Sub directly. It is simpler and
 has lower steady-state overhead, but delivery is fire-and-forget: messages

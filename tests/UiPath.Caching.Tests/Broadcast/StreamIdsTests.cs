@@ -44,7 +44,7 @@ public class StreamIdsTests
     {
         ReadCount? known = null;
 
-        (StreamIds.Gap(Stream(2, "9-0", entriesAdded, firstEntry, maxDeleted), Groups("2-0", entriesRead), "node", ref known) is not null)
+        (Gap(Stream(2, "9-0", entriesAdded, firstEntry, maxDeleted), Groups("2-0", entriesRead), ref known) is not null)
             .Should().Be(removed);
     }
 
@@ -54,10 +54,10 @@ public class StreamIdsTests
         ReadCount? known = null;
 
         // A group created at $ on a stream whose history was trimmed away.
-        StreamIds.Gap(Stream(0, "9-0", 6, null, "0-0"), Groups("9-0", null), "node", ref known).Should().BeNull();
+        Gap(Stream(0, "9-0", 6, null, "0-0"), Groups("9-0", null), ref known).Should().BeNull();
         known.Should().Be(new ReadCount("9-0", 6));
-        StreamIds.Gap(Stream(1, "10-0", 7, "10-0", "0-0"), Groups("9-0", null), "node", ref known).Should().BeNull("the one entry added since is still there");
-        StreamIds.Gap(Stream(2, "14-0", 12, "13-0", "0-0"), Groups("9-0", null), "node", ref known).Should().NotBeNull("three of the five added since were trimmed");
+        Gap(Stream(1, "10-0", 7, "10-0", "0-0"), Groups("9-0", null), ref known).Should().BeNull("the one entry added since is still there");
+        Gap(Stream(2, "14-0", 12, "13-0", "0-0"), Groups("9-0", null), ref known).Should().NotBeNull("three of the five added since were trimmed");
     }
 
     [Fact]
@@ -65,8 +65,20 @@ public class StreamIdsTests
     {
         ReadCount? known = new ReadCount("2-0", 1);
 
-        StreamIds.Gap(Stream(2, "9-0", 10, "7-0", "0-0"), Groups("5-0", null), "node", ref known).Should().NotBeNull();
+        Gap(Stream(2, "9-0", 10, "7-0", "0-0"), Groups("5-0", null), ref known).Should().NotBeNull();
         known.Should().BeNull();
+    }
+
+    [Fact]
+    public void Group_is_null_when_the_group_is_not_in_the_reply() =>
+        StreamIds.Group(Groups("2-0", 1), "missing").Should().BeNull();
+
+    /// <summary>The gap between the two raw replies, the way the writer's check with XINFO GROUPS reads them.</summary>
+    private static StreamGap? Gap(RedisResult stream, RedisResult groups, ref ReadCount? known)
+    {
+        var group = StreamIds.Group(groups, "node");
+        group.Should().NotBeNull();
+        return StreamIds.Gap(StreamIds.Parse(stream), group!.Value.LastDelivered, group.Value.EntriesRead, ref known);
     }
 
     private static RedisResult Stream(long length, string lastGenerated, long entriesAdded, string? firstEntry, string? maxDeleted)

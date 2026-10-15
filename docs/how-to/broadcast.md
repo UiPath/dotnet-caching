@@ -78,7 +78,7 @@ See [reference/settings.md](../reference/settings.md) for the full set. The tabl
 | Field | Default | Per-topic | Notes |
 | --- | --- | --- | --- |
 | `Enabled` | `true` | No | App-wide provider toggle. |
-| `MaxLength` | `32768` | Yes | `XADD MAXLEN ~` cap (server-side trim). |
+| `MaxLength` | `32768` | Yes | `XADD MAXLEN ~` cap (server-side trim); `null` never trims. |
 | `Limit` | `1024` | Yes | Max entries per `XREADGROUP` call. |
 | `PollBatchSize` | `4096` | Yes | Entries fetched per poll cycle. |
 | `FieldName` | `"event"` | Yes | Redis stream field name for the payload. |
@@ -96,7 +96,7 @@ See [reference/settings.md](../reference/settings.md) for the full set. The tabl
 | `MaintainerSearchPattern` | `null` | No | SCAN pattern to discover streams. |
 | `ProfilerEnabled` | `false` | Yes | Enable Redis command profiling. |
 | `EmitStreamReceivedEvent` | `false` | Yes | Emit a telemetry event per received stream entry. |
-| `NotifyEnabled` | `false` | Yes | Opt-in notify doorbell via Pub/Sub. |
+| `NotifyEnabled` | `true` | Yes | Notify doorbell via Pub/Sub; `false` polls only. |
 | `NotifyChannelStrategy` | `null` | Yes | Code-only `IRedisChannelStrategy` for the channel. |
 | `NotifyChannelName` | `"notify"` | Yes | Channel suffix used by the default strategy. |
 | `NotifyShardedPubSub` | `false` | Yes | Use sharded Pub/Sub (Redis 7.0+). |
@@ -120,7 +120,7 @@ See [reference/settings.md](../reference/settings.md) for the full set. The tabl
 
 All three touch how many entries move through the consumer pipeline, but at different layers:
 
-- `MaxLength` (default 32768) is a server-side cap — `XADD MAXLEN ~` trims the stream to at most this many entries. Tune it to bound Redis memory usage on the stream key.
+- `MaxLength` (default 32768) is a server-side cap � `XADD MAXLEN ~` trims the stream to at most this many entries. Tune it to bound Redis memory usage on the stream key. Entries trimmed before a node read them are reported as a loss (see [Troubleshooting](#troubleshooting)), so size it for the topic's burst traffic; a node's own entries are read at the poll, or every `MaxLength / 2` of its own publishes, whichever comes first.
 - `Limit` (default 1024) is the maximum number of entries the server returns in a single `XREADGROUP` call. Lowering it reduces the per-call latency spike at the cost of more round-trips under heavy load.
 - `PollBatchSize` (default 4096) is how many entries the consumer fetches in one poll cycle, potentially across multiple `XREADGROUP` calls. Raising it increases throughput under burst load; lowering it prevents the bounded channel from filling in a single cycle.
 
@@ -216,11 +216,17 @@ Everything else (`MaxLength`, `Limit`, `PollBatchSize`, `PollInterval`, `Consume
 
 ## Notify doorbell
 
-`RedisStreamsTopic` polls at `PollInterval` (default 250 ms). Setting `NotifyEnabled: true` adds a Pub/Sub channel that the publisher fires immediately after each `XADD`. Consumers wake up and call `XREADGROUP` right away instead of waiting for the next poll tick. The periodic poll continues in parallel as a safety net — a missed notification only adds at most one `PollInterval` of latency.
+`RedisStreamsTopic` polls at `PollInterval` (default 250 ms). `NotifyEnabled` (default `true`) adds a Pub/Sub channel that the publisher fires immediately after each `XADD`. The other nodes wake up and call `XREADGROUP` right away instead of waiting for the next poll tick, so an invalidation reaches them in a few network round trips rather than up to one poll interval later. The periodic poll continues in parallel as a safety net — a missed notification only adds at most one `PollInterval` of latency. Set `NotifyEnabled: false` to poll only, for example where the Pub/Sub subscription count matters (see below).
+
+What a broadcast costs on the server: the `XADD`, one fire-and-forget `PUBLISH`, and on every *other* node one script (`XINFO STREAM` and `XREADGROUP`, one round trip) and one `XACK`. The doorbell carries the publisher's consumer name, so the publishing node does not wake for its own ring � its own entries are never dispatched; the poll, the next ring from another node, or every `MaxLength / 2` of its own publishes reads and acknowledges them. Every read is checked for a trim past the group's position: a woken node compares the stream's oldest entry and counts (`XINFO STREAM`, O(1)) with the position it knows, while the check that also asks the server for the group's position (`XINFO GROUPS`, which grows with the number of nodes) keeps the poll's cadence � once a poll interval, after a reconnect, and after a full batch. A doorbell that arrives while a read is in flight is collapsed with any others into one more read.
+
+If the server refuses the subscription � the connection user lacks `SUBSCRIBE` or the channel (`NOPERM`), or the command is disabled � the topic logs one warning and polls only; a connection error is retried at `NotifySubscriberTimeout`, warned about once per streak.
 
 With notify enabled, raise `PollInterval` to 1–5 seconds to cut idle Redis round-trips without sacrificing P50 latency.
 
 The notify feature uses one Pub/Sub subscription per topic per node. At modest topic counts (tens of topics, hundreds of nodes) the subscription count is negligible. At very high topic × node products — thousands of topics, thousands of nodes — consider whether the subscription fan-out pressure on the Redis Pub/Sub bus outweighs the polling savings. In those cases, keeping a shorter `PollInterval` (250–500 ms) without notify may produce fewer total round-trips.
+
+On a Redis Cluster a plain `PUBLISH` is forwarded over the cluster bus to every node, whichever node the subscribers sit on. That is one small message per broadcast per node, and it is what the default does on a cluster too, because sharded Pub/Sub needs Redis 7.0 and a stream key whose hash tag the channel can share, neither of which the library can assume. Where both hold, `NotifyShardedPubSub: true` keeps the doorbell on the stream's shard (see below).
 
 ### Channel naming
 
@@ -241,11 +247,11 @@ Stream keys that contain `{`/`}` but do not form a valid non-empty hash tag (e.g
 
 | Option | Default | Notes |
 | --- | --- | --- |
-| `NotifyEnabled` | `false` | Opt-in. |
+| `NotifyEnabled` | `true` | `false` polls only. |
 | `NotifyChannelStrategy` | `null` | Code-only `IRedisChannelStrategy` override. When `null`, channel = stream key joined with `NotifyChannelName` via `CacheOptions.Separator`. |
 | `NotifyChannelName` | `"notify"` | Suffix appended to the stream's Redis key by the default strategy. Empty/whitespace falls back to `"notify"`. Ignored when `NotifyChannelStrategy` is set. |
 | `NotifyShardedPubSub` | `false` | When `true`, uses sharded Pub/Sub (`SPUBLISH`/`SSUBSCRIBE`; requires Redis 7.0+). Ignored when `NotifyChannelStrategy` is set. |
-| `NotifySubscriberTimeout` | multiplexer timeout | Resubscribe interval if `Subscribe` fails. |
+| `NotifySubscriberTimeout` | multiplexer timeout | Resubscribe interval if `Subscribe` fails (5 s until the connection is up). |
 | `NotifySubscriberDueTime` | half of `NotifySubscriberTimeout` | First-attempt delay before the initial subscribe. |
 
 ## Stream maintainer
@@ -352,7 +358,7 @@ Raise `ConsumerCapacity` for the topic or increase the number of consumer thread
 
 **Notify doorbell is not waking consumers.**
 
-Verify `NotifyEnabled: true` is set for the topic (it is opt-in and defaults to `false`). Check that the Redis connection multiplexer can subscribe — subscribe failures are retried on `NotifySubscriberTimeout`; watch for subscribe-error log lines. For Redis Cluster, confirm that the stream key and notify channel fall on the same slot by inspecting `CLUSTER KEYSLOT <stream-key>` and `CLUSTER KEYSLOT <channel-name>`.
+Verify `NotifyEnabled` is not set to `false` for the topic. Check that the Redis connection multiplexer can subscribe — subscribe failures are retried on `NotifySubscriberTimeout`; watch for subscribe-error log lines. For Redis Cluster, confirm that the stream key and notify channel fall on the same slot by inspecting `CLUSTER KEYSLOT <stream-key>` and `CLUSTER KEYSLOT <channel-name>`.
 
 **Sharded Pub/Sub fails at topic construction with `InvalidOperationException`.**
 
