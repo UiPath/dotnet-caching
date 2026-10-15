@@ -136,10 +136,8 @@ internal sealed partial class MultilayerHashCache : MultilayerCacheBase, IHashCa
     {
         ArgumentNullException.ThrowIfNull(generator);
         policy ??= _defaultPolicy;
-        // One floored resolution for the write and the rehydrate threshold; only the write is jittered.
-        var duration = ResolveDuration(policy);
-        var writeExpiration = _clock.ToDateTimeOffset(ApplyJitter(duration, policy.JitterMaxDuration));
-        return GetOrAddInternalAsync(cacheKey, generator, writeExpiration, duration, policy.JitterMaxDuration, HashCacheSetOption.KeyReplace, policy, _localMemorySetter.Writes, localMissed: false, token);
+        // One floored resolution for the write and the rehydrate threshold; the miss path draws the jittered write deadline, so a hit never reads the clock.
+        return GetOrAddInternalAsync(cacheKey, generator, expiration: null, ResolveDuration(policy), policy.JitterMaxDuration, HashCacheSetOption.KeyReplace, policy, _localMemorySetter.Writes, localMissed: false, token);
     }
 
     [OverloadResolutionPriority(1)]
@@ -393,11 +391,10 @@ internal sealed partial class MultilayerHashCache : MultilayerCacheBase, IHashCa
     private ValueTask<IDictionary<string, T?>> GetOrAddResolvedAsync<T>(CacheKey cacheKey, Func<CancellationToken, Task<IDictionary<string, T?>>> generator, CachePolicy? policy, long seen, bool localMissed, CancellationToken token)
     {
         policy ??= _defaultPolicy;
-        var duration = ResolveDuration(policy);
-        var writeExpiration = _clock.ToDateTimeOffset(ApplyJitter(duration, policy.JitterMaxDuration));
-        return GetOrAddInternalAsync(cacheKey, generator, writeExpiration, duration, policy.JitterMaxDuration, HashCacheSetOption.KeyReplace, policy, seen, localMissed, token);
+        return GetOrAddInternalAsync(cacheKey, generator, expiration: null, ResolveDuration(policy), policy.JitterMaxDuration, HashCacheSetOption.KeyReplace, policy, seen, localMissed, token);
     }
 
+    /// <param name="expiration">The caller's write deadline, or null for a policy write, whose jittered deadline the miss path draws.</param>
     /// <param name="seen">The local writes counter, read before the caller's first read of the local tier.</param>
     /// <param name="localMissed">True when that read found nothing under the key, so the miss path need not read it again.</param>
     private ValueTask<IDictionary<string, T?>> GetOrAddInternalAsync<T>(CacheKey cacheKey, Func<CancellationToken, Task<IDictionary<string, T?>>> generator, DateTimeOffset? expiration, TimeSpan effectiveDuration, TimeSpan? rehydrateJitter, HashCacheSetOption setOption, CachePolicy policy, long seen, bool localMissed, CancellationToken token)
@@ -422,7 +419,7 @@ internal sealed partial class MultilayerHashCache : MultilayerCacheBase, IHashCa
     private async ValueTask<IDictionary<string, T?>> GetOrAddCoreAsync<T>(CacheKey cacheKey, Func<CancellationToken, Task<IDictionary<string, T?>>> generator, DateTimeOffset? expiration, TimeSpan effectiveDuration, TimeSpan? rehydrateJitter, HashCacheSetOption setOption, CachePolicy policy, long seen, bool localMissed, CancellationToken token)
     {
         NotCacheableException.ThrowIfNotCacheable<T>();
-        var cacheEntryOptions = _entryBuilder.BuildEntryOptions<T>(cacheKey, expiration, setOption, token);
+        var cacheEntryOptions = _entryBuilder.BuildEntryOptions<T>(cacheKey, expiration ?? _clock.ToDateTimeOffset(ApplyJitter(effectiveDuration, rehydrateJitter)), setOption, token);
         var cacheEntry = await GetCacheEntryAsync<T>(cacheEntryOptions, policy, localMissed).ConfigureAwait(false);
         if (cacheEntry.Found)
         {
