@@ -1,6 +1,6 @@
 namespace UiPath.Caching.Tests;
 
-/// <summary>Every call shape the removed 3.0 extensions served compiles on each public cache class, which does not inherit the interfaces' sealed members.</summary>
+/// <summary>Every call shape the removed 3.0 extensions served, and every state and argument overload, compiles on each public cache class, which does not inherit the interfaces' sealed members.</summary>
 public class ConcreteCacheCallShapeTests
 {
     private static readonly TimeSpan Ttl = TimeSpan.FromMinutes(5);
@@ -9,6 +9,9 @@ public class ConcreteCacheCallShapeTests
     private static readonly Func<int, CancellationToken, Task<string?>> LoadState = static (n, _) => Task.FromResult<string?>($"v{n}");
     private static readonly Func<CancellationToken, Task<GeneratedValue<string>>> LoadGenerated = static _ => Task.FromResult(new GeneratedValue<string>("g", Deadline));
     private static readonly Func<CancellationToken, Task<IDictionary<string, string?>>> LoadHash = static _ => Task.FromResult<IDictionary<string, string?>>(new Dictionary<string, string?> { ["f"] = "v" });
+    private static readonly Func<int, CancellationToken, Task<GeneratedValue<string>>> LoadGeneratedState = static (n, _) => Task.FromResult(new GeneratedValue<string>($"g{n}", Deadline));
+    private static readonly Func<int, CancellationToken, Task<IDictionary<string, string?>>> LoadHashState = static (n, _) => Task.FromResult<IDictionary<string, string?>>(new Dictionary<string, string?> { ["f"] = $"v{n}" });
+    private static readonly Func<string, int[], CancellationToken, Task<KeyValuePair<int, string?>[]>> LoadBatch = static (prefix, states, _) => Task.FromResult(Array.ConvertAll(states, n => new KeyValuePair<int, string?>(n, $"{prefix}{n}")));
 
     private static CancellationToken Ct => TestContext.Current.CancellationToken;
 
@@ -85,6 +88,63 @@ public class ConcreteCacheCallShapeTests
         (await cache.ContainsAsync<string>(Key(), Ct)).Should().BeFalse();
         (await cache.RemoveAsync<string>(Key(), Ct)).Should().BeTrue();
     }
+
+    [Fact]
+    public async Task Cache_of_T_takes_every_state_and_argument_overload()
+    {
+        var cache = new Cache<string>(NullCache.Instance);
+
+        (await cache.GetOrAddWithExpirationAsync("k", 1, LoadGeneratedState, Ct)).Should().Be("g1");
+        (await cache.GetOrAddAsync(Entries(), "b", LoadBatch, Ct)).Should().ContainSingle().Which.Value.Should().Be("b1");
+        (await cache.GetOrAddAsync(Entries(), "b", LoadBatch, Ttl, Ct)).Should().ContainSingle().Which.Value.Should().Be("b1");
+        (await cache.GetOrAddAsync(Entries(), "b", LoadBatch, Deadline, Ct)).Should().ContainSingle().Which.Value.Should().Be("b1");
+    }
+
+    [Fact]
+    public async Task HashCache_of_T_takes_every_state_overload()
+    {
+        var cache = new HashCache<string>(NullHashCache.Instance);
+
+        (await cache.GetOrAddAsync("k", 1, LoadHashState, Ct)).Should().ContainValue("v1");
+        (await cache.GetOrAddAsync("k", 2, LoadHashState, Ttl, Ct)).Should().ContainValue("v2");
+        (await cache.GetOrAddAsync("k", 3, LoadHashState, Deadline, Ct)).Should().ContainValue("v3");
+        (await cache.GetOrAddAsync(Key(), 4, LoadHashState, Ct)).Should().ContainValue("v4");
+        (await cache.GetOrAddAsync(Key(), 5, LoadHashState, Ttl, Ct)).Should().ContainValue("v5");
+        (await cache.GetOrAddAsync(Key(), 6, LoadHashState, Deadline, Ct)).Should().ContainValue("v6");
+    }
+
+    [Fact]
+    public async Task NullCache_takes_every_state_and_argument_overload()
+    {
+        var cache = NullCache.Instance;
+
+        (await cache.GetOrAddWithExpirationAsync<string, int>("k", 1, LoadGeneratedState, null, Ct)).Should().Be("g1");
+        (await cache.GetOrAddWithExpirationAsync<string, int>("k", 2, LoadGeneratedState, Ct)).Should().Be("g2");
+        (await cache.GetOrAddAsync(Entries(), "b", LoadBatch, null, Ct)).Should().ContainSingle().Which.Value.Should().Be("b1");
+        (await cache.GetOrAddAsync(Entries(), "b", LoadBatch, Ttl, null, Ct)).Should().ContainSingle().Which.Value.Should().Be("b1");
+        (await cache.GetOrAddAsync(Entries(), "b", LoadBatch, Deadline, null, Ct)).Should().ContainSingle().Which.Value.Should().Be("b1");
+    }
+
+    [Fact]
+    public async Task NullHashCache_takes_every_state_overload()
+    {
+        var cache = NullHashCache.Instance;
+
+        (await cache.GetOrAddAsync("k", 1, LoadHashState, null, Ct)).Should().ContainValue("v1");
+        (await cache.GetOrAddAsync("k", 2, LoadHashState, Ttl, null, Ct)).Should().ContainValue("v2");
+        (await cache.GetOrAddAsync("k", 3, LoadHashState, Deadline, null, Ct)).Should().ContainValue("v3");
+        (await cache.GetOrAddAsync("k", 4, LoadHashState, Deadline, HashCacheSetOption.HashReplace, null, Ct)).Should().ContainValue("v4");
+        (await cache.GetOrAddAsync(Key(), 5, LoadHashState, null, Ct)).Should().ContainValue("v5");
+        (await cache.GetOrAddAsync(Key(), 6, LoadHashState, Ttl, null, Ct)).Should().ContainValue("v6");
+        (await cache.GetOrAddAsync(Key(), 7, LoadHashState, Deadline, null, Ct)).Should().ContainValue("v7");
+        (await cache.GetOrAddAsync(Key(), 8, LoadHashState, Deadline, HashCacheSetOption.HashReplace, null, Ct)).Should().ContainValue("v8");
+        (await cache.GetOrAddAsync("k", 9, LoadHashState, Ct)).Should().ContainValue("v9");
+        (await cache.GetOrAddAsync("k", 10, LoadHashState, Ttl, Ct)).Should().ContainValue("v10");
+        (await cache.GetOrAddAsync("k", 11, LoadHashState, Deadline, Ct)).Should().ContainValue("v11");
+        (await cache.GetOrAddAsync("k", 12, LoadHashState, Deadline, HashCacheSetOption.HashReplace, Ct)).Should().ContainValue("v12");
+    }
+
+    private static KeyValuePair<CacheKey, int>[] Entries() => [new("a", 1)];
 
     private static Span<char> Key() => "k".ToCharArray();
 }

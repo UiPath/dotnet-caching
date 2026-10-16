@@ -8,6 +8,10 @@ public static class GeneratedExpirationExtensions
     public static ValueTask<T?> GetOrAddWithExpirationAsync<T>(this ICache cache, CacheKey cacheKey, Func<CancellationToken, Task<GeneratedValue<T>>> generator, CancellationToken token = default) =>
         cache.GetOrAddWithExpirationAsync(cacheKey, generator, (CachePolicy?)null, token);
 
+    /// <inheritdoc cref="IStatefulGeneratedExpirationCache.GetOrAddWithExpirationAsync{T, TState}(CacheKey, TState, Func{TState, CancellationToken, Task{GeneratedValue{T}}}, CachePolicy, CancellationToken)"/>
+    public static ValueTask<T?> GetOrAddWithExpirationAsync<T, TState>(this ICache cache, CacheKey cacheKey, TState state, Func<TState, CancellationToken, Task<GeneratedValue<T>>> generator, CancellationToken token = default) =>
+        cache.GetOrAddWithExpirationAsync(cacheKey, state, generator, (CachePolicy?)null, token);
+
     internal static async ValueTask<T?> ReadThenSetAsync<T>(ICache cache, CacheKey cacheKey, Func<CancellationToken, Task<GeneratedValue<T>>> generator, CachePolicy? policy, CancellationToken token)
     {
         ArgumentNullException.ThrowIfNull(generator);

@@ -6,6 +6,31 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 
 ## [Unreleased]
 
+### Added
+
+- **State overloads on the hash caches.** `IHashCache` and `IHashCache<T>` gain `sealed` `GetOrAddAsync` members that take
+  a `TState state` before a `Func<TState, CancellationToken, Task<IDictionary<string, T?>>>` generator, for `CacheKey`
+  and `Span<char>` keys and every expiration, set-option and policy variant of the closure ones (the policy-less
+  `IHashCache` ones in `HashCacheExtensions`). On the library's multilayer and in-memory hash caches and `HashCache<T>`
+  (`IStatefulHashCache` and `IStatefulSpanKeyHashCache`, with their `<T>` siblings; the span one apart, as
+  `ISpanKeyHashCache` is, so the mockable one takes no `Span<char>`) a hit allocates nothing; any other cache, a Moq or NSubstitute proxy
+  included, is called through its closure members.
+- **A state overload of `GetOrAddWithExpirationAsync`** on `ICache` and `ICache<T>` (the policy-less `ICache` one in
+  `GeneratedExpirationExtensions`), served without a closure by `IStatefulGeneratedExpirationCache` and its `<T>`
+  sibling on the library's multilayer and in-memory caches and `Cache<T>`. Like the closure form it takes a `CacheKey`
+  only; there is no `Span<char>` form of either.
+- **A batch `GetOrAddAsync` with one argument for the whole call.** `GetOrAddAsync<T, TState, TArgument>(entries,
+  argument, generator, ...)` on `ICache` (and `<TState, TArgument>` on `ICache<T>`), for each expiration variant of the
+  batch overload, hands the generator `argument` before the states of the keys that missed, so it can be static. The
+  argument is not a per-entry state. `IBatchArgumentCache` and its `<T>` sibling serve it on the library's multilayer
+  and in-memory caches and `Cache<T>`, binding a closure only for a miss or a rehydrate.
+
+  None of the new overloads takes a call written for an existing one: a generator that throws or returns `default` has
+  no natural type and cannot be a state or an argument, and where both apply the closure member is the more specific
+  (`OverloadShapeTests`). The span state members carry `OverloadResolutionPriority(-1)`, as the other span members do.
+  `Cache<T>`, `HashCache<T>`, `NullCache` and `NullHashCache` declare the new overloads as public members too, so a call
+  on a public cache class takes them (`ConcreteCacheCallShapeTests`).
+
 ### Changed
 
 - **Read scripts are on by default.** `RedisCacheOptions.ReadScriptsEnabled` now defaults to `true`: on Redis 7 and

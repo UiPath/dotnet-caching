@@ -73,10 +73,23 @@ Then pick the simplest shape that fits:
    use for the same reason. It is the most verbose of the three; that verbosity is the price of the zero, so pay it
    only where the zero matters.
 
-The state overloads are members of `ICache` and `ICache<T>`. On the library's caches they reach `IStatefulCache`, which
-hands the state to the generator without a closure; on any other cache — one you wrote, or a Moq or NSubstitute proxy —
-they bind the state into a closure and call the closure overload, so the call works everywhere and only the allocation
-differs.
+The state overloads are members of `ICache`, `ICache<T>`, `IHashCache` and `IHashCache<T>`. On the library's caches they
+reach `IStatefulCache` (`IStatefulHashCache` for the hash caches), which hands the state to the generator without a
+closure; on any other cache — one you wrote, or a Moq or NSubstitute proxy — they bind the state into a closure and call
+the closure overload, so the call works everywhere and only the allocation differs. `GetOrAddWithExpirationAsync` has a
+state overload of the same shape (`IStatefulGeneratedExpirationCache`).
+
+The batch `GetOrAddAsync` already carries a state per entry, but its generator usually needs the service too. The
+overload that takes an `argument` passes one value for the whole call, before the states of the keys that missed, so
+the generator can be static:
+
+```csharp
+var users = await _cache.GetOrAddAsync(entries, this, static (self, ids, ct) => self.LoadManyAsync(ids, ct), ct);
+```
+
+The argument is not a state: every entry keeps its own, and the generator still sees only the states that missed. A
+batch allocates its arrays on every call anyway, so the argument saves the closure and no more; on the library's caches
+(`IBatchArgumentCache`) a call whose keys all hit binds nothing.
 
 ## A generator that knows its value's lifetime
 
@@ -117,8 +130,11 @@ ambiguous against the closure overload.
 Every shape ends in the same place: `ICache<T>` is `Cache<T>`, which composes the key with its `ICacheKeyStrategy` and
 calls the provider (`InMemory`, `InMemoryRedis` or `Redis`). The span, state and `GetOrAddWithExpirationAsync` members of
 `ICache`, `ICache<T>`, `IHashCache` and `IHashCache<T>` are `sealed` interface members with a body: each looks for the
-matching capability interface (`ISpanKeyCache`, `IStatefulCache`, `IGeneratedExpirationCache`) and otherwise calls the
-`CacheKey` member. `Cache<T>` and the library's providers implement all of them.
+matching capability interface (`ISpanKeyCache`, `IStatefulCache`, `IGeneratedExpirationCache`,
+`IStatefulGeneratedExpirationCache`, `IBatchArgumentCache`, and for the hash caches `ISpanKeyHashCache`,
+`IStatefulHashCache` and `IStatefulSpanKeyHashCache`) and otherwise calls the `CacheKey` member. `Cache<T>`, `HashCache<T>` and the library's in-memory
+and multilayer caches implement them; the Redis-only `ICache` implements `IStatefulCache` and `IGeneratedExpirationCache`
+and falls back to a closure for the rest, where the Redis round trip allocates far more than the closure does.
 
 A Moq or NSubstitute proxy implements no capability interface, so every shape arrives at the proxy's own members. Set
 up these, and a strict mock answers the production shape:
@@ -126,16 +142,17 @@ up these, and a strict mock answers the production shape:
 | Call on the proxy | Members to set up |
 |---|---|
 | Span member of any of the four interfaces | The same member with a `CacheKey` (`new CacheKey(span)`) |
-| State `GetOrAddAsync` on `ICache` | `GetOrAddAsync<T>(CacheKey, Func<CancellationToken, Task<T?>>, [expiration,] CachePolicy?, CancellationToken)`; the policy-less call passes `null` |
-| State `GetOrAddAsync` on `ICache<T>` | `GetOrAddAsync(CacheKey, Func<CancellationToken, Task<T?>>, [expiration,] CancellationToken)` |
-| `GetOrAddWithExpirationAsync` on `ICache` | `GetCacheEntryAsync<T>(CacheKey, CachePolicy?, CancellationToken)`; on a miss, `SetAsync<T>` with the generated expiration, or without one when it is `null` |
-| `GetOrAddWithExpirationAsync` on `ICache<T>` | `GetAsync(CacheKey, CancellationToken)`; when it answers `default`, `ContainsAsync(CacheKey, CancellationToken)`; on a miss, `SetAsync` with the generated expiration, or without one when it is `null` |
+| State `GetOrAddAsync` on `ICache` or `IHashCache` | The closure `GetOrAddAsync` with the same key, expiration and set-option arguments and a `CachePolicy?`, which the policy-less call passes as `null` |
+| State `GetOrAddAsync` on `ICache<T>` or `IHashCache<T>` | The closure `GetOrAddAsync` with the same key and expiration arguments |
+| `GetOrAddWithExpirationAsync`, with or without state, on `ICache` | `GetCacheEntryAsync<T>(CacheKey, CachePolicy?, CancellationToken)`; on a miss, `SetAsync<T>` with the generated expiration, or without one when it is `null` |
+| `GetOrAddWithExpirationAsync`, with or without state, on `ICache<T>` | `GetAsync(CacheKey, CancellationToken)`; when it answers `default`, `ContainsAsync(CacheKey, CancellationToken)`; on a miss, `SetAsync` with the generated expiration, or without one when it is `null` |
+| Batch `GetOrAddAsync` with an argument | The batch `GetOrAddAsync` that takes a `Func<TState[], CancellationToken, Task<KeyValuePair<TState, T?>[]>>`, with the same expiration argument (and a `CachePolicy?` on `ICache`) |
 
-On a loose proxy that was not set up, `GetOrAddAsync` in every shape returns the default without running the generator.
-`GetOrAddWithExpirationAsync` reads instead: a read the proxy answers as a miss (a `null` entry or `Found` false on
-`ICache`; a default value with `ContainsAsync` false on `ICache<T>`) runs the generator, sets its value and returns it,
-so that call does run the generator. To test what the library does — coalescing, the generator's expiration — use the
-in-memory provider rather than a proxy.
+On a loose proxy that was not set up, `GetOrAddAsync` in every shape, batch included, returns the default without
+running the generator. `GetOrAddWithExpirationAsync` reads instead: a read the proxy answers as a miss (a `null` entry
+or `Found` false on `ICache`; a default value with `ContainsAsync` false on `ICache<T>`) runs the generator, sets its
+value and returns it, so that call does run the generator. To test what the library does — coalescing, the
+generator's expiration — use the in-memory provider rather than a proxy.
 
 A sealed member is not virtual, so no proxy can intercept it: its body runs on the proxy and reaches the setups above.
 That is why they are sealed. Castle DynamicProxy, which Moq, NSubstitute and FakeItEasy build on, emits invalid IL for an
