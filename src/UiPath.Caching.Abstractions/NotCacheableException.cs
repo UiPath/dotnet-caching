@@ -22,8 +22,13 @@ public class NotCacheableException : Exception
     }
 
     [DebuggerStepThrough]
-    public static void ThrowIfNotCacheable<T>() =>
-        ThrowIfNotCacheable(typeof(T));
+    public static void ThrowIfNotCacheable<T>()
+    {
+        if (!Cacheable<T>.Value)
+        {
+            Throw(typeof(T));
+        }
+    }
 
     [DebuggerStepThrough]
     public static void ThrowIfNotCacheable(Type type)
@@ -40,4 +45,10 @@ public class NotCacheableException : Exception
     /// <summary>A value type is cacheable only if its default can stand for "absent"; <see cref="ReadOnlyMemory{T}"/> of bytes qualifies because empty memory already reads as a miss.</summary>
     private static bool IsCacheable(Type type) =>
         !type.IsValueType || Nullable.GetUnderlyingType(type) != null || type == typeof(ReadOnlyMemory<byte>);
+
+    /// <summary>Judged once per type: the check runs on every operation, and for a nullable value type it reflects and allocates.</summary>
+    private static class Cacheable<T>
+    {
+        public static readonly bool Value = IsCacheable(typeof(T));
+    }
 }

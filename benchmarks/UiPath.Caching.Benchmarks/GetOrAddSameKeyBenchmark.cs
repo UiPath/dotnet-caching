@@ -6,7 +6,7 @@ using UiPath.Caching.Config;
 
 namespace UiPath.Caching.Benchmarks;
 
-/// <summary>Repeated <c>GetOrAddAsync</c> on one key the local tier already holds, so the generator never runs: by string, by a string composed per call, by a <c>Span&lt;char&gt;</c> composed on the stack, with a capturing lambda and with state and a static lambda, and through the generator that returns its own expiration.</summary>
+/// <summary>Repeated <c>GetOrAddAsync</c> on one key the local tier already holds, so the generator never runs: by string, by a string composed per call, by a <c>Span&lt;char&gt;</c> composed on the stack, with a capturing lambda and with state and a static lambda, through the generator that returns its own expiration, and on a cache of a nullable value type.</summary>
 [MemoryDiagnoser]
 [MarkdownExporterAttribute.GitHub]
 public class GetOrAddSameKeyBenchmark
@@ -18,6 +18,7 @@ public class GetOrAddSameKeyBenchmark
 
     private IHost _host = default!;
     private ICache<string> _cache = default!;
+    private ICache<long?> _nullableLongCache = default!;
 
     [Params(KnownCacheProviderNames.InMemory, KnownCacheProviderNames.InMemoryRedis)]
     public string Provider { get; set; } = KnownCacheProviderNames.InMemory;
@@ -28,7 +29,9 @@ public class GetOrAddSameKeyBenchmark
         _host = HostHelper.GetHost(0, cache: Provider);
         await _host.StartAsync();
         _cache = _host.Services.GetRequiredService<ICache<string>>();
+        _nullableLongCache = _host.Services.GetRequiredService<ICache<long?>>();
         await _cache.GetOrAddAsync(KeyText, Generate, TimeSpan.FromHours(1));
+        await _nullableLongCache.GetOrAddAsync(KeyText, GenerateNullableLong, TimeSpan.FromHours(1));
     }
 
     [GlobalCleanup]
@@ -43,6 +46,9 @@ public class GetOrAddSameKeyBenchmark
 
     [Benchmark]
     public ValueTask<string?> ComposedStringKey() => _cache.GetOrAddAsync($"{_id}@{_tenant}", Generate);
+
+    [Benchmark]
+    public ValueTask<long?> StringKeyNullableLong() => _nullableLongCache.GetOrAddAsync(KeyText, GenerateNullableLong);
 
     [Benchmark]
     public ValueTask<string?> StringKeyCapturingLambda()
@@ -84,6 +90,8 @@ public class GetOrAddSameKeyBenchmark
     public ValueTask<string?> WithExpirationStringKey() => _cache.GetOrAddWithExpirationAsync(KeyText, GenerateWithExpiration);
 
     private static Task<string?> Generate(CancellationToken token) => Task.FromResult<string?>("value");
+
+    private static Task<long?> GenerateNullableLong(CancellationToken token) => Task.FromResult<long?>(42);
 
     private static Task<GeneratedValue<string>> GenerateWithExpiration(CancellationToken token) => Task.FromResult(new GeneratedValue<string>("value", DateTimeOffset.UtcNow.AddHours(1)));
 }
