@@ -390,21 +390,27 @@ public class SpanKeyOperationTests
     private static TResult Completed<TResult>(ValueTask<TResult> read) =>
         read.IsCompletedSuccessfully ? read.Result : throw new InvalidOperationException("a warm read went asynchronous");
 
-    /// <summary>Bytes the current thread allocates across a thousand warm calls.</summary>
+    /// <summary>The fewest bytes the current thread allocates across a thousand warm calls in any of ten rounds: a per-call allocation shows in every round, a one-off from tiered JIT in one.</summary>
     private static long AllocatedBy(Action read)
     {
-        for (var i = 0; i < 1_000; i++)
+        var fewest = long.MaxValue;
+        for (var round = 0; round < 10 && fewest > 0; round++)
         {
-            read();
+            for (var i = 0; i < 1_000; i++)
+            {
+                read();
+            }
+
+            var before = GC.GetAllocatedBytesForCurrentThread();
+            for (var i = 0; i < 1_000; i++)
+            {
+                read();
+            }
+
+            fewest = Math.Min(fewest, GC.GetAllocatedBytesForCurrentThread() - before);
         }
 
-        var before = GC.GetAllocatedBytesForCurrentThread();
-        for (var i = 0; i < 1_000; i++)
-        {
-            read();
-        }
-
-        return GC.GetAllocatedBytesForCurrentThread() - before;
+        return fewest;
     }
 #endif
 

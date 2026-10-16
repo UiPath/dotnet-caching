@@ -21,6 +21,9 @@ public class SpanKeyReadTests
         await hash.GetAsync<string>(default, null, Ct);
         await typedHash.GetItemAsync(default, "f", Ct);
         await typedHash.GetAsync(default, Ct);
+        await cache.ContainsAsync<string>(default, Ct);
+        await typed.GetOrAddAsync(default, _ => Task.FromResult<string?>("v"), Ct);
+        await hash.GetCacheEntryAsync<string>(default, null, Ct);
 
         await cache.Received(1).GetAsync<string>(Arg.Any<CacheKey>(), null, Ct);
         await typed.Received(1).GetAsync(Arg.Any<CacheKey>(), Ct);
@@ -28,6 +31,9 @@ public class SpanKeyReadTests
         await hash.Received(1).GetAsync<string>(Arg.Any<CacheKey>(), null, Ct);
         await typedHash.Received(1).GetItemAsync(Arg.Any<CacheKey>(), "f", Ct);
         await typedHash.Received(1).GetAsync(Arg.Any<CacheKey>(), Ct);
+        await cache.Received(1).ContainsAsync<string>(Arg.Any<CacheKey>(), Ct);
+        await typed.Received(1).GetOrAddAsync(Arg.Any<CacheKey>(), Arg.Any<Func<CancellationToken, Task<string?>>>(), Ct);
+        await hash.Received(1).GetCacheEntryAsync<string>(Arg.Any<CacheKey>(), null, Ct);
     }
 
     [Fact]

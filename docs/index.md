@@ -24,6 +24,7 @@ UiPath's internal multilayer caching library. L1 in-memory + L2 Redis, cross-nod
 
 **I need to solve X.**
 
+- Which `GetOrAddAsync` shape to call: lambda, delegate built once, state, span key; what each costs → [how-to/choosing-a-get-or-add-overload.md](how-to/choosing-a-get-or-add-overload.md).
 - Single-flight, hydrating cache, jitter, named policies, Polly → [how-to/resilience.md](how-to/resilience.md).
 - Cross-node sync, per-topic options, streams notify doorbell, sharded Pub/Sub → [how-to/broadcast.md](how-to/broadcast.md).
 - Per-field caching, side-channel metadata, bundled GET+TTL → [how-to/hash-cache.md](how-to/hash-cache.md).

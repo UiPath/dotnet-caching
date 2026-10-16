@@ -2,7 +2,7 @@ using System.Reflection;
 
 namespace UiPath.Caching.Tests;
 
-/// <summary>A proxy generator emits invalid IL for a method that takes a ref struct, so a public interface that consumers mock must neither take nor return one.</summary>
+/// <summary>A proxy generator emits invalid IL for a method that takes a ref struct, so a public interface that consumers mock must neither take nor return one in a member a proxy overrides; a sealed member has a body no proxy touches.</summary>
 public class MockableInterfaceTests
 {
     // Span by design and never mocked: the extensions and the key composition only look for them on a real implementation.
@@ -21,7 +21,7 @@ public class MockableInterfaceTests
         var offenders = LibraryAssemblies()
             .SelectMany(a => a.GetExportedTypes())
             .Where(t => t.IsInterface && !SpanCapabilities.Contains(t))
-            .SelectMany(t => t.GetMethods().Select(m => (Type: t, Method: m)))
+            .SelectMany(t => t.GetMethods().Where(m => m.IsVirtual).Select(m => (Type: t, Method: m)))
             .Where(x => IsRefStruct(x.Method.ReturnType) || x.Method.GetParameters().Any(p => IsRefStruct(p.ParameterType)))
             .Select(x => $"{x.Type.FullName}.{x.Method.Name}")
             .Distinct()

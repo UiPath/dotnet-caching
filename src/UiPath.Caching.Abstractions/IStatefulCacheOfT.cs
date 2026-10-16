@@ -1,6 +1,6 @@
 namespace UiPath.Caching;
 
-/// <summary>An <see cref="ICache{T}"/> whose <c>GetOrAddAsync</c> hands the generator its state, so a static lambda needs no closure; <see cref="StatefulCacheExtensions"/> prefers it.</summary>
+/// <summary>An <see cref="ICache{T}"/> whose <c>GetOrAddAsync</c> hands the generator its state, so a static lambda needs no closure; the state members of <see cref="ICache{T}"/> prefer it.</summary>
 public interface IStatefulCache<T>
 {
     /// <inheritdoc cref="IStatefulCache.GetOrAddAsync{T, TState}(CacheKey, TState, Func{TState, CancellationToken, Task{T}}, CachePolicy, CancellationToken)"/>

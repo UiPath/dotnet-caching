@@ -38,6 +38,41 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
   it on the stream's shard where Redis 7.0 and a hash-tagged stream key allow it, and stays off by default because
   neither can be assumed.
 
+- **The span reads, the state `GetOrAddAsync` and `GetOrAddWithExpirationAsync` are interface members.** They are
+  `sealed` members with a body on `ICache`, `ICache<T>`, `IHashCache` and `IHashCache<T>`, so IntelliSense and
+  go-to-definition find them on the interface. Each body does what the extension did: a cache that implements the
+  capability interface (`ISpanKeyCache`, `IStatefulCache`, `IGeneratedExpirationCache` and their siblings) takes its
+  allocation-free path; any other cache, including a Moq or NSubstitute proxy, is called through its `CacheKey`
+  members. A sealed member is not virtual, so a proxy never intercepts it and a test's `CacheKey` setups answer it as
+  before. The policy-less state and `GetOrAddWithExpirationAsync` overloads of `ICache` stay extensions, as the other
+  policy-less overloads do. A class does not inherit an interface's members, so the public caches declare every shape
+  the removed extensions served: `NullCache` and `NullHashCache` make their span members public and
+  `NullCache` adds the policy-bearing state `GetOrAddAsync` overloads and `GetOrAddWithExpirationAsync`; `Cache<T>` and
+  `HashCache<T>` add `RemoveAsync(Span<char>)`. A call on `Cache<string>`, `NullCache` or another public cache compiles
+  as it did on 3.0. A bare `default` key binds to the `CacheKey` member under C# 13 (`OverloadResolutionPriority(-1)` on
+  the span members); under C# 12, the default for a `net8.0` project, it is now ambiguous (CS0121) for every member that
+  gained a span overload, on the interfaces and on `NullCache`, `NullHashCache` and `HashCache<T>`, as `GetAsync` already
+  was; cast it to `CacheKey`.
+
+### Removed
+
+- **The 3.0 extensions the interface members replace.** `SpanKeyExtensions` is gone, with all 36 of its methods (the
+  `Span<char>` `GetAsync`, `ContainsAsync`, `GetOrAddAsync`, `GetCacheEntryAsync`, `GetItemAsync` and `RemoveAsync`
+  over `ICache`, `ICache<T>`, `IHashCache` and `IHashCache<T>`). `StatefulCacheExtensions` loses its `GetOrAddAsync<T,
+  TState>` overloads that take a `CachePolicy?` on `ICache` and all three over `ICache<T>`; `GeneratedExpirationExtensions`
+  loses the `GetOrAddWithExpirationAsync<T>` that takes a `CachePolicy?` on `ICache` and the one over `ICache<T>`. The
+  policy-less `ICache` overloads of both classes stay. Recompiled, an extension-syntax call binds to the interface member
+  (or the class member, on a public cache class) with no change, except a call on `ICache<T>`, `IHashCache<T>`,
+  `Cache<T>` or `HashCache<T>` that spells the value type as a type argument. The extensions were generic in it; the
+  members take it from the cache, so drop it: `typed.GetAsync<string>(span)` becomes `typed.GetAsync(span)`,
+  `typed.GetOrAddWithExpirationAsync<string>(key, generator)` becomes `typed.GetOrAddWithExpirationAsync(key,
+  generator)`, and `typed.GetOrAddAsync<string, int>(key, state, generator)` becomes `typed.GetOrAddAsync(key, state,
+  generator)` or `typed.GetOrAddAsync<int>(...)`. A call written as a static method
+  (`SpanKeyExtensions.GetAsync<T>(cache, ...)`) becomes an instance call on the cache. An assembly compiled against 3.0
+  that calls a removed method and is not recompiled fails when the JIT first compiles the method holding the call, with
+  `TypeLoadException` for a `SpanKeyExtensions` call and `MissingMethodException` for the others; rebuild it against
+  3.1.
+
 ### Fixed
 
 - **The first subscribe of a Redis Streams topic no longer risks a spurious loss.** A read issued before the subscribe
@@ -64,6 +99,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
   test what the library does instead: over the in-memory cache, named explicitly, since an
   unnamed `CreateCache()` resolves `CacheOptions.DefaultCache` (`InMemoryRedis`) and falls back to `NullCache` when only
   `AddMemory()` is registered.
+
+- **Which `GetOrAddAsync` shape to call.** `docs/how-to/choosing-a-get-or-add-overload.md` makes the plain lambda the
+  documented default and measures the alternatives: a lambda costs 64 to 96 bytes per call; a delegate built once and
+  the state overloads make a local hit allocate nothing. On a miss the lambda still costs its bytes, small next to the
+  generator and the write. It says when the state and `Span<char>`
+  overloads pay (a hot path a profiler has shown), how to write each shape, which one a wrapper should wrap, what runs
+  behind the extension classes, and what a Moq or NSubstitute proxy sees. The README and quickstart point to it, and
+  the XML docs of the capability interfaces name the classes that implement them. `GeneratorShapeBenchmark` in
+  `benchmarks/UiPath.Caching.Benchmarks` is the measurement.
 
 ## [3.0.0] - 2026-10-13
 

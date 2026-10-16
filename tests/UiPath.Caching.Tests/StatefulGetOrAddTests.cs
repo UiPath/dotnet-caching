@@ -136,6 +136,8 @@ public class StatefulGetOrAddTests
         AllocatedBy(() => SpanHit(cache, request, withExpiration: false)).Should().Be(0, "the span form");
         AllocatedBy(() => SpanHit(cache, request, withExpiration: true)).Should().Be(0, "the span form with an expiration");
         AllocatedBy(() => typed.GetOrAddAsync(key, request, Unexpected, Ct)).Should().Be(0, "the typed CacheKey form");
+        AllocatedBy(() => ((ICache)cache).GetOrAddAsync<string, Request>(key, request, Unexpected, null, Ct)).Should().Be(0, "the ICache member");
+        AllocatedBy(() => ((ICache<string>)typed).GetOrAddAsync(key, request, Unexpected, Ct)).Should().Be(0, "the ICache<T> member");
         AllocatedBy(() => SpanHit(typed, request)).Should().Be(0, "the typed span form");
     }
 

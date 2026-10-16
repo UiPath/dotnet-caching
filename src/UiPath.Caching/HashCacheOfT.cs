@@ -166,6 +166,10 @@ public class HashCache<T> : IHashCache<T>, ISpanKeyHashCache<T>
     public ValueTask<bool> RemoveAsync(CacheKey cacheKey, CancellationToken token = default) =>
         _cache.RemoveAsync<T>(GetCacheKey(cacheKey), token);
 
+    [OverloadResolutionPriority(-1)]
+    public ValueTask<bool> RemoveAsync(Span<char> cacheKey, CancellationToken token = default) =>
+        RemoveAsync(new CacheKey(cacheKey), token);
+
     [OverloadResolutionPriority(1)]
     public ValueTask<bool> ContainsAsync(CacheKey cacheKey, CancellationToken token = default)
     {

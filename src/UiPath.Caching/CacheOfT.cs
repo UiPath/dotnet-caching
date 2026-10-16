@@ -203,6 +203,10 @@ public class Cache<T> : ICache<T>, ISpanKeyCache<T>, IStatefulCache<T>, IGenerat
     public ValueTask<bool> RemoveAsync(CacheKey[] cacheKeys, CancellationToken token = default) =>
         _cache.RemoveAsync<T>(GetCacheKeys(cacheKeys), token);
 
+    [OverloadResolutionPriority(-1)]
+    public ValueTask<bool> RemoveAsync(Span<char> cacheKey, CancellationToken token = default) =>
+        RemoveAsync(new CacheKey(cacheKey), token);
+
     public ValueTask<bool> SetAsync(CacheKey cacheKey, T? value, CancellationToken token = default) =>
         _cache.SetAsync(GetCacheKey(cacheKey), value, policy: Policy, token: token);
 
