@@ -15,6 +15,7 @@
 
   <ItemGroup>
     <PackageReference Include="Aspire.Hosting.Redis" />
+    <PackageReference Include="MessagePack" />
   </ItemGroup>
 
   <ItemGroup>
