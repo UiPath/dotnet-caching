@@ -20,15 +20,27 @@ internal static class StreamIds
             group.EntriesRead is > 0 ? group.EntriesRead : null, // StackExchange.Redis reads a count Redis cannot tell as 0.
             ref known);
 
-    /// <summary>The same, from the raw <c>XINFO STREAM</c> and <c>XINFO GROUPS</c> replies a script returned.</summary>
-    public static StreamGap? Gap(RedisResult stream, RedisResult groups, RedisValue groupName, ref ReadCount? known)
+    /// <summary>The same, from the stream's state and the group's position as this reader knows it.</summary>
+    public static StreamGap? Gap(StreamState stream, RedisValue lastDelivered, long? entriesRead, ref ReadCount? known) =>
+        Gap(stream.Length, stream.Oldest, stream.LastGenerated, stream.MaxDeleted, stream.EntriesAdded, lastDelivered, entriesRead, ref known);
+
+    /// <summary>The raw <c>XINFO STREAM</c> reply a script returned.</summary>
+    public static StreamState Parse(RedisResult stream)
     {
         var info = stream.ToDictionary();
         var length = (long)info["length"];
         var lastGenerated = (RedisValue)info["last-generated-id"];
-        var oldest = length == 0 ? lastGenerated : (RedisValue)Items(info["first-entry"])[0];
-        var maxDeleted = info.TryGetValue("max-deleted-entry-id", out var deleted) ? (RedisValue)deleted : RedisValue.Null;
-        var added = info.TryGetValue("entries-added", out var entriesAdded) ? (long)entriesAdded : 0;
+        return new(
+            length,
+            length == 0 ? lastGenerated : (RedisValue)Items(info["first-entry"])[0],
+            lastGenerated,
+            info.TryGetValue("max-deleted-entry-id", out var deleted) ? (RedisValue)deleted : RedisValue.Null,
+            info.TryGetValue("entries-added", out var entriesAdded) ? (long)entriesAdded : 0);
+    }
+
+    /// <summary>The group's position in a raw <c>XINFO GROUPS</c> reply, or <c>null</c> when it is not there.</summary>
+    public static (RedisValue LastDelivered, long? EntriesRead)? Group(RedisResult groups, RedisValue groupName)
+    {
         foreach (var group in Items(groups))
         {
             var fields = group.ToDictionary();
@@ -38,7 +50,7 @@ internal static class StreamIds
             }
 
             long? read = fields.TryGetValue("entries-read", out var entriesRead) && !entriesRead.IsNull ? (long)entriesRead : null;
-            return Gap(length, oldest, lastGenerated, maxDeleted, added, (RedisValue)fields["last-delivered-id"], read, ref known);
+            return ((RedisValue)fields["last-delivered-id"], read);
         }
 
         return null;

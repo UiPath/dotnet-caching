@@ -16,7 +16,34 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
   `RedisHashCache` each log their own) and then the transaction path for good, so no read is lost. Set
   `ReadScriptsEnabled: false` to avoid the attempt, and the warning, where that is the known state of the server.
 
+- **The Redis Streams notify doorbell is on by default, with a cheap wake.** `RedisStreamsTopicOptions.NotifyEnabled`
+  now defaults to `true`: the publisher rings a Pub/Sub channel after every `XADD`, so the other nodes read the
+  stream at once instead of at their next `PollInterval` tick. Measured between two hosts on one machine against a
+  local Redis (`benchmarks` `doorbell` mode), a `SetAsync` became visible to the other host's local tier in 2.7 ms at
+  the median and 3.3 ms at the 99th percentile, against 112 ms at the median and 218 ms at the worst with the poll
+  alone. The poll stays as the safety net.
+  What a broadcast now costs on the server: the `XADD`, one fire-and-forget `PUBLISH`, and on every other node one
+  script (`XINFO STREAM` and `XREADGROUP` in one round trip) and one `XACK`. The doorbell carries the publisher's
+  consumer name, so a node does not wake for its own ring. Every read is still checked for entries trimmed past the
+  group's position, but a woken node checks against the position it knows, and the check that also asks the server
+  for it (`XINFO GROUPS`, which grows with the number of nodes) keeps the poll's cadence (once a poll interval, after
+  a reconnect and after a full batch); doorbells that arrive during a read collapse into one more read; and a read
+  that drained the stream waits for the next ring or poll instead of reading again. A node's own entries, which
+  nothing rings for, are read every `MaxLength / 2` of its own publishes as well as at the poll, so a burst of them
+  cannot be trimmed unread and reported as a loss. The per-node subscription is one Pub/Sub channel per topic; where
+  the server refuses it (`NOPERM`, or `SUBSCRIBE` disabled) the topic logs one warning and polls only, and a
+  connection error is retried at `NotifySubscriberTimeout` with one warning per streak. Set `NotifyEnabled: false`
+  to poll only.
+  On a Redis Cluster a plain `PUBLISH` is forwarded over the cluster bus to every node; `NotifyShardedPubSub` keeps
+  it on the stream's shard where Redis 7.0 and a hash-tagged stream key allow it, and stays off by default because
+  neither can be assumed.
+
 ### Fixed
+
+- **The first subscribe of a Redis Streams topic no longer risks a spurious loss.** A read issued before the subscribe
+  created the consumer group, and answered `NOGROUP` after it, was reported as entries lost, so the local tier could be
+  expired for nothing right after a process started. Such an answer now reports a loss only when the group the
+  subscribe created is gone as well.
 
 - `GetOrAddWithExpirationAsync` on a cache that does not implement `IGeneratedExpirationCache` threw
   `NullReferenceException` when its entry read answered `null`, as a loose Moq or NSubstitute proxy of `ICache` does for a

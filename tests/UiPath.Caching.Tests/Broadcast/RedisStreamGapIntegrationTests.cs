@@ -303,7 +303,7 @@ public sealed class RedisStreamGapIntegrationTests(RedisContainerFixture fixture
             NullLogger.Instance,
             NullTelemetryProvider.Instance,
             NullRedisProfiler.Instance,
-            new TimedFetchWaiter(PollInterval),
+            new SignalingFetchWaiter(PollInterval),
             () => Interlocked.Increment(ref _missed),
             _stop.Token);
     }

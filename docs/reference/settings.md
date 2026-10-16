@@ -122,10 +122,10 @@ App-wide-only fields (per-topic `Topics[]` entries ignore these): `Enabled`, `Co
 | `MaintainerSearchPattern` | `string?` | `null` | App-wide only | Redis key glob pattern for maintainer scan; `null` = use default prefix pattern. |
 | `ProfilerEnabled` | `bool` | `false` | App-wide / Per-topic | Enable per-stream Redis command profiling. |
 | `EmitStreamReceivedEvent` | `bool` | `false` | App-wide / Per-topic | Emit a telemetry event for each raw stream message received. |
-| `NotifyEnabled` | `bool` | `false` | App-wide / Per-topic | Opt-in pub/sub doorbell — `PUBLISH` after `XADD` wakes the consumer immediately instead of waiting `PollInterval`. |
+| `NotifyEnabled` | `bool` | `true` | App-wide / Per-topic | Pub/sub doorbell — `PUBLISH` after `XADD` wakes the consumer immediately instead of waiting `PollInterval`; `false` polls only. |
 | `NotifyChannelName` | `string` | `"notify"` | App-wide / Per-topic | Channel suffix appended to the stream key; ignored when `NotifyChannelStrategy` is set in code. |
 | `NotifyShardedPubSub` | `bool` | `false` | App-wide / Per-topic | `true` = use `SPUBLISH`/`SSUBSCRIBE` (Redis 7.0+); ignored when `NotifyChannelStrategy` is set in code. |
-| `NotifySubscriberTimeout` | `TimeSpan?` | `null` | App-wide / Per-topic | Resubscribe interval when `Subscribe` fails; `null` or non-positive = multiplexer timeout. |
+| `NotifySubscriberTimeout` | `TimeSpan?` | `null` | App-wide / Per-topic | Resubscribe interval when `Subscribe` fails; `null` or non-positive = multiplexer timeout (5 s until the connection is up). |
 | `NotifySubscriberDueTime` | `TimeSpan?` | `null` | App-wide / Per-topic | Delay before the first subscribe attempt; `null` = half of resolved `NotifySubscriberTimeout`. |
 
 Per-topic overrides: add entries to `Topics[]` under `Broadcast:RedisStreams`. Each entry is matched case-insensitively on `Name`; only present fields override app-wide values (delta overlay). See [how-to/broadcast.md#per-topic-overrides](../how-to/broadcast.md#per-topic-overrides).

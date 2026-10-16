@@ -21,8 +21,11 @@ public sealed partial class RedisStreamsTopic<T> : ITopic<T>
     private readonly EventDispatcher<T> _dispatcher;
     private readonly RedisStreamNotifyChannel? _notifyChannel;
     private readonly RedisChannel? _notifyRedisChannel;
-    private readonly IFetchWaiter _waiter;
+    private readonly SignalingFetchWaiter _waiter;
     private readonly Lock _syncObj = new();
+    // Half of MaxLength; 0 = no trim.
+    private readonly long _wakeEvery;
+    private long _published;
     private bool _disposed;
     private volatile bool _consumerGroupCreated;
 
@@ -51,26 +54,23 @@ public sealed partial class RedisStreamsTopic<T> : ITopic<T>
         _streamOptions = streamOptions;
         _subject = subjectFactory();
         _redisStreamKeyStrategy = streamOptions.RedisStreamKeyStrategy ?? new PrefixStrategy(RedisKeyspaces.Streams, cacheOptions);
+        _context = GetContext(topicKey, cacheOptions, streamOptions);
+        _waiter = new SignalingFetchWaiter(streamOptions.PollInterval);
+        _wakeEvery = streamOptions.MaxLength is { } maxLength ? Math.Max(1, maxLength / 2) : 0;
         if (_streamOptions.NotifyEnabled)
         {
             var notifyChannelStrategy = streamOptions.NotifyChannelStrategy
                 ?? StreamSuffixChannel.Create(_redisStreamKeyStrategy, cacheOptions, streamOptions.NotifyChannelName, streamOptions.NotifyShardedPubSub);
             _notifyRedisChannel = notifyChannelStrategy.GetRedisChannel(topicKey);
-            var signaling = new SignalingFetchWaiter(streamOptions.PollInterval);
-            _waiter = signaling;
             _notifyChannel = new RedisStreamNotifyChannel(
                 _notifyRedisChannel.Value,
                 _redis,
                 _logger,
-                signaling,
+                _waiter,
                 streamOptions.NotifySubscriberTimeout,
-                streamOptions.NotifySubscriberDueTime);
+                streamOptions.NotifySubscriberDueTime,
+                _context.ConsumerName);
         }
-        else
-        {
-            _waiter = new TimedFetchWaiter(streamOptions.PollInterval);
-        }
-        _context = GetContext(topicKey, cacheOptions, streamOptions);
         var capacity = ChannelHelper.CalculateBoundedCapacity(streamOptions.ConsumerCapacity, streamOptions.PollBatchSize);
         // Run later on the pool, by which time the writer the drop reports through is in place.
         var dropped = new DroppedEvents(topicKey, () => _subscriber!.ReportLoss(), _logger);
@@ -127,18 +127,11 @@ public sealed partial class RedisStreamsTopic<T> : ITopic<T>
             defaultValue: RedisValue.Null,
             token).ConfigureAwait(false);
             _cachingTelemetryProvider.TrackTopicWriteMetric(_context.Topic.ToString(), id);
-            if (_notifyRedisChannel.HasValue && !id.IsNull)
+            if (!id.IsNull)
             {
-                try
-                {
-                    _ = _redis.Database.PublishAsync(_notifyRedisChannel.Value, RedisValue.EmptyString, CommandFlags.FireAndForget)
-                        .ContinueWith(t => LogNotifyPublishError(t.Exception!, TopicKey), TaskContinuationOptions.OnlyOnFaulted | TaskContinuationOptions.ExecuteSynchronously);
-                }
-                catch (Exception ex)
-                {
-                    LogNotifyPublishError(ex, TopicKey);
-                }
+                Ring();
             }
+
             LogPublished(TopicKey, @event.Id, id);
             return !id.IsNull;
         }
@@ -167,6 +160,28 @@ public sealed partial class RedisStreamsTopic<T> : ITopic<T>
     }
 
     internal RedisStreamsTopicOptions GetResolvedOptionsForTests() => _streamOptions;
+
+    /// <summary>Wakes the other nodes, and this one every <see cref="_wakeEvery"/> own entries: nothing else rings for those, and a burst of them could be trimmed unread.</summary>
+    private void Ring()
+    {
+        if (_notifyRedisChannel.HasValue)
+        {
+            try
+            {
+                // Fire-and-forget: only a send failure surfaces here.
+                _ = _redis.Database.PublishAsync(_notifyRedisChannel.Value, _context.ConsumerName, CommandFlags.FireAndForget);
+            }
+            catch (Exception ex)
+            {
+                LogNotifyPublishError(ex, TopicKey);
+            }
+        }
+
+        if (_wakeEvery > 0 && Interlocked.Increment(ref _published) % _wakeEvery == 0)
+        {
+            _waiter.Signal();
+        }
+    }
 
     /// <summary>Isolated like the subject's own notifications, so a throwing observer cannot fail the subscribe that registered it.</summary>
     private void TellMissed(IMissedEventsObserver missed, MissedEventsReason reason)

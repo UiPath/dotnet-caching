@@ -16,7 +16,7 @@ Alphabetical lookup for terms used across the docs.
 
 **Distributed lock** — Cross-node single-flight via `IDistributedLock`. Default impl `RedisDistributedLock` uses `LockTakeAsync`/`LockReleaseAsync` with a `SourceUri`-prefixed token. See [how-to/resilience.md](../how-to/resilience.md#stampede-protection).
 
-**Doorbell (notify)** — Opt-in Pub/Sub channel a stream publisher fires after every `XADD` so consumers wake immediately instead of waiting for the next poll. Best-effort; the poll continues as a safety net. See [how-to/broadcast.md](../how-to/broadcast.md#notify-doorbell).
+**Doorbell (notify)** — Pub/Sub channel a stream publisher fires after every `XADD` (on by default) so the other nodes wake immediately instead of waiting for the next poll. Best-effort; the poll continues as a safety net. See [how-to/broadcast.md](../how-to/broadcast.md#notify-doorbell).
 
 **Hash tag** — A `{...}` substring inside a Redis key that pins the key to a single shard in Redis Cluster. Used by the sharded Pub/Sub strategy so the doorbell channel and the stream key collide on the same slot.
 
