@@ -119,7 +119,7 @@ public class RedisReadScriptIntegrationTests(RedisContainerFixture fixture)
                 b =>
                 {
                     b.AddRedisConnection(o => o.ConnectionString = connectionString);
-                    b.AddRedis(o => o.ReadScriptsEnabled = true);
+                    b.AddRedis();
                 },
                 o => o.AppShortName = app)
             .BuildServiceProvider();

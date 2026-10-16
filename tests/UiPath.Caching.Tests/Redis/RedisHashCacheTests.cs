@@ -1713,7 +1713,6 @@ public class RedisHashCacheTests(ITestContextAccessor testContextAccessor) : IAs
             EntryFactory = new TestCacheEntryFactory(),
             CacheKeyStrategy = _cacheKeyStrategy,
             RedisKeyStrategyFactory = redisKeyStrategyFactory,
-            ReadScriptsEnabled = true,
         };
         _serializer = new JsonSerializer();
         _fixture.Inject<ISerializerProxy<byte[]>>(_serializer);

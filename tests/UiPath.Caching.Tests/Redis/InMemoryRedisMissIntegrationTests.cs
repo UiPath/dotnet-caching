@@ -77,7 +77,7 @@ public class InMemoryRedisMissIntegrationTests(RedisContainerFixture fixture)
                         o.ProfilerEnabled = true;
                         o.ProfilingSessionFactory = () => profiler.Session;
                     });
-                    b.AddRedis(o => o.ReadScriptsEnabled = true);
+                    b.AddRedis();
                     b.AddInMemoryRedis(_ => { });
                 },
                 o => o.AppShortName = "inmemoryredis")

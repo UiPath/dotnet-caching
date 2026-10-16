@@ -6,6 +6,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 
 ## [Unreleased]
 
+### Changed
+
+- **Read scripts are on by default.** `RedisCacheOptions.ReadScriptsEnabled` now defaults to `true`: on Redis 7 and
+  later, `RedisCache` and `RedisHashCache` read a value (or a hash) and its expiration with one `EVAL_RO` script
+  instead of a MULTI/EXEC transaction, which allocates about 2.5 KB less per miss through the in-memory and Redis
+  tiers. The fallback is unchanged and automatic: before Redis 7 no script is sent; a connection user without
+  `@scripting`, or a proxy that cannot run scripts, gets one warning per cache instance (`RedisCache` and
+  `RedisHashCache` each log their own) and then the transaction path for good, so no read is lost. Set
+  `ReadScriptsEnabled: false` to avoid the attempt, and the warning, where that is the known state of the server.
+
 ### Fixed
 
 - `GetOrAddWithExpirationAsync` on a cache that does not implement `IGeneratedExpirationCache` threw

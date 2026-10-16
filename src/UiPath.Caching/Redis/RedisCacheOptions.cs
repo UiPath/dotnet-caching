@@ -32,11 +32,11 @@ public class RedisCacheOptions : ICacheOptions
 
     /// <summary>
     /// Read a value and its expiration with one read-only script (<c>EVAL_RO</c>) on Redis 7 and later, which allocates
-    /// less than a MULTI/EXEC transaction. Off by default: the server must allow scripts. Once on, reads switch back to the
-    /// transaction for good, with a warning, if the first script fails for any reason, or later if the server refuses one
-    /// as unknown or not permitted.
+    /// less than a MULTI/EXEC transaction. On by default. Before Redis 7, and on a server that cannot run the script,
+    /// reads use the transaction: they switch to it for good, with a warning, if the first script fails for any reason,
+    /// or later if the server refuses one as unknown or not permitted. Set to <see langword="false"/> to never send a script.
     /// </summary>
-    public bool ReadScriptsEnabled { get; set; }
+    public bool ReadScriptsEnabled { get; set; } = true;
 
     /// <summary>Member-wise copy, so a caller can vary one setting without mutating the DI singleton.</summary>
     internal RedisCacheOptions ShallowCopy() => (RedisCacheOptions)MemberwiseClone();
