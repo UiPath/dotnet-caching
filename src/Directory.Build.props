@@ -24,4 +24,18 @@
     <AdditionalFiles Include="PublicAPI.Unshipped.txt" />
   </ItemGroup>
 
+  <!--
+    Package validation: every pack compares each package's public surface with the last release on
+    nuget.org (PackageValidationBaselineVersion) and across the TFMs it ships. A break fails the pack
+    unless it is listed in the project's CompatibilitySuppressions.xml; generate that file for an
+    intended break with /p:GenerateCompatibilitySuppressionFile=true. Bump the baseline on release.
+  -->
+  <PropertyGroup>
+    <EnablePackageValidation>true</EnablePackageValidation>
+    <PackageValidationBaselineVersion>3.0.0</PackageValidationBaselineVersion>
+    <!-- The version comes from the release tag (/p:Version in release.yml); a local or PR build packs 1.0.0,
+         so the assembly-version comparison (CP0003) only means something when a version was passed. -->
+    <NoWarn Condition="'$(Version)' == ''">$(NoWarn);CP0003</NoWarn>
+  </PropertyGroup>
+
 </Project>
