@@ -589,7 +589,21 @@ public class RedisCacheTests(ITestContextAccessor testContextAccessor) : IAsyncL
     }
 
     [Fact]
-    public void Read_scripts_are_opt_in() => new RedisCacheOptions().ReadScriptsEnabled.Should().BeFalse();
+    public void Read_scripts_are_on_by_default() => new RedisCacheOptions().ReadScriptsEnabled.Should().BeTrue();
+
+    /// <summary>The default never sends a script to a server without EVAL_RO, so it is safe before Redis 7.</summary>
+    [Fact]
+    public async Task GetCacheEntry_uses_a_transaction_before_redis_v7_by_default()
+    {
+        _version = new(6, 2);
+        _transaction.StringGetAsync(_redisKey, CommandFlags.PreferReplica).Returns(RedisValue.Null);
+        _transaction.ExecuteAsync(Arg.Any<CommandFlags>()).Returns(true);
+
+        (await Sut.GetCacheEntryAsync<string>(_cacheKey, policy: null, token: testContextAccessor.Current.CancellationToken)).Found.Should().BeFalse();
+
+        _database.Received(1).CreateTransaction();
+        await _database.DidNotReceive().ScriptEvaluateReadOnlyAsync(Arg.Any<string>(), Arg.Any<RedisKey[]?>(), Arg.Any<RedisValue[]?>(), Arg.Any<CommandFlags>());
+    }
 
     [Fact]
     public async Task GetCacheEntry_uses_a_transaction_when_read_scripts_are_turned_off_v7()
@@ -2224,7 +2238,6 @@ public class RedisCacheTests(ITestContextAccessor testContextAccessor) : IAsyncL
         {
             CacheKeyStrategy = _cacheKeyStrategy,
             RedisKeyStrategyFactory = redisKeyStrategyFactory,
-            ReadScriptsEnabled = true,
         };
 
         _database = _fixture.Freeze<IDatabase>();
