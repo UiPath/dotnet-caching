@@ -1,0 +1,6 @@
+#nullable enable
+const UiPath.Caching.Analyzers.CapturingGeneratorAnalyzer.DiagnosticId = "UIPCACHE001" -> string!
+override UiPath.Caching.Analyzers.CapturingGeneratorAnalyzer.Initialize(Microsoft.CodeAnalysis.Diagnostics.AnalysisContext! context) -> void
+override UiPath.Caching.Analyzers.CapturingGeneratorAnalyzer.SupportedDiagnostics.get -> System.Collections.Immutable.ImmutableArray<Microsoft.CodeAnalysis.DiagnosticDescriptor!>
+UiPath.Caching.Analyzers.CapturingGeneratorAnalyzer
+UiPath.Caching.Analyzers.CapturingGeneratorAnalyzer.CapturingGeneratorAnalyzer() -> void

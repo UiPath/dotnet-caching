@@ -10,6 +10,16 @@
   <ItemGroup>
     <InternalsVisibleTo Include="UiPath.Caching" />
   </ItemGroup>
+  <!-- The analyzers ship in this package, so every UiPath.Caching consumer gets them. Their paths come from the analyzer
+       project references (Directory.Build.props), so a custom OutputPath or artifacts path packs the same files. -->
+  <Target Name="PackAnalyzers" BeforeTargets="_GetPackageFiles">
+    <MSBuild Projects="@(ProjectReference->WithMetadataValue('OutputItemType', 'Analyzer'))" Targets="GetTargetPath" Properties="TargetFramework=netstandard2.0">
+      <Output TaskParameter="TargetOutputs" ItemName="_PackedAnalyzer" />
+    </MSBuild>
+    <ItemGroup>
+      <None Include="@(_PackedAnalyzer)" Pack="true" PackagePath="analyzers/dotnet/cs" Visible="false" />
+    </ItemGroup>
+  </Target>
   <ItemGroup>
     <PackageReference Include="Microsoft.Extensions.Configuration.Abstractions" />
     <PackageReference Include="Microsoft.Extensions.Primitives" />

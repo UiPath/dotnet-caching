@@ -20,13 +20,13 @@ public static class HashCacheSyncExtensions
         => cache.GetAsync(cacheKey, fields, token).AsTask().GetAwaiter().GetResult();
 
     public static IDictionary<string, T?> GetOrAdd<T>(this IHashCache<T> cache, CacheKey cacheKey, Func<IDictionary<string, T?>> generator, CancellationToken token = default)
-        => cache.GetOrAddAsync(cacheKey, _ => Task.FromResult(generator()), token).AsTask().GetAwaiter().GetResult();
+        => cache.GetOrAddAsync(cacheKey, generator, static (g, _) => Task.FromResult(g()), token).AsTask().GetAwaiter().GetResult();
 
     public static IDictionary<string, T?> GetOrAdd<T>(this IHashCache<T> cache, CacheKey cacheKey, Func<IDictionary<string, T?>> generator, TimeSpan expiration, CancellationToken token = default)
-        => cache.GetOrAddAsync(cacheKey, _ => Task.FromResult(generator()), expiration, token).AsTask().GetAwaiter().GetResult();
+        => cache.GetOrAddAsync(cacheKey, generator, static (g, _) => Task.FromResult(g()), expiration, token).AsTask().GetAwaiter().GetResult();
 
     public static IDictionary<string, T?> GetOrAdd<T>(this IHashCache<T> cache, CacheKey cacheKey, Func<IDictionary<string, T?>> generator, DateTimeOffset expiration, CancellationToken token = default)
-        => cache.GetOrAddAsync(cacheKey, _ => Task.FromResult(generator()), expiration, token).AsTask().GetAwaiter().GetResult();
+        => cache.GetOrAddAsync(cacheKey, generator, static (g, _) => Task.FromResult(g()), expiration, token).AsTask().GetAwaiter().GetResult();
 
     public static ICacheEntry<IDictionary<string, T?>> GetCacheEntry<T>(this IHashCache<T> cache, CacheKey cacheKey, CancellationToken token = default)
         => cache.GetCacheEntryAsync(cacheKey, token).AsTask().GetAwaiter().GetResult();
