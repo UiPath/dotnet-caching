@@ -818,16 +818,45 @@ public class MultilayerCacheTests(ITestContextAccessor testContextAccessor) : IA
             .Returns(_ => eventPublished);
         var actual = await Sut.RemoveAsync<string>(new CacheKey[] { _cacheKey, _multiKey }, token: testContextAccessor.Current.CancellationToken);
         await _innerCache.Received(1).RemoveAsync<string>(Arg.Is<CacheKey[]>(c => c != null && c.Contains(_innerMultiKey) && c.Contains(_innerCacheKey)), Arg.Any<CancellationToken>());
-        
-        if (removed)
-        {
-            _memoryCache.Received(1).Remove(_innerCacheKey.Name);
-            _memoryCache.Received(1).Remove(_innerMultiKey.Name);
 
-            // If one event is not published, the second event publish is skipped
-            await _topic.Received(eventPublished ? 2 : 1).PublishAsync(Arg.Any<ICacheEvent>(), Arg.Any<CancellationToken>());
-        }
+        // Like two single-key removes: every local entry goes and every invalidation is sent, whatever failed.
+        _memoryCache.Received(1).Remove(_innerCacheKey.Name);
+        _memoryCache.Received(1).Remove(_innerMultiKey.Name);
+        await _topic.Received(2).PublishAsync(Arg.Any<ICacheEvent>(), Arg.Any<CancellationToken>());
         actual.Should().Be(expected);
+    }
+
+    [Fact]
+    public async Task Multi_remove_inner_cache_throw_still_clears_every_local_entry()
+    {
+        _innerCache.RemoveAsync<string>(Arg.Any<CacheKey[]>(), Arg.Any<CancellationToken>())
+            .ThrowsAsync(new Exception());
+
+        var actual = await Sut.RemoveAsync<string>(new CacheKey[] { _cacheKey, _multiKey }, token: testContextAccessor.Current.CancellationToken);
+
+        actual.Should().BeFalse();
+        _memoryCache.Received(1).Remove(_innerCacheKey.Name);
+        _memoryCache.Received(1).Remove(_innerMultiKey.Name);
+    }
+
+    [Fact]
+    public async Task Multi_remove_failed_invalidation_does_not_stop_the_others()
+    {
+        _innerCache.RemoveAsync<string>(Arg.Any<CacheKey[]>(), Arg.Any<CancellationToken>())
+            .Returns(true);
+        var published = new List<string>();
+        _topic.PublishAsync(Arg.Any<ICacheEvent>(), Arg.Any<CancellationToken>())
+            .Returns(c =>
+            {
+                var key = c.Arg<ICacheEvent>().Data!.Key;
+                published.Add(key);
+                return key == _innerCacheKey.Name ? throw new Exception() : true;
+            });
+
+        var actual = await Sut.RemoveAsync<string>(new CacheKey[] { _cacheKey, _multiKey }, token: testContextAccessor.Current.CancellationToken);
+
+        actual.Should().BeFalse();
+        published.Should().Equal(_innerCacheKey.Name, _innerMultiKey.Name);
     }
 
     [Fact]

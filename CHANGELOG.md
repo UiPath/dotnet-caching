@@ -13,6 +13,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
   `GetCacheEntryAsync` it was not set up for, so a consumer test that mocked `ICache` under a `Cache<T>` had to set up
   that read. A null entry now reads as a miss: the generator runs and its value is set.
 
+- **A failed multi-key `RemoveAsync` still clears this node's local entries and sends every invalidation.** The
+  `CacheKey[]` overload on the multilayer cache returned as soon as the inner delete failed, before it cleared the
+  local entries, so after a transient Redis failure the removed values stayed in this node's memory until they
+  expired; and it stopped at the first invalidation that failed, so the other nodes kept the rest of the keys. It now
+  does what one single-key remove per key does: the local entries go first, every key's invalidation is sent even
+  when another fails, and the call still returns `false` when the delete or any invalidation failed.
+
 ### Documentation
 
 - `docs/reference/interfaces.md` says how the capability calls behave over a mock (the span and stateful calls go to
