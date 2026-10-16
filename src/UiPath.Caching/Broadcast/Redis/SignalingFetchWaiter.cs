@@ -5,7 +5,9 @@ internal sealed class SignalingFetchWaiter(TimeSpan pollInterval) : IFetchWaiter
     private readonly SemaphoreSlim _semaphore = new(0, 1);
     private volatile bool _disposed;
 
-    public async Task WaitAsync(CancellationToken cancellationToken)
+    public Task WaitAsync(CancellationToken cancellationToken) => WaitAsync(pollInterval, cancellationToken);
+
+    public async Task WaitAsync(TimeSpan timeout, CancellationToken cancellationToken)
     {
         if (_disposed)
         {
@@ -13,7 +15,7 @@ internal sealed class SignalingFetchWaiter(TimeSpan pollInterval) : IFetchWaiter
         }
         try
         {
-            await _semaphore.WaitAsync(pollInterval, cancellationToken).ConfigureAwait(false);
+            await _semaphore.WaitAsync(timeout, cancellationToken).ConfigureAwait(false);
         }
         catch (ObjectDisposedException)
         {

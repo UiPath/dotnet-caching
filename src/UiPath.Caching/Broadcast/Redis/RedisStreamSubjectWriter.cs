@@ -51,7 +51,9 @@ internal sealed partial class RedisStreamSubjectWriter<T> : IDisposable
     private readonly CancellationTokenSource _stopTokenSource;
     private readonly CancellationToken _cancelationToken;
     private readonly IFetchWaiter _waiter;
-    private readonly SemaphoreSlim _retryGate = new(0, 1);
+    // One view of the group for the subscribes and the reader's recovery, held across their commands, so neither slips
+    // between the other's check and its command.
+    private readonly SemaphoreSlim _groupGate = new(1, 1);
     private readonly Action _onMessagesMissed;
 
     private bool _disposed;
@@ -61,8 +63,19 @@ internal sealed partial class RedisStreamSubjectWriter<T> : IDisposable
     private volatile bool _checkForGap;
     // Set once the topic has subscribers or the group has been read: only then can a loss leave a local entry stale.
     private volatile bool _inUse;
-    // _inUse when the read in flight was issued.
+    // A subscriber has joined; its entries can go stale.
+    private volatile bool _subscribed;
+    // The last entry read, for a subscribe that has to make the group again: what came since is replayed, as the reader's
+    // own recreate does, rather than skipped.
+    private volatile string? _replayFrom;
+    // The group exists as far as this process knows (made or found under _groupGate), until a read proves it gone.
+    private bool _groupExists;
+    // _inUse, and the recoveries seen, when the read in flight was issued.
     private bool _readInUse;
+    private int _recoveriesAtRead;
+    private int _recoveries;
+    // The recoveries seen when the streak of failures being counted began: a read from after a later one starts its own.
+    private int _streakGeneration;
     private bool _noScripts;
     private bool _gapCheckDenied;
     // The last read returned fewer entries than asked: the group is at the head.
@@ -103,15 +116,29 @@ internal sealed partial class RedisStreamSubjectWriter<T> : IDisposable
         _onMessagesMissed = onMessagesMissed;
         _stopTokenSource = CancellationTokenSource.CreateLinkedTokenSource(stopToken);
         _cancelationToken = _stopTokenSource.Token;
-        _connectionState.OnReconnected += OnConnectionRecovered;
-        _connectionState.OnConnectionRestored += OnConnectionRecovered;
+        // The connector's own events: with the connection monitor off, the state passed in never reports a recovery.
+        _redis.OnReconnected += OnConnectionRecovered;
+        _redis.OnConnectionRestored += OnConnectionRecovered;
         FetchTask = Task.Run(FetchLoop, _cancelationToken);
         FetchTask.Forget();
     }
 
+    private enum Recreate
+    {
+        Made,
+        Found,
+        Failed,
+    }
+
     internal Task FetchTask { get; }
 
+    /// <summary>Test seam: runs between the recovery check and the count of a failure.</summary>
+    internal Action? BeforeCountingFailure { get; set; }
+
     private bool ContinueLoop => !(_disposed || _cancelationToken.IsCancellationRequested);
+
+    // The connection came back since the read in flight went out: its failure was the outage's, not a new streak's.
+    private bool RecoveredSinceRead => Volatile.Read(ref _recoveries) != _recoveriesAtRead;
 
     public void Dispose()
     {
@@ -120,22 +147,36 @@ internal sealed partial class RedisStreamSubjectWriter<T> : IDisposable
             return;
         }
         _disposed = true;
-        _connectionState.OnReconnected -= OnConnectionRecovered;
-        _connectionState.OnConnectionRestored -= OnConnectionRecovered;
+        _redis.OnReconnected -= OnConnectionRecovered;
+        _redis.OnConnectionRestored -= OnConnectionRecovered;
         _stopTokenSource?.Cancel();
         _stopTokenSource?.Dispose();
-        _retryGate.Dispose();
+        _groupGate.Dispose();
         _writer.TryComplete();
     }
 
-    /// <summary>The topic is gaining a subscriber, whose entry a loss can leave stale before this group is ever read.</summary>
+    /// <summary>A subscriber is joining: makes sure the group exists, then marks the topic in use.</summary>
     /// <returns>A mark for <see cref="LostSince"/>.</returns>
     internal int MarkSubscribed()
     {
-        // Read before publishing _inUse: a loss before it cannot reach this subscriber, and one after it moves the mark.
-        var mark = Volatile.Read(ref _losses);
-        _inUse = true;
-        return mark;
+        _groupGate.Wait(_cancelationToken);
+        try
+        {
+            if (!_groupExists)
+            {
+                _groupExists = EnsureGroup();
+            }
+
+            // Read before publishing _inUse: a loss before it cannot reach this subscriber, and one after it moves the mark.
+            var mark = Volatile.Read(ref _losses);
+            _subscribed = true;
+            _inUse = true;
+            return mark;
+        }
+        finally
+        {
+            _groupGate.Release();
+        }
     }
 
     /// <summary>Whether a loss was reported since <paramref name="mark"/>, expiring the subscribers already there.</summary>
@@ -169,28 +210,11 @@ internal sealed partial class RedisStreamSubjectWriter<T> : IDisposable
     private void OnConnectionRecovered(object? sender, EventArgs e)
     {
         _checkForGap = true;
-        ReleaseRetryGate();
-    }
-
-    private void ReleaseRetryGate()
-    {
-        if (_disposed)
-        {
-            return;
-        }
-
-        try
-        {
-            _retryGate.Release();
-        }
-        catch (SemaphoreFullException)
-        {
-            // A wake-up is already pending; collapsing to one is the desired behavior.
-        }
-        catch (ObjectDisposedException)
-        {
-            // Disposed concurrently; there is no loop left to wake.
-        }
+        // Redis answers again: the loop ends the wait it is in, or about to enter, and the failures from here on are a
+        // streak of their own, such as the read that recreates a group lost with the server. The streak is the loop's to
+        // reset, so nothing here races its count.
+        Interlocked.Increment(ref _recoveries);
+        _waiter.Signal();
     }
 
     private async Task FetchLoop()
@@ -256,6 +280,7 @@ internal sealed partial class RedisStreamSubjectWriter<T> : IDisposable
             await DispatchEventsAsync(events).ConfigureAwait(false);
             _lastId = events[^1].Id;
             _position = _lastId;
+            _replayFrom = _lastId;
             if (!_caughtUp)
             {
                 return;
@@ -269,6 +294,7 @@ internal sealed partial class RedisStreamSubjectWriter<T> : IDisposable
     private async Task<StreamEntry[]> ReadBatchAsync()
     {
         _readInUse = _inUse;
+        _recoveriesAtRead = Volatile.Read(ref _recoveries);
         if (!_readInUse)
         {
             return await ReadAsync().ConfigureAwait(false);
@@ -340,52 +366,108 @@ internal sealed partial class RedisStreamSubjectWriter<T> : IDisposable
             LogRecreatingTopic(_context.Topic, _context.ConsumerGroup, id);
         }
 
-        // Judged as of the read: a subscriber that joined while it was in flight created the group it did not find.
-        if (_readInUse)
-        {
-            ReportGroupLost();
-        }
-
+        // Judged as of the read: a subscriber that joined while it was in flight made the group it did not find.
+        var lost = _readInUse;
+        Recreate outcome;
+        await _groupGate.WaitAsync(_cancelationToken).ConfigureAwait(false);
         try
         {
-            var created = await ConsumerGroups.CreateAsync(_redis.Database, _context.Topic, _context.ConsumerGroup, id).ConfigureAwait(false);
-            // That group is gone too, or this one would not have been made: what the subscriber cached since is stale.
-            if (created && !_readInUse && _inUse)
+            if (lost)
             {
-                ReportGroupLost();
+                ForgetGroup();
             }
+
+            // A group a subscriber relies on was made or found before this point, so one made now is proof it is gone.
+            var relied = _groupExists && _subscribed;
+            outcome = await CreateGroupAsync(id).ConfigureAwait(false);
+            if (outcome == Recreate.Made && relied)
+            {
+                ForgetGroup();
+                lost = true;
+            }
+
+            _groupExists |= outcome != Recreate.Failed;
+        }
+        finally
+        {
+            _groupGate.Release();
+        }
+
+        // Told once the gate is free: an observer told may subscribe again, which takes it.
+        if (lost)
+        {
+            ReportMessagesMissed();
+        }
+
+        return outcome == Recreate.Found;
+    }
+
+    private async Task<Recreate> CreateGroupAsync(RedisValue id)
+    {
+        try
+        {
+            return await ConsumerGroups.CreateAsync(_redis.Database, _context.Topic, _context.ConsumerGroup, id).ConfigureAwait(false)
+                ? Recreate.Made
+                : Recreate.Failed;
         }
         catch (RedisServerException rex) when (rex.Message == StreamConstants.ConsumerGroupNameExistsErrorMessage)
         {
             LogConsumerGroupExists(_context.Topic, _context.ConsumerGroup);
-            return true;
+            return Recreate.Found;
         }
         catch (Exception ex2)
         {
             LogRecreatingTopicException(ex2);
+            return Recreate.Failed;
         }
-
-        return false;
     }
 
-    /// <summary>The group or the whole stream was removed while in use, so what it held past the last read is gone.</summary>
-    private void ReportGroupLost()
+    /// <summary>Creates the group where the reader left off, at the newest entry if nowhere, or finds it; a failure is the subscriber's to see.</summary>
+    private bool EnsureGroup()
+    {
+        try
+        {
+            return ConsumerGroups.Create(_redis.Database, _context.Topic, _context.ConsumerGroup, _replayFrom ?? StreamPosition.NewMessages);
+        }
+        catch (RedisServerException ex) when (ex.Message == StreamConstants.ConsumerGroupNameExistsErrorMessage)
+        {
+            LogConsumerGroupExists(_context.Topic, _context.ConsumerGroup);
+            return true;
+        }
+    }
+
+    /// <summary>The group or the whole stream was removed, so what it held past the last read is gone; the caller reports it.</summary>
+    private void ForgetGroup()
     {
         _inUse = false;
+        _groupExists = false;
         _checkForGap = false;
         _reportedGap = null;
         _readCount = null;
         _position = RedisValue.Null;
         // The recreated group's position comes from its first check.
         _checkedAt = 0;
-        ReportMessagesMissed();
     }
 
     private Task BackoffAsync()
     {
+        if (RecoveredSinceRead)
+        {
+            return Task.CompletedTask;
+        }
+
+        BeforeCountingFailure?.Invoke();
+        if (_streakGeneration != _recoveriesAtRead)
+        {
+            // The first failure since a recovery: the outage's streak does not pace it.
+            _streakGeneration = _recoveriesAtRead;
+            _consecutiveFailures = 0;
+        }
+
         var failures = ++_consecutiveFailures;
         if (failures <= StreamConstants.ErrorBackoffThreshold)
         {
+            // A ring, the poll or a recovery ends it.
             return _waiter.WaitAsync(_cancelationToken);
         }
 
@@ -396,15 +478,13 @@ internal sealed partial class RedisStreamSubjectWriter<T> : IDisposable
         return WaitForRetryAsync(delay);
     }
 
+    /// <summary>Waits <paramref name="delay"/> out; rings wake the waiter but do not end it, a recovery does.</summary>
     private async Task WaitForRetryAsync(TimeSpan delay)
     {
-        try
+        var until = Environment.TickCount64 + (long)delay.TotalMilliseconds;
+        while (ContinueLoop && !RecoveredSinceRead && Environment.TickCount64 is var now && now < until)
         {
-            await _retryGate.WaitAsync(delay, _cancelationToken).ConfigureAwait(false);
-        }
-        catch (ObjectDisposedException)
-        {
-            // Disposed concurrently with the wait; treat as a wake-up so the loop observes disposal.
+            await _waiter.WaitAsync(TimeSpan.FromMilliseconds(until - now), _cancelationToken).ConfigureAwait(false);
         }
     }
 

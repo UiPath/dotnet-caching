@@ -102,8 +102,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 
 - **The first subscribe of a Redis Streams topic no longer risks a spurious loss.** A read issued before the subscribe
   created the consumer group, and answered `NOGROUP` after it, was reported as entries lost, so the local tier could be
-  expired for nothing right after a process started. Such an answer now reports a loss only when the group the
-  subscribe created is gone as well.
+  expired for nothing right after a process started. The subscribes and the reader's recovery now share one view of
+  the group, taken for the length of their commands: such an answer reports a loss only when a group a subscriber
+  relies on is gone, a subscriber that joins while the reader is recreating the group waits for it and joins it, and
+  a loss already reported is not reported again when the recreate had to be retried.
 
 - `GetOrAddWithExpirationAsync` on a cache that does not implement `IGeneratedExpirationCache` threw
   `NullReferenceException` when its entry read answered `null`, as a loose Moq or NSubstitute proxy of `ICache` does for a
@@ -116,6 +118,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
   expired; and it stopped at the first invalidation that failed, so the other nodes kept the rest of the keys. It now
   does what one single-key remove per key does: the local entries go first, every key's invalidation is sent even
   when another fails, and the call still returns `false` when the delete or any invalidation failed.
+
+- **A Redis restart no longer leaves the Streams reader waiting out its back-off when the connection monitor is
+  off.** The fetch loop's error back-off (three retries at `PollInterval`, then doubling up to 30 s) was ended only by
+  the connection monitor's recovery events, so with `ConnectionMonitorEnabled: false` the reads that failed while
+  Redis was down went on pacing the ones after it came back, and the doorbell could not wake the loop: the first
+  invalidation after a restart waited out the remaining back-off. The reader now listens to the connection's own
+  restored and reconnected events, which end the back-off and its failure streak with or without the monitor, so the
+  group lost with the server is recreated and read at the poll's pace, and the next ring is answered at once. A
+  recovery that lands between a read's failure and its back-off ends that back-off too, and that failure is not
+  counted against the reads after it.
 
 ### Documentation
 

@@ -1,6 +1,7 @@
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using StackExchange.Redis;
+using StackExchange.Redis.Profiling;
 using UiPath.Caching.Policies;
 using UiPath.Caching.Telemetry;
 using UiPath.Caching.Tests.Redis;
@@ -17,6 +18,8 @@ public sealed class RedisStreamNotifyIntegrationTests(RedisContainerFixture fixt
     private readonly IConnectionState _state = Substitute.For<IConnectionState>();
     private readonly CancellationTokenSource _stop = new();
     private readonly List<IDisposable> _disposables = [];
+    // The commands of the nodes' own connection, whatever else runs against the server.
+    private readonly ProfilingSession _profile = new();
     private RedisConnector? _connector;
     private ConnectionMultiplexer? _admin;
     private RedisKey _stream;
@@ -30,18 +33,16 @@ public sealed class RedisStreamNotifyIntegrationTests(RedisContainerFixture fixt
         var (a, _) = Topic("urn:a", FarPoll);
         var (_, received) = Topic("urn:b", FarPoll);
         await SettledAsync();
-        var before = await CommandsAsync();
+        _ = _profile.FinishProfiling().ToList();
 
         (await a.PublishAsync(Event("urn:a", "1"), TestContext.Current.CancellationToken)).Should().BeTrue();
 
         (await Task.WhenAny(received.Next.Task, Task.Delay(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken))).Should().BeSameAs(received.Next.Task, "the poll is far away, so only the doorbell delivers in time");
         await Task.Delay(300, TestContext.Current.CancellationToken);
-        var delta = Delta(before, await CommandsAsync());
-        delta.Should().Contain("xadd", 1).And.Contain("publish", 1);
-        delta.Should().Contain("xreadgroup", 1, "the publisher does not wake for its own ring, and the woken node reads once");
-        delta.Should().Contain("xack", 1);
-        delta.Should().Contain("evalsha", 1).And.Contain("xinfo|stream", 1, "a wake is one script: the read and the stream's state");
-        delta.Keys.Should().NotContain("xinfo|groups", "the check that grows with the number of nodes keeps the poll's cadence");
+        // StackExchange.Redis records a script call as EVAL, whichever of EVALSHA and EVAL it sent.
+        _profile.FinishProfiling().Select(c => c.Command).Should().BeEquivalentTo(
+            ["XADD", "PUBLISH", "EVAL", "XACK"],
+            "the publisher adds and rings and does not wake for its own ring; the woken node reads with the one script that carries the stream's state, and acknowledges; a check apart would show as XINFO calls");
     }
 
     [Fact]
@@ -140,7 +141,7 @@ public sealed class RedisStreamNotifyIntegrationTests(RedisContainerFixture fixt
             return;
         }
 
-        _connector = await ConnectAsync(fixture.ConnectionString);
+        _connector = await ConnectAsync(fixture.ConnectionString, _profile);
         _admin = await ConnectionMultiplexer.ConnectAsync(fixture.ConnectionString + ",allowAdmin=true");
         _state.IsConnected.Returns(true);
         var keys = new PrefixStrategy(RedisKeyspaces.Streams, _cacheOptions);
@@ -188,24 +189,15 @@ public sealed class RedisStreamNotifyIntegrationTests(RedisContainerFixture fixt
         return false;
     }
 
-    private static Dictionary<string, long> Delta(Dictionary<string, long> before, Dictionary<string, long> after)
+    private async Task<RedisConnector> ConnectAsync(string connectionString, ProfilingSession? profile = null)
     {
-        var delta = new Dictionary<string, long>();
-        foreach (var (command, calls) in after)
+        var options = Options.Create(new RedisConnectionOptions
         {
-            var more = calls - before.GetValueOrDefault(command);
-            if (more > 0)
-            {
-                delta[command] = more;
-            }
-        }
-
-        return delta;
-    }
-
-    private async Task<RedisConnector> ConnectAsync(string connectionString)
-    {
-        var options = Options.Create(new RedisConnectionOptions { ConnectionString = connectionString, EnableHangDetection = false });
+            ConnectionString = connectionString,
+            EnableHangDetection = false,
+            ProfilerEnabled = profile is not null,
+            ProfilingSessionFactory = profile is null ? null : () => profile,
+        });
         var connector = new RedisConnector(
             NullTelemetryProvider.Instance,
             new RedisConfigurationOptionsProvider(NullLoggerFactory.Instance, options),
@@ -257,23 +249,6 @@ public sealed class RedisStreamNotifyIntegrationTests(RedisContainerFixture fixt
 
     private async Task<long> SubscribersAsync() =>
         (long)(await _admin!.GetDatabase().ExecuteAsync("PUBSUB", "NUMSUB", _channel.ToString()))[1];
-
-    private async Task<Dictionary<string, long>> CommandsAsync()
-    {
-        var calls = new Dictionary<string, long>();
-        foreach (var group in await _admin!.GetServer(_admin.GetEndPoints()[0]).InfoAsync("commandstats"))
-        {
-            foreach (var (name, value) in group)
-            {
-                if (name.StartsWith("cmdstat_", StringComparison.Ordinal))
-                {
-                    calls[name["cmdstat_".Length..]] = long.Parse(value.Split(',')[0]["calls=".Length..], System.Globalization.CultureInfo.InvariantCulture);
-                }
-            }
-        }
-
-        return calls;
-    }
 
     private sealed class Received : IObserver<ICacheEvent>, IMissedEventsObserver
     {
