@@ -53,4 +53,10 @@
     </PackageReference>
     <AdditionalFiles Include="$(MSBuildThisFileDirectory)stylecop.json" Link="stylecop.json" />
   </ItemGroup>
+  <!-- UIPCACHE001 on src and samples (a warning, .editorconfig); these references also build the analyzers before
+       UiPath.Caching.Abstractions packs them. -->
+  <ItemGroup Condition="'$(IsRoslynComponent)' != 'true' And ($([MSBuild]::MakeRelative('$(MSBuildThisFileDirectory)', '$(MSBuildProjectDirectory)').StartsWith('src')) Or $([MSBuild]::MakeRelative('$(MSBuildThisFileDirectory)', '$(MSBuildProjectDirectory)').StartsWith('samples')))">
+    <ProjectReference Include="$(MSBuildThisFileDirectory)src/UiPath.Caching.Analyzers/UiPath.Caching.Analyzers.csproj" OutputItemType="Analyzer" ReferenceOutputAssembly="false" PrivateAssets="all" IsAspireProjectResource="false" />
+    <ProjectReference Include="$(MSBuildThisFileDirectory)src/UiPath.Caching.Analyzers.CodeFixes/UiPath.Caching.Analyzers.CodeFixes.csproj" OutputItemType="Analyzer" ReferenceOutputAssembly="false" PrivateAssets="all" IsAspireProjectResource="false" />
+  </ItemGroup>
 </Project>

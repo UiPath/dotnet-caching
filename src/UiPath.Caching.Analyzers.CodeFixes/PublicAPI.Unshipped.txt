@@ -1,0 +1,6 @@
+#nullable enable
+override UiPath.Caching.Analyzers.PassStateCodeFixProvider.FixableDiagnosticIds.get -> System.Collections.Immutable.ImmutableArray<string!>
+override UiPath.Caching.Analyzers.PassStateCodeFixProvider.GetFixAllProvider() -> Microsoft.CodeAnalysis.CodeFixes.FixAllProvider!
+override UiPath.Caching.Analyzers.PassStateCodeFixProvider.RegisterCodeFixesAsync(Microsoft.CodeAnalysis.CodeFixes.CodeFixContext context) -> System.Threading.Tasks.Task!
+UiPath.Caching.Analyzers.PassStateCodeFixProvider
+UiPath.Caching.Analyzers.PassStateCodeFixProvider.PassStateCodeFixProvider() -> void

@@ -1,0 +1,25 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFrameworks>$(TargetFrameworks)</TargetFrameworks>
+    <OutputType>Exe</OutputType>
+    <IsPackable>false</IsPackable>
+    <SonarQubeTestProject>true</SonarQubeTestProject>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="xunit.v3" />
+    <PackageReference Include="Microsoft.Testing.Extensions.CodeCoverage" />
+    <PackageReference Include="Microsoft.CodeAnalysis.CSharp.CodeFix.Testing" />
+    <PackageReference Include="Microsoft.CodeAnalysis.CSharp.Workspaces" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\UiPath.Caching.Abstractions\UiPath.Caching.Abstractions.csproj" />
+    <!-- For a concrete cache class (Cache<T>) in the test sources. -->
+    <ProjectReference Include="..\..\src\UiPath.Caching\UiPath.Caching.csproj" />
+    <ProjectReference Include="..\..\src\UiPath.Caching.Analyzers\UiPath.Caching.Analyzers.csproj" />
+    <ProjectReference Include="..\..\src\UiPath.Caching.Analyzers.CodeFixes\UiPath.Caching.Analyzers.CodeFixes.csproj" />
+  </ItemGroup>
+
+</Project>

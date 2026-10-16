@@ -34,6 +34,20 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
   (`OverloadShapeTests`). The span state members carry `OverloadResolutionPriority(-1)`, as the other span members do.
   `Cache<T>`, `HashCache<T>`, `NullCache` and `NullHashCache` declare the new overloads as public members too, so a call
   on a public cache class takes them (`ConcreteCacheCallShapeTests`).
+- **Analyzer `UIPCACHE001`: a generator that allocates on every call.** `UiPath.Caching.Abstractions` now ships an
+  analyzer and code fix (under `analyzers/dotnet/cs`; a project that references `UiPath.Caching` gets them too). It
+  reports, at Info severity, a generator passed to `GetOrAddAsync` or `GetOrAddWithExpirationAsync` on the four cache
+  interfaces, or a class that implements one, that captures `this`, a local or a parameter (itself or through a local
+  function), or is an instance method group, when a state (or batch argument) overload exists for the call; and a
+  capturing lambda passed to a state overload. The fix, *Pass captured values as state*, moves the call to that
+  overload with a `static` lambda: one capture is the state (`this` becomes `self`), several become a named tuple
+  (`(Self: this, Id: id)`), and spelled type arguments get the state's type. It is not offered when the move could
+  change what the generator reads (a captured variable assigned elsewhere, `base`, a capturing local function), and
+  only when the rewritten call compiles in place without an error. The blocking `GetOrAdd` wrappers in
+  `CacheSyncExtensions` and `HashCacheSyncExtensions` now pass their generator as state themselves. The plain lambda
+  stays the default; raise the rule with `dotnet_diagnostic.UIPCACHE001.severity = warning` where the allocation
+  matters. It has a category of its own, `UiPath.Caching`, so raising a category such as `Performance` leaves it alone.
+  See `docs/how-to/choosing-a-get-or-add-overload.md`.
 
 ### Changed
 
