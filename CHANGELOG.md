@@ -6,6 +6,21 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 
 ## [Unreleased]
 
+### Fixed
+
+- `GetOrAddWithExpirationAsync` on a cache that does not implement `IGeneratedExpirationCache` threw
+  `NullReferenceException` when its entry read answered `null`, as a loose Moq or NSubstitute proxy of `ICache` does for a
+  `GetCacheEntryAsync` it was not set up for, so a consumer test that mocked `ICache` under a `Cache<T>` had to set up
+  that read. A null entry now reads as a miss: the generator runs and its value is set.
+
+### Documentation
+
+- `docs/reference/interfaces.md` says how the capability calls behave over a mock (the span and stateful calls go to
+  the proxy's `CacheKey` member, `GetOrAddWithExpirationAsync` reads, generates and sets; none coalesces) and how to
+  test what the library does instead: over the in-memory cache, named explicitly, since an
+  unnamed `CreateCache()` resolves `CacheOptions.DefaultCache` (`InMemoryRedis`) and falls back to `NullCache` when only
+  `AddMemory()` is registered.
+
 ## [3.0.0] - 2026-10-13
 
 ### Added
