@@ -112,10 +112,8 @@ internal sealed partial class MultilayerCache : MultilayerCacheBase, ICache, ISp
     {
         ArgumentNullException.ThrowIfNull(generator);
         policy ??= _defaultPolicy;
-        // One floored resolution for the write and the rehydrate threshold; only the write is jittered.
-        var duration = ResolveDuration(policy);
-        var writeExpiration = _clock.ToDateTimeOffset(ApplyJitter(duration, policy.JitterMaxDuration));
-        return GetOrAddInternalAsync(cacheKey, generator, writeExpiration, duration, policy.JitterMaxDuration, policy, _localMemorySetter.Writes, localMissed: false, token);
+        // One floored resolution for the write and the rehydrate threshold; the miss path draws the jittered write deadline, so a hit never reads the clock.
+        return GetOrAddInternalAsync(cacheKey, generator, expiration: null, ResolveDuration(policy), policy.JitterMaxDuration, policy, _localMemorySetter.Writes, localMissed: false, token);
     }
 
     [OverloadResolutionPriority(1)]
@@ -170,9 +168,7 @@ internal sealed partial class MultilayerCache : MultilayerCacheBase, ICache, ISp
     {
         ArgumentNullException.ThrowIfNull(generator);
         policy ??= _defaultPolicy;
-        var duration = ResolveDuration(policy);
-        var writeExpiration = _clock.ToDateTimeOffset(ApplyJitter(duration, policy.JitterMaxDuration));
-        return GetOrAddInternalAsync(cacheKey, state, generator, writeExpiration, duration, policy.JitterMaxDuration, policy, _localMemorySetter.Writes, localMissed: false, token);
+        return GetOrAddInternalAsync(cacheKey, state, generator, expiration: null, ResolveDuration(policy), policy.JitterMaxDuration, policy, _localMemorySetter.Writes, localMissed: false, token);
     }
 
     public ValueTask<T?> GetOrAddAsync<T, TState>(CacheKey cacheKey, TState state, Func<TState, CancellationToken, Task<T?>> generator, TimeSpan expiration, CachePolicy? policy, CancellationToken token = default)
@@ -498,19 +494,16 @@ internal sealed partial class MultilayerCache : MultilayerCacheBase, ICache, ISp
     private ValueTask<T?> GetOrAddResolvedAsync<T>(CacheKey cacheKey, Func<CancellationToken, Task<T?>> generator, CachePolicy? policy, long seen, bool localMissed, CancellationToken token)
     {
         policy ??= _defaultPolicy;
-        var duration = ResolveDuration(policy);
-        var writeExpiration = _clock.ToDateTimeOffset(ApplyJitter(duration, policy.JitterMaxDuration));
-        return GetOrAddInternalAsync(cacheKey, generator, writeExpiration, duration, policy.JitterMaxDuration, policy, seen, localMissed, token);
+        return GetOrAddInternalAsync(cacheKey, generator, expiration: null, ResolveDuration(policy), policy.JitterMaxDuration, policy, seen, localMissed, token);
     }
 
     private ValueTask<T?> GetOrAddResolvedAsync<T, TState>(CacheKey cacheKey, TState state, Func<TState, CancellationToken, Task<T?>> generator, CachePolicy? policy, long seen, bool localMissed, CancellationToken token)
     {
         policy ??= _defaultPolicy;
-        var duration = ResolveDuration(policy);
-        var writeExpiration = _clock.ToDateTimeOffset(ApplyJitter(duration, policy.JitterMaxDuration));
-        return GetOrAddInternalAsync(cacheKey, state, generator, writeExpiration, duration, policy.JitterMaxDuration, policy, seen, localMissed, token);
+        return GetOrAddInternalAsync(cacheKey, state, generator, expiration: null, ResolveDuration(policy), policy.JitterMaxDuration, policy, seen, localMissed, token);
     }
 
+    /// <param name="expiration">The caller's write deadline, or null for a policy write, whose jittered deadline the miss path draws.</param>
     /// <param name="seen">The local writes counter, read before the caller's first read of the local tier.</param>
     /// <param name="localMissed">True when that read found nothing under the key, so the miss path need not read it again.</param>
     private ValueTask<T?> GetOrAddInternalAsync<T>(CacheKey cacheKey, Func<CancellationToken, Task<T?>> generator, DateTimeOffset? expiration, TimeSpan effectiveDuration, TimeSpan? rehydrateJitter, CachePolicy policy, long seen, bool localMissed, CancellationToken token)
@@ -559,7 +552,7 @@ internal sealed partial class MultilayerCache : MultilayerCacheBase, ICache, ISp
         // Not async: a miss that never waits builds no state machine, and one that waits builds one, where an async method here would build one for the wait at every step.
         try
         {
-            var options = _entryBuilder.BuildEntryOptions<T>(cacheKey, expiration, token);
+            var options = _entryBuilder.BuildEntryOptions<T>(cacheKey, expiration ?? _clock.ToDateTimeOffset(ApplyJitter(effectiveDuration, rehydrateJitter)), token);
             var fetch = localMissed ? FetchInnerAsync<T>(options, policy) : GetCacheEntryInnerAsync<T>(options, policy);
             var miss = new Miss<T>(cacheKey, options, generator, effectiveDuration, rehydrateJitter, policy, seen);
             if (fetch.IsCompletedSuccessfully)
