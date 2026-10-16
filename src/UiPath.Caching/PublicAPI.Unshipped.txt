@@ -1,1 +1,3 @@
 #nullable enable
+UiPath.Caching.Cache<T>.RemoveAsync(System.Span<char> cacheKey, System.Threading.CancellationToken token = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.ValueTask<bool>
+UiPath.Caching.HashCache<T>.RemoveAsync(System.Span<char> cacheKey, System.Threading.CancellationToken token = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.ValueTask<bool>

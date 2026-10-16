@@ -42,6 +42,8 @@ public class UserService(ICache<User> cache, IUserRepository repo)
 }
 ```
 
+That lambda is the default shape. The `GetOrAddAsync` overloads that take a `Span<char>` key or a static lambda with its state exist for hot paths; what each one costs, and when it pays, is in [docs/how-to/choosing-a-get-or-add-overload.md](docs/how-to/choosing-a-get-or-add-overload.md).
+
 Minimum `appsettings.json`:
 
 ```json
@@ -167,6 +169,7 @@ flowchart LR
 | 5-minute onboarding | [docs/quickstart.md](docs/quickstart.md) |
 | Upgrading from 1.x to 2.0 | [docs/upgrade-to-2.0.md](docs/upgrade-to-2.0.md) |
 | Architecture & mental model | [docs/concepts.md](docs/concepts.md) |
+| Which `GetOrAddAsync` shape to use (lambda, delegate, state, span key) | [docs/how-to/choosing-a-get-or-add-overload.md](docs/how-to/choosing-a-get-or-add-overload.md) |
 | Resilience (single-flight, hydrating, jitter, Polly) | [docs/how-to/resilience.md](docs/how-to/resilience.md) |
 | Broadcast (per-topic, notify doorbell, sharded Pub/Sub) | [docs/how-to/broadcast.md](docs/how-to/broadcast.md) |
 | Hash cache (metadata, bundled GET+TTL) | [docs/how-to/hash-cache.md](docs/how-to/hash-cache.md) |

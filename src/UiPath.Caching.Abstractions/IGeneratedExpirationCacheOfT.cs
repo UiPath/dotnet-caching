@@ -1,6 +1,6 @@
 namespace UiPath.Caching;
 
-/// <summary>An <see cref="ICache{T}"/> that lets the generator say when its value expires; <see cref="GeneratedExpirationExtensions"/> reaches it.</summary>
+/// <summary>An <see cref="ICache{T}"/> that lets the generator say when its value expires; <c>GetOrAddWithExpirationAsync</c> on <see cref="ICache{T}"/> reaches it.</summary>
 public interface IGeneratedExpirationCache<T>
 {
     /// <inheritdoc cref="IGeneratedExpirationCache.GetOrAddWithExpirationAsync{T}(CacheKey, Func{CancellationToken, Task{GeneratedValue{T}}}, CachePolicy, CancellationToken)"/>

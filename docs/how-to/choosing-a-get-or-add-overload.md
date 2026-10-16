@@ -1,0 +1,157 @@
+# Choosing a `GetOrAddAsync` overload
+
+`GetOrAddAsync` comes in three shapes: a plain lambda, a delegate you build once, and a static lambda with its state. They
+return the same value, coalesce the same way and take the same expiration arguments. They differ only in what the caller
+allocates per call, and that difference is small. **Start with the plain lambda.** Reach for the other shapes on a path a
+profiler has shown you, not before.
+
+```csharp
+public class UserService(ICache<User> cache, IUserRepository repo)
+{
+    public ValueTask<User?> GetAsync(int id, CancellationToken ct) =>
+        cache.GetOrAddAsync(id, c => repo.LoadAsync(id, c), TimeSpan.FromMinutes(5), ct);
+}
+```
+
+Everything 3.0 did for the hit path — no key string, no entry, no options and no closure allocated *inside the library*
+on a local hit — applies to this call as it is. The only allocation left is the lambda the caller writes, and the table
+below is what it costs.
+
+## What each shape costs
+
+`GeneratorShapeBenchmark` in `benchmarks/UiPath.Caching.Benchmarks` (in-memory provider, one key, .NET 10, short run;
+times are indicative, the allocations are exact):
+
+| Shape | Local hit | Miss (generator runs, answers `null`, nothing stored) |
+|---|---|---|
+| `ct => Load(ct)` — lambda that captures `this` | 127 ns, **64 B** (the delegate) | 1.06 µs, 384 B |
+| `ct => Load(id, ct)` — lambda that captures a local too | 124 ns, **96 B** (closure + delegate) | — |
+| `_load` — delegate built once, in the constructor | 119 ns, **0 B** | 1.13 µs, 320 B |
+| `this, static (self, ct) => self.Load(ct)` — state is `this` | 134 ns, **0 B** | 0.67 µs, 416 B |
+| `(this, id), static (s, ct) => s.Self.Load(s.Id, ct)` — state is a tuple | 257 ns, **0 B** | — |
+
+So the lambda costs 64–96 bytes per call. The delegate built once and the state overloads make a local hit allocate
+nothing; on a miss the lambda still costs its bytes (384 B against 320 B for the prebuilt delegate, since the lambda is
+created before the lookup), and a miss that stores its value also pays for the write, next to which those bytes are
+small. At a thousand calls a second that is under 100 KB/s of short-lived garbage, a rounding error next to the request that
+made the call. The tuple-state form saved those bytes but ran slower in this measurement; if you use it, measure it.
+
+## When a shape other than the plain lambda is worth it
+
+Use another shape when all of these hold:
+
+- the call is on the request path of a service that makes it tens of thousands of times a second per node, or a profiler
+  shows the generator delegate among the top allocations;
+- the call hits far more often than it misses (a miss allocates hundreds of bytes anyway).
+
+Then pick the simplest shape that fits:
+
+1. **The generator needs only `this`.** Build the delegate once and pass the field. It reads as a plain callback and
+   allocates nothing:
+
+   ```csharp
+   private readonly Func<CancellationToken, Task<Config?>> _load;
+
+   public ConfigService(ICache<Config> cache, IConfigClient client)
+   {
+       _load = client.LoadAsync;   // instance method group, bound once
+       ...
+   }
+
+   public ValueTask<Config?> GetAsync(CancellationToken ct) => _cache.GetOrAddAsync(Key, _load, ct);
+   ```
+
+2. **The generator needs per-call arguments.** Pass them as the state of a `static` lambda. The lambda cannot capture
+   anything, which is what keeps it allocation-free; it receives the state instead:
+
+   ```csharp
+   public ValueTask<Token?> GetAsync(Guid machineKey, CancellationToken ct) =>
+       _cache.GetOrAddAsync(machineKey, (Self: this, machineKey), static (s, c) => s.Self.FetchAsync(s.machineKey, c), ct);
+   ```
+
+   This is the shape `HybridCache.GetOrCreateAsync<TState, T>`, `string.Create` and `ConcurrentDictionary.GetOrAdd`
+   use for the same reason. It is the most verbose of the three; that verbosity is the price of the zero, so pay it
+   only where the zero matters.
+
+The state overloads are members of `ICache` and `ICache<T>`. On the library's caches they reach `IStatefulCache`, which
+hands the state to the generator without a closure; on any other cache — one you wrote, or a Moq or NSubstitute proxy —
+they bind the state into a closure and call the closure overload, so the call works everywhere and only the allocation
+differs.
+
+## A generator that knows its value's lifetime
+
+When the lifetime is in the value (a token with an expiry), return it from the generator instead of computing it before
+the call:
+
+```csharp
+var token = await _cache.GetOrAddWithExpirationAsync(key, async c =>
+{
+    var fresh = await _client.FetchAsync(c);
+    return new GeneratedValue<Token?>(fresh, fresh.ExpiresAt - Skew);
+}, ct);
+```
+
+The entry is stored until that instant; an instant already passed returns the value without storing it. The method has
+its own name because a `GetOrAddAsync` overload taking `Func<CancellationToken, Task<GeneratedValue<T>>>` would make
+every generator that only throws or returns `default` — `_ => throw new InvalidOperationException()`, common in tests —
+ambiguous against the closure overload.
+
+## Keys
+
+- **A constant key** needs no span: build it once, `private static readonly CacheKey Key = "default";`. A constant
+  string passed on every call is normalized (trimmed, lowercased) on every call.
+- **A formatted key** is a string: `$"{tenantId}:{machineKey}"`. On the hot paths above, format it on the stack instead
+  and pass the `Span<char>`; a local hit then allocates nothing. Size the buffer for the longest key you can build and
+  skip the fallback branch — a key the buffer cannot hold is a bug, not a case:
+
+  ```csharp
+  Span<char> key = stackalloc char[73];                    // two GUIDs and a separator
+  key.TryWrite($"{tenantId}:{machineKey}", out var written);
+  var token = await _cache.GetOrAddAsync(key[..written], (Self: this, machineKey), static (s, c) => s.Self.FetchAsync(s.machineKey, c), ct);
+  ```
+
+  Keys over 256 characters take the string path inside the library anyway.
+
+## What runs, and what a test sees
+
+Every shape ends in the same place: `ICache<T>` is `Cache<T>`, which composes the key with its `ICacheKeyStrategy` and
+calls the provider (`InMemory`, `InMemoryRedis` or `Redis`). The span, state and `GetOrAddWithExpirationAsync` members of
+`ICache`, `ICache<T>`, `IHashCache` and `IHashCache<T>` are `sealed` interface members with a body: each looks for the
+matching capability interface (`ISpanKeyCache`, `IStatefulCache`, `IGeneratedExpirationCache`) and otherwise calls the
+`CacheKey` member. `Cache<T>` and the library's providers implement all of them.
+
+A Moq or NSubstitute proxy implements no capability interface, so every shape arrives at the proxy's own members. Set
+up these, and a strict mock answers the production shape:
+
+| Call on the proxy | Members to set up |
+|---|---|
+| Span member of any of the four interfaces | The same member with a `CacheKey` (`new CacheKey(span)`) |
+| State `GetOrAddAsync` on `ICache` | `GetOrAddAsync<T>(CacheKey, Func<CancellationToken, Task<T?>>, [expiration,] CachePolicy?, CancellationToken)`; the policy-less call passes `null` |
+| State `GetOrAddAsync` on `ICache<T>` | `GetOrAddAsync(CacheKey, Func<CancellationToken, Task<T?>>, [expiration,] CancellationToken)` |
+| `GetOrAddWithExpirationAsync` on `ICache` | `GetCacheEntryAsync<T>(CacheKey, CachePolicy?, CancellationToken)`; on a miss, `SetAsync<T>` with the generated expiration, or without one when it is `null` |
+| `GetOrAddWithExpirationAsync` on `ICache<T>` | `GetAsync(CacheKey, CancellationToken)`; when it answers `default`, `ContainsAsync(CacheKey, CancellationToken)`; on a miss, `SetAsync` with the generated expiration, or without one when it is `null` |
+
+On a loose proxy that was not set up, `GetOrAddAsync` in every shape returns the default without running the generator.
+`GetOrAddWithExpirationAsync` reads instead: a read the proxy answers as a miss (a `null` entry or `Found` false on
+`ICache`; a default value with `ContainsAsync` false on `ICache<T>`) runs the generator, sets its value and returns it,
+so that call does run the generator. To test what the library does — coalescing, the generator's expiration — use the
+in-memory provider rather than a proxy.
+
+A sealed member is not virtual, so no proxy can intercept it: its body runs on the proxy and reaches the setups above.
+That is why they are sealed. Castle DynamicProxy, which Moq, NSubstitute and FakeItEasy build on, emits invalid IL for an
+overridable method that takes a `ref struct`, and an overridable default interface member is intercepted (Moq,
+NSubstitute) or throws (NSubstitute on Castle.Core 5.2.1) rather than running its body. The capability interfaces stay
+separate for the same reason.
+
+## Wrapping the cache
+
+If your service wraps `ICache<T>` in a helper of its own (to map an application entry type, say), wrap the plain-lambda
+shape and let the library's member handle the capability check:
+
+```csharp
+public static ValueTask<T?> GetOrAddAsync<T>(this ICache<T> cache, CacheKey key, Func<CancellationToken, ValueTask<AppEntry<T>>> fetch, CancellationToken ct = default) =>
+    cache.GetOrAddWithExpirationAsync(key, async c => ToGeneratedValue(await fetch(c)), ct);
+```
+
+A wrapper that takes state, tests `cache is IGeneratedExpirationCache<T>` itself or reads before it calls `GetOrAdd` is
+re-implementing the member it calls.
