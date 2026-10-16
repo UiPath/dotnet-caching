@@ -1,7 +1,7 @@
 namespace UiPath.Caching;
 
 [ExcludeFromCodeCoverage]
-public class HashCache<T> : IHashCache<T>, ISpanKeyHashCache<T>
+public class HashCache<T> : IHashCache<T>, ISpanKeyHashCache<T>, IStatefulHashCache<T>, IStatefulSpanKeyHashCache<T>
 {
     private readonly IHashCache _cache;
     private readonly ICacheKeyStrategy _cacheKeyStrategy;
@@ -120,6 +120,57 @@ public class HashCache<T> : IHashCache<T>, ISpanKeyHashCache<T>
         return SpanKey.TryComposeTyped<T>(_cacheKeyStrategy, cacheKey, buffer, out var key)
             ? _cache.GetOrAddAsync(key, generator, expiration, Policy, token)
             : GetOrAddAsync(new CacheKey(cacheKey), generator, expiration, token);
+    }
+
+    [OverloadResolutionPriority(1)]
+    public ValueTask<IDictionary<string, T?>> GetOrAddAsync<TState>(CacheKey cacheKey, TState state, Func<TState, CancellationToken, Task<IDictionary<string, T?>>> generator, CancellationToken token = default)
+    {
+        Span<char> buffer = SpanKey.ComposesName(_cacheKeyStrategy, cacheKey) ? stackalloc char[SpanKey.MaxLength] : default;
+        return SpanKey.TryComposeName<T>(_cacheKeyStrategy, cacheKey, buffer, out var key)
+            ? _cache.GetOrAddAsync(key, state, generator, Policy, token)
+            : _cache.GetOrAddAsync(GetCacheKey(cacheKey), state, generator, Policy, token);
+    }
+
+    [OverloadResolutionPriority(1)]
+    public ValueTask<IDictionary<string, T?>> GetOrAddAsync<TState>(CacheKey cacheKey, TState state, Func<TState, CancellationToken, Task<IDictionary<string, T?>>> generator, TimeSpan expiration, CancellationToken token = default)
+    {
+        Span<char> buffer = SpanKey.ComposesName(_cacheKeyStrategy, cacheKey) ? stackalloc char[SpanKey.MaxLength] : default;
+        return SpanKey.TryComposeName<T>(_cacheKeyStrategy, cacheKey, buffer, out var key)
+            ? _cache.GetOrAddAsync(key, state, generator, expiration, Policy, token)
+            : _cache.GetOrAddAsync(GetCacheKey(cacheKey), state, generator, expiration, Policy, token);
+    }
+
+    [OverloadResolutionPriority(1)]
+    public ValueTask<IDictionary<string, T?>> GetOrAddAsync<TState>(CacheKey cacheKey, TState state, Func<TState, CancellationToken, Task<IDictionary<string, T?>>> generator, DateTimeOffset expiration, CancellationToken token = default)
+    {
+        Span<char> buffer = SpanKey.ComposesName(_cacheKeyStrategy, cacheKey) ? stackalloc char[SpanKey.MaxLength] : default;
+        return SpanKey.TryComposeName<T>(_cacheKeyStrategy, cacheKey, buffer, out var key)
+            ? _cache.GetOrAddAsync(key, state, generator, expiration, Policy, token)
+            : _cache.GetOrAddAsync(GetCacheKey(cacheKey), state, generator, expiration, Policy, token);
+    }
+
+    public ValueTask<IDictionary<string, T?>> GetOrAddAsync<TState>(Span<char> cacheKey, TState state, Func<TState, CancellationToken, Task<IDictionary<string, T?>>> generator, CancellationToken token = default)
+    {
+        Span<char> buffer = _cacheKeyStrategy is DefaultCacheKeyStrategy ? default : stackalloc char[SpanKey.MaxLength];
+        return SpanKey.TryComposeTyped<T>(_cacheKeyStrategy, cacheKey, buffer, out var key)
+            ? _cache.GetOrAddAsync(key, state, generator, Policy, token)
+            : GetOrAddAsync(new CacheKey(cacheKey), state, generator, token);
+    }
+
+    public ValueTask<IDictionary<string, T?>> GetOrAddAsync<TState>(Span<char> cacheKey, TState state, Func<TState, CancellationToken, Task<IDictionary<string, T?>>> generator, TimeSpan expiration, CancellationToken token = default)
+    {
+        Span<char> buffer = _cacheKeyStrategy is DefaultCacheKeyStrategy ? default : stackalloc char[SpanKey.MaxLength];
+        return SpanKey.TryComposeTyped<T>(_cacheKeyStrategy, cacheKey, buffer, out var key)
+            ? _cache.GetOrAddAsync(key, state, generator, expiration, Policy, token)
+            : GetOrAddAsync(new CacheKey(cacheKey), state, generator, expiration, token);
+    }
+
+    public ValueTask<IDictionary<string, T?>> GetOrAddAsync<TState>(Span<char> cacheKey, TState state, Func<TState, CancellationToken, Task<IDictionary<string, T?>>> generator, DateTimeOffset expiration, CancellationToken token = default)
+    {
+        Span<char> buffer = _cacheKeyStrategy is DefaultCacheKeyStrategy ? default : stackalloc char[SpanKey.MaxLength];
+        return SpanKey.TryComposeTyped<T>(_cacheKeyStrategy, cacheKey, buffer, out var key)
+            ? _cache.GetOrAddAsync(key, state, generator, expiration, Policy, token)
+            : GetOrAddAsync(new CacheKey(cacheKey), state, generator, expiration, token);
     }
 
     [OverloadResolutionPriority(1)]

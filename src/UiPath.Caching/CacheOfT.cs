@@ -1,7 +1,7 @@
 namespace UiPath.Caching;
 
 [ExcludeFromCodeCoverage]
-public class Cache<T> : ICache<T>, ISpanKeyCache<T>, IStatefulCache<T>, IGeneratedExpirationCache<T>
+public class Cache<T> : ICache<T>, ISpanKeyCache<T>, IStatefulCache<T>, IGeneratedExpirationCache<T>, IStatefulGeneratedExpirationCache<T>, IBatchArgumentCache<T>
 {
     private readonly ICache _cache;
     private readonly ICacheKeyStrategy _cacheKeyStrategy;
@@ -187,6 +187,21 @@ public class Cache<T> : ICache<T>, ISpanKeyCache<T>, IStatefulCache<T>, IGenerat
 
     public ValueTask<T?> GetOrAddWithExpirationAsync(CacheKey cacheKey, Func<CancellationToken, Task<GeneratedValue<T>>> generator, CancellationToken token = default) =>
         _cache.GetOrAddWithExpirationAsync(GetCacheKey(cacheKey), generator, Policy, token);
+
+    public ValueTask<T?> GetOrAddWithExpirationAsync<TState>(CacheKey cacheKey, TState state, Func<TState, CancellationToken, Task<GeneratedValue<T>>> generator, CancellationToken token = default) =>
+        _cache.GetOrAddWithExpirationAsync(GetCacheKey(cacheKey), state, generator, Policy, token);
+
+    public ValueTask<KeyValuePair<TState, T?>[]> GetOrAddAsync<TState, TArgument>(KeyValuePair<CacheKey, TState>[] entries, TArgument argument, Func<TArgument, TState[], CancellationToken, Task<KeyValuePair<TState, T?>[]>> generator, CancellationToken token = default)
+        where TState : notnull =>
+        _cache.GetOrAddAsync<T, TState, TArgument>(MapKeys(entries), argument, generator, Policy, token);
+
+    public ValueTask<KeyValuePair<TState, T?>[]> GetOrAddAsync<TState, TArgument>(KeyValuePair<CacheKey, TState>[] entries, TArgument argument, Func<TArgument, TState[], CancellationToken, Task<KeyValuePair<TState, T?>[]>> generator, TimeSpan expiration, CancellationToken token = default)
+        where TState : notnull =>
+        _cache.GetOrAddAsync<T, TState, TArgument>(MapKeys(entries), argument, generator, expiration, Policy, token);
+
+    public ValueTask<KeyValuePair<TState, T?>[]> GetOrAddAsync<TState, TArgument>(KeyValuePair<CacheKey, TState>[] entries, TArgument argument, Func<TArgument, TState[], CancellationToken, Task<KeyValuePair<TState, T?>[]>> generator, DateTimeOffset expiration, CancellationToken token = default)
+        where TState : notnull =>
+        _cache.GetOrAddAsync<T, TState, TArgument>(MapKeys(entries), argument, generator, expiration, Policy, token);
 
     public ValueTask<bool> RefreshAsync(CacheKey cacheKey, CancellationToken token = default) =>
         _cache.RefreshAsync<T>(GetCacheKey(cacheKey), policy: Policy, token: token);

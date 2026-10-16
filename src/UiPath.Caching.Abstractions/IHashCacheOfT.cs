@@ -56,6 +56,63 @@ public interface IHashCache<T>
             ? spanKeyCache.GetOrAddAsync(cacheKey, generator, expiration, token)
             : GetOrAddAsync(new CacheKey(cacheKey), generator, expiration, token);
 
+    /// <inheritdoc cref="IStatefulHashCache.GetOrAddAsync{T, TState}(CacheKey, TState, Func{TState, CancellationToken, Task{IDictionary{string, T}}}, CachePolicy, CancellationToken)"/>
+    sealed ValueTask<IDictionary<string, T?>> GetOrAddAsync<TState>(CacheKey cacheKey, TState state, Func<TState, CancellationToken, Task<IDictionary<string, T?>>> generator, CancellationToken token = default)
+    {
+        ArgumentNullException.ThrowIfNull(generator);
+        return this is IStatefulHashCache<T> stateful
+            ? stateful.GetOrAddAsync(cacheKey, state, generator, token)
+            : GetOrAddAsync(cacheKey, StatefulCacheExtensions.BindHash(state, generator), token);
+    }
+
+    /// <inheritdoc cref="IStatefulHashCache.GetOrAddAsync{T, TState}(CacheKey, TState, Func{TState, CancellationToken, Task{IDictionary{string, T}}}, CachePolicy, CancellationToken)"/>
+    sealed ValueTask<IDictionary<string, T?>> GetOrAddAsync<TState>(CacheKey cacheKey, TState state, Func<TState, CancellationToken, Task<IDictionary<string, T?>>> generator, TimeSpan expiration, CancellationToken token = default)
+    {
+        ArgumentNullException.ThrowIfNull(generator);
+        return this is IStatefulHashCache<T> stateful
+            ? stateful.GetOrAddAsync(cacheKey, state, generator, expiration, token)
+            : GetOrAddAsync(cacheKey, StatefulCacheExtensions.BindHash(state, generator), expiration, token);
+    }
+
+    /// <inheritdoc cref="IStatefulHashCache.GetOrAddAsync{T, TState}(CacheKey, TState, Func{TState, CancellationToken, Task{IDictionary{string, T}}}, CachePolicy, CancellationToken)"/>
+    sealed ValueTask<IDictionary<string, T?>> GetOrAddAsync<TState>(CacheKey cacheKey, TState state, Func<TState, CancellationToken, Task<IDictionary<string, T?>>> generator, DateTimeOffset expiration, CancellationToken token = default)
+    {
+        ArgumentNullException.ThrowIfNull(generator);
+        return this is IStatefulHashCache<T> stateful
+            ? stateful.GetOrAddAsync(cacheKey, state, generator, expiration, token)
+            : GetOrAddAsync(cacheKey, StatefulCacheExtensions.BindHash(state, generator), expiration, token);
+    }
+
+    /// <inheritdoc cref="IStatefulHashCache.GetOrAddAsync{T, TState}(CacheKey, TState, Func{TState, CancellationToken, Task{IDictionary{string, T}}}, CachePolicy, CancellationToken)"/>
+    [OverloadResolutionPriority(-1)]
+    sealed ValueTask<IDictionary<string, T?>> GetOrAddAsync<TState>(Span<char> cacheKey, TState state, Func<TState, CancellationToken, Task<IDictionary<string, T?>>> generator, CancellationToken token = default)
+    {
+        ArgumentNullException.ThrowIfNull(generator);
+        return this is IStatefulSpanKeyHashCache<T> stateful
+            ? stateful.GetOrAddAsync(cacheKey, state, generator, token)
+            : GetOrAddAsync(cacheKey, StatefulCacheExtensions.BindHash(state, generator), token);
+    }
+
+    /// <inheritdoc cref="IStatefulHashCache.GetOrAddAsync{T, TState}(CacheKey, TState, Func{TState, CancellationToken, Task{IDictionary{string, T}}}, CachePolicy, CancellationToken)"/>
+    [OverloadResolutionPriority(-1)]
+    sealed ValueTask<IDictionary<string, T?>> GetOrAddAsync<TState>(Span<char> cacheKey, TState state, Func<TState, CancellationToken, Task<IDictionary<string, T?>>> generator, TimeSpan expiration, CancellationToken token = default)
+    {
+        ArgumentNullException.ThrowIfNull(generator);
+        return this is IStatefulSpanKeyHashCache<T> stateful
+            ? stateful.GetOrAddAsync(cacheKey, state, generator, expiration, token)
+            : GetOrAddAsync(cacheKey, StatefulCacheExtensions.BindHash(state, generator), expiration, token);
+    }
+
+    /// <inheritdoc cref="IStatefulHashCache.GetOrAddAsync{T, TState}(CacheKey, TState, Func{TState, CancellationToken, Task{IDictionary{string, T}}}, CachePolicy, CancellationToken)"/>
+    [OverloadResolutionPriority(-1)]
+    sealed ValueTask<IDictionary<string, T?>> GetOrAddAsync<TState>(Span<char> cacheKey, TState state, Func<TState, CancellationToken, Task<IDictionary<string, T?>>> generator, DateTimeOffset expiration, CancellationToken token = default)
+    {
+        ArgumentNullException.ThrowIfNull(generator);
+        return this is IStatefulSpanKeyHashCache<T> stateful
+            ? stateful.GetOrAddAsync(cacheKey, state, generator, expiration, token)
+            : GetOrAddAsync(cacheKey, StatefulCacheExtensions.BindHash(state, generator), expiration, token);
+    }
+
     ValueTask<ICacheEntry<IDictionary<string, T?>>> GetCacheEntryAsync(CacheKey cacheKey, CancellationToken token = default);
 
     /// <inheritdoc cref="ISpanKeyCache.GetAsync{T}(Span{char}, CachePolicy, CancellationToken)"/>

@@ -124,6 +124,36 @@ public interface ICache : IDisposable
             : GetOrAddAsync(cacheKey, StatefulCacheExtensions.Bind(state, generator), expiration, policy, token);
     }
 
+    /// <inheritdoc cref="IBatchArgumentCache.GetOrAddAsync{T, TState, TArgument}(KeyValuePair{CacheKey, TState}[], TArgument, Func{TArgument, TState[], CancellationToken, Task{KeyValuePair{TState, T}[]}}, CachePolicy, CancellationToken)"/>
+    sealed ValueTask<KeyValuePair<TState, T?>[]> GetOrAddAsync<T, TState, TArgument>(KeyValuePair<CacheKey, TState>[] entries, TArgument argument, Func<TArgument, TState[], CancellationToken, Task<KeyValuePair<TState, T?>[]>> generator, CachePolicy? policy, CancellationToken token = default)
+        where TState : notnull
+    {
+        ArgumentNullException.ThrowIfNull(generator);
+        return this is IBatchArgumentCache capable
+            ? capable.GetOrAddAsync(entries, argument, generator, policy, token)
+            : GetOrAddAsync(entries, StatefulCacheExtensions.BindBatch(argument, generator), policy, token);
+    }
+
+    /// <inheritdoc cref="IBatchArgumentCache.GetOrAddAsync{T, TState, TArgument}(KeyValuePair{CacheKey, TState}[], TArgument, Func{TArgument, TState[], CancellationToken, Task{KeyValuePair{TState, T}[]}}, CachePolicy, CancellationToken)"/>
+    sealed ValueTask<KeyValuePair<TState, T?>[]> GetOrAddAsync<T, TState, TArgument>(KeyValuePair<CacheKey, TState>[] entries, TArgument argument, Func<TArgument, TState[], CancellationToken, Task<KeyValuePair<TState, T?>[]>> generator, TimeSpan expiration, CachePolicy? policy, CancellationToken token = default)
+        where TState : notnull
+    {
+        ArgumentNullException.ThrowIfNull(generator);
+        return this is IBatchArgumentCache capable
+            ? capable.GetOrAddAsync(entries, argument, generator, expiration, policy, token)
+            : GetOrAddAsync(entries, StatefulCacheExtensions.BindBatch(argument, generator), expiration, policy, token);
+    }
+
+    /// <inheritdoc cref="IBatchArgumentCache.GetOrAddAsync{T, TState, TArgument}(KeyValuePair{CacheKey, TState}[], TArgument, Func{TArgument, TState[], CancellationToken, Task{KeyValuePair{TState, T}[]}}, CachePolicy, CancellationToken)"/>
+    sealed ValueTask<KeyValuePair<TState, T?>[]> GetOrAddAsync<T, TState, TArgument>(KeyValuePair<CacheKey, TState>[] entries, TArgument argument, Func<TArgument, TState[], CancellationToken, Task<KeyValuePair<TState, T?>[]>> generator, DateTimeOffset expiration, CachePolicy? policy, CancellationToken token = default)
+        where TState : notnull
+    {
+        ArgumentNullException.ThrowIfNull(generator);
+        return this is IBatchArgumentCache capable
+            ? capable.GetOrAddAsync(entries, argument, generator, expiration, policy, token)
+            : GetOrAddAsync(entries, StatefulCacheExtensions.BindBatch(argument, generator), expiration, policy, token);
+    }
+
     ValueTask<bool> RemoveAsync<T>(CacheKey cacheKey, CancellationToken token = default);
 
     ValueTask<bool> RemoveAsync<T>(CacheKey[] cacheKey, CancellationToken token = default);
@@ -192,4 +222,13 @@ public interface ICache : IDisposable
         this is IGeneratedExpirationCache capable
             ? capable.GetOrAddWithExpirationAsync(cacheKey, generator, policy, token)
             : GeneratedExpirationExtensions.ReadThenSetAsync(this, cacheKey, generator, policy, token);
+
+    /// <inheritdoc cref="IStatefulGeneratedExpirationCache.GetOrAddWithExpirationAsync{T, TState}(CacheKey, TState, Func{TState, CancellationToken, Task{GeneratedValue{T}}}, CachePolicy, CancellationToken)"/>
+    sealed ValueTask<T?> GetOrAddWithExpirationAsync<T, TState>(CacheKey cacheKey, TState state, Func<TState, CancellationToken, Task<GeneratedValue<T>>> generator, CachePolicy? policy, CancellationToken token = default)
+    {
+        ArgumentNullException.ThrowIfNull(generator);
+        return this is IStatefulGeneratedExpirationCache stateful
+            ? stateful.GetOrAddWithExpirationAsync(cacheKey, state, generator, policy, token)
+            : GetOrAddWithExpirationAsync(cacheKey, StatefulCacheExtensions.BindGenerated(state, generator), policy, token);
+    }
 }

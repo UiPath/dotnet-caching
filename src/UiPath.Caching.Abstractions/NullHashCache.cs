@@ -95,6 +95,34 @@ public sealed class NullHashCache : IHashCache, ISpanKeyHashCache
     public ValueTask<IDictionary<string, T?>> GetOrAddAsync<T>(Span<char> cacheKey, Func<CancellationToken, Task<IDictionary<string, T?>>> generator, DateTimeOffset expiration, HashCacheSetOption? setOption, CachePolicy? policy, CancellationToken token = default) =>
         ReturnGeneratorAsync(generator, token);
 
+    public ValueTask<IDictionary<string, T?>> GetOrAddAsync<T, TState>(CacheKey cacheKey, TState state, Func<TState, CancellationToken, Task<IDictionary<string, T?>>> generator, CachePolicy? policy, CancellationToken token = default) =>
+        ((IHashCache)this).GetOrAddAsync(cacheKey, state, generator, policy, token);
+
+    public ValueTask<IDictionary<string, T?>> GetOrAddAsync<T, TState>(CacheKey cacheKey, TState state, Func<TState, CancellationToken, Task<IDictionary<string, T?>>> generator, TimeSpan expiration, CachePolicy? policy, CancellationToken token = default) =>
+        ((IHashCache)this).GetOrAddAsync(cacheKey, state, generator, expiration, policy, token);
+
+    public ValueTask<IDictionary<string, T?>> GetOrAddAsync<T, TState>(CacheKey cacheKey, TState state, Func<TState, CancellationToken, Task<IDictionary<string, T?>>> generator, DateTimeOffset expiration, CachePolicy? policy, CancellationToken token = default) =>
+        ((IHashCache)this).GetOrAddAsync(cacheKey, state, generator, expiration, policy, token);
+
+    public ValueTask<IDictionary<string, T?>> GetOrAddAsync<T, TState>(CacheKey cacheKey, TState state, Func<TState, CancellationToken, Task<IDictionary<string, T?>>> generator, DateTimeOffset expiration, HashCacheSetOption? setOption, CachePolicy? policy, CancellationToken token = default) =>
+        ((IHashCache)this).GetOrAddAsync(cacheKey, state, generator, expiration, setOption, policy, token);
+
+    [OverloadResolutionPriority(-1)]
+    public ValueTask<IDictionary<string, T?>> GetOrAddAsync<T, TState>(Span<char> cacheKey, TState state, Func<TState, CancellationToken, Task<IDictionary<string, T?>>> generator, CachePolicy? policy, CancellationToken token = default) =>
+        ((IHashCache)this).GetOrAddAsync(cacheKey, state, generator, policy, token);
+
+    [OverloadResolutionPriority(-1)]
+    public ValueTask<IDictionary<string, T?>> GetOrAddAsync<T, TState>(Span<char> cacheKey, TState state, Func<TState, CancellationToken, Task<IDictionary<string, T?>>> generator, TimeSpan expiration, CachePolicy? policy, CancellationToken token = default) =>
+        ((IHashCache)this).GetOrAddAsync(cacheKey, state, generator, expiration, policy, token);
+
+    [OverloadResolutionPriority(-1)]
+    public ValueTask<IDictionary<string, T?>> GetOrAddAsync<T, TState>(Span<char> cacheKey, TState state, Func<TState, CancellationToken, Task<IDictionary<string, T?>>> generator, DateTimeOffset expiration, CachePolicy? policy, CancellationToken token = default) =>
+        ((IHashCache)this).GetOrAddAsync(cacheKey, state, generator, expiration, policy, token);
+
+    [OverloadResolutionPriority(-1)]
+    public ValueTask<IDictionary<string, T?>> GetOrAddAsync<T, TState>(Span<char> cacheKey, TState state, Func<TState, CancellationToken, Task<IDictionary<string, T?>>> generator, DateTimeOffset expiration, HashCacheSetOption? setOption, CachePolicy? policy, CancellationToken token = default) =>
+        ((IHashCache)this).GetOrAddAsync(cacheKey, state, generator, expiration, setOption, policy, token);
+
     public ValueTask<bool> RefreshAsync<T>(CacheKey cacheKey, CachePolicy? policy, CancellationToken token = default) => ReturnTrueAsync<T>();
 
     public ValueTask<bool> RefreshAsync<T>(CacheKey cacheKey, TimeSpan expiration, CachePolicy? policy, CancellationToken token = default) => ReturnTrueAsync<T>();

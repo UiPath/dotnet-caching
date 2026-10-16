@@ -111,6 +111,18 @@ public sealed class NullCache : ICache, ISpanKeyCache, IGeneratedExpirationCache
     public ValueTask<T?> GetOrAddAsync<T, TState>(CacheKey cacheKey, TState state, Func<TState, CancellationToken, Task<T?>> generator, DateTimeOffset expiration, CachePolicy? policy, CancellationToken token = default) =>
         ((ICache)this).GetOrAddAsync(cacheKey, state, generator, expiration, policy, token);
 
+    public ValueTask<KeyValuePair<TState, T?>[]> GetOrAddAsync<T, TState, TArgument>(KeyValuePair<CacheKey, TState>[] entries, TArgument argument, Func<TArgument, TState[], CancellationToken, Task<KeyValuePair<TState, T?>[]>> generator, CachePolicy? policy, CancellationToken token = default)
+        where TState : notnull =>
+        ((ICache)this).GetOrAddAsync(entries, argument, generator, policy, token);
+
+    public ValueTask<KeyValuePair<TState, T?>[]> GetOrAddAsync<T, TState, TArgument>(KeyValuePair<CacheKey, TState>[] entries, TArgument argument, Func<TArgument, TState[], CancellationToken, Task<KeyValuePair<TState, T?>[]>> generator, TimeSpan expiration, CachePolicy? policy, CancellationToken token = default)
+        where TState : notnull =>
+        ((ICache)this).GetOrAddAsync(entries, argument, generator, expiration, policy, token);
+
+    public ValueTask<KeyValuePair<TState, T?>[]> GetOrAddAsync<T, TState, TArgument>(KeyValuePair<CacheKey, TState>[] entries, TArgument argument, Func<TArgument, TState[], CancellationToken, Task<KeyValuePair<TState, T?>[]>> generator, DateTimeOffset expiration, CachePolicy? policy, CancellationToken token = default)
+        where TState : notnull =>
+        ((ICache)this).GetOrAddAsync(entries, argument, generator, expiration, policy, token);
+
     public ValueTask<bool> RefreshAsync<T>(CacheKey cacheKey, CachePolicy? policy, CancellationToken token = default) => ReturnTrueAsync<T>();
 
     public ValueTask<bool> RefreshAsync<T>(CacheKey cacheKey, TimeSpan expiration, CachePolicy? policy, CancellationToken token = default) => ReturnTrueAsync<T>();
@@ -161,6 +173,9 @@ public sealed class NullCache : ICache, ISpanKeyCache, IGeneratedExpirationCache
         NotCacheableException.ThrowIfNotCacheable<T>();
         return (await generator(token).ConfigureAwait(false)).Value;
     }
+
+    public ValueTask<T?> GetOrAddWithExpirationAsync<T, TState>(CacheKey cacheKey, TState state, Func<TState, CancellationToken, Task<GeneratedValue<T>>> generator, CachePolicy? policy, CancellationToken token = default) =>
+        ((ICache)this).GetOrAddWithExpirationAsync(cacheKey, state, generator, policy, token);
 
     public void Dispose()
     {
