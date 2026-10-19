@@ -33,6 +33,27 @@ public class MockableInterfaceTests
         offenders.Should().BeEmpty();
     }
 
+    // On Castle.Core 5.2.1 an NSubstitute substitute throws on any call to an overridable default member (castleproject/Core#684).
+    [Theory]
+    [InlineData(typeof(ICacheFactory))]
+    [InlineData(typeof(ICache))]
+    [InlineData(typeof(ICache<>))]
+    [InlineData(typeof(IHashCache))]
+    [InlineData(typeof(IHashCache<>))]
+    [InlineData(typeof(IPolicyDefaults))]
+    [InlineData(typeof(ICachePolicyFactory))]
+    [InlineData(typeof(ITopicFactory))]
+    public void A_commonly_mocked_interface_has_no_overridable_default_member(Type type)
+    {
+        var defaults = type.GetInterfaces().Prepend(type)
+            .SelectMany(t => t.GetMethods())
+            .Where(m => m.IsVirtual && !m.IsAbstract)
+            .Select(m => $"{m.DeclaringType!.Name}.{m.Name}")
+            .ToArray();
+
+        defaults.Should().BeEmpty();
+    }
+
     private static bool IsRefStruct(Type type) => (type.IsByRef ? type.GetElementType()! : type).IsByRefLike;
 
     private static IEnumerable<Assembly> LibraryAssemblies() =>

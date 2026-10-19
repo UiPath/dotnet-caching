@@ -548,8 +548,6 @@ public interface ICacheFactory : IDisposable
 {
     IEnumerable<string> ProviderNames { get; }
 
-    ICachePolicyFactory? PolicyFactory => null;
-
     ICache CreateCache(string? providerName = null);
 
     IHashCache CreateHashCache(string? providerName = null);
@@ -560,7 +558,7 @@ public interface ICacheFactory : IDisposable
 
 `ICacheFactory` is the entry point for obtaining cache instances. `CreateCache` and `CreateHashCache` return the untyped `ICache` / `IHashCache` interfaces; the typed `ICache<T>` / `IHashCache<T>` wrappers are obtained through the `ICacheFactory` extension methods (`CreateCache<T>`, `CreateHashCache<T>`) in the `UiPath.Caching` package, or injected directly, since `AddCaching` registers them. When `providerName` is omitted, the factory uses the default registered provider. `AddProvider` supports registering additional provider implementations at runtime, for example in test fixtures or multi-tenant scenarios where provider instances are created dynamically.
 
-`PolicyFactory` is nullable with a default interface implementation of `null` — existing `ICacheFactory` implementors do not need to add anything to keep compiling. `Cache<T>` / `HashCache<T>` ctors prefer the DI-registered `ICachePolicyFactory` (injected via the optional `policyFactory` parameter) and fall back to `cacheFactory.PolicyFactory`. A custom factory that returns `null` here still gets configured policy resolution applied to its caches via DI.
+`ICacheFactory` has no default members, so a Moq or NSubstitute proxy of it works on any Castle.Core. A factory's own policy factory, the default `Cache<T>` / `HashCache<T>` fall back to, is on [`IPolicyDefaults`](#ipolicydefaults).
 
 **Use this when:**
 
@@ -574,6 +572,25 @@ public interface ICacheFactory : IDisposable
 - You need broadcast (pub/sub) functionality — use [`ITopicFactory`](#itopicfactory) instead.
 
 **See also:** [`ICacheProvider`](../concepts.md), [`ITopicFactory`](#itopicfactory), [Quickstart](../quickstart.md), [Concepts](../concepts.md)
+
+---
+
+### `IPolicyDefaults`
+
+**Namespace:** `UiPath.Caching`
+
+```csharp
+public interface IPolicyDefaults
+{
+    ICachePolicyFactory? PolicyFactory { get; }
+}
+```
+
+The default policy factory of an `ICacheFactory`. `Cache<T>` / `HashCache<T>` ctors prefer the `ICachePolicyFactory` passed to them (DI injects the registered one through the optional `policyFactory` parameter) and otherwise use the factory's `PolicyFactory` when the factory implements this interface, as `CacheFactory` does. With neither, `Policy` stays `null` and the underlying cache applies its factory's `Default` policy on every call.
+
+It is apart from `ICacheFactory`, so a custom factory or a mock implements nothing for it. A decorator that wraps `CacheFactory` and should pass its policies on implements it too; a `PolicyFactory` property on a class that implements only `ICacheFactory` is never read.
+
+**See also:** [`ICacheFactory`](#icachefactory), [`ICachePolicyFactory`](#icachepolicyfactory)
 
 ---
 
@@ -639,7 +656,7 @@ public interface ICachePolicyFactory
 - You're a regular cache consumer — `ICache<T>` already resolves its policy at construction. Don't call `Resolve` on every request.
 - You need to mutate or refresh policies at runtime — the default implementation snapshots at startup. Replace the factory via `builder.UseCachePolicyFactory<T>()` if you need dynamic resolution; see [how-to/extending.md#swapping-the-default-factories](../how-to/extending.md#swapping-the-default-factories).
 
-**See also:** [`ICacheFactory.PolicyFactory`](#icachefactory), [how-to/extending.md](../how-to/extending.md), [Concepts — Policies](../concepts.md#policies)
+**See also:** [`IPolicyDefaults.PolicyFactory`](#ipolicydefaults), [how-to/extending.md](../how-to/extending.md), [Concepts — Policies](../concepts.md#policies)
 
 ---
 

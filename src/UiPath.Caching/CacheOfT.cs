@@ -7,7 +7,7 @@ public class Cache<T> : ICache<T>, ISpanKeyCache<T>, IStatefulCache<T>, IGenerat
     private readonly ICacheKeyStrategy _cacheKeyStrategy;
 
     public Cache(ICacheFactory cacheFactory, ICacheKeyStrategy? cacheKeyStrategy = null, ICachePolicyFactory? policyFactory = null, string? policyName = null)
-    : this(cacheFactory.CreateCache(), cacheKeyStrategy, (policyFactory ?? cacheFactory.PolicyFactory)?.Resolve(policyName ?? typeof(T).FullName ?? typeof(T).Name))
+    : this(cacheFactory.CreateCache(), cacheKeyStrategy, (policyFactory ?? (cacheFactory as IPolicyDefaults)?.PolicyFactory)?.Resolve(policyName ?? typeof(T).FullName ?? typeof(T).Name))
     {
     }
 
@@ -27,7 +27,7 @@ public class Cache<T> : ICache<T>, ISpanKeyCache<T>, IStatefulCache<T>, IGenerat
     /// <summary>
     /// Resolved <see cref="CachePolicy"/> snapshot taken at construction. Supplied directly via the
     /// base ctor's <c>policy</c> argument, or resolved by the DI-injected <c>ICachePolicyFactory</c>
-    /// (falling back to <see cref="ICacheFactory.PolicyFactory"/> when no DI factory is registered).
+    /// (falling back to <see cref="IPolicyDefaults.PolicyFactory"/> when no DI factory is registered).
     /// <c>null</c> when neither source is wired — the underlying <see cref="ICache"/> then coalesces
     /// to its factory's <c>Default</c> on every call, so cache-wide
     /// <c>CacheOptions.DefaultCachePolicy</c> defaults are still honored.

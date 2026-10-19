@@ -36,7 +36,7 @@ public class RedisStreamsTopicTests(ITestContextAccessor testContextAccessor) : 
         _database.StreamCreateConsumerGroup(
                 Arg.Any<RedisKey>(),
                 Arg.Any<RedisValue>(),
-                StreamPosition.NewMessages).Throws<Exception>();
+                Arg.Any<RedisValue>()).Throws<Exception>();
         Action act = () => Sut.Subscribe(observer);
         act.Should().Throw<Exception>();
     }
@@ -48,7 +48,7 @@ public class RedisStreamsTopicTests(ITestContextAccessor testContextAccessor) : 
         _database.StreamCreateConsumerGroup(
                 Arg.Any<RedisKey>(),
                 Arg.Any<RedisValue>(),
-                StreamPosition.NewMessages).Throws(new RedisServerException(RedisErrorKind.None, CommandFlags.None, "BUSYGROUP Consumer Group name already exists"));
+                Arg.Any<RedisValue>()).Throws(new RedisServerException(RedisErrorKind.None, CommandFlags.None, "BUSYGROUP Consumer Group name already exists"));
         Action act = () => Sut.Subscribe(observer);
         act.Should().NotThrow();
     }
@@ -78,7 +78,7 @@ public class RedisStreamsTopicTests(ITestContextAccessor testContextAccessor) : 
         _database.StreamCreateConsumerGroup(
                 Arg.Any<RedisKey>(),
                 Arg.Any<RedisValue>(),
-                StreamPosition.NewMessages).Throws(new RedisServerException(RedisErrorKind.None, CommandFlags.None, _fixture.Create<string>()));
+                Arg.Any<RedisValue>()).Throws(new RedisServerException(RedisErrorKind.None, CommandFlags.None, _fixture.Create<string>()));
         Action act = () => Sut.Subscribe(observer);
         act.Should().Throw<Exception>();
     }
