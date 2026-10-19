@@ -26,6 +26,11 @@ updates:
       # and both majors.
       - dependency-name: "Microsoft.Extensions.*"
         update-types: ["version-update:semver-major"]
+      # Moq 4.21 needs Castle.Core 5.2.1, where an NSubstitute substitute throws ArgumentNullException
+      # on any default interface member (castleproject/Core#684). Lift this once Castle.Core 6.0 ships
+      # and bump Moq with a Castle.Core 6.0 reference.
+      - dependency-name: "Moq"
+        versions: [">= 4.21.0"]
   - package-ecosystem: "github-actions"
     directory: "/"
     schedule:
