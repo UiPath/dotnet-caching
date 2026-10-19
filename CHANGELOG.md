@@ -8,6 +8,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 
 ### Added
 
+- **`IPolicyDefaults`.** `ICacheFactory.PolicyFactory` moves to this interface, which `CacheFactory` implements, and
+  `Cache<T>` and `HashCache<T>` read it from a factory that implements it. `ICacheFactory` is left with no default
+  member, so `new Cache<T>(factory)` over an NSubstitute substitute no longer throws `ArgumentNullException` on
+  Castle.Core 5.2.1, which fails on a call to a default interface member (castleproject/Core#684).
+
 - **State overloads on the hash caches.** `IHashCache` and `IHashCache<T>` gain `sealed` `GetOrAddAsync` members that take
   a `TState state` before a `Func<TState, CancellationToken, Task<IDictionary<string, T?>>>` generator, for `CacheKey`
   and `Span<char>` keys and every expiration, set-option and policy variant of the closure ones (the policy-less
@@ -80,6 +85,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
   was; cast it to `CacheKey`.
 
 ### Removed
+
+- **`ICacheFactory.PolicyFactory`.** It is on `IPolicyDefaults` now. A factory that returned its own policy factory
+  implements `IPolicyDefaults` as well; one that relied on the `null` default drops nothing. A `PolicyFactory` property
+  on a class that does not implement `IPolicyDefaults` still compiles and is no longer read. Code that read
+  `factory.PolicyFactory` reads `(factory as IPolicyDefaults)?.PolicyFactory`, or takes `ICachePolicyFactory` from
+  DI. A test that set it up on a substitute creates it with `Substitute.For<ICacheFactory, IPolicyDefaults>()`
+  (Moq: `.As<IPolicyDefaults>()`).
 
 - **The 3.0 extensions the interface members replace.** `SpanKeyExtensions` is gone, with all 36 of its methods (the
   `Span<char>` `GetAsync`, `ContainsAsync`, `GetOrAddAsync`, `GetCacheEntryAsync`, `GetItemAsync` and `RemoveAsync`

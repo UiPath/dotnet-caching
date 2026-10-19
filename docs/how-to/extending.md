@@ -440,7 +440,7 @@ services.AddCaching(section, builder =>
 
 All three overloads short-circuit when `CacheOptions.Enabled` is `false` — the `NullCacheFactory` registered by `AddCaching` for the disabled-master-switch case is preserved, matching the behavior of `AddBroadcast` / `AddTelemetry` when caching is fully disabled.
 
-A custom `ICacheFactory` that wants to expose its policy factory through the abstraction can return one from the new `ICacheFactory.PolicyFactory` property; the default impl is `=> null` so existing implementors are not broken. The DI-registered `ICachePolicyFactory` still wins inside `Cache<T>` / `HashCache<T>` ctors — the custom factory's `PolicyFactory` is the fallback when no DI factory is registered.
+A custom `ICacheFactory` that wants to expose its policy factory implements `IPolicyDefaults` as well, as `CacheFactory` does; a `PolicyFactory` property on a class that implements only `ICacheFactory` is never read. The DI-registered `ICachePolicyFactory` still wins inside `Cache<T>` / `HashCache<T>` ctors — the factory's `PolicyFactory` is the fallback when no DI factory is registered.
 
 ### `builder.UseCachePolicyFactory<T>()`
 

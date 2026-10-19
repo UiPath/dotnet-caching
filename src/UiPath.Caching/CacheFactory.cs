@@ -1,6 +1,6 @@
 namespace UiPath.Caching;
 
-public sealed class CacheFactory : ICacheFactory
+public sealed class CacheFactory : ICacheFactory, IPolicyDefaults
 {
     private readonly Dictionary<string, ICacheProvider> _providers = new(StringComparer.OrdinalIgnoreCase);
     private readonly CacheOptions _options;
