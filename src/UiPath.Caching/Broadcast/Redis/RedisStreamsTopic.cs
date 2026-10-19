@@ -22,12 +22,10 @@ public sealed partial class RedisStreamsTopic<T> : ITopic<T>
     private readonly RedisStreamNotifyChannel? _notifyChannel;
     private readonly RedisChannel? _notifyRedisChannel;
     private readonly SignalingFetchWaiter _waiter;
-    private readonly Lock _syncObj = new();
     // Half of MaxLength; 0 = no trim.
     private readonly long _wakeEvery;
     private long _published;
     private bool _disposed;
-    private volatile bool _consumerGroupCreated;
 
     public RedisStreamsTopic(
         TopicKey topicKey,
@@ -86,7 +84,6 @@ public sealed partial class RedisStreamsTopic<T> : ITopic<T>
     public IDisposable Subscribe(IObserver<T> observer)
     {
         this.ThrowIfDisposed(_disposed);
-        CreateConsumerGroup();
 
         // Marked first, so a loss reported next expires this observer too; one reported while it joined may have expired
         // the others before it, so it is told itself.
@@ -196,35 +193,6 @@ public sealed partial class RedisStreamsTopic<T> : ITopic<T>
         }
     }
 
-    private void CreateConsumerGroup()
-    {
-        if (!_consumerGroupCreated)
-        {
-            lock (_syncObj)
-            {
-#pragma warning disable S2589 // double-checked locking with a volatile field; outer check is racy by design
-                if (!_consumerGroupCreated)
-#pragma warning restore S2589
-                {
-                    _consumerGroupCreated = EnsureStreamGroup();
-                }
-            }
-        }
-    }
-
-    private bool EnsureStreamGroup()
-    {
-        try
-        {
-            return ConsumerGroups.Create(_redis.Database, _context.Topic, _context.ConsumerGroup, StreamPosition.NewMessages);
-        }
-        catch (RedisServerException ex) when (ex.Message == StreamConstants.ConsumerGroupNameExistsErrorMessage)
-        {
-            LogConsumerGroupExists(_context.Topic, _context.ConsumerGroup);
-            return true;
-        }
-    }
-
     private RedisStreamContext GetContext(
         TopicKey topicKey,
         CacheOptions cacheOptions,
@@ -256,7 +224,4 @@ public sealed partial class RedisStreamsTopic<T> : ITopic<T>
 
     [LoggerMessage(Level = LogLevel.Warning, Message = "Best-effort notify doorbell publish failed for topic {TopicKey}")]
     private partial void LogNotifyPublishError(Exception ex, TopicKey topicKey);
-
-    [LoggerMessage(Level = LogLevel.Debug, Message = "On Topic {Topic} consumer group {ConsumerGroup} already exists")]
-    private partial void LogConsumerGroupExists(RedisKey topic, RedisValue consumerGroup);
 }
