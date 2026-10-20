@@ -249,6 +249,33 @@ public class Cache<T> : ICache<T>, ISpanKeyCache<T>, IStatefulCache<T>, IGenerat
     public ValueTask<bool> SetAsync(CacheKey cacheKey, T? value, DateTimeOffset expiration, CancellationToken token = default) =>
         _cache.SetAsync(GetCacheKey(cacheKey), value, expiration, Policy, token);
 
+    [OverloadResolutionPriority(-1)]
+    public ValueTask<bool> SetAsync(Span<char> cacheKey, T? value, CancellationToken token = default)
+    {
+        Span<char> buffer = _cacheKeyStrategy is DefaultCacheKeyStrategy ? default : stackalloc char[SpanKey.MaxLength];
+        return SpanKey.TryComposeTyped<T>(_cacheKeyStrategy, cacheKey, buffer, out var key)
+            ? _cache.SetAsync<T>(key, value, Policy, token)
+            : SetAsync(new CacheKey(cacheKey), value, token);
+    }
+
+    [OverloadResolutionPriority(-1)]
+    public ValueTask<bool> SetAsync(Span<char> cacheKey, T? value, TimeSpan expiration, CancellationToken token = default)
+    {
+        Span<char> buffer = _cacheKeyStrategy is DefaultCacheKeyStrategy ? default : stackalloc char[SpanKey.MaxLength];
+        return SpanKey.TryComposeTyped<T>(_cacheKeyStrategy, cacheKey, buffer, out var key)
+            ? _cache.SetAsync<T>(key, value, expiration, Policy, token)
+            : SetAsync(new CacheKey(cacheKey), value, expiration, token);
+    }
+
+    [OverloadResolutionPriority(-1)]
+    public ValueTask<bool> SetAsync(Span<char> cacheKey, T? value, DateTimeOffset expiration, CancellationToken token = default)
+    {
+        Span<char> buffer = _cacheKeyStrategy is DefaultCacheKeyStrategy ? default : stackalloc char[SpanKey.MaxLength];
+        return SpanKey.TryComposeTyped<T>(_cacheKeyStrategy, cacheKey, buffer, out var key)
+            ? _cache.SetAsync<T>(key, value, expiration, Policy, token)
+            : SetAsync(new CacheKey(cacheKey), value, expiration, token);
+    }
+
     public ValueTask<bool> SetAsync(KeyValuePair<CacheKey, T?>[] keyValues, CancellationToken token = default) =>
         _cache.SetAsync(GetKeyValuePairs(keyValues), policy: Policy, token: token);
 

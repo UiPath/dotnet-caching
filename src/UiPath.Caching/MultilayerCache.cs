@@ -323,6 +323,15 @@ internal sealed partial class MultilayerCache : MultilayerCacheBase, ICache, ISp
     public ValueTask<bool> SetAsync<T>(CacheKey cacheKey, T? value, DateTimeOffset expiration, CachePolicy? policy, CancellationToken token = default) =>
         SetCoreAsync(cacheKey, value, GetExpiration(expiration), policy ?? _defaultPolicy, token);
 
+    public ValueTask<bool> SetAsync<T>(Span<char> cacheKey, T? value, CachePolicy? policy, CancellationToken token = default) =>
+        SetAsync(new CacheKey(cacheKey), value, policy, token);
+
+    public ValueTask<bool> SetAsync<T>(Span<char> cacheKey, T? value, TimeSpan expiration, CachePolicy? policy, CancellationToken token = default) =>
+        SetAsync(new CacheKey(cacheKey), value, expiration, policy, token);
+
+    public ValueTask<bool> SetAsync<T>(Span<char> cacheKey, T? value, DateTimeOffset expiration, CachePolicy? policy, CancellationToken token = default) =>
+        SetAsync(new CacheKey(cacheKey), value, expiration, policy, token);
+
     public ValueTask<bool> SetAsync<T>(KeyValuePair<CacheKey, T?>[] keyValues, CachePolicy? policy, CancellationToken token = default)
     {
         policy ??= _defaultPolicy;

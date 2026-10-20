@@ -169,6 +169,27 @@ public interface ICache : IDisposable
 
     ValueTask<bool> SetAsync<T>(CacheKey cacheKey, T? value, DateTimeOffset expiration, CachePolicy? policy, CancellationToken token = default);
 
+    /// <inheritdoc cref="ISpanKeyCache.SetAsync{T}(Span{char}, T, CachePolicy, CancellationToken)"/>
+    [OverloadResolutionPriority(-1)]
+    sealed ValueTask<bool> SetAsync<T>(Span<char> cacheKey, T? value, CachePolicy? policy, CancellationToken token = default) =>
+        this is ISpanKeyCache spanKeyCache
+            ? spanKeyCache.SetAsync(cacheKey, value, policy, token)
+            : SetAsync(new CacheKey(cacheKey), value, policy, token);
+
+    /// <inheritdoc cref="ISpanKeyCache.SetAsync{T}(Span{char}, T, CachePolicy, CancellationToken)"/>
+    [OverloadResolutionPriority(-1)]
+    sealed ValueTask<bool> SetAsync<T>(Span<char> cacheKey, T? value, TimeSpan expiration, CachePolicy? policy, CancellationToken token = default) =>
+        this is ISpanKeyCache spanKeyCache
+            ? spanKeyCache.SetAsync(cacheKey, value, expiration, policy, token)
+            : SetAsync(new CacheKey(cacheKey), value, expiration, policy, token);
+
+    /// <inheritdoc cref="ISpanKeyCache.SetAsync{T}(Span{char}, T, CachePolicy, CancellationToken)"/>
+    [OverloadResolutionPriority(-1)]
+    sealed ValueTask<bool> SetAsync<T>(Span<char> cacheKey, T? value, DateTimeOffset expiration, CachePolicy? policy, CancellationToken token = default) =>
+        this is ISpanKeyCache spanKeyCache
+            ? spanKeyCache.SetAsync(cacheKey, value, expiration, policy, token)
+            : SetAsync(new CacheKey(cacheKey), value, expiration, policy, token);
+
     ValueTask<bool> SetAsync<T>(KeyValuePair<CacheKey, T?>[] keyValues, CachePolicy? policy, CancellationToken token = default);
 
     ValueTask<bool> SetAsync<T>(KeyValuePair<CacheKey, T?>[] keyValues, TimeSpan expiration, CachePolicy? policy, CancellationToken token = default);

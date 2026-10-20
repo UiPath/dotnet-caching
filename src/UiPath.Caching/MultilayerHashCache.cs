@@ -301,6 +301,18 @@ internal sealed partial class MultilayerHashCache : MultilayerCacheBase, IHashCa
     public ValueTask<bool> SetAsync<T>(CacheKey cacheKey, IDictionary<string, T?> values, DateTimeOffset expiration, CachePolicy? policy, CancellationToken token = default) =>
         SetCoreAsync(cacheKey, values, GetExpiration(expiration), policy ?? _defaultPolicy, token);
 
+    public ValueTask<bool> SetAsync<T>(Span<char> cacheKey, IDictionary<string, T?> values, CachePolicy? policy, CancellationToken token = default) =>
+        SetAsync(new CacheKey(cacheKey), values, policy, token);
+
+    public ValueTask<bool> SetAsync<T>(Span<char> cacheKey, IDictionary<string, T?> values, TimeSpan expiration, CachePolicy? policy, CancellationToken token = default) =>
+        SetAsync(new CacheKey(cacheKey), values, expiration, policy, token);
+
+    public ValueTask<bool> SetAsync<T>(Span<char> cacheKey, IDictionary<string, T?> values, DateTimeOffset expiration, CachePolicy? policy, CancellationToken token = default) =>
+        SetAsync(new CacheKey(cacheKey), values, expiration, policy, token);
+
+    public ValueTask<bool> SetAsync<T>(Span<char> cacheKey, IDictionary<string, T?> values, HashCacheEntryOptions options, CachePolicy? policy, CancellationToken token = default) =>
+        SetAsync(new CacheKey(cacheKey), values, options, policy, token);
+
     public async ValueTask<bool> SetAsync<T>(CacheKey cacheKey, IDictionary<string, T?> values, HashCacheEntryOptions options, CachePolicy? policy, CancellationToken token = default)
     {
         NotCacheableException.ThrowIfNotCacheable<T>();
