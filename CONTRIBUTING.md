@@ -24,6 +24,15 @@ dotnet test
 - Update CHANGELOG.md under `## [Unreleased]`.
 - Commit messages follow [Conventional Commits](https://www.conventionalcommits.org/): `<type>(<scope>): <subject>`. Example: `feat(redis): add cluster sharding support`.
 
+## Maintenance releases
+
+A released minor line that still takes fixes lives on `release/X.Y` (for example `release/2.1`), cut from its `vX.Y.0` tag.
+
+- Branch off `release/X.Y` and open the PR against it. Branch name convention: `fix/<topic>-X.Y`.
+- A fix that also applies to `main` gets its own PR there. Neither line merges into the other.
+- Add the entry under `## [Unreleased]` on the release branch. Just before tagging, a `docs: release X.Y.Z` PR cuts the section.
+- Only repository admins create `release/*` branches and `v*` tags. The tag goes on the release branch, and its GitHub release is not marked Latest.
+
 ## Public API changes
 
 The `src/` libraries track their public surface with [`Microsoft.CodeAnalysis.PublicApiAnalyzers`](https://github.com/dotnet/roslyn-analyzers/blob/main/src/PublicApiAnalyzers/PublicApiAnalyzers.Help.md). Any change to public or protected API must be reflected in that project's `PublicAPI.Unshipped.txt`, or the build fails (`RS0016` for additions, `RS0017` for removals).
