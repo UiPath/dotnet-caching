@@ -188,6 +188,9 @@ public partial class RedisStreamHealthMaintainer : IHostedService
         }
     }
 
+    private static List<IServer> ConnectedPrimaries(IConnectionMultiplexer? multiplexer) =>
+        multiplexer?.GetServers().Where(static server => !server.IsReplica && server.IsConnected).ToList() ?? [];
+
     private static void AddProp(List<KeyValuePair<string, string>> properties, string key, string? value)
     {
         if (!string.IsNullOrWhiteSpace(key) && !string.IsNullOrWhiteSpace(value))
@@ -448,13 +451,21 @@ public partial class RedisStreamHealthMaintainer : IHostedService
         var primaries = _redis.GetPrimaries().ToList();
         if (primaries.Count == 0)
         {
+            // A connector written outside this library inherits the empty default, yet its multiplexer knows every shard.
+            primaries = ConnectedPrimaries(Database.Multiplexer);
+        }
+
+        if (primaries.Count == 0)
+        {
             LogNoPrimariesToScan();
             await ScanStreamsAsync((command, args, flags) => Database.ExecuteAsync(command, args, flags), keyPrefix, discovered, cancellationToken).ConfigureAwait(false);
         }
         else
         {
+            var database = Database.Database;
+
             // In parallel, so the pass costs the slowest shard rather than their sum and stays inside the lock.
-            foreach (var keys in await Task.WhenAll(primaries.Select(primary => ScanPrimaryAsync(primary, keyPrefix, cancellationToken))).ConfigureAwait(false))
+            foreach (var keys in await Task.WhenAll(primaries.Select(primary => ScanPrimaryAsync(primary, database, keyPrefix, cancellationToken))).ConfigureAwait(false))
             {
                 discovered.UnionWith(keys);
             }
@@ -469,14 +480,14 @@ public partial class RedisStreamHealthMaintainer : IHostedService
         return ret;
     }
 
-    private async Task<HashSet<RedisKey>> ScanPrimaryAsync(IServer primary, string keyPrefix, CancellationToken cancellationToken)
+    private async Task<HashSet<RedisKey>> ScanPrimaryAsync(IServer primary, int database, string keyPrefix, CancellationToken cancellationToken)
     {
         var keys = new HashSet<RedisKey>();
         try
         {
-            // The database-scoped overload: the three-argument one builds the message with db -1, which
-            // StackExchange.Redis refuses for SCAN before it reaches the wire.
-            await ScanStreamsAsync((command, args, flags) => primary.ExecuteAsync(null, command, args, flags), keyPrefix, keys, cancellationToken).ConfigureAwait(false);
+            // The database-scoped overload with the connector's database, as the routed SCAN used: the
+            // three-argument one, like a null database, resolves to the configured default instead.
+            await ScanStreamsAsync((command, args, flags) => primary.ExecuteAsync(database, command, args, flags), keyPrefix, keys, cancellationToken).ConfigureAwait(false);
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {

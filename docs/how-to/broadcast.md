@@ -272,9 +272,11 @@ cannot be reached costs only its own streams for that cycle instead of aborting 
 (`XINFO`, `XTRIM`, the quarantine hash, the deletes) is keyed, so the client already routes it to the owning shard.
 
 Primaries come from `IRedisConnector.GetPrimaries()`. It is a defaulted interface member returning an empty sequence,
-so a custom `IRedisConnector` that does not override it keeps the older behaviour of scanning only the routed server —
-correct on a single server, but on a cluster it reaches one shard. The maintainer logs a warning whenever it takes that
-path, and an error naming the endpoint whenever a primary cannot be scanned.
+so for a custom `IRedisConnector` that does not override it the maintainer takes the connected primaries of
+`Database.Multiplexer` instead. Each is scanned in the connector's database (`Database.Database`). Only when neither
+source names a primary does it scan the routed server — correct on a single server, but on a cluster it reaches one
+shard. The maintainer logs a warning whenever it takes that path, and an error naming the endpoint whenever a primary
+cannot be scanned.
 
 ### Setting a custom search pattern
 

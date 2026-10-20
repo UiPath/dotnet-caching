@@ -96,6 +96,99 @@ public class RedisStreamHealthMaintainerIntegrationTests(RedisContainerFixture f
         }
     }
 
+    // Proves the fix only against a cluster connection string: on a standalone server the routed SCAN already reaches every key.
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Every_stream_is_discovered_through_a_connector_that_does_not_implement_GetPrimaries(bool decorated)
+    {
+        Assert.SkipUnless(fixture.Enabled, "Set RUN_REDIS_INTEGRATION_TESTS=1 (Docker required) to run.");
+
+        var cacheOptions = new CacheOptions { Enabled = true, AppShortName = $"it{Guid.NewGuid():N}"[..10] };
+        var keyStrategy = new PrefixStrategy(RedisKeyspaces.Streams, cacheOptions);
+        var streamKeys = Enumerable.Range(0, 12).Select(i => keyStrategy.GetRedisKey($"topic{i}")).ToArray();
+        var telemetry = new RecordingTelemetryProvider();
+
+        using var inner = NewConnector();
+        await inner.ConnectAsync(TestContext.Current.CancellationToken);
+        using var connector = new PrefixingConnector(inner, $"{cacheOptions.AppShortName}:", decorated, exposePrimaries: false);
+        foreach (var streamKey in streamKeys)
+        {
+            await connector.Database.StreamAddAsync(streamKey, "field", "value");
+        }
+
+        try
+        {
+            connector.GetPrimaries().Should().BeEmpty("the multiplexer fallback is the path under test");
+
+            var maintainer = new RedisStreamHealthMaintainer(
+                connector,
+                telemetry,
+                Options.Create(new RedisStreamsTopicOptions { TrackStatistics = true, MaintainerEnabled = true }),
+                Options.Create(new RedisCacheOptions { Enabled = true }),
+                Options.Create(cacheOptions),
+                NullLogger<RedisStreamHealthMaintainer>.Instance,
+                TimeProvider.System);
+
+            maintainer.Initialize();
+            await maintainer.CheckStreamsAsync(TestContext.Current.CancellationToken);
+
+            telemetry.Metrics
+                .Where(metric => metric.Name == Metrics.Stream)
+                .Select(metric => metric.Properties!["Name"])
+                .Should().BeEquivalentTo(streamKeys.Select(key => key.ToString()));
+        }
+        finally
+        {
+            foreach (var streamKey in streamKeys)
+            {
+                await connector.Database.KeyDeleteAsync(streamKey);
+            }
+        }
+    }
+
+    // The routed SCAN ran in the connector's database; a per-primary SCAN must not fall back to the default one.
+    [Fact]
+    public async Task A_stream_in_a_non_default_database_is_discovered_through_a_connector_that_does_not_implement_GetPrimaries()
+    {
+        Assert.SkipUnless(fixture.Enabled, "Set RUN_REDIS_INTEGRATION_TESTS=1 (Docker required) to run.");
+
+        var cacheOptions = new CacheOptions { Enabled = true, AppShortName = $"it{Guid.NewGuid():N}"[..10] };
+        var streamKey = new PrefixStrategy(RedisKeyspaces.Streams, cacheOptions).GetRedisKey("topic");
+        var telemetry = new RecordingTelemetryProvider();
+
+        using var inner = NewConnector();
+        await inner.ConnectAsync(TestContext.Current.CancellationToken);
+        Assert.SkipWhen(
+            inner.Database.Multiplexer.GetServers().Any(server => server.ServerType == ServerType.Cluster),
+            "A cluster has only database 0.");
+        using var connector = new PrefixingConnector(inner, $"{cacheOptions.AppShortName}:", decorated: false, exposePrimaries: false, database: 3);
+        await connector.Database.StreamAddAsync(streamKey, "field", "value");
+
+        try
+        {
+            var maintainer = new RedisStreamHealthMaintainer(
+                connector,
+                telemetry,
+                Options.Create(new RedisStreamsTopicOptions { TrackStatistics = true, MaintainerEnabled = true }),
+                Options.Create(new RedisCacheOptions { Enabled = true }),
+                Options.Create(cacheOptions),
+                NullLogger<RedisStreamHealthMaintainer>.Instance,
+                TimeProvider.System);
+
+            maintainer.Initialize();
+            await maintainer.CheckStreamsAsync(TestContext.Current.CancellationToken);
+
+            telemetry.Metrics
+                .Where(metric => metric.Name == Metrics.Stream)
+                .Should().Contain(metric => metric.Properties!["Name"] == streamKey.ToString());
+        }
+        finally
+        {
+            await connector.Database.KeyDeleteAsync(streamKey);
+        }
+    }
+
     private RedisConnector NewConnector()
     {
         var options = Options.Create(new RedisConnectionOptions { ConnectionString = fixture.ConnectionString, EnableHangDetection = false });
@@ -131,7 +224,7 @@ public class RedisStreamHealthMaintainerIntegrationTests(RedisContainerFixture f
     }
 
     /// <summary>What an application's own connector does: every command goes through a <c>WithKeyPrefix</c> database.</summary>
-    private sealed class PrefixingConnector(RedisConnector inner, string prefix, bool decorated) : IRedisConnector
+    private sealed class PrefixingConnector(RedisConnector inner, string prefix, bool decorated, bool exposePrimaries = true, int? database = null) : IRedisConnector
     {
         public event EventHandler? OnConnectionFailed
         {
@@ -156,16 +249,19 @@ public class RedisStreamHealthMaintainerIntegrationTests(RedisContainerFixture f
         public Version Version => inner.Version;
 
         public IDatabase Database => decorated
-            ? ForwardingDatabase.Wrap(inner.Database.WithKeyPrefix(prefix))
-            : inner.Database.WithKeyPrefix(prefix);
+            ? ForwardingDatabase.Wrap(Selected.WithKeyPrefix(prefix))
+            : Selected.WithKeyPrefix(prefix);
 
         public ISubscriber Subscriber => inner.Subscriber;
+
+        private IDatabase Selected => database is { } db ? inner.Database.Multiplexer.GetDatabase(db) : inner.Database;
 
         public void ForceReconnect() => inner.ForceReconnect();
 
         public EndPoint[] GetEndPoints(bool configuredOnly = false) => inner.GetEndPoints(configuredOnly);
 
-        public IEnumerable<IServer> GetPrimaries() => inner.GetPrimaries();
+        // Without exposePrimaries, as empty as the default a connector that does not implement it inherits.
+        public IEnumerable<IServer> GetPrimaries() => exposePrimaries ? inner.GetPrimaries() : [];
 
         public void Dispose()
         {
