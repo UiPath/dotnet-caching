@@ -380,9 +380,81 @@ public class RedisStreamHealthMaintainerTests(ITestContextAccessor testContextAc
     }
 
     [Fact]
-    public async Task No_enumerable_primary_falls_back_to_the_routed_database()
+    public async Task The_primaries_the_connector_reports_are_scanned_instead_of_its_multiplexer_servers()
+    {
+        var reported = StubPrimaryHolding("reported-stream");
+        var unreported = StubPrimaryHolding("unreported-stream");
+        unreported.IsConnected.Returns(true);
+        _redisConnector.GetPrimaries().Returns([reported]);
+        var multiplexer = Substitute.For<IConnectionMultiplexer>();
+        multiplexer.GetServers().Returns([reported, unreported]);
+        _database.Multiplexer.Returns(multiplexer);
+
+        Sut.Initialize();
+        await Sut.CheckStreamsAsync(testContextAccessor.Current.CancellationToken);
+
+        await reported.Received().ExecuteAsync(Arg.Any<int?>(), "SCAN", Arg.Any<ICollection<object>>(), Arg.Any<CommandFlags>());
+        await unreported.DidNotReceive().ExecuteAsync(Arg.Any<int?>(), "SCAN", Arg.Any<ICollection<object>>(), Arg.Any<CommandFlags>());
+    }
+
+    [Fact]
+    public async Task Every_primary_is_scanned_in_the_database_of_the_connector()
+    {
+        _database.Database.Returns(3);
+
+        Sut.Initialize();
+        await Sut.CheckStreamsAsync(testContextAccessor.Current.CancellationToken);
+
+        await _primary.Received().ExecuteAsync(3, "SCAN", Arg.Any<ICollection<object>>(), Arg.Any<CommandFlags>());
+        await _primary.DidNotReceive().ExecuteAsync(Arg.Is<int?>(db => db != 3), "SCAN", Arg.Any<ICollection<object>>(), Arg.Any<CommandFlags>());
+    }
+
+    [Fact]
+    public async Task A_connector_without_GetPrimaries_scans_the_primaries_of_its_multiplexer()
+    {
+        var firstPrimary = StubPrimaryHolding("shard1-stream");
+        var secondPrimary = StubPrimaryHolding("shard2-stream");
+        var replica = StubPrimaryHolding("replica-stream");
+        var disconnected = StubPrimaryHolding("disconnected-stream");
+        firstPrimary.IsConnected.Returns(true);
+        secondPrimary.IsConnected.Returns(true);
+        replica.IsConnected.Returns(true);
+        replica.IsReplica.Returns(true);
+        _redisConnector.GetPrimaries().Returns([]);
+        var multiplexer = Substitute.For<IConnectionMultiplexer>();
+        multiplexer.GetServers().Returns([firstPrimary, replica, disconnected, secondPrimary]);
+        _database.Multiplexer.Returns(multiplexer);
+        _database.KeyExistsAsync(Arg.Any<RedisKey>(), Arg.Any<CommandFlags>()).Returns(true);
+
+        Sut.Initialize();
+        await Sut.CheckStreamsAsync(testContextAccessor.Current.CancellationToken);
+
+        await _database.Received().StreamInfoAsync(Arg.Is<RedisKey>(key => key == "shard1-stream"), Arg.Any<CommandFlags>());
+        await _database.Received().StreamInfoAsync(Arg.Is<RedisKey>(key => key == "shard2-stream"), Arg.Any<CommandFlags>());
+        await replica.DidNotReceive().ExecuteAsync(Arg.Any<int?>(), "SCAN", Arg.Any<ICollection<object>>(), Arg.Any<CommandFlags>());
+        await disconnected.DidNotReceive().ExecuteAsync(Arg.Any<int?>(), "SCAN", Arg.Any<ICollection<object>>(), Arg.Any<CommandFlags>());
+        await _database.DidNotReceive().ExecuteAsync("SCAN", Arg.Any<ICollection<object>?>(), Arg.Any<CommandFlags>());
+    }
+
+    [Fact]
+    public async Task No_primary_on_the_connector_or_its_multiplexer_falls_back_to_the_routed_database()
     {
         _redisConnector.GetPrimaries().Returns([]);
+        var multiplexer = Substitute.For<IConnectionMultiplexer>();
+        multiplexer.GetServers().Returns([]);
+        _database.Multiplexer.Returns(multiplexer);
+
+        Sut.Initialize();
+        await Sut.CheckStreamsAsync(testContextAccessor.Current.CancellationToken);
+
+        await _database.Received().ExecuteAsync("SCAN", Arg.Any<ICollection<object>?>(), Arg.Any<CommandFlags>());
+    }
+
+    [Fact]
+    public async Task No_multiplexer_behind_the_database_falls_back_to_the_routed_database()
+    {
+        _redisConnector.GetPrimaries().Returns([]);
+        _database.Multiplexer.Returns((IConnectionMultiplexer)null!);
 
         Sut.Initialize();
         await Sut.CheckStreamsAsync(testContextAccessor.Current.CancellationToken);
