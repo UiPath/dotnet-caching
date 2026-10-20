@@ -41,12 +41,67 @@ public sealed class ConnectorKeyPrefixTests : IDisposable
     }
 
     [Fact]
-    public void A_skipped_connector_prefix_yields_the_configured_key()
+    public void A_connector_prefix_skipped_for_the_SCAN_pattern_is_still_hashed_with()
     {
+        byte[] connectorPrefix = [0xFF, (byte)':'];
         RedisKey configuredKey = System.Text.Encoding.UTF8.GetBytes("configured:");
 
-        NewPrefix().GetKey(_multiplexer.GetDatabase().WithKeyPrefix(new byte[] { 0xFF, (byte)':' }), "configured:", configuredKey, _logger)
-            .Should().Be(configuredKey);
+        NewPrefix().GetKey(_multiplexer.GetDatabase().WithKeyPrefix(connectorPrefix), "configured:", configuredKey, _logger)
+            .Should().Be((RedisKey)connectorPrefix);
+    }
+
+    [Fact]
+    public void A_configured_prefix_skipped_for_the_SCAN_pattern_is_still_hashed_with_when_the_connector_does_not_answer()
+    {
+        var database = Substitute.For<IDatabase>();
+        database.ExecuteAsync("ECHO", Arg.Any<ICollection<object>>(), Arg.Any<CommandFlags>()).ThrowsAsync(new RedisException("down"));
+        var prefix = NewPrefix();
+        RedisKey configuredKey = System.Text.Encoding.UTF8.GetBytes("a?b:");
+
+        prefix.GetKey(database, "a?b:", configuredKey, _logger).Should().Be(configuredKey);
+        prefix.Get(database, "a?b:", _logger).Should().BeEmpty();
+    }
+
+    [Fact]
+    public void A_bare_database_hashes_with_no_prefix_even_when_the_configured_one_holds_a_SCAN_glob_character()
+    {
+        NewPrefix().GetKey(_multiplexer.GetDatabase(), "a?b:", (RedisKey)"a?b:", _logger).Should().Be(default(RedisKey));
+    }
+
+    [Fact]
+    public void An_empty_probe_answer_gives_way_to_a_configured_prefix_with_one_warning()
+    {
+        var database = Echoing(string.Empty);
+        var prefix = NewPrefix();
+
+        prefix.Get(database, "app:", _logger).Should().Be("app:");
+        prefix.Get(database, "app:", _logger).Should().Be("app:");
+
+        Logged(LogLevel.Warning).Should().Be(1);
+        LoggedErrors.Should().Be(0);
+    }
+
+    [Fact]
+    public void An_empty_probe_answer_with_nothing_configured_is_no_prefix_and_no_warning()
+    {
+        NewPrefix().Get(Echoing(string.Empty), string.Empty, _logger).Should().BeEmpty();
+
+        Logged(LogLevel.Warning).Should().Be(0);
+    }
+
+    [Fact]
+    public void Running_out_of_probe_attempts_is_warned_about_once()
+    {
+        var database = Substitute.For<IDatabase>();
+        database.ExecuteAsync("ECHO", Arg.Any<ICollection<object>>(), Arg.Any<CommandFlags>()).ThrowsAsync(new RedisException("down"));
+        var prefix = NewPrefix();
+
+        for (var call = 0; call < 5; call++)
+        {
+            prefix.Get(database, string.Empty, _logger);
+        }
+
+        Logged(LogLevel.Warning).Should().Be(1);
     }
 
     [Fact]

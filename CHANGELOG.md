@@ -128,6 +128,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
   group existed. `Subscribe` no longer throws when Redis cannot create the group; the reader retries, as it already
   did for a group lost while in use.
 
+- **The connector key prefix, three edge cases.** An `ECHO` answered with no prefix no longer overrides a non-empty
+  `RedisCacheOptions.KeyPrefix`: the configured value is used, with a warning, since a decorator may send `ECHO` past
+  its own prefixing. Running out of probe attempts is now warned about, naming the `KeyPrefix` fallback used until the
+  process restarts; it was silent, and with an empty `KeyPrefix` the maintainer again found nothing. A prefix skipped
+  for its SCAN glob characters is skipped for stream discovery only: the cluster slot check hashes with it, since it is
+  what the server receives.
+
 - **Stream discovery reaches every shard through a connector of the application's own.** The maintainer asked
   `IRedisConnector.GetPrimaries()` for the servers to `SCAN`, and an implementation outside this library inherits
   its empty default, so each pass warned `No primary could be enumerated for stream discovery` and scanned only the
@@ -167,6 +174,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
   counted against the reads after it.
 
 ### Documentation
+
+- `broadcast.md` says an explicit `MaintainerSearchPattern` must carry the connector's `WithKeyPrefix` prefix, and its
+  broken em dashes are restored. `second-redis-connection.md` no longer suggests `KeyPrefix` for separate keyspaces: it
+  prepends nothing itself.
 
 - `docs/reference/interfaces.md` says how the capability calls behave over a mock (the span and stateful calls go to
   the proxy's `CacheKey` member, `GetOrAddWithExpirationAsync` reads, generates and sets; none coalesces) and how to
