@@ -82,6 +82,8 @@ jobs:
         with:
           generate_release_notes: true
           prerelease: ${{ contains(github.ref_name, '-') }}
+          # A maintenance line must not take "Latest" from a newer major.
+          make_latest: false
 
   # Gated by the protected `nuget` environment (manual approval). Both nuget.org publishing
   # and Azure Key Vault signing authenticate with OIDC (no long-lived secrets): nuget.org via
