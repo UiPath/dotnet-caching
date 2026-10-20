@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Threading.Channels;
 using UiPath.Caching.Telemetry;
 
@@ -37,6 +38,8 @@ internal sealed partial class RedisStreamSubjectWriter<T> : IDisposable
 
     private const string EventInvalid = "Caching." + nameof(RedisStreamSubjectWriter<T>) + "." + nameof(DispatchEventsAsync) + ".InvalidEvent";
     private const string EventReceived = "Caching." + nameof(RedisStreamSubjectWriter<T>) + "." + nameof(DispatchEventsAsync) + ".EventReceived";
+    // The entries a group made at the head skipped, read back to see whose they were; more than this counts as a loss.
+    private const int SkippedEntriesChecked = 256;
     private const string PropTopicKey = "TopicKey";
     private const string PropTransportId = "TransportId";
     private const string PropEventId = "EventId";
@@ -51,9 +54,6 @@ internal sealed partial class RedisStreamSubjectWriter<T> : IDisposable
     private readonly CancellationTokenSource _stopTokenSource;
     private readonly CancellationToken _cancelationToken;
     private readonly IFetchWaiter _waiter;
-    // One view of the group for the subscribes and the reader's recovery, held across their commands, so neither slips
-    // between the other's check and its command.
-    private readonly SemaphoreSlim _groupGate = new(1, 1);
     private readonly Action _onMessagesMissed;
 
     private bool _disposed;
@@ -65,11 +65,11 @@ internal sealed partial class RedisStreamSubjectWriter<T> : IDisposable
     private volatile bool _inUse;
     // A subscriber has joined; its entries can go stale.
     private volatile bool _subscribed;
-    // The last entry read, for a subscribe that has to make the group again: what came since is replayed, as the reader's
-    // own recreate does, rather than skipped.
-    private volatile string? _replayFrom;
-    // The group exists as far as this process knows (made or found under _groupGate), until a read proves it gone.
-    private bool _groupExists;
+    // The group exists as far as this process knows (made or found by the reader), until a read proves it gone.
+    private volatile bool _groupExists;
+    // The Stopwatch timestamp of the first subscriber that joined while no group was known, 0 for none: a group then made
+    // at the head skipped what was added since.
+    private long _unanchoredAt;
     // _inUse, and the recoveries seen, when the read in flight was issued.
     private bool _readInUse;
     private int _recoveriesAtRead;
@@ -77,6 +77,11 @@ internal sealed partial class RedisStreamSubjectWriter<T> : IDisposable
     // The recoveries seen when the streak of failures being counted began: a read from after a later one starts its own.
     private int _streakGeneration;
     private bool _noScripts;
+    // The batch came back empty without a read, so it says nothing about the group.
+    private bool _readSkipped;
+    // A create at the head failed with the group perhaps made; the head read before it, for the group found later.
+    private bool _createSent;
+    private StreamHead? _sentHead;
     private bool _gapCheckDenied;
     // The last read returned fewer entries than asked: the group is at the head.
     private bool _caughtUp;
@@ -151,32 +156,31 @@ internal sealed partial class RedisStreamSubjectWriter<T> : IDisposable
         _redis.OnConnectionRestored -= OnConnectionRecovered;
         _stopTokenSource?.Cancel();
         _stopTokenSource?.Dispose();
-        _groupGate.Dispose();
         _writer.TryComplete();
     }
 
-    /// <summary>A subscriber is joining: makes sure the group exists, then marks the topic in use.</summary>
+    /// <summary>A subscriber is joining: marks the topic in use and, with no group known, wakes the reader to make it.</summary>
     /// <returns>A mark for <see cref="LostSince"/>.</returns>
+    /// <remarks>Runs on the caller's thread, often a request's, so it neither waits nor sends a command.</remarks>
+    [SuppressMessage("Major Code Smell", "S2589:Boolean expressions should not be gratuitous", Justification = "The reader sets the volatile _groupExists between the two reads; the second one is the handshake.")]
     internal int MarkSubscribed()
     {
-        _groupGate.Wait(_cancelationToken);
-        try
+        // Read before publishing _inUse: a loss before it cannot reach this subscriber, and one after it moves the mark.
+        var mark = Volatile.Read(ref _losses);
+        _subscribed = true;
+        _inUse = true;
+        if (!_groupExists)
         {
+            // The exchange fences the instant ahead of the second look; the reader publishes the group before it takes the
+            // instant, so one of the two sees the other. The first instant is kept: it is the earliest a loss could start.
+            Interlocked.CompareExchange(ref _unanchoredAt, Math.Max(1, Stopwatch.GetTimestamp()), 0);
             if (!_groupExists)
             {
-                _groupExists = EnsureGroup();
+                _waiter.Signal();
             }
+        }
 
-            // Read before publishing _inUse: a loss before it cannot reach this subscriber, and one after it moves the mark.
-            var mark = Volatile.Read(ref _losses);
-            _subscribed = true;
-            _inUse = true;
-            return mark;
-        }
-        finally
-        {
-            _groupGate.Release();
-        }
+        return mark;
     }
 
     /// <summary>Whether a loss was reported since <paramref name="mark"/>, expiring the subscribers already there.</summary>
@@ -265,6 +269,17 @@ internal sealed partial class RedisStreamSubjectWriter<T> : IDisposable
 
         var events = await ReadBatchAsync().ConfigureAwait(false);
 
+        if (!_groupExists && !_readSkipped)
+        {
+            // The read found the group: there for the subscribers that joined without one, unless a create of this node
+            // that seemed to fail made it at the head after they joined.
+            _groupExists = true;
+            if (await FoundGroupSkippedAsync().ConfigureAwait(false))
+            {
+                ReportMessagesMissed();
+            }
+        }
+
         _consecutiveFailures = 0;
         _inUse = true;
         _caughtUp = events.Length < _context.PollBatchSize;
@@ -280,7 +295,6 @@ internal sealed partial class RedisStreamSubjectWriter<T> : IDisposable
             await DispatchEventsAsync(events).ConfigureAwait(false);
             _lastId = events[^1].Id;
             _position = _lastId;
-            _replayFrom = _lastId;
             if (!_caughtUp)
             {
                 return;
@@ -293,6 +307,7 @@ internal sealed partial class RedisStreamSubjectWriter<T> : IDisposable
     /// <summary>Every read the group's position matters for is checked; the one with XINFO GROUPS keeps the poll's cadence.</summary>
     private async Task<StreamEntry[]> ReadBatchAsync()
     {
+        _readSkipped = false;
         _readInUse = _inUse;
         _recoveriesAtRead = Volatile.Read(ref _recoveries);
         if (!_readInUse)
@@ -366,34 +381,40 @@ internal sealed partial class RedisStreamSubjectWriter<T> : IDisposable
             LogRecreatingTopic(_context.Topic, _context.ConsumerGroup, id);
         }
 
-        // Judged as of the read: a subscriber that joined while it was in flight made the group it did not find.
-        var lost = _readInUse;
-        Recreate outcome;
-        await _groupGate.WaitAsync(_cancelationToken).ConfigureAwait(false);
-        try
+        // Judged as of the read: a subscriber that joined while it was in flight relied on no group yet. A group already
+        // known gone was reported when it went, and one never known is the unanchored subscribers' case below.
+        var lost = _readInUse && _groupExists;
+        if (lost)
         {
-            if (lost)
-            {
-                ForgetGroup();
-            }
-
-            // A group a subscriber relies on was made or found before this point, so one made now is proof it is gone.
-            var relied = _groupExists && _subscribed;
-            outcome = await CreateGroupAsync(id).ConfigureAwait(false);
-            if (outcome == Recreate.Made && relied)
-            {
-                ForgetGroup();
-                lost = true;
-            }
-
-            _groupExists |= outcome != Recreate.Failed;
-        }
-        finally
-        {
-            _groupGate.Release();
+            ForgetGroup();
         }
 
-        // Told once the gate is free: an observer told may subscribe again, which takes it.
+        // A group a subscriber relies on was made or found before this point, so one made now is proof it is gone.
+        var relied = _groupExists && _subscribed;
+        var (outcome, head) = await CreateGroupAsync(id).ConfigureAwait(false);
+        if (outcome == Recreate.Made && relied)
+        {
+            ForgetGroup();
+            lost = true;
+        }
+
+        if (outcome == Recreate.Made)
+        {
+            // Published before the instant is taken (the exchange fences it), so a subscriber that missed the group set it.
+            _groupExists = true;
+            _createSent = false;
+            var since = Interlocked.Exchange(ref _unanchoredAt, 0);
+
+            // At the head it skipped what was added since those subscribers joined, if anything was; from the last read it
+            // replays it.
+            lost |= since != 0 && id == StreamPosition.NewMessages && await SkippedSinceAsync(head, since).ConfigureAwait(false);
+        }
+        else if (outcome == Recreate.Found)
+        {
+            _groupExists = true;
+            lost |= await FoundGroupSkippedAsync().ConfigureAwait(false);
+        }
+
         if (lost)
         {
             ReportMessagesMissed();
@@ -402,37 +423,87 @@ internal sealed partial class RedisStreamSubjectWriter<T> : IDisposable
         return outcome == Recreate.Found;
     }
 
-    private async Task<Recreate> CreateGroupAsync(RedisValue id)
+    /// <summary>For a group found rather than made: whether a create of this node made it at the head and skipped something.</summary>
+    private Task<bool> FoundGroupSkippedAsync()
+    {
+        var since = Interlocked.Exchange(ref _unanchoredAt, 0);
+        var sent = _createSent;
+        _createSent = false;
+        return since != 0 && sent ? SkippedSinceAsync(_sentHead, since) : Task.FromResult(false);
+    }
+
+    /// <summary>Whether a group made at <paramref name="head"/> skipped an entry this node would have acted on, added since <paramref name="since"/>.</summary>
+    private async Task<bool> SkippedSinceAsync(StreamHead? head, long since)
+    {
+        if (!ConsumerGroups.AddedSince(head, since))
+        {
+            return false;
+        }
+
+        if (head is not { LastMs: not null } h)
+        {
+            return true;
+        }
+
+        try
+        {
+            var skipped = await _redis.Database.StreamRangeAsync(_context.Topic, $"{Math.Max(0, ConsumerGroups.SinceMs(h, since))}-0", h.LastId, SkippedEntriesChecked).ConfigureAwait(false);
+            return skipped.Length >= SkippedEntriesChecked || Array.Exists(skipped, IsActedOn);
+        }
+        catch (Exception ex)
+        {
+            LogSkippedEntriesUnchecked(ex, _context.Topic);
+            return true;
+        }
+    }
+
+    /// <summary>What <see cref="ProcessEvent"/> dispatches: a valid event from another source.</summary>
+    private bool IsActedOn(StreamEntry entry)
     {
         try
         {
-            return await ConsumerGroups.CreateAsync(_redis.Database, _context.Topic, _context.ConsumerGroup, id).ConfigureAwait(false)
-                ? Recreate.Made
-                : Recreate.Failed;
+            return !entry.IsNull
+                && _formatter.Decode((ReadOnlyMemory<byte>)entry[_context.FieldName]) is { } ev
+                && ev.IsValid()
+                && !ev.SameSource(_context.SourceUri);
+        }
+        catch (Exception)
+        {
+            // Undecodable, so the read would skip it too.
+            return false;
+        }
+    }
+
+    private async Task<(Recreate Outcome, StreamHead? Head)> CreateGroupAsync(RedisValue id)
+    {
+        var atHead = id == StreamPosition.NewMessages;
+        StreamHead? head = null;
+        try
+        {
+            if (atHead)
+            {
+                head = await ConsumerGroups.HeadAsync(_redis.Database, _context.Topic).ConfigureAwait(false);
+            }
+
+            var created = await ConsumerGroups.CreateAsync(_redis.Database, _context.Topic, _context.ConsumerGroup, id, head).ConfigureAwait(false);
+            return (created ? Recreate.Made : Recreate.Failed, head);
         }
         catch (RedisServerException rex) when (rex.Message == StreamConstants.ConsumerGroupNameExistsErrorMessage)
         {
             LogConsumerGroupExists(_context.Topic, _context.ConsumerGroup);
-            return Recreate.Found;
+            return (Recreate.Found, null);
         }
         catch (Exception ex2)
         {
-            LogRecreatingTopicException(ex2);
-            return Recreate.Failed;
-        }
-    }
+            if (atHead)
+            {
+                // A timeout or a dropped connection may follow a create the server ran: the group found next may be it.
+                _createSent = true;
+                _sentHead = head;
+            }
 
-    /// <summary>Creates the group where the reader left off, at the newest entry if nowhere, or finds it; a failure is the subscriber's to see.</summary>
-    private bool EnsureGroup()
-    {
-        try
-        {
-            return ConsumerGroups.Create(_redis.Database, _context.Topic, _context.ConsumerGroup, _replayFrom ?? StreamPosition.NewMessages);
-        }
-        catch (RedisServerException ex) when (ex.Message == StreamConstants.ConsumerGroupNameExistsErrorMessage)
-        {
-            LogConsumerGroupExists(_context.Topic, _context.ConsumerGroup);
-            return true;
+            LogRecreatingTopicException(ex2);
+            return (Recreate.Failed, null);
         }
     }
 
@@ -519,6 +590,7 @@ internal sealed partial class RedisStreamSubjectWriter<T> : IDisposable
             LogScriptsUnavailable(ex, _context.Topic);
             _noScripts = true;
             _checkForGap = true;
+            _readSkipped = true;
             return [];
         }
 
@@ -724,6 +796,9 @@ internal sealed partial class RedisStreamSubjectWriter<T> : IDisposable
 
     [LoggerMessage(Level = LogLevel.Error, Message = "Recreating topic exception.")]
     private partial void LogRecreatingTopicException(Exception ex);
+
+    [LoggerMessage(Level = LogLevel.Information, Message = "Topic {Topic}: the entries a new group skipped could not be read back, so they are reported as missed.")]
+    private partial void LogSkippedEntriesUnchecked(Exception ex, RedisKey topic);
 
     [LoggerMessage(Level = LogLevel.Error, Message = "Fetch events loop error")]
     private partial void LogFetchLoopError(Exception ex);

@@ -7,6 +7,37 @@ on:
     branches: [main, 'release/**']
 
 jobs:
+  # The oldest supported server: no ENTRIESREAD or max-deleted-entry-id, so the stream code takes its fallbacks.
+  test-redis-6:
+    runs-on: uipath-ubuntu-latest
+    services:
+      redis:
+        image: redis:6.2
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+
+      - name: Setup .NET 10
+        uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68  # v6.0.0
+        with:
+          dotnet-version: 10.0.x
+
+      - name: Build
+        run: dotnet build tests/UiPath.Caching.Tests -c Release -f net10.0
+
+      - name: Test
+        timeout-minutes: 10
+        env:
+          RUN_REDIS_INTEGRATION_TESTS: '1'
+          REDIS_CONNECTION_STRING: 'localhost:6379'
+        run: ./tests/UiPath.Caching.Tests/bin/Release/net10.0/UiPath.Caching.Tests
+
   build-linux:
     runs-on: uipath-ubuntu-latest
     env:

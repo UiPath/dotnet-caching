@@ -49,6 +49,7 @@ public sealed class RedisStreamNotifyIntegrationTests(RedisContainerFixture fixt
     public async Task A_burst_of_this_nodes_own_entries_is_read_before_the_trim_reaches_them()
     {
         Assert.SkipUnless(fixture.Enabled, "Set RUN_REDIS_INTEGRATION_TESTS=1 (Docker required) to run.");
+        Assert.SkipWhen(fixture.ServerVersion.Major < 7, "Counts entries with ENTRIESREAD and max-deleted-entry-id, which Redis 7.0 added.");
         // MAXLEN ~ 64 trims whole nodes of 100 entries, so a burst of 300 removes entries the group has not read unless it kept up.
         var log = new RecordingLogger();
         var (a, receivedA) = Topic("urn:a", FarPoll, maxLength: 64, logger: log);
@@ -71,6 +72,61 @@ public sealed class RedisStreamNotifyIntegrationTests(RedisContainerFixture fixt
         (await Task.WhenAny(receivedA.Next.Task, Task.Delay(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken))).Should().BeSameAs(receivedA.Next.Task);
         await Task.Delay(300, TestContext.Current.CancellationToken);
         receivedA.Missed.Task.IsCompleted.Should().BeFalse("no entry was trimmed unread: {0}", string.Join(" | ", log.Records.Select(r => $"{r.Level}: {r.Message}")));
+    }
+
+    [Fact]
+    public async Task A_fresh_node_on_a_stream_of_old_entries_is_not_told_of_a_loss()
+    {
+        Assert.SkipUnless(fixture.Enabled, "Set RUN_REDIS_INTEGRATION_TESTS=1 (Docker required) to run.");
+        var (b, _) = Topic("urn:b", FarPoll);
+        for (var i = 0; i < 5; i++)
+        {
+            (await b.PublishAsync(Event("urn:b", $"old-{i}"), TestContext.Current.CancellationToken)).Should().BeTrue();
+        }
+
+        // Well before the join, so a stall up to here cannot bring the old entries inside the window.
+        await Task.Delay(2000, TestContext.Current.CancellationToken);
+        var (_, received) = Topic("urn:fresh", FarPoll);
+        await SettledAsync();
+
+        received.Missed.Task.IsCompleted.Should().BeFalse("every entry predates the subscribe, so the group made at the head skipped nothing");
+    }
+
+    [Fact]
+    public async Task A_fresh_nodes_own_writes_before_its_group_exists_are_not_a_loss()
+    {
+        Assert.SkipUnless(fixture.Enabled, "Set RUN_REDIS_INTEGRATION_TESTS=1 (Docker required) to run.");
+        var (b, _) = Topic("urn:b", FarPoll);
+        (await b.PublishAsync(Event("urn:b", "old"), TestContext.Current.CancellationToken)).Should().BeTrue();
+        // Well before the join, so a stall up to the head read cannot bring the other node's entry inside the window.
+        await Task.Delay(2000, TestContext.Current.CancellationToken);
+
+        // Published straight after the subscribe, so they race the group the reader makes.
+        var (a, received) = Topic("urn:fresh", FarPoll);
+        for (var i = 0; i < 20; i++)
+        {
+            (await a.PublishAsync(Event("urn:fresh", $"own-{i}"), TestContext.Current.CancellationToken)).Should().BeTrue();
+        }
+
+        await SettledAsync();
+        received.Missed.Task.IsCompleted.Should().BeFalse("this node never acts on its own entries, so skipping them lost nothing");
+    }
+
+    [Fact]
+    public async Task A_stream_the_server_will_not_describe_is_not_taken_for_a_missing_one()
+    {
+        Assert.SkipUnless(fixture.Enabled, "Set RUN_REDIS_INTEGRATION_TESTS=1 (Docker required) to run.");
+        var user = $"it-noxinfo-{Guid.NewGuid():N}"[..20];
+        await _admin!.GetDatabase().ExecuteAsync("ACL", "SETUSER", user, "on", ">pw", "~*", "&*", "+@all", "-xinfo");
+        _aclUser = user;
+        RedisKey stream = $"it-noxinfo-{Guid.NewGuid():N}";
+        await _admin.GetDatabase().StreamAddAsync(stream, "f", "v");
+        var denied = await ConnectAsync($"{fixture.ConnectionString},user={user},password=pw");
+
+        var head = await ConsumerGroups.HeadAsync(denied.Database, stream);
+
+        head.Should().BeNull("a denied XINFO leaves the head unknown, rather than a missing stream whose group would start at 0-0");
+        await _admin.GetDatabase().KeyDeleteAsync(stream);
     }
 
     [Fact]

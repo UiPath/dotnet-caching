@@ -112,12 +112,26 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 
 ### Fixed
 
+- **A subscribe to a Redis Streams topic no longer blocks the caller.** A subscribe that found no consumer group created
+  it synchronously while holding a lock the reader also takes. Every cache write subscribes a change token, so under a
+  burst on a fresh process the request threads queued on that lock while the holder waited on a Redis reply that needed
+  a thread-pool thread, and the pool starved: a load test of a fresh process served 0 of 1,500 requests. A subscribe now
+  neither waits nor sends a command; with no group known it marks the topic in use and wakes the reader, which makes
+  the group. Before making it at the head, the reader reads the server's clock and the stream's newest entry in one
+  script; the subscribers that joined first are told of a loss only if an entry another node would act on was added
+  since the first of them joined, which it checks by reading back what the group skipped (up to 256 entries) and
+  ignoring its own and invalid ones. A fresh process on a quiet stream, or one whose own writes raced its group,
+  reports nothing. The same check runs for a group found after a create that seemed to fail, such as one that timed
+  out after the server ran it. Below Redis 7.0 the group is made at the newest entry the script read rather than at
+  `$`, so what is added between the two is delivered. With scripts or `XINFO` refused, or the skipped entries
+  unreadable, the subscribers are told; a cold start on such a server now expires the entries they cached before the
+  group existed. `Subscribe` no longer throws when Redis cannot create the group; the reader retries, as it already
+  did for a group lost while in use.
+
 - **The first subscribe of a Redis Streams topic no longer risks a spurious loss.** A read issued before the subscribe
   created the consumer group, and answered `NOGROUP` after it, was reported as entries lost, so the local tier could be
-  expired for nothing right after a process started. The subscribes and the reader's recovery now share one view of
-  the group, taken for the length of their commands: such an answer reports a loss only when a group a subscriber
-  relies on is gone, a subscriber that joins while the reader is recreating the group waits for it and joins it, and
-  a loss already reported is not reported again when the recreate had to be retried.
+  expired for nothing right after a process started. Such an answer now reports a loss only when the group was known to
+  exist, and a loss already reported is not reported again when the recreate had to be retried.
 
 - `GetOrAddWithExpirationAsync` on a cache that does not implement `IGeneratedExpirationCache` threw
   `NullReferenceException` when its entry read answered `null`, as a loose Moq or NSubstitute proxy of `ICache` does for a
