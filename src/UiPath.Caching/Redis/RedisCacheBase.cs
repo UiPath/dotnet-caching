@@ -10,6 +10,7 @@ public abstract class RedisCacheBase : IConnectionState, IDisposable
     private readonly IConnectionState _connectionState;
     private readonly KeyMasker _masker;
     private readonly string _keyPrefix;
+    private readonly ConnectorKeyPrefix _connectorPrefix;
     private bool _disposed;
 
     protected RedisCacheBase(
@@ -24,6 +25,7 @@ public abstract class RedisCacheBase : IConnectionState, IDisposable
         ArgumentNullException.ThrowIfNull(clock);
         _masker = KeyMasker.For(keyMaskingPolicy, KnownCacheProviderNames.Redis);
         _keyPrefix = redisCacheOptions.KeyPrefix ?? string.Empty;
+        _connectorPrefix = ConnectorKeyPrefix.For(redis);
         _redis = redis;
         Telemetry = telemetryProvider;
         var monitorConnection = redisCacheOptions.ConnectionMonitorEnabled ?? cacheOptions.ConnectionMonitorEnabled;
@@ -146,18 +148,21 @@ public abstract class RedisCacheBase : IConnectionState, IDisposable
     /// reading a slot resolves the connection, and let <see cref="CrossSlotKeysException"/> back out past
     /// the catch that turns a Redis failure into a miss.
     /// </summary>
-    private protected void ThrowIfCrossSlot(CacheKey[] cacheKeys, RedisKey[] redisKeys, Type? valueType, [CallerMemberName] string? operation = null)
+    private protected void ThrowIfCrossSlot(CacheKey[] cacheKeys, RedisKey[] redisKeys, Type? valueType, ILogger logger, [CallerMemberName] string? operation = null)
     {
         if (redisKeys.Length < 2)
         {
             return;
         }
 
-        var multiplexer = Database.Multiplexer;
-        var slot = multiplexer.GetHashSlot(WithConnectorPrefix(redisKeys[0]));
+        var database = Database;
+        var multiplexer = database.Multiplexer;
+        // Outside the pipeline's latency cap, so this never waits on the probe.
+        var prefix = _connectorPrefix.Get(database, _keyPrefix, logger);
+        var slot = multiplexer.GetHashSlot(WithConnectorPrefix(prefix, redisKeys[0]));
         for (var i = 1; i < redisKeys.Length; i++)
         {
-            if (multiplexer.GetHashSlot(WithConnectorPrefix(redisKeys[i])) == slot)
+            if (multiplexer.GetHashSlot(WithConnectorPrefix(prefix, redisKeys[i])) == slot)
             {
                 continue;
             }
@@ -170,6 +175,6 @@ public abstract class RedisCacheBase : IConnectionState, IDisposable
         }
     }
 
-    /// <summary>The key as the server hashes it: <see cref="RedisCacheOptions.KeyPrefix"/> mirrors the prefix the application's <see cref="IRedisConnector"/> already applies to its <see cref="IDatabase"/> with <c>WithKeyPrefix</c>.</summary>
-    private RedisKey WithConnectorPrefix(RedisKey key) => _keyPrefix.Length == 0 ? key : key.Prepend(_keyPrefix);
+    /// <summary>The key as the server hashes it, with the prefix the connector's <see cref="IDatabase"/> applies through <c>WithKeyPrefix</c>.</summary>
+    private static RedisKey WithConnectorPrefix(string prefix, RedisKey key) => prefix.Length == 0 ? key : key.Prepend(prefix);
 }

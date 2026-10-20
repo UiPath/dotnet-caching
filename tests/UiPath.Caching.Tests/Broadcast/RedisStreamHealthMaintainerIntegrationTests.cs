@@ -1,6 +1,10 @@
+using System.Globalization;
 using System.Net;
+using System.Reflection;
+using System.Runtime.ExceptionServices;
 using Microsoft.Extensions.Logging.Abstractions;
 using StackExchange.Redis;
+using StackExchange.Redis.KeyspaceIsolation;
 using UiPath.Caching.Telemetry;
 using UiPath.Caching.Tests.Redis;
 using UiPath.Caching.Tests.Telemetry;
@@ -51,9 +55,52 @@ public class RedisStreamHealthMaintainerIntegrationTests(RedisContainerFixture f
         }
     }
 
+    [Theory]
+    [InlineData(false, "{{{0}}}:")]
+    [InlineData(true, "{{{0}}}:")]
+    public async Task A_stream_under_the_connector_prefix_is_discovered_when_KeyPrefix_is_not_set(bool decorated, string prefixFormat)
+    {
+        Assert.SkipUnless(fixture.Enabled, "Set RUN_REDIS_INTEGRATION_TESTS=1 (Docker required) to run.");
+
+        // decorated hides the StackExchange.Redis wrapper from the reflection read, leaving only the probe.
+        var cacheOptions = new CacheOptions { Enabled = true, AppShortName = $"it{Guid.NewGuid():N}"[..10] };
+        var streamKey = new PrefixStrategy(RedisKeyspaces.Streams, cacheOptions).GetRedisKey("topic");
+        var telemetry = new RecordingTelemetryProvider();
+
+        using var inner = NewConnector();
+        await inner.ConnectAsync(TestContext.Current.CancellationToken);
+        using var connector = new PrefixingConnector(inner, string.Format(CultureInfo.InvariantCulture, prefixFormat, cacheOptions.AppShortName), decorated);
+        await connector.Database.StreamAddAsync(streamKey, "field", "value");
+
+        try
+        {
+            var maintainer = new RedisStreamHealthMaintainer(
+                connector,
+                telemetry,
+                Options.Create(new RedisStreamsTopicOptions { TrackStatistics = true, MaintainerEnabled = true }),
+                Options.Create(new RedisCacheOptions { Enabled = true }),
+                Options.Create(cacheOptions),
+                NullLogger<RedisStreamHealthMaintainer>.Instance,
+                TimeProvider.System);
+
+            maintainer.Initialize();
+            await maintainer.CheckStreamsAsync(TestContext.Current.CancellationToken);
+
+            telemetry.Metrics
+                .Where(metric => metric.Name == Metrics.Stream)
+                .Should().Contain(metric => metric.Properties!["Name"] == streamKey.ToString());
+        }
+        finally
+        {
+            await connector.Database.KeyDeleteAsync(streamKey);
+        }
+    }
+
     // Proves the fix only against a cluster connection string: on a standalone server the routed SCAN already reaches every key.
-    [Fact]
-    public async Task Every_stream_is_discovered_through_a_connector_that_does_not_implement_GetPrimaries()
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Every_stream_is_discovered_through_a_connector_that_does_not_implement_GetPrimaries(bool decorated)
     {
         Assert.SkipUnless(fixture.Enabled, "Set RUN_REDIS_INTEGRATION_TESTS=1 (Docker required) to run.");
 
@@ -64,7 +111,7 @@ public class RedisStreamHealthMaintainerIntegrationTests(RedisContainerFixture f
 
         using var inner = NewConnector();
         await inner.ConnectAsync(TestContext.Current.CancellationToken);
-        using var connector = new ForwardingConnector(inner);
+        using var connector = new PrefixingConnector(inner, $"{cacheOptions.AppShortName}:", decorated, exposePrimaries: false);
         foreach (var streamKey in streamKeys)
         {
             await connector.Database.StreamAddAsync(streamKey, "field", "value");
@@ -72,7 +119,7 @@ public class RedisStreamHealthMaintainerIntegrationTests(RedisContainerFixture f
 
         try
         {
-            ((IRedisConnector)connector).GetPrimaries().Should().BeEmpty("the multiplexer fallback is the path under test");
+            connector.GetPrimaries().Should().BeEmpty("the multiplexer fallback is the path under test");
 
             var maintainer = new RedisStreamHealthMaintainer(
                 connector,
@@ -115,7 +162,7 @@ public class RedisStreamHealthMaintainerIntegrationTests(RedisContainerFixture f
         Assert.SkipWhen(
             inner.Database.Multiplexer.GetServers().Any(server => server.ServerType == ServerType.Cluster),
             "A cluster has only database 0.");
-        using var connector = new ForwardingConnector(inner, database: 3);
+        using var connector = new PrefixingConnector(inner, $"{cacheOptions.AppShortName}:", decorated: false, exposePrimaries: false, database: 3);
         await connector.Database.StreamAddAsync(streamKey, "field", "value");
 
         try
@@ -150,26 +197,71 @@ public class RedisStreamHealthMaintainerIntegrationTests(RedisContainerFixture f
         return new RedisConnector(NullTelemetryProvider.Instance, optionsProvider, factory, options);
     }
 
-    // Stands in for a consumer's own connector, which inherits GetPrimaries' empty default.
-    private sealed class ForwardingConnector(RedisConnector inner, int? database = null) : IRedisConnector
+    /// <summary>A decorator of the kind an application wraps around its database, e.g. for telemetry.</summary>
+    public class ForwardingDatabase : DispatchProxy
     {
-        public event EventHandler? OnConnectionFailed { add => inner.OnConnectionFailed += value; remove => inner.OnConnectionFailed -= value; }
+        private IDatabase _inner = default!;
 
-        public event EventHandler? OnConnectionRestored { add => inner.OnConnectionRestored += value; remove => inner.OnConnectionRestored -= value; }
+        public static IDatabase Wrap(IDatabase inner)
+        {
+            var proxy = Create<IDatabase, ForwardingDatabase>();
+            ((ForwardingDatabase)(object)proxy)._inner = inner;
+            return proxy;
+        }
 
-        public event EventHandler? OnReconnected { add => inner.OnReconnected += value; remove => inner.OnReconnected -= value; }
+        protected override object? Invoke(MethodInfo? targetMethod, object?[]? args)
+        {
+            try
+            {
+                return targetMethod!.Invoke(_inner, args);
+            }
+            catch (TargetInvocationException ex) when (ex.InnerException is not null)
+            {
+                ExceptionDispatchInfo.Capture(ex.InnerException).Throw();
+                throw;
+            }
+        }
+    }
+
+    /// <summary>What an application's own connector does: every command goes through a <c>WithKeyPrefix</c> database.</summary>
+    private sealed class PrefixingConnector(RedisConnector inner, string prefix, bool decorated, bool exposePrimaries = true, int? database = null) : IRedisConnector
+    {
+        public event EventHandler? OnConnectionFailed
+        {
+            add => inner.OnConnectionFailed += value;
+            remove => inner.OnConnectionFailed -= value;
+        }
+
+        public event EventHandler? OnConnectionRestored
+        {
+            add => inner.OnConnectionRestored += value;
+            remove => inner.OnConnectionRestored -= value;
+        }
+
+        public event EventHandler? OnReconnected
+        {
+            add => inner.OnReconnected += value;
+            remove => inner.OnReconnected -= value;
+        }
 
         public bool IsConnected => inner.IsConnected;
 
         public Version Version => inner.Version;
 
-        public IDatabase Database => database is { } db ? inner.Database.Multiplexer.GetDatabase(db) : inner.Database;
+        public IDatabase Database => decorated
+            ? ForwardingDatabase.Wrap(Selected.WithKeyPrefix(prefix))
+            : Selected.WithKeyPrefix(prefix);
 
         public ISubscriber Subscriber => inner.Subscriber;
+
+        private IDatabase Selected => database is { } db ? inner.Database.Multiplexer.GetDatabase(db) : inner.Database;
 
         public void ForceReconnect() => inner.ForceReconnect();
 
         public EndPoint[] GetEndPoints(bool configuredOnly = false) => inner.GetEndPoints(configuredOnly);
+
+        // Without exposePrimaries, as empty as the default a connector that does not implement it inherits.
+        public IEnumerable<IServer> GetPrimaries() => exposePrimaries ? inner.GetPrimaries() : [];
 
         public void Dispose()
         {
