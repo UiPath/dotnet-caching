@@ -29,28 +29,19 @@ public class RedisStreamsTopicTests(ITestContextAccessor testContextAccessor) : 
         act.Should().NotThrow();
     }
 
-    [Fact]
-    public void EnsureStreamGroup_exception()
+    [Theory]
+    [InlineData("ERR something")]
+    [InlineData("BUSYGROUP Consumer Group name already exists")]
+    public void Subscribe_sends_no_synchronous_group_create(string error)
     {
         var observer = _fixture.Create<IObserver<ICacheEvent>>();
-        _database.StreamCreateConsumerGroup(
-                Arg.Any<RedisKey>(),
-                Arg.Any<RedisValue>(),
-                Arg.Any<RedisValue>()).Throws<Exception>();
-        Action act = () => Sut.Subscribe(observer);
-        act.Should().Throw<Exception>();
-    }
+        _database.StreamCreateConsumerGroup(Arg.Any<RedisKey>(), Arg.Any<RedisValue>(), Arg.Any<RedisValue>())
+            .Throws(new RedisServerException(RedisErrorKind.None, CommandFlags.None, error));
 
-    [Fact]
-    public void EnsureStreamGroup_RedisServerException_BUSYGROUP()
-    {
-        var observer = _fixture.Create<IObserver<ICacheEvent>>();
-        _database.StreamCreateConsumerGroup(
-                Arg.Any<RedisKey>(),
-                Arg.Any<RedisValue>(),
-                Arg.Any<RedisValue>()).Throws(new RedisServerException(RedisErrorKind.None, CommandFlags.None, "BUSYGROUP Consumer Group name already exists"));
         Action act = () => Sut.Subscribe(observer);
+
         act.Should().NotThrow();
+        _database.DidNotReceiveWithAnyArgs().StreamCreateConsumerGroup(default, default, default);
     }
 
     [Fact]
@@ -69,18 +60,6 @@ public class RedisStreamsTopicTests(ITestContextAccessor testContextAccessor) : 
                 limit: Arg.Any<long?>(),
                 trimMode: Arg.Any<StreamTrimMode>(),
                 flags: Arg.Any<CommandFlags>());
-    }
-
-    [Fact]
-    public void EnsureStreamGroup_RedisServerException()
-    {
-        var observer = _fixture.Create<IObserver<ICacheEvent>>();
-        _database.StreamCreateConsumerGroup(
-                Arg.Any<RedisKey>(),
-                Arg.Any<RedisValue>(),
-                Arg.Any<RedisValue>()).Throws(new RedisServerException(RedisErrorKind.None, CommandFlags.None, _fixture.Create<string>()));
-        Action act = () => Sut.Subscribe(observer);
-        act.Should().Throw<Exception>();
     }
 
     [Fact]
