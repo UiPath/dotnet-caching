@@ -90,7 +90,7 @@ The sample wires this exactly as shown above, with a second Redis container prov
 
 ## When not to use
 
-- One Redis server, separate keyspaces: use `RedisCacheOptions.KeyPrefix` or a key strategy, see [app-version-prefix.md](app-version-prefix.md). A second connection to the same server buys nothing.
+- One Redis server, separate keyspaces: use a key strategy, see [app-version-prefix.md](app-version-prefix.md), or a connector whose database applies `WithKeyPrefix`. `RedisCacheOptions.KeyPrefix` prepends nothing itself: it only mirrors such a connector's prefix, and set on the shipped `RedisConnector` it disagrees with the connector and is logged as an error. A second connection to the same server buys nothing.
 - One connection, a second *provider*: register another `ICacheProvider` and select it by name through `ICacheFactory.CreateCache(name)`, see [how-to/extending.md](../how-to/extending.md#custom-cache-provider).
 
 ## See also

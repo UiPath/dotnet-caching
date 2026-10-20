@@ -24,11 +24,14 @@ internal sealed partial class ConnectorKeyPrefix
     private readonly Lock _gate = new();
     private Resolved? _resolved;
     private string? _skipped;
+    private byte[]? _skippedBytes;
     private Task<bool>? _probe;
     private int _attempts;
     private int _skipLogged;
     private int _configuredSkipLogged;
     private int _mismatchLogged;
+    private int _emptyProbeLogged;
+    private int _exhaustedLogged;
 
     private ConnectorKeyPrefix()
     {
@@ -79,16 +82,17 @@ internal sealed partial class ConnectorKeyPrefix
         return prefix;
     }
 
-    /// <summary><see cref="Get"/> as the bytes the server sees, for hashing a key; <paramref name="configuredKey"/> is <paramref name="configured"/> already encoded.</summary>
+    /// <summary>The bytes the server sees, for hashing a key; <paramref name="configuredKey"/> is <paramref name="configured"/> already encoded.</summary>
+    /// <remarks>Only a SCAN pattern needs the prefix glob-free, so a prefix skipped for that is still hashed with.</remarks>
     public RedisKey GetKey(IDatabase database, string configured, RedisKey configuredKey, ILogger logger)
     {
         var prefix = Get(database, configured, logger);
-        if (prefix.Length == 0)
+        if (Volatile.Read(ref _resolved) is { } resolved && ReferenceEquals(resolved.Text, prefix))
         {
-            return default;
+            return prefix.Length == 0 ? default : resolved.Key;
         }
 
-        return Volatile.Read(ref _resolved) is { } resolved && ReferenceEquals(resolved.Text, prefix) ? resolved.Key : configuredKey;
+        return Volatile.Read(ref _skippedBytes) is { } skipped ? skipped : configuredKey;
     }
 
     /// <summary>Recognizes StackExchange.Redis's own databases; a decorator around one reads as unknown.</summary>
@@ -173,11 +177,20 @@ internal sealed partial class ConnectorKeyPrefix
 
     private static bool IsUsable(string prefix) => prefix.IndexOfAny(GlobCharacters) < 0;
 
-    [LoggerMessage(Level = LogLevel.Warning, Message = "The connector's database prepends '{Prefix}', which is not UTF-8 or holds a SCAN glob character (* ? [ ] or backslash); it is skipped and KeyPrefix '{Configured}' is used instead")]
+    [LoggerMessage(Level = LogLevel.Warning, Message = "The connector's database prepends '{Prefix}', which is not UTF-8 or holds a SCAN glob character (* ? [ ] or backslash); stream discovery skips it and uses KeyPrefix '{Configured}' instead")]
     private static partial void LogKeyPrefixSkipped(ILogger logger, string prefix, string configured);
 
-    [LoggerMessage(Level = LogLevel.Warning, Message = "RedisCacheOptions.KeyPrefix '{Configured}' holds a SCAN glob character (* ? [ ] or backslash); it is skipped and no prefix is assumed in its place")]
+    [LoggerMessage(Level = LogLevel.Warning, Message = "RedisCacheOptions.KeyPrefix '{Configured}' holds a SCAN glob character (* ? [ ] or backslash); stream discovery skips it and assumes no prefix in its place")]
     private static partial void LogConfiguredKeyPrefixSkipped(ILogger logger, string configured);
+
+    [LoggerMessage(Level = LogLevel.Warning, Message = "The connector's database answered the key prefix probe with no prefix; RedisCacheOptions.KeyPrefix '{Configured}' is used, since a decorator may send ECHO past its own prefixing")]
+    private static partial void LogProbeFoundNoPrefix(ILogger logger, string configured);
+
+    [LoggerMessage(Level = LogLevel.Warning, Message = "The connector's key prefix could not be probed in {Attempts} attempts; '{Fallback}' from RedisCacheOptions.KeyPrefix is used until the process restarts")]
+    private static partial void LogProbeExhausted(ILogger logger, int attempts, string fallback);
+
+    [LoggerMessage(Level = LogLevel.Warning, Message = "The connector's key prefix could not be probed in {Attempts} attempts, and RedisCacheOptions.KeyPrefix gives none to use; no prefix is assumed until the process restarts")]
+    private static partial void LogProbeExhaustedNoPrefix(ILogger logger, int attempts);
 
     [LoggerMessage(Level = LogLevel.Error, Message = "RedisCacheOptions.KeyPrefix is '{Configured}' but the connector's database prepends '{Resolved}'; '{Resolved}' is used")]
     private static partial void LogKeyPrefixMismatch(ILogger logger, string configured, string resolved);
@@ -238,6 +251,7 @@ internal sealed partial class ConnectorKeyPrefix
             return true;
         }
 
+        Interlocked.CompareExchange(ref _skippedBytes, prefix, null);
         Interlocked.CompareExchange(ref _skipped, text, null);
         return false;
     }
@@ -247,9 +261,31 @@ internal sealed partial class ConnectorKeyPrefix
     {
         var prefix = await EchoAsync(database).ConfigureAwait(false);
         var answered = prefix is not null;
+        if (answered && prefix!.Length == 0 && configuredUsable && configured.Length > 0)
+        {
+            // A decorator that sends ExecuteAsync past its own prefixing answers empty, so a mirrored value is the stronger claim.
+            if (Interlocked.Exchange(ref _emptyProbeLogged, 1) == 0)
+            {
+                LogProbeFoundNoPrefix(logger, configured);
+            }
+
+            prefix = Encoding.UTF8.GetBytes(configured);
+        }
+
         if (answered)
         {
             Accept(prefix!);
+        }
+        else if (Volatile.Read(ref _attempts) >= MaxProbeAttempts && Interlocked.Exchange(ref _exhaustedLogged, 1) == 0)
+        {
+            if (fallback.Length > 0)
+            {
+                LogProbeExhausted(logger, MaxProbeAttempts, fallback);
+            }
+            else
+            {
+                LogProbeExhaustedNoPrefix(logger, MaxProbeAttempts);
+            }
         }
 
         Report(logger, configured, configuredUsable, answered ? Volatile.Read(ref _resolved)?.Text ?? fallback : fallback);

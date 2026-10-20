@@ -120,7 +120,7 @@ See [reference/settings.md](../reference/settings.md) for the full set. The tabl
 
 All three touch how many entries move through the consumer pipeline, but at different layers:
 
-- `MaxLength` (default 32768) is a server-side cap — `XADD MAXLEN ~` trims the stream to at most this many entries. Tune it to bound Redis memory usage on the stream key. Entries trimmed before a node read them are reported as a loss (see [Troubleshooting](#troubleshooting)), so size it for the topic's burst traffic; a node's own entries are read at the poll, or every `MaxLength / 2` of its own publishes, whichever comes first.
+- `MaxLength` (default 32768) is a server-side cap â€” `XADD MAXLEN ~` trims the stream to at most this many entries. Tune it to bound Redis memory usage on the stream key. Entries trimmed before a node read them are reported as a loss (see [Troubleshooting](#troubleshooting)), so size it for the topic's burst traffic; a node's own entries are read at the poll, or every `MaxLength / 2` of its own publishes, whichever comes first.
 - `Limit` (default 1024) is the maximum number of entries the server returns in a single `XREADGROUP` call. Lowering it reduces the per-call latency spike at the cost of more round-trips under heavy load.
 - `PollBatchSize` (default 4096) is how many entries the consumer fetches in one poll cycle, potentially across multiple `XREADGROUP` calls. Raising it increases throughput under burst load; lowering it prevents the bounded channel from filling in a single cycle.
 
@@ -218,9 +218,9 @@ Everything else (`MaxLength`, `Limit`, `PollBatchSize`, `PollInterval`, `Consume
 
 `RedisStreamsTopic` polls at `PollInterval` (default 250 ms). `NotifyEnabled` (default `true`) adds a Pub/Sub channel that the publisher fires immediately after each `XADD`. The other nodes wake up and call `XREADGROUP` right away instead of waiting for the next poll tick, so an invalidation reaches them in a few network round trips rather than up to one poll interval later. The periodic poll continues in parallel as a safety net â€” a missed notification only adds at most one `PollInterval` of latency. Set `NotifyEnabled: false` to poll only, for example where the Pub/Sub subscription count matters (see below). A read that fails, as every read does while Redis is down, is retried three times at `PollInterval` and then with a doubling back-off capped at 30 s; the connection coming back ends the back-off at once, whether or not the connection monitor is on.
 
-What a broadcast costs on the server: the `XADD`, one fire-and-forget `PUBLISH`, and on every *other* node one script (`XINFO STREAM` and `XREADGROUP`, one round trip) and one `XACK`. The doorbell carries the publisher's consumer name, so the publishing node does not wake for its own ring — its own entries are never dispatched; the poll, the next ring from another node, or every `MaxLength / 2` of its own publishes reads and acknowledges them. Every read is checked for a trim past the group's position: a woken node compares the stream's oldest entry and counts (`XINFO STREAM`, O(1)) with the position it knows, while the check that also asks the server for the group's position (`XINFO GROUPS`, which grows with the number of nodes) keeps the poll's cadence — once a poll interval, after a reconnect, and after a full batch. A doorbell that arrives while a read is in flight is collapsed with any others into one more read.
+What a broadcast costs on the server: the `XADD`, one fire-and-forget `PUBLISH`, and on every *other* node one script (`XINFO STREAM` and `XREADGROUP`, one round trip) and one `XACK`. The doorbell carries the publisher's consumer name, so the publishing node does not wake for its own ring â€” its own entries are never dispatched; the poll, the next ring from another node, or every `MaxLength / 2` of its own publishes reads and acknowledges them. Every read is checked for a trim past the group's position: a woken node compares the stream's oldest entry and counts (`XINFO STREAM`, O(1)) with the position it knows, while the check that also asks the server for the group's position (`XINFO GROUPS`, which grows with the number of nodes) keeps the poll's cadence â€” once a poll interval, after a reconnect, and after a full batch. A doorbell that arrives while a read is in flight is collapsed with any others into one more read.
 
-If the server refuses the subscription — the connection user lacks `SUBSCRIBE` or the channel (`NOPERM`), or the command is disabled — the topic logs one warning and polls only; a connection error is retried at `NotifySubscriberTimeout`, warned about once per streak.
+If the server refuses the subscription â€” the connection user lacks `SUBSCRIBE` or the channel (`NOPERM`), or the command is disabled â€” the topic logs one warning and polls only; a connection error is retried at `NotifySubscriberTimeout`, warned about once per streak.
 
 With notify enabled, raise `PollInterval` to 1â€“5 seconds to cut idle Redis round-trips without sacrificing P50 latency.
 
@@ -293,6 +293,9 @@ void Configure(ICachingBuilder builder) => builder
         opt.MaintainerSearchPattern = keyFactory.GetRedisKey("*").ToString();
     });
 ```
+
+An explicit pattern is used as written, so behind a connector whose database applies `WithKeyPrefix` it must start with
+that prefix too: SCAN matches the keys as stored. The derived pattern adds the connector's prefix by itself.
 
 ### Operational considerations
 

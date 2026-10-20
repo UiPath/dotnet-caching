@@ -451,6 +451,48 @@ public class RedisStreamHealthMaintainerTests(ITestContextAccessor testContextAc
     }
 
     [Fact]
+    public async Task The_routed_database_is_scanned_for_and_stripped_of_the_connector_prefix()
+    {
+        ConnectorPrefixIs("app:");
+        _streams = ["app:stream1"];
+        _redisConnector.GetPrimaries().Returns([]);
+        var multiplexer = Substitute.For<IConnectionMultiplexer>();
+        multiplexer.GetServers().Returns([]);
+        _database.Multiplexer.Returns(multiplexer);
+        _database.KeyExistsAsync(Arg.Any<RedisKey>(), Arg.Any<CommandFlags>()).Returns(true);
+
+        Sut.Initialize();
+        await Sut.CheckStreamsAsync(testContextAccessor.Current.CancellationToken);
+
+        await _database.Received().ExecuteAsync(
+            "SCAN",
+            Arg.Is<ICollection<object>?>(args => args != null && args.ElementAt(2).ToString()!.StartsWith("app:", StringComparison.Ordinal)),
+            Arg.Any<CommandFlags>());
+        await _database.Received().StreamInfoAsync(Arg.Is<RedisKey>(key => key == "stream1"), Arg.Any<CommandFlags>());
+    }
+
+    [Fact]
+    public async Task An_explicit_MaintainerSearchPattern_is_not_given_the_connector_prefix()
+    {
+        ConnectorPrefixIs("app:");
+        _streamOptions.MaintainerSearchPattern = "explicit-pattern-*";
+
+        Sut.Initialize();
+        await Sut.CheckStreamsAsync(testContextAccessor.Current.CancellationToken);
+
+        await _primary.Received().ExecuteAsync(
+            Arg.Any<int?>(),
+            "SCAN",
+            Arg.Is<ICollection<object>>(args => args != null && args.Contains((object)"explicit-pattern-*")),
+            Arg.Any<CommandFlags>());
+        await _primary.DidNotReceive().ExecuteAsync(
+            Arg.Any<int?>(),
+            "SCAN",
+            Arg.Is<ICollection<object>>(args => args != null && args.Contains((object)"app:explicit-pattern-*")),
+            Arg.Any<CommandFlags>());
+    }
+
+    [Fact]
     public async Task No_multiplexer_behind_the_database_falls_back_to_the_routed_database()
     {
         _redisConnector.GetPrimaries().Returns([]);
@@ -568,6 +610,11 @@ public class RedisStreamHealthMaintainerTests(ITestContextAccessor testContextAc
 #pragma warning disable CS0618 // Deprecated but still honored, and the key shape it selects is what these tests cover.
     private void ShardKeyEnabled(bool enabled) => _cacheOptions.ShardKeyEnabled = enabled;
 #pragma warning restore CS0618
+
+    // The probe the maintainer sends behind a database it cannot read the prefix from.
+    private void ConnectorPrefixIs(string prefix) =>
+        _database.ExecuteAsync("ECHO", Arg.Any<ICollection<object>?>(), Arg.Any<CommandFlags>())
+            .Returns(RedisResult.Create((RedisValue)(prefix + ConnectorKeyPrefix.ProbeMarker)));
 
     private StreamInfo GenerateStreamInfo(int? groupsCount = null)
     {
