@@ -124,7 +124,8 @@ ambiguous against the closure overload.
   var token = await _cache.GetOrAddAsync(key[..written], (Self: this, machineKey), static (s, c) => s.Self.FetchAsync(s.machineKey, c), ct);
   ```
 
-  Keys over 256 characters take the string path inside the library anyway.
+  Keys over 256 characters take the string path inside the library anyway. `SetAsync` takes the same `Span<char>`; a
+  write has to build the string the entry is stored under, so it saves your own key string, not the allocation.
 
 ## What runs, and what a test sees
 
@@ -132,8 +133,8 @@ Every shape ends in the same place: `ICache<T>` is `Cache<T>`, which composes th
 calls the provider (`InMemory`, `InMemoryRedis` or `Redis`). The span, state and `GetOrAddWithExpirationAsync` members of
 `ICache`, `ICache<T>`, `IHashCache` and `IHashCache<T>` are `sealed` interface members with a body: each looks for the
 matching capability interface (`ISpanKeyCache`, `IStatefulCache`, `IGeneratedExpirationCache`,
-`IStatefulGeneratedExpirationCache`, `IBatchArgumentCache`, and for the hash caches `ISpanKeyHashCache`,
-`IStatefulHashCache` and `IStatefulSpanKeyHashCache`) and otherwise calls the `CacheKey` member. `Cache<T>`, `HashCache<T>` and the library's in-memory
+`IStatefulGeneratedExpirationCache`, `IBatchArgumentCache`, and for the hash caches
+`ISpanKeyHashCache`, `IStatefulHashCache` and `IStatefulSpanKeyHashCache`) and otherwise calls the `CacheKey` member. `Cache<T>`, `HashCache<T>` and the library's in-memory
 and multilayer caches implement them; the Redis-only `ICache` implements `IStatefulCache` and `IGeneratedExpirationCache`
 and falls back to a closure for the rest, where the Redis round trip allocates far more than the closure does.
 

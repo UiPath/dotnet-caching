@@ -23,4 +23,16 @@ public interface ISpanKeyHashCache<T>
 
     /// <inheritdoc cref="ISpanKeyCache.GetAsync{T}(Span{char}, CachePolicy, CancellationToken)"/>
     ValueTask<bool> ContainsAsync(Span<char> cacheKey, CancellationToken token = default);
+
+    /// <inheritdoc cref="ISpanKeyCache.SetAsync{T}(Span{char}, T, CachePolicy, CancellationToken)"/>
+    ValueTask<bool> SetAsync(Span<char> cacheKey, IDictionary<string, T?> values, CancellationToken token = default);
+
+    /// <inheritdoc cref="ISpanKeyCache.SetAsync{T}(Span{char}, T, CachePolicy, CancellationToken)"/>
+    ValueTask<bool> SetAsync(Span<char> cacheKey, IDictionary<string, T?> values, TimeSpan expiration, CancellationToken token = default);
+
+    /// <inheritdoc cref="ISpanKeyCache.SetAsync{T}(Span{char}, T, CachePolicy, CancellationToken)"/>
+    ValueTask<bool> SetAsync(Span<char> cacheKey, IDictionary<string, T?> values, DateTimeOffset expiration, CancellationToken token = default);
+
+    /// <inheritdoc cref="ISpanKeyCache.SetAsync{T}(Span{char}, T, CachePolicy, CancellationToken)"/>
+    ValueTask<bool> SetAsync(Span<char> cacheKey, IDictionary<string, T?> values, HashCacheEntryOptions options, CancellationToken token = default);
 }

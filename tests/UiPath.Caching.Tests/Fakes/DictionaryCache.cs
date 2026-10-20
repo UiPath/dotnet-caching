@@ -1,7 +1,7 @@
 namespace UiPath.Caching.Tests.Fakes;
 
 /// <summary>Minimal in-memory <see cref="ICache"/> whose batch <c>GetOrAddAsync</c> overloads forward to <see cref="BatchGetOrAdd"/>, as an implementation outside the library would.</summary>
-internal sealed class DictionaryCache : ICache
+internal class DictionaryCache : ICache
 {
     private readonly Dictionary<CacheKey, object?> _store = [];
 

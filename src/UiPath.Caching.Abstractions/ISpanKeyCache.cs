@@ -36,4 +36,13 @@ public interface ISpanKeyCache
 
     /// <inheritdoc cref="GetOrAddWithExpirationAsync{T}(Span{char}, Func{CancellationToken, Task{GeneratedValue{T}}}, CachePolicy, CancellationToken)"/>
     ValueTask<T?> GetOrAddWithExpirationAsync<T, TState>(Span<char> cacheKey, TState state, Func<TState, CancellationToken, Task<GeneratedValue<T>>> generator, CachePolicy? policy, CancellationToken token = default);
+
+    /// <summary>Writes by the key's text, normalized as <c>new CacheKey(text)</c> normalizes it; a stored entry needs the key as a string, so an implementation builds it once.</summary>
+    ValueTask<bool> SetAsync<T>(Span<char> cacheKey, T? value, CachePolicy? policy, CancellationToken token = default);
+
+    /// <inheritdoc cref="SetAsync{T}(Span{char}, T, CachePolicy, CancellationToken)"/>
+    ValueTask<bool> SetAsync<T>(Span<char> cacheKey, T? value, TimeSpan expiration, CachePolicy? policy, CancellationToken token = default);
+
+    /// <inheritdoc cref="SetAsync{T}(Span{char}, T, CachePolicy, CancellationToken)"/>
+    ValueTask<bool> SetAsync<T>(Span<char> cacheKey, T? value, DateTimeOffset expiration, CachePolicy? policy, CancellationToken token = default);
 }

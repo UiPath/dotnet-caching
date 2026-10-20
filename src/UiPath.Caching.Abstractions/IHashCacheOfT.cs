@@ -130,6 +130,34 @@ public interface IHashCache<T>
 
     ValueTask<bool> SetAsync(CacheKey cacheKey, IDictionary<string, T?> values, HashCacheEntryOptions options, CancellationToken token = default);
 
+    /// <inheritdoc cref="ISpanKeyCache.SetAsync{T}(Span{char}, T, CachePolicy, CancellationToken)"/>
+    [OverloadResolutionPriority(-1)]
+    sealed ValueTask<bool> SetAsync(Span<char> cacheKey, IDictionary<string, T?> values, CancellationToken token = default) =>
+        this is ISpanKeyHashCache<T> spanKeyCache
+            ? spanKeyCache.SetAsync(cacheKey, values, token)
+            : SetAsync(new CacheKey(cacheKey), values, token);
+
+    /// <inheritdoc cref="ISpanKeyCache.SetAsync{T}(Span{char}, T, CachePolicy, CancellationToken)"/>
+    [OverloadResolutionPriority(-1)]
+    sealed ValueTask<bool> SetAsync(Span<char> cacheKey, IDictionary<string, T?> values, TimeSpan expiration, CancellationToken token = default) =>
+        this is ISpanKeyHashCache<T> spanKeyCache
+            ? spanKeyCache.SetAsync(cacheKey, values, expiration, token)
+            : SetAsync(new CacheKey(cacheKey), values, expiration, token);
+
+    /// <inheritdoc cref="ISpanKeyCache.SetAsync{T}(Span{char}, T, CachePolicy, CancellationToken)"/>
+    [OverloadResolutionPriority(-1)]
+    sealed ValueTask<bool> SetAsync(Span<char> cacheKey, IDictionary<string, T?> values, DateTimeOffset expiration, CancellationToken token = default) =>
+        this is ISpanKeyHashCache<T> spanKeyCache
+            ? spanKeyCache.SetAsync(cacheKey, values, expiration, token)
+            : SetAsync(new CacheKey(cacheKey), values, expiration, token);
+
+    /// <inheritdoc cref="ISpanKeyCache.SetAsync{T}(Span{char}, T, CachePolicy, CancellationToken)"/>
+    [OverloadResolutionPriority(-1)]
+    sealed ValueTask<bool> SetAsync(Span<char> cacheKey, IDictionary<string, T?> values, HashCacheEntryOptions options, CancellationToken token = default) =>
+        this is ISpanKeyHashCache<T> spanKeyCache
+            ? spanKeyCache.SetAsync(cacheKey, values, options, token)
+            : SetAsync(new CacheKey(cacheKey), values, options, token);
+
     ValueTask<bool> RefreshAsync(CacheKey cacheKey, CancellationToken token = default);
 
     ValueTask<bool> RefreshAsync(CacheKey cacheKey, TimeSpan expiration, CancellationToken token = default);

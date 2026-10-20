@@ -142,6 +142,15 @@ public sealed class NullCache : ICache, ISpanKeyCache, IGeneratedExpirationCache
 
     public ValueTask<bool> SetAsync<T>(CacheKey cacheKey, T? value, DateTimeOffset expiration, CachePolicy? policy, CancellationToken token = default) => ReturnTrueAsync<T>();
 
+    [OverloadResolutionPriority(-1)]
+    public ValueTask<bool> SetAsync<T>(Span<char> cacheKey, T? value, CachePolicy? policy, CancellationToken token = default) => ReturnTrueAsync<T>();
+
+    [OverloadResolutionPriority(-1)]
+    public ValueTask<bool> SetAsync<T>(Span<char> cacheKey, T? value, TimeSpan expiration, CachePolicy? policy, CancellationToken token = default) => ReturnTrueAsync<T>();
+
+    [OverloadResolutionPriority(-1)]
+    public ValueTask<bool> SetAsync<T>(Span<char> cacheKey, T? value, DateTimeOffset expiration, CachePolicy? policy, CancellationToken token = default) => ReturnTrueAsync<T>();
+
     public ValueTask<bool> SetAsync<T>(KeyValuePair<CacheKey, T?>[] keyValues, CachePolicy? policy, CancellationToken token = default) => ReturnTrueAsync<T>();
 
     public ValueTask<bool> SetAsync<T>(KeyValuePair<CacheKey, T?>[] keyValues, TimeSpan expiration, CachePolicy? policy, CancellationToken token = default) => ReturnTrueAsync<T>();

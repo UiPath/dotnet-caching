@@ -48,6 +48,17 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
   `OverloadResolutionPriority(-1)` and the `CacheKey` members of `Cache<T>` `OverloadResolutionPriority(1)`, so a bare
   `default` key still binds to the `CacheKey` overload on the interfaces and on `Cache<T>`.
 
+- **`Span<char>` overloads of `SetAsync`.** `ICache`, `ICache<T>`, `IHashCache` and `IHashCache<T>` gain `sealed`
+  members that take the key as a `Span<char>`, for each expiration variant of the single-key write (the
+  `HashCacheEntryOptions` one included), so a consumer that formats its key on the stack no longer builds a string or a
+  `CacheKey` to write. `ISpanKeyCache`, `ISpanKeyCache<T>`, `ISpanKeyHashCache` and `ISpanKeyHashCache<T>` gain the
+  matching members, which the library's multilayer and in-memory caches, `Cache<T>`, `HashCache<T>`, `NullCache` and
+  `NullHashCache` implement; any other cache, a Moq or NSubstitute proxy included, is called through its `CacheKey`
+  members. A stored entry is keyed by a string, so a write builds that string once on every cache: the saving is the
+  caller's own key string and, through a typed cache, the one its key strategy would compose. **Breaking** for an
+  implementation of any of the four `ISpanKey*` interfaces outside the library, which must add the new members. The
+  span members carry `OverloadResolutionPriority(-1)`, as the other span members do.
+
 - **Read scripts are on by default.** `RedisCacheOptions.ReadScriptsEnabled` now defaults to `true`: on Redis 7 and
   later, `RedisCache` and `RedisHashCache` read a value (or a hash) and its expiration with one `EVAL_RO` script
   instead of a MULTI/EXEC transaction, which allocates about 2.5 KB less per miss through the in-memory and Redis

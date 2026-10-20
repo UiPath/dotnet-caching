@@ -32,4 +32,13 @@ public interface ISpanKeyCache<T>
 
     /// <inheritdoc cref="ISpanKeyCache.GetOrAddWithExpirationAsync{T}(Span{char}, Func{CancellationToken, Task{GeneratedValue{T}}}, CachePolicy, CancellationToken)"/>
     ValueTask<T?> GetOrAddWithExpirationAsync<TState>(Span<char> cacheKey, TState state, Func<TState, CancellationToken, Task<GeneratedValue<T>>> generator, CancellationToken token = default);
+
+    /// <inheritdoc cref="ISpanKeyCache.SetAsync{T}(Span{char}, T, CachePolicy, CancellationToken)"/>
+    ValueTask<bool> SetAsync(Span<char> cacheKey, T? value, CancellationToken token = default);
+
+    /// <inheritdoc cref="ISpanKeyCache.SetAsync{T}(Span{char}, T, CachePolicy, CancellationToken)"/>
+    ValueTask<bool> SetAsync(Span<char> cacheKey, T? value, TimeSpan expiration, CancellationToken token = default);
+
+    /// <inheritdoc cref="ISpanKeyCache.SetAsync{T}(Span{char}, T, CachePolicy, CancellationToken)"/>
+    ValueTask<bool> SetAsync(Span<char> cacheKey, T? value, DateTimeOffset expiration, CancellationToken token = default);
 }
