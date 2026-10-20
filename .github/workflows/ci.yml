@@ -123,7 +123,7 @@ jobs:
           name: test-results-windows-latest
           path: TestResults
 
-  # FOSSA runs as its own parallel job (push to main only) so it doesn't delay the build.
+  # FOSSA runs as its own parallel job (on push only) so it doesn't delay the build.
   fossa:
     if: github.event_name == 'push'
     runs-on: uipath-ubuntu-latest
