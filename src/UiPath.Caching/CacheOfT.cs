@@ -185,11 +185,29 @@ public class Cache<T> : ICache<T>, ISpanKeyCache<T>, IStatefulCache<T>, IGenerat
         where TState : notnull =>
         _cache.GetOrAddAsync<T, TState>(MapKeys(entries), generator, expiration, Policy, token);
 
+    [OverloadResolutionPriority(1)]
     public ValueTask<T?> GetOrAddWithExpirationAsync(CacheKey cacheKey, Func<CancellationToken, Task<GeneratedValue<T>>> generator, CancellationToken token = default) =>
         _cache.GetOrAddWithExpirationAsync(GetCacheKey(cacheKey), generator, Policy, token);
 
+    [OverloadResolutionPriority(1)]
     public ValueTask<T?> GetOrAddWithExpirationAsync<TState>(CacheKey cacheKey, TState state, Func<TState, CancellationToken, Task<GeneratedValue<T>>> generator, CancellationToken token = default) =>
         _cache.GetOrAddWithExpirationAsync(GetCacheKey(cacheKey), state, generator, Policy, token);
+
+    public ValueTask<T?> GetOrAddWithExpirationAsync(Span<char> cacheKey, Func<CancellationToken, Task<GeneratedValue<T>>> generator, CancellationToken token = default)
+    {
+        Span<char> buffer = _cacheKeyStrategy is DefaultCacheKeyStrategy ? default : stackalloc char[SpanKey.MaxLength];
+        return SpanKey.TryComposeTyped<T>(_cacheKeyStrategy, cacheKey, buffer, out var key)
+            ? _cache.GetOrAddWithExpirationAsync(key, generator, Policy, token)
+            : GetOrAddWithExpirationAsync(new CacheKey(cacheKey), generator, token);
+    }
+
+    public ValueTask<T?> GetOrAddWithExpirationAsync<TState>(Span<char> cacheKey, TState state, Func<TState, CancellationToken, Task<GeneratedValue<T>>> generator, CancellationToken token = default)
+    {
+        Span<char> buffer = _cacheKeyStrategy is DefaultCacheKeyStrategy ? default : stackalloc char[SpanKey.MaxLength];
+        return SpanKey.TryComposeTyped<T>(_cacheKeyStrategy, cacheKey, buffer, out var key)
+            ? _cache.GetOrAddWithExpirationAsync(key, state, generator, Policy, token)
+            : GetOrAddWithExpirationAsync(new CacheKey(cacheKey), state, generator, token);
+    }
 
     public ValueTask<KeyValuePair<TState, T?>[]> GetOrAddAsync<TState, TArgument>(KeyValuePair<CacheKey, TState>[] entries, TArgument argument, Func<TArgument, TState[], CancellationToken, Task<KeyValuePair<TState, T?>[]>> generator, CancellationToken token = default)
         where TState : notnull =>

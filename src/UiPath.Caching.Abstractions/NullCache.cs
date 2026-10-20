@@ -177,6 +177,14 @@ public sealed class NullCache : ICache, ISpanKeyCache, IGeneratedExpirationCache
     public ValueTask<T?> GetOrAddWithExpirationAsync<T, TState>(CacheKey cacheKey, TState state, Func<TState, CancellationToken, Task<GeneratedValue<T>>> generator, CachePolicy? policy, CancellationToken token = default) =>
         ((ICache)this).GetOrAddWithExpirationAsync(cacheKey, state, generator, policy, token);
 
+    [OverloadResolutionPriority(-1)]
+    public ValueTask<T?> GetOrAddWithExpirationAsync<T>(Span<char> cacheKey, Func<CancellationToken, Task<GeneratedValue<T>>> generator, CachePolicy? policy, CancellationToken token = default) =>
+        GetOrAddWithExpirationAsync(CacheKey.Null, generator, policy, token);
+
+    [OverloadResolutionPriority(-1)]
+    public ValueTask<T?> GetOrAddWithExpirationAsync<T, TState>(Span<char> cacheKey, TState state, Func<TState, CancellationToken, Task<GeneratedValue<T>>> generator, CachePolicy? policy, CancellationToken token = default) =>
+        GetOrAddWithExpirationAsync(CacheKey.Null, state, generator, policy, token);
+
     public void Dispose()
     {
         // Nothing to dispose

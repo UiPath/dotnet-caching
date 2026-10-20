@@ -77,7 +77,8 @@ The state overloads are members of `ICache`, `ICache<T>`, `IHashCache` and `IHas
 reach `IStatefulCache` (`IStatefulHashCache` for the hash caches), which hands the state to the generator without a
 closure; on any other cache — one you wrote, or a Moq or NSubstitute proxy — they bind the state into a closure and call
 the closure overload, so the call works everywhere and only the allocation differs. `GetOrAddWithExpirationAsync` has a
-state overload of the same shape (`IStatefulGeneratedExpirationCache`).
+state overload of the same shape (`IStatefulGeneratedExpirationCache`), and both take a `Span<char>` key
+(`ISpanKeyCache`): a warm hit allocates nothing and a miss reads the local tier once.
 
 The batch `GetOrAddAsync` already carries a state per entry, but its generator usually needs the service too. The
 overload that takes an `argument` passes one value for the whole call, before the states of the keys that missed, so

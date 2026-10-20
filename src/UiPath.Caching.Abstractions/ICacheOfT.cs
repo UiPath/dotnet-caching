@@ -196,4 +196,21 @@ public interface ICache<T>
             ? stateful.GetOrAddWithExpirationAsync(cacheKey, state, generator, token)
             : GetOrAddWithExpirationAsync(cacheKey, StatefulCacheExtensions.BindGenerated(state, generator), token);
     }
+
+    /// <inheritdoc cref="ISpanKeyCache.GetOrAddWithExpirationAsync{T}(Span{char}, Func{CancellationToken, Task{GeneratedValue{T}}}, CachePolicy, CancellationToken)"/>
+    [OverloadResolutionPriority(-1)]
+    sealed ValueTask<T?> GetOrAddWithExpirationAsync(Span<char> cacheKey, Func<CancellationToken, Task<GeneratedValue<T>>> generator, CancellationToken token = default) =>
+        this is ISpanKeyCache<T> spanKeyCache
+            ? spanKeyCache.GetOrAddWithExpirationAsync(cacheKey, generator, token)
+            : GetOrAddWithExpirationAsync(new CacheKey(cacheKey), generator, token);
+
+    /// <inheritdoc cref="ISpanKeyCache.GetOrAddWithExpirationAsync{T}(Span{char}, Func{CancellationToken, Task{GeneratedValue{T}}}, CachePolicy, CancellationToken)"/>
+    [OverloadResolutionPriority(-1)]
+    sealed ValueTask<T?> GetOrAddWithExpirationAsync<TState>(Span<char> cacheKey, TState state, Func<TState, CancellationToken, Task<GeneratedValue<T>>> generator, CancellationToken token = default)
+    {
+        ArgumentNullException.ThrowIfNull(generator);
+        return this is ISpanKeyCache<T> spanKeyCache
+            ? spanKeyCache.GetOrAddWithExpirationAsync(cacheKey, state, generator, token)
+            : GetOrAddWithExpirationAsync(new CacheKey(cacheKey), state, generator, token);
+    }
 }
