@@ -189,6 +189,9 @@ internal sealed partial class ConnectorKeyPrefix
     [LoggerMessage(Level = LogLevel.Warning, Message = "The connector's key prefix could not be probed in {Attempts} attempts; '{Fallback}' from RedisCacheOptions.KeyPrefix is used until the process restarts")]
     private static partial void LogProbeExhausted(ILogger logger, int attempts, string fallback);
 
+    [LoggerMessage(Level = LogLevel.Warning, Message = "The connector's key prefix could not be probed in {Attempts} attempts, and RedisCacheOptions.KeyPrefix gives none to use; no prefix is assumed until the process restarts")]
+    private static partial void LogProbeExhaustedNoPrefix(ILogger logger, int attempts);
+
     [LoggerMessage(Level = LogLevel.Error, Message = "RedisCacheOptions.KeyPrefix is '{Configured}' but the connector's database prepends '{Resolved}'; '{Resolved}' is used")]
     private static partial void LogKeyPrefixMismatch(ILogger logger, string configured, string resolved);
 
@@ -275,7 +278,14 @@ internal sealed partial class ConnectorKeyPrefix
         }
         else if (Volatile.Read(ref _attempts) >= MaxProbeAttempts && Interlocked.Exchange(ref _exhaustedLogged, 1) == 0)
         {
-            LogProbeExhausted(logger, MaxProbeAttempts, fallback);
+            if (fallback.Length > 0)
+            {
+                LogProbeExhausted(logger, MaxProbeAttempts, fallback);
+            }
+            else
+            {
+                LogProbeExhaustedNoPrefix(logger, MaxProbeAttempts);
+            }
         }
 
         Report(logger, configured, configuredUsable, answered ? Volatile.Read(ref _resolved)?.Text ?? fallback : fallback);

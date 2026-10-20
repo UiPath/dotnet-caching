@@ -89,19 +89,39 @@ public sealed class ConnectorKeyPrefixTests : IDisposable
         Logged(LogLevel.Warning).Should().Be(0);
     }
 
-    [Fact]
-    public void Running_out_of_probe_attempts_is_warned_about_once()
+    [Theory]
+    [InlineData("", "no prefix is assumed")]
+    [InlineData("app:", "'app:' from RedisCacheOptions.KeyPrefix is used")]
+    [InlineData("a?b:", "no prefix is assumed")]
+    public void Running_out_of_probe_attempts_is_warned_about_once_after_the_last_one(string configured, string fallback)
     {
         var database = Substitute.For<IDatabase>();
         database.ExecuteAsync("ECHO", Arg.Any<ICollection<object>>(), Arg.Any<CommandFlags>()).ThrowsAsync(new RedisException("down"));
         var prefix = NewPrefix();
 
-        for (var call = 0; call < 5; call++)
+        prefix.Get(database, configured, _logger);
+        prefix.Get(database, configured, _logger);
+        Messages(LogLevel.Warning).Should().NotContain(m => m.Contains("could not be probed"), "two of the three attempts failed");
+
+        for (var call = 0; call < 3; call++)
         {
-            prefix.Get(database, string.Empty, _logger);
+            prefix.Get(database, configured, _logger);
         }
 
-        Logged(LogLevel.Warning).Should().Be(1);
+        Messages(LogLevel.Warning).Where(m => m.Contains("could not be probed")).Should().ContainSingle()
+            .Which.Should().Contain("in 3 attempts").And.Contain(fallback);
+    }
+
+    [Fact]
+    public void An_empty_probe_answer_does_not_take_a_configured_prefix_holding_a_SCAN_glob_character()
+    {
+        var prefix = NewPrefix();
+
+        prefix.Get(Echoing(string.Empty), "a?b:", _logger).Should().BeEmpty();
+
+        // The configured value is what is skipped, not the connector's answer.
+        Messages(LogLevel.Warning).Should().NotContain(m => m.Contains("the connector's database prepends") || m.Contains("since a decorator"));
+        Messages(LogLevel.Warning).Should().ContainSingle(m => m.Contains("RedisCacheOptions.KeyPrefix 'a?b:' holds a SCAN glob character"));
     }
 
     [Fact]
@@ -405,6 +425,11 @@ public sealed class ConnectorKeyPrefixTests : IDisposable
 
         condition().Should().BeTrue();
     }
+
+    private string[] Messages(LogLevel level) =>
+        [.. _logger.ReceivedCalls()
+            .Where(call => call.GetMethodInfo().Name == nameof(ILogger.Log) && (LogLevel)call.GetArguments()[0]! == level)
+            .Select(call => call.GetArguments()[2]!.ToString()!)];
 
     private int Logged(LogLevel level) =>
         _logger.ReceivedCalls().Count(call => call.GetMethodInfo().Name == nameof(ILogger.Log) && (LogLevel)call.GetArguments()[0]! == level);
