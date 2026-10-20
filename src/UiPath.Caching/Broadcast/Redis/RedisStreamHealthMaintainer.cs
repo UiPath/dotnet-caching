@@ -462,7 +462,6 @@ public partial class RedisStreamHealthMaintainer : IHostedService
         }
         else
         {
-            // The connector's own database, as the routed SCAN used: null would mean the configured default.
             var database = Database.Database;
 
             // In parallel, so the pass costs the slowest shard rather than their sum and stays inside the lock.
@@ -486,8 +485,8 @@ public partial class RedisStreamHealthMaintainer : IHostedService
         var keys = new HashSet<RedisKey>();
         try
         {
-            // The database-scoped overload: the three-argument one builds the message with db -1, which
-            // StackExchange.Redis refuses for SCAN before it reaches the wire.
+            // The database-scoped overload with the connector's database, as the routed SCAN used: the
+            // three-argument one, like a null database, resolves to the configured default instead.
             await ScanStreamsAsync((command, args, flags) => primary.ExecuteAsync(database, command, args, flags), keyPrefix, keys, cancellationToken).ConfigureAwait(false);
         }
         catch (Exception ex) when (ex is not OperationCanceledException)

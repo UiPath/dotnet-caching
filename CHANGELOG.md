@@ -135,6 +135,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
   groups were never reaped. An empty answer now falls back to the connected primaries of `Database.Multiplexer`.
   A non-clustered Redis was unaffected beyond the warning.
 
+- **Each primary is scanned in the connector's database.** The per-primary `SCAN` ran in the configured default
+  database rather than `Database.Database`, so a connector on `GetDatabase(n)` with another `n` discovered no streams
+  through it.
+
 - **The first subscribe of a Redis Streams topic no longer risks a spurious loss.** A read issued before the subscribe
   created the consumer group, and answered `NOGROUP` after it, was reported as entries lost, so the local tier could be
   expired for nothing right after a process started. Such an answer now reports a loss only when the group was known to
