@@ -280,13 +280,35 @@ internal sealed partial class MultilayerCache : MultilayerCacheBase, ICache, ISp
     public ValueTask<T?> GetOrAddWithExpirationAsync<T>(CacheKey cacheKey, Func<CancellationToken, Task<GeneratedValue<T>>> generator, CachePolicy? policy, CancellationToken token = default)
     {
         ArgumentNullException.ThrowIfNull(generator);
-        return GetOrAddGeneratedAsync(cacheKey, generator, policy ?? _defaultPolicy, token);
+        return GetOrAddGeneratedAsync(cacheKey, generator, policy ?? _defaultPolicy, _localMemorySetter.Writes, localMissed: false, token);
+    }
+
+    public ValueTask<T?> GetOrAddWithExpirationAsync<T>(Span<char> cacheKey, Func<CancellationToken, Task<GeneratedValue<T>>> generator, CachePolicy? policy, CancellationToken token = default)
+    {
+        ArgumentNullException.ThrowIfNull(generator);
+        policy ??= _defaultPolicy;
+        var seen = _localMemorySetter.Writes;
+        var probe = ProbeGetOrAddLocal<T>(cacheKey, policy, token, out var value);
+        return probe == LocalProbe.Hit
+            ? new ValueTask<T?>(value)
+            : GetOrAddGeneratedAsync(new CacheKey(cacheKey), generator, policy, seen, probe == LocalProbe.Miss, token);
+    }
+
+    public ValueTask<T?> GetOrAddWithExpirationAsync<T, TState>(Span<char> cacheKey, TState state, Func<TState, CancellationToken, Task<GeneratedValue<T>>> generator, CachePolicy? policy, CancellationToken token = default)
+    {
+        ArgumentNullException.ThrowIfNull(generator);
+        policy ??= _defaultPolicy;
+        var seen = _localMemorySetter.Writes;
+        var probe = ProbeGetOrAddLocal<T>(cacheKey, policy, token, out var value);
+        return probe == LocalProbe.Hit
+            ? new ValueTask<T?>(value)
+            : GetOrAddGeneratedAsync(new CacheKey(cacheKey), state, generator, policy, seen, probe == LocalProbe.Miss, token);
     }
 
     public ValueTask<T?> GetOrAddWithExpirationAsync<T, TState>(CacheKey cacheKey, TState state, Func<TState, CancellationToken, Task<GeneratedValue<T>>> generator, CachePolicy? policy, CancellationToken token = default)
     {
         ArgumentNullException.ThrowIfNull(generator);
-        return GetOrAddGeneratedAsync(cacheKey, state, generator, policy ?? _defaultPolicy, token);
+        return GetOrAddGeneratedAsync(cacheKey, state, generator, policy ?? _defaultPolicy, _localMemorySetter.Writes, localMissed: false, token);
     }
 
     public ValueTask<bool> SetAsync<T>(CacheKey cacheKey, T? value, CachePolicy? policy, CancellationToken token = default)
@@ -976,13 +998,14 @@ internal sealed partial class MultilayerCache : MultilayerCacheBase, ICache, ISp
         return entry;
     }
 
-    private async ValueTask<T?> GetOrAddGeneratedAsync<T>(CacheKey cacheKey, Func<CancellationToken, Task<GeneratedValue<T>>> generator, CachePolicy policy, CancellationToken token)
+    private async ValueTask<T?> GetOrAddGeneratedAsync<T>(CacheKey cacheKey, Func<CancellationToken, Task<GeneratedValue<T>>> generator, CachePolicy policy, long seen, bool localMissed, CancellationToken token)
     {
         NotCacheableException.ThrowIfNotCacheable<T>();
-        var seen = _localMemorySetter.Writes;
         var cacheEntryOptions = _entryBuilder.BuildEntryOptions<T>(cacheKey, GetExpiration(policy), token);
 
-        var entry = await GetCacheEntryInnerAsync<T>(cacheEntryOptions, policy).ConfigureAwait(false);
+        var entry = localMissed
+            ? await FetchInnerAsync<T>(cacheEntryOptions, policy).ConfigureAwait(false)
+            : await GetCacheEntryInnerAsync<T>(cacheEntryOptions, policy).ConfigureAwait(false);
         if (entry.Found)
         {
             return entry.Value;
@@ -992,14 +1015,15 @@ internal sealed partial class MultilayerCache : MultilayerCacheBase, ICache, ISp
         return result.Value;
     }
 
-    private async ValueTask<T?> GetOrAddGeneratedAsync<T, TState>(CacheKey cacheKey, TState state, Func<TState, CancellationToken, Task<GeneratedValue<T>>> generator, CachePolicy policy, CancellationToken token)
+    private async ValueTask<T?> GetOrAddGeneratedAsync<T, TState>(CacheKey cacheKey, TState state, Func<TState, CancellationToken, Task<GeneratedValue<T>>> generator, CachePolicy policy, long seen, bool localMissed, CancellationToken token)
     {
         // As the closure form above; the state is bound to a delegate only for the miss, so a hit builds no closure.
         NotCacheableException.ThrowIfNotCacheable<T>();
-        var seen = _localMemorySetter.Writes;
         var cacheEntryOptions = _entryBuilder.BuildEntryOptions<T>(cacheKey, GetExpiration(policy), token);
 
-        var entry = await GetCacheEntryInnerAsync<T>(cacheEntryOptions, policy).ConfigureAwait(false);
+        var entry = localMissed
+            ? await FetchInnerAsync<T>(cacheEntryOptions, policy).ConfigureAwait(false)
+            : await GetCacheEntryInnerAsync<T>(cacheEntryOptions, policy).ConfigureAwait(false);
         if (entry.Found)
         {
             return entry.Value;

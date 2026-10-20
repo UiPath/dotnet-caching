@@ -22,8 +22,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
   included, is called through its closure members.
 - **A state overload of `GetOrAddWithExpirationAsync`** on `ICache` and `ICache<T>` (the policy-less `ICache` one in
   `GeneratedExpirationExtensions`), served without a closure by `IStatefulGeneratedExpirationCache` and its `<T>`
-  sibling on the library's multilayer and in-memory caches and `Cache<T>`. Like the closure form it takes a `CacheKey`
-  only; there is no `Span<char>` form of either.
+  sibling on the library's multilayer and in-memory caches and `Cache<T>`.
 - **A batch `GetOrAddAsync` with one argument for the whole call.** `GetOrAddAsync<T, TState, TArgument>(entries,
   argument, generator, ...)` on `ICache` (and `<TState, TArgument>` on `ICache<T>`), for each expiration variant of the
   batch overload, hands the generator `argument` before the states of the keys that missed, so it can be static. The
@@ -37,6 +36,17 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
   on a public cache class takes them (`ConcreteCacheCallShapeTests`).
 
 ### Changed
+
+- **`Span<char>` overloads of `GetOrAddWithExpirationAsync`.** `ICache` and `ICache<T>` gain `sealed` members that take
+  the key as a `Span<char>`, with and without a `TState state`, so a caller that formats its key on the stack and reads
+  first no longer has to fall back to a string key for a generated expiration. `ISpanKeyCache` and `ISpanKeyCache<T>`
+  gain the matching members, which the library's multilayer and in-memory caches, `Cache<T>` and `NullCache` implement:
+  a warm hit allocates nothing, and a miss reads the local tier once, where a span read followed by a string-key call
+  read it twice. **Breaking** for an `ISpanKeyCache` or `ISpanKeyCache<T>` implementation outside the library, which
+  must add the two members (a cache that only implements `ICache` is unaffected: any other cache, a Moq or NSubstitute
+  proxy included, is called through the `CacheKey` member, as every span member is). The interface members carry
+  `OverloadResolutionPriority(-1)` and the `CacheKey` members of `Cache<T>` `OverloadResolutionPriority(1)`, so a bare
+  `default` key still binds to the `CacheKey` overload on the interfaces and on `Cache<T>`.
 
 - **Read scripts are on by default.** `RedisCacheOptions.ReadScriptsEnabled` now defaults to `true`: on Redis 7 and
   later, `RedisCache` and `RedisHashCache` read a value (or a hash) and its expiration with one `EVAL_RO` script
