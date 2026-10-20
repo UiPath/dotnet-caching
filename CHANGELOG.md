@@ -30,6 +30,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
   holds a SCAN glob character (`*`, `?`, `[`, `]`, `\`) is skipped with a warning, and `KeyPrefix` is used instead.
   A `KeyPrefix` holding one of those glob characters is skipped the same way, and no prefix is assumed, since `*` or `?`
   would widen the maintainer's SCAN to other keyspaces. An explicit `MaintainerSearchPattern` is still used as written.
+  A deployment that relied on the empty default pattern had a maintainer that found nothing, so its first pass after
+  the upgrade trims and quarantines streams no earlier pass touched; expect larger `XTRIM`s on that one.
 
 ## [2.1.0] - 2026-09-28
 
