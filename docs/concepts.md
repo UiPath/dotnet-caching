@@ -211,7 +211,7 @@ The library ships two topic transports, named in `KnownTopicNames`.
 for publishing and XREADGROUP for consuming — with a consumer group per process.
 Delivery is at-least-once and durable: events are retained in the stream and can
 be replayed if a consumer falls behind or restarts. The consumer polls the stream
-at `PollInterval` (default 250 ms), and by default (`NotifyEnabled`) the
+at `PollInterval` (default 250 ms; `NotifiedPollInterval` while the doorbell is live, 5 s unless `PollInterval` is set), and by default (`NotifyEnabled`) the
 publisher also rings a Pub/Sub notify channel that acts as a doorbell: a cheap
 PUBLISH message wakes the poll loop immediately, so delivery takes a few Redis
 round trips in the common case while stream durability is preserved for lagging

@@ -103,4 +103,79 @@ public class SignalingFetchWaiterTests
 
         act.Should().NotThrow();
     }
+
+    [Fact]
+    public async Task A_wait_lasts_the_poll_interval_until_the_notify_is_live()
+    {
+        using var sut = new SignalingFetchWaiter(100.Milliseconds(), 30.Seconds());
+
+        Func<Task> act = () => sut.WaitAsync(CancellationToken.None);
+
+        await act.Should().CompleteWithinAsync(10.Seconds());
+    }
+
+    [Fact]
+    public async Task A_wait_lasts_the_notified_interval_while_the_notify_is_live()
+    {
+        using var sut = new SignalingFetchWaiter(100.Milliseconds(), 30.Seconds());
+        sut.SetNotifyLive(true);
+        using var cts = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken);
+
+        var wait = sut.WaitAsync(cts.Token);
+
+        (await Task.WhenAny(wait, Task.Delay(600.Milliseconds(), TestContext.Current.CancellationToken))).Should().NotBeSameAs(wait, "the short interval is 100 ms");
+        await cts.CancelAsync();
+        Func<Task> act = () => wait;
+        await act.Should().ThrowAsync<OperationCanceledException>();
+    }
+
+    [Fact]
+    public async Task Losing_the_notify_ends_the_wait_in_progress_and_the_next_one_is_short()
+    {
+        using var sut = new SignalingFetchWaiter(300.Milliseconds(), 30.Seconds());
+        sut.SetNotifyLive(true);
+        var wait = sut.WaitAsync(CancellationToken.None);
+        await Task.Delay(50.Milliseconds(), TestContext.Current.CancellationToken);
+        wait.IsCompleted.Should().BeFalse();
+
+        sut.SetNotifyLive(false);
+
+        await wait.WaitAsync(5.Seconds(), TestContext.Current.CancellationToken);
+        var sw = System.Diagnostics.Stopwatch.StartNew();
+        await sut.WaitAsync(CancellationToken.None).WaitAsync(10.Seconds(), TestContext.Current.CancellationToken);
+        sw.Elapsed.Should().BeGreaterThanOrEqualTo(250.Milliseconds(), "only the one wake was owed");
+    }
+
+    [Fact]
+    public async Task Gaining_the_notify_does_not_wake_the_wait_in_progress()
+    {
+        using var sut = new SignalingFetchWaiter(30.Seconds(), 30.Seconds());
+        var wait = sut.WaitAsync(CancellationToken.None);
+
+        sut.SetNotifyLive(true);
+
+        (await Task.WhenAny(wait, Task.Delay(300.Milliseconds(), TestContext.Current.CancellationToken))).Should().NotBeSameAs(wait);
+    }
+
+    [Fact]
+    public async Task Without_a_notified_interval_a_live_notify_changes_nothing()
+    {
+        using var sut = new SignalingFetchWaiter(100.Milliseconds());
+        sut.SetNotifyLive(true);
+
+        Func<Task> act = () => sut.WaitAsync(CancellationToken.None);
+
+        await act.Should().CompleteWithinAsync(10.Seconds());
+    }
+
+    [Fact]
+    public async Task An_explicit_timeout_ignores_the_notify_state()
+    {
+        using var sut = new SignalingFetchWaiter(30.Seconds(), 30.Seconds());
+        sut.SetNotifyLive(true);
+
+        Func<Task> act = () => sut.WaitAsync(100.Milliseconds(), CancellationToken.None);
+
+        await act.Should().CompleteWithinAsync(10.Seconds());
+    }
 }

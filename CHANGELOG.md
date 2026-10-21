@@ -51,6 +51,30 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 
 ### Changed
 
+- **The Redis Streams consumer polls every 5 s while its notify doorbell is live, unless `PollInterval` is set.**
+  `RedisStreamsTopicOptions.NotifiedPollInterval` (`TimeSpan?`, bound from the same section and per topic) is the
+  cadence while the doorbell subscription is confirmed live. Unset, it is 5 s when `PollInterval` was not set, and
+  `PollInterval` when it was, so an app that configured `PollInterval` keeps its cadence. A `PollInterval` key in
+  configuration counts as set even at its 250 ms default, and a global one counts as set for every topic. Only
+  `AddRedisStreams(sectionName)` and the `Topics[]` entries keep an absent key unset: an app that binds the options
+  itself (`AddRedisStreams(o => section.Bind(o))`, `services.Configure<RedisStreamsTopicOptions>(section)`,
+  `ConfigureRedisStreamsTopic(name, o => section.Bind(o))`) counts as having set it, so set `NotifiedPollInterval`
+  explicitly there for the long cadence. A reader takes the long interval from its own subscription, so entries from a
+  writer that does not ring the doorbell (`NotifyEnabled: false`, another app sharing the stream, a version from before
+  the doorbell) reach it up to `NotifiedPollInterval` late; where some writers do not ring, set
+  `NotifiedPollInterval` to `PollInterval`, or keep `PollInterval` set. A restore of the subscription connection
+  reads once, since a ring sent before the subscription is taken again is lost.
+  `PollInterval` stays the cadence before the first subscribe, after a forced reconnect until the topic subscribes again, while a subscription
+  connection is down, when the server refuses the subscription, and with `NotifyEnabled: false`. A set value must be positive
+  and at least `PollInterval` (`OptionsValidationException` from `AddRedisStreams`, and when a topic with an override
+  is made). A subscription connection failing ends a wait in progress at the long interval; a failed command
+  connection does not. Failure retries and the `XINFO GROUPS` position check stay on `PollInterval`. Idle cost per
+  process with 3 topics against a local Redis: 44.4 server-executed commands a second at 250 ms, 12.0 at 1 s, 6.0 at
+  2 s, 2.4 at 5 s, 1.2 at 10 s; invalidation visibility with the doorbell is the same at each (median 14 ms, 90th
+  percentile under 19 ms). What the long interval costs is the window left by a doorbell lost while its subscription
+  still looks live (a dropped `PUBLISH`): up to one `NotifiedPollInterval` instead of one `PollInterval`. 5 s is where
+  the saving levels off. Set `NotifiedPollInterval` to `PollInterval` for the old cadence.
+
 - **`Span<char>` overloads of `GetOrAddWithExpirationAsync`.** `ICache` and `ICache<T>` gain `sealed` members that take
   the key as a `Span<char>`, with and without a `TState state`, so a caller that formats its key on the stack and reads
   first no longer has to fall back to a string key for a generated expiration. `ISpanKeyCache` and `ISpanKeyCache<T>`
@@ -146,6 +170,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
   3.1.
 
 ### Fixed
+
+- **`PollInterval` must be positive.** Zero or negative failed later, when the poll loop waited on it; it is now
+  refused by the options validator with the other Redis Streams options.
 
 - **A subscribe to a Redis Streams topic no longer blocks the caller.** A subscribe that found no consumer group created
   it synchronously while holding a lock the reader also takes. Every cache write subscribes a change token, so under a

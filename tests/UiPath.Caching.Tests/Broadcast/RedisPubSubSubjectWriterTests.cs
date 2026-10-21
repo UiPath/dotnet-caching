@@ -209,6 +209,33 @@ public class RedisPubSubSubjectWriterTests(ITestContextAccessor testContextAcces
     }
 
     [Fact]
+    public async Task A_failure_the_retired_connection_reports_after_a_reconnect_does_not_hide_the_next_gap()
+    {
+        var redis = _fixture.Freeze<IRedisConnector>();
+        redis.Subscriber.Returns(_subscriber);
+        var retired = Substitute.For<IConnectionMultiplexer>();
+        _subscriber.Multiplexer.Returns(retired);
+        var subscribes = 0;
+        _subscriber.When(s => s.Subscribe(Arg.Any<RedisChannel>(), Arg.Any<Action<RedisChannel, RedisValue>>(), Arg.Any<CommandFlags>()))
+            .Do(_ => Interlocked.Increment(ref subscribes));
+        var gaps = 0;
+        _fixture.Inject<Action>(() => Interlocked.Increment(ref gaps));
+        var node = new DnsEndPoint("node-1", 6379);
+        Sut();
+        await WaitForSubscribeAsync();
+        _subscriber.Multiplexer.Returns(Substitute.For<IConnectionMultiplexer>());
+
+        redis.OnReconnected += Raise.Event<EventHandler>(redis, EventArgs.Empty);
+        RaiseConnectionEvent(redis, failed: true, new DnsEndPoint("node-2", 6379), ConnectionType.Subscription, retired);
+        await EventuallyAsync(() => Volatile.Read(ref subscribes) >= 2 && Volatile.Read(ref gaps) == 1);
+        RaiseConnectionEvent(redis, failed: true, node, ConnectionType.Subscription);
+        RaiseConnectionEvent(redis, failed: false, node, ConnectionType.Subscription);
+
+        await EventuallyAsync(() => Volatile.Read(ref gaps) == 2);
+        Volatile.Read(ref gaps).Should().Be(2, "the retired connection never reports node-2 back, so its failure must not count");
+    }
+
+    [Fact]
     public async Task A_failure_of_the_command_connection_alone_reports_no_gap()
     {
         var redis = _fixture.Freeze<IRedisConnector>();
@@ -274,7 +301,7 @@ public class RedisPubSubSubjectWriterTests(ITestContextAccessor testContextAcces
         return ValueTask.CompletedTask;
     }
 
-    private static void RaiseConnectionEvent(IRedisConnector redis, bool failed, EndPoint endPoint, ConnectionType connectionType)
+    private static void RaiseConnectionEvent(IRedisConnector redis, bool failed, EndPoint endPoint, ConnectionType connectionType, object? sender = null)
     {
         var args = (ConnectionFailedEventArgs)Activator.CreateInstance(
             typeof(ConnectionFailedEventArgs),
@@ -284,11 +311,20 @@ public class RedisPubSubSubjectWriterTests(ITestContextAccessor testContextAcces
             null)!;
         if (failed)
         {
-            redis.OnConnectionFailed += NSubstitute.Raise.Event<EventHandler>(redis, args);
+            redis.OnConnectionFailed += NSubstitute.Raise.Event<EventHandler>(sender ?? redis, args);
         }
         else
         {
-            redis.OnConnectionRestored += NSubstitute.Raise.Event<EventHandler>(redis, args);
+            redis.OnConnectionRestored += NSubstitute.Raise.Event<EventHandler>(sender ?? redis, args);
+        }
+    }
+
+    private async Task EventuallyAsync(Func<bool> condition)
+    {
+        var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(10);
+        while (DateTime.UtcNow < deadline && !condition())
+        {
+            await Task.Delay(20, testContextAccessor.Current.CancellationToken);
         }
     }
 

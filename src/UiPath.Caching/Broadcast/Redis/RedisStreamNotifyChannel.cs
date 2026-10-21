@@ -1,3 +1,5 @@
+using System.Net;
+
 namespace UiPath.Caching.Broadcast.Redis;
 
 internal sealed partial class RedisStreamNotifyChannel : IDisposable
@@ -15,6 +17,9 @@ internal sealed partial class RedisStreamNotifyChannel : IDisposable
     private readonly Timer _subscribeTimer;
     private readonly TimeSpan _timerDueTime;
     private readonly ManualResetEventSlim _subscribingDone = new(initialState: true);
+    private readonly object _liveGate = new();
+    // Under _liveGate: the subscription connections reported down, and a failure that named no connection.
+    private readonly HashSet<EndPoint?> _subscriptionsDown = [];
     // The multiplexer's timeout, read once the connection is up, unless configured.
     private TimeSpan _timerPeriod;
     private bool _periodKnown;
@@ -25,6 +30,14 @@ internal sealed partial class RedisStreamNotifyChannel : IDisposable
     // The server refuses the subscription for good (ACL, command disabled): this topic polls only.
     private volatile bool _denied;
     private volatile bool _disposed;
+    // Live for the waiter's long interval only while subscribed, connected and not denied.
+    private volatile bool _subscribed;
+    private bool _unnamedFailure;
+    // Under _liveGate: the multiplexer the subscription was taken on, and the one a reconnect retired, whose events no longer count.
+    private IConnectionMultiplexer? _subscribedOn;
+    private IConnectionMultiplexer? _retired;
+    // Bumped by every subscription failure, so a subscribe that a failure overtook does not read as up.
+    private long _connectionFailures;
 
     public RedisStreamNotifyChannel(
         RedisChannel channel,
@@ -40,6 +53,8 @@ internal sealed partial class RedisStreamNotifyChannel : IDisposable
         _logger = logger;
         _waiter = waiter;
         _redis.OnReconnected += OnReconnected;
+        _redis.OnConnectionFailed += OnConnectionFailed;
+        _redis.OnConnectionRestored += OnConnectionRestored;
         // Skip our own ring: this node never dispatches its own entries; the poll acknowledges them.
         _handler = (_, publisher) =>
         {
@@ -62,6 +77,10 @@ internal sealed partial class RedisStreamNotifyChannel : IDisposable
         }
         _disposed = true;
         _redis.OnReconnected -= OnReconnected;
+        _redis.OnConnectionFailed -= OnConnectionFailed;
+        _redis.OnConnectionRestored -= OnConnectionRestored;
+        _subscribed = false;
+        PublishLive();
         _subscribeTimer.Dispose();
         _subscribingDone.Wait(DisposeDrainTimeout);
         Unsubscribe();
@@ -108,6 +127,7 @@ internal sealed partial class RedisStreamNotifyChannel : IDisposable
                 _timerPeriod = TimeSpan.FromMilliseconds(subscriber.Multiplexer.TimeoutMilliseconds);
             }
 
+            var failuresBefore = Interlocked.Read(ref _connectionFailures);
             await subscriber.SubscribeAsync(_channel, _handler).ConfigureAwait(false);
             _unsubscribe = () => subscriber.Unsubscribe(_channel, _handler, CommandFlags.FireAndForget);
             if (_disposed)
@@ -119,6 +139,19 @@ internal sealed partial class RedisStreamNotifyChannel : IDisposable
             // honored below, once the interlock is free and a fresh callback can get through.
             Reschedule(Timeout.InfiniteTimeSpan);
             _failures = 0;
+            lock (_liveGate)
+            {
+                _subscribedOn = subscriber.Multiplexer;
+                if (Interlocked.Read(ref _connectionFailures) == failuresBefore)
+                {
+                    // Subscribed on a connection that is up: the failures before it are over.
+                    _subscriptionsDown.Clear();
+                    _unnamedFailure = false;
+                }
+                // A reconnect that landed meanwhile may have dropped this subscription with the old connection; the retry makes it live.
+                _subscribed = Volatile.Read(ref _resubscribeRequested) == 0;
+                PublishLiveLocked();
+            }
             LogSubscribed(_channel);
             _waiter.Signal();
         }
@@ -185,9 +218,96 @@ internal sealed partial class RedisStreamNotifyChannel : IDisposable
         {
             return;
         }
+        // Asked for first: a subscribe completing meanwhile then reads it and stays not live.
         Volatile.Write(ref _resubscribeRequested, 1);
+        lock (_liveGate)
+        {
+            // The retired connection will not report its restores; the resubscribe covers what it dropped.
+            _subscriptionsDown.Clear();
+            _unnamedFailure = false;
+            _retired = _subscribedOn;
+            _subscribed = false;
+            PublishLiveLocked();
+        }
         Reschedule(_timerDueTime);
     }
+
+    private void OnConnectionFailed(object? sender, EventArgs e)
+    {
+        lock (_liveGate)
+        {
+            if (IsRetired(sender))
+            {
+                return;
+            }
+            // Only the subscription connection carries the doorbell; a failed command connection loses none of it.
+            if (e is ConnectionFailedEventArgs failed)
+            {
+                if (failed.ConnectionType != ConnectionType.Subscription)
+                {
+                    return;
+                }
+                _subscriptionsDown.Add(failed.EndPoint);
+            }
+            else
+            {
+                _unnamedFailure = true;
+            }
+            Interlocked.Increment(ref _connectionFailures);
+            PublishLiveLocked();
+        }
+    }
+
+    private void OnConnectionRestored(object? sender, EventArgs e)
+    {
+        bool woke;
+        lock (_liveGate)
+        {
+            if (IsRetired(sender))
+            {
+                return;
+            }
+            var wasLive = IsLiveLocked();
+            if (e is ConnectionFailedEventArgs restored)
+            {
+                // Up again once the last subscription connection that went down is back, not on an unrelated restore.
+                if (restored.ConnectionType != ConnectionType.Subscription
+                    || !(_subscriptionsDown.Remove(restored.EndPoint) || _unnamedFailure)
+                    || _subscriptionsDown.Count > 0)
+                {
+                    return;
+                }
+                _unnamedFailure = false;
+            }
+            else
+            {
+                _unnamedFailure = false;
+                _subscriptionsDown.Clear();
+            }
+            PublishLiveLocked();
+            woke = !wasLive && IsLiveLocked();
+        }
+
+        // A ring published before the subscription was taken again on the restored connection is lost: one read covers it.
+        if (woke)
+        {
+            _waiter.Signal();
+        }
+    }
+
+    private void PublishLive()
+    {
+        lock (_liveGate)
+        {
+            PublishLiveLocked();
+        }
+    }
+
+    private void PublishLiveLocked() => _waiter.SetNotifyLive(IsLiveLocked());
+
+    private bool IsRetired(object? sender) => sender is not null && ReferenceEquals(sender, _retired);
+
+    private bool IsLiveLocked() => _subscribed && !_unnamedFailure && _subscriptionsDown.Count == 0 && !_disposed;
 
     [LoggerMessage(Level = LogLevel.Debug, Message = "Stream notify subscribed: {Channel}")]
     private partial void LogSubscribed(RedisChannel channel);

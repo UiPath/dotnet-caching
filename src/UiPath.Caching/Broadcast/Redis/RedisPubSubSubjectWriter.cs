@@ -33,6 +33,10 @@ internal sealed partial class RedisPubSubSubjectWriter<T> : IDisposable
 
     // Under _gate: whether a source that names no connection reported a failure.
     private bool _unnamedFailure;
+
+    // Under _gate: the multiplexer the subscription was taken on, and the one a reconnect retired, whose events no longer count.
+    private IConnectionMultiplexer? _subscribedOn;
+    private IConnectionMultiplexer? _retired;
     private int _activations;
 
     public RedisPubSubSubjectWriter(
@@ -134,6 +138,7 @@ internal sealed partial class RedisPubSubSubjectWriter<T> : IDisposable
                 }
 
                 _subscribeTimer.Change(Timeout.Infinite, Timeout.Infinite);
+                _subscribedOn = subscriber.Multiplexer;
                 _activeGeneration = generation;
                 _activations++;
                 gap = _gap;
@@ -168,6 +173,7 @@ internal sealed partial class RedisPubSubSubjectWriter<T> : IDisposable
             // The retired connection will not report its restores; the resubscribe this arms covers what it dropped.
             _subscriptionsDown.Clear();
             _unnamedFailure = false;
+            _retired = _subscribedOn;
             _generation++;
             _gap = true;
             _subscribeTimer.Change(_timerDueTime, _timerPeriod);
@@ -223,6 +229,11 @@ internal sealed partial class RedisPubSubSubjectWriter<T> : IDisposable
     {
         lock (_gate)
         {
+            if (sender is not null && ReferenceEquals(sender, _retired))
+            {
+                return;
+            }
+
             // Only the subscription connection carries publications; a failed command connection loses none of them.
             if (e is ConnectionFailedEventArgs failed)
             {
@@ -243,6 +254,11 @@ internal sealed partial class RedisPubSubSubjectWriter<T> : IDisposable
         bool lost = false;
         lock (_gate)
         {
+            if (sender is not null && ReferenceEquals(sender, _retired))
+            {
+                return;
+            }
+
             if (e is ConnectionFailedEventArgs restored)
             {
                 // Expired once the last subscription connection that went down is back, not on an unrelated restore.

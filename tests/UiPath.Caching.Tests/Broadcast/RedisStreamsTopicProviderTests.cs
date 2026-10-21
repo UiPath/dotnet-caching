@@ -282,6 +282,7 @@ public class RedisStreamsTopicProviderTests(ITestContextAccessor testContextAcce
     public ValueTask InitializeAsync()
     {
         _redisStreamsTopicOptions = _fixture.Create<RedisStreamsTopicOptions>();
+        _redisStreamsTopicOptions.NotifiedPollInterval = null;
         _redisStreamsTopicOptions.Enabled = true;
         _redisStreamsTopicOptions.ConnectionMonitorEnabled = true;
         _fixture.Inject(Options.Create(_redisStreamsTopicOptions));

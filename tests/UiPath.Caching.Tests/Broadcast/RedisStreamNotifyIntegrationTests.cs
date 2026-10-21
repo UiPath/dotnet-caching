@@ -14,6 +14,7 @@ namespace UiPath.Caching.Tests.Broadcast;
 public sealed class RedisStreamNotifyIntegrationTests(RedisContainerFixture fixture) : IAsyncLifetime
 {
     private static readonly TimeSpan FarPoll = TimeSpan.FromSeconds(30);
+    private static readonly TimeSpan Poll = TimeSpan.FromMilliseconds(250);
     private readonly CacheOptions _cacheOptions = new() { Enabled = true, AppShortName = $"it{Guid.NewGuid():N}"[..10] };
     private readonly IConnectionState _state = Substitute.For<IConnectionState>();
     private readonly CancellationTokenSource _stop = new();
@@ -173,6 +174,52 @@ public sealed class RedisStreamNotifyIntegrationTests(RedisContainerFixture fixt
     }
 
     [Fact]
+    public async Task A_live_doorbell_lets_the_poll_wait_the_notified_interval()
+    {
+        Assert.SkipUnless(fixture.Enabled, "Set RUN_REDIS_INTEGRATION_TESTS=1 (Docker required) to run.");
+        // Node a rings a channel nobody listens on: a doorbell lost while node b's subscription stays live.
+        var (a, _) = Topic("urn:a", Poll, configure: o => o.NotifyChannelStrategy = new LostDoorbell());
+        var (_, received) = Topic("urn:b", Poll, configure: o => o.NotifiedPollInterval = TimeSpan.FromSeconds(2));
+        await SettledAsync();
+
+        (await a.PublishAsync(Event("urn:a", "1"), TestContext.Current.CancellationToken)).Should().BeTrue();
+
+        (await Task.WhenAny(received.Next.Task, Task.Delay(TimeSpan.FromMilliseconds(600), TestContext.Current.CancellationToken))).Should().NotBeSameAs(received.Next.Task, "the 250 ms poll is not the one in force while the doorbell is live");
+        (await Task.WhenAny(received.Next.Task, Task.Delay(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken))).Should().BeSameAs(received.Next.Task, "the notified poll still catches it");
+    }
+
+    [Fact]
+    public async Task With_the_doorbell_off_the_poll_interval_applies()
+    {
+        Assert.SkipUnless(fixture.Enabled, "Set RUN_REDIS_INTEGRATION_TESTS=1 (Docker required) to run.");
+        var (a, _) = Topic("urn:a", Poll);
+        var (_, received) = Topic("urn:b", Poll, configure: o => { o.NotifyEnabled = false; o.NotifiedPollInterval = FarPoll; });
+        await Task.Delay(300, TestContext.Current.CancellationToken);
+
+        (await a.PublishAsync(Event("urn:a", "1"), TestContext.Current.CancellationToken)).Should().BeTrue();
+
+        (await Task.WhenAny(received.Next.Task, Task.Delay(TimeSpan.FromSeconds(3), TestContext.Current.CancellationToken))).Should().BeSameAs(received.Next.Task, "no doorbell is listened to, so only the poll interval can deliver");
+    }
+
+    [Fact]
+    public async Task A_refused_subscription_leaves_the_poll_interval_in_force()
+    {
+        Assert.SkipUnless(fixture.Enabled, "Set RUN_REDIS_INTEGRATION_TESTS=1 (Docker required) to run.");
+        var user = $"it-nopubsub-{Guid.NewGuid():N}"[..20];
+        await _admin!.GetDatabase().ExecuteAsync("ACL", "SETUSER", user, "on", ">pw", "~*", "+@all", "resetchannels");
+        _aclUser = user;
+        var denied = await ConnectAsync($"{fixture.ConnectionString},user={user},password=pw");
+        var log = new RecordingLogger();
+        var (a, _) = Topic("urn:a", Poll);
+        var (_, received) = Topic("urn:b", Poll, connector: denied, logger: log, configure: o => o.NotifiedPollInterval = FarPoll);
+        (await EventuallyAsync(() => Task.FromResult(log.Records.Any(r => r.Message.Contains("polls only"))))).Should().BeTrue();
+
+        (await a.PublishAsync(Event("urn:a", "1"), TestContext.Current.CancellationToken)).Should().BeTrue();
+
+        (await Task.WhenAny(received.Next.Task, Task.Delay(TimeSpan.FromSeconds(3), TestContext.Current.CancellationToken))).Should().BeSameAs(received.Next.Task, "a topic that cannot subscribe never gets the long interval");
+    }
+
+    [Fact]
     public async Task A_stream_deleted_under_two_nodes_is_reported_and_the_next_publish_still_arrives()
     {
         Assert.SkipUnless(fixture.Enabled, "Set RUN_REDIS_INTEGRATION_TESTS=1 (Docker required) to run.");
@@ -264,10 +311,11 @@ public sealed class RedisStreamNotifyIntegrationTests(RedisContainerFixture fixt
         return connector;
     }
 
-    private (RedisStreamsTopic<ICacheEvent> Topic, Received Observer) Topic(string source, TimeSpan pollInterval, long? maxLength = 32_768, RedisConnector? connector = null, ILogger<RedisStreamsTopic<ICacheEvent>>? logger = null)
+    private (RedisStreamsTopic<ICacheEvent> Topic, Received Observer) Topic(string source, TimeSpan pollInterval, long? maxLength = 32_768, RedisConnector? connector = null, ILogger<RedisStreamsTopic<ICacheEvent>>? logger = null, Action<RedisStreamsTopicOptions>? configure = null)
     {
         var cacheOptions = new CacheOptions { Enabled = true, AppShortName = _cacheOptions.AppShortName, SourceUri = new Uri(source) };
         var options = new RedisStreamsTopicOptions { Enabled = true, PollInterval = pollInterval, MaxLength = maxLength, NotifySubscriberDueTime = TimeSpan.FromMilliseconds(10) };
+        configure?.Invoke(options);
         var topic = new RedisStreamsTopic<ICacheEvent>(
             "orders",
             _state,
@@ -305,6 +353,11 @@ public sealed class RedisStreamNotifyIntegrationTests(RedisContainerFixture fixt
 
     private async Task<long> SubscribersAsync() =>
         (long)(await _admin!.GetDatabase().ExecuteAsync("PUBSUB", "NUMSUB", _channel.ToString()))[1];
+
+    private sealed class LostDoorbell : IRedisChannelStrategy
+    {
+        public RedisChannel GetRedisChannel(TopicKey topicKey) => RedisChannel.Literal($"lost:{topicKey}");
+    }
 
     private sealed class Received : IObserver<ICacheEvent>, IMissedEventsObserver
     {

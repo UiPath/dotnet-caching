@@ -109,7 +109,8 @@ App-wide-only fields (per-topic `Topics[]` entries ignore these): `Enabled`, `Co
 | `Limit` | `long?` | `1024` | App-wide / Per-topic | Max entries returned per `XREAD` call. |
 | `PollBatchSize` | `int` | `4096` | App-wide / Per-topic | Max entries fetched per poll cycle. |
 | `FieldName` | `string` | `"event"` | App-wide / Per-topic | Stream entry field name used for the serialized event payload. |
-| `PollInterval` | `TimeSpan` | `00:00:00.250` | App-wide / Per-topic | Time between poll cycles when no notify signal is received. |
+| `PollInterval` | `TimeSpan` | `00:00:00.250` | App-wide / Per-topic | Time between poll cycles while the notify subscription is not live; also paces failure retries. Must be positive. Setting it, even to 250 ms, also makes it the live cadence unless `NotifiedPollInterval` is set. |
+| `NotifiedPollInterval` | `TimeSpan?` | `null` | App-wide / Per-topic | Time between poll cycles while the notify subscription is live; `null` = 5 s, or `PollInterval` when that is set. Must be positive and at least `PollInterval`. |
 | `ConsumerCapacity` | `int` | `2048` | App-wide / Per-topic | Bounded-channel capacity for in-process event delivery; use `-1` for unbounded. |
 | `FullMode` | `BoundedChannelFullMode` | `Wait` | App-wide / Per-topic | Policy when the channel is full: `Wait`, `DropNewest`, `DropOldest`, `DropWrite`. |
 | `SlowObserverThreshold` | `TimeSpan` | `00:00:00.250` | App-wide / Per-topic | Log a warning when an observer takes longer than this to process an event. |

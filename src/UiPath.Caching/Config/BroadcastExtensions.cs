@@ -47,7 +47,7 @@ public static class BroadcastExtensions
     }
 
     public static ICachingBuilder AddRedisStreams(this ICachingBuilder builder, string sectionName = RedisStreamsSectionName) =>
-        builder.AddRedisStreams(opt => builder.Configuration.GetSection(sectionName).Bind(opt), sectionName);
+        builder.AddRedisStreams(opt => ConfigurationBinding.Bind(builder.Configuration.GetSection(sectionName), opt), sectionName);
 
     public static ICachingBuilder AddRedisStreams(this ICachingBuilder builder, Action<RedisStreamsTopicOptions> configureOptions) =>
         builder.AddRedisStreams(configureOptions, RedisStreamsSectionName);
@@ -60,6 +60,8 @@ public static class BroadcastExtensions
         EnsureRegistry<RedisStreamsTopicOptions>(builder, sectionName);
         if (builder.Enabled && options.Enabled)
         {
+            RedisStreamsTopicOptionsValidator.ThrowIfInvalid(options);
+            builder.Services.TryAddEnumerable(ServiceDescriptor.Singleton<IValidateOptions<RedisStreamsTopicOptions>, RedisStreamsTopicOptionsValidator>());
             builder.Services.TryAddEnumerable(ServiceDescriptor.Singleton<ITopicProvider, RedisStreamsTopicProvider>());
             if (options.MaintainerEnabled)
             {
