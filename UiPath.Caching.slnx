@@ -14,11 +14,14 @@
   <Project Path="samples/UiPath.Caching.Sample.ServiceDefaults/UiPath.Caching.Sample.ServiceDefaults.csproj" />
   <Project Path="samples/UiPath.Caching.Sample/UiPath.Caching.Sample.csproj" />
   <Project Path="src/UiPath.Caching.Abstractions/UiPath.Caching.Abstractions.csproj" />
+  <Project Path="src/UiPath.Caching.Analyzers.CodeFixes/UiPath.Caching.Analyzers.CodeFixes.csproj" />
+  <Project Path="src/UiPath.Caching.Analyzers/UiPath.Caching.Analyzers.csproj" />
   <Project Path="src/UiPath.Caching.Azure/UiPath.Caching.Azure.csproj" />
   <Project Path="src/UiPath.Caching.CloudEvents/UiPath.Caching.CloudEvents.csproj" />
   <Project Path="src/UiPath.Caching.OpenTelemetry/UiPath.Caching.OpenTelemetry.csproj" />
   <Project Path="src/UiPath.Caching.Polly/UiPath.Caching.Polly.csproj" />
   <Project Path="src/UiPath.Caching.Queue/UiPath.Caching.Queue.csproj" />
   <Project Path="src/UiPath.Caching/UiPath.Caching.csproj" />
+  <Project Path="tests/UiPath.Caching.Analyzers.Tests/UiPath.Caching.Analyzers.Tests.csproj" />
   <Project Path="tests/UiPath.Caching.Tests/UiPath.Caching.Tests.csproj" />
 </Solution>

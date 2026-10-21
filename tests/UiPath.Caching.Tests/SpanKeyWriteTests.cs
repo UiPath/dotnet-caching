@@ -188,6 +188,19 @@ public class SpanKeyWriteTests
     }
 
     [Fact]
+    public async Task A_hash_cache_written_by_span_keeps_the_expiration_its_options_give()
+    {
+        using var cache = InMemoryMultilayer.HashCache();
+        var deadline = DateTimeOffset.UtcNow.AddMinutes(3);
+
+        (await cache.SetAsync<string>(Key("ttl"), Fields, new HashCacheEntryOptions(TimeToLive: TimeSpan.FromMinutes(3)), null, Ct)).Should().BeTrue();
+        (await cache.SetAsync<string>(Key("at"), Fields, new HashCacheEntryOptions(ExpireTime: deadline), null, Ct)).Should().BeTrue();
+
+        (await cache.GetCacheEntryAsync<string>("ttl", policy: null, Ct)).Expiration.Should().BeCloseTo(DateTimeOffset.UtcNow.AddMinutes(3), TimeSpan.FromSeconds(30));
+        (await cache.GetCacheEntryAsync<string>("at", policy: null, Ct)).Expiration.Should().BeCloseTo(deadline, TimeSpan.FromSeconds(1));
+    }
+
+    [Fact]
     public async Task A_capable_hash_cache_takes_the_span_write_itself_and_any_other_gets_the_CacheKey_member()
     {
         var spy = new SpanWritingHashCache();
@@ -252,9 +265,12 @@ public class SpanKeyWriteTests
         await typed.SetAsync(Key("d"), "v", Ct);
         await hash.SetAsync<string>(Key("a"), Fields, options, policy, Ct);
         await typedHash.SetAsync(Key("b"), Fields, Deadline, Ct);
+        await typedHash.SetAsync(Key("c"), Fields, Ct);
+        await typedHash.SetAsync(Key("d"), Fields, Ttl, Ct);
+        await typedHash.SetAsync(Key("e"), Fields, options, Ct);
 
         spy.Calls.Should().Equal(("a", policy, Ttl), ("b", policy, Deadline), ("c", policy, Ttl), ("d", policy, null));
-        hashSpy.Calls.Should().Equal(("a", policy, options), ("b", policy, Deadline));
+        hashSpy.Calls.Should().Equal(("a", policy, options), ("b", policy, Deadline), ("c", policy, null), ("d", policy, Ttl), ("e", policy, options));
     }
 
     [Fact]

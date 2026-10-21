@@ -92,6 +92,69 @@ The argument is not a state: every entry keeps its own, and the generator still 
 batch allocates its arrays on every call anyway, so the argument saves the closure and no more; on the library's caches
 (`IBatchArgumentCache`) a call whose keys all hit binds nothing.
 
+## The UIPCACHE001 suggestion
+
+`UiPath.Caching.Abstractions` (and so every package built on it) ships an analyzer that points at the allocation above.
+Rule `UIPCACHE001` reports a generator that allocates on every call, hits included, passed to `GetOrAddAsync` or
+`GetOrAddWithExpirationAsync` on `ICache`, `ICache<T>`, `IHashCache` or `IHashCache<T>` (or on a class that implements
+one), single-key or batch, where a state (or, for a batch, argument) overload exists for the same call:
+
+- a lambda that captures `this`, a local or a parameter, itself or through a local function it calls; the message
+  names what it captures — *The generator captures 'this' and 'id' and allocates a closure on every call, hits
+  included; pass them as state and make the lambda static*;
+- an instance method group (`LoadAsync`, `_client.LoadAsync`), which allocates a delegate each time;
+- a capturing lambda passed to a state or argument overload, which should be `static`.
+
+It stays quiet for a `static` lambda, a lambda that captures nothing (the compiler caches it) or names a variable only
+in `nameof`, a static method group or local function, a delegate you built once, and a call with no state overload.
+Only the library's own extension classes count as state overloads: an extension of your own, even in the `UiPath.Caching`
+namespace, is not looked at.
+
+The rule is **Info**: the IDE shows a suggestion and the build prints nothing, because the plain lambda stays the
+default. On a hot path where the bytes matter, raise it in `.editorconfig`, for the whole project or for one folder:
+
+```ini
+[src/Hot/**.cs]
+dotnet_diagnostic.UIPCACHE001.severity = warning
+```
+
+or silence it with `dotnet_diagnostic.UIPCACHE001.severity = none`. The rule has a category of its own, `UiPath.Caching`, so
+raising a whole category such as `Performance` does not turn it on.
+
+The code fix, *Pass captured values as state*, moves the call to the state overload and keeps the other arguments
+(key, expiration, policy, token) where they are:
+
+```csharp
+// One capture is the state itself; `this` becomes `self`, and an implicit member access goes through it.
+_cache.GetOrAddAsync(key, ct => LoadAsync(ct), ct);
+_cache.GetOrAddAsync(key, this, static (self, ct) => self.LoadAsync(ct), ct);
+
+// Several captures become a named tuple.
+_cache.GetOrAddAsync(id, c => _repo.LoadAsync(id, c), TimeSpan.FromMinutes(5), ct);
+_cache.GetOrAddAsync(id, (Self: this, Id: id), static (s, c) => s.Self._repo.LoadAsync(s.Id, c), TimeSpan.FromMinutes(5), ct);
+
+// An instance method group passes its target.
+_cache.GetOrAddAsync(key, _client.LoadAsync, ct);
+_cache.GetOrAddAsync(key, _client, static (client, ct) => client.LoadAsync(ct), ct);
+
+// A batch passes the capture as its argument, ahead of the missing states.
+_cache.GetOrAddAsync(entries, (ids, ct) => LoadManyAsync(ids, ct), ct);
+_cache.GetOrAddAsync(entries, this, static (self, ids, ct) => self.LoadManyAsync(ids, ct), ct);
+
+// Spelled type arguments get the state's type at the end.
+_hash.GetOrAddAsync<User>(key, ct => LoadAsync(id, ct), null, ct);
+_hash.GetOrAddAsync<User, (UserService Self, int Id)>(key, (Self: this, Id: id), static (s, ct) => s.Self.LoadAsync(s.Id, ct), null, ct);
+```
+
+The state is read once, when the call is made, where the lambda read the variable when it ran, so the fix is offered
+only when that cannot differ. It is not offered when a captured variable is assigned anywhere in the method (or a
+captured primary constructor parameter anywhere in the type), when the lambda uses `base`, calls a local function that
+captures, or names a captured local in `nameof` or an inferred tuple or anonymous-type member, for a lambda already
+on a state overload, and for a call on a class whose state overload is only on the cache interface (a cache class of
+your own; the library's public caches declare theirs); the suggestion still shows, and the rewrite is yours. Fix All applies it to a document, project or solution (`dotnet format
+analyzers --diagnostics UIPCACHE001 --severity info` from the command line); a generator inside another generator is
+fixed on the next pass, its outer one first.
+
 ## A generator that knows its value's lifetime
 
 When the lifetime is in the value (a token with an expiry), return it from the generator instead of computing it before

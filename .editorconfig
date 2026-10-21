@@ -510,3 +510,11 @@ dotnet_analyzer_diagnostic.category-StyleCop.CSharp.OrderingRules.severity = war
 # SA1402 past its default of class alone. Tests, samples and benchmarks keep their small helper
 # types next to what uses them: 17 files would otherwise have to be broken up.
 dotnet_diagnostic.SA1402.severity = warning
+
+# UIPCACHE001 (a generator that allocates on every call) is Info as shipped. src and samples, the only
+# projects the analyzer runs on (Directory.Build.props), follow their own advice.
+[src/**.cs]
+dotnet_diagnostic.UIPCACHE001.severity = warning
+
+[samples/**.cs]
+dotnet_diagnostic.UIPCACHE001.severity = warning
