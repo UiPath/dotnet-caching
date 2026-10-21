@@ -243,7 +243,7 @@ internal sealed partial class RedisStreamSubjectWriter<T> : IDisposable
                     }
                     catch (Exception)
                     {
-                        await _waiter.WaitAsync(_cancelationToken).ConfigureAwait(false);
+                        await _waiter.WaitAsync(_context.PollInterval, _cancelationToken).ConfigureAwait(false);
                     }
                 }
             }
@@ -263,7 +263,7 @@ internal sealed partial class RedisStreamSubjectWriter<T> : IDisposable
         {
             // IsConnected turns true before the restored event fires, so the next read may come first.
             _checkForGap = true;
-            await _waiter.WaitAsync(_cancelationToken).ConfigureAwait(false);
+            await _waiter.WaitAsync(_context.PollInterval, _cancelationToken).ConfigureAwait(false);
             return;
         }
 
@@ -304,7 +304,7 @@ internal sealed partial class RedisStreamSubjectWriter<T> : IDisposable
         await _waiter.WaitAsync(_cancelationToken).ConfigureAwait(false);
     }
 
-    /// <summary>Every read the group's position matters for is checked; the one with XINFO GROUPS keeps the poll's cadence.</summary>
+    /// <summary>Every read the group's position matters for is checked; the one with XINFO GROUPS runs at most once a PollInterval, and only on a read, so while the doorbell is live as rarely as once a NotifiedPollInterval.</summary>
     private async Task<StreamEntry[]> ReadBatchAsync()
     {
         _readSkipped = false;
@@ -538,8 +538,8 @@ internal sealed partial class RedisStreamSubjectWriter<T> : IDisposable
         var failures = ++_consecutiveFailures;
         if (failures <= StreamConstants.ErrorBackoffThreshold)
         {
-            // A ring, the poll or a recovery ends it.
-            return _waiter.WaitAsync(_cancelationToken);
+            // A ring, the poll or a recovery ends it; the base interval, since a read that fails says nothing of the doorbell.
+            return _waiter.WaitAsync(_context.PollInterval, _cancelationToken);
         }
 
         var exponent = Math.Min(failures - StreamConstants.ErrorBackoffThreshold, 16);

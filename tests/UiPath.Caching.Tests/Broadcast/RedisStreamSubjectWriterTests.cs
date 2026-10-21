@@ -1191,9 +1191,67 @@ public class RedisStreamSubjectWriterTests : IAsyncLifetime
             _cancellationTokenSource.Token);
 
         (await WaitUntil(() => Volatile.Read(ref reads) >= 5)).Should().BeTrue("the recovery the waiter raised ended the back-off");
-        waiter.Timeouts.Should().HaveCountGreaterThanOrEqualTo(2);
-        waiter.Timeouts[0].Should().BeCloseTo(StreamConstants.MaxErrorBackoff, TimeSpan.FromSeconds(1), "the first step asks for the whole back-off, not the poll");
-        waiter.Timeouts[1].Should().BeLessThanOrEqualTo(waiter.Timeouts[0], "after a ring the step asks for what remains");
+        waiter.Timeouts.Should().HaveCountGreaterThanOrEqualTo(5);
+        waiter.Timeouts.Take(3).Should().AllBeEquivalentTo(TimeSpan.FromSeconds(20), "the first failures retry at the base interval, whatever a live doorbell lets a quiet loop wait");
+        waiter.Timeouts[3].Should().BeCloseTo(StreamConstants.MaxErrorBackoff, TimeSpan.FromSeconds(1), "the first step asks for the whole back-off, not the poll");
+        waiter.Timeouts[4].Should().BeLessThanOrEqualTo(waiter.Timeouts[3], "after a ring the step asks for what remains");
+    }
+
+    [Fact]
+    public async Task A_loop_at_the_head_waits_the_waiters_own_interval()
+    {
+        var redis = _fixture.Create<IRedisConnector>();
+        redis.Database.Returns(_database);
+        _database.StreamReadGroupAsync(_context.Topic, _context.ConsumerGroup, _context.ConsumerName, ">", _context.PollBatchSize)
+            .ReturnsForAnyArgs(Task.FromResult(Array.Empty<StreamEntry>()));
+        var waiter = new RecordingWaiter(redis);
+
+        using var sut = new RedisStreamSubjectWriter<ICacheEvent>(
+            _context with { PollInterval = TimeSpan.FromSeconds(20) },
+            NullConnectionStateMonitor.Instance,
+            redis,
+            Channel.CreateUnbounded<ICacheEvent>().Writer,
+            _formatter,
+            _logger,
+            _fixture.Create<ICachingTelemetryProvider>(),
+            _fixture.Create<IRedisProfiler>(),
+            waiter,
+            () => { },
+            _cancellationTokenSource.Token);
+
+        (await WaitUntil(() => waiter.PlainWaits >= 3)).Should().BeTrue("a quiet loop leaves the length of the wait to the waiter, which knows whether the doorbell is live");
+        waiter.Timeouts.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task A_loop_waiting_for_the_connection_waits_the_poll_interval()
+    {
+        var redis = _fixture.Create<IRedisConnector>();
+        redis.Database.Returns(_database);
+        var connectionState = _fixture.Create<IConnectionState>();
+        connectionState.IsConnected.Returns(false);
+        var waiter = new RecordingWaiter(redis);
+
+        using var sut = new RedisStreamSubjectWriter<ICacheEvent>(
+            _context with { PollInterval = TimeSpan.FromSeconds(20) },
+            connectionState,
+            redis,
+            Channel.CreateUnbounded<ICacheEvent>().Writer,
+            _formatter,
+            _logger,
+            _fixture.Create<ICachingTelemetryProvider>(),
+            _fixture.Create<IRedisProfiler>(),
+            waiter,
+            () => { },
+            _cancellationTokenSource.Token);
+
+        (await WaitUntil(() => { lock (waiter.Timeouts) { return waiter.Timeouts.Count >= 2; } })).Should().BeTrue();
+        lock (waiter.Timeouts)
+        {
+            waiter.Timeouts.Take(2).Should().AllBeEquivalentTo(TimeSpan.FromSeconds(20), "with no connection a doorbell cannot be live, and the loop must not wait out the long interval");
+        }
+
+        waiter.PlainWaits.Should().Be(0);
     }
 
     [Fact]
@@ -1934,19 +1992,27 @@ public class RedisStreamSubjectWriterTests : IAsyncLifetime
             _cancellationTokenSource.Token);
     }
 
-    /// <summary>Records what each back-off step asks for; the first returns as a ring would, the second raises a recovery and returns.</summary>
+    /// <summary>Records what each timed step asks for; the fourth failure's first step returns as a ring would, the next raises a recovery and returns.</summary>
     private sealed class RecordingWaiter(IRedisConnector redis) : IFetchWaiter
     {
+        private int _plainWaits;
+
         public List<TimeSpan> Timeouts { get; } = [];
 
-        public Task WaitAsync(CancellationToken cancellationToken) => Task.CompletedTask;
+        public int PlainWaits => Volatile.Read(ref _plainWaits);
+
+        public Task WaitAsync(CancellationToken cancellationToken)
+        {
+            Interlocked.Increment(ref _plainWaits);
+            return Task.CompletedTask;
+        }
 
         public Task WaitAsync(TimeSpan timeout, CancellationToken cancellationToken)
         {
             lock (Timeouts)
             {
                 Timeouts.Add(timeout);
-                if (Timeouts.Count == 2)
+                if (Timeouts.Count == 5)
                 {
                     redis.OnConnectionRestored += Raise.Event<EventHandler>(redis, EventArgs.Empty);
                 }

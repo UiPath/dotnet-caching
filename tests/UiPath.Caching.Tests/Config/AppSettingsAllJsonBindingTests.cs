@@ -20,6 +20,9 @@ public class AppSettingsAllJsonBindingTests
     ];
 
     // SecondaryRedis is deliberately abbreviated, so it is not listed.
+    // Listed as a comment: setting PollInterval, even to its default, turns the 5 s live default off.
+    private static readonly (string Section, string Key)[] CommentedOutKeys = [("Caching:Broadcast:RedisStreams", "PollInterval")];
+
     public static TheoryData<string, Type[], string[]> DriftCases() => new()
     {
         { "Caching", [typeof(CacheOptions)], ["Connections", "AzureEntra", "Broadcast", "InMemoryRedis", "Redis", "InMemory", "ResiliencePolicies", "Queue"] },
@@ -64,6 +67,29 @@ public class AppSettingsAllJsonBindingTests
         opts!.AppShortName.Should().Be("app");
     }
 
+    [Fact]
+    public void Copying_the_redis_streams_section_keeps_the_5_s_live_default()
+    {
+        var options = new RedisStreamsTopicOptions();
+
+        UiPath.Caching.Config.ConfigurationBinding.Bind(BuildConfig().GetSection("Caching:Broadcast:RedisStreams"), options);
+
+        options.PollInterval.Should().Be(TimeSpan.FromMilliseconds(250));
+        options.EffectiveNotifiedPollInterval.Should().Be(TimeSpan.FromSeconds(5), "a listed PollInterval would count as set");
+    }
+
+    [Fact]
+    public void Commented_out_keys_are_listed_in_the_file()
+    {
+        var raw = File.ReadAllText(AppSettingsAllPath);
+
+        foreach (var (section, key) in CommentedOutKeys)
+        {
+            raw.Should().Contain($"// \"{key}\":", "'{0}:{1}' is listed as commented out", section, key);
+            BuildConfig().GetSection(section)[key].Should().BeNull("'{0}:{1}' must stay out of the bound section", section, key);
+        }
+    }
+
     // The binder ignores unknown keys and defaults missing ones, so only comparing key sets catches drift.
     [Theory]
     [MemberData(nameof(DriftCases))]
@@ -77,6 +103,7 @@ public class AppSettingsAllJsonBindingTests
             .Select(c => c.Key)
             .Except(subSectionAllowlist, StringComparer.OrdinalIgnoreCase)
             .ToHashSet(StringComparer.OrdinalIgnoreCase);
+        jsonKeys.UnionWith(CommentedOutKeys.Where(k => k.Section == sectionPath).Select(k => k.Key));
 
         // Obsolete keys are allowed but not required: some, like ShardKeyEnabled, are still read at runtime.
         var required = Keys(optionsTypes, includeObsolete: false);

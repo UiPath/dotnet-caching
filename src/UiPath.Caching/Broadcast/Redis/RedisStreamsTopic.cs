@@ -41,6 +41,7 @@ public sealed partial class RedisStreamsTopic<T> : ITopic<T>
         IRedisProfiler redisProfiler,
         CancellationToken stopToken)
     {
+        RedisStreamsTopicOptionsValidator.ThrowIfInvalid(streamOptions);
         TopicKey = topicKey;
         _connectionState = connectionState;
         _formatter = formatter;
@@ -53,7 +54,7 @@ public sealed partial class RedisStreamsTopic<T> : ITopic<T>
         _subject = subjectFactory();
         _redisStreamKeyStrategy = streamOptions.RedisStreamKeyStrategy ?? new PrefixStrategy(RedisKeyspaces.Streams, cacheOptions);
         _context = GetContext(topicKey, cacheOptions, streamOptions);
-        _waiter = new SignalingFetchWaiter(streamOptions.PollInterval);
+        _waiter = new SignalingFetchWaiter(streamOptions.PollInterval, streamOptions.EffectiveNotifiedPollInterval);
         _wakeEvery = streamOptions.MaxLength is { } maxLength ? Math.Max(1, maxLength / 2) : 0;
         if (_streamOptions.NotifyEnabled)
         {

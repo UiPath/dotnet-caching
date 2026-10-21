@@ -1,3 +1,5 @@
+using UiPath.Caching.Config;
+
 namespace UiPath.Caching.Broadcast;
 
 /// <summary>
@@ -95,7 +97,10 @@ public sealed class PerTopicOptionsRegistry<TOptions> where TOptions : class
         }
 
         var resolved = clone();
-        lastMatch?.Bind(resolved);
+        if (lastMatch is not null)
+        {
+            ConfigurationBinding.Bind(lastMatch, resolved);
+        }
         foreach (var action in actions)
         {
             action(resolved);

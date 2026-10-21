@@ -23,6 +23,17 @@ public class RedisStreamsTopicTests(ITestContextAccessor testContextAccessor) : 
     private RedisStreamsTopic<ICacheEvent> Sut => _sut ??= _fixture.Create<RedisStreamsTopic<ICacheEvent>>();
 
     [Fact]
+    public void A_notified_interval_below_the_poll_interval_is_refused_when_the_topic_is_made()
+    {
+        _redisStreamsTopicOptions.PollInterval = TimeSpan.FromSeconds(1);
+        _redisStreamsTopicOptions.NotifiedPollInterval = TimeSpan.FromMilliseconds(500);
+
+        var act = () => Sut;
+
+        act.Should().Throw<Exception>().Which.ToString().Should().Contain(nameof(RedisStreamsTopicOptions.NotifiedPollInterval));
+    }
+
+    [Fact]
     public void Dispose_works_as_expected()
     {
         var act = () => Sut.Dispose();
@@ -382,6 +393,7 @@ public class RedisStreamsTopicTests(ITestContextAccessor testContextAccessor) : 
         _cancellationTokenSource = new CancellationTokenSource();
         _fixture.Inject(_cancellationTokenSource.Token);
         _redisStreamsTopicOptions = _fixture.Create<RedisStreamsTopicOptions>();
+        _redisStreamsTopicOptions.NotifiedPollInterval = null;
         _fixture.Inject(_redisStreamsTopicOptions);
         _redisCacheOptions = _fixture.Create<RedisCacheOptions>();
         _fixture.Inject(_redisCacheOptions);
