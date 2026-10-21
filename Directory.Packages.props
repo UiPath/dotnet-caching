@@ -55,7 +55,7 @@
     <PackageVersion Include="BenchmarkDotNet" Version="0.15.8" />
     <PackageVersion Include="Aspire.Hosting.Redis" Version="13.6.0" />
     <!-- Aspire.Hosting pulls MessagePack 2.5.302 (GHSA-qhrr-8q5h-9q3h); pinned until Aspire references 2.5.303 or later. -->
-    <PackageVersion Include="MessagePack" Version="2.5.303" />
+    <PackageVersion Include="MessagePack" Version="3.1.11" />
     <PackageVersion Include="System.Net.Http" Version="4.3.4" />
     <PackageVersion Include="StackExchange.Redis" Version="3.3.1" />
     <PackageVersion Include="StyleCop.Analyzers" Version="1.2.0-beta.556" />
