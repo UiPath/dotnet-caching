@@ -77,6 +77,73 @@ public class FixSafetyTests
             Verify.Diagnostic(0, "is the instance method group 'LoadOrDefaultAsync' and allocates a delegate", "pass its target as state and call it from a static lambda"));
 
     [Fact]
+    public Task Method_group_on_a_target_without_nullable_annotations_gets_no_fix()
+    {
+        // With nullable disabled the target's null state is unknown, so it is treated as possibly null.
+        var source = """
+            #nullable disable
+            using System.Threading;
+            using System.Threading.Tasks;
+            using UiPath.Caching;
+
+            public class Item { }
+
+            public class Repo
+            {
+                public Task<Item> LoadAsync(CancellationToken ct) => Task.FromResult(new Item());
+            }
+
+            public class Service(ICache<Item> cache)
+            {
+                private readonly Repo _repo = new();
+
+                public ValueTask<Item> Get(CancellationToken token) => cache.GetOrAddAsync("k", {|#0:_repo.LoadAsync|}, token);
+            }
+            """;
+        return Verify.FixWholeFileAsync(source, source, null, Verify.Diagnostic(0, "is the instance method group 'LoadAsync' and allocates a delegate", "pass its target as state and call it from a static lambda"));
+    }
+
+    [Fact]
+    public Task Method_group_on_a_struct_gets_no_fix()
+    {
+        // The delegate binds a boxed copy of the struct; as state, the generator would run on another copy.
+        var source = Fixture.Service("""
+            struct Loader
+            {
+                public Task<Item?> LoadAsync(CancellationToken ct) => Task.FromResult<Item?>(new Item());
+            }
+
+            ValueTask<Item?> Get(Loader loader, CancellationToken token) => _cache.GetOrAddAsync("k", {|#0:loader.LoadAsync|}, token);
+            """);
+        return Verify.FixAsync(source, source, Verify.Diagnostic(0, "is the instance method group 'LoadAsync' and allocates a delegate", "pass its target as state and call it from a static lambda"));
+    }
+
+    [Fact]
+    public Task Generic_method_group_with_inferred_type_arguments_gets_no_fix()
+    {
+        var source = Fixture.Service("""
+            Task<Item?> LoadAnyAsync<TToken>(TToken ct) => Task.FromResult<Item?>(new Item());
+
+            ValueTask<Item?> Get(CancellationToken token) => _cache.GetOrAddAsync("k", {|#0:LoadAnyAsync|}, token);
+            """);
+        return Verify.FixAsync(source, source, Verify.Diagnostic(0, "is the instance method group 'LoadAnyAsync' and allocates a delegate", "pass its target as state and call it from a static lambda"));
+    }
+
+    [Fact]
+    public Task Explicitly_typed_lambda_keeps_its_parameter_names() =>
+        Verify.FixAsync(
+            Fixture.Service("""ValueTask<Item?> Get(int id, CancellationToken token) => _cache.GetOrAddAsync("k", {|#0:Task<Item?> (CancellationToken c) => LoadAsync(id, c)|}, token);"""),
+            Fixture.Service("""ValueTask<Item?> Get(int id, CancellationToken token) => _cache.GetOrAddAsync("k", (Self: this, Id: id), static Task<Item?> (s, c) => s.Self.LoadAsync(s.Id, c), token);"""),
+            Verify.Diagnostic(0, "captures 'this' and 'id' and allocates a closure", "pass them as state and make the lambda static"));
+
+    [Fact]
+    public Task Lambda_parameter_default_value_is_dropped() =>
+        Verify.FixAsync(
+            Fixture.Service("""ValueTask<Item?> Get(int id, CancellationToken token) => _cache.GetOrAddAsync("k", {|#0:(CancellationToken c = default) => LoadAsync(id, c)|}, token);"""),
+            Fixture.Service("""ValueTask<Item?> Get(int id, CancellationToken token) => _cache.GetOrAddAsync("k", (Self: this, Id: id), static (s, c) => s.Self.LoadAsync(s.Id, c), token);"""),
+            Verify.Diagnostic(0, "captures 'this' and 'id' and allocates a closure", "pass them as state and make the lambda static"));
+
+    [Fact]
     public Task Primary_constructor_parameter_assigned_in_parentheses_gets_no_fix()
     {
         var source = """
