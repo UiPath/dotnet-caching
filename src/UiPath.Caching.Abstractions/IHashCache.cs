@@ -210,6 +210,25 @@ public interface IHashCache : IDisposable
     sealed ValueTask<bool> RemoveAsync<T>(Span<char> cacheKey, CancellationToken token = default) =>
         RemoveAsync<T>(new CacheKey(cacheKey), token);
 
+    /// <inheritdoc cref="ISpanKeyHashCache.RemoveFieldsAsync{T}(CacheKey, string[], CancellationToken)"/>
+    /// <exception cref="NotSupportedException">The cache does not implement <see cref="ISpanKeyHashCache"/>.</exception>
+    sealed ValueTask<bool> RemoveFieldsAsync<T>(CacheKey cacheKey, string[] fields, CancellationToken token = default) =>
+        this is ISpanKeyHashCache removal
+            ? removal.RemoveFieldsAsync<T>(cacheKey, fields, token)
+            : throw new NotSupportedException($"{GetType().Name} does not remove single fields of a hash.");
+
+    /// <inheritdoc cref="ISpanKeyCache.RemoveManyAsync{T}(IEnumerable{CacheKey}, CancellationToken)"/>
+    sealed ValueTask<IReadOnlyList<CacheKey>> RemoveManyAsync<T>(IEnumerable<CacheKey> cacheKeys, CancellationToken token = default) =>
+        this is ISpanKeyHashCache multi
+            ? multi.RemoveManyAsync<T>(cacheKeys, token)
+            : MultiKeyFallback.RunAsync(cacheKeys, (Cache: this, Token: token), static k => k, static (s, k) => s.Cache.RemoveAsync<T>(k, s.Token));
+
+    /// <inheritdoc cref="ISpanKeyCache.SetManyAsync{T}(IEnumerable{KeyValuePair{CacheKey, T}}, CachePolicy, CancellationToken)"/>
+    sealed ValueTask<IReadOnlyList<CacheKey>> SetManyAsync<T>(IEnumerable<KeyValuePair<CacheKey, IDictionary<string, T?>>> keyValues, HashCacheEntryOptions options, CachePolicy? policy, CancellationToken token = default) =>
+        this is ISpanKeyHashCache multi
+            ? multi.SetManyAsync(keyValues, options, policy, token)
+            : MultiKeyFallback.RunAsync(keyValues, (Cache: this, Options: options, Policy: policy, Token: token), static kv => kv.Key, static (s, kv) => s.Cache.SetAsync<T>(kv.Key, kv.Value, s.Options, s.Policy, s.Token));
+
     ValueTask<bool> ContainsAsync<T>(CacheKey cacheKey, CancellationToken token = default);
 
     /// <inheritdoc cref="ISpanKeyCache.GetAsync{T}(Span{char}, CachePolicy, CancellationToken)"/>

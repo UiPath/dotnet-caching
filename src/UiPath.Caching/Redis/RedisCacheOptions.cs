@@ -38,6 +38,9 @@ public class RedisCacheOptions : ICacheOptions
     /// </summary>
     public bool ReadScriptsEnabled { get; set; } = true;
 
+    /// <summary>How many fields of one hash a single Redis command carries; a hash call over more is split into commands of this size, so none blocks the server for long.</summary>
+    public int HashFieldBatchSize { get; set; } = 1000;
+
     /// <summary>Member-wise copy, so a caller can vary one setting without mutating the DI singleton.</summary>
     internal RedisCacheOptions ShallowCopy() => (RedisCacheOptions)MemberwiseClone();
 }

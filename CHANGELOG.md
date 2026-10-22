@@ -8,6 +8,33 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 
 ### Added
 
+- **`RemoveFieldsAsync` on `IHashCache` and `IHashCache<T>`.** Removes the named fields with `HDEL` (in commands of
+  `RedisCacheOptions.HashFieldBatchSize` fields, 1000 by default, all in flight together), drops the hash from the local tier of the
+  writing node, and announces the key as removed, so every node, an older one too, drops its whole local copy of the hash: an entry is replaced
+  whole, never patched, which keeps a read that races the removal from bringing a removed field back. A hash left without fields is gone. A
+  reserved `_word_` field name is rejected, as on a write. `sealed` member served by `ISpanKeyHashCache` and its `<T>` sibling, on the
+  library's hash caches and `HashCache<T>`; any other hash cache throws `NotSupportedException`, as does an `ISpanKeyHashCache`
+  that does not override it.
+
+- **`RemoveManyAsync` and `SetManyAsync`** on `ICache`, `ICache<T>`, `IHashCache` and `IHashCache<T>` (`sealed` members served by
+  `ISpanKeyCache`, `ISpanKeyCache<T>`, `ISpanKeyHashCache` and `ISpanKeyHashCache<T>` on the library's caches, `Cache<T>` and `HashCache<T>`,
+  which gain them with default bodies so an existing implementation still loads; any other cache gets the same calls through its
+  single-key members). They take an `IEnumerable` and return the keys that
+  failed, empty when all succeeded. One command per key, so no `CROSSSLOT` on a cluster, with the commands of a chunk all in flight before
+  any is awaited and then the chunk's events likewise: about two round trips of wall time per chunk, whatever the key count or slots.
+  The input is read in chunks (`InMemoryRedisCacheOptions.BatchChunkSize`, 500; `BatchConcurrentChunks`, 2), so memory stays with the chunk
+  and a million keys is fine; only the failures are kept. A failure never stops the rest. The call is awaited under
+  `BackgroundDistributedWrite` too, and waits for the pending background writes of its keys, and only those. A removal drops L1 first and is
+  announced even when its delete failed, as `RemoveAsync` does; a set whose write failed gets no event. The caller's cancellation throws,
+  between chunks and within one; what ran stays done. A key named twice in a chunk ends as its writes in order would leave it; across
+  chunks, which run two at a time, their order is not set.
+  `InMemoryRedisCacheOptions.BatchTopicInvalidationThreshold` (off by default) replaces the per-key events of an input of known size above
+  it by one `TopicInvalidated` event after the writes, which makes every node drop its local tier of the topic, for every cache sharing it, and is counted as the
+  `cache.batch.topic_invalidation` event. A node that does not know the event ignores it: turn the threshold on once all nodes run this
+  version. If that event fails, every key of the call is returned.
+  The hash `SetManyAsync` takes one `HashCacheEntryOptions` for all its hashes; the overload without one replaces each key. `RemoveAsync(CacheKey[])` and the batch `SetAsync` are
+  unchanged: the batch set stays one atomic transaction and still refuses keys of several slots.
+
 - **`CachePolicy.BackgroundDistributedWrite`.** Opt-in per policy (`Caching:Policies`, or the default policy for the
   whole cache): single-key `SetAsync` and the write after a `GetOrAddAsync` miss, on the cache and on the hash cache, return once the
   value is in L1, and the L2 write, then a set's event, run detached. The value is local for `LocalMaxExpirationDisconnected` until the L2 write
@@ -87,6 +114,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
   percentile under 19 ms). What the long interval costs is the window left by a doorbell lost while its subscription
   still looks live (a dropped `PUBLISH`): up to one `NotifiedPollInterval` instead of one `PollInterval`. 5 s is where
   the saving levels off. Set `NotifiedPollInterval` to `PollInterval` for the old cadence.
+
+- **A hash of many fields no longer goes to Redis in one command.** On `RedisHashCache`, with `RedisCacheOptions.HashFieldBatchSize` (1000) fields per command:
+  a write of more fields is split into `HSET` commands in flight together. A `KeyReplace` write fills a staging key on the slot of the key and renames
+  it over the key, so it still takes the old hash's place at once and expires as before (the `MULTI`/`EXEC` it replaces held every field in one
+  command); a `HashReplace` merge goes straight into the hash and is not atomic across its chunks. A staging key left by a crash expires on its own, and one whose
+  slot cannot be matched to the key's (a prefix with a key that has no hash tag, on a cluster) falls back to the single transaction.
+  `GetAsync(key, fields)` splits a long field list into `HMGET`s likewise. A read of the whole hash (`GetAsync(key)`,
+  `GetCacheEntryAsync`, the read of `GetOrAddAsync`) where read scripts run takes a hash of more than ten batches of fields by `HSCAN` pages
+  instead of one `HGETALL`; its pages are not one snapshot. Smaller hashes cost what they did.
 
 - **A single-key `SetAsync` writes the value before it publishes the event**, as the batch one does; so do the hash cache's `SetAsync` and the rehydrate writes. It published first, so
   a node the event woke could re-read the old value from L2 and keep it for its whole local lifetime. A write the inner
@@ -190,6 +226,20 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 
 - **`PollInterval` must be positive.** Zero or negative failed later, when the poll loop waited on it; it is now
   refused by the options validator with the other Redis Streams options.
+
+- **`IHashCache.GetCacheEntryAsync` on Redis is one round trip, as documented.** It asked the server whether the key exists before
+  reading it; the read of an absent key already answers a miss, so the first trip is gone.
+
+- **A `HashReplace` write left the hash cache's local tier with only the fields it wrote.** The store merges the fields into the hash, but L1
+  kept the partial dictionary, so a read on the writing node lost every other field until the entry expired. The write now merges
+  into the hash L1 holds, keeping its metadata, and leaves nothing in L1 when it holds none, so the next read fetches the whole hash. A
+  `KeyReplace` write is unchanged, and so is an empty `HashReplace` write with `CacheNullValues` on: it replaces the hash with an empty one
+  in both tiers, as the store always wrote it.
+
+- **The notify doorbell of a Redis Streams topic is one `PUBLISH` at a time.** It was one per event, so a burst of many thousand events
+  overflowed the subscriber connection's output buffer (`client-output-buffer-limit pubsub`) and Redis closed it, failing the
+  commands queued on it. The rings that arrive while one is in flight are sent as one more, and a ring stalled on
+  Redis holds them for at most one second.
 
 - **A subscribe to a Redis Streams topic no longer blocks the caller.** A subscribe that found no consumer group created
   it synchronously while holding a lock the reader also takes. Every cache write subscribes a change token, so under a

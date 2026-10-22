@@ -173,6 +173,29 @@ public interface IHashCache<T>
     sealed ValueTask<bool> RemoveAsync(Span<char> cacheKey, CancellationToken token = default) =>
         RemoveAsync(new CacheKey(cacheKey), token);
 
+    /// <inheritdoc cref="ISpanKeyHashCache.RemoveFieldsAsync{T}(CacheKey, string[], CancellationToken)"/>
+    /// <exception cref="NotSupportedException">The cache does not implement <see cref="ISpanKeyHashCache{T}"/>.</exception>
+    sealed ValueTask<bool> RemoveFieldsAsync(CacheKey cacheKey, string[] fields, CancellationToken token = default) =>
+        this is ISpanKeyHashCache<T> removal
+            ? removal.RemoveFieldsAsync(cacheKey, fields, token)
+            : throw new NotSupportedException($"{GetType().Name} does not remove single fields of a hash.");
+
+    /// <inheritdoc cref="ISpanKeyCache.RemoveManyAsync{T}(IEnumerable{CacheKey}, CancellationToken)"/>
+    sealed ValueTask<IReadOnlyList<CacheKey>> RemoveManyAsync(IEnumerable<CacheKey> cacheKeys, CancellationToken token = default) =>
+        this is ISpanKeyHashCache<T> multi
+            ? multi.RemoveManyAsync(cacheKeys, token)
+            : MultiKeyFallback.RunAsync(cacheKeys, (Cache: this, Token: token), static k => k, static (s, k) => s.Cache.RemoveAsync(k, s.Token));
+
+    /// <inheritdoc cref="ISpanKeyCache.SetManyAsync{T}(IEnumerable{KeyValuePair{CacheKey, T}}, CachePolicy, CancellationToken)"/>
+    sealed ValueTask<IReadOnlyList<CacheKey>> SetManyAsync(IEnumerable<KeyValuePair<CacheKey, IDictionary<string, T?>>> keyValues, HashCacheEntryOptions options, CancellationToken token = default) =>
+        this is ISpanKeyHashCache<T> multi
+            ? multi.SetManyAsync(keyValues, options, token)
+            : MultiKeyFallback.RunAsync(keyValues, (Cache: this, Options: options, Token: token), static kv => kv.Key, static (s, kv) => s.Cache.SetAsync(kv.Key, kv.Value, s.Options, s.Token));
+
+    /// <inheritdoc cref="ISpanKeyCache.SetManyAsync{T}(IEnumerable{KeyValuePair{CacheKey, T}}, CachePolicy, CancellationToken)"/>
+    sealed ValueTask<IReadOnlyList<CacheKey>> SetManyAsync(IEnumerable<KeyValuePair<CacheKey, IDictionary<string, T?>>> keyValues, CancellationToken token = default) =>
+        SetManyAsync(keyValues, new HashCacheEntryOptions(SetOption: HashCacheSetOption.KeyReplace), token);
+
     ValueTask<bool> ContainsAsync(CacheKey cacheKey, CancellationToken token = default);
 
     /// <inheritdoc cref="ISpanKeyCache.GetAsync{T}(Span{char}, CachePolicy, CancellationToken)"/>

@@ -246,7 +246,7 @@ public abstract class RedisCacheBase : IConnectionState, IDisposable
     /// after that, only a refusal (unknown or not permitted) does, and other errors propagate to the read pipeline.
     /// </summary>
     [AsyncMethodBuilder(typeof(PoolingAsyncValueTaskMethodBuilder<>))]
-    private protected async ValueTask<RedisResult?> TryReadScriptAsync(string script, RedisKey[] keys, Action<Exception> logUnavailable)
+    private protected async ValueTask<RedisResult?> TryReadScriptAsync(string script, RedisKey[] keys, Action<Exception> logUnavailable, RedisValue[]? values = null)
     {
         if (!SupportsExpireTime || _noReadScript)
         {
@@ -255,7 +255,7 @@ public abstract class RedisCacheBase : IConnectionState, IDisposable
 
         try
         {
-            var reply = await Database.ScriptEvaluateReadOnlyAsync(script, keys, flags: CommandFlags.PreferReplica).ConfigureAwait(false);
+            var reply = await Database.ScriptEvaluateReadOnlyAsync(script, keys, values, CommandFlags.PreferReplica).ConfigureAwait(false);
             _readScriptWorked = true;
             return reply;
         }
@@ -309,6 +309,15 @@ public abstract class RedisCacheBase : IConnectionState, IDisposable
                 "between '{' and '}', e.g. 'app:s:{org1}:groups_1') so they hash together, or split the batch " +
                 "into one call per group of keys that already share a tag.");
         }
+    }
+
+    /// <summary>Whether Redis Cluster would keep the two keys on one slot, with the connector's prefix on both.</summary>
+    private protected bool SameSlot(RedisKey first, RedisKey second, ILogger logger)
+    {
+        var database = Database;
+        var prefix = _connectorPrefix.GetKey(database, _keyPrefix, _keyPrefixKey, logger);
+        var multiplexer = database.Multiplexer;
+        return multiplexer.GetHashSlot(WithConnectorPrefix(prefix, first)) == multiplexer.GetHashSlot(WithConnectorPrefix(prefix, second));
     }
 
     /// <summary>The key as the server hashes it, with the prefix the connector's <see cref="IDatabase"/> applies through <c>WithKeyPrefix</c>.</summary>

@@ -1,6 +1,7 @@
+#pragma warning disable S3060 // by design: the default body serves a cache through its CacheKey members
 namespace UiPath.Caching;
 
-/// <summary>An <see cref="IHashCache{T}"/> that reads by the key's text without building a <see cref="CacheKey"/>; the <c>Span&lt;char&gt;</c> members of <see cref="IHashCache{T}"/> prefer it.</summary>
+/// <summary>An <see cref="IHashCache{T}"/> that reads by the key's text without building a <see cref="CacheKey"/>; the <c>Span&lt;char&gt;</c> members of <see cref="IHashCache{T}"/> prefer it, and its batch and field-removal members too.</summary>
 public interface ISpanKeyHashCache<T>
 {
     /// <inheritdoc cref="ISpanKeyCache.GetAsync{T}(Span{char}, CachePolicy, CancellationToken)"/>
@@ -35,4 +36,20 @@ public interface ISpanKeyHashCache<T>
 
     /// <inheritdoc cref="ISpanKeyCache.SetAsync{T}(Span{char}, T, CachePolicy, CancellationToken)"/>
     ValueTask<bool> SetAsync(Span<char> cacheKey, IDictionary<string, T?> values, HashCacheEntryOptions options, CancellationToken token = default);
+
+    /// <inheritdoc cref="ISpanKeyHashCache.RemoveFieldsAsync{T}(CacheKey, string[], CancellationToken)"/>
+    ValueTask<bool> RemoveFieldsAsync(CacheKey cacheKey, string[] fields, CancellationToken token = default) =>
+        throw new NotSupportedException($"{GetType().Name} does not remove single fields of a hash.");
+
+    /// <inheritdoc cref="ISpanKeyCache.RemoveManyAsync{T}(IEnumerable{CacheKey}, CancellationToken)"/>
+    ValueTask<IReadOnlyList<CacheKey>> RemoveManyAsync(IEnumerable<CacheKey> cacheKeys, CancellationToken token = default) =>
+        this is IHashCache<T> cache
+            ? MultiKeyFallback.RunAsync(cacheKeys, (Cache: cache, Token: token), static k => k, static (s, k) => s.Cache.RemoveAsync(k, s.Token))
+            : throw new NotSupportedException($"{GetType().Name} is not a cache.");
+
+    /// <inheritdoc cref="ISpanKeyCache.SetManyAsync{T}(IEnumerable{KeyValuePair{CacheKey, T}}, CachePolicy, CancellationToken)"/>
+    ValueTask<IReadOnlyList<CacheKey>> SetManyAsync(IEnumerable<KeyValuePair<CacheKey, IDictionary<string, T?>>> keyValues, HashCacheEntryOptions options, CancellationToken token = default) =>
+        this is IHashCache<T> cache
+            ? MultiKeyFallback.RunAsync(keyValues, (Cache: cache, Options: options, Token: token), static kv => kv.Key, static (s, kv) => s.Cache.SetAsync(kv.Key, kv.Value, s.Options, s.Token))
+            : throw new NotSupportedException($"{GetType().Name} is not a cache.");
 }

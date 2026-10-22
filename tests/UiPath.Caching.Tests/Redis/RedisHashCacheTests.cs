@@ -42,6 +42,9 @@ public class RedisHashCacheTests(ITestContextAccessor testContextAccessor) : IAs
 
     private IEnumerable<DependencyRecord> ReadDeps => _telemetry.Dependencies.Where(d => d.Type == TelemetryScope.DependencyType);
 
+    private Type[] LoggedExceptionTypes =>
+        _logger.ReceivedCalls().Where(c => c.GetMethodInfo().Name == "Log").Select(c => c.GetArguments()[3]?.GetType()).OfType<Type>().ToArray();
+
     [Fact]
     public async Task Every_command_waits_for_the_first_connect_asynchronously_and_never_reads_the_database_before_it()
     {
@@ -322,6 +325,446 @@ public class RedisHashCacheTests(ITestContextAccessor testContextAccessor) : IAs
         actual.Value.Should().BeEquivalentTo(expected);
         actual.Expiration.Should().BeCloseTo(expireTime, TimeSpan.FromMilliseconds(1));
         _database.DidNotReceive().CreateTransaction();
+    }
+
+    [Fact]
+    public async Task RemoveFields_sends_one_HDEL_per_batch_of_fields()
+    {
+        _redisCacheOptions.HashFieldBatchSize = 3;
+        _sut = null;
+        _database.HashDeleteAsync(_redisKey, Arg.Any<RedisValue[]>(), Arg.Any<CommandFlags>()).Returns(1L);
+        var fields = Enumerable.Range(0, 7).Select(i => $"f{i}").ToArray();
+
+        (await Sut.RemoveFieldsAsync<string>(_cacheKey, fields, testContextAccessor.Current.CancellationToken)).Should().BeTrue();
+
+        var sizes = _database.ReceivedCalls()
+            .Where(c => c.GetMethodInfo().Name == nameof(IDatabaseAsync.HashDeleteAsync))
+            .Select(c => ((RedisValue[])c.GetArguments()[1]!).Length)
+            .ToArray();
+        sizes.Should().Equal(3, 3, 1);
+    }
+
+    [Fact]
+    public async Task RemoveFields_is_false_when_a_batch_fails_and_never_removes_a_reserved_field()
+    {
+        _redisCacheOptions.HashFieldBatchSize = 2;
+        _sut = null;
+        _database.HashDeleteAsync(_redisKey, Arg.Any<RedisValue[]>(), Arg.Any<CommandFlags>()).Returns(Task.FromException<long>(new RedisException("down")));
+
+        (await Sut.RemoveFieldsAsync<string>(_cacheKey, ["a", "b", "c"], testContextAccessor.Current.CancellationToken)).Should().BeFalse();
+
+        var act = async () => await Sut.RemoveFieldsAsync<string>(_cacheKey, ["a", KnownFieldNames.MetadataKey], testContextAccessor.Current.CancellationToken);
+        await act.Should().ThrowAsync<ArgumentException>().Where(e => e.Message.Contains("reserved"));
+    }
+
+    [Fact]
+    public async Task A_replacement_of_many_fields_is_staged_in_chunks_and_renamed_over_the_key()
+    {
+        _redisCacheOptions.HashFieldBatchSize = 3;
+        _sut = null;
+        _transaction.ExecuteAsync(Arg.Any<CommandFlags>()).Returns(true);
+        _database.Multiplexer.GetHashSlot(Arg.Any<RedisKey>()).Returns(7);
+        _database.HashSetAsync(Arg.Any<RedisKey>(), Arg.Any<HashEntry[]>(), Arg.Any<CommandFlags>()).Returns(Task.CompletedTask);
+        _database.KeyExpireAsync(Arg.Any<RedisKey>(), Arg.Any<DateTime?>(), Arg.Any<CommandFlags>()).Returns(true);
+        _database.KeyRenameAsync(Arg.Any<RedisKey>(), Arg.Any<RedisKey>(), Arg.Any<When>(), Arg.Any<CommandFlags>()).Returns(true);
+        var values = Enumerable.Range(0, 8).ToDictionary(i => $"f{i}", i => (string?)$"v{i}");
+
+        (await Sut.SetAsync(_cacheKey, values, TimeSpan.FromMinutes(5), policy: null, token: testContextAccessor.Current.CancellationToken)).Should().BeTrue();
+
+        var sets = _transaction.ReceivedCalls().Concat(_database.ReceivedCalls()).Where(c => c.GetMethodInfo().Name == nameof(IDatabaseAsync.HashSetAsync)).ToArray();
+        sets.Select(c => ((HashEntry[])c.GetArguments()[1]!).Length).Should().BeEquivalentTo([3, 3, 2]);
+        sets.Select(c => (RedisKey)c.GetArguments()[0]!).Should().OnlyContain(k => k != _redisKey, "a replacement fills a staging key");
+        await _database.Received(1).KeyRenameAsync(Arg.Is<RedisKey>(k => k != _redisKey), _redisKey, When.Always, CommandFlags.DemandMaster);
+        _database.Received(3).CreateTransaction();
+    }
+
+    [Theory]
+    [InlineData(HashCacheSetOption.HashReplace)]
+    [InlineData(HashCacheSetOption.KeyReplace)]
+    public async Task Every_chunk_of_many_fields_sets_the_lifetime_of_the_key_it_writes(HashCacheSetOption setOption)
+    {
+        _redisCacheOptions.HashFieldBatchSize = 3;
+        _sut = null;
+        _database.Multiplexer.GetHashSlot(Arg.Any<RedisKey>()).Returns(7);
+        _transaction.ExecuteAsync(Arg.Any<CommandFlags>()).Returns(true);
+        var values = Enumerable.Range(0, 8).ToDictionary(i => $"f{i}", i => (string?)$"v{i}");
+        var deadline = _now.AddMinutes(5);
+
+        (await Sut.SetAsync(_cacheKey, values, new HashCacheEntryOptions(ExpireTime: deadline, SetOption: setOption), policy: null, token: testContextAccessor.Current.CancellationToken)).Should().BeTrue();
+
+        // Any chunk can be the one that creates the key: after a deadline passed between them, or after an earlier chunk failed.
+        var calls = _transaction.ReceivedCalls().ToArray();
+        calls.Where(c => c.GetMethodInfo().Name == nameof(IDatabaseAsync.HashSetAsync))
+            .Select(c => ((HashEntry[])c.GetArguments()[1]!).Select(e => e.Name.ToString()).First()).Should().Equal("f0", "f3", "f6");
+        var written = calls.Where(c => c.GetMethodInfo().Name == nameof(IDatabaseAsync.HashSetAsync)).Select(c => (RedisKey)c.GetArguments()[0]!).ToArray();
+        var expiries = calls.Where(c => c.GetMethodInfo().Name == nameof(IDatabaseAsync.KeyExpireAsync)).ToArray();
+        expiries.Select(c => (RedisKey)c.GetArguments()[0]!).Should().Equal(written);
+        expiries.Select(c => c.GetArguments()[1]).Should().AllBeEquivalentTo((DateTime?)deadline.UtcDateTime);
+        await _database.DidNotReceive().HashSetAsync(Arg.Any<RedisKey>(), Arg.Any<HashEntry[]>(), Arg.Any<CommandFlags>());
+    }
+
+    [Fact]
+    public async Task Every_chunk_of_a_merge_with_no_expiry_persists_the_key()
+    {
+        _redisCacheOptions.HashFieldBatchSize = 3;
+        _sut = null;
+        _transaction.ExecuteAsync(Arg.Any<CommandFlags>()).Returns(true);
+        var values = Enumerable.Range(0, 8).ToDictionary(i => $"f{i}", i => (string?)$"v{i}");
+
+        (await Sut.SetAsync(_cacheKey, values, new HashCacheEntryOptions(ExpireTime: DateTimeOffset.MaxValue, SetOption: HashCacheSetOption.HashReplace), policy: null, token: testContextAccessor.Current.CancellationToken)).Should().BeTrue();
+
+        var names = _transaction.ReceivedCalls().Select(c => c.GetMethodInfo().Name).ToArray();
+        names.Count(n => n == nameof(IDatabaseAsync.HashSetAsync)).Should().Be(3);
+        names.Count(n => n == nameof(IDatabaseAsync.KeyPersistAsync)).Should().Be(3);
+        names.Should().NotContain(nameof(IDatabaseAsync.KeyExpireAsync));
+        await _transaction.Received(3).KeyPersistAsync(_redisKey, CommandFlags.DemandMaster);
+    }
+
+    [Fact]
+    public async Task A_replacement_with_no_expiry_bounds_each_staged_chunk_and_persists_the_key_with_the_conditional_rename()
+    {
+        _redisCacheOptions.HashFieldBatchSize = 3;
+        _sut = null;
+        _database.Multiplexer.GetHashSlot(Arg.Any<RedisKey>()).Returns(7);
+        _transaction.ExecuteAsync(Arg.Any<CommandFlags>()).Returns(true);
+        _transaction.AddCondition(Arg.Any<Condition>()).Returns((ConditionResult)null!);
+        var values = Enumerable.Range(0, 8).ToDictionary(i => $"f{i}", i => (string?)$"v{i}");
+
+        (await Sut.SetAsync(_cacheKey, values, DateTimeOffset.MaxValue, policy: null, token: testContextAccessor.Current.CancellationToken)).Should().BeTrue();
+
+        var calls = _transaction.ReceivedCalls().ToArray();
+        var staged = calls.Where(c => c.GetMethodInfo().Name == nameof(IDatabaseAsync.HashSetAsync)).Select(c => (RedisKey)c.GetArguments()[0]!).ToArray();
+        staged.Should().HaveCount(3).And.OnlyContain(k => k != _redisKey);
+        var expiries = calls.Where(c => c.GetMethodInfo().Name == nameof(IDatabaseAsync.KeyExpireAsync)).ToArray();
+        expiries.Select(c => (RedisKey)c.GetArguments()[0]!).Should().Equal(staged);
+        expiries.Select(c => c.GetArguments()[1]).Should().AllBeEquivalentTo((TimeSpan?)TimeSpan.FromMinutes(10), "a staging key a crash leaves behind expires on its own");
+        await _transaction.Received(1).KeyRenameAsync(staged[0], _redisKey, When.Always, CommandFlags.DemandMaster);
+        await _transaction.Received(1).KeyPersistAsync(_redisKey, CommandFlags.DemandMaster);
+        _transaction.Received(1).AddCondition(Arg.Any<Condition>());
+    }
+
+    [Fact]
+    public async Task A_replacement_whose_deadline_passes_before_its_rename_leaves_the_key_gone_as_an_expired_write_does()
+    {
+        _redisCacheOptions.HashFieldBatchSize = 3;
+        _sut = null;
+        _database.Multiplexer.GetHashSlot(Arg.Any<RedisKey>()).Returns(7);
+        _transaction.ExecuteAsync(Arg.Any<CommandFlags>()).Returns(true);
+        _database.KeyRenameAsync(Arg.Any<RedisKey>(), _redisKey, Arg.Any<When>(), Arg.Any<CommandFlags>())
+            .Returns(_ =>
+            {
+                _now = _now.AddMinutes(2);
+                return Task.FromException<bool>(new RedisServerException(RedisErrorKind.None, CommandFlags.None, "ERR no such key"));
+            });
+        _database.KeyDeleteAsync(_redisKey, Arg.Any<CommandFlags>()).Returns(true);
+        var values = Enumerable.Range(0, 8).ToDictionary(i => $"f{i}", i => (string?)$"v{i}");
+
+        (await Sut.SetAsync(_cacheKey, values, _now.AddMinutes(1), policy: null, token: testContextAccessor.Current.CancellationToken)).Should().BeTrue();
+
+        await _database.Received(1).KeyDeleteAsync(_redisKey, CommandFlags.DemandMaster);
+        _logger.ReceivedCalls().Where(c => c.GetMethodInfo().Name == "Log").Select(c => ((LogLevel)c.GetArguments()[0]!, c.GetArguments()[3]?.GetType()))
+            .Should().Equal([(LogLevel.Debug, typeof(RedisServerException))], "the staging key expiring with the deadline is expected");
+    }
+
+    [Fact]
+    public async Task An_expired_replacement_reports_what_the_delete_of_the_key_reports_and_logs_why_the_rename_failed()
+    {
+        _redisCacheOptions.HashFieldBatchSize = 3;
+        _sut = null;
+        _database.Multiplexer.GetHashSlot(Arg.Any<RedisKey>()).Returns(7);
+        _transaction.ExecuteAsync(Arg.Any<CommandFlags>()).Returns(true);
+        _database.KeyRenameAsync(Arg.Any<RedisKey>(), _redisKey, Arg.Any<When>(), Arg.Any<CommandFlags>())
+            .Returns(_ =>
+            {
+                _now = _now.AddMinutes(2);
+                return Task.FromException<bool>(new TimeoutException("rename"));
+            });
+        _database.KeyDeleteAsync(_redisKey, Arg.Any<CommandFlags>()).Returns(false);
+        var values = Enumerable.Range(0, 8).ToDictionary(i => $"f{i}", i => (string?)$"v{i}");
+
+        (await Sut.SetAsync(_cacheKey, values, _now.AddMinutes(1), policy: null, token: testContextAccessor.Current.CancellationToken)).Should().BeFalse("the key was already gone");
+
+        await _database.Received(1).KeyDeleteAsync(_redisKey, CommandFlags.DemandMaster);
+        _logger.ReceivedCalls().Where(c => c.GetMethodInfo().Name == "Log").Select(c => ((LogLevel)c.GetArguments()[0]!, c.GetArguments()[3]?.GetType()))
+            .Should().Equal([(LogLevel.Warning, typeof(TimeoutException))], "a timeout is not the expected expired staging key");
+    }
+
+    [Fact]
+    public async Task An_expired_replacement_whose_delete_fails_reports_the_rename_failure_not_the_delete()
+    {
+        _redisCacheOptions.HashFieldBatchSize = 3;
+        _sut = null;
+        _database.Multiplexer.GetHashSlot(Arg.Any<RedisKey>()).Returns(7);
+        _transaction.ExecuteAsync(Arg.Any<CommandFlags>()).Returns(true);
+        _database.KeyRenameAsync(Arg.Any<RedisKey>(), _redisKey, Arg.Any<When>(), Arg.Any<CommandFlags>())
+            .Returns(_ =>
+            {
+                _now = _now.AddMinutes(2);
+                return Task.FromException<bool>(new RedisServerException(RedisErrorKind.None, CommandFlags.None, "ERR no such key"));
+            });
+        _database.KeyDeleteAsync(_redisKey, Arg.Any<CommandFlags>()).Returns(Task.FromException<bool>(new InvalidOperationException("delete")));
+        var values = Enumerable.Range(0, 8).ToDictionary(i => $"f{i}", i => (string?)$"v{i}");
+
+        (await Sut.SetAsync(_cacheKey, values, _now.AddMinutes(1), policy: null, token: testContextAccessor.Current.CancellationToken)).Should().BeFalse();
+
+        LoggedExceptionTypes.Should().Equal([typeof(RedisServerException), typeof(InvalidOperationException), typeof(RedisServerException)], "the rename at debug, the delete, then the rename again as the write's failure");
+    }
+
+    [Fact]
+    public async Task A_replacement_whose_rename_fails_at_its_deadline_fails_as_an_unexpired_one_does()
+    {
+        _redisCacheOptions.HashFieldBatchSize = 3;
+        _sut = null;
+        _database.Multiplexer.GetHashSlot(Arg.Any<RedisKey>()).Returns(7);
+        _transaction.ExecuteAsync(Arg.Any<CommandFlags>()).Returns(true);
+        var deadline = _now.AddMinutes(1);
+        _database.KeyRenameAsync(Arg.Any<RedisKey>(), _redisKey, Arg.Any<When>(), Arg.Any<CommandFlags>())
+            .Returns(_ =>
+            {
+                _now = deadline;
+                return Task.FromException<bool>(new RedisServerException(RedisErrorKind.None, CommandFlags.None, "ERR no such key"));
+            });
+        var values = Enumerable.Range(0, 8).ToDictionary(i => $"f{i}", i => (string?)$"v{i}");
+
+        (await Sut.SetAsync(_cacheKey, values, deadline, policy: null, token: testContextAccessor.Current.CancellationToken)).Should().BeFalse("a write whose deadline is now is written, not deleted");
+
+        await _database.DidNotReceive().KeyDeleteAsync(_redisKey, Arg.Any<CommandFlags>());
+    }
+
+    [Fact]
+    public async Task A_replacement_whose_rename_fails_before_its_deadline_fails_and_leaves_the_key()
+    {
+        _redisCacheOptions.HashFieldBatchSize = 3;
+        _sut = null;
+        _database.Multiplexer.GetHashSlot(Arg.Any<RedisKey>()).Returns(7);
+        _transaction.ExecuteAsync(Arg.Any<CommandFlags>()).Returns(true);
+        _database.KeyRenameAsync(Arg.Any<RedisKey>(), _redisKey, Arg.Any<When>(), Arg.Any<CommandFlags>()).Returns(Task.FromException<bool>(new RedisServerException(RedisErrorKind.None, CommandFlags.None, "ERR no such key")));
+        var values = Enumerable.Range(0, 8).ToDictionary(i => $"f{i}", i => (string?)$"v{i}");
+
+        (await Sut.SetAsync(_cacheKey, values, _now.AddMinutes(1), policy: null, token: testContextAccessor.Current.CancellationToken)).Should().BeFalse();
+
+        await _database.DidNotReceive().KeyDeleteAsync(_redisKey, Arg.Any<CommandFlags>());
+    }
+
+    [Fact]
+    public async Task A_chunk_whose_transaction_does_not_commit_fails_as_a_redis_error_not_a_cancellation()
+    {
+        _redisCacheOptions.HashFieldBatchSize = 3;
+        _sut = null;
+        _transaction.ExecuteAsync(Arg.Any<CommandFlags>()).Returns(false);
+        _transaction.HashSetAsync(Arg.Any<RedisKey>(), Arg.Any<HashEntry[]>(), Arg.Any<CommandFlags>()).Returns(Task.FromCanceled(new CancellationToken(true)));
+        _transaction.KeyExpireAsync(Arg.Any<RedisKey>(), Arg.Any<DateTime?>(), Arg.Any<CommandFlags>()).Returns(Task.FromCanceled<bool>(new CancellationToken(true)));
+        _database.HashSetAsync(Arg.Any<RedisKey>(), Arg.Any<HashEntry[]>(), Arg.Any<CommandFlags>()).Returns(Task.CompletedTask);
+        var values = Enumerable.Range(0, 8).ToDictionary(i => $"f{i}", i => (string?)$"v{i}");
+
+        (await Sut.SetAsync(_cacheKey, values, new HashCacheEntryOptions(TimeToLive: TimeSpan.FromMinutes(5), SetOption: HashCacheSetOption.HashReplace), policy: null, token: testContextAccessor.Current.CancellationToken)).Should().BeFalse();
+
+        _logger.ReceivedCalls().Where(c => c.GetMethodInfo().Name == "Log").Select(c => c.GetArguments()[3]?.GetType()).Should()
+            .Equal([typeof(RedisException)], "a transaction that did not commit is a Redis failure, not a cancellation");
+    }
+
+    [Fact]
+    public async Task A_failed_chunk_waits_for_the_chunks_in_flight_and_drops_the_staging_key()
+    {
+        _redisCacheOptions.HashFieldBatchSize = 3;
+        _sut = null;
+        _database.Multiplexer.GetHashSlot(Arg.Any<RedisKey>()).Returns(7);
+        var inFlight = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var calls = 0;
+        _transaction.ExecuteAsync(Arg.Any<CommandFlags>())
+            .Returns(_ => Interlocked.Increment(ref calls) == 1 ? inFlight.Task : throw new ObjectDisposedException("multiplexer"));
+        var values = Enumerable.Range(0, 11).ToDictionary(i => $"f{i}", i => (string?)$"v{i}");
+
+        var set = Sut.SetAsync(_cacheKey, values, TimeSpan.FromMinutes(5), policy: null, token: testContextAccessor.Current.CancellationToken).AsTask();
+        await Task.Delay(100, testContextAccessor.Current.CancellationToken);
+
+        set.IsCompleted.Should().BeFalse("the first chunk may still read the caller's buffers");
+        inFlight.SetResult(true);
+        (await set).Should().BeFalse();
+        await _database.Received(1).KeyDeleteAsync(Arg.Is<RedisKey>(k => k != _redisKey), Arg.Any<CommandFlags>());
+        await _database.DidNotReceive().KeyRenameAsync(Arg.Any<RedisKey>(), Arg.Any<RedisKey>(), Arg.Any<When>(), Arg.Any<CommandFlags>());
+    }
+
+    [Fact]
+    public async Task A_chunk_whose_transaction_does_not_commit_fails_as_a_redis_error_though_its_commands_faulted()
+    {
+        _redisCacheOptions.HashFieldBatchSize = 3;
+        _sut = null;
+        _transaction.ExecuteAsync(Arg.Any<CommandFlags>()).Returns(false);
+        _transaction.HashSetAsync(Arg.Any<RedisKey>(), Arg.Any<HashEntry[]>(), Arg.Any<CommandFlags>()).Returns(_ => Task.FromException(new RedisCommandException("WRONGTYPE")));
+        _transaction.KeyExpireAsync(Arg.Any<RedisKey>(), Arg.Any<DateTime?>(), Arg.Any<CommandFlags>()).Returns(_ => Task.FromException<bool>(new RedisCommandException("WRONGTYPE")));
+        _database.HashSetAsync(Arg.Any<RedisKey>(), Arg.Any<HashEntry[]>(), Arg.Any<CommandFlags>()).Returns(Task.CompletedTask);
+        var values = Enumerable.Range(0, 8).ToDictionary(i => $"f{i}", i => (string?)$"v{i}");
+
+        (await Sut.SetAsync(_cacheKey, values, new HashCacheEntryOptions(TimeToLive: TimeSpan.FromMinutes(5), SetOption: HashCacheSetOption.HashReplace), policy: null, token: testContextAccessor.Current.CancellationToken)).Should().BeFalse();
+
+        LoggedExceptionTypes.Should().Equal([typeof(RedisException)]);
+    }
+
+    [Fact]
+    public async Task A_transaction_that_throws_rethrows_its_own_failure_and_leaves_none_of_its_commands_unobserved()
+    {
+        _redisCacheOptions.HashFieldBatchSize = 3;
+        _sut = null;
+        var marker = $"queued-{Guid.NewGuid():N}";
+        var unobserved = 0;
+        void OnUnobserved(object? sender, UnobservedTaskExceptionEventArgs e)
+        {
+            if (e.Exception.Flatten().InnerExceptions.Any(x => x.Message == marker))
+            {
+                Interlocked.Increment(ref unobserved);
+            }
+        }
+
+        _transaction.ExecuteAsync(Arg.Any<CommandFlags>()).Returns(_ => Task.FromException<bool>(new TimeoutException("exec")));
+        _transaction.HashSetAsync(Arg.Any<RedisKey>(), Arg.Any<HashEntry[]>(), Arg.Any<CommandFlags>()).Returns(_ => Task.FromException(new RedisException(marker)));
+        _transaction.KeyExpireAsync(Arg.Any<RedisKey>(), Arg.Any<DateTime?>(), Arg.Any<CommandFlags>()).Returns(_ => Task.FromException<bool>(new RedisException(marker)));
+        _database.HashSetAsync(Arg.Any<RedisKey>(), Arg.Any<HashEntry[]>(), Arg.Any<CommandFlags>()).Returns(Task.CompletedTask);
+        var values = Enumerable.Range(0, 8).ToDictionary(i => $"f{i}", i => (string?)$"v{i}");
+        TaskScheduler.UnobservedTaskException += OnUnobserved;
+        try
+        {
+            (await Sut.SetAsync(_cacheKey, values, new HashCacheEntryOptions(TimeToLive: TimeSpan.FromMinutes(5), SetOption: HashCacheSetOption.HashReplace), policy: null, token: testContextAccessor.Current.CancellationToken)).Should().BeFalse();
+            _transaction.ClearReceivedCalls();
+            for (var i = 0; i < 3; i++)
+            {
+                GC.Collect();
+                GC.WaitForPendingFinalizers();
+            }
+        }
+        finally
+        {
+            TaskScheduler.UnobservedTaskException -= OnUnobserved;
+        }
+
+        LoggedExceptionTypes.Should().Equal([typeof(TimeoutException)]);
+        Volatile.Read(ref unobserved).Should().Be(0);
+    }
+
+    [Fact]
+    public async Task A_rename_that_does_not_commit_fails_the_replacement_and_drops_the_staging_key()
+    {
+        _redisCacheOptions.HashFieldBatchSize = 3;
+        _sut = null;
+        _database.Multiplexer.GetHashSlot(Arg.Any<RedisKey>()).Returns(7);
+        var executes = 0;
+        _transaction.ExecuteAsync(Arg.Any<CommandFlags>()).Returns(_ => Task.FromResult(Interlocked.Increment(ref executes) <= 3));
+        _transaction.AddCondition(Arg.Any<Condition>()).Returns((ConditionResult)null!);
+        _database.HashSetAsync(Arg.Any<RedisKey>(), Arg.Any<HashEntry[]>(), Arg.Any<CommandFlags>()).Returns(Task.CompletedTask);
+        var values = Enumerable.Range(0, 8).ToDictionary(i => $"f{i}", i => (string?)$"v{i}");
+
+        (await Sut.SetAsync(_cacheKey, values, DateTimeOffset.MaxValue, policy: null, token: testContextAccessor.Current.CancellationToken)).Should().BeFalse();
+
+        executes.Should().Be(4, "three chunks with their lifetime, then the conditional rename");
+        LoggedExceptionTypes.Should().Equal([typeof(RedisException)]);
+        await _database.Received(1).KeyDeleteAsync(Arg.Is<RedisKey>(k => k != _redisKey), Arg.Any<CommandFlags>());
+    }
+
+    [Fact]
+    public async Task A_failed_chunk_of_a_replacement_drops_the_staging_key_and_never_renames()
+    {
+        _redisCacheOptions.HashFieldBatchSize = 3;
+        _sut = null;
+        _database.Multiplexer.GetHashSlot(Arg.Any<RedisKey>()).Returns(7);
+        var calls = 0;
+        _transaction.ExecuteAsync(Arg.Any<CommandFlags>())
+            .Returns(_ => Interlocked.Increment(ref calls) == 2 ? Task.FromException<bool>(new RedisException("down")) : Task.FromResult(true));
+        _database.KeyExpireAsync(Arg.Any<RedisKey>(), Arg.Any<DateTime?>(), Arg.Any<CommandFlags>()).Returns(true);
+        var values = Enumerable.Range(0, 8).ToDictionary(i => $"f{i}", i => (string?)$"v{i}");
+
+        (await Sut.SetAsync(_cacheKey, values, TimeSpan.FromMinutes(5), policy: null, token: testContextAccessor.Current.CancellationToken)).Should().BeFalse();
+
+        await _database.DidNotReceive().KeyRenameAsync(Arg.Any<RedisKey>(), Arg.Any<RedisKey>(), Arg.Any<When>(), Arg.Any<CommandFlags>());
+        await _database.Received(1).KeyDeleteAsync(Arg.Is<RedisKey>(k => k != _redisKey), Arg.Any<CommandFlags>());
+    }
+
+    [Fact]
+    public async Task A_merge_of_many_fields_goes_in_chunks_straight_into_the_hash()
+    {
+        _redisCacheOptions.HashFieldBatchSize = 3;
+        _sut = null;
+        _transaction.ExecuteAsync(Arg.Any<CommandFlags>()).Returns(true);
+        _database.HashSetAsync(Arg.Any<RedisKey>(), Arg.Any<HashEntry[]>(), Arg.Any<CommandFlags>()).Returns(Task.CompletedTask);
+        _database.KeyExpireAsync(Arg.Any<RedisKey>(), Arg.Any<DateTime?>(), Arg.Any<CommandFlags>()).Returns(true);
+        var values = Enumerable.Range(0, 8).ToDictionary(i => $"f{i}", i => (string?)$"v{i}");
+
+        (await Sut.SetAsync(_cacheKey, values, new HashCacheEntryOptions(TimeToLive: TimeSpan.FromMinutes(5), SetOption: HashCacheSetOption.HashReplace), policy: null, token: testContextAccessor.Current.CancellationToken)).Should().BeTrue();
+
+        var sets = _transaction.ReceivedCalls().Concat(_database.ReceivedCalls()).Where(c => c.GetMethodInfo().Name == nameof(IDatabaseAsync.HashSetAsync)).ToArray();
+        sets.Select(c => ((HashEntry[])c.GetArguments()[1]!).Length).Should().BeEquivalentTo([3, 3, 2]);
+        sets.Select(c => (RedisKey)c.GetArguments()[0]!).Should().OnlyContain(k => k == _redisKey);
+        await _database.DidNotReceive().KeyRenameAsync(Arg.Any<RedisKey>(), Arg.Any<RedisKey>(), Arg.Any<When>(), Arg.Any<CommandFlags>());
+    }
+
+    [Fact]
+    public async Task A_write_of_no_more_than_a_batch_of_fields_stays_one_transaction()
+    {
+        _redisCacheOptions.HashFieldBatchSize = 8;
+        _sut = null;
+        _transaction.ExecuteAsync(Arg.Any<CommandFlags>()).Returns(true);
+        var values = Enumerable.Range(0, 8).ToDictionary(i => $"f{i}", i => (string?)$"v{i}");
+
+        (await Sut.SetAsync(_cacheKey, values, TimeSpan.FromMinutes(5), policy: null, token: testContextAccessor.Current.CancellationToken)).Should().BeTrue();
+
+        _database.Received(1).CreateTransaction();
+        await _database.DidNotReceive().KeyRenameAsync(Arg.Any<RedisKey>(), Arg.Any<RedisKey>(), Arg.Any<When>(), Arg.Any<CommandFlags>());
+    }
+
+    [Fact]
+    public async Task A_subset_read_of_many_fields_is_split_into_batches_and_keeps_the_order()
+    {
+        _redisCacheOptions.HashFieldBatchSize = 3;
+        _sut = null;
+        _database.HashGetAsync(_redisKey, Arg.Any<RedisValue[]>(), Arg.Any<CommandFlags>())
+            .Returns(call => ((RedisValue[])call[1]).Select(f => (RedisValue)JsonConvert.SerializeObject($"v-{f}")).ToArray());
+        var fields = Enumerable.Range(0, 7).Select(i => $"f{i}").ToArray();
+
+        var actual = await Sut.GetAsync<string>(_cacheKey, fields, policy: null, token: testContextAccessor.Current.CancellationToken);
+
+        actual.Should().HaveCount(7);
+        actual["f6"].Should().Be("v-f6");
+        _database.ReceivedCalls().Count(c => c.GetMethodInfo().Name == nameof(IDatabaseAsync.HashGetAsync) && c.GetArguments()[1] is RedisValue[]).Should().Be(3);
+    }
+
+    [Fact]
+    public async Task A_hash_too_large_for_one_read_is_read_by_pages()
+    {
+        _version = new(7, 0);
+        _redisCacheOptions.HashFieldBatchSize = 2;
+        _sut = null;
+        var expireTime = _now.AddSeconds(30);
+        _database.ScriptEvaluateReadOnlyAsync(Arg.Any<string>(), Arg.Any<RedisKey[]?>(), Arg.Any<RedisValue[]?>(), CommandFlags.PreferReplica)
+            .Returns(RedisResult.Create([RedisResult.Create((RedisValue)500L, ResultType.Integer), RedisResult.Create((RedisValue)expireTime.ToUnixTimeMilliseconds(), ResultType.Integer)]));
+        _database.HashScanAsync(_redisKey, Arg.Any<RedisValue>(), 2, Arg.Any<long>(), Arg.Any<int>(), CommandFlags.PreferReplica)
+            .Returns(Pages(Enumerable.Range(0, 5).Select(i => new HashEntry($"f{i}", JsonConvert.SerializeObject($"v{i}"))).Append(new HashEntry("f0", JsonConvert.SerializeObject("v0")))));
+
+        var actual = await Sut.GetCacheEntryAsync<string>(_cacheKey, policy: null, token: testContextAccessor.Current.CancellationToken);
+
+        actual.Value.Should().HaveCount(5);
+        actual.Value!["f4"].Should().Be("v4");
+        var sent = (RedisValue[])_database.ReceivedCalls().Single(c => c.GetMethodInfo().Name == nameof(IDatabaseAsync.ScriptEvaluateReadOnlyAsync)).GetArguments()[2]!;
+        ((long)sent.Single()).Should().Be(20, "ten batches of two fields");
+        actual.Expiration.Should().BeCloseTo(expireTime, TimeSpan.FromMilliseconds(1));
+    }
+
+    [Fact]
+    public async Task Get_cache_entry_is_one_read_with_no_separate_existence_probe()
+    {
+        _version = new(7, 0);
+        var expireTime = _now.AddSeconds(1);
+        var entries = new[] { new HashEntry("f", JsonConvert.SerializeObject("v")) };
+        _database.ScriptEvaluateReadOnlyAsync(Arg.Any<string>(), Arg.Any<RedisKey[]?>(), Arg.Any<RedisValue[]?>(), CommandFlags.PreferReplica)
+            .Returns(RedisResult.Create(
+            [
+                RedisResult.Create([.. entries.SelectMany(e => new[] { e.Name, e.Value })]),
+                RedisResult.Create((RedisValue)expireTime.ToUnixTimeMilliseconds()),
+            ]));
+
+        var actual = await Sut.GetCacheEntryAsync<string>(_cacheKey, policy: null, token: testContextAccessor.Current.CancellationToken);
+
+        actual.Value.Should().ContainKey("f");
+        await _database.DidNotReceive().KeyExistsAsync(Arg.Any<RedisKey>(), Arg.Any<CommandFlags>());
+        await _database.ReceivedWithAnyArgs(1).ScriptEvaluateReadOnlyAsync(default(string)!, default, default, default);
     }
 
     [Fact]
@@ -1725,6 +2168,15 @@ public class RedisHashCacheTests(ITestContextAccessor testContextAccessor) : IAs
         _connector.Version.Returns(_ => _version);
         _connector.IsConnected.Returns(_ => _isConnected);
         return ValueTask.CompletedTask;
+    }
+
+    private static async IAsyncEnumerable<HashEntry> Pages(IEnumerable<HashEntry> entries)
+    {
+        foreach (var entry in entries)
+        {
+            await Task.Yield();
+            yield return entry;
+        }
     }
 
     private sealed class RecordingRawSerializer : RawByteSerializerProxy

@@ -6,6 +6,10 @@ namespace UiPath.Caching.Broadcast.Redis;
 public sealed partial class RedisStreamsTopic<T> : ITopic<T>
      where T : IEvent
 {
+    private const int DoorbellIdle = 0;
+    private const int DoorbellSending = 1;
+    private const int DoorbellRingAgain = 2;
+
     private readonly IRedisStreamKeyStrategy _redisStreamKeyStrategy;
     private readonly RedisStreamSubjectWriter<T> _subscriber;
     private readonly CancellationTokenSource _stopTokenSource;
@@ -25,6 +29,8 @@ public sealed partial class RedisStreamsTopic<T> : ITopic<T>
     // Half of MaxLength; 0 = no trim.
     private readonly long _wakeEvery;
     private long _published;
+    private int _doorbell;
+    private int _doorbellFailures;
     private bool _disposed;
 
     public RedisStreamsTopic(
@@ -81,6 +87,9 @@ public sealed partial class RedisStreamsTopic<T> : ITopic<T>
     public TopicKey TopicKey { get; }
 
     public EventHandler? OnDisposed { get; set; }
+
+    // A doorbell is a hint: one stalled on Redis must not hold the rings behind it for the whole command timeout.
+    internal TimeSpan DoorbellTimeout { get; set; } = TimeSpan.FromSeconds(1);
 
     public IDisposable Subscribe(IObserver<T> observer)
     {
@@ -164,20 +173,84 @@ public sealed partial class RedisStreamsTopic<T> : ITopic<T>
     {
         if (_notifyRedisChannel.HasValue)
         {
-            try
-            {
-                // Fire-and-forget: only a send failure surfaces here.
-                _ = _redis.Database.PublishAsync(_notifyRedisChannel.Value, _context.ConsumerName, CommandFlags.FireAndForget);
-            }
-            catch (Exception ex)
-            {
-                LogNotifyPublishError(ex, TopicKey);
-            }
+            RingDoorbell();
         }
 
         if (_wakeEvery > 0 && Interlocked.Increment(ref _published) % _wakeEvery == 0)
         {
             _waiter.Signal();
+        }
+    }
+
+    /// <summary>One doorbell in flight; the rings meanwhile coalesce into one more.</summary>
+    // A doorbell per event in a burst would flood the subscribers' output buffers.
+    private void RingDoorbell()
+    {
+        while (true)
+        {
+            var state = Volatile.Read(ref _doorbell);
+            if (state == DoorbellIdle)
+            {
+                if (Interlocked.CompareExchange(ref _doorbell, DoorbellSending, DoorbellIdle) == DoorbellIdle)
+                {
+                    _ = SendDoorbellsAsync();
+                    return;
+                }
+            }
+            else if (state == DoorbellSending)
+            {
+                if (Interlocked.CompareExchange(ref _doorbell, DoorbellRingAgain, DoorbellSending) == DoorbellSending)
+                {
+                    return;
+                }
+            }
+            else
+            {
+                return;
+            }
+        }
+    }
+
+    private async Task SendDoorbellsAsync()
+    {
+        do
+        {
+            Task<long>? publish = null;
+            try
+            {
+                publish = _redis.Database.PublishAsync(_notifyRedisChannel!.Value, _context.ConsumerName);
+                await publish.WaitAsync(DoorbellTimeout, _stopTokenSource.Token).ConfigureAwait(false);
+                Volatile.Write(ref _doorbellFailures, 0);
+            }
+            catch (OperationCanceledException) when (_stopTokenSource.IsCancellationRequested)
+            {
+                publish?.Forget();
+                return;
+            }
+            catch (TimeoutException ex)
+            {
+                publish?.Forget();
+                DoorbellFailed(ex);
+            }
+            catch (Exception ex)
+            {
+                DoorbellFailed(ex);
+            }
+        }
+        while (Interlocked.CompareExchange(ref _doorbell, DoorbellIdle, DoorbellSending) != DoorbellSending && Interlocked.Exchange(ref _doorbell, DoorbellSending) == DoorbellRingAgain);
+    }
+
+    // Once per streak at warning: a stalled Redis would otherwise log every second for every topic.
+    private void DoorbellFailed(Exception ex)
+    {
+        var failures = Interlocked.Increment(ref _doorbellFailures);
+        if (failures == 1)
+        {
+            LogNotifyPublishError(ex, TopicKey);
+        }
+        else
+        {
+            LogNotifyPublishErrorAgain(ex, TopicKey, failures);
         }
     }
 
@@ -225,4 +298,7 @@ public sealed partial class RedisStreamsTopic<T> : ITopic<T>
 
     [LoggerMessage(Level = LogLevel.Warning, Message = "Best-effort notify doorbell publish failed for topic {TopicKey}")]
     private partial void LogNotifyPublishError(Exception ex, TopicKey topicKey);
+
+    [LoggerMessage(Level = LogLevel.Debug, Message = "Best-effort notify doorbell publish failed again for topic {TopicKey} ({Failures} in a row)")]
+    private partial void LogNotifyPublishErrorAgain(Exception ex, TopicKey topicKey, int failures);
 }

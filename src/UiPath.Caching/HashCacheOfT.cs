@@ -257,6 +257,33 @@ public class HashCache<T> : IHashCache<T>, ISpanKeyHashCache<T>, IStatefulHashCa
     public ValueTask<bool> RemoveAsync(Span<char> cacheKey, CancellationToken token = default) =>
         RemoveAsync(new CacheKey(cacheKey), token);
 
+    public ValueTask<bool> RemoveFieldsAsync(CacheKey cacheKey, string[] fields, CancellationToken token = default) =>
+        _cache.RemoveFieldsAsync<T>(GetCacheKey(cacheKey), fields, token);
+
+    public ValueTask<IReadOnlyList<CacheKey>> RemoveManyAsync(IEnumerable<CacheKey> cacheKeys, CancellationToken token = default)
+    {
+        ArgumentNullException.ThrowIfNull(cacheKeys);
+        if (_cacheKeyStrategy is DefaultCacheKeyStrategy)
+        {
+            return _cache.RemoveManyAsync<T>(cacheKeys, token);
+        }
+
+        var composed = ComposedKeys<CacheKey>.Create(cacheKeys, static k => k, GetCacheKey, static (_, k) => k);
+        return RestoreAsync(_cache.RemoveManyAsync<T>(composed, token), composed);
+    }
+
+    public ValueTask<IReadOnlyList<CacheKey>> SetManyAsync(IEnumerable<KeyValuePair<CacheKey, IDictionary<string, T?>>> keyValues, HashCacheEntryOptions options, CancellationToken token = default)
+    {
+        ArgumentNullException.ThrowIfNull(keyValues);
+        if (_cacheKeyStrategy is DefaultCacheKeyStrategy)
+        {
+            return _cache.SetManyAsync(keyValues, options, Policy, token);
+        }
+
+        var composed = ComposedKeys<KeyValuePair<CacheKey, IDictionary<string, T?>>>.Create(keyValues, static kv => kv.Key, GetCacheKey, static (kv, k) => new KeyValuePair<CacheKey, IDictionary<string, T?>>(k, kv.Value));
+        return RestoreAsync(_cache.SetManyAsync(composed, options, Policy, token), composed);
+    }
+
     [OverloadResolutionPriority(1)]
     public ValueTask<bool> ContainsAsync(CacheKey cacheKey, CancellationToken token = default)
     {
@@ -285,6 +312,9 @@ public class HashCache<T> : IHashCache<T>, ISpanKeyHashCache<T>, IStatefulHashCa
 
     public ValueTask<bool> SetMetadataAsync(CacheKey cacheKey, IDictionary<string, string?> metadata, CancellationToken token = default) =>
         _cache.SetMetadataAsync<T>(GetCacheKey(cacheKey), metadata, token);
+
+    private static async ValueTask<IReadOnlyList<CacheKey>> RestoreAsync<TItem>(ValueTask<IReadOnlyList<CacheKey>> pending, ComposedKeys<TItem> composed) =>
+        composed.Restore(await pending.ConfigureAwait(false));
 
     private CacheKey GetCacheKey(CacheKey cacheKey) =>
         _cacheKeyStrategy.GetCacheKey<T>(cacheKey);

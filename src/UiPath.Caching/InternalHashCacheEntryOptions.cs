@@ -21,6 +21,9 @@ internal record struct InternalHashCacheEntryOptions : ICacheEntryOptions
     
     public HashCacheSetOption SetOption { get; init; }
 
+    /// <summary>The fields of this write are merged into a hash that holds others, so they are not the whole hash.</summary>
+    public bool Partial { get; init; }
+
     public DateTimeOffset Expiration { get; set; }
 
     public IDictionary<string, string?>? Metadata { get; set; }

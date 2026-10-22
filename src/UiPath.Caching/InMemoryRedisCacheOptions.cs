@@ -6,6 +6,10 @@ public class InMemoryRedisCacheOptions : IMultilayerCacheOptions, IMemoryCacheOp
 {
     internal const int DefaultMaxBackgroundWrites = 1024;
 
+    internal const int DefaultBatchChunkSize = 500;
+
+    internal const int DefaultBatchConcurrentChunks = 2;
+
     internal static readonly TimeSpan DefaultBackgroundWriteDrainTimeout = TimeSpan.FromSeconds(5);
 
     public bool Enabled { get; set; } = true;
@@ -69,6 +73,16 @@ public class InMemoryRedisCacheOptions : IMultilayerCacheOptions, IMemoryCacheOp
 
     /// <summary>How long disposing the cache waits for background writes still running before it cancels them; <see cref="Timeout.InfiniteTimeSpan"/> waits for them all.</summary>
     public TimeSpan BackgroundWriteDrainTimeout { get; set; } = DefaultBackgroundWriteDrainTimeout;
+
+    /// <summary>How many keys <c>RemoveManyAsync</c> and <c>SetManyAsync</c> put on the wire at once; the input is taken in chunks of this size, so memory and the wait for one reply stay bounded however many keys there are.</summary>
+    public int BatchChunkSize { get; set; } = DefaultBatchChunkSize;
+
+    /// <summary>How many chunks of a batch call are in flight at once; one chunk's events go out while the next chunk's commands are sent.</summary>
+    public int BatchConcurrentChunks { get; set; } = DefaultBatchConcurrentChunks;
+
+    /// <summary>Above this many keys (an input of known size), a batch call sends one topic-wide event after its writes instead of one per key; null keeps one per key.</summary>
+    /// <remarks>Every node then drops the local tier of the topic, for every cache that shares it, since events name no cache. An older node ignores the event and keeps its copies until they expire, so set it only once every node knows it.</remarks>
+    public int? BatchTopicInvalidationThreshold { get; set; }
 
     // Declared before the new pair: the configuration binder sets properties in declaration order, so the new key wins when both are set.
     [Obsolete("Use LocalSingleFlightEnabled; the in-process lock it named is gone.")]

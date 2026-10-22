@@ -1,6 +1,7 @@
+#pragma warning disable S3060 // by design: the default body serves a cache through its CacheKey members
 namespace UiPath.Caching;
 
-/// <summary>An <see cref="ICache"/> that reads by the key's text without building a <see cref="CacheKey"/>; the <c>Span&lt;char&gt;</c> members of <see cref="ICache"/> prefer it.</summary>
+/// <summary>An <see cref="ICache"/> that reads by the key's text without building a <see cref="CacheKey"/>; the <c>Span&lt;char&gt;</c> members of <see cref="ICache"/> prefer it, and its batch members too.</summary>
 /// <remarks>Apart from <see cref="ICache"/>, so a mock never has to proxy a <c>Span&lt;char&gt;</c> parameter. Implemented by the library's in-memory and multilayer caches.</remarks>
 public interface ISpanKeyCache
 {
@@ -45,4 +46,28 @@ public interface ISpanKeyCache
 
     /// <inheritdoc cref="SetAsync{T}(Span{char}, T, CachePolicy, CancellationToken)"/>
     ValueTask<bool> SetAsync<T>(Span<char> cacheKey, T? value, DateTimeOffset expiration, CachePolicy? policy, CancellationToken token = default);
+
+    /// <summary>Removes each key and announces each removal; returns the keys that failed, empty when all succeeded.</summary>
+    ValueTask<IReadOnlyList<CacheKey>> RemoveManyAsync<T>(IEnumerable<CacheKey> cacheKeys, CancellationToken token = default) =>
+        this is ICache cache
+            ? MultiKeyFallback.RunAsync(cacheKeys, (Cache: cache, Token: token), static k => k, static (s, k) => s.Cache.RemoveAsync<T>(k, s.Token))
+            : throw new NotSupportedException($"{GetType().Name} is not a cache.");
+
+    /// <summary>Sets each key and announces each write that landed; returns the keys that failed, empty when all succeeded.</summary>
+    ValueTask<IReadOnlyList<CacheKey>> SetManyAsync<T>(IEnumerable<KeyValuePair<CacheKey, T?>> keyValues, CachePolicy? policy, CancellationToken token = default) =>
+        this is ICache cache
+            ? MultiKeyFallback.RunAsync(keyValues, (Cache: cache, Policy: policy, Token: token), static kv => kv.Key, static (s, kv) => s.Cache.SetAsync(kv.Key, kv.Value, s.Policy, s.Token))
+            : throw new NotSupportedException($"{GetType().Name} is not a cache.");
+
+    /// <inheritdoc cref="SetManyAsync{T}(IEnumerable{KeyValuePair{CacheKey, T}}, CachePolicy, CancellationToken)"/>
+    ValueTask<IReadOnlyList<CacheKey>> SetManyAsync<T>(IEnumerable<KeyValuePair<CacheKey, T?>> keyValues, TimeSpan expiration, CachePolicy? policy, CancellationToken token = default) =>
+        this is ICache cache
+            ? MultiKeyFallback.RunAsync(keyValues, (Cache: cache, Expiration: expiration, Policy: policy, Token: token), static kv => kv.Key, static (s, kv) => s.Cache.SetAsync(kv.Key, kv.Value, s.Expiration, s.Policy, s.Token))
+            : throw new NotSupportedException($"{GetType().Name} is not a cache.");
+
+    /// <inheritdoc cref="SetManyAsync{T}(IEnumerable{KeyValuePair{CacheKey, T}}, CachePolicy, CancellationToken)"/>
+    ValueTask<IReadOnlyList<CacheKey>> SetManyAsync<T>(IEnumerable<KeyValuePair<CacheKey, T?>> keyValues, DateTimeOffset expiration, CachePolicy? policy, CancellationToken token = default) =>
+        this is ICache cache
+            ? MultiKeyFallback.RunAsync(keyValues, (Cache: cache, Expiration: expiration, Policy: policy, Token: token), static kv => kv.Key, static (s, kv) => s.Cache.SetAsync(kv.Key, kv.Value, s.Expiration, s.Policy, s.Token))
+            : throw new NotSupportedException($"{GetType().Name} is not a cache.");
 }

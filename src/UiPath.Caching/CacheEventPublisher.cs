@@ -105,6 +105,24 @@ public sealed partial class CacheEventPublisher
         where TOptions : struct, ICacheEntryOptions =>
         RaiseEventAsync(options, KnownEventTypes.CacheRemoved, entryType);
 
+    internal ValueTask<bool> TopicInvalidatedAsync(TopicKey topicKey)
+    {
+        try
+        {
+            if (_topicProvider is NullTopicProvider)
+            {
+                return new ValueTask<bool>(true);
+            }
+
+            var ev = _cacheEventFactory.Create(_cacheName, KnownEventTypes.TopicInvalidated, new CacheEventData(KnownFieldNames.AllKeys));
+            return _topicProvider.Create(topicKey).PublishAsync(ev, CancellationToken.None);
+        }
+        catch (Exception ex)
+        {
+            return ValueTask.FromException<bool>(ex);
+        }
+    }
+
     private ValueTask<bool> RaiseEventAsync<TOptions>(TOptions options, string eventType, Type? entryType, IDictionary<string, object?>? properties = null)
         where TOptions : ICacheEntryOptions
     {

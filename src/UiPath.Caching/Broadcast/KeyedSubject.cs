@@ -54,6 +54,12 @@ internal sealed partial class KeyedSubject<T> : IEventSubject<T> where T : IEven
             return;
         }
 
+        if (value.Type == KnownEventTypes.TopicInvalidated)
+        {
+            Invalidate(MissedEventsReason.Lost);
+            return;
+        }
+
         var key = value.Key;
         if (key != null && _keyedObservers.TryGetValue(key, out var observers))
         {

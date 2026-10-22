@@ -176,7 +176,82 @@ public class RedisStreamsTopicTests(ITestContextAccessor testContextAccessor) : 
         await _database.Received(1).PublishAsync(
             Arg.Any<RedisChannel>(),
             (RedisValue)(_cacheOptions.SourceUri ?? CacheOptions.MachineUri).ToString().ToLowerInvariant(),
-            CommandFlags.FireAndForget);
+            CommandFlags.None);
+    }
+
+    [Fact]
+    public async Task A_burst_of_events_rings_the_doorbell_once_and_then_once_more_for_the_rest()
+    {
+        _redisStreamsTopicOptions.NotifyEnabled = true;
+        _redisStreamsTopicOptions.NotifySubscriberTimeout = TimeSpan.FromSeconds(60);
+        _redisStreamsTopicOptions.NotifySubscriberDueTime = TimeSpan.FromSeconds(60);
+        _sut = null;
+        _database.StreamAddAsync(
+                key: Arg.Any<RedisKey>(),
+                streamField: Arg.Any<RedisValue>(),
+                streamValue: Arg.Any<RedisValue>(),
+                messageId: Arg.Any<RedisValue?>(),
+                maxLength: Arg.Any<long?>(),
+                useApproximateMaxLength: Arg.Any<bool>(),
+                limit: Arg.Any<long?>(),
+                trimMode: Arg.Any<StreamTrimMode>(),
+                flags: Arg.Any<CommandFlags>())
+            .Returns("1-0");
+        var gate = new TaskCompletionSource<long>(TaskCreationOptions.RunContinuationsAsynchronously);
+        _database.PublishAsync(Arg.Any<RedisChannel>(), Arg.Any<RedisValue>(), Arg.Any<CommandFlags>())
+            .ReturnsForAnyArgs(_ => gate.Task);
+
+        for (var i = 0; i < 20; i++)
+        {
+            (await Sut.PublishAsync(_fixture.Create<ICacheEvent>(), testContextAccessor.Current.CancellationToken)).Should().BeTrue();
+        }
+
+        await _database.ReceivedWithAnyArgs(1).PublishAsync(default, default, default);
+        gate.SetResult(1);
+        var until = DateTime.UtcNow.AddSeconds(5);
+        while (_database.ReceivedCalls().Count(c => c.GetMethodInfo().Name == nameof(IDatabaseAsync.PublishAsync)) < 2 && DateTime.UtcNow < until)
+        {
+            await Task.Delay(5, testContextAccessor.Current.CancellationToken);
+        }
+
+        await Task.Delay(100, testContextAccessor.Current.CancellationToken);
+        await _database.ReceivedWithAnyArgs(2).PublishAsync(default, default, default);
+    }
+
+    [Fact]
+    public async Task A_doorbell_stalled_on_redis_holds_the_rings_behind_it_only_for_its_timeout()
+    {
+        _redisStreamsTopicOptions.NotifyEnabled = true;
+        _redisStreamsTopicOptions.NotifySubscriberTimeout = TimeSpan.FromSeconds(60);
+        _redisStreamsTopicOptions.NotifySubscriberDueTime = TimeSpan.FromSeconds(60);
+        _sut = null;
+        _database.StreamAddAsync(
+                key: Arg.Any<RedisKey>(),
+                streamField: Arg.Any<RedisValue>(),
+                streamValue: Arg.Any<RedisValue>(),
+                messageId: Arg.Any<RedisValue?>(),
+                maxLength: Arg.Any<long?>(),
+                useApproximateMaxLength: Arg.Any<bool>(),
+                limit: Arg.Any<long?>(),
+                trimMode: Arg.Any<StreamTrimMode>(),
+                flags: Arg.Any<CommandFlags>())
+            .Returns("1-0");
+        var stalled = new TaskCompletionSource<long>(TaskCreationOptions.RunContinuationsAsynchronously);
+        _database.PublishAsync(Arg.Any<RedisChannel>(), Arg.Any<RedisValue>(), Arg.Any<CommandFlags>())
+            .ReturnsForAnyArgs(_ => stalled.Task);
+        Sut.DoorbellTimeout = TimeSpan.FromMilliseconds(200);
+
+        (await Sut.PublishAsync(_fixture.Create<ICacheEvent>(), testContextAccessor.Current.CancellationToken)).Should().BeTrue();
+        (await Sut.PublishAsync(_fixture.Create<ICacheEvent>(), testContextAccessor.Current.CancellationToken)).Should().BeTrue();
+
+        var until = DateTime.UtcNow.AddSeconds(5);
+        while (_database.ReceivedCalls().Count(c => c.GetMethodInfo().Name == nameof(IDatabaseAsync.PublishAsync)) < 2 && DateTime.UtcNow < until)
+        {
+            await Task.Delay(5, testContextAccessor.Current.CancellationToken);
+        }
+
+        await _database.ReceivedWithAnyArgs(2).PublishAsync(default, default, default);
+        stalled.SetResult(1);
     }
 
     [Fact]
@@ -205,6 +280,40 @@ public class RedisStreamsTopicTests(ITestContextAccessor testContextAccessor) : 
         var ok = await Sut.PublishAsync(ev, testContextAccessor.Current.CancellationToken);
 
         ok.Should().BeTrue();
+    }
+
+    [Fact]
+    public async Task A_doorbell_that_times_out_at_once_does_not_stop_the_next_ring()
+    {
+        _redisStreamsTopicOptions.NotifyEnabled = true;
+        _redisStreamsTopicOptions.NotifySubscriberTimeout = TimeSpan.FromSeconds(60);
+        _redisStreamsTopicOptions.NotifySubscriberDueTime = TimeSpan.FromSeconds(60);
+        _sut = null;
+        _database.StreamAddAsync(
+                key: Arg.Any<RedisKey>(),
+                streamField: Arg.Any<RedisValue>(),
+                streamValue: Arg.Any<RedisValue>(),
+                messageId: Arg.Any<RedisValue?>(),
+                maxLength: Arg.Any<long?>(),
+                useApproximateMaxLength: Arg.Any<bool>(),
+                limit: Arg.Any<long?>(),
+                trimMode: Arg.Any<StreamTrimMode>(),
+                flags: Arg.Any<CommandFlags>())
+            .Returns("1-0");
+        var calls = 0;
+        _database.PublishAsync(Arg.Any<RedisChannel>(), Arg.Any<RedisValue>(), Arg.Any<CommandFlags>())
+            .ReturnsForAnyArgs(_ => Interlocked.Increment(ref calls) == 1 ? throw new TimeoutException("timed out") : Task.FromResult(1L));
+
+        (await Sut.PublishAsync(_fixture.Create<ICacheEvent>(), testContextAccessor.Current.CancellationToken)).Should().BeTrue();
+        (await Sut.PublishAsync(_fixture.Create<ICacheEvent>(), testContextAccessor.Current.CancellationToken)).Should().BeTrue();
+
+        var until = DateTime.UtcNow.AddSeconds(5);
+        while (Volatile.Read(ref calls) < 2 && DateTime.UtcNow < until)
+        {
+            await Task.Delay(5, testContextAccessor.Current.CancellationToken);
+        }
+
+        Volatile.Read(ref calls).Should().BeGreaterThanOrEqualTo(2);
     }
 
     [Fact]
