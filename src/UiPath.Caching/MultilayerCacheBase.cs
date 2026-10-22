@@ -22,6 +22,7 @@ public abstract partial class MultilayerCacheBase : IDisposable
     private protected readonly RehydrationCoordinator _rehydrator;
     private protected readonly CachePolicy _defaultPolicy;
     private protected readonly KeyMasker _masker;
+    private protected readonly BackgroundWrites _background;
 
     // Hardcoded fallback values for the lock fields. Merged in as the lowest-priority policy
     // (after provider-specific + user DefaultCachePolicy) so every cache instance has a fully
@@ -78,6 +79,20 @@ public abstract partial class MultilayerCacheBase : IDisposable
         _cacheEntryFactory = _multiLayerCacheOptions.EntryFactory ?? new CacheEntryFactory();
         _monitor = _memoryCache.Monitor(multiLayerCacheOptions, Telemetry, GetType().Name);
         _clock = clock;
+        var redisOptions = multiLayerCacheOptions as InMemoryRedisCacheOptions;
+        var drainTimeout = redisOptions?.BackgroundWriteDrainTimeout ?? InMemoryRedisCacheOptions.DefaultBackgroundWriteDrainTimeout;
+        if (drainTimeout != Timeout.InfiniteTimeSpan)
+        {
+            drainTimeout = drainTimeout < TimeSpan.Zero ? TimeSpan.Zero : BoundedTimeout(drainTimeout);
+        }
+
+        _background = new BackgroundWrites(
+            innerCache is NullCache or NullHashCache ? 0 : Math.Max(0, redisOptions?.MaxBackgroundWrites ?? InMemoryRedisCacheOptions.DefaultMaxBackgroundWrites),
+            drainTimeout,
+            cacheName,
+            logger,
+            telemetryProvider,
+            clock);
         _topicProvider = topicFactory.Get(_multiLayerCacheOptions.Topic);
         _eventPublisher = new CacheEventPublisher(cacheName, _topicProvider, cacheEventFactory, logger, _masker);
         var connectionMonitorEnabled = multiLayerCacheOptions.ConnectionMonitorEnabled ?? cacheOptions.ConnectionMonitorEnabled;
@@ -97,6 +112,8 @@ public abstract partial class MultilayerCacheBase : IDisposable
     }
 
     public string Name { get; }
+
+    internal bool BackgroundWritesActive => _background.Active;
 
     protected ICachingTelemetryProvider Telemetry { get; }
     public void Dispose()
@@ -164,6 +181,7 @@ public abstract partial class MultilayerCacheBase : IDisposable
         {
             if (disposing)
             {
+                _background.Drain();
                 _monitor.Dispose();
                 _memoryCache.Dispose();
                 if (_connectionState is IDisposable connectionState)
@@ -175,6 +193,8 @@ public abstract partial class MultilayerCacheBase : IDisposable
         }
     }
 
+    private protected static ValueTask Settled(Task pending, CancellationToken token) => pending.IsCompleted ? default : new ValueTask(pending.WaitAsync(token));
+
     /// <summary>A timeout a cancellation source takes: <c>CancelAfter</c> throws beyond <see cref="int.MaxValue"/> milliseconds, so a misconfigured <c>Lock.LocalSingleFlightTimeout</c> degrades to that.</summary>
     private protected static TimeSpan BoundedTimeout(TimeSpan timeout) =>
         timeout.TotalMilliseconds > int.MaxValue ? TimeSpan.FromMilliseconds(int.MaxValue) : timeout;
@@ -184,6 +204,81 @@ public abstract partial class MultilayerCacheBase : IDisposable
         GetInnerCacheDisconnected()
             ? policy.LocalExpirationDisconnected ?? _multiLayerCacheOptions.LocalMaxExpirationDisconnected
             : policy.LocalExpiration ?? _multiLayerCacheOptions.LocalMaxExpiration;
+
+    private protected Task DrainBackgroundAsync() => _background.DrainAsync();
+
+    /// <summary>Await <see cref="BackgroundWrites.Turn.Previous"/> before the inner write; dispose once written.</summary>
+    private protected BackgroundWrites.Turn EnterInnerWrite(string key) => _background.Enter(key);
+
+    private protected BackgroundWrites.Turn EnterInnerWrite(IEnumerable<string> keys) => _background.Enter(keys);
+
+    private protected long MarkInnerRead(string key) => _background.Mark(key);
+
+    /// <summary>Null when a change of the key since <paramref name="mark"/> kept the read's value out.</summary>
+    private protected bool? FillFromInnerRead<TState>(string key, long mark, TState state, Func<TState, bool> set) => _background.Fill(key, mark, state, set);
+
+    [LoggerMessage(Level = LogLevel.Debug, Message = "Inner copy of {CacheKey} not kept locally: a write of it, or of a key sharing its stripe, came after the read began.")]
+    private protected partial void LogInnerCopyNotKept(LoggedKey cacheKey);
+
+    private protected bool ApplyLocal<TState>(string key, TState state, Func<TState, bool> change) => _background.Apply(key, state, change);
+
+    private protected void RemoveLocal(string key) =>
+        _background.Apply(key, (Memory: _memoryCache, Key: key), static s =>
+        {
+            s.Memory.Remove(s.Key);
+            return true;
+        });
+
+    private protected TimeSpan? DisconnectedLifetime(CachePolicy policy) =>
+        policy.LocalExpirationDisconnected ?? _multiLayerCacheOptions.LocalMaxExpirationDisconnected;
+
+    private protected TimeSpan? ConnectedLifetime(CachePolicy policy) =>
+        policy.LocalExpiration ?? _multiLayerCacheOptions.LocalMaxExpiration;
+
+    /// <summary>Whether a newer write, a removal or an invalidation has not replaced the entry since.</summary>
+    private protected bool IsLocalEntry(string name, object entry) =>
+        _memoryCache.TryGetValue(name, out var current) && ReferenceEquals(current, entry);
+
+    /// <summary>Write, then promote and publish; a failed step is counted and leaves the value local for the disconnected cap.</summary>
+    private protected async ValueTask DetachedWriteAsync<TState>(TState state, Func<TState, CancellationToken, ValueTask<bool>> write, Action<TState> promote, Func<TState, ValueTask<bool>>? publish, CancellationToken token)
+    {
+        var written = false;
+        try
+        {
+            written = await write(state, token).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) when (token.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "A background write in {Cache} failed.", Name);
+        }
+
+        if (!written)
+        {
+            // The Redis setters answer a cancelled write with false; a drain's cancel is counted apart.
+            token.ThrowIfCancellationRequested();
+
+            _background.Failed("write");
+            return;
+        }
+
+        try
+        {
+            promote(state);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "A background write in {Cache} could not extend the local entry.", Name);
+        }
+
+        if (publish is not null && !await publish(state).ConfigureAwait(false))
+        {
+            _background.Failed("event");
+        }
+    }
 
     /// <summary>Writes locally after an inner write: for the normal lifetime when the inner tier took it, and with <paramref name="keepRefused"/> for the disconnected cap when it refused it.</summary>
     private protected bool KeepAfterInnerWrite<TState>(bool written, bool keepRefused, CachePolicy policy, TState state, Func<TState, TimeSpan?, bool> memorySet, CancellationToken token)

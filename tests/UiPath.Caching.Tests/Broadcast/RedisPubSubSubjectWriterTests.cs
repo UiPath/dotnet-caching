@@ -236,6 +236,72 @@ public class RedisPubSubSubjectWriterTests(ITestContextAccessor testContextAcces
     }
 
     [Fact]
+    public async Task A_reconnect_whose_subscriber_cannot_be_read_still_subscribes_again()
+    {
+        var redis = _fixture.Freeze<IRedisConnector>();
+        var throwNext = false;
+        redis.Subscriber.Returns(_ =>
+        {
+            if (throwNext)
+            {
+                throwNext = false;
+                throw new ObjectDisposedException("multiplexer");
+            }
+
+            return _subscriber;
+        });
+        var subscribes = 0;
+        _subscriber.When(s => s.Subscribe(Arg.Any<RedisChannel>(), Arg.Any<Action<RedisChannel, RedisValue>>(), Arg.Any<CommandFlags>()))
+            .Do(_ => Interlocked.Increment(ref subscribes));
+        _fixture.Inject<Action>(() => { });
+        Sut();
+        await EventuallyAsync(() => Volatile.Read(ref subscribes) == 1);
+
+        throwNext = true;
+        redis.OnReconnected += Raise.Event<EventHandler>(redis, EventArgs.Empty);
+
+        await EventuallyAsync(() => Volatile.Read(ref subscribes) >= 2);
+        Volatile.Read(ref subscribes).Should().BeGreaterThanOrEqualTo(2);
+    }
+
+    [Fact]
+    public async Task A_reconnect_during_the_first_subscribe_still_ignores_the_retired_connection()
+    {
+        var redis = _fixture.Freeze<IRedisConnector>();
+        redis.Subscriber.Returns(_subscriber);
+        var retired = Substitute.For<IConnectionMultiplexer>();
+        _subscriber.Multiplexer.Returns(retired);
+        using var inFirstSubscribe = new ManualResetEventSlim();
+        using var releaseFirst = new ManualResetEventSlim();
+        var subscribes = 0;
+        _subscriber.When(s => s.Subscribe(Arg.Any<RedisChannel>(), Arg.Any<Action<RedisChannel, RedisValue>>(), Arg.Any<CommandFlags>()))
+            .Do(_ =>
+            {
+                if (Interlocked.Increment(ref subscribes) == 1)
+                {
+                    inFirstSubscribe.Set();
+                    releaseFirst.Wait(TimeSpan.FromSeconds(10));
+                }
+            });
+        var gaps = 0;
+        _fixture.Inject<Action>(() => Interlocked.Increment(ref gaps));
+        var node = new DnsEndPoint("node-1", 6379);
+        Sut();
+        inFirstSubscribe.Wait(TimeSpan.FromSeconds(10), testContextAccessor.Current.CancellationToken).Should().BeTrue();
+        _subscriber.Multiplexer.Returns(Substitute.For<IConnectionMultiplexer>());
+
+        redis.OnReconnected += Raise.Event<EventHandler>(redis, EventArgs.Empty);
+        releaseFirst.Set();
+        RaiseConnectionEvent(redis, failed: true, new DnsEndPoint("node-2", 6379), ConnectionType.Subscription, retired);
+        await EventuallyAsync(() => Volatile.Read(ref subscribes) >= 2 && Volatile.Read(ref gaps) == 1);
+        RaiseConnectionEvent(redis, failed: true, node, ConnectionType.Subscription);
+        RaiseConnectionEvent(redis, failed: false, node, ConnectionType.Subscription);
+
+        await EventuallyAsync(() => Volatile.Read(ref gaps) == 2);
+        Volatile.Read(ref gaps).Should().Be(2, "the subscribe the reconnect overtook had not finished, and its connection is still the retired one");
+    }
+
+    [Fact]
     public async Task A_failure_of_the_command_connection_alone_reports_no_gap()
     {
         var redis = _fixture.Freeze<IRedisConnector>();

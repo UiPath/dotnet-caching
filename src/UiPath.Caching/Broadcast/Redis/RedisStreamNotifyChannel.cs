@@ -33,9 +33,8 @@ internal sealed partial class RedisStreamNotifyChannel : IDisposable
     // Live for the waiter's long interval only while subscribed, connected and not denied.
     private volatile bool _subscribed;
     private bool _unnamedFailure;
-    // Under _liveGate: the multiplexer the subscription was taken on, and the one a reconnect retired, whose events no longer count.
-    private IConnectionMultiplexer? _subscribedOn;
-    private IConnectionMultiplexer? _retired;
+    // Under _liveGate: the connector's multiplexer as of the last reconnect; events from any other one no longer count.
+    private IConnectionMultiplexer? _current;
     // Bumped by every subscription failure, so a subscribe that a failure overtook does not read as up.
     private long _connectionFailures;
 
@@ -141,7 +140,6 @@ internal sealed partial class RedisStreamNotifyChannel : IDisposable
             _failures = 0;
             lock (_liveGate)
             {
-                _subscribedOn = subscriber.Multiplexer;
                 if (Interlocked.Read(ref _connectionFailures) == failuresBefore)
                 {
                     // Subscribed on a connection that is up: the failures before it are over.
@@ -225,11 +223,26 @@ internal sealed partial class RedisStreamNotifyChannel : IDisposable
             // The retired connection will not report its restores; the resubscribe covers what it dropped.
             _subscriptionsDown.Clear();
             _unnamedFailure = false;
-            _retired = _subscribedOn;
+            // Swapped in before this event, so a subscribe already on it is not mistaken for the retired one; read under the lock, so a later reconnect's wins.
+            _current = CurrentMultiplexer();
             _subscribed = false;
             PublishLiveLocked();
         }
         Reschedule(_timerDueTime);
+    }
+
+    // Null, which counts every sender as current, when the connector cannot say: the resubscribe must still be armed.
+    private IConnectionMultiplexer? CurrentMultiplexer()
+    {
+        try
+        {
+            return _redis.Subscriber.Multiplexer;
+        }
+        catch (Exception ex)
+        {
+            LogSubscribeError(LogLevel.Warning, ex, _channel);
+            return null;
+        }
     }
 
     private void OnConnectionFailed(object? sender, EventArgs e)
@@ -305,7 +318,7 @@ internal sealed partial class RedisStreamNotifyChannel : IDisposable
 
     private void PublishLiveLocked() => _waiter.SetNotifyLive(IsLiveLocked());
 
-    private bool IsRetired(object? sender) => sender is not null && ReferenceEquals(sender, _retired);
+    private bool IsRetired(object? sender) => _current is not null && sender is IConnectionMultiplexer multiplexer && !ReferenceEquals(multiplexer, _current);
 
     private bool IsLiveLocked() => _subscribed && !_unnamedFailure && _subscriptionsDown.Count == 0 && !_disposed;
 

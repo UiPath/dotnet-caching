@@ -22,3 +22,7 @@ UiPath.Caching.HashCache<T>.SetAsync(System.Span<char> cacheKey, System.Collecti
 UiPath.Caching.HashCache<T>.SetAsync(System.Span<char> cacheKey, System.Collections.Generic.IDictionary<string!, T?>! values, UiPath.Caching.HashCacheEntryOptions options, System.Threading.CancellationToken token = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.ValueTask<bool>
 UiPath.Caching.Broadcast.Redis.RedisStreamsTopicOptions.NotifiedPollInterval.get -> System.TimeSpan?
 UiPath.Caching.Broadcast.Redis.RedisStreamsTopicOptions.NotifiedPollInterval.set -> void
+UiPath.Caching.InMemoryRedisCacheOptions.MaxBackgroundWrites.get -> int
+UiPath.Caching.InMemoryRedisCacheOptions.MaxBackgroundWrites.set -> void
+UiPath.Caching.InMemoryRedisCacheOptions.BackgroundWriteDrainTimeout.get -> System.TimeSpan
+UiPath.Caching.InMemoryRedisCacheOptions.BackgroundWriteDrainTimeout.set -> void

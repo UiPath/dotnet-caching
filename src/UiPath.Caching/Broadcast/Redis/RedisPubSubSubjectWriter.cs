@@ -34,9 +34,8 @@ internal sealed partial class RedisPubSubSubjectWriter<T> : IDisposable
     // Under _gate: whether a source that names no connection reported a failure.
     private bool _unnamedFailure;
 
-    // Under _gate: the multiplexer the subscription was taken on, and the one a reconnect retired, whose events no longer count.
-    private IConnectionMultiplexer? _subscribedOn;
-    private IConnectionMultiplexer? _retired;
+    // Under _gate: the connector's multiplexer as of the last reconnect; events from any other one no longer count.
+    private IConnectionMultiplexer? _current;
     private int _activations;
 
     public RedisPubSubSubjectWriter(
@@ -138,7 +137,6 @@ internal sealed partial class RedisPubSubSubjectWriter<T> : IDisposable
                 }
 
                 _subscribeTimer.Change(Timeout.Infinite, Timeout.Infinite);
-                _subscribedOn = subscriber.Multiplexer;
                 _activeGeneration = generation;
                 _activations++;
                 gap = _gap;
@@ -173,10 +171,25 @@ internal sealed partial class RedisPubSubSubjectWriter<T> : IDisposable
             // The retired connection will not report its restores; the resubscribe this arms covers what it dropped.
             _subscriptionsDown.Clear();
             _unnamedFailure = false;
-            _retired = _subscribedOn;
+            // Swapped in before this event, so a subscribe already on it is not mistaken for the retired one; read under the lock, so a later reconnect's wins.
+            _current = CurrentMultiplexer();
             _generation++;
             _gap = true;
             _subscribeTimer.Change(_timerDueTime, _timerPeriod);
+        }
+    }
+
+    // Null, which counts every sender as current, when the connector cannot say: the resubscribe must still be armed.
+    private IConnectionMultiplexer? CurrentMultiplexer()
+    {
+        try
+        {
+            return _redis.Subscriber.Multiplexer;
+        }
+        catch (Exception ex)
+        {
+            LogSubscribeError(ex, _redisChannel);
+            return null;
         }
     }
 
@@ -229,7 +242,7 @@ internal sealed partial class RedisPubSubSubjectWriter<T> : IDisposable
     {
         lock (_gate)
         {
-            if (sender is not null && ReferenceEquals(sender, _retired))
+            if (IsRetired(sender))
             {
                 return;
             }
@@ -254,7 +267,7 @@ internal sealed partial class RedisPubSubSubjectWriter<T> : IDisposable
         bool lost = false;
         lock (_gate)
         {
-            if (sender is not null && ReferenceEquals(sender, _retired))
+            if (IsRetired(sender))
             {
                 return;
             }
@@ -284,6 +297,8 @@ internal sealed partial class RedisPubSubSubjectWriter<T> : IDisposable
             ThreadPool.UnsafeQueueUserWorkItem(static self => self._onSubscriptionGap(), this, preferLocal: false);
         }
     }
+
+    private bool IsRetired(object? sender) => _current is not null && sender is IConnectionMultiplexer multiplexer && !ReferenceEquals(multiplexer, _current);
 
     private void Unsubscribe()
     {
