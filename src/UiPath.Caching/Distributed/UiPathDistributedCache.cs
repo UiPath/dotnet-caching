@@ -1,6 +1,7 @@
 using System.Buffers.Text;
 using System.Runtime.InteropServices;
 using Microsoft.Extensions.Caching.Distributed;
+using UiPath.Caching.Config;
 
 namespace UiPath.Caching.Distributed;
 
@@ -52,7 +53,8 @@ internal sealed partial class UiPathDistributedCache : IDistributedCache
         _keyStrategy = keyStrategy;
         _defaultEntryExpiration = options.DefaultEntryExpiration;
         _allowUnboundedEntries = options.AllowUnboundedEntries;
-        _policy = policy;
+        // Its writes borrow the caller's memory, so none may outlive the call: the hash cache is told no background writes whatever the policy says.
+        _policy = policy is null ? null : CachePolicyMerger.Merge(new CachePolicy { BackgroundDistributedWrite = false }, policy);
         _slideByRewrite = slideByRewrite;
         TierRetainsValues = tierRetainsValues;
         _logger = logger;

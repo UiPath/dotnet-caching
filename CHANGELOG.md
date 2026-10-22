@@ -8,6 +8,19 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 
 ### Added
 
+- **`CachePolicy.BackgroundDistributedWrite`.** Opt-in per policy (`Caching:Policies`, or the default policy for the
+  whole cache): single-key `SetAsync` and the write after a `GetOrAddAsync` miss, on the cache and on the hash cache, return once the
+  value is in L1, and the L2 write, then a set's event, run detached. The value is local for `LocalMaxExpirationDisconnected` until the L2 write
+  succeeds, then for its normal lifetime; writes to one key keep their order; `InMemoryRedisCacheOptions.MaxBackgroundWrites`
+  (default 1024) bounds them, with the foreground as the overflow; `BackgroundWriteDrainTimeout` bounds the wait for them
+  when the cache is disposed (`Timeout.InfiniteTimeSpan` waits for them all; those it cancels stay local only and are counted
+  under the `drain_cancelled` stage). Batch writes, `RemoveAsync`, `TryAddAsync`, refresh, metadata writes and a fill under the distributed lock are
+  unchanged, and wait for the background writes of their key; a background write in turn waits for every write of its key
+  issued before it, and an awaited write that lands after a newer background one leaves that one's value local, as does an L2 read
+  that began before a write or removal of the key; such a read is not kept locally, nor is one of a key sharing the
+  written key's stripe (one in 1024), and the next read keeps it. The caller's token ends the wait. The `IDistributedCache` adapter always writes in the
+  foreground, as its payload may be memory the caller reclaims on return. A failed background step is logged and counted as the `cache.background_write.failed` event.
+
 - **`IPolicyDefaults`.** `ICacheFactory.PolicyFactory` moves to this interface, which `CacheFactory` implements, and
   `Cache<T>` and `HashCache<T>` read it from a factory that implements it. `ICacheFactory` is left with no default
   member, so `new Cache<T>(factory)` over an NSubstitute substitute no longer throws `ArgumentNullException` on
@@ -74,6 +87,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
   percentile under 19 ms). What the long interval costs is the window left by a doorbell lost while its subscription
   still looks live (a dropped `PUBLISH`): up to one `NotifiedPollInterval` instead of one `PollInterval`. 5 s is where
   the saving levels off. Set `NotifiedPollInterval` to `PollInterval` for the old cadence.
+
+- **A single-key `SetAsync` writes the value before it publishes the event**, as the batch one does; so do the hash cache's `SetAsync` and the rehydrate writes. It published first, so
+  a node the event woke could re-read the old value from L2 and keep it for its whole local lifetime. A write the inner
+  tier refuses sends no event; one it takes whose event fails returns `false` with the value in place.
 
 - **`Span<char>` overloads of `GetOrAddWithExpirationAsync`.** `ICache` and `ICache<T>` gain `sealed` members that take
   the key as a `Span<char>`, with and without a `TState state`, so a caller that formats its key on the stack and reads

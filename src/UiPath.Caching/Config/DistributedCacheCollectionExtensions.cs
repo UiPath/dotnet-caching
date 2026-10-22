@@ -237,7 +237,7 @@ public static class DistributedCacheCollectionExtensions
                 sp.GetRequiredService<ICachingTelemetryProvider>(),
                 sp.GetRequiredService<ILoggerFactory>(),
                 sp.GetRequiredService<IDistributedLock>(),
-                sp.GetRequiredService<ICachePolicyFactory>(),
+                new ForegroundOnlyPolicyFactory(sp.GetRequiredService<ICachePolicyFactory>()),
                 sp.GetRequiredService<TimeProvider>(),
                 AlwaysMaskKeyMaskingPolicy.Instance),
             KnownCacheProviderNames.InMemory => new InMemoryCacheProvider(

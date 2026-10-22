@@ -20,6 +20,7 @@ public static class CachePolicyMerger
             LocalExpirationDisconnected = primary.LocalExpirationDisconnected ?? fallback.LocalExpirationDisconnected,
             DistributedExpiration = primary.DistributedExpiration ?? fallback.DistributedExpiration,
             FactoryTimeout = primary.FactoryTimeout ?? fallback.FactoryTimeout,
+            BackgroundDistributedWrite = primary.BackgroundDistributedWrite ?? fallback.BackgroundDistributedWrite,
             JitterMaxDuration = primary.JitterMaxDuration ?? fallback.JitterMaxDuration,
             RehydrateEnabled = primary.RehydrateEnabled ?? fallback.RehydrateEnabled,
             Rehydrate = primary.Rehydrate ?? fallback.Rehydrate,

@@ -4,6 +4,10 @@ namespace UiPath.Caching;
 
 public class InMemoryRedisCacheOptions : IMultilayerCacheOptions, IMemoryCacheOptions
 {
+    internal const int DefaultMaxBackgroundWrites = 1024;
+
+    internal static readonly TimeSpan DefaultBackgroundWriteDrainTimeout = TimeSpan.FromSeconds(5);
+
     public bool Enabled { get; set; } = true;
 
     public TimeSpan? DefaultExpiration { get; set; } = CachePolicy.DefaultDistributedExpiration;
@@ -59,6 +63,12 @@ public class InMemoryRedisCacheOptions : IMultilayerCacheOptions, IMemoryCacheOp
     public bool? ClearLocalOnReconnect { get; set; }
 
     public TimeSpan? LocalMaxExpirationDisconnected { get; set; } = TimeSpan.FromSeconds(30);
+
+    /// <summary>How many background writes (<see cref="CachePolicy.BackgroundDistributedWrite"/>) may run at once; one that finds none free is written in the foreground. Zero turns background writes off.</summary>
+    public int MaxBackgroundWrites { get; set; } = DefaultMaxBackgroundWrites;
+
+    /// <summary>How long disposing the cache waits for background writes still running before it cancels them; <see cref="Timeout.InfiniteTimeSpan"/> waits for them all.</summary>
+    public TimeSpan BackgroundWriteDrainTimeout { get; set; } = DefaultBackgroundWriteDrainTimeout;
 
     // Declared before the new pair: the configuration binder sets properties in declaration order, so the new key wins when both are set.
     [Obsolete("Use LocalSingleFlightEnabled; the in-process lock it named is gone.")]

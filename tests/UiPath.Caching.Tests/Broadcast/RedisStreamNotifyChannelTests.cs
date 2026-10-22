@@ -612,6 +612,22 @@ public class RedisStreamNotifyChannelTests
     }
 
     [Fact]
+    public async Task A_subscribe_on_the_new_connection_before_the_reconnect_event_still_counts_its_failures()
+    {
+        var current = Substitute.For<IConnectionMultiplexer>();
+        current.TimeoutMilliseconds.Returns(5000);
+        using var rig = new LiveRig(_fixture);
+        rig.Subscriber.Multiplexer.Returns(current);
+        (await LiveRig.EventuallyAsync(rig.WaitsLongAsync)).Should().BeTrue();
+        rig.Redis.OnReconnected += Raise.Event();
+        (await LiveRig.EventuallyAsync(rig.WaitsLongAsync)).Should().BeTrue();
+
+        RaiseConnectionEvent(rig.Redis, failed: true, new IPEndPoint(IPAddress.Loopback, 7000), ConnectionType.Subscription, current);
+
+        (await rig.WaitsLongAsync()).Should().BeFalse("the connector swapped to this connection before the event, so it is the current one");
+    }
+
+    [Fact]
     public async Task A_failed_command_connection_keeps_the_notified_interval()
     {
         using var rig = new LiveRig(_fixture);

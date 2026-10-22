@@ -402,6 +402,36 @@ provider defaults are acceptable. Named policies become valuable when different
 caches serving different data categories have meaningfully different freshness
 requirements or cost profiles.
 
+### Background L2 writes
+
+`BackgroundDistributedWrite` (default off) makes single-key `SetAsync` and the write that
+follows a `GetOrAddAsync` miss, on the cache and on the hash cache, return once the value is
+in L1; the L2 write, and for a set the event after it, run detached. Batch writes,
+`RemoveAsync`, refresh and metadata writes stay awaited, and so does a fill under the
+distributed lock. The `IDistributedCache` adapter always writes in the foreground, whatever
+its policy says, because its payload may be memory the caller reclaims on return.
+
+- A set always writes L2 first and publishes its event second, with or without the flag, so
+  a node the event wakes reads the new value. A set returns `false` when either step fails.
+- The value is in L1 for `LocalMaxExpirationDisconnected` until the L2 write succeeds, then
+  for the normal lifetime, unless a newer write, a removal or an invalidation replaced it.
+  When the L2 write fails the value stays local for that cap and no event is sent.
+- Writes to one key reach L2 in the order they were issued: an awaited write or removal of
+  the key waits for the background writes still running, and a background write waits for
+  every write of the key issued before it, awaited ones and those that found no free place
+  included. Awaited writes of one key still run side by side.
+- At most `MaxBackgroundWrites` run at once; one past that is written in the foreground.
+  Disposing the cache waits up to `BackgroundWriteDrainTimeout` for the rest, or for all of
+  them with `Timeout.InfiniteTimeSpan`. Those it then cancels never reach L2; they are counted
+  under the `drain_cancelled` stage.
+- The value must not be mutated after the call, as for any write: L1 holds it, and a write
+  queued behind an earlier one for the key serializes it later.
+- Other nodes can read the previous value until the write lands, about one round trip.
+- A local miss that reads L2 while a write or removal of the key is issued keeps nothing
+  locally, so the older value it found cannot replace the newer one; the next read keeps it.
+  Keys are grouped into 1024 stripes for this, so a write can also skip the local copy of a
+  key sharing its stripe.
+
 See also: [how-to/resilience.md#named-policies](how-to/resilience.md#named-policies), [reference/settings.md#policiesname-cachepolicy](reference/settings.md#policiesname-cachepolicy).
 
 ---

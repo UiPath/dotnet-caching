@@ -1,3 +1,4 @@
+#pragma warning disable CA2012 // NSubstitute setups call the ValueTask-returning members without consuming the result.
 using Microsoft.Extensions.Primitives;
 using UiPath.Caching;
 
@@ -27,6 +28,14 @@ public class InMemoryRedisCacheProviderTests : IAsyncLifetime
     public async Task Broadcast_option(bool enabled)
     {
         _options.BroadcastEnable = enabled;
+        // A set announces only what the inner tier took, so the substitutes must take it.
+        var factory = _fixture.Freeze<ICacheFactory>();
+        var inner = Substitute.For<ICache>();
+        inner.SetAsync<string?>(Arg.Any<CacheKey>(), Arg.Any<string?>(), Arg.Any<DateTimeOffset>(), Arg.Any<CachePolicy?>(), Arg.Any<CancellationToken>()).Returns(new ValueTask<bool>(true));
+        factory.CreateCache(Arg.Any<string>()).Returns(inner);
+        var innerHash = Substitute.For<IHashCache>();
+        innerHash.SetAsync<string?>(Arg.Any<CacheKey>(), Arg.Any<IDictionary<string, string?>>(), Arg.Any<HashCacheEntryOptions>(), Arg.Any<CachePolicy?>(), Arg.Any<CancellationToken>()).Returns(new ValueTask<bool>(true));
+        factory.CreateHashCache(Arg.Any<string>()).Returns(innerHash);
         var topicFactory = _fixture.Freeze<ITopicFactory>();
         var topicProvider = _fixture.Freeze<ITopicProvider>();
         topicFactory.Get(Arg.Any<string?>()).Returns(topicProvider);
