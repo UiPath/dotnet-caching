@@ -877,3 +877,5 @@ UiPath.Caching.Redis.RedisMaintenanceNotifications.Disabled = 0 -> UiPath.Cachin
 UiPath.Caching.Redis.RedisMaintenanceNotifications.Required = 2 -> UiPath.Caching.Redis.RedisMaintenanceNotifications
 UiPath.Caching.Redis.RedisPlannedMaintenance.RedisPlannedMaintenance(UiPath.Caching.Telemetry.ICachingTelemetryProvider! telemetryProvider, UiPath.Caching.Redis.IRedisConnector! redisConnector, System.TimeProvider! clock) -> void
 UiPath.Caching.Redis.RedisPlannedMaintenance.SuggestedTimeout.get -> System.TimeSpan?
+static UiPath.Caching.Redis.ProfiledCommandProcessor.NodeField.get -> string!
+static UiPath.Caching.Redis.ProfiledCommandProcessor.NodeField.set -> void

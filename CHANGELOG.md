@@ -6,6 +6,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 
 ## [Unreleased]
 
+## [2.1.3] - 2026-10-23
+
+### Changed
+
+- **On a Redis Cluster, the batch `SetAsync` and `RemoveAsync(CacheKey[])` are no longer all-or-nothing.** They used to
+  refuse keys of several slots; they now run one command per slot, so a `false` can mean some keys were written or
+  removed. Keys of one slot, and every batch on a server that is not a cluster, keep the old single-command behaviour.
+
 ### Fixed
 
 - **Multi-key calls over keys of several Redis Cluster slots run, one command per slot, instead of throwing
