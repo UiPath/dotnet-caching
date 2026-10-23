@@ -1654,12 +1654,15 @@ internal sealed partial class MultilayerCache : MultilayerCacheBase, ICache, ISp
             return kept;
         }
 
-        if (!written)
-        {
-            return false;
-        }
+        // Announced even when the write reports failure: across Redis Cluster slots it can have written some keys, and a peer
+        // that drops an unchanged copy only reads it again.
+        var published = await PublishSetsAsync(setEntries).ConfigureAwait(false);
+        return written && published && kept;
+    }
 
-        // Every key the inner tier holds is announced, even if one event is refused.
+    /// <summary>Every key is announced, even if one event is refused.</summary>
+    private async ValueTask<bool> PublishSetsAsync<T>(List<CacheEntryValue<T>> setEntries)
+    {
         var published = true;
         foreach (var cacheEntry in setEntries.Select(s => s.CacheEntry))
         {
@@ -1667,7 +1670,7 @@ internal sealed partial class MultilayerCache : MultilayerCacheBase, ICache, ISp
             published &= await PublishSetAsync<T>(cacheEntry).ConfigureAwait(false);
         }
 
-        return published && kept;
+        return published;
     }
 
     private async ValueTask<bool> RefreshCoreAsync<T>(CacheKey cacheKey, DateTimeOffset expiration, CachePolicy policy, CancellationToken token)
@@ -2063,6 +2066,16 @@ internal sealed partial class MultilayerCache : MultilayerCacheBase, ICache, ISp
             {
                 LogBatchSetError(ex, cacheEntries);
                 set = false;
+            }
+
+            // Across Redis Cluster slots a write that reports failure can have written some keys, and this node does not hear
+            // its own events; dropped inside the turn, so no other write of these keys lands in between.
+            if (!set && !keepRefused)
+            {
+                foreach (var cacheEntry in cacheEntries)
+                {
+                    RemoveLocal(cacheEntry.CacheEntry.CacheKey.Name);
+                }
             }
 
             return (set, KeepAfterInnerWrite(set, keepRefused, policy, (Cache: this, Entries: cacheEntries, Turn: turn), static (s, max) => Array.TrueForAll(s.Entries, e => s.Turn.KeepLocal(e.CacheEntry.CacheKey.Name, (s.Cache, e, max), static x => x.Cache.MemorySet(x.e.CacheEntry, x.e.Value, x.max))), token));

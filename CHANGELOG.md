@@ -33,7 +33,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
   `cache.batch.topic_invalidation` event. A node that does not know the event ignores it: turn the threshold on once all nodes run this
   version. If that event fails, every key of the call is returned.
   The hash `SetManyAsync` takes one `HashCacheEntryOptions` for all its hashes; the overload without one replaces each key. `RemoveAsync(CacheKey[])` and the batch `SetAsync` are
-  unchanged: the batch set stays one atomic transaction and still refuses keys of several slots.
+  separate calls, and on a cluster they too run one command per slot (see the slot entry under Fixed).
 
 - **`CachePolicy.BackgroundDistributedWrite`.** Opt-in per policy (`Caching:Policies`, or the default policy for the
   whole cache): single-key `SetAsync` and the write after a `GetOrAddAsync` miss, on the cache and on the hash cache, return once the
@@ -223,6 +223,17 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
   3.1.
 
 ### Fixed
+
+- **Multi-key calls over keys of several Redis Cluster slots run, one command per slot, instead of throwing
+  `CrossSlotKeysException`.** `GetAsync(CacheKey[])`, `GetCacheEntriesAsync`, the batch `SetAsync` and `RemoveAsync(CacheKey[])`
+  refused such a batch, and with them the batch `GetOrAddAsync`, which reads its keys with `GetCacheEntriesAsync` and stores
+  its misses with the batch `SetAsync`; on a cluster endpoint, keys without a shared hash tag made every such call throw. The
+  keys are now grouped by slot (with the connector's key prefix, as before) and each group is sent as its own `MGET`, read
+  transaction, write transaction or `DEL`, all in flight together, up to 1000 at a time; keys of one slot, and every batch on a server that is not a
+  cluster, are still one command. The batch `SetAsync` is atomic per slot, not across slots: when one slot's transaction does not
+  commit it returns `false` and the other slots may be written. A read whose slot fails reads that slot's keys as misses and
+  keeps the others; a remove reports `false` when any slot fails. The multi-layer cache announces every key of a batch set it
+  could not confirm, since some may be written, and drops its own copies of them. `CrossSlotKeysException` stays in the API and is no longer thrown.
 
 - **A profiled Redis command's dependency names the configured server, not the cluster node.** The target was the
   endpoint that served the command, so on a cluster each shard's IP and port showed as its own dependency target. It is

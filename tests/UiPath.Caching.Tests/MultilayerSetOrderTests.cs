@@ -160,13 +160,14 @@ public class MultilayerSetOrderTests
     }
 
     [Fact]
-    public async Task A_batch_set_the_inner_tier_refuses_publishes_nothing()
+    public async Task A_batch_set_the_inner_tier_refuses_still_announces_every_key_after_the_write()
     {
+        // Across Redis Cluster slots a refused batch can have written some of its keys.
         using var rig = new Rig { WriteResult = false };
 
         (await rig.Cache.SetAsync<string>([new("a", "1"), new("b", "2")], policy: null, Ct)).Should().BeFalse();
 
-        rig.Log.Should().Equal("write:a,b");
+        rig.Log.Should().Equal("write:a,b", "event:a", "event:b");
     }
 
     [Fact]

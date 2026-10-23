@@ -531,6 +531,25 @@ public class MultilayerCacheTests(ITestContextAccessor testContextAccessor) : IA
     }
 
     [Fact]
+    public async Task A_multi_set_the_inner_cache_reports_failed_drops_this_nodes_copies()
+    {
+        // Some keys may be written, and this node does not hear its own announcement.
+        _innerCache.SetAsync<string?>(Arg.Any<KeyValuePair<CacheKey, string?>[]>(), Arg.Any<DateTimeOffset>(), Arg.Any<CachePolicy?>(), Arg.Any<CancellationToken>())
+            .Returns(false);
+        _topic.PublishAsync(Arg.Any<ICacheEvent>(), Arg.Any<CancellationToken>()).Returns(true);
+
+        var stored = await Sut.SetAsync(
+            new KeyValuePair<CacheKey, string?>[] { new(_cacheKey, _fixture.Create<string>()), new(_multiKey, _fixture.Create<string>()) },
+            _fixture.Create<TimeSpan>(),
+            policy: null,
+            token: testContextAccessor.Current.CancellationToken);
+
+        stored.Should().BeFalse();
+        _memoryCache.Received().Remove(Arg.Is<object>(k => Equals(k, _innerCacheKey.Name) || Equals(k, _innerCacheKey)));
+        _memoryCache.Received().Remove(Arg.Is<object>(k => Equals(k, _innerMultiKey.Name) || Equals(k, _innerMultiKey)));
+    }
+
+    [Fact]
     public async Task Multi_set_keeps_null_entries_in_set_path_when_CacheNullValues_true()
     {
         _options.CacheNullValues = true;
