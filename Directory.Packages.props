@@ -51,7 +51,7 @@
          than a downlevel one. Raised on purpose in #85 as the prerequisite for SE.Redis 3.0, and it
          still has to move with the family: 10.0.12 of any of them asks for 10.0.12 of this. -->
     <PackageVersion Include="Microsoft.Extensions.Logging.Abstractions" Version="10.0.12" />
-    <PackageVersion Include="Swashbuckle.AspNetCore" Version="10.2.3" />
+    <PackageVersion Include="Swashbuckle.AspNetCore" Version="10.3.0" />
     <PackageVersion Include="BenchmarkDotNet" Version="0.15.8" />
     <PackageVersion Include="Aspire.Hosting.Redis" Version="13.6.1" />
     <!-- Aspire.Hosting pulls MessagePack 2.5.302 (GHSA-qhrr-8q5h-9q3h); overridden until Aspire references a patched version. -->
