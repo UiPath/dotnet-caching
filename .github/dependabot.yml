@@ -31,6 +31,15 @@ updates:
       # and bump Moq with a Castle.Core 6.0 reference.
       - dependency-name: "Moq"
         versions: [">= 4.21.0"]
+      # The analyzers ship in UiPath.Caching.Abstractions and must load in the .NET 8 SDK, whose
+      # compiler is Roslyn 4.8; a newer Roslyn here makes them, and the code fixes, fail to load.
+      - dependency-name: "Microsoft.CodeAnalysis.CSharp"
+        versions: [">= 4.9.0"]
+      - dependency-name: "Microsoft.CodeAnalysis.CSharp.Workspaces"
+        versions: [">= 4.9.0"]
+      # Its releases after 3.11 are versioned with, and meant for, the newer Roslyn.
+      - dependency-name: "Microsoft.CodeAnalysis.Analyzers"
+        versions: [">= 3.12.0"]
   - package-ecosystem: "github-actions"
     directory: "/"
     schedule:
