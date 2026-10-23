@@ -1014,7 +1014,7 @@ internal sealed partial class MultilayerCache : MultilayerCacheBase, ICache
             LogFoundInnerCacheCopy(LoggedComposed(key, typeof(T)));
             var option = cacheEntriesToFetch[i];
             option.Expiration = entry.Expiration;
-            MemorySet(option, new KeyValuePair<CacheKey, T?>(key, entry.Value), policy.LocalExpiration ?? _multiLayerCacheOptions.LocalMaxExpiration);
+            MemorySet(option, entry.Value, policy.LocalExpiration ?? _multiLayerCacheOptions.LocalMaxExpiration);
         }
 
         return results.ToArray();
@@ -1109,7 +1109,7 @@ internal sealed partial class MultilayerCache : MultilayerCacheBase, ICache
             LogFoundInnerCacheCopy(LoggedComposed(key, typeof(T)));
             var option = cacheEntriesToFetch[j];
             option.Expiration = entry.Expiration;
-            MemorySet(option, new KeyValuePair<CacheKey, T?>(key, entry.Value), policy.LocalExpiration ?? _multiLayerCacheOptions.LocalMaxExpiration);
+            MemorySet(option, entry.Value, policy.LocalExpiration ?? _multiLayerCacheOptions.LocalMaxExpiration);
         }
 
         return results;
