@@ -2,6 +2,7 @@ using Microsoft.Extensions.Internal;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using StackExchange.Redis.Profiling;
+using UiPath.Caching.Telemetry;
 
 namespace UiPath.Caching.Tests;
 
@@ -154,6 +155,52 @@ public class RedisProfilerTests(ITestContextAccessor testContextAccessor) : IAsy
         Sut.Count.Should().Be(0);
     }
 
+    [Fact]
+    public void A_session_opened_on_the_leader_is_opened_and_processed_on_its_follower()
+    {
+        // Only the session's close processes its commands; no flush runs meanwhile.
+        _redisConnectionOptions.ProfilerFlushInterval = TimeSpan.FromHours(1);
+        var followerProcessor = Substitute.For<IProfiledCommandProcessor>();
+        using var follower = Follower(followerProcessor);
+        Sut.Lead(follower);
+        var sessionId = _fixture.Create<string>();
+
+        using (Sut.CreateSession(sessionId))
+        {
+            follower.Count.Should().Be(1);
+            follower.GetSession()!.UserToken.Should().Be(sessionId);
+            followerProcessor.DidNotReceiveWithAnyArgs().Process(default!, default);
+        }
+
+        follower.Count.Should().Be(0);
+        followerProcessor.ReceivedWithAnyArgs().Process(default!, default);
+    }
+
+    [Fact]
+    public void A_disposed_follower_opens_no_session()
+    {
+        using var follower = Follower(Substitute.For<IProfiledCommandProcessor>());
+        Sut.Lead(follower);
+        follower.Dispose();
+
+        using (Sut.CreateSession(_fixture.Create<string>()))
+        {
+            follower.Count.Should().Be(0);
+            Sut.Count.Should().Be(1);
+        }
+    }
+
+    [Fact]
+    public void A_profiler_leading_itself_opens_and_processes_a_session_once()
+    {
+        _redisConnectionOptions.ProfilerFlushInterval = TimeSpan.FromHours(1);
+        Sut.Lead(Sut);
+
+        Sut.CreateSession(_fixture.Create<string>()).Dispose();
+
+        _profilingSessionCommandReader.ReceivedWithAnyArgs(1).Get(default!);
+    }
+
     public ValueTask DisposeAsync()
     {
         return ValueTask.CompletedTask;
@@ -178,4 +225,13 @@ public class RedisProfilerTests(ITestContextAccessor testContextAccessor) : IAsy
         _fixture.Inject(Options.Create(_redisConnectionOptions));
         return ValueTask.CompletedTask;
     }
+
+    private RedisProfiler Follower(IProfiledCommandProcessor processor) =>
+        new(
+            processor,
+            _profilingSessionCommandReader,
+            Substitute.For<ICachingTelemetryProvider>(),
+            _logger,
+            Options.Create(_redisConnectionOptions),
+            new SystemClockTimeProvider(_clock));
 }

@@ -224,6 +224,24 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 
 ### Fixed
 
+- **A profiled Redis command's dependency names the configured server, not the cluster node.** The target was the
+  endpoint that served the command, so on a cluster each shard's IP and port showed as its own dependency target. It is
+  now the endpoints of `RedisConnectionOptions.ConnectionString` (`host:port`, with the default port filled in), and the
+  node moves to the new `RedisNode` property (`ProfiledCommandProcessor.NodeField`). Without a connection string, as with
+  a `ConnectionFactory`, the node stays the target. Queries and alerts on the dependency target need the new value.
+
+- **A named caching stack's telemetry carries its name.** Everything a stack from `AddNamedCaching` reports through the
+  application's `ICachingTelemetryProvider` (Redis dependencies, `Caching.Stats.*` metrics, events, exceptions) has a
+  `CachingStack` property set to the stack's name, so stream and topic metrics of two connections no longer mix. The
+  application's own stack adds none. A provider that `configureServices` registers is the stack's own and is left as it is.
+
+- **A named caching stack's profiled commands keep the request's profiling session.** The stack has its own
+  `IRedisProfiler`, and a session opened on the application's one did not reach it, so the stack's commands went to its
+  default session without the request's session id. Each session the application's profiler opens is now opened on the
+  stack's as well, and processed by it when closed. An application that forwards its profiler to the stack through
+  `configureServices` gets the stack's commands with its own connection as their target and without `CachingStack`; it
+  can drop that forwarding now.
+
 - **`PollInterval` must be positive.** Zero or negative failed later, when the poll loop waited on it; it is now
   refused by the options validator with the other Redis Streams options.
 

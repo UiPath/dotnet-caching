@@ -11,6 +11,9 @@ public sealed class ProfiledCommandProcessor(
     private readonly HashSet<string> _commandDenyList =
         new(options.Value.ProfilerCommandDenyList ?? [], StringComparer.OrdinalIgnoreCase);
 
+    // On a cluster each command reports the node that served it; the target stays the server the application configured.
+    private readonly string? _connectionTarget = ConnectionTarget(options.Value.ConnectionString);
+
     public static string FlagsField { get; set; } = "Flags";
 
     public static string CreationToEnqueuedField { get; set; } = "CreationToEnqueued";
@@ -28,6 +31,8 @@ public sealed class ProfiledCommandProcessor(
     public static string RetransmissionReasonField { get; set; } = "RetransmissionReason";
 
     public static string ProfileSessionIdField { get; set; } = "ProfileSessionId";
+
+    public static string NodeField { get; set; } = "RedisNode";
 
     public static string UnknownCommand { get; set; } = "UNKNOWN";
 
@@ -48,8 +53,8 @@ public sealed class ProfiledCommandProcessor(
 
         var statement = command.GetStatement();
         var commandName = command.GetCommandName();
-        var target = command.GetTarget();
-        var properties = new List<KeyValuePair<string, string>>(9)
+        var node = command.GetTarget();
+        var properties = new List<KeyValuePair<string, string>>(10)
         {
             new(FlagsField, command.Flags.ToString("F")),
             new(CreationToEnqueuedField, command.CreationToEnqueued.ToString()),
@@ -70,15 +75,41 @@ public sealed class ProfiledCommandProcessor(
             properties.Add(new(ProfileSessionIdField, sessionId));
         }
 
+        if (node is not null)
+        {
+            properties.Add(new(NodeField, node));
+        }
+
         telemetryProvider.TrackDependency(
             type: RedisTelemetryType,
             name: commandName,
-            target: target ?? UnknownTarget,
+            target: _connectionTarget ?? node ?? UnknownTarget,
             data: statement,
             startTime: command.CommandCreated,
             duration: command.ElapsedTime,
             resultCode: string.Empty,
             success: true,
             properties: System.Runtime.InteropServices.CollectionsMarshal.AsSpan(properties));
+    }
+
+    // Null without a connection string, as with a ConnectionFactory, and the node stays the target.
+    private static string? ConnectionTarget(string? connectionString)
+    {
+        if (string.IsNullOrWhiteSpace(connectionString))
+        {
+            return null;
+        }
+
+        try
+        {
+            var configuration = ConfigurationOptions.Parse(connectionString, ignoreUnknown: true);
+            configuration.SetDefaultPorts();
+            var endPoints = configuration.EndPoints.Select(ProfiledCommandExtensions.Format).OfType<string>().ToArray();
+            return endPoints.Length == 0 ? null : string.Join(',', endPoints);
+        }
+        catch (ArgumentException)
+        {
+            return null;
+        }
     }
 }

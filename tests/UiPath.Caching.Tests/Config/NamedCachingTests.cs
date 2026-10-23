@@ -301,8 +301,71 @@ public class NamedCachingTests
 
         child.GetRequiredService<TimeProvider>().Should().BeSameAs(root.GetRequiredService<TimeProvider>());
         child.GetRequiredService<ILoggerFactory>().Should().BeSameAs(root.GetRequiredService<ILoggerFactory>());
-        child.GetRequiredService<ICachingTelemetryProvider>().Should().BeSameAs(telemetry);
+        root.GetRequiredService<ICachingTelemetryProvider>().Should().BeSameAs(telemetry);
+        child.GetRequiredService<ICachingTelemetryProvider>().TrackMetric("metric", 1d);
+        telemetry.Received(1).TrackMetric("metric", 1d, (TelemetryTags<string>)[new(StackTelemetryProvider.StackProperty, Name)]);
         child.GetRequiredService<ILogger<NamedCachingTests>>().Should().NotBeNull();
+    }
+
+    [Fact]
+    public void Without_telemetry_on_the_application_the_stack_has_none_either()
+    {
+        using var root = Build();
+
+        Child(root).GetRequiredService<ICachingTelemetryProvider>().Should().BeSameAs(NullTelemetryProvider.Instance);
+    }
+
+    [Fact]
+    public void Telemetry_the_stack_registers_itself_is_left_as_it_is()
+    {
+        var own = Substitute.For<ICachingTelemetryProvider>();
+        using var root = Build(register: (services, configuration) =>
+        {
+            services.AddSingleton(Substitute.For<ICachingTelemetryProvider>());
+            services.AddCaching(configuration, RootChain);
+            services.AddNamedCaching(Name, configuration, NamedChain, configureServices: (child, _) => child.AddSingleton(own));
+        });
+
+        Child(root).GetRequiredService<ICachingTelemetryProvider>().Should().BeSameAs(own);
+    }
+
+    [Fact]
+    public void A_session_the_application_opens_is_the_stacks_session_too()
+    {
+        using var root = Build(("Caching:Connections:Redis:ProfilerEnabled", "true"));
+        var stack = Child(root).GetRequiredService<IRedisProfiler>();
+        stack.Should().NotBeSameAs(root.GetRequiredService<IRedisProfiler>());
+
+        using (root.GetRequiredService<IRedisProfiler>().CreateSession("request"))
+        {
+            stack.GetSession()!.UserToken.Should().Be("request");
+        }
+
+        stack.GetSession()!.UserToken.Should().Be("default");
+    }
+
+    [Fact]
+    public void A_stack_handed_the_applications_profiler_shares_it()
+    {
+        using var root = Build(register: (services, configuration) =>
+        {
+            services.AddCaching(configuration, RootChain);
+            services.AddNamedCaching(
+                Name,
+                configuration,
+                NamedChain,
+                configureServices: (child, application) => child.AddSingleton(application.GetRequiredService<IRedisProfiler>()));
+        },
+        ("Caching:Connections:Redis:ProfilerEnabled", "true"));
+        var profiler = root.GetRequiredService<IRedisProfiler>();
+
+        Child(root).GetRequiredService<IRedisProfiler>().Should().BeSameAs(profiler);
+        using (profiler.CreateSession("request"))
+        {
+            profiler.Count.Should().Be(1);
+        }
+
+        profiler.Count.Should().Be(0);
     }
 
     [Fact]
