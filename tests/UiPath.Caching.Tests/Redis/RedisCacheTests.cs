@@ -90,16 +90,40 @@ public class RedisCacheTests(ITestContextAccessor testContextAccessor) : IAsyncL
     }
 
     [Fact]
-    public async Task Multi_get_throws_when_keys_span_slots()
+    public async Task Multi_get_reads_each_slot_with_its_own_command()
     {
         GiveKeysDifferentSlots();
-        var act = () => Sut.GetAsync<string>(new CacheKey[] { _cacheKey, _multiKey }, policy: null, token: testContextAccessor.Current.CancellationToken).AsTask();
-        (await act.Should().ThrowAsync<CrossSlotKeysException>()).And.Message.Should().Contain("GetAsync");
-        await _database.DidNotReceive().StringGetAsync(Arg.Any<RedisKey[]>(), Arg.Any<CommandFlags>());
+        var (first, second) = (_fixture.Create<string>(), _fixture.Create<string>());
+        _database.StringGetAsync(Arg.Is<RedisKey[]>(k => k.SequenceEqual(new[] { _redisKey })), CommandFlags.PreferReplica)
+            .Returns(new RedisValue[] { _serializer.Serialize(first) });
+        _database.StringGetAsync(Arg.Is<RedisKey[]>(k => k.SequenceEqual(new[] { _redisMultiKey })), CommandFlags.PreferReplica)
+            .Returns(new RedisValue[] { _serializer.Serialize(second) });
+
+        var actual = await Sut.GetAsync<string>(new CacheKey[] { _cacheKey, _multiKey }, policy: null, token: testContextAccessor.Current.CancellationToken);
+
+        actual.Should().Equal(new KeyValuePair<CacheKey, string?>(_cacheKey, first), new KeyValuePair<CacheKey, string?>(_multiKey, second));
+        await _database.Received(2).StringGetAsync(Arg.Any<RedisKey[]>(), Arg.Any<CommandFlags>());
+        HitCount.Should().Be(1);
+        _telemetry.Metrics.Should().ContainSingle(m => m.Name.Contains(".Hits.") && m.Properties![TelemetryScope.KeysTag] == "2");
     }
 
     [Fact]
-    public async Task Multi_get_does_not_throw_when_the_key_prefix_puts_the_keys_in_one_slot()
+    public async Task Multi_get_keeps_the_slots_that_answered_when_one_does_not()
+    {
+        GiveKeysDifferentSlots();
+        var first = _fixture.Create<string>();
+        _database.StringGetAsync(Arg.Is<RedisKey[]>(k => k.SequenceEqual(new[] { _redisKey })), CommandFlags.PreferReplica)
+            .Returns(new RedisValue[] { _serializer.Serialize(first) });
+        _database.StringGetAsync(Arg.Is<RedisKey[]>(k => k.SequenceEqual(new[] { _redisMultiKey })), CommandFlags.PreferReplica)
+            .Returns(Array.Empty<RedisValue>());
+
+        var actual = await Sut.GetAsync<string>(new CacheKey[] { _cacheKey, _multiKey }, policy: null, token: testContextAccessor.Current.CancellationToken);
+
+        actual.Should().Equal(new KeyValuePair<CacheKey, string?>(_cacheKey, first), new KeyValuePair<CacheKey, string?>(_multiKey, null));
+    }
+
+    [Fact]
+    public async Task Multi_get_does_not_split_keys_the_key_prefix_puts_in_one_slot()
     {
         // KeyPrefix mirrors the prefix the application's connector applies with WithKeyPrefix, so a hash
         // tag there is what the server hashes; the composed keys alone say nothing about the slot.
@@ -114,6 +138,7 @@ public class RedisCacheTests(ITestContextAccessor testContextAccessor) : IAsyncL
         var actualValue = await Sut.GetAsync<string>(new CacheKey[] { _cacheKey, _multiKey }, policy: null, token: testContextAccessor.Current.CancellationToken);
 
         actualValue.Should().BeEquivalentTo(new KeyValuePair<CacheKey, string>[] { new(_cacheKey, expectedValue), new(_multiKey, expectedValue) });
+        await _database.Received(1).StringGetAsync(Arg.Any<RedisKey[]>(), Arg.Any<CommandFlags>());
     }
 
     [Fact]
@@ -125,18 +150,18 @@ public class RedisCacheTests(ITestContextAccessor testContextAccessor) : IAsyncL
         GiveKeysDifferentSlots();
         _database.Multiplexer.GetHashSlot(_redisKey.Prepend("{tag}:")).Returns(7);
         _database.Multiplexer.GetHashSlot(_redisMultiKey.Prepend("{tag}:")).Returns(7);
-        _database.StringGetAsync(Arg.Is<RedisKey[]>(k => k != null && k.Contains(_redisKey) && k.Contains(_redisMultiKey)), CommandFlags.PreferReplica)
-            .Returns(_ => new RedisValue[] { RedisValue.Null, RedisValue.Null });
+        _database.StringGetAsync(Arg.Any<RedisKey[]>(), CommandFlags.PreferReplica)
+            .Returns(ci => new RedisValue[ci.Arg<RedisKey[]>().Length]);
 
-        var act = () => Sut.GetAsync<string>(new CacheKey[] { _cacheKey, _multiKey }, policy: null, token: testContextAccessor.Current.CancellationToken).AsTask();
+        await Sut.GetAsync<string>(new CacheKey[] { _cacheKey, _multiKey }, policy: null, token: testContextAccessor.Current.CancellationToken);
 
-        await act.Should().NotThrowAsync<CrossSlotKeysException>();
+        await _database.Received(1).StringGetAsync(Arg.Is<RedisKey[]>(k => k.Length == 2), CommandFlags.PreferReplica);
     }
 
     [Fact]
     public async Task A_multi_get_does_not_wait_for_a_connector_probe_still_in_flight()
     {
-        // The slot check runs outside the pipeline's latency cap, so the configured prefix stands in rather than a wait;
+        // The slot grouping runs outside the pipeline's latency cap, so the configured prefix stands in rather than a wait;
         // a wait bounded by Timeout would take the full minute.
         _cacheOptions.KeyPrefix = "{tag}:";
         _cacheOptions.Timeout = TimeSpan.FromMinutes(1);
@@ -167,55 +192,155 @@ public class RedisCacheTests(ITestContextAccessor testContextAccessor) : IAsyncL
         _database.Multiplexer.GetHashSlot(_redisKey.Prepend("{tag}:")).Returns(7);
         _database.Multiplexer.GetHashSlot(_redisMultiKey.Prepend("{tag}:")).Returns(7);
         _database.StringGetAsync(Arg.Any<RedisKey[]>(), CommandFlags.PreferReplica)
-            .Returns(_ => new RedisValue[] { RedisValue.Null, RedisValue.Null });
+            .Returns(ci => new RedisValue[ci.Arg<RedisKey[]>().Length]);
         var keys = new CacheKey[] { _cacheKey, _multiKey };
 
-        var first = () => Sut.GetAsync<string>(keys, policy: null, token: testContextAccessor.Current.CancellationToken).AsTask();
-        await first.Should().ThrowAsync<CrossSlotKeysException>("the probe has not answered, so the configured empty prefix stands in");
+        await Sut.GetAsync<string>(keys, policy: null, token: testContextAccessor.Current.CancellationToken);
+        await _database.Received(2).StringGetAsync(Arg.Is<RedisKey[]>(k => k.Length == 1), CommandFlags.PreferReplica);
 
-        var second = () => Sut.GetAsync<string>(keys, policy: null, token: testContextAccessor.Current.CancellationToken).AsTask();
-        await second.Should().NotThrowAsync<CrossSlotKeysException>();
+        await Sut.GetAsync<string>(keys, policy: null, token: testContextAccessor.Current.CancellationToken);
+        await _database.Received(1).StringGetAsync(Arg.Is<RedisKey[]>(k => k.Length == 2), CommandFlags.PreferReplica);
     }
 
     [Fact]
-    public async Task Multi_get_throws_when_the_prefixed_keys_span_slots()
+    public async Task Multi_get_splits_keys_the_key_prefix_puts_in_different_slots()
     {
         _cacheOptions.KeyPrefix = "prefix:";
         _database.Multiplexer.GetHashSlot(_redisKey.Prepend(_cacheOptions.KeyPrefix)).Returns(1);
         _database.Multiplexer.GetHashSlot(_redisMultiKey.Prepend(_cacheOptions.KeyPrefix)).Returns(2);
+        _database.StringGetAsync(Arg.Any<RedisKey[]>(), CommandFlags.PreferReplica)
+            .Returns(ci => new RedisValue[ci.Arg<RedisKey[]>().Length]);
 
-        var act = () => Sut.GetAsync<string>(new CacheKey[] { _cacheKey, _multiKey }, policy: null, token: testContextAccessor.Current.CancellationToken).AsTask();
+        await Sut.GetAsync<string>(new CacheKey[] { _cacheKey, _multiKey }, policy: null, token: testContextAccessor.Current.CancellationToken);
 
-        await act.Should().ThrowAsync<CrossSlotKeysException>();
-        await _database.DidNotReceive().StringGetAsync(Arg.Any<RedisKey[]>(), Arg.Any<CommandFlags>());
+        await _database.Received(2).StringGetAsync(Arg.Is<RedisKey[]>(k => k.Length == 1), CommandFlags.PreferReplica);
     }
 
     [Fact]
-    public async Task Multi_get_cache_entries_throws_when_keys_span_slots()
+    public async Task Multi_get_cache_entries_reads_each_slot_in_its_own_transaction()
     {
         GiveKeysDifferentSlots();
-        var act = () => Sut.GetCacheEntriesAsync<string>(new CacheKey[] { _cacheKey, _multiKey }, policy: null, token: testContextAccessor.Current.CancellationToken).AsTask();
-        await act.Should().ThrowAsync<CrossSlotKeysException>();
-        _database.DidNotReceive().CreateTransaction();
+        var (first, second) = (_fixture.Create<string>(), _fixture.Create<string>());
+        _transaction.StringGetAsync(Arg.Is<RedisKey[]>(k => k.SequenceEqual(new[] { _redisKey })), CommandFlags.PreferReplica)
+            .Returns(new RedisValue[] { _serializer.Serialize(first) });
+        _transaction.StringGetAsync(Arg.Is<RedisKey[]>(k => k.SequenceEqual(new[] { _redisMultiKey })), CommandFlags.PreferReplica)
+            .Returns(new RedisValue[] { _serializer.Serialize(second) });
+        _transaction.KeyTimeToLiveAsync(_redisKey, CommandFlags.PreferReplica).Returns(TimeSpan.FromMinutes(5));
+        _transaction.KeyTimeToLiveAsync(_redisMultiKey, CommandFlags.PreferReplica).Returns(TimeSpan.FromMinutes(10));
+        _transaction.ExecuteAsync(Arg.Any<CommandFlags>()).Returns(true);
+
+        var actual = await Sut.GetCacheEntriesAsync<string>(new CacheKey[] { _cacheKey, _multiKey }, policy: null, token: testContextAccessor.Current.CancellationToken);
+
+        actual.Select(e => (e.Key, e.Value.Value, e.Value.Expiration)).Should().Equal(
+            (_cacheKey, first, _now.AddMinutes(5)),
+            (_multiKey, second, _now.AddMinutes(10)));
+        _database.Received(2).CreateTransaction();
     }
 
     [Fact]
-    public async Task Multi_remove_throws_when_keys_span_slots()
+    public async Task Multi_get_cache_entries_keeps_the_slots_that_committed_when_one_does_not()
     {
         GiveKeysDifferentSlots();
-        var act = () => Sut.RemoveAsync<string>(new CacheKey[] { _cacheKey, _multiKey }, testContextAccessor.Current.CancellationToken).AsTask();
-        await act.Should().ThrowAsync<CrossSlotKeysException>();
-        await _database.DidNotReceive().KeyDeleteAsync(Arg.Any<RedisKey[]>(), Arg.Any<CommandFlags>());
+        var first = _fixture.Create<string>();
+        _transaction.StringGetAsync(Arg.Any<RedisKey[]>(), CommandFlags.PreferReplica)
+            .Returns(new RedisValue[] { _serializer.Serialize(first) });
+        _transaction.KeyTimeToLiveAsync(Arg.Any<RedisKey>(), CommandFlags.PreferReplica).Returns(TimeSpan.FromMinutes(5));
+        _transaction.ExecuteAsync(Arg.Any<CommandFlags>()).Returns(true, false);
+
+        var actual = await Sut.GetCacheEntriesAsync<string>(new CacheKey[] { _cacheKey, _multiKey }, policy: null, token: testContextAccessor.Current.CancellationToken);
+
+        actual.Select(e => (e.Key, e.Value.Found)).Should().Equal((_cacheKey, true), (_multiKey, false));
     }
 
     [Fact]
-    public async Task Multi_set_throws_when_keys_span_slots()
+    public async Task Multi_remove_deletes_each_slot_with_its_own_command()
     {
         GiveKeysDifferentSlots();
+        _database.KeyDeleteAsync(Arg.Any<RedisKey[]>(), Arg.Any<CommandFlags>()).Returns(1L);
+
+        var removed = await Sut.RemoveAsync<string>(new CacheKey[] { _cacheKey, _multiKey }, testContextAccessor.Current.CancellationToken);
+
+        removed.Should().BeTrue();
+        await _database.Received(1).KeyDeleteAsync(Arg.Is<RedisKey[]>(k => k.SequenceEqual(new[] { _redisKey })), CommandFlags.DemandMaster);
+        await _database.Received(1).KeyDeleteAsync(Arg.Is<RedisKey[]>(k => k.SequenceEqual(new[] { _redisMultiKey })), CommandFlags.DemandMaster);
+    }
+
+    [Fact]
+    public async Task Multi_remove_reports_failure_when_one_slot_fails()
+    {
+        GiveKeysDifferentSlots();
+        _database.KeyDeleteAsync(Arg.Is<RedisKey[]>(k => k.SequenceEqual(new[] { _redisKey })), Arg.Any<CommandFlags>()).Returns(1L);
+        _database.KeyDeleteAsync(Arg.Is<RedisKey[]>(k => k.SequenceEqual(new[] { _redisMultiKey })), Arg.Any<CommandFlags>())
+            .ThrowsAsync(new RedisException("test"));
+
+        var removed = await Sut.RemoveAsync<string>(new CacheKey[] { _cacheKey, _multiKey }, testContextAccessor.Current.CancellationToken);
+
+        removed.Should().BeFalse();
+        await _database.Received(1).KeyDeleteAsync(Arg.Is<RedisKey[]>(k => k.SequenceEqual(new[] { _redisKey })), CommandFlags.DemandMaster);
+    }
+
+    [Fact]
+    public async Task Multi_set_writes_each_slot_in_its_own_transaction()
+    {
+        GiveKeysDifferentSlots();
+        _transaction.ExecuteAsync(Arg.Any<CommandFlags>()).Returns(true);
+        var (first, second) = (_fixture.Create<string>(), _fixture.Create<string>());
+
+        var stored = await Sut.SetAsync(new KeyValuePair<CacheKey, string?>[] { new(_cacheKey, first), new(_multiKey, second) }, _fixture.Create<TimeSpan>(), policy: null, token: testContextAccessor.Current.CancellationToken);
+
+        stored.Should().BeTrue();
+        _database.Received(2).CreateTransaction(Arg.Any<object?>());
+        await _transaction.Received(2).ExecuteAsync(CommandFlags.DemandMaster);
+        await _transaction.Received(1).StringSetAsync(_redisKey, Arg.Any<RedisValue>(), Arg.Any<TimeSpan?>(), When.Always, CommandFlags.DemandMaster);
+        await _transaction.Received(1).StringSetAsync(_redisMultiKey, Arg.Any<RedisValue>(), Arg.Any<TimeSpan?>(), When.Always, CommandFlags.DemandMaster);
+    }
+
+    [Fact]
+    public async Task Multi_get_keeps_the_slots_that_answered_when_one_throws()
+    {
+        GiveKeysDifferentSlots();
+        var first = _fixture.Create<string>();
+        _database.StringGetAsync(Arg.Is<RedisKey[]>(k => k.SequenceEqual(new[] { _redisKey })), CommandFlags.PreferReplica)
+            .Returns(new RedisValue[] { _serializer.Serialize(first) });
+        _database.StringGetAsync(Arg.Is<RedisKey[]>(k => k.SequenceEqual(new[] { _redisMultiKey })), CommandFlags.PreferReplica)
+            .ThrowsAsync(new RedisException("test"));
+
+        var actual = await Sut.GetAsync<string>(new CacheKey[] { _cacheKey, _multiKey }, policy: null, token: testContextAccessor.Current.CancellationToken);
+
+        actual.Should().Equal(new KeyValuePair<CacheKey, string?>(_cacheKey, first), new KeyValuePair<CacheKey, string?>(_multiKey, null));
+    }
+
+    [Fact]
+    public async Task A_multi_set_whose_second_slot_fails_to_start_returns_only_after_the_first_slot_has_written()
+    {
+        GiveKeysDifferentSlots();
+        var written = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var failing = Substitute.For<ITransaction>();
+        failing.When(t => t.StringSetAsync(Arg.Any<RedisKey>(), Arg.Any<RedisValue>(), Arg.Any<TimeSpan?>(), Arg.Any<When>(), Arg.Any<CommandFlags>()))
+            .Do(_ => throw new RedisException("test"));
+        _database.CreateTransaction(Arg.Any<object?>()).Returns(_transaction, failing);
+        _transaction.ExecuteAsync(Arg.Any<CommandFlags>()).Returns(written.Task);
         var value = _fixture.Create<string>();
-        var act = () => Sut.SetAsync(new KeyValuePair<CacheKey, string?>[] { new(_cacheKey, value), new(_multiKey, value) }, _fixture.Create<TimeSpan>(), policy: null, token: testContextAccessor.Current.CancellationToken).AsTask();
-        await act.Should().ThrowAsync<CrossSlotKeysException>();
-        _database.DidNotReceive().CreateTransaction(Arg.Any<object?>());
+
+        var set = Sut.SetAsync(new KeyValuePair<CacheKey, string?>[] { new(_cacheKey, value), new(_multiKey, value) }, _fixture.Create<TimeSpan>(), policy: null, token: testContextAccessor.Current.CancellationToken).AsTask();
+        await Task.Delay(100, testContextAccessor.Current.CancellationToken);
+
+        set.IsCompleted.Should().BeFalse("the first slot's write still holds the serialized payload");
+        written.SetResult(true);
+        (await set).Should().BeFalse();
+    }
+
+    [Fact]
+    public async Task Multi_set_reports_failure_when_one_slot_does_not_commit()
+    {
+        GiveKeysDifferentSlots();
+        _transaction.ExecuteAsync(Arg.Any<CommandFlags>()).Returns(true, false);
+        var value = _fixture.Create<string>();
+
+        var stored = await Sut.SetAsync(new KeyValuePair<CacheKey, string?>[] { new(_cacheKey, value), new(_multiKey, value) }, _fixture.Create<TimeSpan>(), policy: null, token: testContextAccessor.Current.CancellationToken);
+
+        stored.Should().BeFalse();
+        await _transaction.Received(2).ExecuteAsync(CommandFlags.DemandMaster);
     }
 
     [Fact]
