@@ -80,6 +80,8 @@
     <PackageVersion Include="Microsoft.CodeAnalysis.CSharp.Workspaces" Version="4.8.0" />
     <PackageVersion Include="Microsoft.CodeAnalysis.Analyzers" Version="3.11.0" />
     <PackageVersion Include="Microsoft.CodeAnalysis.CSharp.CodeFix.Testing" Version="1.1.4" />
+    <!-- CodeFix.Testing 1.1.4 brings 9.0.6, which has known vulnerabilities; 9.0.21 is the first patched 9.x. -->
+    <PackageVersion Include="System.Security.Cryptography.Pkcs" Version="9.0.21" />
     <!-- Public API surface tracking (src libraries only; wired in src/Directory.Build.props) -->
     <PackageVersion Include="Microsoft.CodeAnalysis.PublicApiAnalyzers" Version="5.6.0" />
     <!-- Test related packages -->
