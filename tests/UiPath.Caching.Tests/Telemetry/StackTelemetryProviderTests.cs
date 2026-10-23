@@ -8,7 +8,7 @@ public class StackTelemetryProviderTests
 
     private readonly RecordingTelemetryProvider _inner = new();
 
-    private ICachingTelemetryProvider Sut => new StackTelemetryProvider(_inner, Stack);
+    private StackTelemetryProvider Sut => new(_inner, Stack);
 
     [Fact]
     public void Every_call_carries_the_stack_after_its_own_properties()

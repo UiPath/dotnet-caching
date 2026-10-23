@@ -92,7 +92,7 @@ public sealed class ProfiledCommandProcessor(
             properties: System.Runtime.InteropServices.CollectionsMarshal.AsSpan(properties));
     }
 
-    // Null without a connection string, as with a ConnectionFactory, and the node stays the target.
+    // Null without a connection string, as with a ConnectionFactory, or for Sentinel, whose endpoints are not the servers that answer; the node stays the target.
     private static string? ConnectionTarget(string? connectionString)
     {
         if (string.IsNullOrWhiteSpace(connectionString))
@@ -103,6 +103,11 @@ public sealed class ProfiledCommandProcessor(
         try
         {
             var configuration = ConfigurationOptions.Parse(connectionString, ignoreUnknown: true);
+            if (!string.IsNullOrEmpty(configuration.ServiceName))
+            {
+                return null;
+            }
+
             configuration.SetDefaultPorts();
             var endPoints = configuration.EndPoints.Select(ProfiledCommandExtensions.Format).OfType<string>().ToArray();
             return endPoints.Length == 0 ? null : string.Join(',', endPoints);
