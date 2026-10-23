@@ -6,6 +6,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 
 ## [Unreleased]
 
+### Fixed
+
+- **Multi-key reads keep a usable local copy.** `GetAsync` and `GetCacheEntriesAsync` over several keys, and the
+  batch `GetOrAddAsync`, stored each inner-tier hit locally as a key-value pair rather than as the value, so no later
+  read found it and every one went back to the inner tier. Only the process that set or generated a value kept it
+  locally. A hit is now kept as a single-key read keeps it.
+
 ## [2.1.1] - 2026-10-20
 
 ### Fixed

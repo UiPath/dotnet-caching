@@ -130,6 +130,37 @@ public class MultilayerCacheBatchGetOrAddTests(ITestContextAccessor testContextA
     }
 
     [Fact]
+    public async Task Inner_tier_hits_are_kept_locally_so_the_second_call_does_not_read_the_inner_cache()
+    {
+        var token = testContextAccessor.Current.CancellationToken;
+        _stored[(CacheKey)"a"] = "A";
+        _stored[(CacheKey)"b"] = "B";
+        await Sut.GetOrAddAsync<string, long>([new((CacheKey)"a", 1L), new((CacheKey)"b", 2L)], Generate, (CachePolicy?)null, token);
+        _innerCache.ClearReceivedCalls();
+
+        var result = await Sut.GetOrAddAsync<string, long>([new((CacheKey)"a", 1L), new((CacheKey)"b", 2L)], Generate, (CachePolicy?)null, token);
+
+        result.Select(r => r.Value).Should().Equal(AAndB);
+        _generatorCalls.Should().BeEmpty();
+        await _innerCache.DidNotReceiveWithAnyArgs().GetCacheEntriesAsync<string>(default!, default, token);
+    }
+
+    [Fact]
+    public async Task Multi_key_GetAsync_keeps_inner_tier_hits_locally()
+    {
+        var token = testContextAccessor.Current.CancellationToken;
+        _stored[(CacheKey)"a"] = "A";
+        _stored[(CacheKey)"b"] = "B";
+        await Sut.GetAsync<string>([(CacheKey)"a", (CacheKey)"b"], (CachePolicy?)null, token);
+        _innerCache.ClearReceivedCalls();
+
+        var result = await Sut.GetAsync<string>([(CacheKey)"a", (CacheKey)"b"], (CachePolicy?)null, token);
+
+        result.Select(r => r.Value).Should().Equal(AAndB);
+        await _innerCache.DidNotReceiveWithAnyArgs().GetCacheEntriesAsync<string>(default!, default, token);
+    }
+
+    [Fact]
     public async Task State_omitted_by_the_generator_is_not_cached()
     {
         var token = testContextAccessor.Current.CancellationToken;
