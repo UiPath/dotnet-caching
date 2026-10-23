@@ -26,8 +26,10 @@ public static class ProfiledCommandExtensions
     public static string GetStatement(this IProfiledCommand profiledCommand) =>
         profiledCommand.GetCommandAndKey() ?? profiledCommand.GetCommandName();
 
-    public static string? GetTarget(this IProfiledCommand profiledCommand) =>
-        profiledCommand.EndPoint switch
+    public static string? GetTarget(this IProfiledCommand profiledCommand) => Format(profiledCommand.EndPoint);
+
+    internal static string? Format(EndPoint? endPoint) =>
+        endPoint switch
         {
             IPEndPoint ipEndPoint => $"{ipEndPoint.Address}:{ipEndPoint.Port}",
             DnsEndPoint dnsEndPoint => $"{dnsEndPoint.Host}:{dnsEndPoint.Port}",
