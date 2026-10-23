@@ -73,7 +73,8 @@ services.AddNamedCaching("SecondaryRedis", configuration, chain,
 | Redis connection, caches, L1 memory caches, set caches, locks, topics, planned maintenance, warm-up | Separate per stack. |
 | Cache options, policies, `AppShortName`, provider and queue options | Shared: the same `Caching` section. Keys look identical on both servers; the server is what separates them. |
 | `Connections:Redis` | Replaced, key by key, by `Connections:{name}`. |
-| Logging, telemetry, clock, key masking, `JsonSerializerOptions` | Forwarded from the application container. One meter and one activity source report both stacks. |
+| Logging, telemetry, clock, key masking, `JsonSerializerOptions` | Forwarded from the application container. One meter and one activity source report both stacks; everything the stack sends through `ICachingTelemetryProvider` carries a `CachingStack` property with its name. |
+| Redis profiler | Per stack, so each connection's dependencies name its own server. A session the application opens on its `IRedisProfiler` is opened on the stack's too. |
 | Resilience pipelines, CloudEvents, Entra authentication, a custom `IConnectionMultiplexerFactory` | Per stack: add them to the chain or through `configureServices`. |
 | `IDistributedCache` | `AddDistributedCache(...)` in the chain, then `.Expose<IDistributedCache>()`. |
 | Health check | A second `RedisHealthCheck` over the keyed connector, per [redis-health-check.md](redis-health-check.md). |

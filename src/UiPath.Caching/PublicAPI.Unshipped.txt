@@ -1,1 +1,3 @@
 #nullable enable
+static UiPath.Caching.Redis.ProfiledCommandProcessor.NodeField.get -> string!
+static UiPath.Caching.Redis.ProfiledCommandProcessor.NodeField.set -> void

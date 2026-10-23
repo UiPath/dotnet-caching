@@ -20,6 +20,10 @@ internal sealed partial class RedisProfiler : IRedisProfiler, IDisposable
     private readonly IProfilingSessionCommandReader _profilingSessionCommandReader;
     private readonly ICachingTelemetryProvider _telemetryProvider;
     private readonly ILogger<RedisProfiler> _logger;
+
+    // Under _followers: the profilers of named stacks, which open each session this one opens.
+    private readonly List<RedisProfiler> _followers = [];
+    private RedisProfiler? _leader;
     private bool _disposed;
 
     public RedisProfiler(
@@ -100,15 +104,26 @@ internal sealed partial class RedisProfiler : IRedisProfiler, IDisposable
         }
         else
         {
-            _sessions.TryAdd(sessionId, new RedisProfileEntry(new ProfilingSession(sessionId), _clock.GetUtcNow()));
+            RedisProfiler[] followers;
+            lock (_followers)
+            {
+                followers = [.. _followers];
+            }
+
+            Open(sessionId);
+            foreach (var follower in followers)
+            {
+                follower.Open(sessionId);
+            }
+
             _currentSessionId.Value = sessionId;
-            return Disposable.Create((outerSessionId, sessionId), args =>
+            return Disposable.Create((outerSessionId, sessionId, followers), args =>
             {
                 _currentSessionId.Value = args.outerSessionId;
-                if (_sessions.TryRemove(args.sessionId, out var entry))
+                Close(args.sessionId);
+                foreach (var follower in args.followers)
                 {
-                    var profileInfo = _profilingSessionCommandReader.Get(entry.Session);
-                    Process(profileInfo);
+                    follower.Close(args.sessionId);
                 }
             });
         }
@@ -121,6 +136,14 @@ internal sealed partial class RedisProfiler : IRedisProfiler, IDisposable
             return;
         }
         _disposed = true;
+        if (_leader is { } leader)
+        {
+            lock (leader._followers)
+            {
+                leader._followers.Remove(this);
+            }
+        }
+
         _timer?.Dispose();
         if (_flushWorker is not null)
         {
@@ -129,6 +152,28 @@ internal sealed partial class RedisProfiler : IRedisProfiler, IDisposable
         }
         DrainAllSessions();
         GC.SuppressFinalize(this);
+    }
+
+    /// <summary>Opens each later session of this profiler on <paramref name="follower"/> as well, so the commands of its connection keep the session's id.</summary>
+    internal void Lead(RedisProfiler follower)
+    {
+        lock (_followers)
+        {
+            _followers.Add(follower);
+        }
+
+        follower._leader = this;
+    }
+
+    private void Open(string sessionId) =>
+        _sessions.TryAdd(sessionId, new RedisProfileEntry(new ProfilingSession(sessionId), _clock.GetUtcNow()));
+
+    private void Close(string sessionId)
+    {
+        if (_sessions.TryRemove(sessionId, out var entry))
+        {
+            Process(_profilingSessionCommandReader.Get(entry.Session));
+        }
     }
 
     private async Task FlushSessionsAsync()

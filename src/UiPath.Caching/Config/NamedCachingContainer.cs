@@ -46,7 +46,7 @@ internal sealed class NamedCachingContainer : IDisposable
         services.AddSingleton(root.GetService<ILoggerFactory>() ?? NullLoggerFactory.Instance);
         services.AddSingleton(typeof(ILogger<>), typeof(Logger<>));
         Forward<TimeProvider>(services, root);
-        Forward<ICachingTelemetryProvider>(services, root);
+        ForwardTelemetry(services, root, name);
         Forward<IKeyMaskingPolicy>(services, root);
         Forward<JsonSerializerOptions>(services, root);
         configureServices?.Invoke(services, root);
@@ -76,6 +76,7 @@ internal sealed class NamedCachingContainer : IDisposable
         {
             ThrowIfEffectiveKeyCasingDiffers(name, applicationCasing, provider);
             ThrowIfConnectionIsNotItsOwn(name, root, provider);
+            FollowPrimaryProfiler(root, provider);
         }
         catch
         {
@@ -153,6 +154,25 @@ internal sealed class NamedCachingContainer : IDisposable
         if (seeder is not null)
         {
             services.Remove(seeder);
+        }
+    }
+
+    /// <summary>Tagged with the stack's name; one that configureServices registers is the stack's own and stays as it is.</summary>
+    private static void ForwardTelemetry(IServiceCollection services, IServiceProvider root, string name)
+    {
+        if (root.GetService<ICachingTelemetryProvider>() is { } telemetry)
+        {
+            services.AddSingleton<ICachingTelemetryProvider>(
+                telemetry is NullTelemetryProvider ? telemetry : new StackTelemetryProvider(telemetry, name));
+        }
+    }
+
+    /// <summary>The application opens a request's profiling session on its own profiler only.</summary>
+    private static void FollowPrimaryProfiler(IServiceProvider root, IServiceProvider stack)
+    {
+        if (root.GetService<IRedisProfiler>() is RedisProfiler primary && stack.GetService<IRedisProfiler>() is RedisProfiler own)
+        {
+            primary.Lead(own);
         }
     }
 
