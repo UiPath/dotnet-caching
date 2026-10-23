@@ -26,3 +26,18 @@ UiPath.Caching.InMemoryRedisCacheOptions.MaxBackgroundWrites.get -> int
 UiPath.Caching.InMemoryRedisCacheOptions.MaxBackgroundWrites.set -> void
 UiPath.Caching.InMemoryRedisCacheOptions.BackgroundWriteDrainTimeout.get -> System.TimeSpan
 UiPath.Caching.InMemoryRedisCacheOptions.BackgroundWriteDrainTimeout.set -> void
+UiPath.Caching.InMemoryRedisCacheOptions.BatchChunkSize.get -> int
+UiPath.Caching.InMemoryRedisCacheOptions.BatchChunkSize.set -> void
+UiPath.Caching.InMemoryRedisCacheOptions.BatchConcurrentChunks.get -> int
+UiPath.Caching.InMemoryRedisCacheOptions.BatchTopicInvalidationThreshold.set -> void
+UiPath.Caching.InMemoryRedisCacheOptions.BatchConcurrentChunks.set -> void
+UiPath.Caching.InMemoryRedisCacheOptions.BatchTopicInvalidationThreshold.get -> int?
+UiPath.Caching.Cache<T>.SetManyAsync(System.Collections.Generic.IEnumerable<System.Collections.Generic.KeyValuePair<UiPath.Caching.CacheKey, T?>>! keyValues, System.Threading.CancellationToken token = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.ValueTask<System.Collections.Generic.IReadOnlyList<UiPath.Caching.CacheKey>!>
+UiPath.Caching.Cache<T>.SetManyAsync(System.Collections.Generic.IEnumerable<System.Collections.Generic.KeyValuePair<UiPath.Caching.CacheKey, T?>>! keyValues, System.TimeSpan expiration, System.Threading.CancellationToken token = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.ValueTask<System.Collections.Generic.IReadOnlyList<UiPath.Caching.CacheKey>!>
+UiPath.Caching.Cache<T>.SetManyAsync(System.Collections.Generic.IEnumerable<System.Collections.Generic.KeyValuePair<UiPath.Caching.CacheKey, T?>>! keyValues, System.DateTimeOffset expiration, System.Threading.CancellationToken token = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.ValueTask<System.Collections.Generic.IReadOnlyList<UiPath.Caching.CacheKey>!>
+UiPath.Caching.Cache<T>.RemoveManyAsync(System.Collections.Generic.IEnumerable<UiPath.Caching.CacheKey>! cacheKeys, System.Threading.CancellationToken token = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.ValueTask<System.Collections.Generic.IReadOnlyList<UiPath.Caching.CacheKey>!>
+UiPath.Caching.HashCache<T>.RemoveManyAsync(System.Collections.Generic.IEnumerable<UiPath.Caching.CacheKey>! cacheKeys, System.Threading.CancellationToken token = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.ValueTask<System.Collections.Generic.IReadOnlyList<UiPath.Caching.CacheKey>!>
+UiPath.Caching.HashCache<T>.SetManyAsync(System.Collections.Generic.IEnumerable<System.Collections.Generic.KeyValuePair<UiPath.Caching.CacheKey, System.Collections.Generic.IDictionary<string!, T?>!>>! keyValues, UiPath.Caching.HashCacheEntryOptions options, System.Threading.CancellationToken token = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.ValueTask<System.Collections.Generic.IReadOnlyList<UiPath.Caching.CacheKey>!>
+UiPath.Caching.HashCache<T>.RemoveFieldsAsync(UiPath.Caching.CacheKey cacheKey, string![]! fields, System.Threading.CancellationToken token = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.ValueTask<bool>
+UiPath.Caching.Redis.RedisCacheOptions.HashFieldBatchSize.get -> int
+UiPath.Caching.Redis.RedisCacheOptions.HashFieldBatchSize.set -> void

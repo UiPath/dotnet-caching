@@ -240,6 +240,27 @@ public class Cache<T> : ICache<T>, ISpanKeyCache<T>, IStatefulCache<T>, IGenerat
     public ValueTask<bool> RemoveAsync(Span<char> cacheKey, CancellationToken token = default) =>
         RemoveAsync(new CacheKey(cacheKey), token);
 
+    public ValueTask<IReadOnlyList<CacheKey>> RemoveManyAsync(IEnumerable<CacheKey> cacheKeys, CancellationToken token = default)
+    {
+        ArgumentNullException.ThrowIfNull(cacheKeys);
+        if (_cacheKeyStrategy is DefaultCacheKeyStrategy)
+        {
+            return _cache.RemoveManyAsync<T>(cacheKeys, token);
+        }
+
+        var composed = ComposedKeys<CacheKey>.Create(cacheKeys, static k => k, GetCacheKey, static (_, k) => k);
+        return RestoreAsync(_cache.RemoveManyAsync<T>(composed, token), composed);
+    }
+
+    public ValueTask<IReadOnlyList<CacheKey>> SetManyAsync(IEnumerable<KeyValuePair<CacheKey, T?>> keyValues, CancellationToken token = default) =>
+        SetMany(keyValues, static (c, kv, t) => c._cache.SetManyAsync(kv, c.Policy, t), token);
+
+    public ValueTask<IReadOnlyList<CacheKey>> SetManyAsync(IEnumerable<KeyValuePair<CacheKey, T?>> keyValues, TimeSpan expiration, CancellationToken token = default) =>
+        SetMany(keyValues, (c, kv, t) => c._cache.SetManyAsync(kv, expiration, c.Policy, t), token);
+
+    public ValueTask<IReadOnlyList<CacheKey>> SetManyAsync(IEnumerable<KeyValuePair<CacheKey, T?>> keyValues, DateTimeOffset expiration, CancellationToken token = default) =>
+        SetMany(keyValues, (c, kv, t) => c._cache.SetManyAsync(kv, expiration, c.Policy, t), token);
+
     public ValueTask<bool> SetAsync(CacheKey cacheKey, T? value, CancellationToken token = default) =>
         _cache.SetAsync(GetCacheKey(cacheKey), value, policy: Policy, token: token);
 
@@ -300,6 +321,21 @@ public class Cache<T> : ICache<T>, ISpanKeyCache<T>, IStatefulCache<T>, IGenerat
 
     public ValueTask<DateTimeOffset?> ExpireTimeAsync(CacheKey cacheKey, CancellationToken token = default) =>
         _cache.ExpireTimeAsync<T>(GetCacheKey(cacheKey), token);
+
+    private static async ValueTask<IReadOnlyList<CacheKey>> RestoreAsync<TItem>(ValueTask<IReadOnlyList<CacheKey>> pending, ComposedKeys<TItem> composed) =>
+        composed.Restore(await pending.ConfigureAwait(false));
+
+    private ValueTask<IReadOnlyList<CacheKey>> SetMany(IEnumerable<KeyValuePair<CacheKey, T?>> keyValues, Func<Cache<T>, IEnumerable<KeyValuePair<CacheKey, T?>>, CancellationToken, ValueTask<IReadOnlyList<CacheKey>>> set, CancellationToken token)
+    {
+        ArgumentNullException.ThrowIfNull(keyValues);
+        if (_cacheKeyStrategy is DefaultCacheKeyStrategy)
+        {
+            return set(this, keyValues, token);
+        }
+
+        var composed = ComposedKeys<KeyValuePair<CacheKey, T?>>.Create(keyValues, static kv => kv.Key, GetCacheKey, static (kv, k) => new KeyValuePair<CacheKey, T?>(k, kv.Value));
+        return RestoreAsync(set(this, composed, token), composed);
+    }
 
     /// <summary>Applies the key strategy to each entry's key and leaves its state alone.</summary>
     private KeyValuePair<CacheKey, TState>[] MapKeys<TState>(KeyValuePair<CacheKey, TState>[] entries)

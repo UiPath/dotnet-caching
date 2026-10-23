@@ -402,6 +402,21 @@ provider defaults are acceptable. Named policies become valuable when different
 caches serving different data categories have meaningfully different freshness
 requirements or cost profiles.
 
+### Removing and setting many keys
+
+`RemoveManyAsync` and `SetManyAsync` (cache and hash cache) write many keys that need not share a slot: one command per key, the commands
+of a chunk in flight together, then the chunk's events together. They return the keys that failed (empty means done), so a caller retries
+just those. The input is read in chunks of `BatchChunkSize`, at most `BatchConcurrentChunks` at a time, so a million keys need memory for a
+chunk, not for the input; keep a chunk small enough to finish inside the request timeout. They are always awaited and wait for the
+pending background writes of their keys. A removal is announced even when its delete failed, as `RemoveAsync` does; a set whose write
+failed is not. Cancelling stops before the next chunk and throws, with the finished chunks left done. A key repeated in one call has no
+order guarantee between chunks.
+
+Above `BatchTopicInvalidationThreshold` keys (an input of known size), one `TopicInvalidated` event replaces the per-key events and every
+node drops its whole local tier of the topic; if it cannot be published every key is returned. Nodes on an older version ignore it, so
+enable it only when all nodes run this version. `RemoveAsync(CacheKey[])` and the batch `SetAsync` keep their all-or-nothing, single-slot
+behaviour.
+
 ### Background L2 writes
 
 `BackgroundDistributedWrite` (default off) makes single-key `SetAsync` and the write that

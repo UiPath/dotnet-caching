@@ -93,6 +93,9 @@ public abstract partial class MultilayerCacheBase : IDisposable
             logger,
             telemetryProvider,
             clock);
+        BatchChunkSize = Math.Max(1, redisOptions?.BatchChunkSize ?? InMemoryRedisCacheOptions.DefaultBatchChunkSize);
+        BatchConcurrentChunks = Math.Max(1, redisOptions?.BatchConcurrentChunks ?? InMemoryRedisCacheOptions.DefaultBatchConcurrentChunks);
+        BatchTopicInvalidationThreshold = redisOptions?.BatchTopicInvalidationThreshold;
         _topicProvider = topicFactory.Get(_multiLayerCacheOptions.Topic);
         _eventPublisher = new CacheEventPublisher(cacheName, _topicProvider, cacheEventFactory, logger, _masker);
         var connectionMonitorEnabled = multiLayerCacheOptions.ConnectionMonitorEnabled ?? cacheOptions.ConnectionMonitorEnabled;

@@ -130,6 +130,23 @@ staleness rather than absolute TTL.
 fields. `SetMetadataAsync` updates metadata in-place on an existing key without touching
 payload fields or changing the TTL.
 
+## Removing fields
+
+`RemoveFieldsAsync(key, fields, token)` deletes just those fields (`HDEL`; a long list goes in commands of
+`HashFieldBatchSize` fields) and returns `false` when a command or the event failed. The hash is dropped from the local tier
+of the writing node and announced as removed, so every node, an older one too, refetches it whole on its next read. A hash left
+without fields is gone. Reserved `_word_` names are rejected.
+
+## Hashes of many fields
+
+A command on a hash with many fields blocks Redis while it runs, so the Redis hash cache splits them: with `HashFieldBatchSize` fields per
+command (1000), a write of more fields is sent as several `HSET`s in flight together, a long subset read as several `HMGET`s, and a field
+list to remove as several `HDEL`s. A replacing write (`KeyReplace`, the default) fills a staging key and renames it over the key, so
+readers see the old hash or the new, never half of it; a merge (`HashReplace`) goes straight into the hash and is not atomic across
+chunks. A read of the whole hash goes by `HSCAN` pages once the hash holds more than ten times `HashFieldBatchSize` fields (on Redis 7 and
+later with read scripts); its pages are not one snapshot. Keep a hash within a size that suits its readers all the same: every read of it
+moves every field.
+
 ## Bundled GET + TTL
 
 `GetCacheEntryAsync` returns the value and its remaining expiration in a single Redis

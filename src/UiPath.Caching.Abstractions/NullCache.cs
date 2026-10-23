@@ -136,6 +136,14 @@ public sealed class NullCache : ICache, ISpanKeyCache, IGeneratedExpirationCache
     [OverloadResolutionPriority(-1)]
     public ValueTask<bool> RemoveAsync<T>(Span<char> cacheKey, CancellationToken token = default) => ((ICache)this).RemoveAsync<T>(cacheKey, token);
 
+    public ValueTask<IReadOnlyList<CacheKey>> RemoveManyAsync<T>(IEnumerable<CacheKey> cacheKeys, CancellationToken token = default) => NoneFailedAsync<T>();
+
+    public ValueTask<IReadOnlyList<CacheKey>> SetManyAsync<T>(IEnumerable<KeyValuePair<CacheKey, T?>> keyValues, CachePolicy? policy, CancellationToken token = default) => NoneFailedAsync<T>();
+
+    public ValueTask<IReadOnlyList<CacheKey>> SetManyAsync<T>(IEnumerable<KeyValuePair<CacheKey, T?>> keyValues, TimeSpan expiration, CachePolicy? policy, CancellationToken token = default) => NoneFailedAsync<T>();
+
+    public ValueTask<IReadOnlyList<CacheKey>> SetManyAsync<T>(IEnumerable<KeyValuePair<CacheKey, T?>> keyValues, DateTimeOffset expiration, CachePolicy? policy, CancellationToken token = default) => NoneFailedAsync<T>();
+
     public ValueTask<bool> SetAsync<T>(CacheKey cacheKey, T? value, CachePolicy? policy, CancellationToken token = default) => ReturnTrueAsync<T>();
 
     public ValueTask<bool> SetAsync<T>(CacheKey cacheKey, T? value, TimeSpan expiration, CachePolicy? policy, CancellationToken token = default) => ReturnTrueAsync<T>();
@@ -197,6 +205,13 @@ public sealed class NullCache : ICache, ISpanKeyCache, IGeneratedExpirationCache
     public void Dispose()
     {
         // Nothing to dispose
+    }
+
+    // Nothing is stored, so nothing fails.
+    private static ValueTask<IReadOnlyList<CacheKey>> NoneFailedAsync<T>()
+    {
+        NotCacheableException.ThrowIfNotCacheable<T>();
+        return ValueTask.FromResult<IReadOnlyList<CacheKey>>([]);
     }
 
     private static ValueTask<bool> ReturnTrueAsync<T>()

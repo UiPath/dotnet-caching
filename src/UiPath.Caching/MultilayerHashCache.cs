@@ -6,6 +6,7 @@ namespace UiPath.Caching;
 
 internal sealed partial class MultilayerHashCache : MultilayerCacheBase, IHashCache, ISpanKeyHashCache, IStatefulHashCache, IStatefulSpanKeyHashCache
 {
+    private readonly Lock[] _mergeLocks = Enumerable.Range(0, 64).Select(static _ => new Lock()).ToArray();
     private readonly IHashCache _innerCache;
     private readonly InFlight<InFlightKey, object?> _innerReads = new();
     private readonly InFlight<InFlightKey, object?> _generations = new();
@@ -317,7 +318,9 @@ internal sealed partial class MultilayerHashCache : MultilayerCacheBase, IHashCa
     {
         NotCacheableException.ThrowIfNotCacheable<T>();
         policy ??= _defaultPolicy;
-        var cacheEntryOptions = _entryBuilder.BuildEntryOptions<T>(cacheKey, GetExpiration(options, policy), options.SetOption, token);
+        // An empty write replaces the key whole in the inner tier, so it does locally too.
+        var setOption = IsNullOrEmpty(values) ? HashCacheSetOption.KeyReplace : options.SetOption;
+        var cacheEntryOptions = _entryBuilder.BuildEntryOptions<T>(cacheKey, GetExpiration(options, policy), setOption, token) with { Partial = setOption == HashCacheSetOption.HashReplace };
         cacheEntryOptions.Metadata = options.Metadata;
         if (IsNullOrEmpty(values) && !_multiLayerCacheOptions.CacheNullValues)
         {
@@ -347,6 +350,73 @@ internal sealed partial class MultilayerHashCache : MultilayerCacheBase, IHashCa
     {
         NotCacheableException.ThrowIfNotCacheable<T>();
         return RemoveAsync<T>(_entryBuilder.BuildEntryOptions<T>(cacheKey, default, token: token));
+    }
+
+    public async ValueTask<bool> RemoveFieldsAsync<T>(CacheKey cacheKey, string[] fields, CancellationToken token = default)
+    {
+        NotCacheableException.ThrowIfNotCacheable<T>();
+        HashFields.ValidateFieldsForWrite(fields);
+        if (_innerCache is not ISpanKeyHashCache inner)
+        {
+            throw new NotSupportedException($"{_innerCache.GetType().Name} does not remove single fields of a hash.");
+        }
+
+        var options = _entryBuilder.BuildEntryOptions<T>(cacheKey, default, token: token);
+        if (fields.Length == 0)
+        {
+            return true;
+        }
+
+        // The whole local hash goes, here and on every node: an entry is replaced whole, never patched, so a read racing the removal cannot bring a removed field back.
+        LogClearingLocalCached(Logged(options, typeof(T)));
+        var removed = false;
+        var issued = false;
+        var cancelled = false;
+        try
+        {
+            using var turn = EnterInnerWrite(options.CacheKey.Name);
+            RemoveLocal(options.CacheKey.Name);
+            if (turn.Tracked)
+            {
+                await Settled(turn.Previous, options.Token).ConfigureAwait(false);
+            }
+
+            issued = true;
+            removed = await inner.RemoveFieldsAsync<T>(options.CacheKey, fields, options.Token).ConfigureAwait(false);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException || !options.Token.IsCancellationRequested)
+        {
+            LogInnerCacheRemoveError(ex, Logged(options, typeof(T)));
+        }
+        catch (OperationCanceledException)
+        {
+            cancelled = true;
+        }
+
+        if (!issued)
+        {
+            options.Token.ThrowIfCancellationRequested();
+            return false;
+        }
+
+        // Announced however the delete ended, a cancel included: some of its chunks may have landed.
+        bool announced;
+        try
+        {
+            announced = await _eventPublisher.CacheRemovedAsync(options, typeof(T)).ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            LogInnerCacheRemoveError(ex, Logged(options, typeof(T)));
+            announced = false;
+        }
+
+        if (cancelled)
+        {
+            throw new OperationCanceledException(options.Token);
+        }
+
+        return announced && removed;
     }
 
     public ValueTask<bool> RefreshAsync<T>(CacheKey cacheKey, CachePolicy? policy, CancellationToken token = default) =>
@@ -826,11 +896,56 @@ internal sealed partial class MultilayerHashCache : MultilayerCacheBase, IHashCa
         }
     }
 
-    private bool MemorySet<T>(InternalHashCacheEntryOptions options, IDictionary<string, T?> value, TimeSpan? maxExpiration) =>
-        MemorySet(options, CreateEntry(value, options), maxExpiration);
+    private bool MemorySet<T>(InternalHashCacheEntryOptions options, IDictionary<string, T?> value, TimeSpan? maxExpiration, bool keepWhenAbsent = false)
+    {
+        if (!options.Partial)
+        {
+            return MemorySet(options, CreateEntry(value, options), maxExpiration);
+        }
 
-    private bool MemorySet<T>(InternalHashCacheEntryOptions options, ICacheEntry<IDictionary<string, T?>> item, TimeSpan? maxExpiration) =>
-        _localMemorySetter.Set(options, item, typeof(T), maxExpiration);
+        // Read, merged and written as one, so two merges of one hash do not each drop the other's fields.
+        lock (MergeLock(options.CacheKey.Name))
+        {
+            if (TryMergeLocal(ref options, value, out var merged))
+            {
+                return MemorySet(options, CreateEntry(merged, options), maxExpiration);
+            }
+
+            // Nothing held here to merge into: the fields alone are not the hash, so the next read takes it whole from the inner tier.
+            return !keepWhenAbsent || MemorySet(options, CreateEntry(value, options), maxExpiration);
+        }
+    }
+
+    // Under the key's merge lock, so a merge never reads the hash a write is replacing and writes it back.
+    private bool MemorySet<T>(InternalHashCacheEntryOptions options, ICacheEntry<IDictionary<string, T?>> item, TimeSpan? maxExpiration)
+    {
+        lock (MergeLock(options.CacheKey.Name))
+        {
+            return _localMemorySetter.Set(options, item, typeof(T), maxExpiration);
+        }
+    }
+
+    private Lock MergeLock(string name) => _mergeLocks[(int)((uint)StringComparer.Ordinal.GetHashCode(name) % (uint)_mergeLocks.Length)];
+
+    /// <summary>False when the local tier holds no hash to merge over.</summary>
+    private bool TryMergeLocal<T>(ref InternalHashCacheEntryOptions options, IDictionary<string, T?> fields, [MaybeNullWhen(false)] out IDictionary<string, T?> merged)
+    {
+        if (!_memoryCache.TryGetValue(options.CacheKey.Name, out ICacheEntry<IDictionary<string, T?>>? held) || held is null || !held.Found || held.Value is null)
+        {
+            merged = null;
+            return false;
+        }
+
+        var combined = held.Value.ToDictionary(f => f.Key, f => f.Value);
+        foreach (var (field, value) in fields)
+        {
+            combined[field] = value;
+        }
+
+        options.Metadata ??= held.Metadata;
+        merged = combined;
+        return true;
+    }
 
     private async ValueTask<bool> InternalSetAsync<T>(InternalHashCacheEntryOptions options, IDictionary<string, T?> value, bool disconnected, CachePolicy policy, bool keepRefused = false) =>
         (await SetInnerAsync(options, value, disconnected, policy, keepRefused).ConfigureAwait(false)).Kept;
@@ -843,7 +958,7 @@ internal sealed partial class MultilayerHashCache : MultilayerCacheBase, IHashCa
             if (disconnected)
             {
                 LogSettingLocalOnly(Logged(options, typeof(T)));
-                return (false, ApplyLocal(options.CacheKey.Name, (Cache: this, Options: options, Value: value, Max: policy.LocalExpirationDisconnected ?? _multiLayerCacheOptions.LocalMaxExpirationDisconnected), static s => s.Cache.MemorySet(s.Options, s.Value, s.Max)));
+                return (false, ApplyLocal(options.CacheKey.Name, (Cache: this, Options: options, Value: value, Max: policy.LocalExpirationDisconnected ?? _multiLayerCacheOptions.LocalMaxExpirationDisconnected), static s => s.Cache.MemorySet(s.Options, s.Value, s.Max, keepWhenAbsent: true)));
             }
 
             using var turn = EnterInnerWrite(options.CacheKey.Name);

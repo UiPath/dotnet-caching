@@ -137,6 +137,30 @@ public interface ICache<T>
     sealed ValueTask<bool> RemoveAsync(Span<char> cacheKey, CancellationToken token = default) =>
         RemoveAsync(new CacheKey(cacheKey), token);
 
+    /// <inheritdoc cref="ISpanKeyCache.RemoveManyAsync{T}(IEnumerable{CacheKey}, CancellationToken)"/>
+    sealed ValueTask<IReadOnlyList<CacheKey>> RemoveManyAsync(IEnumerable<CacheKey> cacheKeys, CancellationToken token = default) =>
+        this is ISpanKeyCache<T> multi
+            ? multi.RemoveManyAsync(cacheKeys, token)
+            : MultiKeyFallback.RunAsync(cacheKeys, (Cache: this, Token: token), static k => k, static (s, k) => s.Cache.RemoveAsync(k, s.Token));
+
+    /// <inheritdoc cref="ISpanKeyCache.SetManyAsync{T}(IEnumerable{KeyValuePair{CacheKey, T}}, CachePolicy, CancellationToken)"/>
+    sealed ValueTask<IReadOnlyList<CacheKey>> SetManyAsync(IEnumerable<KeyValuePair<CacheKey, T?>> keyValues, CancellationToken token = default) =>
+        this is ISpanKeyCache<T> multi
+            ? multi.SetManyAsync(keyValues, token)
+            : MultiKeyFallback.RunAsync(keyValues, (Cache: this, Token: token), static kv => kv.Key, static (s, kv) => s.Cache.SetAsync(kv.Key, kv.Value, s.Token));
+
+    /// <inheritdoc cref="ISpanKeyCache.SetManyAsync{T}(IEnumerable{KeyValuePair{CacheKey, T}}, CachePolicy, CancellationToken)"/>
+    sealed ValueTask<IReadOnlyList<CacheKey>> SetManyAsync(IEnumerable<KeyValuePair<CacheKey, T?>> keyValues, TimeSpan expiration, CancellationToken token = default) =>
+        this is ISpanKeyCache<T> multi
+            ? multi.SetManyAsync(keyValues, expiration, token)
+            : MultiKeyFallback.RunAsync(keyValues, (Cache: this, Expiration: expiration, Token: token), static kv => kv.Key, static (s, kv) => s.Cache.SetAsync(kv.Key, kv.Value, s.Expiration, s.Token));
+
+    /// <inheritdoc cref="ISpanKeyCache.SetManyAsync{T}(IEnumerable{KeyValuePair{CacheKey, T}}, CachePolicy, CancellationToken)"/>
+    sealed ValueTask<IReadOnlyList<CacheKey>> SetManyAsync(IEnumerable<KeyValuePair<CacheKey, T?>> keyValues, DateTimeOffset expiration, CancellationToken token = default) =>
+        this is ISpanKeyCache<T> multi
+            ? multi.SetManyAsync(keyValues, expiration, token)
+            : MultiKeyFallback.RunAsync(keyValues, (Cache: this, Expiration: expiration, Token: token), static kv => kv.Key, static (s, kv) => s.Cache.SetAsync(kv.Key, kv.Value, s.Expiration, s.Token));
+
     ValueTask<bool> SetAsync(CacheKey cacheKey, T? value, CancellationToken token = default);
 
     ValueTask<bool> SetAsync(CacheKey cacheKey, T? value, TimeSpan expiration, CancellationToken token = default);

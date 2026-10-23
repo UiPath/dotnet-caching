@@ -7,6 +7,9 @@ internal static class KnownFieldNames
 
     public const string ExpirationKey = "_expiration_";
 
+    /// <summary>The key a topic-wide event carries: it names no entry.</summary>
+    public const string AllKeys = "*";
+
     /// <summary>True for any <c>_word_</c> pattern (length &gt;= 3, starts and ends with <c>'_'</c>).</summary>
     public static bool IsReserved(string field) =>
         field is not null
