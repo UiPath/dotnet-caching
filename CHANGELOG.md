@@ -6,6 +6,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 
 ## [Unreleased]
 
+## [2.1.2] - 2026-10-23
+
 ### Fixed
 
 - **Multi-key reads keep a usable local copy.** `GetAsync` and `GetCacheEntriesAsync` over several keys, and the
