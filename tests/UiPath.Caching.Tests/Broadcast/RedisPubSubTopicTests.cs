@@ -208,16 +208,13 @@ public class RedisPubSubTopicTests(ITestContextAccessor testContextAccessor) : I
     {
         var subject = new HeldSubject();
         _fixture.Inject<Func<IEventSubject<ICacheEvent>>>(() => subject);
-        _options.SubscriberDueTime = TimeSpan.FromSeconds(1);
+        // The subscription goes in place only once the observer is mid-join, so no scheduling delay can reorder the two.
+        _subscriber.When(x => x.Subscribe(Arg.Any<RedisChannel>(), Arg.Any<Action<RedisChannel, RedisValue>>(), Arg.Any<CommandFlags>()))
+            .Do(_ => subject.Joining.Wait(TimeSpan.FromSeconds(30)));
         var sut = await Sut();
         var entry = new KeptEntry { Throws = throws };
 
-        var joining = Task.Run(() => sut.Subscribe(entry), testContextAccessor.Current.CancellationToken);
-        subject.Joining.Wait(TimeSpan.FromSeconds(10), testContextAccessor.Current.CancellationToken).Should().BeTrue();
-        await WaitForSubscribeAsync();
-        await Task.Delay(_delay.Multiply(2), testContextAccessor.Current.CancellationToken);
-        subject.Release.Set();
-        (await joining).Dispose();
+        (await Task.Run(() => sut.Subscribe(entry), testContextAccessor.Current.CancellationToken)).Dispose();
 
         entry.Missed.Task.IsCompleted.Should().BeTrue("the subscription went in place after the mark but before this observer joined");
     }
@@ -324,19 +321,18 @@ public class RedisPubSubTopicTests(ITestContextAccessor testContextAccessor) : I
     private Task WaitForSubscribeAsync() =>
         _subscribeCalled.Task.WaitAsync(TimeSpan.FromSeconds(30), testContextAccessor.Current.CancellationToken);
 
-    /// <summary>A subject whose next subscription waits, mid-join, until released.</summary>
+    /// <summary>A subject whose next subscription waits, mid-join, until the subscription that expires it goes in place.</summary>
     private sealed class HeldSubject : IEventSubject<ICacheEvent>
     {
         private readonly KeyedSubject<ICacheEvent> _inner = new(Microsoft.Extensions.Logging.Abstractions.NullLogger.Instance);
+        private readonly ManualResetEventSlim _invalidated = new();
 
         public ManualResetEventSlim Joining { get; } = new();
-
-        public ManualResetEventSlim Release { get; } = new();
 
         public IDisposable Subscribe(IObserver<ICacheEvent> observer)
         {
             Joining.Set();
-            Release.Wait(TimeSpan.FromSeconds(10));
+            _invalidated.Wait(TimeSpan.FromSeconds(30));
             return _inner.Subscribe(observer);
         }
 
@@ -344,7 +340,11 @@ public class RedisPubSubTopicTests(ITestContextAccessor testContextAccessor) : I
 
         public void OnCompleted() => _inner.OnCompleted();
 
-        public void Invalidate(MissedEventsReason reason) => _inner.Invalidate(reason);
+        public void Invalidate(MissedEventsReason reason)
+        {
+            _inner.Invalidate(reason);
+            _invalidated.Set();
+        }
 
         public void Dispose() => _inner.Dispose();
     }
