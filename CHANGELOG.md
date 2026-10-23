@@ -8,6 +8,17 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 
 ### Fixed
 
+- **Multi-key calls over keys of several Redis Cluster slots run, one command per slot, instead of throwing
+  `CrossSlotKeysException`.** `GetAsync(CacheKey[])`, `GetCacheEntriesAsync`, the batch `SetAsync` and `RemoveAsync(CacheKey[])`
+  refused such a batch, and with them the batch `GetOrAddAsync`, which reads its keys with `GetCacheEntriesAsync` and stores
+  its misses with the batch `SetAsync`; on a cluster endpoint, keys without a shared hash tag made every such call throw. The
+  keys are now grouped by slot (with the connector's key prefix, as before) and each group is sent as its own `MGET`, read
+  transaction, write transaction or `DEL`, all in flight together, up to 1000 at a time; keys of one slot, and every batch on a server that is not a
+  cluster, are still one command. The batch `SetAsync` is atomic per slot, not across slots: when one slot's transaction does not
+  commit it returns `false` and the other slots may be written. A read whose slot fails reads that slot's keys as misses and
+  keeps the others; a remove reports `false` when any slot fails. The multi-layer cache announces every key of a batch set it
+  could not confirm, since some may be written, and drops its own copies of them. `CrossSlotKeysException` stays in the API and is no longer thrown.
+
 - **A profiled Redis command's dependency names the configured server, not the cluster node.** The target was the
   endpoint that served the command, so on a cluster each shard's IP and port showed as its own dependency target. It is
   now the endpoints of `RedisConnectionOptions.ConnectionString` (`host:port`, with the default port filled in), and the

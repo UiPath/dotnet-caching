@@ -131,6 +131,13 @@ public abstract class RedisCacheBase : IConnectionState, IDisposable
         }
     }
 
+    private protected static Task<TResult[]> PerSlotAsync<TState, TResult>(int[][] groups, TState state, Func<TState, int[], ValueTask<TResult>> run, TResult failed, Action<Exception> logFailure) =>
+        SlotFanOut.RunAsync(groups, state, run, failed, logFailure);
+
+    /// <summary>The items at <paramref name="positions"/>; the array itself when they are all of it.</summary>
+    private protected static TItem[] Pick<TItem>(TItem[] items, int[] positions) =>
+        positions.Length == items.Length ? items : Array.ConvertAll(positions, i => items[i]);
+
     /// <summary>The key as a log line should show it. Nothing is rendered unless the line is written.</summary>
     private protected LoggedKey Logged(CacheKey key, RedisKey composed, Type? valueType = null) =>
         LoggedKey.For(_masker, key, composed, valueType);
@@ -142,37 +149,42 @@ public abstract class RedisCacheBase : IConnectionState, IDisposable
     private protected LoggedKey Logged(RedisKey composed, Type? valueType = null) =>
         LoggedKey.Composed(_masker, composed, valueType);
 
-    /// <summary>
-    /// Redis answers a cross-slot command with an error the caches log and report as a miss, so a batch
-    /// spanning slots would read as a cache that never hits. Call it inside the command's own try, since
-    /// reading a slot resolves the connection, and let <see cref="CrossSlotKeysException"/> back out past
-    /// the catch that turns a Redis failure into a miss.
-    /// </summary>
-    private protected void ThrowIfCrossSlot(CacheKey[] cacheKeys, RedisKey[] redisKeys, Type? valueType, ILogger logger, [CallerMemberName] string? operation = null)
+    /// <summary>The positions of <paramref name="redisKeys"/> by Redis Cluster slot; inside the command's try, since it resolves the connection.</summary>
+    private protected int[][] SlotGroups(RedisKey[] redisKeys, ILogger logger)
     {
         if (redisKeys.Length < 2)
         {
-            return;
+            return [Enumerable.Range(0, redisKeys.Length).ToArray()];
         }
 
         var database = Database;
         var multiplexer = database.Multiplexer;
         // Outside the pipeline's latency cap, so this never waits on the probe.
         var prefix = _connectorPrefix.Get(database, _keyPrefix, logger);
-        var slot = multiplexer.GetHashSlot(WithConnectorPrefix(prefix, redisKeys[0]));
+        var first = multiplexer.GetHashSlot(WithConnectorPrefix(prefix, redisKeys[0]));
+        Dictionary<int, List<int>>? groups = null;
         for (var i = 1; i < redisKeys.Length; i++)
         {
-            if (multiplexer.GetHashSlot(WithConnectorPrefix(prefix, redisKeys[i])) == slot)
+            var slot = multiplexer.GetHashSlot(WithConnectorPrefix(prefix, redisKeys[i]));
+            if (groups is null)
             {
-                continue;
+                if (slot == first)
+                {
+                    continue;
+                }
+
+                groups = new() { [first] = [.. Enumerable.Range(0, i)] };
             }
-            throw new CrossSlotKeysException(
-                $"{operation} was given {redisKeys.Length} keys that Redis Cluster maps to different slots, " +
-                $"starting with '{Logged(cacheKeys[0], redisKeys[0], valueType)}' and '{Logged(cacheKeys[i], redisKeys[i], valueType)}'. " +
-                "A multi-key command runs on one node: give the keys a shared hash tag (non-empty content " +
-                "between '{' and '}', e.g. 'app:s:{org1}:groups_1') so they hash together, or split the batch " +
-                "into one call per group of keys that already share a tag.");
+
+            if (!groups.TryGetValue(slot, out var group))
+            {
+                groups[slot] = group = [];
+            }
+
+            group.Add(i);
         }
+
+        return groups is null ? [Enumerable.Range(0, redisKeys.Length).ToArray()] : [.. groups.Values.Select(g => g.ToArray())];
     }
 
     /// <summary>The key as the server hashes it, with the prefix the connector's <see cref="IDatabase"/> applies through <c>WithKeyPrefix</c>.</summary>

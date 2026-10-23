@@ -127,7 +127,7 @@ internal sealed partial class RedisCache : RedisCacheBase, ICache
 
     public ValueTask<bool> RemoveAsync<T>(CacheKey[] cacheKey, CancellationToken token = default)
     {
-        return RemoveAsync<T>(cacheKey, cacheKey.Select(k => ToRedisKey(k, token)).ToArray(), token);
+        return RemoveAsync<T>(cacheKey.Select(k => ToRedisKey(k, token)).ToArray(), token);
     }
 
     public ValueTask<bool> SetAsync<T>(CacheKey cacheKey, T? value, CachePolicy? policy, CancellationToken token = default) =>
@@ -524,46 +524,14 @@ internal sealed partial class RedisCache : RedisCacheBase, ICache
         var operation = StartOperation<T>(nameof(SetAsync));
         try
         {
-            ThrowIfCrossSlot(Array.ConvertAll(keyValues, kv => kv.Key), redisKeys, typeof(T), _logger, nameof(SetAsync));
-            var transaction = Database.CreateTransaction(asyncState: null);
-
-            for (var i = 0; i < keyValues.Length; i++)
-            {
-                var redisKey = redisKeys[i];
-                var value = keyValues[i].Value;
-                if (IsDefault(value))
-                {
-                    if (_cacheNullValues && expiration > TimeSpan.Zero)
-                    {
-                        transaction.StringSetAsync(redisKey, RedisValue.EmptyString, expiration, When.Always, CommandFlags.DemandMaster).Forget();
-                    }
-                    else
-                    {
-                        transaction.KeyDeleteAsync(redisKey, CommandFlags.DemandMaster).Forget();
-                    }
-                }
-                else
-                {
-                    var serialized = SerializeValue(value);
-                    transaction.StringSetAsync(redisKey, serialized, expiration, When.Always, CommandFlags.DemandMaster).Forget();
-                }
-            }
-
-            ret = await _write.ExecuteAsync(async token =>
-            {
-                token.ThrowIfCancellationRequested();
-                return await transaction.ExecuteAsync(CommandFlags.DemandMaster).ConfigureAwait(false);
-            },
-            default,
-            token).ConfigureAwait(false);
-
+            var committed = await PerSlotAsync(
+                SlotGroups(redisKeys, _logger),
+                (Self: this, KeyValues: keyValues, Keys: redisKeys, Expiration: expiration, Token: token),
+                static (s, group) => s.Self.SetSlotAsync(s.KeyValues, s.Keys, group, s.Expiration, s.Token),
+                false,
+                LogRedisCacheException).ConfigureAwait(false);
+            ret = Array.TrueForAll(committed, static c => c);
             operation.Stop();
-        }
-        catch (CrossSlotKeysException)
-        {
-            // A batch the caller has to fix, not a Redis failure to report as a miss.
-            operation.Stop();
-            throw;
         }
         catch (Exception ex)
         {
@@ -576,6 +544,40 @@ internal sealed partial class RedisCache : RedisCacheBase, ICache
         }
 
         return ret;
+    }
+
+    private ValueTask<bool> SetSlotAsync<T>(KeyValuePair<CacheKey, T?>[] keyValues, RedisKey[] redisKeys, int[] group, TimeSpan expiration, CancellationToken token)
+    {
+        var transaction = Database.CreateTransaction(asyncState: null);
+        foreach (var i in group)
+        {
+            var redisKey = redisKeys[i];
+            var value = keyValues[i].Value;
+            if (IsDefault(value))
+            {
+                if (_cacheNullValues && expiration > TimeSpan.Zero)
+                {
+                    transaction.StringSetAsync(redisKey, RedisValue.EmptyString, expiration, When.Always, CommandFlags.DemandMaster).Forget();
+                }
+                else
+                {
+                    transaction.KeyDeleteAsync(redisKey, CommandFlags.DemandMaster).Forget();
+                }
+            }
+            else
+            {
+                var serialized = SerializeValue(value);
+                transaction.StringSetAsync(redisKey, serialized, expiration, When.Always, CommandFlags.DemandMaster).Forget();
+            }
+        }
+
+        return _write.ExecuteAsync(async token =>
+        {
+            token.ThrowIfCancellationRequested();
+            return await transaction.ExecuteAsync(CommandFlags.DemandMaster).ConfigureAwait(false);
+        },
+        default,
+        token);
     }
 
     /// <summary>
@@ -668,29 +670,32 @@ internal sealed partial class RedisCache : RedisCacheBase, ICache
         return ret;
     }
 
-    private async ValueTask<bool> RemoveAsync<T>(CacheKey[] cacheKeys, RedisKey[] redisKey, CancellationToken token)
+    private async ValueTask<bool> RemoveAsync<T>(RedisKey[] redisKey, CancellationToken token)
     {
         bool ret = default;
         token.ThrowIfCancellationRequested();
         var operation = StartOperation<T>();
         try
         {
-            ThrowIfCrossSlot(cacheKeys, redisKey, typeof(T), _logger, nameof(RemoveAsync));
-            var response = await _write.ExecuteAsync(async token =>
-            {
-                token.ThrowIfCancellationRequested();
-                return await Database.KeyDeleteAsync(redisKey, CommandFlags.DemandMaster).ConfigureAwait(false);
-            },
-            -1,
-            token).ConfigureAwait(false);
+            var responses = await PerSlotAsync(
+                SlotGroups(redisKey, _logger),
+                (Self: this, Keys: redisKey, Token: token),
+                static (s, group) =>
+                {
+                    var keys = Pick(s.Keys, group);
+                    return s.Self._write.ExecuteAsync(
+                        async token =>
+                        {
+                            token.ThrowIfCancellationRequested();
+                            return await s.Self.Database.KeyDeleteAsync(keys, CommandFlags.DemandMaster).ConfigureAwait(false);
+                        },
+                        -1L,
+                        s.Token);
+                },
+                -1L,
+                LogRedisCacheException).ConfigureAwait(false);
             operation.Stop();
-            ret = response > -1;
-        }
-        catch (CrossSlotKeysException)
-        {
-            // A batch the caller has to fix, not a Redis failure to report as a miss.
-            operation.Stop();
-            throw;
+            ret = Array.TrueForAll(responses, static r => r > -1);
         }
         catch (Exception ex)
         {
@@ -761,36 +766,44 @@ internal sealed partial class RedisCache : RedisCacheBase, ICache
         var reads = InitReads(redisKeys);
         try
         {
-            ThrowIfCrossSlot(keys, redisKeys, typeof(T), _logger, nameof(GetAsync));
-            var values = await _read.ExecuteAsync(async token =>
-            {
-                token.ThrowIfCancellationRequested();
-                return await Database.StringGetAsync(redisKeys, CommandFlags.PreferReplica);
-            },
-            [],
-            token).ConfigureAwait(false);
-            if (values.Length == redisKeys.Length)
-            {
-                for (int i = 0; i < redisKeys.Length; i++)
+            var groups = SlotGroups(redisKeys, _logger);
+            var groupValues = await PerSlotAsync(
+                groups,
+                (Self: this, Keys: redisKeys, Token: token),
+                static (s, group) =>
                 {
-                    var value = values[i];
-                    _auditKeySize?.Invoke(Logged(keys[i], redisKeys[i], typeof(T)), value);
-                    var (found, obj) = InterpretReadResult<T>(value);
+                    var keys = Pick(s.Keys, group);
+                    return s.Self._read.ExecuteAsync(
+                        async token =>
+                        {
+                            token.ThrowIfCancellationRequested();
+                            return await s.Self.Database.StringGetAsync(keys, CommandFlags.PreferReplica).ConfigureAwait(false);
+                        },
+                        [],
+                        s.Token);
+                },
+                [],
+                LogRedisCacheException).ConfigureAwait(false);
+            retValues = GetDefaultValues<T>(keys);
+            for (var g = 0; g < groups.Length; g++)
+            {
+                var (group, values) = (groups[g], groupValues[g]);
+                // A slot whose read answered nothing reads as misses; the others keep their values.
+                if (values.Length != group.Length)
+                {
+                    continue;
+                }
+
+                for (var j = 0; j < group.Length; j++)
+                {
+                    var i = group[j];
+                    _auditKeySize?.Invoke(Logged(keys[i], redisKeys[i], typeof(T)), values[j]);
+                    var (found, obj) = InterpretReadResult<T>(values[j]);
                     reads[i].Hit = found;
                     retValues[i] = new KeyValuePair<CacheKey, T?>(keys[i], obj);
                 }
             }
-            else
-            {
-                retValues = GetDefaultValues<T>(keys);
-            }
             operation.Stop();
-        }
-        catch (CrossSlotKeysException)
-        {
-            // A batch the caller has to fix, not a Redis failure to report as a miss.
-            operation.Stop();
-            throw;
         }
         catch (Exception ex)
         {
@@ -875,6 +888,31 @@ internal sealed partial class RedisCache : RedisCacheBase, ICache
         return ret;
     }
 
+    /// <summary>The values and expirations of one slot's keys in one transaction; null when it did not commit.</summary>
+    private async ValueTask<StrongBox<(RedisValue[] Values, DateTimeOffset?[] Expirations)>?> ReadSlotAsync(RedisKey[] redisKeys, CancellationToken token)
+    {
+        StrongBox<(RedisValue[] Values, DateTimeOffset?[] Expirations)>? read = null;
+        var committed = await _read.ExecuteAsync(async token =>
+        {
+            token.ThrowIfCancellationRequested();
+            var transaction = Database.CreateTransaction();
+            var mgetTask = transaction.StringGetAsync(redisKeys, CommandFlags.PreferReplica);
+            var expirationTasks = redisKeys.Select(k => FetchExpirationAsync(transaction, k)).ToArray();
+            mgetTask.Forget();
+            Array.ForEach(expirationTasks, TaskObservation.Forget);
+            if (!await transaction.ExecuteAsync(CommandFlags.PreferReplica).ConfigureAwait(false))
+            {
+                return false;
+            }
+
+            Interlocked.CompareExchange(ref read, new((await mgetTask.ConfigureAwait(false), await Task.WhenAll(expirationTasks).ConfigureAwait(false))), null);
+            return true;
+        },
+        default,
+        token).ConfigureAwait(false);
+        return committed ? read : null;
+    }
+
     private async ValueTask<KeyValuePair<CacheKey, ICacheEntry<T?>>[]> GetCacheEntriesInternalAsync<T>(CacheKey[] keys, CancellationToken token)
     {
         token.ThrowIfCancellationRequested();
@@ -893,55 +931,40 @@ internal sealed partial class RedisCache : RedisCacheBase, ICache
         var reads = InitReads(redisKeys);
         try
         {
-            ThrowIfCrossSlot(keys, redisKeys, typeof(T), _logger, nameof(GetCacheEntriesAsync));
-            StrongBox<(RedisValue[] Values, DateTimeOffset?[] Expirations)>? read = null;
-            var committed = await _read.ExecuteAsync(async token =>
-            {
-                token.ThrowIfCancellationRequested();
-                var transaction = Database.CreateTransaction();
-                var mgetTask = transaction.StringGetAsync(redisKeys, CommandFlags.PreferReplica);
-                var expirationTasks = redisKeys.Select(k => FetchExpirationAsync(transaction, k)).ToArray();
-                mgetTask.Forget();
-                Array.ForEach(expirationTasks, TaskObservation.Forget);
-                if (!await transaction.ExecuteAsync(CommandFlags.PreferReplica).ConfigureAwait(false))
-                {
-                    return false;
-                }
+            var groups = SlotGroups(redisKeys, _logger);
+            var groupReads = await PerSlotAsync(
+                groups,
+                (Self: this, Keys: redisKeys, Token: token),
+                static (s, group) => s.Self.ReadSlotAsync(Pick(s.Keys, group), s.Token),
+                null,
+                LogRedisCacheException).ConfigureAwait(false);
 
-                Interlocked.CompareExchange(ref read, new((await mgetTask.ConfigureAwait(false), await Task.WhenAll(expirationTasks).ConfigureAwait(false))), null);
-                return true;
-            },
-            default,
-            token).ConfigureAwait(false);
-
-            if (!committed || read is null)
+            for (var g = 0; g < groups.Length; g++)
             {
-                operation.Stop();
-                return retValues;
-            }
-
-            var (values, expirations) = read.Value;
-            for (int i = 0; i < redisKeys.Length; i++)
-            {
-                var value = values[i];
-                _auditKeySize?.Invoke(Logged(keys[i], redisKeys[i], typeof(T)), value);
-                var (found, deserialized) = InterpretReadResult<T>(value);
-                if (!found)
+                // A slot whose read did not commit reads as misses; the others keep their entries.
+                if (groupReads[g] is not { } result)
                 {
                     continue;
                 }
-                reads[i].Hit = true;
-                retValues[i] = new KeyValuePair<CacheKey, ICacheEntry<T?>>(
-                    keys[i],
-                    _cacheEntryFactory.Create<T?>(deserialized, Clock.ToDateTimeOffset(expirations[i])));
+
+                var group = groups[g];
+                var (values, expirations) = result.Value;
+                for (var j = 0; j < group.Length; j++)
+                {
+                    var i = group[j];
+                    _auditKeySize?.Invoke(Logged(keys[i], redisKeys[i], typeof(T)), values[j]);
+                    var (found, deserialized) = InterpretReadResult<T>(values[j]);
+                    if (!found)
+                    {
+                        continue;
+                    }
+                    reads[i].Hit = true;
+                    retValues[i] = new KeyValuePair<CacheKey, ICacheEntry<T?>>(
+                        keys[i],
+                        _cacheEntryFactory.Create<T?>(deserialized, Clock.ToDateTimeOffset(expirations[j])));
+                }
             }
             operation.Stop();
-        }
-        catch (CrossSlotKeysException)
-        {
-            // A batch the caller has to fix, not a Redis failure to report as a miss.
-            operation.Stop();
-            throw;
         }
         catch (Exception ex)
         {

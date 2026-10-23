@@ -863,31 +863,25 @@ internal sealed partial class MultilayerCache : MultilayerCacheBase, ICache
 
         var innerCacheDisconnected = GetInnerCacheDisconnected();
         var internalSetResult = await InternalSetAsync<T>(setEntries.ToArray(), innerCacheDisconnected, policy, token).ConfigureAwait(false);
-        if (!internalSetResult)
-        {
-            return false;
-        }
-
         if (innerCacheDisconnected)
         {
-            if (_logger.IsEnabled(LogLevel.Trace))
+            if (internalSetResult && _logger.IsEnabled(LogLevel.Trace))
             {
                 LogSettingLocalOnlyForCacheKeys(Logged(setEntries.Select(o => o.CacheEntry).ToArray(), typeof(T)));
             }
-            return true;
+            return internalSetResult;
         }
 
+        // Announced even when the write reports failure: across Redis Cluster slots it can have written some keys, and a
+        // peer that drops an unchanged copy only reads it again.
+        var published = true;
         foreach (var cacheEntry in setEntries.Select(s => s.CacheEntry))
         {
             LogReplacingCachedKey(Logged(cacheEntry, typeof(T)));
-            var fired = await _eventPublisher.CacheSetAsync(cacheEntry, typeof(T)).ConfigureAwait(false);
-            if (!fired)
-            {
-                return false;
-            }
+            published &= await _eventPublisher.CacheSetAsync(cacheEntry, typeof(T)).ConfigureAwait(false);
         }
 
-        return true;
+        return internalSetResult && published;
     }
 
     private async ValueTask<bool> RefreshCoreAsync<T>(CacheKey cacheKey, DateTimeOffset expiration, CachePolicy policy, CancellationToken token)
@@ -1188,7 +1182,19 @@ internal sealed partial class MultilayerCache : MultilayerCacheBase, ICache
             var set = cacheEntries.Length > 0
                 ? await _innerCache.SetAsync<T?>(cacheKeyValuePairs, cacheEntries[0].CacheEntry.Expiration, policy, token).ConfigureAwait(false)
                 : await _innerCache.SetAsync<T?>(cacheKeyValuePairs, policy, token).ConfigureAwait(false);
-            return set && MemSet(policy.LocalExpiration ?? _multiLayerCacheOptions.LocalMaxExpiration);
+            if (!set)
+            {
+                // Across Redis Cluster slots a write that reports failure can have written some keys, and this node does not
+                // hear its own events.
+                foreach (var cacheEntry in cacheEntries)
+                {
+                    _memoryCache.Remove(cacheEntry.CacheEntry.CacheKey);
+                }
+
+                return false;
+            }
+
+            return MemSet(policy.LocalExpiration ?? _multiLayerCacheOptions.LocalMaxExpiration);
         }
         catch (Exception ex)
         {
