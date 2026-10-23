@@ -41,3 +41,5 @@ UiPath.Caching.HashCache<T>.SetManyAsync(System.Collections.Generic.IEnumerable<
 UiPath.Caching.HashCache<T>.RemoveFieldsAsync(UiPath.Caching.CacheKey cacheKey, string![]! fields, System.Threading.CancellationToken token = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.ValueTask<bool>
 UiPath.Caching.Redis.RedisCacheOptions.HashFieldBatchSize.get -> int
 UiPath.Caching.Redis.RedisCacheOptions.HashFieldBatchSize.set -> void
+static UiPath.Caching.Redis.ProfiledCommandProcessor.NodeField.get -> string!
+static UiPath.Caching.Redis.ProfiledCommandProcessor.NodeField.set -> void

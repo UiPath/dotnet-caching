@@ -1,3 +1,4 @@
+using System.Net;
 using Microsoft.Extensions.Options;
 using StackExchange.Redis.Profiling;
 using UiPath.Caching.Telemetry;
@@ -63,6 +64,54 @@ public class ProfiledCommandProcessorTest : IAsyncLifetime
         properties.Should().ContainKey(ProfiledCommandProcessor.RetransmissionOfField);
         properties.Should().ContainKey(ProfiledCommandProcessor.RetransmissionReasonField);
     }
+
+    [Theory]
+    [InlineData("cache.redis.example:10000,password=secret,ssl=true", "cache.redis.example:10000")]
+    [InlineData("cache.redis.example", "cache.redis.example:6379")]
+    [InlineData("cache.redis.example,ssl=true", "cache.redis.example:6380")]
+    [InlineData("a.example:7000,b.example:7001", "a.example:7000,b.example:7001")]
+    [InlineData("10.0.0.1:6379,unknownKey=1", "10.0.0.1:6379")]
+    public void The_target_is_the_configured_server_and_the_node_that_served_the_command_a_property(string connectionString, string target)
+    {
+        _profiledCommand.EndPoint.Returns(new IPEndPoint(IPAddress.Parse("20.101.230.97"), 8503));
+        _fixture.Inject<IOptions<RedisConnectionOptions>>(Options.Create(new RedisConnectionOptions { ConnectionString = connectionString }));
+
+        Sut.Process(_profiledCommand, null);
+
+        var dependency = _telemetryProvider.Dependencies.Should().ContainSingle().Which;
+        dependency.Target.Should().Be(target);
+        dependency.Properties.Should().Contain(ProfiledCommandProcessor.NodeField, "20.101.230.97:8503");
+    }
+
+    [Theory]
+    [InlineData("")]
+    [InlineData(" ")]
+    [InlineData("password=secret")]
+    [InlineData("sentinel1:26379,sentinel2:26379,serviceName=primary")]
+    public void Without_a_configured_server_the_node_is_the_target(string connectionString)
+    {
+        _profiledCommand.EndPoint.Returns(new DnsEndPoint("node.example", 8503));
+        _fixture.Inject<IOptions<RedisConnectionOptions>>(Options.Create(new RedisConnectionOptions { ConnectionString = connectionString }));
+
+        Sut.Process(_profiledCommand, null);
+
+        var dependency = _telemetryProvider.Dependencies.Should().ContainSingle().Which;
+        dependency.Target.Should().Be("node.example:8503");
+        dependency.Properties.Should().Contain(ProfiledCommandProcessor.NodeField, "node.example:8503");
+    }
+
+    [Fact]
+    public void A_command_with_no_node_reports_no_node()
+    {
+        _profiledCommand.EndPoint.Returns((EndPoint?)null);
+
+        Sut.Process(_profiledCommand, null);
+
+        var dependency = _telemetryProvider.Dependencies.Should().ContainSingle().Which;
+        dependency.Target.Should().Be(ProfiledCommandProcessor.UnknownTarget);
+        dependency.Properties.Should().NotContainKey(ProfiledCommandProcessor.NodeField);
+    }
+
     public ValueTask DisposeAsync()
     {
         FetcherLazy = _oldFetcherLazy;
