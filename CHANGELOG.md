@@ -12,7 +12,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
   endpoint that served the command, so on a cluster each shard's IP and port showed as its own dependency target. It is
   now the endpoints of `RedisConnectionOptions.ConnectionString` (`host:port`, with the default port filled in), and the
   node moves to the new `RedisNode` property (`ProfiledCommandProcessor.NodeField`). Without a connection string, as with
-  a `ConnectionFactory`, the node stays the target. Queries and alerts on the dependency target need the new value.
+  a `ConnectionFactory`, or with a Sentinel `serviceName`, whose endpoints are not the servers that answer, the node stays the target. Queries and alerts on the dependency target need the new value.
 
 - **A named caching stack's telemetry carries its name.** Everything a stack from `AddNamedCaching` reports through the
   application's `ICachingTelemetryProvider` (Redis dependencies, `Caching.Stats.*` metrics, events, exceptions) has a

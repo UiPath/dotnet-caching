@@ -64,6 +64,7 @@ public class ProfiledCommandProcessorTest : IAsyncLifetime
         properties.Should().ContainKey(ProfiledCommandProcessor.RetransmissionOfField);
         properties.Should().ContainKey(ProfiledCommandProcessor.RetransmissionReasonField);
     }
+
     [Theory]
     [InlineData("cache.redis.example:10000,password=secret,ssl=true", "cache.redis.example:10000")]
     [InlineData("cache.redis.example", "cache.redis.example:6379")]
@@ -86,6 +87,7 @@ public class ProfiledCommandProcessorTest : IAsyncLifetime
     [InlineData("")]
     [InlineData(" ")]
     [InlineData("password=secret")]
+    [InlineData("sentinel1:26379,sentinel2:26379,serviceName=primary")]
     public void Without_a_configured_server_the_node_is_the_target(string connectionString)
     {
         _profiledCommand.EndPoint.Returns(new DnsEndPoint("node.example", 8503));
