@@ -79,7 +79,7 @@ See [reference/settings.md](../reference/settings.md) for the full set. The tabl
 | --- | --- | --- | --- |
 | `Enabled` | `true` | No | App-wide provider toggle. |
 | `MaxLength` | `32768` | Yes | `XADD MAXLEN ~` cap (server-side trim). |
-| `Limit` | `1024` | Yes | Max entries per `XREADGROUP` call. |
+| `Limit` | `1024` | Yes | Not used by the stream reader or the publisher. |
 | `PollBatchSize` | `1024` | Yes | Entries one `XREADGROUP` asks for. |
 | `FieldName` | `"event"` | Yes | Redis stream field name for the payload. |
 | `PollInterval` | `250 ms` | Yes | `XREADGROUP` cadence. |
