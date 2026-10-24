@@ -80,7 +80,7 @@ See [reference/settings.md](../reference/settings.md) for the full set. The tabl
 | `Enabled` | `true` | No | App-wide provider toggle. |
 | `MaxLength` | `32768` | Yes | `XADD MAXLEN ~` cap (server-side trim); `null` never trims. |
 | `Limit` | `1024` | Yes | Max entries per `XREADGROUP` call. |
-| `PollBatchSize` | `4096` | Yes | Entries fetched per poll cycle. |
+| `PollBatchSize` | `1024` | Yes | Entries one `XREADGROUP` asks for. |
 | `FieldName` | `"event"` | Yes | Redis stream field name for the payload. |
 | `PollInterval` | `250 ms` | Yes | `XREADGROUP` cadence while the doorbell is not live. |
 | `NotifiedPollInterval` | `5 s`, or `PollInterval` when that is set | Yes | `XREADGROUP` cadence while the doorbell subscription is live; must be at least `PollInterval`. |
@@ -122,10 +122,10 @@ See [reference/settings.md](../reference/settings.md) for the full set. The tabl
 All three touch how many entries move through the consumer pipeline, but at different layers:
 
 - `MaxLength` (default 32768) is a server-side cap — `XADD MAXLEN ~` trims the stream to at most this many entries. Tune it to bound Redis memory usage on the stream key. Entries trimmed before a node read them are reported as a loss (see [Troubleshooting](#troubleshooting)), so size it for the topic's burst traffic; a node's own entries are read at the poll, or every `MaxLength / 2` of its own publishes, whichever comes first.
-- `Limit` (default 1024) is the maximum number of entries the server returns in a single `XREADGROUP` call. Lowering it reduces the per-call latency spike at the cost of more round-trips under heavy load.
-- `PollBatchSize` (default 4096) is how many entries the consumer fetches in one poll cycle, potentially across multiple `XREADGROUP` calls. Raising it increases throughput under burst load; lowering it prevents the bounded channel from filling in a single cycle.
+- `Limit` (default 1024) is not used by the stream reader or the publisher.
+- `PollBatchSize` (default 1024) is the `COUNT` of each `XREADGROUP`. A full batch is read again at once, so a smaller batch costs a round trip per batch while catching up, not throughput. Its reply travels on the connection the cache shares, and the commands behind it wait for it, so keep a full batch's reply well within the connection's timeout: at a few hundred bytes an entry, 1024 entries are a few hundred KiB. Lower it with a short `syncTimeout`/`asyncTimeout` on a small server.
 
-For most services the defaults are fine. Tune `MaxLength` first if you see Redis memory pressure on stream keys, `Limit` if individual `XREADGROUP` calls are slow, and `PollBatchSize` only if the consumer channel saturates under bursts.
+For most services the defaults are fine. Tune `MaxLength` first if you see Redis memory pressure on stream keys, and `PollBatchSize` if `XREADGROUP` calls time out while a node catches up.
 
 ## Per-topic overrides
 
