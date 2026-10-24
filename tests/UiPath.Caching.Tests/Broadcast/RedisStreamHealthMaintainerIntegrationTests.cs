@@ -189,6 +189,52 @@ public class RedisStreamHealthMaintainerIntegrationTests(RedisContainerFixture f
         }
     }
 
+    [Fact]
+    public async Task On_a_quiet_stream_a_caught_up_group_is_kept_and_a_group_behind_is_deleted()
+    {
+        Assert.SkipUnless(fixture.Enabled, "Set RUN_REDIS_INTEGRATION_TESTS=1 (Docker required) to run.");
+
+        var cacheOptions = new CacheOptions { Enabled = true, AppShortName = $"it{Guid.NewGuid():N}"[..10] };
+        var streamKey = new PrefixStrategy(RedisKeyspaces.Streams, cacheOptions).GetRedisKey("topic");
+        var streamOptions = new RedisStreamsTopicOptions { MaintainerEnabled = true };
+        var quiet = DateTimeOffset.UtcNow.Subtract(streamOptions.MaintainerTrimInterval).Subtract(TimeSpan.FromMinutes(5));
+
+        using var connector = NewConnector();
+        await connector.ConnectAsync(TestContext.Current.CancellationToken);
+        var db = connector.Database;
+        await db.StreamAddAsync(streamKey, "field", "value", $"{quiet.ToUnixTimeMilliseconds()}-0");
+        await db.StreamAddAsync(streamKey, "field", "value", $"{quiet.ToUnixTimeMilliseconds()}-1");
+        await db.StreamCreateConsumerGroupAsync(streamKey, "caught-up", "0-0");
+        await db.StreamReadGroupAsync(streamKey, "caught-up", "pod", StreamPosition.NewMessages);
+        await db.StreamCreateConsumerGroupAsync(streamKey, "behind", "0-0");
+        await db.StreamReadGroupAsync(streamKey, "behind", "pod", StreamPosition.NewMessages, count: 1);
+        var maintainer = new RedisStreamHealthMaintainer(
+            connector,
+            NullTelemetryProvider.Instance,
+            Options.Create(streamOptions),
+            Options.Create(new RedisCacheOptions { Enabled = true }),
+            Options.Create(cacheOptions),
+            NullLogger<RedisStreamHealthMaintainer>.Instance,
+            TimeProvider.System);
+        maintainer.Initialize();
+        var quarantineKey = maintainer.QuarantineKey(streamKey);
+
+        try
+        {
+            var elapsed = DateTimeOffset.UtcNow.Subtract(streamOptions.MaintainerQuarantineInterval).Subtract(TimeSpan.FromMinutes(1)).ToString("O");
+            await db.HashSetAsync(quarantineKey, [new("caught-up", elapsed), new("behind", elapsed)]);
+
+            await maintainer.CheckStreamsAsync(TestContext.Current.CancellationToken);
+
+            (await db.StreamGroupInfoAsync(streamKey)).Select(g => g.Name).Should().Equal("caught-up");
+        }
+        finally
+        {
+            await db.KeyDeleteAsync(quarantineKey);
+            await db.KeyDeleteAsync(streamKey);
+        }
+    }
+
     private RedisConnector NewConnector()
     {
         var options = Options.Create(new RedisConnectionOptions { ConnectionString = fixture.ConnectionString, EnableHangDetection = false });

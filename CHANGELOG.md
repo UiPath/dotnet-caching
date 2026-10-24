@@ -224,6 +224,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 
 ### Fixed
 
+- **The stream maintainer no longer deletes the consumer group of a live subscriber on a quiet stream.** A group with
+  consumers counted as stale once its last delivery was older than `MaintainerTrimInterval`, even when nothing newer had
+  been written, so on a stream with no traffic every live group was quarantined and then deleted after
+  `MaintainerQuarantineInterval`, and its reader recreated it on the next `NOGROUP`. A group whose last delivery is the
+  stream's last entry is now healthy, and a quarantine it was under is cleared.
+
 - **Multi-key calls over keys of several Redis Cluster slots run, one command per slot, instead of throwing
   `CrossSlotKeysException`.** `GetAsync(CacheKey[])`, `GetCacheEntriesAsync`, the batch `SetAsync` and `RemoveAsync(CacheKey[])`
   refused such a batch, and with them the batch `GetOrAddAsync`, which reads its keys with `GetCacheEntriesAsync` and stores
