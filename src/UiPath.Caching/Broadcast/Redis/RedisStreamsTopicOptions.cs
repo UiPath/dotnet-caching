@@ -22,7 +22,8 @@ public class RedisStreamsTopicOptions : IBindsFromConfiguration
 
     public long? Limit { get; set; } = 1_024;
 
-    public int PollBatchSize { get; set; } = 4096;
+    /// <summary>Entries one <c>XREADGROUP</c> asks for; a full batch's reply must arrive well within the connection's timeout.</summary>
+    public int PollBatchSize { get; set; } = 1024;
 
     public string FieldName { get; set; } = "event";
 
