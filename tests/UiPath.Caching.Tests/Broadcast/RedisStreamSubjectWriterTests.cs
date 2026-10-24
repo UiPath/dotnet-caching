@@ -1141,12 +1141,15 @@ public class RedisStreamSubjectWriterTests : IAsyncLifetime
         var reads = 0;
         var missed = 0;
         var creates = 0;
+        // The retry waits for the test: the state between the failed recreate and the retry lasts only a poll interval.
+        var retry = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         _formatter.Decode(Arg.Any<ReadOnlyMemory<byte>>()).Returns(_ => new TestCacheEvent { Valid = true, Source = new Uri("urn:other") });
         _database.StreamReadGroupAsync(_context.Topic, _context.ConsumerGroup, _context.ConsumerName, ">", _context.PollBatchSize)
             .ReturnsForAnyArgs(_ => Interlocked.Increment(ref reads) switch
             {
                 1 => Task.FromResult<StreamEntry[]>([new StreamEntry("1-0", [new NameValueEntry(_fieldName, "a")])]),
-                _ when Volatile.Read(ref creates) < 2 => Task.FromException<StreamEntry[]>(new RedisException("NOGROUP No such key or consumer group")),
+                _ when Volatile.Read(ref creates) == 0 => Task.FromException<StreamEntry[]>(new RedisException("NOGROUP No such key or consumer group")),
+                _ when Volatile.Read(ref creates) == 1 => NogroupOnRetry(),
                 _ => Task.FromResult(Array.Empty<StreamEntry>()),
             });
         _database.StreamCreateConsumerGroupAsync(_context.Topic, _context.ConsumerGroup, Arg.Any<RedisValue?>())
@@ -1159,11 +1162,18 @@ public class RedisStreamSubjectWriterTests : IAsyncLifetime
         (await WaitUntil(() => Volatile.Read(ref missed) == 1 && Volatile.Read(ref creates) == 1)).Should().BeTrue("the group went while in use and its recreate failed");
 
         sut.MarkSubscribed();
+        retry.SetResult();
 
         (await WaitUntil(() => Volatile.Read(ref creates) == 2)).Should().BeTrue("the reader retries");
         await _database.Received().StreamCreateConsumerGroupAsync(_context.Topic, _context.ConsumerGroup, (RedisValue)"1-0");
         Volatile.Read(ref missed).Should().Be(1, "what came since the last read is replayed to the group the reader made, not skipped");
         AssertNoSynchronousCommand();
+
+        async Task<StreamEntry[]> NogroupOnRetry()
+        {
+            await retry.Task;
+            throw new RedisException("NOGROUP No such key or consumer group");
+        }
     }
 
     [Fact]
