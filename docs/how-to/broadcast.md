@@ -117,9 +117,9 @@ See [reference/settings.md](../reference/settings.md) for the full set. The tabl
 | `SubscriberTimeout` | multiplexer timeout | Yes | Resubscribe interval. |
 | `SubscriberDueTime` | half of timeout | Yes | First-subscribe delay. |
 
-### `Limit` vs `MaxLength` vs `PollBatchSize`
+### `MaxLength` vs `PollBatchSize`
 
-All three touch how many entries move through the consumer pipeline, but at different layers:
+Both touch how many entries move through the consumer pipeline, but at different layers (`Limit` is not used):
 
 - `MaxLength` (default 32768) is a server-side cap — `XADD MAXLEN ~` trims the stream to at most this many entries. Tune it to bound Redis memory usage on the stream key. Entries trimmed before a node read them are reported as a loss (see [Troubleshooting](#troubleshooting)), so size it for the topic's burst traffic; a node's own entries are read at the poll, or every `MaxLength / 2` of its own publishes, whichever comes first.
 - `Limit` (default 1024) is not used by the stream reader or the publisher.
@@ -212,7 +212,7 @@ Some options are read at provider construction or by singleton hosted services. 
 - `MaintainerQuarantineInterval` — quarantine window for empty consumer groups; read per maintainer cycle.
 - `MaintainerSearchPattern` — SCAN pattern used to discover streams; resolved once at `Initialize`.
 
-Everything else (`MaxLength`, `Limit`, `PollBatchSize`, `PollInterval`, `NotifiedPollInterval`, `ConsumerCapacity`, `FullMode`, `SlowObserverThreshold`, every `Notify*` field, etc.) is honored per-topic.
+Everything else (`MaxLength`, `PollBatchSize`, `PollInterval`, `NotifiedPollInterval`, `ConsumerCapacity`, `FullMode`, `SlowObserverThreshold`, every `Notify*` field, etc.) is honored per-topic.
 
 ## Notify doorbell
 
