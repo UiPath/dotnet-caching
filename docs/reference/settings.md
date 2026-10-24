@@ -109,7 +109,7 @@ App-wide-only fields (per-topic `Topics[]` entries ignore these): `Enabled`, `Co
 | `Enabled` | `bool` | `true` | App-wide only | Enable/disable the Redis Streams provider for the whole app; per-topic override is ignored. |
 | `MaxLength` | `long?` | `32768` | App-wide / Per-topic | Max entries in a stream before approximate trimming (`MAXLEN ~`); `null` = unlimited. |
 | `Limit` | `long?` | `1024` | App-wide / Per-topic | Max entries returned per `XREAD` call. |
-| `PollBatchSize` | `int` | `4096` | App-wide / Per-topic | Max entries fetched per poll cycle. |
+| `PollBatchSize` | `int` | `1024` | App-wide / Per-topic | Entries one `XREADGROUP` asks for. |
 | `FieldName` | `string` | `"event"` | App-wide / Per-topic | Stream entry field name used for the serialized event payload. |
 | `PollInterval` | `TimeSpan` | `00:00:00.250` | App-wide / Per-topic | Time between poll cycles when no notify signal is received. |
 | `ConsumerCapacity` | `int` | `2048` | App-wide / Per-topic | Bounded-channel capacity for in-process event delivery; use `-1` for unbounded. |
