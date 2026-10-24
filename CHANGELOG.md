@@ -6,6 +6,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 
 ## [Unreleased]
 
+### Fixed
+
+- **The stream maintainer no longer deletes the consumer group of a live subscriber on a quiet stream.** A group with
+  consumers counted as stale once its last delivery was older than `MaintainerTrimInterval`, even when nothing newer had
+  been written, so on a stream with no traffic every live group was quarantined and then deleted after
+  `MaintainerQuarantineInterval`, and its reader recreated it on the next `NOGROUP`. A group whose last delivery is the
+  stream's last entry is now healthy, and a quarantine it was under is cleared.
+
 ## [2.1.3] - 2026-10-23
 
 ### Changed

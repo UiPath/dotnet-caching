@@ -188,6 +188,21 @@ public partial class RedisStreamHealthMaintainer : IHostedService
         }
     }
 
+    private static bool IsCaughtUp(string? lastDeliveredId, RedisValue lastGeneratedId) =>
+        TryParseEntryId(lastDeliveredId, out var delivered)
+        && TryParseEntryId(lastGeneratedId, out var generated)
+        && delivered.CompareTo(generated) >= 0;
+
+    private static bool TryParseEntryId(string? entryId, out (ulong Milliseconds, ulong Sequence) id)
+    {
+        id = default;
+        var span = entryId.AsSpan();
+        var separator = span.IndexOf('-');
+        return separator > 0
+            && ulong.TryParse(span[..separator], NumberStyles.None, CultureInfo.InvariantCulture, out id.Milliseconds)
+            && ulong.TryParse(span[(separator + 1)..], NumberStyles.None, CultureInfo.InvariantCulture, out id.Sequence);
+    }
+
     private static List<IServer> ConnectedPrimaries(IConnectionMultiplexer? multiplexer) =>
         multiplexer?.GetServers().Where(static server => !server.IsReplica && server.IsConnected).ToList() ?? [];
 
@@ -287,7 +302,7 @@ public partial class RedisStreamHealthMaintainer : IHostedService
 
         foreach (var groupInfo in groupInfos)
         {
-            await CheckStreamGroupAsync(context, groupInfo, minOffset, cancellationToken).ConfigureAwait(false);
+            await CheckStreamGroupAsync(context, groupInfo, minOffset, streamInfo.LastGeneratedId, cancellationToken).ConfigureAwait(false);
         }
 
         if (_supportsXtrimMinId.Value && TryParseDeliveredIdToDatetimeOffset(streamInfo.LastGeneratedId, out var dateTimeOffset) && dateTimeOffset > minOffset)
@@ -319,7 +334,7 @@ public partial class RedisStreamHealthMaintainer : IHostedService
         }
     }
 
-    private async Task CheckStreamGroupAsync(StreamContext context, StreamGroupInfo groupInfo, DateTimeOffset minOffset, CancellationToken cancellationToken)
+    private async Task CheckStreamGroupAsync(StreamContext context, StreamGroupInfo groupInfo, DateTimeOffset minOffset, RedisValue lastGeneratedId, CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
 
@@ -331,16 +346,17 @@ public partial class RedisStreamHealthMaintainer : IHostedService
         }
         else
         {
-            await CheckStreamGroupWithConsumersAsync(context, groupInfo, minOffset, cancellationToken).ConfigureAwait(false);
+            await CheckStreamGroupWithConsumersAsync(context, groupInfo, minOffset, lastGeneratedId, cancellationToken).ConfigureAwait(false);
         }
     }
 
-    private async Task CheckStreamGroupWithConsumersAsync(StreamContext context, StreamGroupInfo groupInfo, DateTimeOffset minOffset, CancellationToken cancellationToken)
+    private async Task CheckStreamGroupWithConsumersAsync(StreamContext context, StreamGroupInfo groupInfo, DateTimeOffset minOffset, RedisValue lastGeneratedId, CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
 
-        // Check if the consumer group's last-delivered-id is older than minOffset
-        if (TryParseDeliveredIdToDatetimeOffset(groupInfo.LastDeliveredId, out var lastDeliveredOffset) &&
+        // A group at the head of a quiet stream has nothing left to read, however old its last delivery.
+        if (!IsCaughtUp(groupInfo.LastDeliveredId, lastGeneratedId) &&
+            TryParseDeliveredIdToDatetimeOffset(groupInfo.LastDeliveredId, out var lastDeliveredOffset) &&
             lastDeliveredOffset.HasValue &&
             lastDeliveredOffset.Value < minOffset)
         {
