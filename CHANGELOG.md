@@ -6,6 +6,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 
 ## [Unreleased]
 
+### Changed
+
+- **`RedisStreamsTopicOptions.PollBatchSize` defaults to 1024 instead of 4096.** It is the `COUNT` of each
+  `XREADGROUP`, and the reply shares the cache's connection: the commands behind it wait for it, and with a short
+  `syncTimeout` on a small server a 4096-entry reply of a node catching up could take most of the timeout by itself.
+  A full batch is read again at once, so catching up costs a round trip per 1024 entries. A `PollBatchSize` set in
+  configuration is kept. The documentation no longer says `Limit` caps a read: neither the reader nor the publisher uses it.
+
 ## [2.1.3] - 2026-10-23
 
 ### Changed
