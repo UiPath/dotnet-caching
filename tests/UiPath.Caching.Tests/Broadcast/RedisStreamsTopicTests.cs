@@ -320,10 +320,10 @@ public class RedisStreamsTopicTests(ITestContextAccessor testContextAccessor) : 
     public async Task A_stream_removed_while_in_use_invalidates_the_subject()
     {
         _database.StreamReadGroupAsync((RedisKey)"stream", "group", "consumer", ">", 1)
-            .ReturnsForAnyArgs(
+            .ReturnsForAnyArgs(StreamReads.NewOnly(
                 Task.FromResult(Array.Empty<StreamEntry>()),
                 Task.FromException<StreamEntry[]>(new RedisException("NOGROUP No such key or consumer group")),
-                Task.FromResult(Array.Empty<StreamEntry>()));
+                Task.FromResult(Array.Empty<StreamEntry>())));
         _redisStreamsTopicOptions.PollInterval = TimeSpan.FromMilliseconds(20);
         _redisStreamsTopicOptions.NotifyEnabled = false;
         _ = Sut;
@@ -343,11 +343,11 @@ public class RedisStreamsTopicTests(ITestContextAccessor testContextAccessor) : 
         // The first read, before the topic is in use, is plain; the ones a wake brings run the check-and-read script.
         var reads = 0;
         _database.StreamReadGroupAsync((RedisKey)"stream", "group", "consumer", ">", 1)
-            .ReturnsForAnyArgs(_ =>
+            .ReturnsForAnyArgs(StreamReads.NewOnly(_ =>
             {
                 Interlocked.Increment(ref reads);
                 return Task.FromResult(Array.Empty<StreamEntry>());
-            });
+            }));
         _database.Configure().ScriptEvaluateAsync(Arg.Any<string>(), Arg.Any<RedisKey[]>(), Arg.Any<RedisValue[]>(), Arg.Any<CommandFlags>())
             .ReturnsForAnyArgs(_ =>
             {
