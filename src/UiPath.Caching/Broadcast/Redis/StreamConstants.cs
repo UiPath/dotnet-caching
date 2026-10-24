@@ -22,7 +22,16 @@ internal static class StreamConstants
 
     /// <summary>Consecutive failures tolerated at the poll interval before backoff starts growing.</summary>
     internal const int ErrorBackoffThreshold = 3;
+
+    /// <summary>One fetch timeout in this many is logged as a Warning, the rest at Debug.</summary>
+    internal const int TimeoutsPerWarning = 100;
+
+    /// <summary>One undecodable entry in this many is logged as a Warning, the rest at Debug.</summary>
+    internal const int UndecodableEntriesPerWarning = 100;
     internal static readonly RedisValue UndeliveredMessages = ">";
+
+    /// <summary>Read position of the entries delivered to a consumer but not acknowledged.</summary>
+    internal static readonly RedisValue PendingMessages = "0";
 
     /// <summary>Upper bound for the exponential backoff applied after consecutive fetch failures.</summary>
     internal static readonly TimeSpan MaxErrorBackoff = TimeSpan.FromSeconds(30);

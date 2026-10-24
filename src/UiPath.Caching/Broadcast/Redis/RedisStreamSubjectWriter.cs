@@ -7,6 +7,7 @@ internal sealed partial class RedisStreamSubjectWriter<T> : IDisposable
     where T : IEvent
 {
     private const string EventInvalid = "Caching." + nameof(RedisStreamSubjectWriter<T>) + "." + nameof(DispatchEventsAsync) + ".InvalidEvent";
+    private const string EventUndecodable = "Caching." + nameof(RedisStreamSubjectWriter<T>) + "." + nameof(DispatchEventsAsync) + ".UndecodableEvent";
     private const string EventReceived = "Caching." + nameof(RedisStreamSubjectWriter<T>) + "." + nameof(DispatchEventsAsync) + ".EventReceived";
     private const string PropTopicKey = "TopicKey";
     private const string PropTransportId = "TransportId";
@@ -26,6 +27,10 @@ internal sealed partial class RedisStreamSubjectWriter<T> : IDisposable
 
     private bool _disposed;
     private RedisValue _lastId = StreamPosition.NewMessages;
+    // Where the next read of this consumer's pending entries starts; null once they are all read.
+    private RedisValue? _pendingFrom = StreamConstants.PendingMessages;
+    private long _timeouts;
+    private long _undecodable;
     private int _consecutiveFailures;
     private volatile bool _unsupportedCommand;
 
@@ -149,12 +154,13 @@ internal sealed partial class RedisStreamSubjectWriter<T> : IDisposable
             return;
         }
 
-        StreamEntry[] events = await _redis.Database.StreamReadGroupAsync(
-            _context.Topic,
-            _context.ConsumerGroup,
-            _context.ConsumerName,
-            StreamConstants.UndeliveredMessages,
-            _context.PollBatchSize).ConfigureAwait(false);
+        if (_pendingFrom is { } from)
+        {
+            await FetchPendingBatch(from).ConfigureAwait(false);
+            return;
+        }
+
+        StreamEntry[] events = await ReadAsync(StreamConstants.UndeliveredMessages).ConfigureAwait(false);
 
         _consecutiveFailures = 0;
         if (_unsupportedCommand)
@@ -172,6 +178,34 @@ internal sealed partial class RedisStreamSubjectWriter<T> : IDisposable
         await _waiter.WaitAsync(_cancelationToken).ConfigureAwait(false);
     }
 
+    /// <summary>Reads the entries Redis gave this consumer without an acknowledgement, such as those of a read that timed out on the client.</summary>
+    private async Task FetchPendingBatch(RedisValue from)
+    {
+        StreamEntry[] events = await ReadAsync(from).ConfigureAwait(false);
+        if (events.Length > 0)
+        {
+            await DispatchEventsAsync(events).ConfigureAwait(false);
+        }
+
+        // Given to this consumer, then trimmed or deleted before it read them: their invalidations are lost. Told only once
+        // acknowledged, so a failed acknowledgement's retry does not tell it again.
+        var deleted = events.Count(static e => !e.IsNull && e.Values is not { Length: > 0 });
+        if (deleted > 0)
+        {
+            LogPendingEntriesDeleted(_context.Topic, deleted);
+        }
+
+        // Read on from the last entry, not from the start: an entry left unacknowledged would be read again and again.
+        _pendingFrom = events.Length < _context.PollBatchSize || events[^1].Id.IsNull ? null : (RedisValue?)events[^1].Id;
+    }
+
+    private Task<StreamEntry[]> ReadAsync(RedisValue position) => _redis.Database.StreamReadGroupAsync(
+        _context.Topic,
+        _context.ConsumerGroup,
+        _context.ConsumerName,
+        position,
+        _context.PollBatchSize);
+
     private async Task<bool> ProcessException(Exception ex)
     {
         var id = _lastId;
@@ -180,6 +214,8 @@ internal sealed partial class RedisStreamSubjectWriter<T> : IDisposable
             LogReadingStopped(_context.Topic, _context.ConsumerGroup, id);
             return false;
         }
+
+        _pendingFrom = StreamConstants.PendingMessages;
 
         if (IsUnsupportedCommand(ex))
         {
@@ -216,11 +252,27 @@ internal sealed partial class RedisStreamSubjectWriter<T> : IDisposable
         }
         else
         {
-           LogFetchLoopError(ex);
+            LogFetchFailed(ex);
         }
 
         await BackoffAsync().ConfigureAwait(false);
         return true;
+    }
+
+    private void LogFetchFailed(Exception ex)
+    {
+        if (ex is not TimeoutException)
+        {
+            LogFetchLoopError(ex);
+        }
+        else if (++_timeouts is var timeouts && timeouts % StreamConstants.TimeoutsPerWarning == 1)
+        {
+            LogFetchTimedOut(ex, _context.Topic, timeouts);
+        }
+        else
+        {
+            LogFetchTimedOutAgain(ex, _context.Topic);
+        }
     }
 
     private Task BackoffAsync()
@@ -277,11 +329,29 @@ internal sealed partial class RedisStreamSubjectWriter<T> : IDisposable
             return default;
         }
 
+        // A pending entry since deleted from the stream comes back without fields, and would stay pending for good.
+        if (@event.Values is not { Length: > 0 })
+        {
+            ids.Add(@event.Id);
+            return default;
+        }
+
         try
         {
-            var ev = _formatter.Decode((ReadOnlyMemory<byte>)@event[_context.FieldName]);
+            T? ev;
+            try
+            {
+                ev = _formatter.Decode((ReadOnlyMemory<byte>)@event[_context.FieldName]);
+            }
+            catch (Exception ex)
+            {
+                HandleUndecodableEvent(@event, ids, ex);
+                return default;
+            }
+
             if (ev is null)
             {
+                HandleUndecodableEvent(@event, ids, null);
                 return default;
             }
             ev.AttachTransportId(@event.Id);
@@ -307,6 +377,7 @@ internal sealed partial class RedisStreamSubjectWriter<T> : IDisposable
         catch (Exception ex)
         {
             LogOnMessageError(ex, _context.Topic);
+            ids.Add(@event.Id);
             return default;
         }
     }
@@ -353,6 +424,26 @@ internal sealed partial class RedisStreamSubjectWriter<T> : IDisposable
         LogEventInvalid(ev.Id, _context.Topic, @event.Id);
     }
 
+    /// <summary>Drops an entry no retry would decode: acknowledged, since a bad payload is not a lost invalidation.</summary>
+    private void HandleUndecodableEvent(StreamEntry @event, List<RedisValue> ids, Exception? ex)
+    {
+        // Acknowledged first, so a throw below cannot leave the entry pending.
+        ids.Add(@event.Id);
+        _cachingTelemetryProvider.TryTrackEvent(EventUndecodable,
+        [
+            new(PropTopicKey, _context.Topic.ToString()),
+            new(PropTransportId, @event.Id.ToString()),
+        ]);
+        if (++_undecodable is var count && count % StreamConstants.UndecodableEntriesPerWarning == 1)
+        {
+            LogEventUndecodable(ex, _context.Topic, @event.Id, count);
+        }
+        else
+        {
+            LogEventUndecodableAgain(ex, _context.Topic, @event.Id);
+        }
+    }
+
     private void TraceReceipt(T ev)
     {
         LogEventReceived(ev.Id, _context.Topic, ev.TransportId);
@@ -389,6 +480,12 @@ internal sealed partial class RedisStreamSubjectWriter<T> : IDisposable
     [LoggerMessage(Level = LogLevel.Error, Message = "Fetch events loop error")]
     private partial void LogFetchLoopError(Exception ex);
 
+    [LoggerMessage(Level = LogLevel.Warning, Message = "Reading topic {Topic} timed out ({Timeouts} times so far); the entries of a read that timed out are read again from the pending list.")]
+    private partial void LogFetchTimedOut(Exception ex, RedisKey topic, long timeouts);
+
+    [LoggerMessage(Level = LogLevel.Debug, Message = "Reading topic {Topic} timed out")]
+    private partial void LogFetchTimedOutAgain(Exception ex, RedisKey topic);
+
     [LoggerMessage(
         Level = LogLevel.Critical,
         Message = "Redis Streams reads are not supported by the server for topic {Topic}. This node will not receive cross-node cache invalidations over Streams. Retrying slowly in case the connection moves to a server that supports XREADGROUP; to fix it now switch to Pub/Sub (DefaultTopic: RedisPubSub) or disable broadcast.")]
@@ -405,6 +502,15 @@ internal sealed partial class RedisStreamSubjectWriter<T> : IDisposable
 
     [LoggerMessage(Level = LogLevel.Warning, Message = "Event invalid. Id {EventId}  Topic : {Topic}, StreamId : {StreamId}")]
     private partial void LogEventInvalid(string? eventId, RedisKey topic, RedisValue streamId);
+
+    [LoggerMessage(Level = LogLevel.Warning, Message = "Entry {StreamId} of topic {Topic} could not be decoded and was dropped ({Count} so far).")]
+    private partial void LogEventUndecodable(Exception? ex, RedisKey topic, RedisValue streamId, long count);
+
+    [LoggerMessage(Level = LogLevel.Debug, Message = "Entry {StreamId} of topic {Topic} could not be decoded and was dropped")]
+    private partial void LogEventUndecodableAgain(Exception? ex, RedisKey topic, RedisValue streamId);
+
+    [LoggerMessage(Level = LogLevel.Warning, Message = "Topic {Topic}: {Count} pending entries were deleted from the stream before this consumer read them; their invalidations are lost.")]
+    private partial void LogPendingEntriesDeleted(RedisKey topic, int count);
 
     [LoggerMessage(Level = LogLevel.Error, Message = "OnMessage error. Topic : {Topic}")]
     private partial void LogOnMessageError(Exception ex, RedisKey topic);

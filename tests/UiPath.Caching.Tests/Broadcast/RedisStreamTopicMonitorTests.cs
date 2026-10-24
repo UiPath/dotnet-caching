@@ -331,6 +331,87 @@ public class RedisStreamHealthMaintainerTests(ITestContextAccessor testContextAc
     }
 
     [Fact]
+    public async Task Group_with_consumers_caught_up_on_a_quiet_stream_is_not_quarantined()
+    {
+        var quiet = DateTimeOffset.UtcNow.Subtract(_streamOptions.MaintainerTrimInterval).Subtract(TimeSpan.FromMinutes(5));
+        var g1 = GenerateGroupInfo(quiet, consumerCount: 1);
+        _streamGroupInfos = [g1];
+        _lastGeneratedId = g1.LastDeliveredId!;
+        _quarantineValue = RedisValue.Null;
+
+        Sut.Initialize();
+        await Sut.CheckStreamsAsync(testContextAccessor.Current.CancellationToken);
+
+        await _database.DidNotReceive().HashSetAsync(
+            Arg.Any<RedisKey>(),
+            Arg.Is<RedisValue>(v => v == g1.Name),
+            Arg.Any<RedisValue>(),
+            Arg.Any<When>(),
+            Arg.Any<CommandFlags>());
+    }
+
+    [Fact]
+    public async Task Group_with_consumers_caught_up_on_a_quiet_stream_leaves_quarantine_instead_of_being_deleted()
+    {
+        var quiet = DateTimeOffset.UtcNow.Subtract(_streamOptions.MaintainerTrimInterval).Subtract(TimeSpan.FromMinutes(5));
+        var g1 = GenerateGroupInfo(quiet, consumerCount: 1);
+        _streamGroupInfos = [g1];
+        _lastGeneratedId = g1.LastDeliveredId!;
+        _quarantineValue = DateTimeOffset.UtcNow.Subtract(_streamOptions.MaintainerQuarantineInterval).Subtract(TimeSpan.FromMinutes(1)).ToString("O");
+
+        Sut.Initialize();
+        await Sut.CheckStreamsAsync(testContextAccessor.Current.CancellationToken);
+
+        await _database.DidNotReceive().StreamDeleteConsumerGroupAsync(Arg.Any<RedisKey>(), Arg.Any<RedisValue>(), Arg.Any<CommandFlags>());
+        await _database.Received().HashDeleteAsync(
+            Arg.Any<RedisKey>(),
+            Arg.Is<RedisValue>(v => v == g1.Name),
+            CommandFlags.DemandMaster);
+    }
+
+    [Fact]
+    public async Task Group_with_consumers_behind_by_an_entry_of_the_same_millisecond_is_still_quarantined()
+    {
+        var stale = DateTimeOffset.UtcNow.Subtract(_streamOptions.MaintainerTrimInterval).Subtract(TimeSpan.FromMinutes(5));
+        var g1 = GenerateGroupInfo(stale, consumerCount: 1);
+        _streamGroupInfos = [g1];
+        _lastGeneratedId = $"{stale.ToUnixTimeMilliseconds()}-1";
+        _quarantineValue = RedisValue.Null;
+
+        Sut.Initialize();
+        await Sut.CheckStreamsAsync(testContextAccessor.Current.CancellationToken);
+
+        await _database.Received().HashSetAsync(
+            Arg.Any<RedisKey>(),
+            Arg.Is<RedisValue>(v => v == g1.Name),
+            Arg.Any<RedisValue>(),
+            When.Always,
+            CommandFlags.DemandMaster);
+    }
+
+    [Theory]
+    [InlineData("")]
+    [InlineData("not-an-id")]
+    public async Task Group_with_consumers_and_stale_LastDeliveredId_is_quarantined_when_the_stream_head_is_unreadable(string lastGeneratedId)
+    {
+        var stale = DateTimeOffset.UtcNow.Subtract(_streamOptions.MaintainerTrimInterval).Subtract(TimeSpan.FromMinutes(5));
+        var g1 = GenerateGroupInfo(stale, consumerCount: 1);
+        _streamGroupInfos = [g1];
+        _lastGeneratedId = lastGeneratedId;
+        _quarantineValue = RedisValue.Null;
+
+        Sut.Initialize();
+        await Sut.CheckStreamsAsync(testContextAccessor.Current.CancellationToken);
+
+        await _database.Received().HashSetAsync(
+            Arg.Any<RedisKey>(),
+            Arg.Is<RedisValue>(v => v == g1.Name),
+            Arg.Any<RedisValue>(),
+            When.Always,
+            CommandFlags.DemandMaster);
+    }
+
+    [Fact]
     public async Task Initialize_uses_MaintainerSearchPattern_when_configured()
     {
         // When MaintainerSearchPattern is set, Initialize must use it verbatim instead of deriving
