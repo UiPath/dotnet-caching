@@ -6,6 +6,26 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 
 ## [Unreleased]
 
+### Fixed
+
+- **A Redis Streams read that times out no longer loses its invalidations.** Redis hands the entries of a read to the
+  consumer and moves the group past them even when the answer never reaches the client, and the reader only ever asked
+  for new entries, so those stayed pending and their invalidations were never applied: the node kept the old values
+  until they expired. The reader now reads its own pending entries when it starts and after every failed read, before
+  going back to new ones. A pending entry deleted from the stream before it was read is acknowledged and logged as a
+  Warning, since its invalidation is lost. A read timeout is logged as a
+  Warning once per 100, and at Debug otherwise, rather than as an Error every time. An entry that cannot be decoded is
+  acknowledged and dropped, not reported as a missed message: a bad payload is not a lost invalidation, and reporting it
+  would let one bad writer clear the local tier of every node. Each one is tracked as the
+  `Caching.RedisStreamSubjectWriter.DispatchEventsAsync.UndecodableEvent` telemetry event and logged as a Warning once
+  per 100.
+
+- **The stream maintainer no longer deletes the consumer group of a live subscriber on a quiet stream.** A group with
+  consumers counted as stale once its last delivery was older than `MaintainerTrimInterval`, even when nothing newer had
+  been written, so on a stream with no traffic every live group was quarantined and then deleted after
+  `MaintainerQuarantineInterval`, and its reader recreated it on the next `NOGROUP`. A group whose last delivery is the
+  stream's last entry is now healthy, and a quarantine it was under is cleared.
+
 ### Changed
 
 - **`RedisStreamsTopicOptions.PollBatchSize` defaults to 1024 instead of 4096.** It is the `COUNT` of each

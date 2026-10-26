@@ -577,6 +577,276 @@ public class RedisStreamSubjectWriterTests : IAsyncLifetime
         await _database.DidNotReceiveWithAnyArgs().StreamAcknowledgeAsync(default, default, default(RedisValue[])!);
     }
 
+    [Fact]
+    public async Task Start_reads_the_consumers_pending_entries_once_before_new_ones()
+    {
+        var channel = Channel.CreateUnbounded<ICacheEvent>();
+        var pendingId = _fixture.Create<string>();
+        var positions = new ConcurrentQueue<string>();
+        var ev = new TestCacheEvent { Valid = true, Source = new Uri("urn:other-source") };
+        _formatter.Decode(Arg.Any<ReadOnlyMemory<byte>>()).Returns(ev);
+        // Unacknowledged on purpose: the pending entry stays where it is, so reading the pending list again would find it again.
+        _database.StreamReadGroupAsync(_context.Topic, _context.ConsumerGroup, _context.ConsumerName, ">", _context.PollBatchSize)
+            .ReturnsForAnyArgs(call => Read(positions, call, position => position == ">" ? [] : [Entry(pendingId)]));
+
+        using var sut = CreateSut(channel.Writer, _logger, pollBatchSize: 2);
+
+        var read = await channel.Reader.ReadAsync(TestContext.Current.CancellationToken).AsTask().WaitAsync(WaitTimeout, TestContext.Current.CancellationToken);
+        (await WaitUntil(() => positions.Count(p => p == ">") >= 3)).Should().BeTrue();
+        _cancellationTokenSource.Cancel();
+        await sut.FetchTask.WaitAsync(WaitTimeout, TestContext.Current.CancellationToken);
+
+        read.Should().BeSameAs(ev);
+        positions.First().Should().Be("0", "entries delivered to this consumer before it started are read before new ones");
+        positions.Count(p => p == "0").Should().Be(1, "a pending entry that stays pending must not be read over and over");
+    }
+
+    [Fact]
+    public async Task A_failed_read_is_followed_by_a_read_of_the_pending_entries()
+    {
+        var channel = Channel.CreateUnbounded<ICacheEvent>();
+        var lostId = _fixture.Create<string>();
+        var positions = new ConcurrentQueue<string>();
+        var failed = 0;
+        var ev = new TestCacheEvent { Valid = true, Source = new Uri("urn:other-source") };
+        _formatter.Decode(Arg.Any<ReadOnlyMemory<byte>>()).Returns(ev);
+        _database.StreamReadGroupAsync(_context.Topic, _context.ConsumerGroup, _context.ConsumerName, ">", _context.PollBatchSize)
+            .ReturnsForAnyArgs(call => Read(positions, call, position => position switch
+            {
+                ">" when Interlocked.Exchange(ref failed, 1) == 0 => throw Timeout(),
+                ">" => [],
+                // The entries the timed-out read was given.
+                _ when Volatile.Read(ref failed) == 1 => [Entry(lostId)],
+                _ => [],
+            }));
+
+        using var sut = CreateSut(channel.Writer, _logger, pollBatchSize: 2);
+
+        var read = await channel.Reader.ReadAsync(TestContext.Current.CancellationToken).AsTask().WaitAsync(WaitTimeout, TestContext.Current.CancellationToken);
+        _cancellationTokenSource.Cancel();
+        await sut.FetchTask.WaitAsync(WaitTimeout, TestContext.Current.CancellationToken);
+
+        read.Should().BeSameAs(ev);
+        positions.Take(3).Should().Equal("0", ">", "0");
+    }
+
+    [Fact]
+    public async Task A_full_batch_of_pending_entries_is_followed_by_the_entries_after_it()
+    {
+        var channel = Channel.CreateUnbounded<ICacheEvent>();
+        var positions = new ConcurrentQueue<string>();
+        _formatter.Decode(Arg.Any<ReadOnlyMemory<byte>>()).Returns(new TestCacheEvent { Valid = true, Source = new Uri("urn:other-source") });
+        _database.StreamReadGroupAsync(_context.Topic, _context.ConsumerGroup, _context.ConsumerName, ">", _context.PollBatchSize)
+            .ReturnsForAnyArgs(call => Read(positions, call, position => position switch
+            {
+                "0" => [Entry("1-0"), Entry("2-0")],
+                "2-0" => [Entry("3-0")],
+                _ => [],
+            }));
+
+        using var sut = CreateSut(channel.Writer, _logger, pollBatchSize: 2);
+
+        (await WaitUntil(() => positions.Contains(">"))).Should().BeTrue();
+        _cancellationTokenSource.Cancel();
+        await sut.FetchTask.WaitAsync(WaitTimeout, TestContext.Current.CancellationToken);
+
+        positions.Should().StartWith(["0", "2-0", ">"]);
+        channel.Reader.Count.Should().Be(3);
+    }
+
+    [Fact]
+    public async Task A_pending_entry_deleted_from_the_stream_is_acknowledged()
+    {
+        var acked = new TaskCompletionSource<RedisValue[]>(TaskCreationOptions.RunContinuationsAsynchronously);
+        _database.StreamAcknowledgeAsync(Arg.Any<RedisKey>(), Arg.Any<RedisValue>(), Arg.Any<RedisValue[]>())
+            .Returns(call => { acked.TrySetResult(call.Arg<RedisValue[]>()); return Task.FromResult(1L); });
+        var positions = new ConcurrentQueue<string>();
+        var id = _fixture.Create<string>();
+        _database.StreamReadGroupAsync(_context.Topic, _context.ConsumerGroup, _context.ConsumerName, ">", _context.PollBatchSize)
+            .ReturnsForAnyArgs(call => Read(positions, call, position => position == "0" ? [new StreamEntry(id, [])] : []));
+        var telemetry = new RecordingTelemetryProvider();
+        var recordingLogger = new RecordingLogger();
+
+        using var sut = CreateSut(Channel.CreateUnbounded<ICacheEvent>().Writer, recordingLogger, telemetry, pollBatchSize: 2);
+
+        var ids = await acked.Task.WaitAsync(WaitTimeout, TestContext.Current.CancellationToken);
+        _cancellationTokenSource.Cancel();
+        await sut.FetchTask.WaitAsync(WaitTimeout, TestContext.Current.CancellationToken);
+
+        ids.Select(v => v.ToString()).Should().Equal(id);
+        _formatter.DidNotReceiveWithAnyArgs().Decode(default);
+        telemetry.Events.Should().NotContain(e => e.Name.EndsWith(".UndecodableEvent", StringComparison.Ordinal), "a deleted entry is not a bad payload");
+        recordingLogger.Records.Should().ContainSingle(r => r.Level == LogLevel.Warning && r.Message.Contains("deleted", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task Read_timeouts_log_a_warning_once_per_hundred_and_never_an_error()
+    {
+        var recordingLogger = new RecordingLogger();
+        var timeouts = 0;
+        _database.StreamReadGroupAsync(_context.Topic, _context.ConsumerGroup, _context.ConsumerName, ">", _context.PollBatchSize)
+            .ReturnsForAnyArgs(call => Read(new ConcurrentQueue<string>(), call, position =>
+                // Every other new-entry read times out; the successes between keep the backoff from growing.
+                position == ">" && Interlocked.Increment(ref timeouts) % 2 == 1 ? throw Timeout() : []));
+
+        using var sut = CreateSut(Channel.CreateUnbounded<ICacheEvent>().Writer, recordingLogger, pollInterval: TimeSpan.FromMilliseconds(1));
+
+        (await WaitUntil(() => Volatile.Read(ref timeouts) >= 2 * 101 + 2)).Should().BeTrue();
+        _cancellationTokenSource.Cancel();
+        try { await sut.FetchTask.WaitAsync(WaitTimeout, TestContext.Current.CancellationToken); } catch (OperationCanceledException) { }
+
+        recordingLogger.Records.Should().NotContain(r => r.Level >= LogLevel.Error);
+        recordingLogger.Records.Count(r => r.Level == LogLevel.Warning && r.Message.Contains("timed out", StringComparison.Ordinal))
+            .Should().Be(2, "the 1st and the 101st timeouts are reported");
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task An_entry_that_cannot_be_decoded_is_acknowledged(bool decodeThrows)
+    {
+        // Decoding the same bytes fails again, so left pending it would be read on every pass of the pending list.
+        var acked = new TaskCompletionSource<RedisValue[]>(TaskCreationOptions.RunContinuationsAsynchronously);
+        _database.StreamAcknowledgeAsync(Arg.Any<RedisKey>(), Arg.Any<RedisValue>(), Arg.Any<RedisValue[]>())
+            .Returns(call => { acked.TrySetResult(call.Arg<RedisValue[]>()); return Task.FromResult(1L); });
+        _formatter.Decode(Arg.Any<ReadOnlyMemory<byte>>()).Returns(_ => decodeThrows ? throw new FormatException("bad payload") : null);
+        var id = _fixture.Create<string>();
+        SetupSingleBatch([new StreamEntry(id, [new NameValueEntry(_fieldName, _fixture.Create<string>())])]);
+
+        using var sut = CreateSut(Channel.CreateUnbounded<ICacheEvent>().Writer, _logger);
+
+        var ids = await acked.Task.WaitAsync(WaitTimeout, TestContext.Current.CancellationToken);
+        _cancellationTokenSource.Cancel();
+        await sut.FetchTask.WaitAsync(WaitTimeout, TestContext.Current.CancellationToken);
+
+        ids.Select(v => v.ToString()).Should().Equal(id);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task An_entry_that_cannot_be_decoded_is_tracked_and_logged_as_a_warning(bool decodeThrows)
+    {
+        var acked = new TaskCompletionSource<RedisValue[]>(TaskCreationOptions.RunContinuationsAsynchronously);
+        _database.StreamAcknowledgeAsync(Arg.Any<RedisKey>(), Arg.Any<RedisValue>(), Arg.Any<RedisValue[]>())
+            .Returns(call => { acked.TrySetResult(call.Arg<RedisValue[]>()); return Task.FromResult(1L); });
+        _formatter.Decode(Arg.Any<ReadOnlyMemory<byte>>()).Returns(_ => decodeThrows ? throw new FormatException("bad payload") : null);
+        var id = _fixture.Create<string>();
+        SetupSingleBatch([new StreamEntry(id, [new NameValueEntry(_fieldName, _fixture.Create<string>())])]);
+        var telemetry = new RecordingTelemetryProvider();
+        var recordingLogger = new RecordingLogger();
+
+        using var sut = CreateSut(Channel.CreateUnbounded<ICacheEvent>().Writer, recordingLogger, telemetry);
+
+        await acked.Task.WaitAsync(WaitTimeout, TestContext.Current.CancellationToken);
+        _cancellationTokenSource.Cancel();
+        await sut.FetchTask.WaitAsync(WaitTimeout, TestContext.Current.CancellationToken);
+
+        telemetry.Events.Should().ContainSingle(e => e.Name == "Caching.RedisStreamSubjectWriter.DispatchEventsAsync.UndecodableEvent")
+            .Which.Properties.Should().Contain("TopicKey", _context.Topic.ToString()).And.Contain("TransportId", id);
+        recordingLogger.Records.Should().ContainSingle(r => r.Level == LogLevel.Warning && r.Message.Contains(id, StringComparison.Ordinal));
+        recordingLogger.Records.Should().NotContain(r => r.Level >= LogLevel.Error, "a bad entry is dropped, not a failure of the reader");
+    }
+
+    [Fact]
+    public async Task Undecodable_entries_are_each_tracked_but_logged_as_a_warning_once_per_hundred()
+    {
+        var acked = new TaskCompletionSource<RedisValue[]>(TaskCreationOptions.RunContinuationsAsynchronously);
+        _database.StreamAcknowledgeAsync(Arg.Any<RedisKey>(), Arg.Any<RedisValue>(), Arg.Any<RedisValue[]>())
+            .Returns(call => { acked.TrySetResult(call.Arg<RedisValue[]>()); return Task.FromResult(1L); });
+        _formatter.Decode(Arg.Any<ReadOnlyMemory<byte>>()).Returns((ICacheEvent?)null);
+        SetupSingleBatch([.. Enumerable.Range(1, 101).Select(i => new StreamEntry($"{i}-0", [new NameValueEntry(_fieldName, _fixture.Create<string>())]))]);
+        var telemetry = new RecordingTelemetryProvider();
+        var recordingLogger = new RecordingLogger();
+
+        using var sut = CreateSut(Channel.CreateUnbounded<ICacheEvent>().Writer, recordingLogger, telemetry);
+
+        (await acked.Task.WaitAsync(WaitTimeout, TestContext.Current.CancellationToken)).Should().HaveCount(101);
+        _cancellationTokenSource.Cancel();
+        await sut.FetchTask.WaitAsync(WaitTimeout, TestContext.Current.CancellationToken);
+
+        telemetry.Events.Count(e => e.Name.EndsWith(".UndecodableEvent", StringComparison.Ordinal)).Should().Be(101);
+        recordingLogger.Records.Count(r => r.Level == LogLevel.Warning).Should().Be(2, "the 1st and the 101st are reported");
+    }
+
+    [Fact]
+    public async Task An_undecodable_entry_is_acknowledged_when_the_telemetry_sink_refuses_the_record()
+    {
+        var acked = new TaskCompletionSource<RedisValue[]>(TaskCreationOptions.RunContinuationsAsynchronously);
+        _database.StreamAcknowledgeAsync(Arg.Any<RedisKey>(), Arg.Any<RedisValue>(), Arg.Any<RedisValue[]>())
+            .Returns(call => { acked.TrySetResult(call.Arg<RedisValue[]>()); return Task.FromResult(1L); });
+        _formatter.Decode(Arg.Any<ReadOnlyMemory<byte>>()).Returns((ICacheEvent?)null);
+        var id = _fixture.Create<string>();
+        SetupSingleBatch([new StreamEntry(id, [new NameValueEntry(_fieldName, _fixture.Create<string>())])]);
+        var telemetry = new RefusingTelemetryProvider("Caching.RedisStreamSubjectWriter.DispatchEventsAsync.UndecodableEvent");
+        var recordingLogger = new RecordingLogger();
+
+        using var sut = CreateSut(Channel.CreateUnbounded<ICacheEvent>().Writer, recordingLogger, telemetry);
+
+        var ids = await acked.Task.WaitAsync(WaitTimeout, TestContext.Current.CancellationToken);
+        _cancellationTokenSource.Cancel();
+        await sut.FetchTask.WaitAsync(WaitTimeout, TestContext.Current.CancellationToken);
+
+        ids.Select(v => v.ToString()).Should().Equal(id);
+        telemetry.Exceptions.Should().Contain(RefusingTelemetryProvider.Failure);
+    }
+
+    [Fact]
+    public async Task A_pending_batch_with_a_deleted_entry_warns_once_and_still_dispatches_the_rest()
+    {
+        var acked = new TaskCompletionSource<RedisValue[]>(TaskCreationOptions.RunContinuationsAsynchronously);
+        _database.StreamAcknowledgeAsync(Arg.Any<RedisKey>(), Arg.Any<RedisValue>(), Arg.Any<RedisValue[]>())
+            .Returns(call => { acked.TrySetResult(call.Arg<RedisValue[]>()); return Task.FromResult(1L); });
+        var channel = Channel.CreateUnbounded<ICacheEvent>();
+        var ev = new TestCacheEvent { Valid = true, Source = new Uri("urn:other-source") };
+        _formatter.Decode(Arg.Any<ReadOnlyMemory<byte>>()).Returns(ev);
+        _database.StreamReadGroupAsync(_context.Topic, _context.ConsumerGroup, _context.ConsumerName, ">", _context.PollBatchSize)
+            .ReturnsForAnyArgs(call => Read(new ConcurrentQueue<string>(), call, position => position == "0" ? [new StreamEntry("1-0", []), Entry("2-0")] : []));
+        var recordingLogger = new RecordingLogger();
+
+        using var sut = CreateSut(channel.Writer, recordingLogger, pollBatchSize: 4);
+
+        var ids = await acked.Task.WaitAsync(WaitTimeout, TestContext.Current.CancellationToken);
+        _cancellationTokenSource.Cancel();
+        await sut.FetchTask.WaitAsync(WaitTimeout, TestContext.Current.CancellationToken);
+
+        ids.Select(v => v.ToString()).Should().BeEquivalentTo(["1-0", "2-0"]);
+        recordingLogger.Records.Count(r => r.Level == LogLevel.Warning && r.Message.Contains("deleted", StringComparison.Ordinal)).Should().Be(1);
+        channel.Reader.TryRead(out var read).Should().BeTrue();
+        read.Should().BeSameAs(ev);
+    }
+
+    [Fact]
+    public async Task A_deleted_pending_entry_is_logged_once_after_its_acknowledgement_succeeds()
+    {
+        var acks = 0;
+        var acked = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        _database.StreamAcknowledgeAsync(Arg.Any<RedisKey>(), Arg.Any<RedisValue>(), Arg.Any<RedisValue[]>())
+            .Returns(_ =>
+            {
+                if (Interlocked.Increment(ref acks) == 1)
+                {
+                    return Task.FromException<long>(Timeout());
+                }
+
+                acked.TrySetResult();
+                return Task.FromResult(1L);
+            });
+        _database.StreamReadGroupAsync(_context.Topic, _context.ConsumerGroup, _context.ConsumerName, ">", _context.PollBatchSize)
+            .ReturnsForAnyArgs(call => Read(new ConcurrentQueue<string>(), call, position => position == "0" ? [new StreamEntry("1-0", [])] : []));
+        var recordingLogger = new RecordingLogger();
+
+        using var sut = CreateSut(Channel.CreateUnbounded<ICacheEvent>().Writer, recordingLogger, pollBatchSize: 4);
+
+        await acked.Task.WaitAsync(WaitTimeout, TestContext.Current.CancellationToken);
+        (await WaitUntil(() => recordingLogger.Records.Any(r => r.Message.Contains("deleted", StringComparison.Ordinal)))).Should().BeTrue();
+        await Task.Delay(100, TestContext.Current.CancellationToken);
+        _cancellationTokenSource.Cancel();
+        try { await sut.FetchTask.WaitAsync(WaitTimeout, TestContext.Current.CancellationToken); } catch (OperationCanceledException) { }
+
+        recordingLogger.Records.Count(r => r.Message.Contains("deleted", StringComparison.Ordinal)).Should().Be(1, "the first acknowledgement failed, so only the pass whose acknowledgement succeeded logs");
+    }
+
     public ValueTask DisposeAsync()
     {
         return ValueTask.CompletedTask;
@@ -628,6 +898,15 @@ public class RedisStreamSubjectWriterTests : IAsyncLifetime
     private static RedisServerException UnknownCommandError(string message) =>
         new(RedisErrorKind.UnknownCommand, CommandFlags.None, message);
 
+    private static RedisTimeoutException Timeout() => new(CommandFlags.None, "Timeout performing XREADGROUP", CommandStatus.Sent);
+
+    private static Task<StreamEntry[]> Read(ConcurrentQueue<string> positions, NSubstitute.Core.CallInfo call, Func<string, StreamEntry[]> answer)
+    {
+        var position = call.ArgAt<RedisValue?>(3).ToString()!;
+        positions.Enqueue(position);
+        return Task.FromResult(answer(position));
+    }
+
     private void SetupSingleBatch(StreamEntry[] entries)
     {
         var emitted = 0;
@@ -635,14 +914,21 @@ public class RedisStreamSubjectWriterTests : IAsyncLifetime
             .ReturnsForAnyArgs(_ => ++emitted == 1 ? entries : []);
     }
 
-    private RedisStreamSubjectWriter<ICacheEvent> CreateSut(ChannelWriter<ICacheEvent> writer, ILogger logger, ICachingTelemetryProvider? telemetry = null)
+    private StreamEntry Entry(string id) => new(id, [new NameValueEntry(_fieldName, _fixture.Create<string>())]);
+
+    private RedisStreamSubjectWriter<ICacheEvent> CreateSut(ChannelWriter<ICacheEvent> writer, ILogger logger, ICachingTelemetryProvider? telemetry = null, int? pollBatchSize = null, TimeSpan? pollInterval = null)
     {
         var connectionState = _fixture.Create<IConnectionState>();
         connectionState.IsConnected.Returns(true);
         var redis = _fixture.Create<IRedisConnector>();
         redis.Database.Returns(_database);
+        var context = _context with
+        {
+            PollBatchSize = pollBatchSize ?? _context.PollBatchSize,
+            PollInterval = pollInterval ?? _context.PollInterval,
+        };
         return new RedisStreamSubjectWriter<ICacheEvent>(
-            _context,
+            context,
             connectionState,
             redis,
             writer,
@@ -650,7 +936,7 @@ public class RedisStreamSubjectWriterTests : IAsyncLifetime
             logger,
             telemetry ?? _fixture.Create<ICachingTelemetryProvider>(),
             _fixture.Create<IRedisProfiler>(),
-            new TimedFetchWaiter(_pollInterval),
+            new TimedFetchWaiter(context.PollInterval),
             _cancellationTokenSource.Token);
     }
 

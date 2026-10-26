@@ -79,7 +79,7 @@ See [reference/settings.md](../reference/settings.md) for the full set. The tabl
 | --- | --- | --- | --- |
 | `Enabled` | `true` | No | App-wide provider toggle. |
 | `MaxLength` | `32768` | Yes | `XADD MAXLEN ~` cap (server-side trim). |
-| `Limit` | `1024` | Yes | Max entries per `XREADGROUP` call. |
+| `Limit` | `1024` | Yes | Not used by the stream reader or the publisher. |
 | `PollBatchSize` | `1024` | Yes | Entries one `XREADGROUP` asks for. |
 | `FieldName` | `"event"` | Yes | Redis stream field name for the payload. |
 | `PollInterval` | `250 ms` | Yes | `XREADGROUP` cadence. |
@@ -116,9 +116,9 @@ See [reference/settings.md](../reference/settings.md) for the full set. The tabl
 | `SubscriberTimeout` | multiplexer timeout | Yes | Resubscribe interval. |
 | `SubscriberDueTime` | half of timeout | Yes | First-subscribe delay. |
 
-### `Limit` vs `MaxLength` vs `PollBatchSize`
+### `MaxLength` vs `PollBatchSize`
 
-All three touch how many entries move through the consumer pipeline, but at different layers:
+Both touch how many entries move through the consumer pipeline, but at different layers (`Limit` is not used):
 
 - `MaxLength` (default 32768) is a server-side cap — `XADD MAXLEN ~` trims the stream to at most this many entries. Tune it to bound Redis memory usage on the stream key.
 - `Limit` (default 1024) is not used by the stream reader or the publisher.
@@ -212,7 +212,7 @@ Some options are read at provider construction or by singleton hosted services. 
 - `MaintainerQuarantineInterval` — quarantine window for empty consumer groups; read per maintainer cycle.
 - `MaintainerSearchPattern` — SCAN pattern used to discover streams; resolved once at `Initialize`.
 
-Everything else (`MaxLength`, `Limit`, `PollBatchSize`, `PollInterval`, `ConsumerCapacity`, `FullMode`, `SlowObserverThreshold`, every `Notify*` field, etc.) is honored per-topic.
+Everything else (`MaxLength`, `PollBatchSize`, `PollInterval`, `ConsumerCapacity`, `FullMode`, `SlowObserverThreshold`, every `Notify*` field, etc.) is honored per-topic.
 
 ## Notify doorbell
 
