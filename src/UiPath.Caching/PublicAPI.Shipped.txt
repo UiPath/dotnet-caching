@@ -879,3 +879,9 @@ UiPath.Caching.Redis.RedisPlannedMaintenance.RedisPlannedMaintenance(UiPath.Cach
 UiPath.Caching.Redis.RedisPlannedMaintenance.SuggestedTimeout.get -> System.TimeSpan?
 static UiPath.Caching.Redis.ProfiledCommandProcessor.NodeField.get -> string!
 static UiPath.Caching.Redis.ProfiledCommandProcessor.NodeField.set -> void
+UiPath.Caching.Redis.RedisCacheOptions.ReadFrom.get -> UiPath.Caching.Redis.RedisReadFrom
+UiPath.Caching.Redis.RedisCacheOptions.ReadFrom.set -> void
+UiPath.Caching.Redis.RedisReadFrom
+UiPath.Caching.Redis.RedisReadFrom.Master = 0 -> UiPath.Caching.Redis.RedisReadFrom
+UiPath.Caching.Redis.RedisReadFrom.Replica = 1 -> UiPath.Caching.Redis.RedisReadFrom
+UiPath.Caching.Redis.RedisCacheBase.ReadFlags.get -> StackExchange.Redis.CommandFlags
