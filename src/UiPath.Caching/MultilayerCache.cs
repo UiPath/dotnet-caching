@@ -553,6 +553,38 @@ internal sealed partial class MultilayerCache : MultilayerCacheBase, ICache, ISp
         return results;
     }
 
+    [SuppressMessage("Major Code Smell", "S3267:Loops should be simplified with LINQ expressions", Justification = "A closure per call on the batch hit path.")]
+    private static bool HasRepeatedState<TState>(KeyValuePair<CacheKey, TState>[] entries)
+        where TState : notnull
+    {
+        if (entries.Length <= 16)
+        {
+            for (var i = 1; i < entries.Length; i++)
+            {
+                for (var j = 0; j < i; j++)
+                {
+                    if (EqualityComparer<TState>.Default.Equals(entries[i].Value, entries[j].Value))
+                    {
+                        return true;
+                    }
+                }
+            }
+
+            return false;
+        }
+
+        var seen = new HashSet<TState>(entries.Length);
+        foreach (var entry in entries)
+        {
+            if (!seen.Add(entry.Value))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
     /// <summary>A local hit only, never the inner tier: for a caller that has just taken a key, where the only thing that can have changed is a run of this process.</summary>
     private bool TryGetLocalEntry<T>(CacheEntryOptions options, [MaybeNullWhen(false)] out ICacheEntry<T?> entry)
     {
@@ -1090,6 +1122,11 @@ internal sealed partial class MultilayerCache : MultilayerCacheBase, ICache, ISp
         NotCacheableException.ThrowIfNotCacheable<T>();
         ArgumentNullException.ThrowIfNull(entries);
 
+        if (TryGetAllLocal<T, TState>(entries, policy, token, out var local))
+        {
+            return local;
+        }
+
         var (states, keyIndexOfState, callerKeys, options, firstStateOfKey) = DistinctEntries<T, TState>(entries, expiration, token);
         if (states.Length == 0)
         {
@@ -1400,6 +1437,36 @@ internal sealed partial class MultilayerCache : MultilayerCacheBase, ICache, ISp
                 _cacheEntryFactory.Create<T?>(value, wasProduced ? missOptions[i].Expiration : DateTimeOffset.MinValue));
         }
         return results;
+    }
+
+    /// <summary>A batch whose keys are all local hits, answered as the full path would without building its options, lists and lookups; a miss, a rehydrating policy or a repeated state takes the full path.</summary>
+    private bool TryGetAllLocal<T, TState>(KeyValuePair<CacheKey, TState>[] entries, CachePolicy policy, CancellationToken token, [NotNullWhen(true)] out KeyValuePair<TState, T?>[]? results)
+        where TState : notnull
+    {
+        results = null;
+        if (entries.Length == 0 || token.IsCancellationRequested || (policy.RehydrateEnabled == true && policy.Rehydrate is not null))
+        {
+            return false;
+        }
+
+        var found = new KeyValuePair<TState, T?>[entries.Length];
+        for (var i = 0; i < entries.Length; i++)
+        {
+            if (ProbeLocal<T>(entries[i].Key, token, out var entry) != LocalProbe.Hit || !entry!.Found)
+            {
+                return false;
+            }
+
+            found[i] = new KeyValuePair<TState, T?>(entries[i].Value, entry.Value);
+        }
+
+        if (HasRepeatedState(entries))
+        {
+            return false;
+        }
+
+        results = found;
+        return true;
     }
 
     /// <summary>Splits entries into state space and mapped-key space, both in first-occurrence order.</summary>

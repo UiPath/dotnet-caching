@@ -49,15 +49,16 @@
          dependency group including net8.0, so an 8.0.x floor here cannot restore (NU1605); 10.x
          ships a net8.0 asset, so a net8.0 consumer still resolves a net8-targeted assembly rather
          than a downlevel one. Raised on purpose in #85 as the prerequisite for SE.Redis 3.0, and it
-         still has to move with the family: 10.0.12 of any of them asks for 10.0.12 of this. -->
-    <PackageVersion Include="Microsoft.Extensions.Logging.Abstractions" Version="10.0.12" />
+         still has to move with the family: 10.0.12 of any of them asks for 10.0.12 of this, and
+         StackExchange.Redis 3.4.20 asks for 10.0.13. -->
+    <PackageVersion Include="Microsoft.Extensions.Logging.Abstractions" Version="10.0.13" />
     <PackageVersion Include="Swashbuckle.AspNetCore" Version="10.3.0" />
     <PackageVersion Include="BenchmarkDotNet" Version="0.15.8" />
     <PackageVersion Include="Aspire.Hosting.Redis" Version="13.6.1" />
     <!-- Aspire.Hosting pulls MessagePack 2.5.302 (GHSA-qhrr-8q5h-9q3h); overridden until Aspire references a patched version. -->
     <PackageVersion Include="MessagePack" Version="3.1.11" />
     <PackageVersion Include="System.Net.Http" Version="4.3.4" />
-    <PackageVersion Include="StackExchange.Redis" Version="3.3.1" />
+    <PackageVersion Include="StackExchange.Redis" Version="3.4.20" />
     <PackageVersion Include="StyleCop.Analyzers" Version="1.2.0-beta.556" />
     <PackageVersion Include="Azure.Identity" Version="1.21.0" />
     <PackageVersion Include="Microsoft.Azure.StackExchangeRedis" Version="3.3.1" />

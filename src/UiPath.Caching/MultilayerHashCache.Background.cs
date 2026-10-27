@@ -33,7 +33,12 @@ internal sealed partial class MultilayerHashCache : IAsyncDisposable
         {
             if (!TryMergeLocal(ref options, values, out var merged))
             {
-                return true;
+                if (!OnlyTier)
+                {
+                    return true;
+                }
+
+                merged = values;
             }
 
             local.Entry = CreateEntry(merged, options);
