@@ -1,0 +1,50 @@
+name: DCO
+
+# Enforces the DCO sign-off (see CONTRIBUTING.md) as the required `DCO` check.
+# Mirrors .github/dco.yml: org members, repo collaborators and bots are exempt;
+# everyone else needs a `Signed-off-by:` trailer matching the commit author on
+# every commit. Reads the commits through the API, so no pull request code runs.
+
+on:
+  pull_request:
+    types: [opened, reopened, synchronize]
+
+permissions:
+  contents: read
+  pull-requests: read
+
+jobs:
+  dco:
+    name: DCO
+    runs-on: uipath-ubuntu-latest
+    steps:
+      - name: Check sign-off
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3  # v9.0.0
+        with:
+          script: |
+            const pr = context.payload.pull_request;
+            if (['OWNER', 'MEMBER', 'COLLABORATOR'].includes(pr.author_association) || pr.user.type === 'Bot') {
+              core.info(`${pr.user.login} (${pr.author_association}) is exempt.`);
+              return;
+            }
+
+            const commits = await github.paginate(github.rest.pulls.listCommits, {
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              pull_number: pr.number,
+              per_page: 100,
+            });
+
+            const missing = commits.filter(c => {
+              if (c.parents.length > 1) {
+                return false;
+              }
+              const author = c.commit.author;
+              const trailers = [...c.commit.message.matchAll(/^Signed-off-by:\s*(.+?)\s*<([^>]+)>\s*$/gim)];
+              return !trailers.some(t => t[2].toLowerCase() === author.email.toLowerCase());
+            });
+
+            if (missing.length > 0) {
+              const list = missing.map(c => `- ${c.sha.substring(0, 8)} ${c.commit.message.split('\n')[0]}`).join('\n');
+              core.setFailed(`These commits have no Signed-off-by trailer matching their author; amend them with git commit -s:\n${list}`);
+            }

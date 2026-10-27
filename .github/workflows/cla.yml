@@ -1,7 +1,7 @@
 name: CLA
 
 # Two-tier contribution model (see CONTRIBUTING.md):
-#   - DCO sign-off is enforced on every PR by the DCO GitHub App (org members exempt).
+#   - DCO sign-off is enforced on every PR by the DCO workflow (dco.yml; org members exempt).
 #   - A signed Contributor License Agreement (CLA.md) is required ONLY for
 #     material/strategic contributions, escalated per-PR by a maintainer applying
 #     the `cla-required` label.
