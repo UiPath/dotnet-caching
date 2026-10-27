@@ -1,5 +1,3 @@
-using CloudNative.CloudEvents.SystemTextJson;
-
 namespace UiPath.Caching.CloudEvents;
 
 [ExcludeFromCodeCoverage]
@@ -9,7 +7,7 @@ public static class CachingBuilderExtensions
     {
         if(builder.Enabled)
         {
-            builder.Services.TryAddSingleton<IEventFormatterProxy<ICacheEvent>>(sp => new CacheEventFormatterProxy(new JsonEventFormatter<CacheEventData>()));
+            builder.Services.TryAddSingleton<IEventFormatterProxy<ICacheEvent>>(sp => CacheEventFormatterProxy.CreateDefault());
             builder.Services.TryAddSingleton<ICacheEventFactory, CloudCacheEventFactory>();
         }
         return builder;

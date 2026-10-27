@@ -8,6 +8,11 @@ public class RedisStreamsTopicOptions : IBindsFromConfiguration
     internal static readonly TimeSpan DefaultPollInterval = TimeSpan.FromMilliseconds(250);
     internal static readonly TimeSpan DefaultNotifiedPollInterval = TimeSpan.FromSeconds(5);
 
+    internal static readonly TimeSpan DefaultNotifyMinInterval = TimeSpan.FromMilliseconds(25);
+
+    // Past this a doorbell stops being prompt: a change reaches the other nodes no faster than the poll would bring it.
+    internal static readonly TimeSpan MaxNotifyMinInterval = TimeSpan.FromSeconds(1);
+
     private TimeSpan? _pollInterval;
 
     /// <summary>
@@ -24,6 +29,9 @@ public class RedisStreamsTopicOptions : IBindsFromConfiguration
 
     /// <summary>Entries one <c>XREADGROUP</c> asks for; a full batch's reply must arrive well within the connection's timeout.</summary>
     public int PollBatchSize { get; set; } = 1024;
+
+    /// <summary>Reads with <c>NOACK</c> and sends no <c>XACK</c>, so no pending list grows; a read that fails after Redis may have delivered it is reported as missed events.</summary>
+    public bool AutoAck { get; set; }
 
     public string FieldName { get; set; } = "event";
 
@@ -66,6 +74,9 @@ public class RedisStreamsTopicOptions : IBindsFromConfiguration
     /// <summary>Publishes a Pub/Sub doorbell after every <c>XADD</c> so consumers read at once instead of at the next <see cref="PollInterval"/>.</summary>
     public bool NotifyEnabled { get; set; } = true;
 
+    /// <summary>The least time between two doorbells, 25 ms unless set, at most 1 s: rings meanwhile coalesce into the next one, so a burst of writes wakes each consumer at most once per interval. The first ring after a quiet period is sent at once. Zero rings again as soon as the last doorbell is answered.</summary>
+    public TimeSpan? NotifyMinInterval { get; set; }
+
     public IRedisChannelStrategy? NotifyChannelStrategy { get; set; }
 
     public string NotifyChannelName { get; set; } = StreamSuffixChannelStrategy.DefaultName;
@@ -77,6 +88,8 @@ public class RedisStreamsTopicOptions : IBindsFromConfiguration
     public TimeSpan? NotifySubscriberDueTime { get; set; }
 
     internal bool PollIntervalSet => _pollInterval.HasValue;
+
+    internal TimeSpan EffectiveNotifyMinInterval => NotifyMinInterval ?? DefaultNotifyMinInterval;
 
     internal TimeSpan EffectiveNotifiedPollInterval => NotifiedPollInterval ?? (PollIntervalSet ? PollInterval : DefaultNotifiedPollInterval);
 
@@ -99,6 +112,7 @@ public class RedisStreamsTopicOptions : IBindsFromConfiguration
         MaxLength                    = MaxLength,
         Limit                        = Limit,
         PollBatchSize                = PollBatchSize,
+        AutoAck                      = AutoAck,
         FieldName                    = FieldName,
         NotifiedPollInterval         = NotifiedPollInterval,
         RedisStreamKeyStrategy       = RedisStreamKeyStrategy,
@@ -115,6 +129,7 @@ public class RedisStreamsTopicOptions : IBindsFromConfiguration
         ProfilerEnabled              = ProfilerEnabled,
         EmitStreamReceivedEvent      = EmitStreamReceivedEvent,
         NotifyEnabled                = NotifyEnabled,
+        NotifyMinInterval            = NotifyMinInterval,
         NotifyChannelStrategy        = NotifyChannelStrategy,
         NotifyChannelName            = NotifyChannelName,
         NotifyShardedPubSub          = NotifyShardedPubSub,

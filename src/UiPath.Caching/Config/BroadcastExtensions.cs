@@ -20,6 +20,7 @@ public static class BroadcastExtensions
         if (builder.Enabled && enabled)
         {
             builder.Services.TryAddSingleton<ITopicFactory, TopicFactory>();
+            builder.Services.AddHostedService<TopicSelectionValidator>();
             builder.AddRedisPubSub().AddRedisStreams();
         }
 

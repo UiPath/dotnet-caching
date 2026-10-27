@@ -15,6 +15,10 @@ internal sealed class RedisStreamsTopicOptionsValidator : IValidateOptions<Redis
         {
             return ValidateOptionsResult.Fail($"{nameof(RedisStreamsTopicOptions.PollInterval)} must be at most {MaxInterval}.");
         }
+        if (options.NotifyMinInterval is { } spacing && (spacing < TimeSpan.Zero || spacing > RedisStreamsTopicOptions.MaxNotifyMinInterval))
+        {
+            return ValidateOptionsResult.Fail($"{nameof(RedisStreamsTopicOptions.NotifyMinInterval)} must be between zero and {RedisStreamsTopicOptions.MaxNotifyMinInterval}.");
+        }
         if (options.NotifiedPollInterval is not { } notified)
         {
             return ValidateOptionsResult.Success;

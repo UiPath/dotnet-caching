@@ -1,3 +1,5 @@
+using System.Diagnostics;
+using Microsoft.Extensions.Logging;
 using NSubstitute.ExceptionExtensions;
 using NSubstitute.Extensions;
 using StackExchange.Redis;
@@ -27,6 +29,7 @@ public class RedisStreamsTopicTests(ITestContextAccessor testContextAccessor) : 
     {
         _redisStreamsTopicOptions.PollInterval = TimeSpan.FromSeconds(1);
         _redisStreamsTopicOptions.NotifiedPollInterval = TimeSpan.FromMilliseconds(500);
+        _redisStreamsTopicOptions.NotifyMinInterval = TimeSpan.Zero;
 
         var act = () => Sut;
 
@@ -219,6 +222,79 @@ public class RedisStreamsTopicTests(ITestContextAccessor testContextAccessor) : 
     }
 
     [Fact]
+    public async Task Rings_within_the_minimum_interval_fold_into_one_doorbell_sent_once_it_has_passed()
+    {
+        _redisStreamsTopicOptions.NotifyEnabled = true;
+        _redisStreamsTopicOptions.NotifySubscriberTimeout = TimeSpan.FromSeconds(60);
+        _redisStreamsTopicOptions.NotifySubscriberDueTime = TimeSpan.FromSeconds(60);
+        _sut = null;
+        _database.StreamAddAsync(
+                key: Arg.Any<RedisKey>(),
+                streamField: Arg.Any<RedisValue>(),
+                streamValue: Arg.Any<RedisValue>(),
+                messageId: Arg.Any<RedisValue?>(),
+                maxLength: Arg.Any<long?>(),
+                useApproximateMaxLength: Arg.Any<bool>(),
+                limit: Arg.Any<long?>(),
+                trimMode: Arg.Any<StreamTrimMode>(),
+                flags: Arg.Any<CommandFlags>())
+            .Returns("1-0");
+        var sent = new List<long>();
+        _database.PublishAsync(Arg.Any<RedisChannel>(), Arg.Any<RedisValue>(), Arg.Any<CommandFlags>())
+            .ReturnsForAnyArgs(_ =>
+            {
+                lock (sent)
+                {
+                    sent.Add(Stopwatch.GetTimestamp());
+                }
+
+                return Task.FromResult(1L);
+            });
+        Sut.DoorbellSpacing = TimeSpan.FromMilliseconds(300);
+        var token = testContextAccessor.Current.CancellationToken;
+
+        (await Sut.PublishAsync(_fixture.Create<ICacheEvent>(), token)).Should().BeTrue();
+        for (var i = 0; i < 10; i++)
+        {
+            (await Sut.PublishAsync(_fixture.Create<ICacheEvent>(), token)).Should().BeTrue();
+        }
+
+        // Waits for each doorbell rather than sleeping a fixed time, so a loaded machine cannot make the counts race.
+        (await SentAtLeast(1)).Should().BeTrue();
+        lock (sent)
+        {
+            sent.Should().HaveCount(1, "the first ring goes out at once and the rest wait out the interval");
+        }
+
+        (await SentAtLeast(2)).Should().BeTrue();
+        await Task.Delay(300, token);
+        lock (sent)
+        {
+            sent.Should().HaveCount(2, "the waiting rings fold into one doorbell");
+            Stopwatch.GetElapsedTime(sent[0], sent[1]).Should().BeGreaterThanOrEqualTo(TimeSpan.FromMilliseconds(280));
+        }
+
+        async Task<bool> SentAtLeast(int count)
+        {
+            var started = Stopwatch.GetTimestamp();
+            while (Stopwatch.GetElapsedTime(started) < TimeSpan.FromSeconds(5))
+            {
+                lock (sent)
+                {
+                    if (sent.Count >= count)
+                    {
+                        return true;
+                    }
+                }
+
+                await Task.Delay(10, token);
+            }
+
+            return false;
+        }
+    }
+
+    [Fact]
     public async Task A_doorbell_stalled_on_redis_holds_the_rings_behind_it_only_for_its_timeout()
     {
         _redisStreamsTopicOptions.NotifyEnabled = true;
@@ -314,6 +390,118 @@ public class RedisStreamsTopicTests(ITestContextAccessor testContextAccessor) : 
         }
 
         Volatile.Read(ref calls).Should().BeGreaterThanOrEqualTo(2);
+    }
+
+    [Theory]
+    [InlineData(1, 3)]
+    [InlineData(int.MaxValue, 4)]
+    public async Task Rings_folded_into_a_doorbell_that_fails_are_retried_a_bounded_number_of_times(int failuresBeforeSuccess, int expectedCalls)
+    {
+        ArrangeDoorbell();
+        var calls = 0;
+        _database.PublishAsync(Arg.Any<RedisChannel>(), Arg.Any<RedisValue>(), Arg.Any<CommandFlags>())
+            .ReturnsForAnyArgs(_ => Interlocked.Increment(ref calls) is var n && n >= 2 && n - 1 <= failuresBeforeSuccess
+                ? Task.FromException<long>(new RedisException("down"))
+                : Task.FromResult(1L));
+        Sut.DoorbellSpacing = TimeSpan.FromMilliseconds(200);
+        var token = testContextAccessor.Current.CancellationToken;
+
+        await Sut.PublishAsync(_fixture.Create<ICacheEvent>(), token);
+        await Sut.PublishAsync(_fixture.Create<ICacheEvent>(), token);
+        await Sut.PublishAsync(_fixture.Create<ICacheEvent>(), token);
+        await Task.Delay(1500, token);
+
+        Volatile.Read(ref calls).Should().Be(expectedCalls, "the doorbell for the folded ring is retried until it goes out, at most twice");
+    }
+
+    [Fact]
+    public async Task A_failed_doorbell_with_no_folded_ring_is_not_retried()
+    {
+        ArrangeDoorbell();
+        var calls = 0;
+        _database.PublishAsync(Arg.Any<RedisChannel>(), Arg.Any<RedisValue>(), Arg.Any<CommandFlags>())
+            .ReturnsForAnyArgs(_ => Interlocked.Increment(ref calls) > 0 ? Task.FromException<long>(new RedisException("down")) : Task.FromResult(1L));
+        Sut.DoorbellSpacing = TimeSpan.FromMilliseconds(200);
+        var token = testContextAccessor.Current.CancellationToken;
+
+        await Sut.PublishAsync(_fixture.Create<ICacheEvent>(), token);
+        await Task.Delay(700, token);
+
+        Volatile.Read(ref calls).Should().Be(1);
+    }
+
+    [Fact]
+    public async Task A_ring_that_lands_during_a_doorbell_is_retried_when_its_follow_up_fails()
+    {
+        ArrangeDoorbell();
+        var calls = 0;
+        _database.PublishAsync(Arg.Any<RedisChannel>(), Arg.Any<RedisValue>(), Arg.Any<CommandFlags>())
+            .ReturnsForAnyArgs(_ =>
+            {
+                var n = Interlocked.Increment(ref calls);
+                if (n == 1)
+                {
+                    Sut.PublishAsync(_fixture.Create<ICacheEvent>(), CancellationToken.None).AsTask().GetAwaiter().GetResult();
+                }
+
+                return n == 2 ? Task.FromException<long>(new RedisException("down")) : Task.FromResult(1L);
+            });
+        Sut.DoorbellSpacing = TimeSpan.FromMilliseconds(100);
+
+        await Sut.PublishAsync(_fixture.Create<ICacheEvent>(), testContextAccessor.Current.CancellationToken);
+        await Task.Delay(1000, testContextAccessor.Current.CancellationToken);
+
+        Volatile.Read(ref calls).Should().Be(3, "the follow-up doorbell owes the ring that landed during the first one");
+    }
+
+    [Fact]
+    public async Task A_ring_that_lands_after_the_retries_are_spent_gets_its_own_retries()
+    {
+        ArrangeDoorbell();
+        var calls = 0;
+        _database.PublishAsync(Arg.Any<RedisChannel>(), Arg.Any<RedisValue>(), Arg.Any<CommandFlags>())
+            .ReturnsForAnyArgs(_ =>
+            {
+                var n = Interlocked.Increment(ref calls);
+                if (n is 1 or 4)
+                {
+                    Sut.PublishAsync(_fixture.Create<ICacheEvent>(), CancellationToken.None).AsTask().GetAwaiter().GetResult();
+                }
+
+                return n == 1 ? Task.FromResult(1L) : Task.FromException<long>(new RedisException("down"));
+            });
+        Sut.DoorbellSpacing = TimeSpan.FromMilliseconds(100);
+
+        await Sut.PublishAsync(_fixture.Create<ICacheEvent>(), testContextAccessor.Current.CancellationToken);
+        await Task.Delay(1500, testContextAccessor.Current.CancellationToken);
+
+        Volatile.Read(ref calls).Should().Be(7, "the second ring is retried twice after its own failure, then the run ends");
+    }
+
+    [Fact]
+    public async Task A_topic_disposed_while_a_ring_waits_stops_the_doorbell_without_a_failure()
+    {
+        var logger = _fixture.Freeze<ILogger<RedisStreamsTopic<ICacheEvent>>>();
+        logger.IsEnabled(Arg.Any<LogLevel>()).Returns(true);
+        ArrangeDoorbell();
+        var calls = 0;
+        _database.PublishAsync(Arg.Any<RedisChannel>(), Arg.Any<RedisValue>(), Arg.Any<CommandFlags>())
+            .ReturnsForAnyArgs(_ =>
+            {
+                Interlocked.Increment(ref calls);
+                // A ring that arrives during the send, and the topic going away before the doorbell loops to answer it.
+                Sut.PublishAsync(_fixture.Create<ICacheEvent>(), CancellationToken.None).AsTask().GetAwaiter().GetResult();
+                Sut.Dispose();
+                return Task.FromResult(1L);
+            });
+        Sut.DoorbellSpacing = TimeSpan.FromSeconds(10);
+
+        await Sut.PublishAsync(_fixture.Create<ICacheEvent>(), testContextAccessor.Current.CancellationToken);
+        await Task.Delay(200, testContextAccessor.Current.CancellationToken);
+
+        Volatile.Read(ref calls).Should().Be(1);
+        logger.ReceivedCalls().Count(c => c.GetMethodInfo().Name == nameof(ILogger.Log) && c.GetArguments()[0] is LogLevel.Warning && c.GetArguments()[2]?.ToString()!.Contains("doorbell", StringComparison.Ordinal) == true)
+            .Should().Be(0, "stopping is not a doorbell failure");
     }
 
     [Fact]
@@ -520,5 +708,24 @@ public class RedisStreamsTopicTests(ITestContextAccessor testContextAccessor) : 
         {
             await Task.Delay(5, testContextAccessor.Current.CancellationToken);
         }
+    }
+
+    private void ArrangeDoorbell()
+    {
+        _redisStreamsTopicOptions.NotifyEnabled = true;
+        _redisStreamsTopicOptions.NotifySubscriberTimeout = TimeSpan.FromSeconds(60);
+        _redisStreamsTopicOptions.NotifySubscriberDueTime = TimeSpan.FromSeconds(60);
+        _sut = null;
+        _database.StreamAddAsync(
+                key: Arg.Any<RedisKey>(),
+                streamField: Arg.Any<RedisValue>(),
+                streamValue: Arg.Any<RedisValue>(),
+                messageId: Arg.Any<RedisValue?>(),
+                maxLength: Arg.Any<long?>(),
+                useApproximateMaxLength: Arg.Any<bool>(),
+                limit: Arg.Any<long?>(),
+                trimMode: Arg.Any<StreamTrimMode>(),
+                flags: Arg.Any<CommandFlags>())
+            .Returns("1-0");
     }
 }

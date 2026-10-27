@@ -1,27 +1,50 @@
+using System.Net.Mime;
+
 namespace UiPath.Caching.CloudEvents;
 
 internal sealed class CacheCloudEventWrapper : ICacheEvent
 {
+    private readonly string? _id;
+    private readonly string? _type;
+    private readonly Uri? _source;
+    private CloudEvent? _cloudEvent;
+
     public CacheCloudEventWrapper(CloudEvent cloudEvent)
     {
-        CloudEvent = cloudEvent;
-        Data = CloudEvent.Data as CacheEventData;
+        _cloudEvent = cloudEvent;
+        Data = cloudEvent.Data as CacheEventData;
     }
 
-    public string? Id => CloudEvent.Id;
+    public CacheCloudEventWrapper(string id, string type, Uri source, CacheEventData data)
+    {
+        _id = id;
+        _type = type;
+        _source = source;
+        Data = data;
+    }
 
-    public Uri? Source => CloudEvent.Source;
+    public string? Id => _cloudEvent is { } cloudEvent ? cloudEvent.Id : _id;
+
+    public Uri? Source => _cloudEvent is { } cloudEvent ? cloudEvent.Source : _source;
 
     public CacheEventData? Data { get; }
 
-    public string? Type => CloudEvent.Type;
+    public string? Type => _cloudEvent is { } cloudEvent ? cloudEvent.Type : _type;
 
     public string? TransportId { get; private set; }
 
     public string? Key => Data?.Key;
-    internal CloudEvent CloudEvent { get; }
 
-    public bool IsValid() => CloudEvent.IsValid && !string.IsNullOrWhiteSpace(Data?.Key);
+    internal CloudEvent CloudEvent => _cloudEvent ??= new()
+    {
+        Id = _id,
+        Type = _type,
+        Source = _source,
+        DataContentType = MediaTypeNames.Application.Json,
+        Data = Data,
+    };
+
+    public bool IsValid() => (_cloudEvent?.IsValid ?? true) && !string.IsNullOrWhiteSpace(Data?.Key);
 
     public void AttachTransportId(string? transportId)
     {

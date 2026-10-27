@@ -407,6 +407,24 @@ public class NamedCachingTests
     }
 
     [Fact]
+    public async Task A_stack_whose_topic_names_a_disabled_provider_fails_to_start()
+    {
+        using var root = Build(
+            (services, configuration) =>
+            {
+                services.AddCaching(configuration, RootChain);
+                services.AddNamedCaching(Name, configuration, b => b.AddRedis().AddMemory().AddInMemoryRedis());
+            },
+            ("Caching:DefaultTopic", KnownTopicNames.RedisStreams),
+            ("Caching:Broadcast:RedisStreams:Enabled", "false"));
+        var bridge = root.GetServices<IHostedService>().OfType<NamedCachingHostedService>().Single();
+
+        var start = () => bridge.StartAsync(CancellationToken.None);
+
+        (await start.Should().ThrowAsync<OptionsValidationException>()).Which.Failures.Should().ContainSingle().Which.Should().Contain("Broadcast:RedisStreams:Enabled");
+    }
+
+    [Fact]
     public async Task Every_hosted_service_is_stopped_even_when_one_throws()
     {
         using var root = Build(register: (services, configuration) =>

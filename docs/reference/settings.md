@@ -108,6 +108,7 @@ App-wide-only fields (per-topic `Topics[]` entries ignore these): `Enabled`, `Co
 | `MaxLength` | `long?` | `32768` | App-wide / Per-topic | Max entries in a stream before approximate trimming (`MAXLEN ~`); `null` = unlimited. |
 | `Limit` | `long?` | `1024` | App-wide / Per-topic | Not used by the stream reader or the publisher. |
 | `PollBatchSize` | `int` | `1024` | App-wide / Per-topic | Entries one `XREADGROUP` asks for. |
+| `AutoAck` | `bool` | `false` | App-wide / Per-topic | Reads with `NOACK` and sends no `XACK`, so no pending list grows. A read that fails after Redis may have delivered it is reported as missed events, which clears the local tier. |
 | `FieldName` | `string` | `"event"` | App-wide / Per-topic | Stream entry field name used for the serialized event payload. |
 | `PollInterval` | `TimeSpan` | `00:00:00.250` | App-wide / Per-topic | Time between poll cycles while the notify subscription is not live; also paces failure retries. Must be positive. Setting it, even to 250 ms, also makes it the live cadence unless `NotifiedPollInterval` is set. |
 | `NotifiedPollInterval` | `TimeSpan?` | `null` | App-wide / Per-topic | Time between poll cycles while the notify subscription is live; `null` = 5 s, or `PollInterval` when that is set. Must be positive and at least `PollInterval`. |
@@ -124,6 +125,7 @@ App-wide-only fields (per-topic `Topics[]` entries ignore these): `Enabled`, `Co
 | `ProfilerEnabled` | `bool` | `false` | App-wide / Per-topic | Enable per-stream Redis command profiling. |
 | `EmitStreamReceivedEvent` | `bool` | `false` | App-wide / Per-topic | Emit a telemetry event for each raw stream message received. |
 | `NotifyEnabled` | `bool` | `true` | App-wide / Per-topic | Pub/sub doorbell — `PUBLISH` after `XADD` wakes the consumer immediately instead of waiting `PollInterval`; `false` polls only. |
+| `NotifyMinInterval` | `TimeSpan?` | `null` | App-wide / Per-topic | Least time between two doorbells; `null` = 25 ms. Rings meanwhile fold into the next doorbell, so a burst of writes wakes each consumer at most once per interval; the first ring after a quiet period goes out at once. Zero rings again as soon as the last doorbell is answered. Must be between zero and 1 s. |
 | `NotifyChannelName` | `string` | `"notify"` | App-wide / Per-topic | Channel suffix appended to the stream key; ignored when `NotifyChannelStrategy` is set in code. |
 | `NotifyShardedPubSub` | `bool` | `false` | App-wide / Per-topic | `true` = use `SPUBLISH`/`SSUBSCRIBE` (Redis 7.0+); ignored when `NotifyChannelStrategy` is set in code. |
 | `NotifySubscriberTimeout` | `TimeSpan?` | `null` | App-wide / Per-topic | Resubscribe interval when `Subscribe` fails; `null` or non-positive = multiplexer timeout (5 s until the connection is up). |

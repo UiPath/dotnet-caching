@@ -25,6 +25,23 @@ public class RedisStreamsTopicOptionsValidatorTests
     }
 
     [Theory]
+    [InlineData(-1, false)]
+    [InlineData(0, true)]
+    [InlineData(25, true)]
+    [InlineData(1000, true)]
+    [InlineData(1001, false)]
+    public void The_doorbell_interval_is_taken_between_zero_and_one_second(int milliseconds, bool valid)
+    {
+        var result = Validate(new RedisStreamsTopicOptions { NotifyMinInterval = TimeSpan.FromMilliseconds(milliseconds) });
+
+        result.Succeeded.Should().Be(valid);
+        if (!valid)
+        {
+            result.FailureMessage.Should().Contain("NotifyMinInterval");
+        }
+    }
+
+    [Theory]
     [InlineData(0)]
     [InlineData(-1)]
     public void A_poll_interval_that_is_not_positive_is_refused(int milliseconds)

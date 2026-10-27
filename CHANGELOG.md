@@ -8,6 +8,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 
 ### Added
 
+- **`RedisStreamsTopicOptions.AutoAck`** (off by default). Reads with `NOACK` and sends no `XACK`, so the group keeps no pending list and
+  the pending-entry recovery is skipped after the entries an earlier run left pending are read once at start. A read that fails may
+  have been delivered, so it is reported as missed events and the local tier is cleared rather than left stale, when a failure streak
+  starts and again when a read ends it.
+
+- **`RedisStreamsTopicOptions.NotifyMinInterval`.** The least time between two doorbells, 25 ms by default and at most 1 s.
+  Rings during the interval fold into the next doorbell, so a burst of writes wakes each consumer at most once per interval instead of
+  once per write; the first ring after a quiet period still goes out at once.
+
 - **`RemoveFieldsAsync` on `IHashCache` and `IHashCache<T>`.** Removes the named fields with `HDEL` (in commands of
   `RedisCacheOptions.HashFieldBatchSize` fields, 1000 by default, all in flight together), drops the hash from the local tier of the
   writing node, and announces the key as removed, so every node, an older one too, drops its whole local copy of the hash: an entry is replaced
@@ -235,6 +244,19 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
   3.1.
 
 ### Fixed
+
+- **A group this node made on an empty stream no longer reports its first entry as lost on Redis 6.** Without `max-deleted-entry-id`,
+  an entry added after a group made at `0-0` looked trimmed, so the node logged "entries were removed before they were read" and cleared its
+  whole local tier. The node now remembers it made the group on a stream that had never held an entry, and reports no gap for it unless the stream
+  has reached `MaxLength`, where a trim may really have happened. A group that was found, or made on a stream that had held entries, is checked as before.
+
+- **A topic name that selects a disabled or unregistered provider now fails host start.** `CacheOptions.DefaultTopic`, or the `Topic` of an
+  `InMemoryCacheOptions` or `InMemoryRedisCacheOptions` with broadcast on, naming a provider that is off (`Broadcast:RedisPubSub:Enabled` is
+  false by default) or not registered used to resolve to the null topic provider, so broadcast was off with no signal. Start now throws an
+  `OptionsValidationException` that names the provider and the setting to enable it; an empty `DefaultTopic` is rejected too. Nothing is checked
+  while `BroadcastEnabled` is false. **Upgrade check:** an app that sets `Broadcast:RedisStreams:Enabled` to false and has a cache with no `Topic`
+  resolves to the default `RedisStreams` and now fails start. Set `Caching:BroadcastEnabled` to false if it wants no broadcast, or point
+  `DefaultTopic` at an enabled provider.
 
 - **A Redis Streams read that times out no longer loses its invalidations.** Redis hands the entries of a read to the
   consumer and moves the group past them even when the answer never reaches the client, and the reader only ever asked

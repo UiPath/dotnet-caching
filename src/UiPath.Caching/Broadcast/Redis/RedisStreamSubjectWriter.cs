@@ -32,7 +32,12 @@ internal sealed partial class RedisStreamSubjectWriter<T> : IDisposable
                 end
             end
         end
-        local entries = redis.call('XREADGROUP', 'GROUP', ARGV[1], ARGV[2], 'COUNT', ARGV[3], 'STREAMS', KEYS[1], '>')
+        local entries
+        if ARGV[5] == '1' then
+            entries = redis.call('XREADGROUP', 'GROUP', ARGV[1], ARGV[2], 'COUNT', ARGV[3], 'NOACK', 'STREAMS', KEYS[1], '>')
+        else
+            entries = redis.call('XREADGROUP', 'GROUP', ARGV[1], ARGV[2], 'COUNT', ARGV[3], 'STREAMS', KEYS[1], '>')
+        end
         return { stream, groups, entries }
         """;
 
@@ -59,7 +64,8 @@ internal sealed partial class RedisStreamSubjectWriter<T> : IDisposable
 
     private bool _disposed;
     private RedisValue _lastId = StreamPosition.NewMessages;
-    // Where the next read of this consumer's pending entries starts; null once they are all read.
+    // Where the next read of this consumer's pending entries starts; null once they are all read. With AutoAck the entries
+    // an earlier run left pending are drained once, at start.
     private RedisValue? _pendingFrom = StreamConstants.PendingMessages;
     private long _timeouts;
     private long _undecodable;
@@ -82,11 +88,19 @@ internal sealed partial class RedisStreamSubjectWriter<T> : IDisposable
     // The recoveries seen when the streak of failures being counted began: a read from after a later one starts its own.
     private int _streakGeneration;
     private bool _noScripts;
+    // A NOACK read is out, or its reply is being handled: the group has moved on whether or not it came back.
+    private bool _autoAckReadInFlight;
+    // The loss of a failed NOACK read was reported, for the failures that follow it until a read succeeds, which reports again.
+    private bool _autoAckLossReported;
+    // A NOACK entry of the batch being dispatched was lost.
+    private bool _dispatchLost;
     // The batch came back empty without a read, so it says nothing about the group.
     private bool _readSkipped;
     // A create at the head failed with the group perhaps made; the head read before it, for the group found later.
     private bool _createSent;
     private StreamHead? _sentHead;
+    // This node made the group on a stream that had never held an entry, so Redis 6 cannot tell its first entry from a trim.
+    private bool _createdOnEmpty;
     private bool _gapCheckDenied;
     // The last read returned fewer entries than asked: the group is at the head.
     private bool _caughtUp;
@@ -199,6 +213,8 @@ internal sealed partial class RedisStreamSubjectWriter<T> : IDisposable
         _onMessagesMissed();
     }
 
+    private static bool IsEmptyHead(StreamHead? head) => head is { } h && (!h.Exists || h.LastId == "0-0");
+
     private void ReportMessagesMissed()
     {
         LogMessagesMissed(_context.Topic, _context.ConsumerGroup);
@@ -292,7 +308,15 @@ internal sealed partial class RedisStreamSubjectWriter<T> : IDisposable
         }
 
         _consecutiveFailures = 0;
+        _autoAckReadInFlight = false;
         _inUse = true;
+        if (_autoAckLossReported)
+        {
+            // What the tier cached during the streak may predate a lost read, and the report at its start came before that.
+            _autoAckLossReported = false;
+            ReportMessagesMissed();
+        }
+
         _caughtUp = events.Length < _context.PollBatchSize;
 
         if (_unsupportedCommand)
@@ -303,7 +327,7 @@ internal sealed partial class RedisStreamSubjectWriter<T> : IDisposable
 
         if (events.Length > 0)
         {
-            await DispatchEventsAsync(events).ConfigureAwait(false);
+            await DispatchEventsAsync(events, !_context.AutoAck).ConfigureAwait(false);
             _lastId = events[^1].Id;
             _position = _lastId;
             if (!_caughtUp)
@@ -325,7 +349,7 @@ internal sealed partial class RedisStreamSubjectWriter<T> : IDisposable
         var events = await ReadAsync(from).ConfigureAwait(false);
         if (events.Length > 0)
         {
-            await DispatchEventsAsync(events).ConfigureAwait(false);
+            await DispatchEventsAsync(events, true).ConfigureAwait(false);
         }
 
         // Given to this consumer, then trimmed or deleted before it read them: their invalidations are lost. Told only once
@@ -381,7 +405,19 @@ internal sealed partial class RedisStreamSubjectWriter<T> : IDisposable
             return false;
         }
 
-        _pendingFrom = StreamConstants.PendingMessages;
+        var readInFlight = _autoAckReadInFlight;
+        _autoAckReadInFlight = false;
+        if (!_context.AutoAck)
+        {
+            _pendingFrom = StreamConstants.PendingMessages;
+        }
+        else if (readInFlight && !_autoAckLossReported && !RedisUtils.IsUnsupportedCommand(ex) && !ex.Message.Contains("NOGROUP", StringComparison.OrdinalIgnoreCase))
+        {
+            // Without the pending list a read that failed after Redis delivered it cannot be redone, so the local tier must not
+            // stay stale. Once at the start of a streak, and once more when it ends, rather than once per failure.
+            _autoAckLossReported = true;
+            ReportMessagesMissed();
+        }
 
         if (RedisUtils.IsUnsupportedCommand(ex))
         {
@@ -435,6 +471,16 @@ internal sealed partial class RedisStreamSubjectWriter<T> : IDisposable
         {
             ForgetGroup();
             lost = true;
+        }
+
+        if (outcome == Recreate.Made)
+        {
+            _createdOnEmpty = IsEmptyHead(head);
+        }
+        else if (outcome == Recreate.Found && _createSent)
+        {
+            // A create of this node that seemed to fail made the group; a retry then finds it, and it is still ours.
+            _createdOnEmpty |= IsEmptyHead(_sentHead);
         }
 
         if (outcome == Recreate.Made)
@@ -554,6 +600,7 @@ internal sealed partial class RedisStreamSubjectWriter<T> : IDisposable
         _checkForGap = false;
         _reportedGap = null;
         _readCount = null;
+        _createdOnEmpty = false;
         _position = RedisValue.Null;
         // The recreated group's position comes from its first check.
         _checkedAt = 0;
@@ -616,12 +663,16 @@ internal sealed partial class RedisStreamSubjectWriter<T> : IDisposable
 
     private Task<StreamEntry[]> ReadAsync() => ReadAsync(StreamConstants.UndeliveredMessages);
 
-    private Task<StreamEntry[]> ReadAsync(RedisValue position) => _redis.Database.StreamReadGroupAsync(
-        _context.Topic,
-        _context.ConsumerGroup,
-        _context.ConsumerName,
-        position,
-        _context.PollBatchSize);
+    private Task<StreamEntry[]> ReadAsync(RedisValue position)
+    {
+        if (!_context.AutoAck || position != StreamConstants.UndeliveredMessages)
+        {
+            return _redis.Database.StreamReadGroupAsync(_context.Topic, _context.ConsumerGroup, _context.ConsumerName, position, _context.PollBatchSize);
+        }
+
+        _autoAckReadInFlight = true;
+        return _redis.Database.StreamReadGroupAsync(_context.Topic, _context.ConsumerGroup, _context.ConsumerName, position, _context.PollBatchSize, noAck: true);
+    }
 
     /// <summary>Checks for a gap and reads in one script, so a trim cannot land between the check and the read.</summary>
     /// <param name="full">Take the group's position from the server; otherwise check against the last one known.</param>
@@ -629,12 +680,13 @@ internal sealed partial class RedisStreamSubjectWriter<T> : IDisposable
     {
         _checkForGap = false;
         RedisResult reply;
+        _autoAckReadInFlight = _context.AutoAck;
         try
         {
             reply = await _redis.Database.ScriptEvaluateAsync(
                 CheckAndReadScript,
                 [_context.Topic],
-                [_context.ConsumerGroup, _context.ConsumerName, _context.PollBatchSize, full ? 1 : 0]).ConfigureAwait(false);
+                [_context.ConsumerGroup, _context.ConsumerName, _context.PollBatchSize, full ? 1 : 0, _context.AutoAck ? 1 : 0]).ConfigureAwait(false);
         }
         catch (RedisServerException ex) when (ex.Message.Contains("no such key", StringComparison.OrdinalIgnoreCase))
         {
@@ -648,6 +700,7 @@ internal sealed partial class RedisStreamSubjectWriter<T> : IDisposable
             _noScripts = true;
             _checkForGap = true;
             _readSkipped = true;
+            _autoAckReadInFlight = false;
             return [];
         }
 
@@ -659,12 +712,12 @@ internal sealed partial class RedisStreamSubjectWriter<T> : IDisposable
             if (StreamIds.Group(parts[1], _context.ConsumerGroup) is { } group)
             {
                 _position = group.LastDelivered;
-                ReportGap(StreamIds.Gap(stream, group.LastDelivered, group.EntriesRead, ref _readCount));
+                ReportGap(StreamIds.Gap(stream, group.LastDelivered, group.EntriesRead, ref _readCount, _createdOnEmpty, _context.MaxLength));
             }
         }
         else if (!_position.IsNull)
         {
-            ReportGap(StreamIds.Gap(stream, _position, null, ref _readCount));
+            ReportGap(StreamIds.Gap(stream, _position, null, ref _readCount, _createdOnEmpty, _context.MaxLength));
         }
 
         var entries = StreamIds.Entries(parts[2]);
@@ -707,11 +760,11 @@ internal sealed partial class RedisStreamSubjectWriter<T> : IDisposable
         var group = Array.Find(groups, g => g.Name == _context.ConsumerGroup);
         if (group.Name is not null)
         {
-            ReportGap(StreamIds.Gap(stream, group, ref _readCount));
+            ReportGap(StreamIds.Gap(stream, group, ref _readCount, _createdOnEmpty, _context.MaxLength));
         }
     }
 
-    private async Task DispatchEventsAsync(StreamEntry[] events)
+    private async Task DispatchEventsAsync(StreamEntry[] events, bool acknowledge)
     {
         List<RedisValue> ids = new(events.Length);
         try
@@ -723,9 +776,19 @@ internal sealed partial class RedisStreamSubjectWriter<T> : IDisposable
         }
         finally
         {
+            if (_dispatchLost)
+            {
+                _dispatchLost = false;
+                ReportMessagesMissed();
+            }
+
             if (ids.Count > 0)
             {
-                await _redis.Database.StreamAcknowledgeAsync(_context.Topic, _context.ConsumerGroup, [.. ids]).ConfigureAwait(false);
+                if (acknowledge)
+                {
+                    await _redis.Database.StreamAcknowledgeAsync(_context.Topic, _context.ConsumerGroup, [.. ids]).ConfigureAwait(false);
+                }
+
                 LogDispatched(ids.Count, _context.Topic);
             }
         }
@@ -822,6 +885,11 @@ internal sealed partial class RedisStreamSubjectWriter<T> : IDisposable
         catch (Exception ex)
         {
             LogDispatchFailed(ex, ev.Id, _context.Topic, @event.Id);
+            if (_context.AutoAck)
+            {
+                // Read with NOACK: the entry is gone and will not be retried. Reported once for the batch.
+                _dispatchLost = true;
+            }
         }
     }
 
