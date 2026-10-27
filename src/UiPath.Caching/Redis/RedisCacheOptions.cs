@@ -32,7 +32,7 @@ public class RedisCacheOptions : ICacheOptions
 
     /// <summary>
     /// Which node answers a read. <see cref="RedisReadFrom.Master"/> by default: the master cannot return a key it has already removed,
-    /// as a lagging replica can right after a write or an invalidation, and it answers faster.
+    /// as a lagging replica can right after a write or an invalidation, and it answers faster. A replica answers only while no master is reachable.
     /// </summary>
     public RedisReadFrom ReadFrom { get; set; } = RedisReadFrom.Master;
 
