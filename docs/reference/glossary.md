@@ -20,7 +20,7 @@ Alphabetical lookup for terms used across the docs.
 
 **Hash tag** — A `{...}` substring inside a Redis key that pins the key to a single shard in Redis Cluster. Used by the sharded Pub/Sub strategy so the doorbell channel and the stream key collide on the same slot.
 
-**Hydrating cache** — Proactive background refresh of a cache entry before it expires. Configured via `CachePolicy.RehydrateEnabled` + `RehydrateOptions`. Distinct from FusionCache's fail-safe — no stale data is ever returned. See [how-to/resilience.md](../how-to/resilience.md#hydrating-cache).
+**Hydrating cache** — Proactive background refresh of a cache entry before it expires. Configured via `CachePolicy.RehydrateEnabled` + `RehydrateOptions`. It never returns stale data. See [how-to/resilience.md](../how-to/resilience.md#hydrating-cache).
 
 **Jitter** — Uniform random delay added to L2 TTL at write time (`CachePolicy.JitterMaxDuration`) to spread cluster-wide expirations after bulk writes.
 
