@@ -10,7 +10,7 @@
     <MEVersion10>10.0.12</MEVersion10>
   </PropertyGroup>
   <ItemGroup>
-    <PackageVersion Include="MessagePack" Version="3.1.9" />
+    <PackageVersion Include="MessagePack" Version="3.1.11" />
   </ItemGroup>
   <!-- Per-TFM dependency floors: keep both groups in sync ID-for-ID, each on its own major.
        Order matters. Dependabot does not evaluate the conditions, so it sees one version per ID and
@@ -52,13 +52,14 @@
          dependency group including net8.0, so an 8.0.x floor here cannot restore (NU1605); 10.x
          ships a net8.0 asset, so a net8.0 consumer still resolves a net8-targeted assembly rather
          than a downlevel one. Raised on purpose in #85 as the prerequisite for SE.Redis 3.0, and it
-         still has to move with the family: 10.0.12 of any of them asks for 10.0.12 of this. -->
-    <PackageVersion Include="Microsoft.Extensions.Logging.Abstractions" Version="10.0.12" />
-    <PackageVersion Include="Swashbuckle.AspNetCore" Version="10.2.3" />
+         still has to move with the family: 10.0.12 of any of them asks for 10.0.12 of this, and
+         StackExchange.Redis 3.4.20 asks for 10.0.13. -->
+    <PackageVersion Include="Microsoft.Extensions.Logging.Abstractions" Version="10.0.13" />
+    <PackageVersion Include="Swashbuckle.AspNetCore" Version="10.3.0" />
     <PackageVersion Include="BenchmarkDotNet" Version="0.15.8" />
-    <PackageVersion Include="Aspire.Hosting.Redis" Version="13.5.4" />
+    <PackageVersion Include="Aspire.Hosting.Redis" Version="13.6.1" />
     <PackageVersion Include="System.Net.Http" Version="4.3.4" />
-    <PackageVersion Include="StackExchange.Redis" Version="3.3.0" />
+    <PackageVersion Include="StackExchange.Redis" Version="3.4.20" />
     <PackageVersion Include="StyleCop.Analyzers" Version="1.2.0-beta.556" />
     <PackageVersion Include="Azure.Identity" Version="1.21.0" />
     <PackageVersion Include="Microsoft.Azure.StackExchangeRedis" Version="3.3.1" />
@@ -82,7 +83,7 @@
     <!-- Test related packages -->
     <PackageVersion Include="AwesomeAssertions" Version="9.6.0" />
     <PackageVersion Include="xunit.v3" Version="$(xUnit)" />
-    <PackageVersion Include="Microsoft.Testing.Extensions.CodeCoverage" Version="18.11.2" />
+    <PackageVersion Include="Microsoft.Testing.Extensions.CodeCoverage" Version="18.12.0" />
     <PackageVersion Include="xunit.analyzers" Version="1.27.0" />
     <PackageVersion Include="AutoFixture" Version="$(AutoFixture)" />
     <PackageVersion Include="AutoFixture.Xunit3" Version="4.19.0" />

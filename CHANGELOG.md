@@ -8,6 +8,20 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 
 ### Changed
 
+- **StackExchange.Redis 3.4.20.** It fixes transactions on an idle connection being torn down and `IBatch` commands
+  that never completed after a connection drop. Consumer floors that moved:
+
+  | Package | 2.1.3 | 2.1.4 |
+  |---|---|---|
+  | `StackExchange.Redis` (`UiPath.Caching`, `UiPath.Caching.Queue`) | 3.3.0 | 3.4.20 |
+  | `Microsoft.Extensions.Logging.Abstractions` (both TFMs) | 10.0.12 | 10.0.13 |
+
+- **`RedisStreamsTopicOptions.PollBatchSize` defaults to 1024 instead of 4096.** It is the `COUNT` of each
+  `XREADGROUP`, and the reply shares the cache's connection: the commands behind it wait for it, and with a short
+  `syncTimeout` on a small server a 4096-entry reply of a node catching up could take most of the timeout by itself.
+  A full batch is read again at once, so catching up costs a round trip per 1024 entries. A `PollBatchSize` set in
+  configuration is kept. The documentation no longer says `Limit` caps a read: neither the reader nor the publisher uses it.
+
 - **Redis reads now go to the master by default.** A read right after a write or an invalidation could return the old
   value from a lagging replica, and the local tier kept it; replicas also add latency. Set
   `RedisCacheOptions.ReadFrom = RedisReadFrom.Replica` to restore the previous behavior.
@@ -31,14 +45,6 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
   been written, so on a stream with no traffic every live group was quarantined and then deleted after
   `MaintainerQuarantineInterval`, and its reader recreated it on the next `NOGROUP`. A group whose last delivery is the
   stream's last entry is now healthy, and a quarantine it was under is cleared.
-
-### Changed
-
-- **`RedisStreamsTopicOptions.PollBatchSize` defaults to 1024 instead of 4096.** It is the `COUNT` of each
-  `XREADGROUP`, and the reply shares the cache's connection: the commands behind it wait for it, and with a short
-  `syncTimeout` on a small server a 4096-entry reply of a node catching up could take most of the timeout by itself.
-  A full batch is read again at once, so catching up costs a round trip per 1024 entries. A `PollBatchSize` set in
-  configuration is kept. The documentation no longer says `Limit` caps a read: neither the reader nor the publisher uses it.
 
 ## [2.1.3] - 2026-10-23
 
