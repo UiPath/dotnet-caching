@@ -6,6 +6,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 
 ## [Unreleased]
 
+## [2.1.4] - 2026-10-27
+
 ### Changed
 
 - **StackExchange.Redis 3.4.20.** It fixes transactions on an idle connection being torn down and `IBatch` commands
