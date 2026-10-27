@@ -41,6 +41,8 @@ internal sealed partial class MultilayerHashCache : MultilayerCacheBase, IHashCa
     /// <summary>Runs and inner reads still in the tables; tests check they drain once callers are done.</summary>
     internal int RunsInFlight => _innerReads.Count + _generations.Count + _background.InFlight;
 
+    private bool OnlyTier => _innerCache is NullHashCache;
+
     [OverloadResolutionPriority(1)]
     public async ValueTask<T?> GetItemAsync<T>(CacheKey cacheKey, string field, CachePolicy? policy, CancellationToken token = default)
     {
@@ -911,8 +913,8 @@ internal sealed partial class MultilayerHashCache : MultilayerCacheBase, IHashCa
                 return MemorySet(options, CreateEntry(merged, options), maxExpiration);
             }
 
-            // Nothing held here to merge into: the fields alone are not the hash, so the next read takes it whole from the inner tier.
-            return !keepWhenAbsent || MemorySet(options, CreateEntry(value, options), maxExpiration);
+            // Nothing held here to merge into: the fields alone are not the hash, so the next read takes it whole from the inner tier, unless there is none.
+            return !(keepWhenAbsent || OnlyTier) || MemorySet(options, CreateEntry(value, options), maxExpiration);
         }
     }
 

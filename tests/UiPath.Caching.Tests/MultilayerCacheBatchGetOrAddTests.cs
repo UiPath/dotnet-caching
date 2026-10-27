@@ -227,6 +227,83 @@ public class MultilayerCacheBatchGetOrAddTests(ITestContextAccessor testContextA
     }
 
     [Fact]
+    public async Task All_local_hits_under_the_default_key_strategy_skip_the_generator_and_the_inner_tier()
+    {
+        var token = await WarmLocalUnderDefaultKeysAsync();
+
+        var result = await Sut.GetOrAddAsync<string, long>([new((CacheKey)"a", 1L), new((CacheKey)"b", 2L)], Generate, (CachePolicy?)null, token);
+
+        result.Select(r => r.Key).Should().Equal(States1And2);
+        result.Select(r => r.Value).Should().Equal(Gen1AndGen2);
+        _generatorCalls.Should().BeEmpty();
+        await _innerCache.DidNotReceiveWithAnyArgs().GetCacheEntriesAsync<string>(default!, default, token);
+    }
+
+    [Fact]
+    public async Task All_local_hits_with_a_repeated_state_collapse_it_as_the_full_path_does()
+    {
+        var token = await WarmLocalUnderDefaultKeysAsync();
+
+        var result = await Sut.GetOrAddAsync<string, long>(
+            [new((CacheKey)"b", 2L), new((CacheKey)"a", 1L), new((CacheKey)"b", 2L)], Generate, (CachePolicy?)null, token);
+
+        result.Select(r => r.Key).Should().Equal(States2Then1);
+        result.Select(r => r.Value).Should().Equal("gen:2", "gen:1");
+        _generatorCalls.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task All_local_hits_with_two_states_on_one_key_give_both_the_value()
+    {
+        var token = await WarmLocalUnderDefaultKeysAsync();
+
+        var result = await Sut.GetOrAddAsync<string, long>([new((CacheKey)"a", 1L), new((CacheKey)"a", 2L)], Generate, (CachePolicy?)null, token);
+
+        result.Select(r => r.Key).Should().Equal(States1And2);
+        result.Select(r => r.Value).Should().Equal(Gen1Twice);
+        _generatorCalls.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task One_local_miss_among_hits_generates_only_the_miss()
+    {
+        var token = await WarmLocalUnderDefaultKeysAsync();
+
+        var result = await Sut.GetOrAddAsync<string, long>(
+            [new((CacheKey)"a", 1L), new((CacheKey)"c", 3L), new((CacheKey)"b", 2L)], Generate, (CachePolicy?)null, token);
+
+        result.Select(r => r.Value).Should().Equal("gen:1", "gen:3", "gen:2");
+        _generatorCalls.Single().Should().Equal(3L);
+    }
+
+    [Fact]
+    public async Task All_local_hits_with_a_cancelled_token_throw_as_the_full_path_does()
+    {
+        await WarmLocalUnderDefaultKeysAsync();
+        using var cancelled = new CancellationTokenSource();
+        await cancelled.CancelAsync();
+
+        var act = async () => await Sut.GetOrAddAsync<string, long>([new((CacheKey)"a", 1L), new((CacheKey)"b", 2L)], Generate, (CachePolicy?)null, cancelled.Token);
+
+        await act.Should().ThrowAsync<OperationCanceledException>();
+    }
+
+    [Fact]
+    public async Task All_local_hits_while_disconnected_without_local_only_are_not_served_from_memory()
+    {
+        _options.UseLocalOnlyWhenDisconnected = false;
+        _options.ConnectionMonitorEnabled = true;
+        var token = await WarmLocalUnderDefaultKeysAsync();
+        _topicProvider.IsConnected.Returns(false);
+        _topicProvider.OnConnectionFailed += Raise.Event();
+
+        var result = await Sut.GetOrAddAsync<string, long>([new((CacheKey)"a", 1L), new((CacheKey)"b", 2L)], Generate, (CachePolicy?)null, token);
+
+        result.Select(r => r.Value).Should().Equal(Gen1AndGen2);
+        _generatorCalls.Single().Should().Equal(States1And2, "a disconnected tier without local-only reads answers no local hit");
+    }
+
+    [Fact]
     public async Task Empty_request_short_circuits()
     {
         var token = testContextAccessor.Current.CancellationToken;
@@ -354,6 +431,17 @@ public class MultilayerCacheBatchGetOrAddTests(ITestContextAccessor testContextA
         _memoryCache?.Dispose();
         GC.SuppressFinalize(this);
         return ValueTask.CompletedTask;
+    }
+
+    /// <summary>Keys "a" and "b" in local memory under <see cref="DefaultCacheKeyStrategy"/>, which the all-local probe reads by name; the substitute strategy never reaches it.</summary>
+    private async Task<CancellationToken> WarmLocalUnderDefaultKeysAsync()
+    {
+        var token = testContextAccessor.Current.CancellationToken;
+        _options.CacheKeyStrategy = new DefaultCacheKeyStrategy();
+        await Sut.GetOrAddAsync<string, long>([new((CacheKey)"a", 1L), new((CacheKey)"b", 2L)], Generate, (CachePolicy?)null, token);
+        _generatorCalls.Clear();
+        _innerCache.ClearReceivedCalls();
+        return token;
     }
 
     private Task<KeyValuePair<long, string?>[]> Generate(long[] states, CancellationToken _)

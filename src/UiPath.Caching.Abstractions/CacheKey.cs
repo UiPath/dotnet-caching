@@ -128,7 +128,8 @@ public readonly struct CacheKey : IEquatable<CacheKey>
             return false;
         }
 
-        if (casing == CacheKeyCasing.Sensitive)
+        // Lowercasing always copies and is slow under invariant globalization; ASCII with no capitals is already what it would write.
+        if (casing == CacheKeyCasing.Sensitive || IsLowerAscii(name))
         {
             name.CopyTo(destination);
             written = name.Length;
@@ -136,6 +137,19 @@ public readonly struct CacheKey : IEquatable<CacheKey>
         else
         {
             written = name.ToLowerInvariant(destination);
+        }
+
+        return true;
+    }
+
+    private static bool IsLowerAscii(ReadOnlySpan<char> name)
+    {
+        foreach (var c in name)
+        {
+            if (c is >= 'A' and <= 'Z' or > '\u007f')
+            {
+                return false;
+            }
         }
 
         return true;

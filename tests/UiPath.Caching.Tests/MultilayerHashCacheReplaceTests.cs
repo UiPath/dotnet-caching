@@ -44,6 +44,42 @@ public class MultilayerHashCacheReplaceTests
     }
 
     [Fact]
+    public async Task A_merge_to_an_absent_key_is_kept_when_the_local_tier_is_the_only_tier()
+    {
+        using var h = new Rig(memoryOnly: true);
+
+        (await h.Cache.SetAsync<string>("k", Fields(("a", "1")), Merge, Awaited, Ct)).Should().BeTrue();
+
+        (await h.Cache.GetAsync<string>("k", Awaited, Ct)).Should().BeEquivalentTo(Fields(("a", "1")));
+        (await h.Cache.GetItemAsync<string>("k", "a", Awaited, Ct)).Should().Be("1");
+        (await h.Cache.SetAsync<string>("k", Fields(("b", "2")), Merge, Awaited, Ct)).Should().BeTrue();
+        (await h.Cache.GetAsync<string>("k", Awaited, Ct)).Should().BeEquivalentTo(Fields(("a", "1"), ("b", "2")));
+    }
+
+    [Fact]
+    public async Task A_background_merge_to_an_absent_key_is_kept_when_the_local_tier_is_the_only_tier()
+    {
+        using var h = new Rig(memoryOnly: true);
+
+        await h.Cache.SetAsync<string>("k", Fields(("a", "1")), Merge, Background, Ct);
+        await h.Settled();
+
+        (await h.Cache.GetAsync<string>("k", Awaited, Ct)).Should().BeEquivalentTo(Fields(("a", "1")));
+    }
+
+    [Fact]
+    public async Task SetMany_merges_to_absent_keys_are_kept_when_the_local_tier_is_the_only_tier()
+    {
+        using var h = new Rig(memoryOnly: true);
+
+        var failed = await h.Cache.SetManyAsync<string>([new("x", Fields(("a", "1"))), new("y", Fields(("b", "2")))], Merge, Awaited, Ct);
+
+        failed.Should().BeEmpty();
+        (await h.Cache.GetAsync<string>("x", Awaited, Ct)).Should().BeEquivalentTo(Fields(("a", "1")));
+        (await h.Cache.GetAsync<string>("y", Awaited, Ct)).Should().BeEquivalentTo(Fields(("b", "2")));
+    }
+
+    [Fact]
     public async Task A_replace_of_the_whole_key_keeps_exactly_what_was_written()
     {
         using var h = new Rig();
@@ -154,7 +190,7 @@ public class MultilayerHashCacheReplaceTests
     {
         private int _innerReads;
 
-        public Rig()
+        public Rig(bool memoryOnly = false)
         {
             var options = new InMemoryRedisCacheOptions();
             var inner = Substitute.For<IHashCache>();
@@ -182,7 +218,7 @@ public class MultilayerHashCacheReplaceTests
             topics.Get(Arg.Any<string?>()).Returns(provider);
             Cache = RunTables.Track(new MultilayerHashCache(
                 KnownCacheProviderNames.InMemoryRedis,
-                inner,
+                memoryOnly ? NullHashCache.Instance : inner,
                 new MemoryCacheFactory(TimeProvider.System, NullLoggerFactory.Instance),
                 NullChangeTokenFactory.Instance,
                 topics,
