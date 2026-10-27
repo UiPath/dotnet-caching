@@ -6,6 +6,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 
 ## [Unreleased]
 
+### Changed
+
+- **Redis reads now go to the master by default.** A read right after a write or an invalidation could return the old
+  value from a lagging replica, and the local tier kept it; replicas also add latency. Set
+  `RedisCacheOptions.ReadFrom = RedisReadFrom.Replica` to restore the previous behavior.
+
 ### Fixed
 
 - **A Redis Streams read that times out no longer loses its invalidations.** Redis hands the entries of a read to the

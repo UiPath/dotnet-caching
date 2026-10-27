@@ -46,7 +46,7 @@ public class RedisHashCacheTests(ITestContextAccessor testContextAccessor) : IAs
         var field = _fixture.Create<string>();
         var expected = _fixture.Create<string>();
         RedisValue redisField = field;
-        _database.HashGetAsync(_redisKey, redisField, CommandFlags.PreferReplica)
+        _database.HashGetAsync(_redisKey, redisField, CommandFlags.None)
             .Returns(c =>
             {
                 RedisValue ret = JsonConvert.SerializeObject(expected);
@@ -74,7 +74,7 @@ public class RedisHashCacheTests(ITestContextAccessor testContextAccessor) : IAs
     {
         var field = _fixture.Create<string>();
         RedisValue redisField = field;
-        _database.HashGetAsync(_redisKey, redisField, CommandFlags.PreferReplica)
+        _database.HashGetAsync(_redisKey, redisField, CommandFlags.None)
             .ThrowsAsync<Exception>();
 
         var actual = await Sut.GetItemAsync<string>(_cacheKey, field, policy: null, token: testContextAccessor.Current.CancellationToken);
@@ -94,7 +94,7 @@ public class RedisHashCacheTests(ITestContextAccessor testContextAccessor) : IAs
             expected.Add(fields[i], expectedValues[i]);
         }
 
-        _database.HashGetAsync(_redisKey, redisFields, CommandFlags.PreferReplica)
+        _database.HashGetAsync(_redisKey, redisFields, CommandFlags.None)
             .ReturnsForAnyArgs(c =>
             {
                 var ret = expectedValues.Select(e => (RedisValue)JsonConvert.SerializeObject(e)).ToArray();
@@ -111,7 +111,7 @@ public class RedisHashCacheTests(ITestContextAccessor testContextAccessor) : IAs
         var fields = _fixture.CreateMany<string>().ToArray();
         var redisFields = fields.Select(k => (RedisValue)k).ToArray();
         var expected = fields.Select(k => _fixture.Create<string>()).ToArray();
-        _database.HashGetAsync(_redisKey, redisFields, CommandFlags.PreferReplica)
+        _database.HashGetAsync(_redisKey, redisFields, CommandFlags.None)
             .ThrowsAsync<Exception>();
 
         var actual = await Sut.GetAsync<string>(_cacheKey, fields, token: testContextAccessor.Current.CancellationToken);
@@ -122,7 +122,7 @@ public class RedisHashCacheTests(ITestContextAccessor testContextAccessor) : IAs
     public async Task Hash_multi_field_get_does_not_emit_dependency_by_default()
     {
         var fields = _fixture.CreateMany<string>().ToArray();
-        _database.HashGetAsync(_redisKey, Arg.Any<RedisValue[]>(), CommandFlags.PreferReplica)
+        _database.HashGetAsync(_redisKey, Arg.Any<RedisValue[]>(), CommandFlags.None)
             .Returns(c => fields.Select(f => (RedisValue)JsonConvert.SerializeObject(f)).ToArray());
 
         await Sut.GetAsync<string>(_cacheKey, fields, token: testContextAccessor.Current.CancellationToken);
@@ -135,7 +135,7 @@ public class RedisHashCacheTests(ITestContextAccessor testContextAccessor) : IAs
     {
         _redisCacheOptions.KeyReadTelemetryEnabled = true;
         var fields = _fixture.CreateMany<string>().ToArray();
-        _database.HashGetAsync(_redisKey, Arg.Any<RedisValue[]>(), CommandFlags.PreferReplica)
+        _database.HashGetAsync(_redisKey, Arg.Any<RedisValue[]>(), CommandFlags.None)
             .Returns(c => fields.Select(f => (RedisValue)JsonConvert.SerializeObject(f)).ToArray());
 
         await Sut.GetAsync<string>(_cacheKey, fields, token: testContextAccessor.Current.CancellationToken);
@@ -148,7 +148,7 @@ public class RedisHashCacheTests(ITestContextAccessor testContextAccessor) : IAs
     {
         _redisCacheOptions.KeyReadTelemetryEnabled = true;
         var expected = _fixture.CreateMany<string>().ToDictionary(k => k, k => _fixture.Create<string?>());
-        _database.HashGetAllAsync(_redisKey, CommandFlags.PreferReplica)
+        _database.HashGetAllAsync(_redisKey, CommandFlags.None)
             .Returns(c => expected.Select(kv => new HashEntry(kv.Key, JsonConvert.SerializeObject(kv.Value))).ToArray());
 
         await Sut.GetAsync<string>(_cacheKey, policy: null, token: testContextAccessor.Current.CancellationToken);
@@ -160,14 +160,14 @@ public class RedisHashCacheTests(ITestContextAccessor testContextAccessor) : IAs
     public async Task Get_no_fields_returns_cacheKey()
     {
         var fields = Array.Empty<string>();
-        _database.HashGetAllAsync(_redisKey, CommandFlags.PreferReplica)
+        _database.HashGetAllAsync(_redisKey, CommandFlags.None)
             .Returns(c =>
             {
                 return Array.Empty<HashEntry>();
             });
 
         await Sut.GetAsync<string>(_cacheKey, fields, token: testContextAccessor.Current.CancellationToken);
-        await _database.Received(1).HashGetAllAsync(_redisKey, CommandFlags.PreferReplica);
+        await _database.Received(1).HashGetAllAsync(_redisKey, CommandFlags.None);
     }
 
     [Fact]
@@ -176,7 +176,7 @@ public class RedisHashCacheTests(ITestContextAccessor testContextAccessor) : IAs
         var fields = _fixture.CreateMany<string>().ToArray();
         var redisFields = fields.Select(k => (RedisValue)k).ToArray();
         var expected = fields.ToDictionary(k => k, k => _fixture.Create<string?>());
-        _database.HashGetAllAsync(_redisKey, CommandFlags.PreferReplica)
+        _database.HashGetAllAsync(_redisKey, CommandFlags.None)
             .Returns(c =>
             {
                 var ret = expected.Select(kv => new HashEntry(kv.Key, JsonConvert.SerializeObject(kv.Value))).ToArray();
@@ -193,7 +193,7 @@ public class RedisHashCacheTests(ITestContextAccessor testContextAccessor) : IAs
         var fields = _fixture.CreateMany<string>().ToArray();
         var redisFields = fields.Select(k => (RedisValue)k).ToArray();
         var expected = fields.ToDictionary(k => k, k => _fixture.Create<string>());
-        _database.HashGetAllAsync(_redisKey, CommandFlags.PreferReplica)
+        _database.HashGetAllAsync(_redisKey, CommandFlags.None)
             .ThrowsAsync<Exception>();
 
         var actual = await Sut.GetAsync<string>(_cacheKey, policy: null, token: testContextAccessor.Current.CancellationToken);
@@ -206,11 +206,25 @@ public class RedisHashCacheTests(ITestContextAccessor testContextAccessor) : IAs
         var fields = _fixture.CreateMany<string>().ToArray();
         var redisFields = fields.Select(k => (RedisValue)k).ToArray();
         var expected = fields.ToDictionary(k => k, k => _fixture.Create<string>());
-        _database.HashGetAllAsync(_redisKey, CommandFlags.PreferReplica)
+        _database.HashGetAllAsync(_redisKey, CommandFlags.None)
             .ThrowsAsync<Exception>();
 
         var actual = await Sut.GetCacheEntryAsync<string>(_cacheKey, policy: null, token: testContextAccessor.Current.CancellationToken);
         actual.Value.Should().BeEmpty();
+    }
+
+    [Theory]
+    [InlineData(RedisReadFrom.Master, CommandFlags.None)]
+    [InlineData(RedisReadFrom.Replica, CommandFlags.PreferReplica)]
+    public async Task Contains_reads_with_the_flags_of_ReadFrom(RedisReadFrom readFrom, CommandFlags expected)
+    {
+        _redisCacheOptions.ReadFrom = readFrom;
+        _database.KeyExistsAsync(_redisKey, expected).Returns(true);
+        _database.KeyExistsAsync(_redisKey, Arg.Is<CommandFlags>(f => f != expected)).Returns(false);
+
+        var actual = await Sut.ContainsAsync<string>(_cacheKey, testContextAccessor.Current.CancellationToken);
+
+        actual.Should().BeTrue();
     }
 
     [Fact]
@@ -219,7 +233,7 @@ public class RedisHashCacheTests(ITestContextAccessor testContextAccessor) : IAs
         var fields = _fixture.CreateMany<string>().ToArray();
         var redisFields = fields.Select(k => (RedisValue)k).ToArray();
         var expected = fields.ToDictionary(k => k, k => _fixture.Create<string>());
-        _database.KeyExistsAsync(_redisKey, CommandFlags.PreferReplica)
+        _database.KeyExistsAsync(_redisKey, CommandFlags.None)
             .Returns(ci => true);
         _transaction.ExecuteAsync(Arg.Any<CommandFlags>()).Returns(false);
         var actual = await Sut.GetCacheEntryAsync<string>(_cacheKey, policy: null, token: testContextAccessor.Current.CancellationToken);
@@ -230,7 +244,7 @@ public class RedisHashCacheTests(ITestContextAccessor testContextAccessor) : IAs
     public async Task Get_cache_entry_for_unknown_cacheKey()
     {
         var fields = _fixture.CreateMany<string>().ToArray();
-        _database.KeyExistsAsync(_redisKey, CommandFlags.PreferReplica)
+        _database.KeyExistsAsync(_redisKey, CommandFlags.None)
             .Returns(ci => false);
 
         var actual = await Sut.GetCacheEntryAsync<string>(_cacheKey, policy: null, token: testContextAccessor.Current.CancellationToken);
@@ -248,11 +262,11 @@ public class RedisHashCacheTests(ITestContextAccessor testContextAccessor) : IAs
         var entries = expected.Select(kv => new HashEntry(kv.Key, JsonConvert.SerializeObject(kv.Value)))
             .Union(new[] { new HashEntry("_metadata_", JsonConvert.SerializeObject(extendedProps)) })
             .ToArray();
-        _database.KeyExistsAsync(_redisKey, CommandFlags.PreferReplica)
+        _database.KeyExistsAsync(_redisKey, CommandFlags.None)
             .Returns(ci => true);
-        _transaction.HashGetAllAsync(_redisKey, CommandFlags.PreferReplica)
+        _transaction.HashGetAllAsync(_redisKey, CommandFlags.None)
             .Returns(entries);
-        _transaction.KeyExpireTimeAsync(_redisKey, CommandFlags.PreferReplica)
+        _transaction.KeyExpireTimeAsync(_redisKey, CommandFlags.None)
             .Returns((DateTime?)expireTime.UtcDateTime);
         _transaction.ExecuteAsync(Arg.Any<CommandFlags>()).Returns(true);
         var actual = await Sut.GetCacheEntryAsync<string>(_cacheKey, policy: null, token: testContextAccessor.Current.CancellationToken);
@@ -267,12 +281,12 @@ public class RedisHashCacheTests(ITestContextAccessor testContextAccessor) : IAs
         var entries = expected.Select(kv => new HashEntry(kv.Key, JsonConvert.SerializeObject(kv.Value))).ToArray();
         var retried = Substitute.For<ITransaction>();
         _database.CreateTransaction().Returns(_transaction, retried);
-        _database.KeyExistsAsync(_redisKey, CommandFlags.PreferReplica).Returns(true);
-        _transaction.HashGetAllAsync(_redisKey, CommandFlags.PreferReplica).Returns(Task.FromException<HashEntry[]>(new RedisException("lost")));
-        _transaction.KeyTimeToLiveAsync(_redisKey, CommandFlags.PreferReplica).Returns(Task.FromException<TimeSpan?>(new RedisException("lost")));
+        _database.KeyExistsAsync(_redisKey, CommandFlags.None).Returns(true);
+        _transaction.HashGetAllAsync(_redisKey, CommandFlags.None).Returns(Task.FromException<HashEntry[]>(new RedisException("lost")));
+        _transaction.KeyTimeToLiveAsync(_redisKey, CommandFlags.None).Returns(Task.FromException<TimeSpan?>(new RedisException("lost")));
         _transaction.ExecuteAsync(Arg.Any<CommandFlags>()).Returns(Task.FromException<bool>(new RedisException("timed out")), Task.FromResult(true));
-        retried.HashGetAllAsync(_redisKey, CommandFlags.PreferReplica).Returns(entries);
-        retried.KeyTimeToLiveAsync(_redisKey, CommandFlags.PreferReplica).Returns(TimeSpan.FromMinutes(15));
+        retried.HashGetAllAsync(_redisKey, CommandFlags.None).Returns(entries);
+        retried.KeyTimeToLiveAsync(_redisKey, CommandFlags.None).Returns(TimeSpan.FromMinutes(15));
         retried.ExecuteAsync(Arg.Any<CommandFlags>()).Returns(true);
 
         var actual = await Sut.GetCacheEntryAsync<string>(_cacheKey, policy: null, token: testContextAccessor.Current.CancellationToken);
@@ -292,11 +306,11 @@ public class RedisHashCacheTests(ITestContextAccessor testContextAccessor) : IAs
             new[] { new HashEntry("_metadata_", JsonConvert.SerializeObject(extendedProps)) }
             .Union(expected.Select(kv => new HashEntry(kv.Key, JsonConvert.SerializeObject(kv.Value))))
             .ToArray();
-        _database.KeyExistsAsync(_redisKey, CommandFlags.PreferReplica)
+        _database.KeyExistsAsync(_redisKey, CommandFlags.None)
             .Returns(_ => true);
-        _transaction.HashGetAllAsync(_redisKey, CommandFlags.PreferReplica)
+        _transaction.HashGetAllAsync(_redisKey, CommandFlags.None)
             .Returns(entries);
-        _transaction.KeyTimeToLiveAsync(_redisKey, CommandFlags.PreferReplica)
+        _transaction.KeyTimeToLiveAsync(_redisKey, CommandFlags.None)
             .Returns((TimeSpan?)expireTime);
         _transaction.ExecuteAsync(Arg.Any<CommandFlags>()).Returns(true);
         var actual = await Sut.GetCacheEntryAsync<string>(_cacheKey, policy: null, token: testContextAccessor.Current.CancellationToken);
@@ -309,7 +323,7 @@ public class RedisHashCacheTests(ITestContextAccessor testContextAccessor) : IAs
         var fields = _fixture.CreateMany<string>().ToArray();
         var redisFields = fields.Select(k => (RedisValue)k).ToArray();
         var expected = fields.ToDictionary(k => k, k => _fixture.Create<string>());
-        _database.HashGetAllAsync(_redisKey, CommandFlags.PreferReplica)
+        _database.HashGetAllAsync(_redisKey, CommandFlags.None)
             .Returns(c =>
             {
                 var ret = expected.Select(kv => new HashEntry(kv.Key, JsonConvert.SerializeObject(kv.Value))).ToArray();
@@ -333,7 +347,7 @@ public class RedisHashCacheTests(ITestContextAccessor testContextAccessor) : IAs
         var fields = _fixture.CreateMany<string>().ToArray();
         var redisFields = fields.Select(k => (RedisValue)k).ToArray();
         var expected = fields.ToDictionary(k => k, k => _fixture.Create<string>());
-        _database.HashGetAllAsync(_redisKey, CommandFlags.PreferReplica)
+        _database.HashGetAllAsync(_redisKey, CommandFlags.None)
             .Returns(c =>
             {
                 var ret = expected.Select(kv => new HashEntry(kv.Key, JsonConvert.SerializeObject(kv.Value))).ToArray();
@@ -358,7 +372,7 @@ public class RedisHashCacheTests(ITestContextAccessor testContextAccessor) : IAs
         var entries = _fixture.CreateMany<HashEntry>().ToArray();
         var redisFields = entries.Select(e => e.Name).ToArray();
         IDictionary<string, string?> expected = entries.ToDictionary(k => k.Name.ToString(), k => (string?)k.Value);
-        _database.HashGetAllAsync(_redisKey, CommandFlags.PreferReplica)
+        _database.HashGetAllAsync(_redisKey, CommandFlags.None)
             .Returns(c =>
             {
                 return Array.Empty<HashEntry>();
@@ -386,7 +400,7 @@ public class RedisHashCacheTests(ITestContextAccessor testContextAccessor) : IAs
         var entries = _fixture.CreateMany<HashEntry>().ToArray();
         var redisFields = entries.Select(e => e.Name).ToArray();
         IDictionary<string, string?> expected = entries.ToDictionary(k => k.Name.ToString(), k => (string?)k.Value);
-        _database.HashGetAllAsync(_redisKey, CommandFlags.PreferReplica)
+        _database.HashGetAllAsync(_redisKey, CommandFlags.None)
             .Returns(c =>
             {
                 return Array.Empty<HashEntry>();
@@ -412,7 +426,7 @@ public class RedisHashCacheTests(ITestContextAccessor testContextAccessor) : IAs
         var entries = _fixture.CreateMany<HashEntry>().ToArray();
         var redisFields = entries.Select(e => e.Name).ToArray();
         IDictionary<string, string?> expected = new Dictionary<string, string?>();
-        _database.HashGetAllAsync(_redisKey, CommandFlags.PreferReplica)
+        _database.HashGetAllAsync(_redisKey, CommandFlags.None)
             .Returns(c =>
             {
                 return Array.Empty<HashEntry>();
@@ -436,7 +450,7 @@ public class RedisHashCacheTests(ITestContextAccessor testContextAccessor) : IAs
     {
         _redisCacheOptions.CacheNullValues = true;
         _sut = null;
-        _database.HashGetAllAsync(_redisKey, CommandFlags.PreferReplica)
+        _database.HashGetAllAsync(_redisKey, CommandFlags.None)
             .Returns(_ => new[] { new HashEntry(KnownFieldNames.MetadataKey, RedisValue.EmptyString) });
         var generatorCalled = false;
         Task<IDictionary<string, string?>> Generator(CancellationToken _)
@@ -457,7 +471,7 @@ public class RedisHashCacheTests(ITestContextAccessor testContextAccessor) : IAs
         _redisCacheOptions.CacheNullValues = true;
         _redisCacheOptions.KeyReadTelemetryEnabled = true;
         _sut = null;
-        _database.HashGetAllAsync(_redisKey, CommandFlags.PreferReplica)
+        _database.HashGetAllAsync(_redisKey, CommandFlags.None)
             .Returns(_ => new[] { new HashEntry(KnownFieldNames.MetadataKey, RedisValue.EmptyString) });
 
         await Sut.GetAsync<string>(_cacheKey, policy: null, token: testContextAccessor.Current.CancellationToken);
@@ -471,7 +485,7 @@ public class RedisHashCacheTests(ITestContextAccessor testContextAccessor) : IAs
         _redisCacheOptions.CacheNullValues = false;
         _redisCacheOptions.KeyReadTelemetryEnabled = true;
         _sut = null;
-        _database.HashGetAllAsync(_redisKey, CommandFlags.PreferReplica)
+        _database.HashGetAllAsync(_redisKey, CommandFlags.None)
             .Returns(_ => new[] { new HashEntry(KnownFieldNames.MetadataKey, RedisValue.EmptyString) });
 
         await Sut.GetAsync<string>(_cacheKey, policy: null, token: testContextAccessor.Current.CancellationToken);
@@ -485,7 +499,7 @@ public class RedisHashCacheTests(ITestContextAccessor testContextAccessor) : IAs
         _redisCacheOptions.CacheNullValues = false;
         _redisCacheOptions.KeyReadTelemetryEnabled = true;
         _sut = null;
-        _database.HashGetAllAsync(_redisKey, CommandFlags.PreferReplica)
+        _database.HashGetAllAsync(_redisKey, CommandFlags.None)
             .Returns(_ => new[] { new HashEntry("f1", RedisValue.EmptyString) });
 
         await Sut.GetAsync<string>(_cacheKey, policy: null, token: testContextAccessor.Current.CancellationToken);
@@ -499,7 +513,7 @@ public class RedisHashCacheTests(ITestContextAccessor testContextAccessor) : IAs
         _redisCacheOptions.CacheNullValues = true;
         _redisCacheOptions.KeyReadTelemetryEnabled = true;
         _sut = null;
-        _database.HashGetAllAsync(_redisKey, CommandFlags.PreferReplica)
+        _database.HashGetAllAsync(_redisKey, CommandFlags.None)
             .Returns(_ => new[] { new HashEntry("f1", RedisValue.EmptyString) });
 
         await Sut.GetAsync<string>(_cacheKey, policy: null, token: testContextAccessor.Current.CancellationToken);
@@ -545,7 +559,7 @@ public class RedisHashCacheTests(ITestContextAccessor testContextAccessor) : IAs
     {
         _redisCacheOptions.CacheNullValues = true;
         IDictionary<string, string?> generated = new Dictionary<string, string?>();
-        _database.HashGetAllAsync(_redisKey, CommandFlags.PreferReplica)
+        _database.HashGetAllAsync(_redisKey, CommandFlags.None)
             .Returns(_ => Array.Empty<HashEntry>());
         _transaction.ExecuteAsync(Arg.Any<CommandFlags>()).Returns(true);
         HashEntry[]? captured = null;
@@ -567,7 +581,7 @@ public class RedisHashCacheTests(ITestContextAccessor testContextAccessor) : IAs
     {
         _redisCacheOptions.CacheNullValues = false;
         IDictionary<string, string?> generated = new Dictionary<string, string?>();
-        _database.HashGetAllAsync(_redisKey, CommandFlags.PreferReplica)
+        _database.HashGetAllAsync(_redisKey, CommandFlags.None)
             .Returns(_ => Array.Empty<HashEntry>());
 
         var actual = await Sut.GetOrAddAsync(_cacheKey, _ => Task.FromResult(generated), TimeSpan.FromMinutes(5), token: testContextAccessor.Current.CancellationToken);
@@ -593,10 +607,10 @@ public class RedisHashCacheTests(ITestContextAccessor testContextAccessor) : IAs
     {
         _redisCacheOptions.CacheNullValues = false;
         _sut = null;
-        _database.KeyExistsAsync(_redisKey, CommandFlags.PreferReplica).Returns(_ => true);
-        _transaction.HashGetAllAsync(_redisKey, CommandFlags.PreferReplica)
+        _database.KeyExistsAsync(_redisKey, CommandFlags.None).Returns(_ => true);
+        _transaction.HashGetAllAsync(_redisKey, CommandFlags.None)
             .Returns(new[] { new HashEntry(KnownFieldNames.MetadataKey, RedisValue.EmptyString) });
-        _transaction.KeyExpireTimeAsync(_redisKey, CommandFlags.PreferReplica).Returns((DateTime?)_now.AddMinutes(5).UtcDateTime);
+        _transaction.KeyExpireTimeAsync(_redisKey, CommandFlags.None).Returns((DateTime?)_now.AddMinutes(5).UtcDateTime);
         _transaction.ExecuteAsync(Arg.Any<CommandFlags>()).Returns(true);
 
         var actual = await Sut.GetCacheEntryAsync<string>(_cacheKey, policy: null, token: testContextAccessor.Current.CancellationToken);
@@ -609,10 +623,10 @@ public class RedisHashCacheTests(ITestContextAccessor testContextAccessor) : IAs
     {
         _redisCacheOptions.CacheNullValues = true;
         _sut = null;
-        _database.KeyExistsAsync(_redisKey, CommandFlags.PreferReplica).Returns(_ => true);
-        _transaction.HashGetAllAsync(_redisKey, CommandFlags.PreferReplica)
+        _database.KeyExistsAsync(_redisKey, CommandFlags.None).Returns(_ => true);
+        _transaction.HashGetAllAsync(_redisKey, CommandFlags.None)
             .Returns(new[] { new HashEntry(KnownFieldNames.MetadataKey, RedisValue.EmptyString) });
-        _transaction.KeyExpireTimeAsync(_redisKey, CommandFlags.PreferReplica).Returns((DateTime?)_now.AddMinutes(5).UtcDateTime);
+        _transaction.KeyExpireTimeAsync(_redisKey, CommandFlags.None).Returns((DateTime?)_now.AddMinutes(5).UtcDateTime);
         _transaction.ExecuteAsync(Arg.Any<CommandFlags>()).Returns(true);
 
         var actual = await Sut.GetCacheEntryAsync<string>(_cacheKey, policy: null, token: testContextAccessor.Current.CancellationToken);
@@ -627,10 +641,10 @@ public class RedisHashCacheTests(ITestContextAccessor testContextAccessor) : IAs
         _redisCacheOptions.CacheNullValues = true;
         _sut = null;
         var legacyMetadata = _serializer.Serialize(new Dictionary<string, string?> { ["legacy"] = "v" });
-        _database.KeyExistsAsync(_redisKey, CommandFlags.PreferReplica).Returns(_ => true);
-        _transaction.HashGetAllAsync(_redisKey, CommandFlags.PreferReplica)
+        _database.KeyExistsAsync(_redisKey, CommandFlags.None).Returns(_ => true);
+        _transaction.HashGetAllAsync(_redisKey, CommandFlags.None)
             .Returns(new[] { new HashEntry(KnownFieldNames.MetadataKey, legacyMetadata) });
-        _transaction.KeyExpireTimeAsync(_redisKey, CommandFlags.PreferReplica).Returns((DateTime?)_now.AddMinutes(5).UtcDateTime);
+        _transaction.KeyExpireTimeAsync(_redisKey, CommandFlags.None).Returns((DateTime?)_now.AddMinutes(5).UtcDateTime);
         _transaction.ExecuteAsync(Arg.Any<CommandFlags>()).Returns(true);
 
         var actual = await Sut.GetCacheEntryAsync<string>(_cacheKey, policy: null, token: testContextAccessor.Current.CancellationToken);
@@ -644,7 +658,7 @@ public class RedisHashCacheTests(ITestContextAccessor testContextAccessor) : IAs
         _redisCacheOptions.CacheNullValues = true;
         _sut = null;
         var legacyMetadata = _serializer.Serialize(new Dictionary<string, string?> { ["legacy"] = "v" });
-        _database.HashGetAllAsync(_redisKey, CommandFlags.PreferReplica)
+        _database.HashGetAllAsync(_redisKey, CommandFlags.None)
             .Returns(_ => new[] { new HashEntry(KnownFieldNames.MetadataKey, legacyMetadata) });
         var generatorCalled = false;
         Task<IDictionary<string, string?>> Generator(CancellationToken _)
@@ -663,7 +677,7 @@ public class RedisHashCacheTests(ITestContextAccessor testContextAccessor) : IAs
     {
         _redisCacheOptions.CacheNullValues = false;
         _sut = null;
-        _database.HashGetAllAsync(_redisKey, CommandFlags.PreferReplica)
+        _database.HashGetAllAsync(_redisKey, CommandFlags.None)
             .Returns(_ => new[] { new HashEntry(KnownFieldNames.MetadataKey, RedisValue.EmptyString) });
         var generated = new Dictionary<string, string?> { ["k"] = "v" };
         bool generatorCalled = false;
@@ -702,7 +716,7 @@ public class RedisHashCacheTests(ITestContextAccessor testContextAccessor) : IAs
     {
         _redisCacheOptions.CacheNullValues = true;
         _sut = null;
-        _database.KeyExistsAsync(_redisKey, CommandFlags.PreferReplica).Returns(true);
+        _database.KeyExistsAsync(_redisKey, CommandFlags.None).Returns(true);
         _transaction.ExecuteAsync(Arg.Any<CommandFlags>()).Returns(true);
 
         await Sut.SetMetadataAsync<string>(_cacheKey, new Dictionary<string, string?>(), testContextAccessor.Current.CancellationToken);
@@ -716,7 +730,7 @@ public class RedisHashCacheTests(ITestContextAccessor testContextAccessor) : IAs
         _redisCacheOptions.CacheNullValues = true;
         _sut = null;
         var metadata = _fixture.Create<IDictionary<string, string?>>();
-        _database.KeyExistsAsync(_redisKey, CommandFlags.PreferReplica).Returns(true);
+        _database.KeyExistsAsync(_redisKey, CommandFlags.None).Returns(true);
         _transaction.ExecuteAsync(Arg.Any<CommandFlags>()).Returns(true);
 
         await Sut.SetMetadataAsync<string>(_cacheKey, metadata, testContextAccessor.Current.CancellationToken);
@@ -731,7 +745,7 @@ public class RedisHashCacheTests(ITestContextAccessor testContextAccessor) : IAs
         _redisCacheOptions.CacheNullValues = true;
         _sut = null;
         IDictionary<string, string?> generated = new Dictionary<string, string?>();
-        _database.HashGetAllAsync(_redisKey, CommandFlags.PreferReplica)
+        _database.HashGetAllAsync(_redisKey, CommandFlags.None)
             .Returns(_ => Array.Empty<HashEntry>());
         _transaction.ExecuteAsync(Arg.Any<CommandFlags>()).Returns(true);
 
@@ -758,7 +772,7 @@ public class RedisHashCacheTests(ITestContextAccessor testContextAccessor) : IAs
     public async Task GetItemAsync_allows_legacy_underscore_bracketed_names()
     {
         var expected = _fixture.Create<string>();
-        _database.HashGetAsync(_redisKey, (RedisValue)"_legacy_field_", CommandFlags.PreferReplica)
+        _database.HashGetAsync(_redisKey, (RedisValue)"_legacy_field_", CommandFlags.None)
             .Returns(_ => (RedisValue)JsonConvert.SerializeObject(expected));
 
         var actual = await Sut.GetItemAsync<string>(_cacheKey, "_legacy_field_", policy: null, token: testContextAccessor.Current.CancellationToken);
@@ -769,7 +783,7 @@ public class RedisHashCacheTests(ITestContextAccessor testContextAccessor) : IAs
     public async Task GetItemAsync_allows_legacy_expiration_field_name()
     {
         var expected = _fixture.Create<string>();
-        _database.HashGetAsync(_redisKey, (RedisValue)KnownFieldNames.ExpirationKey, CommandFlags.PreferReplica)
+        _database.HashGetAsync(_redisKey, (RedisValue)KnownFieldNames.ExpirationKey, CommandFlags.None)
             .Returns(_ => (RedisValue)JsonConvert.SerializeObject(expected));
 
         var actual = await Sut.GetItemAsync<string>(_cacheKey, KnownFieldNames.ExpirationKey, policy: null, token: testContextAccessor.Current.CancellationToken);
@@ -779,9 +793,9 @@ public class RedisHashCacheTests(ITestContextAccessor testContextAccessor) : IAs
     [Fact]
     public async Task GetCacheEntry_with_empty_hashEntries_returns_miss()
     {
-        _database.KeyExistsAsync(_redisKey, CommandFlags.PreferReplica).Returns(_ => true);
-        _transaction.HashGetAllAsync(_redisKey, CommandFlags.PreferReplica).Returns(Array.Empty<HashEntry>());
-        _transaction.KeyExpireTimeAsync(_redisKey, CommandFlags.PreferReplica).Returns((DateTime?)_now.AddMinutes(5).UtcDateTime);
+        _database.KeyExistsAsync(_redisKey, CommandFlags.None).Returns(_ => true);
+        _transaction.HashGetAllAsync(_redisKey, CommandFlags.None).Returns(Array.Empty<HashEntry>());
+        _transaction.KeyExpireTimeAsync(_redisKey, CommandFlags.None).Returns((DateTime?)_now.AddMinutes(5).UtcDateTime);
         _transaction.ExecuteAsync(Arg.Any<CommandFlags>()).Returns(true);
 
         var actual = await Sut.GetCacheEntryAsync<string>(_cacheKey, policy: null, token: testContextAccessor.Current.CancellationToken);
@@ -841,7 +855,7 @@ public class RedisHashCacheTests(ITestContextAccessor testContextAccessor) : IAs
             new HashEntry("a", JsonConvert.SerializeObject("1")),
             new HashEntry(KnownFieldNames.ExpirationKey, JsonConvert.SerializeObject(expectedExpirationValue)),
         };
-        _database.HashGetAllAsync(_redisKey, CommandFlags.PreferReplica).Returns(entries);
+        _database.HashGetAllAsync(_redisKey, CommandFlags.None).Returns(entries);
 
         var actual = await Sut.GetAsync<string>(_cacheKey, policy: null, token: testContextAccessor.Current.CancellationToken);
 
@@ -883,7 +897,7 @@ public class RedisHashCacheTests(ITestContextAccessor testContextAccessor) : IAs
     public async Task Contains_works_as_expected()
     {
         var fieldsCalled = false;
-        _database.KeyExistsAsync(Arg.Any<RedisKey>(), CommandFlags.PreferReplica)
+        _database.KeyExistsAsync(Arg.Any<RedisKey>(), CommandFlags.None)
             .Returns(c =>
             {
                 fieldsCalled = true;
@@ -898,7 +912,7 @@ public class RedisHashCacheTests(ITestContextAccessor testContextAccessor) : IAs
     [Fact]
     public async Task Contains_redis_exception()
     {
-        _database.KeyExistsAsync(_redisKey, CommandFlags.PreferReplica)
+        _database.KeyExistsAsync(_redisKey, CommandFlags.None)
             .ThrowsAsync<Exception>();
 
         var actual = await Sut.ContainsAsync<string>(_cacheKey, testContextAccessor.Current.CancellationToken);
@@ -1465,7 +1479,7 @@ public class RedisHashCacheTests(ITestContextAccessor testContextAccessor) : IAs
         _isConnected = false;
         var actual = await Sut.GetAsync<string>(_cacheKey, policy: null, token: testContextAccessor.Current.CancellationToken);
         actual.Should().BeEmpty();
-        await _database.DidNotReceive().HashGetAllAsync(_redisKey, CommandFlags.PreferReplica);
+        await _database.DidNotReceive().HashGetAllAsync(_redisKey, CommandFlags.None);
     }
 
     [Fact]

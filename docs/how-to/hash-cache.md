@@ -154,11 +154,12 @@ pair into one transaction halves the Redis command rate for those paths. The mig
 mechanical: replace `GetAsync` + `TimeToLiveAsync` (or `ExpireTimeAsync`) pairs with
 `GetCacheEntryAsync`, then use `entry.Value` and `entry.Expiration`.
 
-**Routing note:** the transaction's `ExecuteAsync` call is issued with
-`CommandFlags.PreferReplica`, so reads land on a replica even when wrapped in a
-transaction. SE.Redis ignores `PreferReplica` set on individual queued commands when
-choosing the server for the transaction, so the flag must be on `ExecuteAsync` itself —
-the library handles this correctly, and you don't need to opt in.
+**Routing note:** the transaction's `ExecuteAsync` call is issued with the flags that
+`RedisCacheOptions.ReadFrom` selects: `CommandFlags.PreferMaster` by default, or
+`CommandFlags.PreferReplica` with `ReadFrom = Replica`. SE.Redis ignores the flags set on
+individual queued commands when choosing the server for the
+transaction, so the flag must be on `ExecuteAsync` itself — the library handles this
+correctly, and you don't need to opt in.
 
 ## `GetOrAddAsync`
 

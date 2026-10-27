@@ -160,7 +160,7 @@ public sealed partial class RedisSetCache : RedisCacheBase, ISetCache
             var values = await _read.ExecuteAsync(async token =>
             {
                 token.ThrowIfCancellationRequested();
-                return await Database.SetMembersAsync(redisKey, CommandFlags.PreferReplica).ConfigureAwait(false);
+                return await Database.SetMembersAsync(redisKey, ReadFlags).ConfigureAwait(false);
             },
             Array.Empty<RedisValue>(),
             token).ConfigureAwait(false);
@@ -192,7 +192,7 @@ public sealed partial class RedisSetCache : RedisCacheBase, ISetCache
             ret = await _read.ExecuteAsync(async token =>
             {
                 token.ThrowIfCancellationRequested();
-                return await Database.SetContainsAsync(redisKey, value, CommandFlags.PreferReplica).ConfigureAwait(false);
+                return await Database.SetContainsAsync(redisKey, value, ReadFlags).ConfigureAwait(false);
             },
             default,
             token).ConfigureAwait(false);
@@ -222,7 +222,7 @@ public sealed partial class RedisSetCache : RedisCacheBase, ISetCache
             ret = await _read.ExecuteAsync(async token =>
             {
                 token.ThrowIfCancellationRequested();
-                return await Database.SetLengthAsync(redisKey, CommandFlags.PreferReplica).ConfigureAwait(false);
+                return await Database.SetLengthAsync(redisKey, ReadFlags).ConfigureAwait(false);
             },
             default,
             token).ConfigureAwait(false);
@@ -350,7 +350,7 @@ public sealed partial class RedisSetCache : RedisCacheBase, ISetCache
             ret = await _read.ExecuteAsync(async token =>
             {
                 token.ThrowIfCancellationRequested();
-                return await Database.KeyExistsAsync(redisKey, CommandFlags.PreferReplica).ConfigureAwait(false);
+                return await Database.KeyExistsAsync(redisKey, ReadFlags).ConfigureAwait(false);
             },
             default,
             token).ConfigureAwait(false);

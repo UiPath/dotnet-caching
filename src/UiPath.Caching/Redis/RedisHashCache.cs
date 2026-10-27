@@ -98,7 +98,7 @@ internal sealed partial class RedisHashCache : RedisCacheBase, IHashCache
             ret = await _read.ExecuteAsync(async token =>
             {
                 token.ThrowIfCancellationRequested();
-                return await Database.KeyExistsAsync(redisKey, CommandFlags.PreferReplica).ConfigureAwait(false);
+                return await Database.KeyExistsAsync(redisKey, ReadFlags).ConfigureAwait(false);
             },
             default,
             token).ConfigureAwait(false);
@@ -252,7 +252,7 @@ internal sealed partial class RedisHashCache : RedisCacheBase, IHashCache
             ret = await _read.ExecuteAsync(async token =>
             {
                 token.ThrowIfCancellationRequested();
-                return await Database.KeyTimeToLiveAsync(ToRedisKey(cacheKey, token), CommandFlags.PreferReplica).ConfigureAwait(false);
+                return await Database.KeyTimeToLiveAsync(ToRedisKey(cacheKey, token), ReadFlags).ConfigureAwait(false);
             },
             default,
             token).ConfigureAwait(false);
@@ -283,7 +283,7 @@ internal sealed partial class RedisHashCache : RedisCacheBase, IHashCache
                 ret = await _read.ExecuteAsync(async token =>
                 {
                     token.ThrowIfCancellationRequested();
-                    return await Database.KeyExpireTimeAsync(ToRedisKey(cacheKey, token), CommandFlags.PreferReplica).ConfigureAwait(false);
+                    return await Database.KeyExpireTimeAsync(ToRedisKey(cacheKey, token), ReadFlags).ConfigureAwait(false);
                 },
                 default,
                 token).ConfigureAwait(false);
@@ -325,7 +325,7 @@ internal sealed partial class RedisHashCache : RedisCacheBase, IHashCache
             var keyExists = await _read.ExecuteAsync(async token =>
             {
                 token.ThrowIfCancellationRequested();
-                return await Database.KeyExistsAsync(redisKey, CommandFlags.PreferReplica).ConfigureAwait(false);
+                return await Database.KeyExistsAsync(redisKey, ReadFlags).ConfigureAwait(false);
             },
             default,
             token).ConfigureAwait(false);
@@ -517,7 +517,7 @@ internal sealed partial class RedisHashCache : RedisCacheBase, IHashCache
             var hashEntries = await _read.ExecuteAsync(async token =>
             {
                 token.ThrowIfCancellationRequested();
-                return await Database.HashGetAllAsync(redisKey, CommandFlags.PreferReplica).ConfigureAwait(false);
+                return await Database.HashGetAllAsync(redisKey, ReadFlags).ConfigureAwait(false);
             },
             [],
             token).ConfigureAwait(false);
@@ -672,15 +672,15 @@ internal sealed partial class RedisHashCache : RedisCacheBase, IHashCache
         {
             token.ThrowIfCancellationRequested();
             var transaction = Database.CreateTransaction();
-            var hashEntriesTask = transaction.HashGetAllAsync(redisKey, CommandFlags.PreferReplica);
-            Task<DateTime?>? expireTimeTask = _supportsExpireTime ? transaction.KeyExpireTimeAsync(redisKey, CommandFlags.PreferReplica) : null;
-            Task<TimeSpan?>? expireTimeToLiveTask = _supportsExpireTime ? null : transaction.KeyTimeToLiveAsync(redisKey, CommandFlags.PreferReplica);
+            var hashEntriesTask = transaction.HashGetAllAsync(redisKey, ReadFlags);
+            Task<DateTime?>? expireTimeTask = _supportsExpireTime ? transaction.KeyExpireTimeAsync(redisKey, ReadFlags) : null;
+            Task<TimeSpan?>? expireTimeToLiveTask = _supportsExpireTime ? null : transaction.KeyTimeToLiveAsync(redisKey, ReadFlags);
 
             // Observed now: an uncommitted transaction leaves them unawaited.
             hashEntriesTask.Forget();
             expireTimeTask?.Forget();
             expireTimeToLiveTask?.Forget();
-            if (!await transaction.ExecuteAsync(CommandFlags.PreferReplica).ConfigureAwait(false))
+            if (!await transaction.ExecuteAsync(ReadFlags).ConfigureAwait(false))
             {
                 return false;
             }
@@ -786,7 +786,7 @@ internal sealed partial class RedisHashCache : RedisCacheBase, IHashCache
             var value = await _read.ExecuteAsync(async token =>
             {
                 token.ThrowIfCancellationRequested();
-                return await Database.HashGetAsync(redisKey, field, CommandFlags.PreferReplica).ConfigureAwait(false);
+                return await Database.HashGetAsync(redisKey, field, ReadFlags).ConfigureAwait(false);
             },
             RedisValue.Null,
             token).ConfigureAwait(false);
@@ -830,7 +830,7 @@ internal sealed partial class RedisHashCache : RedisCacheBase, IHashCache
             var values = await _read.ExecuteAsync(async token =>
             {
                 token.ThrowIfCancellationRequested();
-                return await Database.HashGetAsync(redisKey, fields.Select(k => (RedisValue)k).ToArray(), CommandFlags.PreferReplica).ConfigureAwait(false);
+                return await Database.HashGetAsync(redisKey, fields.Select(k => (RedisValue)k).ToArray(), ReadFlags).ConfigureAwait(false);
             },
             [],
             token).ConfigureAwait(false);
@@ -880,7 +880,7 @@ internal sealed partial class RedisHashCache : RedisCacheBase, IHashCache
             var hashEntries = await _read.ExecuteAsync(async token =>
             {
                 token.ThrowIfCancellationRequested();
-                return await Database.HashGetAllAsync(redisKey, CommandFlags.PreferReplica).ConfigureAwait(false);
+                return await Database.HashGetAllAsync(redisKey, ReadFlags).ConfigureAwait(false);
             },
             [],
             token).ConfigureAwait(false);
@@ -939,7 +939,7 @@ internal sealed partial class RedisHashCache : RedisCacheBase, IHashCache
             var keyExists = await _read.ExecuteAsync(async token =>
             {
                 token.ThrowIfCancellationRequested();
-                return await Database.KeyExistsAsync(redisKey, CommandFlags.PreferReplica).ConfigureAwait(false);
+                return await Database.KeyExistsAsync(redisKey, ReadFlags).ConfigureAwait(false);
             },
             default,
             token).ConfigureAwait(false);
