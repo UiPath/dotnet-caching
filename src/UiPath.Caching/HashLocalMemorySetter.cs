@@ -14,6 +14,16 @@ internal sealed class HashLocalMemorySetter(
     bool ignoreSubscriptionGaps = false)
     : MemoryCacheSetter(cacheName, changeTokenFactory, topicProvider, memoryCache, logger, clock, cacheOptions, memoryCacheOptions, telemetryProvider, masker, ignoreSubscriptionGaps)
 {
+    internal Func<RefreshMetadataState, PeerUpdate, bool>? PeerApply { get; set; }
+
+    protected override bool AppliesPeerUpdates => PeerApply is not null;
+
+    protected override bool TryApplyPeerUpdate(RefreshMetadataState metadataState, PeerUpdate update) =>
+        PeerApply?.Invoke(metadataState, update) ?? false;
+
+    protected override void Renewed(ICacheEntry held, ICacheEntry renewed) =>
+        HashVersions.Carry(held, renewed);
+
     protected override ICacheEntryOptions CreateEntry(RefreshMetadataState metadataState, CancellationToken cancellationToken)
     {
         var token = metadataState.Token;

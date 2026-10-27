@@ -318,6 +318,42 @@ public class ChangeTokenTests : IAsyncLifetime
         Sut.Metadata.Should().BeNull();
     }
 
+    [Theory]
+    [InlineData("no handler", 7L)]
+    [InlineData("handler declines", 7L)]
+    [InlineData("malformed version", 0L)]
+    public void A_write_event_carrying_fields_that_is_not_applied_expires_the_entry_so_a_later_refresh_cannot_renew_it(string case_, long version)
+    {
+        var refreshable = new List<bool>();
+        Sut.RegisterChangeCallback(_ => refreshable.Add(Sut.MetadataHasChanged || Sut.Expiration is not null), null);
+        if (case_ == "handler declines")
+        {
+            ((IPeerUpdateSource)Sut).PeerUpdateHandler = _ => false;
+        }
+
+        Sut.OnNext(new TestCacheEvent
+        {
+            Id = Guid.NewGuid().ToString(),
+            Source = new Uri("urn:machine"),
+            Data = new CacheEventData(_key, new Dictionary<string, object?>
+            {
+                [KnownFieldNames.VersionKey] = version,
+                [KnownFieldNames.PeerFieldsKey] = new Dictionary<string, string?> { ["a"] = "1" },
+            }),
+            Type = _fixture.Create<string>(),
+        });
+        Sut.OnNext(new TestCacheEvent
+        {
+            Id = Guid.NewGuid().ToString(),
+            Source = new Uri("urn:machine"),
+            Data = new CacheEventData(_key, new Dictionary<string, object?> { ["_expiration_"] = DateTimeOffset.Now.AddMinutes(5) }),
+            Type = _fixture.Create<string>(),
+        });
+
+        refreshable.Should().Equal([false, false], "the refresh callback would otherwise put the old value back");
+        Sut.Expiration.Should().BeNull();
+    }
+
     [Fact]
     public void Two_refreshes_both_carry_their_expiration()
     {

@@ -89,6 +89,24 @@ public sealed partial class CacheEventPublisher
         where TOptions : struct, ICacheEntryOptions =>
         RaiseEventAsync(options, KnownEventTypes.CacheSet, entryType);
 
+    /// <summary>The write counted its hash's writes and carries the fields it wrote, for a peer to add to its copy.</summary>
+    internal ValueTask<bool> CacheSetAsync<TOptions>(TOptions options, Type? entryType, long version, IDictionary<string, string?> fields)
+        where TOptions : struct, ICacheEntryOptions
+    {
+        Dictionary<string, object?> properties = new()
+        {
+            [KnownFieldNames.VersionKey] = version,
+            [KnownFieldNames.PeerFieldsKey] = fields,
+            [KnownFieldNames.PeerExpirationKey] = options.Expiration,
+        };
+        if (options.Metadata is not null)
+        {
+            properties[KnownFieldNames.PeerMetadataKey] = options.Metadata;
+        }
+
+        return RaiseEventAsync(options, KnownEventTypes.CacheSet, entryType, properties);
+    }
+
     /// <inheritdoc cref="MetadataUpdatedAsync{TOptions}(TOptions, Type?)"/>
     internal ValueTask<bool> CacheRefreshedAsync<TOptions>(TOptions options, Type? entryType)
         where TOptions : struct, ICacheEntryOptions

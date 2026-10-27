@@ -2,7 +2,7 @@ using UiPath.Caching.Telemetry;
 
 namespace UiPath.Caching.Broadcast;
 
-public sealed partial class ChangeToken<T> : ICacheChangeToken, IKeyedObserver<ICacheEvent>, IMissedEventsObserver, IDisposable
+public sealed partial class ChangeToken<T> : ICacheChangeToken, IKeyedObserver<ICacheEvent>, IMissedEventsObserver, IPeerUpdateSource, IDisposable
 {
     private readonly string _key;
     private readonly KeyMasker _masker;
@@ -26,6 +26,8 @@ public sealed partial class ChangeToken<T> : ICacheChangeToken, IKeyedObserver<I
 
     // Set once a removal, a loss or an error expired the entry: a refresh the dispatcher delivers after it would re-insert the old value.
     private bool _expired;
+
+    private Func<PeerUpdate, bool>? _peerUpdateHandler;
 
     public ChangeToken(
         string key,
@@ -78,6 +80,13 @@ public sealed partial class ChangeToken<T> : ICacheChangeToken, IKeyedObserver<I
     public IDictionary<string, string?>? Metadata  { get; private set; }
 
     public string? TransportId { get; private set; }
+
+    [System.Diagnostics.CodeAnalysis.SuppressMessage("Major Code Smell", "S2292:Trivial properties should be auto-implemented", Justification = "An explicit implementation of an internal interface member cannot be an auto-property.")]
+    Func<PeerUpdate, bool>? IPeerUpdateSource.PeerUpdateHandler
+    {
+        get => _peerUpdateHandler;
+        set => _peerUpdateHandler = value;
+    }
 
     string IKeyedObserver<ICacheEvent>.Key => _key;
 
@@ -150,6 +159,9 @@ public sealed partial class ChangeToken<T> : ICacheChangeToken, IKeyedObserver<I
     public void Dispose() =>
         _unsubscriber?.Dispose();
 
+    private static bool CarriesWriteFields(IDictionary<string, object?> properties) =>
+        properties.ContainsKey(KnownFieldNames.VersionKey) || properties.ContainsKey(KnownFieldNames.PeerFieldsKey);
+
     /// <summary>This token's own key: the caller's, rendered inside the composed key it subscribes with.</summary>
     private LoggedKey Logged() => LoggedKey.For(_masker, _callerKey, _key, _entryType);
 
@@ -158,10 +170,18 @@ public sealed partial class ChangeToken<T> : ICacheChangeToken, IKeyedObserver<I
 
     private void Notify(CacheEventData? data = default)
     {
+        // Before the token changes, since a changed token reads as expired to the cache that holds its entry, and outside its lock: the
+        // update takes the key's merge lock, and a merge holding that lock can be waiting for this one to register on the token.
+        if (data?.Properties != null && !Volatile.Read(ref _expired) && _peerUpdateHandler is { } apply && ExtractPeerUpdate(data.Properties) is { } update && apply(update))
+        {
+            return;
+        }
+
         lock (_notifyLock)
         {
             HasChanged = true;
-            if (data?.Properties != null && !_expired)
+            // A write that carried fields and was not applied is a removal to this copy, as every write was before fields were carried.
+            if (data?.Properties != null && !_expired && !CarriesWriteFields(data.Properties))
             {
                 ExtractExpiration(data.Properties);
                 ExtractMetadata(data.Properties);
@@ -225,6 +245,47 @@ public sealed partial class ChangeToken<T> : ICacheChangeToken, IKeyedObserver<I
             Metadata = mt;
             MetadataHasChanged = true;
         }
+    }
+
+    private PeerUpdate? ExtractPeerUpdate(IDictionary<string, object?> properties)
+    {
+        if (!properties.TryGetValue(KnownFieldNames.VersionKey, out object? v) || v is null
+            || !properties.TryGetValue(KnownFieldNames.PeerFieldsKey, out object? f) || f is null)
+        {
+            return null;
+        }
+
+        if ((v is long version || _serializer.TryDeserialize(v, out version))
+            && version > 0
+            && (f is IDictionary<string, string?> fields || _serializer.TryDeserialize(f, out fields!))
+            && fields is { Count: > 0 })
+        {
+            return new PeerUpdate(version, fields, PeerExpiration(properties), PeerMetadata(properties));
+        }
+
+        return null;
+    }
+
+    private DateTimeOffset? PeerExpiration(IDictionary<string, object?> properties)
+    {
+        if (properties.TryGetValue(KnownFieldNames.PeerExpirationKey, out object? dt) && dt is not null
+            && (dt is DateTimeOffset datetime || _serializer.TryDeserialize(dt, out datetime)))
+        {
+            return datetime;
+        }
+
+        return null;
+    }
+
+    private IDictionary<string, string?>? PeerMetadata(IDictionary<string, object?> properties)
+    {
+        if (properties.TryGetValue(KnownFieldNames.PeerMetadataKey, out object? m) && m is not null
+            && (m is IDictionary<string, string?> metadata || _serializer.TryDeserialize(m, out metadata!)))
+        {
+            return metadata;
+        }
+
+        return null;
     }
 
     private void ExtractExpiration(IDictionary<string, object?> properties)
