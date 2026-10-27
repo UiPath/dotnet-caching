@@ -9,5 +9,7 @@ internal sealed record RedisStreamContext(
     int PollBatchSize,
     TimeSpan PollInterval,
     bool ProfilerEnabled,
-    bool EmitStreamReceivedEvent
+    bool EmitStreamReceivedEvent,
+    bool AutoAck = false,
+    long? MaxLength = null
 );

@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using UiPath.Caching.Policies;
 using UiPath.Caching.Telemetry;
 
@@ -9,6 +10,7 @@ public sealed partial class RedisStreamsTopic<T> : ITopic<T>
     private const int DoorbellIdle = 0;
     private const int DoorbellSending = 1;
     private const int DoorbellRingAgain = 2;
+    private const int MaxDoorbellRetries = 2;
 
     private readonly IRedisStreamKeyStrategy _redisStreamKeyStrategy;
     private readonly RedisStreamSubjectWriter<T> _subscriber;
@@ -31,6 +33,7 @@ public sealed partial class RedisStreamsTopic<T> : ITopic<T>
     private long _published;
     private int _doorbell;
     private int _doorbellFailures;
+    private long _lastDoorbell;
     private bool _disposed;
 
     public RedisStreamsTopic(
@@ -62,6 +65,7 @@ public sealed partial class RedisStreamsTopic<T> : ITopic<T>
         _context = GetContext(topicKey, cacheOptions, streamOptions);
         _waiter = new SignalingFetchWaiter(streamOptions.PollInterval, streamOptions.EffectiveNotifiedPollInterval);
         _wakeEvery = streamOptions.MaxLength is { } maxLength ? Math.Max(1, maxLength / 2) : 0;
+        DoorbellSpacing = streamOptions.EffectiveNotifyMinInterval;
         if (_streamOptions.NotifyEnabled)
         {
             var notifyChannelStrategy = streamOptions.NotifyChannelStrategy
@@ -90,6 +94,8 @@ public sealed partial class RedisStreamsTopic<T> : ITopic<T>
 
     // A doorbell is a hint: one stalled on Redis must not hold the rings behind it for the whole command timeout.
     internal TimeSpan DoorbellTimeout { get; set; } = TimeSpan.FromSeconds(1);
+
+    internal TimeSpan DoorbellSpacing { get; set; }
 
     public IDisposable Subscribe(IObserver<T> observer)
     {
@@ -213,31 +219,124 @@ public sealed partial class RedisStreamsTopic<T> : ITopic<T>
 
     private async Task SendDoorbellsAsync()
     {
+        // Taken once: Dispose cancels and then disposes the source, which a later read of Token would throw on.
+        CancellationToken stop;
+        try
+        {
+            stop = _stopTokenSource.Token;
+        }
+        catch (ObjectDisposedException)
+        {
+            return;
+        }
+
+        // Rings folded into a doorbell that failed are retried a few times, so the consumers they were for are still woken.
+        var owed = false;
+        var retries = 0;
         do
         {
-            Task<long>? publish = null;
-            try
+            if (stop.IsCancellationRequested)
             {
-                publish = _redis.Database.PublishAsync(_notifyRedisChannel!.Value, _context.ConsumerName);
-                await publish.WaitAsync(DoorbellTimeout, _stopTokenSource.Token).ConfigureAwait(false);
-                Volatile.Write(ref _doorbellFailures, 0);
-            }
-            catch (OperationCanceledException) when (_stopTokenSource.IsCancellationRequested)
-            {
-                publish?.Forget();
                 return;
             }
-            catch (TimeoutException ex)
+
+            bool sent;
+            try
             {
-                publish?.Forget();
-                DoorbellFailed(ex);
+                if (await WaitDoorbellSpacingAsync(stop).ConfigureAwait(false))
+                {
+                    owed = true;
+                    retries = 0;
+                }
+
+                sent = await PublishDoorbellAsync(stop).ConfigureAwait(false);
             }
-            catch (Exception ex)
+            catch (OperationCanceledException) when (stop.IsCancellationRequested)
             {
-                DoorbellFailed(ex);
+                return;
+            }
+
+            if (!RingAgain(sent, ref owed, ref retries))
+            {
+                return;
             }
         }
-        while (Interlocked.CompareExchange(ref _doorbell, DoorbellIdle, DoorbellSending) != DoorbellSending && Interlocked.Exchange(ref _doorbell, DoorbellSending) == DoorbellRingAgain);
+        while (true);
+    }
+
+    // False once no ring is left to answer; otherwise the state is Sending again for the next doorbell.
+    private bool RingAgain(bool sent, ref bool owed, ref int retries)
+    {
+        if (sent)
+        {
+            owed = false;
+            retries = 0;
+        }
+
+        // A ring that lands after the budget is spent is a new one and gets its own retries.
+        var retried = !sent && owed && retries < MaxDoorbellRetries
+            && Interlocked.CompareExchange(ref _doorbell, DoorbellRingAgain, DoorbellSending) == DoorbellSending;
+        if (retried)
+        {
+            retries++;
+        }
+
+        if (Interlocked.CompareExchange(ref _doorbell, DoorbellIdle, DoorbellSending) == DoorbellSending
+            || Interlocked.Exchange(ref _doorbell, DoorbellSending) != DoorbellRingAgain)
+        {
+            return false;
+        }
+
+        if (!retried)
+        {
+            owed = true;
+            retries = 0;
+        }
+
+        return true;
+    }
+
+    // True when rings came during the wait: the doorbell about to go out answers them.
+    private async Task<bool> WaitDoorbellSpacingAsync(CancellationToken stop)
+    {
+        // Rings that arrive while this wait runs fold into the doorbell it lets through.
+        var wait = DoorbellSpacing - Stopwatch.GetElapsedTime(Volatile.Read(ref _lastDoorbell));
+        if (wait <= TimeSpan.Zero)
+        {
+            return false;
+        }
+
+        await Task.Delay(wait, stop).ConfigureAwait(false);
+        return Interlocked.Exchange(ref _doorbell, DoorbellSending) == DoorbellRingAgain;
+    }
+
+    private async Task<bool> PublishDoorbellAsync(CancellationToken stop)
+    {
+        Task<long>? publish = null;
+        try
+        {
+            Volatile.Write(ref _lastDoorbell, Stopwatch.GetTimestamp());
+            publish = _redis.Database.PublishAsync(_notifyRedisChannel!.Value, _context.ConsumerName);
+            await publish.WaitAsync(DoorbellTimeout, stop).ConfigureAwait(false);
+            Volatile.Write(ref _doorbellFailures, 0);
+            return true;
+        }
+        catch (OperationCanceledException) when (stop.IsCancellationRequested)
+        {
+            publish?.Forget();
+            throw;
+        }
+        catch (TimeoutException ex)
+        {
+            publish?.Forget();
+            DoorbellFailed(ex);
+            return false;
+        }
+        catch (Exception ex)
+        {
+            DoorbellFailed(ex);
+            return false;
+        }
     }
 
     // Once per streak at warning: a stalled Redis would otherwise log every second for every topic.
@@ -283,7 +382,9 @@ public sealed partial class RedisStreamsTopic<T> : ITopic<T>
             PollBatchSize: options.PollBatchSize,
             PollInterval: options.PollInterval,
             ProfilerEnabled: options.ProfilerEnabled,
-            EmitStreamReceivedEvent: options.EmitStreamReceivedEvent
+            EmitStreamReceivedEvent: options.EmitStreamReceivedEvent,
+            AutoAck: options.AutoAck,
+            MaxLength: options.MaxLength
             );
     }
 

@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using StackExchange.Redis;
@@ -181,6 +182,20 @@ public sealed class RedisStreamNotifyIntegrationTests(RedisContainerFixture fixt
         var (a, _) = Topic("urn:a", Poll, configure: o => o.NotifyChannelStrategy = new LostDoorbell());
         var (_, received) = Topic("urn:b", Poll, configure: o => o.NotifiedPollInterval = TimeSpan.FromSeconds(2));
         await SettledAsync();
+        // A wait that began before the subscription went live still ends at the 250 ms poll, and the subscription goes live a little
+        // after the server counts it. Primers are read until one takes longer than that poll, so the waits that follow are the notified ones.
+        var live = false;
+        for (var i = 0; i < 5 && !live; i++)
+        {
+            var started = Stopwatch.GetTimestamp();
+            (await a.PublishAsync(Event("urn:a", $"primer-{i}"), TestContext.Current.CancellationToken)).Should().BeTrue();
+            (await Task.WhenAny(received.Next.Task, Task.Delay(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken))).Should().BeSameAs(received.Next.Task, "a poll always catches the primer");
+            live = Stopwatch.GetElapsedTime(started) > TimeSpan.FromMilliseconds(600);
+            received.Next = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        }
+
+        live.Should().BeTrue("the notified interval comes into force once the doorbell is live");
+        await Task.Delay(100, TestContext.Current.CancellationToken);
 
         (await a.PublishAsync(Event("urn:a", "1"), TestContext.Current.CancellationToken)).Should().BeTrue();
 

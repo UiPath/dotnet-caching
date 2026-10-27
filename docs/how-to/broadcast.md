@@ -56,7 +56,7 @@ Two things to know:
 | Redis Streams | At-least-once | Yes (XREADGROUP) | Yes | Default |
 | Redis Pub/Sub | None (fire-and-forget) | No | No | Single-node or read-mostly |
 
-Switch to Pub/Sub by setting `Broadcast:RedisPubSub:Enabled: true`, `Broadcast:RedisStreams:Enabled: false`, **and `DefaultTopic: "RedisPubSub"`** at the root of the `Caching` section. The last step matters: `TopicFactory.Get(name)` resolves topics by their configured provider name, not by "the first enabled provider". Leaving `DefaultTopic` at its `RedisStreams` default while disabling Streams resolves to the null topic provider, so L1 invalidations are silently dropped.
+Switch to Pub/Sub by setting `Broadcast:RedisPubSub:Enabled: true`, `Broadcast:RedisStreams:Enabled: false`, **and `DefaultTopic: "RedisPubSub"`** at the root of the `Caching` section. The last step matters: `TopicFactory.Get(name)` resolves topics by their configured provider name, not by "the first enabled provider". Leaving `DefaultTopic` at its `RedisStreams` default while disabling Streams (or naming any provider that is disabled or not registered) fails host start with an `OptionsValidationException`; with `BroadcastEnabled: false` nothing is checked.
 
 You can also call `AddRedisStreams()` / `AddRedisPubSub()` directly instead of `AddBroadcast()` to register only the transport you need:
 

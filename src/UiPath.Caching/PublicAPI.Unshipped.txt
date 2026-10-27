@@ -43,3 +43,7 @@ UiPath.Caching.Redis.RedisCacheOptions.HashFieldBatchSize.get -> int
 UiPath.Caching.Redis.RedisCacheOptions.HashFieldBatchSize.set -> void
 static UiPath.Caching.Redis.ProfiledCommandProcessor.NodeField.get -> string!
 static UiPath.Caching.Redis.ProfiledCommandProcessor.NodeField.set -> void
+UiPath.Caching.Broadcast.Redis.RedisStreamsTopicOptions.NotifyMinInterval.get -> System.TimeSpan?
+UiPath.Caching.Broadcast.Redis.RedisStreamsTopicOptions.NotifyMinInterval.set -> void
+UiPath.Caching.Broadcast.Redis.RedisStreamsTopicOptions.AutoAck.get -> bool
+UiPath.Caching.Broadcast.Redis.RedisStreamsTopicOptions.AutoAck.set -> void

@@ -223,6 +223,23 @@ public sealed class RedisStreamGapIntegrationTests(RedisContainerFixture fixture
         }
     }
 
+    [Fact]
+    public async Task The_first_entry_of_a_group_made_on_an_empty_stream_is_not_a_gap_before_Redis_7()
+    {
+        Assert.SkipUnless(fixture.Enabled, "Set RUN_REDIS_INTEGRATION_TESTS=1 (Docker required) to run.");
+        Assert.SkipWhen(fixture.ServerVersion.Major >= 7, "Redis 7.0 records max-deleted-entry-id, so it never mistakes the first entry for a trim.");
+        await Db.StreamDeleteConsumerGroupAsync(_stream, _group);
+        StartWriter();
+        _sut!.MarkSubscribed();
+        (await EventuallyAsync(async () => (await Db.StreamGroupInfoAsync(_stream)).Any(g => g.Name == _group))).Should().BeTrue("the writer makes the group on the empty stream");
+        _state.OnConnectionRestored += Raise.Event<EventHandler>(_state, EventArgs.Empty);
+        var first = await AddAsync(1);
+
+        (await EventuallyAsync(async () => await LastDeliveredAsync() == first)).Should().BeTrue();
+        await Task.Delay(PollInterval * 5, TestContext.Current.CancellationToken);
+        Volatile.Read(ref _missed).Should().Be(0);
+    }
+
     public async ValueTask InitializeAsync()
     {
         if (!fixture.Enabled)

@@ -4,6 +4,7 @@ using Microsoft.Extensions.Logging;
 using NSubstitute.ExceptionExtensions;
 using NSubstitute.Extensions;
 using NSubstitute.ReceivedExtensions;
+using Polly.Timeout;
 using StackExchange.Redis;
 using UiPath.Caching.Telemetry;
 using UiPath.Caching.Tests.Telemetry;
@@ -34,6 +35,14 @@ public class RedisStreamSubjectWriterTests : IAsyncLifetime
     private TimeSpan _pollInterval = default!;
     private RedisStreamSubjectWriter<ICacheEvent>? _sut;
     private RedisStreamSubjectWriter<ICacheEvent> Sut => _sut ??= _fixture.Create<RedisStreamSubjectWriter<ICacheEvent>>();
+
+    public static TheoryData<Exception> FailuresOfAReadThatMayHaveDelivered() =>
+    [
+        new TimeoutRejectedException("rejected"),
+        new OperationCanceledException("not the stop token"),
+        new RedisServerException(RedisErrorKind.None, CommandFlags.None, "ERR boom"),
+        new InvalidOperationException("boom"),
+    ];
 
     [Fact]
     public async Task Reiceive_redis_null()
@@ -902,9 +911,11 @@ public class RedisStreamSubjectWriterTests : IAsyncLifetime
         sut.MarkSubscribed();
         firstRead.SetException(new RedisException("NOGROUP No such key or consumer group"));
 
-        (await WaitUntil(() => Volatile.Read(ref reads) >= (busy ? 3 : 2))).Should().BeTrue("the group turned up");
+        (await WaitUntil(() => _database.ReceivedCalls().Any(c => c.GetMethodInfo().Name == nameof(IDatabase.StreamRangeAsync)))).Should().BeTrue("the group turned up and was checked");
+        // The loop reads again only after the check has reported.
+        var readsAtCheck = Volatile.Read(ref reads);
+        (await WaitUntil(() => Volatile.Read(ref reads) > readsAtCheck)).Should().BeTrue();
         Volatile.Read(ref creates).Should().Be(busy ? 2 : 1);
-        await Task.Delay(100, TestContext.Current.CancellationToken);
         Volatile.Read(ref missed).Should().Be(lost);
     }
 
@@ -1026,7 +1037,7 @@ public class RedisStreamSubjectWriterTests : IAsyncLifetime
         sut.MarkSubscribed();
 
         (await WaitUntil(() => Volatile.Read(ref resubscribed) == 1)).Should().BeTrue("the telling runs with the gate free");
-        (await WaitUntil(() => Volatile.Read(ref reads) >= 3)).Should().BeTrue("the reader goes on");
+        (await WaitUntil(() => Volatile.Read(ref reads) >= 2)).Should().BeTrue("the reader goes on");
     }
 
     [Fact]
@@ -1389,7 +1400,7 @@ public class RedisStreamSubjectWriterTests : IAsyncLifetime
 
         using var sut = CreateSut(Channel.CreateUnbounded<ICacheEvent>().Writer, _logger, onMessagesMissed: () => Interlocked.Increment(ref missed));
 
-        (await WaitUntil(() => Volatile.Read(ref reads) >= 3)).Should().BeTrue();
+        (await WaitUntil(() => Volatile.Read(ref reads) >= 2)).Should().BeTrue();
         Volatile.Read(ref missed).Should().Be(0, "nothing was read through the group yet");
     }
 
@@ -1841,6 +1852,56 @@ public class RedisStreamSubjectWriterTests : IAsyncLifetime
         await _database.DidNotReceiveWithAnyArgs().StreamAcknowledgeAsync(default, default, default(RedisValue[])!);
     }
 
+    [Theory]
+    [InlineData(true, 1)]
+    [InlineData(false, 0)]
+    public async Task A_dispatch_failure_reports_missed_events_only_with_AutoAck(bool autoAck, int expectedMissed)
+    {
+        var missed = 0;
+        var recordingLogger = new RecordingLogger();
+        var loggedFailed = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+        recordingLogger.OnRecord = r =>
+        {
+            if (r.Message.Contains("Failed to dispatch event"))
+            {
+                loggedFailed.TrySetResult(true);
+            }
+        };
+        var emitted = 0;
+        StreamEntry[] OneEntry() => Interlocked.Increment(ref emitted) == 1 ? [Entry("1-0")] : [];
+        if (autoAck)
+        {
+            NoAckRead(_ => OneEntry());
+        }
+        else
+        {
+            SetupSingleBatch(OneEntry());
+        }
+
+        _formatter.Decode(Arg.Any<ReadOnlyMemory<byte>>()).Returns(new TestCacheEvent { Valid = true, Source = new Uri("urn:other-source") });
+
+        using var sut = CreateSut(
+            new ThrowingChannelWriter(new InvalidOperationException("boom")),
+            recordingLogger,
+            onMessagesMissed: () => Interlocked.Increment(ref missed),
+            context: _context with { AutoAck = autoAck });
+
+        await loggedFailed.Task.WaitAsync(WaitTimeout, TestContext.Current.CancellationToken);
+        if (autoAck)
+        {
+            (await WaitUntil(() => Volatile.Read(ref missed) >= 1)).Should().BeTrue("the entry was read with NOACK and cannot be read again");
+        }
+        else
+        {
+            await Task.Delay(_pollInterval.Multiply(10), TestContext.Current.CancellationToken);
+        }
+
+        await _cancellationTokenSource.CancelAsync();
+        await sut.FetchTask.WaitAsync(WaitTimeout, TestContext.Current.CancellationToken);
+
+        Volatile.Read(ref missed).Should().Be(expectedMissed);
+    }
+
     [Fact]
     public async Task Start_reads_the_consumers_pending_entries_once_before_new_ones()
     {
@@ -2129,6 +2190,273 @@ public class RedisStreamSubjectWriterTests : IAsyncLifetime
         Volatile.Read(ref missed).Should().Be(1, "the first acknowledgement failed, so only the pass whose acknowledgement succeeded reports");
     }
 
+    [Fact]
+    public async Task Without_AutoAck_the_events_are_acknowledged_and_the_reads_do_not_ask_for_NOACK()
+    {
+        var acked = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        _database.StreamAcknowledgeAsync(Arg.Any<RedisKey>(), Arg.Any<RedisValue>(), Arg.Any<RedisValue[]>())
+            .Returns(_ => { acked.TrySetResult(); return Task.FromResult(1L); });
+        _formatter.Decode(Arg.Any<ReadOnlyMemory<byte>>()).Returns(new TestCacheEvent { Valid = true, Source = _sourceUri });
+        SetupSingleBatch([Entry("1-0")]);
+
+        using var sut = CreateSut(Channel.CreateUnbounded<ICacheEvent>().Writer, _logger);
+
+        await acked.Task.WaitAsync(WaitTimeout, TestContext.Current.CancellationToken);
+        (await WaitUntil(() => ReadScriptFlags().Count > 0)).Should().BeTrue();
+        await _cancellationTokenSource.CancelAsync();
+        await sut.FetchTask.WaitAsync(WaitTimeout, TestContext.Current.CancellationToken);
+
+        ReadScriptFlags().Should().OnlyContain(flag => flag == 0);
+        NoAckReads().Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task With_AutoAck_the_reads_ask_for_NOACK_and_nothing_is_acknowledged()
+    {
+        var delivered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var emitted = 0;
+        NoAckRead(call =>
+        {
+            if (!IsNoAck(call) || Interlocked.Increment(ref emitted) != 1)
+            {
+                return [];
+            }
+
+            delivered.TrySetResult();
+            return [Entry("1-0")];
+        });
+        _formatter.Decode(Arg.Any<ReadOnlyMemory<byte>>()).Returns(new TestCacheEvent { Valid = true, Source = new Uri("urn:other-source") });
+        var channel = Channel.CreateUnbounded<ICacheEvent>();
+
+        using var sut = CreateSut(channel.Writer, _logger, context: _context with { AutoAck = true });
+
+        await delivered.Task.WaitAsync(WaitTimeout, TestContext.Current.CancellationToken);
+        (await channel.Reader.WaitToReadAsync(TestContext.Current.CancellationToken)).Should().BeTrue("the entry is still dispatched");
+        (await WaitUntil(() => ReadScriptFlags().Count > 0)).Should().BeTrue();
+        await _cancellationTokenSource.CancelAsync();
+        await sut.FetchTask.WaitAsync(WaitTimeout, TestContext.Current.CancellationToken);
+
+        ReadScriptFlags().Should().OnlyContain(flag => flag == 1);
+        await _database.DidNotReceiveWithAnyArgs().StreamAcknowledgeAsync(default, default, default(RedisValue[])!);
+    }
+
+    [Fact]
+    [System.Diagnostics.CodeAnalysis.SuppressMessage("Major Code Smell", "S108:Nested blocks of code should not be left empty", Justification = "The fetch loop ends by cancellation, which is the expected outcome here.")]
+    public async Task With_AutoAck_a_read_that_times_out_reports_missed_events()
+    {
+        var missed = 0;
+        NoAckRead(call => IsNoAck(call) ? throw Timeout() : []);
+
+        using var sut = CreateSut(Channel.CreateUnbounded<ICacheEvent>().Writer, _logger, onMessagesMissed: () => Interlocked.Increment(ref missed), context: _context with { AutoAck = true });
+
+        (await WaitUntil(() => Volatile.Read(ref missed) >= 1)).Should().BeTrue("the read may have been delivered and cannot be read again");
+        await _cancellationTokenSource.CancelAsync();
+        try { await sut.FetchTask.WaitAsync(WaitTimeout, TestContext.Current.CancellationToken); } catch (OperationCanceledException) { }
+    }
+
+    [Fact]
+    [System.Diagnostics.CodeAnalysis.SuppressMessage("Major Code Smell", "S108:Nested blocks of code should not be left empty", Justification = "The fetch loop ends by cancellation, which is the expected outcome here.")]
+    public async Task With_AutoAck_a_read_that_loses_the_connection_reports_missed_events()
+    {
+        var missed = 0;
+        NoAckRead(call => IsNoAck(call) ? throw new RedisConnectionException(ConnectionFailureType.SocketFailure, CommandFlags.None, "dropped") : []);
+
+        using var sut = CreateSut(Channel.CreateUnbounded<ICacheEvent>().Writer, _logger, onMessagesMissed: () => Interlocked.Increment(ref missed), context: _context with { AutoAck = true });
+
+        (await WaitUntil(() => Volatile.Read(ref missed) >= 1)).Should().BeTrue();
+        await _cancellationTokenSource.CancelAsync();
+        try { await sut.FetchTask.WaitAsync(WaitTimeout, TestContext.Current.CancellationToken); } catch (OperationCanceledException) { }
+    }
+
+    [Theory]
+    [MemberData(nameof(FailuresOfAReadThatMayHaveDelivered), DisableDiscoveryEnumeration = true)]
+    [System.Diagnostics.CodeAnalysis.SuppressMessage("Major Code Smell", "S108:Nested blocks of code should not be left empty", Justification = "The fetch loop ends by cancellation, which is the expected outcome here.")]
+    public async Task With_AutoAck_any_failure_of_the_read_reports_missed_events(Exception failure)
+    {
+        var missed = 0;
+        var reads = 0;
+        NoAckRead(call => IsNoAck(call) && Interlocked.Increment(ref reads) == 1 ? throw failure : []);
+
+        using var sut = CreateSut(Channel.CreateUnbounded<ICacheEvent>().Writer, _logger, onMessagesMissed: () => Interlocked.Increment(ref missed), context: _context with { AutoAck = true });
+
+        (await WaitUntil(() => Volatile.Read(ref reads) >= 2 && Volatile.Read(ref missed) >= 2)).Should().BeTrue();
+        await _cancellationTokenSource.CancelAsync();
+        try { await sut.FetchTask.WaitAsync(WaitTimeout, TestContext.Current.CancellationToken); } catch (OperationCanceledException) { }
+
+        Volatile.Read(ref missed).Should().Be(2, "once when the read fails and once when the next read succeeds");
+    }
+
+    [Fact]
+    [System.Diagnostics.CodeAnalysis.SuppressMessage("Major Code Smell", "S108:Nested blocks of code should not be left empty", Justification = "The fetch loop ends by cancellation, which is the expected outcome here.")]
+    public async Task With_AutoAck_a_read_the_server_refused_as_unknown_reports_nothing()
+    {
+        var missed = 0;
+        var reads = 0;
+        NoAckRead(call => IsNoAck(call) && Interlocked.Increment(ref reads) == 1 ? throw UnknownCommandError("ERR unknown command 'XREADGROUP'") : []);
+
+        using var sut = CreateSut(Channel.CreateUnbounded<ICacheEvent>().Writer, _logger, onMessagesMissed: () => Interlocked.Increment(ref missed), context: _context with { AutoAck = true });
+
+        (await WaitUntil(() => Volatile.Read(ref reads) >= 1)).Should().BeTrue();
+        await Task.Delay(200, TestContext.Current.CancellationToken);
+        await _cancellationTokenSource.CancelAsync();
+        try { await sut.FetchTask.WaitAsync(WaitTimeout, TestContext.Current.CancellationToken); } catch (OperationCanceledException) { }
+
+        Volatile.Read(ref missed).Should().Be(0);
+    }
+
+    [Fact]
+    [System.Diagnostics.CodeAnalysis.SuppressMessage("Major Code Smell", "S108:Nested blocks of code should not be left empty", Justification = "The fetch loop ends by cancellation, which is the expected outcome here.")]
+    public async Task With_AutoAck_a_streak_of_failed_reads_reports_at_its_start_and_again_when_a_read_succeeds()
+    {
+        var missed = 0;
+        var reads = 0;
+        ScriptsUnavailable();
+        NoAckRead(call => IsNoAck(call) && Interlocked.Increment(ref reads) is 1 or 2 or 3 or 5 ? throw Timeout() : []);
+
+        using var sut = CreateSut(Channel.CreateUnbounded<ICacheEvent>().Writer, _logger, onMessagesMissed: () => Interlocked.Increment(ref missed), context: _context with { AutoAck = true });
+
+        (await WaitUntil(() => Volatile.Read(ref reads) >= 6 && Volatile.Read(ref missed) >= 4)).Should().BeTrue();
+        await _cancellationTokenSource.CancelAsync();
+        try { await sut.FetchTask.WaitAsync(WaitTimeout, TestContext.Current.CancellationToken); } catch (OperationCanceledException) { }
+
+        Volatile.Read(ref missed).Should().Be(4, "three failures in a row are one streak, reported when it starts and when the read that succeeds ends it; the failure after that read is another");
+    }
+
+    [Fact]
+    public async Task With_AutoAck_a_batch_of_failed_dispatches_reports_missed_events_once()
+    {
+        var missed = 0;
+        var emitted = 0;
+        NoAckRead(_ => Interlocked.Increment(ref emitted) == 1 ? [Entry("1-0"), Entry("2-0"), Entry("3-0")] : []);
+        _formatter.Decode(Arg.Any<ReadOnlyMemory<byte>>()).Returns(new TestCacheEvent { Valid = true, Source = new Uri("urn:other-source") });
+
+        using var sut = CreateSut(
+            new ThrowingChannelWriter(new InvalidOperationException("boom")),
+            _logger,
+            onMessagesMissed: () => Interlocked.Increment(ref missed),
+            context: _context with { AutoAck = true });
+
+        (await WaitUntil(() => Volatile.Read(ref missed) >= 1)).Should().BeTrue();
+        await Task.Delay(_pollInterval.Multiply(10), TestContext.Current.CancellationToken);
+        await _cancellationTokenSource.CancelAsync();
+        await sut.FetchTask.WaitAsync(WaitTimeout, TestContext.Current.CancellationToken);
+
+        Volatile.Read(ref missed).Should().Be(1, "the three entries lost are one batch");
+    }
+
+    [Fact]
+    [System.Diagnostics.CodeAnalysis.SuppressMessage("Major Code Smell", "S108:Nested blocks of code should not be left empty", Justification = "The fetch loop ends by cancellation, which is the expected outcome here.")]
+    public async Task With_AutoAck_a_failed_gap_check_that_never_read_reports_nothing()
+    {
+        var missed = 0;
+        var checks = 0;
+        ScriptsUnavailable();
+        _database.Configure().StreamInfoAsync(Arg.Any<RedisKey>()).ReturnsForAnyArgs(_ =>
+        {
+            Interlocked.Increment(ref checks);
+            return Task.FromException<StreamInfo>(new RedisConnectionException(ConnectionFailureType.SocketFailure, CommandFlags.None, "dropped"));
+        });
+
+        using var sut = CreateSut(Channel.CreateUnbounded<ICacheEvent>().Writer, _logger, onMessagesMissed: () => Interlocked.Increment(ref missed), context: _context with { AutoAck = true });
+        sut.MarkSubscribed();
+
+        (await WaitUntil(() => Volatile.Read(ref checks) >= 2)).Should().BeTrue();
+        await _cancellationTokenSource.CancelAsync();
+        try { await sut.FetchTask.WaitAsync(WaitTimeout, TestContext.Current.CancellationToken); } catch (OperationCanceledException) { }
+
+        Volatile.Read(ref missed).Should().Be(0, "no read was sent, so nothing was delivered");
+    }
+
+    [Fact]
+    [System.Diagnostics.CodeAnalysis.SuppressMessage("Major Code Smell", "S108:Nested blocks of code should not be left empty", Justification = "The fetch loop ends by cancellation, which is the expected outcome here.")]
+    public async Task Without_AutoAck_a_read_that_times_out_reports_nothing_and_reads_the_pending_entries()
+    {
+        var missed = 0;
+        var positions = new ConcurrentQueue<string>();
+        var reads = 0;
+        Reads(positions, position => position == ">" && Interlocked.Increment(ref reads) == 1 ? throw Timeout() : []);
+
+        using var sut = CreateSut(Channel.CreateUnbounded<ICacheEvent>().Writer, _logger, onMessagesMissed: () => Interlocked.Increment(ref missed));
+
+        (await WaitUntil(() => positions.Contains("0"))).Should().BeTrue();
+        await _cancellationTokenSource.CancelAsync();
+        try { await sut.FetchTask.WaitAsync(WaitTimeout, TestContext.Current.CancellationToken); } catch (OperationCanceledException) { }
+
+        Volatile.Read(ref missed).Should().Be(0);
+    }
+
+    [Fact]
+    [System.Diagnostics.CodeAnalysis.SuppressMessage("Major Code Smell", "S108:Nested blocks of code should not be left empty", Justification = "The fetch loop ends by cancellation, which is the expected outcome here.")]
+    public async Task With_AutoAck_the_pending_entries_an_earlier_run_left_are_read_and_acknowledged_once_before_the_reads_ask_for_NOACK()
+    {
+        var acked = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        _database.StreamAcknowledgeAsync(Arg.Any<RedisKey>(), Arg.Any<RedisValue>(), Arg.Any<RedisValue[]>())
+            .Returns(_ => { acked.TrySetResult(); return Task.FromResult(1L); });
+        _formatter.Decode(Arg.Any<ReadOnlyMemory<byte>>()).Returns(new TestCacheEvent { Valid = true, Source = new Uri("urn:other-source") });
+        var channel = Channel.CreateUnbounded<ICacheEvent>();
+        var positions = new ConcurrentQueue<string>();
+        NoAckRead(call =>
+        {
+            var position = IsNoAck(call) ? "noack" : call.ArgAt<RedisValue?>(3).ToString()!;
+            positions.Enqueue(position);
+            return position == "0" && positions.Count(p => p == "0") == 1 ? [Entry("1-0")] : [];
+        });
+
+        using var sut = CreateSut(channel.Writer, _logger, context: _context with { AutoAck = true });
+
+        await acked.Task.WaitAsync(WaitTimeout, TestContext.Current.CancellationToken);
+        (await WaitUntil(() => positions.Contains("noack"))).Should().BeTrue();
+        await _cancellationTokenSource.CancelAsync();
+        try { await sut.FetchTask.WaitAsync(WaitTimeout, TestContext.Current.CancellationToken); } catch (OperationCanceledException) { }
+
+        channel.Reader.TryRead(out _).Should().BeTrue("the pending entry is dispatched");
+        await _database.Received(1).StreamAcknowledgeAsync(_context.Topic, _context.ConsumerGroup, Arg.Is<RedisValue[]>(ids => ids.Length == 1 && ids[0] == "1-0"));
+        positions.Take(2).Should().Equal("0", "noack");
+        positions.Count(p => p == "0").Should().Be(1, "the pending list is read once");
+    }
+
+    [Fact]
+    [System.Diagnostics.CodeAnalysis.SuppressMessage("Major Code Smell", "S108:Nested blocks of code should not be left empty", Justification = "The fetch loop ends by cancellation, which is the expected outcome here.")]
+    public async Task A_group_made_on_an_empty_stream_by_a_create_that_timed_out_stays_one_when_a_retry_finds_it()
+    {
+        var missed = 0;
+        var created = 0;
+        var newReads = 0;
+        // The head script finds no stream, so the group is made on an empty one.
+        _database.ScriptEvaluateAsync(Arg.Is<string>(script => IsHeadScript(script)), Arg.Any<RedisKey[]>(), Arg.Any<RedisValue[]>(), Arg.Any<CommandFlags>())
+            .Returns(RedisResult.Create([RedisResult.Create(1L), RedisResult.Create(0L), RedisResult.Create(RedisValue.Null), RedisResult.Create(RedisValue.Null), RedisResult.Create(RedisValue.Null), RedisResult.Create(RedisValue.Null)]));
+        _database.ExecuteAsync("XGROUP", Arg.Any<object[]>())
+            .ReturnsForAnyArgs(_ => Interlocked.Increment(ref created) == 1
+                ? Task.FromException<RedisResult>(Timeout())
+                : Task.FromException<RedisResult>(new RedisServerException(RedisErrorKind.None, CommandFlags.None, StreamConstants.ConsumerGroupNameExistsErrorMessage)));
+        NoAckRead(call => call.ArgAt<RedisValue?>(3).ToString() == ">" && Interlocked.Increment(ref newReads) <= 2
+            ? throw new RedisServerException(RedisErrorKind.None, CommandFlags.None, "NOGROUP No such key or consumer group")
+            : []);
+        // Redis 6 on a stream that has grown since: no max-deleted-entry-id, and the group that never read sits at 0-0.
+        _database.Configure().ScriptEvaluateAsync(Arg.Is<string>(script => !IsHeadScript(script)), Arg.Any<RedisKey[]>(), Arg.Any<RedisValue[]>(), Arg.Any<CommandFlags>())
+            .Returns(RedisResult.Create(
+            [
+                RedisResult.Create(
+                [
+                    RedisResult.Create((RedisValue)"length"), RedisResult.Create((RedisValue)1),
+                    RedisResult.Create((RedisValue)"last-generated-id"), RedisResult.Create((RedisValue)"5-0"),
+                    RedisResult.Create((RedisValue)"first-entry"), RedisResult.Create([RedisResult.Create((RedisValue)"5-0")]),
+                ]),
+                RedisResult.Create([RedisResult.Create(new RedisValue[] { "name", _consumerGroup, "last-delivered-id", "0-0" })]),
+                RedisResult.Create(RedisValue.Null),
+            ]));
+
+        using var sut = CreateSut(Channel.CreateUnbounded<ICacheEvent>().Writer, _logger, onMessagesMissed: () => Interlocked.Increment(ref missed));
+
+        (await WaitUntil(() => _database.ReceivedCalls().Any(c => c.GetMethodInfo().Name == nameof(IDatabase.ScriptEvaluateAsync) && c.GetArguments()[0] is string script && !IsHeadScript(script)))).Should().BeTrue();
+        await Task.Delay(200, TestContext.Current.CancellationToken);
+        await _cancellationTokenSource.CancelAsync();
+        try { await sut.FetchTask.WaitAsync(WaitTimeout, TestContext.Current.CancellationToken); } catch (OperationCanceledException) { }
+
+        Volatile.Read(ref created).Should().Be(2);
+        Volatile.Read(ref missed).Should().Be(0, "the group is the one this node made on the empty stream, whose first entry Redis 6 cannot tell from a trim");
+    }
+
     public ValueTask DisposeAsync()
     {
         return ValueTask.CompletedTask;
@@ -2184,6 +2512,8 @@ public class RedisStreamSubjectWriterTests : IAsyncLifetime
         return false;
     }
 
+    private static bool IsNoAck(NSubstitute.Core.CallInfo call) => call.ArgAt<bool>(5);
+
     private static RedisServerException UnknownCommandError(string message) =>
         new(RedisErrorKind.UnknownCommand, CommandFlags.None, message);
 
@@ -2210,6 +2540,18 @@ public class RedisStreamSubjectWriterTests : IAsyncLifetime
             ? RedisResult.Create(RedisValue.Null)
             : RedisResult.Create([RedisResult.Create([RedisResult.Create((RedisValue)"stream"), RedisResult.Create([.. entries.Select(id => RedisResult.Create([RedisResult.Create((RedisValue)id), RedisResult.Create(new RedisValue[] { "f", "v" })]))])])]),
     ]);
+
+    private void NoAckRead(Func<NSubstitute.Core.CallInfo, StreamEntry[]> answer) =>
+        _database.StreamReadGroupAsync(Arg.Any<RedisKey>(), Arg.Any<RedisValue>(), Arg.Any<RedisValue>(), Arg.Any<RedisValue?>(), Arg.Any<int?>(), Arg.Any<bool>(), Arg.Any<TimeSpan?>(), Arg.Any<CommandFlags>())
+            .ReturnsForAnyArgs(call => Task.FromResult(answer(call)));
+
+    private List<object?> NoAckReads() => [.. _database.ReceivedCalls()
+        .Where(c => c.GetMethodInfo().Name == nameof(IDatabase.StreamReadGroupAsync) && c.GetArguments().Length > 5 && c.GetArguments()[5] is true)
+        .Select(c => c.GetArguments()[5])];
+
+    private List<int> ReadScriptFlags() => [.. _database.ReceivedCalls()
+        .Where(c => c.GetMethodInfo().Name == nameof(IDatabase.ScriptEvaluateAsync) && c.GetArguments()[0] is string script && !IsHeadScript(script))
+        .Select(c => (int)((RedisValue[])c.GetArguments()[2]!)[4])];
 
     private void SetupSingleBatch(StreamEntry[] entries)
     {

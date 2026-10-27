@@ -48,6 +48,35 @@ public class StreamIdsTests
             .Should().Be(removed);
     }
 
+    [Theory]
+    [InlineData(null, "0-0", true, 1L, 100L, false)]
+    [InlineData(null, "0-0", true, 1L, null, false)]
+    [InlineData(null, "0-0", true, 99L, 100L, false)]
+    [InlineData(null, "0-0", true, 100L, 100L, true)]
+    [InlineData(null, "0-0", true, 101L, 100L, true)]
+    [InlineData(null, "0-0", false, 1L, 100L, true)]
+    [InlineData(null, "3-0", true, 1L, 100L, true)]
+    [InlineData("0-0", "0-0", true, 1L, 100L, true)]
+    [InlineData("4-0", "0-0", true, 1L, 100L, true)]
+    public void Gap_of_a_group_made_on_an_empty_stream_is_only_a_trim_when_the_stream_can_have_trimmed(string? maxDeleted, string lastDelivered, bool createdOnEmpty, long length, long? maxLength, bool removed)
+    {
+        ReadCount? known = null;
+
+        // Redis 6: no max-deleted-entry-id, and the first entry is past a group that never read.
+        var stream = StreamIds.Parse(Stream(length, "9-0", 0, "5-0", maxDeleted));
+
+        (StreamIds.Gap(stream, lastDelivered, null, ref known, createdOnEmpty, maxLength) is not null).Should().Be(removed);
+    }
+
+    [Fact]
+    public void Gap_of_a_group_made_on_an_empty_stream_is_a_loss_when_the_first_entry_is_not_the_first_of_its_millisecond()
+    {
+        ReadCount? known = null;
+
+        StreamIds.Gap(StreamIds.Parse(Stream(2, "9-0", 0, "5-0", null)), "0-0", null, ref known, true, 100).Should().BeNull();
+        StreamIds.Gap(StreamIds.Parse(Stream(2, "9-0", 0, "5-1", null)), "0-0", null, ref known, true, 100).Should().NotBeNull("5-0 was removed");
+    }
+
     [Fact]
     public void A_count_Redis_cannot_tell_is_every_entry_added_at_the_newest_entry_and_kept_until_the_group_reads_on()
     {
