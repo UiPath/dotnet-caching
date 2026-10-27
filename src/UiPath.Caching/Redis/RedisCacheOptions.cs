@@ -30,6 +30,12 @@ public class RedisCacheOptions : ICacheOptions
     /// </summary>
     public bool AwaitRefresh { get; set; }
 
+    /// <summary>
+    /// Which node answers a read. <see cref="RedisReadFrom.Master"/> by default: the master cannot return a key it has already removed,
+    /// as a lagging replica can right after a write or an invalidation, and it answers faster.
+    /// </summary>
+    public RedisReadFrom ReadFrom { get; set; } = RedisReadFrom.Master;
+
     /// <summary>Member-wise copy, so a caller can vary one setting without mutating the DI singleton.</summary>
     internal RedisCacheOptions ShallowCopy() => (RedisCacheOptions)MemberwiseClone();
 }

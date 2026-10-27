@@ -36,6 +36,7 @@ public abstract class RedisCacheBase : IConnectionState, IDisposable
         DefaultExpiration = DefaultPolicy.DistributedExpiration;
         Clock = clock;
         KeyReadTelemetryEnabled = redisCacheOptions.KeyReadTelemetryEnabled;
+        ReadFlags = redisCacheOptions.ReadFrom == RedisReadFrom.Replica ? CommandFlags.PreferReplica : CommandFlags.None;
         RefreshFlags = redisCacheOptions.AwaitRefresh
             ? CommandFlags.DemandMaster
             : CommandFlags.DemandMaster | CommandFlags.FireAndForget;
@@ -63,6 +64,8 @@ public abstract class RedisCacheBase : IConnectionState, IDisposable
 
     /// <summary>Flags for a standalone TTL write, shared by both caches so the option cannot be honored in one and not the other.</summary>
     internal CommandFlags RefreshFlags { get; }
+
+    protected CommandFlags ReadFlags { get; }
 
     protected ICachingTelemetryProvider Telemetry { get; }
 
