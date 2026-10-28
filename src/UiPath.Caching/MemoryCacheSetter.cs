@@ -36,6 +36,8 @@ internal abstract class MemoryCacheSetter(
 
     protected TimeProvider Clock { get; } = clock;
 
+    protected virtual bool AppliesPeerUpdates => false;
+
     private ICacheEntrySizeProvider SizeProvider { get; } = memoryCacheOptions.SizeProvider ?? new DefaultCacheEntrySizeProvider();
 
     /// <summary>Generic over the options so the caches' option structs come in as they are, not boxed into the interface.</summary>
@@ -55,6 +57,10 @@ internal abstract class MemoryCacheSetter(
             {
                 var state = new RefreshMetadataState(options.CacheKey, options.TopicKey, item, token, entryType, maxExpiration, options.CallerKey);
                 token.RegisterChangeCallback(_refreshMetadata ??= RefreshMetadata, state);
+                if (AppliesPeerUpdates && token is IPeerUpdateSource peer)
+                {
+                    peer.PeerUpdateHandler = update => TryApplyPeerUpdate(state, update);
+                }
             }
 
             // Filled in place rather than through MemoryCacheEntryOptions, which is copied into the entry and discarded.
@@ -104,6 +110,13 @@ internal abstract class MemoryCacheSetter(
 
     protected abstract ICacheEntryOptions CreateEntry(RefreshMetadataState metadataState, CancellationToken cancellationToken);
 
+    /// <summary>True when the entry was updated in place of being dropped; a cache that cannot apply a peer's update drops.</summary>
+    protected virtual bool TryApplyPeerUpdate(RefreshMetadataState metadataState, PeerUpdate update) => false;
+
+    protected virtual void Renewed(ICacheEntry held, ICacheEntry renewed)
+    {
+    }
+
     private static void PostEviction(object key, object? value, EvictionReason reason, object? state) =>
         Release(state);
 
@@ -135,6 +148,7 @@ internal abstract class MemoryCacheSetter(
             cts.CancelAfter(cacheOptions.Timeout);
             var options = CreateEntry(metadataState, cts.Token);
             var newEntry = metadataState.CacheEntity.NewEntry(options.Expiration, options.Metadata);
+            Renewed(metadataState.CacheEntity, newEntry);
             set = Set(options, newEntry, metadataState.EntryType, metadataState.MaxExpiration);
 
         }

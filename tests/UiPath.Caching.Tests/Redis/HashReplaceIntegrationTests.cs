@@ -144,7 +144,9 @@ public class HashReplaceIntegrationTests(RedisContainerFixture fixture) : IDispo
         var server = redis.GetServers()[0];
         await foreach (var key in server.KeysAsync(pattern: $"*{run}*"))
         {
-            (await redis.GetDatabase().KeyTimeToLiveAsync(key)).Should().NotBeNull("{0} must expire or be gone", key);
+            // A null TTL also answers a key that expired after the scan listed it; only one still there without a TTL is the defect.
+            var ttl = await redis.GetDatabase().KeyTimeToLiveAsync(key);
+            (ttl is not null || !await redis.GetDatabase().KeyExistsAsync(key)).Should().BeTrue("{0} must expire or be gone", key);
         }
     }
 

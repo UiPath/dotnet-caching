@@ -6,12 +6,17 @@ namespace UiPath.Caching;
 
 internal sealed partial class MultilayerHashCache : MultilayerCacheBase, IHashCache, ISpanKeyHashCache, IStatefulHashCache, IStatefulSpanKeyHashCache
 {
+    // A hash that stays a write short for long, such as when a write of this node was never laid over it, must not hold every write since.
+    private const int MaxOwnWritesAhead = 32;
+
     private readonly Lock[] _mergeLocks = Enumerable.Range(0, 64).Select(static _ => new Lock()).ToArray();
     private readonly IHashCache _innerCache;
     private readonly InFlight<InFlightKey, object?> _innerReads = new();
     private readonly InFlight<InFlightKey, object?> _generations = new();
     private readonly HashCacheEntryBuilder _entryBuilder;
     private readonly HashLocalMemorySetter _localMemorySetter;
+    private readonly IVersionedHashCache? _versioned;
+    private readonly PeerFieldLimits _peerLimits;
 
     public MultilayerHashCache(
         string cacheName,
@@ -36,6 +41,13 @@ internal sealed partial class MultilayerHashCache : MultilayerCacheBase, IHashCa
         var topicKeyStrategy = _multiLayerCacheOptions.TopicKeyStrategy ?? new DefaultTopicKeyStrategy(cacheOptions.Separator);
         _entryBuilder = new HashCacheEntryBuilder(cacheKeyStrategy, topicKeyStrategy, _clock);
         _localMemorySetter = new HashLocalMemorySetter(cacheName, changeTokenFactory, _topicProvider, _memoryCache, logger, _clock, _multiLayerCacheOptions, memoryCacheOptions, telemetryProvider, _masker, !_clearLocalOnReconnect);
+        if (_multiLayerCacheOptions is InMemoryRedisCacheOptions { PeerFieldUpdates: true } peer && innerCache is IVersionedHashCache versioned && _topicProvider is not NullTopicProvider)
+        {
+            _versioned = versioned;
+            _background.Activate();
+            _peerLimits = new PeerFieldLimits(Math.Max(1, peer.PeerFieldUpdateMaxFields), Math.Max(1, peer.PeerFieldUpdateMaxBytes));
+            _localMemorySetter.PeerApply = TryApplyPeerUpdate;
+        }
     }
 
     /// <summary>Runs and inner reads still in the tables; tests check they drain once callers are done.</summary>
@@ -344,8 +356,8 @@ internal sealed partial class MultilayerHashCache : MultilayerCacheBase, IHashCa
             return SetInBackground(cacheEntryOptions, values, policy);
         }
 
-        var (written, kept) = await SetInnerAsync(cacheEntryOptions, values, innerCacheDisconnected, policy, keepRefused: false).ConfigureAwait(false);
-        return written && await PublishSetAsync<T>(cacheEntryOptions).ConfigureAwait(false) && kept;
+        var (written, kept, counted) = await SetInnerAsync(cacheEntryOptions, values, innerCacheDisconnected, policy, keepRefused: false).ConfigureAwait(false);
+        return written && await PublishSetAsync<T>(cacheEntryOptions, counted).ConfigureAwait(false) && kept;
     }
 
     public ValueTask<bool> RemoveAsync<T>(CacheKey cacheKey, CancellationToken token = default)
@@ -384,7 +396,9 @@ internal sealed partial class MultilayerHashCache : MultilayerCacheBase, IHashCa
             }
 
             issued = true;
-            removed = await inner.RemoveFieldsAsync<T>(options.CacheKey, fields, options.Token).ConfigureAwait(false);
+            removed = _versioned is { } versioned
+                ? await versioned.RemoveFieldsVersionedAsync<T>(options.CacheKey, fields, options.Token).ConfigureAwait(false)
+                : await inner.RemoveFieldsAsync<T>(options.CacheKey, fields, options.Token).ConfigureAwait(false);
         }
         catch (Exception ex) when (ex is not OperationCanceledException || !options.Token.IsCancellationRequested)
         {
@@ -561,6 +575,62 @@ internal sealed partial class MultilayerHashCache : MultilayerCacheBase, IHashCa
         }
     }
 
+    /// <summary>The held entry takes a write's fields only when it was exactly one write behind it: then the merge is the hash the write left, with this node's own later writes still over it.</summary>
+    internal bool ApplyPeerUpdate<T>(RefreshMetadataState state, ICacheEntry<IDictionary<string, T?>> held, HashVersion version, PeerUpdate update)
+    {
+        if (_versioned is not { } versioned || !held.Found || held.Value is null || !version.TryResolve(out var number, out var ahead) || number <= 0)
+        {
+            return false;
+        }
+
+        // A write of the epoch the copy stands on, which the copy already has: an event can come late, behind a newer one or behind a read.
+        if (update.Version <= number && HashVersion.SameEpoch(number, update.Version))
+        {
+            return true;
+        }
+
+        if (number != update.Version - 1 || HashVersion.ReturnedAtOrBefore(ahead, update.Version))
+        {
+            return false;
+        }
+
+        var now = _clock.GetUtcNow();
+        var expiration = update.Expiration ?? held.Expiration;
+        TimeSpan? remaining = null;
+        if (expiration <= now || (version.LocalDeadline is { } deadline && (remaining = deadline - now) <= TimeSpan.Zero))
+        {
+            return false;
+        }
+
+        if (!versioned.TryDecodeFields<T>(update.Fields, out var written))
+        {
+            return false;
+        }
+
+        var changes = new List<KeyValuePair<string, T?>>(written.Count);
+        foreach (var (field, value) in written)
+        {
+            if (!HashVersion.Writes(ahead, field))
+            {
+                changes.Add(new(field, value));
+            }
+        }
+
+        var combined = held.Value.ToImmutableDictionary().SetItems(changes);
+
+        var options = new InternalHashCacheEntryOptions
+        {
+            CacheKey = state.CacheKey,
+            CallerKey = state.CallerKey,
+            TopicKey = state.TopicKey,
+            Expiration = expiration,
+            Metadata = update.Metadata ?? held.Metadata,
+        };
+        var merged = CreateEntry(combined, options);
+        HashVersions.Stamp<T>(merged, update.Version, version.LocalDeadline, ahead);
+        return _localMemorySetter.Set(options, merged, typeof(T), remaining);
+    }
+
     private static bool IsNullOrEmpty<T>(IDictionary<string, T?>? value) =>
         value is null || value.Count == 0;
 
@@ -718,8 +788,8 @@ internal sealed partial class MultilayerHashCache : MultilayerCacheBase, IHashCa
                 }
                 else
                 {
-                    var (inner, kept) = await SetInnerAsync(rehydrateOptions, newValue ?? Empty<T>(), innerCacheDisconnected, policy, keepRefused: false).ConfigureAwait(false);
-                    written = inner && await PublishSetAsync<T>(rehydrateOptions).ConfigureAwait(false) && kept;
+                    var (inner, kept, counted) = await SetInnerAsync(rehydrateOptions, newValue ?? Empty<T>(), innerCacheDisconnected, policy, keepRefused: false).ConfigureAwait(false);
+                    written = inner && await PublishSetAsync<T>(rehydrateOptions, counted).ConfigureAwait(false) && kept;
                 }
 
                 if (!written)
@@ -791,8 +861,8 @@ internal sealed partial class MultilayerHashCache : MultilayerCacheBase, IHashCa
                 return SetInBackground(options, values, policy);
             }
 
-            var (written, kept) = await SetInnerAsync(options, values, innerCacheDisconnected, policy, keepRefused: false).ConfigureAwait(false);
-            return written && await PublishSetAsync<T>(options).ConfigureAwait(false) && kept;
+            var (written, kept, counted) = await SetInnerAsync(options, values, innerCacheDisconnected, policy, keepRefused: false).ConfigureAwait(false);
+            return written && await PublishSetAsync<T>(options, counted).ConfigureAwait(false) && kept;
         }
     }
 
@@ -888,6 +958,7 @@ internal sealed partial class MultilayerHashCache : MultilayerCacheBase, IHashCa
         LogFoundInnerCopy(Logged(options, typeof(T)));
         options.Expiration = fetched.Expiration;
         options.Metadata = fetched.Metadata;
+        options.Version = _versioned is null ? 0 : HashVersions.NumberOf(fetched);
         if (!_background.Active)
         {
             MemorySet(options, fetched.Value ?? Empty<T>(), LocalLifetime(policy));
@@ -914,6 +985,7 @@ internal sealed partial class MultilayerHashCache : MultilayerCacheBase, IHashCa
             }
 
             // Nothing held here to merge into: the fields alone are not the hash, so the next read takes it whole from the inner tier, unless there is none.
+            options.Version = 0;
             return !(keepWhenAbsent || OnlyTier) || MemorySet(options, CreateEntry(value, options), maxExpiration);
         }
     }
@@ -923,29 +995,89 @@ internal sealed partial class MultilayerHashCache : MultilayerCacheBase, IHashCa
     {
         lock (MergeLock(options.CacheKey.Name))
         {
+            if (_versioned is not null && (options.Version > 0 || options.Own is { Length: > 0 }))
+            {
+                HashVersions.Stamp<T>(item, options.Version, maxExpiration is { } max ? _clock.ToDateTimeOffset(max) : null, options.Own);
+            }
+
             return _localMemorySetter.Set(options, item, typeof(T), maxExpiration);
         }
     }
 
+    private bool TryApplyPeerUpdate(RefreshMetadataState state, PeerUpdate update)
+    {
+        var name = state.CacheKey.Name;
+        try
+        {
+            // The same lock a local merge takes, so the two take their turns over the held hash.
+            lock (MergeLock(name))
+            {
+                if (_memoryCache.TryGetValue(name, out object? current) && current is not null
+                    && HashVersions.TryGet(current, out var version) && version.Apply(this, state, current, update))
+                {
+                    return true;
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            LogPeerUpdateFailed(ex, Logged(state.CallerKey, state.EntryType));
+        }
+
+        // What is held may lack the write, whether or not it is the entry the event was for.
+        RemoveLocal(name);
+        return false;
+    }
+
+    /// <summary>The copy a later background write built was made before this write landed, so it lacks its fields and its count.</summary>
+    private bool DropSuperseded(string name)
+    {
+        if (_versioned is null)
+        {
+            return true;
+        }
+
+        // Not under the merge lock: removing an entry disposes its change token, which waits on the lock a delivery holds while it waits on this one.
+        _memoryCache.Remove(name);
+        return true;
+    }
+
     private Lock MergeLock(string name) => _mergeLocks[(int)((uint)StringComparer.Ordinal.GetHashCode(name) % (uint)_mergeLocks.Length)];
 
-    /// <summary>False when the local tier holds no hash to merge over.</summary>
+    /// <summary>False when the local tier holds no hash to merge over, or holds one newer than the write.</summary>
     private bool TryMergeLocal<T>(ref InternalHashCacheEntryOptions options, IDictionary<string, T?> fields, [MaybeNullWhen(false)] out IDictionary<string, T?> merged)
     {
         if (!_memoryCache.TryGetValue(options.CacheKey.Name, out ICacheEntry<IDictionary<string, T?>>? held) || held is null || !held.Found || held.Value is null)
         {
             merged = null;
+            options.Version = 0;
+            options.Own = null;
             return false;
         }
 
-        var combined = held.Value.ToDictionary(f => f.Key, f => f.Value);
-        foreach (var (field, value) in fields)
+        // The merge stands on what the held hash stands on, with the write laid over it; a hash that stands on nothing known leaves the entry without a version.
+        var write = options.Pending ?? (options.Version > 0 ? new OwnWrite([.. fields.Keys]) { Version = options.Version } : null);
+        options.Pending = null;
+        options.Version = 0;
+        options.Own = null;
+        if (_versioned is not null && write is not null && HashVersions.TryGet(held, out var stamp) && stamp.TryResolve(out var number, out var ahead))
         {
-            combined[field] = value;
+            // The held hash already stands on this write or a later one: its fields are newer than the write's.
+            if (write.Version > 0 && write.Version <= number && HashVersion.SameEpoch(number, write.Version))
+            {
+                merged = null;
+                return false;
+            }
+
+            if (ahead.Length < MaxOwnWritesAhead)
+            {
+                options.Version = number;
+                options.Own = [.. ahead, write];
+            }
         }
 
+        merged = held.Value.ToImmutableDictionary().SetItems(fields);
         options.Metadata ??= held.Metadata;
-        merged = combined;
         return true;
     }
 
@@ -953,14 +1085,14 @@ internal sealed partial class MultilayerHashCache : MultilayerCacheBase, IHashCa
         (await SetInnerAsync(options, value, disconnected, policy, keepRefused).ConfigureAwait(false)).Kept;
 
     /// <summary>Written and kept apart: a write the inner tier holds is announced either way.</summary>
-    private async ValueTask<(bool Written, bool Kept)> SetInnerAsync<T>(InternalHashCacheEntryOptions options, IDictionary<string, T?> value, bool disconnected, CachePolicy policy, bool keepRefused)
+    private async ValueTask<(bool Written, bool Kept, VersionedWrite Counted)> SetInnerAsync<T>(InternalHashCacheEntryOptions options, IDictionary<string, T?> value, bool disconnected, CachePolicy policy, bool keepRefused)
     {
         try
         {
             if (disconnected)
             {
                 LogSettingLocalOnly(Logged(options, typeof(T)));
-                return (false, ApplyLocal(options.CacheKey.Name, (Cache: this, Options: options, Value: value, Max: policy.LocalExpirationDisconnected ?? _multiLayerCacheOptions.LocalMaxExpirationDisconnected), static s => s.Cache.MemorySet(s.Options, s.Value, s.Max, keepWhenAbsent: true)));
+                return (false, ApplyLocal(options.CacheKey.Name, (Cache: this, Options: options, Value: value, Max: policy.LocalExpirationDisconnected ?? _multiLayerCacheOptions.LocalMaxExpirationDisconnected), static s => s.Cache.MemorySet(s.Options, s.Value, s.Max, keepWhenAbsent: true)), default);
             }
 
             using var turn = EnterInnerWrite(options.CacheKey.Name);
@@ -970,9 +1102,21 @@ internal sealed partial class MultilayerHashCache : MultilayerCacheBase, IHashCa
             }
 
             bool ret;
+            VersionedWrite counted = default;
             try
             {
-                ret = await _innerCache.SetAsync<T?>(options.CacheKey, value, new HashCacheEntryOptions(options.Expiration, null, options.Metadata, options.SetOption), policy, options.Token).ConfigureAwait(false);
+                if (_versioned is { } versioned)
+                {
+                    counted = await versioned.SetVersionedAsync<T?>(options.CacheKey, value, new HashCacheEntryOptions(options.Expiration, null, options.Metadata, options.SetOption), policy, _peerLimits, options.Token).ConfigureAwait(false);
+                    ret = counted.Written;
+                    var version = counted.Written ? counted.Version : 0;
+                    options.Version = version;
+                    turn.Returned(options.CacheKey.Name, version);
+                }
+                else
+                {
+                    ret = await _innerCache.SetAsync<T?>(options.CacheKey, value, new HashCacheEntryOptions(options.Expiration, null, options.Metadata, options.SetOption), policy, options.Token).ConfigureAwait(false);
+                }
             }
             catch (Exception ex) when (keepRefused && !(ex is OperationCanceledException && options.Token.IsCancellationRequested))
             {
@@ -981,22 +1125,24 @@ internal sealed partial class MultilayerHashCache : MultilayerCacheBase, IHashCa
             }
 
             return (ret, turn.Tracked
-                ? KeepAfterInnerWrite(ret, keepRefused, policy, (Cache: this, Options: options, Value: value, Turn: turn), static (s, max) => s.Turn.KeepLocal(s.Options.CacheKey.Name, (s, max), static x => x.s.Cache.MemorySet(x.s.Options, x.s.Value, x.max)), options.Token)
-                : KeepAfterInnerWrite(ret, keepRefused, policy, (Cache: this, Options: options, Value: value), static (s, max) => s.Cache.MemorySet(s.Options, s.Value, max), options.Token));
+                ? KeepAfterInnerWrite(ret, keepRefused, policy, (Cache: this, Options: options, Value: value, Turn: turn), static (s, max) => s.Turn.KeepLocal(s.Options.CacheKey.Name, (s, max), static x => x.s.Cache.MemorySet(x.s.Options, x.s.Value, x.max), static x => x.s.Cache.DropSuperseded(x.s.Options.CacheKey.Name), s.Options.Version), options.Token)
+                : KeepAfterInnerWrite(ret, keepRefused, policy, (Cache: this, Options: options, Value: value), static (s, max) => s.Cache.MemorySet(s.Options, s.Value, max), options.Token), counted);
         }
         catch (Exception ex)
         {
             LogInnerCacheSetError(ex, Logged(options, typeof(T)));
-            return (false, false);
+            return (false, false, default);
         }
     }
 
-    private ValueTask<bool> PublishSetAsync<T>(InternalHashCacheEntryOptions options)
+    private ValueTask<bool> PublishSetAsync<T>(InternalHashCacheEntryOptions options, VersionedWrite counted = default)
     {
         ValueTask<bool> publishing;
         try
         {
-            publishing = _eventPublisher.CacheSetAsync(options, typeof(T));
+            publishing = counted.Fields is { } fields && counted.Version > 0
+                ? _eventPublisher.CacheSetAsync(options, typeof(T), counted.Version, fields)
+                : _eventPublisher.CacheSetAsync(options, typeof(T));
         }
         catch (Exception ex)
         {
@@ -1088,6 +1234,9 @@ internal sealed partial class MultilayerHashCache : MultilayerCacheBase, IHashCa
 
     [LoggerMessage(Level = LogLevel.Warning, Message = "Inner cache set value for {CacheKey}")]
     private partial void LogInnerCacheSetError(Exception ex, LoggedKey cacheKey);
+
+    [LoggerMessage(Level = LogLevel.Warning, Message = "A peer update to {CacheKey} could not be applied; the local copy is dropped.")]
+    private partial void LogPeerUpdateFailed(Exception ex, LoggedKey cacheKey);
 
     [LoggerMessage(Level = LogLevel.Warning, Message = "Set {CacheKey} is in the inner cache but its event was not published; other nodes keep their local copy until it expires.")]
     private partial void LogSetEventError(Exception ex, LoggedKey cacheKey);

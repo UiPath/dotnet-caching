@@ -5,7 +5,7 @@ using UiPath.Caching.Telemetry;
 
 namespace UiPath.Caching.Redis;
 
-internal sealed partial class RedisHashCache : RedisCacheBase, IHashCache, ISpanKeyHashCache
+internal sealed partial class RedisHashCache : RedisCacheBase, IHashCache, ISpanKeyHashCache, IVersionedHashCache
 {
     /// <summary>All fields and the absolute expiration in one atomic read-only call.</summary>
     private const string ReadWithExpirationScript = "local n = redis.call('HLEN', KEYS[1]) if n > tonumber(ARGV[1]) then return {n, redis.call('PEXPIRETIME', KEYS[1])} end return {redis.call('HGETALL', KEYS[1]), redis.call('PEXPIRETIME', KEYS[1])}";
@@ -186,18 +186,8 @@ internal sealed partial class RedisHashCache : RedisCacheBase, IHashCache, ISpan
         return RunAsync(_write, StartOperation<T>(), static (s, token) => s.Self.Database.KeyDeleteAsync(s.Key, CommandFlags.DemandMaster).AsValueTask(), (Self: this, Key: redisKey), false, static removed => removed, _logFailure, token);
     }
 
-    public ValueTask<bool> RemoveFieldsAsync<T>(CacheKey cacheKey, string[] fields, CancellationToken token = default)
-    {
-        NotCacheableException.ThrowIfNotCacheable<T>();
-        HashFields.ValidateFieldsForWrite(fields);
-        var redisKey = ToRedisKey(cacheKey, token);
-        if (fields.Length == 0)
-        {
-            return new ValueTask<bool>(true);
-        }
-
-        return RunAsync(_write, StartOperation<T>(), static (s, token) => s.Self.DeleteFieldsAsync(s.Key, s.Fields, token), (Self: this, Key: redisKey, Fields: fields), false, static removed => removed, _logFailure, token);
-    }
+    public ValueTask<bool> RemoveFieldsAsync<T>(CacheKey cacheKey, string[] fields, CancellationToken token = default) =>
+        RemoveFieldsCoreAsync<T>(cacheKey, fields, versioned: false, token);
 
     public ValueTask<bool> SetAsync<T>(CacheKey cacheKey, IDictionary<string, T?> values, CachePolicy? policy, CancellationToken token = default) =>
         SetCoreAsync(cacheKey, values, GetExpiration(policy), token);
@@ -208,18 +198,43 @@ internal sealed partial class RedisHashCache : RedisCacheBase, IHashCache, ISpan
     public ValueTask<bool> SetAsync<T>(CacheKey cacheKey, IDictionary<string, T?> values, DateTimeOffset expiration, CachePolicy? policy, CancellationToken token = default) =>
         SetCoreAsync(cacheKey, values, GetExpiration(expiration), token);
 
-    public ValueTask<bool> SetAsync<T>(CacheKey cacheKey, IDictionary<string, T?> values, HashCacheEntryOptions options, CachePolicy? policy, CancellationToken token = default)
-    {
-        NotCacheableException.ThrowIfNotCacheable<T>();
-        HashFields.ValidateForWrite(values);
-        var redisKey = ToRedisKey(cacheKey, token);
-        var metadata = values.Count > 0 || _cacheNullValues ? options.Metadata : null;
-        var expiration = GetExpiration(options, policy);
-        var setOption = values.Count == 0 && _cacheNullValues ? HashCacheSetOption.KeyReplace : options.SetOption;
+    public ValueTask<bool> SetAsync<T>(CacheKey cacheKey, IDictionary<string, T?> values, HashCacheEntryOptions options, CachePolicy? policy, CancellationToken token = default) =>
+        SetCountingAsync(cacheKey, values, options, policy, report: null, token);
 
-        // Everything that can throw runs before the fields and the metadata rent buffers, which SetInnerAsync then owns.
-        var (entries, payloads) = SerializeFields(values, metadata);
-        return SetInnerAsync<T>(redisKey, entries, payloads, setOption, expiration, token);
+    public async ValueTask<VersionedWrite> SetVersionedAsync<T>(CacheKey cacheKey, IDictionary<string, T?> values, HashCacheEntryOptions options, CachePolicy? policy, PeerFieldLimits limits, CancellationToken token = default)
+    {
+        var report = new WriteReport(limits);
+        var written = await SetCountingAsync(cacheKey, values, options, policy, report, token).ConfigureAwait(false);
+        return new VersionedWrite(written, report.Version, report.Fields);
+    }
+
+    public ValueTask<bool> RemoveFieldsVersionedAsync<T>(CacheKey cacheKey, string[] fields, CancellationToken token = default) =>
+        RemoveFieldsCoreAsync<T>(cacheKey, fields, versioned: true, token);
+
+    public bool TryDecodeFields<T>(IDictionary<string, string?> encoded, [MaybeNullWhen(false)] out Dictionary<string, T?> values)
+    {
+        try
+        {
+            var decoded = new Dictionary<string, T?>(encoded.Count);
+            foreach (var (field, text) in encoded)
+            {
+                if (KnownFieldNames.IsReserved(field))
+                {
+                    values = null;
+                    return false;
+                }
+
+                decoded[field] = DeserializeField<T>(text is null ? RedisValue.Null : Convert.FromBase64String(text));
+            }
+
+            values = decoded;
+            return true;
+        }
+        catch (Exception ex) when (ex is FormatException or InvalidOperationException or System.Text.Json.JsonException or NotSupportedException)
+        {
+            values = null;
+            return false;
+        }
     }
 
     public ValueTask<TimeSpan?> TimeToLiveAsync<T>(CacheKey cacheKey, CancellationToken token = default)
@@ -432,6 +447,33 @@ internal sealed partial class RedisHashCache : RedisCacheBase, IHashCache, ISpan
         }
     }
 
+    private ValueTask<bool> RemoveFieldsCoreAsync<T>(CacheKey cacheKey, string[] fields, bool versioned, CancellationToken token)
+    {
+        NotCacheableException.ThrowIfNotCacheable<T>();
+        HashFields.ValidateFieldsForWrite(fields);
+        var redisKey = ToRedisKey(cacheKey, token);
+        if (fields.Length == 0)
+        {
+            return new ValueTask<bool>(true);
+        }
+
+        return RunAsync(_write, StartOperation<T>(), static (s, token) => s.Self.DeleteFieldsAsync(s.Key, s.Fields, s.Versioned, token), (Self: this, Key: redisKey, Fields: fields, Versioned: versioned), false, static removed => removed, _logFailure, token);
+    }
+
+    private ValueTask<bool> SetCountingAsync<T>(CacheKey cacheKey, IDictionary<string, T?> values, HashCacheEntryOptions options, CachePolicy? policy, WriteReport? report, CancellationToken token)
+    {
+        NotCacheableException.ThrowIfNotCacheable<T>();
+        HashFields.ValidateForWrite(values);
+        var redisKey = ToRedisKey(cacheKey, token);
+        var metadata = values.Count > 0 || _cacheNullValues ? options.Metadata : null;
+        var expiration = GetExpiration(options, policy);
+        var setOption = values.Count == 0 && _cacheNullValues ? HashCacheSetOption.KeyReplace : options.SetOption;
+
+        // Everything that can throw runs before the fields and the metadata rent buffers, which SetInnerAsync then owns.
+        var (entries, payloads) = SerializeFields(values, metadata);
+        return SetInnerAsync<T>(redisKey, entries, payloads, setOption, expiration, token, report);
+    }
+
     /// <summary>The hash, or its length when it is too large for one command.</summary>
     private async ValueTask<(HashEntry[] Entries, DateTimeOffset? Expiration)> ParseReplyAsync(RedisKey redisKey, RedisResult reply)
     {
@@ -445,7 +487,11 @@ internal sealed partial class RedisHashCache : RedisCacheBase, IHashCache, ISpan
         var fields = new Dictionary<RedisValue, RedisValue>();
         await foreach (var entry in Database.HashScanAsync(redisKey, pageSize: _fieldBatchSize, flags: CommandFlags.PreferReplica).ConfigureAwait(false))
         {
-            fields[entry.Name] = entry.Value;
+            // The pages are not one snapshot, so a version read among them says nothing of the fields read before it.
+            if (entry.Name != KnownFieldNames.VersionKey)
+            {
+                fields[entry.Name] = entry.Value;
+            }
         }
 
         return (fields.Select(f => new HashEntry(f.Key, f.Value)).ToArray(), ToExpiration((long)parts[1]));
@@ -762,12 +808,19 @@ internal sealed partial class RedisHashCache : RedisCacheBase, IHashCache, ISpan
         Dictionary<string, T?> values = [];
         IDictionary<string, string?>? extendedProps = default;
         var hasEmptyMarker = false;
+        long version = 0;
 
         for (var i = 0; i < hashEntries.Length; i++)
         {
             var hashEntry = hashEntries[i];
             var key = hashEntry.Name.ToString();
             var v = hashEntry.Value;
+            if (string.Equals(key, KnownFieldNames.VersionKey))
+            {
+                version = v.TryParse(out long counted) ? counted : 0;
+                continue;
+            }
+
             _auditKeySize?.Invoke(Logged(cacheKey, redisKey, typeof(T)), key, v);
 
             if (string.Equals(key, KnownFieldNames.MetadataKey))
@@ -795,7 +848,13 @@ internal sealed partial class RedisHashCache : RedisCacheBase, IHashCache, ISpan
             return Default<T>();
         }
 
-        return _cacheEntryFactory.Create<IDictionary<string, T?>>(values, Clock.ToDateTimeOffset(expireTime), extendedProps);
+        var entry = _cacheEntryFactory.Create<IDictionary<string, T?>>(values, Clock.ToDateTimeOffset(expireTime), extendedProps);
+        if (version > 0)
+        {
+            HashVersions.Stamp<T>(entry, version, null);
+        }
+
+        return entry;
     }
 
     private T? DeserializeField<T>(RedisValue value)
@@ -984,7 +1043,7 @@ internal sealed partial class RedisHashCache : RedisCacheBase, IHashCache, ISpan
     }
 
     /// <summary>Owns <paramref name="payloads"/>: they go back to the pool on every exit, including one before the command starts.</summary>
-    private async ValueTask<bool> SetInnerAsync<T>(RedisKey redisKey, HashEntry[] hashEntries, SerializedPayload[] payloads, HashCacheSetOption setOption, DateTimeOffset expiration, CancellationToken token)
+    private async ValueTask<bool> SetInnerAsync<T>(RedisKey redisKey, HashEntry[] hashEntries, SerializedPayload[] payloads, HashCacheSetOption setOption, DateTimeOffset expiration, CancellationToken token, WriteReport? report = null)
     {
         try
         {
@@ -1002,10 +1061,16 @@ internal sealed partial class RedisHashCache : RedisCacheBase, IHashCache, ISpan
                 setOption = HashCacheSetOption.KeyReplace;
             }
 
+            // A chunked write is counted after its chunks land, not with them, so peers never get its fields.
+            if (hashEntries.Length <= _fieldBatchSize)
+            {
+                report?.Capture(hashEntries, setOption);
+            }
+
             var operation = StartOperation<T>(nameof(SetAsync));
             try
             {
-                ret = await WriteAsync(redisKey, hashEntries, setOption, expiration, now, token).ConfigureAwait(false);
+                ret = await WriteAsync(redisKey, hashEntries, setOption, expiration, now, report, token).ConfigureAwait(false);
                 operation.Stop();
             }
             catch (Exception ex)
@@ -1053,7 +1118,7 @@ internal sealed partial class RedisHashCache : RedisCacheBase, IHashCache, ISpan
         return SameSlot(redisKey, staging, _logger);
     }
 
-    private async ValueTask<bool> WriteAsync(RedisKey redisKey, HashEntry[] hashEntries, HashCacheSetOption setOption, DateTimeOffset expiration, DateTimeOffset now, CancellationToken token)
+    private async ValueTask<bool> WriteAsync(RedisKey redisKey, HashEntry[] hashEntries, HashCacheSetOption setOption, DateTimeOffset expiration, DateTimeOffset now, WriteReport? report, CancellationToken token)
     {
         if (expiration < now || hashEntries.Length == 0)
         {
@@ -1063,10 +1128,10 @@ internal sealed partial class RedisHashCache : RedisCacheBase, IHashCache, ISpan
         if (hashEntries.Length > _fieldBatchSize && TryChunkedWriteKeys(redisKey, setOption, out var staging))
         {
             await EnsureConnectedAsync(_write, token).ConfigureAwait(false);
-            return await _write.ExecuteAsync(static (s, token) => s.Self.WriteInChunksAsync(s.Key, s.Staging, s.Entries, s.Option, s.Expiration, token), (Self: this, Key: redisKey, Staging: staging, Entries: hashEntries, Option: setOption, Expiration: expiration), default, token).ConfigureAwait(false);
+            return await _write.ExecuteAsync(static (s, token) => s.Self.WriteInChunksAsync(s.Key, s.Staging, s.Entries, s.Option, s.Expiration, s.Report, token), (Self: this, Key: redisKey, Staging: staging, Entries: hashEntries, Option: setOption, Expiration: expiration, Report: report), default, token).ConfigureAwait(false);
         }
 
-        return await WriteInTransactionAsync(redisKey, hashEntries, setOption, expiration, token).ConfigureAwait(false);
+        return await WriteInTransactionAsync(redisKey, hashEntries, setOption, expiration, report, token).ConfigureAwait(false);
     }
 
     private ValueTask<bool> DeleteKeyAsync(RedisKey redisKey, CancellationToken token) =>
@@ -1080,7 +1145,7 @@ internal sealed partial class RedisHashCache : RedisCacheBase, IHashCache, ISpan
             default,
             token);
 
-    private async ValueTask<bool> WriteInTransactionAsync(RedisKey redisKey, HashEntry[] hashEntries, HashCacheSetOption setOption, DateTimeOffset expiration, CancellationToken token)
+    private async ValueTask<bool> WriteInTransactionAsync(RedisKey redisKey, HashEntry[] hashEntries, HashCacheSetOption setOption, DateTimeOffset expiration, WriteReport? report, CancellationToken token)
     {
         await EnsureConnectedAsync(_write, token).ConfigureAwait(false);
         var transaction = Database.CreateTransaction();
@@ -1090,6 +1155,14 @@ internal sealed partial class RedisHashCache : RedisCacheBase, IHashCache, ISpan
         }
 
         transaction.HashSetAsync(redisKey, hashEntries, CommandFlags.DemandMaster).Forget();
+        Task<long>? counted = null;
+        if (report is not null)
+        {
+            transaction.HashSetAsync(redisKey, KnownFieldNames.VersionKey, HashVersion.NewEpochSeed(), When.NotExists, CommandFlags.DemandMaster).Forget();
+            counted = transaction.HashIncrementAsync(redisKey, KnownFieldNames.VersionKey, 1, CommandFlags.DemandMaster);
+            counted.Forget();
+        }
+
         if (expiration != DateTimeOffset.MaxValue)
         {
             await transaction.KeyExpireAsync(redisKey, expiration.UtcDateTime, CommandFlags.DemandMaster | CommandFlags.FireAndForget).ConfigureAwait(false);
@@ -1113,12 +1186,16 @@ internal sealed partial class RedisHashCache : RedisCacheBase, IHashCache, ISpan
         {
             LogRedisTransactionFailed();
         }
+        else if (counted is not null)
+        {
+            report!.Version = await VersionOrUncountedAsync(counted).ConfigureAwait(false);
+        }
 
         return committed;
     }
 
     /// <summary>A merge is not atomic across chunks; a replacement fills a staging key and renames it over the key.</summary>
-    private async ValueTask<bool> WriteInChunksAsync(RedisKey redisKey, RedisKey staging, HashEntry[] entries, HashCacheSetOption setOption, DateTimeOffset expiration, CancellationToken token)
+    private async ValueTask<bool> WriteInChunksAsync(RedisKey redisKey, RedisKey staging, HashEntry[] entries, HashCacheSetOption setOption, DateTimeOffset expiration, WriteReport? report, CancellationToken token)
     {
         token.ThrowIfCancellationRequested();
         var target = setOption == HashCacheSetOption.HashReplace ? redisKey : staging;
@@ -1132,6 +1209,12 @@ internal sealed partial class RedisHashCache : RedisCacheBase, IHashCache, ISpan
             }
 
             await ObserveAllAsync(pending).ConfigureAwait(false);
+            if (report is not null)
+            {
+                // Apart from the chunks, which are not atomic as a whole; the write reads as unversioned if the key is already gone.
+                report.Version = await CountWriteAsync(target).ConfigureAwait(false);
+            }
+
             if (setOption == HashCacheSetOption.KeyReplace)
             {
                 if (OnStaged is { } staged)
@@ -1239,7 +1322,51 @@ internal sealed partial class RedisHashCache : RedisCacheBase, IHashCache, ISpan
         await CommitAsync(transaction, "A chunk", target, written, lifetime).ConfigureAwait(false);
     }
 
-    private async ValueTask<bool> DeleteFieldsAsync(RedisKey redisKey, string[] fields, CancellationToken token)
+    /// <summary>Zero when the key is gone: counting would make a key of the count alone, with no lifetime. Zero too when the count cannot be made: the chunks it follows have landed.</summary>
+    private async Task<long> CountWriteAsync(RedisKey redisKey)
+    {
+        try
+        {
+            var transaction = Database.CreateTransaction();
+            transaction.AddCondition(Condition.KeyExists(redisKey));
+            transaction.HashSetAsync(redisKey, KnownFieldNames.VersionKey, HashVersion.NewEpochSeed(), When.NotExists, CommandFlags.DemandMaster).Forget();
+            var counted = transaction.HashIncrementAsync(redisKey, KnownFieldNames.VersionKey, 1, CommandFlags.DemandMaster);
+            counted.Forget();
+            return await transaction.ExecuteAsync(CommandFlags.DemandMaster).ConfigureAwait(false) ? await VersionOrUncountedAsync(counted).ConfigureAwait(false) : 0;
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            LogVersionNotCounted(ex);
+            return 0;
+        }
+    }
+
+    /// <summary>Zero, an uncounted write that peers drop on, when the count refuses to move: it stops at the 64-bit maximum while the write beside it still lands.</summary>
+    private async Task<long> VersionOrUncountedAsync(Task<long> counted)
+    {
+        try
+        {
+            return await counted.ConfigureAwait(false);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            LogVersionNotCounted(ex);
+            return 0;
+        }
+    }
+
+    private async Task<long> DeleteFieldsCountingAsync(RedisKey redisKey, RedisValue[] chunk)
+    {
+        var transaction = Database.CreateTransaction();
+        transaction.AddCondition(Condition.KeyExists(redisKey));
+        transaction.HashSetAsync(redisKey, KnownFieldNames.VersionKey, HashVersion.NewEpochSeed(), When.NotExists, CommandFlags.DemandMaster).Forget();
+        transaction.HashIncrementAsync(redisKey, KnownFieldNames.VersionKey, 1, CommandFlags.DemandMaster).Forget();
+        transaction.HashDeleteAsync(redisKey, chunk, CommandFlags.DemandMaster).Forget();
+        await transaction.ExecuteAsync(CommandFlags.DemandMaster).ConfigureAwait(false);
+        return 0;
+    }
+
+    private async ValueTask<bool> DeleteFieldsAsync(RedisKey redisKey, string[] fields, bool versioned, CancellationToken token)
     {
         token.ThrowIfCancellationRequested();
         var pending = new List<Task<long>>((fields.Length + _fieldBatchSize - 1) / _fieldBatchSize);
@@ -1251,11 +1378,26 @@ internal sealed partial class RedisHashCache : RedisCacheBase, IHashCache, ISpan
                 chunk[i] = fields[start + i];
             }
 
-            pending.Add(Database.HashDeleteAsync(redisKey, chunk, CommandFlags.DemandMaster));
+            pending.Add(versioned && start == 0 ? DeleteFieldsCountingAsync(redisKey, chunk) : Database.HashDeleteAsync(redisKey, chunk, CommandFlags.DemandMaster));
         }
 
         await Task.WhenAll(pending).ConfigureAwait(false);
+        if (versioned)
+        {
+            await RemoveCountOfEmptiedHashAsync(redisKey).ConfigureAwait(false);
+        }
+
         return true;
+    }
+
+    /// <summary>Redis deletes a hash whose last field goes; the count alone would keep the key, with its lifetime, as a hash no read can find a value in.</summary>
+    private async Task RemoveCountOfEmptiedHashAsync(RedisKey redisKey)
+    {
+        var transaction = Database.CreateTransaction();
+        transaction.AddCondition(Condition.HashLengthEqual(redisKey, 1));
+        transaction.AddCondition(Condition.HashExists(redisKey, KnownFieldNames.VersionKey));
+        transaction.HashDeleteAsync(redisKey, KnownFieldNames.VersionKey, CommandFlags.DemandMaster).Forget();
+        await transaction.ExecuteAsync(CommandFlags.DemandMaster).ConfigureAwait(false);
     }
 
     private RedisKey ToRedisKey(CacheKey cacheKey, CancellationToken token = default)
@@ -1332,6 +1474,9 @@ internal sealed partial class RedisHashCache : RedisCacheBase, IHashCache, ISpan
 
     [LoggerMessage(Level = LogLevel.Warning, Message = "A hash replacement past its deadline failed its rename for another reason than its expired staging key; the key is deleted, as an expired write deletes it.")]
     private partial void LogExpiredReplacementRenameFailed(Exception ex);
+
+    [LoggerMessage(Level = LogLevel.Warning, Message = "A hash write landed without moving its version; the other nodes drop their copies of it.")]
+    private partial void LogVersionNotCounted(Exception ex);
 
     [LoggerMessage(Level = LogLevel.Warning, Message = "Redis transaction failed.")]
     private partial void LogRedisTransactionFailed();

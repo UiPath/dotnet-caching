@@ -13,6 +13,17 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
   have been delivered, so it is reported as missed events and the local tier is cleared rather than left stale, when a failure streak
   starts and again when a read ends it.
 
+- **`InMemoryRedisCacheOptions.PeerFieldUpdates`** (off by default; `PeerFieldUpdateMaxFields`, 16, and `PeerFieldUpdateMaxBytes`, 1024). A small
+  `HashReplace` write tells the other nodes which fields it wrote, and a node whose local copy of the hash is exactly one write behind (its own writes that the copy already holds do not count, and the copy waits for the events of the other nodes' writes that landed before them) adds
+  them to a copy of its own instead of dropping it and reading the whole hash on its next call. A copy that is further behind, has no version,
+  or a write that is a replacement of the key, a removal, over the limits or by a node that does not count, is dropped as before, except an event that is no newer
+  than the copy and of the same epoch of the hash, which the copy already has and which is ignored (a late event used to drop the copy, and the read it caused was then hit by the next late event). The count's high bits name the
+  epoch, drawn when a write makes the hash, so a hash made again after a removal, an expiry or an eviction is never taken for an earlier state of the old one. A failover that loses
+  acknowledged writes can move the count backwards inside one epoch; the events of the writes it repeats are then ignored rather than dropped, until the reconnect clears the local tier or the TTL ends. Every write of a
+  hash then also counts the hash's writes in a reserved `_version_` field (hidden from reads, rejected on writes), in the write's own
+  transaction, so the TTL and the fields stay atomic. A `RemoveFieldsAsync` that empties a hash leaves the count behind until the key expires.
+  Turn it on once every node that writes the hashes runs this version.
+
 - **`RedisStreamsTopicOptions.NotifyMinInterval`.** The least time between two doorbells, 25 ms by default and at most 1 s.
   Rings during the interval fold into the next doorbell, so a burst of writes wakes each consumer at most once per interval instead of
   once per write; the first ring after a quiet period still goes out at once.

@@ -27,6 +27,15 @@ internal sealed class BackgroundWrites(int limit, TimeSpan drainTimeout, string 
 
     internal int InFlight => Volatile.Read(ref _inFlight);
 
+    /// <summary>Tracks the awaited writes from now on, for a cache that must know the order its writes landed in even when it takes no background write.</summary>
+    public void Activate()
+    {
+        lock (_gate)
+        {
+            ActivateLocked();
+        }
+    }
+
     /// <summary>False when no place is left or the cache is closing; the caller then writes in the foreground.</summary>
     public bool TryReserve()
     {
@@ -37,14 +46,7 @@ internal sealed class BackgroundWrites(int limit, TimeSpan drainTimeout, string 
                 return false;
             }
 
-            if (!_active)
-            {
-                // Awaited writes and fills already in flight are not in the order: they can land around the first background write.
-                _changes = new long[Stripes];
-                _stripes = Enumerable.Range(0, Stripes).Select(static _ => new Lock()).ToArray();
-                _active = true;
-            }
-
+            ActivateLocked();
             _inFlight++;
             return true;
         }
@@ -226,6 +228,43 @@ internal sealed class BackgroundWrites(int limit, TimeSpan drainTimeout, string 
 
     internal static int Stripe(string key) => (int)((uint)StringComparer.Ordinal.GetHashCode(key) % Stripes);
 
+    /// <summary>Tells the key's writes in flight which version this one took: a write of the key that returns after it, with a lower version, took its place in the hash earlier.</summary>
+    internal void RecordReturned(string key, long version)
+    {
+        if (version == 0)
+        {
+            return;
+        }
+
+        lock (_gate)
+        {
+            if (!_tails.TryGetValue(key, out var tail))
+            {
+                return;
+            }
+
+            if (tail.MaxReturned == 0 || tail.MaxReturned >> HashVersion.CounterBits == version >> HashVersion.CounterBits)
+            {
+                tail.MaxReturned = Math.Max(tail.MaxReturned, version);
+            }
+            else
+            {
+                tail.Mixed = true;
+            }
+        }
+    }
+
+    private void ActivateLocked()
+    {
+        if (!_active)
+        {
+            // Awaited writes and fills already in flight are not in the order: they can land around the first background write.
+            _changes = new long[Stripes];
+            _stripes = Enumerable.Range(0, Stripes).Select(static _ => new Lock()).ToArray();
+            _active = true;
+        }
+    }
+
     private async Task DrainOnceAsync()
     {
         Task idle;
@@ -324,7 +363,7 @@ internal sealed class BackgroundWrites(int limit, TimeSpan drainTimeout, string 
         return tail.Background?.Task;
     }
 
-    private bool KeepLocal<TState>(Awaited mine, string key, TState state, Func<TState, bool> set)
+    private bool KeepLocal<TState>(Awaited mine, string key, TState state, Func<TState, bool> set, Func<TState, bool>? whenSuperseded = null, long version = 0)
     {
         Tail? tail;
         lock (_gate)
@@ -339,13 +378,23 @@ internal sealed class BackgroundWrites(int limit, TimeSpan drainTimeout, string 
 
         lock (tail.Gate)
         {
+            bool superseded;
+            bool overtaken;
             lock (_gate)
             {
                 // A background write issued after it holds the newer value, and promotes it when it lands.
-                if (mine.Superseded?.Contains(key) == true)
-                {
-                    return true;
-                }
+                superseded = mine.Superseded?.Contains(key) == true;
+                overtaken = version != 0 && (tail.Mixed || (tail.MaxReturned > version && tail.MaxReturned >> HashVersion.CounterBits == version >> HashVersion.CounterBits));
+            }
+
+            if (overtaken && whenSuperseded is not null)
+            {
+                return Apply(key, state, whenSuperseded);
+            }
+
+            if (superseded)
+            {
+                return whenSuperseded is null || Apply(key, state, whenSuperseded);
             }
 
             return Apply(key, state, set);
@@ -442,9 +491,11 @@ internal sealed class BackgroundWrites(int limit, TimeSpan drainTimeout, string 
 
         public Task Previous => previous ?? Task.CompletedTask;
 
-        /// <summary>Skipped, and counted as kept, when a background write of the key was issued after this one.</summary>
-        public bool KeepLocal<TState>(string of, TState state, Func<TState, bool> set) =>
-            owner is null ? set(state) : owner.KeepLocal(mine!, of, state, set);
+        /// <summary>Skipped, and counted as kept, when a background write of the key was issued after this one; <paramref name="whenSuperseded"/> then runs instead, under the same exclusion as a keep.</summary>
+        public bool KeepLocal<TState>(string of, TState state, Func<TState, bool> set, Func<TState, bool>? whenSuperseded = null, long version = 0) =>
+            owner is null ? set(state) : owner.KeepLocal(mine!, of, state, set, whenSuperseded, version);
+
+        public void Returned(string of, long version) => owner?.RecordReturned(of, version);
 
         public void Dispose() => owner?.Leave(key, keys, mine!);
     }
@@ -463,5 +514,9 @@ internal sealed class BackgroundWrites(int limit, TimeSpan drainTimeout, string 
         public List<Awaited>? Awaited;
         public long Issued;
         public long Applied;
+
+        // Under _gate: the highest version a write of the key returned while the tail lived, and whether the returns came from more than one epoch of the hash.
+        public long MaxReturned;
+        public bool Mixed;
     }
 }

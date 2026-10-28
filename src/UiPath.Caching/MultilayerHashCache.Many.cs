@@ -39,6 +39,10 @@ internal sealed partial class MultilayerHashCache
         return (combined, before.Values is null ? HashCacheSetOption.KeyReplace : before.SetOption);
     }
 
+    // The batch's events carry no fields; counting the write is what keeps a peer from applying a later write over a copy that lacks this one.
+    private static async ValueTask<bool> CountedBatchedAsync<T>(IVersionedHashCache versioned, CacheKey key, IDictionary<string, T?> values, HashCacheEntryOptions inner, CachePolicy policy, CancellationToken token) =>
+        (await versioned.SetVersionedAsync<T?>(key, values, inner, policy, default, token).ConfigureAwait(false)).Written;
+
     private async ValueTask<List<CacheKey>?> RemoveChunkAsync<T>(CacheKey[] keys, int count, bool announce, CancellationToken token)
     {
         var options = new InternalHashCacheEntryOptions[count];
@@ -213,6 +217,14 @@ internal sealed partial class MultilayerHashCache
         }
     }
 
+    private ValueTask<bool> WriteBatchedAsync<T>(InternalHashCacheEntryOptions options, IDictionary<string, T?> values, CachePolicy policy)
+    {
+        var inner = new HashCacheEntryOptions(options.Expiration, null, options.Metadata, options.SetOption);
+        return _versioned is { } versioned
+            ? CountedBatchedAsync(versioned, options.CacheKey, values, inner, policy, options.Token)
+            : _innerCache.SetAsync<T?>(options.CacheKey, values, inner, policy, options.Token);
+    }
+
     /// <summary>The turn is released before the events.</summary>
     private async ValueTask<(bool[] Written, bool[] Kept, InternalHashCacheEntryOptions[] ToAnnounce, int[] AnnounceIndex, int AnnounceCount, bool Cancelled)> WriteChunkAsync<T>((InternalHashCacheEntryOptions Options, IDictionary<string, T?> Values)[] entries, int entryCount, CachePolicy policy, bool announce, CancellationToken token)
     {
@@ -230,7 +242,7 @@ internal sealed partial class MultilayerHashCache
             entries,
             entryCount,
             (Cache: this, Policy: policy),
-            static (s, e) => s.Cache._innerCache.SetAsync<T?>(e.Options.CacheKey, e.Values, new HashCacheEntryOptions(e.Options.Expiration, null, e.Options.Metadata, e.Options.SetOption), s.Policy, e.Options.Token),
+            static (s, e) => s.Cache.WriteBatchedAsync(e.Options, e.Values, s.Policy),
             static (s, e, ex) => s.Cache.LogInnerCacheSetError(ex, s.Cache.Logged(e.Options, typeof(T))),
             token).ConfigureAwait(false);
         var written = issued.Results;
@@ -254,7 +266,7 @@ internal sealed partial class MultilayerHashCache
             }
 
             kept[i] = turn.Tracked
-                ? KeepAfterInnerWrite(true, false, policy, (Cache: this, entries[i].Options, entries[i].Values, Turn: turn), static (s, max) => s.Turn.KeepLocal(s.Options.CacheKey.Name, (s, max), static x => x.s.Cache.MemorySet(x.s.Options, x.s.Values, x.max)), token)
+                ? KeepAfterInnerWrite(true, false, policy, (Cache: this, entries[i].Options, entries[i].Values, Turn: turn), static (s, max) => s.Turn.KeepLocal(s.Options.CacheKey.Name, (s, max), static x => x.s.Cache.MemorySet(x.s.Options, x.s.Values, x.max), static x => x.s.Cache.DropSuperseded(x.s.Options.CacheKey.Name)), token)
                 : KeepAfterInnerWrite(true, false, policy, (Cache: this, entries[i].Options, entries[i].Values), static (s, max) => s.Cache.MemorySet(s.Options, s.Values, max), token);
             if (announce)
             {

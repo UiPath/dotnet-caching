@@ -7,6 +7,19 @@ internal static class KnownFieldNames
 
     public const string ExpirationKey = "_expiration_";
 
+    /// <summary>The hash field that counts a hash's writes, and the event property that names the count a write reached.</summary>
+    public const string VersionKey = "_version_";
+
+    /// <summary>Peer-update event property: the fields a write changed, each as the bytes Redis holds, in base64.</summary>
+    /// <remarks>The peer-update properties are read only by a node that applies the update; any other node drops its copy, as it would for a plain set.</remarks>
+    public const string PeerFieldsKey = "_peerFields_";
+
+    /// <summary>Peer-update event property: the write's expiry. Not <see cref="ExpirationKey"/>, which a node acts on by keeping its copy.</summary>
+    public const string PeerExpirationKey = "_peerExpiration_";
+
+    /// <summary>Peer-update event property: the write's metadata. Not <see cref="MetadataKey"/>, which a node acts on by keeping its copy.</summary>
+    public const string PeerMetadataKey = "_peerMetadata_";
+
     /// <summary>The key a topic-wide event carries: it names no entry.</summary>
     public const string AllKeys = "*";
 
@@ -19,5 +32,5 @@ internal static class KnownFieldNames
 
     /// <summary>True for the actual system field names (kept in sync with the per-field read validation).</summary>
     public static bool IsSystemField(string field) =>
-        field == MetadataKey;
+        field == MetadataKey || field == VersionKey;
 }

@@ -710,6 +710,24 @@ public class RedisHashCacheTests(ITestContextAccessor testContextAccessor) : IAs
         await _database.DidNotReceive().KeyRenameAsync(Arg.Any<RedisKey>(), Arg.Any<RedisKey>(), Arg.Any<When>(), Arg.Any<CommandFlags>());
     }
 
+    [Theory]
+    [InlineData(HashCacheSetOption.HashReplace)]
+    [InlineData(HashCacheSetOption.KeyReplace)]
+    public async Task A_chunked_write_whose_count_fails_after_the_chunks_landed_is_written_and_uncounted(HashCacheSetOption setOption)
+    {
+        _redisCacheOptions.HashFieldBatchSize = 3;
+        _sut = null;
+        _database.Multiplexer.GetHashSlot(Arg.Any<RedisKey>()).Returns(7);
+        _transaction.ExecuteAsync(Arg.Any<CommandFlags>()).Returns(true);
+        _transaction.HashIncrementAsync(Arg.Any<RedisKey>(), KnownFieldNames.VersionKey, 1, Arg.Any<CommandFlags>()).Returns(Task.FromException<long>(new RedisConnectionException(ConnectionFailureType.SocketFailure, CommandFlags.None, "lost")));
+        var values = Enumerable.Range(0, 8).ToDictionary(i => $"f{i}", i => (string?)$"v{i}");
+
+        var written = await Sut.SetVersionedAsync(_cacheKey, values, new HashCacheEntryOptions(TimeToLive: TimeSpan.FromMinutes(5), SetOption: setOption), policy: null, new PeerFieldLimits(2, 1024), testContextAccessor.Current.CancellationToken);
+
+        written.Written.Should().BeTrue();
+        written.Version.Should().Be(0);
+    }
+
     [Fact]
     public async Task A_subset_read_of_many_fields_is_split_into_batches_and_keeps_the_order()
     {

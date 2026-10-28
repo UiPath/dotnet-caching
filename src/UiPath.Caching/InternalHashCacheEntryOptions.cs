@@ -24,6 +24,15 @@ internal record struct InternalHashCacheEntryOptions : ICacheEntryOptions
     /// <summary>The fields of this write are merged into a hash that holds others, so they are not the whole hash.</summary>
     public bool Partial { get; init; }
 
+    /// <summary>The count of the hash's writes the entry is the state of; zero when it is not known.</summary>
+    public long Version { get; set; }
+
+    /// <summary>The background write whose fields the entry is made of; its version is told once it returns.</summary>
+    public OwnWrite? Pending { get; set; }
+
+    /// <summary>The writes of this node laid over <see cref="Version"/> in the entry being kept.</summary>
+    public OwnWrite[]? Own { get; set; }
+
     public DateTimeOffset Expiration { get; set; }
 
     public IDictionary<string, string?>? Metadata { get; set; }

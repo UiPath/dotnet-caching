@@ -10,6 +10,10 @@ public class InMemoryRedisCacheOptions : IMultilayerCacheOptions, IMemoryCacheOp
 
     internal const int DefaultBatchConcurrentChunks = 2;
 
+    internal const int DefaultPeerFieldUpdateMaxFields = 16;
+
+    internal const int DefaultPeerFieldUpdateMaxBytes = 1024;
+
     internal static readonly TimeSpan DefaultBackgroundWriteDrainTimeout = TimeSpan.FromSeconds(5);
 
     public bool Enabled { get; set; } = true;
@@ -83,6 +87,16 @@ public class InMemoryRedisCacheOptions : IMultilayerCacheOptions, IMemoryCacheOp
     /// <summary>Above this many keys (an input of known size), a batch call sends one topic-wide event after its writes instead of one per key; null keeps one per key.</summary>
     /// <remarks>Every node then drops the local tier of the topic, for every cache that shares it, since events name no cache. An older node ignores the event and keeps its copies until they expire, so set it only once every node knows it.</remarks>
     public int? BatchTopicInvalidationThreshold { get; set; }
+
+    /// <summary>A small <c>HashReplace</c> write tells the other nodes which fields it wrote, and a node holding the hash adds them to its copy instead of dropping it, when its copy is exactly one write behind; any other copy is dropped.</summary>
+    /// <remarks>Every write of a hash then also counts the hash's writes in a reserved <c>_version_</c> field. Set it only once every node that writes the hashes knows it: a write by a node that does not count leaves the copies of the others to be dropped by its event.</remarks>
+    public bool PeerFieldUpdates { get; set; }
+
+    /// <summary>The most fields a write may carry to the other nodes; a write of more is dropped by them.</summary>
+    public int PeerFieldUpdateMaxFields { get; set; } = DefaultPeerFieldUpdateMaxFields;
+
+    /// <summary>The most bytes the names and serialized values of a write's fields may add up to for the write to be carried to the other nodes.</summary>
+    public int PeerFieldUpdateMaxBytes { get; set; } = DefaultPeerFieldUpdateMaxBytes;
 
     // Declared before the new pair: the configuration binder sets properties in declaration order, so the new key wins when both are set.
     [Obsolete("Use LocalSingleFlightEnabled; the in-process lock it named is gone.")]
