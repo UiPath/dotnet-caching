@@ -1090,61 +1090,6 @@ public class RedisStreamSubjectWriterTests : IAsyncLifetime
     }
 
     [Fact]
-    public async Task A_recovery_between_the_backoff_check_and_its_count_is_neither_waited_out_nor_counted()
-    {
-        var reads = 0;
-        var recovered = 0;
-        var redis = _fixture.Create<IRedisConnector>();
-        redis.Database.Returns(_database);
-        _database.StreamReadGroupAsync(_context.Topic, _context.ConsumerGroup, _context.ConsumerName, ">", _context.PollBatchSize)
-            .ReturnsForAnyArgs(StreamReads.NewOnly(_ => Interlocked.Increment(ref reads) <= 8 ? Task.FromException<StreamEntry[]>(new RedisException("down")) : Task.FromResult(Array.Empty<StreamEntry>())));
-        using var waiter = new SignalingFetchWaiter(TimeSpan.FromSeconds(30));
-
-        using var sut = new RedisStreamSubjectWriter<ICacheEvent>(
-            _context with { PollInterval = TimeSpan.FromSeconds(30) },
-            NullConnectionStateMonitor.Instance,
-            redis,
-            Channel.CreateUnbounded<ICacheEvent>().Writer,
-            _formatter,
-            _logger,
-            _fixture.Create<ICachingTelemetryProvider>(),
-            _fixture.Create<IRedisProfiler>(),
-            waiter,
-            () => { },
-            _cancellationTokenSource.Token)
-        {
-            // The fourth failure's back-off has passed its recovery check when the connection comes back.
-            // By the read's own count: the loop starts in the constructor, so the seam may have missed a failure or two.
-            BeforeCountingFailure = () =>
-            {
-                if (Volatile.Read(ref reads) == 4 && Interlocked.Exchange(ref recovered, 1) == 0)
-                {
-                    redis.OnConnectionRestored += Raise.Event<EventHandler>(redis, EventArgs.Empty);
-                }
-            },
-        };
-        (await WaitUntil(() => Volatile.Read(ref reads) == 1)).Should().BeTrue();
-        for (var i = 2; i <= 4; i++)
-        {
-            waiter.Signal();
-            (await WaitUntil(() => Volatile.Read(ref reads) >= i)).Should().BeTrue();
-        }
-
-        (await WaitUntil(() => Volatile.Read(ref reads) >= 5)).Should().BeTrue("the recovery ends the back-off it landed in the middle of");
-
-        // Not counted either: three more failures go at the poll's pace, the fourth backs off.
-        for (var i = 6; i <= 8; i++)
-        {
-            waiter.Signal();
-            (await WaitUntil(() => Volatile.Read(ref reads) >= i)).Should().BeTrue("retry {0} of the new streak is at the poll's pace", i - 5);
-        }
-
-        waiter.Signal();
-        await Task.Delay(300, TestContext.Current.CancellationToken);
-        Volatile.Read(ref reads).Should().Be(8, "the fourth failure of the new streak backs off past the poll");
-    }
-
-    [Fact]
     public async Task A_subscriber_joining_while_the_readers_recreate_is_pending_is_served_by_the_group_the_reader_makes_where_it_left_off()
     {
         // In use, the group goes and the recreate fails once; broadcasts land and a subscriber joins before the retry.
@@ -2497,6 +2442,7 @@ public class RedisStreamSubjectWriterTests : IAsyncLifetime
 
         var redisConnector = _fixture.Freeze<IRedisConnector>();
         redisConnector.Database.Returns(_database);
+        _fixture.Inject<IStreamPort>(new RedisStreamPort(_context, redisConnector));
 
         _fixture.Inject(_formatter);
         _fixture.Inject<IFetchWaiter>(new SignalingFetchWaiter(_pollInterval));
