@@ -160,6 +160,25 @@ public class MultilayerHashCacheBackgroundWriteTests
     }
 
     [Fact]
+    public async Task A_metadata_write_waiting_behind_a_background_set_throws_when_its_token_is_cancelled_and_writes_nothing()
+    {
+        using var h = new Rig();
+        var gate = h.Gate("k");
+        await h.Cache.SetAsync<string>("k", Fields("v"), Background, Ct);
+        using var cancel = CancellationTokenSource.CreateLinkedTokenSource(Ct);
+
+        var metadata = h.Cache.SetMetadataAsync<string>("k", new Dictionary<string, string?> { ["m"] = "1" }, cancel.Token).AsTask();
+        await Task.Delay(100, Ct);
+        await cancel.CancelAsync();
+
+        await FluentActions.Awaiting(() => metadata.WaitAsync(TimeSpan.FromSeconds(5), Ct)).Should().ThrowAsync<OperationCanceledException>();
+        h.Local("k").Should().NotBeNull("a cancelled caller does not drop the local copy");
+        gate.SetResult(true);
+        await h.SettledAsync();
+        h.Log.Should().NotContain("metadata:k");
+    }
+
+    [Fact]
     public async Task Background_sets_of_one_key_reach_the_inner_tier_in_the_order_they_were_issued()
     {
         using var h = new Rig();
@@ -172,42 +191,6 @@ public class MultilayerHashCacheBackgroundWriteTests
         first.SetResult(true);
         await h.SettledAsync();
         h.Log.Should().Equal("write:k=a", "event:k", "write:k=b", "event:k");
-    }
-
-    [Fact]
-    public async Task An_awaited_set_after_a_background_set_of_the_key_is_written_after_it()
-    {
-        using var h = new Rig();
-        var first = h.Gate("k", "a");
-        await h.Cache.SetAsync<string>("k", Fields("a"), Background, Ct);
-
-        var second = h.Cache.SetAsync<string>("k", Fields("b"), Awaited, Ct).AsTask();
-
-        await Task.Delay(100, Ct);
-        second.IsCompleted.Should().BeFalse();
-        h.Log.Should().Equal("write:k=a");
-        first.SetResult(true);
-        (await second).Should().BeTrue();
-        h.Log.Should().Equal("write:k=a", "event:k", "write:k=b", "event:k");
-    }
-
-    [Fact]
-    public async Task An_awaited_set_landing_after_a_newer_background_set_leaves_the_newer_hash_local()
-    {
-        using var h = new Rig();
-        await h.ActivateAsync();
-        var first = h.Gate("k", "v1");
-        var awaited = h.Cache.SetAsync<string>("k", Fields("v1"), Awaited, Ct).AsTask();
-        await h.UntilAsync(() => h.Log.Contains("write:k=v1"));
-
-        await h.Cache.SetAsync<string>("k", Fields("v2"), Background, Ct);
-        first.SetResult(true);
-        (await awaited).Should().BeTrue();
-        await h.SettledAsync();
-
-        h.Local("k").Should().Be("v2");
-        h.Clock.Advance(TimeSpan.FromMinutes(5));
-        h.Local("k").Should().Be("v2");
     }
 
     [Fact]

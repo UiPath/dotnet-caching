@@ -1,3 +1,5 @@
+using System.Runtime.CompilerServices;
+using System.Runtime.ExceptionServices;
 using UiPath.Caching.Telemetry;
 
 namespace UiPath.Caching;
@@ -158,6 +160,20 @@ internal sealed class BackgroundWrites(int limit, TimeSpan drainTimeout, string 
         return new Turn(this, null, all, mine, pending is null ? Task.CompletedTask : Task.WhenAll(pending));
     }
 
+    /// <summary>Writes to the inner tier after the background writes issued before, then keeps locally in that order; <paramref name="before"/> runs first, in the turn. Exceptions leave through the caller.</summary>
+    public ValueTask<TResult> WriteAsync<TState, TWritten, TResult>(string key, TState state, Action<TState>? before, Func<TState, Keeper, ValueTask<TWritten>> write, Func<TState, TWritten, Keeper, TResult> keep, CancellationToken token) =>
+        WriteInTurnAsync(Enter(key), state, before, write, keep, token);
+
+    public ValueTask<TResult> WriteAsync<TState, TWritten, TResult>(IEnumerable<string> keys, TState state, Action<TState>? before, Func<TState, Keeper, ValueTask<TWritten>> write, Func<TState, TWritten, Keeper, TResult> keep, CancellationToken token) =>
+        WriteInTurnAsync(Enter(keys), state, before, write, keep, token);
+
+    /// <summary>For a write that keeps nothing locally, a removal or a refresh.</summary>
+    public ValueTask<TResult> WriteAsync<TState, TResult>(string key, TState state, Action<TState>? before, Func<TState, ValueTask<TResult>> write, CancellationToken token) =>
+        WriteInTurnAsync(Enter(key), state, before, write, token);
+
+    public ValueTask<TResult> WriteAsync<TState, TResult>(IEnumerable<string> keys, TState state, Action<TState>? before, Func<TState, ValueTask<TResult>> write, CancellationToken token) =>
+        WriteInTurnAsync(Enter(keys), state, before, write, token);
+
     /// <summary>Stops taking writes and waits up to the drain timeout for those running, then cancels them.</summary>
     public Task DrainAsync()
     {
@@ -207,6 +223,15 @@ internal sealed class BackgroundWrites(int limit, TimeSpan drainTimeout, string 
         }
     }
 
+    /// <summary>Keeps the read's value locally as <see cref="Fill{TState}(string, long, TState, Func{TState, bool})"/> does, and calls <paramref name="notKept"/> when a change since <paramref name="mark"/> kept it out.</summary>
+    public void Fill<TState>(string key, long mark, TState state, Func<TState, bool> set, Action<TState> notKept)
+    {
+        if (Fill(key, mark, state, set) is null)
+        {
+            notKept(state);
+        }
+    }
+
     /// <summary>A local change of the key that a fill from an earlier read must not undo.</summary>
     public bool Apply<TState>(string key, TState state, Func<TState, bool> change)
     {
@@ -251,6 +276,131 @@ internal sealed class BackgroundWrites(int limit, TimeSpan drainTimeout, string 
             {
                 tail.Mixed = true;
             }
+        }
+    }
+
+    // The earlier writes' tasks only ever complete successfully, so this throws nothing but a cancellation of token.
+    private static ValueTask Settled(Task pending, CancellationToken token) => pending.IsCompleted ? default : new ValueTask(pending.WaitAsync(token));
+
+    // Synchronous while nothing is pending and the write completes at once, so the caller's own frame is the only async one.
+    private static ValueTask<TResult> WriteInTurnAsync<TState, TWritten, TResult>(Turn turn, TState state, Action<TState>? before, Func<TState, Keeper, ValueTask<TWritten>> write, Func<TState, TWritten, Keeper, TResult> keep, CancellationToken token)
+    {
+        var leave = true;
+        try
+        {
+            before?.Invoke(state);
+            if (!turn.Previous.IsCompleted)
+            {
+                leave = false;
+                return SettleThenWriteAsync(turn, state, write, keep, token);
+            }
+
+            var writing = write(state, turn.Keeper);
+            if (writing.IsCompletedSuccessfully)
+            {
+                return new ValueTask<TResult>(keep(state, writing.Result, turn.Keeper));
+            }
+
+            leave = false;
+            return KeepAfterAsync(turn, writing, state, keep);
+        }
+        catch (Exception ex)
+        {
+            return Faulted<TResult>(ExceptionDispatchInfo.Capture(ex));
+        }
+        finally
+        {
+            if (leave)
+            {
+                turn.Dispose();
+            }
+        }
+    }
+
+    private static ValueTask<TResult> WriteInTurnAsync<TState, TResult>(Turn turn, TState state, Action<TState>? before, Func<TState, ValueTask<TResult>> write, CancellationToken token)
+    {
+        var leave = true;
+        try
+        {
+            before?.Invoke(state);
+            if (!turn.Previous.IsCompleted)
+            {
+                leave = false;
+                return SettleThenWriteAsync(turn, state, write, token);
+            }
+
+            var writing = write(state);
+            if (writing.IsCompleted)
+            {
+                // Completed, faulted ones included: their exception surfaces when the caller awaits, as from an async method.
+                return writing;
+            }
+
+            leave = false;
+            return LeaveAfterAsync(turn, writing);
+        }
+        catch (Exception ex)
+        {
+            return Faulted<TResult>(ExceptionDispatchInfo.Capture(ex));
+        }
+        finally
+        {
+            if (leave)
+            {
+                turn.Dispose();
+            }
+        }
+    }
+
+    [AsyncMethodBuilder(typeof(Pooled<>))]
+
+    private static async ValueTask<TResult> SettleThenWriteAsync<TState, TWritten, TResult>(Turn turn, TState state, Func<TState, Keeper, ValueTask<TWritten>> write, Func<TState, TWritten, Keeper, TResult> keep, CancellationToken token)
+    {
+        using (turn)
+        {
+            await Settled(turn.Previous, token).ConfigureAwait(false);
+            var written = await write(state, turn.Keeper).ConfigureAwait(false);
+            return keep(state, written, turn.Keeper);
+        }
+    }
+
+    [AsyncMethodBuilder(typeof(Pooled<>))]
+
+    private static async ValueTask<TResult> SettleThenWriteAsync<TState, TResult>(Turn turn, TState state, Func<TState, ValueTask<TResult>> write, CancellationToken token)
+    {
+        using (turn)
+        {
+            await Settled(turn.Previous, token).ConfigureAwait(false);
+            return await write(state).ConfigureAwait(false);
+        }
+    }
+
+    [AsyncMethodBuilder(typeof(Pooled<>))]
+
+    private static async ValueTask<TResult> KeepAfterAsync<TState, TWritten, TResult>(Turn turn, ValueTask<TWritten> writing, TState state, Func<TState, TWritten, Keeper, TResult> keep)
+    {
+        using (turn)
+        {
+            var written = await writing.ConfigureAwait(false);
+            return keep(state, written, turn.Keeper);
+        }
+    }
+
+    // As an async method would: a cancellation ends the task cancelled, anything else faulted.
+    private static async ValueTask<TResult> Faulted<TResult>(ExceptionDispatchInfo thrown)
+    {
+        await Task.CompletedTask.ConfigureAwait(false);
+        thrown.Throw();
+        return default;
+    }
+
+    [AsyncMethodBuilder(typeof(Pooled<>))]
+
+    private static async ValueTask<TResult> LeaveAfterAsync<TResult>(Turn turn, ValueTask<TResult> writing)
+    {
+        using (turn)
+        {
+            return await writing.ConfigureAwait(false);
         }
     }
 
@@ -487,17 +637,21 @@ internal sealed class BackgroundWrites(int limit, TimeSpan drainTimeout, string 
 
     internal readonly struct Turn(BackgroundWrites? owner, string? key, string[]? keys, Awaited? mine, Task previous) : IDisposable
     {
-        public bool Tracked => owner is not null;
-
         public Task Previous => previous ?? Task.CompletedTask;
 
+        public Keeper Keeper => new(owner, mine);
+
+        public void Dispose() => owner?.Leave(key, keys, mine!);
+    }
+
+    /// <summary>What a write's callbacks keep locally and report through; valid only inside them.</summary>
+    internal readonly struct Keeper(BackgroundWrites? owner, Awaited? mine)
+    {
         /// <summary>Skipped, and counted as kept, when a background write of the key was issued after this one; <paramref name="whenSuperseded"/> then runs instead, under the same exclusion as a keep.</summary>
-        public bool KeepLocal<TState>(string of, TState state, Func<TState, bool> set, Func<TState, bool>? whenSuperseded = null, long version = 0) =>
+        public bool Local<TState>(string of, TState state, Func<TState, bool> set, Func<TState, bool>? whenSuperseded = null, long version = 0) =>
             owner is null ? set(state) : owner.KeepLocal(mine!, of, state, set, whenSuperseded, version);
 
         public void Returned(string of, long version) => owner?.RecordReturned(of, version);
-
-        public void Dispose() => owner?.Leave(key, keys, mine!);
     }
 
     internal sealed class Awaited() : TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously)
