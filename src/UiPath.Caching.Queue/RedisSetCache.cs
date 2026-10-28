@@ -68,6 +68,7 @@ public sealed partial class RedisSetCache : RedisCacheBase, ISetCache
     {
         NotCacheableException.ThrowIfNotCacheable<T>();
         var redisKey = ToRedisKey(cacheKey, token);
+        NoteWritten(redisKey);
         T? ret = default;
         var found = false;
         if (!IsConnected)
@@ -100,6 +101,7 @@ public sealed partial class RedisSetCache : RedisCacheBase, ISetCache
         }
         finally
         {
+            NoteWritten(redisKey);
             operation.Track(found);
         }
 
@@ -115,6 +117,7 @@ public sealed partial class RedisSetCache : RedisCacheBase, ISetCache
         }
 
         var redisKey = ToRedisKey(cacheKey, token);
+        NoteWritten(redisKey);
         IReadOnlyCollection<T?> ret = [];
         if (!IsConnected)
         {
@@ -142,6 +145,7 @@ public sealed partial class RedisSetCache : RedisCacheBase, ISetCache
         }
         finally
         {
+            NoteWritten(redisKey);
             operation.Track(ret.Count > 0);
         }
 
@@ -164,7 +168,7 @@ public sealed partial class RedisSetCache : RedisCacheBase, ISetCache
             var values = await _read.ExecuteAsync(static (s, token) =>
             {
                 token.ThrowIfCancellationRequested();
-                return s.Self.Database.SetMembersAsync(s.Key, CommandFlags.PreferReplica).AsValueTask();
+                return s.Self.Database.SetMembersAsync(s.Key, s.Self.ReadFlagsFor(s.Key)).AsValueTask();
             },
             (Self: this, Key: redisKey),
             Array.Empty<RedisValue>(),
@@ -190,22 +194,23 @@ public sealed partial class RedisSetCache : RedisCacheBase, ISetCache
         NotCacheableException.ThrowIfNotCacheable<T>();
         var redisKey = ToRedisKey(cacheKey, token);
         var value = _serializer.Serialize(item);
-        return RunAsync(_read, StartOperation<T>(), static (s, token) => s.Self.Database.SetContainsAsync(s.Key, s.Value, CommandFlags.PreferReplica).AsValueTask(), (Self: this, Key: redisKey, Value: value), false, static hit => hit, _logFailure, token);
+        return RunAsync(_read, StartOperation<T>(), static (s, token) => s.Self.Database.SetContainsAsync(s.Key, s.Value, s.Self.ReadFlagsFor(s.Key)).AsValueTask(), (Self: this, Key: redisKey, Value: value), false, static hit => hit, _logFailure, token);
     }
 
     public ValueTask<long> CountAsync<T>(CacheKey cacheKey, CancellationToken token = default)
     {
         NotCacheableException.ThrowIfNotCacheable<T>();
         var redisKey = ToRedisKey(cacheKey, token);
-        return RunAsync(_read, StartOperation<T>(), static (s, token) => s.Self.Database.SetLengthAsync(s.Key, CommandFlags.PreferReplica).AsValueTask(), (Self: this, Key: redisKey), 0L, static count => count > 0, _logFailure, token);
+        return RunAsync(_read, StartOperation<T>(), static (s, token) => s.Self.Database.SetLengthAsync(s.Key, s.Self.ReadFlagsFor(s.Key)).AsValueTask(), (Self: this, Key: redisKey), 0L, static count => count > 0, _logFailure, token);
     }
 
     public ValueTask<bool> RemoveItemAsync<T>(CacheKey cacheKey, T item, CancellationToken token = default)
     {
         NotCacheableException.ThrowIfNotCacheable<T>();
         var redisKey = ToRedisKey(cacheKey, token);
+        NoteWritten(redisKey);
         var value = _serializer.Serialize(item);
-        return RunAsync(_write, StartOperation<T>(), static (s, token) => s.Self.Database.SetRemoveAsync(s.Key, s.Value, CommandFlags.DemandMaster).AsValueTask(), (Self: this, Key: redisKey, Value: value), false, static removed => removed, _logFailure, token);
+        return NoteWrittenAfterAsync(redisKey, RunAsync(_write, StartOperation<T>(), static (s, token) => s.Self.Database.SetRemoveAsync(s.Key, s.Value, CommandFlags.DemandMaster).AsValueTask(), (Self: this, Key: redisKey, Value: value), false, static removed => removed, _logFailure, token));
     }
 
     public ValueTask<long> RemoveItemsAsync<T>(CacheKey cacheKey, IEnumerable<T> items, CancellationToken token = default)
@@ -213,27 +218,29 @@ public sealed partial class RedisSetCache : RedisCacheBase, ISetCache
         NotCacheableException.ThrowIfNotCacheable<T>();
         ArgumentNullException.ThrowIfNull(items);
         var redisKey = ToRedisKey(cacheKey, token);
+        NoteWritten(redisKey);
         var values = items.Select(i => (RedisValue)_serializer.Serialize(i)).ToArray();
         if (values.Length == 0)
         {
             return ValueTask.FromResult(0L);
         }
 
-        return RunAsync(_write, StartOperation<T>(), static (s, token) => s.Self.Database.SetRemoveAsync(s.Key, s.Values, CommandFlags.DemandMaster).AsValueTask(), (Self: this, Key: redisKey, Values: values), 0L, static removed => removed > 0, _logFailure, token);
+        return NoteWrittenAfterAsync(redisKey, RunAsync(_write, StartOperation<T>(), static (s, token) => s.Self.Database.SetRemoveAsync(s.Key, s.Values, CommandFlags.DemandMaster).AsValueTask(), (Self: this, Key: redisKey, Values: values), 0L, static removed => removed > 0, _logFailure, token));
     }
 
     public ValueTask<bool> RemoveAsync<T>(CacheKey cacheKey, CancellationToken token = default)
     {
         NotCacheableException.ThrowIfNotCacheable<T>();
         var redisKey = ToRedisKey(cacheKey, token);
-        return RunAsync(_write, StartOperation<T>(), static (s, token) => s.Self.Database.KeyDeleteAsync(s.Key, CommandFlags.DemandMaster).AsValueTask(), (Self: this, Key: redisKey), false, static removed => removed, _logFailure, token);
+        NoteWritten(redisKey);
+        return NoteWrittenAfterAsync(redisKey, RunAsync(_write, StartOperation<T>(), static (s, token) => s.Self.Database.KeyDeleteAsync(s.Key, CommandFlags.DemandMaster).AsValueTask(), (Self: this, Key: redisKey), false, static removed => removed, _logFailure, token));
     }
 
     public ValueTask<bool> ContainsAsync<T>(CacheKey cacheKey, CancellationToken token = default)
     {
         NotCacheableException.ThrowIfNotCacheable<T>();
         var redisKey = ToRedisKey(cacheKey, token);
-        return RunAsync(_read, StartOperation<T>(), static (s, token) => s.Self.Database.KeyExistsAsync(s.Key, CommandFlags.PreferReplica).AsValueTask(), (Self: this, Key: redisKey), false, static hit => hit, _logFailure, token);
+        return RunAsync(_read, StartOperation<T>(), static (s, token) => s.Self.Database.KeyExistsAsync(s.Key, s.Self.ReadFlagsFor(s.Key)).AsValueTask(), (Self: this, Key: redisKey), false, static hit => hit, _logFailure, token);
     }
 
     private static void QueueExpirationUpdate(ITransaction transaction, RedisKey redisKey, DateTimeOffset expiration)
@@ -257,6 +264,7 @@ public sealed partial class RedisSetCache : RedisCacheBase, ISetCache
     private async ValueTask<long> AddManyInnerAsync<T>(CacheKey cacheKey, RedisValue[] values, DateTimeOffset expiration, CancellationToken token)
     {
         var redisKey = ToRedisKey(cacheKey, token);
+        NoteWritten(redisKey);
         var now = Clock.GetUtcNow();
         long ret = 0;
         if (!IsConnected || values.Length == 0)
@@ -266,14 +274,14 @@ public sealed partial class RedisSetCache : RedisCacheBase, ISetCache
 
         if (expiration < now)
         {
-            _ = await _write.ExecuteAsync(static (s, token) =>
+            _ = await NoteWrittenAfterAsync(redisKey, _write.ExecuteAsync(static (s, token) =>
             {
                 token.ThrowIfCancellationRequested();
                 return s.Self.Database.KeyDeleteAsync(s.Key, CommandFlags.DemandMaster).AsValueTask();
             },
             (Self: this, Key: redisKey),
             default,
-            token).ConfigureAwait(false);
+            token)).ConfigureAwait(false);
             return ret;
         }
 
@@ -313,6 +321,7 @@ public sealed partial class RedisSetCache : RedisCacheBase, ISetCache
         }
         finally
         {
+            NoteWritten(redisKey);
             operation.Track(ret > 0);
         }
 

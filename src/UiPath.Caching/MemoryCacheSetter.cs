@@ -30,9 +30,13 @@ internal abstract class MemoryCacheSetter(
 
     // Bound once: a method group allocates a delegate at every conversion.
     private Action<object?>? _refreshMetadata;
+    private Action<object?, bool>? _invalidating;
 
     /// <summary>How many local writes have committed, counted as each one returns: a caller that read it before its own read of the tier, and missed a value, sees it move once that value's write has returned.</summary>
     internal long Writes => Volatile.Read(ref _writes);
+
+    /// <summary>Told which keys a received event invalidated, so the tier below can read them from the master for a moment.</summary>
+    internal IInvalidationSink? Invalidations { get; set; }
 
     protected TimeProvider Clock { get; } = clock;
 
@@ -56,6 +60,11 @@ internal abstract class MemoryCacheSetter(
             if (wired)
             {
                 var state = new RefreshMetadataState(options.CacheKey, options.TopicKey, item, token, entryType, maxExpiration, options.CallerKey);
+                if (Invalidations != null && token is IInvalidationSource source)
+                {
+                    source.RegisterInvalidatingCallback(_invalidating ??= Invalidating, state);
+                }
+
                 token.RegisterChangeCallback(_refreshMetadata ??= RefreshMetadata, state);
                 if (AppliesPeerUpdates && token is IPeerUpdateSource peer)
                 {
@@ -129,12 +138,31 @@ internal abstract class MemoryCacheSetter(
         }
     }
 
+    /// <summary>The key changed on the master whatever the event carried; a replica may still hold the old value, which the local tier would cache again.</summary>
+    private void Invalidating(object? state, bool eventsLost)
+    {
+        if (eventsLost)
+        {
+            Invalidations?.InvalidatedAll();
+        }
+        else if (state is RefreshMetadataState metadataState)
+        {
+            Invalidations?.Invalidated(metadataState.CacheKey);
+        }
+    }
+
     private ITopic<ICacheEvent> TopicForCustomFactory(ITopic<ICacheEvent> topic) =>
         ignoreSubscriptionGaps ? _gapFiltered.GetValue(topic, static t => new GapFilteringTopic(t)) : topic;
 
     private void RefreshMetadata(RefreshMetadataState metadataState)
     {
         var token = metadataState.Token;
+        // A custom factory's token cannot report before it changes: reported late rather than not at all.
+        if (token is not IInvalidationSource)
+        {
+            Invalidations?.Invalidated(metadataState.CacheKey);
+        }
+
         if (!token.MetadataHasChanged && token.Expiration == null)
         {
             return;

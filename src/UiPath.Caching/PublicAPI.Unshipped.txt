@@ -53,3 +53,13 @@ UiPath.Caching.InMemoryRedisCacheOptions.PeerFieldUpdateMaxFields.get -> int
 UiPath.Caching.InMemoryRedisCacheOptions.PeerFieldUpdateMaxFields.set -> void
 UiPath.Caching.InMemoryRedisCacheOptions.PeerFieldUpdateMaxBytes.get -> int
 UiPath.Caching.InMemoryRedisCacheOptions.PeerFieldUpdateMaxBytes.set -> void
+UiPath.Caching.Redis.RedisCacheOptions.ReadFrom.get -> UiPath.Caching.Redis.RedisReadFrom
+UiPath.Caching.Redis.RedisCacheOptions.ReadFrom.set -> void
+UiPath.Caching.Redis.RedisCacheOptions.MasterReadWindow.get -> System.TimeSpan
+UiPath.Caching.Redis.RedisCacheOptions.MasterReadWindow.set -> void
+UiPath.Caching.Redis.RedisReadFrom
+UiPath.Caching.Redis.RedisReadFrom.Master = 0 -> UiPath.Caching.Redis.RedisReadFrom
+UiPath.Caching.Redis.RedisReadFrom.Replica = 1 -> UiPath.Caching.Redis.RedisReadFrom
+UiPath.Caching.Redis.RedisCacheBase.ReadFlagsFor(StackExchange.Redis.RedisKey key) -> StackExchange.Redis.CommandFlags
+UiPath.Caching.Redis.RedisCacheBase.NoteWritten(StackExchange.Redis.RedisKey key) -> void
+UiPath.Caching.Redis.RedisCacheBase.NoteWrittenAfterAsync<TResult>(StackExchange.Redis.RedisKey key, System.Threading.Tasks.ValueTask<TResult> write) -> System.Threading.Tasks.ValueTask<TResult>

@@ -172,7 +172,7 @@ mechanical: replace `GetAsync` + `TimeToLiveAsync` (or `ExpireTimeAsync`) pairs 
 `GetCacheEntryAsync`, then use `entry.Value` and `entry.Expiration`.
 
 **Routing note:** the transaction's `ExecuteAsync` call is issued with
-`CommandFlags.PreferReplica`, so reads land on a replica even when wrapped in a
+the read flag (`PreferMaster`, or `PreferReplica` with `ReadFrom` set to `Replica`), so the routing holds even when wrapped in a
 transaction. SE.Redis ignores `PreferReplica` set on individual queued commands when
 choosing the server for the transaction, so the flag must be on `ExecuteAsync` itself —
 the library handles this correctly, and you don't need to opt in.

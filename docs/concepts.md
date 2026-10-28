@@ -659,7 +659,7 @@ rather than disabling the tier underneath it. Options bind from the same
 
 On Redis the set cache keeps its own key namespace: the keyspace slot holds `se`, where the
 single-value cache holds `s` and the hash cache holds `h`, so a set and a string cache can share a
-key name without colliding. Writes are pinned to the master, reads prefer a replica, and an add is a
+key name without colliding. Writes are pinned to the master, reads go to the master unless `ReadFrom` is `Replica`, and an add is a
 transaction that applies `SADD` and the key's expiry together. Like the core Redis caches, a Redis
 failure is logged and swallowed rather than thrown: reads report empty and writes report nothing
 written. Adds, pops and full-member reads check the connection first and return that same empty

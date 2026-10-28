@@ -2,7 +2,7 @@ using UiPath.Caching.Telemetry;
 
 namespace UiPath.Caching.Broadcast;
 
-public sealed partial class ChangeToken<T> : ICacheChangeToken, IKeyedObserver<ICacheEvent>, IMissedEventsObserver, IPeerUpdateSource, IDisposable
+public sealed partial class ChangeToken<T> : ICacheChangeToken, IKeyedObserver<ICacheEvent>, IMissedEventsObserver, IPeerUpdateSource, IInvalidationSource, IDisposable
 {
     private readonly string _key;
     private readonly KeyMasker _masker;
@@ -28,6 +28,12 @@ public sealed partial class ChangeToken<T> : ICacheChangeToken, IKeyedObserver<I
     private bool _expired;
 
     private Func<PeerUpdate, bool>? _peerUpdateHandler;
+
+    private bool _eventsLost;
+
+    private Action<object?, bool>? _invalidating;
+
+    private object? _invalidatingState;
 
     public ChangeToken(
         string key,
@@ -96,6 +102,7 @@ public sealed partial class ChangeToken<T> : ICacheChangeToken, IKeyedObserver<I
     public void OnError(Exception error)
     {
         LogClearLocalCacheOnError(error, Logged(), _topic);
+        Volatile.Write(ref _eventsLost, true);
         Notify();
     }
 
@@ -133,10 +140,25 @@ public sealed partial class ChangeToken<T> : ICacheChangeToken, IKeyedObserver<I
         }
 
         LogClearLocalCacheOnLoss(Logged(), _topic);
+        Volatile.Write(ref _eventsLost, true);
         Notify();
     }
 
 
+
+    void IInvalidationSource.RegisterInvalidatingCallback(Action<object?, bool> callback, object? state)
+    {
+        lock (_notifyLock)
+        {
+            // The state first: Notify reads the callback without the lock, and must see its state with it.
+            _invalidatingState = state;
+            Volatile.Write(ref _invalidating, callback);
+            if (HasChanged)
+            {
+                callback(state, _eventsLost);
+            }
+        }
+    }
 
     public IDisposable RegisterChangeCallback(Action<object?> callback, object? state)
     {
@@ -170,6 +192,10 @@ public sealed partial class ChangeToken<T> : ICacheChangeToken, IKeyedObserver<I
 
     private void Notify(CacheEventData? data = default)
     {
+        // Before the token changes: a changed token reads as expired, and a reader that refills the entry from the tier below must find the key guarded.
+        var invalidating = Volatile.Read(ref _invalidating);
+        invalidating?.Invoke(_invalidatingState, Volatile.Read(ref _eventsLost));
+
         // Before the token changes, since a changed token reads as expired to the cache that holds its entry, and outside its lock: the
         // update takes the key's merge lock, and a merge holding that lock can be waiting for this one to register on the token.
         if (data?.Properties != null && !Volatile.Read(ref _expired) && _peerUpdateHandler is { } apply && ExtractPeerUpdate(data.Properties) is { } update && apply(update))
@@ -179,6 +205,12 @@ public sealed partial class ChangeToken<T> : ICacheChangeToken, IKeyedObserver<I
 
         lock (_notifyLock)
         {
+            // Registered while this ran: told here, still before the token changes.
+            if (invalidating is null && _invalidating is { } late)
+            {
+                late(_invalidatingState, _eventsLost);
+            }
+
             HasChanged = true;
             // A write that carried fields and was not applied is a removal to this copy, as every write was before fields were carried.
             if (data?.Properties != null && !_expired && !CarriesWriteFields(data.Properties))

@@ -40,7 +40,10 @@ internal sealed partial class MultilayerHashCache : MultilayerCacheBase, IHashCa
         var cacheKeyStrategy = _multiLayerCacheOptions.CacheKeyStrategy ?? new DefaultCacheKeyStrategy();
         var topicKeyStrategy = _multiLayerCacheOptions.TopicKeyStrategy ?? new DefaultTopicKeyStrategy(cacheOptions.Separator);
         _entryBuilder = new HashCacheEntryBuilder(cacheKeyStrategy, topicKeyStrategy, _clock);
-        _localMemorySetter = new HashLocalMemorySetter(cacheName, changeTokenFactory, _topicProvider, _memoryCache, logger, _clock, _multiLayerCacheOptions, memoryCacheOptions, telemetryProvider, _masker, !_clearLocalOnReconnect);
+        _localMemorySetter = new HashLocalMemorySetter(cacheName, changeTokenFactory, _topicProvider, _memoryCache, logger, _clock, _multiLayerCacheOptions, memoryCacheOptions, telemetryProvider, _masker, !_clearLocalOnReconnect)
+        {
+            Invalidations = innerCache as IInvalidationSink,
+        };
         if (_multiLayerCacheOptions is InMemoryRedisCacheOptions { PeerFieldUpdates: true } peer && innerCache is IVersionedHashCache versioned && _topicProvider is not NullTopicProvider)
         {
             _versioned = versioned;
@@ -51,6 +54,9 @@ internal sealed partial class MultilayerHashCache : MultilayerCacheBase, IHashCa
     }
 
     /// <summary>Runs and inner reads still in the tables; tests check they drain once callers are done.</summary>
+    /// <summary>The tier told of received invalidations: the inner cache when it tracks them; tests check the wiring.</summary>
+    internal IInvalidationSink? Invalidations => _localMemorySetter.Invalidations;
+
     internal int RunsInFlight => _innerReads.Count + _generations.Count + _background.InFlight;
 
     private bool OnlyTier => _innerCache is NullHashCache;
