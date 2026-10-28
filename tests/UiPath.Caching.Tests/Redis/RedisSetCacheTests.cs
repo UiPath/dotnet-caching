@@ -46,6 +46,40 @@ public class RedisSetCacheTests(ITestContextAccessor testContextAccessor) : IAsy
             .Which.Message.Should().Contain(nameof(RedisSetCacheOptions.ResilienceKeyName));
     }
 
+    [Theory]
+    [InlineData("add")]
+    [InlineData("add many")]
+    [InlineData("pop")]
+    [InlineData("pop count")]
+    [InlineData("remove item")]
+    [InlineData("remove items")]
+    [InlineData("remove")]
+    public async Task A_replica_read_after_a_set_write_goes_to_the_master_until_the_window_passes(string write)
+    {
+        _redisCacheOptions.ReadFrom = RedisReadFrom.Replica;
+        var flags = new List<CommandFlags>();
+        _database.SetLengthAsync(Arg.Any<RedisKey>(), Arg.Do<CommandFlags>(flags.Add)).Returns(1L);
+        var token = testContextAccessor.Current.CancellationToken;
+        var item = _fixture.Create<TestDto>();
+        _ = write switch
+        {
+            "add" => await Sut.AddAsync(_cacheKey, item, policy: null, token: token) ? 1 : 0,
+            "add many" => await Sut.AddAsync(_cacheKey, [item, _fixture.Create<TestDto>()], policy: null, token: token),
+            "pop" => await Sut.PopAsync<TestDto>(_cacheKey, policy: null, token: token) is null ? 0 : 1,
+            "pop count" => (await Sut.PopAsync<TestDto>(_cacheKey, 2, policy: null, token: token)).Count,
+            "remove item" => await Sut.RemoveItemAsync(_cacheKey, item, token) ? 1 : 0,
+            "remove items" => await Sut.RemoveItemsAsync(_cacheKey, [item], token),
+            "remove" => await Sut.RemoveAsync<TestDto>(_cacheKey, token) ? 1 : 0,
+            _ => throw new ArgumentOutOfRangeException(nameof(write)),
+        };
+
+        await Sut.CountAsync<TestDto>(_cacheKey, token);
+        _now += RecentTouches.DefaultWindow;
+        await Sut.CountAsync<TestDto>(_cacheKey, token);
+
+        flags.Should().Equal(CommandFlags.PreferMaster, CommandFlags.PreferReplica);
+    }
+
     [Fact]
     public void Construction_does_not_resolve_the_server_version()
     {
@@ -371,7 +405,7 @@ public class RedisSetCacheTests(ITestContextAccessor testContextAccessor) : IAsy
     {
         var expected = _fixture.CreateMany<TestDto>().ToArray();
         var serialized = expected.Select(e => (RedisValue)_serializer.Serialize(e)).ToArray();
-        _database.SetMembersAsync(_redisKey, CommandFlags.PreferReplica).Returns(serialized);
+        _database.SetMembersAsync(_redisKey, CommandFlags.PreferMaster).Returns(serialized);
 
         var actual = await Sut.MembersAsync<TestDto>(_cacheKey, policy: null, token: testContextAccessor.Current.CancellationToken);
 
@@ -393,7 +427,7 @@ public class RedisSetCacheTests(ITestContextAccessor testContextAccessor) : IAsy
     [Fact]
     public async Task Members_redis_exception_returns_empty()
     {
-        _database.SetMembersAsync(_redisKey, CommandFlags.PreferReplica).ThrowsAsync<Exception>();
+        _database.SetMembersAsync(_redisKey, CommandFlags.PreferMaster).ThrowsAsync<Exception>();
 
         var actual = await Sut.MembersAsync<TestDto>(_cacheKey, policy: null, token: testContextAccessor.Current.CancellationToken);
 
@@ -404,7 +438,7 @@ public class RedisSetCacheTests(ITestContextAccessor testContextAccessor) : IAsy
     public async Task ContainsItem_works()
     {
         var item = _fixture.Create<TestDto>();
-        _database.SetContainsAsync(_redisKey, Arg.Any<RedisValue>(), CommandFlags.PreferReplica).Returns(true);
+        _database.SetContainsAsync(_redisKey, Arg.Any<RedisValue>(), CommandFlags.PreferMaster).Returns(true);
 
         var actual = await Sut.ContainsItemAsync(_cacheKey, item, testContextAccessor.Current.CancellationToken);
 
@@ -415,7 +449,7 @@ public class RedisSetCacheTests(ITestContextAccessor testContextAccessor) : IAsy
     public async Task ContainsItem_redis_exception_returns_false()
     {
         var item = _fixture.Create<TestDto>();
-        _database.SetContainsAsync(_redisKey, Arg.Any<RedisValue>(), CommandFlags.PreferReplica).ThrowsAsync<Exception>();
+        _database.SetContainsAsync(_redisKey, Arg.Any<RedisValue>(), CommandFlags.PreferMaster).ThrowsAsync<Exception>();
 
         var actual = await Sut.ContainsItemAsync(_cacheKey, item, testContextAccessor.Current.CancellationToken);
 
@@ -426,7 +460,7 @@ public class RedisSetCacheTests(ITestContextAccessor testContextAccessor) : IAsy
     public async Task Count_works()
     {
         var expected = _fixture.Create<long>();
-        _database.SetLengthAsync(_redisKey, CommandFlags.PreferReplica).Returns(expected);
+        _database.SetLengthAsync(_redisKey, CommandFlags.PreferMaster).Returns(expected);
 
         var actual = await Sut.CountAsync<TestDto>(_cacheKey, testContextAccessor.Current.CancellationToken);
 
@@ -436,7 +470,7 @@ public class RedisSetCacheTests(ITestContextAccessor testContextAccessor) : IAsy
     [Fact]
     public async Task Count_redis_exception_returns_zero()
     {
-        _database.SetLengthAsync(_redisKey, CommandFlags.PreferReplica).ThrowsAsync<Exception>();
+        _database.SetLengthAsync(_redisKey, CommandFlags.PreferMaster).ThrowsAsync<Exception>();
 
         var actual = await Sut.CountAsync<TestDto>(_cacheKey, testContextAccessor.Current.CancellationToken);
 
@@ -538,7 +572,7 @@ public class RedisSetCacheTests(ITestContextAccessor testContextAccessor) : IAsy
     [Fact]
     public async Task Contains_works()
     {
-        _database.KeyExistsAsync(_redisKey, CommandFlags.PreferReplica).Returns(true);
+        _database.KeyExistsAsync(_redisKey, CommandFlags.PreferMaster).Returns(true);
 
         var actual = await Sut.ContainsAsync<TestDto>(_cacheKey, testContextAccessor.Current.CancellationToken);
 
@@ -555,7 +589,7 @@ public class RedisSetCacheTests(ITestContextAccessor testContextAccessor) : IAsy
     [Fact]
     public async Task Contains_redis_exception_returns_false()
     {
-        _database.KeyExistsAsync(_redisKey, CommandFlags.PreferReplica).ThrowsAsync<Exception>();
+        _database.KeyExistsAsync(_redisKey, CommandFlags.PreferMaster).ThrowsAsync<Exception>();
 
         var actual = await Sut.ContainsAsync<TestDto>(_cacheKey, testContextAccessor.Current.CancellationToken);
 

@@ -14,6 +14,7 @@ public abstract class RedisCacheBase : IConnectionState, IDisposable
     private readonly string _keyPrefix;
     private readonly RedisKey _keyPrefixKey;
     private readonly ConnectorKeyPrefix _connectorPrefix;
+    private readonly RecentTouches? _recentTouches;
     private bool? _supportsExpireTime;
     // Set once scripts turn out to be disabled or denied on this server; reads then use a transaction.
     private bool _noReadScript;
@@ -46,6 +47,17 @@ public abstract class RedisCacheBase : IConnectionState, IDisposable
         Clock = clock;
         KeyReadTelemetryEnabled = redisCacheOptions.KeyReadTelemetryEnabled;
         _noReadScript = !redisCacheOptions.ReadScriptsEnabled;
+        if (redisCacheOptions.MasterReadWindow <= TimeSpan.Zero)
+        {
+            throw new InvalidOperationException($"RedisCacheOptions.{nameof(RedisCacheOptions.MasterReadWindow)} must be positive; it is {redisCacheOptions.MasterReadWindow}.");
+        }
+
+        _recentTouches = redisCacheOptions.ReadFrom switch
+        {
+            RedisReadFrom.Master => null,
+            RedisReadFrom.Replica => new RecentTouches(clock, redisCacheOptions.MasterReadWindow),
+            _ => throw new InvalidOperationException($"RedisCacheOptions.{nameof(RedisCacheOptions.ReadFrom)} has the unsupported value {(int)redisCacheOptions.ReadFrom}. Use {nameof(RedisReadFrom.Master)} or {nameof(RedisReadFrom.Replica)}."),
+        };
         RefreshFlags = redisCacheOptions.AwaitRefresh
             ? CommandFlags.DemandMaster
             : CommandFlags.DemandMaster | CommandFlags.FireAndForget;
@@ -74,6 +86,8 @@ public abstract class RedisCacheBase : IConnectionState, IDisposable
     /// <summary>Flags for a standalone TTL write, shared by both caches so the option cannot be honored in one and not the other.</summary>
     internal CommandFlags RefreshFlags { get; }
 
+    internal RecentTouches? RecentTouches => _recentTouches;
+
     protected ICachingTelemetryProvider Telemetry { get; }
 
     protected bool KeyReadTelemetryEnabled { get; }
@@ -94,6 +108,28 @@ public abstract class RedisCacheBase : IConnectionState, IDisposable
         Dispose(true);
         GC.SuppressFinalize(this);
     }
+
+    internal void NoteWritten(RedisKey[] keys) => _recentTouches?.Touch(keys);
+
+    /// <summary>Records that another node invalidated <paramref name="key"/>; the key is composed only when replicas are on.</summary>
+    internal void NoteInvalidated(IRedisKeyStrategy keyStrategy, CacheKey key) => _recentTouches?.Touch(keyStrategy.GetRedisKey(key));
+
+    internal void NoteAllInvalidated() => _recentTouches?.TouchAll();
+
+    /// <summary>The flag a read of <paramref name="keys"/> carries: the master when any one of them is guarded.</summary>
+    internal CommandFlags ReadFlagsFor(RedisKey[] keys) =>
+        _recentTouches is { } touches && !touches.IsGuarded(keys) ? CommandFlags.PreferReplica : CommandFlags.PreferMaster;
+
+    /// <summary>The flag a read of <paramref name="key"/> carries: the master unless replicas are on and this node has not just written or seen the key invalidated.</summary>
+    protected internal CommandFlags ReadFlagsFor(RedisKey key) =>
+        _recentTouches is { } touches && !touches.IsGuarded(key) ? CommandFlags.PreferReplica : CommandFlags.PreferMaster;
+
+    /// <summary>Records that this node wrote or removed <paramref name="key"/>, so reads of it stay on the master for a moment.</summary>
+    protected internal void NoteWritten(RedisKey key) => _recentTouches?.Touch(key);
+
+    /// <summary>Awaits <paramref name="write"/>, then records <paramref name="key"/> again: a write slower than the window lands after the first touch has lapsed.</summary>
+    protected internal ValueTask<TResult> NoteWrittenAfterAsync<TResult>(RedisKey key, ValueTask<TResult> write) =>
+        _recentTouches is null ? write : NoteAfterAsync(key, write);
 
     /// <summary>Validates a caller-supplied duration.</summary>
     protected static TimeSpan CallerDuration(TimeSpan expiration, [CallerArgumentExpression(nameof(expiration))] string? paramName = null) =>
@@ -141,7 +177,7 @@ public abstract class RedisCacheBase : IConnectionState, IDisposable
 
     /// <summary>The key's TTL, or null when it has none, the key is invalid or the command failed.</summary>
     protected ValueTask<TimeSpan?> KeyTimeToLiveAsync(IResiliencePipeline pipeline, TelemetryScope operation, IRedisKeyStrategy keyStrategy, CacheKey cacheKey, Action<Exception> logFailure, CancellationToken token) =>
-        RunAsync(pipeline, operation, static (s, token) => s.Self.Database.KeyTimeToLiveAsync(ToRedisKey(s.Strategy, s.Key, token), CommandFlags.PreferReplica).AsValueTask(), (Self: this, Strategy: keyStrategy, Key: cacheKey), (TimeSpan?)null, static timeToLive => timeToLive != null, logFailure, token);
+        RunAsync(pipeline, operation, static (s, token) => TimeToLiveCommand(s.Self, s.Strategy, s.Key, token), (Self: this, Strategy: keyStrategy, Key: cacheKey), (TimeSpan?)null, static timeToLive => timeToLive != null, logFailure, token);
 
     /// <summary>The key's expiration: EXPIRETIME on Redis 7, else the TTL added to now, under the same operation.</summary>
     protected async ValueTask<DateTimeOffset?> KeyExpireTimeAsync(IResiliencePipeline pipeline, TelemetryScope operation, IRedisKeyStrategy keyStrategy, CacheKey cacheKey, Action<Exception> logFailure, CancellationToken token)
@@ -152,7 +188,7 @@ public abstract class RedisCacheBase : IConnectionState, IDisposable
             return timeToLive.HasValue ? Clock.ToDateTimeOffset(timeToLive.Value) : null;
         }
 
-        return await RunAsync(pipeline, operation, static (s, token) => s.Self.Database.KeyExpireTimeAsync(ToRedisKey(s.Strategy, s.Key, token), CommandFlags.PreferReplica).AsValueTask(), (Self: this, Strategy: keyStrategy, Key: cacheKey), (DateTime?)null, static expireTime => expireTime.HasValue, logFailure, token).ConfigureAwait(false);
+        return await RunAsync(pipeline, operation, static (s, token) => ExpireTimeCommand(s.Self, s.Strategy, s.Key, token), (Self: this, Strategy: keyStrategy, Key: cacheKey), (DateTime?)null, static expireTime => expireTime.HasValue, logFailure, token).ConfigureAwait(false);
     }
 
     /// <summary>Write duration when the call carries none: policy, then cache default, then <see cref="CachePolicy.DefaultDistributedExpiration"/>; never unbounded by omission.</summary>
@@ -262,7 +298,7 @@ public abstract class RedisCacheBase : IConnectionState, IDisposable
 
         try
         {
-            var reply = await Database.ScriptEvaluateReadOnlyAsync(script, keys, values, CommandFlags.PreferReplica).ConfigureAwait(false);
+            var reply = await Database.ScriptEvaluateReadOnlyAsync(script, keys, values, ReadFlagsFor(keys)).ConfigureAwait(false);
             _readScriptWorked = true;
             return reply;
         }
@@ -332,6 +368,18 @@ public abstract class RedisCacheBase : IConnectionState, IDisposable
         return multiplexer.GetHashSlot(WithConnectorPrefix(prefix, first)) == multiplexer.GetHashSlot(WithConnectorPrefix(prefix, second));
     }
 
+    private static ValueTask<TimeSpan?> TimeToLiveCommand(RedisCacheBase self, IRedisKeyStrategy keyStrategy, CacheKey cacheKey, CancellationToken token)
+    {
+        var key = ToRedisKey(keyStrategy, cacheKey, token);
+        return self.Database.KeyTimeToLiveAsync(key, self.ReadFlagsFor(key)).AsValueTask();
+    }
+
+    private static ValueTask<DateTime?> ExpireTimeCommand(RedisCacheBase self, IRedisKeyStrategy keyStrategy, CacheKey cacheKey, CancellationToken token)
+    {
+        var key = ToRedisKey(keyStrategy, cacheKey, token);
+        return self.Database.KeyExpireTimeAsync(key, self.ReadFlagsFor(key)).AsValueTask();
+    }
+
     /// <summary>The key as the server hashes it, with the prefix the connector's <see cref="IDatabase"/> applies through <c>WithKeyPrefix</c>.</summary>
     private static RedisKey WithConnectorPrefix(RedisKey prefix, RedisKey key) => key.Prepend(prefix);
 
@@ -345,5 +393,17 @@ public abstract class RedisCacheBase : IConnectionState, IDisposable
         }
 
         return keyStrategy.GetRedisKey(cacheKey);
+    }
+
+    private async ValueTask<TResult> NoteAfterAsync<TResult>(RedisKey key, ValueTask<TResult> write)
+    {
+        try
+        {
+            return await write.ConfigureAwait(false);
+        }
+        finally
+        {
+            NoteWritten(key);
+        }
     }
 }

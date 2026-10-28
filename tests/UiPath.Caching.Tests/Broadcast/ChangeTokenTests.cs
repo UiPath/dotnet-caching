@@ -153,6 +153,67 @@ public class ChangeTokenTests : IAsyncLifetime
         callbackCalled.Should().BeTrue();
     }
 
+    [Theory]
+    [InlineData("event", false)]
+    [InlineData("loss", true)]
+    [InlineData("error", true)]
+    public void The_invalidating_callback_runs_before_the_token_changes(string cause, bool lost)
+    {
+        var seen = new List<(object? State, bool Lost, bool HasChanged)>();
+        var state = new object();
+        ((IInvalidationSource)Sut).RegisterInvalidatingCallback((s, l) => seen.Add((s, l, Sut.HasChanged)), state);
+
+        switch (cause)
+        {
+            case "event":
+                Sut.OnNext(new TestCacheEvent { Id = "1", Source = new Uri("urn:peer"), Data = new CacheEventData(_key), Type = _fixture.Create<string>() });
+                break;
+            case "loss":
+                ((IMissedEventsObserver)Sut).OnEventsMissed(MissedEventsReason.Lost);
+                break;
+            default:
+                Sut.OnError(_fixture.Create<Exception>());
+                break;
+        }
+
+        Sut.HasChanged.Should().BeTrue();
+        seen.Should().Equal((state, lost, false));
+    }
+
+    [Fact]
+    public void An_invalidating_callback_registered_after_the_token_changed_runs_at_once()
+    {
+        ((IMissedEventsObserver)Sut).OnEventsMissed(MissedEventsReason.Lost);
+        var seen = new List<bool>();
+
+        ((IInvalidationSource)Sut).RegisterInvalidatingCallback((_, l) => seen.Add(l), null);
+
+        seen.Should().Equal(true);
+    }
+
+    [Fact]
+    public void The_invalidating_callback_runs_for_a_peer_update_the_holder_applied()
+    {
+        var seen = 0;
+        ((IInvalidationSource)Sut).RegisterInvalidatingCallback((_, _) => seen++, null);
+        ((IPeerUpdateSource)Sut).PeerUpdateHandler = _ => true;
+
+        Sut.OnNext(new TestCacheEvent
+        {
+            Id = "1",
+            Source = new Uri("urn:peer"),
+            Data = new CacheEventData(_key, new Dictionary<string, object?>
+            {
+                [KnownFieldNames.VersionKey] = 2L,
+                [KnownFieldNames.PeerFieldsKey] = new Dictionary<string, string?> { ["a"] = "1" },
+            }),
+            Type = _fixture.Create<string>(),
+        });
+
+        Sut.HasChanged.Should().BeFalse();
+        seen.Should().Be(1);
+    }
+
     [Fact]
     public void OnEventsMissed_expires_the_entry()
     {

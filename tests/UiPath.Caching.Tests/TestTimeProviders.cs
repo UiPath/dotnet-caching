@@ -8,8 +8,12 @@ public sealed class FakeTimeProvider(DateTimeOffset now) : TimeProvider
     public override DateTimeOffset GetUtcNow() => now;
 }
 
-/// <summary>A <see cref="TimeProvider"/> over a substituted <see cref="ISystemClock"/>, so a test can hand the same clock to a <c>MemoryCache</c> it builds.</summary>
+/// <summary>A <see cref="TimeProvider"/> over a substituted <see cref="ISystemClock"/>, so a test can hand the same clock to a <c>MemoryCache</c> it builds; its timestamps follow the same clock.</summary>
 public sealed class SystemClockTimeProvider(ISystemClock clock) : TimeProvider
 {
+    public override long TimestampFrequency => TimeSpan.TicksPerSecond;
+
     public override DateTimeOffset GetUtcNow() => clock.UtcNow;
+
+    public override long GetTimestamp() => clock.UtcNow.UtcTicks;
 }

@@ -6,7 +6,7 @@ Alphabetical lookup for terms used across the docs.
 
 **AppShortName** — Required-in-practice cache key prefix scoping all keys an app writes. Prevents collisions when multiple services share a Redis instance.
 
-**Bundled GET+TTL** — A single Redis transaction that fetches a value and its remaining TTL in one round-trip, replacing the older N+1 pattern. Implemented on `ICache.GetCacheEntryAsync<T>` and `IHashCache.GetCacheEntryAsync<T>`. Routes to a replica via `CommandFlags.PreferReplica` on the transaction's `ExecuteAsync`.
+**Bundled GET+TTL** — A single Redis transaction that fetches a value and its remaining TTL in one round-trip, replacing the older N+1 pattern. Implemented on `ICache.GetCacheEntryAsync<T>` and `IHashCache.GetCacheEntryAsync<T>`. Routes by `ReadFrom` (the master by default, a replica with `Replica`) through the flag on the transaction's `ExecuteAsync`.
 
 **CacheKey** — A typed wrapper around `string` used everywhere a key is accepted. Implicit-converts from `string`.
 

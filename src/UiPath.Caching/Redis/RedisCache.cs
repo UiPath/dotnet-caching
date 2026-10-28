@@ -5,7 +5,7 @@ using UiPath.Caching.Telemetry;
 
 namespace UiPath.Caching.Redis;
 
-internal sealed partial class RedisCache : RedisCacheBase, ICache, IStatefulCache, IGeneratedExpirationCache
+internal sealed partial class RedisCache : RedisCacheBase, ICache, IStatefulCache, IGeneratedExpirationCache, IInvalidationSink
 {
     /// <summary>Value and absolute expiration in one atomic read-only call.</summary>
     private const string ReadWithExpirationScript = "local v = redis.call('GET', KEYS[1]) if not v then return false end return {v, redis.call('PEXPIRETIME', KEYS[1])}";
@@ -197,7 +197,7 @@ internal sealed partial class RedisCache : RedisCacheBase, ICache, IStatefulCach
     {
         NotCacheableException.ThrowIfNotCacheable<T>();
         var redisKey = ToRedisKey(cacheKey, token);
-        return RunAsync(_read, StartOperation<T>(), static (s, token) => s.Self.Database.KeyExistsAsync(s.Key, CommandFlags.PreferReplica).AsValueTask(), (Self: this, Key: redisKey), false, static hit => hit, _logFailure, token);
+        return RunAsync(_read, StartOperation<T>(), static (s, token) => s.Self.Database.KeyExistsAsync(s.Key, s.Self.ReadFlagsFor(s.Key)).AsValueTask(), (Self: this, Key: redisKey), false, static hit => hit, _logFailure, token);
     }
 
     public ValueTask<TimeSpan?> TimeToLiveAsync<T>(CacheKey cacheKey, CancellationToken token = default)
@@ -211,6 +211,10 @@ internal sealed partial class RedisCache : RedisCacheBase, ICache, IStatefulCach
         NotCacheableException.ThrowIfNotCacheable<T>();
         return KeyExpireTimeAsync(_read, StartOperation<T>(), _redisKeyStrategy, cacheKey, _logFailure, token);
     }
+
+    void IInvalidationSink.Invalidated(CacheKey key) => NoteInvalidated(_redisKeyStrategy, key);
+
+    void IInvalidationSink.InvalidatedAll() => NoteAllInvalidated();
 
     private static (RedisKey Key, bool Hit)[] InitReads(RedisKey[] redisKeys)
     {
@@ -261,12 +265,13 @@ internal sealed partial class RedisCache : RedisCacheBase, ICache, IStatefulCach
         }
 
         var transaction = s.Self.Database.CreateTransaction();
-        var mgetTask = transaction.StringGetAsync(s.Keys, CommandFlags.PreferReplica);
-        var expirationTasks = s.Keys.Select(k => s.Self.FetchExpirationAsync(transaction, k)).ToArray();
+        var flags = s.Self.ReadFlagsFor(s.Keys);
+        var mgetTask = transaction.StringGetAsync(s.Keys, flags);
+        var expirationTasks = s.Keys.Select(k => s.Self.FetchExpirationAsync(transaction, k, flags)).ToArray();
         bool committed;
         try
         {
-            committed = await transaction.ExecuteAsync(CommandFlags.PreferReplica).ConfigureAwait(false);
+            committed = await transaction.ExecuteAsync(flags).ConfigureAwait(false);
         }
         catch
         {
@@ -325,6 +330,7 @@ internal sealed partial class RedisCache : RedisCacheBase, ICache, IStatefulCach
 
         LogRefreshingKey(Logged(cacheKey, redisKey, typeof(T)), expiration);
         var ret = false;
+        NoteWritten(redisKey);
         var operation = StartOperation<T>();
         try
         {
@@ -359,6 +365,7 @@ internal sealed partial class RedisCache : RedisCacheBase, ICache, IStatefulCach
         }
         finally
         {
+            NoteWritten(redisKey);
             operation.Track(ret);
         }
 
@@ -519,7 +526,7 @@ internal sealed partial class RedisCache : RedisCacheBase, ICache, IStatefulCach
             var value = await _read.ExecuteAsync(static (s, token) =>
             {
                 token.ThrowIfCancellationRequested();
-                return s.Self.Database.StringGetAsync(s.Key, CommandFlags.PreferReplica).AsValueTask();
+                return s.Self.Database.StringGetAsync(s.Key, s.Self.ReadFlagsFor(s.Key)).AsValueTask();
             },
             (Self: this, Key: redisKey),
             RedisValue.Null,
@@ -552,6 +559,7 @@ internal sealed partial class RedisCache : RedisCacheBase, ICache, IStatefulCach
             return false;
         }
 
+        NoteWritten(redisKey);
         var operation = StartOperation<T>(nameof(SetAsync));
         try
         {
@@ -598,6 +606,7 @@ internal sealed partial class RedisCache : RedisCacheBase, ICache, IStatefulCach
         }
         finally
         {
+            NoteWritten(redisKey);
             operation.Track(ret);
         }
 
@@ -609,6 +618,7 @@ internal sealed partial class RedisCache : RedisCacheBase, ICache, IStatefulCach
         bool ret = default;
         token.ThrowIfCancellationRequested();
         var redisKeys = Array.ConvertAll(keyValues, kv => ToRedisKey(kv.Key, token));
+        NoteWritten(redisKeys);
 
         if (!IsConnected)
         {
@@ -640,6 +650,7 @@ internal sealed partial class RedisCache : RedisCacheBase, ICache, IStatefulCach
             {
                 payload.Dispose();
             }
+            NoteWritten(redisKeys);
             operation.Track(ret, keyValues.Length);
         }
 
@@ -711,6 +722,7 @@ internal sealed partial class RedisCache : RedisCacheBase, ICache, IStatefulCach
             }
             else
             {
+                NoteWritten(redisKey);
                 var (serialized, payload) = isNull ? (RedisValue.EmptyString, default(SerializedPayload)) : SerializeValue(value);
                 using (payload)
                 {
@@ -739,6 +751,7 @@ internal sealed partial class RedisCache : RedisCacheBase, ICache, IStatefulCach
         }
         finally
         {
+            NoteWritten(redisKey);
             operation.Track(ret);
         }
 
@@ -749,6 +762,7 @@ internal sealed partial class RedisCache : RedisCacheBase, ICache, IStatefulCach
     {
         bool ret = default;
         token.ThrowIfCancellationRequested();
+        NoteWritten(redisKey);
         var operation = StartOperation<T>();
         try
         {
@@ -770,6 +784,7 @@ internal sealed partial class RedisCache : RedisCacheBase, ICache, IStatefulCach
         }
         finally
         {
+            NoteWritten(redisKey);
             operation.Track(ret);
         }
 
@@ -780,6 +795,7 @@ internal sealed partial class RedisCache : RedisCacheBase, ICache, IStatefulCach
     {
         bool ret = default;
         token.ThrowIfCancellationRequested();
+        NoteWritten(redisKey);
         var operation = StartOperation<T>();
         try
         {
@@ -807,6 +823,7 @@ internal sealed partial class RedisCache : RedisCacheBase, ICache, IStatefulCach
         }
         finally
         {
+            NoteWritten(redisKey);
             operation.Track(ret, redisKey.Length);
         }
 
@@ -831,7 +848,7 @@ internal sealed partial class RedisCache : RedisCacheBase, ICache, IStatefulCach
             var value = await _read.ExecuteAsync(static (s, token) =>
             {
                 token.ThrowIfCancellationRequested();
-                return s.Self.Database.StringGetAsync(s.Key, CommandFlags.PreferReplica).AsValueTask();
+                return s.Self.Database.StringGetAsync(s.Key, s.Self.ReadFlagsFor(s.Key)).AsValueTask();
             },
             (Self: this, Key: redisKey),
             RedisValue.Null,
@@ -878,7 +895,7 @@ internal sealed partial class RedisCache : RedisCacheBase, ICache, IStatefulCach
                 static (s, group) => s.Self._read.ExecuteAsync(static (r, token) =>
                 {
                     token.ThrowIfCancellationRequested();
-                    return r.Self.Database.StringGetAsync(r.Keys, CommandFlags.PreferReplica).AsValueTask();
+                    return r.Self.Database.StringGetAsync(r.Keys, r.Self.ReadFlagsFor(r.Keys)).AsValueTask();
                 },
                 (s.Self, Keys: Pick(s.Keys, group)),
                 [],
@@ -946,12 +963,13 @@ internal sealed partial class RedisCache : RedisCacheBase, ICache, IStatefulCach
                 }
 
                 var transaction = s.Self.Database.CreateTransaction();
-                var valueTask = transaction.StringGetAsync(s.Key, CommandFlags.PreferReplica);
-                var expirationTask = s.Self.FetchExpirationAsync(transaction, s.Key);
+                var flags = s.Self.ReadFlagsFor(s.Key);
+                var valueTask = transaction.StringGetAsync(s.Key, flags);
+                var expirationTask = s.Self.FetchExpirationAsync(transaction, s.Key, flags);
                 bool committed;
                 try
                 {
-                    committed = await transaction.ExecuteAsync(CommandFlags.PreferReplica).ConfigureAwait(false);
+                    committed = await transaction.ExecuteAsync(flags).ConfigureAwait(false);
                 }
                 catch
                 {
@@ -1095,14 +1113,14 @@ internal sealed partial class RedisCache : RedisCacheBase, ICache, IStatefulCach
         return retValues;
     }
 
-    private async Task<DateTimeOffset?> FetchExpirationAsync(ITransaction transaction, RedisKey redisKey)
+    private async Task<DateTimeOffset?> FetchExpirationAsync(ITransaction transaction, RedisKey redisKey, CommandFlags flags)
     {
         if (SupportsExpireTime)
         {
-            return await transaction.KeyExpireTimeAsync(redisKey, CommandFlags.PreferReplica).ConfigureAwait(false);
+            return await transaction.KeyExpireTimeAsync(redisKey, flags).ConfigureAwait(false);
         }
 
-        return Clock.ToDateTimeOffset(await transaction.KeyTimeToLiveAsync(redisKey, CommandFlags.PreferReplica).ConfigureAwait(false));
+        return Clock.ToDateTimeOffset(await transaction.KeyTimeToLiveAsync(redisKey, flags).ConfigureAwait(false));
     }
 
     private ICacheEntry<T?> DefaultEntry<T>() =>

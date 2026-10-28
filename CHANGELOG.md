@@ -111,6 +111,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 
 ### Changed
 
+- **Reads go to the master by default (was `PreferReplica`).** This is a default behavior change: unless you opt in, every Redis read
+  (values, hashes, sets, TTLs, read scripts) is sent to the master. On an Azure Redis 6 cluster a replica round trip measured about 3 times the
+  master's (1.6 ms against 0.55 ms), and a replica that still holds a key the master has removed could refill an entry with stale data right
+  after an invalidation. Set **`RedisCacheOptions.ReadFrom`** to `Replica` to read from replicas as before; it is `Master` by default. With `Replica`, a read of a key this node
+  wrote or removed within **`RedisCacheOptions.MasterReadWindow`** (1 second by default; set it above the expected replica lag), or heard an
+  invalidation for through a live local entry, still goes to the master. A fire-and-forget TTL write (`AwaitRefresh` off) starts the window when
+  it is queued. A key with no local entry is not guarded against another node's write, and neither is a lost-events clear on a node holding no local entries.
+
 - **StackExchange.Redis 3.4.20 (was 3.3.1).** It fixes transactions on an idle connection being torn down as a dead socket when the
   replies are slower than one heartbeat (the hash writes are `MULTI`/`EXEC`), and `IBatch` commands that never completed after a
   connection drop. Commands that a dropped connection fails now throw `RedisConnectionException` instead of a raw transport or

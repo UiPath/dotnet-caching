@@ -5,7 +5,7 @@ using UiPath.Caching.Telemetry;
 
 namespace UiPath.Caching.Redis;
 
-internal sealed partial class RedisHashCache : RedisCacheBase, IHashCache, ISpanKeyHashCache, IVersionedHashCache
+internal sealed partial class RedisHashCache : RedisCacheBase, IHashCache, ISpanKeyHashCache, IVersionedHashCache, IInvalidationSink
 {
     /// <summary>All fields and the absolute expiration in one atomic read-only call.</summary>
     private const string ReadWithExpirationScript = "local n = redis.call('HLEN', KEYS[1]) if n > tonumber(ARGV[1]) then return {n, redis.call('PEXPIRETIME', KEYS[1])} end return {redis.call('HGETALL', KEYS[1]), redis.call('PEXPIRETIME', KEYS[1])}";
@@ -108,7 +108,7 @@ internal sealed partial class RedisHashCache : RedisCacheBase, IHashCache, ISpan
     {
         NotCacheableException.ThrowIfNotCacheable<T>();
         var redisKey = ToRedisKey(cacheKey, token);
-        return RunAsync(_read, StartOperation<T>(), static (s, token) => s.Self.Database.KeyExistsAsync(s.Key, CommandFlags.PreferReplica).AsValueTask(), (Self: this, Key: redisKey), false, static hit => hit, _logFailure, token);
+        return RunAsync(_read, StartOperation<T>(), static (s, token) => s.Self.Database.KeyExistsAsync(s.Key, s.Self.ReadFlagsFor(s.Key)).AsValueTask(), (Self: this, Key: redisKey), false, static hit => hit, _logFailure, token);
     }
 
     public ValueTask<bool> RefreshAsync<T>(CacheKey cacheKey, CachePolicy? policy, CancellationToken token = default) =>
@@ -127,6 +127,7 @@ internal sealed partial class RedisHashCache : RedisCacheBase, IHashCache, ISpan
         var expiration = GetExpiration(options, policy);
         var now = Clock.GetUtcNow();
         var ret = false;
+        NoteWritten(redisKey);
         var operation = StartOperation<T>();
         try
         {
@@ -173,6 +174,7 @@ internal sealed partial class RedisHashCache : RedisCacheBase, IHashCache, ISpan
         }
         finally
         {
+            NoteWritten(redisKey);
             operation.Track(ret);
         }
 
@@ -183,7 +185,8 @@ internal sealed partial class RedisHashCache : RedisCacheBase, IHashCache, ISpan
     {
         NotCacheableException.ThrowIfNotCacheable<T>();
         var redisKey = ToRedisKey(cacheKey, token);
-        return RunAsync(_write, StartOperation<T>(), static (s, token) => s.Self.Database.KeyDeleteAsync(s.Key, CommandFlags.DemandMaster).AsValueTask(), (Self: this, Key: redisKey), false, static removed => removed, _logFailure, token);
+        NoteWritten(redisKey);
+        return NoteWrittenAfterAsync(redisKey, RunAsync(_write, StartOperation<T>(), static (s, token) => s.Self.Database.KeyDeleteAsync(s.Key, CommandFlags.DemandMaster).AsValueTask(), (Self: this, Key: redisKey), false, static removed => removed, _logFailure, token));
     }
 
     public ValueTask<bool> RemoveFieldsAsync<T>(CacheKey cacheKey, string[] fields, CancellationToken token = default) =>
@@ -259,6 +262,7 @@ internal sealed partial class RedisHashCache : RedisCacheBase, IHashCache, ISpan
     {
         NotCacheableException.ThrowIfNotCacheable<T>();
         var redisKey = ToRedisKey(cacheKey, token);
+        NoteWritten(redisKey);
         var ret = false;
         var operation = StartOperation<T>();
         try
@@ -266,7 +270,7 @@ internal sealed partial class RedisHashCache : RedisCacheBase, IHashCache, ISpan
             var keyExists = await _read.ExecuteAsync(static (s, token) =>
             {
                 token.ThrowIfCancellationRequested();
-                return s.Self.Database.KeyExistsAsync(s.Key, CommandFlags.PreferReplica).AsValueTask();
+                return s.Self.Database.KeyExistsAsync(s.Key, s.Self.ReadFlagsFor(s.Key)).AsValueTask();
             },
             (Self: this, Key: redisKey),
             default,
@@ -342,11 +346,16 @@ internal sealed partial class RedisHashCache : RedisCacheBase, IHashCache, ISpan
         }
         finally
         {
+            NoteWritten(redisKey);
             operation.Track(ret);
         }
 
         return ret;
     }
+
+    void IInvalidationSink.Invalidated(CacheKey key) => NoteInvalidated(_redisKeyStrategy, key);
+
+    void IInvalidationSink.InvalidatedAll() => NoteAllInvalidated();
 
     /// <summary>Throws a transaction's own failure, not the cancellation of what it queued.</summary>
     private static async Task CommitAsync(ITransaction transaction, string what, RedisKey key, Task first, Task second)
@@ -485,7 +494,7 @@ internal sealed partial class RedisHashCache : RedisCacheBase, IHashCache, ISpan
 
         // The pages are not one snapshot: a write between two of them can show in one and not the other.
         var fields = new Dictionary<RedisValue, RedisValue>();
-        await foreach (var entry in Database.HashScanAsync(redisKey, pageSize: _fieldBatchSize, flags: CommandFlags.PreferReplica).ConfigureAwait(false))
+        await foreach (var entry in Database.HashScanAsync(redisKey, pageSize: _fieldBatchSize, flags: ReadFlagsFor(redisKey)).ConfigureAwait(false))
         {
             // The pages are not one snapshot, so a version read among them says nothing of the fields read before it.
             if (entry.Name != KnownFieldNames.VersionKey)
@@ -505,16 +514,17 @@ internal sealed partial class RedisHashCache : RedisCacheBase, IHashCache, ISpan
             return (await ParseReplyAsync(redisKey, reply).ConfigureAwait(false)).Entries;
         }
 
-        return await Database.HashGetAllAsync(redisKey, CommandFlags.PreferReplica).ConfigureAwait(false);
+        return await Database.HashGetAllAsync(redisKey, ReadFlagsFor(redisKey)).ConfigureAwait(false);
     }
 
     private async ValueTask<RedisValue[]> HashGetFieldsAsync(RedisKey redisKey, string[] fields)
     {
         if (fields.Length <= _fieldBatchSize)
         {
-            return await Database.HashGetAsync(redisKey, fields.Select(k => (RedisValue)k).ToArray(), CommandFlags.PreferReplica).ConfigureAwait(false);
+            return await Database.HashGetAsync(redisKey, fields.Select(k => (RedisValue)k).ToArray(), ReadFlagsFor(redisKey)).ConfigureAwait(false);
         }
 
+        var flags = ReadFlagsFor(redisKey);
         var pending = new List<Task<RedisValue[]>>();
         for (var start = 0; start < fields.Length; start += _fieldBatchSize)
         {
@@ -524,7 +534,7 @@ internal sealed partial class RedisHashCache : RedisCacheBase, IHashCache, ISpan
                 chunk[i] = fields[start + i];
             }
 
-            pending.Add(Database.HashGetAsync(redisKey, chunk, CommandFlags.PreferReplica));
+            pending.Add(Database.HashGetAsync(redisKey, chunk, flags));
         }
 
         return (await Task.WhenAll(pending).ConfigureAwait(false)).SelectMany(values => values).ToArray();
@@ -631,6 +641,7 @@ internal sealed partial class RedisHashCache : RedisCacheBase, IHashCache, ISpan
         var redisKey = ToRedisKey(cacheKey, token);
         LogRefreshingKey(Logged(cacheKey, redisKey, typeof(T)), localExpiration);
         var ret = false;
+        NoteWritten(redisKey);
         var operation = StartOperation<T>();
         try
         {
@@ -660,6 +671,7 @@ internal sealed partial class RedisHashCache : RedisCacheBase, IHashCache, ISpan
         }
         finally
         {
+            NoteWritten(redisKey);
             operation.Track(ret);
         }
 
@@ -766,15 +778,16 @@ internal sealed partial class RedisHashCache : RedisCacheBase, IHashCache, ISpan
             }
 
             var transaction = s.Self.Database.CreateTransaction();
-            var hashEntriesTask = transaction.HashGetAllAsync(s.Key, CommandFlags.PreferReplica);
-            Task<DateTime?>? expireTimeTask = s.Self.SupportsExpireTime ? transaction.KeyExpireTimeAsync(s.Key, CommandFlags.PreferReplica) : null;
-            Task<TimeSpan?>? expireTimeToLiveTask = s.Self.SupportsExpireTime ? null : transaction.KeyTimeToLiveAsync(s.Key, CommandFlags.PreferReplica);
+            var flags = s.Self.ReadFlagsFor(s.Key);
+            var hashEntriesTask = transaction.HashGetAllAsync(s.Key, flags);
+            Task<DateTime?>? expireTimeTask = s.Self.SupportsExpireTime ? transaction.KeyExpireTimeAsync(s.Key, flags) : null;
+            Task<TimeSpan?>? expireTimeToLiveTask = s.Self.SupportsExpireTime ? null : transaction.KeyTimeToLiveAsync(s.Key, flags);
 
             // Observed now: an uncommitted transaction leaves them unawaited.
             hashEntriesTask.Forget();
             expireTimeTask?.Forget();
             expireTimeToLiveTask?.Forget();
-            if (!await transaction.ExecuteAsync(CommandFlags.PreferReplica).ConfigureAwait(false))
+            if (!await transaction.ExecuteAsync(flags).ConfigureAwait(false))
             {
                 return false;
             }
@@ -894,7 +907,7 @@ internal sealed partial class RedisHashCache : RedisCacheBase, IHashCache, ISpan
             var value = await _read.ExecuteAsync(static (s, token) =>
             {
                 token.ThrowIfCancellationRequested();
-                return s.Self.Database.HashGetAsync(s.Key, s.Field, CommandFlags.PreferReplica).AsValueTask();
+                return s.Self.Database.HashGetAsync(s.Key, s.Field, s.Self.ReadFlagsFor(s.Key)).AsValueTask();
             },
             (Self: this, Key: redisKey, Field: field),
             RedisValue.Null,
@@ -1067,6 +1080,7 @@ internal sealed partial class RedisHashCache : RedisCacheBase, IHashCache, ISpan
                 report?.Capture(hashEntries, setOption);
             }
 
+            NoteWritten(redisKey);
             var operation = StartOperation<T>(nameof(SetAsync));
             try
             {
@@ -1080,6 +1094,7 @@ internal sealed partial class RedisHashCache : RedisCacheBase, IHashCache, ISpan
             }
             finally
             {
+                NoteWritten(redisKey);
                 operation.Track(ret);
             }
 
@@ -1366,7 +1381,13 @@ internal sealed partial class RedisHashCache : RedisCacheBase, IHashCache, ISpan
         return 0;
     }
 
-    private async ValueTask<bool> DeleteFieldsAsync(RedisKey redisKey, string[] fields, bool versioned, CancellationToken token)
+    private ValueTask<bool> DeleteFieldsAsync(RedisKey redisKey, string[] fields, bool versioned, CancellationToken token)
+    {
+        NoteWritten(redisKey);
+        return NoteWrittenAfterAsync(redisKey, DeleteFieldsCoreAsync(redisKey, fields, versioned, token));
+    }
+
+    private async ValueTask<bool> DeleteFieldsCoreAsync(RedisKey redisKey, string[] fields, bool versioned, CancellationToken token)
     {
         token.ThrowIfCancellationRequested();
         var pending = new List<Task<long>>((fields.Length + _fieldBatchSize - 1) / _fieldBatchSize);

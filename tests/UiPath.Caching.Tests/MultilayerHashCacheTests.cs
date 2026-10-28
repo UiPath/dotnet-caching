@@ -40,6 +40,22 @@ public class MultilayerHashCacheTests(ITestContextAccessor testContextAccessor) 
 
 
     [Fact]
+    public void An_inner_tier_that_tracks_invalidations_is_told_of_them()
+    {
+        // A substitute cannot implement the internal sink, so the real Redis tier stands in.
+        using var inner = _fixture.Create<RedisHashCache>();
+        _fixture.Inject<IHashCache>(inner);
+
+        Sut.Invalidations.Should().BeSameAs(inner);
+    }
+
+    [Fact]
+    public void An_inner_tier_that_tracks_nothing_is_told_nothing()
+    {
+        Sut.Invalidations.Should().BeNull();
+    }
+
+    [Fact]
     public async Task Get_data_from_inner_cache()
     {
         var expected = _fixture.Create<IDictionary<string, string?>>();

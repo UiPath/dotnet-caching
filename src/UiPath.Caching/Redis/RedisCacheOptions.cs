@@ -38,6 +38,19 @@ public class RedisCacheOptions : ICacheOptions
     /// </summary>
     public bool ReadScriptsEnabled { get; set; } = true;
 
+    /// <summary>
+    /// Which node answers a read. <see cref="RedisReadFrom.Master"/> by default: the master answers in about a third of a replica's
+    /// time and cannot return a key it has already removed, as a lagging replica can right after an invalidation; a replica answers only while no master is reachable. With
+    /// <see cref="RedisReadFrom.Replica"/>, a key this node wrote, or heard invalidated through a live local entry, within <see cref="MasterReadWindow"/> still reads from the master.
+    /// </summary>
+    public RedisReadFrom ReadFrom { get; set; } = RedisReadFrom.Master;
+
+    /// <summary>
+    /// With <see cref="RedisReadFrom.Replica"/>, how long a key this node wrote or saw invalidated keeps reading from the master; 1 second by default.
+    /// It must exceed the expected replica lag. A fire-and-forget refresh (<see cref="AwaitRefresh"/> off) starts the window when it is queued, not when it lands.
+    /// </summary>
+    public TimeSpan MasterReadWindow { get; set; } = RecentTouches.DefaultWindow;
+
     /// <summary>How many fields of one hash a single Redis command carries; a hash call over more is split into commands of this size, so none blocks the server for long.</summary>
     public int HashFieldBatchSize { get; set; } = 1000;
 
