@@ -87,6 +87,7 @@ jobs:
           /d:sonar.host.url="https://sonarcloud.io"
           /d:sonar.cs.vscoveragexml.reportsPaths="**/TestResults/**/*.xml"
           /d:sonar.cs.vstest.reportsPaths="**/*.trx"
+          /d:sonar.cpd.exclusions="src/UiPath.Caching.Abstractions/ICache.cs,src/UiPath.Caching.Abstractions/ICacheOfT.cs,src/UiPath.Caching.Abstractions/IHashCache.cs,src/UiPath.Caching.Abstractions/IHashCacheOfT.cs"
 
       - name: Restore
         run: dotnet restore UiPath.Caching.slnx

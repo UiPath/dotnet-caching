@@ -36,8 +36,8 @@ public class OverloadShapeTests
     {
         var cache = Substitute.For<ICache>();
         var typed = Substitute.For<ICache<string>>();
-        ValueTaskStubs.Returns(cache.GetCacheEntryAsync<string>(Arg.Any<CacheKey>(), Arg.Any<CachePolicy?>(), Arg.Any<CancellationToken>()), new TestCacheEntry<string?> { Value = "hit", Expiration = DateTimeOffset.MaxValue, Found = true });
-        ValueTaskStubs.Returns(typed.GetAsync(Arg.Any<CacheKey>(), Arg.Any<CancellationToken>()), "hit");
+        ValueTaskStubs.Returns(cache.GetOrAddWithExpirationAsync(Arg.Any<CacheKey>(), Arg.Any<Func<CancellationToken, Task<GeneratedValue<string>>>>(), Arg.Any<CachePolicy?>(), Arg.Any<CancellationToken>()), "hit");
+        ValueTaskStubs.Returns(typed.GetOrAddWithExpirationAsync(Arg.Any<CacheKey>(), Arg.Any<Func<CancellationToken, Task<GeneratedValue<string>>>>(), Arg.Any<CancellationToken>()), "hit");
         var generator = new Func<CancellationToken, Task<GeneratedValue<string>>>(_ => throw new InvalidOperationException());
 
         (await cache.GetOrAddWithExpirationAsync<string>("k", _ => throw new InvalidOperationException(), null, Ct)).Should().Be("hit");

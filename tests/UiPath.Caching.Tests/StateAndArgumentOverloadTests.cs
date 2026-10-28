@@ -83,36 +83,38 @@ public class StateAndArgumentOverloadTests
     [Theory]
     [InlineData(MockBehavior.Strict)]
     [InlineData(MockBehavior.Loose)]
-    public async Task A_moq_hash_cache_serves_the_state_members_from_its_closure_setups(MockBehavior behavior)
+    public async Task A_moq_hash_cache_serves_the_state_members_and_their_span_keys_from_its_state_setups(MockBehavior behavior)
     {
         var mock = new Mock<IHashCache>(behavior);
-        mock.Setup(c => c.GetOrAddAsync(It.IsAny<CacheKey>(), It.IsAny<Func<CancellationToken, Task<IDictionary<string, string?>>>>(), Deadline, HashCacheSetOption.KeyReplace, null, It.IsAny<CancellationToken>()))
-            .Returns((CacheKey _, Func<CancellationToken, Task<IDictionary<string, string?>>> generator, DateTimeOffset _, HashCacheSetOption? _, CachePolicy? _, CancellationToken token) => new ValueTask<IDictionary<string, string?>>(generator(token)));
-        mock.Setup(c => c.GetOrAddAsync(It.IsAny<CacheKey>(), It.IsAny<Func<CancellationToken, Task<IDictionary<string, string?>>>>(), null, It.IsAny<CancellationToken>()))
-            .Returns((CacheKey _, Func<CancellationToken, Task<IDictionary<string, string?>>> generator, CachePolicy? _, CancellationToken token) => new ValueTask<IDictionary<string, string?>>(generator(token)));
+        mock.Setup(c => c.GetOrAddAsync(It.IsAny<CacheKey>(), It.IsAny<Request>(), It.IsAny<Func<Request, CancellationToken, Task<IDictionary<string, string?>>>>(), Deadline, HashCacheSetOption.KeyReplace, null, It.IsAny<CancellationToken>()))
+            .Returns((CacheKey _, Request state, Func<Request, CancellationToken, Task<IDictionary<string, string?>>> generator, DateTimeOffset _, HashCacheSetOption? _, CachePolicy? _, CancellationToken token) => new ValueTask<IDictionary<string, string?>>(generator(state, token)));
+        mock.Setup(c => c.GetOrAddAsync(It.IsAny<CacheKey>(), It.IsAny<Request>(), It.IsAny<Func<Request, CancellationToken, Task<IDictionary<string, string?>>>>(), null, It.IsAny<CancellationToken>()))
+            .Returns((CacheKey _, Request state, Func<Request, CancellationToken, Task<IDictionary<string, string?>>> generator, CachePolicy? _, CancellationToken token) => new ValueTask<IDictionary<string, string?>>(generator(state, token)));
         var typed = new Mock<IHashCache<string>>(behavior);
-        typed.Setup(c => c.GetOrAddAsync(It.IsAny<CacheKey>(), It.IsAny<Func<CancellationToken, Task<IDictionary<string, string?>>>>(), It.IsAny<CancellationToken>()))
-            .Returns((CacheKey _, Func<CancellationToken, Task<IDictionary<string, string?>>> generator, CancellationToken token) => new ValueTask<IDictionary<string, string?>>(generator(token)));
+        typed.Setup(c => c.GetOrAddAsync(It.IsAny<CacheKey>(), It.IsAny<Request>(), It.IsAny<Func<Request, CancellationToken, Task<IDictionary<string, string?>>>>(), It.IsAny<CancellationToken>()))
+            .Returns((CacheKey _, Request state, Func<Request, CancellationToken, Task<IDictionary<string, string?>>> generator, CancellationToken token) => new ValueTask<IDictionary<string, string?>>(generator(state, token)));
 
         (await mock.Object.GetOrAddAsync<string, Request>("k", new Request("a", 2), LoadHash, Deadline, HashCacheSetOption.KeyReplace, policy: null, Ct))["id"].Should().Be("a:2");
         (SpanHash(mock.Object, new Request("a", 3), LoadHash))["id"].Should().Be("a:3");
         (await typed.Object.GetOrAddAsync("k", new Request("a", 4), LoadHash, Ct))["id"].Should().Be("a:4");
+        (SpanHash(typed.Object, new Request("a", 5), LoadHash))["id"].Should().Be("a:5");
     }
 
     [Fact]
-    public async Task An_nsubstitute_hash_cache_serves_the_state_members_from_its_closure_setups()
+    public async Task An_nsubstitute_hash_cache_serves_the_state_members_from_its_state_setups()
     {
         var cache = Substitute.For<IHashCache>();
         ValueTaskStubs.Returns(
-            cache.GetOrAddAsync(Arg.Any<CacheKey>(), Arg.Any<Func<CancellationToken, Task<IDictionary<string, string?>>>>(), TimeSpan.FromSeconds(1), Arg.Any<CachePolicy?>(), Ct),
-            call => new ValueTask<IDictionary<string, string?>>(call.Arg<Func<CancellationToken, Task<IDictionary<string, string?>>>>()(Ct)));
+            cache.GetOrAddAsync(Arg.Any<CacheKey>(), Arg.Any<Request>(), Arg.Any<Func<Request, CancellationToken, Task<IDictionary<string, string?>>>>(), TimeSpan.FromSeconds(1), Arg.Any<CachePolicy?>(), Ct),
+            call => new ValueTask<IDictionary<string, string?>>(call.Arg<Func<Request, CancellationToken, Task<IDictionary<string, string?>>>>()(call.Arg<Request>(), Ct)));
         var typed = Substitute.For<IHashCache<string>>();
         ValueTaskStubs.Returns(
-            typed.GetOrAddAsync(Arg.Any<CacheKey>(), Arg.Any<Func<CancellationToken, Task<IDictionary<string, string?>>>>(), Ct),
-            call => new ValueTask<IDictionary<string, string?>>(call.Arg<Func<CancellationToken, Task<IDictionary<string, string?>>>>()(Ct)));
+            typed.GetOrAddAsync(Arg.Any<CacheKey>(), Arg.Any<Request>(), Arg.Any<Func<Request, CancellationToken, Task<IDictionary<string, string?>>>>(), Ct),
+            call => new ValueTask<IDictionary<string, string?>>(call.Arg<Func<Request, CancellationToken, Task<IDictionary<string, string?>>>>()(call.Arg<Request>(), Ct)));
 
         (await cache.GetOrAddAsync<string, Request>("k", new Request("a", 5), LoadHash, TimeSpan.FromSeconds(1), Ct))["id"].Should().Be("a:5");
         (await typed.GetOrAddAsync("k", new Request("a", 6), LoadHash, Ct))["id"].Should().Be("a:6");
+        (SpanHash(typed, new Request("a", 7), LoadHash))["id"].Should().Be("a:7");
     }
 
     [Fact]
@@ -140,20 +142,18 @@ public class StateAndArgumentOverloadTests
     [Theory]
     [InlineData(MockBehavior.Strict)]
     [InlineData(MockBehavior.Loose)]
-    public async Task A_moq_cache_serves_the_generated_state_members_from_its_read_and_set_setups(MockBehavior behavior)
+    public void A_moq_cache_serves_the_span_generated_state_members_from_its_state_setups(MockBehavior behavior)
     {
         var mock = new Mock<ICache>(behavior);
-        mock.Setup(c => c.GetCacheEntryAsync<string>(new CacheKey("jwt"), null, It.IsAny<CancellationToken>())).Returns(new ValueTask<ICacheEntry<string?>>(new TestCacheEntry<string?> { Expiration = DateTimeOffset.MinValue }));
-        mock.Setup(c => c.SetAsync<string>(new CacheKey("jwt"), "token:1", Deadline, null, It.IsAny<CancellationToken>())).Returns(new ValueTask<bool>(true));
+        mock.Setup(c => c.GetOrAddWithExpirationAsync(new CacheKey("jwt"), It.IsAny<int>(), It.IsAny<Func<int, CancellationToken, Task<GeneratedValue<string>>>>(), null, It.IsAny<CancellationToken>()))
+            .Returns(async (CacheKey _, int state, Func<int, CancellationToken, Task<GeneratedValue<string>>> generator, CachePolicy? _, CancellationToken token) => (await generator(state, token)).Value);
         var typed = Substitute.For<ICache<string>>();
-        ValueTaskStubs.Returns(typed.GetAsync(new CacheKey("jwt"), Arg.Any<CancellationToken>()), (string?)null);
-        ValueTaskStubs.Returns(typed.ContainsAsync(new CacheKey("jwt"), Arg.Any<CancellationToken>()), false);
-        ValueTaskStubs.Returns(typed.SetAsync(new CacheKey("jwt"), "token:2", Deadline, Arg.Any<CancellationToken>()), true);
+        ValueTaskStubs.Returns(
+            typed.GetOrAddWithExpirationAsync(new CacheKey("jwt"), Arg.Any<int>(), Arg.Any<Func<int, CancellationToken, Task<GeneratedValue<string>>>>(), Arg.Any<CancellationToken>()),
+            async call => (await call.Arg<Func<int, CancellationToken, Task<GeneratedValue<string>>>>()(call.Arg<int>(), Ct)).Value);
 
-        (await mock.Object.GetOrAddWithExpirationAsync<string, int>("jwt", 1, static (n, _) => Task.FromResult(new GeneratedValue<string>($"token:{n}", Deadline)), null, Ct)).Should().Be("token:1");
-        (await typed.GetOrAddWithExpirationAsync("jwt", 2, static (n, _) => Task.FromResult(new GeneratedValue<string>($"token:{n}", Deadline)), Ct)).Should().Be("token:2");
-
-        mock.Verify(c => c.SetAsync<string>(new CacheKey("jwt"), "token:1", Deadline, null, It.IsAny<CancellationToken>()), Times.Once);
+        SpanGenerated(mock.Object, 1).Should().Be("token:1");
+        SpanGenerated(typed, 2).Should().Be("token:2");
     }
 
     [Fact]
@@ -177,16 +177,16 @@ public class StateAndArgumentOverloadTests
     [Theory]
     [InlineData(MockBehavior.Strict)]
     [InlineData(MockBehavior.Loose)]
-    public async Task A_moq_cache_serves_the_batch_argument_members_from_its_batch_setups(MockBehavior behavior)
+    public async Task A_moq_cache_serves_the_batch_argument_members_from_their_own_setups(MockBehavior behavior)
     {
         var mock = new Mock<ICache>(behavior);
-        mock.Setup(c => c.GetOrAddAsync(It.IsAny<KeyValuePair<CacheKey, int>[]>(), It.IsAny<Func<int[], CancellationToken, Task<KeyValuePair<int, string?>[]>>>(), null, It.IsAny<CancellationToken>()))
-            .Returns((KeyValuePair<CacheKey, int>[] entries, Func<int[], CancellationToken, Task<KeyValuePair<int, string?>[]>> generator, CachePolicy? _, CancellationToken token) =>
-                new ValueTask<KeyValuePair<int, string?>[]>(generator(entries.Select(e => e.Value).ToArray(), token)));
+        mock.Setup(c => c.GetOrAddAsync(It.IsAny<KeyValuePair<CacheKey, int>[]>(), It.IsAny<Loader>(), It.IsAny<Func<Loader, int[], CancellationToken, Task<KeyValuePair<int, string?>[]>>>(), null, It.IsAny<CancellationToken>()))
+            .Returns((KeyValuePair<CacheKey, int>[] entries, Loader loader, Func<Loader, int[], CancellationToken, Task<KeyValuePair<int, string?>[]>> generator, CachePolicy? _, CancellationToken token) =>
+                new ValueTask<KeyValuePair<int, string?>[]>(generator(loader, entries.Select(e => e.Value).ToArray(), token)));
         var typed = Substitute.For<ICache<string>>();
         ValueTaskStubs.Returns(
-            typed.GetOrAddAsync(Arg.Any<KeyValuePair<CacheKey, int>[]>(), Arg.Any<Func<int[], CancellationToken, Task<KeyValuePair<int, string?>[]>>>(), Arg.Any<CancellationToken>()),
-            call => new ValueTask<KeyValuePair<int, string?>[]>(call.Arg<Func<int[], CancellationToken, Task<KeyValuePair<int, string?>[]>>>()(call.Arg<KeyValuePair<CacheKey, int>[]>().Select(e => e.Value).ToArray(), Ct)));
+            typed.GetOrAddAsync(Arg.Any<KeyValuePair<CacheKey, int>[]>(), Arg.Any<Loader>(), Arg.Any<Func<Loader, int[], CancellationToken, Task<KeyValuePair<int, string?>[]>>>(), Arg.Any<CancellationToken>()),
+            call => new ValueTask<KeyValuePair<int, string?>[]>(call.Arg<Func<Loader, int[], CancellationToken, Task<KeyValuePair<int, string?>[]>>>()(call.Arg<Loader>(), call.Arg<KeyValuePair<CacheKey, int>[]>().Select(e => e.Value).ToArray(), Ct)));
         var loader = new Loader();
 
         (await mock.Object.GetOrAddAsync<string, int, Loader>(Entries(1), loader, static (l, states, ct) => l.LoadAsync(states, ct), policy: null, Ct)).Single().Value.Should().Be("v:1");
@@ -285,6 +285,18 @@ public class StateAndArgumentOverloadTests
         Span<char> key = stackalloc char[8];
         "k".AsSpan().CopyTo(key);
         return Complete(cache.GetOrAddAsync(key[..1], request, generator, Ct));
+    }
+
+    private static string? SpanGenerated(ICache cache, int state)
+    {
+        Span<char> key = "jwt".ToCharArray();
+        return Complete(cache.GetOrAddWithExpirationAsync<string, int>(key, state, static (n, _) => Task.FromResult(new GeneratedValue<string>($"token:{n}", Deadline)), (CachePolicy?)null, Ct));
+    }
+
+    private static string? SpanGenerated(ICache<string> cache, int state)
+    {
+        Span<char> key = "jwt".ToCharArray();
+        return Complete(cache.GetOrAddWithExpirationAsync(key, state, static (n, _) => Task.FromResult(new GeneratedValue<string>($"token:{n}", Deadline)), Ct));
     }
 
 #pragma warning disable S5034 // read once: the result of a completed read, or the awaited one; AsTask on every read would allocate

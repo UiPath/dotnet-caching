@@ -1476,6 +1476,29 @@ public class RedisCacheTests(ITestContextAccessor testContextAccessor) : IAsyncL
     }
 
     [Fact]
+    public async Task GetOrAddWithExpiration_stateful_generator_receives_its_state_on_a_miss_and_is_stored()
+    {
+        var token = testContextAccessor.Current.CancellationToken;
+        var deadline = _now.AddMinutes(10);
+
+        var actual = await ((ICache)Sut).GetOrAddWithExpirationAsync<string, DateTimeOffset>(_cacheKey, deadline, static (expiration, _) => Task.FromResult(new GeneratedValue<string>("jwt", expiration)), policy: null, token);
+
+        actual.Should().Be("jwt");
+        await _database.Received(1).StringSetAsync(_redisKey, Arg.Any<RedisValue>(), TimeSpan.FromMinutes(10), When.Always, CommandFlags.DemandMaster);
+    }
+
+    [Fact]
+    public async Task GetOrAddWithExpiration_stateful_does_not_run_the_generator_on_a_hit()
+    {
+        var token = testContextAccessor.Current.CancellationToken;
+        _database.StringGetAsync(_redisKey, CommandFlags.PreferMaster).Returns(_serializer.Serialize("cached"));
+
+        var actual = await ((ICache)Sut).GetOrAddWithExpirationAsync<string, int>(_cacheKey, 1, static (_, _) => throw new InvalidOperationException("the generator ran on a hit"), policy: null, token);
+
+        actual.Should().Be("cached");
+    }
+
+    [Fact]
     public async Task GetOrAddWithExpiration_does_not_run_the_generator_on_a_hit()
     {
         var token = testContextAccessor.Current.CancellationToken;
@@ -2123,6 +2146,38 @@ public class RedisCacheTests(ITestContextAccessor testContextAccessor) : IAsyncL
         actual.Should().Equal(
             new[] { new KeyValuePair<string, string?>("one", "one-value"), new KeyValuePair<string, string?>("two", "two-value") },
             "the untimed path still projects the generator's values onto the caller's states");
+    }
+
+    [Fact]
+    public async Task Batch_GetOrAdd_argument_members_pass_the_argument_to_a_static_generator()
+    {
+        var token = testContextAccessor.Current.CancellationToken;
+        var entries = new KeyValuePair<CacheKey, string>[] { new(_cacheKey, "one"), new(_multiKey, "two") };
+        var suffix = new Suffix("-value");
+
+        var actual = new[]
+        {
+            await ((ICache)Sut).GetOrAddAsync<string, string, Suffix>(entries, suffix, static (s, states, _) => s.Apply(states), policy: null, token),
+            await ((ICache)Sut).GetOrAddAsync<string, string, Suffix>(entries, suffix, static (s, states, _) => s.Apply(states), TimeSpan.FromMinutes(1), policy: null, token),
+            await ((ICache)Sut).GetOrAddAsync<string, string, Suffix>(entries, suffix, static (s, states, _) => s.Apply(states), _now.AddMinutes(10), policy: null, token),
+        };
+
+        actual.Should().AllSatisfy(result => result.Should().Equal(new KeyValuePair<string, string?>("one", "one-value"), new KeyValuePair<string, string?>("two", "two-value")));
+        suffix.Runs.Should().Be(3, "each call missed and ran the generator once for both keys");
+    }
+
+    [Fact]
+    public async Task Batch_GetOrAdd_argument_member_under_FactoryTimeout_passes_the_argument()
+    {
+        var token = testContextAccessor.Current.CancellationToken;
+        var policy = new CachePolicy { FactoryTimeout = TimeSpan.FromMinutes(1) };
+        var entries = new KeyValuePair<CacheKey, string>[] { new(_cacheKey, "one") };
+        var suffix = new Suffix("-timed");
+
+        var actual = await ((ICache)Sut).GetOrAddAsync<string, string, Suffix>(entries, suffix, static (s, states, _) => s.Apply(states), policy, token);
+
+        actual.Should().Equal(new[] { new KeyValuePair<string, string?>("one", "one-timed") });
+        suffix.Runs.Should().Be(1);
     }
 
     [Fact]
@@ -2833,6 +2888,17 @@ public class RedisCacheTests(ITestContextAccessor testContextAccessor) : IAsyncL
     }
 
     /// <summary>Gives up on a callback that outlasts its timeout and returns the default, as a timeout behind a fallback does.</summary>
+    private sealed class Suffix(string suffix)
+    {
+        public int Runs { get; private set; }
+
+        public Task<KeyValuePair<string, string?>[]> Apply(string[] states)
+        {
+            Runs++;
+            return Task.FromResult(Array.ConvertAll(states, s => new KeyValuePair<string, string?>(s, s + suffix)));
+        }
+    }
+
     private sealed class GivingUpPipeline(TimeSpan timeout) : IResiliencePipeline
     {
         public async ValueTask<TResult> ExecuteAsync<TResult>(Func<CancellationToken, ValueTask<TResult>> callback, TResult defaultValue, CancellationToken cancellationToken = default)

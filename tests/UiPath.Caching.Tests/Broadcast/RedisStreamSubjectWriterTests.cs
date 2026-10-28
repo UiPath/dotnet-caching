@@ -1629,13 +1629,14 @@ public class RedisStreamSubjectWriterTests : IAsyncLifetime
             (await WaitUntil(() => Volatile.Read(ref reads) == i)).Should().BeTrue();
         }
         redis.OnConnectionRestored += Raise.Event<EventHandler>(redis, EventArgs.Empty);
-        (await WaitUntil(() => Volatile.Read(ref reads) == 5)).Should().BeTrue("the restored connection ends the backoff");
+        (await WaitUntil(() => Volatile.Read(ref reads) >= 5)).Should().BeTrue("the restored connection ends the backoff");
 
         // The streak starts over: three more retries at the poll interval, then the backoff, which a ring does not shorten.
+        // A recovery raised before the loop waits leaves its ring pending, so one retry may come without the test's.
         for (var i = 6; i <= 8; i++)
         {
             waiter.Signal();
-            (await WaitUntil(() => Volatile.Read(ref reads) == i)).Should().BeTrue();
+            (await WaitUntil(() => Volatile.Read(ref reads) >= i)).Should().BeTrue();
         }
         waiter.Signal();
         await Task.Delay(_pollInterval.Multiply(4), TestContext.Current.CancellationToken);
@@ -2010,16 +2011,28 @@ public class RedisStreamSubjectWriterTests : IAsyncLifetime
     public async Task Read_timeouts_log_a_warning_once_per_hundred_and_never_an_error()
     {
         var recordingLogger = new RecordingLogger();
-        var timeouts = 0;
-        // Every other new-entry read times out; the successes between keep the backoff from growing.
-        Reads(new ConcurrentQueue<string>(), position => position == ">" && Interlocked.Increment(ref timeouts) % 2 == 1 ? throw Timeout() : []);
-        using var waiter = new SignalingFetchWaiter(TimeSpan.FromMilliseconds(1));
+        var reads = 0;
+        // Every other new-entry read times out; the successes between keep the backoff from growing. No waits, since a
+        // Windows timer rounds a millisecond up to about 15, and the last read stops the loop, so none runs past it.
+        Reads(new ConcurrentQueue<string>(), position =>
+        {
+            if (position != ">")
+            {
+                return [];
+            }
+            var read = Interlocked.Increment(ref reads);
+            if (read == 2 * 101 + 2)
+            {
+                _cancellationTokenSource.Cancel();
+            }
+            return read % 2 == 1 ? throw Timeout() : [];
+        });
+        using var waiter = new SignalingFetchWaiter(TimeSpan.Zero);
 
-        using var sut = CreateSut(Channel.CreateUnbounded<ICacheEvent>().Writer, recordingLogger, waiter: waiter, context: _context with { PollInterval = TimeSpan.FromMilliseconds(1) });
+        using var sut = CreateSut(Channel.CreateUnbounded<ICacheEvent>().Writer, recordingLogger, waiter: waiter, context: _context with { PollInterval = TimeSpan.Zero });
 
-        (await WaitUntil(() => Volatile.Read(ref timeouts) >= 2 * 101 + 2)).Should().BeTrue();
-        _cancellationTokenSource.Cancel();
         try { await sut.FetchTask.WaitAsync(WaitTimeout, TestContext.Current.CancellationToken); } catch (OperationCanceledException) { }
+        Volatile.Read(ref reads).Should().Be(2 * 101 + 2);
 
         recordingLogger.Records.Should().NotContain(r => r.Level >= LogLevel.Error);
         recordingLogger.Records.Count(r => r.Level == LogLevel.Warning && r.Message.Contains("timed out", StringComparison.Ordinal))

@@ -1,3 +1,5 @@
+#pragma warning disable CA1859 // by design: the variables are typed as the interface because the tests exercise its sealed default members
+
 using UiPath.Caching.Tests.Fakes;
 
 namespace UiPath.Caching.Tests;
@@ -7,6 +9,7 @@ public class SealedMemberPathTests
 {
     private static readonly TimeSpan Ttl = TimeSpan.FromMinutes(5);
     private static readonly DateTimeOffset Deadline = DateTimeOffset.UtcNow.AddMinutes(5);
+    private static readonly string[] Fields = ["f"];
     private static readonly Func<CancellationToken, Task<string?>> Load = static _ => Task.FromResult<string?>("v");
     private static readonly Func<int, CancellationToken, Task<string?>> LoadState = static (n, _) => Task.FromResult<string?>($"v{n}");
     private static readonly Func<CancellationToken, Task<IDictionary<string, string?>>> LoadHash = static _ => Task.FromResult<IDictionary<string, string?>>(new Dictionary<string, string?> { ["f"] = "v" });
@@ -34,6 +37,8 @@ public class SealedMemberPathTests
         (await cache.GetOrAddWithExpirationAsync<string>("j", _ => Task.FromResult(new GeneratedValue<string>("g", Deadline)), null, Ct)).Should().Be("g");
         (await cache.GetAsync<string>(Key("a"), null, Ct)).Should().Be("v");
         (await cache.GetCacheEntryAsync<string>(Key("b"), null, Ct)).Value.Should().Be("v");
+        (await cache.TimeToLiveAsync<string>(Key("a"), Ct)).Should().BePositive();
+        (await cache.ExpireTimeAsync<string>(Key("a"), Ct)).Should().Be(await cache.ExpireTimeAsync<string>("a", Ct)).And.NotBeNull();
         (await cache.ContainsAsync<string>(Key("c"), Ct)).Should().BeTrue();
         (await cache.RemoveAsync<string>(Key("c"), Ct)).Should().BeTrue();
         (await cache.ContainsAsync<string>(Key("c"), Ct)).Should().BeFalse();
@@ -53,18 +58,22 @@ public class SealedMemberPathTests
         await cache.GetAsync<string>(Key("a"), null, Ct);
         await cache.GetCacheEntryAsync<string>(Key("b"), null, Ct);
         await cache.ContainsAsync<string>(Key("c"), Ct);
+        await cache.TimeToLiveAsync<string>(Key("t"), Ct);
+        await cache.ExpireTimeAsync<string>(Key("x"), Ct);
         await cache.RemoveAsync<string>(Key("c"), Ct);
 
         await cache.Received(1).GetOrAddAsync(new CacheKey("a"), Load, null, Ct);
         await cache.Received(1).GetOrAddAsync(new CacheKey("b"), Load, Ttl, null, Ct);
         await cache.Received(1).GetOrAddAsync(new CacheKey("c"), Load, Deadline, null, Ct);
-        await cache.Received(1).GetOrAddAsync(new CacheKey("d"), Arg.Any<Func<CancellationToken, Task<string?>>>(), null, Ct);
-        await cache.Received(1).GetOrAddAsync(new CacheKey("e"), Arg.Any<Func<CancellationToken, Task<string?>>>(), Ttl, null, Ct);
-        await cache.Received(1).GetOrAddAsync(new CacheKey("f"), Arg.Any<Func<CancellationToken, Task<string?>>>(), Deadline, null, Ct);
+        await cache.Received(1).GetOrAddAsync(new CacheKey("d"), 1, LoadState, null, Ct);
+        await cache.Received(1).GetOrAddAsync(new CacheKey("e"), 2, LoadState, Ttl, null, Ct);
+        await cache.Received(1).GetOrAddAsync(new CacheKey("f"), 3, LoadState, Deadline, null, Ct);
         await cache.Received(1).GetAsync<string>(new CacheKey("a"), null, Ct);
         await cache.Received(1).GetCacheEntryAsync<string>(new CacheKey("b"), null, Ct);
         await cache.Received(1).ContainsAsync<string>(new CacheKey("c"), Ct);
         await cache.Received(1).RemoveAsync<string>(new CacheKey("c"), Ct);
+        await cache.Received(1).TimeToLiveAsync<string>(new CacheKey("t"), Ct);
+        await cache.Received(1).ExpireTimeAsync<string>(new CacheKey("x"), Ct);
     }
 
     [Fact]
@@ -85,6 +94,8 @@ public class SealedMemberPathTests
         (await cache.GetOrAddWithExpirationAsync("j", _ => Task.FromResult(new GeneratedValue<string>("g", Deadline)), Ct)).Should().Be("g");
         (await cache.GetAsync(Key("a"), Ct)).Should().Be("v");
         (await cache.ContainsAsync(Key("c"), Ct)).Should().BeTrue();
+        (await cache.TimeToLiveAsync(Key("a"), Ct)).Should().BePositive();
+        (await cache.ExpireTimeAsync(Key("a"), Ct)).Should().Be(await cache.ExpireTimeAsync("a", Ct)).And.NotBeNull();
         (await cache.RemoveAsync(Key("c"), Ct)).Should().BeTrue();
         (await cache.ContainsAsync(Key("c"), Ct)).Should().BeFalse();
     }
@@ -100,26 +111,22 @@ public class SealedMemberPathTests
         await cache.GetOrAddAsync(Key("d"), 1, LoadState, Ct);
         await cache.GetOrAddAsync(Key("e"), 2, LoadState, Ttl, Ct);
         await cache.GetOrAddAsync(Key("f"), 3, LoadState, Deadline, Ct);
-        await cache.GetOrAddAsync("g", 4, LoadState, Ct);
-        await cache.GetOrAddAsync("h", 5, LoadState, Ttl, Ct);
-        await cache.GetOrAddAsync("i", 6, LoadState, Deadline, Ct);
-        (await cache.GetOrAddWithExpirationAsync("j", _ => Task.FromResult(new GeneratedValue<string>("g", Deadline)), Ct)).Should().Be("g");
         await cache.GetAsync(Key("a"), Ct);
         await cache.ContainsAsync(Key("c"), Ct);
+        await cache.TimeToLiveAsync(Key("t"), Ct);
+        await cache.ExpireTimeAsync(Key("x"), Ct);
         await cache.RemoveAsync(Key("c"), Ct);
 
         await cache.Received(1).GetOrAddAsync(new CacheKey("a"), Load, Ct);
         await cache.Received(1).GetOrAddAsync(new CacheKey("b"), Load, Ttl, Ct);
         await cache.Received(1).GetOrAddAsync(new CacheKey("c"), Load, Deadline, Ct);
-        await cache.Received(1).GetOrAddAsync(new CacheKey("d"), Arg.Any<Func<CancellationToken, Task<string?>>>(), Ct);
-        await cache.Received(1).GetOrAddAsync(new CacheKey("e"), Arg.Any<Func<CancellationToken, Task<string?>>>(), Ttl, Ct);
-        await cache.Received(1).GetOrAddAsync(new CacheKey("f"), Arg.Any<Func<CancellationToken, Task<string?>>>(), Deadline, Ct);
-        await cache.Received(1).GetOrAddAsync(new CacheKey("g"), Arg.Any<Func<CancellationToken, Task<string?>>>(), Ct);
-        await cache.Received(1).GetOrAddAsync(new CacheKey("h"), Arg.Any<Func<CancellationToken, Task<string?>>>(), Ttl, Ct);
-        await cache.Received(1).GetOrAddAsync(new CacheKey("i"), Arg.Any<Func<CancellationToken, Task<string?>>>(), Deadline, Ct);
-        await cache.Received(1).SetAsync(new CacheKey("j"), "g", Deadline, Ct);
+        await cache.Received(1).GetOrAddAsync(new CacheKey("d"), 1, LoadState, Ct);
+        await cache.Received(1).GetOrAddAsync(new CacheKey("e"), 2, LoadState, Ttl, Ct);
+        await cache.Received(1).GetOrAddAsync(new CacheKey("f"), 3, LoadState, Deadline, Ct);
         await cache.Received(1).GetAsync(new CacheKey("a"), Ct);
         await cache.Received(1).ContainsAsync(new CacheKey("c"), Ct);
+        await cache.Received(1).TimeToLiveAsync(new CacheKey("t"), Ct);
+        await cache.Received(1).ExpireTimeAsync(new CacheKey("x"), Ct);
         await cache.Received(1).RemoveAsync(new CacheKey("c"), Ct);
     }
 
@@ -136,6 +143,10 @@ public class SealedMemberPathTests
         (await cache.GetItemAsync<string>(Key("a"), "f", null, Ct)).Should().Be("v");
         (await cache.GetAsync<string>(Key("b"), null, Ct))["f"].Should().Be("v");
         (await cache.GetCacheEntryAsync<string>(Key("c"), null, Ct)).Found.Should().BeTrue();
+        (await cache.GetAsync<string>(Key("b"), Fields, null, Ct)).Should().ContainKey("f");
+        (await cache.GetMetadataAsync<string>(Key("b"), Ct)).Should().BeEquivalentTo(await cache.GetMetadataAsync<string>("b", Ct));
+        (await cache.TimeToLiveAsync<string>(Key("b"), Ct)).Should().BePositive();
+        (await cache.ExpireTimeAsync<string>(Key("b"), Ct)).Should().Be(await cache.ExpireTimeAsync<string>("b", Ct)).And.NotBeNull();
         (await cache.ContainsAsync<string>(Key("d"), Ct)).Should().BeTrue();
         (await cache.RemoveAsync<string>(Key("d"), Ct)).Should().BeTrue();
         (await cache.ContainsAsync<string>(Key("d"), Ct)).Should().BeFalse();
@@ -153,6 +164,10 @@ public class SealedMemberPathTests
         await cache.GetItemAsync<string>(Key("a"), "f", null, Ct);
         await cache.GetAsync<string>(Key("b"), null, Ct);
         await cache.GetCacheEntryAsync<string>(Key("c"), null, Ct);
+        await cache.GetAsync<string>(Key("s"), Fields, null, Ct);
+        await cache.GetMetadataAsync<string>(Key("m"), Ct);
+        await cache.TimeToLiveAsync<string>(Key("t"), Ct);
+        await cache.ExpireTimeAsync<string>(Key("x"), Ct);
         await cache.ContainsAsync<string>(Key("d"), Ct);
         await cache.RemoveAsync<string>(Key("d"), Ct);
 
@@ -165,6 +180,10 @@ public class SealedMemberPathTests
         await cache.Received(1).GetCacheEntryAsync<string>(new CacheKey("c"), null, Ct);
         await cache.Received(1).ContainsAsync<string>(new CacheKey("d"), Ct);
         await cache.Received(1).RemoveAsync<string>(new CacheKey("d"), Ct);
+        await cache.Received(1).GetAsync<string>(new CacheKey("s"), Fields, null, Ct);
+        await cache.Received(1).GetMetadataAsync<string>(new CacheKey("m"), Ct);
+        await cache.Received(1).TimeToLiveAsync<string>(new CacheKey("t"), Ct);
+        await cache.Received(1).ExpireTimeAsync<string>(new CacheKey("x"), Ct);
     }
 
     [Fact]
@@ -179,6 +198,10 @@ public class SealedMemberPathTests
         (await cache.GetItemAsync(Key("a"), "f", Ct)).Should().Be("v");
         (await cache.GetAsync(Key("b"), Ct))["f"].Should().Be("v");
         (await cache.GetCacheEntryAsync(Key("c"), Ct)).Found.Should().BeTrue();
+        (await cache.GetAsync(Key("b"), Fields, Ct)).Should().ContainKey("f");
+        (await cache.GetMetadataAsync(Key("b"), Ct)).Should().BeEquivalentTo(await cache.GetMetadataAsync("b", Ct));
+        (await cache.TimeToLiveAsync(Key("b"), Ct)).Should().BePositive();
+        (await cache.ExpireTimeAsync(Key("b"), Ct)).Should().Be(await cache.ExpireTimeAsync("b", Ct)).And.NotBeNull();
         (await cache.ContainsAsync(Key("c"), Ct)).Should().BeTrue();
         (await cache.RemoveAsync(Key("c"), Ct)).Should().BeTrue();
         (await cache.ContainsAsync(Key("c"), Ct)).Should().BeFalse();
@@ -195,6 +218,10 @@ public class SealedMemberPathTests
         await cache.GetItemAsync(Key("a"), "f", Ct);
         await cache.GetAsync(Key("b"), Ct);
         await cache.GetCacheEntryAsync(Key("c"), Ct);
+        await cache.GetAsync(Key("s"), Fields, Ct);
+        await cache.GetMetadataAsync(Key("m"), Ct);
+        await cache.TimeToLiveAsync(Key("t"), Ct);
+        await cache.ExpireTimeAsync(Key("x"), Ct);
         await cache.ContainsAsync(Key("c"), Ct);
         await cache.RemoveAsync(Key("c"), Ct);
 
@@ -204,6 +231,10 @@ public class SealedMemberPathTests
         await cache.Received(1).GetItemAsync(new CacheKey("a"), "f", Ct);
         await cache.Received(1).GetAsync(new CacheKey("b"), Ct);
         await cache.Received(1).GetCacheEntryAsync(new CacheKey("c"), Ct);
+        await cache.Received(1).GetAsync(new CacheKey("s"), Fields, Ct);
+        await cache.Received(1).GetMetadataAsync(new CacheKey("m"), Ct);
+        await cache.Received(1).TimeToLiveAsync(new CacheKey("t"), Ct);
+        await cache.Received(1).ExpireTimeAsync(new CacheKey("x"), Ct);
         await cache.Received(1).ContainsAsync(new CacheKey("c"), Ct);
         await cache.Received(1).RemoveAsync(new CacheKey("c"), Ct);
     }
@@ -223,31 +254,6 @@ public class SealedMemberPathTests
         (await typed.GetOrAddAsync(Entries("b"), "q", LoadBatch, Ttl, Ct)).Single().Value.Should().Be("q1");
         (await typed.GetOrAddAsync(Entries("c"), "q", LoadBatch, Deadline, Ct)).Single().Value.Should().Be("q1");
         (await typed.GetOrAddWithExpirationAsync("d", 2, LoadGenerated, Ct)).Should().Be("g2");
-    }
-
-    [Fact]
-    public async Task A_cache_without_the_capabilities_gets_the_closure_members_for_the_argument_and_state_members()
-    {
-        var cache = Substitute.For<ICache>();
-        var typed = Substitute.For<ICache<string>>();
-
-        await cache.GetOrAddAsync(Entries("a"), "p", LoadBatch, null, Ct);
-        await cache.GetOrAddAsync(Entries("b"), "p", LoadBatch, Ttl, null, Ct);
-        await cache.GetOrAddAsync(Entries("c"), "p", LoadBatch, Deadline, null, Ct);
-        (await cache.GetOrAddWithExpirationAsync("d", 1, LoadGenerated, null, Ct)).Should().Be("g1");
-        await typed.GetOrAddAsync(Entries("a"), "q", LoadBatch, Ct);
-        await typed.GetOrAddAsync(Entries("b"), "q", LoadBatch, Ttl, Ct);
-        await typed.GetOrAddAsync(Entries("c"), "q", LoadBatch, Deadline, Ct);
-        (await typed.GetOrAddWithExpirationAsync("d", 2, LoadGenerated, Ct)).Should().Be("g2");
-
-        await cache.Received(1).GetOrAddAsync(Arg.Any<KeyValuePair<CacheKey, int>[]>(), Arg.Any<Func<int[], CancellationToken, Task<KeyValuePair<int, string?>[]>>>(), null, Ct);
-        await cache.Received(1).GetOrAddAsync(Arg.Any<KeyValuePair<CacheKey, int>[]>(), Arg.Any<Func<int[], CancellationToken, Task<KeyValuePair<int, string?>[]>>>(), Ttl, null, Ct);
-        await cache.Received(1).GetOrAddAsync(Arg.Any<KeyValuePair<CacheKey, int>[]>(), Arg.Any<Func<int[], CancellationToken, Task<KeyValuePair<int, string?>[]>>>(), Deadline, null, Ct);
-        await cache.Received(1).SetAsync<string>(new CacheKey("d"), "g1", Deadline, null, Ct);
-        await typed.Received(1).GetOrAddAsync(Arg.Any<KeyValuePair<CacheKey, int>[]>(), Arg.Any<Func<int[], CancellationToken, Task<KeyValuePair<int, string?>[]>>>(), Ct);
-        await typed.Received(1).GetOrAddAsync(Arg.Any<KeyValuePair<CacheKey, int>[]>(), Arg.Any<Func<int[], CancellationToken, Task<KeyValuePair<int, string?>[]>>>(), Ttl, Ct);
-        await typed.Received(1).GetOrAddAsync(Arg.Any<KeyValuePair<CacheKey, int>[]>(), Arg.Any<Func<int[], CancellationToken, Task<KeyValuePair<int, string?>[]>>>(), Deadline, Ct);
-        await typed.Received(1).SetAsync(new CacheKey("d"), "g2", Deadline, Ct);
     }
 
     [Fact]
@@ -275,40 +281,28 @@ public class SealedMemberPathTests
     }
 
     [Fact]
-    public async Task A_hash_cache_without_the_capabilities_gets_the_closure_members_for_the_state_members()
+    public async Task A_hash_cache_without_the_span_capability_gets_the_cache_key_state_members_for_the_span_state_members()
     {
         var cache = Substitute.For<IHashCache>();
         var typed = Substitute.For<IHashCache<string>>();
 
-        await cache.GetOrAddAsync("a", 1, LoadHashState, null, Ct);
-        await cache.GetOrAddAsync("b", 2, LoadHashState, Ttl, null, Ct);
-        await cache.GetOrAddAsync("c", 3, LoadHashState, Deadline, null, Ct);
-        await cache.GetOrAddAsync("d", 4, LoadHashState, Deadline, HashCacheSetOption.KeyReplace, null, Ct);
         await cache.GetOrAddAsync(Key("e"), 5, LoadHashState, null, Ct);
         await cache.GetOrAddAsync(Key("f"), 6, LoadHashState, Ttl, null, Ct);
         await cache.GetOrAddAsync(Key("g"), 7, LoadHashState, Deadline, null, Ct);
         await cache.GetOrAddAsync(Key("h"), 8, LoadHashState, Deadline, HashCacheSetOption.KeyReplace, null, Ct);
-        await typed.GetOrAddAsync("a", 1, LoadHashState, Ct);
-        await typed.GetOrAddAsync("b", 2, LoadHashState, Ttl, Ct);
-        await typed.GetOrAddAsync("c", 3, LoadHashState, Deadline, Ct);
         await typed.GetOrAddAsync(Key("e"), 5, LoadHashState, Ct);
         await typed.GetOrAddAsync(Key("f"), 6, LoadHashState, Ttl, Ct);
         await typed.GetOrAddAsync(Key("g"), 7, LoadHashState, Deadline, Ct);
 
-        await cache.Received(1).GetOrAddAsync(new CacheKey("a"), Arg.Any<Func<CancellationToken, Task<IDictionary<string, string?>>>>(), null, Ct);
-        await cache.Received(1).GetOrAddAsync(new CacheKey("b"), Arg.Any<Func<CancellationToken, Task<IDictionary<string, string?>>>>(), Ttl, null, Ct);
-        await cache.Received(1).GetOrAddAsync(new CacheKey("c"), Arg.Any<Func<CancellationToken, Task<IDictionary<string, string?>>>>(), Deadline, null, Ct);
-        await cache.Received(1).GetOrAddAsync(new CacheKey("d"), Arg.Any<Func<CancellationToken, Task<IDictionary<string, string?>>>>(), Deadline, HashCacheSetOption.KeyReplace, null, Ct);
-        await cache.Received(1).GetOrAddAsync(new CacheKey("e"), Arg.Any<Func<CancellationToken, Task<IDictionary<string, string?>>>>(), null, Ct);
-        await cache.Received(1).GetOrAddAsync(new CacheKey("f"), Arg.Any<Func<CancellationToken, Task<IDictionary<string, string?>>>>(), Ttl, null, Ct);
-        await cache.Received(1).GetOrAddAsync(new CacheKey("g"), Arg.Any<Func<CancellationToken, Task<IDictionary<string, string?>>>>(), Deadline, null, Ct);
-        await cache.Received(1).GetOrAddAsync(new CacheKey("h"), Arg.Any<Func<CancellationToken, Task<IDictionary<string, string?>>>>(), Deadline, HashCacheSetOption.KeyReplace, null, Ct);
-        await typed.Received(1).GetOrAddAsync(new CacheKey("a"), Arg.Any<Func<CancellationToken, Task<IDictionary<string, string?>>>>(), Ct);
-        await typed.Received(1).GetOrAddAsync(new CacheKey("b"), Arg.Any<Func<CancellationToken, Task<IDictionary<string, string?>>>>(), Ttl, Ct);
-        await typed.Received(1).GetOrAddAsync(new CacheKey("c"), Arg.Any<Func<CancellationToken, Task<IDictionary<string, string?>>>>(), Deadline, Ct);
-        await typed.Received(1).GetOrAddAsync(new CacheKey("e"), Arg.Any<Func<CancellationToken, Task<IDictionary<string, string?>>>>(), Ct);
-        await typed.Received(1).GetOrAddAsync(new CacheKey("f"), Arg.Any<Func<CancellationToken, Task<IDictionary<string, string?>>>>(), Ttl, Ct);
-        await typed.Received(1).GetOrAddAsync(new CacheKey("g"), Arg.Any<Func<CancellationToken, Task<IDictionary<string, string?>>>>(), Deadline, Ct);
+        await cache.Received(1).GetOrAddAsync(new CacheKey("e"), 5, LoadHashState, null, Ct);
+        await cache.Received(1).GetOrAddAsync(new CacheKey("f"), 6, LoadHashState, Ttl, null, Ct);
+        await cache.Received(1).GetOrAddAsync(new CacheKey("g"), 7, LoadHashState, Deadline, null, Ct);
+        await cache.Received(1).GetOrAddAsync(new CacheKey("h"), 8, LoadHashState, Deadline, HashCacheSetOption.KeyReplace, null, Ct);
+        await typed.Received(1).GetOrAddAsync(new CacheKey("e"), 5, LoadHashState, Ct);
+        await typed.Received(1).GetOrAddAsync(new CacheKey("f"), 6, LoadHashState, Ttl, Ct);
+        await typed.Received(1).GetOrAddAsync(new CacheKey("g"), 7, LoadHashState, Deadline, Ct);
+        await cache.DidNotReceive().GetOrAddAsync(Arg.Any<CacheKey>(), Arg.Any<Func<CancellationToken, Task<IDictionary<string, string?>>>>(), Arg.Any<CachePolicy?>(), Arg.Any<CancellationToken>());
+        await typed.DidNotReceive().GetOrAddAsync(Arg.Any<CacheKey>(), Arg.Any<Func<CancellationToken, Task<IDictionary<string, string?>>>>(), Arg.Any<CancellationToken>());
     }
 
     private static KeyValuePair<CacheKey, int>[] Entries(string key) => [new(key, 1)];

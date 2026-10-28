@@ -103,16 +103,16 @@ public class StatefulGetOrAddTests
     }
 
     [Fact]
-    public async Task A_cache_without_the_capability_runs_the_generator_with_its_state_through_the_closure_overloads()
+    public async Task A_mock_runs_the_generator_with_its_state_from_its_state_setups()
     {
         var cache = Substitute.For<ICache>();
         ValueTaskStubs.Returns(
-            cache.GetOrAddAsync(Arg.Any<CacheKey>(), Arg.Any<Func<CancellationToken, Task<string?>>>(), TimeSpan.FromSeconds(1), Arg.Any<CachePolicy?>(), Ct),
-            call => new ValueTask<string?>(call.Arg<Func<CancellationToken, Task<string?>>>()(Ct)));
+            cache.GetOrAddAsync(Arg.Any<CacheKey>(), Arg.Any<Request>(), Arg.Any<Func<Request, CancellationToken, Task<string?>>>(), TimeSpan.FromSeconds(1), Arg.Any<CachePolicy?>(), Ct),
+            call => new ValueTask<string?>(call.Arg<Func<Request, CancellationToken, Task<string?>>>()(call.Arg<Request>(), Ct)));
         var typed = Substitute.For<ICache<string>>();
         ValueTaskStubs.Returns(
-            typed.GetOrAddAsync(Arg.Any<CacheKey>(), Arg.Any<Func<CancellationToken, Task<string?>>>(), Ct),
-            call => new ValueTask<string?>(call.Arg<Func<CancellationToken, Task<string?>>>()(Ct)));
+            typed.GetOrAddAsync(Arg.Any<CacheKey>(), Arg.Any<Request>(), Arg.Any<Func<Request, CancellationToken, Task<string?>>>(), Ct),
+            call => new ValueTask<string?>(call.Arg<Func<Request, CancellationToken, Task<string?>>>()(call.Arg<Request>(), Ct)));
 
         (await cache.GetOrAddAsync<string, Request>("k", new Request("a", 2), Load, TimeSpan.FromSeconds(1), Ct)).Should().Be("a:2");
         (await typed.GetOrAddAsync("k", new Request("a", 3), Load, Ct)).Should().Be("a:3");

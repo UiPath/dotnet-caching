@@ -454,6 +454,22 @@ internal sealed class PeerCluster : IDisposable
 
         ValueTask<bool> ISpanKeyHashCache.SetAsync<T>(Span<char> cacheKey, IDictionary<string, T?> values, HashCacheEntryOptions options, CachePolicy? policy, CancellationToken token) where T : default => throw new NotSupportedException();
 
+        ValueTask<IDictionary<string, T?>> ISpanKeyHashCache.GetAsync<T>(Span<char> cacheKey, string[] fields, CachePolicy? policy, CancellationToken token) where T : default => throw new NotSupportedException();
+
+        ValueTask<IDictionary<string, T?>> ISpanKeyHashCache.GetOrAddAsync<T, TState>(Span<char> cacheKey, TState state, Func<TState, CancellationToken, Task<IDictionary<string, T?>>> generator, CachePolicy? policy, CancellationToken token) where T : default => throw new NotSupportedException();
+
+        ValueTask<IDictionary<string, T?>> ISpanKeyHashCache.GetOrAddAsync<T, TState>(Span<char> cacheKey, TState state, Func<TState, CancellationToken, Task<IDictionary<string, T?>>> generator, TimeSpan expiration, CachePolicy? policy, CancellationToken token) where T : default => throw new NotSupportedException();
+
+        ValueTask<IDictionary<string, T?>> ISpanKeyHashCache.GetOrAddAsync<T, TState>(Span<char> cacheKey, TState state, Func<TState, CancellationToken, Task<IDictionary<string, T?>>> generator, DateTimeOffset expiration, CachePolicy? policy, CancellationToken token) where T : default => throw new NotSupportedException();
+
+        ValueTask<IDictionary<string, T?>> ISpanKeyHashCache.GetOrAddAsync<T, TState>(Span<char> cacheKey, TState state, Func<TState, CancellationToken, Task<IDictionary<string, T?>>> generator, DateTimeOffset expiration, HashCacheSetOption? setOption, CachePolicy? policy, CancellationToken token) where T : default => throw new NotSupportedException();
+
+        ValueTask<TimeSpan?> ISpanKeyHashCache.TimeToLiveAsync<T>(Span<char> cacheKey, CancellationToken token) => throw new NotSupportedException();
+
+        ValueTask<DateTimeOffset?> ISpanKeyHashCache.ExpireTimeAsync<T>(Span<char> cacheKey, CancellationToken token) => throw new NotSupportedException();
+
+        ValueTask<IDictionary<string, string?>?> ISpanKeyHashCache.GetMetadataAsync<T>(Span<char> cacheKey, CancellationToken token) => throw new NotSupportedException();
+
         protected override object? Invoke(MethodInfo? targetMethod, object?[]? args)
         {
             switch (targetMethod!.Name)

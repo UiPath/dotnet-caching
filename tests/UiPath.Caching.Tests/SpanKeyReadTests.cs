@@ -5,6 +5,9 @@ namespace UiPath.Caching.Tests;
 /// <summary>The <c>Span&lt;char&gt;</c> reads answer as the <see cref="CacheKey"/> reads do, over real in-memory tiers.</summary>
 public class SpanKeyReadTests
 {
+    private static readonly TimeSpan Ttl = TimeSpan.FromMinutes(5);
+    private static readonly TimeSpan Slack = TimeSpan.FromSeconds(5);
+
     private static CancellationToken Ct => TestContext.Current.CancellationToken;
 
     [Fact]
@@ -262,6 +265,73 @@ public class SpanKeyReadTests
         SpanReads.ReadAll<string>(NullHashCache.Instance, "k", Ct).Should().BeEmpty();
     }
 
+    [Fact]
+    public async Task A_cache_reads_the_expiry_by_span_as_it_reads_it_by_key()
+    {
+        using var cache = InMemoryMultilayer.Cache();
+        var typed = new Cache<string>(cache, new PrefixCacheKeyStrategy("app"));
+        (await cache.SetAsync<string>("user:42", "v", Ttl, policy: null, Ct)).Should().BeTrue();
+        (await typed.SetAsync("user:42", "v", Ttl, Ct)).Should().BeTrue();
+
+        SpanReads.ExpireTime<string>(cache, " User:42 ", Ct).Should().Be(await cache.ExpireTimeAsync<string>("user:42", Ct)).And.NotBeNull();
+        SpanReads.TimeToLive<string>(cache, "user:42", Ct)!.Value.Should().BeCloseTo((await cache.TimeToLiveAsync<string>("user:42", Ct))!.Value, Slack);
+        SpanReads.ExpireTime(typed, "user:42", Ct).Should().Be(await typed.ExpireTimeAsync("user:42", Ct)).And.NotBeNull();
+        SpanReads.TimeToLive(typed, "user:42", Ct)!.Value.Should().BeCloseTo((await typed.TimeToLiveAsync("user:42", Ct))!.Value, Slack);
+        SpanReads.ExpireTime<string>(cache, "user:43", Ct).Should().Be(await cache.ExpireTimeAsync<string>("user:43", Ct));
+        SpanReads.TimeToLive<string>(cache, "user:43", Ct).Should().Be(await cache.TimeToLiveAsync<string>("user:43", Ct));
+        SpanReads.ExpireTime(typed, "user:43", Ct).Should().BeNull();
+        SpanReads.TimeToLive(typed, "user:43", Ct).Should().BeNull();
+    }
+
+    [Fact]
+    public async Task A_hash_cache_reads_fields_metadata_and_expiry_by_span_as_it_reads_them_by_key()
+    {
+        using var cache = InMemoryMultilayer.HashCache();
+        var values = new Dictionary<string, string?> { ["name"] = "n", ["Other"] = "o" };
+        (await cache.SetAsync<string>("user:42", values, Ttl, policy: null, Ct)).Should().BeTrue();
+        (await cache.SetMetadataAsync<string>("user:42", new Dictionary<string, string?> { ["m"] = "1" }, Ct)).Should().BeTrue();
+        string[] fields = ["NAME", "missing"];
+
+        SpanReads.ReadFields<string>(cache, " User:42 ", fields, Ct).Should().BeEquivalentTo(await cache.GetAsync<string>("user:42", fields, policy: null, Ct)).And.ContainKey("name");
+        SpanReads.ReadFields<string>(cache, "user:43", fields, Ct).Should().BeEquivalentTo(await cache.GetAsync<string>("user:43", fields, policy: null, Ct)).And.BeEmpty();
+        SpanReads.Metadata<string>(cache, "user:42", Ct).Should().BeEquivalentTo(await cache.GetMetadataAsync<string>("user:42", Ct));
+        SpanReads.Metadata<string>(cache, "user:43", Ct).Should().BeEquivalentTo(await cache.GetMetadataAsync<string>("user:43", Ct));
+        SpanReads.ExpireTime<string>(cache, "user:42", Ct).Should().Be(await cache.ExpireTimeAsync<string>("user:42", Ct)).And.NotBeNull();
+        SpanReads.TimeToLive<string>(cache, "user:42", Ct)!.Value.Should().BeCloseTo((await cache.TimeToLiveAsync<string>("user:42", Ct))!.Value, Slack);
+        SpanReads.ExpireTime<string>(cache, "user:43", Ct).Should().Be(await cache.ExpireTimeAsync<string>("user:43", Ct));
+        SpanReads.TimeToLive<string>(cache, "user:43", Ct).Should().Be(await cache.TimeToLiveAsync<string>("user:43", Ct));
+    }
+
+    [Fact]
+    public async Task A_typed_hash_cache_reads_fields_metadata_and_expiry_by_span_as_it_reads_them_by_key()
+    {
+        using var cache = InMemoryMultilayer.HashCache(new InMemoryCacheOptions { CacheKeyStrategy = new PrefixCacheKeyStrategy("tier") });
+        var typed = new HashCache<string>(cache, new PrefixCacheKeyStrategy("app"));
+        (await typed.SetAsync("user:42", new Dictionary<string, string?> { ["name"] = "n", ["other"] = "o" }, Ttl, Ct)).Should().BeTrue();
+        (await typed.SetMetadataAsync("user:42", new Dictionary<string, string?> { ["m"] = "1" }, Ct)).Should().BeTrue();
+        string[] fields = ["name"];
+
+        SpanReads.ReadFields(typed, "user:42", fields, Ct).Should().BeEquivalentTo(await typed.GetAsync("user:42", fields, Ct)).And.ContainSingle();
+        SpanReads.ReadFields(typed, "user:43", fields, Ct).Should().BeEmpty();
+        SpanReads.Metadata(typed, "user:42", Ct).Should().BeEquivalentTo(await typed.GetMetadataAsync("user:42", Ct));
+        SpanReads.Metadata(typed, "user:43", Ct).Should().BeEquivalentTo(await typed.GetMetadataAsync("user:43", Ct));
+        SpanReads.ExpireTime(typed, "user:42", Ct).Should().Be(await typed.ExpireTimeAsync("user:42", Ct)).And.NotBeNull();
+        SpanReads.TimeToLive(typed, "user:42", Ct)!.Value.Should().BeCloseTo((await typed.TimeToLiveAsync("user:42", Ct))!.Value, Slack);
+        SpanReads.ExpireTime(typed, "user:43", Ct).Should().BeNull();
+        SpanReads.TimeToLive(typed, "user:43", Ct).Should().BeNull();
+    }
+
+    [Fact]
+    public void The_null_caches_answer_the_span_field_metadata_and_expiry_reads_with_nothing()
+    {
+        SpanReads.TimeToLive<string>(NullCache.Instance, "k", Ct).Should().BeNull();
+        SpanReads.ExpireTime<string>(NullCache.Instance, "k", Ct).Should().BeNull();
+        SpanReads.ReadFields<string>(NullHashCache.Instance, "k", ["f"], Ct).Should().BeEmpty();
+        SpanReads.Metadata<string>(NullHashCache.Instance, "k", Ct).Should().BeNull();
+        SpanReads.TimeToLive<string>(NullHashCache.Instance, "k", Ct).Should().BeNull();
+        SpanReads.ExpireTime<string>(NullHashCache.Instance, "k", Ct).Should().BeNull();
+    }
+
 #if NET9_0_OR_GREATER
     [Fact]
     public async Task A_span_read_does_not_serve_a_local_hit_when_the_connection_drops_during_the_lookup()
@@ -337,6 +407,49 @@ public class SpanKeyReadTests
 
         AllocatedBy(() => SpanReads.ReadItem<string>(cache, "user:42", "name")).Should().Be(0);
         AllocatedBy(() => SpanReads.ReadAll<string>(cache, "user:42")).Should().Be(0);
+    }
+
+    [Fact]
+    public async Task A_warm_span_expiry_read_that_hits_locally_allocates_nothing()
+    {
+        using var cache = InMemoryMultilayer.Cache();
+        var typed = new Cache<string>(cache, new PrefixCacheKeyStrategy("app"));
+        (await cache.SetAsync<string>("user:42", "v", Ttl, policy: null, Ct)).Should().BeTrue();
+        (await typed.SetAsync("user:42", "v", Ttl, Ct)).Should().BeTrue();
+
+        AllocatedBy(() => SpanReads.TimeToLive<string>(cache, " User:42 ")).Should().Be(0);
+        AllocatedBy(() => SpanReads.ExpireTime<string>(cache, " User:42 ")).Should().Be(0);
+        AllocatedBy(() => SpanReads.TimeToLive(typed, "user:42")).Should().Be(0);
+        AllocatedBy(() => SpanReads.ExpireTime(typed, "user:42")).Should().Be(0);
+    }
+
+    [Fact]
+    public async Task A_warm_span_hash_metadata_and_expiry_read_that_hits_locally_allocates_nothing()
+    {
+        using var cache = InMemoryMultilayer.HashCache();
+        var typed = new HashCache<string>(cache, new PrefixCacheKeyStrategy("app"));
+        (await cache.SetAsync<string>("user:42", new Dictionary<string, string?> { ["name"] = "n" }, Ttl, policy: null, Ct)).Should().BeTrue();
+        (await typed.SetAsync("user:42", new Dictionary<string, string?> { ["name"] = "n" }, Ttl, Ct)).Should().BeTrue();
+
+        AllocatedBy(() => SpanReads.Metadata<string>(cache, "user:42")).Should().Be(0);
+        AllocatedBy(() => SpanReads.TimeToLive<string>(cache, "user:42")).Should().Be(0);
+        AllocatedBy(() => SpanReads.ExpireTime<string>(cache, "user:42")).Should().Be(0);
+        AllocatedBy(() => SpanReads.Metadata(typed, "user:42")).Should().Be(0);
+        AllocatedBy(() => SpanReads.TimeToLive(typed, "user:42")).Should().Be(0);
+        AllocatedBy(() => SpanReads.ExpireTime(typed, "user:42")).Should().Be(0);
+    }
+
+    [Fact]
+    public async Task A_warm_span_field_read_that_hits_locally_allocates_less_than_the_key_read()
+    {
+        using var cache = InMemoryMultilayer.HashCache();
+        (await cache.SetAsync<string>("user:42", new Dictionary<string, string?> { ["name"] = "n" }, policy: null, Ct)).Should().BeTrue();
+        string[] fields = ["name"];
+
+        var bySpan = AllocatedBy(() => SpanReads.ReadFields<string>(cache, "user:42", fields));
+        var byKey = AllocatedBy(() => SpanReads.Complete(cache.GetAsync<string>(new CacheKey("user:42"), fields, policy: null)));
+
+        bySpan.Should().BeLessThan(byKey, "the span read selects the fields from the local entry without building the key or the entry options");
     }
 
     /// <summary>Bytes the current thread allocates across a thousand warm calls.</summary>

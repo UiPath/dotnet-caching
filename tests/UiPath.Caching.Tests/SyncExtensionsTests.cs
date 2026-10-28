@@ -45,19 +45,20 @@ public class SyncExtensionsTests
     }
 
     [Fact]
-    public void A_proxy_answers_the_sync_wrappers_from_its_closure_setups()
+    public void A_proxy_answers_the_sync_wrappers_from_its_setups()
     {
         var cache = Substitute.For<ICache<string>>();
         ValueTaskStubs.Returns(
-            cache.GetOrAddAsync(Arg.Any<CacheKey>(), Arg.Any<Func<CancellationToken, Task<string?>>>(), Ct),
-            call => new ValueTask<string?>(call.Arg<Func<CancellationToken, Task<string?>>>()(Ct)));
+            cache.GetOrAddAsync(Arg.Any<CacheKey>(), Arg.Any<Func<string?>>(), Arg.Any<Func<Func<string?>, CancellationToken, Task<string?>>>(), Ct),
+            call => new ValueTask<string?>(call.Arg<Func<Func<string?>, CancellationToken, Task<string?>>>()(call.Arg<Func<string?>>(), Ct)));
         ValueTaskStubs.Returns(
-            cache.GetOrAddAsync(Arg.Any<KeyValuePair<CacheKey, CacheKey>[]>(), Arg.Any<Func<CacheKey[], CancellationToken, Task<KeyValuePair<CacheKey, string?>[]>>>(), Ct),
-            call => new ValueTask<KeyValuePair<CacheKey, string?>[]>(call.Arg<Func<CacheKey[], CancellationToken, Task<KeyValuePair<CacheKey, string?>[]>>>()([.. call.Arg<KeyValuePair<CacheKey, CacheKey>[]>().Select(e => e.Value)], Ct)));
+            cache.GetOrAddAsync(Arg.Any<KeyValuePair<CacheKey, CacheKey>[]>(), Arg.Any<Func<CacheKey[], KeyValuePair<CacheKey, string?>[]>>(), Arg.Any<Func<Func<CacheKey[], KeyValuePair<CacheKey, string?>[]>, CacheKey[], CancellationToken, Task<KeyValuePair<CacheKey, string?>[]>>>(), Ct),
+            call => new ValueTask<KeyValuePair<CacheKey, string?>[]>(call.Arg<Func<Func<CacheKey[], KeyValuePair<CacheKey, string?>[]>, CacheKey[], CancellationToken, Task<KeyValuePair<CacheKey, string?>[]>>>()(
+                call.Arg<Func<CacheKey[], KeyValuePair<CacheKey, string?>[]>>(), [.. call.Arg<KeyValuePair<CacheKey, CacheKey>[]>().Select(e => e.Value)], Ct)));
         var hash = Substitute.For<IHashCache<string>>();
         ValueTaskStubs.Returns(
-            hash.GetOrAddAsync(Arg.Any<CacheKey>(), Arg.Any<Func<CancellationToken, Task<IDictionary<string, string?>>>>(), Ct),
-            call => new ValueTask<IDictionary<string, string?>>(call.Arg<Func<CancellationToken, Task<IDictionary<string, string?>>>>()(Ct)));
+            hash.GetOrAddAsync(Arg.Any<CacheKey>(), Arg.Any<Func<IDictionary<string, string?>>>(), Arg.Any<Func<Func<IDictionary<string, string?>>, CancellationToken, Task<IDictionary<string, string?>>>>(), Ct),
+            call => new ValueTask<IDictionary<string, string?>>(call.Arg<Func<Func<IDictionary<string, string?>>, CancellationToken, Task<IDictionary<string, string?>>>>()(call.Arg<Func<IDictionary<string, string?>>>(), Ct)));
 
         cache.GetOrAdd("k", () => "v", Ct).Should().Be("v");
         cache.GetOrAdd(["k"], keys => [.. keys.Select(k => new KeyValuePair<CacheKey, string?>(k, "m"))], Ct).Single().Value.Should().Be("m");

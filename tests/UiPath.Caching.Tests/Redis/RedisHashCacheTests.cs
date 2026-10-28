@@ -1073,6 +1073,90 @@ public class RedisHashCacheTests(ITestContextAccessor testContextAccessor) : IAs
         generatorCalled.Should().BeTrue();
     }
 
+    [Fact]
+    public async Task GetOrAdd_stateful_generator_receives_its_state_on_a_miss_and_is_stored()
+    {
+        var token = testContextAccessor.Current.CancellationToken;
+        _database.HashGetAllAsync(_redisKey, CommandFlags.PreferMaster).Returns(Array.Empty<HashEntry>());
+        _transaction.ExecuteAsync(Arg.Any<CommandFlags>()).Returns(true);
+
+        var actual = await ((IHashCache)Sut).GetOrAddAsync<string, string>(_cacheKey, "state", static (state, _) => Task.FromResult<IDictionary<string, string?>>(new Dictionary<string, string?> { ["f"] = state }), TimeSpan.FromMinutes(5), policy: null, token);
+
+        actual["f"].Should().Be("state");
+        await _transaction.Received(1).HashSetAsync(_redisKey, Arg.Any<HashEntry[]>(), CommandFlags.DemandMaster);
+    }
+
+    [Fact]
+    public async Task GetOrAdd_stateful_span_key_generator_receives_its_state_and_does_not_run_on_a_hit()
+    {
+        var token = testContextAccessor.Current.CancellationToken;
+        _database.HashGetAllAsync(_redisKey, CommandFlags.PreferMaster).Returns(Array.Empty<HashEntry>());
+        _transaction.ExecuteAsync(Arg.Any<CommandFlags>()).Returns(true);
+
+        var miss = await SpanGetOrAdd("state", static (state, _) => Task.FromResult<IDictionary<string, string?>>(new Dictionary<string, string?> { ["f"] = state }));
+
+        miss["f"].Should().Be("state");
+        _database.HashGetAllAsync(_redisKey, CommandFlags.PreferMaster).Returns([new HashEntry("f", JsonConvert.SerializeObject("cached"))]);
+        var hit = await SpanGetOrAdd("other", static (_, _) => throw new InvalidOperationException("the generator ran on a hit"));
+        hit["f"].Should().Be("cached");
+
+        ValueTask<IDictionary<string, string?>> SpanGetOrAdd(string state, Func<string, CancellationToken, Task<IDictionary<string, string?>>> generator)
+        {
+            Span<char> key = _cacheKey.ToString().ToCharArray();
+            return ((IHashCache)Sut).GetOrAddAsync<string, string>(key, state, generator, (CachePolicy?)null, token);
+        }
+    }
+
+    [Fact]
+    public async Task Span_field_metadata_and_expiry_reads_answer_as_the_key_reads_do()
+    {
+        var token = testContextAccessor.Current.CancellationToken;
+        _version = new(7, 0);
+        string[] fields = ["a", "b"];
+        var metadata = new Dictionary<string, string?> { ["m"] = "1" };
+        var deadline = _now.AddMinutes(5);
+        _database.HashGetAsync(_redisKey, Arg.Any<RedisValue[]>(), CommandFlags.PreferMaster)
+            .Returns(_ => new RedisValue[] { JsonConvert.SerializeObject("va"), RedisValue.Null });
+        _database.HashGetAsync(_redisKey, (RedisValue)KnownFieldNames.MetadataKey, CommandFlags.PreferMaster)
+            .Returns(_ => (RedisValue)JsonConvert.SerializeObject(metadata));
+        _database.KeyTimeToLiveAsync(_redisKey, Arg.Any<CommandFlags>()).Returns(TimeSpan.FromMinutes(3));
+        _database.KeyExpireTimeAsync(_redisKey, Arg.Any<CommandFlags>()).Returns((DateTime?)deadline.UtcDateTime);
+
+        (await ((IHashCache)Sut).GetAsync<string>(Key(), fields, null, token)).Should().BeEquivalentTo(await ((IHashCache)Sut).GetAsync<string>(_cacheKey, fields, null, token)).And.ContainKey("a");
+        (await ((IHashCache)Sut).GetMetadataAsync<string>(Key(), token)).Should().BeEquivalentTo(await ((IHashCache)Sut).GetMetadataAsync<string>(_cacheKey, token)).And.BeEquivalentTo(metadata);
+        (await ((IHashCache)Sut).TimeToLiveAsync<string>(Key(), token)).Should().Be(await ((IHashCache)Sut).TimeToLiveAsync<string>(_cacheKey, token)).And.Be(TimeSpan.FromMinutes(3));
+        (await ((IHashCache)Sut).ExpireTimeAsync<string>(Key(), token)).Should().Be(await ((IHashCache)Sut).ExpireTimeAsync<string>(_cacheKey, token)).And.NotBeNull();
+
+        _database.HashGetAsync(_redisKey, Arg.Any<RedisValue[]>(), CommandFlags.PreferMaster).Returns(_ => new[] { RedisValue.Null, RedisValue.Null });
+        _database.HashGetAsync(_redisKey, (RedisValue)KnownFieldNames.MetadataKey, CommandFlags.PreferMaster).Returns(_ => RedisValue.Null);
+        _database.KeyTimeToLiveAsync(_redisKey, Arg.Any<CommandFlags>()).Returns((TimeSpan?)null);
+        _database.KeyExpireTimeAsync(_redisKey, Arg.Any<CommandFlags>()).Returns((DateTime?)null);
+
+        (await ((IHashCache)Sut).GetAsync<string>(Key(), fields, null, token)).Should().BeEquivalentTo(await ((IHashCache)Sut).GetAsync<string>(_cacheKey, fields, null, token));
+        (await ((IHashCache)Sut).GetMetadataAsync<string>(Key(), token)).Should().BeNull();
+        (await ((IHashCache)Sut).TimeToLiveAsync<string>(Key(), token)).Should().BeNull();
+        (await ((IHashCache)Sut).ExpireTimeAsync<string>(Key(), token)).Should().BeNull();
+
+        Span<char> Key() => _cacheKey.ToString().ToCharArray();
+    }
+
+    [Fact]
+    public async Task GetOrAdd_stateful_policy_FactoryTimeout_cancels_slow_generator()
+    {
+        _database.HashGetAllAsync(_redisKey, CommandFlags.PreferMaster).Returns(Array.Empty<HashEntry>());
+        var policy = new CachePolicy { FactoryTimeout = TimeSpan.FromMilliseconds(50) };
+
+        var act = async () => await ((IHashCache)Sut).GetOrAddAsync<string, int>(_cacheKey, 1, SlowGenerator, policy, testContextAccessor.Current.CancellationToken);
+
+        await act.Should().ThrowAsync<TimeoutException>();
+
+        static async Task<IDictionary<string, string?>> SlowGenerator(int state, CancellationToken ct)
+        {
+            await Task.Delay(TimeSpan.FromSeconds(5), ct);
+            return new Dictionary<string, string?>();
+        }
+    }
+
     [Theory]
     [InlineData(HashCacheSetOption.KeyReplace)]
     [InlineData(HashCacheSetOption.HashReplace)]

@@ -12,8 +12,6 @@ public class MockableInterfaceTests
         typeof(ISpanKeyCache<>),
         typeof(ISpanKeyHashCache),
         typeof(ISpanKeyHashCache<>),
-        typeof(IStatefulSpanKeyHashCache),
-        typeof(IStatefulSpanKeyHashCache<>),
         typeof(ISpanCacheKeyStrategy),
     ];
 

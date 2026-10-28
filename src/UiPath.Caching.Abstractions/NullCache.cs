@@ -1,27 +1,25 @@
 namespace UiPath.Caching;
 
 [ExcludeFromCodeCoverage]
-public sealed class NullCache : ICache, ISpanKeyCache, IGeneratedExpirationCache
+public sealed class NullCache : ICache, ISpanKeyCache
 {
     public static readonly NullCache Instance = new();
 
     public string Name => "Null";
 
-    public ValueTask<bool> ContainsAsync<T>(CacheKey cacheKey, CancellationToken token = default)
-    {
-        NotCacheableException.ThrowIfNotCacheable<T>();
-        return ValueTask.FromResult(false);
-    }
+    public ValueTask<bool> ContainsAsync<T>(CacheKey cacheKey, CancellationToken token = default) =>
+        NullResults.Contains<T>();
 
     [OverloadResolutionPriority(-1)]
     public ValueTask<bool> ContainsAsync<T>(Span<char> cacheKey, CancellationToken token = default) =>
         ContainsAsync<T>(CacheKey.Null, token);
 
-    public ValueTask<DateTimeOffset?> ExpireTimeAsync<T>(CacheKey cacheKey, CancellationToken token = default)
-    {
-        NotCacheableException.ThrowIfNotCacheable<T>();
-        return ValueTask.FromResult(default(DateTimeOffset?));
-    }
+    public ValueTask<DateTimeOffset?> ExpireTimeAsync<T>(CacheKey cacheKey, CancellationToken token = default) =>
+        NullResults.ExpireTime<T>();
+
+    [OverloadResolutionPriority(-1)]
+    public ValueTask<DateTimeOffset?> ExpireTimeAsync<T>(Span<char> cacheKey, CancellationToken token = default) =>
+        ExpireTimeAsync<T>(CacheKey.Null, token);
 
     public ValueTask<T?> GetAsync<T>(CacheKey cacheKey, CachePolicy? policy, CancellationToken token = default)
     {
@@ -103,25 +101,25 @@ public sealed class NullCache : ICache, ISpanKeyCache, IGeneratedExpirationCache
         ReturnGeneratorAsync(state, generator, token);
 
     public ValueTask<T?> GetOrAddAsync<T, TState>(CacheKey cacheKey, TState state, Func<TState, CancellationToken, Task<T?>> generator, CachePolicy? policy, CancellationToken token = default) =>
-        ((ICache)this).GetOrAddAsync(cacheKey, state, generator, policy, token);
+        ReturnGeneratorAsync(state, generator, token);
 
     public ValueTask<T?> GetOrAddAsync<T, TState>(CacheKey cacheKey, TState state, Func<TState, CancellationToken, Task<T?>> generator, TimeSpan expiration, CachePolicy? policy, CancellationToken token = default) =>
-        ((ICache)this).GetOrAddAsync(cacheKey, state, generator, expiration, policy, token);
+        ReturnGeneratorAsync(state, generator, token);
 
     public ValueTask<T?> GetOrAddAsync<T, TState>(CacheKey cacheKey, TState state, Func<TState, CancellationToken, Task<T?>> generator, DateTimeOffset expiration, CachePolicy? policy, CancellationToken token = default) =>
-        ((ICache)this).GetOrAddAsync(cacheKey, state, generator, expiration, policy, token);
+        ReturnGeneratorAsync(state, generator, token);
 
     public ValueTask<KeyValuePair<TState, T?>[]> GetOrAddAsync<T, TState, TArgument>(KeyValuePair<CacheKey, TState>[] entries, TArgument argument, Func<TArgument, TState[], CancellationToken, Task<KeyValuePair<TState, T?>[]>> generator, CachePolicy? policy, CancellationToken token = default)
         where TState : notnull =>
-        ((ICache)this).GetOrAddAsync(entries, argument, generator, policy, token);
+        ReturnGeneratorAsync(entries, argument, generator, token);
 
     public ValueTask<KeyValuePair<TState, T?>[]> GetOrAddAsync<T, TState, TArgument>(KeyValuePair<CacheKey, TState>[] entries, TArgument argument, Func<TArgument, TState[], CancellationToken, Task<KeyValuePair<TState, T?>[]>> generator, TimeSpan expiration, CachePolicy? policy, CancellationToken token = default)
         where TState : notnull =>
-        ((ICache)this).GetOrAddAsync(entries, argument, generator, expiration, policy, token);
+        ReturnGeneratorAsync(entries, argument, generator, token);
 
     public ValueTask<KeyValuePair<TState, T?>[]> GetOrAddAsync<T, TState, TArgument>(KeyValuePair<CacheKey, TState>[] entries, TArgument argument, Func<TArgument, TState[], CancellationToken, Task<KeyValuePair<TState, T?>[]>> generator, DateTimeOffset expiration, CachePolicy? policy, CancellationToken token = default)
         where TState : notnull =>
-        ((ICache)this).GetOrAddAsync(entries, argument, generator, expiration, policy, token);
+        ReturnGeneratorAsync(entries, argument, generator, token);
 
     public ValueTask<bool> RefreshAsync<T>(CacheKey cacheKey, CachePolicy? policy, CancellationToken token = default) => ReturnTrueAsync<T>();
 
@@ -185,14 +183,22 @@ public sealed class NullCache : ICache, ISpanKeyCache, IGeneratedExpirationCache
         return ValueTask.FromResult(default(TimeSpan?));
     }
 
+    [OverloadResolutionPriority(-1)]
+    public ValueTask<TimeSpan?> TimeToLiveAsync<T>(Span<char> cacheKey, CancellationToken token = default) =>
+        TimeToLiveAsync<T>(CacheKey.Null, token);
+
     public async ValueTask<T?> GetOrAddWithExpirationAsync<T>(CacheKey cacheKey, Func<CancellationToken, Task<GeneratedValue<T>>> generator, CachePolicy? policy, CancellationToken token = default)
     {
         NotCacheableException.ThrowIfNotCacheable<T>();
         return (await generator(token).ConfigureAwait(false)).Value;
     }
 
-    public ValueTask<T?> GetOrAddWithExpirationAsync<T, TState>(CacheKey cacheKey, TState state, Func<TState, CancellationToken, Task<GeneratedValue<T>>> generator, CachePolicy? policy, CancellationToken token = default) =>
-        ((ICache)this).GetOrAddWithExpirationAsync(cacheKey, state, generator, policy, token);
+    public async ValueTask<T?> GetOrAddWithExpirationAsync<T, TState>(CacheKey cacheKey, TState state, Func<TState, CancellationToken, Task<GeneratedValue<T>>> generator, CachePolicy? policy, CancellationToken token = default)
+    {
+        NotCacheableException.ThrowIfNotCacheable<T>();
+        ArgumentNullException.ThrowIfNull(generator);
+        return (await generator(state, token).ConfigureAwait(false)).Value;
+    }
 
     [OverloadResolutionPriority(-1)]
     public ValueTask<T?> GetOrAddWithExpirationAsync<T>(Span<char> cacheKey, Func<CancellationToken, Task<GeneratedValue<T>>> generator, CachePolicy? policy, CancellationToken token = default) =>
@@ -233,10 +239,21 @@ public sealed class NullCache : ICache, ISpanKeyCache, IGeneratedExpirationCache
         return await generator(state, token).ConfigureAwait(false);
     }
 
-    /// <summary>What <c>BatchGetOrAdd</c> returns over a cache that never hits: the generator answers each key's first state, states on the same key share that answer, and a key it skips gets the default.</summary>
-    private static async ValueTask<KeyValuePair<TState, T?>[]> ReturnGeneratorAsync<T, TState>(
+    private static ValueTask<KeyValuePair<TState, T?>[]> ReturnGeneratorAsync<T, TState>(
         KeyValuePair<CacheKey, TState>[] entries,
         Func<TState[], CancellationToken, Task<KeyValuePair<TState, T?>[]>> generator,
+        CancellationToken token)
+        where TState : notnull
+    {
+        ArgumentNullException.ThrowIfNull(generator);
+        return ReturnGeneratorAsync(entries, generator, static (g, states, t) => g(states, t), token);
+    }
+
+    /// <summary>What <c>BatchGetOrAdd</c> returns over a cache that never hits: the generator answers each key's first state, states on the same key share that answer, and a key it skips gets the default.</summary>
+    private static async ValueTask<KeyValuePair<TState, T?>[]> ReturnGeneratorAsync<T, TState, TArgument>(
+        KeyValuePair<CacheKey, TState>[] entries,
+        TArgument argument,
+        Func<TArgument, TState[], CancellationToken, Task<KeyValuePair<TState, T?>[]>> generator,
         CancellationToken token)
         where TState : notnull
     {
@@ -251,7 +268,7 @@ public sealed class NullCache : ICache, ISpanKeyCache, IGeneratedExpirationCache
         }
         var requests = distinct.DistinctBy(e => e.Key).ToArray();
         var keyOfRequest = requests.ToDictionary(e => e.Value, e => e.Key);
-        var answers = (await generator(Array.ConvertAll(requests, e => e.Value), token).ConfigureAwait(false) ?? [])
+        var answers = (await generator(argument, Array.ConvertAll(requests, e => e.Value), token).ConfigureAwait(false) ?? [])
             .Where(a => keyOfRequest.ContainsKey(a.Key))
             .DistinctBy(a => a.Key)
             .ToDictionary(a => keyOfRequest[a.Key], a => a.Value);

@@ -409,9 +409,17 @@ public class CapturingGeneratorTests
                 ValueTask<KeyValuePair<CacheKey, Item?>[]> ICache<Item>.GetAsync(CacheKey[] cacheKeys, CancellationToken token) => throw null!;
                 ValueTask<Item?> ICache<Item>.GetOrAddAsync(CacheKey cacheKey, Func<CancellationToken, Task<Item?>> generator, TimeSpan expiration, CancellationToken token) => throw null!;
                 ValueTask<Item?> ICache<Item>.GetOrAddAsync(CacheKey cacheKey, Func<CancellationToken, Task<Item?>> generator, DateTimeOffset expiration, CancellationToken token) => throw null!;
+                ValueTask<Item?> ICache<Item>.GetOrAddAsync<TState>(CacheKey cacheKey, TState state, Func<TState, CancellationToken, Task<Item?>> generator, CancellationToken token) => throw null!;
+                ValueTask<Item?> ICache<Item>.GetOrAddAsync<TState>(CacheKey cacheKey, TState state, Func<TState, CancellationToken, Task<Item?>> generator, TimeSpan expiration, CancellationToken token) => throw null!;
+                ValueTask<Item?> ICache<Item>.GetOrAddAsync<TState>(CacheKey cacheKey, TState state, Func<TState, CancellationToken, Task<Item?>> generator, DateTimeOffset expiration, CancellationToken token) => throw null!;
+                ValueTask<Item?> ICache<Item>.GetOrAddWithExpirationAsync(CacheKey cacheKey, Func<CancellationToken, Task<GeneratedValue<Item>>> generator, CancellationToken token) => throw null!;
+                ValueTask<Item?> ICache<Item>.GetOrAddWithExpirationAsync<TState>(CacheKey cacheKey, TState state, Func<TState, CancellationToken, Task<GeneratedValue<Item>>> generator, CancellationToken token) => throw null!;
                 ValueTask<KeyValuePair<TState, Item?>[]> ICache<Item>.GetOrAddAsync<TState>(KeyValuePair<CacheKey, TState>[] entries, Func<TState[], CancellationToken, Task<KeyValuePair<TState, Item?>[]>> generator, CancellationToken token) => throw null!;
                 ValueTask<KeyValuePair<TState, Item?>[]> ICache<Item>.GetOrAddAsync<TState>(KeyValuePair<CacheKey, TState>[] entries, Func<TState[], CancellationToken, Task<KeyValuePair<TState, Item?>[]>> generator, TimeSpan expiration, CancellationToken token) => throw null!;
                 ValueTask<KeyValuePair<TState, Item?>[]> ICache<Item>.GetOrAddAsync<TState>(KeyValuePair<CacheKey, TState>[] entries, Func<TState[], CancellationToken, Task<KeyValuePair<TState, Item?>[]>> generator, DateTimeOffset expiration, CancellationToken token) => throw null!;
+                ValueTask<KeyValuePair<TState, Item?>[]> ICache<Item>.GetOrAddAsync<TState, TArgument>(KeyValuePair<CacheKey, TState>[] entries, TArgument argument, Func<TArgument, TState[], CancellationToken, Task<KeyValuePair<TState, Item?>[]>> generator, CancellationToken token) => throw null!;
+                ValueTask<KeyValuePair<TState, Item?>[]> ICache<Item>.GetOrAddAsync<TState, TArgument>(KeyValuePair<CacheKey, TState>[] entries, TArgument argument, Func<TArgument, TState[], CancellationToken, Task<KeyValuePair<TState, Item?>[]>> generator, TimeSpan expiration, CancellationToken token) => throw null!;
+                ValueTask<KeyValuePair<TState, Item?>[]> ICache<Item>.GetOrAddAsync<TState, TArgument>(KeyValuePair<CacheKey, TState>[] entries, TArgument argument, Func<TArgument, TState[], CancellationToken, Task<KeyValuePair<TState, Item?>[]>> generator, DateTimeOffset expiration, CancellationToken token) => throw null!;
                 ValueTask<bool> ICache<Item>.RemoveAsync(CacheKey cacheKey, CancellationToken token) => throw null!;
                 ValueTask<bool> ICache<Item>.RemoveAsync(CacheKey[] cacheKeys, CancellationToken token) => throw null!;
                 ValueTask<bool> ICache<Item>.SetAsync(CacheKey cacheKey, Item? value, CancellationToken token) => throw null!;
@@ -640,4 +648,72 @@ public class CapturingGeneratorTests
             Verify.Diagnostic(0, ThisDelegate, PassIt),
             Verify.Diagnostic(1, "captures 'this' and 'id' and allocates a closure", PassThem),
             Verify.Diagnostic(2, "is the instance method group 'LoadAsync' and allocates a delegate", "pass its target as state and call it from a static lambda"));
+
+    [Fact]
+    public Task Span_key_cache_of_T_call_passes_this_as_state() =>
+        Verify.FixAsync(
+            Fixture.Service("""
+                private readonly ISpanKeyCache<Item> _spanCache = null!;
+                private readonly char[] _key = ['k'];
+
+                ValueTask<Item?> Get(CancellationToken token) => _spanCache.GetOrAddAsync(_key.AsSpan(), {|#0:ct => LoadAsync(ct)|}, token);
+                """),
+            Fixture.Service("""
+                private readonly ISpanKeyCache<Item> _spanCache = null!;
+                private readonly char[] _key = ['k'];
+
+                ValueTask<Item?> Get(CancellationToken token) => _spanCache.GetOrAddAsync(_key.AsSpan(), this, static (self, ct) => self.LoadAsync(ct), token);
+                """),
+            Verify.Diagnostic(0, ThisDelegate, PassIt));
+
+    [Fact]
+    public Task Span_key_cache_call_passes_the_captures_as_state() =>
+        Verify.FixAsync(
+            Fixture.Service("""
+                private readonly ISpanKeyCache _spanUntyped = null!;
+                private readonly char[] _key = ['k'];
+
+                ValueTask<Item?> Get(int id, CancellationToken token) => _spanUntyped.GetOrAddAsync<Item>(_key.AsSpan(), {|#0:ct => LoadAsync(id, ct)|}, TimeSpan.FromMinutes(1), _policy, token);
+                """),
+            Fixture.Service("""
+                private readonly ISpanKeyCache _spanUntyped = null!;
+                private readonly char[] _key = ['k'];
+
+                ValueTask<Item?> Get(int id, CancellationToken token) => _spanUntyped.GetOrAddAsync<Item, (Service Self, int Id)>(_key.AsSpan(), (Self: this, Id: id), static (s, ct) => s.Self.LoadAsync(s.Id, ct), TimeSpan.FromMinutes(1), _policy, token);
+                """),
+            Verify.Diagnostic(0, "captures 'this' and 'id' and allocates a closure", PassThem));
+
+    [Fact]
+    public Task Span_key_hash_cache_of_T_call_passes_this_as_state() =>
+        Verify.FixAsync(
+            Fixture.Service("""
+                private readonly ISpanKeyHashCache<Item> _spanHash = null!;
+                private readonly char[] _key = ['k'];
+
+                ValueTask<IDictionary<string, Item?>> Get(CancellationToken token) => _spanHash.GetOrAddAsync(_key.AsSpan(), {|#0:ct => LoadAllInstanceAsync(ct)|}, token);
+                """),
+            Fixture.Service("""
+                private readonly ISpanKeyHashCache<Item> _spanHash = null!;
+                private readonly char[] _key = ['k'];
+
+                ValueTask<IDictionary<string, Item?>> Get(CancellationToken token) => _spanHash.GetOrAddAsync(_key.AsSpan(), this, static (self, ct) => self.LoadAllInstanceAsync(ct), token);
+                """),
+            Verify.Diagnostic(0, ThisDelegate, PassIt));
+
+    [Fact]
+    public Task Span_key_hash_cache_call_passes_the_captures_as_state() =>
+        Verify.FixAsync(
+            Fixture.Service("""
+                private readonly ISpanKeyHashCache _spanUntypedHash = null!;
+                private readonly char[] _key = ['k'];
+
+                ValueTask<IDictionary<string, Item?>> Get(int id, CancellationToken token) => _spanUntypedHash.GetOrAddAsync<Item>(_key.AsSpan(), {|#0:ct => LoadAllInstanceAsync(id, ct)|}, _policy, token);
+                """),
+            Fixture.Service("""
+                private readonly ISpanKeyHashCache _spanUntypedHash = null!;
+                private readonly char[] _key = ['k'];
+
+                ValueTask<IDictionary<string, Item?>> Get(int id, CancellationToken token) => _spanUntypedHash.GetOrAddAsync<Item, (Service Self, int Id)>(_key.AsSpan(), (Self: this, Id: id), static (s, ct) => s.Self.LoadAllInstanceAsync(s.Id, ct), _policy, token);
+                """),
+            Verify.Diagnostic(0, "captures 'this' and 'id' and allocates a closure", PassThem));
 }

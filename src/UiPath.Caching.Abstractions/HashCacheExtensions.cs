@@ -33,19 +33,19 @@ public static class HashCacheExtensions
     public static ValueTask<IDictionary<string, T?>> GetOrAddAsync<T>(this IHashCache cache, CacheKey cacheKey, Func<CancellationToken, Task<IDictionary<string, T?>>> generator, DateTimeOffset expiration, HashCacheSetOption? setOption, CancellationToken token = default)
         => cache.GetOrAddAsync<T>(cacheKey, generator, expiration, setOption, null, token);
 
-    /// <inheritdoc cref="IStatefulHashCache.GetOrAddAsync{T, TState}(CacheKey, TState, Func{TState, CancellationToken, Task{IDictionary{string, T}}}, CachePolicy, CancellationToken)"/>
+    /// <inheritdoc cref="IHashCache.GetOrAddAsync{T, TState}(CacheKey, TState, Func{TState, CancellationToken, Task{IDictionary{string, T}}}, CachePolicy, CancellationToken)"/>
     public static ValueTask<IDictionary<string, T?>> GetOrAddAsync<T, TState>(this IHashCache cache, CacheKey cacheKey, TState state, Func<TState, CancellationToken, Task<IDictionary<string, T?>>> generator, CancellationToken token = default)
         => cache.GetOrAddAsync(cacheKey, state, generator, (CachePolicy?)null, token);
 
-    /// <inheritdoc cref="IStatefulHashCache.GetOrAddAsync{T, TState}(CacheKey, TState, Func{TState, CancellationToken, Task{IDictionary{string, T}}}, CachePolicy, CancellationToken)"/>
+    /// <inheritdoc cref="IHashCache.GetOrAddAsync{T, TState}(CacheKey, TState, Func{TState, CancellationToken, Task{IDictionary{string, T}}}, CachePolicy, CancellationToken)"/>
     public static ValueTask<IDictionary<string, T?>> GetOrAddAsync<T, TState>(this IHashCache cache, CacheKey cacheKey, TState state, Func<TState, CancellationToken, Task<IDictionary<string, T?>>> generator, TimeSpan expiration, CancellationToken token = default)
         => cache.GetOrAddAsync(cacheKey, state, generator, expiration, (CachePolicy?)null, token);
 
-    /// <inheritdoc cref="IStatefulHashCache.GetOrAddAsync{T, TState}(CacheKey, TState, Func{TState, CancellationToken, Task{IDictionary{string, T}}}, CachePolicy, CancellationToken)"/>
+    /// <inheritdoc cref="IHashCache.GetOrAddAsync{T, TState}(CacheKey, TState, Func{TState, CancellationToken, Task{IDictionary{string, T}}}, CachePolicy, CancellationToken)"/>
     public static ValueTask<IDictionary<string, T?>> GetOrAddAsync<T, TState>(this IHashCache cache, CacheKey cacheKey, TState state, Func<TState, CancellationToken, Task<IDictionary<string, T?>>> generator, DateTimeOffset expiration, CancellationToken token = default)
         => cache.GetOrAddAsync(cacheKey, state, generator, expiration, (CachePolicy?)null, token);
 
-    /// <inheritdoc cref="IStatefulHashCache.GetOrAddAsync{T, TState}(CacheKey, TState, Func{TState, CancellationToken, Task{IDictionary{string, T}}}, CachePolicy, CancellationToken)"/>
+    /// <inheritdoc cref="IHashCache.GetOrAddAsync{T, TState}(CacheKey, TState, Func{TState, CancellationToken, Task{IDictionary{string, T}}}, CachePolicy, CancellationToken)"/>
     public static ValueTask<IDictionary<string, T?>> GetOrAddAsync<T, TState>(this IHashCache cache, CacheKey cacheKey, TState state, Func<TState, CancellationToken, Task<IDictionary<string, T?>>> generator, DateTimeOffset expiration, HashCacheSetOption? setOption, CancellationToken token = default)
         => cache.GetOrAddAsync(cacheKey, state, generator, expiration, setOption, (CachePolicy?)null, token);
 

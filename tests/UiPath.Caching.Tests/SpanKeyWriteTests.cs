@@ -283,6 +283,25 @@ public class SpanKeyWriteTests
     }
 
     [Fact]
+    public async Task The_span_field_metadata_TTL_and_expiry_reads_reach_a_cache_that_has_the_span_capability()
+    {
+        using var cache = new SpanWritingCache();
+        using var hash = new SpanWritingHashCache();
+        ICache asCache = cache;
+        IHashCache asHash = hash;
+
+        (await asCache.TimeToLiveAsync<string>(Key("a"), Ct)).Should().Be(Ttl);
+        (await asCache.ExpireTimeAsync<string>(Key("b"), Ct)).Should().Be(Deadline);
+        (await asHash.GetAsync<string>(Key("c"), ["f"], null, Ct)).Should().BeEmpty();
+        (await asHash.TimeToLiveAsync<string>(Key("d"), Ct)).Should().Be(Ttl);
+        (await asHash.ExpireTimeAsync<string>(Key("e"), Ct)).Should().Be(Deadline);
+        (await asHash.GetMetadataAsync<string>(Key("f"), Ct)).Should().BeSameAs(Fields);
+
+        cache.SpanReadKeys.Should().Equal("a", "b");
+        hash.SpanReadKeys.Should().Equal("c", "d", "e", "f");
+    }
+
+    [Fact]
     public async Task A_span_write_through_a_typed_cache_allocates_less_than_building_the_key_first()
     {
         using var cache = InMemoryMultilayer.Cache();
@@ -337,6 +356,8 @@ public class SpanKeyWriteTests
 
         public IEnumerable<string> SpanWrites => Calls.Select(c => c.Key);
 
+        public List<string> SpanReadKeys { get; } = [];
+
         public ValueTask<bool> SetAsync<T>(Span<char> cacheKey, T? value, CachePolicy? policy, CancellationToken token = default) => Record(cacheKey, policy, null);
 
         public ValueTask<bool> SetAsync<T>(Span<char> cacheKey, T? value, TimeSpan expiration, CachePolicy? policy, CancellationToken token = default) => Record(cacheKey, policy, expiration);
@@ -361,9 +382,19 @@ public class SpanKeyWriteTests
 
         public ValueTask<bool> ContainsAsync<T>(Span<char> cacheKey, CancellationToken token = default) => throw new NotSupportedException();
 
+        public ValueTask<TimeSpan?> TimeToLiveAsync<T>(Span<char> cacheKey, CancellationToken token = default) => Read(cacheKey, (TimeSpan?)Ttl);
+
+        public ValueTask<DateTimeOffset?> ExpireTimeAsync<T>(Span<char> cacheKey, CancellationToken token = default) => Read(cacheKey, (DateTimeOffset?)Deadline);
+
         public ValueTask<T?> GetOrAddWithExpirationAsync<T>(Span<char> cacheKey, Func<CancellationToken, Task<GeneratedValue<T>>> generator, CachePolicy? policy, CancellationToken token = default) => throw new NotSupportedException();
 
         public ValueTask<T?> GetOrAddWithExpirationAsync<T, TState>(Span<char> cacheKey, TState state, Func<TState, CancellationToken, Task<GeneratedValue<T>>> generator, CachePolicy? policy, CancellationToken token = default) => throw new NotSupportedException();
+
+        private ValueTask<TResult> Read<TResult>(Span<char> cacheKey, TResult result)
+        {
+            SpanReadKeys.Add(cacheKey.ToString());
+            return ValueTask.FromResult(result);
+        }
 
         private ValueTask<bool> Record(Span<char> cacheKey, CachePolicy? policy, object? expiration)
         {
@@ -377,6 +408,8 @@ public class SpanKeyWriteTests
         public List<(string Key, CachePolicy? Policy, object? Expiration)> Calls { get; } = [];
 
         public IEnumerable<string> SpanWrites => Calls.Select(c => c.Key);
+
+        public List<string> SpanReadKeys { get; } = [];
 
         public int SetCalls { get; private set; }
 
@@ -412,7 +445,15 @@ public class SpanKeyWriteTests
 
         public ValueTask<IDictionary<string, T?>> GetOrAddAsync<T>(Span<char> cacheKey, Func<CancellationToken, Task<IDictionary<string, T?>>> generator, DateTimeOffset expiration, HashCacheSetOption? setOption, CachePolicy? policy, CancellationToken token = default) => throw new NotSupportedException();
 
+        public ValueTask<IDictionary<string, T?>> GetAsync<T>(Span<char> cacheKey, string[] fields, CachePolicy? policy, CancellationToken token = default) => Read(cacheKey, (IDictionary<string, T?>)new Dictionary<string, T?>());
+
         public ValueTask<bool> ContainsAsync<T>(Span<char> cacheKey, CancellationToken token = default) => throw new NotSupportedException();
+
+        public ValueTask<TimeSpan?> TimeToLiveAsync<T>(Span<char> cacheKey, CancellationToken token = default) => Read(cacheKey, (TimeSpan?)Ttl);
+
+        public ValueTask<DateTimeOffset?> ExpireTimeAsync<T>(Span<char> cacheKey, CancellationToken token = default) => Read(cacheKey, (DateTimeOffset?)Deadline);
+
+        public ValueTask<IDictionary<string, string?>?> GetMetadataAsync<T>(Span<char> cacheKey, CancellationToken token = default) => Read(cacheKey, (IDictionary<string, string?>?)Fields);
 
         public ValueTask<T?> GetItemAsync<T>(CacheKey cacheKey, string field, CachePolicy? policy, CancellationToken token = default) => throw new NotSupportedException();
 
@@ -429,6 +470,22 @@ public class SpanKeyWriteTests
         public ValueTask<IDictionary<string, T?>> GetOrAddAsync<T>(CacheKey cacheKey, Func<CancellationToken, Task<IDictionary<string, T?>>> generator, DateTimeOffset expiration, CachePolicy? policy, CancellationToken token = default) => throw new NotSupportedException();
 
         public ValueTask<IDictionary<string, T?>> GetOrAddAsync<T>(CacheKey cacheKey, Func<CancellationToken, Task<IDictionary<string, T?>>> generator, DateTimeOffset expiration, HashCacheSetOption? setOption, CachePolicy? policy, CancellationToken token = default) => throw new NotSupportedException();
+
+        public ValueTask<IDictionary<string, T?>> GetOrAddAsync<T, TState>(CacheKey cacheKey, TState state, Func<TState, CancellationToken, Task<IDictionary<string, T?>>> generator, CachePolicy? policy, CancellationToken token = default) => throw new NotSupportedException();
+
+        public ValueTask<IDictionary<string, T?>> GetOrAddAsync<T, TState>(CacheKey cacheKey, TState state, Func<TState, CancellationToken, Task<IDictionary<string, T?>>> generator, TimeSpan expiration, CachePolicy? policy, CancellationToken token = default) => throw new NotSupportedException();
+
+        public ValueTask<IDictionary<string, T?>> GetOrAddAsync<T, TState>(CacheKey cacheKey, TState state, Func<TState, CancellationToken, Task<IDictionary<string, T?>>> generator, DateTimeOffset expiration, CachePolicy? policy, CancellationToken token = default) => throw new NotSupportedException();
+
+        public ValueTask<IDictionary<string, T?>> GetOrAddAsync<T, TState>(CacheKey cacheKey, TState state, Func<TState, CancellationToken, Task<IDictionary<string, T?>>> generator, DateTimeOffset expiration, HashCacheSetOption? setOption, CachePolicy? policy, CancellationToken token = default) => throw new NotSupportedException();
+
+        public ValueTask<IDictionary<string, T?>> GetOrAddAsync<T, TState>(Span<char> cacheKey, TState state, Func<TState, CancellationToken, Task<IDictionary<string, T?>>> generator, CachePolicy? policy, CancellationToken token = default) => throw new NotSupportedException();
+
+        public ValueTask<IDictionary<string, T?>> GetOrAddAsync<T, TState>(Span<char> cacheKey, TState state, Func<TState, CancellationToken, Task<IDictionary<string, T?>>> generator, TimeSpan expiration, CachePolicy? policy, CancellationToken token = default) => throw new NotSupportedException();
+
+        public ValueTask<IDictionary<string, T?>> GetOrAddAsync<T, TState>(Span<char> cacheKey, TState state, Func<TState, CancellationToken, Task<IDictionary<string, T?>>> generator, DateTimeOffset expiration, CachePolicy? policy, CancellationToken token = default) => throw new NotSupportedException();
+
+        public ValueTask<IDictionary<string, T?>> GetOrAddAsync<T, TState>(Span<char> cacheKey, TState state, Func<TState, CancellationToken, Task<IDictionary<string, T?>>> generator, DateTimeOffset expiration, HashCacheSetOption? setOption, CachePolicy? policy, CancellationToken token = default) => throw new NotSupportedException();
 
         public ValueTask<bool> RefreshAsync<T>(CacheKey cacheKey, CachePolicy? policy, CancellationToken token = default) => throw new NotSupportedException();
 
@@ -452,6 +509,12 @@ public class SpanKeyWriteTests
 
         public void Dispose()
         {
+        }
+
+        private ValueTask<TResult> Read<TResult>(Span<char> cacheKey, TResult result)
+        {
+            SpanReadKeys.Add(cacheKey.ToString());
+            return ValueTask.FromResult(result);
         }
 
         private ValueTask<bool> Record(Span<char> cacheKey, CachePolicy? policy, object? expiration)
