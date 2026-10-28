@@ -202,8 +202,8 @@ Without topics, a two-tier design would create a correctness hazard: a write on
 one node would update L2 but leave every other node's L1 holding the old value
 until it naturally expired. If `LocalMaxExpiration` were set to ten minutes,
 every node except the writing one would serve stale data for up to ten minutes.
-Topics collapse that window to one polling interval (250 ms for `RedisStreams` by
-default) plus network RTT.
+Topics collapse that window to a few Redis round trips when the doorbell rings; a missed ring
+waits for the next poll, `NotifiedPollInterval` (5 s for `RedisStreams` by default).
 
 The library ships two topic transports, named in `KnownTopicNames`.
 
@@ -300,7 +300,7 @@ exactly-once generator execution.
 
 `NullDistributedLock` is the default no-op shim when the distributed lock is not
 registered. Single-node deployments and local-development configurations are
-perfectly fine with it: the shared run still coalesces concurrent callers within
+perfectly fine with it: single-flight still coalesces concurrent callers within
 the same process. For multi-node deployments, wiring `RedisDistributedLock` is
 advisable when the generator is expensive and simultaneous cluster-wide cold
 misses would be problematic.
@@ -365,7 +365,7 @@ than `DistributedExpiration` gives a modest spread while keeping TTLs
 predictable; a value larger than the base lifetime produces highly skewed TTLs
 and should be avoided.
 
-The hydrating-cache feature is the headline policy capability. When
+Rehydration is the headline policy capability. When
 `RehydrateEnabled` is `true` and `Rehydrate` carries a `RehydrateOptions`
 object, the cache performs proactive background refresh of entries before they
 expire. The `Threshold` fraction (default `0.75`) defines the soft-TTL trigger:
@@ -417,32 +417,32 @@ node drops its whole local tier of the topic; if it cannot be published every ke
 enable it only when all nodes run this version. `RemoveAsync(CacheKey[])` and the batch `SetAsync` keep their all-or-nothing, single-slot
 behaviour.
 
-### Background L2 writes
+### Background distributed writes
 
 `BackgroundDistributedWrite` (default off) makes single-key `SetAsync` and the write that
 follows a `GetOrAddAsync` miss, on the cache and on the hash cache, return once the value is
-in L1; the L2 write, and for a set the event after it, run detached. Batch writes,
+in the local tier; the distributed write, and for a set the event after it, run detached. Batch writes,
 `RemoveAsync`, refresh and metadata writes stay awaited, and so does a fill under the
 distributed lock. The `IDistributedCache` adapter always writes in the foreground, whatever
 its policy says, because its payload may be memory the caller reclaims on return.
 
-- A set always writes L2 first and publishes its event second, with or without the flag, so
+- A set always writes the distributed tier first and publishes its event second, with or without the flag, so
   a node the event wakes reads the new value. A set returns `false` when either step fails.
-- The value is in L1 for `LocalMaxExpirationDisconnected` until the L2 write succeeds, then
+- The value is in the local tier for `LocalMaxExpirationDisconnected` until the distributed write succeeds, then
   for the normal lifetime, unless a newer write, a removal or an invalidation replaced it.
-  When the L2 write fails the value stays local for that cap and no event is sent.
-- Writes to one key reach L2 in the order they were issued: an awaited write or removal of
+  When the distributed write fails the value stays local for that cap and no event is sent.
+- Writes to one key reach the distributed tier in the order they were issued: an awaited write or removal of
   the key waits for the background writes still running, and a background write waits for
   every write of the key issued before it, awaited ones and those that found no free place
   included. Awaited writes of one key still run side by side.
 - At most `MaxBackgroundWrites` run at once; one past that is written in the foreground.
   Disposing the cache waits up to `BackgroundWriteDrainTimeout` for the rest, or for all of
-  them with `Timeout.InfiniteTimeSpan`. Those it then cancels never reach L2; they are counted
+  them with `Timeout.InfiniteTimeSpan`. Those it then cancels never reach the distributed tier; they are counted
   under the `drain_cancelled` stage.
-- The value must not be mutated after the call, as for any write: L1 holds it, and a write
+- The value must not be mutated after the call, as for any write: the local tier holds it, and a write
   queued behind an earlier one for the key serializes it later.
 - Other nodes can read the previous value until the write lands, about one round trip.
-- A local miss that reads L2 while a write or removal of the key is issued keeps nothing
+- A local miss that reads the distributed tier while a write or removal of the key is issued keeps nothing
   locally, so the older value it found cannot replace the newer one; the next read keeps it.
   Keys are grouped into 1024 stripes for this, so a write can also skip the local copy of a
   key sharing its stripe.
@@ -593,8 +593,8 @@ Semantics worth knowing:
 - Keys de-duplicate on the **strategy-mapped** key. Two caller keys that an `ICacheKeyStrategy` maps
   onto the same cache key collapse to one probe, one generator request and one write.
 
-Callers whose keys already are their identity can skip the state pairing via a key-only extension
-method — see [recipes/batch-get-or-add.md](recipes/batch-get-or-add.md#keys-you-already-own).
+Callers whose keys already are their identity pair each key with itself (`TState` is `CacheKey`);
+there is no key-only async overload — see [recipes/batch-get-or-add.md](recipes/batch-get-or-add.md#keys-you-already-own).
 
 See also: [reference/interfaces.md](reference/interfaces.md), [recipes/batch-get-or-add.md](recipes/batch-get-or-add.md), [how-to/resilience.md#stampede-protection](how-to/resilience.md#stampede-protection).
 
@@ -651,7 +651,7 @@ neither outcome is the one you wanted.
   cannot displace it.
 
 Registering `AddQueueInMemoryRedis()` on its own is unaffected, because `Caching:Redis:Enabled` binds
-`RedisSetCacheOptions` only when `AddQueueRedis` runs: the Redis tier that the multilayer backing
+`RedisSetCacheOptions` only when `AddQueueRedis` runs: the Redis provider that the multilayer backing
 co-registers stays enabled. If you want the Redis set cache off, leave the multilayer backing out
 rather than disabling the tier underneath it. Options bind from the same
 `Caching:InMemory` / `Caching:Redis` / `Caching:InMemoryRedis` sections as the core providers; see
@@ -659,7 +659,7 @@ rather than disabling the tier underneath it. Options bind from the same
 
 On Redis the set cache keeps its own key namespace: the keyspace slot holds `se`, where the
 single-value cache holds `s` and the hash cache holds `h`, so a set and a string cache can share a
-key name without colliding. Writes are pinned to the master, reads go to the master unless `ReadFrom` is `Replica`, and an add is a
+key name without colliding. Writes are pinned to the primary, reads go to the primary unless `ReadFrom` is `Replica`, and an add is a
 transaction that applies `SADD` and the key's expiry together. Like the core Redis caches, a Redis
 failure is logged and swallowed rather than thrown: reads report empty and writes report nothing
 written. Adds, pops and full-member reads check the connection first and return that same empty

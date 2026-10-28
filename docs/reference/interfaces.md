@@ -815,7 +815,7 @@ public interface IDistributedLockKeyStrategy
 **Don't use this when:**
 
 - You need to customize cache (not lock) key mapping — use [`ICacheKeyStrategy`](#icachekeystrategy) instead.
-- You only need in-process coordination — the shared run per key needs no lock and does not use this strategy.
+- You only need in-process coordination — single-flight per key needs no lock and does not use this strategy.
 
 **See also:** [`ICacheKeyStrategy`](#icachekeystrategy), [`IDistributedLock`](#idistributedlock), [How-to: telemetry and strategies](../how-to/telemetry-and-strategies.md)
 
@@ -847,7 +847,7 @@ public interface IDistributedLock
 
 **Don't use this when:**
 
-- You only need in-process coordination — the shared run per key does that without a lock.
+- You only need in-process coordination — single-flight per key does that without a lock.
 - You are writing application code — configure `CachePolicy.DistributedLockEnabled = true` and let the runtime manage `IDistributedLock` automatically.
 
 **See also:** [`IDistributedLockKeyStrategy`](#idistributedlockkeystrategy), [Reference: settings](settings.md), [Concepts](../concepts.md)

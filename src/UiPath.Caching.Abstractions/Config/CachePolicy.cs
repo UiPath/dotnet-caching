@@ -40,7 +40,7 @@ public sealed class CachePolicy
 
     public TimeSpan? FactoryTimeout { get; init; }
 
-    /// <summary>Single-key <c>SetAsync</c> and the fill after a <c>GetOrAdd</c> miss return after the L1 write; the L2 write (and a set's broadcast) follows detached. <c>null</c> inherits (default off).</summary>
+    /// <summary>Single-key <c>SetAsync</c> and the fill after a <c>GetOrAdd</c> miss return after the local write; the distributed write (and a set's broadcast) follows detached. <c>null</c> inherits (default off).</summary>
     public bool? BackgroundDistributedWrite { get; init; }
 
     /// <summary>

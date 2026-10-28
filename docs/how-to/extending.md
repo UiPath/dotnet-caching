@@ -255,7 +255,7 @@ is not boxed on the way in.
 
 Implementing it is optional; a serializer that only implements `ISerializerProxy<byte[]>` keeps the array
 path everywhere. If you do implement it, the memory you return is **borrowed**: it may alias the input,
-and the caller reclaims it as soon as the operation completes. The Redis tier never retains it — the
+and the caller reclaims it as soon as the operation completes. The Redis provider never retains it — the
 connection copies the value into its own buffer as the command is written, and the write is awaited to
 completion before the caller is told it is done. That await is also a contract on `IResiliencePipeline`:
 `ExecuteAsync` must not complete before its callback has, so a timeout has to be cooperative. The Polly

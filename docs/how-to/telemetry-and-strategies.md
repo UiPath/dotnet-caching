@@ -220,10 +220,10 @@ there would be nothing left to hide:
 Cache missed. generating new myapp:s:session:cos****
 ```
 
-The prefixes are matched against the key as the caller spelled it, before `RedisKeyStrategy` composes the physical
+The prefixes are matched against the key as the caller spelled it, before the `IRedisKeyStrategy` composes the physical
 key around it. `ICacheKeyStrategy` is the exception, because it rewrites the key itself rather than the layout around
 it: a multilayer cache hands the tier below the key its strategy produced, so with `PrefixCacheKeyStrategy("v2")` the
-Redis tier's own lines are judged on `v2:session:...`. The default `DefaultCacheKeyStrategy` returns the key
+Redis provider's own lines are judged on `v2:session:...`. The default `DefaultCacheKeyStrategy` returns the key
 unchanged, so this only applies if you install one that rewrites. When you do, configure the prefixes as the strategy
 spells them (`AddKeyMasking("v2:session:")`), or register a policy of your own that recognizes both.
 

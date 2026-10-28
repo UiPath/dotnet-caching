@@ -12,7 +12,7 @@ public class UiPathDistributedCacheOptions
     /// Composes the storage key from the caller key. Null applies
     /// <see cref="PrefixCacheKeyStrategy"/> with the prefix <c>"d"</c>, which is what keeps a
     /// distributed entry out of reach of the application's own <see cref="ICache"/>/<see cref="IHashCache"/>
-    /// — including the local lock keyspace, which the memory tiers key by provider name plus cache key.
+    /// — including the local tiers, which key by provider name plus cache key.
     /// Replacing it makes that separation yours to preserve; <see cref="DefaultCacheKeyStrategy"/> opts out
     /// of prefixing entirely.
     /// </summary>
