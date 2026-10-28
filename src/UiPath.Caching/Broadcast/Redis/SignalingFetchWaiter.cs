@@ -6,6 +6,9 @@ internal sealed class SignalingFetchWaiter(TimeSpan pollInterval, TimeSpan? noti
     private volatile bool _disposed;
     private volatile bool _notifyLive;
 
+    /// <summary>Whether the doorbell is live, so a wait lasts the notified interval.</summary>
+    internal bool NotifyLive => _notifyLive;
+
     public Task WaitAsync(CancellationToken cancellationToken) =>
         WaitAsync(_notifyLive && notifiedPollInterval is { } notified ? notified : pollInterval, cancellationToken);
 

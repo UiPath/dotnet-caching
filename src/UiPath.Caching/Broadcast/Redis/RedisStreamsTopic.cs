@@ -97,6 +97,9 @@ public sealed partial class RedisStreamsTopic<T> : ITopic<T>
 
     internal TimeSpan DoorbellSpacing { get; set; }
 
+    /// <summary>Whether this topic's doorbell subscription is live.</summary>
+    internal bool NotifyLive => _waiter.NotifyLive;
+
     public IDisposable Subscribe(IObserver<T> observer)
     {
         this.ThrowIfDisposed(_disposed);
