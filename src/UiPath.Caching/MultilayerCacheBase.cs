@@ -24,6 +24,7 @@ public abstract partial class MultilayerCacheBase : IDisposable
     private protected readonly InFlight<InFlightKey, object?> _innerReads = new();
     private protected readonly KeyMasker _masker;
     private protected readonly BackgroundWrites _background;
+    private protected readonly InnerTier _innerTier;
 
     // Hardcoded fallback values for the lock fields. Merged in as the lowest-priority policy
     // (after provider-specific + user DefaultCachePolicy) so every cache instance has a fully
@@ -68,6 +69,7 @@ public abstract partial class MultilayerCacheBase : IDisposable
         IKeyMaskingPolicy? keyMaskingPolicy = null)
     {
         ArgumentNullException.ThrowIfNull(clock);
+        _innerTier = InnerTier.For(innerCache, multiLayerCacheOptions);
         _masker = KeyMasker.For(keyMaskingPolicy, cacheName);
         _logger = logger;
         _multiLayerCacheOptions = multiLayerCacheOptions;
@@ -88,7 +90,7 @@ public abstract partial class MultilayerCacheBase : IDisposable
         }
 
         _background = new BackgroundWrites(
-            innerCache is NullCache or NullHashCache ? 0 : Math.Max(0, redisOptions?.MaxBackgroundWrites ?? InMemoryRedisCacheOptions.DefaultMaxBackgroundWrites),
+            _innerTier.IsShared ? Math.Max(0, redisOptions?.MaxBackgroundWrites ?? InMemoryRedisCacheOptions.DefaultMaxBackgroundWrites) : 0,
             drainTimeout,
             cacheName,
             logger,
@@ -100,7 +102,7 @@ public abstract partial class MultilayerCacheBase : IDisposable
         _topicProvider = topicFactory.Get(_multiLayerCacheOptions.Topic);
         _eventPublisher = new CacheEventPublisher(cacheName, _topicProvider, cacheEventFactory, logger, _masker);
         var connectionMonitorEnabled = multiLayerCacheOptions.ConnectionMonitorEnabled ?? cacheOptions.ConnectionMonitorEnabled;
-        _connectionState = connectionMonitorEnabled ? GetConnectionMonitor(innerCache, _topicProvider) : NullConnectionStateMonitor.Instance;
+        _connectionState = connectionMonitorEnabled ? GetConnectionMonitor(_innerTier.Connection, _topicProvider) : NullConnectionStateMonitor.Instance;
         _useLocalOnlyWhenDisconnected = (multiLayerCacheOptions.UseLocalOnlyWhenDisconnected ?? true) && connectionMonitorEnabled;
         _clearLocalOnReconnect = (multiLayerCacheOptions.ClearLocalOnReconnect ?? true) && connectionMonitorEnabled;
         _distributedLock = distributedLock;
@@ -386,7 +388,7 @@ public abstract partial class MultilayerCacheBase : IDisposable
     private static TimeSpan NonNegativeOrFallback(TimeSpan? value, TimeSpan fallback) =>
         value is { } v && v >= TimeSpan.Zero ? v : fallback;
 
-    private IConnectionState GetConnectionMonitor(params object[] connectionStates)
+    private IConnectionState GetConnectionMonitor(params object?[] connectionStates)
     {
         var lst = connectionStates.OfType<IConnectionState>().ToArray();
         return lst.Length == 0 ? NullConnectionStateMonitor.Instance : new ConnectionStateMonitor(Telemetry, _multiLayerCacheOptions.ConnectionMonitorPeriod ?? TimeSpan.FromSeconds(5), lst);

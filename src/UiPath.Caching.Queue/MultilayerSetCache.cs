@@ -6,6 +6,7 @@ internal sealed class MultilayerSetCache : ISetCache
 {
     private readonly string _name;
     private readonly ISetCache _inner;
+    private readonly bool _sharedInner;
     private readonly IMemoryCache _memoryCache;
     private readonly MemorySetCache _memorySetCache;
     private readonly TimeSpan? _localMaxExpiration;
@@ -30,6 +31,7 @@ internal sealed class MultilayerSetCache : ISetCache
         ArgumentNullException.ThrowIfNull(options);
         _name = name;
         _inner = inner;
+        _sharedInner = inner is not NullSetCache;
         _clock = clock;
         _memoryCache = memoryCacheFactory.Get(options);
         _memorySetCache = new MemorySetCache(_memoryCache, serializer, options, _clock);
@@ -232,15 +234,15 @@ internal sealed class MultilayerSetCache : ISetCache
         return await InternalAddAsync(cacheKey, Materialize(items), expiration, policy, token).ConfigureAwait(false);
     }
 
-    private bool GetInnerCacheDisconnected() => _inner is NullSetCache || (_useLocalOnlyWhenDisconnected && !_connectionState.IsConnected);
+    private bool GetInnerCacheDisconnected() => !_sharedInner || (_useLocalOnlyWhenDisconnected && !_connectionState.IsConnected);
 
     private DateTimeOffset? LocalWriteExpiration(DateTimeOffset? requested, CachePolicy? policy)
     {
         // Memory-only this is the whole answer, so the floor applies here; with a Redis inner it only caps L1.
         requested ??= FromTtl(policy?.DistributedExpiration
             ?? _defaultExpiration
-            ?? (_inner is NullSetCache ? CachePolicy.DefaultDistributedExpiration : null));
-        return _inner is NullSetCache ? requested : DisconnectedExpiration(requested);
+            ?? (!_sharedInner ? CachePolicy.DefaultDistributedExpiration : null));
+        return !_sharedInner ? requested : DisconnectedExpiration(requested);
     }
 
     private async ValueTask<bool> InternalAddAsync<T>(CacheKey cacheKey, T item, CachePolicy? policy, CancellationToken token)
@@ -273,7 +275,7 @@ internal sealed class MultilayerSetCache : ISetCache
 
     /// <summary>This provider's <see cref="IMultilayerSetCacheOptions.DefaultExpiration"/> as the L2 write deadline when neither the caller nor the policy named one. Memory-only, the inner is a no-op and the local tier resolves it.</summary>
     private DateTimeOffset? ConfiguredWriteExpiration(CachePolicy? policy) =>
-        _inner is not NullSetCache && policy?.DistributedExpiration is null && _defaultExpiration is { } configured
+        _sharedInner && policy?.DistributedExpiration is null && _defaultExpiration is { } configured
             ? _clock.ToDateTimeOffset(configured)
             : null;
 

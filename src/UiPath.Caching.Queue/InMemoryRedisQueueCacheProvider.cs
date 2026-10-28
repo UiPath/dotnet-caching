@@ -50,6 +50,9 @@ public sealed class InMemoryRedisQueueCacheProvider : IQueueCacheProvider
         }
     }
 
-    private MultilayerSetCache BuildSetCache() =>
-        new(Name, _queueCacheFactory.Value.CreateSetCache(KnownCacheProviderNames.Redis), _memoryCacheFactory, _serializer, _options, _clock);
+    private MultilayerSetCache BuildSetCache()
+    {
+        var inner = _queueCacheFactory.Value.CreateSetCache(KnownCacheProviderNames.Redis);
+        return new(Name, inner, _memoryCacheFactory, _serializer, _options, _clock);
+    }
 }

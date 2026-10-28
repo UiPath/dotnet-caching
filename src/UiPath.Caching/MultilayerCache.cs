@@ -9,6 +9,7 @@ namespace UiPath.Caching;
 internal sealed partial class MultilayerCache : MultilayerCacheBase, ICache, ISpanKeyCache
 {
     private readonly ICache _innerCache;
+    private readonly bool _sharedInner;
     private readonly InFlight<InFlightKey, object?> _generations = new();
     private readonly Lock _batchReserveGate = new();
     private readonly CacheEntryBuilder _entryBuilder;
@@ -38,14 +39,15 @@ internal sealed partial class MultilayerCache : MultilayerCacheBase, ICache, ISp
         _entryBuilder = new CacheEntryBuilder(cacheKeyStrategy, topicKeyStrategy, _clock);
         _localMemorySetter = new LocalMemorySetter(cacheName, changeTokenFactory, _topicProvider, _memoryCache, logger, _clock, _multiLayerCacheOptions, memoryCacheOptions, telemetryProvider, _masker, !_clearLocalOnReconnect)
         {
-            Invalidations = innerCache as IInvalidationSink,
+            Invalidations = _innerTier.Invalidations,
         };
+        _sharedInner = _innerTier.IsShared;
     }
 
-    /// <summary>Runs and inner reads still in the tables; tests check they drain once callers are done.</summary>
     /// <summary>The tier told of received invalidations: the inner cache when it tracks them; tests check the wiring.</summary>
     internal IInvalidationSink? Invalidations => _localMemorySetter.Invalidations;
 
+    /// <summary>Runs and inner reads still in the tables; tests check they drain once callers are done.</summary>
     internal int RunsInFlight => _innerReads.Count + _generations.Count + _background.InFlight;
 
     [OverloadResolutionPriority(1)]

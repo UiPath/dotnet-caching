@@ -14,7 +14,7 @@ internal sealed class HashLocalMemorySetter(
     bool ignoreSubscriptionGaps = false)
     : MemoryCacheSetter(cacheName, changeTokenFactory, topicProvider, memoryCache, logger, clock, cacheOptions, memoryCacheOptions, telemetryProvider, masker, ignoreSubscriptionGaps)
 {
-    internal Func<RefreshMetadataState, PeerUpdate, bool>? PeerApply { get; set; }
+    internal Func<RefreshMetadataState, PeerUpdate, bool>? PeerApply { get; init; }
 
     protected override bool AppliesPeerUpdates => PeerApply is not null;
 
