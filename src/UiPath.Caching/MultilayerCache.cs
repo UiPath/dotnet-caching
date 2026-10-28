@@ -5,7 +5,7 @@ using UiPath.Caching.Telemetry;
 
 namespace UiPath.Caching;
 
-internal sealed partial class MultilayerCache : MultilayerCacheBase, ICache, ISpanKeyCache, IStatefulCache, IGeneratedExpirationCache, IStatefulGeneratedExpirationCache, IBatchArgumentCache
+internal sealed partial class MultilayerCache : MultilayerCacheBase, ICache, ISpanKeyCache
 {
     private readonly ICache _innerCache;
     private readonly InFlight<InFlightKey, object?> _innerReads = new();
@@ -440,6 +440,14 @@ internal sealed partial class MultilayerCache : MultilayerCacheBase, ICache, ISp
             : await _innerCache.TimeToLiveAsync<T>(cacheEntryOptions.CacheKey, token);
     }
 
+    public ValueTask<TimeSpan?> TimeToLiveAsync<T>(Span<char> cacheKey, CancellationToken token = default)
+    {
+        NotCacheableException.ThrowIfNotCacheable<T>();
+        return !token.IsCancellationRequested && TryGetLocal<T>(cacheKey, token, out var local)
+            ? new ValueTask<TimeSpan?>(local.Expiration.Subtract(_clock.GetUtcNow()))
+            : TimeToLiveAsync<T>(new CacheKey(cacheKey), token);
+    }
+
     public async ValueTask<DateTimeOffset?> ExpireTimeAsync<T>(CacheKey cacheKey, CancellationToken token = default)
     {
         NotCacheableException.ThrowIfNotCacheable<T>();
@@ -448,6 +456,14 @@ internal sealed partial class MultilayerCache : MultilayerCacheBase, ICache, ISp
         return _memoryCache.TryGetValue<ICacheEntry>(cacheEntryOptions.CacheKey.Name, out var value)
             ? value?.Expiration
             : await _innerCache.ExpireTimeAsync<T>(cacheEntryOptions.CacheKey, token);
+    }
+
+    public ValueTask<DateTimeOffset?> ExpireTimeAsync<T>(Span<char> cacheKey, CancellationToken token = default)
+    {
+        NotCacheableException.ThrowIfNotCacheable<T>();
+        return !token.IsCancellationRequested && TryGetLocal<T>(cacheKey, token, out var local)
+            ? new ValueTask<DateTimeOffset?>(local.Expiration)
+            : ExpireTimeAsync<T>(new CacheKey(cacheKey), token);
     }
 
     private static async ValueTask<ICacheEntry<T?>> EntryOfAsync<T>(ValueTask<object?> pending) =>
@@ -2263,11 +2279,4 @@ internal sealed partial class MultilayerCache : MultilayerCacheBase, ICache, ISp
     private sealed record BatchRun(int Index, IInFlightReservation<object?> Run);
 
     private sealed record BatchJoin<T>(int Index, InFlight<InFlightKey, object?>.Joined Join, Task<ICacheEntry<T?>> Run);
-
-    private static class DirectBatch<T, TState>
-        where TState : notnull
-    {
-        public static readonly Func<Func<TState[], CancellationToken, Task<KeyValuePair<TState, T?>[]>>, TState[], CancellationToken, Task<KeyValuePair<TState, T?>[]>> Invoke =
-            static (generator, states, token) => generator(states, token);
-    }
 }

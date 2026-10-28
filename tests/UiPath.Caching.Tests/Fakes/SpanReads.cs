@@ -122,6 +122,90 @@ internal static class SpanReads
         return Complete(cache.GetOrAddAsync(buffer[..key.Length], generator, token));
     }
 
+    public static IDictionary<string, T?> ReadFields<T>(IHashCache cache, string key, string[] fields, CancellationToken token = default)
+    {
+        Span<char> buffer = stackalloc char[512];
+        key.AsSpan().CopyTo(buffer);
+        return Complete(cache.GetAsync<T>(buffer[..key.Length], fields, policy: null, token));
+    }
+
+    public static IDictionary<string, T?> ReadFields<T>(IHashCache<T> cache, string key, string[] fields, CancellationToken token = default)
+    {
+        Span<char> buffer = stackalloc char[512];
+        key.AsSpan().CopyTo(buffer);
+        return Complete(cache.GetAsync(buffer[..key.Length], fields, token));
+    }
+
+    public static TimeSpan? TimeToLive<T>(ICache cache, string key, CancellationToken token = default)
+    {
+        Span<char> buffer = stackalloc char[512];
+        key.AsSpan().CopyTo(buffer);
+        return Complete(cache.TimeToLiveAsync<T>(buffer[..key.Length], token));
+    }
+
+    public static DateTimeOffset? ExpireTime<T>(ICache cache, string key, CancellationToken token = default)
+    {
+        Span<char> buffer = stackalloc char[512];
+        key.AsSpan().CopyTo(buffer);
+        return Complete(cache.ExpireTimeAsync<T>(buffer[..key.Length], token));
+    }
+
+    public static TimeSpan? TimeToLive<T>(ICache<T> cache, string key, CancellationToken token = default)
+    {
+        Span<char> buffer = stackalloc char[512];
+        key.AsSpan().CopyTo(buffer);
+        return Complete(cache.TimeToLiveAsync(buffer[..key.Length], token));
+    }
+
+    public static DateTimeOffset? ExpireTime<T>(ICache<T> cache, string key, CancellationToken token = default)
+    {
+        Span<char> buffer = stackalloc char[512];
+        key.AsSpan().CopyTo(buffer);
+        return Complete(cache.ExpireTimeAsync(buffer[..key.Length], token));
+    }
+
+    public static TimeSpan? TimeToLive<T>(IHashCache cache, string key, CancellationToken token = default)
+    {
+        Span<char> buffer = stackalloc char[512];
+        key.AsSpan().CopyTo(buffer);
+        return Complete(cache.TimeToLiveAsync<T>(buffer[..key.Length], token));
+    }
+
+    public static DateTimeOffset? ExpireTime<T>(IHashCache cache, string key, CancellationToken token = default)
+    {
+        Span<char> buffer = stackalloc char[512];
+        key.AsSpan().CopyTo(buffer);
+        return Complete(cache.ExpireTimeAsync<T>(buffer[..key.Length], token));
+    }
+
+    public static TimeSpan? TimeToLive<T>(IHashCache<T> cache, string key, CancellationToken token = default)
+    {
+        Span<char> buffer = stackalloc char[512];
+        key.AsSpan().CopyTo(buffer);
+        return Complete(cache.TimeToLiveAsync(buffer[..key.Length], token));
+    }
+
+    public static DateTimeOffset? ExpireTime<T>(IHashCache<T> cache, string key, CancellationToken token = default)
+    {
+        Span<char> buffer = stackalloc char[512];
+        key.AsSpan().CopyTo(buffer);
+        return Complete(cache.ExpireTimeAsync(buffer[..key.Length], token));
+    }
+
+    public static IDictionary<string, string?>? Metadata<T>(IHashCache cache, string key, CancellationToken token = default)
+    {
+        Span<char> buffer = stackalloc char[512];
+        key.AsSpan().CopyTo(buffer);
+        return Complete(cache.GetMetadataAsync<T>(buffer[..key.Length], token));
+    }
+
+    public static IDictionary<string, string?>? Metadata<T>(IHashCache<T> cache, string key, CancellationToken token = default)
+    {
+        Span<char> buffer = stackalloc char[512];
+        key.AsSpan().CopyTo(buffer);
+        return Complete(cache.GetMetadataAsync(buffer[..key.Length], token));
+    }
+
     public static TResult Complete<TResult>(ValueTask<TResult> read) =>
         read.IsCompletedSuccessfully ? read.Result : read.AsTask().GetAwaiter().GetResult();
 }

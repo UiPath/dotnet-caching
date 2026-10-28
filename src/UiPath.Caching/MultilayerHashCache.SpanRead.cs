@@ -17,6 +17,27 @@ internal sealed partial class MultilayerHashCache
         return false;
     }
 
+    /// <summary>The fields from a local entry, matched ignoring case; the one filter for span and <see cref="CacheKey"/> reads.</summary>
+    private static IDictionary<string, T?> SelectFields<T>(IDictionary<string, T?> values, string[]? fields)
+    {
+        if (fields == null)
+        {
+            return values;
+        }
+
+        var wanted = fields.ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var selected = ImmutableDictionary.CreateBuilder<string, T?>();
+        foreach (var (field, value) in values)
+        {
+            if (wanted.Contains(field))
+            {
+                selected.Add(field, value);
+            }
+        }
+
+        return selected.ToImmutable();
+    }
+
     /// <inheritdoc cref="MultilayerCache.TryGetLocal{T}(ReadOnlySpan{char}, CancellationToken, out ICacheEntry{T})"/>
     private bool TryGetLocal<T>(ReadOnlySpan<char> cacheKey, [MaybeNullWhen(false)] out ICacheEntry<IDictionary<string, T?>> entry)
     {

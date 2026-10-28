@@ -97,62 +97,31 @@ public interface ICache : IDisposable
             ? spanKeyCache.GetOrAddAsync(cacheKey, state, generator, expiration, policy, token)
             : GetOrAddAsync(new CacheKey(cacheKey), state, generator, expiration, policy, token);
 
-    /// <inheritdoc cref="IStatefulCache.GetOrAddAsync{T, TState}(CacheKey, TState, Func{TState, CancellationToken, Task{T}}, CachePolicy, CancellationToken)"/>
-    sealed ValueTask<T?> GetOrAddAsync<T, TState>(CacheKey cacheKey, TState state, Func<TState, CancellationToken, Task<T?>> generator, CachePolicy? policy, CancellationToken token = default)
-    {
-        ArgumentNullException.ThrowIfNull(generator);
-        return this is IStatefulCache stateful
-            ? stateful.GetOrAddAsync(cacheKey, state, generator, policy, token)
-            : GetOrAddAsync(cacheKey, StatefulCacheExtensions.Bind(state, generator), policy, token);
-    }
+    /// <summary>Reads, and on a miss runs <paramref name="generator"/> with <paramref name="state"/> as <see cref="GetOrAddAsync{T}(CacheKey, Func{CancellationToken, Task{T}}, CachePolicy, CancellationToken)"/> runs its generator; a hit allocates no closure.</summary>
+    ValueTask<T?> GetOrAddAsync<T, TState>(CacheKey cacheKey, TState state, Func<TState, CancellationToken, Task<T?>> generator, CachePolicy? policy, CancellationToken token = default);
 
-    /// <inheritdoc cref="IStatefulCache.GetOrAddAsync{T, TState}(CacheKey, TState, Func{TState, CancellationToken, Task{T}}, CachePolicy, CancellationToken)"/>
-    sealed ValueTask<T?> GetOrAddAsync<T, TState>(CacheKey cacheKey, TState state, Func<TState, CancellationToken, Task<T?>> generator, TimeSpan expiration, CachePolicy? policy, CancellationToken token = default)
-    {
-        ArgumentNullException.ThrowIfNull(generator);
-        return this is IStatefulCache stateful
-            ? stateful.GetOrAddAsync(cacheKey, state, generator, expiration, policy, token)
-            : GetOrAddAsync(cacheKey, StatefulCacheExtensions.Bind(state, generator), expiration, policy, token);
-    }
+    /// <inheritdoc cref="GetOrAddAsync{T, TState}(CacheKey, TState, Func{TState, CancellationToken, Task{T}}, CachePolicy, CancellationToken)"/>
+    ValueTask<T?> GetOrAddAsync<T, TState>(CacheKey cacheKey, TState state, Func<TState, CancellationToken, Task<T?>> generator, TimeSpan expiration, CachePolicy? policy, CancellationToken token = default);
 
-    /// <inheritdoc cref="IStatefulCache.GetOrAddAsync{T, TState}(CacheKey, TState, Func{TState, CancellationToken, Task{T}}, CachePolicy, CancellationToken)"/>
-    sealed ValueTask<T?> GetOrAddAsync<T, TState>(CacheKey cacheKey, TState state, Func<TState, CancellationToken, Task<T?>> generator, DateTimeOffset expiration, CachePolicy? policy, CancellationToken token = default)
-    {
-        ArgumentNullException.ThrowIfNull(generator);
-        return this is IStatefulCache stateful
-            ? stateful.GetOrAddAsync(cacheKey, state, generator, expiration, policy, token)
-            : GetOrAddAsync(cacheKey, StatefulCacheExtensions.Bind(state, generator), expiration, policy, token);
-    }
+    /// <inheritdoc cref="GetOrAddAsync{T, TState}(CacheKey, TState, Func{TState, CancellationToken, Task{T}}, CachePolicy, CancellationToken)"/>
+    ValueTask<T?> GetOrAddAsync<T, TState>(CacheKey cacheKey, TState state, Func<TState, CancellationToken, Task<T?>> generator, DateTimeOffset expiration, CachePolicy? policy, CancellationToken token = default);
 
-    /// <inheritdoc cref="IBatchArgumentCache.GetOrAddAsync{T, TState, TArgument}(KeyValuePair{CacheKey, TState}[], TArgument, Func{TArgument, TState[], CancellationToken, Task{KeyValuePair{TState, T}[]}}, CachePolicy, CancellationToken)"/>
-    sealed ValueTask<KeyValuePair<TState, T?>[]> GetOrAddAsync<T, TState, TArgument>(KeyValuePair<CacheKey, TState>[] entries, TArgument argument, Func<TArgument, TState[], CancellationToken, Task<KeyValuePair<TState, T?>[]>> generator, CachePolicy? policy, CancellationToken token = default)
-        where TState : notnull
-    {
-        ArgumentNullException.ThrowIfNull(generator);
-        return this is IBatchArgumentCache capable
-            ? capable.GetOrAddAsync(entries, argument, generator, policy, token)
-            : GetOrAddAsync(entries, StatefulCacheExtensions.BindBatch(argument, generator), policy, token);
-    }
+    /// <summary>Reads the entries, and for the keys that missed runs <paramref name="generator"/> once with <paramref name="argument"/> and their states, as the batch overload does; the argument lets a static lambda need no closure.</summary>
+    /// <param name="entries">The keys, each with its own state, as in the batch overload.</param>
+    /// <param name="argument">One value for the whole call, passed to <paramref name="generator"/> before the states; not a per-entry state.</param>
+    /// <param name="generator">Receives <paramref name="argument"/> and the states of the keys that missed.</param>
+    /// <param name="policy">The policy, as in the batch overload.</param>
+    /// <param name="token">The cancellation token.</param>
+    ValueTask<KeyValuePair<TState, T?>[]> GetOrAddAsync<T, TState, TArgument>(KeyValuePair<CacheKey, TState>[] entries, TArgument argument, Func<TArgument, TState[], CancellationToken, Task<KeyValuePair<TState, T?>[]>> generator, CachePolicy? policy, CancellationToken token = default)
+        where TState : notnull;
 
-    /// <inheritdoc cref="IBatchArgumentCache.GetOrAddAsync{T, TState, TArgument}(KeyValuePair{CacheKey, TState}[], TArgument, Func{TArgument, TState[], CancellationToken, Task{KeyValuePair{TState, T}[]}}, CachePolicy, CancellationToken)"/>
-    sealed ValueTask<KeyValuePair<TState, T?>[]> GetOrAddAsync<T, TState, TArgument>(KeyValuePair<CacheKey, TState>[] entries, TArgument argument, Func<TArgument, TState[], CancellationToken, Task<KeyValuePair<TState, T?>[]>> generator, TimeSpan expiration, CachePolicy? policy, CancellationToken token = default)
-        where TState : notnull
-    {
-        ArgumentNullException.ThrowIfNull(generator);
-        return this is IBatchArgumentCache capable
-            ? capable.GetOrAddAsync(entries, argument, generator, expiration, policy, token)
-            : GetOrAddAsync(entries, StatefulCacheExtensions.BindBatch(argument, generator), expiration, policy, token);
-    }
+    /// <inheritdoc cref="GetOrAddAsync{T, TState, TArgument}(KeyValuePair{CacheKey, TState}[], TArgument, Func{TArgument, TState[], CancellationToken, Task{KeyValuePair{TState, T}[]}}, CachePolicy, CancellationToken)"/>
+    ValueTask<KeyValuePair<TState, T?>[]> GetOrAddAsync<T, TState, TArgument>(KeyValuePair<CacheKey, TState>[] entries, TArgument argument, Func<TArgument, TState[], CancellationToken, Task<KeyValuePair<TState, T?>[]>> generator, TimeSpan expiration, CachePolicy? policy, CancellationToken token = default)
+        where TState : notnull;
 
-    /// <inheritdoc cref="IBatchArgumentCache.GetOrAddAsync{T, TState, TArgument}(KeyValuePair{CacheKey, TState}[], TArgument, Func{TArgument, TState[], CancellationToken, Task{KeyValuePair{TState, T}[]}}, CachePolicy, CancellationToken)"/>
-    sealed ValueTask<KeyValuePair<TState, T?>[]> GetOrAddAsync<T, TState, TArgument>(KeyValuePair<CacheKey, TState>[] entries, TArgument argument, Func<TArgument, TState[], CancellationToken, Task<KeyValuePair<TState, T?>[]>> generator, DateTimeOffset expiration, CachePolicy? policy, CancellationToken token = default)
-        where TState : notnull
-    {
-        ArgumentNullException.ThrowIfNull(generator);
-        return this is IBatchArgumentCache capable
-            ? capable.GetOrAddAsync(entries, argument, generator, expiration, policy, token)
-            : GetOrAddAsync(entries, StatefulCacheExtensions.BindBatch(argument, generator), expiration, policy, token);
-    }
+    /// <inheritdoc cref="GetOrAddAsync{T, TState, TArgument}(KeyValuePair{CacheKey, TState}[], TArgument, Func{TArgument, TState[], CancellationToken, Task{KeyValuePair{TState, T}[]}}, CachePolicy, CancellationToken)"/>
+    ValueTask<KeyValuePair<TState, T?>[]> GetOrAddAsync<T, TState, TArgument>(KeyValuePair<CacheKey, TState>[] entries, TArgument argument, Func<TArgument, TState[], CancellationToken, Task<KeyValuePair<TState, T?>[]>> generator, DateTimeOffset expiration, CachePolicy? policy, CancellationToken token = default)
+        where TState : notnull;
 
     ValueTask<bool> RemoveAsync<T>(CacheKey cacheKey, CancellationToken token = default);
 
@@ -231,6 +200,12 @@ public interface ICache : IDisposable
     ValueTask<bool> TryAddAsync<T>(CacheKey cacheKey, T? value, CachePolicy? policy, CancellationToken token = default);
 
     /// <inheritdoc cref="TryAddAsync{T}(CacheKey, T, CachePolicy, CancellationToken)"/>
+    /// <remarks>Builds the key from the text, normalized as <c>new CacheKey(text)</c> normalizes it.</remarks>
+    [OverloadResolutionPriority(-1)]
+    sealed ValueTask<bool> TryAddAsync<T>(Span<char> cacheKey, T? value, CachePolicy? policy, CancellationToken token = default) =>
+        TryAddAsync(new CacheKey(cacheKey), value, policy, token);
+
+    /// <inheritdoc cref="TryAddAsync{T}(CacheKey, T, CachePolicy, CancellationToken)"/>
     /// <param name="expiration">
     /// Lifetime of the entry if it is created, applied by the same atomic command. Must be a
     /// positive duration; to inherit <c>CachePolicy.DistributedExpiration</c> and then the cache
@@ -240,13 +215,43 @@ public interface ICache : IDisposable
     ValueTask<bool> TryAddAsync<T>(CacheKey cacheKey, T? value, TimeSpan expiration, CachePolicy? policy, CancellationToken token = default);
 
     /// <inheritdoc cref="TryAddAsync{T}(CacheKey, T, TimeSpan, CachePolicy, CancellationToken)"/>
+    /// <remarks>Builds the key from the text, normalized as <c>new CacheKey(text)</c> normalizes it.</remarks>
+    [OverloadResolutionPriority(-1)]
+    sealed ValueTask<bool> TryAddAsync<T>(Span<char> cacheKey, T? value, TimeSpan expiration, CachePolicy? policy, CancellationToken token = default) =>
+        TryAddAsync(new CacheKey(cacheKey), value, expiration, policy, token);
+
+    /// <inheritdoc cref="TryAddAsync{T}(CacheKey, T, TimeSpan, CachePolicy, CancellationToken)"/>
     ValueTask<bool> TryAddAsync<T>(CacheKey cacheKey, T? value, DateTimeOffset expiration, CachePolicy? policy, CancellationToken token = default);
+
+    /// <inheritdoc cref="TryAddAsync{T}(CacheKey, T, DateTimeOffset, CachePolicy, CancellationToken)"/>
+    /// <remarks>Builds the key from the text, normalized as <c>new CacheKey(text)</c> normalizes it.</remarks>
+    [OverloadResolutionPriority(-1)]
+    sealed ValueTask<bool> TryAddAsync<T>(Span<char> cacheKey, T? value, DateTimeOffset expiration, CachePolicy? policy, CancellationToken token = default) =>
+        TryAddAsync(new CacheKey(cacheKey), value, expiration, policy, token);
 
     ValueTask<bool> RefreshAsync<T>(CacheKey cacheKey, CachePolicy? policy, CancellationToken token = default);
 
+    /// <inheritdoc cref="RefreshAsync{T}(CacheKey, CachePolicy, CancellationToken)"/>
+    /// <remarks>Builds the key from the text, normalized as <c>new CacheKey(text)</c> normalizes it.</remarks>
+    [OverloadResolutionPriority(-1)]
+    sealed ValueTask<bool> RefreshAsync<T>(Span<char> cacheKey, CachePolicy? policy, CancellationToken token = default) =>
+        RefreshAsync<T>(new CacheKey(cacheKey), policy, token);
+
     ValueTask<bool> RefreshAsync<T>(CacheKey cacheKey, TimeSpan expiration, CachePolicy? policy, CancellationToken token = default);
 
+    /// <inheritdoc cref="RefreshAsync{T}(CacheKey, TimeSpan, CachePolicy, CancellationToken)"/>
+    /// <remarks>Builds the key from the text, normalized as <c>new CacheKey(text)</c> normalizes it.</remarks>
+    [OverloadResolutionPriority(-1)]
+    sealed ValueTask<bool> RefreshAsync<T>(Span<char> cacheKey, TimeSpan expiration, CachePolicy? policy, CancellationToken token = default) =>
+        RefreshAsync<T>(new CacheKey(cacheKey), expiration, policy, token);
+
     ValueTask<bool> RefreshAsync<T>(CacheKey cacheKey, DateTimeOffset expiration, CachePolicy? policy, CancellationToken token = default);
+
+    /// <inheritdoc cref="RefreshAsync{T}(CacheKey, DateTimeOffset, CachePolicy, CancellationToken)"/>
+    /// <remarks>Builds the key from the text, normalized as <c>new CacheKey(text)</c> normalizes it.</remarks>
+    [OverloadResolutionPriority(-1)]
+    sealed ValueTask<bool> RefreshAsync<T>(Span<char> cacheKey, DateTimeOffset expiration, CachePolicy? policy, CancellationToken token = default) =>
+        RefreshAsync<T>(new CacheKey(cacheKey), expiration, policy, token);
 
     ValueTask<bool> ContainsAsync<T>(CacheKey cacheKey, CancellationToken token = default);
 
@@ -259,23 +264,27 @@ public interface ICache : IDisposable
 
     ValueTask<TimeSpan?> TimeToLiveAsync<T>(CacheKey cacheKey, CancellationToken token = default);
 
+    /// <inheritdoc cref="ISpanKeyCache.GetAsync{T}(Span{char}, CachePolicy, CancellationToken)"/>
+    [OverloadResolutionPriority(-1)]
+    sealed ValueTask<TimeSpan?> TimeToLiveAsync<T>(Span<char> cacheKey, CancellationToken token = default) =>
+        this is ISpanKeyCache spanKeyCache
+            ? spanKeyCache.TimeToLiveAsync<T>(cacheKey, token)
+            : TimeToLiveAsync<T>(new CacheKey(cacheKey), token);
+
     ValueTask<DateTimeOffset?> ExpireTimeAsync<T>(CacheKey cacheKey, CancellationToken token = default);
 
-    /// <inheritdoc cref="IGeneratedExpirationCache.GetOrAddWithExpirationAsync{T}(CacheKey, Func{CancellationToken, Task{GeneratedValue{T}}}, CachePolicy, CancellationToken)"/>
-    /// <remarks>On a cache that does not implement <see cref="IGeneratedExpirationCache"/>, reads, and on a miss runs the generator and sets its value, without coalescing.</remarks>
-    sealed ValueTask<T?> GetOrAddWithExpirationAsync<T>(CacheKey cacheKey, Func<CancellationToken, Task<GeneratedValue<T>>> generator, CachePolicy? policy, CancellationToken token = default) =>
-        this is IGeneratedExpirationCache capable
-            ? capable.GetOrAddWithExpirationAsync(cacheKey, generator, policy, token)
-            : GeneratedExpirationExtensions.ReadThenSetAsync(this, cacheKey, generator, policy, token);
+    /// <inheritdoc cref="ISpanKeyCache.GetAsync{T}(Span{char}, CachePolicy, CancellationToken)"/>
+    [OverloadResolutionPriority(-1)]
+    sealed ValueTask<DateTimeOffset?> ExpireTimeAsync<T>(Span<char> cacheKey, CancellationToken token = default) =>
+        this is ISpanKeyCache spanKeyCache
+            ? spanKeyCache.ExpireTimeAsync<T>(cacheKey, token)
+            : ExpireTimeAsync<T>(new CacheKey(cacheKey), token);
 
-    /// <inheritdoc cref="IStatefulGeneratedExpirationCache.GetOrAddWithExpirationAsync{T, TState}(CacheKey, TState, Func{TState, CancellationToken, Task{GeneratedValue{T}}}, CachePolicy, CancellationToken)"/>
-    sealed ValueTask<T?> GetOrAddWithExpirationAsync<T, TState>(CacheKey cacheKey, TState state, Func<TState, CancellationToken, Task<GeneratedValue<T>>> generator, CachePolicy? policy, CancellationToken token = default)
-    {
-        ArgumentNullException.ThrowIfNull(generator);
-        return this is IStatefulGeneratedExpirationCache stateful
-            ? stateful.GetOrAddWithExpirationAsync(cacheKey, state, generator, policy, token)
-            : GetOrAddWithExpirationAsync(cacheKey, StatefulCacheExtensions.BindGenerated(state, generator), policy, token);
-    }
+    /// <summary>Reads, and on a miss runs <paramref name="generator"/> as <see cref="GetOrAddAsync{T}(CacheKey, Func{CancellationToken, Task{T}}, CachePolicy, CancellationToken)"/> does, storing the value until the expiration it returns; an expiration that has already passed stores nothing.</summary>
+    ValueTask<T?> GetOrAddWithExpirationAsync<T>(CacheKey cacheKey, Func<CancellationToken, Task<GeneratedValue<T>>> generator, CachePolicy? policy, CancellationToken token = default);
+
+    /// <summary>Reads, and on a miss runs <paramref name="generator"/> with <paramref name="state"/>, storing the value until the expiration it returns.</summary>
+    ValueTask<T?> GetOrAddWithExpirationAsync<T, TState>(CacheKey cacheKey, TState state, Func<TState, CancellationToken, Task<GeneratedValue<T>>> generator, CachePolicy? policy, CancellationToken token = default);
 
     /// <inheritdoc cref="ISpanKeyCache.GetOrAddWithExpirationAsync{T}(Span{char}, Func{CancellationToken, Task{GeneratedValue{T}}}, CachePolicy, CancellationToken)"/>
     [OverloadResolutionPriority(-1)]

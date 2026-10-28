@@ -3,9 +3,65 @@
 <Suppressions xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xmlns:xsd="http://www.w3.org/2001/XMLSchema">
   <Suppression>
     <DiagnosticId>CP0001</DiagnosticId>
+    <Target>T:UiPath.Caching.IGeneratedExpirationCache</Target>
+    <Left>lib/net10.0/UiPath.Caching.Abstractions.dll</Left>
+    <Right>lib/net10.0/UiPath.Caching.Abstractions.dll</Right>
+    <IsBaselineSuppression>true</IsBaselineSuppression>
+  </Suppression>
+  <Suppression>
+    <DiagnosticId>CP0001</DiagnosticId>
+    <Target>T:UiPath.Caching.IGeneratedExpirationCache`1</Target>
+    <Left>lib/net10.0/UiPath.Caching.Abstractions.dll</Left>
+    <Right>lib/net10.0/UiPath.Caching.Abstractions.dll</Right>
+    <IsBaselineSuppression>true</IsBaselineSuppression>
+  </Suppression>
+  <Suppression>
+    <DiagnosticId>CP0001</DiagnosticId>
+    <Target>T:UiPath.Caching.IStatefulCache</Target>
+    <Left>lib/net10.0/UiPath.Caching.Abstractions.dll</Left>
+    <Right>lib/net10.0/UiPath.Caching.Abstractions.dll</Right>
+    <IsBaselineSuppression>true</IsBaselineSuppression>
+  </Suppression>
+  <Suppression>
+    <DiagnosticId>CP0001</DiagnosticId>
+    <Target>T:UiPath.Caching.IStatefulCache`1</Target>
+    <Left>lib/net10.0/UiPath.Caching.Abstractions.dll</Left>
+    <Right>lib/net10.0/UiPath.Caching.Abstractions.dll</Right>
+    <IsBaselineSuppression>true</IsBaselineSuppression>
+  </Suppression>
+  <Suppression>
+    <DiagnosticId>CP0001</DiagnosticId>
     <Target>T:UiPath.Caching.SpanKeyExtensions</Target>
     <Left>lib/net10.0/UiPath.Caching.Abstractions.dll</Left>
     <Right>lib/net10.0/UiPath.Caching.Abstractions.dll</Right>
+    <IsBaselineSuppression>true</IsBaselineSuppression>
+  </Suppression>
+  <Suppression>
+    <DiagnosticId>CP0001</DiagnosticId>
+    <Target>T:UiPath.Caching.IGeneratedExpirationCache</Target>
+    <Left>lib/net8.0/UiPath.Caching.Abstractions.dll</Left>
+    <Right>lib/net8.0/UiPath.Caching.Abstractions.dll</Right>
+    <IsBaselineSuppression>true</IsBaselineSuppression>
+  </Suppression>
+  <Suppression>
+    <DiagnosticId>CP0001</DiagnosticId>
+    <Target>T:UiPath.Caching.IGeneratedExpirationCache`1</Target>
+    <Left>lib/net8.0/UiPath.Caching.Abstractions.dll</Left>
+    <Right>lib/net8.0/UiPath.Caching.Abstractions.dll</Right>
+    <IsBaselineSuppression>true</IsBaselineSuppression>
+  </Suppression>
+  <Suppression>
+    <DiagnosticId>CP0001</DiagnosticId>
+    <Target>T:UiPath.Caching.IStatefulCache</Target>
+    <Left>lib/net8.0/UiPath.Caching.Abstractions.dll</Left>
+    <Right>lib/net8.0/UiPath.Caching.Abstractions.dll</Right>
+    <IsBaselineSuppression>true</IsBaselineSuppression>
+  </Suppression>
+  <Suppression>
+    <DiagnosticId>CP0001</DiagnosticId>
+    <Target>T:UiPath.Caching.IStatefulCache`1</Target>
+    <Left>lib/net8.0/UiPath.Caching.Abstractions.dll</Left>
+    <Right>lib/net8.0/UiPath.Caching.Abstractions.dll</Right>
     <IsBaselineSuppression>true</IsBaselineSuppression>
   </Suppression>
   <Suppression>
@@ -150,6 +206,13 @@
   </Suppression>
   <Suppression>
     <DiagnosticId>CP0006</DiagnosticId>
+    <Target>M:UiPath.Caching.ICache.ExpireTimeAsync``1(System.Span{System.Char},System.Threading.CancellationToken)</Target>
+    <Left>lib/net10.0/UiPath.Caching.Abstractions.dll</Left>
+    <Right>lib/net10.0/UiPath.Caching.Abstractions.dll</Right>
+    <IsBaselineSuppression>true</IsBaselineSuppression>
+  </Suppression>
+  <Suppression>
+    <DiagnosticId>CP0006</DiagnosticId>
     <Target>M:UiPath.Caching.ICache.GetAsync``1(System.Span{System.Char},UiPath.Caching.CachePolicy,System.Threading.CancellationToken)</Target>
     <Left>lib/net10.0/UiPath.Caching.Abstractions.dll</Left>
     <Right>lib/net10.0/UiPath.Caching.Abstractions.dll</Right>
@@ -276,6 +339,27 @@
   </Suppression>
   <Suppression>
     <DiagnosticId>CP0006</DiagnosticId>
+    <Target>M:UiPath.Caching.ICache.RefreshAsync``1(System.Span{System.Char},System.DateTimeOffset,UiPath.Caching.CachePolicy,System.Threading.CancellationToken)</Target>
+    <Left>lib/net10.0/UiPath.Caching.Abstractions.dll</Left>
+    <Right>lib/net10.0/UiPath.Caching.Abstractions.dll</Right>
+    <IsBaselineSuppression>true</IsBaselineSuppression>
+  </Suppression>
+  <Suppression>
+    <DiagnosticId>CP0006</DiagnosticId>
+    <Target>M:UiPath.Caching.ICache.RefreshAsync``1(System.Span{System.Char},System.TimeSpan,UiPath.Caching.CachePolicy,System.Threading.CancellationToken)</Target>
+    <Left>lib/net10.0/UiPath.Caching.Abstractions.dll</Left>
+    <Right>lib/net10.0/UiPath.Caching.Abstractions.dll</Right>
+    <IsBaselineSuppression>true</IsBaselineSuppression>
+  </Suppression>
+  <Suppression>
+    <DiagnosticId>CP0006</DiagnosticId>
+    <Target>M:UiPath.Caching.ICache.RefreshAsync``1(System.Span{System.Char},UiPath.Caching.CachePolicy,System.Threading.CancellationToken)</Target>
+    <Left>lib/net10.0/UiPath.Caching.Abstractions.dll</Left>
+    <Right>lib/net10.0/UiPath.Caching.Abstractions.dll</Right>
+    <IsBaselineSuppression>true</IsBaselineSuppression>
+  </Suppression>
+  <Suppression>
+    <DiagnosticId>CP0006</DiagnosticId>
     <Target>M:UiPath.Caching.ICache.RemoveAsync``1(System.Span{System.Char},System.Threading.CancellationToken)</Target>
     <Left>lib/net10.0/UiPath.Caching.Abstractions.dll</Left>
     <Right>lib/net10.0/UiPath.Caching.Abstractions.dll</Right>
@@ -332,7 +416,42 @@
   </Suppression>
   <Suppression>
     <DiagnosticId>CP0006</DiagnosticId>
+    <Target>M:UiPath.Caching.ICache.TimeToLiveAsync``1(System.Span{System.Char},System.Threading.CancellationToken)</Target>
+    <Left>lib/net10.0/UiPath.Caching.Abstractions.dll</Left>
+    <Right>lib/net10.0/UiPath.Caching.Abstractions.dll</Right>
+    <IsBaselineSuppression>true</IsBaselineSuppression>
+  </Suppression>
+  <Suppression>
+    <DiagnosticId>CP0006</DiagnosticId>
+    <Target>M:UiPath.Caching.ICache.TryAddAsync``1(System.Span{System.Char},``0,System.DateTimeOffset,UiPath.Caching.CachePolicy,System.Threading.CancellationToken)</Target>
+    <Left>lib/net10.0/UiPath.Caching.Abstractions.dll</Left>
+    <Right>lib/net10.0/UiPath.Caching.Abstractions.dll</Right>
+    <IsBaselineSuppression>true</IsBaselineSuppression>
+  </Suppression>
+  <Suppression>
+    <DiagnosticId>CP0006</DiagnosticId>
+    <Target>M:UiPath.Caching.ICache.TryAddAsync``1(System.Span{System.Char},``0,System.TimeSpan,UiPath.Caching.CachePolicy,System.Threading.CancellationToken)</Target>
+    <Left>lib/net10.0/UiPath.Caching.Abstractions.dll</Left>
+    <Right>lib/net10.0/UiPath.Caching.Abstractions.dll</Right>
+    <IsBaselineSuppression>true</IsBaselineSuppression>
+  </Suppression>
+  <Suppression>
+    <DiagnosticId>CP0006</DiagnosticId>
+    <Target>M:UiPath.Caching.ICache.TryAddAsync``1(System.Span{System.Char},``0,UiPath.Caching.CachePolicy,System.Threading.CancellationToken)</Target>
+    <Left>lib/net10.0/UiPath.Caching.Abstractions.dll</Left>
+    <Right>lib/net10.0/UiPath.Caching.Abstractions.dll</Right>
+    <IsBaselineSuppression>true</IsBaselineSuppression>
+  </Suppression>
+  <Suppression>
+    <DiagnosticId>CP0006</DiagnosticId>
     <Target>M:UiPath.Caching.ICache`1.ContainsAsync(System.Span{System.Char},System.Threading.CancellationToken)</Target>
+    <Left>lib/net10.0/UiPath.Caching.Abstractions.dll</Left>
+    <Right>lib/net10.0/UiPath.Caching.Abstractions.dll</Right>
+    <IsBaselineSuppression>true</IsBaselineSuppression>
+  </Suppression>
+  <Suppression>
+    <DiagnosticId>CP0006</DiagnosticId>
+    <Target>M:UiPath.Caching.ICache`1.ExpireTimeAsync(System.Span{System.Char},System.Threading.CancellationToken)</Target>
     <Left>lib/net10.0/UiPath.Caching.Abstractions.dll</Left>
     <Right>lib/net10.0/UiPath.Caching.Abstractions.dll</Right>
     <IsBaselineSuppression>true</IsBaselineSuppression>
@@ -458,6 +577,27 @@
   </Suppression>
   <Suppression>
     <DiagnosticId>CP0006</DiagnosticId>
+    <Target>M:UiPath.Caching.ICache`1.RefreshAsync(System.Span{System.Char},System.DateTimeOffset,System.Threading.CancellationToken)</Target>
+    <Left>lib/net10.0/UiPath.Caching.Abstractions.dll</Left>
+    <Right>lib/net10.0/UiPath.Caching.Abstractions.dll</Right>
+    <IsBaselineSuppression>true</IsBaselineSuppression>
+  </Suppression>
+  <Suppression>
+    <DiagnosticId>CP0006</DiagnosticId>
+    <Target>M:UiPath.Caching.ICache`1.RefreshAsync(System.Span{System.Char},System.Threading.CancellationToken)</Target>
+    <Left>lib/net10.0/UiPath.Caching.Abstractions.dll</Left>
+    <Right>lib/net10.0/UiPath.Caching.Abstractions.dll</Right>
+    <IsBaselineSuppression>true</IsBaselineSuppression>
+  </Suppression>
+  <Suppression>
+    <DiagnosticId>CP0006</DiagnosticId>
+    <Target>M:UiPath.Caching.ICache`1.RefreshAsync(System.Span{System.Char},System.TimeSpan,System.Threading.CancellationToken)</Target>
+    <Left>lib/net10.0/UiPath.Caching.Abstractions.dll</Left>
+    <Right>lib/net10.0/UiPath.Caching.Abstractions.dll</Right>
+    <IsBaselineSuppression>true</IsBaselineSuppression>
+  </Suppression>
+  <Suppression>
+    <DiagnosticId>CP0006</DiagnosticId>
     <Target>M:UiPath.Caching.ICache`1.RemoveAsync(System.Span{System.Char},System.Threading.CancellationToken)</Target>
     <Left>lib/net10.0/UiPath.Caching.Abstractions.dll</Left>
     <Right>lib/net10.0/UiPath.Caching.Abstractions.dll</Right>
@@ -514,7 +654,49 @@
   </Suppression>
   <Suppression>
     <DiagnosticId>CP0006</DiagnosticId>
+    <Target>M:UiPath.Caching.ICache`1.TimeToLiveAsync(System.Span{System.Char},System.Threading.CancellationToken)</Target>
+    <Left>lib/net10.0/UiPath.Caching.Abstractions.dll</Left>
+    <Right>lib/net10.0/UiPath.Caching.Abstractions.dll</Right>
+    <IsBaselineSuppression>true</IsBaselineSuppression>
+  </Suppression>
+  <Suppression>
+    <DiagnosticId>CP0006</DiagnosticId>
+    <Target>M:UiPath.Caching.ICache`1.TryAddAsync(System.Span{System.Char},`0,System.DateTimeOffset,System.Threading.CancellationToken)</Target>
+    <Left>lib/net10.0/UiPath.Caching.Abstractions.dll</Left>
+    <Right>lib/net10.0/UiPath.Caching.Abstractions.dll</Right>
+    <IsBaselineSuppression>true</IsBaselineSuppression>
+  </Suppression>
+  <Suppression>
+    <DiagnosticId>CP0006</DiagnosticId>
+    <Target>M:UiPath.Caching.ICache`1.TryAddAsync(System.Span{System.Char},`0,System.Threading.CancellationToken)</Target>
+    <Left>lib/net10.0/UiPath.Caching.Abstractions.dll</Left>
+    <Right>lib/net10.0/UiPath.Caching.Abstractions.dll</Right>
+    <IsBaselineSuppression>true</IsBaselineSuppression>
+  </Suppression>
+  <Suppression>
+    <DiagnosticId>CP0006</DiagnosticId>
+    <Target>M:UiPath.Caching.ICache`1.TryAddAsync(System.Span{System.Char},`0,System.TimeSpan,System.Threading.CancellationToken)</Target>
+    <Left>lib/net10.0/UiPath.Caching.Abstractions.dll</Left>
+    <Right>lib/net10.0/UiPath.Caching.Abstractions.dll</Right>
+    <IsBaselineSuppression>true</IsBaselineSuppression>
+  </Suppression>
+  <Suppression>
+    <DiagnosticId>CP0006</DiagnosticId>
     <Target>M:UiPath.Caching.IHashCache.ContainsAsync``1(System.Span{System.Char},System.Threading.CancellationToken)</Target>
+    <Left>lib/net10.0/UiPath.Caching.Abstractions.dll</Left>
+    <Right>lib/net10.0/UiPath.Caching.Abstractions.dll</Right>
+    <IsBaselineSuppression>true</IsBaselineSuppression>
+  </Suppression>
+  <Suppression>
+    <DiagnosticId>CP0006</DiagnosticId>
+    <Target>M:UiPath.Caching.IHashCache.ExpireTimeAsync``1(System.Span{System.Char},System.Threading.CancellationToken)</Target>
+    <Left>lib/net10.0/UiPath.Caching.Abstractions.dll</Left>
+    <Right>lib/net10.0/UiPath.Caching.Abstractions.dll</Right>
+    <IsBaselineSuppression>true</IsBaselineSuppression>
+  </Suppression>
+  <Suppression>
+    <DiagnosticId>CP0006</DiagnosticId>
+    <Target>M:UiPath.Caching.IHashCache.GetAsync``1(System.Span{System.Char},System.String[],UiPath.Caching.CachePolicy,System.Threading.CancellationToken)</Target>
     <Left>lib/net10.0/UiPath.Caching.Abstractions.dll</Left>
     <Right>lib/net10.0/UiPath.Caching.Abstractions.dll</Right>
     <IsBaselineSuppression>true</IsBaselineSuppression>
@@ -536,6 +718,13 @@
   <Suppression>
     <DiagnosticId>CP0006</DiagnosticId>
     <Target>M:UiPath.Caching.IHashCache.GetItemAsync``1(System.Span{System.Char},System.String,UiPath.Caching.CachePolicy,System.Threading.CancellationToken)</Target>
+    <Left>lib/net10.0/UiPath.Caching.Abstractions.dll</Left>
+    <Right>lib/net10.0/UiPath.Caching.Abstractions.dll</Right>
+    <IsBaselineSuppression>true</IsBaselineSuppression>
+  </Suppression>
+  <Suppression>
+    <DiagnosticId>CP0006</DiagnosticId>
+    <Target>M:UiPath.Caching.IHashCache.GetMetadataAsync``1(System.Span{System.Char},System.Threading.CancellationToken)</Target>
     <Left>lib/net10.0/UiPath.Caching.Abstractions.dll</Left>
     <Right>lib/net10.0/UiPath.Caching.Abstractions.dll</Right>
     <IsBaselineSuppression>true</IsBaselineSuppression>
@@ -626,7 +815,42 @@
   </Suppression>
   <Suppression>
     <DiagnosticId>CP0006</DiagnosticId>
+    <Target>M:UiPath.Caching.IHashCache.RefreshAsync``1(System.Span{System.Char},System.DateTimeOffset,UiPath.Caching.CachePolicy,System.Threading.CancellationToken)</Target>
+    <Left>lib/net10.0/UiPath.Caching.Abstractions.dll</Left>
+    <Right>lib/net10.0/UiPath.Caching.Abstractions.dll</Right>
+    <IsBaselineSuppression>true</IsBaselineSuppression>
+  </Suppression>
+  <Suppression>
+    <DiagnosticId>CP0006</DiagnosticId>
+    <Target>M:UiPath.Caching.IHashCache.RefreshAsync``1(System.Span{System.Char},System.TimeSpan,UiPath.Caching.CachePolicy,System.Threading.CancellationToken)</Target>
+    <Left>lib/net10.0/UiPath.Caching.Abstractions.dll</Left>
+    <Right>lib/net10.0/UiPath.Caching.Abstractions.dll</Right>
+    <IsBaselineSuppression>true</IsBaselineSuppression>
+  </Suppression>
+  <Suppression>
+    <DiagnosticId>CP0006</DiagnosticId>
+    <Target>M:UiPath.Caching.IHashCache.RefreshAsync``1(System.Span{System.Char},UiPath.Caching.CachePolicy,System.Threading.CancellationToken)</Target>
+    <Left>lib/net10.0/UiPath.Caching.Abstractions.dll</Left>
+    <Right>lib/net10.0/UiPath.Caching.Abstractions.dll</Right>
+    <IsBaselineSuppression>true</IsBaselineSuppression>
+  </Suppression>
+  <Suppression>
+    <DiagnosticId>CP0006</DiagnosticId>
+    <Target>M:UiPath.Caching.IHashCache.RefreshAsync``1(System.Span{System.Char},UiPath.Caching.HashCacheEntryOptions,UiPath.Caching.CachePolicy,System.Threading.CancellationToken)</Target>
+    <Left>lib/net10.0/UiPath.Caching.Abstractions.dll</Left>
+    <Right>lib/net10.0/UiPath.Caching.Abstractions.dll</Right>
+    <IsBaselineSuppression>true</IsBaselineSuppression>
+  </Suppression>
+  <Suppression>
+    <DiagnosticId>CP0006</DiagnosticId>
     <Target>M:UiPath.Caching.IHashCache.RemoveAsync``1(System.Span{System.Char},System.Threading.CancellationToken)</Target>
+    <Left>lib/net10.0/UiPath.Caching.Abstractions.dll</Left>
+    <Right>lib/net10.0/UiPath.Caching.Abstractions.dll</Right>
+    <IsBaselineSuppression>true</IsBaselineSuppression>
+  </Suppression>
+  <Suppression>
+    <DiagnosticId>CP0006</DiagnosticId>
+    <Target>M:UiPath.Caching.IHashCache.RemoveFieldsAsync``1(System.Span{System.Char},System.String[],System.Threading.CancellationToken)</Target>
     <Left>lib/net10.0/UiPath.Caching.Abstractions.dll</Left>
     <Right>lib/net10.0/UiPath.Caching.Abstractions.dll</Right>
     <IsBaselineSuppression>true</IsBaselineSuppression>
@@ -682,7 +906,35 @@
   </Suppression>
   <Suppression>
     <DiagnosticId>CP0006</DiagnosticId>
+    <Target>M:UiPath.Caching.IHashCache.SetMetadataAsync``1(System.Span{System.Char},System.Collections.Generic.IDictionary{System.String,System.String},System.Threading.CancellationToken)</Target>
+    <Left>lib/net10.0/UiPath.Caching.Abstractions.dll</Left>
+    <Right>lib/net10.0/UiPath.Caching.Abstractions.dll</Right>
+    <IsBaselineSuppression>true</IsBaselineSuppression>
+  </Suppression>
+  <Suppression>
+    <DiagnosticId>CP0006</DiagnosticId>
+    <Target>M:UiPath.Caching.IHashCache.TimeToLiveAsync``1(System.Span{System.Char},System.Threading.CancellationToken)</Target>
+    <Left>lib/net10.0/UiPath.Caching.Abstractions.dll</Left>
+    <Right>lib/net10.0/UiPath.Caching.Abstractions.dll</Right>
+    <IsBaselineSuppression>true</IsBaselineSuppression>
+  </Suppression>
+  <Suppression>
+    <DiagnosticId>CP0006</DiagnosticId>
     <Target>M:UiPath.Caching.IHashCache`1.ContainsAsync(System.Span{System.Char},System.Threading.CancellationToken)</Target>
+    <Left>lib/net10.0/UiPath.Caching.Abstractions.dll</Left>
+    <Right>lib/net10.0/UiPath.Caching.Abstractions.dll</Right>
+    <IsBaselineSuppression>true</IsBaselineSuppression>
+  </Suppression>
+  <Suppression>
+    <DiagnosticId>CP0006</DiagnosticId>
+    <Target>M:UiPath.Caching.IHashCache`1.ExpireTimeAsync(System.Span{System.Char},System.Threading.CancellationToken)</Target>
+    <Left>lib/net10.0/UiPath.Caching.Abstractions.dll</Left>
+    <Right>lib/net10.0/UiPath.Caching.Abstractions.dll</Right>
+    <IsBaselineSuppression>true</IsBaselineSuppression>
+  </Suppression>
+  <Suppression>
+    <DiagnosticId>CP0006</DiagnosticId>
+    <Target>M:UiPath.Caching.IHashCache`1.GetAsync(System.Span{System.Char},System.String[],System.Threading.CancellationToken)</Target>
     <Left>lib/net10.0/UiPath.Caching.Abstractions.dll</Left>
     <Right>lib/net10.0/UiPath.Caching.Abstractions.dll</Right>
     <IsBaselineSuppression>true</IsBaselineSuppression>
@@ -704,6 +956,13 @@
   <Suppression>
     <DiagnosticId>CP0006</DiagnosticId>
     <Target>M:UiPath.Caching.IHashCache`1.GetItemAsync(System.Span{System.Char},System.String,System.Threading.CancellationToken)</Target>
+    <Left>lib/net10.0/UiPath.Caching.Abstractions.dll</Left>
+    <Right>lib/net10.0/UiPath.Caching.Abstractions.dll</Right>
+    <IsBaselineSuppression>true</IsBaselineSuppression>
+  </Suppression>
+  <Suppression>
+    <DiagnosticId>CP0006</DiagnosticId>
+    <Target>M:UiPath.Caching.IHashCache`1.GetMetadataAsync(System.Span{System.Char},System.Threading.CancellationToken)</Target>
     <Left>lib/net10.0/UiPath.Caching.Abstractions.dll</Left>
     <Right>lib/net10.0/UiPath.Caching.Abstractions.dll</Right>
     <IsBaselineSuppression>true</IsBaselineSuppression>
@@ -773,7 +1032,42 @@
   </Suppression>
   <Suppression>
     <DiagnosticId>CP0006</DiagnosticId>
+    <Target>M:UiPath.Caching.IHashCache`1.RefreshAsync(System.Span{System.Char},System.DateTimeOffset,System.Threading.CancellationToken)</Target>
+    <Left>lib/net10.0/UiPath.Caching.Abstractions.dll</Left>
+    <Right>lib/net10.0/UiPath.Caching.Abstractions.dll</Right>
+    <IsBaselineSuppression>true</IsBaselineSuppression>
+  </Suppression>
+  <Suppression>
+    <DiagnosticId>CP0006</DiagnosticId>
+    <Target>M:UiPath.Caching.IHashCache`1.RefreshAsync(System.Span{System.Char},System.Threading.CancellationToken)</Target>
+    <Left>lib/net10.0/UiPath.Caching.Abstractions.dll</Left>
+    <Right>lib/net10.0/UiPath.Caching.Abstractions.dll</Right>
+    <IsBaselineSuppression>true</IsBaselineSuppression>
+  </Suppression>
+  <Suppression>
+    <DiagnosticId>CP0006</DiagnosticId>
+    <Target>M:UiPath.Caching.IHashCache`1.RefreshAsync(System.Span{System.Char},System.TimeSpan,System.Threading.CancellationToken)</Target>
+    <Left>lib/net10.0/UiPath.Caching.Abstractions.dll</Left>
+    <Right>lib/net10.0/UiPath.Caching.Abstractions.dll</Right>
+    <IsBaselineSuppression>true</IsBaselineSuppression>
+  </Suppression>
+  <Suppression>
+    <DiagnosticId>CP0006</DiagnosticId>
+    <Target>M:UiPath.Caching.IHashCache`1.RefreshAsync(System.Span{System.Char},UiPath.Caching.HashCacheEntryOptions,System.Threading.CancellationToken)</Target>
+    <Left>lib/net10.0/UiPath.Caching.Abstractions.dll</Left>
+    <Right>lib/net10.0/UiPath.Caching.Abstractions.dll</Right>
+    <IsBaselineSuppression>true</IsBaselineSuppression>
+  </Suppression>
+  <Suppression>
+    <DiagnosticId>CP0006</DiagnosticId>
     <Target>M:UiPath.Caching.IHashCache`1.RemoveAsync(System.Span{System.Char},System.Threading.CancellationToken)</Target>
+    <Left>lib/net10.0/UiPath.Caching.Abstractions.dll</Left>
+    <Right>lib/net10.0/UiPath.Caching.Abstractions.dll</Right>
+    <IsBaselineSuppression>true</IsBaselineSuppression>
+  </Suppression>
+  <Suppression>
+    <DiagnosticId>CP0006</DiagnosticId>
+    <Target>M:UiPath.Caching.IHashCache`1.RemoveFieldsAsync(System.Span{System.Char},System.String[],System.Threading.CancellationToken)</Target>
     <Left>lib/net10.0/UiPath.Caching.Abstractions.dll</Left>
     <Right>lib/net10.0/UiPath.Caching.Abstractions.dll</Right>
     <IsBaselineSuppression>true</IsBaselineSuppression>
@@ -836,6 +1130,27 @@
   </Suppression>
   <Suppression>
     <DiagnosticId>CP0006</DiagnosticId>
+    <Target>M:UiPath.Caching.IHashCache`1.SetMetadataAsync(System.Span{System.Char},System.Collections.Generic.IDictionary{System.String,System.String},System.Threading.CancellationToken)</Target>
+    <Left>lib/net10.0/UiPath.Caching.Abstractions.dll</Left>
+    <Right>lib/net10.0/UiPath.Caching.Abstractions.dll</Right>
+    <IsBaselineSuppression>true</IsBaselineSuppression>
+  </Suppression>
+  <Suppression>
+    <DiagnosticId>CP0006</DiagnosticId>
+    <Target>M:UiPath.Caching.IHashCache`1.TimeToLiveAsync(System.Span{System.Char},System.Threading.CancellationToken)</Target>
+    <Left>lib/net10.0/UiPath.Caching.Abstractions.dll</Left>
+    <Right>lib/net10.0/UiPath.Caching.Abstractions.dll</Right>
+    <IsBaselineSuppression>true</IsBaselineSuppression>
+  </Suppression>
+  <Suppression>
+    <DiagnosticId>CP0006</DiagnosticId>
+    <Target>M:UiPath.Caching.ISpanKeyCache.ExpireTimeAsync``1(System.Span{System.Char},System.Threading.CancellationToken)</Target>
+    <Left>lib/net10.0/UiPath.Caching.Abstractions.dll</Left>
+    <Right>lib/net10.0/UiPath.Caching.Abstractions.dll</Right>
+    <IsBaselineSuppression>true</IsBaselineSuppression>
+  </Suppression>
+  <Suppression>
+    <DiagnosticId>CP0006</DiagnosticId>
     <Target>M:UiPath.Caching.ISpanKeyCache.GetOrAddWithExpirationAsync``1(System.Span{System.Char},System.Func{System.Threading.CancellationToken,System.Threading.Tasks.Task{UiPath.Caching.GeneratedValue{``0}}},UiPath.Caching.CachePolicy,System.Threading.CancellationToken)</Target>
     <Left>lib/net10.0/UiPath.Caching.Abstractions.dll</Left>
     <Right>lib/net10.0/UiPath.Caching.Abstractions.dll</Right>
@@ -865,6 +1180,20 @@
   <Suppression>
     <DiagnosticId>CP0006</DiagnosticId>
     <Target>M:UiPath.Caching.ISpanKeyCache.SetAsync``1(System.Span{System.Char},``0,UiPath.Caching.CachePolicy,System.Threading.CancellationToken)</Target>
+    <Left>lib/net10.0/UiPath.Caching.Abstractions.dll</Left>
+    <Right>lib/net10.0/UiPath.Caching.Abstractions.dll</Right>
+    <IsBaselineSuppression>true</IsBaselineSuppression>
+  </Suppression>
+  <Suppression>
+    <DiagnosticId>CP0006</DiagnosticId>
+    <Target>M:UiPath.Caching.ISpanKeyCache.TimeToLiveAsync``1(System.Span{System.Char},System.Threading.CancellationToken)</Target>
+    <Left>lib/net10.0/UiPath.Caching.Abstractions.dll</Left>
+    <Right>lib/net10.0/UiPath.Caching.Abstractions.dll</Right>
+    <IsBaselineSuppression>true</IsBaselineSuppression>
+  </Suppression>
+  <Suppression>
+    <DiagnosticId>CP0006</DiagnosticId>
+    <Target>M:UiPath.Caching.ISpanKeyCache`1.ExpireTimeAsync(System.Span{System.Char},System.Threading.CancellationToken)</Target>
     <Left>lib/net10.0/UiPath.Caching.Abstractions.dll</Left>
     <Right>lib/net10.0/UiPath.Caching.Abstractions.dll</Right>
     <IsBaselineSuppression>true</IsBaselineSuppression>
@@ -906,6 +1235,62 @@
   </Suppression>
   <Suppression>
     <DiagnosticId>CP0006</DiagnosticId>
+    <Target>M:UiPath.Caching.ISpanKeyCache`1.TimeToLiveAsync(System.Span{System.Char},System.Threading.CancellationToken)</Target>
+    <Left>lib/net10.0/UiPath.Caching.Abstractions.dll</Left>
+    <Right>lib/net10.0/UiPath.Caching.Abstractions.dll</Right>
+    <IsBaselineSuppression>true</IsBaselineSuppression>
+  </Suppression>
+  <Suppression>
+    <DiagnosticId>CP0006</DiagnosticId>
+    <Target>M:UiPath.Caching.ISpanKeyHashCache.ExpireTimeAsync``1(System.Span{System.Char},System.Threading.CancellationToken)</Target>
+    <Left>lib/net10.0/UiPath.Caching.Abstractions.dll</Left>
+    <Right>lib/net10.0/UiPath.Caching.Abstractions.dll</Right>
+    <IsBaselineSuppression>true</IsBaselineSuppression>
+  </Suppression>
+  <Suppression>
+    <DiagnosticId>CP0006</DiagnosticId>
+    <Target>M:UiPath.Caching.ISpanKeyHashCache.GetAsync``1(System.Span{System.Char},System.String[],UiPath.Caching.CachePolicy,System.Threading.CancellationToken)</Target>
+    <Left>lib/net10.0/UiPath.Caching.Abstractions.dll</Left>
+    <Right>lib/net10.0/UiPath.Caching.Abstractions.dll</Right>
+    <IsBaselineSuppression>true</IsBaselineSuppression>
+  </Suppression>
+  <Suppression>
+    <DiagnosticId>CP0006</DiagnosticId>
+    <Target>M:UiPath.Caching.ISpanKeyHashCache.GetMetadataAsync``1(System.Span{System.Char},System.Threading.CancellationToken)</Target>
+    <Left>lib/net10.0/UiPath.Caching.Abstractions.dll</Left>
+    <Right>lib/net10.0/UiPath.Caching.Abstractions.dll</Right>
+    <IsBaselineSuppression>true</IsBaselineSuppression>
+  </Suppression>
+  <Suppression>
+    <DiagnosticId>CP0006</DiagnosticId>
+    <Target>M:UiPath.Caching.ISpanKeyHashCache.GetOrAddAsync``2(System.Span{System.Char},``1,System.Func{``1,System.Threading.CancellationToken,System.Threading.Tasks.Task{System.Collections.Generic.IDictionary{System.String,``0}}},System.DateTimeOffset,System.Nullable{UiPath.Caching.HashCacheSetOption},UiPath.Caching.CachePolicy,System.Threading.CancellationToken)</Target>
+    <Left>lib/net10.0/UiPath.Caching.Abstractions.dll</Left>
+    <Right>lib/net10.0/UiPath.Caching.Abstractions.dll</Right>
+    <IsBaselineSuppression>true</IsBaselineSuppression>
+  </Suppression>
+  <Suppression>
+    <DiagnosticId>CP0006</DiagnosticId>
+    <Target>M:UiPath.Caching.ISpanKeyHashCache.GetOrAddAsync``2(System.Span{System.Char},``1,System.Func{``1,System.Threading.CancellationToken,System.Threading.Tasks.Task{System.Collections.Generic.IDictionary{System.String,``0}}},System.DateTimeOffset,UiPath.Caching.CachePolicy,System.Threading.CancellationToken)</Target>
+    <Left>lib/net10.0/UiPath.Caching.Abstractions.dll</Left>
+    <Right>lib/net10.0/UiPath.Caching.Abstractions.dll</Right>
+    <IsBaselineSuppression>true</IsBaselineSuppression>
+  </Suppression>
+  <Suppression>
+    <DiagnosticId>CP0006</DiagnosticId>
+    <Target>M:UiPath.Caching.ISpanKeyHashCache.GetOrAddAsync``2(System.Span{System.Char},``1,System.Func{``1,System.Threading.CancellationToken,System.Threading.Tasks.Task{System.Collections.Generic.IDictionary{System.String,``0}}},System.TimeSpan,UiPath.Caching.CachePolicy,System.Threading.CancellationToken)</Target>
+    <Left>lib/net10.0/UiPath.Caching.Abstractions.dll</Left>
+    <Right>lib/net10.0/UiPath.Caching.Abstractions.dll</Right>
+    <IsBaselineSuppression>true</IsBaselineSuppression>
+  </Suppression>
+  <Suppression>
+    <DiagnosticId>CP0006</DiagnosticId>
+    <Target>M:UiPath.Caching.ISpanKeyHashCache.GetOrAddAsync``2(System.Span{System.Char},``1,System.Func{``1,System.Threading.CancellationToken,System.Threading.Tasks.Task{System.Collections.Generic.IDictionary{System.String,``0}}},UiPath.Caching.CachePolicy,System.Threading.CancellationToken)</Target>
+    <Left>lib/net10.0/UiPath.Caching.Abstractions.dll</Left>
+    <Right>lib/net10.0/UiPath.Caching.Abstractions.dll</Right>
+    <IsBaselineSuppression>true</IsBaselineSuppression>
+  </Suppression>
+  <Suppression>
+    <DiagnosticId>CP0006</DiagnosticId>
     <Target>M:UiPath.Caching.ISpanKeyHashCache.SetAsync``1(System.Span{System.Char},System.Collections.Generic.IDictionary{System.String,``0},System.DateTimeOffset,UiPath.Caching.CachePolicy,System.Threading.CancellationToken)</Target>
     <Left>lib/net10.0/UiPath.Caching.Abstractions.dll</Left>
     <Right>lib/net10.0/UiPath.Caching.Abstractions.dll</Right>
@@ -934,6 +1319,55 @@
   </Suppression>
   <Suppression>
     <DiagnosticId>CP0006</DiagnosticId>
+    <Target>M:UiPath.Caching.ISpanKeyHashCache.TimeToLiveAsync``1(System.Span{System.Char},System.Threading.CancellationToken)</Target>
+    <Left>lib/net10.0/UiPath.Caching.Abstractions.dll</Left>
+    <Right>lib/net10.0/UiPath.Caching.Abstractions.dll</Right>
+    <IsBaselineSuppression>true</IsBaselineSuppression>
+  </Suppression>
+  <Suppression>
+    <DiagnosticId>CP0006</DiagnosticId>
+    <Target>M:UiPath.Caching.ISpanKeyHashCache`1.ExpireTimeAsync(System.Span{System.Char},System.Threading.CancellationToken)</Target>
+    <Left>lib/net10.0/UiPath.Caching.Abstractions.dll</Left>
+    <Right>lib/net10.0/UiPath.Caching.Abstractions.dll</Right>
+    <IsBaselineSuppression>true</IsBaselineSuppression>
+  </Suppression>
+  <Suppression>
+    <DiagnosticId>CP0006</DiagnosticId>
+    <Target>M:UiPath.Caching.ISpanKeyHashCache`1.GetAsync(System.Span{System.Char},System.String[],System.Threading.CancellationToken)</Target>
+    <Left>lib/net10.0/UiPath.Caching.Abstractions.dll</Left>
+    <Right>lib/net10.0/UiPath.Caching.Abstractions.dll</Right>
+    <IsBaselineSuppression>true</IsBaselineSuppression>
+  </Suppression>
+  <Suppression>
+    <DiagnosticId>CP0006</DiagnosticId>
+    <Target>M:UiPath.Caching.ISpanKeyHashCache`1.GetMetadataAsync(System.Span{System.Char},System.Threading.CancellationToken)</Target>
+    <Left>lib/net10.0/UiPath.Caching.Abstractions.dll</Left>
+    <Right>lib/net10.0/UiPath.Caching.Abstractions.dll</Right>
+    <IsBaselineSuppression>true</IsBaselineSuppression>
+  </Suppression>
+  <Suppression>
+    <DiagnosticId>CP0006</DiagnosticId>
+    <Target>M:UiPath.Caching.ISpanKeyHashCache`1.GetOrAddAsync``1(System.Span{System.Char},``0,System.Func{``0,System.Threading.CancellationToken,System.Threading.Tasks.Task{System.Collections.Generic.IDictionary{System.String,`0}}},System.DateTimeOffset,System.Threading.CancellationToken)</Target>
+    <Left>lib/net10.0/UiPath.Caching.Abstractions.dll</Left>
+    <Right>lib/net10.0/UiPath.Caching.Abstractions.dll</Right>
+    <IsBaselineSuppression>true</IsBaselineSuppression>
+  </Suppression>
+  <Suppression>
+    <DiagnosticId>CP0006</DiagnosticId>
+    <Target>M:UiPath.Caching.ISpanKeyHashCache`1.GetOrAddAsync``1(System.Span{System.Char},``0,System.Func{``0,System.Threading.CancellationToken,System.Threading.Tasks.Task{System.Collections.Generic.IDictionary{System.String,`0}}},System.Threading.CancellationToken)</Target>
+    <Left>lib/net10.0/UiPath.Caching.Abstractions.dll</Left>
+    <Right>lib/net10.0/UiPath.Caching.Abstractions.dll</Right>
+    <IsBaselineSuppression>true</IsBaselineSuppression>
+  </Suppression>
+  <Suppression>
+    <DiagnosticId>CP0006</DiagnosticId>
+    <Target>M:UiPath.Caching.ISpanKeyHashCache`1.GetOrAddAsync``1(System.Span{System.Char},``0,System.Func{``0,System.Threading.CancellationToken,System.Threading.Tasks.Task{System.Collections.Generic.IDictionary{System.String,`0}}},System.TimeSpan,System.Threading.CancellationToken)</Target>
+    <Left>lib/net10.0/UiPath.Caching.Abstractions.dll</Left>
+    <Right>lib/net10.0/UiPath.Caching.Abstractions.dll</Right>
+    <IsBaselineSuppression>true</IsBaselineSuppression>
+  </Suppression>
+  <Suppression>
+    <DiagnosticId>CP0006</DiagnosticId>
     <Target>M:UiPath.Caching.ISpanKeyHashCache`1.SetAsync(System.Span{System.Char},System.Collections.Generic.IDictionary{System.String,`0},System.DateTimeOffset,System.Threading.CancellationToken)</Target>
     <Left>lib/net10.0/UiPath.Caching.Abstractions.dll</Left>
     <Right>lib/net10.0/UiPath.Caching.Abstractions.dll</Right>
@@ -956,6 +1390,13 @@
   <Suppression>
     <DiagnosticId>CP0006</DiagnosticId>
     <Target>M:UiPath.Caching.ISpanKeyHashCache`1.SetAsync(System.Span{System.Char},System.Collections.Generic.IDictionary{System.String,`0},UiPath.Caching.HashCacheEntryOptions,System.Threading.CancellationToken)</Target>
+    <Left>lib/net10.0/UiPath.Caching.Abstractions.dll</Left>
+    <Right>lib/net10.0/UiPath.Caching.Abstractions.dll</Right>
+    <IsBaselineSuppression>true</IsBaselineSuppression>
+  </Suppression>
+  <Suppression>
+    <DiagnosticId>CP0006</DiagnosticId>
+    <Target>M:UiPath.Caching.ISpanKeyHashCache`1.TimeToLiveAsync(System.Span{System.Char},System.Threading.CancellationToken)</Target>
     <Left>lib/net10.0/UiPath.Caching.Abstractions.dll</Left>
     <Right>lib/net10.0/UiPath.Caching.Abstractions.dll</Right>
     <IsBaselineSuppression>true</IsBaselineSuppression>
@@ -969,6 +1410,13 @@
   </Suppression>
   <Suppression>
     <DiagnosticId>CP0006</DiagnosticId>
+    <Target>M:UiPath.Caching.ICache.ExpireTimeAsync``1(System.Span{System.Char},System.Threading.CancellationToken)</Target>
+    <Left>lib/net8.0/UiPath.Caching.Abstractions.dll</Left>
+    <Right>lib/net8.0/UiPath.Caching.Abstractions.dll</Right>
+    <IsBaselineSuppression>true</IsBaselineSuppression>
+  </Suppression>
+  <Suppression>
+    <DiagnosticId>CP0006</DiagnosticId>
     <Target>M:UiPath.Caching.ICache.GetAsync``1(System.Span{System.Char},UiPath.Caching.CachePolicy,System.Threading.CancellationToken)</Target>
     <Left>lib/net8.0/UiPath.Caching.Abstractions.dll</Left>
     <Right>lib/net8.0/UiPath.Caching.Abstractions.dll</Right>
@@ -1095,6 +1543,27 @@
   </Suppression>
   <Suppression>
     <DiagnosticId>CP0006</DiagnosticId>
+    <Target>M:UiPath.Caching.ICache.RefreshAsync``1(System.Span{System.Char},System.DateTimeOffset,UiPath.Caching.CachePolicy,System.Threading.CancellationToken)</Target>
+    <Left>lib/net8.0/UiPath.Caching.Abstractions.dll</Left>
+    <Right>lib/net8.0/UiPath.Caching.Abstractions.dll</Right>
+    <IsBaselineSuppression>true</IsBaselineSuppression>
+  </Suppression>
+  <Suppression>
+    <DiagnosticId>CP0006</DiagnosticId>
+    <Target>M:UiPath.Caching.ICache.RefreshAsync``1(System.Span{System.Char},System.TimeSpan,UiPath.Caching.CachePolicy,System.Threading.CancellationToken)</Target>
+    <Left>lib/net8.0/UiPath.Caching.Abstractions.dll</Left>
+    <Right>lib/net8.0/UiPath.Caching.Abstractions.dll</Right>
+    <IsBaselineSuppression>true</IsBaselineSuppression>
+  </Suppression>
+  <Suppression>
+    <DiagnosticId>CP0006</DiagnosticId>
+    <Target>M:UiPath.Caching.ICache.RefreshAsync``1(System.Span{System.Char},UiPath.Caching.CachePolicy,System.Threading.CancellationToken)</Target>
+    <Left>lib/net8.0/UiPath.Caching.Abstractions.dll</Left>
+    <Right>lib/net8.0/UiPath.Caching.Abstractions.dll</Right>
+    <IsBaselineSuppression>true</IsBaselineSuppression>
+  </Suppression>
+  <Suppression>
+    <DiagnosticId>CP0006</DiagnosticId>
     <Target>M:UiPath.Caching.ICache.RemoveAsync``1(System.Span{System.Char},System.Threading.CancellationToken)</Target>
     <Left>lib/net8.0/UiPath.Caching.Abstractions.dll</Left>
     <Right>lib/net8.0/UiPath.Caching.Abstractions.dll</Right>
@@ -1151,7 +1620,42 @@
   </Suppression>
   <Suppression>
     <DiagnosticId>CP0006</DiagnosticId>
+    <Target>M:UiPath.Caching.ICache.TimeToLiveAsync``1(System.Span{System.Char},System.Threading.CancellationToken)</Target>
+    <Left>lib/net8.0/UiPath.Caching.Abstractions.dll</Left>
+    <Right>lib/net8.0/UiPath.Caching.Abstractions.dll</Right>
+    <IsBaselineSuppression>true</IsBaselineSuppression>
+  </Suppression>
+  <Suppression>
+    <DiagnosticId>CP0006</DiagnosticId>
+    <Target>M:UiPath.Caching.ICache.TryAddAsync``1(System.Span{System.Char},``0,System.DateTimeOffset,UiPath.Caching.CachePolicy,System.Threading.CancellationToken)</Target>
+    <Left>lib/net8.0/UiPath.Caching.Abstractions.dll</Left>
+    <Right>lib/net8.0/UiPath.Caching.Abstractions.dll</Right>
+    <IsBaselineSuppression>true</IsBaselineSuppression>
+  </Suppression>
+  <Suppression>
+    <DiagnosticId>CP0006</DiagnosticId>
+    <Target>M:UiPath.Caching.ICache.TryAddAsync``1(System.Span{System.Char},``0,System.TimeSpan,UiPath.Caching.CachePolicy,System.Threading.CancellationToken)</Target>
+    <Left>lib/net8.0/UiPath.Caching.Abstractions.dll</Left>
+    <Right>lib/net8.0/UiPath.Caching.Abstractions.dll</Right>
+    <IsBaselineSuppression>true</IsBaselineSuppression>
+  </Suppression>
+  <Suppression>
+    <DiagnosticId>CP0006</DiagnosticId>
+    <Target>M:UiPath.Caching.ICache.TryAddAsync``1(System.Span{System.Char},``0,UiPath.Caching.CachePolicy,System.Threading.CancellationToken)</Target>
+    <Left>lib/net8.0/UiPath.Caching.Abstractions.dll</Left>
+    <Right>lib/net8.0/UiPath.Caching.Abstractions.dll</Right>
+    <IsBaselineSuppression>true</IsBaselineSuppression>
+  </Suppression>
+  <Suppression>
+    <DiagnosticId>CP0006</DiagnosticId>
     <Target>M:UiPath.Caching.ICache`1.ContainsAsync(System.Span{System.Char},System.Threading.CancellationToken)</Target>
+    <Left>lib/net8.0/UiPath.Caching.Abstractions.dll</Left>
+    <Right>lib/net8.0/UiPath.Caching.Abstractions.dll</Right>
+    <IsBaselineSuppression>true</IsBaselineSuppression>
+  </Suppression>
+  <Suppression>
+    <DiagnosticId>CP0006</DiagnosticId>
+    <Target>M:UiPath.Caching.ICache`1.ExpireTimeAsync(System.Span{System.Char},System.Threading.CancellationToken)</Target>
     <Left>lib/net8.0/UiPath.Caching.Abstractions.dll</Left>
     <Right>lib/net8.0/UiPath.Caching.Abstractions.dll</Right>
     <IsBaselineSuppression>true</IsBaselineSuppression>
@@ -1277,6 +1781,27 @@
   </Suppression>
   <Suppression>
     <DiagnosticId>CP0006</DiagnosticId>
+    <Target>M:UiPath.Caching.ICache`1.RefreshAsync(System.Span{System.Char},System.DateTimeOffset,System.Threading.CancellationToken)</Target>
+    <Left>lib/net8.0/UiPath.Caching.Abstractions.dll</Left>
+    <Right>lib/net8.0/UiPath.Caching.Abstractions.dll</Right>
+    <IsBaselineSuppression>true</IsBaselineSuppression>
+  </Suppression>
+  <Suppression>
+    <DiagnosticId>CP0006</DiagnosticId>
+    <Target>M:UiPath.Caching.ICache`1.RefreshAsync(System.Span{System.Char},System.Threading.CancellationToken)</Target>
+    <Left>lib/net8.0/UiPath.Caching.Abstractions.dll</Left>
+    <Right>lib/net8.0/UiPath.Caching.Abstractions.dll</Right>
+    <IsBaselineSuppression>true</IsBaselineSuppression>
+  </Suppression>
+  <Suppression>
+    <DiagnosticId>CP0006</DiagnosticId>
+    <Target>M:UiPath.Caching.ICache`1.RefreshAsync(System.Span{System.Char},System.TimeSpan,System.Threading.CancellationToken)</Target>
+    <Left>lib/net8.0/UiPath.Caching.Abstractions.dll</Left>
+    <Right>lib/net8.0/UiPath.Caching.Abstractions.dll</Right>
+    <IsBaselineSuppression>true</IsBaselineSuppression>
+  </Suppression>
+  <Suppression>
+    <DiagnosticId>CP0006</DiagnosticId>
     <Target>M:UiPath.Caching.ICache`1.RemoveAsync(System.Span{System.Char},System.Threading.CancellationToken)</Target>
     <Left>lib/net8.0/UiPath.Caching.Abstractions.dll</Left>
     <Right>lib/net8.0/UiPath.Caching.Abstractions.dll</Right>
@@ -1333,7 +1858,49 @@
   </Suppression>
   <Suppression>
     <DiagnosticId>CP0006</DiagnosticId>
+    <Target>M:UiPath.Caching.ICache`1.TimeToLiveAsync(System.Span{System.Char},System.Threading.CancellationToken)</Target>
+    <Left>lib/net8.0/UiPath.Caching.Abstractions.dll</Left>
+    <Right>lib/net8.0/UiPath.Caching.Abstractions.dll</Right>
+    <IsBaselineSuppression>true</IsBaselineSuppression>
+  </Suppression>
+  <Suppression>
+    <DiagnosticId>CP0006</DiagnosticId>
+    <Target>M:UiPath.Caching.ICache`1.TryAddAsync(System.Span{System.Char},`0,System.DateTimeOffset,System.Threading.CancellationToken)</Target>
+    <Left>lib/net8.0/UiPath.Caching.Abstractions.dll</Left>
+    <Right>lib/net8.0/UiPath.Caching.Abstractions.dll</Right>
+    <IsBaselineSuppression>true</IsBaselineSuppression>
+  </Suppression>
+  <Suppression>
+    <DiagnosticId>CP0006</DiagnosticId>
+    <Target>M:UiPath.Caching.ICache`1.TryAddAsync(System.Span{System.Char},`0,System.Threading.CancellationToken)</Target>
+    <Left>lib/net8.0/UiPath.Caching.Abstractions.dll</Left>
+    <Right>lib/net8.0/UiPath.Caching.Abstractions.dll</Right>
+    <IsBaselineSuppression>true</IsBaselineSuppression>
+  </Suppression>
+  <Suppression>
+    <DiagnosticId>CP0006</DiagnosticId>
+    <Target>M:UiPath.Caching.ICache`1.TryAddAsync(System.Span{System.Char},`0,System.TimeSpan,System.Threading.CancellationToken)</Target>
+    <Left>lib/net8.0/UiPath.Caching.Abstractions.dll</Left>
+    <Right>lib/net8.0/UiPath.Caching.Abstractions.dll</Right>
+    <IsBaselineSuppression>true</IsBaselineSuppression>
+  </Suppression>
+  <Suppression>
+    <DiagnosticId>CP0006</DiagnosticId>
     <Target>M:UiPath.Caching.IHashCache.ContainsAsync``1(System.Span{System.Char},System.Threading.CancellationToken)</Target>
+    <Left>lib/net8.0/UiPath.Caching.Abstractions.dll</Left>
+    <Right>lib/net8.0/UiPath.Caching.Abstractions.dll</Right>
+    <IsBaselineSuppression>true</IsBaselineSuppression>
+  </Suppression>
+  <Suppression>
+    <DiagnosticId>CP0006</DiagnosticId>
+    <Target>M:UiPath.Caching.IHashCache.ExpireTimeAsync``1(System.Span{System.Char},System.Threading.CancellationToken)</Target>
+    <Left>lib/net8.0/UiPath.Caching.Abstractions.dll</Left>
+    <Right>lib/net8.0/UiPath.Caching.Abstractions.dll</Right>
+    <IsBaselineSuppression>true</IsBaselineSuppression>
+  </Suppression>
+  <Suppression>
+    <DiagnosticId>CP0006</DiagnosticId>
+    <Target>M:UiPath.Caching.IHashCache.GetAsync``1(System.Span{System.Char},System.String[],UiPath.Caching.CachePolicy,System.Threading.CancellationToken)</Target>
     <Left>lib/net8.0/UiPath.Caching.Abstractions.dll</Left>
     <Right>lib/net8.0/UiPath.Caching.Abstractions.dll</Right>
     <IsBaselineSuppression>true</IsBaselineSuppression>
@@ -1355,6 +1922,13 @@
   <Suppression>
     <DiagnosticId>CP0006</DiagnosticId>
     <Target>M:UiPath.Caching.IHashCache.GetItemAsync``1(System.Span{System.Char},System.String,UiPath.Caching.CachePolicy,System.Threading.CancellationToken)</Target>
+    <Left>lib/net8.0/UiPath.Caching.Abstractions.dll</Left>
+    <Right>lib/net8.0/UiPath.Caching.Abstractions.dll</Right>
+    <IsBaselineSuppression>true</IsBaselineSuppression>
+  </Suppression>
+  <Suppression>
+    <DiagnosticId>CP0006</DiagnosticId>
+    <Target>M:UiPath.Caching.IHashCache.GetMetadataAsync``1(System.Span{System.Char},System.Threading.CancellationToken)</Target>
     <Left>lib/net8.0/UiPath.Caching.Abstractions.dll</Left>
     <Right>lib/net8.0/UiPath.Caching.Abstractions.dll</Right>
     <IsBaselineSuppression>true</IsBaselineSuppression>
@@ -1445,7 +2019,42 @@
   </Suppression>
   <Suppression>
     <DiagnosticId>CP0006</DiagnosticId>
+    <Target>M:UiPath.Caching.IHashCache.RefreshAsync``1(System.Span{System.Char},System.DateTimeOffset,UiPath.Caching.CachePolicy,System.Threading.CancellationToken)</Target>
+    <Left>lib/net8.0/UiPath.Caching.Abstractions.dll</Left>
+    <Right>lib/net8.0/UiPath.Caching.Abstractions.dll</Right>
+    <IsBaselineSuppression>true</IsBaselineSuppression>
+  </Suppression>
+  <Suppression>
+    <DiagnosticId>CP0006</DiagnosticId>
+    <Target>M:UiPath.Caching.IHashCache.RefreshAsync``1(System.Span{System.Char},System.TimeSpan,UiPath.Caching.CachePolicy,System.Threading.CancellationToken)</Target>
+    <Left>lib/net8.0/UiPath.Caching.Abstractions.dll</Left>
+    <Right>lib/net8.0/UiPath.Caching.Abstractions.dll</Right>
+    <IsBaselineSuppression>true</IsBaselineSuppression>
+  </Suppression>
+  <Suppression>
+    <DiagnosticId>CP0006</DiagnosticId>
+    <Target>M:UiPath.Caching.IHashCache.RefreshAsync``1(System.Span{System.Char},UiPath.Caching.CachePolicy,System.Threading.CancellationToken)</Target>
+    <Left>lib/net8.0/UiPath.Caching.Abstractions.dll</Left>
+    <Right>lib/net8.0/UiPath.Caching.Abstractions.dll</Right>
+    <IsBaselineSuppression>true</IsBaselineSuppression>
+  </Suppression>
+  <Suppression>
+    <DiagnosticId>CP0006</DiagnosticId>
+    <Target>M:UiPath.Caching.IHashCache.RefreshAsync``1(System.Span{System.Char},UiPath.Caching.HashCacheEntryOptions,UiPath.Caching.CachePolicy,System.Threading.CancellationToken)</Target>
+    <Left>lib/net8.0/UiPath.Caching.Abstractions.dll</Left>
+    <Right>lib/net8.0/UiPath.Caching.Abstractions.dll</Right>
+    <IsBaselineSuppression>true</IsBaselineSuppression>
+  </Suppression>
+  <Suppression>
+    <DiagnosticId>CP0006</DiagnosticId>
     <Target>M:UiPath.Caching.IHashCache.RemoveAsync``1(System.Span{System.Char},System.Threading.CancellationToken)</Target>
+    <Left>lib/net8.0/UiPath.Caching.Abstractions.dll</Left>
+    <Right>lib/net8.0/UiPath.Caching.Abstractions.dll</Right>
+    <IsBaselineSuppression>true</IsBaselineSuppression>
+  </Suppression>
+  <Suppression>
+    <DiagnosticId>CP0006</DiagnosticId>
+    <Target>M:UiPath.Caching.IHashCache.RemoveFieldsAsync``1(System.Span{System.Char},System.String[],System.Threading.CancellationToken)</Target>
     <Left>lib/net8.0/UiPath.Caching.Abstractions.dll</Left>
     <Right>lib/net8.0/UiPath.Caching.Abstractions.dll</Right>
     <IsBaselineSuppression>true</IsBaselineSuppression>
@@ -1501,7 +2110,35 @@
   </Suppression>
   <Suppression>
     <DiagnosticId>CP0006</DiagnosticId>
+    <Target>M:UiPath.Caching.IHashCache.SetMetadataAsync``1(System.Span{System.Char},System.Collections.Generic.IDictionary{System.String,System.String},System.Threading.CancellationToken)</Target>
+    <Left>lib/net8.0/UiPath.Caching.Abstractions.dll</Left>
+    <Right>lib/net8.0/UiPath.Caching.Abstractions.dll</Right>
+    <IsBaselineSuppression>true</IsBaselineSuppression>
+  </Suppression>
+  <Suppression>
+    <DiagnosticId>CP0006</DiagnosticId>
+    <Target>M:UiPath.Caching.IHashCache.TimeToLiveAsync``1(System.Span{System.Char},System.Threading.CancellationToken)</Target>
+    <Left>lib/net8.0/UiPath.Caching.Abstractions.dll</Left>
+    <Right>lib/net8.0/UiPath.Caching.Abstractions.dll</Right>
+    <IsBaselineSuppression>true</IsBaselineSuppression>
+  </Suppression>
+  <Suppression>
+    <DiagnosticId>CP0006</DiagnosticId>
     <Target>M:UiPath.Caching.IHashCache`1.ContainsAsync(System.Span{System.Char},System.Threading.CancellationToken)</Target>
+    <Left>lib/net8.0/UiPath.Caching.Abstractions.dll</Left>
+    <Right>lib/net8.0/UiPath.Caching.Abstractions.dll</Right>
+    <IsBaselineSuppression>true</IsBaselineSuppression>
+  </Suppression>
+  <Suppression>
+    <DiagnosticId>CP0006</DiagnosticId>
+    <Target>M:UiPath.Caching.IHashCache`1.ExpireTimeAsync(System.Span{System.Char},System.Threading.CancellationToken)</Target>
+    <Left>lib/net8.0/UiPath.Caching.Abstractions.dll</Left>
+    <Right>lib/net8.0/UiPath.Caching.Abstractions.dll</Right>
+    <IsBaselineSuppression>true</IsBaselineSuppression>
+  </Suppression>
+  <Suppression>
+    <DiagnosticId>CP0006</DiagnosticId>
+    <Target>M:UiPath.Caching.IHashCache`1.GetAsync(System.Span{System.Char},System.String[],System.Threading.CancellationToken)</Target>
     <Left>lib/net8.0/UiPath.Caching.Abstractions.dll</Left>
     <Right>lib/net8.0/UiPath.Caching.Abstractions.dll</Right>
     <IsBaselineSuppression>true</IsBaselineSuppression>
@@ -1523,6 +2160,13 @@
   <Suppression>
     <DiagnosticId>CP0006</DiagnosticId>
     <Target>M:UiPath.Caching.IHashCache`1.GetItemAsync(System.Span{System.Char},System.String,System.Threading.CancellationToken)</Target>
+    <Left>lib/net8.0/UiPath.Caching.Abstractions.dll</Left>
+    <Right>lib/net8.0/UiPath.Caching.Abstractions.dll</Right>
+    <IsBaselineSuppression>true</IsBaselineSuppression>
+  </Suppression>
+  <Suppression>
+    <DiagnosticId>CP0006</DiagnosticId>
+    <Target>M:UiPath.Caching.IHashCache`1.GetMetadataAsync(System.Span{System.Char},System.Threading.CancellationToken)</Target>
     <Left>lib/net8.0/UiPath.Caching.Abstractions.dll</Left>
     <Right>lib/net8.0/UiPath.Caching.Abstractions.dll</Right>
     <IsBaselineSuppression>true</IsBaselineSuppression>
@@ -1592,7 +2236,42 @@
   </Suppression>
   <Suppression>
     <DiagnosticId>CP0006</DiagnosticId>
+    <Target>M:UiPath.Caching.IHashCache`1.RefreshAsync(System.Span{System.Char},System.DateTimeOffset,System.Threading.CancellationToken)</Target>
+    <Left>lib/net8.0/UiPath.Caching.Abstractions.dll</Left>
+    <Right>lib/net8.0/UiPath.Caching.Abstractions.dll</Right>
+    <IsBaselineSuppression>true</IsBaselineSuppression>
+  </Suppression>
+  <Suppression>
+    <DiagnosticId>CP0006</DiagnosticId>
+    <Target>M:UiPath.Caching.IHashCache`1.RefreshAsync(System.Span{System.Char},System.Threading.CancellationToken)</Target>
+    <Left>lib/net8.0/UiPath.Caching.Abstractions.dll</Left>
+    <Right>lib/net8.0/UiPath.Caching.Abstractions.dll</Right>
+    <IsBaselineSuppression>true</IsBaselineSuppression>
+  </Suppression>
+  <Suppression>
+    <DiagnosticId>CP0006</DiagnosticId>
+    <Target>M:UiPath.Caching.IHashCache`1.RefreshAsync(System.Span{System.Char},System.TimeSpan,System.Threading.CancellationToken)</Target>
+    <Left>lib/net8.0/UiPath.Caching.Abstractions.dll</Left>
+    <Right>lib/net8.0/UiPath.Caching.Abstractions.dll</Right>
+    <IsBaselineSuppression>true</IsBaselineSuppression>
+  </Suppression>
+  <Suppression>
+    <DiagnosticId>CP0006</DiagnosticId>
+    <Target>M:UiPath.Caching.IHashCache`1.RefreshAsync(System.Span{System.Char},UiPath.Caching.HashCacheEntryOptions,System.Threading.CancellationToken)</Target>
+    <Left>lib/net8.0/UiPath.Caching.Abstractions.dll</Left>
+    <Right>lib/net8.0/UiPath.Caching.Abstractions.dll</Right>
+    <IsBaselineSuppression>true</IsBaselineSuppression>
+  </Suppression>
+  <Suppression>
+    <DiagnosticId>CP0006</DiagnosticId>
     <Target>M:UiPath.Caching.IHashCache`1.RemoveAsync(System.Span{System.Char},System.Threading.CancellationToken)</Target>
+    <Left>lib/net8.0/UiPath.Caching.Abstractions.dll</Left>
+    <Right>lib/net8.0/UiPath.Caching.Abstractions.dll</Right>
+    <IsBaselineSuppression>true</IsBaselineSuppression>
+  </Suppression>
+  <Suppression>
+    <DiagnosticId>CP0006</DiagnosticId>
+    <Target>M:UiPath.Caching.IHashCache`1.RemoveFieldsAsync(System.Span{System.Char},System.String[],System.Threading.CancellationToken)</Target>
     <Left>lib/net8.0/UiPath.Caching.Abstractions.dll</Left>
     <Right>lib/net8.0/UiPath.Caching.Abstractions.dll</Right>
     <IsBaselineSuppression>true</IsBaselineSuppression>
@@ -1655,6 +2334,27 @@
   </Suppression>
   <Suppression>
     <DiagnosticId>CP0006</DiagnosticId>
+    <Target>M:UiPath.Caching.IHashCache`1.SetMetadataAsync(System.Span{System.Char},System.Collections.Generic.IDictionary{System.String,System.String},System.Threading.CancellationToken)</Target>
+    <Left>lib/net8.0/UiPath.Caching.Abstractions.dll</Left>
+    <Right>lib/net8.0/UiPath.Caching.Abstractions.dll</Right>
+    <IsBaselineSuppression>true</IsBaselineSuppression>
+  </Suppression>
+  <Suppression>
+    <DiagnosticId>CP0006</DiagnosticId>
+    <Target>M:UiPath.Caching.IHashCache`1.TimeToLiveAsync(System.Span{System.Char},System.Threading.CancellationToken)</Target>
+    <Left>lib/net8.0/UiPath.Caching.Abstractions.dll</Left>
+    <Right>lib/net8.0/UiPath.Caching.Abstractions.dll</Right>
+    <IsBaselineSuppression>true</IsBaselineSuppression>
+  </Suppression>
+  <Suppression>
+    <DiagnosticId>CP0006</DiagnosticId>
+    <Target>M:UiPath.Caching.ISpanKeyCache.ExpireTimeAsync``1(System.Span{System.Char},System.Threading.CancellationToken)</Target>
+    <Left>lib/net8.0/UiPath.Caching.Abstractions.dll</Left>
+    <Right>lib/net8.0/UiPath.Caching.Abstractions.dll</Right>
+    <IsBaselineSuppression>true</IsBaselineSuppression>
+  </Suppression>
+  <Suppression>
+    <DiagnosticId>CP0006</DiagnosticId>
     <Target>M:UiPath.Caching.ISpanKeyCache.GetOrAddWithExpirationAsync``1(System.Span{System.Char},System.Func{System.Threading.CancellationToken,System.Threading.Tasks.Task{UiPath.Caching.GeneratedValue{``0}}},UiPath.Caching.CachePolicy,System.Threading.CancellationToken)</Target>
     <Left>lib/net8.0/UiPath.Caching.Abstractions.dll</Left>
     <Right>lib/net8.0/UiPath.Caching.Abstractions.dll</Right>
@@ -1684,6 +2384,20 @@
   <Suppression>
     <DiagnosticId>CP0006</DiagnosticId>
     <Target>M:UiPath.Caching.ISpanKeyCache.SetAsync``1(System.Span{System.Char},``0,UiPath.Caching.CachePolicy,System.Threading.CancellationToken)</Target>
+    <Left>lib/net8.0/UiPath.Caching.Abstractions.dll</Left>
+    <Right>lib/net8.0/UiPath.Caching.Abstractions.dll</Right>
+    <IsBaselineSuppression>true</IsBaselineSuppression>
+  </Suppression>
+  <Suppression>
+    <DiagnosticId>CP0006</DiagnosticId>
+    <Target>M:UiPath.Caching.ISpanKeyCache.TimeToLiveAsync``1(System.Span{System.Char},System.Threading.CancellationToken)</Target>
+    <Left>lib/net8.0/UiPath.Caching.Abstractions.dll</Left>
+    <Right>lib/net8.0/UiPath.Caching.Abstractions.dll</Right>
+    <IsBaselineSuppression>true</IsBaselineSuppression>
+  </Suppression>
+  <Suppression>
+    <DiagnosticId>CP0006</DiagnosticId>
+    <Target>M:UiPath.Caching.ISpanKeyCache`1.ExpireTimeAsync(System.Span{System.Char},System.Threading.CancellationToken)</Target>
     <Left>lib/net8.0/UiPath.Caching.Abstractions.dll</Left>
     <Right>lib/net8.0/UiPath.Caching.Abstractions.dll</Right>
     <IsBaselineSuppression>true</IsBaselineSuppression>
@@ -1725,6 +2439,62 @@
   </Suppression>
   <Suppression>
     <DiagnosticId>CP0006</DiagnosticId>
+    <Target>M:UiPath.Caching.ISpanKeyCache`1.TimeToLiveAsync(System.Span{System.Char},System.Threading.CancellationToken)</Target>
+    <Left>lib/net8.0/UiPath.Caching.Abstractions.dll</Left>
+    <Right>lib/net8.0/UiPath.Caching.Abstractions.dll</Right>
+    <IsBaselineSuppression>true</IsBaselineSuppression>
+  </Suppression>
+  <Suppression>
+    <DiagnosticId>CP0006</DiagnosticId>
+    <Target>M:UiPath.Caching.ISpanKeyHashCache.ExpireTimeAsync``1(System.Span{System.Char},System.Threading.CancellationToken)</Target>
+    <Left>lib/net8.0/UiPath.Caching.Abstractions.dll</Left>
+    <Right>lib/net8.0/UiPath.Caching.Abstractions.dll</Right>
+    <IsBaselineSuppression>true</IsBaselineSuppression>
+  </Suppression>
+  <Suppression>
+    <DiagnosticId>CP0006</DiagnosticId>
+    <Target>M:UiPath.Caching.ISpanKeyHashCache.GetAsync``1(System.Span{System.Char},System.String[],UiPath.Caching.CachePolicy,System.Threading.CancellationToken)</Target>
+    <Left>lib/net8.0/UiPath.Caching.Abstractions.dll</Left>
+    <Right>lib/net8.0/UiPath.Caching.Abstractions.dll</Right>
+    <IsBaselineSuppression>true</IsBaselineSuppression>
+  </Suppression>
+  <Suppression>
+    <DiagnosticId>CP0006</DiagnosticId>
+    <Target>M:UiPath.Caching.ISpanKeyHashCache.GetMetadataAsync``1(System.Span{System.Char},System.Threading.CancellationToken)</Target>
+    <Left>lib/net8.0/UiPath.Caching.Abstractions.dll</Left>
+    <Right>lib/net8.0/UiPath.Caching.Abstractions.dll</Right>
+    <IsBaselineSuppression>true</IsBaselineSuppression>
+  </Suppression>
+  <Suppression>
+    <DiagnosticId>CP0006</DiagnosticId>
+    <Target>M:UiPath.Caching.ISpanKeyHashCache.GetOrAddAsync``2(System.Span{System.Char},``1,System.Func{``1,System.Threading.CancellationToken,System.Threading.Tasks.Task{System.Collections.Generic.IDictionary{System.String,``0}}},System.DateTimeOffset,System.Nullable{UiPath.Caching.HashCacheSetOption},UiPath.Caching.CachePolicy,System.Threading.CancellationToken)</Target>
+    <Left>lib/net8.0/UiPath.Caching.Abstractions.dll</Left>
+    <Right>lib/net8.0/UiPath.Caching.Abstractions.dll</Right>
+    <IsBaselineSuppression>true</IsBaselineSuppression>
+  </Suppression>
+  <Suppression>
+    <DiagnosticId>CP0006</DiagnosticId>
+    <Target>M:UiPath.Caching.ISpanKeyHashCache.GetOrAddAsync``2(System.Span{System.Char},``1,System.Func{``1,System.Threading.CancellationToken,System.Threading.Tasks.Task{System.Collections.Generic.IDictionary{System.String,``0}}},System.DateTimeOffset,UiPath.Caching.CachePolicy,System.Threading.CancellationToken)</Target>
+    <Left>lib/net8.0/UiPath.Caching.Abstractions.dll</Left>
+    <Right>lib/net8.0/UiPath.Caching.Abstractions.dll</Right>
+    <IsBaselineSuppression>true</IsBaselineSuppression>
+  </Suppression>
+  <Suppression>
+    <DiagnosticId>CP0006</DiagnosticId>
+    <Target>M:UiPath.Caching.ISpanKeyHashCache.GetOrAddAsync``2(System.Span{System.Char},``1,System.Func{``1,System.Threading.CancellationToken,System.Threading.Tasks.Task{System.Collections.Generic.IDictionary{System.String,``0}}},System.TimeSpan,UiPath.Caching.CachePolicy,System.Threading.CancellationToken)</Target>
+    <Left>lib/net8.0/UiPath.Caching.Abstractions.dll</Left>
+    <Right>lib/net8.0/UiPath.Caching.Abstractions.dll</Right>
+    <IsBaselineSuppression>true</IsBaselineSuppression>
+  </Suppression>
+  <Suppression>
+    <DiagnosticId>CP0006</DiagnosticId>
+    <Target>M:UiPath.Caching.ISpanKeyHashCache.GetOrAddAsync``2(System.Span{System.Char},``1,System.Func{``1,System.Threading.CancellationToken,System.Threading.Tasks.Task{System.Collections.Generic.IDictionary{System.String,``0}}},UiPath.Caching.CachePolicy,System.Threading.CancellationToken)</Target>
+    <Left>lib/net8.0/UiPath.Caching.Abstractions.dll</Left>
+    <Right>lib/net8.0/UiPath.Caching.Abstractions.dll</Right>
+    <IsBaselineSuppression>true</IsBaselineSuppression>
+  </Suppression>
+  <Suppression>
+    <DiagnosticId>CP0006</DiagnosticId>
     <Target>M:UiPath.Caching.ISpanKeyHashCache.SetAsync``1(System.Span{System.Char},System.Collections.Generic.IDictionary{System.String,``0},System.DateTimeOffset,UiPath.Caching.CachePolicy,System.Threading.CancellationToken)</Target>
     <Left>lib/net8.0/UiPath.Caching.Abstractions.dll</Left>
     <Right>lib/net8.0/UiPath.Caching.Abstractions.dll</Right>
@@ -1753,6 +2523,55 @@
   </Suppression>
   <Suppression>
     <DiagnosticId>CP0006</DiagnosticId>
+    <Target>M:UiPath.Caching.ISpanKeyHashCache.TimeToLiveAsync``1(System.Span{System.Char},System.Threading.CancellationToken)</Target>
+    <Left>lib/net8.0/UiPath.Caching.Abstractions.dll</Left>
+    <Right>lib/net8.0/UiPath.Caching.Abstractions.dll</Right>
+    <IsBaselineSuppression>true</IsBaselineSuppression>
+  </Suppression>
+  <Suppression>
+    <DiagnosticId>CP0006</DiagnosticId>
+    <Target>M:UiPath.Caching.ISpanKeyHashCache`1.ExpireTimeAsync(System.Span{System.Char},System.Threading.CancellationToken)</Target>
+    <Left>lib/net8.0/UiPath.Caching.Abstractions.dll</Left>
+    <Right>lib/net8.0/UiPath.Caching.Abstractions.dll</Right>
+    <IsBaselineSuppression>true</IsBaselineSuppression>
+  </Suppression>
+  <Suppression>
+    <DiagnosticId>CP0006</DiagnosticId>
+    <Target>M:UiPath.Caching.ISpanKeyHashCache`1.GetAsync(System.Span{System.Char},System.String[],System.Threading.CancellationToken)</Target>
+    <Left>lib/net8.0/UiPath.Caching.Abstractions.dll</Left>
+    <Right>lib/net8.0/UiPath.Caching.Abstractions.dll</Right>
+    <IsBaselineSuppression>true</IsBaselineSuppression>
+  </Suppression>
+  <Suppression>
+    <DiagnosticId>CP0006</DiagnosticId>
+    <Target>M:UiPath.Caching.ISpanKeyHashCache`1.GetMetadataAsync(System.Span{System.Char},System.Threading.CancellationToken)</Target>
+    <Left>lib/net8.0/UiPath.Caching.Abstractions.dll</Left>
+    <Right>lib/net8.0/UiPath.Caching.Abstractions.dll</Right>
+    <IsBaselineSuppression>true</IsBaselineSuppression>
+  </Suppression>
+  <Suppression>
+    <DiagnosticId>CP0006</DiagnosticId>
+    <Target>M:UiPath.Caching.ISpanKeyHashCache`1.GetOrAddAsync``1(System.Span{System.Char},``0,System.Func{``0,System.Threading.CancellationToken,System.Threading.Tasks.Task{System.Collections.Generic.IDictionary{System.String,`0}}},System.DateTimeOffset,System.Threading.CancellationToken)</Target>
+    <Left>lib/net8.0/UiPath.Caching.Abstractions.dll</Left>
+    <Right>lib/net8.0/UiPath.Caching.Abstractions.dll</Right>
+    <IsBaselineSuppression>true</IsBaselineSuppression>
+  </Suppression>
+  <Suppression>
+    <DiagnosticId>CP0006</DiagnosticId>
+    <Target>M:UiPath.Caching.ISpanKeyHashCache`1.GetOrAddAsync``1(System.Span{System.Char},``0,System.Func{``0,System.Threading.CancellationToken,System.Threading.Tasks.Task{System.Collections.Generic.IDictionary{System.String,`0}}},System.Threading.CancellationToken)</Target>
+    <Left>lib/net8.0/UiPath.Caching.Abstractions.dll</Left>
+    <Right>lib/net8.0/UiPath.Caching.Abstractions.dll</Right>
+    <IsBaselineSuppression>true</IsBaselineSuppression>
+  </Suppression>
+  <Suppression>
+    <DiagnosticId>CP0006</DiagnosticId>
+    <Target>M:UiPath.Caching.ISpanKeyHashCache`1.GetOrAddAsync``1(System.Span{System.Char},``0,System.Func{``0,System.Threading.CancellationToken,System.Threading.Tasks.Task{System.Collections.Generic.IDictionary{System.String,`0}}},System.TimeSpan,System.Threading.CancellationToken)</Target>
+    <Left>lib/net8.0/UiPath.Caching.Abstractions.dll</Left>
+    <Right>lib/net8.0/UiPath.Caching.Abstractions.dll</Right>
+    <IsBaselineSuppression>true</IsBaselineSuppression>
+  </Suppression>
+  <Suppression>
+    <DiagnosticId>CP0006</DiagnosticId>
     <Target>M:UiPath.Caching.ISpanKeyHashCache`1.SetAsync(System.Span{System.Char},System.Collections.Generic.IDictionary{System.String,`0},System.DateTimeOffset,System.Threading.CancellationToken)</Target>
     <Left>lib/net8.0/UiPath.Caching.Abstractions.dll</Left>
     <Right>lib/net8.0/UiPath.Caching.Abstractions.dll</Right>
@@ -1775,6 +2594,27 @@
   <Suppression>
     <DiagnosticId>CP0006</DiagnosticId>
     <Target>M:UiPath.Caching.ISpanKeyHashCache`1.SetAsync(System.Span{System.Char},System.Collections.Generic.IDictionary{System.String,`0},UiPath.Caching.HashCacheEntryOptions,System.Threading.CancellationToken)</Target>
+    <Left>lib/net8.0/UiPath.Caching.Abstractions.dll</Left>
+    <Right>lib/net8.0/UiPath.Caching.Abstractions.dll</Right>
+    <IsBaselineSuppression>true</IsBaselineSuppression>
+  </Suppression>
+  <Suppression>
+    <DiagnosticId>CP0006</DiagnosticId>
+    <Target>M:UiPath.Caching.ISpanKeyHashCache`1.TimeToLiveAsync(System.Span{System.Char},System.Threading.CancellationToken)</Target>
+    <Left>lib/net8.0/UiPath.Caching.Abstractions.dll</Left>
+    <Right>lib/net8.0/UiPath.Caching.Abstractions.dll</Right>
+    <IsBaselineSuppression>true</IsBaselineSuppression>
+  </Suppression>
+  <Suppression>
+    <DiagnosticId>CP0008</DiagnosticId>
+    <Target>T:UiPath.Caching.NullCache</Target>
+    <Left>lib/net10.0/UiPath.Caching.Abstractions.dll</Left>
+    <Right>lib/net10.0/UiPath.Caching.Abstractions.dll</Right>
+    <IsBaselineSuppression>true</IsBaselineSuppression>
+  </Suppression>
+  <Suppression>
+    <DiagnosticId>CP0008</DiagnosticId>
+    <Target>T:UiPath.Caching.NullCache</Target>
     <Left>lib/net8.0/UiPath.Caching.Abstractions.dll</Left>
     <Right>lib/net8.0/UiPath.Caching.Abstractions.dll</Right>
     <IsBaselineSuppression>true</IsBaselineSuppression>

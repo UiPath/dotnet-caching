@@ -22,8 +22,10 @@ public class SpanGeneratedExpirationTests
         await typed.GetOrAddWithExpirationAsync(default, Generate, Ct);
         await typed.GetOrAddWithExpirationAsync(default, 1, static (_, _) => Generate(Ct), Ct);
 
-        await cache.Received(2).GetCacheEntryAsync<string>(Arg.Any<CacheKey>(), null, Ct);
-        await typed.Received(2).GetAsync(Arg.Any<CacheKey>(), Ct);
+        await cache.Received(1).GetOrAddWithExpirationAsync(Arg.Any<CacheKey>(), Arg.Any<Func<CancellationToken, Task<GeneratedValue<string>>>>(), null, Ct);
+        await cache.Received(1).GetOrAddWithExpirationAsync(Arg.Any<CacheKey>(), 1, Arg.Any<Func<int, CancellationToken, Task<GeneratedValue<string>>>>(), null, Ct);
+        await typed.Received(1).GetOrAddWithExpirationAsync(Arg.Any<CacheKey>(), Arg.Any<Func<CancellationToken, Task<GeneratedValue<string>>>>(), Ct);
+        await typed.Received(1).GetOrAddWithExpirationAsync(Arg.Any<CacheKey>(), 1, Arg.Any<Func<int, CancellationToken, Task<GeneratedValue<string>>>>(), Ct);
     }
 
     [Fact]
@@ -36,7 +38,8 @@ public class SpanGeneratedExpirationTests
         await typed.GetOrAddWithExpirationAsync(default, Generate, Ct);
         await typed.GetOrAddWithExpirationAsync(default, 1, static (_, _) => Generate(Ct), Ct);
 
-        await inner.Received(2).GetCacheEntryAsync<string>(Arg.Any<CacheKey>(), Arg.Any<CachePolicy?>(), Ct);
+        await inner.Received(1).GetOrAddWithExpirationAsync(Arg.Any<CacheKey>(), Arg.Any<Func<CancellationToken, Task<GeneratedValue<string>>>>(), Arg.Any<CachePolicy?>(), Ct);
+        await inner.Received(1).GetOrAddWithExpirationAsync(Arg.Any<CacheKey>(), 1, Arg.Any<Func<int, CancellationToken, Task<GeneratedValue<string>>>>(), Arg.Any<CachePolicy?>(), Ct);
     }
 
     [Theory]
@@ -211,8 +214,10 @@ public class SpanGeneratedExpirationTests
     {
         var cache = Substitute.For<ICache>();
         var typed = Substitute.For<ICache<string>>();
-        cache.GetCacheEntryAsync<string>(new CacheKey("k"), null, Ct).Returns(new TestCacheEntry<string?> { Value = "hit", Expiration = DateTimeOffset.MaxValue, Found = true });
-        typed.GetAsync(new CacheKey("k"), Ct).Returns("typed-hit");
+        ValueTaskStubs.Returns(cache.GetOrAddWithExpirationAsync(new CacheKey("k"), Arg.Any<Func<CancellationToken, Task<GeneratedValue<string>>>>(), null, Ct), "hit");
+        ValueTaskStubs.Returns(cache.GetOrAddWithExpirationAsync(new CacheKey("k"), 1, Arg.Any<Func<int, CancellationToken, Task<GeneratedValue<string>>>>(), null, Ct), "hit");
+        ValueTaskStubs.Returns(typed.GetOrAddWithExpirationAsync(new CacheKey("k"), Arg.Any<Func<CancellationToken, Task<GeneratedValue<string>>>>(), Ct), "typed-hit");
+        ValueTaskStubs.Returns(typed.GetOrAddWithExpirationAsync(new CacheKey("k"), 1, Arg.Any<Func<int, CancellationToken, Task<GeneratedValue<string>>>>(), Ct), "typed-hit");
 
         Complete(Span(cache, "k", Unexpected, token: Ct)).Should().Be("hit");
         Complete(SpanState(cache, "k", 1, UnexpectedState)).Should().Be("hit");

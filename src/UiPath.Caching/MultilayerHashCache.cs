@@ -4,7 +4,7 @@ using UiPath.Caching.Telemetry;
 
 namespace UiPath.Caching;
 
-internal sealed partial class MultilayerHashCache : MultilayerCacheBase, IHashCache, ISpanKeyHashCache, IStatefulHashCache, IStatefulSpanKeyHashCache
+internal sealed partial class MultilayerHashCache : MultilayerCacheBase, IHashCache, ISpanKeyHashCache
 {
     // A hash that stays a write short for long, such as when a write of this node was never laid over it, must not hold every write since.
     private const int MaxOwnWritesAhead = 32;
@@ -125,6 +125,18 @@ internal sealed partial class MultilayerHashCache : MultilayerCacheBase, IHashCa
         policy ??= _defaultPolicy;
         var cacheEntry = await GetCacheEntryAsync<T>(_entryBuilder.BuildEntryOptions<T>(cacheKey, fields, default, token: token), policy);
         return cacheEntry?.Value ?? Empty<T>();
+    }
+
+    public ValueTask<IDictionary<string, T?>> GetAsync<T>(Span<char> cacheKey, string[] fields, CachePolicy? policy, CancellationToken token = default)
+    {
+        NotCacheableException.ThrowIfNotCacheable<T>();
+        token.ThrowIfCancellationRequested();
+        if (TryGetLocal<T>(cacheKey, out var local))
+        {
+            return new ValueTask<IDictionary<string, T?>>(local.Value is null ? Empty<T>() : SelectFields(local.Value, fields));
+        }
+
+        return GetAsync<T>(new CacheKey(cacheKey), fields, policy, token);
     }
 
     [OverloadResolutionPriority(1)]
@@ -515,6 +527,14 @@ internal sealed partial class MultilayerHashCache : MultilayerCacheBase, IHashCa
             : await _innerCache.TimeToLiveAsync<T>(cacheEntryOptions.CacheKey, token);
     }
 
+    public ValueTask<TimeSpan?> TimeToLiveAsync<T>(Span<char> cacheKey, CancellationToken token = default)
+    {
+        NotCacheableException.ThrowIfNotCacheable<T>();
+        return !token.IsCancellationRequested && TryGetLocal<T>(cacheKey, out var local)
+            ? new ValueTask<TimeSpan?>(local.Expiration.Subtract(_clock.GetUtcNow()))
+            : TimeToLiveAsync<T>(new CacheKey(cacheKey), token);
+    }
+
     public async ValueTask<DateTimeOffset?> ExpireTimeAsync<T>(CacheKey cacheKey, CancellationToken token = default)
     {
         NotCacheableException.ThrowIfNotCacheable<T>();
@@ -524,6 +544,14 @@ internal sealed partial class MultilayerHashCache : MultilayerCacheBase, IHashCa
             : await _innerCache.ExpireTimeAsync<T>(cacheEntryOptions.CacheKey, token);
     }
 
+    public ValueTask<DateTimeOffset?> ExpireTimeAsync<T>(Span<char> cacheKey, CancellationToken token = default)
+    {
+        NotCacheableException.ThrowIfNotCacheable<T>();
+        return !token.IsCancellationRequested && TryGetLocal<T>(cacheKey, out var local)
+            ? new ValueTask<DateTimeOffset?>(local.Expiration)
+            : ExpireTimeAsync<T>(new CacheKey(cacheKey), token);
+    }
+
     public async ValueTask<IDictionary<string, string?>?> GetMetadataAsync<T>(CacheKey cacheKey, CancellationToken token = default)
     {
         NotCacheableException.ThrowIfNotCacheable<T>();
@@ -531,6 +559,14 @@ internal sealed partial class MultilayerHashCache : MultilayerCacheBase, IHashCa
         return _memoryCache.TryGetValue<ICacheEntry>(options.CacheKey.Name, out var entry)
             ? (entry?.Metadata)
             : await _innerCache.GetMetadataAsync<T>(options.CacheKey, token).ConfigureAwait(false);
+    }
+
+    public ValueTask<IDictionary<string, string?>?> GetMetadataAsync<T>(Span<char> cacheKey, CancellationToken token = default)
+    {
+        NotCacheableException.ThrowIfNotCacheable<T>();
+        return !token.IsCancellationRequested && TryGetLocal<T>(cacheKey, out var local)
+            ? new ValueTask<IDictionary<string, string?>?>(local.Metadata)
+            : GetMetadataAsync<T>(new CacheKey(cacheKey), token);
     }
 
     public async ValueTask<bool> SetMetadataAsync<T>(CacheKey cacheKey, IDictionary<string, string?> metadata, CancellationToken token = default)
@@ -1178,16 +1214,7 @@ internal sealed partial class MultilayerHashCache : MultilayerCacheBase, IHashCa
         {
             return cacheEntry;
         }
-        var allFields = options.Fields.ToHashSet(StringComparer.OrdinalIgnoreCase);
-        var values = ImmutableDictionary.CreateBuilder<string, T?>();
-        foreach (var (field, value) in cacheEntry.Value)
-        {
-            if (allFields.Contains(field))
-            {
-                values.Add(field, value);
-            }
-        }
-        return CreateEntry(values.ToImmutable(), options);
+        return CreateEntry(SelectFields(cacheEntry.Value, options.Fields), options);
     }
 
     private ICacheEntry<IDictionary<string, T?>> CreateEntry<T>(IDictionary<string, T?> values, InternalHashCacheEntryOptions options) =>

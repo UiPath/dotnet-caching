@@ -18,13 +18,33 @@ public static class BatchGetOrAdd
         ArgumentNullException.ThrowIfNull(generator);
         ArgumentNullException.ThrowIfNull(setAsync);
         NotCacheableException.ThrowIfNotCacheable<T>();
-        return RunCoreAsync(cache, entries, generator, setAsync, policy, token);
+        return RunCoreAsync(cache, entries, generator, DirectBatch<T, TState>.Invoke, setAsync, policy, token);
     }
 
-    private static async ValueTask<KeyValuePair<TState, T?>[]> RunCoreAsync<T, TState>(
+    /// <summary>As <see cref="RunAsync{T, TState}"/>, handing the generator <paramref name="argument"/> instead of a closure.</summary>
+    internal static ValueTask<KeyValuePair<TState, T?>[]> RunAsync<T, TState, TArgument>(
         ICache cache,
         KeyValuePair<CacheKey, TState>[] entries,
-        Func<TState[], CancellationToken, Task<KeyValuePair<TState, T?>[]>> generator,
+        TArgument argument,
+        Func<TArgument, TState[], CancellationToken, Task<KeyValuePair<TState, T?>[]>> generator,
+        Func<KeyValuePair<CacheKey, T?>[], CancellationToken, ValueTask<bool>> setAsync,
+        CachePolicy? policy,
+        CancellationToken token)
+        where TState : notnull
+    {
+        ArgumentNullException.ThrowIfNull(cache);
+        ArgumentNullException.ThrowIfNull(entries);
+        ArgumentNullException.ThrowIfNull(generator);
+        ArgumentNullException.ThrowIfNull(setAsync);
+        NotCacheableException.ThrowIfNotCacheable<T>();
+        return RunCoreAsync(cache, entries, argument, generator, setAsync, policy, token);
+    }
+
+    private static async ValueTask<KeyValuePair<TState, T?>[]> RunCoreAsync<T, TState, TArgument>(
+        ICache cache,
+        KeyValuePair<CacheKey, TState>[] entries,
+        TArgument argument,
+        Func<TArgument, TState[], CancellationToken, Task<KeyValuePair<TState, T?>[]>> generator,
         Func<KeyValuePair<CacheKey, T?>[], CancellationToken, ValueTask<bool>> setAsync,
         CachePolicy? policy,
         CancellationToken token)
@@ -42,7 +62,7 @@ public static class BatchGetOrAdd
         var missKeys = probeKeys.Where(k => !valueByKey.ContainsKey(k)).ToArray();
         if (missKeys.Length > 0)
         {
-            await GenerateAndStoreMissesAsync(missKeys, representative, valueByKey, generator, setAsync, token).ConfigureAwait(false);
+            await GenerateAndStoreMissesAsync(missKeys, representative, valueByKey, argument, generator, setAsync, token).ConfigureAwait(false);
         }
 
         var results = new KeyValuePair<TState, T?>[states.Count];
@@ -95,11 +115,12 @@ public static class BatchGetOrAdd
     }
 
     /// <summary>Generates the missing keys' values, writes them back, and adds them to <paramref name="valueByKey"/>.</summary>
-    private static async ValueTask GenerateAndStoreMissesAsync<T, TState>(
+    private static async ValueTask GenerateAndStoreMissesAsync<T, TState, TArgument>(
         CacheKey[] missKeys,
         Dictionary<CacheKey, TState> representative,
         Dictionary<CacheKey, T?> valueByKey,
-        Func<TState[], CancellationToken, Task<KeyValuePair<TState, T?>[]>> generator,
+        TArgument argument,
+        Func<TArgument, TState[], CancellationToken, Task<KeyValuePair<TState, T?>[]>> generator,
         Func<KeyValuePair<CacheKey, T?>[], CancellationToken, ValueTask<bool>> setAsync,
         CancellationToken token)
         where TState : notnull
@@ -111,7 +132,7 @@ public static class BatchGetOrAdd
             keyOfRequest[requestStates[i]] = missKeys[i];
         }
 
-        var produced = await generator(requestStates, token).ConfigureAwait(false);
+        var produced = await generator(argument, requestStates, token).ConfigureAwait(false);
 
         var claimed = new HashSet<TState>(missKeys.Length);
         var generated = new List<KeyValuePair<CacheKey, T?>>(missKeys.Length);

@@ -1,4 +1,3 @@
-using Moq;
 using UiPath.Caching.Tests.Fakes;
 
 namespace UiPath.Caching.Tests;
@@ -147,163 +146,37 @@ public class GeneratedExpirationTests
     }
 
     [Fact]
-    public async Task A_cache_without_the_capability_reads_then_sets_with_the_returned_expiration()
-    {
-        var deadline = DateTimeOffset.UtcNow.AddMinutes(7);
-        var cache = Substitute.For<ICache>();
-        ValueTaskStubs.Returns(cache.GetCacheEntryAsync<string>(Arg.Any<CacheKey>(), Arg.Any<CachePolicy?>(), Arg.Any<CancellationToken>()), new ValueTask<ICacheEntry<string?>>(new TestCacheEntry<string?> { Expiration = DateTimeOffset.MinValue }));
-        cache.SetAsync<string>(Arg.Any<CacheKey>(), Arg.Any<string?>(), Arg.Any<DateTimeOffset>(), Arg.Any<CachePolicy?>(), Arg.Any<CancellationToken>()).Returns(true);
-        cache.SetAsync<string>(Arg.Any<CacheKey>(), Arg.Any<string?>(), Arg.Any<CachePolicy?>(), Arg.Any<CancellationToken>()).Returns(true);
-        var typed = Substitute.For<ICache<string>>();
-        typed.SetAsync(Arg.Any<CacheKey>(), Arg.Any<string?>(), Arg.Any<DateTimeOffset>(), Arg.Any<CancellationToken>()).Returns(true);
-        typed.SetAsync(Arg.Any<CacheKey>(), Arg.Any<string?>(), Arg.Any<CancellationToken>()).Returns(true);
-
-        (await cache.GetOrAddWithExpirationAsync<string>("a", _ => Task.FromResult(new GeneratedValue<string>("jwt", deadline)), Ct)).Should().Be("jwt");
-        (await cache.GetOrAddWithExpirationAsync<string>("b", _ => Task.FromResult(new GeneratedValue<string>("jwt")), Ct)).Should().Be("jwt");
-        (await typed.GetOrAddWithExpirationAsync("a", _ => Task.FromResult(new GeneratedValue<string>("jwt", deadline)), Ct)).Should().Be("jwt");
-        (await typed.GetOrAddWithExpirationAsync("b", _ => Task.FromResult(new GeneratedValue<string>("jwt")), Ct)).Should().Be("jwt");
-
-        await cache.Received(1).SetAsync<string>(new CacheKey("a"), "jwt", deadline, Arg.Any<CachePolicy?>(), Ct);
-        await cache.Received(1).SetAsync<string>(new CacheKey("b"), "jwt", Arg.Any<CachePolicy?>(), Ct);
-        await typed.Received(1).SetAsync(new CacheKey("a"), "jwt", deadline, Ct);
-        await typed.Received(1).SetAsync(new CacheKey("b"), "jwt", Ct);
-    }
-
-    [Fact]
-    public async Task A_cache_without_the_capability_returns_a_hit_without_running_the_generator()
+    public async Task A_mock_is_reached_through_its_own_member()
     {
         var cache = Substitute.For<ICache>();
-        ValueTaskStubs.Returns(cache.GetCacheEntryAsync<string>(new CacheKey("a"), Arg.Any<CachePolicy?>(), Arg.Any<CancellationToken>()), new ValueTask<ICacheEntry<string?>>(new TestCacheEntry<string?> { Value = "cached", Expiration = DateTimeOffset.UtcNow.AddMinutes(1) }));
-        var typed = Substitute.For<ICache<string>>();
-        ValueTaskStubs.Returns(typed.GetAsync(new CacheKey("a"), Ct), "cached");
-
-        (await cache.GetOrAddWithExpirationAsync<string>("a", _ => throw new InvalidOperationException("the generator ran on a hit"), Ct)).Should().Be("cached");
-        (await typed.GetOrAddWithExpirationAsync("a", _ => throw new InvalidOperationException("the generator ran on a hit"), Ct)).Should().Be("cached");
-    }
-
-    [Fact]
-    public async Task A_cache_without_the_capability_returns_a_value_that_has_already_expired_without_failing()
-    {
-        var cache = Substitute.For<ICache>();
-        ValueTaskStubs.Returns(cache.GetCacheEntryAsync<string>(Arg.Any<CacheKey>(), Arg.Any<CachePolicy?>(), Arg.Any<CancellationToken>()), new ValueTask<ICacheEntry<string?>>(new TestCacheEntry<string?> { Expiration = DateTimeOffset.MinValue }));
         ValueTaskStubs.Returns(
-            cache.SetAsync<string>(Arg.Any<CacheKey>(), Arg.Any<string?>(), Arg.Any<DateTimeOffset>(), Arg.Any<CachePolicy?>(), Arg.Any<CancellationToken>()),
-            _ => throw new ArgumentOutOfRangeException("expiration"));
-        var typed = Substitute.For<ICache<string>>();
-        ValueTaskStubs.Returns(
-            typed.SetAsync(Arg.Any<CacheKey>(), Arg.Any<string?>(), Arg.Any<DateTimeOffset>(), Arg.Any<CancellationToken>()),
-            _ => throw new ArgumentOutOfRangeException("expiration"));
-        var past = new GeneratedValue<string>("jwt", DateTimeOffset.UtcNow.AddMinutes(-1));
-
-        (await cache.GetOrAddWithExpirationAsync<string>("a", _ => Task.FromResult(past), Ct)).Should().Be("jwt");
-        (await typed.GetOrAddWithExpirationAsync("a", _ => Task.FromResult(past), Ct)).Should().Be("jwt");
-    }
-
-    [Fact]
-    public async Task A_cache_without_the_capability_that_rejects_a_deadline_still_ahead_fails_the_call()
-    {
-        var cache = Substitute.For<ICache>();
-        ValueTaskStubs.Returns(cache.GetCacheEntryAsync<string>(Arg.Any<CacheKey>(), Arg.Any<CachePolicy?>(), Arg.Any<CancellationToken>()), new ValueTask<ICacheEntry<string?>>(new TestCacheEntry<string?> { Expiration = DateTimeOffset.MinValue }));
-        ValueTaskStubs.Returns(
-            cache.SetAsync<string>(Arg.Any<CacheKey>(), Arg.Any<string?>(), Arg.Any<DateTimeOffset>(), Arg.Any<CachePolicy?>(), Arg.Any<CancellationToken>()),
-            _ => throw new ArgumentOutOfRangeException("expiration"));
-        var typed = Substitute.For<ICache<string>>();
-        ValueTaskStubs.Returns(
-            typed.SetAsync(Arg.Any<CacheKey>(), Arg.Any<string?>(), Arg.Any<DateTimeOffset>(), Arg.Any<CancellationToken>()),
-            _ => throw new ArgumentOutOfRangeException("expiration"));
-        var ahead = new GeneratedValue<string>("jwt", DateTimeOffset.UtcNow.AddYears(50));
-
-        // Swallowed, the key would never be stored and every call would run the generator again.
-        await FluentActions.Awaiting(async () => await cache.GetOrAddWithExpirationAsync<string>("a", _ => Task.FromResult(ahead), Ct)).Should().ThrowAsync<ArgumentOutOfRangeException>();
-        await FluentActions.Awaiting(async () => await typed.GetOrAddWithExpirationAsync("a", _ => Task.FromResult(ahead), Ct)).Should().ThrowAsync<ArgumentOutOfRangeException>();
-    }
-
-    [Fact]
-    public async Task A_moq_proxy_is_read_then_set_too()
-    {
-        var deadline = DateTimeOffset.UtcNow.AddMinutes(7);
-        var cache = new Mock<ICache>();
-        cache.Setup(c => c.GetCacheEntryAsync<string>(new CacheKey("a"), It.IsAny<CachePolicy?>(), It.IsAny<CancellationToken>())).Returns(new ValueTask<ICacheEntry<string?>>(new TestCacheEntry<string?> { Expiration = DateTimeOffset.MinValue }));
-        cache.Setup(c => c.SetAsync<string>(new CacheKey("a"), "jwt", deadline, It.IsAny<CachePolicy?>(), It.IsAny<CancellationToken>())).Returns(new ValueTask<bool>(true));
-        var typed = new Mock<ICache<string>>();
-        typed.Setup(c => c.GetAsync(new CacheKey("a"), It.IsAny<CancellationToken>())).Returns(new ValueTask<string?>((string?)null));
-        typed.Setup(c => c.SetAsync(new CacheKey("a"), "jwt", deadline, It.IsAny<CancellationToken>())).Returns(new ValueTask<bool>(true));
-
-        (await cache.Object.GetOrAddWithExpirationAsync<string>("a", _ => Task.FromResult(new GeneratedValue<string>("jwt", deadline)), Ct)).Should().Be("jwt");
-        (await typed.Object.GetOrAddWithExpirationAsync("a", _ => Task.FromResult(new GeneratedValue<string>("jwt", deadline)), Ct)).Should().Be("jwt");
-
-        cache.Verify(c => c.SetAsync<string>(new CacheKey("a"), "jwt", deadline, It.IsAny<CachePolicy?>(), It.IsAny<CancellationToken>()), Times.Once);
-        typed.Verify(c => c.SetAsync(new CacheKey("a"), "jwt", deadline, It.IsAny<CancellationToken>()), Times.Once);
-    }
-
-    [Fact]
-    public async Task A_mock_with_no_entry_read_set_up_reads_as_a_miss()
-    {
-        var moq = new Mock<ICache>();
-        var substitute = Substitute.For<ICache>();
-        var generated = 0;
-        Task<GeneratedValue<string>> Generate(CancellationToken _)
-        {
-            generated++;
-            return Task.FromResult(new GeneratedValue<string>("jwt", DateTimeOffset.UtcNow.AddMinutes(7)));
-        }
-
-        (await moq.Object.GetOrAddWithExpirationAsync<string>("a", Generate, Ct)).Should().Be("jwt");
-        (await substitute.GetOrAddWithExpirationAsync<string>("a", Generate, Ct)).Should().Be("jwt");
-        (await new Cache<string>(moq.Object).GetOrAddWithExpirationAsync("a", Generate, Ct)).Should().Be("jwt");
-
-        generated.Should().Be(3);
-    }
-
-    [Fact]
-    public async Task A_cache_without_the_capability_keeps_a_cached_default_value()
-    {
-        var cache = Substitute.For<ICache>();
-        ValueTaskStubs.Returns(cache.GetCacheEntryAsync<int>(Arg.Any<CacheKey>(), Arg.Any<CachePolicy?>(), Arg.Any<CancellationToken>()), new ValueTask<ICacheEntry<int>>(new TestCacheEntry<int> { Value = 0, Expiration = DateTimeOffset.UtcNow.AddMinutes(1) }));
-        var typed = Substitute.For<ICache<int>>();
-        ValueTaskStubs.Returns(typed.GetAsync(Arg.Any<CacheKey>(), Arg.Any<CancellationToken>()), new ValueTask<int>(0));
-        ValueTaskStubs.Returns(typed.ContainsAsync(Arg.Any<CacheKey>(), Arg.Any<CancellationToken>()), new ValueTask<bool>(true));
-        var generated = 0;
-        Task<GeneratedValue<int>> Generate(CancellationToken _)
-        {
-            generated++;
-            return Task.FromResult(new GeneratedValue<int>(42));
-        }
-
-        (await cache.GetOrAddWithExpirationAsync<int>("k", Generate, Ct)).Should().Be(0);
-        (await typed.GetOrAddWithExpirationAsync("k", Generate, Ct)).Should().Be(0);
-
-        generated.Should().Be(0);
-    }
-
-    [Fact]
-    public async Task A_cache_without_the_capability_generates_on_a_miss_that_reads_as_the_default()
-    {
-        var cache = Substitute.For<ICache>();
-        ValueTaskStubs.Returns(cache.GetCacheEntryAsync<int>(Arg.Any<CacheKey>(), Arg.Any<CachePolicy?>(), Arg.Any<CancellationToken>()), new ValueTask<ICacheEntry<int>>(new TestCacheEntry<int> { Expiration = DateTimeOffset.MinValue }));
-        ValueTaskStubs.Returns(cache.SetAsync<int>(Arg.Any<CacheKey>(), 42, Arg.Any<CachePolicy?>(), Arg.Any<CancellationToken>()), new ValueTask<bool>(true));
-        var typed = Substitute.For<ICache<int>>();
-        ValueTaskStubs.Returns(typed.GetAsync(Arg.Any<CacheKey>(), Arg.Any<CancellationToken>()), new ValueTask<int>(0));
-        ValueTaskStubs.Returns(typed.SetAsync(Arg.Any<CacheKey>(), 42, Arg.Any<CancellationToken>()), new ValueTask<bool>(true));
-
-        (await cache.GetOrAddWithExpirationAsync<int>("k", _ => Task.FromResult(new GeneratedValue<int>(42)), Ct)).Should().Be(42);
-        (await typed.GetOrAddWithExpirationAsync("k", _ => Task.FromResult(new GeneratedValue<int>(42)), Ct)).Should().Be(42);
-    }
-
-    [Fact]
-    public async Task A_mock_that_adds_the_capability_is_reached_through_it()
-    {
-        var cache = Substitute.For<ICache, IGeneratedExpirationCache>();
-        ValueTaskStubs.Returns(
-            ((IGeneratedExpirationCache)cache).GetOrAddWithExpirationAsync(Arg.Any<CacheKey>(), Arg.Any<Func<CancellationToken, Task<GeneratedValue<string>>>>(), Arg.Any<CachePolicy?>(), Ct),
+            cache.GetOrAddWithExpirationAsync(Arg.Any<CacheKey>(), Arg.Any<Func<CancellationToken, Task<GeneratedValue<string>>>>(), Arg.Any<CachePolicy?>(), Ct),
             "jwt");
 
         (await cache.GetOrAddWithExpirationAsync<string>("token", _ => Task.FromResult(new GeneratedValue<string>("x")), Ct)).Should().Be("jwt");
     }
 
     [Fact]
+    public async Task A_mock_set_up_for_the_state_member_is_reached_through_it()
+    {
+        var cache = Substitute.For<ICache>();
+        ValueTaskStubs.Returns(
+            cache.GetOrAddWithExpirationAsync(Arg.Any<CacheKey>(), Arg.Any<int>(), Arg.Any<Func<int, CancellationToken, Task<GeneratedValue<string>>>>(), Arg.Any<CachePolicy?>(), Ct),
+            "jwt");
+
+        (await cache.GetOrAddWithExpirationAsync<string, int>("token", 1, static (_, _) => Task.FromResult(new GeneratedValue<string>("x")), Ct)).Should().Be("jwt");
+    }
+
+    [Fact]
     public async Task The_null_cache_returns_the_generated_value()
     {
         (await NullCache.Instance.GetOrAddWithExpirationAsync<string>("token", _ => Task.FromResult(new GeneratedValue<string>("jwt", DateTimeOffset.UtcNow.AddMinutes(1))), Ct)).Should().Be("jwt");
+    }
+
+    [Fact]
+    public async Task The_null_cache_hands_the_state_to_the_generator()
+    {
+        (await NullCache.Instance.GetOrAddWithExpirationAsync<string, string>("token", "jwt", static (s, _) => Task.FromResult(new GeneratedValue<string>(s)), Ct)).Should().Be("jwt");
+        (await ((ICache)NullCache.Instance).GetOrAddAsync<string, string>("token", "jwt", static (s, _) => Task.FromResult<string?>(s), (CachePolicy?)null, Ct)).Should().Be("jwt");
     }
 }

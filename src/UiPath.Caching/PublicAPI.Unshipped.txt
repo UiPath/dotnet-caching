@@ -63,3 +63,9 @@ UiPath.Caching.Redis.RedisReadFrom.Replica = 1 -> UiPath.Caching.Redis.RedisRead
 UiPath.Caching.Redis.RedisCacheBase.ReadFlagsFor(StackExchange.Redis.RedisKey key) -> StackExchange.Redis.CommandFlags
 UiPath.Caching.Redis.RedisCacheBase.NoteWritten(StackExchange.Redis.RedisKey key) -> void
 UiPath.Caching.Redis.RedisCacheBase.NoteWrittenAfterAsync<TResult>(StackExchange.Redis.RedisKey key, System.Threading.Tasks.ValueTask<TResult> write) -> System.Threading.Tasks.ValueTask<TResult>
+UiPath.Caching.Cache<T>.ExpireTimeAsync(System.Span<char> cacheKey, System.Threading.CancellationToken token = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.ValueTask<System.DateTimeOffset?>
+UiPath.Caching.Cache<T>.TimeToLiveAsync(System.Span<char> cacheKey, System.Threading.CancellationToken token = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.ValueTask<System.TimeSpan?>
+UiPath.Caching.HashCache<T>.ExpireTimeAsync(System.Span<char> cacheKey, System.Threading.CancellationToken token = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.ValueTask<System.DateTimeOffset?>
+UiPath.Caching.HashCache<T>.GetAsync(System.Span<char> cacheKey, string![]! fields, System.Threading.CancellationToken token = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.ValueTask<System.Collections.Generic.IDictionary<string!, T?>!>
+UiPath.Caching.HashCache<T>.GetMetadataAsync(System.Span<char> cacheKey, System.Threading.CancellationToken token = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.ValueTask<System.Collections.Generic.IDictionary<string!, string?>?>
+UiPath.Caching.HashCache<T>.TimeToLiveAsync(System.Span<char> cacheKey, System.Threading.CancellationToken token = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.ValueTask<System.TimeSpan?>

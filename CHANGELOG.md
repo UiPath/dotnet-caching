@@ -73,21 +73,21 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
   member, so `new Cache<T>(factory)` over an NSubstitute substitute no longer throws `ArgumentNullException` on
   Castle.Core 5.2.1, which fails on a call to a default interface member (castleproject/Core#684).
 
-- **State overloads on the hash caches.** `IHashCache` and `IHashCache<T>` gain `sealed` `GetOrAddAsync` members that take
-  a `TState state` before a `Func<TState, CancellationToken, Task<IDictionary<string, T?>>>` generator, for `CacheKey`
-  and `Span<char>` keys and every expiration, set-option and policy variant of the closure ones (the policy-less
-  `IHashCache` ones in `HashCacheExtensions`). On the library's multilayer and in-memory hash caches and `HashCache<T>`
-  (`IStatefulHashCache` and `IStatefulSpanKeyHashCache`, with their `<T>` siblings; the span one apart, as
-  `ISpanKeyHashCache` is, so the mockable one takes no `Span<char>`) a hit allocates nothing; any other cache, a Moq or NSubstitute proxy
-  included, is called through its closure members.
+- **State overloads on the hash caches.** `IHashCache` and `IHashCache<T>` gain `GetOrAddAsync` members that take a
+  `TState state` before a `Func<TState, CancellationToken, Task<IDictionary<string, T?>>>` generator, for every
+  expiration, set-option and policy variant of the closure ones (the policy-less `IHashCache` ones in
+  `HashCacheExtensions`). The `CacheKey` ones are plain interface members; the `Span<char>` ones are `sealed` and call
+  `ISpanKeyHashCache` (`ISpanKeyHashCache<T>`), which gains the same members, or else the `CacheKey` state member. Every
+  library hash cache, Redis included, hands the state to the generator without a closure.
 - **A state overload of `GetOrAddWithExpirationAsync`** on `ICache` and `ICache<T>` (the policy-less `ICache` one in
-  `GeneratedExpirationExtensions`), served without a closure by `IStatefulGeneratedExpirationCache` and its `<T>`
-  sibling on the library's multilayer and in-memory caches and `Cache<T>`.
+  `GeneratedExpirationExtensions`), a plain member every cache implements; the library's caches, Redis included, hand
+  the state to the generator without a closure.
 - **A batch `GetOrAddAsync` with one argument for the whole call.** `GetOrAddAsync<T, TState, TArgument>(entries,
   argument, generator, ...)` on `ICache` (and `<TState, TArgument>` on `ICache<T>`), for each expiration variant of the
   batch overload, hands the generator `argument` before the states of the keys that missed, so it can be static. The
-  argument is not a per-entry state. `IBatchArgumentCache` and its `<T>` sibling serve it on the library's multilayer
-  and in-memory caches and `Cache<T>`, binding a closure only for a miss or a rehydrate.
+  argument is not a per-entry state. It is a member every cache implements: the library's multilayer and in-memory
+  caches and `Cache<T>` bind a closure only for a miss or a rehydrate, and Redis and `NullCache` hand the argument to the
+  generator without one.
 
   None of the new overloads takes a call written for an existing one: a generator that throws or returns `default` has
   no natural type and cannot be a state or an argument, and where both apply the closure member is the more specific
@@ -96,8 +96,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
   on a public cache class takes them (`ConcreteCacheCallShapeTests`).
 - **Analyzer `UIPCACHE001`: a generator that allocates on every call.** `UiPath.Caching.Abstractions` now ships an
   analyzer and code fix (under `analyzers/dotnet/cs`; a project that references `UiPath.Caching` gets them too). It
-  reports, at Info severity, a generator passed to `GetOrAddAsync` or `GetOrAddWithExpirationAsync` on the four cache
-  interfaces, or a class that implements one, that captures `this`, a local or a parameter (itself or through a local
+  reports, at Info severity, a generator passed to `GetOrAddAsync` or `GetOrAddWithExpirationAsync` on `ICache`, `IHashCache`,
+  `ISpanKeyCache`, `ISpanKeyHashCache` and their `<T>` forms, or a class that implements one, that captures `this`, a local or a parameter (itself or through a local
   function), or is an instance method group, when a state (or batch argument) overload exists for the call; and a
   capturing lambda passed to a state overload. The fix, *Pass captured values as state*, moves the call to that
   overload with a `static` lambda: one capture is the state (`this` becomes `self`), several become a named tuple
@@ -118,6 +118,30 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
   wrote or removed within **`RedisCacheOptions.MasterReadWindow`** (1 second by default; set it above the expected replica lag), or heard an
   invalidation for through a live local entry, still goes to the master. A fire-and-forget TTL write (`AwaitRefresh` off) starts the window when
   it is queued. A key with no local entry is not guarded against another node's write, and neither is a lost-events clear on a node holding no local entries.
+
+- **Breaking for implementers of `IHashCache`, `IHashCache<T>`, `ISpanKeyHashCache` and `ISpanKeyHashCache<T>`.** The
+  state `GetOrAddAsync` overloads are now members to implement, not `sealed` defaults over the closure ones. A mock of
+  `IHashCache` or `IHashCache<T>` must set up the state member itself: a state call (and the `HashCacheSyncExtensions`
+  `GetOrAdd` on `IHashCache<T>`, which calls it) no longer falls back to the closure overload's setup. `RedisHashCache`
+  now throws `ArgumentNullException` for a `null` generator from the `GetOrAddAsync` call itself, as the other caches do,
+  instead of from the task it returns.
+
+- **Breaking for implementers and mocks of `ICache` and `ICache<T>`: `IStatefulCache` and `IGeneratedExpirationCache`
+  are folded into them.** `IStatefulCache`, `IStatefulCache<T>`, `IGeneratedExpirationCache` and
+  `IGeneratedExpirationCache<T>`, which shipped in 3.0, are removed. Their members, the `CacheKey` state `GetOrAddAsync`
+  overloads and `GetOrAddWithExpirationAsync` with and without state, are now members of `ICache` and `ICache<T>` to
+  implement, not `sealed` defaults; the `Span<char>` forms stay `sealed` and call `ISpanKeyCache` (`ISpanKeyCache<T>`),
+  whose implementers already provide them, or else the `CacheKey` member. A cache outside the library implements the new
+  members; one that implemented the removed interfaces drops them from its base list and keeps its methods. A mock of
+  `ICache` or `ICache<T>` must set up the member it is called through: a state call (and the `CacheSyncExtensions`
+  `GetOrAdd`, which calls the state `GetOrAddAsync`) no longer falls back to the closure overload's setup, and
+  `GetOrAddWithExpirationAsync` no longer reads through `GetCacheEntryAsync` (`GetAsync` and `ContainsAsync` on
+  `ICache<T>`) and writes through `SetAsync`. `GeneratedExpirationExtensions` and `StatefulCacheExtensions` keep their
+  policy-less overloads, which call the members. Code that tested `cache is IStatefulCache` or `cache is
+  IGeneratedExpirationCache` drops the test: every `ICache` has the members. The batch `GetOrAddAsync` with an argument
+  is folded the same way: its three members on `ICache` and `ICache<T>` are to implement, and a mock must set them up,
+  since a call (and the multi-key `CacheSyncExtensions.GetOrAdd`, which calls it) no longer falls back to the batch
+  closure overload's setup.
 
 - **StackExchange.Redis 3.4.20 (was 3.3.1).** It fixes transactions on an idle connection being torn down as a dead socket when the
   replies are slower than one heartbeat (the hash writes are `MULTI`/`EXEC`), and `IBatch` commands that never completed after a
@@ -190,6 +214,26 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
   implementation of any of the four `ISpanKey*` interfaces outside the library, which must add the new members. The
   span members carry `OverloadResolutionPriority(-1)`, as the other span members do.
 
+- **`Span<char>` overloads of the field, metadata, TTL and expiry reads.** `ICache`, `ICache<T>`, `IHashCache` and
+  `IHashCache<T>` gain `sealed` `TimeToLiveAsync` and `ExpireTimeAsync` members that take the key as a `Span<char>`, and
+  `IHashCache` and `IHashCache<T>` gain the same for the field-subset `GetAsync(key, fields)` and for
+  `GetMetadataAsync`. `ISpanKeyCache`, `ISpanKeyCache<T>`, `ISpanKeyHashCache` and `ISpanKeyHashCache<T>` gain the
+  matching members, which the library's multilayer and in-memory caches, the Redis hash cache, `Cache<T>`,
+  `HashCache<T>`, `NullCache` and `NullHashCache` implement; any other cache, a Moq or NSubstitute proxy included, is
+  read through its `CacheKey` member. On the multilayer and in-memory caches a local hit is found by span: a warm TTL,
+  expiry or metadata read allocates nothing on .NET 9 and later, and a field read selects its fields from the local
+  entry without building the key. **Breaking** for an implementation of any of the four `ISpanKey*` interfaces outside
+  the library, which must add the new members. The span members carry `OverloadResolutionPriority(-1)`, as the other
+  span members do.
+
+- **`Span<char>` overloads of the remaining single-key writes.** `ICache` and `ICache<T>` gain `sealed` `Span<char>`
+  forms of every `TryAddAsync` and `RefreshAsync` overload, and `IHashCache` and `IHashCache<T>` of every
+  `RefreshAsync` overload, `RemoveFieldsAsync` and `SetMetadataAsync`. Each builds the `CacheKey` from the text and
+  calls the `CacheKey` member, so every implementation, a Moq or NSubstitute proxy included, serves it unchanged; the
+  capability interfaces gain nothing. Every single-key member of the four cache interfaces now has a `Span<char>` form.
+  The members carry `OverloadResolutionPriority(-1)`; under C# 12 a bare `default` key on these members is now
+  ambiguous (CS0121), as on the other span members.
+
 - **Read scripts are on by default.** `RedisCacheOptions.ReadScriptsEnabled` now defaults to `true`: on Redis 7 and
   later, `RedisCache` and `RedisHashCache` read a value (or a hash) and its expiration with one `EVAL_RO` script
   instead of a MULTI/EXEC transaction, which allocates about 2.5 KB less per miss through the in-memory and Redis
@@ -220,13 +264,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
   it on the stream's shard where Redis 7.0 and a hash-tagged stream key allow it, and stays off by default because
   neither can be assumed.
 
-- **The span reads, the state `GetOrAddAsync` and `GetOrAddWithExpirationAsync` are interface members.** They are
-  `sealed` members with a body on `ICache`, `ICache<T>`, `IHashCache` and `IHashCache<T>`, so IntelliSense and
+- **The span reads, the state `GetOrAddAsync` and `GetOrAddWithExpirationAsync` are interface members.** The span
+  members are `sealed` members with a body on `ICache`, `ICache<T>`, `IHashCache` and `IHashCache<T>`, so IntelliSense and
   go-to-definition find them on the interface. Each body does what the extension did: a cache that implements the
-  capability interface (`ISpanKeyCache`, `IStatefulCache`, `IGeneratedExpirationCache` and their siblings) takes its
-  allocation-free path; any other cache, including a Moq or NSubstitute proxy, is called through its `CacheKey`
-  members. A sealed member is not virtual, so a proxy never intercepts it and a test's `CacheKey` setups answer it as
-  before. The policy-less state and `GetOrAddWithExpirationAsync` overloads of `ICache` stay extensions, as the other
+  capability interface (`ISpanKeyCache`, `ISpanKeyHashCache` and their siblings) takes its allocation-free path; any
+  other cache, including a Moq or NSubstitute proxy, is called through its `CacheKey` members. A sealed member is not
+  virtual, so a proxy never intercepts it and a test's `CacheKey` setups answer it as before. The `CacheKey` state
+  `GetOrAddAsync` and `GetOrAddWithExpirationAsync` are plain members (see the breaking entry under Changed). The policy-less state and `GetOrAddWithExpirationAsync` overloads of `ICache` stay extensions, as the other
   policy-less overloads do. A class does not inherit an interface's members, so the public caches declare every shape
   the removed extensions served: `NullCache` and `NullHashCache` make their span members public and
   `NullCache` adds the policy-bearing state `GetOrAddAsync` overloads and `GetOrAddWithExpirationAsync`; `Cache<T>` and
@@ -379,11 +423,6 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
   created the consumer group, and answered `NOGROUP` after it, was reported as entries lost, so the local tier could be
   expired for nothing right after a process started. Such an answer now reports a loss only when the group was known to
   exist, and a loss already reported is not reported again when the recreate had to be retried.
-
-- `GetOrAddWithExpirationAsync` on a cache that does not implement `IGeneratedExpirationCache` threw
-  `NullReferenceException` when its entry read answered `null`, as a loose Moq or NSubstitute proxy of `ICache` does for a
-  `GetCacheEntryAsync` it was not set up for, so a consumer test that mocked `ICache` under a `Cache<T>` had to set up
-  that read. A null entry now reads as a miss: the generator runs and its value is set.
 
 - **A failed multi-key `RemoveAsync` still clears this node's local entries and sends every invalidation.** The
   `CacheKey[]` overload on the multilayer cache returned as soon as the inner delete failed, before it cleared the

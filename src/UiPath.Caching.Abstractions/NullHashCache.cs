@@ -9,21 +9,19 @@ public sealed class NullHashCache : IHashCache, ISpanKeyHashCache
 
     public string Name => "Null";
 
-    public ValueTask<bool> ContainsAsync<T>(CacheKey cacheKey, CancellationToken token = default)
-    {
-        NotCacheableException.ThrowIfNotCacheable<T>();
-        return ValueTask.FromResult(false);
-    }
+    public ValueTask<bool> ContainsAsync<T>(CacheKey cacheKey, CancellationToken token = default) =>
+        NullResults.Contains<T>();
 
     [OverloadResolutionPriority(-1)]
     public ValueTask<bool> ContainsAsync<T>(Span<char> cacheKey, CancellationToken token = default) =>
         ContainsAsync<T>(CacheKey.Null, token);
 
-    public ValueTask<DateTimeOffset?> ExpireTimeAsync<T>(CacheKey cacheKey, CancellationToken token = default)
-    {
-        NotCacheableException.ThrowIfNotCacheable<T>();
-        return ValueTask.FromResult(default(DateTimeOffset?));
-    }
+    public ValueTask<DateTimeOffset?> ExpireTimeAsync<T>(CacheKey cacheKey, CancellationToken token = default) =>
+        NullResults.ExpireTime<T>();
+
+    [OverloadResolutionPriority(-1)]
+    public ValueTask<DateTimeOffset?> ExpireTimeAsync<T>(Span<char> cacheKey, CancellationToken token = default) =>
+        ExpireTimeAsync<T>(CacheKey.Null, token);
 
     public ValueTask<IDictionary<string, T?>> GetAsync<T>(CacheKey cacheKey, CachePolicy? policy, CancellationToken token = default)
     {
@@ -36,6 +34,10 @@ public sealed class NullHashCache : IHashCache, ISpanKeyHashCache
         NotCacheableException.ThrowIfNotCacheable<T>();
         return ValueTask.FromResult((IDictionary<string, T?>)ImmutableDictionary<string, T?>.Empty);
     }
+
+    [OverloadResolutionPriority(-1)]
+    public ValueTask<IDictionary<string, T?>> GetAsync<T>(Span<char> cacheKey, string[] fields, CachePolicy? policy, CancellationToken token = default) =>
+        GetAsync<T>(CacheKey.Null, fields, policy, token);
 
     [OverloadResolutionPriority(-1)]
     public ValueTask<IDictionary<string, T?>> GetAsync<T>(Span<char> cacheKey, CachePolicy? policy, CancellationToken token = default) =>
@@ -56,6 +58,10 @@ public sealed class NullHashCache : IHashCache, ISpanKeyHashCache
         NotCacheableException.ThrowIfNotCacheable<T>();
         return ValueTask.FromResult<IDictionary<string, string?>?>(default);
     }
+
+    [OverloadResolutionPriority(-1)]
+    public ValueTask<IDictionary<string, string?>?> GetMetadataAsync<T>(Span<char> cacheKey, CancellationToken token = default) =>
+        GetMetadataAsync<T>(CacheKey.Null, token);
 
     public ValueTask<T?> GetItemAsync<T>(CacheKey cacheKey, string field, CachePolicy? policy, CancellationToken token = default)
     {
@@ -96,32 +102,32 @@ public sealed class NullHashCache : IHashCache, ISpanKeyHashCache
         ReturnGeneratorAsync(generator, token);
 
     public ValueTask<IDictionary<string, T?>> GetOrAddAsync<T, TState>(CacheKey cacheKey, TState state, Func<TState, CancellationToken, Task<IDictionary<string, T?>>> generator, CachePolicy? policy, CancellationToken token = default) =>
-        ((IHashCache)this).GetOrAddAsync(cacheKey, state, generator, policy, token);
+        ReturnGeneratorAsync(state, generator, token);
 
     public ValueTask<IDictionary<string, T?>> GetOrAddAsync<T, TState>(CacheKey cacheKey, TState state, Func<TState, CancellationToken, Task<IDictionary<string, T?>>> generator, TimeSpan expiration, CachePolicy? policy, CancellationToken token = default) =>
-        ((IHashCache)this).GetOrAddAsync(cacheKey, state, generator, expiration, policy, token);
+        ReturnGeneratorAsync(state, generator, token);
 
     public ValueTask<IDictionary<string, T?>> GetOrAddAsync<T, TState>(CacheKey cacheKey, TState state, Func<TState, CancellationToken, Task<IDictionary<string, T?>>> generator, DateTimeOffset expiration, CachePolicy? policy, CancellationToken token = default) =>
-        ((IHashCache)this).GetOrAddAsync(cacheKey, state, generator, expiration, policy, token);
+        ReturnGeneratorAsync(state, generator, token);
 
     public ValueTask<IDictionary<string, T?>> GetOrAddAsync<T, TState>(CacheKey cacheKey, TState state, Func<TState, CancellationToken, Task<IDictionary<string, T?>>> generator, DateTimeOffset expiration, HashCacheSetOption? setOption, CachePolicy? policy, CancellationToken token = default) =>
-        ((IHashCache)this).GetOrAddAsync(cacheKey, state, generator, expiration, setOption, policy, token);
+        ReturnGeneratorAsync(state, generator, token);
 
     [OverloadResolutionPriority(-1)]
     public ValueTask<IDictionary<string, T?>> GetOrAddAsync<T, TState>(Span<char> cacheKey, TState state, Func<TState, CancellationToken, Task<IDictionary<string, T?>>> generator, CachePolicy? policy, CancellationToken token = default) =>
-        ((IHashCache)this).GetOrAddAsync(cacheKey, state, generator, policy, token);
+        ReturnGeneratorAsync(state, generator, token);
 
     [OverloadResolutionPriority(-1)]
     public ValueTask<IDictionary<string, T?>> GetOrAddAsync<T, TState>(Span<char> cacheKey, TState state, Func<TState, CancellationToken, Task<IDictionary<string, T?>>> generator, TimeSpan expiration, CachePolicy? policy, CancellationToken token = default) =>
-        ((IHashCache)this).GetOrAddAsync(cacheKey, state, generator, expiration, policy, token);
+        ReturnGeneratorAsync(state, generator, token);
 
     [OverloadResolutionPriority(-1)]
     public ValueTask<IDictionary<string, T?>> GetOrAddAsync<T, TState>(Span<char> cacheKey, TState state, Func<TState, CancellationToken, Task<IDictionary<string, T?>>> generator, DateTimeOffset expiration, CachePolicy? policy, CancellationToken token = default) =>
-        ((IHashCache)this).GetOrAddAsync(cacheKey, state, generator, expiration, policy, token);
+        ReturnGeneratorAsync(state, generator, token);
 
     [OverloadResolutionPriority(-1)]
     public ValueTask<IDictionary<string, T?>> GetOrAddAsync<T, TState>(Span<char> cacheKey, TState state, Func<TState, CancellationToken, Task<IDictionary<string, T?>>> generator, DateTimeOffset expiration, HashCacheSetOption? setOption, CachePolicy? policy, CancellationToken token = default) =>
-        ((IHashCache)this).GetOrAddAsync(cacheKey, state, generator, expiration, setOption, policy, token);
+        ReturnGeneratorAsync(state, generator, token);
 
     public ValueTask<bool> RefreshAsync<T>(CacheKey cacheKey, CachePolicy? policy, CancellationToken token = default) => ReturnTrueAsync<T>();
 
@@ -170,6 +176,10 @@ public sealed class NullHashCache : IHashCache, ISpanKeyHashCache
         return ValueTask.FromResult(default(TimeSpan?));
     }
 
+    [OverloadResolutionPriority(-1)]
+    public ValueTask<TimeSpan?> TimeToLiveAsync<T>(Span<char> cacheKey, CancellationToken token = default) =>
+        TimeToLiveAsync<T>(CacheKey.Null, token);
+
     public void Dispose()
     {
         // nothing to dispose
@@ -192,6 +202,18 @@ public sealed class NullHashCache : IHashCache, ISpanKeyHashCache
     {
         NotCacheableException.ThrowIfNotCacheable<T>();
         return await generator(token).ConfigureAwait(false);
+    }
+
+    private static ValueTask<IDictionary<string, T?>> ReturnGeneratorAsync<T, TState>(TState state, Func<TState, CancellationToken, Task<IDictionary<string, T?>>> generator, CancellationToken token)
+    {
+        ArgumentNullException.ThrowIfNull(generator);
+        return RunAsync(state, generator, token);
+
+        static async ValueTask<IDictionary<string, T?>> RunAsync(TState state, Func<TState, CancellationToken, Task<IDictionary<string, T?>>> generator, CancellationToken token)
+        {
+            NotCacheableException.ThrowIfNotCacheable<T>();
+            return await generator(state, token).ConfigureAwait(false);
+        }
     }
 
     private sealed record NullCacheEntry<T> : ICacheEntry<T>

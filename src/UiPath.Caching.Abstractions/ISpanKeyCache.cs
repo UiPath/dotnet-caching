@@ -32,7 +32,13 @@ public interface ISpanKeyCache
     /// <inheritdoc cref="GetAsync{T}(Span{char}, CachePolicy, CancellationToken)"/>
     ValueTask<bool> ContainsAsync<T>(Span<char> cacheKey, CancellationToken token = default);
 
-    /// <summary>Reads by the key's text as <see cref="GetAsync{T}(Span{char}, CachePolicy, CancellationToken)"/> does; a miss builds the key and runs <paramref name="generator"/> as <see cref="IGeneratedExpirationCache.GetOrAddWithExpirationAsync{T}(CacheKey, Func{CancellationToken, Task{GeneratedValue{T}}}, CachePolicy, CancellationToken)"/> does, without reading the local tier again.</summary>
+    /// <inheritdoc cref="ISpanKeyCache.GetAsync{T}(Span{char}, CachePolicy, CancellationToken)"/>
+    ValueTask<TimeSpan?> TimeToLiveAsync<T>(Span<char> cacheKey, CancellationToken token = default);
+
+    /// <inheritdoc cref="ISpanKeyCache.GetAsync{T}(Span{char}, CachePolicy, CancellationToken)"/>
+    ValueTask<DateTimeOffset?> ExpireTimeAsync<T>(Span<char> cacheKey, CancellationToken token = default);
+
+    /// <summary>Reads by the key's text as <see cref="GetAsync{T}(Span{char}, CachePolicy, CancellationToken)"/> does; a miss builds the key and runs <paramref name="generator"/> as <see cref="ICache.GetOrAddWithExpirationAsync{T}(CacheKey, Func{CancellationToken, Task{GeneratedValue{T}}}, CachePolicy, CancellationToken)"/> does, without reading the local tier again.</summary>
     ValueTask<T?> GetOrAddWithExpirationAsync<T>(Span<char> cacheKey, Func<CancellationToken, Task<GeneratedValue<T>>> generator, CachePolicy? policy, CancellationToken token = default);
 
     /// <inheritdoc cref="GetOrAddWithExpirationAsync{T}(Span{char}, Func{CancellationToken, Task{GeneratedValue{T}}}, CachePolicy, CancellationToken)"/>

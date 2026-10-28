@@ -6,8 +6,6 @@ namespace UiPath.Caching.Tests;
 /// <summary>The span, state and generated-expiration members of the cache interfaces are sealed: a proxy cannot intercept them, so on a mock they run and reach the <see cref="CacheKey"/> members the test set up.</summary>
 public class SealedMemberMockTests
 {
-    private static readonly DateTimeOffset Deadline = DateTimeOffset.UtcNow.AddMinutes(7);
-
     private static CancellationToken Ct => TestContext.Current.CancellationToken;
 
     [Theory]
@@ -19,17 +17,13 @@ public class SealedMemberMockTests
         mock.Setup(c => c.GetAsync<string>(new CacheKey("user:42"), null, It.IsAny<CancellationToken>())).Returns(new ValueTask<string?>("hit"));
         mock.Setup(c => c.GetOrAddAsync(It.IsAny<CacheKey>(), It.IsAny<Func<CancellationToken, Task<string?>>>(), null, It.IsAny<CancellationToken>()))
             .Returns((CacheKey _, Func<CancellationToken, Task<string?>> generator, CachePolicy? _, CancellationToken token) => new ValueTask<string?>(generator(token)));
-        mock.Setup(c => c.GetCacheEntryAsync<string>(new CacheKey("jwt"), null, It.IsAny<CancellationToken>())).Returns(new ValueTask<ICacheEntry<string?>>(new TestCacheEntry<string?> { Expiration = DateTimeOffset.MinValue }));
-        mock.Setup(c => c.SetAsync<string>(new CacheKey("jwt"), "token", Deadline, null, It.IsAny<CancellationToken>())).Returns(new ValueTask<bool>(true));
+        mock.Setup(c => c.GetOrAddAsync(It.IsAny<CacheKey>(), It.IsAny<int>(), It.IsAny<Func<int, CancellationToken, Task<string?>>>(), null, It.IsAny<CancellationToken>()))
+            .Returns((CacheKey _, int state, Func<int, CancellationToken, Task<string?>> generator, CachePolicy? _, CancellationToken token) => new ValueTask<string?>(generator(state, token)));
         var cache = mock.Object;
 
         (await SpanGet(cache)).Should().Be("hit");
         (await SpanGetOrAdd(cache)).Should().Be("span");
         (await SpanGetOrAddWithState(cache)).Should().Be("span:1");
-        (await cache.GetOrAddAsync<string, int>("k", 2, static (n, _) => Task.FromResult<string?>($"state:{n}"), null, Ct)).Should().Be("state:2");
-        (await cache.GetOrAddWithExpirationAsync<string>("jwt", _ => Task.FromResult(new GeneratedValue<string>("token", Deadline)), null, Ct)).Should().Be("token");
-
-        mock.Verify(c => c.SetAsync<string>(new CacheKey("jwt"), "token", Deadline, null, It.IsAny<CancellationToken>()), Times.Once);
     }
 
     [Theory]
@@ -41,18 +35,13 @@ public class SealedMemberMockTests
         mock.Setup(c => c.GetAsync(new CacheKey("user:42"), It.IsAny<CancellationToken>())).Returns(new ValueTask<string?>("hit"));
         mock.Setup(c => c.GetOrAddAsync(It.IsAny<CacheKey>(), It.IsAny<Func<CancellationToken, Task<string?>>>(), It.IsAny<CancellationToken>()))
             .Returns((CacheKey _, Func<CancellationToken, Task<string?>> generator, CancellationToken token) => new ValueTask<string?>(generator(token)));
-        mock.Setup(c => c.GetAsync(new CacheKey("jwt"), It.IsAny<CancellationToken>())).Returns(new ValueTask<string?>((string?)null));
-        mock.Setup(c => c.ContainsAsync(new CacheKey("jwt"), It.IsAny<CancellationToken>())).Returns(new ValueTask<bool>(false));
-        mock.Setup(c => c.SetAsync(new CacheKey("jwt"), "token", Deadline, It.IsAny<CancellationToken>())).Returns(new ValueTask<bool>(true));
+        mock.Setup(c => c.GetOrAddAsync(It.IsAny<CacheKey>(), It.IsAny<int>(), It.IsAny<Func<int, CancellationToken, Task<string?>>>(), It.IsAny<CancellationToken>()))
+            .Returns((CacheKey _, int state, Func<int, CancellationToken, Task<string?>> generator, CancellationToken token) => new ValueTask<string?>(generator(state, token)));
         var cache = mock.Object;
 
         (await SpanGet(cache)).Should().Be("hit");
         (await SpanGetOrAdd(cache)).Should().Be("span");
         (await SpanGetOrAddWithState(cache)).Should().Be("span:1");
-        (await cache.GetOrAddAsync("k", 2, static (n, _) => Task.FromResult<string?>($"state:{n}"), Ct)).Should().Be("state:2");
-        (await cache.GetOrAddWithExpirationAsync("jwt", _ => Task.FromResult(new GeneratedValue<string>("token", Deadline)), Ct)).Should().Be("token");
-
-        mock.Verify(c => c.SetAsync(new CacheKey("jwt"), "token", Deadline, It.IsAny<CancellationToken>()), Times.Once);
     }
 
     [Fact]

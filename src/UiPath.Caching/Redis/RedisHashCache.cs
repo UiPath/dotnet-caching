@@ -92,17 +92,53 @@ internal sealed partial class RedisHashCache : RedisCacheBase, IHashCache, ISpan
         return await GetInnerCacheEntryAsync<T?>(cacheKey, token);
     }
 
-    public ValueTask<IDictionary<string, T?>> GetOrAddAsync<T>(CacheKey cacheKey, Func<CancellationToken, Task<IDictionary<string, T?>>> generator, CachePolicy? policy, CancellationToken token = default) =>
-        GetOrAddCoreAsync(cacheKey, generator, GetExpiration(policy), HashCacheSetOption.KeyReplace, policy, token);
+    public ValueTask<IDictionary<string, T?>> GetOrAddAsync<T>(CacheKey cacheKey, Func<CancellationToken, Task<IDictionary<string, T?>>> generator, CachePolicy? policy, CancellationToken token = default)
+    {
+        ArgumentNullException.ThrowIfNull(generator);
+        return GetOrAddCoreAsync<T, Func<CancellationToken, Task<IDictionary<string, T?>>>>(cacheKey, generator, static (g, ct) => g(ct), GetExpiration(policy), HashCacheSetOption.KeyReplace, policy, token);
+    }
 
-    public ValueTask<IDictionary<string, T?>> GetOrAddAsync<T>(CacheKey cacheKey, Func<CancellationToken, Task<IDictionary<string, T?>>> generator, TimeSpan expiration, CachePolicy? policy, CancellationToken token = default) =>
-        GetOrAddCoreAsync(cacheKey, generator, GetExpiration(expiration), HashCacheSetOption.KeyReplace, policy, token);
+    public ValueTask<IDictionary<string, T?>> GetOrAddAsync<T>(CacheKey cacheKey, Func<CancellationToken, Task<IDictionary<string, T?>>> generator, TimeSpan expiration, CachePolicy? policy, CancellationToken token = default)
+    {
+        ArgumentNullException.ThrowIfNull(generator);
+        return GetOrAddCoreAsync<T, Func<CancellationToken, Task<IDictionary<string, T?>>>>(cacheKey, generator, static (g, ct) => g(ct), GetExpiration(expiration), HashCacheSetOption.KeyReplace, policy, token);
+    }
 
-    public ValueTask<IDictionary<string, T?>> GetOrAddAsync<T>(CacheKey cacheKey, Func<CancellationToken, Task<IDictionary<string, T?>>> generator, DateTimeOffset expiration, CachePolicy? policy, CancellationToken token = default) =>
-        GetOrAddCoreAsync(cacheKey, generator, GetExpiration(expiration), HashCacheSetOption.KeyReplace, policy, token);
+    public ValueTask<IDictionary<string, T?>> GetOrAddAsync<T>(CacheKey cacheKey, Func<CancellationToken, Task<IDictionary<string, T?>>> generator, DateTimeOffset expiration, CachePolicy? policy, CancellationToken token = default)
+    {
+        ArgumentNullException.ThrowIfNull(generator);
+        return GetOrAddCoreAsync<T, Func<CancellationToken, Task<IDictionary<string, T?>>>>(cacheKey, generator, static (g, ct) => g(ct), GetExpiration(expiration), HashCacheSetOption.KeyReplace, policy, token);
+    }
 
-    public ValueTask<IDictionary<string, T?>> GetOrAddAsync<T>(CacheKey cacheKey, Func<CancellationToken, Task<IDictionary<string, T?>>> generator, DateTimeOffset expiration, HashCacheSetOption? setOption, CachePolicy? policy, CancellationToken token = default) =>
-        GetOrAddCoreAsync(cacheKey, generator, GetExpiration(expiration), setOption ?? HashCacheSetOption.KeyReplace, policy, token);
+    public ValueTask<IDictionary<string, T?>> GetOrAddAsync<T>(CacheKey cacheKey, Func<CancellationToken, Task<IDictionary<string, T?>>> generator, DateTimeOffset expiration, HashCacheSetOption? setOption, CachePolicy? policy, CancellationToken token = default)
+    {
+        ArgumentNullException.ThrowIfNull(generator);
+        return GetOrAddCoreAsync<T, Func<CancellationToken, Task<IDictionary<string, T?>>>>(cacheKey, generator, static (g, ct) => g(ct), GetExpiration(expiration), setOption ?? HashCacheSetOption.KeyReplace, policy, token);
+    }
+
+    public ValueTask<IDictionary<string, T?>> GetOrAddAsync<T, TState>(CacheKey cacheKey, TState state, Func<TState, CancellationToken, Task<IDictionary<string, T?>>> generator, CachePolicy? policy, CancellationToken token = default)
+    {
+        ArgumentNullException.ThrowIfNull(generator);
+        return GetOrAddCoreAsync(cacheKey, state, generator, GetExpiration(policy), HashCacheSetOption.KeyReplace, policy, token);
+    }
+
+    public ValueTask<IDictionary<string, T?>> GetOrAddAsync<T, TState>(CacheKey cacheKey, TState state, Func<TState, CancellationToken, Task<IDictionary<string, T?>>> generator, TimeSpan expiration, CachePolicy? policy, CancellationToken token = default)
+    {
+        ArgumentNullException.ThrowIfNull(generator);
+        return GetOrAddCoreAsync(cacheKey, state, generator, GetExpiration(expiration), HashCacheSetOption.KeyReplace, policy, token);
+    }
+
+    public ValueTask<IDictionary<string, T?>> GetOrAddAsync<T, TState>(CacheKey cacheKey, TState state, Func<TState, CancellationToken, Task<IDictionary<string, T?>>> generator, DateTimeOffset expiration, CachePolicy? policy, CancellationToken token = default)
+    {
+        ArgumentNullException.ThrowIfNull(generator);
+        return GetOrAddCoreAsync(cacheKey, state, generator, GetExpiration(expiration), HashCacheSetOption.KeyReplace, policy, token);
+    }
+
+    public ValueTask<IDictionary<string, T?>> GetOrAddAsync<T, TState>(CacheKey cacheKey, TState state, Func<TState, CancellationToken, Task<IDictionary<string, T?>>> generator, DateTimeOffset expiration, HashCacheSetOption? setOption, CachePolicy? policy, CancellationToken token = default)
+    {
+        ArgumentNullException.ThrowIfNull(generator);
+        return GetOrAddCoreAsync(cacheKey, state, generator, GetExpiration(expiration), setOption ?? HashCacheSetOption.KeyReplace, policy, token);
+    }
 
     public ValueTask<bool> ContainsAsync<T>(CacheKey cacheKey, CancellationToken token = default)
     {
@@ -540,10 +576,9 @@ internal sealed partial class RedisHashCache : RedisCacheBase, IHashCache, ISpan
         return (await Task.WhenAll(pending).ConfigureAwait(false)).SelectMany(values => values).ToArray();
     }
 
-    private async ValueTask<IDictionary<string, T?>> GetOrAddCoreAsync<T>(CacheKey cacheKey, Func<CancellationToken, Task<IDictionary<string, T?>>> generator, DateTimeOffset effectiveExpiration, HashCacheSetOption setOption, CachePolicy? policy, CancellationToken token)
+    private async ValueTask<IDictionary<string, T?>> GetOrAddCoreAsync<T, TState>(CacheKey cacheKey, TState state, Func<TState, CancellationToken, Task<IDictionary<string, T?>>> generator, DateTimeOffset effectiveExpiration, HashCacheSetOption setOption, CachePolicy? policy, CancellationToken token)
     {
         NotCacheableException.ThrowIfNotCacheable<T>();
-        ArgumentNullException.ThrowIfNull(generator);
         var (found, cached) = await GetInnerWithFoundAsync<T?>(cacheKey, token).ConfigureAwait(false);
         if (found)
         {
@@ -551,8 +586,7 @@ internal sealed partial class RedisHashCache : RedisCacheBase, IHashCache, ISpan
         }
 
         LogCacheMissed(Logged(cacheKey, typeof(T)));
-        var wrappedGenerator = WrapWithFactoryTimeout(generator, (policy ?? DefaultPolicy)?.FactoryTimeout, cacheKey);
-        var ret = await wrappedGenerator(token).ConfigureAwait(false);
+        var ret = await RunGeneratorAsync(cacheKey, state, generator, (policy ?? DefaultPolicy)?.FactoryTimeout, token).ConfigureAwait(false);
         if (ret.Count > 0)
         {
             var options = new HashCacheEntryOptions(effectiveExpiration, default, default, setOption);
@@ -571,14 +605,10 @@ internal sealed partial class RedisHashCache : RedisCacheBase, IHashCache, ISpan
         return ret;
     }
 
-    private Func<CancellationToken, Task<IDictionary<string, T?>>> WrapWithFactoryTimeout<T>(Func<CancellationToken, Task<IDictionary<string, T?>>> generator, TimeSpan? factoryTimeout, CacheKey cacheKey)
-    {
-        if (factoryTimeout is null || factoryTimeout.Value <= TimeSpan.Zero)
-        {
-            return generator;
-        }
-        return token => FactoryTimeout.RunAsync(generator, factoryTimeout, cacheKey, Name, Telemetry, token);
-    }
+    private Task<IDictionary<string, T?>> RunGeneratorAsync<T, TState>(CacheKey cacheKey, TState state, Func<TState, CancellationToken, Task<IDictionary<string, T?>>> generator, TimeSpan? factoryTimeout, CancellationToken token) =>
+        factoryTimeout is null || factoryTimeout.Value <= TimeSpan.Zero
+            ? generator(state, token)
+            : FactoryTimeout.RunAsync(ct => generator(state, ct), factoryTimeout, cacheKey, Name, Telemetry, token);
 
     private async ValueTask<(bool Found, IDictionary<string, T?> Values)> GetInnerWithFoundAsync<T>(CacheKey cacheKey, CancellationToken token)
     {

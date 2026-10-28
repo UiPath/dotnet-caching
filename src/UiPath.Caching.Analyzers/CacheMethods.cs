@@ -41,7 +41,7 @@ internal sealed class CacheMethods
             return null;
         }
 
-        var cacheTypes = new[] { "UiPath.Caching.ICache`1", "UiPath.Caching.IHashCache", "UiPath.Caching.IHashCache`1" }
+        var cacheTypes = new[] { "UiPath.Caching.ICache`1", "UiPath.Caching.IHashCache", "UiPath.Caching.IHashCache`1", "UiPath.Caching.ISpanKeyCache", "UiPath.Caching.ISpanKeyCache`1", "UiPath.Caching.ISpanKeyHashCache", "UiPath.Caching.ISpanKeyHashCache`1" }
             .Select(compilation.GetTypeByMetadataName)
             .Where(type => type is not null)
             .Select(type => type!)

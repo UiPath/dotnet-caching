@@ -14,6 +14,20 @@ internal static class SpanKey
         false;
 #endif
 
+    /// <summary>Runs <paramref name="composed"/> with the name of <paramref name="key"/> composed on the stack, else <paramref name="fallback"/> with the key.</summary>
+    internal static TResult Named<T, TOwner, TResult>(ICacheKeyStrategy strategy, TOwner owner, CacheKey key, KeyCall<TOwner, TResult> composed, Func<TOwner, CacheKey, CancellationToken, TResult> fallback, CancellationToken token)
+    {
+        Span<char> buffer = ComposesName(strategy, key) ? stackalloc char[MaxLength] : default;
+        return TryComposeName<T>(strategy, key, buffer, out var name) ? composed(owner, name, token) : fallback(owner, key, token);
+    }
+
+    /// <summary>Runs <paramref name="composed"/> with the typed read of <paramref name="text"/>, else <paramref name="fallback"/> with the text as a key.</summary>
+    internal static TResult Typed<T, TOwner, TResult>(ICacheKeyStrategy strategy, TOwner owner, Span<char> text, KeyCall<TOwner, TResult> composed, Func<TOwner, CacheKey, CancellationToken, TResult> fallback, CancellationToken token)
+    {
+        Span<char> buffer = strategy is DefaultCacheKeyStrategy ? default : stackalloc char[MaxLength];
+        return TryComposeTyped<T>(strategy, text, buffer, out var key) ? composed(owner, key, token) : fallback(owner, new CacheKey(text), token);
+    }
+
     /// <summary>The strategy's composition of <paramref name="key"/>'s text in <paramref name="destination"/>, which is empty unless <see cref="ComposesName"/>; false when it is empty or the strategy declines.</summary>
     internal static bool TryComposeName<T>(ICacheKeyStrategy strategy, CacheKey key, Span<char> destination, out Span<char> composed)
     {
