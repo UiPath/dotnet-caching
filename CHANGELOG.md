@@ -32,7 +32,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
   `RedisCacheOptions.HashFieldBatchSize` fields, 1000 by default, all in flight together), drops the hash from the local tier of the
   writing node, and announces the key as removed, so every node, an older one too, drops its whole local copy of the hash: an entry is replaced
   whole, never patched, which keeps a read that races the removal from bringing a removed field back. A hash left without fields is gone. A
-  reserved `_word_` field name is rejected, as on a write. `sealed` member served by `ISpanKeyHashCache` and its `<T>` sibling, on the
+  reserved `_word_` field name is rejected, as on a write. The `CacheKey` overload is a `sealed` member served by `ISpanKeyHashCache` and its `<T>` sibling, on the
   library's hash caches and `HashCache<T>`; any other hash cache throws `NotSupportedException`, as does an `ISpanKeyHashCache`
   that does not override it.
 

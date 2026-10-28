@@ -58,8 +58,8 @@ UiPath's internal multilayer caching library. L1 in-memory + L2 Redis, cross-nod
 
 See [CHANGELOG.md](../CHANGELOG.md). Recent headliners:
 
-- **Hydrating cache** — proactive background refresh via `CachePolicy.RehydrateEnabled` + `RehydrateOptions`.
-- **Single-flight** — a shared run per key (default on) + opt-in `IDistributedLock`.
+- **Rehydration** — proactive background refresh via `CachePolicy.RehydrateEnabled` + `RehydrateOptions`.
+- **Single-flight** — in-process per key (default on) + opt-in `IDistributedLock`.
 - **L2 jitter** — `CachePolicy.JitterMaxDuration` to spread cluster-wide expirations after bulk writes.
 - **Streams notify doorbell** — on by default, `NotifyEnabled` adds a Pub/Sub channel that wakes consumers immediately, dropping publish-to-deliver latency from `PollInterval` to network RTT.
 - **Per-topic broadcast options** — `Topics[]` overlay under `Broadcast:RedisStreams` / `Broadcast:RedisPubSub`.

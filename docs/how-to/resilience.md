@@ -10,7 +10,7 @@ single-flight and hydrating-cache will move latency more than any other change.
 
 Two layers:
 
-- **Shared run** (`LocalSingleFlightEnabled`) — in-process single-flight per cache key: the first
+- **Single-flight** (`LocalSingleFlightEnabled`) — in-process single-flight per cache key: the first
   caller runs the generator and the others join it. **Default on** for `InMemoryRedis` and
   `InMemory` providers; disable via `LocalSingleFlightEnabled: false`. `LocalSingleFlightTimeout` is how long
   a conditional add (`TryAddAsync`) waits for a run that holds its key.
@@ -121,7 +121,7 @@ telemetry event.
 TTL — `factoryTimeout + cooldown` — so a failed rehydrate on node A does not immediately
 retry from node B. When no `IDistributedLock` is registered (the default), `NullDistributedLock`
 is used and cooldown enforcement does not apply — rehydrate can fire per-node on every hit
-past the threshold (subject only to per-node `_inFlight` single-flight). Single-node setups
+past the threshold (subject only to the per-node single-flight). Single-node setups
 are fine with the null lock; multi-node deployments should wire `RedisDistributedLock`.
 
 ### Threshold math
@@ -524,9 +524,9 @@ Use this table to pick the right knob for a given problem.
 
 | Symptom | Recommended feature | Key setting |
 |---|---|---|
-| Cache miss storm after deploy or after a key expires under load | Stampede protection — shared run | `LocalSingleFlightEnabled: true` (default) |
+| Cache miss storm after deploy or after a key expires under load | Stampede protection — single-flight | `LocalSingleFlightEnabled: true` (default) |
 | Cross-node miss storms when multiple pods hit the same cold key simultaneously | Stampede protection — distributed lock | `DistributedLockEnabled: true` (the lock impl is already registered by `AddInMemoryRedis()`) |
-| Foreground callers occasionally block while waiting for a slow factory | Hydrating cache | `RehydrateEnabled: true` + `Rehydrate.Threshold` |
+| Foreground callers occasionally block while waiting for a slow generator | Hydrating cache | `RehydrateEnabled: true` + `Rehydrate.Threshold` |
 | All keys written in a batch expire at the same time, causing periodic spikes | Jitter | `JitterMaxDuration` |
 | Redis goes slow or unavailable and callers queue up waiting | Polly circuit-breaker | `AddResilienceStrategies()` + `ExceptionsAllowedBeforeBreaking` |
 | Some caches need different TTLs or rehydrate settings than others | Named policies | `Policies["MyApp.Models.Order"]` |

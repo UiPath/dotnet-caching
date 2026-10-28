@@ -110,7 +110,7 @@ Details: [second Redis connection recipe](docs/recipes/second-redis-connection.m
 ## Features
 
 **Resiliency**
-- **Single-flight stampede protection** — one factory runs per key on a cache miss; other callers coalesce. In-process through a shared run per key (default on); cross-node via `IDistributedLock` (`AddInMemoryRedis()` registers the impl automatically — opt in with `DistributedLockEnabled: true`; `AddMemory()`-only or custom wiring needs an explicit `.AddRedisDistributedLock()`).
+- **Single-flight stampede protection** — one generator runs per key on a cache miss; other callers coalesce. In-process single-flight per key (default on); cross-node via `IDistributedLock` (`AddInMemoryRedis()` registers the impl automatically — opt in with `DistributedLockEnabled: true`; `AddMemory()`-only or custom wiring needs an explicit `.AddRedisDistributedLock()`).
 - **Hydrating cache** — proactive background refresh before a key expires (`CachePolicy.RehydrateEnabled` + `RehydrateOptions`). Avoids the expiry-miss path on hot keys so reads against still-live entries don't pay the factory cost. First-time misses still run the factory on the foreground caller.
 - **Polly pipelines** — retry + circuit-breaker around every cache op (`AddResilienceStrategies`). Configurable per-op timeout, break duration, and rethrow behavior.
 - **Connection-aware L1 fallback** — `UseLocalOnlyWhenDisconnected` + `LocalMaxExpirationDisconnected` keep the cache useful when Redis blips.
@@ -120,7 +120,7 @@ Details: [second Redis connection recipe](docs/recipes/second-redis-connection.m
 - **Redis Streams backplane** — durable, at-least-once cross-node L1 invalidation with consumer groups and replay. Fallback to Pub/Sub if you don't need durability.
 - **Per-topic options** — fine-grained overrides for fan-out, polling, backpressure, and the streams notify doorbell.
 - **Sharded Pub/Sub doorbell** (Redis 7+) — `NotifyEnabled` + `NotifyShardedPubSub` drop publish-to-deliver latency from `PollInterval` to network RTT without leaving the shard.
-- **Redis Cluster aware** — shard-key routing, master/replica split (writes to master, reads from replicas).
+- **Redis Cluster aware** — shard-key routing, primary/replica split (writes to the primary, reads from replicas).
 - **Azure Managed Redis with Entra ID** — passwordless auth via managed identity, workload identity, or any `TokenCredential` (`UiPath.Caching.Azure`, `AddAzureEntraAuthentication()`). Tokens refresh automatically; TLS and RESP3 on by default. Other schemes (AWS IAM, a custom token source) plug into the same `IRedisConnectionConfigurator` seam without an Azure reference.
 
 **Advanced**
