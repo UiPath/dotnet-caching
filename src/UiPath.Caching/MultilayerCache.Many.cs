@@ -105,7 +105,7 @@ internal sealed partial class MultilayerCache
 
         var (written, kept, toAnnounce, announceIndex, announceCount, cancelled) = await WriteChunkAsync(entries, entryCount, expiration, policy, announce, token).ConfigureAwait(false);
         var published = announce && announceCount > 0
-            ? await AllAsync(toAnnounce, announceCount, this, static (c, o) => c.PublishSetAsync<T>(o), static (c, o, ex) => c.LogSetEventError(ex, c.Logged(o, typeof(T)))).ConfigureAwait(false)
+            ? await AllAsync(toAnnounce, announceCount, this, static (c, o) => c.Layered<T>().PublishSetAsync(o), static (c, o, ex) => c.LogSetEventError(ex, c.Logged(o, typeof(T)))).ConfigureAwait(false)
             : [];
         if (cancelled)
         {

@@ -21,6 +21,7 @@ public abstract partial class MultilayerCacheBase : IDisposable
     private protected readonly bool _clearLocalOnReconnect;
     private protected readonly RehydrationCoordinator _rehydrator;
     private protected readonly CachePolicy _defaultPolicy;
+    private protected readonly InFlight<InFlightKey, object?> _innerReads = new();
     private protected readonly KeyMasker _masker;
     private protected readonly BackgroundWrites _background;
 
@@ -212,6 +213,15 @@ public abstract partial class MultilayerCacheBase : IDisposable
 
     [LoggerMessage(Level = LogLevel.Debug, Message = "Inner copy of {CacheKey} not kept locally: a write of it, or of a key sharing its stripe, came after the read began.")]
     private protected partial void LogInnerCopyNotKept(LoggedKey cacheKey);
+
+    [LoggerMessage(Level = LogLevel.Trace, Message = "Inner cache is not connected. Setting local only for cacheKey {CacheKey}")]
+    private protected partial void LogSettingLocalOnly(LoggedKey cacheKey);
+
+    [LoggerMessage(Level = LogLevel.Warning, Message = "Inner cache set value for {CacheKey}")]
+    private protected partial void LogInnerCacheSetError(Exception ex, LoggedKey cacheKey);
+
+    [LoggerMessage(Level = LogLevel.Warning, Message = "Set {CacheKey} is in the inner cache but its event was not published; other nodes keep their local copy until it expires.")]
+    private protected partial void LogSetEventError(Exception ex, LoggedKey cacheKey);
 
     private protected bool ApplyLocal<TState>(string key, TState state, Func<TState, bool> change) => _background.Apply(key, state, change);
 

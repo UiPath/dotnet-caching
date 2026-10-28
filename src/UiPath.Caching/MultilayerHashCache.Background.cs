@@ -23,7 +23,7 @@ internal sealed partial class MultilayerHashCache : IAsyncDisposable
         }
 
         return _background.Run(options.CacheKey.Name, (Cache: this, Options: options, Value: values, Policy: policy, Local: local), static s => s.Cache.KeepBackground(s.Options, s.Value, s.Policy, s.Local), static (s, token) =>
-            s.Cache.DetachedWriteAsync(s, static (s, token) => s.Cache.WriteDetachedAsync(s.Options, s.Value, s.Policy, s.Local, token), static s => s.Cache.PromoteDetached(s.Options, s.Policy, s.Local), static s => s.Cache.PublishSetAsync<T>(s.Options, s.Local.Counted), token));
+            s.Cache.DetachedWriteAsync(s, static (s, token) => s.Cache.WriteDetachedAsync(s.Options, s.Value, s.Policy, s.Local, token), static s => s.Cache.PromoteDetached(s.Options, s.Policy, s.Local), static s => s.Cache.Layered<T>().PublishSetAsync(s.Options, s.Local.Counted), token));
     }
 
     /// <summary>A merge builds it under the merge lock from the hash held here, or leaves none.</summary>
