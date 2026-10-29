@@ -7,40 +7,6 @@ namespace UiPath.Caching.Broadcast.Redis;
 internal sealed partial class RedisStreamSubjectWriter<T> : IDisposable
     where T : IEvent
 {
-    // Runs on every read, so it returns only what the check needs: XINFO STREAM carries the first and last entries whole.
-    // XINFO GROUPS grows with the number of groups, so a wake (ARGV[4] = 0) checks against the stream alone.
-    private const string CheckAndReadScript = """
-        local info = redis.call('XINFO', 'STREAM', KEYS[1])
-        local stream = {}
-        for i = 1, #info, 2 do
-            local field = info[i]
-            if field == 'length' or field == 'last-generated-id' or field == 'max-deleted-entry-id' or field == 'entries-added' then
-                stream[#stream + 1] = field
-                stream[#stream + 1] = info[i + 1]
-            elseif field == 'first-entry' and info[i + 1] then
-                stream[#stream + 1] = field
-                stream[#stream + 1] = { info[i + 1][1] }
-            end
-        end
-        local groups = {}
-        if ARGV[4] == '1' then
-            for _, group in ipairs(redis.call('XINFO', 'GROUPS', KEYS[1])) do
-                for i = 1, #group, 2 do
-                    if group[i] == 'name' and group[i + 1] == ARGV[1] then
-                        groups[1] = group
-                    end
-                end
-            end
-        end
-        local entries
-        if ARGV[5] == '1' then
-            entries = redis.call('XREADGROUP', 'GROUP', ARGV[1], ARGV[2], 'COUNT', ARGV[3], 'NOACK', 'STREAMS', KEYS[1], '>')
-        else
-            entries = redis.call('XREADGROUP', 'GROUP', ARGV[1], ARGV[2], 'COUNT', ARGV[3], 'STREAMS', KEYS[1], '>')
-        end
-        return { stream, groups, entries }
-        """;
-
     private const string EventInvalid = "Caching." + nameof(RedisStreamSubjectWriter<T>) + "." + nameof(DispatchEventsAsync) + ".InvalidEvent";
     private const string EventUndecodable = "Caching." + nameof(RedisStreamSubjectWriter<T>) + "." + nameof(DispatchEventsAsync) + ".UndecodableEvent";
     private const string EventReceived = "Caching." + nameof(RedisStreamSubjectWriter<T>) + "." + nameof(DispatchEventsAsync) + ".EventReceived";
@@ -51,6 +17,7 @@ internal sealed partial class RedisStreamSubjectWriter<T> : IDisposable
     private const string PropEventId = "EventId";
     private readonly RedisStreamContext _context;
     private readonly IRedisConnector _redis;
+    private readonly IStreamPort _stream;
     private readonly IConnectionState _connectionState;
     private readonly ChannelWriter<T> _writer;
     private readonly IEventFormatterProxy<T> _formatter;
@@ -126,11 +93,13 @@ internal sealed partial class RedisStreamSubjectWriter<T> : IDisposable
         IRedisProfiler redisProfiler,
         IFetchWaiter waiter,
         Action onMessagesMissed,
-        CancellationToken stopToken)
+        CancellationToken stopToken,
+        IStreamPort? stream = null)
     {
         _context = context;
         _connectionState = connectionState;
         _redis = redis;
+        _stream = stream ?? new RedisStreamPort(context, redis);
         _writer = channelWriter;
         _formatter = formatter;
         _logger = logger;
@@ -155,9 +124,6 @@ internal sealed partial class RedisStreamSubjectWriter<T> : IDisposable
     }
 
     internal Task FetchTask { get; }
-
-    /// <summary>Test seam: runs between the recovery check and the count of a failure.</summary>
-    internal Action? BeforeCountingFailure { get; set; }
 
     private bool ContinueLoop => !(_disposed || _cancelationToken.IsCancellationRequested);
 
@@ -532,7 +498,7 @@ internal sealed partial class RedisStreamSubjectWriter<T> : IDisposable
 
         try
         {
-            var skipped = await _redis.Database.StreamRangeAsync(_context.Topic, $"{Math.Max(0, ConsumerGroups.SinceMs(h, since))}-0", h.LastId, SkippedEntriesChecked).ConfigureAwait(false);
+            var skipped = await _stream.RangeAsync($"{Math.Max(0, ConsumerGroups.SinceMs(h, since))}-0", h.LastId, SkippedEntriesChecked).ConfigureAwait(false);
             return skipped.Length >= SkippedEntriesChecked || Array.Exists(skipped, IsActedOn);
         }
         catch (Exception ex)
@@ -567,10 +533,10 @@ internal sealed partial class RedisStreamSubjectWriter<T> : IDisposable
         {
             if (atHead)
             {
-                head = await ConsumerGroups.HeadAsync(_redis.Database, _context.Topic).ConfigureAwait(false);
+                head = await _stream.HeadAsync().ConfigureAwait(false);
             }
 
-            var created = await ConsumerGroups.CreateAsync(_redis.Database, _context.Topic, _context.ConsumerGroup, id, head).ConfigureAwait(false);
+            var created = await _stream.CreateGroupAsync(id, head).ConfigureAwait(false);
             return (created ? Recreate.Made : Recreate.Failed, head);
         }
         catch (RedisServerException rex) when (rex.Message == StreamConstants.ConsumerGroupNameExistsErrorMessage)
@@ -613,7 +579,6 @@ internal sealed partial class RedisStreamSubjectWriter<T> : IDisposable
             return Task.CompletedTask;
         }
 
-        BeforeCountingFailure?.Invoke();
         if (_streakGeneration != _recoveriesAtRead)
         {
             // The first failure since a recovery: the outage's streak does not pace it.
@@ -667,11 +632,11 @@ internal sealed partial class RedisStreamSubjectWriter<T> : IDisposable
     {
         if (!_context.AutoAck || position != StreamConstants.UndeliveredMessages)
         {
-            return _redis.Database.StreamReadGroupAsync(_context.Topic, _context.ConsumerGroup, _context.ConsumerName, position, _context.PollBatchSize);
+            return _stream.ReadGroupAsync(position, noAck: false);
         }
 
         _autoAckReadInFlight = true;
-        return _redis.Database.StreamReadGroupAsync(_context.Topic, _context.ConsumerGroup, _context.ConsumerName, position, _context.PollBatchSize, noAck: true);
+        return _stream.ReadGroupAsync(position, noAck: true);
     }
 
     /// <summary>Checks for a gap and reads in one script, so a trim cannot land between the check and the read.</summary>
@@ -683,10 +648,7 @@ internal sealed partial class RedisStreamSubjectWriter<T> : IDisposable
         _autoAckReadInFlight = _context.AutoAck;
         try
         {
-            reply = await _redis.Database.ScriptEvaluateAsync(
-                CheckAndReadScript,
-                [_context.Topic],
-                [_context.ConsumerGroup, _context.ConsumerName, _context.PollBatchSize, full ? 1 : 0, _context.AutoAck ? 1 : 0]).ConfigureAwait(false);
+            reply = await _stream.CheckAndReadAsync(full).ConfigureAwait(false);
         }
         catch (RedisServerException ex) when (ex.Message.Contains("no such key", StringComparison.OrdinalIgnoreCase))
         {
@@ -739,8 +701,8 @@ internal sealed partial class RedisStreamSubjectWriter<T> : IDisposable
         StreamGroupInfo[] groups;
         try
         {
-            stream = await _redis.Database.StreamInfoAsync(_context.Topic).ConfigureAwait(false);
-            groups = await _redis.Database.StreamGroupInfoAsync(_context.Topic).ConfigureAwait(false);
+            stream = await _stream.InfoAsync().ConfigureAwait(false);
+            groups = await _stream.GroupInfoAsync().ConfigureAwait(false);
         }
         catch (RedisServerException ex) when (ex.Message.StartsWith("ERR no such key", StringComparison.OrdinalIgnoreCase))
         {
@@ -786,7 +748,7 @@ internal sealed partial class RedisStreamSubjectWriter<T> : IDisposable
             {
                 if (acknowledge)
                 {
-                    await _redis.Database.StreamAcknowledgeAsync(_context.Topic, _context.ConsumerGroup, [.. ids]).ConfigureAwait(false);
+                    await _stream.AcknowledgeAsync([.. ids]).ConfigureAwait(false);
                 }
 
                 LogDispatched(ids.Count, _context.Topic);
