@@ -196,8 +196,6 @@ public abstract partial class MultilayerCacheBase : IDisposable
         }
     }
 
-    private protected static ValueTask Settled(Task pending, CancellationToken token) => pending.IsCompleted ? default : new ValueTask(pending.WaitAsync(token));
-
     /// <summary>A timeout a cancellation source takes: <c>CancelAfter</c> throws beyond <see cref="int.MaxValue"/> milliseconds, so a misconfigured <c>Lock.LocalSingleFlightTimeout</c> degrades to that.</summary>
     private protected static TimeSpan BoundedTimeout(TimeSpan timeout) =>
         timeout.TotalMilliseconds > int.MaxValue ? TimeSpan.FromMilliseconds(int.MaxValue) : timeout;
@@ -210,15 +208,7 @@ public abstract partial class MultilayerCacheBase : IDisposable
 
     private protected Task DrainBackgroundAsync() => _background.DrainAsync();
 
-    /// <summary>Await <see cref="BackgroundWrites.Turn.Previous"/> before the inner write; dispose once written.</summary>
-    private protected BackgroundWrites.Turn EnterInnerWrite(string key) => _background.Enter(key);
-
-    private protected BackgroundWrites.Turn EnterInnerWrite(IEnumerable<string> keys) => _background.Enter(keys);
-
     private protected long MarkInnerRead(string key) => _background.Mark(key);
-
-    /// <summary>Null when a change of the key since <paramref name="mark"/> kept the read's value out.</summary>
-    private protected bool? FillFromInnerRead<TState>(string key, long mark, TState state, Func<TState, bool> set) => _background.Fill(key, mark, state, set);
 
     [LoggerMessage(Level = LogLevel.Debug, Message = "Inner copy of {CacheKey} not kept locally: a write of it, or of a key sharing its stripe, came after the read began.")]
     private protected partial void LogInnerCopyNotKept(LoggedKey cacheKey);

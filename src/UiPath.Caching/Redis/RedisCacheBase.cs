@@ -288,7 +288,7 @@ public abstract class RedisCacheBase : IConnectionState, IDisposable
     /// Until one script has succeeded, any failure counts as a refusal, so a server or proxy that cannot run them, whatever it answers, never turns reads into misses;
     /// after that, only a refusal (unknown or not permitted) does, and other errors propagate to the read pipeline.
     /// </summary>
-    [AsyncMethodBuilder(typeof(PoolingAsyncValueTaskMethodBuilder<>))]
+    [AsyncMethodBuilder(typeof(Pooled<>))]
     private protected async ValueTask<RedisResult?> TryReadScriptAsync(string script, RedisKey[] keys, Action<Exception> logUnavailable, RedisValue[]? values = null)
     {
         if (!SupportsExpireTime || _noReadScript)

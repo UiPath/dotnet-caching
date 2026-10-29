@@ -53,21 +53,18 @@ internal sealed partial class MultilayerHashCache
             names[i] = options[i].CacheKey.Name;
         }
 
-        Issued removed;
-        using (var turn = EnterInnerWrite(names))
-        {
-            foreach (var name in names)
+        var removed = await _background.WriteAsync(
+            names,
+            (Cache: this, Options: options, Names: names, Count: count, Token: token),
+            static s =>
             {
-                RemoveLocal(name);
-            }
-
-            if (turn.Tracked)
-            {
-                await Settled(turn.Previous, token).ConfigureAwait(false);
-            }
-
-            removed = await IssueAsync(options, count, this, static (c, o) => c._innerCache.RemoveAsync<T>(o.CacheKey, o.Token), static (c, o, ex) => c.LogInnerCacheRemoveError(ex, c.Logged(o, typeof(T))), token).ConfigureAwait(false);
-        }
+                foreach (var name in s.Names)
+                {
+                    s.Cache.RemoveLocal(name);
+                }
+            },
+            static s => IssueAsync(s.Options, s.Count, s.Cache, static (c, o) => c._innerCache.RemoveAsync<T>(o.CacheKey, o.Token), static (c, o, ex) => c.LogInnerCacheRemoveError(ex, c.Logged(o, typeof(T))), s.Token),
+            token).ConfigureAwait(false);
 
         // As the single remove does, a key whose delete failed is still announced: the delete may have landed, and a node that drops its copy costs one read. A cancel announces what it issued.
         var announced = announce
@@ -226,25 +223,27 @@ internal sealed partial class MultilayerHashCache
     }
 
     /// <summary>The turn is released before the events.</summary>
-    private async ValueTask<(bool[] Written, bool[] Kept, InternalHashCacheEntryOptions[] ToAnnounce, int[] AnnounceIndex, int AnnounceCount, bool Cancelled)> WriteChunkAsync<T>((InternalHashCacheEntryOptions Options, IDictionary<string, T?> Values)[] entries, int entryCount, CachePolicy policy, bool announce, CancellationToken token)
+    private ValueTask<(bool[] Written, bool[] Kept, InternalHashCacheEntryOptions[] ToAnnounce, int[] AnnounceIndex, int AnnounceCount, bool Cancelled)> WriteChunkAsync<T>((InternalHashCacheEntryOptions Options, IDictionary<string, T?> Values)[] entries, int entryCount, CachePolicy policy, bool announce, CancellationToken token) =>
+        _background.WriteAsync(
+            entries.Take(entryCount).Select(e => e.Options.CacheKey.Name),
+            (Cache: this, Entries: entries, Count: entryCount, Policy: policy, Announce: announce, Token: token),
+            null,
+            static (s, _) => IssueAsync(
+                s.Entries,
+                s.Count,
+                (s.Cache, s.Policy),
+                static (x, e) => x.Cache.WriteBatchedAsync(e.Options, e.Values, x.Policy),
+                static (x, e, ex) => x.Cache.LogInnerCacheSetError(ex, x.Cache.Logged(e.Options, typeof(T))),
+                s.Token),
+            static (s, issued, keeper) => s.Cache.KeepChunk(s.Entries, s.Count, issued, s.Policy, s.Announce, keeper, s.Token),
+            token);
+
+    private (bool[] Written, bool[] Kept, InternalHashCacheEntryOptions[] ToAnnounce, int[] AnnounceIndex, int AnnounceCount, bool Cancelled) KeepChunk<T>((InternalHashCacheEntryOptions Options, IDictionary<string, T?> Values)[] entries, int entryCount, Issued issued, CachePolicy policy, bool announce, BackgroundWrites.Keeper keeper, CancellationToken token)
     {
         var kept = new bool[entryCount];
         var toAnnounce = new InternalHashCacheEntryOptions[entryCount];
         var announceIndex = new int[entryCount];
         var announceCount = 0;
-        using var turn = EnterInnerWrite(entries.Take(entryCount).Select(e => e.Options.CacheKey.Name));
-        if (turn.Tracked)
-        {
-            await Settled(turn.Previous, token).ConfigureAwait(false);
-        }
-
-        var issued = await IssueAsync(
-            entries,
-            entryCount,
-            (Cache: this, Policy: policy),
-            static (s, e) => s.Cache.WriteBatchedAsync(e.Options, e.Values, s.Policy),
-            static (s, e, ex) => s.Cache.LogInnerCacheSetError(ex, s.Cache.Logged(e.Options, typeof(T))),
-            token).ConfigureAwait(false);
         var written = issued.Results;
 
         for (var i = 0; i < issued.Count; i++)
@@ -265,9 +264,7 @@ internal sealed partial class MultilayerHashCache
                 continue;
             }
 
-            kept[i] = turn.Tracked
-                ? KeepAfterInnerWrite(true, false, policy, (Cache: this, entries[i].Options, entries[i].Values, Turn: turn), static (s, max) => s.Turn.KeepLocal(s.Options.CacheKey.Name, (s, max), static x => x.s.Cache.MemorySet(x.s.Options, x.s.Values, x.max), static x => x.s.Cache.DropSuperseded(x.s.Options.CacheKey.Name)), token)
-                : KeepAfterInnerWrite(true, false, policy, (Cache: this, entries[i].Options, entries[i].Values), static (s, max) => s.Cache.MemorySet(s.Options, s.Values, max), token);
+            kept[i] = KeepAfterInnerWrite(true, false, policy, (Cache: this, entries[i].Options, entries[i].Values, Keeper: keeper), static (s, max) => s.Keeper.Local(s.Options.CacheKey.Name, (s, max), static x => x.s.Cache.MemorySet(x.s.Options, x.s.Values, x.max), static x => x.s.Cache.DropSuperseded(x.s.Options.CacheKey.Name)), token);
             if (announce)
             {
                 announceIndex[announceCount] = i;

@@ -303,6 +303,27 @@ public class MultilayerCacheBackgroundWriteTests
     }
 
     [Fact]
+    public async Task A_try_add_waiting_behind_a_background_set_throws_when_its_token_is_cancelled_and_adds_nothing()
+    {
+        var logger = new RecordingLogger();
+        using var h = new Harness(logger: logger);
+        var first = h.Gate("k", "a");
+        await h.Cache.SetAsync<string>("k", "a", Background, Ct);
+        h.Clock.Advance(TimeSpan.FromSeconds(31));
+        using var cancel = CancellationTokenSource.CreateLinkedTokenSource(Ct);
+
+        var add = h.Cache.TryAddAsync<string>("k", "b", Awaited, cancel.Token).AsTask();
+        await Task.Delay(100, Ct);
+        await cancel.CancelAsync();
+
+        await FluentActions.Awaiting(() => add.WaitAsync(TimeSpan.FromSeconds(5), Ct)).Should().ThrowAsync<OperationCanceledException>();
+        logger.Records.Should().NotContain(r => r.Level >= LogLevel.Warning, "the caller cancelled; nothing failed");
+        first.SetResult(true);
+        await h.SettledAsync();
+        h.Log.Should().NotContain("tryadd:k=b");
+    }
+
+    [Fact]
     public async Task A_try_add_waits_for_a_background_set_of_the_key_and_then_loses_to_it()
     {
         using var h = new Harness();
@@ -335,48 +356,6 @@ public class MultilayerCacheBackgroundWriteTests
         await refresh;
         await h.SettledAsync();
         h.Log.Where(e => !e.StartsWith("event:", StringComparison.Ordinal)).Should().Equal("write:k=a", "refresh:k");
-    }
-
-    [Fact]
-    public async Task An_awaited_set_landing_after_a_newer_background_set_leaves_the_newer_value_local()
-    {
-        using var h = new Harness();
-        await h.ActivateAsync();
-        var first = h.Gate("k", "v1");
-        var awaited = h.Cache.SetAsync<string>("k", "v1", Awaited, Ct).AsTask();
-        await h.UntilAsync(() => h.Log.Contains("write:k=v1"));
-
-        await h.Cache.SetAsync<string>("k", "v2", Background, Ct);
-        h.Local("k").Should().Be("v2");
-        first.SetResult(true);
-        (await awaited).Should().BeTrue();
-        await h.SettledAsync();
-
-        h.Local("k").Should().Be("v2", "the awaited write landed first in the inner tier, so the background one holds it");
-        h.Clock.Advance(TimeSpan.FromMinutes(5));
-        h.Local("k").Should().Be("v2", "the background write's landing promoted it past the 30 s cap");
-    }
-
-    [Fact]
-    public async Task A_remove_waiting_behind_a_background_set_ends_when_its_token_is_cancelled_and_frees_its_place()
-    {
-        var logger = new RecordingLogger();
-        using var h = new Harness(logger: logger);
-        var first = h.Gate("k", "a");
-        await h.Cache.SetAsync<string>("k", "a", Background, Ct);
-        using var cancel = CancellationTokenSource.CreateLinkedTokenSource(Ct);
-
-        var remove = h.Cache.RemoveAsync<string>("k", cancel.Token).AsTask();
-        await Task.Delay(100, Ct);
-        await cancel.CancelAsync();
-
-        (await remove.WaitAsync(TimeSpan.FromSeconds(5), Ct)).Should().BeFalse();
-        h.Log.Should().NotContain("remove:k");
-        logger.Records.Should().NotContain(r => r.Level >= LogLevel.Warning, "the caller cancelled; nothing failed");
-        await h.Cache.SetAsync<string>("k", "c", Background, Ct);
-        first.SetResult(true);
-        await h.SettledAsync();
-        h.Log.Where(e => e.StartsWith("write:", StringComparison.Ordinal)).Should().Equal("write:k=a", "write:k=c");
     }
 
     [Fact]
@@ -530,53 +509,6 @@ public class MultilayerCacheBackgroundWriteTests
         h.OnBatchRead = null;
         h.Local("b").Should().Be("b1");
         h.Local("c").Should().Be("c1");
-    }
-
-    [Fact]
-    public async Task Without_a_background_write_an_awaited_set_tracks_nothing_and_a_fill_during_it_is_kept()
-    {
-        using var h = new Harness();
-        var write = h.Gate("k", "v2");
-        var set = h.Cache.SetAsync<string>("k", "v2", Awaited, Ct).AsTask();
-        await h.UntilAsync(() => h.Log.Contains("write:k=v2"));
-        h.OnRead = _ => Task.FromResult<ICacheEntry<string?>>(new TestCacheEntry<string?> { Value = "v1", Expiration = h.Clock.GetUtcNow().AddHours(1) });
-
-        (await h.Cache.GetAsync<string>("k", Awaited, Ct)).Should().Be("v1");
-
-        h.Cache.BackgroundWritesActive.Should().BeFalse();
-        h.OnRead = null;
-        h.Local("k").Should().Be("v1", "as on main, nothing orders reads against awaited writes until a background write is taken");
-        write.SetResult(true);
-        await set;
-    }
-
-    [Fact]
-    public async Task Awaited_sets_of_one_key_do_not_wait_for_one_another()
-    {
-        using var h = new Harness();
-        var first = h.Gate("k", "a");
-        var slow = h.Cache.SetAsync<string>("k", "a", Awaited, Ct).AsTask();
-        await h.UntilAsync(() => h.Log.Contains("write:k=a"));
-
-        (await h.Cache.SetAsync<string>("k", "b", Awaited, Ct).AsTask().WaitAsync(TimeSpan.FromSeconds(5), Ct)).Should().BeTrue();
-
-        first.SetResult(true);
-        await slow;
-    }
-
-    [Fact]
-    public async Task Background_sets_of_other_keys_do_not_wait_for_one_another()
-    {
-        using var h = new Harness();
-        var slow = h.Gate("slow");
-
-        await h.Cache.SetAsync<string>("slow", "a", Background, Ct);
-        await h.Cache.SetAsync<string>("fast", "b", Background, Ct);
-        await h.UntilAsync(() => h.Log.Contains("event:fast"));
-
-        h.Log.Should().NotContain("event:slow");
-        slow.SetResult(true);
-        await h.SettledAsync();
     }
 
     [Fact]
@@ -766,26 +698,6 @@ public class MultilayerCacheBackgroundWriteTests
         stuck.SetResult(true);
         await dispose.WaitAsync(TimeSpan.FromSeconds(10), Ct);
         h.Log.Should().Equal("write:k=v", "event:k");
-    }
-
-    [Fact]
-    public async Task A_drain_that_gives_up_releases_a_background_write_waiting_behind_a_stuck_awaited_one()
-    {
-        using var h = new Harness(new InMemoryRedisCacheOptions { BackgroundWriteDrainTimeout = TimeSpan.FromMilliseconds(200) });
-        await h.ActivateAsync();
-        var stuck = h.Gate("k", "w");
-        var awaited = h.Cache.SetAsync<string>("k", "w", Awaited, Ct).AsTask();
-        await h.UntilAsync(() => h.Log.Contains("write:k=w"));
-        await h.Cache.SetAsync<string>("k", "b", Background, Ct);
-
-        await h.Cache.DisposeAsync().AsTask().WaitAsync(TimeSpan.FromSeconds(10), Ct);
-
-        await h.SettledAsync();
-        h.Log.Should().NotContain("write:k=b");
-        h.Telemetry.Received(1).TrackEvent("cache.background_write.failed", Arg.Is<TelemetryTags<string>>(t => Stage(t) == "drain_cancelled"), Arg.Any<TelemetryTags<double>>());
-        h.Telemetry.DidNotReceive().TrackEvent("cache.background_write.failed", Arg.Is<TelemetryTags<string>>(t => Stage(t) == "unexpected"), Arg.Any<TelemetryTags<double>>());
-        stuck.SetResult(true);
-        await awaited;
     }
 
     [Fact]

@@ -1,4 +1,5 @@
 using System.Collections.Immutable;
+using System.Runtime.CompilerServices;
 using UiPath.Caching.Locking;
 using UiPath.Caching.Telemetry;
 
@@ -406,17 +407,31 @@ internal sealed partial class MultilayerHashCache : MultilayerCacheBase, IHashCa
         var cancelled = false;
         try
         {
-            using var turn = EnterInnerWrite(options.CacheKey.Name);
-            RemoveLocal(options.CacheKey.Name);
-            if (turn.Tracked)
-            {
-                await Settled(turn.Previous, options.Token).ConfigureAwait(false);
-            }
-
-            issued = true;
-            removed = _versioned is { } versioned
-                ? await versioned.RemoveFieldsVersionedAsync<T>(options.CacheKey, fields, options.Token).ConfigureAwait(false)
-                : await inner.RemoveFieldsAsync<T>(options.CacheKey, fields, options.Token).ConfigureAwait(false);
+            // The callback reports that the delete went out, so a cancel while waiting for an earlier write is told apart from one during it.
+            (issued, removed, cancelled) = await _background.WriteAsync(
+                options.CacheKey.Name,
+                (Cache: this, Options: options, Fields: fields, Inner: inner),
+                static s => s.Cache.RemoveLocal(s.Options.CacheKey.Name),
+                [AsyncMethodBuilder(typeof(Pooled<>))] static async ValueTask<(bool Issued, bool Removed, bool Cancelled)> (s) =>
+                {
+                    try
+                    {
+                        var removed = s.Cache._versioned is { } versioned
+                            ? await versioned.RemoveFieldsVersionedAsync<T>(s.Options.CacheKey, s.Fields, s.Options.Token).ConfigureAwait(false)
+                            : await s.Inner.RemoveFieldsAsync<T>(s.Options.CacheKey, s.Fields, s.Options.Token).ConfigureAwait(false);
+                        return (true, removed, false);
+                    }
+                    catch (OperationCanceledException) when (s.Options.Token.IsCancellationRequested)
+                    {
+                        return (true, false, true);
+                    }
+                    catch (Exception ex)
+                    {
+                        s.Cache.LogInnerCacheRemoveError(ex, s.Cache.Logged(s.Options, typeof(T)));
+                        return (true, false, false);
+                    }
+                },
+                options.Token).ConfigureAwait(false);
         }
         catch (Exception ex) when (ex is not OperationCanceledException || !options.Token.IsCancellationRequested)
         {
@@ -474,13 +489,18 @@ internal sealed partial class MultilayerHashCache : MultilayerCacheBase, IHashCa
         LogRefreshingInnerCacheKey(Logged(cacheEntryOptions, typeof(T)), cacheEntryOptions.Expiration);
         try
         {
-            using var turn = EnterInnerWrite(cacheEntryOptions.CacheKey.Name);
-            RemoveLocal(cacheEntryOptions.CacheKey.Name);
-            await Settled(turn.Previous, token).ConfigureAwait(false);
-            var fired = await _eventPublisher.CacheRefreshedAsync(cacheEntryOptions, typeof(T)).ConfigureAwait(false);
-            // Forward the multilayer-resolved expiration so the inner write uses the same TTL the broadcast announced.
-            var innerOptions = options with { ExpireTime = expiration, TimeToLive = null };
-            return fired && await _innerCache.RefreshAsync<T>(cacheEntryOptions.CacheKey, innerOptions, policy, token).ConfigureAwait(false);
+            return await _background.WriteAsync(
+                cacheEntryOptions.CacheKey.Name,
+                (Cache: this, Options: cacheEntryOptions, Refresh: options, Expiration: expiration, Policy: policy, Token: token),
+                static s => s.Cache.RemoveLocal(s.Options.CacheKey.Name),
+                static async s =>
+                {
+                    var fired = await s.Cache._eventPublisher.CacheRefreshedAsync(s.Options, typeof(T)).ConfigureAwait(false);
+                    // Forward the multilayer-resolved expiration so the inner write uses the same TTL the broadcast announced.
+                    var innerOptions = s.Refresh with { ExpireTime = s.Expiration, TimeToLive = null };
+                    return fired && await s.Cache._innerCache.RefreshAsync<T>(s.Options.CacheKey, innerOptions, s.Policy, s.Token).ConfigureAwait(false);
+                },
+                token).ConfigureAwait(false);
         }
         catch (Exception ex)
         {
@@ -577,23 +597,33 @@ internal sealed partial class MultilayerHashCache : MultilayerCacheBase, IHashCa
         try
         {
             // Released before the event; the local removal of a failure stays inside it.
-            using (var turn = EnterInnerWrite(cacheEntryOptions.CacheKey.Name))
-            {
-                try
+            var updated = await _background.WriteAsync(
+                cacheEntryOptions.CacheKey.Name,
+                (Cache: this, Options: cacheEntryOptions, Metadata: metadata),
+                null,
+                static async s =>
                 {
-                    await Settled(turn.Previous, cacheEntryOptions.Token).ConfigureAwait(false);
-                    if (!await _innerCache.SetMetadataAsync<T>(cacheEntryOptions.CacheKey, metadata, cacheEntryOptions.Token).ConfigureAwait(false))
+                    try
                     {
-                        LogInnerCacheSetMetadataFailed(Logged(cacheEntryOptions, typeof(T)));
+                        if (!await s.Cache._innerCache.SetMetadataAsync<T>(s.Options.CacheKey, s.Metadata, s.Options.Token).ConfigureAwait(false))
+                        {
+                            s.Cache.LogInnerCacheSetMetadataFailed(s.Cache.Logged(s.Options, typeof(T)));
+                            return false;
+                        }
+
+                        return true;
+                    }
+                    catch (Exception ex) when (!(ex is OperationCanceledException && s.Options.Token.IsCancellationRequested))
+                    {
+                        s.Cache.RemoveLocal(s.Options.CacheKey.Name);
+                        s.Cache.LogInnerCacheRefreshError(ex, s.Cache.Logged(s.Options, typeof(T)));
                         return false;
                     }
-                }
-                catch (Exception ex) when (!(ex is OperationCanceledException && cacheEntryOptions.Token.IsCancellationRequested))
-                {
-                    RemoveLocal(cacheEntryOptions.CacheKey.Name);
-                    LogInnerCacheRefreshError(ex, Logged(cacheEntryOptions, typeof(T)));
-                    return false;
-                }
+                },
+                cacheEntryOptions.Token).ConfigureAwait(false);
+            if (!updated)
+            {
+                return false;
             }
 
             if(_memoryCache.TryGetValue<ICacheEntry>(cacheEntryOptions.CacheKey.Name, out var entry) && entry != null)
@@ -913,14 +943,13 @@ internal sealed partial class MultilayerHashCache : MultilayerCacheBase, IHashCa
         LogClearingLocalCached(Logged(options, typeof(T)));
         try
         {
-            bool removed;
             // Released before the event, so a slow one does not hold the key's background writes.
-            using (var turn = EnterInnerWrite(options.CacheKey.Name))
-            {
-                RemoveLocal(options.CacheKey.Name);
-                await Settled(turn.Previous, options.Token).ConfigureAwait(false);
-                removed = await _innerCache.RemoveAsync<T>(options.CacheKey, options.Token).ConfigureAwait(false);
-            }
+            var removed = await _background.WriteAsync(
+                options.CacheKey.Name,
+                (Cache: this, Options: options),
+                static s => s.Cache.RemoveLocal(s.Options.CacheKey.Name),
+                static s => s.Cache._innerCache.RemoveAsync<T>(s.Options.CacheKey, s.Options.Token),
+                options.Token).ConfigureAwait(false);
 
             var eventFired = await _eventPublisher.CacheRemovedAsync(options, typeof(T)).ConfigureAwait(false);
             return removed && eventFired;
@@ -1001,14 +1030,12 @@ internal sealed partial class MultilayerHashCache : MultilayerCacheBase, IHashCa
         options.Expiration = fetched.Expiration;
         options.Metadata = fetched.Metadata;
         options.Version = _versioned is null ? 0 : HashVersions.NumberOf(fetched);
-        if (!_background.Active)
-        {
-            MemorySet(options, fetched.Value ?? Empty<T>(), LocalLifetime(policy));
-        }
-        else if (FillFromInnerRead(options.CacheKey.Name, mark, (Cache: this, Options: options, Value: fetched.Value ?? Empty<T>(), Max: LocalLifetime(policy)), static s => s.Cache.MemorySet(s.Options, s.Value, s.Max)) is null)
-        {
-            LogInnerCopyNotKept(Logged(options, typeof(T)));
-        }
+        _background.Fill(
+            options.CacheKey.Name,
+            mark,
+            (Cache: this, Options: options, Value: fetched.Value ?? Empty<T>(), Max: LocalLifetime(policy)),
+            static s => s.Cache.MemorySet(s.Options, s.Value, s.Max),
+            static s => s.Cache.LogInnerCopyNotKept(s.Cache.Logged(s.Options, typeof(T))));
     }
 
     private bool MemorySet<T>(InternalHashCacheEntryOptions options, IDictionary<string, T?> value, TimeSpan? maxExpiration, bool keepWhenAbsent = false)
@@ -1137,38 +1164,43 @@ internal sealed partial class MultilayerHashCache : MultilayerCacheBase, IHashCa
                 return (false, ApplyLocal(options.CacheKey.Name, (Cache: this, Options: options, Value: value, Max: policy.LocalExpirationDisconnected ?? _multiLayerCacheOptions.LocalMaxExpirationDisconnected), static s => s.Cache.MemorySet(s.Options, s.Value, s.Max, keepWhenAbsent: true)), default);
             }
 
-            using var turn = EnterInnerWrite(options.CacheKey.Name);
-            if (turn.Tracked)
-            {
-                await Settled(turn.Previous, options.Token).ConfigureAwait(false);
-            }
-
-            bool ret;
-            VersionedWrite counted = default;
-            try
-            {
-                if (_versioned is { } versioned)
+            return await _background.WriteAsync(
+                options.CacheKey.Name,
+                (Cache: this, Options: options, Value: value, Policy: policy, KeepRefused: keepRefused),
+                null,
+                [AsyncMethodBuilder(typeof(Pooled<>))] static async ValueTask<(bool Ret, VersionedWrite Counted, long Version)> (s, keeper) =>
                 {
-                    counted = await versioned.SetVersionedAsync<T?>(options.CacheKey, value, new HashCacheEntryOptions(options.Expiration, null, options.Metadata, options.SetOption), policy, _peerLimits, options.Token).ConfigureAwait(false);
-                    ret = counted.Written;
-                    var version = counted.Written ? counted.Version : 0;
-                    options.Version = version;
-                    turn.Returned(options.CacheKey.Name, version);
-                }
-                else
-                {
-                    ret = await _innerCache.SetAsync<T?>(options.CacheKey, value, new HashCacheEntryOptions(options.Expiration, null, options.Metadata, options.SetOption), policy, options.Token).ConfigureAwait(false);
-                }
-            }
-            catch (Exception ex) when (keepRefused && !(ex is OperationCanceledException && options.Token.IsCancellationRequested))
-            {
-                LogInnerCacheSetError(ex, Logged(options, typeof(T)));
-                ret = false;
-            }
+                    VersionedWrite counted = default;
+                    var version = s.Options.Version;
+                    bool ret;
+                    try
+                    {
+                        if (s.Cache._versioned is { } versioned)
+                        {
+                            counted = await versioned.SetVersionedAsync<T?>(s.Options.CacheKey, s.Value, new HashCacheEntryOptions(s.Options.Expiration, null, s.Options.Metadata, s.Options.SetOption), s.Policy, s.Cache._peerLimits, s.Options.Token).ConfigureAwait(false);
+                            ret = counted.Written;
+                            version = counted.Written ? counted.Version : 0;
+                            keeper.Returned(s.Options.CacheKey.Name, version);
+                        }
+                        else
+                        {
+                            ret = await s.Cache._innerCache.SetAsync<T?>(s.Options.CacheKey, s.Value, new HashCacheEntryOptions(s.Options.Expiration, null, s.Options.Metadata, s.Options.SetOption), s.Policy, s.Options.Token).ConfigureAwait(false);
+                        }
+                    }
+                    catch (Exception ex) when (s.KeepRefused && !(ex is OperationCanceledException && s.Options.Token.IsCancellationRequested))
+                    {
+                        s.Cache.LogInnerCacheSetError(ex, s.Cache.Logged(s.Options, typeof(T)));
+                        ret = false;
+                    }
 
-            return (ret, turn.Tracked
-                ? KeepAfterInnerWrite(ret, keepRefused, policy, (Cache: this, Options: options, Value: value, Turn: turn), static (s, max) => s.Turn.KeepLocal(s.Options.CacheKey.Name, (s, max), static x => x.s.Cache.MemorySet(x.s.Options, x.s.Value, x.max), static x => x.s.Cache.DropSuperseded(x.s.Options.CacheKey.Name), s.Options.Version), options.Token)
-                : KeepAfterInnerWrite(ret, keepRefused, policy, (Cache: this, Options: options, Value: value), static (s, max) => s.Cache.MemorySet(s.Options, s.Value, max), options.Token), counted);
+                    return (Ret: ret, Counted: counted, Version: version);
+                },
+                static (s, written, keeper) =>
+                {
+                    s.Options.Version = written.Version;
+                    return (written.Ret, s.Cache.KeepAfterInnerWrite(written.Ret, s.KeepRefused, s.Policy, (s.Cache, s.Options, s.Value, Keeper: keeper), static (x, max) => x.Keeper.Local(x.Options.CacheKey.Name, (x, max), static y => y.x.Cache.MemorySet(y.x.Options, y.x.Value, y.max), static y => y.x.Cache.DropSuperseded(y.x.Options.CacheKey.Name), x.Options.Version), s.Options.Token), written.Counted);
+                },
+                options.Token).ConfigureAwait(false);
         }
         catch (Exception ex)
         {
