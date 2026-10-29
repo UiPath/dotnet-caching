@@ -15,6 +15,7 @@ internal sealed partial class MultilayerHashCache : MultilayerCacheBase, IHashCa
     private readonly InFlight<InFlightKey, object?> _generations = new();
     private readonly HashCacheEntryBuilder _entryBuilder;
     private readonly HashLocalMemorySetter _localMemorySetter;
+    private readonly bool _sharedInner;
     private readonly IVersionedHashCache? _versioned;
     private readonly PeerFieldLimits _peerLimits;
 
@@ -40,26 +41,28 @@ internal sealed partial class MultilayerHashCache : MultilayerCacheBase, IHashCa
         var cacheKeyStrategy = _multiLayerCacheOptions.CacheKeyStrategy ?? new DefaultCacheKeyStrategy();
         var topicKeyStrategy = _multiLayerCacheOptions.TopicKeyStrategy ?? new DefaultTopicKeyStrategy(cacheOptions.Separator);
         _entryBuilder = new HashCacheEntryBuilder(cacheKeyStrategy, topicKeyStrategy, _clock);
+        _sharedInner = _innerTier.IsShared;
+        if (_innerTier.Versioned is not null && _topicProvider is not NullTopicProvider)
+        {
+            _versioned = _innerTier.Versioned;
+            _background.Activate();
+            _peerLimits = _innerTier.PeerLimits;
+        }
+
         _localMemorySetter = new HashLocalMemorySetter(cacheName, changeTokenFactory, _topicProvider, _memoryCache, logger, _clock, _multiLayerCacheOptions, memoryCacheOptions, telemetryProvider, _masker, !_clearLocalOnReconnect)
         {
-            Invalidations = innerCache as IInvalidationSink,
+            Invalidations = _innerTier.Invalidations,
+            PeerApply = _versioned is null ? null : TryApplyPeerUpdate,
         };
-        if (_multiLayerCacheOptions is InMemoryRedisCacheOptions { PeerFieldUpdates: true } peer && innerCache is IVersionedHashCache versioned && _topicProvider is not NullTopicProvider)
-        {
-            _versioned = versioned;
-            _background.Activate();
-            _peerLimits = new PeerFieldLimits(Math.Max(1, peer.PeerFieldUpdateMaxFields), Math.Max(1, peer.PeerFieldUpdateMaxBytes));
-            _localMemorySetter.PeerApply = TryApplyPeerUpdate;
-        }
     }
 
-    /// <summary>Runs and inner reads still in the tables; tests check they drain once callers are done.</summary>
     /// <summary>The tier told of received invalidations: the inner cache when it tracks them; tests check the wiring.</summary>
     internal IInvalidationSink? Invalidations => _localMemorySetter.Invalidations;
 
+    /// <summary>Runs and inner reads still in the tables; tests check they drain once callers are done.</summary>
     internal int RunsInFlight => _innerReads.Count + _generations.Count + _background.InFlight;
 
-    private bool OnlyTier => _innerCache is NullHashCache;
+    private bool OnlyTier => !_sharedInner;
 
     [OverloadResolutionPriority(1)]
     public async ValueTask<T?> GetItemAsync<T>(CacheKey cacheKey, string field, CachePolicy? policy, CancellationToken token = default)

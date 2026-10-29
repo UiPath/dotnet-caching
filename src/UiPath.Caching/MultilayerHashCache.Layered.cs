@@ -10,7 +10,7 @@ internal sealed partial class MultilayerHashCache
 
         public string Kind => "hash";
 
-        public bool InnerIsNull => cache._innerCache is NullHashCache;
+        public bool InnerIsNull => !cache._sharedInner;
 
         public bool IsEmpty(IDictionary<string, T?>? value) => IsNullOrEmpty(value);
 

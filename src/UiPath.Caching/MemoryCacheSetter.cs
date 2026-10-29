@@ -36,7 +36,7 @@ internal abstract class MemoryCacheSetter(
     internal long Writes => Volatile.Read(ref _writes);
 
     /// <summary>Told which keys a received event invalidated, so the tier below can read them from the master for a moment.</summary>
-    internal IInvalidationSink? Invalidations { get; set; }
+    internal IInvalidationSink? Invalidations { get; init; }
 
     protected TimeProvider Clock { get; } = clock;
 

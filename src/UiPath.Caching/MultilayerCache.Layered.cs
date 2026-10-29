@@ -10,7 +10,7 @@ internal sealed partial class MultilayerCache
 
         public string Kind => "cache";
 
-        public bool InnerIsNull => cache._innerCache is NullCache;
+        public bool InnerIsNull => !cache._sharedInner;
 
         public bool IsEmpty(T? value) => value is null;
 
