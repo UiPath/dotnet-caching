@@ -7,7 +7,7 @@
     <CloudEvents>2.9.0</CloudEvents>
     <!-- The whole net10 dependency floor, in one place: the family ships in lockstep, and a bump
          has a single line to change instead of eleven that must agree. -->
-    <MEVersion10>10.0.12</MEVersion10>
+    <MEVersion10>10.0.13</MEVersion10>
   </PropertyGroup>
   <!-- Per-TFM dependency floors: keep both groups in sync ID-for-ID, each on its own major.
        Order matters. Dependabot does not evaluate the conditions, so it sees one version per ID and
