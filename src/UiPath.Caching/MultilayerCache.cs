@@ -9,7 +9,6 @@ namespace UiPath.Caching;
 internal sealed partial class MultilayerCache : MultilayerCacheBase, ICache, ISpanKeyCache
 {
     private readonly ICache _innerCache;
-    private readonly InFlight<InFlightKey, object?> _innerReads = new();
     private readonly InFlight<InFlightKey, object?> _generations = new();
     private readonly Lock _batchReserveGate = new();
     private readonly CacheEntryBuilder _entryBuilder;
@@ -644,7 +643,7 @@ internal sealed partial class MultilayerCache : MultilayerCacheBase, ICache, ISp
             var probe = ProbeLocal<T?>(cacheKey, token, out var local);
             if (probe == LocalProbe.Hit && local!.Found)
             {
-                TryRehydrate(cacheKey, local.Expiration, local.Value, generator, policy, effectiveDuration, rehydrateJitter);
+                Layered<T>().TryRehydrate(cacheKey, local.Expiration, local.Value, generator, policy, effectiveDuration, rehydrateJitter);
                 return new ValueTask<T?>(local.Value);
             }
 
@@ -663,9 +662,10 @@ internal sealed partial class MultilayerCache : MultilayerCacheBase, ICache, ISp
             var probe = ProbeLocal<T?>(cacheKey, token, out var local);
             if (probe == LocalProbe.Hit && local!.Found)
             {
-                if (ShouldRehydrate(local.Value, policy, effectiveDuration))
+                var layered = Layered<T>();
+                if (layered.ShouldRehydrate(local.Value, policy, effectiveDuration))
                 {
-                    TriggerRehydrate(cacheKey, local.Expiration, Bind(state, generator), policy, effectiveDuration, rehydrateJitter);
+                    layered.TriggerRehydrate(cacheKey, local.Expiration, Bind(state, generator), policy, effectiveDuration, rehydrateJitter);
                 }
                 return new ValueTask<T?>(local.Value);
             }
@@ -682,7 +682,7 @@ internal sealed partial class MultilayerCache : MultilayerCacheBase, ICache, ISp
         try
         {
             var options = _entryBuilder.BuildEntryOptions<T>(cacheKey, expiration ?? _clock.ToDateTimeOffset(ApplyJitter(effectiveDuration, rehydrateJitter)), token);
-            var fetch = localMissed ? FetchInnerAsync<T>(options, policy) : GetCacheEntryInnerAsync<T>(options, policy);
+            var fetch = localMissed ? Layered<T>().FetchInnerAsync(options, policy) : GetCacheEntryInnerAsync<T>(options, policy);
             var miss = new Miss<T>(cacheKey, options, generator, effectiveDuration, rehydrateJitter, policy, seen);
             if (fetch.IsCompletedSuccessfully)
             {
@@ -701,7 +701,7 @@ internal sealed partial class MultilayerCache : MultilayerCacheBase, ICache, ISp
     {
         if (entry.Found)
         {
-            TryRehydrate(miss.Key, entry.Expiration, entry.Value, miss.Generator, miss.Policy, miss.Duration, miss.RehydrateJitter);
+            Layered<T>().TryRehydrate(miss.Key, entry.Expiration, entry.Value, miss.Generator, miss.Policy, miss.Duration, miss.RehydrateJitter);
             return new ValueTask<T?>(entry.Value);
         }
 
@@ -721,69 +721,6 @@ internal sealed partial class MultilayerCache : MultilayerCacheBase, ICache, ISp
     }
 
 
-    private void TryRehydrate<T>(CacheKey originalCacheKey, DateTimeOffset entryExpiration, T? currentValue, Func<CancellationToken, Task<T?>> generator, CachePolicy policy, TimeSpan duration, TimeSpan? rehydrateJitter)
-    {
-        if (ShouldRehydrate(currentValue, policy, duration))
-        {
-            TriggerRehydrate(originalCacheKey, entryExpiration, generator, policy, duration, rehydrateJitter);
-        }
-    }
-
-    private bool ShouldRehydrate<T>(T? currentValue, CachePolicy policy, TimeSpan duration)
-    {
-        if (policy.RehydrateEnabled != true || policy.Rehydrate is null)
-        {
-            return false;
-        }
-        if (currentValue is null && _multiLayerCacheOptions.CacheNullValues)
-        {
-            return false;
-        }
-        return duration > TimeSpan.Zero && duration != TimeSpan.MaxValue;
-    }
-
-    /// <summary>Hands the rehydration to the coordinator; apart from <see cref="TryRehydrate{T}"/> so its early returns do not allocate the closure.</summary>
-    private void TriggerRehydrate<T>(CacheKey originalCacheKey, DateTimeOffset entryExpiration, Func<CancellationToken, Task<T?>> generator, CachePolicy policy, TimeSpan duration, TimeSpan? rehydrateJitter)
-    {
-        _rehydrator.TryTrigger(
-            originalCacheKey,
-            entryExpiration,
-            policy,
-            duration,
-            kind: "cache",
-            rehydrateAsync: async ct =>
-            {
-                var newValue = await generator(ct).ConfigureAwait(false);
-                if (newValue is null && !_multiLayerCacheOptions.CacheNullValues)
-                {
-                    return;
-                }
-                // Factory transitions to null: preserve the original deadline so the null doesn't get a fresh TTL window.
-                var rehydrateExpiration = newValue is null
-                    ? entryExpiration
-                    : _clock.ToDateTimeOffset(ApplyJitter(duration, rehydrateJitter));
-                var rehydrateOptions = _entryBuilder.BuildEntryOptions<T>(originalCacheKey, rehydrateExpiration, ct);
-                var innerCacheDisconnected = GetInnerCacheDisconnected();
-                bool written;
-                if (innerCacheDisconnected)
-                {
-                    written = await InternalSetAsync(rehydrateOptions, newValue, innerCacheDisconnected, policy).ConfigureAwait(false);
-                }
-                else
-                {
-                    var (inner, kept) = await SetInnerAsync(rehydrateOptions, newValue, innerCacheDisconnected, policy, keepRefused: false, entry: null).ConfigureAwait(false);
-                    written = inner && await PublishSetAsync<T>(rehydrateOptions).ConfigureAwait(false) && kept;
-                }
-
-                if (!written)
-                {
-                    throw new RehydrateWriteFailedException(originalCacheKey.Name);
-                }
-            },
-            entryType: typeof(T));
-    }
-
-    /// <summary>Coalesces the rehydration of every hit past its threshold into one background generator call.</summary>
     private void TryRehydrateBatch<T, TState>(
         List<(CacheKey CallerKey, TState State, CacheEntryOptions Options, DateTimeOffset Expiration, T? Value)> hits,
         Func<TState[], CancellationToken, Task<KeyValuePair<TState, T?>[]>> generator,
@@ -1073,7 +1010,7 @@ internal sealed partial class MultilayerCache : MultilayerCacheBase, ICache, ISp
             }
             else
             {
-                await InternalSetAsync(store, ret, innerCacheDisconnected, policy, keepRefused: true, entry).ConfigureAwait(false);
+                await Layered<T>().InternalSetAsync(store, ret, innerCacheDisconnected, policy, keepRefused: true, entry).ConfigureAwait(false);
             }
         }
         return entry;
@@ -1085,7 +1022,7 @@ internal sealed partial class MultilayerCache : MultilayerCacheBase, ICache, ISp
         var cacheEntryOptions = _entryBuilder.BuildEntryOptions<T>(cacheKey, GetExpiration(policy), token);
 
         var entry = localMissed
-            ? await FetchInnerAsync<T>(cacheEntryOptions, policy).ConfigureAwait(false)
+            ? await Layered<T>().FetchInnerAsync(cacheEntryOptions, policy).ConfigureAwait(false)
             : await GetCacheEntryInnerAsync<T>(cacheEntryOptions, policy).ConfigureAwait(false);
         if (entry.Found)
         {
@@ -1103,7 +1040,7 @@ internal sealed partial class MultilayerCache : MultilayerCacheBase, ICache, ISp
         var cacheEntryOptions = _entryBuilder.BuildEntryOptions<T>(cacheKey, GetExpiration(policy), token);
 
         var entry = localMissed
-            ? await FetchInnerAsync<T>(cacheEntryOptions, policy).ConfigureAwait(false)
+            ? await Layered<T>().FetchInnerAsync(cacheEntryOptions, policy).ConfigureAwait(false)
             : await GetCacheEntryInnerAsync<T>(cacheEntryOptions, policy).ConfigureAwait(false);
         if (entry.Found)
         {
@@ -1702,8 +1639,7 @@ internal sealed partial class MultilayerCache : MultilayerCacheBase, ICache, ISp
         var innerCacheDisconnected = GetInnerCacheDisconnected();
         if (innerCacheDisconnected)
         {
-            LogSettingLocalOnly(Logged(cacheEntryOptions, typeof(T)));
-            return await InternalSetAsync(cacheEntryOptions, value, innerCacheDisconnected, policy).ConfigureAwait(false);
+            return await Layered<T>().InternalSetAsync(cacheEntryOptions, value, innerCacheDisconnected, policy).ConfigureAwait(false);
         }
 
         if (policy.BackgroundDistributedWrite == true && _background.TryReserve())
@@ -1712,8 +1648,8 @@ internal sealed partial class MultilayerCache : MultilayerCacheBase, ICache, ISp
         }
 
         // Written before the event, so a node it wakes reads the new value.
-        var (written, kept) = await SetInnerAsync(cacheEntryOptions, value, innerCacheDisconnected, policy, keepRefused: false, entry: null).ConfigureAwait(false);
-        return written && await PublishSetAsync<T>(cacheEntryOptions).ConfigureAwait(false) && kept;
+        var (written, kept, _) = await Layered<T>().SetInnerAsync(cacheEntryOptions, value, innerCacheDisconnected, policy, keepRefused: false).ConfigureAwait(false);
+        return written && await Layered<T>().PublishSetAsync(cacheEntryOptions).ConfigureAwait(false) && kept;
     }
 
     private async ValueTask<bool> SetCoreAsync<T>(KeyValuePair<CacheKey, T?>[] keyValues, DateTimeOffset expiration, CachePolicy policy, CancellationToken token)
@@ -1766,7 +1702,7 @@ internal sealed partial class MultilayerCache : MultilayerCacheBase, ICache, ISp
         foreach (var cacheEntry in setEntries.Select(s => s.CacheEntry))
         {
             LogReplacingCachedKey(Logged(cacheEntry, typeof(T)));
-            published &= await PublishSetAsync<T>(cacheEntry).ConfigureAwait(false);
+            published &= await Layered<T>().PublishSetAsync(cacheEntry).ConfigureAwait(false);
         }
 
         return published;
@@ -1928,7 +1864,7 @@ internal sealed partial class MultilayerCache : MultilayerCacheBase, ICache, ISp
             LogFoundInnerCacheCopy(LoggedComposed(key, typeof(T)));
             var option = cacheEntriesToFetch[i];
             option.Expiration = entry.Expiration;
-            FillFromInnerRead(option, marks?[i] ?? 0, entry.Value, policy);
+            Layered<T>().FillFromInnerRead(option, marks?[i] ?? 0, entry.Value, policy);
         }
 
         return results.ToArray();
@@ -1956,7 +1892,7 @@ internal sealed partial class MultilayerCache : MultilayerCacheBase, ICache, ISp
             }
         }
 
-        var fetched = await FetchInnerAsync<T>(options, policy).ConfigureAwait(false);
+        var fetched = await Layered<T>().FetchInnerAsync(options, policy).ConfigureAwait(false);
         return fetched.Found ? fetched.Value : default;
     }
 
@@ -2015,7 +1951,7 @@ internal sealed partial class MultilayerCache : MultilayerCacheBase, ICache, ISp
             LogFoundInnerCacheCopy(LoggedComposed(key, typeof(T)));
             var option = cacheEntriesToFetch[j];
             option.Expiration = entry.Expiration;
-            FillFromInnerRead(option, marks?[j] ?? 0, entry.Value, policy);
+            Layered<T>().FillFromInnerRead(option, marks?[j] ?? 0, entry.Value, policy);
         }
 
         return results;
@@ -2040,95 +1976,13 @@ internal sealed partial class MultilayerCache : MultilayerCacheBase, ICache, ISp
             return _cacheEntryFactory.Create<T?>(default, DateTimeOffset.MinValue);
         }
 
-        return await FetchInnerAsync<T>(options, policy).ConfigureAwait(false);
-    }
-
-    /// <summary>Reads the inner tier and keeps a hit locally; concurrent reads of one key share one inner read. The null inner tier has nothing to share or keep.</summary>
-    private ValueTask<ICacheEntry<T?>> FetchInnerAsync<T>(CacheEntryOptions options, CachePolicy policy) =>
-        _innerCache is NullCache
-            ? _innerCache.GetCacheEntryAsync<T>(options.CacheKey, policy, options.Token)
-            : FetchSharedInnerAsync<T>(options, policy);
-
-    private async ValueTask<ICacheEntry<T?>> FetchSharedInnerAsync<T>(CacheEntryOptions options, CachePolicy policy) =>
-        (ICacheEntry<T?>)(await _innerReads.RunAsync(
-            new InFlightKey(options.CacheKey.Name, typeof(T), policy.LocalExpiration, policy.LocalExpirationDisconnected),
-            (Cache: this, Options: options, Policy: policy),
-            static (state, run) => state.Cache.FetchAndKeepAsync<T>(state.Options.Token == run.Token ? state.Options : state.Options with { Token = run.Token }, state.Policy, run),
-            options.Token).ConfigureAwait(false))!;
-
-    private async ValueTask<object?> FetchAndKeepAsync<T>(CacheEntryOptions options, CachePolicy policy, IInFlightRun run)
-    {
-        var mark = MarkInnerRead(options.CacheKey.Name);
-        var fetched = await _innerCache.GetCacheEntryAsync<T>(options.CacheKey, policy, options.Token).ConfigureAwait(false);
-        if (fetched.Found)
-        {
-            // Committed only while a caller still waits, so a read every caller left cannot overwrite a fresh one.
-            run.TryCommit((Cache: this, Options: options, Policy: policy, Fetched: fetched, Mark: mark), static s => s.Cache.Keep(s.Options, s.Policy, s.Fetched, s.Mark));
-        }
-
-        return fetched;
-    }
-
-    private void Keep<T>(CacheEntryOptions options, CachePolicy policy, ICacheEntry<T?> fetched, long mark)
-    {
-        LogFoundInnerCacheCopy(Logged(options, typeof(T)));
-        options.Expiration = fetched.Expiration;
-        FillFromInnerRead(options, mark, fetched.Value, policy);
+        return await Layered<T>().FetchInnerAsync(options, policy).ConfigureAwait(false);
     }
 
     private long[]? MarkInnerReads(CacheKey[] keys) => _background.Active ? Array.ConvertAll(keys, k => MarkInnerRead(k.Name)) : null;
 
-    private void FillFromInnerRead<T>(CacheEntryOptions options, long mark, T? value, CachePolicy policy) =>
-        _background.Fill(
-            options.CacheKey.Name,
-            mark,
-            (Cache: this, Options: options, Value: value, Max: LocalLifetime(policy)),
-            static s => s.Cache.MemorySet(s.Options, s.Value, s.Max),
-            static s => s.Cache.LogInnerCopyNotKept(s.Cache.Logged(s.Options, typeof(T))));
-
-    /// <param name="entry">The entry to keep locally, when the caller already built one for <paramref name="value"/>.</param>
-    private async ValueTask<bool> InternalSetAsync<T>(CacheEntryOptions options, T? value, bool innerCacheDisconnected, CachePolicy policy, bool keepRefused = false, ICacheEntry<T?>? entry = null) =>
-        (await SetInnerAsync(options, value, innerCacheDisconnected, policy, keepRefused, entry).ConfigureAwait(false)).Kept;
-
     private async ValueTask<bool> InternalSetAsync<T>(CacheEntryValue<T>[] cacheEntries, bool innerCacheDisconnected, CachePolicy policy, bool keepRefused, CancellationToken token) =>
         (await SetInnerAsync(cacheEntries, innerCacheDisconnected, policy, keepRefused, token).ConfigureAwait(false)).Kept;
-
-    /// <summary>Written and kept apart: a write the inner tier holds is announced either way.</summary>
-    private async ValueTask<(bool Written, bool Kept)> SetInnerAsync<T>(CacheEntryOptions options, T? value, bool innerCacheDisconnected, CachePolicy policy, bool keepRefused, ICacheEntry<T?>? entry)
-    {
-        try
-        {
-            if (innerCacheDisconnected)
-            {
-                LogSettingLocalOnly(Logged(options, typeof(T)));
-                return (false, ApplyLocal(options.CacheKey.Name, (Cache: this, Options: options, Value: value, Max: policy.LocalExpirationDisconnected ?? _multiLayerCacheOptions.LocalMaxExpirationDisconnected, Entry: entry), static s => s.Cache.MemorySet(s.Options, s.Value, s.Max, s.Entry)));
-            }
-
-            return await _background.WriteAsync(
-                options.CacheKey.Name,
-                (Cache: this, Options: options, Value: value, Entry: entry, Policy: policy, KeepRefused: keepRefused),
-                null,
-                [AsyncMethodBuilder(typeof(Pooled<>))] static async ValueTask<bool> (s, _) =>
-                {
-                    try
-                    {
-                        return await s.Cache._innerCache.SetAsync<T?>(s.Options.CacheKey, s.Value, s.Options.Expiration, s.Policy, s.Options.Token).ConfigureAwait(false);
-                    }
-                    catch (Exception ex) when (s.KeepRefused && !(ex is OperationCanceledException && s.Options.Token.IsCancellationRequested))
-                    {
-                        s.Cache.LogInnerCacheSetError(ex, s.Cache.Logged(s.Options, typeof(T)));
-                        return false;
-                    }
-                },
-                static (s, ret, keeper) => (ret, s.Cache.KeepAfterInnerWrite(ret, s.KeepRefused, s.Policy, (s.Cache, s.Options, s.Value, s.Entry, Keeper: keeper), static (x, max) => x.Keeper.Local(x.Options.CacheKey.Name, (x, max), static y => y.x.Cache.MemorySet(y.x.Options, y.x.Value, y.max, y.x.Entry)), s.Options.Token)),
-                options.Token).ConfigureAwait(false);
-        }
-        catch (Exception ex)
-        {
-            LogInnerCacheSetError(ex, Logged(options, typeof(T)));
-            return (false, false);
-        }
-    }
 
     private async ValueTask<(bool Written, bool Kept)> SetInnerAsync<T>(CacheEntryValue<T>[] cacheEntries, bool innerCacheDisconnected, CachePolicy policy, bool keepRefused, CancellationToken token)
     {
@@ -2240,9 +2094,6 @@ internal sealed partial class MultilayerCache : MultilayerCacheBase, ICache, ISp
     [LoggerMessage(Level = LogLevel.Debug, Message = "Replacing cached key {CacheKey}")]
     private partial void LogReplacingCachedKey(LoggedKey cacheKey);
 
-    [LoggerMessage(Level = LogLevel.Trace, Message = "Inner cache is not connected. Setting local only for cacheKey {CacheKey}")]
-    private partial void LogSettingLocalOnly(LoggedKey cacheKey);
-
     [LoggerMessage(Level = LogLevel.Trace, Message = "Inner cache is not connected. Setting local only for cacheKeys {CacheKeys}")]
     private partial void LogSettingLocalOnlyForCacheKeys(LoggedKeys cacheKeys);
 
@@ -2278,9 +2129,6 @@ internal sealed partial class MultilayerCache : MultilayerCacheBase, ICache, ISp
 
     [LoggerMessage(Level = LogLevel.Trace, Message = "Found inner cache copy at cacheKey {CacheKey}")]
     private partial void LogFoundInnerCacheCopy(LoggedKey cacheKey);
-
-    [LoggerMessage(Level = LogLevel.Warning, Message = "Inner cache set value for {CacheKey}")]
-    private partial void LogInnerCacheSetError(Exception ex, LoggedKey cacheKey);
 
     [LoggerMessage(Level = LogLevel.Warning, Message = "Inner cache set value for {CacheKeys}")]
     private partial void LogInnerCacheSetKeysError(Exception ex, LoggedKeys cacheKeys);

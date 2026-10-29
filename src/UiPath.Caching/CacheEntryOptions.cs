@@ -1,6 +1,6 @@
 namespace UiPath.Caching;
 
-internal record struct CacheEntryOptions : ICacheEntryOptions
+internal record struct CacheEntryOptions : ILayeredOptions<CacheEntryOptions>
 {
     private readonly CacheKey _callerKey;
 
@@ -20,4 +20,6 @@ internal record struct CacheEntryOptions : ICacheEntryOptions
     public DateTimeOffset Expiration { get; set; }
 
     public IDictionary<string, string?>? Metadata { get; set; }
+
+    public CacheEntryOptions WithToken(CancellationToken token) => this with { Token = token };
 }
