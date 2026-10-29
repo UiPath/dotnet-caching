@@ -376,7 +376,7 @@ public class RedisStreamNotifyChannelTests
 
         using var waiter = new SignalingFetchWaiter(5.Seconds());
         using var sut = new RedisStreamNotifyChannel(channel, redis, logger, waiter, 50.Milliseconds(), 10.Milliseconds(), "self");
-        await Task.Delay(300, token);
+        (await LiveRig.EventuallyAsync(() => Task.FromResult(logger.Records.Any(r => r.Message.Contains("polls only"))))).Should().BeTrue();
         redis.OnReconnected += Raise.Event();
         await Task.Delay(300, token);
 
@@ -591,11 +591,14 @@ public class RedisStreamNotifyChannelTests
         var retired = Substitute.For<IConnectionMultiplexer>();
         retired.TimeoutMilliseconds.Returns(5000);
         LiveRig? rig = null;
-        var calls = 0;
+        var reconnecting = 0;
+        var resubscribes = 0;
         using var created = rig = new LiveRig(_fixture, subscribe: () =>
         {
-            if (Interlocked.Increment(ref calls) == 2)
+            // Every subscribe from the reconnect on, not a call count: a timer tick can add a subscribe before it.
+            if (Volatile.Read(ref reconnecting) == 1)
             {
+                Interlocked.Increment(ref resubscribes);
                 RaiseConnectionEvent(rig!.Redis, failed: true, new IPEndPoint(IPAddress.Loopback, 7000), ConnectionType.Subscription, retired);
             }
             return Task.CompletedTask;
@@ -606,9 +609,10 @@ public class RedisStreamNotifyChannelTests
         current.TimeoutMilliseconds.Returns(5000);
         created.Subscriber.Multiplexer.Returns(current);
 
+        Volatile.Write(ref reconnecting, 1);
         created.Redis.OnReconnected += Raise.Event();
 
-        (await LiveRig.EventuallyAsync(async () => Volatile.Read(ref calls) >= 2 && await created.WaitsLongAsync())).Should().BeTrue("the retired connection never reports its restore");
+        (await LiveRig.EventuallyAsync(async () => Volatile.Read(ref resubscribes) >= 1 && await created.WaitsLongAsync())).Should().BeTrue("the retired connection never reports its restore");
     }
 
     [Fact]
