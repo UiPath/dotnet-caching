@@ -33,9 +33,12 @@ public sealed class RedisStreamNotifyIntegrationTests(RedisContainerFixture fixt
     {
         Assert.SkipUnless(fixture.Enabled, "Set RUN_REDIS_INTEGRATION_TESTS=1 (Docker required) to run.");
         var (a, _) = Topic("urn:a", FarPoll);
-        var (_, received) = Topic("urn:b", FarPoll);
+        var (b, received) = Topic("urn:b", FarPoll);
         await SettledAsync();
-        _ = _profile.FinishProfiling().ToList();
+        // The server counts a subscription a little before the node treats it as live, and going live wakes a read; the count
+        // below starts only once both nodes are live and the reads that woke have ended.
+        (await EventuallyAsync(() => Task.FromResult(a.NotifyLive && b.NotifyLive))).Should().BeTrue("both doorbell subscriptions go live");
+        (await EventuallyAsync(QuietAsync)).Should().BeTrue("the reads woken by going live end");
 
         (await a.PublishAsync(Event("urn:a", "1"), TestContext.Current.CancellationToken)).Should().BeTrue();
 
@@ -180,22 +183,16 @@ public sealed class RedisStreamNotifyIntegrationTests(RedisContainerFixture fixt
         Assert.SkipUnless(fixture.Enabled, "Set RUN_REDIS_INTEGRATION_TESTS=1 (Docker required) to run.");
         // Node a rings a channel nobody listens on: a doorbell lost while node b's subscription stays live.
         var (a, _) = Topic("urn:a", Poll, configure: o => o.NotifyChannelStrategy = new LostDoorbell());
-        var (_, received) = Topic("urn:b", Poll, configure: o => o.NotifiedPollInterval = TimeSpan.FromSeconds(2));
+        var (topicB, received) = Topic("urn:b", Poll, configure: o => o.NotifiedPollInterval = TimeSpan.FromSeconds(2));
         await SettledAsync();
-        // A wait that began before the subscription went live still ends at the 250 ms poll, and the subscription goes live a little
-        // after the server counts it. Primers are read until one takes longer than that poll, so the waits that follow are the notified ones.
-        var live = false;
-        for (var i = 0; i < 5 && !live; i++)
-        {
-            var started = Stopwatch.GetTimestamp();
-            (await a.PublishAsync(Event("urn:a", $"primer-{i}"), TestContext.Current.CancellationToken)).Should().BeTrue();
-            (await Task.WhenAny(received.Next.Task, Task.Delay(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken))).Should().BeSameAs(received.Next.Task, "a poll always catches the primer");
-            live = Stopwatch.GetElapsedTime(started) > TimeSpan.FromMilliseconds(600);
-            received.Next = new(TaskCreationOptions.RunContinuationsAsynchronously);
-        }
-
-        live.Should().BeTrue("the notified interval comes into force once the doorbell is live");
-        await Task.Delay(100, TestContext.Current.CancellationToken);
+        // The waiter is read for the mechanism itself: a primer that merely took long could be a stalled machine, not a live doorbell.
+        (await EventuallyAsync(() => Task.FromResult(topicB.NotifyLive))).Should().BeTrue("the subscription goes live a little after the server counts it");
+        // A wait that began before it went live still ends at the 250 ms poll; once that primer is read and acknowledged, the next wait is the notified one.
+        (await a.PublishAsync(Event("urn:a", "primer"), TestContext.Current.CancellationToken)).Should().BeTrue();
+        (await Task.WhenAny(received.Next.Task, Task.Delay(TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken))).Should().BeSameAs(received.Next.Task, "a poll always catches the primer");
+        received.Next = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        (await EventuallyAsync(() => CaughtUpAsync("urn:b"))).Should().BeTrue("the primer is read and acknowledged before the wait that follows it begins");
+        await Task.Delay(300, TestContext.Current.CancellationToken);
 
         (await a.PublishAsync(Event("urn:a", "1"), TestContext.Current.CancellationToken)).Should().BeTrue();
 
@@ -355,6 +352,23 @@ public sealed class RedisStreamNotifyIntegrationTests(RedisContainerFixture fixt
     {
         (await EventuallyAsync(async () => await SubscribersAsync() == 1)).Should().BeTrue("one multiplexer carries both nodes' subscriptions");
         await Task.Delay(300, TestContext.Current.CancellationToken);
+    }
+
+    /// <summary>No command went out on the profiled connection for two 300 ms windows in a row; what went out before is dropped.</summary>
+    /// <remarks>Two windows, so a read woken late by a stalled go-live signal shows in the second one rather than in the count.</remarks>
+    private async Task<bool> QuietAsync()
+    {
+        _ = _profile.FinishProfiling().ToList();
+        for (var window = 0; window < 2; window++)
+        {
+            await Task.Delay(300, TestContext.Current.CancellationToken);
+            if (_profile.FinishProfiling().Any())
+            {
+                return false;
+            }
+        }
+
+        return true;
     }
 
     /// <summary>The group has been delivered the newest entry and acknowledged everything.</summary>

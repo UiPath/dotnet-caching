@@ -250,7 +250,7 @@ public class RedisStreamsTopicTests(ITestContextAccessor testContextAccessor) : 
 
                 return Task.FromResult(1L);
             });
-        Sut.DoorbellSpacing = TimeSpan.FromMilliseconds(300);
+        Sut.DoorbellSpacing = TimeSpan.FromSeconds(2);
         var token = testContextAccessor.Current.CancellationToken;
 
         (await Sut.PublishAsync(_fixture.Create<ICacheEvent>(), token)).Should().BeTrue();
@@ -259,6 +259,7 @@ public class RedisStreamsTopicTests(ITestContextAccessor testContextAccessor) : 
             (await Sut.PublishAsync(_fixture.Create<ICacheEvent>(), token)).Should().BeTrue();
         }
 
+        // The spacing is far longer than the publishes take, so even a starved test thread sees the first doorbell alone.
         // Waits for each doorbell rather than sleeping a fixed time, so a loaded machine cannot make the counts race.
         (await SentAtLeast(1)).Should().BeTrue();
         lock (sent)
@@ -267,17 +268,17 @@ public class RedisStreamsTopicTests(ITestContextAccessor testContextAccessor) : 
         }
 
         (await SentAtLeast(2)).Should().BeTrue();
-        await Task.Delay(300, token);
+        await Task.Delay(2_500, token); // longer than the spacing, so a stray third doorbell would have arrived
         lock (sent)
         {
             sent.Should().HaveCount(2, "the waiting rings fold into one doorbell");
-            Stopwatch.GetElapsedTime(sent[0], sent[1]).Should().BeGreaterThanOrEqualTo(TimeSpan.FromMilliseconds(280));
+            Stopwatch.GetElapsedTime(sent[0], sent[1]).Should().BeGreaterThanOrEqualTo(TimeSpan.FromMilliseconds(1_800));
         }
 
         async Task<bool> SentAtLeast(int count)
         {
             var started = Stopwatch.GetTimestamp();
-            while (Stopwatch.GetElapsedTime(started) < TimeSpan.FromSeconds(5))
+            while (Stopwatch.GetElapsedTime(started) < TimeSpan.FromSeconds(30))
             {
                 lock (sent)
                 {
@@ -409,7 +410,8 @@ public class RedisStreamsTopicTests(ITestContextAccessor testContextAccessor) : 
         await Sut.PublishAsync(_fixture.Create<ICacheEvent>(), token);
         await Sut.PublishAsync(_fixture.Create<ICacheEvent>(), token);
         await Sut.PublishAsync(_fixture.Create<ICacheEvent>(), token);
-        await Task.Delay(1500, token);
+
+        await DoorbellCallsSettledAsync(() => Volatile.Read(ref calls), expectedCalls, token);
 
         Volatile.Read(ref calls).Should().Be(expectedCalls, "the doorbell for the folded ring is retried until it goes out, at most twice");
     }
@@ -449,7 +451,7 @@ public class RedisStreamsTopicTests(ITestContextAccessor testContextAccessor) : 
         Sut.DoorbellSpacing = TimeSpan.FromMilliseconds(100);
 
         await Sut.PublishAsync(_fixture.Create<ICacheEvent>(), testContextAccessor.Current.CancellationToken);
-        await Task.Delay(1000, testContextAccessor.Current.CancellationToken);
+        await DoorbellCallsSettledAsync(() => Volatile.Read(ref calls), 3, testContextAccessor.Current.CancellationToken);
 
         Volatile.Read(ref calls).Should().Be(3, "the follow-up doorbell owes the ring that landed during the first one");
     }
@@ -473,7 +475,7 @@ public class RedisStreamsTopicTests(ITestContextAccessor testContextAccessor) : 
         Sut.DoorbellSpacing = TimeSpan.FromMilliseconds(100);
 
         await Sut.PublishAsync(_fixture.Create<ICacheEvent>(), testContextAccessor.Current.CancellationToken);
-        await Task.Delay(1500, testContextAccessor.Current.CancellationToken);
+        await DoorbellCallsSettledAsync(() => Volatile.Read(ref calls), 7, testContextAccessor.Current.CancellationToken);
 
         Volatile.Read(ref calls).Should().Be(7, "the second ring is retried twice after its own failure, then the run ends");
     }
@@ -697,6 +699,18 @@ public class RedisStreamsTopicTests(ITestContextAccessor testContextAccessor) : 
         _cacheOptions = _fixture.Create<CacheOptions>();
         _fixture.Inject(_cacheOptions);
         return ValueTask.CompletedTask;
+    }
+
+    /// <summary>Waits for the expected number of doorbells rather than a fixed time, then a little longer to show no further one follows.</summary>
+    private static async Task DoorbellCallsSettledAsync(Func<int> calls, int expected, CancellationToken token)
+    {
+        var started = Stopwatch.GetTimestamp();
+        while (calls() < expected && Stopwatch.GetElapsedTime(started) < TimeSpan.FromSeconds(30))
+        {
+            await Task.Delay(10, token);
+        }
+
+        await Task.Delay(700, token);
     }
 
     /// <summary>Waits for a read issued from now on: one issued before whatever the test does next may answer after it.</summary>
