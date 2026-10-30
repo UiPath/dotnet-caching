@@ -43,6 +43,9 @@ public sealed class CachePolicy
     /// <summary>Single-key <c>SetAsync</c> and the fill after a <c>GetOrAdd</c> miss return after the local write; the distributed write (and a set's broadcast) follows detached. <c>null</c> inherits (default off).</summary>
     public bool? BackgroundDistributedWrite { get; init; }
 
+    /// <summary>Keeps the local copy on a peer's write and refreshes it from the inner tier in the background. <c>null</c> inherits (default on).</summary>
+    public bool? RefreshLocalOnPeerWrite { get; init; }
+
     /// <summary>
     /// Upper bound on the random duration added to the L2 (distributed) expiration at write time —
     /// uniform random in <c>[0, JitterMaxDuration)</c> added to the resolved write duration on

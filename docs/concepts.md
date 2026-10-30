@@ -445,7 +445,29 @@ its policy says, because its payload may be memory the caller reclaims on return
 - A local miss that reads the distributed tier while a write or removal of the key is issued keeps nothing
   locally, so the older value it found cannot replace the newer one; the next read keeps it.
   Keys are grouped into 1024 stripes for this, so a write can also skip the local copy of a
-  key sharing its stripe.
+  key sharing its stripe. A peer's write, removal or metadata change heard during the read, or lost events, keep nothing either,
+  whether or not this node held the key. About (peer events per second x read latency) / 1024 of the fills are refused this
+  way, each costing one more read later; a loss on the topic of one entry type refuses the fills in flight of every type. Only
+  topics built on the library's own Redis providers hear these events before the keys' tokens; a custom `ITopic` gets no such
+  guarantee, and a fill that commits while its event is delivered may then keep the older value.
+
+### Refresh on a peer's write
+
+When a peer writes a key this node holds in its local tier, the node keeps serving its copy and refreshes it from the distributed tier
+in the background (a master read). After a peer writes a key, this node serves its old copy until the refresh lands, typically one
+inner-tier round trip and at most the cache `Timeout`; the bound is the queue wait plus the read, at most twice `Timeout` plus one re-read.
+A peer batch of a plain cache is refreshed with one read per entry type and policy instance, one command per cluster slot. Policies are
+told apart by reference, so a policy object built for each call reads its keys one by one; share the policy object to batch them. A hash
+cache that could not apply a peer update reads the whole hash, each key separately. A local write always wins over a refresh.
+
+Still dropped at once: removals, a topic-wide invalidation (a batch above `BatchTopicInvalidationThreshold`), subscription gaps, losses
+and errors, any event while the distributed tier is disconnected, policies that opted out, and keys past the refresh queue cap.
+
+A refresh that cannot keep what it read drops the copy instead: a key that waited longer than `Timeout` for its read, a read that failed
+or timed out, a key gone from the distributed tier, a key a peer wrote again after one re-read, and a refreshed value the local tier
+declined after one re-read (a write of the key, or of a key sharing its stripe, was in flight).
+
+Opt out per policy (`RefreshLocalOnPeerWrite: false`) for read-after-peer-write data such as revocations.
 
 See also: [how-to/resilience.md#named-policies](how-to/resilience.md#named-policies), [reference/settings.md#policiesname-cachepolicy](reference/settings.md#policiesname-cachepolicy).
 

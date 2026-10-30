@@ -55,7 +55,7 @@ internal sealed partial class MultilayerCache : IAsyncDisposable
     private void PromoteDetached<T>(CacheEntryOptions options, T? value, CachePolicy policy, ICacheEntry<T?> entry)
     {
         ApplyLocal(options.CacheKey.Name, (Cache: this, Options: options, Value: value, Policy: policy, Entry: entry), static s =>
-            s.Cache.IsLocalEntry(s.Options.CacheKey.Name, s.Entry) && s.Cache.MemorySet(s.Options, s.Value, s.Cache.ConnectedLifetime(s.Policy), s.Entry));
+            s.Cache.IsLocalEntry(s.Options.CacheKey.Name, s.Entry) && s.Cache.MemorySet(s.Options, s.Value, s.Cache.ConnectedLifetime(s.Policy), s.Entry, s.Policy));
     }
 
 }

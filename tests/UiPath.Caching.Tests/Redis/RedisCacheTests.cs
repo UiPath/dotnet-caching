@@ -5,6 +5,7 @@ using NSubstitute.ReceivedExtensions;
 using StackExchange.Redis;
 using UiPath.Caching;
 using UiPath.Caching.Policies;
+using UiPath.Caching.Redis;
 using UiPath.Caching.Telemetry;
 using UiPath.Caching.Tests.Fakes;
 using UiPath.Caching.Tests.Telemetry;
@@ -59,6 +60,63 @@ public class RedisCacheTests(ITestContextAccessor testContextAccessor) : IAsyncL
     {
         new RedisCacheOptions().ReadFrom.Should().Be(RedisReadFrom.Master);
         Sut.ReadFlagsFor(_redisKey).Should().Be(CommandFlags.PreferMaster);
+    }
+
+    [Fact]
+    public void Reads_inside_a_master_scope_demand_the_master()
+    {
+        _cacheOptions.ReadFrom = RedisReadFrom.Replica;
+
+        using (((IMasterReadScope)Sut).DemandMaster())
+        {
+            Sut.ReadFlagsFor(_redisKey).Should().Be(CommandFlags.DemandMaster);
+            Sut.ReadFlagsFor(new[] { _redisKey }).Should().Be(CommandFlags.DemandMaster);
+        }
+    }
+
+    [Fact]
+    public async Task The_master_scope_flows_across_awaits_and_ends_on_dispose()
+    {
+        _cacheOptions.ReadFrom = RedisReadFrom.Replica;
+        var scope = ((IMasterReadScope)Sut).DemandMaster();
+        try
+        {
+            await Task.Yield();
+            Sut.ReadFlagsFor(_redisKey).Should().Be(CommandFlags.DemandMaster);
+        }
+        finally
+        {
+            scope.Dispose();
+        }
+
+        Sut.ReadFlagsFor(_redisKey).Should().Be(CommandFlags.PreferReplica);
+    }
+
+    [Fact]
+    public async Task Reads_outside_a_master_scope_keep_their_flags()
+    {
+        var opened = new TaskCompletionSource();
+        var release = new TaskCompletionSource();
+        async Task HoldScope()
+        {
+            using (((IMasterReadScope)Sut).DemandMaster())
+            {
+                opened.SetResult();
+                await release.Task;
+            }
+        }
+
+        var other = Task.Run(HoldScope, testContextAccessor.Current.CancellationToken);
+        await opened.Task;
+        try
+        {
+            Sut.ReadFlagsFor(_redisKey).Should().Be(CommandFlags.PreferMaster);
+        }
+        finally
+        {
+            release.SetResult();
+            await other;
+        }
     }
 
     [Theory]

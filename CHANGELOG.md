@@ -8,6 +8,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 
 ### Added
 
+- **`RefreshLocalOnPeerWrite`** (per policy, on by default). When a peer writes a key held in the local tier, the node keeps serving its copy and
+  refreshes it from the distributed tier in the background instead of dropping it. Removals, topic-wide invalidations, subscription gaps and
+  a disconnected distributed tier still drop at once. Set it to `false` for data that must be read after a peer's write, such as revocations.
+
 - **`RedisStreamsTopicOptions.AutoAck`** (off by default). Reads with `NOACK` and sends no `XACK`, so the group keeps no pending list and
   the pending-entry recovery is skipped after the entries an earlier run left pending are read once at start. A read that fails may
   have been delivered, so it is reported as missed events and the local tier is cleared rather than left stale, when a failure streak
@@ -110,6 +114,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
   See `docs/how-to/choosing-a-get-or-add-overload.md`.
 
 ### Changed
+
+- **A peer's write refreshes the local copy by default (was a drop).** This changes the read-after-peer-write contract: after another node
+  writes a key, this node serves its old copy until the background refresh lands (typically one round trip, at most twice `Timeout` plus one
+  re-read) instead of reading the new value on its next call. Set `RefreshLocalOnPeerWrite: false` on a policy to keep the drop for that data.
 
 - **Reads go to the master by default (was `PreferReplica`).** This is a default behavior change: unless you opt in, every Redis read
   (values, hashes, sets, TTLs, read scripts) is sent to the master. On an Azure Redis 6 cluster a replica round trip measured about 3 times the
@@ -307,6 +315,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
   3.1.
 
 ### Fixed
+
+- **A local miss whose distributed read began before a peer's write of the key no longer keeps the older value.** A node that did not hold
+  the key had no change token to hear the peer's event, so the value its read found before the write was kept locally until it expired. Each
+  cache with a shared distributed tier and broadcast now hears every peer `CacheSet`, `CacheRemoved` and metadata change on its topics, before
+  the keys' own tokens, and refuses such a fill; a topic-wide invalidation, a loss, a subscription gap or a topic that ends refuses every fill
+  begun before it. From its first distributed read the cache counts changes, and writes in flight, per stripe of keys, which costs an awaited
+  write a stripe lock or two; the write order is still kept only from the first background write. A peer's event can also refuse the fill of a key sharing its stripe
+  (1 in 1024), which costs that key one more read.
 
 - **A group this node made on an empty stream no longer reports its first entry as lost on Redis 6.** Without `max-deleted-entry-id`,
   an entry added after a group made at `0-0` looked trimmed, so the node logged "entries were removed before they were read" and cleared its

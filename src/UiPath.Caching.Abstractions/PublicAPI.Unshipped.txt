@@ -219,6 +219,8 @@ UiPath.Caching.NullHashCache.SetAsync<T>(System.Span<char> cacheKey, System.Coll
 UiPath.Caching.NullHashCache.SetAsync<T>(System.Span<char> cacheKey, System.Collections.Generic.IDictionary<string!, T?>! values, UiPath.Caching.HashCacheEntryOptions options, UiPath.Caching.CachePolicy? policy, System.Threading.CancellationToken token = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.ValueTask<bool>
 UiPath.Caching.CachePolicy.BackgroundDistributedWrite.get -> bool?
 UiPath.Caching.CachePolicy.BackgroundDistributedWrite.init -> void
+UiPath.Caching.CachePolicy.RefreshLocalOnPeerWrite.get -> bool?
+UiPath.Caching.CachePolicy.RefreshLocalOnPeerWrite.init -> void
 const UiPath.Caching.Broadcast.KnownEventTypes.TopicInvalidated = "TopicInvalidated" -> string!
 UiPath.Caching.ISpanKeyCache.RemoveManyAsync<T>(System.Collections.Generic.IEnumerable<UiPath.Caching.CacheKey>! cacheKeys, System.Threading.CancellationToken token = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.ValueTask<System.Collections.Generic.IReadOnlyList<UiPath.Caching.CacheKey>!>
 UiPath.Caching.ISpanKeyCache.SetManyAsync<T>(System.Collections.Generic.IEnumerable<System.Collections.Generic.KeyValuePair<UiPath.Caching.CacheKey, T?>>! keyValues, UiPath.Caching.CachePolicy? policy, System.Threading.CancellationToken token = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.ValueTask<System.Collections.Generic.IReadOnlyList<UiPath.Caching.CacheKey>!>

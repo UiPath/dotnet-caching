@@ -258,6 +258,53 @@ public class BackgroundWritesTests
     }
 
     [Fact]
+    public async Task Counting_alone_refuses_a_fill_begun_before_an_awaited_write_kept_and_orders_no_write()
+    {
+        var writes = Create();
+        writes.Track();
+        var mark = writes.Mark("k");
+        var other = writes.Mark("n");
+
+        (await writes.WriteAsync("k", 0, null, static (_, _) => ValueTask.FromResult(true), static (_, _, keeper) => keeper.Local("k", 0, static _ => true), Ct)).Should().BeTrue();
+
+        writes.Active.Should().BeFalse();
+        writes.Fill("k", mark, 0, static _ => true).Should().BeNull();
+        writes.Fill("n", other, 0, static _ => true).Should().Be(BackgroundWrites.Stripe("n") != BackgroundWrites.Stripe("k") ? true : null);
+    }
+
+    [Fact]
+    public void Counting_alone_refuses_a_fill_while_an_unordered_write_of_its_stripe_is_in_flight_and_after_it_ends()
+    {
+        var writes = Create();
+        writes.Track();
+        var before = writes.Mark("k");
+
+        var turn = writes.Enter(["k"]);
+        var during = writes.Mark("k");
+        writes.Fill("k", during, 0, static _ => true).Should().BeNull("the inner tier may change under the read until the write ends");
+        turn.Dispose();
+
+        writes.Active.Should().BeFalse();
+        writes.Fill("k", before, 0, static _ => true).Should().BeNull();
+        writes.Fill("k", during, 0, static _ => true).Should().BeNull();
+        writes.Fill("k", writes.Mark("k"), 0, static _ => true).Should().BeTrue();
+    }
+
+    [Fact]
+    public void A_background_write_after_counting_keeps_the_counts()
+    {
+        var writes = Create();
+        writes.Track();
+        var mark = writes.Mark("n");
+
+        writes.TryReserve().Should().BeTrue();
+        writes.Release();
+
+        writes.Active.Should().BeTrue();
+        writes.Fill("n", mark, 0, static _ => true).Should().BeTrue("the counts did not restart");
+    }
+
+    [Fact]
     public async Task Before_the_first_background_write_a_write_keeps_at_once_and_does_not_wait()
     {
         var writes = Create();

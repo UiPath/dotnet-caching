@@ -31,15 +31,15 @@ internal sealed partial class MultilayerHashCache
 
         public void LogFoundInner(InternalHashCacheEntryOptions options) => cache.LogFoundInnerCopy(cache.Logged(options, typeof(T)));
 
-        public bool KeepLocal(InternalHashCacheEntryOptions options, IDictionary<string, T?> value, TimeSpan? maxExpiration) => cache.MemorySet(options, value, maxExpiration);
+        public bool KeepLocal(InternalHashCacheEntryOptions options, IDictionary<string, T?> value, TimeSpan? maxExpiration, CachePolicy policy) => cache.MemorySet(options, value, maxExpiration, policy: policy);
 
         public bool KeepWhileDisconnected(InternalHashCacheEntryOptions options, IDictionary<string, T?> value, TimeSpan? maxExpiration, ICacheEntry<IDictionary<string, T?>>? entry) =>
             cache.MemorySet(options, value, maxExpiration, keepWhenAbsent: true);
 
-        public bool KeepWritten(BackgroundWrites.Keeper keeper, InternalHashCacheEntryOptions options, IDictionary<string, T?> value, TimeSpan? maxExpiration, ICacheEntry<IDictionary<string, T?>>? entry, long version)
+        public bool KeepWritten(BackgroundWrites.Keeper keeper, InternalHashCacheEntryOptions options, IDictionary<string, T?> value, TimeSpan? maxExpiration, ICacheEntry<IDictionary<string, T?>>? entry, long version, CachePolicy policy)
         {
             options.Version = version;
-            return keeper.Local(options.CacheKey.Name, (Cache: cache, Options: options, Value: value, Max: maxExpiration), static s => s.Cache.MemorySet(s.Options, s.Value, s.Max), static s => s.Cache.DropSuperseded(s.Options.CacheKey.Name), options.Version);
+            return keeper.Local(options.CacheKey.Name, (Cache: cache, Options: options, Value: value, Max: maxExpiration, Policy: policy), static s => s.Cache.MemorySet(s.Options, s.Value, s.Max, policy: s.Policy), static s => s.Cache.DropSuperseded(s.Options.CacheKey.Name), options.Version);
         }
 
         public bool Written(InnerWrite write) => write.Written;

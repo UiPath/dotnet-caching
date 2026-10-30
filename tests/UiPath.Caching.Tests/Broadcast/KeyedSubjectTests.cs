@@ -554,6 +554,50 @@ public class KeyedSubjectTests
         }
     }
 
+    [Fact]
+    public void A_first_observer_hears_every_event_before_the_key_s_observers()
+    {
+        var order = new List<string>();
+        _sut.Subscribe(new KeyedOrderObserver("keyed", order, "key1"));
+        _sut.Subscribe(new OrderObserver("broadcast", order));
+        _sut.Subscribe(new FirstObserver(order));
+
+        _sut.OnNext(CreateEvent("key1"));
+        _sut.OnNext(CreateEvent("key2"));
+
+        order.Should().Equal("first", "keyed", "broadcast", "first", "broadcast");
+    }
+
+    [Fact]
+    public void A_first_observer_hears_a_loss_before_the_key_s_observers()
+    {
+        var order = new List<string>();
+        _sut.Subscribe(new KeyedOrderObserver("keyed", order, "key1"));
+        _sut.Subscribe(new FirstObserver(order));
+
+        _sut.Invalidate(MissedEventsReason.Lost);
+
+        order.Should().Equal("first-missed", "keyed-missed");
+    }
+
+    [Fact]
+    public void A_first_observer_unsubscribed_or_completed_hears_nothing_more()
+    {
+        var order = new List<string>();
+        var first = new FirstObserver(order);
+        var subscription = _sut.Subscribe(first);
+        var completed = new FirstObserver(order);
+        _sut.Subscribe(completed);
+
+        subscription.Dispose();
+        _sut.OnNext(CreateEvent("key1"));
+        order.Should().ContainSingle();
+        _sut.OnCompleted();
+
+        completed.Completions.Should().Be(1);
+        first.Completions.Should().Be(0);
+    }
+
     private static ICacheEvent CreateEvent(string? key)
     {
         return new TestCacheEvent
@@ -605,6 +649,27 @@ public class KeyedSubjectTests
         public void OnError(Exception error) { }
         public void OnCompleted() => Completed = true;
         public void OnEventsMissed(MissedEventsReason reason) => Invalidations++;
+    }
+
+    private class OrderObserver(string name, List<string> order) : IObserver<ICacheEvent>, IMissedEventsObserver
+    {
+        private int _completions;
+
+        public int Completions => _completions;
+
+        public void OnNext(ICacheEvent value) => order.Add(name);
+        public void OnError(Exception error) { }
+        public void OnCompleted() => _completions++;
+        public void OnEventsMissed(MissedEventsReason reason) => order.Add(name + "-missed");
+    }
+
+    private sealed class KeyedOrderObserver(string name, List<string> order, string key) : OrderObserver(name, order), IKeyedObserver<ICacheEvent>
+    {
+        public string Key => key;
+    }
+
+    private sealed class FirstObserver(List<string> order) : OrderObserver("first", order), IFirstObserver<ICacheEvent>
+    {
     }
 
     private sealed class NoOpKeyedObserver(string key) : IKeyedObserver<ICacheEvent>

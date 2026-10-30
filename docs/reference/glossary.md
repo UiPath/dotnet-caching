@@ -34,7 +34,7 @@ Alphabetical lookup for terms used across the docs.
 
 **Hash tag** — A `{...}` substring inside a Redis key that pins the key to a single shard in Redis Cluster. Used by the sharded Pub/Sub strategy so the doorbell channel and the stream key collide on the same slot.
 
-**Invalidation** — What an [event](#event) does on the receiving node: the local entry for the key is dropped, and the next read goes to the distributed tier.
+**Invalidation** — What an [event](#event) does on the receiving node: the local entry for the key is dropped, and the next read goes to the distributed tier. A peer's set of a key held locally is instead refreshed in the background (`RefreshLocalOnPeerWrite`).
 
 **Jitter** — Uniform random delay added to the distributed TTL at write time (`CachePolicy.JitterMaxDuration`) to spread cluster-wide expirations after bulk writes.
 

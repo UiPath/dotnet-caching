@@ -282,6 +282,133 @@ public class ChangeTokenTests : IAsyncLifetime
     }
 
     [Fact]
+    public void A_peer_set_taken_by_the_refresh_hook_leaves_the_token_unchanged()
+    {
+        var state = new object();
+        var seen = new List<object?>();
+        var changed = false;
+        Sut.RegisterChangeCallback(_ => changed = true, null);
+        ((IPeerRefreshSource)Sut).RegisterPeerRefresh(s => { seen.Add(s); return true; }, state);
+
+        Sut.OnNext(PeerEvent(KnownEventTypes.CacheSet));
+
+        seen.Should().Equal(state);
+        Sut.HasChanged.Should().BeFalse();
+        changed.Should().BeFalse();
+    }
+
+    [Fact]
+    public void A_peer_set_the_hook_declines_changes_the_token()
+    {
+        ((IPeerRefreshSource)Sut).RegisterPeerRefresh(_ => false, null);
+
+        Sut.OnNext(PeerEvent(KnownEventTypes.CacheSet));
+
+        Sut.HasChanged.Should().BeTrue();
+    }
+
+    [Fact]
+    public void A_peer_set_the_hook_declines_clears_a_refreshed_expiration()
+    {
+        ((IPeerRefreshSource)Sut).RegisterPeerRefresh(_ => false, null);
+        Sut.OnNext(PeerEvent(KnownEventTypes.CacheRefreshed, new Dictionary<string, object?> { ["_expiration_"] = DateTimeOffset.Now.AddMinutes(5) }));
+        Sut.Expiration.Should().NotBeNull();
+
+        Sut.OnNext(PeerEvent(KnownEventTypes.CacheSet));
+
+        Sut.Expiration.Should().BeNull();
+    }
+
+    [Fact]
+    public void A_peer_set_whose_hook_throws_still_changes_the_token()
+    {
+        var changed = false;
+        Sut.RegisterChangeCallback(_ => changed = true, null);
+        ((IPeerRefreshSource)Sut).RegisterPeerRefresh(_ => throw new InvalidOperationException("hook failed"), null);
+
+        Sut.Invoking(s => s.OnNext(PeerEvent(KnownEventTypes.CacheSet))).Should().NotThrow();
+
+        Sut.HasChanged.Should().BeTrue();
+        changed.Should().BeTrue();
+    }
+
+    [Fact]
+    public void A_pending_peer_set_whose_hook_throws_still_changes_the_token()
+    {
+        var calls = 0;
+        ((IPeerRefreshSource)Sut).RegisterPeerRefresh(_ => ++calls == 1 ? true : throw new InvalidOperationException("hook failed"), null);
+        Sut.OnNext(PeerEvent(KnownEventTypes.CacheSet));
+
+        Sut.Invoking(s => s.OnNext(PeerEvent(KnownEventTypes.CacheSet))).Should().NotThrow();
+
+        Sut.HasChanged.Should().BeTrue();
+        calls.Should().Be(2);
+    }
+
+    [Fact]
+    public void A_peer_removal_never_reaches_the_refresh_hook()
+    {
+        var calls = 0;
+        ((IPeerRefreshSource)Sut).RegisterPeerRefresh(_ => { calls++; return true; }, null);
+
+        Sut.OnNext(PeerEvent(KnownEventTypes.CacheRemoved));
+
+        calls.Should().Be(0);
+        Sut.HasChanged.Should().BeTrue();
+    }
+
+    [Fact]
+    public void A_refresh_event_after_a_pending_peer_set_drops_the_entry()
+    {
+        ((IPeerRefreshSource)Sut).RegisterPeerRefresh(_ => true, null);
+        Sut.OnNext(PeerEvent(KnownEventTypes.CacheSet));
+
+        Sut.OnNext(PeerEvent(KnownEventTypes.CacheRefreshed, new Dictionary<string, object?> { ["_expiration_"] = DateTimeOffset.Now }));
+
+        Sut.HasChanged.Should().BeTrue();
+        Sut.Expiration.Should().BeNull();
+        Sut.MetadataHasChanged.Should().BeFalse();
+    }
+
+    [Fact]
+    public void A_second_peer_set_while_pending_reaches_the_hook_again()
+    {
+        var calls = 0;
+        ((IPeerRefreshSource)Sut).RegisterPeerRefresh(_ => { calls++; return true; }, null);
+
+        Sut.OnNext(PeerEvent(KnownEventTypes.CacheSet));
+        Sut.OnNext(PeerEvent(KnownEventTypes.CacheSet));
+
+        calls.Should().Be(2);
+        Sut.HasChanged.Should().BeFalse();
+    }
+
+    [Fact]
+    public void A_loss_while_a_refresh_is_pending_still_drops()
+    {
+        var calls = 0;
+        ((IPeerRefreshSource)Sut).RegisterPeerRefresh(_ => { calls++; return true; }, null);
+        Sut.OnNext(PeerEvent(KnownEventTypes.CacheSet));
+
+        ((IMissedEventsObserver)Sut).OnEventsMissed(MissedEventsReason.Lost);
+
+        Sut.HasChanged.Should().BeTrue();
+        calls.Should().Be(1);
+    }
+
+    [Fact]
+    public void The_invalidating_callback_runs_before_the_refresh_hook()
+    {
+        var order = new List<string>();
+        ((IInvalidationSource)Sut).RegisterInvalidatingCallback((_, _) => order.Add("invalidating"), null);
+        ((IPeerRefreshSource)Sut).RegisterPeerRefresh(_ => { order.Add("refresh"); return true; }, null);
+
+        Sut.OnNext(PeerEvent(KnownEventTypes.CacheSet));
+
+        order.Should().Equal("invalidating", "refresh");
+    }
+
+    [Fact]
     public void AcceptedEvents()
     {
         _acceptedEvents = new[] { Guid.NewGuid().ToString(), Guid.NewGuid().ToString() }.ToHashSet();
@@ -534,4 +661,7 @@ public class ChangeTokenTests : IAsyncLifetime
         _fixture.Inject<IEventFormatterProxy<ICacheEvent>>(_formatter);
         return ValueTask.CompletedTask;
     }
+
+    private TestCacheEvent PeerEvent(string type, Dictionary<string, object?>? properties = null) =>
+        new() { Id = Guid.NewGuid().ToString(), Source = new Uri("urn:machine"), Data = new CacheEventData(_key, properties), Type = type };
 }

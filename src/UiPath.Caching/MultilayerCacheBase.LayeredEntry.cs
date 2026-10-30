@@ -54,8 +54,8 @@ public abstract partial class MultilayerCacheBase
             cache._background.Fill(
                 options.CacheKey.Name,
                 mark,
-                (Cache: cache, Shape: shape, Options: options, Value: value, Max: cache.LocalLifetime(policy)),
-                static s => s.Shape.KeepLocal(s.Options, s.Value, s.Max),
+                (Cache: cache, Shape: shape, Options: options, Value: value, Max: cache.LocalLifetime(policy), Policy: policy),
+                static s => s.Shape.KeepLocal(s.Options, s.Value, s.Max, s.Policy),
                 static s => s.Cache.LogInnerCopyNotKept(LoggedKey.For(s.Cache._masker, s.Options.CallerKey, s.Options.CacheKey.Name, s.Shape.EntryType)));
 
         /// <summary>Stores and announces the value, or only keeps it locally while the inner tier is disconnected.</summary>
@@ -91,7 +91,7 @@ public abstract partial class MultilayerCacheBase
                     (Cache: cache, Shape: shape, Options: options, Value: value, Entry: entry, Policy: policy, KeepRefused: keepRefused),
                     null,
                     static (s, keeper) => s.Shape.WriteInnerAsync(s.Options, s.Value, s.Policy, s.KeepRefused, keeper),
-                    static (s, written, keeper) => (s.Shape.Written(written), s.Cache.KeepAfterInnerWrite(s.Shape.Written(written), s.KeepRefused, s.Policy, (s.Shape, s.Options, s.Value, s.Entry, Keeper: keeper, Written: written), static (x, max) => x.Shape.KeepWritten(x.Keeper, x.Options, x.Value, max, x.Entry, x.Shape.Version(x.Written)), s.Options.Token), s.Shape.Counted(written)),
+                    static (s, written, keeper) => (s.Shape.Written(written), s.Cache.KeepAfterInnerWrite(s.Shape.Written(written), s.KeepRefused, s.Policy, (s.Shape, s.Options, s.Value, s.Entry, Keeper: keeper, Written: written, s.Policy), static (x, max) => x.Shape.KeepWritten(x.Keeper, x.Options, x.Value, max, x.Entry, x.Shape.Version(x.Written), x.Policy), s.Options.Token), s.Shape.Counted(written)),
                     options.Token).ConfigureAwait(false);
             }
             catch (Exception ex)
@@ -142,7 +142,7 @@ public abstract partial class MultilayerCacheBase
 
         private async ValueTask<object?> FetchAndKeepAsync(TOptions options, CachePolicy policy, IInFlightRun run)
         {
-            var mark = cache.MarkInnerRead(options.CacheKey.Name);
+            var mark = cache.MarkInnerRead(options.CacheKey.Name, options.TopicKey);
             var fetched = await shape.ReadInnerAsync(options, policy).ConfigureAwait(false);
             if (fetched.Found)
             {

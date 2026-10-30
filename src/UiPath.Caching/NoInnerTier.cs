@@ -4,7 +4,7 @@ namespace UiPath.Caching;
 internal sealed class NoInnerTier : InnerTier
 {
     internal NoInnerTier()
-        : base(false, null, null, default, null)
+        : base(false, null, null, default, null, null)
     {
     }
 }
