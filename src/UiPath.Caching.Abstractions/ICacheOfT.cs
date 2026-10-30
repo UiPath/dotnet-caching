@@ -11,11 +11,23 @@ public interface ICache<T>
     ValueTask<KeyValuePair<CacheKey, T?>[]> GetAsync(CacheKey[] cacheKeys, CancellationToken token = default);
 
     /// <inheritdoc cref="ISpanKeyCache.GetAsync{T}(Span{char}, CachePolicy, CancellationToken)"/>
-    [OverloadResolutionPriority(-1)]
-    sealed ValueTask<T?> GetAsync(Span<char> cacheKey, CancellationToken token = default) =>
-        this is ISpanKeyCache<T> spanKeyCache
-            ? spanKeyCache.GetAsync(cacheKey, token)
-            : GetAsync(new CacheKey(cacheKey), token);
+    [OverloadResolutionPriority(2)]
+    sealed ValueTask<T?> GetAsync(ref CacheKeyHandler cacheKey, CancellationToken token = default)
+    {
+        if (this is not ISpanKeyCache<T> spanKeyCache)
+        {
+            return GetAsync(cacheKey.ToCacheKey(), token);
+        }
+
+        try
+        {
+            return spanKeyCache.GetAsync(cacheKey.Written, token);
+        }
+        finally
+        {
+            cacheKey.Return();
+        }
+    }
 
     ValueTask<T?> GetOrAddAsync(CacheKey cacheKey, Func<CancellationToken, Task<T?>> generator, CancellationToken token = default);
 
@@ -30,46 +42,118 @@ public interface ICache<T>
     ValueTask<KeyValuePair<TState, T?>[]> GetOrAddAsync<TState>(KeyValuePair<CacheKey, TState>[] entries, Func<TState[], CancellationToken, Task<KeyValuePair<TState, T?>[]>> generator, DateTimeOffset expiration, CancellationToken token = default) where TState : notnull;
 
     /// <inheritdoc cref="ISpanKeyCache.GetOrAddAsync{T}(Span{char}, Func{CancellationToken, Task{T}}, CachePolicy, CancellationToken)"/>
-    [OverloadResolutionPriority(-1)]
-    sealed ValueTask<T?> GetOrAddAsync(Span<char> cacheKey, Func<CancellationToken, Task<T?>> generator, CancellationToken token = default) =>
-        this is ISpanKeyCache<T> spanKeyCache
-            ? spanKeyCache.GetOrAddAsync(cacheKey, generator, token)
-            : GetOrAddAsync(new CacheKey(cacheKey), generator, token);
+    [OverloadResolutionPriority(2)]
+    sealed ValueTask<T?> GetOrAddAsync(ref CacheKeyHandler cacheKey, Func<CancellationToken, Task<T?>> generator, CancellationToken token = default)
+    {
+        if (this is not ISpanKeyCache<T> spanKeyCache)
+        {
+            return GetOrAddAsync(cacheKey.ToCacheKey(), generator, token);
+        }
+
+        try
+        {
+            return spanKeyCache.GetOrAddAsync(cacheKey.Written, generator, token);
+        }
+        finally
+        {
+            cacheKey.Return();
+        }
+    }
 
     /// <inheritdoc cref="ISpanKeyCache.GetOrAddAsync{T}(Span{char}, Func{CancellationToken, Task{T}}, CachePolicy, CancellationToken)"/>
-    [OverloadResolutionPriority(-1)]
-    sealed ValueTask<T?> GetOrAddAsync(Span<char> cacheKey, Func<CancellationToken, Task<T?>> generator, TimeSpan expiration, CancellationToken token = default) =>
-        this is ISpanKeyCache<T> spanKeyCache
-            ? spanKeyCache.GetOrAddAsync(cacheKey, generator, expiration, token)
-            : GetOrAddAsync(new CacheKey(cacheKey), generator, expiration, token);
+    [OverloadResolutionPriority(2)]
+    sealed ValueTask<T?> GetOrAddAsync(ref CacheKeyHandler cacheKey, Func<CancellationToken, Task<T?>> generator, TimeSpan expiration, CancellationToken token = default)
+    {
+        if (this is not ISpanKeyCache<T> spanKeyCache)
+        {
+            return GetOrAddAsync(cacheKey.ToCacheKey(), generator, expiration, token);
+        }
+
+        try
+        {
+            return spanKeyCache.GetOrAddAsync(cacheKey.Written, generator, expiration, token);
+        }
+        finally
+        {
+            cacheKey.Return();
+        }
+    }
 
     /// <inheritdoc cref="ISpanKeyCache.GetOrAddAsync{T}(Span{char}, Func{CancellationToken, Task{T}}, CachePolicy, CancellationToken)"/>
-    [OverloadResolutionPriority(-1)]
-    sealed ValueTask<T?> GetOrAddAsync(Span<char> cacheKey, Func<CancellationToken, Task<T?>> generator, DateTimeOffset expiration, CancellationToken token = default) =>
-        this is ISpanKeyCache<T> spanKeyCache
-            ? spanKeyCache.GetOrAddAsync(cacheKey, generator, expiration, token)
-            : GetOrAddAsync(new CacheKey(cacheKey), generator, expiration, token);
+    [OverloadResolutionPriority(2)]
+    sealed ValueTask<T?> GetOrAddAsync(ref CacheKeyHandler cacheKey, Func<CancellationToken, Task<T?>> generator, DateTimeOffset expiration, CancellationToken token = default)
+    {
+        if (this is not ISpanKeyCache<T> spanKeyCache)
+        {
+            return GetOrAddAsync(cacheKey.ToCacheKey(), generator, expiration, token);
+        }
+
+        try
+        {
+            return spanKeyCache.GetOrAddAsync(cacheKey.Written, generator, expiration, token);
+        }
+        finally
+        {
+            cacheKey.Return();
+        }
+    }
 
     /// <inheritdoc cref="ISpanKeyCache.GetOrAddAsync{T, TState}(Span{char}, TState, Func{TState, CancellationToken, Task{T}}, CachePolicy, CancellationToken)"/>
-    [OverloadResolutionPriority(-1)]
-    sealed ValueTask<T?> GetOrAddAsync<TState>(Span<char> cacheKey, TState state, Func<TState, CancellationToken, Task<T?>> generator, CancellationToken token = default) =>
-        this is ISpanKeyCache<T> spanKeyCache
-            ? spanKeyCache.GetOrAddAsync(cacheKey, state, generator, token)
-            : GetOrAddAsync(new CacheKey(cacheKey), state, generator, token);
+    [OverloadResolutionPriority(2)]
+    sealed ValueTask<T?> GetOrAddAsync<TState>(ref CacheKeyHandler cacheKey, TState state, Func<TState, CancellationToken, Task<T?>> generator, CancellationToken token = default)
+    {
+        if (this is not ISpanKeyCache<T> spanKeyCache)
+        {
+            return GetOrAddAsync(cacheKey.ToCacheKey(), state, generator, token);
+        }
+
+        try
+        {
+            return spanKeyCache.GetOrAddAsync(cacheKey.Written, state, generator, token);
+        }
+        finally
+        {
+            cacheKey.Return();
+        }
+    }
 
     /// <inheritdoc cref="ISpanKeyCache.GetOrAddAsync{T, TState}(Span{char}, TState, Func{TState, CancellationToken, Task{T}}, CachePolicy, CancellationToken)"/>
-    [OverloadResolutionPriority(-1)]
-    sealed ValueTask<T?> GetOrAddAsync<TState>(Span<char> cacheKey, TState state, Func<TState, CancellationToken, Task<T?>> generator, TimeSpan expiration, CancellationToken token = default) =>
-        this is ISpanKeyCache<T> spanKeyCache
-            ? spanKeyCache.GetOrAddAsync(cacheKey, state, generator, expiration, token)
-            : GetOrAddAsync(new CacheKey(cacheKey), state, generator, expiration, token);
+    [OverloadResolutionPriority(2)]
+    sealed ValueTask<T?> GetOrAddAsync<TState>(ref CacheKeyHandler cacheKey, TState state, Func<TState, CancellationToken, Task<T?>> generator, TimeSpan expiration, CancellationToken token = default)
+    {
+        if (this is not ISpanKeyCache<T> spanKeyCache)
+        {
+            return GetOrAddAsync(cacheKey.ToCacheKey(), state, generator, expiration, token);
+        }
+
+        try
+        {
+            return spanKeyCache.GetOrAddAsync(cacheKey.Written, state, generator, expiration, token);
+        }
+        finally
+        {
+            cacheKey.Return();
+        }
+    }
 
     /// <inheritdoc cref="ISpanKeyCache.GetOrAddAsync{T, TState}(Span{char}, TState, Func{TState, CancellationToken, Task{T}}, CachePolicy, CancellationToken)"/>
-    [OverloadResolutionPriority(-1)]
-    sealed ValueTask<T?> GetOrAddAsync<TState>(Span<char> cacheKey, TState state, Func<TState, CancellationToken, Task<T?>> generator, DateTimeOffset expiration, CancellationToken token = default) =>
-        this is ISpanKeyCache<T> spanKeyCache
-            ? spanKeyCache.GetOrAddAsync(cacheKey, state, generator, expiration, token)
-            : GetOrAddAsync(new CacheKey(cacheKey), state, generator, expiration, token);
+    [OverloadResolutionPriority(2)]
+    sealed ValueTask<T?> GetOrAddAsync<TState>(ref CacheKeyHandler cacheKey, TState state, Func<TState, CancellationToken, Task<T?>> generator, DateTimeOffset expiration, CancellationToken token = default)
+    {
+        if (this is not ISpanKeyCache<T> spanKeyCache)
+        {
+            return GetOrAddAsync(cacheKey.ToCacheKey(), state, generator, expiration, token);
+        }
+
+        try
+        {
+            return spanKeyCache.GetOrAddAsync(cacheKey.Written, state, generator, expiration, token);
+        }
+        finally
+        {
+            cacheKey.Return();
+        }
+    }
 
     /// <inheritdoc cref="ICache.GetOrAddAsync{T, TState}(CacheKey, TState, Func{TState, CancellationToken, Task{T}}, CachePolicy, CancellationToken)"/>
     ValueTask<T?> GetOrAddAsync<TState>(CacheKey cacheKey, TState state, Func<TState, CancellationToken, Task<T?>> generator, CancellationToken token = default);
@@ -96,10 +180,10 @@ public interface ICache<T>
 
     ValueTask<bool> RemoveAsync(CacheKey[] cacheKeys, CancellationToken token = default);
 
-    /// <inheritdoc cref="ICache.RemoveAsync{T}(Span{char}, CancellationToken)"/>
-    [OverloadResolutionPriority(-1)]
-    sealed ValueTask<bool> RemoveAsync(Span<char> cacheKey, CancellationToken token = default) =>
-        RemoveAsync(new CacheKey(cacheKey), token);
+    /// <inheritdoc cref="ICache.RemoveAsync{T}(CacheKey, CancellationToken)"/>
+    [OverloadResolutionPriority(2)]
+    sealed ValueTask<bool> RemoveAsync(ref CacheKeyHandler cacheKey, CancellationToken token = default) =>
+        RemoveAsync(cacheKey.ToCacheKey(), token);
 
     /// <inheritdoc cref="ISpanKeyCache.RemoveManyAsync{T}(IEnumerable{CacheKey}, CancellationToken)"/>
     sealed ValueTask<IReadOnlyList<CacheKey>> RemoveManyAsync(IEnumerable<CacheKey> cacheKeys, CancellationToken token = default) =>
@@ -132,25 +216,61 @@ public interface ICache<T>
     ValueTask<bool> SetAsync(CacheKey cacheKey, T? value, DateTimeOffset expiration, CancellationToken token = default);
 
     /// <inheritdoc cref="ISpanKeyCache.SetAsync{T}(Span{char}, T, CachePolicy, CancellationToken)"/>
-    [OverloadResolutionPriority(-1)]
-    sealed ValueTask<bool> SetAsync(Span<char> cacheKey, T? value, CancellationToken token = default) =>
-        this is ISpanKeyCache<T> spanKeyCache
-            ? spanKeyCache.SetAsync(cacheKey, value, token)
-            : SetAsync(new CacheKey(cacheKey), value, token);
+    [OverloadResolutionPriority(2)]
+    sealed ValueTask<bool> SetAsync(ref CacheKeyHandler cacheKey, T? value, CancellationToken token = default)
+    {
+        if (this is not ISpanKeyCache<T> spanKeyCache)
+        {
+            return SetAsync(cacheKey.ToCacheKey(), value, token);
+        }
+
+        try
+        {
+            return spanKeyCache.SetAsync(cacheKey.Written, value, token);
+        }
+        finally
+        {
+            cacheKey.Return();
+        }
+    }
 
     /// <inheritdoc cref="ISpanKeyCache.SetAsync{T}(Span{char}, T, CachePolicy, CancellationToken)"/>
-    [OverloadResolutionPriority(-1)]
-    sealed ValueTask<bool> SetAsync(Span<char> cacheKey, T? value, TimeSpan expiration, CancellationToken token = default) =>
-        this is ISpanKeyCache<T> spanKeyCache
-            ? spanKeyCache.SetAsync(cacheKey, value, expiration, token)
-            : SetAsync(new CacheKey(cacheKey), value, expiration, token);
+    [OverloadResolutionPriority(2)]
+    sealed ValueTask<bool> SetAsync(ref CacheKeyHandler cacheKey, T? value, TimeSpan expiration, CancellationToken token = default)
+    {
+        if (this is not ISpanKeyCache<T> spanKeyCache)
+        {
+            return SetAsync(cacheKey.ToCacheKey(), value, expiration, token);
+        }
+
+        try
+        {
+            return spanKeyCache.SetAsync(cacheKey.Written, value, expiration, token);
+        }
+        finally
+        {
+            cacheKey.Return();
+        }
+    }
 
     /// <inheritdoc cref="ISpanKeyCache.SetAsync{T}(Span{char}, T, CachePolicy, CancellationToken)"/>
-    [OverloadResolutionPriority(-1)]
-    sealed ValueTask<bool> SetAsync(Span<char> cacheKey, T? value, DateTimeOffset expiration, CancellationToken token = default) =>
-        this is ISpanKeyCache<T> spanKeyCache
-            ? spanKeyCache.SetAsync(cacheKey, value, expiration, token)
-            : SetAsync(new CacheKey(cacheKey), value, expiration, token);
+    [OverloadResolutionPriority(2)]
+    sealed ValueTask<bool> SetAsync(ref CacheKeyHandler cacheKey, T? value, DateTimeOffset expiration, CancellationToken token = default)
+    {
+        if (this is not ISpanKeyCache<T> spanKeyCache)
+        {
+            return SetAsync(cacheKey.ToCacheKey(), value, expiration, token);
+        }
+
+        try
+        {
+            return spanKeyCache.SetAsync(cacheKey.Written, value, expiration, token);
+        }
+        finally
+        {
+            cacheKey.Return();
+        }
+    }
 
     ValueTask<bool> SetAsync(KeyValuePair<CacheKey, T?>[] keyValues, CancellationToken token = default);
 
@@ -166,80 +286,110 @@ public interface ICache<T>
     ValueTask<bool> TryAddAsync(CacheKey cacheKey, T? value, CancellationToken token = default);
 
     /// <inheritdoc cref="TryAddAsync(CacheKey, T, CancellationToken)"/>
-    /// <remarks>Builds the key from the text, normalized as <c>new CacheKey(text)</c> normalizes it.</remarks>
-    [OverloadResolutionPriority(-1)]
-    sealed ValueTask<bool> TryAddAsync(Span<char> cacheKey, T? value, CancellationToken token = default) =>
-        TryAddAsync(new CacheKey(cacheKey), value, token);
+    [OverloadResolutionPriority(2)]
+    sealed ValueTask<bool> TryAddAsync(ref CacheKeyHandler cacheKey, T? value, CancellationToken token = default) =>
+        TryAddAsync(cacheKey.ToCacheKey(), value, token);
 
     /// <inheritdoc cref="TryAddAsync(CacheKey, T, CancellationToken)"/>
     /// <param name="expiration">Lifetime of the entry if it is created.</param>
     ValueTask<bool> TryAddAsync(CacheKey cacheKey, T? value, TimeSpan expiration, CancellationToken token = default);
 
     /// <inheritdoc cref="TryAddAsync(CacheKey, T, TimeSpan, CancellationToken)"/>
-    /// <remarks>Builds the key from the text, normalized as <c>new CacheKey(text)</c> normalizes it.</remarks>
-    [OverloadResolutionPriority(-1)]
-    sealed ValueTask<bool> TryAddAsync(Span<char> cacheKey, T? value, TimeSpan expiration, CancellationToken token = default) =>
-        TryAddAsync(new CacheKey(cacheKey), value, expiration, token);
+    [OverloadResolutionPriority(2)]
+    sealed ValueTask<bool> TryAddAsync(ref CacheKeyHandler cacheKey, T? value, TimeSpan expiration, CancellationToken token = default) =>
+        TryAddAsync(cacheKey.ToCacheKey(), value, expiration, token);
 
     /// <inheritdoc cref="TryAddAsync(CacheKey, T, TimeSpan, CancellationToken)"/>
     ValueTask<bool> TryAddAsync(CacheKey cacheKey, T? value, DateTimeOffset expiration, CancellationToken token = default);
 
     /// <inheritdoc cref="TryAddAsync(CacheKey, T, DateTimeOffset, CancellationToken)"/>
-    /// <remarks>Builds the key from the text, normalized as <c>new CacheKey(text)</c> normalizes it.</remarks>
-    [OverloadResolutionPriority(-1)]
-    sealed ValueTask<bool> TryAddAsync(Span<char> cacheKey, T? value, DateTimeOffset expiration, CancellationToken token = default) =>
-        TryAddAsync(new CacheKey(cacheKey), value, expiration, token);
+    [OverloadResolutionPriority(2)]
+    sealed ValueTask<bool> TryAddAsync(ref CacheKeyHandler cacheKey, T? value, DateTimeOffset expiration, CancellationToken token = default) =>
+        TryAddAsync(cacheKey.ToCacheKey(), value, expiration, token);
 
     ValueTask<bool> RefreshAsync(CacheKey cacheKey, CancellationToken token = default);
 
     /// <inheritdoc cref="RefreshAsync(CacheKey, CancellationToken)"/>
-    /// <remarks>Builds the key from the text, normalized as <c>new CacheKey(text)</c> normalizes it.</remarks>
-    [OverloadResolutionPriority(-1)]
-    sealed ValueTask<bool> RefreshAsync(Span<char> cacheKey, CancellationToken token = default) =>
-        RefreshAsync(new CacheKey(cacheKey), token);
+    [OverloadResolutionPriority(2)]
+    sealed ValueTask<bool> RefreshAsync(ref CacheKeyHandler cacheKey, CancellationToken token = default) =>
+        RefreshAsync(cacheKey.ToCacheKey(), token);
 
     ValueTask<bool> RefreshAsync(CacheKey cacheKey, TimeSpan expiration, CancellationToken token = default);
 
     /// <inheritdoc cref="RefreshAsync(CacheKey, TimeSpan, CancellationToken)"/>
-    /// <remarks>Builds the key from the text, normalized as <c>new CacheKey(text)</c> normalizes it.</remarks>
-    [OverloadResolutionPriority(-1)]
-    sealed ValueTask<bool> RefreshAsync(Span<char> cacheKey, TimeSpan expiration, CancellationToken token = default) =>
-        RefreshAsync(new CacheKey(cacheKey), expiration, token);
+    [OverloadResolutionPriority(2)]
+    sealed ValueTask<bool> RefreshAsync(ref CacheKeyHandler cacheKey, TimeSpan expiration, CancellationToken token = default) =>
+        RefreshAsync(cacheKey.ToCacheKey(), expiration, token);
 
     ValueTask<bool> RefreshAsync(CacheKey cacheKey, DateTimeOffset expiration, CancellationToken token = default);
 
     /// <inheritdoc cref="RefreshAsync(CacheKey, DateTimeOffset, CancellationToken)"/>
-    /// <remarks>Builds the key from the text, normalized as <c>new CacheKey(text)</c> normalizes it.</remarks>
-    [OverloadResolutionPriority(-1)]
-    sealed ValueTask<bool> RefreshAsync(Span<char> cacheKey, DateTimeOffset expiration, CancellationToken token = default) =>
-        RefreshAsync(new CacheKey(cacheKey), expiration, token);
+    [OverloadResolutionPriority(2)]
+    sealed ValueTask<bool> RefreshAsync(ref CacheKeyHandler cacheKey, DateTimeOffset expiration, CancellationToken token = default) =>
+        RefreshAsync(cacheKey.ToCacheKey(), expiration, token);
 
     ValueTask<bool> ContainsAsync(CacheKey cacheKey, CancellationToken token = default);
 
     /// <inheritdoc cref="ISpanKeyCache.GetAsync{T}(Span{char}, CachePolicy, CancellationToken)"/>
-    [OverloadResolutionPriority(-1)]
-    sealed ValueTask<bool> ContainsAsync(Span<char> cacheKey, CancellationToken token = default) =>
-        this is ISpanKeyCache<T> spanKeyCache
-            ? spanKeyCache.ContainsAsync(cacheKey, token)
-            : ContainsAsync(new CacheKey(cacheKey), token);
+    [OverloadResolutionPriority(2)]
+    sealed ValueTask<bool> ContainsAsync(ref CacheKeyHandler cacheKey, CancellationToken token = default)
+    {
+        if (this is not ISpanKeyCache<T> spanKeyCache)
+        {
+            return ContainsAsync(cacheKey.ToCacheKey(), token);
+        }
+
+        try
+        {
+            return spanKeyCache.ContainsAsync(cacheKey.Written, token);
+        }
+        finally
+        {
+            cacheKey.Return();
+        }
+    }
 
     ValueTask<TimeSpan?> TimeToLiveAsync(CacheKey cacheKey, CancellationToken token = default);
 
     /// <inheritdoc cref="ISpanKeyCache.GetAsync{T}(Span{char}, CachePolicy, CancellationToken)"/>
-    [OverloadResolutionPriority(-1)]
-    sealed ValueTask<TimeSpan?> TimeToLiveAsync(Span<char> cacheKey, CancellationToken token = default) =>
-        this is ISpanKeyCache<T> spanKeyCache
-            ? spanKeyCache.TimeToLiveAsync(cacheKey, token)
-            : TimeToLiveAsync(new CacheKey(cacheKey), token);
+    [OverloadResolutionPriority(2)]
+    sealed ValueTask<TimeSpan?> TimeToLiveAsync(ref CacheKeyHandler cacheKey, CancellationToken token = default)
+    {
+        if (this is not ISpanKeyCache<T> spanKeyCache)
+        {
+            return TimeToLiveAsync(cacheKey.ToCacheKey(), token);
+        }
+
+        try
+        {
+            return spanKeyCache.TimeToLiveAsync(cacheKey.Written, token);
+        }
+        finally
+        {
+            cacheKey.Return();
+        }
+    }
 
     ValueTask<DateTimeOffset?> ExpireTimeAsync(CacheKey cacheKey, CancellationToken token = default);
 
     /// <inheritdoc cref="ISpanKeyCache.GetAsync{T}(Span{char}, CachePolicy, CancellationToken)"/>
-    [OverloadResolutionPriority(-1)]
-    sealed ValueTask<DateTimeOffset?> ExpireTimeAsync(Span<char> cacheKey, CancellationToken token = default) =>
-        this is ISpanKeyCache<T> spanKeyCache
-            ? spanKeyCache.ExpireTimeAsync(cacheKey, token)
-            : ExpireTimeAsync(new CacheKey(cacheKey), token);
+    [OverloadResolutionPriority(2)]
+    sealed ValueTask<DateTimeOffset?> ExpireTimeAsync(ref CacheKeyHandler cacheKey, CancellationToken token = default)
+    {
+        if (this is not ISpanKeyCache<T> spanKeyCache)
+        {
+            return ExpireTimeAsync(cacheKey.ToCacheKey(), token);
+        }
+
+        try
+        {
+            return spanKeyCache.ExpireTimeAsync(cacheKey.Written, token);
+        }
+        finally
+        {
+            cacheKey.Return();
+        }
+    }
 
     /// <inheritdoc cref="ICache.GetOrAddWithExpirationAsync{T}(CacheKey, Func{CancellationToken, Task{GeneratedValue{T}}}, CachePolicy, CancellationToken)"/>
     ValueTask<T?> GetOrAddWithExpirationAsync(CacheKey cacheKey, Func<CancellationToken, Task<GeneratedValue<T>>> generator, CancellationToken token = default);
@@ -248,19 +398,46 @@ public interface ICache<T>
     ValueTask<T?> GetOrAddWithExpirationAsync<TState>(CacheKey cacheKey, TState state, Func<TState, CancellationToken, Task<GeneratedValue<T>>> generator, CancellationToken token = default);
 
     /// <inheritdoc cref="ISpanKeyCache.GetOrAddWithExpirationAsync{T}(Span{char}, Func{CancellationToken, Task{GeneratedValue{T}}}, CachePolicy, CancellationToken)"/>
-    [OverloadResolutionPriority(-1)]
-    sealed ValueTask<T?> GetOrAddWithExpirationAsync(Span<char> cacheKey, Func<CancellationToken, Task<GeneratedValue<T>>> generator, CancellationToken token = default) =>
-        this is ISpanKeyCache<T> spanKeyCache
-            ? spanKeyCache.GetOrAddWithExpirationAsync(cacheKey, generator, token)
-            : GetOrAddWithExpirationAsync(new CacheKey(cacheKey), generator, token);
+    [OverloadResolutionPriority(2)]
+    sealed ValueTask<T?> GetOrAddWithExpirationAsync(ref CacheKeyHandler cacheKey, Func<CancellationToken, Task<GeneratedValue<T>>> generator, CancellationToken token = default)
+    {
+        if (this is not ISpanKeyCache<T> spanKeyCache)
+        {
+            return GetOrAddWithExpirationAsync(cacheKey.ToCacheKey(), generator, token);
+        }
+
+        try
+        {
+            return spanKeyCache.GetOrAddWithExpirationAsync(cacheKey.Written, generator, token);
+        }
+        finally
+        {
+            cacheKey.Return();
+        }
+    }
 
     /// <inheritdoc cref="ISpanKeyCache.GetOrAddWithExpirationAsync{T}(Span{char}, Func{CancellationToken, Task{GeneratedValue{T}}}, CachePolicy, CancellationToken)"/>
-    [OverloadResolutionPriority(-1)]
-    sealed ValueTask<T?> GetOrAddWithExpirationAsync<TState>(Span<char> cacheKey, TState state, Func<TState, CancellationToken, Task<GeneratedValue<T>>> generator, CancellationToken token = default)
+    [OverloadResolutionPriority(2)]
+    sealed ValueTask<T?> GetOrAddWithExpirationAsync<TState>(ref CacheKeyHandler cacheKey, TState state, Func<TState, CancellationToken, Task<GeneratedValue<T>>> generator, CancellationToken token = default)
     {
-        ArgumentNullException.ThrowIfNull(generator);
-        return this is ISpanKeyCache<T> spanKeyCache
-            ? spanKeyCache.GetOrAddWithExpirationAsync(cacheKey, state, generator, token)
-            : GetOrAddWithExpirationAsync(new CacheKey(cacheKey), state, generator, token);
+        if (generator is null)
+        {
+            cacheKey.Return();
+            ArgumentNullException.ThrowIfNull(generator);
+        }
+
+        if (this is not ISpanKeyCache<T> spanKeyCache)
+        {
+            return GetOrAddWithExpirationAsync(cacheKey.ToCacheKey(), state, generator, token);
+        }
+
+        try
+        {
+            return spanKeyCache.GetOrAddWithExpirationAsync(cacheKey.Written, state, generator, token);
+        }
+        finally
+        {
+            cacheKey.Return();
+        }
     }
 }

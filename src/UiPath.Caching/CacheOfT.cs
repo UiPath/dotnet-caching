@@ -4,6 +4,7 @@ namespace UiPath.Caching;
 public class Cache<T> : ICache<T>, ISpanKeyCache<T>
 {
     private readonly ICache _cache;
+    private readonly ISpanKeyCache? _spanCache;
     private readonly ICacheKeyStrategy _cacheKeyStrategy;
 
     public Cache(ICacheFactory cacheFactory, ICacheKeyStrategy? cacheKeyStrategy = null, ICachePolicyFactory? policyFactory = null, string? policyName = null)
@@ -18,6 +19,7 @@ public class Cache<T> : ICache<T>, ISpanKeyCache<T>
     {
         NotCacheableException.ThrowIfNotCacheable<T>();
         _cache = cache;
+        _spanCache = cache as ISpanKeyCache;
         _cacheKeyStrategy = cacheKeyStrategy ?? new DefaultCacheKeyStrategy();
         Policy = policy;
     }
@@ -40,7 +42,7 @@ public class Cache<T> : ICache<T>, ISpanKeyCache<T>
             _cacheKeyStrategy,
             this,
             cacheKey,
-            static (self, key, t) => self._cache.ContainsAsync<T>(key, t),
+            static (self, key, t) => self._spanCache is { } c ? c.ContainsAsync<T>(key, t) : self._cache.ContainsAsync<T>(new CacheKey(key), t),
             static (self, k, t) => self._cache.ContainsAsync<T>(self.GetCacheKey(k), t),
             token);
 
@@ -49,7 +51,7 @@ public class Cache<T> : ICache<T>, ISpanKeyCache<T>
             _cacheKeyStrategy,
             this,
             cacheKey,
-            static (self, key, t) => self._cache.ContainsAsync<T>(key, t),
+            static (self, key, t) => self._spanCache is { } c ? c.ContainsAsync<T>(key, t) : self._cache.ContainsAsync<T>(new CacheKey(key), t),
             static (self, k, t) => self.ContainsAsync(k, t),
             token);
 
@@ -57,16 +59,16 @@ public class Cache<T> : ICache<T>, ISpanKeyCache<T>
     public ValueTask<T?> GetAsync(CacheKey cacheKey, CancellationToken token = default)
     {
         Span<char> buffer = SpanKey.ComposesName(_cacheKeyStrategy, cacheKey) ? stackalloc char[SpanKey.MaxLength] : default;
-        return SpanKey.TryComposeName<T>(_cacheKeyStrategy, cacheKey, buffer, out var key)
-            ? _cache.GetAsync<T>(key, Policy, token)
+        return _spanCache is not null && SpanKey.TryComposeName<T>(_cacheKeyStrategy, cacheKey, buffer, out var key)
+            ? _spanCache.GetAsync<T>(key, Policy, token)
             : _cache.GetAsync<T>(GetCacheKey(cacheKey), Policy, token);
     }
 
     public ValueTask<T?> GetAsync(Span<char> cacheKey, CancellationToken token = default)
     {
         Span<char> buffer = _cacheKeyStrategy is DefaultCacheKeyStrategy ? default : stackalloc char[SpanKey.MaxLength];
-        return SpanKey.TryComposeTyped<T>(_cacheKeyStrategy, cacheKey, buffer, out var key)
-            ? _cache.GetAsync<T>(key, Policy, token)
+        return _spanCache is not null && SpanKey.TryComposeTyped<T>(_cacheKeyStrategy, cacheKey, buffer, out var key)
+            ? _spanCache.GetAsync<T>(key, Policy, token)
             : GetAsync(new CacheKey(cacheKey), token);
     }
 
@@ -77,8 +79,8 @@ public class Cache<T> : ICache<T>, ISpanKeyCache<T>
     public ValueTask<T?> GetOrAddAsync(CacheKey cacheKey, Func<CancellationToken, Task<T?>> generator, CancellationToken token = default)
     {
         Span<char> buffer = SpanKey.ComposesName(_cacheKeyStrategy, cacheKey) ? stackalloc char[SpanKey.MaxLength] : default;
-        return SpanKey.TryComposeName<T>(_cacheKeyStrategy, cacheKey, buffer, out var key)
-            ? _cache.GetOrAddAsync(key, generator, Policy, token)
+        return _spanCache is not null && SpanKey.TryComposeName<T>(_cacheKeyStrategy, cacheKey, buffer, out var key)
+            ? _spanCache.GetOrAddAsync(key, generator, Policy, token)
             : _cache.GetOrAddAsync(GetCacheKey(cacheKey), generator, Policy, token);
     }
 
@@ -86,8 +88,8 @@ public class Cache<T> : ICache<T>, ISpanKeyCache<T>
     public ValueTask<T?> GetOrAddAsync(CacheKey cacheKey, Func<CancellationToken, Task<T?>> generator, TimeSpan expiration, CancellationToken token = default)
     {
         Span<char> buffer = SpanKey.ComposesName(_cacheKeyStrategy, cacheKey) ? stackalloc char[SpanKey.MaxLength] : default;
-        return SpanKey.TryComposeName<T>(_cacheKeyStrategy, cacheKey, buffer, out var key)
-            ? _cache.GetOrAddAsync(key, generator, expiration, Policy, token)
+        return _spanCache is not null && SpanKey.TryComposeName<T>(_cacheKeyStrategy, cacheKey, buffer, out var key)
+            ? _spanCache.GetOrAddAsync(key, generator, expiration, Policy, token)
             : _cache.GetOrAddAsync(GetCacheKey(cacheKey), generator, expiration, Policy, token);
     }
 
@@ -95,32 +97,32 @@ public class Cache<T> : ICache<T>, ISpanKeyCache<T>
     public ValueTask<T?> GetOrAddAsync(CacheKey cacheKey, Func<CancellationToken, Task<T?>> generator, DateTimeOffset expiration, CancellationToken token = default)
     {
         Span<char> buffer = SpanKey.ComposesName(_cacheKeyStrategy, cacheKey) ? stackalloc char[SpanKey.MaxLength] : default;
-        return SpanKey.TryComposeName<T>(_cacheKeyStrategy, cacheKey, buffer, out var key)
-            ? _cache.GetOrAddAsync(key, generator, expiration, Policy, token)
+        return _spanCache is not null && SpanKey.TryComposeName<T>(_cacheKeyStrategy, cacheKey, buffer, out var key)
+            ? _spanCache.GetOrAddAsync(key, generator, expiration, Policy, token)
             : _cache.GetOrAddAsync(GetCacheKey(cacheKey), generator, expiration, Policy, token);
     }
 
     public ValueTask<T?> GetOrAddAsync(Span<char> cacheKey, Func<CancellationToken, Task<T?>> generator, CancellationToken token = default)
     {
         Span<char> buffer = _cacheKeyStrategy is DefaultCacheKeyStrategy ? default : stackalloc char[SpanKey.MaxLength];
-        return SpanKey.TryComposeTyped<T>(_cacheKeyStrategy, cacheKey, buffer, out var key)
-            ? _cache.GetOrAddAsync(key, generator, Policy, token)
+        return _spanCache is not null && SpanKey.TryComposeTyped<T>(_cacheKeyStrategy, cacheKey, buffer, out var key)
+            ? _spanCache.GetOrAddAsync(key, generator, Policy, token)
             : GetOrAddAsync(new CacheKey(cacheKey), generator, token);
     }
 
     public ValueTask<T?> GetOrAddAsync(Span<char> cacheKey, Func<CancellationToken, Task<T?>> generator, TimeSpan expiration, CancellationToken token = default)
     {
         Span<char> buffer = _cacheKeyStrategy is DefaultCacheKeyStrategy ? default : stackalloc char[SpanKey.MaxLength];
-        return SpanKey.TryComposeTyped<T>(_cacheKeyStrategy, cacheKey, buffer, out var key)
-            ? _cache.GetOrAddAsync(key, generator, expiration, Policy, token)
+        return _spanCache is not null && SpanKey.TryComposeTyped<T>(_cacheKeyStrategy, cacheKey, buffer, out var key)
+            ? _spanCache.GetOrAddAsync(key, generator, expiration, Policy, token)
             : GetOrAddAsync(new CacheKey(cacheKey), generator, expiration, token);
     }
 
     public ValueTask<T?> GetOrAddAsync(Span<char> cacheKey, Func<CancellationToken, Task<T?>> generator, DateTimeOffset expiration, CancellationToken token = default)
     {
         Span<char> buffer = _cacheKeyStrategy is DefaultCacheKeyStrategy ? default : stackalloc char[SpanKey.MaxLength];
-        return SpanKey.TryComposeTyped<T>(_cacheKeyStrategy, cacheKey, buffer, out var key)
-            ? _cache.GetOrAddAsync(key, generator, expiration, Policy, token)
+        return _spanCache is not null && SpanKey.TryComposeTyped<T>(_cacheKeyStrategy, cacheKey, buffer, out var key)
+            ? _spanCache.GetOrAddAsync(key, generator, expiration, Policy, token)
             : GetOrAddAsync(new CacheKey(cacheKey), generator, expiration, token);
     }
 
@@ -128,8 +130,8 @@ public class Cache<T> : ICache<T>, ISpanKeyCache<T>
     public ValueTask<T?> GetOrAddAsync<TState>(CacheKey cacheKey, TState state, Func<TState, CancellationToken, Task<T?>> generator, CancellationToken token = default)
     {
         Span<char> buffer = SpanKey.ComposesName(_cacheKeyStrategy, cacheKey) ? stackalloc char[SpanKey.MaxLength] : default;
-        return SpanKey.TryComposeName<T>(_cacheKeyStrategy, cacheKey, buffer, out var key)
-            ? _cache.GetOrAddAsync(key, state, generator, Policy, token)
+        return _spanCache is not null && SpanKey.TryComposeName<T>(_cacheKeyStrategy, cacheKey, buffer, out var key)
+            ? _spanCache.GetOrAddAsync(key, state, generator, Policy, token)
             : _cache.GetOrAddAsync(GetCacheKey(cacheKey), state, generator, Policy, token);
     }
 
@@ -137,8 +139,8 @@ public class Cache<T> : ICache<T>, ISpanKeyCache<T>
     public ValueTask<T?> GetOrAddAsync<TState>(CacheKey cacheKey, TState state, Func<TState, CancellationToken, Task<T?>> generator, TimeSpan expiration, CancellationToken token = default)
     {
         Span<char> buffer = SpanKey.ComposesName(_cacheKeyStrategy, cacheKey) ? stackalloc char[SpanKey.MaxLength] : default;
-        return SpanKey.TryComposeName<T>(_cacheKeyStrategy, cacheKey, buffer, out var key)
-            ? _cache.GetOrAddAsync(key, state, generator, expiration, Policy, token)
+        return _spanCache is not null && SpanKey.TryComposeName<T>(_cacheKeyStrategy, cacheKey, buffer, out var key)
+            ? _spanCache.GetOrAddAsync(key, state, generator, expiration, Policy, token)
             : _cache.GetOrAddAsync(GetCacheKey(cacheKey), state, generator, expiration, Policy, token);
     }
 
@@ -146,32 +148,32 @@ public class Cache<T> : ICache<T>, ISpanKeyCache<T>
     public ValueTask<T?> GetOrAddAsync<TState>(CacheKey cacheKey, TState state, Func<TState, CancellationToken, Task<T?>> generator, DateTimeOffset expiration, CancellationToken token = default)
     {
         Span<char> buffer = SpanKey.ComposesName(_cacheKeyStrategy, cacheKey) ? stackalloc char[SpanKey.MaxLength] : default;
-        return SpanKey.TryComposeName<T>(_cacheKeyStrategy, cacheKey, buffer, out var key)
-            ? _cache.GetOrAddAsync(key, state, generator, expiration, Policy, token)
+        return _spanCache is not null && SpanKey.TryComposeName<T>(_cacheKeyStrategy, cacheKey, buffer, out var key)
+            ? _spanCache.GetOrAddAsync(key, state, generator, expiration, Policy, token)
             : _cache.GetOrAddAsync(GetCacheKey(cacheKey), state, generator, expiration, Policy, token);
     }
 
     public ValueTask<T?> GetOrAddAsync<TState>(Span<char> cacheKey, TState state, Func<TState, CancellationToken, Task<T?>> generator, CancellationToken token = default)
     {
         Span<char> buffer = _cacheKeyStrategy is DefaultCacheKeyStrategy ? default : stackalloc char[SpanKey.MaxLength];
-        return SpanKey.TryComposeTyped<T>(_cacheKeyStrategy, cacheKey, buffer, out var key)
-            ? _cache.GetOrAddAsync(key, state, generator, Policy, token)
+        return _spanCache is not null && SpanKey.TryComposeTyped<T>(_cacheKeyStrategy, cacheKey, buffer, out var key)
+            ? _spanCache.GetOrAddAsync(key, state, generator, Policy, token)
             : GetOrAddAsync(new CacheKey(cacheKey), state, generator, token);
     }
 
     public ValueTask<T?> GetOrAddAsync<TState>(Span<char> cacheKey, TState state, Func<TState, CancellationToken, Task<T?>> generator, TimeSpan expiration, CancellationToken token = default)
     {
         Span<char> buffer = _cacheKeyStrategy is DefaultCacheKeyStrategy ? default : stackalloc char[SpanKey.MaxLength];
-        return SpanKey.TryComposeTyped<T>(_cacheKeyStrategy, cacheKey, buffer, out var key)
-            ? _cache.GetOrAddAsync(key, state, generator, expiration, Policy, token)
+        return _spanCache is not null && SpanKey.TryComposeTyped<T>(_cacheKeyStrategy, cacheKey, buffer, out var key)
+            ? _spanCache.GetOrAddAsync(key, state, generator, expiration, Policy, token)
             : GetOrAddAsync(new CacheKey(cacheKey), state, generator, expiration, token);
     }
 
     public ValueTask<T?> GetOrAddAsync<TState>(Span<char> cacheKey, TState state, Func<TState, CancellationToken, Task<T?>> generator, DateTimeOffset expiration, CancellationToken token = default)
     {
         Span<char> buffer = _cacheKeyStrategy is DefaultCacheKeyStrategy ? default : stackalloc char[SpanKey.MaxLength];
-        return SpanKey.TryComposeTyped<T>(_cacheKeyStrategy, cacheKey, buffer, out var key)
-            ? _cache.GetOrAddAsync(key, state, generator, expiration, Policy, token)
+        return _spanCache is not null && SpanKey.TryComposeTyped<T>(_cacheKeyStrategy, cacheKey, buffer, out var key)
+            ? _spanCache.GetOrAddAsync(key, state, generator, expiration, Policy, token)
             : GetOrAddAsync(new CacheKey(cacheKey), state, generator, expiration, token);
     }
 
@@ -203,8 +205,8 @@ public class Cache<T> : ICache<T>, ISpanKeyCache<T>
     public ValueTask<T?> GetOrAddWithExpirationAsync(CacheKey cacheKey, Func<CancellationToken, Task<GeneratedValue<T>>> generator, CancellationToken token = default)
     {
         Span<char> buffer = SpanKey.ComposesName(_cacheKeyStrategy, cacheKey) ? stackalloc char[SpanKey.MaxLength] : default;
-        return SpanKey.TryComposeName<T>(_cacheKeyStrategy, cacheKey, buffer, out var key)
-            ? _cache.GetOrAddWithExpirationAsync(key, generator, Policy, token)
+        return _spanCache is not null && SpanKey.TryComposeName<T>(_cacheKeyStrategy, cacheKey, buffer, out var key)
+            ? _spanCache.GetOrAddWithExpirationAsync(key, generator, Policy, token)
             : _cache.GetOrAddWithExpirationAsync(GetCacheKey(cacheKey), generator, Policy, token);
     }
 
@@ -212,24 +214,24 @@ public class Cache<T> : ICache<T>, ISpanKeyCache<T>
     public ValueTask<T?> GetOrAddWithExpirationAsync<TState>(CacheKey cacheKey, TState state, Func<TState, CancellationToken, Task<GeneratedValue<T>>> generator, CancellationToken token = default)
     {
         Span<char> buffer = SpanKey.ComposesName(_cacheKeyStrategy, cacheKey) ? stackalloc char[SpanKey.MaxLength] : default;
-        return SpanKey.TryComposeName<T>(_cacheKeyStrategy, cacheKey, buffer, out var key)
-            ? _cache.GetOrAddWithExpirationAsync(key, state, generator, Policy, token)
+        return _spanCache is not null && SpanKey.TryComposeName<T>(_cacheKeyStrategy, cacheKey, buffer, out var key)
+            ? _spanCache.GetOrAddWithExpirationAsync(key, state, generator, Policy, token)
             : _cache.GetOrAddWithExpirationAsync(GetCacheKey(cacheKey), state, generator, Policy, token);
     }
 
     public ValueTask<T?> GetOrAddWithExpirationAsync(Span<char> cacheKey, Func<CancellationToken, Task<GeneratedValue<T>>> generator, CancellationToken token = default)
     {
         Span<char> buffer = _cacheKeyStrategy is DefaultCacheKeyStrategy ? default : stackalloc char[SpanKey.MaxLength];
-        return SpanKey.TryComposeTyped<T>(_cacheKeyStrategy, cacheKey, buffer, out var key)
-            ? _cache.GetOrAddWithExpirationAsync(key, generator, Policy, token)
+        return _spanCache is not null && SpanKey.TryComposeTyped<T>(_cacheKeyStrategy, cacheKey, buffer, out var key)
+            ? _spanCache.GetOrAddWithExpirationAsync(key, generator, Policy, token)
             : GetOrAddWithExpirationAsync(new CacheKey(cacheKey), generator, token);
     }
 
     public ValueTask<T?> GetOrAddWithExpirationAsync<TState>(Span<char> cacheKey, TState state, Func<TState, CancellationToken, Task<GeneratedValue<T>>> generator, CancellationToken token = default)
     {
         Span<char> buffer = _cacheKeyStrategy is DefaultCacheKeyStrategy ? default : stackalloc char[SpanKey.MaxLength];
-        return SpanKey.TryComposeTyped<T>(_cacheKeyStrategy, cacheKey, buffer, out var key)
-            ? _cache.GetOrAddWithExpirationAsync(key, state, generator, Policy, token)
+        return _spanCache is not null && SpanKey.TryComposeTyped<T>(_cacheKeyStrategy, cacheKey, buffer, out var key)
+            ? _spanCache.GetOrAddWithExpirationAsync(key, state, generator, Policy, token)
             : GetOrAddWithExpirationAsync(new CacheKey(cacheKey), state, generator, token);
     }
 
@@ -247,10 +249,6 @@ public class Cache<T> : ICache<T>, ISpanKeyCache<T>
 
     public ValueTask<bool> RemoveAsync(CacheKey[] cacheKeys, CancellationToken token = default) =>
         _cache.RemoveAsync<T>(GetCacheKeys(cacheKeys), token);
-
-    [OverloadResolutionPriority(-1)]
-    public ValueTask<bool> RemoveAsync(Span<char> cacheKey, CancellationToken token = default) =>
-        RemoveAsync(new CacheKey(cacheKey), token);
 
     public ValueTask<IReadOnlyList<CacheKey>> RemoveManyAsync(IEnumerable<CacheKey> cacheKeys, CancellationToken token = default)
     {
@@ -286,8 +284,8 @@ public class Cache<T> : ICache<T>, ISpanKeyCache<T>
     public ValueTask<bool> SetAsync(Span<char> cacheKey, T? value, CancellationToken token = default)
     {
         Span<char> buffer = _cacheKeyStrategy is DefaultCacheKeyStrategy ? default : stackalloc char[SpanKey.MaxLength];
-        return SpanKey.TryComposeTyped<T>(_cacheKeyStrategy, cacheKey, buffer, out var key)
-            ? _cache.SetAsync<T>(key, value, Policy, token)
+        return _spanCache is not null && SpanKey.TryComposeTyped<T>(_cacheKeyStrategy, cacheKey, buffer, out var key)
+            ? _spanCache.SetAsync<T>(key, value, Policy, token)
             : SetAsync(new CacheKey(cacheKey), value, token);
     }
 
@@ -295,8 +293,8 @@ public class Cache<T> : ICache<T>, ISpanKeyCache<T>
     public ValueTask<bool> SetAsync(Span<char> cacheKey, T? value, TimeSpan expiration, CancellationToken token = default)
     {
         Span<char> buffer = _cacheKeyStrategy is DefaultCacheKeyStrategy ? default : stackalloc char[SpanKey.MaxLength];
-        return SpanKey.TryComposeTyped<T>(_cacheKeyStrategy, cacheKey, buffer, out var key)
-            ? _cache.SetAsync<T>(key, value, expiration, Policy, token)
+        return _spanCache is not null && SpanKey.TryComposeTyped<T>(_cacheKeyStrategy, cacheKey, buffer, out var key)
+            ? _spanCache.SetAsync<T>(key, value, expiration, Policy, token)
             : SetAsync(new CacheKey(cacheKey), value, expiration, token);
     }
 
@@ -304,8 +302,8 @@ public class Cache<T> : ICache<T>, ISpanKeyCache<T>
     public ValueTask<bool> SetAsync(Span<char> cacheKey, T? value, DateTimeOffset expiration, CancellationToken token = default)
     {
         Span<char> buffer = _cacheKeyStrategy is DefaultCacheKeyStrategy ? default : stackalloc char[SpanKey.MaxLength];
-        return SpanKey.TryComposeTyped<T>(_cacheKeyStrategy, cacheKey, buffer, out var key)
-            ? _cache.SetAsync<T>(key, value, expiration, Policy, token)
+        return _spanCache is not null && SpanKey.TryComposeTyped<T>(_cacheKeyStrategy, cacheKey, buffer, out var key)
+            ? _spanCache.SetAsync<T>(key, value, expiration, Policy, token)
             : SetAsync(new CacheKey(cacheKey), value, expiration, token);
     }
 
@@ -336,7 +334,7 @@ public class Cache<T> : ICache<T>, ISpanKeyCache<T>
             _cacheKeyStrategy,
             this,
             cacheKey,
-            static (self, key, t) => self._cache.TimeToLiveAsync<T>(key, t),
+            static (self, key, t) => self._spanCache is { } c ? c.TimeToLiveAsync<T>(key, t) : self._cache.TimeToLiveAsync<T>(new CacheKey(key), t),
             static (self, k, t) => self.TimeToLiveAsync(k, t),
             token);
 
@@ -348,7 +346,7 @@ public class Cache<T> : ICache<T>, ISpanKeyCache<T>
             _cacheKeyStrategy,
             this,
             cacheKey,
-            static (self, key, t) => self._cache.ExpireTimeAsync<T>(key, t),
+            static (self, key, t) => self._spanCache is { } c ? c.ExpireTimeAsync<T>(key, t) : self._cache.ExpireTimeAsync<T>(new CacheKey(key), t),
             static (self, k, t) => self.ExpireTimeAsync(k, t),
             token);
 
