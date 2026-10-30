@@ -616,6 +616,7 @@ internal sealed partial class MultilayerCache : MultilayerCacheBase, ICache, ISp
     {
         if ((_connectionState.IsConnected || _useLocalOnlyWhenDisconnected) && _memoryCache.TryGetValue(options.CacheKey.Name, out entry) && entry!.Found)
         {
+            MarkRead(entry);
             return true;
         }
 
@@ -1826,11 +1827,13 @@ internal sealed partial class MultilayerCache : MultilayerCacheBase, ICache, ISp
                 LogFoundLocal(Logged(option, typeof(T)));
                 if (_connectionState.IsConnected)
                 {
+                    MarkRead(entry);
                     results.Add(new KeyValuePair<CacheKey, T?>(option.CacheKey, entry!.Value));
                 }
                 else if (_useLocalOnlyWhenDisconnected)
                 {
                     LogUsingPrimaryOnlyWhenDisconnected(Logged(option, typeof(T)));
+                    MarkRead(entry);
                     results.Add(new KeyValuePair<CacheKey, T?>(option.CacheKey, entry!.Value));
                 }
                 else
@@ -1881,11 +1884,13 @@ internal sealed partial class MultilayerCache : MultilayerCacheBase, ICache, ISp
             LogFoundLocal(Logged(options, typeof(T)));
             if(_connectionState.IsConnected)
             {
+                MarkRead(entry);
                 return entry!.Value;
             }
             else if (_useLocalOnlyWhenDisconnected)
             {
                 LogUsingPrimaryOnlyWhenDisconnected(Logged(options, typeof(T)));
+                MarkRead(entry);
                 return entry!.Value;
             }
             else
@@ -1917,6 +1922,7 @@ internal sealed partial class MultilayerCache : MultilayerCacheBase, ICache, ISp
                     {
                         LogUsingPrimaryOnlyWhenDisconnected(Logged(option, typeof(T)));
                     }
+                    MarkRead(entry);
                     results[i] = new KeyValuePair<CacheKey, ICacheEntry<T?>>(option.CacheKey, entry!);
                     continue;
                 }
@@ -1972,6 +1978,8 @@ internal sealed partial class MultilayerCache : MultilayerCacheBase, ICache, ISp
                 {
                     LogUsingPrimaryOnlyWhenDisconnected(Logged(options, typeof(T)));
                 }
+
+                MarkRead(entry);
                 return entry!;
             }
 
@@ -2081,9 +2089,15 @@ internal sealed partial class MultilayerCache : MultilayerCacheBase, ICache, ISp
     }
 
     /// <param name="policy">The policy the value is kept under, which says whether a peer's write refreshes it; none drops it then.</param>
-    private bool MemorySet<T>(CacheEntryOptions options, T value, TimeSpan? maxExpiration, ICacheEntry<T>? item = null, CachePolicy? policy = null)
+    /// <param name="read">Counts the entry as read now; a refresh keep passes false and inherits the read time of the copy it replaces.</param>
+    private bool MemorySet<T>(CacheEntryOptions options, T value, TimeSpan? maxExpiration, ICacheEntry<T>? item = null, CachePolicy? policy = null, bool read = true)
     {
         item ??= _cacheEntryFactory.Create(value, options.Expiration);
+        if (read)
+        {
+            MarkRead(item);
+        }
+
         return _localMemorySetter.Set(options, item, typeof(T), maxExpiration, RefreshTarget(RefreshReader<T>.Instance, policy));
     }
 
@@ -2212,7 +2226,9 @@ internal sealed partial class MultilayerCache : MultilayerCacheBase, ICache, ISp
                     return false;
                 }
 
-                if (!o.MemorySet(options, entry.Value, o.LocalLifetime(policy), null, policy))
+                var item = o._cacheEntryFactory.Create(entry.Value, options.Expiration);
+                InheritRead(held.CacheEntity, item);
+                if (!o.MemorySet(options, entry.Value, o.LocalLifetime(policy), item, policy, read: false))
                 {
                     failed = true;
                     return false;

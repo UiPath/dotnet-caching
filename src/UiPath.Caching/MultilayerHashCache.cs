@@ -709,6 +709,7 @@ internal sealed partial class MultilayerHashCache : MultilayerCacheBase, IHashCa
         };
         var merged = CreateEntry(combined, options);
         HashVersions.Stamp<T>(merged, update.Version, version.LocalDeadline, ahead);
+        InheritRead(held, merged);
         return _localMemorySetter.Set(options, merged, typeof(T), remaining, state.Refresh);
     }
 
@@ -825,6 +826,7 @@ internal sealed partial class MultilayerHashCache : MultilayerCacheBase, IHashCa
     {
         if ((_connectionState.IsConnected || _useLocalOnlyWhenDisconnected) && _memoryCache.TryGetValue(options.CacheKey.Name, out entry) && entry!.Found)
         {
+            MarkRead(entry);
             return true;
         }
 
@@ -919,11 +921,13 @@ internal sealed partial class MultilayerHashCache : MultilayerCacheBase, IHashCa
             LogFoundLocal(Logged(options, typeof(T)));
             if (_connectionState.IsConnected)
             {
+                MarkRead(cacheEntry);
                 return Filter(cacheEntry!, options);
             }
             else if (_useLocalOnlyWhenDisconnected)
             {
                 LogUsingLocalCopyDisconnected(Logged(options, typeof(T)));
+                MarkRead(cacheEntry);
                 return Filter(cacheEntry!, options);
             }
             else
@@ -946,11 +950,12 @@ internal sealed partial class MultilayerHashCache : MultilayerCacheBase, IHashCa
     }
 
     /// <param name="policy">The policy the hash is kept under, which says whether a peer's write refreshes it; fields kept without the hash never are.</param>
-    private bool MemorySet<T>(InternalHashCacheEntryOptions options, IDictionary<string, T?> value, TimeSpan? maxExpiration, bool keepWhenAbsent = false, CachePolicy? policy = null)
+    /// <param name="read">Counts the entry as read now; a refresh keep passes false and inherits the read time of the copy it replaces.</param>
+    private bool MemorySet<T>(InternalHashCacheEntryOptions options, IDictionary<string, T?> value, TimeSpan? maxExpiration, bool keepWhenAbsent = false, CachePolicy? policy = null, bool read = true)
     {
         if (!options.Partial)
         {
-            return MemorySet(options, CreateEntry(value, options), maxExpiration, policy);
+            return MemorySet(options, CreateEntry(value, options), maxExpiration, policy, read);
         }
 
         // Read, merged and written as one, so two merges of one hash do not each drop the other's fields.
@@ -958,14 +963,14 @@ internal sealed partial class MultilayerHashCache : MultilayerCacheBase, IHashCa
         {
             if (TryMergeLocal(ref options, value, out var merged))
             {
-                return MemorySet(options, CreateEntry(merged, options), maxExpiration, policy);
+                return MemorySet(options, CreateEntry(merged, options), maxExpiration, policy, read);
             }
 
             // Nothing held here to merge into: the fields alone are not the hash, so the next read takes it whole from the inner tier, unless there is none.
             options.Version = 0;
             if (keepWhenAbsent || OnlyTier)
             {
-                return MemorySet(options, CreateEntry(value, options), maxExpiration);
+                return MemorySet(options, CreateEntry(value, options), maxExpiration, read: read);
             }
         }
 
@@ -974,10 +979,15 @@ internal sealed partial class MultilayerHashCache : MultilayerCacheBase, IHashCa
     }
 
     // Under the key's merge lock, so a merge never reads the hash a write is replacing and writes it back.
-    private bool MemorySet<T>(InternalHashCacheEntryOptions options, ICacheEntry<IDictionary<string, T?>> item, TimeSpan? maxExpiration, CachePolicy? policy = null)
+    private bool MemorySet<T>(InternalHashCacheEntryOptions options, ICacheEntry<IDictionary<string, T?>> item, TimeSpan? maxExpiration, CachePolicy? policy = null, bool read = true)
     {
         lock (MergeLock(options.CacheKey.Name))
         {
+            if (read)
+            {
+                MarkRead(item);
+            }
+
             if (_versioned is not null && (options.Version > 0 || options.Own is { Length: > 0 }))
             {
                 HashVersions.Stamp<T>(item, options.Version, maxExpiration is { } max ? _clock.ToDateTimeOffset(max) : null, options.Own);
@@ -1226,7 +1236,8 @@ internal sealed partial class MultilayerHashCache : MultilayerCacheBase, IHashCa
                 }
 
                 var item = o.CreateEntry(entry.Value ?? Empty<T>(), options);
-                if (!o.MemorySet(options, item, o.LocalLifetime(policy), policy))
+                InheritRead(held.CacheEntity, item);
+                if (!o.MemorySet(options, item, o.LocalLifetime(policy), policy, read: false))
                 {
                     failed = true;
                     return false;

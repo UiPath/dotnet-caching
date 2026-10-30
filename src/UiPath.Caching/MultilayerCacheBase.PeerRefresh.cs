@@ -34,6 +34,9 @@ public abstract partial class MultilayerCacheBase
         }
     }
 
+    /// <summary>Tests report the counted outcomes of the refresher at once.</summary>
+    internal void FlushPeerRefreshMetrics() => _peerRefresher?.Flush();
+
     /// <summary>How an entry kept under <paramref name="policy"/> is refreshed on a peer's write; null, and dropped then, when nothing refreshes it, no policy is in scope, or the policy opts out.</summary>
     private protected PeerRefreshTarget? RefreshTarget(IPeerRefreshReader reader, CachePolicy? policy) =>
         _peerRefresher is null || policy is null || policy.RefreshLocalOnPeerWrite == false ? null : new PeerRefreshTarget(reader, policy);
@@ -60,17 +63,41 @@ public abstract partial class MultilayerCacheBase
         }
     }
 
+    /// <summary>Whether no local hit has read the entry within the policy's local expiration, or the cache's default when the policy sets none.</summary>
+    private bool IsIdle(IReadTracked entry, CachePolicy? policy)
+    {
+        var window = IdleWindow(policy);
+        var last = entry.LastRead;
+        return last == IReadTracked.NeverRead || NowSeconds() - last > window.TotalSeconds;
+    }
+
+    private TimeSpan IdleWindow(CachePolicy? policy)
+    {
+        if (policy?.LocalExpiration is { } own && own > TimeSpan.Zero)
+        {
+            return own;
+        }
+
+        if (_multiLayerCacheOptions.LocalMaxExpiration is { } max && max > TimeSpan.Zero)
+        {
+            return max;
+        }
+
+        return TimeSpan.FromSeconds(60);
+    }
+
     /// <summary>Reads the keys peers wrote again, off the dispatcher thread and in batches, and keeps what it read in place of the held entries.</summary>
     private protected sealed partial class PeerRefresher(MultilayerCacheBase cache) : IDisposable
     {
-        private const string EventStarted = "cache.peer_refresh.started";
-        private const string EventKept = "cache.peer_refresh.kept";
-        private const string EventDiscarded = "cache.peer_refresh.discarded";
+        private const string MetricStarted = "cache.peer_refresh.started";
+        private const string MetricKept = "cache.peer_refresh.kept";
+        private const string MetricDiscarded = "cache.peer_refresh.discarded";
+        private const string MetricDropped = "cache.peer_refresh.dropped";
         private const string EventDropped = "cache.peer_refresh.dropped";
         private const string MetricReadMs = "cache.peer_refresh.read_ms";
         private const string TagCache = "cache.name";
         private const string TagReason = "reason";
-        private const string MetricKeys = "keys";
+        private const string ReasonIdle = "idle";
         private const string ReasonNewerLocal = "newer_local";
         private const string ReasonNotFound = "not_found";
         private const string ReasonFailed = "failed";
@@ -80,11 +107,21 @@ public abstract partial class MultilayerCacheBase
         private const string ReasonStillDirty = "still_dirty";
         private const string ReasonExpired = "expired";
 
+        // Where Reasons lists it.
+        private const int IdleIndex = 0;
+
+        private static readonly string[] Reasons = [ReasonIdle, ReasonNotFound, ReasonFailed, ReasonTimedOut, ReasonDeclined, ReasonOverflow, ReasonStillDirty, ReasonExpired];
+
+        // Outcomes are counted as they happen and reported per drained batch, and at intervals while only idle drops arrive.
+        private static readonly TimeSpan FlushInterval = TimeSpan.FromSeconds(10);
+
         private readonly ILogger _logger = cache._logger;
         // Taken to add a key and to dispose; a key's own transitions lock its item.
         private readonly Lock _gate = new();
         private readonly ConcurrentDictionary<string, Item> _items = new(StringComparer.Ordinal);
         private readonly ConcurrentQueue<Item> _order = new();
+        private readonly Lock _flushGate = new();
+        private readonly long[] _dropped = new long[Reasons.Length];
         // The entry a refresh kept, by the entry it replaced: an event that reaches only the replaced entry's token drops it.
         private readonly ConditionalWeakTable<object, object> _successors = [];
         private readonly SemaphoreSlim _signal = new(0);
@@ -92,6 +129,11 @@ public abstract partial class MultilayerCacheBase
         private Task? _loop;
         private bool _disposed;
         private int _pending;
+        private long _started;
+        private long _kept;
+        private long _discarded;
+        private long _flushedAt = cache._clock.GetTimestamp();
+        private Tags? _tags;
 
         private enum Phase
         {
@@ -112,6 +154,14 @@ public abstract partial class MultilayerCacheBase
         {
             if (Volatile.Read(ref _disposed) || !cache._connectionState.IsConnected)
             {
+                return false;
+            }
+
+            // Not read within the local expiration: this node has no use for a fresher copy, so it drops as it did before refreshing existed.
+            if (held.CacheEntity is IReadTracked tracked && cache.IsIdle(tracked, held.Refresh?.Policy))
+            {
+                Interlocked.Increment(ref _dropped[IdleIndex]);
+                FlushIfDue();
                 return false;
             }
 
@@ -176,10 +226,33 @@ public abstract partial class MultilayerCacheBase
             }
 
             _order.Clear();
+            Flush();
             _stop.Cancel();
             if (loop is null)
             {
                 Release();
+            }
+        }
+
+        /// <summary>Reports the outcomes counted since the last report, one metric each.</summary>
+        internal void Flush()
+        {
+            try
+            {
+                // One report at a time, so a caller that flushes finds what another flush took already recorded.
+                using var scope = _flushGate.EnterScope();
+                var tags = CachedTags();
+                TrackCount(MetricStarted, ref _started, tags.Cache);
+                TrackCount(MetricKept, ref _kept, tags.Cache);
+                TrackCount(MetricDiscarded, ref _discarded, tags.Discarded);
+                for (var i = 0; i < _dropped.Length; i++)
+                {
+                    TrackCount(MetricDropped, ref _dropped[i], tags.Dropped[i]);
+                }
+            }
+            catch (Exception ex)
+            {
+                cache.Telemetry.TryTrackException(ex);
             }
         }
 
@@ -302,12 +375,18 @@ public abstract partial class MultilayerCacheBase
                     Abandon(taken.Item, ex);
                 }
             }
+            finally
+            {
+                Flush();
+            }
         }
 
         /// <summary>Takes up to a batch of queued keys into <paramref name="batch"/> for a read; a key that waited past the timeout drops instead.</summary>
         private void Take(List<Taken> batch)
         {
             var timeout = BoundedTimeout(cache._multiLayerCacheOptions.Timeout);
+            // An infinite Timeout bounds neither the wait in the queue nor the read.
+            var bounded = timeout != Timeout.InfiniteTimeSpan;
             while (batch.Count < cache.BatchChunkSize && _order.TryDequeue(out var item))
             {
                 lock (item)
@@ -319,7 +398,7 @@ public abstract partial class MultilayerCacheBase
 
                     try
                     {
-                        if (cache._clock.GetElapsedTime(item.EnqueuedAt) > timeout)
+                        if (bounded && cache._clock.GetElapsedTime(item.EnqueuedAt) > timeout)
                         {
                             End(item, ReasonExpired);
                             continue;
@@ -340,8 +419,10 @@ public abstract partial class MultilayerCacheBase
         /// <summary>Reads the batch, one inner read per value type and policy, and settles each key on what its read found.</summary>
         private async Task RefreshAsync(List<Taken> batch, CancellationToken stop)
         {
-            using var timeout = CancellationTokenSource.CreateLinkedTokenSource(stop);
-            timeout.CancelAfter(BoundedTimeout(cache._multiLayerCacheOptions.Timeout));
+            var limit = BoundedTimeout(cache._multiLayerCacheOptions.Timeout);
+            // Timed by the cache's clock, so a test moves the deadline instead of waiting for it.
+            using var deadline = limit == Timeout.InfiniteTimeSpan ? new CancellationTokenSource() : new CancellationTokenSource(limit, cache._clock);
+            using var timeout = CancellationTokenSource.CreateLinkedTokenSource(stop, deadline.Token);
             var reads = batch
                 .GroupBy(static t => t.Held.Refresh!.Value)
                 .Select(g => g.ToArray())
@@ -365,7 +446,7 @@ public abstract partial class MultilayerCacheBase
         /// <summary>One read from the master, within the cache timeout; on failure the reason the keys drop, none when the refresher stopped.</summary>
         private async Task<(PeerRead[]? Found, string? Failure, Exception? Error)> ReadAsync(PeerRefreshTarget target, CacheKey[] keys, CancellationTokenSource timeout, CancellationToken stop)
         {
-            TrackStarted(keys.Length);
+            Interlocked.Add(ref _started, keys.Length);
             var started = cache._clock.GetTimestamp();
             try
             {
@@ -473,11 +554,11 @@ public abstract partial class MultilayerCacheBase
                     }
 
                     Remove(item);
-                    cache.Telemetry.TryTrackEvent(EventKept, [new(TagCache, cache.Name)]);
+                    Interlocked.Increment(ref _kept);
                     break;
                 case PeerKeep.Replaced:
                     Remove(item);
-                    cache.Telemetry.TryTrackEvent(EventDiscarded, [new(TagCache, cache.Name), new(TagReason, ReasonNewerLocal)]);
+                    Interlocked.Increment(ref _discarded);
                     LogDiscarded(Logged(held));
                     break;
                 case PeerKeep.Declined when !item.Requeued:
@@ -554,19 +635,51 @@ public abstract partial class MultilayerCacheBase
 
         private void Dropped(RefreshMetadataState held, string reason, Exception? failure = null)
         {
-            cache.Telemetry.TryTrackEvent(EventDropped, [new(TagCache, cache.Name), new(TagReason, reason)]);
+            var index = Array.IndexOf(Reasons, reason);
+            Interlocked.Increment(ref _dropped[index]);
+            // Only a drop that points at the inner tier is worth an event of its own; the rest are counted.
+            if (reason is ReasonTimedOut or ReasonFailed)
+            {
+                cache.Telemetry.TryTrackEvent(EventDropped, CachedTags().Dropped[index]);
+            }
+
             LogDropped(failure, Logged(held), reason);
         }
 
-        private void TrackStarted(int keys)
+        private Tags CachedTags() => _tags ??= new Tags(cache.Name);
+
+        private void FlushIfDue()
         {
-            try
+            var last = Volatile.Read(ref _flushedAt);
+            var now = cache._clock.GetTimestamp();
+            if (cache._clock.GetElapsedTime(last, now) >= FlushInterval && Interlocked.CompareExchange(ref _flushedAt, now, last) == last)
             {
-                cache.Telemetry.TrackEvent(EventStarted, [new(TagCache, cache.Name)], [new(MetricKeys, keys)]);
+                TryFlush();
             }
-            catch (Exception ex)
+        }
+
+        // The dispatcher does not wait on a flush under way: the report of the drain's flush counts what it takes.
+        private void TryFlush()
+        {
+            if (_flushGate.TryEnter())
             {
-                cache.Telemetry.TryTrackException(ex);
+                try
+                {
+                    Flush();
+                }
+                finally
+                {
+                    _flushGate.Exit();
+                }
+            }
+        }
+
+        private void TrackCount(string name, ref long counter, TelemetryTags<string> tags)
+        {
+            var count = Interlocked.Exchange(ref counter, 0);
+            if (count > 0)
+            {
+                cache.Telemetry.TrackMetric(name, count, tags);
             }
         }
 
@@ -618,6 +731,23 @@ public abstract partial class MultilayerCacheBase
             public bool Requeued { get; set; }
 
             public bool Removed { get; set; }
+        }
+
+        /// <summary>The tags of each metric and event, built once per refresher.</summary>
+        private sealed class Tags
+        {
+            public Tags(string cacheName)
+            {
+                Cache = [new(TagCache, cacheName)];
+                Discarded = [new(TagCache, cacheName), new(TagReason, ReasonNewerLocal)];
+                Dropped = [.. Reasons.Select(reason => new TelemetryTags<string>([new KeyValuePair<string, string>(TagCache, cacheName), new KeyValuePair<string, string>(TagReason, reason)]))];
+            }
+
+            public TelemetryTags<string> Cache { get; }
+
+            public TelemetryTags<string> Discarded { get; }
+
+            public TelemetryTags<string>[] Dropped { get; }
         }
     }
 }

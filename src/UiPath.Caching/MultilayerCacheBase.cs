@@ -211,9 +211,35 @@ public abstract partial class MultilayerCacheBase : IDisposable
         }
     }
 
+    /// <summary>Gives <paramref name="to"/> the last read of the entry it replaces.</summary>
+    private protected static void InheritRead(object? from, object? to)
+    {
+        if (from is IReadTracked { LastRead: not IReadTracked.NeverRead and var last } && to is IReadTracked inheriting)
+        {
+            inheriting.MarkRead(last);
+        }
+    }
+
     /// <summary>A timeout a cancellation source takes: <c>CancelAfter</c> throws beyond <see cref="int.MaxValue"/> milliseconds, so a misconfigured <c>Lock.LocalSingleFlightTimeout</c> degrades to that.</summary>
     private protected static TimeSpan BoundedTimeout(TimeSpan timeout) =>
         timeout.TotalMilliseconds > int.MaxValue ? TimeSpan.FromMilliseconds(int.MaxValue) : timeout;
+
+    /// <summary>Notes a local hit, so a peer's write to the entry refreshes it rather than drops it while the read is recent.</summary>
+    private protected void MarkRead(object? entry)
+    {
+        if (_peerRefresher is null)
+        {
+            return;
+        }
+
+        if (entry is IReadTracked tracked)
+        {
+            tracked.MarkRead(NowSeconds());
+        }
+    }
+
+    /// <summary>Whole seconds of the cache's monotonic clock, at least 1.</summary>
+    private protected int NowSeconds() => (int)(_clock.GetTimestamp() / _clock.TimestampFrequency) + 1;
 
     /// <summary>How long a hit read from the inner tier stays local: the disconnected cap while the tier reads as down, perhaps only its broadcast.</summary>
     private protected TimeSpan? LocalLifetime(CachePolicy policy) =>

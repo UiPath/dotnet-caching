@@ -13,6 +13,10 @@ internal sealed class Lock
         return new Scope(this);
     }
 
+    public bool TryEnter() => Monitor.TryEnter(this);
+
+    public void Exit() => Monitor.Exit(this);
+
     public ref struct Scope(Lock owner)
     {
         public readonly void Dispose() => Monitor.Exit(owner);

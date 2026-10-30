@@ -22,9 +22,9 @@ internal sealed class CachePeers : IDisposable
     /// <summary>When off, events wait in <see cref="Node.Published"/> for <see cref="Deliver"/>.</summary>
     public bool AutoDeliver { get; set; } = true;
 
-    public Node Add(string name, InMemoryRedisCacheOptions? options = null, RecordingTelemetryProvider? telemetry = null)
+    public Node Add(string name, InMemoryRedisCacheOptions? options = null, RecordingTelemetryProvider? telemetry = null, TimeProvider? clock = null)
     {
-        var node = new Node(this, name, options ?? new InMemoryRedisCacheOptions(), telemetry);
+        var node = new Node(this, name, options ?? new InMemoryRedisCacheOptions(), telemetry, clock ?? TimeProvider.System);
         _nodes.Add(node);
         return node;
     }
@@ -75,7 +75,7 @@ internal sealed class CachePeers : IDisposable
 
     internal sealed class Node : IDisposable
     {
-        public Node(CachePeers peers, string name, InMemoryRedisCacheOptions options, RecordingTelemetryProvider? telemetry)
+        public Node(CachePeers peers, string name, InMemoryRedisCacheOptions options, RecordingTelemetryProvider? telemetry, TimeProvider clock)
         {
             Name = name;
             var cacheOptions = new CacheOptions { AppShortName = "test", ConnectionMonitorEnabled = true, SourceUri = new Uri($"urn:node:{name}") };
@@ -104,7 +104,7 @@ internal sealed class CachePeers : IDisposable
                 cacheOptions,
                 NullDistributedLock.Instance,
                 NullCachePolicyFactory.Instance,
-                TimeProvider.System,
+                clock,
                 NullLogger.Instance));
         }
 
@@ -142,6 +142,9 @@ internal sealed class CachePeers : IDisposable
             {
                 await Task.Delay(5);
             }
+
+            // The refresher reports a batch's outcomes as the batch ends, just after its keys settle.
+            Cache.FlushPeerRefreshMetrics();
         }
 
         public void Dispose()

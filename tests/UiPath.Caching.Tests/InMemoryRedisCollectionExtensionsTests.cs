@@ -71,6 +71,36 @@ public class InMemoryRedisCollectionExtensionsTests
             .Which.OptionsType.Should().Be(typeof(InMemoryRedisCacheOptions));
     }
 
+    [Theory]
+    [InlineData(0)]
+    [InlineData(-2)]
+    public void AddInMemoryRedis_throws_at_registration_when_Timeout_is_zero_or_negative(int milliseconds)
+    {
+        var services = new ServiceCollection();
+        var act = () => services.AddCaching(builder =>
+            builder.AddInMemoryRedis(opt =>
+            {
+                opt.Timeout = TimeSpan.FromMilliseconds(milliseconds);
+            }));
+
+        var failure = act.Should().Throw<OptionsValidationException>().Which;
+        failure.OptionsType.Should().Be<InMemoryRedisCacheOptions>();
+        failure.Failures.Should().ContainSingle().Which.Should().Contain(nameof(InMemoryRedisCacheOptions.Timeout));
+    }
+
+    [Fact]
+    public void AddInMemoryRedis_accepts_an_infinite_Timeout()
+    {
+        var services = new ServiceCollection();
+        var act = () => services.AddCaching(builder =>
+            builder.AddInMemoryRedis(opt =>
+            {
+                opt.Timeout = Timeout.InfiniteTimeSpan;
+            }));
+
+        act.Should().NotThrow();
+    }
+
     private static ServiceProvider BuildContainer()
     {
         var services = new ServiceCollection();

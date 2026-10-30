@@ -21,6 +21,7 @@ public class PeerRefreshHashTests
         var (a, b) = (c.Add("a"), c.Add("b"));
         await Seed(a);
         (await b.Cache.GetAsync<string>(Key, Awaited, Ct)).Should().HaveCount(2);
+        await b.Cache.GetAsync<string>(Key, Awaited, Ct);
         var before = b.InnerReads;
         var gate = new TaskCompletionSource();
         b.Cache.PeerRefreshHold = gate.Task;
@@ -40,11 +41,52 @@ public class PeerRefreshHashTests
     }
 
     [Fact]
+    public async Task A_peer_update_applied_in_place_keeps_the_read_time()
+    {
+        using var c = new PeerCluster();
+        var telemetry = new Telemetry.RecordingTelemetryProvider();
+        var (a, b) = (c.Add("a"), c.Add("b", telemetry: telemetry));
+        await Seed(a);
+        (await b.Cache.GetAsync<string>(Key, Awaited, Ct)).Should().HaveCount(2);
+        var before = b.InnerReads;
+
+        await Add(a, ("c", "3"));
+        await b.Settled();
+        b.InnerReads.Should().Be(before);
+
+        c.Redis.WriteQuietly(("z", "0"));
+        await Add(a, ("d", "4"));
+        await b.Settled();
+
+        Held(b).Should().BeEquivalentTo(c.Redis.Fields());
+        b.InnerReads.Should().Be(before + 1);
+        telemetry.Metrics.Where(m => m.Name == "cache.peer_refresh.dropped").Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task A_hash_filled_by_a_read_is_refreshed_on_a_peer_update()
+    {
+        using var c = new PeerCluster();
+        var (a, b) = (c.Add("a"), c.Add("b"));
+        await Seed(a);
+        (await b.Cache.GetAsync<string>(Key, Awaited, Ct)).Should().HaveCount(2);
+        var before = b.InnerReads;
+
+        c.Redis.WriteQuietly(("z", "0"));
+        await Add(a, ("c", "3"));
+        await b.Settled();
+
+        Held(b).Should().NotBeNull();
+        b.InnerReads.Should().Be(before + 1);
+    }
+
+    [Fact]
     public async Task A_refreshed_hash_carries_the_inner_version()
     {
         using var c = new PeerCluster();
         var (a, b) = (c.Add("a"), c.Add("b"));
         await Seed(a);
+        await b.Cache.GetAsync<string>(Key, Awaited, Ct);
         await b.Cache.GetAsync<string>(Key, Awaited, Ct);
         c.Redis.WriteQuietly(("z", "0"));
         await Add(a, ("c", "3"));
@@ -59,7 +101,8 @@ public class PeerRefreshHashTests
         Held(b).Should().BeEquivalentTo(c.Redis.Fields());
         b.InnerReads.Should().Be(before);
 
-        // The copy the update was laid over is refreshed again on the next gap.
+        // The copy the update was laid over is refreshed again on the next gap, once it has been read.
+        await b.Cache.GetAsync<string>(Key, Awaited, Ct);
         c.Redis.WriteQuietly(("y", "9"));
         await Add(a, ("e", "5"));
         await b.Settled();
@@ -74,6 +117,7 @@ public class PeerRefreshHashTests
         using var c = new PeerCluster();
         var (a, b) = (c.Add("a"), c.Add("b"));
         await Seed(a);
+        await b.Cache.GetAsync<string>(Key, Awaited, Ct);
         await b.Cache.GetAsync<string>(Key, Awaited, Ct);
         var before = b.InnerReads;
         c.AutoDeliver = false;
@@ -113,6 +157,7 @@ public class PeerRefreshHashTests
         await Until(() => b.InnerReads == 1);
         b.Inner.ReadHold = null;
         await b.Cache.GetAsync<string>(Key, other, Ct);
+        await b.Cache.GetAsync<string>(Key, other, Ct);
         b.Local.TryGetValue(Key, out var held).Should().BeTrue();
         var refresh = new TaskCompletionSource();
         b.Cache.PeerRefreshHold = refresh.Task;
@@ -138,6 +183,7 @@ public class PeerRefreshHashTests
         var (a, b) = (c.Add("a"), c.Add("b"));
         var background = new CachePolicy { LocalExpiration = TimeSpan.FromMinutes(10), LocalExpirationDisconnected = TimeSpan.FromSeconds(30), BackgroundDistributedWrite = true };
         await Seed(a);
+        await b.Cache.GetAsync<string>(Key, Awaited, Ct);
         await b.Cache.GetAsync<string>(Key, Awaited, Ct);
         var refresh = new TaskCompletionSource();
         b.Cache.PeerRefreshHold = refresh.Task;
@@ -248,6 +294,8 @@ public class PeerRefreshHashTests
         var (a, b) = (c.Add("a", peerFieldUpdates: false), c.Add("b", peerFieldUpdates: false));
         await a.Cache.SetAsync<string>("k1", Fields(("a", "1")), Awaited, Ct);
         await a.Cache.SetAsync<string>("k2", Fields(("b", "2")), Awaited, Ct);
+        await b.Cache.GetAsync<string>("k1", Awaited, Ct);
+        await b.Cache.GetAsync<string>("k2", Awaited, Ct);
         await b.Cache.GetAsync<string>("k1", Awaited, Ct);
         await b.Cache.GetAsync<string>("k2", Awaited, Ct);
         var before = b.InnerReads;

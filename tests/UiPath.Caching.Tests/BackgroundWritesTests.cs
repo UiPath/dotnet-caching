@@ -273,6 +273,24 @@ public class BackgroundWritesTests
     }
 
     [Fact]
+    public void A_refused_fill_is_counted_by_why_it_was_refused()
+    {
+        var telemetry = new Telemetry.RecordingTelemetryProvider();
+        var writes = new BackgroundWrites(8, TimeSpan.FromSeconds(5), "c", NullLogger.Instance, telemetry, TimeProvider.System);
+        writes.Track();
+        var mark = writes.Mark("k");
+        writes.Touch("k");
+
+        writes.Fill("k", mark, 0, static _ => true).Should().BeNull();
+        using var turn = writes.Enter(["k"]);
+        writes.Fill("k", writes.Mark("k"), 0, static _ => true).Should().BeNull();
+
+        var refused = telemetry.Metrics.Where(m => m.Name == "cache.background_write.fill_refused").ToArray();
+        refused.Select(m => m.Properties!["reason"]).Should().Equal("changed", "in_flight");
+        refused.Should().OnlyContain(m => m.Value == 1 && m.Properties!["cache.name"] == "c");
+    }
+
+    [Fact]
     public void Counting_alone_refuses_a_fill_while_an_unordered_write_of_its_stripe_is_in_flight_and_after_it_ends()
     {
         var writes = Create();

@@ -24,8 +24,8 @@ public class PeerRefreshIntegrationTests(RedisContainerFixture fixture) : IDispo
         var peer = Node("b", telemetry);
         var before = await WarmAsync(writer, peer, telemetry);
         var key = Unique();
-        (await writer.SetAsync(key, "old", Ct)).Should().BeTrue();
-        await EventSettledAsync();
+        // The peer's own write is not heard back, so no event of the old value can reach the copy.
+        (await peer.SetAsync(key, "old", Ct)).Should().BeTrue();
         (await peer.GetAsync<string>(key, Ct)).Should().Be("old");
 
         (await writer.SetAsync(key, "new", Ct)).Should().BeTrue();
@@ -39,8 +39,8 @@ public class PeerRefreshIntegrationTests(RedisContainerFixture fixture) : IDispo
 
         arrived.Should().BeTrue();
         seen.Should().OnlyContain(v => v == "old" || v == "new", "the peer serves its copy until the refresh replaces it, and never misses");
-        (await EventuallyAsync(() => Task.FromResult(telemetry.Events.Skip(before).Any(e => e.Name == "cache.peer_refresh.kept")))).Should().BeTrue("the peer's own refresh read installed the new value");
-        telemetry.Events.Skip(before).Where(e => e.Name == "cache.peer_refresh.started").Sum(e => e.Metrics!["keys"]).Should().Be(1, "a drop-and-read-through would start no refresh");
+        (await EventuallyAsync(() => Task.FromResult(telemetry.Metrics.Skip(before).Any(m => m.Name == "cache.peer_refresh.kept")))).Should().BeTrue("the peer's own refresh read installed the new value");
+        telemetry.Metrics.Skip(before).Where(m => m.Name == "cache.peer_refresh.started").Sum(m => m.Value).Should().Be(1, "a drop-and-read-through would start no refresh");
     }
 
     [Fact]
@@ -52,8 +52,8 @@ public class PeerRefreshIntegrationTests(RedisContainerFixture fixture) : IDispo
         var peer = Node("b", telemetry);
         var before = await WarmAsync(writer, peer, telemetry);
         var keys = Enumerable.Range(0, 20).Select(i => (CacheKey)$"{{t{_app}}}-{i}-{Guid.NewGuid():N}").ToArray();
-        (await writer.SetManyAsync(keys.Select(k => new KeyValuePair<CacheKey, string?>(k, "old")), (CachePolicy?)null, Ct)).Should().BeEmpty();
-        await EventSettledAsync();
+        // The peer's own write is not heard back, so no event of the old values can reach the copies.
+        (await peer.SetManyAsync(keys.Select(k => new KeyValuePair<CacheKey, string?>(k, "old")), (CachePolicy?)null, Ct)).Should().BeEmpty();
         foreach (var key in keys)
         {
             (await peer.GetAsync<string>(key, null, Ct)).Should().Be("old");
@@ -66,9 +66,9 @@ public class PeerRefreshIntegrationTests(RedisContainerFixture fixture) : IDispo
             (await EventuallyAsync(async () => await peer.GetAsync<string>(key, null, Ct) == "new")).Should().BeTrue($"the peer refreshes {key.Name}");
         }
 
-        var started = telemetry.Events.Skip(before).Where(e => e.Name == "cache.peer_refresh.started").ToArray();
-        started.Sum(e => e.Metrics!["keys"]).Should().Be(20);
-        started.Length.Should().BeLessThanOrEqualTo(2);
+        (await EventuallyAsync(() => Task.FromResult(telemetry.Metrics.Skip(before).Where(m => m.Name == "cache.peer_refresh.started").Sum(m => m.Value) >= 20))).Should().BeTrue();
+        telemetry.Metrics.Skip(before).Where(m => m.Name == "cache.peer_refresh.started").Sum(m => m.Value).Should().Be(20);
+        telemetry.Metrics.Skip(before).Count(m => m.Name == "cache.peer_refresh.read_ms").Should().BeLessThanOrEqualTo(2);
     }
 
     [Fact]
@@ -80,14 +80,13 @@ public class PeerRefreshIntegrationTests(RedisContainerFixture fixture) : IDispo
         var peer = Node("b", telemetry);
         var before = await WarmAsync(writer, peer, telemetry);
         var key = Unique();
-        (await writer.SetAsync(key, "v", Ct)).Should().BeTrue();
-        await EventSettledAsync();
+        (await peer.SetAsync(key, "v", Ct)).Should().BeTrue();
         (await peer.GetAsync<string>(key, Ct)).Should().Be("v");
 
         await writer.RemoveAsync<string>(key, Ct);
 
         (await EventuallyAsync(async () => await peer.GetAsync<string>(key, Ct) is null)).Should().BeTrue("a removal is dropped, not refreshed");
-        telemetry.Events.Skip(before).Should().NotContain(e => e.Name == "cache.peer_refresh.started", "a removal starts no refresh");
+        telemetry.Metrics.Skip(before).Should().NotContain(m => m.Name == "cache.peer_refresh.started", "a removal starts no refresh");
     }
 
     public void Dispose()
@@ -100,20 +99,22 @@ public class PeerRefreshIntegrationTests(RedisContainerFixture fixture) : IDispo
         GC.SuppressFinalize(this);
     }
 
-    // The peer's subscription starts while its first read returns; a write before its consumer group exists is reported as a gap that clears the peer's copies instead of refreshing them. Returns the telemetry events the warm-up produced, which the test skips.
+    // The peer's subscription starts while its first read returns; a write before its consumer group exists is reported as a gap that clears the peer's copies instead of refreshing them. Returns the telemetry metrics the warm-up produced, which the test skips.
     private static async Task<int> WarmAsync(ICache writer, ICache peer, RecordingTelemetryProvider telemetry)
     {
         var key = Unique();
-        (await writer.SetAsync(key, "old", Ct)).Should().BeTrue();
+        // The peer writes the old value itself, so only the writer's one event can reach its copy.
+        (await peer.SetAsync(key, "old", Ct)).Should().BeTrue();
         (await peer.GetAsync<string>(key, Ct)).Should().Be("old");
         (await writer.SetAsync(key, "new", Ct)).Should().BeTrue();
         (await EventuallyAsync(async () => await peer.GetAsync<string>(key, Ct) == "new")).Should().BeTrue("the peer's subscription to the topic is live");
-        await Task.Delay(300, Ct);
-        return telemetry.Events.Count;
-    }
 
-    // The write's own event reaches a live peer after the write returns; the peer reads once it has passed, so it cannot be mistaken for a refresh.
-    private static Task EventSettledAsync() => Task.Delay(300, Ct);
+        // The refresh the warm-up's own write may have started ends, and is reported, before the test counts from here.
+        var cache = (MultilayerCache)peer;
+        (await EventuallyAsync(() => Task.FromResult(cache.RunsInFlight == 0))).Should().BeTrue("the warm-up's refresh ended");
+        cache.FlushPeerRefreshMetrics();
+        return telemetry.Metrics.Count;
+    }
 
     private static string Unique() => $"it-{Guid.NewGuid():N}";
 

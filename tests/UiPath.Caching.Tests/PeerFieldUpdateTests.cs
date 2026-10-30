@@ -516,6 +516,7 @@ public class PeerFieldUpdateTests
             return Task.CompletedTask;
         };
         await node.Cache.GetAsync<string>("k", Awaited, Ct);
+        await node.Cache.GetAsync<string>("k", Awaited, Ct);
         var refresh = new TaskCompletionSource();
         node.Cache.PeerRefreshHold = refresh.Task;
         var slow = node.Cache.SetAsync<string>("k", Fields(("x", "old")), Merge, Awaited, Ct).AsTask();
@@ -530,8 +531,8 @@ public class PeerFieldUpdateTests
 
         c.Redis.Fields()!["x"].Should().Be("new");
         (await node.Cache.GetAsync<string>("k", Awaited, Ct)).Should().BeEquivalentTo(c.Redis.Fields());
-        telemetry.Events.Where(e => e.Name.StartsWith("cache.peer_refresh.", StringComparison.Ordinal) && e.Name != "cache.peer_refresh.started")
-            .Select(e => e.Name + (e.Properties!.TryGetValue("reason", out var reason) ? ":" + reason : string.Empty))
+        telemetry.Metrics.Where(m => m.Name.StartsWith("cache.peer_refresh.", StringComparison.Ordinal) && m.Name != "cache.peer_refresh.started" && m.Name != "cache.peer_refresh.read_ms")
+            .Select(m => m.Name + (m.Properties!.TryGetValue("reason", out var reason) ? ":" + reason : string.Empty))
             .Should().Equal("cache.peer_refresh.discarded:newer_local");
     }
 

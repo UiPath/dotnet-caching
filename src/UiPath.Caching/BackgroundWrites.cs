@@ -8,10 +8,18 @@ namespace UiPath.Caching;
 internal sealed class BackgroundWrites(int limit, TimeSpan drainTimeout, string cacheName, ILogger logger, ICachingTelemetryProvider telemetry, TimeProvider clock, Action<string>? onIssued = null)
 {
     private const string FailedEvent = "cache.background_write.failed";
-    private const int Stripes = 1024;
+    private const string FillRefusedMetric = "cache.background_write.fill_refused";
+    private const string TagCache = "cache.name";
+    private const string TagReason = "reason";
+    // Keys share counters by stripe; locks are shared by more stripes than counters are, so a cache with many stripes keeps few locks.
+    private const int Stripes = 8192;
+    private const int StripeLocks = 1024;
     private const long Untracked = -1;
 
     private readonly Lock _gate = new();
+    private readonly TelemetryTags<string> _refusedChanged = [new(TagCache, cacheName), new(TagReason, "changed")];
+    private readonly TelemetryTags<string> _refusedInFlight = [new(TagCache, cacheName), new(TagReason, "in_flight")];
+    private readonly TelemetryTags<string> _refusedUntracked = [new(TagCache, cacheName), new(TagReason, "untracked")];
     private readonly Dictionary<string, Tail> _tails = new(StringComparer.Ordinal);
     private readonly CancellationTokenSource _lifetime = new();
     // Changes per stripe of keys, issued or applied locally or heard from a peer; a fill from a read started before one would put back the older value.
@@ -222,36 +230,35 @@ internal sealed class BackgroundWrites(int limit, TimeSpan drainTimeout, string 
         // Read before counting began: its order is not known.
         if (mark == Untracked)
         {
+            FillRefused(_refusedUntracked);
             return null;
         }
 
         var stripe = Stripe(key);
-        lock (_stripes[stripe])
+        TelemetryTags<string> refused;
+        lock (StripeLock(stripe))
         {
             if (Volatile.Read(ref _changes[stripe]) != mark)
             {
-                return null;
+                refused = _refusedChanged;
             }
-
-            if (Volatile.Read(ref _writing[stripe]) != 0)
+            else if (Volatile.Read(ref _writing[stripe]) != 0)
             {
-                return null;
+                refused = _refusedInFlight;
             }
-
-            if (_active)
+            else if (_active && InTails(key))
             {
-                lock (_gate)
-                {
-                    // The inner tier may change under a read while a write is in flight; its end moves the count.
-                    if (_tails.ContainsKey(key))
-                    {
-                        return null;
-                    }
-                }
+                // The inner tier may change under a read while a write is in flight; its end moves the count.
+                refused = _refusedInFlight;
             }
-
-            return set(state);
+            else
+            {
+                return set(state);
+            }
         }
+
+        FillRefused(refused);
+        return null;
     }
 
     /// <summary>Keeps the read's value locally as <see cref="Fill{TState}(string, long, TState, Func{TState, bool})"/> does, and calls <paramref name="notKept"/> when a change since <paramref name="mark"/> kept it out.</summary>
@@ -272,7 +279,7 @@ internal sealed class BackgroundWrites(int limit, TimeSpan drainTimeout, string 
         }
 
         var stripe = Stripe(key);
-        lock (_stripes[stripe])
+        lock (StripeLock(stripe))
         {
             Interlocked.Increment(ref _changes[stripe]);
             return change(state);
@@ -288,7 +295,7 @@ internal sealed class BackgroundWrites(int limit, TimeSpan drainTimeout, string 
         }
 
         var stripe = Stripe(key);
-        lock (_stripes[stripe])
+        lock (StripeLock(stripe))
         {
             Interlocked.Increment(ref _changes[stripe]);
         }
@@ -302,17 +309,20 @@ internal sealed class BackgroundWrites(int limit, TimeSpan drainTimeout, string 
             return;
         }
 
-        for (var stripe = 0; stripe < Stripes; stripe++)
+        for (var held = 0; held < StripeLocks; held++)
         {
-            lock (_stripes[stripe])
+            lock (_stripes[held])
             {
-                Interlocked.Increment(ref _changes[stripe]);
+                for (var stripe = held; stripe < Stripes; stripe += StripeLocks)
+                {
+                    Interlocked.Increment(ref _changes[stripe]);
+                }
             }
         }
     }
 
     public void Failed(string stage) =>
-        telemetry.TryTrackEvent(FailedEvent, [new("cache.name", cacheName), new("stage", stage)]);
+        telemetry.TryTrackEvent(FailedEvent, [new(TagCache, cacheName), new("stage", stage)]);
 
     internal static int Stripe(string key) => (int)((uint)StringComparer.Ordinal.GetHashCode(key) % Stripes);
 
@@ -508,12 +518,34 @@ internal sealed class BackgroundWrites(int limit, TimeSpan drainTimeout, string 
     private void Ended(string key)
     {
         var stripe = Stripe(key);
-        lock (_stripes[stripe])
+        lock (StripeLock(stripe))
         {
             Interlocked.Increment(ref _changes[stripe]);
         }
 
         Interlocked.Decrement(ref _writing[stripe]);
+    }
+
+    private Lock StripeLock(int stripe) => _stripes[stripe % StripeLocks];
+
+    private bool InTails(string key)
+    {
+        lock (_gate)
+        {
+            return _tails.ContainsKey(key);
+        }
+    }
+
+    private void FillRefused(TelemetryTags<string> tags)
+    {
+        try
+        {
+            telemetry.TrackMetric(FillRefusedMetric, 1, tags);
+        }
+        catch (Exception ex)
+        {
+            telemetry.TryTrackException(ex);
+        }
     }
 
     private void ActivateLocked()
@@ -529,7 +561,7 @@ internal sealed class BackgroundWrites(int limit, TimeSpan drainTimeout, string 
         {
             _changes = new long[Stripes];
             _writing = new int[Stripes];
-            _stripes = Enumerable.Range(0, Stripes).Select(static _ => new Lock()).ToArray();
+            _stripes = Enumerable.Range(0, StripeLocks).Select(static _ => new Lock()).ToArray();
             _counting = true;
         }
     }
