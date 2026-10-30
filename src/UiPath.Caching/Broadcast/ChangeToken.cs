@@ -2,7 +2,7 @@ using UiPath.Caching.Telemetry;
 
 namespace UiPath.Caching.Broadcast;
 
-public sealed partial class ChangeToken<T> : ICacheChangeToken, IKeyedObserver<ICacheEvent>, IMissedEventsObserver, IPeerUpdateSource, IInvalidationSource, IDisposable
+public sealed partial class ChangeToken<T> : ICacheChangeToken, IKeyedObserver<ICacheEvent>, IMissedEventsObserver, IPeerUpdateSource, IInvalidationSource, IPeerRefreshSource, IDisposable
 {
     private readonly string _key;
     private readonly KeyMasker _masker;
@@ -34,6 +34,13 @@ public sealed partial class ChangeToken<T> : ICacheChangeToken, IKeyedObserver<I
     private Action<object?, bool>? _invalidating;
 
     private object? _invalidatingState;
+
+    private Func<object?, bool>? _peerRefresh;
+
+    private object? _peerRefreshState;
+
+    // Set once the refresh hook took a peer's write: the entry stays, and a refresh event must not rebuild it.
+    private bool _refreshPending;
 
     public ChangeToken(
         string key,
@@ -113,7 +120,7 @@ public sealed partial class ChangeToken<T> : ICacheChangeToken, IKeyedObserver<I
         {
             TransportId = cacheEvent.TransportId;
             LogClearLocalCacheKey(Logged(), _topic, cacheEvent.Id, cacheEvent.Source);
-            Notify(data);
+            Notify(data, cacheEvent.Type);
             _telemetryProvider.TrackTopicReadMetric(_topic, TransportId);
         }
         else
@@ -160,6 +167,16 @@ public sealed partial class ChangeToken<T> : ICacheChangeToken, IKeyedObserver<I
         }
     }
 
+    void IPeerRefreshSource.RegisterPeerRefresh(Func<object?, bool> refresh, object? state)
+    {
+        lock (_notifyLock)
+        {
+            // The state first: Notify reads the hook without the lock, and must see its state with it.
+            _peerRefreshState = state;
+            Volatile.Write(ref _peerRefresh, refresh);
+        }
+    }
+
     public IDisposable RegisterChangeCallback(Action<object?> callback, object? state)
     {
         lock (_notifyLock)
@@ -190,15 +207,18 @@ public sealed partial class ChangeToken<T> : ICacheChangeToken, IKeyedObserver<I
     /// <summary>A key off the wire has no caller key to judge, so it is masked whole when masking is on.</summary>
     private LoggedKey LoggedForeign(string key) => LoggedKey.Composed(_masker, key, _entryType);
 
-    private void Notify(CacheEventData? data = default)
+    private void Notify(CacheEventData? data = default, string? type = null)
     {
         // Before the token changes: a changed token reads as expired, and a reader that refills the entry from the tier below must find the key guarded.
         var invalidating = Volatile.Read(ref _invalidating);
         invalidating?.Invoke(_invalidatingState, Volatile.Read(ref _eventsLost));
 
-        // Before the token changes, since a changed token reads as expired to the cache that holds its entry, and outside its lock: the
-        // update takes the key's merge lock, and a merge holding that lock can be waiting for this one to register on the token.
-        if (data?.Properties != null && !Volatile.Read(ref _expired) && _peerUpdateHandler is { } apply && ExtractPeerUpdate(data.Properties) is { } update && apply(update))
+        var peerWrite = string.Equals(type, KnownEventTypes.CacheSet, StringComparison.OrdinalIgnoreCase)
+            && (data?.Properties is null || CarriesWriteFields(data.Properties));
+        var peerRefresh = Volatile.Read(ref _peerRefresh);
+        var pending = Volatile.Read(ref _refreshPending);
+
+        if (TryHandPeerWrite(data, peerWrite, peerRefresh, pending))
         {
             return;
         }
@@ -213,7 +233,8 @@ public sealed partial class ChangeToken<T> : ICacheChangeToken, IKeyedObserver<I
 
             HasChanged = true;
             // A write that carried fields and was not applied is a removal to this copy, as every write was before fields were carried.
-            if (data?.Properties != null && !_expired && !CarriesWriteFields(data.Properties))
+            // A pending token drops a refresh event too: it would rebuild the pre-write value with a fresh expiry.
+            if (data?.Properties != null && !pending && !_expired && !CarriesWriteFields(data.Properties))
             {
                 ExtractExpiration(data.Properties);
                 ExtractMetadata(data.Properties);
@@ -228,6 +249,45 @@ public sealed partial class ChangeToken<T> : ICacheChangeToken, IKeyedObserver<I
             }
 
             _callbacks.ForEach(kv => kv.callback(kv.state));
+        }
+    }
+
+    /// <summary>Whether the update was applied or the refresh took the write, so the token stays unchanged; anything else, or a declined write, drops the entry.</summary>
+    private bool TryHandPeerWrite(CacheEventData? data, bool peerWrite, Func<object?, bool>? peerRefresh, bool pending)
+    {
+        if (pending)
+        {
+            // Marks the key dirty again.
+            return peerWrite && HandToRefresh(peerRefresh!);
+        }
+
+        // Before the token changes, since a changed token reads as expired to the cache that holds its entry, and outside its lock: the
+        // update takes the key's merge lock, and a merge holding that lock can be waiting for this one to register on the token.
+        if (data?.Properties != null && !Volatile.Read(ref _expired) && _peerUpdateHandler is { } apply && ExtractPeerUpdate(data.Properties) is { } update && apply(update))
+        {
+            return true;
+        }
+
+        if (peerWrite && !Volatile.Read(ref _expired) && peerRefresh is not null && HandToRefresh(peerRefresh))
+        {
+            Volatile.Write(ref _refreshPending, true);
+            return true;
+        }
+
+        return false;
+    }
+
+    /// <summary>A hook that throws declines: the entry is dropped, as a write that cannot be refreshed always was.</summary>
+    private bool HandToRefresh(Func<object?, bool> refresh)
+    {
+        try
+        {
+            return refresh(_peerRefreshState);
+        }
+        catch (Exception ex)
+        {
+            LogPeerRefreshFailed(ex, Logged(), _topic);
+            return false;
         }
     }
 
@@ -342,6 +402,9 @@ public sealed partial class ChangeToken<T> : ICacheChangeToken, IKeyedObserver<I
 
     [LoggerMessage(Level = LogLevel.Debug, Message = "Clear local cache {Key},{Topic}")]
     private partial void LogClearLocalCacheOnError(Exception error, LoggedKey key, TopicKey topic);
+
+    [LoggerMessage(Level = LogLevel.Warning, Message = "Clear local cache {Key}: topic {Topic} could not refresh it after a peer's write")]
+    private partial void LogPeerRefreshFailed(Exception error, LoggedKey key, TopicKey topic);
 
     [LoggerMessage(Level = LogLevel.Debug, Message = "Clear local cache {Key}: topic {Topic} lost invalidations")]
     private partial void LogClearLocalCacheOnLoss(LoggedKey key, TopicKey topic);

@@ -117,6 +117,22 @@ public class CachePolicyMergerTests
     }
 
     [Fact]
+    public void RefreshLocalOnPeerWrite_matched_wins_over_default()
+    {
+        var named = new CachePolicy { RefreshLocalOnPeerWrite = false };
+        var defaults = new CachePolicy { RefreshLocalOnPeerWrite = true };
+        CachePolicyMerger.Merge(named, defaults).RefreshLocalOnPeerWrite.Should().BeFalse();
+    }
+
+    [Fact]
+    public void RefreshLocalOnPeerWrite_inherits_from_default_when_named_null()
+    {
+        var named = new CachePolicy { LocalExpiration = TimeSpan.FromMinutes(1) };
+        var defaults = new CachePolicy { RefreshLocalOnPeerWrite = false };
+        CachePolicyMerger.Merge(named, defaults).RefreshLocalOnPeerWrite.Should().BeFalse();
+    }
+
+    [Fact]
     public void Merging_two_empty_returns_empty_fields()
     {
         var merged = CachePolicyMerger.Merge(new CachePolicy(), new CachePolicy());

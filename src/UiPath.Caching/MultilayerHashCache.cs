@@ -19,6 +19,9 @@ internal sealed partial class MultilayerHashCache : MultilayerCacheBase, IHashCa
     private readonly IVersionedHashCache? _versioned;
     private readonly PeerFieldLimits _peerLimits;
 
+    // Held copies a peer's write was handed to the refresh for, which lack that write: marked and read under the key's merge lock.
+    private readonly ConditionalWeakTable<object, object> _awaitingRefresh = [];
+
     public MultilayerHashCache(
         string cacheName,
         IHashCache innerCache,
@@ -53,14 +56,19 @@ internal sealed partial class MultilayerHashCache : MultilayerCacheBase, IHashCa
         {
             Invalidations = _innerTier.Invalidations,
             PeerApply = _versioned is null ? null : TryApplyPeerUpdate,
+            PeerRefresh = _peerRefresher is null ? null : HandToRefresh,
+            PeerRefreshChanged = _peerRefresher is { } changed ? changed.TokenChanged : null,
         };
     }
 
     /// <summary>The tier told of received invalidations: the inner cache when it tracks them; tests check the wiring.</summary>
     internal IInvalidationSink? Invalidations => _localMemorySetter.Invalidations;
 
+    /// <summary>Test seam: runs on the dispatcher thread as a peer's write is handed to the refresh, before the key is queued.</summary>
+    internal Action? PeerRefreshHandOver { get; set; }
+
     /// <summary>Runs and inner reads still in the tables; tests check they drain once callers are done.</summary>
-    internal int RunsInFlight => _innerReads.Count + _generations.Count + _background.InFlight;
+    internal int RunsInFlight => _innerReads.Count + _generations.Count + _background.InFlight + (_peerRefresher?.Pending ?? 0);
 
     private bool OnlyTier => !_sharedInner;
 
@@ -701,7 +709,8 @@ internal sealed partial class MultilayerHashCache : MultilayerCacheBase, IHashCa
         };
         var merged = CreateEntry(combined, options);
         HashVersions.Stamp<T>(merged, update.Version, version.LocalDeadline, ahead);
-        return _localMemorySetter.Set(options, merged, typeof(T), remaining);
+        InheritRead(held, merged);
+        return _localMemorySetter.Set(options, merged, typeof(T), remaining, state.Refresh);
     }
 
     private static bool IsNullOrEmpty<T>(IDictionary<string, T?>? value) =>
@@ -817,6 +826,7 @@ internal sealed partial class MultilayerHashCache : MultilayerCacheBase, IHashCa
     {
         if ((_connectionState.IsConnected || _useLocalOnlyWhenDisconnected) && _memoryCache.TryGetValue(options.CacheKey.Name, out entry) && entry!.Found)
         {
+            MarkRead(entry);
             return true;
         }
 
@@ -911,11 +921,13 @@ internal sealed partial class MultilayerHashCache : MultilayerCacheBase, IHashCa
             LogFoundLocal(Logged(options, typeof(T)));
             if (_connectionState.IsConnected)
             {
+                MarkRead(cacheEntry);
                 return Filter(cacheEntry!, options);
             }
             else if (_useLocalOnlyWhenDisconnected)
             {
                 LogUsingLocalCopyDisconnected(Logged(options, typeof(T)));
+                MarkRead(cacheEntry);
                 return Filter(cacheEntry!, options);
             }
             else
@@ -937,11 +949,13 @@ internal sealed partial class MultilayerHashCache : MultilayerCacheBase, IHashCa
         return Filter(fetched, options);
     }
 
-    private bool MemorySet<T>(InternalHashCacheEntryOptions options, IDictionary<string, T?> value, TimeSpan? maxExpiration, bool keepWhenAbsent = false)
+    /// <param name="policy">The policy the hash is kept under, which says whether a peer's write refreshes it; fields kept without the hash never are.</param>
+    /// <param name="read">Counts the entry as read now; a refresh keep passes false and inherits the read time of the copy it replaces.</param>
+    private bool MemorySet<T>(InternalHashCacheEntryOptions options, IDictionary<string, T?> value, TimeSpan? maxExpiration, bool keepWhenAbsent = false, CachePolicy? policy = null, bool read = true)
     {
         if (!options.Partial)
         {
-            return MemorySet(options, CreateEntry(value, options), maxExpiration);
+            return MemorySet(options, CreateEntry(value, options), maxExpiration, policy, read);
         }
 
         // Read, merged and written as one, so two merges of one hash do not each drop the other's fields.
@@ -949,32 +963,44 @@ internal sealed partial class MultilayerHashCache : MultilayerCacheBase, IHashCa
         {
             if (TryMergeLocal(ref options, value, out var merged))
             {
-                return MemorySet(options, CreateEntry(merged, options), maxExpiration);
+                return MemorySet(options, CreateEntry(merged, options), maxExpiration, policy, read);
             }
 
             // Nothing held here to merge into: the fields alone are not the hash, so the next read takes it whole from the inner tier, unless there is none.
             options.Version = 0;
-            return !(keepWhenAbsent || OnlyTier) || MemorySet(options, CreateEntry(value, options), maxExpiration);
+            if (keepWhenAbsent || OnlyTier)
+            {
+                return MemorySet(options, CreateEntry(value, options), maxExpiration, read: read);
+            }
         }
+
+        DropAwaitingRefresh(options.CacheKey.Name);
+        return true;
     }
 
     // Under the key's merge lock, so a merge never reads the hash a write is replacing and writes it back.
-    private bool MemorySet<T>(InternalHashCacheEntryOptions options, ICacheEntry<IDictionary<string, T?>> item, TimeSpan? maxExpiration)
+    private bool MemorySet<T>(InternalHashCacheEntryOptions options, ICacheEntry<IDictionary<string, T?>> item, TimeSpan? maxExpiration, CachePolicy? policy = null, bool read = true)
     {
         lock (MergeLock(options.CacheKey.Name))
         {
+            if (read)
+            {
+                MarkRead(item);
+            }
+
             if (_versioned is not null && (options.Version > 0 || options.Own is { Length: > 0 }))
             {
                 HashVersions.Stamp<T>(item, options.Version, maxExpiration is { } max ? _clock.ToDateTimeOffset(max) : null, options.Own);
             }
 
-            return _localMemorySetter.Set(options, item, typeof(T), maxExpiration);
+            return _localMemorySetter.Set(options, item, typeof(T), maxExpiration, RefreshTarget(RefreshReader<T>.Instance, policy));
         }
     }
 
     private bool TryApplyPeerUpdate(RefreshMetadataState state, PeerUpdate update)
     {
         var name = state.CacheKey.Name;
+        var handed = false;
         try
         {
             // The same lock a local merge takes, so the two take their turns over the held hash.
@@ -985,6 +1011,9 @@ internal sealed partial class MultilayerHashCache : MultilayerCacheBase, IHashCa
                 {
                     return true;
                 }
+
+                // Marked before the lock is let go, so a merge that takes it next does not lay its fields over the copy.
+                handed = state.Refresh is not null && MarkAwaitingRefresh(name, state.CacheEntity);
             }
         }
         catch (Exception ex)
@@ -992,9 +1021,60 @@ internal sealed partial class MultilayerHashCache : MultilayerCacheBase, IHashCa
             LogPeerUpdateFailed(ex, Logged(state.CallerKey, state.EntryType));
         }
 
+        // The token's refresh hook takes the write next, and drops the entry if it cannot. The key still counts as changed, as a removal
+        // would: a fill from a read begun before the write must not replace the held hash. Runs on the dispatcher, outside the token's notify lock.
+        if (handed)
+        {
+            ApplyLocal(name, 0, static _ => true);
+            return false;
+        }
+
         // What is held may lack the write, whether or not it is the entry the event was for.
         RemoveLocal(name);
         return false;
+    }
+
+    /// <summary>Takes a peer's write to a held hash for a background refresh; false drops the entry. Runs on the dispatcher thread.</summary>
+    private bool HandToRefresh(RefreshMetadataState held)
+    {
+        try
+        {
+            PeerRefreshHandOver?.Invoke();
+            // Let go before the queue is touched: a keep holds the refresher's locks, then the stripe's, then this one.
+            lock (MergeLock(held.CacheKey.Name))
+            {
+                MarkAwaitingRefresh(held.CacheKey.Name, held.CacheEntity);
+            }
+
+            return _peerRefresher!.TryEnqueue(held);
+        }
+        catch (Exception ex)
+        {
+            LogPeerUpdateFailed(ex, Logged(held.CallerKey, held.EntryType));
+            return false;
+        }
+    }
+
+    /// <summary>Under the key's merge lock; false when the entry is no longer held.</summary>
+    private bool MarkAwaitingRefresh(string name, object held)
+    {
+        if (!IsLocalEntry(name, held))
+        {
+            return false;
+        }
+
+        _awaitingRefresh.AddOrUpdate(held, held);
+        return true;
+    }
+
+    /// <summary>A copy a peer's write is refreshing lacks that write, so fields are not merged over it: it is dropped, as it was before refreshes, and the next read takes the hash whole.</summary>
+    /// <remarks>Outside the merge lock: removing an entry disposes its change token.</remarks>
+    private void DropAwaitingRefresh(string name)
+    {
+        if (_memoryCache.TryGetValue(name, out object? held) && held is not null && _awaitingRefresh.TryGetValue(held, out _))
+        {
+            EvictLocal(name, held);
+        }
     }
 
     /// <summary>The copy a later background write built was made before this write landed, so it lacks its fields and its count.</summary>
@@ -1015,7 +1095,8 @@ internal sealed partial class MultilayerHashCache : MultilayerCacheBase, IHashCa
     /// <summary>False when the local tier holds no hash to merge over, or holds one newer than the write.</summary>
     private bool TryMergeLocal<T>(ref InternalHashCacheEntryOptions options, IDictionary<string, T?> fields, [MaybeNullWhen(false)] out IDictionary<string, T?> merged)
     {
-        if (!_memoryCache.TryGetValue(options.CacheKey.Name, out ICacheEntry<IDictionary<string, T?>>? held) || held is null || !held.Found || held.Value is null)
+        if (!_memoryCache.TryGetValue(options.CacheKey.Name, out ICacheEntry<IDictionary<string, T?>>? held) || held is null || !held.Found || held.Value is null
+            || _awaitingRefresh.TryGetValue(held, out _))
         {
             merged = null;
             options.Version = 0;
@@ -1103,7 +1184,77 @@ internal sealed partial class MultilayerHashCache : MultilayerCacheBase, IHashCa
     [LoggerMessage(Level = LogLevel.Trace, Message = "Found inner copy at cacheKey {CacheKey}")]
     private partial void LogFoundInnerCopy(LoggedKey cacheKey);
 
-    [LoggerMessage(Level = LogLevel.Warning, Message = "A peer update to {CacheKey} could not be applied; the local copy is dropped.")]
+    [LoggerMessage(Level = LogLevel.Warning, Message = "A peer update to {CacheKey} could not be applied; the local copy is refreshed or dropped.")]
     private partial void LogPeerUpdateFailed(Exception ex, LoggedKey cacheKey);
+
+    /// <summary>Reads and keeps the refreshed hashes of one value type, whole.</summary>
+    private sealed class RefreshReader<T> : IPeerRefreshReader
+    {
+        public static readonly RefreshReader<T> Instance = new();
+
+        public async ValueTask<PeerRead[]> ReadAsync(MultilayerCacheBase cache, CacheKey[] keys, CachePolicy policy, CancellationToken token)
+        {
+            var inner = ((MultilayerHashCache)cache)._innerCache;
+            if (keys.Length == 1)
+            {
+                var entry = await inner.GetCacheEntryAsync<T>(keys[0], policy, token).ConfigureAwait(false);
+                return [new PeerRead(entry.Found, entry)];
+            }
+
+            // A hash cache has no many-key entry read: each key is read at once, all started in the caller's master scope.
+            var reads = new Task<ICacheEntry<IDictionary<string, T?>>>[keys.Length];
+            for (var i = 0; i < keys.Length; i++)
+            {
+                reads[i] = inner.GetCacheEntryAsync<T>(keys[i], policy, token).AsTask();
+            }
+
+            var entries = await Task.WhenAll(reads).ConfigureAwait(false);
+            return Array.ConvertAll(entries, static e => new PeerRead(e.Found, e));
+        }
+
+        public PeerKeep Keep(MultilayerCacheBase cache, RefreshMetadataState held, PeerRead read, long mark, out object? installed)
+        {
+            var owner = (MultilayerHashCache)cache;
+            var entry = (ICacheEntry<IDictionary<string, T?>>)read.Entry!;
+            var options = new InternalHashCacheEntryOptions
+            {
+                CacheKey = held.CacheKey,
+                CallerKey = held.CallerKey,
+                TopicKey = held.TopicKey,
+            };
+            new HashShape<T>(owner).Adopt(ref options, entry);
+            var name = held.CacheKey.Name;
+            var policy = held.Refresh!.Value.Policy;
+            ICacheEntry<IDictionary<string, T?>>? kept = null;
+            var failed = false;
+            // Only over the entry the event hit: a write, removal or loss since then replaced or dropped it.
+            var filled = owner._background.Fill(name, mark, owner, o =>
+            {
+                if (!o.IsLocalEntry(name, held.CacheEntity))
+                {
+                    return false;
+                }
+
+                var item = o.CreateEntry(entry.Value ?? Empty<T>(), options);
+                InheritRead(held.CacheEntity, item);
+                if (!o.MemorySet(options, item, o.LocalLifetime(policy), policy, read: false))
+                {
+                    failed = true;
+                    return false;
+                }
+
+                kept = item;
+                return true;
+            });
+            installed = kept;
+            return filled switch
+            {
+                true => PeerKeep.Kept,
+                false when failed => PeerKeep.Failed,
+                false => PeerKeep.Replaced,
+                null => owner.IsLocalEntry(name, held.CacheEntity) ? PeerKeep.Declined : PeerKeep.Replaced,
+            };
+        }
+    }
 
 }

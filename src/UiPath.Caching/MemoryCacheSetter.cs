@@ -31,12 +31,19 @@ internal abstract class MemoryCacheSetter(
     // Bound once: a method group allocates a delegate at every conversion.
     private Action<object?>? _refreshMetadata;
     private Action<object?, bool>? _invalidating;
+    private Func<object?, bool>? _peerRefresh;
 
     /// <summary>How many local writes have committed, counted as each one returns: a caller that read it before its own read of the tier, and missed a value, sees it move once that value's write has returned.</summary>
     internal long Writes => Volatile.Read(ref _writes);
 
     /// <summary>Told which keys a received event invalidated, so the tier below can read them from the master for a moment.</summary>
     internal IInvalidationSink? Invalidations { get; init; }
+
+    /// <summary>Takes a peer's write to a held key for a background refresh; false drops the entry.</summary>
+    internal Func<RefreshMetadataState, bool>? PeerRefresh { get; init; }
+
+    /// <summary>Told when the token of an entry a peer's write refreshes changes, for any reason.</summary>
+    internal Action<RefreshMetadataState>? PeerRefreshChanged { get; init; }
 
     protected TimeProvider Clock { get; } = clock;
 
@@ -45,7 +52,8 @@ internal abstract class MemoryCacheSetter(
     private ICacheEntrySizeProvider SizeProvider { get; } = memoryCacheOptions.SizeProvider ?? new DefaultCacheEntrySizeProvider();
 
     /// <summary>Generic over the options so the caches' option structs come in as they are, not boxed into the interface.</summary>
-    public bool Set<TOptions>(TOptions options, ICacheEntry item, Type entryType, TimeSpan? maxExpiration)
+    /// <param name="refresh">How to refresh the entry when a peer writes its key; null drops it then.</param>
+    public bool Set<TOptions>(TOptions options, ICacheEntry item, Type entryType, TimeSpan? maxExpiration, PeerRefreshTarget? refresh = null)
         where TOptions : ICacheEntryOptions
     {
         ICacheChangeToken? token = null;
@@ -59,17 +67,7 @@ internal abstract class MemoryCacheSetter(
             var wired = !ReferenceEquals(token, NullCacheChangeToken.Instance);
             if (wired)
             {
-                var state = new RefreshMetadataState(options.CacheKey, options.TopicKey, item, token, entryType, maxExpiration, options.CallerKey);
-                if (Invalidations != null && token is IInvalidationSource source)
-                {
-                    source.RegisterInvalidatingCallback(_invalidating ??= Invalidating, state);
-                }
-
-                token.RegisterChangeCallback(_refreshMetadata ??= RefreshMetadata, state);
-                if (AppliesPeerUpdates && token is IPeerUpdateSource peer)
-                {
-                    peer.PeerUpdateHandler = update => TryApplyPeerUpdate(state, update);
-                }
+                Wire(token, options, item, entryType, maxExpiration, refresh);
             }
 
             // Filled in place rather than through MemoryCacheEntryOptions, which is copied into the entry and discarded.
@@ -113,6 +111,11 @@ internal abstract class MemoryCacheSetter(
     {
         if (state is RefreshMetadataState metadataState)
         {
+            if (metadataState.Refresh is not null)
+            {
+                PeerRefreshChanged?.Invoke(metadataState);
+            }
+
             RefreshMetadata(metadataState);
         }
     }
@@ -139,6 +142,29 @@ internal abstract class MemoryCacheSetter(
     }
 
     /// <summary>The key changed on the master whatever the event carried; a replica may still hold the old value, which the local tier would cache again.</summary>
+    private void Wire<TOptions>(ICacheChangeToken token, TOptions options, ICacheEntry item, Type entryType, TimeSpan? maxExpiration, PeerRefreshTarget? refresh)
+        where TOptions : ICacheEntryOptions
+    {
+        // Boxed once for every callback that takes it.
+        object state = new RefreshMetadataState(options.CacheKey, options.TopicKey, item, token, entryType, maxExpiration, options.CallerKey, refresh);
+        if (Invalidations != null && token is IInvalidationSource source)
+        {
+            source.RegisterInvalidatingCallback(_invalidating ??= Invalidating, state);
+        }
+
+        if (refresh is not null && PeerRefresh is not null && token is IPeerRefreshSource peerRefresh)
+        {
+            peerRefresh.RegisterPeerRefresh(_peerRefresh ??= RefreshOnPeerWrite, state);
+        }
+
+        token.RegisterChangeCallback(_refreshMetadata ??= RefreshMetadata, state);
+        if (AppliesPeerUpdates && token is IPeerUpdateSource peer)
+        {
+            var held = (RefreshMetadataState)state;
+            peer.PeerUpdateHandler = update => TryApplyPeerUpdate(held, update);
+        }
+    }
+
     private void Invalidating(object? state, bool eventsLost)
     {
         if (eventsLost)
@@ -150,6 +176,9 @@ internal abstract class MemoryCacheSetter(
             Invalidations?.Invalidated(metadataState.CacheKey);
         }
     }
+
+    private bool RefreshOnPeerWrite(object? state) =>
+        state is RefreshMetadataState { Refresh: not null } held && PeerRefresh?.Invoke(held) == true;
 
     private ITopic<ICacheEvent> TopicForCustomFactory(ITopic<ICacheEvent> topic) =>
         ignoreSubscriptionGaps ? _gapFiltered.GetValue(topic, static t => new GapFilteringTopic(t)) : topic;
@@ -176,8 +205,14 @@ internal abstract class MemoryCacheSetter(
             cts.CancelAfter(cacheOptions.Timeout);
             var options = CreateEntry(metadataState, cts.Token);
             var newEntry = metadataState.CacheEntity.NewEntry(options.Expiration, options.Metadata);
+            // Same value, new expiry or metadata: the last read of the entry it replaces still counts.
+            if (metadataState.CacheEntity is IReadTracked { LastRead: not IReadTracked.NeverRead and var lastRead } && newEntry is IReadTracked renewed)
+            {
+                renewed.MarkRead(lastRead);
+            }
+
             Renewed(metadataState.CacheEntity, newEntry);
-            set = Set(options, newEntry, metadataState.EntryType, metadataState.MaxExpiration);
+            set = Set(options, newEntry, metadataState.EntryType, metadataState.MaxExpiration, metadataState.Refresh);
 
         }
         catch (Exception ex)

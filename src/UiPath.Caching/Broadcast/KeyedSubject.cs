@@ -13,6 +13,8 @@ internal sealed partial class KeyedSubject<T> : IEventSubject<T> where T : IEven
     private readonly ILogger _logger;
     private readonly TimeSpan _slowObserverThreshold;
     private volatile bool _completed;
+    // Replaced whole under the keyed lock, so a dispatch reads it without allocating.
+    private volatile IObserver<T>[] _firstObservers = [];
 
     public KeyedSubject(ILogger logger, TimeSpan? slowObserverThreshold = null)
     {
@@ -43,7 +45,21 @@ internal sealed partial class KeyedSubject<T> : IEventSubject<T> where T : IEven
             return CompletedMeanwhile(keyed.Key, observer) ? Disposable.Empty : new Subscription(this, keyed.Key, observer);
         }
 
-        _broadcastObservers.TryAdd(observer, 0);
+        if (observer is IFirstObserver<T>)
+        {
+            lock (_keyedLock)
+            {
+                if (Array.IndexOf(_firstObservers, observer) < 0)
+                {
+                    _firstObservers = [.. _firstObservers, observer];
+                }
+            }
+        }
+        else
+        {
+            _broadcastObservers.TryAdd(observer, 0);
+        }
+
         return CompletedMeanwhile(null, observer) ? Disposable.Empty : new Subscription(this, null, observer);
     }
 
@@ -60,6 +76,12 @@ internal sealed partial class KeyedSubject<T> : IEventSubject<T> where T : IEven
             return;
         }
 
+        foreach (var first in _firstObservers)
+        {
+            SafeOnNext(first, value);
+        }
+
+        // Looked up after the first observers: a token that subscribes before they return is told.
         var key = value.Key;
         if (key != null && _keyedObservers.TryGetValue(key, out var observers))
         {
@@ -95,6 +117,11 @@ internal sealed partial class KeyedSubject<T> : IEventSubject<T> where T : IEven
             }
         }
 
+        foreach (var first in _firstObservers)
+        {
+            CompleteIfRemoved(null, first);
+        }
+
         foreach (var kvp in _broadcastObservers)
         {
             CompleteIfRemoved(null, kvp.Key);
@@ -109,6 +136,11 @@ internal sealed partial class KeyedSubject<T> : IEventSubject<T> where T : IEven
         if (_completed)
         {
             return;
+        }
+
+        foreach (var first in _firstObservers)
+        {
+            SafeInvalidate(first, reason);
         }
 
         foreach (var observers in _keyedObservers.Values)
@@ -196,7 +228,7 @@ internal sealed partial class KeyedSubject<T> : IEventSubject<T> where T : IEven
     {
         if (key is null)
         {
-            return _broadcastObservers.TryRemove(observer, out _);
+            return observer is IFirstObserver<T> ? TryRemoveFirst(observer) : _broadcastObservers.TryRemove(observer, out _);
         }
 
         lock (_keyedLock)
@@ -224,6 +256,22 @@ internal sealed partial class KeyedSubject<T> : IEventSubject<T> where T : IEven
                 _keyedObservers[key] = rest;
             }
 
+            return true;
+        }
+    }
+
+    private bool TryRemoveFirst(IObserver<T> observer)
+    {
+        lock (_keyedLock)
+        {
+            var current = _firstObservers;
+            var index = Array.IndexOf(current, observer);
+            if (index < 0)
+            {
+                return false;
+            }
+
+            _firstObservers = [.. current[..index], .. current[(index + 1)..]];
             return true;
         }
     }

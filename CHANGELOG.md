@@ -8,6 +8,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 
 ### Added
 
+- **`RefreshLocalOnPeerWrite`** (per policy, on by default). When a peer writes a key held in the local tier and read within its policy's local expiration, the node
+  keeps serving its copy and refreshes it from the distributed tier in the background instead of dropping it. An entry no local read has hit
+  in that time (or since it was stored) is dropped as before, with no master read; a refreshed copy keeps the last read time of the one it replaces. Removals, topic-wide invalidations, subscription gaps
+  and a disconnected distributed tier still drop at once. Set it to `false` for data that must be read after a peer's write, such as revocations.
+  Outcomes are reported as the metrics `cache.peer_refresh.started`, `.kept`, `.discarded`, `.dropped` (tag `reason`, including `idle`) and
+  `.read_ms`, per drained batch; a drop with reason `timed_out` or `failed` also raises an event. `InMemoryRedisCacheOptions.Timeout` now rejects
+  zero and negative values other than `Timeout.InfiniteTimeSpan` at registration, which leaves the refresh's queue wait and read unbounded.
+- **`cache.background_write.fill_refused`** metric (tag `reason`: `changed`, `in_flight` or `untracked`), counted each time a local fill from a distributed read is
+  refused because the key's stripe changed since the read began, a write of the key or stripe was in flight, or the read began before counting started.
+
 - **`RedisStreamsTopicOptions.AutoAck`** (off by default). Reads with `NOACK` and sends no `XACK`, so the group keeps no pending list and
   the pending-entry recovery is skipped after the entries an earlier run left pending are read once at start. A read that fails may
   have been delivered, so it is reported as missed events and the local tier is cleared rather than left stale, when a failure streak
@@ -110,6 +120,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
   See `docs/how-to/choosing-a-get-or-add-overload.md`.
 
 ### Changed
+
+- **A peer's write refreshes the local copy by default (was a drop).** This changes the read-after-peer-write contract: after another node
+  writes a key it has read, this node serves its old copy until the background refresh lands (typically one round trip, at most about
+  4 x `Timeout` with the one re-read) instead of reading the new value on its next call. Set `RefreshLocalOnPeerWrite: false` on a policy to keep the drop for that data.
+
+- **`InMemoryRedisCacheOptions.Timeout` of zero or negative now fails at registration.** `Timeout.InfiniteTimeSpan` is still accepted and leaves the
+  peer refresh's queue wait and read unbounded.
 
 - **Reads go to the master by default (was `PreferReplica`).** This is a default behavior change: unless you opt in, every Redis read
   (values, hashes, sets, TTLs, read scripts) is sent to the master. On an Azure Redis 6 cluster a replica round trip measured about 3 times the
@@ -307,6 +324,17 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
   3.1.
 
 ### Fixed
+
+- **A local miss whose distributed read began before a peer's write of the key no longer keeps the older value.** A node that did not hold
+  the key had no change token to hear the peer's event, so the value its read found before the write was kept locally until it expired. Each
+  cache with a shared distributed tier and broadcast now hears every peer `CacheSet`, `CacheRemoved` and metadata change on its topics, before
+  the keys' own tokens, and refuses such a fill; a topic-wide invalidation, a loss, a subscription gap or a topic that ends refuses every fill
+  begun before it. From its first distributed read the cache counts changes, and writes in flight, per stripe of keys, which costs an awaited
+  write a stripe lock or two; the write order is still kept only from the first background write. A fill is refused for two causes: a change
+  since the read began, such as a peer's event, which also refuses the fill of a key sharing the stripe (1 in 8192 keys, up from 1 in 1024 as
+  the stripes grew to 8192, about 147 KB per cache with a shared tier and broadcast, from about 61 KB), and a write of the key or its stripe still in
+  flight. A subscription gap refuses every fill in flight, even for a cache that keeps its entries over gaps. Each refusal costs that key one
+  more read and is counted in `cache.background_write.fill_refused`.
 
 - **A group this node made on an empty stream no longer reports its first entry as lost on Redis 6.** Without `max-deleted-entry-id`,
   an entry added after a group made at `0-0` looked trimmed, so the node logged "entries were removed before they were read" and cleared its

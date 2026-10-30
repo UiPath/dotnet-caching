@@ -80,6 +80,7 @@ internal sealed partial class MultilayerHashCache
             return LocalProbe.Unavailable;
         }
 
+        MarkRead(found);
         entry = found;
         return LocalProbe.Hit;
     }
@@ -126,6 +127,7 @@ internal sealed partial class MultilayerHashCache
             return LocalProbe.Miss;
         }
 
+        MarkRead(found);
         entry = found;
         return LocalProbe.Hit;
     }

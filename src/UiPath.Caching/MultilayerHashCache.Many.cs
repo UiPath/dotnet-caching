@@ -264,7 +264,7 @@ internal sealed partial class MultilayerHashCache
                 continue;
             }
 
-            kept[i] = KeepAfterInnerWrite(true, false, policy, (Cache: this, entries[i].Options, entries[i].Values, Keeper: keeper), static (s, max) => s.Keeper.Local(s.Options.CacheKey.Name, (s, max), static x => x.s.Cache.MemorySet(x.s.Options, x.s.Values, x.max), static x => x.s.Cache.DropSuperseded(x.s.Options.CacheKey.Name)), token);
+            kept[i] = KeepAfterInnerWrite(true, false, policy, (Cache: this, entries[i].Options, entries[i].Values, Keeper: keeper, Policy: policy), static (s, max) => s.Keeper.Local(s.Options.CacheKey.Name, (s, max), static x => x.s.Cache.MemorySet(x.s.Options, x.s.Values, x.max, policy: x.s.Policy), static x => x.s.Cache.DropSuperseded(x.s.Options.CacheKey.Name)), token);
             if (announce)
             {
                 announceIndex[announceCount] = i;

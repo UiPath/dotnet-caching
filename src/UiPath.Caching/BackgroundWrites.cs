@@ -8,16 +8,28 @@ namespace UiPath.Caching;
 internal sealed class BackgroundWrites(int limit, TimeSpan drainTimeout, string cacheName, ILogger logger, ICachingTelemetryProvider telemetry, TimeProvider clock, Action<string>? onIssued = null)
 {
     private const string FailedEvent = "cache.background_write.failed";
-    private const int Stripes = 1024;
+    private const string FillRefusedMetric = "cache.background_write.fill_refused";
+    private const string TagCache = "cache.name";
+    private const string TagReason = "reason";
+    // Keys share counters by stripe; locks are shared by more stripes than counters are, so a cache with many stripes keeps few locks.
+    private const int Stripes = 8192;
+    private const int StripeLocks = 1024;
     private const long Untracked = -1;
 
     private readonly Lock _gate = new();
+    private readonly TelemetryTags<string> _refusedChanged = [new(TagCache, cacheName), new(TagReason, "changed")];
+    private readonly TelemetryTags<string> _refusedInFlight = [new(TagCache, cacheName), new(TagReason, "in_flight")];
+    private readonly TelemetryTags<string> _refusedUntracked = [new(TagCache, cacheName), new(TagReason, "untracked")];
     private readonly Dictionary<string, Tail> _tails = new(StringComparer.Ordinal);
     private readonly CancellationTokenSource _lifetime = new();
-    // Changes per stripe of keys, issued or applied locally; a fill from a read started before one would put back the older value.
-    // Allocated, and the order tracked, from the first background write on; a cache that never takes one pays nothing.
+    // Changes per stripe of keys, issued or applied locally or heard from a peer; a fill from a read started before one would put back the older value.
+    // Allocated when counting starts, at the first background write or a peer's write being watched for; a cache that needs neither pays nothing.
     private long[] _changes = [];
+    // Unordered writes in flight per stripe: the inner tier may change under a read until each ends.
+    private int[] _writing = [];
     private Lock[] _stripes = [];
+    private volatile bool _counting;
+    // The write order, from the first background write on.
     private volatile bool _active;
     private int _inFlight;
     private bool _closed;
@@ -25,9 +37,14 @@ internal sealed class BackgroundWrites(int limit, TimeSpan drainTimeout, string 
     private TaskCompletionSource? _idle;
     private Task? _drain;
 
+    /// <summary>Whether writes are ordered per key: from the first background write, or <see cref="Activate"/>.</summary>
     public bool Active => _active;
 
+    /// <summary>Whether changes are counted per stripe, so a fill from a read begun before one is refused.</summary>
+    public bool Counting => _counting;
+
     internal int InFlight => Volatile.Read(ref _inFlight);
+
 
     /// <summary>Tracks the awaited writes from now on, for a cache that must know the order its writes landed in even when it takes no background write.</summary>
     public void Activate()
@@ -35,6 +52,20 @@ internal sealed class BackgroundWrites(int limit, TimeSpan drainTimeout, string 
         lock (_gate)
         {
             ActivateLocked();
+        }
+    }
+
+    /// <summary>Counts changes per stripe from now on, without ordering the writes.</summary>
+    public void Track()
+    {
+        if (_counting)
+        {
+            return;
+        }
+
+        lock (_gate)
+        {
+            CountLocked();
         }
     }
 
@@ -123,7 +154,7 @@ internal sealed class BackgroundWrites(int limit, TimeSpan drainTimeout, string 
     {
         if (!_active)
         {
-            return default;
+            return EnterUnordered(key, null);
         }
 
         var mine = new Awaited();
@@ -140,7 +171,7 @@ internal sealed class BackgroundWrites(int limit, TimeSpan drainTimeout, string 
     {
         if (!_active)
         {
-            return default;
+            return _counting ? EnterUnordered(null, keys as string[] ?? keys.ToArray()) : default;
         }
 
         var all = keys as string[] ?? keys.ToArray();
@@ -186,41 +217,48 @@ internal sealed class BackgroundWrites(int limit, TimeSpan drainTimeout, string 
     public void Drain() => DrainAsync().GetAwaiter().GetResult();
 
     /// <summary>Taken before an inner read whose value <see cref="Fill"/> may keep locally.</summary>
-    public long Mark(string key) => _active ? Volatile.Read(ref _changes[Stripe(key)]) : Untracked;
+    public long Mark(string key) => _counting ? Volatile.Read(ref _changes[Stripe(key)]) : Untracked;
 
     /// <summary>Null, and nothing kept, when the key or one sharing its stripe changed since <paramref name="mark"/>, or a write of the key is in flight; otherwise what <paramref name="set"/> returned.</summary>
     public bool? Fill<TState>(string key, long mark, TState state, Func<TState, bool> set)
     {
-        if (!_active)
+        if (!_counting)
         {
             return set(state);
         }
 
-        // Read before the first background write: its order is not known.
+        // Read before counting began: its order is not known.
         if (mark == Untracked)
         {
+            FillRefused(_refusedUntracked);
             return null;
         }
 
         var stripe = Stripe(key);
-        lock (_stripes[stripe])
+        TelemetryTags<string> refused;
+        lock (StripeLock(stripe))
         {
             if (Volatile.Read(ref _changes[stripe]) != mark)
             {
-                return null;
+                refused = _refusedChanged;
             }
-
-            lock (_gate)
+            else if (Volatile.Read(ref _writing[stripe]) != 0)
+            {
+                refused = _refusedInFlight;
+            }
+            else if (_active && InTails(key))
             {
                 // The inner tier may change under a read while a write is in flight; its end moves the count.
-                if (_tails.ContainsKey(key))
-                {
-                    return null;
-                }
+                refused = _refusedInFlight;
             }
-
-            return set(state);
+            else
+            {
+                return set(state);
+            }
         }
+
+        FillRefused(refused);
+        return null;
     }
 
     /// <summary>Keeps the read's value locally as <see cref="Fill{TState}(string, long, TState, Func{TState, bool})"/> does, and calls <paramref name="notKept"/> when a change since <paramref name="mark"/> kept it out.</summary>
@@ -235,21 +273,56 @@ internal sealed class BackgroundWrites(int limit, TimeSpan drainTimeout, string 
     /// <summary>A local change of the key that a fill from an earlier read must not undo.</summary>
     public bool Apply<TState>(string key, TState state, Func<TState, bool> change)
     {
-        if (!_active)
+        if (!_counting)
         {
             return change(state);
         }
 
         var stripe = Stripe(key);
-        lock (_stripes[stripe])
+        lock (StripeLock(stripe))
         {
             Interlocked.Increment(ref _changes[stripe]);
             return change(state);
         }
     }
 
+    /// <summary>A peer's change of the key: a fill from a read begun before it is refused.</summary>
+    public void Touch(string key)
+    {
+        if (!_counting)
+        {
+            return;
+        }
+
+        var stripe = Stripe(key);
+        lock (StripeLock(stripe))
+        {
+            Interlocked.Increment(ref _changes[stripe]);
+        }
+    }
+
+    /// <summary>Changes a peer made that were not heard: every fill from a read begun before is refused.</summary>
+    public void TouchAll()
+    {
+        if (!_counting)
+        {
+            return;
+        }
+
+        for (var held = 0; held < StripeLocks; held++)
+        {
+            lock (_stripes[held])
+            {
+                for (var stripe = held; stripe < Stripes; stripe += StripeLocks)
+                {
+                    Interlocked.Increment(ref _changes[stripe]);
+                }
+            }
+        }
+    }
+
     public void Failed(string stage) =>
-        telemetry.TryTrackEvent(FailedEvent, [new("cache.name", cacheName), new("stage", stage)]);
+        telemetry.TryTrackEvent(FailedEvent, [new(TagCache, cacheName), new("stage", stage)]);
 
     internal static int Stripe(string key) => (int)((uint)StringComparer.Ordinal.GetHashCode(key) % Stripes);
 
@@ -404,14 +477,92 @@ internal sealed class BackgroundWrites(int limit, TimeSpan drainTimeout, string 
         }
     }
 
+    /// <summary>A write outside the order, while only changes are counted: its stripes read as written until it ends, and its keep and its end move their counts.</summary>
+    private Turn EnterUnordered(string? key, string[]? keys)
+    {
+        if (!_counting)
+        {
+            return default;
+        }
+
+        if (key is not null)
+        {
+            Interlocked.Increment(ref _writing[Stripe(key)]);
+        }
+        else
+        {
+            foreach (var each in keys!)
+            {
+                Interlocked.Increment(ref _writing[Stripe(each)]);
+            }
+        }
+
+        return new Turn(this, key, keys, null, Task.CompletedTask);
+    }
+
+    private void LeaveUnordered(string? key, string[]? keys)
+    {
+        if (key is not null)
+        {
+            Ended(key);
+            return;
+        }
+
+        foreach (var each in keys!)
+        {
+            Ended(each);
+        }
+    }
+
+    // Moved before the stripe reads as free: a fill that finds it free finds the count moved.
+    private void Ended(string key)
+    {
+        var stripe = Stripe(key);
+        lock (StripeLock(stripe))
+        {
+            Interlocked.Increment(ref _changes[stripe]);
+        }
+
+        Interlocked.Decrement(ref _writing[stripe]);
+    }
+
+    private Lock StripeLock(int stripe) => _stripes[stripe % StripeLocks];
+
+    private bool InTails(string key)
+    {
+        lock (_gate)
+        {
+            return _tails.ContainsKey(key);
+        }
+    }
+
+    private void FillRefused(TelemetryTags<string> tags)
+    {
+        try
+        {
+            telemetry.TrackMetric(FillRefusedMetric, 1, tags);
+        }
+        catch (Exception ex)
+        {
+            telemetry.TryTrackException(ex);
+        }
+    }
+
     private void ActivateLocked()
     {
-        if (!_active)
+        // Awaited writes already in flight are not in the order: they can land around the first background write.
+        CountLocked();
+        _active = true;
+    }
+
+    private void CountLocked()
+    {
+        if (!_counting)
         {
-            // Awaited writes and fills already in flight are not in the order: they can land around the first background write.
             _changes = new long[Stripes];
-            _stripes = Enumerable.Range(0, Stripes).Select(static _ => new Lock()).ToArray();
-            _active = true;
+            _writing = new int[Stripes];
+            _stripes = Enumerable.Range(0, StripeLocks).Select(static _ => new Lock()).ToArray();
+            _counting = true;
         }
     }
 
@@ -477,7 +628,7 @@ internal sealed class BackgroundWrites(int limit, TimeSpan drainTimeout, string 
         finally
         {
             // Before the tail goes, so a fill sees either the write in flight or its end.
-            Changed(key);
+            Touch(key);
             lock (_gate)
             {
                 if (_tails.TryGetValue(key, out var tail) && ReferenceEquals(tail.Background, mine))
@@ -555,13 +706,13 @@ internal sealed class BackgroundWrites(int limit, TimeSpan drainTimeout, string 
     {
         if (key is not null)
         {
-            Changed(key);
+            Touch(key);
         }
         else
         {
             foreach (var each in keys!)
             {
-                Changed(each);
+                Touch(each);
             }
         }
 
@@ -581,20 +732,6 @@ internal sealed class BackgroundWrites(int limit, TimeSpan drainTimeout, string 
         }
 
         mine.TrySetResult();
-    }
-
-    private void Changed(string key)
-    {
-        if (!_active)
-        {
-            return;
-        }
-
-        var stripe = Stripe(key);
-        lock (_stripes[stripe])
-        {
-            Interlocked.Increment(ref _changes[stripe]);
-        }
     }
 
     private void LeaveLocked(string key, Awaited mine)
@@ -641,17 +778,40 @@ internal sealed class BackgroundWrites(int limit, TimeSpan drainTimeout, string 
 
         public Keeper Keeper => new(owner, mine);
 
-        public void Dispose() => owner?.Leave(key, keys, mine!);
+        public void Dispose()
+        {
+            if (mine is not null)
+            {
+                owner?.Leave(key, keys, mine);
+            }
+            else
+            {
+                owner?.LeaveUnordered(key, keys);
+            }
+        }
     }
 
     /// <summary>What a write's callbacks keep locally and report through; valid only inside them.</summary>
     internal readonly struct Keeper(BackgroundWrites? owner, Awaited? mine)
     {
         /// <summary>Skipped, and counted as kept, when a background write of the key was issued after this one; <paramref name="whenSuperseded"/> then runs instead, under the same exclusion as a keep.</summary>
-        public bool Local<TState>(string of, TState state, Func<TState, bool> set, Func<TState, bool>? whenSuperseded = null, long version = 0) =>
-            owner is null ? set(state) : owner.KeepLocal(mine!, of, state, set, whenSuperseded, version);
+        public bool Local<TState>(string of, TState state, Func<TState, bool> set, Func<TState, bool>? whenSuperseded = null, long version = 0)
+        {
+            if (owner is null)
+            {
+                return set(state);
+            }
 
-        public void Returned(string of, long version) => owner?.RecordReturned(of, version);
+            return mine is null ? owner.Apply(of, state, set) : owner.KeepLocal(mine, of, state, set, whenSuperseded, version);
+        }
+
+        public void Returned(string of, long version)
+        {
+            if (mine is not null)
+            {
+                owner?.RecordReturned(of, version);
+            }
+        }
     }
 
     internal sealed class Awaited() : TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously)

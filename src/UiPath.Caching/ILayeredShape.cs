@@ -29,8 +29,8 @@ internal interface ILayeredShape<TValue, TOptions, TWrite>
 
     void LogFoundInner(TOptions options);
 
-    /// <summary>Writes the value to the local tier, no longer than <paramref name="maxExpiration"/>.</summary>
-    bool KeepLocal(TOptions options, TValue value, TimeSpan? maxExpiration);
+    /// <summary>Writes the value to the local tier, no longer than <paramref name="maxExpiration"/>; <paramref name="policy"/> says whether a peer's write refreshes it.</summary>
+    bool KeepLocal(TOptions options, TValue value, TimeSpan? maxExpiration, CachePolicy policy);
 
     /// <summary>Writes the value to the inner tier; a write that throws counts as refused, not as failed, only when <paramref name="keepRefused"/>.</summary>
     ValueTask<TWrite> WriteInnerAsync(TOptions options, TValue value, CachePolicy policy, bool keepRefused, BackgroundWrites.Keeper keeper);
@@ -48,7 +48,7 @@ internal interface ILayeredShape<TValue, TOptions, TWrite>
     bool KeepWhileDisconnected(TOptions options, TValue value, TimeSpan? maxExpiration, ICacheEntry<TValue>? entry);
 
     /// <summary>Keeps the value locally after an inner write, as the write's turn allows.</summary>
-    bool KeepWritten(BackgroundWrites.Keeper keeper, TOptions options, TValue value, TimeSpan? maxExpiration, ICacheEntry<TValue>? entry, long version);
+    bool KeepWritten(BackgroundWrites.Keeper keeper, TOptions options, TValue value, TimeSpan? maxExpiration, ICacheEntry<TValue>? entry, long version, CachePolicy policy);
 
     /// <summary>Starts the event that announces the write; may throw.</summary>
     ValueTask<bool> AnnounceSetAsync(TOptions options, VersionedWrite counted);

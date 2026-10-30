@@ -20,6 +20,11 @@ public static class InMemoryRedisCollectionExtensions
             return builder;
         }
         var validation = new MultilayerCacheLockOptionsValidator<InMemoryRedisCacheOptions>().Validate(name: null, options);
+        if (!validation.Failed)
+        {
+            validation = new InMemoryRedisTimeoutValidator().Validate(name: null, options);
+        }
+
         if (validation.Failed)
         {
             throw new OptionsValidationException(
@@ -35,6 +40,8 @@ public static class InMemoryRedisCollectionExtensions
             .TryAddEnumerable(ServiceDescriptor.Singleton<IValidateOptions<InMemoryRedisCacheOptions>, MultilayerCacheLockOptionsValidator<InMemoryRedisCacheOptions>>());
         builder.Services
             .TryAddEnumerable(ServiceDescriptor.Singleton<IValidateOptions<InMemoryRedisCacheOptions>, MultilayerCacheLockCrossOptionsValidator<InMemoryRedisCacheOptions>>());
+        builder.Services
+            .TryAddEnumerable(ServiceDescriptor.Singleton<IValidateOptions<InMemoryRedisCacheOptions>, InMemoryRedisTimeoutValidator>());
         builder.Services
             .TryAddEnumerable(ServiceDescriptor.Singleton<ICacheProvider, InMemoryRedisCacheProvider>());
         builder.AddBroadcast();

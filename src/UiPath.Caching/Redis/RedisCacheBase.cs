@@ -6,8 +6,11 @@ using UiPath.Caching.Telemetry;
 
 namespace UiPath.Caching.Redis;
 
-public abstract class RedisCacheBase : IConnectionState, IDisposable
+public abstract class RedisCacheBase : IConnectionState, IMasterReadScope, IDisposable
 {
+    private static readonly AsyncLocal<bool> MasterDemanded = new();
+    private static int _demands;
+
     private readonly IRedisConnector _redis;
     private readonly IConnectionState _connectionState;
     private readonly KeyMasker _masker;
@@ -109,6 +112,14 @@ public abstract class RedisCacheBase : IConnectionState, IDisposable
         GC.SuppressFinalize(this);
     }
 
+    IDisposable IMasterReadScope.DemandMaster()
+    {
+        var scope = new MasterScope();
+        MasterDemanded.Value = true;
+        Interlocked.Increment(ref _demands);
+        return scope;
+    }
+
     internal void NoteWritten(RedisKey[] keys) => _recentTouches?.Touch(keys);
 
     /// <summary>Records that another node invalidated <paramref name="key"/>; the key is composed only when replicas are on.</summary>
@@ -117,12 +128,26 @@ public abstract class RedisCacheBase : IConnectionState, IDisposable
     internal void NoteAllInvalidated() => _recentTouches?.TouchAll();
 
     /// <summary>The flag a read of <paramref name="keys"/> carries: the master when any one of them is guarded.</summary>
-    internal CommandFlags ReadFlagsFor(RedisKey[] keys) =>
-        _recentTouches is { } touches && !touches.IsGuarded(keys) ? CommandFlags.PreferReplica : CommandFlags.PreferMaster;
+    internal CommandFlags ReadFlagsFor(RedisKey[] keys)
+    {
+        if (MasterIsDemanded())
+        {
+            return CommandFlags.DemandMaster;
+        }
+
+        return _recentTouches is { } touches && !touches.IsGuarded(keys) ? CommandFlags.PreferReplica : CommandFlags.PreferMaster;
+    }
 
     /// <summary>The flag a read of <paramref name="key"/> carries: the master unless replicas are on and this node has not just written or seen the key invalidated.</summary>
-    protected internal CommandFlags ReadFlagsFor(RedisKey key) =>
-        _recentTouches is { } touches && !touches.IsGuarded(key) ? CommandFlags.PreferReplica : CommandFlags.PreferMaster;
+    protected internal CommandFlags ReadFlagsFor(RedisKey key)
+    {
+        if (MasterIsDemanded())
+        {
+            return CommandFlags.DemandMaster;
+        }
+
+        return _recentTouches is { } touches && !touches.IsGuarded(key) ? CommandFlags.PreferReplica : CommandFlags.PreferMaster;
+    }
 
     /// <summary>Records that this node wrote or removed <paramref name="key"/>, so reads of it stay on the master for a moment.</summary>
     protected internal void NoteWritten(RedisKey key) => _recentTouches?.Touch(key);
@@ -395,6 +420,9 @@ public abstract class RedisCacheBase : IConnectionState, IDisposable
         return keyStrategy.GetRedisKey(cacheKey);
     }
 
+    // The counter keeps the AsyncLocal off the hot path while no scope is open anywhere.
+    private static bool MasterIsDemanded() => Volatile.Read(ref _demands) != 0 && MasterDemanded.Value;
+
     private async ValueTask<TResult> NoteAfterAsync<TResult>(RedisKey key, ValueTask<TResult> write)
     {
         try
@@ -404,6 +432,21 @@ public abstract class RedisCacheBase : IConnectionState, IDisposable
         finally
         {
             NoteWritten(key);
+        }
+    }
+
+    private sealed class MasterScope : IDisposable
+    {
+        private readonly bool _outer = MasterDemanded.Value;
+        private int _disposed;
+
+        public void Dispose()
+        {
+            if (Interlocked.Exchange(ref _disposed, 1) == 0)
+            {
+                MasterDemanded.Value = _outer;
+                Interlocked.Decrement(ref _demands);
+            }
         }
     }
 }

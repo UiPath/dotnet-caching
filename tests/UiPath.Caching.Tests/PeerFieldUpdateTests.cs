@@ -14,6 +14,10 @@ public class PeerFieldUpdateTests
 
     private static readonly CachePolicy Background = new() { LocalExpiration = TimeSpan.FromMinutes(10), LocalExpirationDisconnected = TimeSpan.FromSeconds(30), BackgroundDistributedWrite = true };
 
+    private static readonly CachePolicy AwaitedDropping = new() { LocalExpiration = TimeSpan.FromMinutes(10), LocalExpirationDisconnected = TimeSpan.FromSeconds(30), RefreshLocalOnPeerWrite = false };
+
+    private static readonly CachePolicy BackgroundDropping = new() { LocalExpiration = TimeSpan.FromMinutes(10), LocalExpirationDisconnected = TimeSpan.FromSeconds(30), BackgroundDistributedWrite = true, RefreshLocalOnPeerWrite = false };
+
     private static readonly HashCacheEntryOptions Merge = new(SetOption: HashCacheSetOption.HashReplace);
 
     private static CancellationToken Ct => TestContext.Current.CancellationToken;
@@ -55,12 +59,12 @@ public class PeerFieldUpdateTests
         using var c = new PeerCluster();
         var (writer, peer) = (c.Add("a"), c.Add("b"));
         await Seed(writer);
-        await peer.Cache.GetAsync<string>("k", Awaited, Ct);
+        await peer.Cache.GetAsync<string>("k", AwaitedDropping, Ct);
         c.Redis.WriteQuietly(("z", "0"));
 
         await Add(writer, ("c", "3"));
 
-        (await peer.Cache.GetAsync<string>("k", Awaited, Ct)).Should().BeEquivalentTo(Fields(("a", "1"), ("b", "2"), ("z", "0"), ("c", "3")));
+        (await peer.Cache.GetAsync<string>("k", AwaitedDropping, Ct)).Should().BeEquivalentTo(Fields(("a", "1"), ("b", "2"), ("z", "0"), ("c", "3")));
         peer.InnerReads.Should().Be(2);
     }
 
@@ -85,12 +89,12 @@ public class PeerFieldUpdateTests
         var (writer, peer) = (c.Add("a"), c.Add("b"));
         await Seed(writer);
         c.Redis.ReadsVersions = false;
-        await peer.Cache.GetAsync<string>("k", Awaited, Ct);
+        await peer.Cache.GetAsync<string>("k", AwaitedDropping, Ct);
         c.Redis.ReadsVersions = true;
 
         await Add(writer, ("c", "3"));
 
-        (await peer.Cache.GetAsync<string>("k", Awaited, Ct)).Should().HaveCount(3);
+        (await peer.Cache.GetAsync<string>("k", AwaitedDropping, Ct)).Should().HaveCount(3);
         peer.InnerReads.Should().Be(2);
     }
 
@@ -142,12 +146,12 @@ public class PeerFieldUpdateTests
         await Add(writer, ("d", "4"));
         await Add(writer, ("e", "5"));
         await Add(writer, ("f", "6"));
-        (await peer.Cache.GetAsync<string>("k", Awaited, Ct)).Should().HaveCount(5);
+        (await peer.Cache.GetAsync<string>("k", AwaitedDropping, Ct)).Should().HaveCount(5);
         peer.InnerReads.Should().Be(1);
 
         c.Deliver(peer, old);
 
-        (await peer.Cache.GetAsync<string>("k", Awaited, Ct)).Should().BeEquivalentTo(c.Redis.Fields());
+        (await peer.Cache.GetAsync<string>("k", AwaitedDropping, Ct)).Should().BeEquivalentTo(c.Redis.Fields());
         peer.InnerReads.Should().Be(2);
     }
 
@@ -170,7 +174,7 @@ public class PeerFieldUpdateTests
             await Add(writer, ($"m{i}", "1"));
         }
 
-        (await peer.Cache.GetAsync<string>("k", Awaited, Ct)).Should().HaveCount(6);
+        (await peer.Cache.GetAsync<string>("k", AwaitedDropping, Ct)).Should().HaveCount(6);
         (c.Redis.Version() & ((1L << HashVersion.CounterBits) - 1)).Should().Be(5);
         c.AutoDeliver = false;
         await writer.Cache.RemoveAsync<string>("k", Ct);
@@ -183,7 +187,7 @@ public class PeerFieldUpdateTests
         // Only the last write event is delivered: the removal event and the others are lost.
         c.Deliver(peer, writer.Published[^1]);
 
-        (await peer.Cache.GetAsync<string>("k", Awaited, Ct)).Should().BeEquivalentTo(c.Redis.Fields());
+        (await peer.Cache.GetAsync<string>("k", AwaitedDropping, Ct)).Should().BeEquivalentTo(c.Redis.Fields());
         peer.InnerReads.Should().Be(2);
     }
 
@@ -207,18 +211,18 @@ public class PeerFieldUpdateTests
     {
         using var c = new PeerCluster();
         var (node, other) = (c.Add("a"), c.Add("b"));
-        await Seed(other);
-        await Add(other, ("c", "3"));
-        (await node.Cache.GetAsync<string>("k", Awaited, Ct)).Should().HaveCount(3);
+        await Seed(other, AwaitedDropping);
+        await Add(other, AwaitedDropping, ("c", "3"));
+        (await node.Cache.GetAsync<string>("k", AwaitedDropping, Ct)).Should().HaveCount(3);
         c.AutoDeliver = false;
         c.Redis.Remove("k");
-        await Add(other, ("n", "1"));
+        await Add(other, AwaitedDropping, ("n", "1"));
         c.AutoDeliver = true;
 
-        await Add(node, ("x", "1"));
-        await Add(other, ("y", "1"));
+        await Add(node, AwaitedDropping, ("x", "1"));
+        await Add(other, AwaitedDropping, ("y", "1"));
 
-        (await node.Cache.GetAsync<string>("k", Awaited, Ct)).Should().BeEquivalentTo(c.Redis.Fields());
+        (await node.Cache.GetAsync<string>("k", AwaitedDropping, Ct)).Should().BeEquivalentTo(c.Redis.Fields());
     }
 
     [Fact]
@@ -294,6 +298,25 @@ public class PeerFieldUpdateTests
         c.Redis.Epochs = false;
         var (writer, peer) = (c.Add("a"), c.Add("b"));
         await Seed(writer);
+        await peer.Cache.GetAsync<string>("k", AwaitedDropping, Ct);
+        await Add(writer, ("c", "3"));
+        await Add(writer, ("d", "4"));
+        (await peer.Cache.GetAsync<string>("k", AwaitedDropping, Ct)).Should().HaveCount(4);
+        peer.InnerReads.Should().Be(1);
+
+        c.Deliver(peer, writer.Published[1]);
+
+        (await peer.Cache.GetAsync<string>("k", AwaitedDropping, Ct)).Should().HaveCount(4);
+        peer.InnerReads.Should().Be(2);
+    }
+
+    [Fact]
+    public async Task A_count_with_no_epoch_from_a_node_that_draws_none_is_never_ignored_as_late_and_the_copy_is_refreshed()
+    {
+        using var c = new PeerCluster();
+        c.Redis.Epochs = false;
+        var (writer, peer) = (c.Add("a"), c.Add("b"));
+        await Seed(writer);
         await peer.Cache.GetAsync<string>("k", Awaited, Ct);
         await Add(writer, ("c", "3"));
         await Add(writer, ("d", "4"));
@@ -301,6 +324,7 @@ public class PeerFieldUpdateTests
         peer.InnerReads.Should().Be(1);
 
         c.Deliver(peer, writer.Published[1]);
+        await peer.Settled();
 
         (await peer.Cache.GetAsync<string>("k", Awaited, Ct)).Should().HaveCount(4);
         peer.InnerReads.Should().Be(2);
@@ -414,7 +438,38 @@ public class PeerFieldUpdateTests
     {
         using var c = new PeerCluster();
         var (node, other) = (c.Add("a"), c.Add("b"));
-        await Seed(node);
+        await Seed(node, AwaitedDropping);
+        var held = new TaskCompletionSource();
+        var written = new TaskCompletionSource();
+        node.Inner.AfterWrite = values =>
+        {
+            if (values.TryGetValue("x", out var v) && v == "old")
+            {
+                written.TrySetResult();
+                return held.Task;
+            }
+
+            return Task.CompletedTask;
+        };
+        await node.Cache.GetAsync<string>("k", AwaitedDropping, Ct);
+        var slow = node.Cache.SetAsync<string>("k", Fields(("x", "old")), Merge, AwaitedDropping, Ct).AsTask();
+        await written.Task;
+        await Add(other, AwaitedDropping, ("x", "new"));
+        (await node.Cache.GetAsync<string>("k", AwaitedDropping, Ct)).Should().ContainKey("x");
+
+        held.SetResult();
+        (await slow).Should().BeTrue();
+
+        c.Redis.Fields()!["x"].Should().Be("new");
+        (await node.Cache.GetAsync<string>("k", AwaitedDropping, Ct)).Should().BeEquivalentTo(c.Redis.Fields());
+    }
+
+    [Fact]
+    public async Task A_write_that_returns_after_a_read_already_counted_it_does_not_put_its_values_over_the_refreshed_copy()
+    {
+        using var c = new PeerCluster();
+        var (node, other) = (c.Add("a"), c.Add("b"));
+        await Seed(node, Awaited);
         var held = new TaskCompletionSource();
         var written = new TaskCompletionSource();
         node.Inner.AfterWrite = values =>
@@ -430,14 +485,55 @@ public class PeerFieldUpdateTests
         await node.Cache.GetAsync<string>("k", Awaited, Ct);
         var slow = node.Cache.SetAsync<string>("k", Fields(("x", "old")), Merge, Awaited, Ct).AsTask();
         await written.Task;
-        await Add(other, ("x", "new"));
-        (await node.Cache.GetAsync<string>("k", Awaited, Ct)).Should().ContainKey("x");
+        await Add(other, Awaited, ("x", "new"));
 
+        await node.Settled();
         held.SetResult();
         (await slow).Should().BeTrue();
+        await node.Settled();
 
         c.Redis.Fields()!["x"].Should().Be("new");
         (await node.Cache.GetAsync<string>("k", Awaited, Ct)).Should().BeEquivalentTo(c.Redis.Fields());
+    }
+
+    [Fact]
+    public async Task A_write_that_returns_after_a_peer_s_later_write_does_not_lay_its_values_over_the_copy_awaiting_refresh()
+    {
+        using var c = new PeerCluster();
+        var telemetry = new Telemetry.RecordingTelemetryProvider();
+        var (node, other) = (c.Add("a", telemetry: telemetry), c.Add("b"));
+        await Seed(node, Awaited);
+        var held = new TaskCompletionSource();
+        var written = new TaskCompletionSource();
+        node.Inner.AfterWrite = values =>
+        {
+            if (values.TryGetValue("x", out var v) && v == "old")
+            {
+                written.TrySetResult();
+                return held.Task;
+            }
+
+            return Task.CompletedTask;
+        };
+        await node.Cache.GetAsync<string>("k", Awaited, Ct);
+        await node.Cache.GetAsync<string>("k", Awaited, Ct);
+        var refresh = new TaskCompletionSource();
+        node.Cache.PeerRefreshHold = refresh.Task;
+        var slow = node.Cache.SetAsync<string>("k", Fields(("x", "old")), Merge, Awaited, Ct).AsTask();
+        await written.Task;
+        await Add(other, Awaited, ("x", "new"));
+
+        // The node's own write returns before the refresh of the peer's later one runs.
+        held.SetResult();
+        (await slow).Should().BeTrue();
+        refresh.SetResult();
+        await node.Settled();
+
+        c.Redis.Fields()!["x"].Should().Be("new");
+        (await node.Cache.GetAsync<string>("k", Awaited, Ct)).Should().BeEquivalentTo(c.Redis.Fields());
+        telemetry.Metrics.Where(m => m.Name.StartsWith("cache.peer_refresh.", StringComparison.Ordinal) && m.Name != "cache.peer_refresh.started" && m.Name != "cache.peer_refresh.read_ms")
+            .Select(m => m.Name + (m.Properties!.TryGetValue("reason", out var reason) ? ":" + reason : string.Empty))
+            .Should().Equal("cache.peer_refresh.discarded:newer_local");
     }
 
     [Fact]
@@ -446,11 +542,11 @@ public class PeerFieldUpdateTests
         using var c = new PeerCluster();
         var (writer, peer) = (c.Add("a"), c.Add("b"));
         await Seed(writer);
-        await peer.Cache.GetAsync<string>("k", Awaited, Ct);
+        await peer.Cache.GetAsync<string>("k", AwaitedDropping, Ct);
 
-        await writer.Cache.SetAsync<string>("k", Fields(("c", "3")), new HashCacheEntryOptions(SetOption: HashCacheSetOption.KeyReplace), Awaited, Ct);
+        await writer.Cache.SetAsync<string>("k", Fields(("c", "3")), new HashCacheEntryOptions(SetOption: HashCacheSetOption.KeyReplace), AwaitedDropping, Ct);
 
-        (await peer.Cache.GetAsync<string>("k", Awaited, Ct)).Should().BeEquivalentTo(Fields(("c", "3")));
+        (await peer.Cache.GetAsync<string>("k", AwaitedDropping, Ct)).Should().BeEquivalentTo(Fields(("c", "3")));
         peer.InnerReads.Should().Be(2);
         writer.Published[^1].Data!.Properties.Should().BeNull();
     }
@@ -531,18 +627,37 @@ public class PeerFieldUpdateTests
         using var c = new PeerCluster();
         var (writer, peer) = (c.Add("a"), c.Add("b"));
         await Seed(writer);
-        await peer.Cache.GetAsync<string>("k", Awaited, Ct);
+        await peer.Cache.GetAsync<string>("k", AwaitedDropping, Ct);
         peer.Inner.FailsDecode = true;
 
         await Add(writer, ("c", "3"));
 
         writer.Published[^1].Data!.Properties.Should().ContainKey(KnownFieldNames.PeerFieldsKey);
-        (await peer.Cache.GetAsync<string>("k", Awaited, Ct)).Should().BeEquivalentTo(Fields(("a", "1"), ("b", "2"), ("c", "3")));
+        (await peer.Cache.GetAsync<string>("k", AwaitedDropping, Ct)).Should().BeEquivalentTo(Fields(("a", "1"), ("b", "2"), ("c", "3")));
         peer.InnerReads.Should().Be(2);
     }
 
     [Fact]
     public async Task A_fill_reported_unwritten_keeps_its_copy_without_the_version_it_reported()
+    {
+        using var c = new PeerCluster();
+        var (writer, peer) = (c.Add("a"), c.Add("b"));
+        writer.Inner.ReportsUnwritten = true;
+
+        (await writer.Cache.GetOrAddAsync<string>("k", _ => Task.FromResult<IDictionary<string, string?>>(Fields(("a", "1"))), AwaitedDropping, Ct)).Should().HaveCount(1);
+        writer.Inner.ReportsUnwritten = false;
+        (await writer.Cache.GetAsync<string>("k", AwaitedDropping, Ct)).Should().HaveCount(1);
+        writer.InnerReads.Should().Be(1);
+
+        // Stamped with the reported count, the copy would be one write behind the peer's and take it.
+        await Add(peer, ("b", "2"));
+
+        (await writer.Cache.GetAsync<string>("k", AwaitedDropping, Ct)).Should().BeEquivalentTo(Fields(("a", "1"), ("b", "2")));
+        writer.InnerReads.Should().Be(2);
+    }
+
+    [Fact]
+    public async Task A_fill_reported_unwritten_has_its_copy_refreshed_instead_of_merged()
     {
         using var c = new PeerCluster();
         var (writer, peer) = (c.Add("a"), c.Add("b"));
@@ -555,6 +670,7 @@ public class PeerFieldUpdateTests
 
         // Stamped with the reported count, the copy would be one write behind the peer's and take it.
         await Add(peer, ("b", "2"));
+        await writer.Settled();
 
         (await writer.Cache.GetAsync<string>("k", Awaited, Ct)).Should().BeEquivalentTo(Fields(("a", "1"), ("b", "2")));
         writer.InnerReads.Should().Be(2);
@@ -568,18 +684,18 @@ public class PeerFieldUpdateTests
         var small = c.Add("b", maxBytes: 8);
         var peer = c.Add("p");
         await Seed(narrow);
-        await peer.Cache.GetAsync<string>("k", Awaited, Ct);
+        await peer.Cache.GetAsync<string>("k", AwaitedDropping, Ct);
 
         await Add(narrow, ("c", "3"), ("d", "4"), ("e", "5"));
 
         narrow.Published[^1].Data!.Properties.Should().BeNull();
-        (await peer.Cache.GetAsync<string>("k", Awaited, Ct)).Should().HaveCount(5);
+        (await peer.Cache.GetAsync<string>("k", AwaitedDropping, Ct)).Should().HaveCount(5);
         peer.InnerReads.Should().Be(2);
 
         await Add(small, ("f", "a value longer than eight bytes"));
 
         small.Published[^1].Data!.Properties.Should().BeNull();
-        (await peer.Cache.GetAsync<string>("k", Awaited, Ct)).Should().HaveCount(6);
+        (await peer.Cache.GetAsync<string>("k", AwaitedDropping, Ct)).Should().HaveCount(6);
         peer.InnerReads.Should().Be(3);
     }
 
@@ -635,9 +751,25 @@ public class PeerFieldUpdateTests
         var writer = c.Add("a");
         var older = c.Add("b", peerFieldUpdates: false);
         await Seed(writer);
+        await older.Cache.GetAsync<string>("k", AwaitedDropping, Ct);
+
+        await Add(writer, ("c", "3"));
+
+        (await older.Cache.GetAsync<string>("k", AwaitedDropping, Ct)).Should().HaveCount(3);
+        older.InnerReads.Should().Be(2);
+    }
+
+    [Fact]
+    public async Task A_peer_with_the_option_off_refreshes_on_an_event_that_carries_fields()
+    {
+        using var c = new PeerCluster();
+        var writer = c.Add("a");
+        var older = c.Add("b", peerFieldUpdates: false);
+        await Seed(writer);
         await older.Cache.GetAsync<string>("k", Awaited, Ct);
 
         await Add(writer, ("c", "3"));
+        await older.Settled();
 
         (await older.Cache.GetAsync<string>("k", Awaited, Ct)).Should().HaveCount(3);
         older.InnerReads.Should().Be(2);
@@ -662,13 +794,13 @@ public class PeerFieldUpdateTests
     {
         using var c = new PeerCluster();
         var (writer, other) = (c.Add("a"), c.Add("b"));
-        await Seed(writer);
+        await Seed(writer, AwaitedDropping);
         c.Redis.WriteQuietly(("z", "0"));
-        await Add(writer, ("c", "3"));
+        await Add(writer, AwaitedDropping, ("c", "3"));
 
-        await Add(other, ("d", "4"));
+        await Add(other, AwaitedDropping, ("d", "4"));
 
-        (await writer.Cache.GetAsync<string>("k", Awaited, Ct)).Should().BeEquivalentTo(Fields(("a", "1"), ("b", "2"), ("z", "0"), ("c", "3"), ("d", "4")));
+        (await writer.Cache.GetAsync<string>("k", AwaitedDropping, Ct)).Should().BeEquivalentTo(Fields(("a", "1"), ("b", "2"), ("z", "0"), ("c", "3"), ("d", "4")));
         writer.InnerReads.Should().Be(1);
     }
 
@@ -695,12 +827,12 @@ public class PeerFieldUpdateTests
         var (writer, other) = (c.Add("a"), c.Add("b"));
         await Seed(writer);
         c.Redis.WriteQuietly(("z", "0"));
-        await writer.Cache.SetAsync<string>("k", Fields(("c", "3")), Merge, Background, Ct);
+        await writer.Cache.SetAsync<string>("k", Fields(("c", "3")), Merge, BackgroundDropping, Ct);
         await writer.Settled();
 
         await Add(other, ("d", "4"));
 
-        (await writer.Cache.GetAsync<string>("k", Awaited, Ct)).Should().BeEquivalentTo(Fields(("a", "1"), ("b", "2"), ("z", "0"), ("c", "3"), ("d", "4")));
+        (await writer.Cache.GetAsync<string>("k", AwaitedDropping, Ct)).Should().BeEquivalentTo(Fields(("a", "1"), ("b", "2"), ("z", "0"), ("c", "3"), ("d", "4")));
         writer.InnerReads.Should().Be(1);
     }
 
@@ -927,14 +1059,14 @@ public class PeerFieldUpdateTests
     {
         using var c = new PeerCluster { AutoDeliver = false };
         var (writer, other) = (c.Add("a"), c.Add("b"));
-        await Seed(writer);
-        await Add(other, ("y", "1"));
-        await Add(other, ("z", "2"));
-        await Add(writer, ("c", "3"));
+        await Seed(writer, AwaitedDropping);
+        await Add(other, AwaitedDropping, ("y", "1"));
+        await Add(other, AwaitedDropping, ("z", "2"));
+        await Add(writer, AwaitedDropping, ("c", "3"));
 
         c.Deliver(writer, other.Published[^1]);
 
-        (await writer.Cache.GetAsync<string>("k", Awaited, Ct)).Should().BeEquivalentTo(c.Redis.Fields());
+        (await writer.Cache.GetAsync<string>("k", AwaitedDropping, Ct)).Should().BeEquivalentTo(c.Redis.Fields());
         writer.InnerReads.Should().Be(1);
     }
 
@@ -966,7 +1098,7 @@ public class PeerFieldUpdateTests
         writer.Inner.Hold = release.Task;
         for (var i = 0; i < merges; i++)
         {
-            await writer.Cache.SetAsync<string>("k", Fields(($"f{i}", "x")), Merge, Background, Ct);
+            await writer.Cache.SetAsync<string>("k", Fields(($"f{i}", "x")), Merge, BackgroundDropping, Ct);
         }
 
         release.SetResult();
@@ -974,7 +1106,7 @@ public class PeerFieldUpdateTests
 
         await Add(other, ("d", "4"));
 
-        (await writer.Cache.GetAsync<string>("k", Awaited, Ct)).Should().BeEquivalentTo(c.Redis.Fields());
+        (await writer.Cache.GetAsync<string>("k", AwaitedDropping, Ct)).Should().BeEquivalentTo(c.Redis.Fields());
         writer.InnerReads.Should().Be(reads);
     }
 
@@ -1235,9 +1367,13 @@ public class PeerFieldUpdateTests
     private static Dictionary<string, string?> Fields(params (string Field, string Value)[] fields) =>
         fields.ToDictionary(f => f.Field, f => (string?)f.Value);
 
-    private static async Task Seed(PeerCluster.Node node) =>
-        (await node.Cache.SetAsync<string>("k", Fields(("a", "1"), ("b", "2")), Awaited, Ct)).Should().BeTrue();
+    private static Task Seed(PeerCluster.Node node) => Seed(node, Awaited);
 
-    private static async Task Add(PeerCluster.Node node, params (string Field, string Value)[] fields) =>
-        (await node.Cache.SetAsync<string>("k", Fields(fields), Merge, Awaited, Ct)).Should().BeTrue();
+    private static async Task Seed(PeerCluster.Node node, CachePolicy policy) =>
+        (await node.Cache.SetAsync<string>("k", Fields(("a", "1"), ("b", "2")), policy, Ct)).Should().BeTrue();
+
+    private static Task Add(PeerCluster.Node node, params (string Field, string Value)[] fields) => Add(node, Awaited, fields);
+
+    private static async Task Add(PeerCluster.Node node, CachePolicy policy, params (string Field, string Value)[] fields) =>
+        (await node.Cache.SetAsync<string>("k", Fields(fields), Merge, policy, Ct)).Should().BeTrue();
 }

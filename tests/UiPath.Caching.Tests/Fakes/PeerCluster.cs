@@ -21,9 +21,10 @@ internal sealed class PeerCluster : IDisposable
     /// <summary>When off, events wait in <see cref="Node.Published"/> for <see cref="Deliver"/>.</summary>
     public bool AutoDeliver { get; set; } = true;
 
-    public Node Add(string name, bool peerFieldUpdates = true, int maxFields = 16, int maxBytes = 1024)
+    /// <param name="monitorsConnection">The node follows <see cref="PeerInner.IsConnected"/>, and keeps its local tier when the connection returns.</param>
+    public Node Add(string name, bool peerFieldUpdates = true, int maxFields = 16, int maxBytes = 1024, bool monitorsConnection = false, Telemetry.RecordingTelemetryProvider? telemetry = null)
     {
-        var node = new Node(this, name, peerFieldUpdates, maxFields, maxBytes);
+        var node = new Node(this, name, peerFieldUpdates, maxFields, maxBytes, monitorsConnection, telemetry);
         _nodes.Add(node);
         return node;
     }
@@ -256,11 +257,11 @@ internal sealed class PeerCluster : IDisposable
 
     internal sealed class Node : IDisposable
     {
-        public Node(PeerCluster cluster, string name, bool peerFieldUpdates, int maxFields, int maxBytes)
+        public Node(PeerCluster cluster, string name, bool peerFieldUpdates, int maxFields, int maxBytes, bool monitorsConnection, Telemetry.RecordingTelemetryProvider? telemetry)
         {
             Name = name;
-            var options = new InMemoryRedisCacheOptions { PeerFieldUpdates = peerFieldUpdates, PeerFieldUpdateMaxFields = maxFields, PeerFieldUpdateMaxBytes = maxBytes };
-            var cacheOptions = new CacheOptions { AppShortName = "test", ConnectionMonitorEnabled = false, SourceUri = new Uri($"urn:node:{name}") };
+            var options = new InMemoryRedisCacheOptions { PeerFieldUpdates = peerFieldUpdates, PeerFieldUpdateMaxFields = maxFields, PeerFieldUpdateMaxBytes = maxBytes, ClearLocalOnReconnect = monitorsConnection ? false : null };
+            var cacheOptions = new CacheOptions { AppShortName = "test", ConnectionMonitorEnabled = monitorsConnection, SourceUri = new Uri($"urn:node:{name}") };
             var inner = DispatchProxy.Create<IHashCache, PeerInner>();
             Inner = (PeerInner)(object)inner;
             Inner.Store = cluster.Redis;
@@ -281,7 +282,7 @@ internal sealed class PeerCluster : IDisposable
                 tokens,
                 topics,
                 events,
-                Substitute.For<ICachingTelemetryProvider>(),
+                (ICachingTelemetryProvider?)telemetry ?? Substitute.For<ICachingTelemetryProvider>(),
                 options,
                 options,
                 cacheOptions,
@@ -347,11 +348,22 @@ internal sealed class PeerCluster : IDisposable
     }
 
     /// <summary>The inner tier of a node: a stand-in for the Redis hash cache, which proxies cannot be made to look like because its counting interface is internal.</summary>
-    internal class PeerInner : DispatchProxy, IVersionedHashCache, ISpanKeyHashCache
+    internal class PeerInner : DispatchProxy, IVersionedHashCache, ISpanKeyHashCache, IConnectionState
     {
+        private volatile bool _connected = true;
         private int _reads;
         private int _countedWrites;
         private int _plainWrites;
+
+        public event EventHandler? OnConnectionFailed;
+
+        public event EventHandler? OnConnectionRestored;
+
+        public event EventHandler? OnReconnected
+        {
+            add { }
+            remove { }
+        }
 
         public Store Store { get; set; } = null!;
 
@@ -365,6 +377,26 @@ internal sealed class PeerCluster : IDisposable
 
         /// <summary>When set, a counted write waits for it before it reaches the store.</summary>
         public Task? Hold { get; set; }
+
+        /// <summary>When set, a field removal waits for it before it reaches the store.</summary>
+        public Task? RemoveHold { get; set; }
+
+        /// <summary>When set, a read is counted at once and reaches the store once it completes.</summary>
+        public Task? ReadHold { get; set; }
+
+        /// <summary>When set, a held read takes the store's state at once and answers it once the hold completes, as a reply in flight does.</summary>
+        public bool HeldReadSnapshots { get; set; }
+
+        /// <summary>Read only by a node that monitors its connection.</summary>
+        public bool IsConnected
+        {
+            get => _connected;
+            set
+            {
+                _connected = value;
+                (value ? OnConnectionRestored : OnConnectionFailed)?.Invoke(this, EventArgs.Empty);
+            }
+        }
 
         /// <summary>When set, a counted write waits for the task it returns, if any, after it reached the store and before it answers.</summary>
         public Func<IDictionary<string, string?>, Task?>? AfterWrite { get; set; }
@@ -413,9 +445,11 @@ internal sealed class PeerCluster : IDisposable
         public ValueTask<bool> RemoveFieldsVersionedAsync<T>(CacheKey cacheKey, string[] fields, CancellationToken token = default)
         {
             CountedRemovals++;
-            Store.RemoveFields(cacheKey.Name, fields, counted: true);
-            return new ValueTask<bool>(true);
+            return RemoveFieldsAfter(cacheKey.Name, fields, counted: true);
         }
+
+        ValueTask<bool> ISpanKeyHashCache.RemoveFieldsAsync<T>(CacheKey cacheKey, string[] fields, CancellationToken token) =>
+            RemoveFieldsAfter(cacheKey.Name, fields, counted: false);
 
         public bool TryDecodeFields<T>(IDictionary<string, string?> encoded, [MaybeNullWhen(false)] out Dictionary<string, T?> values)
         {
@@ -480,7 +514,10 @@ internal sealed class PeerCluster : IDisposable
                     return null;
                 case nameof(IHashCache.GetCacheEntryAsync):
                     Interlocked.Increment(ref _reads);
-                    return new ValueTask<ICacheEntry<IDictionary<string, string?>>>(Store.Read(((CacheKey)args![0]!).Name));
+                    var key = ((CacheKey)args![0]!).Name;
+                    return ReadHold is { } hold
+                        ? new ValueTask<ICacheEntry<IDictionary<string, string?>>>(ReadAfterAsync(hold, key))
+                        : new ValueTask<ICacheEntry<IDictionary<string, string?>>>(Store.Read(key));
                 case nameof(IHashCache.SetMetadataAsync):
                     Store.SetMetadata((IDictionary<string, string?>)args![1]!);
                     return new ValueTask<bool>(true);
@@ -495,6 +532,31 @@ internal sealed class PeerCluster : IDisposable
                 default:
                     throw new NotSupportedException(targetMethod.Name);
             }
+        }
+
+        private ValueTask<bool> RemoveFieldsAfter(string key, string[] fields, bool counted)
+        {
+            if (RemoveHold is not { } hold)
+            {
+                Store.RemoveFields(key, fields, counted);
+                return new ValueTask<bool>(true);
+            }
+
+            return new ValueTask<bool>(LaterAsync());
+
+            async Task<bool> LaterAsync()
+            {
+                await hold;
+                Store.RemoveFields(key, fields, counted);
+                return true;
+            }
+        }
+
+        private async Task<ICacheEntry<IDictionary<string, string?>>> ReadAfterAsync(Task hold, string key)
+        {
+            var snapshot = HeldReadSnapshots ? Store.Read(key) : null;
+            await hold;
+            return snapshot ?? Store.Read(key);
         }
     }
 }

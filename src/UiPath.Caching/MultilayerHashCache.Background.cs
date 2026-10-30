@@ -38,19 +38,15 @@ internal sealed partial class MultilayerHashCache : IAsyncDisposable
         options.Pending = local.Pending;
         lock (MergeLock(options.CacheKey.Name))
         {
-            if (!TryMergeLocal(ref options, values, out var merged))
+            if (TryMergeLocal(ref options, values, out var merged) || OnlyTier)
             {
-                if (!OnlyTier)
-                {
-                    return true;
-                }
-
-                merged = values;
+                local.Entry = CreateEntry(merged ?? values, options);
+                return MemorySet(options, local.Entry, DisconnectedLifetime(policy));
             }
-
-            local.Entry = CreateEntry(merged, options);
-            return MemorySet(options, local.Entry, DisconnectedLifetime(policy));
         }
+
+        DropAwaitingRefresh(options.CacheKey.Name);
+        return true;
     }
 
     private void FillInBackground<T>(InternalHashCacheEntryOptions options, IDictionary<string, T?> values, CachePolicy policy)
@@ -129,11 +125,11 @@ internal sealed partial class MultilayerHashCache : IAsyncDisposable
     private void PromoteDetached<T>(InternalHashCacheEntryOptions options, CachePolicy policy, LocalEntry<T> local)
     {
         ApplyLocal(options.CacheKey.Name, (Cache: this, Options: options, Policy: policy, local.Entry), static s =>
-            s.Entry is not null && s.Cache.PromoteLocal(s.Options, s.Entry, s.Cache.ConnectedLifetime(s.Policy)));
+            s.Entry is not null && s.Cache.PromoteLocal(s.Options, s.Entry, s.Cache.ConnectedLifetime(s.Policy), s.Policy));
     }
 
     // The entry is still the held one, and a peer's update waits, for as long as the lock is held.
-    private bool PromoteLocal<T>(InternalHashCacheEntryOptions options, ICacheEntry<IDictionary<string, T?>> entry, TimeSpan? maxExpiration)
+    private bool PromoteLocal<T>(InternalHashCacheEntryOptions options, ICacheEntry<IDictionary<string, T?>> entry, TimeSpan? maxExpiration, CachePolicy policy)
     {
         lock (MergeLock(options.CacheKey.Name))
         {
@@ -151,7 +147,7 @@ internal sealed partial class MultilayerHashCache : IAsyncDisposable
                 options.Own = ahead;
             }
 
-            return MemorySet(options, entry, maxExpiration);
+            return MemorySet(options, entry, maxExpiration, policy);
         }
     }
 

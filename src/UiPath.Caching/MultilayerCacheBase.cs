@@ -34,6 +34,7 @@ public abstract partial class MultilayerCacheBase : IDisposable
     // (ResolveWriteDuration), and leaving it out keeps "nothing configured" observable as null.
     private static readonly CachePolicy HardcodedDefaults = new()
     {
+        RefreshLocalOnPeerWrite = true,
         Lock = new LockProfile
         {
             LocalSingleFlightEnabled = true,
@@ -43,6 +44,7 @@ public abstract partial class MultilayerCacheBase : IDisposable
             DistributedLockExpiry = TimeSpan.FromSeconds(5),
         },
     };
+    private readonly PeerWriteGuard? _peerWrites;
     private readonly IDistributedLock _distributedLock;
     private readonly IDistributedLockKeyStrategy _lockKeyStrategy;
     private readonly TimeSpan _distributedLockExpiry;
@@ -105,6 +107,12 @@ public abstract partial class MultilayerCacheBase : IDisposable
         _connectionState = connectionMonitorEnabled ? GetConnectionMonitor(_innerTier.Connection, _topicProvider) : NullConnectionStateMonitor.Instance;
         _useLocalOnlyWhenDisconnected = (multiLayerCacheOptions.UseLocalOnlyWhenDisconnected ?? true) && connectionMonitorEnabled;
         _clearLocalOnReconnect = (multiLayerCacheOptions.ClearLocalOnReconnect ?? true) && connectionMonitorEnabled;
+        if (_innerTier.IsShared && _topicProvider is not NullTopicProvider)
+        {
+            _peerRefresher = new PeerRefresher(this);
+            _peerWrites = new PeerWriteGuard(_background, _topicProvider, cacheOptions.SourceUri, clock, logger);
+        }
+
         _distributedLock = distributedLock;
         _lockKeyStrategy = multiLayerCacheOptions.LockKeyStrategy ?? new DefaultDistributedLockKeyStrategy(cacheOptions.Separator);
         var defaultLock = _defaultPolicy.Lock!;
@@ -120,6 +128,8 @@ public abstract partial class MultilayerCacheBase : IDisposable
     public string Name { get; }
 
     internal bool BackgroundWritesActive => _background.Active;
+
+    internal bool FillsTracked => _background.Counting;
 
     protected ICachingTelemetryProvider Telemetry { get; }
     public void Dispose()
@@ -187,8 +197,10 @@ public abstract partial class MultilayerCacheBase : IDisposable
         {
             if (disposing)
             {
+                _peerWrites?.Dispose();
                 _background.Drain();
                 _monitor.Dispose();
+                _peerRefresher?.Dispose();
                 _memoryCache.Dispose();
                 if (_connectionState is IDisposable connectionState)
                 {
@@ -199,9 +211,35 @@ public abstract partial class MultilayerCacheBase : IDisposable
         }
     }
 
+    /// <summary>Gives <paramref name="to"/> the last read of the entry it replaces.</summary>
+    private protected static void InheritRead(object? from, object? to)
+    {
+        if (from is IReadTracked { LastRead: not IReadTracked.NeverRead and var last } && to is IReadTracked inheriting)
+        {
+            inheriting.MarkRead(last);
+        }
+    }
+
     /// <summary>A timeout a cancellation source takes: <c>CancelAfter</c> throws beyond <see cref="int.MaxValue"/> milliseconds, so a misconfigured <c>Lock.LocalSingleFlightTimeout</c> degrades to that.</summary>
     private protected static TimeSpan BoundedTimeout(TimeSpan timeout) =>
         timeout.TotalMilliseconds > int.MaxValue ? TimeSpan.FromMilliseconds(int.MaxValue) : timeout;
+
+    /// <summary>Notes a local hit, so a peer's write to the entry refreshes it rather than drops it while the read is recent.</summary>
+    private protected void MarkRead(object? entry)
+    {
+        if (_peerRefresher is null)
+        {
+            return;
+        }
+
+        if (entry is IReadTracked tracked)
+        {
+            tracked.MarkRead(NowSeconds());
+        }
+    }
+
+    /// <summary>Whole seconds of the cache's monotonic clock, at least 1.</summary>
+    private protected int NowSeconds() => (int)(_clock.GetTimestamp() / _clock.TimestampFrequency) + 1;
 
     /// <summary>How long a hit read from the inner tier stays local: the disconnected cap while the tier reads as down, perhaps only its broadcast.</summary>
     private protected TimeSpan? LocalLifetime(CachePolicy policy) =>
@@ -211,7 +249,12 @@ public abstract partial class MultilayerCacheBase : IDisposable
 
     private protected Task DrainBackgroundAsync() => _background.DrainAsync();
 
-    private protected long MarkInnerRead(string key) => _background.Mark(key);
+    /// <summary>Taken before an inner read of the key whose value may be kept locally; peers' writes on <paramref name="topic"/> after it refuse the fill.</summary>
+    private protected long MarkInnerRead(string key, TopicKey topic)
+    {
+        _peerWrites?.Watch(topic);
+        return _background.Mark(key);
+    }
 
     [LoggerMessage(Level = LogLevel.Debug, Message = "Inner copy of {CacheKey} not kept locally: a write of it, or of a key sharing its stripe, came after the read began.")]
     private protected partial void LogInnerCopyNotKept(LoggedKey cacheKey);
