@@ -308,6 +308,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 - **The Streams transport reads without the Lua script on Redis below 7.0.** The `XREADGROUP` inside Lua cost the server
   several times a plain read on every batch. The gap check still runs, using the oldest entry past the group's position, but as separate
   `XINFO STREAM` and `XINFO GROUPS` commands before the read, so it is no longer atomic with it and each read takes more round trips.
+- **A local hit is cheaper.** A key's casing is checked with vector instructions rather than character by character, and a read by span under the default key strategy composes the key once instead of twice. Keys are unchanged.
 - **A local miss whose distributed read began before a peer's write of the key no longer keeps the older value.** A node that did not hold
   the key had no change token to hear the peer's event, so the value its read found before the write was kept locally until it expired. Each
   cache with a shared distributed tier and broadcast now hears every peer `CacheSet`, `CacheRemoved` and metadata change on its topics, before
