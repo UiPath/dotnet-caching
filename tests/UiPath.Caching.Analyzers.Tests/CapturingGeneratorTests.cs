@@ -149,7 +149,7 @@ public class CapturingGeneratorTests
     public Task A_discarded_token_stays_a_discard() =>
         Verify.FixAsync(
             Fixture.Service("""ValueTask<Item?> Get(CancellationToken token) => _cache.GetOrAddAsync("k", {|#0:_ => LoadAsync(token)|}, token);"""),
-            Fixture.Service("""ValueTask<Item?> Get(CancellationToken token) => _cache.GetOrAddAsync("k", (Self: this, Token: token), static (s, _) => s.Self.LoadAsync(s.Token), token);"""),
+            Fixture.Service("""ValueTask<Item?> Get(CancellationToken token) => _cache.GetOrAddAsync("k", this, token, static (self, token, _) => self.LoadAsync(token), token);"""),
             Verify.Diagnostic(0, "captures 'this' and 'token' and allocates a closure", PassThem));
 
     [Fact]
@@ -268,7 +268,7 @@ public class CapturingGeneratorTests
     public Task Untyped_hash_cache_with_spelled_type_arguments_gets_the_state_type_appended() =>
         Verify.FixAsync(
             Fixture.Service("""ValueTask<IDictionary<string, Item?>> Get(int id, CancellationToken token) => _untypedHash.GetOrAddAsync<Item>("k", {|#0:ct => LoadAllInstanceAsync(id, ct)|}, DateTimeOffset.MaxValue, HashCacheSetOption.KeyReplace, _policy, token);"""),
-            Fixture.Service("""ValueTask<IDictionary<string, Item?>> Get(int id, CancellationToken token) => _untypedHash.GetOrAddAsync<Item, (Service Self, int Id)>("k", (Self: this, Id: id), static (s, ct) => s.Self.LoadAllInstanceAsync(s.Id, ct), DateTimeOffset.MaxValue, HashCacheSetOption.KeyReplace, _policy, token);"""),
+            Fixture.Service("""ValueTask<IDictionary<string, Item?>> Get(int id, CancellationToken token) => _untypedHash.GetOrAddAsync<Item, Service, int>("k", this, id, static (self, id, ct) => self.LoadAllInstanceAsync(id, ct), DateTimeOffset.MaxValue, HashCacheSetOption.KeyReplace, _policy, token);"""),
             Verify.Diagnostic(0, "captures 'this' and 'id' and allocates a closure", PassThem));
 
     [Fact]
@@ -289,7 +289,7 @@ public class CapturingGeneratorTests
             Fixture.Service("""
                 ValueTask<Item?> Get(CancellationToken token) => _cache.GetOrAddWithExpirationAsync("k", this, static (self, ct) => self.GenerateAsync(ct), token);
 
-                ValueTask<Item?> Find(int id, CancellationToken token) => _untyped.GetOrAddWithExpirationAsync<Item, (Service Self, int Id)>("k", (Self: this, Id: id), static (s, ct) => s.Self.GenerateAsync(s.Id, ct), _policy, token);
+                ValueTask<Item?> Find(int id, CancellationToken token) => _untyped.GetOrAddWithExpirationAsync<Item, Service, int>("k", this, id, static (self, id, ct) => self.GenerateAsync(id, ct), _policy, token);
                 """),
             Verify.Diagnostic(0, ThisDelegate, PassIt),
             Verify.Diagnostic(1, "captures 'this' and 'id' and allocates a closure", PassThem));
@@ -565,7 +565,7 @@ public class CapturingGeneratorTests
 
             public class UserService(ICache<Item> cache, Repo repo)
             {
-                public ValueTask<Item?> GetAsync(int id, CancellationToken ct) => cache.GetOrAddAsync(id, (Repo: repo, Id: id), static (s, c) => s.Repo.LoadAsync(s.Id, c), TimeSpan.FromMinutes(5), ct);
+                public ValueTask<Item?> GetAsync(int id, CancellationToken ct) => cache.GetOrAddAsync(id, repo, id, static (repo, id, c) => repo.LoadAsync(id, c), TimeSpan.FromMinutes(5), ct);
             }
             """,
             Verify.Diagnostic(0, "captures 'repo' and 'id' and allocates a closure", PassThem));
@@ -635,7 +635,7 @@ public class CapturingGeneratorTests
             Fixture.Service("""
                 ValueTask<Item?> Get(CancellationToken token) => _cache.GetOrAddAsync("k", this, static (self, ct) => self.LoadAsync(ct), token);
 
-                ValueTask<Item?> Find(int id, CancellationToken token) => _cache.GetOrAddAsync(id, (Self: this, Id: id), static (s, ct) => s.Self.LoadAsync(s.Id, ct), token);
+                ValueTask<Item?> Find(int id, CancellationToken token) => _cache.GetOrAddAsync(id, this, id, static (self, id, ct) => self.LoadAsync(id, ct), token);
 
                 ValueTask<Item?> Load(CancellationToken token) => _cache.GetOrAddAsync("k", this, static (self, ct) => self.LoadAsync(ct), token);
                 """),
@@ -710,4 +710,314 @@ public class CapturingGeneratorTests
                 ValueTask<IDictionary<string, Item?>> Get(int id, CancellationToken token) => _spanUntypedHash.GetOrAddAsync<Item, (Service Self, int Id)>(_key.AsSpan(), (Self: this, Id: id), static (s, ct) => s.Self.LoadAllInstanceAsync(s.Id, ct), _policy, token);
                 """),
             Verify.Diagnostic(0, "captures 'this' and 'id' and allocates a closure", PassThem));
+
+    [Fact]
+    public Task Two_captures_become_owner_and_argument() =>
+        Verify.FixAsync(
+            Fixture.Service("""ValueTask<Item?> Get(int id, string name, CancellationToken token) => _cache.GetOrAddAsync(id, {|#0:ct => LoadStaticAsync(id + name.Length, ct)|}, token);"""),
+            Fixture.Service("""ValueTask<Item?> Get(int id, string name, CancellationToken token) => _cache.GetOrAddAsync(id, id, name, static (id, name, ct) => LoadStaticAsync(id + name.Length, ct), token);"""),
+            Verify.Diagnostic(0, "captures 'id' and 'name' and allocates a closure", PassThem));
+
+    [Fact]
+    public Task This_and_one_local_become_self_and_argument() =>
+        Verify.FixAsync(
+            Fixture.Service("""ValueTask<Item?> Get(int id, CancellationToken token) => _cache.GetOrAddAsync(id, {|#0:ct => LoadAsync(_offset + id, ct)|}, token);"""),
+            Fixture.Service("""ValueTask<Item?> Get(int id, CancellationToken token) => _cache.GetOrAddAsync(id, this, id, static (self, id, ct) => self.LoadAsync(self._offset + id, ct), token);"""),
+            Verify.Diagnostic(0, "captures 'this' and 'id' and allocates a closure", PassThem));
+
+    [Fact]
+    public Task One_capture_becomes_the_state() =>
+        Verify.FixAsync(
+            Fixture.Service("""ValueTask<Item?> Get(string name, CancellationToken token) => _untyped.GetOrAddAsync("k", {|#0:ct => LoadStaticAsync(name.Length, ct)|}, _policy, token);"""),
+            Fixture.Service("""ValueTask<Item?> Get(string name, CancellationToken token) => _untyped.GetOrAddAsync("k", name, static (name, ct) => LoadStaticAsync(name.Length, ct), _policy, token);"""),
+            Verify.Diagnostic(0, "captures 'name' and allocates a closure", PassIt));
+
+    [Fact]
+    public Task Three_captures_become_a_named_tuple() =>
+        Verify.FixAsync(
+            Fixture.Service("""ValueTask<Item?> Get(int id, string name, int extra, CancellationToken token) => _cache.GetOrAddAsync(id, {|#0:ct => LoadStaticAsync(id + name.Length + extra, ct)|}, token);"""),
+            Fixture.Service("""ValueTask<Item?> Get(int id, string name, int extra, CancellationToken token) => _cache.GetOrAddAsync(id, (Id: id, Name: name, Extra: extra), static (s, ct) => LoadStaticAsync(s.Id + s.Name.Length + s.Extra, ct), token);"""),
+            Verify.Diagnostic(0, "captures 'id', 'name' and 'extra' and allocates a closure", PassThem));
+
+    [Fact]
+    public Task No_fix_emits_ItemN() =>
+        // Verify.FixAsync fails on any ItemN in a fixed source; four captures are the widest tuple the fix writes here.
+        Verify.FixAsync(
+            Fixture.Service("""ValueTask<Item?> Get(int a, int b, int c, CancellationToken token) => _cache.GetOrAddAsync(a, {|#0:ct => LoadAsync(a + b + c, ct)|}, token);"""),
+            Fixture.Service("""ValueTask<Item?> Get(int a, int b, int c, CancellationToken token) => _cache.GetOrAddAsync(a, (Self: this, A: a, B: b, C: c), static (s, ct) => s.Self.LoadAsync(s.A + s.B + s.C, ct), token);"""),
+            Verify.Diagnostic(0, "captures 'this', 'a', 'b' and 'c' and allocates a closure", PassThem));
+
+    [Fact]
+    public Task Reassigned_capture_is_snapshotted() =>
+        Verify.FixAsync(
+            Fixture.Service("""
+                ValueTask<Item?> Get(int id, CancellationToken token)
+                {
+                    var id0 = 7;
+                    id += id0;
+                    return _cache.GetOrAddAsync("k", {|#0:ct => LoadStaticAsync(id, ct)|}, token);
+                }
+                """),
+            Fixture.Service("""
+                ValueTask<Item?> Get(int id, CancellationToken token)
+                {
+                    var id0 = 7;
+                    id += id0;
+                    var id1 = id;
+                    return _cache.GetOrAddAsync("k", id1, static (id, ct) => LoadStaticAsync(id, ct), token);
+                }
+                """),
+            Verify.Diagnostic(0, "captures 'id' and allocates a closure", PassIt));
+
+    [Fact]
+    public Task Reassigned_capture_beside_this_is_snapshotted_for_owner_and_argument() =>
+        Verify.FixAsync(
+            Fixture.Service("""
+                ValueTask<Item?> Get(int id, CancellationToken token)
+                {
+                    id++;
+                    return _cache.GetOrAddAsync(id, {|#0:ct => LoadAsync(id, ct)|}, token);
+                }
+                """),
+            Fixture.Service("""
+                ValueTask<Item?> Get(int id, CancellationToken token)
+                {
+                    id++;
+                    var id0 = id;
+                    return _cache.GetOrAddAsync(id, this, id0, static (self, id, ct) => self.LoadAsync(id, ct), token);
+                }
+                """),
+            Verify.Diagnostic(0, "captures 'this' and 'id' and allocates a closure", PassThem));
+
+    [Fact]
+    public Task Capture_reassigned_after_the_call_is_refused()
+    {
+        var source = Fixture.Service("""
+            ValueTask<Item?> Get(int id, string name, CancellationToken token)
+            {
+                id++;
+                var pending = _cache.GetOrAddAsync(id, {|#0:ct => LoadStaticAsync(id + name.Length, ct)|}, token);
+                name = "other";
+                return pending;
+            }
+            """);
+        return Verify.FixAsync(source, source, Verify.Diagnostic(0, "captures 'id' and 'name' and allocates a closure", PassThem));
+    }
+
+    [Fact]
+    public Task Interpolated_key_is_kept_as_is() =>
+        Verify.FixAsync(
+            Fixture.Service("""ValueTask<Item?> Get(int id, string name, CancellationToken token) => _cache.GetOrAddAsync($"k:{id}:{name}", {|#0:ct => LoadStaticAsync(id + name.Length, ct)|}, token);"""),
+            Fixture.Service("""ValueTask<Item?> Get(int id, string name, CancellationToken token) => _cache.GetOrAddAsync($"k:{id}:{name}", id, name, static (id, name, ct) => LoadStaticAsync(id + name.Length, ct), token);"""),
+            Verify.Diagnostic(0, "captures 'id' and 'name' and allocates a closure", PassThem));
+
+    [Fact]
+    public Task Result_call_is_fixed_with_the_owner_and_argument_overload() =>
+        Verify.FixAsync(
+            Fixture.Service("""ValueTask<CacheResult<Item>> Get(int id, CancellationToken token) => _cache.GetOrAddResultAsync(id, {|#0:ct => LoadAsync(id, ct)|}, token);"""),
+            Fixture.Service("""ValueTask<CacheResult<Item>> Get(int id, CancellationToken token) => _cache.GetOrAddResultAsync(id, this, id, static (self, id, ct) => self.LoadAsync(id, ct), token);"""),
+            Verify.Diagnostic(0, "captures 'this' and 'id' and allocates a closure", PassThem));
+
+    [Fact]
+    public Task Fix_all_gives_each_snapshot_its_own_name() =>
+        Verify.FixAsync(
+            Fixture.Service("""
+                ValueTask<Item?> Get(int id, CancellationToken token)
+                {
+                    id++;
+                    var a = _cache.GetOrAddAsync("a", {|#0:ct => LoadStaticAsync(id, ct)|}, token);
+                    var b = _cache.GetOrAddAsync("b", {|#1:ct => LoadStaticAsync(id, ct)|}, token);
+                    return a;
+                }
+                """),
+            Fixture.Service("""
+                ValueTask<Item?> Get(int id, CancellationToken token)
+                {
+                    id++;
+                    var id0 = id;
+                    var a = _cache.GetOrAddAsync("a", id0, static (id, ct) => LoadStaticAsync(id, ct), token);
+                    var id1 = id;
+                    var b = _cache.GetOrAddAsync("b", id1, static (id, ct) => LoadStaticAsync(id, ct), token);
+                    return a;
+                }
+                """),
+            Verify.Diagnostic(0, "captures 'id' and allocates a closure", PassIt),
+            Verify.Diagnostic(1, "captures 'id' and allocates a closure", PassIt));
+
+    [Fact]
+    public Task Async_block_lambda_with_ConfigureAwait_is_fixed() =>
+        Verify.FixAsync(
+            Fixture.Service("""
+                ValueTask<Item?> Get(int id, CancellationToken token) => _cache.GetOrAddAsync("k", {|#0:async ct =>
+                {
+                    var item = await LoadStaticAsync(id, ct).ConfigureAwait(false);
+                    return item;
+                }|}, token);
+                """),
+            Fixture.Service("""
+                ValueTask<Item?> Get(int id, CancellationToken token) => _cache.GetOrAddAsync("k", id, static async (id, ct) =>
+                {
+                    var item = await LoadStaticAsync(id, ct).ConfigureAwait(false);
+                    return item;
+                }, token);
+                """),
+            Verify.Diagnostic(0, "captures 'id' and allocates a closure", PassIt));
+
+    [Fact]
+    public Task Capture_reassigned_inside_an_async_lambda_is_refused()
+    {
+        var source = Fixture.Service("""
+            ValueTask<Item?> Get(int id, CancellationToken token) => _cache.GetOrAddAsync("k", {|#0:async ct =>
+            {
+                id++;
+                return await LoadStaticAsync(id, ct).ConfigureAwait(false);
+            }|}, token);
+            """);
+        return Verify.FixAsync(source, source, Verify.Diagnostic(0, "captures 'id' and allocates a closure", PassIt));
+    }
+
+    [Fact]
+    public Task Capture_written_in_a_loop_around_the_call_is_refused()
+    {
+        var source = Fixture.Service("""
+            ValueTask<Item?> Get(CancellationToken token)
+            {
+                ValueTask<Item?> last = default;
+                for (var i = 0; i < 3; i++)
+                {
+                    last = _cache.GetOrAddAsync("k", {|#0:ct => LoadStaticAsync(i, ct)|}, token);
+                }
+
+                return last;
+            }
+            """);
+        return Verify.FixAsync(source, source, Verify.Diagnostic(0, "captures 'i' and allocates a closure", PassIt));
+    }
+
+    [Fact]
+    public Task Reassigned_capture_with_the_call_outside_a_block_is_refused()
+    {
+        var source = Fixture.Service("""
+            ValueTask<Item?> Get(int id, CancellationToken token)
+            {
+                id++;
+                if (id > 0) return _cache.GetOrAddAsync("k", {|#0:ct => LoadStaticAsync(id, ct)|}, token);
+                return default;
+            }
+
+            ValueTask<Item?> Find(int id, CancellationToken token) => id++ > 0 ? _cache.GetOrAddAsync("k", {|#1:ct => LoadStaticAsync(id, ct)|}, token) : default;
+            """);
+        return Verify.FixAsync(source, source, Verify.Diagnostic(0, "captures 'id' and allocates a closure", PassIt), Verify.Diagnostic(1, "captures 'id' and allocates a closure", PassIt));
+    }
+
+    [Fact]
+    public Task Fix_all_numbers_snapshots_across_different_methods() =>
+        Verify.FixAsync(
+            Fixture.Service("""
+                ValueTask<Item?> Get(int id, CancellationToken token)
+                {
+                    id++;
+                    var a = _cache.GetOrAddAsync("a", {|#0:ct => LoadStaticAsync(id, ct)|}, token);
+                    var b = _cache.GetOrAddResultAsync("b", {|#1:ct => LoadStaticAsync(id, ct)|}, token);
+                    return a;
+                }
+                """),
+            Fixture.Service("""
+                ValueTask<Item?> Get(int id, CancellationToken token)
+                {
+                    id++;
+                    var id0 = id;
+                    var a = _cache.GetOrAddAsync("a", id0, static (id, ct) => LoadStaticAsync(id, ct), token);
+                    var id1 = id;
+                    var b = _cache.GetOrAddResultAsync("b", id1, static (id, ct) => LoadStaticAsync(id, ct), token);
+                    return a;
+                }
+                """),
+            Verify.Diagnostic(0, "captures 'id' and allocates a closure", PassIt),
+            Verify.Diagnostic(1, "captures 'id' and allocates a closure", PassIt));
+
+    [Fact]
+    public Task Capture_aliased_by_ref_is_refused()
+    {
+        var source = Fixture.Service("""
+            ValueTask<Item?> Get(int id, CancellationToken token)
+            {
+                id++;
+                ref int alias = ref id;
+                var pending = _cache.GetOrAddAsync("k", {|#0:ct => LoadStaticAsync(id, ct)|}, token);
+                alias = 5;
+                return pending;
+            }
+            """);
+        return Verify.FixAsync(source, source, Verify.Diagnostic(0, "captures 'id' and allocates a closure", PassIt));
+    }
+
+    [Fact]
+    public Task Fix_all_keeps_snapshot_names_distinct_when_one_is_taken() =>
+        Verify.FixAsync(
+            Fixture.Service("""
+                void Fire(int id, CancellationToken token)
+                {
+                    var id0 = 0;
+                    id = id0 + 1;
+                    _ = _cache.GetOrAddAsync("a", {|#0:ct => LoadStaticAsync(id, ct)|}, token);
+                    _ = _cache.GetOrAddAsync("b", {|#1:ct => LoadStaticAsync(id, ct)|}, token);
+                }
+                """),
+            Fixture.Service("""
+                void Fire(int id, CancellationToken token)
+                {
+                    var id0 = 0;
+                    id = id0 + 1;
+                    var id2 = id;
+                    _ = _cache.GetOrAddAsync("a", id2, static (id, ct) => LoadStaticAsync(id, ct), token);
+                    var id1 = id;
+                    _ = _cache.GetOrAddAsync("b", id1, static (id, ct) => LoadStaticAsync(id, ct), token);
+                }
+                """),
+            Verify.Diagnostic(0, "captures 'id' and allocates a closure", PassIt),
+            Verify.Diagnostic(1, "captures 'id' and allocates a closure", PassIt));
+
+    [Fact]
+    public Task Snapshot_under_a_conditional_operator_is_refused()
+    {
+        var source = Fixture.Service("""
+            Task<Item?> LoadNameAsync(string name, CancellationToken ct) => Task.FromResult<Item?>(new Item());
+
+            async Task<bool> Get(string? name, CancellationToken token)
+            {
+                name = name?.Trim();
+                return name is not null && await _cache.GetOrAddAsync("k", {|#0:ct => LoadNameAsync(name, ct)|}, token) is not null;
+            }
+            """);
+        return Verify.FixAsync(source, source, Verify.Diagnostic(0, "captures 'this' and 'name' and allocates a closure", PassThem));
+    }
+
+    [Fact]
+    public Task Snapshot_is_refused_when_the_method_has_a_goto_case()
+    {
+        var source = Fixture.Service("""
+            ValueTask<Item?> Get(int id, int n, CancellationToken token)
+            {
+                ValueTask<Item?> pending = default;
+                switch (n)
+                {
+                    case 1:
+                        id++;
+                        goto case 2;
+                    case 2:
+                        pending = _cache.GetOrAddAsync("k", {|#0:ct => LoadStaticAsync(id, ct)|}, token);
+                        if (n > 5)
+                        {
+                            goto case 1;
+                        }
+
+                        break;
+                }
+
+                return pending;
+            }
+            """);
+        return Verify.FixAsync(source, source, Verify.Diagnostic(0, "captures 'id' and allocates a closure", PassIt));
+    }
 }

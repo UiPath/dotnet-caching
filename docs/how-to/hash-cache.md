@@ -26,19 +26,19 @@ public class UserDirectoryService(IHashCache<UserFieldValue> cache)
 {
     // Read all fields of a logical record — Redis HGETALL
     public ValueTask<IDictionary<string, UserFieldValue?>> GetAllAsync(string userId, CancellationToken token) =>
-        cache.GetAsync(userId, token);
+        cache.GetAsync($"user:{userId}", token);
 
     // Read one field — single Redis HGET
     public ValueTask<UserFieldValue?> GetEmailAsync(string userId, CancellationToken token) =>
-        cache.GetItemAsync(userId, "email", token);
+        cache.GetItemAsync($"user:{userId}", "email", token);
 
     // Write a full record — single Redis HSET with all fields
     public ValueTask<bool> SetAsync(string userId, IDictionary<string, UserFieldValue?> fields, CancellationToken token) =>
-        cache.SetAsync(userId, fields, TimeSpan.FromMinutes(5), token);
+        cache.SetAsync($"user:{userId}", fields, TimeSpan.FromMinutes(5), token);
 
     // Drop the whole record
     public ValueTask<bool> RemoveAsync(string userId, CancellationToken token) =>
-        cache.RemoveAsync(userId, token);
+        cache.RemoveAsync($"user:{userId}", token);
 }
 ```
 
@@ -55,7 +55,7 @@ implementation uses Redis `HMGET`.
 
 ```csharp
 // One Redis call — returns just these two fields.
-var subset = await cache.GetAsync(userId, new[] { "name", "email" }, token);
+var subset = await cache.GetAsync($"user:{userId}", new[] { "name", "email" }, token);
 ```
 
 This matters at scale: a 50-field user profile that's read on every request can serve the
@@ -99,12 +99,12 @@ public async ValueTask StoreAsync(
     var options = new HashCacheEntryOptions(
         TimeToLive: TimeSpan.FromMinutes(5),
         Metadata: metadata);
-    await cache.SetAsync(userId, fields, options, token);
+    await cache.SetAsync($"user:{userId}", fields, options, token);
 }
 
 public async ValueTask<bool> IsStaleAsync(string userId, TimeSpan threshold, CancellationToken token)
 {
-    var metadata = await cache.GetMetadataAsync(userId, token);
+    var metadata = await cache.GetMetadataAsync($"user:{userId}", token);
     if (metadata?[LastSyncTimeKey] is not { } iso)
     {
         return true;
@@ -184,7 +184,7 @@ cache, call the factory on a miss, write the result back.
 
 ```csharp
 var profile = await cache.GetOrAddAsync(
-    userId,
+    $"user:{userId}",
     async ct =>
     {
         // Called only on a cache miss.
@@ -260,7 +260,7 @@ metadata.
 
 ```csharp
 // Extend the key's TTL to 10 more minutes without rewriting any fields.
-await cache.RefreshAsync(userId, TimeSpan.FromMinutes(10), token);
+await cache.RefreshAsync($"user:{userId}", TimeSpan.FromMinutes(10), token);
 ```
 
 The `HashCacheEntryOptions` overload also lets you update metadata at the same time as the
