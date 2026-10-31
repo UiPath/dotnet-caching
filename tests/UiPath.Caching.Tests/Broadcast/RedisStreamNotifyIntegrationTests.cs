@@ -29,6 +29,21 @@ public sealed class RedisStreamNotifyIntegrationTests(RedisContainerFixture fixt
     private string? _aclUser;
 
     [Fact]
+    public async Task A_disposed_connector_ends_the_doorbell_subscribe_retries()
+    {
+        Assert.SkipUnless(fixture.Enabled, "Set RUN_REDIS_INTEGRATION_TESTS=1 (Docker required) to run.");
+        var connector = await ConnectAsync(fixture.ConnectionString);
+        var logger = new RecordingLogger();
+        // Due after the connector is gone, as for a host disposed right after it starts.
+        Topic("urn:a", FarPoll, connector: connector, logger: logger, configure: o => { o.NotifySubscriberDueTime = TimeSpan.FromMilliseconds(200); o.NotifySubscriberTimeout = TimeSpan.FromMilliseconds(100); });
+        connector.Dispose();
+
+        await Task.Delay(700, TestContext.Current.CancellationToken);
+
+        logger.Records.Count(r => r.Message.Contains("subscribe error", StringComparison.OrdinalIgnoreCase)).Should().BeLessThanOrEqualTo(1, "the retries stop once the connector is gone, rather than one per period");
+    }
+
+    [Fact]
     public async Task An_invalidation_wakes_only_the_other_node_for_one_read()
     {
         Assert.SkipUnless(fixture.Enabled, "Set RUN_REDIS_INTEGRATION_TESTS=1 (Docker required) to run.");

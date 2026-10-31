@@ -104,6 +104,56 @@ public class RedisStreamNotifyChannelTests
     }
 
     [Fact]
+    public async Task A_disposed_connector_ends_the_subscribe_retries()
+    {
+        var token = TestContext.Current.CancellationToken;
+        var redis = _fixture.Freeze<IRedisConnector>();
+        var calls = 0;
+        var firstCall = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+        redis.ConnectAsync(Arg.Any<CancellationToken>()).Returns(_ =>
+        {
+            Interlocked.Increment(ref calls);
+            firstCall.TrySetResult(true);
+            return ValueTask.FromException(new ObjectDisposedException(nameof(IRedisConnector)));
+        });
+
+        using var waiter = new SignalingFetchWaiter(5.Seconds());
+        using var sut = new RedisStreamNotifyChannel(RedisChannel.Literal("notify:test"), redis, _fixture.Create<ILogger>(), waiter, 20.Milliseconds(), 10.Milliseconds(), "self");
+
+        await firstCall.Task.WaitAsync(5.Seconds(), token);
+        await Task.Delay(200.Milliseconds(), token);
+        var settled = Volatile.Read(ref calls);
+        await Task.Delay(300.Milliseconds(), token);
+
+        settled.Should().Be(1);
+        Volatile.Read(ref calls).Should().Be(settled, "a connector that is gone for good is not tried again");
+    }
+
+    [Fact]
+    public async Task A_transient_connect_failure_is_retried_while_alive()
+    {
+        var token = TestContext.Current.CancellationToken;
+        var redis = _fixture.Freeze<IRedisConnector>();
+        var calls = 0;
+        var threeCalls = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+        redis.ConnectAsync(Arg.Any<CancellationToken>()).Returns(_ =>
+        {
+            if (Interlocked.Increment(ref calls) >= 3)
+            {
+                threeCalls.TrySetResult(true);
+            }
+            return ValueTask.FromException(new RedisConnectionException(ConnectionFailureType.UnableToConnect, CommandFlags.None, "down"));
+        });
+
+        using var waiter = new SignalingFetchWaiter(5.Seconds());
+        using var sut = new RedisStreamNotifyChannel(RedisChannel.Literal("notify:test"), redis, _fixture.Create<ILogger>(), waiter, 20.Milliseconds(), 10.Milliseconds(), "self");
+
+        await threeCalls.Task.WaitAsync(30.Seconds(), token);
+
+        Volatile.Read(ref calls).Should().BeGreaterThanOrEqualTo(3, "a transient failure is retried while the channel is alive");
+    }
+
+    [Fact]
     public async Task Dispose_unsubscribes()
     {
         var token = TestContext.Current.CancellationToken;
