@@ -282,6 +282,22 @@ public class MultilayerCacheBackgroundWriteTests
     }
 
     [Fact]
+    public async Task A_set_replaces_the_queued_background_write_of_its_key_instead_of_going_to_the_foreground()
+    {
+        using var h = new Harness(new InMemoryRedisCacheOptions { MaxBackgroundWrites = 2 });
+        var gate = h.Gate("k", "a");
+        await h.Cache.SetAsync<string>("k", "a", Background, Ct);
+        await h.Cache.SetAsync<string>("k", "b", Background, Ct);
+
+        var set = h.Cache.SetAsync<string>("k", "c", Background, Ct);
+
+        set.IsCompleted.Should().BeTrue("the queued write took the new value, so no place was needed");
+        gate.SetResult(true);
+        await h.SettledAsync();
+        h.Log.Where(e => e.StartsWith("write:k=", StringComparison.Ordinal)).Should().Equal("write:k=a", "write:k=c");
+    }
+
+    [Fact]
     public async Task A_background_set_waits_for_an_earlier_remove_of_the_key()
     {
         using var h = new Harness();

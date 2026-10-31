@@ -4,7 +4,7 @@ namespace UiPath.Caching;
 
 public class InMemoryRedisCacheOptions : IMultilayerCacheOptions, IMemoryCacheOptions
 {
-    internal const int DefaultMaxBackgroundWrites = 1024;
+    internal const int DefaultMaxBackgroundWrites = 8192;
 
     internal const int DefaultBatchChunkSize = 500;
 

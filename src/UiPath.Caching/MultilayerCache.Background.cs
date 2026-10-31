@@ -8,19 +8,18 @@ internal sealed partial class MultilayerCache : IAsyncDisposable
         Dispose();
     }
 
-    /// <summary>Local at once for the disconnected cap; the inner write, the promotion and the event follow detached.</summary>
-    private bool SetInBackground<T>(CacheEntryOptions options, T? value, CachePolicy policy)
+    /// <summary>Local at once for the disconnected cap; the inner write, the promotion and the event follow detached. Null when the reserved place went back: the caller writes in the foreground.</summary>
+    private bool? SetInBackground<T>(CacheEntryOptions options, T? value, CachePolicy policy)
     {
         var entry = NewEntry(options, value);
         return _background.Run(options.CacheKey.Name, (Cache: this, Options: options, Value: value, Policy: policy, Entry: entry), static s => s.Cache.MemorySet(s.Options, s.Value, s.Cache.DisconnectedLifetime(s.Policy), s.Entry), static (s, token) =>
             s.Cache.DetachedWriteAsync(s, static (s, token) => s.Cache.WriteDetachedAsync(s.Options, s.Value, s.Policy, token), static s => s.Cache.PromoteDetached(s.Options, s.Value, s.Policy, s.Entry), static s => s.Cache.Layered<T>().PublishSetAsync(s.Options), token));
     }
 
-    private void FillInBackground<T>(CacheEntryOptions options, T? value, CachePolicy policy, ICacheEntry<T?> entry)
-    {
-        _background.Run(options.CacheKey.Name, (Cache: this, Options: options, Value: value, Policy: policy, Entry: entry), static s => s.Cache.MemorySet(s.Options, s.Value, s.Cache.DisconnectedLifetime(s.Policy), s.Entry), static (s, token) =>
-            s.Cache.DetachedWriteAsync(s, static (s, token) => s.Cache.WriteDetachedAsync(s.Options, s.Value, s.Policy, token), static s => s.Cache.PromoteDetached(s.Options, s.Value, s.Policy, s.Entry), publish: null, token));
-    }
+    /// <summary>False when the reserved place went back: the caller writes in the foreground.</summary>
+    private bool FillInBackground<T>(CacheEntryOptions options, T? value, CachePolicy policy, ICacheEntry<T?> entry) =>
+        _background.RunWithoutEvent(options.CacheKey.Name, (Cache: this, Options: options, Value: value, Policy: policy, Entry: entry), static s => s.Cache.MemorySet(s.Options, s.Value, s.Cache.DisconnectedLifetime(s.Policy), s.Entry), static (s, token) =>
+            s.Cache.DetachedWriteAsync(s, static (s, token) => s.Cache.WriteDetachedAsync(s.Options, s.Value, s.Policy, token), static s => s.Cache.PromoteDetached(s.Options, s.Value, s.Policy, s.Entry), publish: null, token)) is not null;
 
     private ICacheEntry<T?> NewEntry<T>(CacheEntryOptions options, T? value)
     {

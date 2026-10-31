@@ -179,7 +179,7 @@ Per-topic overrides: add entries to `Topics[]` under `Broadcast:RedisPubSub`. Ea
 | `UseLocalOnlyWhenDisconnected` | `bool?` | `null` | Per-provider | `null` = `true`: serve and keep L1-only while L2 is disconnected; `false` = drop the local entry and answer a miss. |
 | `ClearLocalOnReconnect` | `bool?` | `null` | Per-provider | `null` = `true`: clear L1 when a `RedisPubSub` broadcast reconnects, since invalidations published while it was down never arrived. Inert over `RedisStreams`, which replay them and expire a topic's entries themselves when entries were lost. |
 | `LocalMaxExpirationDisconnected` | `TimeSpan?` | `00:00:30` | Per-provider | L1 TTL cap while L2 is disconnected; limits the stale-read window. |
-| `MaxBackgroundWrites` | `int` | `1024` | Per-provider | Background distributed writes (`BackgroundDistributedWrite`) in flight at once; a write that finds none free runs in the foreground. `0` turns them off. |
+| `MaxBackgroundWrites` | `int` | `8192` | Per-provider | Background distributed writes (`BackgroundDistributedWrite`) in flight at once; a write that finds none free runs in the foreground. `0` turns them off. |
 | `BatchChunkSize` | `int` | `500` | Per-provider | Keys of `RemoveManyAsync` / `SetManyAsync` put on the wire at once; the input is read in chunks of this size. |
 | `BatchConcurrentChunks` | `int` | `2` | Per-provider | Chunks of a batch call in flight at once. |
 | `BatchTopicInvalidationThreshold` | `int?` | `null` | Per-provider | Above this many keys (input of known size) a batch call publishes one topic-wide invalidation instead of one event per key. It drops the local tier of the topic for every cache sharing it; nodes on an older version ignore it. |
