@@ -77,6 +77,80 @@ public class RedisStreamSubjectWriterIntegrationTests(RedisContainerFixture fixt
         }
     }
 
+    [Fact]
+    public async Task Reads_of_a_subscribed_writer_run_the_script_only_on_Redis_7_and_later()
+    {
+        Assert.SkipUnless(fixture.Enabled, "Set RUN_REDIS_INTEGRATION_TESTS=1 (Docker required) to run.");
+
+        RedisKey stream = $"it:script:{Guid.NewGuid():N}";
+        RedisValue group = "group";
+        RedisValue field = "event";
+        using var connector = NewConnector();
+        await connector.ConnectAsync(TestContext.Current.CancellationToken);
+        var db = connector.Database;
+        await using var admin = await ConnectionMultiplexer.ConnectAsync($"{fixture.ConnectionString},allowAdmin=true");
+        using var stop = new CancellationTokenSource();
+
+        try
+        {
+            await db.StreamCreateConsumerGroupAsync(stream, group, StreamPosition.NewMessages, createStream: true);
+            var formatter = Substitute.For<IEventFormatterProxy<ICacheEvent>>();
+            formatter.Decode(Arg.Any<ReadOnlyMemory<byte>>())
+                .Returns(call => call.Arg<ReadOnlyMemory<byte>>().IsEmpty ? null : new TestCacheEvent { Valid = true, Source = new Uri("urn:other-source") });
+            var connectionState = Substitute.For<IConnectionState>();
+            connectionState.IsConnected.Returns(true);
+            var channel = Channel.CreateUnbounded<ICacheEvent>();
+            var pollInterval = TimeSpan.FromMilliseconds(50);
+            var context = new RedisStreamContext(stream, field, "consumer", group, new Uri("urn:this-source"), 10, pollInterval, false, false);
+
+            var before = await EvalCallsAsync(admin);
+            using var waiter = new SignalingFetchWaiter(pollInterval);
+            using var sut = new RedisStreamSubjectWriter<ICacheEvent>(
+                context,
+                connectionState,
+                connector,
+                channel.Writer,
+                formatter,
+                NullLogger.Instance,
+                NullTelemetryProvider.Instance,
+                NullRedisProfiler.Instance,
+                waiter,
+                () => { },
+                stop.Token);
+            sut.MarkSubscribed();
+
+            for (var i = 0; i < 5; i++)
+            {
+                await db.StreamAddAsync(stream, field, $"entry-{i}");
+                await channel.Reader.ReadAsync(TestContext.Current.CancellationToken).AsTask().WaitAsync(TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken);
+            }
+
+            var scripts = await EvalCallsAsync(admin) - before;
+            if (fixture.ServerVersion.Major < 7)
+            {
+                scripts.Should().Be(0, "the script's gap check has no data before Redis 7.0");
+            }
+            else
+            {
+                scripts.Should().BeGreaterThan(0);
+            }
+        }
+        finally
+        {
+            await stop.CancelAsync();
+            await db.KeyDeleteAsync(stream);
+        }
+    }
+
+    private static async Task<long> EvalCallsAsync(IConnectionMultiplexer admin)
+    {
+        var server = admin.GetServer(admin.GetEndPoints()[0]);
+        var commands = (await server.InfoAsync("commandstats")).SelectMany(group => group);
+        return commands
+            .Where(pair => pair.Key.StartsWith("cmdstat_eval", StringComparison.Ordinal))
+            .Sum(pair => long.Parse(pair.Value.Split("calls=")[1].Split(',')[0], System.Globalization.CultureInfo.InvariantCulture));
+    }
+
     private RedisConnector NewConnector()
     {
         var options = Options.Create(new RedisConnectionOptions { ConnectionString = fixture.ConnectionString, EnableHangDetection = false });

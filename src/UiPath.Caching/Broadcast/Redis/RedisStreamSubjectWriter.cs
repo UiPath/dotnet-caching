@@ -28,6 +28,7 @@ internal sealed partial class RedisStreamSubjectWriter<T> : IDisposable
     private readonly CancellationToken _cancelationToken;
     private readonly IFetchWaiter _waiter;
     private readonly Action _onMessagesMissed;
+    private readonly Lazy<bool> _scriptsSuited;
 
     private bool _disposed;
     private RedisValue _lastId = StreamPosition.NewMessages;
@@ -100,6 +101,8 @@ internal sealed partial class RedisStreamSubjectWriter<T> : IDisposable
         _connectionState = connectionState;
         _redis = redis;
         _stream = stream ?? new RedisStreamPort(context, redis);
+        // XINFO STREAM has no entries-added before 7.0, so the script's gap check has no data there and only costs the server.
+        _scriptsSuited = new Lazy<bool>(() => _redis.Version >= Version.Parse("7.0.0"));
         _writer = channelWriter;
         _formatter = formatter;
         _logger = logger;
@@ -342,7 +345,7 @@ internal sealed partial class RedisStreamSubjectWriter<T> : IDisposable
             return await ReadAsync().ConfigureAwait(false);
         }
 
-        if (!_noScripts)
+        if (!_noScripts && _scriptsSuited.Value)
         {
             var full = _checkForGap || !_caughtUp || _checkedAt == 0 || Environment.TickCount64 - _checkedAt >= (long)_context.PollInterval.TotalMilliseconds;
             return await CheckAndReadAsync(full).ConfigureAwait(false);
