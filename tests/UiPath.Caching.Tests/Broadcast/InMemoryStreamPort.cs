@@ -17,6 +17,7 @@ internal sealed class InMemoryStreamPort(RedisValue group, RedisValue field) : I
     private readonly Queue<Held>[] _holds = [new(), new(), new()];
     private readonly Exception?[] _failures = new Exception?[3];
     private readonly int[] _calls = new int[3];
+    private int _scriptReads;
     private long _added;
     private bool _exists;
     private bool _hasGroup;
@@ -62,6 +63,9 @@ internal sealed class InMemoryStreamPort(RedisValue group, RedisValue field) : I
             }
         }
     }
+
+    /// <summary>Reads that went through the check-and-read script.</summary>
+    public int ScriptReads => Volatile.Read(ref _scriptReads);
 
     public int Calls(Op op) => Volatile.Read(ref _calls[(int)op]);
 
@@ -116,8 +120,11 @@ internal sealed class InMemoryStreamPort(RedisValue group, RedisValue field) : I
     public Task<StreamEntry[]> ReadGroupAsync(RedisValue position, bool noAck) =>
         RunAsync(Op.Read, () => ReadCore(position, noAck));
 
-    public Task<RedisResult> CheckAndReadAsync(bool full) =>
-        RunAsync(Op.Read, () => CheckAndReadCore(full));
+    public Task<RedisResult> CheckAndReadAsync(bool full)
+    {
+        Interlocked.Increment(ref _scriptReads);
+        return RunAsync(Op.Read, () => CheckAndReadCore(full));
+    }
 
     public Task<StreamInfo> InfoAsync() => throw new RedisCommandException("XINFO is not offered");
 
