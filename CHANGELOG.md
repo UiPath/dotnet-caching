@@ -303,6 +303,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 
 ### Fixed
 
+- **Disposing the cache host disposes its broadcast topics, and the notify subscription stops retrying.** A disposed host left its topics running, and each topic's doorbell subscribe retried against the disposed connection every period, throwing each time.
 - **The Streams transport reads without the Lua script on Redis below 7.0.** The `XREADGROUP` inside Lua cost the server
   several times a plain read on every batch. The gap check still runs, using the oldest entry past the group's position, but as separate
   `XINFO STREAM` and `XINFO GROUPS` commands before the read, so it is no longer atomic with it and each read takes more round trips.

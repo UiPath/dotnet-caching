@@ -1,4 +1,7 @@
 using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
+using UiPath.Caching.Telemetry;
 
 namespace UiPath.Caching.Tests.Broadcast;
 public class RedisStreamsTopicProviderTests(ITestContextAccessor testContextAccessor) : IAsyncLifetime
@@ -48,6 +51,53 @@ public class RedisStreamsTopicProviderTests(ITestContextAccessor testContextAcce
         Sut.Keys.Should().NotBeEmpty();
         Sut.Remove(topicKey);
         Sut.Keys.Should().BeEmpty();
+    }
+
+    [Fact]
+    public void Dispose_disposes_the_topics_it_created()
+    {
+        var provider = new TopicProvider(_redisConnector, _fixture.Create<ICachingTelemetryProvider>(), _fixture.Create<IRedisProfiler>(), NullLoggerFactory.Instance);
+        var first = provider.Create("first");
+        var second = provider.Create("second");
+        var removed = provider.Create("removed");
+        provider.Remove("removed");
+        removed.ClearReceivedCalls();
+
+        provider.Dispose();
+        provider.Dispose();
+
+        first.Received(1).Dispose();
+        second.Received(1).Dispose();
+        removed.DidNotReceive().Dispose();
+        provider.Keys.Should().BeEmpty();
+    }
+
+    [Fact]
+    public void Create_throws_after_the_provider_is_disposed()
+    {
+        var provider = new TopicProvider(_redisConnector, _fixture.Create<ICachingTelemetryProvider>(), _fixture.Create<IRedisProfiler>(), NullLoggerFactory.Instance);
+        provider.Dispose();
+
+        var act = () => provider.Create("late");
+
+        act.Should().Throw<ObjectDisposedException>();
+        provider.Keys.Should().BeEmpty();
+    }
+
+    [Fact]
+    public void Dispose_disposes_the_other_topics_when_one_throws()
+    {
+        var provider = new TopicProvider(_redisConnector, _fixture.Create<ICachingTelemetryProvider>(), _fixture.Create<IRedisProfiler>(), NullLoggerFactory.Instance);
+        var first = provider.Create("first");
+        var second = provider.Create("second");
+        first.When(t => t.Dispose()).Throw(new InvalidOperationException("boom"));
+        second.When(t => t.Dispose()).Throw(new InvalidOperationException("boom"));
+
+        Action act = provider.Dispose;
+
+        act.Should().NotThrow();
+        first.Received(1).Dispose();
+        second.Received(1).Dispose();
     }
 
     [Fact]
@@ -318,5 +368,20 @@ public class RedisStreamsTopicProviderTests(ITestContextAccessor testContextAcce
         _fixture.Inject(registry);
         _sut?.Dispose();
         _sut = null; // force fixture to rebuild Sut with the new injected registry
+    }
+
+    private sealed class TopicProvider(IRedisConnector redis, ICachingTelemetryProvider telemetry, IRedisProfiler profiler, ILoggerFactory loggerFactory)
+        : RedisTopicProviderBase(redis, telemetry, profiler, loggerFactory, false)
+    {
+        public override string Name => "Test";
+
+        public override bool Enabled => true;
+
+        protected override ITopic<ICacheEvent> CreateInternalTopic(TopicKey topicKey)
+        {
+            var topic = Substitute.For<ITopic<ICacheEvent>>();
+            topic.TopicKey.Returns(topicKey);
+            return topic;
+        }
     }
 }

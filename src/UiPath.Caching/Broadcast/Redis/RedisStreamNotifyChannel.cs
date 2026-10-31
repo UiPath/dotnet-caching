@@ -159,6 +159,11 @@ internal sealed partial class RedisStreamNotifyChannel : IDisposable
             Reschedule(Timeout.InfiniteTimeSpan);
             LogSubscribeDenied(ex, _channel);
         }
+        catch (ObjectDisposedException)
+        {
+            // The connector is gone for good: retrying would only throw again every period.
+            Reschedule(Timeout.InfiniteTimeSpan);
+        }
         catch (Exception ex)
         {
             // The first failure of a streak is worth a warning; the retries, one per timer period, are not.
