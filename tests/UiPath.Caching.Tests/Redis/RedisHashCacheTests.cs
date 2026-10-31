@@ -1716,7 +1716,8 @@ public class RedisHashCacheTests(ITestContextAccessor testContextAccessor) : IAs
     [Fact]
     public async Task RefreshAsync_returns_the_metadata_buffer_when_queueing_the_write_throws()
     {
-        var metadata = new Dictionary<string, string?> { ["owner"] = "a", ["version"] = "2" };
+        // Over the writer's 16 KB copy limit, so the payload keeps its rented array.
+        var metadata = new Dictionary<string, string?> { ["owner"] = new string('a', 20_000), ["version"] = "2" };
         byte[]? rented = null;
         using var pool = new RecordingPool();
         _transaction.HashSetAsync(
@@ -1743,7 +1744,8 @@ public class RedisHashCacheTests(ITestContextAccessor testContextAccessor) : IAs
     [Fact]
     public async Task Set_returns_the_buffers_when_the_clock_throws_before_the_command()
     {
-        IDictionary<string, string?> values = new Dictionary<string, string?> { ["f"] = "v" };
+        // Over the writer's 16 KB copy limit, so the payload keeps its rented array.
+        IDictionary<string, string?> values = new Dictionary<string, string?> { ["f"] = new string('v', 20_000) };
         using var pool = new RecordingPool();
         // The first read resolves the expiration before serializing; the second is the write's own, after the buffers are rented.
         _clock.UtcNow.Returns(_ => _now, _ => throw new InvalidOperationException("clock"));
