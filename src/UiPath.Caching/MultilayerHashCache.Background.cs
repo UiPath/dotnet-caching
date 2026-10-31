@@ -22,7 +22,7 @@ internal sealed partial class MultilayerHashCache : IAsyncDisposable
             local.Entry = NewEntry(options, values);
         }
 
-        return _background.Run(options.CacheKey.Name, (Cache: this, Options: options, Value: values, Policy: policy, Local: local), static s => s.Cache.KeepBackground(s.Options, s.Value, s.Policy, s.Local), static (s, token) =>
+        return _background.RunAppending(options.CacheKey.Name, (Cache: this, Options: options, Value: values, Policy: policy, Local: local), static s => s.Cache.KeepBackground(s.Options, s.Value, s.Policy, s.Local), static (s, token) =>
             s.Cache.DetachedWriteAsync(s, static (s, token) => s.Cache.WriteDetachedAsync(s.Options, s.Value, s.Policy, s.Local, token), static s => s.Cache.PromoteDetached(s.Options, s.Policy, s.Local), static s => s.Cache.Layered<T>().PublishSetAsync(s.Options, s.Local.Counted), token));
     }
 
@@ -58,7 +58,7 @@ internal sealed partial class MultilayerHashCache : IAsyncDisposable
             options.Own = [local.Pending];
         }
 
-        _background.Run(options.CacheKey.Name, (Cache: this, Options: options, Value: values, Policy: policy, Local: local), static s => s.Cache.MemorySet(s.Options, s.Local.Entry!, s.Cache.DisconnectedLifetime(s.Policy)), static (s, token) =>
+        _background.RunAppending(options.CacheKey.Name, (Cache: this, Options: options, Value: values, Policy: policy, Local: local), static s => s.Cache.MemorySet(s.Options, s.Local.Entry!, s.Cache.DisconnectedLifetime(s.Policy)), static (s, token) =>
             s.Cache.DetachedWriteAsync(s, static (s, token) => s.Cache.WriteDetachedAsync(s.Options, s.Value, s.Policy, s.Local, token), static s => s.Cache.PromoteDetached(s.Options, s.Policy, s.Local), publish: null, token));
     }
 

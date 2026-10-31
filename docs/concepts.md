@@ -453,7 +453,7 @@ its policy says, because its payload may be memory the caller reclaims on return
   topics built on the library's own Redis providers hear these events before the keys' tokens; a custom `ITopic` gets no such
   guarantee, and a fill that commits while its event is delivered may then keep the older value. Each refused fill is counted in the
   `cache.background_write.fill_refused` metric, tagged `reason`: `changed` when the stripe's change counter moved since the read began (a peer's event, a local apply, a write's end or a touch),
-  `in_flight` when this node's write to the key or its stripe was still running, `untracked` when the read began before counting started.
+  `in_flight` when this node's write to the key or its stripe was still running, `untracked` when the read began before counting started. A queued background write of a key that a newer write of the key replaces is counted in the `cache.background_write.coalesced` metric.
 
 ### Refresh on a peer's write
 

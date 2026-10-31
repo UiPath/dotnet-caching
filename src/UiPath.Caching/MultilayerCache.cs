@@ -1009,7 +1009,7 @@ internal sealed partial class MultilayerCache : MultilayerCacheBase, ICache, ISp
             // The starter's token, unless it cancelled while callers that joined still wait for the value: then the run's, which outlives it.
             var store = cacheEntryOptions.Token.IsCancellationRequested && !scope.IsAbandoned ? cacheEntryOptions with { Token = scope.Token } : cacheEntryOptions;
             // A peer that takes the distributed lock next must find the value.
-            if (!innerCacheDisconnected && policy.BackgroundDistributedWrite == true && !DistributedLockOn(policy.Lock) && _background.TryReserve())
+            if (!innerCacheDisconnected && policy.BackgroundDistributedWrite == true && !DistributedLockOn(policy.Lock) && _background.TryReserve(cacheEntryOptions.CacheKey.Name, false))
             {
                 FillInBackground(store, ret, policy, entry);
             }
@@ -1647,7 +1647,7 @@ internal sealed partial class MultilayerCache : MultilayerCacheBase, ICache, ISp
             return await Layered<T>().InternalSetAsync(cacheEntryOptions, value, innerCacheDisconnected, policy).ConfigureAwait(false);
         }
 
-        if (policy.BackgroundDistributedWrite == true && _background.TryReserve())
+        if (policy.BackgroundDistributedWrite == true && _background.TryReserve(cacheEntryOptions.CacheKey.Name, true))
         {
             return SetInBackground(cacheEntryOptions, value, policy);
         }

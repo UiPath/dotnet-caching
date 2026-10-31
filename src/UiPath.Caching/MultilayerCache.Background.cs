@@ -18,7 +18,7 @@ internal sealed partial class MultilayerCache : IAsyncDisposable
 
     private void FillInBackground<T>(CacheEntryOptions options, T? value, CachePolicy policy, ICacheEntry<T?> entry)
     {
-        _background.Run(options.CacheKey.Name, (Cache: this, Options: options, Value: value, Policy: policy, Entry: entry), static s => s.Cache.MemorySet(s.Options, s.Value, s.Cache.DisconnectedLifetime(s.Policy), s.Entry), static (s, token) =>
+        _background.RunWithoutEvent(options.CacheKey.Name, (Cache: this, Options: options, Value: value, Policy: policy, Entry: entry), static s => s.Cache.MemorySet(s.Options, s.Value, s.Cache.DisconnectedLifetime(s.Policy), s.Entry), static (s, token) =>
             s.Cache.DetachedWriteAsync(s, static (s, token) => s.Cache.WriteDetachedAsync(s.Options, s.Value, s.Policy, token), static s => s.Cache.PromoteDetached(s.Options, s.Value, s.Policy, s.Entry), publish: null, token));
     }
 

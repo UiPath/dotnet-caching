@@ -9,6 +9,7 @@ internal sealed class BackgroundWrites(int limit, TimeSpan drainTimeout, string 
 {
     private const string FailedEvent = "cache.background_write.failed";
     private const string FillRefusedMetric = "cache.background_write.fill_refused";
+    private const string CoalescedMetric = "cache.background_write.coalesced";
     private const string TagCache = "cache.name";
     private const string TagReason = "reason";
     // Keys share counters by stripe; locks are shared by more stripes than counters are, so a cache with many stripes keeps few locks.
@@ -20,6 +21,7 @@ internal sealed class BackgroundWrites(int limit, TimeSpan drainTimeout, string 
     private readonly TelemetryTags<string> _refusedChanged = [new(TagCache, cacheName), new(TagReason, "changed")];
     private readonly TelemetryTags<string> _refusedInFlight = [new(TagCache, cacheName), new(TagReason, "in_flight")];
     private readonly TelemetryTags<string> _refusedUntracked = [new(TagCache, cacheName), new(TagReason, "untracked")];
+    private readonly TelemetryTags<string> _coalesced = [new(TagCache, cacheName)];
     private readonly Dictionary<string, Tail> _tails = new(StringComparer.Ordinal);
     private readonly CancellationTokenSource _lifetime = new();
     // Changes per stripe of keys, issued or applied locally or heard from a peer; a fill from a read started before one would put back the older value.
@@ -85,6 +87,22 @@ internal sealed class BackgroundWrites(int limit, TimeSpan drainTimeout, string 
         }
     }
 
+    /// <summary>As <see cref="TryReserve()"/>, and true past the limit while a queued write of the key can take the new one in place, which gives the place back. <paramref name="publishes"/>: the write sends the event.</summary>
+    public bool TryReserve(string key, bool publishes)
+    {
+        lock (_gate)
+        {
+            if (_closed || (_inFlight >= limit && !(_tails.TryGetValue(key, out var tail) && Replaceable(tail, publishes))))
+            {
+                return false;
+            }
+
+            ActivateLocked();
+            _inFlight++;
+            return true;
+        }
+    }
+
     public void Release()
     {
         lock (_gate)
@@ -93,61 +111,17 @@ internal sealed class BackgroundWrites(int limit, TimeSpan drainTimeout, string 
         }
     }
 
-    /// <summary>Makes a reserved write's local write and starts its inner one; returns what <paramref name="local"/> returned.</summary>
-    public bool Run<TState>(string key, TState state, Func<TState, bool> local, Func<TState, CancellationToken, ValueTask> work)
-    {
-        var mine = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        Task? previous;
-        Tail started;
-        long issued;
-        lock (_gate)
-        {
-            if (!_tails.TryGetValue(key, out var tail))
-            {
-                _tails[key] = tail = new Tail();
-            }
+    /// <summary>Makes a reserved write's local write and starts its inner one; returns what <paramref name="local"/> returned. The write holds the whole value of the key, so a newer one may take its place while it waits.</summary>
+    public bool Run<TState>(string key, TState state, Func<TState, bool> local, Func<TState, CancellationToken, ValueTask> work) =>
+        RunCore(key, state, local, work, true, true);
 
-            if (tail.Awaited is { Count: > 0 } awaited)
-            {
-                foreach (var each in awaited)
-                {
-                    (each.Superseded ??= new(StringComparer.Ordinal)).Add(key);
-                }
+    /// <summary>As <see cref="Run{TState}(string, TState, Func{TState, bool}, Func{TState, CancellationToken, ValueTask})"/> for a write that sends no event: it never takes the place of one that does.</summary>
+    public bool RunWithoutEvent<TState>(string key, TState state, Func<TState, bool> local, Func<TState, CancellationToken, ValueTask> work) =>
+        RunCore(key, state, local, work, true, false);
 
-                previous = Task.WhenAll(tail.Background is null ? awaited.Select(static t => t.Task) : awaited.Select(static t => t.Task).Append(tail.Background.Task));
-            }
-            else
-            {
-                previous = tail.Background?.Task;
-            }
-            tail.Background = mine;
-            tail.Awaited = null;
-            started = tail;
-            issued = ++tail.Issued;
-            Interlocked.Increment(ref _changes[Stripe(key)]);
-        }
-
-        try
-        {
-            onIssued?.Invoke(key);
-
-            // Two writes of the key can reach the gate out of issue order; the later one's value stands.
-            lock (started.Gate)
-            {
-                if (issued < started.Applied)
-                {
-                    return true;
-                }
-
-                started.Applied = issued;
-                return Apply(key, state, local);
-            }
-        }
-        finally
-        {
-            _ = ExecuteAsync(key, mine, previous, state, work);
-        }
-    }
+    /// <summary>As <see cref="Run{TState}(string, TState, Func{TState, bool}, Func{TState, CancellationToken, ValueTask})"/> for a write that is only part of the key's value, which every write of the key must reach the inner tier.</summary>
+    public bool RunAppending<TState>(string key, TState state, Func<TState, bool> local, Func<TState, CancellationToken, ValueTask> work) =>
+        RunCore(key, state, local, work, false, true);
 
     /// <summary>Places an awaited write of the key after the background writes issued before it.</summary>
     public Turn Enter(string key)
@@ -352,6 +326,32 @@ internal sealed class BackgroundWrites(int limit, TimeSpan drainTimeout, string 
         }
     }
 
+    // Under _gate: the tail's last write is waiting, holds a whole value, no awaited write is queued after it, and the new write sends its event if the waiting one does.
+    private static bool Replaceable(Tail tail, bool publishes) => tail.Background is { Taken: false, Coalesce: true } queued && (publishes || !queued.Publishes) && tail.Awaited is not { Count: > 0 };
+
+    // Under _gate: makes the element the tail's last and returns what it waits for.
+    private static Task? Chain(string key, Tail tail, Queued mine)
+    {
+        Task? previous;
+        if (tail.Awaited is { Count: > 0 } awaited)
+        {
+            foreach (var each in awaited)
+            {
+                (each.Superseded ??= new(StringComparer.Ordinal)).Add(key);
+            }
+
+            previous = Task.WhenAll(tail.Background is null ? awaited.Select(static t => t.Task) : awaited.Select(static t => t.Task).Append(tail.Background.Task));
+        }
+        else
+        {
+            previous = tail.Background?.Task;
+        }
+
+        tail.Background = mine;
+        tail.Awaited = null;
+        return previous;
+    }
+
     // The earlier writes' tasks only ever complete successfully, so this throws nothing but a cancellation of token.
     private static ValueTask Settled(Task pending, CancellationToken token) => pending.IsCompleted ? default : new ValueTask(pending.WaitAsync(token));
 
@@ -536,6 +536,18 @@ internal sealed class BackgroundWrites(int limit, TimeSpan drainTimeout, string 
         }
     }
 
+    private void Coalesced()
+    {
+        try
+        {
+            telemetry.TrackMetric(CoalescedMetric, 1, _coalesced);
+        }
+        catch (Exception ex)
+        {
+            telemetry.TryTrackException(ex);
+        }
+    }
+
     private void FillRefused(TelemetryTags<string> tags)
     {
         try
@@ -603,7 +615,7 @@ internal sealed class BackgroundWrites(int limit, TimeSpan drainTimeout, string 
         }
     }
 
-    private async Task ExecuteAsync<TState>(string key, TaskCompletionSource mine, Task? previous, TState state, Func<TState, CancellationToken, ValueTask> work)
+    private async Task ExecuteAsync(string key, Queued mine, Task? previous)
     {
         var drainCancelled = false;
         try
@@ -614,7 +626,30 @@ internal sealed class BackgroundWrites(int limit, TimeSpan drainTimeout, string 
                 await previous.WaitAsync(_lifetime.Token).ConfigureAwait(false);
             }
 
-            await work(state, _lifetime.Token).ConfigureAwait(false);
+            Job? job = null;
+            while (job is null)
+            {
+                Task? hold = null;
+                lock (_gate)
+                {
+                    if (mine.Applying == 0)
+                    {
+                        mine.Taken = true;
+                        job = mine.Job;
+                    }
+                    else
+                    {
+                        hold = (mine.Hold ??= new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously)).Task;
+                    }
+                }
+
+                if (hold is not null)
+                {
+                    await hold.WaitAsync(_lifetime.Token).ConfigureAwait(false);
+                }
+            }
+
+            await job.RunAsync(_lifetime.Token).ConfigureAwait(false);
         }
         catch (OperationCanceledException) when (_lifetime.IsCancellationRequested)
         {
@@ -631,6 +666,7 @@ internal sealed class BackgroundWrites(int limit, TimeSpan drainTimeout, string 
             Touch(key);
             lock (_gate)
             {
+                mine.Taken = true;
                 if (_tails.TryGetValue(key, out var tail) && ReferenceEquals(tail.Background, mine))
                 {
                     tail.Background = null;
@@ -648,6 +684,83 @@ internal sealed class BackgroundWrites(int limit, TimeSpan drainTimeout, string 
         {
             logger.LogInformation("A background write in {Cache} was cancelled by the drain; its key stays local only.", cacheName);
             Failed("drain_cancelled");
+        }
+    }
+
+    private bool RunCore<TState>(string key, TState state, Func<TState, bool> local, Func<TState, CancellationToken, ValueTask> work, bool coalesce, bool publishes)
+    {
+        Queued? mine = null;
+        Queued? replaced = null;
+        Task? previous = null;
+        Tail started;
+        long issued;
+        lock (_gate)
+        {
+            if (!_tails.TryGetValue(key, out var tail))
+            {
+                _tails[key] = tail = new Tail();
+            }
+
+            // Only the newest value matters: a queued write that has not started takes the new one in place, and the new reservation goes back.
+            if (coalesce && Replaceable(tail, publishes))
+            {
+                // Held until its local apply is done, so the inner write never starts before it.
+                replaced = tail.Background!;
+                replaced.Job = new Job<TState>(state, work);
+                replaced.Publishes = publishes;
+                replaced.Applying++;
+                ReleaseLocked();
+            }
+            else
+            {
+                mine = new Queued(new Job<TState>(state, work), coalesce, publishes);
+                previous = Chain(key, tail, mine);
+            }
+
+            started = tail;
+            issued = ++tail.Issued;
+            Interlocked.Increment(ref _changes[Stripe(key)]);
+        }
+
+        if (replaced is not null)
+        {
+            Coalesced();
+        }
+
+        try
+        {
+            onIssued?.Invoke(key);
+
+            // Two writes of the key can reach the gate out of issue order; the later one's value stands.
+            lock (started.Gate)
+            {
+                if (issued < started.Applied)
+                {
+                    return true;
+                }
+
+                started.Applied = issued;
+                return Apply(key, state, local);
+            }
+        }
+        finally
+        {
+            if (mine is not null)
+            {
+                _ = ExecuteAsync(key, mine, previous);
+            }
+
+            if (replaced is not null)
+            {
+                lock (_gate)
+                {
+                    if (--replaced.Applying == 0)
+                    {
+                        replaced.Hold?.TrySetResult();
+                        replaced.Hold = null;
+                    }
+                }
+            }
         }
     }
 
@@ -820,11 +933,34 @@ internal sealed class BackgroundWrites(int limit, TimeSpan drainTimeout, string 
         public HashSet<string>? Superseded;
     }
 
+    private abstract class Job
+    {
+        public abstract ValueTask RunAsync(CancellationToken token);
+    }
+
+    private sealed class Job<TState>(TState state, Func<TState, CancellationToken, ValueTask> work) : Job
+    {
+        public override ValueTask RunAsync(CancellationToken token) => work(state, token);
+    }
+
+    // A background write in the order; a newer write of the key replaces its job until Taken.
+    private sealed class Queued(Job job, bool coalesce, bool publishes) : TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously)
+    {
+        public readonly bool Coalesce = coalesce;
+        // Under _gate.
+        public Job Job = job;
+        public bool Publishes = publishes;
+        // Writes that took the job and have not yet made their local write; the job waits for them.
+        public int Applying;
+        public TaskCompletionSource? Hold;
+        public bool Taken;
+    }
+
     private sealed class Tail
     {
         public readonly Lock Gate = new();
         // Under _gate, except Applied, which is under Gate.
-        public TaskCompletionSource? Background;
+        public Queued? Background;
         public List<Awaited>? Awaited;
         public long Issued;
         public long Applied;
