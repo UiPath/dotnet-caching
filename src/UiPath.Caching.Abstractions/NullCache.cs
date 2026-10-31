@@ -2,7 +2,7 @@ namespace UiPath.Caching;
 
 [ExcludeFromCodeCoverage]
 [System.Diagnostics.CodeAnalysis.SuppressMessage("Performance", "CA1822:Mark members as static", Justification = "Public instance members mirroring ICache, so calls on a NullCache-typed variable bind.")]
-public sealed class NullCache : ICache, ISpanKeyCache
+public sealed class NullCache : ICache, ISpanKeyCache, IResultCache
 {
     public static readonly NullCache Instance = new();
 
@@ -331,6 +331,90 @@ public sealed class NullCache : ICache, ISpanKeyCache
     }
 
     // Nothing is stored, so nothing fails.
+    public ValueTask<CacheResult<T>> GetOrAddResultAsync<T>(CacheKey cacheKey, Func<CancellationToken, Task<T?>> generator, CachePolicy? policy, CancellationToken token = default) =>
+        GeneratedAsync(ReturnGeneratorAsync(generator, token));
+
+    public ValueTask<CacheResult<T>> GetOrAddResultAsync<T>(CacheKey cacheKey, Func<CancellationToken, Task<T?>> generator, TimeSpan expiration, CachePolicy? policy, CancellationToken token = default) =>
+        GeneratedAsync(ReturnGeneratorAsync(generator, token));
+
+    public ValueTask<CacheResult<T>> GetOrAddResultAsync<T>(CacheKey cacheKey, Func<CancellationToken, Task<T?>> generator, DateTimeOffset expiration, CachePolicy? policy, CancellationToken token = default) =>
+        GeneratedAsync(ReturnGeneratorAsync(generator, token));
+
+    public ValueTask<CacheResult<T>> GetOrAddResultAsync<T, TState>(CacheKey cacheKey, TState state, Func<TState, CancellationToken, Task<T?>> generator, CachePolicy? policy, CancellationToken token = default) =>
+        GeneratedAsync(ReturnGeneratorAsync(state, generator, token));
+
+    public ValueTask<CacheResult<T>> GetOrAddResultAsync<T, TState>(CacheKey cacheKey, TState state, Func<TState, CancellationToken, Task<T?>> generator, TimeSpan expiration, CachePolicy? policy, CancellationToken token = default) =>
+        GeneratedAsync(ReturnGeneratorAsync(state, generator, token));
+
+    public ValueTask<CacheResult<T>> GetOrAddResultAsync<T, TState>(CacheKey cacheKey, TState state, Func<TState, CancellationToken, Task<T?>> generator, DateTimeOffset expiration, CachePolicy? policy, CancellationToken token = default) =>
+        GeneratedAsync(ReturnGeneratorAsync(state, generator, token));
+
+    [OverloadResolutionPriority(2)]
+    public ValueTask<CacheResult<T>> GetOrAddResultAsync<T>(ref CacheKeyHandler cacheKey, Func<CancellationToken, Task<T?>> generator, CachePolicy? policy, CancellationToken token = default)
+    {
+        cacheKey.Return();
+        return GeneratedAsync(ReturnGeneratorAsync(generator, token));
+    }
+
+    [OverloadResolutionPriority(2)]
+    public ValueTask<CacheResult<T>> GetOrAddResultAsync<T>(ref CacheKeyHandler cacheKey, Func<CancellationToken, Task<T?>> generator, TimeSpan expiration, CachePolicy? policy, CancellationToken token = default)
+    {
+        cacheKey.Return();
+        return GeneratedAsync(ReturnGeneratorAsync(generator, token));
+    }
+
+    [OverloadResolutionPriority(2)]
+    public ValueTask<CacheResult<T>> GetOrAddResultAsync<T>(ref CacheKeyHandler cacheKey, Func<CancellationToken, Task<T?>> generator, DateTimeOffset expiration, CachePolicy? policy, CancellationToken token = default)
+    {
+        cacheKey.Return();
+        return GeneratedAsync(ReturnGeneratorAsync(generator, token));
+    }
+
+    [OverloadResolutionPriority(2)]
+    public ValueTask<CacheResult<T>> GetOrAddResultAsync<T, TState>(ref CacheKeyHandler cacheKey, TState state, Func<TState, CancellationToken, Task<T?>> generator, CachePolicy? policy, CancellationToken token = default)
+    {
+        cacheKey.Return();
+        return GeneratedAsync(ReturnGeneratorAsync(state, generator, token));
+    }
+
+    [OverloadResolutionPriority(2)]
+    public ValueTask<CacheResult<T>> GetOrAddResultAsync<T, TState>(ref CacheKeyHandler cacheKey, TState state, Func<TState, CancellationToken, Task<T?>> generator, TimeSpan expiration, CachePolicy? policy, CancellationToken token = default)
+    {
+        cacheKey.Return();
+        return GeneratedAsync(ReturnGeneratorAsync(state, generator, token));
+    }
+
+    [OverloadResolutionPriority(2)]
+    public ValueTask<CacheResult<T>> GetOrAddResultAsync<T, TState>(ref CacheKeyHandler cacheKey, TState state, Func<TState, CancellationToken, Task<T?>> generator, DateTimeOffset expiration, CachePolicy? policy, CancellationToken token = default)
+    {
+        cacheKey.Return();
+        return GeneratedAsync(ReturnGeneratorAsync(state, generator, token));
+    }
+
+    ValueTask<CacheResult<T>> IResultCache.GetOrAddResultAsync<T>(Span<char> cacheKey, Func<CancellationToken, Task<T?>> generator, CachePolicy? policy, CancellationToken token)
+        where T : default =>
+        GeneratedAsync(ReturnGeneratorAsync(generator, token));
+
+    ValueTask<CacheResult<T>> IResultCache.GetOrAddResultAsync<T>(Span<char> cacheKey, Func<CancellationToken, Task<T?>> generator, TimeSpan expiration, CachePolicy? policy, CancellationToken token)
+        where T : default =>
+        GeneratedAsync(ReturnGeneratorAsync(generator, token));
+
+    ValueTask<CacheResult<T>> IResultCache.GetOrAddResultAsync<T>(Span<char> cacheKey, Func<CancellationToken, Task<T?>> generator, DateTimeOffset expiration, CachePolicy? policy, CancellationToken token)
+        where T : default =>
+        GeneratedAsync(ReturnGeneratorAsync(generator, token));
+
+    ValueTask<CacheResult<T>> IResultCache.GetOrAddResultAsync<T, TState>(Span<char> cacheKey, TState state, Func<TState, CancellationToken, Task<T?>> generator, CachePolicy? policy, CancellationToken token)
+        where T : default =>
+        GeneratedAsync(ReturnGeneratorAsync(state, generator, token));
+
+    ValueTask<CacheResult<T>> IResultCache.GetOrAddResultAsync<T, TState>(Span<char> cacheKey, TState state, Func<TState, CancellationToken, Task<T?>> generator, TimeSpan expiration, CachePolicy? policy, CancellationToken token)
+        where T : default =>
+        GeneratedAsync(ReturnGeneratorAsync(state, generator, token));
+
+    ValueTask<CacheResult<T>> IResultCache.GetOrAddResultAsync<T, TState>(Span<char> cacheKey, TState state, Func<TState, CancellationToken, Task<T?>> generator, DateTimeOffset expiration, CachePolicy? policy, CancellationToken token)
+        where T : default =>
+        GeneratedAsync(ReturnGeneratorAsync(state, generator, token));
+
     private static ValueTask<IReadOnlyList<CacheKey>> NoneFailedAsync<T>()
     {
         NotCacheableException.ThrowIfNotCacheable<T>();
@@ -391,6 +475,9 @@ public sealed class NullCache : ICache, ISpanKeyCache
             .ToDictionary(a => keyOfRequest[a.Key], a => a.Value);
         return Array.ConvertAll(distinct, e => new KeyValuePair<TState, T?>(e.Value, answers.GetValueOrDefault(e.Key)));
     }
+
+    private static async ValueTask<CacheResult<T>> GeneratedAsync<T>(ValueTask<T?> generated) =>
+        new(await generated.ConfigureAwait(false), null, WasGenerated: true);
 
     private sealed record NullCacheEntry<T> : ICacheEntry<T>
     {

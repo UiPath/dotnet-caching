@@ -258,6 +258,33 @@ public class OverloadShapeTests
         allocated.Should().BeGreaterThan(12_000);
     }
 
+    [Fact]
+    public async Task Two_parameter_lambda_still_binds_to_the_state_member()
+    {
+        var cache = Substitute.For<ICache>();
+        var owner = new object();
+
+        await cache.GetOrAddAsync<string, object>("k", owner, (o, _) => Task.FromResult<string?>("v"), null, Ct);
+        await cache.GetOrAddAsync<string, object>("k", owner, static (_, _) => Task.FromResult<string?>("v"), TimeSpan.FromMinutes(1), null, Ct);
+
+        await cache.Received(1).GetOrAddAsync<string, object>(Arg.Any<CacheKey>(), owner, Arg.Any<Func<object, CancellationToken, Task<string?>>>(), Arg.Any<CachePolicy?>(), Arg.Any<CancellationToken>());
+        await cache.Received(1).GetOrAddAsync<string, object>(Arg.Any<CacheKey>(), owner, Arg.Any<Func<object, CancellationToken, Task<string?>>>(), TimeSpan.FromMinutes(1), Arg.Any<CachePolicy?>(), Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task Interpolated_key_binds_to_the_handler_member_of_the_owner_and_argument_overload()
+    {
+        var cache = Substitute.For<ICache>();
+        var padding = new string('X', 4000);
+        var owner = new object();
+        static Task<string?> Generator(object o, int a, CancellationToken t) => Task.FromResult<string?>("v");
+        await cache.GetOrAddAsync($"{padding}:{7}", owner, 1, Generator, null, Ct);
+
+        var allocated = Allocated(() => cache.GetOrAddAsync($"{padding}:{7}", owner, 1, Generator, null, Ct).AsTask());
+
+        allocated.Should().BeLessThan(12_000, "the handler builds the 8000-byte normalized key once; the string path also allocates the interpolated string");
+    }
+
     private static long Allocated(Func<Task> call)
     {
         var before = GC.GetAllocatedBytesForCurrentThread();
