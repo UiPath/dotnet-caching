@@ -8,7 +8,7 @@ Alphabetical lookup for terms used across the docs.
 
 **Background distributed write** — `BackgroundDistributedWrite`: a single-key set returns once the value is in the local tier, and the distributed write follows detached. Writes to one key keep their order. See [concepts.md](../concepts.md#background-distributed-writes).
 
-**Bundled GET+TTL** — A single Redis transaction that fetches a value and its remaining TTL in one round-trip, replacing the older N+1 pattern. Implemented on `ICache.GetCacheEntryAsync<T>` and `IHashCache.GetCacheEntryAsync<T>`. Routes by `ReadFrom` (the master by default, a replica with `Replica`) through the flag on the transaction's `ExecuteAsync`.
+**Bundled GET+TTL** — A pair of Redis commands (value and TTL) sent together in one round-trip, not atomic, replacing the older N+1 pattern. Implemented on `ICache.GetCacheEntryAsync<T>` and `IHashCache.GetCacheEntryAsync<T>`. Routes by `ReadFrom` (the master by default, a replica with `Replica`) through the flag on each command.
 
 **CacheKey** — A typed wrapper around `string` used everywhere a key is accepted. Implicit-converts from `string`.
 

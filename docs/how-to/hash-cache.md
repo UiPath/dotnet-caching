@@ -167,15 +167,11 @@ var entry = await cache.GetCacheEntryAsync(key, token);
 Any code path that reads a cached value and then immediately checks its expiration — typical
 for refresh-ahead and staleness-check logic — was paying double the Redis round-trips on
 every hit. For services running cache-aside loops at thousands of ops/sec, collapsing that
-pair into one transaction halves the Redis command rate for those paths. The migration is
+pair into one round trip halves the Redis command rate for those paths. The migration is
 mechanical: replace `GetAsync` + `TimeToLiveAsync` (or `ExpireTimeAsync`) pairs with
 `GetCacheEntryAsync`, then use `entry.Value` and `entry.Expiration`.
 
-**Routing note:** the transaction's `ExecuteAsync` call is issued with
-the read flag (`PreferMaster`, or `PreferReplica` with `ReadFrom` set to `Replica`), so the routing holds even when wrapped in a
-transaction. SE.Redis ignores `PreferReplica` set on individual queued commands when
-choosing the server for the transaction, so the flag must be on `ExecuteAsync` itself —
-the library handles this correctly, and you don't need to opt in.
+**Routing note:** the value and TTL commands are each issued with the read flag (`PreferMaster`, or `PreferReplica` with `ReadFrom` set to `Replica`), so the routing holds for both. The pair is not atomic: a key that expires between them reads as a value without a TTL.
 
 ## `GetOrAddAsync`
 
