@@ -32,11 +32,11 @@ public class RedisCacheOptions : ICacheOptions
 
     /// <summary>
     /// Read a value and its expiration with one read-only script (<c>EVAL_RO</c>) on Redis 7 and later, which allocates
-    /// less than a MULTI/EXEC transaction. On by default. Before Redis 7, and on a server that cannot run the script,
-    /// reads use the transaction: they switch to it for good, with a warning, if the first script fails for any reason,
-    /// or later if the server refuses one as unknown or not permitted. Set to <see langword="false"/> to never send a script.
+    /// less than a MULTI/EXEC transaction. Off by default: the script costs the server several times a plain GET and PTTL, which is what a read sends instead (as it does before Redis 7). When on, and on a server that cannot run the script,
+    /// reads switch to the GET and PTTL pair: they switch to it for good, with a warning, if the first script fails for any reason,
+    /// or later if the server refuses one as unknown or not permitted. Set to <see langword="true"/> to send the script.
     /// </summary>
-    public bool ReadScriptsEnabled { get; set; } = true;
+    public bool ReadScriptsEnabled { get; set; }
 
     /// <summary>
     /// Which node answers a read. <see cref="RedisReadFrom.Master"/> by default: the master answers in about a third of a replica's
