@@ -8,6 +8,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 
 ### Added
 
+- **`GetOrAddResultAsync`.** Returns `CacheResult<T>(Value, Expiration, WasGenerated)` so a caller knows whether its own generator produced the value: `false` for a hit and for a call
+  that waited on a concurrent caller's generation. `Expiration` is the entry's stored expiration (null when unknown, when the entry has no expiry, or when nothing was stored). Available on `ICache` and `ICache<T>` in the closure, state and
+  owner-and-argument forms; a cache outside the library gets a default that wraps the generator, at one allocation per call; it reports `Expiration` only for the `DateTimeOffset` form when its generator ran.
 - **Interpolated keys on every `ICache` and `IHashCache` operation.** Pass `$"{tenantId}:{userId}"` where a key goes, on `ICache`,
   `ICache<T>`, `IHashCache` and `IHashCache<T>` (and `NullCache`, `NullHashCache`): the text is written to a 256-character stack buffer (a longer key rents from `ArrayPool`), so a local hit
   allocates nothing. Values format in the current culture, as in any string interpolation. A string

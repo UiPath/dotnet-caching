@@ -15,11 +15,16 @@ internal sealed class InFlight<TKey, TResult>
     /// <summary>Runs in the table, for tests.</summary>
     internal int Count => _flights.Count;
 
-    public ValueTask<TResult> RunAsync<TState>(TKey key, TState state, Func<TState, IInFlightRun, ValueTask<TResult>> work, CancellationToken token)
+    public ValueTask<TResult> RunAsync<TState>(TKey key, TState state, Func<TState, IInFlightRun, ValueTask<TResult>> work, CancellationToken token) =>
+        RunAsync(key, state, work, token, out _);
+
+    /// <summary>As the overload without it, also handing back the run, so a caller can read what the work recorded on it once the task completes.</summary>
+    public ValueTask<TResult> RunAsync<TState>(TKey key, TState state, Func<TState, IInFlightRun, ValueTask<TResult>> work, CancellationToken token, out IInFlightRun run)
     {
         // A caller cancelled before it arrives starts no work and joins none.
         token.ThrowIfCancellationRequested();
         var flight = Join(key, state, work, token.CanBeCanceled, out var started);
+        run = flight;
 
         // The caller that started the work waits on the work itself: the shared task would resume it through a thread-pool hop.
         // A joiner has no work of its own to wait on, and neither has a starter whose work finished before it first yielded.
@@ -223,6 +228,8 @@ internal sealed class InFlight<TKey, TResult>
 
         /// <summary>The work as its starter awaits it, ending with the work's own failure; null when the work finished before it first yielded.</summary>
         public Task<TResult>? Starter { get; private set; }
+
+        public DateTimeOffset? Expiration { get; set; }
 
         private Outcome Current => (Outcome)Volatile.Read(ref _state);
 

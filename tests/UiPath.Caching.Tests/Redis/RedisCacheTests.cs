@@ -1103,6 +1103,28 @@ public class RedisCacheTests(ITestContextAccessor testContextAccessor) : IAsyncL
         await _database.DidNotReceive().ScriptEvaluateReadOnlyAsync(Arg.Any<string>(), Arg.Any<RedisKey[]?>(), Arg.Any<RedisValue[]?>(), Arg.Any<CommandFlags>());
     }
 
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task GetOrAddResult_records_its_reads_under_its_own_operation_name(bool readScripts)
+    {
+        _version = new(7, 0);
+        _cacheOptions.ReadScriptsEnabled = readScripts;
+        _cacheOptions.KeyReadTelemetryEnabled = true;
+        var payload = _serializer.Serialize("cached");
+        _database.StringGetWithExpiryAsync(_redisKey, Arg.Any<CommandFlags>()).Returns(new RedisValueWithExpiry(payload, TimeSpan.FromMinutes(5)));
+        _database.ScriptEvaluateReadOnlyAsync(Arg.Any<string>(), Arg.Any<RedisKey[]?>(), Arg.Any<RedisValue[]?>(), Arg.Any<CommandFlags>())
+            .Returns(RedisResult.Create([payload, (RedisValue)(DateTimeOffset.UtcNow.AddMinutes(5).ToUnixTimeMilliseconds())]));
+        _transaction.StringGetAsync(_redisKey, Arg.Any<CommandFlags>()).Returns(payload);
+        _transaction.KeyTimeToLiveAsync(Arg.Any<RedisKey>(), Arg.Any<CommandFlags>()).Returns(TimeSpan.FromMinutes(5));
+        _transaction.ExecuteAsync(Arg.Any<CommandFlags>()).Returns(true);
+
+        var hit = await ((ICache)Sut).GetOrAddResultAsync<string>(_cacheKey, static _ => throw new InvalidOperationException("ran on a hit"), TimeSpan.FromMinutes(5), null, testContextAccessor.Current.CancellationToken);
+
+        hit.WasGenerated.Should().BeFalse();
+        ReadDeps.Should().Contain(d => d.Data == _redisKey.ToString() && d.Name == nameof(ICache.GetOrAddResultAsync));
+    }
+
     [Fact]
     public async Task GetCacheEntry_uses_a_transaction_when_read_scripts_are_turned_off_v7()
     {
