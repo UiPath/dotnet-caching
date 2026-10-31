@@ -102,6 +102,272 @@ public class BackgroundWritesTests
     }
 
     [Fact]
+    public async Task Queued_background_writes_of_a_key_are_replaced_by_the_newest_and_give_their_places_back()
+    {
+        var writes = Create(4);
+        var ran = new List<string>();
+        var gate = Gate();
+        foreach (var value in new[] { "v1", "v2", "v3", "v4" })
+        {
+            Reserve(writes, "k", async _ =>
+            {
+                ran.Add(value);
+                await gate.Task;
+            });
+        }
+
+        writes.InFlight.Should().Be(2);
+        writes.TryReserve().Should().BeTrue();
+        writes.Release();
+
+        gate.SetResult();
+        await writes.DrainAsync();
+        ran.Should().Equal("v1", "v4");
+    }
+
+    [Fact]
+    public async Task A_replacing_write_past_the_limit_gives_its_place_back_and_is_counted()
+    {
+        var telemetry = Substitute.For<ICachingTelemetryProvider>();
+        var writes = new BackgroundWrites(2, TimeSpan.FromSeconds(5), "c", NullLogger.Instance, telemetry, TimeProvider.System);
+        var gate = Gate();
+        Reserve(writes, "k", async _ => await gate.Task);
+        Reserve(writes, "k", _ => ValueTask.CompletedTask);
+        writes.InFlight.Should().Be(2);
+
+        writes.TryReserve().Should().BeFalse();
+        writes.TryReserve("k", true).Should().BeTrue("a queued write of the key takes the new one in place");
+        writes.InFlight.Should().Be(3);
+        writes.Run("k", 0, static _ => true, static (_, _) => ValueTask.CompletedTask);
+
+        writes.InFlight.Should().Be(2);
+        telemetry.Received(1).TrackMetric("cache.background_write.coalesced", 1, Arg.Any<TelemetryTags<string>>());
+        gate.SetResult();
+        await writes.DrainAsync();
+        writes.InFlight.Should().Be(0);
+    }
+
+    [Fact]
+    public async Task A_place_reserved_past_the_limit_goes_back_when_the_queued_write_it_was_to_replace_started_first()
+    {
+        var writes = Create(2);
+        var ran = new List<string>();
+        var other = Gate();
+        var awaited = Gate();
+        var queued = Gate();
+        var started = Gate();
+        Reserve(writes, "other", async _ => await other.Task);
+        // Queued behind an awaited write of the key, which holds no place: when it ends, the queued write starts without giving a place back.
+        async ValueTask<bool> AwaitedWrite(List<string> r, BackgroundWrites.Keeper _)
+        {
+            await awaited.Task;
+            return Record(r, "awaited");
+        }
+
+        var write = writes.WriteAsync("k", ran, null, AwaitedWrite, static (_, written, _) => written, Ct);
+        Reserve(writes, "k", async _ =>
+        {
+            ran.Add("queued");
+            started.SetResult();
+            await queued.Task;
+        });
+        writes.InFlight.Should().Be(2);
+        writes.TryReserve("k", true).Should().BeTrue("the queued write can take the new one in place");
+        writes.InFlight.Should().Be(3);
+
+        awaited.SetResult();
+        (await write.AsTask().WaitAsync(Wait, Ct)).Should().BeTrue();
+        await started.Task.WaitAsync(Wait, Ct);
+
+        var kept = writes.Run("k", 0, static _ => true, (_, _) => Ran(ran, "new"));
+        writes.InFlight.Should().Be(2, "a write past the limit that can no longer replace the queued one takes no place");
+        kept.Should().BeNull();
+
+        // As the cache does after a refused reservation: in the foreground, after the queued write.
+        var foreground = writes.WriteAsync("k", ran, null, static (r, _) => Wrote(r, "new"), static (_, written, _) => written, Ct);
+        queued.SetResult();
+        other.SetResult();
+        (await foreground.AsTask().WaitAsync(Wait, Ct)).Should().BeTrue();
+        await writes.DrainAsync();
+        ran.Should().Equal("awaited", "queued", "new");
+        writes.InFlight.Should().Be(0);
+    }
+
+    [Fact]
+    public async Task A_write_without_an_event_does_not_take_the_place_of_a_queued_one_that_sends_it()
+    {
+        var writes = Create(3);
+        var ran = new List<string>();
+        var gate = Gate();
+        Reserve(writes, "k", async _ =>
+        {
+            ran.Add("v1");
+            await gate.Task;
+        });
+        Reserve(writes, "k", _ => Ran(ran, "set"));
+
+        writes.TryReserve("k", false).Should().BeTrue();
+        writes.InFlight.Should().Be(3);
+        writes.RunWithoutEvent("k", 0, static _ => true, (_, _) => Ran(ran, "fill"));
+        writes.InFlight.Should().Be(3, "the fill queued behind the set instead of replacing it");
+        gate.SetResult();
+        await writes.DrainAsync();
+        ran.Should().Equal("v1", "set", "fill");
+    }
+
+    [Fact]
+    public async Task A_write_that_sends_the_event_takes_the_place_of_a_queued_one_that_does_not()
+    {
+        var writes = Create(3);
+        var ran = new List<string>();
+        var gate = Gate();
+        Reserve(writes, "k", async _ =>
+        {
+            ran.Add("v1");
+            await gate.Task;
+        });
+        writes.TryReserve("k", false).Should().BeTrue();
+        writes.RunWithoutEvent("k", 0, static _ => true, (_, _) => Ran(ran, "fill"));
+        writes.TryReserve("k", true).Should().BeTrue();
+        writes.Run("k", 0, static _ => true, (_, _) => Ran(ran, "set"));
+
+        writes.InFlight.Should().Be(2);
+        gate.SetResult();
+        await writes.DrainAsync();
+        ran.Should().Equal("v1", "set");
+    }
+
+    [Fact]
+    public async Task A_replaced_write_does_not_start_before_the_write_that_replaced_it_has_made_its_local_write()
+    {
+        var gate = Gate();
+        var started = Gate();
+        var issued = 0;
+        var localDone = false;
+        bool? sawLocal = null;
+        var writes = new BackgroundWrites(4, TimeSpan.FromSeconds(5), "c", NullLogger.Instance, Substitute.For<ICachingTelemetryProvider>(), TimeProvider.System, onIssued: _ =>
+        {
+            if (++issued == 3)
+            {
+                // Between the swap and the local write: the job must not start here.
+                gate.SetResult();
+                started.Task.Wait(TimeSpan.FromMilliseconds(250), Ct);
+            }
+        });
+        Reserve(writes, "k", async _ => await gate.Task);
+        Reserve(writes, "k", _ => throw new InvalidOperationException("replaced"));
+        writes.TryReserve("k", true).Should().BeTrue();
+        bool Local(int _)
+        {
+            localDone = true;
+            return true;
+        }
+
+        ValueTask Work(int _, CancellationToken __)
+        {
+            sawLocal = Volatile.Read(ref localDone);
+            started.TrySetResult();
+            return ValueTask.CompletedTask;
+        }
+
+        writes.Run("k", 0, Local, Work);
+
+        await writes.DrainAsync();
+        sawLocal.Should().BeTrue();
+    }
+
+    [Theory]
+    [InlineData(0)]
+    [InlineData(10)]
+    [InlineData(30)]
+    public async Task Many_writes_of_one_key_land_the_last_one_everywhere_and_every_awaited_one_completes(int awaitedPercent)
+    {
+        for (var round = 0; round < 20; round++)
+        {
+            var rng = new Random(round);
+            var writes = Create(4);
+            var inner = new System.Collections.Concurrent.ConcurrentQueue<int>();
+            var local = 0L;
+            var awaited = new List<Task<bool>>();
+            const int Count = 200;
+            for (var i = 1; i <= Count; i++)
+            {
+                if (i == Count)
+                {
+                    await Task.WhenAll(awaited).WaitAsync(Wait, Ct);
+                }
+
+                if ((i == Count || rng.Next(100) >= awaitedPercent) && writes.TryReserve("k", true))
+                {
+                    bool Keep(int s)
+                    {
+                        RaiseTo(ref local, s);
+                        return true;
+                    }
+
+                    async ValueTask Work(int s, CancellationToken _)
+                    {
+                        await Task.Yield();
+                        inner.Enqueue(s);
+                    }
+
+                    writes.Run("k", i, Keep, Work);
+                }
+                else
+                {
+                    async ValueTask<bool> Write(int s, BackgroundWrites.Keeper _)
+                    {
+                        await Task.Yield();
+                        inner.Enqueue(s);
+                        return true;
+                    }
+
+                    bool Keep(int s, bool written, BackgroundWrites.Keeper keeper) => keeper.Local("k", s, x =>
+                    {
+                        RaiseTo(ref local, x);
+                        return written;
+                    });
+
+                    awaited.Add(writes.WriteAsync("k", i, null, Write, Keep, Ct).AsTask());
+                }
+
+                if (rng.Next(4) == 0)
+                {
+                    await Task.Yield();
+                }
+            }
+
+            (await Task.WhenAll(awaited).WaitAsync(Wait, Ct)).Should().OnlyContain(w => w);
+            await writes.DrainAsync().WaitAsync(Wait, Ct);
+            inner.Last().Should().Be(Count);
+            Volatile.Read(ref local).Should().Be(Count);
+            writes.InFlight.Should().Be(0);
+        }
+    }
+
+    [Fact]
+    public async Task An_awaited_write_between_background_writes_keeps_its_place()
+    {
+        var writes = Create();
+        var ran = new List<string>();
+        var gate = Gate();
+        Reserve(writes, "k", async _ =>
+        {
+            ran.Add("v1");
+            await gate.Task;
+        });
+        var awaited = writes.WriteAsync("k", ran, null, static (o, _) => Wrote(o, "v2"), static (_, written, _) => written, Ct).AsTask();
+        Reserve(writes, "k", _ => Ran(ran, "v3"));
+        Reserve(writes, "k", _ => Ran(ran, "v4"));
+
+        awaited.IsCompleted.Should().BeFalse();
+        gate.SetResult();
+        (await awaited.WaitAsync(Wait, Ct)).Should().BeTrue();
+        await writes.DrainAsync();
+        ran.Should().Equal("v1", "v2", "v4");
+    }
+
+    [Fact]
     public async Task A_write_of_several_keys_waits_for_the_background_write_of_any_of_them()
     {
         var writes = Create();
@@ -681,6 +947,20 @@ public class BackgroundWritesTests
     {
         log.Add(entry);
         return true;
+    }
+
+    private static void RaiseTo(ref long target, long value)
+    {
+        long seen;
+        while ((seen = Volatile.Read(ref target)) < value && Interlocked.CompareExchange(ref target, value, seen) != seen)
+        {
+        }
+    }
+
+    private static ValueTask Ran(List<string> log, string entry)
+    {
+        log.Add(entry);
+        return ValueTask.CompletedTask;
     }
 
     private static ValueTask<bool> Wrote(List<string> log, string entry) => ValueTask.FromResult(Record(log, entry));

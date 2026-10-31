@@ -80,7 +80,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
   whole cache): single-key `SetAsync` and the write after a `GetOrAddAsync` miss, on the cache and on the hash cache, return once the
   value is in L1, and the L2 write, then a set's event, run detached. The value is local for `LocalMaxExpirationDisconnected` until the L2 write
   succeeds, then for its normal lifetime; writes to one key keep their order; `InMemoryRedisCacheOptions.MaxBackgroundWrites`
-  (default 1024) bounds them, with the foreground as the overflow; `BackgroundWriteDrainTimeout` bounds the wait for them
+  (default 8192) bounds them, with the foreground as the overflow; `BackgroundWriteDrainTimeout` bounds the wait for them
   when the cache is disposed (`Timeout.InfiniteTimeSpan` waits for them all; those it cancels stay local only and are counted
   under the `drain_cancelled` stage). Batch writes, `RemoveAsync`, `TryAddAsync`, refresh, metadata writes and a fill under the distributed lock are
   unchanged, and wait for the background writes of their key; a background write in turn waits for every write of its key
@@ -303,6 +303,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 
 ### Fixed
 
+- **Background writes of one key coalesce.** A hot key's queued background write is replaced by a newer write of the same key, so the key no longer fills the background-write cap and pushes other writes to the foreground. Hash-cache field writes are not coalesced: each one still reaches the inner tier. A write that sends no event (a fill) never replaces a queued one that does, and each replacement is counted in the `cache.background_write.coalesced` metric. A write let in past the cap because it could replace a queued one goes to the foreground if that queued write started before it ran, so the cap holds. Awaited writes interleaved on a hot key still each take a place, so the cap can still fill in that case.
 - **Disposing the cache host disposes its broadcast topics, and the notify subscription stops retrying.** A disposed host left its topics running, and each topic's doorbell subscribe retried against the disposed connection every period, throwing each time.
 - **The Streams transport reads without the Lua script on Redis below 7.0.** The `XREADGROUP` inside Lua cost the server
   several times a plain read on every batch. The gap check still runs, using the oldest entry past the group's position, but as separate
