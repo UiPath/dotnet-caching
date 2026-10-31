@@ -2,10 +2,12 @@ using System.Runtime.InteropServices;
 using System.Text.Encodings.Web;
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using UiPath.Caching.Tests.Fakes;
 using Xunit.Sdk;
 
 namespace UiPath.Caching.Tests;
 
+[Collection(WriterPoolCollection.Name)]
 public class SerializedPayloadTests
 {
     public static IEnumerable<TheoryDataRow<object?>> Values() =>
@@ -147,6 +149,98 @@ public class SerializedPayloadTests
         });
 
         viaPayload.Should().Be(viaSerialize);
+    }
+
+    [Fact]
+    public void A_small_payload_has_its_own_exact_array_and_holds_nothing_rented()
+    {
+        using var pool = new RecordingPool();
+        var sut = new SystemJsonByteSerializerProxy();
+        var value = new Poco { Name = new string('n', 400), Count = 3, Tags = ["a", "b"] };
+
+        using var payload = SerializedPayload.Serialize(sut, value);
+
+        MemoryMarshal.TryGetArray(payload.Memory, out var segment).Should().BeTrue();
+        segment.Array!.Length.Should().Be(payload.Memory.Length);
+        pool.RentedByThisThread.Should().NotContain(segment.Array);
+        payload.Memory.ToArray().Should().Equal(sut.Serialize(value));
+    }
+
+    [Fact]
+    public async Task A_burst_of_small_payloads_held_at_once_rents_a_fixed_number_of_arrays()
+    {
+        using var pool = new RecordingPool();
+        var sut = new SystemJsonByteSerializerProxy();
+        var value = new Poco { Name = new string('n', 400), Count = 3, Tags = ["a", "b"] };
+
+        // A fresh thread starts with no cached writer: its first payload rents 256 bytes and grows once, and the rest reuse that array.
+        var rented = await Task.Factory.StartNew(
+            () =>
+            {
+                var held = Enumerable.Range(0, 3_000).Select(_ => SerializedPayload.Serialize(sut, value)).ToArray();
+                var count = pool.RentedByThisThread.Count;
+                foreach (var payload in held)
+                {
+                    payload.Dispose();
+                }
+                return count;
+            },
+            TestContext.Current.CancellationToken,
+            TaskCreationOptions.LongRunning,
+            TaskScheduler.Default);
+
+        rented.Should().BeLessThanOrEqualTo(2);
+    }
+
+    [Fact]
+    public async Task A_small_payload_returns_a_buffer_over_64_KB_to_the_pool()
+    {
+        // A pool may hand out more than asked; this one rents at least 128 KB, so the writer's buffer is over its 64 KB keep limit.
+        using var pool = new RecordingPool(minimumRent: 128 * 1024);
+        var sut = new SystemJsonByteSerializerProxy();
+        var value = new Poco { Name = new string('n', 400), Count = 3, Tags = ["a", "b"] };
+        var expected = sut.Serialize(value);
+
+        // A fresh thread starts with no cached writer, so each write below rents only if the previous one gave its buffer back.
+        var (payloads, rented) = await Task.Factory.StartNew(
+            () =>
+            {
+                var written = new List<byte[]>();
+                for (var i = 0; i < 2; i++)
+                {
+                    using var payload = SerializedPayload.Serialize(sut, value);
+                    MemoryMarshal.TryGetArray(payload.Memory, out var segment).Should().BeTrue();
+                    segment.Array!.Length.Should().Be(payload.Memory.Length);
+                    written.Add(segment.Array);
+                }
+                return (written, pool.RentedByThisThread.ToList());
+            },
+            TestContext.Current.CancellationToken,
+            TaskCreationOptions.LongRunning,
+            TaskScheduler.Default);
+
+        payloads.Should().AllSatisfy(p => p.Should().Equal(expected));
+        rented.Should().HaveCount(2, "each write rents afresh when the writer kept no buffer")
+            .And.AllSatisfy(a => a.Length.Should().BeGreaterThan(64 * 1024));
+        pool.Returned.Should().Contain(rented);
+        payloads.Should().NotContain(p => rented.Contains(p));
+    }
+
+    [Fact]
+    public void A_large_payload_keeps_its_rented_array_until_disposed()
+    {
+        using var pool = new RecordingPool();
+        var sut = new SystemJsonByteSerializerProxy();
+        var value = new string('x', 20_000);
+
+        var payload = SerializedPayload.Serialize(sut, value);
+        MemoryMarshal.TryGetArray(payload.Memory, out var segment).Should().BeTrue();
+        pool.RentedByThisThread.Should().Contain(segment.Array!);
+        pool.Returned.Should().NotContain(segment.Array!);
+
+        payload.Dispose();
+
+        pool.Returned.Should().Contain(segment.Array!);
     }
 
     [Fact]

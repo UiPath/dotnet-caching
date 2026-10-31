@@ -3,14 +3,19 @@ using System.Collections.Concurrent;
 
 namespace UiPath.Caching.Tests.Fakes;
 
-/// <summary>Stands in for the writer's pool while alive: rents from the shared pool and records every array that comes back.</summary>
+/// <summary>Stands in for the writer's pool while alive: rents from the shared pool, at least <c>minimumRent</c> bytes, and records every array that comes back.</summary>
 internal sealed class RecordingPool : ArrayPool<byte>, IDisposable
 {
     private readonly ArrayPool<byte> _previous = PooledJsonWriter.Pool;
     private readonly ConcurrentBag<byte[]> _returned = [];
     private readonly ConcurrentBag<(int Thread, byte[] Array)> _rented = [];
+    private readonly int _minimumRent;
 
-    public RecordingPool() => PooledJsonWriter.Pool = this;
+    public RecordingPool(int minimumRent = 0)
+    {
+        _minimumRent = minimumRent;
+        PooledJsonWriter.Pool = this;
+    }
 
     public IReadOnlyCollection<byte[]> Returned => _returned;
 
@@ -19,7 +24,7 @@ internal sealed class RecordingPool : ArrayPool<byte>, IDisposable
 
     public override byte[] Rent(int minimumLength)
     {
-        var array = Shared.Rent(minimumLength);
+        var array = Shared.Rent(Math.Max(minimumLength, _minimumRent));
         _rented.Add((Environment.CurrentManagedThreadId, array));
         return array;
     }

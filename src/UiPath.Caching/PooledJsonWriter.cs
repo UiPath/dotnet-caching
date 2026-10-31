@@ -3,11 +3,13 @@ using System.Text.Json;
 
 namespace UiPath.Caching;
 
-/// <summary>Writes JSON into an array rented from <see cref="Pool"/>. One per thread, since serializing is synchronous; a nested call takes a fresh one.</summary>
+/// <summary>Writes JSON into an array rented from <see cref="Pool"/>. One per thread, since serializing is synchronous; a nested call takes a fresh one. A payload up to 16 KB is returned in its own exact-size array; a larger one keeps the rented array until the payload is disposed.</summary>
 internal sealed class PooledJsonWriter : IBufferWriter<byte>
 {
     private const int MinimumBufferSize = 256;
     private const int DefaultMaxDepth = 64;
+    private const int CopyLimit = 16 * 1024;
+    private const int KeepLimit = 64 * 1024;
 
     [ThreadStatic]
     private static PooledJsonWriter? _cached;
@@ -85,8 +87,23 @@ internal sealed class PooledJsonWriter : IBufferWriter<byte>
         return _json;
     }
 
+    // A small payload is copied out so the rented array goes straight back into this writer: a burst of writes in
+    // flight would otherwise hold more rented arrays than the pool keeps, and each one would be a fresh allocation.
     private SerializedPayload Detach()
     {
+        if (_written <= CopyLimit)
+        {
+            var copy = GC.AllocateUninitializedArray<byte>(_written);
+            _buffer.AsSpan(0, _written).CopyTo(copy);
+            _written = 0;
+            if (_buffer.Length > KeepLimit)
+            {
+                Pool.Return(_buffer);
+                _buffer = [];
+            }
+            return new SerializedPayload(copy);
+        }
+
         var payload = SerializedPayload.FromRented(_buffer, _written);
         _buffer = [];
         _written = 0;

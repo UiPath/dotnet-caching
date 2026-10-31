@@ -269,6 +269,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
   adds the policy-bearing state `GetOrAddAsync` overloads and `GetOrAddWithExpirationAsync`, and the public caches declare the
   shapes the removed extensions served. A bare `default` key binds to the `CacheKey` member.
 
+- **A Redis write of up to 16 KB allocates one exact-size array.** With the built-in JSON serializer, a payload of up to 16 KB
+  is copied into its own array and the writer keeps its pooled buffer for the next write, instead of holding a buffer rented from
+  `ArrayPool<byte>.Shared` until the write completes. A larger payload still keeps its rented buffer until then.
+
 ### Removed
 
 - **`ICacheFactory.PolicyFactory`.** It is on `IPolicyDefaults` now. A factory that returned its own policy factory
