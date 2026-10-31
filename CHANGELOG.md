@@ -301,6 +301,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 
 ### Fixed
 
+- **The Streams transport reads without the Lua script on Redis below 7.0.** The script's gap check has no data there (`XINFO STREAM` has no `entries-added`), and its `XREADGROUP` inside Lua cost the server
+  several times a plain read on every batch. The check runs at most once per `PollInterval`, as on a server without scripts.
 - **A local miss whose distributed read began before a peer's write of the key no longer keeps the older value.** A node that did not hold
   the key had no change token to hear the peer's event, so the value its read found before the write was kept locally until it expired. Each
   cache with a shared distributed tier and broadcast now hears every peer `CacheSet`, `CacheRemoved` and metadata change on its topics, before

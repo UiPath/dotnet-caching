@@ -2442,6 +2442,7 @@ public class RedisStreamSubjectWriterTests : IAsyncLifetime
 
         var redisConnector = _fixture.Freeze<IRedisConnector>();
         redisConnector.Database.Returns(_database);
+        redisConnector.Version.Returns(Version.Parse("7.0.0"));
         _fixture.Inject<IStreamPort>(new RedisStreamPort(_context, redisConnector));
 
         _fixture.Inject(_formatter);
