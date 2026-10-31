@@ -3,6 +3,8 @@ using UiPath.Caching.Tests.Fakes;
 
 namespace UiPath.Caching.Tests;
 
+#pragma warning disable IDE0034 // default(CacheKey) is written out to pin the CacheKey overload; a bare default would bind differently
+
 /// <summary><c>SetAsync</c> by <c>Span&lt;char&gt;</c> writes what the <see cref="CacheKey"/> forms write, and reaches a cache's span capability when it has one.</summary>
 public class SpanKeyWriteTests
 {
@@ -13,7 +15,7 @@ public class SpanKeyWriteTests
     private static CancellationToken Ct => TestContext.Current.CancellationToken;
 
     [Fact]
-    public async Task A_bare_default_key_still_binds_to_the_CacheKey_overloads()
+    public async Task A_bare_default_key_reaches_the_cache_as_default_CacheKey()
     {
         var cache = Substitute.For<ICache>();
         var typed = Substitute.For<ICache<string>>();
@@ -25,14 +27,14 @@ public class SpanKeyWriteTests
         await hash.SetAsync<string>(default, Fields, (CachePolicy?)null, Ct);
         await typedHash.SetAsync(default, Fields, Ct);
 
-        await cache.Received(1).SetAsync<string>(Arg.Any<CacheKey>(), "v", null, Ct);
-        await typed.Received(1).SetAsync(Arg.Any<CacheKey>(), "v", Ct);
-        await hash.Received(1).SetAsync<string>(Arg.Any<CacheKey>(), Fields, (CachePolicy?)null, Ct);
-        await typedHash.Received(1).SetAsync(Arg.Any<CacheKey>(), Fields, Ct);
+        await cache.Received(1).SetAsync<string>(default(CacheKey), "v", null, Ct);
+        await typed.Received(1).SetAsync(default(CacheKey), "v", Ct);
+        await hash.Received(1).SetAsync<string>(default(CacheKey), Fields, (CachePolicy?)null, Ct);
+        await typedHash.Received(1).SetAsync(default(CacheKey), Fields, Ct);
     }
 
     [Fact]
-    public async Task A_bare_default_key_binds_to_the_CacheKey_overload_on_the_public_cache_classes()
+    public async Task A_bare_default_key_reaches_the_inner_cache_as_default_CacheKey_through_the_public_cache_classes()
     {
         var inner = Substitute.For<ICache>();
         var innerHash = Substitute.For<IHashCache>();
@@ -42,8 +44,8 @@ public class SpanKeyWriteTests
         await NullCache.Instance.SetAsync<string>(default, "v", (CachePolicy?)null, Ct);
         await NullHashCache.Instance.SetAsync<string>(default, Fields, (CachePolicy?)null, Ct);
 
-        await inner.Received(1).SetAsync<string>(Arg.Any<CacheKey>(), "v", null, Ct);
-        await innerHash.Received(1).SetAsync<string>(Arg.Any<CacheKey>(), Fields, null, Ct);
+        await inner.Received(1).SetAsync<string>(default(CacheKey), "v", null, Ct);
+        await innerHash.Received(1).SetAsync<string>(default(CacheKey), Fields, null, Ct);
     }
 
     [Fact]
@@ -51,9 +53,9 @@ public class SpanKeyWriteTests
     {
         using var cache = InMemoryMultilayer.Cache();
 
-        (await cache.SetAsync<string>(Key(" User:1 "), "a", (CachePolicy?)null, Ct)).Should().BeTrue();
-        (await cache.SetAsync<string>(Key("user:2"), "b", Ttl, null, Ct)).Should().BeTrue();
-        (await cache.SetAsync<string>(Key("user:3"), "c", Deadline, null, Ct)).Should().BeTrue();
+        (await cache.SetAsync<string>($"{Key(" User:1 ")}", "a", (CachePolicy?)null, Ct)).Should().BeTrue();
+        (await cache.SetAsync<string>($"{Key("user:2")}", "b", Ttl, null, Ct)).Should().BeTrue();
+        (await cache.SetAsync<string>($"{Key("user:3")}", "c", Deadline, null, Ct)).Should().BeTrue();
 
         (await cache.GetAsync<string>("user:1", policy: null, Ct)).Should().Be("a");
         (await cache.GetAsync<string>("user:2", policy: null, Ct)).Should().Be("b");
@@ -67,9 +69,9 @@ public class SpanKeyWriteTests
     {
         using var cache = InMemoryMultilayer.Cache();
 
-        var empty = async () => await cache.SetAsync<string>(Key("  "), "v", (CachePolicy?)null, Ct);
-        var zero = async () => await cache.SetAsync<string>(Key("k"), "v", TimeSpan.Zero, null, Ct);
-        var past = async () => await cache.SetAsync<string>(Key("k"), "v", DateTimeOffset.UtcNow.AddMinutes(-1), null, Ct);
+        var empty = async () => await cache.SetAsync<string>($"{Key("  ")}", "v", (CachePolicy?)null, Ct);
+        var zero = async () => await cache.SetAsync<string>($"{Key("k")}", "v", TimeSpan.Zero, null, Ct);
+        var past = async () => await cache.SetAsync<string>($"{Key("k")}", "v", DateTimeOffset.UtcNow.AddMinutes(-1), null, Ct);
 
         await empty.Should().ThrowAsync<ArgumentNullException>();
         await zero.Should().ThrowAsync<ArgumentOutOfRangeException>().WithParameterName("expiration");
@@ -82,9 +84,9 @@ public class SpanKeyWriteTests
         var spy = new SpanWritingCache();
         ICache cache = spy;
 
-        await cache.SetAsync<string>(Key("a"), "v", (CachePolicy?)null, Ct);
-        await cache.SetAsync<string>(Key("b"), "v", Ttl, null, Ct);
-        await cache.SetAsync<string>(Key("c"), "v", Deadline, null, Ct);
+        await cache.SetAsync<string>($"{Key("a")}", "v", (CachePolicy?)null, Ct);
+        await cache.SetAsync<string>($"{Key("b")}", "v", Ttl, null, Ct);
+        await cache.SetAsync<string>($"{Key("c")}", "v", Deadline, null, Ct);
 
         spy.SpanWrites.Should().Equal("a", "b", "c");
         spy.SetCalls.Should().Be(0);
@@ -95,9 +97,9 @@ public class SpanKeyWriteTests
     {
         var cache = new DictionaryCache();
 
-        await ((ICache)cache).SetAsync<string>(Key(" User:42 "), "v", (CachePolicy?)null, Ct);
-        await ((ICache)cache).SetAsync<string>(Key("User:43"), "v", Ttl, null, Ct);
-        await ((ICache)cache).SetAsync<string>(Key("User:44"), "v", Deadline, null, Ct);
+        await ((ICache)cache).SetAsync<string>($"{Key(" User:42 ")}", "v", (CachePolicy?)null, Ct);
+        await ((ICache)cache).SetAsync<string>($"{Key("User:43")}", "v", Ttl, null, Ct);
+        await ((ICache)cache).SetAsync<string>($"{Key("User:44")}", "v", Deadline, null, Ct);
 
         cache.SetCalls.Should().Be(3);
         cache.Read<string>("user:42").Should().Be("v");
@@ -115,10 +117,10 @@ public class SpanKeyWriteTests
         var moqTyped = new Mock<ICache<string>>(MockBehavior.Strict);
         moqTyped.Setup(c => c.SetAsync(new CacheKey("user:42"), "v", Ttl, It.IsAny<CancellationToken>())).Returns(new ValueTask<bool>(true));
 
-        await substitute.SetAsync<string>(Key("user:42"), "v", Ttl, null, Ct);
-        await typed.SetAsync(Key("user:42"), "v", Deadline, Ct);
-        (await moq.Object.SetAsync<string>(Key("user:42"), "v", Deadline, null, Ct)).Should().BeTrue();
-        (await moqTyped.Object.SetAsync(Key("user:42"), "v", Ttl, Ct)).Should().BeTrue();
+        await substitute.SetAsync<string>($"{Key("user:42")}", "v", Ttl, null, Ct);
+        await typed.SetAsync($"{Key("user:42")}", "v", Deadline, Ct);
+        (await moq.Object.SetAsync<string>($"{Key("user:42")}", "v", Deadline, null, Ct)).Should().BeTrue();
+        (await moqTyped.Object.SetAsync($"{Key("user:42")}", "v", Ttl, Ct)).Should().BeTrue();
 
         await substitute.Received(1).SetAsync<string>(new CacheKey("user:42"), "v", Ttl, null, Ct);
         await typed.Received(1).SetAsync(new CacheKey("user:42"), "v", Deadline, Ct);
@@ -133,9 +135,9 @@ public class SpanKeyWriteTests
         var typed = new Cache<string>(spy, new PrefixCacheKeyStrategy("app"));
         ICache<string> cache = typed;
 
-        await cache.SetAsync(Key("user:1"), "v", Ct);
-        await cache.SetAsync(Key("user:2"), "v", Ttl, Ct);
-        await cache.SetAsync(Key("user:3"), "v", Deadline, Ct);
+        await cache.SetAsync($"{Key("user:1")}", "v", Ct);
+        await cache.SetAsync($"{Key("user:2")}", "v", Ttl, Ct);
+        await cache.SetAsync($"{Key("user:3")}", "v", Deadline, Ct);
 
         spy.SpanWrites.Should().Equal("app:user:1", "app:user:2", "app:user:3");
         spy.SetCalls.Should().Be(0);
@@ -148,7 +150,7 @@ public class SpanKeyWriteTests
         var typed = new Cache<string>(spy, new DecliningStrategy());
         ICache<string> cache = typed;
 
-        await cache.SetAsync(Key("User:1"), "v", Ct);
+        await cache.SetAsync($"{Key("User:1")}", "v", Ct);
 
         spy.SpanWrites.Should().BeEmpty();
         spy.SetCalls.Should().Be(1);
@@ -161,9 +163,9 @@ public class SpanKeyWriteTests
         using var cache = InMemoryMultilayer.Cache(new InMemoryCacheOptions { CacheKeyStrategy = new PrefixCacheKeyStrategy("tier") });
         var typed = new Cache<string>(cache, new PrefixCacheKeyStrategy("app"));
 
-        (await typed.SetAsync(Key(" User:1 "), "a", Ct)).Should().BeTrue();
-        (await typed.SetAsync(Key("user:2"), "b", Ttl, Ct)).Should().BeTrue();
-        (await typed.SetAsync(Key("user:3"), "c", Deadline, Ct)).Should().BeTrue();
+        (await typed.SetAsync($"{Key(" User:1 ")}", "a", Ct)).Should().BeTrue();
+        (await typed.SetAsync($"{Key("user:2")}", "b", Ttl, Ct)).Should().BeTrue();
+        (await typed.SetAsync($"{Key("user:3")}", "c", Deadline, Ct)).Should().BeTrue();
 
         (await typed.GetAsync("user:1", Ct)).Should().Be("a");
         (await typed.GetAsync("user:2", Ct)).Should().Be("b");
@@ -176,10 +178,10 @@ public class SpanKeyWriteTests
     {
         using var cache = InMemoryMultilayer.HashCache();
 
-        (await cache.SetAsync<string>(Key(" User:1 "), Fields, (CachePolicy?)null, Ct)).Should().BeTrue();
-        (await cache.SetAsync<string>(Key("user:2"), Fields, Ttl, null, Ct)).Should().BeTrue();
-        (await cache.SetAsync<string>(Key("user:3"), Fields, Deadline, null, Ct)).Should().BeTrue();
-        (await cache.SetAsync<string>(Key("user:4"), Fields, new HashCacheEntryOptions(TimeToLive: Ttl), null, Ct)).Should().BeTrue();
+        (await cache.SetAsync<string>($"{Key(" User:1 ")}", Fields, (CachePolicy?)null, Ct)).Should().BeTrue();
+        (await cache.SetAsync<string>($"{Key("user:2")}", Fields, Ttl, null, Ct)).Should().BeTrue();
+        (await cache.SetAsync<string>($"{Key("user:3")}", Fields, Deadline, null, Ct)).Should().BeTrue();
+        (await cache.SetAsync<string>($"{Key("user:4")}", Fields, new HashCacheEntryOptions(TimeToLive: Ttl), null, Ct)).Should().BeTrue();
 
         foreach (var key in new[] { "user:1", "user:2", "user:3", "user:4" })
         {
@@ -193,8 +195,8 @@ public class SpanKeyWriteTests
         using var cache = InMemoryMultilayer.HashCache();
         var deadline = DateTimeOffset.UtcNow.AddMinutes(3);
 
-        (await cache.SetAsync<string>(Key("ttl"), Fields, new HashCacheEntryOptions(TimeToLive: TimeSpan.FromMinutes(3)), null, Ct)).Should().BeTrue();
-        (await cache.SetAsync<string>(Key("at"), Fields, new HashCacheEntryOptions(ExpireTime: deadline), null, Ct)).Should().BeTrue();
+        (await cache.SetAsync<string>($"{Key("ttl")}", Fields, new HashCacheEntryOptions(TimeToLive: TimeSpan.FromMinutes(3)), null, Ct)).Should().BeTrue();
+        (await cache.SetAsync<string>($"{Key("at")}", Fields, new HashCacheEntryOptions(ExpireTime: deadline), null, Ct)).Should().BeTrue();
 
         (await cache.GetCacheEntryAsync<string>("ttl", policy: null, Ct)).Expiration.Should().BeCloseTo(DateTimeOffset.UtcNow.AddMinutes(3), TimeSpan.FromSeconds(30));
         (await cache.GetCacheEntryAsync<string>("at", policy: null, Ct)).Expiration.Should().BeCloseTo(deadline, TimeSpan.FromSeconds(1));
@@ -207,11 +209,11 @@ public class SpanKeyWriteTests
         IHashCache cache = spy;
         var proxy = Substitute.For<IHashCache>();
 
-        await cache.SetAsync<string>(Key("a"), Fields, (CachePolicy?)null, Ct);
-        await cache.SetAsync<string>(Key("b"), Fields, Ttl, null, Ct);
-        await cache.SetAsync<string>(Key("c"), Fields, Deadline, null, Ct);
-        await cache.SetAsync<string>(Key("d"), Fields, new HashCacheEntryOptions(TimeToLive: Ttl), null, Ct);
-        await proxy.SetAsync<string>(Key("a"), Fields, Ttl, null, Ct);
+        await cache.SetAsync<string>($"{Key("a")}", Fields, (CachePolicy?)null, Ct);
+        await cache.SetAsync<string>($"{Key("b")}", Fields, Ttl, null, Ct);
+        await cache.SetAsync<string>($"{Key("c")}", Fields, Deadline, null, Ct);
+        await cache.SetAsync<string>($"{Key("d")}", Fields, new HashCacheEntryOptions(TimeToLive: Ttl), null, Ct);
+        await proxy.SetAsync<string>($"{Key("a")}", Fields, Ttl, null, Ct);
 
         spy.SpanWrites.Should().Equal("a", "b", "c", "d");
         spy.SetCalls.Should().Be(0);
@@ -225,11 +227,11 @@ public class SpanKeyWriteTests
         IHashCache<string> typed = new HashCache<string>(spy, new PrefixCacheKeyStrategy("app"));
         var proxy = Substitute.For<IHashCache<string>>();
 
-        await typed.SetAsync(Key("user:1"), Fields, Ct);
-        await typed.SetAsync(Key("user:2"), Fields, Ttl, Ct);
-        await typed.SetAsync(Key("user:3"), Fields, Deadline, Ct);
-        await typed.SetAsync(Key("user:4"), Fields, new HashCacheEntryOptions(TimeToLive: Ttl), Ct);
-        await proxy.SetAsync(Key("user:1"), Fields, Ttl, Ct);
+        await typed.SetAsync($"{Key("user:1")}", Fields, Ct);
+        await typed.SetAsync($"{Key("user:2")}", Fields, Ttl, Ct);
+        await typed.SetAsync($"{Key("user:3")}", Fields, Deadline, Ct);
+        await typed.SetAsync($"{Key("user:4")}", Fields, new HashCacheEntryOptions(TimeToLive: Ttl), Ct);
+        await proxy.SetAsync($"{Key("user:1")}", Fields, Ttl, Ct);
 
         spy.SpanWrites.Should().Equal("app:user:1", "app:user:2", "app:user:3", "app:user:4");
         spy.SetCalls.Should().Be(0);
@@ -242,7 +244,7 @@ public class SpanKeyWriteTests
         using var cache = InMemoryMultilayer.HashCache();
         var typed = new HashCache<string>(cache, new PrefixCacheKeyStrategy("app"));
 
-        (await typed.SetAsync(Key(" User:1 "), Fields, Ct)).Should().BeTrue();
+        (await typed.SetAsync($"{Key(" User:1 ")}", Fields, Ct)).Should().BeTrue();
 
         (await typed.GetItemAsync("user:1", "f", Ct)).Should().Be("v");
     }
@@ -259,15 +261,15 @@ public class SpanKeyWriteTests
         ICache<string> typed = new Cache<string>(spy, policy: policy);
         IHashCache<string> typedHash = new HashCache<string>(hashSpy, policy: policy);
 
-        await cache.SetAsync<string>(Key("a"), "v", Ttl, policy, Ct);
-        await cache.SetAsync<string>(Key("b"), "v", Deadline, policy, Ct);
-        await typed.SetAsync(Key("c"), "v", Ttl, Ct);
-        await typed.SetAsync(Key("d"), "v", Ct);
-        await hash.SetAsync<string>(Key("a"), Fields, options, policy, Ct);
-        await typedHash.SetAsync(Key("b"), Fields, Deadline, Ct);
-        await typedHash.SetAsync(Key("c"), Fields, Ct);
-        await typedHash.SetAsync(Key("d"), Fields, Ttl, Ct);
-        await typedHash.SetAsync(Key("e"), Fields, options, Ct);
+        await cache.SetAsync<string>($"{Key("a")}", "v", Ttl, policy, Ct);
+        await cache.SetAsync<string>($"{Key("b")}", "v", Deadline, policy, Ct);
+        await typed.SetAsync($"{Key("c")}", "v", Ttl, Ct);
+        await typed.SetAsync($"{Key("d")}", "v", Ct);
+        await hash.SetAsync<string>($"{Key("a")}", Fields, options, policy, Ct);
+        await typedHash.SetAsync($"{Key("b")}", Fields, Deadline, Ct);
+        await typedHash.SetAsync($"{Key("c")}", Fields, Ct);
+        await typedHash.SetAsync($"{Key("d")}", Fields, Ttl, Ct);
+        await typedHash.SetAsync($"{Key("e")}", Fields, options, Ct);
 
         spy.Calls.Should().Equal(("a", policy, Ttl), ("b", policy, Deadline), ("c", policy, Ttl), ("d", policy, null));
         hashSpy.Calls.Should().Equal(("a", policy, options), ("b", policy, Deadline), ("c", policy, null), ("d", policy, Ttl), ("e", policy, options));
@@ -276,10 +278,10 @@ public class SpanKeyWriteTests
     [Fact]
     public async Task The_null_caches_accept_a_span_write_and_keep_nothing()
     {
-        (await NullCache.Instance.SetAsync<string>(Key("k"), "v", (CachePolicy?)null, Ct)).Should().BeTrue();
-        (await NullHashCache.Instance.SetAsync<string>(Key("k"), Fields, (CachePolicy?)null, Ct)).Should().BeTrue();
-        (await ((ICache)NullCache.Instance).SetAsync<string>(Key("k"), "v", Ttl, null, Ct)).Should().BeTrue();
-        (await ((IHashCache)NullHashCache.Instance).SetAsync<string>(Key("k"), Fields, Deadline, null, Ct)).Should().BeTrue();
+        (await NullCache.Instance.SetAsync<string>($"{Key("k")}", "v", (CachePolicy?)null, Ct)).Should().BeTrue();
+        (await NullHashCache.Instance.SetAsync<string>($"{Key("k")}", Fields, (CachePolicy?)null, Ct)).Should().BeTrue();
+        (await ((ICache)NullCache.Instance).SetAsync<string>($"{Key("k")}", "v", Ttl, null, Ct)).Should().BeTrue();
+        (await ((IHashCache)NullHashCache.Instance).SetAsync<string>($"{Key("k")}", Fields, Deadline, null, Ct)).Should().BeTrue();
     }
 
     [Fact]
@@ -290,12 +292,12 @@ public class SpanKeyWriteTests
         ICache asCache = cache;
         IHashCache asHash = hash;
 
-        (await asCache.TimeToLiveAsync<string>(Key("a"), Ct)).Should().Be(Ttl);
-        (await asCache.ExpireTimeAsync<string>(Key("b"), Ct)).Should().Be(Deadline);
-        (await asHash.GetAsync<string>(Key("c"), ["f"], null, Ct)).Should().BeEmpty();
-        (await asHash.TimeToLiveAsync<string>(Key("d"), Ct)).Should().Be(Ttl);
-        (await asHash.ExpireTimeAsync<string>(Key("e"), Ct)).Should().Be(Deadline);
-        (await asHash.GetMetadataAsync<string>(Key("f"), Ct)).Should().BeSameAs(Fields);
+        (await asCache.TimeToLiveAsync<string>($"{Key("a")}", Ct)).Should().Be(Ttl);
+        (await asCache.ExpireTimeAsync<string>($"{Key("b")}", Ct)).Should().Be(Deadline);
+        (await asHash.GetAsync<string>($"{Key("c")}", ["f"], null, Ct)).Should().BeEmpty();
+        (await asHash.TimeToLiveAsync<string>($"{Key("d")}", Ct)).Should().Be(Ttl);
+        (await asHash.ExpireTimeAsync<string>($"{Key("e")}", Ct)).Should().Be(Deadline);
+        (await asHash.GetMetadataAsync<string>($"{Key("f")}", Ct)).Should().BeSameAs(Fields);
 
         cache.SpanReadKeys.Should().Equal("a", "b");
         hash.SpanReadKeys.Should().Equal("c", "d", "e", "f");
@@ -314,7 +316,7 @@ public class SpanKeyWriteTests
         bySpan.Should().BeLessThan(byKey - 24);
     }
 
-    private static Span<char> Key(string key) => key.ToCharArray();
+    private static string Key(string key) => key;
 
     private static ValueTask<bool> SetBySpan(Cache<string> cache)
     {

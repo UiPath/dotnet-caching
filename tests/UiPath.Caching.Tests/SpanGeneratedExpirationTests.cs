@@ -2,6 +2,8 @@ using UiPath.Caching.Tests.Fakes;
 
 namespace UiPath.Caching.Tests;
 
+#pragma warning disable IDE0034 // default(CacheKey) is written out to pin the CacheKey overload; a bare default would bind differently
+
 /// <summary>The <c>Span&lt;char&gt;</c> <c>GetOrAddWithExpirationAsync</c> answers as the <see cref="CacheKey"/> forms do, and a warm hit by span allocates nothing.</summary>
 public class SpanGeneratedExpirationTests
 {
@@ -12,7 +14,7 @@ public class SpanGeneratedExpirationTests
     private static CancellationToken Ct => TestContext.Current.CancellationToken;
 
     [Fact]
-    public async Task A_bare_default_key_still_binds_to_the_CacheKey_overloads()
+    public async Task A_bare_default_key_reaches_the_cache_as_default_CacheKey()
     {
         var cache = Substitute.For<ICache>();
         var typed = Substitute.For<ICache<string>>();
@@ -22,14 +24,14 @@ public class SpanGeneratedExpirationTests
         await typed.GetOrAddWithExpirationAsync(default, Generate, Ct);
         await typed.GetOrAddWithExpirationAsync(default, 1, static (_, _) => Generate(Ct), Ct);
 
-        await cache.Received(1).GetOrAddWithExpirationAsync(Arg.Any<CacheKey>(), Arg.Any<Func<CancellationToken, Task<GeneratedValue<string>>>>(), null, Ct);
-        await cache.Received(1).GetOrAddWithExpirationAsync(Arg.Any<CacheKey>(), 1, Arg.Any<Func<int, CancellationToken, Task<GeneratedValue<string>>>>(), null, Ct);
-        await typed.Received(1).GetOrAddWithExpirationAsync(Arg.Any<CacheKey>(), Arg.Any<Func<CancellationToken, Task<GeneratedValue<string>>>>(), Ct);
-        await typed.Received(1).GetOrAddWithExpirationAsync(Arg.Any<CacheKey>(), 1, Arg.Any<Func<int, CancellationToken, Task<GeneratedValue<string>>>>(), Ct);
+        await cache.Received(1).GetOrAddWithExpirationAsync(default(CacheKey), Arg.Any<Func<CancellationToken, Task<GeneratedValue<string>>>>(), null, Ct);
+        await cache.Received(1).GetOrAddWithExpirationAsync(default(CacheKey), 1, Arg.Any<Func<int, CancellationToken, Task<GeneratedValue<string>>>>(), null, Ct);
+        await typed.Received(1).GetOrAddWithExpirationAsync(default(CacheKey), Arg.Any<Func<CancellationToken, Task<GeneratedValue<string>>>>(), Ct);
+        await typed.Received(1).GetOrAddWithExpirationAsync(default(CacheKey), 1, Arg.Any<Func<int, CancellationToken, Task<GeneratedValue<string>>>>(), Ct);
     }
 
     [Fact]
-    public async Task A_bare_default_key_binds_to_the_CacheKey_overloads_of_Cache_of_T()
+    public async Task A_bare_default_key_reaches_the_inner_cache_as_default_CacheKey_through_Cache_of_T()
     {
         // Compiles only while Cache<T>'s CacheKey members outrank its span members (CS0121 otherwise).
         var inner = Substitute.For<ICache>();
@@ -38,8 +40,8 @@ public class SpanGeneratedExpirationTests
         await typed.GetOrAddWithExpirationAsync(default, Generate, Ct);
         await typed.GetOrAddWithExpirationAsync(default, 1, static (_, _) => Generate(Ct), Ct);
 
-        await inner.Received(1).GetOrAddWithExpirationAsync(Arg.Any<CacheKey>(), Arg.Any<Func<CancellationToken, Task<GeneratedValue<string>>>>(), Arg.Any<CachePolicy?>(), Ct);
-        await inner.Received(1).GetOrAddWithExpirationAsync(Arg.Any<CacheKey>(), 1, Arg.Any<Func<int, CancellationToken, Task<GeneratedValue<string>>>>(), Arg.Any<CachePolicy?>(), Ct);
+        await inner.Received(1).GetOrAddWithExpirationAsync(default(CacheKey), Arg.Any<Func<CancellationToken, Task<GeneratedValue<string>>>>(), Arg.Any<CachePolicy?>(), Ct);
+        await inner.Received(1).GetOrAddWithExpirationAsync(default(CacheKey), 1, Arg.Any<Func<int, CancellationToken, Task<GeneratedValue<string>>>>(), Arg.Any<CachePolicy?>(), Ct);
     }
 
     [Theory]
@@ -314,30 +316,22 @@ public class SpanGeneratedExpirationTests
 
     private static ValueTask<string?> Span(ICache cache, string key, Func<CancellationToken, Task<GeneratedValue<string>>> generator, CachePolicy? policy = null, CancellationToken? token = null)
     {
-        Span<char> buffer = stackalloc char[key.Length];
-        key.CopyTo(buffer);
-        return cache.GetOrAddWithExpirationAsync(buffer, generator, policy, token ?? Ct);
+        return cache.GetOrAddWithExpirationAsync($"{key}", generator, policy, token ?? Ct);
     }
 
     private static ValueTask<string?> SpanState<TState>(ICache cache, string key, TState state, Func<TState, CancellationToken, Task<GeneratedValue<string>>> generator, CachePolicy? policy = null)
     {
-        Span<char> buffer = stackalloc char[key.Length];
-        key.CopyTo(buffer);
-        return cache.GetOrAddWithExpirationAsync(buffer, state, generator, policy, Ct);
+        return cache.GetOrAddWithExpirationAsync($"{key}", state, generator, policy, Ct);
     }
 
     private static ValueTask<string?> SpanTyped(ICache<string> cache, string key, Func<CancellationToken, Task<GeneratedValue<string>>> generator)
     {
-        Span<char> buffer = stackalloc char[key.Length];
-        key.CopyTo(buffer);
-        return cache.GetOrAddWithExpirationAsync(buffer, generator, Ct);
+        return cache.GetOrAddWithExpirationAsync($"{key}", generator, Ct);
     }
 
     private static ValueTask<string?> SpanTypedState<TState>(ICache<string> cache, string key, TState state, Func<TState, CancellationToken, Task<GeneratedValue<string>>> generator)
     {
-        Span<char> buffer = stackalloc char[key.Length];
-        key.CopyTo(buffer);
-        return cache.GetOrAddWithExpirationAsync(buffer, state, generator, Ct);
+        return cache.GetOrAddWithExpirationAsync($"{key}", state, generator, Ct);
     }
 
     private sealed class DecliningStrategy : ICacheKeyStrategy, ISpanCacheKeyStrategy

@@ -21,18 +21,18 @@ public class SpanKeyDefaultWriteTests
         var cache = Substitute.For<ICache>();
         var typed = Substitute.For<ICache<string>>();
 
-        await cache.TryAddAsync<string>(Key(), "v", null, Ct);
-        await cache.TryAddAsync<string>(Key(), "v", Ttl, null, Ct);
-        await cache.TryAddAsync<string>(Key(), "v", Deadline, null, Ct);
-        await cache.RefreshAsync<string>(Key(), null, Ct);
-        await cache.RefreshAsync<string>(Key(), Ttl, null, Ct);
-        await cache.RefreshAsync<string>(Key(), Deadline, null, Ct);
-        await typed.TryAddAsync(Key(), "v", Ct);
-        await typed.TryAddAsync(Key(), "v", Ttl, Ct);
-        await typed.TryAddAsync(Key(), "v", Deadline, Ct);
-        await typed.RefreshAsync(Key(), Ct);
-        await typed.RefreshAsync(Key(), Ttl, Ct);
-        await typed.RefreshAsync(Key(), Deadline, Ct);
+        await cache.TryAddAsync<string>($"{Key()}", "v", null, Ct);
+        await cache.TryAddAsync<string>($"{Key()}", "v", Ttl, null, Ct);
+        await cache.TryAddAsync<string>($"{Key()}", "v", Deadline, null, Ct);
+        await cache.RefreshAsync<string>($"{Key()}", null, Ct);
+        await cache.RefreshAsync<string>($"{Key()}", Ttl, null, Ct);
+        await cache.RefreshAsync<string>($"{Key()}", Deadline, null, Ct);
+        await typed.TryAddAsync($"{Key()}", "v", Ct);
+        await typed.TryAddAsync($"{Key()}", "v", Ttl, Ct);
+        await typed.TryAddAsync($"{Key()}", "v", Deadline, Ct);
+        await typed.RefreshAsync($"{Key()}", Ct);
+        await typed.RefreshAsync($"{Key()}", Ttl, Ct);
+        await typed.RefreshAsync($"{Key()}", Deadline, Ct);
 
         await cache.Received(1).TryAddAsync<string>(Expected, "v", null, Ct);
         await cache.Received(1).TryAddAsync<string>(Expected, "v", Ttl, null, Ct);
@@ -54,16 +54,16 @@ public class SpanKeyDefaultWriteTests
         var cache = Substitute.For<IHashCache>();
         var typed = Substitute.For<IHashCache<string>>();
 
-        await cache.RefreshAsync<string>(Key(), null, Ct);
-        await cache.RefreshAsync<string>(Key(), Ttl, null, Ct);
-        await cache.RefreshAsync<string>(Key(), Deadline, null, Ct);
-        await cache.RefreshAsync<string>(Key(), Options, null, Ct);
-        await cache.SetMetadataAsync<string>(Key(), Metadata, Ct);
-        await typed.RefreshAsync(Key(), Ct);
-        await typed.RefreshAsync(Key(), Ttl, Ct);
-        await typed.RefreshAsync(Key(), Deadline, Ct);
-        await typed.RefreshAsync(Key(), Options, Ct);
-        await typed.SetMetadataAsync(Key(), Metadata, Ct);
+        await cache.RefreshAsync<string>($"{Key()}", null, Ct);
+        await cache.RefreshAsync<string>($"{Key()}", Ttl, null, Ct);
+        await cache.RefreshAsync<string>($"{Key()}", Deadline, null, Ct);
+        await cache.RefreshAsync<string>($"{Key()}", Options, null, Ct);
+        await cache.SetMetadataAsync<string>($"{Key()}", Metadata, Ct);
+        await typed.RefreshAsync($"{Key()}", Ct);
+        await typed.RefreshAsync($"{Key()}", Ttl, Ct);
+        await typed.RefreshAsync($"{Key()}", Deadline, Ct);
+        await typed.RefreshAsync($"{Key()}", Options, Ct);
+        await typed.SetMetadataAsync($"{Key()}", Metadata, Ct);
 
         await cache.Received(1).RefreshAsync<string>(Expected, null, Ct);
         await cache.Received(1).RefreshAsync<string>(Expected, Ttl, null, Ct);
@@ -83,8 +83,8 @@ public class SpanKeyDefaultWriteTests
         var cache = Substitute.For<IHashCache>();
         var typed = Substitute.For<IHashCache<string>>();
 
-        var bySpan = async () => await cache.RemoveFieldsAsync<string>(Key(), Fields, Ct);
-        var typedBySpan = async () => await typed.RemoveFieldsAsync(Key(), Fields, Ct);
+        var bySpan = async () => await cache.RemoveFieldsAsync<string>($"{Key()}", Fields, Ct);
+        var typedBySpan = async () => await typed.RemoveFieldsAsync($"{Key()}", Fields, Ct);
 
         await bySpan.Should().ThrowAsync<NotSupportedException>();
         await typedBySpan.Should().ThrowAsync<NotSupportedException>();
@@ -96,7 +96,7 @@ public class SpanKeyDefaultWriteTests
         var cache = Substitute.For<IHashCache, ISpanKeyHashCache>();
         ((ISpanKeyHashCache)cache).RemoveFieldsAsync<string>(Expected, Fields, Ct).Returns(true);
 
-        (await cache.RemoveFieldsAsync<string>(Key(), Fields, Ct)).Should().BeTrue();
+        (await cache.RemoveFieldsAsync<string>($"{Key()}", Fields, Ct)).Should().BeTrue();
 
         await ((ISpanKeyHashCache)cache).Received(1).RemoveFieldsAsync<string>(Expected, Fields, Ct);
     }
@@ -109,28 +109,28 @@ public class SpanKeyDefaultWriteTests
         var hash = new Mock<IHashCache>();
         var typedHash = new Mock<IHashCache<string>>();
 
-        await cache.Object.TryAddAsync<string>(Key(), "v", null, Ct);
-        await cache.Object.TryAddAsync<string>(Key(), "v", Ttl, null, Ct);
-        await cache.Object.TryAddAsync<string>(Key(), "v", Deadline, null, Ct);
-        await cache.Object.RefreshAsync<string>(Key(), null, Ct);
-        await cache.Object.RefreshAsync<string>(Key(), Ttl, null, Ct);
-        await cache.Object.RefreshAsync<string>(Key(), Deadline, null, Ct);
-        await typed.Object.TryAddAsync(Key(), "v", Ct);
-        await typed.Object.TryAddAsync(Key(), "v", Ttl, Ct);
-        await typed.Object.TryAddAsync(Key(), "v", Deadline, Ct);
-        await typed.Object.RefreshAsync(Key(), Ct);
-        await typed.Object.RefreshAsync(Key(), Ttl, Ct);
-        await typed.Object.RefreshAsync(Key(), Deadline, Ct);
-        await hash.Object.RefreshAsync<string>(Key(), null, Ct);
-        await hash.Object.RefreshAsync<string>(Key(), Ttl, null, Ct);
-        await hash.Object.RefreshAsync<string>(Key(), Deadline, null, Ct);
-        await hash.Object.RefreshAsync<string>(Key(), Options, null, Ct);
-        await hash.Object.SetMetadataAsync<string>(Key(), Metadata, Ct);
-        await typedHash.Object.RefreshAsync(Key(), Ct);
-        await typedHash.Object.RefreshAsync(Key(), Ttl, Ct);
-        await typedHash.Object.RefreshAsync(Key(), Deadline, Ct);
-        await typedHash.Object.RefreshAsync(Key(), Options, Ct);
-        await typedHash.Object.SetMetadataAsync(Key(), Metadata, Ct);
+        await cache.Object.TryAddAsync<string>($"{Key()}", "v", null, Ct);
+        await cache.Object.TryAddAsync<string>($"{Key()}", "v", Ttl, null, Ct);
+        await cache.Object.TryAddAsync<string>($"{Key()}", "v", Deadline, null, Ct);
+        await cache.Object.RefreshAsync<string>($"{Key()}", null, Ct);
+        await cache.Object.RefreshAsync<string>($"{Key()}", Ttl, null, Ct);
+        await cache.Object.RefreshAsync<string>($"{Key()}", Deadline, null, Ct);
+        await typed.Object.TryAddAsync($"{Key()}", "v", Ct);
+        await typed.Object.TryAddAsync($"{Key()}", "v", Ttl, Ct);
+        await typed.Object.TryAddAsync($"{Key()}", "v", Deadline, Ct);
+        await typed.Object.RefreshAsync($"{Key()}", Ct);
+        await typed.Object.RefreshAsync($"{Key()}", Ttl, Ct);
+        await typed.Object.RefreshAsync($"{Key()}", Deadline, Ct);
+        await hash.Object.RefreshAsync<string>($"{Key()}", null, Ct);
+        await hash.Object.RefreshAsync<string>($"{Key()}", Ttl, null, Ct);
+        await hash.Object.RefreshAsync<string>($"{Key()}", Deadline, null, Ct);
+        await hash.Object.RefreshAsync<string>($"{Key()}", Options, null, Ct);
+        await hash.Object.SetMetadataAsync<string>($"{Key()}", Metadata, Ct);
+        await typedHash.Object.RefreshAsync($"{Key()}", Ct);
+        await typedHash.Object.RefreshAsync($"{Key()}", Ttl, Ct);
+        await typedHash.Object.RefreshAsync($"{Key()}", Deadline, Ct);
+        await typedHash.Object.RefreshAsync($"{Key()}", Options, Ct);
+        await typedHash.Object.SetMetadataAsync($"{Key()}", Metadata, Ct);
 
         cache.Verify(c => c.TryAddAsync<string>(Expected, "v", null, Ct), Times.Once);
         cache.Verify(c => c.TryAddAsync<string>(Expected, "v", Ttl, null, Ct), Times.Once);
@@ -161,15 +161,15 @@ public class SpanKeyDefaultWriteTests
     [InlineData(typeof(ICache<>))]
     [InlineData(typeof(IHashCache))]
     [InlineData(typeof(IHashCache<>))]
-    public void Every_single_key_member_of_a_cache_interface_has_a_span_form(Type type)
+    public void Every_single_key_member_of_a_cache_interface_has_an_interpolated_form(Type type)
     {
         var methods = type.GetMethods();
-        var spanForms = methods.Where(m => m.GetParameters().Any(p => p.ParameterType == typeof(Span<char>))).Select(m => Shape(m, typeof(Span<char>))).ToHashSet();
+        var interpolatedForms = methods.Where(m => m.GetParameters().Any(p => p.ParameterType.GetElementType() == typeof(CacheKeyHandler))).Select(m => Shape(m, typeof(CacheKeyHandler))).ToHashSet();
 
         var missing = methods
             .Where(m => m.GetParameters().Any(p => p.ParameterType == typeof(CacheKey)))
             .Select(m => Shape(m, typeof(CacheKey)))
-            .Where(shape => !spanForms.Contains(shape))
+            .Where(shape => !interpolatedForms.Contains(shape))
             .ToArray();
 
         missing.Should().BeEmpty();
@@ -177,7 +177,7 @@ public class SpanKeyDefaultWriteTests
 
     /// <summary>The member's name, generic arity and parameter types, with the key parameter written as <c>key</c>.</summary>
     private static string Shape(MethodInfo method, Type keyType) =>
-        $"{method.Name}`{method.GetGenericArguments().Length}({string.Join(", ", method.GetParameters().Select(p => p.ParameterType == keyType ? "key" : p.ParameterType.ToString()))})";
+        $"{method.Name}`{method.GetGenericArguments().Length}({string.Join(", ", method.GetParameters().Select(p => (p.ParameterType.IsByRef ? p.ParameterType.GetElementType() : p.ParameterType) == keyType ? "key" : p.ParameterType.ToString()))})";
 
-    private static Span<char> Key() => " User:42 ".ToCharArray();
+    private static string Key() => " User:42 ";
 }

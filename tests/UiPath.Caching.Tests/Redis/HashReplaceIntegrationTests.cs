@@ -175,18 +175,18 @@ public class HashReplaceIntegrationTests(RedisContainerFixture fixture) : IDispo
         var fields = new Dictionary<string, string?> { ["f"] = "v", ["g"] = "w" };
         var expires = DateTimeOffset.UtcNow.AddMinutes(10);
 
-        (await cache.SetAsync<string>(name.ToCharArray(), fields, null, Ct)).Should().BeTrue();
-        (await cache.SetAsync<string>(name.ToCharArray(), fields, TimeSpan.FromMinutes(10), null, Ct)).Should().BeTrue();
-        (await cache.SetAsync<string>(name.ToCharArray(), fields, expires, null, Ct)).Should().BeTrue();
-        (await cache.SetAsync<string>(name.ToCharArray(), fields, new HashCacheEntryOptions(TimeToLive: TimeSpan.FromMinutes(10)), null, Ct)).Should().BeTrue();
-        (await cache.ContainsAsync<string>(name.ToCharArray(), Ct)).Should().BeTrue();
-        (await cache.GetItemAsync<string>(name.ToCharArray(), "f", null, Ct)).Should().Be("v");
-        (await cache.GetAsync<string>(name.ToCharArray(), null, Ct)).Should().BeEquivalentTo(fields);
-        (await cache.GetCacheEntryAsync<string>(name.ToCharArray(), null, Ct)).Value.Should().BeEquivalentTo(fields);
-        (await cache.GetOrAddAsync<string>(name.ToCharArray(), _ => Task.FromResult<IDictionary<string, string?>>(new Dictionary<string, string?>()), null, Ct)).Should().BeEquivalentTo(fields);
-        (await cache.GetOrAddAsync<string>(name.ToCharArray(), _ => Task.FromResult<IDictionary<string, string?>>(new Dictionary<string, string?>()), TimeSpan.FromMinutes(10), null, Ct)).Should().BeEquivalentTo(fields);
-        (await cache.GetOrAddAsync<string>(name.ToCharArray(), _ => Task.FromResult<IDictionary<string, string?>>(new Dictionary<string, string?>()), expires, null, Ct)).Should().BeEquivalentTo(fields);
-        (await cache.GetOrAddAsync<string>(name.ToCharArray(), _ => Task.FromResult<IDictionary<string, string?>>(new Dictionary<string, string?>()), expires, HashCacheSetOption.KeyReplace, null, Ct)).Should().BeEquivalentTo(fields);
+        (await cache.SetAsync<string>($"{name}", fields, null, Ct)).Should().BeTrue();
+        (await cache.SetAsync<string>($"{name}", fields, TimeSpan.FromMinutes(10), null, Ct)).Should().BeTrue();
+        (await cache.SetAsync<string>($"{name}", fields, expires, null, Ct)).Should().BeTrue();
+        (await cache.SetAsync<string>($"{name}", fields, new HashCacheEntryOptions(TimeToLive: TimeSpan.FromMinutes(10)), null, Ct)).Should().BeTrue();
+        (await cache.ContainsAsync<string>($"{name}", Ct)).Should().BeTrue();
+        (await cache.GetItemAsync<string>($"{name}", "f", null, Ct)).Should().Be("v");
+        (await cache.GetAsync<string>($"{name}", null, Ct)).Should().BeEquivalentTo(fields);
+        (await cache.GetCacheEntryAsync<string>($"{name}", null, Ct)).Value.Should().BeEquivalentTo(fields);
+        (await cache.GetOrAddAsync<string>($"{name}", _ => Task.FromResult<IDictionary<string, string?>>(new Dictionary<string, string?>()), null, Ct)).Should().BeEquivalentTo(fields);
+        (await cache.GetOrAddAsync<string>($"{name}", _ => Task.FromResult<IDictionary<string, string?>>(new Dictionary<string, string?>()), TimeSpan.FromMinutes(10), null, Ct)).Should().BeEquivalentTo(fields);
+        (await cache.GetOrAddAsync<string>($"{name}", _ => Task.FromResult<IDictionary<string, string?>>(new Dictionary<string, string?>()), expires, null, Ct)).Should().BeEquivalentTo(fields);
+        (await cache.GetOrAddAsync<string>($"{name}", _ => Task.FromResult<IDictionary<string, string?>>(new Dictionary<string, string?>()), expires, HashCacheSetOption.KeyReplace, null, Ct)).Should().BeEquivalentTo(fields);
         (await cache.RemoveManyAsync<string>([name], Ct)).Should().BeEmpty();
         (await cache.ContainsAsync<string>(name, Ct)).Should().BeFalse();
     }

@@ -74,9 +74,9 @@ Then pick the simplest shape that fits:
    only where the zero matters.
 
 The state overloads are members of `ICache`, `ICache<T>`, `IHashCache` and `IHashCache<T>`. The `CacheKey` ones are
-members every implementation provides, and the `Span<char>` ones go to `ISpanKeyCache` (`ISpanKeyHashCache`) or else to
+members every implementation provides, and an interpolated key goes to `ISpanKeyCache` (`ISpanKeyHashCache`) or else to
 the `CacheKey` state member, so no library cache binds a closure. `GetOrAddWithExpirationAsync` has a state overload of
-the same shape, also a member of `ICache` and `ICache<T>`, and both take a `Span<char>` key (`ISpanKeyCache`): a warm hit
+the same shape, also a member of `ICache` and `ICache<T>`, and both take an interpolated key (`ISpanKeyCache`): a warm hit
 allocates nothing and a miss reads the local tier once.
 
 The batch `GetOrAddAsync` already carries a state per entry, but its generator usually needs the service too. The
@@ -174,27 +174,24 @@ ambiguous against the closure overload.
 
 ## Keys
 
-- **A constant key** needs no span: build it once, `private static readonly CacheKey Key = "default";`. A constant
-  string passed on every call is normalized (trimmed, lowercased) on every call.
-- **A formatted key** is a string: `$"{tenantId}:{machineKey}"`. On the hot paths above, format it on the stack instead
-  and pass the `Span<char>`; a local hit then allocates nothing. Size the buffer for the longest key you can build and
-  skip the fallback branch — a key the buffer cannot hold is a bug, not a case:
+- **A constant key** is built once: `private static readonly CacheKey Key = "default";`. A constant string passed on
+  every call is normalized (trimmed, lowercased) on every call.
+- **A formatted key** is an interpolated string: `$"{tenantId}:{machineKey}"`. On the hot paths above it is written to a
+  256-character stack buffer and a local hit allocates nothing (values format in the current culture, so a `DateTime` or `decimal` hole differs between nodes with different cultures):
 
   ```csharp
-  Span<char> key = stackalloc char[73];                    // two GUIDs and a separator
-  key.TryWrite($"{tenantId}:{machineKey}", out var written);
-  var token = await _cache.GetOrAddAsync(key[..written], (Self: this, machineKey), static (s, c) => s.Self.FetchAsync(s.machineKey, c), ct);
+  var token = await _cache.GetOrAddAsync($"{tenantId}:{machineKey}", (Self: this, machineKey), static (s, c) => s.Self.FetchAsync(s.machineKey, c), ct);
   ```
 
-  Keys over 256 characters take the string path inside the library anyway. `SetAsync` takes the same `Span<char>`; a
-  write has to build the string the entry is stored under, so it saves your own key string, not the allocation.
+  A longer key rents its buffer from `ArrayPool`. `$"..."` on a variable typed as a concrete class (`Cache<T>`, `HashCache<T>`, `MultilayerCache`) goes through `string` and allocates, so type the variable as the interface. Under C# 12 or older a constant interpolated key (`$"fixed"`) is ambiguous (CS0121); pass a plain string. `SetAsync` takes interpolated keys too; a write has to build the
+  string the entry is stored under, so it saves your own key string, not the allocation.
 
 ## What runs, and what a test sees
 
 Every shape ends in the same place: `ICache<T>` is `Cache<T>`, which composes the key with its `ICacheKeyStrategy` and
 calls the provider (`InMemory`, `InMemoryRedis` or `Redis`). The `CacheKey` state `GetOrAddAsync` and
 `GetOrAddWithExpirationAsync`, and the batch `GetOrAddAsync` with an argument, are members every cache implements. The
-span members are `sealed` interface members with a body: each looks for the matching capability interface
+interpolated-key members are `sealed` interface members with a body: each looks for the matching capability interface
 (`ISpanKeyCache`, and for the hash caches `ISpanKeyHashCache`) and otherwise calls the `CacheKey` member. `Cache<T>`,
 `HashCache<T>` and the library's in-memory and multilayer caches implement them; the Redis-only `ICache` implements none
 and takes the fallback, where the Redis round trip allocates far more than the key string does.
@@ -204,7 +201,7 @@ up these, and a strict mock answers the production shape:
 
 | Call on the proxy | Members to set up |
 |---|---|
-| Span member of any of the four interfaces | The same member with a `CacheKey` (`new CacheKey(span)`) |
+| Interpolated key on any of the four interfaces | The same member with a `CacheKey` (the formatted text) |
 | State `GetOrAddAsync` on any of the four interfaces, or the `CacheSyncExtensions` and `HashCacheSyncExtensions` `GetOrAdd` | The same state member with a `CacheKey` (and a `CachePolicy?` on `ICache` and `IHashCache`, which the policy-less call passes as `null`) |
 | `GetOrAddWithExpirationAsync`, with or without state, on `ICache` or `ICache<T>` | The same member with a `CacheKey` (and a `CachePolicy?` on `ICache`, which the policy-less call passes as `null`) |
 | Batch `GetOrAddAsync` with an argument, or the multi-key `CacheSyncExtensions` `GetOrAdd` | The same argument member (and a `CachePolicy?` on `ICache`); the sync `GetOrAdd` passes its generator as the argument |
