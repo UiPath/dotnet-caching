@@ -157,6 +157,21 @@ public class LocalProbeTests
         memory.Lookups.Should().Be(1);
     }
 
+    [Fact]
+    public async Task A_typed_cache_hit_by_span_finds_entries_written_by_string_and_back()
+    {
+        using var inner = InMemoryMultilayer.Cache();
+        var typed = new Cache<string>(inner);
+        await typed.SetAsync("  Mixed:CASE:Key  ", "by-string", Ct);
+
+        (await GetBySpan(typed, "mixed:case:key")).Should().Be("by-string");
+        (await GetBySpan(typed, "MIXED:case:KEY ")).Should().Be("by-string");
+
+        await typed.SetAsync("tenant:7F3A", "second", Ct);
+        (await typed.GetAsync("TENANT:7f3a", Ct)).Should().Be("second");
+        (await GetBySpan(typed, "Tenant:7f3a")).Should().Be("second");
+    }
+
     private static Task<string?> Generate(CancellationToken token) => Task.FromResult<string?>("generated");
 
     private static ValueTask<string?> GetOrAddBySpan(MultilayerCache cache, string key, CachePolicy policy)
@@ -164,5 +179,12 @@ public class LocalProbeTests
         Span<char> buffer = stackalloc char[64];
         key.AsSpan().CopyTo(buffer);
         return cache.GetOrAddAsync<string>(buffer[..key.Length], Generate, policy, Ct);
+    }
+
+    private static ValueTask<string?> GetBySpan(Cache<string> cache, string key)
+    {
+        Span<char> buffer = stackalloc char[64];
+        key.AsSpan().CopyTo(buffer);
+        return ((ISpanKeyCache<string>)cache).GetAsync(buffer[..key.Length], Ct);
     }
 }
