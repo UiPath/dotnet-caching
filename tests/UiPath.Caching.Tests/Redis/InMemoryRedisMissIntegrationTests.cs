@@ -25,11 +25,9 @@ public class InMemoryRedisMissIntegrationTests(RedisContainerFixture fixture)
         (await cache.GetOrAddAsync<string>(key, static _ => Task.FromResult<string?>("generated"), TimeSpan.FromMinutes(5), Ct)).Should().Be("generated");
 
         var commands = profiler.Session.FinishProfiling().Select(c => c.Command).ToList();
-        commands.Count(IsRead).Should().Be(1, "one read of the inner tier: a read-only script on Redis 7, a transaction before it");
-        if (provider.GetRequiredService<IRedisConnector>().Version >= new Version(7, 0))
-        {
-            commands.Should().NotContain("EXEC", "a Redis 7 read is the script alone");
-        }
+        commands.Count(IsRead).Should().Be(1, "one read of the inner tier: a GET with a PTTL, since read scripts are off by default");
+        commands.Count(c => c == "PTTL").Should().Be(1);
+        commands.Should().NotContain("EXEC", "a read is not a transaction");
         commands.Count(c => c.Contains("SET", StringComparison.Ordinal)).Should().Be(1);
     }
 
@@ -61,7 +59,7 @@ public class InMemoryRedisMissIntegrationTests(RedisContainerFixture fixture)
         commands.Count(c => c.Contains("SET", StringComparison.Ordinal)).Should().Be(1);
     }
 
-    private static bool IsRead(string command) => command is "EXEC" or "EVAL_RO" or "EVALSHA_RO";
+    private static bool IsRead(string command) => command is "GET" or "EVAL_RO" or "EVALSHA_RO";
 
     private static string Unique() => $"it-{Guid.NewGuid():N}";
 

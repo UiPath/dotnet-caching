@@ -307,12 +307,12 @@ public abstract class RedisCacheBase : IConnectionState, IMasterReadScope, IDisp
         return SupportsExpireTime;
     }
 
-    /// <summary>Whether a read can fetch value and expiration in one script; otherwise it takes a transaction, or a <c>GET</c> with <c>PTTL</c>.</summary>
+    /// <summary>Whether a read can fetch value and expiration in one script; otherwise it sends a <c>GET</c> with <c>PTTL</c>.</summary>
     private protected bool IsReadScriptAvailable() => SupportsExpireTime && !_noReadScript;
 
     /// <summary>
-    /// Runs a read-only script when the server has PEXPIRETIME (Redis 7) and has not refused scripts; a MULTI/EXEC pair allocates about three times as much per read in StackExchange.Redis.
-    /// Null tells the caller to read with a transaction: scripts are off, or the server just refused one, which turns them off for good.
+    /// Runs a read-only script when the server has PEXPIRETIME (Redis 7) and has not refused scripts.
+    /// Null tells the caller to read with a <c>GET</c> and <c>PTTL</c>: scripts are off, or the server just refused one, which turns them off for good.
     /// Until one script has succeeded, any failure counts as a refusal, so a server or proxy that cannot run them, whatever it answers, never turns reads into misses;
     /// after that, only a refusal (unknown or not permitted) does, and other errors propagate to the read pipeline.
     /// </summary>
