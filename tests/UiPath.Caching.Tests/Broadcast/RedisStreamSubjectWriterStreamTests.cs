@@ -19,6 +19,8 @@ public sealed class RedisStreamSubjectWriterStreamTests : IDisposable
     private readonly TaskCompletionSource _missed = new(TaskCreationOptions.RunContinuationsAsynchronously);
     private readonly List<IDisposable> _disposables = [];
 
+    public RedisStreamSubjectWriterStreamTests() => _redis.Version.Returns(Version.Parse("7.0.0"));
+
     public void Dispose()
     {
         _stop.Cancel();
@@ -48,6 +50,32 @@ public sealed class RedisStreamSubjectWriterStreamTests : IDisposable
 
         (await WaitUntil(() => _stream.Acknowledged.Length == 1)).Should().BeTrue();
         _stream.Acknowledged.Should().Equal("1-0");
+    }
+
+    [Fact]
+    public async Task A_server_below_7_is_read_without_the_script()
+    {
+        _redis.Version.Returns(Version.Parse("6.2.0"));
+        using var sut = Create();
+        (await WaitUntil(() => _stream.HasGroup)).Should().BeTrue();
+        sut.MarkSubscribed();
+        _stream.Add("a");
+
+        (await _events.Reader.ReadAsync(_stop.Token).AsTask().WaitAsync(WaitTimeout, TestContext.Current.CancellationToken)).Should().NotBeNull();
+        _stream.ScriptReads.Should().Be(0);
+        _stream.Calls(Op.Read).Should().BeGreaterThan(0);
+    }
+
+    [Fact]
+    public async Task A_server_at_7_is_read_with_the_script()
+    {
+        using var sut = Create();
+        (await WaitUntil(() => _stream.HasGroup)).Should().BeTrue();
+        sut.MarkSubscribed();
+        _stream.Add("a");
+
+        (await _events.Reader.ReadAsync(_stop.Token).AsTask().WaitAsync(WaitTimeout, TestContext.Current.CancellationToken)).Should().NotBeNull();
+        _stream.ScriptReads.Should().BeGreaterThan(0);
     }
 
     [Fact]
