@@ -1103,6 +1103,28 @@ public class RedisCacheTests(ITestContextAccessor testContextAccessor) : IAsyncL
         await _database.DidNotReceive().ScriptEvaluateReadOnlyAsync(Arg.Any<string>(), Arg.Any<RedisKey[]?>(), Arg.Any<RedisValue[]?>(), Arg.Any<CommandFlags>());
     }
 
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task GetOrAddResult_records_its_reads_under_its_own_operation_name(bool readScripts)
+    {
+        _version = new(7, 0);
+        _cacheOptions.ReadScriptsEnabled = readScripts;
+        _cacheOptions.KeyReadTelemetryEnabled = true;
+        var payload = _serializer.Serialize("cached");
+        _database.StringGetWithExpiryAsync(_redisKey, Arg.Any<CommandFlags>()).Returns(new RedisValueWithExpiry(payload, TimeSpan.FromMinutes(5)));
+        _database.ScriptEvaluateReadOnlyAsync(Arg.Any<string>(), Arg.Any<RedisKey[]?>(), Arg.Any<RedisValue[]?>(), Arg.Any<CommandFlags>())
+            .Returns(RedisResult.Create([payload, (RedisValue)(DateTimeOffset.UtcNow.AddMinutes(5).ToUnixTimeMilliseconds())]));
+        _transaction.StringGetAsync(_redisKey, Arg.Any<CommandFlags>()).Returns(payload);
+        _transaction.KeyTimeToLiveAsync(Arg.Any<RedisKey>(), Arg.Any<CommandFlags>()).Returns(TimeSpan.FromMinutes(5));
+        _transaction.ExecuteAsync(Arg.Any<CommandFlags>()).Returns(true);
+
+        var hit = await ((ICache)Sut).GetOrAddResultAsync<string>(_cacheKey, static _ => throw new InvalidOperationException("ran on a hit"), TimeSpan.FromMinutes(5), null, testContextAccessor.Current.CancellationToken);
+
+        hit.WasGenerated.Should().BeFalse();
+        ReadDeps.Should().Contain(d => d.Data == _redisKey.ToString() && d.Name == nameof(ICache.GetOrAddResultAsync));
+    }
+
     [Fact]
     public async Task GetCacheEntry_uses_a_transaction_when_read_scripts_are_turned_off_v7()
     {
@@ -1805,6 +1827,46 @@ public class RedisCacheTests(ITestContextAccessor testContextAccessor) : IAsyncL
 
         (await Task.WhenAll(callers)).Should().AllBe("cached");
         reads.Should().Be(1);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task GetOrAddResult_joining_a_plain_run_on_a_warm_key_reports_the_entry_deadline(bool expiringGenerator)
+    {
+        var token = testContextAccessor.Current.CancellationToken;
+        var release = new TaskCompletionSource<RedisValue>(TaskCreationOptions.RunContinuationsAsynchronously);
+        _database.StringGetAsync(_redisKey, Arg.Any<CommandFlags>()).Returns(_ => release.Task);
+        _database.KeyTimeToLiveAsync(_redisKey, Arg.Any<CommandFlags>()).Returns(TimeSpan.FromMinutes(3));
+
+        var plain = expiringGenerator
+            ? ((ICache)Sut).GetOrAddWithExpirationAsync<string>(_cacheKey, _ => throw new InvalidOperationException("the generator ran on a hit"), policy: null, token).AsTask()
+            : ((ICache)Sut).GetOrAddAsync<string>(_cacheKey, _ => throw new InvalidOperationException("the generator ran on a hit"), TimeSpan.FromMinutes(5), policy: null, token).AsTask();
+        var result = ((ICache)Sut).GetOrAddResultAsync<string>(_cacheKey, _ => throw new InvalidOperationException("the generator ran on a hit"), TimeSpan.FromMinutes(5), null, token).AsTask();
+        result.IsCompleted.Should().BeFalse("it joins the plain call's read");
+        release.SetResult(_serializer.Serialize("cached"));
+
+        (await plain).Should().Be("cached");
+        (await result).Should().Be(new CacheResult<string>("cached", _now.AddMinutes(3), WasGenerated: false));
+        await _database.Received(1).StringGetAsync(_redisKey, Arg.Any<CommandFlags>());
+        await _database.DidNotReceive().StringGetWithExpiryAsync(Arg.Any<RedisKey>(), Arg.Any<CommandFlags>());
+    }
+
+    [Fact]
+    public async Task GetOrAddResult_joining_a_plain_run_on_a_cold_key_reports_what_the_run_stored_without_a_ttl_read()
+    {
+        var token = testContextAccessor.Current.CancellationToken;
+        var release = new TaskCompletionSource<RedisValue>(TaskCreationOptions.RunContinuationsAsynchronously);
+        _database.StringGetAsync(_redisKey, Arg.Any<CommandFlags>()).Returns(_ => release.Task);
+        _database.StringSetAsync(_redisKey, Arg.Any<RedisValue>(), Arg.Any<TimeSpan?>(), Arg.Any<When>(), Arg.Any<CommandFlags>()).Returns(true);
+
+        var plain = ((ICache)Sut).GetOrAddAsync<string>(_cacheKey, _ => Task.FromResult<string?>("generated"), TimeSpan.FromMinutes(5), policy: null, token).AsTask();
+        var result = ((ICache)Sut).GetOrAddResultAsync<string>(_cacheKey, _ => throw new InvalidOperationException("the joiner's generator ran"), TimeSpan.FromMinutes(5), null, token).AsTask();
+        release.SetResult(RedisValue.Null);
+
+        (await plain).Should().Be("generated");
+        (await result).Should().Be(new CacheResult<string>("generated", _now.AddMinutes(5), WasGenerated: false));
+        await _database.DidNotReceive().KeyTimeToLiveAsync(Arg.Any<RedisKey>(), Arg.Any<CommandFlags>());
     }
 
     [Fact]

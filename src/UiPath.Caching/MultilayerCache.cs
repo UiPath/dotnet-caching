@@ -6,7 +6,7 @@ using UiPath.Caching.Telemetry;
 
 namespace UiPath.Caching;
 
-internal sealed partial class MultilayerCache : MultilayerCacheBase, ICache, ISpanKeyCache
+internal sealed partial class MultilayerCache : MultilayerCacheBase, ICache, ISpanKeyCache, IResultCache
 {
     private readonly ICache _innerCache;
     private readonly bool _sharedInner;
@@ -257,7 +257,7 @@ internal sealed partial class MultilayerCache : MultilayerCacheBase, ICache, ISp
         return GetOrAddBatchInternalAsync<T, TState, Func<TState[], CancellationToken, Task<KeyValuePair<TState, T?>[]>>>(entries, generator, DirectBatch<T, TState>.Invoke, writeExpiration, duration, rehydrateJitter: null, policy ?? _defaultPolicy, token);
     }
 
-    public ValueTask<KeyValuePair<TState, T?>[]> GetOrAddAsync<T, TState, TArgument>(KeyValuePair<CacheKey, TState>[] entries, TArgument argument, Func<TArgument, TState[], CancellationToken, Task<KeyValuePair<TState, T?>[]>> generator, CachePolicy? policy, CancellationToken token = default)
+    public ValueTask<KeyValuePair<TState, T?>[]> GetOrAddAsync<T, TState, TArg>(KeyValuePair<CacheKey, TState>[] entries, TArg argument, Func<TArg, TState[], CancellationToken, Task<KeyValuePair<TState, T?>[]>> generator, CachePolicy? policy, CancellationToken token = default)
         where TState : notnull
     {
         ArgumentNullException.ThrowIfNull(entries);
@@ -266,25 +266,25 @@ internal sealed partial class MultilayerCache : MultilayerCacheBase, ICache, ISp
         // One floored resolution for the write and the rehydrate threshold; only the write is jittered.
         var duration = ResolveDuration(policy);
         var writeExpiration = _clock.ToDateTimeOffset(ApplyJitter(duration, policy.JitterMaxDuration));
-        return GetOrAddBatchInternalAsync<T, TState, TArgument>(entries, argument, generator, writeExpiration, duration, policy.JitterMaxDuration, policy, token);
+        return GetOrAddBatchInternalAsync<T, TState, TArg>(entries, argument, generator, writeExpiration, duration, policy.JitterMaxDuration, policy, token);
     }
 
-    public ValueTask<KeyValuePair<TState, T?>[]> GetOrAddAsync<T, TState, TArgument>(KeyValuePair<CacheKey, TState>[] entries, TArgument argument, Func<TArgument, TState[], CancellationToken, Task<KeyValuePair<TState, T?>[]>> generator, TimeSpan expiration, CachePolicy? policy, CancellationToken token = default)
+    public ValueTask<KeyValuePair<TState, T?>[]> GetOrAddAsync<T, TState, TArg>(KeyValuePair<CacheKey, TState>[] entries, TArg argument, Func<TArg, TState[], CancellationToken, Task<KeyValuePair<TState, T?>[]>> generator, TimeSpan expiration, CachePolicy? policy, CancellationToken token = default)
         where TState : notnull
     {
         ArgumentNullException.ThrowIfNull(entries);
         ArgumentNullException.ThrowIfNull(generator);
         var (writeExpiration, duration) = CallerWrite(expiration);
-        return GetOrAddBatchInternalAsync<T, TState, TArgument>(entries, argument, generator, writeExpiration, duration, rehydrateJitter: null, policy ?? _defaultPolicy, token);
+        return GetOrAddBatchInternalAsync<T, TState, TArg>(entries, argument, generator, writeExpiration, duration, rehydrateJitter: null, policy ?? _defaultPolicy, token);
     }
 
-    public ValueTask<KeyValuePair<TState, T?>[]> GetOrAddAsync<T, TState, TArgument>(KeyValuePair<CacheKey, TState>[] entries, TArgument argument, Func<TArgument, TState[], CancellationToken, Task<KeyValuePair<TState, T?>[]>> generator, DateTimeOffset expiration, CachePolicy? policy, CancellationToken token = default)
+    public ValueTask<KeyValuePair<TState, T?>[]> GetOrAddAsync<T, TState, TArg>(KeyValuePair<CacheKey, TState>[] entries, TArg argument, Func<TArg, TState[], CancellationToken, Task<KeyValuePair<TState, T?>[]>> generator, DateTimeOffset expiration, CachePolicy? policy, CancellationToken token = default)
         where TState : notnull
     {
         ArgumentNullException.ThrowIfNull(entries);
         ArgumentNullException.ThrowIfNull(generator);
         var (writeExpiration, duration) = CallerWrite(expiration);
-        return GetOrAddBatchInternalAsync<T, TState, TArgument>(entries, argument, generator, writeExpiration, duration, rehydrateJitter: null, policy ?? _defaultPolicy, token);
+        return GetOrAddBatchInternalAsync<T, TState, TArg>(entries, argument, generator, writeExpiration, duration, rehydrateJitter: null, policy ?? _defaultPolicy, token);
     }
 
     public ValueTask<T?> GetOrAddWithExpirationAsync<T>(CacheKey cacheKey, Func<CancellationToken, Task<GeneratedValue<T>>> generator, CachePolicy? policy, CancellationToken token = default)
@@ -485,7 +485,7 @@ internal sealed partial class MultilayerCache : MultilayerCacheBase, ICache, ISp
     }
 
     // A closure-form batch passes its generator as the argument with DirectBatch.Invoke, and gets it back unwrapped.
-    private static Func<TState[], CancellationToken, Task<KeyValuePair<TState, T?>[]>> BindBatch<T, TState, TArgument>(TArgument argument, Func<TArgument, TState[], CancellationToken, Task<KeyValuePair<TState, T?>[]>> generator)
+    private static Func<TState[], CancellationToken, Task<KeyValuePair<TState, T?>[]>> BindBatch<T, TState, TArg>(TArg argument, Func<TArg, TState[], CancellationToken, Task<KeyValuePair<TState, T?>[]>> generator)
         where TState : notnull =>
         argument is Func<TState[], CancellationToken, Task<KeyValuePair<TState, T?>[]>> direct && ReferenceEquals(generator, DirectBatch<T, TState>.Invoke)
             ? direct
@@ -1073,10 +1073,10 @@ internal sealed partial class MultilayerCache : MultilayerCacheBase, ICache, ISp
         return await StoreGeneratedEntryAsync(cacheEntryOptions, generated.Value, policy, scope).ConfigureAwait(false);
     }
 
-    private async ValueTask<KeyValuePair<TState, T?>[]> GetOrAddBatchInternalAsync<T, TState, TArgument>(
+    private async ValueTask<KeyValuePair<TState, T?>[]> GetOrAddBatchInternalAsync<T, TState, TArg>(
         KeyValuePair<CacheKey, TState>[] entries,
-        TArgument argument,
-        Func<TArgument, TState[], CancellationToken, Task<KeyValuePair<TState, T?>[]>> generator,
+        TArg argument,
+        Func<TArg, TState[], CancellationToken, Task<KeyValuePair<TState, T?>[]>> generator,
         DateTimeOffset? expiration,
         TimeSpan effectiveDuration,
         TimeSpan? rehydrateJitter,

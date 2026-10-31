@@ -23,7 +23,7 @@ public static class StatefulCacheExtensions
     internal static Func<CancellationToken, Task<GeneratedValue<T>>> BindGenerated<T, TState>(TState state, Func<TState, CancellationToken, Task<GeneratedValue<T>>> generator) =>
         token => generator(state, token);
 
-    internal static Func<TState[], CancellationToken, Task<KeyValuePair<TState, T?>[]>> BindBatch<T, TState, TArgument>(TArgument argument, Func<TArgument, TState[], CancellationToken, Task<KeyValuePair<TState, T?>[]>> generator)
+    internal static Func<TState[], CancellationToken, Task<KeyValuePair<TState, T?>[]>> BindBatch<T, TState, TArg>(TArg argument, Func<TArg, TState[], CancellationToken, Task<KeyValuePair<TState, T?>[]>> generator)
         where TState : notnull =>
         (states, token) => generator(argument, states, token);
 }

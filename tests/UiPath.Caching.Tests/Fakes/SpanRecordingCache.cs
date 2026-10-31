@@ -11,6 +11,18 @@ internal sealed class SpanRecordingCache : DictionaryCache, ISpanKeyCache
 
     public int LastLength { get; private set; }
 
+    public ValueTask<CacheResult<T>> GetOrAddResultAsync<T>(Span<char> cacheKey, Func<CancellationToken, Task<T?>> generator, CachePolicy? policy, CancellationToken token = default) => throw new NotSupportedException();
+
+    public ValueTask<CacheResult<T>> GetOrAddResultAsync<T>(Span<char> cacheKey, Func<CancellationToken, Task<T?>> generator, TimeSpan expiration, CachePolicy? policy, CancellationToken token = default) => throw new NotSupportedException();
+
+    public ValueTask<CacheResult<T>> GetOrAddResultAsync<T>(Span<char> cacheKey, Func<CancellationToken, Task<T?>> generator, DateTimeOffset expiration, CachePolicy? policy, CancellationToken token = default) => throw new NotSupportedException();
+
+    public ValueTask<CacheResult<T>> GetOrAddResultAsync<T, TState>(Span<char> cacheKey, TState state, Func<TState, CancellationToken, Task<T?>> generator, CachePolicy? policy, CancellationToken token = default) => throw new NotSupportedException();
+
+    public ValueTask<CacheResult<T>> GetOrAddResultAsync<T, TState>(Span<char> cacheKey, TState state, Func<TState, CancellationToken, Task<T?>> generator, TimeSpan expiration, CachePolicy? policy, CancellationToken token = default) => throw new NotSupportedException();
+
+    public ValueTask<CacheResult<T>> GetOrAddResultAsync<T, TState>(Span<char> cacheKey, TState state, Func<TState, CancellationToken, Task<T?>> generator, DateTimeOffset expiration, CachePolicy? policy, CancellationToken token = default) => throw new NotSupportedException();
+
     public ValueTask<T?> GetOrAddAsync<T, TState>(Span<char> cacheKey, TState state, Func<TState, CancellationToken, Task<T?>> generator, CachePolicy? policy, CancellationToken token = default)
     {
         LastLength = cacheKey.Length;

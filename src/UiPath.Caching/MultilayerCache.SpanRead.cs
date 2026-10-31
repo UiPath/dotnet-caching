@@ -100,8 +100,16 @@ internal sealed partial class MultilayerCache
     /// <summary>A local hit that <see cref="GetOrAddInternalAsync{T}"/> would return as found. Not a hit under a rehydrating policy, which needs the <see cref="CacheKey"/>, for a cancelled token, which the key path reports through its task, and for an entry that is not found, which the key path judges.</summary>
     private LocalProbe ProbeGetOrAddLocal<T>(ReadOnlySpan<char> cacheKey, CachePolicy policy, CancellationToken token, out T? value)
     {
+        var probe = ProbeGetOrAddLocalEntry<T>(cacheKey, policy, token, out var entry);
+        value = entry is null ? default : entry.Value;
+        return probe;
+    }
+
+    /// <summary>As the overload that yields the value, but yields the entry, so a caller can report its expiration.</summary>
+    private LocalProbe ProbeGetOrAddLocalEntry<T>(ReadOnlySpan<char> cacheKey, CachePolicy policy, CancellationToken token, out ICacheEntry<T>? hit)
+    {
         NotCacheableException.ThrowIfNotCacheable<T>();
-        value = default;
+        hit = default;
         if (token.IsCancellationRequested)
         {
             return LocalProbe.Unavailable;
@@ -118,7 +126,7 @@ internal sealed partial class MultilayerCache
             return LocalProbe.Unavailable;
         }
 
-        value = entry.Value;
+        hit = entry;
         return LocalProbe.Hit;
     }
 }
