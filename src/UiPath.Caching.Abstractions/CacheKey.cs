@@ -1,5 +1,6 @@
 using System.Buffers;
 using System.Globalization;
+using System.Text;
 
 namespace UiPath.Caching;
 
@@ -7,6 +8,7 @@ public readonly struct CacheKey : IEquatable<CacheKey>
 {
     /// <summary>Longest name normalized on the stack; a longer one rents a buffer.</summary>
     private const int StackBufferLength = 256;
+    private static readonly SearchValues<char> UpperAscii = SearchValues.Create("ABCDEFGHIJKLMNOPQRSTUVWXYZ");
 
     private static CacheKeyCasing _defaultCasing = CacheKeyCasing.Insensitive;
 
@@ -142,18 +144,8 @@ public readonly struct CacheKey : IEquatable<CacheKey>
         return true;
     }
 
-    private static bool IsLowerAscii(ReadOnlySpan<char> name)
-    {
-        foreach (var c in name)
-        {
-            if (c is >= 'A' and <= 'Z' or > '\u007f')
-            {
-                return false;
-            }
-        }
-
-        return true;
-    }
+    private static bool IsLowerAscii(ReadOnlySpan<char> name) =>
+        !name.ContainsAny(UpperAscii) && Ascii.IsValid(name);
 
     private static string Normalize(ReadOnlySpan<char> name, CacheKeyCasing casing)
     {

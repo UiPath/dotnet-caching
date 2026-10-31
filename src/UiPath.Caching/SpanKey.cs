@@ -59,6 +59,19 @@ internal static class SpanKey
     internal static bool TryCompose<T>(ICacheKeyStrategy strategy, ReadOnlySpan<char> key, Span<char> destination, out int written, CancellationToken token = default)
     {
         written = 0;
+        if (strategy is DefaultCacheKeyStrategy && destination.Length >= MaxLength)
+        {
+            // The default strategy copies the normalized text, and normalizing that again changes nothing.
+            if (!CacheKey.TryNormalize(key, destination, CacheKey.DefaultCasing, out written) || written == 0)
+            {
+                written = 0;
+                return false;
+            }
+
+            token.ThrowIfCancellationRequested();
+            return true;
+        }
+
         Span<char> normalized = stackalloc char[MaxLength];
         if (!CacheKey.TryNormalize(key, normalized, CacheKey.DefaultCasing, out var length) || length == 0)
         {
