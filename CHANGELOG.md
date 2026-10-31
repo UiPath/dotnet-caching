@@ -299,6 +299,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 
 ### Fixed
 
+- **Disposing the cache host disposes its broadcast topics, and the notify subscription stops retrying.** A disposed host left its topics running, and each topic's doorbell subscribe retried against the disposed connection every period, throwing each time.
 - **The Streams transport reads without the Lua script on Redis below 7.0.** The script's gap check has no data there (`XINFO STREAM` has no `entries-added`), and its `XREADGROUP` inside Lua cost the server
   several times a plain read on every batch.
 - **A local hit is cheaper.** A key's casing is checked with vector instructions rather than character by character, and a read by span under the default key strategy composes the key once instead of twice. Keys are unchanged.

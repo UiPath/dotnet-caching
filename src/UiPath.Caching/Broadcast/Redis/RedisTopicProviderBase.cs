@@ -3,7 +3,7 @@ using UiPath.Caching.Telemetry;
 
 namespace UiPath.Caching.Broadcast.Redis;
 
-public abstract class RedisTopicProviderBase(
+public abstract partial class RedisTopicProviderBase(
     IRedisConnector redis,
     ICachingTelemetryProvider telemetryProvider,
     IRedisProfiler redisProfiler,
@@ -15,6 +15,7 @@ public abstract class RedisTopicProviderBase(
     private readonly ConcurrentDictionary<TopicKey, Lazy<ITopic<ICacheEvent>>> _topics = new();
 
     private readonly CancellationTokenSource _stopTokenSource = new();
+    private readonly ILogger _logger = loggerFactory.CreateLogger<RedisTopicProviderBase>();
     private bool _disposed;
 
     public event EventHandler? OnConnectionFailed
@@ -84,13 +85,35 @@ public abstract class RedisTopicProviderBase(
             {
                 _stopTokenSource?.Cancel();
                 _stopTokenSource?.Dispose();
-                _topics.Clear();
+                DisposeTopics();
             }
             _disposed = true;
         }
     }
 
     protected abstract ITopic<ICacheEvent> CreateInternalTopic(TopicKey topicKey);
+
+    private void DisposeTopics()
+    {
+        foreach (var key in _topics.Keys)
+        {
+            if (!_topics.TryRemove(key, out var lazyTopic) || !lazyTopic.IsValueCreated)
+            {
+                continue;
+            }
+            var topic = lazyTopic.Value;
+            // Unhooked first: the removal callback would only find the topic already gone.
+            topic.OnDisposed -= RemoveTopic;
+            try
+            {
+                topic.Dispose();
+            }
+            catch (Exception ex)
+            {
+                LogTopicDisposeError(ex, key);
+            }
+        }
+    }
 
     private void RemoveTopic(object? sender, EventArgs e)
     {
@@ -99,4 +122,7 @@ public abstract class RedisTopicProviderBase(
             Remove(topic.TopicKey);
         }
     }
+
+    [LoggerMessage(Level = LogLevel.Error, Message = "Error disposing topic {TopicKey}")]
+    private partial void LogTopicDisposeError(Exception ex, TopicKey topicKey);
 }
