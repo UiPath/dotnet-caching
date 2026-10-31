@@ -11,6 +11,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 - **`GetOrAddResultAsync`.** Returns `CacheResult<T>(Value, Expiration, WasGenerated)` so a caller knows whether its own generator produced the value: `false` for a hit and for a call
   that waited on a concurrent caller's generation. `Expiration` is the entry's stored expiration (null when unknown, when the entry has no expiry, or when nothing was stored). Available on `ICache` and `ICache<T>` in the closure, state and
   owner-and-argument forms; a cache outside the library gets a default that wraps the generator, at one allocation per call; it reports `Expiration` only for the `DateTimeOffset` form when its generator ran.
+- **Owner and argument for a static generator.** `cache.GetOrAddAsync($"user:{id}", this, id, static (self, id, ct) => self.LoadAsync(id, ct), policy, ct)` hands the generator
+  an owner and one argument, so a call that needs `this` and one value has no closure and no tuple. Extensions on `ICache`, `ICache<T>`, `IHashCache` and `IHashCache<T>` for every
+  state `GetOrAdd*` operation and `GetOrAddResultAsync`, with `CacheKey` and interpolated keys; a hit allocates nothing.
 - **Interpolated keys on every `ICache` and `IHashCache` operation.** Pass `$"{tenantId}:{userId}"` where a key goes, on `ICache`,
   `ICache<T>`, `IHashCache` and `IHashCache<T>` (and `NullCache`, `NullHashCache`): the text is written to a 256-character stack buffer (a longer key rents from `ArrayPool`), so a local hit
   allocates nothing. Values format in the current culture, as in any string interpolation. A string
@@ -118,13 +121,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
   `ISpanKeyCache`, `ISpanKeyHashCache` and their `<T>` forms, or a class that implements one, that captures `this`, a local or a parameter (itself or through a local
   function), or is an instance method group, when a state (or batch argument) overload exists for the call; and a
   capturing lambda passed to a state overload. The fix, *Pass captured values as state*, moves the call to that
-  overload with a `static` lambda: one capture is the state (`this` becomes `self`), several become a named tuple
-  (`(Self: this, Id: id)`), and spelled type arguments get the state's type. It is not offered when the move could
-  change what the generator reads (a captured variable assigned elsewhere, `base`, a capturing local function), and
+  overload with a `static` lambda: one capture is the state (`this` becomes `self`), two become an owner and an argument
+  (falling back to a named tuple when no such overload binds, such as an `ICache` call without a policy or a batch call), three or more become a tuple with PascalCase element names (`(Self: this, TenantId: tenantId, OrderId: orderId)`, read as `s.TenantId`), a captured variable assigned before the call is
+  copied to a local first (`var id0 = id;`), and spelled type arguments get the state's type. It is not offered when the move could
+  change what the generator reads (a captured variable assigned after the call, inside the lambda or another function, in a loop around the call, through a `ref` alias, under a conditional operator in the call's statement (when it needs a snapshot), or in a method with a label or a `goto case`, `base`, a capturing local function), and
   only when the rewritten call compiles in place without an error. The blocking `GetOrAdd` wrappers in
   `CacheSyncExtensions` and `HashCacheSyncExtensions` now pass their generator as state themselves. The plain lambda
-  stays the default; raise the rule with `dotnet_diagnostic.UIPCACHE001.severity = warning` where the allocation
-  matters. It has a category of its own, `UiPath.Caching`, so raising a category such as `Performance` leaves it alone.
+  stays the default, so the rule is Info; **on a hot path, set `dotnet_diagnostic.UIPCACHE001.severity = warning` in `.editorconfig`** so a new capturing lambda shows in the build. It has a category of its own, `UiPath.Caching`, so raising a category such as `Performance` leaves it alone.
   See `docs/how-to/choosing-a-get-or-add-overload.md`.
 
 ### Changed

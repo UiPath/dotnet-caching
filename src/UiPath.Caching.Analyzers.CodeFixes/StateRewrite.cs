@@ -12,10 +12,17 @@ internal static class StateRewrite
     private static readonly ImmutableHashSet<string> TupleMemberNames =
         ImmutableHashSet.Create("CompareTo", "Equals", "GetHashCode", "GetType", "Rest", "ToString");
 
+    private enum CaptureUse
+    {
+        Read,
+        Write,
+        Unsafe,
+    }
+
     /// <summary>The call with the state inserted before <paramref name="argument"/> and the generator made static, or null when there is no safe rewrite.</summary>
     /// <param name="stateTypeIsLast">Whether the overload's state type is its last type parameter.</param>
     /// <param name="verify">Whether to compile the rewritten call in place first; the code fix defers that to when it is applied.</param>
-    public static InvocationExpressionSyntax? Rewrite(SemanticModel model, ArgumentSyntax argument, string stateParameter, bool stateTypeIsLast, CancellationToken cancellationToken, bool verify = true)
+    public static Rewritten? Rewrite(SemanticModel model, ArgumentSyntax argument, string stateParameter, bool stateTypeIsLast, CancellationToken cancellationToken, bool verify = true)
     {
         if (argument.SyntaxTree.Options is not CSharpParseOptions { LanguageVersion: >= LanguageVersion.CSharp9 }
             || argument.Parent is not ArgumentListSyntax { Parent: InvocationExpressionSyntax invocation } list
@@ -26,54 +33,48 @@ internal static class StateRewrite
             return null;
         }
 
-        var rewrite = target switch
+        // Two captures go to the owner and argument overload when the call has one, else to a tuple.
+        if (target is IAnonymousFunctionOperation pair
+            && FromLambda(pair, invocation, ownerArgument: true, stateParameter) is { } ownerArgument
+            && Build(model, invocation, list, argument, ownerArgument, true, verify, cancellationToken) is { } overload)
         {
-            IAnonymousFunctionOperation lambda => FromLambda(lambda),
-            IMethodReferenceOperation group => FromMethodGroup(group, argument.Expression),
+            return overload;
+        }
+
+        var shape = target switch
+        {
+            IAnonymousFunctionOperation lambda => FromLambda(lambda, invocation, ownerArgument: false, stateParameter),
+            IMethodReferenceOperation group => FromMethodGroup(group, argument.Expression, stateParameter),
             _ => null,
         };
-
-        // A dynamic state would bind the call at run time, where a lambda cannot be an argument (CS1977).
-        if (rewrite is not var (state, generator, stateType) || stateType is null || Contains(stateType, type => type.TypeKind == TypeKind.Dynamic)
-            || WithStateTypeArgument(invocation.Expression, stateType, stateTypeIsLast, model, invocation.SpanStart) is not { } callee)
-        {
-            return null;
-        }
-
-        var rewritten = invocation.WithExpression(callee).WithArgumentList(InsertState(list, argument, state, generator, stateParameter));
-        if (!BindsToStateOverload(model, invocation, rewritten, stateParameter, cancellationToken))
-        {
-            return null;
-        }
-
-        return !verify || CompilesToStateOverload(model, invocation, rewritten, stateParameter, cancellationToken) ? rewritten : null;
+        return shape is null ? null : Build(model, invocation, list, argument, shape, stateTypeIsLast, verify, cancellationToken);
     }
 
-    /// <summary>Whether the rewritten call, compiled in place of the original, has no error and binds to an overload that takes <paramref name="stateParameter"/>: the last check before the fix is offered.</summary>
-    public static bool CompilesToStateOverload(SemanticModel model, InvocationExpressionSyntax original, InvocationExpressionSyntax rewritten, string stateParameter, CancellationToken cancellationToken)
+    internal static bool TakesState(IMethodSymbol method, string stateParameter) =>
+        (method.ReducedFrom ?? method.OriginalDefinition).Parameters.Any(parameter => parameter.Name == stateParameter && parameter.Type.TypeKind == TypeKind.TypeParameter);
+
+    private static Rewritten? Build(SemanticModel model, InvocationExpressionSyntax invocation, ArgumentListSyntax list, ArgumentSyntax argument, Shape shape, bool stateTypeIsLast, bool verify, CancellationToken cancellationToken)
     {
-        var marker = new SyntaxAnnotation();
-        var tree = original.SyntaxTree;
-        var changed = tree.WithRootAndOptions(tree.GetRoot(cancellationToken).ReplaceNode(original, rewritten.WithAdditionalAnnotations(marker)), tree.Options);
-        var changedModel = model.Compilation.ReplaceSyntaxTree(tree, changed).GetSemanticModel(changed);
-        var call = changed.GetRoot(cancellationToken).GetAnnotatedNodes(marker).OfType<InvocationExpressionSyntax>().FirstOrDefault();
-        return call is not null
-            && changedModel.GetSymbolInfo(call, cancellationToken).Symbol is IMethodSymbol method
-            && TakesState(method, stateParameter)
-            && !changedModel.GetDiagnostics(call.Span, cancellationToken).Any(diagnostic => diagnostic.Severity == DiagnosticSeverity.Error);
+        // A dynamic state would bind the call at run time, where a lambda cannot be an argument (CS1977).
+        if (shape.StateTypes.Any(type => type is null || Contains(type, candidate => candidate.TypeKind == TypeKind.Dynamic))
+            || WithStateTypeArguments(invocation.Expression, shape.StateTypes!, stateTypeIsLast, model, invocation.SpanStart) is not { } callee)
+        {
+            return null;
+        }
+
+        var call = invocation.WithExpression(callee).WithArgumentList(InsertState(list, argument, shape));
+        var rewritten = new Rewritten(invocation, call, shape.ArgumentNames[0], shape.Snapshots);
+        // The owner and argument overload may not exist for the call, and a fallback needs to know; a snapshot local or a conditional call (`cache?.X(...)`) cannot be bound apart from its place.
+        var inPlaceOnly = !shape.Snapshots.IsEmpty || invocation.Expression is MemberBindingExpressionSyntax;
+        verify |= shape.OwnerArgument && inPlaceOnly;
+        return (inPlaceOnly || BindsToStateOverload(model, invocation, call, shape.ArgumentNames[0], cancellationToken)) && (!verify || rewritten.Compiles(model, cancellationToken)) ? rewritten : null;
     }
 
     /// <summary>Whether the rewritten call, bound speculatively where the original stands, resolves to an overload that takes <paramref name="stateParameter"/>: a cheap check that needs no new compilation.</summary>
-    /// <remarks>A conditional call (<c>cache?.GetOrAddAsync(...)</c>) has its receiver in the enclosing access, so it binds only in place.</remarks>
     private static bool BindsToStateOverload(SemanticModel model, InvocationExpressionSyntax original, InvocationExpressionSyntax rewritten, string stateParameter, CancellationToken cancellationToken) =>
-        original.Expression is MemberBindingExpressionSyntax
-        || (model.GetSpeculativeSymbolInfo(original.SpanStart, rewritten, SpeculativeBindingOption.BindAsExpression).Symbol is IMethodSymbol method
-            && TakesState(method, stateParameter)
-            && !cancellationToken.IsCancellationRequested);
-
-    private static bool TakesState(IMethodSymbol method, string stateParameter) =>
-        (method.ReducedFrom ?? method.OriginalDefinition).Parameters.Any(parameter => parameter.Name == stateParameter && parameter.Type.TypeKind == TypeKind.TypeParameter);
-
+        model.GetSpeculativeSymbolInfo(original.SpanStart, rewritten, SpeculativeBindingOption.BindAsExpression).Symbol is IMethodSymbol method
+        && TakesState(method, stateParameter)
+        && !cancellationToken.IsCancellationRequested;
 
     // An expression tree takes neither a static lambda nor a tuple literal (CS8143).
     private static bool IsInExpressionTree(SemanticModel model, InvocationExpressionSyntax invocation, CancellationToken cancellationToken) =>
@@ -84,8 +85,8 @@ internal static class StateRewrite
     private static bool IsStaticFormExtensionCall(SemanticModel model, InvocationExpressionSyntax invocation, CancellationToken cancellationToken) =>
         model.GetSymbolInfo(invocation, cancellationToken).Symbol is IMethodSymbol { IsExtensionMethod: true, ReducedFrom: null };
 
-    /// <summary>The callee with the state's type appended to its spelled type arguments, unchanged without them, or null when that type cannot be spelled there.</summary>
-    private static ExpressionSyntax? WithStateTypeArgument(ExpressionSyntax callee, ITypeSymbol stateType, bool stateTypeIsLast, SemanticModel model, int position)
+    /// <summary>The callee with the state types appended to its spelled type arguments, unchanged without them, or null when they cannot be spelled there.</summary>
+    private static ExpressionSyntax? WithStateTypeArguments(ExpressionSyntax callee, IEnumerable<ITypeSymbol> stateTypes, bool stateTypeIsLast, SemanticModel model, int position)
     {
         var name = callee switch
         {
@@ -99,12 +100,12 @@ internal static class StateRewrite
             return callee;
         }
 
-        if (!stateTypeIsLast || Contains(stateType, type => type.IsAnonymousType || type.TypeKind == TypeKind.Error))
+        if (!stateTypeIsLast || stateTypes.Any(stateType => Contains(stateType, type => type.IsAnonymousType || type.TypeKind == TypeKind.Error)))
         {
             return null;
         }
 
-        var widened = generic.WithTypeArgumentList(generic.TypeArgumentList.AddArguments(SyntaxFactory.ParseTypeName(stateType.ToMinimalDisplayString(model, position))));
+        var widened = generic.WithTypeArgumentList(generic.TypeArgumentList.AddArguments(stateTypes.Select(stateType => SyntaxFactory.ParseTypeName(stateType.ToMinimalDisplayString(model, position))).ToArray()));
         return callee switch
         {
             MemberAccessExpressionSyntax access => access.WithName(widened),
@@ -113,14 +114,18 @@ internal static class StateRewrite
         };
     }
 
-    private static ArgumentListSyntax InsertState(ArgumentListSyntax list, ArgumentSyntax argument, ExpressionSyntax state, ExpressionSyntax generator, string stateParameter)
+    private static ArgumentListSyntax InsertState(ArgumentListSyntax list, ArgumentSyntax argument, Shape shape)
     {
         var index = list.Arguments.IndexOf(argument);
-        var stateArgument = SyntaxFactory.Argument(state).WithLeadingTrivia(argument.GetLeadingTrivia());
-        if (argument.NameColon is not null)
+        var generator = shape.Generator;
+        var stateArguments = shape.States.Select((state, i) =>
         {
-            stateArgument = stateArgument.WithNameColon(SyntaxFactory.NameColon(stateParameter).WithTrailingTrivia(SyntaxFactory.Space));
-        }
+            var stateArgument = SyntaxFactory.Argument(state);
+            return argument.NameColon is not null
+                ? stateArgument.WithNameColon(SyntaxFactory.NameColon(shape.ArgumentNames[i]).WithTrailingTrivia(SyntaxFactory.Space))
+                : stateArgument;
+        }).ToList();
+        stateArguments[0] = stateArguments[0].WithLeadingTrivia(argument.GetLeadingTrivia());
 
         // The comma after the state copies the layout of the one before the generator, so arguments on their own lines stay
         // that way; a comment there stays with the state it now leads.
@@ -129,33 +134,38 @@ internal static class StateRewrite
             : default;
         var comma = SyntaxFactory.Token(SyntaxKind.CommaToken)
             .WithTrailingTrivia(layout.Count > 0 ? layout : SyntaxFactory.TriviaList(SyntaxFactory.Space));
-        // What led the generator now leads the state; the generator keeps only its indentation, so a comment is not doubled.
         var indentation = SyntaxFactory.TriviaList(argument.GetLeadingTrivia().Reverse().TakeWhile(trivia => trivia.IsKind(SyntaxKind.WhitespaceTrivia)).Reverse());
+        // What led the generator now leads the state; the generator keeps only its indentation, so a comment is not doubled.
+        var inserted = stateArguments.Skip(1).Select(state => state.WithLeadingTrivia(indentation)).Aggregate(
+            new List<SyntaxNodeOrToken> { stateArguments[0], comma },
+            (nodes, state) => { nodes.Add(state); nodes.Add(comma); return nodes; });
         var nodesAndTokens = list.Arguments.GetWithSeparators()
             .Replace(argument, argument.WithExpression(generator.WithTriviaFrom(argument.Expression)).WithLeadingTrivia(indentation))
-            .InsertRange(index * 2, new SyntaxNodeOrToken[] { stateArgument, comma });
+            .InsertRange(index * 2, inserted);
         return list.WithArguments(SyntaxFactory.SeparatedList<ArgumentSyntax>(nodesAndTokens));
     }
 
-    private static (ExpressionSyntax State, ExpressionSyntax Generator, ITypeSymbol? StateType)? FromLambda(IAnonymousFunctionOperation lambda)
+    private static Shape? FromLambda(IAnonymousFunctionOperation lambda, InvocationExpressionSyntax invocation, bool ownerArgument, string stateParameter)
     {
         var syntax = (AnonymousFunctionExpressionSyntax)lambda.Syntax;
         var captured = GeneratorCaptures.Of(lambda);
-        if (!CanMove(lambda, syntax, captured))
+        if (!CanMove(lambda, syntax, captured) || (ownerArgument && captured.Length != 2) || Reassigned(lambda, captured, invocation) is not { } reassigned)
         {
             return null;
         }
 
         var usedNames = syntax.DescendantTokens().Where(token => token.IsKind(SyntaxKind.IdentifierToken)).Select(token => token.ValueText).ToImmutableHashSet();
-        var (state, parameter, access, renamed) = StateShape(captured, usedNames, DeclaredNames(syntax));
-        if (Replacements(lambda, captured, access, renamed) is not { } replacements)
+        var snapshots = SnapshotNames(reassigned, invocation);
+        var (states, parameters, access, rewritten) = StateShape(captured, usedNames, DeclaredNames(syntax), symbol => snapshots.TryGetValue(symbol, out var name) ? name : symbol.Name, ownerArgument);
+        if (Replacements(lambda, captured, access, rewritten) is not { } replacements)
         {
             return null;
         }
 
-        var text = StaticLambdaText(lambda, syntax, parameter, usedNames, replacements);
-        var stateType = captured.Length == 1 ? TypeOf(captured[0]) : TupleOf(lambda.SemanticModel!, captured, ElementNames(captured));
-        return (state, SyntaxFactory.ParseExpression(text), stateType);
+        var text = StaticLambdaText(lambda, syntax, parameters, usedNames, replacements);
+        var types = ownerArgument || captured.Length == 1 ? captured.Select(TypeOf).ToImmutableArray() : ImmutableArray.Create(TupleOf(lambda.SemanticModel!, captured, ElementNames(captured)));
+        var declarations = snapshots.Select(pair => (LocalDeclarationStatementSyntax)SyntaxFactory.ParseStatement($"var {pair.Value} = {Name(pair.Key.Name).ToString()};")).ToImmutableArray();
+        return new Shape(states, ownerArgument ? ImmutableArray.Create("owner", "argument") : ImmutableArray.Create(stateParameter), SyntaxFactory.ParseExpression(text), types, declarations, ownerArgument);
     }
 
     private static bool CanMove(IAnonymousFunctionOperation lambda, AnonymousFunctionExpressionSyntax syntax, ImmutableArray<ISymbol> captured) =>
@@ -164,9 +174,148 @@ internal static class StateRewrite
         && syntax is not ParenthesizedLambdaExpressionSyntax { AttributeLists.Count: > 0 }
         && captured.All(CanPass)
         && !GeneratorCaptures.UsesOuterLocalFunction(lambda)
-        && !IsWrittenAnywhere(lambda, captured)
         && !HasImplicitCallerArgumentExpression(lambda)
         && !captured.Any(symbol => GeneratorCaptures.IsPrimaryConstructorParameter(symbol) && (IsAssignedInType((IParameterSymbol)symbol) || IsMutableStruct(((IParameterSymbol)symbol).Type)));
+
+    /// <summary>The captures written before the call, which need a snapshot, or null when one is written where a snapshot would not hold: after the call, inside the lambda or another function, or in a loop around the call.</summary>
+    private static ImmutableArray<ISymbol>? Reassigned(IAnonymousFunctionOperation lambda, ImmutableArray<ISymbol> captured, InvocationExpressionSyntax invocation)
+    {
+        var root = RootOf(lambda);
+        var statement = invocation.FirstAncestorOrSelf<StatementSyntax>();
+        var function = FunctionOf(invocation);
+        var written = new List<ISymbol>();
+        foreach (var operation in root.DescendantsAndSelf())
+        {
+            if (Referenced(operation) is not { } symbol || !captured.Contains(symbol, SymbolEqualityComparer.Default))
+            {
+                continue;
+            }
+
+            var use = UseOf(operation, statement, function);
+            if (use == CaptureUse.Unsafe)
+            {
+                return null;
+            }
+
+            if (use == CaptureUse.Write && !written.Contains(symbol, SymbolEqualityComparer.Default))
+            {
+                written.Add(symbol);
+            }
+        }
+
+        return written.Count == 0 || CanSnapshot(written, statement, root, invocation) ? written.ToImmutableArray() : null;
+    }
+
+    // A write a snapshot cannot hold: through a member or an alias (which writes whenever it likes), or one not settled before the call.
+    private static CaptureUse UseOf(IOperation operation, StatementSyntax? statement, SyntaxNode? function)
+    {
+        if (IsMutatedThrough(operation) || IsByRef(operation))
+        {
+            return CaptureUse.Unsafe;
+        }
+
+        if (!IsWrite(operation))
+        {
+            return CaptureUse.Read;
+        }
+
+        return IsSettledBefore(operation.Syntax, statement, function) ? CaptureUse.Write : CaptureUse.Unsafe;
+    }
+
+    private static IOperation RootOf(IOperation operation)
+    {
+        while (operation.Parent is not null)
+        {
+            operation = operation.Parent;
+        }
+
+        return operation;
+    }
+
+    // A write holds for a snapshot when it runs in an earlier statement of the same function, and no loop around the call runs it again.
+    private static bool IsSettledBefore(SyntaxNode write, StatementSyntax? statement, SyntaxNode? function) =>
+        statement is not null
+        && write.Span.End <= statement.SpanStart
+        && FunctionOf(write) == function
+        && !statement.Ancestors().Any(ancestor => ancestor is WhileStatementSyntax or DoStatementSyntax or ForStatementSyntax or CommonForEachStatementSyntax && ancestor.Span.Contains(write.Span));
+
+    // The snapshot is a statement of its own just before the call's, with the variable declared before it; a jump back could run the writes again.
+    private static bool CanSnapshot(List<ISymbol> written, StatementSyntax? statement, IOperation root, InvocationExpressionSyntax invocation) =>
+        statement is { Parent: BlockSyntax or SwitchSectionSyntax }
+        && written.All(symbol => symbol.DeclaringSyntaxReferences.All(reference => reference.SyntaxTree == statement.SyntaxTree && reference.Span.End <= statement.SpanStart))
+        && !root.DescendantsAndSelf().Any(operation => operation is ILabeledOperation)
+        && !HasGotoCase(invocation)
+        && !IsConditionallyEvaluated(invocation, statement);
+
+    // `goto case` and `goto default` jump back to an earlier section like a label does.
+    private static bool HasGotoCase(InvocationExpressionSyntax invocation) =>
+        invocation.FirstAncestorOrSelf<MemberDeclarationSyntax>()?.DescendantNodes().OfType<GotoStatementSyntax>()
+            .Any(jump => jump.IsKind(SyntaxKind.GotoCaseStatement) || jump.IsKind(SyntaxKind.GotoDefaultStatement)) == true;
+
+    // A snapshot before the statement would lose the null state a condition earlier in it establishes.
+    private static bool IsConditionallyEvaluated(InvocationExpressionSyntax invocation, StatementSyntax statement)
+    {
+        SyntaxNode child = invocation;
+        foreach (var ancestor in invocation.Ancestors().TakeWhile(node => node != statement))
+        {
+            var conditional = ancestor switch
+            {
+                BinaryExpressionSyntax binary => (binary.IsKind(SyntaxKind.LogicalAndExpression) || binary.IsKind(SyntaxKind.LogicalOrExpression) || binary.IsKind(SyntaxKind.CoalesceExpression)) && binary.Right == child,
+                AssignmentExpressionSyntax assignment => assignment.IsKind(SyntaxKind.CoalesceAssignmentExpression) && assignment.Right == child,
+                ConditionalExpressionSyntax ternary => ternary.Condition != child,
+                ConditionalAccessExpressionSyntax access => access.WhenNotNull == child,
+                SwitchExpressionArmSyntax or WhenClauseSyntax => true,
+                _ => false,
+            };
+            if (conditional)
+            {
+                return true;
+            }
+
+            child = ancestor;
+        }
+
+        return false;
+    }
+
+    // A `ref` expression, or a `ref` or `in` argument, may let the variable be written through an alias.
+    private static bool IsByRef(IOperation reference) =>
+        reference.Syntax.Parent is RefExpressionSyntax
+        || reference.Parent is IArgumentOperation { Parameter.RefKind: RefKind.Ref or RefKind.In };
+
+    private static SyntaxNode? FunctionOf(SyntaxNode node) =>
+        node.Ancestors().FirstOrDefault(ancestor => ancestor is AnonymousFunctionExpressionSyntax or LocalFunctionStatementSyntax or AccessorDeclarationSyntax or (MemberDeclarationSyntax and not GlobalStatementSyntax));
+
+    // `<name>0`, counting up past any name the member already uses. Fix All applies every call's fix to the original tree, so call i of the member's N
+    // lambda-taking calls, whatever their method, only uses suffixes i, i + N, i + 2N...: two snapshots of one variable then differ.
+    private static Dictionary<ISymbol, string> SnapshotNames(ImmutableArray<ISymbol> reassigned, InvocationExpressionSyntax invocation)
+    {
+        var names = new Dictionary<ISymbol, string>(SymbolEqualityComparer.Default);
+        if (reassigned.IsEmpty)
+        {
+            return names;
+        }
+
+        var used = (invocation.FirstAncestorOrSelf<MemberDeclarationSyntax>() ?? (SyntaxNode)invocation).DescendantTokens()
+            .Where(token => token.IsKind(SyntaxKind.IdentifierToken)).Select(token => token.ValueText).ToImmutableHashSet();
+        var calls = (invocation.FirstAncestorOrSelf<MemberDeclarationSyntax>()?.DescendantNodes().OfType<InvocationExpressionSyntax>() ?? Enumerable.Empty<InvocationExpressionSyntax>())
+            .Where(other => other.ArgumentList.Arguments.Any(argument => argument.Expression is AnonymousFunctionExpressionSyntax)).ToList();
+        var step = Math.Max(calls.Count, 1);
+        var first = calls.Count(other => other.SpanStart < invocation.SpanStart);
+        foreach (var symbol in reassigned)
+        {
+            var suffix = first;
+            while (used.Contains(symbol.Name + suffix))
+            {
+                suffix += step;
+            }
+
+            names[symbol] = symbol.Name + suffix;
+            used = used.Add(names[symbol]);
+        }
+
+        return names;
+    }
 
     // A rewritten reference would change the text an omitted [CallerArgumentExpression] argument records, such as ThrowIfNull's ParamName.
     private static bool HasImplicitCallerArgumentExpression(IAnonymousFunctionOperation lambda) =>
@@ -174,29 +323,53 @@ internal static class StateRewrite
             argument.ArgumentKind == ArgumentKind.DefaultValue
             && argument.Parameter?.GetAttributes().Any(attribute => attribute.AttributeClass?.Name == "CallerArgumentExpressionAttribute") == true);
 
-    /// <summary>The state argument, the lambda parameter that receives it, how the body reaches each captured value through it, and whether references to the captures change.</summary>
-    private static (ExpressionSyntax State, string Parameter, Func<ISymbol, ExpressionSyntax> Access, bool Renamed) StateShape(ImmutableArray<ISymbol> captured, ImmutableHashSet<string> usedNames, ImmutableHashSet<string> declaredNames)
+    /// <summary>The state arguments, the lambda parameters that receive them, how the body reaches each captured value through them, and the captures whose references change.</summary>
+    /// <param name="stateName">What names a capture in the state argument: the variable, or its snapshot.</param>
+    /// <param name="ownerArgument">Whether there are two captures, each its own state, for the owner and argument overload.</param>
+    private static (ImmutableArray<ExpressionSyntax> States, ImmutableArray<string> Parameters, Func<ISymbol, ExpressionSyntax> Access, ImmutableArray<ISymbol> Rewritten) StateShape(
+        ImmutableArray<ISymbol> captured, ImmutableHashSet<string> usedNames, ImmutableHashSet<string> declaredNames, Func<ISymbol, string> stateName, bool ownerArgument)
     {
-        if (captured.Length == 1)
+        if (ownerArgument || captured.Length == 1)
         {
-            // One value is the state itself; a local keeps its name, as a lambda parameter may shadow it (C# 8+), unless the body declares it again.
-            var only = captured[0];
-            if (GeneratorCaptures.IsThis(only))
-            {
-                var self = Unique("self", usedNames);
-                return (SyntaxFactory.ThisExpression(), self, _ => Name(self), false);
-            }
-
-            var renamed = declaredNames.Contains(only.Name);
-            var parameter = renamed ? Unique(only.Name, usedNames) : only.Name;
-            return (Name(only.Name), parameter, _ => Name(parameter), renamed);
+            return OwnStateShape(captured, usedNames, declaredNames, stateName);
         }
 
         var tuple = Unique("s", usedNames);
         var elements = ElementNames(captured);
         var state = SyntaxFactory.TupleExpression(SyntaxFactory.SeparatedList(captured.Select(symbol =>
-            SyntaxFactory.Argument(SyntaxFactory.NameColon(elements[symbol]), default, GeneratorCaptures.IsThis(symbol) ? SyntaxFactory.ThisExpression() : Name(symbol.Name)))));
-        return (state, tuple, symbol => SyntaxFactory.MemberAccessExpression(SyntaxKind.SimpleMemberAccessExpression, Name(tuple), Name(elements[symbol])), true);
+            SyntaxFactory.Argument(SyntaxFactory.NameColon(elements[symbol]), default, GeneratorCaptures.IsThis(symbol) ? SyntaxFactory.ThisExpression() : Name(stateName(symbol))))));
+        return (ImmutableArray.Create<ExpressionSyntax>(state), ImmutableArray.Create(tuple), symbol => SyntaxFactory.MemberAccessExpression(SyntaxKind.SimpleMemberAccessExpression, Name(tuple), Name(elements[symbol])), captured);
+    }
+
+    // Each value is its own state.
+    private static (ImmutableArray<ExpressionSyntax> States, ImmutableArray<string> Parameters, Func<ISymbol, ExpressionSyntax> Access, ImmutableArray<ISymbol> Rewritten) OwnStateShape(
+        ImmutableArray<ISymbol> captured, ImmutableHashSet<string> usedNames, ImmutableHashSet<string> declaredNames, Func<ISymbol, string> stateName)
+    {
+        var used = usedNames;
+        var parameters = new Dictionary<ISymbol, string>(SymbolEqualityComparer.Default);
+        foreach (var symbol in captured)
+        {
+            var parameter = ParameterFor(symbol, used, declaredNames);
+            parameters[symbol] = parameter;
+            used = used.Add(parameter);
+        }
+
+        return (
+            captured.Select(symbol => GeneratorCaptures.IsThis(symbol) ? (ExpressionSyntax)SyntaxFactory.ThisExpression() : Name(stateName(symbol))).ToImmutableArray(),
+            captured.Select(symbol => parameters[symbol]).ToImmutableArray(),
+            symbol => Name(parameters[symbol]),
+            captured.Where(symbol => !GeneratorCaptures.IsThis(symbol) && parameters[symbol] != symbol.Name).ToImmutableArray());
+    }
+
+    // A local keeps its name, as a lambda parameter may shadow it (C# 8+), unless the body declares it again.
+    private static string ParameterFor(ISymbol symbol, ImmutableHashSet<string> used, ImmutableHashSet<string> declaredNames)
+    {
+        if (GeneratorCaptures.IsThis(symbol))
+        {
+            return Unique("self", used);
+        }
+
+        return declaredNames.Contains(symbol.Name) ? Unique(symbol.Name, used) : symbol.Name;
     }
 
     // The names the lambda declares inside itself: locals, pattern and out variables, parameters of nested functions, query variables.
@@ -218,10 +391,9 @@ internal static class StateRewrite
         }).Where(name => name is not null).Select(name => name!).ToImmutableHashSet();
 
     /// <summary>The body's references to the captured values, each mapped to its access through the state, or null when one cannot be rewritten.</summary>
-    private static Dictionary<SyntaxNode, ExpressionSyntax>? Replacements(IAnonymousFunctionOperation lambda, ImmutableArray<ISymbol> captured, Func<ISymbol, ExpressionSyntax> access, bool renamed)
+    private static Dictionary<SyntaxNode, ExpressionSyntax>? Replacements(IAnonymousFunctionOperation lambda, ImmutableArray<ISymbol> captured, Func<ISymbol, ExpressionSyntax> access, ImmutableArray<ISymbol> rewritten)
     {
         var self = captured.FirstOrDefault(GeneratorCaptures.IsThis);
-        var rewritten = renamed ? captured : ImmutableArray<ISymbol>.Empty;
         var replacements = new Dictionary<SyntaxNode, ExpressionSyntax>();
         return lambda.Body.DescendantsAndSelf().All(operation => TryReplace(operation, self, rewritten, access, replacements)) ? replacements : null;
     }
@@ -264,21 +436,21 @@ internal static class StateRewrite
         reference.Parent is AnonymousObjectMemberDeclaratorSyntax { NameEquals: null } or ArgumentSyntax { NameColon: null, Parent: TupleExpressionSyntax }
         || reference.Ancestors().OfType<InvocationExpressionSyntax>().Any(call => call.Expression is IdentifierNameSyntax { Identifier.ValueText: "nameof" });
 
-    private static string StaticLambdaText(IAnonymousFunctionOperation lambda, AnonymousFunctionExpressionSyntax syntax, string parameter, ImmutableHashSet<string> usedNames, Dictionary<SyntaxNode, ExpressionSyntax> replacements)
+    private static string StaticLambdaText(IAnonymousFunctionOperation lambda, AnonymousFunctionExpressionSyntax syntax, ImmutableArray<string> stateParameters, ImmutableHashSet<string> usedNames, Dictionary<SyntaxNode, ExpressionSyntax> replacements)
     {
         var body = syntax.Body.ReplaceNodes(replacements.Keys, (original, _) => replacements[original].WithTriviaFrom(original));
         var returnType = syntax is ParenthesizedLambdaExpressionSyntax { ReturnType: { } type } ? type.ToString() + " " : string.Empty;
         // The body keeps its own layout, and the line break after the arrow when there was one.
         var bodyText = (syntax is LambdaExpressionSyntax lambdaSyntax ? lambdaSyntax.ArrowToken.TrailingTrivia.ToFullString() : string.Empty) + body.ToFullString();
-        var parameters = string.Join(", ", LambdaParameters(lambda, syntax, parameter, usedNames));
+        var parameters = string.Join(", ", LambdaParameters(lambda, syntax, stateParameters, usedNames));
         return $"static {(lambda.Symbol.IsAsync ? "async " : string.Empty)}{returnType}({parameters}) =>{(bodyText.Length > 0 && char.IsWhiteSpace(bodyText[0]) ? string.Empty : " ")}{bodyText}";
     }
 
     // The state first, then the lambda's own parameters; an anonymous method without a list gets a name for each, none repeated.
-    private static IEnumerable<string> LambdaParameters(IAnonymousFunctionOperation lambda, AnonymousFunctionExpressionSyntax syntax, string parameter, ImmutableHashSet<string> usedNames)
+    private static IEnumerable<string> LambdaParameters(IAnonymousFunctionOperation lambda, AnonymousFunctionExpressionSyntax syntax, ImmutableArray<string> stateParameters, ImmutableHashSet<string> usedNames)
     {
-        var used = usedNames.Add(parameter);
-        var names = new List<string> { parameter };
+        var used = usedNames.Union(stateParameters);
+        var names = new List<string>(stateParameters);
         for (var i = 0; i < lambda.Symbol.Parameters.Length; i++)
         {
             var name = ParameterName(syntax, i) ?? Unique(lambda.Symbol.Parameters[i].Type.Name == "CancellationToken" ? "ct" : "arg", used);
@@ -289,7 +461,7 @@ internal static class StateRewrite
         return names.Select(Escape);
     }
 
-    private static (ExpressionSyntax State, ExpressionSyntax Generator, ITypeSymbol? StateType)? FromMethodGroup(IMethodReferenceOperation group, ExpressionSyntax syntax)
+    private static Shape? FromMethodGroup(IMethodReferenceOperation group, ExpressionSyntax syntax, string stateParameter)
     {
         if (group.Method.MethodKind == MethodKind.LocalFunction
             || group.Instance is not { Type.IsValueType: false } instance
@@ -314,7 +486,7 @@ internal static class StateRewrite
 
         var arguments = string.Join(", ", names.Select(Escape));
         var text = $"static ({string.Join(", ", names.Prepend(parameter).Select(Escape))}) => {Escape(parameter)}.{method.WithoutTrivia().ToFullString()}({arguments})";
-        return (state, SyntaxFactory.ParseExpression(text), instance.Type);
+        return new Shape(ImmutableArray.Create(state), ImmutableArray.Create(stateParameter), SyntaxFactory.ParseExpression(text), ImmutableArray.Create<ITypeSymbol?>(instance.Type), ImmutableArray<LocalDeclarationStatementSyntax>.Empty, false);
     }
 
     /// <summary>The method group's target as the state, the method's name, and the lambda parameter for the target.</summary>
@@ -390,18 +562,6 @@ internal static class StateRewrite
 
     private static bool IsPointer(ITypeSymbol type) =>
         Contains(type, candidate => candidate.TypeKind is TypeKind.Pointer or TypeKind.FunctionPointer);
-
-    private static bool IsWrittenAnywhere(IOperation lambda, ImmutableArray<ISymbol> captured)
-    {
-        var root = lambda;
-        while (root.Parent is not null)
-        {
-            root = root.Parent;
-        }
-
-        return root.DescendantsAndSelf().Any(operation =>
-            Referenced(operation) is { } symbol && captured.Contains(symbol, SymbolEqualityComparer.Default) && (IsWrite(operation) || IsMutatedThrough(operation)));
-    }
 
     // Any member may assign a primary constructor parameter; a syntactic look over the type is enough to stay away from those.
     private static bool IsAssignedInType(IParameterSymbol parameter)
@@ -526,4 +686,26 @@ internal static class StateRewrite
     // A keyword name needs a verbatim token: `@await` as its text, `await` as the name it binds to.
     private static IdentifierNameSyntax Name(string name) =>
         Escape(name) == name ? SyntaxFactory.IdentifierName(name) : (IdentifierNameSyntax)SyntaxFactory.ParseName("@" + name);
+
+    /// <summary>What replaces the generator: the state arguments (named <c>ArgumentNames</c> in the overload), the static lambda, the state types, and the locals that snapshot reassigned captures.</summary>
+    private sealed class Shape(
+        ImmutableArray<ExpressionSyntax> states,
+        ImmutableArray<string> argumentNames,
+        ExpressionSyntax generator,
+        ImmutableArray<ITypeSymbol?> stateTypes,
+        ImmutableArray<LocalDeclarationStatementSyntax> snapshots,
+        bool ownerArgument)
+    {
+        public ImmutableArray<ExpressionSyntax> States { get; } = states;
+
+        public ImmutableArray<string> ArgumentNames { get; } = argumentNames;
+
+        public ExpressionSyntax Generator { get; } = generator;
+
+        public ImmutableArray<ITypeSymbol?> StateTypes { get; } = stateTypes;
+
+        public ImmutableArray<LocalDeclarationStatementSyntax> Snapshots { get; } = snapshots;
+
+        public bool OwnerArgument { get; } = ownerArgument;
+    }
 }

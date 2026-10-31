@@ -1,6 +1,7 @@
 # Choosing a `GetOrAddAsync` overload
 
-`GetOrAddAsync` comes in three shapes: a plain lambda, a delegate you build once, and a static lambda with its state. They
+`GetOrAddAsync` comes in three shapes: a plain lambda, a delegate you build once, and a static lambda with its state (`this`,
+an owner and one argument, or a named tuple). They
 return the same value, coalesce the same way and take the same expiration arguments. They differ only in what the caller
 allocates per call, and that difference is small. **Start with the plain lambda.** Reach for the other shapes on a path a
 profiler has shown you, not before.
@@ -9,7 +10,7 @@ profiler has shown you, not before.
 public class UserService(ICache<User> cache, IUserRepository repo)
 {
     public ValueTask<User?> GetAsync(int id, CancellationToken ct) =>
-        cache.GetOrAddAsync(id, c => repo.LoadAsync(id, c), TimeSpan.FromMinutes(5), ct);
+        cache.GetOrAddAsync($"user:{id}", c => repo.LoadAsync(id, c), TimeSpan.FromMinutes(5), ct);
 }
 ```
 
@@ -19,22 +20,30 @@ below is what it costs.
 
 ## What each shape costs
 
-`GeneratorShapeBenchmark` in `benchmarks/UiPath.Caching.Benchmarks` (in-memory provider, one key, .NET 10, short run;
-times are indicative, the allocations are exact):
+`GeneratorShapeBenchmark` in `benchmarks/UiPath.Caching.Benchmarks` (in-memory provider, one key, BenchmarkDotNet default
+job; times are indicative and move by a few tens of nanoseconds between runs, the allocations are exact):
 
-| Shape | Local hit | Miss (generator runs, answers `null`, nothing stored) |
-|---|---|---|
-| `ct => Load(ct)` — lambda that captures `this` | 127 ns, **64 B** (the delegate) | 1.06 µs, 384 B |
-| `ct => Load(id, ct)` — lambda that captures a local too | 124 ns, **96 B** (closure + delegate) | — |
-| `_load` — delegate built once, in the constructor | 119 ns, **0 B** | 1.13 µs, 320 B |
-| `this, static (self, ct) => self.Load(ct)` — state is `this` | 134 ns, **0 B** | 0.67 µs, 416 B |
-| `(this, id), static (s, ct) => s.Self.Load(s.Id, ct)` — state is a tuple | 257 ns, **0 B** | — |
+| Shape | Local hit, .NET 10 | Local hit, .NET 8 | Miss (generator runs, answers `null`, nothing stored), .NET 10 / .NET 8 |
+|---|---|---|---|
+| `ct => Load(ct)` - lambda that captures `this` | 118 ns, **64 B** (the delegate) | 131 ns, **64 B** | 1.00 µs, 392 B / 1.31 µs, 376 B |
+| `ct => Load(id, ct)` - lambda that captures a local too | 158 ns, **96 B** (closure + delegate) | 129 ns, **96 B** | - |
+| `_load` - delegate built once, in the constructor | 145 ns, **0 B** | 127 ns, **0 B** | 1.04 µs, 328 B / 0.91 µs, 312 B |
+| `this, static (self, ct) => self.Load(ct)` - state is `this` | 153 ns, **0 B** | 157 ns, **0 B** | 0.62 µs, 424 B / 0.87 µs, 408 B |
+| `this, id, static (self, id, ct) => self.Load(id, ct)` - owner and argument | 155 ns, **0 B** | 253 ns, **0 B** | - |
+| `(Self: this, Id: id), static (s, ct) => s.Self.Load(s.Id, ct)` - state is a tuple | 164 ns, **0 B** | 258 ns, **0 B** | - |
 
-So the lambda costs 64–96 bytes per call. The delegate built once and the state overloads make a local hit allocate
-nothing; on a miss the lambda still costs its bytes (384 B against 320 B for the prebuilt delegate, since the lambda is
+So the lambda costs 64-96 bytes per call. The delegate built once and the state overloads make a local hit allocate
+nothing; on a miss the lambda still costs its bytes (392 B against 328 B for the prebuilt delegate, since the lambda is
 created before the lookup), and a miss that stores its value also pays for the write, next to which those bytes are
 small. At a thousand calls a second that is under 100 KB/s of short-lived garbage, a rounding error next to the request that
-made the call. The tuple-state form saved those bytes but ran slower in this measurement; if you use it, measure it.
+made the call.
+
+On .NET 8 the two forms whose state is a struct holding a reference (owner and argument, a tuple) measured about 100 ns
+slower on a hit; closures and `this` as state did not, and on .NET 10 they match. In short net8 runs, a class holding
+the same fields and a `(int, int)` tuple stayed at the speed of `this`, and with `DOTNET_TieredPGO=0` the gap was gone,
+so it follows the struct-with-a-reference shape and the runtime's dynamic PGO rather than anything the call does. On
+.NET 8 hot paths pass `this`; for two or more values the closure (about 129 ns, allocates) or a delegate built once
+(about 127 ns, 0 B) beat both struct forms. Measure the shape you use.
 
 ## When a shape other than the plain lambda is worth it
 
@@ -44,36 +53,45 @@ Use another shape when all of these hold:
   shows the generator delegate among the top allocations;
 - the call hits far more often than it misses (a miss allocates hundreds of bytes anyway).
 
-Then pick the simplest shape that fits:
+Then pick the first shape that fits:
 
-1. **The generator needs only `this`.** Build the delegate once and pass the field. It reads as a plain callback and
-   allocates nothing:
+1. **The generator needs only `this`.** Pass `this` as the state of a `static` lambda. The lambda cannot capture anything,
+   which is what keeps it allocation-free; it receives the state instead:
 
    ```csharp
-   private readonly Func<CancellationToken, Task<Config?>> _load;
-
-   public ConfigService(ICache<Config> cache, IConfigClient client)
-   {
-       _load = client.LoadAsync;   // instance method group, bound once
-       ...
-   }
-
-   public ValueTask<Config?> GetAsync(CancellationToken ct) => _cache.GetOrAddAsync(Key, _load, ct);
+   public ValueTask<Config?> GetAsync(CancellationToken ct) =>
+       _cache.GetOrAddAsync($"config:{_tenantId}", this, static (self, c) => self.LoadAsync(c), ct);
    ```
 
-2. **The generator needs per-call arguments.** Pass them as the state of a `static` lambda. The lambda cannot capture
-   anything, which is what keeps it allocation-free; it receives the state instead:
+   A delegate built once and passed as a field (`_load = client.LoadAsync;` in the constructor) allocates nothing either,
+   and reads as a plain callback, when the generator needs nothing else.
+
+2. **The generator needs `this` and one value.** Pass the owner and the argument; no tuple, no closure:
 
    ```csharp
    public ValueTask<Token?> GetAsync(Guid machineKey, CancellationToken ct) =>
-       _cache.GetOrAddAsync(machineKey, (Self: this, machineKey), static (s, c) => s.Self.FetchAsync(s.machineKey, c), ct);
+       _cache.GetOrAddAsync($"{_tenantId}:{machineKey}", this, machineKey, static (self, key, c) => self.FetchAsync(key, c), ct);
+   ```
+
+   The owner and the argument can be any two values, so `_client` and `id` work as well as `this` and `id`. On `ICache`
+   the call also takes the policy, `null` for the default, before the token.
+
+3. **The generator needs three or more values.** Pass a tuple with named elements and read them by name:
+
+   ```csharp
+   var order = await _cache.GetOrAddAsync(
+       $"order:{tenantId}:{orderId}",
+       (Self: this, TenantId: tenantId, OrderId: orderId),
+       static (s, c) => s.Self.LoadAsync(s.TenantId, s.OrderId, c),
+       ct);
    ```
 
    This is the shape `HybridCache.GetOrCreateAsync<TState, T>`, `string.Create` and `ConcurrentDictionary.GetOrAdd`
    use for the same reason. It is the most verbose of the three; that verbosity is the price of the zero, so pay it
-   only where the zero matters.
+   only where the zero matters. Name the elements so the call site reads `s.TenantId`, not a position.
 
-The state overloads are members of `ICache`, `ICache<T>`, `IHashCache` and `IHashCache<T>`. The `CacheKey` ones are
+The state overloads are members of `ICache`, `ICache<T>`, `IHashCache` and `IHashCache<T>`; the owner-and-argument ones
+are extensions on `ICache`, `ICache<T>`, `IHashCache` and `IHashCache<T>` that build the state for you. The `CacheKey` ones are
 members every implementation provides, and an interpolated key goes to `ISpanKeyCache` (`ISpanKeyHashCache`) or else to
 the `CacheKey` state member, so no library cache binds a closure. `GetOrAddWithExpirationAsync` has a state overload of
 the same shape, also a member of `ICache` and `ICache<T>`, and both take an interpolated key (`ISpanKeyCache`): a warm hit
@@ -109,50 +127,73 @@ in `nameof`, a static method group or local function, a delegate you built once,
 Only the library's own extension classes count as state overloads: an extension of your own, even in the `UiPath.Caching`
 namespace, is not looked at.
 
-The rule is **Info**: the IDE shows a suggestion and the build prints nothing, because the plain lambda stays the
-default. On a hot path where the bytes matter, raise it in `.editorconfig`, for the whole project or for one folder:
+The rule is **Info** by default: the IDE shows a suggestion and the build prints nothing, because the plain lambda stays
+the default. **On a hot path, raise it to a warning** in `.editorconfig`, for the whole project or for one folder, so a
+new capturing lambda there shows up in the build:
 
 ```ini
 [src/Hot/**.cs]
 dotnet_diagnostic.UIPCACHE001.severity = warning
 ```
 
-or silence it with `dotnet_diagnostic.UIPCACHE001.severity = none`. The rule has a category of its own, `UiPath.Caching`, so
+Leave it at Info elsewhere, or silence it with `dotnet_diagnostic.UIPCACHE001.severity = none`. The rule has a category of its own, `UiPath.Caching`, so
 raising a whole category such as `Performance` does not turn it on.
 
 The code fix, *Pass captured values as state*, moves the call to the state overload and keeps the other arguments
-(key, expiration, policy, token) where they are:
+(key, expiration, policy, token) where they are. One capture becomes the state, two become an owner and an argument
+(when an overload binds), three or more become a tuple with named elements:
 
 ```csharp
 // One capture is the state itself; `this` becomes `self`, and an implicit member access goes through it.
-_cache.GetOrAddAsync(key, ct => LoadAsync(ct), ct);
-_cache.GetOrAddAsync(key, this, static (self, ct) => self.LoadAsync(ct), ct);
+_cache.GetOrAddAsync($"config:{_tenantId}", c => LoadAsync(c), ct);
+_cache.GetOrAddAsync($"config:{_tenantId}", this, static (self, c) => self.LoadAsync(c), ct);
 
-// Several captures become a named tuple.
-_cache.GetOrAddAsync(id, c => _repo.LoadAsync(id, c), TimeSpan.FromMinutes(5), ct);
-_cache.GetOrAddAsync(id, (Self: this, Id: id), static (s, c) => s.Self._repo.LoadAsync(s.Id, c), TimeSpan.FromMinutes(5), ct);
+// Two captures become an owner and an argument.
+_cache.GetOrAddAsync($"user:{id}", c => _repo.LoadAsync(id, c), TimeSpan.FromMinutes(5), ct);
+_cache.GetOrAddAsync($"user:{id}", this, id, static (self, id, c) => self._repo.LoadAsync(id, c), TimeSpan.FromMinutes(5), ct);
+
+// Three or more become a tuple with PascalCase element names; `this` is `Self`.
+_cache.GetOrAddAsync($"order:{tenantId}:{orderId}", c => LoadAsync(tenantId, orderId, c), ct);
+_cache.GetOrAddAsync($"order:{tenantId}:{orderId}", (Self: this, TenantId: tenantId, OrderId: orderId), static (s, c) => s.Self.LoadAsync(s.TenantId, s.OrderId, c), ct);
 
 // An instance method group passes its target.
-_cache.GetOrAddAsync(key, _client.LoadAsync, ct);
-_cache.GetOrAddAsync(key, _client, static (client, ct) => client.LoadAsync(ct), ct);
+_cache.GetOrAddAsync($"config:{_tenantId}", _client.LoadAsync, ct);
+_cache.GetOrAddAsync($"config:{_tenantId}", _client, static (client, c) => client.LoadAsync(c), ct);
 
 // A batch passes the capture as its argument, ahead of the missing states.
-_cache.GetOrAddAsync(entries, (ids, ct) => LoadManyAsync(ids, ct), ct);
-_cache.GetOrAddAsync(entries, this, static (self, ids, ct) => self.LoadManyAsync(ids, ct), ct);
+_cache.GetOrAddAsync(entries, (ids, c) => LoadManyAsync(ids, c), ct);
+_cache.GetOrAddAsync(entries, this, static (self, ids, c) => self.LoadManyAsync(ids, c), ct);
 
 // Spelled type arguments get the state's type at the end.
-_hash.GetOrAddAsync<User>(key, ct => LoadAsync(id, ct), null, ct);
-_hash.GetOrAddAsync<User, (UserService Self, int Id)>(key, (Self: this, Id: id), static (s, ct) => s.Self.LoadAsync(s.Id, ct), null, ct);
+_hash.GetOrAddAsync<User>($"user:{id}", c => LoadAsync(id, c), null, ct);
+_hash.GetOrAddAsync<User, UserService, int>($"user:{id}", this, id, static (self, id, c) => self.LoadAsync(id, c), null, ct);
 ```
 
+A captured variable that is assigned before the call is copied to a local first (`var id0 = id;`) and the copy is
+passed, so the generator sees the value the lambda would have read.
+
 The state is read once, when the call is made, where the lambda read the variable when it ran, so the fix is offered
-only when that cannot differ. It is not offered when a captured variable is assigned anywhere in the method (or a
-captured primary constructor parameter anywhere in the type), when the lambda uses `base`, calls a local function that
+only when that cannot differ. It is not offered when a captured variable is assigned after the call, inside the lambda or another function, in a loop around the call, through a `ref` alias, under a conditional operator in the call's statement (when it needs a snapshot), or in a method with a label or a `goto case` (or a
+captured primary constructor parameter is assigned anywhere in the type), when the lambda uses `base`, calls a local function that
 captures, or names a captured local in `nameof` or an inferred tuple or anonymous-type member, for a lambda already
 on a state overload, and for a call on a class whose state overload is only on the cache interface (a cache class of
 your own; the library's public caches declare theirs); the suggestion still shows, and the rewrite is yours. Fix All applies it to a document, project or solution (`dotnet format
 analyzers --diagnostics UIPCACHE001 --severity info` from the command line); a generator inside another generator is
 fixed on the next pass, its outer one first.
+
+## Knowing whether this call generated the value
+
+`GetOrAddResultAsync` takes the same arguments as `GetOrAddAsync` and returns a `CacheResult<T>` with the `Value`, its
+`Expiration` and `WasGenerated`: true only when this call's own generator ran. A hit, and a call that waited on a
+concurrent caller's generation, report false. Use it instead of setting a flag inside the generator:
+
+```csharp
+var result = await _cache.GetOrAddResultAsync($"user:{id}", this, id, static (self, id, c) => self.LoadAsync(id, c), ct);
+if (result.WasGenerated)
+{
+    _metrics.CountLoad();
+}
+```
 
 ## A generator that knows its value's lifetime
 
@@ -160,7 +201,7 @@ When the lifetime is in the value (a token with an expiry), return it from the g
 the call:
 
 ```csharp
-var token = await _cache.GetOrAddWithExpirationAsync(key, async c =>
+var token = await _cache.GetOrAddWithExpirationAsync($"token:{machineKey}", async c =>
 {
     var fresh = await _client.FetchAsync(c);
     return new GeneratedValue<Token?>(fresh, fresh.ExpiresAt - Skew);
@@ -180,7 +221,7 @@ ambiguous against the closure overload.
   256-character stack buffer and a local hit allocates nothing (values format in the current culture, so a `DateTime` or `decimal` hole differs between nodes with different cultures):
 
   ```csharp
-  var token = await _cache.GetOrAddAsync($"{tenantId}:{machineKey}", (Self: this, machineKey), static (s, c) => s.Self.FetchAsync(s.machineKey, c), ct);
+  var token = await _cache.GetOrAddAsync($"{tenantId}:{machineKey}", this, machineKey, static (self, key, c) => self.FetchAsync(key, c), ct);
   ```
 
   A longer key rents its buffer from `ArrayPool`. `$"..."` on a variable typed as a concrete class (`Cache<T>`, `HashCache<T>`, `MultilayerCache`) goes through `string` and allocates, so type the variable as the interface. Under C# 12 or older a constant interpolated key (`$"fixed"`) is ambiguous (CS0121); pass a plain string. `SetAsync` takes interpolated keys too; a write has to build the
