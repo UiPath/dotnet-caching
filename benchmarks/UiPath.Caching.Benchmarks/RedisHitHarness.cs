@@ -15,7 +15,7 @@ internal static class RedisHitHarness
     public static async Task RunAsync(string endpoint)
     {
         var connection = endpoint + ",abortConnect=false";
-        var extra = new Dictionary<string, string?> { { "Caching:Connections:Redis:ConnectionString", connection }, { "Caching:Broadcast:RedisPubSub:Enabled", "true" }, { "Caching:Redis:ReadScriptsEnabled", Environment.GetEnvironmentVariable("READSCRIPTS") ?? "true" } };
+        var extra = new Dictionary<string, string?> { { "Caching:Connections:Redis:ConnectionString", connection }, { "Caching:Broadcast:RedisPubSub:Enabled", "true" }, { "Caching:Redis:ReadScriptsEnabled", Environment.GetEnvironmentVariable("READSCRIPTS") ?? "false" } };
         using var host = HostHelper.GetHost(0, cache: KnownCacheProviderNames.Redis, topic: "RedisPubSub", extra: extra);
         await host.StartAsync();
         var cache = host.Services.GetRequiredService<ICache<string>>();

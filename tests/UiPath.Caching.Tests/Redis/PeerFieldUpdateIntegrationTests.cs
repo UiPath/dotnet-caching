@@ -341,8 +341,8 @@ public sealed class PeerFieldUpdateIntegrationTests(RedisContainerFixture fixtur
     {
         Assert.SkipUnless(fixture.Enabled, "Set RUN_REDIS_INTEGRATION_TESTS=1 (Docker required) to run.");
         Assert.SkipUnless(fixture.ServerVersion >= new Version(7, 0), "Only the read script pages a large hash.");
-        var writer = Node("a", peerFieldUpdates: true, fieldBatch: 50);
-        var peer = Node("b", peerFieldUpdates: true, fieldBatch: 50);
+        var writer = Node("a", peerFieldUpdates: true, fieldBatch: 50, readScripts: true);
+        var peer = Node("b", peerFieldUpdates: true, fieldBatch: 50, readScripts: true);
         var key = Unique();
         var many = Enumerable.Range(0, 2000).ToDictionary(i => $"f{i}", i => (string?)$"v{i}");
         await writer.Hashes.SetAsync<string>(key, many, TimeSpan.FromMinutes(10), Ct);
@@ -454,7 +454,7 @@ public sealed class PeerFieldUpdateIntegrationTests(RedisContainerFixture fixtur
         return null;
     }
 
-    private Peer Node(string source, bool peerFieldUpdates, int fieldBatch = 1000)
+    private Peer Node(string source, bool peerFieldUpdates, int fieldBatch = 1000, bool readScripts = false)
     {
         var profiler = new CommandCountingProfiler();
         var provider = new ServiceCollection()
@@ -468,7 +468,11 @@ public sealed class PeerFieldUpdateIntegrationTests(RedisContainerFixture fixtur
                         o.ProfilerEnabled = true;
                         o.ProfilingSessionFactory = () => profiler.Session;
                     });
-                    b.AddRedis(o => o.HashFieldBatchSize = fieldBatch);
+                    b.AddRedis(o =>
+                    {
+                        o.HashFieldBatchSize = fieldBatch;
+                        o.ReadScriptsEnabled = readScripts;
+                    });
                     b.AddBroadcast();
                     b.AddInMemoryRedis(o => o.PeerFieldUpdates = peerFieldUpdates);
                 },

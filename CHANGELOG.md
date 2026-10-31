@@ -230,13 +230,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
   them; an interpolated key on `ICache` or `IHashCache` reaches them, and any other cache is called through its `CacheKey` member.
   **Breaking** for an implementation of those interfaces outside the library, which must add the new members.
 
-- **Read scripts are on by default.** `RedisCacheOptions.ReadScriptsEnabled` now defaults to `true`: on Redis 7 and
-  later, `RedisCache` and `RedisHashCache` read a value (or a hash) and its expiration with one `EVAL_RO` script
-  instead of a MULTI/EXEC transaction, which allocates about 2.5 KB less per miss through the in-memory and Redis
-  tiers. The fallback is unchanged and automatic: before Redis 7 no script is sent; a connection user without
-  `@scripting`, or a proxy that cannot run scripts, gets one warning per cache instance (`RedisCache` and
-  `RedisHashCache` each log their own) and then the transaction path for good, so no read is lost. Set
-  `ReadScriptsEnabled: false` to avoid the attempt, and the warning, where that is the known state of the server.
+- **Reads no longer use a script by default.** `RedisCacheOptions.ReadScriptsEnabled` defaults to `false`: on Azure Managed Redis
+  the `EVAL_RO` read cost the server 4 to 15 times the time of a plain read, with no gain in client latency. A single or batch
+  `RedisCache` read now sends a pipelined `GET` and `PTTL`, and a `RedisHashCache` entry read an `HGETALL` and a `PTTL` (one round trip, no MULTI/EXEC), on every Redis version; the pair is not
+  atomic, so a key that expires between them reads as a value without a TTL. Set `ReadScriptsEnabled: true` to read with one
+  script on Redis 7 and later.
 
 - **The Redis Streams notify doorbell is on by default, with a cheap wake.** `RedisStreamsTopicOptions.NotifyEnabled`
   now defaults to `true`: the publisher rings a Pub/Sub channel after every `XADD`, so the other nodes read the

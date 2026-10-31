@@ -807,26 +807,23 @@ internal sealed partial class RedisHashCache : RedisCacheBase, IHashCache, ISpan
                 return true;
             }
 
-            var transaction = s.Self.Database.CreateTransaction();
+            // An HGETALL with a PTTL in one round trip. Not atomic: a key that expires between them reads as fields without a TTL.
             var flags = s.Self.ReadFlagsFor(s.Key);
-            var hashEntriesTask = transaction.HashGetAllAsync(s.Key, flags);
-            Task<DateTime?>? expireTimeTask = s.Self.SupportsExpireTime ? transaction.KeyExpireTimeAsync(s.Key, flags) : null;
-            Task<TimeSpan?>? expireTimeToLiveTask = s.Self.SupportsExpireTime ? null : transaction.KeyTimeToLiveAsync(s.Key, flags);
-
-            // Observed now: an uncommitted transaction leaves them unawaited.
-            hashEntriesTask.Forget();
-            expireTimeTask?.Forget();
-            expireTimeToLiveTask?.Forget();
-            if (!await transaction.ExecuteAsync(flags).ConfigureAwait(false))
+            var hashEntriesTask = s.Self.Database.HashGetAllAsync(s.Key, flags);
+            var expireTimeToLiveTask = s.Self.Database.KeyTimeToLiveAsync(s.Key, flags);
+            try
             {
-                return false;
+                var entries = await hashEntriesTask.ConfigureAwait(false);
+                var expiration = s.Self.Clock.ToDateTimeOffset(await expireTimeToLiveTask.ConfigureAwait(false));
+                Interlocked.CompareExchange(ref s.Read.Value, new((entries, expiration)), null);
+            }
+            catch
+            {
+                hashEntriesTask.Forget();
+                expireTimeToLiveTask.Forget();
+                throw;
             }
 
-            var entries = await hashEntriesTask.ConfigureAwait(false);
-            var expiration = expireTimeTask is not null
-                ? (DateTimeOffset?)await expireTimeTask.ConfigureAwait(false)
-                : s.Self.Clock.ToDateTimeOffset(await expireTimeToLiveTask!.ConfigureAwait(false));
-            Interlocked.CompareExchange(ref s.Read.Value, new((entries, expiration)), null);
             return true;
         },
         (Self: this, Key: redisKey, Read: read),
