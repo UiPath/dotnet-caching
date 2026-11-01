@@ -37,9 +37,9 @@ public abstract partial class MultilayerCacheBase
     /// <summary>Tests report the counted outcomes of the refresher at once.</summary>
     internal void FlushPeerRefreshMetrics() => _peerRefresher?.Flush();
 
-    /// <summary>How an entry kept under <paramref name="policy"/> is refreshed on a peer's write; null, and dropped then, when nothing refreshes it, no policy is in scope, or the policy opts out.</summary>
-    private protected PeerRefreshTarget? RefreshTarget(IPeerRefreshReader reader, CachePolicy? policy) =>
-        _peerRefresher is null || policy is null || policy.RefreshLocalOnPeerWrite == false ? null : new PeerRefreshTarget(reader, policy);
+    /// <summary>How <paramref name="entry"/>, kept under <paramref name="policy"/>, is refreshed on a peer's write; null, and dropped then, when nothing refreshes it, no policy is in scope, the policy opts out, or the entry cannot be linked to the copy a refresh would keep (a custom entry factory made it).</summary>
+    private protected PeerRefreshTarget? RefreshTarget(IPeerRefreshReader reader, CachePolicy? policy, object entry) =>
+        _peerRefresher is null || policy is null || policy.RefreshLocalOnPeerWrite == false || entry is not IRefreshLinked ? null : new PeerRefreshTarget(reader, policy);
 
     /// <summary>Removes the key locally, only while it still holds <paramref name="held"/>.</summary>
     private protected void DropLocal(string name, object held) =>
@@ -122,13 +122,13 @@ public abstract partial class MultilayerCacheBase
         private readonly ConcurrentQueue<Item> _order = new();
         private readonly Lock _flushGate = new();
         private readonly long[] _dropped = new long[Reasons.Length];
-        // The entry a refresh kept, by the entry it replaced: an event that reaches only the replaced entry's token drops it.
-        private readonly ConditionalWeakTable<object, object> _successors = [];
         private readonly SemaphoreSlim _signal = new(0);
         private readonly CancellationTokenSource _stop = new();
         private Task? _loop;
         private bool _disposed;
         private int _pending;
+        // Numbers the kept refreshes: a replaced entry and the copy kept in its place carry the same number, so an event that reaches only the replaced entry's token finds the copy, and neither references the other.
+        private long _refreshes;
         private long _started;
         private long _kept;
         private long _discarded;
@@ -188,18 +188,18 @@ public abstract partial class MultilayerCacheBase
             }
 
             // Runs under the token's notify lock, which a keep committing an entry can wait for while it holds the item and stripe locks: takes neither.
-            // Pairs with the keep: either this sees the successor, or the keep sees the token changed.
+            // Pairs with the keep: either this sees the copy installed, or the keep sees the token changed.
             Interlocked.MemoryBarrier();
-            if (_successors.TryGetValue(held.CacheEntity, out var next))
+            try
             {
-                try
+                if (RefreshedCopy(held) is { } copy)
                 {
-                    cache.EvictLocal(held.CacheKey.Name, next);
+                    cache.EvictLocal(held.CacheKey.Name, copy);
                 }
-                catch (ObjectDisposedException) when (Volatile.Read(ref _disposed))
-                {
-                    // The cache was disposed meanwhile.
-                }
+            }
+            catch (ObjectDisposedException) when (Volatile.Read(ref _disposed))
+            {
+                // The cache was disposed meanwhile.
             }
         }
 
@@ -256,6 +256,15 @@ public abstract partial class MultilayerCacheBase
             }
         }
 
+        /// <summary>The copy a kept refresh installed in place of the held entry, while it is the local entry; null when none is, or a later write replaced it.</summary>
+        private object? RefreshedCopy(RefreshMetadataState held) =>
+            held.CacheEntity is IRefreshLinked { ReplacedBy: not IRefreshLinked.None and var refresh }
+            && cache._memoryCache.TryGetValue(held.CacheKey.Name, out var current)
+            && current is IRefreshLinked { Replaces: var replaces }
+            && replaces == refresh
+                ? current
+                : null;
+
         /// <summary>Folds the write into the key's queued or reading refresh; null when the item ended meanwhile.</summary>
         private bool? TryCoalesce(Item item, RefreshMetadataState held)
         {
@@ -302,9 +311,9 @@ public abstract partial class MultilayerCacheBase
                 if (!cache.IsLocalEntry(name, held.CacheEntity))
                 {
                     // A write a refresh's read may predate, heard only by the token of the entry it replaced.
-                    if (_successors.TryGetValue(held.CacheEntity, out var next))
+                    if (RefreshedCopy(held) is { } copy)
                     {
-                        cache.DropLocal(name, next);
+                        cache.DropLocal(name, copy);
                     }
 
                     return false;
@@ -538,15 +547,19 @@ public abstract partial class MultilayerCacheBase
         private void Keep(Item item, PeerRead read, long mark)
         {
             var held = item.State;
+            // Numbered before the keep: the copy carries the number before any thread can see it installed.
+            if (held.CacheEntity is IRefreshLinked replaced)
+            {
+                replaced.ReplacedBy = Interlocked.Increment(ref _refreshes);
+            }
+
             switch (held.Refresh!.Value.Reader.Keep(cache, held, read, mark, out var installed))
             {
                 case PeerKeep.Kept:
-                    // Before the item ends: a write that finds no item must find the successor.
                     if (installed is not null)
                     {
-                        _successors.AddOrUpdate(held.CacheEntity, installed);
                         Interlocked.MemoryBarrier();
-                        // The replaced entry's token changed before the successor was recorded, so its change found none.
+                        // The replaced entry's token changed before the copy was installed, so its change found none.
                         if (held.Token.HasChanged)
                         {
                             cache.DropLocal(item.Name, installed);

@@ -16,6 +16,9 @@ internal sealed class RecordingTelemetryProvider : ICachingTelemetryProvider
     public IReadOnlyList<DependencyRecord> Dependencies => Snapshot(_dependencies);
     public IReadOnlyList<ExceptionRecord> Exceptions => Snapshot(_exceptions);
 
+    /// <summary>Told each metric once it is recorded, on the thread that tracked it.</summary>
+    public Action<MetricRecord>? MetricRecorded { get; set; }
+
     public void TrackDependency(string type, string target, string name, string data, DateTimeOffset startTime, TimeSpan duration, string resultCode, bool success, TelemetryTags<string> properties = default, TelemetryTags<double> metrics = default) =>
         Record(_dependencies, new(type, target, name, data, startTime, duration, resultCode, success, TelemetryTags.ToDictionaryOrNull(properties), TelemetryTags.ToDictionaryOrNull(metrics)));
 
@@ -25,8 +28,12 @@ internal sealed class RecordingTelemetryProvider : ICachingTelemetryProvider
     public void TrackException(Exception ex, TelemetryTags<string> properties = default, TelemetryTags<double> metrics = default) =>
         Record(_exceptions, new(ex, TelemetryTags.ToDictionaryOrNull(properties), TelemetryTags.ToDictionaryOrNull(metrics)));
 
-    public void TrackMetric(string name, double value, TelemetryTags<string> properties = default) =>
-        Record(_metrics, new(name, value, TelemetryTags.ToDictionaryOrNull(properties)));
+    public void TrackMetric(string name, double value, TelemetryTags<string> properties = default)
+    {
+        var record = new MetricRecord(name, value, TelemetryTags.ToDictionaryOrNull(properties));
+        Record(_metrics, record);
+        MetricRecorded?.Invoke(record);
+    }
 
     private void Record<T>(List<T> target, T record)
     {
