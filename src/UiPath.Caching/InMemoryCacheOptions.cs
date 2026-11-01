@@ -56,9 +56,9 @@ public class InMemoryCacheOptions : IMultilayerCacheOptions, IMemoryCacheOptions
     public TimeSpan? LocalSingleFlightTimeout { get; set; } = TimeSpan.FromMilliseconds(500);
 
     /// <summary>
-    /// The following four properties (<see cref="DistributedLockEnabled"/>,
+    /// The following five properties (<see cref="DistributedLockEnabled"/>,
     /// <see cref="DistributedLockTimeout"/>, <see cref="DistributedLockExpiry"/>,
-    /// <see cref="LockKeyStrategy"/>) are inert for this provider's runtime behavior — the in-memory
+    /// <see cref="DistributedLockSkipReread"/>, <see cref="LockKeyStrategy"/>) are inert for this provider's runtime behavior — the in-memory
     /// cache has no cross-node lock to acquire. They exist only to satisfy the
     /// <see cref="IMultilayerCacheOptions"/> contract; setting them does not change cache behavior.
     /// Note: shape and cross-property validation still applies at registration time, so
@@ -71,6 +71,8 @@ public class InMemoryCacheOptions : IMultilayerCacheOptions, IMemoryCacheOptions
     public TimeSpan? DistributedLockTimeout { get; set; }
 
     public TimeSpan? DistributedLockExpiry { get; set; }
+
+    public bool? DistributedLockSkipReread { get; set; }
 
     public IDistributedLockKeyStrategy? LockKeyStrategy { get; set; }
 

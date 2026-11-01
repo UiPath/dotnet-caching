@@ -73,3 +73,9 @@ UiPath.Caching.Cache<T>.GetOrAddResultAsync(UiPath.Caching.CacheKey cacheKey, Sy
 UiPath.Caching.Cache<T>.GetOrAddResultAsync<TState>(UiPath.Caching.CacheKey cacheKey, TState state, System.Func<TState, System.Threading.CancellationToken, System.Threading.Tasks.Task<T?>!>! generator, System.DateTimeOffset expiration, System.Threading.CancellationToken token = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.ValueTask<UiPath.Caching.CacheResult<T>>
 UiPath.Caching.Cache<T>.GetOrAddResultAsync<TState>(UiPath.Caching.CacheKey cacheKey, TState state, System.Func<TState, System.Threading.CancellationToken, System.Threading.Tasks.Task<T?>!>! generator, System.Threading.CancellationToken token = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.ValueTask<UiPath.Caching.CacheResult<T>>
 UiPath.Caching.Cache<T>.GetOrAddResultAsync<TState>(UiPath.Caching.CacheKey cacheKey, TState state, System.Func<TState, System.Threading.CancellationToken, System.Threading.Tasks.Task<T?>!>! generator, System.TimeSpan expiration, System.Threading.CancellationToken token = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.ValueTask<UiPath.Caching.CacheResult<T>>
+UiPath.Caching.IMultilayerCacheOptions.DistributedLockSkipReread.get -> bool?
+UiPath.Caching.IMultilayerCacheOptions.DistributedLockSkipReread.set -> void
+UiPath.Caching.InMemoryCacheOptions.DistributedLockSkipReread.get -> bool?
+UiPath.Caching.InMemoryCacheOptions.DistributedLockSkipReread.set -> void
+UiPath.Caching.InMemoryRedisCacheOptions.DistributedLockSkipReread.get -> bool?
+UiPath.Caching.InMemoryRedisCacheOptions.DistributedLockSkipReread.set -> void

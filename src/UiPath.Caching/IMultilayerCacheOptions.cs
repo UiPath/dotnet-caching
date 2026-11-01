@@ -67,6 +67,14 @@ public interface IMultilayerCacheOptions : ICacheOptions
     TimeSpan? DistributedLockExpiry { get; set; }
 
     /// <summary>
+    /// When a local miss has just read Redis and missed, and the Redis lock is free at the first
+    /// attempt, generate without reading Redis again under the lock. Saves one round trip per locked
+    /// miss, but a peer's write that lands within that round trip can then be generated twice.
+    /// Defaults to false; an implementation that does not declare it keeps it off.
+    /// </summary>
+    bool? DistributedLockSkipReread { get => null; set { } }
+
+    /// <summary>
     /// Strategy that derives the Redis distributed-lock key from a cache key. The default
     /// strategy appends <c>":lck"</c> to <see cref="CacheKey.Name"/>.
     /// Note: the default does NOT apply your inner-cache prefix scheme (see

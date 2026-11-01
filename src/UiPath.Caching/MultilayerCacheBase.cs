@@ -42,6 +42,7 @@ public abstract partial class MultilayerCacheBase : IDisposable
             LocalSingleFlightTimeout = TimeSpan.FromMilliseconds(500),
             DistributedLockTimeout = TimeSpan.FromMilliseconds(500),
             DistributedLockExpiry = TimeSpan.FromSeconds(5),
+            DistributedLockSkipReread = false,
         },
     };
     private readonly PeerWriteGuard? _peerWrites;
@@ -52,6 +53,7 @@ public abstract partial class MultilayerCacheBase : IDisposable
     private readonly TimeSpan _localLockTimeout;
     private readonly bool _localLockEnabled;
     private readonly bool _distributedLockEnabled;
+    private readonly bool _distributedLockSkipReread;
     private bool _disposed;
 
     protected MultilayerCacheBase(
@@ -121,6 +123,7 @@ public abstract partial class MultilayerCacheBase : IDisposable
         _localLockTimeout = defaultLock.LocalSingleFlightTimeout!.Value;
         _localLockEnabled = defaultLock.LocalSingleFlightEnabled!.Value;
         _distributedLockEnabled = defaultLock.DistributedLockEnabled!.Value;
+        _distributedLockSkipReread = defaultLock.DistributedLockSkipReread!.Value;
         Name = cacheName;
         _rehydrator = new RehydrationCoordinator(cacheName, _clock, distributedLock, _lockKeyStrategy, telemetryProvider, logger, _masker);
     }
@@ -417,6 +420,9 @@ public abstract partial class MultilayerCacheBase : IDisposable
 
     private protected bool DistributedLockOn(LockProfile? policyLock) => policyLock?.DistributedLockEnabled ?? _distributedLockEnabled;
 
+    /// <summary>Whether an uncontended lock after the caller's own inner miss may skip the read under the lock: <c>Lock.DistributedLockSkipReread</c>.</summary>
+    private protected bool SkipsRereadUnderLock(LockProfile? policyLock) => policyLock?.DistributedLockSkipReread ?? _distributedLockSkipReread;
+
     /// <summary>The key's distributed lock, with the timeout and expiry of the call's profile. Per-call profiles bypass the options validators, so a value out of range falls back to the cache-wide one.</summary>
     private protected ValueTask<IAsyncDisposable> AcquireDistributedLockAsync(CacheKey cacheKey, LockProfile? policyLock, CancellationToken token) =>
         _distributedLock.AcquireAsync(
@@ -424,6 +430,19 @@ public abstract partial class MultilayerCacheBase : IDisposable
             PositiveOrFallback(policyLock?.DistributedLockExpiry, _distributedLockExpiry),
             NonNegativeOrFallback(policyLock?.DistributedLockTimeout, _distributedLockTimeout),
             token);
+
+    /// <summary>As <see cref="AcquireDistributedLockAsync"/>, with whether the lock was contended; a lock that cannot tell counts as contended.</summary>
+    private protected ValueTask<(IAsyncDisposable Lease, bool Contended)> AcquireDistributedLeaseAsync(CacheKey cacheKey, LockProfile? policyLock, CancellationToken token)
+    {
+        var key = _lockKeyStrategy.GetLockKey(cacheKey);
+        var expiry = PositiveOrFallback(policyLock?.DistributedLockExpiry, _distributedLockExpiry);
+        var timeout = NonNegativeOrFallback(policyLock?.DistributedLockTimeout, _distributedLockTimeout);
+        return _distributedLock is IReportsLockContention reporting
+            ? reporting.AcquireReportingContentionAsync(key, expiry, timeout, token)
+            : ContendedAsync(_distributedLock.AcquireAsync(key, expiry, timeout, token));
+
+        static async ValueTask<(IAsyncDisposable, bool)> ContendedAsync(ValueTask<IAsyncDisposable> lease) => (await lease.ConfigureAwait(false), true);
+    }
 
     private static TimeSpan PositiveOrFallback(TimeSpan? value, TimeSpan fallback) =>
         value is { } v && v > TimeSpan.Zero ? v : fallback;

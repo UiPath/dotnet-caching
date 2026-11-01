@@ -22,4 +22,7 @@ public sealed class LockProfile
     public TimeSpan? DistributedLockTimeout { get; init; }
 
     public TimeSpan? DistributedLockExpiry { get; init; }
+
+    /// <summary>Generate without a second Redis read when the caller's read just missed and the lock was free; a peer's write within that round trip can then be generated twice.</summary>
+    public bool? DistributedLockSkipReread { get; init; }
 }

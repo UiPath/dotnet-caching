@@ -308,7 +308,7 @@ misses would be problematic.
 Per-cache-instance tuning is available via the `Lock` member on `CachePolicy`
 (of type `LockProfile?`). `LockProfile` mirrors the lock fields on the cache-wide
 options (`LocalSingleFlightEnabled`, `DistributedLockEnabled`, `LocalSingleFlightTimeout`,
-`DistributedLockTimeout`, `DistributedLockExpiry`) and is merged field-by-field
+`DistributedLockTimeout`, `DistributedLockExpiry`, `DistributedLockSkipReread`) and is merged field-by-field
 against the default policy, so a named policy can override one field while
 inheriting the rest. This is one of the two places in `CachePolicy` where
 field-level merging applies; `RehydrateOptions`, by contrast, is replaced
