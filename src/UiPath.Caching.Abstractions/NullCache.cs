@@ -479,7 +479,7 @@ public sealed class NullCache : ICache, ISpanKeyCache, IResultCache
     private static async ValueTask<CacheResult<T>> GeneratedAsync<T>(ValueTask<T?> generated) =>
         new(await generated.ConfigureAwait(false), null, WasGenerated: true);
 
-    private sealed record NullCacheEntry<T> : ICacheEntry<T>
+    internal sealed record NullCacheEntry<T> : ICacheEntry<T>
     {
         [SuppressMessage("SonarLint.Rule", "S3218:Inner class members should not shadow outer class names")]
         public static readonly ICacheEntry<T> Instance = new NullCacheEntry<T>();
