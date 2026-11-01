@@ -132,6 +132,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 
 ### Changed
 
+- **Memory-only read miss.** A read miss on a memory-only cache returns without building entry options or a second local lookup.
 - **Breaking at C# 12 and older: a constant interpolated key is ambiguous.** With C# 12 or older (the default of net8.0), `$"fixed"` and `$"{Const}:x"` report CS0121 between the `CacheKey` and the interpolated-key members. Use a plain string (`"fixed"`, `Const + ":x"`), or C# 13 (.NET 9 SDK, or `<LangVersion>13</LangVersion>`), where they bind to the interpolated member. A non-constant `$"{s}:{id}"`, a string and a variable bind the same at every language version. A bare `default` behaves as on 3.0: it binds to the `CacheKey` member at C# 13, and at C# 12 it is ambiguous with the batch overload on `ICache` and `ICache<T>`, as before.
 - **Breaking: an interpolated key no longer compiles inside an expression tree, such as a Moq `Setup` or `Verify` lambda.** On 3.0, `mock.Setup(c => c.GetAsync<string>($"user:{id}", null, default))` converted the string to `CacheKey`; it now binds to the interpolated-key member, which an expression tree cannot hold (CS8952). Inside the lambda, pass a string (`"user:" + id`, or a `string key = $"user:{id}"` built before it), or `It.IsAny<CacheKey>()`.
 

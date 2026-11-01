@@ -56,9 +56,16 @@ internal sealed partial class MultilayerCache : MultilayerCacheBase, ICache, ISp
     public ValueTask<T?> GetAsync<T>(CacheKey cacheKey, CachePolicy? policy, CancellationToken token = default)
     {
         NotCacheableException.ThrowIfNotCacheable<T>();
-        if (!token.IsCancellationRequested && TryGetLocal<T>(cacheKey, token, out var local))
+        ICacheEntry<T>? local = null;
+        var probe = token.IsCancellationRequested ? LocalProbe.Unavailable : ProbeLocal<T>(cacheKey, token, out local);
+        if (probe == LocalProbe.Hit)
         {
-            return new ValueTask<T?>(local.Value);
+            return new ValueTask<T?>(local!.Value);
+        }
+
+        if (probe == LocalProbe.Miss && !_sharedInner)
+        {
+            return new ValueTask<T?>(default(T?));
         }
 
         policy ??= _defaultPolicy;
@@ -85,17 +92,22 @@ internal sealed partial class MultilayerCache : MultilayerCacheBase, ICache, ISp
     }
 
     [OverloadResolutionPriority(1)]
-    public async ValueTask<ICacheEntry<T?>> GetCacheEntryAsync<T>(CacheKey cacheKey, CachePolicy? policy, CancellationToken token = default)
+    public ValueTask<ICacheEntry<T?>> GetCacheEntryAsync<T>(CacheKey cacheKey, CachePolicy? policy, CancellationToken token = default)
     {
         NotCacheableException.ThrowIfNotCacheable<T>();
-        if (!token.IsCancellationRequested && TryGetLocal<T?>(cacheKey, token, out var local))
+        ICacheEntry<T?>? local = null;
+        var probe = token.IsCancellationRequested ? LocalProbe.Unavailable : ProbeLocal<T?>(cacheKey, token, out local);
+        if (probe == LocalProbe.Hit)
         {
-            return local;
+            return new ValueTask<ICacheEntry<T?>>(local!);
         }
 
-        policy ??= _defaultPolicy;
-        var options = _entryBuilder.BuildEntryOptions<T>(cacheKey, _clock.ToDateTimeOffset(_multiLayerCacheOptions.DefaultExpiration), token);
-        return await GetCacheEntryInnerAsync<T>(options, policy).ConfigureAwait(false);
+        if (probe == LocalProbe.Miss && !_sharedInner)
+        {
+            return new ValueTask<ICacheEntry<T?>>(NullCache.NullCacheEntry<T?>.Instance);
+        }
+
+        return GetCacheEntryMissAsync<T>(cacheKey, policy, token);
     }
 
     public ValueTask<ICacheEntry<T?>> GetCacheEntryAsync<T>(Span<char> cacheKey, CachePolicy? policy, CancellationToken token = default)
@@ -1900,6 +1912,13 @@ internal sealed partial class MultilayerCache : MultilayerCacheBase, ICache, ISp
 
         var fetched = await Layered<T>().FetchInnerAsync(options, policy).ConfigureAwait(false);
         return fetched.Found ? fetched.Value : default;
+    }
+
+    private async ValueTask<ICacheEntry<T?>> GetCacheEntryMissAsync<T>(CacheKey cacheKey, CachePolicy? policy, CancellationToken token)
+    {
+        policy ??= _defaultPolicy;
+        var options = _entryBuilder.BuildEntryOptions<T>(cacheKey, _clock.ToDateTimeOffset(_multiLayerCacheOptions.DefaultExpiration), token);
+        return await GetCacheEntryInnerAsync<T>(options, policy).ConfigureAwait(false);
     }
 
     private async ValueTask<KeyValuePair<CacheKey, ICacheEntry<T?>>[]> GetCacheEntriesInnerAsync<T>(CacheEntryOptions[] options, CachePolicy policy, CancellationToken token = default)
