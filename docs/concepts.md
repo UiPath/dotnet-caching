@@ -463,7 +463,8 @@ the distributed tier in the background (a master read). An entry no local read h
 idle: it is dropped on the peer's write as before refreshing existed, with no master read, and counted as dropped with reason `idle`.
 Reads are timed to the second. Entries built by a custom `ICacheEntryFactory` carry no read time and are always refreshed. After a peer writes a key, this node serves its old copy until the refresh lands, typically one inner-tier round
 trip. The one bound on that staleness is about 4 x the cache `Timeout`: a queue wait and a read, each at most `Timeout`, and the same
-again for the one re-read a second peer write or a declined keep causes. With `Timeout.InfiniteTimeSpan` neither the queue wait nor the
+again for the one re-read a second peer write or a declined keep causes. A policy's `RefreshLocalRetryWindow` (default 100 ms) lets a refresh that
+could not settle be read again for that long after the first write the copy misses, so the bound is the larger of that and the window plus 2 x `Timeout`. With `Timeout.InfiniteTimeSpan` neither the queue wait nor the
 read is bounded; zero and other negative values are rejected at startup. A refreshed copy keeps the last read time of the copy it replaces, so a key peers write twice between two local reads stays refreshed while it is read within that time. Every local store counts as a read when it happens; a copy kept by a refresh keeps the read time of the copy it replaced, so an entry nobody reads is dropped on a peer's write once its local expiration has passed since it was stored or last read.
 A peer batch of a plain cache is refreshed with one read per entry type and policy instance, one command per cluster slot. Policies are
 told apart by reference, so a policy object built for each call reads its keys one by one; share the policy object to batch them. A hash
@@ -472,9 +473,11 @@ cache that could not apply a peer update reads the whole hash, each key separate
 Still dropped at once: removals, a topic-wide invalidation (a batch above `BatchTopicInvalidationThreshold`), subscription gaps, losses
 and errors, any event while the distributed tier is disconnected, policies that opted out, and keys past the refresh queue cap.
 
-A refresh that cannot keep what it read drops the copy instead: a key that waited longer than `Timeout` for its read, a read that failed
-or timed out, a key gone from the distributed tier, a key a peer wrote again after one re-read, and a refreshed value the local tier
-declined after one re-read (a write of the key, or of a key sharing its stripe, was in flight).
+A refresh that cannot keep what it read drops the copy instead. A read that failed and a key gone from the distributed tier drop at once.
+A key that waited longer than `Timeout` for its read, a read that timed out, a key a peer wrote again after one re-read, and a refreshed
+value the local tier declined after one re-read because a key sharing its stripe changed are read again while the policy's
+`RefreshLocalRetryWindow` (default 100 ms) has not passed since the first write the copy misses, and drop after it; a value declined
+because a write of the key, or of a key sharing its stripe, is still in flight drops after the one re-read.
 
 Outcomes are reported as metrics per drained batch, tagged with the cache name: `cache.peer_refresh.started` (keys read),
 `.kept`, `.discarded` (a newer local write won) and `.dropped` (tagged `reason`: `idle`, `expired`, `timed_out`, `failed`,

@@ -5,6 +5,9 @@ namespace UiPath.Caching;
 
 public abstract partial class MultilayerCacheBase
 {
+    /// <summary>The <see cref="CachePolicy.RefreshLocalRetryWindow"/> a policy that sets none gets: several times a write's propagation plus one refresh read (about 10 ms at p99 on a 1 ms round trip), and well under the cache <c>Timeout</c>, so the documented staleness bound of about 4 x <c>Timeout</c> is unchanged.</summary>
+    internal static readonly TimeSpan DefaultRefreshLocalRetryWindow = TimeSpan.FromMilliseconds(100);
+
     /// <summary>Refreshes held entries on a peer's write; null when no shared tier or no broadcast tells this node of one.</summary>
     private protected readonly PeerRefresher? _peerRefresher;
 
@@ -407,7 +410,8 @@ public abstract partial class MultilayerCacheBase
 
                     try
                     {
-                        if (bounded && cache._clock.GetElapsedTime(item.EnqueuedAt) > timeout)
+                        // A key that waited past the timeout is still read while the retry window allows it.
+                        if (bounded && cache._clock.GetElapsedTime(item.EnqueuedAt) > timeout && !WithinRetryWindow(item))
                         {
                             End(item, ReasonExpired);
                             continue;
@@ -514,12 +518,19 @@ public abstract partial class MultilayerCacheBase
                 {
                     if (failure is not null)
                     {
-                        End(item, failure, error);
+                        // A read that timed out is tried again while the retry window allows; a read that failed drops, as the inner tier may be down.
+                        if (failure == ReasonTimedOut && WithinRetryWindow(item))
+                        {
+                            Requeue(item);
+                        }
+                        else
+                        {
+                            End(item, failure, error);
+                        }
                     }
                     else if (item.Dirty)
                     {
-                        // One more read, unless the key was read again already.
-                        if (!item.Requeued)
+                        if (MayRetry(item))
                         {
                             Requeue(item);
                         }
@@ -578,6 +589,10 @@ public abstract partial class MultilayerCacheBase
                     // A write of a key in the same stripe, or of this key still in flight: read once more.
                     Requeue(item);
                     break;
+                case PeerKeep.Declined when WithinRetryWindow(item) && !cache._background.WriteInFlight(item.Name):
+                    // The stripe changed under the read; a write still in flight would decline the next read too, so that drops, as before the window.
+                    Requeue(item);
+                    break;
                 case PeerKeep.Declined:
                     End(item, ReasonDeclined);
                     break;
@@ -594,6 +609,16 @@ public abstract partial class MultilayerCacheBase
             item.Phase = Phase.Queued;
             item.EnqueuedAt = cache._clock.GetTimestamp();
             _order.Enqueue(item);
+        }
+
+        /// <summary>Whether a refresh that could not settle reads the key once more: once in any case, and again while the retry window allows. Under the item's lock.</summary>
+        private bool MayRetry(Item item) => !item.Requeued || WithinRetryWindow(item);
+
+        /// <summary>Whether the first peer write the held copy misses is younger than the policy's retry window; never with a window of zero. Under the item's lock.</summary>
+        private bool WithinRetryWindow(Item item)
+        {
+            var window = item.State.Refresh!.Value.Policy.RefreshLocalRetryWindow ?? DefaultRefreshLocalRetryWindow;
+            return window > TimeSpan.Zero && cache._clock.GetElapsedTime(item.HeldSince) <= window;
         }
 
         /// <summary>Ends a key a failed drain left unsettled; the key is dropped if it can be, and ends either way.</summary>
@@ -735,12 +760,15 @@ public abstract partial class MultilayerCacheBase
 
             public long EnqueuedAt { get; set; } = enqueuedAt;
 
+            /// <summary>When the first write the held copy misses was heard; the retry window is measured from it.</summary>
+            public long HeldSince { get; } = enqueuedAt;
+
             public Phase Phase { get; set; }
 
             /// <summary>A peer wrote the key again since its read began.</summary>
             public bool Dirty { get; set; }
 
-            /// <summary>Read once more already, after a write during its read or a declined keep: a key is re-queued once, for either.</summary>
+            /// <summary>Read once more already, after a write during its read, a declined keep or a timed-out read: a key is re-queued once for the first two, and again only within the retry window.</summary>
             public bool Requeued { get; set; }
 
             public bool Removed { get; set; }

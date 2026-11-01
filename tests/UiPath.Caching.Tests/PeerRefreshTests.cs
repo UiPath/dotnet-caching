@@ -16,6 +16,12 @@ public class PeerRefreshTests
 
     private static readonly CachePolicy Window = new() { LocalExpiration = TimeSpan.FromMinutes(10) };
 
+    /// <summary>Drops a refresh that could not settle after its one re-read, as before the retry window existed.</summary>
+    private static readonly CachePolicy Dropping = new() { LocalExpiration = TimeSpan.FromMinutes(10), RefreshLocalRetryWindow = TimeSpan.Zero };
+
+    /// <summary>Reads a refresh that could not settle again for longer than any test takes, and longer than the cache timeout.</summary>
+    private static readonly CachePolicy Retrying = new() { LocalExpiration = TimeSpan.FromMinutes(10), RefreshLocalRetryWindow = TimeSpan.FromSeconds(10) };
+
     private static CancellationToken Ct => TestContext.Current.CancellationToken;
 
     [Fact]
@@ -333,11 +339,11 @@ public class PeerRefreshTests
     }
 
     [Fact]
-    public async Task A_key_still_dirty_after_the_second_read_drops()
+    public async Task A_key_still_dirty_after_the_second_read_drops_with_a_zero_retry_window()
     {
         using var peers = new CachePeers();
         var telemetry = new RecordingTelemetryProvider();
-        var (a, b) = await HoldingOld(peers, bTelemetry: telemetry);
+        var (a, b) = await HoldingOld(peers, bTelemetry: telemetry, policy: Dropping);
         var before = b.Inner.SingleReads;
         var first = new TaskCompletionSource();
         var second = new TaskCompletionSource();
@@ -525,11 +531,11 @@ public class PeerRefreshTests
     }
 
     [Fact]
-    public async Task A_key_is_read_again_once_in_all_dirty_then_declined_drops()
+    public async Task A_key_is_read_again_once_in_all_dirty_then_declined_drops_with_a_zero_retry_window()
     {
         using var peers = new CachePeers();
         var telemetry = new RecordingTelemetryProvider();
-        var (a, b) = await HoldingOld(peers, bTelemetry: telemetry);
+        var (a, b) = await HoldingOld(peers, bTelemetry: telemetry, policy: Dropping);
         var neighbour = Enumerable.Range(0, 100_000).Select(i => $"n{i}").First(n => BackgroundWrites.Stripe(n) == BackgroundWrites.Stripe(Key));
         var before = b.Inner.SingleReads;
         var first = new TaskCompletionSource();
@@ -1162,6 +1168,190 @@ public class PeerRefreshTests
         b.Local.TryGetValue(Key, out _).Should().BeFalse();
         await b.Settled();
         b.Inner.SingleReads.Should().Be(before);
+    }
+
+    [Fact]
+    public async Task Within_the_retry_window_a_key_still_dirty_after_the_second_read_is_read_again_and_the_held_copy_is_served()
+    {
+        using var peers = new CachePeers();
+        var telemetry = new RecordingTelemetryProvider();
+        var clock = new ManualTimeProvider(DateTimeOffset.UtcNow);
+        var (a, b) = await HoldingOld(peers, bTelemetry: telemetry, policy: Retrying, clock: clock);
+        var before = b.Inner.SingleReads;
+        var first = new TaskCompletionSource();
+        var second = new TaskCompletionSource();
+        var third = new TaskCompletionSource();
+        b.Inner.Hold = first.Task;
+        await a.Cache.SetAsync(Key, "new", null, Ct);
+        await Until(() => b.Inner.SingleReads == before + 1);
+        await a.Cache.SetAsync(Key, "newer", null, Ct);
+
+        b.Inner.Hold = second.Task;
+        first.SetResult();
+        await Until(() => b.Inner.SingleReads == before + 2);
+        await a.Cache.SetAsync(Key, "newest", null, Ct);
+        b.Inner.Hold = third.Task;
+        second.SetResult();
+        await Until(() => b.Inner.SingleReads == before + 3);
+
+        // Served from the local tier while the third read is in flight: none of these reads reaches the inner tier.
+        var served = await Task.WhenAll(Enumerable.Range(0, 32).Select(_ => b.Cache.GetAsync<string>(Key, Retrying, Ct).AsTask()));
+        served.Should().AllBe("old");
+        b.Inner.SingleReads.Should().Be(before + 3);
+
+        third.SetResult();
+        await b.Settled();
+
+        b.Local.TryGetValue(Key, out _).Should().BeTrue();
+        (await b.Cache.GetAsync<string>(Key, Retrying, Ct)).Should().Be("newest");
+        b.Inner.SingleReads.Should().Be(before + 3);
+        KeptCount(telemetry).Should().Be(1);
+        DroppedReasons(telemetry).Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task Past_the_default_retry_window_a_key_still_dirty_drops_and_the_next_read_goes_to_the_inner_tier()
+    {
+        using var peers = new CachePeers();
+        var telemetry = new RecordingTelemetryProvider();
+        var clock = new ManualTimeProvider(DateTimeOffset.UtcNow);
+        var (a, b) = await HoldingOld(peers, bTelemetry: telemetry, clock: clock);
+        var before = b.Inner.SingleReads;
+        var first = new TaskCompletionSource();
+        var second = new TaskCompletionSource();
+        b.Inner.Hold = first.Task;
+        await a.Cache.SetAsync(Key, "new", null, Ct);
+        await Until(() => b.Inner.SingleReads == before + 1);
+        await a.Cache.SetAsync(Key, "newer", null, Ct);
+
+        b.Inner.Hold = second.Task;
+        first.SetResult();
+        await Until(() => b.Inner.SingleReads == before + 2);
+        await a.Cache.SetAsync(Key, "newest", null, Ct);
+        clock.Advance(MultilayerCacheBase.DefaultRefreshLocalRetryWindow + TimeSpan.FromMilliseconds(1));
+        b.Inner.Hold = null;
+        second.SetResult();
+        await b.Settled();
+
+        b.Local.TryGetValue(Key, out _).Should().BeFalse();
+        DroppedReasons(telemetry).Should().Equal("still_dirty");
+        KeptCount(telemetry).Should().Be(0);
+        (await b.Cache.GetAsync<string>(Key, null, Ct)).Should().Be("newest");
+        b.Inner.SingleReads.Should().Be(before + 3);
+    }
+
+    [Fact]
+    public async Task Within_the_retry_window_a_fill_declined_after_the_re_read_is_read_again()
+    {
+        using var peers = new CachePeers();
+        var telemetry = new RecordingTelemetryProvider();
+        var clock = new ManualTimeProvider(DateTimeOffset.UtcNow);
+        var (a, b) = await HoldingOld(peers, bTelemetry: telemetry, policy: Retrying, clock: clock);
+        var neighbour = Enumerable.Range(0, 100_000).Select(i => $"n{i}").First(n => BackgroundWrites.Stripe(n) == BackgroundWrites.Stripe(Key));
+        var before = b.Inner.SingleReads;
+        var first = new TaskCompletionSource();
+        var second = new TaskCompletionSource();
+        b.Inner.Hold = first.Task;
+        await a.Cache.SetAsync(Key, "new", null, Ct);
+        await Until(() => b.Inner.SingleReads == before + 1);
+        await a.Cache.SetAsync(Key, "newer", null, Ct);
+
+        b.Inner.Hold = second.Task;
+        first.SetResult();
+        await Until(() => b.Inner.SingleReads == before + 2);
+        // Declines the second read's fill while the entry is still held.
+        await b.Cache.SetAsync(neighbour, "x", null, Ct);
+        b.Inner.Hold = null;
+        second.SetResult();
+        await b.Settled();
+
+        b.Inner.SingleReads.Should().Be(before + 3);
+        b.Local.TryGetValue(Key, out _).Should().BeTrue();
+        (await b.Cache.GetAsync<string>(Key, Retrying, Ct)).Should().Be("newer");
+        KeptCount(telemetry).Should().Be(1);
+        DroppedReasons(telemetry).Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task A_peer_removal_during_a_retried_refresh_drops_at_once()
+    {
+        using var peers = new CachePeers();
+        var telemetry = new RecordingTelemetryProvider();
+        var clock = new ManualTimeProvider(DateTimeOffset.UtcNow);
+        var (a, b) = await HoldingOld(peers, bTelemetry: telemetry, policy: Retrying, clock: clock);
+        var before = b.Inner.SingleReads;
+        var first = new TaskCompletionSource();
+        var second = new TaskCompletionSource();
+        var third = new TaskCompletionSource();
+        b.Inner.Hold = first.Task;
+        await a.Cache.SetAsync(Key, "new", null, Ct);
+        await Until(() => b.Inner.SingleReads == before + 1);
+        await a.Cache.SetAsync(Key, "newer", null, Ct);
+        b.Inner.Hold = second.Task;
+        first.SetResult();
+        await Until(() => b.Inner.SingleReads == before + 2);
+        await a.Cache.SetAsync(Key, "newest", null, Ct);
+        b.Inner.Hold = third.Task;
+        second.SetResult();
+        await Until(() => b.Inner.SingleReads == before + 3);
+        (await b.Cache.GetAsync<string>(Key, Retrying, Ct)).Should().Be("old");
+
+        await a.Cache.RemoveAsync<string>(Key, Ct);
+
+        b.Local.TryGetValue(Key, out _).Should().BeFalse();
+        third.SetResult();
+        await b.Settled();
+        b.Local.TryGetValue(Key, out _).Should().BeFalse();
+        KeptCount(telemetry).Should().Be(0);
+        (await b.Cache.GetAsync<string>(Key, Retrying, Ct)).Should().BeNull();
+    }
+
+    [Fact]
+    public async Task Within_a_retry_window_longer_than_the_timeout_a_timed_out_read_is_read_again()
+    {
+        using var peers = new CachePeers();
+        var telemetry = new RecordingTelemetryProvider();
+        var clock = new ManualTimeProvider(DateTimeOffset.UtcNow);
+        var (a, b) = await HoldingOld(peers, bTelemetry: telemetry, policy: Retrying, clock: clock);
+        var before = b.Inner.SingleReads;
+        var slow = new TaskCompletionSource();
+        b.Inner.Hold = slow.Task;
+        b.Inner.HoldIgnoresCancellation = true;
+
+        await a.Cache.SetAsync(Key, "new", null, Ct);
+        await Until(() => b.Inner.SingleReads == before + 1);
+        b.Inner.Hold = null;
+        clock.Advance(InMemoryRedisCacheOptionsTimeout + TimeSpan.FromMilliseconds(1));
+        await b.Settled();
+
+        b.Inner.SingleReads.Should().Be(before + 2);
+        (await b.Cache.GetAsync<string>(Key, Retrying, Ct)).Should().Be("new");
+        KeptCount(telemetry).Should().Be(1);
+        DroppedReasons(telemetry).Should().BeEmpty();
+        telemetry.Events.Should().NotContain(e => e.Name == Dropped);
+        slow.SetResult();
+    }
+
+    [Fact]
+    public async Task Within_a_retry_window_longer_than_the_timeout_a_key_that_waited_past_the_timeout_is_still_read()
+    {
+        using var peers = new CachePeers();
+        var telemetry = new RecordingTelemetryProvider();
+        var clock = new ManualTimeProvider(DateTimeOffset.UtcNow);
+        var (a, b) = await HoldingOld(peers, bTelemetry: telemetry, policy: Retrying, clock: clock);
+        var before = b.Inner.SingleReads;
+        var gate = new TaskCompletionSource();
+        b.Cache.PeerRefreshHold = gate.Task;
+
+        await a.Cache.SetAsync(Key, "new", null, Ct);
+        clock.Advance(InMemoryRedisCacheOptionsTimeout + TimeSpan.FromMilliseconds(1));
+        gate.SetResult();
+        await b.Settled();
+
+        b.Inner.SingleReads.Should().Be(before + 1);
+        (await b.Cache.GetAsync<string>(Key, Retrying, Ct)).Should().Be("new");
+        KeptCount(telemetry).Should().Be(1);
+        DroppedReasons(telemetry).Should().BeEmpty();
     }
 
     /// <summary>Node <c>a</c> wrote <c>old</c>, and node <c>b</c> read it into its local tier.</summary>

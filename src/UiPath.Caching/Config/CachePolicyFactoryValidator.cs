@@ -90,6 +90,10 @@ public static class CachePolicyFactoryValidator
         {
             Throw(ValidateOptionsResult.Fail($"{scope}.JitterMaxDuration must be greater than or equal to zero. Actual: {jitter}."));
         }
+        if (policy.RefreshLocalRetryWindow is { } retryWindow && retryWindow < TimeSpan.Zero)
+        {
+            Throw(ValidateOptionsResult.Fail($"{scope}.RefreshLocalRetryWindow must be greater than or equal to zero. Actual: {retryWindow}."));
+        }
         if (policy.Rehydrate is { } rehydrate)
         {
             ValidateRehydrate($"{scope}.Rehydrate: ", rehydrate);

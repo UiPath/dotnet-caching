@@ -250,6 +250,21 @@ internal sealed class BackgroundWrites(int limit, TimeSpan drainTimeout, string 
         }
     }
 
+    /// <summary>Whether a write of <paramref name="key"/>, or of a key sharing its stripe, is in flight: a fill declined for it is declined again until the write ends.</summary>
+    public bool WriteInFlight(string key)
+    {
+        if (!_counting)
+        {
+            return false;
+        }
+
+        var stripe = Stripe(key);
+        lock (StripeLock(stripe))
+        {
+            return Volatile.Read(ref _writing[stripe]) != 0 || (_active && InTails(key));
+        }
+    }
+
     /// <summary>A local change of the key that a fill from an earlier read must not undo.</summary>
     public bool Apply<TState>(string key, TState state, Func<TState, bool> change)
     {
