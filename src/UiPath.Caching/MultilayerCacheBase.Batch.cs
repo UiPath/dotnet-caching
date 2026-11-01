@@ -87,8 +87,9 @@ public abstract partial class MultilayerCacheBase
         CancellationToken token)
     {
         ArgumentNullException.ThrowIfNull(items);
-        var topicWide = BatchTopicInvalidationThreshold is { } threshold && items.TryGetNonEnumeratedCount(out var total) && total > threshold;
-        var run = new BatchRun<TItem, TState>(state, process, !topicWide, BatchChunkSize, BatchConcurrentChunks, token);
+        var known = items.TryGetNonEnumeratedCount(out var total);
+        var topicWide = known && BatchTopicInvalidationThreshold is { } threshold && total > threshold;
+        var run = new BatchRun<TItem, TState>(state, process, !topicWide, BatchChunkSize, known ? total : 0, BatchConcurrentChunks, token);
         CacheKey? first = null;
         try
         {
@@ -160,11 +161,13 @@ public abstract partial class MultilayerCacheBase
     /// <summary>The first <see cref="Count"/> items were issued, the rest not.</summary>
     private protected readonly record struct Issued(bool[] Results, int Count, bool Cancelled);
 
-    private sealed class BatchRun<TItem, TState>(TState state, Func<TState, TItem[], int, bool, ValueTask<List<CacheKey>?>> process, bool announce, int chunkSize, int concurrent, CancellationToken token)
+    /// <remarks>A known <paramref name="total"/> sizes each chunk to what is left of it, so a small batch allocates no full chunk; 0 means unknown.</remarks>
+    private sealed class BatchRun<TItem, TState>(TState state, Func<TState, TItem[], int, bool, ValueTask<List<CacheKey>?>> process, bool announce, int chunkSize, int total, int concurrent, CancellationToken token)
     {
         private readonly Queue<Task<List<CacheKey>?>> _running = new();
         private TItem[]? _chunk;
         private int _count;
+        private int _remaining = total;
 
         public List<CacheKey> Failed { get; } = [];
 
@@ -173,7 +176,7 @@ public abstract partial class MultilayerCacheBase
 
         public async ValueTask AddAsync(TItem item)
         {
-            _chunk ??= new TItem[chunkSize];
+            _chunk ??= new TItem[NextLength()];
             _chunk[_count++] = item;
             if (_count == _chunk.Length)
             {
@@ -222,6 +225,19 @@ public abstract partial class MultilayerCacheBase
             {
                 Collect(await next.ConfigureAwait(false));
             }
+        }
+
+        // Past a known count (a collection that miscounts), chunks fall back to the full size.
+        private int NextLength()
+        {
+            if (_remaining <= 0)
+            {
+                return chunkSize;
+            }
+
+            var length = Math.Min(chunkSize, _remaining);
+            _remaining -= length;
+            return length;
         }
 
         private void Collect(List<CacheKey>? chunkFailed)

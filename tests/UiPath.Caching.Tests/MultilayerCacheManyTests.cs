@@ -518,7 +518,72 @@ public class MultilayerCacheManyTests
         decoded.Type.Should().Be("TopicInvalidated");
     }
 
+    [Theory]
+    [InlineData(2)]
+    [InlineData(5)]
+    [InlineData(30)]
+    public async Task RemoveMany_covers_every_key_in_order_when_the_collection_miscounts(int reported)
+    {
+        using var h = new Harness(chunk: 4);
+
+        var failed = await h.Cache.RemoveManyAsync<string>(new Miscounted(Keys(9), reported), Ct);
+
+        failed.Should().BeEmpty();
+        h.Log.Where(l => l.StartsWith("remove:", StringComparison.Ordinal)).Should().Equal(Keys(9).Select(k => $"remove:{k.Name}"));
+    }
+
+    [Fact]
+    public void A_small_batch_allocates_less_than_a_full_chunk_of_keys()
+    {
+        using var cache = InMemoryMultilayer.Cache();
+        var keys = Keys(10);
+        var values = keys.Select(k => KeyValuePair.Create(k, (string?)"v")).ToArray();
+
+        // A 500-slot CacheKey[] alone is 8,024 bytes, a 500-slot KeyValuePair<CacheKey, string?>[] 12,024.
+        BytesPerCall(() => cache.RemoveManyAsync<string>(keys, Ct)).Should().BeLessThan(8_024);
+        BytesPerCall(() => cache.SetManyAsync(values, Awaited, Ct)).Should().BeLessThan(12_024);
+    }
+
+    /// <summary>The fewest bytes this thread allocates per call over ten rounds; the call must complete synchronously.</summary>
+    private static long BytesPerCall(Func<ValueTask<IReadOnlyList<CacheKey>>> call)
+    {
+        const int Calls = 100;
+        var fewest = long.MaxValue;
+        for (var round = 0; round < 10; round++)
+        {
+            var before = GC.GetAllocatedBytesForCurrentThread();
+            for (var i = 0; i < Calls; i++)
+            {
+                var pending = call();
+                if (!pending.IsCompletedSuccessfully)
+                {
+                    throw new InvalidOperationException("an in-memory batch went asynchronous");
+                }
+            }
+
+            fewest = Math.Min(fewest, GC.GetAllocatedBytesForCurrentThread() - before);
+        }
+
+        return fewest / Calls;
+    }
+
     private static CacheKey[] Keys(int count) => Enumerable.Range(0, count).Select(i => (CacheKey)$"k{i}").ToArray();
+
+    /// <summary>Keys whose <see cref="System.Collections.ICollection.Count"/>, the one the batch reads up front, is wrong.</summary>
+    private sealed class Miscounted(CacheKey[] keys, int count) : IEnumerable<CacheKey>, System.Collections.ICollection
+    {
+        public int Count => count;
+
+        public bool IsSynchronized => false;
+
+        public object SyncRoot => this;
+
+        public void CopyTo(Array array, int index) => throw new NotSupportedException();
+
+        public IEnumerator<CacheKey> GetEnumerator() => ((IEnumerable<CacheKey>)keys).GetEnumerator();
+
+        System.Collections.IEnumerator System.Collections.IEnumerable.GetEnumerator() => GetEnumerator();
+    }
 
     private sealed class MissObserver : IKeyedObserver<ICacheEvent>, IMissedEventsObserver
     {
