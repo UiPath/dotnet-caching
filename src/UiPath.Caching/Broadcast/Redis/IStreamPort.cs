@@ -8,9 +8,8 @@ internal interface IStreamPort
     /// <summary>Checks the stream and the group, and reads, in one script; <paramref name="full"/> includes the group's position.</summary>
     Task<RedisResult> CheckAndReadAsync(bool full);
 
-    Task<StreamInfo> InfoAsync();
-
-    Task<StreamGroupInfo[]> GroupInfoAsync();
+    /// <summary>Checks the stream, and with <paramref name="full"/> the group, with the read sent behind them to the same node on the same connection, so no round trip is added.</summary>
+    CheckedRead CheckThenRead(bool full, bool noAck);
 
     Task<StreamEntry[]> RangeAsync(RedisValue minId, RedisValue maxId, int count);
 

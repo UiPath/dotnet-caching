@@ -7,26 +7,17 @@ internal static class StreamIds
     /// <summary>
     /// The entries past the group's last delivery that were removed, if any. Redis 7.0 records the newest entry deleted
     /// and counts the entries added and read; below it, an oldest entry past the last delivery is taken as a loss.
-    /// <paramref name="known"/> keeps the last read count found, for the checks where Redis cannot tell it.
-    /// <paramref name="createdOnEmpty"/> is set for a group this node made on a stream that had never held an entry, and
-    /// <paramref name="maxLength"/> is the stream's configured trim length.
+    /// <paramref name="lastDelivered"/> is the group's position as the server or this reader knows it, with
+    /// <paramref name="entriesRead"/> when the server told it; <paramref name="known"/> keeps the last read count found,
+    /// for the checks where Redis cannot tell it. <paramref name="createdOnEmpty"/> is set for a group this node made on a
+    /// stream that had never held an entry, and <paramref name="maxLength"/> is the stream's configured trim length.
     /// </summary>
-    public static StreamGap? Gap(StreamInfo stream, StreamGroupInfo group, ref ReadCount? known, bool createdOnEmpty = false, long? maxLength = null) =>
-        Gap(
-            stream.Length,
-            stream.Length == 0 ? stream.LastGeneratedId : stream.FirstEntry.Id,
-            stream.LastGeneratedId,
-            stream.MaxDeletedEntryId,
-            stream.EntriesAdded,
-            group.LastDeliveredId,
-            group.EntriesRead is > 0 ? group.EntriesRead : null, // StackExchange.Redis reads a count Redis cannot tell as 0.
-            ref known,
-            createdOnEmpty,
-            maxLength);
-
-    /// <summary>The same, from the stream's state and the group's position as this reader knows it.</summary>
     public static StreamGap? Gap(StreamState stream, RedisValue lastDelivered, long? entriesRead, ref ReadCount? known, bool createdOnEmpty = false, long? maxLength = null) =>
         Gap(stream.Length, stream.Oldest, stream.LastGenerated, stream.MaxDeleted, stream.EntriesAdded, lastDelivered, entriesRead, ref known, createdOnEmpty, maxLength);
+
+    /// <summary>What a check reads from an <c>XINFO STREAM</c> reply the client parsed.</summary>
+    public static StreamState Parse(StreamInfo stream) =>
+        new(stream.Length, stream.Length == 0 ? stream.LastGeneratedId : stream.FirstEntry.Id, stream.LastGeneratedId, stream.MaxDeletedEntryId, stream.EntriesAdded);
 
     /// <summary>The raw <c>XINFO STREAM</c> reply a script returned.</summary>
     public static StreamState Parse(RedisResult stream)
@@ -42,8 +33,22 @@ internal static class StreamIds
             info.TryGetValue("entries-added", out var entriesAdded) ? (long)entriesAdded : 0);
     }
 
+    /// <summary>The group's position in an <c>XINFO GROUPS</c> reply the client parsed, or <c>null</c> when it is not there.</summary>
+    public static GroupPosition? Group(StreamGroupInfo[] groups, RedisValue groupName)
+    {
+        var group = Array.Find(groups, g => g.Name == groupName);
+        if (group.Name is null)
+        {
+            return null;
+        }
+
+        // StackExchange.Redis reads a count Redis cannot tell as 0.
+        long? read = group.EntriesRead is > 0 ? group.EntriesRead : null;
+        return new GroupPosition(group.LastDeliveredId, read);
+    }
+
     /// <summary>The group's position in a raw <c>XINFO GROUPS</c> reply, or <c>null</c> when it is not there.</summary>
-    public static (RedisValue LastDelivered, long? EntriesRead)? Group(RedisResult groups, RedisValue groupName)
+    public static GroupPosition? Group(RedisResult groups, RedisValue groupName)
     {
         foreach (var group in Items(groups))
         {
@@ -54,7 +59,7 @@ internal static class StreamIds
             }
 
             long? read = fields.TryGetValue("entries-read", out var entriesRead) && !entriesRead.IsNull ? (long)entriesRead : null;
-            return ((RedisValue)fields["last-delivered-id"], read);
+            return new GroupPosition((RedisValue)fields["last-delivered-id"], read);
         }
 
         return null;

@@ -60,11 +60,12 @@ public sealed class RedisStreamNotifyIntegrationTests(RedisContainerFixture fixt
         (await Task.WhenAny(received.Next.Task, Task.Delay(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken))).Should().BeSameAs(received.Next.Task, "the poll is far away, so only the doorbell delivers in time");
         await Task.Delay(300, TestContext.Current.CancellationToken);
         // StackExchange.Redis records a script call as EVAL, whichever of EVALSHA and EVAL it sent.
-        // Before Redis 7.0 the script is not used: each read checks for a gap with XINFO STREAM and XINFO GROUPS, then reads with a plain XREADGROUP.
-        string[] expected = fixture.ServerVersion.Major < 7 ? ["XADD", "PUBLISH", "XINFO", "XINFO", "XREADGROUP", "XACK"] : ["XADD", "PUBLISH", "EVAL", "XACK"];
+        // Before Redis 7.0 the script is not used: the read checks for a gap with an XINFO STREAM sent with the XREADGROUP, against the
+        // position it knows; the XINFO GROUPS that asks the server for it ran on the read that went live, within the poll interval.
+        string[] expected = fixture.ServerVersion.Major < 7 ? ["XADD", "PUBLISH", "XINFO", "XREADGROUP", "XACK"] : ["XADD", "PUBLISH", "EVAL", "XACK"];
         _profile.FinishProfiling().Select(c => c.Command).Should().BeEquivalentTo(
             expected,
-            "the publisher adds and rings and does not wake for its own ring; the woken node checks for a gap and reads, and acknowledges; on Redis 7 or later the check and read are one script, below 7 they are XINFO calls and a plain XREADGROUP");
+            "the publisher adds and rings and does not wake for its own ring; the woken node checks for a gap and reads, and acknowledges; on Redis 7 or later the check and read are one script, below 7 one XINFO STREAM goes with a plain XREADGROUP, and a check awaited apart would show as a second XINFO call");
     }
 
     [Fact]
