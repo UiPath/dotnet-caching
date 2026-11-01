@@ -137,6 +137,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 
 ### Changed
 
+- **A read on Redis below 7.0 costs one round trip, not three.** Without the Redis 7.0 script, every read in use is still checked for a trim past the group's
+  position, but the `XINFO STREAM` now goes out with the `XREADGROUP` behind it on the same connection to the primary, so the state it reports is the one
+  the read starts from and no round trip is added; the `XINFO GROUPS` that asks the server for the group's position runs once a `PollInterval`, after a
+  reconnect and after a full batch, as with the script, and in between the check compares against the last id this node read. A doorbell-woken read
+  went from `XINFO`, `XINFO`, `XREADGROUP` awaited in turn to one pipelined round trip. The same applies on 7.0 and later when scripts are refused,
+  where the position is still asked of the server on every read.
 - **Peers see a write sooner on the Redis Streams transport.** The doorbell that wakes the other nodes now goes out as soon as the previous one
   is answered (`NotifyMinInterval` defaults to zero, was 25 ms), so a burst of writes no longer holds each doorbell up to 25 ms, and with a single
   primary it is sent behind the `XADD` on the same connection rather than after its reply, one round trip sooner. One doorbell is in flight per

@@ -320,54 +320,43 @@ public class RedisStreamSubjectWriterTests : IAsyncLifetime
     }
 
     [Fact]
-    public async Task A_recovery_raised_during_a_gap_check_is_checked_before_the_next_read()
+    public async Task A_recovery_raised_while_a_checked_read_is_in_flight_makes_the_next_read_take_the_position_from_the_server()
     {
-        var gapChecks = 0;
-        var readBetweenChecks = false;
-        var connectionState = _fixture.Create<IConnectionState>();
-        connectionState.IsConnected.Returns(true);
+        var infos = 0;
+        var groupInfos = 0;
         var redis = _fixture.Create<IRedisConnector>();
-        redis.Database.Returns(_database);
+        redis.Version.Returns(Version.Parse("6.2.0"));
+        _formatter.Decode(Arg.Any<ReadOnlyMemory<byte>>()).Returns(_ => new TestCacheEvent { Valid = true, Source = new Uri("urn:other") });
+        // The first read, before any subscriber, delivers 1-0: the position this node knows from then on.
         _database.StreamReadGroupAsync(_context.Topic, _context.ConsumerGroup, _context.ConsumerName, ">", _context.PollBatchSize)
-            .ReturnsForAnyArgs(_ =>
-            {
-                if (Volatile.Read(ref gapChecks) == 1)
-                {
-                    Volatile.Write(ref readBetweenChecks, true);
-                }
-
-                return Task.FromResult(Array.Empty<StreamEntry>());
-            });
+            .ReturnsForAnyArgs(StreamReads.NewOnly(Task.FromResult<StreamEntry[]>([new StreamEntry("1-0", [new NameValueEntry(_fieldName, "a")])]), Task.FromResult(Array.Empty<StreamEntry>())));
         _database.Configure().StreamInfoAsync(_context.Topic).ReturnsForAnyArgs(_ =>
         {
-            if (Interlocked.Increment(ref gapChecks) == 1)
+            if (Interlocked.Increment(ref infos) == 1)
             {
                 redis.OnConnectionRestored += Raise.Event<EventHandler>(redis, EventArgs.Empty);
             }
 
             return Task.FromResult(default(StreamInfo));
         });
-        _database.Configure().StreamGroupInfoAsync(_context.Topic).ReturnsForAnyArgs(Task.FromResult(Array.Empty<StreamGroupInfo>()));
-        ScriptsUnavailable();
+        _database.Configure().StreamGroupInfoAsync(_context.Topic).ReturnsForAnyArgs(_ =>
+        {
+            Interlocked.Increment(ref groupInfos);
+            return Task.FromResult(Array.Empty<StreamGroupInfo>());
+        });
+        using var waiter = new SignalingFetchWaiter(TimeSpan.FromSeconds(30));
 
-        using var sut = new RedisStreamSubjectWriter<ICacheEvent>(
-            _context,
-            connectionState,
-            redis,
-            Channel.CreateUnbounded<ICacheEvent>().Writer,
-            _formatter,
-            _logger,
-            _fixture.Create<ICachingTelemetryProvider>(),
-            _fixture.Create<IRedisProfiler>(),
-            new SignalingFetchWaiter(_pollInterval),
-            () => { },
-            _cancellationTokenSource.Token);
-
+        using var sut = CreateSut(Channel.CreateUnbounded<ICacheEvent>().Writer, _logger, waiter: waiter, context: _context with { PollInterval = TimeSpan.FromSeconds(30) });
         (await WaitUntil(NewEntriesRead)).Should().BeTrue();
-        redis.OnConnectionRestored += Raise.Event<EventHandler>(redis, EventArgs.Empty);
+        sut.MarkSubscribed();
+        waiter.Signal();
 
-        (await WaitUntil(() => Volatile.Read(ref gapChecks) >= 2)).Should().BeTrue("the second recovery came after the first check began");
-        Volatile.Read(ref readBetweenChecks).Should().BeFalse("a read in between moves the group past the entries the second check compares");
+        (await WaitUntil(() => Volatile.Read(ref infos) == 2)).Should().BeTrue("the recovery raised while the first checked read was in flight wakes one more read");
+        Volatile.Read(ref groupInfos).Should().Be(2, "the read after the recovery takes the group's position from the server again, within the poll interval of the last check");
+
+        waiter.Signal();
+        (await WaitUntil(() => Volatile.Read(ref infos) == 3)).Should().BeTrue();
+        Volatile.Read(ref groupInfos).Should().Be(2, "a read with no recovery before it checks against the position this node knows");
     }
 
     [Theory]
@@ -2304,10 +2293,11 @@ public class RedisStreamSubjectWriterTests : IAsyncLifetime
 
     [Fact]
     [System.Diagnostics.CodeAnalysis.SuppressMessage("Major Code Smell", "S108:Nested blocks of code should not be left empty", Justification = "The fetch loop ends by cancellation, which is the expected outcome here.")]
-    public async Task With_AutoAck_a_failed_gap_check_that_never_read_reports_nothing()
+    public async Task With_AutoAck_a_failed_gap_check_whose_read_delivered_nothing_reports_nothing()
     {
         var missed = 0;
         var checks = 0;
+        NoAckRead(_ => []);
         ScriptsUnavailable();
         _database.Configure().StreamInfoAsync(Arg.Any<RedisKey>()).ReturnsForAnyArgs(_ =>
         {
@@ -2322,7 +2312,7 @@ public class RedisStreamSubjectWriterTests : IAsyncLifetime
         await _cancellationTokenSource.CancelAsync();
         try { await sut.FetchTask.WaitAsync(WaitTimeout, TestContext.Current.CancellationToken); } catch (OperationCanceledException) { }
 
-        Volatile.Read(ref missed).Should().Be(0, "no read was sent, so nothing was delivered");
+        Volatile.Read(ref missed).Should().Be(0, "the read sent with the check delivered nothing, so the group did not move past what the check could not see");
     }
 
     [Fact]

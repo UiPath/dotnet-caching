@@ -47,9 +47,16 @@ internal sealed class RedisStreamPort(RedisStreamContext context, IRedisConnecto
             [context.Topic],
             [context.ConsumerGroup, context.ConsumerName, context.PollBatchSize, full ? 1 : 0, context.AutoAck ? 1 : 0]);
 
-    public Task<StreamInfo> InfoAsync() => redis.Database.StreamInfoAsync(context.Topic);
-
-    public Task<StreamGroupInfo[]> GroupInfoAsync() => redis.Database.StreamGroupInfoAsync(context.Topic);
+    public CheckedRead CheckThenRead(bool full, bool noAck)
+    {
+        // Issued without a wait between them, to the primary like the XREADGROUP (a write), so the one connection to it
+        // carries them in order and the server runs them back to back.
+        var database = redis.Database;
+        var stream = database.StreamInfoAsync(context.Topic, CommandFlags.DemandMaster);
+        var groups = full ? database.StreamGroupInfoAsync(context.Topic, CommandFlags.DemandMaster) : null;
+        var entries = ReadGroupAsync(StreamConstants.UndeliveredMessages, noAck);
+        return new(StateAsync(stream), groups is null ? Task.FromResult<GroupPosition?>(null) : PositionAsync(groups), entries);
+    }
 
     public Task<StreamEntry[]> RangeAsync(RedisValue minId, RedisValue maxId, int count) => redis.Database.StreamRangeAsync(context.Topic, minId, maxId, count);
 
@@ -58,4 +65,8 @@ internal sealed class RedisStreamPort(RedisStreamContext context, IRedisConnecto
     public Task<bool> CreateGroupAsync(RedisValue position, StreamHead? head) => ConsumerGroups.CreateAsync(redis.Database, context.Topic, context.ConsumerGroup, position, head);
 
     public Task<long> AcknowledgeAsync(RedisValue[] ids) => redis.Database.StreamAcknowledgeAsync(context.Topic, context.ConsumerGroup, ids);
+
+    private static async Task<StreamState> StateAsync(Task<StreamInfo> stream) => StreamIds.Parse(await stream.ConfigureAwait(false));
+
+    private async Task<GroupPosition?> PositionAsync(Task<StreamGroupInfo[]> groups) => StreamIds.Group(await groups.ConfigureAwait(false), context.ConsumerGroup);
 }

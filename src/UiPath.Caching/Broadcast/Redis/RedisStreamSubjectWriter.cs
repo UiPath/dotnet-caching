@@ -29,6 +29,7 @@ internal sealed partial class RedisStreamSubjectWriter<T> : IDisposable
     private readonly IFetchWaiter _waiter;
     private readonly Action _onMessagesMissed;
     private readonly Lazy<bool> _scriptsSuited;
+    private readonly TimeProvider _clock;
 
     private bool _disposed;
     private RedisValue _lastId = StreamPosition.NewMessages;
@@ -72,8 +73,8 @@ internal sealed partial class RedisStreamSubjectWriter<T> : IDisposable
     private bool _gapCheckDenied;
     // The last read returned fewer entries than asked: the group is at the head.
     private bool _caughtUp;
-    // Environment.TickCount64 of the last check with XINFO GROUPS; 0 = never.
-    private long _checkedAt;
+    // The clock's timestamp of the last check with XINFO GROUPS; null = never.
+    private long? _checkedAt;
     // The group's last-delivered id, from that check or the last read; Null until either. A wake is checked against it,
     // with the count _readCount holds for it.
     private RedisValue _position = RedisValue.Null;
@@ -95,12 +96,14 @@ internal sealed partial class RedisStreamSubjectWriter<T> : IDisposable
         IFetchWaiter waiter,
         Action onMessagesMissed,
         CancellationToken stopToken,
-        IStreamPort? stream = null)
+        IStreamPort? stream = null,
+        TimeProvider? clock = null)
     {
         _context = context;
         _connectionState = connectionState;
         _redis = redis;
         _stream = stream ?? new RedisStreamPort(context, redis);
+        _clock = clock ?? TimeProvider.System;
         // XINFO STREAM has no entries-added before 7.0, so the script's gap check has no data there and only costs the server.
         _scriptsSuited = new Lazy<bool>(() => _redis.Version >= Version.Parse("7.0.0"));
         _writer = channelWriter;
@@ -183,6 +186,19 @@ internal sealed partial class RedisStreamSubjectWriter<T> : IDisposable
     }
 
     private static bool IsEmptyHead(StreamHead? head) => head is { } h && (!h.Exists || h.LastId == "0-0");
+
+    /// <summary>The task's result, or its failure.</summary>
+    private static async Task<(TResult Result, Exception? Failure)> Settle<TResult>(Task<TResult> task)
+    {
+        try
+        {
+            return (await task.ConfigureAwait(false), null);
+        }
+        catch (Exception ex)
+        {
+            return (default!, ex);
+        }
+    }
 
     private void ReportMessagesMissed()
     {
@@ -347,23 +363,22 @@ internal sealed partial class RedisStreamSubjectWriter<T> : IDisposable
 
         if (!_noScripts && _scriptsSuited.Value)
         {
-            var full = _checkForGap || !_caughtUp || _checkedAt == 0 || Environment.TickCount64 - _checkedAt >= (long)_context.PollInterval.TotalMilliseconds;
-            return await CheckAndReadAsync(full).ConfigureAwait(false);
+            return await CheckAndReadAsync(CheckDue()).ConfigureAwait(false);
         }
 
         // Without XINFO a loss cannot be ruled out, so only a reconnect reports one rather than every read.
         if (_checkForGap || !_gapCheckDenied)
         {
-            // A recovery raised during a check needs its own before the read moves the group past the evidence.
-            do
-            {
-                await CheckForGapAsync().ConfigureAwait(false);
-            }
-            while (_checkForGap && _inUse);
+            // Below 7.0 the group's position between two XINFO GROUPS is the last id read, as the script's check uses it; a
+            // server at 7.0 whose scripts are off is asked each time, for the counts a read sent apart cannot keep exact.
+            return await CheckThenReadAsync(_scriptsSuited.Value || _position.IsNull || CheckDue()).ConfigureAwait(false);
         }
 
         return await ReadAsync().ConfigureAwait(false);
     }
+
+    /// <summary>Whether the check takes the group's position from the server: after a reconnect, a full batch, and once a PollInterval.</summary>
+    private bool CheckDue() => _checkForGap || !_caughtUp || _checkedAt is not { } at || _clock.GetElapsedTime(at) >= _context.PollInterval;
 
     private async Task<bool> ProcessException(Exception ex)
     {
@@ -572,7 +587,7 @@ internal sealed partial class RedisStreamSubjectWriter<T> : IDisposable
         _createdOnEmpty = false;
         _position = RedisValue.Null;
         // The recreated group's position comes from its first check.
-        _checkedAt = 0;
+        _checkedAt = null;
     }
 
     private Task BackoffAsync()
@@ -606,10 +621,10 @@ internal sealed partial class RedisStreamSubjectWriter<T> : IDisposable
     /// <summary>Waits <paramref name="delay"/> out; rings wake the waiter but do not end it, a recovery does.</summary>
     private async Task WaitForRetryAsync(TimeSpan delay)
     {
-        var until = Environment.TickCount64 + (long)delay.TotalMilliseconds;
-        while (ContinueLoop && !RecoveredSinceRead && Environment.TickCount64 is var now && now < until)
+        var start = _clock.GetTimestamp();
+        while (ContinueLoop && !RecoveredSinceRead && _clock.GetElapsedTime(start) is var elapsed && elapsed < delay)
         {
-            await _waiter.WaitAsync(TimeSpan.FromMilliseconds(until - now), _cancelationToken).ConfigureAwait(false);
+            await _waiter.WaitAsync(delay - elapsed, _cancelationToken).ConfigureAwait(false);
         }
     }
 
@@ -673,7 +688,7 @@ internal sealed partial class RedisStreamSubjectWriter<T> : IDisposable
         var stream = StreamIds.Parse(parts[0]);
         if (full)
         {
-            _checkedAt = Environment.TickCount64;
+            _checkedAt = _clock.GetTimestamp();
             if (StreamIds.Group(parts[1], _context.ConsumerGroup) is { } group)
             {
                 _position = group.LastDelivered;
@@ -695,38 +710,65 @@ internal sealed partial class RedisStreamSubjectWriter<T> : IDisposable
         return entries;
     }
 
-    /// <summary>Entries trimmed before the group read them were never delivered.</summary>
-    private async Task CheckForGapAsync()
+    /// <summary>Checks for a gap with the read sent behind the check, so no round trip is added and the state checked is the one the read starts from.</summary>
+    /// <param name="full">Take the group's position from the server; otherwise check against the last one known.</param>
+    private async Task<StreamEntry[]> CheckThenReadAsync(bool full)
     {
-        // Cleared first, so a recovery raised while the check awaits arms the next one.
+        // Cleared first, so a recovery raised while the pair is in flight makes the next check take the position from the server;
+        // one raised since the caller decided is this check's.
+        full |= _checkForGap;
         _checkForGap = false;
-        StreamInfo stream;
-        StreamGroupInfo[] groups;
-        try
+        _autoAckReadInFlight = _context.AutoAck;
+        var sent = _stream.CheckThenRead(full, _context.AutoAck);
+        var (stream, failure) = await Settle(sent.Stream).ConfigureAwait(false);
+        var (group, groupFailure) = await Settle(sent.Group).ConfigureAwait(false);
+        failure ??= groupFailure;
+
+        var accounted = true;
+        if (failure is null)
         {
-            stream = await _stream.InfoAsync().ConfigureAwait(false);
-            groups = await _stream.GroupInfoAsync().ConfigureAwait(false);
+            if (full)
+            {
+                _checkedAt = _clock.GetTimestamp();
+                if (group is { } found)
+                {
+                    _position = found.LastDelivered;
+                    ReportGap(StreamIds.Gap(stream, found.LastDelivered, found.EntriesRead, ref _readCount, _createdOnEmpty, _context.MaxLength));
+                }
+            }
+            else
+            {
+                ReportGap(StreamIds.Gap(stream, _position, null, ref _readCount, _createdOnEmpty, _context.MaxLength));
+            }
         }
-        catch (RedisServerException ex) when (ex.Message.StartsWith("ERR no such key", StringComparison.OrdinalIgnoreCase))
-        {
-            // A missing stream fails the read with NOGROUP, which reports the loss.
-            return;
-        }
-        catch (Exception ex) when (RedisUtils.IsUnsupportedCommand(ex) || RedisUtils.IsDenied(ex))
+        else if (RedisUtils.IsUnsupportedCommand(failure) || RedisUtils.IsDenied(failure))
         {
             // XINFO is denied or renamed away, so a loss cannot be ruled out: report one rather than retry a check that cannot succeed.
-            LogGapCheckDenied(ex, _context.Topic);
+            LogGapCheckDenied(failure, _context.Topic);
             _gapCheckDenied = true;
             ReportMessagesMissed();
-            return;
+        }
+        else
+        {
+            // A missing stream fails the read behind the check with NOGROUP, which reports the loss; what else fails the check most likely failed the read too.
+            accounted = false;
         }
 
-        _checkedAt = Environment.TickCount64;
-        var group = Array.Find(groups, g => g.Name == _context.ConsumerGroup);
-        if (group.Name is not null)
+        var entries = await sent.Entries.ConfigureAwait(false);
+        if (!accounted)
         {
-            ReportGap(StreamIds.Gap(stream, group, ref _readCount, _createdOnEmpty, _context.MaxLength));
+            if (entries.Length > 0)
+            {
+                // The read moved the group past what the check could not see.
+                ReportMessagesMissed();
+            }
+            else
+            {
+                _checkForGap = true;
+            }
         }
+
+        return entries;
     }
 
     private async Task DispatchEventsAsync(StreamEntry[] events, bool acknowledge)

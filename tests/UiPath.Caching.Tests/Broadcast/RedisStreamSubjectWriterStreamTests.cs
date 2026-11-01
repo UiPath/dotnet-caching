@@ -10,7 +10,10 @@ namespace UiPath.Caching.Tests.Broadcast;
 public sealed class RedisStreamSubjectWriterStreamTests : IDisposable
 {
     private static readonly TimeSpan WaitTimeout = TimeSpan.FromSeconds(10);
+    // Far enough that only a signal, or the clock the test moves, lets a read go.
+    private static readonly TimeSpan FarPoll = TimeSpan.FromSeconds(30);
 
+    private readonly ManualTimeProvider _clock = new(DateTimeOffset.UnixEpoch);
     private readonly CancellationTokenSource _stop = new();
     private readonly RedisStreamContext _context = new("topic", "field", "consumer", "group", new Uri("urn:self"), 100, TimeSpan.FromMilliseconds(50), false, true);
     private readonly InMemoryStreamPort _stream = new("group", "field");
@@ -76,6 +79,139 @@ public sealed class RedisStreamSubjectWriterStreamTests : IDisposable
 
         (await _events.Reader.ReadAsync(_stop.Token).AsTask().WaitAsync(WaitTimeout, TestContext.Current.CancellationToken)).Should().NotBeNull();
         _stream.ScriptReads.Should().BeGreaterThan(0);
+    }
+
+    [Fact]
+    public async Task Below_7_entries_trimmed_before_a_read_within_the_poll_interval_are_reported_on_that_read()
+    {
+        var (_, waiter) = await StartBelow7Async();
+
+        // The check found nothing; e1..e5 are added and trimmed to e4, e5 before the doorbell's read, within the poll interval.
+        var reading = _stream.Hold(Op.Read);
+        waiter.Signal();
+        await Reached(reading);
+        for (var i = 1; i <= 5; i++)
+        {
+            _stream.Add($"e{i}");
+        }
+
+        _stream.Trim(3);
+        reading.Release();
+
+        await _missed.Task.WaitAsync(WaitTimeout, TestContext.Current.CancellationToken);
+        (await Next()).Should().NotBeNull("the read behind the check delivers what is left");
+        (await Next()).Should().NotBeNull();
+        _stream.Calls(Op.Groups).Should().Be(1, "the gap shows against the position this node knows, without asking the server for it");
+        _stream.Calls(Op.Info).Should().Be(2, "the check went with the read");
+    }
+
+    [Fact]
+    public async Task Below_7_the_group_position_is_asked_of_the_server_once_a_poll_interval()
+    {
+        var (_, waiter) = await StartBelow7Async();
+
+        for (var i = 1; i <= 3; i++)
+        {
+            var reading = _stream.Hold(Op.Read);
+            _stream.Add($"e{i}");
+            waiter.Signal();
+            await Reached(reading);
+            reading.Release();
+            (await Next()).Should().NotBeNull();
+        }
+
+        _stream.Calls(Op.Groups).Should().Be(1, "within a poll interval of the last check the reads are checked against the position this node knows");
+        _stream.Calls(Op.Info).Should().Be(4, "every read is checked against the stream");
+
+        _clock.Advance(FarPoll);
+        var due = _stream.Hold(Op.Read);
+        _stream.Add("e4");
+        waiter.Signal();
+        await Reached(due);
+        due.Release();
+
+        (await Next()).Should().NotBeNull();
+        _stream.Calls(Op.Groups).Should().Be(2, "a poll interval after the last check the position is taken from the server again");
+    }
+
+    [Fact]
+    public async Task Below_7_a_group_dropped_between_two_position_checks_is_reported_and_made_again_with_a_check_of_its_own()
+    {
+        var (_, waiter) = await StartBelow7Async();
+
+        var recreating = _stream.Hold(Op.CreateGroup);
+        _stream.DropGroup();
+        waiter.Signal();
+        await Reached(recreating);
+        recreating.Release();
+
+        await _missed.Task.WaitAsync(WaitTimeout, TestContext.Current.CancellationToken);
+        _stream.Calls(Op.CreateGroup).Should().Be(2);
+
+        // After the loss was reported nothing local can be stale: the pending read and a plain one follow, and the group is in use again.
+        var pending = _stream.Hold(Op.Read);
+        var plain = _stream.Hold(Op.Read);
+        waiter.Signal();
+        await Reached(pending);
+        pending.Release();
+        await Reached(plain);
+        plain.Release();
+        _stream.Calls(Op.Groups).Should().Be(1);
+
+        // The new group's first checked read takes its position from the server, however recent the last check.
+        var checking = _stream.Hold(Op.Read);
+        waiter.Signal();
+        await Reached(checking);
+        checking.Release();
+
+        _stream.Calls(Op.Groups).Should().Be(2);
+    }
+
+    [Fact]
+    public async Task Below_7_a_trim_past_a_group_another_actor_moved_is_reported_against_the_position_this_node_knows()
+    {
+        var (_, waiter) = await StartBelow7Async();
+
+        // Another actor moves the group to the head past e1..e3, then a trim removes them: against the server's position nothing is past it.
+        var reading = _stream.Hold(Op.Read);
+        for (var i = 1; i <= 3; i++)
+        {
+            _stream.Add($"e{i}");
+        }
+
+        _stream.MoveGroupToHead();
+        _stream.Trim(3);
+        waiter.Signal();
+        await Reached(reading);
+        reading.Release();
+
+        await _missed.Task.WaitAsync(WaitTimeout, TestContext.Current.CancellationToken);
+        _stream.Calls(Op.Groups).Should().Be(1, "the server's position would have hidden the entries it skipped");
+    }
+
+    [Fact]
+    public async Task Below_7_a_denied_check_reports_a_loss_once_and_the_read_behind_it_still_delivers()
+    {
+        var (_, waiter) = await StartBelow7Async();
+        _stream.FailWith(Op.Info, new RedisServerException(RedisErrorKind.None, CommandFlags.None, "NOPERM this user has no permissions to run the 'xinfo|stream' command"));
+
+        var reading = _stream.Hold(Op.Read);
+        _stream.Add("e1");
+        waiter.Signal();
+        await Reached(reading);
+        reading.Release();
+
+        await _missed.Task.WaitAsync(WaitTimeout, TestContext.Current.CancellationToken);
+        (await Next()).Should().NotBeNull("the read sent with the denied check still delivers");
+
+        var next = _stream.Hold(Op.Read);
+        _stream.Add("e2");
+        waiter.Signal();
+        await Reached(next);
+        next.Release();
+
+        (await Next()).Should().NotBeNull();
+        _stream.Calls(Op.Info).Should().Be(2, "a check denied is not sent again");
     }
 
     [Fact]
@@ -248,10 +384,47 @@ public sealed class RedisStreamSubjectWriterStreamTests : IDisposable
 
     private static Task Reached(Held held) => held.Reached.WaitAsync(WaitTimeout, TestContext.Current.CancellationToken);
 
+    private Task<ICacheEvent> Next() => _events.Reader.ReadAsync(_stop.Token).AsTask().WaitAsync(WaitTimeout, TestContext.Current.CancellationToken);
+
     private ObservedWaiter Track(ObservedWaiter waiter)
     {
         _disposables.Add(waiter);
         return waiter;
+    }
+
+    /// <summary>
+    /// A server below 7.0 with "a" (1-0) in the stream before the reader makes its group at the head, so the first entry
+    /// is not past the group; subscribed, read once with the group's position taken from the server, and waiting with the
+    /// poll far away, so each read that follows is a signal's, within the poll interval unless the clock is moved.
+    /// </summary>
+    private async Task<(RedisStreamSubjectWriter<ICacheEvent> Sut, ObservedWaiter Waiter)> StartBelow7Async()
+    {
+        _redis.Version.Returns(Version.Parse("6.2.0"));
+        _stream.HasCounts = false;
+        _stream.Add("a");
+        var waiter = Track(new ObservedWaiter(new SignalingFetchWaiter(FarPoll)));
+        var first = _stream.Hold(Op.Read);
+        var made = _stream.Hold(Op.CreateGroup);
+        var sut = Create(waiter, FarPoll);
+        _disposables.Add(sut);
+        await Reached(first);
+        first.Release();
+        await Reached(made);
+        made.Release();
+
+        // Subscribed once the reader knows the group, so the create is not a loss; the pending read comes before the checked one.
+        var pending = _stream.Hold(Op.Read);
+        var checking = _stream.Hold(Op.Read);
+        waiter.Signal();
+        await Reached(pending);
+        sut.MarkSubscribed();
+        pending.Release();
+        await Reached(checking);
+        checking.Release();
+        // Run before the test changes the stream, or the check would take the changed state for the group's own.
+        await checking.Completed.WaitAsync(WaitTimeout, TestContext.Current.CancellationToken);
+        _stream.Calls(Op.Groups).Should().Be(1, "the first read in use takes the group's position from the server");
+        return (sut, waiter);
     }
 
     private RedisStreamSubjectWriter<ICacheEvent> Create(ObservedWaiter? waiter = null, TimeSpan? pollInterval = null)
@@ -274,7 +447,8 @@ public sealed class RedisStreamSubjectWriterStreamTests : IDisposable
             fetchWaiter,
             () => _missed.TrySetResult(),
             _stop.Token,
-            _stream);
+            _stream,
+            _clock);
     }
 
     /// <summary>Wraps a waiter to tell when a wait longer than the poll, a backoff, begins, and on which wait.</summary>

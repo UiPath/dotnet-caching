@@ -6,7 +6,8 @@ namespace UiPath.Caching.Tests.Broadcast;
 
 /// <summary>
 /// A stream with one group, in memory. An operation can be held until the test releases or fails it, and runs against
-/// the state as of its release. XINFO is not offered, so the writer checks and reads in the one script.
+/// the state as of its release. A check sent with a read is one <see cref="Op.Read"/>, held with it and answered from
+/// the state the read runs against, as Redis runs the two back to back.
 /// </summary>
 internal sealed class InMemoryStreamPort(RedisValue group, RedisValue field) : IStreamPort
 {
@@ -14,9 +15,9 @@ internal sealed class InMemoryStreamPort(RedisValue group, RedisValue field) : I
     private readonly List<(long Seq, string Payload)> _log = [];
     private readonly SortedSet<long> _pending = [];
     private readonly List<string> _acknowledged = [];
-    private readonly Queue<Held>[] _holds = [new(), new(), new()];
-    private readonly Exception?[] _failures = new Exception?[3];
-    private readonly int[] _calls = new int[3];
+    private readonly Queue<Held>[] _holds = [new(), new(), new(), new(), new()];
+    private readonly Exception?[] _failures = new Exception?[5];
+    private readonly int[] _calls = new int[5];
     private int _scriptReads;
     private long _added;
     private bool _exists;
@@ -29,7 +30,12 @@ internal sealed class InMemoryStreamPort(RedisValue group, RedisValue field) : I
         Read,
         CreateGroup,
         Acknowledge,
+        Info,
+        Groups,
     }
+
+    /// <summary>Whether <c>XINFO STREAM</c> carries the counts Redis 7.0 added; off, it answers as a server below 7.0.</summary>
+    public bool HasCounts { get; set; } = true;
 
     public string[] Acknowledged
     {
@@ -67,9 +73,10 @@ internal sealed class InMemoryStreamPort(RedisValue group, RedisValue field) : I
     /// <summary>Reads that went through the check-and-read script.</summary>
     public int ScriptReads => Volatile.Read(ref _scriptReads);
 
+    /// <summary>How often <paramref name="op"/> was called; <see cref="Op.Info"/> and <see cref="Op.Groups"/> count the checks sent with a read.</summary>
     public int Calls(Op op) => Volatile.Read(ref _calls[(int)op]);
 
-    /// <summary>Holds the next <paramref name="op"/> to start, before it touches the stream.</summary>
+    /// <summary>Holds the next <paramref name="op"/> to start, before it touches the stream; a check is held with its read.</summary>
     public Held Hold(Op op)
     {
         var held = new Held();
@@ -81,7 +88,7 @@ internal sealed class InMemoryStreamPort(RedisValue group, RedisValue field) : I
         return held;
     }
 
-    /// <summary>Fails every <paramref name="op"/> from now on with <paramref name="failure"/>; <c>null</c> ends it.</summary>
+    /// <summary>Fails every <paramref name="op"/> from now on with <paramref name="failure"/>; <c>null</c> ends it. A check that fails leaves its read to run.</summary>
     public void FailWith(Op op, Exception? failure)
     {
         lock (_lock)
@@ -117,6 +124,17 @@ internal sealed class InMemoryStreamPort(RedisValue group, RedisValue field) : I
         }
     }
 
+    /// <summary>Moves the group to the head, as another actor's <c>XGROUP SETID $</c>, or a group it made anew there, would.</summary>
+    public void MoveGroupToHead()
+    {
+        lock (_lock)
+        {
+            _delivered = _added;
+            _read = _added;
+            _pending.Clear();
+        }
+    }
+
     public Task<StreamEntry[]> ReadGroupAsync(RedisValue position, bool noAck) =>
         RunAsync(Op.Read, () => ReadCore(position, noAck));
 
@@ -126,9 +144,20 @@ internal sealed class InMemoryStreamPort(RedisValue group, RedisValue field) : I
         return RunAsync(Op.Read, () => CheckAndReadCore(full));
     }
 
-    public Task<StreamInfo> InfoAsync() => throw new RedisCommandException("XINFO is not offered");
+    public CheckedRead CheckThenRead(bool full, bool noAck)
+    {
+        lock (_lock)
+        {
+            _calls[(int)Op.Info]++;
+            if (full)
+            {
+                _calls[(int)Op.Groups]++;
+            }
+        }
 
-    public Task<StreamGroupInfo[]> GroupInfoAsync() => throw new RedisCommandException("XINFO is not offered");
+        var run = RunAsync(Op.Read, () => CheckThenReadCore(full, noAck));
+        return new(Part(run, static p => p.Stream), Part(run, static p => p.Group), Part(run, static p => p.Entries));
+    }
 
     public Task<StreamEntry[]> RangeAsync(RedisValue minId, RedisValue maxId, int count) => Task.FromResult<StreamEntry[]>([]);
 
@@ -144,6 +173,22 @@ internal sealed class InMemoryStreamPort(RedisValue group, RedisValue field) : I
     private static string Id(long seq) => $"{seq}-0";
 
     private static long Seq(RedisValue id) => long.Parse(((string)id!).Split('-')[0], CultureInfo.InvariantCulture);
+
+    private static async Task<T> Part<T>(Task<Pair> run, Func<Pair, Func<T>> part) => part(await run.ConfigureAwait(false))();
+
+    /// <summary>What <paramref name="action"/> returns or throws, kept for the part of a pair that asks for it.</summary>
+    private static Func<T> Outcome<T>(Func<T> action)
+    {
+        try
+        {
+            var result = action();
+            return () => result;
+        }
+        catch (Exception ex)
+        {
+            return () => throw ex;
+        }
+    }
 
     private async Task<T> RunAsync<T>(Op op, Func<T> action)
     {
@@ -162,14 +207,21 @@ internal sealed class InMemoryStreamPort(RedisValue group, RedisValue field) : I
             await held.ArriveAsync().ConfigureAwait(false);
         }
 
-        lock (_lock)
+        try
         {
-            if (_failures[(int)op] is { } failure)
+            lock (_lock)
             {
-                throw failure;
-            }
+                if (_failures[(int)op] is { } failure)
+                {
+                    throw failure;
+                }
 
-            return action();
+                return action();
+            }
+        }
+        finally
+        {
+            held?.Complete();
         }
     }
 
@@ -240,6 +292,39 @@ internal sealed class InMemoryStreamPort(RedisValue group, RedisValue field) : I
         ]);
     }
 
+    // The check's parts answer as XINFO would at the instant of the read: the stream's state the client parses, and the
+    // group's position with its count read as StackExchange.Redis reads a nil, 0, which the check takes as unknown.
+    private Pair CheckThenReadCore(bool full, bool noAck)
+    {
+        var stream = Outcome(() =>
+        {
+            Check(Op.Info);
+            return new StreamState(_log.Count, Id(_log.Count == 0 ? _added : _log[0].Seq), Id(_added), HasCounts ? "0-0" : RedisValue.Null, HasCounts ? _added : 0);
+        });
+        var position = full
+            ? Outcome<GroupPosition?>(() =>
+            {
+                Check(Op.Groups);
+                return _hasGroup ? new GroupPosition(Id(_delivered), HasCounts && _read is > 0 ? _read : null) : null;
+            })
+            : static () => null;
+        var entries = Outcome(() => ReadCore(StreamConstants.UndeliveredMessages, noAck));
+        return new(stream, position, entries);
+    }
+
+    private void Check(Op op)
+    {
+        if (_failures[(int)op] is { } failure)
+        {
+            throw failure;
+        }
+
+        if (!_exists)
+        {
+            throw new RedisServerException(RedisErrorKind.None, CommandFlags.None, "ERR no such key");
+        }
+    }
+
     private RedisResult Reply(StreamEntry e) =>
         RedisResult.Create([RedisResult.Create(e.Id), RedisResult.Create(new RedisValue[] { field, e[field] })]);
 
@@ -270,13 +355,20 @@ internal sealed class InMemoryStreamPort(RedisValue group, RedisValue field) : I
         return ids.Length;
     }
 
+    /// <summary>The parts of a check sent with a read, each answering or throwing as the server would have.</summary>
+    private sealed record Pair(Func<StreamState> Stream, Func<GroupPosition?> Group, Func<StreamEntry[]> Entries);
+
     internal sealed class Held
     {
         private readonly TaskCompletionSource _reached = new(TaskCreationOptions.RunContinuationsAsynchronously);
         private readonly TaskCompletionSource _released = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private readonly TaskCompletionSource _completed = new(TaskCreationOptions.RunContinuationsAsynchronously);
 
         /// <summary>Completes when the operation has arrived and waits.</summary>
         public Task Reached => _reached.Task;
+
+        /// <summary>Completes once the released operation has run against the stream, with its result or its failure; what a test changes after that is for the next one.</summary>
+        public Task Completed => _completed.Task;
 
         public void Release() => _released.TrySetResult();
 
@@ -287,5 +379,7 @@ internal sealed class InMemoryStreamPort(RedisValue group, RedisValue field) : I
             _reached.TrySetResult();
             return _released.Task;
         }
+
+        internal void Complete() => _completed.TrySetResult();
     }
 }
