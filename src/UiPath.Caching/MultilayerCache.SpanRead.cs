@@ -34,7 +34,7 @@ internal sealed partial class MultilayerCache
             return LocalProbe.Unavailable;
         }
 
-        if (!memoryCache.TryGetValue(composed[..written], out var cached) || cached is not ICacheEntry<T> found)
+        if (!memoryCache.TryGetValue(composed[..written], out var cached) || cached is not ICacheEntry<T> found || Unusable(found, composed[..written]))
         {
             return LocalProbe.Miss;
         }
@@ -87,7 +87,7 @@ internal sealed partial class MultilayerCache
             return LocalProbe.Unavailable;
         }
 
-        if (!_memoryCache.TryGetValue(cacheKey.Name, out var cached) || cached is not ICacheEntry<T> found)
+        if (!_memoryCache.TryGetValue(cacheKey.Name, out var cached) || cached is not ICacheEntry<T> found || Unusable(found, cacheKey.Name))
         {
             return LocalProbe.Miss;
         }

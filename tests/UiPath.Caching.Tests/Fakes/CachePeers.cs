@@ -266,8 +266,8 @@ internal sealed class CachePeers : IDisposable
         }
     }
 
-    /// <summary>The inner tier of a node over the shared store: counts its reads, can hold or fail them, and reports a connection state the test sets.</summary>
-    internal class NodeInner : DispatchProxy, IConnectionState, IMasterReadScope
+    /// <summary>The inner tier of a node over the shared store: counts its reads, can hold or fail them, keeps refresh reads serialized as the Redis tier does, and reports a connection state the test sets.</summary>
+    internal class NodeInner : DispatchProxy, IConnectionState, IMasterReadScope, IDeferredEntryReader
     {
         private static readonly MethodInfo ReadOne = typeof(NodeInner).GetMethod(nameof(ReadOneAsync), BindingFlags.Instance | BindingFlags.NonPublic)!;
         private static readonly MethodInfo ReadMany = typeof(NodeInner).GetMethod(nameof(ReadManyAsync), BindingFlags.Instance | BindingFlags.NonPublic)!;
@@ -280,6 +280,7 @@ internal sealed class CachePeers : IDisposable
         private int _openScopes;
         private int _singleReads;
         private int _batchReads;
+        private int _deferredReads;
 
         public event EventHandler? OnConnectionFailed;
 
@@ -296,6 +297,18 @@ internal sealed class CachePeers : IDisposable
         public int SingleReads => Volatile.Read(ref _singleReads);
 
         public int BatchReads => Volatile.Read(ref _batchReads);
+
+        /// <summary>Refresh reads that kept their values serialized, single or batched.</summary>
+        public int DeferredReads => Volatile.Read(ref _deferredReads);
+
+        /// <summary>Serializes and deserializes the payloads of refresh reads.</summary>
+        public ISerializerProxy<byte[]> Serializer { get; set; } = new SystemJsonByteSerializerProxy();
+
+        /// <summary>As the Redis tier's option: off, a payload that reads as null is not found.</summary>
+        public bool CacheNullValues { get; set; }
+
+        /// <summary>When set, refresh reads hand back payloads that do not deserialize.</summary>
+        public bool CorruptPayloads { get; set; }
 
         public int[] BatchSizes => [.. _batchSizes];
 
@@ -334,6 +347,22 @@ internal sealed class CachePeers : IDisposable
             _masterDemanded.Value = true;
             Interlocked.Increment(ref _openScopes);
             return new MasterScope(this);
+        }
+
+        async ValueTask<ICacheEntry<T?>> IDeferredEntryReader.GetDeferredEntryAsync<T>(CacheKey cacheKey, CancellationToken token)
+            where T : default
+        {
+            var entry = await ReadOneAsync<T>(cacheKey, token);
+            Interlocked.Increment(ref _deferredReads);
+            return Deferred(entry);
+        }
+
+        async ValueTask<KeyValuePair<CacheKey, ICacheEntry<T?>>[]> IDeferredEntryReader.GetDeferredEntriesAsync<T>(CacheKey[] cacheKeys, CancellationToken token)
+            where T : default
+        {
+            var entries = await ReadManyAsync<T>(cacheKeys, token);
+            Interlocked.Increment(ref _deferredReads);
+            return Array.ConvertAll(entries, e => KeyValuePair.Create(e.Key, Deferred(e.Value)));
         }
 
         [System.Diagnostics.CodeAnalysis.SuppressMessage("Reliability", "CA2012:Use ValueTasks correctly", Justification = "DispatchProxy returns the ValueTask boxed to the proxied call, which awaits it once.")]
@@ -398,6 +427,9 @@ internal sealed class CachePeers : IDisposable
                 return removed;
             }
         }
+
+        private ICacheEntry<T?> Deferred<T>(ICacheEntry<T?> entry) =>
+            entry.Found ? new DeferredEntry<T>(CorruptPayloads ? "not json"u8.ToArray() : Serializer.Serialize(entry.Value)!, Serializer, CacheNullValues, failed: null, entry.Expiration) : entry;
 
         private async ValueTask<ICacheEntry<T?>> ReadOneAsync<T>(CacheKey key, CancellationToken token)
         {

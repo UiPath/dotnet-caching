@@ -5,7 +5,7 @@ using UiPath.Caching.Telemetry;
 
 namespace UiPath.Caching.Redis;
 
-internal sealed partial class RedisCache : RedisCacheBase, ICache, IInvalidationSink
+internal sealed partial class RedisCache : RedisCacheBase, ICache, IInvalidationSink, IDeferredEntryReader
 {
     /// <summary>Value and absolute expiration in one atomic read-only call.</summary>
     private const string ReadWithExpirationScript = "local v = redis.call('GET', KEYS[1]) if not v then return false end return {v, redis.call('PEXPIRETIME', KEYS[1])}";
@@ -222,6 +222,20 @@ internal sealed partial class RedisCache : RedisCacheBase, ICache, IInvalidation
     void IInvalidationSink.Invalidated(CacheKey key) => NoteInvalidated(_redisKeyStrategy, key);
 
     void IInvalidationSink.InvalidatedAll() => NoteAllInvalidated();
+
+    /// <summary>The entries a peer refresh keeps: a payload stays serialized until a local read asks for it.</summary>
+    public ValueTask<ICacheEntry<T?>> GetDeferredEntryAsync<T>(CacheKey cacheKey, CancellationToken token)
+    {
+        NotCacheableException.ThrowIfNotCacheable<T>();
+        return GetCacheEntryInternalAsync<T>(cacheKey, token, nameof(GetCacheEntryAsync), deferred: true);
+    }
+
+    /// <inheritdoc cref="GetDeferredEntryAsync{T}(CacheKey, CancellationToken)"/>
+    public ValueTask<KeyValuePair<CacheKey, ICacheEntry<T?>>[]> GetDeferredEntriesAsync<T>(CacheKey[] cacheKeys, CancellationToken token)
+    {
+        NotCacheableException.ThrowIfNotCacheable<T>();
+        return GetCacheEntriesInternalAsync<T>(cacheKeys, token, deferred: true);
+    }
 
     private static (RedisKey Key, bool Hit)[] InitReads(RedisKey[] redisKeys)
     {
@@ -536,6 +550,20 @@ internal sealed partial class RedisCache : RedisCacheBase, ICache, IInvalidation
             return (false, default);
         }
         return (true, deserialized);
+    }
+
+    /// <summary>The entry a read found; <paramref name="deferred"/> keeps a non-empty payload serialized, unless a custom entry factory builds the entries.</summary>
+    private bool TryReadEntry<T>(RedisValue value, DateTimeOffset expiration, bool deferred, [NotNullWhen(true)] out ICacheEntry<T?>? entry)
+    {
+        if (deferred && !value.IsNull && value.Length() > 0 && _cacheEntryFactory.GetType() == typeof(CacheEntryFactory))
+        {
+            entry = new DeferredEntry<T>((byte[])value!, _serializer, _cacheNullValues, _logFailure, expiration);
+            return true;
+        }
+
+        var (found, deserialized) = InterpretReadResult<T>(value);
+        entry = found ? _cacheEntryFactory.Create<T?>(deserialized, expiration) : null;
+        return found;
     }
 
     private async ValueTask<(bool Found, T? Value)> ReadGetOrAddProbeAsync<T>(CacheKey cacheKey, RedisKey redisKey, CancellationToken token)
@@ -967,7 +995,7 @@ internal sealed partial class RedisCache : RedisCacheBase, ICache, IInvalidation
         return retValues;
     }
 
-    private async ValueTask<ICacheEntry<T?>> GetCacheEntryInternalAsync<T>(CacheKey cacheKey, CancellationToken token, string methodName = nameof(GetCacheEntryInternalAsync))
+    private async ValueTask<ICacheEntry<T?>> GetCacheEntryInternalAsync<T>(CacheKey cacheKey, CancellationToken token, string methodName = nameof(GetCacheEntryInternalAsync), bool deferred = false)
     {
         token.ThrowIfCancellationRequested();
         var redisKey = ToRedisKey(cacheKey, token);
@@ -978,6 +1006,8 @@ internal sealed partial class RedisCache : RedisCacheBase, ICache, IInvalidation
 
         var operation = StartOperation<T>(methodName);
         ICacheEntry<T?> ret = DefaultEntry<T>();
+        // Not read from a deferred entry, which would deserialize it.
+        var hit = false;
         try
         {
             // Per attempt; boxed so the pipeline stays bool.
@@ -1023,14 +1053,14 @@ internal sealed partial class RedisCache : RedisCacheBase, ICache, IInvalidation
             var (value, expiration) = result.Value;
             _auditKeySize?.Invoke(Logged(cacheKey, redisKey, typeof(T)), value);
 
-            var (found, deserialized) = InterpretReadResult<T>(value);
-            if (!found)
+            if (!TryReadEntry<T>(value, Clock.ToDateTimeOffset(expiration), deferred, out var found))
             {
                 operation.Stop();
                 return ret;
             }
 
-            ret = _cacheEntryFactory.Create<T?>(deserialized, Clock.ToDateTimeOffset(expiration));
+            ret = found;
+            hit = found is DeferredEntry<T> || found.Found;
             operation.Stop();
         }
         catch (Exception ex)
@@ -1040,13 +1070,13 @@ internal sealed partial class RedisCache : RedisCacheBase, ICache, IInvalidation
         }
         finally
         {
-            TrackRead(operation, ret.Found, redisKey);
+            TrackRead(operation, hit, redisKey);
         }
 
         return ret;
     }
 
-    private async ValueTask<KeyValuePair<CacheKey, ICacheEntry<T?>>[]> GetCacheEntriesInternalAsync<T>(CacheKey[] keys, CancellationToken token)
+    private async ValueTask<KeyValuePair<CacheKey, ICacheEntry<T?>>[]> GetCacheEntriesInternalAsync<T>(CacheKey[] keys, CancellationToken token, bool deferred = false)
     {
         token.ThrowIfCancellationRequested();
         if (keys.Length == 0)
@@ -1096,15 +1126,12 @@ internal sealed partial class RedisCache : RedisCacheBase, ICache, IInvalidation
                 {
                     var i = group[j];
                     _auditKeySize?.Invoke(Logged(keys[i], redisKeys[i], typeof(T)), values[j]);
-                    var (found, deserialized) = InterpretReadResult<T>(values[j]);
-                    if (!found)
+                    if (!TryReadEntry<T>(values[j], Clock.ToDateTimeOffset(expirations[j]), deferred, out var found))
                     {
                         continue;
                     }
                     reads[i].Hit = true;
-                    retValues[i] = new KeyValuePair<CacheKey, ICacheEntry<T?>>(
-                        keys[i],
-                        _cacheEntryFactory.Create<T?>(deserialized, Clock.ToDateTimeOffset(expirations[j])));
+                    retValues[i] = new KeyValuePair<CacheKey, ICacheEntry<T?>>(keys[i], found);
                 }
             }
             operation.Stop();

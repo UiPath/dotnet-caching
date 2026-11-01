@@ -256,6 +256,9 @@ public abstract partial class MultilayerCacheBase : IDisposable
         return _background.Mark(key);
     }
 
+    [LoggerMessage(Level = LogLevel.Warning, Message = "The refreshed copy of {CacheKey} holds no value the cache keeps; it is dropped and read from the inner tier.")]
+    private protected partial void LogRefreshedCopyUnusable(LoggedKey cacheKey);
+
     [LoggerMessage(Level = LogLevel.Debug, Message = "Inner copy of {CacheKey} not kept locally: a write of it, or of a key sharing its stripe, came after the read began.")]
     private protected partial void LogInnerCopyNotKept(LoggedKey cacheKey);
 
@@ -284,6 +287,25 @@ public abstract partial class MultilayerCacheBase : IDisposable
         policy.LocalExpiration ?? _multiLayerCacheOptions.LocalMaxExpiration;
 
     /// <summary>Whether a newer write, a removal or an invalidation has not replaced the entry since.</summary>
+    /// <summary>True, and the entry leaves the local tier while it is still the one held, when it is a peer-refreshed copy whose payload holds no value the cache keeps: the read then misses and reads the inner tier, as it did when the refresh deserialized.</summary>
+    private protected bool Unusable(object? entry, ReadOnlySpan<char> name)
+    {
+        if (entry is not IDeferredEntry deferred || deferred.Holds(out var first, out var threw))
+        {
+            return false;
+        }
+
+        var key = name.ToString();
+        if (first)
+        {
+            LogRefreshedCopyUnusable(LoggedKey.Composed(_masker, key, null));
+            _peerRefresher?.Unusable(threw);
+        }
+
+        EvictLocal(key, entry);
+        return true;
+    }
+
     private protected bool IsLocalEntry(string name, object entry) =>
         _memoryCache.TryGetValue(name, out var current) && ReferenceEquals(current, entry);
 

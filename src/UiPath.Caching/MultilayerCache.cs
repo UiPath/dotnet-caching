@@ -418,7 +418,7 @@ internal sealed partial class MultilayerCache : MultilayerCacheBase, ICache, ISp
         var cacheEntryOptions = _entryBuilder.BuildEntryOptions<T>(cacheKey, default, token);
         try
         {
-            return _memoryCache.TryGetValue(cacheEntryOptions.CacheKey.Name, out _) || await _innerCache.ContainsAsync<T>(cacheEntryOptions.CacheKey, cacheEntryOptions.Token).ConfigureAwait(false);
+            return (_memoryCache.TryGetValue(cacheEntryOptions.CacheKey.Name, out var held) && !Unusable(held, cacheEntryOptions.CacheKey.Name)) || await _innerCache.ContainsAsync<T>(cacheEntryOptions.CacheKey, cacheEntryOptions.Token).ConfigureAwait(false);
         }
         catch (Exception ex)
         {
@@ -614,7 +614,7 @@ internal sealed partial class MultilayerCache : MultilayerCacheBase, ICache, ISp
     /// <summary>A local hit only, never the inner tier: for a caller that has just taken a key, where the only thing that can have changed is a run of this process.</summary>
     private bool TryGetLocalEntry<T>(CacheEntryOptions options, [MaybeNullWhen(false)] out ICacheEntry<T?> entry)
     {
-        if ((_connectionState.IsConnected || _useLocalOnlyWhenDisconnected) && _memoryCache.TryGetValue(options.CacheKey.Name, out entry) && entry!.Found)
+        if ((_connectionState.IsConnected || _useLocalOnlyWhenDisconnected) && _memoryCache.TryGetValue(options.CacheKey.Name, out entry) && !Unusable(entry, options.CacheKey.Name) && entry!.Found)
         {
             MarkRead(entry);
             return true;
@@ -1822,7 +1822,7 @@ internal sealed partial class MultilayerCache : MultilayerCacheBase, ICache, ISp
         List<CacheEntryOptions> cacheEntriesToFetch = [];
         foreach (var option in options)
         {
-            if (_memoryCache.TryGetValue<ICacheEntry<T>>(option.CacheKey.Name, out var entry))
+            if (_memoryCache.TryGetValue<ICacheEntry<T>>(option.CacheKey.Name, out var entry) && !Unusable(entry, option.CacheKey.Name))
             {
                 LogFoundLocal(Logged(option, typeof(T)));
                 if (_connectionState.IsConnected)
@@ -1879,7 +1879,7 @@ internal sealed partial class MultilayerCache : MultilayerCacheBase, ICache, ISp
 
     private async ValueTask<T?> GetInnerAsync<T>(CacheEntryOptions options, CachePolicy policy)
     {
-        if (_memoryCache.TryGetValue<ICacheEntry<T>>(options.CacheKey.Name, out var entry))
+        if (_memoryCache.TryGetValue<ICacheEntry<T>>(options.CacheKey.Name, out var entry) && !Unusable(entry, options.CacheKey.Name))
         {
             LogFoundLocal(Logged(options, typeof(T)));
             if(_connectionState.IsConnected)
@@ -1913,7 +1913,7 @@ internal sealed partial class MultilayerCache : MultilayerCacheBase, ICache, ISp
         for (int i = 0; i < options.Length; i++)
         {
             var option = options[i];
-            if (_memoryCache.TryGetValue<ICacheEntry<T?>>(option.CacheKey.Name, out var entry))
+            if (_memoryCache.TryGetValue<ICacheEntry<T?>>(option.CacheKey.Name, out var entry) && !Unusable(entry, option.CacheKey.Name))
             {
                 LogFoundLocal(Logged(option, typeof(T)));
                 if (_connectionState.IsConnected || _useLocalOnlyWhenDisconnected)
@@ -1969,7 +1969,7 @@ internal sealed partial class MultilayerCache : MultilayerCacheBase, ICache, ISp
 
     private async ValueTask<ICacheEntry<T?>> GetCacheEntryInnerAsync<T>(CacheEntryOptions options, CachePolicy policy)
     {
-        if (_memoryCache.TryGetValue<ICacheEntry<T?>>(options.CacheKey.Name, out var entry))
+        if (_memoryCache.TryGetValue<ICacheEntry<T?>>(options.CacheKey.Name, out var entry) && !Unusable(entry, options.CacheKey.Name))
         {
             LogFoundLocal(Logged(options, typeof(T)));
             if (_connectionState.IsConnected || _useLocalOnlyWhenDisconnected)
@@ -2192,7 +2192,21 @@ internal sealed partial class MultilayerCache : MultilayerCacheBase, ICache, ISp
 
         public async ValueTask<PeerRead[]> ReadAsync(MultilayerCacheBase cache, CacheKey[] keys, CachePolicy policy, CancellationToken token)
         {
-            var inner = ((MultilayerCache)cache)._innerCache;
+            var owner = (MultilayerCache)cache;
+            var inner = owner._innerCache;
+            // Kept serialized until a local read asks for the value, where the local entries are the built-in ones and no custom size provider would deserialize it under the stripe lock.
+            if (inner is IDeferredEntryReader deferring && owner._cacheEntryFactory.GetType() == typeof(CacheEntryFactory) && !owner._localMemorySetter.SizesByValue)
+            {
+                if (keys.Length == 1)
+                {
+                    var deferred = await deferring.GetDeferredEntryAsync<T>(keys[0], token).ConfigureAwait(false);
+                    return [Found(deferred)];
+                }
+
+                var many = await deferring.GetDeferredEntriesAsync<T>(keys, token).ConfigureAwait(false);
+                return Array.ConvertAll(many, static e => Found(e.Value));
+            }
+
             if (keys.Length == 1)
             {
                 var entry = await inner.GetCacheEntryAsync<T>(keys[0], policy, token).ConfigureAwait(false);
@@ -2226,9 +2240,10 @@ internal sealed partial class MultilayerCache : MultilayerCacheBase, ICache, ISp
                     return false;
                 }
 
-                var item = o._cacheEntryFactory.Create(entry.Value, options.Expiration);
+                // A deferred entry is this read's own, so it is kept as it is, still serialized.
+                var item = entry as DeferredEntry<T> ?? o._cacheEntryFactory.Create(entry.Value, options.Expiration);
                 InheritRead(held.CacheEntity, item);
-                if (!o.MemorySet(options, entry.Value, o.LocalLifetime(policy), item, policy, read: false))
+                if (!o.MemorySet(options, item is DeferredEntry<T> ? default : entry.Value, o.LocalLifetime(policy), item, policy, read: false))
                 {
                     failed = true;
                     return false;
@@ -2247,5 +2262,9 @@ internal sealed partial class MultilayerCache : MultilayerCacheBase, ICache, ISp
                 null => owner.IsLocalEntry(name, held.CacheEntity) ? PeerKeep.Declined : PeerKeep.Replaced,
             };
         }
+
+        /// <summary>A deferred entry is a hit the read judged already; asking it would deserialize it.</summary>
+        private static PeerRead Found(ICacheEntry<T?> entry) =>
+            entry is DeferredEntry<T> ? new PeerRead(true, entry) : new PeerRead(entry.Found, entry);
     }
 }

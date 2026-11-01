@@ -142,6 +142,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 - **`InMemoryRedisCacheOptions.Timeout` of zero or negative now fails at registration.** `Timeout.InfiniteTimeSpan` is still accepted and leaves the
   peer refresh's queue wait and read unbounded.
 
+- **A peer-refreshed copy stays serialized until it is read.** The refresh keeps the bytes it read from Redis and deserializes them, once, on the first local read, so a copy replaced before anyone reads it is never deserialized and survives as one buffer. Hash caches and custom entry factories deserialize as before.
+
 - **Reads go to the master by default (was `PreferReplica`).** This is a default behavior change: unless you opt in, every Redis read
   (values, hashes, sets, TTLs, read scripts) is sent to the master. On an Azure Redis 6 cluster a replica round trip measured about 3 times the
   master's (1.6 ms against 0.55 ms), and a replica that still holds a key the master has removed could refill an entry with stale data right

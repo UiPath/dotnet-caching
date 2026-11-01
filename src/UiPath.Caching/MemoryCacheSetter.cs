@@ -45,6 +45,9 @@ internal abstract class MemoryCacheSetter(
     /// <summary>Told when the token of an entry a peer's write refreshes changes, for any reason.</summary>
     internal Action<RefreshMetadataState>? PeerRefreshChanged { get; init; }
 
+    /// <summary>Whether a custom size provider, which may read the value, sizes each entry.</summary>
+    internal bool SizesByValue => memoryCacheOptions.SizeLimit.HasValue && SizeProvider.GetType() != typeof(DefaultCacheEntrySizeProvider);
+
     protected TimeProvider Clock { get; } = clock;
 
     protected virtual bool AppliesPeerUpdates => false;

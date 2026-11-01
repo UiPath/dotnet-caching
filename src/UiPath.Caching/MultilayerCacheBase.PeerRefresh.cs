@@ -234,6 +234,21 @@ public abstract partial class MultilayerCacheBase
             }
         }
 
+        /// <summary>A kept copy whose payload a local read found unusable: counted as a drop, not a keep.</summary>
+        public void Unusable(bool threw)
+        {
+            var reason = threw ? ReasonFailed : ReasonNotFound;
+            var index = Array.IndexOf(Reasons, reason);
+            Interlocked.Decrement(ref _kept);
+            Interlocked.Increment(ref _dropped[index]);
+            if (threw)
+            {
+                cache.Telemetry.TryTrackEvent(EventDropped, CachedTags().Dropped[index]);
+            }
+
+            FlushIfDue();
+        }
+
         /// <summary>Reports the outcomes counted since the last report, one metric each.</summary>
         internal void Flush()
         {
@@ -680,6 +695,11 @@ public abstract partial class MultilayerCacheBase
             if (count > 0)
             {
                 cache.Telemetry.TrackMetric(name, count, tags);
+            }
+            else if (count < 0)
+            {
+                // A keep taken back after it was reported: carried into the next report.
+                Interlocked.Add(ref counter, count);
             }
         }
 

@@ -44,6 +44,28 @@ public class PeerRefreshIntegrationTests(RedisContainerFixture fixture) : IDispo
     }
 
     [Fact]
+    public async Task A_refreshed_copy_is_kept_serialized_and_reads_the_peer_s_value_and_expiration()
+    {
+        Assert.SkipUnless(fixture.Enabled, "Set RUN_REDIS_INTEGRATION_TESTS=1 (Docker required) to run.");
+        var telemetry = new RecordingTelemetryProvider();
+        var writer = Node("a");
+        var peer = Node("b", telemetry);
+        await WarmAsync(writer, peer, telemetry);
+        var key = Unique();
+        (await peer.SetAsync(key, "old", Ct)).Should().BeTrue();
+        (await peer.GetAsync<string>(key, Ct)).Should().Be("old");
+        var expiration = DateTimeOffset.UtcNow.AddMinutes(10);
+
+        (await writer.SetAsync(key, "new", expiration, Ct)).Should().BeTrue();
+
+        (await EventuallyAsync(async () => await peer.ExpireTimeAsync<string>(key, Ct) is { } at && (at - expiration).Duration() < TimeSpan.FromSeconds(2))).Should().BeTrue("the refresh kept the peer's expiration");
+        var entry = await peer.GetCacheEntryAsync<string>(key, Ct);
+        entry.Should().BeOfType<DeferredEntry<string>>();
+        entry.Value.Should().Be("new");
+        entry.Expiration.Should().BeCloseTo(expiration, TimeSpan.FromSeconds(2));
+    }
+
+    [Fact]
     public async Task A_peer_batch_of_20_keys_in_one_slot_is_refreshed_in_at_most_two_reads()
     {
         Assert.SkipUnless(fixture.Enabled, "Set RUN_REDIS_INTEGRATION_TESTS=1 (Docker required) to run.");

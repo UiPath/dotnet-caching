@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using UiPath.Caching.Tests.Fakes;
 using UiPath.Caching.Tests.Telemetry;
 
@@ -73,6 +74,177 @@ public class PeerRefreshTests
         b.Local.TryGetValue(Key, out _).Should().BeTrue();
         KeptCount(telemetry).Should().Be(1);
         DroppedReasons(telemetry).Should().BeEmpty();
+        (await b.Cache.GetAsync<string>(Key, null, Ct)).Should().Be("new");
+    }
+
+    [Fact]
+    public async Task A_refreshed_copy_stays_serialized_until_a_local_read_asks_for_it()
+    {
+        using var peers = new CachePeers();
+        var (a, b) = await HoldingOld(peers);
+
+        await a.Cache.SetAsync(Key, "new", null, Ct);
+        await b.Settled();
+
+        b.Local.TryGetValue(Key, out var kept).Should().BeTrue();
+        var deferred = kept.Should().BeOfType<DeferredEntry<string>>().Subject;
+        deferred.Materialized.Should().BeFalse();
+        (await b.Cache.ExpireTimeAsync<string>(Key, Ct)).Should().Be(deferred.Expiration);
+        deferred.Materialized.Should().BeFalse("an expiration query does not deserialize");
+
+        (await b.Cache.GetAsync<string>(Key, null, Ct)).Should().Be("new");
+        deferred.Materialized.Should().BeTrue();
+    }
+
+    [Fact]
+    public async Task A_refresh_deserializes_nothing_and_concurrent_reads_deserialize_once()
+    {
+        using var peers = new CachePeers();
+        var (a, b) = await HoldingOld(peers);
+        var serializer = new CountingSerializer { Delay = TimeSpan.FromMilliseconds(20) };
+        b.Inner.Serializer = serializer;
+
+        await a.Cache.SetAsync(Key, "new", null, Ct);
+        await b.Settled();
+        serializer.Deserialized.Should().Be(0);
+
+        var reads = await Task.WhenAll(Enumerable.Range(0, 8).Select(_ => Task.Run(() => b.Cache.GetAsync<string>(Key, null, Ct).AsTask(), Ct)));
+
+        reads.Should().OnlyContain(r => r == "new");
+        serializer.Deserialized.Should().Be(1);
+        b.Inner.DeferredReads.Should().Be(1);
+    }
+
+    [Fact]
+    public async Task A_batch_refresh_keeps_every_key_serialized_until_read()
+    {
+        using var peers = new CachePeers();
+        string[] keys = ["k1", "k2", "k3"];
+        var (a, b) = await HoldingOld(peers, keys);
+        var serializer = new CountingSerializer();
+        b.Inner.Serializer = serializer;
+        var gate = new TaskCompletionSource();
+        b.Cache.PeerRefreshHold = gate.Task;
+
+        foreach (var key in keys)
+        {
+            await a.Cache.SetAsync(key, "new", null, Ct);
+        }
+
+        gate.SetResult();
+        await b.Settled();
+
+        b.Inner.BatchReads.Should().Be(1);
+        b.Inner.DeferredReads.Should().Be(1);
+        serializer.Deserialized.Should().Be(0);
+        foreach (var key in keys)
+        {
+            (await b.Cache.GetAsync<string>(key, null, Ct)).Should().Be("new");
+        }
+
+        serializer.Deserialized.Should().Be(keys.Length);
+    }
+
+    [Fact]
+    public async Task A_refreshed_payload_that_does_not_deserialize_is_dropped_and_read_from_the_inner_tier()
+    {
+        using var peers = new CachePeers();
+        var telemetry = new RecordingTelemetryProvider();
+        var (a, b) = await HoldingOld(peers, bTelemetry: telemetry);
+        b.Inner.CorruptPayloads = true;
+        await a.Cache.SetAsync(Key, "new", null, Ct);
+        await b.Settled();
+        b.Local.TryGetValue(Key, out var refreshed).Should().BeTrue();
+        var before = b.Inner.SingleReads;
+
+        (await b.Cache.GetAsync<string>(Key, null, Ct)).Should().Be("new");
+
+        b.Inner.SingleReads.Should().Be(before + 1, "the unusable copy reads as a local miss");
+        b.Local.TryGetValue(Key, out var current);
+        current.Should().NotBeSameAs(refreshed);
+        (await b.Cache.ContainsAsync<string>(Key, Ct)).Should().BeTrue();
+
+        // A later keep reports net of the one taken back.
+        b.Inner.CorruptPayloads = false;
+        await a.Cache.SetAsync(Key, "newer", null, Ct);
+        await b.Settled();
+        b.Cache.FlushPeerRefreshMetrics();
+        DroppedReasons(telemetry).Should().Equal("failed");
+        KeptCount(telemetry).Should().Be(1, "two keeps, one of which a read found unusable");
+    }
+
+    [Fact]
+    public async Task A_refreshed_payload_that_reads_as_null_with_null_values_off_is_dropped_and_read_from_the_inner_tier()
+    {
+        using var peers = new CachePeers();
+        var telemetry = new RecordingTelemetryProvider();
+        var (a, b) = await HoldingOld(peers, bTelemetry: telemetry);
+        var set = await QuietSet(peers, a);
+        peers.Store.WriteQuietly(Key, null);
+        peers.Deliver(b, set);
+        await b.Settled();
+        b.Local.TryGetValue(Key, out var refreshed).Should().BeTrue();
+        var before = b.Inner.SingleReads;
+
+        (await b.Cache.GetCacheEntryAsync<string>(Key, null, Ct)).Value.Should().BeNull();
+
+        b.Inner.SingleReads.Should().Be(before + 1, "a null the cache does not keep reads as a local miss");
+        b.Local.TryGetValue(Key, out var current);
+        current.Should().NotBeSameAs(refreshed);
+
+        peers.AutoDeliver = true;
+        await a.Cache.SetAsync(Key, "newer", null, Ct);
+        await b.Settled();
+        b.Cache.FlushPeerRefreshMetrics();
+        DroppedReasons(telemetry).Should().Equal("not_found");
+        KeptCount(telemetry).Should().Be(1, "two keeps, one of which a read found unusable");
+    }
+
+    [Fact]
+    public async Task A_refreshed_null_is_kept_when_null_values_are_cached()
+    {
+        using var peers = new CachePeers();
+        var (a, b) = await HoldingOld(peers);
+        b.Inner.CacheNullValues = true;
+        var set = await QuietSet(peers, a);
+        peers.Store.WriteQuietly(Key, null);
+        peers.Deliver(b, set);
+        await b.Settled();
+        var before = b.Inner.SingleReads;
+
+        (await b.Cache.GetAsync<string>(Key, null, Ct)).Should().BeNull();
+
+        b.Inner.SingleReads.Should().Be(before);
+        b.Inner.DeferredReads.Should().Be(1);
+    }
+
+    [Fact]
+    public async Task A_custom_entry_factory_refreshes_eagerly()
+    {
+        using var peers = new CachePeers();
+        var (a, b) = await HoldingOld(peers, bOptions: new InMemoryRedisCacheOptions { EntryFactory = new CustomEntryFactory() });
+
+        await a.Cache.SetAsync(Key, "new", null, Ct);
+        await b.Settled();
+
+        b.Inner.DeferredReads.Should().Be(0);
+        b.Local.TryGetValue(Key, out var kept).Should().BeTrue();
+        kept.Should().NotBeOfType<DeferredEntry<string>>();
+        (await b.Cache.GetAsync<string>(Key, null, Ct)).Should().Be("new");
+    }
+
+    [Fact]
+    public async Task A_custom_size_provider_refreshes_eagerly()
+    {
+        using var peers = new CachePeers();
+        var sizes = new ValueSizeProvider();
+        var (a, b) = await HoldingOld(peers, bOptions: new InMemoryRedisCacheOptions { SizeLimit = 1_000, SizeProvider = sizes });
+
+        await a.Cache.SetAsync(Key, "new", null, Ct);
+        await b.Settled();
+
+        b.Inner.DeferredReads.Should().Be(0);
+        sizes.Sized.Should().Contain("new", "the provider sized the refreshed value without deserializing it under the stripe lock");
         (await b.Cache.GetAsync<string>(Key, null, Ct)).Should().Be("new");
     }
 
@@ -376,6 +548,7 @@ public class PeerRefreshTests
         await b.Settled();
 
         b.Local.TryGetValue(Key, out _).Should().BeTrue();
+        b.Inner.DeferredReads.Should().Be(1, "the older read was a deferred one");
         (await b.Cache.GetAsync<string>(Key, null, Ct)).Should().Be("mine");
         DiscardedReasons(telemetry).Should().Equal("newer_local");
         DroppedReasons(telemetry).Should().BeEmpty();
@@ -1155,6 +1328,24 @@ public class PeerRefreshTests
 
         public void OnError(Exception error)
         {
+        }
+    }
+
+    private sealed class CustomEntryFactory : ICacheEntryFactory
+    {
+        private readonly CacheEntryFactory _inner = new();
+
+        public ICacheEntry<T> Create<T>(T value, DateTimeOffset expiration, IDictionary<string, string?>? properties = null) => _inner.Create(value, expiration, properties);
+    }
+
+    private sealed class ValueSizeProvider : ICacheEntrySizeProvider
+    {
+        public ConcurrentQueue<object?> Sized { get; } = new();
+
+        public long GetSize(ICacheEntry entry)
+        {
+            Sized.Enqueue(entry.Value);
+            return 1;
         }
     }
 }
