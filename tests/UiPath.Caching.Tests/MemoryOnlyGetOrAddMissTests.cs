@@ -202,6 +202,36 @@ public class MemoryOnlyGetOrAddMissTests
 
     [Theory]
     [MemberData(nameof(Shapes))]
+    public async Task A_starter_that_cancels_leaves_the_run_going_for_a_joiner_which_gets_the_value(string shape)
+    {
+        using var cache = InMemoryMultilayer.Cache();
+        using var leaving = CancellationTokenSource.CreateLinkedTokenSource(Ct);
+        var started = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var generated = 0;
+        async Task<string?> Generate(CancellationToken token)
+        {
+            Interlocked.Increment(ref generated);
+            started.TrySetResult();
+            await release.Task.WaitAsync(token);
+            return "generated";
+        }
+
+        var starter = Call(shape, cache, "k", Generate, null, leaving.Token).AsTask();
+        await started.Task;
+        var joiner = Call(shape, cache, "k", Generate, null, Ct).AsTask();
+        cache.RunsInFlight.Should().Be(1);
+        await leaving.CancelAsync();
+
+        await Throws<OperationCanceledException>(starter);
+        release.SetResult();
+        (await joiner).Should().Be("generated");
+        generated.Should().Be(1);
+        (await cache.GetAsync<string>("k", Ct)).Should().Be("generated");
+    }
+
+    [Theory]
+    [MemberData(nameof(Shapes))]
     public async Task A_failing_generator_fails_every_caller_keeps_nothing_and_the_next_call_generates(string shape)
     {
         using var cache = InMemoryMultilayer.Cache();

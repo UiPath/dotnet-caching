@@ -430,36 +430,49 @@ internal sealed partial class RedisCache : RedisCacheBase, ICache, IInvalidation
             token);
     }
 
-    private async ValueTask<T?> GenerateAndStoreAsync<T, TState>(CacheKey cacheKey, RedisKey redisKey, TState state, Func<TState, CancellationToken, Task<T?>> generator, TimeSpan? factoryTimeout, TimeSpan expiration, IInFlightRun run)
+    /// <summary>The work of a shared run, which ends the run itself (see <see cref="IInFlightEnd{TResult}"/>): out of the table with its result or failure before its task completes.</summary>
+    private async ValueTask<T?> GenerateAndStoreAsync<T, TState>(CacheKey cacheKey, RedisKey redisKey, TState state, Func<TState, CancellationToken, Task<T?>> generator, TimeSpan? factoryTimeout, TimeSpan expiration, IInFlightEnd<T?> run)
     {
-        var token = run.Token;
-        // The one read of the run: every caller of the key shares it, a hit or a miss.
-        var (found, cached) = await ReadGetOrAddProbeAsync<T>(cacheKey, redisKey, token).ConfigureAwait(false);
-        if (found)
+        T? ret;
+        try
         {
-            // The probe reads no TTL; a result call that joined this run reads it itself.
-            run.ExpirationUnread = true;
-            return cached;
+            var token = run.Token;
+            // The one read of the run: every caller of the key shares it, a hit or a miss.
+            var (found, cached) = await ReadGetOrAddProbeAsync<T>(cacheKey, redisKey, token).ConfigureAwait(false);
+            if (found)
+            {
+                // The probe reads no TTL; a result call that joined this run reads it itself.
+                run.ExpirationUnread = true;
+                ret = cached;
+            }
+            else
+            {
+                LogCacheMissed(Logged(cacheKey, redisKey, typeof(T)));
+                ret = await RunGeneratorAsync(cacheKey, state, generator, factoryTimeout, token).ConfigureAwait(false);
+
+                if ((!IsDefault(ret) || _cacheNullValues) && await SetInternalAsync(redisKey, ret, expiration, token).ConfigureAwait(false))
+                {
+                    run.Expiration = StoredDeadline(expiration);
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            run.Fail(ex);
+            throw;
         }
 
-        LogCacheMissed(Logged(cacheKey, redisKey, typeof(T)));
-        var ret = await RunGeneratorAsync(cacheKey, state, generator, factoryTimeout, token).ConfigureAwait(false);
-
-        if ((!IsDefault(ret) || _cacheNullValues) && await SetInternalAsync(redisKey, ret, expiration, token).ConfigureAwait(false))
-        {
-            run.Expiration = StoredDeadline(expiration);
-        }
-
+        run.Complete(ret);
         return ret;
     }
 
-    /// <summary>One run per Redis key and type: concurrent callers join the run in progress, which reads Redis once and generates only on a miss, and share its result or failure; it runs on its own token, cancelled once every caller has cancelled. Keyed by the Redis key, not the cache key, which a strategy may map to different Redis keys, and by value, so a prefixed key is never rendered to a string.</summary>
-    private ValueTask<T?> ShareGenerationAsync<T, TArgs>(RedisKey redisKey, TArgs args, Func<TArgs, IInFlightRun, ValueTask<T?>> work, CancellationToken token) =>
-        GenerationsOf<T>().RunAsync(redisKey, (Args: args, Work: work), static (state, run) => state.Work(state.Args, run), token);
+    /// <summary>One run per Redis key and type: concurrent callers join the run in progress, which reads Redis once and generates only on a miss, and share its result or failure; it runs on its own token, cancelled once every caller has cancelled. Keyed by the Redis key, not the cache key, which a strategy may map to different Redis keys, and by value, so a prefixed key is never rendered to a string. The work ends the run itself, so the caller that started it awaits the work's own task.</summary>
+    private ValueTask<T?> ShareGenerationAsync<T, TArgs>(RedisKey redisKey, TArgs args, Func<TArgs, IInFlightEnd<T?>, ValueTask<T?>> work, CancellationToken token) =>
+        GenerationsOf<T>().StartOrJoinAsync(redisKey, (Args: args, Work: work), static (state, run) => state.Work(state.Args, run), token, out _);
 
-    /// <summary>As <see cref="ShareGenerationAsync{T, TArgs}"/>, also handing back the run, whose <see cref="IInFlightRun.Expiration"/> is what the starter stored.</summary>
-    private ValueTask<T?> ShareGenerationAsync<T, TArgs>(RedisKey redisKey, TArgs args, Func<TArgs, IInFlightRun, ValueTask<T?>> work, CancellationToken token, out IInFlightRun flight) =>
-        GenerationsOf<T>().RunAsync(redisKey, (Args: args, Work: work), static (state, run) => state.Work(state.Args, run), token, out flight);
+    /// <summary>As <see cref="ShareGenerationAsync{T, TArgs}(RedisKey, TArgs, Func{TArgs, IInFlightEnd{T}, ValueTask{T}}, CancellationToken)"/>, also handing back the run, whose <see cref="IInFlightRun.Expiration"/> is what the starter stored.</summary>
+    private ValueTask<T?> ShareGenerationAsync<T, TArgs>(RedisKey redisKey, TArgs args, Func<TArgs, IInFlightEnd<T?>, ValueTask<T?>> work, CancellationToken token, out IInFlightRun flight) =>
+        GenerationsOf<T>().StartOrJoinAsync(redisKey, (Args: args, Work: work), static (state, run) => state.Work(state.Args, run), token, out _, out flight);
 
     /// <summary>The runs of one value type, so a result needs no box and no cast.</summary>
     private InFlight<RedisKey, T?> GenerationsOf<T>() =>
@@ -472,28 +485,43 @@ internal sealed partial class RedisCache : RedisCacheBase, ICache, IInvalidation
             static (args, run) => args.Cache.GenerateExpiringAndStoreAsync(args.Key, args.RedisKey, args.State, args.Generator, args.Policy, run),
             token);
 
-    private async ValueTask<T?> GenerateExpiringAndStoreAsync<T, TState>(CacheKey cacheKey, RedisKey redisKey, TState state, Func<TState, CancellationToken, Task<GeneratedValue<T>>> generator, CachePolicy? policy, IInFlightRun run)
+    /// <summary>As <see cref="GenerateAndStoreAsync{T, TState}"/>, for a generator that returns the value's deadline; ends the run itself.</summary>
+    private async ValueTask<T?> GenerateExpiringAndStoreAsync<T, TState>(CacheKey cacheKey, RedisKey redisKey, TState state, Func<TState, CancellationToken, Task<GeneratedValue<T>>> generator, CachePolicy? policy, IInFlightEnd<T?> run)
     {
-        var token = run.Token;
-        var (found, cached) = await ReadGetOrAddProbeAsync<T>(cacheKey, redisKey, token).ConfigureAwait(false);
-        if (found)
+        T? ret;
+        try
         {
-            // The probe reads no TTL; a result call that joined this run reads it itself.
-            run.ExpirationUnread = true;
-            return cached;
+            var token = run.Token;
+            var (found, cached) = await ReadGetOrAddProbeAsync<T>(cacheKey, redisKey, token).ConfigureAwait(false);
+            if (found)
+            {
+                // The probe reads no TTL; a result call that joined this run reads it itself.
+                run.ExpirationUnread = true;
+                ret = cached;
+            }
+            else
+            {
+                LogCacheMissed(Logged(cacheKey, redisKey, typeof(T)));
+                var generated = await RunGeneratorAsync(cacheKey, state, generator, (policy ?? DefaultPolicy)?.FactoryTimeout, token).ConfigureAwait(false);
+
+                var duration = generated.Expiration is { } expiration ? Remaining(expiration) : PolicyDuration(policy);
+                if (duration is { } lifetime && (!IsDefault(generated.Value) || _cacheNullValues)
+                    && await SetInternalAsync(redisKey, generated.Value, lifetime, token).ConfigureAwait(false))
+                {
+                    run.Expiration = StoredDeadline(lifetime);
+                }
+
+                ret = generated.Value;
+            }
+        }
+        catch (Exception ex)
+        {
+            run.Fail(ex);
+            throw;
         }
 
-        LogCacheMissed(Logged(cacheKey, redisKey, typeof(T)));
-        var generated = await RunGeneratorAsync(cacheKey, state, generator, (policy ?? DefaultPolicy)?.FactoryTimeout, token).ConfigureAwait(false);
-
-        var duration = generated.Expiration is { } expiration ? Remaining(expiration) : PolicyDuration(policy);
-        if (duration is { } lifetime && (!IsDefault(generated.Value) || _cacheNullValues)
-            && await SetInternalAsync(redisKey, generated.Value, lifetime, token).ConfigureAwait(false))
-        {
-            run.Expiration = StoredDeadline(lifetime);
-        }
-
-        return generated.Value;
+        run.Complete(ret);
+        return ret;
     }
 
     private TimeSpan? Remaining(DateTimeOffset expiration)

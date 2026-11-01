@@ -23,18 +23,26 @@ internal sealed class InFlight<TKey, TResult>
     {
         // A caller cancelled before it arrives starts no work and joins none.
         token.ThrowIfCancellationRequested();
-        var flight = Join(key, state, work, token.CanBeCanceled, out var started);
+        var flight = Join(key, state, work, token.CanBeCanceled, workEnds: false, out var started);
         run = flight;
+        return Wait(flight, started, token);
+    }
 
-        // The caller that started the work waits on the work itself: the shared task would resume it through a thread-pool hop.
-        // A joiner has no work of its own to wait on, and neither has a starter whose work finished before it first yielded.
-        var ownWork = started ? flight.Starter : null;
-        if (ownWork is null)
-        {
-            return WaitAsync(flight, joined: null, token);
-        }
+    /// <summary>As <see cref="RunAsync{TState}(TKey, TState, Func{TState, IInFlightRun, ValueTask{TResult}}, CancellationToken)"/>, for work that ends the run itself (see <see cref="IInFlightEnd{TResult}"/>): the caller that started it then awaits the work's own task, with no task of the run between, and <paramref name="started"/> tells it so.</summary>
+    public ValueTask<TResult> StartOrJoinAsync<TState>(TKey key, TState state, Func<TState, IInFlightEnd<TResult>, ValueTask<TResult>> work, CancellationToken token, out bool started)
+    {
+        token.ThrowIfCancellationRequested();
+        var flight = Join(key, state, work, token.CanBeCanceled, workEnds: true, out started);
+        return Wait(flight, started, token);
+    }
 
-        return token.CanBeCanceled ? WaitStarterCancellableAsync(flight, ownWork, token) : new ValueTask<TResult>(ownWork);
+    /// <summary>As <see cref="StartOrJoinAsync{TState}(TKey, TState, Func{TState, IInFlightEnd{TResult}, ValueTask{TResult}}, CancellationToken, out bool)"/>, also handing back the run, so a caller can read what the work recorded on it once the task completes.</summary>
+    public ValueTask<TResult> StartOrJoinAsync<TState>(TKey key, TState state, Func<TState, IInFlightEnd<TResult>, ValueTask<TResult>> work, CancellationToken token, out bool started, out IInFlightRun run)
+    {
+        token.ThrowIfCancellationRequested();
+        var flight = Join(key, state, work, token.CanBeCanceled, workEnds: true, out started);
+        run = flight;
+        return Wait(flight, started, token);
     }
 
     /// <summary>Joins the run in progress for <paramref name="key"/>; false when none is, starting nothing. The caller that stops waiting for any reason other than its token must <see cref="Joined.Withdraw"/>, or it keeps counting as a waiter.</summary>
@@ -69,6 +77,19 @@ internal sealed class InFlight<TKey, TResult>
 
     /// <summary>When each run in progress ends, for tests.</summary>
     internal Task[] Completions() => [.. _flights.Values.Select(f => f.Completion)];
+
+    private static ValueTask<TResult> Wait(Flight flight, bool started, CancellationToken token)
+    {
+        // The caller that started the work waits on the work itself: the shared task would resume it through a thread-pool hop.
+        // A joiner has no work of its own to wait on, and neither has a starter whose work succeeded before it first yielded.
+        var ownWork = started ? flight.Starter : null;
+        if (ownWork is null)
+        {
+            return WaitAsync(flight, joined: null, token);
+        }
+
+        return token.CanBeCanceled ? WaitStarterCancellableAsync(flight, ownWork, token) : new ValueTask<TResult>(ownWork);
+    }
 
     private static ValueTask<TResult> WaitAsync(Flight flight, Joined? joined, CancellationToken token)
     {
@@ -118,7 +139,8 @@ internal sealed class InFlight<TKey, TResult>
         }
     }
 
-    private Flight Join<TState>(TKey key, TState state, Func<TState, IInFlightRun, ValueTask<TResult>> work, bool starterCanCancel, out bool startedHere)
+    // The work's second parameter is the flight itself, under whichever of its interfaces the caller's delegate names.
+    private Flight Join<TState>(TKey key, TState state, Func<TState, Flight, ValueTask<TResult>> work, bool starterCanCancel, bool workEnds, out bool startedHere)
     {
         startedHere = false;
         while (true)
@@ -139,7 +161,7 @@ internal sealed class InFlight<TKey, TResult>
             var started = new Flight(this, key, cancellable: starterCanCancel);
             if (_flights.TryAdd(key, started))
             {
-                started.Run(state, work);
+                started.Run(state, work, workEnds);
                 startedHere = true;
                 return started;
             }
@@ -168,10 +190,10 @@ internal sealed class InFlight<TKey, TResult>
         }
     }
 
-    internal sealed class Flight(InFlight<TKey, TResult> owner, TKey key, bool reserved = false, bool cancellable = true) : IInFlightRun, IInFlightReservation<TResult>, IDisposable
+    /// <remarks>Locks on itself: the class is internal and sealed, reaches other code only through its interfaces, and nothing else locks a run, so a separate lock object would only cost an allocation per run.</remarks>
+    internal sealed class Flight(InFlight<TKey, TResult> owner, TKey key, bool reserved = false, bool cancellable = true) : IInFlightEnd<TResult>, IInFlightReservation<TResult>, IDisposable
     {
         private readonly CancellationTokenSource? _cancellation = reserved || !cancellable ? null : new();
-        private readonly Lock _gate = new();
         private int _waiting = 1;
         private TaskCompletionSource<TResult>? _source;
         private int _state;
@@ -192,7 +214,7 @@ internal sealed class InFlight<TKey, TResult>
         {
             get
             {
-                lock (_gate)
+                lock (this)
                 {
                     if (_source is null)
                     {
@@ -217,7 +239,7 @@ internal sealed class InFlight<TKey, TResult>
         {
             get
             {
-                lock (_gate)
+                lock (this)
                 {
                     return !reserved && _waiting == 0;
                 }
@@ -226,7 +248,7 @@ internal sealed class InFlight<TKey, TResult>
 
         public CancellationToken Token => _cancellation?.Token ?? default;
 
-        /// <summary>The work as its starter awaits it, ending with the work's own failure; null when the work finished before it first yielded.</summary>
+        /// <summary>The work as its starter awaits it, ending with the work's own failure; null when the work succeeded before it first yielded.</summary>
         public Task<TResult>? Starter { get; private set; }
 
         public DateTimeOffset? Expiration { get; set; }
@@ -256,7 +278,7 @@ internal sealed class InFlight<TKey, TResult>
                 return true;
             }
 
-            lock (_gate)
+            lock (this)
             {
                 if (_waiting == 0)
                 {
@@ -275,7 +297,7 @@ internal sealed class InFlight<TKey, TResult>
                 return;
             }
 
-            lock (_gate)
+            lock (this)
             {
                 if (--_waiting > 0)
                 {
@@ -299,7 +321,7 @@ internal sealed class InFlight<TKey, TResult>
         public bool TryCommit<TArg>(TArg arg, Action<TArg> commit)
         {
             // Under the gate Leave takes, so work every caller has left cannot commit after a fresh run has started.
-            lock (_gate)
+            lock (this)
             {
                 if (_waiting == 0)
                 {
@@ -327,8 +349,13 @@ internal sealed class InFlight<TKey, TResult>
             Dispose();
         }
 
-        /// <summary>Starts the work. One that finishes before it first yields completes here, without the state machine an async method would build.</summary>
-        public void Run<TState>(TState state, Func<TState, IInFlightRun, ValueTask<TResult>> work)
+        void IInFlightEnd<TResult>.Complete(TResult result) => Finish(result, null);
+
+        void IInFlightEnd<TResult>.Fail(Exception failure) => Finish(default!, failure);
+
+        /// <summary>Starts the work. One that succeeds before it first yields completes here, without the state machine an async method would build.</summary>
+        /// <param name="workEnds">The work ends the run itself before its task completes, so that task is the starter's; otherwise the run ends it when it completes.</param>
+        public void Run<TState>(TState state, Func<TState, Flight, ValueTask<TResult>> work, bool workEnds)
         {
             ValueTask<TResult> pending;
             try
@@ -343,11 +370,12 @@ internal sealed class InFlight<TKey, TResult>
 
             if (pending.IsCompletedSuccessfully)
             {
+                // Work that ends the run has ended it already; a second Finish settles nothing.
                 Finish(pending.Result, null);
                 return;
             }
 
-            Starter = FinishAsync(pending);
+            Starter = workEnds ? pending.AsTask() : FinishAsync(pending);
         }
 
         private async Task<TResult> FinishAsync(ValueTask<TResult> pending)
@@ -374,7 +402,7 @@ internal sealed class InFlight<TKey, TResult>
 
         private void Finish(TResult result, Exception? failure)
         {
-            // Out of the table before anyone sees the outcome, so a caller that arrives next starts a fresh run.
+            // Out of the table before anyone sees the outcome, so a caller that arrives next starts a fresh run. Idempotent: Settle keeps the first outcome.
             owner._flights.TryRemove(new KeyValuePair<TKey, Flight>(key, this));
             if (failure is OperationCanceledException && _cancellation is { IsCancellationRequested: true })
             {
@@ -394,7 +422,7 @@ internal sealed class InFlight<TKey, TResult>
 
         private void Settle(Outcome outcome, TResult? value, Exception? failure)
         {
-            lock (_gate)
+            lock (this)
             {
                 if (Current != Outcome.Running)
                 {

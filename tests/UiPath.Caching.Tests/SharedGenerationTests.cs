@@ -196,6 +196,26 @@ public class SharedGenerationTests
     }
 
     [Fact]
+    public async Task A_run_under_the_distributed_lock_leaves_the_table_only_once_its_lease_is_released()
+    {
+        using var cache = InMemoryMultilayer.Cache();
+        var distributed = Substitute.For<IDistributedLock>();
+        var lease = new GatedLease();
+        ValueTaskStubs.Returns(distributed.AcquireAsync(Arg.Any<string>(), Arg.Any<TimeSpan>(), Arg.Any<TimeSpan>(), Arg.Any<CancellationToken>()), new ValueTask<IAsyncDisposable>(lease));
+        typeof(MultilayerCacheBase).GetField("_distributedLock", BindingFlags.Instance | BindingFlags.NonPublic)!.SetValue(cache, distributed);
+        var policy = new CachePolicy { Lock = new LockProfile { DistributedLockEnabled = true } };
+
+        var call = cache.GetOrAddAsync<string>("k", _ => Task.FromResult<string?>("loaded"), policy, Ct).AsTask();
+        await lease.Releasing.Task;
+        var (runs, completed) = (cache.RunsInFlight, call.IsCompleted);
+        lease.Released.SetResult();
+
+        (await call).Should().Be("loaded");
+        (runs, completed).Should().Be((1, false), "the run ends after the lease is released, so the next caller that takes the lock finds the value");
+        cache.RunsInFlight.Should().Be(0);
+    }
+
+    [Fact]
     public async Task A_single_key_caller_that_reserves_after_the_key_was_written_does_not_generate()
     {
         using var cache = InMemoryMultilayer.Cache();
@@ -685,6 +705,20 @@ public class SharedGenerationTests
         {
             Disposed.TrySetResult();
             return ValueTask.CompletedTask;
+        }
+    }
+
+    /// <summary>A lease whose release waits for the test.</summary>
+    private sealed class GatedLease : IAsyncDisposable
+    {
+        public TaskCompletionSource Releasing { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public TaskCompletionSource Released { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public async ValueTask DisposeAsync()
+        {
+            Releasing.TrySetResult();
+            await Released.Task;
         }
     }
 

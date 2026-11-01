@@ -78,26 +78,39 @@ internal sealed partial class RedisCache : IResultCache
         return deadline == DateTimeOffset.MaxValue ? null : deadline;
     }
 
-    private async ValueTask<T?> ReadOrGenerateResultAsync<T>(CacheKey cacheKey, RedisKey redisKey, GeneratorRecorder<T> recorder, TimeSpan? factoryTimeout, TimeSpan duration, IInFlightRun run)
+    /// <summary>The work of the result run, which ends the run itself (see <see cref="IInFlightEnd{TResult}"/>) once the expiration to report is recorded on it.</summary>
+    private async ValueTask<T?> ReadOrGenerateResultAsync<T>(CacheKey cacheKey, RedisKey redisKey, GeneratorRecorder<T> recorder, TimeSpan? factoryTimeout, TimeSpan duration, IInFlightEnd<T?> run)
     {
-        var token = run.Token;
-
-        // One read of value and expiration together, shared by every caller of the key.
-        var entry = await GetCacheEntryInternalAsync<T>(cacheKey, token, nameof(GetOrAddResultAsync)).ConfigureAwait(false);
-        if (entry.Found)
+        T? ret;
+        try
         {
-            run.Expiration = entry.Expiration == DateTimeOffset.MaxValue ? null : entry.Expiration;
-            return entry.Value;
+            var token = run.Token;
+
+            // One read of value and expiration together, shared by every caller of the key.
+            var entry = await GetCacheEntryInternalAsync<T>(cacheKey, token, nameof(GetOrAddResultAsync)).ConfigureAwait(false);
+            if (entry.Found)
+            {
+                run.Expiration = entry.Expiration == DateTimeOffset.MaxValue ? null : entry.Expiration;
+                ret = entry.Value;
+            }
+            else
+            {
+                LogCacheMissed(Logged(cacheKey, redisKey, typeof(T)));
+                ret = await RunGeneratorAsync(cacheKey, recorder.Generator, static (g, ct) => g(ct), factoryTimeout, token).ConfigureAwait(false);
+                // Only a value that was written has an expiration to report.
+                if ((!IsDefault(ret) || _cacheNullValues) && await SetInternalAsync(redisKey, ret, duration, token).ConfigureAwait(false))
+                {
+                    run.Expiration = StoredDeadline(duration);
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            run.Fail(ex);
+            throw;
         }
 
-        LogCacheMissed(Logged(cacheKey, redisKey, typeof(T)));
-        var ret = await RunGeneratorAsync(cacheKey, recorder.Generator, static (g, ct) => g(ct), factoryTimeout, token).ConfigureAwait(false);
-        // Only a value that was written has an expiration to report.
-        if ((!IsDefault(ret) || _cacheNullValues) && await SetInternalAsync(redisKey, ret, duration, token).ConfigureAwait(false))
-        {
-            run.Expiration = StoredDeadline(duration);
-        }
-
+        run.Complete(ret);
         return ret;
     }
 }
