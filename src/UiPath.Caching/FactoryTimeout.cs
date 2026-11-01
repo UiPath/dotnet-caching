@@ -19,17 +19,29 @@ internal static class FactoryTimeout
         string cacheName,
         ICachingTelemetryProvider telemetry,
         CancellationToken token,
+        string source = SourceForeground) =>
+        RunAsync(factory, static (f, ct) => f(ct), factoryTimeout, cacheKey, cacheName, telemetry, token, source);
+
+    /// <summary>As the overload above, with the factory's state passed to it rather than bound into a closure.</summary>
+    public static Task<T> RunAsync<TState, T>(
+        TState state,
+        Func<TState, CancellationToken, Task<T>> factory,
+        TimeSpan? factoryTimeout,
+        CacheKey cacheKey,
+        string cacheName,
+        ICachingTelemetryProvider telemetry,
+        CancellationToken token,
         string source = SourceForeground)
     {
         if (factoryTimeout is not null && factoryTimeout.Value > TimeSpan.Zero)
         {
-            return RunWithTimeoutAsync(factory, factoryTimeout.Value, cacheKey, cacheName, telemetry, source, token);
+            return RunWithTimeoutAsync(state, factory, factoryTimeout.Value, cacheKey, cacheName, telemetry, source, token);
         }
 
         // Nothing to time, so the factory's own task is handed back: an async wrapper would allocate a second one per run. A throw before it yields stays on the task, as the wrapper reported it.
         try
         {
-            return factory(token);
+            return factory(state, token);
         }
         catch (Exception ex)
         {
@@ -37,8 +49,9 @@ internal static class FactoryTimeout
         }
     }
 
-    private static async Task<T> RunWithTimeoutAsync<T>(
-        Func<CancellationToken, Task<T>> factory,
+    private static async Task<T> RunWithTimeoutAsync<TState, T>(
+        TState state,
+        Func<TState, CancellationToken, Task<T>> factory,
         TimeSpan factoryTimeout,
         CacheKey cacheKey,
         string cacheName,
@@ -54,7 +67,7 @@ internal static class FactoryTimeout
         linkedCts.CancelAfter(clampedTimeout);
         try
         {
-            return await factory(linkedCts.Token).ConfigureAwait(false);
+            return await factory(state, linkedCts.Token).ConfigureAwait(false);
         }
         catch (OperationCanceledException) when (linkedCts.IsCancellationRequested && !token.IsCancellationRequested)
         {
