@@ -46,6 +46,7 @@ public static class CachePolicyMerger
             LocalSingleFlightTimeout = primary.LocalSingleFlightTimeout ?? fallback.LocalSingleFlightTimeout,
             DistributedLockTimeout = primary.DistributedLockTimeout ?? fallback.DistributedLockTimeout,
             DistributedLockExpiry = primary.DistributedLockExpiry ?? fallback.DistributedLockExpiry,
+            DistributedLockSkipReread = primary.DistributedLockSkipReread ?? fallback.DistributedLockSkipReread,
         };
     }
 }

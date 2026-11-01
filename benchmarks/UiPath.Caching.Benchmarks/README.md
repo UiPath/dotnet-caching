@@ -124,3 +124,10 @@ dotnet run --project benchmarks/UiPath.Caching.Benchmarks/UiPath.Caching.Benchma
 ```powershell
 dotnet run --project benchmarks/UiPath.Caching.Benchmarks/UiPath.Caching.Benchmarks.csproj --framework net10.0 -c Release -- --filter '*GetOrAddColdMissBenchmark*' --job short --inProcess
 ```
+
+`LockedMissBenchmark` runs the same cold `GetOrAddAsync` on `InMemoryRedis` with `DistributedLockEnabled` off, on, and on with `DistributedLockSkipReread`,
+so the lock's share of a miss, and the Redis read the opt-in skips, show next to a miss without it. It needs Redis on `127.0.0.1:6379`:
+
+```powershell
+dotnet run --project benchmarks/UiPath.Caching.Benchmarks/UiPath.Caching.Benchmarks.csproj --framework net10.0 -c Release -- --filter '*LockedMissBenchmark*'
+```

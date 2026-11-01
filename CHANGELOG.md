@@ -272,6 +272,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
   is copied into its own array and the writer keeps its pooled buffer for the next write, instead of holding a buffer rented from
   `ArrayPool<byte>.Shared` until the write completes. A larger payload still keeps its rented buffer until then.
 
+- **`DistributedLockSkipReread`: a local miss under the distributed lock can read Redis once when the lock is free.** Single-key
+  `GetOrAddAsync` reads L2, takes the lock, and reads L2 again. With the option on (`IMultilayerCacheOptions` or `LockProfile`),
+  when the Redis lock is taken at its first attempt, the caller's miss stands for the second read. It is off by default because
+  a peer that stores and releases within that round trip (longer with `PreferReplica`) is then not seen, and both nodes generate,
+  which the lock is there to prevent. After a wait, a timeout, or with a custom `IDistributedLock`, the read under the lock stays.
+  An `IMultilayerCacheOptions` implementation outside the library that does not declare it keeps it off.
+
 ### Removed
 
 - **`ICacheFactory.PolicyFactory`.** It is on `IPolicyDefaults` now. A factory that returned its own policy factory

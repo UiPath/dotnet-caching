@@ -171,6 +171,72 @@ public class MultilayerCacheGetOrAddLockTests(ITestContextAccessor testContextAc
             Arg.Any<string>(), Arg.Any<TimeSpan>(), Arg.Any<TimeSpan>(), Arg.Any<CancellationToken>());
     }
 
+    [Theory]
+    [InlineData(null, null, false)]
+    [InlineData(false, null, false)]
+    [InlineData(true, null, true)]
+    [InlineData(false, true, true)]
+    [InlineData(true, false, false)]
+    public async Task GetOrAddAsync_skips_the_read_under_a_lock_taken_at_once_only_when_DistributedLockSkipReread_is_on(bool? optionSkip, bool? policySkip, bool skips)
+    {
+        // The peer stores and releases between this caller's miss and its lock: only the read under the lock sees it.
+        string? stored = null;
+        _fixture.Inject<IDistributedLock>(new ContentionReportingDistributedLock(contended: false) { OnAcquire = () => stored = "peer" });
+        _options.DistributedLockEnabled = true;
+        _options.DistributedLockSkipReread = optionSkip;
+        _sut = null;
+
+        var token = testContextAccessor.Current.CancellationToken;
+        var cacheKey = _fixture.Create<string>();
+        _cacheKeyStrategy.GetCacheKey<string>(cacheKey).Returns((CacheKey)cacheKey);
+        _innerCache.GetCacheEntryAsync<string>((CacheKey)cacheKey, Arg.Any<CachePolicy?>(), Arg.Any<CancellationToken>())
+            .Returns(_ => new TestCacheEntry<string?> { Value = stored });
+        var policy = policySkip is null ? null : new CachePolicy { Lock = new LockProfile { DistributedLockSkipReread = policySkip } };
+
+        var generatorCalls = 0;
+        var result = await Sut.GetOrAddAsync(cacheKey, _ => { generatorCalls++; return Task.FromResult<string?>("generated"); }, policy, token);
+
+        var innerReads = _innerCache.ReceivedCalls().Count(c => c.GetMethodInfo().Name == nameof(ICache.GetCacheEntryAsync));
+        if (skips)
+        {
+            innerReads.Should().Be(1, "the caller's miss stands for the read under a lock no peer held");
+            result.Should().Be("generated", "the skip trades the peer's write within the round trip for one read less");
+            generatorCalls.Should().Be(1);
+        }
+        else
+        {
+            innerReads.Should().Be(2, "with the skip off the lock is always followed by a read");
+            result.Should().Be("peer");
+            generatorCalls.Should().Be(0);
+        }
+    }
+
+    [Theory]
+    [InlineData(null)]
+    [InlineData(true)]
+    public async Task GetOrAddAsync_reads_the_inner_tier_again_after_waiting_for_the_distributed_lock_and_returns_the_peer_value(bool? optionSkip)
+    {
+        string? stored = null;
+        _fixture.Inject<IDistributedLock>(new ContentionReportingDistributedLock(contended: true) { OnAcquire = () => stored = "peer" });
+        _options.DistributedLockEnabled = true;
+        _options.DistributedLockSkipReread = optionSkip;
+        _sut = null;
+
+        var token = testContextAccessor.Current.CancellationToken;
+        var cacheKey = _fixture.Create<string>();
+        _cacheKeyStrategy.GetCacheKey<string>(cacheKey).Returns((CacheKey)cacheKey);
+        _innerCache.GetCacheEntryAsync<string>((CacheKey)cacheKey, Arg.Any<CachePolicy?>(), Arg.Any<CancellationToken>())
+            .Returns(_ => new TestCacheEntry<string?> { Value = stored });
+
+        var generatorCalls = 0;
+        var result = await Sut.GetOrAddAsync(cacheKey, _ => { generatorCalls++; return Task.FromResult<string?>("generated"); }, (CachePolicy?)null, token);
+
+        result.Should().Be("peer");
+        generatorCalls.Should().Be(0);
+        _innerCache.ReceivedCalls().Count(c => c.GetMethodInfo().Name == nameof(ICache.GetCacheEntryAsync))
+            .Should().Be(2, "a peer may have stored the value while this caller waited for the lock");
+    }
+
     [Fact]
     public async Task GetOrAddAsync_without_a_distributed_lock_joins_the_generator_in_flight_at_once_and_reads_the_cache_once()
     {

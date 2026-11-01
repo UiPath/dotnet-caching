@@ -20,6 +20,7 @@ internal static class CachePolicyFromMultilayerOptions
                 DistributedLockEnabled = src.DistributedLockEnabled,
                 DistributedLockTimeout = src.DistributedLockTimeout,
                 DistributedLockExpiry = src.DistributedLockExpiry,
+                DistributedLockSkipReread = src.DistributedLockSkipReread,
             },
         };
 }

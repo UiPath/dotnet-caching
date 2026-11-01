@@ -192,6 +192,7 @@ Per-topic overrides: add entries to `Topics[]` under `Broadcast:RedisPubSub`. Ea
 | `DistributedLockEnabled` | `bool?` | `null` | Per-provider | Acquire a distributed (Redis) lock before calling the generator; `null` = not configured. |
 | `DistributedLockTimeout` | `TimeSpan?` | `00:00:00.500` | Per-provider | Max wait to acquire the distributed lock. |
 | `DistributedLockExpiry` | `TimeSpan?` | `00:00:05` | Per-provider | Redis key TTL for the distributed lock (safety expiry to prevent deadlocks). |
+| `DistributedLockSkipReread` | `bool?` | `null` | Per-provider | `null` = `false`. On a local miss that just read Redis and missed, a lock free at the first attempt skips the second Redis read under it: one round trip less per locked miss, but a peer's write landing within that round trip can then be generated twice. |
 
 *Code-only seams:* `EntryFactory`, `CacheKeyStrategy`, `TopicKeyStrategy`, `SizeProvider`, `LockKeyStrategy`.
 
@@ -245,6 +246,7 @@ Per-topic overrides: add entries to `Topics[]` under `Broadcast:RedisPubSub`. Ea
 | `DistributedLockEnabled` | `bool?` | `null` | Per-provider | Inert for this provider; present to satisfy `IMultilayerCacheOptions`. Startup validation still applies. |
 | `DistributedLockTimeout` | `TimeSpan?` | `null` | Per-provider | Inert for this provider; present to satisfy `IMultilayerCacheOptions`. |
 | `DistributedLockExpiry` | `TimeSpan?` | `null` | Per-provider | Inert for this provider; present to satisfy `IMultilayerCacheOptions`. |
+| `DistributedLockSkipReread` | `bool?` | `null` | Per-provider | Inert for this provider; present to satisfy `IMultilayerCacheOptions`. |
 
 *Code-only seams:* `EntryFactory`, `CacheKeyStrategy`, `TopicKeyStrategy`, `SizeProvider`, `LockKeyStrategy`.
 
@@ -464,3 +466,4 @@ Nested under a `CachePolicy` entry. Field-level merged against the default polic
 | `LocalSingleFlightTimeout` | `TimeSpan?` | `null` | Per-policy | `null` = inherit from provider options or default policy. Formerly `LocalLockTimeout`, which still binds; the new key wins when both are set. |
 | `DistributedLockTimeout` | `TimeSpan?` | `null` | Per-policy | `null` = inherit from provider options or default policy. |
 | `DistributedLockExpiry` | `TimeSpan?` | `null` | Per-policy | Redis key TTL for the distributed lock; `null` = inherit from provider options or default policy. |
+| `DistributedLockSkipReread` | `bool?` | `null` | Per-policy | Skip the second Redis read under a lock free at the first attempt (see the provider option); `null` = inherit from provider options or default policy. |

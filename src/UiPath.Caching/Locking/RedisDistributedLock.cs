@@ -4,7 +4,7 @@ using UiPath.Caching.Telemetry;
 
 namespace UiPath.Caching.Redis;
 
-internal sealed class RedisDistributedLock : IDistributedLock
+internal sealed class RedisDistributedLock : IDistributedLock, IReportsLockContention
 {
     private const string EventAcquired = "cache.distributedlock.acquired";
     private const string EventTimeout = "cache.distributedlock.timeout";
@@ -51,7 +51,11 @@ internal sealed class RedisDistributedLock : IDistributedLock
         _maxPollInterval = opts.DistributedLockMaxPollInterval;
     }
 
-    public async ValueTask<IAsyncDisposable> AcquireAsync(string key, TimeSpan expiry, TimeSpan waitTimeout, CancellationToken token)
+    public async ValueTask<IAsyncDisposable> AcquireAsync(string key, TimeSpan expiry, TimeSpan waitTimeout, CancellationToken token) =>
+        (await AcquireReportingContentionAsync(key, expiry, waitTimeout, token).ConfigureAwait(false)).Lease;
+
+    /// <summary>Contended unless the first attempt took the lock: a failed attempt, a timeout, and an unreachable server all are.</summary>
+    public async ValueTask<(IAsyncDisposable Lease, bool Contended)> AcquireReportingContentionAsync(string key, TimeSpan expiry, TimeSpan waitTimeout, CancellationToken token)
     {
         var redisKey = new RedisKey(key);
         var lockToken = BuildLockToken();
@@ -75,19 +79,19 @@ internal sealed class RedisDistributedLock : IDistributedLock
                 var contendedStr = contended.ToString();
                 _telemetry.TryTrackException(ex, [new(PropOperation, OperationAcquire), new(PropKey, key), new(PropContended, contendedStr)]);
                 _telemetry.TryTrackEvent(EventUnavailable, [new(PropKey, key), new(PropContended, contendedStr)]);
-                return NoOpAsyncDisposable.Instance;
+                return (NoOpAsyncDisposable.Instance, true);
             }
 
             if (acquired)
             {
-                return BuildAcquiredLease(redisKey, lockToken, key, contended);
+                return (BuildAcquiredLease(redisKey, lockToken, key, contended), contended);
             }
 
             contended = true;
             var delay = ComputeRetryDelay(hasDeadline, startTimestamp, waitTimeout, pollInterval);
             if (delay <= TimeSpan.Zero)
             {
-                return hasDeadline ? TrackTimeoutNoOp(key) : NoOpAsyncDisposable.Instance;
+                return (hasDeadline ? TrackTimeoutNoOp(key) : NoOpAsyncDisposable.Instance, true);
             }
 
             await Task.Delay(delay, token).ConfigureAwait(false);

@@ -115,6 +115,8 @@ public class InMemoryRedisCacheOptions : IMultilayerCacheOptions, IMemoryCacheOp
 
     public TimeSpan? DistributedLockExpiry { get; set; } = TimeSpan.FromSeconds(5);
 
+    public bool? DistributedLockSkipReread { get; set; }
+
     public IDistributedLockKeyStrategy? LockKeyStrategy { get; set; }
 
     /// <summary>Member-wise copy, so a caller can vary one setting without mutating the DI singleton.</summary>
