@@ -133,6 +133,14 @@ public class CachePolicyMergerTests
     }
 
     [Fact]
+    public void RefreshLocalRetryWindow_matched_wins_over_default_and_inherits_when_null()
+    {
+        var defaults = new CachePolicy { RefreshLocalRetryWindow = TimeSpan.FromSeconds(1) };
+        CachePolicyMerger.Merge(new CachePolicy { RefreshLocalRetryWindow = TimeSpan.Zero }, defaults).RefreshLocalRetryWindow.Should().Be(TimeSpan.Zero);
+        CachePolicyMerger.Merge(new CachePolicy { LocalExpiration = TimeSpan.FromMinutes(1) }, defaults).RefreshLocalRetryWindow.Should().Be(TimeSpan.FromSeconds(1));
+    }
+
+    [Fact]
     public void Merging_two_empty_returns_empty_fields()
     {
         var merged = CachePolicyMerger.Merge(new CachePolicy(), new CachePolicy());

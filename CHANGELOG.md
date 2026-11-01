@@ -26,6 +26,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
   Outcomes are reported as the metrics `cache.peer_refresh.started`, `.kept`, `.discarded`, `.dropped` (tag `reason`, including `idle`) and
   `.read_ms`, per drained batch; a drop with reason `timed_out` or `failed` also raises an event. `InMemoryRedisCacheOptions.Timeout` now rejects
   zero and negative values other than `Timeout.InfiniteTimeSpan` at registration, which leaves the refresh's queue wait and read unbounded.
+- **`RefreshLocalRetryWindow`** (per policy, default 100 ms). For this long after the first peer write a held copy misses, a refresh that could not settle (a peer wrote the key
+  again, a key sharing its stripe changed under the read, its read timed out or waited past `Timeout`) is read again and the copy stays served, instead of being dropped so that the
+  next call reads the distributed tier on the request path. In a multi-node load test with peers writing a hot key many times a second, about 1.7 % of requests found their copy
+  dropped this way and paid a Redis read in the p98-p99.5 band. The copy is served stale for at most the window plus two `Timeout`s, so the default leaves the documented bound of
+  about 4 x `Timeout` unchanged. Zero drops after one re-read, as before. A failed read, a key gone from the distributed tier, a peer's removal, losses and a disconnected tier still drop at once.
 - **`cache.background_write.fill_refused`** metric (tag `reason`: `changed`, `in_flight` or `untracked`), counted each time a local fill from a distributed read is
   refused because the key's stripe changed since the read began, a write of the key or stripe was in flight, or the read began before counting started.
 

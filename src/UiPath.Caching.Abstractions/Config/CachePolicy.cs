@@ -46,6 +46,9 @@ public sealed class CachePolicy
     /// <summary>Keeps the local copy on a peer's write and refreshes it from the inner tier in the background. <c>null</c> inherits (default on).</summary>
     public bool? RefreshLocalOnPeerWrite { get; init; }
 
+    /// <summary>For this long after the first peer write a held copy misses, a refresh that could not settle (a peer wrote again, a key sharing the stripe changed under the read, the read timed out or waited past the cache <c>Timeout</c>) is read again and the copy stays served, instead of being dropped to a read of the inner tier. Trades staleness of at most this plus two cache <c>Timeout</c>s for no inner read on the request path. Zero drops after one re-read, as before. A failed read, a key gone from the inner tier and a peer's removal still drop at once. <c>null</c> inherits (default 100 ms).</summary>
+    public TimeSpan? RefreshLocalRetryWindow { get; init; }
+
     /// <summary>
     /// Upper bound on the random duration added to the L2 (distributed) expiration at write time —
     /// uniform random in <c>[0, JitterMaxDuration)</c> added to the resolved write duration on
