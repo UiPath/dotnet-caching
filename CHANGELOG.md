@@ -333,6 +333,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
   the stripes grew to 8192, about 147 KB per cache with a shared tier and broadcast, from about 61 KB), and a write of the key or its stripe still in
   flight. A subscription gap refuses every fill in flight, even for a cache that keeps its entries over gaps. Each refusal costs that key one
   more read and is counted in `cache.background_write.fill_refused`.
+- **A peer refresh keeps no superseded copy alive.** The refresher recorded each copy it kept against the entry it replaced, in a weak table whose
+  handles the collector scans once per link, so a key peers write often chained its copies old to new: one superseded copy still reachable kept
+  every later one alive, and an ephemeral collection that met the chain spent tens of milliseconds on it. A replaced entry and its copy now carry
+  the refresh's number instead, and neither references the other; a late event on the replaced entry's token still drops the copy, and only it.
+  An entry from a custom `EntryFactory` cannot carry the number, so a peer's write drops it, as before `RefreshLocalOnPeerWrite`.
 
 - **A group this node made on an empty stream no longer reports its first entry as lost on Redis 6.** Without `max-deleted-entry-id`,
   an entry added after a group made at `0-0` looked trimmed, so the node logged "entries were removed before they were read" and cleared its

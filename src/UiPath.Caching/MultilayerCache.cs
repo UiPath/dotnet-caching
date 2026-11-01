@@ -2231,7 +2231,7 @@ internal sealed partial class MultilayerCache : MultilayerCacheBase, ICache, ISp
             MarkRead(item);
         }
 
-        return _localMemorySetter.Set(options, item, typeof(T), maxExpiration, RefreshTarget(RefreshReader<T>.Instance, policy));
+        return _localMemorySetter.Set(options, item, typeof(T), maxExpiration, RefreshTarget(RefreshReader<T>.Instance, policy, item));
     }
 
     [LoggerMessage(Level = LogLevel.Debug, Message = "Cache missed. generating new {CacheKey}")]
@@ -2361,6 +2361,7 @@ internal sealed partial class MultilayerCache : MultilayerCacheBase, ICache, ISp
 
                 var item = o._cacheEntryFactory.Create(entry.Value, options.Expiration);
                 InheritRead(held.CacheEntity, item);
+                LinkRefresh(held.CacheEntity, item);
                 if (!o.MemorySet(options, entry.Value, o.LocalLifetime(policy), item, policy, read: false))
                 {
                     failed = true;

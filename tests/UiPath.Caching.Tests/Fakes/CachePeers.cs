@@ -75,6 +75,9 @@ internal sealed class CachePeers : IDisposable
 
     internal sealed class Node : IDisposable
     {
+        private readonly List<(int Count, TaskCompletionSource Done)> _evictionWaiters = [];
+        private int _evicted;
+
         public Node(CachePeers peers, string name, InMemoryRedisCacheOptions options, RecordingTelemetryProvider? telemetry, TimeProvider clock)
         {
             Name = name;
@@ -135,6 +138,22 @@ internal sealed class CachePeers : IDisposable
 
         private NodeTopic Topic { get; }
 
+        /// <summary>Completes once the local tier has run the eviction callbacks of <paramref name="count"/> entries: it runs them on the pool, after the entry is replaced or removed.</summary>
+        public Task Evicted(int count)
+        {
+            lock (_evictionWaiters)
+            {
+                if (_evicted >= count)
+                {
+                    return Task.CompletedTask;
+                }
+
+                var done = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+                _evictionWaiters.Add((count, done));
+                return done.Task;
+            }
+        }
+
         public async Task Settled()
         {
             var until = DateTime.UtcNow.AddSeconds(10);
@@ -151,6 +170,15 @@ internal sealed class CachePeers : IDisposable
         {
             Cache.Dispose();
             Subject.Dispose();
+        }
+
+        private void OnEvicted()
+        {
+            lock (_evictionWaiters)
+            {
+                _evicted++;
+                _evictionWaiters.RemoveAll(waiter => waiter.Count <= _evicted && waiter.Done.TrySetResult());
+            }
         }
 
         private sealed class KeptMemoryCacheFactory(Node node) : IMemoryCacheFactory
@@ -226,6 +254,16 @@ internal sealed class CachePeers : IDisposable
             public void Dispose()
             {
                 node.BeforeCommit?.Invoke((string)inner.Key);
+                foreach (var registration in inner.PostEvictionCallbacks)
+                {
+                    var callback = registration.EvictionCallback;
+                    registration.EvictionCallback = (key, value, reason, state) =>
+                    {
+                        callback?.Invoke(key, value, reason, state);
+                        node.OnEvicted();
+                    };
+                }
+
                 inner.Dispose();
             }
         }

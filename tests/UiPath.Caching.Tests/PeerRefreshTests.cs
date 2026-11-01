@@ -1,3 +1,5 @@
+using System.Runtime.CompilerServices;
+using Microsoft.Extensions.Caching.Memory;
 using UiPath.Caching.Tests.Fakes;
 using UiPath.Caching.Tests.Telemetry;
 
@@ -1082,6 +1084,86 @@ public class PeerRefreshTests
         b.Subscribers[^1].Should().NotBeSameAs(oldToken);
     }
 
+    [Fact]
+    public async Task A_late_event_on_a_replaced_token_drops_only_the_copy_its_refresh_installed()
+    {
+        using var peers = new CachePeers();
+        var telemetry = new RecordingTelemetryProvider();
+        var (a, b) = await HoldingOld(peers, bTelemetry: telemetry);
+        var firstToken = b.Subscribers[^1];
+        await Refreshed(a, b, telemetry, "new");
+        var secondToken = b.Subscribers[^1];
+        await Refreshed(a, b, telemetry, "newer");
+        peers.AutoDeliver = false;
+        await a.Cache.SetAsync(Key, "newest", null, Ct);
+        var late = a.Published[^1];
+
+        // The copy in place replaced the second entry: the first entry's token finds no copy of its own refresh, and the chain is not followed.
+        peers.Deliver(firstToken, late);
+        b.Local.TryGetValue(Key, out _).Should().BeTrue();
+        (await b.Cache.GetAsync<string>(Key, null, Ct)).Should().Be("newer");
+
+        peers.Deliver(secondToken, late);
+        b.Local.TryGetValue(Key, out _).Should().BeFalse();
+    }
+
+    [Fact]
+    public async Task A_late_event_on_a_replaced_token_spares_an_entry_this_node_wrote_since()
+    {
+        using var peers = new CachePeers();
+        var telemetry = new RecordingTelemetryProvider();
+        var (a, b) = await HoldingOld(peers, bTelemetry: telemetry);
+        var oldToken = b.Subscribers[^1];
+        await Refreshed(a, b, telemetry, "new");
+        await b.Cache.SetAsync(Key, "mine", null, Ct);
+        peers.AutoDeliver = false;
+        await a.Cache.SetAsync(Key, "newest", null, Ct);
+
+        peers.Deliver(oldToken, a.Published[^1]);
+
+        (await b.Cache.GetAsync<string>(Key, null, Ct)).Should().Be("mine");
+    }
+
+    [Fact]
+    public async Task A_long_run_of_refreshes_of_one_key_keeps_no_superseded_copy_alive()
+    {
+        using var peers = new CachePeers();
+        var telemetry = new RecordingTelemetryProvider();
+        var (a, b) = await HoldingOld(peers, bTelemetry: telemetry);
+        // One superseded copy stays reachable, as a reader still holding it or an ephemeral collection does: it must not keep the later ones.
+        var first = LocalEntry(b.Local);
+        var copies = new List<WeakReference>();
+        for (var i = 0; i < 40; i++)
+        {
+            await Refreshed(a, b, telemetry, $"v{i}");
+            copies.Add(WeakLocalEntry(b.Local));
+        }
+
+        // The local tier releases a replaced entry's token from an eviction callback on the pool, and the harness records every token of the node: a token roots its entry.
+        await b.Evicted(40).WaitAsync(TimeSpan.FromSeconds(10), Ct);
+        b.Subscribers.Clear();
+        b.Unsubscribed.Clear();
+        var superseded = copies[..^1];
+        await Collected(superseded);
+
+        superseded.Count(copy => copy.IsAlive).Should().Be(0);
+        GC.KeepAlive(first);
+    }
+
+    [Fact]
+    public async Task An_entry_from_a_custom_entry_factory_drops_on_a_peer_write()
+    {
+        using var peers = new CachePeers();
+        var (a, b) = await HoldingOld(peers, new InMemoryRedisCacheOptions { EntryFactory = new TestCacheEntryFactory() });
+        var before = b.Inner.SingleReads;
+
+        await a.Cache.SetAsync(Key, "new", null, Ct);
+
+        b.Local.TryGetValue(Key, out _).Should().BeFalse();
+        await b.Settled();
+        b.Inner.SingleReads.Should().Be(before);
+    }
+
     /// <summary>Node <c>a</c> wrote <c>old</c>, and node <c>b</c> read it into its local tier.</summary>
     private static Task<(CachePeers.Node A, CachePeers.Node B)> HoldingOld(CachePeers peers, InMemoryRedisCacheOptions? bOptions = null, RecordingTelemetryProvider? bTelemetry = null, CachePolicy? policy = null, bool read = true, TimeProvider? clock = null) =>
         HoldingOld(peers, [Key], bOptions, bTelemetry, policy, read, clock);
@@ -1132,6 +1214,51 @@ public class PeerRefreshTests
         }
 
         condition().Should().BeTrue();
+    }
+
+    /// <summary>Node <c>a</c> writes <paramref name="value"/>, and node <c>b</c>'s refresh of it lands: returns as the refresher reports the kept key, at the end of its drain.</summary>
+    private static async Task Refreshed(CachePeers.Node a, CachePeers.Node b, RecordingTelemetryProvider telemetry, string value)
+    {
+        var kept = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        telemetry.MetricRecorded = metric =>
+        {
+            if (metric.Name == Kept)
+            {
+                kept.TrySetResult();
+            }
+        };
+        await a.Cache.SetAsync(Key, value, null, Ct);
+        await kept.Task.WaitAsync(TimeSpan.FromSeconds(10), Ct);
+        telemetry.MetricRecorded = null;
+        (await b.Cache.GetAsync<string>(Key, null, Ct)).Should().Be(value);
+    }
+
+    /// <summary>The local tier's entry object for <see cref="Key"/>, out of this method so the caller's state machine holds no reference to it.</summary>
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    private static object LocalEntry(IMemoryCache local)
+    {
+        local.TryGetValue(Key, out var entry).Should().BeTrue();
+        return entry!;
+    }
+
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    private static WeakReference WeakLocalEntry(IMemoryCache local) => new(LocalEntry(local));
+
+    /// <summary>Collects until none of <paramref name="references"/> is alive, or gives up after a bounded number of collections: a thread that just let go of an entry may still hold it on its stack.</summary>
+    private static async Task Collected(List<WeakReference> references)
+    {
+        for (var attempt = 0; attempt < 50; attempt++)
+        {
+            GC.Collect();
+            GC.WaitForPendingFinalizers();
+            GC.Collect();
+            if (!references.Exists(reference => reference.IsAlive))
+            {
+                return;
+            }
+
+            await Task.Yield();
+        }
     }
 
     /// <summary>Runs <paramref name="onEvent"/> as the dispatch reaches it, once.</summary>

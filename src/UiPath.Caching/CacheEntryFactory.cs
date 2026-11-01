@@ -5,21 +5,23 @@ public sealed class CacheEntryFactory : ICacheEntryFactory
     public ICacheEntry<T> Create<T>(T value, DateTimeOffset expiration, IDictionary<string, string?>? properties = null) =>
         new CacheEntry<T>(value, expiration, properties);
 
-    private struct ReadMark : IEquatable<ReadMark>
+    private struct Marks : IEquatable<Marks>
     {
-        public int Value;
+        public int Read;
+        public long ReplacedBy;
+        public long Replaces;
 
-        public readonly bool Equals(ReadMark other) => true;
+        public readonly bool Equals(Marks other) => true;
 
-        public override readonly bool Equals(object? obj) => obj is ReadMark;
+        public override readonly bool Equals(object? obj) => obj is Marks;
 
         public override readonly int GetHashCode() => 0;
     }
 
-    private sealed record CacheEntry<T> : ICacheEntry<T>, IReadTracked
+    private sealed record CacheEntry<T> : ICacheEntry<T>, IReadTracked, IRefreshLinked
     {
         // Not part of the entry's value: every copy of an entry equals the others.
-        private ReadMark _read;
+        private Marks _marks;
 
         public CacheEntry(T? value, DateTimeOffset? expiration = null, IDictionary<string, string?>? metadata = null)
         {
@@ -36,13 +38,25 @@ public sealed class CacheEntryFactory : ICacheEntryFactory
 
         object? ICacheEntry.Value => Value;
 
-        int IReadTracked.LastRead => Volatile.Read(ref _read.Value);
+        int IReadTracked.LastRead => Volatile.Read(ref _marks.Read);
+
+        long IRefreshLinked.ReplacedBy
+        {
+            get => Volatile.Read(ref _marks.ReplacedBy);
+            set => Volatile.Write(ref _marks.ReplacedBy, value);
+        }
+
+        long IRefreshLinked.Replaces
+        {
+            get => Volatile.Read(ref _marks.Replaces);
+            set => Volatile.Write(ref _marks.Replaces, value);
+        }
 
         void IReadTracked.MarkRead(int nowSeconds)
         {
-            if (Volatile.Read(ref _read.Value) != nowSeconds)
+            if (Volatile.Read(ref _marks.Read) != nowSeconds)
             {
-                Volatile.Write(ref _read.Value, nowSeconds);
+                Volatile.Write(ref _marks.Read, nowSeconds);
             }
         }
 

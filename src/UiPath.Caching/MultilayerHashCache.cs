@@ -993,7 +993,7 @@ internal sealed partial class MultilayerHashCache : MultilayerCacheBase, IHashCa
                 HashVersions.Stamp<T>(item, options.Version, maxExpiration is { } max ? _clock.ToDateTimeOffset(max) : null, options.Own);
             }
 
-            return _localMemorySetter.Set(options, item, typeof(T), maxExpiration, RefreshTarget(RefreshReader<T>.Instance, policy));
+            return _localMemorySetter.Set(options, item, typeof(T), maxExpiration, RefreshTarget(RefreshReader<T>.Instance, policy, item));
         }
     }
 
@@ -1237,6 +1237,7 @@ internal sealed partial class MultilayerHashCache : MultilayerCacheBase, IHashCa
 
                 var item = o.CreateEntry(entry.Value ?? Empty<T>(), options);
                 InheritRead(held.CacheEntity, item);
+                LinkRefresh(held.CacheEntity, item);
                 if (!o.MemorySet(options, item, o.LocalLifetime(policy), policy, read: false))
                 {
                     failed = true;

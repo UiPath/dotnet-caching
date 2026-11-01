@@ -223,6 +223,15 @@ public abstract partial class MultilayerCacheBase : IDisposable
         }
     }
 
+    /// <summary>Gives <paramref name="to"/>, the copy a refresh keeps in place of <paramref name="from"/>, that refresh's number.</summary>
+    private protected static void LinkRefresh(object? from, object? to)
+    {
+        if (from is IRefreshLinked { ReplacedBy: var refresh } && to is IRefreshLinked copy)
+        {
+            copy.Replaces = refresh;
+        }
+    }
+
     /// <summary>A timeout a cancellation source takes: <c>CancelAfter</c> throws beyond <see cref="int.MaxValue"/> milliseconds, so a misconfigured <c>Lock.LocalSingleFlightTimeout</c> degrades to that.</summary>
     private protected static TimeSpan BoundedTimeout(TimeSpan timeout) =>
         timeout.TotalMilliseconds > int.MaxValue ? TimeSpan.FromMilliseconds(int.MaxValue) : timeout;
