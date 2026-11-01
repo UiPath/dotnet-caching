@@ -168,15 +168,29 @@ internal sealed partial class MultilayerCache
     private async ValueTask<CacheResult<T>> GetOrAddResultCoreAsync<T>(CacheKey cacheKey, Func<CancellationToken, Task<T?>> generator, DateTimeOffset? expiration, TimeSpan effectiveDuration, TimeSpan? rehydrateJitter, CachePolicy policy, long seen, bool localMissed, CancellationToken token)
     {
         var options = _entryBuilder.BuildEntryOptions<T>(cacheKey, expiration ?? _clock.ToDateTimeOffset(ApplyJitter(effectiveDuration, rehydrateJitter)), token);
-        var entry = localMissed ? await Layered<T>().FetchInnerAsync(options, policy).ConfigureAwait(false) : await GetCacheEntryInnerAsync<T>(options, policy).ConfigureAwait(false);
-        if (entry.Found)
+        // A local miss with no inner tier has nothing to read: the run generates at once and keeps the value locally.
+        var localOnly = localMissed && !_sharedInner;
+        if (!localOnly)
         {
-            Layered<T>().TryRehydrate(cacheKey, entry.Expiration, entry.Value, generator, policy, effectiveDuration, rehydrateJitter);
-            return ResultOf(entry, generated: false);
+            var entry = localMissed ? await Layered<T>().FetchInnerAsync(options, policy).ConfigureAwait(false) : await GetCacheEntryInnerAsync<T>(options, policy).ConfigureAwait(false);
+            if (entry.Found)
+            {
+                Layered<T>().TryRehydrate(cacheKey, entry.Expiration, entry.Value, generator, policy, effectiveDuration, rehydrateJitter);
+                return ResultOf(entry, generated: false);
+            }
         }
 
         var recorder = GeneratorRecorder<T>.For(generator);
-        var generated = await GetOrGenerateEntryAsync<T, Func<CancellationToken, Task<T?>>>(options, recorder.Generator, policy, static (cache, o, g, p, scope) => cache.RunGeneratorAndStoreEntryAsync(o, g, p, scope), seen, localMissed, token).ConfigureAwait(false);
+        var generated = await GetOrGenerateEntryAsync<T, Func<CancellationToken, Task<T?>>>(
+            options,
+            recorder.Generator,
+            policy,
+            localOnly
+                ? static (cache, o, g, p, scope) => cache.RunGeneratorAndStoreEntryAsync(o, g, static (f, ct) => f(ct), p, scope, localOnly: true)
+                : static (cache, o, g, p, scope) => cache.RunGeneratorAndStoreEntryAsync(o, g, p, scope),
+            seen,
+            localMissed,
+            token).ConfigureAwait(false);
         return ResultOf(generated, recorder.Ran);
     }
 }
