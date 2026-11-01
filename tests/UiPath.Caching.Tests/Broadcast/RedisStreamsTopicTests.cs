@@ -18,6 +18,7 @@ public class RedisStreamsTopicTests(ITestContextAccessor testContextAccessor) : 
     private IObserver<ICacheEvent> _observer = default!;
     private IConnectionState _connectionState = default!;
     private IDatabase _database = default!;
+    private IRedisConnector _redis = default!;
     private IResiliencePipelineProvider _resiliencePipelineProvider = default!;
     private bool _isConnected = true;
 
@@ -179,7 +180,110 @@ public class RedisStreamsTopicTests(ITestContextAccessor testContextAccessor) : 
         await _database.Received(1).PublishAsync(
             Arg.Any<RedisChannel>(),
             (RedisValue)(_cacheOptions.SourceUri ?? CacheOptions.MachineUri).ToString().ToLowerInvariant(),
-            CommandFlags.None);
+            CommandFlags.DemandMaster);
+    }
+
+    [Fact]
+    public async Task On_a_single_primary_the_doorbell_goes_out_behind_the_xadd_before_its_reply()
+    {
+        ArrangeDoorbell();
+        Primaries(ServerType.Standalone);
+        var added = ArrangeGatedAdd();
+
+        var publishing = Sut.PublishAsync(_fixture.Create<ICacheEvent>(), testContextAccessor.Current.CancellationToken);
+
+        await _database.Received(1).PublishAsync(Arg.Any<RedisChannel>(), Arg.Any<RedisValue>(), CommandFlags.DemandMaster);
+        publishing.IsCompleted.Should().BeFalse("the XADD has not been answered yet");
+        added.SetResult("1-0");
+        (await publishing).Should().BeTrue();
+        await _database.Received(1).PublishAsync(Arg.Any<RedisChannel>(), Arg.Any<RedisValue>(), Arg.Any<CommandFlags>());
+    }
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task On_a_cluster_or_before_the_topology_is_known_the_doorbell_waits_for_the_xadd_reply(bool cluster)
+    {
+        ArrangeDoorbell();
+        if (cluster)
+        {
+            Primaries(ServerType.Cluster, ServerType.Cluster);
+        }
+
+        var added = ArrangeGatedAdd();
+
+        var publishing = Sut.PublishAsync(_fixture.Create<ICacheEvent>(), testContextAccessor.Current.CancellationToken);
+
+        await _database.DidNotReceiveWithAnyArgs().PublishAsync(default, default, default);
+        added.SetResult("1-0");
+        (await publishing).Should().BeTrue();
+        await _database.Received(1).PublishAsync(Arg.Any<RedisChannel>(), Arg.Any<RedisValue>(), CommandFlags.DemandMaster);
+    }
+
+    [Fact]
+    public async Task The_topology_is_read_once_it_is_known_and_again_after_a_reconnect()
+    {
+        ArrangeDoorbell();
+        var token = testContextAccessor.Current.CancellationToken;
+        var added = ArrangeGatedAdd();
+        var publishing = Sut.PublishAsync(_fixture.Create<ICacheEvent>(), token).AsTask();
+        await _database.DidNotReceiveWithAnyArgs().PublishAsync(default, default, default);
+        added.SetResult("1-0");
+        (await publishing).Should().BeTrue();
+
+        // Known now: the next doorbell goes out behind the XADD, and the one after that too, without asking again.
+        Primaries(ServerType.Standalone);
+        for (var i = 2; i <= 3; i++)
+        {
+            added = ArrangeGatedAdd();
+            publishing = Sut.PublishAsync(_fixture.Create<ICacheEvent>(), token).AsTask();
+            await _database.Received(i).PublishAsync(Arg.Any<RedisChannel>(), Arg.Any<RedisValue>(), Arg.Any<CommandFlags>());
+            added.SetResult("1-0");
+            (await publishing).Should().BeTrue();
+        }
+
+        _redis.Received(2).GetPrimaries();
+
+        // A reconnect may be to a cluster: asked again, and the doorbell waits for the reply.
+        Primaries(ServerType.Cluster);
+        _redis.OnReconnected += Raise.Event<EventHandler>(_redis, EventArgs.Empty);
+        added = ArrangeGatedAdd();
+        publishing = Sut.PublishAsync(_fixture.Create<ICacheEvent>(), token).AsTask();
+        await _database.Received(3).PublishAsync(Arg.Any<RedisChannel>(), Arg.Any<RedisValue>(), Arg.Any<CommandFlags>());
+        added.SetResult("1-0");
+        (await publishing).Should().BeTrue();
+        await _database.Received(4).PublishAsync(Arg.Any<RedisChannel>(), Arg.Any<RedisValue>(), Arg.Any<CommandFlags>());
+    }
+
+    [Fact]
+    public async Task With_no_minimum_interval_set_the_folded_ring_goes_out_as_soon_as_the_doorbell_is_answered()
+    {
+        ArrangeDoorbell();
+        Sut.DoorbellSpacing.Should().Be(TimeSpan.Zero, "the default spaces doorbells by the round trip alone");
+        var first = new TaskCompletionSource<long>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var secondSent = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var calls = 0;
+        _database.PublishAsync(Arg.Any<RedisChannel>(), Arg.Any<RedisValue>(), Arg.Any<CommandFlags>()).Returns(_ =>
+        {
+            if (Interlocked.Increment(ref calls) == 1)
+            {
+                return first.Task;
+            }
+
+            secondSent.TrySetResult();
+            return Task.FromResult(1L);
+        });
+        var token = testContextAccessor.Current.CancellationToken;
+
+        for (var i = 0; i < 3; i++)
+        {
+            (await Sut.PublishAsync(_fixture.Create<ICacheEvent>(), token)).Should().BeTrue();
+        }
+
+        Volatile.Read(ref calls).Should().Be(1, "the rings during a doorbell fold into one more");
+        first.SetResult(1);
+        await secondSent.Task.WaitAsync(TimeSpan.FromSeconds(10), token);
+        Volatile.Read(ref calls).Should().Be(2, "the folded ring is one doorbell, sent once the first is answered");
     }
 
     [Fact]
@@ -680,6 +784,10 @@ public class RedisStreamsTopicTests(ITestContextAccessor testContextAccessor) : 
         _database.Configure().StreamInfo(Arg.Any<RedisKey>()).ReturnsForAnyArgs(default(StreamInfo));
         _database.Configure().StreamInfoAsync(Arg.Any<RedisKey>()).ReturnsForAnyArgs(Task.FromResult(default(StreamInfo)));
         _database.Configure().StreamGroupInfoAsync(Arg.Any<RedisKey>()).ReturnsForAnyArgs(Task.FromResult(Array.Empty<StreamGroupInfo>()));
+        // No primary known: the doorbell waits for the XADD reply, as before the topology is read; the tests of the other path set one.
+        _redis = _fixture.Freeze<IRedisConnector>();
+        _redis.Database.Returns(_database);
+        _redis.GetPrimaries().Returns([]);
         _subject = _fixture.Freeze<IEventSubject<ICacheEvent>>();
         _observer = _fixture.Freeze<IObserver<ICacheEvent>>();
         _connectionState = _fixture.Freeze<IConnectionState>();
@@ -724,9 +832,41 @@ public class RedisStreamsTopicTests(ITestContextAccessor testContextAccessor) : 
         }
     }
 
+    // The servers are made before GetPrimaries is called: configuring them in its Returns argument would steal the last call.
+    private void Primaries(params ServerType[] types)
+    {
+        var servers = Array.ConvertAll(types, static type =>
+        {
+            var server = Substitute.For<IServer>();
+            server.ServerType.Returns(type);
+            return server;
+        });
+        _redis.GetPrimaries().Returns(servers);
+    }
+
+    /// <summary>The next XADD answers only when the returned source is completed.</summary>
+    private TaskCompletionSource<RedisValue> ArrangeGatedAdd()
+    {
+        var added = new TaskCompletionSource<RedisValue>(TaskCreationOptions.RunContinuationsAsynchronously);
+        _database.StreamAddAsync(
+                key: Arg.Any<RedisKey>(),
+                streamField: Arg.Any<RedisValue>(),
+                streamValue: Arg.Any<RedisValue>(),
+                messageId: Arg.Any<RedisValue?>(),
+                maxLength: Arg.Any<long?>(),
+                useApproximateMaxLength: Arg.Any<bool>(),
+                limit: Arg.Any<long?>(),
+                trimMode: Arg.Any<StreamTrimMode>(),
+                flags: Arg.Any<CommandFlags>())
+            .Returns(added.Task);
+        return added;
+    }
+
     private void ArrangeDoorbell()
     {
         _redisStreamsTopicOptions.NotifyEnabled = true;
+        // The fixture fills the options at random; the default spacing is the one under test unless a test sets its own.
+        _redisStreamsTopicOptions.NotifyMinInterval = null;
         _redisStreamsTopicOptions.NotifySubscriberTimeout = TimeSpan.FromSeconds(60);
         _redisStreamsTopicOptions.NotifySubscriberDueTime = TimeSpan.FromSeconds(60);
         _sut = null;

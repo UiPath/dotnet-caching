@@ -13,6 +13,11 @@ public class Program
             await StreamNotifyDoorbellHarness.RunAsync(durationSec, writeHz);
             return;
         }
+        if (args.Length > 0 && args[0] == "doorbell-load")
+        {
+            await StreamNotifyDoorbellHarness.RunLoadAsync(IntArg(args, 1, 20), IntArg(args, 2, 1000), IntArg(args, 3, 64), args.Length > 4 ? args[4] : "streams:25,streams:5,streams:2,streams:0,pubsub");
+            return;
+        }
         if (args.Length > 0 && args[0] == "hashmiss")
         {
             await HashMissHarness.RunAsync(args.Length > 1 ? args[1] : "RedisStreams", IntArg(args, 2, 10));
