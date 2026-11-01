@@ -68,6 +68,32 @@ public sealed class RedisStreamNotifyIntegrationTests(RedisContainerFixture fixt
     }
 
     [Fact]
+    public async Task On_a_single_primary_the_doorbell_is_sent_behind_the_xadd_and_the_woken_node_finds_the_entry()
+    {
+        Assert.SkipUnless(fixture.Enabled, "Set RUN_REDIS_INTEGRATION_TESTS=1 (Docker required) to run.");
+        Assert.SkipWhen(_connector!.GetPrimaries().Any(p => p.ServerType != ServerType.Standalone), "on a cluster or behind a proxy the doorbell waits for the XADD reply");
+        var (a, _) = Topic("urn:a", FarPoll);
+        var (b, received) = Topic("urn:b", FarPoll);
+        await SettledAsync();
+        (await EventuallyAsync(() => Task.FromResult(a.NotifyLive && b.NotifyLive))).Should().BeTrue("both doorbell subscriptions go live");
+        (await EventuallyAsync(QuietAsync)).Should().BeTrue("the reads woken by going live end");
+
+        (await a.PublishAsync(Event("urn:a", "1"), TestContext.Current.CancellationToken)).Should().BeTrue();
+
+        (await Task.WhenAny(received.Next.Task, Task.Delay(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken))).Should().BeSameAs(received.Next.Task, "the poll is far away, so only the doorbell delivers in time");
+        (await received.Next.Task).Id.Should().Be("1", "the woken node's read finds the entry the doorbell announced");
+        var commands = new List<IProfiledCommand>();
+        (await EventuallyAsync(() =>
+        {
+            commands.AddRange(_profile.FinishProfiling());
+            return Task.FromResult(commands.Exists(c => c.Command == "XADD") && commands.Exists(c => c.Command == "PUBLISH"));
+        })).Should().BeTrue("both the add and the doorbell complete");
+        var add = commands.Single(c => c.Command == "XADD");
+        var doorbell = commands.Single(c => c.Command == "PUBLISH");
+        doorbell.CommandCreated.Should().BeBefore(add.CommandCreated + add.ElapsedTime, "the doorbell is enqueued behind the XADD on the same connection, not after its reply");
+    }
+
+    [Fact]
     public async Task A_burst_of_this_nodes_own_entries_is_read_before_the_trim_reaches_them()
     {
         Assert.SkipUnless(fixture.Enabled, "Set RUN_REDIS_INTEGRATION_TESTS=1 (Docker required) to run.");

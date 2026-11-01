@@ -132,6 +132,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 
 ### Changed
 
+- **Peers see a write sooner on the Redis Streams transport.** The doorbell that wakes the other nodes now goes out as soon as the previous one
+  is answered (`NotifyMinInterval` defaults to zero, was 25 ms), so a burst of writes no longer holds each doorbell up to 25 ms, and with a single
+  primary it is sent behind the `XADD` on the same connection rather than after its reply, one round trip sooner. One doorbell is in flight per
+  topic and node, so there are never more doorbells than writes, and a consumer reads at most once per round trip whatever the number of rings;
+  refresh reads follow the smaller batches. Set `NotifyMinInterval` to space doorbells apart again.
 - **Memory-only read miss.** A read miss on a memory-only cache returns without building entry options or a second local lookup.
 - **Memory-only GetOrAdd miss.** A single-key `GetOrAdd*` miss on a memory-only cache generates without an inner read and keeps the value locally without a background-write turn; the `GetOrAdd` and `GetOrAddWithExpiration` state overloads also bind no closure. Concurrent callers still share one run.
 - **Breaking at C# 12 and older: a constant interpolated key is ambiguous.** With C# 12 or older (the default of net8.0), `$"fixed"` and `$"{Const}:x"` report CS0121 between the `CacheKey` and the interpolated-key members. Use a plain string (`"fixed"`, `Const + ":x"`), or C# 13 (.NET 9 SDK, or `<LangVersion>13</LangVersion>`), where they bind to the interpolated member. A non-constant `$"{s}:{id}"`, a string and a variable bind the same at every language version. A bare `default` behaves as on 3.0: it binds to the `CacheKey` member at C# 13, and at C# 12 it is ambiguous with the batch overload on `ICache` and `ICache<T>`, as before.

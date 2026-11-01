@@ -1,4 +1,5 @@
 using System.Collections.Concurrent;
+using System.Diagnostics;
 using System.Globalization;
 using Microsoft.Extensions.DependencyInjection;
 using StackExchange.Redis;
@@ -29,10 +30,16 @@ namespace UiPath.Caching.Benchmarks;
 // `writer` and `reader` mode behind a CLI flag.
 //
 // Run with:  dotnet run -c Release --framework net8.0 -- doorbell [durationSec] [writeHz]
+//
+// The load mode writes `keys` keys round-robin at `writeHz`, so every doorbell window holds several writes and no write is
+// overwritten before the reader saw it: each write is one sample. Cells are "streams:<spacing ms>" or "pubsub".
+// Run with:  dotnet run -c Release --framework net8.0 -- doorbell-load [durationSec] [writeHz] [keys] [cells]
 internal static class StreamNotifyDoorbellHarness
 {
 
     private const string TimestampPrefix = "ts:";
+    private static readonly string[] CountedCommands = ["psetex", "set", "xadd", "publish", "xreadgroup", "evalsha", "eval", "xack", "xinfo", "mget", "get", "pttl"];
+
     public static async Task RunAsync(int durationSec = 20, int writeHz = 5)
     {
         var cells = new (bool NotifyEnabled, string PollInterval)[]
@@ -64,6 +71,31 @@ internal static class StreamNotifyDoorbellHarness
             var p99 = sortedMs[(int)(sortedMs.Length * 0.99)];
             var max = sortedMs[^1];
             Console.WriteLine($"{notify,14} | {poll,13} | {sortedMs.Length,8} | {mean,10:F2} | {p50,10:F2} | {p95,10:F2} | {p99,10:F2} | {max,10:F2}");
+        }
+    }
+
+    public static async Task RunLoadAsync(int durationSec, int writeHz, int keys, string cells)
+    {
+        Console.WriteLine($"=== Write-to-peer-visible latency under load: {keys} keys round-robin at {writeHz} Hz for {durationSec}s ===");
+#pragma warning disable CA1303 // the header row is built from constants only; console output of a harness is not localized
+        Console.WriteLine($"{"Cell",12} | {"Written",8} | {"Seen",8} | {"Mean",8} | {"P50",8} | {"P95",8} | {"P99",8} | {"Max",8} | {"Writer ops",10} | {"Reader ops",10} | commands (server delta)");
+#pragma warning restore CA1303
+        Console.WriteLine(new string('-', 150));
+        foreach (var cell in cells.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+        {
+            var (topic, spacing) = cell.StartsWith("streams:", StringComparison.Ordinal)
+                ? ("RedisStreams", (TimeSpan?)TimeSpan.FromMilliseconds(double.Parse(cell["streams:".Length..], CultureInfo.InvariantCulture)))
+                : (cell == "pubsub" ? "RedisPubSub" : "RedisStreams", null);
+            var result = await MeasureLoadCellAsync(topic, spacing, TimeSpan.FromSeconds(durationSec), writeHz, keys);
+            var sorted = result.SamplesMs.OrderBy(x => x).ToArray();
+            if (sorted.Length == 0)
+            {
+                Console.WriteLine($"{cell,12} | {result.Written,8} | {0,8} | no samples");
+                continue;
+            }
+
+            var commands = string.Join(" ", result.Commands.Where(kv => kv.Value > 0).Select(kv => $"{kv.Key}={kv.Value}"));
+            Console.WriteLine($"{cell,12} | {result.Written,8} | {sorted.Length,8} | {sorted.Average(),8:F2} | {sorted[sorted.Length / 2],8:F2} | {sorted[(int)(sorted.Length * 0.95)],8:F2} | {sorted[(int)(sorted.Length * 0.99)],8:F2} | {sorted[^1],8:F2} | {result.WriterOps,10} | {result.ReaderOps,10} | {commands}");
         }
     }
 
@@ -172,4 +204,154 @@ internal static class StreamNotifyDoorbellHarness
             // Hosts dispose via 'using'.
         }
     }
+
+    private static async Task<LoadResult> MeasureLoadCellAsync(string topic, TimeSpan? spacing, TimeSpan duration, int writeHz, int keys)
+    {
+        Console.Error.WriteLine($"[cell] start topic={topic} spacing={spacing?.TotalMilliseconds.ToString(CultureInfo.InvariantCulture) ?? "-"} ms");
+        var overrides = new Dictionary<string, string?>
+        {
+            { "Caching:Broadcast:RedisStreams:MaintainerEnabled", "false" },
+            { "Logging:LogLevel:Default", "Warning" },
+            { "Logging:LogLevel:StackExchange.Redis", "Error" },
+            { "Logging:LogLevel:Microsoft.Hosting.Lifetime", "Warning" },
+        };
+        if (spacing is { } s)
+        {
+            overrides["Caching:Broadcast:RedisStreams:NotifyMinInterval"] = s.ToString("c", CultureInfo.InvariantCulture);
+        }
+
+        if (topic == "RedisPubSub")
+        {
+            overrides["Caching:Broadcast:RedisPubSub:Enabled"] = "true";
+        }
+
+        using var writerHost = HostHelper.GetHost(0, topic: topic, extra: overrides);
+        using var readerHost = HostHelper.GetHost(1, topic: topic, extra: overrides);
+        await writerHost.StartAsync();
+        await readerHost.StartAsync();
+        var writerCache = writerHost.Services.GetRequiredService<ICache<string>>();
+        var readerCache = readerHost.Services.GetRequiredService<ICache<string>>();
+        var writerMux = writerHost.Services.GetRequiredService<IRedisConnector>().Database.Multiplexer;
+        // INFO needs admin mode, which the hosts' connections do not have.
+        using var admin = await ConnectionMultiplexer.ConnectAsync(writerMux.Configuration + ",allowAdmin=true");
+        var server = admin.GetServers().First(s => s.IsConnected && !s.IsReplica);
+        var readerMux = readerHost.Services.GetRequiredService<IRedisConnector>().Database.Multiplexer;
+
+        var run = $"perf-doorbell-load-{Guid.NewGuid():N}:";
+        var names = Enumerable.Range(0, keys).Select(i => run + i.ToString(CultureInfo.InvariantCulture)).ToArray();
+        foreach (var name in names)
+        {
+            await writerCache.SetAsync(name, "init");
+            _ = await readerCache.GetAsync(name);
+        }
+
+        // The doorbell subscription and the consumer group come up in the background; a warm-up write shows they deliver.
+        await Task.Delay(TimeSpan.FromSeconds(2));
+        for (var warm = 0; warm < 3; warm++)
+        {
+            await writerCache.SetAsync(names[0], $"warm{warm}");
+            var until = Stopwatch.GetTimestamp() + Stopwatch.Frequency * 6;
+            while (await readerCache.GetAsync(names[0]) != $"warm{warm}" && Stopwatch.GetTimestamp() < until)
+            {
+                await Task.Delay(1);
+            }
+        }
+
+        var lastSeen = new string?[keys];
+        for (var i = 0; i < keys; i++)
+        {
+            lastSeen[i] = await readerCache.GetAsync(names[i]);
+        }
+
+        var samples = new List<double>(writeHz * (int)duration.TotalSeconds + 1024);
+        using var stopReader = new CancellationTokenSource();
+        var readerTask = Task.Run(async () =>
+        {
+            while (!stopReader.IsCancellationRequested)
+            {
+                for (var i = 0; i < keys && !stopReader.IsCancellationRequested; i++)
+                {
+                    string? v;
+                    try
+                    {
+                        v = await readerCache.GetAsync(names[i], stopReader.Token);
+                    }
+                    catch (Exception)
+                    {
+                        continue;
+                    }
+
+                    if (v is not null && v != lastSeen[i])
+                    {
+                        lastSeen[i] = v;
+                        if (v.StartsWith(TimestampPrefix, StringComparison.Ordinal) && long.TryParse(v.AsSpan(TimestampPrefix.Length), NumberStyles.Integer, CultureInfo.InvariantCulture, out var sent))
+                        {
+                            lock (samples)
+                            {
+                                samples.Add(Stopwatch.GetElapsedTime(sent).TotalMilliseconds);
+                            }
+                        }
+                    }
+                }
+            }
+        });
+
+        var before = await CommandStatsAsync(server);
+        var writerOpsBefore = writerMux.OperationCount;
+        var readerOpsBefore = readerMux.OperationCount;
+        var interval = Stopwatch.Frequency / writeHz;
+        var next = Stopwatch.GetTimestamp();
+        var stopAt = next + (long)(duration.TotalSeconds * Stopwatch.Frequency);
+        var written = 0;
+        while (Stopwatch.GetTimestamp() < stopAt)
+        {
+            var remaining = next - Stopwatch.GetTimestamp();
+            if (remaining > 0)
+            {
+                Pacer.Pause(remaining);
+                continue;
+            }
+
+            await writerCache.SetAsync(names[written % keys], $"{TimestampPrefix}{Stopwatch.GetTimestamp().ToString(CultureInfo.InvariantCulture)}");
+            written++;
+            // Open loop, but a stall is not repaid as a burst.
+            next = Math.Max(next + interval, Stopwatch.GetTimestamp() - interval);
+        }
+
+        await Task.Delay(TimeSpan.FromSeconds(1.5));
+        var writerOps = writerMux.OperationCount - writerOpsBefore;
+        var readerOps = readerMux.OperationCount - readerOpsBefore;
+        var after = await CommandStatsAsync(server);
+        stopReader.Cancel();
+        await readerTask;
+        var commands = CountedCommands.ToDictionary(c => c, c => after.GetValueOrDefault(c) - before.GetValueOrDefault(c));
+        List<double> taken;
+        lock (samples)
+        {
+            taken = [.. samples];
+        }
+
+        Console.Error.WriteLine($"[cell]   wrote={written} observed={taken.Count}");
+        return new LoadResult(written, taken, writerOps, readerOps, commands);
+    }
+
+    // The server's totals, so other clients on a shared server add to the deltas.
+    private static async Task<Dictionary<string, long>> CommandStatsAsync(IServer server)
+    {
+        var stats = new Dictionary<string, long>(StringComparer.OrdinalIgnoreCase);
+        foreach (var group in await server.InfoAsync("commandstats"))
+        {
+            foreach (var (key, value) in group)
+            {
+                if (key.StartsWith("cmdstat_", StringComparison.Ordinal))
+                {
+                    stats[key["cmdstat_".Length..]] = long.Parse(value.Split(',')[0].AsSpan("calls=".Length), CultureInfo.InvariantCulture);
+                }
+            }
+        }
+
+        return stats;
+    }
+
+    private sealed record LoadResult(int Written, List<double> SamplesMs, long WriterOps, long ReaderOps, Dictionary<string, long> Commands);
 }

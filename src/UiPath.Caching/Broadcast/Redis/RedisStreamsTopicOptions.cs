@@ -8,7 +8,9 @@ public class RedisStreamsTopicOptions : IBindsFromConfiguration
     internal static readonly TimeSpan DefaultPollInterval = TimeSpan.FromMilliseconds(250);
     internal static readonly TimeSpan DefaultNotifiedPollInterval = TimeSpan.FromSeconds(5);
 
-    internal static readonly TimeSpan DefaultNotifyMinInterval = TimeSpan.FromMilliseconds(25);
+    // Zero, not a few milliseconds: a short Task.Delay lasts the platform timer's tick (about 15 ms on Windows), which would
+    // hold every doorbell in a burst that long. One doorbell in flight at a time bounds the rate without a timer.
+    internal static readonly TimeSpan DefaultNotifyMinInterval = TimeSpan.Zero;
 
     // Past this a doorbell stops being prompt: a change reaches the other nodes no faster than the poll would bring it.
     internal static readonly TimeSpan MaxNotifyMinInterval = TimeSpan.FromSeconds(1);
@@ -74,7 +76,7 @@ public class RedisStreamsTopicOptions : IBindsFromConfiguration
     /// <summary>Publishes a Pub/Sub doorbell after every <c>XADD</c> so consumers read at once instead of at the next <see cref="PollInterval"/>.</summary>
     public bool NotifyEnabled { get; set; } = true;
 
-    /// <summary>The least time between two doorbells, 25 ms unless set, at most 1 s: rings meanwhile coalesce into the next one, so a burst of writes wakes each consumer at most once per interval. The first ring after a quiet period is sent at once. Zero rings again as soon as the last doorbell is answered.</summary>
+    /// <summary>The least time between two doorbells, zero unless set, at most 1 s. The first ring goes out at once; the rings during a doorbell fold into one more, sent as soon as the last one is answered, so one doorbell is in flight per topic and there are never more doorbells than writes. A positive value holds the next doorbell until it has passed since the last one, at the platform timer's resolution (about 15 ms on Windows).</summary>
     public TimeSpan? NotifyMinInterval { get; set; }
 
     public IRedisChannelStrategy? NotifyChannelStrategy { get; set; }

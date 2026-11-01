@@ -11,6 +11,10 @@ public sealed partial class RedisStreamsTopic<T> : ITopic<T>
     private const int DoorbellSending = 1;
     private const int DoorbellRingAgain = 2;
     private const int MaxDoorbellRetries = 2;
+    // Where the doorbell goes relative to the XADD; decided from the topology once it is known, and again after a reconnect.
+    private const int RingUndecided = 0;
+    private const int RingAfterReply = 1;
+    private const int RingBehindAdd = 2;
 
     private readonly IRedisStreamKeyStrategy _redisStreamKeyStrategy;
     private readonly RedisStreamSubjectWriter<T> _subscriber;
@@ -34,6 +38,7 @@ public sealed partial class RedisStreamsTopic<T> : ITopic<T>
     private int _doorbell;
     private int _doorbellFailures;
     private long _lastDoorbell;
+    private int _ringMode;
     private bool _disposed;
 
     public RedisStreamsTopic(
@@ -79,6 +84,8 @@ public sealed partial class RedisStreamsTopic<T> : ITopic<T>
                 streamOptions.NotifySubscriberTimeout,
                 streamOptions.NotifySubscriberDueTime,
                 _context.ConsumerName);
+            // A new connection may be to another topology.
+            _redis.OnReconnected += OnReconnected;
         }
         var capacity = ChannelHelper.CalculateBoundedCapacity(streamOptions.ConsumerCapacity, streamOptions.PollBatchSize);
         // Run later on the pool, by which time the writer the drop reports through is in place.
@@ -128,24 +135,34 @@ public sealed partial class RedisStreamsTopic<T> : ITopic<T>
         try
         {
             RedisValue message = _formatter.Encode(@event);
+            var behindAdd = _notifyRedisChannel.HasValue && RingsBehindAdd();
             var id = await _write.ExecuteAsync(static (s, token) =>
             {
                 token.ThrowIfCancellationRequested();
-                return s.Self._redis.Database.StreamAddAsync(
+                var added = s.Self._redis.Database.StreamAddAsync(
                     s.Self._context.Topic,
                     s.Self._context.FieldName,
                     s.Message,
                     maxLength: s.Self._streamOptions.MaxLength,
                     useApproximateMaxLength: true,
-                    flags: CommandFlags.DemandMaster).AsValueTask();
+                    flags: CommandFlags.DemandMaster);
+                if (s.BehindAdd)
+                {
+                    // Enqueued behind the XADD rather than after its reply: the one connection to a single primary runs them in
+                    // order, so a consumer the doorbell wakes finds the entry. Each attempt rings for itself, so a retried XADD is
+                    // followed by its own doorbell.
+                    s.Self.RingDoorbell();
+                }
+
+                return added.AsValueTask();
             },
-            (Self: this, Message: message),
+            (Self: this, Message: message, BehindAdd: behindAdd),
             defaultValue: RedisValue.Null,
             token).ConfigureAwait(false);
             _cachingTelemetryProvider.TrackTopicWriteMetric(_context.Topic.ToString(), id);
             if (!id.IsNull)
             {
-                Ring();
+                Ring(doorbell: !behindAdd);
             }
 
             LogPublished(TopicKey, @event.Id, id);
@@ -165,6 +182,7 @@ public sealed partial class RedisStreamsTopic<T> : ITopic<T>
             return;
         }
         _disposed = true;
+        _redis.OnReconnected -= OnReconnected;
         _stopTokenSource?.Cancel();
         _stopTokenSource?.Dispose();
         _dispatcher.Dispose();
@@ -177,10 +195,10 @@ public sealed partial class RedisStreamsTopic<T> : ITopic<T>
 
     internal RedisStreamsTopicOptions GetResolvedOptionsForTests() => _streamOptions;
 
-    /// <summary>Wakes the other nodes, and this one every <see cref="_wakeEvery"/> own entries: nothing else rings for those, and a burst of them could be trimmed unread.</summary>
-    private void Ring()
+    /// <summary>Wakes the other nodes unless the doorbell went out behind the XADD, and this one every <see cref="_wakeEvery"/> own entries: nothing else rings for those, and a burst of them could be trimmed unread.</summary>
+    private void Ring(bool doorbell)
     {
-        if (_notifyRedisChannel.HasValue)
+        if (doorbell && _notifyRedisChannel.HasValue)
         {
             RingDoorbell();
         }
@@ -190,6 +208,51 @@ public sealed partial class RedisStreamsTopic<T> : ITopic<T>
             _waiter.Signal();
         }
     }
+
+    /// <summary>Whether the doorbell may go out behind the XADD rather than after its reply: true with a standalone primary, whose one connection carries both in order. A cluster or a proxy may route the stream and the channel to different nodes, and an unknown topology is treated the same way.</summary>
+    private bool RingsBehindAdd()
+    {
+        var mode = Volatile.Read(ref _ringMode);
+        if (mode == RingUndecided)
+        {
+            mode = DecideRingMode();
+        }
+
+        return mode == RingBehindAdd;
+    }
+
+    // Undecided while the connector has no primary to show, so a later publish asks again.
+    private int DecideRingMode()
+    {
+        var mode = RingUndecided;
+        try
+        {
+            foreach (var primary in _redis.GetPrimaries())
+            {
+                if (primary.ServerType != ServerType.Standalone)
+                {
+                    mode = RingAfterReply;
+                    break;
+                }
+
+                mode = RingBehindAdd;
+            }
+        }
+        catch (Exception ex)
+        {
+            LogTopologyUnknown(ex, TopicKey);
+            mode = RingAfterReply;
+        }
+
+        if (mode != RingUndecided)
+        {
+            Volatile.Write(ref _ringMode, mode);
+        }
+
+        return mode;
+    }
+
+    private void OnReconnected(object? sender, EventArgs e) => Volatile.Write(ref _ringMode, RingUndecided);
 
     /// <summary>One doorbell in flight; the rings meanwhile coalesce into one more.</summary>
     // A doorbell per event in a burst would flood the subscribers' output buffers.
@@ -319,7 +382,8 @@ public sealed partial class RedisStreamsTopic<T> : ITopic<T>
         try
         {
             Volatile.Write(ref _lastDoorbell, Stopwatch.GetTimestamp());
-            publish = _redis.Database.PublishAsync(_notifyRedisChannel!.Value, _context.ConsumerName);
+            // On the primary, like the XADD: a doorbell behind it on the same connection cannot overtake the entry.
+            publish = _redis.Database.PublishAsync(_notifyRedisChannel!.Value, _context.ConsumerName, CommandFlags.DemandMaster);
             await publish.WaitAsync(DoorbellTimeout, stop).ConfigureAwait(false);
             Volatile.Write(ref _doorbellFailures, 0);
             return true;
@@ -405,4 +469,7 @@ public sealed partial class RedisStreamsTopic<T> : ITopic<T>
 
     [LoggerMessage(Level = LogLevel.Debug, Message = "Best-effort notify doorbell publish failed again for topic {TopicKey} ({Failures} in a row)")]
     private partial void LogNotifyPublishErrorAgain(Exception ex, TopicKey topicKey, int failures);
+
+    [LoggerMessage(Level = LogLevel.Debug, Message = "The topology behind topic {TopicKey} could not be read; the doorbell waits for the XADD reply")]
+    private partial void LogTopologyUnknown(Exception ex, TopicKey topicKey);
 }
