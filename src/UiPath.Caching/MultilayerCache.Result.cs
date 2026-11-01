@@ -181,7 +181,7 @@ internal sealed partial class MultilayerCache
         }
 
         var recorder = GeneratorRecorder<T>.For(generator);
-        var generated = await GetOrGenerateEntryAsync<T, Func<CancellationToken, Task<T?>>>(
+        var generated = (ICacheEntry<T?>)(await GetOrGenerateEntryAsync<T, Func<CancellationToken, Task<T?>>>(
             options,
             recorder.Generator,
             policy,
@@ -190,7 +190,7 @@ internal sealed partial class MultilayerCache
                 : static (cache, o, g, p, scope) => cache.RunGeneratorAndStoreEntryAsync(o, g, p, scope),
             seen,
             localMissed,
-            token).ConfigureAwait(false);
+            token).ConfigureAwait(false))!;
         return ResultOf(generated, recorder.Ran);
     }
 }

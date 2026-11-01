@@ -60,8 +60,10 @@ public class InFlightTests
     }
 
 
-    [Fact]
-    public async Task Work_every_caller_left_fails_without_an_unobserved_exception()
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Work_every_caller_left_fails_without_an_unobserved_exception(bool workEnds)
     {
         var unobserved = 0;
         void OnUnobserved(object? sender, UnobservedTaskExceptionEventArgs e)
@@ -75,7 +77,7 @@ public class InFlightTests
         TaskScheduler.UnobservedTaskException += OnUnobserved;
         try
         {
-            await AbandonAFailingRunAsync();
+            await AbandonAFailingRunAsync(workEnds);
             GC.Collect();
             GC.WaitForPendingFinalizers();
             GC.Collect();
@@ -295,9 +297,11 @@ public class InFlightTests
     }
 
     [Theory]
-    [InlineData(false)]
-    [InlineData(true)]
-    public async Task A_starter_whose_work_ends_asynchronously_resumes_on_the_thread_that_ended_it(bool cancellableToken)
+    [InlineData(false, false)]
+    [InlineData(true, false)]
+    [InlineData(false, true)]
+    [InlineData(true, true)]
+    public async Task A_starter_whose_work_ends_asynchronously_resumes_on_the_thread_that_ended_it(bool cancellableToken, bool workEnds)
     {
         var flights = new InFlight<string, int>();
         const int Rounds = 100;
@@ -309,7 +313,15 @@ public class InFlightTests
             var resumedOn = 0;
             async Task Resume()
             {
-                await flights.RunAsync("k", release, static (r, _) => new ValueTask<int>(r.Task), cancellableToken ? Ct : CancellationToken.None).ConfigureAwait(false);
+                var token = cancellableToken ? Ct : CancellationToken.None;
+                if (workEnds)
+                {
+                    await flights.StartOrJoinAsync("k", release, EndOwn, token, out _).ConfigureAwait(false);
+                }
+                else
+                {
+                    await flights.RunAsync("k", release, static (r, _) => new ValueTask<int>(r.Task), token).ConfigureAwait(false);
+                }
                 Volatile.Write(ref resumedOn, Environment.CurrentManagedThreadId);
             }
 
@@ -338,9 +350,135 @@ public class InFlightTests
         inline.Should().BeGreaterThan(Rounds * 9 / 10, "a starter waits on the work it started, not on a task the run publishes through a thread-pool hop");
     }
 
+    [Fact]
+    public async Task Callers_of_a_run_its_work_ends_are_told_who_started_it_and_share_its_value()
+    {
+        var flights = new InFlight<string, int>();
+        var release = new TaskCompletionSource<int>(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        var starter = flights.StartOrJoinAsync("k", release, EndOwn, Ct, out var started).AsTask();
+        var joiner = flights.StartOrJoinAsync("k", release, EndOwn, Ct, out var startedToo).AsTask();
+        release.SetResult(42);
+
+        (started, startedToo).Should().Be((true, false));
+        (await starter, await joiner).Should().Be((42, 42));
+        flights.Count.Should().Be(0);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task A_run_its_work_ends_has_left_the_table_when_its_callers_resume(bool cancellableToken)
+    {
+        var flights = new InFlight<string, int>();
+        var release = new TaskCompletionSource<int>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var token = cancellableToken ? Ct : CancellationToken.None;
+        async Task<int> RunsOnResume(ValueTask<int> call)
+        {
+            await call.ConfigureAwait(false);
+            return flights.Count;
+        }
+
+        var starter = RunsOnResume(flights.StartOrJoinAsync("k", release, EndOwn, token, out _));
+        var joiner = RunsOnResume(flights.StartOrJoinAsync("k", release, EndOwn, token, out _));
+        release.SetResult(1);
+
+        (await starter).Should().Be(0);
+        (await joiner).Should().Be(0);
+    }
+
+    [Theory]
+    [MemberData(nameof(StarterFailures))]
+    public async Task A_failure_of_work_that_ends_its_run_reaches_the_starter_and_the_joiner(Type failure, bool cancellableToken)
+    {
+        var flights = new InFlight<string, int>();
+        var release = new TaskCompletionSource<int>(TaskCreationOptions.RunContinuationsAsynchronously);
+        using var source = new CancellationTokenSource();
+        var expected = (Exception)Activator.CreateInstance(failure, "not ours")!;
+        var token = cancellableToken ? source.Token : CancellationToken.None;
+
+        var starter = flights.StartOrJoinAsync("k", release, EndOwn, token, out _).AsTask();
+        var joiner = flights.StartOrJoinAsync("k", release, EndOwn, token, out _).AsTask();
+        release.SetException(expected);
+
+        (await starter.Invoking(t => t).Should().ThrowAsync<Exception>()).Which.Should().BeSameAs(expected);
+        (await joiner.Invoking(t => t).Should().ThrowAsync<Exception>()).Which.Should().BeSameAs(expected);
+        flights.Count.Should().Be(0);
+    }
+
+    [Fact]
+    public async Task A_starter_that_cancels_leaves_work_that_ends_its_run_going_for_the_joiner()
+    {
+        var flights = new InFlight<string, int>();
+        var release = new TaskCompletionSource<int>(TaskCreationOptions.RunContinuationsAsynchronously);
+        using var leaving = new CancellationTokenSource();
+
+        var starter = flights.StartOrJoinAsync("k", release, EndOwn, leaving.Token, out _).AsTask();
+        var joiner = flights.StartOrJoinAsync("k", release, EndOwn, Ct, out _).AsTask();
+        await leaving.CancelAsync();
+
+        await starter.Invoking(t => t).Should().ThrowExactlyAsync<TaskCanceledException>();
+        flights.Count.Should().Be(1, "the joiner still waits on the run");
+        release.SetResult(9);
+        (await joiner).Should().Be(9);
+        flights.Count.Should().Be(0);
+    }
+
+    [Fact]
+    public async Task Work_that_ends_its_run_before_it_yields_leaves_no_run_behind()
+    {
+        var flights = new InFlight<string, int>();
+        var runs = 0;
+        ValueTask<int> EndNow(int value, IInFlightEnd<int> run)
+        {
+            Interlocked.Increment(ref runs);
+            run.Complete(value);
+            return new ValueTask<int>(value);
+        }
+
+        var first = await flights.StartOrJoinAsync("k", 1, EndNow, Ct, out var started);
+        var second = await flights.StartOrJoinAsync("k", 2, EndNow, Ct, out var startedAgain);
+
+        (first, second, started, startedAgain, runs).Should().Be((1, 2, true, true, 2));
+        flights.Count.Should().Be(0);
+    }
+
+    [Fact]
+    public async Task Work_that_fails_its_run_before_it_yields_surfaces_the_failure_and_leaves_no_run_behind()
+    {
+        var flights = new InFlight<string, int>();
+        var expected = new InvalidOperationException("now");
+        static ValueTask<int> FailNow(Exception failure, IInFlightEnd<int> run)
+        {
+            run.Fail(failure);
+            return ValueTask.FromException<int>(failure);
+        }
+
+        var call = () => flights.StartOrJoinAsync("k", expected, FailNow, Ct, out _).AsTask();
+
+        (await call.Should().ThrowAsync<InvalidOperationException>()).Which.Should().BeSameAs(expected);
+        flights.Count.Should().Be(0);
+    }
+
+    /// <summary>Work that ends its run itself, as a generation does: out of the table with its result or failure before its task completes.</summary>
+    private static async ValueTask<int> EndOwn(TaskCompletionSource<int> release, IInFlightEnd<int> run)
+    {
+        try
+        {
+            var value = await release.Task;
+            run.Complete(value);
+            return value;
+        }
+        catch (Exception ex)
+        {
+            run.Fail(ex);
+            throw;
+        }
+    }
+
     // Not inlined, so nothing in the calling frame keeps the flight reachable when the test collects.
     [System.Runtime.CompilerServices.MethodImpl(System.Runtime.CompilerServices.MethodImplOptions.NoInlining)]
-    private static async Task AbandonAFailingRunAsync()
+    private static async Task AbandonAFailingRunAsync(bool workEnds)
     {
         var flights = new InFlight<string, int>();
         var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -353,7 +491,20 @@ public class InFlightTests
             throw new InvalidOperationException(AbandonedFailure);
         }
 
-        var abandoned = flights.RunAsync("k", release, FailLate, leaving.Token).AsTask();
+        async ValueTask<int> FailLateAndEnd(TaskCompletionSource gate, IInFlightEnd<int> run)
+        {
+            try
+            {
+                return await FailLate(gate, run);
+            }
+            catch (Exception ex)
+            {
+                run.Fail(ex);
+                throw;
+            }
+        }
+
+        var abandoned = workEnds ? flights.StartOrJoinAsync("k", release, FailLateAndEnd, leaving.Token, out _).AsTask() : flights.RunAsync("k", release, FailLate, leaving.Token).AsTask();
         await leaving.CancelAsync();
         await abandoned.Invoking(t => t).Should().ThrowAsync<OperationCanceledException>();
         release.SetResult();
