@@ -22,11 +22,11 @@ public static class BatchGetOrAdd
     }
 
     /// <summary>As <see cref="RunAsync{T, TState}"/>, handing the generator <paramref name="argument"/> instead of a closure.</summary>
-    internal static ValueTask<KeyValuePair<TState, T?>[]> RunAsync<T, TState, TArgument>(
+    internal static ValueTask<KeyValuePair<TState, T?>[]> RunAsync<T, TState, TArg>(
         ICache cache,
         KeyValuePair<CacheKey, TState>[] entries,
-        TArgument argument,
-        Func<TArgument, TState[], CancellationToken, Task<KeyValuePair<TState, T?>[]>> generator,
+        TArg argument,
+        Func<TArg, TState[], CancellationToken, Task<KeyValuePair<TState, T?>[]>> generator,
         Func<KeyValuePair<CacheKey, T?>[], CancellationToken, ValueTask<bool>> setAsync,
         CachePolicy? policy,
         CancellationToken token)
@@ -40,11 +40,11 @@ public static class BatchGetOrAdd
         return RunCoreAsync(cache, entries, argument, generator, setAsync, policy, token);
     }
 
-    private static async ValueTask<KeyValuePair<TState, T?>[]> RunCoreAsync<T, TState, TArgument>(
+    private static async ValueTask<KeyValuePair<TState, T?>[]> RunCoreAsync<T, TState, TArg>(
         ICache cache,
         KeyValuePair<CacheKey, TState>[] entries,
-        TArgument argument,
-        Func<TArgument, TState[], CancellationToken, Task<KeyValuePair<TState, T?>[]>> generator,
+        TArg argument,
+        Func<TArg, TState[], CancellationToken, Task<KeyValuePair<TState, T?>[]>> generator,
         Func<KeyValuePair<CacheKey, T?>[], CancellationToken, ValueTask<bool>> setAsync,
         CachePolicy? policy,
         CancellationToken token)
@@ -115,12 +115,12 @@ public static class BatchGetOrAdd
     }
 
     /// <summary>Generates the missing keys' values, writes them back, and adds them to <paramref name="valueByKey"/>.</summary>
-    private static async ValueTask GenerateAndStoreMissesAsync<T, TState, TArgument>(
+    private static async ValueTask GenerateAndStoreMissesAsync<T, TState, TArg>(
         CacheKey[] missKeys,
         Dictionary<CacheKey, TState> representative,
         Dictionary<CacheKey, T?> valueByKey,
-        TArgument argument,
-        Func<TArgument, TState[], CancellationToken, Task<KeyValuePair<TState, T?>[]>> generator,
+        TArg argument,
+        Func<TArg, TState[], CancellationToken, Task<KeyValuePair<TState, T?>[]>> generator,
         Func<KeyValuePair<CacheKey, T?>[], CancellationToken, ValueTask<bool>> setAsync,
         CancellationToken token)
         where TState : notnull

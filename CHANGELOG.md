@@ -8,6 +8,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 
 ### Added
 
+- **`GetOrAddResultAsync`.** Returns `CacheResult<T>(Value, Expiration, WasGenerated)` so a caller knows whether its own generator produced the value: `false` for a hit and for a call
+  that waited on a concurrent caller's generation. `Expiration` is the entry's stored expiration (null when unknown, when the entry has no expiry, or when nothing was stored). Available on `ICache` and `ICache<T>` in the closure, state and
+  owner-and-argument forms; a cache outside the library gets a default that wraps the generator, at one allocation per call; it reports `Expiration` only for the `DateTimeOffset` form when its generator ran and returned a value other than null or default.
 - **Interpolated keys on every `ICache` and `IHashCache` operation.** Pass `$"{tenantId}:{userId}"` where a key goes, on `ICache`,
   `ICache<T>`, `IHashCache` and `IHashCache<T>` (and `NullCache`, `NullHashCache`): the text is written to a 256-character stack buffer (a longer key rents from `ArrayPool`), so a local hit
   allocates nothing. Values format in the current culture, as in any string interpolation. A string
@@ -97,8 +100,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 - **A state overload of `GetOrAddWithExpirationAsync`** on `ICache` and `ICache<T>` (the policy-less `ICache` one in
   `GeneratedExpirationExtensions`), a plain member every cache implements; the library's caches, Redis included, hand
   the state to the generator without a closure.
-- **A batch `GetOrAddAsync` with one argument for the whole call.** `GetOrAddAsync<T, TState, TArgument>(entries,
-  argument, generator, ...)` on `ICache` (and `<TState, TArgument>` on `ICache<T>`), for each expiration variant of the
+- **A batch `GetOrAddAsync` with one argument for the whole call.** `GetOrAddAsync<T, TState, TArg>(entries,
+  argument, generator, ...)` on `ICache` (and `<TState, TArg>` on `ICache<T>`), for each expiration variant of the
   batch overload, hands the generator `argument` before the states of the keys that missed, so it can be static. The
   argument is not a per-entry state. It is a member every cache implements: the library's multilayer and in-memory
   caches and `Cache<T>` bind a closure only for a miss or a rehydrate, and Redis and `NullCache` hand the argument to the

@@ -13,6 +13,12 @@ internal interface IInFlightRun
     /// <summary>True once every caller has left, so the work must not store its result over a newer one.</summary>
     bool IsAbandoned { get; }
 
+    /// <summary>When the work's stored value expires; written by the work before it completes, read by a caller that waited for it.</summary>
+    DateTimeOffset? Expiration { get; set; }
+
+    /// <summary>True when the work found the value with a read that returns no expiration, so a null <see cref="Expiration"/> means unknown, not none.</summary>
+    bool ExpirationUnread { get; set; }
+
     /// <summary>Runs <paramref name="commit"/> unless every caller has left; false when it did not.</summary>
     bool TryCommit<TArg>(TArg arg, Action<TArg> commit);
 }

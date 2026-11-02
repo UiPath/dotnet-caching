@@ -64,7 +64,7 @@ Alphabetical lookup for terms used across the docs.
 
 **SourceUri** — `CacheOptions.SourceUri`, default `urn:<MachineName>`. Identifies the machine/pod in cross-node sync events.
 
-**State / argument** — State is the `TState` a batch `GetOrAddAsync` pairs with each key, handed back to the generator for the keys that missed. An argument is one value for the whole call (`TArgument`). Neither is cache state or a setting.
+**State / argument** — State is the `TState` a batch `GetOrAddAsync` pairs with each key, handed back to the generator for the keys that missed. An argument is one value for the whole call (`TArg`). Neither is cache state or a setting.
 
 **Stream maintainer** — `RedisStreamHealthMaintainer` background service that trims streams and quarantines no-consumer groups. See [how-to/broadcast.md](../how-to/broadcast.md#stream-maintainer).
 

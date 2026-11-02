@@ -208,15 +208,15 @@ public interface ICache : IDisposable
     /// <param name="generator">Receives <paramref name="argument"/> and the states of the keys that missed.</param>
     /// <param name="policy">The policy, as in the batch overload.</param>
     /// <param name="token">The cancellation token.</param>
-    ValueTask<KeyValuePair<TState, T?>[]> GetOrAddAsync<T, TState, TArgument>(KeyValuePair<CacheKey, TState>[] entries, TArgument argument, Func<TArgument, TState[], CancellationToken, Task<KeyValuePair<TState, T?>[]>> generator, CachePolicy? policy, CancellationToken token = default)
+    ValueTask<KeyValuePair<TState, T?>[]> GetOrAddAsync<T, TState, TArg>(KeyValuePair<CacheKey, TState>[] entries, TArg argument, Func<TArg, TState[], CancellationToken, Task<KeyValuePair<TState, T?>[]>> generator, CachePolicy? policy, CancellationToken token = default)
         where TState : notnull;
 
-    /// <inheritdoc cref="GetOrAddAsync{T, TState, TArgument}(KeyValuePair{CacheKey, TState}[], TArgument, Func{TArgument, TState[], CancellationToken, Task{KeyValuePair{TState, T}[]}}, CachePolicy, CancellationToken)"/>
-    ValueTask<KeyValuePair<TState, T?>[]> GetOrAddAsync<T, TState, TArgument>(KeyValuePair<CacheKey, TState>[] entries, TArgument argument, Func<TArgument, TState[], CancellationToken, Task<KeyValuePair<TState, T?>[]>> generator, TimeSpan expiration, CachePolicy? policy, CancellationToken token = default)
+    /// <inheritdoc cref="GetOrAddAsync{T, TState, TArg}(KeyValuePair{CacheKey, TState}[], TArg, Func{TArg, TState[], CancellationToken, Task{KeyValuePair{TState, T}[]}}, CachePolicy, CancellationToken)"/>
+    ValueTask<KeyValuePair<TState, T?>[]> GetOrAddAsync<T, TState, TArg>(KeyValuePair<CacheKey, TState>[] entries, TArg argument, Func<TArg, TState[], CancellationToken, Task<KeyValuePair<TState, T?>[]>> generator, TimeSpan expiration, CachePolicy? policy, CancellationToken token = default)
         where TState : notnull;
 
-    /// <inheritdoc cref="GetOrAddAsync{T, TState, TArgument}(KeyValuePair{CacheKey, TState}[], TArgument, Func{TArgument, TState[], CancellationToken, Task{KeyValuePair{TState, T}[]}}, CachePolicy, CancellationToken)"/>
-    ValueTask<KeyValuePair<TState, T?>[]> GetOrAddAsync<T, TState, TArgument>(KeyValuePair<CacheKey, TState>[] entries, TArgument argument, Func<TArgument, TState[], CancellationToken, Task<KeyValuePair<TState, T?>[]>> generator, DateTimeOffset expiration, CachePolicy? policy, CancellationToken token = default)
+    /// <inheritdoc cref="GetOrAddAsync{T, TState, TArg}(KeyValuePair{CacheKey, TState}[], TArg, Func{TArg, TState[], CancellationToken, Task{KeyValuePair{TState, T}[]}}, CachePolicy, CancellationToken)"/>
+    ValueTask<KeyValuePair<TState, T?>[]> GetOrAddAsync<T, TState, TArg>(KeyValuePair<CacheKey, TState>[] entries, TArg argument, Func<TArg, TState[], CancellationToken, Task<KeyValuePair<TState, T?>[]>> generator, DateTimeOffset expiration, CachePolicy? policy, CancellationToken token = default)
         where TState : notnull;
 
     ValueTask<bool> RemoveAsync<T>(CacheKey cacheKey, CancellationToken token = default);
@@ -485,6 +485,192 @@ public interface ICache : IDisposable
         try
         {
             return spanKeyCache.GetOrAddWithExpirationAsync(cacheKey.Written, state, generator, policy, token);
+        }
+        finally
+        {
+            cacheKey.Return();
+        }
+    }
+
+    /// <summary>Reads, and on a miss runs <paramref name="generator"/> as <c>GetOrAddAsync</c> does; reports whether this call's generator produced the value and when the entry expires.</summary>
+    sealed ValueTask<CacheResult<T>> GetOrAddResultAsync<T>(CacheKey cacheKey, Func<CancellationToken, Task<T?>> generator, CachePolicy? policy, CancellationToken token = default)
+    {
+        if (this is IResultCache source)
+        {
+            return source.GetOrAddResultAsync(cacheKey, generator, policy, token);
+        }
+
+        var recorder = GeneratorRecorder<T>.For(generator);
+        return recorder.ResultOf(GetOrAddAsync<T>(cacheKey, recorder.Generator, policy, token));
+    }
+
+    /// <inheritdoc cref="GetOrAddResultAsync{T}(CacheKey, Func{CancellationToken, Task{T}}, CachePolicy, CancellationToken)"/>
+    sealed ValueTask<CacheResult<T>> GetOrAddResultAsync<T>(CacheKey cacheKey, Func<CancellationToken, Task<T?>> generator, TimeSpan expiration, CachePolicy? policy, CancellationToken token = default)
+    {
+        if (this is IResultCache source)
+        {
+            return source.GetOrAddResultAsync(cacheKey, generator, expiration, policy, token);
+        }
+
+        var recorder = GeneratorRecorder<T>.For(generator);
+        return recorder.ResultOf(GetOrAddAsync<T>(cacheKey, recorder.Generator, expiration, policy, token));
+    }
+
+    /// <inheritdoc cref="GetOrAddResultAsync{T}(CacheKey, Func{CancellationToken, Task{T}}, CachePolicy, CancellationToken)"/>
+    sealed ValueTask<CacheResult<T>> GetOrAddResultAsync<T>(CacheKey cacheKey, Func<CancellationToken, Task<T?>> generator, DateTimeOffset expiration, CachePolicy? policy, CancellationToken token = default)
+    {
+        if (this is IResultCache source)
+        {
+            return source.GetOrAddResultAsync(cacheKey, generator, expiration, policy, token);
+        }
+
+        var recorder = GeneratorRecorder<T>.For(generator);
+        return recorder.ResultOf(GetOrAddAsync<T>(cacheKey, recorder.Generator, expiration, policy, token), expiration);
+    }
+
+    /// <inheritdoc cref="GetOrAddResultAsync{T}(CacheKey, Func{CancellationToken, Task{T}}, CachePolicy, CancellationToken)"/>
+    sealed ValueTask<CacheResult<T>> GetOrAddResultAsync<T, TState>(CacheKey cacheKey, TState state, Func<TState, CancellationToken, Task<T?>> generator, CachePolicy? policy, CancellationToken token = default)
+    {
+        if (this is IResultCache source)
+        {
+            return source.GetOrAddResultAsync(cacheKey, state, generator, policy, token);
+        }
+
+        var recorder = GeneratorRecorder<T>.For(state, generator);
+        return recorder.ResultOf(GetOrAddAsync<T>(cacheKey, recorder.Generator, policy, token));
+    }
+
+    /// <inheritdoc cref="GetOrAddResultAsync{T}(CacheKey, Func{CancellationToken, Task{T}}, CachePolicy, CancellationToken)"/>
+    sealed ValueTask<CacheResult<T>> GetOrAddResultAsync<T, TState>(CacheKey cacheKey, TState state, Func<TState, CancellationToken, Task<T?>> generator, TimeSpan expiration, CachePolicy? policy, CancellationToken token = default)
+    {
+        if (this is IResultCache source)
+        {
+            return source.GetOrAddResultAsync(cacheKey, state, generator, expiration, policy, token);
+        }
+
+        var recorder = GeneratorRecorder<T>.For(state, generator);
+        return recorder.ResultOf(GetOrAddAsync<T>(cacheKey, recorder.Generator, expiration, policy, token));
+    }
+
+    /// <inheritdoc cref="GetOrAddResultAsync{T}(CacheKey, Func{CancellationToken, Task{T}}, CachePolicy, CancellationToken)"/>
+    sealed ValueTask<CacheResult<T>> GetOrAddResultAsync<T, TState>(CacheKey cacheKey, TState state, Func<TState, CancellationToken, Task<T?>> generator, DateTimeOffset expiration, CachePolicy? policy, CancellationToken token = default)
+    {
+        if (this is IResultCache source)
+        {
+            return source.GetOrAddResultAsync(cacheKey, state, generator, expiration, policy, token);
+        }
+
+        var recorder = GeneratorRecorder<T>.For(state, generator);
+        return recorder.ResultOf(GetOrAddAsync<T>(cacheKey, recorder.Generator, expiration, policy, token), expiration);
+    }
+
+    /// <inheritdoc cref="GetOrAddResultAsync{T}(CacheKey, Func{CancellationToken, Task{T}}, CachePolicy, CancellationToken)"/>
+    [OverloadResolutionPriority(2)]
+    sealed ValueTask<CacheResult<T>> GetOrAddResultAsync<T>(ref CacheKeyHandler cacheKey, Func<CancellationToken, Task<T?>> generator, CachePolicy? policy, CancellationToken token = default)
+    {
+        if (this is not IResultCache results)
+        {
+            return GetOrAddResultAsync(cacheKey.ToCacheKey(), generator, policy, token);
+        }
+
+        try
+        {
+            return results.GetOrAddResultAsync(cacheKey.Written, generator, policy, token);
+        }
+        finally
+        {
+            cacheKey.Return();
+        }
+    }
+
+    /// <inheritdoc cref="GetOrAddResultAsync{T}(CacheKey, Func{CancellationToken, Task{T}}, CachePolicy, CancellationToken)"/>
+    [OverloadResolutionPriority(2)]
+    sealed ValueTask<CacheResult<T>> GetOrAddResultAsync<T>(ref CacheKeyHandler cacheKey, Func<CancellationToken, Task<T?>> generator, TimeSpan expiration, CachePolicy? policy, CancellationToken token = default)
+    {
+        if (this is not IResultCache results)
+        {
+            return GetOrAddResultAsync(cacheKey.ToCacheKey(), generator, expiration, policy, token);
+        }
+
+        try
+        {
+            return results.GetOrAddResultAsync(cacheKey.Written, generator, expiration, policy, token);
+        }
+        finally
+        {
+            cacheKey.Return();
+        }
+    }
+
+    /// <inheritdoc cref="GetOrAddResultAsync{T}(CacheKey, Func{CancellationToken, Task{T}}, CachePolicy, CancellationToken)"/>
+    [OverloadResolutionPriority(2)]
+    sealed ValueTask<CacheResult<T>> GetOrAddResultAsync<T>(ref CacheKeyHandler cacheKey, Func<CancellationToken, Task<T?>> generator, DateTimeOffset expiration, CachePolicy? policy, CancellationToken token = default)
+    {
+        if (this is not IResultCache results)
+        {
+            return GetOrAddResultAsync(cacheKey.ToCacheKey(), generator, expiration, policy, token);
+        }
+
+        try
+        {
+            return results.GetOrAddResultAsync(cacheKey.Written, generator, expiration, policy, token);
+        }
+        finally
+        {
+            cacheKey.Return();
+        }
+    }
+
+    /// <inheritdoc cref="GetOrAddResultAsync{T}(CacheKey, Func{CancellationToken, Task{T}}, CachePolicy, CancellationToken)"/>
+    [OverloadResolutionPriority(2)]
+    sealed ValueTask<CacheResult<T>> GetOrAddResultAsync<T, TState>(ref CacheKeyHandler cacheKey, TState state, Func<TState, CancellationToken, Task<T?>> generator, CachePolicy? policy, CancellationToken token = default)
+    {
+        if (this is not IResultCache results)
+        {
+            return GetOrAddResultAsync(cacheKey.ToCacheKey(), state, generator, policy, token);
+        }
+
+        try
+        {
+            return results.GetOrAddResultAsync(cacheKey.Written, state, generator, policy, token);
+        }
+        finally
+        {
+            cacheKey.Return();
+        }
+    }
+
+    /// <inheritdoc cref="GetOrAddResultAsync{T}(CacheKey, Func{CancellationToken, Task{T}}, CachePolicy, CancellationToken)"/>
+    [OverloadResolutionPriority(2)]
+    sealed ValueTask<CacheResult<T>> GetOrAddResultAsync<T, TState>(ref CacheKeyHandler cacheKey, TState state, Func<TState, CancellationToken, Task<T?>> generator, TimeSpan expiration, CachePolicy? policy, CancellationToken token = default)
+    {
+        if (this is not IResultCache results)
+        {
+            return GetOrAddResultAsync(cacheKey.ToCacheKey(), state, generator, expiration, policy, token);
+        }
+
+        try
+        {
+            return results.GetOrAddResultAsync(cacheKey.Written, state, generator, expiration, policy, token);
+        }
+        finally
+        {
+            cacheKey.Return();
+        }
+    }
+
+    /// <inheritdoc cref="GetOrAddResultAsync{T}(CacheKey, Func{CancellationToken, Task{T}}, CachePolicy, CancellationToken)"/>
+    [OverloadResolutionPriority(2)]
+    sealed ValueTask<CacheResult<T>> GetOrAddResultAsync<T, TState>(ref CacheKeyHandler cacheKey, TState state, Func<TState, CancellationToken, Task<T?>> generator, DateTimeOffset expiration, CachePolicy? policy, CancellationToken token = default)
+    {
+        if (this is not IResultCache results)
+        {
+            return GetOrAddResultAsync(cacheKey.ToCacheKey(), state, generator, expiration, policy, token);
+        }
+
+        try
+        {
+            return results.GetOrAddResultAsync(cacheKey.Written, state, generator, expiration, policy, token);
         }
         finally
         {

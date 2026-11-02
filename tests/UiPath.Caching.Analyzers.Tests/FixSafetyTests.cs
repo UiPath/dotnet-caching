@@ -292,9 +292,9 @@ public class FixSafetyTests
     [Fact]
     public Task State_overload_whose_type_parameters_are_reordered_gets_no_fix_for_spelled_type_arguments()
     {
-        // `<TState, T, TArgument>` against the closure's `<T, TState>`: appending a type argument would shift the others.
+        // `<TState, T, TArg>` against the closure's `<T, TState>`: appending a type argument would shift the others.
         var cache = CacheImplementation.Abstract("UiPath.Caching.ICache", "ReorderedCache", """
-                public ValueTask<KeyValuePair<TState, T?>[]> GetOrAddAsync<TState, T, TArgument>(KeyValuePair<CacheKey, TState>[] entries, TArgument argument, Func<TArgument, TState[], CancellationToken, Task<KeyValuePair<TState, T?>[]>> generator, CachePolicy? policy, CancellationToken token = default)
+                public ValueTask<KeyValuePair<TState, T?>[]> GetOrAddAsync<TState, T, TArg>(KeyValuePair<CacheKey, TState>[] entries, TArg argument, Func<TArg, TState[], CancellationToken, Task<KeyValuePair<TState, T?>[]>> generator, CachePolicy? policy, CancellationToken token = default)
                     where TState : notnull => default;
             """);
         var source = Fixture.Service("""
