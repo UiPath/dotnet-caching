@@ -6,7 +6,7 @@ using UiPath.Caching.Config;
 
 namespace UiPath.Caching.Benchmarks;
 
-/// <summary>One <c>GetOrAddAsync</c> with the generator in each shape a caller can write: a lambda that captures <c>this</c>, one that captures a local too, an instance delegate built once in the constructor, and a static lambda with its state; on a key the local tier holds, and on a key it never stores, so the generator runs each time.</summary>
+/// <summary>One <c>GetOrAddAsync</c> with the generator in each shape a caller can write: a lambda that captures <c>this</c>, one that captures a local too, an instance delegate built once in the constructor, and a static lambda with its state (<c>this</c>, an owner and an argument, or a named tuple); on a key the local tier holds, and on a key it never stores, so the generator runs each time.</summary>
 [MemoryDiagnoser]
 [GroupBenchmarksBy(BenchmarkLogicalGroupRule.ByCategory)]
 [MarkdownExporterAttribute.GitHub]
@@ -67,6 +67,9 @@ public class GeneratorShapeBenchmark
 
     [Benchmark, BenchmarkCategory("Hit")]
     public ValueTask<string?> HitStateTuple() => _cache.GetOrAddAsync(HitKey, (Self: this, Id: _id), static (s, ct) => s.Self.LoadAsync(s.Id, ct));
+
+    [Benchmark, BenchmarkCategory("Hit")]
+    public ValueTask<string?> HitOwnerArgument() => _cache.GetOrAddAsync(HitKey, this, _id, static (self, id, ct) => self.LoadAsync(id, ct));
 
     [Benchmark(Baseline = true), BenchmarkCategory("Miss")]
     public ValueTask<string?> MissClosureCapturingThis() => _cache.GetOrAddAsync(MissKey, ct => LoadNothingAsync(ct));

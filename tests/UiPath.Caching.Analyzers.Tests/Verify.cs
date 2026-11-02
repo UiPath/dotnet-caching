@@ -51,6 +51,8 @@ internal static class Verify
 
     private static Task FixFilesAsync(string[] sources, string[] fixedSources, int? numberOfFixAllIterations, DiagnosticResult[] expected)
     {
+        // The state is named, never Item1, Item2: the fix writes tuple elements by the captured names.
+        Assert.All(fixedSources, fixedSource => Assert.DoesNotMatch(@"Item[1-9]", fixedSource));
         var test = new CSharpCodeFixTest<CapturingGeneratorAnalyzer, PassStateCodeFixProvider, DefaultVerifier>
         {
             ReferenceAssemblies = new ReferenceAssemblies("runtime"),

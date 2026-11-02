@@ -34,7 +34,7 @@ public sealed class PassStateCodeFixProvider : CodeFixProvider
         {
             if (!diagnostic.Properties.TryGetValue(CapturingGeneratorAnalyzer.StateParameterProperty, out var stateParameter)
                 || stateParameter is null
-                || root.FindNode(diagnostic.Location.SourceSpan, getInnermostNodeForTie: true).FirstAncestorOrSelf<ArgumentSyntax>() is not { Parent: ArgumentListSyntax { Parent: InvocationExpressionSyntax invocation } } argument
+                || root.FindNode(diagnostic.Location.SourceSpan, getInnermostNodeForTie: true).FirstAncestorOrSelf<ArgumentSyntax>() is not { Parent: ArgumentListSyntax { Parent: InvocationExpressionSyntax } } argument
                 || StateRewrite.Rewrite(model, argument, stateParameter, diagnostic.Properties.ContainsKey(CapturingGeneratorAnalyzer.StateTypeIsLastProperty), context.CancellationToken, verify: false) is not { } rewritten)
             {
                 continue;
@@ -46,8 +46,8 @@ public sealed class PassStateCodeFixProvider : CodeFixProvider
             context.RegisterCodeFix(
                 CodeAction.Create(
                     Title,
-                    cancellationToken => Task.FromResult(StateRewrite.CompilesToStateOverload(model, invocation, rewritten, stateParameter, cancellationToken)
-                        ? document.WithSyntaxRoot(root.ReplaceNode(invocation, rewritten))
+                    cancellationToken => Task.FromResult(rewritten.Compiles(model, cancellationToken)
+                        ? document.WithSyntaxRoot(rewritten.Apply(root))
                         : document),
                     equivalenceKey: Title),
                 diagnostic);

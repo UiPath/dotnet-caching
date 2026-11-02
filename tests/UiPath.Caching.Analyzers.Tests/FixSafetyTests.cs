@@ -133,14 +133,14 @@ public class FixSafetyTests
     public Task Explicitly_typed_lambda_keeps_its_parameter_names() =>
         Verify.FixAsync(
             Fixture.Service("""ValueTask<Item?> Get(int id, CancellationToken token) => _cache.GetOrAddAsync("k", {|#0:Task<Item?> (CancellationToken c) => LoadAsync(id, c)|}, token);"""),
-            Fixture.Service("""ValueTask<Item?> Get(int id, CancellationToken token) => _cache.GetOrAddAsync("k", (Self: this, Id: id), static Task<Item?> (s, c) => s.Self.LoadAsync(s.Id, c), token);"""),
+            Fixture.Service("""ValueTask<Item?> Get(int id, CancellationToken token) => _cache.GetOrAddAsync("k", this, id, static Task<Item?> (self, id, c) => self.LoadAsync(id, c), token);"""),
             Verify.Diagnostic(0, "captures 'this' and 'id' and allocates a closure", "pass them as state and make the lambda static"));
 
     [Fact]
     public Task Lambda_parameter_default_value_is_dropped() =>
         Verify.FixAsync(
             Fixture.Service("""ValueTask<Item?> Get(int id, CancellationToken token) => _cache.GetOrAddAsync("k", {|#0:(CancellationToken c = default) => LoadAsync(id, c)|}, token);"""),
-            Fixture.Service("""ValueTask<Item?> Get(int id, CancellationToken token) => _cache.GetOrAddAsync("k", (Self: this, Id: id), static (s, c) => s.Self.LoadAsync(s.Id, c), token);"""),
+            Fixture.Service("""ValueTask<Item?> Get(int id, CancellationToken token) => _cache.GetOrAddAsync("k", this, id, static (self, id, c) => self.LoadAsync(id, c), token);"""),
             Verify.Diagnostic(0, "captures 'this' and 'id' and allocates a closure", "pass them as state and make the lambda static"));
 
     [Fact]
@@ -262,7 +262,7 @@ public class FixSafetyTests
                 ValueTask<Item?> Get(CancellationToken token)
                 {
                     var _1 = 2;
-                    return _cache.GetOrAddAsync("k", (Self: this, Value1: _1), static (s, ct) => s.Self.LoadAsync(s.Value1, ct), token);
+                    return _cache.GetOrAddAsync("k", this, _1, static (self, _1, ct) => self.LoadAsync(_1, ct), token);
                 }
 
                 ValueTask<Item?> Find(Repo _1, CancellationToken token) => _cache.GetOrAddAsync("k", _1, static (target, ct) => target.LoadAsync(ct), token);
@@ -609,24 +609,24 @@ public class FixSafetyTests
     [Fact]
     public Task Capture_named_item_keeps_the_element_name_Item() =>
         Verify.FixAsync(
-            Fixture.Service("""ValueTask<Item?> Get(int item, CancellationToken token) => _cache.GetOrAddAsync("k", {|#0:ct => LoadAsync(item, ct)|}, token);"""),
-            Fixture.Service("""ValueTask<Item?> Get(int item, CancellationToken token) => _cache.GetOrAddAsync("k", (Self: this, Item: item), static (s, ct) => s.Self.LoadAsync(s.Item, ct), token);"""),
-            Verify.Diagnostic(0, "captures 'this' and 'item' and allocates a closure", "pass them as state and make the lambda static"));
+            Fixture.Service("""ValueTask<Item?> Get(int item, string name, CancellationToken token) => _cache.GetOrAddAsync("k", {|#0:ct => LoadAsync(item + name.Length, ct)|}, token);"""),
+            Fixture.Service("""ValueTask<Item?> Get(int item, string name, CancellationToken token) => _cache.GetOrAddAsync("k", (Self: this, Item: item, Name: name), static (s, ct) => s.Self.LoadAsync(s.Item + s.Name.Length, ct), token);"""),
+            Verify.Diagnostic(0, "captures 'this', 'item' and 'name' and allocates a closure", "pass them as state and make the lambda static"));
 
     [Fact]
     public Task Capture_named_by_nameof_or_inference_gets_no_fix()
     {
         // As a tuple element `id` becomes `s.Id`, which compiles but changes what nameof and an anonymous type's member name say.
         var source = Fixture.Service("""
-            ValueTask<Item?> Get(int id, CancellationToken token) => _cache.GetOrAddAsync("a", {|#0:ct => LoadAsync(nameof(id).Length + id, ct)|}, token);
+            ValueTask<Item?> Get(int id, string name, CancellationToken token) => _cache.GetOrAddAsync("a", {|#0:ct => LoadAsync(nameof(id).Length + id + name.Length, ct)|}, token);
 
-            ValueTask<Item?> Find(int id, CancellationToken token) => _cache.GetOrAddAsync("b", {|#1:ct => LoadAsync(new { id }.ToString().Length, ct)|}, token);
+            ValueTask<Item?> Find(int id, string name, CancellationToken token) => _cache.GetOrAddAsync("b", {|#1:ct => LoadAsync(new { id }.ToString().Length + name.Length, ct)|}, token);
             """);
         return Verify.FixAsync(
             source,
             source,
-            Verify.Diagnostic(0, "captures 'this' and 'id' and allocates a closure", "pass them as state and make the lambda static"),
-            Verify.Diagnostic(1, "captures 'this' and 'id' and allocates a closure", "pass them as state and make the lambda static"));
+            Verify.Diagnostic(0, "captures 'this', 'id' and 'name' and allocates a closure", "pass them as state and make the lambda static"),
+            Verify.Diagnostic(1, "captures 'this', 'id' and 'name' and allocates a closure", "pass them as state and make the lambda static"));
     }
 
     [Fact]
