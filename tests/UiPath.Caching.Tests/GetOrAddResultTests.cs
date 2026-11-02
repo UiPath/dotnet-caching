@@ -510,20 +510,6 @@ public class GetOrAddResultRedisIntegrationTests(RedisContainerFixture fixture) 
     }
 
     [Fact]
-    public async Task A_redis_hit_allocates_about_what_get_or_add_does()
-    {
-        Assert.SkipUnless(fixture.Enabled, "Set RUN_REDIS_INTEGRATION_TESTS=1 (Docker required) to run.");
-        var cache = Cache(KnownCacheProviderNames.Redis);
-        CacheKey key = $"k-{Guid.NewGuid():N}";
-        await cache.GetOrAddResultAsync<string>(key, _ => Task.FromResult<string?>("v"), TimeSpan.FromMinutes(5), null, Ct);
-        static Task<string?> Fail(CancellationToken token) => throw new InvalidOperationException("ran on a hit");
-
-        var (plain, result) = await AllocatedPerCallAsync(() => cache.GetOrAddAsync(key, Fail, TimeSpan.FromMinutes(5), null, Ct).AsTask(), () => cache.GetOrAddResultAsync(key, Fail, TimeSpan.FromMinutes(5), null, Ct).AsTask());
-
-        result.Should().BeLessThan((plain * 2) + 1024, $"a plain hit allocated {plain} B and a result hit {result} B");
-    }
-
-    [Fact]
     public async Task Without_the_read_script_a_hit_reports_the_stored_deadline()
     {
         Assert.SkipUnless(fixture.Enabled, "Set RUN_REDIS_INTEGRATION_TESTS=1 (Docker required) to run.");
@@ -709,38 +695,6 @@ public class GetOrAddResultRedisIntegrationTests(RedisContainerFixture fixture) 
 
     private static async Task<CacheResult<string>> Wrap(Task<string?> plain) => new(await plain, null, WasGenerated: false);
 
-    private static async Task<(long First, long Second)> AllocatedPerCallAsync(Func<Task> first, Func<Task> second)
-    {
-        for (var i = 0; i < 50; i++)
-        {
-            await first();
-            await second();
-        }
-
-        // The fewest of several rounds, alternating the two calls: other tests allocate on their own threads meanwhile, and a
-        // call's continuations run on pool threads, so a burst from elsewhere lands on rounds of both calls rather than one.
-        var fewestFirst = long.MaxValue;
-        var fewestSecond = long.MaxValue;
-        for (var round = 0; round < 7; round++)
-        {
-            fewestFirst = Math.Min(fewestFirst, await AllocatedInRoundAsync(first));
-            fewestSecond = Math.Min(fewestSecond, await AllocatedInRoundAsync(second));
-        }
-
-        return (fewestFirst, fewestSecond);
-    }
-
-    private static async Task<long> AllocatedInRoundAsync(Func<Task> call)
-    {
-        var before = GC.GetTotalAllocatedBytes(precise: true);
-        for (var i = 0; i < 200; i++)
-        {
-            await call();
-        }
-
-        return (GC.GetTotalAllocatedBytes(precise: true) - before) / 200;
-    }
-
     private ICache Cache(string provider, bool readScripts = true, bool cacheNulls = false)
     {
         var node = new ServiceCollection()
@@ -765,5 +719,77 @@ public class GetOrAddResultRedisIntegrationTests(RedisContainerFixture fixture) 
             .BuildServiceProvider();
         _nodes.Add(node);
         return node.GetRequiredService<ICacheFactory>().CreateCache(provider);
+    }
+}
+
+/// <summary>The Redis-backed allocation checks, alone: the count is process-wide, so tests running beside them would skew it.</summary>
+[Collection(RedisAllocationCollection.Name)]
+[Trait("Category", "Integration")]
+public sealed class GetOrAddResultRedisAllocationTests(RedisContainerFixture fixture) : IDisposable
+{
+    private readonly string _app = $"ga{Guid.NewGuid():N}"[..10];
+    private ServiceProvider? _node;
+
+    private static CancellationToken Ct => TestContext.Current.CancellationToken;
+
+    [Fact]
+    public async Task A_redis_hit_allocates_about_what_get_or_add_does()
+    {
+        Assert.SkipUnless(fixture.Enabled, "Set RUN_REDIS_INTEGRATION_TESTS=1 (Docker required) to run.");
+        var cache = RedisCache();
+        CacheKey key = $"k-{Guid.NewGuid():N}";
+        await cache.GetOrAddResultAsync<string>(key, _ => Task.FromResult<string?>("v"), TimeSpan.FromMinutes(5), null, Ct);
+        static Task<string?> Fail(CancellationToken token) => throw new InvalidOperationException("ran on a hit");
+
+        var plain = await AllocatedPerCallAsync(() => cache.GetOrAddAsync(key, Fail, TimeSpan.FromMinutes(5), null, Ct).AsTask());
+        var result = await AllocatedPerCallAsync(() => cache.GetOrAddResultAsync(key, Fail, TimeSpan.FromMinutes(5), null, Ct).AsTask());
+
+        result.Should().BeLessThan((plain * 2) + 1024, $"a plain hit allocated {plain} B and a result hit {result} B");
+    }
+
+    public void Dispose() => _node?.Dispose();
+
+    private static async Task<long> AllocatedPerCallAsync(Func<Task> call)
+    {
+        for (var i = 0; i < 50; i++)
+        {
+            await call();
+        }
+
+        // The fewest of several rounds: a call's continuations run on pool threads, where the runtime may allocate meanwhile.
+        var fewest = long.MaxValue;
+        for (var round = 0; round < 7; round++)
+        {
+            var before = GC.GetTotalAllocatedBytes(precise: true);
+            for (var i = 0; i < 200; i++)
+            {
+                await call();
+            }
+
+            fewest = Math.Min(fewest, (GC.GetTotalAllocatedBytes(precise: true) - before) / 200);
+        }
+
+        return fewest;
+    }
+
+    private ICache RedisCache()
+    {
+        _node = new ServiceCollection()
+            .AddLogging()
+            .AddCaching(
+                b =>
+                {
+                    b.AddRedisConnection(o => o.ConnectionString = fixture.ConnectionString);
+                    b.AddRedis(o => o.ReadScriptsEnabled = true);
+                    b.AddBroadcast();
+                    b.AddInMemoryRedis(o => o.LocalMaxExpiration = TimeSpan.FromMinutes(1));
+                },
+                o =>
+                {
+                    o.AppShortName = _app;
+                    o.SourceUri = new Uri($"urn:{_app}-0");
+                })
+            .BuildServiceProvider();
+        return _node.GetRequiredService<ICacheFactory>().CreateCache(KnownCacheProviderNames.Redis);
     }
 }

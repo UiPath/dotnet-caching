@@ -30,3 +30,10 @@ public sealed class RedisContainerFixture : IAsyncLifetime
 
 [CollectionDefinition("RedisIntegration")]
 public sealed class RedisIntegrationCollection : ICollectionFixture<RedisContainerFixture>;
+
+/// <summary>Redis tests that measure allocated bytes, run alone as <see cref="AllocationCollection"/> does, with the same fixture.</summary>
+[CollectionDefinition(Name, DisableParallelization = true)]
+public sealed class RedisAllocationCollection : ICollectionFixture<RedisContainerFixture>
+{
+    public const string Name = "RedisAllocation";
+}

@@ -306,6 +306,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
   unchanged. Nodes on 3.0 and 3.1 share a stream during a rolling deploy: a 3.0 reader takes the payload by its field name and ignores the
   extra field, and a 3.1 reader decodes an entry without it and compares the source as before. With `EmitStreamReceivedEvent` on, own
   entries are still decoded so the receipt carries the event id. The read metric's topic name is built once per topic, not per entry.
+- **A node's own Redis Pub/Sub messages are dropped before they are decoded.** A subscriber also receives what its node publishes, and decoded
+  each such message in full (about 1.75 KB) only to drop it as its own. The default `CacheEventFormatter` and the CloudEvents formatter now
+  implement `IEventSourceMatcherProvider`: the subscriber reads only the payload's top-level source and drops the message unread when it is
+  this node's exactly as written, with no allocation. The wire format is unchanged; any other source, a case-only difference, a missing or
+  repeated source and malformed JSON are decoded and compared as before, as is every message while the subscriber's debug or trace log is on.
+  A custom formatter can implement the interface to opt in.
 
 ### Removed
 

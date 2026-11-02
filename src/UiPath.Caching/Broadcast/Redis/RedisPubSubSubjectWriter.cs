@@ -19,6 +19,8 @@ internal sealed partial class RedisPubSubSubjectWriter<T> : IDisposable
     private readonly Action _onSubscriptionGap;
     private readonly Action _onDropped;
     private readonly Lock _gate = new();
+    // Null when the formatter cannot tell a payload's source without decoding it.
+    private readonly IEventSourceMatcher? _ownSource;
 
     // Under _gate: the subscription connections down now.
     private readonly HashSet<EndPoint?> _subscriptionsDown = [];
@@ -57,6 +59,7 @@ internal sealed partial class RedisPubSubSubjectWriter<T> : IDisposable
         _logger = logger;
         _sourceUri = sourceUri;
         _redisChannel = redisChannel;
+        _ownSource = (formatter as IEventSourceMatcherProvider)?.CreateSourceMatcher(sourceUri);
         _redis.OnReconnected += OnReconnected;
         _redis.OnConnectionFailed += OnConnectionFailed;
         _redis.OnConnectionRestored += OnConnectionRestored;
@@ -199,7 +202,13 @@ internal sealed partial class RedisPubSubSubjectWriter<T> : IDisposable
         {
             try
             {
-                var ev = _formatter.Decode((ReadOnlyMemory<byte>)value);
+                var payload = (ReadOnlyMemory<byte>)value;
+                if (IsOwnUndecoded(payload))
+                {
+                    return;
+                }
+
+                var ev = _formatter.Decode(payload);
                 if (ev is null)
                 {
                     return;
@@ -228,6 +237,15 @@ internal sealed partial class RedisPubSubSubjectWriter<T> : IDisposable
             }
         }
     }
+
+    /// <summary>
+    /// Whether the payload is this node's and may be dropped unread: only while its two logs, which name the event id, are off.
+    /// </summary>
+    private bool IsOwnUndecoded(ReadOnlyMemory<byte> payload) =>
+        _ownSource is { } own
+        && !_logger.IsEnabled(LogLevel.Debug)
+        && !_logger.IsEnabled(LogLevel.Trace)
+        && own.IsFromSource(payload);
 
     private void Write(T ev)
     {
