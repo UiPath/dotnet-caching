@@ -1,3 +1,4 @@
+using System.Text;
 using System.Threading.Channels;
 using Microsoft.Extensions.Logging;
 using StackExchange.Redis;
@@ -53,6 +54,80 @@ public sealed class RedisStreamSubjectWriterStreamTests : IDisposable
 
         (await WaitUntil(() => _stream.Acknowledged.Length == 1)).Should().BeTrue();
         _stream.Acknowledged.Should().Equal("1-0");
+    }
+
+    [Theory]
+    [InlineData("7.0.0")]
+    [InlineData("6.2.0")]
+    public async Task An_entry_that_names_this_node_as_its_source_is_acknowledged_and_passed_without_a_decode(string version)
+    {
+        var scripts = version.StartsWith('7');
+        _redis.Version.Returns(Version.Parse(version));
+        _stream.HasCounts = scripts;
+        var formatter = Formatter();
+        using var sut = Create(formatter: formatter, context: _context with { EmitStreamReceivedEvent = false });
+        (await WaitUntil(() => _stream.HasGroup)).Should().BeTrue();
+        sut.MarkSubscribed();
+        _stream.Add("own", "urn:self");
+        _stream.Add("theirs", "urn:other");
+        _stream.Add("old");
+
+        (await Next()).Id.Should().Be("theirs", "another node's entry is decoded and dispatched");
+        (await Next()).Id.Should().Be("old", "an entry without the field, a 3.0 node's, is decoded to tell whose it is");
+        (await WaitUntil(() => _stream.AcknowledgedCount == 3)).Should().BeTrue();
+
+        _stream.Acknowledged.Should().Equal(["1-0", "2-0", "3-0"], "the own entry is acknowledged like any other");
+        _stream.LastDelivered.Should().Be("3-0");
+        formatter.Received(2).Decode(Arg.Any<ReadOnlyMemory<byte>>());
+        formatter.DidNotReceive().Decode(Arg.Is<ReadOnlyMemory<byte>>(body => Decoded(body, "own")));
+        (_stream.ScriptReads > 0).Should().Be(scripts, "the script read and the read sent behind the check both skip the own entry");
+    }
+
+    [Fact]
+    public async Task An_own_entry_without_the_source_field_is_decoded_then_dropped()
+    {
+        var formatter = Formatter();
+        using var sut = Create(formatter: formatter, context: _context with { EmitStreamReceivedEvent = false });
+        (await WaitUntil(() => _stream.HasGroup)).Should().BeTrue();
+        _stream.Add("own");
+        _stream.Add("theirs");
+
+        (await Next()).Id.Should().Be("theirs", "the own entry, written by a 3.0 node, is found by its decoded source and dropped");
+        (await WaitUntil(() => _stream.AcknowledgedCount == 2)).Should().BeTrue();
+
+        formatter.Received(1).Decode(Arg.Is<ReadOnlyMemory<byte>>(body => Decoded(body, "own")));
+        _stream.LastDelivered.Should().Be("2-0");
+        _events.Reader.TryRead(out _).Should().BeFalse();
+    }
+
+    [Fact]
+    public async Task An_own_entry_whose_source_differs_in_case_is_dropped_once_decoded()
+    {
+        var formatter = Formatter();
+        using var sut = Create(formatter: formatter, context: _context with { EmitStreamReceivedEvent = false });
+        (await WaitUntil(() => _stream.HasGroup)).Should().BeTrue();
+        _stream.Add("OWN", "urn:SELF");
+
+        (await WaitUntil(() => _stream.AcknowledgedCount == 1)).Should().BeTrue();
+
+        formatter.Received(1).Decode(Arg.Any<ReadOnlyMemory<byte>>());
+        _events.Reader.TryRead(out _).Should().BeFalse("the field is not this node's byte for byte, so the decoded source decides, case-insensitively as before");
+    }
+
+    [Fact]
+    public async Task With_the_receipt_diagnostic_on_an_own_entry_is_decoded_so_its_receipt_names_the_event()
+    {
+        var formatter = Formatter();
+        var telemetry = Substitute.For<ICachingTelemetryProvider>();
+        using var sut = Create(formatter: formatter, telemetry: telemetry, context: _context with { EmitStreamReceivedEvent = true });
+        (await WaitUntil(() => _stream.HasGroup)).Should().BeTrue();
+        _stream.Add("own", "urn:self");
+
+        (await WaitUntil(() => _stream.AcknowledgedCount == 1)).Should().BeTrue();
+
+        formatter.Received(1).Decode(Arg.Any<ReadOnlyMemory<byte>>());
+        _events.Reader.TryRead(out _).Should().BeFalse();
+        telemetry.Received(1).TrackEvent("Caching.RedisStreamSubjectWriter.DispatchEventsAsync.EventReceived", Arg.Any<TelemetryTags<string>>(), Arg.Any<TelemetryTags<double>>());
     }
 
     [Fact]
@@ -384,6 +459,26 @@ public sealed class RedisStreamSubjectWriterStreamTests : IDisposable
 
     private static Task Reached(Held held) => held.Reached.WaitAsync(WaitTimeout, TestContext.Current.CancellationToken);
 
+    /// <summary>Decodes a payload to an event with the payload as its id, from this node for <c>own</c>, from <c>urn:SELF</c> for <c>OWN</c>, and from another node otherwise.</summary>
+    private static IEventFormatterProxy<ICacheEvent> Formatter()
+    {
+        var formatter = Substitute.For<IEventFormatterProxy<ICacheEvent>>();
+        formatter.Decode(Arg.Any<ReadOnlyMemory<byte>>()).Returns(call =>
+        {
+            var text = Encoding.UTF8.GetString(call.Arg<ReadOnlyMemory<byte>>().Span);
+            var source = text switch
+            {
+                "own" => "urn:self",
+                "OWN" => "urn:SELF",
+                _ => "urn:other",
+            };
+            return new TestCacheEvent { Id = text, Valid = true, Source = new Uri(source) };
+        });
+        return formatter;
+    }
+
+    private static bool Decoded(ReadOnlyMemory<byte> body, string payload) => Encoding.UTF8.GetString(body.Span) == payload;
+
     private Task<ICacheEvent> Next() => _events.Reader.ReadAsync(_stop.Token).AsTask().WaitAsync(WaitTimeout, TestContext.Current.CancellationToken);
 
     private ObservedWaiter Track(ObservedWaiter waiter)
@@ -427,22 +522,31 @@ public sealed class RedisStreamSubjectWriterStreamTests : IDisposable
         return (sut, waiter);
     }
 
-    private RedisStreamSubjectWriter<ICacheEvent> Create(ObservedWaiter? waiter = null, TimeSpan? pollInterval = null)
+    private RedisStreamSubjectWriter<ICacheEvent> Create(
+        ObservedWaiter? waiter = null,
+        TimeSpan? pollInterval = null,
+        IEventFormatterProxy<ICacheEvent>? formatter = null,
+        ICachingTelemetryProvider? telemetry = null,
+        RedisStreamContext? context = null)
     {
         var connectionState = Substitute.For<IConnectionState>();
         connectionState.IsConnected.Returns(true);
-        var formatter = Substitute.For<IEventFormatterProxy<ICacheEvent>>();
-        formatter.Decode(Arg.Any<ReadOnlyMemory<byte>>()).Returns(_ => new TestCacheEvent { Valid = true, Source = new Uri("urn:other") });
+        if (formatter is null)
+        {
+            formatter = Substitute.For<IEventFormatterProxy<ICacheEvent>>();
+            formatter.Decode(Arg.Any<ReadOnlyMemory<byte>>()).Returns(_ => new TestCacheEvent { Valid = true, Source = new Uri("urn:other") });
+        }
+
         var poll = pollInterval ?? _context.PollInterval;
         var fetchWaiter = waiter ?? Track(new ObservedWaiter(new SignalingFetchWaiter(poll)));
         return new RedisStreamSubjectWriter<ICacheEvent>(
-            _context with { PollInterval = poll },
+            (context ?? _context) with { PollInterval = poll },
             connectionState,
             _redis,
             _events.Writer,
             formatter,
             Substitute.For<ILogger>(),
-            Substitute.For<ICachingTelemetryProvider>(),
+            telemetry ?? Substitute.For<ICachingTelemetryProvider>(),
             Substitute.For<IRedisProfiler>(),
             fetchWaiter,
             () => _missed.TrySetResult(),

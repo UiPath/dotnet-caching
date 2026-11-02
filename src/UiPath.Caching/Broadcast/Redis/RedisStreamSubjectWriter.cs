@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Text;
 using System.Threading.Channels;
 using UiPath.Caching.Telemetry;
 
@@ -30,6 +31,11 @@ internal sealed partial class RedisStreamSubjectWriter<T> : IDisposable
     private readonly Action _onMessagesMissed;
     private readonly Lazy<bool> _scriptsSuited;
     private readonly TimeProvider _clock;
+    private readonly string _topicName;
+    // This node's source as a 3.1 writer puts it beside the payload, so an entry that carries it is this node's own.
+    private readonly byte[] _ownSource;
+    // Own entries are dropped unread unless the receipt diagnostic is on, which reports each event's id and so needs the decode.
+    private readonly bool _skipOwnUndecoded;
 
     private bool _disposed;
     private RedisValue _lastId = StreamPosition.NewMessages;
@@ -104,6 +110,9 @@ internal sealed partial class RedisStreamSubjectWriter<T> : IDisposable
         _redis = redis;
         _stream = stream ?? new RedisStreamPort(context, redis);
         _clock = clock ?? TimeProvider.System;
+        _topicName = context.Topic.ToString();
+        _ownSource = Encoding.UTF8.GetBytes(StreamSource.Of(context.SourceUri));
+        _skipOwnUndecoded = !context.EmitStreamReceivedEvent;
         // XINFO STREAM has no entries-added before 7.0, so the script's gap check has no data there and only costs the server.
         _scriptsSuited = new Lazy<bool>(() => _redis.Version >= Version.Parse("7.0.0"));
         _writer = channelWriter;
@@ -532,6 +541,7 @@ internal sealed partial class RedisStreamSubjectWriter<T> : IDisposable
         try
         {
             return !entry.IsNull
+                && !IsOwn(entry)
                 && _formatter.Decode((ReadOnlyMemory<byte>)entry[_context.FieldName]) is { } ev
                 && ev.IsValid()
                 && !ev.SameSource(_context.SourceUri);
@@ -817,6 +827,15 @@ internal sealed partial class RedisStreamSubjectWriter<T> : IDisposable
 
         try
         {
+            if (_skipOwnUndecoded && IsOwn(@event))
+            {
+                // Acknowledged first, so a throw below cannot leave the entry pending.
+                ids.Add(@event.Id);
+                LogEventFromCurrentSource(null, _context.Topic, @event.Id);
+                _cachingTelemetryProvider.TrackTopicReadMetric(_topicName, @event.Id);
+                return default;
+            }
+
             T? ev;
             try
             {
@@ -846,7 +865,7 @@ internal sealed partial class RedisStreamSubjectWriter<T> : IDisposable
                 // Acknowledged first, so a throw below cannot leave the entry pending.
                 ids.Add(@event.Id);
                 LogEventFromCurrentSource(ev.Id, _context.Topic, @event.Id);
-                _cachingTelemetryProvider.TrackTopicReadMetric(_context.Topic.ToString(), @event.Id);
+                _cachingTelemetryProvider.TrackTopicReadMetric(_topicName, @event.Id);
                 TraceReceipt(ev);
                 return default;
             }
@@ -906,7 +925,7 @@ internal sealed partial class RedisStreamSubjectWriter<T> : IDisposable
         ids.Add(@event.Id);
         _cachingTelemetryProvider.TryTrackEvent(EventInvalid,
         [
-            new(PropTopicKey, _context.Topic.ToString()),
+            new(PropTopicKey, _topicName),
             new(PropTransportId, @event.Id.ToString()),
         ]);
         LogEventInvalid(ev.Id, _context.Topic, @event.Id);
@@ -919,7 +938,7 @@ internal sealed partial class RedisStreamSubjectWriter<T> : IDisposable
         ids.Add(@event.Id);
         _cachingTelemetryProvider.TryTrackEvent(EventUndecodable,
         [
-            new(PropTopicKey, _context.Topic.ToString()),
+            new(PropTopicKey, _topicName),
             new(PropTransportId, @event.Id.ToString()),
         ]);
         if (++_undecodable is var count && count % StreamConstants.UndecodableEntriesPerWarning == 1)
@@ -932,6 +951,20 @@ internal sealed partial class RedisStreamSubjectWriter<T> : IDisposable
         }
     }
 
+    /// <summary>Whether the entry names this node as its source, in the field a 3.1 writer puts beside the payload; an entry without it is unknown.</summary>
+    private bool IsOwn(in StreamEntry entry)
+    {
+        foreach (var field in entry.Values)
+        {
+            if (field.Name == StreamConstants.SourceField)
+            {
+                return ((ReadOnlyMemory<byte>)field.Value).Span.SequenceEqual(_ownSource);
+            }
+        }
+
+        return false;
+    }
+
     private void TraceReceipt(T ev)
     {
         LogEventReceived(ev.Id, _context.Topic, ev.TransportId);
@@ -941,7 +974,7 @@ internal sealed partial class RedisStreamSubjectWriter<T> : IDisposable
             _cachingTelemetryProvider.TryTrackEvent(EventReceived,
             [
                 new(PropEventId, ev.Id!),
-                new(PropTopicKey, _context.Topic.ToString()),
+                new(PropTopicKey, _topicName),
                 new(PropTransportId, ev.TransportId!),
             ]);
         }

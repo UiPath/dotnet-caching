@@ -1,4 +1,5 @@
 using System.Globalization;
+using System.Text;
 using StackExchange.Redis;
 using UiPath.Caching.Broadcast.Redis;
 
@@ -12,13 +13,15 @@ namespace UiPath.Caching.Tests.Broadcast;
 internal sealed class InMemoryStreamPort(RedisValue group, RedisValue field) : IStreamPort
 {
     private readonly object _lock = new();
-    private readonly List<(long Seq, string Payload)> _log = [];
+    // Values are byte-backed, as the client parses them off the wire.
+    private readonly List<(long Seq, RedisValue Payload, RedisValue Source)> _log = [];
     private readonly SortedSet<long> _pending = [];
     private readonly List<string> _acknowledged = [];
     private readonly Queue<Held>[] _holds = [new(), new(), new(), new(), new()];
     private readonly Exception?[] _failures = new Exception?[5];
     private readonly int[] _calls = new int[5];
     private int _scriptReads;
+    private int _acknowledgedCount;
     private long _added;
     private bool _exists;
     private bool _hasGroup;
@@ -47,6 +50,9 @@ internal sealed class InMemoryStreamPort(RedisValue group, RedisValue field) : I
             }
         }
     }
+
+    /// <summary>The entries acknowledged so far, without copying them.</summary>
+    public int AcknowledgedCount => Volatile.Read(ref _acknowledgedCount);
 
     public bool HasGroup
     {
@@ -97,12 +103,13 @@ internal sealed class InMemoryStreamPort(RedisValue group, RedisValue field) : I
         }
     }
 
-    public void Add(string payload)
+    /// <summary>Appends an entry; with <paramref name="source"/>, its writer's source goes in the field beside the payload, as a 3.1 node writes it.</summary>
+    public void Add(string payload, string? source = null)
     {
         lock (_lock)
         {
             _exists = true;
-            _log.Add((++_added, payload));
+            _log.Add((++_added, Bytes(payload), source is null ? RedisValue.Null : Bytes(source)));
         }
     }
 
@@ -171,6 +178,8 @@ internal sealed class InMemoryStreamPort(RedisValue group, RedisValue field) : I
         RunAsync(Op.Acknowledge, () => AcknowledgeCore(ids));
 
     private static string Id(long seq) => $"{seq}-0";
+
+    private static RedisValue Bytes(string text) => Encoding.UTF8.GetBytes(text);
 
     private static long Seq(RedisValue id) => long.Parse(((string)id!).Split('-')[0], CultureInfo.InvariantCulture);
 
@@ -256,7 +265,8 @@ internal sealed class InMemoryStreamPort(RedisValue group, RedisValue field) : I
     private StreamEntry PendingEntry(long seq) =>
         _log.Exists(e => e.Seq == seq) ? Entry(_log.Find(e => e.Seq == seq)) : new StreamEntry(Id(seq), []);
 
-    private StreamEntry Entry((long Seq, string Payload) e) => new(Id(e.Seq), [new NameValueEntry(field, e.Payload)]);
+    private StreamEntry Entry((long Seq, RedisValue Payload, RedisValue Source) e) =>
+        new(Id(e.Seq), e.Source.IsNull ? [new NameValueEntry(field, e.Payload)] : [new NameValueEntry(field, e.Payload), new NameValueEntry(StreamConstants.SourceField, e.Source)]);
 
     private RedisResult CheckAndReadCore(bool full)
     {
@@ -325,8 +335,17 @@ internal sealed class InMemoryStreamPort(RedisValue group, RedisValue field) : I
         }
     }
 
-    private RedisResult Reply(StreamEntry e) =>
-        RedisResult.Create([RedisResult.Create(e.Id), RedisResult.Create(new RedisValue[] { field, e[field] })]);
+    private RedisResult Reply(StreamEntry e)
+    {
+        var fields = new RedisValue[e.Values.Length * 2];
+        for (var i = 0; i < e.Values.Length; i++)
+        {
+            fields[2 * i] = e.Values[i].Name;
+            fields[(2 * i) + 1] = e.Values[i].Value;
+        }
+
+        return RedisResult.Create([RedisResult.Create(e.Id), RedisResult.Create(fields)]);
+    }
 
     private bool CreateCore(RedisValue position)
     {
@@ -352,6 +371,7 @@ internal sealed class InMemoryStreamPort(RedisValue group, RedisValue field) : I
             _acknowledged.Add(id!);
         }
 
+        Interlocked.Add(ref _acknowledgedCount, ids.Length);
         return ids.Length;
     }
 

@@ -299,6 +299,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
   a peer that stores and releases within that round trip (longer with `PreferReplica`) is then not seen, and both nodes generate,
   which the lock is there to prevent. After a wait, a timeout, or with a custom `IDistributedLock`, the read under the lock stays.
   An `IMultilayerCacheOptions` implementation outside the library that does not declare it keeps it off.
+- **A node's own Redis Streams entries are dropped before they are decoded.** Every node's consumer group reads every entry, its own included, and
+  an own entry was decoded in full (about 2.2-2.6 KB of JSON, `Uri` and dictionary allocations each, about 4.5 MB per periodic backlog read
+  in the load test) only to be dropped as this node's. The writer now puts the event's source in a `src` field after the payload, and a reader that
+  finds its own source there acknowledges the entry and moves the group on without decoding it; the gap check, loss reporting and ordering are
+  unchanged. Nodes on 3.0 and 3.1 share a stream during a rolling deploy: a 3.0 reader takes the payload by its field name and ignores the
+  extra field, and a 3.1 reader decodes an entry without it and compares the source as before. With `EmitStreamReceivedEvent` on, own
+  entries are still decoded so the receipt carries the event id. The read metric's topic name is built once per topic, not per entry.
 
 ### Removed
 

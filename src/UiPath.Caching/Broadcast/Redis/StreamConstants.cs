@@ -30,6 +30,12 @@ internal static class StreamConstants
     internal const int UndecodableEntriesPerWarning = 100;
     internal static readonly RedisValue UndeliveredMessages = ">";
 
+    /// <summary>
+    /// The entry field beside the payload that names the writer's source, so a reader drops its own entries without
+    /// decoding them. A 3.0 reader finds the payload by its field name and ignores this one; an entry without it is decoded.
+    /// </summary>
+    internal static readonly RedisValue SourceField = "src";
+
     /// <summary>Read position of the entries delivered to a consumer but not acknowledged.</summary>
     internal static readonly RedisValue PendingMessages = "0";
 
