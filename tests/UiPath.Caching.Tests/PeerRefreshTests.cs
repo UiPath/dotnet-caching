@@ -246,6 +246,8 @@ public class PeerRefreshTests
             clock.Advance(InMemoryRedisCacheOptionsTimeout + TimeSpan.FromMilliseconds(1));
         }
 
+        // The refresh leaves the runs in flight just before it reports the drop.
+        await Until(() => telemetry.Events.Any(e => e.Name == Dropped));
         await b.Settled();
 
         var reason = how == "throws" ? "failed" : "timed_out";

@@ -194,11 +194,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
   since a call (and the multi-key `CacheSyncExtensions.GetOrAdd`, which calls it) no longer falls back to the batch
   closure overload's setup.
 
-- **StackExchange.Redis 3.4.20 (was 3.3.1).** It fixes transactions on an idle connection being torn down as a dead socket when the
+- **StackExchange.Redis 3.4.29 (was 3.3.1).** It fixes a corrupted reply stream: a connection that reused a read-buffer segment
+  another connection had released (3.3.1 and 3.4.20) kept that segment's old offset, so it read replies at the wrong position. It
+  also fixes transactions on an idle connection being torn down as a dead socket when the
   replies are slower than one heartbeat (the hash writes are `MULTI`/`EXEC`), and `IBatch` commands that never completed after a
   connection drop. Commands that a dropped connection fails now throw `RedisConnectionException` instead of a raw transport or
-  cancellation exception. Under RESP3 (the Azure Entra default) pub/sub now uses its own connection, so a server sees one more client
-  per node. `Microsoft.Extensions.Logging.Abstractions` rises to 10.0.13, the floor StackExchange.Redis 3.4.20 declares.
+  cancellation exception. Under RESP3 (the Azure Entra default) pub/sub now uses its own connection, opened at the first subscribe,
+  so a server sees one more client per node. `Microsoft.Extensions.Logging.Abstractions` rises to 10.0.13, the floor StackExchange.Redis 3.4.29 declares.
 
 - **`RedisStreamsTopicOptions.PollBatchSize` defaults to 1024 instead of 4096.** It is the `COUNT` of each
   `XREADGROUP`, and the reply shares the cache's connection: the commands behind it wait for it, and with a short
