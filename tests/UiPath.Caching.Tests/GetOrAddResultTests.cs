@@ -518,8 +518,7 @@ public class GetOrAddResultRedisIntegrationTests(RedisContainerFixture fixture) 
         await cache.GetOrAddResultAsync<string>(key, _ => Task.FromResult<string?>("v"), TimeSpan.FromMinutes(5), null, Ct);
         static Task<string?> Fail(CancellationToken token) => throw new InvalidOperationException("ran on a hit");
 
-        var plain = await AllocatedPerCallAsync(() => cache.GetOrAddAsync(key, Fail, TimeSpan.FromMinutes(5), null, Ct).AsTask());
-        var result = await AllocatedPerCallAsync(() => cache.GetOrAddResultAsync(key, Fail, TimeSpan.FromMinutes(5), null, Ct).AsTask());
+        var (plain, result) = await AllocatedPerCallAsync(() => cache.GetOrAddAsync(key, Fail, TimeSpan.FromMinutes(5), null, Ct).AsTask(), () => cache.GetOrAddResultAsync(key, Fail, TimeSpan.FromMinutes(5), null, Ct).AsTask());
 
         result.Should().BeLessThan((plain * 2) + 1024, $"a plain hit allocated {plain} B and a result hit {result} B");
     }
@@ -710,27 +709,36 @@ public class GetOrAddResultRedisIntegrationTests(RedisContainerFixture fixture) 
 
     private static async Task<CacheResult<string>> Wrap(Task<string?> plain) => new(await plain, null, WasGenerated: false);
 
-    private static async Task<long> AllocatedPerCallAsync(Func<Task> call)
+    private static async Task<(long First, long Second)> AllocatedPerCallAsync(Func<Task> first, Func<Task> second)
     {
         for (var i = 0; i < 50; i++)
+        {
+            await first();
+            await second();
+        }
+
+        // The fewest of several rounds, alternating the two calls: other tests allocate on their own threads meanwhile, and a
+        // call's continuations run on pool threads, so a burst from elsewhere lands on rounds of both calls rather than one.
+        var fewestFirst = long.MaxValue;
+        var fewestSecond = long.MaxValue;
+        for (var round = 0; round < 7; round++)
+        {
+            fewestFirst = Math.Min(fewestFirst, await AllocatedInRoundAsync(first));
+            fewestSecond = Math.Min(fewestSecond, await AllocatedInRoundAsync(second));
+        }
+
+        return (fewestFirst, fewestSecond);
+    }
+
+    private static async Task<long> AllocatedInRoundAsync(Func<Task> call)
+    {
+        var before = GC.GetTotalAllocatedBytes(precise: true);
+        for (var i = 0; i < 200; i++)
         {
             await call();
         }
 
-        // The fewest of several rounds: other tests allocate on their own threads meanwhile, and a call's continuations run on pool threads.
-        var fewest = long.MaxValue;
-        for (var round = 0; round < 7; round++)
-        {
-            var before = GC.GetTotalAllocatedBytes(precise: true);
-            for (var i = 0; i < 200; i++)
-            {
-                await call();
-            }
-
-            fewest = Math.Min(fewest, (GC.GetTotalAllocatedBytes(precise: true) - before) / 200);
-        }
-
-        return fewest;
+        return (GC.GetTotalAllocatedBytes(precise: true) - before) / 200;
     }
 
     private ICache Cache(string provider, bool readScripts = true, bool cacheNulls = false)
