@@ -2,6 +2,7 @@
 namespace UiPath.Caching;
 
 /// <summary>An <see cref="IHashCache"/> that reads by the key's text without building a <see cref="CacheKey"/>; the <c>Span&lt;char&gt;</c> members of <see cref="IHashCache"/> prefer it, and its batch and field-removal members too.</summary>
+/// <remarks>The key span is valid only until the call returns; an implementation copies it before any await.</remarks>
 public interface ISpanKeyHashCache
 {
     /// <inheritdoc cref="ISpanKeyCache.GetAsync{T}(Span{char}, CachePolicy, CancellationToken)"/>

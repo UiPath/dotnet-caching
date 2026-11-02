@@ -2,6 +2,8 @@ using UiPath.Caching.Tests.Fakes;
 
 namespace UiPath.Caching.Tests;
 
+#pragma warning disable IDE0034 // default(CacheKey) is written out to pin the CacheKey overload; a bare default would bind differently
+
 /// <summary>Span <c>ContainsAsync</c>, <c>GetCacheEntryAsync</c> and <c>GetOrAddAsync</c> answer as the <see cref="CacheKey"/> forms do, and string keys read the local tier by their text.</summary>
 public class SpanKeyOperationTests
 {
@@ -13,7 +15,7 @@ public class SpanKeyOperationTests
     private static CancellationToken Ct => TestContext.Current.CancellationToken;
 
     [Fact]
-    public async Task A_bare_default_key_still_binds_to_the_CacheKey_overloads()
+    public async Task A_bare_default_key_reaches_the_cache_as_default_CacheKey()
     {
         var cache = Substitute.For<ICache>();
         var typed = Substitute.For<ICache<string>>();
@@ -28,13 +30,13 @@ public class SpanKeyOperationTests
         await typedHash.ContainsAsync(default, Ct);
         await typedHash.GetCacheEntryAsync(default, Ct);
 
-        await cache.Received(1).ContainsAsync<string>(Arg.Any<CacheKey>(), Ct);
-        await cache.Received(1).GetCacheEntryAsync<string>(Arg.Any<CacheKey>(), null, Ct);
-        await typed.Received(1).ContainsAsync(Arg.Any<CacheKey>(), Ct);
-        await hash.Received(1).ContainsAsync<string>(Arg.Any<CacheKey>(), Ct);
-        await hash.Received(1).GetCacheEntryAsync<string>(Arg.Any<CacheKey>(), null, Ct);
-        await typedHash.Received(1).ContainsAsync(Arg.Any<CacheKey>(), Ct);
-        await typedHash.Received(1).GetCacheEntryAsync(Arg.Any<CacheKey>(), Ct);
+        await cache.Received(1).ContainsAsync<string>(default(CacheKey), Ct);
+        await cache.Received(1).GetCacheEntryAsync<string>(default(CacheKey), null, Ct);
+        await typed.Received(1).ContainsAsync(default(CacheKey), Ct);
+        await hash.Received(1).ContainsAsync<string>(default(CacheKey), Ct);
+        await hash.Received(1).GetCacheEntryAsync<string>(default(CacheKey), null, Ct);
+        await typedHash.Received(1).ContainsAsync(default(CacheKey), Ct);
+        await typedHash.Received(1).GetCacheEntryAsync(default(CacheKey), Ct);
     }
 
     [Fact]
@@ -159,9 +161,8 @@ public class SpanKeyOperationTests
         SpanReads.Contains<string>(cache, " User:42 ", Ct).Should().BeTrue();
         SpanReads.GetOrAdd(cache, "User:42", Unexpected, token: Ct).Should().Be("v");
         SpanReads.Contains(typed, "User:42", Ct).Should().BeTrue();
-        Span<char> key = stackalloc char[7];
-        "User:42".CopyTo(key);
-        (await typed.GetOrAddAsync(key, Unexpected, TimeSpan.FromMinutes(1), Ct)).Should().Be("v");
+        var text = "User:42";
+        (await typed.GetOrAddAsync($"{text}", Unexpected, TimeSpan.FromMinutes(1), Ct)).Should().Be("v");
         SpanReads.Contains<string>(hash, "User:42", Ct).Should().BeTrue();
     }
 
@@ -424,16 +425,12 @@ public class SpanKeyOperationTests
 
     private static ValueTask<string?> GetOrAddBySpan(ICache cache, string key, TimeSpan expiration)
     {
-        Span<char> buffer = stackalloc char[key.Length];
-        key.CopyTo(buffer);
-        return cache.GetOrAddAsync(buffer, static _ => Task.FromResult<string?>("v"), expiration, policy: null, Ct);
+        return cache.GetOrAddAsync($"{key}", static _ => Task.FromResult<string?>("v"), expiration, policy: null, Ct);
     }
 
     private static ValueTask<string?> GetOrAddBySpan(ICache cache, string key, DateTimeOffset expiration)
     {
-        Span<char> buffer = stackalloc char[key.Length];
-        key.CopyTo(buffer);
-        return cache.GetOrAddAsync(buffer, static _ => Task.FromResult<string?>("v"), expiration, policy: null, Ct);
+        return cache.GetOrAddAsync($"{key}", static _ => Task.FromResult<string?>("v"), expiration, policy: null, Ct);
     }
 
     /// <summary>Declines every span composition, so the typed cache must fall back to the key it builds.</summary>

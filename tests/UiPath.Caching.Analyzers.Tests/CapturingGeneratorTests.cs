@@ -120,22 +120,20 @@ public class CapturingGeneratorTests
     }
 
     [Fact]
-    public Task Span_key_overload_is_fixed() =>
+    public Task Interpolated_key_overload_is_fixed() =>
         Verify.FixAsync(
             Fixture.Service("""
                 ValueTask<Item?> Get(CancellationToken token)
                 {
-                    Span<char> key = stackalloc char[1];
-                    key[0] = 'k';
-                    return _cache.GetOrAddAsync(key, {|#0:ct => LoadAsync(ct)|}, token);
+                    var id = "k";
+                    return _cache.GetOrAddAsync($"{id}", {|#0:ct => LoadAsync(ct)|}, token);
                 }
                 """),
             Fixture.Service("""
                 ValueTask<Item?> Get(CancellationToken token)
                 {
-                    Span<char> key = stackalloc char[1];
-                    key[0] = 'k';
-                    return _cache.GetOrAddAsync(key, this, static (self, ct) => self.LoadAsync(ct), token);
+                    var id = "k";
+                    return _cache.GetOrAddAsync($"{id}", this, static (self, ct) => self.LoadAsync(ct), token);
                 }
                 """),
             Verify.Diagnostic(0, ThisDelegate, PassIt));
@@ -155,22 +153,20 @@ public class CapturingGeneratorTests
             Verify.Diagnostic(0, "captures 'this' and 'token' and allocates a closure", PassThem));
 
     [Fact]
-    public Task Untyped_span_key_overload_is_fixed() =>
+    public Task Untyped_interpolated_key_overload_is_fixed() =>
         Verify.FixAsync(
             Fixture.Service("""
                 ValueTask<Item?> Get(CancellationToken token)
                 {
-                    Span<char> key = stackalloc char[1];
-                    key[0] = 'k';
-                    return _untyped.GetOrAddAsync<Item>(key, {|#0:ct => LoadAsync(ct)|}, _policy, token);
+                    var id = "k";
+                    return _untyped.GetOrAddAsync<Item>($"{id}", {|#0:ct => LoadAsync(ct)|}, _policy, token);
                 }
                 """),
             Fixture.Service("""
                 ValueTask<Item?> Get(CancellationToken token)
                 {
-                    Span<char> key = stackalloc char[1];
-                    key[0] = 'k';
-                    return _untyped.GetOrAddAsync<Item, Service>(key, this, static (self, ct) => self.LoadAsync(ct), _policy, token);
+                    var id = "k";
+                    return _untyped.GetOrAddAsync<Item, Service>($"{id}", this, static (self, ct) => self.LoadAsync(ct), _policy, token);
                 }
                 """),
             Verify.Diagnostic(0, ThisDelegate, PassIt));
@@ -197,22 +193,20 @@ public class CapturingGeneratorTests
             Verify.Diagnostic(0, ThisDelegate, PassIt));
 
     [Fact]
-    public Task Span_key_generated_expiration_overload_is_fixed() =>
+    public Task Interpolated_key_generated_expiration_overload_is_fixed() =>
         Verify.FixAsync(
             Fixture.Service("""
                 ValueTask<Item?> Get(CancellationToken token)
                 {
-                    Span<char> key = stackalloc char[1];
-                    key[0] = 'k';
-                    return _cache.GetOrAddWithExpirationAsync(key, {|#0:ct => GenerateAsync(ct)|}, token);
+                    var id = "k";
+                    return _cache.GetOrAddWithExpirationAsync($"{id}", {|#0:ct => GenerateAsync(ct)|}, token);
                 }
                 """),
             Fixture.Service("""
                 ValueTask<Item?> Get(CancellationToken token)
                 {
-                    Span<char> key = stackalloc char[1];
-                    key[0] = 'k';
-                    return _cache.GetOrAddWithExpirationAsync(key, this, static (self, ct) => self.GenerateAsync(ct), token);
+                    var id = "k";
+                    return _cache.GetOrAddWithExpirationAsync($"{id}", this, static (self, ct) => self.GenerateAsync(ct), token);
                 }
                 """),
             Verify.Diagnostic(0, ThisDelegate, PassIt));

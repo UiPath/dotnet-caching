@@ -133,7 +133,7 @@ public class UserService(
 
 The extension-method pattern scales: each cache gets its own `ICacheKeyStrategy` (e.g. `"user:"`, `"order:"`, `"tenant:"`) so keys never collide. It's common to see a single service define dozens of these extensions, one per typed cache.
 
-The lambda above is the shape to use unless a profiler says otherwise; the `Span<char>` and state overloads are for hot paths, and [how-to/choosing-a-get-or-add-overload.md](how-to/choosing-a-get-or-add-overload.md) says what each costs.
+The lambda above is the shape to use unless a profiler says otherwise; interpolated keys and the state overloads are for hot paths, and [how-to/choosing-a-get-or-add-overload.md](how-to/choosing-a-get-or-add-overload.md) says what each costs.
 
 For richer patterns — provider fallback when Redis is disabled, app-version prefixes for deploy-time invalidation, MediatR caching behaviors — see [recipes/](recipes/).
 
@@ -153,7 +153,7 @@ Pick the next page based on what you need:
 
 - **Build the mental model** — [concepts.md](concepts.md). Architecture overview: providers, layers, topics, locks, policies, telemetry, and the two surfaces.
 - **Wire Redis into the ASP.NET health probe** — [recipes/redis-health-check.md](recipes/redis-health-check.md). The shipped `RedisHealthCheck` reports red on connection failure but stays green during Azure Redis planned maintenance.
-- **Wondering which `GetOrAddAsync` overload to call** — [how-to/choosing-a-get-or-add-overload.md](how-to/choosing-a-get-or-add-overload.md). Lambda first; what the delegate, state and span shapes cost and when they pay.
+- **Wondering which `GetOrAddAsync` overload to call** — [how-to/choosing-a-get-or-add-overload.md](how-to/choosing-a-get-or-add-overload.md). Lambda first; what the delegate, state and interpolated-key shapes cost and when they pay.
 - **Need resilience knobs** — [how-to/resilience.md](how-to/resilience.md). Single-flight, hydrating cache, jitter, named policies, Polly.
 - **Need cross-node sync** — [how-to/broadcast.md](how-to/broadcast.md). Streams vs Pub/Sub, per-topic options, the notify doorbell.
 - **Need per-field caching** — [how-to/hash-cache.md](how-to/hash-cache.md). `IHashCache<T>`, metadata, bundled GET+TTL.

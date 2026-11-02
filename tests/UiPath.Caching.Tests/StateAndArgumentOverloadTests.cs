@@ -275,28 +275,26 @@ public class StateAndArgumentOverloadTests
 
     private static IDictionary<string, string?> SpanHash(IHashCache cache, Request request, Func<Request, CancellationToken, Task<IDictionary<string, string?>>> generator)
     {
-        Span<char> key = stackalloc char[8];
-        "k".AsSpan().CopyTo(key);
-        return Complete(cache.GetOrAddAsync<string, Request>(key[..1], request, generator, (CachePolicy?)null, Ct));
+        var text = "k";
+        return Complete(cache.GetOrAddAsync<string, Request>($"{text}", request, generator, (CachePolicy?)null, Ct));
     }
 
     private static IDictionary<string, string?> SpanHash(IHashCache<string> cache, Request request, Func<Request, CancellationToken, Task<IDictionary<string, string?>>> generator)
     {
-        Span<char> key = stackalloc char[8];
-        "k".AsSpan().CopyTo(key);
-        return Complete(cache.GetOrAddAsync(key[..1], request, generator, Ct));
+        var text = "k";
+        return Complete(cache.GetOrAddAsync($"{text}", request, generator, Ct));
     }
 
     private static string? SpanGenerated(ICache cache, int state)
     {
-        Span<char> key = "jwt".ToCharArray();
-        return Complete(cache.GetOrAddWithExpirationAsync<string, int>(key, state, static (n, _) => Task.FromResult(new GeneratedValue<string>($"token:{n}", Deadline)), (CachePolicy?)null, Ct));
+        var text = "jwt";
+        return Complete(cache.GetOrAddWithExpirationAsync<string, int>($"{text}", state, static (n, _) => Task.FromResult(new GeneratedValue<string>($"token:{n}", Deadline)), (CachePolicy?)null, Ct));
     }
 
     private static string? SpanGenerated(ICache<string> cache, int state)
     {
-        Span<char> key = "jwt".ToCharArray();
-        return Complete(cache.GetOrAddWithExpirationAsync(key, state, static (n, _) => Task.FromResult(new GeneratedValue<string>($"token:{n}", Deadline)), Ct));
+        var text = "jwt";
+        return Complete(cache.GetOrAddWithExpirationAsync($"{text}", state, static (n, _) => Task.FromResult(new GeneratedValue<string>($"token:{n}", Deadline)), Ct));
     }
 
 #pragma warning disable S5034 // read once: the result of a completed read, or the awaited one; AsTask on every read would allocate

@@ -68,21 +68,21 @@ public class SealedMemberMockTests
         (await SpanGet(typed)).Should().Be("typed");
     }
 
-    private static Span<char> Key(string key) => key.ToCharArray();
+    private static string Key(string key) => key;
 
-    private static ValueTask<string?> SpanGet(ICache cache) => cache.GetAsync<string>(Key("user:42"), null);
+    private static ValueTask<string?> SpanGet(ICache cache) => cache.GetAsync<string>($"{Key("user:42")}", null);
 
-    private static ValueTask<string?> SpanGet(ICache<string> cache) => cache.GetAsync(Key("user:42"));
+    private static ValueTask<string?> SpanGet(ICache<string> cache) => cache.GetAsync($"{Key("user:42")}");
 
-    private static ValueTask<string?> SpanGetOrAdd(ICache cache) => cache.GetOrAddAsync(Key("k"), _ => Task.FromResult<string?>("span"), null);
+    private static ValueTask<string?> SpanGetOrAdd(ICache cache) => cache.GetOrAddAsync($"{Key("k")}", _ => Task.FromResult<string?>("span"), null);
 
-    private static ValueTask<string?> SpanGetOrAdd(ICache<string> cache) => cache.GetOrAddAsync(Key("k"), _ => Task.FromResult<string?>("span"));
+    private static ValueTask<string?> SpanGetOrAdd(ICache<string> cache) => cache.GetOrAddAsync($"{Key("k")}", _ => Task.FromResult<string?>("span"));
 
-    private static ValueTask<string?> SpanGetOrAddWithState(ICache cache) => cache.GetOrAddAsync<string, int>(Key("k"), 1, static (n, _) => Task.FromResult<string?>($"span:{n}"), null);
+    private static ValueTask<string?> SpanGetOrAddWithState(ICache cache) => cache.GetOrAddAsync<string, int>($"{Key("k")}", 1, static (n, _) => Task.FromResult<string?>($"span:{n}"), null);
 
-    private static ValueTask<string?> SpanGetOrAddWithState(ICache<string> cache) => cache.GetOrAddAsync(Key("k"), 1, static (n, _) => Task.FromResult<string?>($"span:{n}"));
+    private static ValueTask<string?> SpanGetOrAddWithState(ICache<string> cache) => cache.GetOrAddAsync($"{Key("k")}", 1, static (n, _) => Task.FromResult<string?>($"span:{n}"));
 
-    private static ValueTask<string?> SpanGetItem(IHashCache cache) => cache.GetItemAsync<string>(Key("user:42"), "f", null);
+    private static ValueTask<string?> SpanGetItem(IHashCache cache) => cache.GetItemAsync<string>($"{Key("user:42")}", "f", null);
 
-    private static ValueTask<string?> SpanGetItem(IHashCache<string> cache) => cache.GetItemAsync(Key("user:42"), "f");
+    private static ValueTask<string?> SpanGetItem(IHashCache<string> cache) => cache.GetItemAsync($"{Key("user:42")}", "f");
 }

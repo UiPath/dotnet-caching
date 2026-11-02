@@ -8,6 +8,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 
 ### Added
 
+- **Interpolated keys on every `ICache` and `IHashCache` operation.** Pass `$"{tenantId}:{userId}"` where a key goes, on `ICache`,
+  `ICache<T>`, `IHashCache` and `IHashCache<T>` (and `NullCache`, `NullHashCache`): the text is written to a 256-character stack buffer (a longer key rents from `ArrayPool`), so a local hit
+  allocates nothing. Values format in the current culture, as in any string interpolation. A string
+  or `default` key binds to the `CacheKey` member as before; a constant interpolated string binds to the interpolated member under C# 13 (see Changed). Implementers add `ISpanKeyCache`, `ISpanKeyCache<T>`,
+  `ISpanKeyHashCache` or `ISpanKeyHashCache<T>` to serve the key without a string; any other cache gets the `CacheKey` member.
 - **`RefreshLocalOnPeerWrite`** (per policy, on by default). When a peer writes a key held in the local tier and read within its policy's local expiration, the node
   keeps serving its copy and refreshes it from the distributed tier in the background instead of dropping it. An entry no local read has hit
   in that time (or since it was stored) is dropped as before, with no master read; a refreshed copy keeps the last read time of the one it replaces. Removals, topic-wide invalidations, subscription gaps
@@ -86,7 +91,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 - **State overloads on the hash caches.** `IHashCache` and `IHashCache<T>` gain `GetOrAddAsync` members that take a
   `TState state` before a `Func<TState, CancellationToken, Task<IDictionary<string, T?>>>` generator, for every
   expiration, set-option and policy variant of the closure ones (the policy-less `IHashCache` ones in
-  `HashCacheExtensions`). The `CacheKey` ones are plain interface members; the `Span<char>` ones are `sealed` and call
+  `HashCacheExtensions`). The `CacheKey` ones are plain interface members, and an interpolated key goes to
   `ISpanKeyHashCache` (`ISpanKeyHashCache<T>`), which gains the same members, or else the `CacheKey` state member. Every
   library hash cache, Redis included, hands the state to the generator without a closure.
 - **A state overload of `GetOrAddWithExpirationAsync`** on `ICache` and `ICache<T>` (the policy-less `ICache` one in
@@ -101,7 +106,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 
   None of the new overloads takes a call written for an existing one: a generator that throws or returns `default` has
   no natural type and cannot be a state or an argument, and where both apply the closure member is the more specific
-  (`OverloadShapeTests`). The span state members carry `OverloadResolutionPriority(-1)`, as the other span members do.
+  (`OverloadShapeTests`).
   `Cache<T>`, `HashCache<T>`, `NullCache` and `NullHashCache` declare the new overloads as public members too, so a call
   on a public cache class takes them (`ConcreteCacheCallShapeTests`).
 - **Analyzer `UIPCACHE001`: a generator that allocates on every call.** `UiPath.Caching.Abstractions` now ships an
@@ -120,6 +125,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
   See `docs/how-to/choosing-a-get-or-add-overload.md`.
 
 ### Changed
+
+- **Breaking at C# 12 and older: a constant interpolated key is ambiguous.** With C# 12 or older (the default of net8.0), `$"fixed"` and `$"{Const}:x"` report CS0121 between the `CacheKey` and the interpolated-key members. Use a plain string (`"fixed"`, `Const + ":x"`), or C# 13 (.NET 9 SDK, or `<LangVersion>13</LangVersion>`), where they bind to the interpolated member. A non-constant `$"{s}:{id}"`, a string and a variable bind the same at every language version. A bare `default` behaves as on 3.0: it binds to the `CacheKey` member at C# 13, and at C# 12 it is ambiguous with the batch overload on `ICache` and `ICache<T>`, as before.
+- **Breaking: an interpolated key no longer compiles inside an expression tree, such as a Moq `Setup` or `Verify` lambda.** On 3.0, `mock.Setup(c => c.GetAsync<string>($"user:{id}", null, default))` converted the string to `CacheKey`; it now binds to the interpolated-key member, which an expression tree cannot hold (CS8952). Inside the lambda, pass a string (`"user:" + id`, or a `string key = $"user:{id}"` built before it), or `It.IsAny<CacheKey>()`.
 
 - **A peer's write refreshes the local copy by default (was a drop).** This changes the read-after-peer-write contract: after another node
   writes a key it has read, this node serves its old copy until the background refresh lands (typically one round trip, at most about
@@ -147,8 +155,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
   are folded into them.** `IStatefulCache`, `IStatefulCache<T>`, `IGeneratedExpirationCache` and
   `IGeneratedExpirationCache<T>`, which shipped in 3.0, are removed. Their members, the `CacheKey` state `GetOrAddAsync`
   overloads and `GetOrAddWithExpirationAsync` with and without state, are now members of `ICache` and `ICache<T>` to
-  implement, not `sealed` defaults; the `Span<char>` forms stay `sealed` and call `ISpanKeyCache` (`ISpanKeyCache<T>`),
-  whose implementers already provide them, or else the `CacheKey` member. A cache outside the library implements the new
+  implement, not `sealed` defaults; an interpolated key stays a `sealed` member that calls `ISpanKeyCache` (`ISpanKeyCache<T>`),
+  whose implementers already provide the span forms, or else the `CacheKey` member. A cache outside the library implements the new
   members; one that implemented the removed interfaces drops them from its base list and keeps its methods. A mock of
   `ICache` or `ICache<T>` must set up the member it is called through: a state call (and the `CacheSyncExtensions`
   `GetOrAdd`, which calls the state `GetOrAddAsync`) no longer falls back to the closure overload's setup, and
@@ -209,47 +217,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
   a node the event woke could re-read the old value from L2 and keep it for its whole local lifetime. A write the inner
   tier refuses sends no event; one it takes whose event fails returns `false` with the value in place.
 
-- **`Span<char>` overloads of `GetOrAddWithExpirationAsync`.** `ICache` and `ICache<T>` gain `sealed` members that take
-  the key as a `Span<char>`, with and without a `TState state`, so a caller that formats its key on the stack and reads
-  first no longer has to fall back to a string key for a generated expiration. `ISpanKeyCache` and `ISpanKeyCache<T>`
-  gain the matching members, which the library's multilayer and in-memory caches, `Cache<T>` and `NullCache` implement:
-  a warm hit allocates nothing, and a miss reads the local tier once, where a span read followed by a string-key call
-  read it twice. **Breaking** for an `ISpanKeyCache` or `ISpanKeyCache<T>` implementation outside the library, which
-  must add the two members (a cache that only implements `ICache` is unaffected: any other cache, a Moq or NSubstitute
-  proxy included, is called through the `CacheKey` member, as every span member is). The interface members carry
-  `OverloadResolutionPriority(-1)` and the `CacheKey` members of `Cache<T>` `OverloadResolutionPriority(1)`, so a bare
-  `default` key still binds to the `CacheKey` overload on the interfaces and on `Cache<T>`.
-
-- **`Span<char>` overloads of `SetAsync`.** `ICache`, `ICache<T>`, `IHashCache` and `IHashCache<T>` gain `sealed`
-  members that take the key as a `Span<char>`, for each expiration variant of the single-key write (the
-  `HashCacheEntryOptions` one included), so a consumer that formats its key on the stack no longer builds a string or a
-  `CacheKey` to write. `ISpanKeyCache`, `ISpanKeyCache<T>`, `ISpanKeyHashCache` and `ISpanKeyHashCache<T>` gain the
-  matching members, which the library's multilayer and in-memory caches, `Cache<T>`, `HashCache<T>`, `NullCache` and
-  `NullHashCache` implement; any other cache, a Moq or NSubstitute proxy included, is called through its `CacheKey`
-  members. A stored entry is keyed by a string, so a write builds that string once on every cache: the saving is the
-  caller's own key string and, through a typed cache, the one its key strategy would compose. **Breaking** for an
-  implementation of any of the four `ISpanKey*` interfaces outside the library, which must add the new members. The
-  span members carry `OverloadResolutionPriority(-1)`, as the other span members do.
-
-- **`Span<char>` overloads of the field, metadata, TTL and expiry reads.** `ICache`, `ICache<T>`, `IHashCache` and
-  `IHashCache<T>` gain `sealed` `TimeToLiveAsync` and `ExpireTimeAsync` members that take the key as a `Span<char>`, and
-  `IHashCache` and `IHashCache<T>` gain the same for the field-subset `GetAsync(key, fields)` and for
-  `GetMetadataAsync`. `ISpanKeyCache`, `ISpanKeyCache<T>`, `ISpanKeyHashCache` and `ISpanKeyHashCache<T>` gain the
-  matching members, which the library's multilayer and in-memory caches, the Redis hash cache, `Cache<T>`,
-  `HashCache<T>`, `NullCache` and `NullHashCache` implement; any other cache, a Moq or NSubstitute proxy included, is
-  read through its `CacheKey` member. On the multilayer and in-memory caches a local hit is found by span: a warm TTL,
-  expiry or metadata read allocates nothing on .NET 9 and later, and a field read selects its fields from the local
-  entry without building the key. **Breaking** for an implementation of any of the four `ISpanKey*` interfaces outside
-  the library, which must add the new members. The span members carry `OverloadResolutionPriority(-1)`, as the other
-  span members do.
-
-- **`Span<char>` overloads of the remaining single-key writes.** `ICache` and `ICache<T>` gain `sealed` `Span<char>`
-  forms of every `TryAddAsync` and `RefreshAsync` overload, and `IHashCache` and `IHashCache<T>` of every
-  `RefreshAsync` overload, `RemoveFieldsAsync` and `SetMetadataAsync`. Each builds the `CacheKey` from the text and
-  calls the `CacheKey` member, so every implementation, a Moq or NSubstitute proxy included, serves it unchanged; the
-  capability interfaces gain nothing. Every single-key member of the four cache interfaces now has a `Span<char>` form.
-  The members carry `OverloadResolutionPriority(-1)`; under C# 12 a bare `default` key on these members is now
-  ambiguous (CS0121), as on the other span members.
+- **More members on the `ISpanKey*` capability interfaces.** `ISpanKeyCache` and `ISpanKeyCache<T>` gain `Span<char>` forms of
+  `GetOrAddWithExpirationAsync` (with and without state), `SetAsync`, `TimeToLiveAsync` and `ExpireTimeAsync`; `ISpanKeyHashCache` and
+  `ISpanKeyHashCache<T>` gain `SetAsync`, `TimeToLiveAsync`, `ExpireTimeAsync`, the field-subset `GetAsync` and `GetMetadataAsync`. The
+  library's multilayer and in-memory caches, the Redis hash cache, `Cache<T>`, `HashCache<T>`, `NullCache` and `NullHashCache` implement
+  them; an interpolated key on `ICache` or `IHashCache` reaches them, and any other cache is called through its `CacheKey` member.
+  **Breaking** for an implementation of those interfaces outside the library, which must add the new members.
 
 - **Read scripts are on by default.** `RedisCacheOptions.ReadScriptsEnabled` now defaults to `true`: on Redis 7 and
   later, `RedisCache` and `RedisHashCache` read a value (or a hash) and its expiration with one `EVAL_RO` script
@@ -281,21 +254,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
   it on the stream's shard where Redis 7.0 and a hash-tagged stream key allow it, and stays off by default because
   neither can be assumed.
 
-- **The span reads, the state `GetOrAddAsync` and `GetOrAddWithExpirationAsync` are interface members.** The span
-  members are `sealed` members with a body on `ICache`, `ICache<T>`, `IHashCache` and `IHashCache<T>`, so IntelliSense and
-  go-to-definition find them on the interface. Each body does what the extension did: a cache that implements the
-  capability interface (`ISpanKeyCache`, `ISpanKeyHashCache` and their siblings) takes its allocation-free path; any
-  other cache, including a Moq or NSubstitute proxy, is called through its `CacheKey` members. A sealed member is not
-  virtual, so a proxy never intercepts it and a test's `CacheKey` setups answer it as before. The `CacheKey` state
-  `GetOrAddAsync` and `GetOrAddWithExpirationAsync` are plain members (see the breaking entry under Changed). The policy-less state and `GetOrAddWithExpirationAsync` overloads of `ICache` stay extensions, as the other
-  policy-less overloads do. A class does not inherit an interface's members, so the public caches declare every shape
-  the removed extensions served: `NullCache` and `NullHashCache` make their span members public and
-  `NullCache` adds the policy-bearing state `GetOrAddAsync` overloads and `GetOrAddWithExpirationAsync`; `Cache<T>` and
-  `HashCache<T>` add `RemoveAsync(Span<char>)`. A call on `Cache<string>`, `NullCache` or another public cache compiles
-  as it did on 3.0. A bare `default` key binds to the `CacheKey` member under C# 13 (`OverloadResolutionPriority(-1)` on
-  the span members); under C# 12, the default for a `net8.0` project, it is now ambiguous (CS0121) for every member that
-  gained a span overload, on the interfaces and on `NullCache`, `NullHashCache` and `HashCache<T>`, as `GetAsync` already
-  was; cast it to `CacheKey`.
+- **The state `GetOrAddAsync` and `GetOrAddWithExpirationAsync` are interface members.** The `CacheKey` ones are plain members
+  of `ICache`, `ICache<T>`, `IHashCache` and `IHashCache<T>` (see the breaking entry above), and each interface has a `sealed`
+  interpolated-key sibling: a cache that implements the capability interface (`ISpanKeyCache`, `ISpanKeyHashCache` and their
+  siblings) takes its allocation-free path; any other cache, including a Moq or NSubstitute proxy, is called through its
+  `CacheKey` members, so a test's `CacheKey` setups answer it. The policy-less state and `GetOrAddWithExpirationAsync` overloads of
+  `ICache` stay extensions, as the other policy-less overloads do. A class does not inherit an interface's members, so `NullCache`
+  adds the policy-bearing state `GetOrAddAsync` overloads and `GetOrAddWithExpirationAsync`, and the public caches declare the
+  shapes the removed extensions served. A bare `default` key binds to the `CacheKey` member.
 
 ### Removed
 
@@ -308,16 +274,20 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 
 - **The 3.0 extensions the interface members replace.** `SpanKeyExtensions` is gone, with all 36 of its methods (the
   `Span<char>` `GetAsync`, `ContainsAsync`, `GetOrAddAsync`, `GetCacheEntryAsync`, `GetItemAsync` and `RemoveAsync`
-  over `ICache`, `ICache<T>`, `IHashCache` and `IHashCache<T>`). `StatefulCacheExtensions` loses its `GetOrAddAsync<T,
+  over `ICache`, `ICache<T>`, `IHashCache` and `IHashCache<T>`), and `ICache`, `ICache<T>`, `IHashCache` and `IHashCache<T>` take no
+  `Span<char>` key. A 3.0 call with a span moves to an interpolated key, which allocates nothing up to 256 characters
+  (`cache.GetAsync<string>(span, null)` becomes `cache.GetAsync<string>($"{tenant}:{id}", null)`), to `new CacheKey(span)`, or, in code
+  that is about the span capability, to a cast to `ISpanKeyCache`, `ISpanKeyHashCache` or their `<T>` siblings. `Cache<T>`, `HashCache<T>`,
+  `NullCache`, `NullHashCache` and the library's caches keep the span members that implement those interfaces, but not
+  `RemoveAsync(Span<char>)`. `StatefulCacheExtensions` loses its `GetOrAddAsync<T,
   TState>` overloads that take a `CachePolicy?` on `ICache` and all three over `ICache<T>`; `GeneratedExpirationExtensions`
   loses the `GetOrAddWithExpirationAsync<T>` that takes a `CachePolicy?` on `ICache` and the one over `ICache<T>`. The
-  policy-less `ICache` overloads of both classes stay. Recompiled, an extension-syntax call binds to the interface member
+  policy-less `ICache` overloads of both classes stay. Recompiled, a state or generated-expiration call binds to the interface member
   (or the class member, on a public cache class) with no change, except a call on `ICache<T>`, `IHashCache<T>`,
   `Cache<T>` or `HashCache<T>` that spells the value type as a type argument. The extensions were generic in it; the
-  members take it from the cache, so drop it: `typed.GetAsync<string>(span)` becomes `typed.GetAsync(span)`,
-  `typed.GetOrAddWithExpirationAsync<string>(key, generator)` becomes `typed.GetOrAddWithExpirationAsync(key,
-  generator)`, and `typed.GetOrAddAsync<string, int>(key, state, generator)` becomes `typed.GetOrAddAsync(key, state,
-  generator)` or `typed.GetOrAddAsync<int>(...)`. A call written as a static method
+  members take it from the cache, so drop it: `typed.GetOrAddWithExpirationAsync<string>(key, generator)` becomes
+  `typed.GetOrAddWithExpirationAsync(key, generator)`, and `typed.GetOrAddAsync<string, int>(key, state, generator)` becomes
+  `typed.GetOrAddAsync(key, state, generator)` or `typed.GetOrAddAsync<int>(...)`. A call written as a static method
   (`SpanKeyExtensions.GetAsync<T>(cache, ...)`) becomes an instance call on the cache. An assembly compiled against 3.0
   that calls a removed method and is not recompiled fails when the JIT first compiles the method holding the call, with
   `TypeLoadException` for a `SpanKeyExtensions` call and `MissingMethodException` for the others; rebuild it against
@@ -475,7 +445,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
   broken em dashes are restored. `second-redis-connection.md` no longer suggests `KeyPrefix` for separate keyspaces: it
   prepends nothing itself.
 
-- `docs/reference/interfaces.md` says how the capability calls behave over a mock (the span and stateful calls go to
+- `docs/reference/interfaces.md` says how the capability calls behave over a mock (the interpolated-key and stateful calls go to
   the proxy's `CacheKey` member, `GetOrAddWithExpirationAsync` reads, generates and sets; none coalesces) and how to
   test what the library does instead: over the in-memory cache, named explicitly, since an
   unnamed `CreateCache()` resolves `CacheOptions.DefaultCache` (`InMemoryRedis`) and falls back to `NullCache` when only
@@ -484,7 +454,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 - **Which `GetOrAddAsync` shape to call.** `docs/how-to/choosing-a-get-or-add-overload.md` makes the plain lambda the
   documented default and measures the alternatives: a lambda costs 64 to 96 bytes per call; a delegate built once and
   the state overloads make a local hit allocate nothing. On a miss the lambda still costs its bytes, small next to the
-  generator and the write. It says when the state and `Span<char>`
+  generator and the write. It says when the state and interpolated-key
   overloads pay (a hot path a profiler has shown), how to write each shape, which one a wrapper should wrap, what runs
   behind the extension classes, and what a Moq or NSubstitute proxy sees. The README and quickstart point to it, and
   the XML docs of the capability interfaces name the classes that implement them. `GeneratorShapeBenchmark` in

@@ -25,23 +25,23 @@ public class SealedMemberPathTests
         using var owner = InMemoryMultilayer.Cache();
         ICache cache = owner;
 
-        (await cache.GetOrAddAsync(Key("a"), Load, null, Ct)).Should().Be("v");
-        (await cache.GetOrAddAsync(Key("b"), Load, Ttl, null, Ct)).Should().Be("v");
-        (await cache.GetOrAddAsync(Key("c"), Load, Deadline, null, Ct)).Should().Be("v");
-        (await cache.GetOrAddAsync(Key("d"), 1, LoadState, null, Ct)).Should().Be("v1");
-        (await cache.GetOrAddAsync(Key("e"), 2, LoadState, Ttl, null, Ct)).Should().Be("v2");
-        (await cache.GetOrAddAsync(Key("f"), 3, LoadState, Deadline, null, Ct)).Should().Be("v3");
+        (await cache.GetOrAddAsync($"{Key("a")}", Load, null, Ct)).Should().Be("v");
+        (await cache.GetOrAddAsync($"{Key("b")}", Load, Ttl, null, Ct)).Should().Be("v");
+        (await cache.GetOrAddAsync($"{Key("c")}", Load, Deadline, null, Ct)).Should().Be("v");
+        (await cache.GetOrAddAsync($"{Key("d")}", 1, LoadState, null, Ct)).Should().Be("v1");
+        (await cache.GetOrAddAsync($"{Key("e")}", 2, LoadState, Ttl, null, Ct)).Should().Be("v2");
+        (await cache.GetOrAddAsync($"{Key("f")}", 3, LoadState, Deadline, null, Ct)).Should().Be("v3");
         (await cache.GetOrAddAsync<string, int>("g", 4, LoadState, null, Ct)).Should().Be("v4");
         (await cache.GetOrAddAsync<string, int>("h", 5, LoadState, Ttl, null, Ct)).Should().Be("v5");
         (await cache.GetOrAddAsync<string, int>("i", 6, LoadState, Deadline, null, Ct)).Should().Be("v6");
         (await cache.GetOrAddWithExpirationAsync<string>("j", _ => Task.FromResult(new GeneratedValue<string>("g", Deadline)), null, Ct)).Should().Be("g");
-        (await cache.GetAsync<string>(Key("a"), null, Ct)).Should().Be("v");
-        (await cache.GetCacheEntryAsync<string>(Key("b"), null, Ct)).Value.Should().Be("v");
-        (await cache.TimeToLiveAsync<string>(Key("a"), Ct)).Should().BePositive();
-        (await cache.ExpireTimeAsync<string>(Key("a"), Ct)).Should().Be(await cache.ExpireTimeAsync<string>("a", Ct)).And.NotBeNull();
-        (await cache.ContainsAsync<string>(Key("c"), Ct)).Should().BeTrue();
-        (await cache.RemoveAsync<string>(Key("c"), Ct)).Should().BeTrue();
-        (await cache.ContainsAsync<string>(Key("c"), Ct)).Should().BeFalse();
+        (await cache.GetAsync<string>($"{Key("a")}", null, Ct)).Should().Be("v");
+        (await cache.GetCacheEntryAsync<string>($"{Key("b")}", null, Ct)).Value.Should().Be("v");
+        (await cache.TimeToLiveAsync<string>($"{Key("a")}", Ct)).Should().BePositive();
+        (await cache.ExpireTimeAsync<string>($"{Key("a")}", Ct)).Should().Be(await cache.ExpireTimeAsync<string>("a", Ct)).And.NotBeNull();
+        (await cache.ContainsAsync<string>($"{Key("c")}", Ct)).Should().BeTrue();
+        (await cache.RemoveAsync<string>($"{Key("c")}", Ct)).Should().BeTrue();
+        (await cache.ContainsAsync<string>($"{Key("c")}", Ct)).Should().BeFalse();
     }
 
     [Fact]
@@ -49,18 +49,18 @@ public class SealedMemberPathTests
     {
         var cache = Substitute.For<ICache>();
 
-        await cache.GetOrAddAsync(Key("a"), Load, null, Ct);
-        await cache.GetOrAddAsync(Key("b"), Load, Ttl, null, Ct);
-        await cache.GetOrAddAsync(Key("c"), Load, Deadline, null, Ct);
-        await cache.GetOrAddAsync(Key("d"), 1, LoadState, null, Ct);
-        await cache.GetOrAddAsync(Key("e"), 2, LoadState, Ttl, null, Ct);
-        await cache.GetOrAddAsync(Key("f"), 3, LoadState, Deadline, null, Ct);
-        await cache.GetAsync<string>(Key("a"), null, Ct);
-        await cache.GetCacheEntryAsync<string>(Key("b"), null, Ct);
-        await cache.ContainsAsync<string>(Key("c"), Ct);
-        await cache.TimeToLiveAsync<string>(Key("t"), Ct);
-        await cache.ExpireTimeAsync<string>(Key("x"), Ct);
-        await cache.RemoveAsync<string>(Key("c"), Ct);
+        await cache.GetOrAddAsync($"{Key("a")}", Load, null, Ct);
+        await cache.GetOrAddAsync($"{Key("b")}", Load, Ttl, null, Ct);
+        await cache.GetOrAddAsync($"{Key("c")}", Load, Deadline, null, Ct);
+        await cache.GetOrAddAsync($"{Key("d")}", 1, LoadState, null, Ct);
+        await cache.GetOrAddAsync($"{Key("e")}", 2, LoadState, Ttl, null, Ct);
+        await cache.GetOrAddAsync($"{Key("f")}", 3, LoadState, Deadline, null, Ct);
+        await cache.GetAsync<string>($"{Key("a")}", null, Ct);
+        await cache.GetCacheEntryAsync<string>($"{Key("b")}", null, Ct);
+        await cache.ContainsAsync<string>($"{Key("c")}", Ct);
+        await cache.TimeToLiveAsync<string>($"{Key("t")}", Ct);
+        await cache.ExpireTimeAsync<string>($"{Key("x")}", Ct);
+        await cache.RemoveAsync<string>($"{Key("c")}", Ct);
 
         await cache.Received(1).GetOrAddAsync(new CacheKey("a"), Load, null, Ct);
         await cache.Received(1).GetOrAddAsync(new CacheKey("b"), Load, Ttl, null, Ct);
@@ -82,22 +82,22 @@ public class SealedMemberPathTests
         using var owner = InMemoryMultilayer.Cache();
         ICache<string> cache = new Cache<string>(owner, new PrefixCacheKeyStrategy("app"));
 
-        (await cache.GetOrAddAsync(Key("a"), Load, Ct)).Should().Be("v");
-        (await cache.GetOrAddAsync(Key("b"), Load, Ttl, Ct)).Should().Be("v");
-        (await cache.GetOrAddAsync(Key("c"), Load, Deadline, Ct)).Should().Be("v");
-        (await cache.GetOrAddAsync(Key("d"), 1, LoadState, Ct)).Should().Be("v1");
-        (await cache.GetOrAddAsync(Key("e"), 2, LoadState, Ttl, Ct)).Should().Be("v2");
-        (await cache.GetOrAddAsync(Key("f"), 3, LoadState, Deadline, Ct)).Should().Be("v3");
+        (await cache.GetOrAddAsync($"{Key("a")}", Load, Ct)).Should().Be("v");
+        (await cache.GetOrAddAsync($"{Key("b")}", Load, Ttl, Ct)).Should().Be("v");
+        (await cache.GetOrAddAsync($"{Key("c")}", Load, Deadline, Ct)).Should().Be("v");
+        (await cache.GetOrAddAsync($"{Key("d")}", 1, LoadState, Ct)).Should().Be("v1");
+        (await cache.GetOrAddAsync($"{Key("e")}", 2, LoadState, Ttl, Ct)).Should().Be("v2");
+        (await cache.GetOrAddAsync($"{Key("f")}", 3, LoadState, Deadline, Ct)).Should().Be("v3");
         (await cache.GetOrAddAsync("g", 4, LoadState, Ct)).Should().Be("v4");
         (await cache.GetOrAddAsync("h", 5, LoadState, Ttl, Ct)).Should().Be("v5");
         (await cache.GetOrAddAsync("i", 6, LoadState, Deadline, Ct)).Should().Be("v6");
         (await cache.GetOrAddWithExpirationAsync("j", _ => Task.FromResult(new GeneratedValue<string>("g", Deadline)), Ct)).Should().Be("g");
-        (await cache.GetAsync(Key("a"), Ct)).Should().Be("v");
-        (await cache.ContainsAsync(Key("c"), Ct)).Should().BeTrue();
-        (await cache.TimeToLiveAsync(Key("a"), Ct)).Should().BePositive();
-        (await cache.ExpireTimeAsync(Key("a"), Ct)).Should().Be(await cache.ExpireTimeAsync("a", Ct)).And.NotBeNull();
-        (await cache.RemoveAsync(Key("c"), Ct)).Should().BeTrue();
-        (await cache.ContainsAsync(Key("c"), Ct)).Should().BeFalse();
+        (await cache.GetAsync($"{Key("a")}", Ct)).Should().Be("v");
+        (await cache.ContainsAsync($"{Key("c")}", Ct)).Should().BeTrue();
+        (await cache.TimeToLiveAsync($"{Key("a")}", Ct)).Should().BePositive();
+        (await cache.ExpireTimeAsync($"{Key("a")}", Ct)).Should().Be(await cache.ExpireTimeAsync("a", Ct)).And.NotBeNull();
+        (await cache.RemoveAsync($"{Key("c")}", Ct)).Should().BeTrue();
+        (await cache.ContainsAsync($"{Key("c")}", Ct)).Should().BeFalse();
     }
 
     [Fact]
@@ -105,17 +105,17 @@ public class SealedMemberPathTests
     {
         var cache = Substitute.For<ICache<string>>();
 
-        await cache.GetOrAddAsync(Key("a"), Load, Ct);
-        await cache.GetOrAddAsync(Key("b"), Load, Ttl, Ct);
-        await cache.GetOrAddAsync(Key("c"), Load, Deadline, Ct);
-        await cache.GetOrAddAsync(Key("d"), 1, LoadState, Ct);
-        await cache.GetOrAddAsync(Key("e"), 2, LoadState, Ttl, Ct);
-        await cache.GetOrAddAsync(Key("f"), 3, LoadState, Deadline, Ct);
-        await cache.GetAsync(Key("a"), Ct);
-        await cache.ContainsAsync(Key("c"), Ct);
-        await cache.TimeToLiveAsync(Key("t"), Ct);
-        await cache.ExpireTimeAsync(Key("x"), Ct);
-        await cache.RemoveAsync(Key("c"), Ct);
+        await cache.GetOrAddAsync($"{Key("a")}", Load, Ct);
+        await cache.GetOrAddAsync($"{Key("b")}", Load, Ttl, Ct);
+        await cache.GetOrAddAsync($"{Key("c")}", Load, Deadline, Ct);
+        await cache.GetOrAddAsync($"{Key("d")}", 1, LoadState, Ct);
+        await cache.GetOrAddAsync($"{Key("e")}", 2, LoadState, Ttl, Ct);
+        await cache.GetOrAddAsync($"{Key("f")}", 3, LoadState, Deadline, Ct);
+        await cache.GetAsync($"{Key("a")}", Ct);
+        await cache.ContainsAsync($"{Key("c")}", Ct);
+        await cache.TimeToLiveAsync($"{Key("t")}", Ct);
+        await cache.ExpireTimeAsync($"{Key("x")}", Ct);
+        await cache.RemoveAsync($"{Key("c")}", Ct);
 
         await cache.Received(1).GetOrAddAsync(new CacheKey("a"), Load, Ct);
         await cache.Received(1).GetOrAddAsync(new CacheKey("b"), Load, Ttl, Ct);
@@ -136,20 +136,20 @@ public class SealedMemberPathTests
         using var owner = InMemoryMultilayer.HashCache();
         IHashCache cache = owner;
 
-        (await cache.GetOrAddAsync(Key("a"), LoadHash, null, Ct))["f"].Should().Be("v");
-        (await cache.GetOrAddAsync(Key("b"), LoadHash, Ttl, null, Ct))["f"].Should().Be("v");
-        (await cache.GetOrAddAsync(Key("c"), LoadHash, Deadline, null, Ct))["f"].Should().Be("v");
-        (await cache.GetOrAddAsync(Key("d"), LoadHash, Deadline, HashCacheSetOption.KeyReplace, null, Ct))["f"].Should().Be("v");
-        (await cache.GetItemAsync<string>(Key("a"), "f", null, Ct)).Should().Be("v");
-        (await cache.GetAsync<string>(Key("b"), null, Ct))["f"].Should().Be("v");
-        (await cache.GetCacheEntryAsync<string>(Key("c"), null, Ct)).Found.Should().BeTrue();
-        (await cache.GetAsync<string>(Key("b"), Fields, null, Ct)).Should().ContainKey("f");
-        (await cache.GetMetadataAsync<string>(Key("b"), Ct)).Should().BeEquivalentTo(await cache.GetMetadataAsync<string>("b", Ct));
-        (await cache.TimeToLiveAsync<string>(Key("b"), Ct)).Should().BePositive();
-        (await cache.ExpireTimeAsync<string>(Key("b"), Ct)).Should().Be(await cache.ExpireTimeAsync<string>("b", Ct)).And.NotBeNull();
-        (await cache.ContainsAsync<string>(Key("d"), Ct)).Should().BeTrue();
-        (await cache.RemoveAsync<string>(Key("d"), Ct)).Should().BeTrue();
-        (await cache.ContainsAsync<string>(Key("d"), Ct)).Should().BeFalse();
+        (await cache.GetOrAddAsync($"{Key("a")}", LoadHash, null, Ct))["f"].Should().Be("v");
+        (await cache.GetOrAddAsync($"{Key("b")}", LoadHash, Ttl, null, Ct))["f"].Should().Be("v");
+        (await cache.GetOrAddAsync($"{Key("c")}", LoadHash, Deadline, null, Ct))["f"].Should().Be("v");
+        (await cache.GetOrAddAsync($"{Key("d")}", LoadHash, Deadline, HashCacheSetOption.KeyReplace, null, Ct))["f"].Should().Be("v");
+        (await cache.GetItemAsync<string>($"{Key("a")}", "f", null, Ct)).Should().Be("v");
+        (await cache.GetAsync<string>($"{Key("b")}", null, Ct))["f"].Should().Be("v");
+        (await cache.GetCacheEntryAsync<string>($"{Key("c")}", null, Ct)).Found.Should().BeTrue();
+        (await cache.GetAsync<string>($"{Key("b")}", Fields, null, Ct)).Should().ContainKey("f");
+        (await cache.GetMetadataAsync<string>($"{Key("b")}", Ct)).Should().BeEquivalentTo(await cache.GetMetadataAsync<string>("b", Ct));
+        (await cache.TimeToLiveAsync<string>($"{Key("b")}", Ct)).Should().BePositive();
+        (await cache.ExpireTimeAsync<string>($"{Key("b")}", Ct)).Should().Be(await cache.ExpireTimeAsync<string>("b", Ct)).And.NotBeNull();
+        (await cache.ContainsAsync<string>($"{Key("d")}", Ct)).Should().BeTrue();
+        (await cache.RemoveAsync<string>($"{Key("d")}", Ct)).Should().BeTrue();
+        (await cache.ContainsAsync<string>($"{Key("d")}", Ct)).Should().BeFalse();
     }
 
     [Fact]
@@ -157,19 +157,19 @@ public class SealedMemberPathTests
     {
         var cache = Substitute.For<IHashCache>();
 
-        await cache.GetOrAddAsync(Key("a"), LoadHash, null, Ct);
-        await cache.GetOrAddAsync(Key("b"), LoadHash, Ttl, null, Ct);
-        await cache.GetOrAddAsync(Key("c"), LoadHash, Deadline, null, Ct);
-        await cache.GetOrAddAsync(Key("d"), LoadHash, Deadline, HashCacheSetOption.KeyReplace, null, Ct);
-        await cache.GetItemAsync<string>(Key("a"), "f", null, Ct);
-        await cache.GetAsync<string>(Key("b"), null, Ct);
-        await cache.GetCacheEntryAsync<string>(Key("c"), null, Ct);
-        await cache.GetAsync<string>(Key("s"), Fields, null, Ct);
-        await cache.GetMetadataAsync<string>(Key("m"), Ct);
-        await cache.TimeToLiveAsync<string>(Key("t"), Ct);
-        await cache.ExpireTimeAsync<string>(Key("x"), Ct);
-        await cache.ContainsAsync<string>(Key("d"), Ct);
-        await cache.RemoveAsync<string>(Key("d"), Ct);
+        await cache.GetOrAddAsync($"{Key("a")}", LoadHash, null, Ct);
+        await cache.GetOrAddAsync($"{Key("b")}", LoadHash, Ttl, null, Ct);
+        await cache.GetOrAddAsync($"{Key("c")}", LoadHash, Deadline, null, Ct);
+        await cache.GetOrAddAsync($"{Key("d")}", LoadHash, Deadline, HashCacheSetOption.KeyReplace, null, Ct);
+        await cache.GetItemAsync<string>($"{Key("a")}", "f", null, Ct);
+        await cache.GetAsync<string>($"{Key("b")}", null, Ct);
+        await cache.GetCacheEntryAsync<string>($"{Key("c")}", null, Ct);
+        await cache.GetAsync<string>($"{Key("s")}", Fields, null, Ct);
+        await cache.GetMetadataAsync<string>($"{Key("m")}", Ct);
+        await cache.TimeToLiveAsync<string>($"{Key("t")}", Ct);
+        await cache.ExpireTimeAsync<string>($"{Key("x")}", Ct);
+        await cache.ContainsAsync<string>($"{Key("d")}", Ct);
+        await cache.RemoveAsync<string>($"{Key("d")}", Ct);
 
         await cache.Received(1).GetOrAddAsync(new CacheKey("a"), LoadHash, null, Ct);
         await cache.Received(1).GetOrAddAsync(new CacheKey("b"), LoadHash, Ttl, null, Ct);
@@ -192,19 +192,19 @@ public class SealedMemberPathTests
         using var owner = InMemoryMultilayer.HashCache();
         IHashCache<string> cache = new HashCache<string>(owner, new PrefixCacheKeyStrategy("app"));
 
-        (await cache.GetOrAddAsync(Key("a"), LoadHash, Ct))["f"].Should().Be("v");
-        (await cache.GetOrAddAsync(Key("b"), LoadHash, Ttl, Ct))["f"].Should().Be("v");
-        (await cache.GetOrAddAsync(Key("c"), LoadHash, Deadline, Ct))["f"].Should().Be("v");
-        (await cache.GetItemAsync(Key("a"), "f", Ct)).Should().Be("v");
-        (await cache.GetAsync(Key("b"), Ct))["f"].Should().Be("v");
-        (await cache.GetCacheEntryAsync(Key("c"), Ct)).Found.Should().BeTrue();
-        (await cache.GetAsync(Key("b"), Fields, Ct)).Should().ContainKey("f");
-        (await cache.GetMetadataAsync(Key("b"), Ct)).Should().BeEquivalentTo(await cache.GetMetadataAsync("b", Ct));
-        (await cache.TimeToLiveAsync(Key("b"), Ct)).Should().BePositive();
-        (await cache.ExpireTimeAsync(Key("b"), Ct)).Should().Be(await cache.ExpireTimeAsync("b", Ct)).And.NotBeNull();
-        (await cache.ContainsAsync(Key("c"), Ct)).Should().BeTrue();
-        (await cache.RemoveAsync(Key("c"), Ct)).Should().BeTrue();
-        (await cache.ContainsAsync(Key("c"), Ct)).Should().BeFalse();
+        (await cache.GetOrAddAsync($"{Key("a")}", LoadHash, Ct))["f"].Should().Be("v");
+        (await cache.GetOrAddAsync($"{Key("b")}", LoadHash, Ttl, Ct))["f"].Should().Be("v");
+        (await cache.GetOrAddAsync($"{Key("c")}", LoadHash, Deadline, Ct))["f"].Should().Be("v");
+        (await cache.GetItemAsync($"{Key("a")}", "f", Ct)).Should().Be("v");
+        (await cache.GetAsync($"{Key("b")}", Ct))["f"].Should().Be("v");
+        (await cache.GetCacheEntryAsync($"{Key("c")}", Ct)).Found.Should().BeTrue();
+        (await cache.GetAsync($"{Key("b")}", Fields, Ct)).Should().ContainKey("f");
+        (await cache.GetMetadataAsync($"{Key("b")}", Ct)).Should().BeEquivalentTo(await cache.GetMetadataAsync("b", Ct));
+        (await cache.TimeToLiveAsync($"{Key("b")}", Ct)).Should().BePositive();
+        (await cache.ExpireTimeAsync($"{Key("b")}", Ct)).Should().Be(await cache.ExpireTimeAsync("b", Ct)).And.NotBeNull();
+        (await cache.ContainsAsync($"{Key("c")}", Ct)).Should().BeTrue();
+        (await cache.RemoveAsync($"{Key("c")}", Ct)).Should().BeTrue();
+        (await cache.ContainsAsync($"{Key("c")}", Ct)).Should().BeFalse();
     }
 
     [Fact]
@@ -212,18 +212,18 @@ public class SealedMemberPathTests
     {
         var cache = Substitute.For<IHashCache<string>>();
 
-        await cache.GetOrAddAsync(Key("a"), LoadHash, Ct);
-        await cache.GetOrAddAsync(Key("b"), LoadHash, Ttl, Ct);
-        await cache.GetOrAddAsync(Key("c"), LoadHash, Deadline, Ct);
-        await cache.GetItemAsync(Key("a"), "f", Ct);
-        await cache.GetAsync(Key("b"), Ct);
-        await cache.GetCacheEntryAsync(Key("c"), Ct);
-        await cache.GetAsync(Key("s"), Fields, Ct);
-        await cache.GetMetadataAsync(Key("m"), Ct);
-        await cache.TimeToLiveAsync(Key("t"), Ct);
-        await cache.ExpireTimeAsync(Key("x"), Ct);
-        await cache.ContainsAsync(Key("c"), Ct);
-        await cache.RemoveAsync(Key("c"), Ct);
+        await cache.GetOrAddAsync($"{Key("a")}", LoadHash, Ct);
+        await cache.GetOrAddAsync($"{Key("b")}", LoadHash, Ttl, Ct);
+        await cache.GetOrAddAsync($"{Key("c")}", LoadHash, Deadline, Ct);
+        await cache.GetItemAsync($"{Key("a")}", "f", Ct);
+        await cache.GetAsync($"{Key("b")}", Ct);
+        await cache.GetCacheEntryAsync($"{Key("c")}", Ct);
+        await cache.GetAsync($"{Key("s")}", Fields, Ct);
+        await cache.GetMetadataAsync($"{Key("m")}", Ct);
+        await cache.TimeToLiveAsync($"{Key("t")}", Ct);
+        await cache.ExpireTimeAsync($"{Key("x")}", Ct);
+        await cache.ContainsAsync($"{Key("c")}", Ct);
+        await cache.RemoveAsync($"{Key("c")}", Ct);
 
         await cache.Received(1).GetOrAddAsync(new CacheKey("a"), LoadHash, Ct);
         await cache.Received(1).GetOrAddAsync(new CacheKey("b"), LoadHash, Ttl, Ct);
@@ -268,16 +268,16 @@ public class SealedMemberPathTests
         (await cache.GetOrAddAsync("b", 2, LoadHashState, Ttl, null, Ct))["f"].Should().Be("v2");
         (await cache.GetOrAddAsync("c", 3, LoadHashState, Deadline, null, Ct))["f"].Should().Be("v3");
         (await cache.GetOrAddAsync("d", 4, LoadHashState, Deadline, HashCacheSetOption.KeyReplace, null, Ct))["f"].Should().Be("v4");
-        (await cache.GetOrAddAsync(Key("e"), 5, LoadHashState, null, Ct))["f"].Should().Be("v5");
-        (await cache.GetOrAddAsync(Key("f"), 6, LoadHashState, Ttl, null, Ct))["f"].Should().Be("v6");
-        (await cache.GetOrAddAsync(Key("g"), 7, LoadHashState, Deadline, null, Ct))["f"].Should().Be("v7");
-        (await cache.GetOrAddAsync(Key("h"), 8, LoadHashState, Deadline, HashCacheSetOption.KeyReplace, null, Ct))["f"].Should().Be("v8");
+        (await cache.GetOrAddAsync($"{Key("e")}", 5, LoadHashState, null, Ct))["f"].Should().Be("v5");
+        (await cache.GetOrAddAsync($"{Key("f")}", 6, LoadHashState, Ttl, null, Ct))["f"].Should().Be("v6");
+        (await cache.GetOrAddAsync($"{Key("g")}", 7, LoadHashState, Deadline, null, Ct))["f"].Should().Be("v7");
+        (await cache.GetOrAddAsync($"{Key("h")}", 8, LoadHashState, Deadline, HashCacheSetOption.KeyReplace, null, Ct))["f"].Should().Be("v8");
         (await typed.GetOrAddAsync("a", 1, LoadHashState, Ct))["f"].Should().Be("v1");
         (await typed.GetOrAddAsync("b", 2, LoadHashState, Ttl, Ct))["f"].Should().Be("v2");
         (await typed.GetOrAddAsync("c", 3, LoadHashState, Deadline, Ct))["f"].Should().Be("v3");
-        (await typed.GetOrAddAsync(Key("e"), 5, LoadHashState, Ct))["f"].Should().Be("v5");
-        (await typed.GetOrAddAsync(Key("f"), 6, LoadHashState, Ttl, Ct))["f"].Should().Be("v6");
-        (await typed.GetOrAddAsync(Key("g"), 7, LoadHashState, Deadline, Ct))["f"].Should().Be("v7");
+        (await typed.GetOrAddAsync($"{Key("e")}", 5, LoadHashState, Ct))["f"].Should().Be("v5");
+        (await typed.GetOrAddAsync($"{Key("f")}", 6, LoadHashState, Ttl, Ct))["f"].Should().Be("v6");
+        (await typed.GetOrAddAsync($"{Key("g")}", 7, LoadHashState, Deadline, Ct))["f"].Should().Be("v7");
     }
 
     [Fact]
@@ -286,13 +286,13 @@ public class SealedMemberPathTests
         var cache = Substitute.For<IHashCache>();
         var typed = Substitute.For<IHashCache<string>>();
 
-        await cache.GetOrAddAsync(Key("e"), 5, LoadHashState, null, Ct);
-        await cache.GetOrAddAsync(Key("f"), 6, LoadHashState, Ttl, null, Ct);
-        await cache.GetOrAddAsync(Key("g"), 7, LoadHashState, Deadline, null, Ct);
-        await cache.GetOrAddAsync(Key("h"), 8, LoadHashState, Deadline, HashCacheSetOption.KeyReplace, null, Ct);
-        await typed.GetOrAddAsync(Key("e"), 5, LoadHashState, Ct);
-        await typed.GetOrAddAsync(Key("f"), 6, LoadHashState, Ttl, Ct);
-        await typed.GetOrAddAsync(Key("g"), 7, LoadHashState, Deadline, Ct);
+        await cache.GetOrAddAsync($"{Key("e")}", 5, LoadHashState, null, Ct);
+        await cache.GetOrAddAsync($"{Key("f")}", 6, LoadHashState, Ttl, null, Ct);
+        await cache.GetOrAddAsync($"{Key("g")}", 7, LoadHashState, Deadline, null, Ct);
+        await cache.GetOrAddAsync($"{Key("h")}", 8, LoadHashState, Deadline, HashCacheSetOption.KeyReplace, null, Ct);
+        await typed.GetOrAddAsync($"{Key("e")}", 5, LoadHashState, Ct);
+        await typed.GetOrAddAsync($"{Key("f")}", 6, LoadHashState, Ttl, Ct);
+        await typed.GetOrAddAsync($"{Key("g")}", 7, LoadHashState, Deadline, Ct);
 
         await cache.Received(1).GetOrAddAsync(new CacheKey("e"), 5, LoadHashState, null, Ct);
         await cache.Received(1).GetOrAddAsync(new CacheKey("f"), 6, LoadHashState, Ttl, null, Ct);
@@ -307,5 +307,5 @@ public class SealedMemberPathTests
 
     private static KeyValuePair<CacheKey, int>[] Entries(string key) => [new(key, 1)];
 
-    private static Span<char> Key(string key) => key.ToCharArray();
+    private static string Key(string key) => key;
 }

@@ -96,9 +96,9 @@ dotnet run --project benchmarks/UiPath.Caching.Benchmarks/UiPath.Caching.Benchma
 ## Local Hit Benchmark
 
 `LocalHitBenchmark` reads one entry that the in-memory tier holds, through `ICache<string>`: by a prebuilt
-`CacheKey`, by a string, by a string formatted per call, and by a `Span<char>` formatted on the stack, under
+`CacheKey`, by a string, and by a string formatted per call (an interpolated key), under
 the default key strategy and under a `PrefixCacheKeyStrategy`; and it writes the same entry. The allocation
-column is the point: the span read is the one that stays at zero when the key has to be composed per call.
+column is the point: the interpolated read is the one that stays at zero when the key has to be composed per call.
 The host is the same as above, so a local Redis is still needed for it to start:
 
 ```powershell
@@ -109,8 +109,8 @@ dotnet run --project benchmarks/UiPath.Caching.Benchmarks/UiPath.Caching.Benchma
 
 `GetOrAddSameKeyBenchmark` calls `GetOrAddAsync` repeatedly on one key the local tier already holds, per tier
 (`InMemory`, `InMemoryRedis`), so the generator never runs and the cost is the call itself: by a constant string,
-by a string composed per call, by a `Span<char>` composed on the stack, with a capturing lambda, and with state
-and a static lambda, and through `GetOrAddWithExpirationAsync`. The allocation column is the point: the span key and the stateful overload are the ones
+by a string composed per call (an interpolated key), with a capturing lambda, and with state
+and a static lambda, and through `GetOrAddWithExpirationAsync`. The allocation column is the point: the interpolated key and the stateful overload are the ones
 that stay at zero where the string key and the closure allocate. A local Redis is needed for the host to start:
 
 ```powershell

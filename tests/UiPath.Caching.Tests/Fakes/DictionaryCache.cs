@@ -15,6 +15,8 @@ internal class DictionaryCache : ICache
 
     public int TryAddCalls { get; private set; }
 
+    public List<CacheKey> GetOrAddKeys { get; } = [];
+
     public List<CacheKey[]> SetKeySets { get; } = [];
 
     public void Seed<T>(CacheKey key, T? value) => _store[key] = value;
@@ -57,8 +59,11 @@ internal class DictionaryCache : ICache
     public ValueTask<T?> GetOrAddAsync<T>(CacheKey cacheKey, Func<CancellationToken, Task<T?>> generator, DateTimeOffset expiration, CachePolicy? policy, CancellationToken token = default) =>
         throw new NotSupportedException();
 
-    public ValueTask<T?> GetOrAddAsync<T, TState>(CacheKey cacheKey, TState state, Func<TState, CancellationToken, Task<T?>> generator, CachePolicy? policy, CancellationToken token = default) =>
-        throw new NotSupportedException();
+    public ValueTask<T?> GetOrAddAsync<T, TState>(CacheKey cacheKey, TState state, Func<TState, CancellationToken, Task<T?>> generator, CachePolicy? policy, CancellationToken token = default)
+    {
+        GetOrAddKeys.Add(cacheKey);
+        return new ValueTask<T?>(generator(state, token));
+    }
 
     public ValueTask<T?> GetOrAddAsync<T, TState>(CacheKey cacheKey, TState state, Func<TState, CancellationToken, Task<T?>> generator, TimeSpan expiration, CachePolicy? policy, CancellationToken token = default) =>
         throw new NotSupportedException();

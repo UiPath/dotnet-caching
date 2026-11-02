@@ -46,26 +46,13 @@ public class LocalHitBenchmark
     public ValueTask<string?> ByString() => _cache.GetAsync(KeyText);
 
     [Benchmark, BenchmarkCategory("Read")]
-    public ValueTask<string?> ByFormattedString() => _cache.GetAsync($"user:{_id}");
-
-    [Benchmark, BenchmarkCategory("Read")]
-    public ValueTask<string?> BySpan()
-    {
-        Span<char> buffer = stackalloc char[32];
-        buffer.TryWrite($"user:{_id}", out var written);
-        return _cache.GetAsync(buffer[..written]);
-    }
+    public ValueTask<string?> ByInterpolatedKey() => _cache.GetAsync($"user:{_id}");
 
     [Benchmark(Baseline = true), BenchmarkCategory("Prefixed read")]
     public ValueTask<string?> PrefixedByKey() => _prefixed.GetAsync(Key);
 
     [Benchmark, BenchmarkCategory("Prefixed read")]
-    public ValueTask<string?> PrefixedBySpan()
-    {
-        Span<char> buffer = stackalloc char[32];
-        buffer.TryWrite($"user:{_id}", out var written);
-        return _prefixed.GetAsync(buffer[..written]);
-    }
+    public ValueTask<string?> PrefixedByInterpolatedKey() => _prefixed.GetAsync($"user:{_id}");
 
     [Benchmark, BenchmarkCategory("Write")]
     public ValueTask<bool> Set() => _cache.SetAsync(Key, "value");

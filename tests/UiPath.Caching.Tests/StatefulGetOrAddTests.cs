@@ -143,18 +143,16 @@ public class StatefulGetOrAddTests
 
     private static void SpanHit(MultilayerCache cache, Request request, bool withExpiration)
     {
-        Span<char> key = stackalloc char[8];
-        "k".AsSpan().CopyTo(key);
+        var text = "k";
         _ = SpanReads.Complete(withExpiration
-            ? cache.GetOrAddAsync<string, Request>(key[..1], request, Unexpected, TimeSpan.FromMinutes(1), null, Ct)
-            : cache.GetOrAddAsync<string, Request>(key[..1], request, Unexpected, (CachePolicy?)null, Ct));
+            ? cache.GetOrAddAsync<string, Request>($"{text}", request, Unexpected, TimeSpan.FromMinutes(1), null, Ct)
+            : cache.GetOrAddAsync<string, Request>($"{text}", request, Unexpected, (CachePolicy?)null, Ct));
     }
 
     private static void SpanHit(Cache<string> typed, Request request)
     {
-        Span<char> key = stackalloc char[8];
-        "k".AsSpan().CopyTo(key);
-        _ = SpanReads.Complete(typed.GetOrAddAsync(key[..1], request, Unexpected, Ct));
+        var text = "k";
+        _ = SpanReads.Complete(typed.GetOrAddAsync($"{text}", request, Unexpected, Ct));
     }
 
     private static long AllocatedBy(Func<ValueTask<string?>> read) => AllocatedBy(() => _ = SpanReads.Complete(read()));
@@ -193,8 +191,8 @@ public class StatefulGetOrAddTests
 
     private static string? SpanFallback(ICache cache)
     {
-        Span<char> key = "k".ToCharArray();
-        return cache.GetOrAddAsync<string, Request>(key, new Request("a", 2), Load, TimeSpan.FromSeconds(1), (CachePolicy?)null, Ct).AsTask().GetAwaiter().GetResult();
+        var text = "k";
+        return cache.GetOrAddAsync<string, Request>($"{text}", new Request("a", 2), Load, TimeSpan.FromSeconds(1), (CachePolicy?)null, Ct).AsTask().GetAwaiter().GetResult();
     }
 
     private sealed record Request(string Id, int Version);

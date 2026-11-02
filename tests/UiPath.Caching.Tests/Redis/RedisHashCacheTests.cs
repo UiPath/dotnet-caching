@@ -1102,8 +1102,7 @@ public class RedisHashCacheTests(ITestContextAccessor testContextAccessor) : IAs
 
         ValueTask<IDictionary<string, string?>> SpanGetOrAdd(string state, Func<string, CancellationToken, Task<IDictionary<string, string?>>> generator)
         {
-            Span<char> key = _cacheKey.ToString().ToCharArray();
-            return ((IHashCache)Sut).GetOrAddAsync<string, string>(key, state, generator, (CachePolicy?)null, token);
+            return ((IHashCache)Sut).GetOrAddAsync<string, string>($"{_cacheKey}", state, generator, (CachePolicy?)null, token);
         }
     }
 
@@ -1122,22 +1121,22 @@ public class RedisHashCacheTests(ITestContextAccessor testContextAccessor) : IAs
         _database.KeyTimeToLiveAsync(_redisKey, Arg.Any<CommandFlags>()).Returns(TimeSpan.FromMinutes(3));
         _database.KeyExpireTimeAsync(_redisKey, Arg.Any<CommandFlags>()).Returns((DateTime?)deadline.UtcDateTime);
 
-        (await ((IHashCache)Sut).GetAsync<string>(Key(), fields, null, token)).Should().BeEquivalentTo(await ((IHashCache)Sut).GetAsync<string>(_cacheKey, fields, null, token)).And.ContainKey("a");
-        (await ((IHashCache)Sut).GetMetadataAsync<string>(Key(), token)).Should().BeEquivalentTo(await ((IHashCache)Sut).GetMetadataAsync<string>(_cacheKey, token)).And.BeEquivalentTo(metadata);
-        (await ((IHashCache)Sut).TimeToLiveAsync<string>(Key(), token)).Should().Be(await ((IHashCache)Sut).TimeToLiveAsync<string>(_cacheKey, token)).And.Be(TimeSpan.FromMinutes(3));
-        (await ((IHashCache)Sut).ExpireTimeAsync<string>(Key(), token)).Should().Be(await ((IHashCache)Sut).ExpireTimeAsync<string>(_cacheKey, token)).And.NotBeNull();
+        (await ((IHashCache)Sut).GetAsync<string>($"{Key()}", fields, null, token)).Should().BeEquivalentTo(await ((IHashCache)Sut).GetAsync<string>(_cacheKey, fields, null, token)).And.ContainKey("a");
+        (await ((IHashCache)Sut).GetMetadataAsync<string>($"{Key()}", token)).Should().BeEquivalentTo(await ((IHashCache)Sut).GetMetadataAsync<string>(_cacheKey, token)).And.BeEquivalentTo(metadata);
+        (await ((IHashCache)Sut).TimeToLiveAsync<string>($"{Key()}", token)).Should().Be(await ((IHashCache)Sut).TimeToLiveAsync<string>(_cacheKey, token)).And.Be(TimeSpan.FromMinutes(3));
+        (await ((IHashCache)Sut).ExpireTimeAsync<string>($"{Key()}", token)).Should().Be(await ((IHashCache)Sut).ExpireTimeAsync<string>(_cacheKey, token)).And.NotBeNull();
 
         _database.HashGetAsync(_redisKey, Arg.Any<RedisValue[]>(), CommandFlags.PreferMaster).Returns(_ => new[] { RedisValue.Null, RedisValue.Null });
         _database.HashGetAsync(_redisKey, (RedisValue)KnownFieldNames.MetadataKey, CommandFlags.PreferMaster).Returns(_ => RedisValue.Null);
         _database.KeyTimeToLiveAsync(_redisKey, Arg.Any<CommandFlags>()).Returns((TimeSpan?)null);
         _database.KeyExpireTimeAsync(_redisKey, Arg.Any<CommandFlags>()).Returns((DateTime?)null);
 
-        (await ((IHashCache)Sut).GetAsync<string>(Key(), fields, null, token)).Should().BeEquivalentTo(await ((IHashCache)Sut).GetAsync<string>(_cacheKey, fields, null, token));
-        (await ((IHashCache)Sut).GetMetadataAsync<string>(Key(), token)).Should().BeNull();
-        (await ((IHashCache)Sut).TimeToLiveAsync<string>(Key(), token)).Should().BeNull();
-        (await ((IHashCache)Sut).ExpireTimeAsync<string>(Key(), token)).Should().BeNull();
+        (await ((IHashCache)Sut).GetAsync<string>($"{Key()}", fields, null, token)).Should().BeEquivalentTo(await ((IHashCache)Sut).GetAsync<string>(_cacheKey, fields, null, token));
+        (await ((IHashCache)Sut).GetMetadataAsync<string>($"{Key()}", token)).Should().BeNull();
+        (await ((IHashCache)Sut).TimeToLiveAsync<string>($"{Key()}", token)).Should().BeNull();
+        (await ((IHashCache)Sut).ExpireTimeAsync<string>($"{Key()}", token)).Should().BeNull();
 
-        Span<char> Key() => _cacheKey.ToString().ToCharArray();
+        string Key() => _cacheKey.ToString();
     }
 
     [Fact]

@@ -61,30 +61,22 @@ public class SpanKeyRemoveTests
 
     private static bool Remove<T>(ICache cache, string key)
     {
-        Span<char> buffer = stackalloc char[64];
-        key.AsSpan().CopyTo(buffer);
-        return Complete(cache.RemoveAsync<T>(buffer[..key.Length], Ct));
+        return Complete(cache.RemoveAsync<T>($"{key}", Ct));
     }
 
     private static bool Remove<T>(ICache<T> cache, string key)
     {
-        Span<char> buffer = stackalloc char[64];
-        key.AsSpan().CopyTo(buffer);
-        return Complete(cache.RemoveAsync(buffer[..key.Length], Ct));
+        return Complete(cache.RemoveAsync($"{key}", Ct));
     }
 
     private static bool Remove<T>(IHashCache cache, string key)
     {
-        Span<char> buffer = stackalloc char[64];
-        key.AsSpan().CopyTo(buffer);
-        return Complete(cache.RemoveAsync<T>(buffer[..key.Length], Ct));
+        return Complete(cache.RemoveAsync<T>($"{key}", Ct));
     }
 
     private static bool Remove<T>(IHashCache<T> cache, string key)
     {
-        Span<char> buffer = stackalloc char[64];
-        key.AsSpan().CopyTo(buffer);
-        return Complete(cache.RemoveAsync(buffer[..key.Length], Ct));
+        return Complete(cache.RemoveAsync($"{key}", Ct));
     }
 
     private static bool Complete(ValueTask<bool> remove) =>

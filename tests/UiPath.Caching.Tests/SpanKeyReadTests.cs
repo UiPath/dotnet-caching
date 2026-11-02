@@ -2,6 +2,8 @@ using UiPath.Caching.Tests.Fakes;
 
 namespace UiPath.Caching.Tests;
 
+#pragma warning disable IDE0034 // default(CacheKey) is written out to pin the CacheKey overload; a bare default would bind differently
+
 /// <summary>The <c>Span&lt;char&gt;</c> reads answer as the <see cref="CacheKey"/> reads do, over real in-memory tiers.</summary>
 public class SpanKeyReadTests
 {
@@ -11,7 +13,7 @@ public class SpanKeyReadTests
     private static CancellationToken Ct => TestContext.Current.CancellationToken;
 
     [Fact]
-    public async Task A_bare_default_key_still_binds_to_the_CacheKey_overload()
+    public async Task A_bare_default_key_reaches_the_cache_as_default_CacheKey()
     {
         var cache = Substitute.For<ICache>();
         var typed = Substitute.For<ICache<string>>();
@@ -28,15 +30,15 @@ public class SpanKeyReadTests
         await typed.GetOrAddAsync(default, _ => Task.FromResult<string?>("v"), Ct);
         await hash.GetCacheEntryAsync<string>(default, null, Ct);
 
-        await cache.Received(1).GetAsync<string>(Arg.Any<CacheKey>(), null, Ct);
-        await typed.Received(1).GetAsync(Arg.Any<CacheKey>(), Ct);
-        await hash.Received(1).GetItemAsync<string>(Arg.Any<CacheKey>(), "f", null, Ct);
-        await hash.Received(1).GetAsync<string>(Arg.Any<CacheKey>(), null, Ct);
-        await typedHash.Received(1).GetItemAsync(Arg.Any<CacheKey>(), "f", Ct);
-        await typedHash.Received(1).GetAsync(Arg.Any<CacheKey>(), Ct);
-        await cache.Received(1).ContainsAsync<string>(Arg.Any<CacheKey>(), Ct);
-        await typed.Received(1).GetOrAddAsync(Arg.Any<CacheKey>(), Arg.Any<Func<CancellationToken, Task<string?>>>(), Ct);
-        await hash.Received(1).GetCacheEntryAsync<string>(Arg.Any<CacheKey>(), null, Ct);
+        await cache.Received(1).GetAsync<string>(default(CacheKey), null, Ct);
+        await typed.Received(1).GetAsync(default(CacheKey), Ct);
+        await hash.Received(1).GetItemAsync<string>(default(CacheKey), "f", null, Ct);
+        await hash.Received(1).GetAsync<string>(default(CacheKey), null, Ct);
+        await typedHash.Received(1).GetItemAsync(default(CacheKey), "f", Ct);
+        await typedHash.Received(1).GetAsync(default(CacheKey), Ct);
+        await cache.Received(1).ContainsAsync<string>(default(CacheKey), Ct);
+        await typed.Received(1).GetOrAddAsync(default(CacheKey), Arg.Any<Func<CancellationToken, Task<string?>>>(), Ct);
+        await hash.Received(1).GetCacheEntryAsync<string>(default(CacheKey), null, Ct);
     }
 
     [Fact]

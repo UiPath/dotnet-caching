@@ -45,7 +45,7 @@ public class GetOrAddSameKeyBenchmark
     public ValueTask<string?> StringKey() => _cache.GetOrAddAsync(KeyText, Generate);
 
     [Benchmark]
-    public ValueTask<string?> ComposedStringKey() => _cache.GetOrAddAsync($"{_id}@{_tenant}", Generate);
+    public ValueTask<string?> InterpolatedKey() => _cache.GetOrAddAsync($"{_id}@{_tenant}", Generate);
 
     [Benchmark]
     public ValueTask<long?> StringKeyNullableLong() => _nullableLongCache.GetOrAddAsync(KeyText, GenerateNullableLong);
@@ -58,7 +58,7 @@ public class GetOrAddSameKeyBenchmark
     }
 
     [Benchmark]
-    public ValueTask<string?> ComposedStringKeyCapturingLambda()
+    public ValueTask<string?> InterpolatedKeyCapturingLambda()
     {
         var id = _id;
         return _cache.GetOrAddAsync($"{_id}@{_tenant}", token => Task.FromResult<string?>(id.ToString(CultureInfo.InvariantCulture)));
@@ -68,23 +68,7 @@ public class GetOrAddSameKeyBenchmark
     public ValueTask<string?> StringKeyStateful() => _cache.GetOrAddAsync(KeyText, _id, static (id, token) => Task.FromResult<string?>(id.ToString(CultureInfo.InvariantCulture)));
 
     [Benchmark]
-    public ValueTask<string?> ComposedStringKeyStateful() => _cache.GetOrAddAsync($"{_id}@{_tenant}", _id, static (id, token) => Task.FromResult<string?>(id.ToString(CultureInfo.InvariantCulture)));
-
-    [Benchmark]
-    public ValueTask<string?> SpanKey()
-    {
-        Span<char> buffer = stackalloc char[64];
-        buffer.TryWrite($"{_id}@{_tenant}", out var written);
-        return _cache.GetOrAddAsync(buffer[..written], Generate);
-    }
-
-    [Benchmark]
-    public ValueTask<string?> SpanKeyStateful()
-    {
-        Span<char> buffer = stackalloc char[64];
-        buffer.TryWrite($"{_id}@{_tenant}", out var written);
-        return _cache.GetOrAddAsync(buffer[..written], _id, static (id, token) => Task.FromResult<string?>(id.ToString(CultureInfo.InvariantCulture)));
-    }
+    public ValueTask<string?> InterpolatedKeyStateful() => _cache.GetOrAddAsync($"{_id}@{_tenant}", _id, static (id, token) => Task.FromResult<string?>(id.ToString(CultureInfo.InvariantCulture)));
 
     [Benchmark]
     public ValueTask<string?> WithExpirationStringKey() => _cache.GetOrAddWithExpirationAsync(KeyText, GenerateWithExpiration);

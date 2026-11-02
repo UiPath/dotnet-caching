@@ -29,14 +29,12 @@ public class SpanKeyWriteRedisIntegrationTests(RedisContainerFixture fixture)
 
     private static ValueTask<bool> SetBySpan(ICache cache, string key, string value)
     {
-        Span<char> text = key.ToCharArray();
-        return cache.SetAsync<string>(text, value, TimeSpan.FromMinutes(5), policy: null, Ct);
+        return cache.SetAsync<string>($"{key}", value, TimeSpan.FromMinutes(5), policy: null, Ct);
     }
 
     private static ValueTask<bool> SetBySpan(IHashCache cache, string key, IDictionary<string, string?> values)
     {
-        Span<char> text = key.ToCharArray();
-        return cache.SetAsync<string>(text, values, TimeSpan.FromMinutes(5), policy: null, Ct);
+        return cache.SetAsync<string>($"{key}", values, TimeSpan.FromMinutes(5), policy: null, Ct);
     }
 
     private ServiceProvider Build() =>
