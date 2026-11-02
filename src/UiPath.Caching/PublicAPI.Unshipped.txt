@@ -79,3 +79,4 @@ UiPath.Caching.InMemoryCacheOptions.DistributedLockSkipReread.get -> bool?
 UiPath.Caching.InMemoryCacheOptions.DistributedLockSkipReread.set -> void
 UiPath.Caching.InMemoryRedisCacheOptions.DistributedLockSkipReread.get -> bool?
 UiPath.Caching.InMemoryRedisCacheOptions.DistributedLockSkipReread.set -> void
+UiPath.Caching.Broadcast.CacheEventFormatter.CreateSourceMatcher(System.Uri! source) -> UiPath.Caching.Broadcast.IEventSourceMatcher?

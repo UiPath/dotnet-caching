@@ -1,8 +1,9 @@
+using System.Text.Json;
 using CloudNative.CloudEvents.SystemTextJson;
 
 namespace UiPath.Caching.CloudEvents;
 
-public class CacheEventFormatterProxy(CloudEventFormatter formatter) : IEventFormatterProxy<ICacheEvent>
+public class CacheEventFormatterProxy(CloudEventFormatter formatter) : IEventFormatterProxy<ICacheEvent>, IEventSourceMatcherProvider
 {
     private FastCloudEventCodec? _fast;
 
@@ -36,6 +37,23 @@ public class CacheEventFormatterProxy(CloudEventFormatter formatter) : IEventFor
         return formatter.EncodeStructuredModeMessage(wrapper.CloudEvent, out _);
     }
 
+    /// <summary>Matches the structured-mode <c>source</c> attribute; null unless the formatter is a JSON one.</summary>
+    public IEventSourceMatcher? CreateSourceMatcher(Uri source)
+    {
+        ArgumentNullException.ThrowIfNull(source);
+        return formatter is JsonEventFormatter ? JsonSourceMatcher.Create("source"u8, source, text => Decode(Probe(text))) : null;
+    }
+
     internal static CacheEventFormatterProxy CreateDefault() =>
         new(new JsonEventFormatter<CacheEventData>()) { _fast = new FastCloudEventCodec() };
+
+    private static byte[] Probe(string source) => JsonSerializer.SerializeToUtf8Bytes(new Dictionary<string, object>
+    {
+        ["specversion"] = "1.0",
+        ["id"] = "probe",
+        ["source"] = source,
+        ["type"] = "probe",
+        ["datacontenttype"] = "application/json",
+        ["data"] = new CacheEventData("probe"),
+    });
 }

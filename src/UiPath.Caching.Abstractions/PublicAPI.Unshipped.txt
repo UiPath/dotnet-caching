@@ -462,3 +462,7 @@ UiPath.Caching.NullCache.GetOrAddResultAsync<T>(ref UiPath.Caching.CacheKeyHandl
 UiPath.Caching.NullCache.GetOrAddResultAsync<T>(ref UiPath.Caching.CacheKeyHandler cacheKey, System.Func<System.Threading.CancellationToken, System.Threading.Tasks.Task<T?>!>! generator, UiPath.Caching.CachePolicy? policy, System.Threading.CancellationToken token = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.ValueTask<UiPath.Caching.CacheResult<T>>
 UiPath.Caching.LockProfile.DistributedLockSkipReread.get -> bool?
 UiPath.Caching.LockProfile.DistributedLockSkipReread.init -> void
+UiPath.Caching.Broadcast.IEventSourceMatcher
+UiPath.Caching.Broadcast.IEventSourceMatcher.IsFromSource(System.ReadOnlyMemory<byte> payload) -> bool
+UiPath.Caching.Broadcast.IEventSourceMatcherProvider
+UiPath.Caching.Broadcast.IEventSourceMatcherProvider.CreateSourceMatcher(System.Uri! source) -> UiPath.Caching.Broadcast.IEventSourceMatcher?

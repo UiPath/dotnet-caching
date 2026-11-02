@@ -1,1 +1,2 @@
 #nullable enable
+UiPath.Caching.CloudEvents.CacheEventFormatterProxy.CreateSourceMatcher(System.Uri! source) -> UiPath.Caching.Broadcast.IEventSourceMatcher?

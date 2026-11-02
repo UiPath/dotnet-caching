@@ -15,6 +15,9 @@
     <PackageReference Include="CloudNative.CloudEvents.SystemTextJson" />
   </ItemGroup>
   <ItemGroup>
+    <Compile Include="..\UiPath.Caching\Broadcast\JsonSourceMatcher.cs" Link="JsonSourceMatcher.cs" />
+  </ItemGroup>
+  <ItemGroup>
     <ProjectReference Include="..\UiPath.Caching\UiPath.Caching.csproj" />
   </ItemGroup>
 </Project>
