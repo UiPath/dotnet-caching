@@ -42,8 +42,8 @@ On .NET 8 the two forms whose state is a struct holding a reference (owner and a
 slower on a hit; closures and `this` as state did not, and on .NET 10 they match. In short net8 runs, a class holding
 the same fields and a `(int, int)` tuple stayed at the speed of `this`, and with `DOTNET_TieredPGO=0` the gap was gone,
 so it follows the struct-with-a-reference shape and the runtime's dynamic PGO rather than anything the call does. On
-.NET 8 hot paths pass `this`; for two or more values the closure (about 129 ns, allocates) or a delegate built once
-(about 127 ns, 0 B) beat both struct forms. Measure the shape you use.
+.NET 8 hot paths pass `this` when the generator needs nothing else; when it needs a per-call value too, the closure
+(about 129 ns, 96 B) is faster than both struct forms, which buy their 0 B with about 100 ns. Measure the shape you use.
 
 ## When a shape other than the plain lambda is worth it
 
@@ -128,15 +128,16 @@ Only the library's own extension classes count as state overloads: an extension 
 namespace, is not looked at.
 
 The rule is **Info** by default: the IDE shows a suggestion and the build prints nothing, because the plain lambda stays
-the default. **On a hot path, raise it to a warning** in `.editorconfig`, for the whole project or for one folder, so a
-new capturing lambda there shows up in the build:
+the default. **On a hot path on .NET 10, raise it to a warning** in `.editorconfig`, for the whole project or for one
+folder, so a new capturing lambda there shows up in the build:
 
 ```ini
 [src/Hot/**.cs]
 dotnet_diagnostic.UIPCACHE001.severity = warning
 ```
 
-Leave it at Info elsewhere, or silence it with `dotnet_diagnostic.UIPCACHE001.severity = none`. The rule has a category of its own, `UiPath.Caching`, so
+On .NET 8 leave it at Info on hot paths too: for two or more captures the fix writes the owner-and-argument or tuple
+form, which is slower there than the closure it replaces (see above). Leave it at Info elsewhere, or silence it with `dotnet_diagnostic.UIPCACHE001.severity = none`. The rule has a category of its own, `UiPath.Caching`, so
 raising a whole category such as `Performance` does not turn it on.
 
 The code fix, *Pass captured values as state*, moves the call to the state overload and keeps the other arguments
@@ -169,11 +170,11 @@ _hash.GetOrAddAsync<User>($"user:{id}", c => LoadAsync(id, c), null, ct);
 _hash.GetOrAddAsync<User, UserService, int>($"user:{id}", this, id, static (self, id, c) => self.LoadAsync(id, c), null, ct);
 ```
 
-A captured variable that is assigned before the call is copied to a local first (`var id0 = id;`) and the copy is
-passed, so the generator sees the value the lambda would have read.
+A captured variable that is assigned before the call is passed as it is: nothing writes it after the call, so the
+generator sees the value the lambda would have read.
 
 The state is read once, when the call is made, where the lambda read the variable when it ran, so the fix is offered
-only when that cannot differ. It is not offered when a captured variable is assigned after the call, inside the lambda or another function, in a loop around the call, through a `ref` alias, under a conditional operator in the call's statement (when it needs a snapshot), or in a method with a label or a `goto case` (or a
+only when that cannot differ. It is not offered when a captured variable is assigned in or after the call's statement, inside the lambda or another function, in a loop around the call, through a `ref` alias, or in a method with a label or a `goto case` (or a
 captured primary constructor parameter is assigned anywhere in the type), when the lambda uses `base`, calls a local function that
 captures, or names a captured local in `nameof` or an inferred tuple or anonymous-type member, for a lambda already
 on a state overload, and for a call on a class whose state overload is only on the cache interface (a cache class of

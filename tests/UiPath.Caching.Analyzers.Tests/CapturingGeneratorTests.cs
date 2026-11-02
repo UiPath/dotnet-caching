@@ -1,3 +1,5 @@
+using Microsoft.CodeAnalysis;
+using Microsoft.CodeAnalysis.CSharp.Testing;
 using Microsoft.CodeAnalysis.Testing;
 using Xunit;
 
@@ -726,6 +728,60 @@ public class CapturingGeneratorTests
             Verify.Diagnostic(0, "captures 'this' and 'id' and allocates a closure", PassThem));
 
     [Fact]
+    public Task Two_captures_fall_back_to_a_tuple_when_no_owner_overload_binds() =>
+        // ICache has no owner and argument overload without a policy.
+        Verify.FixAsync(
+            Fixture.Service("""ValueTask<Item?> Get(int id, CancellationToken token) => _untyped.GetOrAddAsync("k", {|#0:ct => LoadAsync(id, ct)|}, token);"""),
+            Fixture.Service("""ValueTask<Item?> Get(int id, CancellationToken token) => _untyped.GetOrAddAsync("k", (Self: this, Id: id), static (s, ct) => s.Self.LoadAsync(s.Id, ct), token);"""),
+            Verify.Diagnostic(0, "captures 'this' and 'id' and allocates a closure", PassThem));
+
+    [Fact]
+    public Task Nested_generators_each_become_owner_and_argument() =>
+        Verify.FixAsync(
+            Fixture.Service("""ValueTask<Item?> Get(int id, CancellationToken token) => _cache.GetOrAddAsync("outer", {|#0:async ct => await _cache.GetOrAddAsync(id, {|#1:c => LoadAsync(id, c)|}, ct)|}, token);"""),
+            Fixture.Service("""ValueTask<Item?> Get(int id, CancellationToken token) => _cache.GetOrAddAsync("outer", this, id, static async (self, id, ct) => await self._cache.GetOrAddAsync(id, self, id, static (self, id, c) => self.LoadAsync(id, c), ct), token);"""),
+            numberOfFixAllIterations: 2,
+            Verify.Diagnostic(0, "captures 'this' and 'id' and allocates a closure", PassThem),
+            Verify.Diagnostic(1, "captures 'this' and 'id' and allocates a closure", PassThem));
+
+    [Fact]
+    public Task Top_level_capture_written_before_the_call_is_passed_without_a_new_local() =>
+        TopLevelAsync(
+            """
+            var id = 1;
+            if (args.Length > 0)
+            {
+                id++;
+                _ = cache.GetOrAddAsync("k", {|#0:ct => Load(id, ct)|}, default);
+            }
+
+            var id0 = 5;
+            Console.WriteLine(id0);
+            """,
+            """
+            var id = 1;
+            if (args.Length > 0)
+            {
+                id++;
+                _ = cache.GetOrAddAsync("k", id, static (id, ct) => Load(id, ct), default);
+            }
+
+            var id0 = 5;
+            Console.WriteLine(id0);
+            """);
+
+    [Fact]
+    public Task Top_level_capture_written_after_the_call_is_refused()
+    {
+        const string source = """
+            var id = 1;
+            _ = cache.GetOrAddAsync("k", {|#0:ct => Load(id, ct)|}, default);
+            id = 2;
+            """;
+        return TopLevelAsync(source, source);
+    }
+
+    [Fact]
     public Task One_capture_becomes_the_state() =>
         Verify.FixAsync(
             Fixture.Service("""ValueTask<Item?> Get(string name, CancellationToken token) => _untyped.GetOrAddAsync("k", {|#0:ct => LoadStaticAsync(name.Length, ct)|}, _policy, token);"""),
@@ -748,29 +804,26 @@ public class CapturingGeneratorTests
             Verify.Diagnostic(0, "captures 'this', 'a', 'b' and 'c' and allocates a closure", PassThem));
 
     [Fact]
-    public Task Reassigned_capture_is_snapshotted() =>
+    public Task Capture_written_before_the_call_is_passed_as_is() =>
         Verify.FixAsync(
             Fixture.Service("""
                 ValueTask<Item?> Get(int id, CancellationToken token)
                 {
-                    var id0 = 7;
-                    id += id0;
+                    id += 7;
                     return _cache.GetOrAddAsync("k", {|#0:ct => LoadStaticAsync(id, ct)|}, token);
                 }
                 """),
             Fixture.Service("""
                 ValueTask<Item?> Get(int id, CancellationToken token)
                 {
-                    var id0 = 7;
-                    id += id0;
-                    var id1 = id;
-                    return _cache.GetOrAddAsync("k", id1, static (id, ct) => LoadStaticAsync(id, ct), token);
+                    id += 7;
+                    return _cache.GetOrAddAsync("k", id, static (id, ct) => LoadStaticAsync(id, ct), token);
                 }
                 """),
             Verify.Diagnostic(0, "captures 'id' and allocates a closure", PassIt));
 
     [Fact]
-    public Task Reassigned_capture_beside_this_is_snapshotted_for_owner_and_argument() =>
+    public Task Capture_written_before_the_call_beside_this_is_the_argument() =>
         Verify.FixAsync(
             Fixture.Service("""
                 ValueTask<Item?> Get(int id, CancellationToken token)
@@ -783,8 +836,7 @@ public class CapturingGeneratorTests
                 ValueTask<Item?> Get(int id, CancellationToken token)
                 {
                     id++;
-                    var id0 = id;
-                    return _cache.GetOrAddAsync(id, this, id0, static (self, id, ct) => self.LoadAsync(id, ct), token);
+                    return _cache.GetOrAddAsync(id, this, id, static (self, id, ct) => self.LoadAsync(id, ct), token);
                 }
                 """),
             Verify.Diagnostic(0, "captures 'this' and 'id' and allocates a closure", PassThem));
@@ -819,14 +871,14 @@ public class CapturingGeneratorTests
             Verify.Diagnostic(0, "captures 'this' and 'id' and allocates a closure", PassThem));
 
     [Fact]
-    public Task Fix_all_gives_each_snapshot_its_own_name() =>
+    public Task Fix_all_passes_a_variable_written_before_two_calls() =>
         Verify.FixAsync(
             Fixture.Service("""
                 ValueTask<Item?> Get(int id, CancellationToken token)
                 {
                     id++;
                     var a = _cache.GetOrAddAsync("a", {|#0:ct => LoadStaticAsync(id, ct)|}, token);
-                    var b = _cache.GetOrAddAsync("b", {|#1:ct => LoadStaticAsync(id, ct)|}, token);
+                    var b = _cache.GetOrAddResultAsync("b", {|#1:ct => LoadStaticAsync(id, ct)|}, token);
                     return a;
                 }
                 """),
@@ -834,13 +886,32 @@ public class CapturingGeneratorTests
                 ValueTask<Item?> Get(int id, CancellationToken token)
                 {
                     id++;
-                    var id0 = id;
-                    var a = _cache.GetOrAddAsync("a", id0, static (id, ct) => LoadStaticAsync(id, ct), token);
-                    var id1 = id;
-                    var b = _cache.GetOrAddAsync("b", id1, static (id, ct) => LoadStaticAsync(id, ct), token);
+                    var a = _cache.GetOrAddAsync("a", id, static (id, ct) => LoadStaticAsync(id, ct), token);
+                    var b = _cache.GetOrAddResultAsync("b", id, static (id, ct) => LoadStaticAsync(id, ct), token);
                     return a;
                 }
                 """),
+            Verify.Diagnostic(0, "captures 'id' and allocates a closure", PassIt),
+            Verify.Diagnostic(1, "captures 'id' and allocates a closure", PassIt));
+
+    [Fact]
+    public Task Fix_all_fixes_two_calls_in_one_statement_in_one_pass() =>
+        Verify.FixAsync(
+            Fixture.Service("""
+                Task Get(int id, CancellationToken token)
+                {
+                    id++;
+                    return Task.WhenAll(_cache.GetOrAddAsync("a", {|#0:ct => LoadStaticAsync(id, ct)|}, token).AsTask(), _cache.GetOrAddAsync("b", {|#1:ct => LoadStaticAsync(id, ct)|}, token).AsTask());
+                }
+                """),
+            Fixture.Service("""
+                Task Get(int id, CancellationToken token)
+                {
+                    id++;
+                    return Task.WhenAll(_cache.GetOrAddAsync("a", id, static (id, ct) => LoadStaticAsync(id, ct), token).AsTask(), _cache.GetOrAddAsync("b", id, static (id, ct) => LoadStaticAsync(id, ct), token).AsTask());
+                }
+                """),
+            numberOfFixAllIterations: 1,
             Verify.Diagnostic(0, "captures 'id' and allocates a closure", PassIt),
             Verify.Diagnostic(1, "captures 'id' and allocates a closure", PassIt));
 
@@ -895,46 +966,34 @@ public class CapturingGeneratorTests
     }
 
     [Fact]
-    public Task Reassigned_capture_with_the_call_outside_a_block_is_refused()
-    {
-        var source = Fixture.Service("""
-            ValueTask<Item?> Get(int id, CancellationToken token)
-            {
-                id++;
-                if (id > 0) return _cache.GetOrAddAsync("k", {|#0:ct => LoadStaticAsync(id, ct)|}, token);
-                return default;
-            }
-
-            ValueTask<Item?> Find(int id, CancellationToken token) => id++ > 0 ? _cache.GetOrAddAsync("k", {|#1:ct => LoadStaticAsync(id, ct)|}, token) : default;
-            """);
-        return Verify.FixAsync(source, source, Verify.Diagnostic(0, "captures 'id' and allocates a closure", PassIt), Verify.Diagnostic(1, "captures 'id' and allocates a closure", PassIt));
-    }
-
-    [Fact]
-    public Task Fix_all_numbers_snapshots_across_different_methods() =>
+    public Task Capture_written_before_a_call_outside_a_block_is_passed() =>
         Verify.FixAsync(
             Fixture.Service("""
                 ValueTask<Item?> Get(int id, CancellationToken token)
                 {
                     id++;
-                    var a = _cache.GetOrAddAsync("a", {|#0:ct => LoadStaticAsync(id, ct)|}, token);
-                    var b = _cache.GetOrAddResultAsync("b", {|#1:ct => LoadStaticAsync(id, ct)|}, token);
-                    return a;
+                    if (id > 0) return _cache.GetOrAddAsync("k", {|#0:ct => LoadStaticAsync(id, ct)|}, token);
+                    return default;
                 }
                 """),
             Fixture.Service("""
                 ValueTask<Item?> Get(int id, CancellationToken token)
                 {
                     id++;
-                    var id0 = id;
-                    var a = _cache.GetOrAddAsync("a", id0, static (id, ct) => LoadStaticAsync(id, ct), token);
-                    var id1 = id;
-                    var b = _cache.GetOrAddResultAsync("b", id1, static (id, ct) => LoadStaticAsync(id, ct), token);
-                    return a;
+                    if (id > 0) return _cache.GetOrAddAsync("k", id, static (id, ct) => LoadStaticAsync(id, ct), token);
+                    return default;
                 }
                 """),
-            Verify.Diagnostic(0, "captures 'id' and allocates a closure", PassIt),
-            Verify.Diagnostic(1, "captures 'id' and allocates a closure", PassIt));
+            Verify.Diagnostic(0, "captures 'id' and allocates a closure", PassIt));
+
+    [Fact]
+    public Task Capture_written_in_the_call_s_own_expression_is_refused()
+    {
+        var source = Fixture.Service("""
+            ValueTask<Item?> Find(int id, CancellationToken token) => id++ > 0 ? _cache.GetOrAddAsync("k", {|#0:ct => LoadStaticAsync(id, ct)|}, token) : default;
+            """);
+        return Verify.FixAsync(source, source, Verify.Diagnostic(0, "captures 'id' and allocates a closure", PassIt));
+    }
 
     [Fact]
     public Task Capture_aliased_by_ref_is_refused()
@@ -953,48 +1012,86 @@ public class CapturingGeneratorTests
     }
 
     [Fact]
-    public Task Fix_all_keeps_snapshot_names_distinct_when_one_is_taken() =>
-        Verify.FixAsync(
-            Fixture.Service("""
-                void Fire(int id, CancellationToken token)
-                {
-                    var id0 = 0;
-                    id = id0 + 1;
-                    _ = _cache.GetOrAddAsync("a", {|#0:ct => LoadStaticAsync(id, ct)|}, token);
-                    _ = _cache.GetOrAddAsync("b", {|#1:ct => LoadStaticAsync(id, ct)|}, token);
-                }
-                """),
-            Fixture.Service("""
-                void Fire(int id, CancellationToken token)
-                {
-                    var id0 = 0;
-                    id = id0 + 1;
-                    var id2 = id;
-                    _ = _cache.GetOrAddAsync("a", id2, static (id, ct) => LoadStaticAsync(id, ct), token);
-                    var id1 = id;
-                    _ = _cache.GetOrAddAsync("b", id1, static (id, ct) => LoadStaticAsync(id, ct), token);
-                }
-                """),
-            Verify.Diagnostic(0, "captures 'id' and allocates a closure", PassIt),
-            Verify.Diagnostic(1, "captures 'id' and allocates a closure", PassIt));
-
-    [Fact]
-    public Task Snapshot_under_a_conditional_operator_is_refused()
+    public Task Capture_written_by_the_enclosing_local_function_is_refused()
     {
         var source = Fixture.Service("""
-            Task<Item?> LoadNameAsync(string name, CancellationToken ct) => Task.FromResult<Item?>(new Item());
-
-            async Task<bool> Get(string? name, CancellationToken token)
+            void Get(int id, CancellationToken token)
             {
-                name = name?.Trim();
-                return name is not null && await _cache.GetOrAddAsync("k", {|#0:ct => LoadNameAsync(name, ct)|}, token) is not null;
+                ValueTask<Item?> Run()
+                {
+                    id++;
+                    return _cache.GetOrAddAsync("k", {|#0:ct => LoadStaticAsync(id, ct)|}, token);
+                }
+
+                var first = Run();
+                _ = Run();
             }
             """);
-        return Verify.FixAsync(source, source, Verify.Diagnostic(0, "captures 'this' and 'name' and allocates a closure", PassThem));
+        return Verify.FixAsync(source, source, Verify.Diagnostic(0, "captures 'id' and allocates a closure", PassIt));
     }
 
     [Fact]
-    public Task Snapshot_is_refused_when_the_method_has_a_goto_case()
+    public Task Capture_passed_by_ref_readonly_is_refused()
+    {
+        var source = Fixture.Service("""
+            static void Bump(ref readonly int x) => System.Runtime.CompilerServices.Unsafe.AsRef(in x)++;
+
+            ValueTask<Item?> Get(int id, CancellationToken token)
+            {
+                var pending = _cache.GetOrAddAsync("k", {|#0:ct => LoadStaticAsync(id, ct)|}, token);
+                Bump(ref id);
+                return pending;
+            }
+            """);
+        return Verify.FixAsync(source, source, Verify.Diagnostic(0, "captures 'id' and allocates a closure", PassIt));
+    }
+
+    [Fact]
+    public Task Capture_written_before_a_call_under_a_conditional_operator_is_passed() =>
+        Verify.FixAsync(
+            Fixture.Service("""
+                Task<Item?> LoadNameAsync(string name, CancellationToken ct) => Task.FromResult<Item?>(new Item());
+
+                async Task<bool> Get(string? name, CancellationToken token)
+                {
+                    name = name?.Trim();
+                    return name is not null && await _cache.GetOrAddAsync("k", {|#0:ct => LoadNameAsync(name, ct)|}, token) is not null;
+                }
+                """),
+            Fixture.Service("""
+                Task<Item?> LoadNameAsync(string name, CancellationToken ct) => Task.FromResult<Item?>(new Item());
+
+                async Task<bool> Get(string? name, CancellationToken token)
+                {
+                    name = name?.Trim();
+                    return name is not null && await _cache.GetOrAddAsync("k", this, name, static (self, name, ct) => self.LoadNameAsync(name, ct), token) is not null;
+                }
+                """),
+            Verify.Diagnostic(0, "captures 'this' and 'name' and allocates a closure", PassThem));
+
+    [Fact]
+    public Task Capture_written_before_a_label_is_refused()
+    {
+        var source = Fixture.Service("""
+            ValueTask<Item?> Get(int id, CancellationToken token)
+            {
+                ValueTask<Item?> pending = default;
+            again:
+                id++;
+                pending = _cache.GetOrAddAsync("k", {|#0:ct => LoadStaticAsync(id, ct)|}, token);
+                if (id < 3)
+                {
+                    goto again;
+                }
+
+                return pending;
+            }
+            """);
+        return Verify.FixAsync(source, source, Verify.Diagnostic(0, "captures 'id' and allocates a closure", PassIt));
+    }
+
+    [Fact]
+    public Task Capture_written_before_a_goto_case_is_refused()
     {
         var source = Fixture.Service("""
             ValueTask<Item?> Get(int id, int n, CancellationToken token)
@@ -1019,5 +1116,35 @@ public class CapturingGeneratorTests
             }
             """);
         return Verify.FixAsync(source, source, Verify.Diagnostic(0, "captures 'id' and allocates a closure", PassIt));
+    }
+
+    // A top-level program: one capture of a top-level local, which the fix reports and may pass.
+    private static Task TopLevelAsync(string body, string fixedBody)
+    {
+        const string Header = """
+            #nullable enable
+            using System;
+            using System.Threading;
+            using System.Threading.Tasks;
+            using UiPath.Caching;
+
+            ICache<string> cache = null!;
+
+            """;
+        const string Footer = """
+
+            static Task<string?> Load(int id, CancellationToken ct) => Task.FromResult<string?>("x");
+            """;
+        var test = new CSharpCodeFixTest<CapturingGeneratorAnalyzer, PassStateCodeFixProvider, DefaultVerifier>
+        {
+            ReferenceAssemblies = new ReferenceAssemblies("runtime"),
+        };
+        test.TestState.Sources.Add(("/0/Test0.cs", Header + body + Footer));
+        test.FixedState.Sources.Add(("/0/Test0.cs", Header + fixedBody + Footer));
+        test.TestState.OutputKind = OutputKind.ConsoleApplication;
+        test.FixedState.OutputKind = OutputKind.ConsoleApplication;
+        test.TestState.AdditionalReferences.AddRange(Verify.RuntimeReferences);
+        test.ExpectedDiagnostics.Add(Verify.Diagnostic(0, "captures 'id' and allocates a closure", PassIt));
+        return test.RunAsync(TestContext.Current.CancellationToken);
     }
 }
