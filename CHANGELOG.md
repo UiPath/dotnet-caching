@@ -123,11 +123,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
   capturing lambda passed to a state overload. The fix, *Pass captured values as state*, moves the call to that
   overload with a `static` lambda: one capture is the state (`this` becomes `self`), two become an owner and an argument
   (falling back to a named tuple when no such overload binds, such as an `ICache` call without a policy or a batch call), three or more become a tuple with PascalCase element names (`(Self: this, TenantId: tenantId, OrderId: orderId)`, read as `s.TenantId`), a captured variable assigned before the call is
-  copied to a local first (`var id0 = id;`), and spelled type arguments get the state's type. It is not offered when the move could
-  change what the generator reads (a captured variable assigned after the call, inside the lambda or another function, in a loop around the call, through a `ref` alias, under a conditional operator in the call's statement (when it needs a snapshot), or in a method with a label or a `goto case`, `base`, a capturing local function), and
+  passed as it is, and spelled type arguments get the state's type. It is not offered when the move could
+  change what the generator reads (a captured variable assigned in or after the call's statement, inside the lambda or another function, in a loop around the call, through a `ref` alias, or in a method with a label or a `goto case`, `base`, a capturing local function), and
   only when the rewritten call compiles in place without an error. The blocking `GetOrAdd` wrappers in
   `CacheSyncExtensions` and `HashCacheSyncExtensions` now pass their generator as state themselves. The plain lambda
-  stays the default, so the rule is Info; **on a hot path, set `dotnet_diagnostic.UIPCACHE001.severity = warning` in `.editorconfig`** so a new capturing lambda shows in the build. It has a category of its own, `UiPath.Caching`, so raising a category such as `Performance` leaves it alone.
+  stays the default, so the rule is Info; **on a .NET 10 hot path, set `dotnet_diagnostic.UIPCACHE001.severity = warning` in `.editorconfig`** so a new capturing lambda shows in the build. On .NET 8 keep it at Info: there the owner-and-argument and tuple forms the fix writes for two or more captures are slower on a hit than the closure. It has a category of its own, `UiPath.Caching`, so raising a category such as `Performance` leaves it alone.
   See `docs/how-to/choosing-a-get-or-add-overload.md`.
 
 ### Changed
