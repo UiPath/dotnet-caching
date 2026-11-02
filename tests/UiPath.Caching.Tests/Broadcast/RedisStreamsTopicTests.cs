@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Runtime.CompilerServices;
 using Microsoft.Extensions.Logging;
 using NSubstitute.ExceptionExtensions;
 using NSubstitute.Extensions;
@@ -67,8 +68,7 @@ public class RedisStreamsTopicTests(ITestContextAccessor testContextAccessor) : 
         actual.Should().BeFalse();
         await _database.DidNotReceive().StreamAddAsync(
                 key: Arg.Any<RedisKey>(),
-                streamField: Arg.Any<RedisValue>(),
-                streamValue: Arg.Any<RedisValue>(),
+                streamPairs: Arg.Any<NameValueEntry[]>(),
                 messageId: Arg.Any<RedisValue?>(),
                 maxLength: Arg.Any<long?>(),
                 useApproximateMaxLength: Arg.Any<bool>(),
@@ -94,8 +94,7 @@ public class RedisStreamsTopicTests(ITestContextAccessor testContextAccessor) : 
         await _database.Received()
             .StreamAddAsync(
                 key: Arg.Any<RedisKey>(),
-                streamField: Arg.Any<RedisValue>(),
-                streamValue: Arg.Any<RedisValue>(),
+                streamPairs: Arg.Any<NameValueEntry[]>(),
                 messageId: Arg.Any<RedisValue?>(),
                 maxLength: Arg.Any<long?>(),
                 useApproximateMaxLength: Arg.Any<bool>(),
@@ -106,14 +105,46 @@ public class RedisStreamsTopicTests(ITestContextAccessor testContextAccessor) : 
     }
 
     [Fact]
+    public async Task A_published_entry_carries_the_payload_under_the_field_name_and_the_source_after_it()
+    {
+        var formatter = _fixture.Freeze<IEventFormatterProxy<ICacheEvent>>();
+        var ev = _fixture.Create<ICacheEvent>();
+        ev.Source.Returns(new Uri("urn:Writer-Node"));
+        byte[] payload = [1, 2, 3];
+        formatter.Encode(ev).Returns(payload);
+        var fields = ArrangeAddCapture();
+
+        (await Sut.PublishAsync(ev, testContextAccessor.Current.CancellationToken)).Should().BeTrue();
+
+        fields.Value.Should().NotBeNull();
+        fields.Value!.Select(f => f.Name.ToString()).Should().Equal(_redisStreamsTopicOptions.FieldName, "src");
+        ((byte[]?)fields.Value[0].Value).Should().Equal(payload);
+        fields.Value[1].Value.ToString().Should().Be("urn:Writer-Node");
+        // A 3.0 reader takes the payload by its field name (`@event[_context.FieldName]` in RedisStreamSubjectWriter at v3.0.0), so the second field is ignored.
+        var entry = new StreamEntry("1-0", fields.Value);
+        ((ReadOnlyMemory<byte>)entry[_redisStreamsTopicOptions.FieldName]).ToArray().Should().Equal(payload);
+    }
+
+    [Fact]
+    public async Task An_event_without_a_source_is_published_with_the_payload_alone()
+    {
+        var ev = _fixture.Create<ICacheEvent>();
+        ev.Source.Returns((Uri?)null);
+        var fields = ArrangeAddCapture();
+
+        (await Sut.PublishAsync(ev, testContextAccessor.Current.CancellationToken)).Should().BeTrue();
+
+        fields.Value.Should().ContainSingle().Which.Name.Should().Be((RedisValue)_redisStreamsTopicOptions.FieldName);
+    }
+
+    [Fact]
     public async Task Publish_event_exception()
     {
         var ev = _fixture.Create<ICacheEvent>();
         _database
             .StreamAddAsync(
                 key: Arg.Any<RedisKey>(),
-                streamField: Arg.Any<RedisValue>(),
-                streamValue: Arg.Any<RedisValue>(),
+                streamPairs: Arg.Any<NameValueEntry[]>(),
                 messageId: Arg.Any<RedisValue?>(),
                 maxLength: Arg.Any<long?>(),
                 useApproximateMaxLength: Arg.Any<bool>(),
@@ -133,8 +164,7 @@ public class RedisStreamsTopicTests(ITestContextAccessor testContextAccessor) : 
 
         _database.StreamAddAsync(
                 key: Arg.Any<RedisKey>(),
-                streamField: Arg.Any<RedisValue>(),
-                streamValue: Arg.Any<RedisValue>(),
+                streamPairs: Arg.Any<NameValueEntry[]>(),
                 messageId: Arg.Any<RedisValue?>(),
                 maxLength: Arg.Any<long?>(),
                 useApproximateMaxLength: Arg.Any<bool>(),
@@ -163,8 +193,7 @@ public class RedisStreamsTopicTests(ITestContextAccessor testContextAccessor) : 
 
         _database.StreamAddAsync(
                 key: Arg.Any<RedisKey>(),
-                streamField: Arg.Any<RedisValue>(),
-                streamValue: Arg.Any<RedisValue>(),
+                streamPairs: Arg.Any<NameValueEntry[]>(),
                 messageId: Arg.Any<RedisValue?>(),
                 maxLength: Arg.Any<long?>(),
                 useApproximateMaxLength: Arg.Any<bool>(),
@@ -295,8 +324,7 @@ public class RedisStreamsTopicTests(ITestContextAccessor testContextAccessor) : 
         _sut = null;
         _database.StreamAddAsync(
                 key: Arg.Any<RedisKey>(),
-                streamField: Arg.Any<RedisValue>(),
-                streamValue: Arg.Any<RedisValue>(),
+                streamPairs: Arg.Any<NameValueEntry[]>(),
                 messageId: Arg.Any<RedisValue?>(),
                 maxLength: Arg.Any<long?>(),
                 useApproximateMaxLength: Arg.Any<bool>(),
@@ -334,8 +362,7 @@ public class RedisStreamsTopicTests(ITestContextAccessor testContextAccessor) : 
         _sut = null;
         _database.StreamAddAsync(
                 key: Arg.Any<RedisKey>(),
-                streamField: Arg.Any<RedisValue>(),
-                streamValue: Arg.Any<RedisValue>(),
+                streamPairs: Arg.Any<NameValueEntry[]>(),
                 messageId: Arg.Any<RedisValue?>(),
                 maxLength: Arg.Any<long?>(),
                 useApproximateMaxLength: Arg.Any<bool>(),
@@ -408,8 +435,7 @@ public class RedisStreamsTopicTests(ITestContextAccessor testContextAccessor) : 
         _sut = null;
         _database.StreamAddAsync(
                 key: Arg.Any<RedisKey>(),
-                streamField: Arg.Any<RedisValue>(),
-                streamValue: Arg.Any<RedisValue>(),
+                streamPairs: Arg.Any<NameValueEntry[]>(),
                 messageId: Arg.Any<RedisValue?>(),
                 maxLength: Arg.Any<long?>(),
                 useApproximateMaxLength: Arg.Any<bool>(),
@@ -445,8 +471,7 @@ public class RedisStreamsTopicTests(ITestContextAccessor testContextAccessor) : 
 
         _database.StreamAddAsync(
                 key: Arg.Any<RedisKey>(),
-                streamField: Arg.Any<RedisValue>(),
-                streamValue: Arg.Any<RedisValue>(),
+                streamPairs: Arg.Any<NameValueEntry[]>(),
                 messageId: Arg.Any<RedisValue?>(),
                 maxLength: Arg.Any<long?>(),
                 useApproximateMaxLength: Arg.Any<bool>(),
@@ -472,8 +497,7 @@ public class RedisStreamsTopicTests(ITestContextAccessor testContextAccessor) : 
         _sut = null;
         _database.StreamAddAsync(
                 key: Arg.Any<RedisKey>(),
-                streamField: Arg.Any<RedisValue>(),
-                streamValue: Arg.Any<RedisValue>(),
+                streamPairs: Arg.Any<NameValueEntry[]>(),
                 messageId: Arg.Any<RedisValue?>(),
                 maxLength: Arg.Any<long?>(),
                 useApproximateMaxLength: Arg.Any<bool>(),
@@ -655,8 +679,7 @@ public class RedisStreamsTopicTests(ITestContextAccessor testContextAccessor) : 
             });
         _database.StreamAddAsync(
                 key: Arg.Any<RedisKey>(),
-                streamField: Arg.Any<RedisValue>(),
-                streamValue: Arg.Any<RedisValue>(),
+                streamPairs: Arg.Any<NameValueEntry[]>(),
                 messageId: Arg.Any<RedisValue?>(),
                 maxLength: Arg.Any<long?>(),
                 useApproximateMaxLength: Arg.Any<bool>(),
@@ -821,6 +844,23 @@ public class RedisStreamsTopicTests(ITestContextAccessor testContextAccessor) : 
         await Task.Delay(700, token);
     }
 
+    /// <summary>Answers the XADD with an id and captures the fields it was given.</summary>
+    private StrongBox<NameValueEntry[]?> ArrangeAddCapture()
+    {
+        var fields = new StrongBox<NameValueEntry[]?>();
+        _database.StreamAddAsync(
+                key: Arg.Any<RedisKey>(),
+                streamPairs: Arg.Do<NameValueEntry[]>(f => fields.Value = f),
+                messageId: Arg.Any<RedisValue?>(),
+                maxLength: Arg.Any<long?>(),
+                useApproximateMaxLength: Arg.Any<bool>(),
+                limit: Arg.Any<long?>(),
+                trimMode: Arg.Any<StreamTrimMode>(),
+                flags: Arg.Any<CommandFlags>())
+            .Returns(Task.FromResult<RedisValue>("1-0"));
+        return fields;
+    }
+
     /// <summary>Waits for a read issued from now on: one issued before whatever the test does next may answer after it.</summary>
     private async Task ReadsAfterAsync(Func<int> reads)
     {
@@ -850,8 +890,7 @@ public class RedisStreamsTopicTests(ITestContextAccessor testContextAccessor) : 
         var added = new TaskCompletionSource<RedisValue>(TaskCreationOptions.RunContinuationsAsynchronously);
         _database.StreamAddAsync(
                 key: Arg.Any<RedisKey>(),
-                streamField: Arg.Any<RedisValue>(),
-                streamValue: Arg.Any<RedisValue>(),
+                streamPairs: Arg.Any<NameValueEntry[]>(),
                 messageId: Arg.Any<RedisValue?>(),
                 maxLength: Arg.Any<long?>(),
                 useApproximateMaxLength: Arg.Any<bool>(),
@@ -872,8 +911,7 @@ public class RedisStreamsTopicTests(ITestContextAccessor testContextAccessor) : 
         _sut = null;
         _database.StreamAddAsync(
                 key: Arg.Any<RedisKey>(),
-                streamField: Arg.Any<RedisValue>(),
-                streamValue: Arg.Any<RedisValue>(),
+                streamPairs: Arg.Any<NameValueEntry[]>(),
                 messageId: Arg.Any<RedisValue?>(),
                 maxLength: Arg.Any<long?>(),
                 useApproximateMaxLength: Arg.Any<bool>(),

@@ -1665,6 +1665,30 @@ public class RedisStreamSubjectWriterTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task An_entry_naming_this_source_is_acknowledged_undecoded_when_the_telemetry_sink_refuses_the_metric()
+    {
+        var channel = Channel.CreateBounded<ICacheEvent>(new BoundedChannelOptions(10));
+        var acked = new TaskCompletionSource<RedisValue[]>(TaskCreationOptions.RunContinuationsAsynchronously);
+        _database.StreamAcknowledgeAsync(Arg.Any<RedisKey>(), Arg.Any<RedisValue>(), Arg.Any<RedisValue[]>())
+            .Returns(call => { acked.TrySetResult(call.Arg<RedisValue[]>()); return Task.FromResult(1L); });
+        var id = _fixture.Create<string>();
+        var source = _sourceUri.GetComponents(UriComponents.AbsoluteUri, UriFormat.SafeUnescaped);
+        var entries = new[] { new StreamEntry(id, [new NameValueEntry(_fieldName, _fixture.Create<string>()), new NameValueEntry(StreamConstants.SourceField, source)]) };
+        SetupSingleBatch(entries);
+        var telemetry = new RefusingTelemetryProvider("none", refuseMetrics: true);
+
+        using var sut = CreateSut(channel.Writer, _logger, telemetry, context: _context with { EmitStreamReceivedEvent = false });
+
+        var ids = await acked.Task.WaitAsync(WaitTimeout, TestContext.Current.CancellationToken);
+        _cancellationTokenSource.Cancel();
+        await sut.FetchTask.WaitAsync(WaitTimeout, TestContext.Current.CancellationToken);
+
+        ids.Select(v => v.ToString()).Should().Contain(id, "the entry must still be acknowledged");
+        _formatter.DidNotReceive().Decode(Arg.Any<ReadOnlyMemory<byte>>());
+        channel.Reader.TryRead(out _).Should().BeFalse("events from the current source must not enter the dispatcher channel");
+    }
+
+    [Fact]
     public async Task Valid_event_is_dispatched_and_acknowledged_when_the_telemetry_sink_refuses_the_receipt()
     {
         var channel = Channel.CreateBounded<ICacheEvent>(new BoundedChannelOptions(10));

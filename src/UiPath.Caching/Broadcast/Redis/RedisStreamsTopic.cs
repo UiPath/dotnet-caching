@@ -34,6 +34,8 @@ public sealed partial class RedisStreamsTopic<T> : ITopic<T>
     private readonly SignalingFetchWaiter _waiter;
     // Half of MaxLength; 0 = no trim.
     private readonly long _wakeEvery;
+    // This node's source as the entries carry it, so a publish of its own events allocates no new text for it.
+    private readonly RedisValue _ownSource;
     private long _published;
     private int _doorbell;
     private int _doorbellFailures;
@@ -68,6 +70,7 @@ public sealed partial class RedisStreamsTopic<T> : ITopic<T>
         _subject = subjectFactory();
         _redisStreamKeyStrategy = streamOptions.RedisStreamKeyStrategy ?? new PrefixStrategy(RedisKeyspaces.Streams, cacheOptions);
         _context = GetContext(topicKey, cacheOptions, streamOptions);
+        _ownSource = StreamSource.Of(_context.SourceUri);
         _waiter = new SignalingFetchWaiter(streamOptions.PollInterval, streamOptions.EffectiveNotifiedPollInterval);
         _wakeEvery = streamOptions.MaxLength is { } maxLength ? Math.Max(1, maxLength / 2) : 0;
         DoorbellSpacing = streamOptions.EffectiveNotifyMinInterval;
@@ -134,14 +137,13 @@ public sealed partial class RedisStreamsTopic<T> : ITopic<T>
 
         try
         {
-            RedisValue message = _formatter.Encode(@event);
+            var message = Fields(@event);
             var behindAdd = _notifyRedisChannel.HasValue && RingsBehindAdd();
             var id = await _write.ExecuteAsync(static (s, token) =>
             {
                 token.ThrowIfCancellationRequested();
                 var added = s.Self._redis.Database.StreamAddAsync(
                     s.Self._context.Topic,
-                    s.Self._context.FieldName,
                     s.Message,
                     maxLength: s.Self._streamOptions.MaxLength,
                     useApproximateMaxLength: true,
@@ -431,6 +433,21 @@ public sealed partial class RedisStreamsTopic<T> : ITopic<T>
         {
             LogObserverMissedEventsFailed(ex, TopicKey);
         }
+    }
+
+    /// <summary>
+    /// The entry's fields: the payload first, under the configured name, then the event's source, which a reader compares
+    /// with its own before it decodes anything. A 3.0 reader takes the payload by name and ignores the second field.
+    /// </summary>
+    private NameValueEntry[] Fields(T @event)
+    {
+        var payload = new NameValueEntry(_context.FieldName, _formatter.Encode(@event));
+        if (@event.Source is not { } source || _context.FieldName == StreamConstants.SourceField)
+        {
+            return [payload];
+        }
+
+        return [payload, new NameValueEntry(StreamConstants.SourceField, ReferenceEquals(source, _context.SourceUri) ? _ownSource : StreamSource.Of(source))];
     }
 
     private RedisStreamContext GetContext(
