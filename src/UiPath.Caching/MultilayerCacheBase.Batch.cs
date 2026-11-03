@@ -15,7 +15,11 @@ public abstract partial class MultilayerCacheBase
         (await IssueAsync(items, count, state, start, onError, CancellationToken.None).ConfigureAwait(false)).Results;
 
     /// <summary>As <see cref="AllAsync"/>, but a cancel stops the calls not yet started.</summary>
-    private protected static async ValueTask<Issued> IssueAsync<TItem, TState>(TItem[] items, int count, TState state, Func<TState, TItem, ValueTask<bool>> start, Action<TState, TItem, Exception> onError, CancellationToken token)
+    private protected static ValueTask<Issued> IssueAsync<TItem, TState>(TItem[] items, int count, TState state, Func<TState, TItem, ValueTask<bool>> start, Action<TState, TItem, Exception> onError, CancellationToken token) =>
+        IssueAsync(items, count, (State: state, Start: start, OnError: onError), static (s, item, _) => s.Start(s.State, item), static (s, item, ex) => s.OnError(s.State, item, ex), token);
+
+    /// <summary>As above, with each item's index, for a call that leaves something at the item's place.</summary>
+    private protected static async ValueTask<Issued> IssueAsync<TItem, TState>(TItem[] items, int count, TState state, Func<TState, TItem, int, ValueTask<bool>> start, Action<TState, TItem, Exception> onError, CancellationToken token)
     {
         var pending = new ValueTask<bool>[count];
         var results = new bool[count];
@@ -26,7 +30,7 @@ public abstract partial class MultilayerCacheBase
             try
             {
 #pragma warning disable CA2012 // started together so they share the pipeline, each awaited exactly once below
-                pending[issued] = start(state, items[issued]);
+                pending[issued] = start(state, items[issued], issued);
 #pragma warning restore CA2012
                 started[issued] = true;
             }
