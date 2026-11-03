@@ -73,7 +73,8 @@ public sealed class RedisStreamNotifyIntegrationTests(RedisContainerFixture fixt
     {
         Assert.SkipUnless(fixture.Enabled, "Set RUN_REDIS_INTEGRATION_TESTS=1 (Docker required) to run.");
         Assert.SkipWhen(_connector!.GetPrimaries().Any(p => p.ServerType != ServerType.Standalone), "on a cluster or behind a proxy the doorbell waits for the XADD reply");
-        var (a, _) = Topic("urn:a", FarPoll);
+        var writes = new HandedBackWrites();
+        var (a, _) = Topic("urn:a", FarPoll, pipelines: writes);
         var (b, received) = Topic("urn:b", FarPoll);
         await SettledAsync();
         (await EventuallyAsync(() => Task.FromResult(a.NotifyLive && b.NotifyLive))).Should().BeTrue("both doorbell subscriptions go live");
@@ -91,7 +92,10 @@ public sealed class RedisStreamNotifyIntegrationTests(RedisContainerFixture fixt
         })).Should().BeTrue("both the add and the doorbell complete");
         var add = commands.Single(c => c.Command == "XADD");
         var doorbell = commands.Single(c => c.Command == "PUBLISH");
-        doorbell.CommandCreated.Should().BeBefore(add.CommandCreated + add.ElapsedTime, "the doorbell is enqueued behind the XADD on the same connection, not after its reply");
+        doorbell.EndPoint.Should().Be(add.EndPoint, "the doorbell goes to the primary that took the XADD");
+        // Ordered against the write handing back the XADD's pending reply, not against the reply's round trip: a first call's
+        // JIT or a busy machine can delay the doorbell past a sub-millisecond reply, while ringing after the reply cannot come first.
+        doorbell.CommandCreated.Should().BeOnOrBefore(writes.HandedBack, "the doorbell is enqueued behind the XADD before the publisher awaits its reply");
     }
 
     [Fact]
@@ -397,7 +401,7 @@ public sealed class RedisStreamNotifyIntegrationTests(RedisContainerFixture fixt
         return connector;
     }
 
-    private (RedisStreamsTopic<ICacheEvent> Topic, Received Observer) Topic(string source, TimeSpan pollInterval, long? maxLength = 32_768, RedisConnector? connector = null, ILogger<RedisStreamsTopic<ICacheEvent>>? logger = null, Action<RedisStreamsTopicOptions>? configure = null)
+    private (RedisStreamsTopic<ICacheEvent> Topic, Received Observer) Topic(string source, TimeSpan pollInterval, long? maxLength = 32_768, RedisConnector? connector = null, ILogger<RedisStreamsTopic<ICacheEvent>>? logger = null, Action<RedisStreamsTopicOptions>? configure = null, IResiliencePipelineProvider? pipelines = null)
     {
         var cacheOptions = new CacheOptions { Enabled = true, AppShortName = _cacheOptions.AppShortName, SourceUri = new Uri(source) };
         var options = new RedisStreamsTopicOptions { Enabled = true, PollInterval = pollInterval, MaxLength = maxLength, NotifySubscriberDueTime = TimeSpan.FromMilliseconds(10) };
@@ -408,7 +412,7 @@ public sealed class RedisStreamNotifyIntegrationTests(RedisContainerFixture fixt
             connector ?? _connector!,
             () => new KeyedSubject<ICacheEvent>(NullLogger.Instance),
             new TestCacheEventFormatterProxy(),
-            EmptyResiliencePipelineProvider.Instance,
+            pipelines ?? EmptyResiliencePipelineProvider.Instance,
             options,
             cacheOptions,
             logger ?? NullLogger<RedisStreamsTopic<ICacheEvent>>.Instance,
@@ -460,6 +464,26 @@ public sealed class RedisStreamNotifyIntegrationTests(RedisContainerFixture fixt
     private sealed class LostDoorbell : IRedisChannelStrategy
     {
         public RedisChannel GetRedisChannel(TopicKey topicKey) => RedisChannel.Literal($"lost:{topicKey}");
+    }
+
+    /// <summary>Runs writes as the empty pipeline does, and records when the last one handed its pending result back to the caller.</summary>
+    private sealed class HandedBackWrites : IResiliencePipelineProvider, IResiliencePipeline
+    {
+        private long _handedBack;
+
+        public DateTime HandedBack => new(Interlocked.Read(ref _handedBack), DateTimeKind.Utc);
+
+        public IResiliencePipeline Get(string? name) => name == ResiliencePipelineNames.Write ? this : EmptyResiliencePipeline.Instance;
+
+        public ValueTask<TResult> ExecuteAsync<TResult>(Func<CancellationToken, ValueTask<TResult>> callback, TResult defaultValue, CancellationToken cancellationToken = default) =>
+            ExecuteAsync(static (c, token) => c(token), callback, defaultValue, cancellationToken);
+
+        public ValueTask<TResult> ExecuteAsync<TResult, TState>(Func<TState, CancellationToken, ValueTask<TResult>> callback, TState state, TResult defaultValue, CancellationToken cancellationToken = default)
+        {
+            var pending = callback(state, cancellationToken);
+            Interlocked.Exchange(ref _handedBack, DateTime.UtcNow.Ticks);
+            return pending;
+        }
     }
 
     private sealed class Received : IObserver<ICacheEvent>, IMissedEventsObserver
