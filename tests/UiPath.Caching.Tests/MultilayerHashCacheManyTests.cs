@@ -298,6 +298,23 @@ public class MultilayerHashCacheManyTests
     }
 
     [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Hash_cache_of_T_reports_the_caller_key_whose_write_failed_when_two_compose_to_one_stored_key(bool streamed)
+    {
+        using var h = new Harness(chunk: 1);
+        var cache = new HashCache<string>(h.Cache, new SharedKeyStrategy(), Awaited);
+        var writes = 0;
+        h.OnWrite = _ => Task.FromResult(Interlocked.Increment(ref writes) == 1);
+        var pairs = Pairs(2);
+
+        var failed = await cache.SetManyAsync(streamed ? pairs.Where(_ => true) : pairs, Replace, Ct);
+
+        h.Log.Where(l => l.StartsWith("write:", StringComparison.Ordinal)).Should().Equal("write:shared", "write:shared");
+        failed.Select(k => k.Name).Should().Equal("k1");
+    }
+
+    [Theory]
     [InlineData(false, "w", "")]
     [InlineData(false, "", "w")]
     [InlineData(false, "w1", "", "w2")]
@@ -342,6 +359,11 @@ public class MultilayerHashCacheManyTests
 
     private static KeyValuePair<CacheKey, IDictionary<string, string?>>[] Pairs(int count, string value = "v") =>
         Keys(count).Select(k => new KeyValuePair<CacheKey, IDictionary<string, string?>>(k, new Dictionary<string, string?> { ["f"] = $"{value}-{k.Name}" })).ToArray();
+
+    private sealed class SharedKeyStrategy : ICacheKeyStrategy
+    {
+        public CacheKey GetCacheKey<T>(CacheKey key) => "shared";
+    }
 
     private sealed class Harness : IDisposable
     {
