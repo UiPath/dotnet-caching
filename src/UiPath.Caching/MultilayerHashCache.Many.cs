@@ -40,8 +40,16 @@ internal sealed partial class MultilayerHashCache
     }
 
     // The batch's events carry no fields; counting the write is what keeps a peer from applying a later write over a copy that lacks this one.
-    private static async ValueTask<bool> CountedBatchedAsync<T>(IVersionedHashCache versioned, CacheKey key, IDictionary<string, T?> values, HashCacheEntryOptions inner, CachePolicy policy, CancellationToken token) =>
-        (await versioned.SetVersionedAsync<T?>(key, values, inner, policy, default, token).ConfigureAwait(false)).Written;
+    // The version it took stays on its entry for the keep and is recorded, as a single write's is, so the key's writes that return out of order see which copy is newer.
+    private static async ValueTask<bool> CountedBatchedAsync<T>(IVersionedHashCache versioned, (InternalHashCacheEntryOptions Options, IDictionary<string, T?> Values)[] entries, int index, HashCacheEntryOptions inner, CachePolicy policy, BackgroundWrites.Keeper keeper)
+    {
+        var (options, values) = entries[index];
+        var counted = await versioned.SetVersionedAsync<T?>(options.CacheKey, values, inner, policy, default, options.Token).ConfigureAwait(false);
+        var version = counted.Written ? counted.Version : 0;
+        entries[index].Options.Version = version;
+        keeper.Returned(options.CacheKey.Name, version);
+        return counted.Written;
+    }
 
     private async ValueTask<List<CacheKey>?> RemoveChunkAsync<T>(CacheKey[] keys, int count, bool announce, CancellationToken token)
     {
@@ -214,11 +222,12 @@ internal sealed partial class MultilayerHashCache
         }
     }
 
-    private ValueTask<bool> WriteBatchedAsync<T>(InternalHashCacheEntryOptions options, IDictionary<string, T?> values, CachePolicy policy)
+    private ValueTask<bool> WriteBatchedAsync<T>((InternalHashCacheEntryOptions Options, IDictionary<string, T?> Values)[] entries, int index, CachePolicy policy, BackgroundWrites.Keeper keeper)
     {
+        var (options, values) = entries[index];
         var inner = new HashCacheEntryOptions(options.Expiration, null, options.Metadata, options.SetOption);
         return _versioned is { } versioned
-            ? CountedBatchedAsync(versioned, options.CacheKey, values, inner, policy, options.Token)
+            ? CountedBatchedAsync(versioned, entries, index, inner, policy, keeper)
             : _innerCache.SetAsync<T?>(options.CacheKey, values, inner, policy, options.Token);
     }
 
@@ -228,11 +237,11 @@ internal sealed partial class MultilayerHashCache
             entries.Take(entryCount).Select(e => e.Options.CacheKey.Name),
             (Cache: this, Entries: entries, Count: entryCount, Policy: policy, Announce: announce, Token: token),
             null,
-            static (s, _) => IssueAsync(
+            static (s, keeper) => IssueAsync(
                 s.Entries,
                 s.Count,
-                (s.Cache, s.Policy),
-                static (x, e) => x.Cache.WriteBatchedAsync(e.Options, e.Values, x.Policy),
+                (s.Cache, s.Entries, s.Policy, Keeper: keeper),
+                static (x, _, i) => x.Cache.WriteBatchedAsync(x.Entries, i, x.Policy, x.Keeper),
                 static (x, e, ex) => x.Cache.LogInnerCacheSetError(ex, x.Cache.Logged(e.Options, typeof(T))),
                 s.Token),
             static (s, issued, keeper) => s.Cache.KeepChunk(s.Entries, s.Count, issued, s.Policy, s.Announce, keeper, s.Token),
@@ -264,7 +273,7 @@ internal sealed partial class MultilayerHashCache
                 continue;
             }
 
-            kept[i] = KeepAfterInnerWrite(true, false, policy, (Cache: this, entries[i].Options, entries[i].Values, Keeper: keeper, Policy: policy), static (s, max) => s.Keeper.Local(s.Options.CacheKey.Name, (s, max), static x => x.s.Cache.MemorySet(x.s.Options, x.s.Values, x.max, policy: x.s.Policy), static x => x.s.Cache.DropSuperseded(x.s.Options.CacheKey.Name)), token);
+            kept[i] = KeepAfterInnerWrite(true, false, policy, (Cache: this, entries[i].Options, entries[i].Values, Keeper: keeper, Policy: policy), static (s, max) => s.Keeper.Local(s.Options.CacheKey.Name, (s, max), static x => x.s.Cache.MemorySet(x.s.Options, x.s.Values, x.max, policy: x.s.Policy), static x => x.s.Cache.DropSuperseded(x.s.Options.CacheKey.Name), s.Options.Version), token);
             if (announce)
             {
                 announceIndex[announceCount] = i;

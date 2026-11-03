@@ -510,6 +510,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
   recovery that lands between a read's failure and its back-off ends that back-off too, and that failure is not
   counted against the reads after it.
 
+- **A hash `SetManyAsync` keeps the version each of its writes took, with `PeerFieldUpdates` on.** The batch dropped the count its
+  writes returned, so a write of the same key that returned after a later batch write laid its older fields over the batch's local copy,
+  and a batch write that returned after a later single write replaced that write's copy, while the distributed tier held the newer value:
+  the node served the stale hash until the next peer event or its expiry. The batch now records each write's version as a single write
+  does, so the write that returns out of order leaves the newer copy alone, or drops its own.
+
 ### Documentation
 
 - `broadcast.md` says an explicit `MaintainerSearchPattern` must carry the connector's `WithKeyPrefix` prefix, and its

@@ -433,6 +433,72 @@ public class PeerFieldUpdateTests
         (await node.Cache.GetAsync<string>("k", Awaited, Ct)).Should().BeEquivalentTo(c.Redis.Fields());
     }
 
+    [Theory]
+    [InlineData(HashCacheSetOption.HashReplace, HashCacheSetOption.HashReplace)]
+    [InlineData(HashCacheSetOption.HashReplace, HashCacheSetOption.KeyReplace)]
+    [InlineData(HashCacheSetOption.KeyReplace, HashCacheSetOption.HashReplace)]
+    [InlineData(HashCacheSetOption.KeyReplace, HashCacheSetOption.KeyReplace)]
+    public async Task A_write_that_returns_after_a_later_batch_write_of_the_key_leaves_the_batch_s_value_in_the_copy(HashCacheSetOption singleOption, HashCacheSetOption batchOption)
+    {
+        using var c = new PeerCluster();
+        var node = c.Add("a");
+        await Seed(node);
+        var first = new TaskCompletionSource();
+        var firstWritten = new TaskCompletionSource();
+        node.Inner.AfterWrite = values =>
+        {
+            if (values.TryGetValue("x", out var v) && v == "first")
+            {
+                firstWritten.TrySetResult();
+                return first.Task;
+            }
+
+            return Task.CompletedTask;
+        };
+        var early = node.Cache.SetAsync<string>("k", Fields(("x", "first")), new HashCacheEntryOptions(SetOption: singleOption), Awaited, Ct).AsTask();
+        await firstWritten.Task;
+        (await node.Cache.SetManyAsync<string>([new("k", Fields(("x", "second")))], new HashCacheEntryOptions(SetOption: batchOption), Awaited, Ct)).Should().BeEmpty();
+
+        first.SetResult();
+        (await early).Should().BeTrue();
+
+        c.Redis.Fields()!["x"].Should().Be("second");
+        (await node.Cache.GetAsync<string>("k", Awaited, Ct)).Should().BeEquivalentTo(c.Redis.Fields());
+    }
+
+    [Theory]
+    [InlineData(HashCacheSetOption.HashReplace, HashCacheSetOption.HashReplace)]
+    [InlineData(HashCacheSetOption.HashReplace, HashCacheSetOption.KeyReplace)]
+    [InlineData(HashCacheSetOption.KeyReplace, HashCacheSetOption.HashReplace)]
+    [InlineData(HashCacheSetOption.KeyReplace, HashCacheSetOption.KeyReplace)]
+    public async Task A_batch_write_that_returns_after_a_later_write_of_the_key_leaves_the_later_value_in_the_copy(HashCacheSetOption batchOption, HashCacheSetOption singleOption)
+    {
+        using var c = new PeerCluster();
+        var node = c.Add("a");
+        await Seed(node);
+        var first = new TaskCompletionSource();
+        var firstWritten = new TaskCompletionSource();
+        node.Inner.AfterWrite = values =>
+        {
+            if (values.TryGetValue("x", out var v) && v == "first")
+            {
+                firstWritten.TrySetResult();
+                return first.Task;
+            }
+
+            return Task.CompletedTask;
+        };
+        var early = node.Cache.SetManyAsync<string>([new("k", Fields(("x", "first")))], new HashCacheEntryOptions(SetOption: batchOption), Awaited, Ct).AsTask();
+        await firstWritten.Task;
+        (await node.Cache.SetAsync<string>("k", Fields(("x", "second")), new HashCacheEntryOptions(SetOption: singleOption), Awaited, Ct)).Should().BeTrue();
+
+        first.SetResult();
+        (await early).Should().BeEmpty();
+
+        c.Redis.Fields()!["x"].Should().Be("second");
+        (await node.Cache.GetAsync<string>("k", Awaited, Ct)).Should().BeEquivalentTo(c.Redis.Fields());
+    }
+
     [Fact]
     public async Task A_write_that_returns_after_a_read_already_counted_it_does_not_put_its_values_over_the_read()
     {
