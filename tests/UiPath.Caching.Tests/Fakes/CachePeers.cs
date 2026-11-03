@@ -44,6 +44,20 @@ internal sealed class CachePeers : IDisposable
         }
     }
 
+    /// <summary>Waits until <paramref name="telemetry"/> holds <paramref name="outcomes"/> kept, discarded or dropped keys in all, flushing as it waits: the refresher ends a key's run just before it counts the key.</summary>
+    internal static async Task Reported(MultilayerCacheBase cache, RecordingTelemetryProvider telemetry, int outcomes)
+    {
+        var until = DateTime.UtcNow.AddSeconds(10);
+        while (Outcomes(telemetry) < outcomes && DateTime.UtcNow < until)
+        {
+            await Task.Delay(5);
+            cache.FlushPeerRefreshMetrics();
+        }
+    }
+
+    private static double Outcomes(RecordingTelemetryProvider telemetry) =>
+        telemetry.Metrics.Where(m => m.Name is "cache.peer_refresh.kept" or "cache.peer_refresh.discarded" or "cache.peer_refresh.dropped").Sum(m => m.Value);
+
     private ValueTask<bool> Publish(Node from, ICacheEvent @event)
     {
         lock (from.Published)
@@ -76,11 +90,13 @@ internal sealed class CachePeers : IDisposable
     internal sealed class Node : IDisposable
     {
         private readonly List<(int Count, TaskCompletionSource Done)> _evictionWaiters = [];
+        private readonly RecordingTelemetryProvider? _telemetry;
         private int _evicted;
 
         public Node(CachePeers peers, string name, InMemoryRedisCacheOptions options, RecordingTelemetryProvider? telemetry, TimeProvider clock)
         {
             Name = name;
+            _telemetry = telemetry;
             var cacheOptions = new CacheOptions { AppShortName = "test", ConnectionMonitorEnabled = true, SourceUri = new Uri($"urn:node:{name}") };
             var inner = DispatchProxy.Create<ICache, NodeInner>();
             Inner = (NodeInner)(object)inner;
@@ -164,6 +180,13 @@ internal sealed class CachePeers : IDisposable
 
             // The refresher reports a batch's outcomes as the batch ends, just after its keys settle.
             Cache.FlushPeerRefreshMetrics();
+        }
+
+        /// <summary>Settles once the refresher has reported <paramref name="outcomes"/> keys since the node started.</summary>
+        public async Task Settled(int outcomes)
+        {
+            await Settled();
+            await Reported(Cache, _telemetry!, outcomes);
         }
 
         public void Dispose()

@@ -593,7 +593,7 @@ public class PeerFieldUpdateTests
         held.SetResult();
         (await slow).Should().BeTrue();
         refresh.SetResult();
-        await node.Settled();
+        await node.Settled(outcomes: 1);
 
         c.Redis.Fields()!["x"].Should().Be("new");
         (await node.Cache.GetAsync<string>("k", Awaited, Ct)).Should().BeEquivalentTo(c.Redis.Fields());

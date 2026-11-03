@@ -56,7 +56,7 @@ public class PeerRefreshHashTests
 
         c.Redis.WriteQuietly(("z", "0"));
         await Add(a, ("d", "4"));
-        await b.Settled();
+        await b.Settled(outcomes: 1);
 
         Held(b).Should().BeEquivalentTo(c.Redis.Fields());
         b.InnerReads.Should().Be(before + 1);

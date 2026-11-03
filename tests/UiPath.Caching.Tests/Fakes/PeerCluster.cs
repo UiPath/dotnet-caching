@@ -257,9 +257,12 @@ internal sealed class PeerCluster : IDisposable
 
     internal sealed class Node : IDisposable
     {
+        private readonly Telemetry.RecordingTelemetryProvider? _telemetry;
+
         public Node(PeerCluster cluster, string name, bool peerFieldUpdates, int maxFields, int maxBytes, bool monitorsConnection, Telemetry.RecordingTelemetryProvider? telemetry)
         {
             Name = name;
+            _telemetry = telemetry;
             var options = new InMemoryRedisCacheOptions { PeerFieldUpdates = peerFieldUpdates, PeerFieldUpdateMaxFields = maxFields, PeerFieldUpdateMaxBytes = maxBytes, ClearLocalOnReconnect = monitorsConnection ? false : null };
             var cacheOptions = new CacheOptions { AppShortName = "test", ConnectionMonitorEnabled = monitorsConnection, SourceUri = new Uri($"urn:node:{name}") };
             var inner = DispatchProxy.Create<IHashCache, PeerInner>();
@@ -316,6 +319,13 @@ internal sealed class PeerCluster : IDisposable
             {
                 await Task.Delay(5);
             }
+        }
+
+        /// <summary>Settles once the refresher has reported <paramref name="outcomes"/> keys since the node started.</summary>
+        public async Task Settled(int outcomes)
+        {
+            await Settled();
+            await CachePeers.Reported(Cache, _telemetry!, outcomes);
         }
 
         public void Dispose()

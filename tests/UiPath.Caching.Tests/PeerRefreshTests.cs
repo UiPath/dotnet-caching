@@ -58,7 +58,7 @@ public class PeerRefreshTests
         var before = b.Inner.SingleReads;
 
         await a.Cache.SetAsync(Key, "new", null, Ct);
-        await b.Settled();
+        await b.Settled(outcomes: 1);
 
         b.Inner.SingleReads.Should().Be(before + 1);
         b.Local.TryGetValue(Key, out _).Should().BeTrue();
@@ -75,7 +75,7 @@ public class PeerRefreshTests
         var before = b.Inner.SingleReads;
 
         await a.Cache.SetAsync(Key, "new", null, Ct);
-        await b.Settled();
+        await b.Settled(outcomes: 1);
 
         b.Inner.SingleReads.Should().Be(before + 1);
         b.Local.TryGetValue(Key, out _).Should().BeTrue();
@@ -93,9 +93,9 @@ public class PeerRefreshTests
         var before = b.Inner.SingleReads;
 
         await a.Cache.SetAsync(Key, "new", null, Ct);
-        await b.Settled();
+        await b.Settled(outcomes: 1);
         await a.Cache.SetAsync(Key, "newer", null, Ct);
-        await b.Settled();
+        await b.Settled(outcomes: 2);
 
         b.Inner.SingleReads.Should().Be(before + 2);
         KeptCount(telemetry).Should().Be(2);
@@ -116,7 +116,7 @@ public class PeerRefreshTests
 
         clock.Advance(TimeSpan.FromMinutes(11));
         peers.Deliver(b, set);
-        await b.Settled();
+        await b.Settled(outcomes: 1);
 
         b.Local.TryGetValue(Key, out _).Should().BeFalse();
         b.Inner.SingleReads.Should().Be(before);
@@ -133,13 +133,13 @@ public class PeerRefreshTests
 
         clock.Advance(TimeSpan.FromMinutes(6));
         await a.Cache.SetAsync(Key, "new", null, Ct);
-        await b.Settled();
+        await b.Settled(outcomes: 1);
         KeptCount(telemetry).Should().Be(1);
 
         // 12 minutes after the one read: the refresh did not count as a read.
         clock.Advance(TimeSpan.FromMinutes(6));
         await a.Cache.SetAsync(Key, "newer", null, Ct);
-        await b.Settled();
+        await b.Settled(outcomes: 2);
 
         b.Local.TryGetValue(Key, out _).Should().BeFalse();
         DroppedReasons(telemetry).Should().Equal("idle");
@@ -160,7 +160,7 @@ public class PeerRefreshTests
         // 11 minutes after the store, 2 after the hit.
         clock.Advance(TimeSpan.FromMinutes(2));
         await a.Cache.SetAsync(Key, "new", null, Ct);
-        await b.Settled();
+        await b.Settled(outcomes: 1);
 
         b.Local.TryGetValue(Key, out _).Should().BeTrue();
         b.Inner.SingleReads.Should().Be(before + 1);
@@ -209,7 +209,7 @@ public class PeerRefreshTests
         peers.Store.RemoveQuietly(Key);
 
         peers.Deliver(b, set);
-        await b.Settled();
+        await b.Settled(outcomes: 1);
 
         b.Local.TryGetValue(Key, out _).Should().BeFalse();
         DroppedReasons(telemetry).Should().Equal("not_found");
@@ -332,7 +332,7 @@ public class PeerRefreshTests
         await Until(() => b.Inner.SingleReads == before + 2);
         peers.Store.WriteQuietly(Key, "newer");
         second.SetResult();
-        await b.Settled();
+        await b.Settled(outcomes: 1);
 
         b.Inner.SingleReads.Should().Be(before + 2);
         b.Local.TryGetValue(Key, out _).Should().BeTrue();
@@ -360,7 +360,7 @@ public class PeerRefreshTests
         await a.Cache.SetAsync(Key, "newest", null, Ct);
         b.Local.TryGetValue(Key, out _).Should().BeTrue();
         second.SetResult();
-        await b.Settled();
+        await b.Settled(outcomes: 1);
 
         b.Local.TryGetValue(Key, out _).Should().BeFalse();
         DroppedReasons(telemetry).Should().Equal("still_dirty");
@@ -383,7 +383,7 @@ public class PeerRefreshTests
         // The read reached the store before the local write.
         peers.Store.WriteQuietly(Key, "new");
         gate.SetResult();
-        await b.Settled();
+        await b.Settled(outcomes: 1);
 
         b.Local.TryGetValue(Key, out _).Should().BeTrue();
         (await b.Cache.GetAsync<string>(Key, null, Ct)).Should().Be("mine");
@@ -404,7 +404,7 @@ public class PeerRefreshTests
         var before = b.Inner.SingleReads;
 
         await a.Cache.SetAsync(Key, "new", null, Ct);
-        await b.Settled();
+        await b.Settled(outcomes: 1);
 
         b.Inner.SingleReads.Should().Be(before + 1);
         b.Local.TryGetValue(Key, out _).Should().BeTrue();
@@ -449,7 +449,7 @@ public class PeerRefreshTests
         b.Inner.Hold = null;
         await b.Cache.SetAsync(neighbour, "x", null, Ct);
         gate.SetResult();
-        await b.Settled();
+        await b.Settled(outcomes: 1);
 
         b.Inner.SingleReads.Should().Be(before + 2);
         b.Local.TryGetValue(Key, out _).Should().BeTrue();
@@ -553,7 +553,7 @@ public class PeerRefreshTests
         // Declines the second read's fill while the entry is still held.
         await b.Cache.SetAsync(neighbour, "x", null, Ct);
         second.SetResult();
-        await b.Settled();
+        await b.Settled(outcomes: 1);
 
         b.Inner.SingleReads.Should().Be(before + 2);
         b.Local.TryGetValue(Key, out _).Should().BeFalse();
@@ -601,7 +601,7 @@ public class PeerRefreshTests
         b.Local.TryGetValue(Key, out _).Should().BeTrue();
         clock.Advance(InMemoryRedisCacheOptionsTimeout + TimeSpan.FromMilliseconds(1));
         gate.SetResult();
-        await b.Settled();
+        await b.Settled(outcomes: 1);
 
         b.Local.TryGetValue(Key, out _).Should().BeFalse();
         DroppedReasons(telemetry).Should().Equal("expired");
@@ -627,7 +627,7 @@ public class PeerRefreshTests
         await Until(() => b.Inner.SingleReads == before + 1);
         clock.Advance(TimeSpan.FromHours(1));
         read.SetResult();
-        await b.Settled();
+        await b.Settled(outcomes: 1);
 
         KeptCount(telemetry).Should().Be(1);
         DroppedReasons(telemetry).Should().BeEmpty();
@@ -1027,7 +1027,7 @@ public class PeerRefreshTests
         await Until(() => (string?)peers.Store.Values[Key] == "mine");
         b.Local.TryGetValue(Key, out var held).Should().BeTrue();
         gate.SetResult();
-        await b.Settled();
+        await b.Settled(outcomes: 1);
 
         KeptCount(telemetry).Should().Be(0);
         DroppedReasons(telemetry).Should().Equal("declined");
@@ -1202,7 +1202,7 @@ public class PeerRefreshTests
         b.Inner.SingleReads.Should().Be(before + 3);
 
         third.SetResult();
-        await b.Settled();
+        await b.Settled(outcomes: 1);
 
         b.Local.TryGetValue(Key, out _).Should().BeTrue();
         (await b.Cache.GetAsync<string>(Key, Retrying, Ct)).Should().Be("newest");
@@ -1233,7 +1233,7 @@ public class PeerRefreshTests
         clock.Advance(MultilayerCacheBase.DefaultRefreshLocalRetryWindow + TimeSpan.FromMilliseconds(1));
         b.Inner.Hold = null;
         second.SetResult();
-        await b.Settled();
+        await b.Settled(outcomes: 1);
 
         b.Local.TryGetValue(Key, out _).Should().BeFalse();
         DroppedReasons(telemetry).Should().Equal("still_dirty");
@@ -1265,7 +1265,7 @@ public class PeerRefreshTests
         await b.Cache.SetAsync(neighbour, "x", null, Ct);
         b.Inner.Hold = null;
         second.SetResult();
-        await b.Settled();
+        await b.Settled(outcomes: 1);
 
         b.Inner.SingleReads.Should().Be(before + 3);
         b.Local.TryGetValue(Key, out _).Should().BeTrue();
@@ -1324,7 +1324,7 @@ public class PeerRefreshTests
         await Until(() => b.Inner.SingleReads == before + 1);
         b.Inner.Hold = null;
         clock.Advance(InMemoryRedisCacheOptionsTimeout + TimeSpan.FromMilliseconds(1));
-        await b.Settled();
+        await b.Settled(outcomes: 1);
 
         b.Inner.SingleReads.Should().Be(before + 2);
         (await b.Cache.GetAsync<string>(Key, Retrying, Ct)).Should().Be("new");
@@ -1348,7 +1348,7 @@ public class PeerRefreshTests
         await a.Cache.SetAsync(Key, "new", null, Ct);
         clock.Advance(InMemoryRedisCacheOptionsTimeout + TimeSpan.FromMilliseconds(1));
         gate.SetResult();
-        await b.Settled();
+        await b.Settled(outcomes: 1);
 
         b.Inner.SingleReads.Should().Be(before + 1);
         (await b.Cache.GetAsync<string>(Key, Retrying, Ct)).Should().Be("new");
