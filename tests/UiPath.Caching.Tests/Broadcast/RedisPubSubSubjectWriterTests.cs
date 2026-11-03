@@ -338,6 +338,93 @@ public class RedisPubSubSubjectWriterTests(ITestContextAccessor testContextAcces
         act.Should().NotThrow();
     }
 
+    [Fact]
+    public async Task A_subscribe_that_completes_after_dispose_is_unsubscribed()
+    {
+        var redis = _fixture.Freeze<IRedisConnector>();
+        redis.Subscriber.Returns(_subscriber);
+        _fixture.Inject<Action>(() => { });
+        using var inSubscribe = new ManualResetEventSlim();
+        using var release = new ManualResetEventSlim();
+        var subscribed = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var registered = 0;
+        _subscriber.When(x => x.Subscribe(_redisChannel, Arg.Any<Action<RedisChannel, RedisValue>>()))
+            .Do(_ =>
+            {
+                inSubscribe.Set();
+                release.Wait(TimeSpan.FromSeconds(10));
+                Interlocked.Increment(ref registered);
+                subscribed.TrySetResult();
+            });
+        _subscriber.When(x => x.Unsubscribe(_redisChannel, Arg.Any<Action<RedisChannel, RedisValue>>(), CommandFlags.FireAndForget))
+            .Do(_ => Interlocked.Decrement(ref registered));
+
+        var sut = Sut();
+        inSubscribe.Wait(TimeSpan.FromSeconds(10), testContextAccessor.Current.CancellationToken).Should().BeTrue();
+        sut.Dispose();
+        release.Set();
+        await subscribed.Task.WaitAsync(TimeSpan.FromSeconds(10), testContextAccessor.Current.CancellationToken);
+        await EventuallyAsync(() => Volatile.Read(ref registered) == 0);
+        sut.Dispose();
+
+        Volatile.Read(ref registered).Should().Be(0, "the subscription completed on a disposed writer, which nothing else would unregister");
+        _subscriber.Received(1).Unsubscribe(_redisChannel, Arg.Any<Action<RedisChannel, RedisValue>>(), CommandFlags.FireAndForget);
+    }
+
+    [Fact]
+    public async Task A_subscribe_that_times_out_is_unregistered_before_the_next_attempt()
+    {
+        var redis = _fixture.Freeze<IRedisConnector>();
+        redis.Subscriber.Returns(_subscriber);
+        _fixture.Inject<Action>(() => { });
+        var subscribedAgain = new TaskCompletionSource<int>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var subscribes = 0;
+        var registered = 0;
+        // Like the multiplexer, which adds the handler to its table before it sends the command.
+        _subscriber.When(x => x.Subscribe(_redisChannel, Arg.Any<Action<RedisChannel, RedisValue>>()))
+            .Do(_ =>
+            {
+                var already = Interlocked.Increment(ref registered) - 1;
+                if (Interlocked.Increment(ref subscribes) == 1)
+                {
+                    throw new RedisTimeoutException(CommandFlags.None, "timeout", CommandStatus.Sent);
+                }
+
+                subscribedAgain.TrySetResult(already);
+            });
+        _subscriber.When(x => x.Unsubscribe(_redisChannel, Arg.Any<Action<RedisChannel, RedisValue>>(), CommandFlags.FireAndForget))
+            .Do(_ => Interlocked.Decrement(ref registered));
+
+        var sut = Sut();
+        var mark = sut.MarkSubscribed();
+        var before = await subscribedAgain.Task.WaitAsync(TimeSpan.FromSeconds(10), testContextAccessor.Current.CancellationToken);
+        await EventuallyAsync(() => sut.ActivatedSince(mark));
+
+        before.Should().Be(0, "the handler the failed subscribe registered is gone before the next attempt adds it again");
+        Volatile.Read(ref registered).Should().Be(1, "the successful subscribe is not undone");
+        _subscriber.Received(1).Unsubscribe(_redisChannel, Arg.Any<Action<RedisChannel, RedisValue>>(), CommandFlags.FireAndForget);
+        sut.Dispose();
+        Volatile.Read(ref registered).Should().Be(0);
+        _subscriber.Received(2).Unsubscribe(_redisChannel, Arg.Any<Action<RedisChannel, RedisValue>>(), CommandFlags.FireAndForget);
+    }
+
+    [Fact]
+    public void A_timer_tick_that_starts_after_dispose_does_not_subscribe()
+    {
+        var redis = _fixture.Freeze<IRedisConnector>();
+        redis.Subscriber.Returns(_subscriber);
+        _options.SubscriberDueTime = Timeout.InfiniteTimeSpan;
+        var sut = Sut();
+        sut.Dispose();
+
+        // A tick queued before the timer stopped still runs the callback.
+        typeof(RedisPubSubSubjectWriter<ICacheEvent>)
+            .GetMethod("Subscribe", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!
+            .Invoke(sut, [null]);
+
+        _subscriber.DidNotReceive().Subscribe(Arg.Any<RedisChannel>(), Arg.Any<Action<RedisChannel, RedisValue>>(), Arg.Any<CommandFlags>());
+    }
+
     public ValueTask DisposeAsync()
     {
         return ValueTask.CompletedTask;
