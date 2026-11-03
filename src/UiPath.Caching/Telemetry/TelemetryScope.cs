@@ -77,10 +77,17 @@ public struct TelemetryScope
         var elapsed = Elapsed(target);
         var startTime = new DateTimeOffset(_startUtcTicks, TimeSpan.Zero);
         var batchId = Guid.NewGuid().ToString();
-        var hitProperties = Properties(target, true, batchId);
-        var missProperties = Properties(target, false, batchId);
+        TelemetryTags<string> hitProperties = default;
+        TelemetryTags<string> missProperties = default;
         foreach (var (key, hit) in reads)
         {
+            // Each outcome's tags are built on its first read, so a single read builds one set.
+            ref var properties = ref hit ? ref hitProperties : ref missProperties;
+            if (properties.IsEmpty)
+            {
+                properties = Properties(target, hit, batchId);
+            }
+
             target.Provider.TrackDependency(
                 type: DependencyType,
                 target: target.ProviderName,
@@ -90,11 +97,11 @@ public struct TelemetryScope
                 duration: elapsed,
                 resultCode: hit ? HitOutcome : MissOutcome,
                 success: true,
-                properties: hit ? hitProperties : missProperties);
+                properties: properties);
         }
     }
 
-    private static KeyValuePair<string, string>[] Properties(Target target, bool hit, string batchId) =>
+    private static TelemetryTags<string> Properties(Target target, bool hit, string batchId) =>
     [
         new(OutcomeTag, hit ? HitOutcome : MissOutcome),
         new(ProviderTag, target.ProviderName),
