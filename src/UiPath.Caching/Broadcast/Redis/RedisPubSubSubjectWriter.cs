@@ -71,15 +71,25 @@ internal sealed partial class RedisPubSubSubjectWriter<T> : IDisposable
 
     public void Dispose()
     {
-        if (!_disposed)
+        Action? unsubscribe;
+        lock (_gate)
         {
-            _redis.OnReconnected -= OnReconnected;
-            _redis.OnConnectionFailed -= OnConnectionFailed;
-            _redis.OnConnectionRestored -= OnConnectionRestored;
-            _subscribeTimer.Dispose();
-            Unsubscribe();
+            if (_disposed)
+            {
+                return;
+            }
+
+            // A subscribe still in flight finds the writer disposed once it completes, and undoes itself.
+            _disposed = true;
+            unsubscribe = _unsubscribe;
+            _unsubscribe = null;
         }
-        _disposed = true;
+
+        _redis.OnReconnected -= OnReconnected;
+        _redis.OnConnectionFailed -= OnConnectionFailed;
+        _redis.OnConnectionRestored -= OnConnectionRestored;
+        _subscribeTimer.Dispose();
+        Unsubscribe(unsubscribe);
     }
 
     /// <summary>The topic is gaining an observer, whose entry a publication before the subscription is in place could leave stale.</summary>
@@ -109,30 +119,43 @@ internal sealed partial class RedisPubSubSubjectWriter<T> : IDisposable
             return;
         }
 
-        LogSubscribeChannel(_redisChannel);
         int generation;
+        Action? previous;
         lock (_gate)
         {
-            // A tick already queued when the timer stopped finds this generation in place and leaves it.
-            if (_activeGeneration == _generation)
+            // A tick already queued when the timer stopped finds the writer disposed, or this generation in place, and leaves it.
+            if (_disposed || _activeGeneration == _generation)
             {
                 Interlocked.Exchange(ref _subscribing, 0);
                 return;
             }
 
             generation = _generation;
+            previous = _unsubscribe;
+            _unsubscribe = null;
         }
 
+        LogSubscribeChannel(_redisChannel);
+        // A subscriber left holding this writer's handler with nothing to undo it; unregistered before another attempt can start.
+        ISubscriber? unowned = null;
         try
         {
-            _unsubscribe?.Invoke();
-            _unsubscribe = null;
+            previous?.Invoke();
             var subscriber = _redis.Subscriber;
+            // Set first: the multiplexer adds the handler before it sends the command, and keeps it, resubscribing on reconnect, if the command fails.
+            unowned = subscriber;
             subscriber.Subscribe(_redisChannel, _handler);
-            _unsubscribe = () => subscriber.Unsubscribe(_redisChannel, _handler, CommandFlags.FireAndForget);
             bool gap;
             lock (_gate)
             {
+                // Dispose ran during the subscribe and had nothing to undo yet.
+                if (_disposed)
+                {
+                    return;
+                }
+
+                unowned = null;
+                _unsubscribe = () => subscriber.Unsubscribe(_redisChannel, _handler, CommandFlags.FireAndForget);
                 // A reconnect during this attempt left the timer armed, so it subscribes again on the new connection.
                 if (generation != _generation)
                 {
@@ -158,19 +181,37 @@ internal sealed partial class RedisPubSubSubjectWriter<T> : IDisposable
         }
         finally
         {
+            if (unowned is not null)
+            {
+                Unregister(unowned);
+            }
+
             Interlocked.Exchange(ref _subscribing, 0);
+        }
+    }
+
+    private void Unregister(ISubscriber subscriber)
+    {
+        try
+        {
+            subscriber.Unsubscribe(_redisChannel, _handler, CommandFlags.FireAndForget);
+        }
+        catch (Exception ex)
+        {
+            LogUnsubscribeError(ex, _redisChannel);
         }
     }
 
     private void OnReconnected(object? sender, EventArgs e)
     {
-        if(_disposed)
-        {
-            return;
-        }
-
         lock (_gate)
         {
+            // Checked under the gate, so the timer is never changed after Dispose stopped it.
+            if (_disposed)
+            {
+                return;
+            }
+
             // The retired connection will not report its restores; the resubscribe this arms covers what it dropped.
             _subscriptionsDown.Clear();
             _unnamedFailure = false;
@@ -318,12 +359,12 @@ internal sealed partial class RedisPubSubSubjectWriter<T> : IDisposable
 
     private bool IsRetired(object? sender) => _current is not null && sender is IConnectionMultiplexer multiplexer && !ReferenceEquals(multiplexer, _current);
 
-    private void Unsubscribe()
+    private void Unsubscribe(Action? unsubscribe)
     {
         LogUnsubscribeChannel(_redisChannel);
         try
         {
-            _unsubscribe?.Invoke();
+            unsubscribe?.Invoke();
             _channelWriter.TryComplete();
         }
         catch (Exception ex)
