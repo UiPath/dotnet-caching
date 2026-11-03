@@ -22,6 +22,18 @@ public class BatchSurfaceTests
     }
 
     [Fact]
+    public void A_chunk_gives_back_the_caller_keys_of_its_failed_keys_and_any_failed_key_it_does_not_hold()
+    {
+        CacheKey[] source = ["a", "b", "c"];
+        var keys = ComposedKeys<CacheKey>.Create(source, static k => k, static k => k.Name == "c" ? "p:a" : (CacheKey)$"p:{k.Name}", static (_, k) => k);
+        CacheKey[] chunk = ["p:a", "p:b", "p:a"];
+
+        var restored = keys.RestoreChunk(["p:a", "p:z"], chunk, source, 3);
+
+        restored!.Select(k => k.Name).Should().Equal("a", "c", "p:z");
+    }
+
+    [Fact]
     public async Task The_null_caches_store_nothing_and_so_fail_nothing()
     {
         ICache cache = NullCache.Instance;

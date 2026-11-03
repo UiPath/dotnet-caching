@@ -380,6 +380,39 @@ public class MultilayerCacheManyTests
         h.Log.Where(l => l.StartsWith("event:", StringComparison.Ordinal)).Should().Equal($"event:{KnownEventTypes.TopicInvalidated}:*");
     }
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Cache_of_T_reports_the_caller_key_whose_write_failed_when_two_compose_to_one_stored_key(bool streamed)
+    {
+        using var h = new Harness(chunk: 1);
+        var cache = new Cache<string>(h.Cache, new SharedKeyStrategy(), Awaited);
+        var writes = 0;
+        h.OnWrite = (_, _) => Task.FromResult(Interlocked.Increment(ref writes) == 1);
+        KeyValuePair<CacheKey, string?>[] pairs = [new("a", "first"), new("b", "second")];
+
+        var failed = await cache.SetManyAsync(streamed ? pairs.Where(_ => true) : pairs, Ct);
+
+        h.Log.Where(l => l.StartsWith("write:", StringComparison.Ordinal)).Should().Equal("write:shared=first", "write:shared=second");
+        failed.Select(k => k.Name).Should().Equal(["b"], "only the second write failed; a would make the caller retry the older value");
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Cache_of_T_reports_every_caller_key_one_chunk_folded_into_a_failed_write(bool streamed)
+    {
+        using var h = new Harness(chunk: 4);
+        var cache = new Cache<string>(h.Cache, new SharedKeyStrategy(), Awaited);
+        h.OnWrite = (_, _) => Task.FromResult(false);
+        KeyValuePair<CacheKey, string?>[] pairs = [new("a", "first"), new("b", "second"), new("a", "third")];
+
+        var failed = await cache.SetManyAsync(streamed ? pairs.Where(_ => true) : pairs, Ct);
+
+        h.Log.Where(l => l.StartsWith("write:", StringComparison.Ordinal)).Should().Equal("write:shared=third");
+        failed.Select(k => k.Name).Should().Equal("a", "b");
+    }
+
     [Fact]
     public async Task SetMany_of_a_key_named_twice_ends_as_its_last_write_leaves_it()
     {
@@ -604,6 +637,11 @@ public class MultilayerCacheManyTests
         }
 
         public void OnEventsMissed(MissedEventsReason reason) => Missed.Add(reason);
+    }
+
+    private sealed class SharedKeyStrategy : ICacheKeyStrategy
+    {
+        public CacheKey GetCacheKey<T>(CacheKey key) => "shared";
     }
 
     private sealed class Harness : IDisposable

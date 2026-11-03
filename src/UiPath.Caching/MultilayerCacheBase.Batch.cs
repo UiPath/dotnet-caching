@@ -93,7 +93,13 @@ public abstract partial class MultilayerCacheBase
         ArgumentNullException.ThrowIfNull(items);
         var known = items.TryGetNonEnumeratedCount(out var total);
         var topicWide = known && BatchTopicInvalidationThreshold is { } threshold && total > threshold;
-        var run = new BatchRun<TItem, TState>(state, process, !topicWide, BatchChunkSize, known ? total : 0, BatchConcurrentChunks, token);
+        var composed = items as ComposedKeys<TItem>;
+        if (composed is not null)
+        {
+            composed.RestoredPerChunk = true;
+        }
+
+        var run = new BatchRun<TItem, TState>(state, process, !topicWide, BatchChunkSize, known ? total : 0, BatchConcurrentChunks, token) { Composed = composed };
         CacheKey? first = null;
         try
         {
@@ -159,7 +165,12 @@ public abstract partial class MultilayerCacheBase
         Telemetry.TryTrackEvent(TopicInvalidationEvent, [new("cache.name", Name), new("announced", announced ? "true" : "false")]);
 
         // Without its event no write here has been announced: every key goes back to the caller, and a repeat is harmless.
-        return announced ? failed : items.Select(keyOf).ToList();
+        if (announced)
+        {
+            return failed;
+        }
+
+        return items is ComposedKeys<TItem> composed ? composed.Originals() : items.Select(keyOf).ToList();
     }
 
     /// <summary>The first <see cref="Count"/> items were issued, the rest not.</summary>
@@ -170,6 +181,7 @@ public abstract partial class MultilayerCacheBase
     {
         private readonly Queue<Task<List<CacheKey>?>> _running = new();
         private TItem[]? _chunk;
+        private CacheKey[]? _originals;
         private int _count;
         private int _remaining = total;
 
@@ -178,9 +190,17 @@ public abstract partial class MultilayerCacheBase
         /// <summary>Whether any chunk may have written.</summary>
         public bool Started { get; private set; }
 
+        /// <summary>A typed wrapper's input, whose caller keys each chunk gives back for its own failures.</summary>
+        public ComposedKeys<TItem>? Composed { get; init; }
+
         public async ValueTask AddAsync(TItem item)
         {
             _chunk ??= new TItem[NextLength()];
+            if (Composed is not null)
+            {
+                (_originals ??= new CacheKey[_chunk.Length])[_count] = Composed.Original;
+            }
+
             _chunk[_count++] = item;
             if (_count == _chunk.Length)
             {
@@ -216,15 +236,21 @@ public abstract partial class MultilayerCacheBase
             }
         }
 
+        private static async Task<List<CacheKey>?> RestoreAsync(ValueTask<List<CacheKey>?> pending, ComposedKeys<TItem> composed, TItem[] chunk, CacheKey[] originals, int count) =>
+            composed.RestoreChunk(await pending.ConfigureAwait(false), chunk, originals, count);
+
         private async ValueTask StartAsync()
         {
             token.ThrowIfCancellationRequested();
             var taken = _chunk!;
             var takenCount = _count;
+            var originals = _originals;
             _chunk = null;
+            _originals = null;
             _count = 0;
             Started = true;
-            _running.Enqueue(process(state, taken, takenCount, announce).AsTask());
+            var pending = process(state, taken, takenCount, announce);
+            _running.Enqueue(Composed is null ? pending.AsTask() : RestoreAsync(pending, Composed, taken, originals!, takenCount));
             while (_running.Count >= concurrent && _running.TryDequeue(out var next))
             {
                 Collect(await next.ConfigureAwait(false));
