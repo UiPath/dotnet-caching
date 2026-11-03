@@ -42,6 +42,67 @@ public class MultilayerCacheBatchRehydrateTests(ITestContextAccessor testContext
     private MultilayerCache Sut => _sut ??= RunTables.Track(_fixture.Create<MultilayerCache>());
 
     [Fact]
+    public async Task Batch_rehydration_writes_L2_before_publishing_its_invalidation()
+    {
+        var token = testContextAccessor.Current.CancellationToken;
+        SeedAged("a", "old");
+        var atPublish = new TaskCompletionSource<string?>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var written = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        _topic.PublishAsync(Arg.Any<ICacheEvent>(), Arg.Any<CancellationToken>()).Returns(_ =>
+        {
+            // A peer woken by this event reads exactly this value from L2.
+            atPublish.TrySetResult(_stored[(CacheKey)"a"]);
+            return true;
+        });
+        _innerCache.SetAsync<string?>(Arg.Any<KeyValuePair<CacheKey, string?>[]>(), Arg.Any<DateTimeOffset>(), Arg.Any<CachePolicy?>(), Arg.Any<CancellationToken>())
+            .Returns(call =>
+            {
+                foreach (var pair in call.Arg<KeyValuePair<CacheKey, string?>[]>())
+                {
+                    _stored[pair.Key] = pair.Value;
+                }
+                written.TrySetResult();
+                return true;
+            });
+
+        var result = await Sut.GetOrAddAsync<string, long>(
+            [new((CacheKey)"a", 1L)],
+            static (_, _) => Task.FromResult<KeyValuePair<long, string?>[]>([new(1L, "fresh")]),
+            RehydratePolicy(),
+            token);
+
+        result.Single().Value.Should().Be("old");
+        var visibleToPeer = await atPublish.Task.WaitAsync(TimeSpan.FromSeconds(10), token);
+        await written.Task.WaitAsync(TimeSpan.FromSeconds(10), token);
+        _stored[(CacheKey)"a"].Should().Be("fresh");
+        visibleToPeer.Should().Be("fresh", "the invalidation must follow the L2 write so a peer cannot refill the old value");
+    }
+
+    [Fact]
+    public async Task Batch_rehydration_writes_and_announces_every_key_when_an_event_is_refused()
+    {
+        var token = testContextAccessor.Current.CancellationToken;
+        SeedAged("a", "A");
+        SeedAged("b", "B");
+        var announced = new ConcurrentQueue<ICacheEvent>();
+        _topic.PublishAsync(Arg.Any<ICacheEvent>(), Arg.Any<CancellationToken>()).Returns(call =>
+        {
+            announced.Enqueue(call.Arg<ICacheEvent>());
+            return false;
+        });
+
+        await Sut.GetOrAddAsync<string, long>(
+            [new((CacheKey)"a", 1L), new((CacheKey)"b", 2L)],
+            static (ids, _) => Task.FromResult(ids.Select(id => new KeyValuePair<long, string?>(id, "fresh" + id)).ToArray()),
+            RehydratePolicy(),
+            token);
+
+        await WaitForAsync(() => announced.Count == 2, TimeSpan.FromSeconds(10), token);
+        _stored[(CacheKey)"a"].Should().Be("fresh1");
+        _stored[(CacheKey)"b"].Should().Be("fresh2");
+    }
+
+    [Fact]
     public async Task Hits_past_threshold_are_rehydrated_in_one_background_call()
     {
         var token = testContextAccessor.Current.CancellationToken;

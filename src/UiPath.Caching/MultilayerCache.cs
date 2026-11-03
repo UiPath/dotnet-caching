@@ -889,7 +889,7 @@ internal sealed partial class MultilayerCache : MultilayerCacheBase, ICache, ISp
         return groups;
     }
 
-    /// <summary>Publishes then writes one expiration group at a time, reporting every caller key that failed.</summary>
+    /// <summary>Writes then announces one expiration group at a time, reporting every caller key that failed.</summary>
     private async ValueTask WriteRehydrateGroupsAsync<T>(
         Dictionary<DateTimeOffset, List<(CacheEntryValue<T> Entry, CacheKey CallerKey)>> groups,
         CachePolicy policy,
@@ -899,9 +899,13 @@ internal sealed partial class MultilayerCache : MultilayerCacheBase, ICache, ISp
         var innerCacheDisconnected = GetInnerCacheDisconnected();
         foreach (var group in groups.Values)
         {
-            var fired = innerCacheDisconnected || await PublishCacheSetEventsAsync(group).ConfigureAwait(false);
-            var written = fired && await InternalSetAsync<T>(group.Select(e => e.Entry).ToArray(), innerCacheDisconnected, policy, keepRefused: false, token).ConfigureAwait(false);
-            if (!written)
+            var entries = group.ConvertAll(e => e.Entry);
+            var (written, kept) = await SetInnerAsync<T>(entries.ToArray(), innerCacheDisconnected, policy, keepRefused: false, token).ConfigureAwait(false);
+
+            // Written before the events, so a node they wake reads the new value; announced even when the write reports
+            // failure, since across Redis Cluster slots it can have written some keys.
+            var published = innerCacheDisconnected || await PublishSetsAsync(entries).ConfigureAwait(false);
+            if (!kept || !published || (!innerCacheDisconnected && !written))
             {
                 failed.AddRange(group.Select(e => e.CallerKey.Name));
             }
@@ -911,19 +915,6 @@ internal sealed partial class MultilayerCache : MultilayerCacheBase, ICache, ISp
         {
             throw new RehydrateWriteFailedException(string.Join(",", failed));
         }
-    }
-
-    /// <summary>Publishes a <c>CacheSet</c> event per entry, stopping at the first one that does not fire.</summary>
-    private async ValueTask<bool> PublishCacheSetEventsAsync<T>(List<(CacheEntryValue<T> Entry, CacheKey CallerKey)> group)
-    {
-        foreach (var (entry, _) in group)
-        {
-            if (!await _eventPublisher.CacheSetAsync(entry.CacheEntry, typeof(T)).ConfigureAwait(false))
-            {
-                return false;
-            }
-        }
-        return true;
     }
 
     /// <summary>The generated entry, as an <see cref="ICacheEntry{T}"/> the caller casts in its own frame: with the shared run off every caller generates for itself, under the distributed lock when one is enabled.</summary>
