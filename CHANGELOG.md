@@ -241,9 +241,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
   `GetCacheEntryAsync`, the read of `GetOrAddAsync`) where read scripts run takes a hash of more than ten batches of fields by `HSCAN` pages
   instead of one `HGETALL`; its pages are not one snapshot. Smaller hashes cost what they did.
 
-- **A single-key `SetAsync` writes the value before it publishes the event**, as the batch one does; so do the hash cache's `SetAsync` and the rehydrate writes. It published first, so
-  a node the event woke could re-read the old value from L2 and keep it for its whole local lifetime. A write the inner
-  tier refuses sends no event; one it takes whose event fails returns `false` with the value in place.
+- **A single-key `SetAsync` writes the value before it publishes the event**, as the batch one does; so do the hash cache's `SetAsync` and the single-key and batch rehydrate writes. It published first, so
+  a node the event woke could re-read the old value from L2 and keep it for its whole local lifetime. A single-key write
+  the inner tier refuses sends no event; one it takes whose event fails returns `false` with the value in place. A batch
+  rehydration announces every key of a group even when its write reports a failure, as the batch `SetAsync` does, since a
+  write over several slots may have landed in part.
 
 - **More members on the `ISpanKey*` capability interfaces.** `ISpanKeyCache` and `ISpanKeyCache<T>` gain `Span<char>` forms of
   `GetOrAddWithExpirationAsync` (with and without state), `SetAsync`, `TimeToLiveAsync` and `ExpireTimeAsync`; `ISpanKeyHashCache` and
