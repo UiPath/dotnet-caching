@@ -469,19 +469,25 @@ public class Cache<T> : ICache<T>, ISpanKeyCache<T>, IResultCache<T>
         return RestoreAsync(set(this, composed, token), composed);
     }
 
-    /// <summary>Applies the key strategy to each entry's key and leaves its state alone.</summary>
+    /// <summary>Applies the key strategy to each entry's key and leaves its state alone; the default strategy keeps the caller's array.</summary>
     private KeyValuePair<CacheKey, TState>[] MapKeys<TState>(KeyValuePair<CacheKey, TState>[] entries)
     {
         ArgumentNullException.ThrowIfNull(entries);
-        return Array.ConvertAll(entries, e => new KeyValuePair<CacheKey, TState>(GetCacheKey(e.Key), e.Value));
+        return _cacheKeyStrategy is DefaultCacheKeyStrategy ? entries : Array.ConvertAll(entries, e => new KeyValuePair<CacheKey, TState>(GetCacheKey(e.Key), e.Value));
     }
 
     private CacheKey GetCacheKey(CacheKey cacheKey) =>
         _cacheKeyStrategy.GetCacheKey<T>(cacheKey);
 
-    private CacheKey[] GetCacheKeys(CacheKey[] cacheKeys) =>
-        Array.ConvertAll(cacheKeys, GetCacheKey);
+    private CacheKey[] GetCacheKeys(CacheKey[] cacheKeys)
+    {
+        ArgumentNullException.ThrowIfNull(cacheKeys);
+        return _cacheKeyStrategy is DefaultCacheKeyStrategy ? cacheKeys : Array.ConvertAll(cacheKeys, GetCacheKey);
+    }
 
-    private KeyValuePair<CacheKey, T?>[] GetKeyValuePairs(KeyValuePair<CacheKey, T?>[] keyValues) =>
-        Array.ConvertAll(keyValues, kv => new KeyValuePair<CacheKey, T?>(GetCacheKey(kv.Key), kv.Value));
+    private KeyValuePair<CacheKey, T?>[] GetKeyValuePairs(KeyValuePair<CacheKey, T?>[] keyValues)
+    {
+        ArgumentNullException.ThrowIfNull(keyValues);
+        return _cacheKeyStrategy is DefaultCacheKeyStrategy ? keyValues : Array.ConvertAll(keyValues, kv => new KeyValuePair<CacheKey, T?>(GetCacheKey(kv.Key), kv.Value));
+    }
 }
