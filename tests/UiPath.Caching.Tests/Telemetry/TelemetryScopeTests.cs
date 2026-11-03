@@ -105,22 +105,33 @@ public class TelemetryScopeTests
         var scope = NewScope();
 
         scope.Stop();
-        scope.TrackKeyReads([("k1", true), ("k2", false)]);
+        scope.TrackKeyReads([("k1", true), ("k2", false), ("k3", true)]);
 
         _telemetry.Metrics.Should().BeEmpty();
-        _telemetry.Dependencies.Should().HaveCount(2);
+        _telemetry.Dependencies.Should().HaveCount(3);
         var hit = _telemetry.Dependencies.Single(d => d.Data == "k1");
         var miss = _telemetry.Dependencies.Single(d => d.Data == "k2");
+        var secondHit = _telemetry.Dependencies.Single(d => d.Data == "k3");
         hit.Type.Should().Be(TelemetryScope.DependencyType);
         hit.Name.Should().Be("MethodY");
         hit.Target.Should().Be("ProviderX");
         hit.Success.Should().BeTrue();
         hit.ResultCode.Should().Be("Hit");
-        hit.Properties![TelemetryScope.TypeTag].Should().Be("String");
         miss.Success.Should().BeTrue();
         miss.ResultCode.Should().Be("Miss");
-        hit.Properties![TelemetryScope.BatchIdTag].Should().Be(miss.Properties![TelemetryScope.BatchIdTag]);
-        hit.Properties![TelemetryScope.BatchIdTag].Should().NotBeNullOrEmpty();
+        var batchId = hit.Properties![TelemetryScope.BatchIdTag];
+        batchId.Should().NotBeNullOrEmpty();
+        foreach (var (dependency, outcome) in new[] { (hit, "Hit"), (miss, "Miss"), (secondHit, "Hit") })
+        {
+            dependency.Properties.Should().BeEquivalentTo(new Dictionary<string, string>
+            {
+                [TelemetryScope.OutcomeTag] = outcome,
+                [TelemetryScope.ProviderTag] = "ProviderX",
+                [TelemetryScope.MethodTag] = "MethodY",
+                [TelemetryScope.TypeTag] = "String",
+                [TelemetryScope.BatchIdTag] = batchId,
+            });
+        }
     }
 
     [Fact]
