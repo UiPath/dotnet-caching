@@ -1550,8 +1550,15 @@ internal sealed partial class MultilayerCache : MultilayerCacheBase, ICache, ISp
             return false;
         }
 
+        // The first key probed before the array is allocated, so a cold batch discards nothing.
+        if (ProbeLocal<T>(entries[0].Key, token, out var first) != LocalProbe.Hit || !first!.Found)
+        {
+            return false;
+        }
+
         var found = new KeyValuePair<TState, T?>[entries.Length];
-        for (var i = 0; i < entries.Length; i++)
+        found[0] = new KeyValuePair<TState, T?>(entries[0].Value, first.Value);
+        for (var i = 1; i < entries.Length; i++)
         {
             if (ProbeLocal<T>(entries[i].Key, token, out var entry) != LocalProbe.Hit || !entry!.Found)
             {
