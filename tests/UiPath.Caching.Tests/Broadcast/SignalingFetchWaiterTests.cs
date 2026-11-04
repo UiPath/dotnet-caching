@@ -60,6 +60,38 @@ public class SignalingFetchWaiterTests
     }
 
     [Fact]
+    public async Task A_signal_while_one_is_pending_throws_nothing()
+    {
+        using var sut = new SignalingFetchWaiter(30.Seconds());
+        var threadId = Environment.CurrentManagedThreadId;
+        var thrown = 0;
+        void OnFirstChance(object? sender, System.Runtime.ExceptionServices.FirstChanceExceptionEventArgs e)
+        {
+            if (Environment.CurrentManagedThreadId == threadId && e.Exception is SemaphoreFullException)
+            {
+                Interlocked.Increment(ref thrown);
+            }
+        }
+
+        AppDomain.CurrentDomain.FirstChanceException += OnFirstChance;
+        try
+        {
+            sut.Signal();
+            sut.Signal();
+        }
+        finally
+        {
+            AppDomain.CurrentDomain.FirstChanceException -= OnFirstChance;
+        }
+
+        thrown.Should().Be(0);
+        await sut.WaitAsync(CancellationToken.None).WaitAsync(10.Seconds(), TestContext.Current.CancellationToken);
+        var sw = System.Diagnostics.Stopwatch.StartNew();
+        await sut.WaitAsync(200.Milliseconds(), CancellationToken.None);
+        sw.Elapsed.Should().BeGreaterThanOrEqualTo(150.Milliseconds(), "the two signals left one wake-up");
+    }
+
+    [Fact]
     public async Task WaitAsync_throws_when_token_cancelled()
     {
         using var sut = new SignalingFetchWaiter(5.Seconds());

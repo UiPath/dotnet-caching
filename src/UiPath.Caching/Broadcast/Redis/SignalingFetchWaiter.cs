@@ -44,7 +44,8 @@ internal sealed class SignalingFetchWaiter(TimeSpan pollInterval, TimeSpan? noti
 
     public void Signal()
     {
-        if (_disposed)
+        // A pending wake-up is the common case under churn; returning here avoids a thrown SemaphoreFullException per signal.
+        if (_disposed || _semaphore.CurrentCount != 0)
         {
             return;
         }
@@ -54,7 +55,7 @@ internal sealed class SignalingFetchWaiter(TimeSpan pollInterval, TimeSpan? noti
         }
         catch (SemaphoreFullException)
         {
-            // A signal is already pending; collapsing to one is the desired behavior.
+            // Another signal raced in after the check; collapsing to one is the desired behavior.
         }
         catch (ObjectDisposedException)
         {
