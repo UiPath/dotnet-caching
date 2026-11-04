@@ -1,3 +1,4 @@
+#pragma warning disable CA2012 // NSubstitute setups call the ValueTask-returning members without consuming the result.
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging.Abstractions;
