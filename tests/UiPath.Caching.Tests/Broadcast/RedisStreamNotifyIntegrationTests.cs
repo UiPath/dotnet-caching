@@ -231,7 +231,8 @@ public sealed class RedisStreamNotifyIntegrationTests(RedisContainerFixture fixt
         Assert.SkipUnless(fixture.Enabled, "Set RUN_REDIS_INTEGRATION_TESTS=1 (Docker required) to run.");
         // Node a rings a channel nobody listens on: a doorbell lost while node b's subscription stays live.
         var (a, _) = Topic("urn:a", Poll, configure: o => o.NotifyChannelStrategy = new LostDoorbell());
-        var (topicB, received) = Topic("urn:b", Poll, configure: o => o.NotifiedPollInterval = TimeSpan.FromSeconds(2));
+        // Long enough that a slow wait for the acknowledgement below cannot use up the notified wait before the 600 ms check.
+        var (topicB, received) = Topic("urn:b", Poll, configure: o => o.NotifiedPollInterval = TimeSpan.FromSeconds(5));
         await SettledAsync();
         // The waiter is read for the mechanism itself: a primer that merely took long could be a stalled machine, not a live doorbell.
         (await EventuallyAsync(() => Task.FromResult(topicB.NotifyLive))).Should().BeTrue("the subscription goes live a little after the server counts it");
@@ -245,7 +246,7 @@ public sealed class RedisStreamNotifyIntegrationTests(RedisContainerFixture fixt
         (await a.PublishAsync(Event("urn:a", "1"), TestContext.Current.CancellationToken)).Should().BeTrue();
 
         (await Task.WhenAny(received.Next.Task, Task.Delay(TimeSpan.FromMilliseconds(600), TestContext.Current.CancellationToken))).Should().NotBeSameAs(received.Next.Task, "the 250 ms poll is not the one in force while the doorbell is live");
-        (await Task.WhenAny(received.Next.Task, Task.Delay(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken))).Should().BeSameAs(received.Next.Task, "the notified poll still catches it");
+        (await Task.WhenAny(received.Next.Task, Task.Delay(TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken))).Should().BeSameAs(received.Next.Task, "the notified poll still catches it");
     }
 
     [Fact]
