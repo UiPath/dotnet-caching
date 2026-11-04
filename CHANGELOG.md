@@ -136,6 +136,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
   `CacheSyncExtensions` and `HashCacheSyncExtensions` now pass their generator as state themselves. The plain lambda
   stays the default, so the rule is Info; **on a .NET 10 hot path, set `dotnet_diagnostic.UIPCACHE001.severity = warning` in `.editorconfig`** so a new capturing lambda shows in the build. On .NET 8 keep it at Info: there the owner-and-argument and tuple forms the fix writes for two or more captures are slower on a hit than the closure. It has a category of its own, `UiPath.Caching`, so raising a category such as `Performance` leaves it alone.
   See `docs/how-to/choosing-a-get-or-add-overload.md`.
+- **`RedisConnectionOptions.DedicatedThreads`** (off by default). StackExchange.Redis 3.x reads replies on thread-pool threads, where 2.x had a dedicated thread; set it to `true` to have each connection read and write on threads of its own, so Redis traffic keeps flowing while the pool is starved, at a reader and a writer thread per connection. It sets the StackExchange.Redis `DedicatedThreads` feature flag before the first connect, so it applies to every StackExchange.Redis connection in the process, not only the cache's, and is never reset.
 
 ### Changed
 

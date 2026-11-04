@@ -16,6 +16,8 @@ public sealed class RedisConnector : IRedisConnector
     /// <summary>Most scan intervals skipped after a failing refresh: an hour at the default interval.</summary>
     internal const int MaxScanBackoff = 120;
 
+    internal const string DedicatedThreadsFeatureFlag = "DedicatedThreads";
+
     /// <summary>How long a topology change is left to settle before the scan judges it.</summary>
     internal static readonly TimeSpan TopologyChangeSettleTime = TimeSpan.FromSeconds(5);
 
@@ -1154,6 +1156,11 @@ public sealed class RedisConnector : IRedisConnector
     {
         var configuration = _redisConfigurationOptionsProvider.GetConfiguration();
         await RedisConnectionConfigurators.ApplyAsync(configuration, _configurators, _redisConfigurationOptionsProvider, cancellationToken).ConfigureAwait(false);
+        if (_redisOptions.DedicatedThreads)
+        {
+            // Read per physical connection when it opens, so it must be set before connecting; never cleared, since other connections may rely on it.
+            StackExchange.Redis.ConnectionMultiplexer.SetFeatureFlag(DedicatedThreadsFeatureFlag, true);
+        }
         return await _connectionMultiplexerFactory.CreateAsync(configuration, cancellationToken).ConfigureAwait(false);
     }
 
