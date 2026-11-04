@@ -2,6 +2,7 @@ using System.Net;
 using Microsoft.Extensions.DependencyInjection;
 using StackExchange.Redis;
 using StackExchange.Redis.KeyspaceIsolation;
+using StackExchange.Redis.Profiling;
 using UiPath.Caching.Config;
 using UiPath.Caching.Redis;
 
@@ -111,7 +112,10 @@ public class RedisReadScriptIntegrationTests(RedisContainerFixture fixture)
     {
         Assert.SkipUnless(fixture.Enabled, "Set RUN_REDIS_INTEGRATION_TESTS=1 (Docker required) to run.");
         using var admin = await ConnectionMultiplexer.ConnectAsync(fixture.ConnectionString + ",allowAdmin=true");
-        using var provider = Build(fixture.ConnectionString, readScripts: new RedisCacheOptions().ReadScriptsEnabled);
+        using var mux = await ConnectionMultiplexer.ConnectAsync(fixture.ConnectionString);
+        var session = new ProfilingSession();
+        mux.RegisterProfiler(() => session);
+        using var provider = Build(fixture.ConnectionString, connector: new PrefixingConnector(mux, prefix: null), readScripts: new RedisCacheOptions().ReadScriptsEnabled);
         var cache = provider.GetRequiredService<ICacheFactory>().CreateCache(KnownCacheProviderNames.Redis);
         var tag = Guid.NewGuid().ToString("N");
         CacheKey withTtl = $"{{{tag}}}ttl";
@@ -125,23 +129,23 @@ public class RedisReadScriptIntegrationTests(RedisContainerFixture fixture)
         // Warms the connection so the counted reads carry nothing else.
         await cache.GetCacheEntryAsync<string>(missing, policy: null, Ct);
 
-        var before = await CommandCallsAsync(admin);
+        session.FinishProfiling();
         var ttl = await cache.GetCacheEntryAsync<string>(withTtl, policy: null, Ct);
         var forever = await cache.GetCacheEntryAsync<string>(noTtl, policy: null, Ct);
         var miss = await cache.GetCacheEntryAsync<string>(missing, policy: null, Ct);
-        var after = await CommandCallsAsync(admin);
+        var calls = CallsOf(session);
 
         ttl.Value.Should().Be("a");
         ttl.Expiration.Should().BeCloseTo(expiration, ClockSkew);
         forever.Value.Should().Be("b");
         forever.Expiration.Should().Be(DateTimeOffset.MaxValue);
         miss.Found.Should().BeFalse();
-        Delta(before, after, "get").Should().Be(3);
-        Delta(before, after, "pttl").Should().Be(3);
-        Delta(before, after, "multi").Should().Be(0);
-        Delta(before, after, "exec").Should().Be(0);
-        Delta(before, after, "evalsha_ro").Should().Be(0);
-        Delta(before, after, "eval_ro").Should().Be(0);
+        Count(calls, "get").Should().Be(3);
+        Count(calls, "pttl").Should().Be(3);
+        Count(calls, "multi").Should().Be(0);
+        Count(calls, "exec").Should().Be(0);
+        Count(calls, "evalsha_ro").Should().Be(0);
+        Count(calls, "eval_ro").Should().Be(0);
     }
 
     [Fact]
@@ -149,31 +153,35 @@ public class RedisReadScriptIntegrationTests(RedisContainerFixture fixture)
     {
         Assert.SkipUnless(fixture.Enabled, "Set RUN_REDIS_INTEGRATION_TESTS=1 (Docker required) to run.");
         Assert.SkipWhen(fixture.ServerVersion.Major < 7, "The read script needs PEXPIRETIME, which Redis 7.0 added.");
-        using var admin = await ConnectionMultiplexer.ConnectAsync(fixture.ConnectionString + ",allowAdmin=true");
-        using var provider = Build(fixture.ConnectionString, readScripts: true);
+        using var mux = await ConnectionMultiplexer.ConnectAsync(fixture.ConnectionString);
+        var session = new ProfilingSession();
+        mux.RegisterProfiler(() => session);
+        using var provider = Build(fixture.ConnectionString, connector: new PrefixingConnector(mux, prefix: null), readScripts: true);
         var cache = provider.GetRequiredService<ICacheFactory>().CreateCache(KnownCacheProviderNames.Redis);
         CacheKey key = $"{{{Guid.NewGuid():N}}}script";
         var expiration = DateTimeOffset.UtcNow.AddMinutes(5);
         (await cache.SetAsync(key, "a", expiration, policy: null, Ct)).Should().BeTrue();
         await cache.GetCacheEntryAsync<string>(key, policy: null, Ct);
 
-        var before = await CommandCallsAsync(admin);
+        session.FinishProfiling();
         var entry = await cache.GetCacheEntryAsync<string>(key, policy: null, Ct);
-        var after = await CommandCallsAsync(admin);
+        var calls = CallsOf(session);
 
         entry.Value.Should().Be("a");
         entry.Expiration.Should().BeCloseTo(expiration, ClockSkew);
-        (Delta(before, after, "evalsha_ro") + Delta(before, after, "eval_ro")).Should().Be(1);
-        Delta(before, after, "pttl").Should().Be(0);
-        Delta(before, after, "multi").Should().Be(0);
+        (Count(calls, "evalsha_ro") + Count(calls, "eval_ro")).Should().Be(1);
+        Count(calls, "pttl").Should().Be(0);
+        Count(calls, "multi").Should().Be(0);
     }
 
     [Fact]
     public async Task A_hash_read_with_the_default_options_sends_hgetall_or_hmget_and_a_pttl_and_no_transaction()
     {
         Assert.SkipUnless(fixture.Enabled, "Set RUN_REDIS_INTEGRATION_TESTS=1 (Docker required) to run.");
-        using var admin = await ConnectionMultiplexer.ConnectAsync(fixture.ConnectionString + ",allowAdmin=true");
-        using var provider = Build(fixture.ConnectionString, readScripts: new RedisCacheOptions().ReadScriptsEnabled);
+        using var mux = await ConnectionMultiplexer.ConnectAsync(fixture.ConnectionString);
+        var session = new ProfilingSession();
+        mux.RegisterProfiler(() => session);
+        using var provider = Build(fixture.ConnectionString, connector: new PrefixingConnector(mux, prefix: null), readScripts: new RedisCacheOptions().ReadScriptsEnabled);
         var hashCache = provider.GetRequiredService<ICacheFactory>().CreateHashCache(KnownCacheProviderNames.Redis);
         var tag = Guid.NewGuid().ToString("N");
         CacheKey key = $"{{{tag}}}h";
@@ -183,35 +191,30 @@ public class RedisReadScriptIntegrationTests(RedisContainerFixture fixture)
         (await hashCache.SetAsync(key, fields, expiration, policy: null, Ct)).Should().BeTrue();
         await hashCache.GetCacheEntryAsync<string>(missing, policy: null, Ct);
 
-        var before = await CommandCallsAsync(admin);
+        session.FinishProfiling();
         var entry = await hashCache.GetCacheEntryAsync<string>(key, policy: null, Ct);
         var miss = await hashCache.GetCacheEntryAsync<string>(missing, policy: null, Ct);
         var subset = await hashCache.GetAsync<string>(key, ["f"], policy: null, Ct);
-        var after = await CommandCallsAsync(admin);
+        var calls = CallsOf(session);
 
         entry.Value.Should().BeEquivalentTo(fields);
         entry.Expiration.Should().BeCloseTo(expiration, ClockSkew);
         miss.Found.Should().BeFalse();
         subset.Should().BeEquivalentTo(new Dictionary<string, string?> { ["f"] = "v" });
-        Delta(before, after, "hgetall").Should().Be(2);
-        Delta(before, after, "hmget").Should().Be(1);
-        Delta(before, after, "pttl").Should().Be(2);
-        Delta(before, after, "multi").Should().Be(0);
-        Delta(before, after, "exec").Should().Be(0);
-        Delta(before, after, "evalsha_ro").Should().Be(0);
-        Delta(before, after, "eval_ro").Should().Be(0);
+        Count(calls, "hgetall").Should().Be(2);
+        Count(calls, "hmget").Should().Be(1);
+        Count(calls, "pttl").Should().Be(2);
+        Count(calls, "multi").Should().Be(0);
+        Count(calls, "exec").Should().Be(0);
+        Count(calls, "evalsha_ro").Should().Be(0);
+        Count(calls, "eval_ro").Should().Be(0);
     }
 
-    private static async Task<Dictionary<string, long>> CommandCallsAsync(ConnectionMultiplexer admin)
-    {
-        var sections = await admin.GetServer(admin.GetEndPoints()[0]).InfoAsync("commandstats");
-        return sections.SelectMany(section => section).ToDictionary(
-            stat => stat.Key.Replace("cmdstat_", string.Empty, StringComparison.Ordinal),
-            stat => long.Parse(stat.Value.Split(',')[0]["calls=".Length..], System.Globalization.CultureInfo.InvariantCulture));
-    }
+    // Counts only this test's own commands: the server-wide INFO commandstats also counts another test process sharing the server.
+    private static Dictionary<string, int> CallsOf(ProfilingSession session) =>
+        session.FinishProfiling().GroupBy(c => c.Command.ToLowerInvariant()).ToDictionary(g => g.Key, g => g.Count());
 
-    private static long Delta(Dictionary<string, long> before, Dictionary<string, long> after, string command) =>
-        after.GetValueOrDefault(command) - before.GetValueOrDefault(command);
+    private static int Count(Dictionary<string, int> calls, string command) => calls.GetValueOrDefault(command);
 
     private static ServiceProvider Build(string connectionString, string app = "readscript", IRedisConnector? connector = null, bool readScripts = true)
     {
@@ -232,8 +235,8 @@ public class RedisReadScriptIntegrationTests(RedisContainerFixture fixture)
             .BuildServiceProvider();
     }
 
-    /// <summary>An application's own connector whose database prefixes every key, as <c>WithKeyPrefix</c> does.</summary>
-    private sealed class PrefixingConnector(IConnectionMultiplexer mux, string prefix) : IRedisConnector
+    /// <summary>An application's own connector whose database prefixes every key, as <c>WithKeyPrefix</c> does, or none without a prefix.</summary>
+    private sealed class PrefixingConnector(IConnectionMultiplexer mux, string? prefix) : IRedisConnector
     {
         public event EventHandler? OnConnectionFailed
         {
@@ -257,7 +260,7 @@ public class RedisReadScriptIntegrationTests(RedisContainerFixture fixture)
 
         public Version Version => mux.GetServer(mux.GetEndPoints()[0]).Version;
 
-        public IDatabase Database => mux.GetDatabase().WithKeyPrefix(prefix);
+        public IDatabase Database => prefix is null ? mux.GetDatabase() : mux.GetDatabase().WithKeyPrefix(prefix);
 
         public ISubscriber Subscriber => mux.GetSubscriber();
 
