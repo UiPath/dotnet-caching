@@ -39,6 +39,9 @@ internal static class StreamConstants
     /// <summary>Read position of the entries delivered to a consumer but not acknowledged.</summary>
     internal static readonly RedisValue PendingMessages = "0";
 
+    /// <summary>The position before a stream's first entry: a group made there is delivered everything the stream holds.</summary>
+    internal static readonly RedisValue StreamStart = "0-0";
+
     /// <summary>Upper bound for the exponential backoff applied after consecutive fetch failures.</summary>
     internal static readonly TimeSpan MaxErrorBackoff = TimeSpan.FromSeconds(30);
 }

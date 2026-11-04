@@ -367,6 +367,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
   the refresh's number instead, and neither references the other; a late event on the replaced entry's token still drops the copy, and only it.
   An entry from a custom `EntryFactory` cannot carry the number, so a peer's write drops it, as before `RefreshLocalOnPeerWrite`.
 
+- **A stream deleted and made anew under a node no longer loses the entries whose ids do not pass the last one read.** A read that
+  found its group gone made it again at the last id read, which is right when only the group was removed, but a stream made anew by
+  the next `XADD` starts its ids over (a clock stepped back widens this), so entries at or below that id, including writes after the loss was
+  reported, were never delivered. The node now reads that one entry back (`XRANGE`, one round trip on this recovery path only) and
+  resumes there only if the stream still holds it byte for byte; otherwise the group is made at `0-0` and the stream is read from its
+  start, a replay that at worst drops local copies. The loss is reported as before.
 - **A group this node made on an empty stream no longer reports its first entry as lost on Redis 6.** Without `max-deleted-entry-id`,
   an entry added after a group made at `0-0` looked trimmed, so the node logged "entries were removed before they were read" and cleared its
   whole local tier. The node now remembers it made the group on a stream that had never held an entry, and reports no gap for it unless the stream

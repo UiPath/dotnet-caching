@@ -17,9 +17,10 @@ internal sealed class InMemoryStreamPort(RedisValue group, RedisValue field) : I
     private readonly List<(long Seq, RedisValue Payload, RedisValue Source)> _log = [];
     private readonly SortedSet<long> _pending = [];
     private readonly List<string> _acknowledged = [];
-    private readonly Queue<Held>[] _holds = [new(), new(), new(), new(), new()];
-    private readonly Exception?[] _failures = new Exception?[5];
-    private readonly int[] _calls = new int[5];
+    private readonly Queue<Held>[] _holds = [new(), new(), new(), new(), new(), new()];
+    private readonly Exception?[] _failures = new Exception?[6];
+    private readonly int[] _calls = new int[6];
+    private readonly bool[] _replyLost = new bool[6];
     private int _scriptReads;
     private int _acknowledgedCount;
     private long _added;
@@ -35,6 +36,7 @@ internal sealed class InMemoryStreamPort(RedisValue group, RedisValue field) : I
         Acknowledge,
         Info,
         Groups,
+        Range,
     }
 
     /// <summary>Whether <c>XINFO STREAM</c> carries the counts Redis 7.0 added; off, it answers as a server below 7.0.</summary>
@@ -94,6 +96,15 @@ internal sealed class InMemoryStreamPort(RedisValue group, RedisValue field) : I
         return held;
     }
 
+    /// <summary>Lets the next <paramref name="op"/> run against the stream, then fails it as a reply lost to a timeout.</summary>
+    public void LoseNextReply(Op op)
+    {
+        lock (_lock)
+        {
+            _replyLost[(int)op] = true;
+        }
+    }
+
     /// <summary>Fails every <paramref name="op"/> from now on with <paramref name="failure"/>; <c>null</c> ends it. A check that fails leaves its read to run.</summary>
     public void FailWith(Op op, Exception? failure)
     {
@@ -128,6 +139,18 @@ internal sealed class InMemoryStreamPort(RedisValue group, RedisValue field) : I
         {
             _hasGroup = false;
             _pending.Clear();
+        }
+    }
+
+    /// <summary>Deletes the stream with its group, as a <c>DEL</c> does; what is added next makes a new stream whose ids start over.</summary>
+    public void Delete()
+    {
+        lock (_lock)
+        {
+            _log.Clear();
+            _added = 0;
+            _exists = false;
+            DropGroup();
         }
     }
 
@@ -166,7 +189,8 @@ internal sealed class InMemoryStreamPort(RedisValue group, RedisValue field) : I
         return new(Part(run, static p => p.Stream), Part(run, static p => p.Group), Part(run, static p => p.Entries));
     }
 
-    public Task<StreamEntry[]> RangeAsync(RedisValue minId, RedisValue maxId, int count) => Task.FromResult<StreamEntry[]>([]);
+    public Task<StreamEntry[]> RangeAsync(RedisValue minId, RedisValue maxId, int count) =>
+        RunAsync(Op.Range, () => _log.Where(e => e.Seq >= Seq(minId) && e.Seq <= Seq(maxId)).Take(count).Select(Entry).ToArray());
 
     /// <summary>Unknown, as when scripts are refused.</summary>
     public Task<StreamHead?> HeadAsync() => Task.FromResult<StreamHead?>(null);
@@ -225,7 +249,14 @@ internal sealed class InMemoryStreamPort(RedisValue group, RedisValue field) : I
                     throw failure;
                 }
 
-                return action();
+                var result = action();
+                if (_replyLost[(int)op])
+                {
+                    _replyLost[(int)op] = false;
+                    throw new TimeoutException("reply lost");
+                }
+
+                return result;
             }
         }
         finally

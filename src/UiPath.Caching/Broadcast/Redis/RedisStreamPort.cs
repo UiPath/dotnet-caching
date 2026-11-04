@@ -58,7 +58,8 @@ internal sealed class RedisStreamPort(RedisStreamContext context, IRedisConnecto
         return new(StateAsync(stream), groups is null ? Task.FromResult<GroupPosition?>(null) : PositionAsync(groups), entries);
     }
 
-    public Task<StreamEntry[]> RangeAsync(RedisValue minId, RedisValue maxId, int count) => redis.Database.StreamRangeAsync(context.Topic, minId, maxId, count);
+    // From the primary, as the group is made there: a replica behind it could still hold the stream the group lost.
+    public Task<StreamEntry[]> RangeAsync(RedisValue minId, RedisValue maxId, int count) => redis.Database.StreamRangeAsync(context.Topic, minId, maxId, count, flags: CommandFlags.DemandMaster);
 
     public Task<StreamHead?> HeadAsync() => ConsumerGroups.HeadAsync(redis.Database, context.Topic);
 

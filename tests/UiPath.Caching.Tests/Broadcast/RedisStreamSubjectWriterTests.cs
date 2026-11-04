@@ -1101,6 +1101,9 @@ public class RedisStreamSubjectWriterTests : IAsyncLifetime
             .ReturnsForAnyArgs(_ => Interlocked.Increment(ref creates) == 1
                 ? Task.FromException<bool>(new RedisConnectionException(ConnectionFailureType.SocketFailure, CommandFlags.None, "down"))
                 : Task.FromResult(true));
+        // The stream still holds 1-0 as it was read: the group went, not the stream.
+        _database.StreamRangeAsync(_context.Topic, (RedisValue)"1-0", (RedisValue)"1-0", 1, Arg.Any<Order>(), Arg.Any<CommandFlags>())
+            .ReturnsForAnyArgs([new StreamEntry("1-0", [new NameValueEntry(_fieldName, "a")])]);
 
         using var sut = CreateSut(Channel.CreateUnbounded<ICacheEvent>().Writer, _logger, onMessagesMissed: () => Interlocked.Increment(ref missed));
         sut.MarkSubscribed();

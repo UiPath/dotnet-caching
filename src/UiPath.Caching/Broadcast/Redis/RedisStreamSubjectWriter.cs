@@ -39,6 +39,8 @@ internal sealed partial class RedisStreamSubjectWriter<T> : IDisposable
 
     private bool _disposed;
     private RedisValue _lastId = StreamPosition.NewMessages;
+    // The entry read at _lastId, kept to tell the stream it came from: one that holds another entry there, or none, replaced it.
+    private StreamEntry _lastEntry;
     // Where the next read of this consumer's pending entries starts; null once they are all read. With AutoAck the entries
     // an earlier run left pending are drained once, at start.
     private RedisValue? _pendingFrom = StreamConstants.PendingMessages;
@@ -74,7 +76,8 @@ internal sealed partial class RedisStreamSubjectWriter<T> : IDisposable
     // A create at the head failed with the group perhaps made; the head read before it, for the group found later.
     private bool _createSent;
     private StreamHead? _sentHead;
-    // This node made the group on a stream that had never held an entry, so Redis 6 cannot tell its first entry from a trim.
+    // This node made the group at 0-0, on a stream that had never held an entry or one that replaced the stream it read, so
+    // Redis 6 cannot tell the first entry from a trim.
     private bool _createdOnEmpty;
     private bool _gapCheckDenied;
     // The last read returned fewer entries than asked: the group is at the head.
@@ -195,6 +198,25 @@ internal sealed partial class RedisStreamSubjectWriter<T> : IDisposable
     }
 
     private static bool IsEmptyHead(StreamHead? head) => head is { } h && (!h.Exists || h.LastId == "0-0");
+
+    /// <summary>Whether <paramref name="found"/> carries the fields of <paramref name="read"/>, byte for byte.</summary>
+    private static bool SameEntry(in StreamEntry found, in StreamEntry read)
+    {
+        if (found.Values is not { } fields || read.Values is not { } kept || fields.Length != kept.Length)
+        {
+            return false;
+        }
+
+        for (var i = 0; i < fields.Length; i++)
+        {
+            if (fields[i].Name != kept[i].Name || !((ReadOnlyMemory<byte>)fields[i].Value).Span.SequenceEqual(((ReadOnlyMemory<byte>)kept[i].Value).Span))
+            {
+                return false;
+            }
+        }
+
+        return true;
+    }
 
     /// <summary>The task's result, or its failure.</summary>
     private static async Task<(TResult Result, Exception? Failure)> Settle<TResult>(Task<TResult> task)
@@ -322,7 +344,8 @@ internal sealed partial class RedisStreamSubjectWriter<T> : IDisposable
         if (events.Length > 0)
         {
             await DispatchEventsAsync(events, !_context.AutoAck).ConfigureAwait(false);
-            _lastId = events[^1].Id;
+            _lastEntry = events[^1];
+            _lastId = _lastEntry.Id;
             _position = _lastId;
             if (!_caughtUp)
             {
@@ -459,7 +482,7 @@ internal sealed partial class RedisStreamSubjectWriter<T> : IDisposable
 
         // A group a subscriber relies on was made or found before this point, so one made now is proof it is gone.
         var relied = _groupExists && _subscribed;
-        var (outcome, head) = await CreateGroupAsync(id).ConfigureAwait(false);
+        var (outcome, head, position) = await CreateGroupAsync(id).ConfigureAwait(false);
         if (outcome == Recreate.Made && relied)
         {
             ForgetGroup();
@@ -468,27 +491,16 @@ internal sealed partial class RedisStreamSubjectWriter<T> : IDisposable
 
         if (outcome == Recreate.Made)
         {
-            _createdOnEmpty = IsEmptyHead(head);
-        }
-        else if (outcome == Recreate.Found && _createSent)
-        {
-            // A create of this node that seemed to fail made the group; a retry then finds it, and it is still ours.
-            _createdOnEmpty |= IsEmptyHead(_sentHead);
-        }
-
-        if (outcome == Recreate.Made)
-        {
-            // Published before the instant is taken (the exchange fences it), so a subscriber that missed the group set it.
-            _groupExists = true;
-            _createSent = false;
-            var since = Interlocked.Exchange(ref _unanchoredAt, 0);
-
-            // At the head it skipped what was added since those subscribers joined, if anything was; from the last read it
-            // replays it.
-            lost |= since != 0 && id == StreamPosition.NewMessages && await SkippedSinceAsync(head, since).ConfigureAwait(false);
+            lost |= await GroupMadeSkippedAsync(id, head, position).ConfigureAwait(false);
         }
         else if (outcome == Recreate.Found)
         {
+            if (_createSent)
+            {
+                // A create of this node that seemed to fail made the group; a retry then finds it, and it is still ours.
+                _createdOnEmpty |= IsEmptyHead(_sentHead);
+            }
+
             _groupExists = true;
             lost |= await FoundGroupSkippedAsync().ConfigureAwait(false);
         }
@@ -499,6 +511,36 @@ internal sealed partial class RedisStreamSubjectWriter<T> : IDisposable
         }
 
         return outcome == Recreate.Found;
+    }
+
+    /// <summary>For a group this node just made: records it, and whether making it at the head skipped something.</summary>
+    private async Task<bool> GroupMadeSkippedAsync(RedisValue id, StreamHead? head, RedisValue position)
+    {
+        if (position == StreamConstants.StreamStart)
+        {
+            MadeAtStart();
+        }
+        else
+        {
+            _createdOnEmpty = IsEmptyHead(head);
+        }
+
+        // Published before the instant is taken (the exchange fences it), so a subscriber that missed the group set it.
+        _groupExists = true;
+        _createSent = false;
+        var since = Interlocked.Exchange(ref _unanchoredAt, 0);
+
+        // At the head it skipped what was added since those subscribers joined, if anything was; from the last read it
+        // replays it.
+        return since != 0 && id == StreamPosition.NewMessages && await SkippedSinceAsync(head, since).ConfigureAwait(false);
+    }
+
+    /// <summary>For a group made at the start: nothing of this stream was read, so a check finds a trim in its counts.</summary>
+    private void MadeAtStart()
+    {
+        _createdOnEmpty = true;
+        _position = StreamConstants.StreamStart;
+        _readCount = new(StreamConstants.StreamStart, 0);
     }
 
     /// <summary>For a group found rather than made: whether a create of this node made it at the head and skipped something.</summary>
@@ -553,7 +595,8 @@ internal sealed partial class RedisStreamSubjectWriter<T> : IDisposable
         }
     }
 
-    private async Task<(Recreate Outcome, StreamHead? Head)> CreateGroupAsync(RedisValue id)
+    /// <summary>Makes the group at <paramref name="id"/>, or where <see cref="ResumeAtAsync"/> moves it; the position is the one sent.</summary>
+    private async Task<(Recreate Outcome, StreamHead? Head, RedisValue Position)> CreateGroupAsync(RedisValue id)
     {
         var atHead = id == StreamPosition.NewMessages;
         StreamHead? head = null;
@@ -563,14 +606,18 @@ internal sealed partial class RedisStreamSubjectWriter<T> : IDisposable
             {
                 head = await _stream.HeadAsync().ConfigureAwait(false);
             }
+            else
+            {
+                id = await ResumeAtAsync(id).ConfigureAwait(false);
+            }
 
             var created = await _stream.CreateGroupAsync(id, head).ConfigureAwait(false);
-            return (created ? Recreate.Made : Recreate.Failed, head);
+            return (created ? Recreate.Made : Recreate.Failed, head, id);
         }
         catch (RedisServerException rex) when (rex.Message == StreamConstants.ConsumerGroupNameExistsErrorMessage)
         {
             LogConsumerGroupExists(_context.Topic, _context.ConsumerGroup);
-            return (Recreate.Found, null);
+            return (Recreate.Found, null, id);
         }
         catch (Exception ex2)
         {
@@ -580,10 +627,40 @@ internal sealed partial class RedisStreamSubjectWriter<T> : IDisposable
                 _createSent = true;
                 _sentHead = head;
             }
+            else if (id == StreamConstants.StreamStart)
+            {
+                // The group found next, by a retry or by the read itself, may be the one this create made; a check before
+                // that read must not take the new stream's first entry for a trim.
+                MadeAtStart();
+            }
 
             LogRecreatingTopicException(ex2);
-            return (Recreate.Failed, null);
+            return (Recreate.Failed, null, id);
         }
+    }
+
+    /// <summary>
+    /// Where a group made again after a read resumes: at <paramref name="id"/> while the stream still holds the entry read
+    /// there, else at the start. NOGROUP cannot tell a group removed from a stream replaced, and a stream made anew can
+    /// reuse ids at or below the last one read, which a group resumed there would never deliver; a replay only drops local copies.
+    /// </summary>
+    private async Task<RedisValue> ResumeAtAsync(RedisValue id)
+    {
+        try
+        {
+            var held = await _stream.RangeAsync(id, id, 1).ConfigureAwait(false);
+            if (held.Length == 1 && SameEntry(held[0], _lastEntry))
+            {
+                return id;
+            }
+        }
+        catch (Exception ex) when (RedisUtils.IsUnsupportedCommand(ex) || RedisUtils.IsDenied(ex))
+        {
+            LogLastEntryUnchecked(ex, _context.Topic);
+        }
+
+        LogStreamReplaced(_context.Topic, id);
+        return StreamConstants.StreamStart;
     }
 
     /// <summary>The group or the whole stream was removed, so what it held past the last read is gone; the caller reports it.</summary>
@@ -1000,6 +1077,12 @@ internal sealed partial class RedisStreamSubjectWriter<T> : IDisposable
 
     [LoggerMessage(Level = LogLevel.Error, Message = "Recreating topic exception.")]
     private partial void LogRecreatingTopicException(Exception ex);
+
+    [LoggerMessage(Level = LogLevel.Warning, Message = "Topic {Topic} no longer holds the last entry read, {LastId}: the group is made at the start of the stream, so what it holds is read again.")]
+    private partial void LogStreamReplaced(RedisKey topic, RedisValue lastId);
+
+    [LoggerMessage(Level = LogLevel.Information, Message = "Topic {Topic}: the last entry read could not be read back, so the stream is taken as replaced.")]
+    private partial void LogLastEntryUnchecked(Exception ex, RedisKey topic);
 
     [LoggerMessage(Level = LogLevel.Information, Message = "Topic {Topic}: the entries a new group skipped could not be read back, so they are reported as missed.")]
     private partial void LogSkippedEntriesUnchecked(Exception ex, RedisKey topic);
