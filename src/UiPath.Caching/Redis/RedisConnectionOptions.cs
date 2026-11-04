@@ -92,4 +92,7 @@ public class RedisConnectionOptions
     /// connection interruptions.
     /// </remarks>
     public bool AbortOnConnectFail { get; set; }
+
+    /// <summary>Read and write on threads StackExchange.Redis owns instead of the thread pool. Process-wide: it applies to every StackExchange.Redis connection in the process, not only the cache's, and once set it is not reset.</summary>
+    public bool DedicatedThreads { get; set; }
 }

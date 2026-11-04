@@ -1,1 +1,3 @@
 #nullable enable
+UiPath.Caching.Redis.RedisConnectionOptions.DedicatedThreads.get -> bool
+UiPath.Caching.Redis.RedisConnectionOptions.DedicatedThreads.set -> void

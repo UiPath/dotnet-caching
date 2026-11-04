@@ -76,6 +76,7 @@ Every binding-visible property on every shipped options class, with shipped defa
 | `ProfilerTrackMetricEnabled` | `bool` | `true` | App-wide | Emit profiler metrics via the telemetry provider. |
 | `ConnectionMultiplexerFactoryType` | `string?` | `null` | App-wide | Assembly-qualified type name of a custom `IConnectionMultiplexer` factory; `null` = built-in. See [recipes/opentelemetry-multiplexer-factory.md](../recipes/opentelemetry-multiplexer-factory.md). |
 | `AbortOnConnectFail` | `bool` | `false` | App-wide | `false` = retry in background; `true` = throw on first connect failure. |
+| `DedicatedThreads` | `bool` | `false` | App-wide | `true` = StackExchange.Redis reads and writes each connection on threads it owns, as 2.x read on a dedicated thread, instead of the thread pool, so Redis traffic keeps flowing when the pool is starved; costs a reader and a writer thread per connection. Sets the StackExchange.Redis `DedicatedThreads` feature flag before the first connect; it applies to every StackExchange.Redis connection in the process and is never reset. |
 
 *Code-only seams:* `ConnectionFactory`, `ProfilingSessionFactory`.
 
