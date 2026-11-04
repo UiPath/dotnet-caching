@@ -54,6 +54,7 @@ public abstract partial class MultilayerCacheBase : IDisposable
     private readonly bool _localLockEnabled;
     private readonly bool _distributedLockEnabled;
     private readonly bool _distributedLockSkipReread;
+    private readonly bool _systemClock;
     private bool _disposed;
 
     protected MultilayerCacheBase(
@@ -86,6 +87,7 @@ public abstract partial class MultilayerCacheBase : IDisposable
         _cacheEntryFactory = _multiLayerCacheOptions.EntryFactory ?? new CacheEntryFactory();
         _monitor = _memoryCache.Monitor(multiLayerCacheOptions, Telemetry, GetType().Name);
         _clock = clock;
+        _systemClock = ReferenceEquals(clock, TimeProvider.System);
         var redisOptions = multiLayerCacheOptions as InMemoryRedisCacheOptions;
         var drainTimeout = redisOptions?.BackgroundWriteDrainTimeout ?? InMemoryRedisCacheOptions.DefaultBackgroundWriteDrainTimeout;
         if (drainTimeout != Timeout.InfiniteTimeSpan)
@@ -251,7 +253,10 @@ public abstract partial class MultilayerCacheBase : IDisposable
     }
 
     /// <summary>Whole seconds of the cache's monotonic clock, at least 1.</summary>
-    private protected int NowSeconds() => (int)(_clock.GetTimestamp() / _clock.TimestampFrequency) + 1;
+    // Every local hit marks a read: on the system clock the tick count costs far less than a timestamp and a 64-bit division.
+    // An injected clock keeps its own time, so tests can move it.
+    private protected int NowSeconds() =>
+        _systemClock ? (int)(Environment.TickCount64 / 1000) + 1 : (int)(_clock.GetTimestamp() / _clock.TimestampFrequency) + 1;
 
     /// <summary>How long a hit read from the inner tier stays local: the disconnected cap while the tier reads as down, perhaps only its broadcast.</summary>
     private protected TimeSpan? LocalLifetime(CachePolicy policy) =>
