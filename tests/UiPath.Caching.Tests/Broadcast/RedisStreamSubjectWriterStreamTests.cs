@@ -22,6 +22,7 @@ public sealed class RedisStreamSubjectWriterStreamTests : IDisposable
     private readonly Channel<ICacheEvent> _events = Channel.CreateUnbounded<ICacheEvent>();
     private readonly TaskCompletionSource _missed = new(TaskCreationOptions.RunContinuationsAsynchronously);
     private readonly List<IDisposable> _disposables = [];
+    private int _missedCount;
 
     public RedisStreamSubjectWriterStreamTests() => _redis.Version.Returns(Version.Parse("7.0.0"));
 
@@ -293,7 +294,7 @@ public sealed class RedisStreamSubjectWriterStreamTests : IDisposable
     public async Task A_group_lost_while_in_use_is_recreated_where_it_left_off_and_reported_once()
     {
         var made = _stream.Hold(Op.CreateGroup);
-        using var sut = Create();
+        using var sut = Create(formatter: Formatter());
         await Reached(made);
         made.Release();
         (await WaitUntil(() => _stream.HasGroup)).Should().BeTrue();
@@ -304,16 +305,95 @@ public sealed class RedisStreamSubjectWriterStreamTests : IDisposable
         await Reached(acknowledging);
         sut.MarkSubscribed();
         acknowledging.Release();
+        (await Next()).Id.Should().Be("a");
 
+        // "b" lands between the loss and the group made again, on the stream that still holds "a".
         var recreating = _stream.Hold(Op.CreateGroup);
         _stream.DropGroup();
+        _stream.Add("b");
         await Reached(recreating);
         recreating.Release();
 
         await _missed.Task.WaitAsync(WaitTimeout, TestContext.Current.CancellationToken);
-        (await WaitUntil(() => _stream.HasGroup)).Should().BeTrue("the reader made the group again");
-        _stream.LastDelivered.Should().Be("1-0", "from the last read, so what came since is replayed, not skipped");
+        (await Next()).Id.Should().Be("b", "from the last read, so what came since is replayed, not skipped");
+        (await WaitUntil(() => _stream.AcknowledgedCount == 2)).Should().BeTrue();
+        _events.Reader.TryRead(out _).Should().BeFalse("the stream still holds the entry last read, so the group is not made at 0-0 and nothing before it is read again");
         _stream.Calls(Op.CreateGroup).Should().Be(2);
+        _stream.Calls(Op.Range).Should().Be(1, "the entry last read is looked up once, when the group is made again");
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task A_group_made_at_the_start_by_a_create_whose_reply_was_lost_does_not_take_the_first_entry_for_a_trim(bool retryFindsIt)
+    {
+        _redis.Version.Returns(Version.Parse("6.2.0"));
+        _stream.HasCounts = false;
+        var made = _stream.Hold(Op.CreateGroup);
+        using var sut = Create(formatter: Formatter());
+        await Reached(made);
+        made.Release();
+        (await WaitUntil(() => _stream.HasGroup)).Should().BeTrue();
+        sut.MarkSubscribed();
+        _stream.Add("a");
+        (await Next()).Id.Should().Be("a");
+
+        // The stream is made anew, and the create at 0-0 runs on the server but its reply is lost. A subscriber joins
+        // meanwhile, so the next read checks the group, which sits at 0-0 below the new stream's first entry.
+        var recreating = _stream.Hold(Op.CreateGroup);
+        _stream.Delete();
+        _stream.Add("a2");
+        await Reached(recreating);
+        // Counted from here: the fake has no head, so the first group's first entry may have been taken for a trim already.
+        var reported = Volatile.Read(ref _missedCount);
+        sut.MarkSubscribed();
+        _stream.LoseNextReply(Op.CreateGroup);
+        var read = retryFindsIt ? _stream.Hold(Op.Read) : null;
+        recreating.Release();
+        if (read is not null)
+        {
+            // As in the head path's test: the read still answers NOGROUP, so a retry finds the group.
+            await Reached(read);
+            read.Fail(new RedisServerException(RedisErrorKind.None, CommandFlags.None, "NOGROUP No such key or consumer group"));
+        }
+
+        (await Next()).Id.Should().Be("a2");
+        _stream.Add("b");
+        (await Next()).Id.Should().Be("b");
+        _stream.Calls(Op.CreateGroup).Should().Be(retryFindsIt ? 3 : 2);
+        Volatile.Read(ref _missedCount).Should().Be(reported + 1, "the replacement is reported once, and the group is the one this node made at 0-0, whose first entry Redis 6 cannot tell from a trim");
+    }
+
+    [Theory]
+    [InlineData("7.0.0", false)]
+    [InlineData("7.0.0", true)]
+    [InlineData("6.2.0", false)]
+    public async Task A_stream_replaced_under_the_group_is_read_from_its_start_though_its_ids_do_not_pass_the_last_one_read(string version, bool autoAck)
+    {
+        _redis.Version.Returns(Version.Parse(version));
+        _stream.HasCounts = version.StartsWith('7');
+        var made = _stream.Hold(Op.CreateGroup);
+        using var sut = Create(formatter: Formatter(), context: _context with { AutoAck = autoAck });
+        await Reached(made);
+        made.Release();
+        (await WaitUntil(() => _stream.HasGroup)).Should().BeTrue();
+        sut.MarkSubscribed();
+        _stream.Add("a");
+        (await Next()).Id.Should().Be("a");
+
+        // Deleted, then made anew by another node's add in the same millisecond: its first entry has the id of the one last read.
+        var recreating = _stream.Hold(Op.CreateGroup);
+        _stream.Delete();
+        _stream.Add("a2");
+        await Reached(recreating);
+        recreating.Release();
+
+        await _missed.Task.WaitAsync(WaitTimeout, TestContext.Current.CancellationToken);
+        (await Next()).Id.Should().Be("a2", "a group made again where the old stream was read would never be delivered the new stream's first entries");
+        _stream.Add("b");
+        (await Next()).Id.Should().Be("b");
+        _stream.Calls(Op.CreateGroup).Should().Be(2);
+        _stream.Calls(Op.Range).Should().Be(1);
     }
 
     [Fact]
@@ -549,7 +629,11 @@ public sealed class RedisStreamSubjectWriterStreamTests : IDisposable
             telemetry ?? Substitute.For<ICachingTelemetryProvider>(),
             Substitute.For<IRedisProfiler>(),
             fetchWaiter,
-            () => _missed.TrySetResult(),
+            () =>
+            {
+                Interlocked.Increment(ref _missedCount);
+                _missed.TrySetResult();
+            },
             _stop.Token,
             _stream,
             _clock);

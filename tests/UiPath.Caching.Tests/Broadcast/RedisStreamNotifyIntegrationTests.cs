@@ -275,6 +275,36 @@ public sealed class RedisStreamNotifyIntegrationTests(RedisContainerFixture fixt
         (await Task.WhenAny(received.Next.Task, Task.Delay(TimeSpan.FromSeconds(3), TestContext.Current.CancellationToken))).Should().BeSameAs(received.Next.Task, "a topic that cannot subscribe never gets the long interval");
     }
 
+    [Theory]
+    [InlineData("1000-0", false, false)]
+    [InlineData("1000-0", true, false)]
+    [InlineData("1000-5", false, true)]
+    [InlineData("1000-5", true, true)]
+    public async Task A_recreated_stream_with_a_reused_id_delivers_its_first_entry(string oldId, bool autoAck, bool publishAfterRecovery)
+    {
+        Assert.SkipUnless(fixture.Enabled, "Set RUN_REDIS_INTEGRATION_TESTS=1 to run.");
+        var (_, received) = Topic("urn:b", Poll, configure: o => o.AutoAck = autoAck);
+        await SettledAsync();
+        var db = _connector!.Database;
+        var formatter = new TestCacheEventFormatterProxy();
+        // Redis can generate the same id again when DEL and both XADDs fall in one millisecond.
+        // Explicit ids make that interleaving deterministic without depending on the machine's speed.
+        await db.StreamAddAsync(_stream, "event", formatter.Encode(Event("urn:a", "before")), oldId);
+        (await Task.WhenAny(received.Next.Task, Task.Delay(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken))).Should().BeSameAs(received.Next.Task);
+        (await EventuallyAsync(() => CaughtUpAsync("urn:b"))).Should().BeTrue();
+        received.Next = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        await db.KeyDeleteAsync(_stream);
+        await db.StreamAddAsync(_stream, "event", formatter.Encode(Event("urn:a", "after")), "1000-0");
+        await received.Missed.Task.WaitAsync(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
+        if (publishAfterRecovery)
+        {
+            // Even writes made after the one-off loss notification are skipped until ids pass the old cursor.
+            await db.StreamAddAsync(_stream, "event", formatter.Encode(Event("urn:a", "after-recovery")), "1000-1");
+        }
+        (await Task.WhenAny(received.Next.Task, Task.Delay(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken))).Should().BeSameAs(received.Next.Task,
+            "the recreated stream's entries must be delivered even when their ids do not exceed the old stream's last delivered id");
+    }
+
     [Fact]
     public async Task A_stream_deleted_under_two_nodes_is_reported_and_the_next_publish_still_arrives()
     {
