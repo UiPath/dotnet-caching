@@ -6,6 +6,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 
 ## [Unreleased]
 
+## [3.1.0] - 2026-11-04
+
 ### Added
 
 - **`GetOrAddResultAsync`.** Returns `CacheResult<T>(Value, Expiration, WasGenerated)` so a caller knows whether its own generator produced the value: `false` for a hit and for a call
@@ -136,6 +138,17 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
   See `docs/how-to/choosing-a-get-or-add-overload.md`.
 
 ### Changed
+
+- **Dependency floors.** What a consumer's restore has to satisfy, taken from the packed packages:
+
+  | Package | 3.0.0 | 3.1.0 |
+  |---|---|---|
+  | `StackExchange.Redis` (`UiPath.Caching`, `UiPath.Caching.Queue`) | 3.3.1 | 3.4.29 |
+  | `Microsoft.Extensions.*` on net10.0 (every package) | 10.0.12 | 10.0.13 |
+  | `Microsoft.Extensions.Logging.Abstractions` on net8.0 (`UiPath.Caching`, `UiPath.Caching.CloudEvents`, `UiPath.Caching.Polly`, `UiPath.Caching.Queue`) | 10.0.12 | 10.0.13 |
+  | `Microsoft.Extensions.Options` on net8.0 (`UiPath.Caching.Azure`) | 10.0.12 | 10.0.13 |
+
+  The Polly and `Microsoft.Azure.StackExchangeRedis` floors are unchanged.
 
 - **A read on Redis below 7.0 costs one round trip, not three.** Without the Redis 7.0 script, every read in use is still checked for a trim past the group's
   position, but the `XINFO STREAM` now goes out with the `XREADGROUP` behind it on the same connection to the primary, so the state it reports is the one

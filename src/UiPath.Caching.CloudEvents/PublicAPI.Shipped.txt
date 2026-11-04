@@ -9,3 +9,4 @@ UiPath.Caching.CloudEvents.CloudCacheEventFactory.CloudCacheEventFactory(Microso
 UiPath.Caching.CloudEvents.CloudCacheEventFactory.Create(string! cacheName, string! eventType, UiPath.Caching.Broadcast.CacheEventData! eventData, string? id = null) -> UiPath.Caching.Broadcast.ICacheEvent!
 UiPath.Caching.CloudEvents.CloudCacheEventFactory.IsKnown(string? eventType) -> bool
 static UiPath.Caching.CloudEvents.CachingBuilderExtensions.AddCloudEvents(this UiPath.Caching.Config.ICachingBuilder! builder) -> UiPath.Caching.Config.ICachingBuilder!
+UiPath.Caching.CloudEvents.CacheEventFormatterProxy.CreateSourceMatcher(System.Uri! source) -> UiPath.Caching.Broadcast.IEventSourceMatcher?
