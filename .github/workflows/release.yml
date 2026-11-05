@@ -157,18 +157,19 @@ jobs:
           trap 'echo "added=${added}" >> "$GITHUB_OUTPUT"' EXIT
           allowed=" "
           allow() {
-            allowed="${allowed}$1 "
+            local rule_ip="$1" existing
+            allowed="${allowed}${rule_ip} "
             # A rule that existed before this job belongs to someone else: leave it in place on close.
             existing=$(az keyvault network-rule list --name "${kv_name}" --resource-group "${kv_rg}" \
-              --query "ipRules[?value=='$1' || value=='$1/32'] | length(@)" -o tsv)
+              --query "ipRules[?value=='${rule_ip}' || value=='${rule_ip}/32'] | length(@)" -o tsv)
             if [ "${existing}" != "0" ]; then
-              echo "IP $1 is already allowed on ${kv_name}; not adding a rule."
+              echo "IP ${rule_ip} is already allowed on ${kv_name}; not adding a rule."
               return
             fi
-            echo "Adding IP rule $1/32 to ${kv_name}"
+            echo "Adding IP rule ${rule_ip}/32 to ${kv_name}"
             az keyvault network-rule add --name "${kv_name}" --resource-group "${kv_rg}" \
-              --ip-address "$1/32" >/dev/null
-            added="${added:+${added} }$1"
+              --ip-address "${rule_ip}/32" >/dev/null
+            added="${added:+${added} }${rule_ip}"
           }
           ip=""
           for provider in https://ipv4.icanhazip.com https://api.ipify.org https://api4.my-ip.io/ip; do
@@ -191,7 +192,7 @@ jobs:
             fi
             code=$(printf '%s' "${err}" | grep -oE '\([A-Za-z]+\)' | head -1 || true)
             client=$(printf '%s' "${err}" | grep -oE 'Client address: [0-9]+\.[0-9]+\.[0-9]+\.[0-9]+' | head -1 | awk '{print $3}' || true)
-            echo "${kv_name} refused the request: ${code:-no error code}${client:+, client address ${client}}"
+            echo "${kv_name} refused the request: ${code:-no error code}${client:+, client address ${client}}" >&2
             if [ -n "${client}" ] && [[ "${allowed}" != *" ${client} "* ]]; then
               allow "${client}"
               continue
