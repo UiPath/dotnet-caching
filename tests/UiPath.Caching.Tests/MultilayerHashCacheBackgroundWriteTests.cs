@@ -41,9 +41,11 @@ public class MultilayerHashCacheBackgroundWriteTests
     public async Task A_peer_write_during_a_pending_background_write_refreshes_the_provisional_hash(string write)
     {
         using var c = new PeerCluster();
-        var (a, b) = (c.Add("a"), c.Add("b"));
+        // No timeout: the gates below hold the refresh read for as long as the test needs, which a slow runner can stretch past one.
+        var (a, b) = (c.Add("a"), c.Add("b", timeout: Timeout.InfiniteTimeSpan));
+        var written = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var writeGate = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        var refreshGate = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var readGate = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         Dictionary<string, string?> provisional;
 
         try
@@ -52,13 +54,13 @@ public class MultilayerHashCacheBackgroundWriteTests
             {
                 (await a.Cache.SetAsync<string>("k", Fields("a"), Awaited, Ct)).Should().BeTrue();
                 (await b.Cache.GetAsync<string>("k", Awaited, Ct)).Should().BeEquivalentTo(Fields("a"));
-                b.Inner.AfterWrite = _ => writeGate.Task;
+                b.Inner.AfterWrite = _ => Written(written, writeGate);
                 (await b.Cache.SetAsync<string>("k", new Dictionary<string, string?> { ["x"] = "9" }, new HashCacheEntryOptions(SetOption: HashCacheSetOption.HashReplace), Background, Ct)).Should().BeTrue();
                 provisional = new() { ["f"] = "a", ["x"] = "9" };
             }
             else
             {
-                b.Inner.AfterWrite = _ => writeGate.Task;
+                b.Inner.AfterWrite = _ => Written(written, writeGate);
                 if (write == "fill")
                 {
                     (await b.Cache.GetOrAddAsync<string>("k", static _ => Task.FromResult<IDictionary<string, string?>>(Fields("b")), Background, Ct))["f"].Should().Be("b");
@@ -71,25 +73,34 @@ public class MultilayerHashCacheBackgroundWriteTests
                 provisional = Fields("b");
             }
 
-            await Until(() => Same(c.Redis.Fields(), provisional));
-            b.Cache.PeerRefreshHold = refreshGate.Task;
+            // The provisional write reached the store and waits to answer: it stays in flight until the write gate opens.
+            await written.Task.WaitAsync(TimeSpan.FromSeconds(10), Ct);
+            c.Redis.Fields().Should().BeEquivalentTo(provisional);
+            var reads = b.InnerReads;
+            b.Inner.ReadHold = readGate.Task;
             (await a.Cache.SetAsync<string>("k", Fields("peer"), Awaited, Ct)).Should().BeTrue();
 
             // The peer's write must keep the still-pending provisional hash for a refresh, not drop it.
             Held(b).Should().BeEquivalentTo(provisional);
 
-            // A refresh that lands while this node's own write is still in flight is declined, so the write finishes first.
+            // The first refresh read starts while the write is in flight; the write then promotes and leaves its turn before that read answers.
+            await CachePeers.Until(() => b.InnerReads == reads + 1);
+            CachePeers.WriteInFlight(b.Cache, "k").Should().BeTrue();
             writeGate.SetResult();
-            await Until(() => b.Cache.RunsInFlight == 1);
-            refreshGate.SetResult();
+            await CachePeers.Until(() => !CachePeers.WriteInFlight(b.Cache, "k"));
+            Held(b).Should().BeEquivalentTo(provisional);
+
+            // The first read is declined, as the write moved the key under it; the retry finds no write in flight and keeps the peer's hash.
+            readGate.SetResult();
             await b.Settled();
 
             Held(b).Should().BeEquivalentTo(Fields("peer"));
+            b.InnerReads.Should().Be(reads + 2);
         }
         finally
         {
             writeGate.TrySetResult();
-            refreshGate.TrySetResult();
+            readGate.TrySetResult();
             await b.Settled();
         }
     }
@@ -511,18 +522,11 @@ public class MultilayerHashCacheBackgroundWriteTests
     private static IDictionary<string, string?>? Held(PeerCluster.Node node) =>
         node.Local.TryGetValue("k", out ICacheEntry<IDictionary<string, string?>>? held) ? held!.Value : null;
 
-    private static bool Same(IDictionary<string, string?>? actual, Dictionary<string, string?> expected) =>
-        actual is not null && actual.Count == expected.Count && expected.All(e => actual.TryGetValue(e.Key, out var v) && v == e.Value);
-
-    private static async Task Until(Func<bool> condition)
+    /// <summary>Tells <paramref name="written"/> that a write reached the store, and holds its answer on <paramref name="gate"/>.</summary>
+    private static Task Written(TaskCompletionSource written, TaskCompletionSource gate)
     {
-        var until = DateTime.UtcNow.AddSeconds(10);
-        while (!condition() && DateTime.UtcNow < until)
-        {
-            await Task.Delay(5, Ct);
-        }
-
-        condition().Should().BeTrue();
+        written.TrySetResult();
+        return gate.Task;
     }
 
     private sealed class RecordingTopic(Rig rig) : ITopic<ICacheEvent>

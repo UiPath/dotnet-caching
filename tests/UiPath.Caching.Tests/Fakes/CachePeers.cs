@@ -14,6 +14,8 @@ namespace UiPath.Caching.Tests.Fakes;
 /// <summary>Real multilayer caches, one per node, over one shared stand-in for Redis, with a bus that carries their events as JSON, as the wire does.</summary>
 internal sealed class CachePeers : IDisposable
 {
+    private static readonly FieldInfo BackgroundField = typeof(MultilayerCacheBase).GetField("_background", BindingFlags.Instance | BindingFlags.NonPublic)!;
+
     private readonly List<Node> _nodes = [];
     private readonly CacheEventFormatter _formatter = new();
 
@@ -53,6 +55,22 @@ internal sealed class CachePeers : IDisposable
             await Task.Delay(5);
             cache.FlushPeerRefreshMetrics();
         }
+    }
+
+    /// <summary>Whether a background write of <paramref name="key"/> is in flight, as a peer refresh's keep checks it: false once the write promoted its entry and left its turn.</summary>
+    internal static bool WriteInFlight(MultilayerCacheBase cache, string key) =>
+        ((BackgroundWrites)BackgroundField.GetValue(cache)!).WriteInFlight(key);
+
+    /// <summary>Polls <paramref name="condition"/> until it holds, for up to 10 s, and fails if it never does.</summary>
+    internal static async Task Until(Func<bool> condition)
+    {
+        var until = DateTime.UtcNow.AddSeconds(10);
+        while (!condition() && DateTime.UtcNow < until)
+        {
+            await Task.Delay(5);
+        }
+
+        condition().Should().BeTrue();
     }
 
     private static double Outcomes(RecordingTelemetryProvider telemetry) =>

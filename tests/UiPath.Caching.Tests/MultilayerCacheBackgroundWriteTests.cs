@@ -40,7 +40,8 @@ public class MultilayerCacheBackgroundWriteTests
         using var peers = new CachePeers();
         var a = peers.Add("a");
         var telemetry = new RecordingTelemetryProvider();
-        var b = peers.Add("b", telemetry: telemetry);
+        // No timeout: the gates below hold the refresh read for as long as the test needs, which a slow runner can stretch past one.
+        var b = peers.Add("b", new InMemoryRedisCacheOptions { Timeout = Timeout.InfiniteTimeSpan }, telemetry);
         var writeGate = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var readGate = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         b.Inner.AfterWrite = writeGate.Task;
@@ -56,7 +57,8 @@ public class MultilayerCacheBackgroundWriteTests
                 (await b.Cache.SetAsync<string>("k", "provisional", Background, Ct)).Should().BeTrue();
             }
 
-            peers.Store.Values["k"].Should().Be("provisional");
+            // The provisional write reached the store and waits to answer: it stays in flight until the write gate opens.
+            await CachePeers.Until(() => peers.Store.Values.TryGetValue("k", out var stored) && Equals(stored, "provisional"));
             var reads = b.Inner.SingleReads;
             b.Inner.Hold = readGate.Task;
             (await a.Cache.SetAsync<string>("k", "peer", Awaited, Ct)).Should().BeTrue();
@@ -64,12 +66,12 @@ public class MultilayerCacheBackgroundWriteTests
             // The peer's committed write must refresh the still-current provisional entry, even while its own L2 write is pending.
             b.Local.TryGetValue("k", out _).Should().BeTrue();
             (await b.Cache.GetAsync<string>("k", Awaited, Ct)).Should().Be("provisional");
-            await Until(() => b.Inner.SingleReads == reads + 1);
-            b.Inner.SingleReads.Should().Be(reads + 1);
+            await CachePeers.Until(() => b.Inner.SingleReads == reads + 1);
+            CachePeers.WriteInFlight(b.Cache, "k").Should().BeTrue();
 
-            // Once the original write promotes its entry, the old refresh read loses its write guard and retries against the peer value.
+            // Once the original write promotes its entry and leaves its turn, the held refresh read is declined and retries against the peer value.
             writeGate.SetResult();
-            await Until(() => b.Cache.RunsInFlight == 1);
+            await CachePeers.Until(() => !CachePeers.WriteInFlight(b.Cache, "k"));
             readGate.SetResult();
             await b.Settled(outcomes: 1);
 
@@ -988,17 +990,6 @@ public class MultilayerCacheBackgroundWriteTests
     }
 
     private static string? Stage(TelemetryTags<string> tags) => tags.FirstOrDefault(t => t.Key == "stage").Value;
-
-    private static async Task Until(Func<bool> condition)
-    {
-        var until = DateTime.UtcNow.AddSeconds(10);
-        while (!condition() && DateTime.UtcNow < until)
-        {
-            await Task.Delay(5, Ct);
-        }
-
-        condition().Should().BeTrue();
-    }
 
     private sealed class StepClock : TimeProvider
     {
