@@ -32,7 +32,7 @@ internal sealed partial class MultilayerHashCache : IAsyncDisposable
         if (!options.Partial)
         {
             options.Own = local.Pending is null ? null : [local.Pending];
-            return MemorySet(options, local.Entry!, DisconnectedLifetime(policy));
+            return MemorySet(options, local.Entry!, DisconnectedLifetime(policy), policy);
         }
 
         options.Pending = local.Pending;
@@ -41,7 +41,7 @@ internal sealed partial class MultilayerHashCache : IAsyncDisposable
             if (TryMergeLocal(ref options, values, out var merged) || OnlyTier)
             {
                 local.Entry = CreateEntry(merged ?? values, options);
-                return MemorySet(options, local.Entry, DisconnectedLifetime(policy));
+                return MemorySet(options, local.Entry, DisconnectedLifetime(policy), merged is null ? null : policy);
             }
         }
 
@@ -58,7 +58,7 @@ internal sealed partial class MultilayerHashCache : IAsyncDisposable
             options.Own = [local.Pending];
         }
 
-        _background.RunAppending(options.CacheKey.Name, (Cache: this, Options: options, Value: values, Policy: policy, Local: local), static s => s.Cache.MemorySet(s.Options, s.Local.Entry!, s.Cache.DisconnectedLifetime(s.Policy)), static (s, token) =>
+        _background.RunAppending(options.CacheKey.Name, (Cache: this, Options: options, Value: values, Policy: policy, Local: local), static s => s.Cache.MemorySet(s.Options, s.Local.Entry!, s.Cache.DisconnectedLifetime(s.Policy), s.Policy), static (s, token) =>
             s.Cache.DetachedWriteAsync(s, static (s, token) => s.Cache.WriteDetachedAsync(s.Options, s.Value, s.Policy, s.Local, token), static s => s.Cache.PromoteDetached(s.Options, s.Policy, s.Local), publish: null, token));
     }
 

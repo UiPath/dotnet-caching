@@ -263,7 +263,7 @@ public class PeerFieldUpdateTests
         (await node.Cache.GetAsync<string>("k", Awaited, Ct)).Should().HaveCount(3);
         var release = new TaskCompletionSource();
         node.Inner.Hold = release.Task;
-        await node.Cache.SetAsync<string>("k", Fields(("e", "5")), Merge, Background, Ct);
+        await node.Cache.SetAsync<string>("k", Fields(("e", "5")), Merge, BackgroundDropping, Ct);
         var reads = node.InnerReads;
 
         c.Deliver(node, old);
@@ -966,7 +966,7 @@ public class PeerFieldUpdateTests
         var (writer, other) = (c.Add("a"), c.Add("b"));
         var release = new TaskCompletionSource();
         writer.Inner.Hold = release.Task;
-        await writer.Cache.GetOrAddAsync<string>("k", _ => Task.FromResult<IDictionary<string, string?>>(Fields(("a", "1"))), Background, Ct);
+        await writer.Cache.GetOrAddAsync<string>("k", _ => Task.FromResult<IDictionary<string, string?>>(Fields(("a", "1"))), BackgroundDropping, Ct);
         await Add(other, ("z", "0"));
         release.SetResult();
         await writer.Settled();
@@ -1143,7 +1143,7 @@ public class PeerFieldUpdateTests
         var (writer, other) = (c.Add("a"), c.Add("b"));
         await Seed(writer);
         writer.Inner.Refuses = true;
-        await writer.Cache.SetAsync<string>("k", Fields(("c", "3")), Merge, Background, Ct);
+        await writer.Cache.SetAsync<string>("k", Fields(("c", "3")), Merge, BackgroundDropping, Ct);
         await writer.Settled();
 
         await Add(other, ("d", "4"));
