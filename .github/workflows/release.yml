@@ -150,6 +150,26 @@ jobs:
         run: |
           kv_name=$(echo "${KV_URL}" | sed -E 's#^https://([^.]+)\..*#\1#')
           kv_rg=$(az keyvault show --name "${kv_name}" --query resourceGroup -o tsv)
+          echo "name=${kv_name}" >> "$GITHUB_OUTPUT"
+          echo "rg=${kv_rg}" >> "$GITHUB_OUTPUT"
+          # The rules this job adds, space separated; written on exit so the close step removes them even after a failure.
+          added=""
+          trap 'echo "added=${added}" >> "$GITHUB_OUTPUT"' EXIT
+          allowed=" "
+          allow() {
+            allowed="${allowed}$1 "
+            # A rule that existed before this job belongs to someone else: leave it in place on close.
+            existing=$(az keyvault network-rule list --name "${kv_name}" --resource-group "${kv_rg}" \
+              --query "ipRules[?value=='$1' || value=='$1/32'] | length(@)" -o tsv)
+            if [ "${existing}" != "0" ]; then
+              echo "IP $1 is already allowed on ${kv_name}; not adding a rule."
+              return
+            fi
+            echo "Adding IP rule $1/32 to ${kv_name}"
+            az keyvault network-rule add --name "${kv_name}" --resource-group "${kv_rg}" \
+              --ip-address "$1/32" >/dev/null
+            added="${added:+${added} }$1"
+          }
           ip=""
           for provider in https://ipv4.icanhazip.com https://api.ipify.org https://api4.my-ip.io/ip; do
             ip=$(curl -sS --max-time 10 "${provider}" | tr -d '[:space:]') || true
@@ -160,32 +180,27 @@ jobs:
             echo "::error::Could not determine the runner's egress IP."
             exit 1
           fi
-          echo "name=${kv_name}" >> "$GITHUB_OUTPUT"
-          echo "rg=${kv_rg}" >> "$GITHUB_OUTPUT"
-          echo "ip=${ip}" >> "$GITHUB_OUTPUT"
-          # A rule that existed before this job belongs to someone else: leave it in place on close.
-          existing=$(az keyvault network-rule list --name "${kv_name}" --resource-group "${kv_rg}" \
-            --query "ipRules[?value=='${ip}' || value=='${ip}/32'] | length(@)" -o tsv)
-          if [ "${existing}" != "0" ]; then
-            echo "IP ${ip} is already allowed on ${kv_name}; not adding a rule."
-            echo "added=false" >> "$GITHUB_OUTPUT"
-          else
-            echo "Adding IP rule ${ip}/32 to ${kv_name}"
-            az keyvault network-rule add --name "${kv_name}" --resource-group "${kv_rg}" \
-              --ip-address "${ip}/32" >/dev/null
-            echo "added=true" >> "$GITHUB_OUTPUT"
-          fi
-          # The rule takes a while to reach the data plane.
+          allow "${ip}"
+          # The rule takes a while to reach the data plane. The vault can also see this runner
+          # under another address than the IP services report (traffic from inside Azure); its
+          # firewall reply names that address, which is then allowed too.
           for try in $(seq 1 20); do
-            if az keyvault certificate show --vault-name "${kv_name}" --name "${KV_CERT}" >/dev/null 2>&1; then
+            if err=$(az keyvault certificate show --vault-name "${kv_name}" --name "${KV_CERT}" --query id -o tsv 2>&1 >/dev/null); then
               echo "${kv_name} is reachable."
               exit 0
+            fi
+            code=$(printf '%s' "${err}" | grep -oE '\([A-Za-z]+\)' | head -1 || true)
+            client=$(printf '%s' "${err}" | grep -oE 'Client address: [0-9]+\.[0-9]+\.[0-9]+\.[0-9]+' | head -1 | awk '{print $3}' || true)
+            echo "${kv_name} refused the request: ${code:-no error code}${client:+, client address ${client}}"
+            if [ -n "${client}" ] && [[ "${allowed}" != *" ${client} "* ]]; then
+              allow "${client}"
+              continue
             fi
             wait=$(( 2 ** try )); [ "${wait}" -gt 60 ] && wait=60
             echo "${kv_name} not reachable yet; waiting ${wait}s (try ${try}/20)"
             sleep "${wait}"
           done
-          echo "::error::${kv_name} did not become reachable after the IP rule was added."
+          echo "::error::${kv_name} did not become reachable after the IP rule was added; last error: ${code:-none}${client:+, client address ${client}}."
           exit 1
 
       - name: Sign packages (author signature via Azure Key Vault)
@@ -211,22 +226,29 @@ jobs:
           done
 
       - name: Close Key Vault firewall for this runner
-        if: always() && steps.kv-open.outputs.added == 'true'
+        if: always() && steps.kv-open.outputs.added != ''
         env:
           KV_NAME: ${{ steps.kv-open.outputs.name }}
           KV_RG: ${{ steps.kv-open.outputs.rg }}
-          KV_IP: ${{ steps.kv-open.outputs.ip }}
+          KV_IPS: ${{ steps.kv-open.outputs.added }}
         run: |
-          for try in 1 2 3; do
-            if az keyvault network-rule remove --name "${KV_NAME}" --resource-group "${KV_RG}" \
-              --ip-address "${KV_IP}/32" >/dev/null; then
-              echo "Removed IP rule ${KV_IP}/32 from ${KV_NAME}"
-              exit 0
+          failed=0
+          for ip in ${KV_IPS}; do
+            removed=0
+            for try in 1 2 3; do
+              if az keyvault network-rule remove --name "${KV_NAME}" --resource-group "${KV_RG}"                 --ip-address "${ip}/32" >/dev/null; then
+                echo "Removed IP rule ${ip}/32 from ${KV_NAME}"
+                removed=1
+                break
+              fi
+              sleep 5
+            done
+            if [ "${removed}" = 0 ]; then
+              echo "::error::Could not remove IP rule ${ip}/32 from ${KV_NAME}; remove it by hand."
+              failed=1
             fi
-            sleep 5
           done
-          echo "::error::Could not remove IP rule ${KV_IP}/32 from ${KV_NAME}; remove it by hand."
-          exit 1
+          exit "${failed}"
 
       - name: Authenticate to nuget.org (OIDC trusted publishing)
         id: nuget-login
