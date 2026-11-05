@@ -536,6 +536,8 @@ UiPath.Caching.Redis.RedisConnectionOptions.ConnectionString.get -> string!
 UiPath.Caching.Redis.RedisConnectionOptions.ConnectionString.set -> void
 UiPath.Caching.Redis.RedisConnectionOptions.ConnectionStringExtraParams.get -> string?
 UiPath.Caching.Redis.RedisConnectionOptions.ConnectionStringExtraParams.set -> void
+UiPath.Caching.Redis.RedisConnectionOptions.DedicatedThreads.get -> bool
+UiPath.Caching.Redis.RedisConnectionOptions.DedicatedThreads.set -> void
 UiPath.Caching.Redis.RedisConnectionOptions.DefaultVersion.get -> string?
 UiPath.Caching.Redis.RedisConnectionOptions.DefaultVersion.set -> void
 UiPath.Caching.Redis.RedisConnectionOptions.EnableHangDetection.get -> bool
