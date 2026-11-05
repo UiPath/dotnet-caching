@@ -534,6 +534,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
   the node served the stale hash until the next peer event or its expiry. The batch now records each write's version as a single write
   does, so the write that returns out of order leaves the newer copy alone, or drops its own.
 - **`Cache<T>` and `HashCache<T>` batch writes report the caller key whose write failed when a key strategy maps two keys to one.** The failed stored key was given back as the first caller key that mapped to it, or every one, even when that key's write, in an earlier chunk, had landed. Each chunk's failures now go back to the caller keys of that chunk.
+- **A background write's local copy is refreshed, not evicted, when a peer writes the same key before the background write finishes.** The copy kept while a `BackgroundDistributedWrite` write was in flight carried no policy, so a peer's write dropped it and the next read went to Redis. Applies to the plain and the hash cache.
 
 ### Documentation
 
