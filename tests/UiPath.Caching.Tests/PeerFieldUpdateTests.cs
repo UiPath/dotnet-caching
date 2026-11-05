@@ -275,6 +275,39 @@ public class PeerFieldUpdateTests
     }
 
     [Fact]
+    public async Task An_event_of_an_older_epoch_that_a_refresh_takes_leaves_no_copy_that_holds_writes_of_its_own_still_in_flight()
+    {
+        using var c = new PeerCluster();
+        var telemetry = new Telemetry.RecordingTelemetryProvider();
+        var (node, other) = (c.Add("a", telemetry: telemetry), c.Add("b"));
+        await Seed(other);
+        await Add(other, ("c", "3"));
+        var old = other.Published[^1];
+        await other.Cache.RemoveAsync<string>("k", Ct);
+        await Seed(other);
+        await Add(other, ("d", "4"));
+        (await node.Cache.GetAsync<string>("k", Awaited, Ct)).Should().HaveCount(3);
+        var release = new TaskCompletionSource();
+        node.Inner.Hold = release.Task;
+        await node.Cache.SetAsync<string>("k", Fields(("e", "5")), Merge, Background, Ct);
+        Local(c, node).Value.Should().ContainKey("e");
+
+        c.Deliver(node, old);
+
+        // The write stays held, so every refresh read finds it in flight: the refresher ends the key by dropping the copy.
+        await CachePeers.Reported(node.Cache, telemetry, 1);
+        CachePeers.WriteInFlight(node.Cache, "k").Should().BeTrue();
+        node.Local.TryGetValue("k", out _).Should().BeFalse();
+        telemetry.Metrics.Should().Contain(m => m.Name == "cache.peer_refresh.dropped" && m.Properties!["reason"] == "declined");
+
+        release.SetResult();
+        await node.Settled();
+
+        node.Local.TryGetValue("k", out _).Should().BeFalse();
+        (await node.Cache.GetAsync<string>("k", Awaited, Ct)).Should().BeEquivalentTo(c.Redis.Fields());
+    }
+
+    [Fact]
     public async Task An_event_of_the_node_s_own_write_delivered_again_leaves_its_copy_alone()
     {
         using var c = new PeerCluster();
@@ -977,6 +1010,32 @@ public class PeerFieldUpdateTests
     }
 
     [Fact]
+    public async Task An_update_that_arrives_while_the_fill_that_made_the_copy_is_in_flight_refreshes_the_copy_to_the_hash()
+    {
+        using var c = new PeerCluster();
+        // No timeout: the read gate holds the refresh read for as long as the test needs, which a slow runner can stretch past one.
+        var (writer, other) = (c.Add("a", timeout: Timeout.InfiniteTimeSpan), c.Add("b"));
+        var release = new TaskCompletionSource();
+        var readGate = new TaskCompletionSource();
+        writer.Inner.Hold = release.Task;
+        await writer.Cache.GetOrAddAsync<string>("k", _ => Task.FromResult<IDictionary<string, string?>>(Fields(("a", "1"))), Background, Ct);
+        var reads = writer.InnerReads;
+        writer.Inner.ReadHold = readGate.Task;
+        await Add(other, ("z", "0"));
+
+        // The copy waits for a refresh, whose first read starts while the fill is in flight; the fill then lands and leaves its turn before that read answers.
+        await CachePeers.Until(() => writer.InnerReads == reads + 1);
+        CachePeers.WriteInFlight(writer.Cache, "k").Should().BeTrue();
+        release.SetResult();
+        await CachePeers.Until(() => !CachePeers.WriteInFlight(writer.Cache, "k"));
+        readGate.SetResult();
+        await writer.Settled();
+
+        Local(c, writer).Value.Should().BeEquivalentTo(c.Redis.Fields());
+        writer.InnerReads.Should().Be(reads + 2);
+    }
+
+    [Fact]
     public async Task A_merge_two_writes_past_its_copy_takes_the_missing_write_when_its_event_comes_and_keeps_the_copy()
     {
         using var c = new PeerCluster { AutoDeliver = false };
@@ -1150,6 +1209,26 @@ public class PeerFieldUpdateTests
 
         (await writer.Cache.GetAsync<string>("k", Awaited, Ct)).Should().BeEquivalentTo(Fields(("a", "1"), ("b", "2"), ("d", "4")));
         writer.InnerReads.Should().Be(1);
+    }
+
+    [Fact]
+    public async Task A_background_merge_the_inner_tier_refused_leaves_a_copy_that_a_peer_write_refreshes_to_the_hash()
+    {
+        using var c = new PeerCluster();
+        var (writer, other) = (c.Add("a"), c.Add("b"));
+        await Seed(writer);
+        writer.Inner.Refuses = true;
+        await writer.Cache.SetAsync<string>("k", Fields(("c", "3")), Merge, Background, Ct);
+        await writer.Settled();
+        var reads = writer.InnerReads;
+
+        await Add(other, ("d", "4"));
+        await writer.Settled();
+
+        // The refused field never reached the hash, so the refreshed copy must not keep it.
+        c.Redis.Fields().Should().BeEquivalentTo(Fields(("a", "1"), ("b", "2"), ("d", "4")));
+        Local(c, writer).Value.Should().BeEquivalentTo(c.Redis.Fields()).And.NotContainKey("c");
+        writer.InnerReads.Should().Be(reads + 1);
     }
 
     [Theory]

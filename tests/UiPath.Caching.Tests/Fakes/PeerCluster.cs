@@ -22,9 +22,10 @@ internal sealed class PeerCluster : IDisposable
     public bool AutoDeliver { get; set; } = true;
 
     /// <param name="monitorsConnection">The node follows <see cref="PeerInner.IsConnected"/>, and keeps its local tier when the connection returns.</param>
-    public Node Add(string name, bool peerFieldUpdates = true, int maxFields = 16, int maxBytes = 1024, bool monitorsConnection = false, Telemetry.RecordingTelemetryProvider? telemetry = null)
+    /// <param name="timeout">The node's cache timeout, which also bounds a peer refresh's wait in the queue and its read; the options' default when null.</param>
+    public Node Add(string name, bool peerFieldUpdates = true, int maxFields = 16, int maxBytes = 1024, bool monitorsConnection = false, Telemetry.RecordingTelemetryProvider? telemetry = null, TimeSpan? timeout = null)
     {
-        var node = new Node(this, name, peerFieldUpdates, maxFields, maxBytes, monitorsConnection, telemetry);
+        var node = new Node(this, name, peerFieldUpdates, maxFields, maxBytes, monitorsConnection, telemetry, timeout);
         _nodes.Add(node);
         return node;
     }
@@ -259,11 +260,16 @@ internal sealed class PeerCluster : IDisposable
     {
         private readonly Telemetry.RecordingTelemetryProvider? _telemetry;
 
-        public Node(PeerCluster cluster, string name, bool peerFieldUpdates, int maxFields, int maxBytes, bool monitorsConnection, Telemetry.RecordingTelemetryProvider? telemetry)
+        public Node(PeerCluster cluster, string name, bool peerFieldUpdates, int maxFields, int maxBytes, bool monitorsConnection, Telemetry.RecordingTelemetryProvider? telemetry, TimeSpan? timeout)
         {
             Name = name;
             _telemetry = telemetry;
             var options = new InMemoryRedisCacheOptions { PeerFieldUpdates = peerFieldUpdates, PeerFieldUpdateMaxFields = maxFields, PeerFieldUpdateMaxBytes = maxBytes, ClearLocalOnReconnect = monitorsConnection ? false : null };
+            if (timeout is { } bound)
+            {
+                options.Timeout = bound;
+            }
+
             var cacheOptions = new CacheOptions { AppShortName = "test", ConnectionMonitorEnabled = monitorsConnection, SourceUri = new Uri($"urn:node:{name}") };
             var inner = DispatchProxy.Create<IHashCache, PeerInner>();
             Inner = (PeerInner)(object)inner;
