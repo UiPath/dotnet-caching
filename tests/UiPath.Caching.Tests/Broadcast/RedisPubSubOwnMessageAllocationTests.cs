@@ -1,6 +1,6 @@
 namespace UiPath.Caching.Tests.Broadcast;
 
-/// <summary>What a node's own Pub/Sub messages cost its subscriber, per message, over 1000 of them.</summary>
+/// <summary>What a node's own Pub/Sub messages cost its subscriber, per message, over 1000 of them, counted on the receiving thread only.</summary>
 [Collection(AllocationCollection.Name)]
 public sealed class RedisPubSubOwnMessageAllocationTests(ITestOutputHelper output)
 {
@@ -19,13 +19,13 @@ public sealed class RedisPubSubOwnMessageAllocationTests(ITestOutputHelper outpu
         var payloads = Enumerable.Range(0, Messages).Select(Payload).ToArray();
         node.Receive(payloads[0]);
 
-        var before = GC.GetTotalAllocatedBytes(precise: true);
+        var before = GC.GetAllocatedBytesForCurrentThread();
         foreach (var payload in payloads)
         {
             node.Receive(payload);
         }
 
-        var perMessage = (GC.GetTotalAllocatedBytes(precise: true) - before) / Messages;
+        var perMessage = (GC.GetAllocatedBytesForCurrentThread() - before) / Messages;
 
         output.WriteLine($"{(withMatcher ? "with" : "without")} the matcher: {perMessage} bytes per own message");
         node.Received.Should().BeEmpty("own messages are not dispatched");
