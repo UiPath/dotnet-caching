@@ -6,6 +6,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 
 ## [Unreleased]
 
+### Documentation
+
+- **A peer's write drops a local copy nobody read.** `RefreshLocalOnPeerWrite` keeps and refreshes only a copy a local hit read since it was stored and within its local expiration; any other copy is dropped on a peer's write. The `CachePolicy` XML doc and the settings reference now say so, as [concepts](docs/concepts.md#refresh-on-a-peers-write) already did. A test that stores a key, changes the distributed tier behind the cache and then expects the local copy must allow for that drop.
+- **Mocks must set up the `GetOrAdd*` members.** Code moved from a `GetAsync` and `SetAsync` pair to `GetOrAddAsync` calls a member a test mock may not have set up, and a loose mock returns the default (`null`) without running the generator. Set up the members listed in [choosing a GetOrAdd overload](docs/how-to/choosing-a-get-or-add-overload.md#what-runs-and-what-a-test-sees), or test against the in-memory provider.
+
 ## [3.1.0] - 2026-11-05
 
 ### Added
