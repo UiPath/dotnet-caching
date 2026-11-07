@@ -149,7 +149,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
   | `Microsoft.Extensions.Logging.Abstractions` on net8.0 (`UiPath.Caching`, `UiPath.Caching.CloudEvents`, `UiPath.Caching.Polly`, `UiPath.Caching.Queue`) | 10.0.12 | 10.0.13 |
   | `Microsoft.Extensions.Options` on net8.0 (`UiPath.Caching.Azure`) | 10.0.12 | 10.0.13 |
 
-  The Polly and `Microsoft.Azure.StackExchangeRedis` floors are unchanged.
+  The Polly and `Microsoft.Azure.StackExchangeRedis` floors are unchanged. `StackExchange.Redis` 3.4.29 asks for `Microsoft.Extensions.Logging.Abstractions` 10.0.13 on every target, net8.0 included, so that floor holds whatever the other floors are, and only going back to `StackExchange.Redis` 3.3.1 would lower it. A project that pins the `Microsoft.Extensions` family below 10.0.13, directly or through central package management, fails restore with NU1605 (detected package downgrade); raise its pins to 10.0.13 or later.
 
 - **A read on Redis below 7.0 costs one round trip, not three.** Without the Redis 7.0 script, every read in use is still checked for a trim past the group's
   position, but the `XINFO STREAM` now goes out with the `XREADGROUP` behind it on the same connection to the primary, so the state it reports is the one
