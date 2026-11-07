@@ -7,7 +7,7 @@ using System.Runtime.CompilerServices;
 namespace UiPath.Caching;
 
 /// <summary>Builds a cache key from an interpolated string without allocating for a short key; the text sits on the stack, and a long key borrows a pooled array.</summary>
-/// <remarks>Formats with <see cref="CultureInfo.CurrentCulture"/>, as string interpolation does, so a key reads the same as the string it replaces. The compiler builds a handler value for one call: do not store it or pass it twice. Pass <c>$"..."</c> where a key is taken.</remarks>
+/// <remarks>Formats with <see cref="CultureInfo.InvariantCulture"/>, so a key is the same on every node whatever its culture. The compiler builds a handler value for one call: do not store it or pass it twice. Pass <c>$"..."</c> where a key is taken.</remarks>
 [InterpolatedStringHandler]
 public ref struct CacheKeyHandler
 {
@@ -67,13 +67,13 @@ public ref struct CacheKeyHandler
         string? text;
         if (value is IFormattable)
         {
-            if (value is ISpanFormattable && ((ISpanFormattable)value).TryFormat(Free, out var written, format, CultureInfo.CurrentCulture))
+            if (value is ISpanFormattable && ((ISpanFormattable)value).TryFormat(Free, out var written, format, CultureInfo.InvariantCulture))
             {
                 _length += written;
                 return;
             }
 
-            text = ((IFormattable)value).ToString(format, CultureInfo.CurrentCulture);
+            text = ((IFormattable)value).ToString(format, CultureInfo.InvariantCulture);
         }
         else
         {
