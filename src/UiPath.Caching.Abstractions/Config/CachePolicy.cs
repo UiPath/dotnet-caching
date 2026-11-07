@@ -43,7 +43,7 @@ public sealed class CachePolicy
     /// <summary>Single-key <c>SetAsync</c> and the fill after a <c>GetOrAdd</c> miss return after the local write; the distributed write (and a set's broadcast) follows detached. <c>null</c> inherits (default off).</summary>
     public bool? BackgroundDistributedWrite { get; init; }
 
-    /// <summary>Keeps the local copy on a peer's write and refreshes it from the inner tier in the background. <c>null</c> inherits (default on).</summary>
+    /// <summary>Keeps the local copy on a peer's write and refreshes it from the inner tier in the background, if a local hit read it since it was stored and within the local expiration; any other copy is dropped. <c>null</c> inherits (default on).</summary>
     public bool? RefreshLocalOnPeerWrite { get; init; }
 
     /// <summary>For this long after the first peer write a held copy misses, a refresh that could not settle (a peer wrote again, a key sharing the stripe changed under the read, the read timed out or waited past the cache <c>Timeout</c>) is read again and the copy stays served, instead of being dropped to a read of the inner tier. Trades staleness of at most this plus two cache <c>Timeout</c>s for no inner read on the request path. Zero drops after one re-read, as before. A failed read, a key gone from the inner tier and a peer's removal still drop at once. <c>null</c> inherits (default 100 ms).</summary>
