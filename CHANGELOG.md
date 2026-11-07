@@ -6,6 +6,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 
 ## [Unreleased]
 
+### Fixed
+
+- **Interpolated keys format with the invariant culture.** `CacheKeyHandler` formatted holes with the current culture, so nodes with different cultures built different keys for one value and missed each other's invalidations; a negative number under a culture whose minus sign is U+2212 was one case. Keys whose holes are culture-sensitive (`DateTime`, `DateTimeOffset`, `decimal`, `double`, and negative numbers under some cultures) change once on upgrade, and a 3.1.0 node and a 3.1.1 node build different keys for them until every node runs 3.1.1. A `string` key built with `$"..."` for an entry also read through an interpolated key must now use `FormattableString.Invariant` or `string.Create(CultureInfo.InvariantCulture, ...)` to keep matching.
+
 ### Documentation
 
 - **A peer's write drops a local copy nobody read.** `RefreshLocalOnPeerWrite` keeps and refreshes only a copy a local hit read since it was stored and within its local expiration; any other copy is dropped on a peer's write. The `CachePolicy` XML doc and the settings reference now say so, as [concepts](docs/concepts.md#refresh-on-a-peers-write) already did. A test that stores a key, changes the distributed tier behind the cache and then expects the local copy must allow for that drop.

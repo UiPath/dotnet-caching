@@ -6,6 +6,8 @@ namespace UiPath.Caching.Tests;
 [Collection(AllocationCollection.Name)]
 public class CacheKeyHandlerTests
 {
+    private const string MinusSignCulture = "en-US with U+2212 minus";
+
     private static readonly Guid Id = Guid.Parse("0f8fad5b-d9cb-469f-a165-70867728950e");
     private static readonly DateTimeOffset At = new(2026, 10, 30, 12, 30, 45, TimeSpan.FromHours(2));
 
@@ -13,10 +15,11 @@ public class CacheKeyHandlerTests
     [InlineData("en-US")]
     [InlineData("de-DE")]
     [InlineData("")]
-    public void Handler_key_equals_the_interpolated_string_key(string culture)
+    [InlineData(MinusSignCulture)]
+    public void Handler_key_formats_with_the_invariant_culture(string culture)
     {
         var previous = CultureInfo.CurrentCulture;
-        CultureInfo.CurrentCulture = CultureInfo.GetCultureInfo(culture);
+        CultureInfo.CurrentCulture = Culture(culture);
         try
         {
             var dto = At;
@@ -29,17 +32,18 @@ public class CacheKeyHandlerTests
             string? none = null;
             var long1 = new string('y', 300);
 
-            Check(Handle($"a:{dto}"), new CacheKey($"a:{dto}"), $"a:{dto}");
-            Check(Handle($"a:{dto:o}:{dto:d}"), new CacheKey($"a:{dto:o}:{dto:d}"), $"a:{dto:o}:{dto:d}");
-            Check(Handle($"a:{dt}"), new CacheKey($"a:{dt}"), $"a:{dt}");
-            Check(Handle($"a:{amount}:{amount:F2}:{amount:N1}"), new CacheKey($"a:{amount}:{amount:F2}:{amount:N1}"), $"a:{amount}:{amount:F2}:{amount:N1}");
-            Check(Handle($"a:{price}:{price:C}"), new CacheKey($"a:{price}:{price:C}"), $"a:{price}:{price:C}");
-            Check(Handle($"a:{id}:{id:N}"), new CacheKey($"a:{id}:{id:N}"), $"a:{id}:{id:N}");
-            Check(Handle($"a:{count}:{number}"), new CacheKey($"a:{count}:{number}"), $"a:{count}:{number}");
-            Check(Handle($"a:{none}:b"), new CacheKey($"a:{none}:b"), $"a:{none}:b");
-            Check(Handle($"{long1}:{long1}:{amount}"), new CacheKey($"{long1}:{long1}:{amount}"), $"{long1}:{long1}:{amount}");
-            Check(Handle($"a:{id,8}|{count,-8}|{amount,20:F2}|{none,4}|{long1.AsSpan(0, 2),5}"), new CacheKey($"a:{id,8}|{count,-8}|{amount,20:F2}|{none,4}|{long1.AsSpan(0, 2),5}"), $"a:{id,8}|{count,-8}|{amount,20:F2}|{none,4}|{long1.AsSpan(0, 2),5}");
-            Check(Handle($"a:{count,8}|{count,-8}|{amount,10:F2}"), new CacheKey($"a:{count,8}|{count,-8}|{amount,10:F2}"), $"a:{count,8}|{count,-8}|{amount,10:F2}");
+            Check(Handle($"a:{dto}"), string.Create(CultureInfo.InvariantCulture, $"a:{dto}"));
+            Check(Handle($"a:{dto:o}:{dto:d}"), string.Create(CultureInfo.InvariantCulture, $"a:{dto:o}:{dto:d}"));
+            Check(Handle($"a:{dt}"), string.Create(CultureInfo.InvariantCulture, $"a:{dt}"));
+            Check(Handle($"a:{amount}:{amount:F2}:{amount:N1}"), string.Create(CultureInfo.InvariantCulture, $"a:{amount}:{amount:F2}:{amount:N1}"));
+            Check(Handle($"a:{price}:{price:C}"), string.Create(CultureInfo.InvariantCulture, $"a:{price}:{price:C}"));
+            Check(Handle($"a:{id}:{id:N}"), string.Create(CultureInfo.InvariantCulture, $"a:{id}:{id:N}"));
+            Check(Handle($"a:{count}:{number}"), string.Create(CultureInfo.InvariantCulture, $"a:{count}:{number}"));
+            Check(Handle($"a:{none}:b"), string.Create(CultureInfo.InvariantCulture, $"a:{none}:b"));
+            Check(Handle($"{long1}:{long1}:{amount}"), string.Create(CultureInfo.InvariantCulture, $"{long1}:{long1}:{amount}"));
+            Check(Handle($"a:{id,8}|{count,-8}|{amount,20:F2}|{none,4}|{long1.AsSpan(0, 2),5}"), string.Create(CultureInfo.InvariantCulture, $"a:{id,8}|{count,-8}|{amount,20:F2}|{none,4}|{long1.AsSpan(0, 2),5}"));
+            Check(Handle($"a:{count,8}|{count,-8}|{amount,10:F2}"), string.Create(CultureInfo.InvariantCulture, $"a:{count,8}|{count,-8}|{amount,10:F2}"));
+            Handle($"a:{count}").Should().Be("a:-42");
         }
         finally
         {
@@ -98,11 +102,26 @@ public class CacheKeyHandlerTests
     [Theory]
     [InlineData(true)]
     [InlineData(false)]
-    public void A_hole_with_no_natural_type_formats_as_string_interpolation_does(bool flag)
+    public void A_hole_with_no_natural_type_formats_as_invariant_string_interpolation_does(bool flag)
     {
         var text = Handle($"a:{(flag ? 1 : "x")}:{(flag ? 1 : "x"),5}:{(flag ? 2.5 : "x"):F1}");
 
-        text.Should().Be($"a:{(flag ? 1 : "x")}:{(flag ? 1 : "x"),5}:{(flag ? 2.5 : "x"):F1}");
+        text.Should().Be(string.Create(CultureInfo.InvariantCulture, $"a:{(flag ? 1 : "x")}:{(flag ? 1 : "x"),5}:{(flag ? 2.5 : "x"):F1}"));
+    }
+
+    [Fact]
+    public void A_formattable_value_without_span_formatting_uses_the_invariant_culture()
+    {
+        var previous = CultureInfo.CurrentCulture;
+        CultureInfo.CurrentCulture = CultureInfo.GetCultureInfo("de-DE");
+        try
+        {
+            Handle($"a:{new Amount(1.5m)}").Should().Be("a:1.5");
+        }
+        finally
+        {
+            CultureInfo.CurrentCulture = previous;
+        }
     }
 
     private static void Build(ICache cache, Guid tenant, string machine) =>
@@ -120,9 +139,22 @@ public class CacheKeyHandlerTests
     private static T Completed<T>(ValueTask<T> task) =>
         task.IsCompleted ? task.Result : throw new InvalidOperationException("The cache did not complete synchronously.");
 
-    private static void Check(string handled, CacheKey expectedKey, string expectedText)
+    private static void Check(string handled, string expected) => handled.Should().Be(expected);
+
+    private static CultureInfo Culture(string name)
     {
-        handled.Should().Be(expectedText);
-        new CacheKey(handled).Should().Be(expectedKey);
+        if (name != MinusSignCulture)
+        {
+            return CultureInfo.GetCultureInfo(name);
+        }
+
+        var culture = (CultureInfo)CultureInfo.GetCultureInfo("en-US").Clone();
+        culture.NumberFormat.NegativeSign = "\u2212";
+        return culture;
+    }
+
+    private readonly record struct Amount(decimal Value) : IFormattable
+    {
+        public string ToString(string? format, IFormatProvider? formatProvider) => Value.ToString(format, formatProvider);
     }
 }
