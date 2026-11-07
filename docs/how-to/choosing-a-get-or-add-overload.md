@@ -219,7 +219,7 @@ ambiguous against the closure overload.
 - **A constant key** is built once: `private static readonly CacheKey Key = "default";`. A constant string passed on
   every call is normalized (trimmed, lowercased) on every call.
 - **A formatted key** is an interpolated string: `$"{tenantId}:{machineKey}"`. On the hot paths above it is written to a
-  256-character stack buffer and a local hit allocates nothing (values format in the invariant culture, so a `DateTime` or `decimal` hole gives the same key on every node):
+  256-character stack buffer and a local hit allocates nothing (values format in the invariant culture, so a `DateTime` or `decimal` hole gives the same key on every node; a `string` key for the same entry must use `FormattableString.Invariant` to match):
 
   ```csharp
   var token = await _cache.GetOrAddAsync($"{tenantId}:{machineKey}", this, machineKey, static (self, key, c) => self.FetchAsync(key, c), ct);
