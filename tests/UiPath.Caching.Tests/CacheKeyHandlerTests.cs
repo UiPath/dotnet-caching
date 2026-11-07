@@ -104,9 +104,18 @@ public class CacheKeyHandlerTests
     [InlineData(false)]
     public void A_hole_with_no_natural_type_formats_as_invariant_string_interpolation_does(bool flag)
     {
-        var text = Handle($"a:{(flag ? 1 : "x")}:{(flag ? 1 : "x"),5}:{(flag ? 2.5 : "x"):F1}");
+        var previous = CultureInfo.CurrentCulture;
+        CultureInfo.CurrentCulture = CultureInfo.GetCultureInfo("de-DE");
+        try
+        {
+            var text = Handle($"a:{(flag ? 1 : "x")}:{(flag ? 1 : "x"),5}:{(flag ? 2.5 : "x"):F1}");
 
-        text.Should().Be(string.Create(CultureInfo.InvariantCulture, $"a:{(flag ? 1 : "x")}:{(flag ? 1 : "x"),5}:{(flag ? 2.5 : "x"):F1}"));
+            text.Should().Be(string.Create(CultureInfo.InvariantCulture, $"a:{(flag ? 1 : "x")}:{(flag ? 1 : "x"),5}:{(flag ? 2.5 : "x"):F1}"));
+        }
+        finally
+        {
+            CultureInfo.CurrentCulture = previous;
+        }
     }
 
     [Fact]
