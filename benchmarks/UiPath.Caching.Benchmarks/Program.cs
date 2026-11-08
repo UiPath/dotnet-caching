@@ -18,6 +18,36 @@ public class Program
             await StreamNotifyDoorbellHarness.RunLoadAsync(IntArg(args, 1, 20), IntArg(args, 2, 1000), IntArg(args, 3, 64), args.Length > 4 ? args[4] : "streams:25,streams:5,streams:2,streams:0,pubsub");
             return;
         }
+        if (args.Length > 0 && args[0] == "hitcpu")
+        {
+            await RedisOnlyHitCpuHarness.RunAsync(IntArg(args, 1, 2000), IntArg(args, 2, 4));
+            return;
+        }
+        if (args.Length > 0 && args[0] == "pubcost")
+        {
+            await PublishCostHarness.RunAsync(IntArg(args, 1, 2000), IntArg(args, 2, 3));
+            return;
+        }
+        if (args.Length > 1 && args[0] == "doorbellclean" && args[1].StartsWith("rca311", StringComparison.Ordinal))
+        {
+            await DoorbellCostHarness.CleanupAsync(args[1]);
+            return;
+        }
+        if (args.Length > 2 && args[0] == "dbmon")
+        {
+            await DoorbellMonitor.RunAsync(args[1], args[2]);
+            return;
+        }
+        if (args.Length > 0 && args[0] == "peerlag")
+        {
+            await PeerLagHarness.RunAsync(IntArg(args, 1, 15), IntArg(args, 2, 2), args.Length > 3 ? args[3] : "nonotify,notify,notify:1,notify:2,notify:5,notify:10,notify:25");
+            return;
+        }
+        if (args.Length > 0 && args[0] == "doorbellcost")
+        {
+            await DoorbellCostHarness.RunAsync(IntArg(args, 1, 200), IntArg(args, 2, 4), args.Length > 3 ? args[3] : "nonotify,notify");
+            return;
+        }
         if (args.Length > 0 && args[0] == "hashmiss")
         {
             await HashMissHarness.RunAsync(args.Length > 1 ? args[1] : "RedisStreams", IntArg(args, 2, 10));
