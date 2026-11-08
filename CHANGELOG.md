@@ -22,6 +22,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 ### Fixed
 
 - **Interpolated keys format with the invariant culture.** `CacheKeyHandler` formatted holes with the current culture, so nodes with different cultures built different keys for one value and missed each other's invalidations; a negative number under a culture whose minus sign is U+2212 was one case. Keys whose holes are culture-sensitive (`DateTime`, `DateTimeOffset`, `decimal`, `double`, and negative numbers under some cultures) change once on upgrade, and a 3.1.0 node and a 3.1.1 node build different keys for them until every node runs 3.1.1. A `string` key built with `$"..."` for an entry also read through an interpolated key must now use `FormattableString.Invariant` or `string.Create(CultureInfo.InvariantCulture, ...)` to keep matching.
+- The Redis profiler no longer starts its flush timer before its dependencies are set. A constructor that stalled past the first flush interval made the flush loop fail with a `NullReferenceException`, stop flushing, and rethrow on `Dispose`.
 
 ### Documentation
 

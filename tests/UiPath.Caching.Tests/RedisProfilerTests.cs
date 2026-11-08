@@ -201,6 +201,22 @@ public class RedisProfilerTests(ITestContextAccessor testContextAccessor) : IAsy
         _profilingSessionCommandReader.ReceivedWithAnyArgs(1).Get(default!);
     }
 
+    [Fact]
+    public void A_flush_tick_signalled_during_construction_does_not_fault_the_worker()
+    {
+        _redisConnectionOptions.ProfilerHasDefaultSession = false;
+
+        var act = () => new RedisProfiler(
+            _profiledCommandProcessor,
+            _profilingSessionCommandReader,
+            Substitute.For<ICachingTelemetryProvider>(),
+            _logger,
+            Options.Create(_redisConnectionOptions),
+            new ImmediateTickTimeProvider()).Dispose();
+
+        act.Should().NotThrow();
+    }
+
     public ValueTask DisposeAsync()
     {
         return ValueTask.CompletedTask;
@@ -234,4 +250,24 @@ public class RedisProfilerTests(ITestContextAccessor testContextAccessor) : IAsy
             _logger,
             Options.Create(_redisConnectionOptions),
             new SystemClockTimeProvider(_clock));
+
+    private sealed class ImmediateTickTimeProvider : TimeProvider
+    {
+        public override ITimer CreateTimer(TimerCallback callback, object? state, TimeSpan dueTime, TimeSpan period)
+        {
+            callback(state);
+            return new NoopTimer();
+        }
+
+        private sealed class NoopTimer : ITimer
+        {
+            public bool Change(TimeSpan dueTime, TimeSpan period) => true;
+
+            public void Dispose()
+            {
+            }
+
+            public ValueTask DisposeAsync() => ValueTask.CompletedTask;
+        }
+    }
 }
