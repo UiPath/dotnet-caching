@@ -82,6 +82,12 @@ internal sealed class SignalingFetchWaiter(TimeSpan pollInterval, TimeSpan? noti
 
     private async Task WaitOnClockAsync(TimeSpan timeout, TimeProvider clock, CancellationToken cancellationToken)
     {
+        if (timeout == TimeSpan.Zero)
+        {
+            _semaphore.Wait(0, cancellationToken);
+            return;
+        }
+
         using var timeoutCts = new CancellationTokenSource(timeout, clock);
         using var linked = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, timeoutCts.Token);
         try
@@ -91,6 +97,10 @@ internal sealed class SignalingFetchWaiter(TimeSpan pollInterval, TimeSpan? noti
         catch (OperationCanceledException) when (timeoutCts.IsCancellationRequested && !cancellationToken.IsCancellationRequested)
         {
             // The clock-driven timeout elapsed, which is a normal return.
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw new OperationCanceledException(cancellationToken);
         }
     }
 }

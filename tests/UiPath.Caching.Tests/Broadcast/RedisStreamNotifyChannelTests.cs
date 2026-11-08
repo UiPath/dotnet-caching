@@ -847,9 +847,9 @@ public class RedisStreamNotifyChannelTests
         }
     }
 
-    /// <summary>A waiter with a 50 ms poll interval and a 30 s notified one, so a probe tells which applies.</summary>
     private static ManualTimeProvider NewClock() => new(DateTimeOffset.UnixEpoch);
 
+    /// <summary>A waiter with a 50 ms poll interval and a 30 s notified one, so a probe tells which applies.</summary>
     private sealed class LiveRig : IDisposable
     {
         public LiveRig(IFixture fixture, TimeSpan? dueTime = null, Func<Task>? subscribe = null, ILogger? logger = null, TimeProvider? clock = null)
@@ -912,7 +912,7 @@ public class RedisStreamNotifyChannelTests
             await DrainAsync();
             var wait = Waiter.WaitAsync(CancellationToken.None);
             Clock!.Advance(1.Seconds());
-            var long_ = await Task.WhenAny(wait, Task.Delay(100.Milliseconds(), TestContext.Current.CancellationToken)) != wait;
+            var long_ = await Task.WhenAny(wait, Task.Delay(100.Milliseconds(), TestContext.Current.CancellationToken)) != wait && Waiter.NotifyLive;
             Waiter.Signal();
             await wait;
             return long_;

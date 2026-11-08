@@ -403,7 +403,7 @@ public class RedisStreamsTopicTests(ITestContextAccessor testContextAccessor) : 
         lock (sent)
         {
             sent.Should().HaveCount(2, "the waiting rings fold into one doorbell");
-            Stopwatch.GetElapsedTime(sent[0], sent[1]).Should().BeGreaterThanOrEqualTo(TimeSpan.FromMilliseconds(1_000));
+            Stopwatch.GetElapsedTime(sent[0], sent[1]).Should().BeGreaterThanOrEqualTo(TimeSpan.FromMilliseconds(1_500));
         }
 
         async Task<bool> SentAtLeast(int count)
