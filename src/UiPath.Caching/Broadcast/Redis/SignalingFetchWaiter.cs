@@ -84,7 +84,7 @@ internal sealed class SignalingFetchWaiter(TimeSpan pollInterval, TimeSpan? noti
     {
         if (timeout == TimeSpan.Zero)
         {
-            _semaphore.Wait(0, cancellationToken);
+            await _semaphore.WaitAsync(0, cancellationToken).ConfigureAwait(false);
             return;
         }
 
