@@ -6,12 +6,16 @@ public class SignalingFetchWaiterTests
     [Fact]
     public async Task WaitAsync_returns_when_timeout_elapses_without_signal()
     {
-        using var sut = new SignalingFetchWaiter(50.Milliseconds());
-        var sw = System.Diagnostics.Stopwatch.StartNew();
+        var clock = NewClock();
+        using var sut = new SignalingFetchWaiter(50.Milliseconds(), timeProvider: clock);
 
-        await sut.WaitAsync(CancellationToken.None);
+        var wait = sut.WaitAsync(CancellationToken.None);
+        await StillWaitingAsync(wait);
+        clock.Advance(49.Milliseconds());
+        await StillWaitingAsync(wait);
+        clock.Advance(1.Milliseconds());
 
-        sw.Elapsed.Should().BeGreaterThanOrEqualTo(45.Milliseconds());
+        await wait.WaitAsync(10.Seconds(), TestContext.Current.CancellationToken);
     }
 
     [Fact]
@@ -41,28 +45,27 @@ public class SignalingFetchWaiterTests
     public async Task Multiple_signals_between_waits_collapse_to_one()
     {
         var interval = 2.Seconds();
-        using var sut = new SignalingFetchWaiter(interval);
+        var clock = NewClock();
+        using var sut = new SignalingFetchWaiter(interval, timeProvider: clock);
         sut.Signal();
         sut.Signal();
         sut.Signal();
 
-        var sw1 = System.Diagnostics.Stopwatch.StartNew();
-        await sut.WaitAsync(CancellationToken.None);
-        sw1.Stop();
-        sw1.Elapsed.Should().BeLessThan(interval - 200.Milliseconds(),
-            "the first wait should be unblocked by a pending signal, not the timeout");
+        await sut.WaitAsync(CancellationToken.None).WaitAsync(10.Seconds(), TestContext.Current.CancellationToken);
 
-        var sw2 = System.Diagnostics.Stopwatch.StartNew();
-        await sut.WaitAsync(CancellationToken.None);
-        sw2.Stop();
-        sw2.Elapsed.Should().BeGreaterThanOrEqualTo(interval - 50.Milliseconds(),
-            "extra signals before the first wait should have collapsed; the second wait must hit the timeout");
+        var second = sut.WaitAsync(CancellationToken.None);
+        await StillWaitingAsync(second);
+        clock.Advance(interval - 1.Milliseconds());
+        await StillWaitingAsync(second);
+        clock.Advance(1.Milliseconds());
+        await second.WaitAsync(10.Seconds(), TestContext.Current.CancellationToken);
     }
 
     [Fact]
     public async Task A_signal_while_one_is_pending_throws_nothing()
     {
-        using var sut = new SignalingFetchWaiter(30.Seconds());
+        var clock = NewClock();
+        using var sut = new SignalingFetchWaiter(30.Seconds(), timeProvider: clock);
         var threadId = Environment.CurrentManagedThreadId;
         var thrown = 0;
         void OnFirstChance(object? sender, System.Runtime.ExceptionServices.FirstChanceExceptionEventArgs e)
@@ -86,9 +89,10 @@ public class SignalingFetchWaiterTests
 
         thrown.Should().Be(0);
         await sut.WaitAsync(CancellationToken.None).WaitAsync(10.Seconds(), TestContext.Current.CancellationToken);
-        var sw = System.Diagnostics.Stopwatch.StartNew();
-        await sut.WaitAsync(200.Milliseconds(), CancellationToken.None);
-        sw.Elapsed.Should().BeGreaterThanOrEqualTo(150.Milliseconds(), "the two signals left one wake-up");
+        var next = sut.WaitAsync(200.Milliseconds(), CancellationToken.None);
+        await StillWaitingAsync(next);
+        clock.Advance(200.Milliseconds());
+        await next.WaitAsync(10.Seconds(), TestContext.Current.CancellationToken);
     }
 
     [Fact]
@@ -164,18 +168,22 @@ public class SignalingFetchWaiterTests
     [Fact]
     public async Task Losing_the_notify_ends_the_wait_in_progress_and_the_next_one_is_short()
     {
-        using var sut = new SignalingFetchWaiter(300.Milliseconds(), 30.Seconds());
+        var clock = NewClock();
+        using var sut = new SignalingFetchWaiter(300.Milliseconds(), 30.Seconds(), clock);
         sut.SetNotifyLive(true);
         var wait = sut.WaitAsync(CancellationToken.None);
-        await Task.Delay(50.Milliseconds(), TestContext.Current.CancellationToken);
-        wait.IsCompleted.Should().BeFalse();
+        clock.Advance(50.Milliseconds());
+        await StillWaitingAsync(wait);
 
         sut.SetNotifyLive(false);
 
         await wait.WaitAsync(5.Seconds(), TestContext.Current.CancellationToken);
-        var sw = System.Diagnostics.Stopwatch.StartNew();
-        await sut.WaitAsync(CancellationToken.None).WaitAsync(10.Seconds(), TestContext.Current.CancellationToken);
-        sw.Elapsed.Should().BeGreaterThanOrEqualTo(250.Milliseconds(), "only the one wake was owed");
+        var next = sut.WaitAsync(CancellationToken.None);
+        await StillWaitingAsync(next);
+        clock.Advance(299.Milliseconds());
+        await StillWaitingAsync(next);
+        clock.Advance(1.Milliseconds());
+        await next.WaitAsync(10.Seconds(), TestContext.Current.CancellationToken);
     }
 
     [Fact]
@@ -209,5 +217,14 @@ public class SignalingFetchWaiterTests
         Func<Task> act = () => sut.WaitAsync(100.Milliseconds(), CancellationToken.None);
 
         await act.Should().CompleteWithinAsync(10.Seconds());
+    }
+
+    private static ManualTimeProvider NewClock() => new(DateTimeOffset.UnixEpoch);
+
+    /// <summary>Gives a wait that should still be pending a real moment to finish wrongly, then asserts it has not.</summary>
+    private static async Task StillWaitingAsync(Task wait)
+    {
+        await Task.Delay(100.Milliseconds(), TestContext.Current.CancellationToken);
+        wait.IsCompleted.Should().BeFalse();
     }
 }
