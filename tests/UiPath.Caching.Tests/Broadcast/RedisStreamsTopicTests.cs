@@ -528,16 +528,21 @@ public class RedisStreamsTopicTests(ITestContextAccessor testContextAccessor) : 
     {
         ArrangeDoorbell();
         var calls = 0;
+        var first = new TaskCompletionSource<long>(TaskCreationOptions.RunContinuationsAsynchronously);
         _database.PublishAsync(Arg.Any<RedisChannel>(), Arg.Any<RedisValue>(), Arg.Any<CommandFlags>())
-            .ReturnsForAnyArgs(_ => Interlocked.Increment(ref calls) is var n && n >= 2 && n - 1 <= failuresBeforeSuccess
-                ? Task.FromException<long>(new RedisException("down"))
-                : Task.FromResult(1L));
+            .ReturnsForAnyArgs(_ => Interlocked.Increment(ref calls) is var n && n == 1
+                ? first.Task
+                : n - 1 <= failuresBeforeSuccess
+                    ? Task.FromException<long>(new RedisException("down"))
+                    : Task.FromResult(1L));
         Sut.DoorbellSpacing = TimeSpan.FromMilliseconds(200);
         var token = testContextAccessor.Current.CancellationToken;
 
+        // The first doorbell stays in flight until both later rings have folded into the next one.
         await Sut.PublishAsync(_fixture.Create<ICacheEvent>(), token);
         await Sut.PublishAsync(_fixture.Create<ICacheEvent>(), token);
         await Sut.PublishAsync(_fixture.Create<ICacheEvent>(), token);
+        first.SetResult(1L);
 
         await DoorbellCallsSettledAsync(() => Volatile.Read(ref calls), expectedCalls, token);
 
