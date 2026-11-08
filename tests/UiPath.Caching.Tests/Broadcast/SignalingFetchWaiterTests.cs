@@ -96,6 +96,34 @@ public class SignalingFetchWaiterTests
     }
 
     [Fact]
+    public async Task A_zero_timeout_wait_consumes_a_pending_signal_on_the_clock_path()
+    {
+        var clock = NewClock();
+        using var sut = new SignalingFetchWaiter(30.Seconds(), timeProvider: clock);
+        sut.Signal();
+
+        await sut.WaitAsync(TimeSpan.Zero, CancellationToken.None);
+
+        var next = sut.WaitAsync(100.Milliseconds(), CancellationToken.None);
+        await StillWaitingAsync(next);
+        clock.Advance(100.Milliseconds());
+        await next.WaitAsync(10.Seconds(), TestContext.Current.CancellationToken);
+    }
+
+    [Fact]
+    public async Task A_cancelled_wait_on_the_clock_path_throws_with_the_callers_token()
+    {
+        using var sut = new SignalingFetchWaiter(30.Seconds(), timeProvider: NewClock());
+        using var cts = new CancellationTokenSource();
+        var task = sut.WaitAsync(cts.Token);
+        cts.Cancel();
+
+        var thrown = await Assert.ThrowsAnyAsync<OperationCanceledException>(() => task);
+
+        thrown.CancellationToken.Should().Be(cts.Token);
+    }
+
+    [Fact]
     public async Task WaitAsync_throws_when_token_cancelled()
     {
         using var sut = new SignalingFetchWaiter(5.Seconds());
