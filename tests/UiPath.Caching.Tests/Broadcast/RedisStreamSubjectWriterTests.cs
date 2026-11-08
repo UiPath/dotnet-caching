@@ -2390,9 +2390,11 @@ public class RedisStreamSubjectWriterTests : IAsyncLifetime
         positions.Count(p => p == "0").Should().Be(1, "the pending list is read once");
     }
 
-    [Fact]
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
     [System.Diagnostics.CodeAnalysis.SuppressMessage("Major Code Smell", "S108:Nested blocks of code should not be left empty", Justification = "The fetch loop ends by cancellation, which is the expected outcome here.")]
-    public async Task A_group_made_on_an_empty_stream_by_a_create_that_timed_out_stays_one_when_a_retry_finds_it()
+    public async Task A_group_made_on_an_empty_stream_by_a_create_that_timed_out_stays_one_when_a_retry_or_the_read_finds_it(bool retryFindsIt)
     {
         var missed = 0;
         var created = 0;
@@ -2404,7 +2406,7 @@ public class RedisStreamSubjectWriterTests : IAsyncLifetime
             .ReturnsForAnyArgs(_ => Interlocked.Increment(ref created) == 1
                 ? Task.FromException<RedisResult>(Timeout())
                 : Task.FromException<RedisResult>(new RedisServerException(RedisErrorKind.None, CommandFlags.None, StreamConstants.ConsumerGroupNameExistsErrorMessage)));
-        NoAckRead(call => call.ArgAt<RedisValue?>(3).ToString() == ">" && Interlocked.Increment(ref newReads) <= 2
+        NoAckRead(call => call.ArgAt<RedisValue?>(3).ToString() == ">" && Interlocked.Increment(ref newReads) <= (retryFindsIt ? 2 : 1)
             ? throw new RedisServerException(RedisErrorKind.None, CommandFlags.None, "NOGROUP No such key or consumer group")
             : []);
         // Redis 6 on a stream that has grown since: no max-deleted-entry-id, and the group that never read sits at 0-0.
@@ -2428,7 +2430,7 @@ public class RedisStreamSubjectWriterTests : IAsyncLifetime
         await _cancellationTokenSource.CancelAsync();
         try { await sut.FetchTask.WaitAsync(WaitTimeout, TestContext.Current.CancellationToken); } catch (OperationCanceledException) { }
 
-        Volatile.Read(ref created).Should().Be(2);
+        Volatile.Read(ref created).Should().Be(retryFindsIt ? 2 : 1);
         Volatile.Read(ref missed).Should().Be(0, "the group is the one this node made on the empty stream, whose first entry Redis 6 cannot tell from a trim");
     }
 
