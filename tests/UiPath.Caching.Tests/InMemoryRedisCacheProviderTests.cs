@@ -1,4 +1,5 @@
 #pragma warning disable CA2012 // NSubstitute setups call the ValueTask-returning members without consuming the result.
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Primitives;
 using UiPath.Caching;
 
@@ -21,6 +22,85 @@ public class InMemoryRedisCacheProviderTests : IAsyncLifetime
         Sut.Enabled.Should().Be(_options.Enabled);
     }
 
+
+    [Fact]
+    public void An_uncapped_local_tier_logs_one_warning_naming_the_setting()
+    {
+        var logger = FreezeRecordingLogger();
+        _options.Enabled = true;
+        _options.LocalMaxExpiration = null;
+        InjectDefaultPolicy(null);
+
+        _ = Sut;
+        Sut.CreateCache();
+        Sut.CreateHashCache();
+
+        logger.Warnings.Should().ContainSingle().Which.Should().Contain("LocalMaxExpiration");
+    }
+
+    [Fact]
+    public void A_maximum_local_max_expiration_is_no_cap_and_logs_the_warning()
+    {
+        var logger = FreezeRecordingLogger();
+        _options.Enabled = true;
+        _options.LocalMaxExpiration = TimeSpan.MaxValue;
+        InjectDefaultPolicy(null);
+
+        _ = Sut;
+
+        logger.Warnings.Should().ContainSingle().Which.Should().Contain("LocalMaxExpiration");
+    }
+
+    [Fact]
+    public void A_maximum_default_policy_local_expiration_is_no_cap_and_logs_the_warning()
+    {
+        var logger = FreezeRecordingLogger();
+        _options.Enabled = true;
+        _options.LocalMaxExpiration = null;
+        InjectDefaultPolicy(new CachePolicy { LocalExpiration = TimeSpan.MaxValue });
+
+        _ = Sut;
+
+        logger.Warnings.Should().ContainSingle().Which.Should().Contain("LocalExpiration");
+    }
+
+    [Fact]
+    public void A_capped_local_tier_logs_no_warning()
+    {
+        var logger = FreezeRecordingLogger();
+        _options.Enabled = true;
+        _options.LocalMaxExpiration = TimeSpan.FromMinutes(5);
+
+        Sut.CreateCache();
+
+        logger.Warnings.Should().BeEmpty();
+    }
+
+    [Fact]
+    public void A_cap_from_the_default_policy_logs_no_warning()
+    {
+        var logger = FreezeRecordingLogger();
+        _options.Enabled = true;
+        _options.LocalMaxExpiration = null;
+        InjectDefaultPolicy(new CachePolicy { LocalExpiration = TimeSpan.FromMinutes(5) });
+
+        _ = Sut;
+
+        logger.Warnings.Should().BeEmpty();
+    }
+
+    [Fact]
+    public void A_disabled_provider_logs_no_warning()
+    {
+        var logger = FreezeRecordingLogger();
+        _options.Enabled = false;
+        _options.LocalMaxExpiration = null;
+        InjectDefaultPolicy(null);
+
+        _ = Sut;
+
+        logger.Warnings.Should().BeEmpty();
+    }
 
     [Theory]
     [InlineData(true)]
@@ -112,5 +192,38 @@ public class InMemoryRedisCacheProviderTests : IAsyncLifetime
             .Create();
         _fixture.Inject(Options.Create(_options));
         return ValueTask.CompletedTask;
+    }
+
+    private void InjectDefaultPolicy(CachePolicy? policy)
+    {
+        var factory = Substitute.For<ICachePolicyFactory>();
+        factory.Default.Returns(policy);
+        _fixture.Inject(factory);
+    }
+
+    private RecordingLogger FreezeRecordingLogger()
+    {
+        var logger = new RecordingLogger();
+        _fixture.Freeze<ILoggerFactory>().CreateLogger("InMemoryRedis").Returns(logger);
+        return logger;
+    }
+
+    private sealed class RecordingLogger : ILogger
+    {
+        private readonly List<string> _warnings = [];
+
+        public IReadOnlyList<string> Warnings => _warnings;
+
+        public IDisposable? BeginScope<TState>(TState state) where TState : notnull => null;
+
+        public bool IsEnabled(LogLevel logLevel) => true;
+
+        public void Log<TState>(LogLevel logLevel, EventId eventId, TState state, Exception? exception, Func<TState, Exception?, string> formatter)
+        {
+            if (logLevel == LogLevel.Warning)
+            {
+                _warnings.Add(formatter(state, exception));
+            }
+        }
     }
 }
