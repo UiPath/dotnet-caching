@@ -437,8 +437,39 @@ internal sealed partial class RedisCache : RedisCacheBase, ICache, IInvalidation
         try
         {
             var token = run.Token;
-            // The one read of the run: every caller of the key shares it, a hit or a miss.
-            var (found, cached) = await ReadGetOrAddProbeAsync<T>(cacheKey, redisKey, token).ConfigureAwait(false);
+            // The one read of the run: every caller of the key shares it, a hit or a miss. Inlined rather than awaited
+            // through ReadGetOrAddProbeAsync, so a hit runs one async frame fewer; a change to one goes in both.
+            token.ThrowIfCancellationRequested();
+            var found = false;
+            T? cached = default;
+            if (IsConnected)
+            {
+                var operation = StartOperation<T>(nameof(GetOrAddAsync));
+                try
+                {
+                    var value = await _read.ExecuteAsync(static (s, token) =>
+                    {
+                        token.ThrowIfCancellationRequested();
+                        return s.Self.Database.StringGetAsync(s.Key, s.Self.ReadFlagsFor(s.Key)).AsValueTask();
+                    },
+                    (Self: this, Key: redisKey),
+                    RedisValue.Null,
+                    token).ConfigureAwait(false);
+                    _auditKeySize?.Invoke(Logged(cacheKey, redisKey, typeof(T)), value);
+                    (found, cached) = InterpretReadResult<T>(value);
+                    operation.Stop();
+                }
+                catch (Exception ex)
+                {
+                    operation.Stop();
+                    LogRedisCacheException(ex);
+                }
+                finally
+                {
+                    TrackRead(operation, found, redisKey);
+                }
+            }
+
             if (found)
             {
                 // The probe reads no TTL; a result call that joined this run reads it itself.
@@ -468,15 +499,15 @@ internal sealed partial class RedisCache : RedisCacheBase, ICache, IInvalidation
 
     /// <summary>One run per Redis key and type: concurrent callers join the run in progress, which reads Redis once and generates only on a miss, and share its result or failure; it runs on its own token, cancelled once every caller has cancelled. Keyed by the Redis key, not the cache key, which a strategy may map to different Redis keys, and by value, so a prefixed key is never rendered to a string. The work ends the run itself, so the caller that started it awaits the work's own task.</summary>
     private ValueTask<T?> ShareGenerationAsync<T, TArgs>(RedisKey redisKey, TArgs args, Func<TArgs, IInFlightEnd<T?>, ValueTask<T?>> work, CancellationToken token) =>
-        GenerationsOf<T>().StartOrJoinAsync(redisKey, (Args: args, Work: work), static (state, run) => state.Work(state.Args, run), token, out _);
+        GenerationsOf<T>().StartOrJoinAsync(new HashedRedisKey(redisKey), (Args: args, Work: work), static (state, run) => state.Work(state.Args, run), token, out _);
 
     /// <summary>As <see cref="ShareGenerationAsync{T, TArgs}(RedisKey, TArgs, Func{TArgs, IInFlightEnd{T}, ValueTask{T}}, CancellationToken)"/>, also handing back the run, whose <see cref="IInFlightRun.Expiration"/> is what the starter stored.</summary>
     private ValueTask<T?> ShareGenerationAsync<T, TArgs>(RedisKey redisKey, TArgs args, Func<TArgs, IInFlightEnd<T?>, ValueTask<T?>> work, CancellationToken token, out IInFlightRun flight) =>
-        GenerationsOf<T>().StartOrJoinAsync(redisKey, (Args: args, Work: work), static (state, run) => state.Work(state.Args, run), token, out _, out flight);
+        GenerationsOf<T>().StartOrJoinAsync(new HashedRedisKey(redisKey), (Args: args, Work: work), static (state, run) => state.Work(state.Args, run), token, out _, out flight);
 
     /// <summary>The runs of one value type, so a result needs no box and no cast.</summary>
-    private InFlight<RedisKey, T?> GenerationsOf<T>() =>
-        (InFlight<RedisKey, T?>)_generations.GetOrAdd(typeof(T), static _ => new InFlight<RedisKey, T?>());
+    private InFlight<HashedRedisKey, T?> GenerationsOf<T>() =>
+        (InFlight<HashedRedisKey, T?>)_generations.GetOrAdd(typeof(T), static _ => new InFlight<HashedRedisKey, T?>());
 
     private ValueTask<T?> GetOrAddGeneratedAsync<T, TState>(CacheKey cacheKey, RedisKey redisKey, TState state, Func<TState, CancellationToken, Task<GeneratedValue<T>>> generator, CachePolicy? policy, CancellationToken token) =>
         ShareGenerationAsync<T, (RedisCache Cache, CacheKey Key, RedisKey RedisKey, TState State, Func<TState, CancellationToken, Task<GeneratedValue<T>>> Generator, CachePolicy? Policy)>(
@@ -570,6 +601,7 @@ internal sealed partial class RedisCache : RedisCacheBase, ICache, IInvalidation
         return (true, deserialized);
     }
 
+    // GenerateAndStoreAsync carries an inlined copy of this read; a change to one goes in both.
     private async ValueTask<(bool Found, T? Value)> ReadGetOrAddProbeAsync<T>(CacheKey cacheKey, RedisKey redisKey, CancellationToken token)
     {
         token.ThrowIfCancellationRequested();

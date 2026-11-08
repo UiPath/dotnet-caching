@@ -2715,6 +2715,24 @@ public class RedisCacheTests(ITestContextAccessor testContextAccessor) : IAsyncL
         await _database.DidNotReceive().StringSetAsync(_redisKey, Arg.Any<RedisValue>(), Arg.Any<TimeSpan?>(), Arg.Any<When>(), Arg.Any<CommandFlags>());
     }
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task GetOrAddAsync_with_a_cancelled_token_neither_reads_nor_generates(bool generatedExpiration)
+    {
+        using var cancelled = new CancellationTokenSource();
+        await cancelled.CancelAsync();
+        var generatorCalled = false;
+
+        Func<Task> act = generatedExpiration
+            ? async () => await Sut.GetOrAddWithExpirationAsync<string>(_cacheKey, _ => { generatorCalled = true; return Task.FromResult(new GeneratedValue<string>("fresh")); }, (CachePolicy?)null, cancelled.Token)
+            : async () => await Sut.GetOrAddAsync<string>(_cacheKey, _ => { generatorCalled = true; return Task.FromResult<string?>("fresh"); }, (CachePolicy?)null, cancelled.Token);
+
+        await act.Should().ThrowAsync<OperationCanceledException>();
+        generatorCalled.Should().BeFalse();
+        await _database.DidNotReceiveWithAnyArgs().StringGetAsync(default(RedisKey), default);
+    }
+
     [Fact]
     public async Task GetOrAddAsync_returns_cached_null_without_invoking_generator_when_CacheNullValues_true()
     {
