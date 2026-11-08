@@ -34,6 +34,11 @@ internal sealed partial class RedisProfiler : IRedisProfiler, IDisposable
         IOptions<RedisConnectionOptions> optionsAccessor,
         TimeProvider clock)
     {
+        _clock = clock;
+        _profiledCommandProcessor = profiledCommandProcessor;
+        _profilingSessionCommandReader = profilingSessionCommandReader;
+        _telemetryProvider = telemetryProvider;
+        _logger = logger;
         _options = optionsAccessor.Value;
         if (_options.ProfilerEnabled)
         {
@@ -46,15 +51,9 @@ internal sealed partial class RedisProfiler : IRedisProfiler, IDisposable
             {
                 _defaultSession = new ProfilingSession("default");
             }
-            _timer = new PeriodicTimer(_options.ProfilerFlushInterval);
+            _timer = new PeriodicTimer(_options.ProfilerFlushInterval, _clock);
             _flushWorker = FlushSessionsAsync();
         }
-
-        _clock = clock;
-        _profiledCommandProcessor = profiledCommandProcessor;
-        _profilingSessionCommandReader = profilingSessionCommandReader;
-        _telemetryProvider = telemetryProvider;
-        _logger = logger;
     }
 
     public int Count => _sessions.Count;
