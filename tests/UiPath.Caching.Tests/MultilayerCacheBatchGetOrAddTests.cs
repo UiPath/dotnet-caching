@@ -4,6 +4,7 @@ using UiPath.Caching.Tests.Fakes;
 
 namespace UiPath.Caching.Tests;
 
+[Collection(AllocationCollection.Name)]
 public class MultilayerCacheBatchGetOrAddTests(ITestContextAccessor testContextAccessor) : IAsyncLifetime
 {
 
@@ -239,6 +240,47 @@ public class MultilayerCacheBatchGetOrAddTests(ITestContextAccessor testContextA
         await _innerCache.DidNotReceiveWithAnyArgs().GetCacheEntriesAsync<string>(default!, default, token);
     }
 
+    [Theory]
+    [InlineData(4)]
+    [InlineData(16)]
+    public async Task All_local_hits_allocate_only_the_result_array(int count)
+    {
+#if DEBUG
+        Assert.Skip("allocation counts are only stable in Release");
+#endif
+        var token = testContextAccessor.Current.CancellationToken;
+        _options.CacheKeyStrategy = new DefaultCacheKeyStrategy();
+        _fixture.Inject<Microsoft.Extensions.Logging.ILogger>(Microsoft.Extensions.Logging.Abstractions.NullLogger.Instance);
+        var entries = Enumerable.Range(1, count)
+            .Select(i => new KeyValuePair<CacheKey, long>((CacheKey)("k" + i), i))
+            .ToArray();
+        Func<long[], CancellationToken, Task<KeyValuePair<long, string?>[]>> generate = Generate;
+        await Sut.GetOrAddAsync<string, long>(entries, generate, (CachePolicy?)null, token);
+        _generatorCalls.Clear();
+
+        var resultArrayBytes = 24L + (16L * count);
+        long allocated = -1;
+        for (var round = 0; round < 60 && allocated != resultArrayBytes * 100; round++)
+        {
+            for (var i = 0; i < 300; i++)
+            {
+                Hit(entries, generate, token);
+            }
+
+            SpinWait.SpinUntil(static () => false, 100);
+            var before = GC.GetAllocatedBytesForCurrentThread();
+            for (var i = 0; i < 100; i++)
+            {
+                Hit(entries, generate, token);
+            }
+
+            allocated = GC.GetAllocatedBytesForCurrentThread() - before;
+        }
+
+        (allocated / 100).Should().Be(resultArrayBytes);
+        _generatorCalls.Should().BeEmpty();
+    }
+
     [Fact]
     public async Task All_local_hits_with_a_repeated_state_collapse_it_as_the_full_path_does()
     {
@@ -442,6 +484,12 @@ public class MultilayerCacheBatchGetOrAddTests(ITestContextAccessor testContextA
         _generatorCalls.Clear();
         _innerCache.ClearReceivedCalls();
         return token;
+    }
+
+    private KeyValuePair<long, string?>[] Hit(KeyValuePair<CacheKey, long>[] entries, Func<long[], CancellationToken, Task<KeyValuePair<long, string?>[]>> generate, CancellationToken token)
+    {
+        var pending = Sut.GetOrAddAsync<string, long>(entries, generate, (CachePolicy?)null, token);
+        return pending.IsCompletedSuccessfully ? pending.Result : throw new InvalidOperationException("The all-local batch did not complete synchronously.");
     }
 
     private Task<KeyValuePair<long, string?>[]> Generate(long[] states, CancellationToken _)
