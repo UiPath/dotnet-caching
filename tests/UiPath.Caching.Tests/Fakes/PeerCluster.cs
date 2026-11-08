@@ -23,9 +23,10 @@ internal sealed class PeerCluster : IDisposable
 
     /// <param name="monitorsConnection">The node follows <see cref="PeerInner.IsConnected"/>, and keeps its local tier when the connection returns.</param>
     /// <param name="timeout">The node's cache timeout, which also bounds a peer refresh's wait in the queue and its read; the options' default when null.</param>
-    public Node Add(string name, bool peerFieldUpdates = true, int maxFields = 16, int maxBytes = 1024, bool monitorsConnection = false, Telemetry.RecordingTelemetryProvider? telemetry = null, TimeSpan? timeout = null)
+    /// <param name="clock">The node's clock, for its local expirations; the system clock when null.</param>
+    public Node Add(string name, bool peerFieldUpdates = true, int maxFields = 16, int maxBytes = 1024, bool monitorsConnection = false, Telemetry.RecordingTelemetryProvider? telemetry = null, TimeSpan? timeout = null, TimeProvider? clock = null)
     {
-        var node = new Node(this, name, peerFieldUpdates, maxFields, maxBytes, monitorsConnection, telemetry, timeout);
+        var node = new Node(this, name, peerFieldUpdates, maxFields, maxBytes, monitorsConnection, telemetry, timeout, clock ?? TimeProvider.System);
         _nodes.Add(node);
         return node;
     }
@@ -260,7 +261,7 @@ internal sealed class PeerCluster : IDisposable
     {
         private readonly Telemetry.RecordingTelemetryProvider? _telemetry;
 
-        public Node(PeerCluster cluster, string name, bool peerFieldUpdates, int maxFields, int maxBytes, bool monitorsConnection, Telemetry.RecordingTelemetryProvider? telemetry, TimeSpan? timeout)
+        public Node(PeerCluster cluster, string name, bool peerFieldUpdates, int maxFields, int maxBytes, bool monitorsConnection, Telemetry.RecordingTelemetryProvider? telemetry, TimeSpan? timeout, TimeProvider clock)
         {
             Name = name;
             _telemetry = telemetry;
@@ -287,7 +288,7 @@ internal sealed class PeerCluster : IDisposable
             Cache = RunTables.Track(new MultilayerHashCache(
                 KnownCacheProviderNames.InMemoryRedis,
                 inner,
-                new KeptMemoryCacheFactory(this),
+                new KeptMemoryCacheFactory(this, clock),
                 tokens,
                 topics,
                 events,
@@ -297,7 +298,7 @@ internal sealed class PeerCluster : IDisposable
                 cacheOptions,
                 NullDistributedLock.Instance,
                 NullCachePolicyFactory.Instance,
-                TimeProvider.System,
+                clock,
                 NullLogger.Instance));
         }
 
@@ -340,9 +341,9 @@ internal sealed class PeerCluster : IDisposable
             Subject.Dispose();
         }
 
-        private sealed class KeptMemoryCacheFactory(Node node) : IMemoryCacheFactory
+        private sealed class KeptMemoryCacheFactory(Node node, TimeProvider clock) : IMemoryCacheFactory
         {
-            private readonly MemoryCacheFactory _inner = new(TimeProvider.System, NullLoggerFactory.Instance);
+            private readonly MemoryCacheFactory _inner = new(clock, NullLoggerFactory.Instance);
 
             public IMemoryCache Get(IMemoryCacheOptions memoryOptions) => node.Local = _inner.Get(memoryOptions);
         }

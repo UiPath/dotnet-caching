@@ -1294,17 +1294,18 @@ public class PeerFieldUpdateTests
     [Fact]
     public async Task An_applied_copy_does_not_outlive_the_local_cap_it_was_read_under()
     {
+        var clock = new ManualTimeProvider(DateTimeOffset.UtcNow);
         using var c = new PeerCluster();
-        var (writer, peer) = (c.Add("a"), c.Add("b"));
+        var (writer, peer) = (c.Add("a"), c.Add("b", clock: clock));
         var capped = new CachePolicy { LocalExpiration = TimeSpan.FromMilliseconds(800), LocalExpirationDisconnected = TimeSpan.FromSeconds(30) };
         await Seed(writer);
         await peer.Cache.GetAsync<string>("k", capped, Ct);
-        await Task.Delay(400, Ct);
+        clock.Advance(TimeSpan.FromMilliseconds(400));
         await Add(writer, ("c", "3"));
         (await peer.Cache.GetAsync<string>("k", capped, Ct)).Should().HaveCount(3);
         peer.InnerReads.Should().Be(1);
 
-        await Task.Delay(700, Ct);
+        clock.Advance(TimeSpan.FromMilliseconds(700));
 
         (await peer.Cache.GetAsync<string>("k", capped, Ct)).Should().HaveCount(3);
         peer.InnerReads.Should().Be(2);
