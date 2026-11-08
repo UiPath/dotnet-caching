@@ -205,10 +205,14 @@ internal abstract class MemoryCacheSetter(
             cts.CancelAfter(cacheOptions.Timeout);
             var options = CreateEntry(metadataState, cts.Token);
             var newEntry = metadataState.CacheEntity.NewEntry(options.Expiration, options.Metadata);
-            // Same value, new expiry or metadata: the last read of the entry it replaces still counts.
-            if (metadataState.CacheEntity is IReadTracked { LastRead: not IReadTracked.NeverRead and var lastRead } && newEntry is IReadTracked renewed)
+            // Same value, new expiry or metadata: the entry it replaces keeps its tracking, and its last read still counts.
+            if (metadataState.CacheEntity is IReadTracked held && newEntry is IReadTracked renewed)
             {
-                renewed.MarkRead(lastRead);
+                renewed.Track(held.IsTracked);
+                if (held.LastRead is not IReadTracked.NeverRead and var lastRead)
+                {
+                    renewed.MarkRead(lastRead);
+                }
             }
 
             Renewed(metadataState.CacheEntity, newEntry);

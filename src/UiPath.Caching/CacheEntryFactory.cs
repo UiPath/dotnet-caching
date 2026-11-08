@@ -2,6 +2,8 @@ namespace UiPath.Caching;
 
 public sealed class CacheEntryFactory : ICacheEntryFactory
 {
+    private const int Untracked = -1;
+
     public ICacheEntry<T> Create<T>(T value, DateTimeOffset expiration, IDictionary<string, string?>? properties = null) =>
         new CacheEntry<T>(value, expiration, properties);
 
@@ -38,7 +40,9 @@ public sealed class CacheEntryFactory : ICacheEntryFactory
 
         object? ICacheEntry.Value => Value;
 
-        int IReadTracked.LastRead => Volatile.Read(ref _marks.Read);
+        int IReadTracked.LastRead => Math.Max(Volatile.Read(ref _marks.Read), IReadTracked.NeverRead);
+
+        bool IReadTracked.IsTracked => Volatile.Read(ref _marks.Read) != Untracked;
 
         long IRefreshLinked.ReplacedBy
         {
@@ -52,9 +56,22 @@ public sealed class CacheEntryFactory : ICacheEntryFactory
             set => Volatile.Write(ref _marks.Replaces, value);
         }
 
+        void IReadTracked.Track(bool tracked)
+        {
+            if (!tracked)
+            {
+                Volatile.Write(ref _marks.Read, Untracked);
+            }
+            else if (Volatile.Read(ref _marks.Read) == Untracked)
+            {
+                Volatile.Write(ref _marks.Read, IReadTracked.NeverRead);
+            }
+        }
+
         void IReadTracked.MarkRead(int nowSeconds)
         {
-            if (Volatile.Read(ref _marks.Read) != nowSeconds)
+            var last = Volatile.Read(ref _marks.Read);
+            if (last != nowSeconds && last != Untracked)
             {
                 Volatile.Write(ref _marks.Read, nowSeconds);
             }

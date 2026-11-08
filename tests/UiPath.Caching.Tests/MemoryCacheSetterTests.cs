@@ -214,6 +214,45 @@ public class MemoryCacheSetterTests : IAsyncLifetime
         _memoryCache.TryGetValue(_cacheKey.Name, out _).Should().BeTrue();
     }
 
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public void A_renewed_copy_keeps_whether_the_entry_it_replaces_takes_read_marks(bool tracked)
+    {
+        _memoryCache = new MemoryCache(Options.Create(new MemoryCacheOptions
+        {
+            Clock = _clock,
+        }));
+        _fixture.Inject(_memoryCache);
+
+        var token = new TestChangeToken
+        {
+            ActiveChangeCallbacks = true,
+            HasChanged = false,
+            Expiration = _clock.UtcNow.AddDays(1),
+        };
+        _changeTokenFactory.Create(Arg.Any<string>(), Arg.Any<ITopic<ICacheEvent>>(), Arg.Any<string>(), Arg.Any<Type>())
+            .Returns(c => token);
+        var x = new InternalHashCacheEntryOptions()
+        {
+            CacheKey = _cacheKey,
+            TopicKey = _topicKey,
+            Expiration = _clock.UtcNow.AddDays(1),
+        };
+        var entry = new CacheEntryFactory().Create("v", _clock.UtcNow.AddDays(1));
+        if (!tracked)
+        {
+            ((IReadTracked)entry).Track(false);
+        }
+
+        Sut.Set(x, entry, typeof(string), TimeSpan.FromMinutes(1));
+        token.InvokeCallbacks();
+
+        _memoryCache.TryGetValue(_cacheKey.Name, out var held).Should().BeTrue();
+        held.Should().NotBeSameAs(entry);
+        ((IReadTracked)held!).IsTracked.Should().Be(tracked);
+    }
+
     public ValueTask DisposeAsync()
     {
         return ValueTask.CompletedTask;
