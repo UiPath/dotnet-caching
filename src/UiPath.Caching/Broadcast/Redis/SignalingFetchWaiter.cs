@@ -1,6 +1,6 @@
 namespace UiPath.Caching.Broadcast.Redis;
 
-internal sealed class SignalingFetchWaiter(TimeSpan pollInterval, TimeSpan? notifiedPollInterval = null) : IFetchWaiter
+internal sealed class SignalingFetchWaiter(TimeSpan pollInterval, TimeSpan? notifiedPollInterval = null, TimeProvider? timeProvider = null) : IFetchWaiter
 {
     private readonly SemaphoreSlim _semaphore = new(0, 1);
     private volatile bool _disposed;
@@ -20,7 +20,14 @@ internal sealed class SignalingFetchWaiter(TimeSpan pollInterval, TimeSpan? noti
         }
         try
         {
-            await _semaphore.WaitAsync(timeout, cancellationToken).ConfigureAwait(false);
+            if (timeProvider is null || timeProvider == TimeProvider.System)
+            {
+                await _semaphore.WaitAsync(timeout, cancellationToken).ConfigureAwait(false);
+            }
+            else
+            {
+                await WaitOnClockAsync(timeout, timeProvider, cancellationToken).ConfigureAwait(false);
+            }
         }
         catch (ObjectDisposedException)
         {
@@ -71,5 +78,19 @@ internal sealed class SignalingFetchWaiter(TimeSpan pollInterval, TimeSpan? noti
         }
         _disposed = true;
         _semaphore.Dispose();
+    }
+
+    private async Task WaitOnClockAsync(TimeSpan timeout, TimeProvider clock, CancellationToken cancellationToken)
+    {
+        using var timeoutCts = new CancellationTokenSource(timeout, clock);
+        using var linked = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, timeoutCts.Token);
+        try
+        {
+            await _semaphore.WaitAsync(linked.Token).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) when (timeoutCts.IsCancellationRequested && !cancellationToken.IsCancellationRequested)
+        {
+            // The clock-driven timeout elapsed, which is a normal return.
+        }
     }
 }
