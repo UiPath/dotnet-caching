@@ -169,6 +169,7 @@ public sealed class RedisStreamNotifyIntegrationTests(RedisContainerFixture fixt
     public async Task A_stream_the_server_will_not_describe_is_not_taken_for_a_missing_one()
     {
         Assert.SkipUnless(fixture.Enabled, "Set RUN_REDIS_INTEGRATION_TESTS=1 (Docker required) to run.");
+        Assert.SkipUnless(fixture.SupportsAcl, "Needs ACL SETUSER, which this server does not allow.");
         var user = $"it-noxinfo-{Guid.NewGuid():N}"[..20];
         await _admin!.GetDatabase().ExecuteAsync("ACL", "SETUSER", user, "on", ">pw", "~*", "&*", "+@all", "-xinfo");
         _aclUser = user;
@@ -186,6 +187,7 @@ public sealed class RedisStreamNotifyIntegrationTests(RedisContainerFixture fixt
     public async Task A_subscription_the_server_refuses_leaves_the_topic_polling()
     {
         Assert.SkipUnless(fixture.Enabled, "Set RUN_REDIS_INTEGRATION_TESTS=1 (Docker required) to run.");
+        Assert.SkipUnless(fixture.SupportsAcl, "Needs ACL SETUSER, which this server does not allow.");
         var user = $"it-nopubsub-{Guid.NewGuid():N}"[..20];
         await _admin!.GetDatabase().ExecuteAsync("ACL", "SETUSER", user, "on", ">pw", "~*", "+@all", "resetchannels");
         _aclUser = user;
@@ -266,6 +268,7 @@ public sealed class RedisStreamNotifyIntegrationTests(RedisContainerFixture fixt
     public async Task A_refused_subscription_leaves_the_poll_interval_in_force()
     {
         Assert.SkipUnless(fixture.Enabled, "Set RUN_REDIS_INTEGRATION_TESTS=1 (Docker required) to run.");
+        Assert.SkipUnless(fixture.SupportsAcl, "Needs ACL SETUSER, which this server does not allow.");
         var user = $"it-nopubsub-{Guid.NewGuid():N}"[..20];
         await _admin!.GetDatabase().ExecuteAsync("ACL", "SETUSER", user, "on", ">pw", "~*", "+@all", "resetchannels");
         _aclUser = user;
