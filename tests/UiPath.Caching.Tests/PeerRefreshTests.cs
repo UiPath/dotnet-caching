@@ -666,6 +666,59 @@ public class PeerRefreshTests
     }
 
     [Fact]
+    public async Task A_local_hit_leaves_the_read_mark_unset_when_the_policy_opts_out()
+    {
+        using var peers = new CachePeers();
+        var (_, b) = await HoldingOld(peers, policy: new CachePolicy { RefreshLocalOnPeerWrite = false });
+
+        (await b.Cache.GetAsync<string>(Key, new CachePolicy { RefreshLocalOnPeerWrite = false }, Ct)).Should().Be("old");
+
+        ReadMark(b).Should().Be(IReadTracked.NeverRead);
+    }
+
+    [Fact]
+    public async Task A_local_hit_stamps_the_read_mark_when_the_policy_refreshes()
+    {
+        using var peers = new CachePeers();
+        var clock = new ManualTimeProvider(DateTimeOffset.UtcNow);
+        var (_, b) = await HoldingOld(peers, policy: Window, clock: clock);
+        var stamped = ReadMark(b);
+        stamped.Should().NotBe(IReadTracked.NeverRead);
+        clock.Advance(TimeSpan.FromSeconds(5));
+
+        (await b.Cache.GetAsync<string>(Key, Window, Ct)).Should().Be("old");
+
+        ReadMark(b).Should().BeGreaterThan(stamped);
+    }
+
+    [Fact]
+    public async Task A_copy_stored_with_refresh_is_stamped_by_a_hit_under_a_policy_that_opts_out()
+    {
+        using var peers = new CachePeers();
+        var clock = new ManualTimeProvider(DateTimeOffset.UtcNow);
+        var (_, b) = await HoldingOld(peers, policy: Window, clock: clock);
+        var stamped = ReadMark(b);
+        clock.Advance(TimeSpan.FromSeconds(5));
+
+        (await b.Cache.GetAsync<string>(Key, new CachePolicy { RefreshLocalOnPeerWrite = false }, Ct)).Should().Be("old");
+
+        ReadMark(b).Should().BeGreaterThan(stamped);
+    }
+
+    [Fact]
+    public async Task A_copy_stored_without_refresh_is_not_stamped_by_a_hit_under_a_policy_that_refreshes()
+    {
+        using var peers = new CachePeers();
+        var clock = new ManualTimeProvider(DateTimeOffset.UtcNow);
+        var (_, b) = await HoldingOld(peers, policy: new CachePolicy { RefreshLocalOnPeerWrite = false }, clock: clock);
+        clock.Advance(TimeSpan.FromSeconds(5));
+
+        (await b.Cache.GetAsync<string>(Key, Window, Ct)).Should().Be("old");
+
+        ReadMark(b).Should().Be(IReadTracked.NeverRead);
+    }
+
+    [Fact]
     public async Task The_dispatcher_is_not_held_by_a_slow_refresh()
     {
         using var peers = new CachePeers();
@@ -1377,6 +1430,12 @@ public class PeerRefreshTests
         }
 
         return (a, b);
+    }
+
+    private static int ReadMark(CachePeers.Node node)
+    {
+        node.Local.TryGetValue(Key, out ICacheEntry<string>? entry).Should().BeTrue();
+        return ((IReadTracked)entry!).LastRead;
     }
 
     /// <summary>Node <c>a</c> writes <c>new</c>; its event is held back for the test to deliver.</summary>

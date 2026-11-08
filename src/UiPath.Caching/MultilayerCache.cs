@@ -2231,12 +2231,14 @@ internal sealed partial class MultilayerCache : MultilayerCacheBase, ICache, ISp
     private bool MemorySet<T>(CacheEntryOptions options, T value, TimeSpan? maxExpiration, ICacheEntry<T>? item = null, CachePolicy? policy = null, bool read = true)
     {
         item ??= _cacheEntryFactory.Create(value, options.Expiration);
-        if (read)
+        var target = RefreshTarget(RefreshReader<T>.Instance, policy, item);
+        Track(item, target is not null);
+        if (target is not null && read)
         {
             MarkRead(item);
         }
 
-        return _localMemorySetter.Set(options, item, typeof(T), maxExpiration, RefreshTarget(RefreshReader<T>.Instance, policy, item));
+        return _localMemorySetter.Set(options, item, typeof(T), maxExpiration, target);
     }
 
     [LoggerMessage(Level = LogLevel.Debug, Message = "Cache missed. generating new {CacheKey}")]

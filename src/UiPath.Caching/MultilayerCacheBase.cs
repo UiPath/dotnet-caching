@@ -225,6 +225,10 @@ public abstract partial class MultilayerCacheBase : IDisposable
         }
     }
 
+    /// <summary>Sets whether a local hit marks <paramref name="entry"/>, before it is published.</summary>
+    private protected static void Track(object? entry, bool tracked) =>
+        (entry as IReadTracked)?.Track(tracked);
+
     /// <summary>Gives <paramref name="to"/>, the copy a refresh keeps in place of <paramref name="from"/>, that refresh's number.</summary>
     private protected static void LinkRefresh(object? from, object? to)
     {

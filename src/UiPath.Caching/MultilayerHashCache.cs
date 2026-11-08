@@ -709,6 +709,7 @@ internal sealed partial class MultilayerHashCache : MultilayerCacheBase, IHashCa
         };
         var merged = CreateEntry(combined, options);
         HashVersions.Stamp<T>(merged, update.Version, version.LocalDeadline, ahead);
+        Track(merged, held is not IReadTracked { IsTracked: false });
         InheritRead(held, merged);
         return _localMemorySetter.Set(options, merged, typeof(T), remaining, state.Refresh);
     }
@@ -983,7 +984,9 @@ internal sealed partial class MultilayerHashCache : MultilayerCacheBase, IHashCa
     {
         lock (MergeLock(options.CacheKey.Name))
         {
-            if (read)
+            var target = RefreshTarget(RefreshReader<T>.Instance, policy, item);
+            Track(item, target is not null);
+            if (target is not null && read)
             {
                 MarkRead(item);
             }
@@ -993,7 +996,7 @@ internal sealed partial class MultilayerHashCache : MultilayerCacheBase, IHashCa
                 HashVersions.Stamp<T>(item, options.Version, maxExpiration is { } max ? _clock.ToDateTimeOffset(max) : null, options.Own);
             }
 
-            return _localMemorySetter.Set(options, item, typeof(T), maxExpiration, RefreshTarget(RefreshReader<T>.Instance, policy, item));
+            return _localMemorySetter.Set(options, item, typeof(T), maxExpiration, target);
         }
     }
 

@@ -8,6 +8,12 @@ internal interface IReadTracked
     /// <summary>The second of the last read on the cache's monotonic clock, at least 1; <see cref="NeverRead"/> when none has read it.</summary>
     int LastRead { get; }
 
-    /// <summary>Records a read at <paramref name="nowSeconds"/>; writes only when the second changed, so hits on a hot entry share its cache line.</summary>
+    /// <summary>False when nothing consults the read mark, so a hit does not stamp it.</summary>
+    bool IsTracked { get; }
+
+    /// <summary>Sets whether the entry takes read marks; set before the entry is published.</summary>
+    void Track(bool tracked);
+
+    /// <summary>Records a read at <paramref name="nowSeconds"/>, unless the entry is untracked; writes only when the second changed, so hits on a hot entry share its cache line.</summary>
     void MarkRead(int nowSeconds);
 }

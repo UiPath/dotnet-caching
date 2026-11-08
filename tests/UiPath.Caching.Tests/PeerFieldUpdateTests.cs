@@ -40,6 +40,104 @@ public class PeerFieldUpdateTests
     }
 
     [Fact]
+    public async Task A_field_update_applied_to_a_copy_stored_without_refresh_leaves_it_unstamped()
+    {
+        var clock = new ManualTimeProvider(DateTimeOffset.UtcNow);
+        using var c = new PeerCluster();
+        var (writer, peer) = (c.Add("a"), c.Add("b", clock: clock));
+        await Seed(writer);
+        (await peer.Cache.GetAsync<string>("k", AwaitedDropping, Ct)).Should().HaveCount(2);
+        await Add(writer, ("c", "3"));
+        clock.Advance(TimeSpan.FromSeconds(5));
+
+        (await peer.Cache.GetAsync<string>("k", AwaitedDropping, Ct)).Should().HaveCount(3);
+
+        peer.InnerReads.Should().Be(1);
+        ReadMark(c, peer).Should().Be(IReadTracked.NeverRead);
+    }
+
+    [Fact]
+    public async Task A_field_update_applied_to_a_copy_stored_with_refresh_keeps_it_stamping()
+    {
+        var clock = new ManualTimeProvider(DateTimeOffset.UtcNow);
+        using var c = new PeerCluster();
+        var (writer, peer) = (c.Add("a"), c.Add("b", clock: clock));
+        await Seed(writer);
+        (await peer.Cache.GetAsync<string>("k", Awaited, Ct)).Should().HaveCount(2);
+        await Add(writer, ("c", "3"));
+        var stamped = ReadMark(c, peer);
+        clock.Advance(TimeSpan.FromSeconds(5));
+
+        (await peer.Cache.GetAsync<string>("k", Awaited, Ct)).Should().HaveCount(3);
+
+        stamped.Should().NotBe(IReadTracked.NeverRead);
+        ReadMark(c, peer).Should().BeGreaterThan(stamped);
+    }
+
+    [Fact]
+    public async Task A_hash_hit_stamps_the_read_mark_when_the_policy_refreshes()
+    {
+        var clock = new ManualTimeProvider(DateTimeOffset.UtcNow);
+        using var c = new PeerCluster();
+        var (writer, peer) = (c.Add("a"), c.Add("b", clock: clock));
+        await Seed(writer);
+        (await peer.Cache.GetAsync<string>("k", Awaited, Ct)).Should().HaveCount(2);
+        var stamped = ReadMark(c, peer);
+        stamped.Should().NotBe(IReadTracked.NeverRead);
+        clock.Advance(TimeSpan.FromSeconds(5));
+
+        (await peer.Cache.GetAsync<string>("k", Awaited, Ct)).Should().HaveCount(2);
+
+        ReadMark(c, peer).Should().BeGreaterThan(stamped);
+    }
+
+    [Fact]
+    public async Task A_hash_hit_leaves_the_read_mark_unset_when_the_policy_opts_out()
+    {
+        var clock = new ManualTimeProvider(DateTimeOffset.UtcNow);
+        using var c = new PeerCluster();
+        var (writer, peer) = (c.Add("a"), c.Add("b", clock: clock));
+        await Seed(writer);
+        (await peer.Cache.GetAsync<string>("k", AwaitedDropping, Ct)).Should().HaveCount(2);
+        clock.Advance(TimeSpan.FromSeconds(5));
+
+        (await peer.Cache.GetAsync<string>("k", AwaitedDropping, Ct)).Should().HaveCount(2);
+
+        ReadMark(c, peer).Should().Be(IReadTracked.NeverRead);
+    }
+
+    [Fact]
+    public async Task A_hash_stored_with_refresh_is_stamped_by_a_hit_under_a_policy_that_opts_out()
+    {
+        var clock = new ManualTimeProvider(DateTimeOffset.UtcNow);
+        using var c = new PeerCluster();
+        var (writer, peer) = (c.Add("a"), c.Add("b", clock: clock));
+        await Seed(writer);
+        (await peer.Cache.GetAsync<string>("k", Awaited, Ct)).Should().HaveCount(2);
+        var stamped = ReadMark(c, peer);
+        clock.Advance(TimeSpan.FromSeconds(5));
+
+        (await peer.Cache.GetAsync<string>("k", AwaitedDropping, Ct)).Should().HaveCount(2);
+
+        ReadMark(c, peer).Should().BeGreaterThan(stamped);
+    }
+
+    [Fact]
+    public async Task A_hash_stored_without_refresh_is_not_stamped_by_a_hit_under_a_policy_that_refreshes()
+    {
+        var clock = new ManualTimeProvider(DateTimeOffset.UtcNow);
+        using var c = new PeerCluster();
+        var (writer, peer) = (c.Add("a"), c.Add("b", clock: clock));
+        await Seed(writer);
+        (await peer.Cache.GetAsync<string>("k", AwaitedDropping, Ct)).Should().HaveCount(2);
+        clock.Advance(TimeSpan.FromSeconds(5));
+
+        (await peer.Cache.GetAsync<string>("k", Awaited, Ct)).Should().HaveCount(2);
+
+        ReadMark(c, peer).Should().Be(IReadTracked.NeverRead);
+    }
+
+    [Fact]
     public async Task A_dictionary_a_caller_holds_is_not_changed_by_an_update_applied_after_it_was_returned()
     {
         using var c = new PeerCluster();
@@ -1503,6 +1601,9 @@ public class PeerFieldUpdateTests
         node.Local.TryGetValue(c.Redis.Key(), out ICacheEntry<IDictionary<string, string?>>? held).Should().BeTrue();
         return held!;
     }
+
+    private static int ReadMark(PeerCluster c, PeerCluster.Node node) =>
+        ((IReadTracked)Local(c, node)).LastRead;
 
     private static async Task Race(Barrier barrier, PeerCluster.Node node, string field)
     {
