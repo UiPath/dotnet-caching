@@ -76,7 +76,7 @@ public class RedisStreamsTopicOptions : IBindsFromConfiguration
     /// <summary>Publishes a Pub/Sub doorbell after every <c>XADD</c> so consumers read at once instead of at the next <see cref="PollInterval"/>.</summary>
     public bool NotifyEnabled { get; set; } = true;
 
-    /// <summary>The least time between two doorbells, zero unless set, at most 1 s. The first ring goes out at once; the rings during a doorbell fold into one more, sent as soon as the last one is answered, so one doorbell is in flight per topic and there are never more doorbells than writes. A positive value holds the next doorbell until it has passed since the last one, at the platform timer's resolution (about 15 ms on Windows).</summary>
+    /// <summary>The least time between two doorbells, zero unless set, at most 1 s. The first ring goes out at once; the rings during a doorbell fold into one more, sent as soon as the last one is answered, so one doorbell is in flight per topic and there are never more doorbells than writes. A positive value holds the next doorbell until it has passed since the last one, at the platform timer's resolution (about 15 ms on Windows). Keep zero where a stale entry is wrong, such as permissions: a positive value lets other nodes serve the old value for up to that long.</summary>
     public TimeSpan? NotifyMinInterval { get; set; }
 
     public IRedisChannelStrategy? NotifyChannelStrategy { get; set; }

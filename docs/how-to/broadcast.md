@@ -98,6 +98,7 @@ See [reference/settings.md](../reference/settings.md) for the full set. The tabl
 | `ProfilerEnabled` | `false` | Yes | Enable Redis command profiling. |
 | `EmitStreamReceivedEvent` | `false` | Yes | Emit a telemetry event per received stream entry. |
 | `NotifyEnabled` | `true` | Yes | Notify doorbell via Pub/Sub; `false` polls only. |
+| `NotifyMinInterval` | zero | Yes | Least time between two doorbells. **Keep zero where a stale entry is wrong**; see [Doorbell spacing](#doorbell-spacing-notifymininterval). |
 | `NotifyChannelStrategy` | `null` | Yes | Code-only `IRedisChannelStrategy` for the channel. |
 | `NotifyChannelName` | `"notify"` | Yes | Channel suffix used by the default strategy. |
 | `NotifyShardedPubSub` | `false` | Yes | Use sharded Pub/Sub (Redis 7.0+). |
@@ -234,6 +235,16 @@ The notify feature uses one Pub/Sub subscription per topic per node. At modest t
 
 On a Redis Cluster a plain `PUBLISH` is forwarded over the cluster bus to every node, whichever node the subscribers sit on. That is one small message per broadcast per node, and it is what the default does on a cluster too, because sharded Pub/Sub needs Redis 7.0 and a stream key whose hash tag the channel can share, neither of which the library can assume. Where both hold, `NotifyShardedPubSub: true` keeps the doorbell on the stream's shard (see below).
 
+### Doorbell spacing (`NotifyMinInterval`)
+
+> [!IMPORTANT]
+> **Keep `NotifyMinInterval` at zero, the default, for any cache where a stale entry is wrong:** permissions and access rules, addresses or routes that change often, anything a security or correctness decision reads.
+> A positive value holds back the doorbell, so every other node keeps serving the old value for up to that long after a write (about 15 ms at least on Windows, because of the timer's resolution).
+
+At zero the first ring goes out at once, and the rings that arrive while a doorbell is in flight fold into one more, so there are never more doorbells than writes. A positive value also holds the next doorbell until that much time has passed since the last one. No entry is lost either way: a delayed doorbell wakes the other nodes, and they read every entry the stream holds.
+
+Raise it only for a topic with a steady stream of writes where a few milliseconds of staleness is acceptable. There, 5 ms sends far fewer doorbells and uses less CPU on every node. Set it per topic in `Topics[]` so the caches that must stay at zero keep it.
+
 ### Channel naming
 
 By default the notify channel name is the stream's Redis key joined with `NotifyChannelName` (default `"notify"`) using `CacheOptions.Separator`. The separator and the name suffix are lowercased at construction time; the stream key itself is not modified by the channel strategy (its casing is controlled by the key strategy). For example, if the stream key is `app:st:topicA` and the separator is `:`, the channel is `app:st:topicA:notify`. Override the channel entirely by assigning a custom `IRedisChannelStrategy` to `NotifyChannelStrategy` (code-only; `IRedisChannelStrategy` instances are not JSON-bindable).
@@ -254,6 +265,7 @@ Stream keys that contain `{`/`}` but do not form a valid non-empty hash tag (e.g
 | Option | Default | Notes |
 | --- | --- | --- |
 | `NotifyEnabled` | `true` | `false` polls only. |
+| `NotifyMinInterval` | zero | Least time between two doorbells, at most 1 s. **Keep zero where a stale entry is wrong.** |
 | `NotifyChannelStrategy` | `null` | Code-only `IRedisChannelStrategy` override. When `null`, channel = stream key joined with `NotifyChannelName` via `CacheOptions.Separator`. |
 | `NotifyChannelName` | `"notify"` | Suffix appended to the stream's Redis key by the default strategy. Empty/whitespace falls back to `"notify"`. Ignored when `NotifyChannelStrategy` is set. |
 | `NotifyShardedPubSub` | `false` | When `true`, uses sharded Pub/Sub (`SPUBLISH`/`SSUBSCRIBE`; requires Redis 7.0+). Ignored when `NotifyChannelStrategy` is set. |

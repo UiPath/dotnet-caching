@@ -10,6 +10,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 
 - **A peer's write drops a local copy nobody read.** `RefreshLocalOnPeerWrite` keeps and refreshes only a copy a local hit read since it was stored and within its local expiration; any other copy is dropped on a peer's write. The `CachePolicy` XML doc and the settings reference now say so, as [concepts](docs/concepts.md#refresh-on-a-peers-write) already did. A test that stores a key, changes the distributed tier behind the cache and then expects the local copy must allow for that drop.
 - **Mocks must set up the `GetOrAdd*` members.** Code moved from a `GetAsync` and `SetAsync` pair to `GetOrAddAsync` calls a member a test mock may not have set up, and a loose mock returns the default (`null`) without running the generator. Set up the members listed in [choosing a GetOrAdd overload](docs/how-to/choosing-a-get-or-add-overload.md#what-runs-and-what-a-test-sees), or test against the in-memory provider.
+- `RedisStreamsTopicOptions.NotifyMinInterval`: keep it at zero, the default since 3.1.0, for any cache where a stale entry is wrong, such as permissions or addresses that change often. A positive value lets other nodes serve the old value for up to that long. The broadcast guide now has a [doorbell spacing](docs/how-to/broadcast.md#doorbell-spacing-notifymininterval) section, and the 3.1.0 entry no longer says 25 ms.
 
 ## [3.1.0] - 2026-11-05
 
@@ -57,7 +58,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
   transaction, so the TTL and the fields stay atomic. A `RemoveFieldsAsync` that empties a hash leaves the count behind until the key expires.
   Turn it on once every node that writes the hashes runs this version.
 
-- **`RedisStreamsTopicOptions.NotifyMinInterval`.** The least time between two doorbells, 25 ms by default and at most 1 s.
+- **`RedisStreamsTopicOptions.NotifyMinInterval`.** The least time between two doorbells, zero by default and at most 1 s.
   Rings during the interval fold into the next doorbell, so a burst of writes wakes each consumer at most once per interval instead of
   once per write; the first ring after a quiet period still goes out at once.
 
