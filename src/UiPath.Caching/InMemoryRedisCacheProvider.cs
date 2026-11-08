@@ -3,7 +3,7 @@ using UiPath.Caching.Telemetry;
 
 namespace UiPath.Caching;
 
-public sealed class InMemoryRedisCacheProvider : ICacheProvider
+public sealed partial class InMemoryRedisCacheProvider : ICacheProvider
 {
     private readonly InMemoryRedisCacheOptions _options;
     private readonly CacheOptions _cacheOptions;
@@ -62,6 +62,10 @@ public sealed class InMemoryRedisCacheProvider : ICacheProvider
         _cache = new Lazy<MultilayerCache>(() => BuildCache());
         _hashCache = new Lazy<MultilayerHashCache>(() => BuildHashCache());
         Enabled = _options.Enabled;
+        if (Enabled && !IsCap(_options.LocalMaxExpiration) && !IsCap(policyFactory.Default?.LocalExpiration))
+        {
+            LogUncappedLocalTier(loggerFactory.CreateLogger(Name));
+        }
     }
 
     public string Name => KnownCacheProviderNames.InMemoryRedis;
@@ -86,6 +90,12 @@ public sealed class InMemoryRedisCacheProvider : ICacheProvider
             _hashCache.Value.Dispose();
         }
     }
+
+    [LoggerMessage(Level = LogLevel.Warning, Message = "The InMemoryRedis local tier has no lifetime cap: neither InMemoryRedis LocalMaxExpiration nor the default policy's LocalExpiration is set. If a peer's invalidation is lost, a local copy can outlive what the application expects; set either one to bound it. A named policy's own LocalExpiration bounds only the caches that use it.")]
+    private static partial void LogUncappedLocalTier(ILogger logger);
+
+    private bool IsCap(TimeSpan? lifetime) =>
+        lifetime.HasValue && _clock.ToDateTimeOffset(lifetime) != DateTimeOffset.MaxValue;
 
     private MultilayerCache BuildCache() =>
         new(

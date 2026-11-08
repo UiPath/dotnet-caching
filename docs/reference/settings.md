@@ -171,7 +171,7 @@ Per-topic overrides: add entries to `Topics[]` under `Broadcast:RedisPubSub`. Ea
 | `StatisticsFlushInterval` | `TimeSpan` | `00:01:00` | Per-provider | How often statistics are flushed to the telemetry sink. |
 | `BroadcastEnable` | `bool` | `true` | Per-provider | Publish/consume cross-node L1 invalidations for this provider. `false` keeps L1+L2 with no broadcast traffic. Can only narrow `CacheOptions.BroadcastEnabled`, never widen it. Note the default is the opposite of `InMemoryCacheOptions.BroadcastEnable`. |
 | `Topic` | `string?` | `null` | Per-provider | Topic name for L1 invalidation broadcasts; `null` = use `CacheOptions.DefaultTopic`. |
-| `LocalMaxExpiration` | `TimeSpan?` | `null` | Per-provider | Cap on the L1 (in-memory) TTL while L2 is connected; `null` = no cap beyond `DefaultExpiration`. |
+| `LocalMaxExpiration` | `TimeSpan?` | `null` | Per-provider | Cap on the L1 (in-memory) TTL while L2 is connected; `null` = no cap beyond `DefaultExpiration`. A warning is logged once, when the provider is first created, if no cap is set here or in `DefaultCachePolicy.LocalExpiration` (`TimeSpan.MaxValue` counts as no cap; a named policy's own `LocalExpiration` bounds only the caches that use it). |
 | `ConnectionMonitorEnabled` | `bool?` | `null` | Per-provider | `null` = inherit from `CacheOptions.ConnectionMonitorEnabled`. |
 | `CacheNullValues` | `bool` | `false` | Per-provider | Persist `null`/empty factory returns as sentinels to suppress thundering-herd on missing keys. |
 | `ConnectionMonitorPeriod` | `TimeSpan?` | `00:00:05` | Per-provider | How often the connection monitor probes Redis health. |

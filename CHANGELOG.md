@@ -12,6 +12,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
   (CS0121): the fix makes it a plain string (`"fixed"`, `Const + ":x"`). In an expression tree, such as a Moq `Setup` lambda, an interpolated key does not compile (CS8952):
   the fix wraps it in `FormattableString.Invariant($"user:{id}")`, which keeps the key text. Fix All applies either to a document, project or solution. It ships in
   `UiPath.Caching.Abstractions` with the UIPCACHE001 fix.
+- **Warning for an uncapped local tier.** `InMemoryRedis` logs one warning, when the provider is first created, if neither `LocalMaxExpiration` nor `DefaultCachePolicy.LocalExpiration` is set (`TimeSpan.MaxValue` counts as unset), since a local copy can then outlive what the application expects if a peer's invalidation is lost.
 
 ### Changed
 
