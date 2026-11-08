@@ -76,8 +76,8 @@ internal sealed partial class RedisStreamSubjectWriter<T> : IDisposable
     // A create at the head failed with the group perhaps made; the head read before it, for the group found later.
     private bool _createSent;
     private StreamHead? _sentHead;
-    // This node made the group at 0-0, on a stream that had never held an entry or one that replaced the stream it read, so
-    // Redis 6 cannot tell the first entry from a trim.
+    // This node made the group at 0-0, on a stream that had never held an entry or one that replaced the stream it read, or a
+    // create of this node that failed may have made it on an empty stream: Redis 6 cannot tell the first entry from a trim.
     private bool _createdOnEmpty;
     private bool _gapCheckDenied;
     // The last read returned fewer entries than asked: the group is at the head.
@@ -497,7 +497,7 @@ internal sealed partial class RedisStreamSubjectWriter<T> : IDisposable
         {
             if (_createSent)
             {
-                // A create of this node that seemed to fail made the group; a retry then finds it, and it is still ours.
+                // Also set when the create failed, but a group forgotten since then cleared it; the group found may still be ours.
                 _createdOnEmpty |= IsEmptyHead(_sentHead);
             }
 
@@ -623,9 +623,11 @@ internal sealed partial class RedisStreamSubjectWriter<T> : IDisposable
         {
             if (atHead)
             {
-                // A timeout or a dropped connection may follow a create the server ran: the group found next may be it.
+                // A timeout or a dropped connection may follow a create the server ran: the group found next, by a retry or
+                // by the read itself, may be it, so a check before that read must not take an empty stream's first entry for a trim.
                 _createSent = true;
                 _sentHead = head;
+                _createdOnEmpty |= IsEmptyHead(head);
             }
             else if (id == StreamConstants.StreamStart)
             {
