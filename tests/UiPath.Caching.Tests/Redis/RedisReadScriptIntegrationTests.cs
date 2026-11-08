@@ -23,6 +23,7 @@ public class RedisReadScriptIntegrationTests(RedisContainerFixture fixture)
     public async Task Reads_return_values_and_expirations_whether_or_not_the_server_allows_scripts(bool scriptsAllowed)
     {
         Assert.SkipUnless(fixture.Enabled, "Set RUN_REDIS_INTEGRATION_TESTS=1 (Docker required) to run.");
+        Assert.SkipUnless(scriptsAllowed || fixture.SupportsAcl, "Needs ACL SETUSER, which this server does not allow.");
         using var admin = await ConnectionMultiplexer.ConnectAsync(fixture.ConnectionString);
         var server = admin.GetServer(admin.GetEndPoints()[0]);
         var user = $"it-noscript-{Guid.NewGuid():N}";

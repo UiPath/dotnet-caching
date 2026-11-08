@@ -11,6 +11,8 @@ public sealed class RedisContainerFixture : IAsyncLifetime
     /// <summary>The version of the server the tests run against; 0.0 when they do not run.</summary>
     public Version ServerVersion { get; private set; } = new(0, 0);
 
+    public bool SupportsAcl { get; private set; }
+
     public async ValueTask InitializeAsync()
     {
         if (!string.Equals(Environment.GetEnvironmentVariable("RUN_REDIS_INTEGRATION_TESTS"), "1", StringComparison.Ordinal))
@@ -22,10 +24,27 @@ public sealed class RedisContainerFixture : IAsyncLifetime
         ConnectionString = string.IsNullOrWhiteSpace(connectionString) ? "localhost:6379" : connectionString;
         Enabled = true;
         await using var connection = await ConnectionMultiplexer.ConnectAsync(ConnectionString);
-        ServerVersion = connection.GetServer(connection.GetEndPoints()[0]).Version;
+        var server = connection.GetServer(connection.GetEndPoints()[0]);
+        ServerVersion = server.Version;
+        SupportsAcl = await CanSetAclUserAsync(server);
     }
 
     public ValueTask DisposeAsync() => ValueTask.CompletedTask;
+
+    private static async Task<bool> CanSetAclUserAsync(IServer server)
+    {
+        var probe = $"it-probe-{Guid.NewGuid():N}"[..20];
+        try
+        {
+            await server.ExecuteAsync("ACL", "SETUSER", probe, "off");
+            await server.ExecuteAsync("ACL", "DELUSER", probe);
+            return true;
+        }
+        catch (RedisServerException)
+        {
+            return false;
+        }
+    }
 }
 
 [CollectionDefinition("RedisIntegration")]
