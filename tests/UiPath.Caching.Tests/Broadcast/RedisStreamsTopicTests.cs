@@ -444,8 +444,10 @@ public class RedisStreamsTopicTests(ITestContextAccessor testContextAccessor) : 
                 flags: Arg.Any<CommandFlags>())
             .Returns("1-0");
         var stalled = new TaskCompletionSource<long>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var calls = 0;
+        // Only the first doorbell stalls: a second that stalled too would have its folded ring retried after its own timeout.
         _database.PublishAsync(Arg.Any<RedisChannel>(), Arg.Any<RedisValue>(), Arg.Any<CommandFlags>())
-            .ReturnsForAnyArgs(_ => stalled.Task);
+            .ReturnsForAnyArgs(_ => Interlocked.Increment(ref calls) == 1 ? stalled.Task : Task.FromResult(1L));
         Sut.DoorbellTimeout = TimeSpan.FromMilliseconds(200);
 
         (await Sut.PublishAsync(_fixture.Create<ICacheEvent>(), testContextAccessor.Current.CancellationToken)).Should().BeTrue();
