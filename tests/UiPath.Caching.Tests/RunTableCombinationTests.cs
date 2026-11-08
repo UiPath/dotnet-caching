@@ -153,7 +153,8 @@ public class RunTableCombinationTests
         public async Task Open(bool sharedRun, CancellationToken token)
         {
             await _first.Task.WaitAsync(TimeSpan.FromSeconds(10), token);
-            var deadline = Environment.TickCount64 + 300;
+            // Without a shared run, a caller that starts after a sibling wrote the entry would hit it instead of generating.
+            var deadline = Environment.TickCount64 + 10_000;
             while (Generators < (sharedRun ? 1 : callers) && Environment.TickCount64 < deadline)
             {
                 await Task.Delay(10, token);
