@@ -1040,7 +1040,7 @@ public class RedisCacheTests(ITestContextAccessor testContextAccessor) : IAsyncL
     {
         _version = new(7, 0);
         var expectedValue = _fixture.Create<string>();
-        var expectedExpiration = DateTimeOffset.UtcNow.AddMinutes(15);
+        var expectedExpiration = _now.AddMinutes(15);
         _database.ScriptEvaluateReadOnlyAsync(Arg.Any<string>(), Arg.Any<RedisKey[]?>(), Arg.Any<RedisValue[]?>(), Arg.Any<CommandFlags>())
             .ThrowsAsync(new RedisServerException(RedisErrorKind.None, CommandFlags.None, "NOPERM this user has no permissions to run the 'eval_ro' command"));
         _database.StringGetAsync(_redisKey, CommandFlags.PreferMaster)
@@ -1053,7 +1053,7 @@ public class RedisCacheTests(ITestContextAccessor testContextAccessor) : IAsyncL
 
         first.Value.Should().Be(expectedValue);
         second.Value.Should().Be(expectedValue);
-        first.Expiration.Should().BeCloseTo(expectedExpiration, TimeSpan.FromSeconds(1));
+        first.Expiration.Should().Be(expectedExpiration);
         await _database.Received(1).ScriptEvaluateReadOnlyAsync(Arg.Any<string>(), Arg.Any<RedisKey[]?>(), Arg.Any<RedisValue[]?>(), Arg.Any<CommandFlags>());
     }
 
@@ -1339,7 +1339,7 @@ public class RedisCacheTests(ITestContextAccessor testContextAccessor) : IAsyncL
     {
         _version = new(7, 0);
         var expected = _fixture.Create<string>();
-        var expectedExpiration = DateTimeOffset.UtcNow.AddMinutes(15);
+        var expectedExpiration = _now.AddMinutes(15);
         _database.ScriptEvaluateReadOnlyAsync(Arg.Any<string>(), Arg.Any<RedisKey[]?>(), Arg.Any<RedisValue[]?>(), Arg.Any<CommandFlags>())
             .ThrowsAsync(new RedisServerException(RedisErrorKind.None, CommandFlags.None, "NOPERM this user has no permissions to run the 'eval_ro' command"));
         _database.StringGetAsync(Arg.Is<RedisKey[]>(k => k != null && k.Contains(_redisKey) && k.Contains(_redisMultiKey)), CommandFlags.PreferMaster)
@@ -1350,7 +1350,7 @@ public class RedisCacheTests(ITestContextAccessor testContextAccessor) : IAsyncL
         var entries = await Sut.GetCacheEntriesAsync<string>(new CacheKey[] { _cacheKey, _multiKey }, policy: null, token: testContextAccessor.Current.CancellationToken);
 
         entries.Should().AllSatisfy(kv => kv.Value.Value.Should().Be(expected));
-        entries[0].Value.Expiration.Should().BeCloseTo(expectedExpiration, TimeSpan.FromSeconds(1));
+        entries[0].Value.Expiration.Should().Be(expectedExpiration);
         await _database.Received(1).KeyTimeToLiveAsync(_redisKey, Arg.Any<CommandFlags>());
     }
 
