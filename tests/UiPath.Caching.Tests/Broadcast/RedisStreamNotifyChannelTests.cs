@@ -547,7 +547,7 @@ public class RedisStreamNotifyChannelTests
     [Fact]
     public async Task Until_the_subscription_is_up_the_poll_interval_applies()
     {
-        using var rig = new LiveRig(_fixture, dueTime: 1.Hours());
+        using var rig = new LiveRig(_fixture, clock: NewClock(), dueTime: 1.Hours());
 
         (await rig.PollsAsync()).Should().BeTrue();
     }
@@ -555,7 +555,7 @@ public class RedisStreamNotifyChannelTests
     [Fact]
     public async Task Once_subscribed_the_notified_interval_applies()
     {
-        using var rig = new LiveRig(_fixture);
+        using var rig = new LiveRig(_fixture, clock: NewClock());
 
         (await LiveRig.EventuallyAsync(rig.WaitsLongAsync)).Should().BeTrue();
     }
@@ -563,9 +563,10 @@ public class RedisStreamNotifyChannelTests
     [Fact]
     public async Task A_failed_connection_ends_the_long_wait_in_progress_and_the_poll_interval_applies()
     {
-        using var rig = new LiveRig(_fixture);
+        using var rig = new LiveRig(_fixture, clock: NewClock());
         (await LiveRig.EventuallyAsync(rig.WaitsLongAsync)).Should().BeTrue();
         var wait = rig.Waiter.WaitAsync(CancellationToken.None);
+        rig.Clock!.Advance(1.Seconds());
         await Task.Delay(100.Milliseconds(), TestContext.Current.CancellationToken);
         wait.IsCompleted.Should().BeFalse();
 
@@ -578,7 +579,7 @@ public class RedisStreamNotifyChannelTests
     [Fact]
     public async Task A_restored_connection_with_the_subscription_up_gets_the_notified_interval_again()
     {
-        using var rig = new LiveRig(_fixture);
+        using var rig = new LiveRig(_fixture, clock: NewClock());
         (await LiveRig.EventuallyAsync(rig.WaitsLongAsync)).Should().BeTrue();
         rig.Redis.OnConnectionFailed += Raise.Event();
         (await rig.PollsAsync()).Should().BeTrue();
@@ -594,7 +595,7 @@ public class RedisStreamNotifyChannelTests
     {
         var first = new IPEndPoint(IPAddress.Loopback, 7000);
         var second = new IPEndPoint(IPAddress.Loopback, 7001);
-        using var rig = new LiveRig(_fixture);
+        using var rig = new LiveRig(_fixture, clock: NewClock());
         (await LiveRig.EventuallyAsync(rig.WaitsLongAsync)).Should().BeTrue();
         RaiseConnectionEvent(rig.Redis, failed: true, first, ConnectionType.Subscription);
         (await rig.PollsAsync()).Should().BeTrue();
@@ -612,10 +613,10 @@ public class RedisStreamNotifyChannelTests
     public async Task A_restore_that_makes_the_doorbell_live_again_wakes_the_reader_at_once()
     {
         var endPoint = new IPEndPoint(IPAddress.Loopback, 7000);
-        using var rig = new LiveRig(_fixture);
+        using var rig = new LiveRig(_fixture, clock: NewClock());
         (await LiveRig.EventuallyAsync(rig.WaitsLongAsync)).Should().BeTrue();
         RaiseConnectionEvent(rig.Redis, failed: true, endPoint, ConnectionType.Subscription);
-        await rig.Waiter.WaitAsync(1.Milliseconds(), CancellationToken.None);
+        await rig.DrainAsync();
 
         RaiseConnectionEvent(rig.Redis, failed: false, endPoint, ConnectionType.Subscription);
 
@@ -626,7 +627,7 @@ public class RedisStreamNotifyChannelTests
     [Fact]
     public async Task A_subscription_failure_before_a_reconnect_does_not_outlive_the_resubscribe()
     {
-        using var rig = new LiveRig(_fixture);
+        using var rig = new LiveRig(_fixture, clock: NewClock());
         (await LiveRig.EventuallyAsync(rig.WaitsLongAsync)).Should().BeTrue();
         RaiseConnectionEvent(rig.Redis, failed: true, new IPEndPoint(IPAddress.Loopback, 7000), ConnectionType.Subscription);
 
@@ -643,7 +644,7 @@ public class RedisStreamNotifyChannelTests
         LiveRig? rig = null;
         var reconnecting = 0;
         var resubscribes = 0;
-        using var created = rig = new LiveRig(_fixture, subscribe: () =>
+        using var created = rig = new LiveRig(_fixture, clock: NewClock(), subscribe: () =>
         {
             // Every subscribe from the reconnect on, not a call count: a timer tick can add a subscribe before it.
             if (Volatile.Read(ref reconnecting) == 1)
@@ -670,7 +671,7 @@ public class RedisStreamNotifyChannelTests
     {
         var current = Substitute.For<IConnectionMultiplexer>();
         current.TimeoutMilliseconds.Returns(5000);
-        using var rig = new LiveRig(_fixture);
+        using var rig = new LiveRig(_fixture, clock: NewClock());
         rig.Subscriber.Multiplexer.Returns(current);
         (await LiveRig.EventuallyAsync(rig.WaitsLongAsync)).Should().BeTrue();
         rig.Redis.OnReconnected += Raise.Event();
@@ -684,7 +685,7 @@ public class RedisStreamNotifyChannelTests
     [Fact]
     public async Task A_failed_command_connection_keeps_the_notified_interval()
     {
-        using var rig = new LiveRig(_fixture);
+        using var rig = new LiveRig(_fixture, clock: NewClock());
         (await LiveRig.EventuallyAsync(rig.WaitsLongAsync)).Should().BeTrue();
 
         RaiseConnectionEvent(rig.Redis, failed: true, new IPEndPoint(IPAddress.Loopback, 7000), ConnectionType.Interactive);
@@ -698,7 +699,7 @@ public class RedisStreamNotifyChannelTests
         LiveRig? rig = null;
         var failed = 0;
         var logger = new RecordingLogger();
-        using var created = rig = new LiveRig(_fixture, logger: logger, subscribe: () =>
+        using var created = rig = new LiveRig(_fixture, clock: NewClock(), logger: logger, subscribe: () =>
         {
             if (Interlocked.Exchange(ref failed, 1) == 0)
             {
@@ -719,7 +720,7 @@ public class RedisStreamNotifyChannelTests
     {
         var resubscribe = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var calls = 0;
-        using var rig = new LiveRig(_fixture, subscribe: () => Interlocked.Increment(ref calls) == 1 ? Task.CompletedTask : resubscribe.Task);
+        using var rig = new LiveRig(_fixture, clock: NewClock(), subscribe: () => Interlocked.Increment(ref calls) == 1 ? Task.CompletedTask : resubscribe.Task);
         (await LiveRig.EventuallyAsync(rig.WaitsLongAsync)).Should().BeTrue();
 
         rig.Redis.OnReconnected += Raise.Event();
@@ -732,7 +733,7 @@ public class RedisStreamNotifyChannelTests
     [Fact]
     public async Task A_forced_reconnect_ends_the_notified_interval_before_the_resubscribe_is_due()
     {
-        using var rig = new LiveRig(_fixture, dueTime: 1500.Milliseconds());
+        using var rig = new LiveRig(_fixture, clock: NewClock(), dueTime: 1500.Milliseconds());
         (await LiveRig.EventuallyAsync(rig.WaitsLongAsync)).Should().BeTrue();
 
         rig.Redis.OnReconnected += Raise.Event();
@@ -781,7 +782,7 @@ public class RedisStreamNotifyChannelTests
         var firstStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var never = new TaskCompletionSource();
         var calls = 0;
-        using var rig = new LiveRig(_fixture, dueTime: 1500.Milliseconds(), subscribe: () =>
+        using var rig = new LiveRig(_fixture, clock: NewClock(), dueTime: 1500.Milliseconds(), subscribe: () =>
         {
             if (Interlocked.Increment(ref calls) == 1)
             {
@@ -802,7 +803,7 @@ public class RedisStreamNotifyChannelTests
     [Fact]
     public async Task A_subscription_the_server_refuses_never_gets_the_notified_interval()
     {
-        using var rig = new LiveRig(_fixture, subscribe: () => throw new RedisServerException(RedisErrorKind.None, CommandFlags.None, "NOPERM No permissions to access a channel"));
+        using var rig = new LiveRig(_fixture, clock: NewClock(), subscribe: () => throw new RedisServerException(RedisErrorKind.None, CommandFlags.None, "NOPERM No permissions to access a channel"));
         await Task.Delay(300.Milliseconds(), TestContext.Current.CancellationToken);
 
         (await rig.PollsAsync()).Should().BeTrue();
@@ -811,7 +812,7 @@ public class RedisStreamNotifyChannelTests
     [Fact]
     public async Task A_failed_subscribe_keeps_the_poll_interval()
     {
-        using var rig = new LiveRig(_fixture, subscribe: () => throw new RedisConnectionException(ConnectionFailureType.SocketFailure, CommandFlags.None, "boom"));
+        using var rig = new LiveRig(_fixture, clock: NewClock(), subscribe: () => throw new RedisConnectionException(ConnectionFailureType.SocketFailure, CommandFlags.None, "boom"));
         await Task.Delay(300.Milliseconds(), TestContext.Current.CancellationToken);
 
         (await rig.PollsAsync()).Should().BeTrue();
@@ -820,7 +821,7 @@ public class RedisStreamNotifyChannelTests
     [Fact]
     public async Task Disposing_the_channel_ends_the_notified_interval()
     {
-        using var rig = new LiveRig(_fixture);
+        using var rig = new LiveRig(_fixture, clock: NewClock());
         (await LiveRig.EventuallyAsync(rig.WaitsLongAsync)).Should().BeTrue();
 
         rig.Bell.Dispose();
@@ -847,9 +848,11 @@ public class RedisStreamNotifyChannelTests
     }
 
     /// <summary>A waiter with a 50 ms poll interval and a 30 s notified one, so a probe tells which applies.</summary>
+    private static ManualTimeProvider NewClock() => new(DateTimeOffset.UnixEpoch);
+
     private sealed class LiveRig : IDisposable
     {
-        public LiveRig(IFixture fixture, TimeSpan? dueTime = null, Func<Task>? subscribe = null, ILogger? logger = null)
+        public LiveRig(IFixture fixture, TimeSpan? dueTime = null, Func<Task>? subscribe = null, ILogger? logger = null, TimeProvider? clock = null)
         {
             Channel = RedisChannel.Literal("notify:test");
             Redis = Substitute.For<IRedisConnector>();
@@ -863,7 +866,8 @@ public class RedisStreamNotifyChannelTests
                 Subscriber.SubscribeAsync(Channel, Arg.Any<Action<RedisChannel, RedisValue>>()).Returns(_ => subscribe());
             }
 
-            Waiter = new SignalingFetchWaiter(50.Milliseconds(), 30.Seconds());
+            Clock = clock as ManualTimeProvider;
+            Waiter = new SignalingFetchWaiter(50.Milliseconds(), 30.Seconds(), clock);
             Bell = new RedisStreamNotifyChannel(Channel, Redis, logger ?? fixture.Create<ILogger>(), Waiter, 50.Milliseconds(), dueTime ?? 10.Milliseconds(), "self");
         }
 
@@ -874,6 +878,9 @@ public class RedisStreamNotifyChannelTests
         public ISubscriber Subscriber { get; }
 
         public SignalingFetchWaiter Waiter { get; }
+
+        /// <summary>The manual clock the waiter runs on; the timing helpers need the rig built with one.</summary>
+        public ManualTimeProvider? Clock { get; }
 
         public RedisStreamNotifyChannel Bell { get; }
 
@@ -891,22 +898,32 @@ public class RedisStreamNotifyChannelTests
             return false;
         }
 
-        /// <summary>True when a wait outlasts 400 ms, so the notified interval is in force; a pending wake is drained first. A busy machine can stretch a poll past 400 ms, so a test that expects the poll interval asks <see cref="PollsAsync"/>.</summary>
+        /// <summary>Consumes a pending wake, if any, by running a 1 ms wait past its timeout.</summary>
+        public async Task DrainAsync()
+        {
+            var drain = Waiter.WaitAsync(1.Milliseconds(), CancellationToken.None);
+            Clock!.Advance(1.Milliseconds());
+            await drain.WaitAsync(10.Seconds(), TestContext.Current.CancellationToken);
+        }
+
+        /// <summary>True when a wait is still pending after the clock moves past the poll interval but not the notified one, so the notified interval is in force; a pending wake is drained first. Only a starved test thread can make a poll look long, and a test that expects the poll interval asks <see cref="PollsAsync"/>.</summary>
         public async Task<bool> WaitsLongAsync()
         {
-            await Waiter.WaitAsync(1.Milliseconds(), CancellationToken.None);
+            await DrainAsync();
             var wait = Waiter.WaitAsync(CancellationToken.None);
-            var long_ = await Task.WhenAny(wait, Task.Delay(400.Milliseconds(), TestContext.Current.CancellationToken)) != wait;
+            Clock!.Advance(1.Seconds());
+            var long_ = await Task.WhenAny(wait, Task.Delay(100.Milliseconds(), TestContext.Current.CancellationToken)) != wait;
             Waiter.Signal();
             await wait;
             return long_;
         }
 
-        /// <summary>True when a wait ends on its own well inside the notified interval, so the poll interval is in force; a pending wake is drained first. Its bound is far from both intervals, so a busy machine cannot make a poll look long.</summary>
+        /// <summary>True when a wait ends once the clock moves past the poll interval but not the notified one, so the poll interval is in force; a pending wake is drained first.</summary>
         public async Task<bool> PollsAsync()
         {
-            await Waiter.WaitAsync(1.Milliseconds(), CancellationToken.None);
+            await DrainAsync();
             var wait = Waiter.WaitAsync(CancellationToken.None);
+            Clock!.Advance(1.Seconds());
             var polled = await Task.WhenAny(wait, Task.Delay(10.Seconds(), TestContext.Current.CancellationToken)) == wait;
             Waiter.Signal();
             await wait;
