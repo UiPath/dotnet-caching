@@ -88,6 +88,33 @@ public class MultilayerCacheManyTests
     }
 
     [Fact]
+    public async Task An_array_remove_starts_every_key_invalidation_before_the_first_completes()
+    {
+        using var h = new Harness(chunk: 4);
+        var gate = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+        h.OnPublish = _ => new ValueTask<bool>(gate.Task);
+
+        var pending = h.Cache.RemoveAsync<string>(Keys(3), Ct).AsTask();
+
+        await h.UntilAsync(() => h.Count("event:") == 3);
+        pending.IsCompleted.Should().BeFalse();
+        gate.SetResult(true);
+        (await pending).Should().BeTrue();
+    }
+
+    [Fact]
+    public async Task An_array_remove_still_announces_the_other_keys_when_one_invalidation_throws()
+    {
+        using var h = new Harness(chunk: 4);
+        h.OnPublish = e => e.Key == "k1" ? throw new InvalidOperationException("stream") : new ValueTask<bool>(true);
+
+        var removed = await h.Cache.RemoveAsync<string>(Keys(3), Ct);
+
+        removed.Should().BeFalse();
+        h.Log.Where(l => l.StartsWith("event:", StringComparison.Ordinal)).Should().BeEquivalentTo("event:CacheRemoved:k0", "event:CacheRemoved:k1", "event:CacheRemoved:k2");
+    }
+
+    [Fact]
     public async Task RemoveMany_of_nothing_does_nothing()
     {
         using var h = new Harness(chunk: 4);
@@ -672,6 +699,9 @@ public class MultilayerCacheManyTests
                     Add($"remove:{key}");
                     return OnRemove!(key);
                 });
+            ValueTaskStubs.Returns(
+                inner.RemoveAsync<string>(Arg.Any<CacheKey[]>(), Arg.Any<CancellationToken>()),
+                new ValueTask<bool>(true));
             ValueTaskStubs.Returns(
                 inner.GetCacheEntryAsync<string>(Arg.Any<CacheKey>(), Arg.Any<CachePolicy?>(), Arg.Any<CancellationToken>()),
                 new ValueTask<ICacheEntry<string?>>(new TestCacheEntry<string?> { Value = null, Expiration = DateTimeOffset.MinValue }));

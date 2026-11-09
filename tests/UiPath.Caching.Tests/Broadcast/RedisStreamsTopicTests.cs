@@ -4,6 +4,7 @@ using Microsoft.Extensions.Logging;
 using NSubstitute.ExceptionExtensions;
 using NSubstitute.Extensions;
 using StackExchange.Redis;
+using StackExchange.Redis.KeyspaceIsolation;
 using UiPath.Caching.Policies;
 
 namespace UiPath.Caching.Tests.Broadcast;
@@ -839,6 +840,193 @@ public class RedisStreamsTopicTests(ITestContextAccessor testContextAccessor) : 
         return ValueTask.CompletedTask;
     }
 
+    /// <summary>The doorbell on the stream's own channel, which a script may publish to.</summary>
+    [Fact]
+    public async Task With_the_default_channel_the_entry_carries_its_doorbell_in_one_scripted_command()
+    {
+        ArrangeRingInAdd();
+        _database.ScriptEvaluateAsync(Arg.Any<string>(), Arg.Any<RedisKey[]>(), Arg.Any<RedisValue[]>(), Arg.Any<CommandFlags>())
+            .Returns(Scripted("1-0"));
+
+        (await Sut.PublishAsync(_fixture.Create<ICacheEvent>(), testContextAccessor.Current.CancellationToken)).Should().BeTrue();
+        (await Sut.PublishAsync(_fixture.Create<ICacheEvent>(), testContextAccessor.Current.CancellationToken)).Should().BeTrue();
+
+        await _database.Received(2).ScriptEvaluateAsync(
+            Arg.Is<string>(script => script.Contains("PUBLISH")),
+            Arg.Any<RedisKey[]>(),
+            Arg.Is<RedisValue[]>(values => values[2] == (RedisValue)(_cacheOptions.SourceUri ?? CacheOptions.MachineUri).ToString().ToLowerInvariant()),
+            CommandFlags.DemandMaster);
+        await _database.DidNotReceiveWithAnyArgs().PublishAsync(default, default, default);
+        _database.ReceivedCalls().Count(call => call.GetMethodInfo().Name == nameof(IDatabase.StreamAddAsync)).Should().Be(0);
+    }
+
+    [Fact]
+    public async Task An_entry_added_while_a_scripted_doorbell_is_in_flight_folds_into_one_doorbell_after_it()
+    {
+        ArrangeRingInAdd();
+        var scripted = new TaskCompletionSource<RedisResult>(TaskCreationOptions.RunContinuationsAsynchronously);
+        _database.ScriptEvaluateAsync(Arg.Any<string>(), Arg.Any<RedisKey[]>(), Arg.Any<RedisValue[]>(), Arg.Any<CommandFlags>()).Returns(scripted.Task);
+        _database.StreamAddAsync(
+                key: Arg.Any<RedisKey>(),
+                streamPairs: Arg.Any<NameValueEntry[]>(),
+                messageId: Arg.Any<RedisValue?>(),
+                maxLength: Arg.Any<long?>(),
+                useApproximateMaxLength: Arg.Any<bool>(),
+                limit: Arg.Any<long?>(),
+                trimMode: Arg.Any<StreamTrimMode>(),
+                flags: Arg.Any<CommandFlags>())
+            .Returns("2-0");
+        var token = testContextAccessor.Current.CancellationToken;
+
+        var first = Sut.PublishAsync(_fixture.Create<ICacheEvent>(), token);
+        (await Sut.PublishAsync(_fixture.Create<ICacheEvent>(), token)).Should().BeTrue();
+        (await Sut.PublishAsync(_fixture.Create<ICacheEvent>(), token)).Should().BeTrue();
+        await _database.DidNotReceiveWithAnyArgs().PublishAsync(default, default, default);
+
+        scripted.SetResult(Scripted("1-0"));
+        (await first).Should().BeTrue();
+
+        await DoorbellCallsSettledAsync(Doorbells, 1, token);
+        Doorbells().Should().Be(1, "the two folded rings get one doorbell after the scripted one");
+        await _database.Received(1).ScriptEvaluateAsync(Arg.Any<string>(), Arg.Any<RedisKey[]>(), Arg.Any<RedisValue[]>(), Arg.Any<CommandFlags>());
+    }
+
+    [Fact]
+    public async Task A_refused_script_falls_back_to_the_xadd_and_a_doorbell_of_its_own_for_good()
+    {
+        ArrangeRingInAdd();
+        _database.ScriptEvaluateAsync(Arg.Any<string>(), Arg.Any<RedisKey[]>(), Arg.Any<RedisValue[]>(), Arg.Any<CommandFlags>())
+            .ThrowsAsync(new RedisServerException(RedisErrorKind.None, CommandFlags.None, "NOPERM this user has no permissions to run the 'eval' command"));
+        var token = testContextAccessor.Current.CancellationToken;
+
+        (await Sut.PublishAsync(_fixture.Create<ICacheEvent>(), token)).Should().BeTrue();
+        await DoorbellCallsSettledAsync(Doorbells, 1, token);
+        Doorbells().Should().Be(1);
+        (await Sut.PublishAsync(_fixture.Create<ICacheEvent>(), token)).Should().BeTrue();
+        await DoorbellCallsSettledAsync(Doorbells, 2, token);
+        Doorbells().Should().Be(2);
+
+        await _database.Received(1).ScriptEvaluateAsync(Arg.Any<string>(), Arg.Any<RedisKey[]>(), Arg.Any<RedisValue[]>(), Arg.Any<CommandFlags>());
+    }
+
+    [Fact]
+    public async Task A_script_that_adds_but_cannot_publish_keeps_its_one_entry_and_rings_with_a_doorbell_of_its_own()
+    {
+        // The XADD in the script stays when its PUBLISH is refused (scripts do not roll back), so the entry must not be added again.
+        ArrangeRingInAdd();
+        _database.ScriptEvaluateAsync(Arg.Any<string>(), Arg.Any<RedisKey[]>(), Arg.Any<RedisValue[]>(), Arg.Any<CommandFlags>())
+            .Returns(Scripted("1-0", rung: false, error: "NOPERM No permissions to access a channel"));
+        var token = testContextAccessor.Current.CancellationToken;
+
+        (await Sut.PublishAsync(_fixture.Create<ICacheEvent>(), token)).Should().BeTrue();
+        await DoorbellCallsSettledAsync(Doorbells, 1, token);
+
+        Doorbells().Should().Be(1);
+        _database.ReceivedCalls().Count(call => call.GetMethodInfo().Name == nameof(IDatabase.StreamAddAsync)).Should().Be(0);
+        Sut.RingInAdd.Should().BeFalse("a script that may not publish rings with a command of its own from now on");
+    }
+
+    [Fact]
+    public async Task A_script_the_client_refuses_falls_back_to_the_xadd_and_a_doorbell_of_its_own()
+    {
+        // A command map that disables EVAL fails it in the client, before anything is sent.
+        ArrangeRingInAdd();
+        _database.ScriptEvaluateAsync(Arg.Any<string>(), Arg.Any<RedisKey[]>(), Arg.Any<RedisValue[]>(), Arg.Any<CommandFlags>())
+            .ThrowsAsync(new RedisCommandException("This operation has been disabled in the command-map and cannot be used: EVAL"));
+        var token = testContextAccessor.Current.CancellationToken;
+
+        (await Sut.PublishAsync(_fixture.Create<ICacheEvent>(), token)).Should().BeTrue();
+        await DoorbellCallsSettledAsync(Doorbells, 1, token);
+
+        Doorbells().Should().Be(1);
+        _database.ReceivedCalls().Count(call => call.GetMethodInfo().Name == nameof(IDatabase.StreamAddAsync)).Should().Be(1);
+        Sut.RingInAdd.Should().BeFalse();
+    }
+
+    [Theory]
+    [InlineData("BUSY Redis is busy running a script. You can only call SCRIPT KILL or SHUTDOWN NOSAVE.")]
+    [InlineData("LOADING Redis is loading the dataset in memory")]
+    [InlineData("ERR Error running script (call to f_1a2b): @user_script:3: @user_script: 3: -READONLY You can't write against a read only replica.")]
+    public async Task A_script_that_fails_for_a_passing_reason_keeps_scripts_on_and_sends_no_doorbell(string error)
+    {
+        ArrangeRingInAdd();
+        _database.ScriptEvaluateAsync(Arg.Any<string>(), Arg.Any<RedisKey[]>(), Arg.Any<RedisValue[]>(), Arg.Any<CommandFlags>())
+            .ThrowsAsync(new RedisServerException(RedisErrorKind.None, CommandFlags.None, error));
+        var token = testContextAccessor.Current.CancellationToken;
+
+        (await Sut.PublishAsync(_fixture.Create<ICacheEvent>(), token)).Should().BeFalse();
+        await DoorbellCallsSettledAsync(Doorbells, 0, token);
+
+        Doorbells().Should().Be(0, "no entry was added, so there is nothing to ring for");
+        Sut.RingInAdd.Should().BeTrue();
+    }
+
+    [Fact]
+    public async Task Rings_folded_behind_a_scripted_doorbell_keep_their_retries_when_the_doorbell_after_it_fails()
+    {
+        ArrangeRingInAdd();
+        var scripted = new TaskCompletionSource<RedisResult>(TaskCreationOptions.RunContinuationsAsynchronously);
+        _database.ScriptEvaluateAsync(Arg.Any<string>(), Arg.Any<RedisKey[]>(), Arg.Any<RedisValue[]>(), Arg.Any<CommandFlags>()).Returns(scripted.Task);
+        var calls = 0;
+        _database.PublishAsync(default, default, default)
+            .ReturnsForAnyArgs(_ => Interlocked.Increment(ref calls) == 1 ? Task.FromException<long>(new RedisException("down")) : Task.FromResult(1L));
+        var token = testContextAccessor.Current.CancellationToken;
+
+        var first = Sut.PublishAsync(_fixture.Create<ICacheEvent>(), token);
+        (await Sut.PublishAsync(_fixture.Create<ICacheEvent>(), token)).Should().BeTrue();
+        scripted.SetResult(Scripted("1-0"));
+        (await first).Should().BeTrue();
+
+        await DoorbellCallsSettledAsync(() => Volatile.Read(ref calls), 2, token);
+        Volatile.Read(ref calls).Should().Be(2, "the doorbell for the folded ring is retried once it fails");
+    }
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task A_connection_that_prefixes_keys_or_channels_rings_with_a_doorbell_of_its_own(bool keyPrefix)
+    {
+        // The script's channel is an argument, which neither a key prefix nor a channel prefix reaches; the PUBLISH gets both.
+        ArrangeRingInAdd();
+        if (keyPrefix)
+        {
+            _redis.Database.Returns(_database.WithKeyPrefix("pfx:"));
+        }
+        else
+        {
+            _database.Multiplexer.Configuration.Returns("localhost:6379,channelPrefix=app:");
+        }
+
+        var token = testContextAccessor.Current.CancellationToken;
+
+        (await Sut.PublishAsync(_fixture.Create<ICacheEvent>(), token)).Should().BeTrue();
+        await DoorbellCallsSettledAsync(Doorbells, 1, token);
+
+        await _database.DidNotReceiveWithAnyArgs().ScriptEvaluateAsync(default(string)!, default, default, default);
+        _database.ReceivedCalls().Count(call => call.GetMethodInfo().Name == nameof(IDatabase.StreamAddAsync)).Should().Be(1);
+        Doorbells().Should().Be(1);
+    }
+
+    [Fact]
+    public async Task A_sharded_channel_keeps_the_xadd_and_a_doorbell_of_its_own()
+    {
+        ArrangeRingInAdd();
+        _redisStreamsTopicOptions.NotifyShardedPubSub = true;
+        _sut = null;
+        var token = testContextAccessor.Current.CancellationToken;
+
+        (await Sut.PublishAsync(_fixture.Create<ICacheEvent>(), token)).Should().BeTrue();
+        await DoorbellCallsSettledAsync(Doorbells, 1, token);
+
+        await _database.DidNotReceiveWithAnyArgs().ScriptEvaluateAsync(default(string)!, default, default, default);
+        Doorbells().Should().Be(1);
+    }
+
+    private static RedisResult Scripted(string id, bool rung = true, string? error = null) =>
+        RedisResult.Create(error is null
+            ? [RedisResult.Create((RedisValue)id), RedisResult.Create((RedisValue)(rung ? 1 : 0))]
+            : [RedisResult.Create((RedisValue)id), RedisResult.Create((RedisValue)(rung ? 1 : 0)), RedisResult.Create((RedisValue)error)]);
+
     /// <summary>Waits for the expected number of doorbells rather than a fixed time, then a little longer to show no further one follows.</summary>
     private static async Task DoorbellCallsSettledAsync(Func<int> calls, int expected, CancellationToken token)
     {
@@ -850,6 +1038,8 @@ public class RedisStreamsTopicTests(ITestContextAccessor testContextAccessor) : 
 
         await Task.Delay(700, token);
     }
+
+    private int Doorbells() => _database.ReceivedCalls().Count(call => call.GetMethodInfo().Name == nameof(IDatabase.PublishAsync));
 
     /// <summary>Answers the XADD with an id and captures the fields it was given.</summary>
     private StrongBox<NameValueEntry[]?> ArrangeAddCapture()
@@ -877,6 +1067,14 @@ public class RedisStreamsTopicTests(ITestContextAccessor testContextAccessor) : 
         {
             await Task.Delay(5, testContextAccessor.Current.CancellationToken);
         }
+    }
+
+    private void ArrangeRingInAdd()
+    {
+        ArrangeDoorbell();
+        _redisStreamsTopicOptions.NotifyChannelStrategy = null;
+        _redisStreamsTopicOptions.NotifyShardedPubSub = false;
+        Primaries(ServerType.Cluster);
     }
 
     // The servers are made before GetPrimaries is called: configuring them in its Returns argument would steal the last call.
