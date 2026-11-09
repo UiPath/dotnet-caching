@@ -26,6 +26,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 - **No false stream loss on Redis 6 after a lost group create.** A create at the head of an empty stream whose reply was lost may still make the group. When the next
   read found that group rather than a retry, a check before the read took the stream's first entry for a trim and cleared the topic's local tier. The reader now records the empty
   head when the create fails, as it already did for a create at `0-0`.
+- **A queued subscribe tick no longer retries a disposed connector.** A disposed connector is no longer retried by a subscribe tick already queued on the thread pool.
 
 ### Documentation
 
