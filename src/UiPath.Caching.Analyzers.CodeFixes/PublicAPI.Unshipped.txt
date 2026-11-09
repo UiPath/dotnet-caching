@@ -1,1 +1,6 @@
 #nullable enable
+override UiPath.Caching.Analyzers.InterpolatedKeyCodeFixProvider.FixableDiagnosticIds.get -> System.Collections.Immutable.ImmutableArray<string!>
+override UiPath.Caching.Analyzers.InterpolatedKeyCodeFixProvider.GetFixAllProvider() -> Microsoft.CodeAnalysis.CodeFixes.FixAllProvider!
+override UiPath.Caching.Analyzers.InterpolatedKeyCodeFixProvider.RegisterCodeFixesAsync(Microsoft.CodeAnalysis.CodeFixes.CodeFixContext context) -> System.Threading.Tasks.Task!
+UiPath.Caching.Analyzers.InterpolatedKeyCodeFixProvider
+UiPath.Caching.Analyzers.InterpolatedKeyCodeFixProvider.InterpolatedKeyCodeFixProvider() -> void

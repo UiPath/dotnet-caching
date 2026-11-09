@@ -225,7 +225,7 @@ ambiguous against the closure overload.
   var token = await _cache.GetOrAddAsync($"{tenantId}:{machineKey}", this, machineKey, static (self, key, c) => self.FetchAsync(key, c), ct);
   ```
 
-  A longer key rents its buffer from `ArrayPool`. `$"..."` on a variable typed as a concrete class (`Cache<T>`, `HashCache<T>`, `MultilayerCache`) goes through `string` and allocates, so type the variable as the interface. Under C# 12 or older a constant interpolated key (`$"fixed"`) is ambiguous (CS0121); pass a plain string. `SetAsync` takes interpolated keys too; a write has to build the
+  A longer key rents its buffer from `ArrayPool`. `$"..."` on a variable typed as a concrete class (`Cache<T>`, `HashCache<T>`, `MultilayerCache`) goes through `string` and allocates, so type the variable as the interface. Under C# 12 or older a constant interpolated key (`$"fixed"`) is ambiguous (CS0121); pass a plain string. Visual Studio offers this as a fix on the error. `SetAsync` takes interpolated keys too; a write has to build the
   string the entry is stored under, so it saves your own key string, not the allocation.
 
 ## What runs, and what a test sees
