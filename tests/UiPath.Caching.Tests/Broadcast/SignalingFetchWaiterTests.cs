@@ -21,12 +21,15 @@ public class SignalingFetchWaiterTests
     [Fact]
     public async Task WaitAsync_returns_quickly_when_signaled()
     {
-        using var sut = new SignalingFetchWaiter(30.Seconds());
+        // The clock never moves, so only the signal can end the wait.
+        using var sut = new SignalingFetchWaiter(30.Seconds(), timeProvider: NewClock());
 
-        var task = sut.WaitAsync(CancellationToken.None);
+        var wait = sut.WaitAsync(CancellationToken.None);
+        wait.IsCompleted.Should().BeFalse();
         sut.Signal();
 
-        await task.WaitAsync(10.Seconds(), TestContext.Current.CancellationToken);
+        await wait.WaitAsync(10.Seconds(), TestContext.Current.CancellationToken);
+        wait.IsCompletedSuccessfully.Should().BeTrue();
     }
 
     [Fact]
