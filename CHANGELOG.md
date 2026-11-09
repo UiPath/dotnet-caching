@@ -6,6 +6,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 
 ## [Unreleased]
 
+### Added
+
+- **A code fix for the two 3.1 interpolated-key compile errors.** Under C# 12 or older, a constant interpolated key (`$"fixed"`, `$"{Const}:x"`) is ambiguous
+  (CS0121): the fix makes it a plain string (`"fixed"`, `Const + ":x"`). In an expression tree, such as a Moq `Setup` lambda, an interpolated key does not compile (CS8952):
+  the fix wraps it in `FormattableString.Invariant($"user:{id}")`, which keeps the key text. Fix All applies either to a document, project or solution. It ships in
+  `UiPath.Caching.Abstractions` with the UIPCACHE001 fix.
+
 ### Fixed
 
 - **Interpolated keys format with the invariant culture.** `CacheKeyHandler` formatted holes with the current culture, so nodes with different cultures built different keys for one value and missed each other's invalidations; a negative number under a culture whose minus sign is U+2212 was one case. Keys whose holes are culture-sensitive (`DateTime`, `DateTimeOffset`, `decimal`, `double`, and negative numbers under some cultures) change once on upgrade, and a 3.1.0 node and a 3.1.1 node build different keys for them until every node runs 3.1.1. A `string` key built with `$"..."` for an entry also read through an interpolated key must now use `FormattableString.Invariant` or `string.Create(CultureInfo.InvariantCulture, ...)` to keep matching.
