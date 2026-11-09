@@ -759,10 +759,22 @@ public class RedisStreamsTopicTests(ITestContextAccessor testContextAccessor) : 
         var lose = false;
         var lost = 0;
         var reads = 0;
+        // Only reads of new entries count: the drain of pending entries at start does not make the group known, so a loss on
+        // the read after it is no loss of this subscriber's. The loss is decided before the count, so a read the test sees counted answers.
         _database.StreamReadGroupAsync((RedisKey)"stream", "group", "consumer", ">", 1)
-            .ReturnsForAnyArgs(_ => Interlocked.Increment(ref reads) > 0 && Volatile.Read(ref lose) && Interlocked.Increment(ref lost) == 1
-                ? Task.FromException<StreamEntry[]>(new RedisException("NOGROUP No such key or consumer group"))
-                : Task.FromResult(Array.Empty<StreamEntry>()));
+            .ReturnsForAnyArgs(call =>
+            {
+                if (call.ArgAt<RedisValue?>(3) != StreamConstants.UndeliveredMessages)
+                {
+                    return Task.FromResult(Array.Empty<StreamEntry>());
+                }
+
+                var failing = Volatile.Read(ref lose);
+                Interlocked.Increment(ref reads);
+                return failing && Interlocked.Increment(ref lost) == 1
+                    ? Task.FromException<StreamEntry[]>(new RedisException("NOGROUP No such key or consumer group"))
+                    : Task.FromResult(Array.Empty<StreamEntry>());
+            });
         _redisStreamsTopicOptions.PollInterval = TimeSpan.FromMilliseconds(20);
         _redisStreamsTopicOptions.NotifyEnabled = false;
         using var joining = new ManualResetEventSlim();

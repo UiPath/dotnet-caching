@@ -43,6 +43,9 @@ public class CacheKeyHandlerTests
             Check(Handle($"{long1}:{long1}:{amount}"), string.Create(CultureInfo.InvariantCulture, $"{long1}:{long1}:{amount}"));
             Check(Handle($"a:{id,8}|{count,-8}|{amount,20:F2}|{none,4}|{long1.AsSpan(0, 2),5}"), string.Create(CultureInfo.InvariantCulture, $"a:{id,8}|{count,-8}|{amount,20:F2}|{none,4}|{long1.AsSpan(0, 2),5}"));
             Check(Handle($"a:{count,8}|{count,-8}|{amount,10:F2}"), string.Create(CultureInfo.InvariantCulture, $"a:{count,8}|{count,-8}|{amount,10:F2}"));
+            // A formatted value longer than the stack buffer: TryFormat fails, and the text grows a rented one.
+            Check(Handle($"a:{amount:F400}"), string.Create(CultureInfo.InvariantCulture, $"a:{amount:F400}"));
+            Check(Handle($"a:{amount,-300:N2}|{dto}"), string.Create(CultureInfo.InvariantCulture, $"a:{amount,-300:N2}|{dto}"));
             Handle($"a:{count}").Should().Be("a:-42");
         }
         finally
