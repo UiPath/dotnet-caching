@@ -62,7 +62,8 @@ public sealed class RedisStreamNotifyIntegrationTests(RedisContainerFixture fixt
         // StackExchange.Redis records a script call as EVAL, whichever of EVALSHA and EVAL it sent.
         // Before Redis 7.0 the script is not used: the read checks for a gap with an XINFO STREAM sent with the XREADGROUP, against the
         // position it knows; the XINFO GROUPS that asks the server for it ran on the read that went live, within the poll interval.
-        string[] expected = fixture.ServerVersion.Major < 7 ? ["XADD", "PUBLISH", "XINFO", "XREADGROUP", "XACK"] : ["XADD", "PUBLISH", "EVAL", "XACK"];
+        // The publisher's XADD and PUBLISH are one script, so they show as one EVAL too.
+        string[] expected = fixture.ServerVersion.Major < 7 ? ["EVAL", "XINFO", "XREADGROUP", "XACK"] : ["EVAL", "EVAL", "XACK"];
         _profile.FinishProfiling().Select(c => c.Command).Should().BeEquivalentTo(
             expected,
             "the publisher adds and rings and does not wake for its own ring; the woken node checks for a gap and reads, and acknowledges; on Redis 7 or later the check and read are one script, below 7 one XINFO STREAM goes with a plain XREADGROUP, and a check awaited apart would show as a second XINFO call");
@@ -75,6 +76,8 @@ public sealed class RedisStreamNotifyIntegrationTests(RedisContainerFixture fixt
         Assert.SkipWhen(_connector!.GetPrimaries().Any(p => p.ServerType != ServerType.Standalone), "on a cluster or behind a proxy the doorbell waits for the XADD reply");
         var writes = new HandedBackWrites();
         var (a, _) = Topic("urn:a", FarPoll, pipelines: writes);
+        // The doorbell as a command of its own, as a sharded or custom channel sends it.
+        a.RingInAdd = false;
         var (b, received) = Topic("urn:b", FarPoll);
         await SettledAsync();
         (await EventuallyAsync(() => Task.FromResult(a.NotifyLive && b.NotifyLive))).Should().BeTrue("both doorbell subscriptions go live");

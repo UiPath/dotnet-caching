@@ -1928,22 +1928,10 @@ internal sealed partial class MultilayerCache : MultilayerCacheBase, ICache, ISp
                 static s => s.Cache._innerCache.RemoveAsync<T>(Array.ConvertAll(s.Options, static o => o.CacheKey), s.Token),
                 token).ConfigureAwait(false);
 
-            // Each key's invalidation is sent on its own, so one that fails does not keep the others from the other nodes.
-            var published = true;
-            foreach (var option in options)
-            {
-                try
-                {
-                    published &= await _eventPublisher.CacheRemovedAsync(option, typeof(T)).ConfigureAwait(false);
-                }
-                catch (Exception ex)
-                {
-                    LogInnerCacheRemoveError(ex, Logged(option, typeof(T)));
-                    published = false;
-                }
-            }
-
-            return removed && published;
+            // Each key's invalidation is sent on its own, so one that fails does not keep the others from the other nodes. Started
+            // together, as RemoveManyAsync does: one round trip for the batch, and their doorbells fold into one.
+            var published = await AllAsync(options, options.Length, this, static (c, o) => c._eventPublisher.CacheRemovedAsync(o, typeof(T)), static (c, o, ex) => c.LogInnerCacheRemoveError(ex, c.Logged(o, typeof(T)))).ConfigureAwait(false);
+            return removed && Array.TrueForAll(published, static p => p);
         }
         catch (OperationCanceledException) when (token.IsCancellationRequested)
         {

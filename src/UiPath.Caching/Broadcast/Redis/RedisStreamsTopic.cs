@@ -16,6 +16,24 @@ public sealed partial class RedisStreamsTopic<T> : ITopic<T>
     private const int RingAfterReply = 1;
     private const int RingBehindAdd = 2;
 
+    // The entry and its doorbell in one command: the PUBLISH runs on the stream's node right after the XADD, so a node it wakes
+    // finds the entry, and the doorbell costs no command, reply or continuation of its own. ARGV: max length ('' for none),
+    // channel, publisher, then the entry's fields and values. Returns the id, 1 when the PUBLISH ran or 0 and its error: a script
+    // does not roll back, so a refused PUBLISH is caught rather than failing the script with the entry already added.
+    private const string AddAndRingScript = """
+        local id
+        if ARGV[1] == '' then
+            id = redis.call('XADD', KEYS[1], '*', unpack(ARGV, 4))
+        else
+            id = redis.call('XADD', KEYS[1], 'MAXLEN', '~', ARGV[1], '*', unpack(ARGV, 4))
+        end
+        local rung = redis.pcall('PUBLISH', ARGV[2], ARGV[3])
+        if type(rung) == 'table' and rung.err then
+            return {id, 0, rung.err}
+        end
+        return {id, 1}
+        """;
+
     private readonly IRedisStreamKeyStrategy _redisStreamKeyStrategy;
     private readonly RedisStreamSubjectWriter<T> _subscriber;
     private readonly CancellationTokenSource _stopTokenSource;
@@ -41,6 +59,9 @@ public sealed partial class RedisStreamsTopic<T> : ITopic<T>
     private int _doorbellFailures;
     private long _lastDoorbell;
     private int _ringMode;
+    // Off for good once the server refuses the script, and for a channel a script may not publish to (sharded, or a custom strategy's).
+    private volatile bool _ringInAdd;
+    private volatile bool _prefixChecked;
     private bool _disposed;
 
     public RedisStreamsTopic(
@@ -79,6 +100,7 @@ public sealed partial class RedisStreamsTopic<T> : ITopic<T>
             var notifyChannelStrategy = streamOptions.NotifyChannelStrategy
                 ?? StreamSuffixChannel.Create(_redisStreamKeyStrategy, cacheOptions, streamOptions.NotifyChannelName, streamOptions.NotifyShardedPubSub);
             _notifyRedisChannel = notifyChannelStrategy.GetRedisChannel(topicKey);
+            _ringInAdd = streamOptions.NotifyChannelStrategy is null && !streamOptions.NotifyShardedPubSub;
             _notifyChannel = new RedisStreamNotifyChannel(
                 _notifyRedisChannel.Value,
                 _redis,
@@ -106,6 +128,13 @@ public sealed partial class RedisStreamsTopic<T> : ITopic<T>
     internal TimeSpan DoorbellTimeout { get; set; } = TimeSpan.FromSeconds(1);
 
     internal TimeSpan DoorbellSpacing { get; set; }
+
+    /// <summary>Whether an entry may carry its doorbell in one scripted command; off for a sharded or custom channel and after a refusal.</summary>
+    internal bool RingInAdd
+    {
+        get => _ringInAdd;
+        set => _ringInAdd = value;
+    }
 
     /// <summary>Whether this topic's doorbell subscription is live.</summary>
     internal bool NotifyLive => _waiter.NotifyLive;
@@ -138,6 +167,12 @@ public sealed partial class RedisStreamsTopic<T> : ITopic<T>
         try
         {
             var message = Fields(@event);
+            // While no doorbell is in flight this entry carries one; otherwise its ring folds into the one in flight, as before.
+            if (_notifyRedisChannel.HasValue && TryTakeDoorbellForAdd())
+            {
+                return await PublishRingingAsync(@event, message, token).ConfigureAwait(false);
+            }
+
             var behindAdd = _notifyRedisChannel.HasValue && RingsBehindAdd();
             var id = await _write.ExecuteAsync(static (s, token) =>
             {
@@ -196,6 +231,142 @@ public sealed partial class RedisStreamsTopic<T> : ITopic<T>
     }
 
     internal RedisStreamsTopicOptions GetResolvedOptionsForTests() => _streamOptions;
+
+    /// <summary>Whether the connection prepends a key prefix or a channel prefix, neither of which reaches a script's arguments.</summary>
+    private static bool Prefixes(IDatabase database)
+    {
+        if (ConnectorKeyPrefix.TryRead(database, out var prefix) && prefix.Length > 0)
+        {
+            return true;
+        }
+
+        try
+        {
+            return ConfigurationOptions.Parse(database.Multiplexer.Configuration).ChannelPrefix is { IsNullOrEmpty: false };
+        }
+        catch (Exception)
+        {
+            // A configuration that does not parse is not one to bet the doorbell on.
+            return true;
+        }
+    }
+
+    private async ValueTask<bool> PublishRingingAsync(T @event, NameValueEntry[] message, CancellationToken token)
+    {
+        var rung = false;
+        var added = false;
+        try
+        {
+            var (id, replyRung) = await _write.ExecuteAsync(static (s, token) =>
+            {
+                token.ThrowIfCancellationRequested();
+                return s.Self.AddAndRingAsync(s.Message);
+            },
+            (Self: this, Message: message),
+            defaultValue: (Id: RedisValue.Null, Rung: false),
+            token).ConfigureAwait(false);
+            rung = replyRung;
+            added = !id.IsNull;
+            _cachingTelemetryProvider.TrackTopicWriteMetric(_context.Topic.ToString(), id);
+            if (added)
+            {
+                Ring(doorbell: false);
+            }
+
+            LogPublished(TopicKey, @event.Id, id);
+            return added;
+        }
+        finally
+        {
+            EndRingInAdd(rung, owed: added && !rung);
+        }
+    }
+
+    private async ValueTask<(RedisValue Id, bool Rung)> AddAndRingAsync(NameValueEntry[] message)
+    {
+        if (!_prefixChecked)
+        {
+            _prefixChecked = true;
+            if (Prefixes(_redis.Database))
+            {
+                // The script's channel is an argument, which neither prefix reaches; a PUBLISH of its own gets both.
+                _ringInAdd = false;
+                LogRingInAddPrefixed(TopicKey);
+            }
+        }
+
+        if (_ringInAdd)
+        {
+            var values = new RedisValue[3 + message.Length * 2];
+            values[0] = _streamOptions.MaxLength is { } maxLength ? maxLength : RedisValue.EmptyString;
+            values[1] = _notifyRedisChannel!.Value.ToString();
+            values[2] = _context.ConsumerName;
+            for (var i = 0; i < message.Length; i++)
+            {
+                values[3 + i * 2] = message[i].Name;
+                values[4 + i * 2] = message[i].Value;
+            }
+
+            try
+            {
+                var result = await _redis.Database.ScriptEvaluateAsync(AddAndRingScript, [_context.Topic], values, CommandFlags.DemandMaster).ConfigureAwait(false);
+                if ((RedisResult[]?)result is not [var idPart, var rungPart, ..] reply)
+                {
+                    throw new RedisException("The script that adds an entry and rings its doorbell returned an unexpected reply.");
+                }
+
+                var scriptedId = (RedisValue)idPart;
+                if ((int)rungPart == 1)
+                {
+                    return (scriptedId, true);
+                }
+
+                // Added but not rung: the caller sends the doorbell for it, and this topic rings with a command of its own from now on.
+                _ringInAdd = false;
+                LogRingInAddPublishRefused(TopicKey, reply.Length > 2 ? (string?)reply[2] : null);
+                return (scriptedId, false);
+            }
+            catch (Exception ex) when (RedisUtils.RefusesScript(ex))
+            {
+                // Scripts refused (ACL, disabled, or no PUBLISH from a script): this topic rings with a command of its own from now on.
+                _ringInAdd = false;
+                LogRingInAddRefused(ex, TopicKey);
+            }
+        }
+
+        var id = await _redis.Database.StreamAddAsync(_context.Topic, message, maxLength: _streamOptions.MaxLength, useApproximateMaxLength: true, flags: CommandFlags.DemandMaster).ConfigureAwait(false);
+        return (id, false);
+    }
+
+    /// <summary>Takes the doorbell for an entry that rings in its own command: only while none is in flight and the spacing has passed.</summary>
+    private bool TryTakeDoorbellForAdd() =>
+        _ringInAdd
+        && (DoorbellSpacing <= TimeSpan.Zero || Stopwatch.GetElapsedTime(Volatile.Read(ref _lastDoorbell)) >= DoorbellSpacing)
+        && Interlocked.CompareExchange(ref _doorbell, DoorbellSending, DoorbellIdle) == DoorbellIdle;
+
+    /// <summary>Hands the doorbell back after an entry that carried it; the rings folded meanwhile, or an entry added without its doorbell (<paramref name="owed"/>), get a doorbell of their own.</summary>
+    private void EndRingInAdd(bool rung, bool owed)
+    {
+        if (rung)
+        {
+            Volatile.Write(ref _lastDoorbell, Stopwatch.GetTimestamp());
+            Volatile.Write(ref _doorbellFailures, 0);
+        }
+
+        if (Interlocked.CompareExchange(ref _doorbell, DoorbellIdle, DoorbellSending) == DoorbellSending)
+        {
+            if (owed)
+            {
+                RingDoorbell();
+            }
+
+            return;
+        }
+
+        // Rings folded meanwhile: only the holder moves the state out of RingAgain, so the one sender starts here, owing them.
+        Volatile.Write(ref _doorbell, DoorbellSending);
+        _ = SendDoorbellsAsync(owed: true);
+    }
 
     /// <summary>Wakes the other nodes unless the doorbell went out behind the XADD, and this one every <see cref="_wakeEvery"/> own entries: nothing else rings for those, and a burst of them could be trimmed unread.</summary>
     private void Ring(bool doorbell)
@@ -285,7 +456,7 @@ public sealed partial class RedisStreamsTopic<T> : ITopic<T>
         }
     }
 
-    private async Task SendDoorbellsAsync()
+    private async Task SendDoorbellsAsync(bool owed = false)
     {
         // Taken once: Dispose cancels and then disposes the source, which a later read of Token would throw on.
         CancellationToken stop;
@@ -299,7 +470,6 @@ public sealed partial class RedisStreamsTopic<T> : ITopic<T>
         }
 
         // Rings folded into a doorbell that failed are retried a few times, so the consumers they were for are still woken.
-        var owed = false;
         var retries = 0;
         do
         {
@@ -486,6 +656,15 @@ public sealed partial class RedisStreamsTopic<T> : ITopic<T>
 
     [LoggerMessage(Level = LogLevel.Debug, Message = "Best-effort notify doorbell publish failed again for topic {TopicKey} ({Failures} in a row)")]
     private partial void LogNotifyPublishErrorAgain(Exception ex, TopicKey topicKey, int failures);
+
+    [LoggerMessage(Level = LogLevel.Warning, Message = "The server refused the script that adds an entry and rings its doorbell on topic {TopicKey}; the doorbell goes out as a command of its own")]
+    private partial void LogRingInAddRefused(Exception ex, TopicKey topicKey);
+
+    [LoggerMessage(Level = LogLevel.Information, Message = "A script on topic {TopicKey} added its entry but could not publish its doorbell ({Reason}); the topic rings with a PUBLISH of its own from now on")]
+    private partial void LogRingInAddPublishRefused(TopicKey topicKey, string? reason);
+
+    [LoggerMessage(Level = LogLevel.Debug, Message = "The connection behind topic {TopicKey} prefixes keys or channels; the topic rings with a PUBLISH of its own")]
+    private partial void LogRingInAddPrefixed(TopicKey topicKey);
 
     [LoggerMessage(Level = LogLevel.Debug, Message = "The topology behind topic {TopicKey} could not be read; the doorbell waits for the XADD reply")]
     private partial void LogTopologyUnknown(Exception ex, TopicKey topicKey);
