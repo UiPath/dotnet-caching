@@ -130,6 +130,135 @@ public class RedisStreamNotifyChannelTests
     }
 
     [Fact]
+    public void A_stale_subscribe_tick_does_not_reconnect_a_disposed_connector()
+    {
+        var redis = _fixture.Freeze<IRedisConnector>();
+        var calls = 0;
+        redis.ConnectAsync(Arg.Any<CancellationToken>()).Returns(_ =>
+        {
+            Interlocked.Increment(ref calls);
+            return ValueTask.FromException(new ObjectDisposedException(nameof(IRedisConnector)));
+        });
+
+        using var waiter = new SignalingFetchWaiter(5.Seconds());
+        using var sut = new RedisStreamNotifyChannel(RedisChannel.Literal("notify:test"), redis, _fixture.Create<ILogger>(), waiter, 1.Hours(), 1.Hours(), "self");
+        var subscribe = typeof(RedisStreamNotifyChannel).GetMethod("Subscribe", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!;
+
+        // The failed connect completes synchronously, so the first tick is done when Invoke returns.
+        subscribe.Invoke(sut, [null]);
+        subscribe.Invoke(sut, [null]);
+
+        Volatile.Read(ref calls).Should().Be(1, "a tick queued before the connector was seen gone must not connect again");
+    }
+
+    [Fact]
+    public async Task A_tick_past_the_entry_guard_when_the_connector_goes_gone_does_not_connect()
+    {
+        var token = TestContext.Current.CancellationToken;
+        var redis = _fixture.Freeze<IRedisConnector>();
+        var calls = 0;
+        redis.ConnectAsync(Arg.Any<CancellationToken>()).Returns(_ =>
+        {
+            Interlocked.Increment(ref calls);
+            return ValueTask.FromException(new ObjectDisposedException(nameof(IRedisConnector)));
+        });
+
+        using var waiter = new SignalingFetchWaiter(5.Seconds());
+        using var sut = new RedisStreamNotifyChannel(RedisChannel.Literal("notify:test"), redis, _fixture.Create<ILogger>(), waiter, 1.Hours(), 1.Hours(), "self");
+        var subscribe = typeof(RedisStreamNotifyChannel).GetMethod("Subscribe", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!;
+        var entered = new ManualResetEventSlim();
+        var gate = new ManualResetEventSlim();
+        sut.AfterEntryGuardForTests = () =>
+        {
+            sut.AfterEntryGuardForTests = null;
+            entered.Set();
+            gate.Wait(token);
+        };
+
+        var tickB = Task.Run(() => subscribe.Invoke(sut, [null]), token);
+        entered.Wait(30.Seconds(), token).Should().BeTrue();
+        // Tick A runs the disposed-connector path to the end while B holds the stale view of the flags.
+        subscribe.Invoke(sut, [null]);
+        gate.Set();
+        await tickB.WaitAsync(30.Seconds(), token);
+
+        Volatile.Read(ref calls).Should().Be(1, "the re-check after the interlock stops a tick that passed the guard before the flag was set");
+    }
+
+    [Fact]
+    public async Task A_reconnect_rearms_the_timer_after_the_subscribe_step_hit_a_retired_multiplexer()
+    {
+        var token = TestContext.Current.CancellationToken;
+        var channel = RedisChannel.Literal("notify:test");
+        var redis = _fixture.Freeze<IRedisConnector>();
+        var subscriber = _fixture.Freeze<ISubscriber>();
+        var multiplexer = _fixture.Freeze<IConnectionMultiplexer>();
+        multiplexer.TimeoutMilliseconds.Returns(5000);
+        subscriber.Multiplexer.Returns(multiplexer);
+        redis.Subscriber.Returns(subscriber);
+        var attempts = 0;
+        var first = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var second = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        subscriber.SubscribeAsync(channel, Arg.Any<Action<RedisChannel, RedisValue>>()).Returns(_ =>
+        {
+            if (Interlocked.Increment(ref attempts) == 1)
+            {
+                first.TrySetResult();
+                return Task.FromException(new ObjectDisposedException(nameof(IConnectionMultiplexer)));
+            }
+            second.TrySetResult();
+            return Task.CompletedTask;
+        });
+
+        using var waiter = new SignalingFetchWaiter(5.Seconds());
+        using var sut = new RedisStreamNotifyChannel(channel, redis, _fixture.Create<ILogger>(), waiter, 1.Hours(), 10.Milliseconds(), "self");
+
+        await first.Task.WaitAsync(10.Seconds(), token);
+        redis.OnReconnected += Raise.Event();
+
+        await second.Task.WaitAsync(10.Seconds(), token);
+    }
+
+    [Fact]
+    public async Task A_retired_multiplexer_failing_the_subscribe_step_does_not_end_the_resubscribes()
+    {
+        var token = TestContext.Current.CancellationToken;
+        var channel = RedisChannel.Literal("notify:test");
+        var redis = _fixture.Freeze<IRedisConnector>();
+        var subscriber = _fixture.Freeze<ISubscriber>();
+        var multiplexer = _fixture.Freeze<IConnectionMultiplexer>();
+        multiplexer.TimeoutMilliseconds.Returns(5000);
+        subscriber.Multiplexer.Returns(multiplexer);
+        redis.Subscriber.Returns(subscriber);
+        var attempts = 0;
+        subscriber.SubscribeAsync(channel, Arg.Any<Action<RedisChannel, RedisValue>>()).Returns(_ =>
+            Interlocked.Increment(ref attempts) == 1
+                ? Task.FromException(new ObjectDisposedException(nameof(IConnectionMultiplexer)))
+                : Task.CompletedTask);
+
+        using var waiter = new SignalingFetchWaiter(5.Seconds());
+        using var sut = new RedisStreamNotifyChannel(channel, redis, _fixture.Create<ILogger>(), waiter, 1.Hours(), 1.Hours(), "self");
+        var flags = System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic;
+        var subscribe = typeof(RedisStreamNotifyChannel).GetMethod("Subscribe", flags)!;
+        var subscribing = typeof(RedisStreamNotifyChannel).GetField("_subscribing", flags)!;
+
+        subscribe.Invoke(sut, [null]);
+        var deadline = DateTime.UtcNow + 30.Seconds();
+        while (DateTime.UtcNow < deadline && (Volatile.Read(ref attempts) == 0 || (int)subscribing.GetValue(sut)! != 0))
+        {
+            await Task.Delay(5.Milliseconds(), token);
+        }
+        redis.OnReconnected += Raise.Event();
+        subscribe.Invoke(sut, [null]);
+        while (DateTime.UtcNow < deadline && Volatile.Read(ref attempts) < 2)
+        {
+            await Task.Delay(5.Milliseconds(), token);
+        }
+
+        Volatile.Read(ref attempts).Should().Be(2, "an ObjectDisposedException past the connect is not the connector being gone");
+    }
+
+    [Fact]
     public async Task A_transient_connect_failure_is_retried_while_alive()
     {
         var token = TestContext.Current.CancellationToken;

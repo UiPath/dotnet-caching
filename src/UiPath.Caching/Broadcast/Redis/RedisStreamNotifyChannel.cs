@@ -4,6 +4,9 @@ namespace UiPath.Caching.Broadcast.Redis;
 
 internal sealed partial class RedisStreamNotifyChannel : IDisposable
 {
+    /// <summary>Test seam run between the entry guard and the interlock in <c>Subscribe</c>.</summary>
+    internal Action? AfterEntryGuardForTests;
+
     private static readonly TimeSpan DisposeDrainTimeout = TimeSpan.FromSeconds(5);
     // StackExchange.Redis's default timeout, until the connection is up and can tell its own.
     private static readonly TimeSpan DefaultPeriod = TimeSpan.FromSeconds(5);
@@ -29,6 +32,8 @@ internal sealed partial class RedisStreamNotifyChannel : IDisposable
     private int _failures;
     // The server refuses the subscription for good (ACL, command disabled): this topic polls only.
     private volatile bool _denied;
+    // ConnectAsync threw ObjectDisposedException: a tick already queued on the pool must not connect again.
+    private volatile bool _connectorGone;
     private volatile bool _disposed;
     // Live for the waiter's long interval only while subscribed, connected and not denied.
     private volatile bool _subscribed;
@@ -68,6 +73,8 @@ internal sealed partial class RedisStreamNotifyChannel : IDisposable
         _subscribeTimer = new Timer(Subscribe, null, _timerDueTime, _timerPeriod);
     }
 
+    private bool Stopped => _disposed || _denied || _connectorGone;
+
     public void Dispose()
     {
         if (_disposed)
@@ -88,13 +95,20 @@ internal sealed partial class RedisStreamNotifyChannel : IDisposable
 
     private void Subscribe(object? state)
     {
-        if (_disposed || _denied)
+        if (Stopped)
         {
             return;
         }
+        AfterEntryGuardForTests?.Invoke();
         if (Interlocked.CompareExchange(ref _subscribing, 1, 0) != 0)
         {
             // The attempt already in flight re-arms the timer for whoever asked, so this one can drop out.
+            return;
+        }
+        if (Stopped)
+        {
+            // A flag was set between the guard and the interlock.
+            Interlocked.Exchange(ref _subscribing, 0);
             return;
         }
         Volatile.Write(ref _resubscribeRequested, 0);
@@ -118,7 +132,16 @@ internal sealed partial class RedisStreamNotifyChannel : IDisposable
         {
             Unsubscribe();
             // Awaited first: asked for before the connection is up, the subscriber would block this thread until it is.
-            await _redis.ConnectAsync().ConfigureAwait(false);
+            try
+            {
+                await _redis.ConnectAsync().ConfigureAwait(false);
+            }
+            catch (ObjectDisposedException)
+            {
+                // Only the connector's own disposal is final; one from the subscribe step may be a retired multiplexer.
+                _connectorGone = true;
+                throw;
+            }
             var subscriber = _redis.Subscriber;
             if (!_periodKnown)
             {
@@ -166,6 +189,7 @@ internal sealed partial class RedisStreamNotifyChannel : IDisposable
         }
         catch (Exception ex)
         {
+            // A disposed connector that throws from Subscriber or Multiplexer does not set _connectorGone; the next ConnectAsync does, at most one extra attempt.
             // The first failure of a streak is worth a warning; the retries, one per timer period, are not.
             LogSubscribeError(++_failures == 1 ? LogLevel.Warning : LogLevel.Debug, ex, _channel);
             Reschedule(_timerPeriod);
@@ -175,7 +199,7 @@ internal sealed partial class RedisStreamNotifyChannel : IDisposable
             Interlocked.Exchange(ref _subscribing, 0);
             // Only now can a scheduled callback get past the contention check, so a reconnect that
             // arrived during this attempt — or one whose own callback bailed on it — is armed here.
-            if (Volatile.Read(ref _resubscribeRequested) != 0 && !_denied)
+            if (Volatile.Read(ref _resubscribeRequested) != 0 && !_denied && !_connectorGone)
             {
                 Reschedule(_timerDueTime);
             }
@@ -217,7 +241,7 @@ internal sealed partial class RedisStreamNotifyChannel : IDisposable
 
     private void OnReconnected(object? sender, EventArgs e)
     {
-        if (_disposed || _denied)
+        if (_disposed || _denied || _connectorGone)
         {
             return;
         }
