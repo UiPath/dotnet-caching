@@ -480,20 +480,24 @@ internal sealed class CachePeers : IDisposable
 
         private async ValueTask<ICacheEntry<T?>> ReadOneAsync<T>(CacheKey key, CancellationToken token)
         {
+            // The hold is chosen before the count a test waits on.
+            var (hold, ignoresCancellation) = (Hold, HoldIgnoresCancellation);
             Interlocked.Increment(ref _singleReads);
-            await BeforeReadAsync(token);
+            await BeforeReadAsync(hold, ignoresCancellation, token);
             return EntryFor<T>(Store, key);
         }
 
         private async ValueTask<KeyValuePair<CacheKey, ICacheEntry<T?>>[]> ReadManyAsync<T>(CacheKey[] keys, CancellationToken token)
         {
+            // The hold is chosen before the count a test waits on.
+            var (hold, ignoresCancellation) = (Hold, HoldIgnoresCancellation);
             Interlocked.Increment(ref _batchReads);
             _batchSizes.Enqueue(keys.Length);
-            await BeforeReadAsync(token);
+            await BeforeReadAsync(hold, ignoresCancellation, token);
             return [.. keys.Select(k => KeyValuePair.Create<CacheKey, ICacheEntry<T?>>(k, EntryFor<T>(Store, k)))];
         }
 
-        private async Task BeforeReadAsync(CancellationToken token)
+        private async Task BeforeReadAsync(Task? hold, bool ignoresCancellation, CancellationToken token)
         {
             if (BeforeFlags is { } before)
             {
@@ -501,9 +505,9 @@ internal sealed class CachePeers : IDisposable
             }
 
             _readsOnMaster.Enqueue(_masterDemanded.Value && Volatile.Read(ref _openScopes) != 0);
-            if (Hold is { } hold)
+            if (hold is not null)
             {
-                await (HoldIgnoresCancellation ? hold : hold.WaitAsync(token));
+                await (ignoresCancellation ? hold : hold.WaitAsync(token));
             }
 
             if (ReadThrows)
