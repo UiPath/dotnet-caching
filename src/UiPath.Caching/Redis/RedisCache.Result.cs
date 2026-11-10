@@ -98,7 +98,7 @@ internal sealed partial class RedisCache : IResultCache
                 LogCacheMissed(Logged(cacheKey, redisKey, typeof(T)));
                 ret = await RunGeneratorAsync(cacheKey, recorder.Generator, static (g, ct) => g(ct), factoryTimeout, token).ConfigureAwait(false);
                 // Only a value that was written has an expiration to report.
-                if ((!IsDefault(ret) || _cacheNullValues) && await SetInternalAsync(redisKey, ret, duration, token).ConfigureAwait(false))
+                if ((!IsDefault(ret) || _cacheNullValues) && await SetInternalAsync(cacheKey, redisKey, ret, duration, token).ConfigureAwait(false))
                 {
                     run.Expiration = StoredDeadline(duration);
                 }
