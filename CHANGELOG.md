@@ -6,6 +6,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 
 ## [Unreleased]
 
+## [3.1.1] - 2026-11-10
+
 ### Added
 
 - **A code fix for the two 3.1 interpolated-key compile errors.** Under C# 12 or older, a constant interpolated key (`$"fixed"`, `$"{Const}:x"`) is ambiguous
@@ -16,6 +18,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 
 ### Changed
 
+- **Dependency floors.** Unchanged from 3.1.0. Only the test pins in `Directory.Packages.props` moved.
 - **A Redis Streams entry and its doorbell go out in one command, and an array remove announces its keys together.** While no doorbell is in flight, a publish on the stream's default channel runs the entry and its doorbell in one Lua script, so the doorbell costs no command of its own and, on a cluster, peers are woken a round trip sooner; a publish while a doorbell is in flight adds a plain entry and folds its ring into the next one. A server that refuses scripts (ACL, scripting disabled, or no PUBLISH from a script) turns the script off for that topic, which then sends the two commands as before; a busy or loading server does not turn it off, a script that adds the entry but may not publish keeps that one entry and rings with a doorbell of its own, a connection that prefixes keys or channels sends the two commands too, and a failed add sends no doorbell. `RemoveAsync` with an array of keys now starts every key's invalidation together instead of one after another, so the batch costs one round trip and its doorbells fold into one; each key is still announced and logged on its own, and a key whose announcement fails is reported as a failed remove without keeping the others from being announced.
 - **No read mark when `RefreshLocalOnPeerWrite` is off.** A local hit no longer marks the entry as read when the policy sets `RefreshLocalOnPeerWrite` to false, which saves a clock read and a write per hit.
 
