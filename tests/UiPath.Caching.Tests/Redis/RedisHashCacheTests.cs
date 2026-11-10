@@ -6,6 +6,7 @@ using Newtonsoft.Json;
 using NSubstitute.ExceptionExtensions;
 using StackExchange.Redis;
 using UiPath.Caching;
+using UiPath.Caching.Logging;
 using UiPath.Caching.Policies;
 using UiPath.Caching.Telemetry;
 using UiPath.Caching.Tests.Fakes;
@@ -303,6 +304,96 @@ public class RedisHashCacheTests(ITestContextAccessor testContextAccessor) : IAs
 
         Func<Task> act = async () => await Sut.GetItemAsync<string>(_cacheKey, key, policy: null, token: testContextAccessor.Current.CancellationToken);
         await act.Should().ThrowAsync<ArgumentOutOfRangeException>();
+    }
+
+    [Fact]
+    public async Task A_field_written_over_the_large_value_threshold_logs_one_warning()
+    {
+        AuditLargeValues();
+        _transaction.ExecuteAsync(Arg.Any<CommandFlags>()).Returns(true);
+        var values = new Dictionary<string, string?> { ["large"] = new string('x', 2000), ["small"] = "a" };
+
+        await Sut.SetAsync(_cacheKey, values, TimeSpan.FromMinutes(5), policy: null, token: testContextAccessor.Current.CancellationToken);
+
+        LargeValueWarnings().Should().Be(1);
+    }
+
+    [Fact]
+    public async Task A_large_hash_write_names_the_callers_key_so_the_masking_policy_decides()
+    {
+        AuditLargeValues();
+        var policy = Substitute.For<IKeyMaskingPolicy>();
+        policy.ShouldMask(default).ReturnsForAnyArgs(false);
+        _fixture.Inject(policy);
+        _transaction.ExecuteAsync(Arg.Any<CommandFlags>()).Returns(true);
+
+        await Sut.SetAsync(_cacheKey, new Dictionary<string, string?> { ["large"] = new string('x', 2000) }, TimeSpan.FromMinutes(5), policy: null, token: testContextAccessor.Current.CancellationToken);
+
+        LargeValueMessages().Should().ContainSingle().Which.Should().Contain(_redisKey.ToString());
+    }
+
+    [Fact]
+    public async Task Large_metadata_written_on_its_own_logs_one_warning()
+    {
+        AuditLargeValues();
+        _database.KeyExistsAsync(_redisKey, Arg.Any<CommandFlags>()).Returns(true);
+        _database.HashSetAsync(_redisKey, Arg.Any<RedisValue>(), Arg.Any<RedisValue>(), Arg.Any<When>(), Arg.Any<CommandFlags>()).Returns(true);
+        _transaction.ExecuteAsync(Arg.Any<CommandFlags>()).Returns(true);
+
+        await Sut.SetMetadataAsync<string>(_cacheKey, new Dictionary<string, string?> { ["note"] = new string('x', 2000) }, testContextAccessor.Current.CancellationToken);
+
+        LargeValueWarnings().Should().Be(1);
+    }
+
+    [Fact]
+    public async Task Large_metadata_written_with_a_refresh_logs_one_warning()
+    {
+        AuditLargeValues();
+        _transaction.ExecuteAsync(Arg.Any<CommandFlags>()).Returns(true);
+        var options = new HashCacheEntryOptions { TimeToLive = TimeSpan.FromMinutes(5), Metadata = new Dictionary<string, string?> { ["note"] = new string('x', 2000) } };
+
+        await Sut.RefreshAsync<string>(_cacheKey, options, policy: null, testContextAccessor.Current.CancellationToken);
+
+        LargeValueWarnings().Should().Be(1);
+    }
+
+    // An expired write only deletes the key, so nothing large was stored.
+    [Fact]
+    public async Task An_expired_large_write_logs_nothing()
+    {
+        AuditLargeValues();
+        _database.KeyDeleteAsync(Arg.Any<RedisKey>(), Arg.Any<CommandFlags>()).Returns(true);
+        var options = new HashCacheEntryOptions(ExpireTime: _now.AddMinutes(-1));
+
+        await Sut.SetAsync(_cacheKey, new Dictionary<string, string?> { ["large"] = new string('x', 2000) }, options, policy: null, token: testContextAccessor.Current.CancellationToken);
+
+        LargeValueWarnings().Should().Be(0);
+    }
+
+    [Theory]
+    [InlineData(false, 1000)]
+    [InlineData(true, 0)]
+    public async Task A_large_hash_write_logs_nothing_when_auditing_is_off(bool enabled, int threshold)
+    {
+        AuditLargeValues(enabled, threshold);
+        _transaction.ExecuteAsync(Arg.Any<CommandFlags>()).Returns(true);
+
+        await Sut.SetAsync(_cacheKey, new Dictionary<string, string?> { ["large"] = new string('x', 2000) }, TimeSpan.FromMinutes(5), policy: null, token: testContextAccessor.Current.CancellationToken);
+
+        LargeValueWarnings().Should().Be(0);
+    }
+
+    // A value stored once by design would otherwise warn on every read of it.
+    [Fact]
+    public async Task A_large_field_read_logs_nothing()
+    {
+        AuditLargeValues();
+        var field = _fixture.Create<string>();
+        _database.HashGetAsync(_redisKey, (RedisValue)field, CommandFlags.PreferMaster).Returns((RedisValue)JsonConvert.SerializeObject(new string('x', 2000)));
+
+        await Sut.GetItemAsync<string>(_cacheKey, field, policy: null, token: testContextAccessor.Current.CancellationToken);
+
+        LargeValueWarnings().Should().Be(0);
     }
 
     [Fact]
@@ -2458,6 +2549,18 @@ public class RedisHashCacheTests(ITestContextAccessor testContextAccessor) : IAs
         _database.HashGetAsync(Arg.Any<RedisKey>(), Arg.Any<RedisValue>(), Arg.Do<CommandFlags>(flags.Add)).Returns(_ => (RedisValue)JsonConvert.SerializeObject("v"));
         return flags;
     }
+
+    private int LargeValueWarnings() => LargeValueMessages().Length;
+
+    private string[] LargeValueMessages() =>
+        _logger.ReceivedCalls()
+            .Where(c => c.GetMethodInfo().Name == nameof(ILogger.Log) && (LogLevel)c.GetArguments()[0]! == LogLevel.Warning)
+            .Select(c => c.GetArguments()[2]?.ToString() ?? string.Empty)
+            .Where(m => m.Contains("large value", StringComparison.Ordinal))
+            .ToArray();
+
+    private void AuditLargeValues(bool enabled = true, int threshold = 1000) =>
+        _fixture.Inject(new CacheOptions { AppShortName = "test", AuditEnabled = enabled, LargeValueThreshold = threshold });
 
     private sealed class RecordingRawSerializer : RawByteSerializerProxy
     {

@@ -1,9 +1,11 @@
 ﻿using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Internal;
+using Microsoft.Extensions.Logging;
 using NSubstitute.ExceptionExtensions;
 using NSubstitute.ReceivedExtensions;
 using StackExchange.Redis;
 using UiPath.Caching;
+using UiPath.Caching.Logging;
 using UiPath.Caching.Policies;
 using UiPath.Caching.Redis;
 using UiPath.Caching.Telemetry;
@@ -33,6 +35,7 @@ public class RedisCacheTests(ITestContextAccessor testContextAccessor) : IAsyncL
     private IRedisConnector _connector = default!;
     private bool _isConnected = true;
     private Version _version = new(6, 0);
+    private ILogger<RedisCache> _logger = default!;
     private RedisCache? _sut = null;
 
     private RedisCache Sut => _sut ??= _fixture.Create<RedisCache>();
@@ -792,6 +795,79 @@ public class RedisCacheTests(ITestContextAccessor testContextAccessor) : IAsyncL
         actual.Should().BeEquivalentTo(new KeyValuePair<CacheKey, string?>[] { new(_cacheKey, default), new(_multiKey, default) });
         HitCount.Should().Be(0);
         MissCount.Should().Be(1);
+    }
+
+    [Theory]
+    [InlineData("set")]
+    [InlineData("set many")]
+    [InlineData("try add")]
+    [InlineData("get or add")]
+    public async Task A_write_over_the_large_value_threshold_logs_one_warning(string write)
+    {
+        AuditLargeValues();
+
+        await WriteLargeAsync(write);
+
+        LargeValueWarnings().Should().Be(1);
+    }
+
+    // With only the composed key, a policy that leaves this key readable never gets asked and the whole key is masked.
+    [Theory]
+    [InlineData("set")]
+    [InlineData("set many")]
+    [InlineData("try add")]
+    [InlineData("get or add")]
+    public async Task A_large_write_names_the_callers_key_so_the_masking_policy_decides(string write)
+    {
+        AuditLargeValues();
+        var policy = Substitute.For<IKeyMaskingPolicy>();
+        policy.ShouldMask(default).ReturnsForAnyArgs(false);
+        _fixture.Inject(policy);
+
+        await WriteLargeAsync(write);
+
+        LargeValueMessages().Should().ContainSingle().Which.Should().Contain(_redisKey.ToString());
+    }
+
+    [Fact]
+    public async Task A_large_write_logs_nothing_when_auditing_is_off()
+    {
+        AuditLargeValues(enabled: false);
+
+        await WriteLargeAsync("set");
+
+        LargeValueWarnings().Should().Be(0);
+    }
+
+    [Fact]
+    public async Task A_write_under_the_large_value_threshold_logs_nothing()
+    {
+        AuditLargeValues();
+        StubWrites();
+
+        await Sut.SetAsync(_cacheKey, "a", TimeSpan.FromMinutes(1), policy: null, testContextAccessor.Current.CancellationToken);
+
+        LargeValueWarnings().Should().Be(0);
+    }
+
+    // A value stored once by design would otherwise warn on every read of it; Redis 7 reads through the script, Redis 6 without it.
+    [Theory]
+    [InlineData(6)]
+    [InlineData(7)]
+    public async Task A_read_of_a_large_value_logs_nothing(int major)
+    {
+        _version = new(major, 4);
+        AuditLargeValues();
+        var large = new string('x', 2000);
+        _database.StringGetAsync(_redisKey, Arg.Any<CommandFlags>()).Returns((RedisValue)_serializer.Serialize(large));
+        _database.KeyTimeToLiveAsync(_redisKey, Arg.Any<CommandFlags>()).Returns((TimeSpan?)null);
+        StubReadScript(_serializer.Serialize(large), -1);
+        var token = testContextAccessor.Current.CancellationToken;
+
+        (await Sut.GetAsync<string>(_cacheKey, policy: null, token: token)).Should().Be(large);
+        (await Sut.GetCacheEntryAsync<string>(_cacheKey, policy: null, token: token)).Value.Should().Be(large);
+
+        LargeValueWarnings().Should().Be(0);
     }
 
     [Fact]
@@ -2858,6 +2934,40 @@ public class RedisCacheTests(ITestContextAccessor testContextAccessor) : IAsyncL
         var seen = new List<CommandFlags>();
         flags = seen;
         _database.StringGetAsync(Arg.Any<RedisKey>(), Arg.Do<CommandFlags>(seen.Add)).Returns(_ => (RedisValue)_serializer.Serialize("a"));
+    }
+
+    private int LargeValueWarnings() => LargeValueMessages().Length;
+
+    private string[] LargeValueMessages() =>
+        _logger.ReceivedCalls()
+            .Where(c => c.GetMethodInfo().Name == nameof(ILogger.Log) && (LogLevel)c.GetArguments()[0]! == LogLevel.Warning)
+            .Select(c => c.GetArguments()[2]?.ToString() ?? string.Empty)
+            .Where(m => m.Contains("large value", StringComparison.Ordinal))
+            .ToArray();
+
+    private void AuditLargeValues(bool enabled = true)
+    {
+        _fixture.Inject(new CacheOptions { AppShortName = "test", ConnectionMonitorEnabled = true, AuditEnabled = enabled, LargeValueThreshold = 1000 });
+        _logger = _fixture.Freeze<ILogger<RedisCache>>();
+        _logger.IsEnabled(Arg.Any<LogLevel>()).Returns(true);
+    }
+
+    private async Task WriteLargeAsync(string write)
+    {
+        StubWrites();
+        _database.StringGetAsync(Arg.Any<RedisKey>(), Arg.Any<CommandFlags>()).Returns(RedisValue.Null);
+        _transaction.StringSetAsync(Arg.Any<RedisKey>(), Arg.Any<RedisValue>(), Arg.Any<TimeSpan?>(), Arg.Any<When>(), Arg.Any<CommandFlags>()).Returns(true);
+        _transaction.ExecuteAsync(Arg.Any<CommandFlags>()).Returns(true);
+        var large = new string('x', 2000);
+        var token = testContextAccessor.Current.CancellationToken;
+
+        _ = write switch
+        {
+            "set" => await Sut.SetAsync(_cacheKey, large, TimeSpan.FromMinutes(1), policy: null, token),
+            "set many" => await Sut.SetAsync(new KeyValuePair<CacheKey, string?>[] { new(_cacheKey, large), new(_multiKey, "a") }, TimeSpan.FromMinutes(1), policy: null, token),
+            "try add" => await Sut.TryAddAsync<string>(_cacheKey, large, TimeSpan.FromMinutes(1), policy: null, token),
+            _ => await Sut.GetOrAddAsync<string>(_cacheKey, _ => Task.FromResult<string?>(large), policy: null, token) is not null,
+        };
     }
 
     private void StubWrites()

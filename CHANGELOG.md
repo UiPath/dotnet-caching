@@ -27,6 +27,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
   read found that group rather than a retry, a check before the read took the stream's first entry for a trim and cleared the topic's local tier. The reader now records the empty
   head when the create fails, as it already did for a create at `0-0`.
 - **A queued subscribe tick no longer retries a disposed connector.** A disposed connector is no longer retried by a subscribe tick already queued on the thread pool.
+- **The large-value audit logs writes, as documented.** With `AuditEnabled`, a value over `LargeValueThreshold` logged a `Warning` on every Redis read
+  of it, so one large value stored by design warned on every read. Reads no longer warn. Writes now do, where the caller can shrink the value: one
+  `Warning` per oversized string value, hash field or hash metadata written by `RedisCache` and `RedisHashCache`, so an app may see warnings it never saw
+  before. The log names the caller's key, so a key masking policy applies as it does elsewhere. A write that only deletes an expired entry is not
+  audited, and a `LargeValueThreshold` of zero or less turns the hash audit off, as it already did for strings. An app that raised `LargeValueThreshold`
+  to quiet the read warnings can lower it again.
 
 ### Documentation
 

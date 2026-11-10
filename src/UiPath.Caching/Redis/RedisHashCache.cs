@@ -25,7 +25,7 @@ internal sealed partial class RedisHashCache : RedisCacheBase, IHashCache, ISpan
     private readonly IResiliencePipeline _write;
     private readonly IRedisKeyStrategy _redisKeyStrategy;
     private readonly CacheOptions _cacheOptions;
-    private readonly Action<LoggedKey, string, RedisValue>? _auditKeySize;
+    private readonly bool _auditLargeValues;
     private readonly bool _cacheNullValues;
     private readonly int _fieldBatchSize;
 
@@ -54,10 +54,7 @@ internal sealed partial class RedisHashCache : RedisCacheBase, IHashCache, ISpan
         _redisKeyStrategy = (redisCacheOptions.RedisKeyStrategyFactory ?? new DefaultRedisKeyStrategyFactory()).Create(_cacheOptions, GetType());
         _cacheNullValues = redisCacheOptions.CacheNullValues;
         _fieldBatchSize = Math.Max(1, redisCacheOptions.HashFieldBatchSize);
-        if (_cacheOptions.AuditEnabled)
-        {
-            _auditKeySize = AuditKeySize;
-        }
+        _auditLargeValues = _cacheOptions.AuditEnabled && _cacheOptions.LargeValueThreshold > 0;
     }
 
     public string Name => KnownCacheProviderNames.Redis;
@@ -182,7 +179,7 @@ internal sealed partial class RedisHashCache : RedisCacheBase, IHashCache, ISpan
             {
                 await EnsureConnectedAsync(_write, token).ConfigureAwait(false);
                 var transaction = Database.CreateTransaction();
-                using (QueueMetadataWrite(transaction, redisKey, options.Metadata))
+                using (QueueMetadataWrite(transaction, Logged(cacheKey, redisKey, typeof(T)), redisKey, options.Metadata))
                 {
                     QueueExpirationUpdate(transaction, redisKey, expiration);
 
@@ -316,6 +313,11 @@ internal sealed partial class RedisHashCache : RedisCacheBase, IHashCache, ISpan
                 if (metadata.Count > 0)
                 {
                     var (metadataValue, payload) = SerializeFieldValue(metadata);
+                    if (_auditLargeValues)
+                    {
+                        AuditKeySize(Logged(cacheKey, redisKey, typeof(T)), KnownFieldNames.MetadataKey, metadataValue);
+                    }
+
                     using (payload)
                     {
                         if (_cacheNullValues)
@@ -516,7 +518,7 @@ internal sealed partial class RedisHashCache : RedisCacheBase, IHashCache, ISpan
 
         // Everything that can throw runs before the fields and the metadata rent buffers, which SetInnerAsync then owns.
         var (entries, payloads) = SerializeFields(values, metadata);
-        return SetInnerAsync<T>(redisKey, entries, payloads, setOption, expiration, token, report);
+        return SetInnerAsync<T>(cacheKey, redisKey, entries, payloads, setOption, expiration, token, report);
     }
 
     /// <summary>The hash, or its length when it is too large for one command.</summary>
@@ -638,7 +640,7 @@ internal sealed partial class RedisHashCache : RedisCacheBase, IHashCache, ISpan
                 return (false, ret);
             }
 
-            (ret, found) = ReadFields<T>(hashEntries, cacheKey, redisKey);
+            (ret, found) = ReadFields<T>(hashEntries);
             operation.Stop();
         }
         catch (Exception ex)
@@ -662,7 +664,7 @@ internal sealed partial class RedisHashCache : RedisCacheBase, IHashCache, ISpan
             : RedisValue.EmptyString;
         var entries = new[] { new HashEntry(KnownFieldNames.MetadataKey, metadata) };
         var expiration = GetExpiration(options, policy);
-        return SetInnerAsync<T>(redisKey, entries, [], HashCacheSetOption.KeyReplace, expiration, token);
+        return SetInnerAsync<T>(cacheKey, redisKey, entries, [], HashCacheSetOption.KeyReplace, expiration, token);
     }
 
     private async ValueTask<bool> RefreshCoreAsync<T>(CacheKey cacheKey, DateTimeOffset localExpiration, CancellationToken token)
@@ -709,7 +711,7 @@ internal sealed partial class RedisHashCache : RedisCacheBase, IHashCache, ISpan
     }
 
     /// <summary>Returns the metadata's payload, which the caller disposes once the transaction has executed.</summary>
-    private SerializedPayload QueueMetadataWrite(ITransaction transaction, RedisKey redisKey, IDictionary<string, string?>? metadata)
+    private SerializedPayload QueueMetadataWrite(ITransaction transaction, LoggedKey logged, RedisKey redisKey, IDictionary<string, string?>? metadata)
     {
         if (metadata != null)
         {
@@ -718,6 +720,11 @@ internal sealed partial class RedisHashCache : RedisCacheBase, IHashCache, ISpan
                 transaction.AddCondition(Condition.KeyExists(redisKey));
             }
             var (value, payload) = SerializeFieldValue(metadata);
+            if (_auditLargeValues)
+            {
+                AuditKeySize(logged, KnownFieldNames.MetadataKey, value);
+            }
+
             try
             {
                 var hashEntries = new[] { new HashEntry(KnownFieldNames.MetadataKey, value) };
@@ -747,7 +754,7 @@ internal sealed partial class RedisHashCache : RedisCacheBase, IHashCache, ISpan
         HashFields.ValidateForWrite(values);
         var redisKey = ToRedisKey(cacheKey, token);
         var (hashEntries, payloads) = SerializeFields(values);
-        return SetInnerAsync<T>(redisKey, hashEntries, payloads, HashCacheSetOption.KeyReplace, effective, token);
+        return SetInnerAsync<T>(cacheKey, redisKey, hashEntries, payloads, HashCacheSetOption.KeyReplace, effective, token);
     }
 
     /// <summary>One entry per field, then the metadata entry when there is metadata; the payloads go back once the write has completed.</summary>
@@ -861,7 +868,6 @@ internal sealed partial class RedisHashCache : RedisCacheBase, IHashCache, ISpan
                 continue;
             }
 
-            _auditKeySize?.Invoke(Logged(cacheKey, redisKey, typeof(T)), key, v);
 
             if (string.Equals(key, KnownFieldNames.MetadataKey))
             {
@@ -939,7 +945,6 @@ internal sealed partial class RedisHashCache : RedisCacheBase, IHashCache, ISpan
             (Self: this, Key: redisKey, Field: field),
             RedisValue.Null,
             token).ConfigureAwait(false);
-            _auditKeySize?.Invoke(Logged(cacheKey, redisKey, typeof(T)), field, value);
             ret = DeserializeField<T?>(value);
             found = IsCacheHit(value);
             operation.Stop();
@@ -991,7 +996,6 @@ internal sealed partial class RedisHashCache : RedisCacheBase, IHashCache, ISpan
                 for (var i = 0; i < fields.Length; i++)
                 {
                     var v = values[i];
-                    _auditKeySize?.Invoke(Logged(cacheKey, redisKey, typeof(T)), fields[i], v);
                     dict.Add(fields[i], DeserializeField<T?>(v));
                     anyPresent |= IsCacheHit(v);
                 }
@@ -1037,7 +1041,7 @@ internal sealed partial class RedisHashCache : RedisCacheBase, IHashCache, ISpan
             token).ConfigureAwait(false);
             if (hashEntries.Length > 0)
             {
-                (ret, found) = ReadFields<T>(hashEntries, cacheKey, redisKey);
+                (ret, found) = ReadFields<T>(hashEntries);
             }
             operation.Stop();
         }
@@ -1083,7 +1087,7 @@ internal sealed partial class RedisHashCache : RedisCacheBase, IHashCache, ISpan
     }
 
     /// <summary>Owns <paramref name="payloads"/>: they go back to the pool on every exit, including one before the command starts.</summary>
-    private async ValueTask<bool> SetInnerAsync<T>(RedisKey redisKey, HashEntry[] hashEntries, SerializedPayload[] payloads, HashCacheSetOption setOption, DateTimeOffset expiration, CancellationToken token, WriteReport? report = null)
+    private async ValueTask<bool> SetInnerAsync<T>(CacheKey cacheKey, RedisKey redisKey, HashEntry[] hashEntries, SerializedPayload[] payloads, HashCacheSetOption setOption, DateTimeOffset expiration, CancellationToken token, WriteReport? report = null)
     {
         try
         {
@@ -1093,6 +1097,11 @@ internal sealed partial class RedisHashCache : RedisCacheBase, IHashCache, ISpan
             {
                 token.ThrowIfCancellationRequested();
                 return ret;
+            }
+
+            if (_auditLargeValues && expiration >= now)
+            {
+                AuditKeySize(Logged(cacheKey, redisKey, typeof(T)), hashEntries);
             }
 
             if (hashEntries.Length == 0 && expiration >= now && _cacheNullValues)
@@ -1459,7 +1468,7 @@ internal sealed partial class RedisHashCache : RedisCacheBase, IHashCache, ISpan
     }
 
     /// <summary>The hash's user fields, and whether they count as a hit: a value other than the null marker, or the empty marker while nulls are cached.</summary>
-    private (Dictionary<string, T?> Values, bool Found) ReadFields<T>(HashEntry[] hashEntries, CacheKey cacheKey, RedisKey redisKey)
+    private (Dictionary<string, T?> Values, bool Found) ReadFields<T>(HashEntry[] hashEntries)
     {
         var values = new Dictionary<string, T?>();
         var hasEmptyMarker = false;
@@ -1477,7 +1486,6 @@ internal sealed partial class RedisHashCache : RedisCacheBase, IHashCache, ISpan
                 continue;
             }
             var v = hashEntry.Value;
-            _auditKeySize?.Invoke(Logged(cacheKey, redisKey, typeof(T)), name, v);
             anyValue |= IsCacheHit(v);
             values.Add(name, DeserializeField<T>(v));
         }
@@ -1489,17 +1497,33 @@ internal sealed partial class RedisHashCache : RedisCacheBase, IHashCache, ISpan
         new(Telemetry, Clock, Name, methodName, typeof(T));
 
 
-    private void AuditKeySize(LoggedKey key, string field, RedisValue value)
+    private void AuditKeySize(LoggedKey key, HashEntry[] entries)
     {
         if (!_logger.IsEnabled(LogLevel.Warning))
         {
             return;
         }
 
+        foreach (var entry in entries)
+        {
+            AuditValue(key, entry.Name, entry.Value);
+        }
+    }
+
+    private void AuditKeySize(LoggedKey key, RedisValue field, RedisValue value)
+    {
+        if (_logger.IsEnabled(LogLevel.Warning))
+        {
+            AuditValue(key, field, value);
+        }
+    }
+
+    private void AuditValue(LoggedKey key, RedisValue field, RedisValue value)
+    {
         var valueLen = value.Length();
         if (valueLen > _cacheOptions.LargeValueThreshold)
         {
-            LogLargeValueDetected(key, field, valueLen);
+            LogLargeValueDetected(key, field.ToString(), valueLen);
         }
     }
 

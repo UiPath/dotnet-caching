@@ -64,7 +64,7 @@ internal sealed partial class RedisCache : RedisCacheBase, ICache, IInvalidation
     public ValueTask<T?> GetAsync<T>(CacheKey cacheKey, CachePolicy? policy, CancellationToken token = default)
     {
         NotCacheableException.ThrowIfNotCacheable<T>();
-        return GetAsync<T>(cacheKey, ToRedisKey(cacheKey, token), token);
+        return GetAsync<T>(ToRedisKey(cacheKey, token), token);
     }
 
     public ValueTask<KeyValuePair<CacheKey, T?>[]> GetAsync<T>(CacheKey[] cacheKeys, CachePolicy? policy, CancellationToken token = default)
@@ -397,7 +397,7 @@ internal sealed partial class RedisCache : RedisCacheBase, ICache, IInvalidation
     private ValueTask<bool> SetCoreAsync<T>(CacheKey cacheKey, T? value, TimeSpan duration, CancellationToken token)
     {
         NotCacheableException.ThrowIfNotCacheable<T>();
-        return SetInternalAsync(ToRedisKey(cacheKey, token), value, duration, token);
+        return SetInternalAsync(cacheKey, ToRedisKey(cacheKey, token), value, duration, token);
     }
 
     private ValueTask<bool> SetCoreAsync<T>(KeyValuePair<CacheKey, T?>[] keyValues, TimeSpan duration, CancellationToken token)
@@ -455,7 +455,6 @@ internal sealed partial class RedisCache : RedisCacheBase, ICache, IInvalidation
                     (Self: this, Key: redisKey),
                     RedisValue.Null,
                     token).ConfigureAwait(false);
-                    _auditKeySize?.Invoke(Logged(cacheKey, redisKey, typeof(T)), value);
                     (found, cached) = InterpretReadResult<T>(value);
                     operation.Stop();
                 }
@@ -481,7 +480,7 @@ internal sealed partial class RedisCache : RedisCacheBase, ICache, IInvalidation
                 LogCacheMissed(Logged(cacheKey, redisKey, typeof(T)));
                 ret = await RunGeneratorAsync(cacheKey, state, generator, factoryTimeout, token).ConfigureAwait(false);
 
-                if ((!IsDefault(ret) || _cacheNullValues) && await SetInternalAsync(redisKey, ret, expiration, token).ConfigureAwait(false))
+                if ((!IsDefault(ret) || _cacheNullValues) && await SetInternalAsync(cacheKey, redisKey, ret, expiration, token).ConfigureAwait(false))
                 {
                     run.Expiration = StoredDeadline(expiration);
                 }
@@ -523,7 +522,7 @@ internal sealed partial class RedisCache : RedisCacheBase, ICache, IInvalidation
         try
         {
             var token = run.Token;
-            var (found, cached) = await ReadGetOrAddProbeAsync<T>(cacheKey, redisKey, token).ConfigureAwait(false);
+            var (found, cached) = await ReadGetOrAddProbeAsync<T>(redisKey, token).ConfigureAwait(false);
             if (found)
             {
                 // The probe reads no TTL; a result call that joined this run reads it itself.
@@ -537,7 +536,7 @@ internal sealed partial class RedisCache : RedisCacheBase, ICache, IInvalidation
 
                 var duration = generated.Expiration is { } expiration ? Remaining(expiration) : PolicyDuration(policy);
                 if (duration is { } lifetime && (!IsDefault(generated.Value) || _cacheNullValues)
-                    && await SetInternalAsync(redisKey, generated.Value, lifetime, token).ConfigureAwait(false))
+                    && await SetInternalAsync(cacheKey, redisKey, generated.Value, lifetime, token).ConfigureAwait(false))
                 {
                     run.Expiration = StoredDeadline(lifetime);
                 }
@@ -602,7 +601,7 @@ internal sealed partial class RedisCache : RedisCacheBase, ICache, IInvalidation
     }
 
     // GenerateAndStoreAsync carries an inlined copy of this read; a change to one goes in both.
-    private async ValueTask<(bool Found, T? Value)> ReadGetOrAddProbeAsync<T>(CacheKey cacheKey, RedisKey redisKey, CancellationToken token)
+    private async ValueTask<(bool Found, T? Value)> ReadGetOrAddProbeAsync<T>(RedisKey redisKey, CancellationToken token)
     {
         token.ThrowIfCancellationRequested();
 
@@ -624,8 +623,6 @@ internal sealed partial class RedisCache : RedisCacheBase, ICache, IInvalidation
             (Self: this, Key: redisKey),
             RedisValue.Null,
             token).ConfigureAwait(false);
-            _auditKeySize?.Invoke(Logged(cacheKey, redisKey, typeof(T)), value);
-
             (found, deserialized) = InterpretReadResult<T>(value);
             operation.Stop();
         }
@@ -642,7 +639,7 @@ internal sealed partial class RedisCache : RedisCacheBase, ICache, IInvalidation
         return (found, deserialized);
     }
 
-    private async ValueTask<bool> SetInternalAsync<T>(RedisKey redisKey, T? value, TimeSpan expiration, CancellationToken token)
+    private async ValueTask<bool> SetInternalAsync<T>(CacheKey cacheKey, RedisKey redisKey, T? value, TimeSpan expiration, CancellationToken token)
     {
         bool ret = default;
         token.ThrowIfCancellationRequested();
@@ -678,6 +675,7 @@ internal sealed partial class RedisCache : RedisCacheBase, ICache, IInvalidation
             else
             {
                 var (serialized, payload) = SerializeValue(value);
+                _auditKeySize?.Invoke(Logged(cacheKey, redisKey, typeof(T)), serialized);
                 using (payload)
                 {
                     ret = await _write.ExecuteAsync(static (s, token) =>
@@ -772,6 +770,7 @@ internal sealed partial class RedisCache : RedisCacheBase, ICache, IInvalidation
             else
             {
                 (var serialized, payloads[i]) = SerializeValue(value);
+                _auditKeySize?.Invoke(Logged(keyValues[i].Key, redisKey, typeof(T)), serialized);
                 transaction.StringSetAsync(redisKey, serialized, expiration, When.Always, CommandFlags.DemandMaster).Forget();
             }
         }
@@ -817,6 +816,7 @@ internal sealed partial class RedisCache : RedisCacheBase, ICache, IInvalidation
             {
                 NoteWritten(redisKey);
                 var (serialized, payload) = isNull ? (RedisValue.EmptyString, default(SerializedPayload)) : SerializeValue(value);
+                _auditKeySize?.Invoke(Logged(cacheKey, redisKey, typeof(T)), serialized);
                 using (payload)
                 {
                     ret = await _write.ExecuteAsync(static (s, token) =>
@@ -923,7 +923,7 @@ internal sealed partial class RedisCache : RedisCacheBase, ICache, IInvalidation
         return ret;
     }
 
-    private async ValueTask<T?> GetAsync<T>(CacheKey cacheKey, RedisKey redisKey, CancellationToken token)
+    private async ValueTask<T?> GetAsync<T>(RedisKey redisKey, CancellationToken token)
     {
         T? ret = default;
         bool found = false;
@@ -946,7 +946,6 @@ internal sealed partial class RedisCache : RedisCacheBase, ICache, IInvalidation
             (Self: this, Key: redisKey),
             RedisValue.Null,
             token).ConfigureAwait(false);
-            _auditKeySize?.Invoke(Logged(cacheKey, redisKey, typeof(T)), value);
             (found, ret) = InterpretReadResult<T>(value);
             operation.Stop();
         }
@@ -1008,7 +1007,6 @@ internal sealed partial class RedisCache : RedisCacheBase, ICache, IInvalidation
                 for (var j = 0; j < group.Length; j++)
                 {
                     var i = group[j];
-                    _auditKeySize?.Invoke(Logged(keys[i], redisKeys[i], typeof(T)), values[j]);
                     var (found, obj) = InterpretReadResult<T>(values[j]);
                     reads[i].Hit = found;
                     retValues[i] = new KeyValuePair<CacheKey, T?>(keys[i], obj);
@@ -1085,8 +1083,6 @@ internal sealed partial class RedisCache : RedisCacheBase, ICache, IInvalidation
             }
 
             var (value, expiration) = result.Value;
-            _auditKeySize?.Invoke(Logged(cacheKey, redisKey, typeof(T)), value);
-
             var (found, deserialized) = InterpretReadResult<T>(value);
             if (!found)
             {
@@ -1159,7 +1155,6 @@ internal sealed partial class RedisCache : RedisCacheBase, ICache, IInvalidation
                 for (var j = 0; j < group.Length; j++)
                 {
                     var i = group[j];
-                    _auditKeySize?.Invoke(Logged(keys[i], redisKeys[i], typeof(T)), values[j]);
                     var (found, deserialized) = InterpretReadResult<T>(values[j]);
                     if (!found)
                     {
@@ -1230,6 +1225,11 @@ internal sealed partial class RedisCache : RedisCacheBase, ICache, IInvalidation
 
     private void AuditKeySize(LoggedKey key, RedisValue value)
     {
+        if (!_logger.IsEnabled(LogLevel.Warning))
+        {
+            return;
+        }
+
         var valueLen = value.Length();
         if (valueLen > _largeValueThreshold)
         {
