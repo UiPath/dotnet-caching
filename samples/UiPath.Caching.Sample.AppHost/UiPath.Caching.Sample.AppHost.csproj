@@ -1,4 +1,4 @@
-<Project Sdk="Aspire.AppHost.Sdk/13.3.0">
+<Project Sdk="Aspire.AppHost.Sdk/13.6.5">
 
   <PropertyGroup>
     <OutputType>Exe</OutputType>
@@ -7,6 +7,7 @@
     <Nullable>enable</Nullable>
     <IsAspireHost>true</IsAspireHost>
     <IsPackable>false</IsPackable>
+    <NoWarn>$(NoWarn);ASPIRE010</NoWarn>
     <SonarQubeExclude>true</SonarQubeExclude>
     <SonarQubeTestProject>false</SonarQubeTestProject>
     <GenerateAssemblyInfo>true</GenerateAssemblyInfo>

@@ -7,7 +7,7 @@
     <CloudEvents>2.9.0</CloudEvents>
     <!-- The whole net10 dependency floor, in one place: the family ships in lockstep, and a bump
          has a single line to change instead of eleven that must agree. -->
-    <MEVersion10>10.0.13</MEVersion10>
+    <MEVersion10>10.0.14</MEVersion10>
   </PropertyGroup>
   <!-- Per-TFM dependency floors: keep both groups in sync ID-for-ID, each on its own major.
        Order matters. Dependabot does not evaluate the conditions, so it sees one version per ID and
@@ -51,11 +51,11 @@
          than a downlevel one. Raised on purpose in #85 as the prerequisite for SE.Redis 3.0, and it
          still has to move with the family: 10.0.12 of any of them asks for 10.0.12 of this, and
          StackExchange.Redis 3.4.29 asks for 10.0.13. -->
-    <PackageVersion Include="Microsoft.Extensions.Logging.Abstractions" Version="10.0.13" />
+    <PackageVersion Include="Microsoft.Extensions.Logging.Abstractions" Version="10.0.14" />
     <PackageVersion Include="Swashbuckle.AspNetCore" Version="10.3.1" />
     <PackageVersion Include="BenchmarkDotNet" Version="0.15.8" />
-    <PackageVersion Include="Aspire.Hosting.Redis" Version="13.6.3" />
-    <!-- Aspire.Hosting 13.6.3 resolves MessagePack 2.5.307, which already fixes GHSA-qhrr-8q5h-9q3h (fixed in 2.5.303 and 3.1.9).
+    <PackageVersion Include="Aspire.Hosting.Redis" Version="13.6.5" />
+    <!-- Aspire.Hosting 13.6.5 resolves MessagePack 2.5.307, which already fixes GHSA-qhrr-8q5h-9q3h (fixed in 2.5.303 and 3.1.9).
          The sample app host references this 3.1.x pin directly, so it wins over Aspire's 2.5.x. -->
     <PackageVersion Include="MessagePack" Version="3.1.12" />
     <PackageVersion Include="System.Net.Http" Version="4.3.4" />
