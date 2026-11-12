@@ -14,6 +14,11 @@ updates:
         patterns:
           - "OpenTelemetry"
           - "OpenTelemetry.*"
+      # The Microsoft.Extensions 10.x packages depend on each other at the same patch; bumping
+      # one at a time fails restore with NU1605. Keep the family in a single PR.
+      microsoft-extensions:
+        patterns:
+          - "Microsoft.Extensions.*"
     ignore:
       # Microsoft.Extensions.* versions are framework-aligned via TFM-conditional
       # ItemGroups in Directory.Packages.props (net8 -> 8.x, net10 -> 10.x).
