@@ -8,6 +8,9 @@
     <IsAspireHost>true</IsAspireHost>
     <IsPackable>false</IsPackable>
     <NoWarn>$(NoWarn);ASPIRE010</NoWarn>
+    <!-- Aspire.AppHost.Sdk 13.6.5 calls the SDK's PickBestRid task on any 10.0.100+ SDK, but 10.0.4xx lacks it (MSB4036).
+         Use the RID tool it falls back to instead. -->
+    <_AspireUseSdkPickBestRid>false</_AspireUseSdkPickBestRid>
     <SonarQubeExclude>true</SonarQubeExclude>
     <SonarQubeTestProject>false</SonarQubeTestProject>
     <GenerateAssemblyInfo>true</GenerateAssemblyInfo>
