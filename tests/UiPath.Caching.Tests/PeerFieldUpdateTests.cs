@@ -1455,10 +1455,10 @@ public class PeerFieldUpdateTests
             return true;
         };
 
-        subject.OnNext(SetEvent("1", new Dictionary<string, object?> { [KnownFieldNames.VersionKey] = 7L, [KnownFieldNames.PeerFieldsKey] = new Dictionary<string, string?> { ["f"] = "dg==" }, ["_unknown_"] = "ignored" }));
+        subject.OnNext(SetEvent("1", new Dictionary<string, object?> { [KnownFieldNames.VersionKey] = 7L, [KnownFieldNames.PeerFieldsKey] = new Dictionary<string, byte[]?> { ["f"] = [0x76] }, ["_unknown_"] = "ignored" }));
 
         token.HasChanged.Should().BeFalse();
-        seen.Should().ContainSingle().Which.Should().BeEquivalentTo(new { Version = 7L, Fields = new Dictionary<string, string?> { ["f"] = "dg==" } });
+        seen.Should().ContainSingle().Which.Should().BeEquivalentTo(new { Version = 7L, Fields = new Dictionary<string, byte[]?> { ["f"] = [0x76] } });
     }
 
     [Fact]
@@ -1466,7 +1466,7 @@ public class PeerFieldUpdateTests
     {
         var (subject, token) = Token();
         using var _ = token;
-        var properties = new Dictionary<string, object?> { [KnownFieldNames.VersionKey] = 7L, [KnownFieldNames.PeerFieldsKey] = new Dictionary<string, string?> { ["f"] = "dg==" } };
+        var properties = new Dictionary<string, object?> { [KnownFieldNames.VersionKey] = 7L, [KnownFieldNames.PeerFieldsKey] = new Dictionary<string, byte[]?> { ["f"] = [0x76] } };
 
         subject.OnNext(SetEvent("1", properties));
 
@@ -1495,8 +1495,8 @@ public class PeerFieldUpdateTests
         };
 
         subject.OnNext(SetEvent("1", new Dictionary<string, object?> { [KnownFieldNames.VersionKey] = 7L }));
-        subject.OnNext(SetEvent("2", new Dictionary<string, object?> { [KnownFieldNames.PeerFieldsKey] = new Dictionary<string, string?> { ["f"] = "dg==" } }));
-        subject.OnNext(SetEvent("3", new Dictionary<string, object?> { [KnownFieldNames.VersionKey] = 0L, [KnownFieldNames.PeerFieldsKey] = new Dictionary<string, string?> { ["f"] = "dg==" } }));
+        subject.OnNext(SetEvent("2", new Dictionary<string, object?> { [KnownFieldNames.PeerFieldsKey] = new Dictionary<string, byte[]?> { ["f"] = [0x76] } }));
+        subject.OnNext(SetEvent("3", new Dictionary<string, object?> { [KnownFieldNames.VersionKey] = 0L, [KnownFieldNames.PeerFieldsKey] = new Dictionary<string, byte[]?> { ["f"] = [0x76] } }));
         subject.OnNext(new TestCacheEvent { Id = "4", Type = KnownEventTypes.CacheRemoved, Source = new Uri("urn:peer"), Data = new CacheEventData("k") });
 
         offered.Should().Be(0);

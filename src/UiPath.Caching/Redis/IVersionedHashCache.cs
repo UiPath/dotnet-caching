@@ -7,5 +7,5 @@ internal interface IVersionedHashCache
 
     ValueTask<bool> RemoveFieldsVersionedAsync<T>(CacheKey cacheKey, string[] fields, CancellationToken token = default);
 
-    bool TryDecodeFields<T>(IDictionary<string, string?> encoded, [MaybeNullWhen(false)] out Dictionary<string, T?> values);
+    bool TryDecodeFields<T>(IReadOnlyDictionary<string, byte[]?> encoded, [MaybeNullWhen(false)] out Dictionary<string, T?> values);
 }

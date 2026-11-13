@@ -1378,6 +1378,20 @@ public class RedisHashCacheTests(ITestContextAccessor testContextAccessor) : IAs
     }
 
     [Fact]
+    public void Decoding_peer_fields_hands_each_cache_its_own_copy_of_the_event_bytes()
+    {
+        _fixture.Inject<ISerializerProxy<byte[]>>(new RawByteSerializerProxy());
+        byte[] shared = [1, 2, 3];
+        var encoded = new Dictionary<string, byte[]?> { ["a"] = shared };
+
+        Sut.TryDecodeFields<byte[]>(encoded, out var first).Should().BeTrue();
+        Sut.TryDecodeFields<byte[]>(encoded, out var second).Should().BeTrue();
+
+        first!["a"].Should().Equal(shared).And.NotBeSameAs(shared);
+        second!["a"].Should().NotBeSameAs(first["a"]).And.NotBeSameAs(shared);
+    }
+
+    [Fact]
     public async Task Set_asks_a_memory_serializer_for_memory_instead_of_an_array()
     {
         var serializer = new RecordingRawSerializer();

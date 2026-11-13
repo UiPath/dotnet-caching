@@ -284,6 +284,8 @@ public interface ISerializerProxy<T1>
 
 The two `TryDeserialize` overloads exist so callers can attempt a deserialization without throwing on malformed input — useful for cache-poisoning recovery (drop the bad entry and rehydrate).
 
+`TryDeserialize(object)` no longer sees cache event properties that the built-in event formatters decode: they read `_version_`, the expirations, the metadata and the peer fields as typed values, and only a custom event formatter that leaves them as `JsonElement` still reaches it. So does the CloudEvents proxy's stock decode when the fast path declines an event (an extra, missing or duplicate attribute).
+
 ### Skeleton implementation
 
 Most binary serializers natively produce `byte[]`, so an implementation is mostly delegation:

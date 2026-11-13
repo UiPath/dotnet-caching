@@ -221,6 +221,35 @@ public class FastCloudEventCodecTests
         Stock.Encode(foreign).Should().Be(ReadOnlyMemory<byte>.Empty);
     }
 
+    [Fact]
+    public void Decode_reads_known_properties_as_typed_values()
+    {
+        var wire = Stock.Encode(Standard("CacheSet", "urn:machine:1", new CacheEventData("k", new Dictionary<string, object?>
+        {
+            ["_version_"] = 5L,
+            ["_peerFields_"] = new Dictionary<string, string?> { ["a"] = "AQ==", ["b"] = null },
+        })));
+
+        var properties = Fast.Decode(wire)!.Data!.Properties!;
+
+        properties["_version_"].Should().BeOfType<long>();
+        properties["_peerFields_"].Should().BeAssignableTo<IReadOnlyDictionary<string, byte[]?>>();
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void Decode_reads_base64_peer_fields_with_plus_and_slash_in_plain_and_escaped_form(bool escaped)
+    {
+        var wire = """{"specversion":"1.0","id":"i","type":"CacheSet","source":"urn:s","datacontenttype":"application/json","data":{"Key":"k","Properties":{"_version_":5,"_peerFields_":{"a":"@"}}}}"""
+            .Replace("@", escaped ? "+/+/".Replace("+", @"\u002B").Replace("/", @"\/") : "+/+/");
+
+        var fields = Fast.Decode(System.Text.Encoding.UTF8.GetBytes(wire))!.Data!.Properties!["_peerFields_"]
+            .Should().BeAssignableTo<IReadOnlyDictionary<string, byte[]?>>().Which;
+
+        fields["a"].Should().Equal(Convert.FromBase64String("+/+/"));
+    }
+
     [Theory]
     [MemberData(nameof(Payloads), DisableDiscoveryEnumeration = true)]
     public void Decode_equals_the_stock_decode_for_every_payload(string name, CacheEventData data)
