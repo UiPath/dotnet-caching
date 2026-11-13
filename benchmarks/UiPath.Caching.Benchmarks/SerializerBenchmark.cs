@@ -206,3 +206,170 @@ public class MessagePackSerializerBenchmark
     [BenchmarkCategory("Set"), Benchmark]
     public ValueTask<bool> Set() => _cache.SetAsync("bench:format", _obj, Expiration, _policy);
 }
+
+/// <summary>What a policy that migrates on read costs a read: <c>off</c> reads a value in the format the policy writes with migration off, <c>native</c> the same with it on (nothing to rewrite), <c>json</c> a value still in JSON, which every read offers and the queue refuses after the first.</summary>
+[MemoryDiagnoser]
+[GroupBenchmarksBy(BenchmarkLogicalGroupRule.ByCategory)]
+[CategoriesColumn]
+public class MigrateOnReadBenchmark
+{
+    private static readonly TimeSpan Expiration = TimeSpan.FromMinutes(30);
+
+    private CustomObject _obj = default!;
+    private FakeRedisConnector _redis = default!;
+    private RedisCache _cache = default!;
+    private ValueMigration _migration = default!;
+    private CachePolicy _policy = default!;
+    private Func<CancellationToken, Task<CustomObject?>> _neverRuns = _ => throw new InvalidOperationException("A hit ran its generator");
+
+    [Params("Small", "Medium")]
+    public string Size { get; set; } = "Medium";
+
+    [Params("off", "native", "json")]
+    public string Mode { get; set; } = "off";
+
+    [GlobalSetup]
+    public void Setup()
+    {
+        _obj = Size == "Small" ? CustomObject.RandomSmall() : CustomObject.RandomMedium();
+        var registry = new ValueSerializerRegistry([("bench", new JsonBodySerializer(), false)]);
+        var proxy = new SystemJsonByteSerializerProxy();
+        _migration = new ValueMigration(new FormatMigrator(NullTelemetryProvider.Instance, TimeProvider.System, NullLogger.Instance), new ValueRewriter(proxy, registry), registry, effective: null);
+        _policy = new CachePolicy { Serializer = new SerializerPolicy { Write = "bench", MigrateOnRead = Mode != "off" } };
+        _redis = new FakeRedisConnector();
+        _cache = new RedisCache(
+            _redis,
+            proxy,
+            EmptyResiliencePipelineProvider.Instance,
+            NullTelemetryProvider.Instance,
+            new RedisCacheOptions(),
+            new CacheOptions { AppShortName = "bench" },
+            new DefaultCachePolicyFactory(null, null, valueSerializers: registry),
+            TimeProvider.System,
+            NullLogger<RedisCache>.Instance)
+        {
+            ValueSerializers = registry,
+            Migration = _migration,
+        };
+        var seed = Mode == "json" ? new CachePolicy { Serializer = new SerializerPolicy { Write = "json" } } : _policy;
+        _cache.SetAsync("bench:migrate", _obj, Expiration, seed).AsTask().GetAwaiter().GetResult();
+        if (_cache.GetAsync<CustomObject>("bench:migrate", _policy).AsTask().GetAwaiter().GetResult() is null)
+        {
+            throw new InvalidOperationException("The fake connector did not serve the read");
+        }
+    }
+
+    [GlobalCleanup]
+    public void Cleanup()
+    {
+        _migration.Dispose();
+        _redis.Dispose();
+    }
+
+    [BenchmarkCategory("Get"), Benchmark]
+    public ValueTask<CustomObject?> Get() => _cache.GetAsync<CustomObject>("bench:migrate", _policy);
+
+    [BenchmarkCategory("GetOrAdd"), Benchmark]
+    public ValueTask<CustomObject?> GetOrAdd_Hit() => _cache.GetOrAddAsync<CustomObject>("bench:migrate", _neverRuns, Expiration, _policy);
+
+    private sealed class JsonBodySerializer : ICacheValueSerializer
+    {
+        public IReadOnlyList<int> FormatIds { get; } = [0x10];
+
+        public int Serialize<T>(T value, IBufferWriter<byte> target)
+        {
+            using var writer = new Utf8JsonWriter(target);
+            JsonSerializer.Serialize(writer, value);
+            return 0x10;
+        }
+
+        public T? Deserialize<T>(int formatId, ReadOnlySequence<byte> source)
+        {
+            var reader = new Utf8JsonReader(source);
+            return JsonSerializer.Deserialize<T>(ref reader);
+        }
+    }
+}
+
+/// <summary>What a policy that migrates on read costs reading a hash of five fields, in the modes of <see cref="MigrateOnReadBenchmark"/>.</summary>
+[MemoryDiagnoser]
+[GroupBenchmarksBy(BenchmarkLogicalGroupRule.ByCategory)]
+[CategoriesColumn]
+public class MigrateOnReadHashBenchmark
+{
+    private const int Fields = 5;
+
+    private FakeRedisConnector _redis = default!;
+    private RedisHashCache _cache = default!;
+    private ValueMigration _migration = default!;
+    private CachePolicy _policy = default!;
+
+    [Params("Small", "Medium")]
+    public string Size { get; set; } = "Medium";
+
+    [Params("off", "native", "json")]
+    public string Mode { get; set; } = "off";
+
+    [GlobalSetup]
+    public void Setup()
+    {
+        var obj = Size == "Small" ? CustomObject.RandomSmall() : CustomObject.RandomMedium();
+        var serializer = new JsonBodySerializer();
+        var registry = new ValueSerializerRegistry([("bench", serializer, false)]);
+        var proxy = new SystemJsonByteSerializerProxy();
+        _migration = new ValueMigration(new FormatMigrator(NullTelemetryProvider.Instance, TimeProvider.System, NullLogger.Instance), new ValueRewriter(proxy, registry), registry, effective: null);
+        _policy = new CachePolicy { Serializer = new SerializerPolicy { Write = "bench", MigrateOnRead = Mode != "off" } };
+        var stored = new ArrayBufferWriter<byte>();
+        stored.Write<byte>([0x10]);
+        serializer.Serialize(obj, stored);
+        var value = Mode == "json" ? JsonSerializer.SerializeToUtf8Bytes(obj) : stored.WrittenSpan.ToArray();
+        _redis = new FakeRedisConnector();
+        _redis.SeedHash("bench:h:migrate", [.. Enumerable.Range(0, Fields).Select(i => new HashEntry($"f{i}", value))]);
+        _cache = new RedisHashCache(
+            _redis,
+            proxy,
+            EmptyResiliencePipelineProvider.Instance,
+            NullTelemetryProvider.Instance,
+            new RedisCacheOptions(),
+            new CacheOptions { AppShortName = "bench" },
+            new DefaultCachePolicyFactory(null, null, valueSerializers: registry),
+            TimeProvider.System,
+            NullLogger<RedisHashCache>.Instance)
+        {
+            ValueSerializers = registry,
+            Migration = _migration,
+        };
+        if ((_cache.GetAsync<CustomObject>("migrate", _policy).AsTask().GetAwaiter().GetResult()).Count != Fields)
+        {
+            throw new InvalidOperationException("The fake connector did not serve the read");
+        }
+    }
+
+    [GlobalCleanup]
+    public void Cleanup()
+    {
+        _migration.Dispose();
+        _redis.Dispose();
+    }
+
+    [BenchmarkCategory("HashGet"), Benchmark]
+    public ValueTask<IDictionary<string, CustomObject?>> Get() => _cache.GetAsync<CustomObject>("migrate", _policy);
+
+    private sealed class JsonBodySerializer : ICacheValueSerializer
+    {
+        public IReadOnlyList<int> FormatIds { get; } = [0x10];
+
+        public int Serialize<T>(T value, IBufferWriter<byte> target)
+        {
+            using var writer = new Utf8JsonWriter(target);
+            JsonSerializer.Serialize(writer, value);
+            return 0x10;
+        }
+
+        public T? Deserialize<T>(int formatId, ReadOnlySequence<byte> source)
+        {
+            var reader = new Utf8JsonReader(source);
+            return JsonSerializer.Deserialize<T>(ref reader);
+        }
+    }
+}

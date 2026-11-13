@@ -10,7 +10,9 @@ internal sealed class ValueFormatResolver
     private readonly CachePolicy _defaultPolicy;
     private readonly IEffectiveFormat? _effective;
     private readonly ConcurrentDictionary<ReadKey, ReadableFormats> _readable = new(ReadKeyComparer.Instance);
+    private readonly ConcurrentDictionary<ICacheValueSerializer, ReadableFormats> _anyMigrating = new(ReferenceEqualityComparer.Instance);
     private ReadableFormats? _defaultReadable;
+    private ReadableFormats? _defaultMigrating;
 
     public ValueFormatResolver(ISerializerProxy<byte[]> proxy, ValueSerializerRegistry registry, CachePolicy defaultPolicy, IEffectiveFormat? effective = null)
     {
@@ -51,29 +53,46 @@ internal sealed class ValueFormatResolver
     {
         var defaultRead = _defaultPolicy.Serializer?.Read;
         var read = policy?.Serializer?.Read ?? defaultRead;
+        var migrateTo = MigrationTarget(policy, effective);
         if (read is null)
         {
-            return ReadableFormats.Any;
+            return migrateTo is null ? ReadableFormats.Any : AnyMigratingTo(migrateTo);
         }
 
         if (ReferenceEquals(effective, _defaultPolicy) && ReferenceEquals(read, defaultRead))
         {
-            return _defaultReadable ??= Resolve(read, _defaultPolicy);
+            return migrateTo is null
+                ? _defaultReadable ??= Resolve(read, _defaultPolicy, null)
+                : _defaultMigrating ??= Resolve(read, _defaultPolicy, migrateTo);
         }
 
-        var key = new ReadKey(read, ConfiguredWriter(effective));
+        var key = new ReadKey(read, ConfiguredWriter(effective), migrateTo is not null);
         if (_readable.TryGetValue(key, out var cached))
         {
             return cached;
         }
 
-        var resolved = Resolve(read, effective);
+        var resolved = Resolve(read, effective, migrateTo);
         return _readable.GetOrAdd(key.Snapshot(), resolved);
     }
 
-    private ReadableFormats Resolve(IReadOnlyList<string> read, CachePolicy effective) =>
+    // A policy that sets MigrateOnRead sets it for itself; one that does not takes the default's, as it takes its Read. A policy that writes JSON has no target: nothing is rewritten toward it.
+    private ICacheValueSerializer? MigrationTarget(CachePolicy? policy, CachePolicy effective) =>
+        (policy?.Serializer?.MigrateOnRead ?? _defaultPolicy.Serializer?.MigrateOnRead) == true ? ConfiguredWriter(effective) : null;
+
+    private ReadableFormats AnyMigratingTo(ICacheValueSerializer migrateTo)
+    {
+        if (_anyMigrating.TryGetValue(migrateTo, out var cached))
+        {
+            return cached;
+        }
+
+        return _anyMigrating.GetOrAdd(migrateTo, static target => ReadableFormats.AnyMigratingTo(target));
+    }
+
+    private ReadableFormats Resolve(IReadOnlyList<string> read, CachePolicy effective, ICacheValueSerializer? migrateTo) =>
         // The configured format is readable even while the node list holds it back, and then the write is JSON.
-        ReadableFormats.Resolve(_registry, read, ConfiguredWriter(effective), jsonFallback: _effective is not null && Reader is { JsonProxyIsDefault: true });
+        ReadableFormats.Resolve(_registry, read, ConfiguredWriter(effective), jsonFallback: _effective is not null && Reader is { JsonProxyIsDefault: true }, migrateTo);
 
     private ICacheValueSerializer? ConfiguredWriter(CachePolicy effective) =>
         effective.WriteSerializer
@@ -85,9 +104,9 @@ internal sealed class ValueFormatResolver
 
     private ICacheValueSerializer? WriterOf(CachePolicy effective) => _registry.WriteSerializerFor(effective);
 
-    private readonly record struct ReadKey(IReadOnlyList<string> Read, ICacheValueSerializer? Writer)
+    private readonly record struct ReadKey(IReadOnlyList<string> Read, ICacheValueSerializer? Writer, bool Migrate)
     {
-        public ReadKey Snapshot() => new([.. Read], Writer);
+        public ReadKey Snapshot() => new([.. Read], Writer, Migrate);
     }
 
     // By what the list says, so a copy of it, or one edited since it was first read, is not mistaken for it.
@@ -97,7 +116,7 @@ internal sealed class ValueFormatResolver
 
         public bool Equals(ReadKey x, ReadKey y)
         {
-            if (!ReferenceEquals(x.Writer, y.Writer) || x.Read.Count != y.Read.Count)
+            if (!ReferenceEquals(x.Writer, y.Writer) || x.Migrate != y.Migrate || x.Read.Count != y.Read.Count)
             {
                 return false;
             }
@@ -117,6 +136,7 @@ internal sealed class ValueFormatResolver
         {
             var hash = new HashCode();
             hash.Add(key.Writer is null ? 0 : RuntimeHelpers.GetHashCode(key.Writer));
+            hash.Add(key.Migrate);
             for (var i = 0; i < key.Read.Count; i++)
             {
                 hash.Add(key.Read[i], StringComparer.OrdinalIgnoreCase);

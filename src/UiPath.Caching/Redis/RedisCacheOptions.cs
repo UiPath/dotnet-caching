@@ -35,6 +35,7 @@ public class RedisCacheOptions : ICacheOptions
     /// less than a MULTI/EXEC transaction. Off by default: the script costs the server several times a plain GET and PTTL, which is what a read sends instead (as it does before Redis 7). When on, and on a server that cannot run the script,
     /// reads switch to the GET and PTTL pair: they switch to it for good, with a warning, if the first script fails for any reason,
     /// or later if the server refuses one as unknown or not permitted. Set to <see langword="true"/> to send the script.
+    /// A rewrite for <c>Serializer.MigrateOnRead</c> follows it too: it sends a script only when this is on, and that script needs write-capable <c>EVAL</c>/<c>EVALSHA</c> (it runs on Redis 6 too), else it sends a transaction.
     /// </summary>
     public bool ReadScriptsEnabled { get; set; }
 
