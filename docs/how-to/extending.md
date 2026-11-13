@@ -518,6 +518,44 @@ inspected under them.
 
 A policy that sets no `Serializer` takes the default policy's `Write`, and one that sets only `Read` does too.
 
+### MessagePack
+
+`UiPath.Caching.MessagePack` is a ready `ICacheValueSerializer`: MessagePack, LZ4-compressed above a size threshold. It
+needs no attributes on your types. In this repo's benchmarks a small object went from 172 bytes as JSON to 102 as MessagePack, a medium one from 799 to 645, and a large one from 388,780 to 277,208. Compression then cuts repetitive rows to roughly a third at 16 KB and above: 1 KB of rows 1,257 to 626 bytes, 16 KB 19,327 to 7,124, 128 KB 156,651 to 56,385.
+
+```csharp
+services.AddCaching(
+    b =>
+    {
+        b.AddRedis(_ => { });
+        b.AddMessagePackSerializer(); // registered as "messagepack"; pass a name and a callback to change either
+    },
+    o => o.Policies["Sessions"] = new CachePolicy { Serializer = new SerializerPolicy { Write = "messagepack" } });
+```
+
+Or in configuration, with the serializer registered in code: `"Policies": { "Sessions": { "Serializer": { "Write": "messagepack" } } }`.
+Only the policies that name it write MessagePack; every other policy keeps writing JSON.
+The package depends on the exact `UiPath.Caching` version it was built with, so upgrade the two together.
+
+| Option | Default | Notes |
+|---|---|---|
+| `CompressionThresholdBytes` | `1024` | A value whose MessagePack bytes reach this size is compressed when that makes it smaller, so an incompressible value is stored plain. `0` tries every value, `int.MaxValue` none. |
+| `MaxDecompressedBytes` | `67108864` (64 MiB) | A compressed value that claims more than this uncompressed is rejected on read, as is any claim above 255 times its compressed size. Deserializing can allocate several times the decompressed size (measured up to about 8x for typed collections, more for an `object[]` of nils), so size it to available memory. It replaces `MaximumDecompressedSize` on a supplied `MessagePackSecurity`. |
+| `SerializerOptions` | contractless resolver, `MessagePackSecurity.UntrustedData` | Replace it to use your own resolvers. `UntrustedData` adds hash-collision-resistant comparers; the object-graph depth limit is the same as `TrustedData`. A supplied instance that carries `MessagePackSecurity.TrustedData` is switched to `UntrustedData`; to run trusted, pass your own `MessagePackSecurity` instance. Where MessagePack has no resistant comparer for a key type (`TimeSpan`, `decimal`, `Uri`, tuples, custom structs), the default comparer is used instead of failing the read. Compression set on it is ignored: the threshold decides. A resolver you supply that resolves `object` by type name (Typeless) or polymorphically reopens type confusion on bytes read from Redis. |
+
+The serializer owns format ids `0x02` (plain) and `0x03` (LZ4); the id stored with each value says which, so a node reads
+both whatever its threshold.
+
+Roll it out readers first. A node reads a format only once the serializer is registered on it, so register
+`AddMessagePackSerializer` on every node and finish that deploy before any policy sets `Write = "messagepack"`; a node that
+cannot read the value misses and regenerates it (see [rolling a serializer out](../concepts.md#rolling-a-serializer-out)).
+Setting `Write` back to `json` keeps values already stored as MessagePack readable while the default JSON proxy is in use; with a custom `ISerializerProxy` registered, headers are only recognized under a policy that writes a non-JSON format, so under `Write = "json"` those values go to your proxy and read as misses.
+
+The default resolver is contractless, which writes a type's public property names, as JSON does. Renaming a
+property, or changing its type, therefore silently loses that data for values written before the change, exactly as
+it would with JSON: the old values read back with the new property empty. Mark a type with `[MessagePackObject]` and
+`[Key(n)]` to make the format independent of the names.
+
 ## Swapping the default factories
 
 `ICacheFactory` and `ICachePolicyFactory` each have a default DI registration set up by `AddCaching` — the concrete `CacheFactory` and `DefaultCachePolicyFactory` respectively. When you need to substitute either, use the fluent `Use*Factory` extensions on `ICachingBuilder`. They internally call `Services.Replace(...)` so the swap survives the rest of the `AddCaching` pipeline (which uses `TryAddSingleton` and would otherwise lose to the default registration).

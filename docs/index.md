@@ -13,6 +13,7 @@ UiPath's internal multilayer caching library. L1 in-memory + L2 Redis, cross-nod
 | `UiPath.Caching.OpenTelemetry` | OpenTelemetry wiring for `ICachingTelemetryProvider` (`ActivitySource` + `Meter` named `UiPath.Caching`). |
 | `UiPath.Caching.Azure` | Microsoft Entra ID authentication for Azure Managed Redis / Azure Cache for Redis. |
 | `UiPath.Caching.Queue` | Set ("queue") caches on Redis sets — `ISetCache` / `ISetCache<T>`. |
+| `UiPath.Caching.MessagePack` | MessagePack value serializer with LZ4 compression above a size threshold. |
 
 ## Pick your path
 
