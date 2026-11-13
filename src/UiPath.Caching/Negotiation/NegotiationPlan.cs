@@ -24,7 +24,8 @@ internal static class NegotiationPlan
         return desired;
     }
 
-    public static NodeAdvertisement Advertisement(ValueSerializerRegistry registry, ICachePolicyFactory policies, ValueReader reader, string library)
+    /// <param name="readsBinaryEvents">Whether the binary event decoder is registered; a node without it still lists the JSON events it reads.</param>
+    public static NodeAdvertisement Advertisement(ValueSerializerRegistry registry, ICachePolicyFactory policies, ValueReader reader, string library, bool readsBinaryEvents = false)
     {
         var reads = new List<string> { NodeAdvertisement.Json };
         foreach (var (_, serializer, _) in registry.Entries)
@@ -51,7 +52,7 @@ internal static class NegotiationPlan
             strict[DefaultPolicyName] = [NodeAdvertisement.Json, NodeAdvertisement.NoSniff];
         }
 
-        return new(library, Guid.NewGuid().ToString("N"), reads.Distinct().ToList(), strict);
+        return new(library, Guid.NewGuid().ToString("N"), reads.Distinct().ToList(), strict, EventReads: readsBinaryEvents ? [NodeAdvertisement.Json, BinaryEventSettings.Token] : [NodeAdvertisement.Json]);
     }
 
     private static IEnumerable<string> Tokens(ValueSerializerRegistry registry, string format) =>

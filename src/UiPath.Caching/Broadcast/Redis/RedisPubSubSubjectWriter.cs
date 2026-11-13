@@ -71,6 +71,21 @@ internal sealed partial class RedisPubSubSubjectWriter<T> : IDisposable
         _subscribeTimer = new Timer(Subscribe, null, _timerDueTime, _timerPeriod);
     }
 
+    /// <summary>Raised once a subscription is in place, after the server has confirmed it.</summary>
+    internal event Action? Subscribed;
+
+    /// <summary>Whether the server has confirmed the subscription and no subscription connection is known to be down.</summary>
+    internal bool IsSubscribed
+    {
+        get
+        {
+            lock (_gate)
+            {
+                return !_disposed && _activeGeneration == _generation && _subscriptionsDown.Count == 0 && !_unnamedFailure;
+            }
+        }
+    }
+
     public void Dispose()
     {
         Action? unsubscribe;
@@ -179,6 +194,8 @@ internal sealed partial class RedisPubSubSubjectWriter<T> : IDisposable
             {
                 _onSubscriptionGap();
             }
+
+            Subscribed?.Invoke();
         }
         catch (Exception ex)
         {
@@ -244,64 +261,74 @@ internal sealed partial class RedisPubSubSubjectWriter<T> : IDisposable
 
     private void OnMessage(RedisValue value)
     {
-        if (!_disposed)
+        if (_disposed)
         {
-            try
+            return;
+        }
+
+        try
+        {
+            var payload = (ReadOnlyMemory<byte>)value;
+            if (!IsOwnUndecoded(payload) && TryDecode(payload, out var ev))
             {
-                var payload = (ReadOnlyMemory<byte>)value;
-                if (IsOwnUndecoded(payload))
-                {
-                    return;
-                }
-
-                T? ev;
-                try
-                {
-                    ev = _formatter.Decode(payload);
-                }
-                catch (Exception ex) when (IsKnownFormat(payload))
-                {
-                    LogUndecodable(ex);
-                    _onDropped();
-                    return;
-                }
-
-                if (ev is null)
-                {
-                    if (IsKnownFormat(payload))
-                    {
-                        LogUndecodable(null);
-                        _onDropped();
-                    }
-
-                    return;
-                }
-
-                LogEventReceived(ev.Id, _redisChannel);
-                if (ev.IsValid())
-                {
-                    if (ev.SameSource(_sourceUri))
-                    {
-                        LogEventFromCurrentSource(ev.Id, _redisChannel);
-                    }
-                    else
-                    {
-                        Write(ev);
-                    }
-                }
-                else
-                {
-                    LogEventInvalid(ev.Id, _redisChannel);
-                    if (IsKnownFormat(payload))
-                    {
-                        _onDropped();
-                    }
-                }
+                Dispatch(ev, payload);
             }
-            catch (Exception ex)
+        }
+        catch (Exception ex)
+        {
+            LogOnMessageError(ex, _redisChannel);
+        }
+    }
+
+    private bool TryDecode(ReadOnlyMemory<byte> payload, [NotNullWhen(true)] out T? ev)
+    {
+        try
+        {
+            ev = _formatter.Decode(payload);
+        }
+        catch (Exception ex) when (IsKnownFormat(payload))
+        {
+            LogUndecodable(ex);
+            _onDropped();
+            ev = default;
+            return false;
+        }
+
+        if (ev is not null)
+        {
+            return true;
+        }
+
+        if (IsKnownFormat(payload))
+        {
+            LogUndecodable(null);
+            _onDropped();
+        }
+
+        return false;
+    }
+
+    private void Dispatch(T ev, ReadOnlyMemory<byte> payload)
+    {
+        LogEventReceived(ev.Id, _redisChannel);
+        if (!ev.IsValid())
+        {
+            LogEventInvalid(ev.Id, _redisChannel);
+            if (IsKnownFormat(payload))
             {
-                LogOnMessageError(ex, _redisChannel);
+                _onDropped();
             }
+
+            return;
+        }
+
+        if (ev.SameSource(_sourceUri))
+        {
+            LogEventFromCurrentSource(ev.Id, _redisChannel);
+        }
+        else
+        {
+            Write(ev);
         }
     }
 

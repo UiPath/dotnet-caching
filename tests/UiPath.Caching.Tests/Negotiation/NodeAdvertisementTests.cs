@@ -32,6 +32,56 @@ public class NodeAdvertisementTests
     }
 
     [Fact]
+    public void Ad_round_trips_event_formats_and_confirmed_subscriptions()
+    {
+        var ad = new NodeAdvertisement(
+            "3.2.0",
+            "9f1c",
+            ["json"],
+            new Dictionary<string, IReadOnlyList<string>>(),
+            EventReads: ["json", "02"],
+            Subscriptions: new Dictionary<string, int> { ["app:ps:orders"] = 1, ["a,b;c=d"] = 2 });
+
+        ad.Encode().Should().Contain(";er=json,02").And.Contain("sub=");
+        NodeAdvertisement.TryParse(ad.Encode(), out var parsed).Should().BeTrue();
+
+        parsed!.EventReads.Should().Equal("json", "02");
+        parsed.Subscriptions.Should().BeEquivalentTo(new Dictionary<string, int> { ["app:ps:orders"] = 1, ["a,b;c=d"] = 2 });
+    }
+
+    [Fact]
+    public void Ad_round_trips_the_pattern_subscriptions_and_omits_none()
+    {
+        var ad = new NodeAdvertisement("3.2.0", "i", ["json"], new Dictionary<string, IReadOnlyList<string>>(), PatternSubscriptions: 2);
+
+        ad.Encode().Should().Contain(";psub=2");
+        NodeAdvertisement.TryParse(ad.Encode(), out var parsed).Should().BeTrue();
+        parsed!.PatternSubscriptions.Should().Be(2);
+        (ad with { PatternSubscriptions = 0 }).Encode().Should().NotContain("psub");
+        NodeAdvertisement.TryParse("lib=3.2.0;inst=i;vr=json;psub=x", out var bad).Should().BeTrue();
+        bad!.PatternSubscriptions.Should().BeNull("a count that does not parse is no claim");
+    }
+
+    [Fact]
+    public void An_ad_that_says_nothing_about_events_or_subscriptions_parses_as_none()
+    {
+        var ad = new NodeAdvertisement("3.2.0", "i", ["json"], new Dictionary<string, IReadOnlyList<string>>());
+
+        ad.Encode().Should().NotContain("er=").And.NotContain("sub=");
+        NodeAdvertisement.TryParse("lib=3.2.0;inst=i;vr=json", out var parsed).Should().BeTrue();
+        parsed!.EventReads.Should().BeNull("a build that did not know events lists none, which is not the same as listing json");
+        parsed.Subscriptions.Should().BeNull();
+    }
+
+    [Fact]
+    public void A_subscription_entry_that_does_not_parse_is_left_out_not_the_whole_ad()
+    {
+        NodeAdvertisement.TryParse("lib=3.2.0;inst=i;vr=json;sub=good:2,bad,worse:x,:3", out var parsed).Should().BeTrue();
+
+        parsed!.Subscriptions.Should().BeEquivalentTo(new Dictionary<string, int> { ["good"] = 2 });
+    }
+
+    [Fact]
     public void An_ad_that_is_not_leaving_does_not_say_so()
     {
         var ad = new NodeAdvertisement("3.2.0", "i", ["json"], new Dictionary<string, IReadOnlyList<string>>());
