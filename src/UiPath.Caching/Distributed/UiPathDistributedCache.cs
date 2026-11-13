@@ -54,7 +54,8 @@ internal sealed partial class UiPathDistributedCache : IDistributedCache
         _defaultEntryExpiration = options.DefaultEntryExpiration;
         _allowUnboundedEntries = options.AllowUnboundedEntries;
         // Its writes borrow the caller's memory, so none may outlive the call: the hash cache is told no background writes whatever the policy says.
-        _policy = policy is null ? null : CachePolicyMerger.Merge(new CachePolicy { BackgroundDistributedWrite = false }, policy);
+        // The values are the caller's own bytes, so they are stored as they are and never behind a value serializer's format header.
+        _policy = policy is null ? null : CachePolicyMerger.Merge(AdapterPolicyFactory.Overlay, policy);
         _slideByRewrite = slideByRewrite;
         TierRetainsValues = tierRetainsValues;
         _logger = logger;
@@ -63,6 +64,8 @@ internal sealed partial class UiPathDistributedCache : IDistributedCache
     }
 
     internal bool TierRetainsValues { get; }
+
+    internal CachePolicy? Policy => _policy;
 
     public byte[]? Get(string key) =>
         GetAsync(key).GetAwaiter().GetResult();

@@ -21,7 +21,7 @@ public static class RedisCollectionExtensions
         {
             return builder;
         }
-        builder.Services.TryAddEnumerable(ServiceDescriptor.Singleton<ICacheProvider, RedisCacheProvider>());
+        builder.Services.TryAddEnumerable(ServiceDescriptor.Singleton<ICacheProvider, RedisCacheProvider>(RedisCacheProvider.Create));
         return builder;
     }
 

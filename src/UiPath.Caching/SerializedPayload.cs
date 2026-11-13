@@ -36,5 +36,8 @@ internal readonly struct SerializedPayload : IDisposable
             ? PooledJsonWriter.Serialize(value, json.Options)
             : new(serializer.SerializeToMemory(value));
 
+    internal static SerializedPayload Serialize<T>(ICacheValueSerializer serializer, ReadOnlySpan<int> formatIds, T value) =>
+        PooledJsonWriter.SerializeValue(serializer, formatIds, value);
+
     internal static SerializedPayload FromRented(byte[] rented, int length) => new(rented, length);
 }

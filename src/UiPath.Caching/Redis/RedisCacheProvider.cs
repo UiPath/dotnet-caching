@@ -1,4 +1,5 @@
 using UiPath.Caching.Policies;
+using UiPath.Caching.Serialization;
 using UiPath.Caching.Telemetry;
 
 namespace UiPath.Caching.Redis;
@@ -15,6 +16,7 @@ public sealed class RedisCacheProvider : ICacheProvider
     private readonly ICachePolicyFactory _policyFactory;
     private readonly TimeProvider _clock;
     private readonly IKeyMaskingPolicy? _keyMaskingPolicy;
+    private readonly ValueSerializerRegistry _valueSerializers;
     private readonly Lazy<RedisCache> _cache;
     private readonly Lazy<RedisHashCache> _hashCache;
 
@@ -29,7 +31,35 @@ public sealed class RedisCacheProvider : ICacheProvider
         ICachePolicyFactory policyFactory,
         TimeProvider clock,
         IKeyMaskingPolicy? keyMaskingPolicy = null)
+        : this(
+            redisCacheOptions,
+            cacheOptions,
+            redis,
+            serializerProxy,
+            resiliencePipelineProvider,
+            cachingTelemetryProvider,
+            loggerFactory,
+            policyFactory,
+            clock,
+            keyMaskingPolicy,
+            ValueSerializerRegistry.Empty)
     {
+    }
+
+    internal RedisCacheProvider(
+        IOptions<RedisCacheOptions> redisCacheOptions,
+        IOptions<CacheOptions> cacheOptions,
+        IRedisConnector redis,
+        ISerializerProxy<byte[]> serializerProxy,
+        IResiliencePipelineProvider resiliencePipelineProvider,
+        ICachingTelemetryProvider cachingTelemetryProvider,
+        ILoggerFactory loggerFactory,
+        ICachePolicyFactory policyFactory,
+        TimeProvider clock,
+        IKeyMaskingPolicy? keyMaskingPolicy,
+        ValueSerializerRegistry valueSerializers)
+    {
+        _valueSerializers = valueSerializers;
         _keyMaskingPolicy = keyMaskingPolicy;
         _clock = clock;
         _redisCacheOptions = redisCacheOptions.Value;
@@ -68,8 +98,24 @@ public sealed class RedisCacheProvider : ICacheProvider
         }
     }
 
-    private RedisCache BuildCache() =>
+    internal static RedisCacheProvider Create(IServiceProvider services) =>
         new(
+            services.GetRequiredService<IOptions<RedisCacheOptions>>(),
+            services.GetRequiredService<IOptions<CacheOptions>>(),
+            services.GetRequiredService<IRedisConnector>(),
+            services.GetRequiredService<ISerializerProxy<byte[]>>(),
+            services.GetRequiredService<IResiliencePipelineProvider>(),
+            services.GetRequiredService<ICachingTelemetryProvider>(),
+            services.GetRequiredService<ILoggerFactory>(),
+            services.GetRequiredService<ICachePolicyFactory>(),
+            services.GetRequiredService<TimeProvider>(),
+            services.GetService<IKeyMaskingPolicy>(),
+            services.GetRequiredService<ValueSerializerRegistry>());
+
+    private RedisCache BuildCache()
+    {
+        _valueSerializers.ValidateWriteNames(_policyFactory);
+        return new(
             _redis,
             _serializerProxy,
             _resiliencePipelineProvider,
@@ -79,10 +125,16 @@ public sealed class RedisCacheProvider : ICacheProvider
             _policyFactory,
             _clock,
             _loggerFactory.Create<RedisCache>(),
-            _keyMaskingPolicy);
+            _keyMaskingPolicy)
+        {
+            ValueSerializers = _valueSerializers,
+        };
+    }
 
-    private RedisHashCache BuildHashCache() =>
-        new(
+    private RedisHashCache BuildHashCache()
+    {
+        _valueSerializers.ValidateWriteNames(_policyFactory);
+        return new(
             _redis,
             _serializerProxy,
             _resiliencePipelineProvider,
@@ -92,5 +144,9 @@ public sealed class RedisCacheProvider : ICacheProvider
             _policyFactory,
             _clock,
             _loggerFactory.Create<RedisHashCache>(),
-            _keyMaskingPolicy);
+            _keyMaskingPolicy)
+        {
+            ValueSerializers = _valueSerializers,
+        };
+    }
 }

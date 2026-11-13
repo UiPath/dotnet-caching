@@ -89,4 +89,10 @@ public sealed class CachePolicy
     /// while inheriting the rest. (Compare with <see cref="Rehydrate"/>, which is replaced wholesale.)
     /// </summary>
     public LockProfile? Lock { get; init; }
+
+    /// <summary>Which value serializer the policy writes with and reads. Merged field by field against the default policy. <c>null</c> inherits (default JSON).</summary>
+    public SerializerPolicy? Serializer { get; init; }
+
+    /// <summary>The serializer <see cref="SerializerPolicy.Write"/> names, set once the policy factory has resolved it; <c>null</c> writes JSON.</summary>
+    internal ICacheValueSerializer? WriteSerializer { get; init; }
 }

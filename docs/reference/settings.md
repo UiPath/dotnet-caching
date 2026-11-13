@@ -440,6 +440,7 @@ Entries are keyed by string under `Caching:Policies`. `ICache<T>` and `IHashCach
 | `RehydrateEnabled` | `bool?` | `null` | Per-policy | Master switch for proactive background refresh; `null` = inherit (default off). |
 | `Rehydrate` | `RehydrateOptions?` | `null` | Per-policy | Rehydrate tuning; replaced wholesale (no per-field merge) when overriding. See [Policies\[\<name\>\].Rehydrate (RehydrateOptions)](#policiesnamerehydrate-rehydrateoptions). |
 | `Lock` | `LockProfile?` | `null` | Per-policy | Per-cache lock overrides; field-level merged against the default policy. See [Policies\[\<name\>\].Lock (LockProfile)](#policiesnamelock-lockprofile). |
+| `Serializer` | `SerializerPolicy?` | `null` | Per-policy | Which value serializer the policy writes with and reads; `null` = JSON. Field-level merged against the default policy. See [Policies\[\<name\>\].Serializer (SerializerPolicy)](#policiesnameserializer-serializerpolicy). |
 
 ---
 
@@ -469,3 +470,17 @@ Nested under a `CachePolicy` entry. Field-level merged against the default polic
 | `DistributedLockTimeout` | `TimeSpan?` | `null` | Per-policy | `null` = inherit from provider options or default policy. |
 | `DistributedLockExpiry` | `TimeSpan?` | `null` | Per-policy | Redis key TTL for the distributed lock; `null` = inherit from provider options or default policy. |
 | `DistributedLockSkipReread` | `bool?` | `null` | Per-policy | Skip the second Redis read under a lock free at the first attempt (see the provider option); `null` = inherit from provider options or default policy. |
+
+---
+
+## Policies\[\<name\>\].Serializer (SerializerPolicy)
+
+Nested under a `CachePolicy` entry. Field-level merged against the default policy's `SerializerPolicy`: set only the fields you want to override; `null` inherits. A blank name, or one that is not registered with `AddValueSerializer` (and is not `json`), fails with an `OptionsValidationException` when the policy factory is first resolved, which is on first cache use rather than at host start. The merged policy must also read what it writes: `Read` may not be empty and must include `Write`. `AddDistributedCache` ignores `Serializer`: its own policy always writes and reads JSON, so a default `Serializer` does not stop it.
+
+| Property | Type | Default | Scope | Notes |
+|---|---|---|---|---|
+| `Write` | `string?` | `null` | Per-policy | A registered serializer name, or `json`; blank is rejected; `null` = inherit, and under that `json`. |
+| `Read` | `string[]?` | `null` | Per-policy | The formats the policy reads, each a registered name or `json`; never empty, and including `Write`; `null` = inherit, and under that every registered format. Arrays from layered configuration merge by index, see below. |
+| `MigrateOnRead` | `bool?` | `null` | Per-policy | Rewrite a value read in another format into the write format; `null` = inherit, and under that off. |
+
+**`Read` and layered configuration.** A `Read` set in code replaces the default policy's list as a whole, but .NET configuration providers merge arrays by index. With a base layer of `"Read": ["a", "b"]` and an override layer of `"Read": ["json"]`, the bound list is `["json", "b"]`, not `["json"]`. An override of `"Read": []` binds as `null`, so it inherits and the policy reads every registered format. To override safely, set every index the base layer sets (or repeat the full list), or declare `Read` in one layer only.

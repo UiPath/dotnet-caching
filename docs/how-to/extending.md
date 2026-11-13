@@ -359,6 +359,21 @@ adapter, which constructs its own `RawByteSerializerProxy`; see the contract not
 - **Only replace the default globally.** `AddDistributedCache` gives its own provider `RawByteSerializerProxy` explicitly rather than resolving one from DI, so replacing the app-wide registration does not change what the `IDistributedCache` adapter stores in its `data` field. That is deliberate: those bytes belong to the caller.
 - **Set members are compared by their serialized bytes.** `ISetCache`'s local tier keys its snapshot on `Serialize` output using structural byte equality, so a serializer must be deterministic: two equal values must serialize identically, or set membership and de-duplication will disagree between the memory and Redis tiers.
 
+### Named value serializers: `ICacheValueSerializer`
+
+`AddValueSerializer(name, factory)` registers an `ICacheValueSerializer` that a policy selects with
+`Serializer.Write` (see [Policies\[\<name\>\].Serializer](../reference/settings.md#policiesnameserializer-serializerpolicy)).
+The library writes and strips the format header; the serializer only produces and reads the payload.
+
+```csharp
+builder.AddValueSerializer("fast", _ => new MyValueSerializer());
+```
+
+The registry owns whatever the factory returns and disposes it with the container, through `DisposeAsync` when
+the serializer has one and `Dispose` otherwise. So the factory must return a new instance, not one resolved from
+DI, which the container would dispose a second time. The factory runs when the registry is built, on first cache
+use; a build that throws disposes what it created, and the next use runs the factory again.
+
 ### Distributed cache keyspace
 
 The distributed cache stores each entry as a Redis hash with a `data` field plus `absexp`/`sldexp`

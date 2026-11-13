@@ -3,6 +3,8 @@ using StackExchange.Redis;
 using UiPath.Caching.Config;
 using UiPath.Caching.Policies;
 using UiPath.Caching.Polly;
+using UiPath.Caching.Serialization;
+using UiPath.Caching.Tests.Fakes;
 
 namespace UiPath.Caching.Tests;
 
@@ -123,6 +125,180 @@ public class CachingBuilderTests
             .Should().BeOfType<ChangeTokenFactory<byte[]>>();
         providerB.GetRequiredService<IResiliencePipelineProvider>()
             .Get(ResiliencePipelineNames.Read).Should().BeOfType<ResiliencePipelineWrapper>();
+    }
+
+    [Fact]
+    public void Registered_serializer_resolves_by_name()
+    {
+        var serializer = new FakeValueSerializer(0x10);
+        var services = new ServiceCollection();
+        var builder = new CachingBuilder(services);
+        builder.AddValueSerializer("fast", _ => serializer);
+        builder.Complete();
+
+        var registry = services.BuildServiceProvider().GetRequiredService<ValueSerializerRegistry>();
+
+        registry.Resolve("fast").Should().BeSameAs(serializer);
+        registry.TryGetByFormat(0x10, out var byFormat).Should().BeTrue();
+        byFormat.Should().BeSameAs(serializer);
+    }
+
+    [Fact]
+    public void The_factory_receives_the_container()
+    {
+        var services = new ServiceCollection();
+        var marker = new object();
+        services.AddSingleton(marker);
+        object? seen = null;
+        var builder = new CachingBuilder(services);
+        builder.AddValueSerializer("fast", sp =>
+        {
+            seen = sp.GetRequiredService<object>();
+            return new FakeValueSerializer(0x10);
+        });
+        builder.Complete();
+
+        services.BuildServiceProvider().GetRequiredService<ValueSerializerRegistry>();
+
+        seen.Should().BeSameAs(marker);
+    }
+
+    [Fact]
+    public void Registry_is_empty_without_registrations()
+    {
+        var services = new ServiceCollection();
+        new CachingBuilder(services).Complete();
+
+        services.BuildServiceProvider().GetRequiredService<ValueSerializerRegistry>().IsEmpty.Should().BeTrue();
+    }
+
+    [Fact]
+    public void A_consumer_cannot_register_a_library_id()
+    {
+        var services = new ServiceCollection();
+        var builder = new CachingBuilder(services);
+        builder.AddValueSerializer("fast", _ => new FakeValueSerializer(CacheValueFormats.MessagePack));
+        builder.Complete();
+
+        var act = () => services.BuildServiceProvider().GetRequiredService<ValueSerializerRegistry>();
+
+        act.Should().Throw<OptionsValidationException>().WithMessage("*0x02*");
+    }
+
+    [Fact]
+    public void A_library_serializer_may_use_a_library_id()
+    {
+        var services = new ServiceCollection();
+        var builder = new CachingBuilder(services);
+        builder.AddLibraryValueSerializer("messagepack", _ => new FakeValueSerializer(CacheValueFormats.MessagePack));
+        builder.Complete();
+
+        services.BuildServiceProvider().GetRequiredService<ValueSerializerRegistry>()
+            .TryGetByFormat(CacheValueFormats.MessagePack, out _).Should().BeTrue();
+    }
+
+    [Fact]
+    public void The_same_name_registered_twice_fails_at_registration()
+    {
+        var builder = new CachingBuilder(new ServiceCollection());
+        builder.AddValueSerializer("fast", _ => new FakeValueSerializer(0x10));
+
+        var act = () => builder.AddValueSerializer("FAST", _ => new FakeValueSerializer(0x11));
+
+        act.Should().Throw<ArgumentException>().WithParameterName("name").WithMessage("*FAST*");
+    }
+
+    [Fact]
+    public void The_json_name_is_refused_at_registration()
+    {
+        var builder = new CachingBuilder(new ServiceCollection());
+
+        var act = () => builder.AddValueSerializer("JSON", _ => new FakeValueSerializer(0x10));
+
+        act.Should().Throw<ArgumentException>().WithParameterName("name").WithMessage("*json*");
+    }
+
+    [Fact]
+    public void A_library_and_a_consumer_serializer_cannot_share_a_name()
+    {
+        var builder = new CachingBuilder(new ServiceCollection());
+        builder.AddLibraryValueSerializer("messagepack", _ => new FakeValueSerializer(CacheValueFormats.MessagePack));
+
+        var act = () => builder.AddValueSerializer("messagepack", _ => new FakeValueSerializer(0x10));
+
+        act.Should().Throw<ArgumentException>().WithParameterName("name");
+    }
+
+    [Fact]
+    public void A_factory_that_returns_null_fails_naming_the_serializer()
+    {
+        var services = new ServiceCollection();
+        var builder = new CachingBuilder(services);
+        builder.AddValueSerializer("fast", _ => null!);
+        builder.Complete();
+
+        var act = () => services.BuildServiceProvider().GetRequiredService<ValueSerializerRegistry>();
+
+        act.Should().Throw<InvalidOperationException>().WithMessage("*fast*").WithMessage("*null*");
+    }
+
+    [Fact]
+    public void The_container_disposes_the_serializers_it_created()
+    {
+        var serializer = new DisposableFakeValueSerializer(0x10);
+        var services = new ServiceCollection();
+        var builder = new CachingBuilder(services);
+        builder.AddValueSerializer("fast", _ => serializer);
+        builder.Complete();
+        var provider = services.BuildServiceProvider();
+        _ = provider.GetRequiredService<ValueSerializerRegistry>();
+
+        provider.Dispose();
+
+        serializer.Disposed.Should().Be(1);
+    }
+
+    [Fact]
+    public void A_serializer_that_fails_validation_is_still_disposed()
+    {
+        var serializer = new DisposableFakeValueSerializer(0x02);
+        var services = new ServiceCollection();
+        var builder = new CachingBuilder(services);
+        builder.AddValueSerializer("fast", _ => serializer);
+        builder.Complete();
+        using var provider = services.BuildServiceProvider();
+
+        var act = () => provider.GetRequiredService<ValueSerializerRegistry>();
+
+        act.Should().Throw<OptionsValidationException>();
+        serializer.Disposed.Should().Be(1);
+    }
+
+    [Fact]
+    public void A_registration_needs_a_name_and_a_factory()
+    {
+        var builder = new CachingBuilder(new ServiceCollection());
+
+        builder.Invoking(b => b.AddValueSerializer("", _ => new FakeValueSerializer(0x10))).Should().Throw<ArgumentException>();
+        builder.Invoking(b => b.AddValueSerializer("fast", null!)).Should().Throw<ArgumentNullException>();
+    }
+
+    [Fact]
+    public void The_redis_provider_built_from_the_container_carries_the_registry()
+    {
+        var services = new ServiceCollection();
+        services.AddSingleton(Substitute.For<IRedisConnector>());
+        services.AddCaching(
+            builder => builder.AddRedis(_ => { }).AddValueSerializer("fast", _ => new FakeValueSerializer(0x10)),
+            options => options.AppShortName = "app");
+        using var provider = services.BuildServiceProvider();
+
+        var redis = provider.GetServices<ICacheProvider>().OfType<RedisCacheProvider>().Should().ContainSingle().Subject;
+
+        var registry = provider.GetRequiredService<ValueSerializerRegistry>();
+        registry.IsEmpty.Should().BeFalse();
+        redis.CreateCache().Should().BeOfType<RedisCache>().Which.ValueSerializers.Should().BeSameAs(registry);
+        redis.CreateHashCache().Should().BeOfType<RedisHashCache>().Which.ValueSerializers.Should().BeSameAs(registry);
     }
 
     private static ServiceProvider BuildContainer()

@@ -6,6 +6,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 
 ## [Unreleased]
 
+### Added
+
+- **A seam for value serializers.** `ICacheValueSerializer` and `CacheValueFormats` define a buffer-based serializer whose output starts with a one-byte format id, `AddValueSerializer` registers one by name, and `CachePolicy.Serializer` (`Write`, `Read`, `MigrateOnRead`) names it per policy. `AddValueSerializer` throws at the call for a name used twice on one builder or for `json`. A policy that names an unregistered or blank serializer, has an empty `Read`, or writes a format its `Read` leaves out fails with an `OptionsValidationException`, as does a serializer whose ids are outside the consumer ranges; these are checked when the policy factory is first resolved, on first cache use rather than at host start. A custom `ICachePolicyFactory` whose policy names an unregistered serializer fails the same way when the Redis provider builds its cache. Serializers the container created are disposed with it, through `DisposeAsync` when they only implement `IAsyncDisposable`, so a factory must return a new instance rather than one resolved from DI. The default stays JSON with no header, and `AddDistributedCache` ignores `Serializer`: its own policy always writes and reads JSON with no migration, so the caller's bytes never get a format header.
+
 ### Changed
 
 - **Cache event properties are read as typed values.** The built-in event formatters parse `_version_`, the expirations, the metadata and the peer fields straight into `long`, `DateTimeOffset`, string dictionaries and byte arrays instead of a `JsonElement` that was parsed again by the value serializer, which saves a clone, a box and a second parse per property of a peer-update event. The event bytes on the wire are unchanged. A custom `ISerializerProxy<byte[]>` no longer sees these properties in `TryDeserialize(object)` when the built-in formatters decode the event.
