@@ -5,7 +5,7 @@ namespace UiPath.Caching.Broadcast;
 public sealed class CacheEventFormatter : IEventFormatterProxy<ICacheEvent>, IEventSourceMatcherProvider
 {
     public ICacheEvent? Decode(ReadOnlyMemory<byte> body) =>
-        JsonSerializer.Deserialize<CacheEvent>(body.Span);
+        JsonSerializer.Deserialize<CacheEvent>(body.Span, CacheEventJson.Options);
 
     public ReadOnlyMemory<byte> Encode(ICacheEvent clearCacheEvent) =>
         JsonSerializer.SerializeToUtf8Bytes((CacheEvent)clearCacheEvent);

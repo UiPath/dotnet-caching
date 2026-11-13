@@ -95,7 +95,7 @@ public sealed class InnerTierTests
         public ValueTask<bool> RemoveFieldsVersionedAsync<T>(CacheKey cacheKey, string[] fields, CancellationToken token = default) =>
             throw new NotSupportedException();
 
-        public bool TryDecodeFields<T>(IDictionary<string, string?> encoded, [System.Diagnostics.CodeAnalysis.MaybeNullWhen(false)] out Dictionary<string, T?> values) =>
+        public bool TryDecodeFields<T>(IReadOnlyDictionary<string, byte[]?> encoded, [System.Diagnostics.CodeAnalysis.MaybeNullWhen(false)] out Dictionary<string, T?> values) =>
             throw new NotSupportedException();
     }
 }

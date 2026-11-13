@@ -6,6 +6,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 
 ## [Unreleased]
 
+### Changed
+
+- **Cache event properties are read as typed values.** The built-in event formatters parse `_version_`, the expirations, the metadata and the peer fields straight into `long`, `DateTimeOffset`, string dictionaries and byte arrays instead of a `JsonElement` that was parsed again by the value serializer, which saves a clone, a box and a second parse per property of a peer-update event. The event bytes on the wire are unchanged. A custom `ISerializerProxy<byte[]>` no longer sees these properties in `TryDeserialize(object)` when the built-in formatters decode the event.
+- **Decoded `ICacheEvent.Data.Properties` hold typed values.** From the built-in formatter and the CloudEvents fast path they are `long`, `DateTimeOffset`, `Dictionary<string, string?>` and byte-valued peer fields instead of `JsonElement`, so a custom subscriber that casts a property to `JsonElement` must handle those types.
+
 ## [3.1.1] - 2026-11-10
 
 ### Added

@@ -247,12 +247,12 @@ internal sealed partial class RedisHashCache : RedisCacheBase, IHashCache, ISpan
     public ValueTask<bool> RemoveFieldsVersionedAsync<T>(CacheKey cacheKey, string[] fields, CancellationToken token = default) =>
         RemoveFieldsCoreAsync<T>(cacheKey, fields, versioned: true, token);
 
-    public bool TryDecodeFields<T>(IDictionary<string, string?> encoded, [MaybeNullWhen(false)] out Dictionary<string, T?> values)
+    public bool TryDecodeFields<T>(IReadOnlyDictionary<string, byte[]?> encoded, [MaybeNullWhen(false)] out Dictionary<string, T?> values)
     {
         try
         {
             var decoded = new Dictionary<string, T?>(encoded.Count);
-            foreach (var (field, text) in encoded)
+            foreach (var (field, bytes) in encoded)
             {
                 if (KnownFieldNames.IsReserved(field))
                 {
@@ -260,7 +260,7 @@ internal sealed partial class RedisHashCache : RedisCacheBase, IHashCache, ISpan
                     return false;
                 }
 
-                decoded[field] = DeserializeField<T>(text is null ? RedisValue.Null : Convert.FromBase64String(text));
+                decoded[field] = DeserializeField<T>(bytes is null ? RedisValue.Null : (byte[])bytes.Clone());
             }
 
             values = decoded;

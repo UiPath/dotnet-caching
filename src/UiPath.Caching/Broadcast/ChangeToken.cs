@@ -334,7 +334,7 @@ public sealed partial class ChangeToken<T> : ICacheChangeToken, IKeyedObserver<I
 
         if (m is IDictionary<string, string?> mt || _serializer.TryDeserialize(m, out mt!))
         {
-            Metadata = mt;
+            Metadata = mt is null ? null : new Dictionary<string, string?>(mt);
             MetadataHasChanged = true;
         }
     }
@@ -349,13 +349,32 @@ public sealed partial class ChangeToken<T> : ICacheChangeToken, IKeyedObserver<I
 
         if ((v is long version || _serializer.TryDeserialize(v, out version))
             && version > 0
-            && (f is IDictionary<string, string?> fields || _serializer.TryDeserialize(f, out fields!))
+            && TryReadPeerFields(f, out var fields)
             && fields is { Count: > 0 })
         {
             return new PeerUpdate(version, fields, PeerExpiration(properties), PeerMetadata(properties));
         }
 
         return null;
+    }
+
+    /// <summary>Anything else is asked of the serializer as the base64 string dictionary it was always asked for, so custom serializers keep working.</summary>
+    private bool TryReadPeerFields(object value, out IReadOnlyDictionary<string, byte[]?>? fields)
+    {
+        if (value is IReadOnlyDictionary<string, byte[]?> decoded)
+        {
+            fields = decoded;
+            return true;
+        }
+
+        if (value is IDictionary<string, string?> encoded || _serializer.TryDeserialize(value, out encoded!))
+        {
+            fields = encoded is null ? null : new LazyPeerFields(encoded);
+            return fields is not null;
+        }
+
+        fields = null;
+        return false;
     }
 
     private DateTimeOffset? PeerExpiration(IDictionary<string, object?> properties)
@@ -369,12 +388,12 @@ public sealed partial class ChangeToken<T> : ICacheChangeToken, IKeyedObserver<I
         return null;
     }
 
-    private IDictionary<string, string?>? PeerMetadata(IDictionary<string, object?> properties)
+    private Dictionary<string, string?>? PeerMetadata(IDictionary<string, object?> properties)
     {
         if (properties.TryGetValue(KnownFieldNames.PeerMetadataKey, out object? m) && m is not null
             && (m is IDictionary<string, string?> metadata || _serializer.TryDeserialize(m, out metadata!)))
         {
-            return metadata;
+            return metadata is null ? null : new Dictionary<string, string?>(metadata);
         }
 
         return null;

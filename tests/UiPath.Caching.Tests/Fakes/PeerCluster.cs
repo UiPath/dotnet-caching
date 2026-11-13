@@ -468,7 +468,7 @@ internal sealed class PeerCluster : IDisposable
         ValueTask<bool> ISpanKeyHashCache.RemoveFieldsAsync<T>(CacheKey cacheKey, string[] fields, CancellationToken token) =>
             RemoveFieldsAfter(cacheKey.Name, fields, counted: false);
 
-        public bool TryDecodeFields<T>(IDictionary<string, string?> encoded, [MaybeNullWhen(false)] out Dictionary<string, T?> values)
+        public bool TryDecodeFields<T>(IReadOnlyDictionary<string, byte[]?> encoded, [MaybeNullWhen(false)] out Dictionary<string, T?> values)
         {
             if (FailsDecode)
             {
@@ -476,7 +476,7 @@ internal sealed class PeerCluster : IDisposable
                 return false;
             }
 
-            values = (Dictionary<string, T?>)(object)encoded.ToDictionary(f => f.Key, f => (string?)Encoding.UTF8.GetString(Convert.FromBase64String(f.Value!)));
+            values = (Dictionary<string, T?>)(object)encoded.ToDictionary(f => f.Key, f => (string?)Encoding.UTF8.GetString(f.Value!));
             return true;
         }
 

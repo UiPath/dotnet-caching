@@ -207,7 +207,7 @@ internal sealed class FastCloudEventCodec
                 source = _sources.Get(ref reader);
                 break;
             case DataSeen:
-                data = JsonSerializer.Deserialize<CacheEventData>(ref reader);
+                data = JsonSerializer.Deserialize<CacheEventData>(ref reader, CacheEventJson.Options);
                 break;
         }
 
@@ -220,7 +220,7 @@ internal sealed class FastCloudEventCodec
         private const int MaxEntries = 16;
         private const int MaxTextBytes = 256;
 
-        private readonly object _lock = new();
+        private readonly Lock _lock = new();
         private (byte[] Raw, T Value)[] _entries = [];
 
         public T Get(ref Utf8JsonReader reader)

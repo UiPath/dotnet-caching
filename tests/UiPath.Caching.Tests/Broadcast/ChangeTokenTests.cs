@@ -1,4 +1,6 @@
+using System.Text.Json;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 using StackExchange.Redis;
 using UiPath.Caching.Tests.Telemetry;
 
@@ -205,7 +207,7 @@ public class ChangeTokenTests : IAsyncLifetime
             Data = new CacheEventData(_key, new Dictionary<string, object?>
             {
                 [KnownFieldNames.VersionKey] = 2L,
-                [KnownFieldNames.PeerFieldsKey] = new Dictionary<string, string?> { ["a"] = "1" },
+                [KnownFieldNames.PeerFieldsKey] = new Dictionary<string, byte[]?> { ["a"] = [1] },
             }),
             Type = _fixture.Create<string>(),
         });
@@ -526,7 +528,7 @@ public class ChangeTokenTests : IAsyncLifetime
             Data = new CacheEventData(_key, new Dictionary<string, object?>
             {
                 [KnownFieldNames.VersionKey] = version,
-                [KnownFieldNames.PeerFieldsKey] = new Dictionary<string, string?> { ["a"] = "1" },
+                [KnownFieldNames.PeerFieldsKey] = new Dictionary<string, byte[]?> { ["a"] = [1] },
             }),
             Type = _fixture.Create<string>(),
         });
@@ -649,6 +651,198 @@ public class ChangeTokenTests : IAsyncLifetime
         return ValueTask.CompletedTask;
     }
 
+    [Fact]
+    public void Typed_properties_are_used_without_the_value_serializer()
+    {
+        var strict = new ThrowingSerializer();
+        var token = new ChangeToken<byte[]>(_key, _topic, _source, strict, _fixture.Freeze<ILogger<ChangeToken<byte[]>>>(), _telemetryProvider, _acceptedEvents);
+        PeerUpdate? seen = null;
+        ((IPeerUpdateSource)token).PeerUpdateHandler = update =>
+        {
+            seen = update;
+            return true;
+        };
+        var deadline = DateTimeOffset.UnixEpoch.AddDays(9);
+
+        token.OnNext(PeerEvent("set", new Dictionary<string, object?>
+        {
+            [KnownFieldNames.VersionKey] = 7L,
+            [KnownFieldNames.PeerFieldsKey] = new Dictionary<string, byte[]?> { ["a"] = [1, 2] },
+            [KnownFieldNames.PeerExpirationKey] = deadline,
+            [KnownFieldNames.PeerMetadataKey] = new Dictionary<string, string?> { ["m"] = "v" },
+        }));
+        token.OnNext(PeerEvent("refreshed", new Dictionary<string, object?>
+        {
+            [KnownFieldNames.ExpirationKey] = deadline,
+            [KnownFieldNames.MetadataKey] = new Dictionary<string, string?> { ["m"] = "v" },
+        }));
+
+        seen.Should().NotBeNull();
+        seen!.Version.Should().Be(7);
+        seen.Fields["a"].Should().Equal(1, 2);
+        seen.Expiration.Should().Be(deadline);
+        seen.Metadata.Should().Equal(new Dictionary<string, string?> { ["m"] = "v" });
+        token.Expiration.Should().Be(deadline);
+        token.Metadata.Should().Equal(new Dictionary<string, string?> { ["m"] = "v" });
+        strict.Calls.Should().Be(0);
+    }
+
+    [Fact]
+    public void JsonElement_properties_still_use_the_fallback()
+    {
+        PeerUpdate? seen = null;
+        ((IPeerUpdateSource)Sut).PeerUpdateHandler = update =>
+        {
+            seen = update;
+            return true;
+        };
+        var deadline = DateTimeOffset.UnixEpoch.AddDays(9);
+        var json = """{"_version_":7,"_peerFields_":{"a":"AQI="},"_peerExpiration_":@,"_peerMetadata_":{"m":"v"},"_expiration_":@,"_metadata_":{"m":"v"}}""".Replace("@", JsonSerializer.Serialize(deadline));
+        var properties = JsonSerializer.Deserialize<Dictionary<string, JsonElement>>(json)!.ToDictionary(p => p.Key, p => (object?)p.Value);
+
+        Sut.OnNext(PeerEvent("set", properties));
+
+        seen.Should().NotBeNull();
+        seen!.Version.Should().Be(7);
+        seen.Fields["a"].Should().Equal(1, 2);
+        seen.Expiration.Should().Be(deadline);
+        seen.Metadata.Should().Equal(new Dictionary<string, string?> { ["m"] = "v" });
+    }
+
+    [Fact]
+    public void JsonElement_peer_fields_are_requested_from_the_serializer_as_base64_strings()
+    {
+        var recording = new RecordingSerializer();
+        var token = new ChangeToken<byte[]>(_key, _topic, _source, recording, _fixture.Freeze<ILogger<ChangeToken<byte[]>>>(), _telemetryProvider, _acceptedEvents);
+        PeerUpdate? seen = null;
+        ((IPeerUpdateSource)token).PeerUpdateHandler = update =>
+        {
+            seen = update;
+            return true;
+        };
+        var json = """{"_version_":7,"_peerFields_":{"a":"AQI="}}""";
+        var properties = JsonSerializer.Deserialize<Dictionary<string, JsonElement>>(json)!.ToDictionary(p => p.Key, p => (object?)p.Value);
+
+        token.OnNext(PeerEvent("set", properties));
+
+        recording.Requested.Should().Contain(typeof(IDictionary<string, string?>));
+        recording.Requested.Should().NotContain(typeof(IReadOnlyDictionary<string, byte[]?>));
+        seen.Should().NotBeNull();
+        seen!.Fields["a"].Should().Equal(1, 2);
+    }
+
+    [Fact]
+    public void Null_JsonElement_metadata_still_applies_the_peer_update()
+    {
+        PeerUpdate? seen = null;
+        ((IPeerUpdateSource)Sut).PeerUpdateHandler = update =>
+        {
+            seen = update;
+            return true;
+        };
+        var json = """{"_version_":7,"_peerFields_":{"a":"AQI="},"_peerMetadata_":null,"_metadata_":null}""";
+        var properties = JsonSerializer.Deserialize<Dictionary<string, JsonElement>>(json)!.ToDictionary(p => p.Key, p => (object?)p.Value);
+
+        Sut.Invoking(s => s.OnNext(PeerEvent("set", properties))).Should().NotThrow();
+
+        seen.Should().NotBeNull();
+        seen!.Metadata.Should().BeNull();
+        Sut.Metadata.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task A_published_event_that_never_left_the_process_applies_as_a_peer_update()
+    {
+        CacheEventData? published = null;
+        var factory = Substitute.For<ICacheEventFactory>();
+        factory.Create("cache", Arg.Any<string>(), Arg.Any<CacheEventData>(), Arg.Any<string?>())
+            .Returns(call => new CacheEvent { Id = "1", Source = new Uri("urn:machine"), Type = call.ArgAt<string>(1), Data = published = call.Arg<CacheEventData>() });
+        var topics = Substitute.For<ITopicProvider>();
+        topics.Create(Arg.Any<TopicKey>()).PublishAsync(Arg.Any<ICacheEvent>(), Arg.Any<CancellationToken>()).Returns(true);
+        var options = new CacheEntryOptions { CacheKey = new CacheKey(_key), TopicKey = "t", Metadata = new Dictionary<string, string?> { ["m"] = "v" } };
+        await new CacheEventPublisher("cache", topics, factory, NullLogger.Instance)
+            .CacheSetAsync(options, typeof(string), 7, new Dictionary<string, string?> { ["a"] = "AQI=", ["b"] = null });
+        PeerUpdate? seen = null;
+        ((IPeerUpdateSource)Sut).PeerUpdateHandler = update =>
+        {
+            seen = update;
+            return true;
+        };
+
+        Sut.OnNext(new TestCacheEvent { Id = "1", Source = new Uri("urn:machine"), Data = published, Type = "set" });
+
+        seen.Should().NotBeNull();
+        seen!.Version.Should().Be(7);
+        seen.Fields["a"].Should().Equal(1, 2);
+        seen.Fields["b"].Should().BeNull();
+        seen.Metadata.Should().Equal(new Dictionary<string, string?> { ["m"] = "v" });
+    }
+
+    [Fact]
+    public void An_in_process_peer_update_with_invalid_base64_fails_when_the_fields_are_first_used()
+    {
+        PeerUpdate? seen = null;
+        ((IPeerUpdateSource)Sut).PeerUpdateHandler = update =>
+        {
+            seen = update;
+            return false;
+        };
+
+        Sut.OnNext(PeerEvent("set", new Dictionary<string, object?>
+        {
+            [KnownFieldNames.VersionKey] = 7L,
+            [KnownFieldNames.PeerFieldsKey] = new Dictionary<string, string?> { ["a"] = "AQI=", ["b"] = "!" },
+        }));
+
+        seen.Should().NotBeNull();
+        seen!.Fields.Count.Should().Be(2);
+        seen.Fields.Invoking(f => f.ToList()).Should().Throw<FormatException>();
+    }
+
+    [Fact]
+    public void A_decoded_peer_update_the_node_does_not_apply_never_decodes_its_base64()
+    {
+        var body = """{"Id":"1","Source":"urn:machine","Type":"set","Data":{"Key":"@","Properties":{"_version_":7,"_peerFields_":{"a":"!"}}}}"""u8.ToArray();
+        body = System.Text.Encoding.UTF8.GetBytes(System.Text.Encoding.UTF8.GetString(body).Replace("@", _key));
+        var decoded = new CacheEventFormatter().Decode(body)!;
+        var handed = false;
+        ((IPeerUpdateSource)Sut).PeerUpdateHandler = _ =>
+        {
+            handed = true;
+            return false;
+        };
+
+        Sut.Invoking(s => s.OnNext(decoded)).Should().NotThrow();
+
+        handed.Should().BeTrue();
+    }
+
+    [Fact]
+    public void Two_tokens_built_from_one_event_do_not_share_metadata()
+    {
+        var other = new ChangeToken<byte[]>(_key, _topic, _source, _serializer, _fixture.Freeze<ILogger<ChangeToken<byte[]>>>(), _telemetryProvider, _acceptedEvents);
+        PeerUpdate? first = null;
+        PeerUpdate? second = null;
+        ((IPeerUpdateSource)Sut).PeerUpdateHandler = update => (first = update) is not null;
+        ((IPeerUpdateSource)other).PeerUpdateHandler = update => (second = update) is not null;
+        var metadata = new Dictionary<string, string?> { ["m"] = "v" };
+        var peerEvent = PeerEvent("set", new Dictionary<string, object?>
+        {
+            [KnownFieldNames.VersionKey] = 7L,
+            [KnownFieldNames.PeerFieldsKey] = new Dictionary<string, byte[]?> { ["a"] = [1] },
+            [KnownFieldNames.PeerMetadataKey] = metadata,
+        });
+        var refreshed = PeerEvent("refreshed", new Dictionary<string, object?> { [KnownFieldNames.MetadataKey] = metadata });
+
+        Sut.OnNext(peerEvent);
+        other.OnNext(peerEvent);
+        Sut.OnNext(refreshed);
+        other.OnNext(refreshed);
+
+        first!.Metadata.Should().NotBeSameAs(metadata).And.NotBeSameAs(second!.Metadata);
+        Sut.Metadata.Should().NotBeSameAs(metadata).And.NotBeSameAs(other.Metadata);
+    }
+
     public ValueTask InitializeAsync()
     {
         _key = _fixture.Freeze<string>();
@@ -664,4 +858,50 @@ public class ChangeTokenTests : IAsyncLifetime
 
     private TestCacheEvent PeerEvent(string type, Dictionary<string, object?>? properties = null) =>
         new() { Id = Guid.NewGuid().ToString(), Source = new Uri("urn:machine"), Data = new CacheEventData(_key, properties), Type = type };
+
+    private sealed class RecordingSerializer : ISerializerProxy<byte[]>
+    {
+        private readonly SystemJsonByteSerializerProxy _inner = new();
+
+        public List<Type> Requested { get; } = [];
+
+        public byte[]? Serialize(object? value) => _inner.Serialize(value);
+
+        public T? Deserialize<T>(byte[]? value) => _inner.Deserialize<T>(value);
+
+        public bool TryDeserialize<T>(string? value, out T? result) => _inner.TryDeserialize(value, out result);
+
+        public bool TryDeserialize<T>(object? value, out T? result)
+        {
+            Requested.Add(typeof(T));
+            return _inner.TryDeserialize(value, out result);
+        }
+    }
+
+    private sealed class ThrowingSerializer : ISerializerProxy<byte[]>
+    {
+        public int Calls { get; private set; }
+
+        public byte[]? Serialize(object? value) => Fail<byte[]?>();
+
+        public T? Deserialize<T>(byte[]? value) => Fail<T?>();
+
+        public bool TryDeserialize<T>(string? value, out T? result)
+        {
+            result = default;
+            return Fail<bool>();
+        }
+
+        public bool TryDeserialize<T>(object? value, out T? result)
+        {
+            result = default;
+            return Fail<bool>();
+        }
+
+        private TResult Fail<TResult>()
+        {
+            Calls++;
+            throw new InvalidOperationException("The value serializer must not see typed event properties.");
+        }
+    }
 }

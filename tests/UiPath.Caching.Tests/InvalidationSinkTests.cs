@@ -124,7 +124,7 @@ public sealed class InvalidationSinkTests : IDisposable
             Data = new CacheEventData(Key, new Dictionary<string, object?>
             {
                 [KnownFieldNames.VersionKey] = 2L,
-                [KnownFieldNames.PeerFieldsKey] = new Dictionary<string, string?> { ["a"] = "1" },
+                [KnownFieldNames.PeerFieldsKey] = new Dictionary<string, byte[]?> { ["a"] = [1] },
             }),
             Type = "set",
         });
