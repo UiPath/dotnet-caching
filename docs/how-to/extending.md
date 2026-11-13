@@ -546,7 +546,7 @@ The package depends on the exact `UiPath.Caching` version it was built with, so 
 The serializer owns format ids `0x02` (plain) and `0x03` (LZ4); the id stored with each value says which, so a node reads
 both whatever its threshold.
 
-Roll it out readers first. A node reads a format only once the serializer is registered on it, so register
+By default (`FormatNegotiation:Mode` `Auto`) a policy that sets `Write = "messagepack"` writes it only while every node on the Streams transport is known to read it, and JSON until then, so this is safe to deploy in one step; see [choosing when a format is written](../concepts.md#choosing-when-a-format-is-written). With `Force`, roll it out readers first. A node reads a format only once the serializer is registered on it, so register
 `AddMessagePackSerializer` on every node and finish that deploy before any policy sets `Write = "messagepack"`; a node that
 cannot read the value misses and regenerates it (see [rolling a serializer out](../concepts.md#rolling-a-serializer-out)).
 Setting `Write` back to `json` keeps values already stored as MessagePack readable while the default JSON proxy is in use; with a custom `ISerializerProxy` registered, headers are only recognized under a policy that writes a non-JSON format, so under `Write = "json"` those values go to your proxy and read as misses.

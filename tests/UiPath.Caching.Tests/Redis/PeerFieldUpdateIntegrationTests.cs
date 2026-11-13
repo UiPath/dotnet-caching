@@ -509,6 +509,7 @@ public sealed class PeerFieldUpdateIntegrationTests(RedisContainerFixture fixtur
                     {
                         o.HashFieldBatchSize = fieldBatch;
                         o.ReadScriptsEnabled = readScripts;
+                        o.FormatNegotiation.Mode = FormatNegotiationMode.Force;
                     });
                     b.AddBroadcast();
                     b.AddInMemoryRedis(o => o.PeerFieldUpdates = peerFieldUpdates);

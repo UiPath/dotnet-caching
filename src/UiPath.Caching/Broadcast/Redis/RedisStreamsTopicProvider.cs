@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using UiPath.Caching.Policies;
 using UiPath.Caching.Telemetry;
 
@@ -12,6 +13,7 @@ public class RedisStreamsTopicProvider : RedisTopicProviderBase
     private readonly PerTopicOptionsRegistry<RedisStreamsTopicOptions> _registry;
     private readonly CancellationTokenSource _stopTokenSource = new();
     private readonly ILogger<RedisStreamsTopicProvider> _logger;
+    private readonly ConcurrentDictionary<TopicKey, RedisKey> _streamKeys = new();
     private bool _disposed;
 
     public RedisStreamsTopicProvider(
@@ -39,10 +41,28 @@ public class RedisStreamsTopicProvider : RedisTopicProviderBase
 
     public override bool Enabled { get; }
 
+    internal int StreamKeyCount => _streamKeys.Count;
+
+    /// <summary>The stream of each topic this provider has made, for the node node list.</summary>
+    internal IReadOnlyList<RedisKey> StreamKeys()
+    {
+        List<RedisKey> streams = [];
+        foreach (var key in Keys)
+        {
+            if (_streamKeys.TryGetValue(key, out var stream))
+            {
+                streams.Add(stream);
+            }
+        }
+
+        return streams;
+    }
+
     protected override ITopic<ICacheEvent> CreateInternalTopic(TopicKey topicKey)
     {
         var resolved = ResolveOptions(topicKey) ?? _redisStreamsTopicOptions;
-        return new RedisStreamsTopic<ICacheEvent>(
+        _streamKeys[topicKey] = (resolved.RedisStreamKeyStrategy ?? new PrefixStrategy(RedisKeyspaces.Streams, _cacheOptions)).GetRedisKey(topicKey);
+        var topic = new RedisStreamsTopic<ICacheEvent>(
             topicKey,
             ConnectionState,
             Redis,
@@ -55,6 +75,10 @@ public class RedisStreamsTopicProvider : RedisTopicProviderBase
             Telemetry,
             Profiler,
             _stopTokenSource.Token);
+
+        // The topic's stream goes with it, so a provider that makes and drops many topics keeps no record of the dropped ones.
+        topic.OnDisposed += (_, _) => _streamKeys.TryRemove(topicKey, out _);
+        return topic;
     }
 
     protected override void Dispose(bool disposing)

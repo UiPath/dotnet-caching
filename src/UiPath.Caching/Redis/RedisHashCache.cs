@@ -1,5 +1,6 @@
 using System.Collections.Immutable;
 using System.Runtime.CompilerServices;
+using UiPath.Caching.Negotiation;
 using UiPath.Caching.Policies;
 using UiPath.Caching.Serialization;
 using UiPath.Caching.Telemetry;
@@ -32,6 +33,7 @@ internal sealed partial class RedisHashCache : RedisCacheBase, IHashCache, ISpan
     private readonly int _fieldBatchSize;
     private ValueSerializerRegistry _valueSerializers = ValueSerializerRegistry.Empty;
     private ValueFormatResolver _formats;
+    private IEffectiveFormat? _effectiveFormat;
 
     public RedisHashCache(
         IRedisConnector redis,
@@ -70,7 +72,16 @@ internal sealed partial class RedisHashCache : RedisCacheBase, IHashCache, ISpan
         init
         {
             _valueSerializers = value;
-            _formats = new ValueFormatResolver(_serializer, value, DefaultPolicy);
+            _formats = new ValueFormatResolver(_serializer, value, DefaultPolicy, _effectiveFormat);
+        }
+    }
+
+    internal IEffectiveFormat? EffectiveFormat
+    {
+        init
+        {
+            _effectiveFormat = value;
+            _formats = new ValueFormatResolver(_serializer, _valueSerializers, DefaultPolicy, value);
         }
     }
 

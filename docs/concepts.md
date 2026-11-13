@@ -516,9 +516,10 @@ the key's policy is not known to the peer, it does not apply the update and read
 
 ### Rolling a serializer out
 
-Reading comes first, writing second. Every node from 3.2.0 reads every registered format; nothing writes a
+With `FormatNegotiation:Mode` at `Force`, reading comes first, writing second. Every node from 3.2.0 reads every registered format; nothing writes a
 new one until a policy sets `Serializer`, so set it only after every node runs 3.2.0 or later with the
-serializer registered.
+serializer registered. With the default `Auto`, a node that sees an older node keeps writing JSON by itself; see
+[choosing when a format is written](#choosing-when-a-format-is-written).
 
 A node that cannot read a format treats the value as a miss, and what happens to the key depends on why:
 
@@ -542,6 +543,39 @@ See [MessagePack events](how-to/extending.md#messagepack-events).
 
 All of it shows up as factory load and churn during the deploy, never as a wrong value. Switching a policy back
 to JSON is safe at any time: new writes are JSON and the older values still read.
+
+### Choosing when a format is written
+
+A policy's `Serializer.Write` names the format it *wants*. With `FormatNegotiation:Mode` at `Auto` (the default), a node writes it
+only while every node that shares the Streams transport is known to read it, and writes JSON until then; this replaces the two-deploy
+order for values, so a node that registers the serializer and sets `Write` can be deployed in one step. A policy that sets `Write = "json"`
+is pinned to JSON, and `Mode = Force` writes exactly what each policy configures, as before.
+
+How it works. An app with a serializer registered advertises what it reads, whether or not any policy of its own writes a non-JSON format and in either mode, so a node that only reads, or runs `Force`, never blocks the writers. In `Auto` it also reads the node list and decides, for every registered serializer, so a policy built at the call site that names one is held to the same decision as a registered policy. An app with no serializer registered does none of this: it advertises nothing, and so correctly counts as a node that cannot read.
+
+The advertisement says what the node's reads actually do. With the default JSON proxy a read looks for a format header whatever the policy writes. With a custom proxy, a subclass of the default or `RawByteSerializerProxy`, a read looks for one only under a policy that itself writes a non-JSON format; for every other policy (and the default policy, when it is not one) the node advertises that it reads JSON only, and no writer upgrades while such a node is on the node list. A policy on such a proxy never falls back to JSON either, since its bytes are not JSON and could read back as a header: it always writes the format it names, as in `Force`.
+
+- Each node writes an advertisement (the formats it reads, and the read list of each policy that sets one) to a hash in Redis every
+  15 seconds, stamped with the server's clock, so a node's own clock never matters. It advertises first when its hosted service starts, before it reads the
+  node list; the service is registered with the caching, so an app hosted service that touches a cache earlier can subscribe first and be briefly unaccounted
+  for. An advertisement counts for `LivenessWindow` plus two advertise intervals, so it outlives the consumer group of a node that crashed. A node that stops
+  writes a departing advertisement (`left=1`) instead of deleting its own: its group is then a node that left, neither a reader nor an unaccounted one.
+- Every node also reads that hash and the consumer groups of its Streams topics. A group has the node's source id as its name; one whose
+  consumer read within `LivenessWindow` and that no fresh advertisement accounts for is a node that cannot say what it reads (a
+  node before 3.2, for one), and it keeps every writer on JSON. A node that went quiet for longer than `LivenessWindow` no longer counts.
+- The format is written once every advertisement lists it, no live node is unaccounted for, and that has held for `UpgradeHold` (an hour by default) since a node
+  last joined or restarted (each process advertises its own id, so a restart under the same name is a join). A node that leaves never restarts the hold. A node that cannot read it, or an unaccounted node that appears, stops the writes at once. Redis being unreachable keeps the decision
+  for `MaxViewAge` since the last good read, then writes JSON, and for two advertise intervals after it returns, so peers can advertise again; an advertisement that lacks the format is never excused. All of this runs on a timer; a read or a write sends no extra command, only a read of the cached decision and its age.
+
+The hold trades speed for rollback safety. After a rollback to a build that cannot read the format, nodes miss on the values written in that
+format and the generator rewrites them as JSON, never a wrong value. With the default hour, an app rolled back within the hour never wrote the
+format at all. A shorter `UpgradeHold` switches sooner and widens that rollback window; zero switches as soon as the node list agrees.
+
+The node list sees only nodes on the Streams transport. An app that has `BroadcastEnabled` off, or that publishes events over Pub/Sub only, cannot see the others and writes JSON; set
+`FormatNegotiation:AssumeAllNodesCanRead` to attest that every node that says nothing reads the desired formats. The attestation covers nodes that advertise nothing, not one whose advertisement lacks the format, and the hold still applies. Every node judges the others by its own `AdvertiseInterval` and `LivenessWindow`, so keep them alike across the fleet. Group
+names that are not node ids (for example another app sharing the stream key) also count as live nodes, a safe false positive.
+Telemetry (`cache.format.effective`, `cache.format.fallback`, `cache.format.nodes` and `cache.format.view.age`) is emitted only while this runs, and
+a node that is blocking is named in a Warning log. The advertisement needs a host that runs hosted services: without one, nothing advertises and values stay JSON.
 
 See also: [how-to/extending.md#value-serializers](how-to/extending.md#value-serializers).
 
