@@ -36,6 +36,10 @@ public class SerializerBenchmark
     [Params(false, true)]
     public bool Registered { get; set; }
 
+    /// <summary>Whether the default policy lists the formats it reads, which a registered serializer makes every call resolve; ignored without one.</summary>
+    [Params(false, true)]
+    public bool DefaultReads { get; set; }
+
     [GlobalSetup]
     public void Setup()
     {
@@ -49,6 +53,7 @@ public class SerializerBenchmark
 
         var registry = Registered ? new ValueSerializerRegistry([("bench", new UnusedSerializer(), false)]) : ValueSerializerRegistry.Empty;
         _policy = Registered ? new CachePolicy { Serializer = new SerializerPolicy { Write = "json" } } : null;
+        var defaultPolicy = Registered && DefaultReads ? new CachePolicy { Serializer = new SerializerPolicy { Write = "json", Read = ["json", "bench"] } } : null;
         _redis = new FakeRedisConnector();
         _cache = new RedisCache(
             _redis,
@@ -57,7 +62,7 @@ public class SerializerBenchmark
             NullTelemetryProvider.Instance,
             new RedisCacheOptions(),
             new CacheOptions { AppShortName = "bench" },
-            new DefaultCachePolicyFactory(null, null, valueSerializers: registry),
+            new DefaultCachePolicyFactory(null, defaultPolicy, valueSerializers: registry),
             TimeProvider.System,
             NullLogger<RedisCache>.Instance)
         {
@@ -95,6 +100,15 @@ public class SerializerBenchmark
 
     [BenchmarkCategory("RedisCacheGet"), Benchmark]
     public ValueTask<CustomObject?> RedisCache_Get() => _cache.GetAsync<CustomObject>("bench:serializer", _policy);
+
+    [BenchmarkCategory("RedisCacheGetNullPolicy"), Benchmark]
+    public ValueTask<CustomObject?> RedisCache_Get_NullPolicy() => _cache.GetAsync<CustomObject>("bench:serializer", (CachePolicy?)null);
+
+    [BenchmarkCategory("RedisCacheGetNewPolicy"), Benchmark]
+    public ValueTask<CustomObject?> RedisCache_Get_NewPolicyPerCall() => _cache.GetAsync<CustomObject>("bench:serializer", new CachePolicy { DistributedExpiration = Expiration });
+
+    [BenchmarkCategory("RedisCacheGetOrAddNewPolicy"), Benchmark]
+    public ValueTask<CustomObject?> RedisCache_GetOrAdd_Hit_NewPolicyPerCall() => _cache.GetOrAddAsync<CustomObject>("bench:serializer", _neverRuns, Expiration, new CachePolicy { DistributedExpiration = Expiration });
 
     [BenchmarkCategory("RedisCacheGetOrAdd"), Benchmark]
     public ValueTask<CustomObject?> RedisCache_GetOrAdd_Hit() => _cache.GetOrAddAsync<CustomObject>("bench:serializer", _neverRuns, Expiration, _policy);

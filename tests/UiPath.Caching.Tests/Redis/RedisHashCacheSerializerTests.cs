@@ -352,6 +352,43 @@ public class RedisHashCacheSerializerTests(ITestContextAccessor testContextAcces
         AssertNothingDeleted();
     }
 
+    [Theory]
+    [InlineData(false, "fast", "headerless")]
+    [InlineData(false, "json", "0x10")]
+    [InlineData(true, "fast", "headerless")]
+    [InlineData(true, "json", "0x10")]
+    public async Task A_field_or_metadata_outside_the_read_list_is_counted_under_its_format(bool metadata, string reads, string format)
+    {
+        var sut = Create(out var registry);
+        var policy = ReadingPolicy(registry, reads);
+        var readable = reads == "fast" ? Header(0x10, "x") : Json("x");
+        var excluded = reads == "fast" ? Json("x") : Header(0x10, "x");
+        var readableMeta = reads == "fast" ? Header(0x10, "{\"m\":\"v\"}") : Encoding.UTF8.GetBytes("{\"m\":\"v\"}");
+        var excludedMeta = reads == "fast" ? Encoding.UTF8.GetBytes("{\"m\":\"v\"}") : Header(0x10, "{\"m\":\"v\"}");
+        _database.HashGetAllAsync(Arg.Any<RedisKey>(), Arg.Any<CommandFlags>()).Returns(metadata ? [Entry("a", readable), Entry("_metadata_", excludedMeta)] : [Entry("a", excluded), Entry("_metadata_", readableMeta)]);
+        _database.KeyTimeToLiveAsync(Arg.Any<RedisKey>(), Arg.Any<CommandFlags>()).Returns(TimeSpan.FromMinutes(1));
+
+        var entry = await sut.GetCacheEntryAsync<string>("k", policy, Token);
+
+        entry.Found.Should().BeFalse();
+        AssertNothingDeleted();
+        _telemetry.Metrics.Should().ContainSingle(m => m.Name == UnreadableMetric).Which.Properties.Should().Contain("format", format);
+    }
+
+    [Fact]
+    public async Task A_field_whose_serializer_throws_makes_a_hash_replace_get_or_add_replace_the_whole_key()
+    {
+        var sut = Create(new ValueSerializerRegistry([("bad", new ThrowingValueSerializer(), false)]));
+        CaptureWrites();
+        _transaction.KeyDeleteAsync(Arg.Any<RedisKey>(), Arg.Any<CommandFlags>()).Returns(true);
+        _database.HashGetAllAsync(Arg.Any<RedisKey>(), Arg.Any<CommandFlags>()).Returns([Entry("a", [0x10, 1])]);
+
+        await sut.GetOrAddAsync<string>("k", _ => Task.FromResult<IDictionary<string, string?>>(new Dictionary<string, string?> { ["a"] = "fresh" }), DateTimeOffset.UtcNow.AddMinutes(1), HashCacheSetOption.HashReplace, policy: null, Token);
+
+        _ = _transaction.Received().KeyDeleteAsync(Arg.Any<RedisKey>(), Arg.Any<CommandFlags>());
+        _telemetry.Metrics.Should().NotContain(m => m.Name == UnreadableMetric);
+    }
+
     [Fact]
     public async Task An_unreadable_field_in_a_field_read_is_a_whole_hash_miss_and_the_hash_stays()
     {
@@ -571,6 +608,9 @@ public class RedisHashCacheSerializerTests(ITestContextAccessor testContextAcces
 
     private static CachePolicy ResolvedPolicy(ValueSerializerRegistry registry) =>
         new DefaultCachePolicyFactory(null, new CachePolicy { Serializer = new SerializerPolicy { Write = "fast" } }, valueSerializers: registry).Default!;
+
+    private static CachePolicy ReadingPolicy(ValueSerializerRegistry registry, string format) =>
+        new DefaultCachePolicyFactory(null, new CachePolicy { Serializer = new SerializerPolicy { Write = format, Read = [format] } }, valueSerializers: registry, negotiation: FormatNegotiationMode.Force).Default!;
 
     private void AssertNothingDeleted()
     {

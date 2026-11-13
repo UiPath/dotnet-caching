@@ -67,6 +67,13 @@ internal sealed class FormatNegotiation
         var pubSub = cacheOptions.BroadcastEnabled
             ? services.GetServices<ITopicProvider>().OfType<RedisPubSubTopicProvider>().FirstOrDefault(p => p.Enabled)
             : null;
+        if (options.Mode == FormatNegotiationMode.Force && NegotiationPlan.ReadingNoJson(policies) is { Count: > 0 } readingNoJson)
+        {
+            loggers.CreateLogger<FormatNegotiationService>().LogWarning(
+                "Serializer.Read of {Policies} leaves out json, and FormatNegotiation.Mode is Force. A node still in Auto writes JSON until every node reads its format, and this node reads those values as misses. Keep every node on the shared keys in Force, or add json to Read.",
+                string.Join(", ", readingNoJson.Select(name => $"'{name}'")));
+        }
+
         var library = typeof(FormatNegotiation).Assembly.GetCustomAttribute<AssemblyInformationalVersionAttribute>()?.InformationalVersion ?? string.Empty;
         return new()
         {

@@ -173,7 +173,7 @@ internal sealed partial class RedisCache : RedisCacheBase, ICache, IInvalidation
     {
         NotCacheableException.ThrowIfNotCacheable<T>();
         ArgumentNullException.ThrowIfNull(generator);
-        var format = FormatFor(policy, forWrite: true);
+        var format = FormatFor(policy, forWrite: true, alsoReads: true);
         return format.IsDefault
             ? GetOrAddGeneratedAsync(cacheKey, ToRedisKey(cacheKey, token), generator, static (g, ct) => g(ct), policy, default(PlainFormat), token)
             : GetOrAddGeneratedAsync(cacheKey, ToRedisKey(cacheKey, token), generator, static (g, ct) => g(ct), policy, format, token);
@@ -183,7 +183,7 @@ internal sealed partial class RedisCache : RedisCacheBase, ICache, IInvalidation
     {
         NotCacheableException.ThrowIfNotCacheable<T>();
         ArgumentNullException.ThrowIfNull(generator);
-        var format = FormatFor(policy, forWrite: true);
+        var format = FormatFor(policy, forWrite: true, alsoReads: true);
         return format.IsDefault
             ? GetOrAddGeneratedAsync(cacheKey, ToRedisKey(cacheKey, token), state, generator, policy, default(PlainFormat), token)
             : GetOrAddGeneratedAsync(cacheKey, ToRedisKey(cacheKey, token), state, generator, policy, format, token);
@@ -464,7 +464,7 @@ internal sealed partial class RedisCache : RedisCacheBase, ICache, IInvalidation
         NotCacheableException.ThrowIfNotCacheable<T>();
         ArgumentNullException.ThrowIfNull(generator);
         var redisKey = ToRedisKey(cacheKey, token);
-        var format = FormatFor(policy, forWrite: true);
+        var format = FormatFor(policy, forWrite: true, alsoReads: true);
         return format.IsDefault
             ? GetOrAddInternalAsync(cacheKey, redisKey, state, generator, (policy ?? DefaultPolicy)?.FactoryTimeout, duration, default(PlainFormat), token)
             : GetOrAddInternalAsync(cacheKey, redisKey, state, generator, (policy ?? DefaultPolicy)?.FactoryTimeout, duration, format, token);
@@ -660,12 +660,16 @@ internal sealed partial class RedisCache : RedisCacheBase, ICache, IInvalidation
         }
         else if (format.Sniff)
         {
-            var outcome = _formats.Reader!.Read<T>(((byte[]?)value)!);
+            var outcome = _formats.Reader!.Read<T>(((byte[]?)value)!, format.Readable);
             if (outcome.IsMiss)
             {
                 if (outcome.Failure is { } failure)
                 {
                     LogRedisCacheException(failure);
+                }
+                else if (outcome.ExcludedFormat != 0)
+                {
+                    TrackUnreadable(outcome.ExcludedFormat, Name);
                 }
 
                 return (false, default, outcome.UnreadableFormat);

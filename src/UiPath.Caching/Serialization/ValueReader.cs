@@ -17,10 +17,16 @@ internal sealed class ValueReader(ISerializerProxy<byte[]> json, ValueSerializer
     public bool SniffsFor(CachePolicy? policy) =>
         !registry.IsEmpty && (_jsonProxyIsDefault || WritesHeaders(policy));
 
-    public ReadOutcome<T> Read<T>(byte[] value)
+    /// <param name="readable">A known format outside it is an excluded miss, which keeps the key; null accepts every registered format.</param>
+    public ReadOutcome<T> Read<T>(byte[] value, ReadableFormats? readable = null)
     {
         if (!ValueHeader.TryRead(value, out var formatId, out var headerLength))
         {
+            if (readable is { Json: false })
+            {
+                return ReadOutcome<T>.Excluded(ReadableFormats.JsonId);
+            }
+
             try
             {
                 return ReadOutcome<T>.Read(json.Deserialize<T>(value));
@@ -35,6 +41,11 @@ internal sealed class ValueReader(ISerializerProxy<byte[]> json, ValueSerializer
         if (formatId < 0 || !registry.TryGetByFormat(formatId, out var serializer))
         {
             return ReadOutcome<T>.Unreadable(formatId);
+        }
+
+        if (readable?.Accepts(formatId) == false)
+        {
+            return ReadOutcome<T>.Excluded(formatId);
         }
 
         try

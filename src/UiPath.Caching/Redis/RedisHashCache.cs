@@ -219,8 +219,9 @@ internal sealed partial class RedisHashCache : RedisCacheBase, IHashCache, ISpan
         try
         {
             // The held key's own policy decides the gate, as it does for a read. Where serializers are registered and that policy is not known, nothing is decoded.
-            var sniff = FormatFor(policy, forWrite: false).Sniff;
-            var ambiguous = _formats.Reader is not null && !sniff;
+            var readable = FormatFor(policy, forWrite: false).Readable;
+            // With no policy, the default's own Read list would stand in for the key's, so only an unlimited one decodes.
+            var ambiguous = _formats.Reader is not null && (readable is null || (policy is null && !ReferenceEquals(readable, ReadableFormats.Any)));
             var unreadable = 0;
             var decoded = new Dictionary<string, T?>(encoded.Count);
             foreach (var (field, bytes) in encoded)
@@ -237,7 +238,7 @@ internal sealed partial class RedisHashCache : RedisCacheBase, IHashCache, ISpan
                     return false;
                 }
 
-                decoded[field] = DeserializeField<T>(bytes is null ? RedisValue.Null : (byte[])bytes.Clone(), sniff, ref unreadable);
+                decoded[field] = DeserializeField<T>(bytes is null ? RedisValue.Null : (byte[])bytes.Clone(), readable, ref unreadable);
                 if (unreadable != 0)
                 {
                     values = null;
@@ -270,9 +271,10 @@ internal sealed partial class RedisHashCache : RedisCacheBase, IHashCache, ISpan
     public ValueTask<IDictionary<string, string?>?> GetMetadataAsync<T>(CacheKey cacheKey, CancellationToken token = default)
     {
         NotCacheableException.ThrowIfNotCacheable<T>();
+        // No policy is known here, and the metadata was written by whichever policy wrote the hash: every registered format reads.
         var format = FormatFor(policy: null, forWrite: false);
         return format.Sniff
-            ? GetInnerAsync<IDictionary<string, string?>, ValueFormat>(cacheKey, KnownFieldNames.MetadataKey, format, token)
+            ? GetInnerAsync<IDictionary<string, string?>, ValueFormat>(cacheKey, KnownFieldNames.MetadataKey, format with { Readable = ReadableFormats.Any }, token)
             : GetInnerAsync<IDictionary<string, string?>, PlainFormat>(cacheKey, KnownFieldNames.MetadataKey, default, token);
     }
 
@@ -702,10 +704,16 @@ internal sealed partial class RedisHashCache : RedisCacheBase, IHashCache, ISpan
     private async ValueTask<IDictionary<string, T?>> GetOrAddCoreAsync<T, TState>(CacheKey cacheKey, TState state, Func<TState, CancellationToken, Task<IDictionary<string, T?>>> generator, DateTimeOffset effectiveExpiration, HashCacheSetOption setOption, CachePolicy? policy, CancellationToken token)
     {
         NotCacheableException.ThrowIfNotCacheable<T>();
-        var (found, cached) = await GetInnerWithFoundAsync<T?>(cacheKey, policy, token).ConfigureAwait(false);
+        var (found, cached, unreadable) = await GetInnerWithFoundAsync<T?>(cacheKey, policy, token).ConfigureAwait(false);
         if (found)
         {
             return cached;
+        }
+
+        // A field this call cannot read would survive a write that only sets fields, and every read after would miss again until the key expires.
+        if (unreadable && setOption == HashCacheSetOption.HashReplace)
+        {
+            setOption = HashCacheSetOption.KeyReplace;
         }
 
         LogCacheMissed(Logged(cacheKey, typeof(T)));
@@ -891,7 +899,7 @@ internal sealed partial class RedisHashCache : RedisCacheBase, IHashCache, ISpan
     }
 
     [SuppressMessage("SonarLint.Rule", "S3776")]
-    private ICacheEntry<IDictionary<string, T?>> ParseCacheEntry<T>(CacheKey cacheKey, RedisKey redisKey, HashEntry[] hashEntries, DateTimeOffset? expireTime, bool sniff, ref int unreadable)
+    private ICacheEntry<IDictionary<string, T?>> ParseCacheEntry<T>(CacheKey cacheKey, RedisKey redisKey, HashEntry[] hashEntries, DateTimeOffset? expireTime, ReadableFormats? readable, ref int unreadable)
     {
         if (hashEntries.Length == 0)
         {
@@ -923,12 +931,12 @@ internal sealed partial class RedisHashCache : RedisCacheBase, IHashCache, ISpan
                 }
                 else
                 {
-                    extendedProps = ReadValue<IDictionary<string, string?>>(v, sniff, ref unreadable);
+                    extendedProps = ReadValue<IDictionary<string, string?>>(v, readable, ref unreadable);
                 }
                 continue;
             }
 
-            values.Add(name.ToString(), DeserializeField<T>(v, sniff, ref unreadable));
+            values.Add(name.ToString(), DeserializeField<T>(v, readable, ref unreadable));
         }
 
         if (unreadable != 0)
@@ -950,7 +958,7 @@ internal sealed partial class RedisHashCache : RedisCacheBase, IHashCache, ISpan
         return entry;
     }
 
-    private T? DeserializeField<T>(RedisValue value, bool sniff, ref int unreadable)
+    private T? DeserializeField<T>(RedisValue value, ReadableFormats? readable, ref int unreadable)
     {
         if (value.IsNull)
         {
@@ -960,7 +968,7 @@ internal sealed partial class RedisHashCache : RedisCacheBase, IHashCache, ISpan
         {
             return default;
         }
-        var deserialized = ReadValue<T>(value, sniff, ref unreadable);
+        var deserialized = ReadValue<T>(value, readable, ref unreadable);
         if (!_cacheNullValues && IsDefault(deserialized))
         {
             return default;
@@ -968,15 +976,15 @@ internal sealed partial class RedisHashCache : RedisCacheBase, IHashCache, ISpan
         return deserialized;
     }
 
-    /// <summary>The value by its format header when the call sniffs, else through the proxy; a header no serializer owns sets <paramref name="unreadable"/> to its id, and a serializer that throws to <see cref="SerializerFailed"/>; both read as nothing.</summary>
-    private T? ReadValue<T>(RedisValue value, bool sniff, ref int unreadable)
+    /// <summary>The value by its format header when the call sniffs, else through the proxy; a header no serializer owns, or the call's formats leave out, sets <paramref name="unreadable"/> to its id, and a serializer that throws to <see cref="SerializerFailed"/>; both read as nothing.</summary>
+    private T? ReadValue<T>(RedisValue value, ReadableFormats? readable, ref int unreadable)
     {
-        if (!sniff)
+        if (readable is null)
         {
             return _serializer.Deserialize<T>(value);
         }
 
-        var outcome = _formats.Reader!.Read<T>(((byte[]?)value)!);
+        var outcome = _formats.Reader!.Read<T>(((byte[]?)value)!, readable);
         if (outcome.IsMiss)
         {
             if (outcome.Failure is { } failure)
@@ -986,7 +994,7 @@ internal sealed partial class RedisHashCache : RedisCacheBase, IHashCache, ISpan
             }
             else
             {
-                unreadable = outcome.UnreadableFormat;
+                unreadable = outcome.UnreadableFormat != 0 ? outcome.UnreadableFormat : outcome.ExcludedFormat;
             }
 
             return default;
@@ -1032,7 +1040,7 @@ internal sealed partial class RedisHashCache : RedisCacheBase, IHashCache, ISpan
             RedisValue.Null,
             token).ConfigureAwait(false);
             var unreadable = 0;
-            ret = DeserializeField<T?>(value, format.Sniff, ref unreadable);
+            ret = DeserializeField<T?>(value, format.Readable, ref unreadable);
             found = unreadable == 0 && IsCacheHit(value);
             TrackUnreadableRead(unreadable);
             operation.Stop();
@@ -1086,7 +1094,7 @@ internal sealed partial class RedisHashCache : RedisCacheBase, IHashCache, ISpan
                 for (var i = 0; i < fields.Length; i++)
                 {
                     var v = values[i];
-                    dict.Add(fields[i], DeserializeField<T?>(v, format.Sniff, ref unreadable));
+                    dict.Add(fields[i], DeserializeField<T?>(v, format.Readable, ref unreadable));
                     anyPresent |= IsCacheHit(v);
                 }
 
@@ -1139,7 +1147,7 @@ internal sealed partial class RedisHashCache : RedisCacheBase, IHashCache, ISpan
             if (hashEntries.Length > 0)
             {
                 var unreadable = 0;
-                (ret, found) = ReadFields<T>(hashEntries, format.Sniff, ref unreadable);
+                (ret, found) = ReadFields<T>(hashEntries, format.Readable, ref unreadable);
                 TrackUnreadableRead(unreadable);
             }
             operation.Stop();
@@ -1157,23 +1165,24 @@ internal sealed partial class RedisHashCache : RedisCacheBase, IHashCache, ISpan
         return ret;
     }
 
-    private ValueTask<(bool Found, IDictionary<string, T?> Values)> GetInnerWithFoundAsync<T>(CacheKey cacheKey, CachePolicy? policy, CancellationToken token)
+    private ValueTask<(bool Found, IDictionary<string, T?> Values, bool Unreadable)> GetInnerWithFoundAsync<T>(CacheKey cacheKey, CachePolicy? policy, CancellationToken token)
     {
         var format = FormatFor(policy, forWrite: false);
         return format.Sniff ? GetInnerWithFoundAsync<T, ValueFormat>(cacheKey, format, token) : GetInnerWithFoundAsync<T, PlainFormat>(cacheKey, default, token);
     }
 
-    private async ValueTask<(bool Found, IDictionary<string, T?> Values)> GetInnerWithFoundAsync<T, TFormat>(CacheKey cacheKey, TFormat format, CancellationToken token)
+    private async ValueTask<(bool Found, IDictionary<string, T?> Values, bool Unreadable)> GetInnerWithFoundAsync<T, TFormat>(CacheKey cacheKey, TFormat format, CancellationToken token)
         where TFormat : struct, IValueFormat
     {
         var redisKey = ToRedisKey(cacheKey, token);
         if (!IsConnected)
         {
-            return (false, Empty<T?>());
+            return (false, Empty<T?>(), false);
         }
 
         var operation = StartOperation<T>(nameof(GetOrAddAsync));
         bool found = false;
+        var unreadable = 0;
         IDictionary<string, T?> ret = Empty<T?>();
         try
         {
@@ -1189,11 +1198,10 @@ internal sealed partial class RedisHashCache : RedisCacheBase, IHashCache, ISpan
             if (hashEntries.Length == 0)
             {
                 operation.Stop();
-                return (false, ret);
+                return (false, ret, false);
             }
 
-            var unreadable = 0;
-            (ret, found) = ReadFields<T>(hashEntries, format.Sniff, ref unreadable);
+            (ret, found) = ReadFields<T>(hashEntries, format.Readable, ref unreadable);
             TrackUnreadableRead(unreadable);
             operation.Stop();
         }
@@ -1207,7 +1215,7 @@ internal sealed partial class RedisHashCache : RedisCacheBase, IHashCache, ISpan
             TrackRead(operation, found, redisKey);
         }
 
-        return (found, ret);
+        return (found, ret, unreadable != 0);
     }
 
     private async ValueTask<ICacheEntry<IDictionary<string, T?>>> GetInnerCacheEntryAsync<T, TFormat>(CacheKey cacheKey, TFormat format, CancellationToken token)
@@ -1282,9 +1290,11 @@ internal sealed partial class RedisHashCache : RedisCacheBase, IHashCache, ISpan
         }
 
         var unreadable = 0;
-        var entry = ParseCacheEntry<T>(cacheKey, redisKey, result.Value.Entries, result.Value.Expiration, format.Sniff, ref unreadable);
+        var entry = ParseCacheEntry<T>(cacheKey, redisKey, result.Value.Entries, result.Value.Expiration, format.Readable, ref unreadable);
         TrackUnreadableRead(unreadable);
-        return entry;
+
+        // A layered cache above reads this miss and writes the regenerated hash, and says by it whether a field is left to replace.
+        return unreadable != 0 ? new UnreadableEntry<IDictionary<string, T?>>(entry) : entry;
     }
 
     /// <summary>Owns <paramref name="payloads"/>: they go back to the pool on every exit, including one before the command starts.</summary>
@@ -1675,7 +1685,7 @@ internal sealed partial class RedisHashCache : RedisCacheBase, IHashCache, ISpan
     }
 
     /// <summary>The hash's user fields, and whether they count as a hit: a value other than the null marker, or the empty marker while nulls are cached.</summary>
-    private (Dictionary<string, T?> Values, bool Found) ReadFields<T>(HashEntry[] hashEntries, bool sniff, ref int unreadable)
+    private (Dictionary<string, T?> Values, bool Found) ReadFields<T>(HashEntry[] hashEntries, ReadableFormats? readable, ref int unreadable)
     {
         var values = new Dictionary<string, T?>();
         var hasEmptyMarker = false;
@@ -1693,7 +1703,7 @@ internal sealed partial class RedisHashCache : RedisCacheBase, IHashCache, ISpan
             }
             var v = hashEntry.Value;
             anyValue |= IsCacheHit(v);
-            values.Add(hashEntry.Name.ToString(), DeserializeField<T>(v, sniff, ref unreadable));
+            values.Add(hashEntry.Name.ToString(), DeserializeField<T>(v, readable, ref unreadable));
         }
 
         if (unreadable != 0)

@@ -495,8 +495,11 @@ See also: [how-to/resilience.md#named-policies](how-to/resilience.md#named-polic
 Values are JSON unless a policy says otherwise; a call with no policy takes the default policy's choice. A
 policy that sets `Serializer.Write` to a registered serializer writes its values in that serializer's format, behind a one-byte *format id*; JSON has no header,
 and no JSON text starts with a byte a header can be. The reader looks at the first byte: a format id picks
-the serializer registered for it, anything else is JSON. It does this whatever the reading policy writes, so
-a key written as JSON, then MessagePack, then JSON again reads correctly each time. Hash fields and a hash's
+the serializer registered for it, anything else is JSON. Unless the policy limits what it reads, it does this
+whatever the reading policy writes, so a key written as JSON, then MessagePack, then JSON again reads correctly each
+time. A policy that sets `Serializer.Read` reads only the formats it lists, plus the one it writes: any other
+registered format, and JSON when it is not listed, is a miss (counted in `cache.serializer.unreadable`, tagged with the
+format id, or `headerless` for bytes with no header) and the key is left as it is. Hash fields and a hash's
 `_metadata_` field follow the same rule; `_version_` stays a plain number and is never inspected.
 
 The reader looks only where it can tell a header from caller bytes, and only when a serializer is registered.
@@ -516,7 +519,7 @@ the key's policy is not known to the peer, it does not apply the update and read
 
 ### Rolling a serializer out
 
-With `FormatNegotiation:Mode` at `Force`, reading comes first, writing second. Every node from 3.2.0 reads every registered format; nothing writes a
+With `FormatNegotiation:Mode` at `Force`, reading comes first, writing second. Every node from 3.2.0 reads every registered format, unless a policy limits it with `Serializer.Read`; nothing writes a
 new one until a policy sets `Serializer`, so set it only after every node runs 3.2.0 or later with the
 serializer registered. With the default `Auto`, a node that sees an older node keeps writing JSON by itself; see
 [choosing when a format is written](#choosing-when-a-format-is-written).
@@ -531,6 +534,10 @@ A node that cannot read a format treats the value as a miss, and what happens to
   another node wrote in between, or a lagging replica's stale read, survives the removal. A hash with such a
   field misses whole and is left in place, still counted: removing it could drop what another node just
   wrote, and removing the one field would leave the rest looking like a complete hash.
+- A value in a format the policy's `Serializer.Read` leaves out, JSON or a registered id, is a miss and is counted the same way, and the key stays,
+  as does a hash with such a field: another policy or node reads it, and the next write replaces it. A `GetOrAdd` on a hash that found
+  such a field writes with `KeyReplace` whatever it was asked, also through `InMemoryRedis`, since a write that only sets fields would leave the field to miss again. A `Read` without `json` needs every node on the shared keys in `Force`: a node in `Auto`
+  writes JSON until every node reads the format, and a node whose list leaves it out reads that as a miss, which is why `Auto` refuses such a list. A `Force` node with one logs a warning.
 - A registered serializer that throws on a value it owns is a logged miss, and the key stays, as for JSON that
   does not parse. The bytes may be good for another version of the type that other nodes still run during a
   rolling deploy, and a serializer disposed at shutdown says nothing about the data. This departs from the

@@ -790,6 +790,12 @@ internal sealed partial class MultilayerHashCache : MultilayerCacheBase, IHashCa
             return cacheEntry.Value ?? Empty<T>();
         }
 
+        // A field the inner tier could not read would survive a write that only sets fields, and every node would miss on it again once its local copy expired.
+        if (cacheEntry is IUnreadableEntry && cacheEntryOptions.SetOption == HashCacheSetOption.HashReplace)
+        {
+            cacheEntryOptions = cacheEntryOptions with { SetOption = HashCacheSetOption.KeyReplace };
+        }
+
         var result = SharesRuns(policy.Lock)
             ? await RunFirstAsync(cacheEntryOptions, generator, policy, seen, token).ConfigureAwait(false)
             : (ICacheEntry<IDictionary<string, T?>>)(await GenerateGuardedAsync<T>(cacheEntryOptions, generator, policy, new GenerationScope(null, token)).ConfigureAwait(false))!;
@@ -807,7 +813,13 @@ internal sealed partial class MultilayerHashCache : MultilayerCacheBase, IHashCa
         await using var lease = await AcquireDistributedLockAsync(options.CacheKey, policy.Lock, scope.Token).ConfigureAwait(false);
         // Read on the run's token: the starter may have left while callers that joined still wait for this.
         var current = await GetCacheEntryAsync<T>(options with { Token = scope.Token }, policy, false).ConfigureAwait(false);
-        return current.Found ? current : await RunHashGeneratorAndStoreEntryAsync(options, generator, policy, scope).ConfigureAwait(false);
+        if (current.Found)
+        {
+            return current;
+        }
+
+        // The first read was clean, so a field another policy wrote since is only found here.
+        return await RunHashGeneratorAndStoreEntryAsync(current is IUnreadableEntry && options.SetOption == HashCacheSetOption.HashReplace ? options with { SetOption = HashCacheSetOption.KeyReplace } : options, generator, policy, scope).ConfigureAwait(false);
     }
 
     /// <summary>Takes the key's run before anything else and runs the generator inline in the caller that took it: a caller that arrives meanwhile joins the run at once; only the caller that runs it takes the distributed lock, if one is enabled.</summary>
