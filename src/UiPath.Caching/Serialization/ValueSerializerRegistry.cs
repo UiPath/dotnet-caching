@@ -6,6 +6,7 @@ internal sealed class ValueSerializerRegistry : IDisposable, IAsyncDisposable
     private readonly Dictionary<string, ICacheValueSerializer> _byName = new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<int, ICacheValueSerializer> _byFormat = [];
     private readonly Dictionary<ICacheValueSerializer, int[]> _idsOf = new(ReferenceEqualityComparer.Instance);
+    private readonly Dictionary<int, string> _nameOf = [];
     private readonly List<(string Name, ICacheValueSerializer Serializer, bool Library)> _entries = [];
     private readonly HashSet<ICacheValueSerializer> _borrowed = new(ReferenceEqualityComparer.Instance);
 
@@ -121,6 +122,14 @@ internal sealed class ValueSerializerRegistry : IDisposable, IAsyncDisposable
     public bool TryGetByFormat(int formatId, [NotNullWhen(true)] out ICacheValueSerializer? serializer) =>
         _byFormat.TryGetValue(formatId, out serializer);
 
+    /// <summary>What a value written by <paramref name="writer"/> is counted under: <c>json</c> for no writer, else the name it is registered as.</summary>
+    public string NameOf(ICacheValueSerializer? writer) =>
+        writer is null ? CacheValueFormats.JsonName : NameOf(FormatIdsOf(writer).Span[0]);
+
+    /// <summary><c>json</c> for headerless bytes (id 0), the registered name for an id, <c>unknown</c> for any other.</summary>
+    public string NameOf(int formatId) =>
+        formatId == 0 ? CacheValueFormats.JsonName : _nameOf.GetValueOrDefault(formatId, "unknown");
+
     internal static void DisposeAll(IEnumerable<ICacheValueSerializer> serializers)
     {
         foreach (var serializer in serializers)
@@ -181,6 +190,7 @@ internal sealed class ValueSerializerRegistry : IDisposable, IAsyncDisposable
         foreach (var id in claimed)
         {
             _byFormat.Add(id, serializer);
+            _nameOf.Add(id, name);
         }
     }
 

@@ -20,6 +20,7 @@ internal sealed partial class RedisCache : RedisCacheBase, ICache, IInvalidation
     private readonly ILogger<RedisCache> _logger;
     private readonly Action<Exception> _logFailure;
     private readonly Action<Exception> _logReadScriptUnavailable;
+    private readonly Action<Exception> _rewriteScriptRefused;
     private readonly IResiliencePipeline _read;
     private readonly IResiliencePipeline _write;
     private readonly IRedisKeyStrategy _redisKeyStrategy;
@@ -48,6 +49,7 @@ internal sealed partial class RedisCache : RedisCacheBase, ICache, IInvalidation
         _logger = logger;
         _logFailure = LogRedisCacheException;
         _logReadScriptUnavailable = LogReadScriptUnavailable;
+        _rewriteScriptRefused = RewriteScriptsRefused;
         _serializer = serializer;
         _memorySerializer = serializer as IMemorySerializerProxy;
         _formats = new ValueFormatResolver(serializer, ValueSerializerRegistry.Empty, DefaultPolicy);
@@ -85,6 +87,8 @@ internal sealed partial class RedisCache : RedisCacheBase, ICache, IInvalidation
             _formats = new ValueFormatResolver(_serializer, _valueSerializers, DefaultPolicy, value);
         }
     }
+
+    internal ValueMigration? Migration { get; init; }
 
     [OverloadResolutionPriority(1)]
     public ValueTask<T?> GetAsync<T>(CacheKey cacheKey, CachePolicy? policy, CancellationToken token = default)
@@ -495,7 +499,7 @@ internal sealed partial class RedisCache : RedisCacheBase, ICache, IInvalidation
         NotCacheableException.ThrowIfNotCacheable<T>();
         var redisKey = ToRedisKey(cacheKey, token);
         var format = FormatFor(policy, forWrite: true);
-        return format.Writer is null
+        return format.IsDefault
             ? SetInternalAsync(cacheKey, redisKey, value, duration, default(PlainFormat), token)
             : SetInternalAsync(cacheKey, redisKey, value, duration, format, token);
     }
@@ -504,7 +508,7 @@ internal sealed partial class RedisCache : RedisCacheBase, ICache, IInvalidation
     {
         NotCacheableException.ThrowIfNotCacheable<T>();
         var format = FormatFor(policy, forWrite: true);
-        return format.Writer is null
+        return format.IsDefault
             ? SetInternalAsync(keyValues, duration, default(PlainFormat), token)
             : SetInternalAsync(keyValues, duration, format, token);
     }
@@ -514,7 +518,7 @@ internal sealed partial class RedisCache : RedisCacheBase, ICache, IInvalidation
         NotCacheableException.ThrowIfNotCacheable<T>();
         var redisKey = ToRedisKey(cacheKey, token);
         var format = FormatFor(policy, forWrite: true);
-        return format.Writer is null
+        return format.IsDefault
             ? TryAddInternalAsync(cacheKey, redisKey, value, duration, default(PlainFormat), token)
             : TryAddInternalAsync(cacheKey, redisKey, value, duration, format, token);
     }
@@ -560,7 +564,7 @@ internal sealed partial class RedisCache : RedisCacheBase, ICache, IInvalidation
                 try
                 {
                     var value = await ReadStringAsync(redisKey, token).ConfigureAwait(false);
-                    (found, cached, var unreadable) = InterpretReadResult<T, TFormat>(value, format);
+                    (found, cached, var unreadable) = InterpretReadResult<T, TFormat>(redisKey, value, format);
                     if (unreadable != 0)
                     {
                         await RemoveUnreadableAsync<T>(redisKey, value, unreadable, token).ConfigureAwait(false);
@@ -693,10 +697,16 @@ internal sealed partial class RedisCache : RedisCacheBase, ICache, IInvalidation
     {
         if (format.Writer is { } writer)
         {
+            if (SerializerMetricsOn)
+            {
+                TrackSerializer(Metrics.SerializerWrite, _valueSerializers.NameOf(writer), Name);
+            }
+
             var headered = SerializedPayload.Serialize(writer, _valueSerializers.FormatIdsOf(writer).Span, value!);
             return (headered.Memory, headered);
         }
 
+        TrackJsonWrite(format);
         if (_memorySerializer is { } memory)
         {
             var payload = SerializedPayload.Serialize(memory, value);
@@ -710,7 +720,7 @@ internal sealed partial class RedisCache : RedisCacheBase, ICache, IInvalidation
     /// <c>CacheNullValues</c> is on); non-empty -> deserialize. Legacy round-trip to <c>default(T)</c>
     /// is also treated as a miss when the option is off.
     /// </summary>
-    private (bool Found, T? Value, int Unreadable) InterpretReadResult<T, TFormat>(RedisValue value, TFormat format)
+    private (bool Found, T? Value, int Unreadable) InterpretReadResult<T, TFormat>(RedisKey key, RedisValue value, TFormat format)
         where TFormat : struct, IValueFormat
     {
         if (value.IsNull)
@@ -719,28 +729,26 @@ internal sealed partial class RedisCache : RedisCacheBase, ICache, IInvalidation
         }
 
         T? deserialized;
+        byte[]? stored = null;
         if (value.Length() == 0)
         {
             deserialized = default;
         }
         else if (format.Sniff)
         {
-            var outcome = _formats.Reader!.Read<T>(((byte[]?)value)!, format.Readable);
+            stored = (byte[]?)value;
+            var outcome = _formats.Reader!.Read<T>(stored!, format.Readable);
             if (outcome.IsMiss)
             {
-                if (outcome.Failure is { } failure)
-                {
-                    LogRedisCacheException(failure);
-                }
-                else if (outcome.ExcludedFormat != 0)
-                {
-                    TrackUnreadable(outcome.ExcludedFormat, Name);
-                }
-
+                ReportReadMiss(outcome);
                 return (false, default, outcome.UnreadableFormat);
             }
 
             deserialized = outcome.Value;
+            if (SerializerMetricsOn)
+            {
+                TrackSerializer(Metrics.SerializerRead, _formats.Reader.NameOf(outcome.SourceFormat), Name);
+            }
         }
         else
         {
@@ -751,14 +759,32 @@ internal sealed partial class RedisCache : RedisCacheBase, ICache, IInvalidation
         {
             return (false, default, 0);
         }
+
+        if (format.Sniff && stored is not null && format.Readable!.MigrateTo is { } target && Migration is { } migration && !IsDefault(deserialized) && migration.Wants(target, stored))
+        {
+            OfferRewrite<T>(key, stored, target, migration);
+        }
+
         return (true, deserialized, 0);
+    }
+
+    private void ReportReadMiss<T>(ReadOutcome<T> outcome)
+    {
+        if (outcome.Failure is { } failure)
+        {
+            LogRedisCacheException(failure);
+        }
+        else if (outcome.ExcludedFormat != 0)
+        {
+            TrackUnreadable(outcome.ExcludedFormat, Name);
+        }
     }
 
     /// <summary>As <see cref="InterpretReadResult{T, TFormat}"/>, for one value of a batch: a format no serializer owns joins <paramref name="unreadableKeys"/>, which the batch drops after it has reported.</summary>
     private (bool Found, T? Value) InterpretBatchRead<T, TFormat>(RedisKey redisKey, RedisValue value, TFormat format, ref List<(RedisKey Key, RedisValue Read, int FormatId)>? unreadableKeys)
         where TFormat : struct, IValueFormat
     {
-        var (found, deserialized, unreadable) = InterpretReadResult<T, TFormat>(value, format);
+        var (found, deserialized, unreadable) = InterpretReadResult<T, TFormat>(redisKey, value, format);
         if (unreadable != 0)
         {
             (unreadableKeys ??= []).Add((redisKey, value, unreadable));
@@ -794,7 +820,7 @@ internal sealed partial class RedisCache : RedisCacheBase, ICache, IInvalidation
         try
         {
             var value = await ReadStringAsync(redisKey, token).ConfigureAwait(false);
-            (found, deserialized, var unreadable) = InterpretReadResult<T, TFormat>(value, format);
+            (found, deserialized, var unreadable) = InterpretReadResult<T, TFormat>(redisKey, value, format);
             if (unreadable != 0)
             {
                 await RemoveUnreadableAsync<T>(redisKey, value, unreadable, token).ConfigureAwait(false);
@@ -1145,7 +1171,7 @@ internal sealed partial class RedisCache : RedisCacheBase, ICache, IInvalidation
         try
         {
             var value = await ReadStringAsync(redisKey, token).ConfigureAwait(false);
-            (found, ret, var unreadable) = InterpretReadResult<T, TFormat>(value, format);
+            (found, ret, var unreadable) = InterpretReadResult<T, TFormat>(redisKey, value, format);
             if (unreadable != 0)
             {
                 await RemoveUnreadableAsync<T>(redisKey, value, unreadable, token).ConfigureAwait(false);
@@ -1284,7 +1310,7 @@ internal sealed partial class RedisCache : RedisCacheBase, ICache, IInvalidation
             }
 
             var (value, expiration) = result.Value;
-            var (found, deserialized, unreadable) = InterpretReadResult<T, TFormat>(value, format);
+            var (found, deserialized, unreadable) = InterpretReadResult<T, TFormat>(redisKey, value, format);
             if (found)
             {
                 ret = _cacheEntryFactory.Create<T?>(deserialized, Clock.ToDateTimeOffset(expiration));
@@ -1469,6 +1495,9 @@ internal sealed partial class RedisCache : RedisCacheBase, ICache, IInvalidation
 
     [LoggerMessage(Level = LogLevel.Warning, Message = "Scripts are unavailable; cache reads now use a GET and PTTL pair")]
     private partial void LogReadScriptUnavailable(Exception ex);
+
+    [LoggerMessage(Level = LogLevel.Warning, Message = "The server refused the script that rewrites a value; rewrites now use a transaction")]
+    private partial void LogRewriteScriptRefused(Exception ex);
 
     [LoggerMessage(Level = LogLevel.Warning, Message = "RedisCache exception.")]
     private partial void LogRedisCacheException(Exception ex);

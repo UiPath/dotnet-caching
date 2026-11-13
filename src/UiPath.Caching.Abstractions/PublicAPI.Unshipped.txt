@@ -2,6 +2,7 @@
 const UiPath.Caching.CacheValueFormats.FirstConsumer = 16 -> int
 const UiPath.Caching.CacheValueFormats.FirstExtended = 256 -> int
 const UiPath.Caching.CacheValueFormats.JsonName = "json" -> string!
+const UiPath.Caching.CacheValueFormats.UnknownName = "unknown" -> string!
 const UiPath.Caching.CacheValueFormats.LastConsumer = 30 -> int
 const UiPath.Caching.CacheValueFormats.LastExtended = 511 -> int
 const UiPath.Caching.CacheValueFormats.MessagePack = 2 -> int

@@ -61,6 +61,7 @@ public class CachingBuilder(IServiceCollection services, IConfiguration? configu
         if (Services.Any(d => d.ServiceType == typeof(ValueSerializerRegistration) || d.ServiceType == typeof(BinaryEventSettings)))
         {
             Services.TryAddSingleton(FormatNegotiation.Create);
+            Services.TryAddSingleton(sp => ValueMigration.Create(sp)!);
             Services.TryAddEnumerable(ServiceDescriptor.Singleton<IHostedService, FormatNegotiationService>());
         }
 
