@@ -1,16 +1,23 @@
+using UiPath.Caching.Negotiation;
+
 namespace UiPath.Caching.Broadcast;
 
-/// <summary>Reads a body by its first byte, the format id of a binary event or else JSON; writes binary only when told to.</summary>
+/// <summary>Reads a body by its first byte, the format id of a binary event or else JSON; writes binary only while <paramref name="writes"/> says so, asked on every event.</summary>
 internal sealed class CompositeEventFormatter(
     IEventFormatterProxy<ICacheEvent> json,
     IEventFormatterProxy<ICacheEvent> binary,
-    bool writeBinary) : IEventFormatterProxy<ICacheEvent>, IEventSourceMatcherProvider
+    IBinaryEvents writes) : IEventFormatterProxy<ICacheEvent>, IEventSourceMatcherProvider
 {
+    public CompositeEventFormatter(IEventFormatterProxy<ICacheEvent> json, IEventFormatterProxy<ICacheEvent> binary, bool writeBinary)
+        : this(json, binary, writeBinary ? FixedBinaryEvents.Always : FixedBinaryEvents.Never)
+    {
+    }
+
     public ICacheEvent? Decode(ReadOnlyMemory<byte> body) =>
         IsBinary(body) ? binary.Decode(body) : json.Decode(body);
 
     public ReadOnlyMemory<byte> Encode(ICacheEvent @event) =>
-        writeBinary ? binary.Encode(@event) : json.Encode(@event);
+        writes.Writes ? binary.Encode(@event) : json.Encode(@event);
 
     /// <summary>Each side's matcher, picked by the first byte; a side without one leaves its bodies to be decoded and compared.</summary>
     public IEventSourceMatcher? CreateSourceMatcher(Uri source)

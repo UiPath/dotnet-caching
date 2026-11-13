@@ -71,6 +71,21 @@ internal sealed partial class RedisPubSubSubjectWriter<T> : IDisposable
         _subscribeTimer = new Timer(Subscribe, null, _timerDueTime, _timerPeriod);
     }
 
+    /// <summary>Raised once a subscription is in place, after the server has confirmed it.</summary>
+    internal event Action? Subscribed;
+
+    /// <summary>Whether the server has confirmed the subscription and no subscription connection is known to be down.</summary>
+    internal bool IsSubscribed
+    {
+        get
+        {
+            lock (_gate)
+            {
+                return !_disposed && _activeGeneration == _generation && _subscriptionsDown.Count == 0 && !_unnamedFailure;
+            }
+        }
+    }
+
     public void Dispose()
     {
         Action? unsubscribe;
@@ -179,6 +194,8 @@ internal sealed partial class RedisPubSubSubjectWriter<T> : IDisposable
             {
                 _onSubscriptionGap();
             }
+
+            Subscribed?.Invoke();
         }
         catch (Exception ex)
         {

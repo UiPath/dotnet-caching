@@ -7,6 +7,7 @@ namespace UiPath.Caching.Tests.Negotiation;
 internal sealed class FakeNodeListServer
 {
     private readonly Dictionary<string, string> _hash = [];
+    private int _inFlight;
 
     public FakeNodeListServer(bool scripts = true)
     {
@@ -15,7 +16,10 @@ internal sealed class FakeNodeListServer
         Connector.Database.Returns(Database);
         Database.ScriptEvaluateAsync(Arg.Any<string>(), Arg.Any<RedisKey[]>(), Arg.Any<RedisValue[]>(), Arg.Any<CommandFlags>())
             .Returns(call => Failure is { } failure ? Task.FromException<RedisResult>(failure) : scripts
-                ? Task.FromResult(Script(call.ArgAt<string>(0), call.ArgAt<RedisValue[]>(2)))
+                ? (WriteDelay is { } delay && call.ArgAt<string>(0).Contains("HSET", StringComparison.Ordinal)
+                    ? DelayedScript(delay, call.ArgAt<string>(0), call.ArgAt<RedisValue[]>(2))
+                    : Task.FromResult(Script(call.ArgAt<string>(0), call.ArgAt<RedisValue[]>(2))))
+
 #pragma warning disable CS0618 // The only public constructor of a server error.
                 : Task.FromException<RedisResult>(new RedisServerException("ERR unknown command 'EVAL'")));
 #pragma warning restore CS0618
@@ -39,6 +43,12 @@ internal sealed class FakeNodeListServer
 
     public IDatabase Database { get; }
 
+    /// <summary>When set, a write waits for it before it lands, as a slow Redis would hold it.</summary>
+    public Func<Task>? WriteDelay { get; set; }
+
+    /// <summary>The most writes that were in flight at once.</summary>
+    public int MaxConcurrentWrites { get; private set; }
+
     /// <summary>When set, every script fails with it, as an unreachable Redis does.</summary>
     public Exception? Failure { get; set; }
 
@@ -54,6 +64,24 @@ internal sealed class FakeNodeListServer
 
     /// <summary>Stores a raw field, as another node or version would have written it.</summary>
     public void Put(string field, string value) => _hash[field] = value;
+
+    private async Task<RedisResult> DelayedScript(Func<Task> delay, string script, RedisValue[] arguments)
+    {
+        var inFlight = Interlocked.Increment(ref _inFlight);
+        MaxConcurrentWrites = Math.Max(MaxConcurrentWrites, inFlight);
+        try
+        {
+            await delay().ConfigureAwait(false);
+            lock (_hash)
+            {
+                return Script(script, arguments);
+            }
+        }
+        finally
+        {
+            Interlocked.Decrement(ref _inFlight);
+        }
+    }
 
     private RedisResult Script(string script, RedisValue[] arguments)
     {

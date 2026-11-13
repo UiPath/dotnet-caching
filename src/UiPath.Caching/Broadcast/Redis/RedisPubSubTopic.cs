@@ -47,9 +47,23 @@ public sealed partial class RedisPubSubTopic<T> : ITopic<T>
         _dispatcher = new EventDispatcher<T>(topicKey, channel, _subject, _logger, _stopTokenSource.Token);
     }
 
+    internal event Action? Subscribed
+    {
+        add => _subscriber.Subscribed += value;
+        remove => _subscriber.Subscribed -= value;
+    }
+
     public TopicKey TopicKey { get; }
 
     public EventHandler? OnDisposed { get; set; }
+
+    internal string ChannelName => _redisChannel.ToString();
+
+    internal bool IsPattern => _redisChannel.IsPattern;
+
+    internal bool Countable => !_redisChannel.IsPattern && !_redisChannel.IsSharded;
+
+    internal bool IsSubscribed => _subscriber.IsSubscribed;
 
     public IDisposable Subscribe(IObserver<T> observer)
     {

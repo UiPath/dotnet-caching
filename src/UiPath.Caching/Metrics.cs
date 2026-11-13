@@ -19,6 +19,7 @@ public static class Metrics
     public const string FormatFallback = "cache.format.fallback";
     public const string FormatViewAge = "cache.format.view.age";
     public const string FormatNodes = "cache.format.nodes";
+    public const string FormatBlockers = Prefix + "FormatBlockers";
 
     public const string TopicName = nameof(TopicName);
     public const string SequenceNumber = nameof(SequenceNumber);
