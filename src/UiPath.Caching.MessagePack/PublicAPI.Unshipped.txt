@@ -10,3 +10,4 @@ UiPath.Caching.MessagePack.MessagePackValueSerializerOptions.MaxDecompressedByte
 UiPath.Caching.MessagePack.MessagePackValueSerializerOptions.MessagePackValueSerializerOptions() -> void
 UiPath.Caching.MessagePack.MessagePackValueSerializerOptions.SerializerOptions.get -> MessagePack.MessagePackSerializerOptions?
 UiPath.Caching.MessagePack.MessagePackValueSerializerOptions.SerializerOptions.set -> void
+static UiPath.Caching.MessagePack.MessagePackCachingBuilderExtensions.AddMessagePackEvents(this UiPath.Caching.Config.ICachingBuilder! builder, bool write) -> UiPath.Caching.Config.ICachingBuilder!

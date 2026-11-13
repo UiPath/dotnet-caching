@@ -1,7 +1,9 @@
+using System.Collections.Concurrent;
 using System.Net;
 using System.Text;
 using System.Text.Json;
 using System.Threading.Channels;
+using AutoFixture.Kernel;
 using StackExchange.Redis;
 
 namespace UiPath.Caching.Tests.Broadcast;
@@ -39,6 +41,67 @@ public class RedisPubSubSubjectWriterTests(ITestContextAccessor testContextAcces
         action(_redisChannel, (RedisValue)_fixture.Create<string>());
         await Task.Delay(_delay.Multiply(5), testContextAccessor.Current.CancellationToken);
         _channel.Reader.TryRead(out var item).Should().BeFalse();
+    }
+
+    [Theory]
+    [InlineData(new byte[] { 0x02, 0x81, 0x01 }, true, 1)]
+    [InlineData(new byte[] { 0x02, 0x81, 0x01 }, false, 1)]
+    [InlineData(new byte[] { 0x03, 0x01 }, true, 1)]
+    [InlineData(new byte[] { 0x1F }, true, 1)]
+    [InlineData(new byte[] { 0x10, 0x01 }, false, 1)]
+    [InlineData(new byte[] { 0x08, 0x01, 0x02 }, true, 0)]
+    [InlineData(new byte[] { 0x08, 0x01, 0x02 }, false, 0)]
+    [InlineData(new byte[] { 0x78, 0x79, 0x7A }, true, 0)]
+    [InlineData(new byte[] { 0x78, 0x79, 0x7A }, false, 0)]
+    [InlineData(new byte[] { (byte)'{', (byte)'x' }, true, 0)]
+    [InlineData(new byte[] { (byte)' ', (byte)'{' }, true, 0)]
+    [InlineData(new byte[] { 0x09, (byte)'{' }, false, 0)]
+    [InlineData(new byte[] { 0x0A, (byte)'{' }, true, 0)]
+    [InlineData(new byte[] { 0x0D, (byte)'{' }, false, 0)]
+    public async Task An_event_in_a_known_format_that_cannot_be_decoded_is_a_drop_and_other_bodies_are_skipped(byte[] body, bool decodeThrows, int drops)
+    {
+        var (dropped, gaps) = await ReceiveUndecodableAsync(body, decodeThrows);
+
+        dropped.Should().Be(drops);
+        gaps.Should().Be(0, "a lost event is not a subscription gap, which a cache that keeps its tier on reconnect ignores");
+    }
+
+    [Theory]
+    [InlineData(new byte[] { 0x02, 0x81, 0x01 }, 1)]
+    [InlineData(new byte[] { (byte)'{', (byte)'x' }, 0)]
+    public async Task An_invalid_event_is_a_drop_only_in_a_known_format(byte[] body, int drops)
+    {
+        var (dropped, gaps) = await ReceiveUndecodableAsync(body, decodeThrows: false, decoded: new TestCacheEvent { Valid = false });
+
+        dropped.Should().Be(drops);
+        gaps.Should().Be(0);
+    }
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task An_undecodable_event_in_a_known_format_is_logged_as_a_warning(bool decodeThrows)
+    {
+        var logger = new WarningLogger();
+
+        await ReceiveUndecodableAsync([0x02, 0x81, 0x01], decodeThrows, logger: logger);
+        logger.Warnings.Should().ContainSingle().Which.Should().Contain("could not be decoded");
+    }
+
+    [Fact]
+    public async Task A_binary_body_that_overflows_the_source_matcher_is_a_drop_not_an_error()
+    {
+        var dropped = 0;
+        _fixture.Customizations.Insert(0, new FilteringSpecimenBuilder(new FixedBuilder((Action)(() => Interlocked.Increment(ref dropped))), new ParameterSpecification(typeof(Action), "onDropped")));
+        _fixture.Inject<IEventFormatterProxy<ICacheEvent>>(new UiPath.Caching.MessagePack.MessagePackEventFormatter());
+        _fixture.Inject<Microsoft.Extensions.Logging.ILogger>(Microsoft.Extensions.Logging.Abstractions.NullLogger.Instance);
+
+        Sut();
+        var action = await WaitForSubscribeAsync();
+        action(_redisChannel, (RedisValue)new byte[] { 0x02, 0xDF, 0xFF, 0xFF, 0xFF, 0xFF });
+        await Task.Delay(_delay.Multiply(5), testContextAccessor.Current.CancellationToken);
+
+        Volatile.Read(ref dropped).Should().Be(1);
     }
 
     [Theory]
@@ -481,6 +544,29 @@ public class RedisPubSubSubjectWriterTests(ITestContextAccessor testContextAcces
         }
     }
 
+    private async Task<(int Dropped, int Gaps)> ReceiveUndecodableAsync(byte[] body, bool decodeThrows, ICacheEvent? decoded = null, Microsoft.Extensions.Logging.ILogger? logger = null)
+    {
+        var dropped = 0;
+        var gaps = 0;
+        _fixture.Customizations.Insert(0, new FilteringSpecimenBuilder(new FixedBuilder((Action)(() => Interlocked.Increment(ref dropped))), new ParameterSpecification(typeof(Action), "onDropped")));
+        _fixture.Customizations.Insert(0, new FilteringSpecimenBuilder(new FixedBuilder((Action)(() => Interlocked.Increment(ref gaps))), new ParameterSpecification(typeof(Action), "onSubscriptionGap")));
+        var formatter = Substitute.For<IEventFormatterProxy<ICacheEvent>>();
+        formatter.Decode(Arg.Any<ReadOnlyMemory<byte>>()).Returns(_ => decoded ?? (decodeThrows ? throw new FormatException("foreign") : null));
+        _fixture.Inject(formatter);
+        if (logger is not null)
+        {
+            _fixture.Inject(logger);
+        }
+
+        Sut();
+        var action = await WaitForSubscribeAsync();
+        action(_redisChannel, (RedisValue)body);
+        await Task.Delay(_delay.Multiply(5), testContextAccessor.Current.CancellationToken);
+
+        _channel.Reader.TryRead(out _).Should().BeFalse();
+        return (Volatile.Read(ref dropped), Volatile.Read(ref gaps));
+    }
+
     private RedisPubSubSubjectWriter<ICacheEvent> Sut() =>
         _sut ??= _fixture.Create<RedisPubSubSubjectWriter<ICacheEvent>>();
 
@@ -488,4 +574,23 @@ public class RedisPubSubSubjectWriterTests(ITestContextAccessor testContextAcces
         _subscribeCalled.Task
             .WaitAsync(TimeSpan.FromSeconds(30), testContextAccessor.Current.CancellationToken)
             .ContinueWith(_ => _capturedAction!, TaskContinuationOptions.OnlyOnRanToCompletion);
+
+    private sealed class WarningLogger : Microsoft.Extensions.Logging.ILogger
+    {
+        private readonly ConcurrentQueue<string> _warnings = new();
+
+        public IReadOnlyList<string> Warnings => [.. _warnings];
+
+        public IDisposable? BeginScope<TState>(TState state) where TState : notnull => null;
+
+        public bool IsEnabled(Microsoft.Extensions.Logging.LogLevel logLevel) => true;
+
+        public void Log<TState>(Microsoft.Extensions.Logging.LogLevel logLevel, Microsoft.Extensions.Logging.EventId eventId, TState state, Exception? exception, Func<TState, Exception?, string> formatter)
+        {
+            if (logLevel == Microsoft.Extensions.Logging.LogLevel.Warning)
+            {
+                _warnings.Enqueue(formatter(state, exception));
+            }
+        }
+    }
 }

@@ -1,5 +1,6 @@
 using System.Net;
 using System.Threading.Channels;
+using UiPath.Caching.Serialization;
 
 namespace UiPath.Caching.Broadcast.Redis;
 
@@ -27,6 +28,7 @@ internal sealed partial class RedisPubSubSubjectWriter<T> : IDisposable
     private bool _disposed;
     private Action? _unsubscribe;
     private int _subscribing;
+    private long _undecodable;
 
     // Under _gate: each reconnect starts a generation, and only a subscription made in the current one stops the timer.
     private int _generation;
@@ -111,6 +113,9 @@ internal sealed partial class RedisPubSubSubjectWriter<T> : IDisposable
             return _activations != mark;
         }
     }
+
+    /// <summary>A body that starts with a format id is one this node should have read, so what it carried is a lost invalidation; any other that does not decode is junk.</summary>
+    private static bool IsKnownFormat(ReadOnlyMemory<byte> payload) => ValueHeader.IsKnownFormat(payload.Span);
 
     private void Subscribe(object? state)
     {
@@ -249,9 +254,26 @@ internal sealed partial class RedisPubSubSubjectWriter<T> : IDisposable
                     return;
                 }
 
-                var ev = _formatter.Decode(payload);
+                T? ev;
+                try
+                {
+                    ev = _formatter.Decode(payload);
+                }
+                catch (Exception ex) when (IsKnownFormat(payload))
+                {
+                    LogUndecodable(ex);
+                    _onDropped();
+                    return;
+                }
+
                 if (ev is null)
                 {
+                    if (IsKnownFormat(payload))
+                    {
+                        LogUndecodable(null);
+                        _onDropped();
+                    }
+
                     return;
                 }
 
@@ -270,12 +292,28 @@ internal sealed partial class RedisPubSubSubjectWriter<T> : IDisposable
                 else
                 {
                     LogEventInvalid(ev.Id, _redisChannel);
+                    if (IsKnownFormat(payload))
+                    {
+                        _onDropped();
+                    }
                 }
             }
             catch (Exception ex)
             {
                 LogOnMessageError(ex, _redisChannel);
             }
+        }
+    }
+
+    private void LogUndecodable(Exception? ex)
+    {
+        if (Interlocked.Increment(ref _undecodable) is var count && count % StreamConstants.UndecodableEntriesPerWarning == 1)
+        {
+            LogEventUndecodableWarning(ex, _redisChannel, count);
+        }
+        else
+        {
+            LogEventUndecodableAgain(ex, _redisChannel);
         }
     }
 
@@ -387,6 +425,12 @@ internal sealed partial class RedisPubSubSubjectWriter<T> : IDisposable
 
     [LoggerMessage(Level = LogLevel.Warning, Message = "Event invalid. Id {EventId}  Channel : {RedisChannel}")]
     private partial void LogEventInvalid(string? eventId, RedisChannel redisChannel);
+
+    [LoggerMessage(Level = LogLevel.Warning, Message = "A message on channel {RedisChannel} could not be decoded and was dropped ({Count} so far).")]
+    private partial void LogEventUndecodableWarning(Exception? ex, RedisChannel redisChannel, long count);
+
+    [LoggerMessage(Level = LogLevel.Debug, Message = "A message on channel {RedisChannel} could not be decoded and was dropped")]
+    private partial void LogEventUndecodableAgain(Exception? ex, RedisChannel redisChannel);
 
     [LoggerMessage(Level = LogLevel.Error, Message = "OnMessage error. Channel : {RedisChannel}")]
     private partial void LogOnMessageError(Exception ex, RedisChannel redisChannel);

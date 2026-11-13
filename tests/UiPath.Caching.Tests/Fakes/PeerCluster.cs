@@ -155,7 +155,7 @@ internal sealed class PeerCluster : IDisposable
                 }
 
                 hash.Version++;
-                var carried = values.ToDictionary(f => f.Key, f => (string?)Convert.ToBase64String(Encoding.UTF8.GetBytes(f.Value ?? string.Empty)));
+                var carried = values.ToDictionary(f => f.Key, f => (byte[]?)Encoding.UTF8.GetBytes(f.Value ?? string.Empty));
                 var bytes = values.Sum(f => Encoding.UTF8.GetByteCount(f.Key) + Encoding.UTF8.GetByteCount(f.Value ?? string.Empty));
                 var fits = merge && values.Count > 0 && values.Count <= limits.MaxFields && bytes <= limits.MaxBytes;
                 return new VersionedWrite(true, hash.Version, fits ? carried : null);

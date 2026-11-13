@@ -1,6 +1,6 @@
 namespace UiPath.Caching.Broadcast;
 
-/// <summary>Turns events dropped at a full dispatcher channel into one expiry at a time, off the thread that dropped them.</summary>
+/// <summary>Turns events dropped at a full dispatcher channel, or unreadable in a known format, into one expiry at a time, off the thread that dropped them.</summary>
 internal sealed partial class DroppedEvents(TopicKey topicKey, Action expire, ILogger logger)
 {
     private const int Idle = 0;
@@ -50,7 +50,7 @@ internal sealed partial class DroppedEvents(TopicKey topicKey, Action expire, IL
         }
     }
 
-    [LoggerMessage(Level = LogLevel.Warning, Message = "Topic {TopicKey} dropped events at its full dispatcher channel; expiring what it keeps")]
+    [LoggerMessage(Level = LogLevel.Warning, Message = "Topic {TopicKey} lost events, dropped at its full dispatcher channel or unreadable by this node; expiring what it keeps")]
     private partial void LogEventsDropped(TopicKey topicKey);
 
     [LoggerMessage(Level = LogLevel.Error, Message = "Expiring topic {TopicKey} after dropped events failed")]

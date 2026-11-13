@@ -1,6 +1,7 @@
 using System.Diagnostics;
 using System.Text;
 using System.Threading.Channels;
+using UiPath.Caching.Serialization;
 using UiPath.Caching.Telemetry;
 
 namespace UiPath.Caching.Broadcast.Redis;
@@ -69,7 +70,7 @@ internal sealed partial class RedisStreamSubjectWriter<T> : IDisposable
     private bool _autoAckReadInFlight;
     // The loss of a failed NOACK read was reported, for the failures that follow it until a read succeeds, which reports again.
     private bool _autoAckLossReported;
-    // A NOACK entry of the batch being dispatched was lost.
+    // A NOACK entry of the batch being dispatched was lost, or one in a known format could not be decoded.
     private bool _dispatchLost;
     // The batch came back empty without a read, so it says nothing about the group.
     private bool _readSkipped;
@@ -198,6 +199,8 @@ internal sealed partial class RedisStreamSubjectWriter<T> : IDisposable
     }
 
     private static bool IsEmptyHead(StreamHead? head) => head is { } h && (!h.Exists || h.LastId == "0-0");
+
+    private static bool IsKnownFormat(ReadOnlyMemory<byte> body) => ValueHeader.IsKnownFormat(body.Span);
 
     /// <summary>Whether <paramref name="found"/> carries the fields of <paramref name="read"/>, byte for byte.</summary>
     private static bool SameEntry(in StreamEntry found, in StreamEntry read)
@@ -582,16 +585,20 @@ internal sealed partial class RedisStreamSubjectWriter<T> : IDisposable
     {
         try
         {
-            return !entry.IsNull
-                && !IsOwn(entry)
-                && _formatter.Decode((ReadOnlyMemory<byte>)entry[_context.FieldName]) is { } ev
-                && ev.IsValid()
-                && !ev.SameSource(_context.SourceUri);
+            if (entry.IsNull || IsOwn(entry))
+            {
+                return false;
+            }
+
+            var body = (ReadOnlyMemory<byte>)entry[_context.FieldName];
+            return _formatter.Decode(body) is { } ev
+                ? ev.IsValid() && !ev.SameSource(_context.SourceUri)
+                : IsKnownFormat(body);
         }
         catch (Exception)
         {
-            // Undecodable, so the read would skip it too.
-            return false;
+            // Undecodable, so the read would skip it too, unless it is in a format this node should have read: that is a loss.
+            return IsKnownFormat((ReadOnlyMemory<byte>)entry[_context.FieldName]);
         }
     }
 
@@ -1002,6 +1009,12 @@ internal sealed partial class RedisStreamSubjectWriter<T> : IDisposable
     {
         // Acknowledged first, so a throw below cannot leave the entry pending.
         ids.Add(@event.Id);
+        if (IsKnownFormat((ReadOnlyMemory<byte>)@event[_context.FieldName]))
+        {
+            // Reported once for the batch, after the loop.
+            _dispatchLost = true;
+        }
+
         _cachingTelemetryProvider.TryTrackEvent(EventInvalid,
         [
             new(PropTopicKey, _topicName),
@@ -1010,11 +1023,17 @@ internal sealed partial class RedisStreamSubjectWriter<T> : IDisposable
         LogEventInvalid(ev.Id, _context.Topic, @event.Id);
     }
 
-    /// <summary>Drops an entry no retry would decode: acknowledged, since a bad payload is not a lost invalidation.</summary>
+    /// <summary>Drops an entry no retry would decode: acknowledged, since a bad payload is not a lost invalidation. One in a known format is a loss.</summary>
     private void HandleUndecodableEvent(StreamEntry @event, List<RedisValue> ids, Exception? ex)
     {
         // Acknowledged first, so a throw below cannot leave the entry pending.
         ids.Add(@event.Id);
+        if (IsKnownFormat((ReadOnlyMemory<byte>)@event[_context.FieldName]))
+        {
+            // Reported once for the batch, after the loop.
+            _dispatchLost = true;
+        }
+
         _cachingTelemetryProvider.TryTrackEvent(EventUndecodable,
         [
             new(PropTopicKey, _topicName),

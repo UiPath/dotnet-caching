@@ -556,6 +556,44 @@ property, or changing its type, therefore silently loses that data for values wr
 it would with JSON: the old values read back with the new property empty. Mark a type with `[MessagePackObject]` and
 `[Key(n)]` to make the format independent of the names.
 
+### MessagePack events
+
+`AddMessagePackEvents(write)` wraps the event formatter with one that reads both formats, told apart by the first
+byte: `{` or whitespace is JSON, `0x02` is binary. A binary event is a MessagePack map with integer keys, a binary GUID
+id, an integer event type and the peer fields as raw bytes, so a `CacheSet` without peer fields is about a third of its
+JSON size and a peer-field event saves the 33% base64 adds. Properties it has no compact form for travel as JSON bytes
+and read back as `JsonElement`, as they do from a JSON event, and an expiry reads back in UTC.
+
+```csharp
+b.AddMessagePackEvents(write: false); // first deploy: reads both, still writes JSON
+b.AddMessagePackEvents(write: true);  // second deploy: writes binary
+```
+
+Switch in two deploys, like a value serializer. Every node must run library version 3.2.0 or later, the first one that
+has this formatter and the loss handling below, with `AddMessagePackEvents(write: false)` registered, before any node
+uses `write: true`. A node on an older version acknowledges and skips a binary event, logging a warning for every 100th one it cannot decode and tracking telemetry, but never treating it as a loss, so it keeps what
+it has until `LocalMaxExpiration`; one on 3.2.0 or later without the formatter treats the event as lost and drops its
+whole local tier for that topic. Switching back to `write: false` is safe at any time. Never remove the JSON decoder:
+a restarted node replays its stream backlog, and a JSON entry it could not read is skipped without counting as a loss, so the node would keep what that entry invalidated. The setting is
+app-wide, not per topic.
+
+It wraps whichever JSON formatter would otherwise be registered, `AddCloudEvents` included, whether that is called
+before or after `AddMessagePackEvents`, so the JSON on the wire is what it was. Calling `AddMessagePackEvents` again
+replaces the earlier call's `write`.
+
+An event whose body starts with a format id this library writes (`0x02`, `0x03`) or one of the consumer ids, but does
+not decode, such as a binary event on a node that never registered the formatter, is reported as a loss, not skipped.
+The stream reader acknowledges the entries and expires the local copies once per batch; the Pub/Sub reader expires
+them through the same coalesced path as an event dropped at a full channel, so it holds for caches that keep their
+tier over a subscription gap too. A body that does not start with one of those ids, such as JSON, garbage or another
+producer's first byte on a shared stream, is still dropped as junk. Binary events are read as untrusted data: nesting
+is limited by `MessagePackSecurity.UntrustedData`, and a count the body cannot hold is rejected before anything is
+read. A map's initial capacity is capped at 16 entries, so allocation follows the entries the body holds, not the count it claims.
+
+The integer event type values on the wire (`CacheSet` 0, `CacheRefreshed` 1, `CacheRemoved` 2, `TopicInvalidated` 3)
+are fixed and only ever appended to. A node that reads a type number it does not know refuses the event, which is a
+loss, so a release that adds a type needs the same two deploys.
+
 ## Swapping the default factories
 
 `ICacheFactory` and `ICachePolicyFactory` each have a default DI registration set up by `AddCaching` — the concrete `CacheFactory` and `DefaultCachePolicyFactory` respectively. When you need to substitute either, use the fluent `Use*Factory` extensions on `ICachingBuilder`. They internally call `Services.Replace(...)` so the swap survives the rest of the `AddCaching` pipeline (which uses `TryAddSingleton` and would otherwise lose to the default registration).

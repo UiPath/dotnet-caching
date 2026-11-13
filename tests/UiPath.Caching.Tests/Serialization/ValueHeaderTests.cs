@@ -53,6 +53,22 @@ public class ValueHeaderTests
         headerLength.Should().Be(1);
     }
 
+    [Theory]
+    [InlineData(new byte[] { 0x02 }, true)]
+    [InlineData(new byte[] { 0x03 }, true)]
+    [InlineData(new byte[] { 0x10 }, true)]
+    [InlineData(new byte[] { 0x1E }, true)]
+    [InlineData(new byte[] { 0x1F }, true)]
+    [InlineData(new byte[] { 0x1F, 0x05 }, true)]
+    [InlineData(new byte[] { 0x01 }, false)]
+    [InlineData(new byte[] { 0x08 }, false)]
+    [InlineData(new byte[] { 0x0F }, false)]
+    [InlineData(new byte[] { (byte)'{' }, false)]
+    [InlineData(new byte[] { 0x09 }, false)]
+    [InlineData(new byte[] { }, false)]
+    public void Only_the_library_and_consumer_ids_are_known_formats(byte[] value, bool known) =>
+        ValueHeader.IsKnownFormat(value).Should().Be(known);
+
     [Fact]
     public void A_payload_of_only_the_header_byte_reads_as_that_header()
     {
