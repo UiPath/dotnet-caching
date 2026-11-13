@@ -39,7 +39,7 @@ public class CacheEventPublisherTests
     public async Task Default_event_bytes_are_unchanged()
     {
         var sets = await Encoded(sut => sut.CacheSetAsync(Options(), typeof(string)));
-        var peerUpdate = await Encoded(sut => sut.CacheSetAsync(Options(), typeof(string), 7, new Dictionary<string, string?> { ["a"] = "AQI=", ["b"] = null }));
+        var peerUpdate = await Encoded(sut => sut.CacheSetAsync(Options(), typeof(string), 7, new Dictionary<string, byte[]?> { ["a"] = [1, 2], ["b"] = null }));
 
         Utf8(sets).Should().Be("""{"Id":"1","Source":"urn:test","Data":{"Key":"user:42","Properties":null},"Type":"set","TransportId":null,"Key":"user:42"}""");
         Utf8(peerUpdate).Should().Be("""{"Id":"1","Source":"urn:test","Data":{"Key":"user:42","Properties":{"_version_":7,"_peerFields_":{"a":"AQI=","b":null},"_peerExpiration_":"2030-01-02T03:04:05+00:00","_peerMetadata_":{"m":"v"}}},"Type":"set","TransportId":null,"Key":"user:42"}""");

@@ -535,6 +535,11 @@ A node that cannot read a format treats the value as a miss, and what happens to
   rolling deploy, and a serializer disposed at shutdown says nothing about the data. This departs from the
   design spec, which removed such a value. An `OutOfMemoryException` from a registered serializer's payload is never treated as a failed read: it propagates from `Get`, `GetOrAdd` and the hash reads instead of becoming a miss that runs the generator. A value with no header (JSON) behaves as it does with no serializer registered, so an `OutOfMemoryException` there is a logged miss.
 
+Events follow the same order. A node that cannot decode an event with a format id in front treats it as a topic loss and
+expires its local copies, so upgrade every node to 3.2.0 or later and register `AddMessagePackEvents(write: false)`
+before any node uses `write: true`, and keep the JSON decoder for good: older nodes skip binary events silently.
+See [MessagePack events](how-to/extending.md#messagepack-events).
+
 All of it shows up as factory load and churn during the deploy, never as a wrong value. Switching a policy back
 to JSON is safe at any time: new writes are JSON and the older values still read.
 

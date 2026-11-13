@@ -7,7 +7,7 @@ internal sealed class WriteReport(PeerFieldLimits limits)
 {
     public long Version { get; set; }
 
-    public IDictionary<string, string?>? Fields { get; private set; }
+    public IReadOnlyDictionary<string, byte[]?>? Fields { get; private set; }
 
     /// <summary>Only a merge within the limits is carried: a replacement leaves nothing a peer could add its fields to.</summary>
     public void Capture(HashEntry[] entries, HashCacheSetOption setOption)
@@ -17,7 +17,7 @@ internal sealed class WriteReport(PeerFieldLimits limits)
             return;
         }
 
-        var fields = new Dictionary<string, string?>(StringComparer.Ordinal);
+        var fields = new PeerFieldBytes();
         var bytes = 0;
         foreach (var entry in entries)
         {
@@ -27,14 +27,16 @@ internal sealed class WriteReport(PeerFieldLimits limits)
                 continue;
             }
 
-            var value = (byte[]?)entry.Value ?? [];
-            bytes += Encoding.UTF8.GetByteCount(name) + value.Length;
+            // Measured before it is copied, so a peer's oversized field costs nothing.
+            var held = (ReadOnlyMemory<byte>)entry.Value;
+            bytes += Encoding.UTF8.GetByteCount(name) + held.Length;
             if (fields.Count == limits.MaxFields || bytes > limits.MaxBytes)
             {
                 return;
             }
 
-            fields[name] = Convert.ToBase64String(value);
+            // A copy: the entry may lend memory that is reclaimed once the write returns, and the event goes out after it.
+            fields[name] = held.ToArray();
         }
 
         if (fields.Count > 0)
