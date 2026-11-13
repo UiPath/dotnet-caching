@@ -480,7 +480,7 @@ Nested under a `CachePolicy` entry. Field-level merged against the default polic
 | Property | Type | Default | Scope | Notes |
 |---|---|---|---|---|
 | `Write` | `string?` | `null` | Per-policy | A registered serializer name, or `json`; blank is rejected; `null` = inherit, and under that `json`. |
-| `Read` | `string[]?` | `null` | Per-policy | The formats the policy reads, each a registered name or `json`; never empty, and including `Write`; `null` = inherit, and under that every registered format. Arrays from layered configuration merge by index, see below. |
-| `MigrateOnRead` | `bool?` | `null` | Per-policy | Rewrite a value read in another format into the write format; `null` = inherit, and under that off. |
+| `Read` | `string[]?` | `null` | Per-policy | The formats the policy reads, each a registered name or `json`; never empty, and including `Write`; `null` = inherit, and under that every registered format. Checked when the policies are built; it does not yet limit what is read, which is every registered format whatever it says. Arrays from layered configuration merge by index, see below. |
+| `MigrateOnRead` | `bool?` | `null` | Per-policy | Rewrite a value read in another format into the write format; `null` = inherit, and under that off. Accepted and merged, but nothing reads it yet: a value is never rewritten in this release. |
 
 **`Read` and layered configuration.** A `Read` set in code replaces the default policy's list as a whole, but .NET configuration providers merge arrays by index. With a base layer of `"Read": ["a", "b"]` and an override layer of `"Read": ["json"]`, the bound list is `["json", "b"]`, not `["json"]`. An override of `"Read": []` binds as `null`, so it inherits and the policy reads every registered format. To override safely, set every index the base layer sets (or repeat the full list), or declare `Read` in one layer only.

@@ -2,6 +2,7 @@ using Microsoft.Extensions.DependencyInjection;
 using StackExchange.Redis;
 using StackExchange.Redis.Profiling;
 using UiPath.Caching.Config;
+using UiPath.Caching.Tests.Fakes;
 
 namespace UiPath.Caching.Tests.Redis;
 
@@ -41,6 +42,30 @@ public sealed class PeerFieldUpdateIntegrationTests(RedisContainerFixture fixtur
         peer.Profiler.Session.FinishProfiling().Select(c => c.Command).Should().NotContain(InnerReadCommands);
         (await peer.Redis.TimeToLiveAsync<string>(key, Ct)).Should().BeGreaterThan(TimeSpan.Zero);
         (await Counted(key)).Should().Be(2);
+    }
+
+    [Fact]
+    public async Task A_peer_applies_fields_written_in_the_policy_serializers_format_from_memory()
+    {
+        Assert.SkipUnless(fixture.Enabled, "Set RUN_REDIS_INTEGRATION_TESTS=1 (Docker required) to run.");
+        var writer = Node("a", peerFieldUpdates: true, headered: true);
+        var peer = Node("b", peerFieldUpdates: true, headered: true);
+        await WarmAsync(writer, peer);
+        var key = Unique();
+        (await writer.Hashes.SetAsync<string>(key, Fields(("a", "1"), ("b", "2")), TimeSpan.FromMinutes(10), Ct)).Should().BeTrue();
+        _ = peer.Profiler.Session.FinishProfiling().ToList();
+        (await peer.Hashes.GetAsync<string>(key, Ct)).Should().HaveCount(2);
+        await EventsConsumedAsync(peer);
+        (await peer.Hashes.GetAsync<string>(key, Ct)).Should().HaveCount(2);
+        _ = peer.Profiler.Session.FinishProfiling().ToList();
+
+        (await writer.Hashes.SetAsync<string>(key, Fields(("c", "3")), new HashCacheEntryOptions(TimeToLive: TimeSpan.FromMinutes(10), SetOption: HashCacheSetOption.HashReplace), Ct)).Should().BeTrue();
+        var seen = await UntilAsync(async () => (await peer.Hashes.GetAsync<string>(key, Ct)).ContainsKey("c"));
+
+        seen.Should().BeTrue("the peer's event is applied to its copy");
+        (await peer.Hashes.GetAsync<string>(key, Ct)).Should().BeEquivalentTo(Fields(("a", "1"), ("b", "2"), ("c", "3")));
+        peer.Profiler.Session.FinishProfiling().Select(c => c.Command).Should().NotContain(InnerReadCommands);
+        (await RawField(key, "c")).Should().Equal(0x10, (byte)'3');
     }
 
     [Fact]
@@ -431,6 +456,18 @@ public sealed class PeerFieldUpdateIntegrationTests(RedisContainerFixture fixtur
         return 0;
     }
 
+    [System.Diagnostics.CodeAnalysis.SuppressMessage("Major Code Smell", "S1751:Loops with at most one iteration should be refactored", Justification = "The first key matching the pattern is the one wanted.")]
+    private async Task<byte[]?> RawField(string key, string field)
+    {
+        await using var redis = await ConnectionMultiplexer.ConnectAsync(fixture.ConnectionString);
+        await foreach (var found in redis.GetServers()[0].KeysAsync(pattern: $"*{key}"))
+        {
+            return await redis.GetDatabase().HashGetAsync(found, field);
+        }
+
+        return null;
+    }
+
     private async Task SetRaw(string key, string field, long value)
     {
         await using var redis = await ConnectionMultiplexer.ConnectAsync(fixture.ConnectionString);
@@ -454,7 +491,7 @@ public sealed class PeerFieldUpdateIntegrationTests(RedisContainerFixture fixtur
         return null;
     }
 
-    private Peer Node(string source, bool peerFieldUpdates, int fieldBatch = 1000, bool readScripts = false)
+    private Peer Node(string source, bool peerFieldUpdates, int fieldBatch = 1000, bool readScripts = false, bool headered = false)
     {
         var profiler = new CommandCountingProfiler();
         var provider = new ServiceCollection()
@@ -475,11 +512,19 @@ public sealed class PeerFieldUpdateIntegrationTests(RedisContainerFixture fixtur
                     });
                     b.AddBroadcast();
                     b.AddInMemoryRedis(o => o.PeerFieldUpdates = peerFieldUpdates);
+                    if (headered)
+                    {
+                        b.AddValueSerializer("fast", _ => new PassthroughValueSerializer(0x10));
+                    }
                 },
                 o =>
                 {
                     o.AppShortName = _app;
                     o.SourceUri = new Uri($"urn:{source}-{_app}");
+                    if (headered)
+                    {
+                        o.DefaultCachePolicy = new CachePolicy { Serializer = new SerializerPolicy { Write = "fast" } };
+                    }
                 })
             .BuildServiceProvider();
         _nodes.Add(provider);

@@ -683,7 +683,7 @@ internal sealed partial class MultilayerHashCache : MultilayerCacheBase, IHashCa
             return false;
         }
 
-        if (!versioned.TryDecodeFields<T>(update.Fields, out var written))
+        if (!versioned.TryDecodeFields<T>(update.Fields, state.Refresh?.Policy, out var written))
         {
             return false;
         }
