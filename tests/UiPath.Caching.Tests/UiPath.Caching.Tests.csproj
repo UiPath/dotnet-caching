@@ -39,6 +39,7 @@
     <ProjectReference Include="..\..\src\UiPath.Caching.CloudEvents\UiPath.Caching.CloudEvents.csproj" />
     <ProjectReference Include="..\..\src\UiPath.Caching.Polly\UiPath.Caching.Polly.csproj" />
     <ProjectReference Include="..\..\src\UiPath.Caching.Queue\UiPath.Caching.Queue.csproj" />
+    <ProjectReference Include="..\..\src\UiPath.Caching.MessagePack\UiPath.Caching.MessagePack.csproj" />
     <ProjectReference Include="..\..\src\UiPath.Caching.OpenTelemetry\UiPath.Caching.OpenTelemetry.csproj" />
     <ProjectReference Include="..\..\src\UiPath.Caching.Azure\UiPath.Caching.Azure.csproj" />
     <ProjectReference Include="..\..\src\UiPath.Caching\UiPath.Caching.csproj" />
