@@ -132,7 +132,9 @@ public abstract class RedisCacheBase : IConnectionState, IMasterReadScope, IDisp
     {
         try
         {
-            Telemetry.TrackMetric(ValueReader.UnreadableMetric, 1, [new("format", $"0x{(formatId < 0 ? 0x1F : formatId):X2}"), new("cache", cacheName)]);
+            var shown = formatId < 0 ? 0x1F : formatId;
+            var format = formatId == ReadableFormats.JsonId ? "headerless" : $"0x{shown:X2}";
+            Telemetry.TrackMetric(ValueReader.UnreadableMetric, 1, [new("format", format), new("cache", cacheName)]);
         }
         catch (Exception ex)
         {

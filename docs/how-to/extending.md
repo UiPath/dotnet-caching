@@ -502,7 +502,9 @@ What a node does with a value it cannot read depends on why:
 - **A registered serializer that throws** is a logged miss and the key stays, as for JSON that does not parse:
   the bytes may be good for another version of the type that other nodes run during a rolling deploy.
   An `OutOfMemoryException` from a registered serializer's payload is never treated as a failed read; one from a value with no header (JSON) is a logged miss, as with no serializer registered.
-- **A hash with such a field** misses as a whole and is left in place; an unknown id is still counted.
+- **A format the policy's `Serializer.Read` leaves out** (JSON, or an id a serializer owns) is a counted miss and the key stays, since another
+  policy or node reads it; `cache.serializer.unreadable` is tagged with the id, or `headerless` for bytes with no header. The generator runs, and its write replaces the value.
+- **A hash with such a field** misses as a whole and is left in place; an unknown id is still counted. `GetOrAdd` on it writes with `KeyReplace`, so the field does not outlive the regenerate.
 
 Update the nodes that read before any policy writes a new format: a node that cannot read one keeps missing
 and regenerating until it is updated.

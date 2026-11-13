@@ -5,7 +5,7 @@ namespace UiPath.Caching.Redis;
 
 internal sealed partial class RedisCache
 {
-    private ValueFormat FormatFor(CachePolicy? policy, bool forWrite) => _formats.For(policy, forWrite);
+    private ValueFormat FormatFor(CachePolicy? policy, bool forWrite, bool alsoReads = false) => _formats.For(policy, forWrite, alsoReads);
 
     /// <summary>A read found a format no registered serializer owns: counted, and the key dropped if it still holds the bytes that were read, so the caller regenerates it. Best effort, like any remove.</summary>
     private ValueTask<bool> RemoveUnreadableAsync<T>(RedisKey redisKey, RedisValue read, int formatId, CancellationToken token)

@@ -63,7 +63,7 @@ internal sealed partial class RedisCache : IResultCache
     private ValueTask<CacheResult<T>> GetOrAddResultCoreAsync<T>(CacheKey cacheKey, GeneratorRecorder<T> recorder, TimeSpan duration, CachePolicy? policy, CancellationToken token)
     {
         NotCacheableException.ThrowIfNotCacheable<T>();
-        var format = FormatFor(policy, forWrite: true);
+        var format = FormatFor(policy, forWrite: true, alsoReads: true);
         return format.IsDefault
             ? GetOrAddResultCoreAsync(cacheKey, recorder, duration, policy, default(PlainFormat), token)
             : GetOrAddResultCoreAsync(cacheKey, recorder, duration, policy, format, token);

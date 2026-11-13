@@ -7,6 +7,9 @@ internal interface IValueFormat
 
     bool Sniff { get; }
 
+    /// <summary>The formats a read accepts; null when it looks for no header.</summary>
+    ReadableFormats? Readable { get; }
+
     /// <summary>Whether a read that failed with <paramref name="exception"/> logs it and reads as a miss.</summary>
     bool Handles(Exception exception);
 }
