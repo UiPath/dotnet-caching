@@ -1,3 +1,4 @@
+using UiPath.Caching.Negotiation;
 using UiPath.Caching.Policies;
 using UiPath.Caching.Serialization;
 using UiPath.Caching.Telemetry;
@@ -17,6 +18,7 @@ public sealed class RedisCacheProvider : ICacheProvider
     private readonly TimeProvider _clock;
     private readonly IKeyMaskingPolicy? _keyMaskingPolicy;
     private readonly ValueSerializerRegistry _valueSerializers;
+    private readonly IEffectiveFormat? _effectiveFormat;
     private readonly Lazy<RedisCache> _cache;
     private readonly Lazy<RedisHashCache> _hashCache;
 
@@ -57,9 +59,11 @@ public sealed class RedisCacheProvider : ICacheProvider
         ICachePolicyFactory policyFactory,
         TimeProvider clock,
         IKeyMaskingPolicy? keyMaskingPolicy,
-        ValueSerializerRegistry valueSerializers)
+        ValueSerializerRegistry valueSerializers,
+        IEffectiveFormat? effectiveFormat = null)
     {
         _valueSerializers = valueSerializers;
+        _effectiveFormat = effectiveFormat;
         _keyMaskingPolicy = keyMaskingPolicy;
         _clock = clock;
         _redisCacheOptions = redisCacheOptions.Value;
@@ -110,7 +114,8 @@ public sealed class RedisCacheProvider : ICacheProvider
             services.GetRequiredService<ICachePolicyFactory>(),
             services.GetRequiredService<TimeProvider>(),
             services.GetService<IKeyMaskingPolicy>(),
-            services.GetRequiredService<ValueSerializerRegistry>());
+            services.GetRequiredService<ValueSerializerRegistry>(),
+            services.GetService<FormatNegotiation>()?.Negotiator);
 
     private RedisCache BuildCache()
     {
@@ -128,6 +133,7 @@ public sealed class RedisCacheProvider : ICacheProvider
             _keyMaskingPolicy)
         {
             ValueSerializers = _valueSerializers,
+            EffectiveFormat = _effectiveFormat,
         };
     }
 
@@ -147,6 +153,7 @@ public sealed class RedisCacheProvider : ICacheProvider
             _keyMaskingPolicy)
         {
             ValueSerializers = _valueSerializers,
+            EffectiveFormat = _effectiveFormat,
         };
     }
 }

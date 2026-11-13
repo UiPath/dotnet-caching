@@ -1,3 +1,28 @@
 #nullable enable
 static UiPath.Caching.Config.ValueSerializerBuilderExtensions.AddValueSerializer(this UiPath.Caching.Config.ICachingBuilder! builder, string! name, System.Func<System.IServiceProvider!, UiPath.Caching.ICacheValueSerializer!>! factory) -> UiPath.Caching.Config.ICachingBuilder!
 UiPath.Caching.Config.ValueSerializerBuilderExtensions
+UiPath.Caching.Redis.FormatNegotiationMode
+UiPath.Caching.Redis.FormatNegotiationMode.Auto = 0 -> UiPath.Caching.Redis.FormatNegotiationMode
+UiPath.Caching.Redis.FormatNegotiationMode.Force = 1 -> UiPath.Caching.Redis.FormatNegotiationMode
+UiPath.Caching.Redis.FormatNegotiationOptions
+UiPath.Caching.Redis.FormatNegotiationOptions.AdvertiseInterval.get -> System.TimeSpan
+UiPath.Caching.Redis.FormatNegotiationOptions.AdvertiseInterval.set -> void
+UiPath.Caching.Redis.FormatNegotiationOptions.AssumeAllNodesCanRead.get -> bool
+UiPath.Caching.Redis.FormatNegotiationOptions.AssumeAllNodesCanRead.set -> void
+UiPath.Caching.Redis.FormatNegotiationOptions.FormatNegotiationOptions() -> void
+UiPath.Caching.Redis.FormatNegotiationOptions.LivenessWindow.get -> System.TimeSpan
+UiPath.Caching.Redis.FormatNegotiationOptions.LivenessWindow.set -> void
+UiPath.Caching.Redis.FormatNegotiationOptions.MaxViewAge.get -> System.TimeSpan
+UiPath.Caching.Redis.FormatNegotiationOptions.MaxViewAge.set -> void
+UiPath.Caching.Redis.FormatNegotiationOptions.Mode.get -> UiPath.Caching.Redis.FormatNegotiationMode
+UiPath.Caching.Redis.FormatNegotiationOptions.Mode.set -> void
+UiPath.Caching.Redis.FormatNegotiationOptions.UpgradeHold.get -> System.TimeSpan
+UiPath.Caching.Redis.FormatNegotiationOptions.UpgradeHold.set -> void
+UiPath.Caching.Redis.FormatNegotiationOptions.ViewInterval.get -> System.TimeSpan
+UiPath.Caching.Redis.FormatNegotiationOptions.ViewInterval.set -> void
+UiPath.Caching.Redis.RedisCacheOptions.FormatNegotiation.get -> UiPath.Caching.Redis.FormatNegotiationOptions!
+UiPath.Caching.Redis.RedisCacheOptions.FormatNegotiation.set -> void
+const UiPath.Caching.Metrics.FormatEffective = "cache.format.effective" -> string!
+const UiPath.Caching.Metrics.FormatFallback = "cache.format.fallback" -> string!
+const UiPath.Caching.Metrics.FormatNodes = "cache.format.nodes" -> string!
+const UiPath.Caching.Metrics.FormatViewAge = "cache.format.view.age" -> string!
