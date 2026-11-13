@@ -1,5 +1,6 @@
 using System.Buffers;
 using System.Text.Json;
+using UiPath.Caching.Serialization;
 
 namespace UiPath.Caching;
 
@@ -45,6 +46,26 @@ internal sealed class PooledJsonWriter : IBufferWriter<byte>
         }
     }
 
+    /// <summary>The bytes <paramref name="serializer"/> writes behind its format header, in the same pooled buffer type as the JSON path. <paramref name="formatIds"/> are the ids the registry validated, not the serializer's live list.</summary>
+    public static SerializedPayload SerializeValue<T>(ICacheValueSerializer serializer, ReadOnlySpan<int> formatIds, T value)
+    {
+        var writer = _cached ?? new PooledJsonWriter();
+        _cached = null;
+        try
+        {
+            return writer.WriteWithHeader(serializer, formatIds, value);
+        }
+        catch
+        {
+            writer.Clear();
+            throw;
+        }
+        finally
+        {
+            _cached = writer;
+        }
+    }
+
     public void Advance(int count) => _written += count;
 
     public Memory<byte> GetMemory(int sizeHint = 0)
@@ -72,6 +93,32 @@ internal sealed class PooledJsonWriter : IBufferWriter<byte>
 #endif
         SkipValidation = true,
     };
+
+    private SerializedPayload WriteWithHeader<T>(ICacheValueSerializer serializer, ReadOnlySpan<int> ids, T value)
+    {
+        if (ids.IsEmpty)
+        {
+            throw new InvalidOperationException($"{serializer.GetType().Name} declares no format ids.");
+        }
+
+        var headerLength = ValueHeader.Length(ids[0]);
+        EnsureCapacity(headerLength);
+        _written += headerLength;
+
+        var id = serializer.Serialize(value, this);
+        if (_written == headerLength)
+        {
+            throw new InvalidOperationException($"{serializer.GetType().Name} wrote no bytes; a serializer must not write zero bytes.");
+        }
+
+        if (!ids.Contains(id) || ValueHeader.Length(id) != headerLength)
+        {
+            throw new InvalidOperationException($"{serializer.GetType().Name} returned format id 0x{id:X2}, which is not one of its FormatIds.");
+        }
+
+        ValueHeader.Write(_buffer, id);
+        return Detach();
+    }
 
     private Utf8JsonWriter JsonFor(JsonSerializerOptions options)
     {

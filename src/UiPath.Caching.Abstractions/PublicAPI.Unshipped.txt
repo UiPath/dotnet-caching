@@ -1,1 +1,23 @@
 #nullable enable
+const UiPath.Caching.CacheValueFormats.FirstConsumer = 16 -> int
+const UiPath.Caching.CacheValueFormats.FirstExtended = 256 -> int
+const UiPath.Caching.CacheValueFormats.JsonName = "json" -> string!
+const UiPath.Caching.CacheValueFormats.LastConsumer = 30 -> int
+const UiPath.Caching.CacheValueFormats.LastExtended = 511 -> int
+const UiPath.Caching.CacheValueFormats.MessagePack = 2 -> int
+const UiPath.Caching.CacheValueFormats.MessagePackLz4 = 3 -> int
+UiPath.Caching.CacheValueFormats
+UiPath.Caching.ICacheValueSerializer
+UiPath.Caching.ICacheValueSerializer.Deserialize<T>(int formatId, System.Buffers.ReadOnlySequence<byte> source) -> T?
+UiPath.Caching.ICacheValueSerializer.FormatIds.get -> System.Collections.Generic.IReadOnlyList<int>!
+UiPath.Caching.ICacheValueSerializer.Serialize<T>(T value, System.Buffers.IBufferWriter<byte>! target) -> int
+UiPath.Caching.CachePolicy.Serializer.get -> UiPath.Caching.SerializerPolicy?
+UiPath.Caching.CachePolicy.Serializer.init -> void
+UiPath.Caching.SerializerPolicy
+UiPath.Caching.SerializerPolicy.MigrateOnRead.get -> bool?
+UiPath.Caching.SerializerPolicy.MigrateOnRead.init -> void
+UiPath.Caching.SerializerPolicy.Read.get -> System.Collections.Generic.IReadOnlyList<string!>?
+UiPath.Caching.SerializerPolicy.Read.init -> void
+UiPath.Caching.SerializerPolicy.SerializerPolicy() -> void
+UiPath.Caching.SerializerPolicy.Write.get -> string?
+UiPath.Caching.SerializerPolicy.Write.init -> void

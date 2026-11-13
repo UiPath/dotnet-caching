@@ -5,7 +5,9 @@ using Microsoft.Extensions.Logging;
 using UiPath.Caching.Config;
 using UiPath.Caching.Locking;
 using UiPath.Caching.Queue.Config;
+using UiPath.Caching.Serialization;
 using UiPath.Caching.Telemetry;
+using UiPath.Caching.Tests.Fakes;
 
 namespace UiPath.Caching.Tests.Config;
 
@@ -113,6 +115,69 @@ public class NamedCachingTests
         (await cache.Should().ThrowAsync<NotSupportedException>()).WithMessage("*k*");
         (await hashCache.Should().ThrowAsync<NotSupportedException>()).WithMessage("*h*");
         (await setCache.Should().ThrowAsync<NotSupportedException>()).WithMessage("*s*");
+    }
+
+    [Fact]
+    public void Named_stack_sees_its_own_and_forwarded_serializers()
+    {
+        var shared = new FakeValueSerializer(0x10);
+        var own = new FakeValueSerializer(0x11);
+        using var root = Build(register: (services, configuration) =>
+        {
+            services.AddCaching(configuration, b => b.AddRedisConnection().AddRedis().AddValueSerializer("shared", _ => shared));
+            services.AddNamedCaching(Name, configuration, b => b.AddRedis().AddValueSerializer("own", _ => own));
+        });
+
+        var registry = Child(root).GetRequiredService<ValueSerializerRegistry>();
+
+        registry.Resolve("shared").Should().BeSameAs(shared);
+        registry.Resolve("own").Should().BeSameAs(own);
+        root.GetRequiredService<ValueSerializerRegistry>().TryResolve("own", out _).Should().BeFalse();
+    }
+
+    [Fact]
+    public void A_stacks_own_serializer_replaces_a_forwarded_one_of_the_same_name()
+    {
+        var forwarded = new FakeValueSerializer(0x10);
+        var own = new FakeValueSerializer(0x10);
+        using var root = Build(register: (services, configuration) =>
+        {
+            services.AddCaching(configuration, b => b.AddRedisConnection().AddRedis().AddLibraryValueSerializer("messagepack", _ => new FakeValueSerializer(CacheValueFormats.MessagePack)).AddValueSerializer("fast", _ => forwarded));
+            services.AddNamedCaching(Name, configuration, b => b.AddRedis().AddLibraryValueSerializer("messagepack", _ => new FakeValueSerializer(CacheValueFormats.MessagePack)).AddValueSerializer("fast", _ => own));
+        });
+
+        var registry = Child(root).GetRequiredService<ValueSerializerRegistry>();
+
+        registry.Resolve("fast").Should().BeSameAs(own);
+        registry.TryGetByFormat(CacheValueFormats.MessagePack, out _).Should().BeTrue();
+    }
+
+    [Fact]
+    public void A_forwarded_serializer_is_disposed_once_by_the_application()
+    {
+        var shared = new DisposableFakeValueSerializer(0x10);
+        var root = Build(register: (services, configuration) =>
+        {
+            services.AddCaching(configuration, b => b.AddRedisConnection().AddRedis().AddValueSerializer("shared", _ => shared));
+            services.AddNamedCaching(Name, configuration, b => b.AddRedis());
+        });
+        _ = Child(root).GetRequiredService<ValueSerializerRegistry>();
+
+        root.Dispose();
+
+        shared.Disposed.Should().Be(1);
+    }
+
+    [Fact]
+    public void A_forwarded_library_serializer_keeps_its_library_ids()
+    {
+        using var root = Build(register: (services, configuration) =>
+        {
+            services.AddCaching(configuration, b => b.AddRedisConnection().AddRedis().AddLibraryValueSerializer("messagepack", _ => new FakeValueSerializer(CacheValueFormats.MessagePack)));
+            services.AddNamedCaching(Name, configuration, b => b.AddRedis());
+        });
+
+        Child(root).GetRequiredService<ValueSerializerRegistry>().TryGetByFormat(CacheValueFormats.MessagePack, out _).Should().BeTrue();
     }
 
     [Fact]

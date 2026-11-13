@@ -1,1 +1,3 @@
 #nullable enable
+static UiPath.Caching.Config.ValueSerializerBuilderExtensions.AddValueSerializer(this UiPath.Caching.Config.ICachingBuilder! builder, string! name, System.Func<System.IServiceProvider!, UiPath.Caching.ICacheValueSerializer!>! factory) -> UiPath.Caching.Config.ICachingBuilder!
+UiPath.Caching.Config.ValueSerializerBuilderExtensions

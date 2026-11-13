@@ -40,6 +40,7 @@ public class AppSettingsAllJsonBindingTests
         { OrderPolicy, [typeof(CachePolicy)], [] },
         { OrderPolicy + ":Rehydrate", [typeof(RehydrateOptions)], [] },
         { OrderPolicy + ":Lock", [typeof(LockProfile)], [] },
+        { OrderPolicy + ":Serializer", [typeof(SerializerPolicy)], [] },
     };
 
     // A container only groups sections, so it must hold exactly the ones the file is expected to carry.
@@ -65,6 +66,17 @@ public class AppSettingsAllJsonBindingTests
 
         opts.Should().NotBeNull();
         opts!.AppShortName.Should().Be("app");
+    }
+
+    [Fact]
+    public void Binds_from_configuration()
+    {
+        var policy = BuildConfig().GetSection(OrderPolicy).Get<CachePolicy>()!;
+
+        policy.Serializer.Should().NotBeNull();
+        policy.Serializer!.Write.Should().Be("messagepack");
+        policy.Serializer.Read.Should().Equal("json", "messagepack");
+        policy.Serializer.MigrateOnRead.Should().BeTrue();
     }
 
     [Fact]

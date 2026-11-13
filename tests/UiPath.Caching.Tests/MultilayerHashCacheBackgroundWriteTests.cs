@@ -489,7 +489,7 @@ public class MultilayerHashCacheBackgroundWriteTests
         factory.Default.Returns(new CachePolicy { BackgroundDistributedWrite = true });
         factory.Resolve(Arg.Any<string>()).Returns(new CachePolicy { BackgroundDistributedWrite = true });
         factory.Keys.Returns([]);
-        var wrapped = new ForegroundOnlyPolicyFactory(factory);
+        var wrapped = new AdapterPolicyFactory(factory);
 
         wrapped.Default!.BackgroundDistributedWrite.Should().BeFalse();
         wrapped.Resolve("anything")!.BackgroundDistributedWrite.Should().BeFalse();
@@ -503,7 +503,7 @@ public class MultilayerHashCacheBackgroundWriteTests
         var first = new CachePolicy { BackgroundDistributedWrite = true };
         factory.Default.Returns(first);
         factory.Resolve("p").Returns(first);
-        var wrapped = new ForegroundOnlyPolicyFactory(factory);
+        var wrapped = new AdapterPolicyFactory(factory);
 
         wrapped.Default.Should().BeSameAs(wrapped.Default);
         wrapped.Resolve("p").Should().BeSameAs(wrapped.Resolve("p"));

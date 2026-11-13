@@ -1,4 +1,5 @@
 using UiPath.Caching.Config;
+using UiPath.Caching.Tests.Fakes;
 
 namespace UiPath.Caching.Tests;
 
@@ -192,5 +193,73 @@ public class CachePolicyMergerTests
         var defaults = new CachePolicy { JitterMaxDuration = TimeSpan.FromSeconds(30) };
 
         CachePolicyMerger.Merge(named, defaults).JitterMaxDuration.Should().Be(TimeSpan.FromSeconds(30));
+    }
+
+    [Fact]
+    public void Serializer_merges_per_field()
+    {
+        var named = new CachePolicy { Serializer = new SerializerPolicy { Write = "a" } };
+        var defaults = new CachePolicy { Serializer = new SerializerPolicy { Read = ["x"], MigrateOnRead = true } };
+
+        var merged = CachePolicyMerger.Merge(named, defaults)!.Serializer!;
+
+        merged.Write.Should().Be("a");
+        merged.Read.Should().Equal("x");
+        merged.MigrateOnRead.Should().BeTrue();
+    }
+
+    [Fact]
+    public void Serializer_fields_of_the_named_policy_win_over_the_default()
+    {
+        var named = new CachePolicy { Serializer = new SerializerPolicy { Write = "json", Read = [], MigrateOnRead = false } };
+        var defaults = new CachePolicy { Serializer = new SerializerPolicy { Write = "messagepack", Read = ["x"], MigrateOnRead = true } };
+
+        var merged = CachePolicyMerger.Merge(named, defaults)!.Serializer!;
+
+        merged.Write.Should().Be("json");
+        merged.Read.Should().BeEmpty();
+        merged.MigrateOnRead.Should().BeFalse();
+    }
+
+    [Fact]
+    public void Serializer_absent_on_one_side_comes_from_the_other()
+    {
+        var serializer = new SerializerPolicy { Write = "a" };
+
+        CachePolicyMerger.Merge(new CachePolicy { Serializer = serializer }, new CachePolicy())!.Serializer.Should().BeSameAs(serializer);
+        CachePolicyMerger.Merge(new CachePolicy(), new CachePolicy { Serializer = serializer })!.Serializer.Should().BeSameAs(serializer);
+        CachePolicyMerger.Merge(new CachePolicy(), new CachePolicy())!.Serializer.Should().BeNull();
+    }
+
+    [Fact]
+    public void The_adapters_factory_drops_a_resolved_slot()
+    {
+        var resolved = new FakeValueSerializer(0x10);
+        var source = CachePolicyMerger.WithWriteSerializer(new CachePolicy { Serializer = new SerializerPolicy { Write = "fast" } }, resolved);
+        var factory = Substitute.For<ICachePolicyFactory>();
+        factory.Resolve("orders").Returns(source);
+        factory.Default.Returns(source);
+
+        var sut = new AdapterPolicyFactory(factory);
+
+        CachePolicyMerger.WriteSerializerOf(sut.Resolve("orders")!).Should().BeNull();
+        CachePolicyMerger.WriteSerializerOf(sut.Default!).Should().BeNull();
+        sut.Resolve("orders")!.Serializer!.Write.Should().Be("json");
+        sut.Resolve("orders")!.BackgroundDistributedWrite.Should().BeFalse();
+    }
+
+    [Fact]
+    public void Slot_comes_from_the_side_that_supplies_the_write_name()
+    {
+        var slot = new FakeValueSerializer(0x10);
+        var resolvedDefault = CachePolicyMerger.WithWriteSerializer(new CachePolicy { Serializer = new SerializerPolicy { Write = "fast" } }, slot);
+
+        // Names no write: the default's name and slot both apply.
+        CachePolicyMerger.WriteSerializerOf(CachePolicyMerger.Merge(new CachePolicy(), resolvedDefault)!).Should().BeSameAs(slot);
+        CachePolicyMerger.WriteSerializerOf(CachePolicyMerger.Merge(new CachePolicy { Serializer = new SerializerPolicy { Read = ["json"] } }, resolvedDefault)!).Should().BeSameAs(slot);
+        // Names its own write, still unresolved: the default's slot belongs to another name.
+        CachePolicyMerger.WriteSerializerOf(CachePolicyMerger.Merge(new CachePolicy { Serializer = new SerializerPolicy { Write = "other" } }, resolvedDefault)!).Should().BeNull();
+        // Names json: the default's slot must not leak back in.
+        CachePolicyMerger.WriteSerializerOf(CachePolicyMerger.Merge(new CachePolicy { Serializer = new SerializerPolicy { Write = "json" } }, resolvedDefault)!).Should().BeNull();
     }
 }

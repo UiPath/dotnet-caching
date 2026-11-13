@@ -1,6 +1,7 @@
 using System.Text.Json;
 using UiPath.Caching.Locking;
 using UiPath.Caching.Policies;
+using UiPath.Caching.Serialization;
 using UiPath.Caching.Telemetry;
 
 namespace UiPath.Caching.Config;
@@ -54,6 +55,7 @@ public class CachingBuilder(IServiceCollection services, IConfiguration? configu
         Services.TryAddEnumerable(
             ServiceDescriptor.Singleton<IValidateOptions<CacheOptions>, CacheKeyCasingSeeder>());
         Services.TryAddSingleton<ISerializerProxy<byte[]>>(sp => new SystemJsonByteSerializerProxy(sp.GetService<JsonSerializerOptions>()));
+        Services.TryAddSingleton(ValueSerializerRegistration.BuildRegistry);
         Services.TryAddSingleton<IResiliencePipelineProvider>(EmptyResiliencePipelineProvider.Instance);
         Services.TryAddSingleton<IChangeTokenFactory>(NullChangeTokenFactory.Instance);
         Services.TryAddSingleton<ITopicFactory>(NullTopicFactory.Instance);
@@ -69,7 +71,8 @@ public class CachingBuilder(IServiceCollection services, IConfiguration? configu
             return new DefaultCachePolicyFactory(
                 resolvedOptions.Policies,
                 resolvedOptions.DefaultCachePolicy,
-                resolvedOptions.DistributedLockPollInterval);
+                resolvedOptions.DistributedLockPollInterval,
+                sp.GetRequiredService<ValueSerializerRegistry>());
         });
     }
 

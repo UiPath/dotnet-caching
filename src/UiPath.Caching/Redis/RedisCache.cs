@@ -1,6 +1,7 @@
 using System.Collections.Concurrent;
 using System.Runtime.CompilerServices;
 using UiPath.Caching.Policies;
+using UiPath.Caching.Serialization;
 using UiPath.Caching.Telemetry;
 
 namespace UiPath.Caching.Redis;
@@ -59,6 +60,8 @@ internal sealed partial class RedisCache : RedisCacheBase, ICache, IInvalidation
     }
 
     public string Name => KnownCacheProviderNames.Redis;
+
+    internal ValueSerializerRegistry ValueSerializers { get; init; } = ValueSerializerRegistry.Empty;
 
     [OverloadResolutionPriority(1)]
     public ValueTask<T?> GetAsync<T>(CacheKey cacheKey, CachePolicy? policy, CancellationToken token = default)

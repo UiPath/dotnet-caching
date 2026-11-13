@@ -159,7 +159,7 @@ public static class DistributedCacheCollectionExtensions
             return null;
         }
 
-        var policy = sp.GetService<ICachePolicyFactory>()?.Resolve(policyName);
+        var policy = AdapterPolicies(sp)?.Resolve(policyName);
         return policy ?? throw new InvalidOperationException(
             $"Cache policy '{policyName}' configured on UiPathDistributedCacheOptions.PolicyName is not registered in CacheOptions.Policies.");
     }
@@ -171,6 +171,9 @@ public static class DistributedCacheCollectionExtensions
         EnsureBoundedWrites(sp, providerName, options);
         return provider;
     }
+
+    private static AdapterPolicyFactory? AdapterPolicies(IServiceProvider sp) =>
+        sp.GetService<ICachePolicyFactory>() is { } factory ? new AdapterPolicyFactory(factory) : null;
 
     /// <summary>
     /// Writes without a caller expiration take a default TTL; reject configurations where one resolves
@@ -237,7 +240,7 @@ public static class DistributedCacheCollectionExtensions
                 sp.GetRequiredService<ICachingTelemetryProvider>(),
                 sp.GetRequiredService<ILoggerFactory>(),
                 sp.GetRequiredService<IDistributedLock>(),
-                new ForegroundOnlyPolicyFactory(sp.GetRequiredService<ICachePolicyFactory>()),
+                new AdapterPolicyFactory(sp.GetRequiredService<ICachePolicyFactory>()),
                 sp.GetRequiredService<TimeProvider>(),
                 AlwaysMaskKeyMaskingPolicy.Instance),
             KnownCacheProviderNames.InMemory => new InMemoryCacheProvider(
@@ -249,7 +252,7 @@ public static class DistributedCacheCollectionExtensions
                 sp.GetRequiredService<ITopicFactory>(),
                 sp.GetRequiredService<ICachingTelemetryProvider>(),
                 sp.GetRequiredService<ILoggerFactory>(),
-                sp.GetRequiredService<ICachePolicyFactory>(),
+                new AdapterPolicyFactory(sp.GetRequiredService<ICachePolicyFactory>()),
                 sp.GetRequiredService<TimeProvider>(),
                 AlwaysMaskKeyMaskingPolicy.Instance),
             _ => throw new InvalidOperationException(
@@ -266,7 +269,7 @@ public static class DistributedCacheCollectionExtensions
         new CacheFactory(
             sp.GetRequiredService<IOptions<CacheOptions>>(),
             [CreateRedisProvider(sp, options, differentiator)],
-            sp.GetService<ICachePolicyFactory>());
+            AdapterPolicies(sp));
 
     /// <summary>
     /// The connection is resolved before the keyspace is composed, so a missing one still reports itself
@@ -292,7 +295,7 @@ public static class DistributedCacheCollectionExtensions
             sp.GetRequiredService<IResiliencePipelineProvider>(),
             sp.GetRequiredService<ICachingTelemetryProvider>(),
             sp.GetRequiredService<ILoggerFactory>(),
-            sp.GetRequiredService<ICachePolicyFactory>(),
+            new AdapterPolicyFactory(sp.GetRequiredService<ICachePolicyFactory>()),
             sp.GetRequiredService<TimeProvider>(),
             // Not the application's policy: these keys are the consumer's, and can be secrets whatever the app configured.
             AlwaysMaskKeyMaskingPolicy.Instance);

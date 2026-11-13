@@ -1,4 +1,5 @@
 using System.Text.Json;
+using UiPath.Caching.Serialization;
 using UiPath.Caching.Telemetry;
 
 namespace UiPath.Caching.Config;
@@ -49,6 +50,7 @@ internal sealed class NamedCachingContainer : IDisposable
         ForwardTelemetry(services, root, name);
         Forward<IKeyMaskingPolicy>(services, root);
         Forward<JsonSerializerOptions>(services, root);
+        ForwardValueSerializers(services, root);
         configureServices?.Invoke(services, root);
 
         services.AddCaching(
@@ -173,6 +175,20 @@ internal sealed class NamedCachingContainer : IDisposable
         if (root.GetService<IRedisProfiler>() is RedisProfiler primary && stack.GetService<IRedisProfiler>() is RedisProfiler own)
         {
             primary.Lead(own);
+        }
+    }
+
+    /// <summary>The application's serializers are built already; the stack reuses those instances rather than running their factories against its own container.</summary>
+    private static void ForwardValueSerializers(IServiceCollection services, IServiceProvider root)
+    {
+        if (root.GetService<ValueSerializerRegistry>() is not { } registry)
+        {
+            return;
+        }
+
+        foreach (var (name, serializer, library) in registry.Entries)
+        {
+            services.AddSingleton(new ValueSerializerRegistration(name, _ => serializer, library, Forwarded: true));
         }
     }
 
