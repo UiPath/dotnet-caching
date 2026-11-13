@@ -33,4 +33,35 @@ internal static class KnownFieldNames
     /// <summary>True for the actual system field names (kept in sync with the per-field read validation).</summary>
     public static bool IsSystemField(string field) =>
         field == MetadataKey || field == VersionKey;
+
+    public static bool IsSystemField(ReadOnlySpan<byte> field) =>
+        IsMetadata(field) || IsVersion(field);
+
+    /// <summary>Compares the name's bytes in place, whatever the storage of the value Redis handed back, without making a string of it.</summary>
+    public static bool IsSystemField(RedisValue name) =>
+        IsMetadata(name) || IsVersion(name);
+
+    public static bool IsMetadata(ReadOnlySpan<byte> field) =>
+        field.SequenceEqual("_metadata_"u8);
+
+    public static bool IsMetadata(RedisValue name) =>
+        SameBytes(name, "_metadata_"u8);
+
+    public static bool IsVersion(ReadOnlySpan<byte> field) =>
+        field.SequenceEqual("_version_"u8);
+
+    public static bool IsVersion(RedisValue name) =>
+        SameBytes(name, "_version_"u8);
+
+    private static bool SameBytes(RedisValue name, ReadOnlySpan<byte> expected)
+    {
+        if (name.GetByteCount() != expected.Length)
+        {
+            return false;
+        }
+
+        Span<byte> bytes = stackalloc byte[expected.Length];
+        name.CopyTo(bytes);
+        return bytes.SequenceEqual(expected);
+    }
 }

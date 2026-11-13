@@ -2,6 +2,7 @@ using System.Runtime.CompilerServices;
 using System.Text;
 using UiPath.Caching.Config;
 using UiPath.Caching.Policies;
+using UiPath.Caching.Serialization;
 using UiPath.Caching.Telemetry;
 
 namespace UiPath.Caching.Redis;
@@ -126,6 +127,18 @@ public abstract class RedisCacheBase : IConnectionState, IMasterReadScope, IDisp
     internal void NoteInvalidated(IRedisKeyStrategy keyStrategy, CacheKey key) => _recentTouches?.Touch(keyStrategy.GetRedisKey(key));
 
     internal void NoteAllInvalidated() => _recentTouches?.TouchAll();
+
+    internal void TrackUnreadable(int formatId, string cacheName)
+    {
+        try
+        {
+            Telemetry.TrackMetric(ValueReader.UnreadableMetric, 1, [new("format", $"0x{(formatId < 0 ? 0x1F : formatId):X2}"), new("cache", cacheName)]);
+        }
+        catch (Exception ex)
+        {
+            Telemetry.TryTrackException(ex);
+        }
+    }
 
     /// <summary>The flag a read of <paramref name="keys"/> carries: the master when any one of them is guarded.</summary>
     internal CommandFlags ReadFlagsFor(RedisKey[] keys)

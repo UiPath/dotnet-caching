@@ -1,3 +1,5 @@
+using UiPath.Caching.Serialization;
+
 namespace UiPath.Caching.Redis;
 
 internal sealed partial class RedisCache : IResultCache
@@ -61,11 +63,20 @@ internal sealed partial class RedisCache : IResultCache
     private ValueTask<CacheResult<T>> GetOrAddResultCoreAsync<T>(CacheKey cacheKey, GeneratorRecorder<T> recorder, TimeSpan duration, CachePolicy? policy, CancellationToken token)
     {
         NotCacheableException.ThrowIfNotCacheable<T>();
+        var format = FormatFor(policy, forWrite: true);
+        return format.IsDefault
+            ? GetOrAddResultCoreAsync(cacheKey, recorder, duration, policy, default(PlainFormat), token)
+            : GetOrAddResultCoreAsync(cacheKey, recorder, duration, policy, format, token);
+    }
+
+    private ValueTask<CacheResult<T>> GetOrAddResultCoreAsync<T, TFormat>(CacheKey cacheKey, GeneratorRecorder<T> recorder, TimeSpan duration, CachePolicy? policy, TFormat format, CancellationToken token)
+        where TFormat : struct, IValueFormat
+    {
         var redisKey = ToRedisKey(cacheKey, token);
-        var shared = ShareGenerationAsync<T, (RedisCache Cache, CacheKey Key, RedisKey RedisKey, GeneratorRecorder<T> Recorder, TimeSpan? FactoryTimeout, TimeSpan Duration)>(
+        var shared = ShareGenerationAsync<T, (RedisCache Cache, CacheKey Key, RedisKey RedisKey, GeneratorRecorder<T> Recorder, TimeSpan? FactoryTimeout, TimeSpan Duration, TFormat Format)>(
             redisKey,
-            (this, cacheKey, redisKey, recorder, (policy ?? DefaultPolicy)?.FactoryTimeout, duration),
-            static (args, run) => args.Cache.ReadOrGenerateResultAsync(args.Key, args.RedisKey, args.Recorder, args.FactoryTimeout, args.Duration, run),
+            (this, cacheKey, redisKey, recorder, (policy ?? DefaultPolicy)?.FactoryTimeout, duration, format),
+            static (args, run) => args.Cache.ReadOrGenerateResultAsync(args.Key, args.RedisKey, args.Recorder, args.FactoryTimeout, args.Duration, args.Format, run),
             token,
             out var flight);
         return AttributeAsync(shared, flight, recorder, cacheKey, token);
@@ -79,7 +90,8 @@ internal sealed partial class RedisCache : IResultCache
     }
 
     /// <summary>The work of the result run, which ends the run itself (see <see cref="IInFlightEnd{TResult}"/>) once the expiration to report is recorded on it.</summary>
-    private async ValueTask<T?> ReadOrGenerateResultAsync<T>(CacheKey cacheKey, RedisKey redisKey, GeneratorRecorder<T> recorder, TimeSpan? factoryTimeout, TimeSpan duration, IInFlightEnd<T?> run)
+    private async ValueTask<T?> ReadOrGenerateResultAsync<T, TFormat>(CacheKey cacheKey, RedisKey redisKey, GeneratorRecorder<T> recorder, TimeSpan? factoryTimeout, TimeSpan duration, TFormat format, IInFlightEnd<T?> run)
+        where TFormat : struct, IValueFormat
     {
         T? ret;
         try
@@ -87,7 +99,7 @@ internal sealed partial class RedisCache : IResultCache
             var token = run.Token;
 
             // One read of value and expiration together, shared by every caller of the key.
-            var entry = await GetCacheEntryInternalAsync<T>(cacheKey, token, nameof(GetOrAddResultAsync)).ConfigureAwait(false);
+            var entry = await GetCacheEntryInternalAsync<T, TFormat>(cacheKey, format, token, nameof(GetOrAddResultAsync)).ConfigureAwait(false);
             if (entry.Found)
             {
                 run.Expiration = entry.Expiration == DateTimeOffset.MaxValue ? null : entry.Expiration;
@@ -98,7 +110,7 @@ internal sealed partial class RedisCache : IResultCache
                 LogCacheMissed(Logged(cacheKey, redisKey, typeof(T)));
                 ret = await RunGeneratorAsync(cacheKey, recorder.Generator, static (g, ct) => g(ct), factoryTimeout, token).ConfigureAwait(false);
                 // Only a value that was written has an expiration to report.
-                if ((!IsDefault(ret) || _cacheNullValues) && await SetInternalAsync(cacheKey, redisKey, ret, duration, token).ConfigureAwait(false))
+                if ((!IsDefault(ret) || _cacheNullValues) && await SetInternalAsync(cacheKey, redisKey, ret, duration, format, token).ConfigureAwait(false))
                 {
                     run.Expiration = StoredDeadline(duration);
                 }
