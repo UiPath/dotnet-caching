@@ -2048,6 +2048,111 @@ public class RedisStreamSubjectWriterTests : IAsyncLifetime
         recordingLogger.Records.Should().NotContain(r => r.Level >= LogLevel.Error, "a bad entry is dropped, not a failure of the reader");
     }
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task An_entry_in_a_known_format_that_cannot_be_decoded_is_a_loss_and_acknowledged(bool decodeThrows)
+    {
+        var (acked, missed) = await DispatchBodyAsync([0x02, 0x81, 0x01], decodeThrows);
+
+        acked.Should().ContainSingle();
+        missed.Should().Be(1);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task A_batch_of_entries_in_a_known_format_that_cannot_be_decoded_is_one_loss_and_all_acknowledged(bool decodeThrows)
+    {
+        var (acked, missed) = await DispatchBodyAsync([0x02, 0x81, 0x01], decodeThrows, entries: 5);
+
+        acked.Should().HaveCount(5);
+        missed.Should().Be(1, "one expiry per batch, not one per entry");
+    }
+
+    [Fact]
+    public async Task An_invalid_entry_in_a_known_format_is_a_loss_and_acknowledged()
+    {
+        var (acked, missed) = await DispatchBodyAsync([0x02, 0x81, 0x01], false, decoded: new TestCacheEvent { Valid = false });
+
+        acked.Should().ContainSingle();
+        missed.Should().Be(1);
+    }
+
+    [Fact]
+    public async Task An_invalid_json_entry_is_acknowledged_without_a_loss()
+    {
+        var (acked, missed) = await DispatchBodyAsync("{ \"x\": 1 }"u8.ToArray(), false, decoded: new TestCacheEvent { Valid = false });
+
+        acked.Should().ContainSingle();
+        missed.Should().Be(0);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task A_json_body_that_cannot_be_decoded_is_skipped_without_a_loss(bool decodeThrows)
+    {
+        var (acked, missed) = await DispatchBodyAsync("{ not json"u8.ToArray(), decodeThrows);
+
+        acked.Should().ContainSingle();
+        missed.Should().Be(0);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task A_foreign_first_byte_is_skipped_without_a_loss(bool decodeThrows)
+    {
+        var (acked, missed) = await DispatchBodyAsync([0x08, 0x01, 0x02], decodeThrows);
+
+        acked.Should().ContainSingle();
+        missed.Should().Be(0);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Garbage_is_still_skipped_without_a_loss(bool decodeThrows)
+    {
+        var (acked, missed) = await DispatchBodyAsync("xyz"u8.ToArray(), decodeThrows);
+
+        acked.Should().ContainSingle();
+        missed.Should().Be(0);
+    }
+
+    [Theory]
+    [InlineData(new byte[] { 0x02, 0x81, 0x01 }, true, 1)]
+    [InlineData(new byte[] { 0x1F }, true, 1)]
+    [InlineData(new byte[] { 0x02, 0x81, 0x01 }, false, 1)]
+    [InlineData(new byte[] { 0x08, 0x01, 0x02 }, true, 0)]
+    [InlineData(new byte[] { 0x78, 0x79, 0x7A }, true, 0)]
+    [InlineData(new byte[] { 0x78, 0x79, 0x7A }, false, 0)]
+    [InlineData(new byte[] { (byte)'{', (byte)'x' }, true, 0)]
+    [InlineData(new byte[] { 0x20, (byte)'{' }, true, 0)]
+    public async Task A_skipped_entry_in_a_known_format_that_cannot_be_decoded_counts_as_one_this_node_would_have_acted_on(byte[] body, bool decodeThrows, int lost)
+    {
+        ScriptsUnavailable();
+        var missed = 0;
+        var firstRead = new TaskCompletionSource<StreamEntry[]>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var reads = 0;
+        _database.StreamReadGroupAsync(_context.Topic, _context.ConsumerGroup, _context.ConsumerName, ">", _context.PollBatchSize)
+            .ReturnsForAnyArgs(StreamReads.NewOnly(_ => Interlocked.Increment(ref reads) == 1 ? firstRead.Task : Task.FromResult(Array.Empty<StreamEntry>())));
+        HeadAt(NowMs);
+        _database.ExecuteAsync("XGROUP", Arg.Any<object[]>()).Returns(Task.FromResult(RedisResult.Create((RedisValue)"OK")));
+        _database.StreamRangeAsync(_context.Topic, Arg.Any<RedisValue?>(), Arg.Any<RedisValue?>(), Arg.Any<int?>(), Arg.Any<Order>(), Arg.Any<CommandFlags>())
+            .ReturnsForAnyArgs([new StreamEntry($"{NowMs}-0", [new NameValueEntry(_fieldName, body)])]);
+        _formatter.Decode(Arg.Any<ReadOnlyMemory<byte>>()).Returns(_ => decodeThrows ? throw new FormatException("foreign") : null);
+
+        using var sut = CreateSut(Channel.CreateUnbounded<ICacheEvent>().Writer, _logger, onMessagesMissed: () => Interlocked.Increment(ref missed));
+        (await WaitUntil(() => Volatile.Read(ref reads) == 1)).Should().BeTrue();
+        sut.MarkSubscribed();
+        firstRead.SetException(new RedisException("NOGROUP No such key or consumer group"));
+
+        (await WaitUntil(() => Volatile.Read(ref reads) >= 2)).Should().BeTrue();
+        Volatile.Read(ref missed).Should().Be(lost);
+    }
+
     [Fact]
     public async Task Undecodable_entries_are_each_tracked_but_logged_as_a_warning_once_per_hundred()
     {
@@ -2537,6 +2642,23 @@ public class RedisStreamSubjectWriterTests : IAsyncLifetime
         var emitted = 0;
         _database.StreamReadGroupAsync(_context.Topic, _context.ConsumerGroup, _context.ConsumerName, ">", _context.PollBatchSize)
             .ReturnsForAnyArgs(_ => ++emitted == 1 ? entries : []);
+    }
+
+    private async Task<(RedisValue[] Acked, int Missed)> DispatchBodyAsync(byte[] body, bool decodeThrows, int entries = 1, ICacheEvent? decoded = null)
+    {
+        var acked = new TaskCompletionSource<RedisValue[]>(TaskCreationOptions.RunContinuationsAsynchronously);
+        _database.StreamAcknowledgeAsync(Arg.Any<RedisKey>(), Arg.Any<RedisValue>(), Arg.Any<RedisValue[]>())
+            .Returns(call => { acked.TrySetResult(call.Arg<RedisValue[]>()); return Task.FromResult(1L); });
+        _formatter.Decode(Arg.Any<ReadOnlyMemory<byte>>()).Returns(_ => decoded ?? (decodeThrows ? throw new FormatException("foreign") : null));
+        SetupSingleBatch([.. Enumerable.Range(1, entries).Select(i => new StreamEntry($"{i}-0", [new NameValueEntry(_fieldName, body)]))]);
+        var missed = 0;
+
+        using var sut = CreateSut(Channel.CreateUnbounded<ICacheEvent>().Writer, _logger, onMessagesMissed: () => Interlocked.Increment(ref missed));
+
+        var ids = await acked.Task.WaitAsync(WaitTimeout, TestContext.Current.CancellationToken);
+        _cancellationTokenSource.Cancel();
+        await sut.FetchTask.WaitAsync(WaitTimeout, TestContext.Current.CancellationToken);
+        return (ids, Volatile.Read(ref missed));
     }
 
     private StreamEntry Entry(string id) => new(id, [new NameValueEntry(_fieldName, _fixture.Create<string>())]);

@@ -922,7 +922,7 @@ public class PeerFieldUpdateTests
         var properties = writer.Published[^1].Data!.Properties!;
         ((long)properties[KnownFieldNames.VersionKey]! & ((1L << HashVersion.CounterBits) - 1)).Should().Be(2);
         ((long)properties[KnownFieldNames.VersionKey]! >> HashVersion.CounterBits).Should().BePositive();
-        properties[KnownFieldNames.PeerFieldsKey].Should().BeAssignableTo<IDictionary<string, string?>>().Which.Keys.Should().BeEquivalentTo("c");
+        properties[KnownFieldNames.PeerFieldsKey].Should().BeAssignableTo<IReadOnlyDictionary<string, byte[]?>>().Which.Keys.Should().BeEquivalentTo("c");
         properties.Keys.Should().NotContain([KnownFieldNames.ExpirationKey, KnownFieldNames.MetadataKey]);
     }
 

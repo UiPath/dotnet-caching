@@ -76,7 +76,7 @@ internal sealed class JsonSourceMatcher : IEventSourceMatcher
             // The rest is read so that a duplicate or trailing content counts against the match, as it does in a decode.
             return matched && reader.TokenType == JsonTokenType.EndObject && !reader.Read();
         }
-        catch (JsonException)
+        catch (Exception ex) when (ex is not OutOfMemoryException)
         {
             return false;
         }

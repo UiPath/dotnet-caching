@@ -761,7 +761,7 @@ public class ChangeTokenTests : IAsyncLifetime
         topics.Create(Arg.Any<TopicKey>()).PublishAsync(Arg.Any<ICacheEvent>(), Arg.Any<CancellationToken>()).Returns(true);
         var options = new CacheEntryOptions { CacheKey = new CacheKey(_key), TopicKey = "t", Metadata = new Dictionary<string, string?> { ["m"] = "v" } };
         await new CacheEventPublisher("cache", topics, factory, NullLogger.Instance)
-            .CacheSetAsync(options, typeof(string), 7, new Dictionary<string, string?> { ["a"] = "AQI=", ["b"] = null });
+            .CacheSetAsync(options, typeof(string), 7, new Dictionary<string, byte[]?> { ["a"] = [1, 2], ["b"] = null });
         PeerUpdate? seen = null;
         ((IPeerUpdateSource)Sut).PeerUpdateHandler = update =>
         {
