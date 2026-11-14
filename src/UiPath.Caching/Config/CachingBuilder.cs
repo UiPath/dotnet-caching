@@ -80,9 +80,16 @@ public class CachingBuilder(IServiceCollection services, IConfiguration? configu
                 resolvedOptions.Policies,
                 resolvedOptions.DefaultCachePolicy,
                 resolvedOptions.DistributedLockPollInterval,
-                sp.GetRequiredService<ValueSerializerRegistry>());
+                sp.GetRequiredService<ValueSerializerRegistry>(),
+                NegotiationMode(sp));
         });
     }
+
+    // Without a connector there is no node list, and a custom proxy has no JSON to fall back to: the writer then writes what its policy says, as in Force.
+    private static FormatNegotiationMode NegotiationMode(IServiceProvider sp) =>
+        sp.GetService<IRedisConnector>() is not null && sp.GetRequiredService<ISerializerProxy<byte[]>>().GetType() == typeof(SystemJsonByteSerializerProxy)
+            ? sp.GetService<IOptions<RedisCacheOptions>>()?.Value.FormatNegotiation.Mode ?? FormatNegotiationMode.Auto
+            : FormatNegotiationMode.Force;
 
     private void ThrowIfLegacySerializerRegistered()
     {
