@@ -45,6 +45,9 @@ internal abstract class MemoryCacheSetter(
     /// <summary>Told when the token of an entry a peer's write refreshes changes, for any reason.</summary>
     internal Action<RefreshMetadataState>? PeerRefreshChanged { get; init; }
 
+    /// <summary>Told, with the key and the entry, when an entry's token changes, before anything refreshes it.</summary>
+    internal Action<string, ICacheEntry>? TokenChanged { get; init; }
+
     protected TimeProvider Clock { get; } = clock;
 
     protected virtual bool AppliesPeerUpdates => false;
@@ -54,8 +57,17 @@ internal abstract class MemoryCacheSetter(
     /// <summary>Generic over the options so the caches' option structs come in as they are, not boxed into the interface.</summary>
     /// <param name="refresh">How to refresh the entry when a peer writes its key; null drops it then.</param>
     public bool Set<TOptions>(TOptions options, ICacheEntry item, Type entryType, TimeSpan? maxExpiration, PeerRefreshTarget? refresh = null)
+        where TOptions : ICacheEntryOptions =>
+        Set(options, item, entryType, maxExpiration, refresh, out _, out _);
+
+    /// <param name="deadline">When the local tier stops serving the entry: its expiration, or the cap of <paramref name="maxExpiration"/> as read for this write.</param>
+    /// <param name="size">The size the tier charges the entry; zero in a tier with no size limit.</param>
+    /// <param name="kept">The fail-safe values, told when the entry leaves, for an entry kept under fail-safe in a tier with a size limit.</param>
+    public bool Set<TOptions>(TOptions options, ICacheEntry item, Type entryType, TimeSpan? maxExpiration, PeerRefreshTarget? refresh, out DateTimeOffset deadline, out long size, StaleValues? kept = null)
         where TOptions : ICacheEntryOptions
     {
+        deadline = options.Expiration;
+        size = 0;
         ICacheChangeToken? token = null;
         try
         {
@@ -74,7 +86,7 @@ internal abstract class MemoryCacheSetter(
             // The entry is committed when disposed, and only once its value is set, so a throw before that stores nothing.
             using (var entry = memoryCache.CreateEntry(options.CacheKey.Name))
             {
-                entry.AbsoluteExpiration = GetCacheExpiration(options.Expiration, maxExpiration);
+                entry.AbsoluteExpiration = deadline = GetCacheExpiration(options.Expiration, maxExpiration);
                 if (wired)
                 {
                     entry.ExpirationTokens.Add(token);
@@ -83,8 +95,14 @@ internal abstract class MemoryCacheSetter(
 
                 if (memoryCacheOptions.SizeLimit.HasValue)
                 {
-                    entry.Size = SizeProvider.GetSize(item);
+                    entry.Size = size = SizeProvider.GetSize(item);
                 }
+
+                if (kept is not null)
+                {
+                    entry.RegisterPostEvictionCallback(StaleValues.EntryLeft, kept);
+                }
+
                 entry.Value = item;
             }
 
@@ -111,6 +129,7 @@ internal abstract class MemoryCacheSetter(
     {
         if (state is RefreshMetadataState metadataState)
         {
+            TokenChanged?.Invoke(metadataState.CacheKey.Name, metadataState.CacheEntity);
             if (metadataState.Refresh is not null)
             {
                 PeerRefreshChanged?.Invoke(metadataState);

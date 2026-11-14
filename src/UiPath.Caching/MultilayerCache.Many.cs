@@ -164,7 +164,7 @@ internal sealed partial class MultilayerCache
         for (var i = 0; i < entryCount; i++)
         {
             LogSettingLocalOnly(Logged(entries[i].CacheEntry, typeof(T)));
-            if (!ApplyLocal(entries[i].CacheEntry.CacheKey.Name, (Cache: this, Entry: entries[i], Max: max), static s => s.Cache.MemorySet(s.Entry.CacheEntry, s.Entry.Value, s.Max)))
+            if (!ApplyLocal(entries[i].CacheEntry.CacheKey.Name, (Cache: this, Entry: entries[i], Max: max, Policy: policy), static s => s.Cache.MemorySet(s.Entry.CacheEntry, s.Entry.Value, s.Max, failSafe: s.Policy)))
             {
                 (failed ??= []).Add(keys[i]);
             }

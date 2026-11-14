@@ -63,6 +63,9 @@ public class OwnerArgumentTests
     [Fact]
     public async Task A_warm_hit_allocates_nothing_for_every_untyped_form()
     {
+#if DEBUG
+        Assert.Skip("allocation counts are only stable in Release");
+#endif
         using var cache = InMemoryMultilayer.Cache();
         using var hashCache = InMemoryMultilayer.HashCache();
         var owner = new Owner("o");

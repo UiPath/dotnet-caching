@@ -27,6 +27,18 @@ public sealed class ManualTimeProvider(DateTimeOffset start) : TimeProvider
 
     public override long TimestampFrequency => TimeSpan.TicksPerSecond;
 
+    /// <summary>Whether a timer is waiting to fire.</summary>
+    public bool HasTimers
+    {
+        get
+        {
+            lock (_gate)
+            {
+                return _timers.Count > 0;
+            }
+        }
+    }
+
     public override DateTimeOffset GetUtcNow()
     {
         lock (_gate)

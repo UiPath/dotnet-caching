@@ -64,6 +64,10 @@ public sealed class InMemoryCacheProvider : ICacheProvider
         _policyFactory = policyFactory;
         _cache = new Lazy<MultilayerCache>(BuildCache);
         _hashCache = new Lazy<MultilayerHashCache>(BuildHashCache);
+        if (Enabled)
+        {
+            FailSafeLifetimeWarning.Log(loggerFactory.CreateLogger(Name), Name, policyFactory, _options.SizeLimit);
+        }
     }
 
     public string Name => KnownCacheProviderNames.InMemory;

@@ -2,7 +2,7 @@
 
 Every reliability knob the library ships. **Local single-flight is on by default** for the
 `InMemoryRedis` and `InMemory` providers (`LocalSingleFlightEnabled = true`). Everything else on this page —
-distributed lock, hydrating cache, jitter, named policies, Polly resilience — is opt-in
+distributed lock, hydrating cache, fail-safe, jitter, named policies, Polly resilience — is opt-in
 via `CachePolicy` or explicit builder extensions. If you're hitting Redis under load,
 single-flight and hydrating-cache will move latency more than any other change.
 
@@ -518,6 +518,119 @@ manual `StringIncrement`-based latch, manual counter-based throttle — see
 [recipes/avoid-raw-iredisconnector.md](../recipes/avoid-raw-iredisconnector.md). The
 supported alternatives are `ICache<T>`, `IDistributedLock`, and `CachePolicy`.
 
+## Fail-safe
+
+Single-flight and rehydration keep a value fresh while its source answers. **Fail-safe** covers the
+moment it does not: once an entry has expired in both tiers and the `GetOrAdd` generator throws (or
+runs past a soft timeout), the cache returns the value this node last held for the key instead of
+failing or waiting. **Default off**; turn it on per policy. It works on the `InMemoryRedis` and
+`InMemory` providers.
+
+```jsonc
+"Caching": {
+  "Policies": {
+    "request-routing-cache": {
+      "FailSafeEnabled": true,
+      "FailSafeMaxStaleAge": "1.00:00:00",   // default 1 day, counted from the local expiry
+      "FailSafeCooldown": "0:00:30",         // default 30 s
+      "FailSafeTimeout": "0:00:02",          // soft timeout; default none (wait)
+      "FactoryTimeout": "0:00:10"            // hard timeout; cancels the generator
+    }
+  }
+}
+```
+
+How it behaves:
+
+- **When it acts.** Only on a `GetOrAdd` miss that reaches the generator: the local copy is gone and
+  the Redis read missed (or Redis is down and the local tier is served). The generator runs first as
+  always; fail-safe acts when it throws (the `FactoryTimeout` `TimeoutException` included) or, with
+  `FailSafeTimeout`, once it has run that long. With no kept value the exception reaches the caller
+  and the soft timeout does not apply. Cancellation of the call is never answered with a kept value.
+- **Soft timeout.** Past `FailSafeTimeout` the caller gets the kept value and the generator keeps
+  running. When it finishes, its value is stored as a generated value is (local tier, Redis), unless
+  the key was removed, invalidated or written since the generator started. A late value written to Redis is also
+  announced with a set event, which an ordinary generation is not: other nodes may be answering
+  misses with the value it replaces, and the event ends their cooldown. `FactoryTimeout` still cancels it,
+  and so does disposing the cache; the call's own cancellation reaches the generator only until the
+  call has returned with the kept value. A `FailSafeTimeout` above about 24 days counts as 24 days.
+  A late generator is not shared: once the cooldown has passed, a miss of the key runs a generator
+  of its own while the late one still runs, and falls back again if that one fails or runs late. A
+  slow source can therefore see one call per key and cooldown; `FactoryTimeout` bounds how long each
+  of them runs.
+  A removal whose Redis delete races the late value's Redis write still in flight can lose to it, as
+  it can to any generator's write: writes and removals of a key are ordered only once the cache has
+  taken a background write.
+- **Distributed lock.** With the lock on, `FailSafeTimeout` does not apply: the lease would end while
+  the generator still runs, and its late write could overwrite the value a peer generated under the
+  lock next. A generator that throws still falls back.
+- **Stale age.** `FailSafeMaxStaleAge` counts from the value's local expiry. The policy of the write
+  bounds how long the value is kept, and each caller's own `FailSafeMaxStaleAge` bounds what that
+  caller is served: a call under a shorter limit is never answered with an older value, whether it
+  ran the generator, came during a cooldown or joined another caller's run.
+- **Cooldown.** After a fallback, misses of the key return the kept value for `FailSafeCooldown`
+  without reading Redis or running the generator, so a failing source is not hit once per request.
+  A peer's write to the key ends it early. The cooldown never extends `FailSafeMaxStaleAge`.
+- **Single-flight.** Callers that joined the failing run get the kept value when their own policy
+  enables fail-safe, whether or not the call that started the run did. A joined call without it, and
+  a batch `GetOrAdd`, get the generator's error, or wait for its value past the soft timeout, until
+  their own cancellation; so does a joined call whose own `FailSafeMaxStaleAge` the value is past.
+  A joined call is never answered with a value that was removed, invalidated or replaced while the
+  run was ending: it generates for itself.
+- **Where the value lives.** Per node, in the local tier's own memory, under a key no cache key can
+  equal: it is never returned by `GetAsync`, never written to Redis and never announced. Memory: one
+  small record per key written under fail-safe. While the local copy is live, the kept value is the
+  same payload and takes no size. When the local copy expires, the kept value takes its size, at low
+  priority, and stays up to `FailSafeMaxStaleAge` after that expiry, whatever caps the local tier:
+  only a shorter `FailSafeMaxStaleAge` bounds it. Once a cache has used fail-safe, the local tier's
+  statistics (entry count, hits, misses) include the kept records and their lookups, and a custom
+  `IMemoryCacheFactory` cache receives keys that are not strings.
+- **One `SizeLimit`.** The limit covers the local entries and the kept values together. A full cache
+  refuses a kept value, which is then not kept. A write at the limit may be refused too, as it is
+  without fail-safe. Either refusal starts a compaction, which removes expired entries, then kept
+  values, then the least recently used live entries, so the next write finds room. A local copy
+  evicted for room takes its kept value with it. With the default size provider every entry has
+  size 1, so `SizeLimit` counts entries, not bytes. Without `SizeLimit` nothing caps how many values
+  are kept, so each policy that enables fail-safe on a provider with no `SizeLimit` logs one startup
+  warning naming it.
+- **What drops it.** A removal (`RemoveAsync`, many-key removes, `RefreshAsync`), a write under a
+  policy without fail-safe, a generator answer the cache does not store (such as `null` without
+  `CacheNullValues`; a value a write kept while that generator ran stays), any event a peer sends
+  for the key (set, remove, refresh, heard even after
+  the local copy expired), lost or invalidated topic events, and any subscription gap (even with
+  `ClearLocalOnReconnect` off, so a Redis blip that ends in a gap drops them all). A removed or
+  invalidated value is never returned. After lost events or a gap, a kept value whose local copy had
+  expired holds its memory until its key is next read or written, the cache compacts, or its stale
+  age ends.
+- **Known limit.** A subscription gap that lands while a write is on its Redis round trip, before the
+  value is kept locally, is not seen by that write: the node may keep a value a peer overwrote during
+  the gap. Such a value is returned only when a generator fails, and never past `FailSafeMaxStaleAge`.
+- **`GetOrAddResultAsync`** reports a fallback with `WasGenerated = false` and `Expiration = null`.
+- **Not covered:** batch `GetOrAdd` (a failed batch generator still throws), hash caches and the
+  Redis-only provider; the fields are ignored there.
+
+**Opting one value out.** A negative result or a placeholder should not outlive its own expiration.
+Return it from `GetOrAddWithExpirationAsync` with `SkipFailSafe`: it is cached as usual, is not kept
+for fail-safe, and drops the value kept before it.
+
+```csharp
+var location = await cache.GetOrAddWithExpirationAsync(key, this, static async (self, ct) =>
+{
+    var found = await self._locations.GetAsync(ct); // throws on a transient error: fail-safe answers
+    return found is null
+        ? new GeneratedValue<Location>(null, DateTimeOffset.UtcNow.AddSeconds(30)) { SkipFailSafe = true }
+        : new GeneratedValue<Location>(found);
+}, ct);
+```
+
+A generator that signals a transient error by returning `null` instead of throwing gets no
+fallback, and drops the kept value: throw for failures you want fail-safe to cover.
+
+**Telemetry.** `cache.fail_safe.served` (tags `cache.name`, `reason` = `error` or `timeout`) once per
+fallback run, with a warning log; misses served during the cooldown are not counted one by one.
+`cache.fail_safe.background` (tag `outcome` = `stored`, `discarded` or `failed`) for each generator
+that finished after the soft timeout.
+
 ## Feature decision guide
 
 Use this table to pick the right knob for a given problem.
@@ -527,6 +640,7 @@ Use this table to pick the right knob for a given problem.
 | Cache miss storm after deploy or after a key expires under load | Stampede protection — single-flight | `LocalSingleFlightEnabled: true` (default) |
 | Cross-node miss storms when multiple pods hit the same cold key simultaneously | Stampede protection — distributed lock | `DistributedLockEnabled: true` (the lock impl is already registered by `AddInMemoryRedis()`) |
 | Foreground callers occasionally block while waiting for a slow generator | Hydrating cache | `RehydrateEnabled: true` + `Rehydrate.Threshold` |
+| An expired key's generator fails or is slow, and the last value is better than an error or a wait | Fail-safe | `FailSafeEnabled: true`, `FailSafeTimeout` |
 | All keys written in a batch expire at the same time, causing periodic spikes | Jitter | `JitterMaxDuration` |
 | Redis goes slow or unavailable and callers queue up waiting | Polly circuit-breaker | `AddResilienceStrategies()` + `ExceptionsAllowedBeforeBreaking` |
 | Some caches need different TTLs or rehydrate settings than others | Named policies | `Policies["MyApp.Models.Order"]` |
@@ -570,6 +684,11 @@ downtime fraction * RPS)` as a rough calculation.
 Setting only `RehydrateEnabled: true` without a `Rehydrate` block leaves `Rehydrate` null;
 `RehydrationCoordinator.TryTrigger` checks both and returns false immediately. Both fields
 must be set.
+
+**Fail-safe that never acts because the generator does not throw.**
+Fail-safe answers a generator that throws or is late. One that catches its source's error and
+returns `null` (or a default) has answered, so the kept value is dropped rather than returned. Let
+transient failures throw, and mark a definitive negative result with `SkipFailSafe`.
 
 ## See also
 

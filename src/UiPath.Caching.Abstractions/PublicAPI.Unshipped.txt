@@ -21,3 +21,13 @@ UiPath.Caching.SerializerPolicy.Read.init -> void
 UiPath.Caching.SerializerPolicy.SerializerPolicy() -> void
 UiPath.Caching.SerializerPolicy.Write.get -> string?
 UiPath.Caching.SerializerPolicy.Write.init -> void
+UiPath.Caching.CachePolicy.FailSafeCooldown.get -> System.TimeSpan?
+UiPath.Caching.CachePolicy.FailSafeCooldown.init -> void
+UiPath.Caching.CachePolicy.FailSafeEnabled.get -> bool?
+UiPath.Caching.CachePolicy.FailSafeEnabled.init -> void
+UiPath.Caching.CachePolicy.FailSafeMaxStaleAge.get -> System.TimeSpan?
+UiPath.Caching.CachePolicy.FailSafeMaxStaleAge.init -> void
+UiPath.Caching.CachePolicy.FailSafeTimeout.get -> System.TimeSpan?
+UiPath.Caching.CachePolicy.FailSafeTimeout.init -> void
+UiPath.Caching.GeneratedValue<T>.SkipFailSafe.get -> bool
+UiPath.Caching.GeneratedValue<T>.SkipFailSafe.init -> void

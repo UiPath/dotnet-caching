@@ -98,6 +98,17 @@ public static class CachePolicyFactoryValidator
         {
             ValidateRehydrate($"{scope}.Rehydrate: ", rehydrate);
         }
+        ValidateNonNegative(scope, nameof(CachePolicy.FailSafeMaxStaleAge), policy.FailSafeMaxStaleAge);
+        ValidateNonNegative(scope, nameof(CachePolicy.FailSafeCooldown), policy.FailSafeCooldown);
+        ValidateNonNegative(scope, nameof(CachePolicy.FailSafeTimeout), policy.FailSafeTimeout);
+    }
+
+    private static void ValidateNonNegative(string scope, string field, TimeSpan? value)
+    {
+        if (value is { } duration && duration < TimeSpan.Zero)
+        {
+            Throw(ValidateOptionsResult.Fail($"{scope}.{field} must be greater than or equal to zero. Actual: {duration}."));
+        }
     }
 
     private static void ValidateRehydrate(string scope, RehydrateOptions opts)

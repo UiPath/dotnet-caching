@@ -33,7 +33,7 @@ internal sealed partial class MultilayerHashCache
 
         public bool KeepLocal(InternalHashCacheEntryOptions options, IDictionary<string, T?> value, TimeSpan? maxExpiration, CachePolicy policy) => cache.MemorySet(options, value, maxExpiration, policy: policy, read: true);
 
-        public bool KeepWhileDisconnected(InternalHashCacheEntryOptions options, IDictionary<string, T?> value, TimeSpan? maxExpiration, ICacheEntry<IDictionary<string, T?>>? entry) =>
+        public bool KeepWhileDisconnected(InternalHashCacheEntryOptions options, IDictionary<string, T?> value, TimeSpan? maxExpiration, ICacheEntry<IDictionary<string, T?>>? entry, CachePolicy policy) =>
             cache.MemorySet(options, value, maxExpiration, keepWhenAbsent: true, read: true);
 
         public bool KeepWritten(BackgroundWrites.Keeper keeper, InternalHashCacheEntryOptions options, IDictionary<string, T?> value, TimeSpan? maxExpiration, ICacheEntry<IDictionary<string, T?>>? entry, long version, CachePolicy policy)

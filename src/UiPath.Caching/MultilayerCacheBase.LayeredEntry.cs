@@ -83,7 +83,7 @@ public abstract partial class MultilayerCacheBase
                 if (disconnected)
                 {
                     cache.LogSettingLocalOnly(Logged(options));
-                    return (false, cache.ApplyLocal(options.CacheKey.Name, (Shape: shape, Options: options, Value: value, Max: policy.LocalExpirationDisconnected ?? cache._multiLayerCacheOptions.LocalMaxExpirationDisconnected, Entry: entry), static s => s.Shape.KeepWhileDisconnected(s.Options, s.Value, s.Max, s.Entry)), default);
+                    return (false, cache.ApplyLocal(options.CacheKey.Name, (Shape: shape, Options: options, Value: value, Max: policy.LocalExpirationDisconnected ?? cache._multiLayerCacheOptions.LocalMaxExpirationDisconnected, Entry: entry, Policy: policy), static s => s.Shape.KeepWhileDisconnected(s.Options, s.Value, s.Max, s.Entry, s.Policy)), default);
                 }
 
                 return await cache._background.WriteAsync(

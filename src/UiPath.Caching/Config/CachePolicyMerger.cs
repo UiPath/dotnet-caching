@@ -79,6 +79,10 @@ public static class CachePolicyMerger
             RehydrateEnabled = primary.RehydrateEnabled ?? fallback.RehydrateEnabled,
             Rehydrate = primary.Rehydrate ?? fallback.Rehydrate,
             Lock = MergeLock(primary.Lock, fallback.Lock),
+            FailSafeEnabled = primary.FailSafeEnabled ?? fallback.FailSafeEnabled,
+            FailSafeMaxStaleAge = primary.FailSafeMaxStaleAge ?? fallback.FailSafeMaxStaleAge,
+            FailSafeCooldown = primary.FailSafeCooldown ?? fallback.FailSafeCooldown,
+            FailSafeTimeout = primary.FailSafeTimeout ?? fallback.FailSafeTimeout,
             Serializer = MergeSerializer(primary.Serializer, fallback.Serializer),
             WriteSerializer = writeSerializer
                 ?? (primary.Serializer?.Write is not null
