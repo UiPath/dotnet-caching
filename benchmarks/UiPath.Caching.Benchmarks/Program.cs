@@ -96,6 +96,11 @@ public class Program
             await MemoryMissHarness.RunAsync();
             return;
         }
+        if (args.Length > 0 && args[0] == "failsafe-writes")
+        {
+            FailSafeWriteHarness.Run(IntArg(args, 1, 32), IntArg(args, 2, 8_000_000));
+            return;
+        }
         BenchmarkSwitcher.FromAssembly(typeof(Program).Assembly).Run(args);
     }
 

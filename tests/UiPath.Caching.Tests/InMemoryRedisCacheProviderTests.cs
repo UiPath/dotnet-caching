@@ -65,6 +65,49 @@ public class InMemoryRedisCacheProviderTests : IAsyncLifetime
     }
 
     [Fact]
+    public void A_fail_safe_default_policy_is_no_cap_and_logs_the_warning()
+    {
+        var logger = FreezeRecordingLogger();
+        _options.Enabled = true;
+        _options.LocalMaxExpiration = null;
+        _options.SizeLimit = null;
+        InjectDefaultPolicy(new CachePolicy { FailSafeEnabled = true, FailSafeMaxStaleAge = TimeSpan.FromMinutes(5) });
+
+        _ = Sut;
+
+        logger.Warnings.Should().ContainSingle(w => w.StartsWith("The InMemoryRedis local tier has no lifetime cap", StringComparison.Ordinal), "a fail-safe stale age is no cap on the local tier");
+        logger.Warnings.Should().ContainSingle(w => w.Contains("enables fail-safe") && w.Contains(FailSafeLifetimeWarning.DefaultPolicyName), "the fail-safe policy is named once");
+    }
+
+    [Fact]
+    public void A_size_limited_provider_logs_no_fail_safe_warning()
+    {
+        var logger = FreezeRecordingLogger();
+        _options.Enabled = true;
+        _options.LocalMaxExpiration = TimeSpan.FromMinutes(5);
+        _options.SizeLimit = 1000;
+        InjectDefaultPolicy(new CachePolicy { FailSafeEnabled = true });
+
+        _ = Sut;
+
+        logger.Warnings.Should().BeEmpty();
+    }
+
+    [Fact]
+    public void A_capped_provider_without_a_size_limit_still_logs_the_fail_safe_warning()
+    {
+        var logger = FreezeRecordingLogger();
+        _options.Enabled = true;
+        _options.LocalMaxExpiration = TimeSpan.FromMinutes(5);
+        _options.SizeLimit = null;
+        InjectDefaultPolicy(new CachePolicy { FailSafeEnabled = true });
+
+        _ = Sut;
+
+        logger.Warnings.Should().ContainSingle().Which.Should().Contain("enables fail-safe").And.Contain("InMemoryRedis SizeLimit is unset");
+    }
+
+    [Fact]
     public void A_capped_local_tier_logs_no_warning()
     {
         var logger = FreezeRecordingLogger();
@@ -198,6 +241,7 @@ public class InMemoryRedisCacheProviderTests : IAsyncLifetime
     {
         var factory = Substitute.For<ICachePolicyFactory>();
         factory.Default.Returns(policy);
+        factory.Keys.Returns([]);
         _fixture.Inject(factory);
     }
 

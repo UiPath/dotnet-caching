@@ -32,6 +32,10 @@ public abstract partial class MultilayerCacheBase : IDisposable
     // 
     // DistributedExpiration is deliberately not floored here: the floor is a write-side rule
     // (ResolveWriteDuration), and leaving it out keeps "nothing configured" observable as null.
+    private const string FailSafeServedEvent = "cache.fail_safe.served";
+    private const string FailSafeTagCache = "cache.name";
+    private const string FailSafeTagReason = "reason";
+
     private static readonly CachePolicy HardcodedDefaults = new()
     {
         RefreshLocalOnPeerWrite = true,
@@ -55,6 +59,9 @@ public abstract partial class MultilayerCacheBase : IDisposable
     private readonly bool _distributedLockEnabled;
     private readonly bool _distributedLockSkipReread;
     private readonly bool _systemClock;
+    private readonly IMemoryCacheOptions _memoryOptions;
+    private readonly Uri? _sourceUri;
+    private StaleValues? _stale;
     private bool _disposed;
 
     protected MultilayerCacheBase(
@@ -83,6 +90,8 @@ public abstract partial class MultilayerCacheBase : IDisposable
             HardcodedDefaults);
         CachePolicyFactoryValidator.ValidateAgainstEffectiveDefault(policyFactory, cacheOptions.DistributedLockPollInterval, _defaultPolicy);
         _memoryCache = memoryCacheFactory.Get(memoryOptions);
+        _memoryOptions = memoryOptions;
+        _sourceUri = cacheOptions.SourceUri;
         Telemetry = telemetryProvider;
         _cacheEntryFactory = _multiLayerCacheOptions.EntryFactory ?? new CacheEntryFactory();
         _monitor = _memoryCache.Monitor(multiLayerCacheOptions, Telemetry, GetType().Name);
@@ -137,6 +146,11 @@ public abstract partial class MultilayerCacheBase : IDisposable
     internal bool FillsTracked => _background.Counting;
 
     protected ICachingTelemetryProvider Telemetry { get; }
+
+    /// <summary>The fail-safe values, once a fail-safe policy kept one; null before.</summary>
+    private protected StaleValues? StaleOrNull => Volatile.Read(ref _stale);
+
+    private protected bool Disposed => Volatile.Read(ref _disposed);
     public void Dispose()
     {
         Dispose(true);
@@ -200,19 +214,21 @@ public abstract partial class MultilayerCacheBase : IDisposable
     {
         if (!_disposed)
         {
+            // Before the stores go: a late fail-safe generator that ends meanwhile finds the cache disposed, not a disposed store.
+            Volatile.Write(ref _disposed, true);
             if (disposing)
             {
                 _peerWrites?.Dispose();
                 _background.Drain();
                 _monitor.Dispose();
                 _peerRefresher?.Dispose();
+                _stale?.Dispose();
                 _memoryCache.Dispose();
                 if (_connectionState is IDisposable connectionState)
                 {
                     connectionState.Dispose();
                 }
             }
-            _disposed = true;
         }
     }
 
@@ -277,6 +293,9 @@ public abstract partial class MultilayerCacheBase : IDisposable
         return _background.Mark(key);
     }
 
+    [LoggerMessage(Level = LogLevel.Warning, Message = "Fail-safe returned the last value of {CacheKey} after a generator {Reason}.")]
+    private protected partial void LogFailSafeServed(Exception? ex, LoggedKey cacheKey, string reason);
+
     [LoggerMessage(Level = LogLevel.Debug, Message = "Inner copy of {CacheKey} not kept locally: a write of it, or of a key sharing its stripe, came after the read began.")]
     private protected partial void LogInnerCopyNotKept(LoggedKey cacheKey);
 
@@ -292,11 +311,111 @@ public abstract partial class MultilayerCacheBase : IDisposable
     private protected bool ApplyLocal<TState>(string key, TState state, Func<TState, bool> change) => _background.Apply(key, state, change);
 
     private protected void RemoveLocal(string key) =>
-        _background.Apply(key, (Memory: _memoryCache, Key: key), static s =>
+        _background.Apply(key, (Cache: this, Key: key), static s =>
         {
-            s.Memory.Remove(s.Key);
+            s.Cache.RemoveEntry(s.Key);
             return true;
         });
+
+    /// <summary>Removes the key's local entry and its fail-safe value.</summary>
+    private protected void RemoveEntry(string name)
+    {
+        // The fallback first: a miss that follows the removal must not find it. Whatever this drops loses its entry just below.
+        Volatile.Read(ref _stale)?.Drop(name);
+        _memoryCache.Remove(name);
+
+        // A write that kept its value between the two steps above lost its entry to the second. No turn orders the two when this removal began before
+        // the first write under fail-safe started them, or runs in a token's callback, which takes none.
+        DropKeptUnlessLive(name);
+    }
+
+    /// <summary>
+    /// Drops the key's fail-safe value unless the local tier holds its entry. A value whose entry was replaced, removed or has expired is older
+    /// than whatever asks; one whose entry is live belongs to a write that came since, which this must not undo.
+    /// </summary>
+    private protected void DropKeptUnlessLive(string name)
+    {
+        if (Volatile.Read(ref _stale) is { } stale && stale.Find(name) is { } kept && !IsLocalEntry(name, kept.Entry))
+        {
+            stale.Drop(name, kept);
+        }
+    }
+
+    /// <summary>Keeps <paramref name="entry"/>, just written locally, as the key's fail-safe value when <paramref name="policy"/> has fail-safe on; any other write drops the value kept before.</summary>
+    /// <param name="localDeadline">The deadline the local tier gave the entry: the stale age counts from when it stopped being served.</param>
+    /// <param name="size">The size the local tier charged the entry.</param>
+    /// <param name="epoch">What <see cref="KeepEpoch"/> returned before the entry was written locally.</param>
+    /// <param name="policy">The policy the write was kept under; null when it was not kept.</param>
+    private protected void KeepStale(string name, TopicKey topic, ICacheEntry entry, DateTimeOffset localDeadline, long size, long epoch, CachePolicy? policy)
+    {
+        if (policy?.FailSafeEnabled != true)
+        {
+            // Not by key: a write that began before fail-safe was first used is in no turn, and a newer write may have kept its value since this one committed.
+            DropKeptUnlessLive(name);
+            return;
+        }
+
+        var stale = Volatile.Read(ref _stale) ?? CreateStale();
+        var kept = stale.Keep(name, topic, entry, localDeadline, size, policy.FailSafeMaxStaleAge ?? StaleValues.DefaultMaxStaleAge, epoch);
+
+        // A peer's change heard between the commit and the keep expired the entry before the store could hear it.
+        if (kept is not null && !IsLocalEntry(name, entry))
+        {
+            stale.Drop(name, kept);
+        }
+    }
+
+    /// <summary>Runs a local write in the key's local turn, which the first write under fail-safe starts: its commit and what it does to the key's kept value are then one step against any other write or removal of the key.</summary>
+    private protected bool InLocalTurn<TState>(string key, TState state, Func<TState, bool> write)
+    {
+        _background.Track();
+        return _background.Exclusive(key, state, write);
+    }
+
+    /// <summary>The kept values' epoch for a write under a fail-safe policy, read before the write commits locally. The store exists and watches the topic first, so a gap during the first such write is heard too.</summary>
+    private protected long KeepEpoch(TopicKey topic) => (Volatile.Read(ref _stale) ?? CreateStale()).EpochFor(topic);
+
+    /// <summary>Whether <paramref name="value"/> is still the key's fail-safe value, read in the key's local turn: no write or removal of the key is half done.</summary>
+    private protected bool StillKept(string name, StaleValue value) =>
+        _background.Exclusive(name, (Cache: this, Name: name, Value: value), static s => s.Cache._stale?.IsCurrent(s.Name, s.Value) == true);
+
+    /// <summary>The key's fail-safe value under <paramref name="policy"/>, within that policy's own stale age, while the local tier may be read.</summary>
+    private protected bool TryGetStale<T>(string name, CachePolicy policy, [NotNullWhen(true)] out StaleValue? value, [NotNullWhen(true)] out ICacheEntry<T?>? entry)
+    {
+        if (policy.FailSafeEnabled == true && Volatile.Read(ref _stale) is { } stale && (_connectionState.IsConnected || _useLocalOnlyWhenDisconnected))
+        {
+            return stale.TryGet(name, policy.FailSafeMaxStaleAge ?? StaleValues.DefaultMaxStaleAge, out value, out entry);
+        }
+
+        value = null;
+        entry = null;
+        return false;
+    }
+
+    /// <summary>The key's fail-safe value while the cooldown after fail-safe last returned it runs: a miss returns it without reading the inner tier or running the generator.</summary>
+    private protected bool TryGetCooling<T>(string name, CachePolicy policy, [NotNullWhen(true)] out ICacheEntry<T?>? entry)
+    {
+        if (TryGetStale<T>(name, policy, out var value, out var kept) && value.Cooling(_clock.GetUtcNow()))
+        {
+            entry = new StaleEntry<T>(value, kept);
+            return true;
+        }
+
+        entry = null;
+        return false;
+    }
+
+    /// <summary>Returns the key's fail-safe value in place of a generation, and starts its cooldown.</summary>
+    /// <param name="late">The generator's own answer when fail-safe stopped waiting for it, for a joined caller that did not opt in.</param>
+    private protected ICacheEntry<T?> ServeStale<T>(LoggedKey key, StaleValue value, ICacheEntry<T?> entry, CachePolicy policy, string reason, Exception? failure, Task<ICacheEntry<T?>>? late = null)
+    {
+        value.Cool(_clock.GetUtcNow(), policy.FailSafeCooldown ?? StaleValues.DefaultCooldown);
+        Telemetry.TryTrackEvent(FailSafeServedEvent, [new(FailSafeTagCache, Name), new(FailSafeTagReason, reason)]);
+        LogFailSafeServed(failure, key, reason);
+        return new StaleEntry<T>(value, entry, failure, late);
+    }
+
+
 
     private protected TimeSpan? DisconnectedLifetime(CachePolicy policy) =>
         policy.LocalExpirationDisconnected ?? _multiLayerCacheOptions.LocalMaxExpirationDisconnected;
@@ -467,6 +586,19 @@ public abstract partial class MultilayerCacheBase : IDisposable
 
     private static TimeSpan NonNegativeOrFallback(TimeSpan? value, TimeSpan fallback) =>
         value is { } v && v >= TimeSpan.Zero ? v : fallback;
+
+    private StaleValues CreateStale()
+    {
+        var created = new StaleValues(_topicProvider, _sourceUri, _clock, _memoryOptions, _memoryCache, _logger);
+        var won = Interlocked.CompareExchange(ref _stale, created, null);
+        if (won is null)
+        {
+            return created;
+        }
+
+        created.Dispose();
+        return won;
+    }
 
     private IConnectionState GetConnectionMonitor(params object?[] connectionStates)
     {

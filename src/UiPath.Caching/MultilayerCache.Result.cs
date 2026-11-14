@@ -118,9 +118,17 @@ internal sealed partial class MultilayerCache
             : GetOrAddResultInternalAsync(new CacheKey(cacheKey), state, generator, writeExpiration, duration, rehydrateJitter: null, policy, seen, probe == LocalProbe.Miss, token);
     }
 
-    /// <summary>A null that is not cached has no expiration to report, and neither has an entry without one.</summary>
-    private CacheResult<T> ResultOf<T>(ICacheEntry<T?> entry, bool generated) =>
-        new(entry.Value, entry.Expiration == DateTimeOffset.MaxValue || (entry.Value is null && !_multiLayerCacheOptions.CacheNullValues) ? null : entry.Expiration, generated);
+    /// <summary>A null that is not cached has no expiration to report, and neither has an entry without one, or a value fail-safe returned, which no generator of this call produced.</summary>
+    private CacheResult<T> ResultOf<T>(ICacheEntry<T?> entry, bool generated)
+    {
+        if (entry is IStaleEntry)
+        {
+            return new(entry.Value, null, false);
+        }
+
+        var noExpiration = entry.Expiration == DateTimeOffset.MaxValue || (entry.Value is null && !_multiLayerCacheOptions.CacheNullValues);
+        return new(entry.Value, noExpiration ? null : entry.Expiration, generated);
+    }
 
     /// <summary>As <see cref="GetOrAddInternalAsync{T}"/>, reporting whether this call ran its generator; a hit allocates nothing.</summary>
     private ValueTask<CacheResult<T>> GetOrAddResultInternalAsync<T>(CacheKey cacheKey, Func<CancellationToken, Task<T?>> generator, DateTimeOffset? expiration, TimeSpan effectiveDuration, TimeSpan? rehydrateJitter, CachePolicy policy, long seen, bool localMissed, CancellationToken token)
@@ -168,6 +176,11 @@ internal sealed partial class MultilayerCache
     private async ValueTask<CacheResult<T>> GetOrAddResultCoreAsync<T>(CacheKey cacheKey, Func<CancellationToken, Task<T?>> generator, DateTimeOffset? expiration, TimeSpan effectiveDuration, TimeSpan? rehydrateJitter, CachePolicy policy, long seen, bool localMissed, CancellationToken token)
     {
         var options = _entryBuilder.BuildEntryOptions<T>(cacheKey, expiration ?? _clock.ToDateTimeOffset(ApplyJitter(effectiveDuration, rehydrateJitter)), token);
+        if (TryGetCooling<T>(options.CacheKey.Name, policy, out var cooling))
+        {
+            return ResultOf(cooling, generated: false);
+        }
+
         // A local miss with no inner tier has nothing to read: the run generates at once and keeps the value locally.
         var localOnly = localMissed && !_sharedInner;
         if (!localOnly)
