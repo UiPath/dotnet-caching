@@ -802,8 +802,8 @@ internal sealed partial class MultilayerCache : MultilayerCacheBase, ICache, ISp
             policy,
             duration,
             kind: "cache",
-            rehydrateAsync: (rehydrateKeys, ct) =>
-                RehydrateReservedAsync<T, TState>(rehydrateKeys, stateByCallerKey, byState, generator, policy, duration, rehydrateJitter, ct),
+            rehydrateAsync: (rehydrateKeys, run, ct) =>
+                RehydrateReservedAsync<T, TState>(rehydrateKeys, stateByCallerKey, byState, generator, policy, duration, rehydrateJitter, run, ct),
             entryType: typeof(T));
     }
 
@@ -837,10 +837,17 @@ internal sealed partial class MultilayerCache : MultilayerCacheBase, ICache, ISp
         CachePolicy policy,
         TimeSpan duration,
         TimeSpan? rehydrateJitter,
+        RehydrateRun run,
         CancellationToken token)
         where TState : notnull
     {
         var rehydrateStates = MapReservedKeysToStates(reservedKeys, stateByCallerKey);
+        rehydrateStates = await AdoptFreshInnerAsync<T, TState>(rehydrateStates, byState, policy, duration, run, token).ConfigureAwait(false);
+        if (rehydrateStates.Length == 0)
+        {
+            return;
+        }
+
         var produced = await generator(rehydrateStates, token).ConfigureAwait(false);
 
         var groups = GroupRehydratedByExpiration<T, TState>(produced, rehydrateStates, byState, duration, rehydrateJitter);
@@ -850,6 +857,121 @@ internal sealed partial class MultilayerCache : MultilayerCacheBase, ICache, ISp
         }
 
         await WriteRehydrateGroupsAsync(groups, policy, token).ConfigureAwait(false);
+    }
+
+    /// <summary>Keeps the inner copies another node already refreshed and returns the states still to generate: those not fresh, not kept, or all of them when the read fails.</summary>
+    private async ValueTask<TState[]> AdoptFreshInnerAsync<T, TState>(
+        TState[] states,
+        Dictionary<TState, RehydrateTarget> byState,
+        CachePolicy policy,
+        TimeSpan duration,
+        RehydrateRun run,
+        CancellationToken token)
+        where TState : notnull
+    {
+        if (states.Length == 0 || !_sharedInner || _innerCache is not IAdoptionReadCache snapshot || GetInnerCacheDisconnected())
+        {
+            return states;
+        }
+
+        var rehydrate = policy.Rehydrate!;
+        var targets = new CacheEntryOptions[states.Length];
+        for (var i = 0; i < states.Length; i++)
+        {
+            targets[i] = byState[states[i]].Options with { Token = token };
+        }
+
+        var keys = Array.ConvertAll(targets, static o => o.CacheKey);
+        var groupKey = CompositeCacheKey.For(Array.ConvertAll(states, state => byState[state].CallerKey));
+        using var read = CancellationTokenSource.CreateLinkedTokenSource(token);
+        var budget = RehydrationCoordinator.AdoptReadTimeout(rehydrate, duration);
+        read.CancelAfter(budget);
+        var marks = MarkInnerReads(keys, targets[0].TopicKey);
+        Task<ICacheEntry<T?>[]>? reading = null;
+        ICacheEntry<T?>[] fetched;
+        try
+        {
+            reading = ReadForAdoptionAsync<T>(snapshot, keys, read.Token);
+            fetched = await reading.WaitAsync(budget, _clock, token).ConfigureAwait(false);
+        }
+        catch (Exception ex) when (!(ex is OperationCanceledException && token.IsCancellationRequested))
+        {
+            read.Cancel();
+            reading?.Observe();
+            var timedOut = ex is TimeoutException or OperationCanceledException;
+            if (timedOut)
+            {
+                LogRehydrateInnerReadTimedOut(LoggedComposed(groupKey, typeof(T)));
+            }
+            else
+            {
+                LogRehydrateInnerReadFailed(ex, LoggedComposed(groupKey, typeof(T)));
+            }
+
+            _rehydrator.TrackAdoptReadFailed(rehydrate, "cache", groupKey, timedOut ? "timeout" : "error");
+            return states;
+        }
+
+        token.ThrowIfCancellationRequested();
+        var remaining = new List<TState>(states.Length);
+        for (var i = 0; i < states.Length; i++)
+        {
+            var entry = fetched[i];
+            if (!entry.Found || !InnerCopyFreshEnough(entry.Expiration, _clock.GetUtcNow(), rehydrate.Threshold, duration))
+            {
+                remaining.Add(states[i]);
+                continue;
+            }
+
+            if (!TryKeepAdopted(targets[i], marks?[i] ?? 0, entry, policy, token))
+            {
+                remaining.Add(states[i]);
+                continue;
+            }
+
+            run.Adopt(byState[states[i]].CallerKey);
+        }
+
+        return remaining.ToArray();
+    }
+
+    /// <summary>One snapshot read per key, concurrently.</summary>
+    private async Task<ICacheEntry<T?>[]> ReadForAdoptionAsync<T>(IAdoptionReadCache snapshot, CacheKey[] keys, CancellationToken token)
+    {
+        var reads = new Task<ICacheEntry<T?>>[keys.Length];
+        for (var i = 0; i < keys.Length; i++)
+        {
+            reads[i] = snapshot.ReadForAdoptionAsync<T>(keys[i], token).AsTask();
+        }
+
+        try
+        {
+            return await Task.WhenAll(reads).ConfigureAwait(false);
+        }
+        catch
+        {
+            foreach (var read in reads)
+            {
+                read.Observe();
+            }
+
+            throw;
+        }
+    }
+
+    private bool TryKeepAdopted<T>(CacheEntryOptions target, long mark, ICacheEntry<T?> entry, CachePolicy policy, CancellationToken token)
+    {
+        try
+        {
+            LogFoundInnerCacheCopy(LoggedComposed(target.CacheKey, typeof(T)));
+            target.Expiration = entry.Expiration;
+            return Layered<T>().FillFromInnerRead(target, mark, entry.Value, policy);
+        }
+        catch (Exception ex) when (!(ex is OperationCanceledException && token.IsCancellationRequested))
+        {
+            LogRehydrateAdoptFailed(ex, LoggedComposed(target.CacheKey, typeof(T)));
+            return false;
+        }
     }
 
     /// <summary>Groups the produced pairs by target expiration, which <c>InternalSetAsync</c> applies per write.</summary>

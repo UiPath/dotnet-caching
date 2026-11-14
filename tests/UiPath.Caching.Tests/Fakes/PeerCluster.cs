@@ -107,6 +107,15 @@ internal sealed class PeerCluster : IDisposable
             }
         }
 
+        /// <summary>A new deadline nobody is told of.</summary>
+        public void SetExpirationQuietly(DateTimeOffset expiration)
+        {
+            lock (_gate)
+            {
+                _hashes.Values.Single().Expiration = expiration;
+            }
+        }
+
         /// <summary>A write nobody is told of: another node whose event this node does not get.</summary>
         public long WriteQuietly(params (string Field, string Value)[] fields)
         {
@@ -365,7 +374,7 @@ internal sealed class PeerCluster : IDisposable
     }
 
     /// <summary>The inner tier of a node: a stand-in for the Redis hash cache, which proxies cannot be made to look like because its counting interface is internal.</summary>
-    internal class PeerInner : DispatchProxy, IVersionedHashCache, ISpanKeyHashCache, IConnectionState
+    internal class PeerInner : DispatchProxy, IVersionedHashCache, ISpanKeyHashCache, IConnectionState, IAdoptionReadHashCache
     {
         private volatile bool _connected = true;
         private int _reads;
@@ -520,6 +529,14 @@ internal sealed class PeerCluster : IDisposable
         ValueTask<DateTimeOffset?> ISpanKeyHashCache.ExpireTimeAsync<T>(Span<char> cacheKey, CancellationToken token) => throw new NotSupportedException();
 
         ValueTask<IDictionary<string, string?>?> ISpanKeyHashCache.GetMetadataAsync<T>(Span<char> cacheKey, CancellationToken token) => throw new NotSupportedException();
+
+        ValueTask<ICacheEntry<IDictionary<string, T?>>> IAdoptionReadHashCache.ReadForAdoptionAsync<T>(CacheKey cacheKey, CancellationToken token)
+            where T : default
+        {
+            Interlocked.Increment(ref _reads);
+            var entry = ReadHold is { } hold ? ReadAfterAsync(hold, cacheKey.Name) : Task.FromResult(Store.Read(cacheKey.Name));
+            return new(entry.ContinueWith(static read => (ICacheEntry<IDictionary<string, T?>>)(object)read.Result, TaskScheduler.Default));
+        }
 
         protected override object? Invoke(MethodInfo? targetMethod, object?[]? args)
         {

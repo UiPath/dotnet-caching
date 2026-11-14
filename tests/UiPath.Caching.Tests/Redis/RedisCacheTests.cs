@@ -996,6 +996,55 @@ public class RedisCacheTests(ITestContextAccessor testContextAccessor) : IAsyncL
     }
 
     [Fact]
+    public async Task ReadForAdoption_takes_the_value_and_its_remaining_ttl_from_one_transaction()
+    {
+        var snapshot = _fixture.Create<string>();
+        var ttl = TimeSpan.FromMinutes(9);
+        _transaction.StringGetAsync(_redisKey, CommandFlags.DemandMaster).Returns(_serializer.Serialize(snapshot));
+        _transaction.KeyTimeToLiveAsync(_redisKey, CommandFlags.DemandMaster).Returns(ttl);
+        _transaction.ExecuteAsync(CommandFlags.DemandMaster).Returns(true);
+        // Two separate commands could pair the value before a replacement with the lifetime after it.
+        _database.StringGetAsync(_redisKey, Arg.Any<CommandFlags>()).Returns(_serializer.Serialize("replaced"));
+        _database.KeyTimeToLiveAsync(_redisKey, Arg.Any<CommandFlags>()).Returns(ttl);
+
+        var entry = await Sut.ReadForAdoptionAsync<string>(_cacheKey, testContextAccessor.Current.CancellationToken);
+
+        entry.Value.Should().Be(snapshot);
+        entry.Expiration.Should().Be(_clock.UtcNow.Add(ttl));
+        await _transaction.Received(1).ExecuteAsync(CommandFlags.DemandMaster);
+        await _database.DidNotReceive().StringGetAsync(Arg.Any<RedisKey>(), Arg.Any<CommandFlags>());
+        await _database.DidNotReceive().KeyTimeToLiveAsync(Arg.Any<RedisKey>(), Arg.Any<CommandFlags>());
+    }
+
+    [Fact]
+    public async Task ReadForAdoption_without_a_ttl_reads_as_no_deadline()
+    {
+        _transaction.StringGetAsync(_redisKey, CommandFlags.DemandMaster).Returns(_serializer.Serialize(_fixture.Create<string>()));
+        _transaction.KeyTimeToLiveAsync(_redisKey, CommandFlags.DemandMaster).Returns((TimeSpan?)null);
+        _transaction.ExecuteAsync(CommandFlags.DemandMaster).Returns(true);
+
+        var entry = await Sut.ReadForAdoptionAsync<string>(_cacheKey, testContextAccessor.Current.CancellationToken);
+
+        entry.Expiration.Should().Be(DateTimeOffset.MaxValue);
+    }
+
+    [Fact]
+    public async Task ReadForAdoption_reports_a_failed_read_where_a_plain_read_answers_a_miss()
+    {
+        _transaction.StringGetAsync(_redisKey, CommandFlags.DemandMaster).Returns(_serializer.Serialize(_fixture.Create<string>()));
+        _transaction.KeyTimeToLiveAsync(_redisKey, CommandFlags.DemandMaster).Returns(TimeSpan.FromMinutes(9));
+        _transaction.ExecuteAsync(CommandFlags.DemandMaster).Returns(Task.FromException<bool>(new RedisException("lost")));
+        _database.StringGetAsync(_redisKey, Arg.Any<CommandFlags>()).Returns(Task.FromException<RedisValue>(new RedisException("lost")));
+        _database.KeyTimeToLiveAsync(_redisKey, Arg.Any<CommandFlags>()).Returns(Task.FromException<TimeSpan?>(new RedisException("lost")));
+
+        var plain = await Sut.GetCacheEntryAsync<string>(_cacheKey, policy: null, token: testContextAccessor.Current.CancellationToken);
+        var adoption = async () => await Sut.ReadForAdoptionAsync<string>(_cacheKey, testContextAccessor.Current.CancellationToken);
+
+        plain.Found.Should().BeFalse();
+        await adoption.Should().ThrowAsync<RedisException>();
+    }
+
+    [Fact]
     public async Task GetCacheEntry_reads_with_a_get_and_a_pttl_and_no_transaction()
     {
         var expectedValue = _fixture.Create<string>();

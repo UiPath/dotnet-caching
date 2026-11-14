@@ -6,7 +6,7 @@ using UiPath.Caching.Telemetry;
 
 namespace UiPath.Caching.Redis;
 
-internal sealed partial class RedisCache : RedisCacheBase, ICache, IInvalidationSink
+internal sealed partial class RedisCache : RedisCacheBase, ICache, IInvalidationSink, IAdoptionReadCache
 {
     /// <summary>Value and absolute expiration in one atomic read-only call.</summary>
     private const string ReadWithExpirationScript = "local v = redis.call('GET', KEYS[1]) if not v then return false end return {v, redis.call('PEXPIRETIME', KEYS[1])}";
@@ -80,6 +80,12 @@ internal sealed partial class RedisCache : RedisCacheBase, ICache, IInvalidation
     {
         NotCacheableException.ThrowIfNotCacheable<T>();
         return GetCacheEntryInternalAsync<T>(cacheKey, token);
+    }
+
+    public ValueTask<ICacheEntry<T?>> ReadForAdoptionAsync<T>(CacheKey cacheKey, CancellationToken token)
+    {
+        NotCacheableException.ThrowIfNotCacheable<T>();
+        return GetCacheEntryInternalAsync<T>(cacheKey, token, nameof(ReadForAdoptionAsync), atomic: true);
     }
 
     public ValueTask<KeyValuePair<CacheKey, ICacheEntry<T?>>[]> GetCacheEntriesAsync<T>(CacheKey[] cacheKeys, CachePolicy? policy, CancellationToken token = default)
@@ -1032,13 +1038,14 @@ internal sealed partial class RedisCache : RedisCacheBase, ICache, IInvalidation
         return retValues;
     }
 
-    private async ValueTask<ICacheEntry<T?>> GetCacheEntryInternalAsync<T>(CacheKey cacheKey, CancellationToken token, string methodName = nameof(GetCacheEntryInternalAsync))
+    /// <param name="atomic">Reads value and remaining lifetime in one transaction on the primary, and lets a failure through instead of answering a miss.</param>
+    private async ValueTask<ICacheEntry<T?>> GetCacheEntryInternalAsync<T>(CacheKey cacheKey, CancellationToken token, string methodName = nameof(GetCacheEntryInternalAsync), bool atomic = false)
     {
         token.ThrowIfCancellationRequested();
         var redisKey = ToRedisKey(cacheKey, token);
         if (!IsConnected)
         {
-            return DefaultEntry<T>();
+            return atomic ? throw new InvalidOperationException("The cache is not connected") : DefaultEntry<T>();
         }
 
         var operation = StartOperation<T>(methodName);
@@ -1050,6 +1057,20 @@ internal sealed partial class RedisCache : RedisCacheBase, ICache, IInvalidation
             var committed = await _read.ExecuteAsync(static async (s, token) =>
             {
                 token.ThrowIfCancellationRequested();
+                if (s.Atomic)
+                {
+                    var transaction = s.Self.Database.CreateTransaction();
+                    var snapshotValue = transaction.StringGetAsync(s.Key, CommandFlags.DemandMaster);
+                    var snapshotTimeToLive = transaction.KeyTimeToLiveAsync(s.Key, CommandFlags.DemandMaster);
+                    if (!await transaction.ExecuteAsync(CommandFlags.DemandMaster).ConfigureAwait(false))
+                    {
+                        throw new InvalidOperationException("The read transaction was not committed");
+                    }
+
+                    Interlocked.CompareExchange(ref s.Read.Value, new((await snapshotValue.ConfigureAwait(false), s.Self.Clock.ToDateTimeOffset(await snapshotTimeToLive.ConfigureAwait(false)))), null);
+                    return true;
+                }
+
                 if (await s.Self.TryReadScriptAsync(ReadWithExpirationScript, [s.Key], s.Self._logReadScriptUnavailable).ConfigureAwait(false) is { } reply)
                 {
                     Interlocked.CompareExchange(ref s.Read.Value, new(ReadReply(reply)), null);
@@ -1075,14 +1096,14 @@ internal sealed partial class RedisCache : RedisCacheBase, ICache, IInvalidation
 
                 return true;
             },
-            (Self: this, Key: redisKey, Read: read),
+            (Self: this, Key: redisKey, Read: read, Atomic: atomic),
             default,
             token).ConfigureAwait(false);
 
             if (!committed || read.Value is not { } result)
             {
                 operation.Stop();
-                return ret;
+                return atomic ? throw new InvalidOperationException("Unable to read from redis") : ret;
             }
 
             var (value, expiration) = result.Value;
@@ -1096,7 +1117,7 @@ internal sealed partial class RedisCache : RedisCacheBase, ICache, IInvalidation
             ret = _cacheEntryFactory.Create<T?>(deserialized, Clock.ToDateTimeOffset(expiration));
             operation.Stop();
         }
-        catch (Exception ex)
+        catch (Exception ex) when (!atomic)
         {
             operation.Stop();
             LogRedisCacheException(ex);

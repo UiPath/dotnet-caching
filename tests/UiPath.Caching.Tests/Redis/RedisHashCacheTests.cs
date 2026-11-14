@@ -484,6 +484,42 @@ public class RedisHashCacheTests(ITestContextAccessor testContextAccessor) : IAs
     }
 
     [Fact]
+    public async Task ReadForAdoption_takes_the_fields_and_their_remaining_ttl_from_one_transaction()
+    {
+        var ttl = TimeSpan.FromMinutes(9);
+        _transaction.HashGetAllAsync(_redisKey, CommandFlags.DemandMaster).Returns([new HashEntry("f", "\"snapshot\"")]);
+        _transaction.KeyTimeToLiveAsync(_redisKey, CommandFlags.DemandMaster).Returns(ttl);
+        _transaction.ExecuteAsync(CommandFlags.DemandMaster).Returns(true);
+        // Two separate commands could pair the fields before a replacement with the lifetime after it.
+        _database.HashGetAllAsync(_redisKey, Arg.Any<CommandFlags>()).Returns([new HashEntry("f", "\"replaced\"")]);
+        _database.KeyTimeToLiveAsync(_redisKey, Arg.Any<CommandFlags>()).Returns(ttl);
+
+        var entry = await Sut.ReadForAdoptionAsync<string>(_cacheKey, testContextAccessor.Current.CancellationToken);
+
+        entry.Value.Should().Equal(new Dictionary<string, string?> { ["f"] = "snapshot" });
+        entry.Expiration.Should().BeCloseTo(DateTimeOffset.UtcNow.Add(ttl), TimeSpan.FromSeconds(5));
+        await _transaction.Received(1).ExecuteAsync(CommandFlags.DemandMaster);
+        await _database.DidNotReceive().HashGetAllAsync(Arg.Any<RedisKey>(), Arg.Any<CommandFlags>());
+        await _database.DidNotReceive().KeyTimeToLiveAsync(Arg.Any<RedisKey>(), Arg.Any<CommandFlags>());
+    }
+
+    [Fact]
+    public async Task ReadForAdoption_reports_a_failed_read_where_a_plain_read_answers_a_miss()
+    {
+        _transaction.HashGetAllAsync(_redisKey, CommandFlags.DemandMaster).Returns([new HashEntry("f", "\"snapshot\"")]);
+        _transaction.KeyTimeToLiveAsync(_redisKey, CommandFlags.DemandMaster).Returns(TimeSpan.FromMinutes(9));
+        _transaction.ExecuteAsync(CommandFlags.DemandMaster).Returns(Task.FromException<bool>(new RedisException("lost")));
+        _database.HashGetAllAsync(_redisKey, Arg.Any<CommandFlags>()).Returns(Task.FromException<HashEntry[]>(new RedisException("lost")));
+        _database.KeyTimeToLiveAsync(_redisKey, Arg.Any<CommandFlags>()).Returns(Task.FromException<TimeSpan?>(new RedisException("lost")));
+
+        var plain = await Sut.GetCacheEntryAsync<string>(_cacheKey, policy: null, token: testContextAccessor.Current.CancellationToken);
+        var adoption = async () => await Sut.ReadForAdoptionAsync<string>(_cacheKey, testContextAccessor.Current.CancellationToken);
+
+        plain.Found.Should().BeFalse();
+        await adoption.Should().ThrowAsync<RedisException>();
+    }
+
+    [Fact]
     public async Task Get_no_fields_returns_cacheKey()
     {
         var fields = Array.Empty<string>();

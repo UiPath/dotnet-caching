@@ -118,7 +118,7 @@ telemetry event.
 
 **Cooldown semantics:** `Rehydrate.BaseCooldown` doubles after each failure up to
 `MaxCooldown`. The `RehydrationCoordinator` enforces the cooldown via the distributed lock's
-TTL — `factoryTimeout + cooldown` — so a failed rehydrate on node A does not immediately
+TTL — the run timeout plus that key's own cooldown, where the run timeout is the factory timeout plus the budget of the shared-tier read described under [The Name field](#the-name-field) — so a failed rehydrate on node A does not immediately
 retry from node B. When no `IDistributedLock` is registered (the default), `NullDistributedLock`
 is used and cooldown enforcement does not apply — rehydrate can fire per-node on every hit
 past the threshold (subject only to the per-node single-flight). Single-node setups
@@ -139,15 +139,23 @@ very short-TTL entries (under 2s) still get a full second for their background f
 preventing an instantaneous timeout on entries whose `TimeoutFraction * duration` rounds to
 zero.
 
+Before it runs the factory, a node that wins the lock reads the key from the shared tier
+and adopts a copy another node already refreshed. That read has its own budget, a quarter
+of the factory timeout and at most 2 seconds, which the run timeout adds on top of the
+factory timeout, so a slow shared tier never takes the factory's time. A read that outlasts
+its budget is abandoned and the factory runs.
+
 ### The Name field
 
 The `Name` field on `RehydrateOptions` surfaces on telemetry as the `profile` dimension
 across all rehydrate events:
 
 - `cache.rehydrate.triggered` — rehydration has started for a key.
-- `cache.rehydrate.succeeded` — factory completed and the new value was stored.
-- `cache.rehydrate.failed` — factory threw an exception.
-- `cache.rehydrate.timed_out` — factory exceeded `TimeoutFraction * duration`.
+- `cache.rehydrate.succeeded` — factory completed and the new value was stored. A batch that adopted some of its keys adds an `adopted` tag with their count.
+- `cache.rehydrate.adopted` — the shared tier already held a copy not yet past the threshold for every key, and each was kept locally, so the factory did not run. A copy that could not be kept, because the key changed while it was read, is generated instead. Each rehydration does one shared-tier read first, which counts in the Redis read metrics.
+- `cache.rehydrate.failed` — factory threw an exception. In a batch that adopted some keys, only the generated keys count as failed and keep their cooldown; the event carries the `adopted` tag.
+- `cache.rehydrate.timed_out` — the run exceeded `TimeoutFraction * duration` (at least 1 second) plus the read budget. It carries the `adopted` tag when a batch had adopted some keys.
+- `cache.rehydrate.adopt_read_failed` — the shared-tier read before the factory failed (`reason` = `error`, including a Redis error the plain read would have answered as a miss) or outlasted its budget (`reason` = `timeout`), so the factory ran instead.
 - `cache.rehydrate.deduped` — a concurrent rehydration was already in flight; skipped.
 
 If multiple typed caches share the same `RehydrateOptions` block — for example via
@@ -539,7 +547,7 @@ Use this table to pick the right knob for a given problem.
 Without a real distributed lock, `NullDistributedLock.TryAcquireAsync` always returns a
 non-null handle — every node treats itself as having acquired the lock. Per-node
 `_inFlight` deduplication prevents concurrent rehydrations on the same node, but across N
-nodes you get N simultaneous background factory calls after the threshold is crossed. For
+nodes the factory can run on several nodes after the threshold is crossed; a node that starts later may instead adopt the value an earlier one already stored. For
 single-node or dev setups this is acceptable. For multi-node production, register
 `RedisDistributedLock`.
 
