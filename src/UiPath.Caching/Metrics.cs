@@ -15,6 +15,11 @@ public static class Metrics
     public const string Read = $".{nameof(Read)}";
     public const string MessageId = $".{nameof(MessageId)}";
 
+    public const string FormatEffective = "cache.format.effective";
+    public const string FormatFallback = "cache.format.fallback";
+    public const string FormatViewAge = "cache.format.view.age";
+    public const string FormatNodes = "cache.format.nodes";
+
     public const string TopicName = nameof(TopicName);
     public const string SequenceNumber = nameof(SequenceNumber);
     public const string Invalid = nameof(Invalid);

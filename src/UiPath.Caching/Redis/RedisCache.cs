@@ -1,5 +1,6 @@
 using System.Collections.Concurrent;
 using System.Runtime.CompilerServices;
+using UiPath.Caching.Negotiation;
 using UiPath.Caching.Policies;
 using UiPath.Caching.Serialization;
 using UiPath.Caching.Telemetry;
@@ -29,6 +30,7 @@ internal sealed partial class RedisCache : RedisCacheBase, ICache, IInvalidation
     private readonly ConcurrentDictionary<Type, object> _generations = new();
     private ValueSerializerRegistry _valueSerializers = ValueSerializerRegistry.Empty;
     private ValueFormatResolver _formats;
+    private IEffectiveFormat? _effectiveFormat;
 
     public RedisCache(
         IRedisConnector redis,
@@ -70,7 +72,16 @@ internal sealed partial class RedisCache : RedisCacheBase, ICache, IInvalidation
         init
         {
             _valueSerializers = value;
-            _formats = new ValueFormatResolver(_serializer, value, DefaultPolicy);
+            _formats = new ValueFormatResolver(_serializer, value, DefaultPolicy, _effectiveFormat);
+        }
+    }
+
+    internal IEffectiveFormat? EffectiveFormat
+    {
+        init
+        {
+            _effectiveFormat = value;
+            _formats = new ValueFormatResolver(_serializer, _valueSerializers, DefaultPolicy, value);
         }
     }
 

@@ -1,5 +1,7 @@
 using System.Text.Json;
+using Microsoft.Extensions.Hosting;
 using UiPath.Caching.Locking;
+using UiPath.Caching.Negotiation;
 using UiPath.Caching.Policies;
 using UiPath.Caching.Serialization;
 using UiPath.Caching.Telemetry;
@@ -56,6 +58,12 @@ public class CachingBuilder(IServiceCollection services, IConfiguration? configu
             ServiceDescriptor.Singleton<IValidateOptions<CacheOptions>, CacheKeyCasingSeeder>());
         Services.TryAddSingleton<ISerializerProxy<byte[]>>(sp => new SystemJsonByteSerializerProxy(sp.GetService<JsonSerializerOptions>()));
         Services.TryAddSingleton(ValueSerializerRegistration.BuildRegistry);
+        if (Services.Any(d => d.ServiceType == typeof(ValueSerializerRegistration)))
+        {
+            Services.TryAddSingleton(FormatNegotiation.Create);
+            Services.TryAddEnumerable(ServiceDescriptor.Singleton<IHostedService, FormatNegotiationService>());
+        }
+
         Services.TryAddSingleton<IResiliencePipelineProvider>(EmptyResiliencePipelineProvider.Instance);
         Services.TryAddSingleton<IChangeTokenFactory>(NullChangeTokenFactory.Instance);
         Services.TryAddSingleton<ITopicFactory>(NullTopicFactory.Instance);

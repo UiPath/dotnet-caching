@@ -11,6 +11,9 @@ internal sealed class ValueReader(ISerializerProxy<byte[]> json, ValueSerializer
     private readonly bool _jsonProxyIsDefault = json.GetType() == typeof(SystemJsonByteSerializerProxy);
 
     // Only a policy that writes a non-JSON format puts headers where a custom proxy could not tell them from its own bytes; Read lists never open the gate.
+    /// <summary>False for a custom proxy or a subclass: its bytes are not known to be JSON, so a write it makes cannot stand in for one with a header.</summary>
+    public bool JsonProxyIsDefault => _jsonProxyIsDefault;
+
     public bool SniffsFor(CachePolicy? policy) =>
         !registry.IsEmpty && (_jsonProxyIsDefault || WritesHeaders(policy));
 

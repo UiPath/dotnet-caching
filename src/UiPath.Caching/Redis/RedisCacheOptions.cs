@@ -54,6 +54,13 @@ public class RedisCacheOptions : ICacheOptions
     /// <summary>How many fields of one hash a single Redis command carries; a hash call over more is split into commands of this size, so none blocks the server for long.</summary>
     public int HashFieldBatchSize { get; set; } = 1000;
 
+    public FormatNegotiationOptions FormatNegotiation { get; set; } = new();
+
     /// <summary>Member-wise copy, so a caller can vary one setting without mutating the DI singleton.</summary>
-    internal RedisCacheOptions ShallowCopy() => (RedisCacheOptions)MemberwiseClone();
+    internal RedisCacheOptions ShallowCopy()
+    {
+        var copy = (RedisCacheOptions)MemberwiseClone();
+        copy.FormatNegotiation = FormatNegotiation.Clone();
+        return copy;
+    }
 }
