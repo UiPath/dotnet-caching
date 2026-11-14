@@ -17,7 +17,7 @@ public class RehydrationCoordinatorTests
         var sut = NewCoordinator();
         var policy = new CachePolicy { RehydrateEnabled = null, Rehydrate = RehydratePolicy().Rehydrate };
 
-        var triggered = sut.TryTrigger((CacheKey)"k", DateTimeOffset.UtcNow.Add(Duration), policy, Duration, "cache", _ => ValueTask.CompletedTask);
+        var triggered = sut.TryTrigger((CacheKey)"k", DateTimeOffset.UtcNow.Add(Duration), policy, Duration, "cache", (_, _) => ValueTask.CompletedTask);
 
         triggered.Should().BeFalse();
     }
@@ -28,7 +28,7 @@ public class RehydrationCoordinatorTests
         var sut = NewCoordinator();
         var policy = new CachePolicy { RehydrateEnabled = true, Rehydrate = null };
 
-        var triggered = sut.TryTrigger((CacheKey)"k", DateTimeOffset.UtcNow.Add(Duration), policy, Duration, "cache", _ => ValueTask.CompletedTask);
+        var triggered = sut.TryTrigger((CacheKey)"k", DateTimeOffset.UtcNow.Add(Duration), policy, Duration, "cache", (_, _) => ValueTask.CompletedTask);
 
         triggered.Should().BeFalse();
     }
@@ -38,8 +38,8 @@ public class RehydrationCoordinatorTests
     {
         var sut = NewCoordinator();
 
-        sut.TryTrigger((CacheKey)"k", DateTimeOffset.UtcNow.Add(Duration), RehydratePolicy(), TimeSpan.Zero, "cache", _ => ValueTask.CompletedTask).Should().BeFalse();
-        sut.TryTrigger((CacheKey)"k", DateTimeOffset.UtcNow.Add(Duration), RehydratePolicy(), TimeSpan.FromSeconds(-1), "cache", _ => ValueTask.CompletedTask).Should().BeFalse();
+        sut.TryTrigger((CacheKey)"k", DateTimeOffset.UtcNow.Add(Duration), RehydratePolicy(), TimeSpan.Zero, "cache", (_, _) => ValueTask.CompletedTask).Should().BeFalse();
+        sut.TryTrigger((CacheKey)"k", DateTimeOffset.UtcNow.Add(Duration), RehydratePolicy(), TimeSpan.FromSeconds(-1), "cache", (_, _) => ValueTask.CompletedTask).Should().BeFalse();
     }
 
     [Fact]
@@ -47,7 +47,7 @@ public class RehydrationCoordinatorTests
     {
         var sut = NewCoordinator();
 
-        var triggered = sut.TryTrigger((CacheKey)"k", DateTimeOffset.UtcNow.AddMinutes(-5), RehydratePolicy(), Duration, "cache", _ => ValueTask.CompletedTask);
+        var triggered = sut.TryTrigger((CacheKey)"k", DateTimeOffset.UtcNow.AddMinutes(-5), RehydratePolicy(), Duration, "cache", (_, _) => ValueTask.CompletedTask);
 
         triggered.Should().BeFalse();
     }
@@ -58,7 +58,7 @@ public class RehydrationCoordinatorTests
         var sut = NewCoordinator();
         var fresh = DateTimeOffset.UtcNow.Add(Duration);
 
-        var triggered = sut.TryTrigger((CacheKey)"k", fresh, RehydratePolicy(threshold: 0.75), Duration, "cache", _ => ValueTask.CompletedTask);
+        var triggered = sut.TryTrigger((CacheKey)"k", fresh, RehydratePolicy(threshold: 0.75), Duration, "cache", (_, _) => ValueTask.CompletedTask);
 
         triggered.Should().BeFalse();
     }
@@ -81,7 +81,7 @@ public class RehydrationCoordinatorTests
             policy,
             Duration,
             "cache",
-            async ct => await Task.Delay(TimeSpan.FromSeconds(30), ct));
+            async (_, ct) => await Task.Delay(TimeSpan.FromSeconds(30), ct));
 
         triggered.Should().BeTrue();
         await WaitForEvent(telemetry, "cache.rehydrate.timed_out", TimeSpan.FromSeconds(30));
@@ -105,7 +105,7 @@ public class RehydrationCoordinatorTests
             RehydratePolicy(),
             Duration,
             "cache",
-            _ => throw new InvalidOperationException("boom"));
+            (_, _) => throw new InvalidOperationException("boom"));
 
         triggered.Should().BeTrue();
         await WaitForEvent(telemetry, "cache.rehydrate.failed", TimeSpan.FromSeconds(30));
@@ -134,7 +134,7 @@ public class RehydrationCoordinatorTests
             policy,
             Duration,
             "cache",
-            _ => ValueTask.CompletedTask);
+            (_, _) => ValueTask.CompletedTask);
 
         triggered.Should().BeTrue();
         await WaitForEvent(telemetry, "cache.rehydrate.deduped", TimeSpan.FromSeconds(30));
@@ -164,7 +164,7 @@ public class RehydrationCoordinatorTests
         var aged = DateTimeOffset.UtcNow.Add(TimeSpan.FromSeconds(1));
         var key = (CacheKey)"k";
 
-        var triggered = sut.TryTrigger(key, aged, RehydratePolicy(), Duration, "cache", _ => ValueTask.CompletedTask);
+        var triggered = sut.TryTrigger(key, aged, RehydratePolicy(), Duration, "cache", (_, _) => ValueTask.CompletedTask);
 
         triggered.Should().BeTrue();
 
@@ -172,7 +172,7 @@ public class RehydrationCoordinatorTests
         var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(10);
         while (DateTime.UtcNow < deadline)
         {
-            second = sut.TryTrigger(key, aged, RehydratePolicy(), Duration, "cache", _ => ValueTask.CompletedTask);
+            second = sut.TryTrigger(key, aged, RehydratePolicy(), Duration, "cache", (_, _) => ValueTask.CompletedTask);
             if (second)
             {
                 break;
@@ -195,8 +195,8 @@ public class RehydrationCoordinatorTests
         var key = (CacheKey)"k";
         var gate = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
 
-        var first = sut.TryTrigger(key, aged, RehydratePolicy(), Duration, "cache", async _ => await gate.Task);
-        var second = sut.TryTrigger(key, aged, RehydratePolicy(), Duration, "cache", _ => ValueTask.CompletedTask);
+        var first = sut.TryTrigger(key, aged, RehydratePolicy(), Duration, "cache", async (_, _) => await gate.Task);
+        var second = sut.TryTrigger(key, aged, RehydratePolicy(), Duration, "cache", (_, _) => ValueTask.CompletedTask);
 
         first.Should().BeTrue();
         second.Should().BeFalse("per-node _inFlight blocks duplicate spawns on the same key");
@@ -228,12 +228,12 @@ public class RehydrationCoordinatorTests
             policy,
             Duration,
             "cache",
-            _ => ValueTask.CompletedTask);
+            (_, _) => ValueTask.CompletedTask);
 
         triggered.Should().BeTrue();
         await WaitForCallAsync(() => capturedExpiry > TimeSpan.Zero, TimeSpan.FromSeconds(5));
 
-        var expectedFactoryTimeout = TimeSpan.FromMilliseconds(0.5 * Duration.TotalMilliseconds);
+        var expectedFactoryTimeout = TimeSpan.FromSeconds(302);
         capturedExpiry.Should().Be(expectedFactoryTimeout + cooldown,
             "lockExpiry = factoryTimeout + cooldown so the failure path holds the lock for the factory window plus the configured cooldown");
     }
@@ -263,9 +263,9 @@ public class RehydrationCoordinatorTests
             return ValueTask.CompletedTask;
         }
 
-        nodeA.TryTriggerBatch([(a, aged), ((CacheKey)"b", aged)], policy, Duration, "cache", (keys, _) => Record(keys, ranA))
+        nodeA.TryTriggerBatch([(a, aged), ((CacheKey)"b", aged)], policy, Duration, "cache", (keys, _, _) => Record(keys, ranA))
             .Should().BeTrue();
-        nodeB.TryTriggerBatch([(a, aged), ((CacheKey)"c", aged)], policy, Duration, "cache", (keys, _) => Record(keys, ranB))
+        nodeB.TryTriggerBatch([(a, aged), ((CacheKey)"c", aged)], policy, Duration, "cache", (keys, _, _) => Record(keys, ranB))
             .Should().BeTrue();
 
         await ranA.Task.WaitAsync(TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken);
@@ -279,7 +279,7 @@ public class RehydrationCoordinatorTests
     }
 
     [Fact]
-    public async Task Batch_cooldown_uses_the_max_failure_count_across_the_set()
+    public async Task Batch_cooldown_uses_each_keys_own_failure_count()
     {
         var expiries = new ConcurrentDictionary<string, TimeSpan>(StringComparer.Ordinal);
         var distributedLock = Substitute.For<IDistributedLock>();
@@ -297,10 +297,10 @@ public class RehydrationCoordinatorTests
         var lockKeyStrategy = new DefaultDistributedLockKeyStrategy(separator: ':');
         var failing = (CacheKey)"failing";
 
-        sut.TryTrigger(failing, aged, policy, Duration, "cache", _ => throw new InvalidOperationException("boom"))
+        sut.TryTrigger(failing, aged, policy, Duration, "cache", (_, _) => throw new InvalidOperationException("boom"))
             .Should().BeTrue();
 
-        var expectedFactoryTimeout = TimeSpan.FromMilliseconds(0.5 * Duration.TotalMilliseconds);
+        var expectedFactoryTimeout = TimeSpan.FromSeconds(302);
         var expectedCooldown = baseCooldown * 2;
         var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(20);
         for (var attempt = 0; DateTime.UtcNow < deadline; attempt++)
@@ -312,7 +312,7 @@ public class RehydrationCoordinatorTests
                 policy,
                 Duration,
                 "cache",
-                (keys, _) => { rehydrated = keys; ran.TrySetResult(); return ValueTask.CompletedTask; })
+                (keys, _, _) => { rehydrated = keys; ran.TrySetResult(); return ValueTask.CompletedTask; })
                 .Should().BeTrue("the partner key has never been seen, so it is always reservable");
             await ran.Task.WaitAsync(TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken);
 
@@ -324,8 +324,8 @@ public class RehydrationCoordinatorTests
                     var lockKey = "rehydrate:" + lockKeyStrategy.GetLockKey(key);
                     expiries.Should().ContainKey(lockKey, "each reserved key takes its own rehydrate lock");
                     expiries[lockKey].Should().Be(
-                        expectedFactoryTimeout + expectedCooldown,
-                        "the group backs off on the worst key's failure count, not the partner key's zero");
+                        expectedFactoryTimeout + (key == failing ? expectedCooldown : baseCooldown),
+                        "each key backs off on its own failure count");
                 }
                 expiries.Should().NotContainKey(
                     "rehydrate:" + lockKeyStrategy.GetLockKey(CompositeCacheKey.For(rehydrated!)),
@@ -337,7 +337,7 @@ public class RehydrationCoordinatorTests
             await Task.Delay(25, TestContext.Current.CancellationToken);
         }
 
-        Assert.Fail("\"failing\" never left the in-flight set, so the max-failure-count path was never exercised.");
+        Assert.Fail("\"failing\" never left the in-flight set, so the per-key cooldown path was never exercised.");
     }
 
     [Fact]
@@ -357,7 +357,7 @@ public class RehydrationCoordinatorTests
             RehydratePolicy(),
             Duration,
             "cache",
-            _ =>
+            (_, _) =>
             {
                 rehydrated.TrySetResult();
                 return ValueTask.CompletedTask;
@@ -391,8 +391,8 @@ public class RehydrationCoordinatorTests
             Duration,
             "cache",
             refusedEvent == "cache.rehydrate.failed"
-                ? _ => ValueTask.FromException(new InvalidOperationException("factory failed"))
-                : async ct => await Task.Delay(TimeSpan.FromSeconds(30), ct));
+                ? (_, _) => ValueTask.FromException(new InvalidOperationException("factory failed"))
+                : async (_, ct) => await Task.Delay(TimeSpan.FromSeconds(30), ct));
 
         triggered.Should().BeTrue();
         await WaitForRefusalAsync(telemetry);
@@ -405,11 +405,150 @@ public class RehydrationCoordinatorTests
         await handle.DidNotReceive().DisposeAsync();
     }
 
+    [Fact]
+    public async Task A_failed_run_that_adopted_a_key_releases_its_lock_and_penalises_only_the_generated_key()
+    {
+        var telemetry = new RecordingTelemetryProvider();
+        var handles = new ConcurrentDictionary<string, IAsyncDisposable>();
+        var expiries = new ConcurrentDictionary<string, TimeSpan>();
+        var distributedLock = Substitute.For<IDistributedLock>();
+        distributedLock.TryAcquireAsync(Arg.Any<string>(), Arg.Any<TimeSpan>(), Arg.Any<CancellationToken>())
+            .Returns<IAsyncDisposable?>(call =>
+            {
+                expiries[call.Arg<string>()] = call.Arg<TimeSpan>();
+                return handles.GetOrAdd(call.Arg<string>(), _ => Substitute.For<IAsyncDisposable>());
+            });
+        var sut = NewCoordinator(distributedLock, telemetry);
+        var policy = RehydratePolicy();
+        var aged = DateTimeOffset.UtcNow.Add(TimeSpan.FromSeconds(1));
+        var (adopted, generated) = ((CacheKey)"adopted", (CacheKey)"generated");
+
+        sut.TryTriggerBatch(
+            [(adopted, aged), (generated, aged)],
+            policy,
+            Duration,
+            "cache",
+            (_, run, _) =>
+            {
+                run.Adopt(adopted);
+                throw new InvalidOperationException("upstream is down");
+            }).Should().BeTrue();
+
+        await WaitForCallAsync(() => telemetry.Events.Any(e => e.Name == "cache.rehydrate.failed"), TimeSpan.FromSeconds(10));
+        telemetry.Events.Single(e => e.Name == "cache.rehydrate.failed").Properties!["adopted"].Should().Be("1");
+        var lockOfAdopted = handles.Single(h => h.Key.Contains("adopted", StringComparison.Ordinal)).Value;
+        var lockOfGenerated = handles.Single(h => h.Key.Contains("generated", StringComparison.Ordinal)).Value;
+        await lockOfAdopted.Received(1).DisposeAsync();
+        await lockOfGenerated.DidNotReceive().DisposeAsync();
+
+        // Each key backs off on its own failure count: the adopted one starts over, the generated one doubles.
+        var runTimeout = TimeSpan.FromSeconds(302);
+        var baseCooldown = policy.Rehydrate!.BaseCooldown;
+        await AssertExpiryAsync(adopted, runTimeout + baseCooldown);
+        await AssertExpiryAsync(generated, runTimeout + (baseCooldown * 2));
+
+        async Task AssertExpiryAsync(CacheKey key, TimeSpan expected)
+        {
+            var lockKey = expiries.Keys.Single(k => k.Contains(key.Name, StringComparison.Ordinal));
+            expiries.TryRemove(lockKey, out _);
+            var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(10);
+            while (!sut.TryTrigger(key, aged, policy, Duration, "cache", (_, _) => ValueTask.CompletedTask) && DateTime.UtcNow < deadline)
+            {
+                await Task.Delay(10, TestContext.Current.CancellationToken);
+            }
+
+            await WaitForCallAsync(() => expiries.ContainsKey(lockKey), TimeSpan.FromSeconds(10));
+            expiries[lockKey].Should().Be(expected);
+        }
+    }
+
+    [Fact]
+    public async Task A_key_adopted_beside_a_failure_keeps_its_own_cooldown_and_the_generated_keys_lock_its_own()
+    {
+        var telemetry = new RecordingTelemetryProvider();
+        var expiries = new ConcurrentDictionary<string, TimeSpan>();
+        var distributedLock = Substitute.For<IDistributedLock>();
+        distributedLock.TryAcquireAsync(Arg.Any<string>(), Arg.Any<TimeSpan>(), Arg.Any<CancellationToken>())
+            .Returns<IAsyncDisposable?>(call =>
+            {
+                expiries[call.Arg<string>()] = call.Arg<TimeSpan>();
+                return Substitute.For<IAsyncDisposable>();
+            });
+        var sut = NewCoordinator(distributedLock, telemetry);
+        var policy = RehydratePolicy(baseCooldown: TimeSpan.FromSeconds(1), maxCooldown: TimeSpan.FromSeconds(8));
+        var aged = DateTimeOffset.UtcNow.Add(TimeSpan.FromSeconds(1));
+        var (backedOff, fresh) = ((CacheKey)"backed-off", (CacheKey)"fresh");
+
+        // "backed-off" fails often enough to reach the 8 s cap; "fresh" has never failed.
+        for (var failures = 1; failures <= 4; failures++)
+        {
+            await TriggerUntilAcceptedAsync(() => sut.TryTrigger(backedOff, aged, policy, Duration, "cache", (_, _) => throw new InvalidOperationException("boom")));
+            await WaitForCallAsync(() => telemetry.Events.Count(e => e.Name == "cache.rehydrate.failed") == failures, TimeSpan.FromSeconds(10));
+        }
+
+        await TriggerUntilAcceptedAsync(() => sut.TryTriggerBatch(
+            [(backedOff, aged), (fresh, aged)],
+            policy,
+            Duration,
+            "cache",
+            (_, run, _) =>
+            {
+                run.Adopt(backedOff);
+                throw new InvalidOperationException("upstream is down");
+            }));
+        await WaitForCallAsync(() => telemetry.Events.Count(e => e.Name == "cache.rehydrate.failed") == 5, TimeSpan.FromSeconds(10));
+
+        var lockOfFresh = expiries.Single(e => e.Key.Contains("fresh", StringComparison.Ordinal));
+        lockOfFresh.Value.Should().Be(TimeSpan.FromSeconds(302 + 1), "the retained lock reflects the generated key's own count of zero, not the adopted key's cap");
+        expiries.Single(e => e.Key.Contains("backed-off", StringComparison.Ordinal)).Value.Should().Be(TimeSpan.FromSeconds(302 + 8));
+    }
+
+    [Theory]
+    [InlineData(2_000, 1_250)]
+    [InlineData(20_000, 12_000)]
+    public async Task The_run_is_cancelled_at_the_factory_timeout_plus_the_read_budget(int durationMs, int expectedMs)
+    {
+        var time = new ManualTimeProvider(DateTimeOffset.UtcNow);
+        var telemetry = new RecordingTelemetryProvider();
+        var sut = NewCoordinator(telemetry: telemetry, time: time);
+        var duration = TimeSpan.FromMilliseconds(durationMs);
+        var started = new TaskCompletionSource<CancellationToken>(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        sut.TryTrigger(
+            (CacheKey)"k",
+            time.GetUtcNow() + (duration / 10),
+            RehydratePolicy(),
+            duration,
+            "cache",
+            async (_, ct) =>
+            {
+                started.TrySetResult(ct);
+                await Task.Delay(Timeout.Infinite, ct);
+            }).Should().BeTrue();
+        var token = await started.Task.WaitAsync(TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken);
+
+        time.Advance(TimeSpan.FromMilliseconds(expectedMs - 1));
+        token.IsCancellationRequested.Should().BeFalse("the read budget is added on top of the factory timeout");
+        time.Advance(TimeSpan.FromMilliseconds(1));
+        token.IsCancellationRequested.Should().BeTrue();
+        await WaitForCallAsync(() => telemetry.Events.Any(e => e.Name == "cache.rehydrate.timed_out"), TimeSpan.FromSeconds(10));
+    }
+
+    private static async Task TriggerUntilAcceptedAsync(Func<bool> trigger)
+    {
+        var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(10);
+        while (!trigger())
+        {
+            Assert.True(DateTime.UtcNow < deadline, "the previous run never released its in-flight reservation");
+            await Task.Delay(10, TestContext.Current.CancellationToken);
+        }
+    }
+
     private static async Task WaitForReservationReleaseAsync(RehydrationCoordinator sut, CachePolicy policy)
     {
         for (var i = 0; i < 3000; i++)
         {
-            if (!sut.TryTrigger((CacheKey)"k", DateTimeOffset.UtcNow.Add(TimeSpan.FromSeconds(1)), policy, Duration, "cache", _ => ValueTask.CompletedTask))
+            if (!sut.TryTrigger((CacheKey)"k", DateTimeOffset.UtcNow.Add(TimeSpan.FromSeconds(1)), policy, Duration, "cache", (_, _) => ValueTask.CompletedTask))
             {
                 await Task.Delay(10, TestContext.Current.CancellationToken);
                 continue;
@@ -434,9 +573,10 @@ public class RehydrationCoordinatorTests
     private static RehydrationCoordinator NewCoordinator(
         IDistributedLock? distributedLock = null,
         ICachingTelemetryProvider? telemetry = null,
-        ILogger? logger = null)
+        ILogger? logger = null,
+        TimeProvider? time = null)
     {
-        var clock = TimeProvider.System;
+        var clock = time ?? TimeProvider.System;
         var lockKeyStrategy = new DefaultDistributedLockKeyStrategy(separator: ':');
         return new RehydrationCoordinator(
             cacheName: "test-cache",
@@ -450,7 +590,8 @@ public class RehydrationCoordinatorTests
     private static CachePolicy RehydratePolicy(
         double threshold = 0.5,
         double timeoutFraction = 0.5,
-        TimeSpan? baseCooldown = null) => new()
+        TimeSpan? baseCooldown = null,
+        TimeSpan? maxCooldown = null) => new()
     {
         DistributedExpiration = Duration,
         RehydrateEnabled = true,
@@ -458,7 +599,7 @@ public class RehydrationCoordinatorTests
         {
             Threshold = threshold,
             BaseCooldown = baseCooldown ?? TimeSpan.FromSeconds(1),
-            MaxCooldown = TimeSpan.FromMinutes(5),
+            MaxCooldown = maxCooldown ?? TimeSpan.FromMinutes(5),
             TimeoutFraction = timeoutFraction,
             Name = "test",
         },

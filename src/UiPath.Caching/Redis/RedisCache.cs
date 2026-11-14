@@ -6,7 +6,7 @@ using UiPath.Caching.Telemetry;
 
 namespace UiPath.Caching.Redis;
 
-internal sealed partial class RedisCache : RedisCacheBase, ICache, IInvalidationSink
+internal sealed partial class RedisCache : RedisCacheBase, ICache, IInvalidationSink, IAdoptionReadCache
 {
     /// <summary>Value and absolute expiration in one atomic read-only call.</summary>
     private const string ReadWithExpirationScript = "local v = redis.call('GET', KEYS[1]) if not v then return false end return {v, redis.call('PEXPIRETIME', KEYS[1])}";
@@ -95,6 +95,15 @@ internal sealed partial class RedisCache : RedisCacheBase, ICache, IInvalidation
         NotCacheableException.ThrowIfNotCacheable<T>();
         var format = FormatFor(policy, forWrite: false);
         return format.Sniff ? GetCacheEntryInternalAsync<T, ValueFormat>(cacheKey, format, token) : GetCacheEntryInternalAsync<T, PlainFormat>(cacheKey, default, token);
+    }
+
+    public ValueTask<ICacheEntry<T?>> ReadForAdoptionAsync<T>(CacheKey cacheKey, CachePolicy? policy, CancellationToken token)
+    {
+        NotCacheableException.ThrowIfNotCacheable<T>();
+        var format = FormatFor(policy, forWrite: false);
+        return format.Sniff
+            ? GetCacheEntryInternalAsync<T, ValueFormat>(cacheKey, format, token, nameof(ReadForAdoptionAsync), atomic: true)
+            : GetCacheEntryInternalAsync<T, PlainFormat>(cacheKey, default, token, nameof(ReadForAdoptionAsync), atomic: true);
     }
 
     public ValueTask<KeyValuePair<CacheKey, ICacheEntry<T?>>[]> GetCacheEntriesAsync<T>(CacheKey[] cacheKeys, CachePolicy? policy, CancellationToken token = default)
@@ -284,6 +293,51 @@ internal sealed partial class RedisCache : RedisCacheBase, ICache, IInvalidation
         }
 
         return (values, expirations);
+    }
+
+    /// <summary>The miss a plain read answers where an atomic one reports the failure.</summary>
+    private static ICacheEntry<T?> Missed<T>(bool atomic, string failure, ICacheEntry<T?> miss) =>
+        atomic ? throw new InvalidOperationException(failure) : miss;
+
+    /// <summary>One attempt at the read: the snapshot transaction, the script, or a GET with a PTTL.</summary>
+    private static async Task ReadOnceAsync(RedisCache self, RedisKey key, StrongBox<StrongBox<(RedisValue Value, DateTimeOffset? Expiration)>?> read, bool atomic)
+    {
+        if (atomic)
+        {
+            var transaction = self.Database.CreateTransaction();
+            var snapshotValue = transaction.StringGetAsync(key, CommandFlags.DemandMaster);
+            var snapshotTimeToLive = transaction.KeyTimeToLiveAsync(key, CommandFlags.DemandMaster);
+            if (!await transaction.ExecuteAsync(CommandFlags.DemandMaster).ConfigureAwait(false))
+            {
+                throw new InvalidOperationException("The read transaction was not committed");
+            }
+
+            Interlocked.CompareExchange(ref read.Value, new((await snapshotValue.ConfigureAwait(false), self.Clock.ToDateTimeOffset(await snapshotTimeToLive.ConfigureAwait(false)))), null);
+            return;
+        }
+
+        if (await self.TryReadScriptAsync(ReadWithExpirationScript, [key], self._logReadScriptUnavailable).ConfigureAwait(false) is { } reply)
+        {
+            Interlocked.CompareExchange(ref read.Value, new(ReadReply(reply)), null);
+            return;
+        }
+
+        // A GET with a PTTL in one round trip. Not atomic: a key that expires between them reads as a value without a TTL.
+        var flags = self.ReadFlagsFor(key);
+        var valueTask = self.Database.StringGetAsync(key, flags);
+        var timeToLiveTask = self.Database.KeyTimeToLiveAsync(key, flags);
+        try
+        {
+            var value = await valueTask.ConfigureAwait(false);
+            var expiration = self.Clock.ToDateTimeOffset(await timeToLiveTask.ConfigureAwait(false));
+            Interlocked.CompareExchange(ref read.Value, new((value, expiration)), null);
+        }
+        catch
+        {
+            valueTask.Observe();
+            timeToLiveTask.Observe();
+            throw;
+        }
     }
 
     /// <summary>One attempt at a batch read: the script, or an MGET with a PTTL per key.</summary>
@@ -1135,14 +1189,15 @@ internal sealed partial class RedisCache : RedisCacheBase, ICache, IInvalidation
         return retValues;
     }
 
-    private async ValueTask<ICacheEntry<T?>> GetCacheEntryInternalAsync<T, TFormat>(CacheKey cacheKey, TFormat format, CancellationToken token, string methodName = nameof(GetCacheEntryInternalAsync))
+    /// <param name="atomic">Reads value and remaining lifetime in one transaction on the primary, lets a failure through instead of answering a miss, and leaves an unreadable value where it is.</param>
+    private async ValueTask<ICacheEntry<T?>> GetCacheEntryInternalAsync<T, TFormat>(CacheKey cacheKey, TFormat format, CancellationToken token, string methodName = nameof(GetCacheEntryInternalAsync), bool atomic = false)
         where TFormat : struct, IValueFormat
     {
         token.ThrowIfCancellationRequested();
         var redisKey = ToRedisKey(cacheKey, token);
         if (!IsConnected)
         {
-            return DefaultEntry<T>();
+            return Missed(atomic, "The cache is not connected", DefaultEntry<T>());
         }
 
         var operation = StartOperation<T>(methodName);
@@ -1154,39 +1209,17 @@ internal sealed partial class RedisCache : RedisCacheBase, ICache, IInvalidation
             var committed = await _read.ExecuteAsync(static async (s, token) =>
             {
                 token.ThrowIfCancellationRequested();
-                if (await s.Self.TryReadScriptAsync(ReadWithExpirationScript, [s.Key], s.Self._logReadScriptUnavailable).ConfigureAwait(false) is { } reply)
-                {
-                    Interlocked.CompareExchange(ref s.Read.Value, new(ReadReply(reply)), null);
-                    return true;
-                }
-
-                // A GET with a PTTL in one round trip. Not atomic: a key that expires between them reads as a value without a TTL.
-                var flags = s.Self.ReadFlagsFor(s.Key);
-                var valueTask = s.Self.Database.StringGetAsync(s.Key, flags);
-                var timeToLiveTask = s.Self.Database.KeyTimeToLiveAsync(s.Key, flags);
-                try
-                {
-                    var value = await valueTask.ConfigureAwait(false);
-                    var expiration = s.Self.Clock.ToDateTimeOffset(await timeToLiveTask.ConfigureAwait(false));
-                    Interlocked.CompareExchange(ref s.Read.Value, new((value, expiration)), null);
-                }
-                catch
-                {
-                    valueTask.Observe();
-                    timeToLiveTask.Observe();
-                    throw;
-                }
-
+                await ReadOnceAsync(s.Self, s.Key, s.Read, s.Atomic).ConfigureAwait(false);
                 return true;
             },
-            (Self: this, Key: redisKey, Read: read),
+            (Self: this, Key: redisKey, Read: read, Atomic: atomic),
             default,
             token).ConfigureAwait(false);
 
             if (!committed || read.Value is not { } result)
             {
                 operation.Stop();
-                return ret;
+                return Missed(atomic, "Unable to read from redis", ret);
             }
 
             var (value, expiration) = result.Value;
@@ -1196,14 +1229,14 @@ internal sealed partial class RedisCache : RedisCacheBase, ICache, IInvalidation
                 ret = _cacheEntryFactory.Create<T?>(deserialized, Clock.ToDateTimeOffset(expiration));
             }
 
-            if (unreadable != 0)
+            if (unreadable != 0 && !atomic)
             {
                 await RemoveUnreadableAsync<T>(redisKey, value, unreadable, token).ConfigureAwait(false);
             }
 
             operation.Stop();
         }
-        catch (Exception ex) when (format.Handles(ex))
+        catch (Exception ex) when (!atomic && format.Handles(ex))
         {
             operation.Stop();
             LogRedisCacheException(ex);
