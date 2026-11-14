@@ -1,0 +1,25 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFrameworks>$(TargetFrameworks)</TargetFrameworks>
+    <GeneratePackageOnBuild>true</GeneratePackageOnBuild>
+    <PackageRequireLicenseAcceptance>false</PackageRequireLicenseAcceptance>
+    <Description>A MessagePack value serializer, with LZ4 compression above a size threshold, for UiPath.Caching.</Description>
+    <PackageTags>UiPath;Caching;MessagePack</PackageTags>
+    <!-- New package: there is no release on nuget.org to compare with yet; clear this after the first release. -->
+    <PackageValidationBaselineVersion />
+  </PropertyGroup>
+  <ItemGroup>
+    <!-- The central pin is the version the repo builds against; the package accepts any 3.x from it. -->
+    <PackageReference Include="MessagePack" VersionOverride="[3.1.12,4.0)" />
+  </ItemGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\UiPath.Caching\UiPath.Caching.csproj" />
+  </ItemGroup>
+  <!-- This package reaches into UiPath.Caching internals, so the nuspec pins that exact version instead of "at least". -->
+  <Target Name="PinProjectReferenceVersions" AfterTargets="_GetProjectReferenceVersions">
+    <ItemGroup>
+      <_ProjectReferencesWithVersions Update="@(_ProjectReferencesWithVersions)" ProjectVersion="[%(ProjectVersion)]" />
+    </ItemGroup>
+  </Target>
+</Project>

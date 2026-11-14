@@ -1,0 +1,12 @@
+#nullable enable
+const UiPath.Caching.MessagePack.MessagePackCachingBuilderExtensions.DefaultName = "messagepack" -> string!
+static UiPath.Caching.MessagePack.MessagePackCachingBuilderExtensions.AddMessagePackSerializer(this UiPath.Caching.Config.ICachingBuilder! builder, string! name = "messagepack", System.Action<UiPath.Caching.MessagePack.MessagePackValueSerializerOptions!>? configure = null) -> UiPath.Caching.Config.ICachingBuilder!
+UiPath.Caching.MessagePack.MessagePackCachingBuilderExtensions
+UiPath.Caching.MessagePack.MessagePackValueSerializerOptions
+UiPath.Caching.MessagePack.MessagePackValueSerializerOptions.CompressionThresholdBytes.get -> int
+UiPath.Caching.MessagePack.MessagePackValueSerializerOptions.CompressionThresholdBytes.set -> void
+UiPath.Caching.MessagePack.MessagePackValueSerializerOptions.MaxDecompressedBytes.get -> int
+UiPath.Caching.MessagePack.MessagePackValueSerializerOptions.MaxDecompressedBytes.set -> void
+UiPath.Caching.MessagePack.MessagePackValueSerializerOptions.MessagePackValueSerializerOptions() -> void
+UiPath.Caching.MessagePack.MessagePackValueSerializerOptions.SerializerOptions.get -> MessagePack.MessagePackSerializerOptions?
+UiPath.Caching.MessagePack.MessagePackValueSerializerOptions.SerializerOptions.set -> void

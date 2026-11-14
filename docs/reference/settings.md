@@ -484,3 +484,15 @@ Nested under a `CachePolicy` entry. Field-level merged against the default polic
 | `MigrateOnRead` | `bool?` | `null` | Per-policy | Rewrite a value read in another format into the write format; `null` = inherit, and under that off. Accepted and merged, but nothing reads it yet: a value is never rewritten in this release. |
 
 **`Read` and layered configuration.** A `Read` set in code replaces the default policy's list as a whole, but .NET configuration providers merge arrays by index. With a base layer of `"Read": ["a", "b"]` and an override layer of `"Read": ["json"]`, the bound list is `["json", "b"]`, not `["json"]`. An override of `"Read": []` binds as `null`, so it inherits and the policy reads every registered format. To override safely, set every index the base layer sets (or repeat the full list), or declare `Read` in one layer only.
+
+---
+
+## MessagePackValueSerializerOptions (`UiPath.Caching.MessagePack`)
+
+Passed to `AddMessagePackSerializer(name, configure)` in code; not bound from configuration. A policy selects the serializer with `Serializer.Write` set to the registered name (default `messagepack`). See [MessagePack](../how-to/extending.md#messagepack).
+
+| Property | Type | Default | Scope | Notes |
+|---|---|---|---|---|
+| `CompressionThresholdBytes` | `int` | `1024` | Per-registration | A value whose MessagePack bytes reach this size is LZ4-compressed when that makes it smaller; otherwise stored plain. `0` tries every value, `int.MaxValue` compresses none, negative throws. Written as format id `0x03` when compressed, `0x02` when not. |
+| `MaxDecompressedBytes` | `int` | `67108864` | Per-registration | A compressed value claiming more than this many bytes uncompressed (64 MiB by default) is rejected on read (also any claim above 255 times its compressed size); zero or negative throws. Deserializing can allocate several times the decompressed size (up to about 8x for typed collections, more for an `object[]` of nils), so size it to available memory. It replaces `MaximumDecompressedSize` on a supplied `MessagePackSecurity`. |
+| `SerializerOptions` | `MessagePackSerializerOptions?` | contractless resolver, `MessagePackSecurity.UntrustedData` | Per-registration | Replaces the default options; compression set on it is ignored. `UntrustedData` adds hash-collision-resistant comparers (same depth limit as `TrustedData`); a supplied `MessagePackSecurity.TrustedData` is switched to `UntrustedData`, so pass a custom `MessagePackSecurity` to run trusted. A key type MessagePack has no resistant comparer for (`TimeSpan`, `decimal`, tuples, custom structs) uses the default comparer instead of failing the read. |

@@ -16,6 +16,7 @@ global using static UiPath.Caching.CacheValueHelpers;
 
 [assembly: System.Runtime.CompilerServices.InternalsVisibleTo("UiPath.Caching.Tests")]
 [assembly: System.Runtime.CompilerServices.InternalsVisibleTo("UiPath.Caching.Benchmarks")]
+[assembly: System.Runtime.CompilerServices.InternalsVisibleTo("UiPath.Caching.MessagePack")]
 // Castle DynamicProxy (used by NSubstitute via AutoFixture in Caching.Tests) needs access to the
 // internal concrete cache classes to generate dynamic proxies for closed generics like
 // ILogger<RedisCache>. Without this, mocking those proxies fails at test fixture time.

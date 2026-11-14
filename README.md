@@ -161,6 +161,7 @@ flowchart LR
 | `UiPath.Caching.OpenTelemetry` | OpenTelemetry adapter for `ICachingTelemetryProvider` — `ActivitySource` + `Meter` named `UiPath.Caching`. |
 | `UiPath.Caching.Azure` | Microsoft Entra ID authentication for Azure Managed Redis / Azure Cache for Redis. Adds `AddAzureEntraAuthentication()`. |
 | `UiPath.Caching.Queue` | Set ("queue") caches — `ISetCache` / `ISetCache<T>`, registered per backing via `AddQueueMemory` / `AddQueueRedis` / `AddQueueInMemoryRedis`. |
+| `UiPath.Caching.MessagePack` | MessagePack value serializer with LZ4 compression above a size threshold; selected per policy through `Serializer.Write`. |
 
 ## Documentation
 
