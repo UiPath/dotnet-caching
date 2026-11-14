@@ -24,6 +24,11 @@ internal sealed class FormatNegotiation
     /// <summary>The streams this node's topics read; <see langword="null"/> when the app has no Streams transport, so the node list is blind.</summary>
     public Func<IReadOnlyList<RedisKey>>? StreamKeys { get; init; }
 
+    /// <summary>The channels this node's topics listen on, and which are confirmed; <see langword="null"/> when the app has no Pub/Sub transport.</summary>
+    public IPubSubSubscriptions? PubSub { get; init; }
+
+    public PubSubNodeList? Subscribers { get; init; }
+
     public FormatNegotiationOptions Options { get; init; } = new();
 
     public TimeProvider Clock { get; init; } = TimeProvider.System;
@@ -32,14 +37,23 @@ internal sealed class FormatNegotiation
 
     public bool IsActive => Advertisement is not null;
 
+    /// <summary>The node reads the node list off a transport it can see; otherwise only the operator's word can switch a format.</summary>
+    public bool HasTransport => StreamKeys is not null || PubSub is not null;
+
     public static FormatNegotiation Create(IServiceProvider services)
     {
         var redisOptions = services.GetRequiredService<IOptions<RedisCacheOptions>>().Value;
         var options = redisOptions.FormatNegotiation;
         var registry = services.GetRequiredService<ValueSerializerRegistry>();
-        if (registry.IsEmpty || services.GetService<IRedisConnector>() is not { } connector)
+        var events = services.GetService<BinaryEventSettings>();
+        if (registry.IsEmpty && events is null)
         {
             return Inactive;
+        }
+
+        if (services.GetService<IRedisConnector>() is not { } connector)
+        {
+            return events is { Write: true } ? WithoutNodeList(services, options) : Inactive;
         }
 
         options.Validate();
@@ -50,17 +64,53 @@ internal sealed class FormatNegotiation
         var streams = cacheOptions.BroadcastEnabled
             ? services.GetServices<ITopicProvider>().OfType<RedisStreamsTopicProvider>().FirstOrDefault(p => p.Enabled)
             : null;
+        var pubSub = cacheOptions.BroadcastEnabled
+            ? services.GetServices<ITopicProvider>().OfType<RedisPubSubTopicProvider>().FirstOrDefault(p => p.Enabled)
+            : null;
         var library = typeof(FormatNegotiation).Assembly.GetCustomAttribute<AssemblyInformationalVersionAttribute>()?.InformationalVersion ?? string.Empty;
         return new()
         {
-            Negotiator = options.Mode == FormatNegotiationMode.Force
+            // A node with nothing to decide, in Force or with no serializer and no binary events to write, only advertises.
+            Negotiator = options.Mode == FormatNegotiationMode.Force || (registry.IsEmpty && events is not { Write: true })
                 ? null
-                : new FormatNegotiator(NegotiationPlan.Desired(registry, policies), options, clock, services.GetRequiredService<ICachingTelemetryProvider>(), loggers.CreateLogger<FormatNegotiator>()),
-            Advertisement = NegotiationPlan.Advertisement(registry, policies, new ValueReader(services.GetRequiredService<ISerializerProxy<byte[]>>(), registry), library),
+                : new FormatNegotiator(
+                    NegotiationPlan.Desired(registry, policies),
+                    options,
+                    clock,
+                    services.GetRequiredService<ICachingTelemetryProvider>(),
+                    loggers.CreateLogger<FormatNegotiator>(),
+                    events is { Write: true } ? new DesiredEvents([BinaryEventSettings.Token]) : null),
+            Advertisement = NegotiationPlan.Advertisement(registry, policies, new ValueReader(services.GetRequiredService<ISerializerProxy<byte[]>>(), registry), library, readsBinaryEvents: events is not null),
             NodeId = (cacheOptions.SourceUri ?? CacheOptions.MachineUri).ToString().ToLowerInvariant(),
             Store = new NodeListStore(connector, NodeListStore.KeyFor(cacheOptions, redisOptions)),
             NodeList = new StreamNodeList(new RedisStreamGroupSource(connector), options),
             StreamKeys = streams is null ? null : streams.StreamKeys,
+            PubSub = pubSub,
+            Subscribers = pubSub is null ? null : new PubSubNodeList(new RedisSubscriberSource(connector)),
+            Options = options,
+            Clock = clock,
+            Logger = loggers.CreateLogger<FormatNegotiationService>(),
+        };
+    }
+
+    /// <summary>
+    /// Whether this node writes binary events: never when it is not set to, as configured in <see cref="FormatNegotiationMode.Force"/>, as the node list allows
+    /// in <see cref="FormatNegotiationMode.Auto"/>, and with no node list to ask only on the operator's word.
+    /// </summary>
+    public IBinaryEvents EventWrites(BinaryEventSettings settings) =>
+        !settings.Write ? FixedBinaryEvents.Never : Negotiator is { } negotiator ? negotiator : IsActive || Options.Mode == FormatNegotiationMode.Force ? FixedBinaryEvents.Always : FixedBinaryEvents.Never;
+
+    // No Redis connection, so no node list and nothing to advertise to: the node writes JSON events until the operator attests, or forces them.
+    private static FormatNegotiation WithoutNodeList(IServiceProvider services, FormatNegotiationOptions options)
+    {
+        options.Validate();
+        var clock = services.GetRequiredService<TimeProvider>();
+        var loggers = services.GetRequiredService<ILoggerFactory>();
+        return new()
+        {
+            Negotiator = options.Mode == FormatNegotiationMode.Force
+                ? null
+                : new FormatNegotiator([], options, clock, services.GetRequiredService<ICachingTelemetryProvider>(), loggers.CreateLogger<FormatNegotiator>(), new DesiredEvents([BinaryEventSettings.Token])),
             Options = options,
             Clock = clock,
             Logger = loggers.CreateLogger<FormatNegotiationService>(),

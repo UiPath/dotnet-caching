@@ -91,6 +91,10 @@ public abstract partial class RedisTopicProviderBase(
         GC.SuppressFinalize(this);
     }
 
+    /// <summary>The topics made so far and not removed, for the node node list.</summary>
+    internal IEnumerable<ITopic<ICacheEvent>> CreatedTopics() =>
+        _topics.Values.Where(topic => topic.IsValueCreated).Select(topic => topic.Value);
+
     protected virtual void Dispose(bool disposing)
     {
         if (!_disposed)

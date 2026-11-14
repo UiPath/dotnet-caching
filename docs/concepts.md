@@ -536,10 +536,11 @@ A node that cannot read a format treats the value as a miss, and what happens to
   rolling deploy, and a serializer disposed at shutdown says nothing about the data. This departs from the
   design spec, which removed such a value. An `OutOfMemoryException` from a registered serializer's payload is never treated as a failed read: it propagates from `Get`, `GetOrAdd` and the hash reads instead of becoming a miss that runs the generator. A value with no header (JSON) behaves as it does with no serializer registered, so an `OutOfMemoryException` there is a logged miss.
 
-Events follow the same order. A node that cannot decode an event with a format id in front treats it as a topic loss and
-expires its local copies, so upgrade every node to 3.2.0 or later and register `AddMessagePackEvents(write: false)`
-before any node uses `write: true`, and keep the JSON decoder for good: older nodes skip binary events silently.
-See [MessagePack events](how-to/extending.md#messagepack-events).
+Events switch by themselves too. `AddMessagePackEvents(write: true)` writes binary events only while every live node is known to read
+them, and JSON before and after, so no deploy order is needed; with `FormatNegotiation:Mode` at `Force` it writes binary at once, and then the
+nodes must read both first. A node that cannot decode an event with a format id in front treats it as a topic loss and expires its local copies, and
+a node before 3.2.0 skips a binary event silently, so keep the JSON decoder for good. See
+[choosing when a format is written](#choosing-when-a-format-is-written) and [MessagePack events](how-to/extending.md#messagepack-events).
 
 All of it shows up as factory load and churn during the deploy, never as a wrong value. Switching a policy back
 to JSON is safe at any time: new writes are JSON and the older values still read.
@@ -547,11 +548,11 @@ to JSON is safe at any time: new writes are JSON and the older values still read
 ### Choosing when a format is written
 
 A policy's `Serializer.Write` names the format it *wants*. With `FormatNegotiation:Mode` at `Auto` (the default), a node writes it
-only while every node that shares the Streams transport is known to read it, and writes JSON until then; this replaces the two-deploy
+only while every node that shares the transport (Streams or Pub/Sub) is known to read it, and writes JSON until then; this replaces the two-deploy
 order for values, so a node that registers the serializer and sets `Write` can be deployed in one step. A policy that sets `Write = "json"`
-is pinned to JSON, and `Mode = Force` writes exactly what each policy configures, as before.
+is pinned to JSON, and `Mode = Force` writes exactly what each policy configures, as before. Binary events follow the same rule and are covered below.
 
-How it works. An app with a serializer registered advertises what it reads, whether or not any policy of its own writes a non-JSON format and in either mode, so a node that only reads, or runs `Force`, never blocks the writers. In `Auto` it also reads the node list and decides, for every registered serializer, so a policy built at the call site that names one is held to the same decision as a registered policy. An app with no serializer registered does none of this: it advertises nothing, and so correctly counts as a node that cannot read.
+How it works. An app with a serializer registered advertises what it reads, whether or not any policy of its own writes a non-JSON format and in either mode, so a node that only reads, or runs `Force`, never blocks the writers. In `Auto` it also reads the node list and decides, for every registered serializer, so a policy built at the call site that names one is held to the same decision as a registered policy. An app with no serializer registered and no binary event decoder does none of this: it advertises nothing, and so correctly counts as a node that cannot read. An app with only the decoder advertises the event formats it reads and decides events.
 
 The advertisement says what the node's reads actually do. With the default JSON proxy a read looks for a format header whatever the policy writes. With a custom proxy, a subclass of the default or `RawByteSerializerProxy`, a read looks for one only under a policy that itself writes a non-JSON format; for every other policy (and the default policy, when it is not one) the node advertises that it reads JSON only, and no writer upgrades while such a node is on the node list. A policy on such a proxy never falls back to JSON either, since its bytes are not JSON and could read back as a header: it always writes the format it names, as in `Force`.
 
@@ -564,18 +565,74 @@ The advertisement says what the node's reads actually do. With the default JSON 
   consumer read within `LivenessWindow` and that no fresh advertisement accounts for is a node that cannot say what it reads (a
   node before 3.2, for one), and it keeps every writer on JSON. A node that went quiet for longer than `LivenessWindow` no longer counts.
 - The format is written once every advertisement lists it, no live node is unaccounted for, and that has held for `UpgradeHold` (an hour by default) since a node
-  last joined or restarted (each process advertises its own id, so a restart under the same name is a join). A node that leaves never restarts the hold. A node that cannot read it, or an unaccounted node that appears, stops the writes at once. Redis being unreachable keeps the decision
+  last joined or restarted (each process advertises its own id, so a restart under the same name is a join). A node that leaves never restarts the hold. A node that cannot read it stops the writes at once, and so does an unaccounted node over Streams; over Pub/Sub an unaccounted node takes two views to count. Redis being unreachable keeps the decision
   for `MaxViewAge` since the last good read, then writes JSON, and for two advertise intervals after it returns, so peers can advertise again; an advertisement that lacks the format is never excused. All of this runs on a timer; a read or a write sends no extra command, only a read of the cached decision and its age.
 
 The hold trades speed for rollback safety. After a rollback to a build that cannot read the format, nodes miss on the values written in that
 format and the generator rewrites them as JSON, never a wrong value. With the default hour, an app rolled back within the hour never wrote the
 format at all. A shorter `UpgradeHold` switches sooner and widens that rollback window; zero switches as soon as the node list agrees.
 
-The node list sees only nodes on the Streams transport. An app that has `BroadcastEnabled` off, or that publishes events over Pub/Sub only, cannot see the others and writes JSON; set
-`FormatNegotiation:AssumeAllNodesCanRead` to attest that every node that says nothing reads the desired formats. The attestation covers nodes that advertise nothing, not one whose advertisement lacks the format, and the hold still applies. Every node judges the others by its own `AdvertiseInterval` and `LivenessWindow`, so keep them alike across the fleet. Group
+An app that has `BroadcastEnabled` off, or that has neither a Streams nor a Pub/Sub topic, cannot see the others and writes JSON; set
+`FormatNegotiation:AssumeAllNodesCanRead` to attest that every node that says nothing reads the desired formats. The attestation covers nodes that advertise nothing, and subscribers no advertisement accounts for, not a node whose advertisement lacks the format, and the hold still applies. Every node judges the others by its own `AdvertiseInterval` and `LivenessWindow`, so keep them alike across the fleet. Group
 names that are not node ids (for example another app sharing the stream key) also count as live nodes, a safe false positive.
-Telemetry (`cache.format.effective`, `cache.format.fallback`, `cache.format.nodes` and `cache.format.view.age`) is emitted only while this runs, and
-a node that is blocking is named in a Warning log. The advertisement needs a host that runs hosted services: without one, nothing advertises and values stay JSON.
+Telemetry is emitted only while this runs; see [telemetry](#telemetry-of-the-switch). The advertisement needs a host that runs hosted services: without one, nothing advertises and values stay JSON, and events stay JSON unless `Mode` is `Force`.
+
+#### Events
+
+Events use the same node list and the same rules, decided apart from values. Each advertisement also lists the event formats the node decodes (`er`): an app with the
+binary decoder registered (`AddMessagePackEvents`, either `write`) lists JSON and binary; a node with a serializer registered and no decoder lists JSON; a node before this version
+lists nothing, and so counts as one that cannot say what it reads. An app with the decoder and no value serializer advertises and decides too, and lists JSON for values.
+
+- `AddMessagePackEvents(write: true)` means binary events once every advertisement lists binary, no live node is unaccounted for, and `UpgradeHold` has passed. The first node that
+  lists only JSON, or an unaccounted node, switches the events back to JSON at once. `write: false` always writes JSON and `Force` always writes binary.
+- The decoder reads both formats always, so what was written before a fall back, or replayed from a stream backlog, still decodes. The formatter asks for the decision on every event
+  and sends no command to Redis; it costs a read of the cached decision. An app that registers nothing is unchanged, and has no wrapper at all.
+- An old node (3.0 or 3.1) cannot read binary events: it skips them without a trace and keeps what it has until its own `LocalMaxExpiration`. While it is live in the node list it blocks binary events,
+  by the advertisement it does not write (on Streams, its consumer group; on Pub/Sub, its subscription). Its stale-L1 risk is therefore the join window, about one view interval from when it joins until the
+  others see it; over Pub/Sub, a node that advertises nothing and takes a freed subscription slot, which stays hidden for up to the advertisement lifetime (`LivenessWindow` plus two advertise intervals) plus two views, about 180 s by default, while binary reaches it and it skips those events, so its local tier can serve a stale value for that window; and when a node judged dead (idle past `LivenessWindow`) returns on the same source id and replays what was written meanwhile. All are bounded by that old node's own `LocalMaxExpiration`: set a short one
+  on old nodes, a few minutes, before enabling `write: true`. A node on this version never holds binary events back from itself; its local lifetimes are what you configured.
+
+#### Pub/Sub
+
+The Streams transport has a consumer group per node, which is how a node that advertises nothing is found. Pub/Sub has no membership, so over Pub/Sub the node list counts subscribers:
+
+- Each node counts the subscribers of each channel it listens on with `PUBSUB NUMSUB`, on every server of the deployment, primaries and replicas, and sums them, because a subscriber is local to the server it
+  connected to. Asking one server undercounts. A server this node knows about but is not connected to would hide its subscribers, so the whole view fails: it is not a partial sum, it resets the debounce
+  and keeps the last decision until `MaxViewAge`, then JSON. The channel names it asks for carry the connection's `ChannelPrefix`, since the server only knows the prefixed ones.
+- `NUMSUB` leaves pattern subscriptions out, so the same round trip also reads `PUBSUB NUMPAT`. Each node advertises the pattern subscriptions it holds (`psub`, none unless a channel strategy makes patterns),
+  and more patterns on the servers than the advertisements claim is an unknown subscriber, under the same two-view rule as a surplus on a channel. `NUMPAT` counts the whole server and its unique patterns, not this app's
+  channels: another app on the same Redis that subscribes to a pattern (a keyspace listener, say) keeps binary events on JSON, and so does a tool left running. There is no deficit rule for patterns. Set
+  `AssumeAllNodesCanRead` to attest that none of them is a node that needs to read binary events.
+- Each node advertises the subscriptions it holds (`sub`), once the server has confirmed them, and says so at once, not on the next interval. The order is deliberate: subscribe, then advertise. A claim made
+  first would hide a subscriber that says nothing. A node that is stopping writes its departing advertisement (`left=1`) with the subscriptions it still holds, and its connection closes a little later, maybe views later:
+  for as long as that advertisement lives, the count may include its subscription or not, either is clean, so a slow shutdown never takes the fleet to JSON. The node list sends one `PUBSUB NUMSUB` per server per view, for all
+  the channels in it.
+- More subscribers than advertisements account for is a node that cannot say what it reads, and keeps values and events on JSON. A surplus counts only when two views in a row show it, so a node that has subscribed and not
+  yet advertised is absorbed. An upgrade needs two views in a row with no surplus and the same number of servers. An advertisement that lacks a format still stops the writes at once.
+- Fewer subscribers than the advertisements claim is a count that does not add up too, and is unknown: JSON for values and events, after the same two views in a row. It is how a node that crashed shows,
+  since its advertisement outlives its connection and a claim with no subscriber behind it would hide a node that says nothing. It is a departure, not a join, so it never restarts the hold: once the
+  advertisement expires and the counts match again for two views, what was written before resumes at once. A node that joins meanwhile is a join, and waits for the hold, and so does a deficit that clears while the
+  claim is still fresh: the count rose, so something subscribed, and it advertised nothing. A blip, one view of surplus, deficit or a change in the number of servers, pauses a hold in progress and does not restart it; a
+  surplus confirmed in two views, or a node that lists no format, does; a deficit confirmed in two views never does, it holds the format back and keeps the hold it had earned. Each channel is judged on its own: a surplus on one channel and then on another is not two views of the same.
+- When the server refuses `PUBSUB NUMSUB` (no permission, the command disabled or unknown), or a server that is up cannot answer, the count is unknown and the writes stay JSON, unless
+  `AssumeAllNodesCanRead` is set. The node logs a Warning once, naming the fallback, and again when it can count. A failed or partial read keeps the last decision for `MaxViewAge`, as for the Streams node list, and the two
+  views on either side of it are not consecutive.
+- `PUBSUB NUMSUB` counts classic literal channels. A custom `IRedisChannelStrategy` that returns a pattern or a sharded channel cannot be counted, so the count is unknown for that node: JSON unless attested, logged
+  once with the channel names.
+
+Limits. A connection that half-closed keeps counting until Redis drops it, which only delays an upgrade. A node that crashed keeps the writes on JSON for as long as its advertisement lives (`LivenessWindow` plus
+two advertise intervals) and for two views after it expires. A node that resubscribes after a reconnect is briefly short; two views absorb it. What remains hidden: an old node that subscribes to a channel in place of a
+node that crashed, while that node's claim is still fresh, looks like the crashed node's subscription still held, and an old node that subscribes while a leaving node's advertisement is fresh looks like the leaving node still holding
+its subscription. Either lasts at most the advertisement's lifetime (`LivenessWindow` plus two advertise intervals) plus two views, about 180 s by default; binary events reach that node, it skips them, and its local tier may serve a stale value until the window closes or its own `LocalMaxExpiration` passes.
+
+An app with no Redis connection has no node list at all, and `write: true` writes JSON events unless `FormatNegotiation:AssumeAllNodesCanRead` attests that every node reads binary (the hold applies) or `Mode` is `Force`.
+
+#### Telemetry of the switch
+
+`cache.format.effective` is 1 while a format is written and 0 while it is not, tagged `kind` (`value` or `event`) and `format`, and `policy` for a value. `cache.format.fallback` counts transitions to JSON, tagged
+`reason`, `kind` and `policy`; the reasons are `missing_format`, `unaccounted_group`, `unaccounted_subscriber`, `subscriber_deficit`, `transport_unknown`, `no_view` and `view_stale`. `cache.format.nodes` and `cache.format.view.age` are the live and
+blocking nodes and the age of the view. Who blocks is kept off these metrics, whose tags are bounded: the node ids, or the Pub/Sub channels (or `(patterns)`) with a surplus or a deficit, are in a Warning log and on the separate `Caching.Stats.FormatBlockers`, each time the set
+changes. Those are as many values as there are nodes, so a backend that turns a metric's tags into dimensions will see them as one each: alert on the metric's value, not on its tags. A fallback of an event has no `policy` tag.
 
 See also: [how-to/extending.md#value-serializers](how-to/extending.md#value-serializers).
 

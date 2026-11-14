@@ -3,14 +3,20 @@ using System.Text;
 
 namespace UiPath.Caching.Negotiation;
 
-/// <summary>What a node tells the others about itself: the value formats it reads, per-policy read lists, a field reserved for migration capabilities, and whether the node is leaving.</summary>
+/// <summary>
+/// What a node tells the others about itself: the value and event formats it reads, per-policy read lists, the Pub/Sub channels it has confirmed a subscription
+/// to and how many pattern subscriptions it holds, a field reserved for migration capabilities, and whether the node is leaving. A node that lists no event formats reads none it can name.
+/// </summary>
 internal sealed record NodeAdvertisement(
     string Library,
     string Instance,
     IReadOnlyList<string> ValueReads,
     IReadOnlyDictionary<string, IReadOnlyList<string>> Strict,
     string? Migration = null,
-    bool Left = false)
+    bool Left = false,
+    IReadOnlyList<string>? EventReads = null,
+    IReadOnlyDictionary<string, int>? Subscriptions = null,
+    int? PatternSubscriptions = null)
 {
     public const string Json = "json";
 
@@ -34,6 +40,27 @@ internal sealed record NodeAdvertisement(
             }
         }
 
+        if (EventReads is not null)
+        {
+            text.Append(";er=").AppendJoin(',', EventReads);
+        }
+
+        if (Subscriptions is { Count: > 0 })
+        {
+            text.Append(";sub=");
+            var first = true;
+            foreach (var (channel, count) in Subscriptions.OrderBy(p => p.Key, StringComparer.Ordinal))
+            {
+                text.Append(first ? string.Empty : ",").Append(Escape(channel)).Append(':').Append(count.ToString(CultureInfo.InvariantCulture));
+                first = false;
+            }
+        }
+
+        if (PatternSubscriptions is > 0)
+        {
+            text.Append(";psub=").Append(PatternSubscriptions.Value.ToString(CultureInfo.InvariantCulture));
+        }
+
         if (Migration is not null)
         {
             text.Append(";mig=").Append(Escape(Migration));
@@ -54,8 +81,10 @@ internal sealed record NodeAdvertisement(
         string library = string.Empty, instance = string.Empty;
         string? migration = null;
         var left = false;
-        IReadOnlyList<string>? reads = null;
+        IReadOnlyList<string>? reads = null, eventReads = null;
         Dictionary<string, IReadOnlyList<string>> strict = [];
+        Dictionary<string, int> subscriptions = [];
+        int? patterns = null;
         foreach (var field in text.Split(';'))
         {
             var separator = field.IndexOf('=', StringComparison.Ordinal);
@@ -75,6 +104,24 @@ internal sealed record NodeAdvertisement(
                     break;
                 case "vr":
                     reads = value.Split(',', StringSplitOptions.RemoveEmptyEntries);
+                    break;
+                case "er":
+                    eventReads = value.Split(',', StringSplitOptions.RemoveEmptyEntries);
+                    break;
+                case "sub":
+                    // An entry that does not parse is left out: the node then counts for fewer subscribers, which only holds writes back.
+                    foreach (var entry in value.Split(',', StringSplitOptions.RemoveEmptyEntries))
+                    {
+                        var colon = entry.LastIndexOf(':');
+                        if (colon > 0 && int.TryParse(entry[(colon + 1)..], NumberStyles.None, CultureInfo.InvariantCulture, out var count))
+                        {
+                            subscriptions[Unescape(entry[..colon])] = count;
+                        }
+                    }
+
+                    break;
+                case "psub":
+                    patterns = int.TryParse(value, NumberStyles.None, CultureInfo.InvariantCulture, out var pattern) ? pattern : null;
                     break;
                 case "mig":
                     migration = Unescape(value);
@@ -103,7 +150,7 @@ internal sealed record NodeAdvertisement(
             return false;
         }
 
-        advertisement = new NodeAdvertisement(library, instance, reads, strict, migration, left);
+        advertisement = new NodeAdvertisement(library, instance, reads, strict, migration, left, eventReads, subscriptions.Count > 0 ? subscriptions : null, patterns);
         return true;
     }
 

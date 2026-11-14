@@ -197,7 +197,8 @@ public sealed class MessagePackEventIntegrationTests(RedisContainerFixture fixtu
                 b =>
                 {
                     b.AddRedisConnection(o => o.ConnectionString = fixture.ConnectionString);
-                    b.AddRedis(_ => { });
+                    // These tests are about the wire; the automatic switch has its own.
+                    b.AddRedis(o => o.FormatNegotiation.Mode = FormatNegotiationMode.Force);
                     if (pubSub)
                     {
                         b.AddRedisPubSub(o => o.Enabled = true);

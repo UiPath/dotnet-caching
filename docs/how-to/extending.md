@@ -546,7 +546,7 @@ The package depends on the exact `UiPath.Caching` version it was built with, so 
 The serializer owns format ids `0x02` (plain) and `0x03` (LZ4); the id stored with each value says which, so a node reads
 both whatever its threshold.
 
-By default (`FormatNegotiation:Mode` `Auto`) a policy that sets `Write = "messagepack"` writes it only while every node on the Streams transport is known to read it, and JSON until then, so this is safe to deploy in one step; see [choosing when a format is written](../concepts.md#choosing-when-a-format-is-written). With `Force`, roll it out readers first. A node reads a format only once the serializer is registered on it, so register
+By default (`FormatNegotiation:Mode` `Auto`) a policy that sets `Write = "messagepack"` writes it only while every node on the Streams or Pub/Sub transport is known to read it, and JSON until then, so this is safe to deploy in one step; see [choosing when a format is written](../concepts.md#choosing-when-a-format-is-written). With `Force`, roll it out readers first. A node reads a format only once the serializer is registered on it, so register
 `AddMessagePackSerializer` on every node and finish that deploy before any policy sets `Write = "messagepack"`; a node that
 cannot read the value misses and regenerates it (see [rolling a serializer out](../concepts.md#rolling-a-serializer-out)).
 Setting `Write` back to `json` keeps values already stored as MessagePack readable while the default JSON proxy is in use; with a custom `ISerializerProxy` registered, headers are only recognized under a policy that writes a non-JSON format, so under `Write = "json"` those values go to your proxy and read as misses.
@@ -565,15 +565,20 @@ JSON size and a peer-field event saves the 33% base64 adds. Properties it has no
 and read back as `JsonElement`, as they do from a JSON event, and an expiry reads back in UTC.
 
 ```csharp
-b.AddMessagePackEvents(write: false); // first deploy: reads both, still writes JSON
-b.AddMessagePackEvents(write: true);  // second deploy: writes binary
+b.AddMessagePackEvents(write: true);  // reads both; writes binary once every live node can read it
+b.AddMessagePackEvents(write: false); // reads both; always writes JSON
 ```
 
-Switch in two deploys, like a value serializer. Every node must run library version 3.2.0 or later, the first one that
-has this formatter and the loss handling below, with `AddMessagePackEvents(write: false)` registered, before any node
-uses `write: true`. A node on an older version acknowledges and skips a binary event, logging a warning for every 100th one it cannot decode and tracking telemetry, but never treating it as a loss, so it keeps what
-it has until `LocalMaxExpiration`; one on 3.2.0 or later without the formatter treats the event as lost and drops its
-whole local tier for that topic. Switching back to `write: false` is safe at any time. Never remove the JSON decoder:
+There is no deploy order. With `write: true` a node writes JSON until the node list shows that every node reads binary events, for the
+`UpgradeHold` (an hour by default) after the last node joined, and writes JSON again as soon as a node that cannot read them appears. Each node
+advertises the event formats it decodes: one with this formatter registered lists binary, one without lists JSON only, and a node before
+3.2.0 lists nothing and is treated as unable to read. See [choosing when a format is written](../concepts.md#choosing-when-a-format-is-written),
+including how a Pub/Sub deployment counts subscribers. A node on an older version acknowledges and skips a binary event, logging a warning for every 100th one it cannot decode and tracking telemetry, but never treating it as a loss, so it keeps
+what it has until `LocalMaxExpiration`; one on 3.2.0 or later without the formatter treats the event as lost and drops its whole local tier for that
+topic. An old node blocks binary events while it is live in the node list, so what is left is the window a join leaves open, about one view interval; a Pub/Sub node that advertises nothing and takes a freed subscription slot, which stays hidden for up to the advertisement lifetime plus two views (about 180 s by default), during which it skips binary events and may serve a stale local value; and a node judged dead that returns on the same source id: the
+stale local entry it keeps is bounded by that old node's own `LocalMaxExpiration`. Set a short one, a few minutes, on 3.0 and 3.1 nodes before enabling `write: true`.
+
+`FormatNegotiation:Mode` `Force` writes binary at once with `write: true`: then every node must read both first, as before. An app with no Redis connection has no node list to read, and `write: true` writes JSON events unless `FormatNegotiation:AssumeAllNodesCanRead` attests that every node reads binary or `Mode` is `Force`. Switching back to `write: false` is safe at any time. Never remove the JSON decoder:
 a restarted node replays its stream backlog, and a JSON entry it could not read is skipped without counting as a loss, so the node would keep what that entry invalidated. The setting is
 app-wide, not per topic.
 
@@ -592,7 +597,7 @@ read. A map's initial capacity is capped at 16 entries, so allocation follows th
 
 The integer event type values on the wire (`CacheSet` 0, `CacheRefreshed` 1, `CacheRemoved` 2, `TopicInvalidated` 3)
 are fixed and only ever appended to. A node that reads a type number it does not know refuses the event, which is a
-loss, so a release that adds a type needs the same two deploys.
+loss, so a release that adds a type needs every node on it before any node writes binary events: use `Force` only after that, and in `Auto` upgrade every node before the hold has passed.
 
 ## Swapping the default factories
 
