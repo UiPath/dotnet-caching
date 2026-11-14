@@ -378,6 +378,24 @@ repeated failed refreshes from stampeding the upstream. Cooldown enforcement
 uses the distributed lock's TTL so that backoff is consistent across nodes
 without any additional shared state.
 
+A node that wins the per-key lock first reads the key from the shared tier, once per
+rehydration; that read counts in the Redis read metrics. The built-in Redis caches take
+the value and its remaining lifetime from that read as one snapshot, in a single
+transaction on the primary, so a write that lands meanwhile can never pair an old value
+with the new lifetime. An inner cache that does not offer such a read, a custom `ICache` or
+`IHashCache`, never adopts: its rehydrations run the generator as before. If the shared copy is not yet
+past the threshold (more than `1 - Threshold` of the lifetime left), because another node
+already refreshed it, the node keeps it locally and does not run the generator, and
+telemetry records `cache.rehydrate.adopted` instead of `cache.rehydrate.succeeded`. A
+missing copy, a copy without a deadline, an aged copy, a read that fails or outlasts its
+own budget (a quarter of the rehydrate timeout, at most 2 s, added on top of the timeout),
+a copy that could not be kept locally because the key changed meanwhile, or a disconnected
+cache runs the generator as before. A batch generates only the keys whose shared copy is not fresh;
+its `succeeded` event then carries an `adopted` tag with the number of keys adopted, and a
+generator failure there counts only against the keys that were generated.
+The remaining lifetime is converted with the node's clock when it is read, so clock skew
+between node and server does not shift the margin.
+
 `RehydrateOptions` is replaced wholesale when a named policy declares it —
 there is no per-field merge. If your named policy needs to change only the
 `Threshold` while keeping the cooldown defaults, it must redeclare all

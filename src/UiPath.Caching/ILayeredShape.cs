@@ -14,6 +14,9 @@ internal interface ILayeredShape<TValue, TOptions, TWrite>
     /// <summary>Whether the inner tier is the null one, which has nothing to share or keep.</summary>
     bool InnerIsNull { get; }
 
+    /// <summary>Whether the inner cache offers the snapshot read adoption needs; one that does not never adopts.</summary>
+    bool CanAdopt { get; }
+
     /// <summary>Whether the value is nothing a caller could use: null for a plain entry, null or no fields for a hash.</summary>
     bool IsEmpty(TValue? value);
 
@@ -23,6 +26,9 @@ internal interface ILayeredShape<TValue, TOptions, TWrite>
     TOptions BuildOptions(CacheKey cacheKey, DateTimeOffset expiration, CancellationToken token);
 
     ValueTask<ICacheEntry<TValue>> ReadInnerAsync(TOptions options, CachePolicy policy);
+
+    /// <summary>The read that decides an adoption: an atomic snapshot of value and lifetime, and a failure thrown rather than answered as a miss.</summary>
+    ValueTask<ICacheEntry<TValue>> ReadForAdoptionAsync(TOptions options);
 
     /// <summary>Takes what the inner tier holds into the options of the local copy: its deadline, and what only this kind of entry has.</summary>
     void Adopt(ref TOptions options, ICacheEntry<TValue> fetched);

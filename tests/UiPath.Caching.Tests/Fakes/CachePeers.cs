@@ -98,6 +98,9 @@ internal sealed class CachePeers : IDisposable
     {
         public ConcurrentDictionary<string, object?> Values { get; } = new(StringComparer.Ordinal);
 
+        /// <summary>The lifetime a read reports for a key, from the read; an hour for a key not listed.</summary>
+        public ConcurrentDictionary<string, TimeSpan> Remaining { get; } = new(StringComparer.Ordinal);
+
         /// <summary>A write nobody is told of.</summary>
         public void WriteQuietly(string key, object? value) => Values[key] = value;
 
@@ -346,7 +349,7 @@ internal sealed class CachePeers : IDisposable
     }
 
     /// <summary>The inner tier of a node over the shared store: counts its reads, can hold or fail them, and reports a connection state the test sets.</summary>
-    internal class NodeInner : DispatchProxy, IConnectionState, IMasterReadScope
+    internal class NodeInner : DispatchProxy, IConnectionState, IMasterReadScope, IAdoptionReadCache
     {
         private static readonly MethodInfo ReadOne = typeof(NodeInner).GetMethod(nameof(ReadOneAsync), BindingFlags.Instance | BindingFlags.NonPublic)!;
         private static readonly MethodInfo ReadMany = typeof(NodeInner).GetMethod(nameof(ReadManyAsync), BindingFlags.Instance | BindingFlags.NonPublic)!;
@@ -357,6 +360,7 @@ internal sealed class CachePeers : IDisposable
         private readonly ConcurrentQueue<int> _batchSizes = new();
         private volatile bool _connected = true;
         private int _openScopes;
+        private Task? _afterNextRead;
         private int _singleReads;
         private int _batchReads;
 
@@ -392,6 +396,13 @@ internal sealed class CachePeers : IDisposable
 
         public bool ReadThrows { get; set; }
 
+        /// <summary>When set, the next single-key read waits for it after it has read the store, then answers with what it read.</summary>
+        public Task? AfterNextRead
+        {
+            get => _afterNextRead;
+            set => _afterNextRead = value;
+        }
+
         /// <summary>When set, a removal waits for it before it reaches the store.</summary>
         public Task? RemoveHold { get; set; }
 
@@ -407,6 +418,9 @@ internal sealed class CachePeers : IDisposable
                 (value ? OnConnectionRestored : OnConnectionFailed)?.Invoke(this, EventArgs.Empty);
             }
         }
+
+        ValueTask<ICacheEntry<T?>> IAdoptionReadCache.ReadForAdoptionAsync<T>(CacheKey cacheKey, CancellationToken token)
+            where T : default => ReadOneAsync<T>(cacheKey, token);
 
         IDisposable IMasterReadScope.DemandMaster()
         {
@@ -453,7 +467,7 @@ internal sealed class CachePeers : IDisposable
 
         private static TestCacheEntry<T?> EntryFor<T>(SharedStore store, CacheKey key) =>
             store.Values.TryGetValue(key.Name, out var value)
-                ? new TestCacheEntry<T?> { Value = (T?)value, Expiration = DateTimeOffset.UtcNow.AddHours(1), Found = true }
+                ? new TestCacheEntry<T?> { Value = (T?)value, Expiration = DateTimeOffset.UtcNow + (store.Remaining.TryGetValue(key.Name, out var remaining) ? remaining : TimeSpan.FromHours(1)), Found = true }
                 : new TestCacheEntry<T?> { Expiration = DateTimeOffset.MinValue, Found = false };
 
         private ValueTask<bool> RemoveAfter(CacheKey[] keys)
@@ -484,7 +498,13 @@ internal sealed class CachePeers : IDisposable
             var (hold, ignoresCancellation) = (Hold, HoldIgnoresCancellation);
             Interlocked.Increment(ref _singleReads);
             await BeforeReadAsync(hold, ignoresCancellation, token);
-            return EntryFor<T>(Store, key);
+            var entry = EntryFor<T>(Store, key);
+            if (Interlocked.Exchange(ref _afterNextRead, null) is { } afterRead)
+            {
+                await afterRead;
+            }
+
+            return entry;
         }
 
         private async ValueTask<KeyValuePair<CacheKey, ICacheEntry<T?>>[]> ReadManyAsync<T>(CacheKey[] keys, CancellationToken token)

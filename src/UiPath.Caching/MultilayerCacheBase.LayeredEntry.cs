@@ -40,7 +40,7 @@ public abstract partial class MultilayerCacheBase
                 policy,
                 duration,
                 kind: shape.Kind,
-                rehydrateAsync: ct => flow.RehydrateAsync(originalCacheKey, entryExpiration, generator, policy, duration, rehydrateJitter, ct),
+                rehydrateAsync: (run, ct) => flow.RehydrateAsync(originalCacheKey, entryExpiration, generator, policy, duration, rehydrateJitter, run, ct),
                 entryType: shape.EntryType);
         }
 
@@ -50,13 +50,21 @@ public abstract partial class MultilayerCacheBase
                 ? shape.ReadInnerAsync(options, policy)
                 : FetchSharedInnerAsync(options, policy);
 
-        public void FillFromInnerRead(TOptions options, long mark, TValue value, CachePolicy policy) =>
-            cache._background.Fill(
+        /// <returns>Whether the value was kept locally; a fill an inner read lost the race for is not.</returns>
+        public bool FillFromInnerRead(TOptions options, long mark, TValue value, CachePolicy policy)
+        {
+            var kept = cache._background.Fill(
                 options.CacheKey.Name,
                 mark,
                 (Cache: cache, Shape: shape, Options: options, Value: value, Max: cache.LocalLifetime(policy), Policy: policy),
-                static s => s.Shape.KeepLocal(s.Options, s.Value, s.Max, s.Policy),
-                static s => s.Cache.LogInnerCopyNotKept(LoggedKey.For(s.Cache._masker, s.Options.CallerKey, s.Options.CacheKey.Name, s.Shape.EntryType)));
+                static s => s.Shape.KeepLocal(s.Options, s.Value, s.Max, s.Policy));
+            if (kept is null)
+            {
+                cache.LogInnerCopyNotKept(LoggedKey.For(cache._masker, options.CallerKey, options.CacheKey.Name, shape.EntryType));
+            }
+
+            return kept == true;
+        }
 
         /// <summary>Stores and announces the value, or only keeps it locally while the inner tier is disconnected.</summary>
         public async ValueTask<bool> StoreAsync(TOptions options, TValue value, bool disconnected, CachePolicy policy)
@@ -153,15 +161,20 @@ public abstract partial class MultilayerCacheBase
             return fetched;
         }
 
-        private void Keep(TOptions options, CachePolicy policy, ICacheEntry<TValue> fetched, long mark)
+        private bool Keep(TOptions options, CachePolicy policy, ICacheEntry<TValue> fetched, long mark)
         {
             shape.LogFoundInner(options);
             shape.Adopt(ref options, fetched);
-            FillFromInnerRead(options, mark, shape.Present(fetched.Value), policy);
+            return FillFromInnerRead(options, mark, shape.Present(fetched.Value), policy);
         }
 
-        private async ValueTask RehydrateAsync(CacheKey originalCacheKey, DateTimeOffset entryExpiration, Func<CancellationToken, Task<TValue>> generator, CachePolicy policy, TimeSpan duration, TimeSpan? rehydrateJitter, CancellationToken ct)
+        private async ValueTask RehydrateAsync(CacheKey originalCacheKey, DateTimeOffset entryExpiration, Func<CancellationToken, Task<TValue>> generator, CachePolicy policy, TimeSpan duration, TimeSpan? rehydrateJitter, RehydrateRun run, CancellationToken ct)
         {
+            if (await TryAdoptInnerAsync(originalCacheKey, entryExpiration, policy, duration, run, ct).ConfigureAwait(false))
+            {
+                return;
+            }
+
             var newValue = await generator(ct).ConfigureAwait(false);
             var empty = shape.IsEmpty(newValue);
             if (empty && !cache._multiLayerCacheOptions.CacheNullValues)
@@ -177,6 +190,70 @@ public abstract partial class MultilayerCacheBase
             {
                 throw new RehydrateWriteFailedException(originalCacheKey.Name);
             }
+        }
+
+        /// <summary>Keeps the inner tier's copy when another node already refreshed it, so the generator is not run again; true only when the copy was kept.</summary>
+        private async ValueTask<bool> TryAdoptInnerAsync(CacheKey originalCacheKey, DateTimeOffset entryExpiration, CachePolicy policy, TimeSpan duration, RehydrateRun run, CancellationToken ct)
+        {
+            if (shape.InnerIsNull || !shape.CanAdopt || cache.GetInnerCacheDisconnected())
+            {
+                return false;
+            }
+
+            var rehydrate = policy.Rehydrate!;
+            var options = shape.BuildOptions(originalCacheKey, entryExpiration, ct);
+            using var read = CancellationTokenSource.CreateLinkedTokenSource(ct);
+            var budget = RehydrationCoordinator.AdoptReadTimeout(rehydrate, duration);
+            read.CancelAfter(budget);
+            var mark = cache.MarkInnerRead(options.CacheKey.Name, options.TopicKey);
+            Task<ICacheEntry<TValue>>? reading = null;
+            ICacheEntry<TValue> fetched;
+            try
+            {
+                reading = shape.ReadForAdoptionAsync(options.WithToken(read.Token)).AsTask();
+                // The token alone does not bound a read that ignores it; an abandoned read is never kept, as nothing below runs for it.
+                fetched = await reading.WaitAsync(budget, cache._clock, ct).ConfigureAwait(false);
+            }
+            catch (Exception ex) when (!(ex is OperationCanceledException && ct.IsCancellationRequested))
+            {
+                read.Cancel();
+                reading?.Observe();
+                var timedOut = ex is TimeoutException or OperationCanceledException;
+                var logged = LoggedKey.For(cache._masker, originalCacheKey, shape.EntryType);
+                if (timedOut)
+                {
+                    cache.LogRehydrateInnerReadTimedOut(logged);
+                }
+                else
+                {
+                    cache.LogRehydrateInnerReadFailed(ex, logged);
+                }
+
+                cache._rehydrator.TrackAdoptReadFailed(rehydrate, shape.Kind, originalCacheKey, timedOut ? "timeout" : "error");
+                return false;
+            }
+
+            ct.ThrowIfCancellationRequested();
+            if (!fetched.Found || !InnerCopyFreshEnough(fetched.Expiration, cache._clock.GetUtcNow(), rehydrate.Threshold, duration))
+            {
+                return false;
+            }
+
+            try
+            {
+                if (!Keep(options, policy, fetched, mark))
+                {
+                    return false;
+                }
+            }
+            catch (Exception ex) when (!(ex is OperationCanceledException && ct.IsCancellationRequested))
+            {
+                cache.LogRehydrateAdoptFailed(ex, LoggedKey.For(cache._masker, originalCacheKey, shape.EntryType));
+                return false;
+            }
+
+            run.Adopt(originalCacheKey);
+            return true;
         }
     }
 }

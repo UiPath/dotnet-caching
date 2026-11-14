@@ -143,6 +143,10 @@ public abstract partial class MultilayerCacheBase : IDisposable
         GC.SuppressFinalize(this);
     }
 
+    /// <summary>An inner copy not yet past the rehydrate threshold: more than <c>(1 - threshold) * duration</c> left. A copy without a deadline is never fresh.</summary>
+    internal static bool InnerCopyFreshEnough(DateTimeOffset expiration, DateTimeOffset now, double threshold, TimeSpan duration) =>
+        expiration != DateTimeOffset.MaxValue && expiration - now > (1 - threshold) * duration;
+
     protected static TimeSpan ApplyJitter(TimeSpan duration, TimeSpan? maxJitter)
     {
         // TimeSpan.MaxValue means "no TTL"; jittering it would clamp it under the sentinel and back onto EXPIRE.
@@ -279,6 +283,15 @@ public abstract partial class MultilayerCacheBase : IDisposable
 
     [LoggerMessage(Level = LogLevel.Debug, Message = "Inner copy of {CacheKey} not kept locally: a write of it, or of a key sharing its stripe, came after the read began.")]
     private protected partial void LogInnerCopyNotKept(LoggedKey cacheKey);
+
+    [LoggerMessage(Level = LogLevel.Warning, Message = "Inner cache read before rehydrating cacheKey {CacheKey} failed; the value is generated instead.")]
+    private protected partial void LogRehydrateInnerReadFailed(Exception ex, LoggedKey cacheKey);
+
+    [LoggerMessage(Level = LogLevel.Debug, Message = "Inner cache read before rehydrating cacheKey {CacheKey} outlasted its budget; the value is generated instead.")]
+    private protected partial void LogRehydrateInnerReadTimedOut(LoggedKey cacheKey);
+
+    [LoggerMessage(Level = LogLevel.Warning, Message = "Keeping the inner copy of cacheKey {CacheKey} before rehydrating failed; the value is generated instead.")]
+    private protected partial void LogRehydrateAdoptFailed(Exception ex, LoggedKey cacheKey);
 
     [LoggerMessage(Level = LogLevel.Trace, Message = "Inner cache is not connected. Setting local only for cacheKey {CacheKey}")]
     private protected partial void LogSettingLocalOnly(LoggedKey cacheKey);
