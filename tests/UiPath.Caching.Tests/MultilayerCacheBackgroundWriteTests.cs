@@ -786,6 +786,8 @@ public class MultilayerCacheBackgroundWriteTests
 
         await h.Cache.DisposeAsync().AsTask().WaitAsync(TimeSpan.FromSeconds(10), Ct);
         await h.SettledAsync();
+        // The drain_cancelled event is sent after the write leaves the in-flight count.
+        await h.UntilAsync(() => Failures(h.Telemetry, "drain_cancelled") > 0);
 
         h.Telemetry.Received(1).TrackEvent("cache.background_write.failed", Arg.Is<TelemetryTags<string>>(t => Stage(t) == "drain_cancelled"), Arg.Any<TelemetryTags<double>>());
         h.Telemetry.DidNotReceive().TrackEvent("cache.background_write.failed", Arg.Is<TelemetryTags<string>>(t => Stage(t) == "write"), Arg.Any<TelemetryTags<double>>());
@@ -801,6 +803,8 @@ public class MultilayerCacheBackgroundWriteTests
 
         await h.Cache.DisposeAsync().AsTask().WaitAsync(TimeSpan.FromSeconds(10), Ct);
         await h.SettledAsync();
+        // The drain_cancelled event is sent after the write leaves the in-flight count.
+        await h.UntilAsync(() => Failures(h.Telemetry, "drain_cancelled") > 0);
 
         h.Telemetry.Received(1).TrackEvent("cache.background_write.failed", Arg.Is<TelemetryTags<string>>(t => Stage(t) == "drain_cancelled"), Arg.Any<TelemetryTags<double>>());
         h.Telemetry.DidNotReceive().TrackEvent("cache.background_write.failed", Arg.Is<TelemetryTags<string>>(t => Stage(t) == "write"), Arg.Any<TelemetryTags<double>>());
@@ -990,6 +994,10 @@ public class MultilayerCacheBackgroundWriteTests
     }
 
     private static string? Stage(TelemetryTags<string> tags) => tags.FirstOrDefault(t => t.Key == "stage").Value;
+
+    private static int Failures<T>(T telemetry, string stage)
+        where T : class =>
+        telemetry.ReceivedCalls().Count(c => c.GetMethodInfo().Name == "TrackEvent" && c.GetArguments() is ["cache.background_write.failed", TelemetryTags<string> tags, ..] && Stage(tags) == stage);
 
     private sealed class StepClock : TimeProvider
     {

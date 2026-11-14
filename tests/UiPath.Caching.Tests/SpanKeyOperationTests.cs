@@ -341,6 +341,9 @@ public class SpanKeyOperationTests
     [Fact]
     public async Task Warm_string_key_reads_on_a_cache_allocate_nothing()
     {
+#if DEBUG
+        Assert.Skip("allocation counts are only stable in Release");
+#endif
         using var cache = InMemoryMultilayer.Cache(new InMemoryCacheOptions { CacheKeyStrategy = new PrefixCacheKeyStrategy("tier") });
         (await cache.SetAsync<string>("user:42", "v", policy: null, Ct)).Should().BeTrue();
 
@@ -353,6 +356,9 @@ public class SpanKeyOperationTests
     [Fact]
     public async Task Warm_string_key_reads_on_a_hash_cache_allocate_nothing()
     {
+#if DEBUG
+        Assert.Skip("allocation counts are only stable in Release");
+#endif
         using var cache = InMemoryMultilayer.HashCache(new InMemoryCacheOptions { CacheKeyStrategy = new PrefixCacheKeyStrategy("tier") });
         var typed = new HashCache<string>(cache, new PrefixCacheKeyStrategy("app"));
         (await typed.SetAsync("user:42", new Dictionary<string, string?> { ["f"] = "v" }, Ct)).Should().BeTrue();

@@ -24,9 +24,11 @@ internal sealed class CachePeers : IDisposable
     /// <summary>When off, events wait in <see cref="Node.Published"/> for <see cref="Deliver"/>.</summary>
     public bool AutoDeliver { get; set; } = true;
 
-    public Node Add(string name, InMemoryRedisCacheOptions? options = null, RecordingTelemetryProvider? telemetry = null, TimeProvider? clock = null)
+    /// <param name="clock">The cache's clock; the system clock when null.</param>
+    /// <param name="localClock">The local tier's clock, for its expirations; the system clock when null.</param>
+    public Node Add(string name, InMemoryRedisCacheOptions? options = null, RecordingTelemetryProvider? telemetry = null, TimeProvider? clock = null, TimeProvider? localClock = null)
     {
-        var node = new Node(this, name, options ?? new InMemoryRedisCacheOptions(), telemetry, clock ?? TimeProvider.System);
+        var node = new Node(this, name, options ?? new InMemoryRedisCacheOptions(), telemetry, clock ?? TimeProvider.System, localClock ?? TimeProvider.System);
         _nodes.Add(node);
         return node;
     }
@@ -111,7 +113,7 @@ internal sealed class CachePeers : IDisposable
         private readonly RecordingTelemetryProvider? _telemetry;
         private int _evicted;
 
-        public Node(CachePeers peers, string name, InMemoryRedisCacheOptions options, RecordingTelemetryProvider? telemetry, TimeProvider clock)
+        public Node(CachePeers peers, string name, InMemoryRedisCacheOptions options, RecordingTelemetryProvider? telemetry, TimeProvider clock, TimeProvider localClock)
         {
             Name = name;
             _telemetry = telemetry;
@@ -131,7 +133,7 @@ internal sealed class CachePeers : IDisposable
             Cache = RunTables.Track(new MultilayerCache(
                 KnownCacheProviderNames.InMemoryRedis,
                 inner,
-                new KeptMemoryCacheFactory(this),
+                new KeptMemoryCacheFactory(this, localClock),
                 tokens,
                 topics,
                 events,
@@ -169,6 +171,9 @@ internal sealed class CachePeers : IDisposable
 
         /// <summary>Runs on the writing thread before an entry of the local tier commits, with its key, after the cache wired its token.</summary>
         public Action<string>? BeforeCommit { get; set; }
+
+        /// <summary>Runs once, as the next fail-safe value is committed to the local tier.</summary>
+        public Action? BeforeKept { get; set; }
 
         private NodeTopic Topic { get; }
 
@@ -222,9 +227,9 @@ internal sealed class CachePeers : IDisposable
             }
         }
 
-        private sealed class KeptMemoryCacheFactory(Node node) : IMemoryCacheFactory
+        private sealed class KeptMemoryCacheFactory(Node node, TimeProvider clock) : IMemoryCacheFactory
         {
-            private readonly MemoryCacheFactory _inner = new(TimeProvider.System, NullLoggerFactory.Instance);
+            private readonly MemoryCacheFactory _inner = new(clock, NullLoggerFactory.Instance);
 
             public IMemoryCache Get(IMemoryCacheOptions memoryOptions) => node.Local = new HookedMemoryCache(node, _inner.Get(memoryOptions));
         }
@@ -294,7 +299,16 @@ internal sealed class CachePeers : IDisposable
 
             public void Dispose()
             {
-                node.BeforeCommit?.Invoke((string)inner.Key);
+                if (inner.Key is string key)
+                {
+                    node.BeforeCommit?.Invoke(key);
+                }
+                else if (node.BeforeKept is { } kept)
+                {
+                    node.BeforeKept = null;
+                    kept();
+                }
+
                 foreach (var registration in inner.PostEvictionCallbacks)
                 {
                     var callback = registration.EvictionCallback;

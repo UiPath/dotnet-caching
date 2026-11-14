@@ -25,6 +25,26 @@ public class InMemoryCacheProviderTests(ITestContextAccessor testContextAccessor
     [Theory]
     [InlineData(true)]
     [InlineData(false)]
+    public void A_cache_without_a_size_limit_warns_for_a_fail_safe_policy(bool limited)
+    {
+        var logger = new FailSafeLifetimeWarningTests.WarningLogger();
+        _fixture.Freeze<Microsoft.Extensions.Logging.ILoggerFactory>().CreateLogger("InMemory").Returns(logger);
+        _options.Enabled = true;
+        _options.LocalMaxExpiration = TimeSpan.FromHours(1);
+        _options.SizeLimit = limited ? 1000 : null;
+        var factory = Substitute.For<ICachePolicyFactory>();
+        factory.Default.Returns(new CachePolicy { FailSafeEnabled = true });
+        factory.Keys.Returns([]);
+        _fixture.Inject(factory);
+
+        _ = Sut;
+
+        logger.Warnings.Should().HaveCount(limited ? 0 : 1);
+    }
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
     public async Task Broadcast_option(bool enabled)
     {
         _options.BroadcastEnable = enabled;

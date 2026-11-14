@@ -83,6 +83,18 @@ public sealed class CachePolicy
     /// </summary>
     public RehydrateOptions? Rehydrate { get; init; }
 
+    /// <summary>When a <c>GetOrAdd</c> generator throws, or runs past <see cref="FailSafeTimeout"/>, returns the value this node last held for the key instead. Multilayer caches only (<c>InMemoryRedis</c>, <c>InMemory</c>); batch calls and hash caches do not serve it. <c>null</c> inherits (default off).</summary>
+    public bool? FailSafeEnabled { get; init; }
+
+    /// <summary>How long after it expires locally a value can still be returned by fail-safe. <c>null</c> inherits (default 1 day).</summary>
+    public TimeSpan? FailSafeMaxStaleAge { get; init; }
+
+    /// <summary>After fail-safe returns a value, how long a <c>GetOrAdd</c> of the key keeps returning it without reading the inner tier or running the generator. <c>null</c> inherits (default 30 s).</summary>
+    public TimeSpan? FailSafeCooldown { get; init; }
+
+    /// <summary>With fail-safe and a value to fall back to, how long the generator runs before that value is returned; the generator then finishes in the background and its value is stored. <see cref="FactoryTimeout"/> still cancels it. <c>null</c> or zero waits for the generator (default).</summary>
+    public TimeSpan? FailSafeTimeout { get; init; }
+
     /// <summary>
     /// Lock settings. Merged field-level against the default policy's <see cref="LockProfile"/> —
     /// a named policy can override individual fields (e.g. <see cref="LockProfile.LocalSingleFlightEnabled"/>)

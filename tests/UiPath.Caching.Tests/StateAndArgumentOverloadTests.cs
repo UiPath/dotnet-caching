@@ -216,6 +216,9 @@ public class StateAndArgumentOverloadTests
     [Fact]
     public async Task A_warm_generated_state_hit_allocates_nothing_and_a_batch_argument_hit_less_than_a_capturing_lambda()
     {
+#if DEBUG
+        Assert.Skip("allocation counts are only stable in Release");
+#endif
         using var cache = InMemoryMultilayer.Cache();
         var request = new Request("a", 1);
         var loader = new Loader();

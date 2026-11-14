@@ -281,6 +281,20 @@ internal sealed class BackgroundWrites(int limit, TimeSpan drainTimeout, string 
         }
     }
 
+    /// <summary>Runs <paramref name="step"/> in the key's local turn, as <see cref="Apply"/> runs a change, without counting one: a fill from an earlier read is still kept.</summary>
+    public bool Exclusive<TState>(string key, TState state, Func<TState, bool> step)
+    {
+        if (!_counting)
+        {
+            return step(state);
+        }
+
+        lock (StripeLock(Stripe(key)))
+        {
+            return step(state);
+        }
+    }
+
     /// <summary>A peer's change of the key: a fill from a read begun before it is refused.</summary>
     public void Touch(string key)
     {

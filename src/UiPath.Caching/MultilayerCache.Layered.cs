@@ -28,8 +28,8 @@ internal sealed partial class MultilayerCache
 
         public bool KeepLocal(CacheEntryOptions options, T? value, TimeSpan? maxExpiration, CachePolicy policy) => cache.MemorySet(options, value, maxExpiration, null, policy, read: true);
 
-        public bool KeepWhileDisconnected(CacheEntryOptions options, T? value, TimeSpan? maxExpiration, ICacheEntry<T?>? entry) =>
-            cache.MemorySet(options, value, maxExpiration, entry, read: true);
+        public bool KeepWhileDisconnected(CacheEntryOptions options, T? value, TimeSpan? maxExpiration, ICacheEntry<T?>? entry, CachePolicy policy) =>
+            cache.MemorySet(options, value, maxExpiration, entry, read: true, failSafe: policy);
 
         public bool KeepWritten(BackgroundWrites.Keeper keeper, CacheEntryOptions options, T? value, TimeSpan? maxExpiration, ICacheEntry<T?>? entry, long version, CachePolicy policy) =>
             keeper.Local(options.CacheKey.Name, (Cache: cache, Options: options, Value: value, Max: maxExpiration, Entry: entry, Policy: policy), static s => s.Cache.MemorySet(s.Options, s.Value, s.Max, s.Entry, s.Policy, read: true));
@@ -45,6 +45,12 @@ internal sealed partial class MultilayerCache
         {
             try
             {
+                // A late fail-safe value checks in the key's turn that nothing removed or replaced the key since its generator started.
+                if (!cache.LateStillCurrent(options))
+                {
+                    return false;
+                }
+
                 return await cache._innerCache.SetAsync<T?>(options.CacheKey, value, options.Expiration, policy, options.Token).ConfigureAwait(false);
             }
             catch (Exception ex) when (keepRefused && !(ex is OperationCanceledException && options.Token.IsCancellationRequested))
