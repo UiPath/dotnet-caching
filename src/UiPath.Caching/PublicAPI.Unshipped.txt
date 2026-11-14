@@ -27,3 +27,7 @@ const UiPath.Caching.Metrics.FormatEffective = "cache.format.effective" -> strin
 const UiPath.Caching.Metrics.FormatFallback = "cache.format.fallback" -> string!
 const UiPath.Caching.Metrics.FormatNodes = "cache.format.nodes" -> string!
 const UiPath.Caching.Metrics.FormatViewAge = "cache.format.view.age" -> string!
+const UiPath.Caching.Metrics.SerializerRead = "cache.serializer.read" -> string!
+const UiPath.Caching.Metrics.SerializerRewrite = "cache.serializer.rewrite" -> string!
+const UiPath.Caching.Metrics.SerializerWrite = "cache.serializer.write" -> string!
+UiPath.Caching.Redis.RedisCacheProvider.CountFormatsAsync(string! keyPattern, System.Threading.CancellationToken token = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<System.Collections.Generic.IReadOnlyDictionary<string!, long>!>!

@@ -95,6 +95,21 @@ internal sealed partial class ConnectorKeyPrefix
         return Volatile.Read(ref _skippedBytes) is { } skipped ? skipped : configuredKey;
     }
 
+    /// <summary>
+    /// The prefix the connector's database prepends, as bytes, for a caller that escapes it itself: asked of the database's type, else of the server (<c>ECHO</c>),
+    /// else the configured one. Unlike <see cref="Get"/>, a prefix with glob characters is returned, and nothing is kept or logged.
+    /// </summary>
+    internal static async ValueTask<byte[]> ResolveBytesAsync(IDatabase database, string configured)
+    {
+        if (TryRead(database, out var read))
+        {
+            return read;
+        }
+
+        var echoed = await EchoAsync(database).ConfigureAwait(false);
+        return echoed is { Length: > 0 } ? echoed : Encoding.UTF8.GetBytes(configured);
+    }
+
     /// <summary>Recognizes StackExchange.Redis's own databases; a decorator around one reads as unknown.</summary>
     [SuppressMessage("SonarQube", "S3011:Reflection should not be used to increase accessibility of classes, methods, or fields", Justification = "The wrapper's Prefix is internal; a failed read falls back to the probe")]
     internal static bool TryRead(IDatabase database, out byte[] prefix)

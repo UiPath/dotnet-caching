@@ -641,6 +641,66 @@ An app with no Redis connection has no node list at all, and `write: true` write
 blocking nodes and the age of the view. Who blocks is kept off these metrics, whose tags are bounded: the node ids, or the Pub/Sub channels (or `(patterns)`) with a surplus or a deficit, are in a Warning log and on the separate `Caching.Stats.FormatBlockers`, each time the set
 changes. Those are as many values as there are nodes, so a backend that turns a metric's tags into dimensions will see them as one each: alert on the metric's value, not on its tags. A fallback of an event has no `policy` tag.
 
+### Migrating stored values to the new format
+
+Switching what a node writes leaves the values already in Redis in their old format. They still read, so nothing has to move, but a key stays in the old format until something writes it again. `Serializer.MigrateOnRead` moves them as they are read: a policy that sets it rewrites each value it reads from Redis into its `Write` format, in the background. There are no operator phases. The write switch is decided by the node list ([choosing when a format is written](#choosing-when-a-format-is-written)), and migration follows it.
+
+What it does:
+
+- **Upward only.** A value is rewritten when the format the policy configures is one this node may write now, and the value is stored in another format the policy reads: JSON, or a registered format the write serializer does not own (MessagePack plain and compressed are one serializer's, so neither is rewritten into the other). It is never rewritten toward JSON. While the node list holds the format back, nothing is rewritten, and a policy that writes JSON rewrites nothing. With `Mode = Force` the configured format is always the one that may be written.
+- **Only what a read found in Redis.** A value served from the local tier is never offered. A value outside the policy's `Read` list, or in an id nobody registered, is a miss as before and is never rewritten.
+- **Off the caller's path.** The read returns the value it read and queues the rewrite. A key is offered at most once a minute (a hash field, at most once a minute each), at most 100 offers are taken a second, 1024 rewrites wait, and what waits weighs at most 32 MiB; past any of these the offer is dropped and counted, and a later read offers the key again (a hash read stops offering at the first refusal, so what is left waits for a later read). The 100 a second is per process, so a fleet of N nodes puts up to N times that on Redis. A value over 256 KiB is not offered, and one hash rewrite carries at most 1 MiB of the fields it takes (a field that came out lossy, and waits, does not use it up); the rest waits for a later read or a write. These limits are fixed. The rewrite reads its own copy of the value from the bytes it was given, so what the caller does with the object it was returned does not reach Redis, and it asks the node list again right before it writes: if a node that cannot read the format has joined meanwhile, nothing is written and the value is counted `held`.
+- **Compare-and-set.** The rewrite replaces the bytes that were read only if the key still holds them, and keeps the TTL. A value written, deleted or rewritten by another node in between wins and is counted `changed`. A rewrite publishes no event, adds no stream entry and does not move `_version_`, since it changes no meaning: other nodes keep what they cached.
+- **Only if it comes out the same.** The value is encoded in the new format and compared with what was read. JSON must come back as the same JSON document (member order, layout and the spelling of a number do not count); a value in another registered format must serialize to the same bytes. The rewrite is read back and compared once more, so a serializer that cannot carry the type is found out before anything is written. A value that would come out different, or that the target serializer throws for, is left as it is and counted `lossy` (the exception is also logged as a Warning, once an interval): a read into a type with fewer members than the stored value has (or more, with a default filled in), a number or an enum stored as a string, a member the serializer leaves out when it is null, a document that repeats a property name. It stays in its format until the next write, and is not looked at again for an hour. A value that equals `default(T)` (`0`, `false`, a default struct) and an empty value (the cached null) are never offered, and `_version_` is never rewritten, so such keys stay in the old format until written, and a census counts them as it finds them. JSON written by a custom or subclassed JSON proxy is not looked at at all, since its bytes are not known to be JSON.
+- **Hashes, per field.** Each user field is decided on its own, and is offered on its own: fields in another readable format are rewritten together, fields already in the write format are left, a field that changed meanwhile is skipped alone, and a hash read one field at a time migrates one field at a time. A field named like a system one (`_word_`), left by an older version, is left. A hash with a field the call cannot read misses whole, and nothing in it is rewritten. `_metadata_` is not part of a rewrite: it keeps the format the hash was last written in, and the metrics and the census below ignore it. Peer fields exist only in events, which a rewrite never publishes.
+- **Scripts.** A rewrite sends a script only where `ReadScriptsEnabled` is on, and goes back to a transaction for good once the server refuses the script. That setting is named for reads but also decides this; rewrites have no switch of their own. Unlike a read, which needs Redis 7, the rewrite script runs on Redis 6 too, and it needs a user that may run `EVAL` and `EVALSHA` and write: `EVAL_RO` and `EVALSHA_RO` are not enough, and that refusal is what moves it to the transaction. The script hashes the value on the server, about a millisecond for the largest. The transaction fetches the value to compare it, then sends the new one.
+- **Shutdown.** What is queued is dropped, and a rewrite in flight is cancelled if it has not yet sent its command; one that has been sent completes, and a rewrite is a single compare-and-set, so nothing is left half-written. A failure caused by the shutdown is logged at Debug. Failures are otherwise logged once, then once every 30 seconds with how many followed.
+- **One `Write` for the whole fleet.** Nodes configured with different `Write` formats and `MigrateOnRead` on rewrite each other's values back and forth: each reads the other's format as one to migrate. Compare-and-set and the once-a-minute offer per key bound it, but it is wasted load that never drains. Give every node the same `Write` before turning `MigrateOnRead` on.
+- **Not everywhere.** The distributed-cache provider (`AddDistributedCache`) registers no serializer, so `MigrateOnRead` does nothing for it, and neither does it for an app with no serializer registered; no warning is logged.
+
+#### Metrics and alerts
+
+An app with a serializer registered counts every value it reads or writes, and what became of each rewrite:
+
+| Metric | Tags | Counts |
+|---|---|---|
+| `cache.serializer.read` | `format`, `cache` (`Redis` for strings, `RedisHash` for hashes) | A value read from Redis (a field, for a hash) by the format it was stored in: `json`, or the name its serializer is registered under. |
+| `cache.serializer.write` | `format`, `cache` | A value written (a field, for a hash), by format. `json` while the node list holds the format back. |
+| `cache.serializer.rewrite` | `outcome`, `cache` | An offered value, by `done`, `changed` (the key moved on first), `lossy` (it would not come out the same, or the target serializer threw for it), `held` (the node list held the format back by the time it was to be written), `ratelimited`, `dropped` (a limit reached, or shutting down) or `failed`. A hash counts `done`, `changed`, `lossy` and `held` by field, and the others by field offered. `ratelimited` and `dropped` are reported once a second at most, as a count, not once per read. |
+
+`cache.serializer.unreadable` and `cache.format.*` ([telemetry of the switch](#telemetry-of-the-switch)) keep their meaning. Alert on:
+
+- `cache.serializer.rewrite` with `outcome` `failed` above zero for several minutes: Redis refused or timed out a rewrite, with a Warning in the log. Values keep reading, and nothing is lost.
+- `cache.serializer.unreadable` rising after the switch: a node cannot read a format, as after a rollback or a deploy that lost the registration.
+- `cache.format.effective` at 0 for the format you set, long after the node list should agree: no migration starts while it holds.
+
+Watch, without alerting: `ratelimited` and `dropped` mean reads find values faster than they are rewritten, so the drain takes longer, which is harmless; `lossy` counts values that cannot migrate and stay in their format until written; `changed` is hot keys.
+
+#### Telling when the old format is gone
+
+Two readings, taken together:
+
+- **What is stored.** `RedisCacheProvider.CountFormatsAsync` scans for the keys of a name pattern and counts strings and hashes by format. Get the provider from the container and ask with the names you call the caches with; it derives the keys from the same key strategy the caches use (`orders:*` is `{app}:s:orders:*` for strings and `{app}:h:orders:*` for hashes, cased as the caches case them), under the connector's prefix:
+
+  ```csharp
+  var redis = services.GetServices<ICacheProvider>().OfType<RedisCacheProvider>().Single();
+  var counts = await redis.CountFormatsAsync("orders:*", cancellationToken);
+  // { "json": 18234, "messagepack": 1203412 }   ("unknown" is CacheValueFormats.UnknownName)
+  ```
+
+  A headerless value counts as `json` (`CacheValueFormats.JsonName`), a registered id under its serializer's name, and anything else as `unknown`. A string counts once. A hash is counted once under each format any of its user fields is in, so a hash with fields in two formats appears under both, the counts can add up to more than the keys, and `json` at zero means no field is left in JSON (the question a drain asks); `_version_` and `_metadata_` are not looked at. A hash is sampled, not counted whole: its first 256 user fields in HSCAN order, a hundred to a page, so one of more than 256 fields can still hold JSON in a field the census did not reach. A pattern is a SCAN glob over the names, so `*` and `?` match as they do in Redis, and the glob characters of what the key strategy adds (the connector's key prefix, the application name, the separators) are escaped, so an application called `app[1]` is not read as `app1`. The scan runs on every primary, one after the other, with at most 32 commands in flight, and walks the whole keyspace of each twice (once for strings, once for hashes, 500 keys a page); run it off peak. The token is checked between pages. Other key types and empty values are not counted, and a key that moves between shards during a reshard can be counted twice. The obsolete shard-tag key strategy needs a pattern that carries its own `{tag}`.
+- **What is still read.** `cache.serializer.read` with `format` `json` falls to zero as the values are rewritten or expire. It shows what the fleet depends on now, which a scan taken once does not.
+
+The old format is drained when the census shows no `json` and `cache.serializer.read` shows none over a window as long as your longest `DistributedExpiration`. Values that are `lossy`, equal to `default(T)`, or over the size limit leave only by a write or by expiry; when only those remain, stop waiting, since they read as they always did. Draining does not retire the JSON decoder: under `Auto`, `Read` must keep `json`, because the writer falls back to it.
+
+#### Rolling back
+
+Rolling back to a build that cannot read the format needs no step. As soon as a node that cannot read it joins, the node list holds the format back, so the new nodes write JSON again and rewrite nothing. The old nodes miss on the values already migrated and the generator writes them back as JSON, as for any value they cannot read (see [rolling a serializer out](#rolling-a-serializer-out)); an old node never rewrites upward. A value that no old node ever reads stays in the new format, and still reads on the new nodes. Under `Force`, or with `AssumeAllNodesCanRead`, nothing holds the format back, so turn `MigrateOnRead` off before rolling back: otherwise a node that can read the format keeps rewriting the JSON the old nodes write. Turning it off stops migrating at all; what was rewritten stays rewritten.
+
+#### Events never retire JSON
+
+Migration moves values, never events. An event is read for a moment and is not stored, so there is nothing to drain and the census does not see it. The event decoders read JSON and binary for good: what was written before a fall back, or replayed from a stream backlog, still decodes, and a node before 3.2 skips a binary event silently. Keep the JSON event decoder, even when every value is migrated. See [events](#events).
+
 See also: [how-to/extending.md#value-serializers](how-to/extending.md#value-serializers).
 
 ---
