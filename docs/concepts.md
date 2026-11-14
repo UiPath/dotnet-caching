@@ -490,6 +490,58 @@ See also: [how-to/resilience.md#named-policies](how-to/resilience.md#named-polic
 
 ---
 
+## Value serializers and the format header
+
+Values are JSON unless a policy says otherwise; a call with no policy takes the default policy's choice. A
+policy that sets `Serializer.Write` to a registered serializer writes its values in that serializer's format, behind a one-byte *format id*; JSON has no header,
+and no JSON text starts with a byte a header can be. The reader looks at the first byte: a format id picks
+the serializer registered for it, anything else is JSON. It does this whatever the reading policy writes, so
+a key written as JSON, then MessagePack, then JSON again reads correctly each time. Hash fields and a hash's
+`_metadata_` field follow the same rule; `_version_` stays a plain number and is never inspected.
+
+The reader looks only where it can tell a header from caller bytes, and only when a serializer is registered.
+It does so when the cache's serializer is the default `SystemJsonByteSerializerProxy` itself, or when the
+call's effective policy writes a serializer other than JSON: its own `Serializer.Write`, else the default
+policy's, compared without regard to case. `Write = "json"` does not open it, and neither does what
+`Serializer.Read` lists. A subclass, a custom `ISerializerProxy<byte[]>` and `RawByteSerializerProxy` (which
+`AddDistributedCache` uses) keep their bytes as they are otherwise, so a stored `byte[]` that starts with
+`0x02` reads back unchanged, also under a policy that writes JSON or lists other formats to read.
+
+A hash write that names a serializer leaves out `_metadata_` when the metadata is empty and nulls are not
+cached; the entry then reads with no metadata rather than an empty dictionary, and a `HashReplace` write also
+deletes the field an earlier write left, in the same transaction as the fields (a replacement too large for one command is
+written in chunks and deletes it right after). The JSON default keeps writing it. Events stay JSON for every policy, and a peer that applies another node's field update decodes the field
+bytes by their header like any other read, with the gate its own policy for that key sets. Where serializers are registered and
+the key's policy is not known to the peer, it does not apply the update and reads the hash instead.
+
+### Rolling a serializer out
+
+Reading comes first, writing second. Every node from 3.2.0 reads every registered format; nothing writes a
+new one until a policy sets `Serializer`, so set it only after every node runs 3.2.0 or later with the
+serializer registered.
+
+A node that cannot read a format treats the value as a miss, and what happens to the key depends on why:
+
+- A node before 3.2.0, or a 3.2.0 node with no serializer registered, hits a `JsonException` (logged at
+  Warning) and keeps the key; the generator rewrites it as JSON. In a batch read one `JsonException` misses
+  every key of the batch, and a hash misses whole, its `_metadata_` included.
+- A 3.2.0 node with a serializer registered, reading an id none of its serializers owns, removes the key and
+  counts it in `cache.serializer.unreadable`, but only if the key still holds the bytes it read. A newer value
+  another node wrote in between, or a lagging replica's stale read, survives the removal. A hash with such a
+  field misses whole and is left in place, still counted: removing it could drop what another node just
+  wrote, and removing the one field would leave the rest looking like a complete hash.
+- A registered serializer that throws on a value it owns is a logged miss, and the key stays, as for JSON that
+  does not parse. The bytes may be good for another version of the type that other nodes still run during a
+  rolling deploy, and a serializer disposed at shutdown says nothing about the data. This departs from the
+  design spec, which removed such a value. An `OutOfMemoryException` from a registered serializer's payload is never treated as a failed read: it propagates from `Get`, `GetOrAdd` and the hash reads instead of becoming a miss that runs the generator. A value with no header (JSON) behaves as it does with no serializer registered, so an `OutOfMemoryException` there is a logged miss.
+
+All of it shows up as factory load and churn during the deploy, never as a wrong value. Switching a policy back
+to JSON is safe at any time: new writes are JSON and the older values still read.
+
+See also: [how-to/extending.md#value-serializers](how-to/extending.md#value-serializers).
+
+---
+
 ## Telemetry
 
 `ICachingTelemetryProvider` is the instrumentation seam. The library never takes

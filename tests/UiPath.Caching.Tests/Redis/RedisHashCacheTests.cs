@@ -1384,8 +1384,8 @@ public class RedisHashCacheTests(ITestContextAccessor testContextAccessor) : IAs
         byte[] shared = [1, 2, 3];
         var encoded = new Dictionary<string, byte[]?> { ["a"] = shared };
 
-        Sut.TryDecodeFields<byte[]>(encoded, out var first).Should().BeTrue();
-        Sut.TryDecodeFields<byte[]>(encoded, out var second).Should().BeTrue();
+        Sut.TryDecodeFields<byte[]>(encoded, policy: null, out var first).Should().BeTrue();
+        Sut.TryDecodeFields<byte[]>(encoded, policy: null, out var second).Should().BeTrue();
 
         first!["a"].Should().Equal(shared).And.NotBeSameAs(shared);
         second!["a"].Should().NotBeSameAs(first["a"]).And.NotBeSameAs(shared);
