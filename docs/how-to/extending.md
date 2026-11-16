@@ -228,7 +228,8 @@ JSON `null` literal, following the contract note below. Both read back as `defau
 `RawByteSerializerProxy` exists because an `IDistributedCache`
 payload is caller bytes that the caller has already serialized: base64-ing them would cost a third
 again in size for no benefit, and a consumer who swaps in MessagePack should not have their session
-bytes re-encoded. Neither implementation sniffs the payload — the requested type argument decides.
+bytes re-encoded. Neither implementation inspects the payload — the requested type argument decides. A
+format that is not JSON belongs in a [value serializer](#value-serializers), which tags what it writes.
 
 You can register `RawByteSerializerProxy` app-wide to get raw byte storage everywhere, but that *is*
 a wire-format change: it returns stored bytes as-is rather than base64-decoding them, so a 1.x
@@ -432,6 +433,90 @@ o.RedisKeyStrategyFactory = new MyRedisKeyStrategyFactory();   // gets "dh" (or 
 
 Left null it inherits the application's own `RedisCacheOptions.RedisKeyStrategyFactory`, so
 `AppShortName`, the separator and sharding behave as they do everywhere else.
+
+### Value serializers
+
+`ICacheValueSerializer` is the seam for a format that is not JSON: MessagePack, MemoryPack, a compressing
+wrapper. It writes into the buffer the library hands it, and the library puts a one-byte format id in front
+of what it wrote. The reader picks the serializer by that id, not by the policy's current choice, so a
+policy can switch formats at any time and the values already stored still read.
+
+```csharp
+using System.Buffers;
+using MessagePack;
+using UiPath.Caching;
+
+public sealed class MessagePackValueSerializer(MessagePackSerializerOptions? options = null) : ICacheValueSerializer
+{
+    public IReadOnlyList<int> FormatIds { get; } = [0x10];
+
+    public int Serialize<T>(T value, IBufferWriter<byte> target)
+    {
+        MessagePackSerializer.Serialize(target, value, options);
+        return 0x10;
+    }
+
+    public T? Deserialize<T>(int formatId, ReadOnlySequence<byte> source) =>
+        MessagePackSerializer.Deserialize<T>(source, options);
+}
+```
+
+Register it by name and choose it per policy:
+
+```csharp
+services.AddCaching(
+    b =>
+    {
+        b.AddRedis(_ => { });
+        b.AddValueSerializer("msgpack", _ => new MessagePackValueSerializer());
+    },
+    o => o.Policies["Sessions"] = new CachePolicy { Serializer = new SerializerPolicy { Write = "msgpack" } });
+```
+
+A policy without `Serializer` keeps writing JSON, exactly as before. `Write` accepts a registered name or
+`json`, and a name nobody registered fails when the policies are built; a policy passed to a single call
+that names an unregistered serializer throws `OptionsValidationException` on that call, before anything is
+written.
+
+Rules a serializer follows:
+
+- **Format ids.** A serializer lists the ids it writes in `FormatIds`, all with the same header length.
+  Consumer serializers take `0x10`-`0x1E` (one byte) or `0x100`-`0x1FF` (the marker byte `0x1F`, then the low
+  byte). `0x01`-`0x0F`, except `0x09`, `0x0A` and `0x0D`, belong to the library. Every other first byte,
+  including `0x00`, JSON whitespace (`0x09`, `0x0A`, `0x0D`) and `0x20` onward, is JSON, which has no header. An
+  id is never reused: a leftover value written under a retired id would be misread by whatever took it over.
+- **`Serialize` returns the id it wrote**, one of `FormatIds`; a serializer that picks between a plain and a
+  compressed id says which after it has written.
+- **Never write zero bytes.** An empty payload means a cached null.
+- **Never retain `source`.** `Deserialize` receives a sequence over a buffer the library owns and reclaims
+  when the call returns, so copy what you keep.
+- **Handle null.** A single value that is null never reaches `Serialize`, but a hash field can be null while
+  nulls are not cached; write something `Deserialize` maps back to `default` (MessagePack's nil does).
+
+What a node does with a value it cannot read depends on why:
+
+- **An id no registered serializer owns** is data no node with this registry can read. It is a miss, the key
+  is removed (best effort) only if it still holds the bytes that were read, `cache.serializer.unreadable`
+  counts it and the generator runs. A newer value written in between survives. A node with no serializer
+  registered does not look for ids: it logs a `JsonException` miss and keeps the key.
+- **A registered serializer that throws** is a logged miss and the key stays, as for JSON that does not parse:
+  the bytes may be good for another version of the type that other nodes run during a rolling deploy.
+  An `OutOfMemoryException` from a registered serializer's payload is never treated as a failed read; one from a value with no header (JSON) is a logged miss, as with no serializer registered.
+- **A hash with such a field** misses as a whole and is left in place; an unknown id is still counted.
+
+Update the nodes that read before any policy writes a new format: a node that cannot read one keeps missing
+and regenerating until it is updated.
+
+Under a policy that writes a serializer, reads of a custom app-wide `ISerializerProxy<byte[]>` look for a
+format header, so the shared keys of such a policy must not also be written by that proxy: a byte it writes
+first that happens to be a format id would be handed to the wrong reader. The gate is this. With the default
+JSON proxy, every read looks for a header once a serializer is registered. With a custom proxy, a subclass or
+`RawByteSerializerProxy`, a read looks only when the call's effective policy (its own `Serializer.Write`, else
+the default policy's) writes a serializer other than `json`, compared without regard to case. `Write = "json"`
+and `Serializer.Read` do not open it, so such a proxy's values, and what `AddDistributedCache` stores, are never
+inspected under them.
+
+A policy that sets no `Serializer` takes the default policy's `Write`, and one that sets only `Read` does too.
 
 ## Swapping the default factories
 

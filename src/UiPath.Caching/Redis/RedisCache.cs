@@ -27,6 +27,8 @@ internal sealed partial class RedisCache : RedisCacheBase, ICache, IInvalidation
     private readonly int _largeValueThreshold;
     private readonly bool _cacheNullValues;
     private readonly ConcurrentDictionary<Type, object> _generations = new();
+    private ValueSerializerRegistry _valueSerializers = ValueSerializerRegistry.Empty;
+    private ValueFormatResolver _formats;
 
     public RedisCache(
         IRedisConnector redis,
@@ -46,6 +48,7 @@ internal sealed partial class RedisCache : RedisCacheBase, ICache, IInvalidation
         _logReadScriptUnavailable = LogReadScriptUnavailable;
         _serializer = serializer;
         _memorySerializer = serializer as IMemorySerializerProxy;
+        _formats = new ValueFormatResolver(serializer, ValueSerializerRegistry.Empty, DefaultPolicy);
         _read = new ConnectingPipeline(redis, resiliencePipelineProvider.Get(ResiliencePipelineNames.Read));
         _write = new ConnectingPipeline(redis, resiliencePipelineProvider.Get(ResiliencePipelineNames.Write));
         _largeValueThreshold = cacheOptions.LargeValueThreshold;
@@ -61,31 +64,44 @@ internal sealed partial class RedisCache : RedisCacheBase, ICache, IInvalidation
 
     public string Name => KnownCacheProviderNames.Redis;
 
-    internal ValueSerializerRegistry ValueSerializers { get; init; } = ValueSerializerRegistry.Empty;
+    internal ValueSerializerRegistry ValueSerializers
+    {
+        get => _valueSerializers;
+        init
+        {
+            _valueSerializers = value;
+            _formats = new ValueFormatResolver(_serializer, value, DefaultPolicy);
+        }
+    }
 
     [OverloadResolutionPriority(1)]
     public ValueTask<T?> GetAsync<T>(CacheKey cacheKey, CachePolicy? policy, CancellationToken token = default)
     {
         NotCacheableException.ThrowIfNotCacheable<T>();
-        return GetAsync<T>(ToRedisKey(cacheKey, token), token);
+        var format = FormatFor(policy, forWrite: false);
+        var redisKey = ToRedisKey(cacheKey, token);
+        return format.Sniff ? GetAsync<T, ValueFormat>(redisKey, format, token) : GetAsync<T, PlainFormat>(redisKey, default, token);
     }
 
     public ValueTask<KeyValuePair<CacheKey, T?>[]> GetAsync<T>(CacheKey[] cacheKeys, CachePolicy? policy, CancellationToken token = default)
     {
         NotCacheableException.ThrowIfNotCacheable<T>();
-        return GetAsyncInternal<T>(cacheKeys, token);
+        var format = FormatFor(policy, forWrite: false);
+        return format.Sniff ? GetAsyncInternal<T, ValueFormat>(cacheKeys, format, token) : GetAsyncInternal<T, PlainFormat>(cacheKeys, default, token);
     }
 
     public ValueTask<ICacheEntry<T?>> GetCacheEntryAsync<T>(CacheKey cacheKey, CachePolicy? policy, CancellationToken token = default)
     {
         NotCacheableException.ThrowIfNotCacheable<T>();
-        return GetCacheEntryInternalAsync<T>(cacheKey, token);
+        var format = FormatFor(policy, forWrite: false);
+        return format.Sniff ? GetCacheEntryInternalAsync<T, ValueFormat>(cacheKey, format, token) : GetCacheEntryInternalAsync<T, PlainFormat>(cacheKey, default, token);
     }
 
     public ValueTask<KeyValuePair<CacheKey, ICacheEntry<T?>>[]> GetCacheEntriesAsync<T>(CacheKey[] cacheKeys, CachePolicy? policy, CancellationToken token = default)
     {
         NotCacheableException.ThrowIfNotCacheable<T>();
-        return GetCacheEntriesInternalAsync<T>(cacheKeys, token);
+        var format = FormatFor(policy, forWrite: false);
+        return format.Sniff ? GetCacheEntriesInternalAsync<T, ValueFormat>(cacheKeys, format, token) : GetCacheEntriesInternalAsync<T, PlainFormat>(cacheKeys, default, token);
     }
 
     public ValueTask<T?> GetOrAddAsync<T>(CacheKey cacheKey, Func<CancellationToken, Task<T?>> generator, CachePolicy? policy, CancellationToken token = default)
@@ -146,14 +162,20 @@ internal sealed partial class RedisCache : RedisCacheBase, ICache, IInvalidation
     {
         NotCacheableException.ThrowIfNotCacheable<T>();
         ArgumentNullException.ThrowIfNull(generator);
-        return GetOrAddGeneratedAsync(cacheKey, ToRedisKey(cacheKey, token), generator, static (g, ct) => g(ct), policy, token);
+        var format = FormatFor(policy, forWrite: true);
+        return format.IsDefault
+            ? GetOrAddGeneratedAsync(cacheKey, ToRedisKey(cacheKey, token), generator, static (g, ct) => g(ct), policy, default(PlainFormat), token)
+            : GetOrAddGeneratedAsync(cacheKey, ToRedisKey(cacheKey, token), generator, static (g, ct) => g(ct), policy, format, token);
     }
 
     public ValueTask<T?> GetOrAddWithExpirationAsync<T, TState>(CacheKey cacheKey, TState state, Func<TState, CancellationToken, Task<GeneratedValue<T>>> generator, CachePolicy? policy, CancellationToken token = default)
     {
         NotCacheableException.ThrowIfNotCacheable<T>();
         ArgumentNullException.ThrowIfNull(generator);
-        return GetOrAddGeneratedAsync(cacheKey, ToRedisKey(cacheKey, token), state, generator, policy, token);
+        var format = FormatFor(policy, forWrite: true);
+        return format.IsDefault
+            ? GetOrAddGeneratedAsync(cacheKey, ToRedisKey(cacheKey, token), state, generator, policy, default(PlainFormat), token)
+            : GetOrAddGeneratedAsync(cacheKey, ToRedisKey(cacheKey, token), state, generator, policy, format, token);
     }
 
     public ValueTask<bool> RefreshAsync<T>(CacheKey cacheKey, CachePolicy? policy, CancellationToken token = default) =>
@@ -177,31 +199,31 @@ internal sealed partial class RedisCache : RedisCacheBase, ICache, IInvalidation
     }
 
     public ValueTask<bool> SetAsync<T>(CacheKey cacheKey, T? value, CachePolicy? policy, CancellationToken token = default) =>
-        SetCoreAsync(cacheKey, value, PolicyDuration(policy), token);
+        SetCoreAsync(cacheKey, value, PolicyDuration(policy), policy, token);
 
     public ValueTask<bool> SetAsync<T>(CacheKey cacheKey, T? value, TimeSpan expiration, CachePolicy? policy, CancellationToken token = default) =>
-        SetCoreAsync(cacheKey, value, CallerDuration(expiration), token);
+        SetCoreAsync(cacheKey, value, CallerDuration(expiration), policy, token);
 
     public ValueTask<bool> SetAsync<T>(CacheKey cacheKey, T? value, DateTimeOffset expiration, CachePolicy? policy, CancellationToken token = default) =>
-        SetCoreAsync(cacheKey, value, CallerDuration(expiration), token);
+        SetCoreAsync(cacheKey, value, CallerDuration(expiration), policy, token);
 
     public ValueTask<bool> SetAsync<T>(KeyValuePair<CacheKey, T?>[] keyValues, CachePolicy? policy, CancellationToken token = default) =>
-        SetCoreAsync(keyValues, PolicyDuration(policy), token);
+        SetCoreAsync(keyValues, PolicyDuration(policy), policy, token);
 
     public ValueTask<bool> SetAsync<T>(KeyValuePair<CacheKey, T?>[] keyValues, TimeSpan expiration, CachePolicy? policy, CancellationToken token = default) =>
-        SetCoreAsync(keyValues, CallerDuration(expiration), token);
+        SetCoreAsync(keyValues, CallerDuration(expiration), policy, token);
 
     public ValueTask<bool> SetAsync<T>(KeyValuePair<CacheKey, T?>[] keyValues, DateTimeOffset expiration, CachePolicy? policy, CancellationToken token = default) =>
-        SetCoreAsync(keyValues, CallerDuration(expiration), token);
+        SetCoreAsync(keyValues, CallerDuration(expiration), policy, token);
 
     public ValueTask<bool> TryAddAsync<T>(CacheKey cacheKey, T? value, CachePolicy? policy, CancellationToken token = default) =>
-        TryAddCoreAsync(cacheKey, value, PolicyDuration(policy), token);
+        TryAddCoreAsync(cacheKey, value, PolicyDuration(policy), policy, token);
 
     public ValueTask<bool> TryAddAsync<T>(CacheKey cacheKey, T? value, TimeSpan expiration, CachePolicy? policy, CancellationToken token = default) =>
-        TryAddCoreAsync(cacheKey, value, CallerDuration(expiration), token);
+        TryAddCoreAsync(cacheKey, value, CallerDuration(expiration), policy, token);
 
     public ValueTask<bool> TryAddAsync<T>(CacheKey cacheKey, T? value, DateTimeOffset expiration, CachePolicy? policy, CancellationToken token = default) =>
-        TryAddCoreAsync(cacheKey, value, CallerDuration(expiration), token);
+        TryAddCoreAsync(cacheKey, value, CallerDuration(expiration), policy, token);
 
     public ValueTask<bool> ContainsAsync<T>(CacheKey cacheKey, CancellationToken token = default)
     {
@@ -397,22 +419,33 @@ internal sealed partial class RedisCache : RedisCacheBase, ICache, IInvalidation
         return ret;
     }
 
-    private ValueTask<bool> SetCoreAsync<T>(CacheKey cacheKey, T? value, TimeSpan duration, CancellationToken token)
+    private ValueTask<bool> SetCoreAsync<T>(CacheKey cacheKey, T? value, TimeSpan duration, CachePolicy? policy, CancellationToken token)
     {
         NotCacheableException.ThrowIfNotCacheable<T>();
-        return SetInternalAsync(cacheKey, ToRedisKey(cacheKey, token), value, duration, token);
+        var redisKey = ToRedisKey(cacheKey, token);
+        var format = FormatFor(policy, forWrite: true);
+        return format.Writer is null
+            ? SetInternalAsync(cacheKey, redisKey, value, duration, default(PlainFormat), token)
+            : SetInternalAsync(cacheKey, redisKey, value, duration, format, token);
     }
 
-    private ValueTask<bool> SetCoreAsync<T>(KeyValuePair<CacheKey, T?>[] keyValues, TimeSpan duration, CancellationToken token)
+    private ValueTask<bool> SetCoreAsync<T>(KeyValuePair<CacheKey, T?>[] keyValues, TimeSpan duration, CachePolicy? policy, CancellationToken token)
     {
         NotCacheableException.ThrowIfNotCacheable<T>();
-        return SetInternalAsync(keyValues, duration, token);
+        var format = FormatFor(policy, forWrite: true);
+        return format.Writer is null
+            ? SetInternalAsync(keyValues, duration, default(PlainFormat), token)
+            : SetInternalAsync(keyValues, duration, format, token);
     }
 
-    private ValueTask<bool> TryAddCoreAsync<T>(CacheKey cacheKey, T? value, TimeSpan duration, CancellationToken token)
+    private ValueTask<bool> TryAddCoreAsync<T>(CacheKey cacheKey, T? value, TimeSpan duration, CachePolicy? policy, CancellationToken token)
     {
         NotCacheableException.ThrowIfNotCacheable<T>();
-        return TryAddInternalAsync(cacheKey, ToRedisKey(cacheKey, token), value, duration, token);
+        var redisKey = ToRedisKey(cacheKey, token);
+        var format = FormatFor(policy, forWrite: true);
+        return format.Writer is null
+            ? TryAddInternalAsync(cacheKey, redisKey, value, duration, default(PlainFormat), token)
+            : TryAddInternalAsync(cacheKey, redisKey, value, duration, format, token);
     }
 
     private ValueTask<T?> GetOrAddCoreAsync<T, TState>(CacheKey cacheKey, TState state, Func<TState, CancellationToken, Task<T?>> generator, TimeSpan duration, CachePolicy? policy, CancellationToken token)
@@ -420,21 +453,26 @@ internal sealed partial class RedisCache : RedisCacheBase, ICache, IInvalidation
         NotCacheableException.ThrowIfNotCacheable<T>();
         ArgumentNullException.ThrowIfNull(generator);
         var redisKey = ToRedisKey(cacheKey, token);
-        return GetOrAddInternalAsync(cacheKey, redisKey, state, generator, (policy ?? DefaultPolicy)?.FactoryTimeout, duration, token);
+        var format = FormatFor(policy, forWrite: true);
+        return format.IsDefault
+            ? GetOrAddInternalAsync(cacheKey, redisKey, state, generator, (policy ?? DefaultPolicy)?.FactoryTimeout, duration, default(PlainFormat), token)
+            : GetOrAddInternalAsync(cacheKey, redisKey, state, generator, (policy ?? DefaultPolicy)?.FactoryTimeout, duration, format, token);
     }
 
-    private ValueTask<T?> GetOrAddInternalAsync<T, TState>(CacheKey cacheKey, RedisKey redisKey, TState state, Func<TState, CancellationToken, Task<T?>> generator, TimeSpan? factoryTimeout, TimeSpan expiration, CancellationToken token)
+    private ValueTask<T?> GetOrAddInternalAsync<T, TState, TFormat>(CacheKey cacheKey, RedisKey redisKey, TState state, Func<TState, CancellationToken, Task<T?>> generator, TimeSpan? factoryTimeout, TimeSpan expiration, TFormat format, CancellationToken token)
+        where TFormat : struct, IValueFormat
     {
         NotCacheableException.ThrowIfNotCacheable<T>();
-        return ShareGenerationAsync<T, (RedisCache Cache, CacheKey Key, RedisKey RedisKey, TState State, Func<TState, CancellationToken, Task<T?>> Generator, TimeSpan? FactoryTimeout, TimeSpan Expiration)>(
+        return ShareGenerationAsync<T, (RedisCache Cache, CacheKey Key, RedisKey RedisKey, TState State, Func<TState, CancellationToken, Task<T?>> Generator, TimeSpan? FactoryTimeout, TimeSpan Expiration, TFormat Format)>(
             redisKey,
-            (this, cacheKey, redisKey, state, generator, factoryTimeout, expiration),
-            static (args, run) => args.Cache.GenerateAndStoreAsync(args.Key, args.RedisKey, args.State, args.Generator, args.FactoryTimeout, args.Expiration, run),
+            (this, cacheKey, redisKey, state, generator, factoryTimeout, expiration, format),
+            static (args, run) => args.Cache.GenerateAndStoreAsync(args.Key, args.RedisKey, args.State, args.Generator, args.FactoryTimeout, args.Expiration, args.Format, run),
             token);
     }
 
     /// <summary>The work of a shared run, which ends the run itself (see <see cref="IInFlightEnd{TResult}"/>): out of the table with its result or failure before its task completes.</summary>
-    private async ValueTask<T?> GenerateAndStoreAsync<T, TState>(CacheKey cacheKey, RedisKey redisKey, TState state, Func<TState, CancellationToken, Task<T?>> generator, TimeSpan? factoryTimeout, TimeSpan expiration, IInFlightEnd<T?> run)
+    private async ValueTask<T?> GenerateAndStoreAsync<T, TState, TFormat>(CacheKey cacheKey, RedisKey redisKey, TState state, Func<TState, CancellationToken, Task<T?>> generator, TimeSpan? factoryTimeout, TimeSpan expiration, TFormat format, IInFlightEnd<T?> run)
+        where TFormat : struct, IValueFormat
     {
         T? ret;
         try
@@ -450,18 +488,16 @@ internal sealed partial class RedisCache : RedisCacheBase, ICache, IInvalidation
                 var operation = StartOperation<T>(nameof(GetOrAddAsync));
                 try
                 {
-                    var value = await _read.ExecuteAsync(static (s, token) =>
+                    var value = await ReadStringAsync(redisKey, token).ConfigureAwait(false);
+                    (found, cached, var unreadable) = InterpretReadResult<T, TFormat>(value, format);
+                    if (unreadable != 0)
                     {
-                        token.ThrowIfCancellationRequested();
-                        return s.Self.Database.StringGetAsync(s.Key, s.Self.ReadFlagsFor(s.Key)).AsValueTask();
-                    },
-                    (Self: this, Key: redisKey),
-                    RedisValue.Null,
-                    token).ConfigureAwait(false);
-                    (found, cached) = InterpretReadResult<T>(value);
+                        await RemoveUnreadableAsync<T>(redisKey, value, unreadable, token).ConfigureAwait(false);
+                    }
+
                     operation.Stop();
                 }
-                catch (Exception ex)
+                catch (Exception ex) when (format.Handles(ex))
                 {
                     operation.Stop();
                     LogRedisCacheException(ex);
@@ -483,7 +519,7 @@ internal sealed partial class RedisCache : RedisCacheBase, ICache, IInvalidation
                 LogCacheMissed(Logged(cacheKey, redisKey, typeof(T)));
                 ret = await RunGeneratorAsync(cacheKey, state, generator, factoryTimeout, token).ConfigureAwait(false);
 
-                if ((!IsDefault(ret) || _cacheNullValues) && await SetInternalAsync(cacheKey, redisKey, ret, expiration, token).ConfigureAwait(false))
+                if ((!IsDefault(ret) || _cacheNullValues) && await SetInternalAsync(cacheKey, redisKey, ret, expiration, format, token).ConfigureAwait(false))
                 {
                     run.Expiration = StoredDeadline(expiration);
                 }
@@ -511,21 +547,23 @@ internal sealed partial class RedisCache : RedisCacheBase, ICache, IInvalidation
     private InFlight<HashedRedisKey, T?> GenerationsOf<T>() =>
         (InFlight<HashedRedisKey, T?>)_generations.GetOrAdd(typeof(T), static _ => new InFlight<HashedRedisKey, T?>());
 
-    private ValueTask<T?> GetOrAddGeneratedAsync<T, TState>(CacheKey cacheKey, RedisKey redisKey, TState state, Func<TState, CancellationToken, Task<GeneratedValue<T>>> generator, CachePolicy? policy, CancellationToken token) =>
-        ShareGenerationAsync<T, (RedisCache Cache, CacheKey Key, RedisKey RedisKey, TState State, Func<TState, CancellationToken, Task<GeneratedValue<T>>> Generator, CachePolicy? Policy)>(
+    private ValueTask<T?> GetOrAddGeneratedAsync<T, TState, TFormat>(CacheKey cacheKey, RedisKey redisKey, TState state, Func<TState, CancellationToken, Task<GeneratedValue<T>>> generator, CachePolicy? policy, TFormat format, CancellationToken token)
+        where TFormat : struct, IValueFormat =>
+        ShareGenerationAsync<T, (RedisCache Cache, CacheKey Key, RedisKey RedisKey, TState State, Func<TState, CancellationToken, Task<GeneratedValue<T>>> Generator, CachePolicy? Policy, TFormat Format)>(
             redisKey,
-            (this, cacheKey, redisKey, state, generator, policy),
-            static (args, run) => args.Cache.GenerateExpiringAndStoreAsync(args.Key, args.RedisKey, args.State, args.Generator, args.Policy, run),
+            (this, cacheKey, redisKey, state, generator, policy, format),
+            static (args, run) => args.Cache.GenerateExpiringAndStoreAsync(args.Key, args.RedisKey, args.State, args.Generator, args.Policy, args.Format, run),
             token);
 
-    /// <summary>As <see cref="GenerateAndStoreAsync{T, TState}"/>, for a generator that returns the value's deadline; ends the run itself.</summary>
-    private async ValueTask<T?> GenerateExpiringAndStoreAsync<T, TState>(CacheKey cacheKey, RedisKey redisKey, TState state, Func<TState, CancellationToken, Task<GeneratedValue<T>>> generator, CachePolicy? policy, IInFlightEnd<T?> run)
+    /// <summary>As <see cref="GenerateAndStoreAsync{T, TState, TFormat}"/>, for a generator that returns the value's deadline; ends the run itself.</summary>
+    private async ValueTask<T?> GenerateExpiringAndStoreAsync<T, TState, TFormat>(CacheKey cacheKey, RedisKey redisKey, TState state, Func<TState, CancellationToken, Task<GeneratedValue<T>>> generator, CachePolicy? policy, TFormat format, IInFlightEnd<T?> run)
+        where TFormat : struct, IValueFormat
     {
         T? ret;
         try
         {
             var token = run.Token;
-            var (found, cached) = await ReadGetOrAddProbeAsync<T>(redisKey, token).ConfigureAwait(false);
+            var (found, cached) = await ReadGetOrAddProbeAsync<T, TFormat>(redisKey, format, token).ConfigureAwait(false);
             if (found)
             {
                 // The probe reads no TTL; a result call that joined this run reads it itself.
@@ -539,7 +577,7 @@ internal sealed partial class RedisCache : RedisCacheBase, ICache, IInvalidation
 
                 var duration = generated.Expiration is { } expiration ? Remaining(expiration) : PolicyDuration(policy);
                 if (duration is { } lifetime && (!IsDefault(generated.Value) || _cacheNullValues)
-                    && await SetInternalAsync(cacheKey, redisKey, generated.Value, lifetime, token).ConfigureAwait(false))
+                    && await SetInternalAsync(cacheKey, redisKey, generated.Value, lifetime, format, token).ConfigureAwait(false))
                 {
                     run.Expiration = StoredDeadline(lifetime);
                 }
@@ -574,8 +612,15 @@ internal sealed partial class RedisCache : RedisCacheBase, ICache, IInvalidation
             : FactoryTimeout.RunAsync(ct => generator(state, ct), factoryTimeout, cacheKey, Name, Telemetry, token);
 
     /// <summary>Borrowed memory is safe here because every write awaits its command and the connection copies the value while writing it; pooled memory goes back only then.</summary>
-    private (RedisValue Value, SerializedPayload Payload) SerializeValue<T>(T? value)
+    private (RedisValue Value, SerializedPayload Payload) SerializeValue<T, TFormat>(T? value, TFormat format)
+        where TFormat : struct, IValueFormat
     {
+        if (format.Writer is { } writer)
+        {
+            var headered = SerializedPayload.Serialize(writer, _valueSerializers.FormatIdsOf(writer).Span, value!);
+            return (headered.Memory, headered);
+        }
+
         if (_memorySerializer is { } memory)
         {
             var payload = SerializedPayload.Serialize(memory, value);
@@ -589,22 +634,72 @@ internal sealed partial class RedisCache : RedisCacheBase, ICache, IInvalidation
     /// <c>CacheNullValues</c> is on); non-empty -> deserialize. Legacy round-trip to <c>default(T)</c>
     /// is also treated as a miss when the option is off.
     /// </summary>
-    private (bool Found, T? Value) InterpretReadResult<T>(RedisValue value)
+    private (bool Found, T? Value, int Unreadable) InterpretReadResult<T, TFormat>(RedisValue value, TFormat format)
+        where TFormat : struct, IValueFormat
     {
         if (value.IsNull)
         {
-            return (false, default);
+            return (false, default, 0);
         }
-        var deserialized = value.Length() == 0 ? default : _serializer.Deserialize<T>(value);
+
+        T? deserialized;
+        if (value.Length() == 0)
+        {
+            deserialized = default;
+        }
+        else if (format.Sniff)
+        {
+            var outcome = _formats.Reader!.Read<T>(((byte[]?)value)!);
+            if (outcome.IsMiss)
+            {
+                if (outcome.Failure is { } failure)
+                {
+                    LogRedisCacheException(failure);
+                }
+
+                return (false, default, outcome.UnreadableFormat);
+            }
+
+            deserialized = outcome.Value;
+        }
+        else
+        {
+            deserialized = _serializer.Deserialize<T>(value);
+        }
+
         if (!_cacheNullValues && IsDefault(deserialized))
         {
-            return (false, default);
+            return (false, default, 0);
         }
-        return (true, deserialized);
+        return (true, deserialized, 0);
     }
 
+    /// <summary>As <see cref="InterpretReadResult{T, TFormat}"/>, for one value of a batch: a format no serializer owns joins <paramref name="unreadableKeys"/>, which the batch drops after it has reported.</summary>
+    private (bool Found, T? Value) InterpretBatchRead<T, TFormat>(RedisKey redisKey, RedisValue value, TFormat format, ref List<(RedisKey Key, RedisValue Read, int FormatId)>? unreadableKeys)
+        where TFormat : struct, IValueFormat
+    {
+        var (found, deserialized, unreadable) = InterpretReadResult<T, TFormat>(value, format);
+        if (unreadable != 0)
+        {
+            (unreadableKeys ??= []).Add((redisKey, value, unreadable));
+        }
+
+        return (found, deserialized);
+    }
+
+    private ValueTask<RedisValue> ReadStringAsync(RedisKey redisKey, CancellationToken token) =>
+        _read.ExecuteAsync(static (s, token) =>
+        {
+            token.ThrowIfCancellationRequested();
+            return s.Self.Database.StringGetAsync(s.Key, s.Self.ReadFlagsFor(s.Key)).AsValueTask();
+        },
+        (Self: this, Key: redisKey),
+        RedisValue.Null,
+        token);
+
     // GenerateAndStoreAsync carries an inlined copy of this read; a change to one goes in both.
-    private async ValueTask<(bool Found, T? Value)> ReadGetOrAddProbeAsync<T>(RedisKey redisKey, CancellationToken token)
+    private async ValueTask<(bool Found, T? Value)> ReadGetOrAddProbeAsync<T, TFormat>(RedisKey redisKey, TFormat format, CancellationToken token)
+        where TFormat : struct, IValueFormat
     {
         token.ThrowIfCancellationRequested();
 
@@ -618,18 +713,16 @@ internal sealed partial class RedisCache : RedisCacheBase, ICache, IInvalidation
         T? deserialized = default;
         try
         {
-            var value = await _read.ExecuteAsync(static (s, token) =>
+            var value = await ReadStringAsync(redisKey, token).ConfigureAwait(false);
+            (found, deserialized, var unreadable) = InterpretReadResult<T, TFormat>(value, format);
+            if (unreadable != 0)
             {
-                token.ThrowIfCancellationRequested();
-                return s.Self.Database.StringGetAsync(s.Key, s.Self.ReadFlagsFor(s.Key)).AsValueTask();
-            },
-            (Self: this, Key: redisKey),
-            RedisValue.Null,
-            token).ConfigureAwait(false);
-            (found, deserialized) = InterpretReadResult<T>(value);
+                await RemoveUnreadableAsync<T>(redisKey, value, unreadable, token).ConfigureAwait(false);
+            }
+
             operation.Stop();
         }
-        catch (Exception ex)
+        catch (Exception ex) when (format.Handles(ex))
         {
             operation.Stop();
             LogRedisCacheException(ex);
@@ -642,7 +735,8 @@ internal sealed partial class RedisCache : RedisCacheBase, ICache, IInvalidation
         return (found, deserialized);
     }
 
-    private async ValueTask<bool> SetInternalAsync<T>(CacheKey cacheKey, RedisKey redisKey, T? value, TimeSpan expiration, CancellationToken token)
+    private async ValueTask<bool> SetInternalAsync<T, TFormat>(CacheKey cacheKey, RedisKey redisKey, T? value, TimeSpan expiration, TFormat format, CancellationToken token)
+        where TFormat : struct, IValueFormat
     {
         bool ret = default;
         token.ThrowIfCancellationRequested();
@@ -677,7 +771,7 @@ internal sealed partial class RedisCache : RedisCacheBase, ICache, IInvalidation
             }
             else
             {
-                var (serialized, payload) = SerializeValue(value);
+                var (serialized, payload) = SerializeValue(value, format);
                 _auditKeySize?.Invoke(Logged(cacheKey, redisKey, typeof(T)), serialized);
                 using (payload)
                 {
@@ -707,7 +801,8 @@ internal sealed partial class RedisCache : RedisCacheBase, ICache, IInvalidation
         return ret;
     }
 
-    private async ValueTask<bool> SetInternalAsync<T>(KeyValuePair<CacheKey, T?>[] keyValues, TimeSpan expiration, CancellationToken token)
+    private async ValueTask<bool> SetInternalAsync<T, TFormat>(KeyValuePair<CacheKey, T?>[] keyValues, TimeSpan expiration, TFormat format, CancellationToken token)
+        where TFormat : struct, IValueFormat
     {
         bool ret = default;
         token.ThrowIfCancellationRequested();
@@ -726,8 +821,8 @@ internal sealed partial class RedisCache : RedisCacheBase, ICache, IInvalidation
             await EnsureConnectedAsync(_write, token).ConfigureAwait(false);
             var committed = await PerSlotAsync(
                 SlotGroups(redisKeys, _logger),
-                (Self: this, KeyValues: keyValues, Keys: redisKeys, Payloads: payloads, Expiration: expiration, Token: token),
-                static (s, group) => s.Self.SetSlotAsync(s.KeyValues, s.Keys, s.Payloads, group, s.Expiration, s.Token),
+                (Self: this, KeyValues: keyValues, Keys: redisKeys, Payloads: payloads, Expiration: expiration, Format: format, Token: token),
+                static (s, group) => s.Self.SetSlotAsync(s.KeyValues, s.Keys, s.Payloads, group, s.Expiration, s.Format, s.Token),
                 false,
                 LogRedisCacheException).ConfigureAwait(false);
             ret = Array.TrueForAll(committed, static c => c);
@@ -752,7 +847,8 @@ internal sealed partial class RedisCache : RedisCacheBase, ICache, IInvalidation
     }
 
     /// <summary>One transaction for the keys of one slot; it serializes into <paramref name="payloads"/>, which the caller disposes.</summary>
-    private ValueTask<bool> SetSlotAsync<T>(KeyValuePair<CacheKey, T?>[] keyValues, RedisKey[] redisKeys, SerializedPayload[] payloads, int[] group, TimeSpan expiration, CancellationToken token)
+    private ValueTask<bool> SetSlotAsync<T, TFormat>(KeyValuePair<CacheKey, T?>[] keyValues, RedisKey[] redisKeys, SerializedPayload[] payloads, int[] group, TimeSpan expiration, TFormat format, CancellationToken token)
+        where TFormat : struct, IValueFormat
     {
         var transaction = Database.CreateTransaction(asyncState: null);
         foreach (var i in group)
@@ -772,7 +868,7 @@ internal sealed partial class RedisCache : RedisCacheBase, ICache, IInvalidation
             }
             else
             {
-                (var serialized, payloads[i]) = SerializeValue(value);
+                (var serialized, payloads[i]) = SerializeValue(value, format);
                 _auditKeySize?.Invoke(Logged(keyValues[i].Key, redisKey, typeof(T)), serialized);
                 transaction.StringSetAsync(redisKey, serialized, expiration, When.Always, CommandFlags.DemandMaster).Forget();
             }
@@ -793,7 +889,8 @@ internal sealed partial class RedisCache : RedisCacheBase, ICache, IInvalidation
     /// Safe to retry — an attempt whose reply was lost is refused by the key it just wrote, and
     /// reports the same <c>false</c> the exception would have.
     /// </summary>
-    private async ValueTask<bool> TryAddInternalAsync<T>(CacheKey cacheKey, RedisKey redisKey, T? value, TimeSpan expiration, CancellationToken token)
+    private async ValueTask<bool> TryAddInternalAsync<T, TFormat>(CacheKey cacheKey, RedisKey redisKey, T? value, TimeSpan expiration, TFormat format, CancellationToken token)
+        where TFormat : struct, IValueFormat
     {
         bool ret = default;
         token.ThrowIfCancellationRequested();
@@ -818,7 +915,7 @@ internal sealed partial class RedisCache : RedisCacheBase, ICache, IInvalidation
             else
             {
                 NoteWritten(redisKey);
-                var (serialized, payload) = isNull ? (RedisValue.EmptyString, default(SerializedPayload)) : SerializeValue(value);
+                var (serialized, payload) = isNull ? (RedisValue.EmptyString, default(SerializedPayload)) : SerializeValue(value, format);
                 _auditKeySize?.Invoke(Logged(cacheKey, redisKey, typeof(T)), serialized);
                 using (payload)
                 {
@@ -926,7 +1023,8 @@ internal sealed partial class RedisCache : RedisCacheBase, ICache, IInvalidation
         return ret;
     }
 
-    private async ValueTask<T?> GetAsync<T>(RedisKey redisKey, CancellationToken token)
+    private async ValueTask<T?> GetAsync<T, TFormat>(RedisKey redisKey, TFormat format, CancellationToken token)
+        where TFormat : struct, IValueFormat
     {
         T? ret = default;
         bool found = false;
@@ -937,22 +1035,20 @@ internal sealed partial class RedisCache : RedisCacheBase, ICache, IInvalidation
             return default;
         }
 
-        var operation = StartOperation<T>();
+        var operation = StartOperation<T>(nameof(GetAsync));
 
         try
         {
-            var value = await _read.ExecuteAsync(static (s, token) =>
+            var value = await ReadStringAsync(redisKey, token).ConfigureAwait(false);
+            (found, ret, var unreadable) = InterpretReadResult<T, TFormat>(value, format);
+            if (unreadable != 0)
             {
-                token.ThrowIfCancellationRequested();
-                return s.Self.Database.StringGetAsync(s.Key, s.Self.ReadFlagsFor(s.Key)).AsValueTask();
-            },
-            (Self: this, Key: redisKey),
-            RedisValue.Null,
-            token).ConfigureAwait(false);
-            (found, ret) = InterpretReadResult<T>(value);
+                await RemoveUnreadableAsync<T>(redisKey, value, unreadable, token).ConfigureAwait(false);
+            }
+
             operation.Stop();
         }
-        catch (Exception ex)
+        catch (Exception ex) when (format.Handles(ex))
         {
             operation.Stop();
             LogRedisCacheException(ex);
@@ -965,7 +1061,8 @@ internal sealed partial class RedisCache : RedisCacheBase, ICache, IInvalidation
         return ret;
     }
 
-    private async ValueTask<KeyValuePair<CacheKey, T?>[]> GetAsyncInternal<T>(CacheKey[] keys, CancellationToken token)
+    private async ValueTask<KeyValuePair<CacheKey, T?>[]> GetAsyncInternal<T, TFormat>(CacheKey[] keys, TFormat format, CancellationToken token)
+        where TFormat : struct, IValueFormat
     {
         KeyValuePair<CacheKey, T?>[] retValues = new KeyValuePair<CacheKey, T?>[keys.Length];
         token.ThrowIfCancellationRequested();
@@ -978,8 +1075,9 @@ internal sealed partial class RedisCache : RedisCacheBase, ICache, IInvalidation
         {
             return GetDefaultValues<T>(keys);
         }
-        var operation = StartOperation<T>();
+        var operation = StartOperation<T>(nameof(GetAsyncInternal));
         var reads = InitReads(redisKeys);
+        List<(RedisKey Key, RedisValue Read, int FormatId)>? unreadableKeys = null;
         try
         {
             await EnsureConnectedAsync(_read, token).ConfigureAwait(false);
@@ -1010,14 +1108,14 @@ internal sealed partial class RedisCache : RedisCacheBase, ICache, IInvalidation
                 for (var j = 0; j < group.Length; j++)
                 {
                     var i = group[j];
-                    var (found, obj) = InterpretReadResult<T>(values[j]);
+                    var (found, obj) = InterpretBatchRead<T, TFormat>(redisKeys[i], values[j], format, ref unreadableKeys);
                     reads[i].Hit = found;
                     retValues[i] = new KeyValuePair<CacheKey, T?>(keys[i], obj);
                 }
             }
             operation.Stop();
         }
-        catch (Exception ex)
+        catch (Exception ex) when (format.Handles(ex))
         {
             operation.Stop();
             LogRedisCacheException(ex);
@@ -1029,10 +1127,16 @@ internal sealed partial class RedisCache : RedisCacheBase, ICache, IInvalidation
             TrackPerKey(operation, reads);
         }
 
+        if (unreadableKeys is not null)
+        {
+            await RemoveUnreadableAsync<T, TFormat>(unreadableKeys, format, token).ConfigureAwait(false);
+        }
+
         return retValues;
     }
 
-    private async ValueTask<ICacheEntry<T?>> GetCacheEntryInternalAsync<T>(CacheKey cacheKey, CancellationToken token, string methodName = nameof(GetCacheEntryInternalAsync))
+    private async ValueTask<ICacheEntry<T?>> GetCacheEntryInternalAsync<T, TFormat>(CacheKey cacheKey, TFormat format, CancellationToken token, string methodName = nameof(GetCacheEntryInternalAsync))
+        where TFormat : struct, IValueFormat
     {
         token.ThrowIfCancellationRequested();
         var redisKey = ToRedisKey(cacheKey, token);
@@ -1086,17 +1190,20 @@ internal sealed partial class RedisCache : RedisCacheBase, ICache, IInvalidation
             }
 
             var (value, expiration) = result.Value;
-            var (found, deserialized) = InterpretReadResult<T>(value);
-            if (!found)
+            var (found, deserialized, unreadable) = InterpretReadResult<T, TFormat>(value, format);
+            if (found)
             {
-                operation.Stop();
-                return ret;
+                ret = _cacheEntryFactory.Create<T?>(deserialized, Clock.ToDateTimeOffset(expiration));
             }
 
-            ret = _cacheEntryFactory.Create<T?>(deserialized, Clock.ToDateTimeOffset(expiration));
+            if (unreadable != 0)
+            {
+                await RemoveUnreadableAsync<T>(redisKey, value, unreadable, token).ConfigureAwait(false);
+            }
+
             operation.Stop();
         }
-        catch (Exception ex)
+        catch (Exception ex) when (format.Handles(ex))
         {
             operation.Stop();
             LogRedisCacheException(ex);
@@ -1109,7 +1216,8 @@ internal sealed partial class RedisCache : RedisCacheBase, ICache, IInvalidation
         return ret;
     }
 
-    private async ValueTask<KeyValuePair<CacheKey, ICacheEntry<T?>>[]> GetCacheEntriesInternalAsync<T>(CacheKey[] keys, CancellationToken token)
+    private async ValueTask<KeyValuePair<CacheKey, ICacheEntry<T?>>[]> GetCacheEntriesInternalAsync<T, TFormat>(CacheKey[] keys, TFormat format, CancellationToken token)
+        where TFormat : struct, IValueFormat
     {
         token.ThrowIfCancellationRequested();
         if (keys.Length == 0)
@@ -1122,9 +1230,10 @@ internal sealed partial class RedisCache : RedisCacheBase, ICache, IInvalidation
             return GetDefaultEntries<T>(keys);
         }
 
-        var operation = StartOperation<T>();
+        var operation = StartOperation<T>(nameof(GetCacheEntriesInternalAsync));
         var retValues = GetDefaultEntries<T>(keys);
         var reads = InitReads(redisKeys);
+        List<(RedisKey Key, RedisValue Read, int FormatId)>? unreadableKeys = null;
         try
         {
             await EnsureConnectedAsync(_read, token).ConfigureAwait(false);
@@ -1158,7 +1267,7 @@ internal sealed partial class RedisCache : RedisCacheBase, ICache, IInvalidation
                 for (var j = 0; j < group.Length; j++)
                 {
                     var i = group[j];
-                    var (found, deserialized) = InterpretReadResult<T>(values[j]);
+                    var (found, deserialized) = InterpretBatchRead<T, TFormat>(redisKeys[i], values[j], format, ref unreadableKeys);
                     if (!found)
                     {
                         continue;
@@ -1171,7 +1280,7 @@ internal sealed partial class RedisCache : RedisCacheBase, ICache, IInvalidation
             }
             operation.Stop();
         }
-        catch (Exception ex)
+        catch (Exception ex) when (format.Handles(ex))
         {
             operation.Stop();
             LogRedisCacheException(ex);
@@ -1181,6 +1290,11 @@ internal sealed partial class RedisCache : RedisCacheBase, ICache, IInvalidation
         finally
         {
             TrackPerKey(operation, reads);
+        }
+
+        if (unreadableKeys is not null)
+        {
+            await RemoveUnreadableAsync<T, TFormat>(unreadableKeys, format, token).ConfigureAwait(false);
         }
 
         return retValues;
