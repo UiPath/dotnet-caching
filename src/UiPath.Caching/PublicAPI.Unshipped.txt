@@ -22,6 +22,7 @@ UiPath.Caching.Redis.FormatNegotiationOptions.ViewInterval.get -> System.TimeSpa
 UiPath.Caching.Redis.FormatNegotiationOptions.ViewInterval.set -> void
 UiPath.Caching.Redis.RedisCacheOptions.FormatNegotiation.get -> UiPath.Caching.Redis.FormatNegotiationOptions!
 UiPath.Caching.Redis.RedisCacheOptions.FormatNegotiation.set -> void
+const UiPath.Caching.Metrics.FormatBlockers = "Caching.Stats.FormatBlockers" -> string!
 const UiPath.Caching.Metrics.FormatEffective = "cache.format.effective" -> string!
 const UiPath.Caching.Metrics.FormatFallback = "cache.format.fallback" -> string!
 const UiPath.Caching.Metrics.FormatNodes = "cache.format.nodes" -> string!

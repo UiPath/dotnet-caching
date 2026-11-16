@@ -1,9 +1,10 @@
+using UiPath.Caching.Negotiation;
 using UiPath.Caching.Policies;
 using UiPath.Caching.Telemetry;
 
 namespace UiPath.Caching.Broadcast.Redis;
 
-public class RedisPubSubTopicProvider : RedisTopicProviderBase
+public class RedisPubSubTopicProvider : RedisTopicProviderBase, IPubSubSubscriptions
 {
     private readonly RedisPubSubTopicOptions _options;
     private readonly IEventFormatterProxy<ICacheEvent> _formatter;
@@ -38,15 +39,32 @@ public class RedisPubSubTopicProvider : RedisTopicProviderBase
         Enabled = _options.Enabled;
     }
 
+    private event Action? SubscriptionConfirmed;
+
     public override string Name => KnownTopicNames.RedisPubSub;
 
     public override bool Enabled { get; }
+
+    IReadOnlyList<string> IPubSubSubscriptions.Channels() =>
+        [.. Topics().Where(topic => topic.Countable).Select(topic => topic.ChannelName).Distinct(StringComparer.Ordinal)];
+
+    IReadOnlyList<string> IPubSubSubscriptions.Uncountable() =>
+        [.. Topics().Where(topic => !topic.Countable).Select(topic => topic.ChannelName).Distinct(StringComparer.Ordinal)];
+
+    // Each channel once: a connection holds one subscription to a channel, whatever the topics listening on it.
+    IReadOnlyDictionary<string, int> IPubSubSubscriptions.Confirmed() =>
+        Topics().Where(topic => topic.Countable && topic.IsSubscribed).Select(topic => topic.ChannelName).Distinct(StringComparer.Ordinal).ToDictionary(channel => channel, _ => 1, StringComparer.Ordinal);
+
+    int IPubSubSubscriptions.Patterns() =>
+        Topics().Where(topic => topic.IsPattern && topic.IsSubscribed).Select(topic => topic.ChannelName).Distinct(StringComparer.Ordinal).Count();
+
+    void IPubSubSubscriptions.WhenConfirmed(Action handler) => SubscriptionConfirmed += handler;
 
     protected override ITopic<ICacheEvent> CreateInternalTopic(TopicKey topicKey)
     {
         var resolved = ResolveOptions(topicKey) ?? _options;
         var strategy = resolved.RedisChannelStrategy ?? _defaultChannelStrategy;
-        return new RedisPubSubTopic<ICacheEvent>(
+        var topic = new RedisPubSubTopic<ICacheEvent>(
             topicKey,
             _sourceUri,
             ConnectionState,
@@ -58,6 +76,8 @@ public class RedisPubSubTopicProvider : RedisTopicProviderBase
             resolved,
             LoggerFactory.Create<RedisPubSubTopic<ICacheEvent>>(),
             _stopTokenSource.Token);
+        topic.Subscribed += () => SubscriptionConfirmed?.Invoke();
+        return topic;
     }
 
     protected override void Dispose(bool disposing)
@@ -75,6 +95,8 @@ public class RedisPubSubTopicProvider : RedisTopicProviderBase
 
         base.Dispose(disposing);
     }
+
+    private IEnumerable<RedisPubSubTopic<ICacheEvent>> Topics() => CreatedTopics().OfType<RedisPubSubTopic<ICacheEvent>>();
 
     private RedisPubSubTopicOptions? ResolveOptions(TopicKey topicKey) =>
         _registry.Resolve(topicKey, _options.Clone, _logger);

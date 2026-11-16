@@ -830,7 +830,7 @@ public class MessagePackEventFormatterTests
                 b =>
                 {
                     b.AddRedisConnection(o => o.ConnectionString = "127.0.0.1:1");
-                    b.AddRedis();
+                    b.AddRedis(o => o.FormatNegotiation.Mode = FormatNegotiationMode.Force);
                     b.AddBroadcast();
                     if (configureFirst)
                     {
@@ -843,7 +843,11 @@ public class MessagePackEventFormatterTests
                         configure(b);
                     }
                 },
-                o => o.SourceUri = Source)
+                o =>
+                {
+                    o.AppShortName = "mp";
+                    o.SourceUri = Source;
+                })
             .BuildServiceProvider();
 
     private class DisposableFormatter : IEventFormatterProxy<ICacheEvent>, IDisposable, IAsyncDisposable
