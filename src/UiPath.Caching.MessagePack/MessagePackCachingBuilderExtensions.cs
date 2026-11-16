@@ -22,7 +22,7 @@ public static class MessagePackCachingBuilderExtensions
 
         var options = new MessagePackValueSerializerOptions();
         configure?.Invoke(options);
-        return builder.AddLibraryValueSerializer(name, _ => new MessagePackValueSerializer(options));
+        return builder.AddValueSerializer(name, MessagePackFormats.ValueIds, _ => new MessagePackValueSerializer(options));
     }
 
     /// <summary>Reads binary and JSON events; <paramref name="write"/> true writes binary once every live node can read it, false always writes JSON.</summary>

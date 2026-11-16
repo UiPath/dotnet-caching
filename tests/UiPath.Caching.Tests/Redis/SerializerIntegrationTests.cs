@@ -341,13 +341,13 @@ public class SerializerIntegrationTests(RedisContainerFixture fixture)
                     switch (registry)
                     {
                         case "fast":
-                            b.AddValueSerializer("fast", _ => _serializer);
+                            b.AddValueSerializer("fast", _serializer.FormatIds, _ => _serializer);
                             break;
                         case "other":
-                            b.AddValueSerializer("other", _ => new PassthroughValueSerializer(0x12));
+                            b.AddValueSerializer("other", [0x12], _ => new PassthroughValueSerializer(0x12));
                             break;
                         case "throwing":
-                            b.AddValueSerializer("bad", _ => new ThrowingValueSerializer());
+                            b.AddValueSerializer("bad", [0x10], _ => new ThrowingValueSerializer());
                             break;
                     }
 

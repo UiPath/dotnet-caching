@@ -280,7 +280,7 @@ public class FormatNegotiationIntegrationTests(RedisContainerFixture fixture)
                     b.AddInMemoryRedis(_ => { });
                     if (registerSerializer)
                     {
-                        b.AddValueSerializer("fast", _ => new PassthroughValueSerializer(0x10));
+                        b.AddValueSerializer("fast", [0x10], _ => new PassthroughValueSerializer(0x10));
                     }
                 },
                 o =>

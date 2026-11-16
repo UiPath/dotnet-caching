@@ -55,19 +55,29 @@ public class ValueHeaderTests
 
     [Theory]
     [InlineData(new byte[] { 0x02 }, true)]
-    [InlineData(new byte[] { 0x03 }, true)]
     [InlineData(new byte[] { 0x10 }, true)]
-    [InlineData(new byte[] { 0x1E }, true)]
     [InlineData(new byte[] { 0x1F }, true)]
     [InlineData(new byte[] { 0x1F, 0x05 }, true)]
-    [InlineData(new byte[] { 0x01 }, false)]
-    [InlineData(new byte[] { 0x08 }, false)]
-    [InlineData(new byte[] { 0x0F }, false)]
+    [InlineData(new byte[] { 0x01 }, true)]
+    [InlineData(new byte[] { 0x08 }, true)]
+    [InlineData(new byte[] { 0x0F }, true)]
     [InlineData(new byte[] { (byte)'{' }, false)]
     [InlineData(new byte[] { 0x09 }, false)]
     [InlineData(new byte[] { }, false)]
-    public void Only_the_library_and_consumer_ids_are_known_formats(byte[] value, bool known) =>
+    public void Any_header_byte_is_a_known_format(byte[] value, bool known) =>
         ValueHeader.IsKnownFormat(value).Should().Be(known);
+
+    [Fact]
+    public void Exactly_the_header_bytes_are_known_formats()
+    {
+        byte[] known = [0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x0B, 0x0C, 0x0E, 0x0F, 0x10, 0x11, 0x12, 0x13, 0x14, 0x15, 0x16, 0x17, 0x18, 0x19, 0x1A, 0x1B, 0x1C, 0x1D, 0x1E, 0x1F];
+        for (var b = 0; b <= 0xFF; b++)
+        {
+            ReadOnlySpan<byte> value = [(byte)b, 0x00];
+
+            ValueHeader.IsKnownFormat(value).Should().Be(known.Contains((byte)b), $"byte 0x{b:X2}");
+        }
+    }
 
     [Fact]
     public void A_payload_of_only_the_header_byte_reads_as_that_header()

@@ -9,12 +9,15 @@ namespace UiPath.Caching;
 /// </remarks>
 public interface ICacheValueSerializer
 {
-    /// <summary>The ids this serializer writes and reads, all with the same header length: 0x10-0x1E take one byte, 0x100-0x1FF two.</summary>
-    /// <remarks>Read once, when the serializer is registered; it must not change afterwards.</remarks>
+    /// <summary>The ids this serializer writes and reads, all with the same header length: one byte for 0x01-0x1E, two for 0x100-0x1FF.</summary>
+    /// <remarks>Must equal, as a set, the ids declared when the serializer was registered, and must not change afterwards; a mismatch fails when the registry is built.</remarks>
     IReadOnlyList<int> FormatIds { get; }
 
     /// <summary>Writes at least one byte and returns the id it wrote, one of <see cref="FormatIds"/>.</summary>
-    /// <remarks>A null value included: an empty payload is reserved for a cached null. <paramref name="target"/> is valid only during the call.</remarks>
+    /// <remarks>
+    /// A null value included: an empty payload is reserved for a cached null. <paramref name="target"/> is valid only during the call.
+    /// Must be deterministic: <c>MigrateOnRead</c> rewrites a value only when <c>Deserialize(Serialize(x))</c> is stable, and counts one that is not as lossy and skips it.
+    /// </remarks>
     int Serialize<T>(T value, IBufferWriter<byte> target);
 
     /// <summary>Returns the value in <paramref name="source"/>, or throws; must not retain <paramref name="source"/> past the call.</summary>

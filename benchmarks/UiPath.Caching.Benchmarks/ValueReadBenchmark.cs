@@ -14,7 +14,7 @@ public class ValueReadBenchmark
     private const int FormatId = 0x10;
 
     private readonly string _run = Guid.NewGuid().ToString("N");
-    private readonly ValueSerializerRegistry _registry = new([("bench", new JsonBody(), false)]);
+    private readonly ValueSerializerRegistry _registry = new([("bench", new JsonBody(), [FormatId])]);
 
     private ConnectionMultiplexer _redis = default!;
     private IDatabase _database = default!;

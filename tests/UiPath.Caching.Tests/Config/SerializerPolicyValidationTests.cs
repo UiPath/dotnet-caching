@@ -157,7 +157,7 @@ public class SerializerPolicyValidationTests
     public void A_factory_that_returns_null_names_the_serializer()
     {
         var services = new ServiceCollection();
-        services.AddCaching(builder => builder.AddValueSerializer("fast", _ => null!));
+        services.AddCaching(builder => builder.AddValueSerializer("fast", [0x10], _ => null!));
         using var provider = services.BuildServiceProvider();
 
         var act = () => provider.GetRequiredService<ICachePolicyFactory>();
@@ -237,7 +237,7 @@ public class SerializerPolicyValidationTests
     {
         var services = new ServiceCollection();
         services.AddCaching(
-            builder => builder.AddValueSerializer("fast", _ => Fast),
+            builder => builder.AddValueSerializer("fast", Fast.FormatIds, _ => Fast),
             options => options.Policies = new Dictionary<string, CachePolicy> { ["orders"] = Writing("fast") });
         using var provider = services.BuildServiceProvider();
 
@@ -326,7 +326,7 @@ public class SerializerPolicyValidationTests
             builder =>
             {
                 builder.AddMemory(_ => { });
-                builder.AddValueSerializer("fast", _ => Fast);
+                builder.AddValueSerializer("fast", Fast.FormatIds, _ => Fast);
                 builder.AddDistributedCache(KnownCacheProviderNames.InMemory, o => o.PolicyName = policyName);
             },
             options =>
@@ -349,5 +349,5 @@ public class SerializerPolicyValidationTests
 
     private static CachePolicy Writing(string? write) => new() { Serializer = new SerializerPolicy { Write = write } };
 
-    private static ValueSerializerRegistry Registry() => new([("fast", Fast, false)]);
+    private static ValueSerializerRegistry Registry() => new([RegistryEntry.Of("fast", Fast)]);
 }

@@ -366,7 +366,7 @@ public class MessagePackEventFormatterTests
     {
         var encoded = _binary.Encode(Event(KnownEventTypes.CacheSet, null));
 
-        encoded.Span[0].Should().Be(CacheValueFormats.MessagePack);
+        encoded.Span[0].Should().Be(MessagePackFormats.Event);
         encoded.Length.Should().BeLessThan(_json.Encode(Event(KnownEventTypes.CacheSet, null)).Length / 2);
     }
 
@@ -406,7 +406,7 @@ public class MessagePackEventFormatterTests
         var original = Event(KnownEventTypes.CacheSet, null);
 
         new CompositeEventFormatter(_json, _binary, writeBinary: false).Encode(original).Span[0].Should().Be((byte)'{');
-        new CompositeEventFormatter(_json, _binary, writeBinary: true).Encode(original).Span[0].Should().Be(CacheValueFormats.MessagePack);
+        new CompositeEventFormatter(_json, _binary, writeBinary: true).Encode(original).Span[0].Should().Be(MessagePackFormats.Event);
     }
 
     [Fact]
@@ -426,7 +426,7 @@ public class MessagePackEventFormatterTests
         none.Encode(original).ToArray().Should().Equal(expected);
         readOnly.Should().BeOfType<CompositeEventFormatter>();
         readOnly.Encode(original).ToArray().Should().Equal(expected);
-        Resolve(b => b.AddMessagePackEvents(write: true)).Encode(original).Span[0].Should().Be(CacheValueFormats.MessagePack);
+        Resolve(b => b.AddMessagePackEvents(write: true)).Encode(original).Span[0].Should().Be(MessagePackFormats.Event);
     }
 
     [Theory]
@@ -466,7 +466,7 @@ public class MessagePackEventFormatterTests
         encoded.IsEmpty.Should().BeFalse("an event that cannot be encoded is never published");
         if (write)
         {
-            encoded.Span[0].Should().Be(CacheValueFormats.MessagePack);
+            encoded.Span[0].Should().Be(MessagePackFormats.Event);
         }
         else
         {
@@ -498,7 +498,7 @@ public class MessagePackEventFormatterTests
             b.AddMessagePackEvents(write: false);
         });
 
-        binary.Encode(original).Span[0].Should().Be(CacheValueFormats.MessagePack);
+        binary.Encode(original).Span[0].Should().Be(MessagePackFormats.Event);
         json.Encode(original).Span[0].Should().Be((byte)'{');
         json.Decode(json.Encode(original))!.Key.Should().Be("the-key");
     }
@@ -813,7 +813,7 @@ public class MessagePackEventFormatterTests
     private static ReadOnlyMemory<byte> Raw(WriteBody write)
     {
         var buffer = new ArrayBufferWriter<byte>();
-        buffer.GetSpan(1)[0] = CacheValueFormats.MessagePack;
+        buffer.GetSpan(1)[0] = MessagePackFormats.Event;
         buffer.Advance(1);
         var writer = new MessagePackWriter(buffer);
         write(ref writer);

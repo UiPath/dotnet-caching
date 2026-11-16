@@ -362,13 +362,18 @@ adapter, which constructs its own `RawByteSerializerProxy`; see the contract not
 
 ### Named value serializers: `ICacheValueSerializer`
 
-`AddValueSerializer(name, factory)` registers an `ICacheValueSerializer` that a policy selects with
+`AddValueSerializer(name, formatIds, factory)` registers an `ICacheValueSerializer` that a policy selects with
 `Serializer.Write` (see [Policies\[\<name\>\].Serializer](../reference/settings.md#policiesnameserializer-serializerpolicy)).
 The library writes and strips the format header; the serializer only produces and reads the payload.
 
 ```csharp
-builder.AddValueSerializer("fast", _ => new MyValueSerializer());
+builder.AddValueSerializer("fast", [0x10], _ => new MyValueSerializer());
 ```
+
+`formatIds` are the ids the serializer writes and reads, checked at the call: each is `0x01`-`0x0F` (except `0x09`, `0x0A`, `0x0D`), `0x10`-`0x1E` or
+`0x100`-`0x1FF`, all of one header length, none used twice or claimed by another serializer. A call that fails registers nothing. The serializer's own
+`FormatIds` must equal them as a set, which is checked when the registry is built. The ids `0x01`-`0x0F` are allocated: use one only if it has a row in
+[format ids](../reference/format-ids.md); an application's own serializer takes `0x10`-`0x1E` or `0x100`-`0x1FF`.
 
 The registry owns whatever the factory returns and disposes it with the container, through `DisposeAsync` when
 the serializer has one and `Dispose` otherwise. So the factory must return a new instance, not one resolved from
@@ -468,7 +473,7 @@ services.AddCaching(
     b =>
     {
         b.AddRedis(_ => { });
-        b.AddValueSerializer("msgpack", _ => new MessagePackValueSerializer());
+        b.AddValueSerializer("msgpack", [0x10], _ => new MessagePackValueSerializer());
     },
     o => o.Policies["Sessions"] = new CachePolicy { Serializer = new SerializerPolicy { Write = "msgpack" } });
 ```
@@ -481,8 +486,9 @@ written.
 Rules a serializer follows:
 
 - **Format ids.** A serializer lists the ids it writes in `FormatIds`, all with the same header length.
-  Consumer serializers take `0x10`-`0x1E` (one byte) or `0x100`-`0x1FF` (the marker byte `0x1F`, then the low
-  byte). `0x01`-`0x0F`, except `0x09`, `0x0A` and `0x0D`, belong to the library. Every other first byte,
+  Application-private serializers take `0x10`-`0x1E` (one byte) or `0x100`-`0x1FF` (the marker byte `0x1F`, then the low
+  byte). `0x01`-`0x0F`, except `0x09`, `0x0A` and `0x0D`, are allocated by the table in
+  [format ids](../reference/format-ids.md). Every other first byte,
   including `0x00`, JSON whitespace (`0x09`, `0x0A`, `0x0D`) and `0x20` onward, is JSON, which has no header. An
   id is never reused: a leftover value written under a retired id would be misread by whatever took it over.
 - **`Serialize` returns the id it wrote**, one of `FormatIds`; a serializer that picks between a plain and a
@@ -588,7 +594,7 @@ It wraps whichever JSON formatter would otherwise be registered, `AddCloudEvents
 before or after `AddMessagePackEvents`, so the JSON on the wire is what it was. Calling `AddMessagePackEvents` again
 replaces the earlier call's `write`.
 
-An event whose body starts with a format id this library writes (`0x02`, `0x03`) or one of the consumer ids, but does
+An event whose body starts with a format header byte (`0x01`-`0x1F` except `0x09`, `0x0A`, `0x0D`), but does
 not decode, such as a binary event on a node that never registered the formatter, is reported as a loss, not skipped.
 The stream reader acknowledges the entries and expires the local copies once per batch; the Pub/Sub reader expires
 them through the same coalesced path as an event dropped at a full channel, so it holds for caches that keep their

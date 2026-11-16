@@ -489,7 +489,7 @@ public class ReadListIntegrationTests(RedisContainerFixture fixture)
                 {
                     b.AddRedisConnection(o => o.ConnectionString = fixture.ConnectionString);
                     b.AddRedis(o => o.FormatNegotiation.Mode = mode);
-                    b.AddValueSerializer("fast", _ => _serializer);
+                    b.AddValueSerializer("fast", _serializer.FormatIds, _ => _serializer);
                 },
                 o =>
                 {

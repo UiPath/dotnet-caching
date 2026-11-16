@@ -28,7 +28,7 @@ internal sealed class CompositeEventFormatter(
     }
 
     private static bool IsBinary(ReadOnlyMemory<byte> body) =>
-        !body.IsEmpty && body.Span[0] == CacheValueFormats.MessagePack;
+        !body.IsEmpty && body.Span[0] == BinaryEventSettings.FormatId;
 
     private sealed class MatcherByFormat(IEventSourceMatcher? json, IEventSourceMatcher? binary) : IEventSourceMatcher
     {

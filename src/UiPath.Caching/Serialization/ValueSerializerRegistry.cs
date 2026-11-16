@@ -7,16 +7,16 @@ internal sealed class ValueSerializerRegistry : IDisposable, IAsyncDisposable
     private readonly Dictionary<int, ICacheValueSerializer> _byFormat = [];
     private readonly Dictionary<ICacheValueSerializer, int[]> _idsOf = new(ReferenceEqualityComparer.Instance);
     private readonly Dictionary<int, string> _nameOf = [];
-    private readonly List<(string Name, ICacheValueSerializer Serializer, bool Library)> _entries = [];
+    private readonly List<(string Name, ICacheValueSerializer Serializer, IReadOnlyList<int> Ids)> _entries = [];
     private readonly HashSet<ICacheValueSerializer> _borrowed = new(ReferenceEqualityComparer.Instance);
 
     public ValueSerializerRegistry(
-        IEnumerable<(string Name, ICacheValueSerializer Serializer, bool Library)> entries,
+        IEnumerable<(string Name, ICacheValueSerializer Serializer, IReadOnlyList<int> Ids)> entries,
         IEnumerable<ICacheValueSerializer>? borrowed = null)
     {
-        foreach (var (name, serializer, library) in entries)
+        foreach (var (name, serializer, ids) in entries)
         {
-            Add(name, serializer, library);
+            Add(name, serializer, ids);
         }
 
         _borrowed.UnionWith(borrowed ?? []);
@@ -26,7 +26,7 @@ internal sealed class ValueSerializerRegistry : IDisposable, IAsyncDisposable
 
     public bool IsEmpty => _byName.Count == 0;
 
-    public IReadOnlyList<(string Name, ICacheValueSerializer Serializer, bool Library)> Entries => _entries;
+    public IReadOnlyList<(string Name, ICacheValueSerializer Serializer, IReadOnlyList<int> Ids)> Entries => _entries;
 
     public static string UnregisteredMessage(string policy, string field, string name) =>
         $"{policy} names the value serializer '{name}' in Serializer.{field}, but none with that name is registered. " +
@@ -146,12 +146,6 @@ internal sealed class ValueSerializerRegistry : IDisposable, IAsyncDisposable
         }
     }
 
-    private static bool IsLibraryId(int id) => id is >= 0x01 and <= 0x0F and not 0x09 and not 0x0A and not 0x0D;
-
-    private static bool IsConsumerId(int id) =>
-        id is >= CacheValueFormats.FirstConsumer and <= CacheValueFormats.LastConsumer
-            or >= CacheValueFormats.FirstExtended and <= CacheValueFormats.LastExtended;
-
     [DoesNotReturn]
     private static void Invalid(string message) =>
         throw new OptionsValidationException(nameof(CacheOptions), typeof(CacheOptions), [message]);
@@ -159,35 +153,22 @@ internal sealed class ValueSerializerRegistry : IDisposable, IAsyncDisposable
     private IEnumerable<ICacheValueSerializer> Owned() =>
         _entries.Select(e => e.Serializer).Where(serializer => !_borrowed.Contains(serializer));
 
-    private void Add(string name, ICacheValueSerializer serializer, bool library)
+    private void Add(string name, ICacheValueSerializer serializer, IReadOnlyList<int> declared)
     {
         ArgumentException.ThrowIfNullOrEmpty(name);
         ArgumentNullException.ThrowIfNull(serializer);
         CheckName(name);
 
-        var declared = serializer.FormatIds;
-        if (declared is null)
-        {
-            Invalid($"Value serializer '{name}' returns null from FormatIds; it must declare at least one format id.");
-        }
-
         int[] ids = [.. declared];
-        if (ids.Length == 0)
+        if (FormatIdRules.Find(name, ids, id => _nameOf.GetValueOrDefault(id)) is { } fault)
         {
-            Invalid($"Value serializer '{name}' declares no format ids.");
-        }
-
-        var extended = ids[0] >= CacheValueFormats.FirstExtended;
-        var claimed = new HashSet<int>();
-        foreach (var id in ids)
-        {
-            CheckId(name, id, library, extended, claimed);
+            Invalid(fault.Message);
         }
 
         _byName.Add(name, serializer);
-        _entries.Add((name, serializer, library));
+        _entries.Add((name, serializer, Array.AsReadOnly(ids)));
         _idsOf.Add(serializer, ids);
-        foreach (var id in claimed)
+        foreach (var id in ids)
         {
             _byFormat.Add(id, serializer);
             _nameOf.Add(id, name);
@@ -204,26 +185,6 @@ internal sealed class ValueSerializerRegistry : IDisposable, IAsyncDisposable
         if (_byName.ContainsKey(name))
         {
             throw new ArgumentException($"A value serializer named '{name}' is already registered.", nameof(name));
-        }
-    }
-
-    private void CheckId(string name, int id, bool library, bool extended, HashSet<int> claimed)
-    {
-        if (!(library ? IsLibraryId(id) : IsConsumerId(id)))
-        {
-            Invalid(
-                $"Value serializer '{name}' declares format id 0x{id:X2}, which is not " +
-                (library ? "a library id (0x01-0x0F except 0x09, 0x0A, 0x0D)." : "a consumer id (0x10-0x1E or 0x100-0x1FF)."));
-        }
-
-        if ((id >= CacheValueFormats.FirstExtended) != extended)
-        {
-            Invalid($"Value serializer '{name}' mixes one-byte and extended format ids; all of its ids need the same header length.");
-        }
-
-        if (!claimed.Add(id) || _byFormat.ContainsKey(id))
-        {
-            Invalid($"Format id 0x{id:X2} is declared more than once (value serializer '{name}').");
         }
     }
 }

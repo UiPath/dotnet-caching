@@ -62,7 +62,7 @@ public class MessagePackCompressionBenchmark
     }
 
     [BenchmarkCategory("Read"), Benchmark(Baseline = true)]
-    public Payload? Read_Plain() => _plain.Deserialize<Payload>(CacheValueFormats.MessagePack, new ReadOnlySequence<byte>(_plainBytes));
+    public Payload? Read_Plain() => _plain.Deserialize<Payload>(MessagePackFormats.Value, new ReadOnlySequence<byte>(_plainBytes));
 
     [BenchmarkCategory("Read"), Benchmark]
     public Payload? Read_Compressed() => _compressed.Deserialize<Payload>(_compressedId, new ReadOnlySequence<byte>(_compressedBytes));

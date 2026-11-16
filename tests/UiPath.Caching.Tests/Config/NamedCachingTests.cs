@@ -124,8 +124,8 @@ public class NamedCachingTests
         var own = new FakeValueSerializer(0x11);
         using var root = Build(register: (services, configuration) =>
         {
-            services.AddCaching(configuration, b => b.AddRedisConnection().AddRedis().AddValueSerializer("shared", _ => shared));
-            services.AddNamedCaching(Name, configuration, b => b.AddRedis().AddValueSerializer("own", _ => own));
+            services.AddCaching(configuration, b => b.AddRedisConnection().AddRedis().AddValueSerializer("shared", shared.FormatIds, _ => shared));
+            services.AddNamedCaching(Name, configuration, b => b.AddRedis().AddValueSerializer("own", own.FormatIds, _ => own));
         });
 
         var registry = Child(root).GetRequiredService<ValueSerializerRegistry>();
@@ -142,14 +142,14 @@ public class NamedCachingTests
         var own = new FakeValueSerializer(0x10);
         using var root = Build(register: (services, configuration) =>
         {
-            services.AddCaching(configuration, b => b.AddRedisConnection().AddRedis().AddLibraryValueSerializer("messagepack", _ => new FakeValueSerializer(CacheValueFormats.MessagePack)).AddValueSerializer("fast", _ => forwarded));
-            services.AddNamedCaching(Name, configuration, b => b.AddRedis().AddLibraryValueSerializer("messagepack", _ => new FakeValueSerializer(CacheValueFormats.MessagePack)).AddValueSerializer("fast", _ => own));
+            services.AddCaching(configuration, b => b.AddRedisConnection().AddRedis().AddValueSerializer("allocated", [0x05], _ => new FakeValueSerializer(0x05)).AddValueSerializer("fast", forwarded.FormatIds, _ => forwarded));
+            services.AddNamedCaching(Name, configuration, b => b.AddRedis().AddValueSerializer("allocated", [0x05], _ => new FakeValueSerializer(0x05)).AddValueSerializer("fast", own.FormatIds, _ => own));
         });
 
         var registry = Child(root).GetRequiredService<ValueSerializerRegistry>();
 
         registry.Resolve("fast").Should().BeSameAs(own);
-        registry.TryGetByFormat(CacheValueFormats.MessagePack, out _).Should().BeTrue();
+        registry.TryGetByFormat(0x05, out _).Should().BeTrue();
     }
 
     [Fact]
@@ -158,7 +158,7 @@ public class NamedCachingTests
         var shared = new DisposableFakeValueSerializer(0x10);
         var root = Build(register: (services, configuration) =>
         {
-            services.AddCaching(configuration, b => b.AddRedisConnection().AddRedis().AddValueSerializer("shared", _ => shared));
+            services.AddCaching(configuration, b => b.AddRedisConnection().AddRedis().AddValueSerializer("shared", shared.FormatIds, _ => shared));
             services.AddNamedCaching(Name, configuration, b => b.AddRedis());
         });
         _ = Child(root).GetRequiredService<ValueSerializerRegistry>();
@@ -169,15 +169,15 @@ public class NamedCachingTests
     }
 
     [Fact]
-    public void A_forwarded_library_serializer_keeps_its_library_ids()
+    public void A_forwarded_serializer_keeps_an_allocated_id()
     {
         using var root = Build(register: (services, configuration) =>
         {
-            services.AddCaching(configuration, b => b.AddRedisConnection().AddRedis().AddLibraryValueSerializer("messagepack", _ => new FakeValueSerializer(CacheValueFormats.MessagePack)));
+            services.AddCaching(configuration, b => b.AddRedisConnection().AddRedis().AddValueSerializer("allocated", [0x05], _ => new FakeValueSerializer(0x05)));
             services.AddNamedCaching(Name, configuration, b => b.AddRedis());
         });
 
-        Child(root).GetRequiredService<ValueSerializerRegistry>().TryGetByFormat(CacheValueFormats.MessagePack, out _).Should().BeTrue();
+        Child(root).GetRequiredService<ValueSerializerRegistry>().TryGetByFormat(0x05, out _).Should().BeTrue();
     }
 
     [Fact]

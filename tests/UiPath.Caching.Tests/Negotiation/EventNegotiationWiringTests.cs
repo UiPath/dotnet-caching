@@ -15,10 +15,10 @@ public class EventNegotiationWiringTests
     [Fact]
     public void A_node_with_the_binary_decoder_advertises_both_event_formats_and_one_without_advertises_json()
     {
-        using var plain = Provider(b => b.AddValueSerializer("fast", _ => new FakeValueSerializer(0x10)));
+        using var plain = Provider(b => b.AddValueSerializer("fast", [0x10], _ => new FakeValueSerializer(0x10)));
         using var decoder = Provider(b =>
         {
-            b.AddValueSerializer("fast", _ => new FakeValueSerializer(0x10));
+            b.AddValueSerializer("fast", [0x10], _ => new FakeValueSerializer(0x10));
             b.AddMessagePackEvents(write: false);
         });
 
@@ -26,6 +26,22 @@ public class EventNegotiationWiringTests
         decoder.GetRequiredService<FormatNegotiation>().Advertisement!.EventReads.Should().Equal("json", "02");
         NodeAdvertisement.TryParse(plain.GetRequiredService<FormatNegotiation>().Advertisement!.Encode(), out var parsed).Should().BeTrue();
         parsed!.EventReads.Should().Equal("json");
+    }
+
+    [Fact]
+    public void A_message_pack_node_advertises_the_literal_tokens()
+    {
+        using var provider = Provider(b =>
+        {
+            b.AddMessagePackSerializer();
+            b.AddMessagePackEvents(write: false);
+        });
+
+        var advertisement = provider.GetRequiredService<FormatNegotiation>().Advertisement!;
+
+        advertisement.ValueReads.Should().Equal("json", "02", "03");
+        advertisement.EventReads.Should().Equal("json", "02");
+        advertisement.Encode().Should().Contain("vr=json,02,03").And.Contain("er=json,02");
     }
 
     [Fact]
@@ -56,7 +72,7 @@ public class EventNegotiationWiringTests
         forced.GetRequiredService<IBinaryEvents>().Writes.Should().BeTrue();
         forced.GetRequiredService<FormatNegotiation>().Negotiator.Should().BeNull();
         forced.GetRequiredService<FormatNegotiation>().IsActive.Should().BeTrue("it still tells the nodes that decide what it reads");
-        forced.GetRequiredService<IEventFormatterProxy<ICacheEvent>>().Encode(Event()).Span[0].Should().Be(CacheValueFormats.MessagePack);
+        forced.GetRequiredService<IEventFormatterProxy<ICacheEvent>>().Encode(Event()).Span[0].Should().Be(MessagePackFormats.Event);
     }
 
     [Fact]
@@ -70,7 +86,7 @@ public class EventNegotiationWiringTests
         automatic.GetRequiredService<IBinaryEvents>().Writes.Should().BeFalse("silent until proven");
         automatic.GetRequiredService<IEventFormatterProxy<ICacheEvent>>().Encode(Event()).Span[0].Should().Be((byte)'{');
         forced.GetRequiredService<IBinaryEvents>().Writes.Should().BeTrue();
-        forced.GetRequiredService<IEventFormatterProxy<ICacheEvent>>().Encode(Event()).Span[0].Should().Be(CacheValueFormats.MessagePack);
+        forced.GetRequiredService<IEventFormatterProxy<ICacheEvent>>().Encode(Event()).Span[0].Should().Be(MessagePackFormats.Event);
         json.GetRequiredService<IBinaryEvents>().Writes.Should().BeFalse();
         attested.GetRequiredService<IBinaryEvents>().Writes.Should().BeFalse("the operator's word counts once the service has started, and the hold has passed");
     }

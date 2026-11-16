@@ -54,7 +54,7 @@ public class ReadListWarningTests
                 {
                     b.AddRedisConnection(o => o.ConnectionString = "127.0.0.1:1");
                     b.AddRedis(o => o.FormatNegotiation.Mode = mode);
-                    b.AddValueSerializer("fast", _ => new PassthroughValueSerializer(0x10));
+                    b.AddValueSerializer("fast", [0x10], _ => new PassthroughValueSerializer(0x10));
                 },
                 o =>
                 {

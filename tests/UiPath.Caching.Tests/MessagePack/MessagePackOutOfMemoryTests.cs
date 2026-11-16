@@ -96,7 +96,7 @@ public class MessagePackOutOfMemoryTests(ITestContextAccessor testContextAccesso
         strategy.GetRedisKey(Arg.Any<CacheKey>()).Returns(call => (RedisKey)$"test:str:{call.Arg<CacheKey>()}");
         var strategies = Substitute.For<IRedisKeyStrategyFactory>();
         strategies.Create(Arg.Any<CacheOptions>(), Arg.Any<Type>()).Returns(strategy);
-        var registry = new ValueSerializerRegistry([("messagepack", _serializer, true)]);
+        var registry = new ValueSerializerRegistry([RegistryEntry.Of("messagepack", _serializer)]);
 
         return new RedisCache(
             connector,

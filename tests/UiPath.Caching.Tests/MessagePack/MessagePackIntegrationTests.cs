@@ -30,7 +30,7 @@ public sealed class MessagePackIntegrationTests(RedisContainerFixture fixture) :
         (await cache.GetAsync<Profile>(key, mp, Ct)).Should().Be(new Profile("json", 1));
 
         await cache.SetAsync(key, new Profile("msgpack", 2), mp, Ct);
-        (await FirstByte(key)).Should().Be(CacheValueFormats.MessagePack);
+        (await FirstByte(key)).Should().Be(MessagePackFormats.Value);
         (await cache.GetAsync<Profile>(key, policy: null, Ct)).Should().Be(new Profile("msgpack", 2));
 
         await cache.SetAsync(key, new Profile("json again", 3), policy: null, Ct);
@@ -48,7 +48,7 @@ public sealed class MessagePackIntegrationTests(RedisContainerFixture fixture) :
 
         await cache.SetAsync(key, value, PolicyOf(_nodes[0]), Ct);
 
-        (await FirstByte(key)).Should().Be(CacheValueFormats.MessagePackLz4);
+        (await FirstByte(key)).Should().Be(MessagePackFormats.ValueLz4);
         (await cache.GetAsync<Profile>(key, policy: null, Ct)).Should().Be(value);
     }
 
@@ -85,8 +85,8 @@ public sealed class MessagePackIntegrationTests(RedisContainerFixture fixture) :
 
         entry.Value.Should().BeEquivalentTo(fields);
         entry.Metadata.Should().BeEquivalentTo(options.Metadata);
-        (await RawField(key, "a"))![0].Should().Be(CacheValueFormats.MessagePack);
-        (await RawField(key, "b"))![0].Should().Be(CacheValueFormats.MessagePackLz4);
+        (await RawField(key, "a"))![0].Should().Be(MessagePackFormats.Value);
+        (await RawField(key, "b"))![0].Should().Be(MessagePackFormats.ValueLz4);
     }
 
     [Fact]
@@ -101,8 +101,8 @@ public sealed class MessagePackIntegrationTests(RedisContainerFixture fixture) :
 
         await cache.SetAsync([.. keys.Zip(values, (k, v) => new KeyValuePair<CacheKey, Profile?>(k, v))], mp, Ct);
 
-        (await FirstByte(keys[0])).Should().Be(CacheValueFormats.MessagePack);
-        (await FirstByte(keys[1])).Should().Be(CacheValueFormats.MessagePackLz4);
+        (await FirstByte(keys[0])).Should().Be(MessagePackFormats.Value);
+        (await FirstByte(keys[1])).Should().Be(MessagePackFormats.ValueLz4);
         (await cache.GetAsync<Profile>(keys, mp, Ct)).Select(v => v.Value).Should().Equal(values);
         (await cache.GetAsync<Profile>(keys, policy: null, Ct)).Select(v => v.Value).Should().Equal(values);
     }
@@ -122,7 +122,7 @@ public sealed class MessagePackIntegrationTests(RedisContainerFixture fixture) :
 
         (await UntilAsync(async () => (await peer.GetAsync<Profile>(key, Ct)).ContainsKey("b"))).Should().BeTrue("the peer applies the field from the event");
         (await peer.GetAsync<Profile>(key, Ct)).Keys.Should().BeEquivalentTo(["a", "b"]);
-        (await RawField(key, "b"))![0].Should().Be(CacheValueFormats.MessagePack);
+        (await RawField(key, "b"))![0].Should().Be(MessagePackFormats.Value);
     }
 
     public void Dispose()

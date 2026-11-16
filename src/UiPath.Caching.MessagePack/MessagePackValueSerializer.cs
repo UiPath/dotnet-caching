@@ -44,7 +44,7 @@ internal sealed class MessagePackValueSerializer : ICacheValueSerializer
         _compressRaw = _compressing.WithResolver(RawMessagePackResolver.Instance);
     }
 
-    public IReadOnlyList<int> FormatIds { get; } = [CacheValueFormats.MessagePack, CacheValueFormats.MessagePackLz4];
+    public IReadOnlyList<int> FormatIds { get; } = MessagePackFormats.ValueIds;
 
     internal MessagePackSerializerOptions Options => _plain;
 
@@ -62,7 +62,7 @@ internal sealed class MessagePackValueSerializer : ICacheValueSerializer
                 throw;
             }
 
-            return CacheValueFormats.MessagePack;
+            return MessagePackFormats.Value;
         }
 
         using var plain = new PooledBufferWriter();
@@ -95,12 +95,12 @@ internal sealed class MessagePackValueSerializer : ICacheValueSerializer
             if (compressed.WrittenMemory.Length < plainBytes.Length)
             {
                 target.Write(compressed.WrittenMemory.Span);
-                return CacheValueFormats.MessagePackLz4;
+                return MessagePackFormats.ValueLz4;
             }
         }
 
         target.Write(plainBytes.Span);
-        return CacheValueFormats.MessagePack;
+        return MessagePackFormats.Value;
     }
 
     public T? Deserialize<T>(int formatId, ReadOnlySequence<byte> source)
@@ -175,9 +175,9 @@ internal sealed class MessagePackValueSerializer : ICacheValueSerializer
     {
         switch (formatId)
         {
-            case CacheValueFormats.MessagePack:
+            case MessagePackFormats.Value:
                 return MessagePackSerializer.Deserialize<T>(source, _plain);
-            case CacheValueFormats.MessagePackLz4:
+            case MessagePackFormats.ValueLz4:
                 if (!TryReadCompressedHeader(source, out var plainLength))
                 {
                     throw new InvalidDataException("A value stored as MessagePack with LZ4 does not hold a compressed block array.");

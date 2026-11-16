@@ -160,7 +160,7 @@ public class EventFormatNegotiationTests
         var original = new CacheEvent { Id = Guid.NewGuid().ToString(), Type = KnownEventTypes.CacheSet, Source = new Uri("urn:node-a"), Data = new CacheEventData("the-key", new Dictionary<string, object?> { [KnownFieldNames.VersionKey] = 3L }) };
         Settle(sut, View(Node("a", Both)));
         var binary = composite.Encode(original);
-        binary.Span[0].Should().Be(CacheValueFormats.MessagePack);
+        binary.Span[0].Should().Be(MessagePackFormats.Event);
 
         sut.Observe(View(Node("a", Both), Node("old", Json)));
         var fallback = composite.Encode(original);

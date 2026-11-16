@@ -85,7 +85,7 @@ public class RedisHashCacheSerializerTests(ITestContextAccessor testContextAcces
     [Fact]
     public async Task A_chunked_replace_the_caller_cancels_while_it_drops_the_stale_metadata_reaches_the_caller()
     {
-        var registry = new ValueSerializerRegistry([("fast", _fast, false)]);
+        var registry = new ValueSerializerRegistry([RegistryEntry.Of("fast", _fast)]);
         var sut = Create(registry, fieldBatchSize: 2);
         CaptureWrites();
         using var cts = new CancellationTokenSource();
@@ -233,7 +233,7 @@ public class RedisHashCacheSerializerTests(ITestContextAccessor testContextAcces
     [MemberData(nameof(Scenarios))]
     public async Task Every_operation_reports_the_method_name_it_reported_before_serializers(string scenario)
     {
-        var registry = scenario == "no registry" ? ValueSerializerRegistry.Empty : new ValueSerializerRegistry([("fast", _fast, false)]);
+        var registry = scenario == "no registry" ? ValueSerializerRegistry.Empty : new ValueSerializerRegistry([RegistryEntry.Of("fast", _fast)]);
         var fastWrite = scenario.EndsWith("fast write", StringComparison.Ordinal);
         var sut = Create(registry, defaultPolicy: fastWrite ? new CachePolicy { Serializer = new SerializerPolicy { Write = "fast" } } : null);
         var policy = fastWrite ? ResolvedPolicy(registry) : null;
@@ -270,7 +270,7 @@ public class RedisHashCacheSerializerTests(ITestContextAccessor testContextAcces
     [Fact]
     public async Task A_field_whose_serializer_throws_is_a_whole_hash_miss_and_the_hash_stays()
     {
-        var sut = Create(new ValueSerializerRegistry([("bad", new ThrowingValueSerializer(), false)]));
+        var sut = Create(new ValueSerializerRegistry([RegistryEntry.Of("bad", new ThrowingValueSerializer())]));
         _database.HashGetAllAsync(Arg.Any<RedisKey>(), Arg.Any<CommandFlags>()).Returns([Entry("a", Json("x")), Entry("b", [0x10, 1])]);
 
         var values = await sut.GetAsync<string>("k", policy: null, Token);
@@ -283,7 +283,7 @@ public class RedisHashCacheSerializerTests(ITestContextAccessor testContextAcces
     [Fact]
     public async Task An_out_of_memory_from_a_serializer_propagates_from_every_hash_read_and_runs_no_generator()
     {
-        var sut = Create(new ValueSerializerRegistry([("bad", new ThrowingValueSerializer { Failure = new OutOfMemoryException() }, false)]));
+        var sut = Create(new ValueSerializerRegistry([RegistryEntry.Of("bad", new ThrowingValueSerializer { Failure = new OutOfMemoryException() })]));
         _database.HashGetAllAsync(Arg.Any<RedisKey>(), Arg.Any<CommandFlags>()).Returns([Entry("a", [0x10, 1])]);
         _database.HashGetAsync(Arg.Any<RedisKey>(), Arg.Any<RedisValue>(), Arg.Any<CommandFlags>()).Returns((RedisValue)new byte[] { 0x10, 1 });
         _database.HashGetAsync(Arg.Any<RedisKey>(), Arg.Any<RedisValue[]>(), Arg.Any<CommandFlags>()).Returns([(RedisValue)new byte[] { 0x10, 1 }]);
@@ -326,7 +326,7 @@ public class RedisHashCacheSerializerTests(ITestContextAccessor testContextAcces
     public async Task A_field_round_trips_through_a_two_byte_format_id()
     {
         var extended = new PassthroughValueSerializer(0x105);
-        var registry = new ValueSerializerRegistry([("extended", extended, false)]);
+        var registry = new ValueSerializerRegistry([RegistryEntry.Of("extended", extended)]);
         var sut = Create(registry);
         var written = CaptureWrites();
         var policy = new DefaultCachePolicyFactory(null, new CachePolicy { Serializer = new SerializerPolicy { Write = "extended" } }, valueSerializers: registry).Default!;
@@ -397,7 +397,7 @@ public class RedisHashCacheSerializerTests(ITestContextAccessor testContextAcces
     [Fact]
     public async Task A_field_whose_serializer_throws_makes_a_hash_replace_get_or_add_replace_the_whole_key()
     {
-        var sut = Create(new ValueSerializerRegistry([("bad", new ThrowingValueSerializer(), false)]));
+        var sut = Create(new ValueSerializerRegistry([RegistryEntry.Of("bad", new ThrowingValueSerializer())]));
         CaptureWrites();
         _transaction.KeyDeleteAsync(Arg.Any<RedisKey>(), Arg.Any<CommandFlags>()).Returns(true);
         _database.HashGetAllAsync(Arg.Any<RedisKey>(), Arg.Any<CommandFlags>()).Returns([Entry("a", [0x10, 1])]);
@@ -468,7 +468,7 @@ public class RedisHashCacheSerializerTests(ITestContextAccessor testContextAcces
     [Fact]
     public async Task GetMetadata_does_not_sniff_for_a_custom_proxy()
     {
-        var sut = Create(new ValueSerializerRegistry([("fast", _fast, false)]), new ByteProxy());
+        var sut = Create(new ValueSerializerRegistry([RegistryEntry.Of("fast", _fast)]), new ByteProxy());
         _database.HashGetAsync(Arg.Any<RedisKey>(), Arg.Any<RedisValue>(), Arg.Any<CommandFlags>()).Returns((RedisValue)Header(0x10, "{\"m\":\"v\"}"));
 
         var metadata = await sut.GetMetadataAsync<string>("k", Token);
@@ -480,7 +480,7 @@ public class RedisHashCacheSerializerTests(ITestContextAccessor testContextAcces
     [Fact]
     public async Task SetMetadata_writes_the_default_policy_serializer()
     {
-        var registry = new ValueSerializerRegistry([("fast", _fast, false)]);
+        var registry = new ValueSerializerRegistry([RegistryEntry.Of("fast", _fast)]);
         var sut = Create(registry, defaultPolicy: new CachePolicy { Serializer = new SerializerPolicy { Write = "fast" } });
         _database.KeyExistsAsync(Arg.Any<RedisKey>(), Arg.Any<CommandFlags>()).Returns(true);
         _database.HashSetAsync(Arg.Any<RedisKey>(), Arg.Any<RedisValue>(), Arg.Any<RedisValue>(), Arg.Any<When>(), Arg.Any<CommandFlags>()).Returns(true);
@@ -518,7 +518,7 @@ public class RedisHashCacheSerializerTests(ITestContextAccessor testContextAcces
     [Fact]
     public void Peer_fields_are_not_decoded_where_a_custom_proxy_could_mistake_headered_bytes_for_its_own()
     {
-        var sut = Create(new ValueSerializerRegistry([("fast", _fast, false)]), new ByteProxy());
+        var sut = Create(new ValueSerializerRegistry([RegistryEntry.Of("fast", _fast)]), new ByteProxy());
 
         sut.TryDecodeFields<byte[]>(new Dictionary<string, byte[]?> { ["a"] = Header(0x10, "x") }, new CachePolicy(), out var values).Should().BeFalse();
 
@@ -529,7 +529,7 @@ public class RedisHashCacheSerializerTests(ITestContextAccessor testContextAcces
     [Fact]
     public void Peer_fields_decode_through_the_reader_for_a_custom_proxy_when_the_default_policy_writes_a_serializer()
     {
-        var sut = Create(new ValueSerializerRegistry([("fast", _fast, false)]), new ByteProxy(), new CachePolicy { Serializer = new SerializerPolicy { Write = "fast" } });
+        var sut = Create(new ValueSerializerRegistry([RegistryEntry.Of("fast", _fast)]), new ByteProxy(), new CachePolicy { Serializer = new SerializerPolicy { Write = "fast" } });
 
         sut.TryDecodeFields<string>(new Dictionary<string, byte[]?> { ["a"] = Header(0x10, "x") }, new CachePolicy(), out var values).Should().BeTrue();
 
@@ -549,7 +549,7 @@ public class RedisHashCacheSerializerTests(ITestContextAccessor testContextAcces
     [Fact]
     public void Peer_fields_of_a_key_whose_policy_writes_json_are_not_decoded_by_the_default_policys_gate()
     {
-        var sut = Create(new ValueSerializerRegistry([("fast", _fast, false)]), new ByteProxy(), new CachePolicy { Serializer = new SerializerPolicy { Write = "fast" } });
+        var sut = Create(new ValueSerializerRegistry([RegistryEntry.Of("fast", _fast)]), new ByteProxy(), new CachePolicy { Serializer = new SerializerPolicy { Write = "fast" } });
         var keyPolicy = new CachePolicy { Serializer = new SerializerPolicy { Write = "json" } };
 
         sut.TryDecodeFields<byte[]>(new Dictionary<string, byte[]?> { ["a"] = [0x10, 1, 2] }, keyPolicy, out var values).Should().BeFalse();
@@ -571,7 +571,7 @@ public class RedisHashCacheSerializerTests(ITestContextAccessor testContextAcces
     [Fact]
     public void Peer_fields_are_not_decoded_for_an_unknown_key_policy_with_a_custom_proxy()
     {
-        var sut = Create(new ValueSerializerRegistry([("fast", _fast, false)]), new ByteProxy());
+        var sut = Create(new ValueSerializerRegistry([RegistryEntry.Of("fast", _fast)]), new ByteProxy());
 
         sut.TryDecodeFields<byte[]>(new Dictionary<string, byte[]?> { ["a"] = [1, 2] }, policy: null, out var values).Should().BeFalse();
 
@@ -581,7 +581,7 @@ public class RedisHashCacheSerializerTests(ITestContextAccessor testContextAcces
     [Fact]
     public void Peer_fields_whose_serializer_throws_are_not_applied()
     {
-        var sut = Create(new ValueSerializerRegistry([("bad", new ThrowingValueSerializer(), false)]));
+        var sut = Create(new ValueSerializerRegistry([RegistryEntry.Of("bad", new ThrowingValueSerializer())]));
 
         sut.TryDecodeFields<string>(new Dictionary<string, byte[]?> { ["a"] = [0x10, 1] }, new CachePolicy(), out var values).Should().BeFalse();
 
@@ -639,7 +639,7 @@ public class RedisHashCacheSerializerTests(ITestContextAccessor testContextAcces
 
     private RedisHashCache Create(out ValueSerializerRegistry registry, bool cacheNullValues = false, ILogger<RedisHashCache>? logger = null, int auditThreshold = 0)
     {
-        registry = new ValueSerializerRegistry([("fast", _fast, false)]);
+        registry = new ValueSerializerRegistry([RegistryEntry.Of("fast", _fast)]);
         return Create(registry, cacheNullValues: cacheNullValues, logger: logger, auditThreshold: auditThreshold);
     }
 
