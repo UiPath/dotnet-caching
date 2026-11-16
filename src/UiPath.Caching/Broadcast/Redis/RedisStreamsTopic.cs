@@ -196,7 +196,7 @@ public sealed partial class RedisStreamsTopic<T> : ITopic<T>
             (Self: this, Message: message, BehindAdd: behindAdd),
             defaultValue: RedisValue.Null,
             token).ConfigureAwait(false);
-            _cachingTelemetryProvider.TrackTopicWriteMetric(_context.Topic.ToString(), id);
+            _cachingTelemetryProvider.TrackTopicWriteMetric(_context.Topic, id);
             if (!id.IsNull)
             {
                 Ring(doorbell: !behindAdd);
@@ -267,7 +267,7 @@ public sealed partial class RedisStreamsTopic<T> : ITopic<T>
             token).ConfigureAwait(false);
             rung = replyRung;
             added = !id.IsNull;
-            _cachingTelemetryProvider.TrackTopicWriteMetric(_context.Topic.ToString(), id);
+            _cachingTelemetryProvider.TrackTopicWriteMetric(_context.Topic, id);
             if (added)
             {
                 Ring(doorbell: false);

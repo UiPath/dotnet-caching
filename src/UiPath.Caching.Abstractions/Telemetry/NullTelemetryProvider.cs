@@ -2,11 +2,13 @@ namespace UiPath.Caching.Telemetry;
 
 [ExcludeFromCodeCoverage]
 #pragma warning disable IDE0060 // Remove unused parameter
-public sealed class NullTelemetryProvider : ICachingTelemetryProvider
+public sealed class NullTelemetryProvider : ICachingTelemetryProvider, ITelemetryListening
 {
 #pragma warning disable IDE1006 // Naming Styles
     public static readonly NullTelemetryProvider Instance = new();
 #pragma warning restore IDE1006 // Naming Styles
+
+    public bool IsListening => false;
 
     public void TrackDependency(string type, string target, string name, string data, DateTimeOffset startTime, TimeSpan duration, string resultCode, bool success, TelemetryTags<string> properties = default, TelemetryTags<double> metrics = default)
     {

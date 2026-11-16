@@ -37,3 +37,6 @@ const UiPath.Caching.Broadcast.CacheEventPropertyNames.PeerFields = "_peerFields
 const UiPath.Caching.Broadcast.CacheEventPropertyNames.PeerMetadata = "_peerMetadata_" -> string!
 const UiPath.Caching.Broadcast.CacheEventPropertyNames.Version = "_version_" -> string!
 UiPath.Caching.Broadcast.CacheEventPropertyNames
+UiPath.Caching.Telemetry.ITelemetryListening
+UiPath.Caching.Telemetry.ITelemetryListening.IsListening.get -> bool
+UiPath.Caching.Telemetry.NullTelemetryProvider.IsListening.get -> bool

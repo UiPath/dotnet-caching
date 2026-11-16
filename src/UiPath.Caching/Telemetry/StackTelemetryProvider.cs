@@ -3,9 +3,11 @@ using System.Buffers;
 namespace UiPath.Caching.Telemetry;
 
 /// <summary>Names the stack on everything a named caching stack reports, so its telemetry stays apart from the application's.</summary>
-internal sealed class StackTelemetryProvider(ICachingTelemetryProvider inner, string stack) : ICachingTelemetryProvider
+internal sealed class StackTelemetryProvider(ICachingTelemetryProvider inner, string stack) : ICachingTelemetryProvider, ITelemetryListening
 {
     internal const string StackProperty = "CachingStack";
+
+    public bool IsListening => inner.IsListening();
 
     public void TrackDependency(string type, string target, string name, string data, DateTimeOffset startTime, TimeSpan duration, string resultCode, bool success, TelemetryTags<string> properties = default, TelemetryTags<double> metrics = default)
     {

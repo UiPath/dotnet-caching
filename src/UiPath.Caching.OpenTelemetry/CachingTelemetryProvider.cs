@@ -10,10 +10,13 @@ namespace UiPath.Caching.OpenTelemetry;
 /// <c>ICachingBuilder.AddOpenTelemetry()</c> and subscribe to the <see cref="ActivitySourceName"/>
 /// source / <see cref="MeterName"/> meter in your OpenTelemetry pipeline.
 /// </summary>
-public sealed class CachingTelemetryProvider : ICachingTelemetryProvider, IDisposable
+public sealed class CachingTelemetryProvider : ICachingTelemetryProvider, IDisposable, ITelemetryListening
 {
     public const string ActivitySourceName = "UiPath.Caching";
     public const string MeterName = "UiPath.Caching";
+
+    private static readonly object True = true;
+    private static readonly object False = false;
 
     private readonly ActivitySource _activitySource = new(ActivitySourceName);
     private readonly Meter _meter = new(MeterName);
@@ -28,8 +31,15 @@ public sealed class CachingTelemetryProvider : ICachingTelemetryProvider, IDispo
         _exceptions = _meter.CreateCounter<long>("uipath.caching.exception");
     }
 
+    public bool IsListening => _metric.Enabled || _events.Enabled || _exceptions.Enabled || _activitySource.HasListeners();
+
     public void TrackMetric(string name, double value, TelemetryTags<string> properties = default)
     {
+        if (!_metric.Enabled)
+        {
+            return;
+        }
+
         var tags = new TagList { { "metric.name", name } };
         foreach (var p in properties)
         {
@@ -40,12 +50,21 @@ public sealed class CachingTelemetryProvider : ICachingTelemetryProvider, IDispo
 
     public void TrackEvent(string eventName, TelemetryTags<string> properties = default, TelemetryTags<double> metrics = default)
     {
-        var tags = new TagList { { "event.name", eventName } };
-        foreach (var p in properties)
+        if (_events.Enabled)
         {
-            tags.Add(p.Key, p.Value);
+            var tags = new TagList { { "event.name", eventName } };
+            foreach (var p in properties)
+            {
+                tags.Add(p.Key, p.Value);
+            }
+            _events.Add(1, tags);
         }
-        _events.Add(1, tags);
+
+        if (!_metric.Enabled)
+        {
+            return;
+        }
+
         foreach (var m in metrics)
         {
             _metric.Record(m.Value, new TagList { { "metric.name", m.Key }, { "event.name", eventName } });
@@ -54,12 +73,15 @@ public sealed class CachingTelemetryProvider : ICachingTelemetryProvider, IDispo
 
     public void TrackException(Exception ex, TelemetryTags<string> properties = default, TelemetryTags<double> metrics = default)
     {
-        var tags = new TagList { { "exception.type", ex.GetType().FullName ?? string.Empty } };
-        foreach (var p in properties)
+        if (_exceptions.Enabled)
         {
-            tags.Add(p.Key, p.Value);
+            var tags = new TagList { { "exception.type", ex.GetType().FullName ?? string.Empty } };
+            foreach (var p in properties)
+            {
+                tags.Add(p.Key, p.Value);
+            }
+            _exceptions.Add(1, tags);
         }
-        _exceptions.Add(1, tags);
 
         // BCL-only (net8 + net10): record an exception event on the current span rather than the
         // net9+ Activity.AddException API.
@@ -73,13 +95,18 @@ public sealed class CachingTelemetryProvider : ICachingTelemetryProvider, IDispo
 
     public void TrackDependency(string type, string target, string name, string data, DateTimeOffset startTime, TimeSpan duration, string resultCode, bool success, TelemetryTags<string> properties = default, TelemetryTags<double> metrics = default)
     {
+        if (!_activitySource.HasListeners())
+        {
+            return;
+        }
+
         var tags = new ActivityTagsCollection
         {
             { "dependency.type", type },
             { "dependency.target", target },
             { "dependency.data", data },
             { "dependency.result_code", resultCode },
-            { "dependency.success", success },
+            { "dependency.success", success ? True : False },
         };
         foreach (var p in properties)
         {

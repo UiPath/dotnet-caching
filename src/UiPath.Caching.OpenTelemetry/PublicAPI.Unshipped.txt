@@ -1,1 +1,2 @@
 #nullable enable
+UiPath.Caching.OpenTelemetry.CachingTelemetryProvider.IsListening.get -> bool

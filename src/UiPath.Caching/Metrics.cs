@@ -39,5 +39,5 @@ public static class Metrics
         GetMetricName(topicName, _topicReadMetricNames, Read);
 
     private static string GetMetricName(string topicName, ConcurrentDictionary<string, string> metricDictionary, string operationType)
-        => metricDictionary.GetOrAdd(topicName, tn => $"{Topic}{tn}{operationType}");
+        => metricDictionary.GetOrAdd(topicName, static (tn, operation) => $"{Topic}{tn}{operation}", operationType);
 }
