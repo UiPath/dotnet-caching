@@ -27,6 +27,10 @@ internal sealed partial class RedisCache
         {
             await Task.WhenAll(unreadable.Select(u => RemoveIfUnchangedAsync<T>(u.Key, u.Read, token).AsTask())).ConfigureAwait(false);
         }
+        catch (OperationCanceledException) when (token.IsCancellationRequested)
+        {
+            // The read this follows has its answer; the cleanup is best effort.
+        }
         catch (Exception ex) when (format.Handles(ex))
         {
             LogRedisCacheException(ex);
@@ -37,7 +41,6 @@ internal sealed partial class RedisCache
     private async ValueTask<bool> RemoveIfUnchangedAsync<T>(RedisKey redisKey, RedisValue read, CancellationToken token)
     {
         bool ret = default;
-        token.ThrowIfCancellationRequested();
         NoteWritten(redisKey);
         var operation = StartOperation<T>(nameof(RemoveAsync));
         try
@@ -57,6 +60,11 @@ internal sealed partial class RedisCache
             default,
             token).ConfigureAwait(false);
             operation.Stop();
+        }
+        // Best effort, like the batch cleanup: the read it follows has its answer.
+        catch (OperationCanceledException) when (token.IsCancellationRequested)
+        {
+            operation.Cancel();
         }
         catch (Exception ex)
         {

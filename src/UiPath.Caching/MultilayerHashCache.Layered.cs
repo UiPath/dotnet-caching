@@ -73,6 +73,10 @@ internal sealed partial class MultilayerHashCache
                     ret = await cache._innerCache.SetAsync<T?>(options.CacheKey, value, new HashCacheEntryOptions(options.Expiration, null, options.Metadata, options.SetOption), policy, options.Token).ConfigureAwait(false);
                 }
             }
+            catch (OperationCanceledException) when (!keepRefused && options.Token.IsCancellationRequested)
+            {
+                ret = false;
+            }
             catch (Exception ex) when (keepRefused && !(ex is OperationCanceledException && options.Token.IsCancellationRequested))
             {
                 cache.LogInnerCacheSetError(ex, cache.Logged(options, typeof(T)));

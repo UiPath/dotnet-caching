@@ -436,6 +436,24 @@ public class MultilayerCacheRehydrateTests(ITestContextAccessor testContextAcces
     }
 
     [Fact]
+    public async Task A_run_timeout_that_ends_the_store_is_reported_as_timed_out_not_failed()
+    {
+        var token = testContextAccessor.Current.CancellationToken;
+        var aged = new TestCacheEntry<string?> { Value = "cached", Expiration = DateTimeOffset.UtcNow.AddMilliseconds(300) };
+        _innerCache.GetCacheEntryAsync<string>(_cacheKey, Arg.Any<CachePolicy?>(), Arg.Any<CancellationToken>()).Returns(aged);
+        _distributedLock.TryAcquireAsync(Arg.Any<string>(), Arg.Any<TimeSpan>(), Arg.Any<CancellationToken>())
+            .Returns(Substitute.For<IAsyncDisposable>());
+        _innerCache.SetAsync<string?>(_cacheKey, Arg.Any<string?>(), Arg.Any<DateTimeOffset>(), Arg.Any<CachePolicy?>(), Arg.Any<CancellationToken>())
+            .Returns(call => new ValueTask<bool>(HangUntilCancelledAsync(call.Arg<CancellationToken>())));
+
+        await Sut.GetOrAddAsync(_cacheKey, _ => Task.FromResult<string?>("rehydrated"), RehydratePolicy(duration: TimeSpan.FromSeconds(2)), token);
+
+        await WaitForAsync(() => _telemetry.Events.Any(e => e.Name is "cache.rehydrate.timed_out" or "cache.rehydrate.failed"), TimeSpan.FromSeconds(15), token);
+        _telemetry.Events.Should().Contain(e => e.Name == "cache.rehydrate.timed_out");
+        _telemetry.Events.Should().NotContain(e => e.Name == "cache.rehydrate.failed");
+    }
+
+    [Fact]
     public async Task Rehydrate_holds_lock_when_inner_write_returns_false()
     {
         var token = testContextAccessor.Current.CancellationToken;
@@ -639,6 +657,12 @@ public class MultilayerCacheRehydrateTests(ITestContextAccessor testContextAcces
             Name = "test-profile",
         },
     };
+
+    private static async Task<bool> HangUntilCancelledAsync(CancellationToken token)
+    {
+        await Task.Delay(Timeout.Infinite, token);
+        return true;
+    }
 
     private static async Task WaitForAsync(Func<bool> predicate, TimeSpan timeout, CancellationToken token)
     {

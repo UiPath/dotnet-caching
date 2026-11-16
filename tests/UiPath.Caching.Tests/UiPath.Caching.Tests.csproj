@@ -21,6 +21,7 @@
     <PackageReference Include="xunit.v3" />
     <PackageReference Include="Microsoft.Testing.Extensions.CodeCoverage" />
     <PackageReference Include="AwesomeAssertions" />
+    <PackageReference Include="Microsoft.Extensions.Diagnostics.HealthChecks" />
     <PackageReference Include="NSubstitute" />
     <PackageReference Include="Moq" />
     <PackageReference Include="AutoFixture.Xunit3" />

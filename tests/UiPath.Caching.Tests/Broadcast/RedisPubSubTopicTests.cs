@@ -1,4 +1,5 @@
 using System.Text;
+using Microsoft.Extensions.Logging;
 using NSubstitute.ExceptionExtensions;
 using StackExchange.Redis;
 using UiPath.Caching.Policies;
@@ -196,6 +197,24 @@ public class RedisPubSubTopicTests(ITestContextAccessor testContextAccessor) : I
         cancelSource.Cancel();
         Func<Task> act = async () => await sut.PublishAsync(cloudEvent, token);
         await act.Should().ThrowAsync<OperationCanceledException>();
+    }
+
+    [Fact]
+    public async Task A_publish_the_caller_cancels_reaches_the_caller_and_is_not_logged()
+    {
+        var logger = _fixture.Freeze<ILogger<RedisPubSubTopic<ICacheEvent>>>();
+        logger.IsEnabled(Arg.Any<LogLevel>()).Returns(true);
+        var sut = await Sut();
+        using var cts = new CancellationTokenSource();
+        var pending = new TaskCompletionSource<long>(TaskCreationOptions.RunContinuationsAsynchronously);
+        _database.PublishAsync(Arg.Any<RedisChannel>(), Arg.Any<RedisValue>(), Arg.Any<CommandFlags>()).Returns(pending.Task);
+
+        var publish = sut.PublishAsync(new TestCacheEvent { Id = Guid.NewGuid().ToString(), Source = new Uri("urn:machine") }, cts.Token).AsTask();
+        await cts.CancelAsync();
+        pending.SetException(new OperationCanceledException(cts.Token));
+
+        await publish.Invoking(p => p).Should().ThrowAsync<OperationCanceledException>();
+        logger.ReceivedCalls().Should().NotContain(c => c.GetMethodInfo().Name == "Log" && (LogLevel)c.GetArguments()[0]! >= LogLevel.Warning && c.GetArguments()[3] is OperationCanceledException);
     }
 
     [Fact]

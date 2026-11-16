@@ -278,6 +278,56 @@ public class RedisHashCacheTests(ITestContextAccessor testContextAccessor) : IAs
     }
 
     [Fact]
+    public async Task A_field_read_the_caller_cancels_reaches_the_caller_and_is_not_logged_or_counted()
+    {
+        var pending = PendingHash<RedisValue>();
+        _database.HashGetAsync(Arg.Any<RedisKey>(), Arg.Any<RedisValue>(), Arg.Any<CommandFlags>()).Returns(pending.Task);
+
+        await CancelHashCallMidFlightAsync(pending, token => Sut.GetItemAsync<string>(_cacheKey, "f", policy: null, token: token).AsTask());
+    }
+
+    [Fact]
+    public async Task A_whole_hash_read_the_caller_cancels_reaches_the_caller_and_is_not_logged_or_counted()
+    {
+        var pending = PendingHash<HashEntry[]>();
+        _database.HashGetAllAsync(Arg.Any<RedisKey>(), Arg.Any<CommandFlags>()).Returns(pending.Task);
+
+        await CancelHashCallMidFlightAsync(pending, token => Sut.GetAsync<string>(_cacheKey, policy: null, token: token).AsTask());
+    }
+
+    [Fact]
+    public async Task An_adoption_read_that_a_timer_the_library_owns_cancels_reaches_its_owner()
+    {
+        using var budget = new CancellationTokenSource(TimeSpan.FromMilliseconds(50));
+        _transaction.ExecuteAsync(Arg.Any<CommandFlags>()).Returns(_ => HangUntilAsync<bool>(budget.Token));
+
+        var read = ((IAdoptionReadHashCache)Sut).ReadForAdoptionAsync<string>(_cacheKey, policy: null, budget.Token).AsTask();
+
+        await read.Invoking(r => r).Should().ThrowAsync<OperationCanceledException>();
+        LoggedExceptionTypes.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task A_peer_read_that_a_timer_the_library_owns_cancels_reaches_its_owner()
+    {
+        using var timeout = new CancellationTokenSource(TimeSpan.FromMilliseconds(50));
+        _database.HashGetAllAsync(Arg.Any<RedisKey>(), Arg.Any<CommandFlags>()).Returns(_ => HangUntilAsync<HashEntry[]>(timeout.Token));
+
+        var read = Sut.GetCacheEntryAsync<string>(_cacheKey, policy: null, token: timeout.Token).AsTask();
+
+        await read.Invoking(r => r).Should().ThrowAsync<OperationCanceledException>();
+    }
+
+    [Fact]
+    public async Task A_refresh_the_caller_cancels_reaches_the_caller_and_is_not_logged_or_counted()
+    {
+        var pending = PendingHash<bool>();
+        _database.KeyExpireAsync(Arg.Any<RedisKey>(), Arg.Any<DateTime?>(), Arg.Any<CommandFlags>()).Returns(pending.Task);
+
+        await CancelHashCallMidFlightAsync(pending, token => Sut.RefreshAsync<string>(_cacheKey, TimeSpan.FromMinutes(1), policy: null, token).AsTask());
+    }
+
+    [Fact]
     public async Task Get_data_from_cacheKey_cache()
     {
         var field = _fixture.Create<string>();
@@ -2584,6 +2634,14 @@ public class RedisHashCacheTests(ITestContextAccessor testContextAccessor) : IAs
         return ValueTask.CompletedTask;
     }
 
+    private static TaskCompletionSource<T> PendingHash<T>() => new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+    private static async Task<T> HangUntilAsync<T>(CancellationToken token)
+    {
+        await Task.Delay(Timeout.Infinite, token);
+        return default!;
+    }
+
     private static async IAsyncEnumerable<HashEntry> Pages(IEnumerable<HashEntry> entries)
     {
         foreach (var entry in entries)
@@ -2591,6 +2649,18 @@ public class RedisHashCacheTests(ITestContextAccessor testContextAccessor) : IAs
             await Task.Yield();
             yield return entry;
         }
+    }
+
+    private async Task CancelHashCallMidFlightAsync<T>(TaskCompletionSource<T> pending, Func<CancellationToken, Task> call)
+    {
+        using var cts = new CancellationTokenSource();
+        var running = call(cts.Token);
+        await cts.CancelAsync();
+        pending.TrySetException(new OperationCanceledException(cts.Token));
+
+        await running.Invoking(r => r).Should().ThrowAsync<OperationCanceledException>();
+        LoggedExceptionTypes.Should().BeEmpty();
+        _telemetry.Metrics.Should().NotContain(m => m.Name.StartsWith("Caching.Stats.", StringComparison.Ordinal), "a cancelled call is neither a hit nor a miss");
     }
 
     private List<CommandFlags> StubFieldReads()

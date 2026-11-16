@@ -102,6 +102,10 @@ public abstract partial class MultilayerCacheBase
                     static (s, written, keeper) => (s.Shape.Written(written), s.Cache.KeepAfterInnerWrite(s.Shape.Written(written), s.KeepRefused, s.Policy, (s.Shape, s.Options, s.Value, s.Entry, Keeper: keeper, Written: written, s.Policy), static (x, max) => x.Shape.KeepWritten(x.Keeper, x.Options, x.Value, max, x.Entry, x.Shape.Version(x.Written), x.Policy), s.Options.Token), s.Shape.Counted(written)),
                     options.Token).ConfigureAwait(false);
             }
+            catch (OperationCanceledException) when (options.Token.IsCancellationRequested)
+            {
+                return (false, false, default);
+            }
             catch (Exception ex)
             {
                 cache.LogInnerCacheSetError(ex, Logged(options));
@@ -188,6 +192,8 @@ public abstract partial class MultilayerCacheBase
             var rehydrateOptions = shape.BuildOptions(originalCacheKey, rehydrateExpiration, ct);
             if (!await StoreAsync(rehydrateOptions, shape.Present(newValue), cache.GetInnerCacheDisconnected(), policy).ConfigureAwait(false))
             {
+                // A run timeout that ended the store is the coordinator's to report, not a write failure.
+                ct.ThrowIfCancellationRequested();
                 throw new RehydrateWriteFailedException(originalCacheKey.Name);
             }
         }

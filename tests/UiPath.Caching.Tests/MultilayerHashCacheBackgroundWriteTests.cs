@@ -194,6 +194,41 @@ public class MultilayerHashCacheBackgroundWriteTests
     }
 
     [Fact]
+    public async Task A_remove_the_caller_cancels_mid_delete_still_announces_the_invalidation()
+    {
+        using var h = new Rig();
+        using var cancelled = new CancellationTokenSource();
+        h.OnRemove = () =>
+        {
+            cancelled.Cancel();
+            return Task.FromException<bool>(new OperationCanceledException(cancelled.Token));
+        };
+
+        (await h.Cache.RemoveAsync<string>("k", cancelled.Token)).Should().BeFalse();
+
+        h.Log.Should().Contain("event:k", "the delete may have landed before the cancel, and a peer drops its copy on this event");
+    }
+
+    [Fact]
+    public async Task A_set_the_caller_cancels_mid_write_answers_false_without_announcing_and_keeps_nothing_new()
+    {
+        using var h = new Rig();
+        using var cancelled = new CancellationTokenSource();
+        await h.Cache.SetAsync<string>("k", Fields("old"), Awaited, Ct);
+        h.Local("k").Should().Be("old");
+        h.OnWrite = token =>
+        {
+            cancelled.Cancel();
+            return Task.FromException<bool>(new OperationCanceledException(token));
+        };
+
+        (await h.Cache.SetAsync<string>("k", Fields("new"), Awaited, cancelled.Token)).Should().BeFalse();
+
+        h.Log.Should().NotContain(e => e == "event:k" && h.Log.IndexOf(e) > h.Log.IndexOf("write:k=new"));
+        h.Local("k").Should().NotBe("new");
+    }
+
+    [Fact]
     public async Task A_remove_after_a_background_set_waits_for_it_and_leaves_nothing_local()
     {
         using var h = new Rig();
@@ -601,7 +636,7 @@ public class MultilayerHashCacheBackgroundWriteTests
                 call =>
                 {
                     Add($"remove:{call.ArgAt<CacheKey>(0).Name}");
-                    return new ValueTask<bool>(true);
+                    return new ValueTask<bool>(OnRemove?.Invoke() ?? Task.FromResult(true));
                 });
             ValueTaskStubs.Returns(
                 inner.RefreshAsync<string>(Arg.Any<CacheKey>(), Arg.Any<HashCacheEntryOptions>(), Arg.Any<CachePolicy?>(), Arg.Any<CancellationToken>()),
@@ -666,6 +701,8 @@ public class MultilayerHashCacheBackgroundWriteTests
         public Action<CancellationToken>? OnToken { get; set; }
 
         public Func<CancellationToken, Task<bool>>? OnWrite { get; set; }
+
+        public Func<Task<bool>>? OnRemove { get; set; }
 
         public Func<string, Task<ICacheEntry<IDictionary<string, string?>>>?>? OnRead { get; set; }
 

@@ -176,7 +176,7 @@ public abstract class RedisCacheBase : IConnectionState, IMasterReadScope, IDisp
         CacheExpiration.ThrowIfNotPositive(expiration, paramName);
 
     /// <summary>One command under <paramref name="pipeline"/>, handed <paramref name="state"/> so it needs no closure: timed by <paramref name="operation"/>, tracked as a hit by <paramref name="isHit"/>, and on failure logged through <paramref name="logFailure"/> and answered with <paramref name="fallback"/>.</summary>
-    protected static async ValueTask<TResult> RunAsync<TState, TResult>(
+    protected static ValueTask<TResult> RunAsync<TState, TResult>(
         IResiliencePipeline pipeline,
         TelemetryScope operation,
         Func<TState, CancellationToken, ValueTask<TResult>> command,
@@ -184,27 +184,8 @@ public abstract class RedisCacheBase : IConnectionState, IMasterReadScope, IDisp
         TResult fallback,
         Func<TResult, bool> isHit,
         Action<Exception> logFailure,
-        CancellationToken token)
-    {
-        var ret = fallback;
-        try
-        {
-            token.ThrowIfCancellationRequested();
-            ret = await pipeline.ExecuteAsync(command, state, fallback, token).ConfigureAwait(false);
-            operation.Stop();
-        }
-        catch (Exception ex)
-        {
-            operation.Stop();
-            logFailure(ex);
-        }
-        finally
-        {
-            operation.Track(isHit(ret));
-        }
-
-        return ret;
-    }
+        CancellationToken token) =>
+        RunAsync(pipeline, operation, command, state, fallback, isHit, logFailure, answerCancellationWithFallback: false, token);
 
     protected void TrackRead(TelemetryScope operation, bool hit, RedisKey key)
     {
@@ -217,18 +198,30 @@ public abstract class RedisCacheBase : IConnectionState, IMasterReadScope, IDisp
 
     /// <summary>The key's TTL, or null when it has none, the key is invalid or the command failed.</summary>
     protected ValueTask<TimeSpan?> KeyTimeToLiveAsync(IResiliencePipeline pipeline, TelemetryScope operation, IRedisKeyStrategy keyStrategy, CacheKey cacheKey, Action<Exception> logFailure, CancellationToken token) =>
-        RunAsync(pipeline, operation, static (s, token) => TimeToLiveCommand(s.Self, s.Strategy, s.Key, token), (Self: this, Strategy: keyStrategy, Key: cacheKey), (TimeSpan?)null, static timeToLive => timeToLive != null, logFailure, token);
+        RunAsync(pipeline, operation, static (s, token) => TimeToLiveCommand(s.Self, s.Strategy, s.Key, token), (Self: this, Strategy: keyStrategy, Key: cacheKey), (TimeSpan?)null, static timeToLive => timeToLive != null, logFailure, answerCancellationWithFallback: true, token);
 
     /// <summary>The key's expiration: EXPIRETIME on Redis 7, else the TTL added to now, under the same operation.</summary>
     protected async ValueTask<DateTimeOffset?> KeyExpireTimeAsync(IResiliencePipeline pipeline, TelemetryScope operation, IRedisKeyStrategy keyStrategy, CacheKey cacheKey, Action<Exception> logFailure, CancellationToken token)
     {
-        if (!await SupportsExpireTimeAsync(token).ConfigureAwait(false))
+        bool supported;
+        try
+        {
+            supported = await SupportsExpireTimeAsync(token).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) when (token.IsCancellationRequested)
+        {
+            operation.Stop();
+            operation.Track(false);
+            return null;
+        }
+
+        if (!supported)
         {
             var timeToLive = await KeyTimeToLiveAsync(pipeline, operation, keyStrategy, cacheKey, logFailure, token).ConfigureAwait(false);
             return timeToLive.HasValue ? Clock.ToDateTimeOffset(timeToLive.Value) : null;
         }
 
-        return await RunAsync(pipeline, operation, static (s, token) => ExpireTimeCommand(s.Self, s.Strategy, s.Key, token), (Self: this, Strategy: keyStrategy, Key: cacheKey), (DateTime?)null, static expireTime => expireTime.HasValue, logFailure, token).ConfigureAwait(false);
+        return await RunAsync(pipeline, operation, static (s, token) => ExpireTimeCommand(s.Self, s.Strategy, s.Key, token), (Self: this, Strategy: keyStrategy, Key: cacheKey), (DateTime?)null, static expireTime => expireTime.HasValue, logFailure, answerCancellationWithFallback: true, token).ConfigureAwait(false);
     }
 
     /// <summary>Write duration when the call carries none: policy, then cache default, then <see cref="CachePolicy.DefaultDistributedExpiration"/>; never unbounded by omission.</summary>
@@ -265,6 +258,47 @@ public abstract class RedisCacheBase : IConnectionState, IMasterReadScope, IDisp
             }
             _disposed = true;
         }
+    }
+
+    /// <summary>As <see cref="RunAsync{TState, TResult}(IResiliencePipeline, TelemetryScope, Func{TState, CancellationToken, ValueTask{TResult}}, TState, TResult, Func{TResult, bool}, Action{Exception}, CancellationToken)"/>, answering a cancelled token with the fallback, as a pre-cancelled call is, when <paramref name="answerCancellationWithFallback"/>; otherwise the cancellation reaches the caller.</summary>
+    private protected static async ValueTask<TResult> RunAsync<TState, TResult>(
+        IResiliencePipeline pipeline,
+        TelemetryScope operation,
+        Func<TState, CancellationToken, ValueTask<TResult>> command,
+        TState state,
+        TResult fallback,
+        Func<TResult, bool> isHit,
+        Action<Exception> logFailure,
+        bool answerCancellationWithFallback,
+        CancellationToken token)
+    {
+        var ret = fallback;
+        try
+        {
+            token.ThrowIfCancellationRequested();
+            ret = await pipeline.ExecuteAsync(command, state, fallback, token).ConfigureAwait(false);
+            operation.Stop();
+        }
+        catch (OperationCanceledException) when (token.IsCancellationRequested && answerCancellationWithFallback)
+        {
+            operation.Stop();
+        }
+        catch (OperationCanceledException) when (token.IsCancellationRequested)
+        {
+            operation.Cancel();
+            throw;
+        }
+        catch (Exception ex)
+        {
+            operation.Stop();
+            logFailure(ex);
+        }
+        finally
+        {
+            operation.Track(isHit(ret));
+        }
+
+        return ret;
     }
 
     private protected static Task<TResult[]> PerSlotAsync<TState, TResult>(int[][] groups, TState state, Func<TState, int[], ValueTask<TResult>> run, TResult failed, Action<Exception> logFailure) =>

@@ -511,7 +511,7 @@ internal sealed partial class MultilayerHashCache : MultilayerCacheBase, IHashCa
                 },
                 token).ConfigureAwait(false);
         }
-        catch (Exception ex)
+        catch (Exception ex) when (!(ex is OperationCanceledException && token.IsCancellationRequested))
         {
             LogInnerCacheRefreshError(ex, Logged(cacheEntryOptions, typeof(T)));
             return false;
@@ -532,7 +532,7 @@ internal sealed partial class MultilayerHashCache : MultilayerCacheBase, IHashCa
         {
             return _memoryCache.TryGetValue(cacheEntryOptions.CacheKey.Name, out _) || await _innerCache.ContainsAsync<T>(cacheEntryOptions.CacheKey, cacheEntryOptions.Token).ConfigureAwait(false);
         }
-        catch (Exception ex)
+        catch (Exception ex) when (!(ex is OperationCanceledException && cacheEntryOptions.Token.IsCancellationRequested))
         {
             LogInnerCacheContainsError(ex, Logged(cacheEntryOptions, typeof(T)));
             return false;
@@ -910,7 +910,7 @@ internal sealed partial class MultilayerHashCache : MultilayerCacheBase, IHashCa
                 options.CacheKey.Name,
                 (Cache: this, Options: options),
                 static s => s.Cache.RemoveLocal(s.Options.CacheKey.Name),
-                static s => s.Cache._innerCache.RemoveAsync<T>(s.Options.CacheKey, s.Options.Token),
+                static s => RemoveInnerAsync(s.Cache._innerCache.RemoveAsync<T>(s.Options.CacheKey, s.Options.Token), s.Options.Token),
                 options.Token).ConfigureAwait(false);
 
             var eventFired = await _eventPublisher.CacheRemovedAsync(options, typeof(T)).ConfigureAwait(false);

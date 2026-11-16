@@ -1,3 +1,4 @@
+#pragma warning disable CA2012 // NSubstitute setups call the ValueTask-returning members without consuming the result.
 using Microsoft.Extensions.Caching.Memory;
 using Microsoft.Extensions.Internal;
 using Microsoft.Extensions.Logging;
@@ -1098,6 +1099,70 @@ public class MultilayerCacheTests(ITestContextAccessor testContextAccessor) : IA
     }
 
     [Fact]
+    public async Task Contains_the_caller_cancels_reaches_the_caller_and_is_not_logged()
+    {
+        using var cts = new CancellationTokenSource();
+        _memoryCache.TryGetValue(Arg.Any<object>(), out Arg.Any<object?>()).Returns(false);
+        var pending = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+        _innerCache.ContainsAsync<string>(_innerCacheKey, Arg.Any<CancellationToken>()).Returns(new ValueTask<bool>(pending.Task));
+
+        var containing = Sut.ContainsAsync<string>(_cacheKey, token: cts.Token).AsTask();
+        await cts.CancelAsync();
+        pending.SetException(new OperationCanceledException(cts.Token));
+
+        await containing.Invoking(c => c).Should().ThrowAsync<OperationCanceledException>();
+        WarningsOrWorse().Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task Refresh_the_caller_cancels_reaches_the_caller_and_is_not_logged()
+    {
+        using var cts = new CancellationTokenSource();
+        var pending = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+        _innerCache.RefreshAsync<string>(Arg.Any<CacheKey>(), Arg.Any<DateTimeOffset>(), Arg.Any<CachePolicy?>(), Arg.Any<CancellationToken>())
+            .Returns(new ValueTask<bool>(pending.Task));
+
+        var refreshing = Sut.RefreshAsync<string>(_cacheKey, policy: null, token: cts.Token).AsTask();
+        await cts.CancelAsync();
+        pending.SetException(new OperationCanceledException(cts.Token));
+
+        await refreshing.Invoking(r => r).Should().ThrowAsync<OperationCanceledException>();
+        WarningsOrWorse().Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task Set_the_caller_cancels_is_answered_false_and_is_not_logged()
+    {
+        using var cts = new CancellationTokenSource();
+        var pending = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+        _innerCache.SetAsync(_innerCacheKey, Arg.Any<string?>(), Arg.Any<DateTimeOffset>(), Arg.Any<CachePolicy?>(), Arg.Any<CancellationToken>())
+            .Returns(new ValueTask<bool>(pending.Task));
+
+        var setting = Sut.SetAsync(_cacheKey, "v", TimeSpan.FromMinutes(1), token: cts.Token).AsTask();
+        await cts.CancelAsync();
+        pending.SetException(new OperationCanceledException(cts.Token));
+
+        (await setting).Should().BeFalse();
+        WarningsOrWorse().Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task Set_of_several_keys_the_caller_cancels_is_answered_false_and_is_not_logged()
+    {
+        using var cts = new CancellationTokenSource();
+        var pending = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+        _innerCache.SetAsync(Arg.Any<KeyValuePair<CacheKey, string?>[]>(), Arg.Any<DateTimeOffset>(), Arg.Any<CachePolicy?>(), Arg.Any<CancellationToken>())
+            .Returns(new ValueTask<bool>(pending.Task));
+
+        var setting = Sut.SetAsync<string>([new(_cacheKey, "v")], TimeSpan.FromMinutes(1), policy: null, token: cts.Token).AsTask();
+        await cts.CancelAsync();
+        pending.SetException(new OperationCanceledException(cts.Token));
+
+        (await setting).Should().BeFalse();
+        WarningsOrWorse().Should().BeEmpty();
+    }
+
+    [Fact]
     public async Task Read_ExpireTime_For_Key()
     {
         _memoryCache = new MemoryCache(Options.Create(new MemoryCacheOptions
@@ -1565,4 +1630,7 @@ public class MultilayerCacheTests(ITestContextAccessor testContextAccessor) : IA
     {
         return key;
     }
+
+    private LogLevel[] WarningsOrWorse() =>
+        [.. _logger.ReceivedCalls().Where(c => c.GetMethodInfo().Name == "Log").Select(c => (LogLevel)c.GetArguments()[0]!).Where(l => l >= LogLevel.Warning)];
 }

@@ -35,7 +35,7 @@ public class RedisHealthCheck : IHealthCheck
                     { "ConnectionMultiplexer.DisconnectedEndPoints", DisconnectedEndPoints(_redisConnector.Database.Multiplexer) },
                 });
         }
-        catch (Exception ex)
+        catch (Exception ex) when (!(ex is OperationCanceledException && cancellationToken.IsCancellationRequested))
         {
             return new HealthCheckResult(context.Registration.FailureStatus, exception: ex);
         }

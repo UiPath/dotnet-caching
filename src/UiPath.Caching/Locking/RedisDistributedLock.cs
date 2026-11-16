@@ -74,7 +74,7 @@ internal sealed class RedisDistributedLock : IDistributedLock, IReportsLockConte
                 await _redis.ConnectAsync(token).ConfigureAwait(false);
                 acquired = await _redis.Database.LockTakeAsync(redisKey, lockToken, expiry, CommandFlags.DemandMaster).ConfigureAwait(false);
             }
-            catch (Exception ex)
+            catch (Exception ex) when (!(ex is OperationCanceledException && token.IsCancellationRequested))
             {
                 var contendedStr = contended.ToString();
                 _telemetry.TryTrackException(ex, [new(PropOperation, OperationAcquire), new(PropKey, key), new(PropContended, contendedStr)]);
@@ -112,7 +112,7 @@ internal sealed class RedisDistributedLock : IDistributedLock, IReportsLockConte
             await _redis.ConnectAsync(token).ConfigureAwait(false);
             acquired = await _redis.Database.LockTakeAsync(redisKey, lockToken, expiry, CommandFlags.DemandMaster).ConfigureAwait(false);
         }
-        catch (Exception ex)
+        catch (Exception ex) when (!(ex is OperationCanceledException && token.IsCancellationRequested))
         {
             _telemetry.TryTrackException(ex, [new(PropOperation, OperationAcquire), new(PropKey, key), new(PropContended, bool.FalseString)]);
             _telemetry.TryTrackEvent(EventUnavailable, [new(PropKey, key), new(PropContended, bool.FalseString)]);
