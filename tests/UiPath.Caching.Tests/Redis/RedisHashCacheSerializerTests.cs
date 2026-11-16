@@ -83,6 +83,25 @@ public class RedisHashCacheSerializerTests(ITestContextAccessor testContextAcces
     }
 
     [Fact]
+    public async Task A_chunked_replace_the_caller_cancels_while_it_drops_the_stale_metadata_reaches_the_caller()
+    {
+        var registry = new ValueSerializerRegistry([("fast", _fast, false)]);
+        var sut = Create(registry, fieldBatchSize: 2);
+        CaptureWrites();
+        using var cts = new CancellationTokenSource();
+        var dropping = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+        _database.HashDeleteAsync(Arg.Any<RedisKey>(), Arg.Any<RedisValue>(), Arg.Any<CommandFlags>()).Returns(dropping.Task);
+        var values = Enumerable.Range(0, 5).ToDictionary(i => $"f{i}", i => (string?)$"v{i}");
+        var options = new HashCacheEntryOptions(DateTimeOffset.UtcNow.AddMinutes(5), Metadata: new Dictionary<string, string?>(), SetOption: HashCacheSetOption.HashReplace);
+
+        var setting = sut.SetAsync("k", values, options, ResolvedPolicy(registry), cts.Token).AsTask();
+        await cts.CancelAsync();
+        dropping.SetException(new OperationCanceledException(cts.Token));
+
+        await setting.Invoking(s => s).Should().ThrowAsync<OperationCanceledException>();
+    }
+
+    [Fact]
     public async Task A_key_replace_with_empty_metadata_needs_no_field_delete_for_a_non_json_write()
     {
         var sut = Create(out var registry);
@@ -597,7 +616,7 @@ public class RedisHashCacheSerializerTests(ITestContextAccessor testContextAcces
         ];
     }
 
-    private RedisHashCache Create(ValueSerializerRegistry registry, ISerializerProxy<byte[]>? proxy = null, CachePolicy? defaultPolicy = null, bool cacheNullValues = false, ILogger<RedisHashCache>? logger = null, int auditThreshold = 0)
+    private RedisHashCache Create(ValueSerializerRegistry registry, ISerializerProxy<byte[]>? proxy = null, CachePolicy? defaultPolicy = null, bool cacheNullValues = false, ILogger<RedisHashCache>? logger = null, int auditThreshold = 0, int? fieldBatchSize = null)
     {
         var connector = Substitute.For<IRedisConnector>();
         connector.Database.Returns(_database);
@@ -614,6 +633,11 @@ public class RedisHashCacheSerializerTests(ITestContextAccessor testContextAcces
         var strategies = Substitute.For<IRedisKeyStrategyFactory>();
         strategies.Create(Arg.Any<CacheOptions>(), Arg.Any<Type>()).Returns(strategy);
         var options = new RedisCacheOptions { RedisKeyStrategyFactory = strategies, ReadScriptsEnabled = false, CacheNullValues = cacheNullValues };
+        if (fieldBatchSize is { } batch)
+        {
+            options.HashFieldBatchSize = batch;
+        }
+
         var cacheOptions = new CacheOptions { AppShortName = "test", ConnectionMonitorEnabled = true, AuditEnabled = auditThreshold > 0, LargeValueThreshold = auditThreshold };
 
         return new RedisHashCache(

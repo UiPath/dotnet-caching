@@ -126,6 +126,58 @@ public class MultilayerCacheBackgroundWriteTests
     }
 
     [Fact]
+    public async Task A_batch_set_the_caller_cancels_after_part_of_it_committed_drops_the_local_entries()
+    {
+        using var h = new Harness();
+        using var cancelled = new CancellationTokenSource();
+        await h.Cache.SetAsync<string>([new KeyValuePair<CacheKey, string?>("a", "old"), new KeyValuePair<CacheKey, string?>("b", "old")], Awaited, Ct);
+        h.Local("a").Should().Be("old");
+        h.Local("b").Should().Be("old");
+        h.OnBatchWrite = () =>
+        {
+            cancelled.Cancel();
+            throw new OperationCanceledException(cancelled.Token);
+        };
+
+        (await h.Cache.SetAsync<string>([new KeyValuePair<CacheKey, string?>("a", "new"), new KeyValuePair<CacheKey, string?>("b", "new")], Awaited, cancelled.Token)).Should().BeFalse();
+
+        h.Local("a").Should().BeNull();
+        h.Local("b").Should().BeNull();
+    }
+
+    [Fact]
+    public async Task A_remove_the_caller_cancels_mid_delete_still_tells_the_other_nodes()
+    {
+        using var h = new Harness();
+        using var cancelled = new CancellationTokenSource();
+        h.OnRemove = _ =>
+        {
+            cancelled.Cancel();
+            return Task.FromException<bool>(new OperationCanceledException(cancelled.Token));
+        };
+
+        (await h.Cache.RemoveAsync<string>("k", cancelled.Token)).Should().BeFalse();
+
+        h.Log.Should().Contain("event:k", "the delete may have landed before the cancel");
+    }
+
+    [Fact]
+    public async Task A_batch_remove_the_caller_cancels_mid_delete_still_tells_the_other_nodes_about_every_key()
+    {
+        using var h = new Harness();
+        using var cancelled = new CancellationTokenSource();
+        h.OnRemoveMany = () =>
+        {
+            cancelled.Cancel();
+            return Task.FromException<bool>(new OperationCanceledException(cancelled.Token));
+        };
+
+        (await h.Cache.RemoveAsync<string>(new CacheKey[] { "a", "b" }, cancelled.Token)).Should().BeFalse();
+
+        h.Log.Should().Contain(["event:a", "event:b"]);
+    }
+
+    [Fact]
     public async Task A_set_the_caller_cancels_while_the_write_runs_still_publishes_what_was_written()
     {
         using var h = new Harness();
@@ -1095,6 +1147,13 @@ public class MultilayerCacheBackgroundWriteTests
                     return new ValueTask<bool>(OnRemove?.Invoke(key) ?? Task.FromResult(true));
                 });
             ValueTaskStubs.Returns(
+                inner.RemoveAsync<string>(Arg.Any<CacheKey[]>(), Arg.Any<CancellationToken>()),
+                call =>
+                {
+                    Add("remove-many");
+                    return new ValueTask<bool>(OnRemoveMany?.Invoke() ?? Task.FromResult(true));
+                });
+            ValueTaskStubs.Returns(
                 inner.GetCacheEntriesAsync<string>(Arg.Any<CacheKey[]>(), Arg.Any<CachePolicy?>(), Arg.Any<CancellationToken>()),
                 call =>
                 {
@@ -1155,6 +1214,8 @@ public class MultilayerCacheBackgroundWriteTests
         public Action? OnBatchWrite { get; set; }
 
         public Func<string, Task<bool>>? OnRemove { get; set; }
+
+        public Func<Task<bool>>? OnRemoveMany { get; set; }
 
         public Func<string, Task<ICacheEntry<string?>>?>? OnRead { get; set; }
 

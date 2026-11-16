@@ -205,7 +205,7 @@ public sealed partial class RedisStreamsTopic<T> : ITopic<T>
             LogPublished(TopicKey, @event.Id, id);
             return !id.IsNull;
         }
-        catch (Exception ex)
+        catch (Exception ex) when (!(ex is OperationCanceledException && token.IsCancellationRequested))
         {
             LogPublishError(ex, TopicKey, @event.Id);
             return false;
@@ -284,32 +284,12 @@ public sealed partial class RedisStreamsTopic<T> : ITopic<T>
 
     private async ValueTask<(RedisValue Id, bool Rung)> AddAndRingAsync(NameValueEntry[] message)
     {
-        if (!_prefixChecked)
-        {
-            _prefixChecked = true;
-            if (Prefixes(_redis.Database))
-            {
-                // The script's channel is an argument, which neither prefix reaches; a PUBLISH of its own gets both.
-                _ringInAdd = false;
-                LogRingInAddPrefixed(TopicKey);
-            }
-        }
-
+        CheckPrefixOnce();
         if (_ringInAdd)
         {
-            var values = new RedisValue[3 + message.Length * 2];
-            values[0] = _streamOptions.MaxLength is { } maxLength ? maxLength : RedisValue.EmptyString;
-            values[1] = _notifyRedisChannel!.Value.ToString();
-            values[2] = _context.ConsumerName;
-            for (var i = 0; i < message.Length; i++)
-            {
-                values[3 + i * 2] = message[i].Name;
-                values[4 + i * 2] = message[i].Value;
-            }
-
             try
             {
-                var result = await _redis.Database.ScriptEvaluateAsync(AddAndRingScript, [_context.Topic], values, CommandFlags.DemandMaster).ConfigureAwait(false);
+                var result = await _redis.Database.ScriptEvaluateAsync(AddAndRingScript, [_context.Topic], AddAndRingArguments(message), CommandFlags.DemandMaster).ConfigureAwait(false);
                 if ((RedisResult[]?)result is not [var idPart, var rungPart, ..] reply)
                 {
                     throw new RedisException("The script that adds an entry and rings its doorbell returned an unexpected reply.");
@@ -336,6 +316,37 @@ public sealed partial class RedisStreamsTopic<T> : ITopic<T>
 
         var id = await _redis.Database.StreamAddAsync(_context.Topic, message, maxLength: _streamOptions.MaxLength, useApproximateMaxLength: true, flags: CommandFlags.DemandMaster).ConfigureAwait(false);
         return (id, false);
+    }
+
+    private void CheckPrefixOnce()
+    {
+        if (_prefixChecked)
+        {
+            return;
+        }
+
+        _prefixChecked = true;
+        if (Prefixes(_redis.Database))
+        {
+            // The script's channel is an argument, which neither prefix reaches; a PUBLISH of its own gets both.
+            _ringInAdd = false;
+            LogRingInAddPrefixed(TopicKey);
+        }
+    }
+
+    private RedisValue[] AddAndRingArguments(NameValueEntry[] message)
+    {
+        var values = new RedisValue[3 + message.Length * 2];
+        values[0] = _streamOptions.MaxLength is { } maxLength ? maxLength : RedisValue.EmptyString;
+        values[1] = _notifyRedisChannel!.Value.ToString();
+        values[2] = _context.ConsumerName;
+        for (var i = 0; i < message.Length; i++)
+        {
+            values[3 + i * 2] = message[i].Name;
+            values[4 + i * 2] = message[i].Value;
+        }
+
+        return values;
     }
 
     /// <summary>Takes the doorbell for an entry that rings in its own command: only while none is in flight and the spacing has passed.</summary>

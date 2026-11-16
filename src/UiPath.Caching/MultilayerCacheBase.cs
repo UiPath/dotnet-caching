@@ -249,6 +249,19 @@ public abstract partial class MultilayerCacheBase : IDisposable
     private protected static void Track(object? entry, bool tracked) =>
         (entry as IReadTracked)?.Track(tracked);
 
+    /// <summary>A delete the caller cancels may have landed, so it answers false inside the turn and the invalidations still go out.</summary>
+    private protected static async ValueTask<bool> RemoveInnerAsync(ValueTask<bool> removing, CancellationToken token)
+    {
+        try
+        {
+            return await removing.ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) when (token.IsCancellationRequested)
+        {
+            return false;
+        }
+    }
+
     /// <summary>Gives <paramref name="to"/>, the copy a refresh keeps in place of <paramref name="from"/>, that refresh's number.</summary>
     private protected static void LinkRefresh(object? from, object? to)
     {
@@ -459,7 +472,7 @@ public abstract partial class MultilayerCacheBase : IDisposable
 
         if (!written)
         {
-            // The Redis setters answer a cancelled write with false; a drain's cancel is counted apart.
+            // A custom inner tier may answer a cancelled write with false; a drain cancel is counted apart.
             token.ThrowIfCancellationRequested();
 
             _background.Failed("write");
@@ -489,7 +502,7 @@ public abstract partial class MultilayerCacheBase : IDisposable
             return memorySet(state, policy.LocalExpiration ?? _multiLayerCacheOptions.LocalMaxExpiration);
         }
 
-        // The Redis setters answer a canceled write with false, so the caller's token tells a refusal from a cancellation.
+        // A custom inner tier may answer a canceled write with false, so the caller token tells a refusal from a cancellation.
         if (keepRefused && !token.IsCancellationRequested)
         {
             // Kept as a disconnected write is kept, so the callers waiting on the local lock reuse it.

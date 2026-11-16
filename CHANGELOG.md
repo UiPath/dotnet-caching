@@ -20,6 +20,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 
 ### Changed
 
+- **A call whose token is cancelled reaches its caller instead of being answered as a Redis failure.** The Redis string and hash caches, the distributed lock and the topics' `PublishAsync` rethrow the `OperationCanceledException` of a cancelled token without a warning, a failure event or a hit or miss count; before, a read answered a miss and a write, remove, refresh or publish answered `false` (a lock acquire answered a no-op lease and reported itself unavailable), all logged as a Redis failure. `MultilayerCache` and `MultilayerHashCache` `Contains` and `Refresh` then throw for a cancelled caller where they answered `false`. Unchanged: `TimeToLive` and `ExpireTime` still answer a miss for a cancelled token, without a warning; the cleanup of an unreadable value after a read stays best effort and silent; `MultilayerCache` `Set` still answers `false` for a cancelled caller, now without a warning; a delete a cancelled caller ends mid-flight is still announced to the other nodes, and a cancelled batch set still drops this node's local copies, as when the write fails; `RedisCache.TryAdd` already threw; a timeout the library sets (request timeout, factory timeout, adoption read budget, peer refresh timeout) is classified by the code that set it, as before; the health check rethrows a cancelled token, which the health check service reports as unhealthy past its own timeout and rethrows on host shutdown.
+
 - **`GeneratedValue<T>` equality and `ToString` include `SkipFailSafe`.** Two values that differ only in it are no longer equal.
 
 ### Added

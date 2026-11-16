@@ -106,6 +106,32 @@ public class RedisStreamsTopicTests(ITestContextAccessor testContextAccessor) : 
     }
 
     [Fact]
+    public async Task A_publish_the_caller_cancels_reaches_the_caller_and_is_not_logged()
+    {
+        var logger = _fixture.Freeze<ILogger<RedisStreamsTopic<ICacheEvent>>>();
+        logger.IsEnabled(Arg.Any<LogLevel>()).Returns(true);
+        var pending = new TaskCompletionSource<RedisValue>(TaskCreationOptions.RunContinuationsAsynchronously);
+        _database.StreamAddAsync(
+                key: Arg.Any<RedisKey>(),
+                streamPairs: Arg.Any<NameValueEntry[]>(),
+                messageId: Arg.Any<RedisValue?>(),
+                maxLength: Arg.Any<long?>(),
+                useApproximateMaxLength: Arg.Any<bool>(),
+                limit: Arg.Any<long?>(),
+                trimMode: Arg.Any<StreamTrimMode>(),
+                flags: Arg.Any<CommandFlags>())
+            .Returns(pending.Task);
+        using var cts = new CancellationTokenSource();
+
+        var publish = Sut.PublishAsync(_fixture.Create<ICacheEvent>(), cts.Token).AsTask();
+        await cts.CancelAsync();
+        pending.SetException(new OperationCanceledException(cts.Token));
+
+        await publish.Invoking(p => p).Should().ThrowAsync<OperationCanceledException>();
+        logger.ReceivedCalls().Should().NotContain(c => c.GetMethodInfo().Name == nameof(ILogger.Log) && (LogLevel)c.GetArguments()[0]! >= LogLevel.Warning && c.GetArguments()[3] is OperationCanceledException);
+    }
+
+    [Fact]
     public async Task A_published_entry_carries_the_payload_under_the_field_name_and_the_source_after_it()
     {
         var formatter = _fixture.Freeze<IEventFormatterProxy<ICacheEvent>>();

@@ -459,6 +459,11 @@ internal sealed partial class RedisCache : RedisCacheBase, ICache, IInvalidation
             }
             operation.Stop();
         }
+        catch (OperationCanceledException) when (token.IsCancellationRequested)
+        {
+            operation.Cancel();
+            throw;
+        }
         catch (Exception ex)
         {
             operation.Stop();
@@ -550,6 +555,11 @@ internal sealed partial class RedisCache : RedisCacheBase, ICache, IInvalidation
                     }
 
                     operation.Stop();
+                }
+                catch (OperationCanceledException) when (token.IsCancellationRequested)
+                {
+                    operation.Cancel();
+                    throw;
                 }
                 catch (Exception ex) when (format.Handles(ex))
                 {
@@ -776,6 +786,11 @@ internal sealed partial class RedisCache : RedisCacheBase, ICache, IInvalidation
 
             operation.Stop();
         }
+        catch (OperationCanceledException) when (token.IsCancellationRequested)
+        {
+            operation.Cancel();
+            throw;
+        }
         catch (Exception ex) when (format.Handles(ex))
         {
             operation.Stop();
@@ -841,6 +856,11 @@ internal sealed partial class RedisCache : RedisCacheBase, ICache, IInvalidation
             }
             operation.Stop();
         }
+        catch (OperationCanceledException) when (token.IsCancellationRequested)
+        {
+            operation.Cancel();
+            throw;
+        }
         catch (Exception ex)
         {
             operation.Stop();
@@ -881,6 +901,11 @@ internal sealed partial class RedisCache : RedisCacheBase, ICache, IInvalidation
                 LogRedisCacheException).ConfigureAwait(false);
             ret = Array.TrueForAll(committed, static c => c);
             operation.Stop();
+        }
+        catch (OperationCanceledException) when (token.IsCancellationRequested)
+        {
+            operation.Cancel();
+            throw;
         }
         catch (Exception ex)
         {
@@ -988,7 +1013,7 @@ internal sealed partial class RedisCache : RedisCacheBase, ICache, IInvalidation
         // false would claim someone else owns the key, which a cancelled call never established.
         catch (OperationCanceledException) when (token.IsCancellationRequested)
         {
-            operation.Stop();
+            operation.Cancel();
             throw;
         }
         catch (Exception ex)
@@ -1023,6 +1048,11 @@ internal sealed partial class RedisCache : RedisCacheBase, ICache, IInvalidation
             default,
             token).ConfigureAwait(false);
             operation.Stop();
+        }
+        catch (OperationCanceledException) when (token.IsCancellationRequested)
+        {
+            operation.Cancel();
+            throw;
         }
         catch (Exception ex)
         {
@@ -1063,6 +1093,11 @@ internal sealed partial class RedisCache : RedisCacheBase, ICache, IInvalidation
             operation.Stop();
             ret = Array.TrueForAll(responses, static r => r > -1);
         }
+        catch (OperationCanceledException) when (token.IsCancellationRequested)
+        {
+            operation.Cancel();
+            throw;
+        }
         catch (Exception ex)
         {
             operation.Stop();
@@ -1101,6 +1136,11 @@ internal sealed partial class RedisCache : RedisCacheBase, ICache, IInvalidation
             }
 
             operation.Stop();
+        }
+        catch (OperationCanceledException) when (token.IsCancellationRequested)
+        {
+            operation.Cancel();
+            throw;
         }
         catch (Exception ex) when (format.Handles(ex))
         {
@@ -1169,6 +1209,11 @@ internal sealed partial class RedisCache : RedisCacheBase, ICache, IInvalidation
             }
             operation.Stop();
         }
+        catch (OperationCanceledException) when (token.IsCancellationRequested)
+        {
+            operation.Cancel();
+            throw;
+        }
         catch (Exception ex) when (format.Handles(ex))
         {
             operation.Stop();
@@ -1235,6 +1280,11 @@ internal sealed partial class RedisCache : RedisCacheBase, ICache, IInvalidation
             }
 
             operation.Stop();
+        }
+        catch (OperationCanceledException) when (token.IsCancellationRequested)
+        {
+            operation.Cancel();
+            throw;
         }
         catch (Exception ex) when (!atomic && format.Handles(ex))
         {
@@ -1312,6 +1362,11 @@ internal sealed partial class RedisCache : RedisCacheBase, ICache, IInvalidation
                 }
             }
             operation.Stop();
+        }
+        catch (OperationCanceledException) when (token.IsCancellationRequested)
+        {
+            operation.Cancel();
+            throw;
         }
         catch (Exception ex) when (format.Handles(ex))
         {

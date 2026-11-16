@@ -434,7 +434,7 @@ internal sealed partial class MultilayerCache : MultilayerCacheBase, ICache, ISp
         {
             return _memoryCache.TryGetValue(cacheEntryOptions.CacheKey.Name, out _) || await _innerCache.ContainsAsync<T>(cacheEntryOptions.CacheKey, cacheEntryOptions.Token).ConfigureAwait(false);
         }
-        catch (Exception ex)
+        catch (Exception ex) when (!(ex is OperationCanceledException && cacheEntryOptions.Token.IsCancellationRequested))
         {
             LogInnerCacheContainsError(ex, Logged(cacheKey, typeof(T)));
             return false;
@@ -1078,6 +1078,8 @@ internal sealed partial class MultilayerCache : MultilayerCacheBase, ICache, ISp
 
         if (failed.Count > 0)
         {
+            // A run timeout that ended the write is the coordinator's to report, not a write failure.
+            token.ThrowIfCancellationRequested();
             throw new RehydrateWriteFailedException(string.Join(",", failed));
         }
     }
@@ -2119,7 +2121,7 @@ internal sealed partial class MultilayerCache : MultilayerCacheBase, ICache, ISp
                 },
                 token).ConfigureAwait(false);
         }
-        catch (Exception ex)
+        catch (Exception ex) when (!(ex is OperationCanceledException && token.IsCancellationRequested))
         {
             LogInnerCacheRefreshError(ex, Logged(cacheKey, typeof(T)));
             return false;
@@ -2136,7 +2138,7 @@ internal sealed partial class MultilayerCache : MultilayerCacheBase, ICache, ISp
                 options.CacheKey.Name,
                 (Cache: this, Options: options),
                 static s => s.Cache.RemoveLocal(s.Options.CacheKey.Name),
-                static s => s.Cache._innerCache.RemoveAsync<T>(s.Options.CacheKey, s.Options.Token),
+                static s => RemoveInnerAsync(s.Cache._innerCache.RemoveAsync<T>(s.Options.CacheKey, s.Options.Token), s.Options.Token),
                 options.Token).ConfigureAwait(false);
 
             var eventFired = await _eventPublisher.CacheRemovedAsync(options, typeof(T)).ConfigureAwait(false);
@@ -2168,7 +2170,7 @@ internal sealed partial class MultilayerCache : MultilayerCacheBase, ICache, ISp
                         s.Cache.RemoveLocal(option.CacheKey.Name);
                     }
                 },
-                static s => s.Cache._innerCache.RemoveAsync<T>(Array.ConvertAll(s.Options, static o => o.CacheKey), s.Token),
+                static s => RemoveInnerAsync(s.Cache._innerCache.RemoveAsync<T>(Array.ConvertAll(s.Options, static o => o.CacheKey), s.Token), s.Token),
                 token).ConfigureAwait(false);
 
             // Each key's invalidation is sent on its own, so one that fails does not keep the others from the other nodes. Started
@@ -2428,6 +2430,10 @@ internal sealed partial class MultilayerCache : MultilayerCacheBase, ICache, ISp
                 },
                 token).ConfigureAwait(false);
         }
+        catch (OperationCanceledException) when (token.IsCancellationRequested)
+        {
+            return (false, false);
+        }
         catch (Exception ex)
         {
             LogBatchSetError(ex, cacheEntries);
@@ -2445,6 +2451,10 @@ internal sealed partial class MultilayerCache : MultilayerCacheBase, ICache, ISp
             return entries.Length > 0
                 ? await _innerCache.SetAsync<T?>(pairs, entries[0].CacheEntry.Expiration, policy, token).ConfigureAwait(false)
                 : await _innerCache.SetAsync<T?>(pairs, policy, token).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) when (!keepRefused && token.IsCancellationRequested)
+        {
+            return false;
         }
         catch (Exception ex) when (keepRefused && !(ex is OperationCanceledException && token.IsCancellationRequested))
         {

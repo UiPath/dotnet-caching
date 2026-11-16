@@ -31,6 +31,8 @@ public struct TelemetryScope
     // 0 while running; the elapsed timestamp ticks plus one once stopped.
     private long _stoppedElapsed;
 
+    private bool _cancelled;
+
     /// <summary>Starts timing; with <see cref="NullTelemetryProvider"/> the scope does nothing.</summary>
     public TelemetryScope(ICachingTelemetryProvider provider, TimeProvider clock, string providerName, string callerMethod, Type cacheObjectType)
     {
@@ -60,7 +62,7 @@ public struct TelemetryScope
 
     public readonly void Track(bool hit, int keyCount = 1)
     {
-        if (_target is not { } target)
+        if (_target is not { } target || _cancelled)
         {
             return;
         }
@@ -69,7 +71,7 @@ public struct TelemetryScope
 
     public readonly void TrackKeyReads((string Key, bool Hit)[] reads)
     {
-        if (_target is not { } target)
+        if (_target is not { } target || _cancelled)
         {
             return;
         }
@@ -99,6 +101,13 @@ public struct TelemetryScope
                 success: true,
                 properties: properties);
         }
+    }
+
+    /// <summary>Freezes the duration and drops the hit or miss report: a call its token cancelled is neither.</summary>
+    internal void Cancel()
+    {
+        Stop();
+        _cancelled = true;
     }
 
     private static TelemetryTags<string> Properties(Target target, bool hit, string batchId) =>

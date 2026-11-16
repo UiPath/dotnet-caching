@@ -427,6 +427,11 @@ internal sealed partial class RedisHashCache : RedisCacheBase, IHashCache, ISpan
             }
             operation.Stop();
         }
+        catch (OperationCanceledException) when (token.IsCancellationRequested)
+        {
+            operation.Cancel();
+            throw;
+        }
         catch (Exception ex)
         {
             operation.Stop();
@@ -526,6 +531,11 @@ internal sealed partial class RedisHashCache : RedisCacheBase, IHashCache, ISpan
             }
             operation.Stop();
 
+        }
+        catch (OperationCanceledException) when (token.IsCancellationRequested)
+        {
+            operation.Cancel();
+            throw;
         }
         catch (Exception ex)
         {
@@ -627,6 +637,10 @@ internal sealed partial class RedisHashCache : RedisCacheBase, IHashCache, ISpan
             (Self: this, Key: redisKey),
             default,
             token).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) when (token.IsCancellationRequested)
+        {
+            throw;
         }
         catch (Exception ex)
         {
@@ -773,6 +787,11 @@ internal sealed partial class RedisHashCache : RedisCacheBase, IHashCache, ISpan
                 default,
                 token).ConfigureAwait(false);
             operation.Stop();
+        }
+        catch (OperationCanceledException) when (token.IsCancellationRequested)
+        {
+            operation.Cancel();
+            throw;
         }
         catch (Exception ex)
         {
@@ -1035,6 +1054,11 @@ internal sealed partial class RedisHashCache : RedisCacheBase, IHashCache, ISpan
             TrackUnreadableRead(unreadable);
             operation.Stop();
         }
+        catch (OperationCanceledException) when (token.IsCancellationRequested)
+        {
+            operation.Cancel();
+            throw;
+        }
         catch (Exception ex) when (format.Handles(ex))
         {
             operation.Stop();
@@ -1098,6 +1122,11 @@ internal sealed partial class RedisHashCache : RedisCacheBase, IHashCache, ISpan
             }
             operation.Stop();
         }
+        catch (OperationCanceledException) when (token.IsCancellationRequested)
+        {
+            operation.Cancel();
+            throw;
+        }
         catch (Exception ex) when (format.Handles(ex))
         {
             operation.Stop();
@@ -1141,6 +1170,11 @@ internal sealed partial class RedisHashCache : RedisCacheBase, IHashCache, ISpan
                 TrackUnreadableRead(unreadable);
             }
             operation.Stop();
+        }
+        catch (OperationCanceledException) when (token.IsCancellationRequested)
+        {
+            operation.Cancel();
+            throw;
         }
         catch (Exception ex) when (format.Handles(ex))
         {
@@ -1195,6 +1229,11 @@ internal sealed partial class RedisHashCache : RedisCacheBase, IHashCache, ISpan
             TrackUnreadableRead(unreadable);
             operation.Stop();
         }
+        catch (OperationCanceledException) when (token.IsCancellationRequested)
+        {
+            operation.Cancel();
+            throw;
+        }
         catch (Exception ex) when (format.Handles(ex))
         {
             operation.Stop();
@@ -1224,6 +1263,11 @@ internal sealed partial class RedisHashCache : RedisCacheBase, IHashCache, ISpan
         {
             ret = await GetCacheEntryForKeyAsync<T?, TFormat>(cacheKey, redisKey, format, token, atomic).ConfigureAwait(false);
             operation.Stop();
+        }
+        catch (OperationCanceledException) when (token.IsCancellationRequested)
+        {
+            operation.Cancel();
+            throw;
         }
         catch (Exception ex) when (!atomic && format.Handles(ex))
         {
@@ -1337,6 +1381,11 @@ internal sealed partial class RedisHashCache : RedisCacheBase, IHashCache, ISpan
                 ret = await WriteAsync(redisKey, hashEntries, setOption, expiration, now, report, dropMetadata, token).ConfigureAwait(false);
                 operation.Stop();
             }
+        catch (OperationCanceledException) when (token.IsCancellationRequested)
+        {
+            operation.Cancel();
+            throw;
+        }
             catch (Exception ex)
             {
                 operation.Stop();

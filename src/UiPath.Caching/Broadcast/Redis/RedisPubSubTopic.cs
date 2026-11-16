@@ -89,7 +89,7 @@ public sealed partial class RedisPubSubTopic<T> : ITopic<T>
             token).ConfigureAwait(false);
             return response >= 0;
         }
-        catch (Exception ex)
+        catch (Exception ex) when (!(ex is OperationCanceledException && token.IsCancellationRequested))
         {
             LogPublishError(ex, TopicKey);
             return false;
