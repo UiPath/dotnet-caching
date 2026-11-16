@@ -63,6 +63,16 @@ internal static class ValueHeader
         return true;
     }
 
+    /// <summary>
+    /// Whether a body starts with a format id this library writes (<c>0x02</c>, <c>0x03</c>) or one a consumer may register, so a node that
+    /// cannot read it lost what it carried. The other library ids are unused, so a foreign producer's first byte such as <c>0x08</c> is junk.
+    /// </summary>
+    public static bool IsKnownFormat(ReadOnlySpan<byte> value) =>
+        TryRead(value, out var formatId, out _)
+        && (formatId is -1 or CacheValueFormats.MessagePack or CacheValueFormats.MessagePackLz4
+            || formatId is >= CacheValueFormats.FirstConsumer and <= CacheValueFormats.LastConsumer
+            || formatId is >= CacheValueFormats.FirstExtended and <= CacheValueFormats.LastExtended);
+
     private static bool IsOneByteId(int id) => id is >= 0x01 and <= 0x1E && IsHeaderByte((byte)id);
 
     private static bool IsHeaderByte(byte b) => b is >= 0x01 and <= 0x1F and not 0x09 and not 0x0A and not 0x0D;

@@ -82,6 +82,23 @@ public class RedisPubSubTopicTests(ITestContextAccessor testContextAccessor) : I
     }
 
     [Fact]
+    public async Task An_event_in_a_known_format_that_cannot_be_decoded_reaches_an_observer_behind_the_gap_filter_as_lost()
+    {
+        var sut = await Sut();
+        var observer = new MissedObserver();
+        using var subscription = new GapFilteringTopic(sut).Subscribe(observer);
+        await WaitForSubscribeAsync();
+        for (var count = 0; _handler is null && count < 100; count++)
+        {
+            await Task.Delay(50.Milliseconds(), testContextAccessor.Current.CancellationToken);
+        }
+
+        _handler!.Invoke(RedisChannel.Literal(_topicKey.Name), (RedisValue)new byte[] { 0x02, 0x81, 0x01 });
+
+        (await observer.Lost.Task.WaitAsync(TimeSpan.FromSeconds(10), testContextAccessor.Current.CancellationToken)).Should().Be(MissedEventsReason.Lost);
+    }
+
+    [Fact]
     public async Task No_message_when_subscription_disposed()
     {
         var sut = await Sut();
@@ -320,6 +337,25 @@ public class RedisPubSubTopicTests(ITestContextAccessor testContextAccessor) : I
 
     private Task WaitForSubscribeAsync() =>
         _subscribeCalled.Task.WaitAsync(TimeSpan.FromSeconds(30), testContextAccessor.Current.CancellationToken);
+
+    private sealed class MissedObserver : IObserver<ICacheEvent>, IMissedEventsObserver
+    {
+        public TaskCompletionSource<MissedEventsReason> Lost { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public void OnNext(ICacheEvent value)
+        {
+        }
+
+        public void OnError(Exception error)
+        {
+        }
+
+        public void OnCompleted()
+        {
+        }
+
+        public void OnEventsMissed(MissedEventsReason reason) => Lost.TrySetResult(reason);
+    }
 
     /// <summary>A subject whose next subscription waits, mid-join, until the subscription that expires it goes in place.</summary>
     private sealed class HeldSubject : IEventSubject<ICacheEvent>
