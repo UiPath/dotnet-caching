@@ -22,7 +22,6 @@ public class MultilayerHashCacheRehydrateTests(ITestContextAccessor testContextA
     private MultilayerCachePerNameLockTests.ITopicProviderWithConnectionState _topicProvider = default!;
     private ITopic<ICacheEvent> _topic = default!;
     private global::UiPath.Caching.IMemoryCacheFactory _memoryCacheFactory = default!;
-    private ICacheEventFactory _cacheEventFactory = default!;
     private IDistributedLock _distributedLock = default!;
     private InMemoryRedisCacheOptions _options = default!;
     private CacheKey _cacheKey = default!;
@@ -328,7 +327,7 @@ public class MultilayerHashCacheRehydrateTests(ITestContextAccessor testContextA
     [Fact]
     public async Task Rehydrate_with_factory_returning_empty_preserves_original_entry_expiration()
     {
-        // Circuit-breaker B (hash variant): factory returns an empty dict and we cache nulls;
+        // Circuit-breaker B, hash variant: the factory returns an empty dictionary and we cache nulls,
         // the rehydrate write must reuse the original deadline so a stale empty entry expires
         // at its natural time instead of being extended forever.
         _options.CacheNullValues = true;
@@ -395,7 +394,7 @@ public class MultilayerHashCacheRehydrateTests(ITestContextAccessor testContextA
         _topic.PublishAsync(Arg.Any<ICacheEvent>(), Arg.Any<CancellationToken>()).Returns(_ => true);
         _memoryCacheFactory = _fixture.Freeze<global::UiPath.Caching.IMemoryCacheFactory>();
         _memoryCacheFactory.Get(Arg.Any<IMemoryCacheOptions>()).Returns(_memoryCache);
-        _cacheEventFactory = _fixture.Freeze<ICacheEventFactory>();
+        _fixture.Freeze<ICacheEventFactory>();
         return ValueTask.CompletedTask;
     }
 

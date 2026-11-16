@@ -6,7 +6,7 @@ namespace UiPath.Caching.Tests.Redis;
 /// <summary>The multi-key calls over keys of many slots; on a cluster each slot is its own command, on a standalone server one.</summary>
 [Collection("RedisIntegration")]
 [Trait("Category", "Integration")]
-public class CrossSlotBatchIntegrationTests(RedisContainerFixture fixture) : IDisposable
+public sealed class CrossSlotBatchIntegrationTests(RedisContainerFixture fixture) : IDisposable
 {
     private readonly string _app = $"cs{Guid.NewGuid():N}"[..10];
     private readonly List<ServiceProvider> _nodes = [];

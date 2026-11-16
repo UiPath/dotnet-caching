@@ -53,7 +53,7 @@ public class RedisStreamSubjectWriterTests : IAsyncLifetime
 
         Func<Task> act = async () => await Sut.FetchTask;
         await act.Should().NotCompleteWithinAsync(500.Microseconds());
-        _cancellationTokenSource.Cancel();
+        await _cancellationTokenSource.CancelAsync();
         _formatter.Received(0).Decode(Arg.Any<ReadOnlyMemory<byte>>());
     }
 
@@ -66,33 +66,31 @@ public class RedisStreamSubjectWriterTests : IAsyncLifetime
 
         Func<Task> act = async () => await Sut.FetchTask;
         await act.Should().NotCompleteWithinAsync(_pollInterval.Multiply(5));
-        _cancellationTokenSource.Cancel();
+        await _cancellationTokenSource.CancelAsync();
         _formatter.Received(0).Decode(Arg.Any<ReadOnlyMemory<byte>>());
     }
 
     [Fact]
     public async Task StreamReadGroupAsync_Cancel_exceptions()
     {
-        var entries = new[] { StreamEntry.Null };
         _database.StreamReadGroupAsync(_context.Topic, _context.ConsumerGroup, _context.ConsumerName, ">", _context.PollBatchSize)
             .ThrowsAsyncForAnyArgs(_ => throw new TaskCanceledException(_fixture.Create<string>(), _fixture.Create<Exception>(), _cancellationTokenSource.Token));
  
         Func<Task> act = async () => await Sut.FetchTask;
         await act.Should().NotCompleteWithinAsync(500.Microseconds());
-        _cancellationTokenSource.Cancel();
+        await _cancellationTokenSource.CancelAsync();
         _formatter.Received(0).Decode(Arg.Any<ReadOnlyMemory<byte>>());
     }
 
     [Fact]
     public async Task StreamReadGroupAsync_exceptions()
     {
-        var entries = new[] { StreamEntry.Null };
         _database.StreamReadGroupAsync(_context.Topic, _context.ConsumerGroup, _context.ConsumerName, ">", _context.PollBatchSize)
             .ThrowsAsyncForAnyArgs(_ => throw new Exception());
 
         Func<Task> act = async () => await Sut.FetchTask;
         await act.Should().NotCompleteWithinAsync(_pollInterval.Multiply(50));
-        _cancellationTokenSource.Cancel();
+        await _cancellationTokenSource.CancelAsync();
         try
         {
             await act.Should().CompleteWithinAsync(_pollInterval.Multiply(200));
@@ -107,7 +105,6 @@ public class RedisStreamSubjectWriterTests : IAsyncLifetime
     [Fact]
     public async Task StreamReadGroupAsync_logger_exceptions()
     {
-        var entries = new[] { StreamEntry.Null };
         _database.StreamReadGroupAsync(_context.Topic, _context.ConsumerGroup, _context.ConsumerName, ">", _context.PollBatchSize)
             .ThrowsAsyncForAnyArgs(_ => throw new Exception());
         _logger.When(l =>l.Log(LogLevel.Error, Arg.Any<EventId>(), Arg.Any<object>(), Arg.Any<Exception?>(), Arg.Any<Func<object, Exception?, string>>()))
@@ -119,10 +116,10 @@ public class RedisStreamSubjectWriterTests : IAsyncLifetime
                 }
             });
 
-        var s = Sut;
+        _ = Sut;
         Func<Task> act = async () => await Sut.FetchTask;
         await act.Should().NotCompleteWithinAsync(_pollInterval.Multiply(5));
-        _cancellationTokenSource.Cancel();
+        await _cancellationTokenSource.CancelAsync();
         _formatter.Received(0).Decode(Arg.Any<ReadOnlyMemory<byte>>());
     }
 
@@ -140,7 +137,7 @@ public class RedisStreamSubjectWriterTests : IAsyncLifetime
 
         var fetchTask = Sut.FetchTask;
         await decodeCalled.Task.WaitAsync(WaitTimeout, TestContext.Current.CancellationToken);
-        _cancellationTokenSource.Cancel();
+        await _cancellationTokenSource.CancelAsync();
         await fetchTask.WaitAsync(WaitTimeout, TestContext.Current.CancellationToken);
 
         _formatter.Received().Decode(Arg.Any<ReadOnlyMemory<byte>>());
@@ -160,7 +157,7 @@ public class RedisStreamSubjectWriterTests : IAsyncLifetime
 
         var fetchTask = Sut.FetchTask;
         await decodeCalled.Task.WaitAsync(WaitTimeout, TestContext.Current.CancellationToken);
-        _cancellationTokenSource.Cancel();
+        await _cancellationTokenSource.CancelAsync();
         await fetchTask.WaitAsync(WaitTimeout, TestContext.Current.CancellationToken);
 
         _formatter.Received().Decode(Arg.Any<ReadOnlyMemory<byte>>());
@@ -180,7 +177,7 @@ public class RedisStreamSubjectWriterTests : IAsyncLifetime
 
         var fetchTask = Sut.FetchTask;
         await decodeCalled.Task.WaitAsync(WaitTimeout, TestContext.Current.CancellationToken);
-        _cancellationTokenSource.Cancel();
+        await _cancellationTokenSource.CancelAsync();
         await fetchTask.WaitAsync(WaitTimeout, TestContext.Current.CancellationToken);
 
         _formatter.Received().Decode(Arg.Any<ReadOnlyMemory<byte>>());
@@ -199,7 +196,7 @@ public class RedisStreamSubjectWriterTests : IAsyncLifetime
 
         Func<Task> act = async () => await Sut.FetchTask;
         await act.Should().NotCompleteWithinAsync(_pollInterval.Multiply(100));
-        _cancellationTokenSource.Cancel();
+        await _cancellationTokenSource.CancelAsync();
         _formatter.Received().Decode(Arg.Any<ReadOnlyMemory<byte>>());
     }
 
@@ -234,8 +231,8 @@ public class RedisStreamSubjectWriterTests : IAsyncLifetime
 
         var fetchTask = Sut.FetchTask;
         await createCalled.Task.WaitAsync(NogroupPollTimeout, TestContext.Current.CancellationToken);
-        _cancellationTokenSource.Cancel();
-        try { await fetchTask.WaitAsync(WaitTimeout, TestContext.Current.CancellationToken); } catch (OperationCanceledException) { }
+        await _cancellationTokenSource.CancelAsync();
+        try { await fetchTask.WaitAsync(WaitTimeout, TestContext.Current.CancellationToken); } catch (OperationCanceledException) { /* Expected: the fetch was cancelled. */ }
 
         await _database.ReceivedWithAnyArgs().StreamCreateConsumerGroupAsync(_context.Topic, _context.ConsumerGroup, Arg.Any<RedisValue?>());
     }
@@ -1355,8 +1352,8 @@ public class RedisStreamSubjectWriterTests : IAsyncLifetime
 
         var fetchTask = Sut.FetchTask;
         await createCalled.Task.WaitAsync(NogroupPollTimeout, TestContext.Current.CancellationToken);
-        _cancellationTokenSource.Cancel();
-        try { await fetchTask.WaitAsync(WaitTimeout, TestContext.Current.CancellationToken); } catch (OperationCanceledException) { }
+        await _cancellationTokenSource.CancelAsync();
+        try { await fetchTask.WaitAsync(WaitTimeout, TestContext.Current.CancellationToken); } catch (OperationCanceledException) { /* Expected: the fetch was cancelled. */ }
 
         fetchTask.IsFaulted.Should().BeFalse("BUSYGROUP only means the group is already there, so recovery must swallow it and leave the fetch loop running");
     }
@@ -1373,8 +1370,8 @@ public class RedisStreamSubjectWriterTests : IAsyncLifetime
 
         var fetchTask = Sut.FetchTask;
         await createCalled.Task.WaitAsync(NogroupPollTimeout, TestContext.Current.CancellationToken);
-        _cancellationTokenSource.Cancel();
-        try { await fetchTask.WaitAsync(WaitTimeout, TestContext.Current.CancellationToken); } catch (OperationCanceledException) { }
+        await _cancellationTokenSource.CancelAsync();
+        try { await fetchTask.WaitAsync(WaitTimeout, TestContext.Current.CancellationToken); } catch (OperationCanceledException) { /* Expected: the fetch was cancelled. */ }
 
         fetchTask.IsFaulted.Should().BeFalse("an unexpected StreamCreate failure must be logged and the fetch loop kept alive, not surfaced as a fault");
     }
@@ -1417,8 +1414,8 @@ public class RedisStreamSubjectWriterTests : IAsyncLifetime
 
         sut.FetchTask.IsCompleted.Should().BeFalse("the loop stays alive so a reconnect to a capable server can recover");
 
-        _cancellationTokenSource.Cancel();
-        try { await sut.FetchTask.WaitAsync(WaitTimeout, TestContext.Current.CancellationToken); } catch (OperationCanceledException) { }
+        await _cancellationTokenSource.CancelAsync();
+        try { await sut.FetchTask.WaitAsync(WaitTimeout, TestContext.Current.CancellationToken); } catch (OperationCanceledException) { /* Expected: the fetch was cancelled. */ }
     }
 
     [Fact]
@@ -1476,8 +1473,8 @@ public class RedisStreamSubjectWriterTests : IAsyncLifetime
         recovered.Should().BeTrue(
             "the reconnect must wake the fetch loop so the next successful read lifts the quarantine, rather than leaving it to wait out the 30s backoff");
 
-        _cancellationTokenSource.Cancel();
-        try { await sut.FetchTask.WaitAsync(WaitTimeout, TestContext.Current.CancellationToken); } catch (OperationCanceledException) { }
+        await _cancellationTokenSource.CancelAsync();
+        try { await sut.FetchTask.WaitAsync(WaitTimeout, TestContext.Current.CancellationToken); } catch (OperationCanceledException) { /* Expected: the fetch was cancelled. */ }
     }
 
     [Fact]
@@ -1583,8 +1580,8 @@ public class RedisStreamSubjectWriterTests : IAsyncLifetime
     [Fact]
     public async Task ProcessEvent_swallows_formatter_exception()
     {
-        // Decode throwing inside ProcessEvent must hit the outer catch (LogOnMessageError) so the
-        // fetch loop doesn't blow up on a single malformed message.
+        // Decode throwing inside ProcessEvent must reach the outer catch, which logs it, so the
+        // fetch loop does not blow up on a single malformed message.
         var decodeCalled = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
         _formatter.Decode(Arg.Any<ReadOnlyMemory<byte>>()).Returns<ICacheEvent?>(_ =>
         {
@@ -1596,7 +1593,7 @@ public class RedisStreamSubjectWriterTests : IAsyncLifetime
 
         var fetchTask = Sut.FetchTask;
         await decodeCalled.Task.WaitAsync(WaitTimeout, TestContext.Current.CancellationToken);
-        _cancellationTokenSource.Cancel();
+        await _cancellationTokenSource.CancelAsync();
         Func<Task> act = async () => await fetchTask.WaitAsync(WaitTimeout, TestContext.Current.CancellationToken);
         await act.Should().NotThrowAsync("a single bad event must not tear down the fetch loop");
     }
@@ -1615,7 +1612,7 @@ public class RedisStreamSubjectWriterTests : IAsyncLifetime
         using var sut = CreateSut(channel.Writer, _logger);
 
         await ackCalled.Task.WaitAsync(WaitTimeout, TestContext.Current.CancellationToken);
-        _cancellationTokenSource.Cancel();
+        await _cancellationTokenSource.CancelAsync();
         await sut.FetchTask.WaitAsync(WaitTimeout, TestContext.Current.CancellationToken);
 
         channel.Reader.TryRead(out _).Should().BeFalse("events from the current source must not enter the dispatcher channel");
@@ -1637,7 +1634,7 @@ public class RedisStreamSubjectWriterTests : IAsyncLifetime
         using var sut = CreateSut(channel.Writer, _logger, telemetry);
 
         var ids = await acked.Task.WaitAsync(WaitTimeout, TestContext.Current.CancellationToken);
-        _cancellationTokenSource.Cancel();
+        await _cancellationTokenSource.CancelAsync();
         await sut.FetchTask.WaitAsync(WaitTimeout, TestContext.Current.CancellationToken);
 
         ids.Select(v => v.ToString()).Should().Contain(id, "the poison entry must still be acknowledged");
@@ -1661,7 +1658,7 @@ public class RedisStreamSubjectWriterTests : IAsyncLifetime
         using var sut = CreateSut(channel.Writer, _logger, telemetry);
 
         var ids = await acked.Task.WaitAsync(WaitTimeout, TestContext.Current.CancellationToken);
-        _cancellationTokenSource.Cancel();
+        await _cancellationTokenSource.CancelAsync();
         await sut.FetchTask.WaitAsync(WaitTimeout, TestContext.Current.CancellationToken);
 
         ids.Select(v => v.ToString()).Should().Contain(id, "the entry must still be acknowledged");
@@ -1683,7 +1680,7 @@ public class RedisStreamSubjectWriterTests : IAsyncLifetime
         using var sut = CreateSut(channel.Writer, _logger, telemetry, context: _context with { EmitStreamReceivedEvent = false });
 
         var ids = await acked.Task.WaitAsync(WaitTimeout, TestContext.Current.CancellationToken);
-        _cancellationTokenSource.Cancel();
+        await _cancellationTokenSource.CancelAsync();
         await sut.FetchTask.WaitAsync(WaitTimeout, TestContext.Current.CancellationToken);
 
         ids.Select(v => v.ToString()).Should().Contain(id, "the entry must still be acknowledged");
@@ -1707,7 +1704,7 @@ public class RedisStreamSubjectWriterTests : IAsyncLifetime
         using var sut = CreateSut(channel.Writer, _logger, telemetry);
 
         var ids = await acked.Task.WaitAsync(WaitTimeout, TestContext.Current.CancellationToken);
-        _cancellationTokenSource.Cancel();
+        await _cancellationTokenSource.CancelAsync();
         await sut.FetchTask.WaitAsync(WaitTimeout, TestContext.Current.CancellationToken);
 
         channel.Reader.TryRead(out _).Should().BeTrue("the event must still reach the dispatcher");
@@ -1733,7 +1730,7 @@ public class RedisStreamSubjectWriterTests : IAsyncLifetime
         read.Should().BeSameAs(ev);
         await ackCalled.Task.WaitAsync(WaitTimeout, TestContext.Current.CancellationToken);
 
-        _cancellationTokenSource.Cancel();
+        await _cancellationTokenSource.CancelAsync();
         await sut.FetchTask.WaitAsync(WaitTimeout, TestContext.Current.CancellationToken);
     }
 
@@ -1752,7 +1749,7 @@ public class RedisStreamSubjectWriterTests : IAsyncLifetime
         using var sut = CreateSut(channel.Writer, recordingLogger);
 
         await loggedClosed.Task.WaitAsync(WaitTimeout, TestContext.Current.CancellationToken);
-        _cancellationTokenSource.Cancel();
+        await _cancellationTokenSource.CancelAsync();
         await sut.FetchTask.WaitAsync(WaitTimeout, TestContext.Current.CancellationToken);
 
         await _database.DidNotReceiveWithAnyArgs().StreamAcknowledgeAsync(default, default, default(RedisValue[])!);
@@ -1778,7 +1775,7 @@ public class RedisStreamSubjectWriterTests : IAsyncLifetime
         using var sut = CreateSut(channel.Writer, _logger);
 
         await channel.Reader.WaitToReadAsync(TestContext.Current.CancellationToken).AsTask().WaitAsync(WaitTimeout, TestContext.Current.CancellationToken);
-        _cancellationTokenSource.Cancel();
+        await _cancellationTokenSource.CancelAsync();
 
         var ackArgs = await ackCalled.Task.WaitAsync(WaitTimeout, TestContext.Current.CancellationToken);
         ackArgs.Should().ContainSingle().Which.Should().Be((RedisValue)firstId);
@@ -1808,7 +1805,7 @@ public class RedisStreamSubjectWriterTests : IAsyncLifetime
         using var sut = CreateSut(throwingWriter, recordingLogger);
 
         await loggedFailed.Task.WaitAsync(WaitTimeout, TestContext.Current.CancellationToken);
-        _cancellationTokenSource.Cancel();
+        await _cancellationTokenSource.CancelAsync();
         await sut.FetchTask.WaitAsync(WaitTimeout, TestContext.Current.CancellationToken);
 
         await _database.DidNotReceiveWithAnyArgs().StreamAcknowledgeAsync(default, default, default(RedisValue[])!);
@@ -1879,7 +1876,7 @@ public class RedisStreamSubjectWriterTests : IAsyncLifetime
 
         var read = await channel.Reader.ReadAsync(TestContext.Current.CancellationToken).AsTask().WaitAsync(WaitTimeout, TestContext.Current.CancellationToken);
         (await WaitUntil(() => positions.Count(p => p == ">") >= 3)).Should().BeTrue();
-        _cancellationTokenSource.Cancel();
+        await _cancellationTokenSource.CancelAsync();
         await sut.FetchTask.WaitAsync(WaitTimeout, TestContext.Current.CancellationToken);
 
         read.Should().BeSameAs(ev);
@@ -1915,7 +1912,7 @@ public class RedisStreamSubjectWriterTests : IAsyncLifetime
         }
 
         var read = await channel.Reader.ReadAsync(TestContext.Current.CancellationToken).AsTask().WaitAsync(WaitTimeout, TestContext.Current.CancellationToken);
-        _cancellationTokenSource.Cancel();
+        await _cancellationTokenSource.CancelAsync();
         await sut.FetchTask.WaitAsync(WaitTimeout, TestContext.Current.CancellationToken);
 
         read.Should().BeSameAs(ev);
@@ -1938,7 +1935,7 @@ public class RedisStreamSubjectWriterTests : IAsyncLifetime
         using var sut = CreateSut(channel.Writer, _logger, context: _context with { PollBatchSize = 2 });
 
         (await WaitUntil(() => positions.Contains(">"))).Should().BeTrue();
-        _cancellationTokenSource.Cancel();
+        await _cancellationTokenSource.CancelAsync();
         await sut.FetchTask.WaitAsync(WaitTimeout, TestContext.Current.CancellationToken);
 
         positions.Should().StartWith(["0", "2-0", ">"]);
@@ -1959,7 +1956,7 @@ public class RedisStreamSubjectWriterTests : IAsyncLifetime
         using var sut = CreateSut(Channel.CreateUnbounded<ICacheEvent>().Writer, _logger, telemetry, onMessagesMissed: () => Interlocked.Increment(ref missed), context: _context with { PollBatchSize = 2 });
 
         var ids = await acked.Task.WaitAsync(WaitTimeout, TestContext.Current.CancellationToken);
-        _cancellationTokenSource.Cancel();
+        await _cancellationTokenSource.CancelAsync();
         await sut.FetchTask.WaitAsync(WaitTimeout, TestContext.Current.CancellationToken);
 
         ids.Select(v => v.ToString()).Should().Equal(id);
@@ -1992,7 +1989,7 @@ public class RedisStreamSubjectWriterTests : IAsyncLifetime
 
         using var sut = CreateSut(Channel.CreateUnbounded<ICacheEvent>().Writer, recordingLogger, waiter: waiter, context: _context with { PollInterval = TimeSpan.Zero });
 
-        try { await sut.FetchTask.WaitAsync(WaitTimeout, TestContext.Current.CancellationToken); } catch (OperationCanceledException) { }
+        try { await sut.FetchTask.WaitAsync(WaitTimeout, TestContext.Current.CancellationToken); } catch (OperationCanceledException) { /* Expected: the fetch was cancelled. */ }
         Volatile.Read(ref reads).Should().Be(2 * 101 + 2);
 
         recordingLogger.Records.Should().NotContain(r => r.Level >= LogLevel.Error);
@@ -2016,7 +2013,7 @@ public class RedisStreamSubjectWriterTests : IAsyncLifetime
         using var sut = CreateSut(Channel.CreateUnbounded<ICacheEvent>().Writer, _logger);
 
         var ids = await acked.Task.WaitAsync(WaitTimeout, TestContext.Current.CancellationToken);
-        _cancellationTokenSource.Cancel();
+        await _cancellationTokenSource.CancelAsync();
         await sut.FetchTask.WaitAsync(WaitTimeout, TestContext.Current.CancellationToken);
 
         ids.Select(v => v.ToString()).Should().Equal(id);
@@ -2039,7 +2036,7 @@ public class RedisStreamSubjectWriterTests : IAsyncLifetime
         using var sut = CreateSut(Channel.CreateUnbounded<ICacheEvent>().Writer, recordingLogger, telemetry);
 
         await acked.Task.WaitAsync(WaitTimeout, TestContext.Current.CancellationToken);
-        _cancellationTokenSource.Cancel();
+        await _cancellationTokenSource.CancelAsync();
         await sut.FetchTask.WaitAsync(WaitTimeout, TestContext.Current.CancellationToken);
 
         telemetry.Events.Should().ContainSingle(e => e.Name == "Caching.RedisStreamSubjectWriter.DispatchEventsAsync.UndecodableEvent")
@@ -2167,7 +2164,7 @@ public class RedisStreamSubjectWriterTests : IAsyncLifetime
         using var sut = CreateSut(Channel.CreateUnbounded<ICacheEvent>().Writer, recordingLogger, telemetry);
 
         (await acked.Task.WaitAsync(WaitTimeout, TestContext.Current.CancellationToken)).Should().HaveCount(101);
-        _cancellationTokenSource.Cancel();
+        await _cancellationTokenSource.CancelAsync();
         await sut.FetchTask.WaitAsync(WaitTimeout, TestContext.Current.CancellationToken);
 
         telemetry.Events.Count(e => e.Name.EndsWith(".UndecodableEvent", StringComparison.Ordinal)).Should().Be(101);
@@ -2189,7 +2186,7 @@ public class RedisStreamSubjectWriterTests : IAsyncLifetime
         using var sut = CreateSut(Channel.CreateUnbounded<ICacheEvent>().Writer, recordingLogger, telemetry);
 
         var ids = await acked.Task.WaitAsync(WaitTimeout, TestContext.Current.CancellationToken);
-        _cancellationTokenSource.Cancel();
+        await _cancellationTokenSource.CancelAsync();
         await sut.FetchTask.WaitAsync(WaitTimeout, TestContext.Current.CancellationToken);
 
         ids.Select(v => v.ToString()).Should().Equal(id);
@@ -2211,10 +2208,10 @@ public class RedisStreamSubjectWriterTests : IAsyncLifetime
         using var sut = CreateSut(channel.Writer, _logger, onMessagesMissed: () => Interlocked.Increment(ref missed), context: _context with { PollBatchSize = 4 });
 
         var ids = await acked.Task.WaitAsync(WaitTimeout, TestContext.Current.CancellationToken);
-        _cancellationTokenSource.Cancel();
+        await _cancellationTokenSource.CancelAsync();
         await sut.FetchTask.WaitAsync(WaitTimeout, TestContext.Current.CancellationToken);
 
-        ids.Select(v => v.ToString()).Should().BeEquivalentTo(["1-0", "2-0"]);
+        ids.Select(v => v.ToString()).Should().BeEquivalentTo("1-0", "2-0");
         Volatile.Read(ref missed).Should().Be(1);
         channel.Reader.TryRead(out var read).Should().BeTrue();
         read.Should().BeSameAs(ev);
@@ -2233,7 +2230,7 @@ public class RedisStreamSubjectWriterTests : IAsyncLifetime
         using var sut = CreateSut(Channel.CreateUnbounded<ICacheEvent>().Writer, _logger, onMessagesMissed: () => Interlocked.Increment(ref missed), context: _context with { PollBatchSize = 4 });
 
         await acked.Task.WaitAsync(WaitTimeout, TestContext.Current.CancellationToken);
-        _cancellationTokenSource.Cancel();
+        await _cancellationTokenSource.CancelAsync();
         await sut.FetchTask.WaitAsync(WaitTimeout, TestContext.Current.CancellationToken);
 
         Volatile.Read(ref missed).Should().Be(0);
@@ -2263,8 +2260,8 @@ public class RedisStreamSubjectWriterTests : IAsyncLifetime
         await acked.Task.WaitAsync(WaitTimeout, TestContext.Current.CancellationToken);
         (await WaitUntil(() => Volatile.Read(ref missed) >= 1)).Should().BeTrue();
         await Task.Delay(100, TestContext.Current.CancellationToken);
-        _cancellationTokenSource.Cancel();
-        try { await sut.FetchTask.WaitAsync(WaitTimeout, TestContext.Current.CancellationToken); } catch (OperationCanceledException) { }
+        await _cancellationTokenSource.CancelAsync();
+        try { await sut.FetchTask.WaitAsync(WaitTimeout, TestContext.Current.CancellationToken); } catch (OperationCanceledException) { /* Expected: the fetch was cancelled. */ }
 
         Volatile.Read(ref missed).Should().Be(1, "the first acknowledgement failed, so only the pass whose acknowledgement succeeded reports");
     }
@@ -2511,7 +2508,8 @@ public class RedisStreamSubjectWriterTests : IAsyncLifetime
             .ReturnsForAnyArgs(_ => Interlocked.Increment(ref created) == 1
                 ? Task.FromException<RedisResult>(Timeout())
                 : Task.FromException<RedisResult>(new RedisServerException(RedisErrorKind.None, CommandFlags.None, StreamConstants.ConsumerGroupNameExistsErrorMessage)));
-        NoAckRead(call => call.ArgAt<RedisValue?>(3).ToString() == ">" && Interlocked.Increment(ref newReads) <= (retryFindsIt ? 2 : 1)
+        var newReadLimit = retryFindsIt ? 2 : 1;
+        NoAckRead(call => call.ArgAt<RedisValue?>(3).ToString() == ">" && Interlocked.Increment(ref newReads) <= newReadLimit
             ? throw new RedisServerException(RedisErrorKind.None, CommandFlags.None, "NOGROUP No such key or consumer group")
             : []);
         // Redis 6 on a stream that has grown since: no max-deleted-entry-id, and the group that never read sits at 0-0.
@@ -2541,6 +2539,7 @@ public class RedisStreamSubjectWriterTests : IAsyncLifetime
 
     public ValueTask DisposeAsync()
     {
+        _cancellationTokenSource.Dispose();
         return ValueTask.CompletedTask;
     }
 
@@ -2656,7 +2655,7 @@ public class RedisStreamSubjectWriterTests : IAsyncLifetime
         using var sut = CreateSut(Channel.CreateUnbounded<ICacheEvent>().Writer, _logger, onMessagesMissed: () => Interlocked.Increment(ref missed));
 
         var ids = await acked.Task.WaitAsync(WaitTimeout, TestContext.Current.CancellationToken);
-        _cancellationTokenSource.Cancel();
+        await _cancellationTokenSource.CancelAsync();
         await sut.FetchTask.WaitAsync(WaitTimeout, TestContext.Current.CancellationToken);
         return (ids, Volatile.Read(ref missed));
     }
@@ -2696,20 +2695,6 @@ public class RedisStreamSubjectWriterTests : IAsyncLifetime
     private RedisResult UntrimmedReply() => RedisResult.Create(
     [
         RedisResult.Create(new RedisValue[] { "length", 0, "last-generated-id", "1-0", "entries-added", 1 }),
-        RedisResult.Create([RedisResult.Create(new RedisValue[] { "name", _consumerGroup, "last-delivered-id", "1-0", "entries-read", 1 })]),
-        RedisResult.Create(RedisValue.Null),
-    ]);
-
-    /// <summary>The group at 1-0 with 2-0 trimmed away: the oldest entry left is past its last delivery.</summary>
-    private RedisResult TrimmedReply() => RedisResult.Create(
-    [
-        RedisResult.Create(
-        [
-            RedisResult.Create((RedisValue)"length"), RedisResult.Create((RedisValue)1),
-            RedisResult.Create((RedisValue)"last-generated-id"), RedisResult.Create((RedisValue)"3-0"),
-            RedisResult.Create((RedisValue)"entries-added"), RedisResult.Create((RedisValue)3),
-            RedisResult.Create((RedisValue)"first-entry"), RedisResult.Create([RedisResult.Create((RedisValue)"3-0")]),
-        ]),
         RedisResult.Create([RedisResult.Create(new RedisValue[] { "name", _consumerGroup, "last-delivered-id", "1-0", "entries-read", 1 })]),
         RedisResult.Create(RedisValue.Null),
     ]);

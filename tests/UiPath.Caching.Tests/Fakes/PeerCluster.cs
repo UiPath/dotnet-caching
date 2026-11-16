@@ -387,8 +387,15 @@ internal sealed class PeerCluster : IDisposable
 
         public event EventHandler? OnReconnected
         {
-            add { }
-            remove { }
+            add
+            {
+                // Never raised by this fake.
+            }
+
+            remove
+            {
+                // Never raised by this fake.
+            }
         }
 
         public Store Store { get; set; } = null!;

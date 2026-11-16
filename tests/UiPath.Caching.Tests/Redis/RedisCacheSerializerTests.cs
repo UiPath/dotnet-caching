@@ -212,12 +212,12 @@ public class RedisCacheSerializerTests(ITestContextAccessor testContextAccessor)
             return Task.FromResult<string?>("fresh");
         }
 
-        await FluentActions.Awaiting(() => sut.GetAsync<string>("k", policy: null, Token).AsTask()).Should().ThrowAsync<OutOfMemoryException>();
-        await FluentActions.Awaiting(() => sut.GetAsync<string>(["a", "b"], policy: null, Token).AsTask()).Should().ThrowAsync<OutOfMemoryException>();
-        await FluentActions.Awaiting(() => sut.GetCacheEntryAsync<string>("k", policy: null, Token).AsTask()).Should().ThrowAsync<OutOfMemoryException>();
-        await FluentActions.Awaiting(() => sut.GetCacheEntriesAsync<string>(["a", "b"], policy: null, Token).AsTask()).Should().ThrowAsync<OutOfMemoryException>();
-        await FluentActions.Awaiting(() => sut.GetOrAddAsync<string>("k", Generate, TimeSpan.FromMinutes(1), policy: null, Token).AsTask()).Should().ThrowAsync<OutOfMemoryException>();
-        await FluentActions.Awaiting(() => sut.GetOrAddResultAsync<string>("k", Generate, TimeSpan.FromMinutes(1), policy: null, Token).AsTask()).Should().ThrowAsync<OutOfMemoryException>();
+        await FluentActions.Awaiting(async () => await sut.GetAsync<string>("k", policy: null, Token)).Should().ThrowAsync<OutOfMemoryException>();
+        await FluentActions.Awaiting(async () => await sut.GetAsync<string>(["a", "b"], policy: null, Token)).Should().ThrowAsync<OutOfMemoryException>();
+        await FluentActions.Awaiting(async () => await sut.GetCacheEntryAsync<string>("k", policy: null, Token)).Should().ThrowAsync<OutOfMemoryException>();
+        await FluentActions.Awaiting(async () => await sut.GetCacheEntriesAsync<string>(["a", "b"], policy: null, Token)).Should().ThrowAsync<OutOfMemoryException>();
+        await FluentActions.Awaiting(async () => await sut.GetOrAddAsync<string>("k", Generate, TimeSpan.FromMinutes(1), policy: null, Token)).Should().ThrowAsync<OutOfMemoryException>();
+        await FluentActions.Awaiting(async () => await sut.GetOrAddResultAsync<string>("k", Generate, TimeSpan.FromMinutes(1), policy: null, Token)).Should().ThrowAsync<OutOfMemoryException>();
 
         generated.Should().Be(0);
     }

@@ -66,8 +66,8 @@ public class MultilayerSetCacheTests
         var first = await sut.MembersAsync<string>("k", token: Ct);
         var second = await sut.MembersAsync<string>("k", token: Ct);
 
-        first.Should().BeEquivalentTo(new[] { "a", "b" });
-        second.Should().BeEquivalentTo(new[] { "a", "b" });
+        first.Should().BeEquivalentTo("a", "b");
+        second.Should().BeEquivalentTo("a", "b");
         await l2.ReceivedWithAnyArgs(1).MembersAsync<string>(default, default, Ct);
     }
 
@@ -82,7 +82,7 @@ public class MultilayerSetCacheTests
         await sut.AddAsync("k", "b", token: Ct);                     // must patch L1, not evict it
         var members = await sut.MembersAsync<string>("k", token: Ct); // must be served from L1
 
-        members.Should().BeEquivalentTo(new[] { "a", "b" });
+        members.Should().BeEquivalentTo("a", "b");
         (await sut.ContainsItemAsync("k", "b", Ct)).Should().BeTrue();
         await l2.ReceivedWithAnyArgs(1).MembersAsync<string>(default, default, Ct);
     }
@@ -99,7 +99,7 @@ public class MultilayerSetCacheTests
         await sut.AddAsync("k", (IEnumerable<string>)new[] { "b", "c" }, (CachePolicy?)null, Ct);
         var members = await sut.MembersAsync<string>("k", token: Ct);
 
-        members.Should().BeEquivalentTo(new[] { "a", "b", "c" });
+        members.Should().BeEquivalentTo("a", "b", "c");
         await l2.ReceivedWithAnyArgs(1).MembersAsync<string>(default, default, Ct);
     }
 
@@ -113,7 +113,7 @@ public class MultilayerSetCacheTests
         await sut.AddAsync("k", "b", token: Ct);                     // no snapshot cached: must not create one
         var members = await sut.MembersAsync<string>("k", token: Ct); // must fetch the whole set from L2
 
-        members.Should().BeEquivalentTo(new[] { "a", "b" });
+        members.Should().BeEquivalentTo("a", "b");
         await l2.ReceivedWithAnyArgs(1).MembersAsync<string>(default, default, Ct);
     }
 
@@ -129,7 +129,7 @@ public class MultilayerSetCacheTests
         var members = await sut.MembersAsync<string>("k", token: Ct); // must be served from the patched L1
 
         popped.Should().Be("a");
-        members.Should().BeEquivalentTo(new[] { "b" });
+        members.Should().BeEquivalentTo("b");
         await l2.ReceivedWithAnyArgs(1).MembersAsync<string>(default, default, Ct);
     }
 
@@ -144,7 +144,7 @@ public class MultilayerSetCacheTests
         await sut.RemoveItemAsync("k", "a", Ct);
         var members = await sut.MembersAsync<string>("k", token: Ct);
 
-        members.Should().BeEquivalentTo(new[] { "b" });
+        members.Should().BeEquivalentTo("b");
         await l2.ReceivedWithAnyArgs(1).MembersAsync<string>(default, default, Ct);
     }
 
@@ -194,7 +194,7 @@ public class MultilayerSetCacheTests
         var (sut, l2) = CreateMonitoredSut(connected: false, useLocalOnlyWhenDisconnected: true);
 
         (await sut.AddAsync("k", "x", token: Ct)).Should().BeTrue();
-        (await sut.MembersAsync<string>("k", token: Ct)).Should().BeEquivalentTo(new[] { "x" });
+        (await sut.MembersAsync<string>("k", token: Ct)).Should().BeEquivalentTo("x");
         (await sut.ContainsItemAsync("k", "x", Ct)).Should().BeTrue();
 
         await l2.DidNotReceiveWithAnyArgs().AddAsync<string>(default, default(string)!, default, Ct);

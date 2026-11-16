@@ -6,8 +6,6 @@ namespace UiPath.Caching.Tests;
 /// <summary>The span, state and generated-expiration members of the cache interfaces are sealed: a proxy cannot intercept them, so on a mock they run and reach the <see cref="CacheKey"/> members the test set up.</summary>
 public class SealedMemberMockTests
 {
-    private static CancellationToken Ct => TestContext.Current.CancellationToken;
-
     [Theory]
     [InlineData(MockBehavior.Strict)]
     [InlineData(MockBehavior.Loose)]

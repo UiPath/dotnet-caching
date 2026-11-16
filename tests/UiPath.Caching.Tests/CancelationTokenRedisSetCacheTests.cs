@@ -86,9 +86,9 @@ public class CancelationTokenRedisSetCacheTests
     private async Task ValidateCancellationToken(Func<RedisSetCache, CancellationToken, Task> act)
     {
         var sut = _fixture.Create<RedisSetCache>();
-        var cancelSource = new CancellationTokenSource();
+        using var cancelSource = new CancellationTokenSource();
         var token = cancelSource.Token;
-        cancelSource.Cancel();
+        await cancelSource.CancelAsync();
         Func<Task> innerAct = () => act(sut, token);
         await innerAct.Should().ThrowAsync<OperationCanceledException>();
     }

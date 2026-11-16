@@ -112,11 +112,11 @@ public class UiPathBufferDistributedCacheTests
     [Fact]
     public async Task TryGet_validates_the_key_and_the_destination()
     {
-        await FluentActions.Awaiting(() => _cache.TryGetAsync(null!, new ArrayBufferWriter<byte>(), TestContext.Current.CancellationToken).AsTask())
+        await FluentActions.Awaiting(async () => await _cache.TryGetAsync(null!, new ArrayBufferWriter<byte>(), TestContext.Current.CancellationToken))
             .Should().ThrowAsync<ArgumentNullException>();
-        await FluentActions.Awaiting(() => _cache.TryGetAsync("k", null!, TestContext.Current.CancellationToken).AsTask())
+        await FluentActions.Awaiting(async () => await _cache.TryGetAsync("k", null!, TestContext.Current.CancellationToken))
             .Should().ThrowAsync<ArgumentNullException>();
-        await FluentActions.Awaiting(() => _cache.TryGetAsync("   ", new ArrayBufferWriter<byte>(), TestContext.Current.CancellationToken).AsTask())
+        await FluentActions.Awaiting(async () => await _cache.TryGetAsync("   ", new ArrayBufferWriter<byte>(), TestContext.Current.CancellationToken))
             .Should().ThrowAsync<ArgumentException>();
     }
 

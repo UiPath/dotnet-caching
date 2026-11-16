@@ -271,8 +271,10 @@ public class StateAndArgumentOverloadTests
     private static Task<IDictionary<string, string?>> LoadHash(Request request, CancellationToken token) =>
         Task.FromResult<IDictionary<string, string?>>(new Dictionary<string, string?> { ["id"] = $"{request.Id}:{request.Version}" });
 
+#pragma warning disable S1144, S1172 // Passed as a method group, so the signature is fixed; the analyzer misses that use.
     private static Task<GeneratedValue<string>> Generated(Request request, CancellationToken token) =>
         Task.FromResult(new GeneratedValue<string>($"{request.Id}:{request.Version}", Deadline));
+#pragma warning restore S1144, S1172
 
     private static KeyValuePair<CacheKey, int>[] Entries(params int[] ids) => [.. ids.Select(id => new KeyValuePair<CacheKey, int>($"k:{id}", id))];
 

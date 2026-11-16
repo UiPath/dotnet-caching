@@ -121,7 +121,7 @@ public sealed class MessagePackIntegrationTests(RedisContainerFixture fixture) :
         (await writer.SetAsync(key, Fields(("b", "2")), new HashCacheEntryOptions(TimeToLive: TimeSpan.FromMinutes(10), SetOption: HashCacheSetOption.HashReplace), Ct)).Should().BeTrue();
 
         (await UntilAsync(async () => (await peer.GetAsync<Profile>(key, Ct)).ContainsKey("b"))).Should().BeTrue("the peer applies the field from the event");
-        (await peer.GetAsync<Profile>(key, Ct)).Keys.Should().BeEquivalentTo(["a", "b"]);
+        (await peer.GetAsync<Profile>(key, Ct)).Keys.Should().BeEquivalentTo("a", "b");
         (await RawField(key, "b"))![0].Should().Be(MessagePackFormats.Value);
     }
 

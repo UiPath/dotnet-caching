@@ -25,7 +25,7 @@ public class CacheEntryFactoryTests
     [Fact]
     public void An_untracked_entry_ignores_a_read_mark()
     {
-        var entry = (IReadTracked)new CacheEntryFactory().Create("v", DateTimeOffset.MaxValue);
+        var entry = new CacheEntryFactory().Create("v", DateTimeOffset.MaxValue).Should().BeAssignableTo<IReadTracked>().Subject;
         entry.Track(false);
 
         entry.MarkRead(5);
@@ -37,7 +37,7 @@ public class CacheEntryFactoryTests
     [Fact]
     public void An_untracked_entry_that_is_tracked_again_takes_read_marks()
     {
-        var entry = (IReadTracked)new CacheEntryFactory().Create("v", DateTimeOffset.MaxValue);
+        var entry = new CacheEntryFactory().Create("v", DateTimeOffset.MaxValue).Should().BeAssignableTo<IReadTracked>().Subject;
         entry.Track(false);
 
         entry.Track(true);
@@ -50,7 +50,7 @@ public class CacheEntryFactoryTests
     [Fact]
     public void Tracking_an_entry_again_keeps_its_read_mark()
     {
-        var entry = (IReadTracked)new CacheEntryFactory().Create("v", DateTimeOffset.MaxValue);
+        var entry = new CacheEntryFactory().Create("v", DateTimeOffset.MaxValue).Should().BeAssignableTo<IReadTracked>().Subject;
         entry.MarkRead(5);
 
         entry.Track(true);
@@ -61,7 +61,7 @@ public class CacheEntryFactoryTests
     [Fact]
     public void A_tracked_entry_takes_a_read_mark()
     {
-        var entry = (IReadTracked)new CacheEntryFactory().Create("v", DateTimeOffset.MaxValue);
+        var entry = new CacheEntryFactory().Create("v", DateTimeOffset.MaxValue).Should().BeAssignableTo<IReadTracked>().Subject;
 
         entry.MarkRead(5);
 

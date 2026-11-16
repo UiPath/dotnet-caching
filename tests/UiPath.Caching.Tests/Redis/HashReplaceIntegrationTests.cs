@@ -6,7 +6,7 @@ namespace UiPath.Caching.Tests.Redis;
 
 [Collection("RedisIntegration")]
 [Trait("Category", "Integration")]
-public class HashReplaceIntegrationTests(RedisContainerFixture fixture) : IDisposable
+public sealed class HashReplaceIntegrationTests(RedisContainerFixture fixture) : IDisposable
 {
     private readonly string _app = $"hr{Guid.NewGuid():N}"[..10];
     private readonly List<ServiceProvider> _nodes = [];

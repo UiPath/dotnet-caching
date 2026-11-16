@@ -66,7 +66,7 @@ public class ReadListTests
     [MemberData(nameof(Matrix))]
     public void Each_stored_format_is_read_or_a_miss_by_the_list(string why, string[]? read, bool storedJson, bool hit)
     {
-        var readable = read is null ? ReadableFormats.Any : Readable(read, write: read.Contains("fast", StringComparer.OrdinalIgnoreCase) ? _fast : null);
+        var readable = read is null ? ReadableFormats.Any : Readable(read, write: WriterFor(read));
 
         var outcome = Reader().Read<string>(storedJson ? JsonValue : FastValue, readable);
 
@@ -465,6 +465,8 @@ public class ReadListTests
     private static CachePolicy FastOnly() => new() { Serializer = new SerializerPolicy { Write = "fast", Read = ["fast"] } };
 
     private ValueSerializerRegistry Registry() => new([RegistryEntry.Of("fast", _fast)]);
+
+    private PassthroughValueSerializer? WriterFor(string[] read) => read.Contains("fast", StringComparer.OrdinalIgnoreCase) ? _fast : null;
 
     private ReadableFormats Readable(string[] read, ICacheValueSerializer? write = null) =>
         ReadableFormats.Resolve(Registry(), read, write, jsonFallback: false);

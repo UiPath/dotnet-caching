@@ -15,7 +15,6 @@ public class MultilayerCachePerNameLockTests(ITestContextAccessor testContextAcc
     private ITopicProviderWithConnectionState _topicProvider = default!;
     private ITopic<ICacheEvent> _topic = default!;
     private global::UiPath.Caching.IMemoryCacheFactory _memoryCacheFactory = default!;
-    private ICacheEventFactory _cacheEventFactory = default!;
     private IDistributedLock _distributedLock = default!;
     private InMemoryRedisCacheOptions _options = default!;
     private CacheKey _cacheKey = default!;
@@ -156,7 +155,7 @@ public class MultilayerCachePerNameLockTests(ITestContextAccessor testContextAcc
         _topicProvider.Create(_topicKey).Returns(_topic);
         _memoryCacheFactory = _fixture.Freeze<global::UiPath.Caching.IMemoryCacheFactory>();
         _memoryCacheFactory.Get(Arg.Any<IMemoryCacheOptions>()).Returns(_memoryCache);
-        _cacheEventFactory = _fixture.Freeze<ICacheEventFactory>();
+        _fixture.Freeze<ICacheEventFactory>();
         return ValueTask.CompletedTask;
     }
 }

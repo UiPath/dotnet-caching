@@ -9,7 +9,7 @@ public class TestChangeTokenFactory : IChangeTokenFactory
         _func = func;
     }
 
-    public ICacheChangeToken Create(string token, ITopic<ICacheEvent> topic, string cacheName, Type entryTypec)
+    public ICacheChangeToken Create(string token, ITopic<ICacheEvent> topic, string cacheName, Type entryType)
     {
         return _func(token, topic);
     }

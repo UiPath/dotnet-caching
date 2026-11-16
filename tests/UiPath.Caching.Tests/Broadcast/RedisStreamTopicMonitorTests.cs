@@ -10,6 +10,7 @@ namespace UiPath.Caching.Tests;
 public class RedisStreamHealthMaintainerTests(ITestContextAccessor testContextAccessor) : IAsyncLifetime
 {
     private readonly IFixture _fixture = AutoFixtureCreator.NSubstitute();
+    private readonly bool _successStreamDeleteConsumerGroup = true;
     private IRedisConnector _redisConnector = default!;
     private IDatabase _database = default!;
     private RecordingTelemetryProvider _telemetryProvider = default!;
@@ -23,7 +24,6 @@ public class RedisStreamHealthMaintainerTests(ITestContextAccessor testContextAc
     private RedisStreamHealthMaintainer? _sut;
     private bool _ownLock = true;
     private RedisValue _quarantineValue = RedisValue.Null;
-    private bool _successStreamDeleteConsumerGroup = true;
 
     private RedisValue[] _streams = ["stream1", "stream2"];
     private IServer _primary = default!;

@@ -22,7 +22,6 @@ public class MultilayerCacheRehydrateTests(ITestContextAccessor testContextAcces
     private MultilayerCachePerNameLockTests.ITopicProviderWithConnectionState _topicProvider = default!;
     private ITopic<ICacheEvent> _topic = default!;
     private global::UiPath.Caching.IMemoryCacheFactory _memoryCacheFactory = default!;
-    private ICacheEventFactory _cacheEventFactory = default!;
     private IDistributedLock _distributedLock = default!;
     private InMemoryRedisCacheOptions _options = default!;
     private CacheKey _cacheKey = default!;
@@ -534,8 +533,8 @@ public class MultilayerCacheRehydrateTests(ITestContextAccessor testContextAcces
     [Fact]
     public async Task Rehydrate_skipped_when_current_entry_is_cached_null_and_CacheNullValues_true()
     {
-        // Circuit-breaker A: the existing entry is a cached-null marker (Value is null but Found=true);
-        // re-running the factory would just churn the same null, so the rehydrate must short-circuit
+        // Circuit-breaker A: the existing entry is a cached-null marker (a null value that was found),
+        // and re-running the factory would just churn the same null, so the rehydrate must short-circuit
         // before taking the distributed lock.
         _options.CacheNullValues = true;
         var token = testContextAccessor.Current.CancellationToken;
@@ -640,7 +639,7 @@ public class MultilayerCacheRehydrateTests(ITestContextAccessor testContextAcces
         _topic.PublishAsync(Arg.Any<ICacheEvent>(), Arg.Any<CancellationToken>()).Returns(_ => true);
         _memoryCacheFactory = _fixture.Freeze<global::UiPath.Caching.IMemoryCacheFactory>();
         _memoryCacheFactory.Get(Arg.Any<IMemoryCacheOptions>()).Returns(_memoryCache);
-        _cacheEventFactory = _fixture.Freeze<ICacheEventFactory>();
+        _fixture.Freeze<ICacheEventFactory>();
         return ValueTask.CompletedTask;
     }
 
@@ -706,10 +705,12 @@ public class MultilayerCacheRehydrateTests(ITestContextAccessor testContextAcces
 
         public int Calls => Volatile.Read(ref _calls);
 
+#pragma warning disable S1172 // Used as a method group for a generator delegate, so the signature is fixed.
         public Task<string?> Run(CancellationToken token)
         {
             Interlocked.Increment(ref _calls);
             return Task.FromResult<string?>("rehydrated");
         }
+#pragma warning restore S1172
     }
 }

@@ -333,9 +333,11 @@ public class SerializedPayloadTests
     /// <summary>Adds overloads beside the virtual members without overriding them.</summary>
     private sealed class OverloadingSerializer : SystemJsonByteSerializerProxy
     {
+#pragma warning disable S1144, S1172 // the added overloads are the case under test
         public static byte[] Serialize(string value, bool indented) => System.Text.Encoding.UTF8.GetBytes(indented ? value : value.Trim());
 
         public ReadOnlyMemory<byte> SerializeToMemory<T>(T? value, int unused) => SerializeToMemory(value);
+#pragma warning restore S1144, S1172
     }
 
     private sealed class PrefixingSerializer : SystemJsonByteSerializerProxy

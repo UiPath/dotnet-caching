@@ -119,7 +119,7 @@ public class HandlerKeyCacheTests
 
         await UntypedCases.Single(c => c.Tag == tag).Call(recorder, "a", 7);
 
-        recorder.Calls.Should().Equal([(tag, Expected)]);
+        recorder.Calls.Should().Equal((tag, Expected));
     }
 
     [Theory]
@@ -149,7 +149,7 @@ public class HandlerKeyCacheTests
         await spanCache.GetOrAddAsync($"{padding}:{7}", 1, StateGen, Policy, Ct);
         await plain.GetAsync<string>($"{padding}:{7}", Policy, Ct);
 
-        recorder.Calls.Should().Equal([("GetOrAddAsync(state,gen,policy)", $"{padding}:7")]);
+        recorder.Calls.Should().Equal(("GetOrAddAsync(state,gen,policy)", $"{padding}:7"));
         plain.ReceivedCalls().Single().GetOriginalArguments()[0].Should().Be(new CacheKey($"{padding}:7"));
     }
 
@@ -228,10 +228,15 @@ public class HandlerKeyCacheTests
         }
     }
 
-    private static string InnerTag(string typedTag) =>
-        typedTag.StartsWith("Contains", StringComparison.Ordinal) || typedTag.StartsWith("TimeToLive", StringComparison.Ordinal) || typedTag.StartsWith("ExpireTime", StringComparison.Ordinal)
-            ? typedTag
-            : typedTag.EndsWith("()", StringComparison.Ordinal) ? typedTag[..^1] + "policy)" : typedTag[..^1] + ",policy)";
+    private static string InnerTag(string typedTag)
+    {
+        if (typedTag.StartsWith("Contains", StringComparison.Ordinal) || typedTag.StartsWith("TimeToLive", StringComparison.Ordinal) || typedTag.StartsWith("ExpireTime", StringComparison.Ordinal))
+        {
+            return typedTag;
+        }
+
+        return typedTag.EndsWith("()", StringComparison.Ordinal) ? typedTag[..^1] + "policy)" : typedTag[..^1] + ",policy)";
+    }
 
     private static void AssertCacheKeyCall(object cache, string tag)
     {

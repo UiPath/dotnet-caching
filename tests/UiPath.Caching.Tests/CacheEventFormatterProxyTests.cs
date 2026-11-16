@@ -7,7 +7,7 @@ namespace UiPath.Caching.Tests;
 public class CacheEventFormatterProxyTests
 {
     private readonly IFixture _fixture = AutoFixtureCreator.NSubstitute();
-    private CacheEventFormatterProxy _sut = new CacheEventFormatterProxy(new JsonEventFormatter<CacheEventData>());
+    private readonly CacheEventFormatterProxy _sut = new CacheEventFormatterProxy(new JsonEventFormatter<CacheEventData>());
 
     [Fact]
     public void Works_as_expected()

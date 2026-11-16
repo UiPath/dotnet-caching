@@ -147,7 +147,7 @@ public class MultilayerCacheBatchGetOrAddTests(ITestContextAccessor testContextA
 
         result.Single(r => r.Key == 2L).Value.Should().BeNull();
         _stored.Should().NotContainKey((CacheKey)"b");
-        _innerSetCalls.Single().Should().Equal(new[] { (CacheKey)"a" });
+        _innerSetCalls.Single().Should().Equal((CacheKey)"a");
     }
 
     [Fact]
@@ -180,7 +180,7 @@ public class MultilayerCacheBatchGetOrAddTests(ITestContextAccessor testContextA
             (CachePolicy?)null,
             token);
 
-        _innerSetCalls.Single().Should().Equal(new[] { (CacheKey)"a" });
+        _innerSetCalls.Single().Should().Equal((CacheKey)"a");
     }
 
     [Fact]
@@ -486,10 +486,13 @@ public class MultilayerCacheBatchGetOrAddTests(ITestContextAccessor testContextA
         return token;
     }
 
-    private KeyValuePair<long, string?>[] Hit(KeyValuePair<CacheKey, long>[] entries, Func<long[], CancellationToken, Task<KeyValuePair<long, string?>[]>> generate, CancellationToken token)
+    private void Hit(KeyValuePair<CacheKey, long>[] entries, Func<long[], CancellationToken, Task<KeyValuePair<long, string?>[]>> generate, CancellationToken token)
     {
         var pending = Sut.GetOrAddAsync<string, long>(entries, generate, (CachePolicy?)null, token);
-        return pending.IsCompletedSuccessfully ? pending.Result : throw new InvalidOperationException("The all-local batch did not complete synchronously.");
+        if (!pending.IsCompletedSuccessfully)
+        {
+            throw new InvalidOperationException("The all-local batch did not complete synchronously.");
+        }
     }
 
     private Task<KeyValuePair<long, string?>[]> Generate(long[] states, CancellationToken _)

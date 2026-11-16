@@ -294,11 +294,11 @@ public class RedisHashCacheSerializerTests(ITestContextAccessor testContextAcces
             return Task.FromResult<IDictionary<string, string?>>(new Dictionary<string, string?> { ["a"] = "x" });
         }
 
-        await FluentActions.Awaiting(() => sut.GetAsync<string>("k", policy: null, Token).AsTask()).Should().ThrowAsync<OutOfMemoryException>();
-        await FluentActions.Awaiting(() => sut.GetAsync<string>("k", ["a"], policy: null, Token).AsTask()).Should().ThrowAsync<OutOfMemoryException>();
-        await FluentActions.Awaiting(() => sut.GetItemAsync<string>("k", "a", policy: null, Token).AsTask()).Should().ThrowAsync<OutOfMemoryException>();
-        await FluentActions.Awaiting(() => sut.GetCacheEntryAsync<string>("k", policy: null, Token).AsTask()).Should().ThrowAsync<OutOfMemoryException>();
-        await FluentActions.Awaiting(() => sut.GetOrAddAsync<string>("k", Generate, policy: null, Token).AsTask()).Should().ThrowAsync<OutOfMemoryException>();
+        await FluentActions.Awaiting(async () => await sut.GetAsync<string>("k", policy: null, Token)).Should().ThrowAsync<OutOfMemoryException>();
+        await FluentActions.Awaiting(async () => await sut.GetAsync<string>("k", ["a"], policy: null, Token)).Should().ThrowAsync<OutOfMemoryException>();
+        await FluentActions.Awaiting(async () => await sut.GetItemAsync<string>("k", "a", policy: null, Token)).Should().ThrowAsync<OutOfMemoryException>();
+        await FluentActions.Awaiting(async () => await sut.GetCacheEntryAsync<string>("k", policy: null, Token)).Should().ThrowAsync<OutOfMemoryException>();
+        await FluentActions.Awaiting(async () => await sut.GetOrAddAsync<string>("k", Generate, policy: null, Token)).Should().ThrowAsync<OutOfMemoryException>();
 
         generated.Should().Be(0);
     }
@@ -637,12 +637,6 @@ public class RedisHashCacheSerializerTests(ITestContextAccessor testContextAcces
         _transaction.DidNotReceive().KeyDeleteAsync(Arg.Any<RedisKey>(), Arg.Any<CommandFlags>());
     }
 
-    private RedisHashCache Create(out ValueSerializerRegistry registry, bool cacheNullValues = false, ILogger<RedisHashCache>? logger = null, int auditThreshold = 0)
-    {
-        registry = new ValueSerializerRegistry([RegistryEntry.Of("fast", _fast)]);
-        return Create(registry, cacheNullValues: cacheNullValues, logger: logger, auditThreshold: auditThreshold);
-    }
-
     private async Task<string[]> MethodsOf(Func<Task> operation)
     {
         var (metrics, dependencies) = (_telemetry.Metrics.Count, _telemetry.Dependencies.Count);
@@ -654,6 +648,12 @@ public class RedisHashCacheSerializerTests(ITestContextAccessor testContextAcces
                 .Distinct()
                 .Order(StringComparer.Ordinal),
         ];
+    }
+
+    private RedisHashCache Create(out ValueSerializerRegistry registry, bool cacheNullValues = false, ILogger<RedisHashCache>? logger = null, int auditThreshold = 0)
+    {
+        registry = new ValueSerializerRegistry([RegistryEntry.Of("fast", _fast)]);
+        return Create(registry, cacheNullValues: cacheNullValues, logger: logger, auditThreshold: auditThreshold);
     }
 
     private RedisHashCache Create(ValueSerializerRegistry registry, ISerializerProxy<byte[]>? proxy = null, CachePolicy? defaultPolicy = null, bool cacheNullValues = false, ILogger<RedisHashCache>? logger = null, int auditThreshold = 0, int? fieldBatchSize = null)

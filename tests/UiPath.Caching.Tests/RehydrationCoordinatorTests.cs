@@ -303,7 +303,8 @@ public class RehydrationCoordinatorTests
         var expectedFactoryTimeout = TimeSpan.FromSeconds(302);
         var expectedCooldown = baseCooldown * 2;
         var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(20);
-        for (var attempt = 0; DateTime.UtcNow < deadline; attempt++)
+        var attempt = 0;
+        while (DateTime.UtcNow < deadline)
         {
             CacheKey[]? rehydrated = null;
             var ran = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -335,6 +336,7 @@ public class RehydrationCoordinatorTests
             }
 
             await Task.Delay(25, TestContext.Current.CancellationToken);
+            attempt++;
         }
 
         Assert.Fail("\"failing\" never left the in-flight set, so the per-key cooldown path was never exercised.");

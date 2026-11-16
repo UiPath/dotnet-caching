@@ -553,7 +553,7 @@ public class BackgroundWritesTests
 
         var refused = telemetry.Metrics.Where(m => m.Name == "cache.background_write.fill_refused").ToArray();
         refused.Select(m => m.Properties!["reason"]).Should().Equal("changed", "in_flight");
-        refused.Should().OnlyContain(m => m.Value == 1 && m.Properties!["cache.name"] == "c");
+        refused.Should().OnlyContain(m => Math.Abs(m.Value - 1) < double.Epsilon && m.Properties!["cache.name"] == "c");
     }
 
     [Fact]
@@ -954,6 +954,7 @@ public class BackgroundWritesTests
         long seen;
         while ((seen = Volatile.Read(ref target)) < value && Interlocked.CompareExchange(ref target, value, seen) != seen)
         {
+            // Expected: the CAS lost a race, so the loop rereads the target.
         }
     }
 

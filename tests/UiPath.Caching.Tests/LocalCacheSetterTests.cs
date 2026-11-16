@@ -133,6 +133,7 @@ public class LocalCacheSetterTests : IAsyncLifetime
         _memoryCache.TryGetValue(_cacheKey.Name, out _).Should().BeFalse();
     }
 
+#pragma warning disable S4144 // The two size-limit cases are kept as separate tests.
     [Fact]
     public void SizeLimit_set_provided_size_positive()
     {
@@ -157,6 +158,7 @@ public class LocalCacheSetterTests : IAsyncLifetime
         actual.Should().BeFalse();
         _memoryCache.TryGetValue(_cacheKey.Name, out _).Should().BeFalse();
     }
+#pragma warning restore S4144
 
     public ValueTask DisposeAsync()
     {

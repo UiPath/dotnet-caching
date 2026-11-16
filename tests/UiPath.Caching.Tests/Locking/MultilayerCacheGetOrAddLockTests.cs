@@ -419,13 +419,4 @@ public class MultilayerCacheGetOrAddLockTests(ITestContextAccessor testContextAc
         _memoryCache?.Dispose();
         return ValueTask.CompletedTask;
     }
-
-    private static async Task WaitForAsync(Func<bool> predicate, TimeSpan timeout, CancellationToken token)
-    {
-        var sw = System.Diagnostics.Stopwatch.StartNew();
-        while (!predicate() && sw.Elapsed < timeout)
-        {
-            await Task.Delay(10, token);
-        }
-    }
 }

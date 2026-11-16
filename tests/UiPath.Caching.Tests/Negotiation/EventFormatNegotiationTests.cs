@@ -117,7 +117,7 @@ public class EventFormatNegotiationTests
         var sut = Negotiator();
         Settle(sut, View(Node("node-id-that-must-not-be-a-tag", Both)));
 
-        _telemetry.Metrics.Should().Contain(m => m.Name == Metrics.FormatEffective && m.Properties!["kind"] == "event" && m.Properties["format"] == "02" && m.Value == 1);
+        _telemetry.Metrics.Should().Contain(m => m.Name == Metrics.FormatEffective && m.Properties!["kind"] == "event" && m.Properties["format"] == "02" && Math.Abs(m.Value - 1) < double.Epsilon);
         _telemetry.Metrics.Where(m => m.Name.StartsWith("cache.format.", StringComparison.Ordinal))
             .SelectMany(m => (IEnumerable<string>?)m.Properties?.Values ?? [])
             .Should().NotContain(value => value.Contains("node-id", StringComparison.Ordinal));

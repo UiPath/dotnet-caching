@@ -215,10 +215,12 @@ public class MultilayerCacheRehydrateAdoptTests
 
         public int Calls => Volatile.Read(ref _calls);
 
-        public Task<string?> Run(CancellationToken token)
+#pragma warning disable S1172 // Run is passed as a method group, so its signature is fixed.
+        public Task<string?> Run(CancellationToken _)
         {
             Interlocked.Increment(ref _calls);
             return Task.FromResult(value);
         }
+#pragma warning restore S1172
     }
 }

@@ -33,7 +33,7 @@ public class MetricExtensionsTests
         var writeTopicMetricName = Metrics.GetWriteTopicMetricName(topic);
         telemetry.Metrics.Should().ContainSingle(m =>
             m.Name == writeTopicMetricName &&
-            m.Value == 0 &&
+            Math.Abs(m.Value) < 1e-9 &&
             m.Properties != null &&
             m.Properties[Metrics.TopicName] == topic &&
             m.Properties[Metrics.SequenceNumber] == Metrics.Invalid);
@@ -57,13 +57,13 @@ public class MetricExtensionsTests
         var streamId = streamIdValue.GetStreamIdFromRedisValue();
         telemetry.Metrics.Should().ContainSingle(m =>
             m.Name == writeTopicMetricName &&
-            m.Value == streamId.Timestamp &&
+            Math.Abs(m.Value - streamId.Timestamp) < 1e-9 &&
             m.Properties != null &&
             m.Properties[Metrics.TopicName] == topic &&
             m.Properties[Metrics.SequenceNumber] == streamId.Sequence.ToString());
         telemetry.Metrics.Should().ContainSingle(m =>
             m.Name == readTopicMetricName &&
-            m.Value == streamId.Timestamp &&
+            Math.Abs(m.Value - streamId.Timestamp) < 1e-9 &&
             m.Properties != null &&
             m.Properties[Metrics.TopicName] == topic &&
             m.Properties[Metrics.SequenceNumber] == streamId.Sequence.ToString());

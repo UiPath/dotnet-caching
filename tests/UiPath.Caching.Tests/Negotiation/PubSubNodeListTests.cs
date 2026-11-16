@@ -532,7 +532,7 @@ public class PubSubNodeListTests
         sut.Writes.Should().BeFalse("a third subscriber that no advertisement claims");
         sut.Allows(Writer).Should().BeFalse();
         _telemetry.Metrics.Should().Contain(m => m.Name == Metrics.FormatFallback && m.Properties!["reason"] == FormatNegotiator.ReasonUnaccountedSubscriber);
-        _telemetry.Metrics.Should().Contain(m => m.Name == Metrics.FormatBlockers && m.Properties!["channels"] == Channel && m.Value == 1);
+        _telemetry.Metrics.Should().Contain(m => m.Name == Metrics.FormatBlockers && m.Properties!["channels"] == Channel && Math.Abs(m.Value - 1) < 1e-9);
     }
 
     [Fact]

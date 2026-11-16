@@ -33,7 +33,9 @@ public class NotCacheableExceptionTests
     {
     }
 
+#pragma warning disable S2094 // A type to wrap in the exception.
     public class TestClass
     {
     }
+#pragma warning restore S2094
 }

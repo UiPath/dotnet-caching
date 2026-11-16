@@ -35,6 +35,7 @@ internal static class PeerUpdateStressHarness
             long seen;
             while (gap > (seen = Interlocked.Read(ref maxStall[node])) && Interlocked.CompareExchange(ref maxStall[node], gap, seen) != seen)
             {
+                // Lost the race: re-read the maximum and try again.
             }
         }
 

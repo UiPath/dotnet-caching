@@ -79,11 +79,15 @@ public class QueueCacheFactoryTests
         sut.SetCache.Should().BeSameAs(NullSetCache.Instance);
     }
 
+#pragma warning disable S2094 // A marker type.
     public class MyService { }
+#pragma warning restore S2094
 
     private sealed class DependsOnQueueCacheFactory
     {
+#pragma warning disable S1144 // Constructed by the service provider.
         public DependsOnQueueCacheFactory(IQueueCacheFactory factory) => SetCache = factory.CreateSetCache();
+#pragma warning restore S1144
 
         public ISetCache SetCache { get; }
     }

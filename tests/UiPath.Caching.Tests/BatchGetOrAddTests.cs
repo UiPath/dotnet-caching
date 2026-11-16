@@ -76,7 +76,7 @@ public class BatchGetOrAddTests(ITestContextAccessor testContextAccessor)
         observed.Single().Should().Equal(States1, "one request per distinct KEY, carrying the first state for it");
         result.Select(r => r.Key).Should().Equal(States1And2, "one result per distinct STATE");
         result.Select(r => r.Value).Should().Equal(Gen1Twice, "both states carry the one generated value");
-        fake.SetKeySets.Single().Should().Equal(new[] { (CacheKey)"shared" });
+        fake.SetKeySets.Single().Should().Equal((CacheKey)"shared");
     }
 
     [Fact]

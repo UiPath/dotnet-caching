@@ -220,7 +220,7 @@ public class FormatNegotiationIntegrationTests(RedisContainerFixture fixture)
 
             // Its group is read a moment ago and its ad is gone from the readers: both are the departed's, and neither may count against the fleet.
             await leavesService.StopAsync(Ct);
-            leaves.Dispose();
+            await leaves.DisposeAsync();
             for (var i = 0; i < 8; i++)
             {
                 writer.Allows(serializer).Should().BeTrue("a node that left is accounted for, not an unaccounted one");
@@ -302,20 +302,20 @@ public class FormatNegotiationIntegrationTests(RedisContainerFixture fixture)
     {
         public event EventHandler? OnConnectionFailed
         {
-            add { }
-            remove { }
+            add { /* Expected: this connector never raises the event. */ }
+            remove { /* Expected: nothing is attached. */ }
         }
 
         public event EventHandler? OnConnectionRestored
         {
-            add { }
-            remove { }
+            add { /* Expected: this connector never raises the event. */ }
+            remove { /* Expected: nothing is attached. */ }
         }
 
         public event EventHandler? OnReconnected
         {
-            add { }
-            remove { }
+            add { /* Expected: this connector never raises the event. */ }
+            remove { /* Expected: nothing is attached. */ }
         }
 
         public bool IsConnected => mux.IsConnected;

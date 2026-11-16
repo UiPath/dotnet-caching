@@ -214,7 +214,9 @@ internal sealed class InFlight<TKey, TResult>
         {
             get
             {
+#pragma warning disable S2551 // the run locks on itself by design: internal, sealed and never shared, and a lock object would cost an allocation per run
                 lock (this)
+#pragma warning restore S2551
                 {
                     if (_source is null)
                     {
@@ -239,7 +241,9 @@ internal sealed class InFlight<TKey, TResult>
         {
             get
             {
+#pragma warning disable S2551 // the run locks on itself by design: internal, sealed and never shared, and a lock object would cost an allocation per run
                 lock (this)
+#pragma warning restore S2551
                 {
                     return !reserved && _waiting == 0;
                 }
@@ -278,7 +282,9 @@ internal sealed class InFlight<TKey, TResult>
                 return true;
             }
 
+#pragma warning disable S2551 // the run locks on itself by design: internal, sealed and never shared, and a lock object would cost an allocation per run
             lock (this)
+#pragma warning restore S2551
             {
                 if (_waiting == 0)
                 {
@@ -297,7 +303,9 @@ internal sealed class InFlight<TKey, TResult>
                 return;
             }
 
+#pragma warning disable S2551 // the run locks on itself by design: internal, sealed and never shared, and a lock object would cost an allocation per run
             lock (this)
+#pragma warning restore S2551
             {
                 if (--_waiting > 0)
                 {
@@ -321,7 +329,9 @@ internal sealed class InFlight<TKey, TResult>
         public bool TryCommit<TArg>(TArg arg, Action<TArg> commit)
         {
             // Under the gate Leave takes, so work every caller has left cannot commit after a fresh run has started.
+#pragma warning disable S2551 // the run locks on itself by design: internal, sealed and never shared, and a lock object would cost an allocation per run
             lock (this)
+#pragma warning restore S2551
             {
                 if (_waiting == 0)
                 {
@@ -422,7 +432,9 @@ internal sealed class InFlight<TKey, TResult>
 
         private void Settle(Outcome outcome, TResult? value, Exception? failure)
         {
+#pragma warning disable S2551 // the run locks on itself by design: internal, sealed and never shared, and a lock object would cost an allocation per run
             lock (this)
+#pragma warning restore S2551
             {
                 if (Current != Outcome.Running)
                 {

@@ -44,7 +44,8 @@ public class InnerTierOutageTests
             .Returns(_ => { Interlocked.Increment(ref reads); return new ValueTask<ICacheEntry<string?>>(release.Task); });
         using var cache = InMemoryMultilayer.Cache(inner: inner);
 
-        var shortLived = cache.GetAsync<string>("user:42", new CachePolicy { LocalExpiration = TimeSpan.FromSeconds(1) }, Ct).AsTask();
+        var shortLivedRead = cache.GetAsync<string>("user:42", new CachePolicy { LocalExpiration = TimeSpan.FromSeconds(1) }, Ct);
+        var shortLived = shortLivedRead.AsTask();
         var longLived = cache.GetAsync<string>("user:42", new CachePolicy { LocalExpiration = TimeSpan.FromMinutes(1) }, Ct).AsTask();
         release.SetResult(new TestCacheEntry<string?> { Value = "v", Expiration = DateTimeOffset.UtcNow.AddMinutes(5) });
 
@@ -62,7 +63,8 @@ public class InnerTierOutageTests
             .Returns(_ => { Interlocked.Increment(ref reads); return new ValueTask<ICacheEntry<string?>>(release.Task); });
         using var cache = InMemoryMultilayer.Cache(inner: inner);
 
-        var a = cache.GetAsync<string>("user:42", new CachePolicy { LocalExpiration = TimeSpan.FromMinutes(1) }, Ct).AsTask();
+        var aRead = cache.GetAsync<string>("user:42", new CachePolicy { LocalExpiration = TimeSpan.FromMinutes(1) }, Ct);
+        var a = aRead.AsTask();
         var b = cache.GetAsync<string>("user:42", new CachePolicy { LocalExpiration = TimeSpan.FromMinutes(1) }, Ct).AsTask();
         release.SetResult(new TestCacheEntry<string?> { Value = "v", Expiration = DateTimeOffset.UtcNow.AddMinutes(5) });
 
@@ -80,7 +82,8 @@ public class InnerTierOutageTests
             .Returns(_ => { Interlocked.Increment(ref reads); return new ValueTask<ICacheEntry<IDictionary<string, string?>>>(release.Task); });
         using var cache = InMemoryMultilayer.HashCache(inner: inner);
 
-        var a = cache.GetItemAsync<string>("user:42", "a", policy: null, Ct).AsTask();
+        var aRead = cache.GetItemAsync<string>("user:42", "a", policy: null, Ct);
+        var a = aRead.AsTask();
         var b = cache.GetItemAsync<string>("user:42", "b", policy: null, Ct).AsTask();
         release.SetResult(new TestCacheEntry<IDictionary<string, string?>>
         {
@@ -328,7 +331,8 @@ public class InnerTierOutageTests
             .Returns(_ => { Interlocked.Increment(ref reads); return new ValueTask<ICacheEntry<string?>>(release.Task); });
         using var cache = InMemoryMultilayer.Cache(inner: inner);
 
-        var shortCap = cache.GetAsync<string>("user:42", new CachePolicy { LocalExpirationDisconnected = TimeSpan.FromSeconds(1) }, Ct).AsTask();
+        var shortCapRead = cache.GetAsync<string>("user:42", new CachePolicy { LocalExpirationDisconnected = TimeSpan.FromSeconds(1) }, Ct);
+        var shortCap = shortCapRead.AsTask();
         var longCap = cache.GetAsync<string>("user:42", new CachePolicy { LocalExpirationDisconnected = TimeSpan.FromMinutes(1) }, Ct).AsTask();
         release.SetResult(new TestCacheEntry<string?> { Value = "v", Expiration = DateTimeOffset.UtcNow.AddMinutes(5) });
 
@@ -490,6 +494,7 @@ public class InnerTierOutageTests
         }
         catch (OperationCanceledException)
         {
+            // Expected: the call was cancelled.
         }
     }
 

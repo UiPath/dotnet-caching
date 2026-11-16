@@ -175,11 +175,44 @@ public sealed class ConnectingPipelineTests
 
     private sealed class ConnectedRedis : IRedisConnector
     {
-        public event EventHandler? OnConnectionFailed { add { } remove { } }
+        public event EventHandler? OnConnectionFailed
+        {
+            add
+            {
+                // Never raised: this connector stays connected.
+            }
 
-        public event EventHandler? OnConnectionRestored { add { } remove { } }
+            remove
+            {
+                // Never raised: this connector stays connected.
+            }
+        }
 
-        public event EventHandler? OnReconnected { add { } remove { } }
+        public event EventHandler? OnConnectionRestored
+        {
+            add
+            {
+                // Never raised: this connector stays connected.
+            }
+
+            remove
+            {
+                // Never raised: this connector stays connected.
+            }
+        }
+
+        public event EventHandler? OnReconnected
+        {
+            add
+            {
+                // Never raised: this connector stays connected.
+            }
+
+            remove
+            {
+                // Never raised: this connector stays connected.
+            }
+        }
 
         public bool IsConnected => true;
 

@@ -22,7 +22,6 @@ public class MultilayerCacheTryAddTests(ITestContextAccessor testContextAccessor
     private readonly IFixture _fixture = AutoFixtureCreator.NSubstitute();
 
     private ICache _innerCache = default!;
-    private IChangeTokenFactory _changeTokenFactory = default!;
     private ITopicFactory _topicFactory = default!;
     private ITopicProviderWithConnectionState _topicProvider = default!;
     private ITopic<ICacheEvent> _topic = default!;
@@ -323,7 +322,7 @@ public class MultilayerCacheTryAddTests(ITestContextAccessor testContextAccessor
         _cacheKey = _fixture.Create<string>();
         _topicKey = _fixture.Create<string>();
 
-        _changeTokenFactory = _fixture.Freeze<IChangeTokenFactory>();
+        _fixture.Freeze<IChangeTokenFactory>();
         _memoryCache = _fixture.Freeze<IMemoryCache>();
         _innerCache = _fixture.Freeze<ICache>();
         _logger = _fixture.Freeze<ILogger>();
@@ -454,6 +453,7 @@ public class InMemoryCacheTryAddTests
         results.Count(won => won).Should().Be(1, "the local lock is what makes probe-then-write atomic");
     }
 
+#pragma warning disable S4144 // Kept as its own named case beside First_caller_adds_and_the_second_loses.
     [Fact]
     public async Task The_local_probe_narrows_an_L2_that_grants_everyone_a_win()
     {
@@ -462,6 +462,7 @@ public class InMemoryCacheTryAddTests
         (await sut.TryAddAsync("k", "first", policy: null, token: Ct)).Should().BeTrue();
         (await sut.TryAddAsync("k", "second", policy: null, token: Ct)).Should().BeFalse();
     }
+#pragma warning restore S4144
 
     [Fact]
     public async Task Exactly_one_caller_still_wins_with_the_local_lock_disabled()

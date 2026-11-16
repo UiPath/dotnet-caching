@@ -332,7 +332,12 @@ public class SpanKeyWriteTests
         return cache.SetAsync(new CacheKey(key), "v", Ct);
     }
 
-    private static bool Complete(ValueTask<bool> write) => write.IsCompletedSuccessfully ? write.Result : write.AsTask().GetAwaiter().GetResult();
+    private static void Complete(ValueTask<bool> write)
+    {
+#pragma warning disable S5034 // read once: the result of a completed write, or the awaited one; AsTask on every write would allocate
+        _ = write.IsCompletedSuccessfully ? write.Result : write.AsTask().GetAwaiter().GetResult();
+#pragma warning restore S5034
+    }
 
     /// <summary>The mean bytes the current thread allocates per warm call.</summary>
     private static long AllocatedBy(Action write)
@@ -369,18 +374,6 @@ public class SpanKeyWriteTests
         public ValueTask<T?> GetAsync<T>(Span<char> cacheKey, CachePolicy? policy, CancellationToken token = default) => throw new NotSupportedException();
 
         public ValueTask<ICacheEntry<T?>> GetCacheEntryAsync<T>(Span<char> cacheKey, CachePolicy? policy, CancellationToken token = default) => throw new NotSupportedException();
-
-        public ValueTask<CacheResult<T>> GetOrAddResultAsync<T>(Span<char> cacheKey, Func<CancellationToken, Task<T?>> generator, CachePolicy? policy, CancellationToken token = default) => throw new NotSupportedException();
-
-        public ValueTask<CacheResult<T>> GetOrAddResultAsync<T>(Span<char> cacheKey, Func<CancellationToken, Task<T?>> generator, TimeSpan expiration, CachePolicy? policy, CancellationToken token = default) => throw new NotSupportedException();
-
-        public ValueTask<CacheResult<T>> GetOrAddResultAsync<T>(Span<char> cacheKey, Func<CancellationToken, Task<T?>> generator, DateTimeOffset expiration, CachePolicy? policy, CancellationToken token = default) => throw new NotSupportedException();
-
-        public ValueTask<CacheResult<T>> GetOrAddResultAsync<T, TState>(Span<char> cacheKey, TState state, Func<TState, CancellationToken, Task<T?>> generator, CachePolicy? policy, CancellationToken token = default) => throw new NotSupportedException();
-
-        public ValueTask<CacheResult<T>> GetOrAddResultAsync<T, TState>(Span<char> cacheKey, TState state, Func<TState, CancellationToken, Task<T?>> generator, TimeSpan expiration, CachePolicy? policy, CancellationToken token = default) => throw new NotSupportedException();
-
-        public ValueTask<CacheResult<T>> GetOrAddResultAsync<T, TState>(Span<char> cacheKey, TState state, Func<TState, CancellationToken, Task<T?>> generator, DateTimeOffset expiration, CachePolicy? policy, CancellationToken token = default) => throw new NotSupportedException();
 
         public ValueTask<T?> GetOrAddAsync<T>(Span<char> cacheKey, Func<CancellationToken, Task<T?>> generator, CachePolicy? policy, CancellationToken token = default) => throw new NotSupportedException();
 
@@ -449,6 +442,8 @@ public class SpanKeyWriteTests
 
         public ValueTask<IDictionary<string, T?>> GetAsync<T>(Span<char> cacheKey, CachePolicy? policy, CancellationToken token = default) => throw new NotSupportedException();
 
+        public ValueTask<IDictionary<string, T?>> GetAsync<T>(Span<char> cacheKey, string[] fields, CachePolicy? policy, CancellationToken token = default) => Read(cacheKey, (IDictionary<string, T?>)new Dictionary<string, T?>());
+
         public ValueTask<ICacheEntry<IDictionary<string, T?>>> GetCacheEntryAsync<T>(Span<char> cacheKey, CachePolicy? policy, CancellationToken token = default) => throw new NotSupportedException();
 
         public ValueTask<IDictionary<string, T?>> GetOrAddAsync<T>(Span<char> cacheKey, Func<CancellationToken, Task<IDictionary<string, T?>>> generator, CachePolicy? policy, CancellationToken token = default) => throw new NotSupportedException();
@@ -458,8 +453,6 @@ public class SpanKeyWriteTests
         public ValueTask<IDictionary<string, T?>> GetOrAddAsync<T>(Span<char> cacheKey, Func<CancellationToken, Task<IDictionary<string, T?>>> generator, DateTimeOffset expiration, CachePolicy? policy, CancellationToken token = default) => throw new NotSupportedException();
 
         public ValueTask<IDictionary<string, T?>> GetOrAddAsync<T>(Span<char> cacheKey, Func<CancellationToken, Task<IDictionary<string, T?>>> generator, DateTimeOffset expiration, HashCacheSetOption? setOption, CachePolicy? policy, CancellationToken token = default) => throw new NotSupportedException();
-
-        public ValueTask<IDictionary<string, T?>> GetAsync<T>(Span<char> cacheKey, string[] fields, CachePolicy? policy, CancellationToken token = default) => Read(cacheKey, (IDictionary<string, T?>)new Dictionary<string, T?>());
 
         public ValueTask<bool> ContainsAsync<T>(Span<char> cacheKey, CancellationToken token = default) => throw new NotSupportedException();
 

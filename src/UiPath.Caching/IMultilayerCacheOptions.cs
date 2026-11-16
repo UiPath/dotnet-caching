@@ -22,11 +22,13 @@ public interface IMultilayerCacheOptions : ICacheOptions
     /// <summary>L1 cap on entry lifetime while the L2 connection is unhealthy (paired with <see cref="UseLocalOnlyWhenDisconnected"/>).</summary>
     TimeSpan? LocalMaxExpirationDisconnected { get; set; }
 
+#pragma warning disable S1133 // removing an [Obsolete] public member is a breaking change for consumers
     [Obsolete("Use LocalSingleFlightEnabled; the in-process lock it named is gone.")]
     bool? LocalLockEnabled { get => LocalSingleFlightEnabled; set => LocalSingleFlightEnabled = value; }
 
     [Obsolete("Use LocalSingleFlightTimeout; the in-process lock it named is gone.")]
     TimeSpan? LocalLockTimeout { get => LocalSingleFlightTimeout; set => LocalSingleFlightTimeout = value; }
+#pragma warning restore S1133
 
     /// <summary>
     /// Callers of one process share one generator run per key: the first runs it and the rest join
@@ -72,7 +74,9 @@ public interface IMultilayerCacheOptions : ICacheOptions
     /// miss, but a peer's write that lands within that round trip can then be generated twice.
     /// Defaults to false; an implementation that does not declare it keeps it off.
     /// </summary>
+#pragma warning disable S3237, S108 // a default interface member: an implementation that does not declare it keeps it off, so the setter ignores the value
     bool? DistributedLockSkipReread { get => null; set { } }
+#pragma warning restore S3237, S108
 
     /// <summary>
     /// Strategy that derives the Redis distributed-lock key from a cache key. The default

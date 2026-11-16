@@ -67,5 +67,7 @@ public class HashCacheOfTPolicyResolutionTests
         return cacheFactory;
     }
 
+#pragma warning disable S2094 // a marker type for the generic argument
     public class MyService { }
+#pragma warning restore S2094
 }

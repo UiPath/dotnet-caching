@@ -80,9 +80,11 @@ public class GeneratorShapeBenchmark
     [Benchmark, BenchmarkCategory("Miss")]
     public ValueTask<string?> MissStateThis() => _cache.GetOrAddAsync(MissKey, this, static (self, ct) => self.LoadNothingAsync(ct));
 
+#pragma warning disable S2325, S1172 // the benchmark measures instance delegate shapes, and the delegate signature is fixed
     private Task<string?> LoadAsync(CancellationToken token) => Value;
 
     private Task<string?> LoadAsync(int id, CancellationToken token) => id == _id ? Value : Nothing;
 
     private Task<string?> LoadNothingAsync(CancellationToken token) => Nothing;
+#pragma warning restore S2325, S1172
 }

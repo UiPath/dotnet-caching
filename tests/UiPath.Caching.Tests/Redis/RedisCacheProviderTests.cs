@@ -27,8 +27,8 @@ public class RedisCacheProviderTests : IAsyncLifetime
     [Fact]
     public void Dispose_can_be_called()
     {
-        var x = Sut.CreateCache();
-        var y = Sut.CreateHashCache();
+        Sut.CreateCache();
+        Sut.CreateHashCache();
         Action act = () => Sut.Dispose();
         act.Should().NotThrow();
     }

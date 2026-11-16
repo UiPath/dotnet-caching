@@ -1,6 +1,6 @@
 namespace UiPath.Caching.Tests;
 
-internal class TestChangeToken : ICacheChangeToken, IDisposable
+internal sealed class TestChangeToken : ICacheChangeToken, IDisposable
 {
     public bool Disposed { get; set; }
 

@@ -177,7 +177,13 @@ public class SpanKeyDefaultWriteTests
 
     /// <summary>The member's name, generic arity and parameter types, with the key parameter written as <c>key</c>.</summary>
     private static string Shape(MethodInfo method, Type keyType) =>
-        $"{method.Name}`{method.GetGenericArguments().Length}({string.Join(", ", method.GetParameters().Select(p => (p.ParameterType.IsByRef ? p.ParameterType.GetElementType() : p.ParameterType) == keyType ? "key" : p.ParameterType.ToString()))})";
+        $"{method.Name}`{method.GetGenericArguments().Length}({string.Join(", ", method.GetParameters().Select(p => ParameterShape(p.ParameterType, keyType)))})";
+
+    private static string ParameterShape(Type type, Type keyType)
+    {
+        var unwrapped = type.IsByRef ? type.GetElementType() : type;
+        return unwrapped == keyType ? "key" : type.ToString();
+    }
 
     private static string Key() => " User:42 ";
 }

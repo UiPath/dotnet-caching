@@ -6,7 +6,7 @@ namespace UiPath.Caching.Tests.Redis;
 /// <summary>Fail-safe on two nodes over one Redis with broadcast: the last value covers a failing generator once Redis lost the key, a peer's removal is never answered with it, and it never reaches Redis.</summary>
 [Collection("RedisIntegration")]
 [Trait("Category", "Integration")]
-public class FailSafeIntegrationTests(RedisContainerFixture fixture) : IDisposable
+public sealed class FailSafeIntegrationTests(RedisContainerFixture fixture) : IDisposable
 {
     private static readonly TimeSpan LocalLifetime = TimeSpan.FromMilliseconds(400);
     private static readonly CachePolicy FailSafe = new() { FailSafeEnabled = true, LocalExpiration = LocalLifetime, DistributedExpiration = TimeSpan.FromMinutes(5), FailSafeCooldown = TimeSpan.Zero };

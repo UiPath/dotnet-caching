@@ -51,7 +51,9 @@ public class InFlightCostBenchmark
             default,
             out _);
         source.SetResult(Value);
+#pragma warning disable S5034 // the source is already completed, so the result is read once, synchronously
         return pending.Result;
+#pragma warning restore S5034
 #pragma warning restore CA2012
     }
 
@@ -63,7 +65,9 @@ public class InFlightCostBenchmark
 #pragma warning disable CA2012 // the result is read once the source is completed; awaiting would change what is measured
         var pending = Work(source);
         source.SetResult(Value);
+#pragma warning disable S5034 // the source is already completed, so the result is read once, synchronously
         return pending.Result;
+#pragma warning restore S5034
 #pragma warning restore CA2012
 
         static async ValueTask<List<string>?> Work(TaskCompletionSource<List<string>?> s) => await s.Task.ConfigureAwait(false);

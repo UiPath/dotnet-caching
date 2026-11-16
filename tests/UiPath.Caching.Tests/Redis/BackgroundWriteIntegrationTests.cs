@@ -7,7 +7,7 @@ namespace UiPath.Caching.Tests.Redis;
 /// <summary>Two nodes on one Redis with broadcast, the writes of one slowed so the order of its value and event shows.</summary>
 [Collection("RedisIntegration")]
 [Trait("Category", "Integration")]
-public class BackgroundWriteIntegrationTests(RedisContainerFixture fixture) : IDisposable
+public sealed class BackgroundWriteIntegrationTests(RedisContainerFixture fixture) : IDisposable
 {
     private static readonly TimeSpan Slow = TimeSpan.FromMilliseconds(150);
     private readonly string _app = $"bw{Guid.NewGuid():N}"[..10];
@@ -100,7 +100,7 @@ public class BackgroundWriteIntegrationTests(RedisContainerFixture fixture) : ID
         var key = Unique();
         (await writer.SetAsync(key, "v", Ct)).Should().BeTrue();
 
-        node.Dispose();
+        await node.DisposeAsync();
 
         (await peer.GetAsync<string>(key, Ct)).Should().Be("v");
     }
@@ -209,7 +209,7 @@ public class BackgroundWriteIntegrationTests(RedisContainerFixture fixture) : ID
         (await writer.GetOrAddAsync<string>(key, static _ => Task.FromResult<IDictionary<string, string?>>(Fields("gen")), TimeSpan.FromMinutes(5), Ct))["f"].Should().Be("gen");
         (DateTime.UtcNow - started).Should().BeLessThan(TimeSpan.FromMilliseconds(400));
 
-        writerNode.Dispose();
+        await writerNode.DisposeAsync();
 
         (await peer.GetAsync<string>(key, Ct))!["f"].Should().Be("gen");
     }

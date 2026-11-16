@@ -60,7 +60,7 @@ public class EventFormatNegotiationIntegrationTests(RedisContainerFixture fixtur
         // The server knows the channel only with the prefix in front. Asked as the bare name, there is nobody on it.
         counted!.Channels.Should().Equal(new long[] { 2 }, "two connections subscribed under the prefix, and the count is of those");
         await using var bare = await ConnectionMultiplexer.ConnectAsync(fixture.ConnectionString);
-        (await new RedisSubscriberSource(new Connector(bare)).CountAsync(source.Endpoints()[0], [channel], Ct))!.Channels.Should().Equal(new long[] { 0 });
+        (await new RedisSubscriberSource(new Connector(bare)).CountAsync(source.Endpoints()[0], [channel], Ct))!.Channels.Should().Equal(0L);
     }
 
     [Fact]
@@ -112,7 +112,7 @@ public class EventFormatNegotiationIntegrationTests(RedisContainerFixture fixtur
             await Task.Delay(1, Ct);
         }
 
-        raw.GetServer(raw.GetEndPoints()[0]).SubscriptionSubscriberCount(RedisChannel.Literal(channel)).Should().Be(1);
+        (await raw.GetServer(raw.GetEndPoints()[0]).SubscriptionSubscriberCountAsync(RedisChannel.Literal(channel))).Should().Be(1);
         subscriptions.Confirmed().Should().BeEquivalentTo(new Dictionary<string, int> { [channel] = 1 });
     }
 
@@ -323,20 +323,20 @@ public class EventFormatNegotiationIntegrationTests(RedisContainerFixture fixtur
     {
         public event EventHandler? OnConnectionFailed
         {
-            add { }
-            remove { }
+            add { /* the wrapped connection raises none of these */ }
+            remove { /* the wrapped connection raises none of these */ }
         }
 
         public event EventHandler? OnConnectionRestored
         {
-            add { }
-            remove { }
+            add { /* the wrapped connection raises none of these */ }
+            remove { /* the wrapped connection raises none of these */ }
         }
 
         public event EventHandler? OnReconnected
         {
-            add { }
-            remove { }
+            add { /* the wrapped connection raises none of these */ }
+            remove { /* the wrapped connection raises none of these */ }
         }
 
         public bool IsConnected => mux.IsConnected;

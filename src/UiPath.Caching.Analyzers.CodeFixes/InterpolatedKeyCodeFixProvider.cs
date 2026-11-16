@@ -177,9 +177,15 @@ public sealed class InterpolatedKeyCodeFixProvider : CodeFixProvider
 
                 rebuilt.Append(part);
                 // A nested constant interpolation is flattened too: left as it is, it would still be ambiguous.
-                operand = hole.Expression is InterpolatedStringExpressionSyntax nested
-                    ? PlainString(model, nested, part, token) is { } flat ? Operand(flat) : null
-                    : Operand(hole.Expression);
+                if (hole.Expression is InterpolatedStringExpressionSyntax nested)
+                {
+                    operand = PlainString(model, nested, part, token) is { } flat ? Operand(flat) : null;
+                }
+                else
+                {
+                    operand = Operand(hole.Expression);
+                }
+
                 if (operand is null)
                 {
                     return null;

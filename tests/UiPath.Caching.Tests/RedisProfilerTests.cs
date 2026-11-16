@@ -151,7 +151,7 @@ public class RedisProfilerTests(ITestContextAccessor testContextAccessor) : IAsy
     public void Create_session_when_no_sessionId(string? sessionId)
     {
         _redisConnectionOptions.ProfilerEnabled = true;
-        var dispose =  Sut.CreateSession(sessionId);
+        Sut.CreateSession(sessionId);
         Sut.Count.Should().Be(0);
     }
 

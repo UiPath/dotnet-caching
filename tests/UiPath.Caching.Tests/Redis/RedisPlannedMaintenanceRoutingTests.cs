@@ -12,7 +12,7 @@ namespace UiPath.Caching.Tests.Redis;
 
 #pragma warning disable SER010 // Server-native maintenance notifications are for evaluation purposes only
 
-public class RedisPlannedMaintenanceRoutingTests : IDisposable
+public sealed class RedisPlannedMaintenanceRoutingTests : IDisposable
 {
     private readonly List<RedisPlannedMaintenance> _started = [];
 

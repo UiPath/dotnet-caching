@@ -132,9 +132,9 @@ internal static class ChurnLoadHarness
             Console.WriteLine($"n{n.Id + 1,-4}{n.Issued,8}{n.Completed,8}{n.Errors,5}{incomplete[n.Id],8}{Ms(n.MaxLag),8} | {Ms(Pct(resp, .5)),9}{Ms(Pct(resp, .95)),8}{Ms(Pct(resp, .99)),8} | {Ms(Pct(svc, .5)),8}{Ms(Pct(svc, .95)),8}{Ms(Pct(svc, .99)),8} | {Ms(Pct(goa, .95)),8}{Ms(Pct(set, .5)),8}{Ms(Pct(set, .95)),8} | {(n.Hook ? "" : "(no hook) ")}{rcv,7}{s.Applied,8}{s.Dropped,8}{(rcv == 0 ? 0 : s.TotalTicks * 1e6 / Stopwatch.Frequency / rcv),8:F1}{s.MaxTicks * 1e6 / Stopwatch.Frequency,8:F0}");
         }
 
-        foreach (var n in nodes.Where(n => peerAt[n.Id].Reasons.Length > 0))
+        foreach (var id in nodes.Where(n => peerAt[n.Id].Reasons.Length > 0).Select(n => n.Id))
         {
-            Console.WriteLine($"n{n.Id + 1} drop reasons: " + string.Join("; ", peerAt[n.Id].Reasons.OrderByDescending(kv => kv.Value).Select(kv => $"{kv.Key}={kv.Value}")));
+            Console.WriteLine($"n{id + 1} drop reasons: " + string.Join("; ", peerAt[id].Reasons.OrderByDescending(kv => kv.Value).Select(kv => $"{kv.Key}={kv.Value}")));
         }
 
         var delta = cmdAfter.Select(kv => (Name: kv.Key, Calls: kv.Value - cmdBefore.GetValueOrDefault(kv.Key))).Where(x => x.Calls > 0 && x.Name is not ("info" or "ping" or "client" or "cluster")).OrderByDescending(x => x.Calls).Take(16);

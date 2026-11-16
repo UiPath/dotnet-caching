@@ -124,8 +124,8 @@ public class OwnerArgumentTests
         using var source = new CancellationTokenSource();
         await source.CancelAsync();
 
-        var viaOwner = await Outcome(() => cache.GetOrAddAsync($"k:{1}", owner, 5, Compose, policy: null, source.Token).AsTask());
-        var viaState = await Outcome(() => cache.GetOrAddAsync($"k:{2}", owner, static (o, t) => Compose(o, 5, t), policy: null, source.Token).AsTask());
+        var viaOwner = await Outcome(async () => await cache.GetOrAddAsync($"k:{1}", owner, 5, Compose, policy: null, source.Token));
+        var viaState = await Outcome(async () => await cache.GetOrAddAsync($"k:{2}", owner, static (o, t) => Compose(o, 5, t), policy: null, source.Token));
 
         viaState.Should().Be("canceled");
         viaOwner.Should().Be(viaState);
@@ -146,38 +146,38 @@ public class OwnerArgumentTests
 
         Func<Task>[] calls =
         [
-            () => cache.GetOrAddAsync((CacheKey)"k", owner, 5, value, policy: null, Ct).AsTask(),
-            () => cache.GetOrAddAsync($"k:{1}", owner, 5, value, policy: null, Ct).AsTask(),
-            () => cache.GetOrAddWithExpirationAsync($"k:{1}", owner, 5, generated, policy: null, Ct).AsTask(),
-            () => typed.GetOrAddAsync((CacheKey)"k", owner, 5, value, Ct).AsTask(),
-            () => typed.GetOrAddAsync($"k:{1}", owner, 5, value, Ct).AsTask(),
-            () => typed.GetOrAddWithExpirationAsync($"k:{1}", owner, 5, generated, Ct).AsTask(),
-            () => hash.GetOrAddAsync<string, Owner, int>((CacheKey)"k", owner, 5, dictionary, policy: null, Ct).AsTask(),
-            () => hash.GetOrAddAsync<string, Owner, int>($"k:{1}", owner, 5, dictionary, policy: null, Ct).AsTask(),
-            () => hash.GetOrAddAsync<string, Owner, int>($"k:{1}", owner, 5, dictionary, Deadline, HashCacheSetOption.KeyReplace, null, Ct).AsTask(),
-            () => typedHash.GetOrAddAsync((CacheKey)"k", owner, 5, dictionary, Ct).AsTask(),
-            () => typedHash.GetOrAddAsync($"k:{1}", owner, 5, dictionary, Ct).AsTask(),
-            () => cache.GetOrAddAsync($"k:{1}", owner, 5, value, Minutes, null, Ct).AsTask(),
-            () => cache.GetOrAddAsync($"k:{1}", owner, 5, value, Deadline, null, Ct).AsTask(),
-            () => typed.GetOrAddAsync((CacheKey)"k", owner, 5, value, Minutes, Ct).AsTask(),
-            () => typed.GetOrAddAsync($"k:{1}", owner, 5, value, Minutes, Ct).AsTask(),
-            () => typed.GetOrAddAsync((CacheKey)"k", owner, 5, value, Deadline, Ct).AsTask(),
-            () => typed.GetOrAddAsync($"k:{1}", owner, 5, value, Deadline, Ct).AsTask(),
-            () => typed.GetOrAddWithExpirationAsync((CacheKey)"k", owner, 5, generated, Ct).AsTask(),
-            () => hash.GetOrAddAsync<string, Owner, int>($"k:{1}", owner, 5, dictionary, Minutes, null, Ct).AsTask(),
-            () => hash.GetOrAddAsync<string, Owner, int>((CacheKey)"k", owner, 5, dictionary, Deadline, null, Ct).AsTask(),
-            () => hash.GetOrAddAsync<string, Owner, int>($"k:{1}", owner, 5, dictionary, Deadline, null, Ct).AsTask(),
-            () => hash.GetOrAddAsync<string, Owner, int>((CacheKey)"k", owner, 5, dictionary, Deadline, HashCacheSetOption.KeyReplace, null, Ct).AsTask(),
-            () => typedHash.GetOrAddAsync((CacheKey)"k", owner, 5, dictionary, Minutes, Ct).AsTask(),
-            () => typedHash.GetOrAddAsync($"k:{1}", owner, 5, dictionary, Minutes, Ct).AsTask(),
-            () => typedHash.GetOrAddAsync((CacheKey)"k", owner, 5, dictionary, Deadline, Ct).AsTask(),
-            () => typedHash.GetOrAddAsync($"k:{1}", owner, 5, dictionary, Deadline, Ct).AsTask(),
-            () => cache.GetOrAddResultAsync($"k:{1}", owner, 5, value, (CachePolicy?)null, Ct).AsTask(),
-            () => cache.GetOrAddResultAsync($"k:{1}", owner, 5, value, Minutes, null, Ct).AsTask(),
-            () => cache.GetOrAddResultAsync($"k:{1}", owner, 5, value, Deadline, null, Ct).AsTask(),
-            () => typed.GetOrAddResultAsync($"k:{1}", owner, 5, value, Ct).AsTask(),
-            () => typed.GetOrAddResultAsync($"k:{1}", owner, 5, value, Minutes, Ct).AsTask(),
-            () => typed.GetOrAddResultAsync($"k:{1}", owner, 5, value, Deadline, Ct).AsTask(),
+            async () => await cache.GetOrAddAsync((CacheKey)"k", owner, 5, value, policy: null, Ct),
+            async () => await cache.GetOrAddAsync($"k:{1}", owner, 5, value, policy: null, Ct),
+            async () => await cache.GetOrAddWithExpirationAsync($"k:{1}", owner, 5, generated, policy: null, Ct),
+            async () => await typed.GetOrAddAsync((CacheKey)"k", owner, 5, value, Ct),
+            async () => await typed.GetOrAddAsync($"k:{1}", owner, 5, value, Ct),
+            async () => await typed.GetOrAddWithExpirationAsync($"k:{1}", owner, 5, generated, Ct),
+            async () => await hash.GetOrAddAsync<string, Owner, int>((CacheKey)"k", owner, 5, dictionary, policy: null, Ct),
+            async () => await hash.GetOrAddAsync<string, Owner, int>($"k:{1}", owner, 5, dictionary, policy: null, Ct),
+            async () => await hash.GetOrAddAsync<string, Owner, int>($"k:{1}", owner, 5, dictionary, Deadline, HashCacheSetOption.KeyReplace, null, Ct),
+            async () => await typedHash.GetOrAddAsync((CacheKey)"k", owner, 5, dictionary, Ct),
+            async () => await typedHash.GetOrAddAsync($"k:{1}", owner, 5, dictionary, Ct),
+            async () => await cache.GetOrAddAsync($"k:{1}", owner, 5, value, Minutes, null, Ct),
+            async () => await cache.GetOrAddAsync($"k:{1}", owner, 5, value, Deadline, null, Ct),
+            async () => await typed.GetOrAddAsync((CacheKey)"k", owner, 5, value, Minutes, Ct),
+            async () => await typed.GetOrAddAsync($"k:{1}", owner, 5, value, Minutes, Ct),
+            async () => await typed.GetOrAddAsync((CacheKey)"k", owner, 5, value, Deadline, Ct),
+            async () => await typed.GetOrAddAsync($"k:{1}", owner, 5, value, Deadline, Ct),
+            async () => await typed.GetOrAddWithExpirationAsync((CacheKey)"k", owner, 5, generated, Ct),
+            async () => await hash.GetOrAddAsync<string, Owner, int>($"k:{1}", owner, 5, dictionary, Minutes, null, Ct),
+            async () => await hash.GetOrAddAsync<string, Owner, int>((CacheKey)"k", owner, 5, dictionary, Deadline, null, Ct),
+            async () => await hash.GetOrAddAsync<string, Owner, int>($"k:{1}", owner, 5, dictionary, Deadline, null, Ct),
+            async () => await hash.GetOrAddAsync<string, Owner, int>((CacheKey)"k", owner, 5, dictionary, Deadline, HashCacheSetOption.KeyReplace, null, Ct),
+            async () => await typedHash.GetOrAddAsync((CacheKey)"k", owner, 5, dictionary, Minutes, Ct),
+            async () => await typedHash.GetOrAddAsync($"k:{1}", owner, 5, dictionary, Minutes, Ct),
+            async () => await typedHash.GetOrAddAsync((CacheKey)"k", owner, 5, dictionary, Deadline, Ct),
+            async () => await typedHash.GetOrAddAsync($"k:{1}", owner, 5, dictionary, Deadline, Ct),
+            async () => await cache.GetOrAddResultAsync($"k:{1}", owner, 5, value, (CachePolicy?)null, Ct),
+            async () => await cache.GetOrAddResultAsync($"k:{1}", owner, 5, value, Minutes, null, Ct),
+            async () => await cache.GetOrAddResultAsync($"k:{1}", owner, 5, value, Deadline, null, Ct),
+            async () => await typed.GetOrAddResultAsync($"k:{1}", owner, 5, value, Ct),
+            async () => await typed.GetOrAddResultAsync($"k:{1}", owner, 5, value, Minutes, Ct),
+            async () => await typed.GetOrAddResultAsync($"k:{1}", owner, 5, value, Deadline, Ct),
         ];
 
         foreach (var call in calls)
@@ -347,34 +347,34 @@ public class OwnerArgumentTests
         return fewest;
     }
 
-    private static string? HandlerHit(ICache cache, Owner owner)
+    private static void HandlerHit(ICache cache, Owner owner)
     {
         var text = "k";
-        return Complete(cache.GetOrAddAsync($"{text}", owner, 1, UnexpectedValue, (CachePolicy?)null, Ct));
+        _ = Complete(cache.GetOrAddAsync($"{text}", owner, 1, UnexpectedValue, (CachePolicy?)null, Ct));
     }
 
-    private static IDictionary<string, string?> HandlerHashHit(IHashCache cache, Owner owner)
+    private static void HandlerHashHit(IHashCache cache, Owner owner)
     {
         var text = "k";
-        return Complete(cache.GetOrAddAsync<string, Owner, int>($"{text}", owner, 1, UnexpectedHash, (CachePolicy?)null, Ct));
+        _ = Complete(cache.GetOrAddAsync<string, Owner, int>($"{text}", owner, 1, UnexpectedHash, (CachePolicy?)null, Ct));
     }
 
-    private static string? TypedHandlerHit(ICache<string> cache, Owner owner)
+    private static void TypedHandlerHit(ICache<string> cache, Owner owner)
     {
         var text = "k";
-        return Complete(cache.GetOrAddAsync($"{text}", owner, 1, UnexpectedValue, Ct));
+        _ = Complete(cache.GetOrAddAsync($"{text}", owner, 1, UnexpectedValue, Ct));
     }
 
-    private static IDictionary<string, string?> TypedHashHandlerHit(IHashCache<string> cache, Owner owner)
+    private static void TypedHashHandlerHit(IHashCache<string> cache, Owner owner)
     {
         var text = "k";
-        return Complete(cache.GetOrAddAsync($"{text}", owner, 1, UnexpectedHash, Ct));
+        _ = Complete(cache.GetOrAddAsync($"{text}", owner, 1, UnexpectedHash, Ct));
     }
-#endif
 
 #pragma warning disable S5034 // read once: the result of a completed read, or the awaited one; AsTask on every read would allocate
     private static TResult Complete<TResult>(ValueTask<TResult> read) => read.IsCompletedSuccessfully ? read.Result : read.AsTask().GetAwaiter().GetResult();
 #pragma warning restore S5034
+#endif
 
     private static async Task<string> Outcome(Func<Task<string?>> call)
     {

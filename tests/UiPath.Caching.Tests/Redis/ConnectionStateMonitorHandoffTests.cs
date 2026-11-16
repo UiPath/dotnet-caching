@@ -49,18 +49,34 @@ public class ConnectionStateMonitorHandoffTests
     {
         public event EventHandler? OnConnectionFailed;
 
-        public event EventHandler? OnConnectionRestored;
+        public event EventHandler? OnConnectionRestored
+        {
+            add
+            {
+                // Never raised by this fake.
+            }
 
-        public event EventHandler? OnReconnected;
+            remove
+            {
+                // Never raised by this fake.
+            }
+        }
+
+        public event EventHandler? OnReconnected
+        {
+            add
+            {
+                // Never raised by this fake.
+            }
+
+            remove
+            {
+                // Never raised by this fake.
+            }
+        }
 
         public bool IsConnected => true;
 
         public void RaiseConnectionFailed(EventArgs e) => OnConnectionFailed?.Invoke(this, e);
-
-        public void RaiseUnused()
-        {
-            OnConnectionRestored?.Invoke(this, EventArgs.Empty);
-            OnReconnected?.Invoke(this, EventArgs.Empty);
-        }
     }
 }

@@ -46,7 +46,7 @@ public class ValueRewriterTests
     [Fact]
     public void A_number_written_with_a_fraction_is_the_same_number_on_every_target()
     {
-        // net8.0 compares with JsonNode.DeepEquals and net10.0 with JsonElement.DeepEquals. Both agree here because the package graph brings System.Text.Json 10 to net8.0 too;
+        // net8.0 compares with JsonNode.DeepEquals and net10.0 with JsonElement.DeepEquals. Both agree here because the package graph brings System.Text.Json 10 to net8.0 too, and
         // the 8.x library compares numbers as text, so a graph that fell back to it would make such a value lossy (never rewritten) there, which is the safe side.
         LosslessCheck.Json(Utf8("{\"a\":1.0}"), Utf8("{\"a\":1}")).Should().BeTrue();
         LosslessCheck.Json(Utf8("{\"a\":1.50}"), Utf8("{\"a\":1.5}")).Should().BeTrue();
@@ -311,9 +311,11 @@ public class ValueRewriterTests
         public T? Deserialize<T>(int formatId, ReadOnlySequence<byte> source) => JsonSerializer.Deserialize<T>(source.ToArray());
     }
 
+#pragma warning disable S2094 // Subclassing is the point: it proves the proxy can be derived from.
     private sealed class SubclassedProxy : SystemJsonByteSerializerProxy
     {
     }
+#pragma warning restore S2094
 
     private sealed class ThrowingSerializer : ICacheValueSerializer
     {

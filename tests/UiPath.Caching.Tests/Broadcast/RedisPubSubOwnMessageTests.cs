@@ -178,7 +178,7 @@ public sealed class RedisPubSubOwnMessageTests
 
     private static void AssertMatchesSameSource(Func<Uri, IEventSourceMatcher?> create, Func<string, ReadOnlyMemory<byte>> encode, Func<ReadOnlyMemory<byte>, ICacheEvent?> decode)
     {
-        var sources = Sources().Select(row => (string)row.Data).ToArray();
+        var sources = Sources().Select(row => row.Data).ToArray();
         var failures = new List<string>();
         foreach (var self in sources)
         {
@@ -280,7 +280,7 @@ public sealed class RedisPubSubOwnMessageTests
             return inner.Decode(body);
         }
 
-        public ReadOnlyMemory<byte> Encode(ICacheEvent @event) => inner.Encode(@event);
+        ReadOnlyMemory<byte> IEventFormatterProxy<ICacheEvent>.Encode(ICacheEvent @event) => inner.Encode(@event);
 
         public IEventSourceMatcher? CreateSourceMatcher(Uri source) => inner.CreateSourceMatcher(source);
     }
@@ -298,7 +298,7 @@ public sealed class RedisPubSubOwnMessageTests
             return inner.Decode(body);
         }
 
-        public ReadOnlyMemory<byte> Encode(ICacheEvent @event) => inner.Encode(@event);
+        ReadOnlyMemory<byte> IEventFormatterProxy<ICacheEvent>.Encode(ICacheEvent @event) => inner.Encode(@event);
     }
 
     private sealed class RecordingLogger : ILogger

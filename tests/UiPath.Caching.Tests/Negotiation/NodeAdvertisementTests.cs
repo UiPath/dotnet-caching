@@ -189,7 +189,7 @@ public class NodeAdvertisementTests
         await store.WriteAsync("raced", Ad(), Ct);
         await store.PruneAsync([.. read.Where(a => a.Age > TimeSpan.FromMinutes(5))], Ct);
 
-        (await store.ReadAsync(Ct)).Select(a => a.NodeId).Should().BeEquivalentTo(["raced", "fresh"]);
+        (await store.ReadAsync(Ct)).Select(a => a.NodeId).Should().BeEquivalentTo("raced", "fresh");
     }
 
     [Fact]

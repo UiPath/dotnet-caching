@@ -15,14 +15,24 @@ internal sealed class FakeNodeListServer
         Connector = Substitute.For<IRedisConnector>();
         Connector.Database.Returns(Database);
         Database.ScriptEvaluateAsync(Arg.Any<string>(), Arg.Any<RedisKey[]>(), Arg.Any<RedisValue[]>(), Arg.Any<CommandFlags>())
-            .Returns(call => Failure is { } failure ? Task.FromException<RedisResult>(failure) : scripts
-                ? (WriteDelay is { } delay && call.ArgAt<string>(0).Contains("HSET", StringComparison.Ordinal)
-                    ? DelayedScript(delay, call.ArgAt<string>(0), call.ArgAt<RedisValue[]>(2))
-                    : Task.FromResult(Script(call.ArgAt<string>(0), call.ArgAt<RedisValue[]>(2))))
+            .Returns(call =>
+            {
+                if (Failure is { } failure)
+                {
+                    return Task.FromException<RedisResult>(failure);
+                }
 
+                if (!scripts)
+                {
 #pragma warning disable CS0618 // The only public constructor of a server error.
-                : Task.FromException<RedisResult>(new RedisServerException("ERR unknown command 'EVAL'")));
+                    return Task.FromException<RedisResult>(new RedisServerException("ERR unknown command 'EVAL'"));
 #pragma warning restore CS0618
+                }
+
+                return WriteDelay is { } delay && call.ArgAt<string>(0).Contains("HSET", StringComparison.Ordinal)
+                    ? DelayedScript(delay, call.ArgAt<string>(0), call.ArgAt<RedisValue[]>(2))
+                    : Task.FromResult(Script(call.ArgAt<string>(0), call.ArgAt<RedisValue[]>(2)));
+            });
         Database.ExecuteAsync("TIME", Arg.Any<ICollection<object>?>(), Arg.Any<CommandFlags>())
             .Returns(_ => Task.FromResult(RedisResult.Create([(RedisValue)(NowMs / 1000), (RedisValue)((NowMs % 1000) * 1000)])));
         Database.HashSetAsync(Arg.Any<RedisKey>(), Arg.Any<RedisValue>(), Arg.Any<RedisValue>(), Arg.Any<When>(), Arg.Any<CommandFlags>())

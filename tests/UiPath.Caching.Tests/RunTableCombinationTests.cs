@@ -36,7 +36,7 @@ public class RunTableCombinationTests
         (await Task.WhenAll(calls)).Should().AllBe("generated");
 
         gate.Generators.Should().Be(sharedRun ? 1 : Callers);
-        distributed.Acquisitions.Should().Be(!distributedLock ? 0 : sharedRun ? 1 : Callers);
+        distributed.Acquisitions.Should().Be(ExpectedAcquisitions(sharedRun, distributedLock));
     }
 
     [Theory]
@@ -60,7 +60,7 @@ public class RunTableCombinationTests
 
         results.Should().AllSatisfy(r => r.Select(p => p.Value).Should().Equal("generated", "generated"));
         gate.Generators.Should().Be(sharedRun ? 1 : Callers);
-        distributed.Acquisitions.Should().Be(!distributedLock ? 0 : sharedRun ? 1 : Callers);
+        distributed.Acquisitions.Should().Be(ExpectedAcquisitions(sharedRun, distributedLock));
     }
 
     [Theory]
@@ -83,7 +83,7 @@ public class RunTableCombinationTests
 
         results.Should().AllSatisfy(r => r["f"].Should().Be("generated"));
         gate.Generators.Should().Be(sharedRun ? 1 : Callers);
-        distributed.Acquisitions.Should().Be(!distributedLock ? 0 : sharedRun ? 1 : Callers);
+        distributed.Acquisitions.Should().Be(ExpectedAcquisitions(sharedRun, distributedLock));
     }
 
     [Fact]
@@ -101,7 +101,8 @@ public class RunTableCombinationTests
         }
 
         var policy = Policy(true, true);
-        var first = cache.GetOrAddAsync<string>("k", Generate, policy, Ct).AsTask();
+        var firstRun = cache.GetOrAddAsync<string>("k", Generate, policy, Ct);
+        var first = firstRun.AsTask();
         await started.Task.WaitAsync(TimeSpan.FromSeconds(10), Ct);
         var joiner = cache.GetOrAddAsync<string>("k", Generate, policy, Ct).AsTask();
         await Task.Delay(100, Ct);
@@ -126,6 +127,16 @@ public class RunTableCombinationTests
 
         results.Count(won => won).Should().Be(1);
         distributed.Acquisitions.Should().Be(0);
+    }
+
+    private static int ExpectedAcquisitions(bool sharedRun, bool distributedLock)
+    {
+        if (!distributedLock)
+        {
+            return 0;
+        }
+
+        return sharedRun ? 1 : Callers;
     }
 
     private static CachePolicy Policy(bool sharedRun, bool distributedLock) =>

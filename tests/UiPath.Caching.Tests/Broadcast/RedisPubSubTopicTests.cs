@@ -13,6 +13,7 @@ public class RedisPubSubTopicTests(ITestContextAccessor testContextAccessor) : I
     private readonly TimeSpan _delay = 50.Milliseconds();
     private readonly TaskCompletionSource _subscribeCalled = new(TaskCreationOptions.RunContinuationsAsynchronously);
     private readonly TaskCompletionSource _unsubscribeCalled = new(TaskCreationOptions.RunContinuationsAsynchronously);
+    private readonly string _value = default!;
 
     private TopicKey _topicKey;
     private ISubscriber _subscriber = default!;
@@ -23,7 +24,6 @@ public class RedisPubSubTopicTests(ITestContextAccessor testContextAccessor) : I
     private IDatabase _database = default!;
     private IRedisConnector _redisConnector = default!;
     private string _channel = default!;
-    private string _value = default!;
     private IRedisChannelStrategy _redisChannelStrategy = default!;
     private IResiliencePipelineProvider _resiliencePipelineProvider = default!;
     private RedisPubSubTopicOptions _options = default!;
@@ -49,14 +49,16 @@ public class RedisPubSubTopicTests(ITestContextAccessor testContextAccessor) : I
         var disposable = sut.Subscribe(_observer);
         disposable.Should().NotBeNull();
         await WaitForSubscribeAsync();
+#pragma warning disable S6966 // The code under test uses the sync API, so the verification must match it.
         _subscriber.Received().Subscribe(Arg.Is<RedisChannel>(rc => rc.ToString().EndsWith((string)_topicKey)), Arg.Any<Action<RedisChannel, RedisValue>>(), Arg.Any<CommandFlags>());
+#pragma warning restore S6966
     }
 
     [Fact]
     public async Task Message_received_when_channel_event_received()
     {
         var sut = await Sut();
-        var disposable = sut.Subscribe(_observer);
+        sut.Subscribe(_observer);
         var machineName = _fixture.Create<string>();
 
         var cloudEvent = new TestCacheEvent
@@ -103,7 +105,7 @@ public class RedisPubSubTopicTests(ITestContextAccessor testContextAccessor) : I
     public async Task No_message_when_subscription_disposed()
     {
         var sut = await Sut();
-        var disposable = sut.Subscribe(_observer);
+        sut.Subscribe(_observer);
         var message = _fixture.Create<string>();
         sut.Dispose();
         _handler?.Invoke(RedisChannel.Literal(_topicKey.Name), message);
@@ -115,7 +117,7 @@ public class RedisPubSubTopicTests(ITestContextAccessor testContextAccessor) : I
     public async Task No_message_when_channel_is_unknown()
     {
         var sut = await Sut();
-        var disposable = sut.Subscribe(_observer);
+        sut.Subscribe(_observer);
         var message = _fixture.Create<string>();
         RedisChannel newChannel = RedisChannel.Literal(_fixture.Create<string>());
 
@@ -129,7 +131,6 @@ public class RedisPubSubTopicTests(ITestContextAccessor testContextAccessor) : I
     public async Task Exception_is_not_thrown_when_subscribe_fails()
     {
         var sut = await Sut();
-        TopicKey channel = _fixture.Create<string>();
         _subscriber.When(x => x.Subscribe(Arg.Any<RedisChannel>(), Arg.Any<Action<RedisChannel, RedisValue>>(), Arg.Any<CommandFlags>()))
             .Do(_ => throw new Exception());
 
@@ -143,7 +144,9 @@ public class RedisPubSubTopicTests(ITestContextAccessor testContextAccessor) : I
         var sut = await Sut();
         var disposable = sut.Subscribe(_observer);
         await WaitForSubscribeAsync();
+#pragma warning disable S6966 // The code under test uses the sync API, so the verification must match it.
         _subscriber.Received().Subscribe(Arg.Any<RedisChannel>(), Arg.Any<Action<RedisChannel, RedisValue>>(), Arg.Any<CommandFlags>());
+#pragma warning restore S6966
         await _subscriber.DidNotReceive().SubscribeAsync(Arg.Any<RedisChannel>(), Arg.Any<Action<RedisChannel, RedisValue>>(), Arg.Any<CommandFlags>());
         disposable.Should().NotBeNull();
         _topicKey.Name.Should().BeEquivalentTo(_actualRedisChannel);
@@ -156,14 +159,15 @@ public class RedisPubSubTopicTests(ITestContextAccessor testContextAccessor) : I
         await WaitForSubscribeAsync();
         sut.Dispose();
         await _unsubscribeCalled.Task.WaitAsync(TimeSpan.FromSeconds(30), testContextAccessor.Current.CancellationToken);
+#pragma warning disable S6966 // The code under test uses the sync API, so the verification must match it.
         _subscriber.Received().Unsubscribe(Arg.Any<RedisChannel>(), Arg.Any<Action<RedisChannel, RedisValue>?>(), Arg.Any<CommandFlags>());
+#pragma warning restore S6966
         _topicKey.Name.Should().BeEquivalentTo(_actualRedisChannel);
     }
     [Fact]
     public async Task Publish_works_as_expected()
     {
         var sut = await Sut();
-        TopicKey topicKey = _fixture.Create<string>();
         var cloudEvent = new TestCacheEvent
         {
             Id = Guid.NewGuid().ToString(),
@@ -186,15 +190,14 @@ public class RedisPubSubTopicTests(ITestContextAccessor testContextAccessor) : I
     public async Task Canceling_token_stops_execution()
     {
         var sut = await Sut();
-        TopicKey topicKey = _fixture.Create<string>();
         var cloudEvent = new TestCacheEvent
         {
             Id = Guid.NewGuid().ToString(),
             Source = new Uri("urn:machine"),
         };
-        var cancelSource = new CancellationTokenSource();
+        using var cancelSource = new CancellationTokenSource();
         var token = cancelSource.Token;
-        cancelSource.Cancel();
+        await cancelSource.CancelAsync();
         Func<Task> act = async () => await sut.PublishAsync(cloudEvent, token);
         await act.Should().ThrowAsync<OperationCanceledException>();
     }
@@ -221,7 +224,6 @@ public class RedisPubSubTopicTests(ITestContextAccessor testContextAccessor) : I
     public async Task No_exceptions_are_thrown_when_redis_fails()
     {
         var sut = await Sut();
-        TopicKey topicKey = _fixture.Create<string>();
         var cloudEvent = new TestCacheEvent
         {
             Id = Guid.NewGuid().ToString(),

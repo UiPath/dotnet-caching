@@ -45,11 +45,13 @@ public class InMemoryCacheOptions : IMultilayerCacheOptions, IMemoryCacheOptions
     public TimeSpan? LocalMaxExpirationDisconnected { get; set; } = TimeSpan.FromSeconds(30);
 
     // Declared before the new pair: the configuration binder sets properties in declaration order, so the new key wins when both are set.
+#pragma warning disable S1133 // removing an [Obsolete] public member is a breaking change for consumers
     [Obsolete("Use LocalSingleFlightEnabled; the in-process lock it named is gone.")]
     public bool? LocalLockEnabled { get => LocalSingleFlightEnabled; set => LocalSingleFlightEnabled = value; }
 
     [Obsolete("Use LocalSingleFlightTimeout; the in-process lock it named is gone.")]
     public TimeSpan? LocalLockTimeout { get => LocalSingleFlightTimeout; set => LocalSingleFlightTimeout = value; }
+#pragma warning restore S1133
 
     public bool? LocalSingleFlightEnabled { get; set; } = true;
 

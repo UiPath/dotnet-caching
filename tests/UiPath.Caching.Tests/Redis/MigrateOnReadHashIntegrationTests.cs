@@ -233,7 +233,7 @@ public class MigrateOnReadHashIntegrationTests(RedisContainerFixture fixture)
         read.Should().HaveCount(3);
         (await StoredAsync(raw, redisKey, "a", "b", "c")).Should().SatisfyRespectively(
             a => a.Should().Equal(JsonX),
-            b => b.Should().Equal([0x12, (byte)'x']),
+            b => b.Should().Equal((byte)0x12, (byte)'x'),
             c => c.Should().Equal(FastY));
         harness.Telemetry.Metrics.Where(m => m.Name == Metrics.SerializerRewrite).Should().BeEmpty();
     }

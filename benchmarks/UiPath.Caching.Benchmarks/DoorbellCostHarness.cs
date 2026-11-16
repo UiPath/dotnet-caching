@@ -29,7 +29,12 @@ internal static class DoorbellCostHarness
             foreach (var cell in cells.Split(','))
             {
                 var r = await MeasureAsync(connection, app, cell, ops, value);
-                (totals.TryGetValue(cell, out var l) ? l : totals[cell] = []).Add(r);
+                if (!totals.TryGetValue(cell, out var l))
+                {
+                    totals[cell] = l = [];
+                }
+
+                l.Add(r);
                 Console.WriteLine(string.Create(CultureInfo.InvariantCulture, $"{cell,-11} {round,5}  {r.Wall,10:F2}  {r.Cpu,9:F0}  {r.Items,8:F2}  {r.Locks,8:F3}"));
             }
         }
@@ -55,7 +60,12 @@ internal static class DoorbellCostHarness
     private static async Task<(double Wall, double Cpu, double Items, double Locks)> MeasureAsync(string connection, string app, string cell, int ops, string value)
     {
         // nonotify, notify, or notify:<ms> for a NotifyMinInterval between doorbells.
-        var notify = cell.StartsWith("notify", StringComparison.Ordinal) ? "true" : cell == "nonotify" ? "false" : throw new ArgumentException(cell);
+        var notify = cell switch
+        {
+            _ when cell.StartsWith("notify", StringComparison.Ordinal) => "true",
+            "nonotify" => "false",
+            _ => throw new ArgumentException(cell),
+        };
         var spacing = cell.StartsWith("notify:", StringComparison.Ordinal) ? TimeSpan.FromMilliseconds(int.Parse(cell["notify:".Length..], CultureInfo.InvariantCulture)).ToString() : null;
         var extra = new Dictionary<string, string?>
         {

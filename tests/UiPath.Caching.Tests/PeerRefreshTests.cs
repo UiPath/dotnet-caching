@@ -171,7 +171,9 @@ public class PeerRefreshTests
     [Fact]
     public void Hits_in_the_same_second_keep_the_read_time()
     {
+#pragma warning disable S1944 // The factory's entries are read-tracked at run time.
         var tracked = (IReadTracked)new CacheEntryFactory().Create("v", DateTimeOffset.UtcNow.AddHours(1));
+#pragma warning restore S1944
         tracked.LastRead.Should().Be(IReadTracked.NeverRead);
 
         tracked.MarkRead(5);
@@ -817,7 +819,7 @@ public class PeerRefreshTests
         b.Cache.PeerRefreshHold = gate.Task;
 
         await a.Cache.SetAsync(Key, "new", null, Ct);
-        b.Cache.Dispose();
+        await b.Cache.DisposeAsync();
         gate.SetResult();
         await b.Settled();
 
@@ -948,7 +950,7 @@ public class PeerRefreshTests
 
         var guard = b.Subscribers.OfType<IFirstObserver<ICacheEvent>>().Should().ContainSingle().Subject;
         b.Cache.FillsTracked.Should().BeTrue();
-        b.Cache.Dispose();
+        await b.Cache.DisposeAsync();
         b.Unsubscribed.Should().Contain(guard);
     }
 
@@ -1040,7 +1042,7 @@ public class PeerRefreshTests
     public async Task A_read_begun_while_this_node_s_removal_is_in_flight_does_not_bring_the_value_back(string how)
     {
         using var peers = new CachePeers();
-        var (a, b) = await HoldingOld(peers);
+        var (_, b) = await HoldingOld(peers);
         var gate = new TaskCompletionSource();
         b.Inner.RemoveHold = gate.Task;
         CacheKey[] keys = [Key, "k2"];
@@ -1435,7 +1437,9 @@ public class PeerRefreshTests
     private static int ReadMark(CachePeers.Node node)
     {
         node.Local.TryGetValue(Key, out ICacheEntry<string>? entry).Should().BeTrue();
+#pragma warning disable S1944 // The node's entries are read-tracked at run time.
         return ((IReadTracked)entry!).LastRead;
+#pragma warning restore S1944
     }
 
     /// <summary>Node <c>a</c> writes <c>new</c>; its event is held back for the test to deliver.</summary>
@@ -1500,9 +1504,11 @@ public class PeerRefreshTests
     {
         for (var attempt = 0; attempt < 50; attempt++)
         {
+#pragma warning disable S1215 // The test needs the collector to clear the entry's weak references.
             GC.Collect();
             GC.WaitForPendingFinalizers();
             GC.Collect();
+#pragma warning restore S1215
             if (!references.Exists(reference => reference.IsAlive))
             {
                 return;
@@ -1517,7 +1523,9 @@ public class PeerRefreshTests
     {
         private int _ran;
 
+#pragma warning disable S3218 // IKeyedObserver fixes the member name.
         public string Key => key;
+#pragma warning restore S3218
 
         public void OnNext(ICacheEvent value)
         {

@@ -63,7 +63,7 @@ else
     }
 }
 
-builder.Build().Run();
+await builder.Build().RunAsync();
 
 static IEnumerable<IResourceBuilder<ProjectResource>> AddSampleMachines(
     IDistributedApplicationBuilder builder,
@@ -167,6 +167,7 @@ static IResourceBuilder<ContainerResource> AddRedisStackNode(
 static EndpointReferenceExpression Endpoint(IResourceBuilder<ContainerResource> resource) =>
     resource.GetEndpoint("tcp").Property(EndpointProperty.HostAndPort);
 
+#pragma warning disable S3903 // a top-level-statements file cannot declare a namespace
 internal sealed record ShardedRedisResources(
     ReferenceExpression ConnectionString,
     IResourceBuilder<ContainerResource> Master1,
@@ -176,3 +177,4 @@ internal sealed record ShardedRedisResources(
     IResourceBuilder<ContainerResource> Slave1Master2,
     IResourceBuilder<ContainerResource> Slave2Master2,
     IResourceBuilder<ContainerResource> ClusterInit);
+#pragma warning restore S3903

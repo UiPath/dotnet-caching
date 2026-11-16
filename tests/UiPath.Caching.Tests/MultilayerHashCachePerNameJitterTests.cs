@@ -16,8 +16,6 @@ public class MultilayerHashCachePerNameJitterTests(ITestContextAccessor testCont
     private MultilayerCachePerNameLockTests.ITopicProviderWithConnectionState _topicProvider = default!;
     private ITopic<ICacheEvent> _topic = default!;
     private global::UiPath.Caching.IMemoryCacheFactory _memoryCacheFactory = default!;
-    private ICacheEventFactory _cacheEventFactory = default!;
-    private IDistributedLock _distributedLock = default!;
     private InMemoryRedisCacheOptions _options = default!;
     private CacheKey _cacheKey = default!;
     private TopicKey _topicKey = default!;
@@ -244,7 +242,7 @@ public class MultilayerHashCachePerNameJitterTests(ITestContextAccessor testCont
         _topicKey = _fixture.Create<string>();
         _innerCache = _fixture.Freeze<IHashCache>();
         _memoryCache = _fixture.Freeze<global::Microsoft.Extensions.Caching.Memory.IMemoryCache>();
-        _distributedLock = _fixture.Freeze<IDistributedLock>();
+        _fixture.Freeze<IDistributedLock>();
         _options = new InMemoryRedisCacheOptions
         {
             // These tests assume a tier that is never seen as disconnected; the ones about disconnection turn the monitor on.
@@ -267,7 +265,7 @@ public class MultilayerHashCachePerNameJitterTests(ITestContextAccessor testCont
         _topicProvider.Create(_topicKey).Returns(_topic);
         _memoryCacheFactory = _fixture.Freeze<global::UiPath.Caching.IMemoryCacheFactory>();
         _memoryCacheFactory.Get(Arg.Any<IMemoryCacheOptions>()).Returns(_memoryCache);
-        _cacheEventFactory = _fixture.Freeze<ICacheEventFactory>();
+        _fixture.Freeze<ICacheEventFactory>();
         return ValueTask.CompletedTask;
     }
 }

@@ -310,7 +310,9 @@ public class MigrateOnReadIntegrationTests(RedisContainerFixture fixture)
         // The first rewrite is running, so the second sits in the queue with what it holds.
         for (var attempt = 0; attempt < 10 && watched!.IsAlive; attempt++)
         {
+#pragma warning disable S1215 // The test needs the collector to clear the queued rewrite weak reference.
             GC.Collect();
+#pragma warning restore S1215
             GC.WaitForPendingFinalizers();
             await Task.Delay(20, Ct);
         }
@@ -702,7 +704,9 @@ public class MigrateOnReadIntegrationTests(RedisContainerFixture fixture)
             var migrator = harness.Migrator;
             harness.Dispose();
             await migrator.Stopped.WaitAsync(TimeSpan.FromSeconds(10), Ct);
+#pragma warning disable S1215 // The test needs the finalizers to run so an unobserved task exception surfaces.
             GC.Collect();
+#pragma warning restore S1215
             GC.WaitForPendingFinalizers();
 
             unobserved.Should().BeEmpty();
@@ -735,7 +739,9 @@ public class MigrateOnReadIntegrationTests(RedisContainerFixture fixture)
 
         var reads = harness.Telemetry.Metrics.Where(m => m.Name == Metrics.SerializerRead).ToList();
         reads.Select(r => (r.Properties!["format"], r.Properties["cache"])).Should().Equal(("json", "Redis"), ("fast", "Redis"), ("fast", "Redis"));
+#pragma warning disable S1244 // The metric value is the exact count 1, not a computed float.
         reads.Should().OnlyContain(r => r.Value == 1);
+#pragma warning restore S1244
     }
 
     [Fact]
@@ -925,12 +931,14 @@ public class MigrateOnReadIntegrationTests(RedisContainerFixture fixture)
         }
     }
 
+#pragma warning disable S1144, S3459 // Populated by the JSON serializer.
     private sealed class Measure
     {
         public string? Name { get; set; }
 
         public double Value { get; set; }
     }
+#pragma warning restore S1144, S3459
 
     private sealed class JsonBlockingSerializer(int id, TaskCompletionSource entered, TaskCompletionSource gate, bool forgetful = false) : ICacheValueSerializer
     {

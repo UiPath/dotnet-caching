@@ -112,9 +112,9 @@ public class MemoryCacheSetterTokenReleaseTests
 
             public void Dispose()
             {
-                if (Interlocked.Exchange(ref _topic, null) is { } topic)
+                if (Interlocked.Exchange(ref _topic, null) is { } released)
                 {
-                    Interlocked.Decrement(ref topic._live);
+                    Interlocked.Decrement(ref released._live);
                 }
             }
         }

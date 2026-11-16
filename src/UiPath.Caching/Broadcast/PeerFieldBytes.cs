@@ -38,8 +38,8 @@ internal sealed class PeerFieldBytes() : Dictionary<string, byte[]?>(StringCompa
         private static void WriteBase64(Utf8JsonWriter writer, byte[] bytes)
         {
             var length = Base64.GetMaxEncodedToUtf8Length(bytes.Length);
-            byte[]? rented = null;
-            Span<byte> text = length <= StackBytes ? stackalloc byte[StackBytes] : (rented = ArrayPool<byte>.Shared.Rent(length));
+            var rented = length <= StackBytes ? null : ArrayPool<byte>.Shared.Rent(length);
+            Span<byte> text = rented is null ? stackalloc byte[StackBytes] : rented;
             try
             {
                 Base64.EncodeToUtf8(bytes, text, out _, out var written);

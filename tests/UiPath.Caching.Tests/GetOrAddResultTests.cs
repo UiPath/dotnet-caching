@@ -85,7 +85,7 @@ public class GetOrAddResultTests
         var started = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var release = new TaskCompletionSource<string?>(TaskCreationOptions.RunContinuationsAsynchronously);
 
-        var first = cache.GetOrAddResultAsync<string>(
+        var firstRead = cache.GetOrAddResultAsync<string>(
             "k:shared",
             async _ =>
             {
@@ -93,9 +93,11 @@ public class GetOrAddResultTests
                 return await release.Task;
             },
             policy: null,
-            Ct).AsTask();
+            Ct);
+        var first = firstRead.AsTask();
         await started.Task;
-        var second = cache.GetOrAddResultAsync<string>("k:shared", Unexpected, policy: null, Ct).AsTask();
+        var secondRead = cache.GetOrAddResultAsync<string>("k:shared", Unexpected, policy: null, Ct);
+        var second = secondRead.AsTask();
         await Task.Delay(50, Ct);
         second.IsCompleted.Should().BeFalse("it waits on the run in progress");
         release.SetResult("v");
@@ -339,16 +341,16 @@ public class GetOrAddResultTests
         AllocatedBy(() => TypedHandlerHit(typed)).Should().Be(0, "the handler-key form");
     }
 
-    private static CacheResult<string> TypedHandlerHit(ICache<string> cache)
+    private static void TypedHandlerHit(ICache<string> cache)
     {
         var text = "k:typed-alloc";
-        return Complete(cache.GetOrAddResultAsync($"{text}", Unexpected, Ct));
+        _ = Complete(cache.GetOrAddResultAsync($"{text}", Unexpected, Ct));
     }
 
-    private static CacheResult<string> HandlerHit(ICache cache)
+    private static void HandlerHit(ICache cache)
     {
         var text = "k:alloc";
-        return Complete(cache.GetOrAddResultAsync<string>($"{text}", Unexpected, (CachePolicy?)null, Ct));
+        _ = Complete(cache.GetOrAddResultAsync<string>($"{text}", Unexpected, (CachePolicy?)null, Ct));
     }
 
     private static long AllocatedBy(Action read)
@@ -372,6 +374,10 @@ public class GetOrAddResultTests
 
         return fewest;
     }
+
+#pragma warning disable S5034 // the hit completes synchronously; the wait only covers a miss
+    private static TResult Complete<TResult>(ValueTask<TResult> read) => read.IsCompletedSuccessfully ? read.Result : read.AsTask().GetAwaiter().GetResult();
+#pragma warning restore S5034
 #endif
 
     private static ValueTask<CacheResult<string>> GetOrAddResultByHandlerAsync(ICache cache)
@@ -449,10 +455,6 @@ public class GetOrAddResultTests
         return value;
     }
 
-#pragma warning disable S5034 // the hit completes synchronously; the wait only covers a miss
-    private static TResult Complete<TResult>(ValueTask<TResult> read) => read.IsCompletedSuccessfully ? read.Result : read.AsTask().GetAwaiter().GetResult();
-#pragma warning restore S5034
-
     /// <summary>An <see cref="ICache"/> that stores one value per key and has no GetOrAddResultAsync of its own, as a cache outside the library has none.</summary>
     private sealed record Owner(string Name);
 
@@ -484,7 +486,7 @@ public class GetOrAddResultTests
 /// <summary>The same reports from the Redis-backed caches.</summary>
 [Collection("RedisIntegration")]
 [Trait("Category", "Integration")]
-public class GetOrAddResultRedisIntegrationTests(RedisContainerFixture fixture) : IDisposable
+public sealed class GetOrAddResultRedisIntegrationTests(RedisContainerFixture fixture) : IDisposable
 {
     private readonly string _app = $"gr{Guid.NewGuid():N}"[..10];
     private readonly List<ServiceProvider> _nodes = [];
@@ -600,15 +602,19 @@ public class GetOrAddResultRedisIntegrationTests(RedisContainerFixture fixture) 
         Task<CacheResult<string>> second;
         if (resultCallStarts)
         {
-            first = cache.GetOrAddResultAsync<string>(key, Gated, TimeSpan.FromMinutes(5), null, Ct).AsTask();
+            var firstRead = cache.GetOrAddResultAsync<string>(key, Gated, TimeSpan.FromMinutes(5), null, Ct);
+            first = firstRead.AsTask();
             await started.Task;
-            second = Wrap(cache.GetOrAddAsync<string>(key, Joiner, TimeSpan.FromMinutes(5), null, Ct).AsTask());
+            var joinerRead = cache.GetOrAddAsync<string>(key, Joiner, TimeSpan.FromMinutes(5), null, Ct);
+            second = Wrap(joinerRead.AsTask());
         }
         else
         {
-            first = Wrap(cache.GetOrAddAsync<string>(key, Gated, TimeSpan.FromMinutes(5), null, Ct).AsTask());
+            var gatedRead = cache.GetOrAddAsync<string>(key, Gated, TimeSpan.FromMinutes(5), null, Ct);
+            first = Wrap(gatedRead.AsTask());
             await started.Task;
-            second = cache.GetOrAddResultAsync<string>(key, Joiner, TimeSpan.FromMinutes(5), null, Ct).AsTask();
+            var joinerRead = cache.GetOrAddResultAsync<string>(key, Joiner, TimeSpan.FromMinutes(5), null, Ct);
+            second = joinerRead.AsTask();
         }
 
         await Task.Delay(100, Ct);
@@ -741,8 +747,16 @@ public sealed class GetOrAddResultRedisAllocationTests(RedisContainerFixture fix
         await cache.GetOrAddResultAsync<string>(key, _ => Task.FromResult<string?>("v"), TimeSpan.FromMinutes(5), null, Ct);
         static Task<string?> Fail(CancellationToken token) => throw new InvalidOperationException("ran on a hit");
 
-        var plain = await AllocatedPerCallAsync(() => cache.GetOrAddAsync(key, Fail, TimeSpan.FromMinutes(5), null, Ct).AsTask());
-        var result = await AllocatedPerCallAsync(() => cache.GetOrAddResultAsync(key, Fail, TimeSpan.FromMinutes(5), null, Ct).AsTask());
+        var plain = await AllocatedPerCallAsync(() =>
+        {
+            var read = cache.GetOrAddAsync(key, Fail, TimeSpan.FromMinutes(5), null, Ct);
+            return read.AsTask();
+        });
+        var result = await AllocatedPerCallAsync(() =>
+        {
+            var read = cache.GetOrAddResultAsync(key, Fail, TimeSpan.FromMinutes(5), null, Ct);
+            return read.AsTask();
+        });
 
         result.Should().BeLessThan((plain * 2) + 1024, $"a plain hit allocated {plain} B and a result hit {result} B");
     }

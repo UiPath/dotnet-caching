@@ -7,11 +7,13 @@ namespace UiPath.Caching;
 /// </summary>
 public sealed class LockProfile
 {
+#pragma warning disable S1133 // removing an [Obsolete] public member is a breaking change for consumers
     [Obsolete("Use LocalSingleFlightEnabled; the in-process lock it named is gone.")]
     public bool? LocalLockEnabled { get => LocalSingleFlightEnabled; init => LocalSingleFlightEnabled = value; }
 
     [Obsolete("Use LocalSingleFlightTimeout; the in-process lock it named is gone.")]
     public TimeSpan? LocalLockTimeout { get => LocalSingleFlightTimeout; init => LocalSingleFlightTimeout = value; }
+#pragma warning restore S1133
 
     public bool? LocalSingleFlightEnabled { get; init; }
 

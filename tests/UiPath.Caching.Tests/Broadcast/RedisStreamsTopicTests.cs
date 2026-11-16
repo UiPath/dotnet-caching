@@ -282,7 +282,8 @@ public class RedisStreamsTopicTests(ITestContextAccessor testContextAccessor) : 
         ArrangeDoorbell();
         var token = testContextAccessor.Current.CancellationToken;
         var added = ArrangeGatedAdd();
-        var publishing = Sut.PublishAsync(_fixture.Create<ICacheEvent>(), token).AsTask();
+        var publishingRead = Sut.PublishAsync(_fixture.Create<ICacheEvent>(), token);
+        var publishing = publishingRead.AsTask();
         await _database.DidNotReceiveWithAnyArgs().PublishAsync(default, default, default);
         added.SetResult("1-0");
         (await publishing).Should().BeTrue();
@@ -292,7 +293,8 @@ public class RedisStreamsTopicTests(ITestContextAccessor testContextAccessor) : 
         for (var i = 2; i <= 3; i++)
         {
             added = ArrangeGatedAdd();
-            publishing = Sut.PublishAsync(_fixture.Create<ICacheEvent>(), token).AsTask();
+            var loopPublish = Sut.PublishAsync(_fixture.Create<ICacheEvent>(), token);
+            publishing = loopPublish.AsTask();
             await _database.Received(i).PublishAsync(Arg.Any<RedisChannel>(), Arg.Any<RedisValue>(), Arg.Any<CommandFlags>());
             added.SetResult("1-0");
             (await publishing).Should().BeTrue();
@@ -559,11 +561,18 @@ public class RedisStreamsTopicTests(ITestContextAccessor testContextAccessor) : 
         var calls = 0;
         var first = new TaskCompletionSource<long>(TaskCreationOptions.RunContinuationsAsynchronously);
         _database.PublishAsync(Arg.Any<RedisChannel>(), Arg.Any<RedisValue>(), Arg.Any<CommandFlags>())
-            .ReturnsForAnyArgs(_ => Interlocked.Increment(ref calls) is var n && n == 1
-                ? first.Task
-                : n - 1 <= failuresBeforeSuccess
+            .ReturnsForAnyArgs(_ =>
+            {
+                var n = Interlocked.Increment(ref calls);
+                if (n == 1)
+                {
+                    return first.Task;
+                }
+
+                return n - 1 <= failuresBeforeSuccess
                     ? Task.FromException<long>(new RedisException("down"))
-                    : Task.FromResult(1L));
+                    : Task.FromResult(1L);
+            });
         Sut.DoorbellSpacing = TimeSpan.FromMilliseconds(200);
         var token = testContextAccessor.Current.CancellationToken;
 
@@ -1060,10 +1069,13 @@ public class RedisStreamsTopicTests(ITestContextAccessor testContextAccessor) : 
         Doorbells().Should().Be(1);
     }
 
-    private static RedisResult Scripted(string id, bool rung = true, string? error = null) =>
-        RedisResult.Create(error is null
-            ? [RedisResult.Create((RedisValue)id), RedisResult.Create((RedisValue)(rung ? 1 : 0))]
-            : [RedisResult.Create((RedisValue)id), RedisResult.Create((RedisValue)(rung ? 1 : 0)), RedisResult.Create((RedisValue)error)]);
+    private static RedisResult Scripted(string id, bool rung = true, string? error = null)
+    {
+        var rungFlag = RedisResult.Create((RedisValue)(rung ? 1 : 0));
+        return RedisResult.Create(error is null
+            ? [RedisResult.Create((RedisValue)id), rungFlag]
+            : [RedisResult.Create((RedisValue)id), rungFlag, RedisResult.Create((RedisValue)error)]);
+    }
 
     /// <summary>Waits for the expected number of doorbells rather than a fixed time, then a little longer to show no further one follows.</summary>
     private static async Task DoorbellCallsSettledAsync(Func<int> calls, int expected, CancellationToken token)

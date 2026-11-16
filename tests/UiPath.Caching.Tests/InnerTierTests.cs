@@ -63,20 +63,41 @@ public sealed class InnerTierTests
     {
         public event EventHandler? OnConnectionFailed
         {
-            add { }
-            remove { }
+            add
+            {
+                // Never raised by this fake.
+            }
+
+            remove
+            {
+                // Never raised by this fake.
+            }
         }
 
         public event EventHandler? OnConnectionRestored
         {
-            add { }
-            remove { }
+            add
+            {
+                // Never raised by this fake.
+            }
+
+            remove
+            {
+                // Never raised by this fake.
+            }
         }
 
         public event EventHandler? OnReconnected
         {
-            add { }
-            remove { }
+            add
+            {
+                // Never raised by this fake.
+            }
+
+            remove
+            {
+                // Never raised by this fake.
+            }
         }
 
         public bool IsConnected => true;

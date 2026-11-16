@@ -241,20 +241,20 @@ public class RedisReadScriptIntegrationTests(RedisContainerFixture fixture)
     {
         public event EventHandler? OnConnectionFailed
         {
-            add { }
-            remove { }
+            add { /* Expected: this connector never raises the event. */ }
+            remove { /* Expected: nothing is attached. */ }
         }
 
         public event EventHandler? OnConnectionRestored
         {
-            add { }
-            remove { }
+            add { /* Expected: this connector never raises the event. */ }
+            remove { /* Expected: nothing is attached. */ }
         }
 
         public event EventHandler? OnReconnected
         {
-            add { }
-            remove { }
+            add { /* Expected: this connector never raises the event. */ }
+            remove { /* Expected: nothing is attached. */ }
         }
 
         public bool IsConnected => mux.IsConnected;

@@ -10,7 +10,7 @@ namespace UiPath.Caching.Tests.Redis;
 
 // The StackExchange.Redis flag is process-wide, so no other test may connect while one of these has it on.
 [CollectionDefinition(Name, DisableParallelization = true)]
-public class DedicatedThreadsCollection
+public static class DedicatedThreadsCollection
 {
     public const string Name = "DedicatedThreads";
 }
