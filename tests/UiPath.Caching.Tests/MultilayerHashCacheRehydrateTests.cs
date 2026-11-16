@@ -1,5 +1,8 @@
+using System.Reflection;
 using UiPath.Caching.Locking;
+using UiPath.Caching.Telemetry;
 using UiPath.Caching.Tests.Fakes;
+using UiPath.Caching.Tests.Telemetry;
 
 namespace UiPath.Caching.Tests;
 
@@ -24,6 +27,7 @@ public class MultilayerHashCacheRehydrateTests(ITestContextAccessor testContextA
     private InMemoryRedisCacheOptions _options = default!;
     private CacheKey _cacheKey = default!;
     private TopicKey _topicKey = default!;
+    private RecordingTelemetryProvider _telemetry = default!;
     private MultilayerHashCache? _sut;
 
     private MultilayerHashCache Sut => _sut ??= RunTables.Track(_fixture.Create<MultilayerHashCache>());
@@ -100,6 +104,68 @@ public class MultilayerHashCacheRehydrateTests(ITestContextAccessor testContextA
             Arg.Any<CachePolicy?>(),
             Arg.Any<CancellationToken>());
         await acquiredLock.Received(1).DisposeAsync();
+    }
+
+    [Fact]
+    public async Task Rehydrate_adopts_a_fresh_inner_value_and_skips_the_generator()
+    {
+        var token = testContextAccessor.Current.CancellationToken;
+        var aged = new TestCacheEntry<IDictionary<string, string?>> { Value = CachedDict, Expiration = DateTimeOffset.UtcNow.AddMinutes(2) };
+        var refreshed = new TestCacheEntry<IDictionary<string, string?>> { Value = RefreshedDict, Expiration = DateTimeOffset.UtcNow.AddMinutes(9) };
+        var acquiredLock = Substitute.For<IAsyncDisposable>();
+        var locked = 0;
+        _distributedLock.TryAcquireAsync(Arg.Any<string>(), Arg.Any<TimeSpan>(), Arg.Any<CancellationToken>())
+            .Returns<IAsyncDisposable?>(_ =>
+            {
+                Volatile.Write(ref locked, 1);
+                return acquiredLock;
+            });
+        _innerCache.GetCacheEntryAsync<string>(_cacheKey, Arg.Any<CachePolicy?>(), Arg.Any<CancellationToken>())
+            .Returns(_ => Volatile.Read(ref locked) == 0 ? aged : refreshed);
+        var generatorCalls = 0;
+        Task<IDictionary<string, string?>> Generator(CancellationToken _)
+        {
+            Interlocked.Increment(ref generatorCalls);
+            return Task.FromResult(RefreshedDict);
+        }
+
+        await Sut.GetOrAddAsync(_cacheKey, Generator, RehydratePolicy(), token);
+
+        await WaitForAsync(() => _telemetry.Events.Any(e => e.Name == "cache.rehydrate.adopted"), TimeSpan.FromSeconds(5), token);
+        await WaitForAsync(() => acquiredLock.ReceivedCalls().Any(), TimeSpan.FromSeconds(5), token);
+        generatorCalls.Should().Be(0);
+        _telemetry.Events.Should().NotContain(e => e.Name == "cache.rehydrate.succeeded");
+        await acquiredLock.Received(1).DisposeAsync();
+    }
+
+    [Fact]
+    public async Task Rehydrate_decides_on_the_snapshot_read_of_an_inner_cache_that_offers_one()
+    {
+        var token = testContextAccessor.Current.CancellationToken;
+        var proxy = DispatchProxy.Create<IHashCache, AdoptionProxy>();
+        var inner = (AdoptionProxy)(object)proxy;
+        _fixture.Inject(proxy);
+        // The plain read always shows the aged copy, so only the snapshot read can tell a peer refreshed it.
+        inner.Answer = (name, _) => name == nameof(IHashCache.GetCacheEntryAsync)
+            ? new TestCacheEntry<IDictionary<string, string?>> { Value = CachedDict, Expiration = DateTimeOffset.UtcNow.AddMinutes(2) }
+            : throw new NotSupportedException(name);
+        inner.Adoption = _ => new TestCacheEntry<IDictionary<string, string?>> { Value = RefreshedDict, Expiration = DateTimeOffset.UtcNow.AddMinutes(9) };
+        _distributedLock.TryAcquireAsync(Arg.Any<string>(), Arg.Any<TimeSpan>(), Arg.Any<CancellationToken>()).Returns(Substitute.For<IAsyncDisposable>());
+        var generatorCalls = 0;
+
+        await Sut.GetOrAddAsync(
+            _cacheKey,
+            _ =>
+            {
+                Interlocked.Increment(ref generatorCalls);
+                return Task.FromResult(RefreshedDict);
+            },
+            RehydratePolicy(),
+            token);
+
+        await WaitForAsync(() => _telemetry.Events.Any(e => e.Name == "cache.rehydrate.adopted"), TimeSpan.FromSeconds(5), token);
+        generatorCalls.Should().Be(0);
+        inner.Count("ReadForAdoptionAsync:" + _cacheKey.Name).Should().Be(1);
     }
 
     [Fact]
@@ -301,8 +367,11 @@ public class MultilayerHashCacheRehydrateTests(ITestContextAccessor testContextA
         _cacheKey = _fixture.Create<string>();
         _topicKey = _fixture.Create<string>();
         _innerCache = _fixture.Freeze<IHashCache>();
+        _fixture.Inject(AdoptionProxy.Over(_innerCache));
         _memoryCache = _fixture.Freeze<global::Microsoft.Extensions.Caching.Memory.IMemoryCache>();
         _distributedLock = _fixture.Freeze<IDistributedLock>();
+        _telemetry = new RecordingTelemetryProvider();
+        _fixture.Inject<ICachingTelemetryProvider>(_telemetry);
         _options = new InMemoryRedisCacheOptions
         {
             // These tests assume a tier that is never seen as disconnected; the ones about disconnection turn the monitor on.

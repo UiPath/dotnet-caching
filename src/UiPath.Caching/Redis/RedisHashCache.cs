@@ -6,7 +6,7 @@ using UiPath.Caching.Telemetry;
 
 namespace UiPath.Caching.Redis;
 
-internal sealed partial class RedisHashCache : RedisCacheBase, IHashCache, ISpanKeyHashCache, IVersionedHashCache, IInvalidationSink
+internal sealed partial class RedisHashCache : RedisCacheBase, IHashCache, ISpanKeyHashCache, IVersionedHashCache, IInvalidationSink, IAdoptionReadHashCache
 {
     /// <summary>All fields and the absolute expiration in one atomic read-only call.</summary>
     private const string ReadWithExpirationScript = "local n = redis.call('HLEN', KEYS[1]) if n > tonumber(ARGV[1]) then return {n, redis.call('PEXPIRETIME', KEYS[1])} end return {redis.call('HGETALL', KEYS[1]), redis.call('PEXPIRETIME', KEYS[1])}";
@@ -101,6 +101,15 @@ internal sealed partial class RedisHashCache : RedisCacheBase, IHashCache, ISpan
     {
         var format = FormatFor(policy, forWrite: false);
         return format.Sniff ? GetCacheEntryCoreAsync<T, ValueFormat>(cacheKey, format, token) : GetCacheEntryCoreAsync<T, PlainFormat>(cacheKey, default, token);
+    }
+
+    public ValueTask<ICacheEntry<IDictionary<string, T?>>> ReadForAdoptionAsync<T>(CacheKey cacheKey, CachePolicy? policy, CancellationToken token)
+    {
+        NotCacheableException.ThrowIfNotCacheable<T>();
+        var format = FormatFor(policy, forWrite: false);
+        return format.Sniff
+            ? GetInnerCacheEntryAsync<T?, ValueFormat>(cacheKey, format, token, atomic: true)
+            : GetInnerCacheEntryAsync<T?, PlainFormat>(cacheKey, default, token, atomic: true);
     }
 
     public ValueTask<IDictionary<string, T?>> GetOrAddAsync<T>(CacheKey cacheKey, Func<CancellationToken, Task<IDictionary<string, T?>>> generator, CachePolicy? policy, CancellationToken token = default)
@@ -1199,23 +1208,24 @@ internal sealed partial class RedisHashCache : RedisCacheBase, IHashCache, ISpan
         return (found, ret);
     }
 
-    private async ValueTask<ICacheEntry<IDictionary<string, T?>>> GetInnerCacheEntryAsync<T, TFormat>(CacheKey cacheKey, TFormat format, CancellationToken token)
+    /// <param name="atomic">Reads the fields and the remaining lifetime in one transaction on the primary, and lets a failure through instead of answering a miss.</param>
+    private async ValueTask<ICacheEntry<IDictionary<string, T?>>> GetInnerCacheEntryAsync<T, TFormat>(CacheKey cacheKey, TFormat format, CancellationToken token, bool atomic = false)
         where TFormat : struct, IValueFormat
     {
         var ret = Default<T>();
         if(!IsConnected)
         {
-            return ret;
+            return atomic ? throw new InvalidOperationException("The cache is not connected") : ret;
         }
 
         var redisKey = ToRedisKey(cacheKey, token);
         var operation = StartOperation<T>(nameof(GetInnerCacheEntryAsync));
         try
         {
-            ret = await GetCacheEntryForKeyAsync<T?, TFormat>(cacheKey, redisKey, format, token).ConfigureAwait(false);
+            ret = await GetCacheEntryForKeyAsync<T?, TFormat>(cacheKey, redisKey, format, token, atomic).ConfigureAwait(false);
             operation.Stop();
         }
-        catch (Exception ex) when (format.Handles(ex))
+        catch (Exception ex) when (!atomic && format.Handles(ex))
         {
             operation.Stop();
             LogRedisHashCacheException(ex);
@@ -1228,7 +1238,7 @@ internal sealed partial class RedisHashCache : RedisCacheBase, IHashCache, ISpan
         return ret;
     }
 
-    private async ValueTask<ICacheEntry<IDictionary<string, T?>>> GetCacheEntryForKeyAsync<T, TFormat>(CacheKey cacheKey, RedisKey redisKey, TFormat format, CancellationToken token)
+    private async ValueTask<ICacheEntry<IDictionary<string, T?>>> GetCacheEntryForKeyAsync<T, TFormat>(CacheKey cacheKey, RedisKey redisKey, TFormat format, CancellationToken token, bool atomic = false)
         where TFormat : struct, IValueFormat
     {
         token.ThrowIfCancellationRequested();
@@ -1237,6 +1247,20 @@ internal sealed partial class RedisHashCache : RedisCacheBase, IHashCache, ISpan
         var committed = await _read.ExecuteAsync(static async (s, token) =>
         {
             token.ThrowIfCancellationRequested();
+            if (s.Atomic)
+            {
+                var transaction = s.Self.Database.CreateTransaction();
+                var snapshotEntries = transaction.HashGetAllAsync(s.Key, CommandFlags.DemandMaster);
+                var snapshotTimeToLive = transaction.KeyTimeToLiveAsync(s.Key, CommandFlags.DemandMaster);
+                if (!await transaction.ExecuteAsync(CommandFlags.DemandMaster).ConfigureAwait(false))
+                {
+                    throw new InvalidOperationException("The read transaction was not committed");
+                }
+
+                Interlocked.CompareExchange(ref s.Read.Value, new((await snapshotEntries.ConfigureAwait(false), s.Self.Clock.ToDateTimeOffset(await snapshotTimeToLive.ConfigureAwait(false)))), null);
+                return true;
+            }
+
             if (await s.Self.TryReadScriptAsync(ReadWithExpirationScript, [s.Key], s.Self._logReadScriptUnavailable, [(long)s.Self._fieldBatchSize * PagedReadFactor]).ConfigureAwait(false) is { } reply)
             {
                 Interlocked.CompareExchange(ref s.Read.Value, new(await s.Self.ParseReplyAsync(s.Key, reply).ConfigureAwait(false)), null);
@@ -1262,7 +1286,7 @@ internal sealed partial class RedisHashCache : RedisCacheBase, IHashCache, ISpan
 
             return true;
         },
-        (Self: this, Key: redisKey, Read: read),
+        (Self: this, Key: redisKey, Read: read, Atomic: atomic),
         default,
         token).ConfigureAwait(false);
         if (!committed || read.Value is not { } result)
