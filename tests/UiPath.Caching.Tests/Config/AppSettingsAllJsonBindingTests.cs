@@ -32,6 +32,7 @@ public class AppSettingsAllJsonBindingTests
         { "Caching:Broadcast:RedisPubSub", [typeof(RedisPubSubTopicOptions)], ["Topics"] },
         { "Caching:InMemoryRedis", [typeof(InMemoryRedisCacheOptions)], [] },
         { "Caching:Redis", [typeof(RedisCacheOptions)], [] },
+        { "Caching:Redis:FormatNegotiation", [typeof(FormatNegotiationOptions)], [] },
         { "Caching:InMemory", [typeof(InMemoryCacheOptions)], [] },
         { "Caching:ResiliencePolicies", [typeof(ResiliencePoliciesOptions)], [] },
         { "Caching:Queue:Redis", [typeof(RedisSetCacheOptions)], [] },

@@ -333,7 +333,11 @@ public class SerializerIntegrationTests(RedisContainerFixture fixture)
                 b =>
                 {
                     b.AddRedisConnection(o => o.ConnectionString = fixture.ConnectionString);
-                    b.AddRedis(o => o.HashFieldBatchSize = fieldBatchSize);
+                    b.AddRedis(o =>
+                    {
+                        o.HashFieldBatchSize = fieldBatchSize;
+                        o.FormatNegotiation.Mode = FormatNegotiationMode.Force;
+                    });
                     switch (registry)
                     {
                         case "fast":

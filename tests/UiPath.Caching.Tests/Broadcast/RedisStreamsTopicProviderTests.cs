@@ -43,6 +43,37 @@ public class RedisStreamsTopicProviderTests(ITestContextAccessor testContextAcce
     }
 
     [Fact]
+    public async Task A_provider_that_makes_and_drops_topics_keeps_no_record_of_the_dropped_ones()
+    {
+        var token = testContextAccessor.Current.CancellationToken;
+        TopicKey[] keys = [.. Enumerable.Range(0, 20).Select(i => (TopicKey)$"topic-{i}")];
+        foreach (var key in keys)
+        {
+            Sut.Create(key);
+        }
+
+        Sut.StreamKeyCount.Should().Be(keys.Length);
+        Sut.StreamKeys().Should().HaveCount(keys.Length);
+
+        foreach (var key in keys.Take(10))
+        {
+            Sut.Remove(key);
+        }
+
+        foreach (var key in keys.Skip(10))
+        {
+            Sut.Create(key).Dispose();
+        }
+
+        for (var attempt = 0; Sut.StreamKeyCount > 0 && attempt < 50; attempt++)
+        {
+            await Task.Delay(20, token);
+        }
+
+        Sut.StreamKeyCount.Should().Be(0);
+    }
+
+    [Fact]
     public void Remove_topic_from_provider()
     {
         TopicKey topicKey = _fixture.Create<string>();

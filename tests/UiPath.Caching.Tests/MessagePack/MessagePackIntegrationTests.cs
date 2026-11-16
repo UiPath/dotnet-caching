@@ -183,7 +183,7 @@ public sealed class MessagePackIntegrationTests(RedisContainerFixture fixture) :
                 b =>
                 {
                     b.AddRedisConnection(o => o.ConnectionString = fixture.ConnectionString);
-                    b.AddRedis(_ => { });
+                    b.AddRedis(o => o.FormatNegotiation.Mode = FormatNegotiationMode.Force);
                     b.AddBroadcast();
                     b.AddInMemoryRedis(o => o.PeerFieldUpdates = peerFieldUpdates);
                     b.AddMessagePackSerializer();
