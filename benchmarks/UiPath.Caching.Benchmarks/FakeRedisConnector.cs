@@ -110,7 +110,8 @@ internal class FakeProxy<T> : DispatchProxy
 
         if (method.Name == "StringSetAsync" && args is [RedisKey setKey, RedisValue value, ..])
         {
-            _store.Values[setKey] = value;
+            // The caller returns a pooled buffer to its pool once the call completes, so the store keeps its own bytes.
+            _store.Values[setKey] = value.IsNull ? value : (byte[])value!;
             _store.LastSet = setKey;
             return Task.FromResult(true);
         }

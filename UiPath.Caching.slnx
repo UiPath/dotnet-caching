@@ -18,6 +18,7 @@
   <Project Path="src/UiPath.Caching.Analyzers/UiPath.Caching.Analyzers.csproj" />
   <Project Path="src/UiPath.Caching.Azure/UiPath.Caching.Azure.csproj" />
   <Project Path="src/UiPath.Caching.CloudEvents/UiPath.Caching.CloudEvents.csproj" />
+  <Project Path="src/UiPath.Caching.MessagePack/UiPath.Caching.MessagePack.csproj" />
   <Project Path="src/UiPath.Caching.OpenTelemetry/UiPath.Caching.OpenTelemetry.csproj" />
   <Project Path="src/UiPath.Caching.Polly/UiPath.Caching.Polly.csproj" />
   <Project Path="src/UiPath.Caching.Queue/UiPath.Caching.Queue.csproj" />

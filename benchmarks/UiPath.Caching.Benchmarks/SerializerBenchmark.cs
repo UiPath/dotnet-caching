@@ -2,9 +2,11 @@ using System.Buffers;
 using System.Text.Json;
 using BenchmarkDotNet.Attributes;
 using BenchmarkDotNet.Configs;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging.Abstractions;
 using StackExchange.Redis;
 using UiPath.Caching.Config;
+using UiPath.Caching.MessagePack;
 using UiPath.Caching.Policies;
 using UiPath.Caching.Redis;
 using UiPath.Caching.Serialization;
@@ -108,4 +110,85 @@ public class SerializerBenchmark
 
         public T? Deserialize<T>(int formatId, ReadOnlySequence<byte> source) => throw new NotSupportedException();
     }
+}
+
+/// <summary>The same cache read and write under a policy that names <c>json</c> or <c>messagepack</c>, so the rows compare size, time and allocation of the two formats through <see cref="RedisCache"/>.</summary>
+[MemoryDiagnoser]
+[GroupBenchmarksBy(BenchmarkLogicalGroupRule.ByCategory)]
+[CategoriesColumn]
+public class MessagePackSerializerBenchmark
+{
+    private static readonly TimeSpan Expiration = TimeSpan.FromMinutes(30);
+
+    private CustomObject _obj = default!;
+    private FakeRedisConnector _redis = default!;
+    private RedisCache _cache = default!;
+    private ServiceProvider _services = default!;
+    private CachePolicy _policy = default!;
+
+    [Params("Small", "Medium", "Large")]
+    public string Size { get; set; } = "Medium";
+
+    [Params("json", "messagepack")]
+    public string Format { get; set; } = "json";
+
+    [GlobalSetup]
+    public void Setup()
+    {
+        _obj = Size switch
+        {
+            "Small" => CustomObject.RandomSmall(),
+            "Large" => CustomObject.RandomLarge(),
+            _ => CustomObject.RandomMedium(),
+        };
+        _services = new ServiceCollection()
+            .AddCaching(b => b.AddMessagePackSerializer(), o => o.AppShortName = "bench")
+            .BuildServiceProvider();
+        var registry = ValueSerializerRegistration.BuildRegistry(_services);
+        _policy = new CachePolicy { Serializer = new SerializerPolicy { Write = Format } };
+        _redis = new FakeRedisConnector();
+        _cache = new RedisCache(
+            _redis,
+            new SystemJsonByteSerializerProxy(),
+            EmptyResiliencePipelineProvider.Instance,
+            NullTelemetryProvider.Instance,
+            new RedisCacheOptions(),
+            new CacheOptions { AppShortName = "bench" },
+            new DefaultCachePolicyFactory(null, null, valueSerializers: registry),
+            TimeProvider.System,
+            NullLogger<RedisCache>.Instance)
+        {
+            ValueSerializers = registry,
+        };
+        _cache.SetAsync("bench:format", _obj, Expiration, _policy).AsTask().GetAwaiter().GetResult();
+        var written = new ArrayBufferWriter<byte>();
+        if (Format == "json")
+        {
+            written.Write(JsonSerializer.SerializeToUtf8Bytes(_obj));
+        }
+        else
+        {
+            registry.Entries.Single().Serializer.Serialize(_obj, written);
+        }
+
+        if (_cache.GetAsync<CustomObject>("bench:format", _policy).AsTask().GetAwaiter().GetResult() is null)
+        {
+            throw new InvalidOperationException("The fake connector did not serve the read");
+        }
+
+        Console.WriteLine($"{Size} {Format}: {written.WrittenCount} bytes");
+    }
+
+    [GlobalCleanup]
+    public void Cleanup()
+    {
+        _redis.Dispose();
+        _services.Dispose();
+    }
+
+    [BenchmarkCategory("Get"), Benchmark]
+    public ValueTask<CustomObject?> Get() => _cache.GetAsync<CustomObject>("bench:format", _policy);
+
+    [BenchmarkCategory("Set"), Benchmark]
+    public ValueTask<bool> Set() => _cache.SetAsync("bench:format", _obj, Expiration, _policy);
 }
