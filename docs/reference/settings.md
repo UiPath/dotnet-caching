@@ -441,6 +441,10 @@ Entries are keyed by string under `Caching:Policies`. `ICache<T>` and `IHashCach
 | `Rehydrate` | `RehydrateOptions?` | `null` | Per-policy | Rehydrate tuning; replaced wholesale (no per-field merge) when overriding. See [Policies\[\<name\>\].Rehydrate (RehydrateOptions)](#policiesnamerehydrate-rehydrateoptions). |
 | `Lock` | `LockProfile?` | `null` | Per-policy | Per-cache lock overrides; field-level merged against the default policy. See [Policies\[\<name\>\].Lock (LockProfile)](#policiesnamelock-lockprofile). |
 | `Serializer` | `SerializerPolicy?` | `null` | Per-policy | Which value serializer the policy writes with and reads; `null` = JSON. Field-level merged against the default policy. See [Policies\[\<name\>\].Serializer (SerializerPolicy)](#policiesnameserializer-serializerpolicy). |
+| `FailSafeEnabled` | `bool?` | `null` | Per-policy | `true` = a `GetOrAdd` whose generator throws or passes `FailSafeTimeout` returns the value this node last held for the key. `InMemoryRedis` and `InMemory` only; not batch `GetOrAdd` or hash caches. See [Fail-safe](../how-to/resilience.md#fail-safe). `null` = inherit (default off). |
+| `FailSafeMaxStaleAge` | `TimeSpan?` | `null` | Per-policy | How long after its local expiry a value can still be returned by fail-safe; `null` = inherit (default 1 day). The policy of the write bounds how long the value is kept; the policy of each call bounds what that call is served. Negative is rejected at startup. |
+| `FailSafeCooldown` | `TimeSpan?` | `null` | Per-policy | After fail-safe returns a value, how long misses of the key return it without reading Redis or running the generator; `null` = inherit (default 30 s). |
+| `FailSafeTimeout` | `TimeSpan?` | `null` | Per-policy | Soft generator timeout: with a value to fall back to, it is returned after this long and the generator finishes in the background. `FactoryTimeout` stays the hard limit. `null` or zero = wait. |
 
 ---
 

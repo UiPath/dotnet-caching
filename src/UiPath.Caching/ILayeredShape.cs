@@ -45,7 +45,7 @@ internal interface ILayeredShape<TValue, TOptions, TWrite>
     long Version(TWrite write);
 
     /// <summary>Keeps the value locally while the inner tier is disconnected.</summary>
-    bool KeepWhileDisconnected(TOptions options, TValue value, TimeSpan? maxExpiration, ICacheEntry<TValue>? entry);
+    bool KeepWhileDisconnected(TOptions options, TValue value, TimeSpan? maxExpiration, ICacheEntry<TValue>? entry, CachePolicy policy);
 
     /// <summary>Keeps the value locally after an inner write, as the write's turn allows.</summary>
     bool KeepWritten(BackgroundWrites.Keeper keeper, TOptions options, TValue value, TimeSpan? maxExpiration, ICacheEntry<TValue>? entry, long version, CachePolicy policy);

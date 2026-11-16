@@ -53,7 +53,7 @@ public abstract partial class MultilayerCacheBase
                 return false;
             }
 
-            s.Cache._memoryCache.Remove(s.Name);
+            s.Cache.RemoveEntry(s.Name);
             return true;
         });
 
@@ -62,7 +62,7 @@ public abstract partial class MultilayerCacheBase
     {
         if (IsLocalEntry(name, held))
         {
-            _memoryCache.Remove(name);
+            RemoveEntry(name);
         }
     }
 

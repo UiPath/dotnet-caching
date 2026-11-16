@@ -66,6 +66,11 @@ public sealed partial class InMemoryRedisCacheProvider : ICacheProvider
         {
             LogUncappedLocalTier(loggerFactory.CreateLogger(Name));
         }
+
+        if (Enabled)
+        {
+            FailSafeLifetimeWarning.Log(loggerFactory.CreateLogger(Name), Name, policyFactory, _options.SizeLimit);
+        }
     }
 
     public string Name => KnownCacheProviderNames.InMemoryRedis;

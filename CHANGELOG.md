@@ -4,7 +4,23 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 
-## [Unreleased]
+## [3.2.0] - Unreleased
+
+### Added
+
+- **Fail-safe** (per policy, off by default). On an `InMemory` or `InMemoryRedis` cache, a `GetOrAdd` whose generator throws, or runs past
+  `FailSafeTimeout`, returns the value the node last held for the key; a late generator finishes in the background and announces the value it writes to the other nodes. A later miss does not wait for it and runs a generator of its own, so a slow source may see more calls. `FailSafeEnabled` turns it on,
+  `FailSafeMaxStaleAge` (default 1 day) bounds the value's age, `FailSafeCooldown` (default 30 s) serves it without retrying after a fallback, and
+  `FailSafeTimeout` is the soft timeout. `GeneratedValue<T>.SkipFailSafe` keeps one value out. The value is never written to Redis and is dropped on
+  any removal, peer event or lost event. With `SizeLimit`, the one limit covers the local entries and these values: a value takes its entry's size
+  when that entry expires, at low priority, and a full cache does not keep it. Once a cache has used fail-safe, the local tier's statistics (entry
+  count, hits, misses) include these values and their lookups, and a custom `IMemoryCacheFactory` cache receives keys that are not strings. Batch
+  `GetOrAdd`, hash caches and the Redis-only provider ignore it. See
+  [Resilience](docs/how-to/resilience.md#fail-safe).
+
+### Changed
+
+- **`GeneratedValue<T>` equality and `ToString` include `SkipFailSafe`.** Two values that differ only in it are no longer equal.
 
 ### Added
 
