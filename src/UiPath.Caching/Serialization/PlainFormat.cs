@@ -7,5 +7,7 @@ internal readonly struct PlainFormat : IValueFormat
 
     public bool Sniff => false;
 
+    public ReadableFormats? Readable => null;
+
     public bool Handles(Exception exception) => true;
 }

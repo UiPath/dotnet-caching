@@ -1,3 +1,4 @@
+using UiPath.Caching.Redis;
 using UiPath.Caching.Serialization;
 
 namespace UiPath.Caching.Config;
@@ -10,16 +11,17 @@ internal sealed class DefaultCachePolicyFactory : ICachePolicyFactory
         IEnumerable<KeyValuePair<string, CachePolicy>>? policies,
         CachePolicy? defaultPolicy,
         TimeSpan distributedLockPollInterval = default,
-        ValueSerializerRegistry? valueSerializers = null)
+        ValueSerializerRegistry? valueSerializers = null,
+        FormatNegotiationMode negotiation = FormatNegotiationMode.Auto)
     {
         var registry = valueSerializers ?? ValueSerializerRegistry.Empty;
-        Default = WithResolvedSerializer("default", defaultPolicy, registry);
+        Default = WithResolvedSerializer("default", defaultPolicy, registry, negotiation);
         _preMerged = new Dictionary<string, CachePolicy>(StringComparer.OrdinalIgnoreCase);
         if (policies is not null)
         {
             foreach (var (key, policy) in policies)
             {
-                var merged = WithResolvedSerializer(key, CachePolicyMerger.Merge(policy, defaultPolicy), registry);
+                var merged = WithResolvedSerializer(key, CachePolicyMerger.Merge(policy, defaultPolicy), registry, negotiation);
                 if (!_preMerged.TryAdd(key, merged))
                 {
                     throw new InvalidOperationException(
@@ -47,7 +49,7 @@ internal sealed class DefaultCachePolicyFactory : ICachePolicyFactory
 
     // Runs on the merged policy, so an inherited or overridden value is checked as it takes effect.
     [return: NotNullIfNotNull(nameof(policy))]
-    private static CachePolicy? WithResolvedSerializer(string policyName, CachePolicy? policy, ValueSerializerRegistry registry)
+    private static CachePolicy? WithResolvedSerializer(string policyName, CachePolicy? policy, ValueSerializerRegistry registry, FormatNegotiationMode negotiation)
     {
         if (policy?.Serializer is not { } serializer)
         {
@@ -75,6 +77,13 @@ internal sealed class DefaultCachePolicyFactory : ICachePolicyFactory
             if (!read.Contains(write, StringComparer.OrdinalIgnoreCase))
             {
                 Fail($"Cache policy '{policyName}' writes '{write}' but Serializer.Read does not include it, so it would write values it refuses to read.");
+            }
+
+            if (negotiation == FormatNegotiationMode.Auto && !read.Contains(CacheValueFormats.JsonName, StringComparer.OrdinalIgnoreCase))
+            {
+                Fail(
+                    $"Cache policy '{policyName}' has a Serializer.Read without \"json\", but with FormatNegotiation.Mode = Auto the writer falls back to JSON until every node reads its format, so it would write values it refuses to read. " +
+                    "Add \"json\" to Serializer.Read, or set RedisCacheOptions.FormatNegotiation.Mode to Force.");
             }
         }
 

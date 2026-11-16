@@ -2,10 +2,11 @@ namespace UiPath.Caching.Serialization;
 
 internal readonly struct ReadOutcome<T>
 {
-    private ReadOutcome(T? value, int unreadableFormat, Exception? failure)
+    private ReadOutcome(T? value, int unreadableFormat, int excludedFormat, Exception? failure)
     {
         Value = value;
         UnreadableFormat = unreadableFormat;
+        ExcludedFormat = excludedFormat;
         Failure = failure;
     }
 
@@ -17,13 +18,18 @@ internal readonly struct ReadOutcome<T>
     /// <summary>What a registered serializer threw; null otherwise. A miss that keeps the key, since the data may be fine for another version of the type.</summary>
     public Exception? Failure { get; }
 
+    /// <summary>The format id of a value the policy's read list leaves out, or <see cref="ReadableFormats.JsonId"/> for headerless bytes; 0 otherwise. A counted miss that keeps the key: another policy or node reads it.</summary>
+    public int ExcludedFormat { get; }
+
     public bool IsUnreadable => UnreadableFormat != 0;
 
-    public bool IsMiss => IsUnreadable || Failure is not null;
+    public bool IsMiss => IsUnreadable || ExcludedFormat != 0 || Failure is not null;
 
-    public static ReadOutcome<T> Read(T? value) => new(value, 0, null);
+    public static ReadOutcome<T> Read(T? value) => new(value, 0, 0, null);
 
-    public static ReadOutcome<T> Unreadable(int formatId) => new(default, formatId, null);
+    public static ReadOutcome<T> Unreadable(int formatId) => new(default, formatId, 0, null);
 
-    public static ReadOutcome<T> Failed(Exception failure) => new(default, 0, failure);
+    public static ReadOutcome<T> Excluded(int formatId) => new(default, 0, formatId, null);
+
+    public static ReadOutcome<T> Failed(Exception failure) => new(default, 0, 0, failure);
 }
