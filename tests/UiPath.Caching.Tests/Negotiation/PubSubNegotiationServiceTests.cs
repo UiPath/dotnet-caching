@@ -293,7 +293,7 @@ public class PubSubNegotiationServiceTests
 
         negotiator.Writes.Should().BeFalse();
         logger.Records.Where(r => r.Level == LogLevel.Warning && r.Message.Contains("cannot be counted", StringComparison.Ordinal)).Should().ContainSingle()
-            .Which.Message.Should().Contain("refused PUBSUB NUMSUB").And.Contain("binary formats stay JSON").And.Contain("AssumeAllNodesCanRead");
+            .Which.Message.Should().Contain("refused PUBSUB NUMSUB").And.Contain("writes stay JSON").And.Contain("AssumeAllNodesCanRead");
 
         _subscribers.Denied = false;
         _subscribers.Count(Channel, 1);

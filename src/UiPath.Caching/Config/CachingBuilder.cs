@@ -58,7 +58,7 @@ public class CachingBuilder(IServiceCollection services, IConfiguration? configu
             ServiceDescriptor.Singleton<IValidateOptions<CacheOptions>, CacheKeyCasingSeeder>());
         Services.TryAddSingleton<ISerializerProxy<byte[]>>(sp => new SystemJsonByteSerializerProxy(sp.GetService<JsonSerializerOptions>()));
         Services.TryAddSingleton(ValueSerializerRegistration.BuildRegistry);
-        if (Services.Any(d => d.ServiceType == typeof(ValueSerializerRegistration) || d.ServiceType == typeof(BinaryEventSettings)))
+        if (Services.Any(d => d.ServiceType == typeof(ValueSerializerRegistration) || d.ServiceType == typeof(EventFormatRegistry)))
         {
             Services.TryAddSingleton(FormatNegotiation.Create);
             Services.TryAddSingleton(sp => ValueMigration.Create(sp)!);

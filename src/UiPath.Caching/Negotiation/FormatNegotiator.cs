@@ -3,12 +3,12 @@ using UiPath.Caching.Telemetry;
 namespace UiPath.Caching.Negotiation;
 
 /// <summary>
-/// Turns what the node list shows into which serializers, and whether the binary event format, are written now, whatever policy asks for them. A format
+/// Turns what the node list shows into which serializers, and whether the event format, are written now, whatever policy asks for them. A format
 /// is written only while every advertisement lists it and no live node is unaccounted for, and only after that has held for
 /// <see cref="FormatNegotiationOptions.UpgradeHold"/> since the reading nodes last gained a member. The first node that cannot read it stops the
 /// writes at once; a node that leaves never does.
 /// </summary>
-internal sealed class FormatNegotiator : IEffectiveFormat, IBinaryEvents
+internal sealed class FormatNegotiator : IEffectiveFormat, IEventWrites
 {
     public const string ReasonUnaccountedGroup = "unaccounted_group";
     public const string ReasonMissingFormat = "missing_format";
@@ -62,7 +62,7 @@ internal sealed class FormatNegotiator : IEffectiveFormat, IBinaryEvents
         _snapshot = Publish(new bool[_slots.Length], 0);
     }
 
-    /// <summary>Whether binary events are written now; always <see langword="false"/> for a node not set to write them.</summary>
+    /// <summary>Whether events are written in the event format now; always <see langword="false"/> for a node not set to write them.</summary>
     public bool Writes
     {
         get
@@ -334,19 +334,19 @@ internal sealed class FormatNegotiator : IEffectiveFormat, IBinaryEvents
         _blocking = key;
         if (blocking.Length > 0)
         {
-            _logger.LogWarning("Nodes live on a stream without an advertisement, so not sent a binary format: {Nodes}.", blocking);
+            _logger.LogWarning("Nodes live on a stream without an advertisement, so not sent a non-JSON format: {Nodes}.", blocking);
             _telemetry.TrackMetric(Metrics.FormatBlockers, view.Blockers.Count, [new("nodes", blocking)]);
         }
 
         if (channels.Length > 0)
         {
-            _logger.LogWarning("Subscribers no advertisement accounts for on Pub/Sub channels or patterns, so not sent a binary format: {Channels}. Pattern subscriptions are counted for the whole server, other apps' included; set FormatNegotiation:AssumeAllNodesCanRead to attest that every node reads binary formats.", channels);
+            _logger.LogWarning("Subscribers no advertisement accounts for on Pub/Sub channels or patterns, so not sent a non-JSON format: {Channels}. Pattern subscriptions are counted for the whole server, other apps' included; set FormatNegotiation:AssumeAllNodesCanRead to attest that every node reads the format.", channels);
             _telemetry.TrackMetric(Metrics.FormatBlockers, view.Subscribers!.Surplus, [new("channels", channels)]);
         }
 
         if (missing.Length > 0)
         {
-            _logger.LogWarning("Pub/Sub channels with fewer subscribers than the advertisements claim, so not sent a binary format until the claims expire: {Channels}.", missing);
+            _logger.LogWarning("Pub/Sub channels with fewer subscribers than the advertisements claim, so not sent a non-JSON format until the claims expire: {Channels}.", missing);
             _telemetry.TrackMetric(Metrics.FormatBlockers, view.Subscribers!.ShortChannels!.Count, [new("short_channels", missing)]);
         }
     }
@@ -362,7 +362,7 @@ internal sealed class FormatNegotiator : IEffectiveFormat, IBinaryEvents
 
         if (why is not null)
         {
-            _logger.LogWarning("Pub/Sub subscribers cannot be counted ({Why}), so binary formats stay JSON. Set FormatNegotiation:AssumeAllNodesCanRead to attest that every node reads them.", why);
+            _logger.LogWarning("Pub/Sub subscribers cannot be counted ({Why}), so writes stay JSON. Set FormatNegotiation:AssumeAllNodesCanRead to attest that every node reads them.", why);
         }
         else
         {
@@ -383,7 +383,7 @@ internal sealed class FormatNegotiator : IEffectiveFormat, IBinaryEvents
         return new(writers, stamp);
     }
 
-    /// <summary>A serializer, or the binary event format when <paramref name="Writer"/> is <see langword="null"/>, with what a node must read to be sent it.</summary>
+    /// <summary>A serializer, or the event format when <paramref name="Writer"/> is <see langword="null"/>, with what a node must read to be sent it.</summary>
     private sealed record Slot(ICacheValueSerializer? Writer, IReadOnlyList<string> Tokens, IReadOnlyCollection<string> Policies, IReadOnlyCollection<string> Others)
     {
         public bool IsEvent => Writer is null;

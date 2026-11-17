@@ -606,9 +606,9 @@ Telemetry is emitted only while this runs; see [telemetry](#telemetry-of-the-swi
 
 #### Events
 
-Events use the same node list and the same rules, decided apart from values. Each advertisement also lists the event formats the node decodes (`er`): an app with the
-binary decoder registered (`AddMessagePackEvents`, either `write`) lists JSON and binary; a node with a serializer registered and no decoder lists JSON; a node before this version
-lists nothing, and so counts as one that cannot say what it reads. An app with the decoder and no value serializer advertises and decides too, and lists JSON for values.
+Events use the same node list and the same rules, decided apart from values. Each advertisement also lists the event formats the node decodes (`er`): an app with an
+event format registered (`AddMessagePackEvents` or `AddEventFormat`, either `write`) lists JSON and that format; a node with a serializer registered and no event format lists JSON; a node before this version
+lists nothing, and so counts as one that cannot say what it reads. An app with an event format and no value serializer advertises and decides too, and lists JSON for values.
 
 - `AddMessagePackEvents(write: true)` means binary events once every advertisement lists binary, no live node is unaccounted for, and `UpgradeHold` has passed. The first node that
   lists only JSON, or an unaccounted node, switches the events back to JSON at once. `write: false` always writes JSON and `Force` always writes binary.
