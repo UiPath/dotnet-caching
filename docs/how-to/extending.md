@@ -404,6 +404,19 @@ without decoding them.
 With `write: true` and `FormatNegotiation:Mode` `Auto` the node writes JSON until every node lists the format's token (its id as two hex digits) in
 `er`, as described for [MessagePack events](#messagepack-events). The factory runs when the formatter is first resolved, and the container owns and disposes what it returns.
 
+### Writing a serialization plugin
+
+A plugin is a package that calls `AddValueSerializer`, `AddEventFormat` or both, through public API only; the first-party MessagePack package is built the same way.
+`tests/UiPath.Caching.PluginContract.Tests` holds a fake third-party plugin that exercises every seam: registration, round trip, `Read` lists, `MigrateOnRead`, the census, the negotiated switch, named stacks and the JSON decoder next to a plugin's events. It runs against the library, not against your plugin, but it is the one to copy from.
+
+- **Value ids.** Take two-byte ids, `0x100`-`0x17F`, and ask for a row in [format ids](../reference/format-ids.md) by pull request. `0x01`-`0x0F` (except `0x09`, `0x0A`, `0x0D`) is allocated by that table and `0x10`-`0x1E` is for an application's own serializers. Make the ids an option with the row as default, so an application can move a plugin whose ids clash with its own. A second id of your own is how a plugin keeps a variant, such as a compressed one; the library never looks inside the payload.
+- **Event id.** One byte, `0x01`-`0x0F` (except `0x09`, `0x0A`, `0x0D`) or `0x10`-`0x1E`. A published plugin takes it from the allocated range by a row, like a value id; value and event ids are separate. The fake plugin uses the application-private `0x11` for its events because it is never published.
+- **Round trip.** `Deserialize(Serialize(x))` must give back `x`, and `Serialize` must give the same bytes for the same value on every call. `MigrateOnRead` rewrites a value only when that holds and counts one that fails it as lossy. `Deserialize` throws on an id it does not own and on corrupt or truncated input, never returning part of a value; the reader turns the throw into a miss and keeps the key.
+- **Ids declared once.** `FormatIds` must equal the ids passed to `AddValueSerializer`; a mismatch throws when the registry is built, on first cache use, and disposes what was built. An event `Encode` must start with `formatId`; one that does not is written as JSON and logged once as an error, so an invalidation is never lost.
+- **One writer.** Any number of formats decode, only one event format has `write: true`. To move from one plugin to another, deploy the new one beside the old, switch `Serializer.Write` and the event `write` flag once every node has it, and keep the old plugin registered until `CountFormatsAsync` shows none of its values.
+- **Source matching.** An event formatter may also implement `IEventSourceMatcherProvider` to tell its own events from a peer's without decoding them; one that does not is decoded and compared.
+- **Thread safety.** One serializer instance serves every thread and cache; keep no state between calls.
+
 ### Distributed cache keyspace
 
 The distributed cache stores each entry as a Redis hash with a `data` field plus `absexp`/`sldexp`

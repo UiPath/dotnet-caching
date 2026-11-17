@@ -32,12 +32,22 @@ jobs:
       - name: Build
         run: dotnet build tests/UiPath.Caching.Tests -c Release -f net10.0
 
+      - name: Build plugin contract tests
+        run: dotnet build tests/UiPath.Caching.PluginContract.Tests -c Release -f net10.0
+
       - name: Test
         timeout-minutes: 10
         env:
           RUN_REDIS_INTEGRATION_TESTS: '1'
           REDIS_CONNECTION_STRING: 'localhost:6379'
         run: ./tests/UiPath.Caching.Tests/bin/Release/net10.0/UiPath.Caching.Tests
+
+      - name: Plugin contract tests
+        timeout-minutes: 10
+        env:
+          RUN_REDIS_INTEGRATION_TESTS: '1'
+          REDIS_CONNECTION_STRING: 'localhost:6379'
+        run: ./tests/UiPath.Caching.PluginContract.Tests/bin/Release/net10.0/UiPath.Caching.PluginContract.Tests
 
   build-linux:
     runs-on: uipath-ubuntu-latest
