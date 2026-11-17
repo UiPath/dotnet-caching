@@ -1,6 +1,7 @@
 using System.Text;
 using NSubstitute.ExceptionExtensions;
 using StackExchange.Redis;
+using StackExchange.Redis.KeyspaceIsolation;
 using UiPath.Caching.Policies;
 
 namespace UiPath.Caching.Tests.Broadcast;
@@ -163,6 +164,18 @@ public class RedisPubSubTopicTests(ITestContextAccessor testContextAccessor) : I
         executed.Should().BeTrue();
     }
 
+
+    [Fact]
+    public async Task A_connector_that_prefixes_its_keys_publishes_on_the_channel_it_subscribes_to()
+    {
+        _database.Multiplexer.GetDatabase(Arg.Any<int>(), Arg.Any<object?>()).Returns(_database);
+        _redisConnector.Database.Returns(_database.WithKeyPrefix("pfx:"));
+        var sut = await Sut();
+
+        (await sut.PublishAsync(new TestCacheEvent { Id = Guid.NewGuid().ToString(), Source = new Uri("urn:machine") }, testContextAccessor.Current.CancellationToken)).Should().BeTrue();
+
+        _channel.ToString().Should().Be(_topicKey, "the subscriber carries no key prefix, so an event published with one reaches nobody");
+    }
 
     [Fact]
     public async Task Canceling_token_stops_execution()

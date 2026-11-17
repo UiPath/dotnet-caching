@@ -6,7 +6,7 @@ namespace UiPath.Caching.Broadcast.Redis;
 public class RedisStreamsTopicOptions : IBindsFromConfiguration
 {
     internal static readonly TimeSpan DefaultPollInterval = TimeSpan.FromMilliseconds(250);
-    internal static readonly TimeSpan DefaultNotifiedPollInterval = TimeSpan.FromSeconds(5);
+    internal static readonly TimeSpan DefaultNotifiedPollInterval = TimeSpan.FromSeconds(1);
 
     // Zero, not a few milliseconds: a short Task.Delay lasts the platform timer's tick (about 15 ms on Windows), which would
     // hold every doorbell in a burst that long. One doorbell in flight at a time bounds the rate without a timer.
@@ -44,7 +44,7 @@ public class RedisStreamsTopicOptions : IBindsFromConfiguration
         set => _pollInterval = value;
     }
 
-    /// <summary>Poll cadence while the doorbell subscription is live; <c>null</c> is 5 s, or <see cref="PollInterval"/> when that was set. Must be at least <see cref="PollInterval"/>.</summary>
+    /// <summary>Poll cadence while the doorbell subscription is live; <c>null</c> is 1 s, or <see cref="PollInterval"/> when that was set. Must be at least <see cref="PollInterval"/>.</summary>
     public TimeSpan? NotifiedPollInterval { get; set; }
 
     public IRedisStreamKeyStrategy? RedisStreamKeyStrategy { get; set; }

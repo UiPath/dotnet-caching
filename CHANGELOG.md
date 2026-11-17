@@ -6,6 +6,20 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 
 ## [Unreleased]
 
+### Changed
+
+- **A connector that prefixes its keys keeps the one-command entry and doorbell.** Since 3.1.1 such a connector sent the `XADD` and the doorbell as two commands, on the belief that the script could not prefix its channel. The script's channel never needed the key prefix, since the subscription has none. Only a multiplexer `ChannelPrefix` now turns the script off, and a reconnect to a multiplexer without one turns it on again.
+
+- **`NotifiedPollInterval` defaults to 1 s, was 5 s.** A doorbell lost while its subscription still looks live now costs up to 1 s instead of 5 s. An idle topic costs about 4 server-executed commands a second per process at 1 s, against 0.8 at 5 s and 15 at 250 ms. Set `NotifiedPollInterval` to `0:00:05` for the previous cadence. An app that sets `NotifiedPollInterval` or `PollInterval` keeps its values.
+
+### Fixed
+
+- **Redis Pub/Sub events reach the other nodes when the connector's database prefixes its keys.** The Pub/Sub topic published through the connector's `Database`, so a `WithKeyPrefix` database put the key prefix in front of the channel, while the subscription carried none. Every event was lost: Pub/Sub has no poll to fall back on. It now publishes through the multiplexer's own database, like the subscription. A connector whose `Database` is a decorator of its own no longer sees these publishes; the stream entries and cache commands still go through it.
+
+- **The Redis Streams doorbell reaches the other nodes when the connector's database prefixes its keys.** A connector whose `Database` is a `WithKeyPrefix` database published the doorbell on the channel with the key prefix in front, while the subscription, taken through `Subscriber`, carried none. No node was ever woken, the subscription still read as live, and an invalidation reached the other nodes up to one `NotifiedPollInterval` late (5 s by default, or `PollInterval` when that is set). Every release with the doorbell publishes this way; it became visible in 3.1.0, when the notified interval went to 5 s. The doorbell is now published through the multiplexer's own database, so it gets the multiplexer's `ChannelPrefix`, as the subscription does, and no key prefix. A connector whose `Database` is a decorator of its own no longer sees the doorbell.
+
+- **A Redis Streams reader whose doorbell does not deliver goes back to `PollInterval` by itself.** A reader kept `NotifiedPollInterval` for as long as its doorbell subscription read as live, also when no doorbell ever arrived: a writer that does not ring, or one that rings another channel name, left every invalidation up to one notified interval late with nothing in the logs. A wait that began with the doorbell live, ran its whole interval and then found another node's entry is now counted as an unannounced read. After two in a row, with no doorbell arriving between them, the reader logs a warning ("Entries of other nodes reached topic ... with no doorbell"), records the telemetry event `cache.topic.doorbell_missed` with a `topic` tag, and polls at `PollInterval`. It returns to `NotifiedPollInterval`, with an information log line and `cache.topic.doorbell_recovered`, once a doorbell arrives and no read was unannounced for 12 notified intervals, or when the subscription is taken again. Nothing changes for a topic whose doorbells arrive, or with `NotifiedPollInterval` equal to `PollInterval`. A stream that mixes ringing and silent writers may not trigger it; set `NotifiedPollInterval` to `PollInterval` there.
+
 ## [3.1.1] - 2026-11-10
 
 ### Added

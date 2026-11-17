@@ -203,7 +203,7 @@ one node would update L2 but leave every other node's L1 holding the old value
 until it naturally expired. If `LocalMaxExpiration` were set to ten minutes,
 every node except the writing one would serve stale data for up to ten minutes.
 Topics collapse that window to a few Redis round trips when the doorbell rings; a missed ring
-waits for the next poll, `NotifiedPollInterval` (5 s for `RedisStreams` by default).
+waits for the next poll, `NotifiedPollInterval` (1 s for `RedisStreams` by default).
 
 The library ships two topic transports, named in `KnownTopicNames`.
 
@@ -211,7 +211,7 @@ The library ships two topic transports, named in `KnownTopicNames`.
 for publishing and XREADGROUP for consuming — with a consumer group per process.
 Delivery is at-least-once and durable: events are retained in the stream and can
 be replayed if a consumer falls behind or restarts. The consumer polls the stream
-at `PollInterval` (default 250 ms; `NotifiedPollInterval` while the doorbell is live, 5 s unless `PollInterval` is set), and by default (`NotifyEnabled`) the
+at `PollInterval` (default 250 ms; `NotifiedPollInterval` while the doorbell is live, 1 s unless `PollInterval` is set), and by default (`NotifyEnabled`) the
 publisher also rings a Pub/Sub notify channel that acts as a doorbell: a cheap
 PUBLISH message wakes the poll loop immediately, so delivery takes a few Redis
 round trips in the common case while stream durability is preserved for lagging
