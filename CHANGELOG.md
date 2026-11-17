@@ -6,6 +6,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 
 ## [Unreleased]
 
+## [3.1.2] - 2026-11-17
+
+- **Dependency floors.** Unchanged from 3.1.1. Only the sample app host's Aspire pin moved, to 13.6.5.
+
 ### Changed
 
 - **A connector that prefixes its keys keeps the one-command entry and doorbell.** Since 3.1.1 such a connector sent the `XADD` and the doorbell as two commands, on the belief that the script could not prefix its channel. The script's channel never needed the key prefix, since the subscription has none. Only a multiplexer `ChannelPrefix` now turns the script off, and a reconnect to a multiplexer without one turns it on again.
