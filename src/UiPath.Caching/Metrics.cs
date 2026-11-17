@@ -21,6 +21,10 @@ public static class Metrics
     public const string FormatNodes = "cache.format.nodes";
     public const string FormatBlockers = Prefix + "FormatBlockers";
 
+    public const string SerializerRead = "cache.serializer.read";
+    public const string SerializerWrite = "cache.serializer.write";
+    public const string SerializerRewrite = "cache.serializer.rewrite";
+
     public const string TopicName = nameof(TopicName);
     public const string SequenceNumber = nameof(SequenceNumber);
     public const string Invalid = nameof(Invalid);

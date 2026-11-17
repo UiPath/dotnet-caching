@@ -19,11 +19,14 @@ public abstract class RedisCacheBase : IConnectionState, IMasterReadScope, IDisp
     private readonly RedisKey _keyPrefixKey;
     private readonly ConnectorKeyPrefix _connectorPrefix;
     private readonly RecentTouches? _recentTouches;
+    private readonly bool _serializerMetrics;
     private bool? _supportsExpireTime;
     // Set once scripts turn out to be disabled or denied on this server; reads then send the value and TTL commands as a pair.
     private bool _noReadScript;
     // Set by the first script that succeeds; until then any failure of a script turns scripts off.
     private bool _readScriptWorked;
+    // Set when scripts are off, and for good once the server refuses the rewrite script; a rewrite then sends the transaction.
+    private bool _noRewriteScript;
     private bool _disposed;
 
     protected RedisCacheBase(
@@ -51,6 +54,8 @@ public abstract class RedisCacheBase : IConnectionState, IMasterReadScope, IDisp
         Clock = clock;
         KeyReadTelemetryEnabled = redisCacheOptions.KeyReadTelemetryEnabled;
         _noReadScript = !redisCacheOptions.ReadScriptsEnabled;
+        _noRewriteScript = !redisCacheOptions.ReadScriptsEnabled;
+        _serializerMetrics = Telemetry is not NullTelemetryProvider;
         if (redisCacheOptions.MasterReadWindow <= TimeSpan.Zero)
         {
             throw new InvalidOperationException($"RedisCacheOptions.{nameof(RedisCacheOptions.MasterReadWindow)} must be positive; it is {redisCacheOptions.MasterReadWindow}.");
@@ -92,6 +97,11 @@ public abstract class RedisCacheBase : IConnectionState, IMasterReadScope, IDisp
 
     internal RecentTouches? RecentTouches => _recentTouches;
 
+    internal bool RewriteScriptsOn => !Volatile.Read(ref _noRewriteScript);
+
+    /// <summary>Whether a serializer metric goes anywhere; a call site asks first, so it looks up no format name for a provider that discards them.</summary>
+    internal bool SerializerMetricsOn => _serializerMetrics;
+
     protected ICachingTelemetryProvider Telemetry { get; }
 
     protected bool KeyReadTelemetryEnabled { get; }
@@ -127,6 +137,26 @@ public abstract class RedisCacheBase : IConnectionState, IMasterReadScope, IDisp
     internal void NoteInvalidated(IRedisKeyStrategy keyStrategy, CacheKey key) => _recentTouches?.Touch(keyStrategy.GetRedisKey(key));
 
     internal void NoteAllInvalidated() => _recentTouches?.TouchAll();
+
+    internal void RewriteScriptRefused() => Volatile.Write(ref _noRewriteScript, true);
+
+    /// <summary>Values read or written, by the format they were in.</summary>
+    internal void TrackSerializer(string metric, string format, string cacheName, int count = 1)
+    {
+        if (!_serializerMetrics)
+        {
+            return;
+        }
+
+        try
+        {
+            Telemetry.TrackMetric(metric, count, [new("format", format), new("cache", cacheName)]);
+        }
+        catch (Exception ex)
+        {
+            Telemetry.TryTrackException(ex);
+        }
+    }
 
     internal void TrackUnreadable(int formatId, string cacheName)
     {

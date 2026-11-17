@@ -14,6 +14,9 @@ internal sealed class ValueReader(ISerializerProxy<byte[]> json, ValueSerializer
     /// <summary>False for a custom proxy or a subclass: its bytes are not known to be JSON, so a write it makes cannot stand in for one with a header.</summary>
     public bool JsonProxyIsDefault => _jsonProxyIsDefault;
 
+    /// <summary>The name a format is counted under: <c>json</c>, or what its serializer is registered as.</summary>
+    public string NameOf(int formatId) => registry.NameOf(formatId);
+
     public bool SniffsFor(CachePolicy? policy) =>
         !registry.IsEmpty && (_jsonProxyIsDefault || WritesHeaders(policy));
 
@@ -50,7 +53,7 @@ internal sealed class ValueReader(ISerializerProxy<byte[]> json, ValueSerializer
 
         try
         {
-            return ReadOutcome<T>.Read(serializer.Deserialize<T>(formatId, new ReadOnlySequence<byte>(value, headerLength, value.Length - headerLength)));
+            return ReadOutcome<T>.Read(serializer.Deserialize<T>(formatId, new ReadOnlySequence<byte>(value, headerLength, value.Length - headerLength)), formatId);
         }
         catch (Exception ex) when (ex is not OutOfMemoryException)
         {

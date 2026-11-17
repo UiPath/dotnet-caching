@@ -34,6 +34,9 @@ internal sealed class FakeRedisConnector : IRedisConnector
     /// <summary>GETs sent so far.</summary>
     public long Gets => Volatile.Read(ref _store.GetCount);
 
+    /// <summary>Stores a hash for HGETALL to answer.</summary>
+    public void SeedHash(RedisKey key, HashEntry[] entries) => _store.Hashes[key] = entries;
+
     /// <summary>Removes the key most recently SET, in constant time.</summary>
     public void ForgetLastWrite()
     {
@@ -56,6 +59,7 @@ internal sealed class FakeRedisConnector : IRedisConnector
 internal sealed class FakeRedisStore : IDisposable
 {
     public readonly ConcurrentDictionary<RedisKey, RedisValue> Values = new();
+    public readonly ConcurrentDictionary<RedisKey, HashEntry[]> Hashes = new();
     public long GetCount;
     public RedisKey? LastSet;
     private readonly BlockingCollection<(TaskCompletionSource<RedisValue> Reply, RedisValue Value)> _replies = [];
@@ -106,6 +110,11 @@ internal class FakeProxy<T> : DispatchProxy
         if (method.Name == "StringGetAsync" && args is [RedisKey key, ..])
         {
             return _store.Get(key);
+        }
+
+        if (method.Name == "HashGetAllAsync" && args is [RedisKey hashKey, ..])
+        {
+            return Task.FromResult(_store.Hashes.TryGetValue(hashKey, out var entries) ? entries : []);
         }
 
         if (method.Name == "StringSetAsync" && args is [RedisKey setKey, RedisValue value, ..])

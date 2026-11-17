@@ -2,15 +2,19 @@ namespace UiPath.Caching.Serialization;
 
 internal readonly struct ReadOutcome<T>
 {
-    private ReadOutcome(T? value, int unreadableFormat, int excludedFormat, Exception? failure)
+    private ReadOutcome(T? value, int unreadableFormat, int excludedFormat, Exception? failure, int sourceFormat = 0)
     {
         Value = value;
+        SourceFormat = sourceFormat;
         UnreadableFormat = unreadableFormat;
         ExcludedFormat = excludedFormat;
         Failure = failure;
     }
 
     public T? Value { get; }
+
+    /// <summary>The format id a read value was stored under; 0 for headerless JSON.</summary>
+    public int SourceFormat { get; }
 
     /// <summary>The format id no registered serializer reads, or -1 for a header cut short; 0 otherwise. Only such data is removed.</summary>
     public int UnreadableFormat { get; }
@@ -25,7 +29,7 @@ internal readonly struct ReadOutcome<T>
 
     public bool IsMiss => IsUnreadable || ExcludedFormat != 0 || Failure is not null;
 
-    public static ReadOutcome<T> Read(T? value) => new(value, 0, 0, null);
+    public static ReadOutcome<T> Read(T? value, int sourceFormat = 0) => new(value, 0, 0, null, sourceFormat);
 
     public static ReadOutcome<T> Unreadable(int formatId) => new(default, formatId, 0, null);
 
