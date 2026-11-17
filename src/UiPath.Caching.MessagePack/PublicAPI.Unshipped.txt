@@ -11,3 +11,8 @@ UiPath.Caching.MessagePack.MessagePackValueSerializerOptions.MessagePackValueSer
 UiPath.Caching.MessagePack.MessagePackValueSerializerOptions.SerializerOptions.get -> MessagePack.MessagePackSerializerOptions?
 UiPath.Caching.MessagePack.MessagePackValueSerializerOptions.SerializerOptions.set -> void
 static UiPath.Caching.MessagePack.MessagePackCachingBuilderExtensions.AddMessagePackEvents(this UiPath.Caching.Config.ICachingBuilder! builder, bool write) -> UiPath.Caching.Config.ICachingBuilder!
+const UiPath.Caching.MessagePack.MessagePackFormats.Event = 2 -> int
+const UiPath.Caching.MessagePack.MessagePackFormats.Value = 2 -> int
+const UiPath.Caching.MessagePack.MessagePackFormats.ValueLz4 = 3 -> int
+static UiPath.Caching.MessagePack.MessagePackFormats.ValueIds.get -> System.Collections.Generic.IReadOnlyList<int>!
+UiPath.Caching.MessagePack.MessagePackFormats

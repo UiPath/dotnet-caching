@@ -38,7 +38,7 @@ public sealed class MessagePackEventIntegrationTests(RedisContainerFixture fixtu
 
         (await UntilAsync(async () => (await peer.GetAsync<string>(key, Ct)).ContainsKey("b"))).Should().BeTrue("the peer applies the field from the binary event");
         (await peer.GetAsync<string>(key, Ct)).Should().BeEquivalentTo(Fields(("a", "1"), ("b", "2")));
-        (await StreamBodies()).Should().Contain(body => body[0] == CacheValueFormats.MessagePack, "the events on the wire are binary");
+        (await StreamBodies()).Should().Contain(body => body[0] == MessagePackFormats.Event, "the events on the wire are binary");
     }
 
     [Fact]
@@ -105,11 +105,11 @@ public sealed class MessagePackEventIntegrationTests(RedisContainerFixture fixtu
             bodies.Should().NotBeEmpty();
             if (events == Events.WriteBinary)
             {
-                bodies.Should().Contain(body => body[0] == CacheValueFormats.MessagePack);
+                bodies.Should().Contain(body => body[0] == MessagePackFormats.Event);
             }
             else
             {
-                bodies.Should().NotContain(body => body[0] == CacheValueFormats.MessagePack);
+                bodies.Should().NotContain(body => body[0] == MessagePackFormats.Event);
                 bodies.Select(System.Text.Encoding.UTF8.GetString).Should().Contain(body => body.Contains("\"source\":"), "the JSON wire is the CloudEvents one");
             }
         }

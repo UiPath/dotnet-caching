@@ -1,5 +1,5 @@
 #nullable enable
-static UiPath.Caching.Config.ValueSerializerBuilderExtensions.AddValueSerializer(this UiPath.Caching.Config.ICachingBuilder! builder, string! name, System.Func<System.IServiceProvider!, UiPath.Caching.ICacheValueSerializer!>! factory) -> UiPath.Caching.Config.ICachingBuilder!
+static UiPath.Caching.Config.ValueSerializerBuilderExtensions.AddValueSerializer(this UiPath.Caching.Config.ICachingBuilder! builder, string! name, System.Collections.Generic.IReadOnlyList<int>! formatIds, System.Func<System.IServiceProvider!, UiPath.Caching.ICacheValueSerializer!>! factory) -> UiPath.Caching.Config.ICachingBuilder!
 UiPath.Caching.Config.ValueSerializerBuilderExtensions
 UiPath.Caching.Redis.FormatNegotiationMode
 UiPath.Caching.Redis.FormatNegotiationMode.Auto = 0 -> UiPath.Caching.Redis.FormatNegotiationMode

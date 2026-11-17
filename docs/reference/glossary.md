@@ -26,7 +26,7 @@ Alphabetical lookup for terms used across the docs.
 
 **Event** — A message published on a topic, such as a set, a removal or a refresh of a key. Its effect on a receiving node is an [invalidation](#invalidation).
 
-**Format id** — The byte in front of a value that a [value serializer](../how-to/extending.md#value-serializers) wrote, naming the format so any node can pick the right reader. JSON has none. Consumer ids are `0x10`-`0x1E` and `0x100`-`0x1FF`; the library keeps the rest. See [concepts.md](../concepts.md#value-serializers-and-the-format-header).
+**Format id** — The byte in front of a value that a [value serializer](../how-to/extending.md#value-serializers) wrote, naming the format so any node can pick the right reader. JSON has none. Application-private ids are `0x10`-`0x1E` and `0x100`-`0x1FF`; `0x01`-`0x0F` (except `0x09`, `0x0A`, `0x0D`) are allocated by [format-ids.md](format-ids.md). See [concepts.md](../concepts.md#value-serializers-and-the-format-header).
 
 **Generated expiration** — A lifetime the generator picks for the value it returns, instead of the policy. `GetOrAddWithExpirationAsync` takes a `GeneratedValue<T>`; a null expiration leaves it to the policy.
 

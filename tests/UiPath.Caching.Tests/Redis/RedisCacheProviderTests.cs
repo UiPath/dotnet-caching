@@ -36,7 +36,7 @@ public class RedisCacheProviderTests : IAsyncLifetime
     [Fact]
     public void Provider_passes_the_registry_to_both_caches()
     {
-        var registry = new ValueSerializerRegistry([("fast", new FakeValueSerializer(0x10), false)]);
+        var registry = new ValueSerializerRegistry([RegistryEntry.Of("fast", new FakeValueSerializer(0x10))]);
         using var sut = new RedisCacheProvider(
             _fixture.Create<IOptions<RedisCacheOptions>>(),
             _fixture.Create<IOptions<CacheOptions>>(),

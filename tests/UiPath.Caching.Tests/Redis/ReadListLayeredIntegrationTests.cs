@@ -138,7 +138,7 @@ public class ReadListLayeredIntegrationTests(RedisContainerFixture fixture)
             {
                 b.AddRedisConnection(o => o.ConnectionString = fixture.ConnectionString);
                 b.AddRedis(o => o.FormatNegotiation.Mode = FormatNegotiationMode.Force);
-                b.AddValueSerializer("fast", _ => _serializer);
+                b.AddValueSerializer("fast", _serializer.FormatIds, _ => _serializer);
                 b.AddInMemoryRedis(_ => { });
                 if (versioned)
                 {

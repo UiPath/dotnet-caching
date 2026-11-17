@@ -515,7 +515,7 @@ public sealed class PeerFieldUpdateIntegrationTests(RedisContainerFixture fixtur
                     b.AddInMemoryRedis(o => o.PeerFieldUpdates = peerFieldUpdates);
                     if (headered)
                     {
-                        b.AddValueSerializer("fast", _ => new PassthroughValueSerializer(0x10));
+                        b.AddValueSerializer("fast", [0x10], _ => new PassthroughValueSerializer(0x10));
                     }
                 },
                 o =>

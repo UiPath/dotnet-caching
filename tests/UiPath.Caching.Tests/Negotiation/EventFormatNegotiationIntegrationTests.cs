@@ -166,7 +166,7 @@ public class EventFormatNegotiationIntegrationTests(RedisContainerFixture fixtur
             await WaitAsync(() => !writes.Writes, TimeSpan.FromSeconds(15));
             await cache.SetAsync("k1", "json-while-blocked", TimeSpan.FromMinutes(1), policy: null, Ct);
             await WaitAsync(() => received.Any(body => body[0] == (byte)'{'), TimeSpan.FromSeconds(10));
-            received.Should().NotContain(body => body[0] == CacheValueFormats.MessagePack);
+            received.Should().NotContain(body => body[0] == MessagePackFormats.Event);
 
             // It leaves: two clean views and the hold, and they are binary.
             await raw.GetSubscriber().UnsubscribeAsync(channel);
@@ -175,7 +175,7 @@ public class EventFormatNegotiationIntegrationTests(RedisContainerFixture fixtur
             await raw.GetSubscriber().SubscribeAsync(channel, (_, value) => received.Enqueue((byte[])value!));
             await cache.SetAsync("k2", "binary-until-it-returns", TimeSpan.FromMinutes(1), policy: null, Ct);
             await WaitAsync(() => !received.IsEmpty, TimeSpan.FromSeconds(10));
-            received.Should().Contain(body => body[0] == CacheValueFormats.MessagePack, "the returning subscriber is not yet seen, and a node that reads both loses nothing");
+            received.Should().Contain(body => body[0] == MessagePackFormats.Event, "the returning subscriber is not yet seen, and a node that reads both loses nothing");
 
             // Seen in two views, it stops them again.
             await WaitAsync(() => !writes.Writes, TimeSpan.FromSeconds(15));
@@ -222,7 +222,7 @@ public class EventFormatNegotiationIntegrationTests(RedisContainerFixture fixtur
 
             await WaitAsync(() => writes.Writes, TimeSpan.FromSeconds(30));
             await cache.SetAsync("k2", "binary", TimeSpan.FromMinutes(1), policy: null, Ct);
-            (await LastBodyAsync(db, streamKey))[0].Should().Be(CacheValueFormats.MessagePack);
+            (await LastBodyAsync(db, streamKey))[0].Should().Be(MessagePackFormats.Event);
 
             await db.StreamReadGroupAsync(streamKey, "urn:node-old", "urn:node-old", ">", 1);
             await WaitAsync(() => !writes.Writes, TimeSpan.FromSeconds(5));

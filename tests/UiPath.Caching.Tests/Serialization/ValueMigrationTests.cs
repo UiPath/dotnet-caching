@@ -195,7 +195,7 @@ public class ValueMigrationTests
     public void A_target_serializer_that_throws_for_the_value_is_a_value_that_would_not_come_out_the_same_and_is_logged()
     {
         var target = new ThrowingSerializer();
-        var registry = new ValueSerializerRegistry([("fast", target, false)]);
+        var registry = new ValueSerializerRegistry([RegistryEntry.Of("fast", target)]);
         var logger = new RecordedLogger();
         using var sut = new ValueMigration(
             new FormatMigrator(new RecordingTelemetryProvider(), TimeProvider.System, logger),
@@ -212,7 +212,7 @@ public class ValueMigrationTests
     private static CachePolicy Policy(string write, bool? migrate, string[]? read = null) =>
         new() { Serializer = new SerializerPolicy { Write = write, Read = read, MigrateOnRead = migrate } };
 
-    private ValueSerializerRegistry Registry() => new([("fast", _fast, false), ("other", _other, false)]);
+    private ValueSerializerRegistry Registry() => new([RegistryEntry.Of("fast", _fast), RegistryEntry.Of("other", _other)]);
 
     private ValueFormatResolver Resolver(CachePolicy? defaultPolicy = null, IEffectiveFormat? effective = null) =>
         new(new SystemJsonByteSerializerProxy(), Registry(), defaultPolicy ?? new CachePolicy(), effective);

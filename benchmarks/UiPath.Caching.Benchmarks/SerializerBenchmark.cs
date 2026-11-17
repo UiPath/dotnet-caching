@@ -51,7 +51,7 @@ public class SerializerBenchmark
         };
         _payload = JsonSerializer.SerializeToUtf8Bytes(_obj);
 
-        var registry = Registered ? new ValueSerializerRegistry([("bench", new UnusedSerializer(), false)]) : ValueSerializerRegistry.Empty;
+        var registry = Registered ? new ValueSerializerRegistry([RegistryEntry.Of("bench", new UnusedSerializer())]) : ValueSerializerRegistry.Empty;
         _policy = Registered ? new CachePolicy { Serializer = new SerializerPolicy { Write = "json" } } : null;
         var defaultPolicy = Registered && DefaultReads ? new CachePolicy { Serializer = new SerializerPolicy { Write = "json", Read = ["json", "bench"] } } : null;
         _redis = new FakeRedisConnector();
@@ -232,7 +232,7 @@ public class MigrateOnReadBenchmark
     public void Setup()
     {
         _obj = Size == "Small" ? CustomObject.RandomSmall() : CustomObject.RandomMedium();
-        var registry = new ValueSerializerRegistry([("bench", new JsonBodySerializer(), false)]);
+        var registry = new ValueSerializerRegistry([RegistryEntry.Of("bench", new JsonBodySerializer())]);
         var proxy = new SystemJsonByteSerializerProxy();
         _migration = new ValueMigration(new FormatMigrator(NullTelemetryProvider.Instance, TimeProvider.System, NullLogger.Instance), new ValueRewriter(proxy, registry), registry, effective: null);
         _policy = new CachePolicy { Serializer = new SerializerPolicy { Write = "bench", MigrateOnRead = Mode != "off" } };
@@ -315,7 +315,7 @@ public class MigrateOnReadHashBenchmark
     {
         var obj = Size == "Small" ? CustomObject.RandomSmall() : CustomObject.RandomMedium();
         var serializer = new JsonBodySerializer();
-        var registry = new ValueSerializerRegistry([("bench", serializer, false)]);
+        var registry = new ValueSerializerRegistry([RegistryEntry.Of("bench", serializer)]);
         var proxy = new SystemJsonByteSerializerProxy();
         _migration = new ValueMigration(new FormatMigrator(NullTelemetryProvider.Instance, TimeProvider.System, NullLogger.Instance), new ValueRewriter(proxy, registry), registry, effective: null);
         _policy = new CachePolicy { Serializer = new SerializerPolicy { Write = "bench", MigrateOnRead = Mode != "off" } };

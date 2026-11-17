@@ -18,7 +18,7 @@ public class MessagePackValueSerializerTests
 
         var (id, bytes) = Write(value);
 
-        id.Should().Be(CacheValueFormats.MessagePack);
+        id.Should().Be(MessagePackFormats.Value);
         Read<Plain>(id, bytes).Should().BeEquivalentTo(value);
     }
 
@@ -80,7 +80,7 @@ public class MessagePackValueSerializerTests
         writer.Write(1);
         writer.Flush();
 
-        var act = () => Read<object>(CacheValueFormats.MessagePack, nested.WrittenMemory.ToArray());
+        var act = () => Read<object>(MessagePackFormats.Value, nested.WrittenMemory.ToArray());
 
         act.Should().Throw<MessagePackSerializationException>();
     }
@@ -150,7 +150,7 @@ public class MessagePackValueSerializerTests
 
         var id = serializer.Serialize(new string('a', 10_000), target);
 
-        id.Should().Be(CacheValueFormats.MessagePack);
+        id.Should().Be(MessagePackFormats.Value);
         serializer.Options.Compression.Should().Be(MessagePackCompression.None);
         target.WrittenCount.Should().BeGreaterThan(10_000);
     }
@@ -163,10 +163,10 @@ public class MessagePackValueSerializerTests
         var compressedId = _serializer.Serialize(big, compressed);
         var (plainId, plainBytes) = Write("small");
 
-        compressedId.Should().Be(CacheValueFormats.MessagePackLz4);
-        plainId.Should().Be(CacheValueFormats.MessagePack);
-        var asPlain = () => Read<string>(CacheValueFormats.MessagePack, compressed.WrittenMemory.ToArray());
-        var asCompressed = () => Read<string>(CacheValueFormats.MessagePackLz4, plainBytes);
+        compressedId.Should().Be(MessagePackFormats.ValueLz4);
+        plainId.Should().Be(MessagePackFormats.Value);
+        var asPlain = () => Read<string>(MessagePackFormats.Value, compressed.WrittenMemory.ToArray());
+        var asCompressed = () => Read<string>(MessagePackFormats.ValueLz4, plainBytes);
         asPlain.Should().Throw<MessagePackSerializationException>();
         asCompressed.Should().Throw<InvalidDataException>();
     }
@@ -180,7 +180,7 @@ public class MessagePackValueSerializerTests
 
         var id = serializer.Serialize(new Lookalike(), target);
 
-        id.Should().Be(CacheValueFormats.MessagePack);
+        id.Should().Be(MessagePackFormats.Value);
         target.WrittenSpan[..2].ToArray().Should().Equal(0x92, 0xD4);
         serializer.Deserialize<Lookalike>(id, new ReadOnlySequence<byte>(target.WrittenMemory.ToArray())).Should().NotBeNull();
     }

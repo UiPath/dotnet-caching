@@ -81,7 +81,7 @@ public class ReadListTests
     public void Null_read_list_accepts_every_registered_format()
     {
         var other = new PassthroughValueSerializer(0x12);
-        var sut = new ValueReader(new SystemJsonByteSerializerProxy(), new ValueSerializerRegistry([("fast", _fast, false), ("other", other, false)]));
+        var sut = new ValueReader(new SystemJsonByteSerializerProxy(), new ValueSerializerRegistry([RegistryEntry.Of("fast", _fast), RegistryEntry.Of("other", other)]));
 
         sut.Read<string>(FastValue, ReadableFormats.Any).Value.Should().Be("ok");
         sut.Read<string>([0x12, (byte)'o', (byte)'k'], ReadableFormats.Any).Value.Should().Be("ok");
@@ -257,7 +257,7 @@ public class ReadListTests
     public void A_policy_with_the_defaults_list_and_its_own_write_is_not_served_the_defaults_set()
     {
         var other = new PassthroughValueSerializer(0x12);
-        var registry = new ValueSerializerRegistry([("fast", _fast, false), ("other", other, false)]);
+        var registry = new ValueSerializerRegistry([RegistryEntry.Of("fast", _fast), RegistryEntry.Of("other", other)]);
         var sut = new ValueFormatResolver(new SystemJsonByteSerializerProxy(), registry, new CachePolicy { Serializer = new SerializerPolicy { Write = "json", Read = ["json", "fast"] } });
         var writesOther = new CachePolicy { Serializer = new SerializerPolicy { Write = "other" } };
 
@@ -393,7 +393,7 @@ public class ReadListTests
             {
                 builder.AddRedisConnection(o => o.ConnectionString = "127.0.0.1:1");
                 builder.AddRedis(o => o.FormatNegotiation.Mode = mode);
-                builder.AddValueSerializer("fast", _ => _fast);
+                builder.AddValueSerializer("fast", _fast.FormatIds, _ => _fast);
             },
             options => options.Policies["orders"] = FastOnly());
         using var provider = services.BuildServiceProvider();
@@ -415,7 +415,7 @@ public class ReadListTests
     {
         var services = new ServiceCollection();
         services.AddCaching(
-            builder => builder.AddValueSerializer("fast", _ => _fast),
+            builder => builder.AddValueSerializer("fast", _fast.FormatIds, _ => _fast),
             options => options.Policies["orders"] = FastOnly());
         using var provider = services.BuildServiceProvider();
 
@@ -434,7 +434,7 @@ public class ReadListTests
             {
                 builder.AddRedisConnection(o => o.ConnectionString = "127.0.0.1:1");
                 builder.AddRedis(_ => { });
-                builder.AddValueSerializer("fast", _ => _fast);
+                builder.AddValueSerializer("fast", _fast.FormatIds, _ => _fast);
             },
             options => options.Policies["orders"] = FastOnly());
         using var provider = services.BuildServiceProvider();
@@ -452,7 +452,7 @@ public class ReadListTests
             builder =>
             {
                 builder.AddRedisConnection(o => o.ConnectionString = "127.0.0.1:1");
-                builder.AddValueSerializer("fast", _ => _fast);
+                builder.AddValueSerializer("fast", _fast.FormatIds, _ => _fast);
             },
             options => options.Policies["orders"] = FastOnly());
         using var provider = services.BuildServiceProvider();
@@ -464,7 +464,7 @@ public class ReadListTests
 
     private static CachePolicy FastOnly() => new() { Serializer = new SerializerPolicy { Write = "fast", Read = ["fast"] } };
 
-    private ValueSerializerRegistry Registry() => new([("fast", _fast, false)]);
+    private ValueSerializerRegistry Registry() => new([RegistryEntry.Of("fast", _fast)]);
 
     private ReadableFormats Readable(string[] read, ICacheValueSerializer? write = null) =>
         ReadableFormats.Resolve(Registry(), read, write, jsonFallback: false);

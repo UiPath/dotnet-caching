@@ -189,7 +189,7 @@ public class RedisCacheSerializerTests(ITestContextAccessor testContextAccessor)
     [Fact]
     public async Task A_headered_value_whose_serializer_throws_is_a_miss_and_the_key_stays()
     {
-        var sut = Create(new ValueSerializerRegistry([("bad", new ThrowingValueSerializer(), false)]));
+        var sut = Create(new ValueSerializerRegistry([RegistryEntry.Of("bad", new ThrowingValueSerializer())]));
         _database.StringGetAsync(Arg.Any<RedisKey>(), Arg.Any<CommandFlags>()).Returns((RedisValue)new byte[] { 0x10, 1, 2 });
 
         var value = await sut.GetAsync<string>("k", policy: null, Token);
@@ -202,7 +202,7 @@ public class RedisCacheSerializerTests(ITestContextAccessor testContextAccessor)
     [Fact]
     public async Task An_out_of_memory_from_a_serializer_propagates_from_every_read_path_and_runs_no_generator()
     {
-        var sut = Create(new ValueSerializerRegistry([("bad", new ThrowingValueSerializer { Failure = new OutOfMemoryException() }, false)]));
+        var sut = Create(new ValueSerializerRegistry([RegistryEntry.Of("bad", new ThrowingValueSerializer { Failure = new OutOfMemoryException() })]));
         _database.StringGetAsync(Arg.Any<RedisKey>(), Arg.Any<CommandFlags>()).Returns((RedisValue)new byte[] { 0x10, 1, 2 });
         _database.StringGetAsync(Arg.Any<RedisKey[]>(), Arg.Any<CommandFlags>()).Returns([(RedisValue)new byte[] { 0x10, 1, 2 }, RedisValue.Null]);
         var generated = 0;
@@ -225,7 +225,7 @@ public class RedisCacheSerializerTests(ITestContextAccessor testContextAccessor)
     [Fact]
     public async Task A_headered_value_whose_serializer_throws_is_a_miss_that_keeps_the_key_on_every_read_path()
     {
-        var sut = Create(new ValueSerializerRegistry([("bad", new ThrowingValueSerializer(), false)]));
+        var sut = Create(new ValueSerializerRegistry([RegistryEntry.Of("bad", new ThrowingValueSerializer())]));
         _database.StringGetAsync(Arg.Any<RedisKey>(), Arg.Any<CommandFlags>()).Returns((RedisValue)new byte[] { 0x10, 1, 2 });
         _database.StringGetAsync(Arg.Any<RedisKey[]>(), Arg.Any<CommandFlags>()).Returns([(RedisValue)new byte[] { 0x10, 1, 2 }, RedisValue.Null]);
         _database.StringSetAsync(Arg.Any<RedisKey>(), Arg.Any<RedisValue>(), Arg.Any<TimeSpan?>(), Arg.Any<When>(), Arg.Any<CommandFlags>()).Returns(true);
@@ -295,7 +295,7 @@ public class RedisCacheSerializerTests(ITestContextAccessor testContextAccessor)
     public async Task A_value_round_trips_through_a_two_byte_format_id()
     {
         var extended = new PassthroughValueSerializer(0x105);
-        var registry = new ValueSerializerRegistry([("extended", extended, false)]);
+        var registry = new ValueSerializerRegistry([RegistryEntry.Of("extended", extended)]);
         var sut = Create(registry);
         var captured = CaptureWrites();
         var policy = ResolvedPolicy(registry, "extended");
@@ -329,7 +329,7 @@ public class RedisCacheSerializerTests(ITestContextAccessor testContextAccessor)
     public async Task Raw_proxy_never_sniffs()
     {
         var messagePack = new PassthroughValueSerializer(0x02);
-        var sut = Create(new ValueSerializerRegistry([("messagepack", messagePack, true)]), new RawByteSerializerProxy());
+        var sut = Create(new ValueSerializerRegistry([RegistryEntry.Of("messagepack", messagePack)]), new RawByteSerializerProxy());
         _database.StringGetAsync(Arg.Any<RedisKey>(), Arg.Any<CommandFlags>()).Returns((RedisValue)new byte[] { 0x02, 1, 2 });
 
         var value = await sut.GetAsync<byte[]>("k", policy: null, Token);
@@ -342,7 +342,7 @@ public class RedisCacheSerializerTests(ITestContextAccessor testContextAccessor)
     [Fact]
     public async Task Raw_proxy_bytes_with_an_unregistered_header_byte_are_kept()
     {
-        var sut = Create(new ValueSerializerRegistry([("messagepack", new PassthroughValueSerializer(0x02), true)]), new RawByteSerializerProxy());
+        var sut = Create(new ValueSerializerRegistry([RegistryEntry.Of("messagepack", new PassthroughValueSerializer(0x02))]), new RawByteSerializerProxy());
         _database.StringGetAsync(Arg.Any<RedisKey>(), Arg.Any<CommandFlags>()).Returns((RedisValue)new byte[] { 0x1B, 1, 2 });
 
         var value = await sut.GetAsync<byte[]>("k", policy: null, Token);
@@ -406,7 +406,7 @@ public class RedisCacheSerializerTests(ITestContextAccessor testContextAccessor)
     [Fact]
     public async Task An_out_of_memory_from_headerless_json_is_a_miss_whatever_is_registered()
     {
-        var sut = Create(new ValueSerializerRegistry([("fast", _fast, false)]), new OutOfMemoryProxy(), new CachePolicy { Serializer = new SerializerPolicy { Write = "fast" } });
+        var sut = Create(new ValueSerializerRegistry([RegistryEntry.Of("fast", _fast)]), new OutOfMemoryProxy(), new CachePolicy { Serializer = new SerializerPolicy { Write = "fast" } });
         var json = new SystemJsonByteSerializerProxy().Serialize("a")!;
         _database.StringGetAsync(Arg.Any<RedisKey>(), Arg.Any<CommandFlags>()).Returns((RedisValue)json);
         _database.StringGetAsync(Arg.Any<RedisKey[]>(), Arg.Any<CommandFlags>()).Returns([(RedisValue)json, RedisValue.Null]);
@@ -636,7 +636,7 @@ public class RedisCacheSerializerTests(ITestContextAccessor testContextAccessor)
         _ = _transaction.DidNotReceive().KeyDeleteAsync(Arg.Any<RedisKey>(), Arg.Any<CommandFlags>());
     }
 
-    private ValueSerializerRegistry FastRegistry() => new([("fast", _fast, false)]);
+    private ValueSerializerRegistry FastRegistry() => new([RegistryEntry.Of("fast", _fast)]);
 
     private async Task<string[]> MethodsOf(Func<Task> operation)
     {

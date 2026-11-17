@@ -2102,9 +2102,9 @@ public class RedisStreamSubjectWriterTests : IAsyncLifetime
     [Theory]
     [InlineData(false)]
     [InlineData(true)]
-    public async Task A_foreign_first_byte_is_skipped_without_a_loss(bool decodeThrows)
+    public async Task A_first_byte_that_is_no_header_is_skipped_without_a_loss(bool decodeThrows)
     {
-        var (acked, missed) = await DispatchBodyAsync([0x08, 0x01, 0x02], decodeThrows);
+        var (acked, missed) = await DispatchBodyAsync([0x7F, 0x01, 0x02], decodeThrows);
 
         acked.Should().ContainSingle();
         missed.Should().Be(0);
@@ -2125,7 +2125,7 @@ public class RedisStreamSubjectWriterTests : IAsyncLifetime
     [InlineData(new byte[] { 0x02, 0x81, 0x01 }, true, 1)]
     [InlineData(new byte[] { 0x1F }, true, 1)]
     [InlineData(new byte[] { 0x02, 0x81, 0x01 }, false, 1)]
-    [InlineData(new byte[] { 0x08, 0x01, 0x02 }, true, 0)]
+    [InlineData(new byte[] { 0x08, 0x01, 0x02 }, true, 1)]
     [InlineData(new byte[] { 0x78, 0x79, 0x7A }, true, 0)]
     [InlineData(new byte[] { 0x78, 0x79, 0x7A }, false, 0)]
     [InlineData(new byte[] { (byte)'{', (byte)'x' }, true, 0)]

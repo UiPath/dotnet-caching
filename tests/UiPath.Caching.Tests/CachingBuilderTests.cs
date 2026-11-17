@@ -133,7 +133,7 @@ public class CachingBuilderTests
         var serializer = new FakeValueSerializer(0x10);
         var services = new ServiceCollection();
         var builder = new CachingBuilder(services);
-        builder.AddValueSerializer("fast", _ => serializer);
+        builder.AddValueSerializer("fast", serializer.FormatIds, _ => serializer);
         builder.Complete();
 
         var registry = services.BuildServiceProvider().GetRequiredService<ValueSerializerRegistry>();
@@ -151,7 +151,7 @@ public class CachingBuilderTests
         services.AddSingleton(marker);
         object? seen = null;
         var builder = new CachingBuilder(services);
-        builder.AddValueSerializer("fast", sp =>
+        builder.AddValueSerializer("fast", [0x10], sp =>
         {
             seen = sp.GetRequiredService<object>();
             return new FakeValueSerializer(0x10);
@@ -173,37 +173,24 @@ public class CachingBuilderTests
     }
 
     [Fact]
-    public void A_consumer_cannot_register_a_library_id()
+    public void An_allocated_id_is_accepted_for_any_serializer()
     {
         var services = new ServiceCollection();
         var builder = new CachingBuilder(services);
-        builder.AddValueSerializer("fast", _ => new FakeValueSerializer(CacheValueFormats.MessagePack));
-        builder.Complete();
-
-        var act = () => services.BuildServiceProvider().GetRequiredService<ValueSerializerRegistry>();
-
-        act.Should().Throw<OptionsValidationException>().WithMessage("*0x02*");
-    }
-
-    [Fact]
-    public void A_library_serializer_may_use_a_library_id()
-    {
-        var services = new ServiceCollection();
-        var builder = new CachingBuilder(services);
-        builder.AddLibraryValueSerializer("messagepack", _ => new FakeValueSerializer(CacheValueFormats.MessagePack));
+        builder.AddValueSerializer("fast", [0x05], _ => new FakeValueSerializer(0x05));
         builder.Complete();
 
         services.BuildServiceProvider().GetRequiredService<ValueSerializerRegistry>()
-            .TryGetByFormat(CacheValueFormats.MessagePack, out _).Should().BeTrue();
+            .TryGetByFormat(0x05, out _).Should().BeTrue();
     }
 
     [Fact]
     public void The_same_name_registered_twice_fails_at_registration()
     {
         var builder = new CachingBuilder(new ServiceCollection());
-        builder.AddValueSerializer("fast", _ => new FakeValueSerializer(0x10));
+        builder.AddValueSerializer("fast", [0x10], _ => new FakeValueSerializer(0x10));
 
-        var act = () => builder.AddValueSerializer("FAST", _ => new FakeValueSerializer(0x11));
+        var act = () => builder.AddValueSerializer("FAST", [0x11], _ => new FakeValueSerializer(0x11));
 
         act.Should().Throw<ArgumentException>().WithParameterName("name").WithMessage("*FAST*");
     }
@@ -213,20 +200,9 @@ public class CachingBuilderTests
     {
         var builder = new CachingBuilder(new ServiceCollection());
 
-        var act = () => builder.AddValueSerializer("JSON", _ => new FakeValueSerializer(0x10));
+        var act = () => builder.AddValueSerializer("JSON", [0x10], _ => new FakeValueSerializer(0x10));
 
         act.Should().Throw<ArgumentException>().WithParameterName("name").WithMessage("*json*");
-    }
-
-    [Fact]
-    public void A_library_and_a_consumer_serializer_cannot_share_a_name()
-    {
-        var builder = new CachingBuilder(new ServiceCollection());
-        builder.AddLibraryValueSerializer("messagepack", _ => new FakeValueSerializer(CacheValueFormats.MessagePack));
-
-        var act = () => builder.AddValueSerializer("messagepack", _ => new FakeValueSerializer(0x10));
-
-        act.Should().Throw<ArgumentException>().WithParameterName("name");
     }
 
     [Fact]
@@ -234,7 +210,7 @@ public class CachingBuilderTests
     {
         var services = new ServiceCollection();
         var builder = new CachingBuilder(services);
-        builder.AddValueSerializer("fast", _ => null!);
+        builder.AddValueSerializer("fast", [0x10], _ => null!);
         builder.Complete();
 
         var act = () => services.BuildServiceProvider().GetRequiredService<ValueSerializerRegistry>();
@@ -248,7 +224,7 @@ public class CachingBuilderTests
         var serializer = new DisposableFakeValueSerializer(0x10);
         var services = new ServiceCollection();
         var builder = new CachingBuilder(services);
-        builder.AddValueSerializer("fast", _ => serializer);
+        builder.AddValueSerializer("fast", serializer.FormatIds, _ => serializer);
         builder.Complete();
         var provider = services.BuildServiceProvider();
         _ = provider.GetRequiredService<ValueSerializerRegistry>();
@@ -261,16 +237,16 @@ public class CachingBuilderTests
     [Fact]
     public void A_serializer_that_fails_validation_is_still_disposed()
     {
-        var serializer = new DisposableFakeValueSerializer(0x02);
+        var serializer = new DisposableFakeValueSerializer(0x10);
         var services = new ServiceCollection();
         var builder = new CachingBuilder(services);
-        builder.AddValueSerializer("fast", _ => serializer);
+        builder.AddValueSerializer("fast", [0x11], _ => serializer);
         builder.Complete();
         using var provider = services.BuildServiceProvider();
 
         var act = () => provider.GetRequiredService<ValueSerializerRegistry>();
 
-        act.Should().Throw<OptionsValidationException>();
+        act.Should().Throw<InvalidOperationException>().WithMessage("*0x11*0x10*");
         serializer.Disposed.Should().Be(1);
     }
 
@@ -279,8 +255,8 @@ public class CachingBuilderTests
     {
         var builder = new CachingBuilder(new ServiceCollection());
 
-        builder.Invoking(b => b.AddValueSerializer("", _ => new FakeValueSerializer(0x10))).Should().Throw<ArgumentException>();
-        builder.Invoking(b => b.AddValueSerializer("fast", null!)).Should().Throw<ArgumentNullException>();
+        builder.Invoking(b => b.AddValueSerializer("", [0x10], _ => new FakeValueSerializer(0x10))).Should().Throw<ArgumentException>();
+        builder.Invoking(b => b.AddValueSerializer("fast", [0x10], null!)).Should().Throw<ArgumentNullException>();
     }
 
     [Fact]
@@ -289,7 +265,7 @@ public class CachingBuilderTests
         var services = new ServiceCollection();
         services.AddSingleton(Substitute.For<IRedisConnector>());
         services.AddCaching(
-            builder => builder.AddRedis(_ => { }).AddValueSerializer("fast", _ => new FakeValueSerializer(0x10)),
+            builder => builder.AddRedis(_ => { }).AddValueSerializer("fast", [0x10], _ => new FakeValueSerializer(0x10)),
             options => options.AppShortName = "app");
         using var provider = services.BuildServiceProvider();
 

@@ -101,7 +101,7 @@ public class EffectiveWriteTests(ITestContextAccessor testContextAccessor)
     public async Task Hot_path_issues_no_extra_redis_call()
     {
         var nodeList = new FakeNodeListServer();
-        var policy = ResolvedPolicy(new ValueSerializerRegistry([("fast", _fast, false)]));
+        var policy = ResolvedPolicy(new ValueSerializerRegistry([RegistryEntry.Of("fast", _fast)]));
         var negotiator = new FormatNegotiator([new DesiredWrite(_fast, Binary, ["default"], [])], new FormatNegotiationOptions { UpgradeHold = TimeSpan.Zero }, TimeProvider.System);
         negotiator.Observe(new NodeListView([new("me", new("3.2.0", "i", ["json", "10"], new Dictionary<string, IReadOnlyList<string>>()), TimeSpan.Zero)], [], Complete: true));
         negotiator.Allows(_fast).Should().BeTrue();
@@ -128,7 +128,7 @@ public class EffectiveWriteTests(ITestContextAccessor testContextAccessor)
     public async Task Force_mode_ignores_node_list_and_still_advertises_what_it_reads()
     {
         var options = new RedisCacheOptions { FormatNegotiation = { Mode = FormatNegotiationMode.Force } };
-        var services = Build(options, new ValueSerializerRegistry([("fast", _fast, false)]), new CachePolicy { Serializer = new SerializerPolicy { Write = "fast" } });
+        var services = Build(options, new ValueSerializerRegistry([RegistryEntry.Of("fast", _fast)]), new CachePolicy { Serializer = new SerializerPolicy { Write = "fast" } });
 
         var forced = FormatNegotiation.Create(services);
         forced.Negotiator.Should().BeNull("Force writes exactly what is configured, so there is nothing to decide");
@@ -146,7 +146,7 @@ public class EffectiveWriteTests(ITestContextAccessor testContextAccessor)
     [Fact]
     public void A_reader_only_app_advertises_and_decides_for_a_policy_built_at_the_call_site_and_one_with_no_serializer_does_neither()
     {
-        var reader = FormatNegotiation.Create(Build(new RedisCacheOptions(), new ValueSerializerRegistry([("fast", _fast, false)]), null));
+        var reader = FormatNegotiation.Create(Build(new RedisCacheOptions(), new ValueSerializerRegistry([RegistryEntry.Of("fast", _fast)]), null));
         reader.IsActive.Should().BeTrue();
         reader.Negotiator.Should().NotBeNull("an ad-hoc policy may still name a registered serializer");
         reader.Advertisement!.ValueReads.Should().Equal("json", "10");
@@ -161,7 +161,7 @@ public class EffectiveWriteTests(ITestContextAccessor testContextAccessor)
     {
         var options = new RedisCacheOptions { FormatNegotiation = { Mode = FormatNegotiationMode.Force, AdvertiseInterval = TimeSpan.FromSeconds(seconds) } };
 
-        FluentActions.Invoking(() => FormatNegotiation.Create(Build(options, new ValueSerializerRegistry([("fast", _fast, false)]), null)))
+        FluentActions.Invoking(() => FormatNegotiation.Create(Build(options, new ValueSerializerRegistry([RegistryEntry.Of("fast", _fast)]), null)))
             .Should().Throw<InvalidOperationException>().WithMessage("*AdvertiseInterval*");
     }
 
@@ -175,7 +175,7 @@ public class EffectiveWriteTests(ITestContextAccessor testContextAccessor)
             TimeProvider.System);
         // Every node reads 11 and one node does not read 10.
         negotiator.Observe(new NodeListView([new("me", new("3.2.0", "i", ["json", "11"], new Dictionary<string, IReadOnlyList<string>>()), TimeSpan.Zero)], [], Complete: true));
-        var registry = new ValueSerializerRegistry([("fast", _fast, false), ("other", other, false)]);
+        var registry = new ValueSerializerRegistry([RegistryEntry.Of("fast", _fast), RegistryEntry.Of("other", other)]);
         var sut = SimpleCache(registry, negotiator);
         var written = CaptureSimpleWrites();
 
@@ -191,7 +191,7 @@ public class EffectiveWriteTests(ITestContextAccessor testContextAccessor)
     {
         var negotiator = new FormatNegotiator([new DesiredWrite(_fast, Binary, ["default"], [])], new FormatNegotiationOptions { UpgradeHold = TimeSpan.Zero }, TimeProvider.System);
         negotiator.Observe(new NodeListView([new("me", new("3.2.0", "i", ["json", "10"], new Dictionary<string, IReadOnlyList<string>>()), TimeSpan.Zero)], [], Complete: true));
-        var registry = new ValueSerializerRegistry([("fast", _fast, false)]);
+        var registry = new ValueSerializerRegistry([RegistryEntry.Of("fast", _fast)]);
         var resolver = new ValueFormatResolver(new SystemJsonByteSerializerProxy(), registry, new CachePolicy(), negotiator);
         var policy = ResolvedPolicy(registry);
         resolver.For(policy, forWrite: true).Writer.Should().BeSameAs(_fast);
@@ -229,7 +229,7 @@ public class EffectiveWriteTests(ITestContextAccessor testContextAccessor)
     public void Every_registered_serializer_is_planned_whichever_policies_write_it()
     {
         var other = new PassthroughValueSerializer(0x11);
-        var registry = new ValueSerializerRegistry([("fast", _fast, false), ("other", other, false)]);
+        var registry = new ValueSerializerRegistry([RegistryEntry.Of("fast", _fast), RegistryEntry.Of("other", other)]);
         var policies = new DefaultCachePolicyFactory(
             new Dictionary<string, CachePolicy> { ["Orders"] = new() { Serializer = new SerializerPolicy { Write = "fast" } } },
             null,
@@ -248,7 +248,7 @@ public class EffectiveWriteTests(ITestContextAccessor testContextAccessor)
     [Fact]
     public async Task A_policy_on_a_raw_byte_proxy_writes_its_own_format_whatever_the_gate_says_so_nothing_reads_back_differently()
     {
-        var registry = new ValueSerializerRegistry([("fast", _fast, false)]);
+        var registry = new ValueSerializerRegistry([RegistryEntry.Of("fast", _fast)]);
         var sut = SimpleCache(registry, _gate, new RawByteSerializerProxy());
         var written = CaptureSimpleWrites();
         byte[] looksLikeAHeader = [0x02, 0xC4, 0x01, 0x41];
@@ -266,7 +266,7 @@ public class EffectiveWriteTests(ITestContextAccessor testContextAccessor)
     [Fact]
     public void A_node_that_does_not_sniff_advertises_json_only_for_the_policies_that_do_not()
     {
-        var registry = new ValueSerializerRegistry([("fast", _fast, false)]);
+        var registry = new ValueSerializerRegistry([RegistryEntry.Of("fast", _fast)]);
         var policies = new DefaultCachePolicyFactory(
             new Dictionary<string, CachePolicy> { ["Orders"] = new() { Serializer = new SerializerPolicy { Write = "fast" } }, ["Plain"] = new() },
             null,
@@ -297,7 +297,7 @@ public class EffectiveWriteTests(ITestContextAccessor testContextAccessor)
     {
         var services = new ServiceCollection();
         var builder = new CachingBuilder(services);
-        builder.AddValueSerializer("fast", _ => _fast);
+        builder.AddValueSerializer("fast", _fast.FormatIds, _ => _fast);
         builder.Complete();
 
         services.Should().Contain(d => d.ImplementationType == typeof(FormatNegotiationService));
@@ -372,7 +372,7 @@ public class EffectiveWriteTests(ITestContextAccessor testContextAccessor)
 
     private RedisCache SimpleCache(out ValueSerializerRegistry registry, bool gate = true, IEffectiveFormat? negotiator = null)
     {
-        registry = new ValueSerializerRegistry([("fast", _fast, false)]);
+        registry = new ValueSerializerRegistry([RegistryEntry.Of("fast", _fast)]);
         return SimpleCache(registry, negotiator ?? (gate ? _gate : null));
     }
 
@@ -397,7 +397,7 @@ public class EffectiveWriteTests(ITestContextAccessor testContextAccessor)
 
     private RedisHashCache HashCache(out ValueSerializerRegistry registry, CachePolicy? defaultPolicy = null)
     {
-        registry = new ValueSerializerRegistry([("fast", _fast, false)]);
+        registry = new ValueSerializerRegistry([RegistryEntry.Of("fast", _fast)]);
         var (pipelines, strategies) = Plumbing("hash");
         return new RedisHashCache(
             Connector(),

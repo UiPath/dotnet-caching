@@ -65,7 +65,7 @@ internal sealed class MessagePackEventFormatter : IEventFormatterProxy<ICacheEve
 
     public ICacheEvent? Decode(ReadOnlyMemory<byte> body)
     {
-        if (body.IsEmpty || body.Span[0] != CacheValueFormats.MessagePack)
+        if (body.IsEmpty || body.Span[0] != MessagePackFormats.Event)
         {
             return null;
         }
@@ -131,7 +131,7 @@ internal sealed class MessagePackEventFormatter : IEventFormatterProxy<ICacheEve
 
     private static void Write(ICacheEvent @event, ArrayBufferWriter<byte> buffer)
     {
-        buffer.GetSpan(1)[0] = CacheValueFormats.MessagePack;
+        buffer.GetSpan(1)[0] = MessagePackFormats.Event;
         buffer.Advance(1);
         var writer = new MessagePackWriter(buffer);
 
@@ -536,7 +536,7 @@ internal sealed class MessagePackEventFormatter : IEventFormatterProxy<ICacheEve
         /// <summary>True when the body is a map whose source key, present once, is a string equal to one of the texts; any other shape is not this source's.</summary>
         public bool IsFromSource(ReadOnlyMemory<byte> payload)
         {
-            if (payload.IsEmpty || payload.Span[0] != CacheValueFormats.MessagePack)
+            if (payload.IsEmpty || payload.Span[0] != MessagePackFormats.Event)
             {
                 return false;
             }

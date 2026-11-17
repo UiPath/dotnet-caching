@@ -501,7 +501,7 @@ public class FormatCensusIntegrationTests(RedisContainerFixture fixture)
     [InlineData(new byte[] { 0x1F, 0x02 }, "unknown")]
     public void A_value_is_classified_by_its_first_bytes(byte[] head, string? expected)
     {
-        var registry = new ValueSerializerRegistry([("fast", new PassthroughValueSerializer(0x10), false), ("other", new PassthroughValueSerializer(0x12), false), ("wide", new PassthroughValueSerializer(0x101), false)]);
+        var registry = new ValueSerializerRegistry([RegistryEntry.Of("fast", new PassthroughValueSerializer(0x10)), RegistryEntry.Of("other", new PassthroughValueSerializer(0x12)), RegistryEntry.Of("wide", new PassthroughValueSerializer(0x101))]);
 
         FormatCensus.Classify(head, registry).Should().Be(expected);
     }
@@ -534,9 +534,9 @@ public class FormatCensusIntegrationTests(RedisContainerFixture fixture)
     {
         var registry = new ValueSerializerRegistry(
             [
-                ("fast", new PassthroughValueSerializer(0x10), false),
-                ("other", new PassthroughValueSerializer(0x12), false),
-                .. extended ? new[] { ("wide", (ICacheValueSerializer)new PassthroughValueSerializer(0x101), false) } : [],
+                RegistryEntry.Of("fast", new PassthroughValueSerializer(0x10)),
+                RegistryEntry.Of("other", new PassthroughValueSerializer(0x12)),
+                .. extended ? new[] { RegistryEntry.Of("wide", (ICacheValueSerializer)new PassthroughValueSerializer(0x101)) } : [],
             ]);
         var options = new RedisCacheOptions { KeyPrefix = keyPrefix, RedisKeyStrategyFactory = strategies };
         return new RedisCacheProvider(

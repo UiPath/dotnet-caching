@@ -94,10 +94,10 @@ public class ValueFormatResolverTests
 
     private ValueFormatResolver Resolver(ISerializerProxy<byte[]>? proxy = null, CachePolicy? defaultPolicy = null, ICacheValueSerializer? other = null)
     {
-        List<(string, ICacheValueSerializer, bool)> entries = [("fast", _fast, false)];
+        List<(string, ICacheValueSerializer, IReadOnlyList<int>)> entries = [RegistryEntry.Of("fast", _fast)];
         if (other is not null)
         {
-            entries.Add(("other", other, false));
+            entries.Add(RegistryEntry.Of("other", other));
         }
 
         return new(proxy ?? new SystemJsonByteSerializerProxy(), new ValueSerializerRegistry(entries), defaultPolicy ?? new CachePolicy());

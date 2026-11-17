@@ -75,8 +75,8 @@ internal sealed class MigrateOnReadHarness : IDisposable
                     o.HashFieldBatchSize = hashBatch;
                 });
                 var target = fast;
-                b.AddValueSerializer("fast", _ => target);
-                b.AddValueSerializer("other", _ => other ?? new PassthroughValueSerializer(0x12));
+                b.AddValueSerializer("fast", target.FormatIds, _ => target);
+                b.AddValueSerializer("other", other?.FormatIds ?? [0x12], _ => other ?? new PassthroughValueSerializer(0x12));
                 if (layered)
                 {
                     b.AddInMemoryRedis(_ => { });

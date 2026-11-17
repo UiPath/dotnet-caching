@@ -5,8 +5,6 @@ const UiPath.Caching.CacheValueFormats.JsonName = "json" -> string!
 const UiPath.Caching.CacheValueFormats.UnknownName = "unknown" -> string!
 const UiPath.Caching.CacheValueFormats.LastConsumer = 30 -> int
 const UiPath.Caching.CacheValueFormats.LastExtended = 511 -> int
-const UiPath.Caching.CacheValueFormats.MessagePack = 2 -> int
-const UiPath.Caching.CacheValueFormats.MessagePackLz4 = 3 -> int
 UiPath.Caching.CacheValueFormats
 UiPath.Caching.ICacheValueSerializer
 UiPath.Caching.ICacheValueSerializer.Deserialize<T>(int formatId, System.Buffers.ReadOnlySequence<byte> source) -> T?

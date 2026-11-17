@@ -285,7 +285,7 @@ public class ValueReaderTests
     }
 
     private static ValueSerializerRegistry Registry(params (string Name, ICacheValueSerializer Serializer)[] entries) =>
-        new(entries.Select(e => (e.Name, e.Serializer, false)));
+        new(entries.Select(e => RegistryEntry.Of(e.Name, e.Serializer)));
 
     private static ValueReader Reader(ISerializerProxy<byte[]>? json = null, ValueSerializerRegistry? registry = null) =>
         new(json ?? new SystemJsonByteSerializerProxy(), registry ?? Registry(("fast", new PassthroughValueSerializer())));

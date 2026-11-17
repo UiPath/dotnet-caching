@@ -186,9 +186,9 @@ internal sealed class NamedCachingContainer : IDisposable
             return;
         }
 
-        foreach (var (name, serializer, library) in registry.Entries)
+        foreach (var (name, serializer, ids) in registry.Entries)
         {
-            services.AddSingleton(new ValueSerializerRegistration(name, _ => serializer, library, Forwarded: true));
+            services.AddSingleton(new ValueSerializerRegistration(name, ids, _ => serializer, Forwarded: true));
         }
     }
 

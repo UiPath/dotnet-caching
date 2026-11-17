@@ -9,7 +9,7 @@ public class ValueSerializerRegistryTests
     [Fact]
     public void Json_name_resolves_to_the_default_path()
     {
-        var sut = new ValueSerializerRegistry([("fast", Fake(0x10), false)]);
+        var sut = new ValueSerializerRegistry([RegistryEntry.Of("fast", Fake(0x10))]);
 
         sut.Resolve("json").Should().BeNull();
         sut.Resolve("JSON").Should().BeNull();
@@ -18,7 +18,7 @@ public class ValueSerializerRegistryTests
     [Theory, InlineData(null), InlineData(""), InlineData(" ")]
     public void A_blank_name_is_not_resolved(string? name)
     {
-        var sut = new ValueSerializerRegistry([("fast", Fake(0x10), false)]);
+        var sut = new ValueSerializerRegistry([RegistryEntry.Of("fast", Fake(0x10))]);
 
         sut.TryResolve(name, out _).Should().BeFalse();
         sut.Invoking(r => r.Resolve(name)).Should().Throw<ArgumentException>();
@@ -28,7 +28,7 @@ public class ValueSerializerRegistryTests
     public void Registered_name_resolves_ignoring_case()
     {
         var serializer = Fake(0x10);
-        var sut = new ValueSerializerRegistry([("fast", serializer, false)]);
+        var sut = new ValueSerializerRegistry([RegistryEntry.Of("fast", serializer)]);
 
         sut.Resolve("FAST").Should().BeSameAs(serializer);
     }
@@ -36,7 +36,7 @@ public class ValueSerializerRegistryTests
     [Fact]
     public void Unknown_name_is_not_resolved()
     {
-        var sut = new ValueSerializerRegistry([("fast", Fake(0x10), false)]);
+        var sut = new ValueSerializerRegistry([RegistryEntry.Of("fast", Fake(0x10))]);
 
         sut.TryResolve("slow", out _).Should().BeFalse();
         sut.TryResolve("json", out var json).Should().BeTrue();
@@ -47,7 +47,7 @@ public class ValueSerializerRegistryTests
     [Fact]
     public void Json_is_a_reserved_name()
     {
-        var act = () => new ValueSerializerRegistry([("json", Fake(0x10), false)]);
+        var act = () => new ValueSerializerRegistry([RegistryEntry.Of("json", Fake(0x10))]);
 
         act.Should().Throw<ArgumentException>().WithMessage("*json*");
     }
@@ -55,7 +55,7 @@ public class ValueSerializerRegistryTests
     [Fact]
     public void Duplicate_name_is_rejected()
     {
-        var act = () => new ValueSerializerRegistry([("fast", Fake(0x10), false), ("FAST", Fake(0x11), false)]);
+        var act = () => new ValueSerializerRegistry([RegistryEntry.Of("fast", Fake(0x10)), RegistryEntry.Of("FAST", Fake(0x11))]);
 
         act.Should().Throw<ArgumentException>().WithMessage("*FAST*");
     }
@@ -63,7 +63,7 @@ public class ValueSerializerRegistryTests
     [Fact]
     public void Duplicate_format_id_is_rejected()
     {
-        var act = () => new ValueSerializerRegistry([("a", Fake(0x10), false), ("b", Fake(0x10), false)]);
+        var act = () => new ValueSerializerRegistry([RegistryEntry.Of("a", Fake(0x10)), RegistryEntry.Of("b", Fake(0x10))]);
 
         act.Should().Throw<OptionsValidationException>().WithMessage("*0x10*");
     }
@@ -71,7 +71,7 @@ public class ValueSerializerRegistryTests
     [Fact]
     public void Repeated_id_inside_one_serializer_is_rejected()
     {
-        var act = () => new ValueSerializerRegistry([("a", Fake(0x10, 0x10), false)]);
+        var act = () => new ValueSerializerRegistry([RegistryEntry.Of("a", Fake(0x10, 0x10))]);
 
         act.Should().Throw<OptionsValidationException>().WithMessage("*0x10*");
     }
@@ -79,7 +79,7 @@ public class ValueSerializerRegistryTests
     [Fact]
     public void A_serializer_without_ids_is_rejected()
     {
-        var act = () => new ValueSerializerRegistry([("a", Fake(), false)]);
+        var act = () => new ValueSerializerRegistry([RegistryEntry.Of("a", Fake())]);
 
         act.Should().Throw<OptionsValidationException>().WithMessage("*a*");
     }
@@ -87,55 +87,19 @@ public class ValueSerializerRegistryTests
     [Theory, InlineData(0x09), InlineData(0x0A), InlineData(0x0D), InlineData(0x1F), InlineData(0x00), InlineData(0x20), InlineData(0x200), InlineData(-1)]
     public void Invalid_ids_are_rejected(int id)
     {
-        var consumer = () => new ValueSerializerRegistry([("a", Fake(id), false)]);
-        var library = () => new ValueSerializerRegistry([("a", Fake(id), true)]);
-
-        consumer.Should().Throw<OptionsValidationException>();
-        library.Should().Throw<OptionsValidationException>();
-    }
-
-    [Theory, InlineData(0x01), InlineData(0x02), InlineData(0x0F)]
-    public void Library_ids_are_rejected_for_consumers(int id)
-    {
-        var act = () => new ValueSerializerRegistry([("a", Fake(id), false)]);
+        var act = () => new ValueSerializerRegistry([RegistryEntry.Of("a", Fake(id))]);
 
         act.Should().Throw<OptionsValidationException>();
     }
 
-    [Theory, InlineData(0x01), InlineData(0x02), InlineData(0x0F)]
-    public void Library_entries_may_use_library_ids(int id)
+    [Theory, InlineData(0x01), InlineData(0x02), InlineData(0x0F), InlineData(0x10), InlineData(0x1E), InlineData(0x100), InlineData(0x1FF)]
+    public void Allowed_ids_are_accepted(int id)
     {
         var serializer = Fake(id);
-        var sut = new ValueSerializerRegistry([("a", serializer, true)]);
+        var sut = new ValueSerializerRegistry([RegistryEntry.Of("a", serializer)]);
 
         sut.TryGetByFormat(id, out var found).Should().BeTrue();
         found.Should().BeSameAs(serializer);
-    }
-
-    [Theory, InlineData(0x10), InlineData(0x1E), InlineData(0x100), InlineData(0x1FF)]
-    public void Consumer_ids_are_accepted(int id)
-    {
-        var sut = new ValueSerializerRegistry([("a", Fake(id), false)]);
-
-        sut.TryGetByFormat(id, out _).Should().BeTrue();
-    }
-
-    [Theory, InlineData(0x10), InlineData(0x1E), InlineData(0x100)]
-    public void Consumer_ids_are_rejected_for_library_entries(int id)
-    {
-        var act = () => new ValueSerializerRegistry([("a", Fake(id), true)]);
-
-        act.Should().Throw<OptionsValidationException>();
-    }
-
-    [Fact]
-    public void The_library_range_ends_below_the_consumer_range()
-    {
-        var library = () => new ValueSerializerRegistry([("a", Fake(0x10), true)]);
-        var consumer = () => new ValueSerializerRegistry([("a", Fake(0x0F), false)]);
-
-        library.Should().Throw<OptionsValidationException>();
-        consumer.Should().Throw<OptionsValidationException>();
     }
 
     [Fact]
@@ -143,7 +107,7 @@ public class ValueSerializerRegistryTests
     {
         var ids = new List<int> { 0x10 };
         var serializer = new FakeSerializer(ids);
-        var sut = new ValueSerializerRegistry([("a", serializer, false)]);
+        var sut = new ValueSerializerRegistry([RegistryEntry.Of("a", serializer)]);
 
         ids.Add(0x11);
 
@@ -153,7 +117,7 @@ public class ValueSerializerRegistryTests
     [Fact]
     public void Ids_of_a_serializer_from_elsewhere_are_refused()
     {
-        var sut = new ValueSerializerRegistry([("a", Fake(0x10), false)]);
+        var sut = new ValueSerializerRegistry([RegistryEntry.Of("a", Fake(0x10))]);
 
         sut.Invoking(r => r.FormatIdsOf(Fake(0x10))).Should().Throw<InvalidOperationException>();
     }
@@ -162,7 +126,7 @@ public class ValueSerializerRegistryTests
     public void Dispose_disposes_the_serializers_it_holds()
     {
         var owned = new DisposableSerializer(0x10);
-        var sut = new ValueSerializerRegistry([("a", owned, false), ("b", Fake(0x11), false)]);
+        var sut = new ValueSerializerRegistry([RegistryEntry.Of("a", owned), RegistryEntry.Of("b", Fake(0x11))]);
 
         sut.Dispose();
 
@@ -173,7 +137,7 @@ public class ValueSerializerRegistryTests
     public void Dispose_leaves_borrowed_serializers_alone()
     {
         var borrowed = new DisposableSerializer(0x10);
-        var sut = new ValueSerializerRegistry([("a", borrowed, false)], [borrowed]);
+        var sut = new ValueSerializerRegistry([RegistryEntry.Of("a", borrowed)], [borrowed]);
 
         sut.Dispose();
 
@@ -181,18 +145,10 @@ public class ValueSerializerRegistryTests
     }
 
     [Fact]
-    public void A_serializer_whose_ids_are_null_is_rejected_by_name()
-    {
-        var act = () => new ValueSerializerRegistry([("fast", new FakeSerializer(null!), false)]);
-
-        act.Should().Throw<OptionsValidationException>().WithMessage("*fast*FormatIds*");
-    }
-
-    [Fact]
     public void Dispose_disposes_a_serializer_that_is_only_async_disposable()
     {
         var owned = new AsyncDisposableSerializer(0x10);
-        var sut = new ValueSerializerRegistry([("a", owned, false)]);
+        var sut = new ValueSerializerRegistry([RegistryEntry.Of("a", owned)]);
 
         sut.Dispose();
 
@@ -205,7 +161,7 @@ public class ValueSerializerRegistryTests
         var asyncOnly = new AsyncDisposableSerializer(0x10);
         var syncOnly = new DisposableSerializer(0x11);
         var borrowed = new AsyncDisposableSerializer(0x12);
-        var sut = new ValueSerializerRegistry([("a", asyncOnly, false), ("b", syncOnly, false), ("c", borrowed, false)], [borrowed]);
+        var sut = new ValueSerializerRegistry([RegistryEntry.Of("a", asyncOnly), RegistryEntry.Of("b", syncOnly), RegistryEntry.Of("c", borrowed)], [borrowed]);
 
         await sut.DisposeAsync();
 
@@ -218,7 +174,7 @@ public class ValueSerializerRegistryTests
     public void A_per_call_policy_naming_a_registered_serializer_resolves_it()
     {
         var serializer = Fake(0x10);
-        var sut = new ValueSerializerRegistry([("fast", serializer, false)]);
+        var sut = new ValueSerializerRegistry([RegistryEntry.Of("fast", serializer)]);
         var factory = new DefaultCachePolicyFactory(null, new CachePolicy { LocalExpiration = TimeSpan.FromMinutes(1) }, default, sut);
         var perCall = CachePolicyMerger.Merge(new CachePolicy { Serializer = new SerializerPolicy { Write = "FAST" } }, factory.Default)!;
 
@@ -229,7 +185,7 @@ public class ValueSerializerRegistryTests
     [Fact]
     public void A_per_call_policy_naming_an_unknown_serializer_throws()
     {
-        var sut = new ValueSerializerRegistry([("fast", Fake(0x10), false)]);
+        var sut = new ValueSerializerRegistry([RegistryEntry.Of("fast", Fake(0x10))]);
         var perCall = new CachePolicy { Serializer = new SerializerPolicy { Write = "typo" } };
 
         sut.Invoking(r => r.WriteSerializerFor(perCall)).Should().Throw<OptionsValidationException>().WithMessage("*typo*Serializer.Write*");
@@ -240,7 +196,7 @@ public class ValueSerializerRegistryTests
     {
         var fast = Fake(0x10);
         var other = Fake(0x11);
-        var sut = new ValueSerializerRegistry([("fast", fast, false), ("other", other, false)]);
+        var sut = new ValueSerializerRegistry([RegistryEntry.Of("fast", fast), RegistryEntry.Of("other", other)]);
         var factory = new DefaultCachePolicyFactory(null, new CachePolicy { Serializer = new SerializerPolicy { Write = "fast" } }, default, sut);
         var perCall = CachePolicyMerger.Merge(new CachePolicy { Serializer = new SerializerPolicy { Write = "other" } }, factory.Default)!;
 
@@ -251,7 +207,7 @@ public class ValueSerializerRegistryTests
     [Theory, InlineData(null), InlineData("json"), InlineData("JSON")]
     public void Json_and_unset_write_names_keep_the_json_path(string? write)
     {
-        var sut = new ValueSerializerRegistry([("fast", Fake(0x10), false)]);
+        var sut = new ValueSerializerRegistry([RegistryEntry.Of("fast", Fake(0x10))]);
 
         sut.WriteSerializerFor(new CachePolicy { Serializer = new SerializerPolicy { Write = write } }).Should().BeNull();
         sut.WriteSerializerFor(new CachePolicy()).Should().BeNull();
@@ -261,7 +217,7 @@ public class ValueSerializerRegistryTests
     [Fact]
     public void A_custom_factory_naming_an_unknown_serializer_is_rejected()
     {
-        var sut = new ValueSerializerRegistry([("fast", Fake(0x10), false)]);
+        var sut = new ValueSerializerRegistry([RegistryEntry.Of("fast", Fake(0x10))]);
         var named = Substitute.For<ICachePolicyFactory>();
         named.Keys.Returns(["orders"]);
         named.Resolve("orders").Returns(new CachePolicy { Serializer = new SerializerPolicy { Write = "typo" } });
@@ -277,7 +233,7 @@ public class ValueSerializerRegistryTests
     public void Extended_ids_resolve_by_format()
     {
         var serializer = Fake(0x105);
-        var sut = new ValueSerializerRegistry([("a", serializer, false)]);
+        var sut = new ValueSerializerRegistry([RegistryEntry.Of("a", serializer)]);
 
         sut.TryGetByFormat(0x105, out var found).Should().BeTrue();
         found.Should().BeSameAs(serializer);
@@ -288,7 +244,7 @@ public class ValueSerializerRegistryTests
     public void A_serializer_owns_all_its_ids()
     {
         var serializer = Fake(0x10, 0x11);
-        var sut = new ValueSerializerRegistry([("a", serializer, false)]);
+        var sut = new ValueSerializerRegistry([RegistryEntry.Of("a", serializer)]);
 
         sut.TryGetByFormat(0x10, out var first).Should().BeTrue();
         sut.TryGetByFormat(0x11, out var second).Should().BeTrue();
@@ -299,7 +255,7 @@ public class ValueSerializerRegistryTests
     [Fact]
     public void Mixed_header_lengths_are_rejected()
     {
-        var act = () => new ValueSerializerRegistry([("a", Fake(0x10, 0x105), false)]);
+        var act = () => new ValueSerializerRegistry([RegistryEntry.Of("a", Fake(0x10, 0x105))]);
 
         act.Should().Throw<OptionsValidationException>().WithMessage("*a*");
     }
@@ -308,7 +264,7 @@ public class ValueSerializerRegistryTests
     public void Empty_registry_reports_empty()
     {
         new ValueSerializerRegistry([]).IsEmpty.Should().BeTrue();
-        new ValueSerializerRegistry([("a", Fake(0x10), false)]).IsEmpty.Should().BeFalse();
+        new ValueSerializerRegistry([RegistryEntry.Of("a", Fake(0x10))]).IsEmpty.Should().BeFalse();
     }
 
     private static FakeSerializer Fake(params int[] ids) => new(ids);

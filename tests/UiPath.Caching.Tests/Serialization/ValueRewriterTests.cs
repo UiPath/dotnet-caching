@@ -131,7 +131,7 @@ public class ValueRewriterTests
     public void A_value_already_in_a_format_the_target_owns_is_not_rewritten()
     {
         var both = new PassthroughValueSerializer(0x10, 0x12);
-        var sut = new ValueRewriter(new SystemJsonByteSerializerProxy(), new ValueSerializerRegistry([("both", both, false)]));
+        var sut = new ValueRewriter(new SystemJsonByteSerializerProxy(), new ValueSerializerRegistry([RegistryEntry.Of("both", both)]));
         byte[] original = [0x10, .. Utf8("hi")];
 
         sut.TryReencode<string>(original, both, out _).Should().BeFalse();
@@ -170,7 +170,7 @@ public class ValueRewriterTests
     [Fact]
     public void A_custom_json_proxy_is_not_known_to_write_json_so_its_values_are_not_rewritten()
     {
-        var sut = new ValueRewriter(new SubclassedProxy(), new ValueSerializerRegistry([("fast", _fast, false)]));
+        var sut = new ValueRewriter(new SubclassedProxy(), new ValueSerializerRegistry([RegistryEntry.Of("fast", _fast)]));
 
         sut.TryReencode<string>(Utf8("\"x\""), _fast, out _).Should().BeFalse();
     }
@@ -178,7 +178,7 @@ public class ValueRewriterTests
     [Fact]
     public void A_headered_value_is_rewritten_whatever_the_json_proxy_is()
     {
-        var sut = new ValueRewriter(new SubclassedProxy(), new ValueSerializerRegistry([("fast", _fast, false), ("other", _other, false)]));
+        var sut = new ValueRewriter(new SubclassedProxy(), new ValueSerializerRegistry([RegistryEntry.Of("fast", _fast), RegistryEntry.Of("other", _other)]));
         byte[] original = [0x10, .. Utf8("hi")];
 
         sut.TryReencode<string>(original, _other, out var payload).Should().BeTrue();
@@ -189,7 +189,7 @@ public class ValueRewriterTests
     public void A_target_that_throws_is_not_swallowed()
     {
         var bad = new ThrowingSerializer();
-        var sut = new ValueRewriter(new SystemJsonByteSerializerProxy(), new ValueSerializerRegistry([("bad", bad, false)]));
+        var sut = new ValueRewriter(new SystemJsonByteSerializerProxy(), new ValueSerializerRegistry([RegistryEntry.Of("bad", bad)]));
 
         var act = () => sut.TryReencode<string>(Utf8("\"x\""), bad, out _);
 
@@ -222,7 +222,7 @@ public class ValueRewriterTests
     public void A_target_that_cannot_carry_the_value_back_is_found_out_before_anything_is_written()
     {
         var forgetful = new ForgetfulSerializer();
-        var sut = new ValueRewriter(new SystemJsonByteSerializerProxy(), new ValueSerializerRegistry([("forgetful", forgetful, false)]));
+        var sut = new ValueRewriter(new SystemJsonByteSerializerProxy(), new ValueSerializerRegistry([RegistryEntry.Of("forgetful", forgetful)]));
 
         sut.TryReencode<Dto>(Utf8("{\"id\":7,\"name\":\"n\"}"), forgetful, out var payload).Should().BeFalse();
 
@@ -235,7 +235,7 @@ public class ValueRewriterTests
         using var pool = new RecordingPool();
         // The first check of the value passes, the one of what the target wrote back does not: the serializer that wrote the original rejects it.
         var source = new FailsOnTheSecondSerialize(0x10);
-        var sut = new ValueRewriter(new SystemJsonByteSerializerProxy(), new ValueSerializerRegistry([("source", source, false), ("target", _other, false)]));
+        var sut = new ValueRewriter(new SystemJsonByteSerializerProxy(), new ValueSerializerRegistry([RegistryEntry.Of("source", source), RegistryEntry.Of("target", _other)]));
         byte[] original = [0x10, .. new string('a', 40_000).Select(c => (byte)c)];
 
         var act = () => sut.TryReencode<string>(original, _other, out _);
@@ -250,14 +250,14 @@ public class ValueRewriterTests
     [Fact]
     public void Only_the_default_json_proxy_can_have_its_json_compared()
     {
-        new ValueRewriter(new SystemJsonByteSerializerProxy(), new ValueSerializerRegistry([("fast", _fast, false)])).ComparesJson.Should().BeTrue();
-        new ValueRewriter(new SubclassedProxy(), new ValueSerializerRegistry([("fast", _fast, false)])).ComparesJson.Should().BeFalse();
+        new ValueRewriter(new SystemJsonByteSerializerProxy(), new ValueSerializerRegistry([RegistryEntry.Of("fast", _fast)])).ComparesJson.Should().BeTrue();
+        new ValueRewriter(new SubclassedProxy(), new ValueSerializerRegistry([RegistryEntry.Of("fast", _fast)])).ComparesJson.Should().BeFalse();
     }
 
     private static byte[] Utf8(string text) => Encoding.UTF8.GetBytes(text);
 
     private ValueRewriter Rewriter() =>
-        new(new SystemJsonByteSerializerProxy(), new ValueSerializerRegistry([("fast", _fast, false), ("other", _other, false)]));
+        new(new SystemJsonByteSerializerProxy(), new ValueSerializerRegistry([RegistryEntry.Of("fast", _fast), RegistryEntry.Of("other", _other)]));
 
     private sealed class Dto
     {
