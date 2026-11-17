@@ -83,7 +83,7 @@ See [reference/settings.md](../reference/settings.md) for the full set. The tabl
 | `PollBatchSize` | `1024` | Yes | Entries one `XREADGROUP` asks for. |
 | `FieldName` | `"event"` | Yes | Redis stream field name for the payload. |
 | `PollInterval` | `250 ms` | Yes | `XREADGROUP` cadence while the doorbell is not live. |
-| `NotifiedPollInterval` | `5 s`, or `PollInterval` when that is set | Yes | `XREADGROUP` cadence while the doorbell subscription is live; must be at least `PollInterval`. |
+| `NotifiedPollInterval` | `1 s`, or `PollInterval` when that is set | Yes | `XREADGROUP` cadence while the doorbell subscription is live; must be at least `PollInterval`. |
 | `RedisStreamKeyStrategy` | `null` | Yes | Code-only `IRedisStreamKeyStrategy`. |
 | `ConsumerCapacity` | `2048` | Yes | Bounded channel capacity. |
 | `FullMode` | `Wait` | Yes | `BoundedChannelFullMode` for backpressure. |
@@ -217,17 +217,19 @@ Everything else (`MaxLength`, `PollBatchSize`, `PollInterval`, `NotifiedPollInte
 
 ## Notify doorbell
 
-`RedisStreamsTopic` polls at `PollInterval` (default 250 ms) until its doorbell subscription is live, and at `NotifiedPollInterval` while it is: 5 s by default, or `PollInterval` when `PollInterval` is set (a `PollInterval` key in configuration counts as set, even at 250 ms). `NotifyEnabled` (default `true`) adds a Pub/Sub channel that the publisher fires immediately after each `XADD`. The other nodes wake up and call `XREADGROUP` right away instead of waiting for the next poll tick, so an invalidation reaches them in a few network round trips rather than up to one poll interval later. The periodic poll continues in parallel as a safety net — a notification that is lost while the subscription still looks live (a dropped `PUBLISH`) adds at most one poll interval of latency. Set `NotifyEnabled: false` to poll only, for example where the Pub/Sub subscription count matters (see below). A read that fails, as every read does while Redis is down, is retried three times at `PollInterval` and then with a doubling back-off capped at 30 s; the connection coming back ends the back-off at once, whether or not the connection monitor is on.
+`RedisStreamsTopic` polls at `PollInterval` (default 250 ms) until its doorbell subscription is live, and at `NotifiedPollInterval` while it is: 1 s by default, or `PollInterval` when `PollInterval` is set (a `PollInterval` key in configuration counts as set, even at 250 ms). `NotifyEnabled` (default `true`) adds a Pub/Sub channel that the publisher fires immediately after each `XADD`. The other nodes wake up and call `XREADGROUP` right away instead of waiting for the next poll tick, so an invalidation reaches them in a few network round trips rather than up to one poll interval later. The periodic poll continues in parallel as a safety net — a notification that is lost while the subscription still looks live (a dropped `PUBLISH`) adds at most one poll interval of latency. Set `NotifyEnabled: false` to poll only, for example where the Pub/Sub subscription count matters (see below). A read that fails, as every read does while Redis is down, is retried three times at `PollInterval` and then with a doubling back-off capped at 30 s; the connection coming back ends the back-off at once, whether or not the connection monitor is on.
 
 What a broadcast costs on the server: the `XADD`, one fire-and-forget `PUBLISH`, and on every *other* node one read and one `XACK`. On Redis 7 or later the read is one script (`XINFO STREAM` and `XREADGROUP`, one round trip). Below 7 the `XINFO STREAM` is pipelined with a plain `XREADGROUP` on the same connection, also one round trip. The doorbell carries the publisher's consumer name, so the publishing node does not wake for its own ring — its own entries are never dispatched; the poll, the next ring from another node, or every `MaxLength / 2` of its own publishes reads and acknowledges them. Every read is checked for a trim past the group's position: a woken node compares the stream's oldest entry and counts (`XINFO STREAM`, O(1)) with the position it knows, while the check that also asks the server for the group's position (`XINFO GROUPS`, which grows with the number of nodes) keeps the poll's cadence — once a poll interval, after a reconnect, and after a full batch. A doorbell that arrives while a read is in flight is collapsed with any others into one more read.
 
 If the server refuses the subscription — the connection user lacks `SUBSCRIBE` or the channel (`NOPERM`), or the command is disabled — the topic logs one warning and polls only; a connection error is retried at `NotifySubscriberTimeout`, warned about once per streak.
 
-The long interval applies only while the subscription is confirmed live. Before the first subscribe, after a forced reconnect until the topic subscribes again, while a subscription connection is down (a failed command connection does not count), when the server refuses the subscription, and with `NotifyEnabled: false`, the loop polls at `PollInterval`; a connection failure also ends a wait in progress at the long interval. Failure retries and the `XINFO GROUPS` position check stay on `PollInterval`. An idle topic costs about 15 server-executed commands a second per process at 250 ms and 0.8 at 5 s (measured on a single node: 3 topics, 44 against 2.4); 5 s is where the saving levels off; set it lower (down to `PollInterval`) to shorten the window a dropped doorbell leaves, or higher to cut the idle cost further.
+The long interval applies only while the subscription is confirmed live. Before the first subscribe, after a forced reconnect until the topic subscribes again, while a subscription connection is down (a failed command connection does not count), when the server refuses the subscription, and with `NotifyEnabled: false`, the loop polls at `PollInterval`; a connection failure also ends a wait in progress at the long interval. Failure retries and the `XINFO GROUPS` position check stay on `PollInterval`. An idle topic costs about 15 server-executed commands a second per process at 250 ms, 4 at 1 s and 0.8 at 5 s (measured on a single node: 3 topics, 44, 12 and 2.4); the saving levels off near 5 s. Set it lower (down to `PollInterval`) to shorten the window a dropped doorbell leaves, or higher to cut the idle cost further.
 
 Only `AddRedisStreams(sectionName)` and the `Topics[]` entries keep an absent `PollInterval` key unset. An app that binds the options itself — `AddRedisStreams(o => section.Bind(o))`, `services.Configure<RedisStreamsTopicOptions>(section)` or `ConfigureRedisStreamsTopic(name, o => section.Bind(o))` — counts as having set `PollInterval`, because the configuration binder writes it back, so the live cadence stays at `PollInterval`; set `NotifiedPollInterval` explicitly there to get the long one.
 
-A reader takes the long interval because its own subscription is live, not because the writers ring. Entries from a writer that does not ring the doorbell — one with `NotifyEnabled: false`, another app sharing the stream with other settings, or a library version from before the doorbell — reach it up to `NotifiedPollInterval` late instead of `PollInterval`. Where some writers do not ring, set `NotifiedPollInterval` to `PollInterval`, or keep `PollInterval` set.
+A reader takes the long interval because its own subscription is live, not because the writers ring. Entries from a writer that does not ring the doorbell — one with `NotifyEnabled: false`, another app sharing the stream with other settings, or a library version from before the doorbell — reach it up to `NotifiedPollInterval` late instead of `PollInterval`.
+
+The reader notices this by itself. A wait that began with the doorbell live, ran its whole interval and then found another node's entry, with no doorbell in between, is an unannounced read; several entries found by one read count once. After two of them in a row the reader logs one warning, records the telemetry event `cache.topic.doorbell_missed` (tag `topic`), and polls at `PollInterval` again, as if the doorbell were off. It returns to `NotifiedPollInterval`, recording `cache.topic.doorbell_recovered`, once a doorbell arrives and no read has been unannounced for 12 notified intervals, or when the subscription is taken again. Any doorbell that arrives between two unannounced reads resets the count, so one doorbell that raced a poll changes nothing. A stream where no writer rings therefore settles on `PollInterval` after two such reads. A stream that mixes ringing and silent writers may never reach two in a row, so there the silent writers' entries stay up to `NotifiedPollInterval` late: set `NotifiedPollInterval` to `PollInterval`, or keep `PollInterval` set.
 
 Do not raise `PollInterval` for this: it also paces the fallback, so a topic without a live doorbell would poll slowly too.
 
@@ -335,7 +337,7 @@ A service that uses Redis Streams with the notify doorbell enabled on a high-tra
       "Enabled": true,
       "MaxLength": 32768,
       "PollInterval": "0:00:00.250",
-      "NotifiedPollInterval": "0:00:05.000",
+      "NotifiedPollInterval": "0:00:01.000",
       "MaintainerEnabled": true,
       "MaintainerCheckInterval": "0:30:00",
       "MaintainerTrimInterval": "1:00:00",
@@ -363,9 +365,9 @@ builder.Host.ConfigureCaching(x => x
 
 With this configuration:
 
-- All topics poll every 5 seconds while their doorbell is live (`NotifiedPollInterval`, because notify wakes consumers sooner) and every 250 ms otherwise.
+- All topics poll every second while their doorbell is live (`NotifiedPollInterval`, because notify wakes consumers sooner) and every 250 ms otherwise.
 - The `orders` topic has a larger stream cap (131072 entries) and a larger consumer channel (8192).
-- The `orders` topic uses the notify doorbell — after every `XADD` a Pub/Sub message wakes consumers immediately, so the 5-second poll is only a fallback.
+- The `orders` topic uses the notify doorbell — after every `XADD` a Pub/Sub message wakes consumers immediately, so the 1-second poll is only a fallback.
 - The stream maintainer runs every 30 minutes, trims entries older than 1 hour, and quarantines empty consumer groups for up to 1 hour before deleting them.
 
 ## Troubleshooting

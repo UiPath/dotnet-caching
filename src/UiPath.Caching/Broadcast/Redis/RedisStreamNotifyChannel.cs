@@ -64,7 +64,7 @@ internal sealed partial class RedisStreamNotifyChannel : IDisposable
         {
             if (publisher != self)
             {
-                _waiter.Signal();
+                _waiter.Ring();
             }
         };
         _periodKnown = subscriberTimeout > TimeSpan.Zero;

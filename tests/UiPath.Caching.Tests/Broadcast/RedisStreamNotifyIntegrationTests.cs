@@ -282,6 +282,58 @@ public sealed class RedisStreamNotifyIntegrationTests(RedisContainerFixture fixt
     }
 
     [Fact]
+    public async Task Entries_that_keep_arriving_unannounced_bring_the_poll_interval_back()
+    {
+        Assert.SkipUnless(fixture.Enabled, "Set RUN_REDIS_INTEGRATION_TESTS=1 (Docker required) to run.");
+        // Node a rings a channel nobody listens on, while node b's subscription stays live.
+        var (a, _) = Topic("urn:a", Poll, configure: o => o.NotifyChannelStrategy = new LostDoorbell());
+        var log = new RecordingLogger();
+        var telemetry = Substitute.For<ICachingTelemetryProvider>();
+        var (topicB, received) = Topic("urn:b", Poll, logger: log, configure: o => o.NotifiedPollInterval = TimeSpan.FromSeconds(3), telemetry: telemetry);
+        await SettledAsync();
+        (await EventuallyAsync(() => Task.FromResult(topicB.NotifyLive))).Should().BeTrue("the subscription goes live a little after the server counts it");
+        // Each entry lands in a wait that runs its whole 3 s, since nothing rings for it. An entry read by a wait that began
+        // before the subscription went live does not count, so a slow machine may need one or two more than the two in a row.
+        var published = 0;
+        while (!topicB.DoorbellShortened && published < 5)
+        {
+            (await a.PublishAsync(Event("urn:a", $"{published++}"), TestContext.Current.CancellationToken)).Should().BeTrue();
+            (await Task.WhenAny(received.Next.Task, Task.Delay(TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken))).Should().BeSameAs(received.Next.Task, "a poll always catches it");
+            received.Next = new(TaskCreationOptions.RunContinuationsAsynchronously);
+            (await EventuallyAsync(() => CaughtUpAsync("urn:b"))).Should().BeTrue("the entry is read and acknowledged before the wait that follows it begins");
+            await Task.Delay(300, TestContext.Current.CancellationToken);
+        }
+
+        published.Should().BeGreaterThanOrEqualTo(2, "one unannounced entry is not enough");
+        log.Records.Should().Contain(r => r.Level == LogLevel.Warning && r.Message.Contains("with no doorbell"), "entries kept coming unannounced");
+        topicB.DoorbellShortened.Should().BeTrue();
+        telemetry.Received(1).TrackEvent("cache.topic.doorbell_missed", Arg.Any<TelemetryTags<string>>(), Arg.Any<TelemetryTags<double>>());
+
+        (await a.PublishAsync(Event("urn:a", "3"), TestContext.Current.CancellationToken)).Should().BeTrue();
+
+        (await Task.WhenAny(received.Next.Task, Task.Delay(TimeSpan.FromMilliseconds(1500), TestContext.Current.CancellationToken))).Should().BeSameAs(received.Next.Task, "the 250 ms poll is back in force, well inside the 3 s notified interval");
+    }
+
+    [Fact]
+    public async Task A_nodes_own_entries_read_on_a_timed_wait_are_not_unannounced()
+    {
+        Assert.SkipUnless(fixture.Enabled, "Set RUN_REDIS_INTEGRATION_TESTS=1 (Docker required) to run.");
+        // No node wakes for its own doorbell, so its own entries are always read on a wait that ran its whole interval.
+        var log = new RecordingLogger();
+        var (a, _) = Topic("urn:a", Poll, logger: log, configure: o => o.NotifiedPollInterval = TimeSpan.FromSeconds(1));
+        (await EventuallyAsync(() => Task.FromResult(a.NotifyLive))).Should().BeTrue("the subscription goes live");
+
+        foreach (var id in new[] { "1", "2", "3" })
+        {
+            (await a.PublishAsync(Event("urn:a", id), TestContext.Current.CancellationToken)).Should().BeTrue();
+            (await EventuallyAsync(() => CaughtUpAsync("urn:a"))).Should().BeTrue("the node reads and acknowledges its own entry on the next poll");
+        }
+
+        a.DoorbellShortened.Should().BeFalse("only entries of other nodes can show a doorbell missing");
+        log.Records.Should().NotContain(r => r.Message.Contains("with no doorbell"));
+    }
+
+    [Fact]
     public async Task With_the_doorbell_off_the_poll_interval_applies()
     {
         Assert.SkipUnless(fixture.Enabled, "Set RUN_REDIS_INTEGRATION_TESTS=1 (Docker required) to run.");
@@ -439,7 +491,7 @@ public sealed class RedisStreamNotifyIntegrationTests(RedisContainerFixture fixt
         return connector;
     }
 
-    private (RedisStreamsTopic<ICacheEvent> Topic, Received Observer) Topic(string source, TimeSpan pollInterval, long? maxLength = 32_768, IRedisConnector? connector = null, ILogger<RedisStreamsTopic<ICacheEvent>>? logger = null, Action<RedisStreamsTopicOptions>? configure = null, IResiliencePipelineProvider? pipelines = null)
+    private (RedisStreamsTopic<ICacheEvent> Topic, Received Observer) Topic(string source, TimeSpan pollInterval, long? maxLength = 32_768, IRedisConnector? connector = null, ILogger<RedisStreamsTopic<ICacheEvent>>? logger = null, Action<RedisStreamsTopicOptions>? configure = null, IResiliencePipelineProvider? pipelines = null, ICachingTelemetryProvider? telemetry = null)
     {
         var cacheOptions = new CacheOptions { Enabled = true, AppShortName = _cacheOptions.AppShortName, SourceUri = new Uri(source) };
         var options = new RedisStreamsTopicOptions { Enabled = true, PollInterval = pollInterval, MaxLength = maxLength, NotifySubscriberDueTime = TimeSpan.FromMilliseconds(10) };
@@ -454,7 +506,7 @@ public sealed class RedisStreamNotifyIntegrationTests(RedisContainerFixture fixt
             options,
             cacheOptions,
             logger ?? NullLogger<RedisStreamsTopic<ICacheEvent>>.Instance,
-            NullTelemetryProvider.Instance,
+            telemetry ?? NullTelemetryProvider.Instance,
             NullRedisProfiler.Instance,
             _stop.Token);
         var observer = new Received();
