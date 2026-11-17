@@ -352,13 +352,15 @@ public class ResiliencePipelineWrapperTests(ITestContextAccessor testContextAcce
 
         public bool Finished => _finished;
 
-        public async ValueTask<bool> RunAsync(CancellationToken token)
+#pragma warning disable S1172 // RunAsync is passed as a method group, so its signature is fixed.
+        public async ValueTask<bool> RunAsync(CancellationToken _)
         {
             _entered.TrySetResult();
             await _release.Task.ConfigureAwait(false);
             _finished = true;
             return true;
         }
+#pragma warning restore S1172
 
         public void Release() => _release.TrySetResult();
     }

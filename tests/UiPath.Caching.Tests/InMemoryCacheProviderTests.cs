@@ -108,8 +108,8 @@ public class InMemoryCacheProviderTests(ITestContextAccessor testContextAccessor
     [Fact]
     public void Dispose_can_be_called()
     {
-        var x = Sut.CreateCache();
-        var y = Sut.CreateHashCache();
+        _ = Sut.CreateCache();
+        _ = Sut.CreateHashCache();
         Action act = () => Sut.Dispose();
         act.Should().NotThrow();
     }

@@ -365,7 +365,7 @@ public sealed class RedisStreamNotifyIntegrationTests(RedisContainerFixture fixt
                 await _admin.GetDatabase().ExecuteAsync("ACL", "DELUSER", _aclUser);
             }
 
-            _admin.Dispose();
+            await _admin.DisposeAsync();
         }
 
         _stop.Dispose();

@@ -189,7 +189,7 @@ public class GenerationDepthGuard : ISpecimenBuilderNode
 
     public object Create(object request, ISpecimenContext context)
     {
-        if (request is SeededRequest)
+        if (request is SeededRequest seededRequest)
         {
             var currentDepth = 0;
 
@@ -200,7 +200,7 @@ public class GenerationDepthGuard : ISpecimenBuilderNode
                 currentDepth = requestsForCurrentThread.Max(x => x.Depth) + 1;
             }
 
-            var depthRequest = new DepthSeededRequest(((SeededRequest)request).Request, ((SeededRequest)request).Seed, currentDepth);
+            var depthRequest = new DepthSeededRequest(seededRequest.Request, seededRequest.Seed, currentDepth);
 
             if (depthRequest.Depth >= GenerationDepth)
             {

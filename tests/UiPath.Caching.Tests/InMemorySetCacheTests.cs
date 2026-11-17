@@ -103,7 +103,7 @@ public class InMemorySetCacheTests
         var added = await AddMany(sut, "k", "a", "b", "a");
 
         added.Should().Be(2);
-        (await sut.MembersAsync<string>("k", token: Ct)).Should().BeEquivalentTo(new[] { "a", "b" });
+        (await sut.MembersAsync<string>("k", token: Ct)).Should().BeEquivalentTo("a", "b");
     }
 
     [Fact]
@@ -164,7 +164,7 @@ public class InMemorySetCacheTests
         (await sut.RemoveItemAsync("k", "a", Ct)).Should().BeFalse();
         (await sut.RemoveItemsAsync("k", new[] { "b", "missing" }, Ct)).Should().Be(1);
 
-        (await sut.MembersAsync<string>("k", token: Ct)).Should().BeEquivalentTo(new[] { "c" });
+        (await sut.MembersAsync<string>("k", token: Ct)).Should().BeEquivalentTo("c");
     }
 
     [Fact]

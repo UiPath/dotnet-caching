@@ -312,5 +312,7 @@ public class ValueReaderTests
         public bool TryDeserialize<T>(object? value, out T? result) => throw new NotSupportedException();
     }
 
+#pragma warning disable S2094 // The subclass is the test subject.
     private sealed class JsonSubclass : SystemJsonByteSerializerProxy;
+#pragma warning restore S2094
 }

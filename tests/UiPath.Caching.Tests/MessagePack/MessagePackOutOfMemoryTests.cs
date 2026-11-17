@@ -77,7 +77,7 @@ public class MessagePackOutOfMemoryTests(ITestContextAccessor testContextAccesso
             return Task.FromResult<Exhausted?>(new Exhausted());
         }
 
-        await FluentActions.Awaiting(() => sut.GetAsync<Exhausted>("k", policy: null, Token).AsTask()).Should().ThrowAsync<OutOfMemoryException>();
+        await FluentActions.Awaiting(async () => await sut.GetAsync<Exhausted>("k", policy: null, Token)).Should().ThrowAsync<OutOfMemoryException>();
         await FluentActions.Awaiting(() => sut.GetOrAddAsync<Exhausted>("k", Generate, TimeSpan.FromMinutes(1), policy: null, Token).AsTask()).Should().ThrowAsync<OutOfMemoryException>();
 
         generated.Should().Be(0);
@@ -113,9 +113,11 @@ public class MessagePackOutOfMemoryTests(ITestContextAccessor testContextAccesso
         };
     }
 
+#pragma warning disable S2094 // a marker type for the generic argument
     public sealed class Exhausted
     {
     }
+#pragma warning restore S2094
 
     public sealed class ExhaustedFormatter : IMessagePackFormatter<Exhausted?>
     {

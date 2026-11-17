@@ -40,7 +40,13 @@ internal static class PeerLagHarness
 
     private static Dictionary<string, string?> ExtraFor(string app, string connection, string cell)
     {
-        var notify = cell == "nonotify" ? "false" : cell == "notify" || cell.StartsWith("notify:", StringComparison.Ordinal) ? "true" : throw new ArgumentException($"Unknown cell {cell}", nameof(cell));
+        var notify = cell switch
+        {
+            "nonotify" => "false",
+            "notify" => "true",
+            _ when cell.StartsWith("notify:", StringComparison.Ordinal) => "true",
+            _ => throw new ArgumentException($"Unknown cell {cell}", nameof(cell)),
+        };
         var extra = new Dictionary<string, string?>
         {
             { "Caching:AppShortName", app },

@@ -27,7 +27,7 @@ public class TopicFactoryTests : IAsyncLifetime
     [Fact]
     public void Works_as_expected()
     {
-        var provider = _providers.Where(p => p.Name != _defaultProvider.Name).ToList().First();
+        var provider = _providers.First(p => p.Name != _defaultProvider.Name);
         Sut.Get(provider.Name).Should().Be(provider);
     }
 
@@ -48,7 +48,7 @@ public class TopicFactoryTests : IAsyncLifetime
     [Fact]
     public void Disabled_provider_ignored()
     {
-        var provider = _providers.Where(p => p.Name != _defaultProvider.Name).ToList().First();
+        var provider = _providers.First(p => p.Name != _defaultProvider.Name);
         provider.ClearSubstitute();
         provider.Enabled.Returns(false);
         Sut.Get(provider.Name).Should().NotBe(provider);
@@ -89,7 +89,7 @@ public class TopicFactoryTests : IAsyncLifetime
     [Fact]
     public void Dispose_provider_exception()
     {
-        var f = _providers.First();
+        var f = _providers[0];
         f.When(x => x.Dispose()).Throw(new Exception("test"));
         var act = () => Sut.Dispose();
         act.Should().NotThrow<Exception>();

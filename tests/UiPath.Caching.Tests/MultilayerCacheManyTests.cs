@@ -66,7 +66,15 @@ public class MultilayerCacheManyTests
     public async Task RemoveMany_reports_the_failed_key_of_a_middle_chunk_and_carries_on()
     {
         using var h = new Harness(chunk: 4);
-        h.OnRemove = key => key == "k5" ? new ValueTask<bool>(false) : key == "k6" ? throw new InvalidOperationException("down") : new ValueTask<bool>(true);
+        h.OnRemove = key =>
+        {
+            if (key == "k5")
+            {
+                return new ValueTask<bool>(false);
+            }
+
+            return key == "k6" ? throw new InvalidOperationException("down") : new ValueTask<bool>(true);
+        };
 
         var failed = await h.Cache.RemoveManyAsync<string>(Keys(12), Ct);
 
@@ -80,7 +88,15 @@ public class MultilayerCacheManyTests
     public async Task RemoveMany_reports_a_key_whose_event_failed()
     {
         using var h = new Harness(chunk: 4);
-        h.OnPublish = e => e.Key == "k2" ? throw new InvalidOperationException("stream") : e.Key == "k3" ? new ValueTask<bool>(false) : new ValueTask<bool>(true);
+        h.OnPublish = e =>
+        {
+            if (e.Key == "k2")
+            {
+                throw new InvalidOperationException("stream");
+            }
+
+            return new ValueTask<bool>(e.Key != "k3");
+        };
 
         var failed = await h.Cache.RemoveManyAsync<string>(Keys(5), Ct);
 
@@ -238,7 +254,15 @@ public class MultilayerCacheManyTests
     public async Task SetMany_gives_a_key_whose_write_failed_no_event_and_reports_it_while_the_rest_go_on()
     {
         using var h = new Harness(chunk: 4);
-        h.OnWrite = (key, _) => key == "k5" ? Task.FromResult(false) : key == "k6" ? throw new InvalidOperationException("down") : Task.FromResult(true);
+        h.OnWrite = (key, _) =>
+        {
+            if (key == "k5")
+            {
+                return Task.FromResult(false);
+            }
+
+            return key == "k6" ? throw new InvalidOperationException("down") : Task.FromResult(true);
+        };
         var pairs = Keys(12).Select(k => new KeyValuePair<CacheKey, string?>(k, "v")).ToArray();
 
         var failed = await h.Cache.SetManyAsync<string>(pairs, Awaited, Ct);

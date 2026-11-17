@@ -9,7 +9,7 @@ namespace UiPath.Caching.Tests.Redis;
 /// <summary>Two nodes on one Redis, standalone or cluster, with broadcast: the batch remove and set across many keys and slots.</summary>
 [Collection("RedisIntegration")]
 [Trait("Category", "Integration")]
-public class ManyKeysIntegrationTests(RedisContainerFixture fixture) : IDisposable
+public sealed class ManyKeysIntegrationTests(RedisContainerFixture fixture) : IDisposable
 {
     private readonly string _app = $"mk{Guid.NewGuid():N}"[..10];
     private readonly List<ServiceProvider> _nodes = [];

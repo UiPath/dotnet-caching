@@ -9,7 +9,7 @@ namespace UiPath.Caching.Tests.Redis;
 /// <summary>Two nodes on one Redis: a node that was not told of a peer's refresh adopts the refreshed value instead of generating it again.</summary>
 [Collection("RedisIntegration")]
 [Trait("Category", "Integration")]
-public class RehydrateAdoptIntegrationTests(RedisContainerFixture fixture) : IDisposable
+public sealed class RehydrateAdoptIntegrationTests(RedisContainerFixture fixture) : IDisposable
 {
     private static readonly CachePolicy Policy = new()
     {

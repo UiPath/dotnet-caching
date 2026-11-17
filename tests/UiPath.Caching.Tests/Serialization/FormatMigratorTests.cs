@@ -165,7 +165,8 @@ public class FormatMigratorTests
         using var sut = Migrator(rate: 4);
         bool Offer(string key) => sut.TryEnqueue(Owner, key, "Redis", 1, 0, static _ => _ => ValueTask.FromResult(RewriteTally.Of(RewriteOutcome.Done)));
 
-        Enumerable.Range(0, 4).Select(i => Offer($"k{i}")).ToArray().Should().AllBeEquivalentTo(true);
+        bool[] initial = [.. Enumerable.Range(0, 4).Select(i => Offer($"k{i}"))];
+        initial.Should().AllBeEquivalentTo(true);
         Offer("k4").Should().BeFalse();
         Offer("k5").Should().BeFalse();
         sut.Flush();
@@ -178,7 +179,8 @@ public class FormatMigratorTests
         Outcomes("ratelimited").Should().Be(3);
 
         _clock.Advance(TimeSpan.FromSeconds(60));
-        Enumerable.Range(10, 4).Select(i => Offer($"k{i}")).ToArray().Should().AllBeEquivalentTo(true);
+        bool[] refilled = [.. Enumerable.Range(10, 4).Select(i => Offer($"k{i}"))];
+        refilled.Should().AllBeEquivalentTo(true);
         Offer("k20").Should().BeFalse("the bucket holds one second of tokens, however long it sat");
     }
 
@@ -381,9 +383,11 @@ public class FormatMigratorTests
 
             sut.Dispose();
             await sut.Stopped.WaitAsync(TimeSpan.FromSeconds(10), Ct);
+#pragma warning disable S1215 // The test needs the finalizers to run so an unobserved task exception surfaces.
             GC.Collect();
             GC.WaitForPendingFinalizers();
             GC.Collect();
+#pragma warning restore S1215
 
             unobserved.Should().BeEmpty();
             Outcomes("failed").Should().Be(1);

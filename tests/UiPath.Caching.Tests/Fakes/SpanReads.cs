@@ -103,19 +103,9 @@ internal static class SpanReads
         return Complete(cache.TimeToLiveAsync<T>($"{key}", token));
     }
 
-    public static DateTimeOffset? ExpireTime<T>(ICache cache, string key, CancellationToken token = default)
-    {
-        return Complete(cache.ExpireTimeAsync<T>($"{key}", token));
-    }
-
     public static TimeSpan? TimeToLive<T>(ICache<T> cache, string key, CancellationToken token = default)
     {
         return Complete(cache.TimeToLiveAsync($"{key}", token));
-    }
-
-    public static DateTimeOffset? ExpireTime<T>(ICache<T> cache, string key, CancellationToken token = default)
-    {
-        return Complete(cache.ExpireTimeAsync($"{key}", token));
     }
 
     public static TimeSpan? TimeToLive<T>(IHashCache cache, string key, CancellationToken token = default)
@@ -123,14 +113,24 @@ internal static class SpanReads
         return Complete(cache.TimeToLiveAsync<T>($"{key}", token));
     }
 
-    public static DateTimeOffset? ExpireTime<T>(IHashCache cache, string key, CancellationToken token = default)
+    public static TimeSpan? TimeToLive<T>(IHashCache<T> cache, string key, CancellationToken token = default)
+    {
+        return Complete(cache.TimeToLiveAsync($"{key}", token));
+    }
+
+    public static DateTimeOffset? ExpireTime<T>(ICache cache, string key, CancellationToken token = default)
     {
         return Complete(cache.ExpireTimeAsync<T>($"{key}", token));
     }
 
-    public static TimeSpan? TimeToLive<T>(IHashCache<T> cache, string key, CancellationToken token = default)
+    public static DateTimeOffset? ExpireTime<T>(ICache<T> cache, string key, CancellationToken token = default)
     {
-        return Complete(cache.TimeToLiveAsync($"{key}", token));
+        return Complete(cache.ExpireTimeAsync($"{key}", token));
+    }
+
+    public static DateTimeOffset? ExpireTime<T>(IHashCache cache, string key, CancellationToken token = default)
+    {
+        return Complete(cache.ExpireTimeAsync<T>($"{key}", token));
     }
 
     public static DateTimeOffset? ExpireTime<T>(IHashCache<T> cache, string key, CancellationToken token = default)
@@ -149,5 +149,7 @@ internal static class SpanReads
     }
 
     public static TResult Complete<TResult>(ValueTask<TResult> read) =>
+#pragma warning disable S5034 // The result is read only when the read has completed; otherwise the task is awaited once, and AsTask on a completed read would allocate.
         read.IsCompletedSuccessfully ? read.Result : read.AsTask().GetAwaiter().GetResult();
+#pragma warning restore S5034
 }

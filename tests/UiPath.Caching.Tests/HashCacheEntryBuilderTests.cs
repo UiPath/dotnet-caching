@@ -23,7 +23,7 @@ public class HashCacheEntryBuilderTests : IAsyncLifetime
     [Fact]
     public void Entry_token_cancel()
     {
-        var cancellationTokenSource = new CancellationTokenSource();
+        using var cancellationTokenSource = new CancellationTokenSource();
         var token = cancellationTokenSource.Token;
         cancellationTokenSource.Cancel();
         Action act = () => Sut.BuildEntryOptions<string>(_cacheKey, token);

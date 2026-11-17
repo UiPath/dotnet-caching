@@ -102,9 +102,9 @@ public class RedisConnectionWarmupTests
     private sealed class FakeConnector(Func<ValueTask>? onConnect = null) : IRedisConnector
     {
         private int _connectCount;
-        public event EventHandler? OnConnectionFailed { add { } remove { } }
-        public event EventHandler? OnConnectionRestored { add { } remove { } }
-        public event EventHandler? OnReconnected { add { } remove { } }
+        public event EventHandler? OnConnectionFailed { add { /* unused */ } remove { /* unused */ } }
+        public event EventHandler? OnConnectionRestored { add { /* unused */ } remove { /* unused */ } }
+        public event EventHandler? OnReconnected { add { /* unused */ } remove { /* unused */ } }
         public int ConnectCount => Volatile.Read(ref _connectCount);
 
         public bool IsConnected => false;

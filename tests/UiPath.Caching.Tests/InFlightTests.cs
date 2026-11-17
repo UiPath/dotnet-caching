@@ -78,9 +78,11 @@ public class InFlightTests
         try
         {
             await AbandonAFailingRunAsync(workEnds);
+#pragma warning disable S1215 // The test needs the abandoned task finalized to prove it raises no unobserved exception.
             GC.Collect();
             GC.WaitForPendingFinalizers();
             GC.Collect();
+#pragma warning restore S1215
 
             Volatile.Read(ref unobserved).Should().Be(0);
         }
@@ -149,7 +151,8 @@ public class InFlightTests
         var workToken = CancellationToken.None;
         using var leaving = new CancellationTokenSource();
 
-        var leaver = flights.RunAsync("k", release, (r, run) => { workToken = run.Token; return new ValueTask<int>(r.Task); }, leaving.Token).AsTask();
+        var leaverRun = flights.RunAsync("k", release, (r, run) => { workToken = run.Token; return new ValueTask<int>(r.Task); }, leaving.Token);
+        var leaver = leaverRun.AsTask();
         var stayer = flights.RunAsync("k", release, static (r, _) => new ValueTask<int>(r.Task), Ct).AsTask();
         await leaving.CancelAsync();
 
@@ -175,7 +178,8 @@ public class InFlightTests
             }
         }
 
-        var a = flights.RunAsync("k", cancelled, UntilCancelled, first.Token).AsTask();
+        var aRun = flights.RunAsync("k", cancelled, UntilCancelled, first.Token);
+        var a = aRun.AsTask();
         var b = flights.RunAsync("k", cancelled, UntilCancelled, second.Token).AsTask();
         await first.CancelAsync();
         cancelled.Task.IsCompleted.Should().BeFalse("one caller is still waiting");
@@ -258,7 +262,8 @@ public class InFlightTests
         }
 
         var token = cancellableToken ? source.Token : CancellationToken.None;
-        var starter = flights.RunAsync("k", release, FailLate, token).AsTask();
+        var starterRun = flights.RunAsync("k", release, FailLate, token);
+        var starter = starterRun.AsTask();
         var joiner = flights.RunAsync("k", release, FailLate, token).AsTask();
         release.SetResult();
 
@@ -273,7 +278,8 @@ public class InFlightTests
         var release = new TaskCompletionSource<int>(TaskCreationOptions.RunContinuationsAsynchronously);
         using var leaving = new CancellationTokenSource();
 
-        var starter = flights.RunAsync("k", release, static (r, _) => new ValueTask<int>(r.Task), leaving.Token).AsTask();
+        var starterRun = flights.RunAsync("k", release, static (r, _) => new ValueTask<int>(r.Task), leaving.Token);
+        var starter = starterRun.AsTask();
         var joiner = flights.RunAsync("k", release, static (r, _) => new ValueTask<int>(r.Task), Ct).AsTask();
         await leaving.CancelAsync();
 
@@ -356,7 +362,8 @@ public class InFlightTests
         var flights = new InFlight<string, int>();
         var release = new TaskCompletionSource<int>(TaskCreationOptions.RunContinuationsAsynchronously);
 
-        var starter = flights.StartOrJoinAsync("k", release, EndOwn, Ct, out var started).AsTask();
+        var starterRun = flights.StartOrJoinAsync("k", release, EndOwn, Ct, out var started);
+        var starter = starterRun.AsTask();
         var joiner = flights.StartOrJoinAsync("k", release, EndOwn, Ct, out var startedToo).AsTask();
         release.SetResult(42);
 
@@ -397,7 +404,8 @@ public class InFlightTests
         var expected = (Exception)Activator.CreateInstance(failure, "not ours")!;
         var token = cancellableToken ? source.Token : CancellationToken.None;
 
-        var starter = flights.StartOrJoinAsync("k", release, EndOwn, token, out _).AsTask();
+        var starterRun = flights.StartOrJoinAsync("k", release, EndOwn, token, out _);
+        var starter = starterRun.AsTask();
         var joiner = flights.StartOrJoinAsync("k", release, EndOwn, token, out _).AsTask();
         release.SetException(expected);
 
@@ -413,7 +421,8 @@ public class InFlightTests
         var release = new TaskCompletionSource<int>(TaskCreationOptions.RunContinuationsAsynchronously);
         using var leaving = new CancellationTokenSource();
 
-        var starter = flights.StartOrJoinAsync("k", release, EndOwn, leaving.Token, out _).AsTask();
+        var starterRun = flights.StartOrJoinAsync("k", release, EndOwn, leaving.Token, out _);
+        var starter = starterRun.AsTask();
         var joiner = flights.StartOrJoinAsync("k", release, EndOwn, Ct, out _).AsTask();
         await leaving.CancelAsync();
 
@@ -504,7 +513,8 @@ public class InFlightTests
             }
         }
 
-        var abandoned = workEnds ? flights.StartOrJoinAsync("k", release, FailLateAndEnd, leaving.Token, out _).AsTask() : flights.RunAsync("k", release, FailLate, leaving.Token).AsTask();
+        var abandonedRun = workEnds ? flights.StartOrJoinAsync("k", release, FailLateAndEnd, leaving.Token, out _) : flights.RunAsync("k", release, FailLate, leaving.Token);
+        var abandoned = abandonedRun.AsTask();
         await leaving.CancelAsync();
         await abandoned.Invoking(t => t).Should().ThrowAsync<OperationCanceledException>();
         release.SetResult();

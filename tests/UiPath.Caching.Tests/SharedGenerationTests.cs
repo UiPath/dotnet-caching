@@ -38,7 +38,8 @@ public class SharedGenerationTests
         using var cache = InMemoryMultilayer.Cache();
         var generations = ReplaceGenerations(cache, null);
 
-        var failing = cache.GetOrAddAsync<string, string>([new("a", "a")], (_, _) => throw new InvalidOperationException("boom"), policy: null, Ct).AsTask();
+        var failingRead = cache.GetOrAddAsync<string, string>([new("a", "a")], (_, _) => throw new InvalidOperationException("boom"), policy: null, Ct);
+        var failing = failingRead.AsTask();
         await Throws<InvalidOperationException>(failing);
         generations.Count.Should().Be(0);
 
@@ -87,7 +88,8 @@ public class SharedGenerationTests
 
         var batch = Task.Run(async () => await cache.GetOrAddAsync<string, string>([new("k", "k"), new("other", "other")], GenerateBatch, policy: null, Ct), Ct);
         batchAtReservation.Wait(TimeSpan.FromSeconds(10), Ct).Should().BeTrue();
-        var single = cache.GetOrAddAsync<string>("k", GenerateSingle, policy: null, Ct).AsTask();
+        var singleRead = cache.GetOrAddAsync<string>("k", GenerateSingle, policy: null, Ct);
+        var single = singleRead.AsTask();
         await singleStarted.Task.WaitAsync(TimeSpan.FromSeconds(10), Ct);
         allowReservation.Set();
 
@@ -107,7 +109,7 @@ public class SharedGenerationTests
         using var cache = InMemoryMultilayer.Cache(new InMemoryCacheOptions { LocalSingleFlightTimeout = TimeSpan.FromMilliseconds(5) });
         using var starterCancellation = CancellationTokenSource.CreateLinkedTokenSource(Ct);
         var started = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        var starter = cache.GetOrAddAsync<string, string>(
+        var starterRead = cache.GetOrAddAsync<string, string>(
             [new("k", "k")],
             async (_, token) =>
             {
@@ -116,7 +118,8 @@ public class SharedGenerationTests
                 return [];
             },
             policy: null,
-            starterCancellation.Token).AsTask();
+            starterCancellation.Token);
+        var starter = starterRead.AsTask();
         await started.Task;
 
         var joinedA = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -144,8 +147,10 @@ public class SharedGenerationTests
             return states.Select(s => new KeyValuePair<string, string?>(s, s)).ToArray();
         }
 
-        var a = cache.GetOrAddAsync<string, string>([new("k", "k"), new("a", "a")], Generate, policy: null, Ct).AsTask();
-        var b = cache.GetOrAddAsync<string, string>([new("k", "k"), new("b", "b")], Generate, policy: null, Ct).AsTask();
+        var aRead = cache.GetOrAddAsync<string, string>([new("k", "k"), new("a", "a")], Generate, policy: null, Ct);
+        var a = aRead.AsTask();
+        var bRead = cache.GetOrAddAsync<string, string>([new("k", "k"), new("b", "b")], Generate, policy: null, Ct);
+        var b = bRead.AsTask();
         await Task.WhenAll(joinedA.Task, joinedB.Task).WaitAsync(TimeSpan.FromSeconds(10), Ct);
         await starterCancellation.CancelAsync();
         await Throws<OperationCanceledException>(starter);
@@ -179,9 +184,11 @@ public class SharedGenerationTests
             return "loaded";
         }
 
-        var starter = cache.GetOrAddAsync<string>("k", Load, policy, cancellation.Token).AsTask();
+        var starterRead = cache.GetOrAddAsync<string>("k", Load, policy, cancellation.Token);
+        var starter = starterRead.AsTask();
         await started.Task;
-        var joiner = cache.GetOrAddAsync<string>("k", _ => throw new InvalidOperationException("should join"), policy, Ct).AsTask();
+        var joinerRead = cache.GetOrAddAsync<string>("k", _ => throw new InvalidOperationException("should join"), policy, Ct);
+        var joiner = joinerRead.AsTask();
         await Task.Delay(200, Ct);
 
         await cancellation.CancelAsync();
@@ -205,7 +212,8 @@ public class SharedGenerationTests
         typeof(MultilayerCacheBase).GetField("_distributedLock", BindingFlags.Instance | BindingFlags.NonPublic)!.SetValue(cache, distributed);
         var policy = new CachePolicy { Lock = new LockProfile { DistributedLockEnabled = true } };
 
-        var call = cache.GetOrAddAsync<string>("k", _ => Task.FromResult<string?>("loaded"), policy, Ct).AsTask();
+        var callRead = cache.GetOrAddAsync<string>("k", _ => Task.FromResult<string?>("loaded"), policy, Ct);
+        var call = callRead.AsTask();
         await lease.Releasing.Task;
         var (runs, completed) = (cache.RunsInFlight, call.IsCompleted);
         lease.Released.SetResult();
@@ -517,7 +525,8 @@ public class SharedGenerationTests
             return "old";
         }
 
-        var old = cache.GetOrAddAsync<string>("k", Old, policy: null, cancellation.Token).AsTask();
+        var oldRead = cache.GetOrAddAsync<string>("k", Old, policy: null, cancellation.Token);
+        var old = oldRead.AsTask();
         await started.Task;
         var oldRun = generations.Completions().Single();
         await cancellation.CancelAsync();
@@ -546,7 +555,8 @@ public class SharedGenerationTests
             return new Dictionary<string, string?> { ["f"] = "old" };
         }
 
-        var old = cache.GetOrAddAsync<string>("k", Old, policy: null, cancellation.Token).AsTask();
+        var oldRead = cache.GetOrAddAsync<string>("k", Old, policy: null, cancellation.Token);
+        var old = oldRead.AsTask();
         await started.Task;
         var oldRun = generations.Completions().Single();
         await cancellation.CancelAsync();
@@ -580,10 +590,12 @@ public class SharedGenerationTests
             return Task.FromResult(states.Select(s => new KeyValuePair<string, string?>(s, "new")).ToArray());
         }
 
-        var first = cache.GetOrAddAsync<string, string>([new("k", "k")], Old, policy: null, cancellation.Token).AsTask();
+        var firstRead = cache.GetOrAddAsync<string, string>([new("k", "k")], Old, policy: null, cancellation.Token);
+        var first = firstRead.AsTask();
         await started.Task;
         await cancellation.CancelAsync();
-        var second = cache.GetOrAddAsync<string, string>([new("k", "k")], Second, policy: null, Ct).AsTask();
+        var secondRead = cache.GetOrAddAsync<string, string>([new("k", "k")], Second, policy: null, Ct);
+        var second = secondRead.AsTask();
         await Task.Delay(200, Ct);
         secondGenerated.Should().Be(0);
         release.SetResult();
@@ -611,9 +623,11 @@ public class SharedGenerationTests
 
         Task<KeyValuePair<string, string?>[]> Fail(string[] states, CancellationToken token) => throw new InvalidOperationException("batch failed");
 
-        var single = cache.GetOrAddAsync<string>("k", Load, policy: null, cancellation.Token).AsTask();
+        var singleRead = cache.GetOrAddAsync<string>("k", Load, policy: null, cancellation.Token);
+        var single = singleRead.AsTask();
         await started.Task;
-        var batch = cache.GetOrAddAsync<string, string>([new("k", "k"), new("other", "other")], Fail, policy: null, Ct).AsTask();
+        var batchRead = cache.GetOrAddAsync<string, string>([new("k", "k"), new("other", "other")], Fail, policy: null, Ct);
+        var batch = batchRead.AsTask();
         await Throws<InvalidOperationException>(batch);
         await cancellation.CancelAsync();
         await Throws<OperationCanceledException>(single);
@@ -643,10 +657,12 @@ public class SharedGenerationTests
             return new Dictionary<string, string?> { ["f"] = "loaded" };
         }
 
-        var starter = cache.GetOrAddAsync<string>("k", Load, policy, cancellation.Token).AsTask();
+        var starterRead = cache.GetOrAddAsync<string>("k", Load, policy, cancellation.Token);
+        var starter = starterRead.AsTask();
         await started.Task;
         Task<IDictionary<string, string?>> ShouldJoin(CancellationToken token) => throw new InvalidOperationException("should join");
-        var joiner = cache.GetOrAddAsync<string>("k", ShouldJoin, policy, Ct).AsTask();
+        var joinerRead = cache.GetOrAddAsync<string>("k", ShouldJoin, policy, Ct);
+        var joiner = joinerRead.AsTask();
         await Task.Delay(200, Ct);
 
         await cancellation.CancelAsync();

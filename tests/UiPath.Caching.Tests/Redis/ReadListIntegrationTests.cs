@@ -81,7 +81,7 @@ public class ReadListIntegrationTests(RedisContainerFixture fixture)
         var read = await ReadAsync(cache, operation, key, policy);
 
         var regenerates = !hit && operation.StartsWith("getoradd", StringComparison.Ordinal);
-        read.Should().Be(hit ? "x" : regenerates ? "generated" : null);
+        read.Should().Be(hit ? "x" : Regenerated(regenerates));
         if (regenerates)
         {
             // The generator's value is written in the policy's format over the one it could not read.
@@ -241,7 +241,7 @@ public class ReadListIntegrationTests(RedisContainerFixture fixture)
         var read = await ReadHashAsync(hashes, operation, key, policy);
 
         var regenerates = !hit && operation == "getoradd";
-        read.Should().Be(hit ? "x" : regenerates ? "generated" : null);
+        read.Should().Be(hit ? "x" : Regenerated(regenerates));
         if (!regenerates)
         {
             ((byte[]?)await raw.GetDatabase().HashGetAsync(redisKey, "a")).Should().Equal(storedJson ? JsonX : FastX);
@@ -402,6 +402,8 @@ public class ReadListIntegrationTests(RedisContainerFixture fixture)
 
     private static CachePolicy Policy(string write, string[]? read) =>
         new() { DistributedExpiration = TimeSpan.FromMinutes(5), Serializer = new SerializerPolicy { Write = write, Read = read } };
+
+    private static string? Regenerated(bool regenerates) => regenerates ? "generated" : null;
 
     private static async Task<string?> ReadAsync(ICache cache, string operation, string key, CachePolicy policy)
     {

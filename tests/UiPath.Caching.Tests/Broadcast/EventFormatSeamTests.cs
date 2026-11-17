@@ -128,7 +128,7 @@ public class EventFormatSeamTests
         fromB!.Id.Should().Be(original.Id);
         json.Bodies.Select(b => b[0]).Should().Equal(new byte[] { 0x13, (byte)'{' }, "only a body no format owns reaches JSON");
         formatA.Offered.Should().Equal(new byte[] { 0x11 }, "a body is offered only to the format that owns its first byte");
-        formatB.Offered.Should().Equal(new byte[] { 0x12 });
+        formatB.Offered.Should().Equal((byte)0x12);
         unregistered.Should().BeNull();
         text.Should().BeNull();
     }

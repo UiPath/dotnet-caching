@@ -761,7 +761,15 @@ public class RedisConnectorStaleEndpointTests
         public Harness(bool retiredIsMember = false, bool clusterConfigurationKnown = true, bool retiredIsConfigured = false, bool replacementAvailable = true, bool timerDriven = false, bool connectedNodeIsConfigured = true)
         {
             LiveServer = Server(connectedNodeIsConfigured ? Seed : Live, connected: true); // only the configured endpoints are re-handshaked by the refresh
-            Topology.Members = clusterConfigurationKnown ? (retiredIsMember ? [Live, Retired] : [Live]) : null;
+            if (clusterConfigurationKnown)
+            {
+                Topology.Members = retiredIsMember ? [Live, Retired] : [Live];
+            }
+            else
+            {
+                Topology.Members = null;
+            }
+
             Multiplexer.GetEndPoints(true).Returns(retiredIsConfigured ? [Seed, Retired] : [Seed]);
             Multiplexer.GetServers().Returns([LiveServer, RetiredServer]);
             Multiplexer.ConfigureAsync(Arg.Any<TextWriter?>()).Returns(_ => Topology.Refreshed());

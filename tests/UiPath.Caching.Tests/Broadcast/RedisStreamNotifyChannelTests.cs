@@ -217,6 +217,7 @@ public class RedisStreamNotifyChannelTests
         redis.OnReconnected += Raise.Event();
 
         await second.Task.WaitAsync(10.Seconds(), token);
+        second.Task.IsCompletedSuccessfully.Should().BeTrue();
     }
 
     [Fact]
@@ -304,7 +305,9 @@ public class RedisStreamNotifyChannelTests
 
         sut.Dispose();
 
+#pragma warning disable S6966 // The code under test calls the sync Unsubscribe, so that is what is verified.
         subscriber.Received().Unsubscribe(channel, Arg.Any<Action<RedisChannel, RedisValue>>(), CommandFlags.FireAndForget);
+#pragma warning restore S6966
     }
 
     [Fact]
@@ -433,7 +436,9 @@ public class RedisStreamNotifyChannelTests
         Action act = () => sut.Dispose();
 
         act.Should().NotThrow();
+#pragma warning disable S6966 // The code under test calls the sync Unsubscribe, so that is what is verified.
         subscriber.Received(1).Unsubscribe(channel, Arg.Any<Action<RedisChannel, RedisValue>>(), CommandFlags.FireAndForget);
+#pragma warning restore S6966
     }
 
     [Fact]
@@ -637,7 +642,9 @@ public class RedisStreamNotifyChannelTests
             await Task.Delay(20, token);
         }
 
+#pragma warning disable S6966 // The code under test calls the sync Unsubscribe, so that is what is verified.
         subscriber.Received(1).Unsubscribe(channel, Arg.Any<Action<RedisChannel, RedisValue>>(), CommandFlags.FireAndForget);
+#pragma warning restore S6966
     }
 
     [Fact]

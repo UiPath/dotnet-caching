@@ -25,9 +25,16 @@ internal static class CacheImplementation
         var abstracts = new[] { cache }.Concat(cache.AllInterfaces)
             .SelectMany(type => type.GetMembers())
             .Where(member => member.IsAbstract && member is IPropertySymbol or IMethodSymbol { MethodKind: MethodKind.Ordinary })
-            .Select(member => member is IMethodSymbol method && declared.Contains(Signature(method))
-                ? "    " + Explicit(method)
-                : "    public abstract " + member.ToDisplayString(Declaration) + (member is IMethodSymbol ? ";" : string.Empty));
+            .Select(member =>
+            {
+                if (member is IMethodSymbol method && declared.Contains(Signature(method)))
+                {
+                    return "    " + Explicit(method);
+                }
+
+                var terminator = member is IMethodSymbol ? ";" : string.Empty;
+                return "    public abstract " + member.ToDisplayString(Declaration) + terminator;
+            });
         return $"public abstract class {declaration} : {cache.ToDisplayString()}\n{{\n{string.Join("\n", abstracts)}\n\n{members}\n}}\n";
     }
 

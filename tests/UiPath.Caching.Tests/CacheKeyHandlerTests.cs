@@ -68,7 +68,7 @@ public class CacheKeyHandlerTests
         await spanCache.GetAsync<string>($"{empty}", (CachePolicy?)null, TestContext.Current.CancellationToken);
 
         plain.ReceivedCalls().Select(c => c.GetOriginalArguments()[0]).Should().OnlyContain(k => (CacheKey)k! == new CacheKey("") && ((CacheKey)k!).Name == string.Empty);
-        recorder.Calls.Should().Equal([("GetAsync(policy)", ""), ("GetAsync(policy)", "")]);
+        recorder.Calls.Should().Equal(("GetAsync(policy)", ""), ("GetAsync(policy)", ""));
     }
 
     [Fact]
@@ -148,8 +148,15 @@ public class CacheKeyHandlerTests
     }
 
     // The recording cache completes synchronously; reading the result inline keeps the allocation count on this thread.
-    private static T Completed<T>(ValueTask<T> task) =>
-        task.IsCompleted ? task.Result : throw new InvalidOperationException("The cache did not complete synchronously.");
+    private static T Completed<T>(ValueTask<T> task)
+    {
+        if (task.IsCompletedSuccessfully)
+        {
+            return task.Result;
+        }
+
+        throw new InvalidOperationException("The cache did not complete synchronously.");
+    }
 
     private static void Check(string handled, string expected) => handled.Should().Be(expected);
 

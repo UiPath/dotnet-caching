@@ -329,6 +329,7 @@ public class MultilayerHashCacheBackgroundWriteTests
             }
             catch (OperationCanceledException)
             {
+                // Expected: the drain cancelled the write.
             }
 
             return false;
@@ -766,16 +767,6 @@ public class MultilayerHashCacheBackgroundWriteTests
         }
 
         public Task SettledAsync() => UntilAsync(() => Cache.RunsInFlight == 0);
-
-        public async Task ActivateAsync()
-        {
-            await Cache.SetAsync<string>("warm-up", Fields("x"), Background, Ct);
-            await UntilAsync(() => Cache.RunsInFlight == 0);
-            lock (_gate)
-            {
-                Log.Clear();
-            }
-        }
 
         public void Dispose() => Cache.Dispose();
 

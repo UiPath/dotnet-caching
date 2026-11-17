@@ -499,6 +499,7 @@ public class SpanKeyReadTests
     }
 
     /// <summary>Runs a callback while composing, which is after the read has sampled the connection and before it probes the local tier.</summary>
+#pragma warning disable S1144 // Constructed by the tests above, which the analyzer misses for a primary-constructor type.
     private sealed class DroppingStrategy(Action onCompose) : ICacheKeyStrategy, ISpanCacheKeyStrategy
     {
         public CacheKey GetCacheKey<T>(CacheKey key) => key;
@@ -511,6 +512,7 @@ public class SpanKeyReadTests
             return true;
         }
     }
+#pragma warning restore S1144
 
     private sealed class ThrowingStrategy : ICacheKeyStrategy, ISpanCacheKeyStrategy
     {

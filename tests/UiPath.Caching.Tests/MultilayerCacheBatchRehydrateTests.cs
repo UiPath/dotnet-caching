@@ -830,13 +830,14 @@ public class MultilayerCacheBatchRehydrateTests(ITestContextAccessor testContext
                     _stored[k] = refreshed;
                 }
 
+                var remaining = _agedKeys.Contains(k) ? _agedRemaining : TimeSpan.FromMinutes(10);
                 return new KeyValuePair<CacheKey, ICacheEntry<string?>>(
                     k,
                     _stored.TryGetValue(k, out var v)
                         ? new TestCacheEntry<string?>
                         {
                             Value = v,
-                            Expiration = DateTimeOffset.UtcNow + (_agedKeys.Contains(k) ? _agedRemaining : TimeSpan.FromMinutes(10)),
+                            Expiration = DateTimeOffset.UtcNow + remaining,
                             Found = true,
                         }
                         : new TestCacheEntry<string?> { Value = null, Expiration = DateTimeOffset.MinValue });

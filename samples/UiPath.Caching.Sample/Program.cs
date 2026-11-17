@@ -69,7 +69,7 @@ app.MapDefaultEndpoints();
 
 app.MapControllers();
 
-app.Run();
+await app.RunAsync();
 
 static void ConfigureRedisInstrumentation(StackExchangeRedisInstrumentationOptions options)
 {

@@ -27,7 +27,7 @@ public class CacheFactoryTests : IAsyncLifetime
     [Fact]
     public void Works_as_expected()
     {
-        var provider = _providers.Where(p => p.Name != _defaultProvider.Name).ToList().First();
+        var provider = _providers.First(p => p.Name != _defaultProvider.Name);
         var cache = _fixture.Create<ICache>();
         var hashCache = _fixture.Create<IHashCache>();
         provider.CreateCache().Returns(cache);
@@ -60,7 +60,7 @@ public class CacheFactoryTests : IAsyncLifetime
     [Fact]
     public void Disabled_provider_ignored()
     {
-        var provider = _providers.Where(p => p.Name != _defaultProvider.Name).ToList().First();
+        var provider = _providers.First(p => p.Name != _defaultProvider.Name);
         provider.ClearSubstitute();
         provider.Enabled.Returns(false);
         var cache = _fixture.Create<ICache>();
@@ -84,7 +84,7 @@ public class CacheFactoryTests : IAsyncLifetime
     [Fact]
     public void Dispose_provider_exception()
     {
-        var f = _providers.First();
+        var f = _providers[0];
         f.When(x => x.Dispose()).Throw(new Exception("test"));
         var act = () => Sut.Dispose();
         act.Should().NotThrow<Exception>();

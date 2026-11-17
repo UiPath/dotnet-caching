@@ -211,8 +211,10 @@ public class FormatCensusIntegrationTests(RedisContainerFixture fixture)
         var server = Forwarding<IServer>.Wrap(
             mux.GetServer(mux.GetEndPoints()[0]),
             before: (method, args) => method.Name == nameof(IServer.ExecuteAsync) && args is [_, "SCAN", ICollection<object> scan, ..]
-                ? (true, Task.FromResult(scan.Contains("string") ? page : empty))
+                ? (true, Task.FromResult(PageFor(scan)))
                 : (false, null));
+        RedisResult PageFor(ICollection<object> scan) => scan.Contains("string") ? page : empty;
+        var gate = new object();
         var started = 0;
         var inFlight = 0;
         var most = 0;
@@ -224,7 +226,7 @@ public class FormatCensusIntegrationTests(RedisContainerFixture fixture)
                 {
                     var now = Interlocked.Increment(ref inFlight);
                     Interlocked.Increment(ref started);
-                    lock (this)
+                    lock (gate)
                     {
                         most = Math.Max(most, now);
                     }
@@ -429,7 +431,7 @@ public class FormatCensusIntegrationTests(RedisContainerFixture fixture)
 
         var arguments = scans.Select(s => ((IEnumerable<object>)s[2]!).Select(a => a.ToString()!).ToList()).ToList();
         arguments.Should().OnlyContain(a => a.Contains("TYPE") && a.Contains("COUNT") && a.Contains("MATCH"));
-        arguments.Select(a => a[a.IndexOf("TYPE") + 1]).Distinct().Should().BeEquivalentTo(["string", "hash"]);
+        arguments.Select(a => a[a.IndexOf("TYPE") + 1]).Distinct().Should().BeEquivalentTo("string", "hash");
         arguments.Select(a => a[a.IndexOf("COUNT") + 1]).Distinct().Should().Equal(FormatCensus.ScanCount.ToString(CultureInfo.InvariantCulture));
 
         scans.Clear();
@@ -577,6 +579,7 @@ public class FormatCensusIntegrationTests(RedisContainerFixture fixture)
 
     private sealed class Connector(IConnectionMultiplexer mux, string? prefix = null, bool exposePrimaries = true, IServer[]? primaries = null, IDatabase? database = null) : IRedisConnector
     {
+#pragma warning disable S108 // The census never raises connection events, so the subscriptions are no-ops.
         public event EventHandler? OnConnectionFailed
         {
             add { }
@@ -594,6 +597,7 @@ public class FormatCensusIntegrationTests(RedisContainerFixture fixture)
             add { }
             remove { }
         }
+#pragma warning restore S108
 
         public bool IsConnected => mux.IsConnected;
 

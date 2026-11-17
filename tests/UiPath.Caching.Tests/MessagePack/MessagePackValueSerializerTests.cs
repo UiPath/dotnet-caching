@@ -243,9 +243,11 @@ public class MessagePackValueSerializerTests
         };
     }
 
+#pragma warning disable S2094 // A member-less type is the point: the formatter, not the type, carries the data.
     public sealed class Lookalike
     {
     }
+#pragma warning restore S2094
 
     public sealed class LookalikeFormatter : IMessagePackFormatter<Lookalike?>
     {

@@ -8,7 +8,7 @@ namespace UiPath.Caching.Tests.Redis;
 /// <summary>Two nodes on one Redis with broadcast: a peer's write refreshes the local copy instead of dropping it.</summary>
 [Collection("RedisIntegration")]
 [Trait("Category", "Integration")]
-public class PeerRefreshIntegrationTests(RedisContainerFixture fixture) : IDisposable
+public sealed class PeerRefreshIntegrationTests(RedisContainerFixture fixture) : IDisposable
 {
     private readonly string _app = $"pr{Guid.NewGuid():N}"[..10];
     private readonly List<ServiceProvider> _nodes = [];

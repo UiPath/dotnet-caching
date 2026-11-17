@@ -384,8 +384,8 @@ internal sealed class CachePeers : IDisposable
 
         public event EventHandler? OnReconnected
         {
-            add { }
-            remove { }
+            add { /* Expected: this fake never raises the event. */ }
+            remove { /* Expected: nothing to detach. */ }
         }
 
         public SharedStore Store { get; set; } = null!;
@@ -411,11 +411,13 @@ internal sealed class CachePeers : IDisposable
         public bool ReadThrows { get; set; }
 
         /// <summary>When set, the next single-key read waits for it after it has read the store, then answers with what it read.</summary>
+#pragma warning disable S2292 // The backing field is exchanged through Interlocked.
         public Task? AfterNextRead
         {
             get => _afterNextRead;
             set => _afterNextRead = value;
         }
+#pragma warning restore S2292
 
         /// <summary>When set, a removal waits for it before it reaches the store.</summary>
         public Task? RemoveHold { get; set; }
@@ -479,10 +481,16 @@ internal sealed class CachePeers : IDisposable
             }
         }
 
-        private static TestCacheEntry<T?> EntryFor<T>(SharedStore store, CacheKey key) =>
-            store.Values.TryGetValue(key.Name, out var value)
-                ? new TestCacheEntry<T?> { Value = (T?)value, Expiration = DateTimeOffset.UtcNow + (store.Remaining.TryGetValue(key.Name, out var remaining) ? remaining : TimeSpan.FromHours(1)), Found = true }
-                : new TestCacheEntry<T?> { Expiration = DateTimeOffset.MinValue, Found = false };
+        private static TestCacheEntry<T?> EntryFor<T>(SharedStore store, CacheKey key)
+        {
+            if (!store.Values.TryGetValue(key.Name, out var value))
+            {
+                return new TestCacheEntry<T?> { Expiration = DateTimeOffset.MinValue, Found = false };
+            }
+
+            var remaining = store.Remaining.TryGetValue(key.Name, out var left) ? left : TimeSpan.FromHours(1);
+            return new TestCacheEntry<T?> { Value = (T?)value, Expiration = DateTimeOffset.UtcNow + remaining, Found = true };
+        }
 
         private ValueTask<bool> RemoveAfter(CacheKey[] keys)
         {

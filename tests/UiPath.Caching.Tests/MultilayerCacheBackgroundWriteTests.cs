@@ -1040,6 +1040,7 @@ public class MultilayerCacheBackgroundWriteTests
         }
         catch (OperationCanceledException)
         {
+            // Expected: the wait is cancelled to end the test.
         }
 
         return false;

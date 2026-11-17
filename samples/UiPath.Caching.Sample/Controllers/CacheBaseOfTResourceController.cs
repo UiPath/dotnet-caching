@@ -15,8 +15,10 @@ public abstract class CacheBaseController<TResource>(ICache<TResource> cache) : 
 
     [HttpPost]
     [Route("Set")]
+#pragma warning disable S6967 // the concrete controllers carry [ApiController], which rejects an invalid model before the action runs
     public async Task<bool> SetAsync([FromQuery] string cacheKey, [FromBody] TResource value, CancellationToken token) =>
         await Cache.SetAsync(cacheKey, value, token);
+#pragma warning restore S6967
 
     [HttpPost]
     [Route("Refresh")]

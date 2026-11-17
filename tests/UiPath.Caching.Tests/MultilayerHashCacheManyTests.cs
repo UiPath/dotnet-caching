@@ -53,7 +53,12 @@ public class MultilayerHashCacheManyTests
     public async Task RemoveMany_reports_the_failed_hash_of_a_middle_chunk_and_carries_on()
     {
         using var h = new Harness(chunk: 4);
-        h.OnRemove = key => key == "k5" ? new ValueTask<bool>(false) : key == "k6" ? throw new InvalidOperationException("down") : new ValueTask<bool>(true);
+        h.OnRemove = key => key switch
+        {
+            "k5" => new ValueTask<bool>(false),
+            "k6" => throw new InvalidOperationException("down"),
+            _ => new ValueTask<bool>(true),
+        };
 
         var failed = await h.Cache.RemoveManyAsync<string>(Keys(12), Ct);
 
@@ -122,7 +127,12 @@ public class MultilayerHashCacheManyTests
     public async Task SetMany_gives_a_hash_whose_write_failed_no_event_and_reports_it()
     {
         using var h = new Harness(chunk: 4);
-        h.OnWrite = key => key == "k5" ? Task.FromResult(false) : key == "k6" ? throw new InvalidOperationException("down") : Task.FromResult(true);
+        h.OnWrite = key => key switch
+        {
+            "k5" => Task.FromResult(false),
+            "k6" => throw new InvalidOperationException("down"),
+            _ => Task.FromResult(true),
+        };
 
         var failed = await h.Cache.SetManyAsync<string>(Pairs(12), Replace, Awaited, Ct);
 

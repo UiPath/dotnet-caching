@@ -91,7 +91,7 @@ public class MultilayerSetOrderTests
     public async Task A_rehydrated_value_is_written_before_it_is_published()
     {
         using var rig = new Rig();
-        rig.InnerEntry("k");
+        rig.InnerEntry();
 
         (await rig.Cache.GetOrAddAsync<string>("k", _ => Task.FromResult<string?>("fresh"), Rehydrating, Ct)).Should().Be("old");
 
@@ -104,7 +104,7 @@ public class MultilayerSetOrderTests
     public async Task A_rehydrated_value_the_inner_tier_refuses_is_not_published()
     {
         using var rig = new Rig { WriteResult = false };
-        rig.InnerEntry("k");
+        rig.InnerEntry();
 
         await rig.Cache.GetOrAddAsync<string>("k", _ => Task.FromResult<string?>("fresh"), Rehydrating, Ct);
 
@@ -117,7 +117,7 @@ public class MultilayerSetOrderTests
     public async Task A_rehydrated_hash_is_written_before_it_is_published()
     {
         using var rig = new Rig();
-        rig.InnerHashEntry("k");
+        rig.InnerHashEntry();
 
         await rig.Hash.GetOrAddAsync<string>("k", _ => Task.FromResult(Fields), Rehydrating, Ct);
 
@@ -130,7 +130,7 @@ public class MultilayerSetOrderTests
     public async Task A_rehydrated_hash_the_inner_tier_refuses_is_not_published()
     {
         using var rig = new Rig { WriteResult = false };
-        rig.InnerHashEntry("k");
+        rig.InnerHashEntry();
 
         await rig.Hash.GetOrAddAsync<string>("k", _ => Task.FromResult(Fields), Rehydrating, Ct);
 
@@ -272,12 +272,12 @@ public class MultilayerSetOrderTests
 
         public Func<string, bool>? PublishResultFor { get; set; }
 
-        public void InnerEntry(string key) =>
+        public void InnerEntry() =>
             ValueTaskStubs.Returns(
                 InnerCache.GetCacheEntryAsync<string>(Arg.Any<CacheKey>(), Arg.Any<CachePolicy?>(), Arg.Any<CancellationToken>()),
                 new ValueTask<ICacheEntry<string?>>(new TestCacheEntry<string?> { Value = "old", Expiration = DateTimeOffset.UtcNow.AddMinutes(2) }));
 
-        public void InnerHashEntry(string key) =>
+        public void InnerHashEntry() =>
             ValueTaskStubs.Returns(
                 InnerHash.GetCacheEntryAsync<string>(Arg.Any<CacheKey>(), Arg.Any<CachePolicy?>(), Arg.Any<CancellationToken>()),
                 new ValueTask<ICacheEntry<IDictionary<string, string?>>>(new TestCacheEntry<IDictionary<string, string?>> { Value = new Dictionary<string, string?> { ["f"] = "old" }, Expiration = DateTimeOffset.UtcNow.AddMinutes(2) }));

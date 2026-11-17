@@ -30,7 +30,7 @@ public class RedisPubSubSubjectWriterTests(ITestContextAccessor testContextAcces
         var action = await WaitForSubscribeAsync();
         action(_redisChannel, RedisValue.Null);
         await Task.Delay(_delay.Multiply(5), testContextAccessor.Current.CancellationToken);
-        _channel.Reader.TryRead(out var item).Should().BeFalse();
+        _channel.Reader.TryRead(out _).Should().BeFalse();
     }
 
     [Fact]
@@ -40,7 +40,7 @@ public class RedisPubSubSubjectWriterTests(ITestContextAccessor testContextAcces
         var action = await WaitForSubscribeAsync();
         action(_redisChannel, (RedisValue)_fixture.Create<string>());
         await Task.Delay(_delay.Multiply(5), testContextAccessor.Current.CancellationToken);
-        _channel.Reader.TryRead(out var item).Should().BeFalse();
+        _channel.Reader.TryRead(out _).Should().BeFalse();
     }
 
     [Theory]
@@ -118,7 +118,7 @@ public class RedisPubSubSubjectWriterTests(ITestContextAccessor testContextAcces
         var action = await WaitForSubscribeAsync();
         action(_redisChannel, (RedisValue)expectedString);
         await Task.Delay(_delay.Multiply(3), testContextAccessor.Current.CancellationToken);
-        _channel.Reader.TryRead(out var item).Should().Be(valid);
+        _channel.Reader.TryRead(out _).Should().Be(valid);
     }
 
     [Fact]
@@ -204,7 +204,7 @@ public class RedisPubSubSubjectWriterTests(ITestContextAccessor testContextAcces
     {
         var full = Channel.CreateBounded<ICacheEvent>(new BoundedChannelOptions(1) { FullMode = BoundedChannelFullMode.Wait });
         full.Writer.TryWrite(new TestCacheEvent()).Should().BeTrue();
-        _fixture.Inject((ChannelWriter<ICacheEvent>)full.Writer);
+        _fixture.Inject(full.Writer);
         var dropped = 0;
         _fixture.Inject<Action>(() => Interlocked.Increment(ref dropped));
         var expected = _fixture.Create<TestCacheEvent>();
@@ -431,7 +431,9 @@ public class RedisPubSubSubjectWriterTests(ITestContextAccessor testContextAcces
         sut.Dispose();
 
         Volatile.Read(ref registered).Should().Be(0, "the subscription completed on a disposed writer, which nothing else would unregister");
+#pragma warning disable S6966 // The test verifies the writer calls the synchronous Unsubscribe.
         _subscriber.Received(1).Unsubscribe(_redisChannel, Arg.Any<Action<RedisChannel, RedisValue>>(), CommandFlags.FireAndForget);
+#pragma warning restore S6966
     }
 
     [Fact]
@@ -465,10 +467,14 @@ public class RedisPubSubSubjectWriterTests(ITestContextAccessor testContextAcces
 
         before.Should().Be(0, "the handler the failed subscribe registered is gone before the next attempt adds it again");
         Volatile.Read(ref registered).Should().Be(1, "the successful subscribe is not undone");
+#pragma warning disable S6966 // The test verifies the writer calls the synchronous Unsubscribe.
         _subscriber.Received(1).Unsubscribe(_redisChannel, Arg.Any<Action<RedisChannel, RedisValue>>(), CommandFlags.FireAndForget);
+#pragma warning restore S6966
         sut.Dispose();
         Volatile.Read(ref registered).Should().Be(0);
+#pragma warning disable S6966 // The test verifies the writer calls the synchronous Unsubscribe.
         _subscriber.Received(2).Unsubscribe(_redisChannel, Arg.Any<Action<RedisChannel, RedisValue>>(), CommandFlags.FireAndForget);
+#pragma warning restore S6966
     }
 
     [Fact]

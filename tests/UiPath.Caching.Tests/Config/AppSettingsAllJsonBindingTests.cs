@@ -178,9 +178,21 @@ public class AppSettingsAllJsonBindingTests
         var sb = new StringBuilder(input.Length);
         var inString = false;
         var escape = false;
+        var inComment = false;
         for (var i = 0; i < input.Length; i++)
         {
             var c = input[i];
+            if (inComment)
+            {
+                if (c == '\n')
+                {
+                    inComment = false;
+                    sb.Append(c);
+                }
+
+                continue;
+            }
+
             if (inString)
             {
                 sb.Append(c);
@@ -209,16 +221,7 @@ public class AppSettingsAllJsonBindingTests
 
             if (c == '/' && i + 1 < input.Length && input[i + 1] == '/')
             {
-                while (i < input.Length && input[i] != '\n')
-                {
-                    i++;
-                }
-
-                if (i < input.Length)
-                {
-                    sb.Append(input[i]);
-                }
-
+                inComment = true;
                 continue;
             }
 

@@ -15,8 +15,10 @@ public abstract class CacheBaseController(ICache cache) : ControllerBase
 
     [HttpPost]
     [Route("MGet")]
+#pragma warning disable S6967 // the concrete controllers carry [ApiController], which rejects an invalid model before the action runs
     public async Task<Dictionary<string, string?>> GetAsync([FromBody]string[] keys, CancellationToken token) =>
         (await Cache.GetAsync<string>(keys.Select(s => (CacheKey)s).ToArray(), policy: null, token: token)).ToDictionary(kv => kv.Key.ToString(), kv => kv.Value);
+#pragma warning restore S6967
 
     [HttpPost]
     [Route("Set")]
@@ -25,8 +27,10 @@ public abstract class CacheBaseController(ICache cache) : ControllerBase
 
     [HttpPost]
     [Route("MSet")]
+#pragma warning disable S6967 // the concrete controllers carry [ApiController], which rejects an invalid model before the action runs
     public async Task<bool> MSetAsync([FromBody] Dictionary<string, string?> values, CancellationToken token) =>
         await Cache.SetAsync(values.Select(kv => new KeyValuePair<CacheKey, string?>(kv.Key, kv.Value)).ToArray(), policy: null, token: token);
+#pragma warning restore S6967
 
     [HttpPost]
     [Route("Refresh")]

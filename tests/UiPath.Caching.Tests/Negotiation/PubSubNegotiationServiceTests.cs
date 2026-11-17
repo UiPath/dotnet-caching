@@ -496,9 +496,12 @@ public class PubSubNegotiationServiceTests
         public Task<ServerCount?> CountAsync(EndPoint endpoint, IReadOnlyList<string> channels, CancellationToken cancellationToken)
         {
             events.Add("numsub");
-            return Failure is { } failure
-                ? Task.FromException<ServerCount?>(failure)
-                : Task.FromResult<ServerCount?>(Denied ? null : new([.. channels.Select(channel => _counts.GetValueOrDefault(channel))], Patterns));
+            if (Failure is { } failure)
+            {
+                return Task.FromException<ServerCount?>(failure);
+            }
+
+            return Task.FromResult<ServerCount?>(Denied ? null : new([.. channels.Select(channel => _counts.GetValueOrDefault(channel))], Patterns));
         }
     }
 }

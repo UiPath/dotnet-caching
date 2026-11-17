@@ -855,18 +855,26 @@ public class MessagePackEventFormatterTests
 
         public ReadOnlyMemory<byte> Encode(ICacheEvent @event) => default;
 
-        public void Dispose() => Interlocked.Increment(ref _disposals);
+        public void Dispose()
+        {
+            Dispose(true);
+            GC.SuppressFinalize(this);
+        }
 
         public ValueTask DisposeAsync()
         {
             Dispose();
             return ValueTask.CompletedTask;
         }
+
+        protected virtual void Dispose(bool disposing) => Interlocked.Increment(ref _disposals);
     }
 
     private sealed class TypeFormatter : DisposableFormatter
     {
+#pragma warning disable S1144 // Constructed by the service provider, which is what records Created.
         public TypeFormatter() => Created = this;
+#pragma warning restore S1144
 
         public static TypeFormatter? Created { get; set; }
     }

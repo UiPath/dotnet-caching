@@ -7,7 +7,6 @@ public class MultilayerCachePerNameFactoryTimeoutTests(ITestContextAccessor test
 {
     private readonly IFixture _fixture = AutoFixtureCreator.NSubstitute();
 
-    private ICache _innerCache = default!;
     private global::Microsoft.Extensions.Caching.Memory.IMemoryCache _memoryCache = default!;
     private ICacheKeyStrategy _cacheKeyStrategy = default!;
     private ITopicKeyStrategy _topicKeyStrategy = default!;
@@ -15,8 +14,6 @@ public class MultilayerCachePerNameFactoryTimeoutTests(ITestContextAccessor test
     private MultilayerCachePerNameLockTests.ITopicProviderWithConnectionState _topicProvider = default!;
     private ITopic<ICacheEvent> _topic = default!;
     private global::UiPath.Caching.IMemoryCacheFactory _memoryCacheFactory = default!;
-    private ICacheEventFactory _cacheEventFactory = default!;
-    private IDistributedLock _distributedLock = default!;
     private InMemoryRedisCacheOptions _options = default!;
     private CacheKey _cacheKey = default!;
     private TopicKey _topicKey = default!;
@@ -77,7 +74,7 @@ public class MultilayerCachePerNameFactoryTimeoutTests(ITestContextAccessor test
         using var cts = new CancellationTokenSource();
         Func<CancellationToken, Task<string?>> generator = async ct =>
         {
-            cts.Cancel();
+            await cts.CancelAsync();
             await Task.Delay(TimeSpan.FromSeconds(30), ct);
             return "v";
         };
@@ -107,9 +104,9 @@ public class MultilayerCachePerNameFactoryTimeoutTests(ITestContextAccessor test
     {
         _cacheKey = _fixture.Create<string>();
         _topicKey = _fixture.Create<string>();
-        _innerCache = _fixture.Freeze<ICache>();
+        _fixture.Freeze<ICache>();
         _memoryCache = _fixture.Freeze<global::Microsoft.Extensions.Caching.Memory.IMemoryCache>();
-        _distributedLock = _fixture.Freeze<IDistributedLock>();
+        _fixture.Freeze<IDistributedLock>();
         _options = new InMemoryRedisCacheOptions
         {
             DefaultExpiration = TimeSpan.FromMinutes(10),
@@ -130,7 +127,7 @@ public class MultilayerCachePerNameFactoryTimeoutTests(ITestContextAccessor test
         _topicProvider.Create(_topicKey).Returns(_topic);
         _memoryCacheFactory = _fixture.Freeze<global::UiPath.Caching.IMemoryCacheFactory>();
         _memoryCacheFactory.Get(Arg.Any<IMemoryCacheOptions>()).Returns(_memoryCache);
-        _cacheEventFactory = _fixture.Freeze<ICacheEventFactory>();
+        _fixture.Freeze<ICacheEventFactory>();
         return ValueTask.CompletedTask;
     }
 }

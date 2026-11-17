@@ -68,7 +68,9 @@ public class SerializerBenchmark
         {
             ValueSerializers = registry,
         };
+#pragma warning disable S5034 // AsTask() is the only consumption of the ValueTask; the setup is synchronous
         _cache.SetAsync("bench:serializer", _obj, Expiration, _policy).AsTask().GetAwaiter().GetResult();
+#pragma warning restore S5034
         if (_cache.GetAsync<CustomObject>("bench:serializer", _policy).AsTask().GetAwaiter().GetResult() is null)
         {
             throw new InvalidOperationException("The fake connector did not serve the read");
@@ -174,7 +176,9 @@ public class MessagePackSerializerBenchmark
         {
             ValueSerializers = registry,
         };
+#pragma warning disable S5034 // AsTask() is the only consumption of the ValueTask; the setup is synchronous
         _cache.SetAsync("bench:format", _obj, Expiration, _policy).AsTask().GetAwaiter().GetResult();
+#pragma warning restore S5034
         var written = new ArrayBufferWriter<byte>();
         if (Format == "json")
         {
@@ -216,7 +220,6 @@ public class MigrateOnReadBenchmark
     private static readonly TimeSpan Expiration = TimeSpan.FromMinutes(30);
 
     private readonly Func<CancellationToken, Task<CustomObject?>> _neverRuns = _ => throw new InvalidOperationException("A hit ran its generator");
-    private CustomObject _obj = default!;
     private FakeRedisConnector _redis = default!;
     private RedisCache _cache = default!;
     private ValueMigration _migration = default!;
@@ -231,7 +234,7 @@ public class MigrateOnReadBenchmark
     [GlobalSetup]
     public void Setup()
     {
-        _obj = Size == "Small" ? CustomObject.RandomSmall() : CustomObject.RandomMedium();
+        var obj = Size == "Small" ? CustomObject.RandomSmall() : CustomObject.RandomMedium();
         var registry = new ValueSerializerRegistry([RegistryEntry.Of("bench", new JsonBodySerializer())]);
         var proxy = new SystemJsonByteSerializerProxy();
         _migration = new ValueMigration(new FormatMigrator(NullTelemetryProvider.Instance, TimeProvider.System, NullLogger.Instance), new ValueRewriter(proxy, registry), registry, effective: null);
@@ -252,7 +255,9 @@ public class MigrateOnReadBenchmark
             Migration = _migration,
         };
         var seed = Mode == "json" ? new CachePolicy { Serializer = new SerializerPolicy { Write = "json" } } : _policy;
-        _cache.SetAsync("bench:migrate", _obj, Expiration, seed).AsTask().GetAwaiter().GetResult();
+#pragma warning disable S5034 // AsTask() is the only consumption of the ValueTask; the setup is synchronous
+        _cache.SetAsync("bench:migrate", obj, Expiration, seed).AsTask().GetAwaiter().GetResult();
+#pragma warning restore S5034
         if (_cache.GetAsync<CustomObject>("bench:migrate", _policy).AsTask().GetAwaiter().GetResult() is null)
         {
             throw new InvalidOperationException("The fake connector did not serve the read");

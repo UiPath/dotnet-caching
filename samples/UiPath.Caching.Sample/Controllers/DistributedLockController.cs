@@ -11,6 +11,7 @@ public abstract class DistributedLockBaseController(IDistributedLock distributed
     /// <summary>Takes the lock, holds it for <paramref name="holdSeconds"/>, releases it. Call it twice in parallel to see the second call refused.</summary>
     [HttpPost]
     [Route("Hold")]
+#pragma warning disable S6967 // the concrete controllers carry [ApiController], which rejects an invalid model before the action runs
     public async Task<IActionResult> HoldAsync([FromQuery] string key, [FromQuery] int holdSeconds = 5, CancellationToken token = default)
     {
         if (holdSeconds is < 0 or > MaxHoldSeconds)
@@ -33,6 +34,7 @@ public abstract class DistributedLockBaseController(IDistributedLock distributed
 
         return Ok();
     }
+#pragma warning restore S6967
 }
 
 [ApiController]

@@ -160,12 +160,12 @@ public class ConnectionStateMonitorRecoveredTests
         using var sut = new ConnectionStateMonitor(_telemetry, TimeSpan.FromMilliseconds(20), timers, state);
         var recovered = 0;
         sut.Recovered += (_, _) => Interlocked.Increment(ref recovered);
-        state.Fail();
+        state.Drop();
         var sampling = state.HoldNextRead();
         var poll = Task.Run(timers.Tick, TestContext.Current.CancellationToken);
         sampling.Wait(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken).Should().BeTrue("the poll the failure armed reads the state");
 
-        state.Restore();
+        state.Recover();
         Volatile.Read(ref recovered).Should().Be(1);
         state.Release();
         await poll;
@@ -182,7 +182,7 @@ public class ConnectionStateMonitorRecoveredTests
         using var sut = new ConnectionStateMonitor(_telemetry, TimeSpan.FromMilliseconds(20), timers, state);
         var recovered = 0;
         sut.Recovered += (_, _) => Interlocked.Increment(ref recovered);
-        state.Fail();
+        state.Drop();
         var sampling = state.HoldNextRead(reading: true);
         var poll = Task.Run(timers.Tick, TestContext.Current.CancellationToken);
         sampling.Wait(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken).Should().BeTrue();
@@ -208,7 +208,7 @@ public class ConnectionStateMonitorRecoveredTests
         var poll = Task.Run(timers.Tick, TestContext.Current.CancellationToken);
         sampling.Wait(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken).Should().BeTrue();
 
-        state.Restore();
+        state.Recover();
         state.Release();
         await poll;
         timers.Tick();
@@ -223,16 +223,16 @@ public class ConnectionStateMonitorRecoveredTests
         using var sut = new ConnectionStateMonitor(_telemetry, Timeout.InfiniteTimeSpan, state);
         var recovered = 0;
         sut.Recovered += (_, _) => Interlocked.Increment(ref recovered);
-        state.Fail();
+        state.Drop();
         var sampling = state.HoldNextRead();
         var read = Task.Run(() => sut.IsConnected, TestContext.Current.CancellationToken);
         sampling.Wait(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken).Should().BeTrue();
 
-        state.Restore();
+        state.Recover();
         recovered.Should().Be(1);
         state.Release();
         (await read).Should().BeFalse();
-        state.Restore();
+        state.Recover();
 
         recovered.Should().Be(1, "the held read sampled the outage the restore already ended");
     }
@@ -247,7 +247,7 @@ public class ConnectionStateMonitorRecoveredTests
         sut.Recovered += (_, _) => recovered++;
 
         // The poll samples twice, then the recovery check samples a third time and finds the state down again.
-        state.Fail(readsUntilDown: 2);
+        state.Drop(readsUntilDown: 2);
         timers.Tick();
         recovered.Should().Be(0);
         timers.Armed.Should().Be(1, "the timer keeps polling until recovery holds");
@@ -275,8 +275,6 @@ public class ConnectionStateMonitorRecoveredTests
         state.OnConnectionRestored += Raise.Event<EventHandler>(state, EventArgs.Empty);
     }
 
-    private int Evaluations() => _telemetry.Events.Count(e => e.Name == "Redis.EvaluateConnected");
-
     /// <summary>A failed state that reads up a set number of times, then down once, then up for good.</summary>
     private sealed class ScriptedState : IConnectionState
     {
@@ -286,19 +284,33 @@ public class ConnectionStateMonitorRecoveredTests
 
         public event EventHandler? OnConnectionRestored
         {
-            add { }
-            remove { }
+            add
+            {
+                // Never raised by this fake.
+            }
+
+            remove
+            {
+                // Never raised by this fake.
+            }
         }
 
         public event EventHandler? OnReconnected
         {
-            add { }
-            remove { }
+            add
+            {
+                // Never raised by this fake.
+            }
+
+            remove
+            {
+                // Never raised by this fake.
+            }
         }
 
         public bool IsConnected => Interlocked.Decrement(ref _readsUntilDown) != -1;
 
-        public void Fail(int readsUntilDown)
+        public void Drop(int readsUntilDown)
         {
             Volatile.Write(ref _readsUntilDown, int.MinValue / 2);
             OnConnectionFailed?.Invoke(this, EventArgs.Empty);
@@ -320,7 +332,18 @@ public class ConnectionStateMonitorRecoveredTests
 
         public event EventHandler? OnConnectionRestored;
 
-        public event EventHandler? OnReconnected;
+        public event EventHandler? OnReconnected
+        {
+            add
+            {
+                // Never raised by this fake.
+            }
+
+            remove
+            {
+                // Never raised by this fake.
+            }
+        }
 
         public bool IsConnected
         {
@@ -350,19 +373,17 @@ public class ConnectionStateMonitorRecoveredTests
 
         public void SetSilently(bool up) => _up = up;
 
-        public void Fail()
+        public void Drop()
         {
             _up = false;
             OnConnectionFailed?.Invoke(this, EventArgs.Empty);
         }
 
-        public void Restore()
+        public void Recover()
         {
             _up = true;
             OnConnectionRestored?.Invoke(this, EventArgs.Empty);
         }
-
-        public void Reconnect() => OnReconnected?.Invoke(this, EventArgs.Empty);
     }
 
     /// <summary>Timers that fire only when a test ticks them, so no poll interleaves with the sequence it drives.</summary>

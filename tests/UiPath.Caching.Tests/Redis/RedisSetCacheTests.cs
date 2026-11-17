@@ -166,9 +166,11 @@ public class RedisSetCacheTests(ITestContextAccessor testContextAccessor) : IAsy
         try
         {
             await AddThroughAFailingTransactionAsync(marker, throws);
+#pragma warning disable S1215 // the test needs the abandoned transaction finalized
             GC.Collect();
             GC.WaitForPendingFinalizers();
             GC.Collect();
+#pragma warning restore S1215
         }
         finally
         {

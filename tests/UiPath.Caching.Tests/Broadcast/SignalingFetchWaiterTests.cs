@@ -119,7 +119,7 @@ public class SignalingFetchWaiterTests
         using var sut = new SignalingFetchWaiter(30.Seconds(), timeProvider: NewClock());
         using var cts = new CancellationTokenSource();
         var task = sut.WaitAsync(cts.Token);
-        cts.Cancel();
+        await cts.CancelAsync();
 
         var thrown = await Assert.ThrowsAnyAsync<OperationCanceledException>(() => task);
 
@@ -132,7 +132,7 @@ public class SignalingFetchWaiterTests
         using var sut = new SignalingFetchWaiter(5.Seconds());
         using var cts = new CancellationTokenSource();
         var task = sut.WaitAsync(cts.Token);
-        cts.Cancel();
+        await cts.CancelAsync();
 
         Func<Task> act = async () => await task;
         await act.Should().ThrowAsync<OperationCanceledException>();

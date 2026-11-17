@@ -939,7 +939,7 @@ public class DistributedCacheRegistrationTests
 
         private sealed class ThrowingRedisKeyStrategy(string keyspace) : IRedisKeyStrategy
         {
-            public RedisKey GetRedisKey(CacheKey cacheKey) =>
+            public RedisKey GetRedisKey(CacheKey key) =>
                 throw new InvalidOperationException($"cannot render a key for {keyspace}");
         }
     }
@@ -958,13 +958,13 @@ public class DistributedCacheRegistrationTests
     }
 
     /// <summary>A factory that ignores the differentiator it is given and lands on a fixed one.</summary>
-    private sealed class FixedDifferentiatorRedisKeyStrategyFactory(string differentiator) : IRedisKeyStrategyFactory
+    private sealed class FixedDifferentiatorRedisKeyStrategyFactory(string fixedDifferentiator) : IRedisKeyStrategyFactory
     {
         private readonly DefaultRedisKeyStrategyFactory _inner = new();
 
         public IRedisKeyStrategy Create(CacheOptions options, Type cacheType) => _inner.Create(options, cacheType);
 
-        public IRedisKeyStrategy Create(CacheOptions options, string _) => _inner.Create(options, differentiator);
+        public IRedisKeyStrategy Create(CacheOptions options, string differentiator) => _inner.Create(options, fixedDifferentiator);
     }
 
     /// <summary>

@@ -8,8 +8,6 @@ namespace UiPath.Caching.Tests.Config;
 [Collection("CacheKeyDefaultCasing")]
 public class NamedCachingKeyCasingTests
 {
-    private const string Name = "SecondaryRedis";
-
     [Fact]
     public void A_key_casing_declared_in_configuration_is_refused_before_the_global_default_moves()
     {

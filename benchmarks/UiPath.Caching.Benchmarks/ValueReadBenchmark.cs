@@ -49,7 +49,7 @@ public class ValueReadBenchmark
     {
         await _database.KeyDeleteAsync(_key);
         await _redis.CloseAsync();
-        _redis.Dispose();
+        await _redis.DisposeAsync();
     }
 
     [Benchmark(Baseline = true)]

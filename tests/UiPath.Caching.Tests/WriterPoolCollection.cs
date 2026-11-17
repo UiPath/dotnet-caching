@@ -5,4 +5,9 @@ namespace UiPath.Caching.Tests;
 public sealed class WriterPoolCollection
 {
     public const string Name = "PooledJsonWriter pool";
+
+    private WriterPoolCollection()
+    {
+        // Never constructed: the type only carries the collection definition.
+    }
 }

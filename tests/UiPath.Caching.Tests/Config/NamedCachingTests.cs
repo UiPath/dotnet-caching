@@ -594,9 +594,11 @@ public class NamedCachingTests
         return services.BuildServiceProvider(new ServiceProviderOptions { ValidateScopes = true });
     }
 
+#pragma warning disable S2094 // Marker types for the exposed-service lookups.
     private sealed class Marker;
 
     private sealed class Missing;
+#pragma warning restore S2094
 
     private sealed record Exposed(string AppShortName);
 

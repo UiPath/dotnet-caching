@@ -242,7 +242,7 @@ public class MemoryCacheSetterTests : IAsyncLifetime
         var entry = new CacheEntryFactory().Create("v", _clock.UtcNow.AddDays(1));
         if (!tracked)
         {
-            ((IReadTracked)entry).Track(false);
+            entry.Should().BeAssignableTo<IReadTracked>().Subject.Track(false);
         }
 
         Sut.Set(x, entry, typeof(string), TimeSpan.FromMinutes(1));

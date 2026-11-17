@@ -7,7 +7,7 @@ using UiPath.Caching.Tests.Telemetry;
 namespace UiPath.Caching.Tests;
 
 /// <summary>Fail-safe on the in-memory multilayer cache: the last value is returned when the generator fails or runs late, within its stale age and cooldown, and never after a removal.</summary>
-public class MultilayerCacheFailSafeTests : IDisposable
+public sealed class MultilayerCacheFailSafeTests : IDisposable
 {
     private static readonly TimeSpan Lifetime = TimeSpan.FromMinutes(1);
     private static readonly CachePolicy FailSafe = new() { FailSafeEnabled = true, FailSafeMaxStaleAge = TimeSpan.FromHours(1), FailSafeCooldown = TimeSpan.FromSeconds(30) };
@@ -287,7 +287,8 @@ public class MultilayerCacheFailSafeTests : IDisposable
             throw new InvalidOperationException("down");
         }
 
-        var first = _cache.GetOrAddAsync(Key, Failing, Lifetime, FailSafe, Ct).AsTask();
+        var firstRead = _cache.GetOrAddAsync(Key, Failing, Lifetime, FailSafe, Ct);
+        var first = firstRead.AsTask();
         await started.Task;
         var joined = _cache.GetOrAddAsync(Key, Failing, Lifetime, FailSafe, Ct).AsTask();
         release.SetResult();
@@ -474,7 +475,8 @@ public class MultilayerCacheFailSafeTests : IDisposable
         (await _cache.GetOrAddAsync(Key, Producing("v1"), Lifetime, FailSafe, Ct)).Should().Be("v1");
         _clock.Advance(Lifetime * 2);
         var release = new TaskCompletionSource<string?>(TaskCreationOptions.RunContinuationsAsynchronously);
-        var opted = _cache.GetOrAddAsync(Key, _ => release.Task, Lifetime, FailSafe, Ct).AsTask();
+        var optedRead = _cache.GetOrAddAsync(Key, _ => release.Task, Lifetime, FailSafe, Ct);
+        var opted = optedRead.AsTask();
         await CachePeers.Until(() => _cache.RunsInFlight == 1);
         var plain = _cache.GetOrAddAsync(Key, Throwing, Lifetime, new CachePolicy(), Ct).AsTask();
 
@@ -515,7 +517,7 @@ public class MultilayerCacheFailSafeTests : IDisposable
         (await pending).Should().Be("v1");
 
         var served = logger.Warnings;
-        cache.Dispose();
+        await cache.DisposeAsync();
         release.SetResult("late");
         await CachePeers.Until(() => cache.LateGenerations == 0);
 

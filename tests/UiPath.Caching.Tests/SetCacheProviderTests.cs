@@ -33,7 +33,7 @@ public class InMemoryQueueCacheProviderTests
         (await cache.AddAsync("k", "a", token: ct)).Should().BeTrue();
         (await cache.AddAsync("k", "b", token: ct)).Should().BeTrue();
 
-        (await cache.MembersAsync<string>("k", token: ct)).Should().BeEquivalentTo(new[] { "a", "b" });
+        (await cache.MembersAsync<string>("k", token: ct)).Should().BeEquivalentTo("a", "b");
         (await cache.CountAsync<string>("k", ct)).Should().Be(2);
 
         var popped = await cache.PopAsync<string>("k", token: ct);

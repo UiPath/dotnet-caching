@@ -17,11 +17,23 @@ internal sealed class FakeRedisConnector : IRedisConnector
         Subscriber = FakeProxy<ISubscriber>.Create(_store);
     }
 
-    public event EventHandler? OnConnectionFailed { add { } remove { } }
+    public event EventHandler? OnConnectionFailed
+    {
+        add { /* Never raised: the fake connection does not fail. */ }
+        remove { /* Never raised: the fake connection does not fail. */ }
+    }
 
-    public event EventHandler? OnConnectionRestored { add { } remove { } }
+    public event EventHandler? OnConnectionRestored
+    {
+        add { /* Never raised: the fake connection does not fail. */ }
+        remove { /* Never raised: the fake connection does not fail. */ }
+    }
 
-    public event EventHandler? OnReconnected { add { } remove { } }
+    public event EventHandler? OnReconnected
+    {
+        add { /* Never raised: the fake connection does not fail. */ }
+        remove { /* Never raised: the fake connection does not fail. */ }
+    }
 
     public bool IsConnected => true;
 
@@ -63,12 +75,11 @@ internal sealed class FakeRedisStore : IDisposable
     public long GetCount;
     public RedisKey? LastSet;
     private readonly BlockingCollection<(TaskCompletionSource<RedisValue> Reply, RedisValue Value)> _replies = [];
-    private readonly Thread _reader;
 
     public FakeRedisStore()
     {
-        _reader = new Thread(Read) { IsBackground = true, Name = "fake-redis-reader" };
-        _reader.Start();
+        var reader = new Thread(Read) { IsBackground = true, Name = "fake-redis-reader" };
+        reader.Start();
     }
 
     public Task<RedisValue> Get(RedisKey key)
@@ -94,7 +105,9 @@ internal sealed class FakeRedisStore : IDisposable
 internal class FakeProxy<T> : DispatchProxy
     where T : class
 {
+#pragma warning disable S2743 // the cache is per proxied interface on purpose
     private static readonly ConcurrentDictionary<Type, object?> Defaults = new();
+#pragma warning restore S2743
     private FakeRedisStore _store = default!;
 
     public static T Create(FakeRedisStore store)

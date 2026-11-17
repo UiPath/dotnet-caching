@@ -148,7 +148,7 @@ public class TelemetryTagsTests
         provider.TrackException(new InvalidOperationException(), [new("key", "value")]);
         provider.TrackDependency("t", "target", "name", "data", DateTimeOffset.UnixEpoch, TimeSpan.Zero, "200", true, [new("key", "value")]);
 
-        provider.Received(1).TrackEvent("evt", Arg.Is<TelemetryTags<string>>(t => t.Count == 1 && t[0].Value == "value"), Arg.Is<TelemetryTags<double>>(t => t[0].Value == 1.5));
+        provider.Received(1).TrackEvent("evt", Arg.Is<TelemetryTags<string>>(t => t.Count == 1 && t[0].Value == "value"), Arg.Is<TelemetryTags<double>>(t => Math.Abs(t[0].Value - 1.5) < 1e-9));
         provider.Received(1).TrackMetric("metric", 2, Arg.Is<TelemetryTags<string>>(t => t[0].Key == "key"));
         provider.Received(1).TrackException(Arg.Any<InvalidOperationException>(), Arg.Is<TelemetryTags<string>>(t => t.Count == 1), Arg.Any<TelemetryTags<double>>());
         provider.Received(1).TrackDependency("t", "target", "name", "data", DateTimeOffset.UnixEpoch, TimeSpan.Zero, "200", true, Arg.Is<TelemetryTags<string>>(t => t.Count == 1), Arg.Any<TelemetryTags<double>>());

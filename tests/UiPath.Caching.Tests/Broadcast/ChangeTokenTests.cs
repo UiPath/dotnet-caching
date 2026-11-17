@@ -79,7 +79,7 @@ public class ChangeTokenTests : IAsyncLifetime
             callbackCalled = true;
             actualState = state;
         };
-        var d = Sut.RegisterChangeCallback(callback, expectedState);
+        _ = Sut.RegisterChangeCallback(callback, expectedState);
 
         Sut.OnNext(cloudEvent);
         Sut.HasChanged.Should().BeFalse();
@@ -106,7 +106,7 @@ public class ChangeTokenTests : IAsyncLifetime
             actualState = state;
         };
 
-        var d = Sut.RegisterChangeCallback(callback, expectedState);
+        _ = Sut.RegisterChangeCallback(callback, expectedState);
         var cloudEVent = new TestCacheEvent
         {
             Id = Guid.NewGuid().ToString(),
@@ -131,7 +131,7 @@ public class ChangeTokenTests : IAsyncLifetime
             actualState = state;
         };
 
-        var d = Sut.RegisterChangeCallback(callback, expectedState);
+        _ = Sut.RegisterChangeCallback(callback, expectedState);
         Sut.OnCompleted();
         Sut.HasChanged.Should().BeFalse();
         callbackCalled.Should().BeFalse();
@@ -149,7 +149,7 @@ public class ChangeTokenTests : IAsyncLifetime
             actualState = state;
         };
 
-        var d = Sut.RegisterChangeCallback(callback, expectedState);
+        _ = Sut.RegisterChangeCallback(callback, expectedState);
         Sut.OnError(_fixture.Create<Exception>());
         Sut.HasChanged.Should().BeTrue();
         callbackCalled.Should().BeTrue();
@@ -605,7 +605,7 @@ public class ChangeTokenTests : IAsyncLifetime
 
         });
         _telemetryProvider.Metrics.Should().ContainSingle(m =>
-            m.Name == Metrics.GetReadTopicMetricName(_topicKey) && m.Value == 123456789013);
+            m.Name == Metrics.GetReadTopicMetricName(_topicKey) && Math.Abs(m.Value - 123456789013) < 0.5);
         Sut.HasChanged.Should().BeTrue();
         Sut.MetadataHasChanged.Should().BeTrue();
         Sut.Metadata.Should().NotBeNull();
@@ -632,7 +632,7 @@ public class ChangeTokenTests : IAsyncLifetime
 
         });
         _telemetryProvider.Metrics.Should().ContainSingle(m =>
-            m.Name == Metrics.GetReadTopicMetricName(_topicKey) && m.Value == 123456789013);
+            m.Name == Metrics.GetReadTopicMetricName(_topicKey) && Math.Abs(m.Value - 123456789013) < 0.5);
     }
 
 
@@ -754,9 +754,15 @@ public class ChangeTokenTests : IAsyncLifetime
     public async Task A_published_event_that_never_left_the_process_applies_as_a_peer_update()
     {
         CacheEventData? published = null;
+        CacheEventData Capture(CacheEventData data)
+        {
+            published = data;
+            return data;
+        }
+
         var factory = Substitute.For<ICacheEventFactory>();
         factory.Create("cache", Arg.Any<string>(), Arg.Any<CacheEventData>(), Arg.Any<string?>())
-            .Returns(call => new CacheEvent { Id = "1", Source = new Uri("urn:machine"), Type = call.ArgAt<string>(1), Data = published = call.Arg<CacheEventData>() });
+            .Returns(call => new CacheEvent { Id = "1", Source = new Uri("urn:machine"), Type = call.ArgAt<string>(1), Data = Capture(call.Arg<CacheEventData>()) });
         var topics = Substitute.For<ITopicProvider>();
         topics.Create(Arg.Any<TopicKey>()).PublishAsync(Arg.Any<ICacheEvent>(), Arg.Any<CancellationToken>()).Returns(true);
         var options = new CacheEntryOptions { CacheKey = new CacheKey(_key), TopicKey = "t", Metadata = new Dictionary<string, string?> { ["m"] = "v" } };
@@ -823,8 +829,16 @@ public class ChangeTokenTests : IAsyncLifetime
         var other = new ChangeToken<byte[]>(_key, _topic, _source, _serializer, _fixture.Freeze<ILogger<ChangeToken<byte[]>>>(), _telemetryProvider, _acceptedEvents);
         PeerUpdate? first = null;
         PeerUpdate? second = null;
-        ((IPeerUpdateSource)Sut).PeerUpdateHandler = update => (first = update) is not null;
-        ((IPeerUpdateSource)other).PeerUpdateHandler = update => (second = update) is not null;
+        ((IPeerUpdateSource)Sut).PeerUpdateHandler = update =>
+        {
+            first = update;
+            return true;
+        };
+        ((IPeerUpdateSource)other).PeerUpdateHandler = update =>
+        {
+            second = update;
+            return true;
+        };
         var metadata = new Dictionary<string, string?> { ["m"] = "v" };
         var peerEvent = PeerEvent("set", new Dictionary<string, object?>
         {

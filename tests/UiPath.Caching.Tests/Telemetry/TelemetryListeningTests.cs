@@ -7,7 +7,7 @@ using UiPath.Caching.Telemetry;
 namespace UiPath.Caching.Tests.Telemetry;
 
 [CollectionDefinition(Name, DisableParallelization = true)]
-public sealed class TelemetryListeners
+public static class TelemetryListeners
 {
     public const string Name = "Telemetry listeners";
 }

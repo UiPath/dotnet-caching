@@ -83,9 +83,10 @@ internal static class StreamNotifyDoorbellHarness
         Console.WriteLine(new string('-', 150));
         foreach (var cell in cells.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
         {
+            var unspacedTopic = cell == "pubsub" ? "RedisPubSub" : "RedisStreams";
             var (topic, spacing) = cell.StartsWith("streams:", StringComparison.Ordinal)
                 ? ("RedisStreams", (TimeSpan?)TimeSpan.FromMilliseconds(double.Parse(cell["streams:".Length..], CultureInfo.InvariantCulture)))
-                : (cell == "pubsub" ? "RedisPubSub" : "RedisStreams", null);
+                : (unspacedTopic, null);
             var result = await MeasureLoadCellAsync(topic, spacing, TimeSpan.FromSeconds(durationSec), writeHz, keys);
             var sorted = result.SamplesMs.OrderBy(x => x).ToArray();
             if (sorted.Length == 0)
@@ -101,7 +102,7 @@ internal static class StreamNotifyDoorbellHarness
 
     private static async Task<List<TimeSpan>> MeasureCellAsync(bool notifyEnabled, string pollInterval, TimeSpan duration, int writeHz)
     {
-        Console.Error.WriteLine($"[cell] start NotifyEnabled={notifyEnabled} PollInterval={pollInterval}");
+        await Console.Error.WriteLineAsync($"[cell] start NotifyEnabled={notifyEnabled} PollInterval={pollInterval}");
         var overrides = new Dictionary<string, string?>
         {
             { "Caching:Broadcast:RedisStreams:NotifyEnabled", notifyEnabled.ToString() },
@@ -148,7 +149,7 @@ internal static class StreamNotifyDoorbellHarness
             var lastSeenValue = await readerCache.GetAsync(key);
 
             var samples = new ConcurrentBag<TimeSpan>();
-            var stopReader = new CancellationTokenSource();
+            using var stopReader = new CancellationTokenSource();
 
             // Reader: tight GetAsync loop. Records (now - ts) whenever the value
             // changes to a "ts:..." payload from the timed-window writes below.
@@ -193,10 +194,10 @@ internal static class StreamNotifyDoorbellHarness
             // Drain: give the reader at least one full PollInterval (no doorbell case)
             // plus a small buffer to observe the last write.
             await Task.Delay(pollSpan + TimeSpan.FromSeconds(1));
-            stopReader.Cancel();
+            await stopReader.CancelAsync();
             await readerTask;
 
-            Console.Error.WriteLine($"[cell]   wrote={written} observed={samples.Count}");
+            await Console.Error.WriteLineAsync($"[cell]   wrote={written} observed={samples.Count}");
             return samples.ToList();
         }
         finally
@@ -207,7 +208,7 @@ internal static class StreamNotifyDoorbellHarness
 
     private static async Task<LoadResult> MeasureLoadCellAsync(string topic, TimeSpan? spacing, TimeSpan duration, int writeHz, int keys)
     {
-        Console.Error.WriteLine($"[cell] start topic={topic} spacing={spacing?.TotalMilliseconds.ToString(CultureInfo.InvariantCulture) ?? "-"} ms");
+        await Console.Error.WriteLineAsync($"[cell] start topic={topic} spacing={spacing?.TotalMilliseconds.ToString(CultureInfo.InvariantCulture) ?? "-"} ms");
         var overrides = new Dictionary<string, string?>
         {
             { "Caching:Broadcast:RedisStreams:MaintainerEnabled", "false" },
@@ -322,7 +323,7 @@ internal static class StreamNotifyDoorbellHarness
         var writerOps = writerMux.OperationCount - writerOpsBefore;
         var readerOps = readerMux.OperationCount - readerOpsBefore;
         var after = await CommandStatsAsync(server);
-        stopReader.Cancel();
+        await stopReader.CancelAsync();
         await readerTask;
         var commands = CountedCommands.ToDictionary(c => c, c => after.GetValueOrDefault(c) - before.GetValueOrDefault(c));
         List<double> taken;
@@ -331,7 +332,7 @@ internal static class StreamNotifyDoorbellHarness
             taken = [.. samples];
         }
 
-        Console.Error.WriteLine($"[cell]   wrote={written} observed={taken.Count}");
+        await Console.Error.WriteLineAsync($"[cell]   wrote={written} observed={taken.Count}");
         return new LoadResult(written, taken, writerOps, readerOps, commands);
     }
 

@@ -32,5 +32,7 @@ public class SetCacheOfTPolicyResolutionTests
         sut.Policy.Should().BeNull();
     }
 
+#pragma warning disable S2094 // Marker type for the generic argument.
     public class MyService { }
+#pragma warning restore S2094
 }

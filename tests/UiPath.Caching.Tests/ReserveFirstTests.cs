@@ -24,7 +24,8 @@ public class ReserveFirstTests
             return "slow";
         }
 
-        var first = cache.GetOrAddAsync<string>("k", Slow, policy: null, Ct).AsTask();
+        var firstValue = cache.GetOrAddAsync<string>("k", Slow, policy: null, Ct);
+        var first = firstValue.AsTask();
         await started.Task.WaitAsync(TimeSpan.FromSeconds(10), Ct);
         var joiners = Enumerable.Range(0, 7).Select(_ => cache.GetOrAddAsync<string>("k", Slow, policy: null, Ct).AsTask()).ToArray();
         await Task.Delay(200, Ct);
@@ -50,7 +51,8 @@ public class ReserveFirstTests
             throw new InvalidOperationException("boom");
         }
 
-        var first = cache.GetOrAddAsync<string>("k", Failing, policy: null, Ct).AsTask();
+        var firstValue = cache.GetOrAddAsync<string>("k", Failing, policy: null, Ct);
+        var first = firstValue.AsTask();
         await started.Task.WaitAsync(TimeSpan.FromSeconds(10), Ct);
         var joiners = Enumerable.Range(0, 7).Select(_ => cache.GetOrAddAsync<string>("k", Failing, policy: null, Ct).AsTask()).ToArray();
         release.SetResult();
@@ -87,7 +89,8 @@ public class ReserveFirstTests
             return "generated";
         }
 
-        var starter = cache.GetOrAddAsync<string>("k", Generate, policy: null, leaving.Token).AsTask();
+        var starterValue = cache.GetOrAddAsync<string>("k", Generate, policy: null, leaving.Token);
+        var starter = starterValue.AsTask();
         await started.Task.WaitAsync(TimeSpan.FromSeconds(10), Ct);
         var joiner = cache.GetOrAddAsync<string>("k", Generate, policy: null, Ct).AsTask();
         await leaving.CancelAsync();
@@ -165,7 +168,8 @@ public class ReserveFirstTests
             return "generated";
         }
 
-        var first = cache.GetOrAddAsync<string>("k", Generate, policy: null, Ct).AsTask();
+        var firstValue = cache.GetOrAddAsync<string>("k", Generate, policy: null, Ct);
+        var first = firstValue.AsTask();
         await started.Task.WaitAsync(TimeSpan.FromSeconds(10), Ct);
         var late = cache.GetOrAddAsync<string>("k", Generate, policy: null, Ct).AsTask();
         await lateReadStarted.Task.WaitAsync(TimeSpan.FromSeconds(10), Ct);
@@ -197,12 +201,14 @@ public class ReserveFirstTests
         using var cache = InMemoryMultilayer.Cache(new InMemoryCacheOptions { LocalSingleFlightTimeout = TimeSpan.FromMilliseconds(50) });
         var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var started = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+#pragma warning disable S4144 // Each test closes over its own gates, so the body cannot be shared.
         async Task<string?> Slow(CancellationToken _)
         {
             started.TrySetResult();
             await release.Task;
             return "generated";
         }
+#pragma warning restore S4144
 
         var run = cache.GetOrAddAsync<string>("k", Slow, policy: null, Ct).AsTask();
         await started.Task.WaitAsync(TimeSpan.FromSeconds(10), Ct);
@@ -220,14 +226,17 @@ public class ReserveFirstTests
         using var cache = InMemoryMultilayer.Cache(new InMemoryCacheOptions { LocalSingleFlightTimeout = TimeSpan.FromSeconds(30) });
         var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var started = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+#pragma warning disable S4144 // Each test closes over its own gates, so the body cannot be shared.
         async Task<string?> Slow(CancellationToken _)
         {
             started.TrySetResult();
             await release.Task;
             return "generated";
         }
+#pragma warning restore S4144
 
-        var run = cache.GetOrAddAsync<string>("k", Slow, policy: null, Ct).AsTask();
+        var runValue = cache.GetOrAddAsync<string>("k", Slow, policy: null, Ct);
+        var run = runValue.AsTask();
         await started.Task.WaitAsync(TimeSpan.FromSeconds(10), Ct);
         var add = cache.TryAddAsync<string>("k", "added", policy: null, Ct).AsTask();
         await Task.Delay(100, Ct);
@@ -252,7 +261,8 @@ public class ReserveFirstTests
             return null;
         }
 
-        var run = cache.GetOrAddAsync<string>("k", Nothing, policy: null, Ct).AsTask();
+        var runValue = cache.GetOrAddAsync<string>("k", Nothing, policy: null, Ct);
+        var run = runValue.AsTask();
         await started.Task.WaitAsync(TimeSpan.FromSeconds(10), Ct);
         var add = cache.TryAddAsync<string>("k", "added", policy: null, Ct).AsTask();
         await Task.Delay(100, Ct);
@@ -284,7 +294,8 @@ public class ReserveFirstTests
             return Task.FromResult<string?>("generated");
         }
 
-        var add = cache.TryAddAsync<string>("k", "added", policy: null, Ct).AsTask();
+        var addValue = cache.TryAddAsync<string>("k", "added", policy: null, Ct);
+        var add = addValue.AsTask();
         await innerAddCalled.Task.WaitAsync(TimeSpan.FromSeconds(10), Ct);
         var miss = cache.GetOrAddAsync<string>("k", Generate, policy: null, Ct).AsTask();
         await Task.Delay(100, Ct);
@@ -318,7 +329,8 @@ public class ReserveFirstTests
             return Task.FromResult<string?>("generated");
         }
 
-        var add = cache.TryAddAsync<string>("k", "added", policy: null, Ct).AsTask();
+        var addValue = cache.TryAddAsync<string>("k", "added", policy: null, Ct);
+        var add = addValue.AsTask();
         await innerAddCalled.Task.WaitAsync(TimeSpan.FromSeconds(10), Ct);
         var miss = cache.GetOrAddAsync<string>("k", Generate, policy: null, Ct).AsTask();
         await Task.Delay(100, Ct);
@@ -379,7 +391,8 @@ public class ReserveFirstTests
         using var cache = InMemoryMultilayer.Cache(inner: MissingInner(), distributedLock: gate);
         using var leaving = new CancellationTokenSource();
 
-        var starter = cache.GetOrAddAsync<string>("k", Generated, policy, leaving.Token).AsTask();
+        var starterValue = cache.GetOrAddAsync<string>("k", Generated, policy, leaving.Token);
+        var starter = starterValue.AsTask();
         await gate.Waiting.Task.WaitAsync(TimeSpan.FromSeconds(10), Ct);
         var joiner = cache.GetOrAddAsync<string>("k", Generated, policy, Ct).AsTask();
         await leaving.CancelAsync();
@@ -396,12 +409,6 @@ public class ReserveFirstTests
     }
 
     private static Task<string?> Generated(CancellationToken token) => Task.FromResult<string?>("generated");
-
-    private static Task<KeyValuePair<string, string?>[]> GeneratedBatch(string[] states, CancellationToken token) =>
-        Task.FromResult(states.Select(s => new KeyValuePair<string, string?>(s, "generated")).ToArray());
-
-    private static Task<IDictionary<string, string?>> GeneratedHash(CancellationToken token) =>
-        Task.FromResult<IDictionary<string, string?>>(new Dictionary<string, string?> { ["f"] = "generated" });
 
     private static ICache MissingInner()
     {

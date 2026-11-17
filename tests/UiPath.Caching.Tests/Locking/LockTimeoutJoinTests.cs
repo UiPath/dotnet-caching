@@ -140,7 +140,8 @@ public class LockTimeoutJoinTests
             return new GeneratedValue<string>("jwt", DateTimeOffset.UtcNow.AddMinutes(5));
         }
 
-        var held = cache.GetOrAddWithExpirationAsync<string>("k", Generate, Ct).AsTask();
+        var heldValue = cache.GetOrAddWithExpirationAsync<string>("k", Generate, Ct);
+        var held = heldValue.AsTask();
         await started.Task.WaitAsync(TimeSpan.FromSeconds(10), Ct);
         var waiter = cache.GetOrAddWithExpirationAsync<string>("k", Generate, Ct).AsTask();
         await Task.Delay(PastTheTimeout, Ct);

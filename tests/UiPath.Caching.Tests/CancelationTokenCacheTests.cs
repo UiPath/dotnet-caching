@@ -69,9 +69,9 @@ public abstract class CancelationTokenCacheTests
     private async Task ValidateCancellationToken(Func<ICache, CancellationToken, Task> act)
     {
         var sut = CreateSut();
-        var cancelSource = new CancellationTokenSource();
+        using var cancelSource = new CancellationTokenSource();
         var token = cancelSource.Token;
-        cancelSource.Cancel();
+        await cancelSource.CancelAsync();
         await Assert.ThrowsAsync<OperationCanceledException>(() => act(sut, token));
     }
 }

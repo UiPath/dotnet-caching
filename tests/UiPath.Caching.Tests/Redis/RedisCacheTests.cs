@@ -537,8 +537,8 @@ public class RedisCacheTests(ITestContextAccessor testContextAccessor) : IAsyncL
     [Fact]
     public async Task A_multi_get_does_not_wait_for_a_connector_probe_still_in_flight()
     {
-        // The slot grouping runs outside the pipeline's latency cap, so the configured prefix stands in rather than a wait;
-        // a wait bounded by Timeout would take the full minute.
+        // The slot grouping runs outside the pipeline's latency cap, so the configured prefix stands in rather than a wait.
+        // A wait bounded by Timeout would take the full minute.
         _cacheOptions.KeyPrefix = "{tag}:";
         _cacheOptions.Timeout = TimeSpan.FromMinutes(1);
         _database.ExecuteAsync("ECHO", Arg.Any<ICollection<object>>(), Arg.Any<CommandFlags>())
@@ -1108,9 +1108,11 @@ public class RedisCacheTests(ITestContextAccessor testContextAccessor) : IAsyncL
         try
         {
             await ReadThroughAFailingPairAsync(marker);
+#pragma warning disable S1215 // The test needs the unobserved task exception to surface now.
             GC.Collect();
             GC.WaitForPendingFinalizers();
             GC.Collect();
+#pragma warning restore S1215
         }
         finally
         {
@@ -1681,7 +1683,8 @@ public class RedisCacheTests(ITestContextAccessor testContextAccessor) : IAsyncL
             return "loaded";
         }
 
-        var first = Sut.GetOrAddAsync(_cacheKey, Generate, TimeSpan.FromSeconds(5), policy: null, token).AsTask();
+        var firstRead = Sut.GetOrAddAsync(_cacheKey, Generate, TimeSpan.FromSeconds(5), policy: null, token);
+        var first = firstRead.AsTask();
         await started.Task.WaitAsync(TimeSpan.FromSeconds(10), token);
         var others = Enumerable.Range(0, 9).Select(_ => Sut.GetOrAddAsync(_cacheKey, Generate, TimeSpan.FromSeconds(5), policy: null, token).AsTask()).ToArray();
         await Task.Delay(100, token);
@@ -1713,7 +1716,8 @@ public class RedisCacheTests(ITestContextAccessor testContextAccessor) : IAsyncL
         };
 
         tenant.Value = "a";
-        var first = Sut.GetOrAddAsync(_cacheKey, Generate("from-a"), TimeSpan.FromSeconds(5), policy: null, token).AsTask();
+        var firstRead = Sut.GetOrAddAsync(_cacheKey, Generate("from-a"), TimeSpan.FromSeconds(5), policy: null, token);
+        var first = firstRead.AsTask();
         await started.Task.WaitAsync(TimeSpan.FromSeconds(10), token);
         tenant.Value = "b";
         var second = Sut.GetOrAddAsync(_cacheKey, Generate("from-b"), TimeSpan.FromSeconds(5), policy: null, token).AsTask();
@@ -1748,7 +1752,8 @@ public class RedisCacheTests(ITestContextAccessor testContextAccessor) : IAsyncL
             return "shared";
         }
 
-        var first = Sut.GetOrAddAsync(_cacheKey, Generate, TimeSpan.FromSeconds(5), policy: null, token).AsTask();
+        var firstRead = Sut.GetOrAddAsync(_cacheKey, Generate, TimeSpan.FromSeconds(5), policy: null, token);
+        var first = firstRead.AsTask();
         await started.Task.WaitAsync(TimeSpan.FromSeconds(10), token);
         var second = Sut.GetOrAddAsync(_cacheKey, Generate, TimeSpan.FromSeconds(5), policy: null, token).AsTask();
         await Task.Delay(100, token);
@@ -1782,7 +1787,8 @@ public class RedisCacheTests(ITestContextAccessor testContextAccessor) : IAsyncL
             return 42;
         }
 
-        var text = Sut.GetOrAddAsync(_cacheKey, GenerateText, TimeSpan.FromSeconds(5), policy: null, token).AsTask();
+        var textRead = Sut.GetOrAddAsync(_cacheKey, GenerateText, TimeSpan.FromSeconds(5), policy: null, token);
+        var text = textRead.AsTask();
         await started.Task.WaitAsync(TimeSpan.FromSeconds(10), token);
         var number = Sut.GetOrAddAsync<int?>(_cacheKey, GenerateNumber, TimeSpan.FromSeconds(5), policy: null, token).AsTask();
         await Task.Delay(100, token);
@@ -1957,8 +1963,9 @@ public class RedisCacheTests(ITestContextAccessor testContextAccessor) : IAsyncL
             return Task.FromResult<string?>("loaded");
         }
 
+        var firstAdd = Sut.GetOrAddAsync(_cacheKey, Generate, TimeSpan.FromSeconds(5), policy: null, token);
         await Task.WhenAll(
-            Sut.GetOrAddAsync(_cacheKey, Generate, TimeSpan.FromSeconds(5), policy: null, token).AsTask(),
+            firstAdd.AsTask(),
             Sut.GetOrAddAsync(_multiKey, Generate, TimeSpan.FromSeconds(5), policy: null, token).AsTask());
 
         calls.Should().Be(2);
@@ -1980,7 +1987,8 @@ public class RedisCacheTests(ITestContextAccessor testContextAccessor) : IAsyncL
             return "never";
         }
 
-        var first = Sut.GetOrAddAsync(_cacheKey, Generate, TimeSpan.FromSeconds(5), policy: null, firstCancellation.Token).AsTask();
+        var firstRead = Sut.GetOrAddAsync(_cacheKey, Generate, TimeSpan.FromSeconds(5), policy: null, firstCancellation.Token);
+        var first = firstRead.AsTask();
         await started.Task.WaitAsync(TimeSpan.FromSeconds(10), token);
         var second = Sut.GetOrAddAsync(_cacheKey, Generate, TimeSpan.FromSeconds(5), policy: null, secondCancellation.Token).AsTask();
 
@@ -2005,7 +2013,8 @@ public class RedisCacheTests(ITestContextAccessor testContextAccessor) : IAsyncL
             throw new InvalidOperationException("the load failed");
         }
 
-        var first = Sut.GetOrAddAsync(_cacheKey, Failing, TimeSpan.FromSeconds(5), policy: null, token).AsTask();
+        var firstRead = Sut.GetOrAddAsync(_cacheKey, Failing, TimeSpan.FromSeconds(5), policy: null, token);
+        var first = firstRead.AsTask();
         await started.Task.WaitAsync(TimeSpan.FromSeconds(10), token);
         var second = Sut.GetOrAddAsync(_cacheKey, Failing, TimeSpan.FromSeconds(5), policy: null, token).AsTask();
         release.SetResult();
@@ -2049,22 +2058,23 @@ public class RedisCacheTests(ITestContextAccessor testContextAccessor) : IAsyncL
         CacheKey[] keys = [_cacheKey, _multiKey];
         KeyValuePair<CacheKey, string?>[] pairs = [new(_cacheKey, "a"), new(_multiKey, "b")];
 
+        static Task Started<T>(ValueTask<T> call) => call.AsTask();
         var calls = new Task[]
         {
-            Sut.GetAsync<string>(_cacheKey, policy: null, token).AsTask(),
-            Sut.GetAsync<string>(keys, policy: null, token).AsTask(),
-            Sut.GetCacheEntryAsync<string>(_cacheKey, policy: null, token).AsTask(),
-            Sut.GetCacheEntriesAsync<string>(keys, policy: null, token).AsTask(),
-            Sut.GetOrAddAsync(_cacheKey, _ => Task.FromResult<string?>("g"), TimeSpan.FromMinutes(1), policy: null, token).AsTask(),
-            Sut.SetAsync<string>(_cacheKey, "a", TimeSpan.FromMinutes(1), policy: null, token).AsTask(),
-            Sut.SetAsync(pairs, TimeSpan.FromMinutes(1), policy: null, token).AsTask(),
-            Sut.TryAddAsync<string>(_cacheKey, "a", TimeSpan.FromMinutes(1), policy: null, token).AsTask(),
-            Sut.RemoveAsync<string>(_cacheKey, token).AsTask(),
-            Sut.RemoveAsync<string>(keys, token).AsTask(),
-            Sut.ContainsAsync<string>(_cacheKey, token).AsTask(),
-            Sut.RefreshAsync<string>(_cacheKey, TimeSpan.FromMinutes(1), policy: null, token).AsTask(),
-            Sut.TimeToLiveAsync<string>(_cacheKey, token).AsTask(),
-            Sut.ExpireTimeAsync<string>(_cacheKey, token).AsTask(),
+            Started(Sut.GetAsync<string>(_cacheKey, policy: null, token)),
+            Started(Sut.GetAsync<string>(keys, policy: null, token)),
+            Started(Sut.GetCacheEntryAsync<string>(_cacheKey, policy: null, token)),
+            Started(Sut.GetCacheEntriesAsync<string>(keys, policy: null, token)),
+            Started(Sut.GetOrAddAsync(_cacheKey, _ => Task.FromResult<string?>("g"), TimeSpan.FromMinutes(1), policy: null, token)),
+            Started(Sut.SetAsync<string>(_cacheKey, "a", TimeSpan.FromMinutes(1), policy: null, token)),
+            Started(Sut.SetAsync(pairs, TimeSpan.FromMinutes(1), policy: null, token)),
+            Started(Sut.TryAddAsync<string>(_cacheKey, "a", TimeSpan.FromMinutes(1), policy: null, token)),
+            Started(Sut.RemoveAsync<string>(_cacheKey, token)),
+            Started(Sut.RemoveAsync<string>(keys, token)),
+            Started(Sut.ContainsAsync<string>(_cacheKey, token)),
+            Started(Sut.RefreshAsync<string>(_cacheKey, TimeSpan.FromMinutes(1), policy: null, token)),
+            Started(Sut.TimeToLiveAsync<string>(_cacheKey, token)),
+            Started(Sut.ExpireTimeAsync<string>(_cacheKey, token)),
         };
         await Task.Delay(100, token);
         earlyReads.Should().Be(0, "the library waits for the connect without reading the blocking database accessor");
@@ -2093,10 +2103,11 @@ public class RedisCacheTests(ITestContextAccessor testContextAccessor) : IAsyncL
         KeyValuePair<CacheKey, string?>[] pairs = [new(_cacheKey, "a"), new(_multiKey, "b")];
 
         // A wait outside the pipeline would hold every call for as long as the connect takes, here forever.
-        var reads = Sut.GetAsync<string>(keys, policy: null, token).AsTask().WaitAsync(TimeSpan.FromSeconds(10), token);
-        var entries = Sut.GetCacheEntriesAsync<string>(keys, policy: null, token).AsTask().WaitAsync(TimeSpan.FromSeconds(10), token);
-        var set = Sut.SetAsync(pairs, TimeSpan.FromMinutes(1), policy: null, token).AsTask().WaitAsync(TimeSpan.FromSeconds(10), token);
-        var removed = Sut.RemoveAsync<string>(keys, token).AsTask().WaitAsync(TimeSpan.FromSeconds(10), token);
+        static Task<T> Capped<T>(ValueTask<T> call, CancellationToken token) => call.AsTask().WaitAsync(TimeSpan.FromSeconds(10), token);
+        var reads = Capped(Sut.GetAsync<string>(keys, policy: null, token), token);
+        var entries = Capped(Sut.GetCacheEntriesAsync<string>(keys, policy: null, token), token);
+        var set = Capped(Sut.SetAsync(pairs, TimeSpan.FromMinutes(1), policy: null, token), token);
+        var removed = Capped(Sut.RemoveAsync<string>(keys, token), token);
 
         (await reads).Should().OnlyContain(kv => kv.Value == null);
         (await entries).Should().OnlyContain(kv => !kv.Value.Found);
@@ -2127,7 +2138,6 @@ public class RedisCacheTests(ITestContextAccessor testContextAccessor) : IAsyncL
     public async Task Refresh_timespan_works_as_expected()
     {
         var expiration =  _clock.UtcNow.AddDays(1);
-        var actualKey = string.Empty;
         bool called = false;
         _database.KeyExpireAsync(_redisKey, Arg.Any<DateTime>(), Arg.Any<CommandFlags>())
             .Returns(ci =>
@@ -2143,7 +2153,6 @@ public class RedisCacheTests(ITestContextAccessor testContextAccessor) : IAsyncL
     public async Task Refresh_datetime_works_as_expected()
     {
         var expiration = _fixture.Create<TimeSpan>();
-        var actualKey = string.Empty;
         _database.KeyExpireAsync(_redisKey, Arg.Any<DateTime>(), Arg.Any<CommandFlags>())
             .Returns(ci =>
             {
@@ -2156,8 +2165,6 @@ public class RedisCacheTests(ITestContextAccessor testContextAccessor) : IAsyncL
     [Fact]
     public async Task Refresh_no_expiration_works_as_expected()
     {
-        var expiration = _fixture.Create<TimeSpan>();
-        var actualKey = string.Empty;
         DateTime? actualExpiration = default;
         _database.KeyExpireAsync(_redisKey, Arg.Any<DateTime?>(), Arg.Any<CommandFlags>())
             .Returns(ci =>
@@ -2499,7 +2506,7 @@ public class RedisCacheTests(ITestContextAccessor testContextAccessor) : IAsyncL
     public async Task Multi_set_when_defaultValue()
     {
         string? value = default;
-        var actualResponse = await Sut.SetAsync(new KeyValuePair<CacheKey, string?>[] { new(_cacheKey, value), new(_multiKey, value) }, _fixture.Create<TimeSpan>(), policy: null, token: testContextAccessor.Current.CancellationToken);
+        await Sut.SetAsync(new KeyValuePair<CacheKey, string?>[] { new(_cacheKey, value), new(_multiKey, value) }, _fixture.Create<TimeSpan>(), policy: null, token: testContextAccessor.Current.CancellationToken);
         await _transaction.Received().KeyDeleteAsync(Arg.Any<RedisKey>(),Arg.Is<CommandFlags>(f => f.HasFlag(CommandFlags.DemandMaster)));
     }
 
@@ -3063,7 +3070,6 @@ public class RedisCacheTests(ITestContextAccessor testContextAccessor) : IAsyncL
     private async Task Set_works_as_expected(Type expirationType)
     {
         var value = _fixture.Create<string>();
-        var expiration = _fixture.Create<TimeSpan>();
         var expectedResponse = _fixture.Create<bool>();
         _database.StringSetAsync(_redisKey, Arg.Any<RedisValue>(), Arg.Any<TimeSpan?>(), Arg.Any<When>(), Arg.Is<CommandFlags>(f => f.HasFlag(CommandFlags.DemandMaster)))
                 .Returns(_ => Task.FromResult(expectedResponse));
@@ -3088,7 +3094,6 @@ public class RedisCacheTests(ITestContextAccessor testContextAccessor) : IAsyncL
     private async Task Multi_set_works_as_expected(Type expirationType)
     {
         var value = _fixture.Create<string?>();
-        var expiration = _fixture.Create<TimeSpan>();
         var expectedResponse = _fixture.Create<bool>();
         _transaction.StringSetAsync(_redisKey, Arg.Any<RedisValue>(), Arg.Any<TimeSpan?>(), Arg.Any<When>(), Arg.Is<CommandFlags>(f => f.HasFlag(CommandFlags.DemandMaster)))
                 .Returns(_ => Task.FromResult(expectedResponse));

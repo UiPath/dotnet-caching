@@ -80,5 +80,5 @@ public class SpanKeyRemoveTests
     }
 
     private static bool Complete(ValueTask<bool> remove) =>
-        remove.IsCompletedSuccessfully ? remove.Result : remove.AsTask().GetAwaiter().GetResult();
+        remove.AsTask().GetAwaiter().GetResult();
 }

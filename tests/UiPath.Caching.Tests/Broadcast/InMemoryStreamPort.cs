@@ -223,6 +223,18 @@ internal sealed class InMemoryStreamPort(RedisValue group, RedisValue field) : I
         }
     }
 
+    private static RedisResult Reply(StreamEntry e)
+    {
+        var fields = new RedisValue[e.Values.Length * 2];
+        for (var i = 0; i < e.Values.Length; i++)
+        {
+            fields[2 * i] = e.Values[i].Name;
+            fields[(2 * i) + 1] = e.Values[i].Value;
+        }
+
+        return RedisResult.Create([RedisResult.Create(e.Id), RedisResult.Create(fields)]);
+    }
+
     private async Task<T> RunAsync<T>(Op op, Func<T> action)
     {
         Held? held = null;
@@ -319,8 +331,9 @@ internal sealed class InMemoryStreamPort(RedisValue group, RedisValue field) : I
             stream.Add(RedisResult.Create([RedisResult.Create((RedisValue)Id(_log[0].Seq))]));
         }
 
+        RedisValue entriesRead = _read is { } r ? r : RedisValue.Null;
         var groups = full && _hasGroup
-            ? new[] { RedisResult.Create(new RedisValue[] { "name", group, "last-delivered-id", Id(_delivered), "entries-read", _read is { } r ? r : RedisValue.Null }) }
+            ? new[] { RedisResult.Create(new RedisValue[] { "name", group, "last-delivered-id", Id(_delivered), "entries-read", entriesRead }) }
             : [];
         var entries = ReadCore(StreamConstants.UndeliveredMessages, noAck: false);
         return RedisResult.Create(
@@ -342,13 +355,18 @@ internal sealed class InMemoryStreamPort(RedisValue group, RedisValue field) : I
             Check(Op.Info);
             return new StreamState(_log.Count, Id(_log.Count == 0 ? _added : _log[0].Seq), Id(_added), HasCounts ? "0-0" : RedisValue.Null, HasCounts ? _added : 0);
         });
-        var position = full
-            ? Outcome<GroupPosition?>(() =>
+        Func<GroupPosition?> readPosition = static () => null;
+        if (full)
+        {
+            readPosition = () =>
             {
                 Check(Op.Groups);
-                return _hasGroup ? new GroupPosition(Id(_delivered), HasCounts && _read is > 0 ? _read : null) : null;
-            })
-            : static () => null;
+                long? count = HasCounts && _read is > 0 ? _read : null;
+                return _hasGroup ? new GroupPosition(Id(_delivered), count) : null;
+            };
+        }
+
+        var position = Outcome(readPosition);
         var entries = Outcome(() => ReadCore(StreamConstants.UndeliveredMessages, noAck));
         return new(stream, position, entries);
     }
@@ -364,18 +382,6 @@ internal sealed class InMemoryStreamPort(RedisValue group, RedisValue field) : I
         {
             throw new RedisServerException(RedisErrorKind.None, CommandFlags.None, "ERR no such key");
         }
-    }
-
-    private RedisResult Reply(StreamEntry e)
-    {
-        var fields = new RedisValue[e.Values.Length * 2];
-        for (var i = 0; i < e.Values.Length; i++)
-        {
-            fields[2 * i] = e.Values[i].Name;
-            fields[(2 * i) + 1] = e.Values[i].Value;
-        }
-
-        return RedisResult.Create([RedisResult.Create(e.Id), RedisResult.Create(fields)]);
     }
 
     private bool CreateCore(RedisValue position)

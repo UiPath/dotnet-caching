@@ -233,9 +233,11 @@ public class ValueMigrationTests
         public T? Deserialize<T>(int formatId, System.Buffers.ReadOnlySequence<byte> source) => throw new NotSupportedException();
     }
 
+#pragma warning disable S2094 // Subclassing is the point: it proves the proxy can be derived from.
     private sealed class SubclassedProxy : SystemJsonByteSerializerProxy
     {
     }
+#pragma warning restore S2094
 
     private sealed class Denies : IEffectiveFormat
     {

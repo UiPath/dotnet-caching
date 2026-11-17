@@ -393,9 +393,14 @@ public class SpanKeyOperationTests
         AllocatedBy(() => SpanReads.GetOrAdd(typedHash, "user:42", UnexpectedHash)).Should().Be(0);
     }
 
-    /// <summary>The result of a read that must complete synchronously, as a warm local hit does.</summary>
-    private static TResult Completed<TResult>(ValueTask<TResult> read) =>
-        read.IsCompletedSuccessfully ? read.Result : throw new InvalidOperationException("a warm read went asynchronous");
+    /// <summary>Asserts that a read completes synchronously, as a warm local hit does.</summary>
+    private static void Completed<TResult>(ValueTask<TResult> read)
+    {
+        if (!read.IsCompletedSuccessfully)
+        {
+            throw new InvalidOperationException("a warm read went asynchronous");
+        }
+    }
 
     /// <summary>The fewest bytes the current thread allocates across a thousand warm calls in any of ten rounds: a per-call allocation shows in every round, a one-off from tiered JIT in one.</summary>
     private static long AllocatedBy(Action read)

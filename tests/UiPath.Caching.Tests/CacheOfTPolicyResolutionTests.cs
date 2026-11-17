@@ -98,5 +98,7 @@ public class CacheOfTPolicyResolutionTests(ITestContextAccessor testContextAcces
         return cacheFactory;
     }
 
+#pragma warning disable S2094 // A marker type for Cache<T>.
     public class MyService { }
+#pragma warning restore S2094
 }

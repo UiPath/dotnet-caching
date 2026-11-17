@@ -57,7 +57,7 @@ public sealed class RedisStreamOwnEventAllocationTests(ITestOutputHelper output)
         var perEntry = (GC.GetTotalAllocatedBytes(precise: true) - before) / Entries;
 
         output.WriteLine($"{(withSourceField ? "with" : "without")} the source field: {perEntry} bytes per own entry, {formatter.Decodes} decodes");
-        stop.Cancel();
+        await stop.CancelAsync();
         channel.Reader.TryRead(out _).Should().BeFalse("own entries are not dispatched");
         stream.LastDelivered.Should().Be($"{Entries}-0");
         if (withSourceField)

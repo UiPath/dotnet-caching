@@ -137,7 +137,9 @@ public class MultilayerHashCacheRehydrateAdoptTests
 
         public int Calls => Volatile.Read(ref _calls);
 
+#pragma warning disable S1172 // bound as a generator delegate, which takes the token
         public Task<IDictionary<string, string?>> Run(CancellationToken token)
+#pragma warning restore S1172
         {
             Interlocked.Increment(ref _calls);
             return Task.FromResult<IDictionary<string, string?>>(new Dictionary<string, string?> { ["f"] = "generated" });
