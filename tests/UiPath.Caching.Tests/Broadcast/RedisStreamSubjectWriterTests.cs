@@ -2752,6 +2752,8 @@ public class RedisStreamSubjectWriterTests : IAsyncLifetime
     {
         private int _plainWaits;
 
+        public bool ObservesReads => false;
+
         public List<TimeSpan> Timeouts { get; } = [];
 
         public int PlainWaits => Volatile.Read(ref _plainWaits);
@@ -2780,6 +2782,8 @@ public class RedisStreamSubjectWriterTests : IAsyncLifetime
         {
         }
 
+        public DoorbellHealth ObserveRead(bool fromOthers) => DoorbellHealth.Unchanged;
+
         public void Dispose()
         {
         }
@@ -2792,9 +2796,13 @@ public class RedisStreamSubjectWriterTests : IAsyncLifetime
 
         private int _held;
 
+        public bool ObservesReads => inner.ObservesReads;
+
         public Task WaitAsync(CancellationToken cancellationToken) => inner.WaitAsync(cancellationToken);
 
         public Task WaitAsync(TimeSpan timeout, CancellationToken cancellationToken) => inner.WaitAsync(timeout, cancellationToken);
+
+        public DoorbellHealth ObserveRead(bool fromOthers) => inner.ObserveRead(fromOthers);
 
         public void Signal()
         {

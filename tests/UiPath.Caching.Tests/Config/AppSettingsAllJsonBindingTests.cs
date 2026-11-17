@@ -88,7 +88,7 @@ public class AppSettingsAllJsonBindingTests
         UiPath.Caching.Config.ConfigurationBinding.Bind(BuildConfig().GetSection("Caching:Broadcast:RedisStreams"), options);
 
         options.PollInterval.Should().Be(TimeSpan.FromMilliseconds(250));
-        options.EffectiveNotifiedPollInterval.Should().Be(TimeSpan.FromSeconds(5), "a listed PollInterval would count as set");
+        options.EffectiveNotifiedPollInterval.Should().Be(TimeSpan.FromSeconds(1), "a listed PollInterval would count as set");
     }
 
     [Fact]

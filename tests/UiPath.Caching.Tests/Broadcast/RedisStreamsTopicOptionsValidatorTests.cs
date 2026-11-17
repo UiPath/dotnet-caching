@@ -103,12 +103,12 @@ public class RedisStreamsTopicOptionsValidatorTests
     }
 
     [Fact]
-    public void Neither_set_waits_5_s_while_the_doorbell_is_live()
+    public void Neither_set_waits_1_s_while_the_doorbell_is_live()
     {
         var options = new RedisStreamsTopicOptions();
 
         options.PollInterval.Should().Be(TimeSpan.FromMilliseconds(250));
-        options.EffectiveNotifiedPollInterval.Should().Be(TimeSpan.FromSeconds(5));
+        options.EffectiveNotifiedPollInterval.Should().Be(TimeSpan.FromSeconds(1));
     }
 
     [Theory]
@@ -149,9 +149,9 @@ public class RedisStreamsTopicOptionsValidatorTests
     }
 
     [Fact]
-    public void A_clone_of_the_defaults_keeps_the_5_s_default()
+    public void A_clone_of_the_defaults_keeps_the_1_s_default()
     {
-        new RedisStreamsTopicOptions().Clone().EffectiveNotifiedPollInterval.Should().Be(TimeSpan.FromSeconds(5));
+        new RedisStreamsTopicOptions().Clone().EffectiveNotifiedPollInterval.Should().Be(TimeSpan.FromSeconds(1));
     }
 
     [Fact]
@@ -164,7 +164,7 @@ public class RedisStreamsTopicOptionsValidatorTests
     }
 
     [Theory]
-    [InlineData(null, 5_000)]
+    [InlineData(null, 1_000)]
     [InlineData("00:00:00.250", 250)]
     [InlineData("00:00:01", 1_000)]
     public void The_section_sets_the_poll_interval_only_when_it_has_the_key(string? pollInterval, int liveMilliseconds)
@@ -183,7 +183,7 @@ public class RedisStreamsTopicOptionsValidatorTests
     }
 
     [Theory]
-    [InlineData(null, null, 5_000)]
+    [InlineData(null, null, 1_000)]
     [InlineData("00:00:01", null, 1_000)]
     [InlineData(null, "00:00:02", 2_000)]
     public void A_topic_override_starts_from_the_global_options(string? globalPoll, string? topicPoll, int liveMilliseconds)

@@ -141,6 +141,9 @@ public sealed partial class RedisStreamsTopic<T> : ITopic<T>
     /// <summary>Whether this topic's doorbell subscription is live.</summary>
     internal bool NotifyLive => _waiter.NotifyLive;
 
+    /// <summary>Whether entries that no doorbell announced brought this topic's waits back to the poll interval.</summary>
+    internal bool DoorbellShortened => _waiter.Shortened;
+
     public IDisposable Subscribe(IObserver<T> observer)
     {
         this.ThrowIfDisposed(_disposed);
