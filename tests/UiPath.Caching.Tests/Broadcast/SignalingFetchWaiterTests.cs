@@ -250,7 +250,248 @@ public class SignalingFetchWaiterTests
         await act.Should().CompleteWithinAsync(10.Seconds());
     }
 
+    [Fact]
+    public async Task Two_live_waits_that_time_out_onto_other_nodes_entries_shorten_the_next_wait()
+    {
+        var clock = NewClock();
+        using var sut = new SignalingFetchWaiter(100.Milliseconds(), 5.Seconds(), clock);
+        sut.SetNotifyLive(true);
+
+        await TimeOutAsync(sut, clock, 5.Seconds());
+        sut.ObserveRead(fromOthers: true).Should().Be(DoorbellHealth.Unchanged, "one late entry may be a doorbell that raced the poll");
+        await TimeOutAsync(sut, clock, 5.Seconds());
+        sut.ObserveRead(fromOthers: true).Should().Be(DoorbellHealth.Missed);
+
+        sut.Shortened.Should().BeTrue();
+        await TimeOutAsync(sut, clock, 100.Milliseconds());
+    }
+
+    [Fact]
+    public async Task A_doorbell_that_delivers_between_two_misses_keeps_the_long_wait()
+    {
+        var clock = NewClock();
+        using var sut = new SignalingFetchWaiter(100.Milliseconds(), 5.Seconds(), clock);
+        sut.SetNotifyLive(true);
+
+        await TimeOutAsync(sut, clock, 5.Seconds());
+        sut.ObserveRead(fromOthers: true);
+        sut.Ring();
+        await sut.WaitAsync(CancellationToken.None).WaitAsync(10.Seconds(), TestContext.Current.CancellationToken);
+        sut.ObserveRead(fromOthers: true);
+        await TimeOutAsync(sut, clock, 5.Seconds());
+
+        sut.ObserveRead(fromOthers: true).Should().Be(DoorbellHealth.Unchanged, "the misses were not in a row");
+        sut.Shortened.Should().BeFalse();
+    }
+
+    [Fact]
+    public async Task A_doorbell_whose_read_finds_nothing_still_resets_the_count()
+    {
+        var clock = NewClock();
+        using var sut = new SignalingFetchWaiter(100.Milliseconds(), 5.Seconds(), clock);
+        sut.SetNotifyLive(true);
+
+        // The poll timed out a moment after another node's XADD, before its doorbell arrived.
+        await TimeOutAsync(sut, clock, 5.Seconds());
+        sut.ObserveRead(fromOthers: true);
+        // The late doorbell wakes a read that finds the entry already taken.
+        sut.Ring();
+        await sut.WaitAsync(CancellationToken.None).WaitAsync(10.Seconds(), TestContext.Current.CancellationToken);
+        sut.ObserveRead(fromOthers: false);
+        await TimeOutAsync(sut, clock, 5.Seconds());
+
+        sut.ObserveRead(fromOthers: true).Should().Be(DoorbellHealth.Unchanged, "a doorbell arrived between the two late entries");
+        sut.Shortened.Should().BeFalse();
+    }
+
+    [Fact]
+    public void Reads_are_observed_only_while_a_live_doorbell_lengthens_the_wait()
+    {
+        using var longer = new SignalingFetchWaiter(100.Milliseconds(), 5.Seconds());
+        using var same = new SignalingFetchWaiter(100.Milliseconds(), 100.Milliseconds());
+        using var none = new SignalingFetchWaiter(100.Milliseconds());
+
+        longer.ObservesReads.Should().BeFalse("the doorbell is not live yet");
+        longer.SetNotifyLive(true);
+        same.SetNotifyLive(true);
+        none.SetNotifyLive(true);
+
+        longer.ObservesReads.Should().BeTrue();
+        same.ObservesReads.Should().BeFalse("the wait is the poll interval anyway");
+        none.ObservesReads.Should().BeFalse();
+    }
+
+    [Fact]
+    public async Task A_doorbell_that_rang_as_the_wait_timed_out_is_not_a_miss()
+    {
+        var clock = NewClock();
+        using var sut = new SignalingFetchWaiter(100.Milliseconds(), 5.Seconds(), clock);
+        sut.SetNotifyLive(true);
+
+        for (var i = 0; i < 3; i++)
+        {
+            await TimeOutAsync(sut, clock, 5.Seconds());
+            sut.Ring();
+            sut.ObserveRead(fromOthers: true).Should().Be(DoorbellHealth.Unchanged);
+            // The ring left a wake-up pending; the read it causes finds nothing.
+            await sut.WaitAsync(CancellationToken.None).WaitAsync(10.Seconds(), TestContext.Current.CancellationToken);
+            sut.ObserveRead(fromOthers: false);
+        }
+
+        sut.Shortened.Should().BeFalse();
+    }
+
+    [Theory]
+    [InlineData(false, true)]
+    [InlineData(true, false)]
+    public async Task A_timed_out_wait_is_no_miss_without_a_live_doorbell_or_without_other_nodes_entries(bool live, bool fromOthers)
+    {
+        var clock = NewClock();
+        using var sut = new SignalingFetchWaiter(100.Milliseconds(), 5.Seconds(), clock);
+        sut.SetNotifyLive(live);
+
+        for (var i = 0; i < 3; i++)
+        {
+            await TimeOutAsync(sut, clock, live ? 5.Seconds() : 100.Milliseconds());
+            sut.ObserveRead(fromOthers).Should().Be(DoorbellHealth.Unchanged);
+        }
+
+        sut.Shortened.Should().BeFalse();
+    }
+
+    [Fact]
+    public async Task A_wait_with_an_explicit_timeout_is_not_counted()
+    {
+        var clock = NewClock();
+        using var sut = new SignalingFetchWaiter(100.Milliseconds(), 5.Seconds(), clock);
+        sut.SetNotifyLive(true);
+
+        for (var i = 0; i < 3; i++)
+        {
+            var wait = sut.WaitAsync(1.Seconds(), CancellationToken.None);
+            clock.Advance(1.Seconds());
+            await wait.WaitAsync(10.Seconds(), TestContext.Current.CancellationToken);
+            sut.ObserveRead(fromOthers: true).Should().Be(DoorbellHealth.Unchanged, "a retry or a disconnected wait says nothing about the doorbell");
+        }
+    }
+
+    [Fact]
+    public async Task A_shortened_wait_lengthens_again_once_doorbells_deliver_and_no_entry_came_unannounced_for_a_while()
+    {
+        var clock = NewClock();
+        using var sut = new SignalingFetchWaiter(100.Milliseconds(), 5.Seconds(), clock);
+        sut.SetNotifyLive(true);
+        await ShortenAsync(sut, clock);
+
+        sut.Ring();
+        await sut.WaitAsync(CancellationToken.None).WaitAsync(10.Seconds(), TestContext.Current.CancellationToken);
+        sut.ObserveRead(fromOthers: true).Should().Be(DoorbellHealth.Unchanged, "an unannounced entry is too recent");
+        clock.Advance(60.Seconds());
+        sut.Ring();
+        await sut.WaitAsync(CancellationToken.None).WaitAsync(10.Seconds(), TestContext.Current.CancellationToken);
+
+        sut.ObserveRead(fromOthers: true).Should().Be(DoorbellHealth.Recovered);
+        sut.Shortened.Should().BeFalse();
+        await TimeOutAsync(sut, clock, 5.Seconds());
+    }
+
+    [Fact]
+    public async Task An_unannounced_entry_on_a_shortened_wait_puts_the_long_wait_off()
+    {
+        var clock = NewClock();
+        using var sut = new SignalingFetchWaiter(100.Milliseconds(), 5.Seconds(), clock);
+        sut.SetNotifyLive(true);
+        await ShortenAsync(sut, clock);
+
+        clock.Advance(59.Seconds());
+        await TimeOutAsync(sut, clock, 100.Milliseconds());
+        sut.ObserveRead(fromOthers: true);
+        clock.Advance(30.Seconds());
+        sut.Ring();
+        await sut.WaitAsync(CancellationToken.None).WaitAsync(10.Seconds(), TestContext.Current.CancellationToken);
+
+        sut.ObserveRead(fromOthers: true).Should().Be(DoorbellHealth.Unchanged, "some writer still does not ring");
+        sut.Shortened.Should().BeTrue();
+    }
+
+    [Fact]
+    public async Task A_subscription_taken_again_starts_from_the_long_wait()
+    {
+        var clock = NewClock();
+        using var sut = new SignalingFetchWaiter(100.Milliseconds(), 5.Seconds(), clock);
+        sut.SetNotifyLive(true);
+        await ShortenAsync(sut, clock);
+
+        sut.SetNotifyLive(false);
+        sut.SetNotifyLive(true);
+        // Losing the subscription left a wake-up pending; the read it causes is the one that reports.
+        await sut.WaitAsync(CancellationToken.None).WaitAsync(10.Seconds(), TestContext.Current.CancellationToken);
+
+        sut.Shortened.Should().BeFalse("the new subscription has missed nothing yet");
+        sut.ObserveRead(fromOthers: false).Should().Be(DoorbellHealth.Recovered, "the fallback ended, so it is reported once");
+        sut.ObserveRead(fromOthers: false).Should().Be(DoorbellHealth.Unchanged);
+        await TimeOutAsync(sut, clock, 5.Seconds());
+    }
+
+    [Fact]
+    public async Task A_wait_that_ran_under_the_old_subscription_is_not_counted_against_the_new_one()
+    {
+        var clock = NewClock();
+        using var sut = new SignalingFetchWaiter(100.Milliseconds(), 5.Seconds(), clock);
+        sut.SetNotifyLive(true);
+        await TimeOutAsync(sut, clock, 5.Seconds());
+        sut.ObserveRead(fromOthers: true);
+        await TimeOutAsync(sut, clock, 5.Seconds());
+
+        // The subscription is taken again before the read after that wait is observed.
+        sut.SetNotifyLive(false);
+        sut.SetNotifyLive(true);
+
+        sut.ObserveRead(fromOthers: true).Should().Be(DoorbellHealth.Unchanged);
+        sut.Shortened.Should().BeFalse();
+    }
+
+    [Fact]
+    public async Task A_fallback_lasts_twelve_notified_intervals_after_the_last_unannounced_entry()
+    {
+        var clock = NewClock();
+        using var sut = new SignalingFetchWaiter(100.Milliseconds(), 5.Seconds(), clock);
+        sut.SetNotifyLive(true);
+        await ShortenAsync(sut, clock);
+
+        clock.Advance(60.Seconds() - 1.Milliseconds());
+        sut.Ring();
+        await sut.WaitAsync(CancellationToken.None).WaitAsync(10.Seconds(), TestContext.Current.CancellationToken);
+        sut.ObserveRead(fromOthers: true).Should().Be(DoorbellHealth.Unchanged, "12 notified intervals have not passed yet");
+
+        clock.Advance(1.Milliseconds());
+        sut.Ring();
+        await sut.WaitAsync(CancellationToken.None).WaitAsync(10.Seconds(), TestContext.Current.CancellationToken);
+        sut.ObserveRead(fromOthers: true).Should().Be(DoorbellHealth.Recovered);
+    }
+
     private static ManualTimeProvider NewClock() => new(DateTimeOffset.UnixEpoch);
+
+    private static async Task ShortenAsync(SignalingFetchWaiter sut, ManualTimeProvider clock)
+    {
+        for (var i = 0; i < 2; i++)
+        {
+            await TimeOutAsync(sut, clock, 5.Seconds());
+            sut.ObserveRead(fromOthers: true);
+        }
+
+        sut.Shortened.Should().BeTrue();
+    }
+
+    /// <summary>Starts the idle wait and moves the clock to its end; a wait shorter or longer than <paramref name="interval"/> fails.</summary>
+    private static async Task TimeOutAsync(SignalingFetchWaiter sut, ManualTimeProvider clock, TimeSpan interval)
+    {
+        var wait = sut.WaitAsync(CancellationToken.None);
+        clock.Advance(interval - 1.Milliseconds());
+        await StillWaitingAsync(wait);
+        clock.Advance(1.Milliseconds());
+        await wait.WaitAsync(10.Seconds(), TestContext.Current.CancellationToken);
+    }
 
     /// <summary>Gives a wait that should still be pending a real moment to finish wrongly, then asserts it has not.</summary>
     private static async Task StillWaitingAsync(Task wait)

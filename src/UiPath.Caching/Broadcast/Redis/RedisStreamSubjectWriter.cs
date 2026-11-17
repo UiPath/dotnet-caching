@@ -17,6 +17,8 @@ internal sealed partial class RedisStreamSubjectWriter<T> : IDisposable
     private const string PropTopicKey = "TopicKey";
     private const string PropTransportId = "TransportId";
     private const string PropEventId = "EventId";
+    private const string EventDoorbellMissed = "cache.topic.doorbell_missed";
+    private const string EventDoorbellRecovered = "cache.topic.doorbell_recovered";
     private readonly RedisStreamContext _context;
     private readonly IRedisConnector _redis;
     private readonly IStreamPort _stream;
@@ -314,6 +316,7 @@ internal sealed partial class RedisStreamSubjectWriter<T> : IDisposable
         }
 
         var events = await ReadBatchAsync().ConfigureAwait(false);
+        ObserveDoorbell(events);
 
         if (!_groupExists && !_readSkipped)
         {
@@ -357,6 +360,28 @@ internal sealed partial class RedisStreamSubjectWriter<T> : IDisposable
         }
         // At the head: a read now would find nothing.
         await _waiter.WaitAsync(_cancelationToken).ConfigureAwait(false);
+    }
+
+    /// <summary>Tells the waiter whether this read found another node's entry; one that no doorbell announced shortens the waits.</summary>
+    private void ObserveDoorbell(StreamEntry[] events)
+    {
+        var fromOthers = false;
+        for (var i = 0; _waiter.ObservesReads && i < events.Length && !fromOthers; i++)
+        {
+            fromOthers = !IsOwn(events[i]);
+        }
+
+        switch (_waiter.ObserveRead(fromOthers))
+        {
+            case DoorbellHealth.Missed:
+                LogDoorbellMissed(_context.Topic, _context.PollInterval);
+                _cachingTelemetryProvider.TryTrackEvent(EventDoorbellMissed, [new(Metrics.TopicName, _topicName)]);
+                break;
+            case DoorbellHealth.Recovered:
+                LogDoorbellRecovered(_context.Topic);
+                _cachingTelemetryProvider.TryTrackEvent(EventDoorbellRecovered, [new(Metrics.TopicName, _topicName)]);
+                break;
+        }
     }
 
     /// <summary>Reads the entries Redis gave this consumer without an acknowledgement, such as those of a read that timed out on the client.</summary>
@@ -1077,6 +1102,12 @@ internal sealed partial class RedisStreamSubjectWriter<T> : IDisposable
             ]);
         }
     }
+
+    [LoggerMessage(Level = LogLevel.Warning, Message = "Entries of other nodes reached topic {Topic} with no doorbell while its subscription reads as live; polling every {PollInterval} until doorbells deliver again. A writer that does not ring, one that rings another channel name, or a subscription that died unnoticed causes this.")]
+    private partial void LogDoorbellMissed(RedisKey topic, TimeSpan pollInterval);
+
+    [LoggerMessage(Level = LogLevel.Information, Message = "Doorbells deliver again for topic {Topic}; back to the notified poll interval")]
+    private partial void LogDoorbellRecovered(RedisKey topic);
 
     [LoggerMessage(Level = LogLevel.Debug, Message = "Fetch events loop started")]
     private partial void LogFetchLoopStarted();
