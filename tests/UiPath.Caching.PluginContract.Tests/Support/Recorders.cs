@@ -1,0 +1,52 @@
+using System.Collections.Concurrent;
+using Microsoft.Extensions.Logging;
+using UiPath.Caching.Telemetry;
+
+namespace UiPath.Caching.PluginContract.Tests.Support;
+
+internal sealed class RecordingTelemetry : ICachingTelemetryProvider
+{
+    private readonly ConcurrentQueue<(string Name, Dictionary<string, string> Tags)> _metrics = [];
+
+    public int Count(string name, string tag, string value) =>
+        _metrics.Count(m => m.Name == name && m.Tags.TryGetValue(tag, out var found) && found == value);
+
+    public void TrackDependency(string type, string target, string name, string data, DateTimeOffset startTime, TimeSpan duration, string resultCode, bool success, TelemetryTags<string> properties = default, TelemetryTags<double> metrics = default)
+    {
+    }
+
+    public void TrackEvent(string eventName, TelemetryTags<string> properties = default, TelemetryTags<double> metrics = default)
+    {
+    }
+
+    public void TrackException(Exception ex, TelemetryTags<string> properties = default, TelemetryTags<double> metrics = default)
+    {
+    }
+
+    public void TrackMetric(string name, double value, TelemetryTags<string> properties = default) =>
+        _metrics.Enqueue((name, properties.ToDictionary(p => p.Key, p => p.Value)));
+}
+
+internal sealed class RecordingLoggerProvider : ILoggerProvider
+{
+    private readonly ConcurrentQueue<(LogLevel Level, string Message)> _entries = [];
+
+    public IReadOnlyCollection<(LogLevel Level, string Message)> Entries => _entries;
+
+    public ILogger CreateLogger(string categoryName) => new Recorder(_entries);
+
+    public void Dispose()
+    {
+    }
+
+    private sealed class Recorder(ConcurrentQueue<(LogLevel Level, string Message)> entries) : ILogger
+    {
+        public IDisposable? BeginScope<TState>(TState state)
+            where TState : notnull => null;
+
+        public bool IsEnabled(LogLevel logLevel) => true;
+
+        public void Log<TState>(LogLevel logLevel, EventId eventId, TState state, Exception? exception, Func<TState, Exception?, string> formatter) =>
+            entries.Enqueue((logLevel, formatter(state, exception)));
+    }
+}

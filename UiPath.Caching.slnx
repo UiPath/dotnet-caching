@@ -24,5 +24,6 @@
   <Project Path="src/UiPath.Caching.Queue/UiPath.Caching.Queue.csproj" />
   <Project Path="src/UiPath.Caching/UiPath.Caching.csproj" />
   <Project Path="tests/UiPath.Caching.Analyzers.Tests/UiPath.Caching.Analyzers.Tests.csproj" />
+  <Project Path="tests/UiPath.Caching.PluginContract.Tests/UiPath.Caching.PluginContract.Tests.csproj" />
   <Project Path="tests/UiPath.Caching.Tests/UiPath.Caching.Tests.csproj" />
 </Solution>
