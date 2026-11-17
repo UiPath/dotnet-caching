@@ -62,6 +62,8 @@ public sealed partial class RedisStreamsTopic<T> : ITopic<T>
     // Off for good once the server refuses the script, and for a channel a script may not publish to (sharded, or a custom strategy's).
     private volatile bool _ringInAdd;
     private volatile bool _prefixChecked;
+    // The script went off for a channel prefix, not for a refusal: a new connection may have none.
+    private volatile bool _ringInAddOffForPrefix;
     private bool _disposed;
 
     public RedisStreamsTopic(
@@ -138,6 +140,9 @@ public sealed partial class RedisStreamsTopic<T> : ITopic<T>
 
     /// <summary>Whether this topic's doorbell subscription is live.</summary>
     internal bool NotifyLive => _waiter.NotifyLive;
+
+    /// <summary>Whether entries that no doorbell announced brought this topic's waits back to the poll interval.</summary>
+    internal bool DoorbellShortened => _waiter.Shortened;
 
     public IDisposable Subscribe(IObserver<T> observer)
     {
@@ -232,14 +237,10 @@ public sealed partial class RedisStreamsTopic<T> : ITopic<T>
 
     internal RedisStreamsTopicOptions GetResolvedOptionsForTests() => _streamOptions;
 
-    /// <summary>Whether the connection prepends a key prefix or a channel prefix, neither of which reaches a script's arguments.</summary>
-    private static bool Prefixes(IDatabase database)
+    /// <summary>Whether the multiplexer prepends a channel prefix, which the subscription gets and a script's channel argument does not.</summary>
+    /// <remarks>A key prefix does not matter: the script's stream key gets it, and neither its channel nor the subscription does.</remarks>
+    private static bool PrefixesChannels(IDatabase database)
     {
-        if (ConnectorKeyPrefix.TryRead(database, out var prefix) && prefix.Length > 0)
-        {
-            return true;
-        }
-
         try
         {
             return ConfigurationOptions.Parse(database.Multiplexer.Configuration).ChannelPrefix is { IsNullOrEmpty: false };
@@ -287,9 +288,9 @@ public sealed partial class RedisStreamsTopic<T> : ITopic<T>
         if (!_prefixChecked)
         {
             _prefixChecked = true;
-            if (Prefixes(_redis.Database))
+            if (PrefixesChannels(_redis.Database))
             {
-                // The script's channel is an argument, which neither prefix reaches; a PUBLISH of its own gets both.
+                _ringInAddOffForPrefix = true;
                 _ringInAdd = false;
                 LogRingInAddPrefixed(TopicKey);
             }
@@ -425,7 +426,17 @@ public sealed partial class RedisStreamsTopic<T> : ITopic<T>
         return mode;
     }
 
-    private void OnReconnected(object? sender, EventArgs e) => Volatile.Write(ref _ringMode, RingUndecided);
+    private void OnReconnected(object? sender, EventArgs e)
+    {
+        Volatile.Write(ref _ringMode, RingUndecided);
+        // A new multiplexer may prefix channels differently, so the next add checks again.
+        if (_ringInAddOffForPrefix)
+        {
+            _ringInAddOffForPrefix = false;
+            _prefixChecked = false;
+            _ringInAdd = true;
+        }
+    }
 
     /// <summary>One doorbell in flight; the rings meanwhile coalesce into one more.</summary>
     // A doorbell per event in a burst would flood the subscribers' output buffers.
@@ -555,7 +566,8 @@ public sealed partial class RedisStreamsTopic<T> : ITopic<T>
         {
             Volatile.Write(ref _lastDoorbell, Stopwatch.GetTimestamp());
             // On the primary, like the XADD: a doorbell behind it on the same connection cannot overtake the entry.
-            publish = _redis.Database.PublishAsync(_notifyRedisChannel!.Value, _context.ConsumerName, CommandFlags.DemandMaster);
+            // Through the multiplexer's own database: a connector's key-prefixed one would prefix the channel too, and the subscriber, which carries no key prefix, would never hear it.
+            publish = _redis.Database.Multiplexer.GetDatabase().PublishAsync(_notifyRedisChannel!.Value, _context.ConsumerName, CommandFlags.DemandMaster);
             await publish.WaitAsync(DoorbellTimeout, stop).ConfigureAwait(false);
             Volatile.Write(ref _doorbellFailures, 0);
             return true;
@@ -663,7 +675,7 @@ public sealed partial class RedisStreamsTopic<T> : ITopic<T>
     [LoggerMessage(Level = LogLevel.Information, Message = "A script on topic {TopicKey} added its entry but could not publish its doorbell ({Reason}); the topic rings with a PUBLISH of its own from now on")]
     private partial void LogRingInAddPublishRefused(TopicKey topicKey, string? reason);
 
-    [LoggerMessage(Level = LogLevel.Debug, Message = "The connection behind topic {TopicKey} prefixes keys or channels; the topic rings with a PUBLISH of its own")]
+    [LoggerMessage(Level = LogLevel.Debug, Message = "The connection behind topic {TopicKey} prefixes channels; the topic rings with a PUBLISH of its own")]
     private partial void LogRingInAddPrefixed(TopicKey topicKey);
 
     [LoggerMessage(Level = LogLevel.Debug, Message = "The topology behind topic {TopicKey} could not be read; the doorbell waits for the XADD reply")]

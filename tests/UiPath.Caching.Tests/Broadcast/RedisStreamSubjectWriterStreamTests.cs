@@ -646,6 +646,8 @@ public sealed class RedisStreamSubjectWriterStreamTests : IDisposable
         private readonly List<int> _longWaits = [];
         private int _waits;
 
+        public bool ObservesReads => inner.ObservesReads;
+
         /// <summary>Runs on the writer's thread at the start of each timed wait, with its number and timeout, before the inner waiter is called.</summary>
         public Action<int, TimeSpan>? BeforeWait { get; set; }
 
@@ -685,6 +687,8 @@ public sealed class RedisStreamSubjectWriterStreamTests : IDisposable
         }
 
         public void Signal() => inner.Signal();
+
+        public DoorbellHealth ObserveRead(bool fromOthers) => inner.ObserveRead(fromOthers);
 
         public void Dispose()
         {

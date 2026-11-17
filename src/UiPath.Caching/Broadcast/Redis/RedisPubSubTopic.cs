@@ -82,7 +82,8 @@ public sealed partial class RedisPubSubTopic<T> : ITopic<T>
             var response = await _write.ExecuteAsync(static (s, token) =>
             {
                 token.ThrowIfCancellationRequested();
-                return s.Self._redis.Database.PublishAsync(s.Self._redisChannel, s.Message, CommandFlags.DemandMaster).AsValueTask();
+                // The multiplexer's own database: a connector's key-prefixed one would prefix the channel too, and the subscriber, which carries no key prefix, would never hear it.
+                return s.Self._redis.Database.Multiplexer.GetDatabase().PublishAsync(s.Self._redisChannel, s.Message, CommandFlags.DemandMaster).AsValueTask();
             },
             (Self: this, Message: message),
             defaultValue: -1,

@@ -112,7 +112,7 @@ App-wide-only fields (per-topic `Topics[]` entries ignore these): `Enabled`, `Co
 | `AutoAck` | `bool` | `false` | App-wide / Per-topic | Reads with `NOACK` and sends no `XACK`, so no pending list grows. A read that fails after Redis may have delivered it is reported as missed events, which clears the local tier. |
 | `FieldName` | `string` | `"event"` | App-wide / Per-topic | Stream entry field name used for the serialized event payload. |
 | `PollInterval` | `TimeSpan` | `00:00:00.250` | App-wide / Per-topic | Time between poll cycles while the notify subscription is not live; also paces failure retries. Must be positive. Setting it, even to 250 ms, also makes it the live cadence unless `NotifiedPollInterval` is set. |
-| `NotifiedPollInterval` | `TimeSpan?` | `null` | App-wide / Per-topic | Time between poll cycles while the notify subscription is live; `null` = 5 s, or `PollInterval` when that is set. Must be positive and at least `PollInterval`. |
+| `NotifiedPollInterval` | `TimeSpan?` | `null` | App-wide / Per-topic | Time between poll cycles while the notify subscription is live; `null` = 1 s, or `PollInterval` when that is set. Must be positive and at least `PollInterval`. |
 | `ConsumerCapacity` | `int` | `2048` | App-wide / Per-topic | Bounded-channel capacity for in-process event delivery; use `-1` for unbounded. |
 | `FullMode` | `BoundedChannelFullMode` | `Wait` | App-wide / Per-topic | Policy when the channel is full: `Wait`, `DropNewest`, `DropOldest`, `DropWrite`. |
 | `SlowObserverThreshold` | `TimeSpan` | `00:00:00.250` | App-wide / Per-topic | Log a warning when an observer takes longer than this to process an event. |
