@@ -380,6 +380,30 @@ the serializer has one and `Dispose` otherwise. So the factory must return a new
 DI, which the container would dispose a second time. The factory runs when the registry is built, on first cache
 use; a build that throws disposes what it created, and the next use runs the factory again.
 
+### Event formats: `AddEventFormat`
+
+`AddEventFormat(name, formatId, factory, write)` registers an `IEventFormatterProxy<ICacheEvent>` for events whose body starts with the one byte
+`formatId`. The library keeps the JSON decoder, so a node reads JSON and every registered format, picked by the first byte, and writes at most one
+format, the one registered with `write: true`.
+
+```csharp
+builder.AddEventFormat("fast", 0x11, _ => new MyEventFormatter(), write: true);
+```
+
+`formatId` is `0x01`-`0x0F` (except `0x09`, `0x0A`, `0x0D`) or `0x10-0x1E`; the ids `0x01`-`0x0F` are allocated by [format ids](../reference/format-ids.md).
+Value ids and event ids are separate, so one number may be both. Everything is checked at the call and a failing call registers nothing: a name or an id
+used twice, an id out of range, a second format with `write: true` (give the other one `write: false`) and the reserved name `json` all throw, so a second
+`AddMessagePackEvents` throws too. A named stack registers its own formats; they are not forwarded.
+
+`Encode` must start every body with `formatId`. A body that does not is written as JSON and one error is logged, so a mistake never loses an invalidation. `Decode`
+returns `null` for a body it does not own. The typed properties named by `CacheEventPropertyNames` (`Version` a `long`, `Expiration` and `PeerExpiration`
+a `DateTimeOffset`, `Metadata` and `PeerMetadata` a sequence of `KeyValuePair<string, string?>`, `PeerFields` the same or with `byte[]?` values) must come back
+as those types; any other property may travel as JSON. A formatter that also implements `IEventSourceMatcherProvider` lets a node tell its own events
+without decoding them.
+
+With `write: true` and `FormatNegotiation:Mode` `Auto` the node writes JSON until every node lists the format's token (its id as two hex digits) in
+`er`, as described for [MessagePack events](#messagepack-events). The factory runs when the formatter is first resolved, and the container owns and disposes what it returns.
+
 ### Distributed cache keyspace
 
 The distributed cache stores each entry as a Redis hash with a `data` field plus `absexp`/`sldexp`
@@ -573,8 +597,9 @@ JSON size and a peer-field event saves the 33% base64 adds. Properties it has no
 and read back as `JsonElement`, as they do from a JSON event, and an expiry reads back in UTC.
 
 ```csharp
-b.AddMessagePackEvents(write: true);  // reads both; writes binary once every live node can read it
-b.AddMessagePackEvents(write: false); // reads both; always writes JSON
+// One of the two; a second event format that writes throws.
+b.AddMessagePackEvents(write: true);   // reads both; writes binary once every live node can read it
+// b.AddMessagePackEvents(write: false); // reads both; always writes JSON
 ```
 
 There is no deploy order. With `write: true` a node writes JSON until the node list shows that every node reads binary events, for the
@@ -591,8 +616,8 @@ a restarted node replays its stream backlog, and a JSON entry it could not read 
 app-wide, not per topic.
 
 It wraps whichever JSON formatter would otherwise be registered, `AddCloudEvents` included, whether that is called
-before or after `AddMessagePackEvents`, so the JSON on the wire is what it was. Calling `AddMessagePackEvents` again
-replaces the earlier call's `write`.
+before or after `AddMessagePackEvents`, so the JSON on the wire is what it was. It is `AddEventFormat` with the id
+`MessagePackFormats.Event`, so calling `AddMessagePackEvents` a second time throws, as does a second event format that writes.
 
 An event whose body starts with a format header byte (`0x01`-`0x1F` except `0x09`, `0x0A`, `0x0D`), but does
 not decode, such as a binary event on a node that never registered the formatter, is reported as a loss, not skipped.

@@ -45,7 +45,7 @@ internal sealed class FormatNegotiation
         var redisOptions = services.GetRequiredService<IOptions<RedisCacheOptions>>().Value;
         var options = redisOptions.FormatNegotiation;
         var registry = services.GetRequiredService<ValueSerializerRegistry>();
-        var events = services.GetService<BinaryEventSettings>();
+        var events = services.GetService<EventFormatRegistry>();
         if (registry.IsEmpty && events is null)
         {
             return Inactive;
@@ -53,7 +53,7 @@ internal sealed class FormatNegotiation
 
         if (services.GetService<IRedisConnector>() is not { } connector)
         {
-            return events is { Write: true } ? WithoutNodeList(services, options) : Inactive;
+            return events?.WriteToken is { } token ? WithoutNodeList(services, options, token) : Inactive;
         }
 
         options.Validate();
@@ -74,12 +74,12 @@ internal sealed class FormatNegotiation
                 string.Join(", ", readingNoJson.Select(name => $"'{name}'")));
         }
 
-        DesiredEvents? desiredEvents = events is { Write: true } ? new DesiredEvents([BinaryEventSettings.Token]) : null;
+        DesiredEvents? desiredEvents = events?.WriteToken is { } writeToken ? new DesiredEvents([writeToken]) : null;
         var library = typeof(FormatNegotiation).Assembly.GetCustomAttribute<AssemblyInformationalVersionAttribute>()?.InformationalVersion ?? string.Empty;
         return new()
         {
-            // A node with nothing to decide, in Force or with no serializer and no binary events to write, only advertises.
-            Negotiator = options.Mode == FormatNegotiationMode.Force || (registry.IsEmpty && events is not { Write: true })
+            // A node with nothing to decide, in Force or with no serializer and no event format to write, only advertises.
+            Negotiator = options.Mode == FormatNegotiationMode.Force || (registry.IsEmpty && events?.WriteToken is null)
                 ? null
                 : new FormatNegotiator(
                     NegotiationPlan.Desired(registry, policies),
@@ -88,7 +88,7 @@ internal sealed class FormatNegotiation
                     services.GetRequiredService<ICachingTelemetryProvider>(),
                     loggers.CreateLogger<FormatNegotiator>(),
                     desiredEvents),
-            Advertisement = NegotiationPlan.Advertisement(registry, policies, new ValueReader(services.GetRequiredService<ISerializerProxy<byte[]>>(), registry), library, readsBinaryEvents: events is not null),
+            Advertisement = NegotiationPlan.Advertisement(registry, policies, new ValueReader(services.GetRequiredService<ISerializerProxy<byte[]>>(), registry), library, eventTokens: events?.ReadTokens),
             NodeId = (cacheOptions.SourceUri ?? CacheOptions.MachineUri).ToString().ToLowerInvariant(),
             Store = new NodeListStore(connector, NodeListStore.KeyFor(cacheOptions, redisOptions)),
             NodeList = new StreamNodeList(new RedisStreamGroupSource(connector), options),
@@ -102,14 +102,14 @@ internal sealed class FormatNegotiation
     }
 
     /// <summary>
-    /// Whether this node writes binary events: never when it is not set to, as configured in <see cref="FormatNegotiationMode.Force"/>, as the node list allows
+    /// Whether this node writes its event format: never when it is not set to, as configured in <see cref="FormatNegotiationMode.Force"/>, as the node list allows
     /// in <see cref="FormatNegotiationMode.Auto"/>, and with no node list to ask only on the operator's word.
     /// </summary>
-    public IBinaryEvents EventWrites(BinaryEventSettings settings)
+    public IEventWrites EventWrites(EventFormatRegistry registry)
     {
-        if (!settings.Write)
+        if (registry.Writer is null)
         {
-            return FixedBinaryEvents.Never;
+            return FixedEventWrites.Never;
         }
 
         if (Negotiator is { } negotiator)
@@ -117,11 +117,11 @@ internal sealed class FormatNegotiation
             return negotiator;
         }
 
-        return IsActive || Options.Mode == FormatNegotiationMode.Force ? FixedBinaryEvents.Always : FixedBinaryEvents.Never;
+        return IsActive || Options.Mode == FormatNegotiationMode.Force ? FixedEventWrites.Always : FixedEventWrites.Never;
     }
 
     // No Redis connection, so no node list and nothing to advertise to: the node writes JSON events until the operator attests, or forces them.
-    private static FormatNegotiation WithoutNodeList(IServiceProvider services, FormatNegotiationOptions options)
+    private static FormatNegotiation WithoutNodeList(IServiceProvider services, FormatNegotiationOptions options, string writeToken)
     {
         options.Validate();
         var clock = services.GetRequiredService<TimeProvider>();
@@ -130,7 +130,7 @@ internal sealed class FormatNegotiation
         {
             Negotiator = options.Mode == FormatNegotiationMode.Force
                 ? null
-                : new FormatNegotiator([], options, clock, services.GetRequiredService<ICachingTelemetryProvider>(), loggers.CreateLogger<FormatNegotiator>(), new DesiredEvents([BinaryEventSettings.Token])),
+                : new FormatNegotiator([], options, clock, services.GetRequiredService<ICachingTelemetryProvider>(), loggers.CreateLogger<FormatNegotiator>(), new DesiredEvents([writeToken])),
             Options = options,
             Clock = clock,
             Logger = loggers.CreateLogger<FormatNegotiationService>(),

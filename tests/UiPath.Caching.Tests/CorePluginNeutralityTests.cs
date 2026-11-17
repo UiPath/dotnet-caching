@@ -7,8 +7,6 @@ namespace UiPath.Caching.Tests;
 
 public partial class CorePluginNeutralityTests
 {
-    private const string AllowedLine = "InternalsVisibleTo(\"UiPath.Caching.MessagePack\")";
-
     private static readonly string[] Names = ["MessagePack", "Lz4"];
 
     private static readonly string MessagePackOwner = typeof(MessagePackFormats).Assembly.GetName().Name!;
@@ -31,8 +29,7 @@ public partial class CorePluginNeutralityTests
                 var lines = File.ReadAllLines(file);
                 for (var i = 0; i < lines.Length; i++)
                 {
-                    var isAllowed = relative.EndsWith("/GlobalUsings.cs", StringComparison.Ordinal) && lines[i].Contains(AllowedLine, StringComparison.Ordinal);
-                    if (!isAllowed && Names.Any(n => lines[i].Contains(n, StringComparison.OrdinalIgnoreCase)))
+                    if (Names.Any(n => lines[i].Contains(n, StringComparison.OrdinalIgnoreCase)))
                     {
                         offenders.Add($"{relative}:{i + 1}");
                     }

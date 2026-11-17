@@ -9,6 +9,7 @@ using StackExchange.Redis;
 using UiPath.Caching.CloudEvents;
 using UiPath.Caching.Config;
 using UiPath.Caching.MessagePack;
+using UiPath.Caching.Tests.Fakes;
 
 namespace UiPath.Caching.Tests.MessagePack;
 
@@ -392,7 +393,7 @@ public class MessagePackEventFormatterTests
     [Fact]
     public void Composite_reads_json_and_binary()
     {
-        var composite = new CompositeEventFormatter(_json, _binary, writeBinary: true);
+        var composite = CompositeFormatters.Of(_json, _binary, true);
         var original = Event(KnownEventTypes.CacheRemoved, null);
 
         composite.Decode(_json.Encode(original))!.Id.Should().Be(original.Id);
@@ -405,8 +406,8 @@ public class MessagePackEventFormatterTests
     {
         var original = Event(KnownEventTypes.CacheSet, null);
 
-        new CompositeEventFormatter(_json, _binary, writeBinary: false).Encode(original).Span[0].Should().Be((byte)'{');
-        new CompositeEventFormatter(_json, _binary, writeBinary: true).Encode(original).Span[0].Should().Be(MessagePackFormats.Event);
+        CompositeFormatters.Of(_json, _binary, false).Encode(original).Span[0].Should().Be((byte)'{');
+        CompositeFormatters.Of(_json, _binary, true).Encode(original).Span[0].Should().Be(MessagePackFormats.Event);
     }
 
     [Fact]
@@ -483,30 +484,24 @@ public class MessagePackEventFormatterTests
     }
 
     [Fact]
-    public void A_second_call_replaces_the_setting_and_wraps_the_formatter_once()
+    public void A_second_call_throws_and_leaves_the_first_registration_in_place()
     {
         var original = Event(KnownEventTypes.CacheSet, null);
+        var builder = new CachingBuilder(new ServiceCollection());
+        builder.AddMessagePackEvents(write: false);
+        var registered = builder.Services.Count;
 
-        var binary = Resolve(b =>
-        {
-            b.AddMessagePackEvents(write: false);
-            b.AddMessagePackEvents(write: true);
-        });
-        var json = Resolve(b =>
-        {
-            b.AddMessagePackEvents(write: true);
-            b.AddMessagePackEvents(write: false);
-        });
+        var act = () => builder.AddMessagePackEvents(write: true);
 
-        binary.Encode(original).Span[0].Should().Be(MessagePackFormats.Event);
-        json.Encode(original).Span[0].Should().Be((byte)'{');
-        json.Decode(json.Encode(original))!.Key.Should().Be("the-key");
+        act.Should().Throw<ArgumentException>();
+        builder.Services.Count.Should().Be(registered);
+        Resolve(b => b.AddMessagePackEvents(write: false)).Encode(original).Span[0].Should().Be((byte)'{');
     }
 
     [Fact]
     public void Own_event_filtering_still_works()
     {
-        var composite = new CompositeEventFormatter(_json, _binary, writeBinary: true);
+        var composite = CompositeFormatters.Of(_json, _binary, true);
         var own = composite.Decode(composite.Encode(Event(KnownEventTypes.CacheSet, null)))!;
         var other = Event(KnownEventTypes.CacheSet, null);
         other.Source = new Uri("urn:node-b");
@@ -525,7 +520,7 @@ public class MessagePackEventFormatterTests
     [Fact]
     public void Matching_the_source_of_a_binary_body_throws_nothing_even_first_chance()
     {
-        var matcher = new CompositeEventFormatter(_json, _binary, writeBinary: true).CreateSourceMatcher(Source)!;
+        var matcher = CompositeFormatters.Of(_json, _binary, true).CreateSourceMatcher(Source)!;
         var own = _binary.Encode(Event(KnownEventTypes.CacheSet, new Dictionary<string, object?> { [KnownFieldNames.VersionKey] = 1L }));
         var other = Event(KnownEventTypes.CacheSet, null);
         other.Source = new Uri("urn:node-b");
@@ -592,8 +587,8 @@ public class MessagePackEventFormatterTests
     {
         var jsonBody = _json.Encode(Event(KnownEventTypes.CacheSet, null));
         var binaryBody = _binary.Encode(Event(KnownEventTypes.CacheSet, null));
-        var neither = new CompositeEventFormatter(Substitute.For<IEventFormatterProxy<ICacheEvent>>(), Substitute.For<IEventFormatterProxy<ICacheEvent>>(), writeBinary: true);
-        var binaryOnly = new CompositeEventFormatter(Substitute.For<IEventFormatterProxy<ICacheEvent>>(), _binary, writeBinary: true).CreateSourceMatcher(Source)!;
+        var neither = CompositeFormatters.Of(Substitute.For<IEventFormatterProxy<ICacheEvent>>(), Substitute.For<IEventFormatterProxy<ICacheEvent>>(), true);
+        var binaryOnly = CompositeFormatters.Of(Substitute.For<IEventFormatterProxy<ICacheEvent>>(), _binary, true).CreateSourceMatcher(Source)!;
 
         neither.CreateSourceMatcher(Source).Should().BeNull();
         binaryOnly.IsFromSource(binaryBody).Should().BeTrue();

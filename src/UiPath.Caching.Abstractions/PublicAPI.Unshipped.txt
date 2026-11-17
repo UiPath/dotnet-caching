@@ -30,3 +30,10 @@ UiPath.Caching.CachePolicy.FailSafeTimeout.get -> System.TimeSpan?
 UiPath.Caching.CachePolicy.FailSafeTimeout.init -> void
 UiPath.Caching.GeneratedValue<T>.SkipFailSafe.get -> bool
 UiPath.Caching.GeneratedValue<T>.SkipFailSafe.init -> void
+const UiPath.Caching.Broadcast.CacheEventPropertyNames.Expiration = "_expiration_" -> string!
+const UiPath.Caching.Broadcast.CacheEventPropertyNames.Metadata = "_metadata_" -> string!
+const UiPath.Caching.Broadcast.CacheEventPropertyNames.PeerExpiration = "_peerExpiration_" -> string!
+const UiPath.Caching.Broadcast.CacheEventPropertyNames.PeerFields = "_peerFields_" -> string!
+const UiPath.Caching.Broadcast.CacheEventPropertyNames.PeerMetadata = "_peerMetadata_" -> string!
+const UiPath.Caching.Broadcast.CacheEventPropertyNames.Version = "_version_" -> string!
+UiPath.Caching.Broadcast.CacheEventPropertyNames

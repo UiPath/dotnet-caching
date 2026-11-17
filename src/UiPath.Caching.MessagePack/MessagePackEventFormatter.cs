@@ -228,10 +228,10 @@ internal sealed class MessagePackEventFormatter : IEventFormatterProxy<ICacheEve
 
     private static bool IsEncodedKnown(string name, object? value) => name switch
     {
-        KnownFieldNames.VersionKey => value is long,
-        KnownFieldNames.ExpirationKey or KnownFieldNames.PeerExpirationKey => value is DateTimeOffset,
-        KnownFieldNames.MetadataKey or KnownFieldNames.PeerMetadataKey => value is IEnumerable<KeyValuePair<string, string?>>,
-        KnownFieldNames.PeerFieldsKey => value is IEnumerable<KeyValuePair<string, string?>> or IEnumerable<KeyValuePair<string, byte[]?>>,
+        CacheEventPropertyNames.Version => value is long,
+        CacheEventPropertyNames.Expiration or CacheEventPropertyNames.PeerExpiration => value is DateTimeOffset,
+        CacheEventPropertyNames.Metadata or CacheEventPropertyNames.PeerMetadata => value is IEnumerable<KeyValuePair<string, string?>>,
+        CacheEventPropertyNames.PeerFields => value is IEnumerable<KeyValuePair<string, string?>> or IEnumerable<KeyValuePair<string, byte[]?>>,
         _ => false,
     };
 
@@ -292,23 +292,23 @@ internal sealed class MessagePackEventFormatter : IEventFormatterProxy<ICacheEve
 
             switch (name)
             {
-                case KnownFieldNames.VersionKey:
+                case CacheEventPropertyNames.Version:
                     writer.Write(VersionProperty);
                     writer.Write((long)value!);
                     break;
-                case KnownFieldNames.ExpirationKey:
+                case CacheEventPropertyNames.Expiration:
                     writer.Write(ExpirationProperty);
                     writer.Write(((DateTimeOffset)value!).UtcTicks);
                     break;
-                case KnownFieldNames.PeerExpirationKey:
+                case CacheEventPropertyNames.PeerExpiration:
                     writer.Write(PeerExpirationProperty);
                     writer.Write(((DateTimeOffset)value!).UtcTicks);
                     break;
-                case KnownFieldNames.MetadataKey:
+                case CacheEventPropertyNames.Metadata:
                     writer.Write(MetadataProperty);
                     WriteTextMap(ref writer, (IEnumerable<KeyValuePair<string, string?>>)value!);
                     break;
-                case KnownFieldNames.PeerMetadataKey:
+                case CacheEventPropertyNames.PeerMetadata:
                     writer.Write(PeerMetadataProperty);
                     WriteTextMap(ref writer, (IEnumerable<KeyValuePair<string, string?>>)value!);
                     break;
@@ -392,22 +392,22 @@ internal sealed class MessagePackEventFormatter : IEventFormatterProxy<ICacheEve
             switch (reader.ReadInt32())
             {
                 case VersionProperty:
-                    properties[KnownFieldNames.VersionKey] = reader.ReadInt64();
+                    properties[CacheEventPropertyNames.Version] = reader.ReadInt64();
                     break;
                 case ExpirationProperty:
-                    properties[KnownFieldNames.ExpirationKey] = ReadInstant(ref reader);
+                    properties[CacheEventPropertyNames.Expiration] = ReadInstant(ref reader);
                     break;
                 case PeerExpirationProperty:
-                    properties[KnownFieldNames.PeerExpirationKey] = ReadInstant(ref reader);
+                    properties[CacheEventPropertyNames.PeerExpiration] = ReadInstant(ref reader);
                     break;
                 case MetadataProperty:
-                    properties[KnownFieldNames.MetadataKey] = ReadTextMap(ref reader);
+                    properties[CacheEventPropertyNames.Metadata] = ReadTextMap(ref reader);
                     break;
                 case PeerMetadataProperty:
-                    properties[KnownFieldNames.PeerMetadataKey] = ReadTextMap(ref reader);
+                    properties[CacheEventPropertyNames.PeerMetadata] = ReadTextMap(ref reader);
                     break;
                 case PeerFieldsProperty:
-                    properties[KnownFieldNames.PeerFieldsKey] = ReadPeerFields(ref reader);
+                    properties[CacheEventPropertyNames.PeerFields] = ReadPeerFields(ref reader);
                     break;
                 default:
                     Skip(ref reader);

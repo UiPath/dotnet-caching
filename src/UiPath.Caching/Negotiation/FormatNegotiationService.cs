@@ -24,7 +24,7 @@ internal sealed class FormatNegotiationService(FormatNegotiation negotiation) : 
     {
         if (!negotiation.IsActive)
         {
-            // An app with no Redis connection advertises nowhere, but may still decide its binary events on the operator's word.
+            // An app with no Redis connection advertises nowhere, but may still decide its event format on the operator's word.
             if (negotiation.Negotiator is not null)
             {
                 StartBlind();

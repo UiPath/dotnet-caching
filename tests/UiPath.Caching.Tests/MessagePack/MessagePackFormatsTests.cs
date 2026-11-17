@@ -17,10 +17,6 @@ public class MessagePackFormatsTests
     }
 
     [Fact]
-    public void The_core_event_byte_matches_until_the_event_seam_replaces_it() =>
-        BinaryEventSettings.FormatId.Should().Be(MessagePackFormats.Event);
-
-    [Fact]
     public void A_second_serializer_under_another_name_clashes_on_the_ids_at_the_call()
     {
         var builder = new CachingBuilder(new ServiceCollection());

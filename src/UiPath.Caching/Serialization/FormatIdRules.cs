@@ -8,6 +8,10 @@ internal static class FormatIdRules
             or >= CacheValueFormats.FirstConsumer and <= CacheValueFormats.LastConsumer
             or >= CacheValueFormats.FirstExtended and <= CacheValueFormats.LastExtended;
 
+    public static bool IsEventId(int id) =>
+        id is >= 0x01 and <= 0x0F and not 0x09 and not 0x0A and not 0x0D
+            or >= CacheValueFormats.FirstConsumer and <= CacheValueFormats.LastConsumer;
+
     public static string Hex(int id) => $"0x{id:X2}";
 
     /// <summary>The first rule <paramref name="ids"/> break; <paramref name="claimedBy"/> names the serializer that already owns an id, or null.</summary>

@@ -24,8 +24,8 @@ internal static class NegotiationPlan
         return desired;
     }
 
-    /// <param name="readsBinaryEvents">Whether the binary event decoder is registered; a node without it still lists the JSON events it reads.</param>
-    public static NodeAdvertisement Advertisement(ValueSerializerRegistry registry, ICachePolicyFactory policies, ValueReader reader, string library, bool readsBinaryEvents = false)
+    /// <param name="eventTokens">The tokens of the registered event formats; a node without any still lists the JSON events it reads.</param>
+    public static NodeAdvertisement Advertisement(ValueSerializerRegistry registry, ICachePolicyFactory policies, ValueReader reader, string library, IReadOnlyList<string>? eventTokens = null)
     {
         var reads = new List<string> { NodeAdvertisement.Json };
         foreach (var (_, serializer, _) in registry.Entries)
@@ -52,7 +52,7 @@ internal static class NegotiationPlan
             strict[DefaultPolicyName] = [NodeAdvertisement.Json, NodeAdvertisement.NoSniff];
         }
 
-        return new(library, Guid.NewGuid().ToString("N"), reads.Distinct().ToList(), strict, EventReads: readsBinaryEvents ? [NodeAdvertisement.Json, BinaryEventSettings.Token] : [NodeAdvertisement.Json]);
+        return new(library, Guid.NewGuid().ToString("N"), reads.Distinct().ToList(), strict, EventReads: [NodeAdvertisement.Json, .. eventTokens ?? []]);
     }
 
     /// <summary>The policies whose read list leaves JSON out, which a node still in Auto writes while it holds a format back.</summary>

@@ -147,7 +147,7 @@ public class EventFormatNegotiationIntegrationTests(RedisContainerFixture fixtur
         using var b = Node(app, "node-b", pubSub: true, write: true);
         var serviceA = Service(a);
         var serviceB = Service(b);
-        var writes = a.GetRequiredService<IBinaryEvents>();
+        var writes = a.GetRequiredService<IEventWrites>();
         var cache = a.GetRequiredService<ICacheFactory>().CreateCache(KnownCacheProviderNames.InMemoryRedis);
         var received = new ConcurrentQueue<byte[]>();
         var nodeListKey = NodeListStore.KeyFor(new CacheOptions { AppShortName = app }, new RedisCacheOptions());
@@ -198,7 +198,7 @@ public class EventFormatNegotiationIntegrationTests(RedisContainerFixture fixtur
         var db = raw.GetDatabase();
         using var node = Node(app, "node-a", pubSub: false, write: true);
         var service = Service(node);
-        var writes = node.GetRequiredService<IBinaryEvents>();
+        var writes = node.GetRequiredService<IEventWrites>();
         var cache = node.GetRequiredService<ICacheFactory>().CreateCache(KnownCacheProviderNames.InMemoryRedis);
         var streamKey = new PrefixStrategy(RedisKeyspaces.Streams, new CacheOptions { AppShortName = app }).GetRedisKey(topic);
         var nodeListKey = NodeListStore.KeyFor(new CacheOptions { AppShortName = app }, new RedisCacheOptions());

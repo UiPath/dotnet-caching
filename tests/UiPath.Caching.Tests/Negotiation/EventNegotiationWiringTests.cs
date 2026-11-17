@@ -55,13 +55,13 @@ public class EventNegotiationWiringTests
         deciding.Advertisement!.ValueReads.Should().Equal("json");
         deciding.Advertisement.EventReads.Should().Equal("json", "02");
         deciding.Negotiator.Should().NotBeNull();
-        writes.GetRequiredService<IBinaryEvents>().Writes.Should().BeFalse("Auto writes JSON until a node list says otherwise");
+        writes.GetRequiredService<IEventWrites>().Writes.Should().BeFalse("Auto writes JSON until a node list says otherwise");
         writes.GetServices<IHostedService>().Should().Contain(s => s is FormatNegotiationService);
 
         var reader = reads.GetRequiredService<FormatNegotiation>();
         reader.IsActive.Should().BeTrue();
         reader.Negotiator.Should().BeNull("a node set to write JSON has nothing to decide, so it only advertises");
-        reads.GetRequiredService<IBinaryEvents>().Writes.Should().BeFalse();
+        reads.GetRequiredService<IEventWrites>().Writes.Should().BeFalse();
     }
 
     [Fact]
@@ -69,7 +69,7 @@ public class EventNegotiationWiringTests
     {
         using var forced = Provider(b => b.AddMessagePackEvents(write: true), force: true);
 
-        forced.GetRequiredService<IBinaryEvents>().Writes.Should().BeTrue();
+        forced.GetRequiredService<IEventWrites>().Writes.Should().BeTrue();
         forced.GetRequiredService<FormatNegotiation>().Negotiator.Should().BeNull();
         forced.GetRequiredService<FormatNegotiation>().IsActive.Should().BeTrue("it still tells the nodes that decide what it reads");
         forced.GetRequiredService<IEventFormatterProxy<ICacheEvent>>().Encode(Event()).Span[0].Should().Be(MessagePackFormats.Event);
@@ -83,12 +83,12 @@ public class EventNegotiationWiringTests
         using var forced = NoRedis(write: true, mode: FormatNegotiationMode.Force);
         using var json = NoRedis(write: false, mode: FormatNegotiationMode.Auto, assume: true);
 
-        automatic.GetRequiredService<IBinaryEvents>().Writes.Should().BeFalse("silent until proven");
+        automatic.GetRequiredService<IEventWrites>().Writes.Should().BeFalse("silent until proven");
         automatic.GetRequiredService<IEventFormatterProxy<ICacheEvent>>().Encode(Event()).Span[0].Should().Be((byte)'{');
-        forced.GetRequiredService<IBinaryEvents>().Writes.Should().BeTrue();
+        forced.GetRequiredService<IEventWrites>().Writes.Should().BeTrue();
         forced.GetRequiredService<IEventFormatterProxy<ICacheEvent>>().Encode(Event()).Span[0].Should().Be(MessagePackFormats.Event);
-        json.GetRequiredService<IBinaryEvents>().Writes.Should().BeFalse();
-        attested.GetRequiredService<IBinaryEvents>().Writes.Should().BeFalse("the operator's word counts once the service has started, and the hold has passed");
+        json.GetRequiredService<IEventWrites>().Writes.Should().BeFalse();
+        attested.GetRequiredService<IEventWrites>().Writes.Should().BeFalse("the operator's word counts once the service has started, and the hold has passed");
     }
 
     [Fact]
@@ -99,8 +99,42 @@ public class EventNegotiationWiringTests
 
         await service.StartAsync(TestContext.Current.CancellationToken);
 
-        attested.GetRequiredService<IBinaryEvents>().Writes.Should().BeTrue("the hold is zero here");
+        attested.GetRequiredService<IEventWrites>().Writes.Should().BeTrue("the hold is zero here");
         await service.StopAsync(TestContext.Current.CancellationToken);
+    }
+
+    [Fact]
+    public void A_writer_with_id_11_advertises_it_and_waits_for_nodes_that_read_11_not_02()
+    {
+        using var provider = Provider(b => b.AddEventFormat("acme", 0x11, _ => new MessagePackEventFormatter(), write: true));
+        var negotiation = provider.GetRequiredService<FormatNegotiation>();
+        var sut = negotiation.Negotiator!;
+
+        negotiation.Advertisement!.EventReads.Should().Equal("json", "11");
+        negotiation.Advertisement.Encode().Should().EndWith("er=json,11");
+        provider.GetRequiredService<EventFormatRegistry>().WriteToken.Should().Be("11");
+
+        Settle(sut, View(Node("a", ["json", "02"])));
+        sut.Writes.Should().BeFalse("the node reads 02, not the 11 this node would write");
+
+        Settle(sut, View(Node("a", ["json", "11"])));
+        sut.Writes.Should().BeTrue();
+
+        sut.Observe(View(Node("a", ["json", "11"]), Node("b", ["json", "02"])));
+        sut.Writes.Should().BeFalse();
+    }
+
+    [Fact]
+    public void With_no_redis_connection_a_writer_with_id_11_still_waits_for_nodes_that_read_11()
+    {
+        using var provider = NoRedis(b => b.AddEventFormat("acme", 0x11, _ => new MessagePackEventFormatter(), write: true));
+        var sut = provider.GetRequiredService<FormatNegotiation>().Negotiator!;
+
+        Settle(sut, View(Node("a", ["json", "02"])));
+        sut.Writes.Should().BeFalse();
+
+        Settle(sut, View(Node("a", ["json", "11"])));
+        sut.Writes.Should().BeTrue();
     }
 
     [Fact]
@@ -111,7 +145,7 @@ public class EventNegotiationWiringTests
         var builder = new CachingBuilder(services);
         builder.Complete();
 
-        services.Should().NotContain(d => d.ServiceType == typeof(FormatNegotiation) || d.ServiceType == typeof(IBinaryEvents) || d.ServiceType == typeof(BinaryEventSettings));
+        services.Should().NotContain(d => d.ServiceType == typeof(FormatNegotiation) || d.ServiceType == typeof(IEventWrites) || d.ServiceType == typeof(EventFormatRegistry));
         var formatter = plain.GetRequiredService<IEventFormatterProxy<ICacheEvent>>();
         formatter.Should().BeOfType<CacheEventFormatter>("no wrapper, so no decision to ask for");
         var direct = new CacheEventFormatter();
@@ -144,7 +178,22 @@ public class EventNegotiationWiringTests
         Data = new CacheEventData("the-key", new Dictionary<string, object?> { [KnownFieldNames.VersionKey] = 3L }),
     };
 
+    private static (string Id, NodeAdvertisement Ad) Node(string id, string[] events) =>
+        (id, new("3.2.0", id, ["json"], new Dictionary<string, IReadOnlyList<string>>(), EventReads: events));
+
+    private static NodeListView View(params (string Id, NodeAdvertisement Ad)[] nodes) =>
+        new([.. nodes.Select(n => new StoredAdvertisement(n.Id, n.Ad, TimeSpan.Zero))], [], Complete: true);
+
+    private static void Settle(FormatNegotiator sut, NodeListView view)
+    {
+        sut.Observe(view);
+        sut.Observe(view);
+    }
+
     private static ServiceProvider NoRedis(bool write, FormatNegotiationMode mode, bool assume = false) =>
+        NoRedis(b => b.AddMessagePackEvents(write), mode, assume);
+
+    private static ServiceProvider NoRedis(Action<ICachingBuilder> configure, FormatNegotiationMode mode = FormatNegotiationMode.Auto, bool assume = false) =>
         new ServiceCollection()
             .AddLogging()
             .Configure<RedisCacheOptions>(o =>
@@ -153,7 +202,7 @@ public class EventNegotiationWiringTests
                 o.FormatNegotiation.AssumeAllNodesCanRead = assume;
                 o.FormatNegotiation.UpgradeHold = TimeSpan.Zero;
             })
-            .AddCaching(b => b.AddMessagePackEvents(write), o => o.AppShortName = "wiring")
+            .AddCaching(configure, o => o.AppShortName = "wiring")
             .BuildServiceProvider();
 
     private static ServiceProvider Provider(Action<ICachingBuilder> configure, bool force = false) =>
@@ -163,7 +212,11 @@ public class EventNegotiationWiringTests
                 b =>
                 {
                     b.AddRedisConnection(o => o.ConnectionString = "127.0.0.1:1");
-                    b.AddRedis(o => o.FormatNegotiation.Mode = force ? FormatNegotiationMode.Force : FormatNegotiationMode.Auto);
+                    b.AddRedis(o =>
+                    {
+                        o.FormatNegotiation.Mode = force ? FormatNegotiationMode.Force : FormatNegotiationMode.Auto;
+                        o.FormatNegotiation.UpgradeHold = TimeSpan.Zero;
+                    });
                     b.AddBroadcast();
                     b.AddInMemoryRedis();
                     configure(b);

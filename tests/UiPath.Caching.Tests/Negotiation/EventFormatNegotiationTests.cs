@@ -142,13 +142,13 @@ public class EventFormatNegotiationTests
         var forced = new FormatNegotiation { Negotiator = null, Advertisement = new("3.2.0", "me", ["json"], new Dictionary<string, IReadOnlyList<string>>()) };
         var automatic = new FormatNegotiation { Negotiator = Negotiator(), Advertisement = forced.Advertisement };
 
-        forced.EventWrites(new BinaryEventSettings(true)).Writes.Should().BeTrue("Force writes what is configured, with no node list");
-        automatic.EventWrites(new BinaryEventSettings(true)).Writes.Should().BeFalse("Auto waits for a node list");
-        forced.EventWrites(new BinaryEventSettings(false)).Writes.Should().BeFalse();
-        automatic.EventWrites(new BinaryEventSettings(false)).Writes.Should().BeFalse();
-        FormatNegotiation.Inactive.EventWrites(new BinaryEventSettings(true)).Writes.Should().BeFalse("with no node list to ask, nothing proves binary is safe");
-        new FormatNegotiation { Options = new() { Mode = FormatNegotiationMode.Force } }.EventWrites(new BinaryEventSettings(true)).Writes.Should().BeTrue("Force needs no node list");
-        new FormatNegotiation { Options = new() { Mode = FormatNegotiationMode.Force } }.EventWrites(new BinaryEventSettings(false)).Writes.Should().BeFalse();
+        forced.EventWrites(Registry(true)).Writes.Should().BeTrue("Force writes what is configured, with no node list");
+        automatic.EventWrites(Registry(true)).Writes.Should().BeFalse("Auto waits for a node list");
+        forced.EventWrites(Registry(false)).Writes.Should().BeFalse();
+        automatic.EventWrites(Registry(false)).Writes.Should().BeFalse();
+        FormatNegotiation.Inactive.EventWrites(Registry(true)).Writes.Should().BeFalse("with no node list to ask, nothing proves binary is safe");
+        new FormatNegotiation { Options = new() { Mode = FormatNegotiationMode.Force } }.EventWrites(Registry(true)).Writes.Should().BeTrue("Force needs no node list");
+        new FormatNegotiation { Options = new() { Mode = FormatNegotiationMode.Force } }.EventWrites(Registry(false)).Writes.Should().BeFalse();
     }
 
     [Fact]
@@ -156,7 +156,7 @@ public class EventFormatNegotiationTests
     {
         var sut = Negotiator();
         var json = new CacheEventFormatter();
-        var composite = new CompositeEventFormatter(json, new MessagePackEventFormatter(), sut);
+        var composite = CompositeFormatters.Of(json, new MessagePackEventFormatter(), sut);
         var original = new CacheEvent { Id = Guid.NewGuid().ToString(), Type = KnownEventTypes.CacheSet, Source = new Uri("urn:node-a"), Data = new CacheEventData("the-key", new Dictionary<string, object?> { [KnownFieldNames.VersionKey] = 3L }) };
         Settle(sut, View(Node("a", Both)));
         var binary = composite.Encode(original);
@@ -177,8 +177,8 @@ public class EventFormatNegotiationTests
         Settle(sut, View(Node("a", Both)));
         sut.Observe(View(Node("a", Both), Node("old", Json)));
         var original = new CacheEvent { Id = Guid.NewGuid().ToString(), Type = KnownEventTypes.CacheSet, Source = new Uri("urn:node-a"), Data = new CacheEventData("the-key", null) };
-        var negotiated = new CompositeEventFormatter(new CacheEventFormatter(), new MessagePackEventFormatter(), sut);
-        var fixedJson = new CompositeEventFormatter(new CacheEventFormatter(), new MessagePackEventFormatter(), FixedBinaryEvents.Never);
+        var negotiated = CompositeFormatters.Of(new CacheEventFormatter(), new MessagePackEventFormatter(), sut);
+        var fixedJson = CompositeFormatters.Of(new CacheEventFormatter(), new MessagePackEventFormatter(), FixedEventWrites.Never);
         var plain = new CacheEventFormatter();
 
         var viaNodeList = Allocated(() => negotiated.Encode(original));
@@ -187,6 +187,13 @@ public class EventFormatNegotiationTests
 
         viaNodeList.Should().Be(viaFixed, "reading the decision costs nothing");
         viaFixed.Should().Be(direct, "and neither does the wrapper");
+    }
+
+    private static EventFormatRegistry Registry(bool write)
+    {
+        var registry = new EventFormatRegistry();
+        registry.Add("messagepack", MessagePackFormats.Event, _ => new MessagePackEventFormatter(), write);
+        return registry;
     }
 
     private static long Allocated(Action action)
