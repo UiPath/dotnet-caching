@@ -5,11 +5,22 @@ namespace UiPath.Caching;
 
 internal static class MetricExtensions
 {
-    internal static void TrackTopicWriteMetric(this ICachingTelemetryProvider cachingTelemetryProvider, string topicName, RedisValue streamId)
-        => TrackTopicMetric(cachingTelemetryProvider, topicName, Metrics.GetWriteTopicMetricName(topicName), streamId);
+    internal static void TrackTopicWriteMetric(this ICachingTelemetryProvider cachingTelemetryProvider, RedisKey topic, RedisValue streamId)
+    {
+        if (cachingTelemetryProvider.IsListening())
+        {
+            var topicName = topic.ToString();
+            TrackTopicMetric(cachingTelemetryProvider, topicName, Metrics.GetWriteTopicMetricName(topicName), streamId);
+        }
+    }
 
     internal static void TrackTopicReadMetric(this ICachingTelemetryProvider cachingTelemetryProvider, string topicName, RedisValue streamId)
-        => TrackTopicMetric(cachingTelemetryProvider, topicName, Metrics.GetReadTopicMetricName(topicName), streamId);
+    {
+        if (cachingTelemetryProvider.IsListening())
+        {
+            TrackTopicMetric(cachingTelemetryProvider, topicName, Metrics.GetReadTopicMetricName(topicName), streamId);
+        }
+    }
 
     internal static StreamId GetStreamIdFromRedisValue(this RedisValue redisValue)
     {

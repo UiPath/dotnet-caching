@@ -4,9 +4,11 @@ using Microsoft.Extensions.DependencyInjection;
 using UiPath.Caching.Config;
 using UiPath.Caching.OpenTelemetry;
 using UiPath.Caching.Telemetry;
+using UiPath.Caching.Tests.Telemetry;
 
 namespace UiPath.Caching.Tests.OpenTelemetry;
 
+[Collection(TelemetryListeners.Name)]
 public class OpenTelemetryCachingTelemetryProviderTests
 {
 

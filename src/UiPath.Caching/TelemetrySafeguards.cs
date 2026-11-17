@@ -5,6 +5,10 @@ namespace UiPath.Caching;
 /// <summary>Telemetry calls that never throw at the caller, so the work around them carries on.</summary>
 internal static class TelemetrySafeguards
 {
+    /// <summary>False for no provider, or one that reports nothing would be recorded; a provider that cannot tell is assumed to be listening.</summary>
+    public static bool IsListening(this ICachingTelemetryProvider? telemetryProvider) =>
+        telemetryProvider is not null && (telemetryProvider is not ITelemetryListening listening || listening.IsListening);
+
     /// <summary>Invokes each subscriber separately, so one that throws does not cost the rest theirs.</summary>
     public static void TryRaise<THandler>(this THandler? handlers, ICachingTelemetryProvider telemetryProvider, Action<THandler> raise)
         where THandler : Delegate

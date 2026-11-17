@@ -80,7 +80,9 @@ The interface takes tag bags as `TelemetryTags<T>`, a struct that holds up to ni
 
 The `eventName` parameter on `TrackEvent` is the library's event name (e.g. `cache.miss`, `cache.write`, `cache.distributedlock.unavailable`). Filter by name if you only want a subset of events forwarded.
 
-Implement all four methods; a method you do not forward gets an empty body. The interface has no default bodies, so Moq and NSubstitute can mock it, and a test can match the tags it receives, `[new("key", "value")]` included, because `TelemetryTags<T>` compares by value.
+Implement all four methods; a method you do not forward gets an empty body. The interface has no default bodies, so Moq and NSubstitute can mock it, and a test can match the tags it receives, `[new("key", "value")]` included, because `TelemetryTags<T>` compares by value. `Substitute.For<ICachingTelemetryProvider, ITelemetryListening>()` returns false for `IsListening` by default, so configure it to true in a test that expects telemetry, or the scopes and topic metrics are skipped.
+
+Optionally implement `ITelemetryListening` as well. `IsListening` is true when any signal the provider records on its own instruments or source (metrics, events, dependencies, exceptions, traces) would be recorded, and false only when none would. An exception note on an activity another source started is not one of its signals, and the library never skips `TrackException`. The library reads it on every operation, so it must be cheap, thread-safe and never cached: it reflects the current state, so a listener attached later is picked up by the next operation. The library skips the Redis-tier operation timer and the topic metrics only when it is false; a provider that does not implement it is treated as listening. The per-event `IsEnabled(eventName)` of a host API cannot implement it, because the answer must cover every signal, not one event.
 
 ## When not to use
 

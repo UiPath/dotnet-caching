@@ -33,11 +33,11 @@ public struct TelemetryScope
 
     private bool _cancelled;
 
-    /// <summary>Starts timing; with <see cref="NullTelemetryProvider"/> the scope does nothing.</summary>
+    /// <summary>Starts timing; with <see cref="NullTelemetryProvider"/> or a provider nobody listens to the scope does nothing.</summary>
     public TelemetryScope(ICachingTelemetryProvider provider, TimeProvider clock, string providerName, string callerMethod, Type cacheObjectType)
     {
         ArgumentNullException.ThrowIfNull(clock);
-        if (provider is null or NullTelemetryProvider)
+        if (!provider.IsListening())
         {
             return;
         }

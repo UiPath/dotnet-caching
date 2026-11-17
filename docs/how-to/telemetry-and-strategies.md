@@ -4,7 +4,7 @@ Two telemetry paths and five customization seams. The two telemetry paths are co
 
 ## OpenTelemetry adapter
 
-Default. `.AddOpenTelemetry()` on the caching builder registers `UiPath.Caching.OpenTelemetry.CachingTelemetryProvider` as the `ICachingTelemetryProvider` implementation. The provider is backed by a `System.Diagnostics.ActivitySource` and a `Meter`, both named **`UiPath.Caching`**: every `TrackDependency` / `TrackEvent` / `TrackException` call starts (or annotates) an `Activity` on that source, and `TrackMetric` plus the hit/miss counters record on instruments from that `Meter`. Tag bags arrive as `TelemetryTags<T>` and are enumerated directly into the activity or measurement, so no allocation occurs on the hot path when there are no tags.
+Default. `.AddOpenTelemetry()` on the caching builder registers `UiPath.Caching.OpenTelemetry.CachingTelemetryProvider` as the `ICachingTelemetryProvider` implementation. The provider is backed by a `System.Diagnostics.ActivitySource` and a `Meter`, both named **`UiPath.Caching`**: `TrackDependency` starts an `Activity` on that source only while something listens to it, and `TrackException` annotates the current activity whenever there is one, whichever source started it; `TrackMetric`, `TrackEvent`, `TrackException` and the hit/miss counters record on instruments from that `Meter`, only while a listener is attached to the instrument. Tag bags arrive as `TelemetryTags<T>` and are enumerated directly into the activity or measurement, so no allocation occurs on the hot path when there are no tags.
 
 You collect these signals the same way you collect any other OTel source — add the source and meter to your tracer/meter providers by name:
 
@@ -132,9 +132,13 @@ public interface ICachingTelemetryProvider
 }
 ```
 
-All four tracking methods accept tag bags as `TelemetryTags<string>` and `TelemetryTags<double>`: a struct holding up to nine pairs inline and more in one array, built from a collection expression such as `[new("key", value)]`, a span or an array. `NullTelemetryProvider` (the default when no `ICachingTelemetryProvider` is registered) is a true no-op, so there is zero allocation when telemetry is disabled.
+All four tracking methods accept tag bags as `TelemetryTags<string>` and `TelemetryTags<double>`: a struct holding up to nine pairs inline and more in one array, built from a collection expression such as `[new("key", value)]`, a span or an array. `NullTelemetryProvider` (the default when no `ICachingTelemetryProvider` is registered) is a no-op, and the Redis-tier operation timer and the topic metrics skip their work for it.
 
 The methods have no default bodies: an implementation writes all four, with an empty body for a signal it drops. A struct rather than a `ReadOnlySpan` keeps the interface mockable — a proxy generator emits invalid IL for a method that takes a span — and `TelemetryTags<T>` compares by value, so a mock matches the tags a test expects.
+
+### Skipping work when nothing listens
+
+A provider can also implement `ITelemetryListening`. `IsListening` is true when any signal the provider records on its own instruments or source (metrics, events, dependencies, exceptions, traces) would be recorded, and false only when none would. An exception note on an activity another source started is not one of its signals, and the library never skips `TrackException`. The library reads it on every operation, so it must be cheap, thread-safe and never cached: it reflects the current state, so a listener attached later is picked up by the next operation. The library skips the Redis-tier operation timer and the topic metrics only when it is false; a provider that does not implement the interface is treated as listening. Per-key read telemetry, stream events and the Redis profiler do not check it.
 
 ### Materializing tags in bridge implementations
 
