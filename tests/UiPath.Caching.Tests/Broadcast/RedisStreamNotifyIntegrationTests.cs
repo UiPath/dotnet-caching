@@ -1,7 +1,9 @@
 using System.Diagnostics;
+using System.Net;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using StackExchange.Redis;
+using StackExchange.Redis.KeyspaceIsolation;
 using StackExchange.Redis.Profiling;
 using UiPath.Caching.Policies;
 using UiPath.Caching.Telemetry;
@@ -20,6 +22,7 @@ public sealed class RedisStreamNotifyIntegrationTests(RedisContainerFixture fixt
     private readonly IConnectionState _state = Substitute.For<IConnectionState>();
     private readonly CancellationTokenSource _stop = new();
     private readonly List<IDisposable> _disposables = [];
+    private readonly List<RedisKey> _extraKeys = [];
     // The commands of the nodes' own connection, whatever else runs against the server.
     private readonly ProfilingSession _profile = new();
     private RedisConnector? _connector;
@@ -67,6 +70,30 @@ public sealed class RedisStreamNotifyIntegrationTests(RedisContainerFixture fixt
         _profile.FinishProfiling().Select(c => c.Command).Should().BeEquivalentTo(
             expected,
             "the publisher adds and rings and does not wake for its own ring; the woken node checks for a gap and reads, and acknowledges; on Redis 7 or later the check and read are one script, below 7 one XINFO STREAM goes with a plain XREADGROUP, and a check awaited apart would show as a second XINFO call");
+    }
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task A_connector_that_prefixes_its_keys_still_delivers_the_doorbell(bool ringInAdd)
+    {
+        Assert.SkipUnless(fixture.Enabled, "Set RUN_REDIS_INTEGRATION_TESTS=1 (Docker required) to run.");
+        const string prefix = "tenant:";
+        // Deleted after the topics are disposed, so a late group create cannot make it again.
+        _extraKeys.Add(_stream.Prepend(prefix));
+        var connector = new KeyPrefixingConnector(_connector!, prefix);
+        var (a, _) = Topic("urn:a", FarPoll, connector: connector);
+        // Off, the doorbell is a PUBLISH of its own; on, it goes out in the script with the XADD.
+        a.RingInAdd = ringInAdd;
+        var (b, received) = Topic("urn:b", FarPoll, connector: connector);
+        (await EventuallyAsync(() => Task.FromResult(a.NotifyLive && b.NotifyLive))).Should().BeTrue("both doorbell subscriptions go live");
+        (await EventuallyAsync(QuietAsync)).Should().BeTrue("the reads woken by going live end");
+
+        (await a.PublishAsync(Event("urn:a", "1"), TestContext.Current.CancellationToken)).Should().BeTrue();
+
+        (await Task.WhenAny(received.Next.Task, Task.Delay(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken))).Should().BeSameAs(
+            received.Next.Task,
+            "the subscriber does not carry the key prefix, so a doorbell published with it rings a channel nobody listens on, and the poll is far away");
     }
 
     [Fact]
@@ -360,6 +387,10 @@ public sealed class RedisStreamNotifyIntegrationTests(RedisContainerFixture fixt
         if (_admin is not null)
         {
             await _admin.GetDatabase().KeyDeleteAsync(_stream);
+            foreach (var key in _extraKeys)
+            {
+                await _admin.GetDatabase().KeyDeleteAsync(key);
+            }
             if (_aclUser is not null)
             {
                 await _admin.GetDatabase().ExecuteAsync("ACL", "DELUSER", _aclUser);
@@ -408,7 +439,7 @@ public sealed class RedisStreamNotifyIntegrationTests(RedisContainerFixture fixt
         return connector;
     }
 
-    private (RedisStreamsTopic<ICacheEvent> Topic, Received Observer) Topic(string source, TimeSpan pollInterval, long? maxLength = 32_768, RedisConnector? connector = null, ILogger<RedisStreamsTopic<ICacheEvent>>? logger = null, Action<RedisStreamsTopicOptions>? configure = null, IResiliencePipelineProvider? pipelines = null)
+    private (RedisStreamsTopic<ICacheEvent> Topic, Received Observer) Topic(string source, TimeSpan pollInterval, long? maxLength = 32_768, IRedisConnector? connector = null, ILogger<RedisStreamsTopic<ICacheEvent>>? logger = null, Action<RedisStreamsTopicOptions>? configure = null, IResiliencePipelineProvider? pipelines = null)
     {
         var cacheOptions = new CacheOptions { Enabled = true, AppShortName = _cacheOptions.AppShortName, SourceUri = new Uri(source) };
         var options = new RedisStreamsTopicOptions { Enabled = true, PollInterval = pollInterval, MaxLength = maxLength, NotifySubscriberDueTime = TimeSpan.FromMilliseconds(10) };
@@ -467,6 +498,48 @@ public sealed class RedisStreamNotifyIntegrationTests(RedisContainerFixture fixt
 
     private async Task<long> SubscribersAsync() =>
         (long)(await _admin!.GetDatabase().ExecuteAsync("PUBSUB", "NUMSUB", _channel.ToString()))[1];
+
+    /// <summary>What an application's own connector may do: commands go through a <c>WithKeyPrefix</c> database, subscriptions through the plain subscriber.</summary>
+    private sealed class KeyPrefixingConnector(RedisConnector inner, string prefix) : IRedisConnector
+    {
+        public event EventHandler? OnConnectionFailed
+        {
+            add => inner.OnConnectionFailed += value;
+            remove => inner.OnConnectionFailed -= value;
+        }
+
+        public event EventHandler? OnConnectionRestored
+        {
+            add => inner.OnConnectionRestored += value;
+            remove => inner.OnConnectionRestored -= value;
+        }
+
+        public event EventHandler? OnReconnected
+        {
+            add => inner.OnReconnected += value;
+            remove => inner.OnReconnected -= value;
+        }
+
+        public bool IsConnected => inner.IsConnected;
+
+        public Version Version => inner.Version;
+
+        public IDatabase Database => inner.Database.WithKeyPrefix(prefix);
+
+        public ISubscriber Subscriber => inner.Subscriber;
+
+        public void ForceReconnect() => inner.ForceReconnect();
+
+        public EndPoint[] GetEndPoints(bool configuredOnly = false) => inner.GetEndPoints(configuredOnly);
+
+        public IEnumerable<IServer> GetPrimaries() => inner.GetPrimaries();
+
+        public ValueTask ConnectAsync(CancellationToken cancellationToken = default) => inner.ConnectAsync(cancellationToken);
+
+        public void Dispose()
+        {
+        }
+    }
 
     private sealed class LostDoorbell : IRedisChannelStrategy
     {

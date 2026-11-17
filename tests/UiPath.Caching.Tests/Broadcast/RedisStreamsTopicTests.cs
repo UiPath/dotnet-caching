@@ -1028,22 +1028,12 @@ public class RedisStreamsTopicTests(ITestContextAccessor testContextAccessor) : 
         Volatile.Read(ref calls).Should().Be(2, "the doorbell for the folded ring is retried once it fails");
     }
 
-    [Theory]
-    [InlineData(true)]
-    [InlineData(false)]
-    public async Task A_connection_that_prefixes_keys_or_channels_rings_with_a_doorbell_of_its_own(bool keyPrefix)
+    [Fact]
+    public async Task A_connection_that_prefixes_channels_rings_with_a_doorbell_of_its_own()
     {
-        // The script's channel is an argument, which neither a key prefix nor a channel prefix reaches; the PUBLISH gets both.
+        // The script's channel is an argument, which the channel prefix does not reach; the PUBLISH gets it, as the subscription does.
         ArrangeRingInAdd();
-        if (keyPrefix)
-        {
-            _redis.Database.Returns(_database.WithKeyPrefix("pfx:"));
-        }
-        else
-        {
-            _database.Multiplexer.Configuration.Returns("localhost:6379,channelPrefix=app:");
-        }
-
+        _database.Multiplexer.Configuration.Returns("localhost:6379,channelPrefix=app:");
         var token = testContextAccessor.Current.CancellationToken;
 
         (await Sut.PublishAsync(_fixture.Create<ICacheEvent>(), token)).Should().BeTrue();
@@ -1052,6 +1042,39 @@ public class RedisStreamsTopicTests(ITestContextAccessor testContextAccessor) : 
         await _database.DidNotReceiveWithAnyArgs().ScriptEvaluateAsync(default(string)!, default, default, default);
         _database.ReceivedCalls().Count(call => call.GetMethodInfo().Name == nameof(IDatabase.StreamAddAsync)).Should().Be(1);
         Doorbells().Should().Be(1);
+    }
+
+    [Fact]
+    public async Task A_connection_that_prefixes_keys_rings_in_the_add_on_an_unprefixed_channel()
+    {
+        // The stream key gets the prefix; the channel argument does not, and neither does the subscription.
+        ArrangeRingInAdd();
+        _database.ScriptEvaluateAsync(Arg.Any<string>(), Arg.Any<RedisKey[]>(), Arg.Any<RedisValue[]>(), Arg.Any<CommandFlags>())
+            .Returns(Scripted("1-0"));
+        _database.Multiplexer.Configuration.Returns("localhost:6379");
+        _redis.Database.Returns(_database.WithKeyPrefix("pfx:"));
+        var token = testContextAccessor.Current.CancellationToken;
+
+        (await Sut.PublishAsync(_fixture.Create<ICacheEvent>(), token)).Should().BeTrue();
+
+        var script = _database.ReceivedCalls().Single(call => call.GetMethodInfo().Name == nameof(IDatabase.ScriptEvaluateAsync)).GetArguments();
+        ((RedisKey[])script[1]!)[0].ToString().Should().StartWith("pfx:", "the stream key is the connector's to prefix");
+        ((RedisValue[])script[2]!)[1].ToString().Should().NotStartWith("pfx:", "the subscription carries no key prefix");
+        Doorbells().Should().Be(0, "the script rang");
+    }
+
+    [Fact]
+    public async Task A_connection_that_prefixes_keys_sends_its_own_doorbell_on_an_unprefixed_channel()
+    {
+        _redis.Database.Returns(_database.WithKeyPrefix("pfx:"));
+        Sut.RingInAdd = false;
+        var token = testContextAccessor.Current.CancellationToken;
+
+        (await Sut.PublishAsync(_fixture.Create<ICacheEvent>(), token)).Should().BeTrue();
+        await DoorbellCallsSettledAsync(Doorbells, 1, token);
+
+        var channel = (RedisChannel)_database.ReceivedCalls().Single(call => call.GetMethodInfo().Name == nameof(IDatabase.PublishAsync)).GetArguments()[0]!;
+        channel.ToString().Should().NotStartWith("pfx:", "the subscription carries no key prefix, so a doorbell with one rings a channel nobody listens on");
     }
 
     [Fact]
