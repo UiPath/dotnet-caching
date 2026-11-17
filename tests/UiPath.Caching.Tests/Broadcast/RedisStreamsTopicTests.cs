@@ -1045,6 +1045,25 @@ public class RedisStreamsTopicTests(ITestContextAccessor testContextAccessor) : 
     }
 
     [Fact]
+    public async Task A_reconnect_to_a_multiplexer_without_a_channel_prefix_rings_in_the_add_again()
+    {
+        ArrangeRingInAdd();
+        _database.ScriptEvaluateAsync(Arg.Any<string>(), Arg.Any<RedisKey[]>(), Arg.Any<RedisValue[]>(), Arg.Any<CommandFlags>())
+            .Returns(Scripted("1-0"));
+        _database.Multiplexer.Configuration.Returns("localhost:6379,channelPrefix=app:");
+        var token = testContextAccessor.Current.CancellationToken;
+        (await Sut.PublishAsync(_fixture.Create<ICacheEvent>(), token)).Should().BeTrue();
+        await DoorbellCallsSettledAsync(Doorbells, 1, token);
+        Sut.RingInAdd.Should().BeFalse("the channel prefix turned the script off");
+
+        _database.Multiplexer.Configuration.Returns("localhost:6379");
+        _redis.OnReconnected += Raise.Event<EventHandler>(_redis, EventArgs.Empty);
+        (await Sut.PublishAsync(_fixture.Create<ICacheEvent>(), token)).Should().BeTrue();
+
+        await _database.Received(1).ScriptEvaluateAsync(Arg.Any<string>(), Arg.Any<RedisKey[]>(), Arg.Any<RedisValue[]>(), Arg.Any<CommandFlags>());
+    }
+
+    [Fact]
     public async Task A_connection_that_prefixes_keys_rings_in_the_add_on_an_unprefixed_channel()
     {
         // The stream key gets the prefix; the channel argument does not, and neither does the subscription.

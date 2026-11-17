@@ -62,6 +62,8 @@ public sealed partial class RedisStreamsTopic<T> : ITopic<T>
     // Off for good once the server refuses the script, and for a channel a script may not publish to (sharded, or a custom strategy's).
     private volatile bool _ringInAdd;
     private volatile bool _prefixChecked;
+    // The script went off for a channel prefix, not for a refusal: a new connection may have none.
+    private volatile bool _ringInAddOffForPrefix;
     private bool _disposed;
 
     public RedisStreamsTopic(
@@ -324,6 +326,7 @@ public sealed partial class RedisStreamsTopic<T> : ITopic<T>
         _prefixChecked = true;
         if (PrefixesChannels(_redis.Database))
         {
+            _ringInAddOffForPrefix = true;
             _ringInAdd = false;
             LogRingInAddPrefixed(TopicKey);
         }
@@ -431,7 +434,17 @@ public sealed partial class RedisStreamsTopic<T> : ITopic<T>
         return mode;
     }
 
-    private void OnReconnected(object? sender, EventArgs e) => Volatile.Write(ref _ringMode, RingUndecided);
+    private void OnReconnected(object? sender, EventArgs e)
+    {
+        Volatile.Write(ref _ringMode, RingUndecided);
+        // A new multiplexer may prefix channels differently, so the next add checks again.
+        if (_ringInAddOffForPrefix)
+        {
+            _ringInAddOffForPrefix = false;
+            _prefixChecked = false;
+            _ringInAdd = true;
+        }
+    }
 
     /// <summary>One doorbell in flight; the rings meanwhile coalesce into one more.</summary>
     // A doorbell per event in a burst would flood the subscribers' output buffers.
