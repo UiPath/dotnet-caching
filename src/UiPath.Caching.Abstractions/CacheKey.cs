@@ -34,6 +34,7 @@ public readonly struct CacheKey : IEquatable<CacheKey>
         {
             CacheKeyCasing.Insensitive => name?.Trim().ToLowerInvariant() ?? string.Empty,
             CacheKeyCasing.Sensitive => name?.Trim() ?? string.Empty,
+            CacheKeyCasing.Verbatim => VerbatimName(name),
             _ => throw new ArgumentOutOfRangeException(nameof(casing), casing, $"Unsupported {nameof(CacheKeyCasing)} value."),
         };
     }
@@ -51,6 +52,7 @@ public readonly struct CacheKey : IEquatable<CacheKey>
         Name = casing switch
         {
             CacheKeyCasing.Insensitive or CacheKeyCasing.Sensitive => Normalize(name, casing),
+            CacheKeyCasing.Verbatim => VerbatimName(name.IsEmpty ? null : name.ToString()),
             _ => throw new ArgumentOutOfRangeException(nameof(casing), casing, $"Unsupported {nameof(CacheKeyCasing)} value."),
         };
     }
@@ -105,6 +107,14 @@ public readonly struct CacheKey : IEquatable<CacheKey>
     public static bool operator !=(CacheKey left, CacheKey right) =>
         !(left == right);
 
+    /// <summary>A key whose name is exactly <paramref name="name"/>: not trimmed, not lowercased, whatever <see cref="DefaultCasing"/> is.</summary>
+    /// <exception cref="ArgumentException"><paramref name="name"/> is null, empty or only whitespace.</exception>
+    public static CacheKey Verbatim(string name)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(name);
+        return new CacheKey(name, CacheKeyCasing.Verbatim);
+    }
+
     /// <summary>New key from <paramref name="name"/>, preserving this key's casing mode.</summary>
     public CacheKey WithName(string? name) => new(name, Casing);
 
@@ -142,6 +152,16 @@ public readonly struct CacheKey : IEquatable<CacheKey>
         }
 
         return true;
+    }
+
+    private static string VerbatimName(string? name)
+    {
+        if (!string.IsNullOrEmpty(name))
+        {
+            ArgumentException.ThrowIfNullOrWhiteSpace(name);
+        }
+
+        return name ?? string.Empty;
     }
 
     private static bool IsLowerAscii(ReadOnlySpan<char> name) =>

@@ -28,6 +28,7 @@ internal sealed partial class RedisCache : RedisCacheBase, ICache, IInvalidation
     private readonly Action<LoggedKey, RedisValue>? _auditKeySize;
     private readonly int _largeValueThreshold;
     private readonly bool _cacheNullValues;
+    private readonly bool _removeUnreadable;
     private readonly ConcurrentDictionary<Type, object> _generations = new();
     private ValueSerializerRegistry _valueSerializers = ValueSerializerRegistry.Empty;
     private ValueFormatResolver _formats;
@@ -59,6 +60,7 @@ internal sealed partial class RedisCache : RedisCacheBase, ICache, IInvalidation
         _redisKeyStrategy = (redisCacheOptions.RedisKeyStrategyFactory ?? new DefaultRedisKeyStrategyFactory()).Create(cacheOptions, GetType());
         _cacheEntryFactory = redisCacheOptions.EntryFactory ?? new CacheEntryFactory();
         _cacheNullValues = redisCacheOptions.CacheNullValues;
+        _removeUnreadable = redisCacheOptions.RemoveUnreadable;
 
         if (cacheOptions.AuditEnabled && _largeValueThreshold > 0)
         {

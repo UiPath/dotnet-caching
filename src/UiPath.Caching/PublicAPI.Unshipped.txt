@@ -33,3 +33,5 @@ const UiPath.Caching.Metrics.SerializerWrite = "cache.serializer.write" -> strin
 UiPath.Caching.Redis.RedisCacheProvider.CountFormatsAsync(string! keyPattern, System.Threading.CancellationToken token = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<System.Collections.Generic.IReadOnlyDictionary<string!, long>!>!
 static UiPath.Caching.Config.EventFormatBuilderExtensions.AddEventFormat(this UiPath.Caching.Config.ICachingBuilder! builder, string! name, int formatId, System.Func<System.IServiceProvider!, UiPath.Caching.Broadcast.IEventFormatterProxy<UiPath.Caching.Broadcast.ICacheEvent!>!>! factory, bool write) -> UiPath.Caching.Config.ICachingBuilder!
 UiPath.Caching.Config.EventFormatBuilderExtensions
+UiPath.Caching.Redis.RedisCacheOptions.RemoveUnreadable.get -> bool
+UiPath.Caching.Redis.RedisCacheOptions.RemoveUnreadable.set -> void

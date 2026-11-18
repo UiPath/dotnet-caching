@@ -136,6 +136,41 @@ public class RedisCacheSerializerTests(ITestContextAccessor testContextAccessor)
     }
 
     [Fact]
+    public async Task A_verbatim_key_is_read_under_its_exact_name()
+    {
+        var sut = Create(out _);
+        _database.StringGetAsync(Arg.Any<RedisKey>(), Arg.Any<CommandFlags>()).Returns(RedisValue.Null);
+
+        await sut.GetAsync<string>(CacheKey.Verbatim(" Mixed:Key "), policy: null, Token);
+
+        _ = _database.Received(1).StringGetAsync((RedisKey)"test:str: Mixed:Key ", Arg.Any<CommandFlags>());
+    }
+
+    [Fact]
+    public void Unreadable_values_are_removed_by_default() =>
+        new RedisCacheOptions().RemoveUnreadable.Should().BeTrue();
+
+    [Fact]
+    public async Task With_RemoveUnreadable_off_an_unknown_format_is_a_counted_miss_and_the_key_stays()
+    {
+        var sut = Create(out _, removeUnreadable: false);
+        byte[] stored = [0x1E, (byte)'a'];
+        _database.StringGetAsync(Arg.Any<RedisKey>(), Arg.Any<CommandFlags>()).Returns((RedisValue)stored);
+        _database.StringGetAsync(Arg.Any<RedisKey[]>(), Arg.Any<CommandFlags>()).Returns([(RedisValue)stored, (RedisValue)new SystemJsonByteSerializerProxy().Serialize("ok")!]);
+        _database.KeyTimeToLiveAsync(Arg.Any<RedisKey>(), Arg.Any<CommandFlags>()).Returns(TimeSpan.FromMinutes(1));
+
+        (await sut.GetAsync<string>("k", policy: null, Token)).Should().BeNull();
+        (await sut.GetCacheEntryAsync<string>("k", policy: null, Token)).Found.Should().BeFalse();
+        var entries = await sut.GetCacheEntriesAsync<string>(["a", "b"], policy: null, Token);
+
+        entries.Select(e => e.Value.Found).Should().Equal(false, true);
+        _ = _database.DidNotReceive().CreateTransaction(Arg.Any<object?>());
+        _ = _transaction.DidNotReceive().KeyDeleteAsync(Arg.Any<RedisKey>(), Arg.Any<CommandFlags>());
+        _ = _database.DidNotReceive().KeyDeleteAsync(Arg.Any<RedisKey>(), Arg.Any<CommandFlags>());
+        _telemetry.Metrics.Count(m => m.Name == UnreadableMetric).Should().Be(3);
+    }
+
+    [Fact]
     public async Task The_conditional_removal_is_reported_as_a_remove()
     {
         var sut = Create(out _);
@@ -651,13 +686,13 @@ public class RedisCacheSerializerTests(ITestContextAccessor testContextAccessor)
         ];
     }
 
-    private RedisCache Create(out ValueSerializerRegistry registry, bool cacheNullValues = false)
+    private RedisCache Create(out ValueSerializerRegistry registry, bool cacheNullValues = false, bool removeUnreadable = true)
     {
         registry = FastRegistry();
-        return Create(registry, cacheNullValues: cacheNullValues);
+        return Create(registry, cacheNullValues: cacheNullValues, removeUnreadable: removeUnreadable);
     }
 
-    private RedisCache Create(ValueSerializerRegistry registry, ISerializerProxy<byte[]>? proxy = null, CachePolicy? defaultPolicy = null, bool cacheNullValues = false)
+    private RedisCache Create(ValueSerializerRegistry registry, ISerializerProxy<byte[]>? proxy = null, CachePolicy? defaultPolicy = null, bool cacheNullValues = false, bool removeUnreadable = true)
     {
         var connector = Substitute.For<IRedisConnector>();
         connector.Database.Returns(_database);
@@ -673,7 +708,7 @@ public class RedisCacheSerializerTests(ITestContextAccessor testContextAccessor)
         strategy.GetRedisKey(Arg.Any<CacheKey>()).Returns(call => (RedisKey)$"test:str:{call.Arg<CacheKey>()}");
         var strategies = Substitute.For<IRedisKeyStrategyFactory>();
         strategies.Create(Arg.Any<CacheOptions>(), Arg.Any<Type>()).Returns(strategy);
-        var options = new RedisCacheOptions { RedisKeyStrategyFactory = strategies, ReadScriptsEnabled = false, CacheNullValues = cacheNullValues };
+        var options = new RedisCacheOptions { RedisKeyStrategyFactory = strategies, ReadScriptsEnabled = false, CacheNullValues = cacheNullValues, RemoveUnreadable = removeUnreadable };
         var cacheOptions = new CacheOptions { AppShortName = "test", ConnectionMonitorEnabled = true };
 
         return new RedisCache(
