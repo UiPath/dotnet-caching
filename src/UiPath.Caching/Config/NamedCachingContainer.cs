@@ -124,7 +124,7 @@ internal sealed class NamedCachingContainer : IDisposable
 
     private static void RemoveStreamMaintainer(IServiceCollection services)
     {
-        foreach (var maintainer in services.Where(d => d.ServiceType == typeof(IHostedService) && d.ImplementationType == typeof(RedisStreamHealthMaintainer)).ToList())
+        while (services.FirstOrDefault(d => d.ServiceType == typeof(IHostedService) && d.ImplementationType == typeof(RedisStreamHealthMaintainer)) is { } maintainer)
         {
             services.Remove(maintainer);
         }
