@@ -1,0 +1,218 @@
+using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.DependencyInjection;
+using StackExchange.Redis;
+using UiPath.Caching.Broadcast;
+using UiPath.Caching.Config;
+using UiPath.Caching.Migration.Tests.Support;
+
+namespace UiPath.Caching.Migration.Tests;
+
+[Collection("RedisIntegration")]
+[Trait("Category", "Integration")]
+public sealed class RouterRedisTests(RedisFixture fixture) : IAsyncLifetime
+{
+    private static readonly TimeSpan Lifetime = TimeSpan.FromMinutes(5);
+
+    private readonly string _cacheName = $"Rt{Guid.NewGuid():N}"[..12];
+    private readonly string _app = $"rt{Guid.NewGuid():N}"[..10];
+    private readonly List<ServiceProvider> _nodes = [];
+    private ConnectionMultiplexer? _redis;
+
+    private static CancellationToken Ct => TestContext.Current.CancellationToken;
+
+    private IDatabase Db => _redis!.GetDatabase();
+
+    public async ValueTask InitializeAsync()
+    {
+        if (fixture.Enabled)
+        {
+            _redis = await ConnectionMultiplexer.ConnectAsync($"{fixture.ConnectionString},allowAdmin=true");
+        }
+    }
+
+    public async ValueTask DisposeAsync()
+    {
+        foreach (var node in _nodes)
+        {
+            await node.DisposeAsync();
+        }
+
+        if (_redis is not null)
+        {
+            foreach (var key in _redis.GetServer(_redis.GetEndPoints()[0]).Keys(pattern: $"n:{_cacheName},c:*"))
+            {
+                await Db.KeyDeleteAsync(key);
+            }
+
+            await _redis.DisposeAsync();
+        }
+    }
+
+    [Fact]
+    public async Task A_source_write_is_read_by_the_library_path_and_a_library_write_is_read_back_with_identical_bytes_and_key_text()
+    {
+        Assert.SkipUnless(fixture.Enabled, "Set RUN_REDIS_INTEGRATION_TESTS=1 (Redis at 127.0.0.1:6379) to run.");
+        var library = false;
+        var cache = Cache(NewNode("a", () => library, TimeSpan.Zero));
+        var value = new List<long> { 1, 2, 3 };
+
+        await cache.SetAsync("Mixed:Key 1", value, CacheExpiry.After(Lifetime), Ct);
+
+        var viaSource = (byte[]?)await Db.StringGetAsync(RedisKeyOf("Mixed:Key 1"));
+        viaSource.Should().Equal(LegacyEnvelope.Write(value));
+        library = true;
+        (await cache.TryGetAsync("Mixed:Key 1", Ct)).Should().Equal(value);
+
+        await cache.SetAsync("Mixed:Key 2", value, CacheExpiry.After(Lifetime), Ct);
+
+        var viaLibrary = (byte[]?)await Db.StringGetAsync(RedisKeyOf("Mixed:Key 2"));
+        viaLibrary.Should().Equal(viaSource, "both paths write the same envelope bytes");
+        (await Db.KeyTimeToLiveAsync(RedisKeyOf("Mixed:Key 2")))!.Value.Should().BeCloseTo(Lifetime, TimeSpan.FromSeconds(10));
+        library = false;
+        (await cache.TryGetAsync("Mixed:Key 2", Ct)).Should().Equal(value, "the source reads what the library wrote");
+        _redis!.GetServer(_redis.GetEndPoints()[0]).Keys(pattern: $"n:{_cacheName},c:*").Should().HaveCount(2);
+    }
+
+    [Fact]
+    public async Task A_flip_runs_no_extra_factory_and_leaves_the_entry_where_it_was()
+    {
+        Assert.SkipUnless(fixture.Enabled, "Set RUN_REDIS_INTEGRATION_TESTS=1 (Redis at 127.0.0.1:6379) to run.");
+        var library = false;
+        var cache = Cache(NewNode("a", () => library, TimeSpan.Zero));
+        var runs = 0;
+        Task<List<long>?> Factory(CancellationToken token)
+        {
+            runs++;
+            return Task.FromResult<List<long>?>([7]);
+        }
+
+        await cache.GetOrAddAsync("k", Factory, CacheExpiry.After(Lifetime), Ct);
+        library = true;
+        var afterFlip = await cache.GetOrAddAsync("k", Factory, CacheExpiry.After(Lifetime), Ct);
+        library = false;
+        var back = await cache.GetOrAddAsync("k", Factory, CacheExpiry.After(Lifetime), Ct);
+
+        afterFlip.Should().Equal(7);
+        back.Should().Equal(7);
+        runs.Should().Be(1);
+    }
+
+    [Theory]
+    [InlineData(KnownTopicNames.RedisStreams, true)]
+    [InlineData(KnownTopicNames.RedisStreams, false)]
+    [InlineData(KnownTopicNames.RedisPubSub, true)]
+    public async Task A_peer_write_evicts_the_local_copy_on_another_node(string transport, bool peerOnLibrary)
+    {
+        Assert.SkipUnless(fixture.Enabled, "Set RUN_REDIS_INTEGRATION_TESTS=1 (Redis at 127.0.0.1:6379) to run.");
+        var reader = Cache(NewNode("reader", () => true, TimeSpan.FromMinutes(5), transport));
+        var writer = Cache(NewNode("writer", () => peerOnLibrary, TimeSpan.FromMinutes(5), transport));
+        await WaitSubscribedAsync();
+        // Seeded by the reader, whose own event it ignores: a peer's seed event could land after the fill and evict it.
+        await reader.SetAsync("k", [1], CacheExpiry.After(Lifetime), Ct);
+        (await reader.TryGetAsync("k", Ct)).Should().Equal(1);
+        await Db.KeyDeleteAsync(RedisKeyOf("k"));
+        // Redis no longer has the entry, so only the local copy can answer.
+        (await reader.TryGetAsync("k", Ct)).Should().Equal(1);
+
+        await writer.SetAsync("k", [2], CacheExpiry.After(Lifetime), Ct);
+
+        (await UntilAsync(async () => (await reader.TryGetAsync("k", Ct))?.SequenceEqual([2L]) == true)).Should().BeTrue("the event evicted the stale copy");
+    }
+
+    [Theory]
+    [InlineData(KnownTopicNames.RedisStreams)]
+    [InlineData(KnownTopicNames.RedisPubSub)]
+    public async Task A_clear_on_one_node_drops_the_local_copies_of_another(string transport)
+    {
+        Assert.SkipUnless(fixture.Enabled, "Set RUN_REDIS_INTEGRATION_TESTS=1 (Redis at 127.0.0.1:6379) to run.");
+        var first = Cache(NewNode("first", () => true, TimeSpan.FromMinutes(5), transport));
+        var second = Cache(NewNode("second", () => true, TimeSpan.FromMinutes(5), transport));
+        await WaitSubscribedAsync();
+        await first.SetAsync("a", [1], CacheExpiry.After(Lifetime), Ct);
+        await first.SetAsync("b", [2], CacheExpiry.After(Lifetime), Ct);
+        (await second.TryGetAsync("a", Ct)).Should().Equal(1);
+        (await second.TryGetAsync("b", Ct)).Should().Equal(2);
+
+        await first.ClearAsync(Ct);
+
+        (await UntilAsync(async () => await second.TryGetAsync("a", Ct) is null && await second.TryGetAsync("b", Ct) is null)).Should().BeTrue();
+        (await Db.KeyExistsAsync(RedisKeyOf("a"))).Should().BeFalse();
+    }
+
+    [Fact]
+    public async Task A_value_the_envelope_cannot_read_is_a_counted_miss_that_leaves_the_key_in_place()
+    {
+        Assert.SkipUnless(fixture.Enabled, "Set RUN_REDIS_INTEGRATION_TESTS=1 (Redis at 127.0.0.1:6379) to run.");
+        using var meters = new MeterCollector("lists");
+        var cache = Cache(NewNode("a", () => true, TimeSpan.Zero));
+        await Db.StringSetAsync(RedisKeyOf("bad"), "not an envelope", Lifetime);
+
+        var value = await cache.TryGetAsync("bad", Ct);
+
+        value.Should().BeNull();
+        meters.Count("unreadable").Should().BeGreaterThanOrEqualTo(1);
+        meters.Count("unreadable", "path_reason", "other_client_unreadable").Should().Be(1);
+        (await Db.KeyExistsAsync(RedisKeyOf("bad"))).Should().BeTrue("the library does not delete what it cannot read");
+    }
+
+    private static async Task<bool> UntilAsync(Func<Task<bool>> condition)
+    {
+        var until = DateTime.UtcNow.AddSeconds(20);
+        while (DateTime.UtcNow < until)
+        {
+            if (await condition())
+            {
+                return true;
+            }
+
+            await Task.Delay(50, Ct);
+        }
+
+        return false;
+    }
+
+    private static IRoutedCache<List<long>> Cache(ServiceProvider node) => node.GetRequiredService<IRouter>().Get<List<long>>("lists");
+
+    /// <summary>Gives the subscriptions of every node a moment to be confirmed, so the first event is not lost to a slow start.</summary>
+    private static Task WaitSubscribedAsync() => Task.Delay(1500, Ct);
+
+    private string RedisKeyOf(string key) => $"n:{_cacheName},c:{key}";
+
+    private ServiceProvider NewNode(string name, Func<bool> useLibrary, TimeSpan localCap, string transport = KnownTopicNames.RedisStreams)
+    {
+        var pubSub = transport == KnownTopicNames.RedisPubSub;
+        var configuration = new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>
+        {
+            ["Caching:AppShortName"] = _app,
+            ["Caching:SourceUri"] = $"urn:router-{name}-{_app}",
+            ["Caching:DefaultCache"] = KnownCacheProviderNames.Redis,
+            ["Caching:Connections:Redis:ConnectionString"] = $"{fixture.ConnectionString},name=rt{name}",
+            ["Caching:Connections:Redis:WarmUpOnStart"] = "false",
+            ["Caching:Connections:Redis:PlannedMaintenanceEnabled"] = "false",
+            ["Caching:DefaultTopic"] = transport,
+            ["Caching:Broadcast:RedisPubSub:Enabled"] = pubSub ? "true" : "false",
+            ["Caching:Broadcast:RedisStreams:Enabled"] = pubSub ? "false" : "true",
+        }).Build();
+        var source = new LegacySource(_redis!, _cacheName);
+        var services = new ServiceCollection().AddLogging();
+        services.AddCaching(configuration, builder => builder.AddRedisConnection());
+        services.AddCachingRouter(
+            configuration,
+            router => router
+                .Add(new RouterCacheRegistration<List<long>>
+                {
+                    Name = "lists",
+                    Group = "g",
+                    Source = source,
+                    RedisKey = source.RedisKey,
+                    LocalCap = localCap,
+                    DefaultExpiry = Lifetime,
+                })
+                .UseLibraryWhen(_ => useLibrary())
+                .UseEnvelope(new LegacyEnvelopeProxy()));
+        var provider = services.BuildServiceProvider();
+        _nodes.Add(provider);
+        _ = provider.GetRequiredService<IRouter>();
+        return provider;
+    }
+}

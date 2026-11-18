@@ -1,0 +1,98 @@
+#nullable enable
+UiPath.Caching.Migration.CacheExpiry
+UiPath.Caching.Migration.CacheExpiry.CacheExpiry() -> void
+UiPath.Caching.Migration.CacheExpiry.Deadline.get -> System.DateTimeOffset?
+UiPath.Caching.Migration.CacheExpiry.Equals(UiPath.Caching.Migration.CacheExpiry other) -> bool
+UiPath.Caching.Migration.CacheExpiry.Relative.get -> System.TimeSpan?
+UiPath.Caching.Migration.CacheUnavailableException
+UiPath.Caching.Migration.CacheUnavailableException.CacheUnavailableException() -> void
+UiPath.Caching.Migration.CacheUnavailableException.CacheUnavailableException(string! message) -> void
+UiPath.Caching.Migration.CacheUnavailableException.CacheUnavailableException(string! message, System.Exception! innerException) -> void
+UiPath.Caching.Migration.IRoutedCache<T>
+UiPath.Caching.Migration.IRoutedCache<T>.ClearAsync(System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.ValueTask
+UiPath.Caching.Migration.IRoutedCache<T>.GetOrAddAsync(string! key, System.Func<System.Threading.CancellationToken, System.Threading.Tasks.Task<T?>!>! factory, UiPath.Caching.Migration.CacheExpiry expiry = default(UiPath.Caching.Migration.CacheExpiry), System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.ValueTask<T?>
+UiPath.Caching.Migration.IRoutedCache<T>.RemoveAsync(string! key, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.ValueTask<UiPath.Caching.Migration.WriteOutcome>
+UiPath.Caching.Migration.IRoutedCache<T>.SetAsync(string! key, T! value, UiPath.Caching.Migration.CacheExpiry expiry = default(UiPath.Caching.Migration.CacheExpiry), System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.ValueTask<UiPath.Caching.Migration.WriteOutcome>
+UiPath.Caching.Migration.IRoutedCache<T>.TryGetAsync(string! key, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.ValueTask<T?>
+UiPath.Caching.Migration.IRouter
+UiPath.Caching.Migration.IRouter.Get<T>(string! cacheName) -> UiPath.Caching.Migration.IRoutedCache<T!>!
+UiPath.Caching.Migration.ISourceCache<T>
+UiPath.Caching.Migration.ISourceCache<T>.ClearAsync(System.Threading.CancellationToken cancellationToken) -> System.Threading.Tasks.ValueTask
+UiPath.Caching.Migration.ISourceCache<T>.GetAsync(string! key, System.Threading.CancellationToken cancellationToken) -> System.Threading.Tasks.ValueTask<UiPath.Caching.Migration.SourceRead<T!>>
+UiPath.Caching.Migration.ISourceCache<T>.RemoveAsync(string! key, System.Threading.CancellationToken cancellationToken) -> System.Threading.Tasks.ValueTask<UiPath.Caching.Migration.WriteResult>
+UiPath.Caching.Migration.ISourceCache<T>.SetAsync(string! key, T! value, UiPath.Caching.Migration.CacheExpiry expiry, System.Threading.CancellationToken cancellationToken) -> System.Threading.Tasks.ValueTask<UiPath.Caching.Migration.WriteResult>
+UiPath.Caching.Migration.ReadOutcome
+UiPath.Caching.Migration.ReadOutcome.Absent = 1 -> UiPath.Caching.Migration.ReadOutcome
+UiPath.Caching.Migration.ReadOutcome.Found = 0 -> UiPath.Caching.Migration.ReadOutcome
+UiPath.Caching.Migration.ReadOutcome.Unavailable = 3 -> UiPath.Caching.Migration.ReadOutcome
+UiPath.Caching.Migration.ReadOutcome.Unreadable = 2 -> UiPath.Caching.Migration.ReadOutcome
+UiPath.Caching.Migration.RouterBuilder
+UiPath.Caching.Migration.RouterBuilder.Add<T>(UiPath.Caching.Migration.RouterCacheRegistration<T!>! registration) -> UiPath.Caching.Migration.RouterBuilder!
+UiPath.Caching.Migration.RouterBuilder.RouterBuilder() -> void
+UiPath.Caching.Migration.RouterBuilder.UseEnvelope(UiPath.Caching.ISerializerProxy<byte[]!>! envelope) -> UiPath.Caching.Migration.RouterBuilder!
+UiPath.Caching.Migration.RouterBuilder.UseLibraryWhen(System.Func<string!, bool>! predicate) -> UiPath.Caching.Migration.RouterBuilder!
+UiPath.Caching.Migration.RouterCacheRegistration<T>
+UiPath.Caching.Migration.RouterCacheRegistration<T>.DefaultExpiry.get -> System.TimeSpan?
+UiPath.Caching.Migration.RouterCacheRegistration<T>.DefaultExpiry.init -> void
+UiPath.Caching.Migration.RouterCacheRegistration<T>.Group.get -> string!
+UiPath.Caching.Migration.RouterCacheRegistration<T>.Group.init -> void
+UiPath.Caching.Migration.RouterCacheRegistration<T>.LocalCap.get -> System.TimeSpan
+UiPath.Caching.Migration.RouterCacheRegistration<T>.LocalCap.init -> void
+UiPath.Caching.Migration.RouterCacheRegistration<T>.Name.get -> string!
+UiPath.Caching.Migration.RouterCacheRegistration<T>.Name.init -> void
+UiPath.Caching.Migration.RouterCacheRegistration<T>.PendingWindow.get -> System.TimeSpan
+UiPath.Caching.Migration.RouterCacheRegistration<T>.PendingWindow.init -> void
+UiPath.Caching.Migration.RouterCacheRegistration<T>.RedisKey.get -> System.Func<string!, string!>!
+UiPath.Caching.Migration.RouterCacheRegistration<T>.RedisKey.init -> void
+UiPath.Caching.Migration.RouterCacheRegistration<T>.RouterCacheRegistration() -> void
+UiPath.Caching.Migration.RouterCacheRegistration<T>.Source.get -> UiPath.Caching.Migration.ISourceCache<T!>!
+UiPath.Caching.Migration.RouterCacheRegistration<T>.Source.init -> void
+UiPath.Caching.Migration.RouterServiceCollectionExtensions
+UiPath.Caching.Migration.SourceRead<T>
+UiPath.Caching.Migration.SourceRead<T>.Deconstruct(out UiPath.Caching.Migration.ReadOutcome Kind, out T? Value) -> void
+UiPath.Caching.Migration.SourceRead<T>.Kind.get -> UiPath.Caching.Migration.ReadOutcome
+UiPath.Caching.Migration.SourceRead<T>.Kind.init -> void
+UiPath.Caching.Migration.SourceRead<T>.SourceRead() -> void
+UiPath.Caching.Migration.SourceRead<T>.SourceRead(UiPath.Caching.Migration.ReadOutcome Kind, T? Value) -> void
+UiPath.Caching.Migration.SourceRead<T>.Value.get -> T?
+UiPath.Caching.Migration.SourceRead<T>.Value.init -> void
+UiPath.Caching.Migration.WriteOutcome
+UiPath.Caching.Migration.WriteOutcome.Committed = 0 -> UiPath.Caching.Migration.WriteOutcome
+UiPath.Caching.Migration.WriteOutcome.NotSent = 1 -> UiPath.Caching.Migration.WriteOutcome
+UiPath.Caching.Migration.WriteOutcome.Unknown = 2 -> UiPath.Caching.Migration.WriteOutcome
+UiPath.Caching.Migration.WriteResult
+UiPath.Caching.Migration.WriteResult.Deconstruct(out UiPath.Caching.Migration.WriteOutcome Outcome, out System.TimeSpan? SettleWithin) -> void
+UiPath.Caching.Migration.WriteResult.Equals(UiPath.Caching.Migration.WriteResult other) -> bool
+UiPath.Caching.Migration.WriteResult.Outcome.get -> UiPath.Caching.Migration.WriteOutcome
+UiPath.Caching.Migration.WriteResult.Outcome.init -> void
+UiPath.Caching.Migration.WriteResult.SettleWithin.get -> System.TimeSpan?
+UiPath.Caching.Migration.WriteResult.SettleWithin.init -> void
+UiPath.Caching.Migration.WriteResult.WriteResult() -> void
+UiPath.Caching.Migration.WriteResult.WriteResult(UiPath.Caching.Migration.WriteOutcome Outcome, System.TimeSpan? SettleWithin = null) -> void
+override UiPath.Caching.Migration.CacheExpiry.GetHashCode() -> int
+override UiPath.Caching.Migration.SourceRead<T>.GetHashCode() -> int
+override UiPath.Caching.Migration.WriteResult.GetHashCode() -> int
+static UiPath.Caching.Migration.CacheExpiry.After(System.TimeSpan lifetime) -> UiPath.Caching.Migration.CacheExpiry
+static UiPath.Caching.Migration.CacheExpiry.At(System.DateTimeOffset deadline) -> UiPath.Caching.Migration.CacheExpiry
+static UiPath.Caching.Migration.CacheExpiry.Default.get -> UiPath.Caching.Migration.CacheExpiry
+static UiPath.Caching.Migration.CacheExpiry.operator !=(UiPath.Caching.Migration.CacheExpiry left, UiPath.Caching.Migration.CacheExpiry right) -> bool
+static UiPath.Caching.Migration.CacheExpiry.operator ==(UiPath.Caching.Migration.CacheExpiry left, UiPath.Caching.Migration.CacheExpiry right) -> bool
+static UiPath.Caching.Migration.RouterServiceCollectionExtensions.AddCachingRouter(this Microsoft.Extensions.DependencyInjection.IServiceCollection! services, Microsoft.Extensions.Configuration.IConfiguration! configuration, System.Action<UiPath.Caching.Migration.RouterBuilder!>! configure, string! sectionName = "Caching") -> Microsoft.Extensions.DependencyInjection.IServiceCollection!
+static UiPath.Caching.Migration.SourceRead<T>.Absent.get -> UiPath.Caching.Migration.SourceRead<T!>
+static UiPath.Caching.Migration.SourceRead<T>.Found(T! value) -> UiPath.Caching.Migration.SourceRead<T!>
+static UiPath.Caching.Migration.SourceRead<T>.Unavailable.get -> UiPath.Caching.Migration.SourceRead<T!>
+static UiPath.Caching.Migration.SourceRead<T>.Unreadable.get -> UiPath.Caching.Migration.SourceRead<T!>
+static UiPath.Caching.Migration.WriteResult.FromOutcome(UiPath.Caching.Migration.WriteOutcome outcome) -> UiPath.Caching.Migration.WriteResult
+static UiPath.Caching.Migration.WriteResult.UnknownWithin(System.TimeSpan settleWithin) -> UiPath.Caching.Migration.WriteResult
+static UiPath.Caching.Migration.WriteResult.implicit operator UiPath.Caching.Migration.WriteResult(UiPath.Caching.Migration.WriteOutcome outcome) -> UiPath.Caching.Migration.WriteResult
+static UiPath.Caching.Migration.WriteResult.operator !=(UiPath.Caching.Migration.WriteResult left, UiPath.Caching.Migration.WriteResult right) -> bool
+static UiPath.Caching.Migration.WriteResult.operator ==(UiPath.Caching.Migration.WriteResult left, UiPath.Caching.Migration.WriteResult right) -> bool
+~UiPath.Caching.Migration.SourceRead<T>.Equals(UiPath.Caching.Migration.SourceRead<T> other) -> bool
+~override UiPath.Caching.Migration.CacheExpiry.Equals(object obj) -> bool
+~override UiPath.Caching.Migration.CacheExpiry.ToString() -> string
+~override UiPath.Caching.Migration.SourceRead<T>.Equals(object obj) -> bool
+~override UiPath.Caching.Migration.SourceRead<T>.ToString() -> string
+~override UiPath.Caching.Migration.WriteResult.Equals(object obj) -> bool
+~override UiPath.Caching.Migration.WriteResult.ToString() -> string
+~static UiPath.Caching.Migration.SourceRead<T>.operator !=(UiPath.Caching.Migration.SourceRead<T> left, UiPath.Caching.Migration.SourceRead<T> right) -> bool
+~static UiPath.Caching.Migration.SourceRead<T>.operator ==(UiPath.Caching.Migration.SourceRead<T> left, UiPath.Caching.Migration.SourceRead<T> right) -> bool

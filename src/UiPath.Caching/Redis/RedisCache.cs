@@ -7,7 +7,7 @@ using UiPath.Caching.Telemetry;
 
 namespace UiPath.Caching.Redis;
 
-internal sealed partial class RedisCache : RedisCacheBase, ICache, IInvalidationSink, IAdoptionReadCache
+internal sealed partial class RedisCache : RedisCacheBase, ICache, IInvalidationSink, IAdoptionReadCache, ISnapshotReadCache
 {
     /// <summary>Value and absolute expiration in one atomic read-only call.</summary>
     private const string ReadWithExpirationScript = "local v = redis.call('GET', KEYS[1]) if not v then return false end return {v, redis.call('PEXPIRETIME', KEYS[1])}";
@@ -114,6 +114,9 @@ internal sealed partial class RedisCache : RedisCacheBase, ICache, IInvalidation
         var format = FormatFor(policy, forWrite: false);
         return format.Sniff ? GetCacheEntryInternalAsync<T, ValueFormat>(cacheKey, format, token) : GetCacheEntryInternalAsync<T, PlainFormat>(cacheKey, default, token);
     }
+
+    public ValueTask<ICacheEntry<T?>> ReadSnapshotAsync<T>(CacheKey cacheKey, CachePolicy? policy, CancellationToken token = default) =>
+        ReadForAdoptionAsync<T>(cacheKey, policy, token);
 
     public ValueTask<ICacheEntry<T?>> ReadForAdoptionAsync<T>(CacheKey cacheKey, CachePolicy? policy, CancellationToken token)
     {

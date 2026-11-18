@@ -1017,6 +1017,21 @@ public class RedisCacheTests(ITestContextAccessor testContextAccessor) : IAsyncL
     }
 
     [Fact]
+    public async Task ReadSnapshot_is_the_public_form_of_the_adoption_read_and_reports_a_failed_read()
+    {
+        var snapshot = _fixture.Create<string>();
+        _transaction.StringGetAsync(_redisKey, CommandFlags.DemandMaster).Returns(_serializer.Serialize(snapshot));
+        _transaction.KeyTimeToLiveAsync(_redisKey, CommandFlags.DemandMaster).Returns(TimeSpan.FromMinutes(9));
+        _transaction.ExecuteAsync(CommandFlags.DemandMaster).Returns(Task.FromResult(true), Task.FromException<bool>(new RedisException("lost")));
+        var entry = await ((ISnapshotReadCache)Sut).ReadSnapshotAsync<string>(_cacheKey, policy: null, testContextAccessor.Current.CancellationToken);
+        var failed = async () => await ((ISnapshotReadCache)Sut).ReadSnapshotAsync<string>(_cacheKey, policy: null, testContextAccessor.Current.CancellationToken);
+
+        entry.Value.Should().Be(snapshot);
+        entry.Expiration.Should().Be(_clock.UtcNow.AddMinutes(9));
+        await failed.Should().ThrowAsync<RedisException>();
+    }
+
+    [Fact]
     public async Task ReadForAdoption_without_a_ttl_reads_as_no_deadline()
     {
         _transaction.StringGetAsync(_redisKey, CommandFlags.DemandMaster).Returns(_serializer.Serialize(_fixture.Create<string>()));
