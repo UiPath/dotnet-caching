@@ -162,6 +162,7 @@ flowchart LR
 | `UiPath.Caching.Azure` | Microsoft Entra ID authentication for Azure Managed Redis / Azure Cache for Redis. Adds `AddAzureEntraAuthentication()`. |
 | `UiPath.Caching.Queue` | Set ("queue") caches — `ISetCache` / `ISetCache<T>`, registered per backing via `AddQueueMemory` / `AddQueueRedis` / `AddQueueInMemoryRedis`. |
 | `UiPath.Caching.MessagePack` | MessagePack value serializer with LZ4 compression above a size threshold; selected per policy through `Serializer.Write`. |
+| `UiPath.Caching.Migration` | Moves cache groups between an existing Redis client and the library on one shared local tier, with the same keys and bytes on both. |
 
 ## Documentation
 
@@ -175,6 +176,7 @@ flowchart LR
 | Broadcast (per-topic, notify doorbell, sharded Pub/Sub) | [docs/how-to/broadcast.md](docs/how-to/broadcast.md) |
 | Hash cache (metadata, bundled GET+TTL) | [docs/how-to/hash-cache.md](docs/how-to/hash-cache.md) |
 | Telemetry + custom strategies | [docs/how-to/telemetry-and-strategies.md](docs/how-to/telemetry-and-strategies.md) |
+| Router (existing Redis client and the library on one local tier) | [docs/how-to/router.md](docs/how-to/router.md) |
 | Azure Managed Redis with Entra ID (and custom auth) | [docs/recipes/azure-entra-authentication.md](docs/recipes/azure-entra-authentication.md) |
 | Set ("queue") caches — model, coherence, pitfalls | [docs/concepts.md#set-caches](docs/concepts.md#set-caches) |
 | Set ("queue") caches — registration & settings | [docs/reference/settings.md#queue-caches-uipathcachingqueue](docs/reference/settings.md#queue-caches-uipathcachingqueue) |

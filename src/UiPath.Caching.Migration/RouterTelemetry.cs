@@ -1,0 +1,54 @@
+using System.Diagnostics;
+using System.Diagnostics.Metrics;
+
+namespace UiPath.Caching.Migration;
+
+internal static class RouterTelemetry
+{
+    public const string MeterName = "UiPath.Caching.Migration";
+
+    private static readonly Meter RouterMeter = new(MeterName);
+
+    private static readonly Counter<long> LocalHit = RouterMeter.CreateCounter<long>("local_hit");
+    private static readonly Counter<long> RedisHit = RouterMeter.CreateCounter<long>("redis_hit");
+    private static readonly Counter<long> Miss = RouterMeter.CreateCounter<long>("miss");
+    private static readonly Counter<long> FactoryRuns = RouterMeter.CreateCounter<long>("factory_runs");
+    private static readonly Counter<long> Unavailable = RouterMeter.CreateCounter<long>("unavailable");
+    private static readonly Counter<long> Unreadable = RouterMeter.CreateCounter<long>("unreadable");
+    private static readonly Counter<long> PublishFailed = RouterMeter.CreateCounter<long>("publish_failed");
+    private static readonly Counter<long> Pending = RouterMeter.CreateCounter<long>("pending");
+
+    public static void CountLocalHit(string cache, string group, Route route) => Add(LocalHit, cache, group, route.Path, route.Reason);
+
+    public static void CountRedisHit(string cache, string group, RoutePath path, string reason) => Add(RedisHit, cache, group, path, reason);
+
+    public static void CountMiss(string cache, string group, Route route) => Add(Miss, cache, group, route.Path, route.Reason);
+
+    public static void CountFactoryRun(string cache, string group, Route route) => Add(FactoryRuns, cache, group, route.Path, route.Reason);
+
+    public static void CountUnavailable(string cache, string group, RoutePath path, string reason) => Add(Unavailable, cache, group, path, reason);
+
+    public static void CountUnreadable(string cache, string group, RoutePath path, string reason) => Add(Unreadable, cache, group, path, reason);
+
+    public static void CountPublishFailed(string cache, string group, Route route) => Add(PublishFailed, cache, group, route.Path, route.Reason);
+
+    public static void CountPending(string cache, string group, Route route) => Add(Pending, cache, group, route.Path, route.Reason);
+
+    private static void Add(Counter<long> counter, string cache, string group, RoutePath path, string reason)
+    {
+        if (!counter.Enabled)
+        {
+            return;
+        }
+
+        counter.Add(
+            1,
+            new TagList
+            {
+                { "cache", cache },
+                { "group", group },
+                { "path", path == RoutePath.Library ? "library" : "source" },
+                { "path_reason", reason },
+            });
+    }
+}
