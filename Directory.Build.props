@@ -53,8 +53,11 @@
     </PackageReference>
     <AdditionalFiles Include="$(MSBuildThisFileDirectory)stylecop.json" Link="stylecop.json" />
   </ItemGroup>
-  <!-- The SonarCloud rules at build time, so the CI build fails on them before the PR analysis does. -->
-  <ItemGroup>
+  <!-- The SonarCloud rules at build time, so the CI build fails on them before the PR analysis does.
+       SonarAnalyzer.CSharp 10.x is under the Sonar Source-Available License, which the FOSSA policy flags. It is a
+       build-time analyzer (PrivateAssets=all) and never ships in our packages, so the FOSSA job restores with
+       -p:UseSonarAnalyzer=false to keep it out of the scanned dependency graph. -->
+  <ItemGroup Condition="'$(UseSonarAnalyzer)' != 'false'">
     <PackageReference Include="SonarAnalyzer.CSharp">
       <PrivateAssets>all</PrivateAssets>
       <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
