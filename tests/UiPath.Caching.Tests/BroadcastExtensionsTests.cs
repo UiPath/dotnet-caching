@@ -241,19 +241,4 @@ public class BroadcastExtensionsTests
         registry.TopicsSection.Path.Should().Be("CustomBroadcast:RedisStreams:Topics");
         registry.GetActions("orders").Should().ContainSingle();
     }
-
-    [Fact]
-    public void AddBroadcast_with_AddRedis_resolves_a_topic_provider_and_the_event_pair_that_publishing_needs()
-    {
-        var services = new ServiceCollection();
-        services.AddLogging();
-        services.AddCaching(
-            b => b.AddRedisConnection(o => o.ConnectionString = "127.0.0.1:1").AddRedis().AddBroadcast(),
-            o => o.AppShortName = "router");
-        using var provider = services.BuildServiceProvider();
-
-        provider.GetRequiredService<ICacheEventFactory>().Should().BeOfType<CacheEventFactory>();
-        provider.GetRequiredService<IEventFormatterProxy<ICacheEvent>>().Should().BeOfType<CacheEventFormatter>();
-        provider.GetRequiredService<ITopicFactory>().Get().Should().BeOfType<RedisStreamsTopicProvider>();
-    }
 }

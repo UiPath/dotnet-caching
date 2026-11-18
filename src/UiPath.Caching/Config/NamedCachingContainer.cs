@@ -1,4 +1,6 @@
 using System.Text.Json;
+using Microsoft.Extensions.Hosting;
+using UiPath.Caching.Broadcast.Redis;
 using UiPath.Caching.Serialization;
 using UiPath.Caching.Telemetry;
 
@@ -55,6 +57,8 @@ internal sealed class NamedCachingContainer : IDisposable
         if (sharePrimaryConnector)
         {
             ForwardConnection(name, services, root);
+            // The application's streams and the stack's are one keyspace, so the stack is a node of its own: its own consumer group.
+            services.PostConfigure<CacheOptions>(options => options.SourceUri = StackSource(options.SourceUri ?? CacheOptions.MachineUri, name));
         }
 
         configureServices?.Invoke(services, root);
@@ -72,17 +76,21 @@ internal sealed class NamedCachingContainer : IDisposable
                 configure(builder);
                 if (CountConnectionConfigurers(builder.Services) != connectionConfigurers)
                 {
-                    throw new InvalidOperationException(
-                        $"The chain of named caching stack '{name}' configured the Redis connection itself. " + (sharePrimaryConnector
-                            ? "The stack uses the application's connector; remove AddRedisConnection from the chain."
-                            : $"The stack's connection is '{section.Path}:{ConnectionSection(name)}' laid over '{section.Path}:{ConnectionSection(PrimaryConnection)}'; " +
-                              "remove AddRedisConnection from the chain, or pass configureConnection for settings that need code."));
+                    throw new InvalidOperationException(sharePrimaryConnector
+                        ? $"The chain of named caching stack '{name}' configured the Redis connection itself. The stack uses the application's connector; remove AddRedisConnection from the chain."
+                        : OwnConnectionChainMessage(name, section));
                 }
             },
             options => section.Bind(options));
 
         // Left in, it would publish a casing the check below is about to refuse, for other threads to read meanwhile.
         RemoveKeyCasingSeeder(services);
+
+        // The application's maintainer already covers the one keyspace; a second would trim it on its own interval.
+        if (sharePrimaryConnector)
+        {
+            RemoveStreamMaintainer(services);
+        }
 
         var provider = services.BuildServiceProvider(new ServiceProviderOptions { ValidateScopes = true });
         try
@@ -107,7 +115,22 @@ internal sealed class NamedCachingContainer : IDisposable
 
     internal static string ConnectionSection(string connectionName) => $"Connections:{connectionName}";
 
-    /// <summary>Instances, which the stack's container does not dispose: the connector and what watches its connection stay the application's.</summary>
+    private static string OwnConnectionChainMessage(string name, IConfigurationSection section) =>
+        $"The chain of named caching stack '{name}' configured the Redis connection itself. The stack's connection is '{section.Path}:{ConnectionSection(name)}' laid over '{section.Path}:{ConnectionSection(PrimaryConnection)}'; " +
+        "remove AddRedisConnection from the chain, or pass configureConnection for settings that need code.";
+
+    private static Uri StackSource(Uri source, string name) =>
+        new($"{source.AbsoluteUri.Split('?')[0]}?stack={Uri.EscapeDataString(name)}");
+
+    private static void RemoveStreamMaintainer(IServiceCollection services)
+    {
+        foreach (var maintainer in services.Where(d => d.ServiceType == typeof(IHostedService) && d.ImplementationType == typeof(RedisStreamHealthMaintainer)).ToList())
+        {
+            services.Remove(maintainer);
+        }
+    }
+
+    // Instances, so the stack's container does not dispose them; it is built after the connector, so it is disposed first.
     private static void ForwardConnection(string name, IServiceCollection services, IServiceProvider root)
     {
         services.AddSingleton(root.GetService<IRedisConnector>() ?? throw new InvalidOperationException(
