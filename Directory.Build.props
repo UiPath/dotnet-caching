@@ -53,13 +53,6 @@
     </PackageReference>
     <AdditionalFiles Include="$(MSBuildThisFileDirectory)stylecop.json" Link="stylecop.json" />
   </ItemGroup>
-  <!-- The SonarCloud rules at build time, so the CI build fails on them before the PR analysis does. -->
-  <ItemGroup>
-    <PackageReference Include="SonarAnalyzer.CSharp">
-      <PrivateAssets>all</PrivateAssets>
-      <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
-    </PackageReference>
-  </ItemGroup>
   <!-- UIPCACHE001 on src and samples (a warning, .editorconfig); these references also build the analyzers before
        UiPath.Caching.Abstractions packs them. -->
   <ItemGroup Condition="'$(IsRoslynComponent)' != 'true' And ($([MSBuild]::MakeRelative('$(MSBuildThisFileDirectory)', '$(MSBuildProjectDirectory)').StartsWith('src')) Or $([MSBuild]::MakeRelative('$(MSBuildThisFileDirectory)', '$(MSBuildProjectDirectory)').StartsWith('samples')))">
