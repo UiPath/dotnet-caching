@@ -185,9 +185,8 @@ jobs:
         with:
           dotnet-version: 10.0.x
 
-      # Without SonarAnalyzer.CSharp: a build-time analyzer that never ships, under a license FOSSA flags.
       - name: Restore
-        run: dotnet restore UiPath.Caching.slnx -p:UseSonarAnalyzer=false
+        run: dotnet restore UiPath.Caching.slnx
 
       - name: FOSSA analyze (upload)
         if: env.FOSSA_API_KEY != ''
