@@ -87,9 +87,10 @@ internal sealed class NamedCachingContainer : IDisposable
         RemoveKeyCasingSeeder(services);
 
         // The application's maintainer already covers the one keyspace; a second would trim it on its own interval.
-        if (sharePrimaryConnector)
+        while (sharePrimaryConnector
+            && services.FirstOrDefault(d => d.ServiceType == typeof(IHostedService) && d.ImplementationType == typeof(RedisStreamHealthMaintainer)) is { } maintainer)
         {
-            RemoveStreamMaintainer(services);
+            services.Remove(maintainer);
         }
 
         var provider = services.BuildServiceProvider(new ServiceProviderOptions { ValidateScopes = true });
@@ -121,14 +122,6 @@ internal sealed class NamedCachingContainer : IDisposable
 
     private static Uri StackSource(Uri source, string name) =>
         new($"{source.AbsoluteUri.Split('?')[0]}?stack={Uri.EscapeDataString(name)}");
-
-    private static void RemoveStreamMaintainer(IServiceCollection services)
-    {
-        while (services.FirstOrDefault(d => d.ServiceType == typeof(IHostedService) && d.ImplementationType == typeof(RedisStreamHealthMaintainer)) is { } maintainer)
-        {
-            services.Remove(maintainer);
-        }
-    }
 
     // Instances, so the stack's container does not dispose them; it is built after the connector, so it is disposed first.
     private static void ForwardConnection(string name, IServiceCollection services, IServiceProvider root)
