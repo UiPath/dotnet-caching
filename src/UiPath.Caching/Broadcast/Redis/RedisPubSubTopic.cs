@@ -2,7 +2,7 @@ using UiPath.Caching.Policies;
 
 namespace UiPath.Caching.Broadcast.Redis;
 
-public sealed partial class RedisPubSubTopic<T> : ITopic<T>
+public sealed partial class RedisPubSubTopic<T> : ITopic<T>, ITopicSubscriptionState
      where T : IEvent
 {
     private readonly RedisChannel _redisChannel;
@@ -57,13 +57,13 @@ public sealed partial class RedisPubSubTopic<T> : ITopic<T>
 
     public EventHandler? OnDisposed { get; set; }
 
+    public bool IsSubscribed => _subscriber.IsSubscribed;
+
     internal string ChannelName => _redisChannel.ToString();
 
     internal bool IsPattern => _redisChannel.IsPattern;
 
     internal bool Countable => !_redisChannel.IsPattern && !_redisChannel.IsSharded;
-
-    internal bool IsSubscribed => _subscriber.IsSubscribed;
 
     public IDisposable Subscribe(IObserver<T> observer)
     {

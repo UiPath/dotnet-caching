@@ -4,7 +4,7 @@ using UiPath.Caching.Telemetry;
 
 namespace UiPath.Caching.Broadcast.Redis;
 
-public sealed partial class RedisStreamsTopic<T> : ITopic<T>
+public sealed partial class RedisStreamsTopic<T> : ITopic<T>, ITopicSubscriptionState
      where T : IEvent
 {
     private const int DoorbellIdle = 0;
@@ -125,6 +125,8 @@ public sealed partial class RedisStreamsTopic<T> : ITopic<T>
     public TopicKey TopicKey { get; }
 
     public EventHandler? OnDisposed { get; set; }
+
+    public bool IsSubscribed => !_disposed && _subscriber.IsReading;
 
     // A doorbell is a hint: one stalled on Redis must not hold the rings behind it for the whole command timeout.
     internal TimeSpan DoorbellTimeout { get; set; } = TimeSpan.FromSeconds(1);

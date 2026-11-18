@@ -28,7 +28,8 @@ internal sealed class NamedCachingContainer : IDisposable
         IConfigurationSection section,
         Action<ICachingBuilder> configure,
         Action<RedisConnectionOptions>? configureConnection,
-        Action<IServiceCollection, IServiceProvider>? configureServices)
+        Action<IServiceCollection, IServiceProvider>? configureServices,
+        bool sharePrimaryConnector)
     {
         // Without one there is no key casing to match, and two stacks would seed the process-wide default against each other.
         if (root.GetService<ICacheFactory>() is null)
@@ -51,21 +52,31 @@ internal sealed class NamedCachingContainer : IDisposable
         Forward<IKeyMaskingPolicy>(services, root);
         Forward<JsonSerializerOptions>(services, root);
         ForwardValueSerializers(services, root);
+        if (sharePrimaryConnector)
+        {
+            ForwardConnection(name, services, root);
+        }
+
         configureServices?.Invoke(services, root);
 
         services.AddCaching(
             section,
             builder =>
             {
-                AddConnection(builder, name, configureConnection);
+                if (!sharePrimaryConnector)
+                {
+                    AddConnection(builder, name, configureConnection);
+                }
+
                 var connectionConfigurers = CountConnectionConfigurers(builder.Services);
                 configure(builder);
                 if (CountConnectionConfigurers(builder.Services) != connectionConfigurers)
                 {
                     throw new InvalidOperationException(
-                        $"The chain of named caching stack '{name}' configured the Redis connection itself. The stack's connection is " +
-                        $"'{section.Path}:{ConnectionSection(name)}' laid over '{section.Path}:{ConnectionSection(PrimaryConnection)}'; " +
-                        "remove AddRedisConnection from the chain, or pass configureConnection for settings that need code.");
+                        $"The chain of named caching stack '{name}' configured the Redis connection itself. " + (sharePrimaryConnector
+                            ? "The stack uses the application's connector; remove AddRedisConnection from the chain."
+                            : $"The stack's connection is '{section.Path}:{ConnectionSection(name)}' laid over '{section.Path}:{ConnectionSection(PrimaryConnection)}'; " +
+                              "remove AddRedisConnection from the chain, or pass configureConnection for settings that need code."));
                 }
             },
             options => section.Bind(options));
@@ -77,8 +88,11 @@ internal sealed class NamedCachingContainer : IDisposable
         try
         {
             ThrowIfEffectiveKeyCasingDiffers(name, applicationCasing, provider);
-            ThrowIfConnectionIsNotItsOwn(name, root, provider);
-            FollowPrimaryProfiler(root, provider);
+            if (!sharePrimaryConnector)
+            {
+                ThrowIfConnectionIsNotItsOwn(name, root, provider);
+                FollowPrimaryProfiler(root, provider);
+            }
         }
         catch
         {
@@ -92,6 +106,16 @@ internal sealed class NamedCachingContainer : IDisposable
     public void Dispose() => Provider.Dispose();
 
     internal static string ConnectionSection(string connectionName) => $"Connections:{connectionName}";
+
+    /// <summary>Instances, which the stack's container does not dispose: the connector and what watches its connection stay the application's.</summary>
+    private static void ForwardConnection(string name, IServiceCollection services, IServiceProvider root)
+    {
+        services.AddSingleton(root.GetService<IRedisConnector>() ?? throw new InvalidOperationException(
+            $"Named caching stack '{name}' is to use the application's Redis connector, and the application's container has none. Call AddRedisConnection there, or use AddNamedCaching for a connection of its own."));
+        Forward<IRedisProfiler>(services, root);
+        Forward<IRedisPlannedMaintenance>(services, root);
+        Forward<UiPath.Caching.Policies.IDisruptionState>(services, root);
+    }
 
     /// <summary>Both sections are bound in order, so a key the stack leaves unset keeps the primary connection's value.</summary>
     private static void AddConnection(ICachingBuilder builder, string name, Action<RedisConnectionOptions>? configureConnection) =>

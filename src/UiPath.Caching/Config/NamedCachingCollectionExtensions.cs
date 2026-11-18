@@ -23,7 +23,30 @@ public static class NamedCachingCollectionExtensions
         Action<ICachingBuilder> configure,
         string sectionName = DefaultSectionName,
         Action<RedisConnectionOptions>? configureConnection = null,
-        Action<IServiceCollection, IServiceProvider>? configureServices = null)
+        Action<IServiceCollection, IServiceProvider>? configureServices = null) =>
+        AddNamedCaching(services, name, configuration, configure, sectionName, configureConnection, configureServices, sharePrimaryConnector: false);
+
+    /// <summary>
+    /// A named caching stack on the application's own <see cref="IRedisConnector"/>: it opens no connection, and the application's container keeps ownership of the connector.
+    /// </summary>
+    public static INamedCaching AddNamedCachingOnPrimaryConnection(
+        this IServiceCollection services,
+        string name,
+        IConfiguration configuration,
+        Action<ICachingBuilder> configure,
+        string sectionName = DefaultSectionName,
+        Action<IServiceCollection, IServiceProvider>? configureServices = null) =>
+        AddNamedCaching(services, name, configuration, configure, sectionName, configureConnection: null, configureServices, sharePrimaryConnector: true);
+
+    private static INamedCaching AddNamedCaching(
+        IServiceCollection services,
+        string name,
+        IConfiguration configuration,
+        Action<ICachingBuilder> configure,
+        string sectionName,
+        Action<RedisConnectionOptions>? configureConnection,
+        Action<IServiceCollection, IServiceProvider>? configureServices,
+        bool sharePrimaryConnector)
     {
         ArgumentNullException.ThrowIfNull(services);
         ArgumentException.ThrowIfNullOrWhiteSpace(name);
@@ -43,7 +66,7 @@ public static class NamedCachingCollectionExtensions
         var connection = section.GetSection(NamedCachingContainer.ConnectionSection(name));
 
         // With none of its own it would inherit the primary's and land on that server; only code can supply one instead.
-        if (configureConnection is null && string.IsNullOrWhiteSpace(connection[nameof(RedisConnectionOptions.ConnectionString)]))
+        if (!sharePrimaryConnector && configureConnection is null && string.IsNullOrWhiteSpace(connection[nameof(RedisConnectionOptions.ConnectionString)]))
         {
             throw new InvalidOperationException(
                 $"AddNamedCaching('{name}') found no ConnectionString under '{connection.Path}'. A named caching stack needs its own " +
@@ -52,7 +75,7 @@ public static class NamedCachingCollectionExtensions
         }
 
         services.AddKeyedSingleton(name, (root, key) =>
-            NamedCachingContainer.Build((string)key!, root, section, configure, configureConnection, configureServices));
+            NamedCachingContainer.Build((string)key!, root, section, configure, configureConnection, configureServices, sharePrimaryConnector));
         services.AddSingleton<IHostedService>(sp => new NamedCachingHostedService(name, sp));
         services.AddKeyedTransient(typeof(ICache<>), name, typeof(NamedCache<>));
         services.AddKeyedTransient(typeof(IHashCache<>), name, typeof(NamedHashCache<>));

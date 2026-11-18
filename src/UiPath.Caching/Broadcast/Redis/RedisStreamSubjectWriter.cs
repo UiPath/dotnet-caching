@@ -146,6 +146,9 @@ internal sealed partial class RedisStreamSubjectWriter<T> : IDisposable
 
     internal Task FetchTask { get; }
 
+    /// <summary>The consumer group existed at the last read, the connection is up and the reader is running.</summary>
+    internal bool IsReading => _groupExists && _connectionState.IsConnected && !FetchTask.IsCompleted && !_disposed;
+
     private bool ContinueLoop => !(_disposed || _cancelationToken.IsCancellationRequested);
 
     // The connection came back since the read in flight went out: its failure was the outage's, not a new streak's.

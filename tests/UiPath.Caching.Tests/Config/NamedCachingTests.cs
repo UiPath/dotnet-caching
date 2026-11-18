@@ -293,6 +293,69 @@ public class NamedCachingTests
     }
 
     [Fact]
+    public void A_stack_on_the_primary_connection_reuses_the_applications_connector_and_opens_none_of_its_own()
+    {
+        using var root = Build(
+            register: (services, configuration) =>
+            {
+                services.AddCaching(configuration, RootChain);
+                services.AddNamedCachingOnPrimaryConnection(Name, configuration, NamedChain);
+            },
+            ($"Caching:Connections:{Name}:ConnectionString", null));
+
+        var child = Child(root);
+
+        child.GetRequiredService<IRedisConnector>().Should().BeSameAs(root.GetRequiredService<IRedisConnector>());
+        child.GetService<IConnectionMultiplexerFactory>().Should().BeNull();
+        root.GetRequiredKeyedService<ICacheFactory>(Name).Should().NotBeSameAs(root.GetRequiredService<ICacheFactory>());
+    }
+
+    [Fact]
+    public void Disposing_a_stack_on_the_primary_connection_leaves_the_applications_connector_alive()
+    {
+        var connector = Substitute.For<IRedisConnector>();
+        using var root = Build(register: (services, configuration) =>
+        {
+            services.AddSingleton(connector);
+            services.AddCaching(configuration, b => b.AddRedis().AddMemory());
+            services.AddNamedCachingOnPrimaryConnection(Name, configuration, b => b.AddRedis().AddMemory());
+        });
+        Child(root).GetRequiredService<IRedisConnector>().Should().BeSameAs(connector);
+
+        NamedCachingContainer.Of(root, Name).Dispose();
+
+        connector.DidNotReceive().Dispose();
+    }
+
+    [Fact]
+    public void A_stack_on_the_primary_connection_is_refused_when_the_application_has_none()
+    {
+        using var root = Build(register: (services, configuration) =>
+        {
+            services.AddCaching(configuration, b => b.AddMemory());
+            services.AddNamedCachingOnPrimaryConnection(Name, configuration, b => b.AddMemory());
+        });
+
+        var act = () => root.GetRequiredKeyedService<ICacheFactory>(Name);
+
+        act.Should().Throw<InvalidOperationException>().WithMessage("*application's container has none*");
+    }
+
+    [Fact]
+    public void A_chain_on_the_primary_connection_that_adds_its_own_connection_is_refused()
+    {
+        using var root = Build(register: (services, configuration) =>
+        {
+            services.AddCaching(configuration, RootChain);
+            services.AddNamedCachingOnPrimaryConnection(Name, configuration, b => b.AddRedisConnection().AddRedis());
+        });
+
+        var act = () => root.GetRequiredKeyedService<ICacheFactory>(Name);
+
+        act.Should().Throw<InvalidOperationException>().WithMessage("*uses the application's connector*");
+    }
+
+    [Fact]
     public void A_chain_that_adds_its_own_connection_is_refused()
     {
         using var root = Build(register: (services, configuration) =>

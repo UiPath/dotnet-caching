@@ -72,6 +72,24 @@ public sealed partial class CacheEventPublisher
     public ValueTask<bool> CacheRemovedAsync(ICacheEntryOptions options, Type? entryType) =>
         RaiseEventAsync(options, KnownEventTypes.CacheRemoved, entryType);
 
+    public ValueTask<bool> TopicInvalidatedAsync(TopicKey topicKey)
+    {
+        try
+        {
+            if (_topicProvider is NullTopicProvider)
+            {
+                return new ValueTask<bool>(true);
+            }
+
+            var ev = _cacheEventFactory.Create(_cacheName, KnownEventTypes.TopicInvalidated, new CacheEventData(KnownFieldNames.AllKeys));
+            return _topicProvider.Create(topicKey).PublishAsync(ev, CancellationToken.None);
+        }
+        catch (Exception ex)
+        {
+            return ValueTask.FromException<bool>(ex);
+        }
+    }
+
     /// <summary>For the caches' own option structs, which come in as they are rather than boxed into the interface.</summary>
     internal ValueTask<bool> MetadataUpdatedAsync<TOptions>(TOptions options, Type? entryType)
         where TOptions : struct, ICacheEntryOptions
@@ -122,24 +140,6 @@ public sealed partial class CacheEventPublisher
     internal ValueTask<bool> CacheRemovedAsync<TOptions>(TOptions options, Type? entryType)
         where TOptions : struct, ICacheEntryOptions =>
         RaiseEventAsync(options, KnownEventTypes.CacheRemoved, entryType);
-
-    internal ValueTask<bool> TopicInvalidatedAsync(TopicKey topicKey)
-    {
-        try
-        {
-            if (_topicProvider is NullTopicProvider)
-            {
-                return new ValueTask<bool>(true);
-            }
-
-            var ev = _cacheEventFactory.Create(_cacheName, KnownEventTypes.TopicInvalidated, new CacheEventData(KnownFieldNames.AllKeys));
-            return _topicProvider.Create(topicKey).PublishAsync(ev, CancellationToken.None);
-        }
-        catch (Exception ex)
-        {
-            return ValueTask.FromException<bool>(ex);
-        }
-    }
 
     private ValueTask<bool> RaiseEventAsync<TOptions>(TOptions options, string eventType, Type? entryType, IDictionary<string, object?>? properties = null)
         where TOptions : ICacheEntryOptions
