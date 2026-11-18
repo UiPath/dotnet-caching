@@ -98,6 +98,23 @@ public class CacheKeyCasingTest
     }
 
     [Fact]
+    public void WithName_on_a_verbatim_key_rejects_whitespace_where_other_modes_give_the_empty_key()
+    {
+        FluentActions.Invoking(() => CacheKey.Verbatim("A").WithName("  ")).Should().Throw<ArgumentException>();
+        new CacheKey("A", CacheKeyCasing.Sensitive).WithName("  ").IsNull.Should().BeTrue();
+        new CacheKey("A", CacheKeyCasing.Insensitive).WithName("  ").IsNull.Should().BeTrue();
+    }
+
+    [Fact]
+    public void DefaultCacheKeyStrategy_leaves_a_verbatim_key_as_it_is()
+    {
+        var key = new DefaultCacheKeyStrategy().GetCacheKey<string>(CacheKey.Verbatim(" Ab "));
+
+        key.Name.Should().Be(" Ab ");
+        key.Casing.Should().Be(CacheKeyCasing.Verbatim);
+    }
+
+    [Fact]
     public void Verbatim_reaches_the_redis_key_unchanged()
     {
         var redisKey = new UiPath.Caching.Redis.PrefixRedisKeyStrategy("App", ':').GetRedisKey(CacheKey.Verbatim(" Abc:DEF "));

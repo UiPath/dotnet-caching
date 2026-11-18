@@ -153,21 +153,70 @@ public class RedisCacheSerializerTests(ITestContextAccessor testContextAccessor)
     [Fact]
     public async Task With_RemoveUnreadable_off_an_unknown_format_is_a_counted_miss_and_the_key_stays()
     {
-        var sut = Create(out _, removeUnreadable: false);
+        var sut = Create(out _, removeUnreadable: false, keyReadTelemetry: true);
         byte[] stored = [0x1E, (byte)'a'];
         _database.StringGetAsync(Arg.Any<RedisKey>(), Arg.Any<CommandFlags>()).Returns((RedisValue)stored);
         _database.StringGetAsync(Arg.Any<RedisKey[]>(), Arg.Any<CommandFlags>()).Returns([(RedisValue)stored, (RedisValue)new SystemJsonByteSerializerProxy().Serialize("ok")!]);
         _database.KeyTimeToLiveAsync(Arg.Any<RedisKey>(), Arg.Any<CommandFlags>()).Returns(TimeSpan.FromMinutes(1));
 
-        (await sut.GetAsync<string>("k", policy: null, Token)).Should().BeNull();
-        (await sut.GetCacheEntryAsync<string>("k", policy: null, Token)).Found.Should().BeFalse();
-        var entries = await sut.GetCacheEntriesAsync<string>(["a", "b"], policy: null, Token);
+        var single = await MetricNamesOf(async () => (await sut.GetAsync<string>("k", policy: null, Token)).Should().BeNull());
+        var entry = await MetricNamesOf(async () => (await sut.GetCacheEntryAsync<string>("k", policy: null, Token)).Found.Should().BeFalse());
+        var batch = await MetricNamesOf(async () => (await sut.GetCacheEntriesAsync<string>(["a", "b"], policy: null, Token)).Select(e => e.Value.Found).Should().Equal(false, true));
 
-        entries.Select(e => e.Value.Found).Should().Equal(false, true);
+        single.Should().Contain(n => n.StartsWith("Caching.Stats.Misses.Redis.GetAsync", StringComparison.Ordinal)).And.NotContain(n => n.StartsWith("Caching.Stats.Hits", StringComparison.Ordinal));
+        entry.Should().Contain(n => n.StartsWith("Caching.Stats.Misses.Redis.GetCacheEntry", StringComparison.Ordinal)).And.NotContain(n => n.StartsWith("Caching.Stats.Hits", StringComparison.Ordinal));
+        batch.Should().Contain(n => n.StartsWith("Caching.Stats.Hits.Redis.GetCacheEntries", StringComparison.Ordinal));
+        var reads = _telemetry.Dependencies.Where(d => d.Name.StartsWith("GetCacheEntriesInternalAsync", StringComparison.Ordinal)).ToDictionary(d => d.Data, d => d.ResultCode);
+        reads.Should().Contain("test:str:a", "Miss").And.Contain("test:str:b", "Hit");
+        _telemetry.Metrics.Should().NotContain(m => m.Name.Contains("RemoveAsync", StringComparison.Ordinal));
         _ = _database.DidNotReceive().CreateTransaction(Arg.Any<object?>());
-        _ = _transaction.DidNotReceive().KeyDeleteAsync(Arg.Any<RedisKey>(), Arg.Any<CommandFlags>());
-        _ = _database.DidNotReceive().KeyDeleteAsync(Arg.Any<RedisKey>(), Arg.Any<CommandFlags>());
-        _telemetry.Metrics.Count(m => m.Name == UnreadableMetric).Should().Be(3);
+        AssertNothingDeleted();
+        var unreadable = _telemetry.Metrics.Where(m => m.Name == UnreadableMetric).ToList();
+        unreadable.Should().HaveCount(3);
+        unreadable.Should().OnlyContain(m => m.Properties!["format"] == "0x1E");
+    }
+
+    [Fact]
+    public async Task With_RemoveUnreadable_off_and_no_registered_serializer_the_default_proxy_still_counts_an_unknown_format()
+    {
+        var sut = Create(ValueSerializerRegistry.Empty, removeUnreadable: false);
+        _database.StringGetAsync(Arg.Any<RedisKey>(), Arg.Any<CommandFlags>()).Returns((RedisValue)new byte[] { 0x1E, (byte)'a' });
+
+        (await sut.GetAsync<string>("k", policy: null, Token)).Should().BeNull();
+
+        _telemetry.Metrics.Should().ContainSingle(m => m.Name == UnreadableMetric);
+        AssertNothingDeleted();
+    }
+
+    [Fact]
+    public async Task With_RemoveUnreadable_on_and_no_registered_serializer_nothing_is_classified_or_removed()
+    {
+        var sut = Create(ValueSerializerRegistry.Empty);
+        _database.StringGetAsync(Arg.Any<RedisKey>(), Arg.Any<CommandFlags>()).Returns((RedisValue)new byte[] { 0x1E, (byte)'a' });
+
+        (await sut.GetAsync<string>("k", policy: null, Token)).Should().BeNull();
+
+        _telemetry.Metrics.Should().NotContain(m => m.Name == UnreadableMetric);
+        AssertNothingDeleted();
+    }
+
+    [Fact]
+    public async Task With_RemoveUnreadable_off_a_get_or_add_runs_the_generator_and_the_write_replaces_the_key()
+    {
+        var sut = Create(out _, removeUnreadable: false);
+        _database.StringGetAsync(Arg.Any<RedisKey>(), Arg.Any<CommandFlags>()).Returns((RedisValue)new byte[] { 0x1E, 1, 2 });
+        var written = new List<byte[]>();
+        _database.StringSetAsync(Arg.Any<RedisKey>(), Arg.Do<RedisValue>(v => written.Add(((byte[]?)v)!)), Arg.Any<TimeSpan?>(), Arg.Any<When>(), Arg.Any<CommandFlags>()).Returns(true);
+        _transaction.StringSetAsync(Arg.Any<RedisKey>(), Arg.Do<RedisValue>(v => written.Add(((byte[]?)v)!)), Arg.Any<TimeSpan?>(), Arg.Any<When>(), Arg.Any<CommandFlags>()).Returns(true);
+        var generated = 0;
+
+        var value = await sut.GetOrAddAsync<string>("k", _ => Task.FromResult<string?>("fresh" + ++generated), TimeSpan.FromMinutes(1), policy: null, Token);
+
+        value.Should().Be("fresh1");
+        generated.Should().Be(1);
+        written.Should().NotBeEmpty();
+        AssertNothingDeleted();
+        _telemetry.Metrics.Should().ContainSingle(m => m.Name == UnreadableMetric);
     }
 
     [Fact]
@@ -671,6 +720,13 @@ public class RedisCacheSerializerTests(ITestContextAccessor testContextAccessor)
         _ = _transaction.DidNotReceive().KeyDeleteAsync(Arg.Any<RedisKey>(), Arg.Any<CommandFlags>());
     }
 
+    private async Task<string[]> MetricNamesOf(Func<Task> operation)
+    {
+        var before = _telemetry.Metrics.Count;
+        await operation();
+        return [.. _telemetry.Metrics.Skip(before).Select(m => m.Name).Distinct()];
+    }
+
     private ValueSerializerRegistry FastRegistry() => new([RegistryEntry.Of("fast", _fast)]);
 
     private async Task<string[]> MethodsOf(Func<Task> operation)
@@ -686,13 +742,13 @@ public class RedisCacheSerializerTests(ITestContextAccessor testContextAccessor)
         ];
     }
 
-    private RedisCache Create(out ValueSerializerRegistry registry, bool cacheNullValues = false, bool removeUnreadable = true)
+    private RedisCache Create(out ValueSerializerRegistry registry, bool cacheNullValues = false, bool removeUnreadable = true, bool keyReadTelemetry = false)
     {
         registry = FastRegistry();
-        return Create(registry, cacheNullValues: cacheNullValues, removeUnreadable: removeUnreadable);
+        return Create(registry, cacheNullValues: cacheNullValues, removeUnreadable: removeUnreadable, keyReadTelemetry: keyReadTelemetry);
     }
 
-    private RedisCache Create(ValueSerializerRegistry registry, ISerializerProxy<byte[]>? proxy = null, CachePolicy? defaultPolicy = null, bool cacheNullValues = false, bool removeUnreadable = true)
+    private RedisCache Create(ValueSerializerRegistry registry, ISerializerProxy<byte[]>? proxy = null, CachePolicy? defaultPolicy = null, bool cacheNullValues = false, bool removeUnreadable = true, bool keyReadTelemetry = false)
     {
         var connector = Substitute.For<IRedisConnector>();
         connector.Database.Returns(_database);
@@ -708,7 +764,7 @@ public class RedisCacheSerializerTests(ITestContextAccessor testContextAccessor)
         strategy.GetRedisKey(Arg.Any<CacheKey>()).Returns(call => (RedisKey)$"test:str:{call.Arg<CacheKey>()}");
         var strategies = Substitute.For<IRedisKeyStrategyFactory>();
         strategies.Create(Arg.Any<CacheOptions>(), Arg.Any<Type>()).Returns(strategy);
-        var options = new RedisCacheOptions { RedisKeyStrategyFactory = strategies, ReadScriptsEnabled = false, CacheNullValues = cacheNullValues, RemoveUnreadable = removeUnreadable };
+        var options = new RedisCacheOptions { RedisKeyStrategyFactory = strategies, ReadScriptsEnabled = false, CacheNullValues = cacheNullValues, RemoveUnreadable = removeUnreadable, KeyReadTelemetryEnabled = keyReadTelemetry };
         var cacheOptions = new CacheOptions { AppShortName = "test", ConnectionMonitorEnabled = true };
 
         return new RedisCache(

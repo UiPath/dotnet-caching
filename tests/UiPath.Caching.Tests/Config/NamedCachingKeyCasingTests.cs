@@ -34,6 +34,18 @@ public class NamedCachingKeyCasingTests
     }
 
     [Fact]
+    public void Verbatim_declared_in_configuration_is_refused_for_a_named_stack()
+    {
+        var casing = CacheKey.DefaultCasing;
+        using var root = Build(configureChild: null, ("CachingCold:KeyCasing", nameof(CacheKeyCasing.Verbatim)));
+
+        var act = () => root.GetRequiredKeyedService<ICacheFactory>("cold");
+
+        act.Should().Throw<InvalidOperationException>().WithMessage("*Verbatim*");
+        CacheKey.DefaultCasing.Should().Be(casing);
+    }
+
+    [Fact]
     public void A_matching_key_casing_is_accepted()
     {
         var casing = CacheKey.DefaultCasing;

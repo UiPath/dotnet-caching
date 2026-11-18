@@ -6,7 +6,7 @@ namespace UiPath.Caching.Broadcast;
 internal sealed partial class KeyedSubject<T> : IEventSubject<T> where T : IEvent
 {
     // Per key, its observers as an array replaced whole on every change under the keyed lock: readers take the array as it is. One token per entry is the norm, and a dictionary per key weighed more than the entry.
-    private readonly ConcurrentDictionary<string, IObserver<T>[]> _keyedObservers = new(StringComparer.OrdinalIgnoreCase);
+    private readonly ConcurrentDictionary<string, IObserver<T>[]> _keyedObservers = new(StringComparer.Ordinal);
     private readonly ConcurrentDictionary<IObserver<T>, byte> _broadcastObservers = new();
     private readonly Lock _keyedLock = new();
 

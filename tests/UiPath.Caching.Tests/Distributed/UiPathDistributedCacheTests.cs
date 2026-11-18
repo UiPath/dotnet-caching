@@ -162,6 +162,19 @@ public class UiPathDistributedCacheTests
     }
 
     [Fact]
+    public async Task Key_strategy_returning_a_verbatim_key_is_accepted_and_the_name_kept()
+    {
+        StoredEntry(Entry());
+        var verbatim = Build(keyStrategy: new VerbatimKeyStrategy());
+        await verbatim.GetAsync("AbC", TestContext.Current.CancellationToken);
+        await _inner.Received(1).GetAsync<ReadOnlyMemory<byte>>(
+            Arg.Is<CacheKey>(k => k.Name == " AbC " && k.Casing == CacheKeyCasing.Verbatim),
+            Arg.Any<string[]>(),
+            Arg.Any<CachePolicy?>(),
+            Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
     public async Task Key_strategy_returning_an_empty_key_fails_loudly()
     {
         var broken = Build(keyStrategy: new EmptyKeyStrategy());
@@ -703,7 +716,18 @@ public class UiPathDistributedCacheTests
         }
     }
 
-    private sealed class AmbientCasingKeyStrategy : ICacheKeyStrategy, ISpanCacheKeyStrategy
+    private sealed class VerbatimKeyStrategy : ICacheKeyStrategy, ISpanCacheKeyStrategy
+    {
+        public CacheKey GetCacheKey<T>(CacheKey key) => CacheKey.Verbatim($" {key.Name} ");
+
+        public bool TryGetCacheKey<T>(ReadOnlySpan<char> key, Span<char> destination, out int written)
+        {
+            written = 0;
+            return false;
+        }
+    }
+
+    private sealed class AmbientCasingKeyStrategy: ICacheKeyStrategy, ISpanCacheKeyStrategy
     {
         public CacheKey GetCacheKey<T>(CacheKey key) => new(key.Name, CacheKeyCasing.Insensitive);
 

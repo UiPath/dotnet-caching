@@ -14,15 +14,16 @@ internal sealed class ValueFormatResolver
     private ReadableFormats? _defaultReadable;
     private ReadableFormats? _defaultMigrating;
 
-    public ValueFormatResolver(ISerializerProxy<byte[]> proxy, ValueSerializerRegistry registry, CachePolicy defaultPolicy, IEffectiveFormat? effective = null)
+    public ValueFormatResolver(ISerializerProxy<byte[]> proxy, ValueSerializerRegistry registry, CachePolicy defaultPolicy, IEffectiveFormat? effective = null, bool classifyHeadersWithNoRegistry = false)
     {
         _registry = registry;
         _defaultPolicy = defaultPolicy;
         _effective = effective;
-        Reader = registry.IsEmpty ? null : new ValueReader(proxy, registry);
+        // A header is told from JSON only when the proxy is the default one; a custom proxy keeps its own bytes.
+        Reader = !registry.IsEmpty || (classifyHeadersWithNoRegistry && proxy.GetType() == typeof(SystemJsonByteSerializerProxy)) ? new ValueReader(proxy, registry) : null;
     }
 
-    /// <summary>Null while no serializer is registered: nothing then reads by header.</summary>
+    /// <summary>Null while no serializer is registered, unless the default JSON proxy was asked to classify headers anyway.</summary>
     public ValueReader? Reader { get; }
 
     /// <summary>A write the node node list does not yet allow is JSON. A call without a policy takes the default policy's, and a policy that sets no write serializer falls back to the default's. A write that names a serializer nobody registered throws. A write that does not also read takes no read list, so a bad one fails the read, not the write.</summary>
@@ -43,12 +44,13 @@ internal sealed class ValueFormatResolver
             writer = null;
         }
 
-        if (Reader is not { } reader || !reader.SniffsFor(effective))
+        // A reader over an empty registry exists only when the default JSON proxy was asked to classify headers, so it always sniffs.
+        if (Reader is not { } reader || (!_registry.IsEmpty && !reader.SniffsFor(effective)))
         {
             return new(writer, null);
         }
 
-        return new(writer, forWrite && !alsoReads ? ReadableFormats.Any : ReadableFor(policy, effective));
+        return new(writer, (forWrite && !alsoReads) || _registry.IsEmpty ? ReadableFormats.Any : ReadableFor(policy, effective));
     }
 
     // A policy that sets no read list takes the default policy's, as it takes its write. The default's own set is built once, so a call with no

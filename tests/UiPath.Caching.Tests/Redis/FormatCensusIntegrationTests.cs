@@ -45,6 +45,25 @@ public class FormatCensusIntegrationTests(RedisContainerFixture fixture)
     }
 
     [Fact]
+    public async Task A_verbatim_pattern_counts_mixed_case_and_padded_keys_that_a_normalized_one_cannot()
+    {
+        Assert.SkipUnless(fixture.Enabled, "Set RUN_REDIS_INTEGRATION_TESTS=1 (Docker required) to run.");
+        await using var mux = await ConnectionMultiplexer.ConnectAsync(fixture.ConnectionString);
+        var db = mux.GetDatabase();
+        var run = Run();
+        await db.StringSetAsync($"census:s: Mix{run}:A", Json, TimeSpan.FromMinutes(5));
+        await db.StringSetAsync($"census:s: Mix{run}:B", Fast, TimeSpan.FromMinutes(5));
+        using var connector = new Connector(mux);
+        var sut = Provider(connector);
+
+        var verbatim = await sut.CountFormatsByKeyAsync(CacheKey.Verbatim($" Mix{run}:*"), Ct);
+        var normalized = await sut.CountFormatsAsync($" Mix{run}:*", Ct);
+
+        verbatim.Should().BeEquivalentTo(new Dictionary<string, long> { ["json"] = 1, ["fast"] = 1 });
+        normalized.Should().BeEmpty();
+    }
+
+    [Fact]
     public async Task A_registered_id_counts_under_its_serializers_name_and_an_extended_id_is_read_in_full()
     {
         Assert.SkipUnless(fixture.Enabled, "Set RUN_REDIS_INTEGRATION_TESTS=1 (Docker required) to run.");

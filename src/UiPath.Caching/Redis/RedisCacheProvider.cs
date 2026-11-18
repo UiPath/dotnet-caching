@@ -95,6 +95,13 @@ public sealed class RedisCacheProvider : ICacheProvider
     /// <summary>Counts the strings and hashes whose key matches <paramref name="keyPattern"/>, a SCAN glob over the names the caches are called with, by the format they are stored in: <c>json</c>, a registered serializer's name, or <see cref="CacheValueFormats.UnknownName"/>; a hash is counted under each format one of its fields is in.</summary>
     public Task<IReadOnlyDictionary<string, long>> CountFormatsAsync(string keyPattern, CancellationToken token = default)
     {
+        ArgumentException.ThrowIfNullOrWhiteSpace(keyPattern);
+        return CountFormatsByKeyAsync(new CacheKey(keyPattern, _cacheOptions.KeyCasing), token);
+    }
+
+    /// <summary>As <see cref="CountFormatsAsync(string, CancellationToken)"/>, for a pattern taken exactly as <see cref="CacheKey"/> holds it, such as a <see cref="CacheKey.Verbatim(string)"/> one.</summary>
+    public Task<IReadOnlyDictionary<string, long>> CountFormatsByKeyAsync(CacheKey keyPattern, CancellationToken token = default)
+    {
         var factory = _redisCacheOptions.RedisKeyStrategyFactory ?? new DefaultRedisKeyStrategyFactory();
         return new FormatCensus(
             _redis,
