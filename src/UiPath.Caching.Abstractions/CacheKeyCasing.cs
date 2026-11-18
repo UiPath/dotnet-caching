@@ -8,4 +8,7 @@ public enum CacheKeyCasing
 
     /// <summary>Trim only; the caller's casing is preserved.</summary>
     Sensitive = 1,
+
+    /// <summary>The name exactly as given, set per key by <see cref="CacheKey.Verbatim(string)"/>; not valid for <see cref="CacheOptions.KeyCasing"/>.</summary>
+    Verbatim = 2,
 }

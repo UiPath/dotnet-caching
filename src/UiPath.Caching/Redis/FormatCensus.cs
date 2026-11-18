@@ -28,17 +28,27 @@ internal sealed class FormatCensus(
 
     private static readonly UTF8Encoding StrictUtf8 = new(encoderShouldEmitUTF8Identifier: false, throwOnInvalidBytes: true);
 
-    public async Task<IReadOnlyDictionary<string, long>> CountAsync(string keyPattern, CancellationToken token)
+    public Task<IReadOnlyDictionary<string, long>> CountAsync(string keyPattern, CancellationToken token)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(keyPattern);
+        return CountAsync(new CacheKey(keyPattern, casing), token);
+    }
+
+    public async Task<IReadOnlyDictionary<string, long>> CountAsync(CacheKey keyPattern, CancellationToken token)
+    {
+        if (keyPattern.IsNull)
+        {
+            throw new ArgumentException("The key pattern must contain text.", nameof(keyPattern));
+        }
+
         token.ThrowIfCancellationRequested();
         await redis.ConnectAsync(token).ConfigureAwait(false);
         var database = redis.Database;
         var prefix = await PrefixPatternAsync(database).WaitAsync(token).ConfigureAwait(false);
         // The keys a cache writes are its strategy's: another segment for a string than for a hash, and cased as the cache cases them.
-        var name = new CacheKey(keyPattern, casing).Name;
-        var stringPattern = prefix + Literally(strings.GetRedisKey(new CacheKey(keyPattern, casing)).ToString(), name);
-        var hashPattern = prefix + Literally(hashes.GetRedisKey(new CacheKey(keyPattern, casing)).ToString(), name);
+        var name = keyPattern.Name;
+        var stringPattern = prefix + Literally(strings.GetRedisKey(keyPattern).ToString(), name);
+        var hashPattern = prefix + Literally(hashes.GetRedisKey(keyPattern).ToString(), name);
         var multiplexer = database.Multiplexer;
         var reader = multiplexer.GetDatabase(database.Database);
         var primaries = redis.GetPrimaries().ToList();

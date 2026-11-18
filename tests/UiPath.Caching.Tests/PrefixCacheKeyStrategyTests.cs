@@ -51,6 +51,15 @@ public class PrefixCacheKeyStrategyTests
     }
 
     [Fact]
+    public void Verbatim_keys_keep_their_name_and_mode_through_prefixing()
+    {
+        var result = new PrefixCacheKeyStrategy("MyApp").GetCacheKey<string>(CacheKey.Verbatim(" AbC "));
+
+        result.Name.Should().Be("myapp: AbC ");
+        result.Casing.Should().Be(CacheKeyCasing.Verbatim);
+    }
+
+    [Fact]
     public void Insensitive_keys_behave_exactly_as_before()
     {
         var strategy = new PrefixCacheKeyStrategy("MyApp");

@@ -119,6 +119,27 @@ public class ChangeTokenTests : IAsyncLifetime
     }
 
 
+    [Theory]
+    [InlineData("Key", "key", false)]
+    [InlineData("key", "Key", false)]
+    [InlineData("Key", "Key", true)]
+    public void OnNext_matches_the_key_by_ordinal_comparison(string tokenKey, string eventKey, bool hasChanged)
+    {
+        _key = tokenKey;
+        var callbackCalled = false;
+        _ = Sut.RegisterChangeCallback(_ => callbackCalled = true, null);
+
+        Sut.OnNext(new TestCacheEvent
+        {
+            Id = Guid.NewGuid().ToString(),
+            Source = new Uri("urn:machine"),
+            Data = new CacheEventData(eventKey),
+        });
+
+        Sut.HasChanged.Should().Be(hasChanged);
+        callbackCalled.Should().Be(hasChanged);
+    }
+
     [Fact]
     public void OnComplete()
     {

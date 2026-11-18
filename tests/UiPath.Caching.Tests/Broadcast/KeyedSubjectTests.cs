@@ -30,15 +30,17 @@ public class KeyedSubjectTests
     }
 
     [Fact]
-    public void OnNext_keyed_lookup_is_case_insensitive()
+    public void OnNext_keyed_lookup_is_ordinal_so_keys_differing_in_case_stay_apart()
     {
         var observer = new TestKeyedObserver("MyKey");
+        var other = new TestKeyedObserver("mykey");
         _sut.Subscribe(observer);
+        _sut.Subscribe(other);
 
-        var cacheEvent = CreateEvent("MYKEY");
-        _sut.OnNext(cacheEvent);
+        _sut.OnNext(CreateEvent("MyKey"));
 
         observer.Events.Should().ContainSingle();
+        other.Events.Should().BeEmpty();
     }
 
     [Fact]

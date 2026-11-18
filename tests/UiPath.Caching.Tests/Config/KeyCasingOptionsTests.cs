@@ -52,6 +52,30 @@ public class KeyCasingOptionsTests
         act.Should().Throw<InvalidOperationException>().WithMessage("*KeyCasing*unsupported value 2*");
     }
 
+    [Fact]
+    public void Verbatim_is_refused_as_the_application_key_casing()
+    {
+        var services = new ServiceCollection();
+
+        var act = () => services.AddCaching(_ => { }, o => o.KeyCasing = CacheKeyCasing.Verbatim);
+
+        act.Should().Throw<InvalidOperationException>().WithMessage("*KeyCasing*unsupported value 2*");
+    }
+
+    [Fact]
+    public void Verbatim_configured_after_AddCaching_is_refused_by_the_seeder()
+    {
+        var services = new ServiceCollection();
+        services.AddCaching(_ => { });
+        services.Configure<CacheOptions>(o => o.KeyCasing = CacheKeyCasing.Verbatim);
+        using var provider = services.BuildServiceProvider();
+
+        var act = () => provider.GetRequiredService<IOptions<CacheOptions>>().Value;
+
+        act.Should().Throw<OptionsValidationException>().WithMessage("*KeyCasing*unsupported value 2*");
+        CacheKey.DefaultCasing.Should().Be(CacheKeyCasing.Insensitive);
+    }
+
     /// <summary>
     /// Options registered after AddCaching bypass the eager seed and reach only the PostConfigure callback, so
     /// that callback validates too — otherwise resolving options succeeds and the next key built throws.

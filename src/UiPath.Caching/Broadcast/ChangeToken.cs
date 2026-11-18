@@ -295,7 +295,7 @@ public sealed partial class ChangeToken<T> : ICacheChangeToken, IKeyedObserver<I
     {
         var data = cacheEvent.Data;
 
-        if (!string.Equals(data?.Key, _key, StringComparison.OrdinalIgnoreCase))
+        if (!string.Equals(data?.Key, _key, StringComparison.Ordinal))
         {
             // No key to name when the event carried no data; saying so beats logging an empty one.
             if (data?.Key is { } ignoredKey)

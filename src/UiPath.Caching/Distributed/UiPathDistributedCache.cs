@@ -284,7 +284,7 @@ internal sealed partial class UiPathDistributedCache : IDistributedCache
                 $"The cache key strategy configured on {nameof(UiPathDistributedCacheOptions)}.{nameof(UiPathDistributedCacheOptions.CacheKeyStrategy)} returned an empty key.");
         }
 
-        if (composed.Casing != CacheKeyCasing.Sensitive)
+        if (composed.Casing is not (CacheKeyCasing.Sensitive or CacheKeyCasing.Verbatim))
         {
             throw new InvalidOperationException(
                 $"The cache key strategy configured on {nameof(UiPathDistributedCacheOptions)}.{nameof(UiPathDistributedCacheOptions.CacheKeyStrategy)} returned a {composed.Casing} key, which lowercases the caller's key. {nameof(IDistributedCache)} keys are case-significant; build the result with {nameof(CacheKey)}.{nameof(CacheKey.WithName)} so the mode carries over.");

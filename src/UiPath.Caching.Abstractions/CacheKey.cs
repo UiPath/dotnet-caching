@@ -23,9 +23,9 @@ public readonly struct CacheKey : IEquatable<CacheKey>
     }
 
     /// <summary>
-    /// Builds a key, trimming the name and lowercasing it when <paramref name="casing"/> is
-    /// <see cref="CacheKeyCasing.Insensitive"/>. An unrecognized value is rejected rather than treated as
-    /// sensitive, which would silently stop lowercasing and relocate every key built with it.
+    /// Builds a key. <see cref="CacheKeyCasing.Insensitive"/> trims and lowercases the name, <see cref="CacheKeyCasing.Sensitive"/> only trims,
+    /// <see cref="CacheKeyCasing.Verbatim"/> keeps it exactly (null or empty is the empty key, whitespace-only throws; <see cref="Verbatim(string)"/> throws for all three).
+    /// An unrecognized value is rejected rather than treated as sensitive, which would silently stop lowercasing and relocate every key built with it.
     /// </summary>
     public CacheKey(string? name, CacheKeyCasing casing)
     {
@@ -34,6 +34,7 @@ public readonly struct CacheKey : IEquatable<CacheKey>
         {
             CacheKeyCasing.Insensitive => name?.Trim().ToLowerInvariant() ?? string.Empty,
             CacheKeyCasing.Sensitive => name?.Trim() ?? string.Empty,
+            CacheKeyCasing.Verbatim => VerbatimName(name),
             _ => throw new ArgumentOutOfRangeException(nameof(casing), casing, $"Unsupported {nameof(CacheKeyCasing)} value."),
         };
     }
@@ -51,6 +52,7 @@ public readonly struct CacheKey : IEquatable<CacheKey>
         Name = casing switch
         {
             CacheKeyCasing.Insensitive or CacheKeyCasing.Sensitive => Normalize(name, casing),
+            CacheKeyCasing.Verbatim => VerbatimName(name.IsEmpty ? null : name.ToString()),
             _ => throw new ArgumentOutOfRangeException(nameof(casing), casing, $"Unsupported {nameof(CacheKeyCasing)} value."),
         };
     }
@@ -105,6 +107,14 @@ public readonly struct CacheKey : IEquatable<CacheKey>
     public static bool operator !=(CacheKey left, CacheKey right) =>
         !(left == right);
 
+    /// <summary>A key whose name is exactly <paramref name="name"/>: not trimmed, not lowercased, whatever <see cref="DefaultCasing"/> is.</summary>
+    /// <exception cref="ArgumentException"><paramref name="name"/> is null, empty or only whitespace.</exception>
+    public static CacheKey Verbatim(string name)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(name);
+        return new CacheKey(name, CacheKeyCasing.Verbatim);
+    }
+
     /// <summary>New key from <paramref name="name"/>, preserving this key's casing mode.</summary>
     public CacheKey WithName(string? name) => new(name, Casing);
 
@@ -120,10 +130,14 @@ public readonly struct CacheKey : IEquatable<CacheKey>
     public override int GetHashCode() =>
         HashCode.Combine(Name, IsNull);
 
-    /// <summary>Trims <paramref name="name"/>, lowercasing it for <see cref="CacheKeyCasing.Insensitive"/>, into <paramref name="destination"/>; false when it does not fit.</summary>
+    /// <summary>Trims <paramref name="name"/> (not for <see cref="CacheKeyCasing.Verbatim"/>), lowercasing it for <see cref="CacheKeyCasing.Insensitive"/>, into <paramref name="destination"/>; false when it does not fit.</summary>
     internal static bool TryNormalize(ReadOnlySpan<char> name, Span<char> destination, CacheKeyCasing casing, out int written)
     {
-        name = name.Trim();
+        if (casing != CacheKeyCasing.Verbatim)
+        {
+            name = name.Trim();
+        }
+
         if (name.Length > destination.Length)
         {
             written = 0;
@@ -131,7 +145,7 @@ public readonly struct CacheKey : IEquatable<CacheKey>
         }
 
         // Lowercasing always copies and is slow under invariant globalization; ASCII with no capitals is already what it would write.
-        if (casing == CacheKeyCasing.Sensitive || IsLowerAscii(name))
+        if (casing != CacheKeyCasing.Insensitive || IsLowerAscii(name))
         {
             name.CopyTo(destination);
             written = name.Length;
@@ -142,6 +156,17 @@ public readonly struct CacheKey : IEquatable<CacheKey>
         }
 
         return true;
+    }
+
+    private static string VerbatimName(string? name)
+    {
+        if (string.IsNullOrEmpty(name))
+        {
+            return string.Empty;
+        }
+
+        ArgumentException.ThrowIfNullOrWhiteSpace(name);
+        return name;
     }
 
     private static bool IsLowerAscii(ReadOnlySpan<char> name) =>

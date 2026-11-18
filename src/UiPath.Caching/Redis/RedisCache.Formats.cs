@@ -76,11 +76,11 @@ internal sealed partial class RedisCache
         }
     }
 
-    /// <summary>A read found a format no registered serializer owns: counted, and the key dropped if it still holds the bytes that were read, so the caller regenerates it. Best effort, like any remove.</summary>
+    /// <summary>A read found a format no registered serializer owns: counted, and the key dropped when <see cref="RedisCacheOptions.RemoveUnreadable"/> is on and it still holds the bytes that were read, so the caller regenerates it. Best effort, like any remove.</summary>
     private ValueTask<bool> RemoveUnreadableAsync<T>(RedisKey redisKey, RedisValue read, int formatId, CancellationToken token)
     {
         TrackUnreadable(formatId, Name);
-        return RemoveIfUnchangedAsync<T>(redisKey, read, token);
+        return _removeUnreadable ? RemoveIfUnchangedAsync<T>(redisKey, read, token) : new ValueTask<bool>(false);
     }
 
     /// <summary>Never throws what <paramref name="format"/> handles, so a late cancellation leaves the batch's misses as they are.</summary>
@@ -90,6 +90,11 @@ internal sealed partial class RedisCache
         foreach (var (_, _, formatId) in unreadable)
         {
             TrackUnreadable(formatId, Name);
+        }
+
+        if (!_removeUnreadable)
+        {
+            return;
         }
 
         try

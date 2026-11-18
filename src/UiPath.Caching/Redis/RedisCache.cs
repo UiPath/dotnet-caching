@@ -28,6 +28,7 @@ internal sealed partial class RedisCache : RedisCacheBase, ICache, IInvalidation
     private readonly Action<LoggedKey, RedisValue>? _auditKeySize;
     private readonly int _largeValueThreshold;
     private readonly bool _cacheNullValues;
+    private readonly bool _removeUnreadable;
     private readonly ConcurrentDictionary<Type, object> _generations = new();
     private ValueSerializerRegistry _valueSerializers = ValueSerializerRegistry.Empty;
     private ValueFormatResolver _formats;
@@ -52,7 +53,8 @@ internal sealed partial class RedisCache : RedisCacheBase, ICache, IInvalidation
         _rewriteScriptRefused = RewriteScriptsRefused;
         _serializer = serializer;
         _memorySerializer = serializer as IMemorySerializerProxy;
-        _formats = new ValueFormatResolver(serializer, ValueSerializerRegistry.Empty, DefaultPolicy);
+        _removeUnreadable = redisCacheOptions.RemoveUnreadable;
+        _formats = new ValueFormatResolver(serializer, ValueSerializerRegistry.Empty, DefaultPolicy, classifyHeadersWithNoRegistry: !_removeUnreadable);
         _read = new ConnectingPipeline(redis, resiliencePipelineProvider.Get(ResiliencePipelineNames.Read));
         _write = new ConnectingPipeline(redis, resiliencePipelineProvider.Get(ResiliencePipelineNames.Write));
         _largeValueThreshold = cacheOptions.LargeValueThreshold;
@@ -74,7 +76,7 @@ internal sealed partial class RedisCache : RedisCacheBase, ICache, IInvalidation
         init
         {
             _valueSerializers = value;
-            _formats = new ValueFormatResolver(_serializer, value, DefaultPolicy, _effectiveFormat);
+            _formats = new ValueFormatResolver(_serializer, value, DefaultPolicy, _effectiveFormat, !_removeUnreadable);
         }
     }
 
@@ -84,7 +86,7 @@ internal sealed partial class RedisCache : RedisCacheBase, ICache, IInvalidation
         init
         {
             _effectiveFormat = value;
-            _formats = new ValueFormatResolver(_serializer, _valueSerializers, DefaultPolicy, value);
+            _formats = new ValueFormatResolver(_serializer, _valueSerializers, DefaultPolicy, value, !_removeUnreadable);
         }
     }
 
