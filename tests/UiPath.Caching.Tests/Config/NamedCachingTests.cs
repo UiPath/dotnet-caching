@@ -293,6 +293,160 @@ public class NamedCachingTests
     }
 
     [Fact]
+    public void A_stack_on_the_primary_connection_reuses_the_applications_connector_and_opens_none_of_its_own()
+    {
+        using var root = BuildShared(
+            (services, configuration) =>
+            {
+                services.AddCaching(configuration, RootChain);
+                services.AddNamedCachingOnPrimaryConnection(Name, configuration, NamedChain);
+            });
+
+        var child = Child(root);
+
+        child.GetRequiredService<IRedisConnector>().Should().BeSameAs(root.GetRequiredService<IRedisConnector>()).And.BeOfType<RedisConnector>();
+        child.GetService<IConnectionMultiplexerFactory>().Should().BeNull();
+        root.GetRequiredKeyedService<ICacheFactory>(Name).Should().NotBeSameAs(root.GetRequiredService<ICacheFactory>());
+    }
+
+    [Fact]
+    public void Disposing_a_stack_on_the_primary_connection_leaves_the_applications_connector_alive()
+    {
+        var connector = Substitute.For<IRedisConnector>();
+        using var root = BuildShared((services, configuration) =>
+        {
+            services.AddSingleton(connector);
+            services.AddCaching(configuration, b => b.AddRedis().AddMemory());
+            services.AddNamedCachingOnPrimaryConnection(Name, configuration, b => b.AddRedis().AddMemory());
+        });
+        Child(root).GetRequiredService<IRedisConnector>().Should().BeSameAs(connector);
+
+        NamedCachingContainer.Of(root, Name).Dispose();
+
+        connector.DidNotReceive().Dispose();
+    }
+
+    [Fact]
+    public void A_stack_on_the_primary_connection_shares_the_applications_profiler_planned_maintenance_and_disruption_state()
+    {
+        var profiler = Substitute.For<IRedisProfiler>();
+        var maintenance = Substitute.For<IRedisPlannedMaintenance>();
+        var disruption = Substitute.For<UiPath.Caching.Policies.IDisruptionState>();
+        using var root = BuildShared((services, configuration) =>
+        {
+            services.AddSingleton(profiler);
+            services.AddSingleton(maintenance);
+            services.AddSingleton(disruption);
+            services.AddCaching(configuration, RootChain);
+            services.AddNamedCachingOnPrimaryConnection(Name, configuration, NamedChain);
+        });
+
+        var child = Child(root);
+
+        child.GetRequiredService<IRedisProfiler>().Should().BeSameAs(profiler);
+        child.GetRequiredService<IRedisPlannedMaintenance>().Should().BeSameAs(maintenance);
+        child.GetRequiredService<UiPath.Caching.Policies.IDisruptionState>().Should().BeSameAs(disruption);
+    }
+
+    [Fact]
+    public void A_stack_on_the_primary_connection_runs_no_stream_maintainer_beside_the_applications()
+    {
+        using var root = BuildShared((services, configuration) =>
+        {
+            services.AddCaching(configuration, b => Broadcast(b.AddRedisConnection().AddRedis()));
+            services.AddNamedCachingOnPrimaryConnection(Name, configuration, b => Broadcast(b.AddRedis()));
+        });
+
+        root.GetServices<IHostedService>().Should().Contain(service => service is RedisStreamHealthMaintainer, "the application's chain registers one");
+        Child(root).GetServices<IHostedService>().Should().NotContain(service => service is RedisStreamHealthMaintainer);
+    }
+
+    [Fact]
+    public void A_stack_on_the_primary_connection_has_a_source_of_its_own_so_its_consumer_group_is_its_own()
+    {
+        using var root = BuildShared((services, configuration) =>
+        {
+            services.AddCaching(configuration, RootChain);
+            services.AddNamedCachingOnPrimaryConnection(Name, configuration, NamedChain);
+        });
+
+        var application = root.GetRequiredService<IOptions<CacheOptions>>().Value.SourceUri;
+        var stack = Child(root).GetRequiredService<IOptions<CacheOptions>>().Value.SourceUri;
+
+        stack.Should().NotBeNull().And.NotBe(application);
+        stack!.ToString().Should().EndWith($"?stack={Name}");
+    }
+
+    [Fact]
+    public void A_connection_section_for_a_stack_on_the_primary_connection_is_refused_as_it_would_be_ignored()
+    {
+        var act = () => Build(
+            register: (services, configuration) =>
+            {
+                services.AddCaching(configuration, RootChain);
+                services.AddNamedCachingOnPrimaryConnection(Name, configuration, NamedChain);
+            });
+
+        act.Should().Throw<InvalidOperationException>().WithMessage("*would ignore*");
+    }
+
+    [Fact]
+    public void The_applications_connector_is_not_offered_through_the_stacks_name_and_stays_the_applications_to_dispose()
+    {
+        var external = Substitute.For<IRedisConnector>();
+        var owned = Substitute.For<IRedisConnector>();
+        var rootOfExternal = BuildShared((services, configuration) =>
+        {
+            services.AddSingleton(external);
+            services.AddCaching(configuration, b => b.AddRedis().AddMemory());
+            services.AddNamedCachingOnPrimaryConnection(Name, configuration, b => b.AddRedis().AddMemory());
+        });
+        var rootOfOwned = BuildShared((services, configuration) =>
+        {
+            services.AddSingleton<IRedisConnector>(_ => owned);
+            services.AddCaching(configuration, b => b.AddRedis().AddMemory());
+            services.AddNamedCachingOnPrimaryConnection(Name, configuration, b => b.AddRedis().AddMemory());
+        });
+        rootOfExternal.GetRequiredKeyedService<ICacheFactory>(Name);
+        rootOfOwned.GetRequiredKeyedService<ICacheFactory>(Name);
+
+        rootOfExternal.GetKeyedService<IRedisConnector>(Name).Should().BeNull();
+        rootOfExternal.Dispose();
+        rootOfOwned.Dispose();
+
+        external.DidNotReceive().Dispose();
+        owned.Received(1).Dispose();
+    }
+
+    [Fact]
+    public void A_stack_on_the_primary_connection_is_refused_when_the_application_has_none()
+    {
+        using var root = BuildShared((services, configuration) =>
+        {
+            services.AddCaching(configuration, b => b.AddMemory());
+            services.AddNamedCachingOnPrimaryConnection(Name, configuration, b => b.AddMemory());
+        });
+
+        var act = () => root.GetRequiredKeyedService<ICacheFactory>(Name);
+
+        act.Should().Throw<InvalidOperationException>().WithMessage("*application's container has none*");
+    }
+
+    [Fact]
+    public void A_chain_on_the_primary_connection_that_adds_its_own_connection_is_refused()
+    {
+        using var root = BuildShared((services, configuration) =>
+        {
+            services.AddCaching(configuration, RootChain);
+            services.AddNamedCachingOnPrimaryConnection(Name, configuration, b => b.AddRedisConnection().AddRedis());
+        });
+
+        var act = () => root.GetRequiredKeyedService<ICacheFactory>(Name);
+
+        act.Should().Throw<InvalidOperationException>().WithMessage("*uses the application's connector*");
+    }
+
+    [Fact]
     public void A_chain_that_adds_its_own_connection_is_refused()
     {
         using var root = Build(register: (services, configuration) =>
@@ -553,11 +707,21 @@ public class NamedCachingTests
     private static IServiceProvider Child(IServiceProvider root, string name = Name) =>
         NamedCachingContainer.Of(root, name).Provider;
 
+    private static void Broadcast(ICachingBuilder b)
+    {
+        b.AddBroadcast();
+        b.Services.AddSingleton<IEventFormatterProxy<ICacheEvent>, CacheEventFormatter>();
+        b.Services.AddSingleton<ICacheEventFactory, CacheEventFactory>();
+    }
+
     private static void RootChain(ICachingBuilder b) =>
         b.AddRedisConnection().AddRedis().AddMemory().AddRedisDistributedLock().AddQueueRedis();
 
     private static void NamedChain(ICachingBuilder b) =>
         b.AddRedis().AddMemory().AddRedisDistributedLock().AddQueueRedis();
+
+    private static ServiceProvider BuildShared(Action<IServiceCollection, IConfiguration> register) =>
+        Build(register, ($"Caching:Connections:{Name}:ConnectionString", null));
 
     private static ServiceProvider Build(params (string Path, string? Value)[] settings) =>
         Build(register: null, settings);

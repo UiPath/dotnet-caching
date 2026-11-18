@@ -40,5 +40,7 @@ UiPath.Caching.Broadcast.CacheEventPropertyNames
 UiPath.Caching.Telemetry.ITelemetryListening
 UiPath.Caching.Telemetry.ITelemetryListening.IsListening.get -> bool
 UiPath.Caching.Telemetry.NullTelemetryProvider.IsListening.get -> bool
+UiPath.Caching.Broadcast.ITopicSubscriptionState
+UiPath.Caching.Broadcast.ITopicSubscriptionState.IsSubscribed.get -> bool
 static UiPath.Caching.CacheKey.Verbatim(string! name) -> UiPath.Caching.CacheKey
 UiPath.Caching.CacheKeyCasing.Verbatim = 2 -> UiPath.Caching.CacheKeyCasing

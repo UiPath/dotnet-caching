@@ -4,9 +4,11 @@ namespace UiPath.Caching.Broadcast;
 /// The topic a custom change token factory is handed for a cache that keeps its entries over a subscription gap: its
 /// observers hear a known loss but not a gap, which that factory has no other way to learn the cache chose.
 /// </summary>
-internal sealed class GapFilteringTopic(ITopic<ICacheEvent> inner) : ITopic<ICacheEvent>
+internal sealed class GapFilteringTopic(ITopic<ICacheEvent> inner) : ITopic<ICacheEvent>, ITopicSubscriptionState
 {
     public TopicKey TopicKey => inner.TopicKey;
+
+    public bool IsSubscribed => inner is ITopicSubscriptionState { IsSubscribed: true };
 
     public EventHandler? OnDisposed
     {

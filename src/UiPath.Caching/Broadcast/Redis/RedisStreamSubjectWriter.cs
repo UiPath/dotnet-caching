@@ -146,6 +146,11 @@ internal sealed partial class RedisStreamSubjectWriter<T> : IDisposable
 
     internal Task FetchTask { get; }
 
+    /// <summary>The group existed at the last read, the connector is connected, the reader runs and its last read succeeded; a deleted group goes unnoticed until the next read.</summary>
+    internal bool IsReading =>
+        _groupExists && _redis.IsConnected && _connectionState.IsConnected && !FetchTask.IsCompleted && !_disposed
+        && Volatile.Read(ref _consecutiveFailures) == 0 && !_checkForGap;
+
     private bool ContinueLoop => !(_disposed || _cancelationToken.IsCancellationRequested);
 
     // The connection came back since the read in flight went out: its failure was the outage's, not a new streak's.

@@ -276,6 +276,8 @@ Stream keys that contain `{`/`}` but do not form a valid non-empty hash tag (e.g
 
 ## Stream maintainer
 
+**Subscription state.** `RedisPubSubTopic<T>` and `RedisStreamsTopic<T>` implement `ITopicSubscriptionState`: `IsSubscribed` is true once the server confirmed the Pub/Sub subscription, or while a Streams topic's consumer group existed at its last read, its connector is connected, its reader runs and its last read succeeded. It is a point in time, not a loss signal (`IMissedEventsObserver` is), and a Streams topic replays what the stream retained after a reconnect. A group deleted on the server goes unnoticed until the next read, so `IsSubscribed` can stay true that long. A decorator of a topic must forward the interface.
+
 `RedisStreamHealthMaintainer` is a singleton hosted service that wakes on a `PeriodicTimer` every `MaintainerCheckInterval` (default 30 min). On each cycle it acquires a distributed lock — so only one instance in the cluster does the work — then:
 
 1. **Trims** entries older than `MaintainerTrimInterval` (default 1 h) using `XTRIM MINID` on Redis 6.2+ or falls back to timestamp-based `XDEL` on older versions. Set `MaintainerTrimInterval` to a value greater than `InMemoryRedis.LocalMaxExpiration`; trimming entries before all consumer groups have read them can cause missed invalidations on slow consumers.

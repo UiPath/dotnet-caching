@@ -23,7 +23,32 @@ public static class NamedCachingCollectionExtensions
         Action<ICachingBuilder> configure,
         string sectionName = DefaultSectionName,
         Action<RedisConnectionOptions>? configureConnection = null,
-        Action<IServiceCollection, IServiceProvider>? configureServices = null)
+        Action<IServiceCollection, IServiceProvider>? configureServices = null) =>
+        AddNamedCaching(services, name, configuration, configure, sectionName, configureConnection, configureServices, sharePrimaryConnector: false);
+
+    /// <summary>
+    /// <see cref="AddNamedCaching(IServiceCollection, string, IConfiguration, Action{ICachingBuilder}, string, Action{RedisConnectionOptions}?, Action{IServiceCollection, IServiceProvider}?)"/>
+    /// on the application's own <see cref="IRedisConnector"/>, which stays the application's: the stack opens no connection, exposes no connector, and runs no stream maintainer.
+    /// It is a node of its own, with <c>?stack={name}</c> added to the source URI, so its Streams consumer group is its own; topic keys and cache names may then repeat the application's.
+    /// </summary>
+    public static INamedCaching AddNamedCachingOnPrimaryConnection(
+        this IServiceCollection services,
+        string name,
+        IConfiguration configuration,
+        Action<ICachingBuilder> configure,
+        string sectionName = DefaultSectionName,
+        Action<IServiceCollection, IServiceProvider>? configureServices = null) =>
+        AddNamedCaching(services, name, configuration, configure, sectionName, configureConnection: null, configureServices, sharePrimaryConnector: true);
+
+    private static INamedCaching AddNamedCaching(
+        IServiceCollection services,
+        string name,
+        IConfiguration configuration,
+        Action<ICachingBuilder> configure,
+        string sectionName,
+        Action<RedisConnectionOptions>? configureConnection,
+        Action<IServiceCollection, IServiceProvider>? configureServices,
+        bool sharePrimaryConnector)
     {
         ArgumentNullException.ThrowIfNull(services);
         ArgumentException.ThrowIfNullOrWhiteSpace(name);
@@ -43,7 +68,14 @@ public static class NamedCachingCollectionExtensions
         var connection = section.GetSection(NamedCachingContainer.ConnectionSection(name));
 
         // With none of its own it would inherit the primary's and land on that server; only code can supply one instead.
-        if (configureConnection is null && string.IsNullOrWhiteSpace(connection[nameof(RedisConnectionOptions.ConnectionString)]))
+        if (sharePrimaryConnector && ConfigurationExtensions.AsEnumerable(connection, makePathsRelative: true).Any(setting => setting.Value is not null))
+        {
+            throw new InvalidOperationException(
+                $"AddNamedCachingOnPrimaryConnection('{name}') found settings under '{connection.Path}', which the stack would ignore: it uses the application's connector. " +
+                "Remove them, or use AddNamedCaching for a connection of its own.");
+        }
+
+        if (!sharePrimaryConnector && configureConnection is null && string.IsNullOrWhiteSpace(connection[nameof(RedisConnectionOptions.ConnectionString)]))
         {
             throw new InvalidOperationException(
                 $"AddNamedCaching('{name}') found no ConnectionString under '{connection.Path}'. A named caching stack needs its own " +
@@ -52,17 +84,23 @@ public static class NamedCachingCollectionExtensions
         }
 
         services.AddKeyedSingleton(name, (root, key) =>
-            NamedCachingContainer.Build((string)key!, root, section, configure, configureConnection, configureServices));
+            NamedCachingContainer.Build((string)key!, root, section, configure, configureConnection, configureServices, sharePrimaryConnector));
         services.AddSingleton<IHostedService>(sp => new NamedCachingHostedService(name, sp));
         services.AddKeyedTransient(typeof(ICache<>), name, typeof(NamedCache<>));
         services.AddKeyedTransient(typeof(IHashCache<>), name, typeof(NamedHashCache<>));
 
-        return new NamedCaching(name, services)
+        var stack = new NamedCaching(name, services)
             .Expose<ICacheFactory>()
             .Expose<ICacheKeyStrategy>()
-            .Expose<ICachePolicyFactory>()
-            .Expose<IRedisConnector>()
-            .Expose<IRedisPlannedMaintenance>()
+            .Expose<ICachePolicyFactory>();
+
+        // Exposed, the application's own connector would be disposed through the stack's name as well, which is not the stack's to offer.
+        if (!sharePrimaryConnector)
+        {
+            stack.Expose<IRedisConnector>().Expose<IRedisPlannedMaintenance>();
+        }
+
+        return stack
             .Expose<IDistributedLock>()
             .Expose<ITopicFactory>()
             .Expose(child => child.GetRequiredService<ICacheFactory>().CreateCache())

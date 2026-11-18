@@ -33,6 +33,10 @@ const UiPath.Caching.Metrics.SerializerWrite = "cache.serializer.write" -> strin
 UiPath.Caching.Redis.RedisCacheProvider.CountFormatsAsync(string! keyPattern, System.Threading.CancellationToken token = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<System.Collections.Generic.IReadOnlyDictionary<string!, long>!>!
 static UiPath.Caching.Config.EventFormatBuilderExtensions.AddEventFormat(this UiPath.Caching.Config.ICachingBuilder! builder, string! name, int formatId, System.Func<System.IServiceProvider!, UiPath.Caching.Broadcast.IEventFormatterProxy<UiPath.Caching.Broadcast.ICacheEvent!>!>! factory, bool write) -> UiPath.Caching.Config.ICachingBuilder!
 UiPath.Caching.Config.EventFormatBuilderExtensions
+UiPath.Caching.CacheEventPublisher.TopicInvalidatedAsync(UiPath.Caching.Broadcast.TopicKey topicKey) -> System.Threading.Tasks.ValueTask<bool>
+UiPath.Caching.Broadcast.Redis.RedisPubSubTopic<T>.IsSubscribed.get -> bool
+UiPath.Caching.Broadcast.Redis.RedisStreamsTopic<T>.IsSubscribed.get -> bool
+static UiPath.Caching.Config.NamedCachingCollectionExtensions.AddNamedCachingOnPrimaryConnection(this Microsoft.Extensions.DependencyInjection.IServiceCollection! services, string! name, Microsoft.Extensions.Configuration.IConfiguration! configuration, System.Action<UiPath.Caching.Config.ICachingBuilder!>! configure, string! sectionName = "Caching", System.Action<Microsoft.Extensions.DependencyInjection.IServiceCollection!, System.IServiceProvider!>? configureServices = null) -> UiPath.Caching.Config.INamedCaching!
 UiPath.Caching.Redis.RedisCacheProvider.CountFormatsByKeyAsync(UiPath.Caching.CacheKey keyPattern, System.Threading.CancellationToken token = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<System.Collections.Generic.IReadOnlyDictionary<string!, long>!>!
 UiPath.Caching.Redis.RedisCacheOptions.RemoveUnreadable.get -> bool
 UiPath.Caching.Redis.RedisCacheOptions.RemoveUnreadable.set -> void
