@@ -508,6 +508,17 @@ public class FormatCensusIntegrationTests(RedisContainerFixture fixture)
         await sut.Invoking(s => s.CountFormatsAsync(null!, Ct)).Should().ThrowAsync<ArgumentException>();
     }
 
+    [Fact]
+    public async Task A_null_key_pattern_throws_at_the_call_rather_than_in_the_task()
+    {
+        Assert.SkipUnless(fixture.Enabled, "Set RUN_REDIS_INTEGRATION_TESTS=1 (Docker required) to run.");
+        await using var mux = await ConnectionMultiplexer.ConnectAsync(fixture.ConnectionString);
+        using var connector = new Connector(mux);
+        var sut = Provider(connector);
+
+        sut.Invoking(s => { _ = s.CountFormatsByKeyAsync(default, Ct); }).Should().Throw<ArgumentException>();
+    }
+
     [Theory]
     [InlineData(new byte[0], null)]
     [InlineData(new byte[] { (byte)'"' }, "json")]

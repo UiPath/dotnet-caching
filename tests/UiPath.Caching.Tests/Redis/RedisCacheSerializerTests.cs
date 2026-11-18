@@ -15,6 +15,8 @@ public class RedisCacheSerializerTests(ITestContextAccessor testContextAccessor)
 {
     private const string UnreadableMetric = "cache.serializer.unreadable";
 
+    private static readonly byte[] Unreadable = [0x1E, 1, 2];
+
     private readonly IDatabase _database = Substitute.For<IDatabase>();
     private readonly RecordingTelemetryProvider _telemetry = new();
     private readonly RecordingResiliencePipeline _write = new();
@@ -189,6 +191,30 @@ public class RedisCacheSerializerTests(ITestContextAccessor testContextAccessor)
     }
 
     [Fact]
+    public async Task With_RemoveUnreadable_off_and_no_registered_serializer_valid_headerless_json_is_a_hit()
+    {
+        var sut = Create(ValueSerializerRegistry.Empty, removeUnreadable: false);
+        _database.StringGetAsync(Arg.Any<RedisKey>(), Arg.Any<CommandFlags>()).Returns((RedisValue)new SystemJsonByteSerializerProxy().Serialize("ok")!);
+
+        (await sut.GetAsync<string>("k", policy: null, Token)).Should().Be("ok");
+
+        _telemetry.Metrics.Should().NotContain(m => m.Name == UnreadableMetric);
+        AssertNothingDeleted();
+    }
+
+    [Fact]
+    public async Task With_RemoveUnreadable_off_and_no_registered_serializer_a_custom_proxy_is_not_header_classified()
+    {
+        var sut = Create(ValueSerializerRegistry.Empty, new ByteProxy(), removeUnreadable: false);
+        _database.StringGetAsync(Arg.Any<RedisKey>(), Arg.Any<CommandFlags>()).Returns((RedisValue)Unreadable);
+
+        (await sut.GetAsync<byte[]>("k", policy: null, Token)).Should().Equal(Unreadable);
+
+        _telemetry.Metrics.Should().NotContain(m => m.Name == UnreadableMetric);
+        AssertNothingDeleted();
+    }
+
+    [Fact]
     public async Task With_RemoveUnreadable_on_and_no_registered_serializer_nothing_is_classified_or_removed()
     {
         var sut = Create(ValueSerializerRegistry.Empty);
@@ -205,18 +231,33 @@ public class RedisCacheSerializerTests(ITestContextAccessor testContextAccessor)
     {
         var sut = Create(out _, removeUnreadable: false);
         _database.StringGetAsync(Arg.Any<RedisKey>(), Arg.Any<CommandFlags>()).Returns((RedisValue)new byte[] { 0x1E, 1, 2 });
-        var written = new List<byte[]>();
-        _database.StringSetAsync(Arg.Any<RedisKey>(), Arg.Do<RedisValue>(v => written.Add(((byte[]?)v)!)), Arg.Any<TimeSpan?>(), Arg.Any<When>(), Arg.Any<CommandFlags>()).Returns(true);
-        _transaction.StringSetAsync(Arg.Any<RedisKey>(), Arg.Do<RedisValue>(v => written.Add(((byte[]?)v)!)), Arg.Any<TimeSpan?>(), Arg.Any<When>(), Arg.Any<CommandFlags>()).Returns(true);
+        var (written, whens) = CaptureWritesWithConditions();
         var generated = 0;
 
         var value = await sut.GetOrAddAsync<string>("k", _ => Task.FromResult<string?>("fresh" + ++generated), TimeSpan.FromMinutes(1), policy: null, Token);
 
         value.Should().Be("fresh1");
         generated.Should().Be(1);
-        written.Should().NotBeEmpty();
+        written.Should().NotBeEmpty().And.OnlyContain(w => !w.SequenceEqual(Unreadable));
+        whens.Should().NotBeEmpty().And.OnlyContain(w => w == When.Always);
         AssertNothingDeleted();
         _telemetry.Metrics.Should().ContainSingle(m => m.Name == UnreadableMetric);
+    }
+
+    [Fact]
+    public async Task With_RemoveUnreadable_off_a_batch_get_or_add_runs_the_generator_and_the_write_replaces_the_key()
+    {
+        var sut = Create(out _, removeUnreadable: false);
+        _database.StringGetAsync(Arg.Any<RedisKey[]>(), Arg.Any<CommandFlags>()).Returns([(RedisValue)Unreadable]);
+        _database.StringGetAsync(Arg.Any<RedisKey>(), Arg.Any<CommandFlags>()).Returns((RedisValue)Unreadable);
+        var (written, whens) = CaptureWritesWithConditions();
+
+        var results = await sut.GetOrAddAsync<string, string>([new KeyValuePair<CacheKey, string>("a", "a")], static (states, _) => Task.FromResult(states.Select(s => new KeyValuePair<string, string?>(s, "fresh")).ToArray()), TimeSpan.FromMinutes(1), policy: null, Token);
+
+        results[0].Value.Should().Be("fresh");
+        written.Should().NotBeEmpty().And.OnlyContain(w => !w.SequenceEqual(Unreadable));
+        whens.Should().NotBeEmpty().And.OnlyContain(w => w == When.Always);
+        AssertNothingDeleted();
     }
 
     [Fact]
@@ -780,6 +821,15 @@ public class RedisCacheSerializerTests(ITestContextAccessor testContextAccessor)
         {
             ValueSerializers = registry,
         };
+    }
+
+    private (List<byte[]> Values, List<When> Conditions) CaptureWritesWithConditions()
+    {
+        List<byte[]> values = [];
+        List<When> conditions = [];
+        _database.StringSetAsync(Arg.Any<RedisKey>(), Arg.Do<RedisValue>(v => values.Add(((byte[]?)v)!)), Arg.Any<TimeSpan?>(), Arg.Do<When>(conditions.Add), Arg.Any<CommandFlags>()).Returns(true);
+        _transaction.StringSetAsync(Arg.Any<RedisKey>(), Arg.Do<RedisValue>(v => values.Add(((byte[]?)v)!)), Arg.Any<TimeSpan?>(), Arg.Do<When>(conditions.Add), Arg.Any<CommandFlags>()).Returns(true);
+        return (values, conditions);
     }
 
     private List<byte[]> CaptureWrites()

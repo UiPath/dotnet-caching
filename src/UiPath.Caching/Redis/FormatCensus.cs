@@ -34,39 +34,14 @@ internal sealed class FormatCensus(
         return CountAsync(new CacheKey(keyPattern, casing), token);
     }
 
-    public async Task<IReadOnlyDictionary<string, long>> CountAsync(CacheKey keyPattern, CancellationToken token)
+    public Task<IReadOnlyDictionary<string, long>> CountAsync(CacheKey keyPattern, CancellationToken token)
     {
         if (keyPattern.IsNull)
         {
             throw new ArgumentException("The key pattern must contain text.", nameof(keyPattern));
         }
 
-        token.ThrowIfCancellationRequested();
-        await redis.ConnectAsync(token).ConfigureAwait(false);
-        var database = redis.Database;
-        var prefix = await PrefixPatternAsync(database).WaitAsync(token).ConfigureAwait(false);
-        // The keys a cache writes are its strategy's: another segment for a string than for a hash, and cased as the cache cases them.
-        var name = keyPattern.Name;
-        var stringPattern = prefix + Literally(strings.GetRedisKey(keyPattern).ToString(), name);
-        var hashPattern = prefix + Literally(hashes.GetRedisKey(keyPattern).ToString(), name);
-        var multiplexer = database.Multiplexer;
-        var reader = multiplexer.GetDatabase(database.Database);
-        var primaries = redis.GetPrimaries().ToList();
-        if (primaries.Count == 0)
-        {
-            // A connector written outside this library inherits the empty default, yet its multiplexer knows every shard.
-            primaries = [.. multiplexer.GetServers().Where(static server => !server.IsReplica && server.IsConnected)];
-        }
-
-        var counts = new Dictionary<string, long>(StringComparer.Ordinal);
-        foreach (var primary in primaries)
-        {
-            // One type at a time, so the server filters and no key costs a TYPE.
-            await ScanAsync(primary, database.Database, reader, stringPattern, "string", counts, token).ConfigureAwait(false);
-            await ScanAsync(primary, database.Database, reader, hashPattern, "hash", counts, token).ConfigureAwait(false);
-        }
-
-        return counts;
+        return CountCoreAsync(keyPattern, token);
     }
 
     /// <summary>A value is read by its first bytes. Null for one that is not counted: an empty value is the cached-null marker, which carries no format.</summary>
@@ -106,6 +81,36 @@ internal sealed class FormatCensus(
         }
 
         return escaped.ToString();
+    }
+
+    private async Task<IReadOnlyDictionary<string, long>> CountCoreAsync(CacheKey keyPattern, CancellationToken token)
+    {
+        token.ThrowIfCancellationRequested();
+        await redis.ConnectAsync(token).ConfigureAwait(false);
+        var database = redis.Database;
+        var prefix = await PrefixPatternAsync(database).WaitAsync(token).ConfigureAwait(false);
+        // The keys a cache writes are its strategy's: another segment for a string than for a hash, and cased as the cache cases them.
+        var name = keyPattern.Name;
+        var stringPattern = prefix + Literally(strings.GetRedisKey(keyPattern).ToString(), name);
+        var hashPattern = prefix + Literally(hashes.GetRedisKey(keyPattern).ToString(), name);
+        var multiplexer = database.Multiplexer;
+        var reader = multiplexer.GetDatabase(database.Database);
+        var primaries = redis.GetPrimaries().ToList();
+        if (primaries.Count == 0)
+        {
+            // A connector written outside this library inherits the empty default, yet its multiplexer knows every shard.
+            primaries = [.. multiplexer.GetServers().Where(static server => !server.IsReplica && server.IsConnected)];
+        }
+
+        var counts = new Dictionary<string, long>(StringComparer.Ordinal);
+        foreach (var primary in primaries)
+        {
+            // One type at a time, so the server filters and no key costs a TYPE.
+            await ScanAsync(primary, database.Database, reader, stringPattern, "string", counts, token).ConfigureAwait(false);
+            await ScanAsync(primary, database.Database, reader, hashPattern, "hash", counts, token).ConfigureAwait(false);
+        }
+
+        return counts;
     }
 
     // The connector's prefix as the server holds it, with the glob characters a pattern would read escaped; only a prefix that is not text cannot be looked for.

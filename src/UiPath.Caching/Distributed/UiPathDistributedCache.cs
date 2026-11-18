@@ -8,7 +8,8 @@ namespace UiPath.Caching.Distributed;
 /// <summary>
 /// <see cref="IDistributedCache"/> over an <see cref="IHashCache"/>. Keys are always case-sensitive;
 /// each entry is a hash of <c>data</c> plus <c>absexp</c>/<c>sldexp</c> expiration metadata, so a
-/// refresh reads the metadata without transferring the payload.
+/// refresh reads the metadata without transferring the payload. The caller's key is trimmed before the key strategy sees it,
+/// so a strategy returning <see cref="CacheKeyCasing.Verbatim"/> can add text but cannot restore the caller's whitespace.
 /// </summary>
 internal sealed partial class UiPathDistributedCache : IDistributedCache
 {
