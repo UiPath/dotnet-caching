@@ -9,4 +9,4 @@ internal sealed record RouterContext(
     ITopicProvider Topics,
     ICacheEventFactory Events,
     Uri Source,
-    TimeSpan LibrarySettleWithin);
+    Func<TimeSpan> LibrarySettleWithin);

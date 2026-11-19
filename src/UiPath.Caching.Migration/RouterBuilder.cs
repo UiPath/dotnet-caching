@@ -11,6 +11,8 @@ public sealed class RouterBuilder
 
     internal ISerializerProxy<byte[]>? Envelope { get; private set; }
 
+    internal TimeSpan? SettleBound { get; private set; }
+
     public RouterBuilder Add<T>(RouterCacheRegistration<T> registration)
         where T : class
     {
@@ -19,6 +21,7 @@ public sealed class RouterBuilder
         ArgumentException.ThrowIfNullOrWhiteSpace(registration.Group);
         ArgumentOutOfRangeException.ThrowIfLessThan(registration.LocalCap, TimeSpan.Zero);
         ArgumentOutOfRangeException.ThrowIfLessThanOrEqual(registration.PendingWindow, TimeSpan.Zero);
+        ArgumentOutOfRangeException.ThrowIfGreaterThan(registration.PendingWindow, LibrarySettleBound.Horizon);
         if (!_names.Add(registration.Name))
         {
             throw new ArgumentException($"A cache named '{registration.Name}' is already registered.", nameof(registration));
@@ -48,6 +51,15 @@ public sealed class RouterBuilder
     public RouterBuilder UseEnvelope(ISerializerProxy<byte[]> envelope)
     {
         Envelope = envelope ?? throw new ArgumentNullException(nameof(envelope));
+        return this;
+    }
+
+    /// <summary>The longest a library write can stay in flight after its caller stopped waiting, which replaces the bound derived from the connection's configuration; at most one day.</summary>
+    public RouterBuilder UseLibrarySettleBound(TimeSpan bound)
+    {
+        ArgumentOutOfRangeException.ThrowIfLessThanOrEqual(bound, TimeSpan.Zero);
+        ArgumentOutOfRangeException.ThrowIfGreaterThan(bound, LibrarySettleBound.Horizon);
+        SettleBound = bound;
         return this;
     }
 }

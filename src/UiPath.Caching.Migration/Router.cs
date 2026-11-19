@@ -3,7 +3,6 @@ namespace UiPath.Caching.Migration;
 internal sealed class Router : IRouter, IAsyncDisposable
 {
     private static readonly TimeSpan PhaseLimit = TimeSpan.FromSeconds(5);
-    private static readonly TimeSpan CleanupLimit = TimeSpan.FromSeconds(20);
 
     private readonly RouterCore _core;
     private readonly Dictionary<string, (Type Type, object Cache)> _caches = new(StringComparer.Ordinal);
@@ -12,7 +11,8 @@ internal sealed class Router : IRouter, IAsyncDisposable
 #else
     private readonly object _stopGate = new();
 #endif
-    private Task? _stop;
+    private TaskCompletionSource? _stop;
+    private TaskCompletionSource? _cleaned;
 
     public Router(RouterCore core, IEnumerable<Func<RouterContext, (string Name, Type Type, object Cache)>> registrations, RouterContext context)
         : this(core, registrations.Select(create => create(context)))
@@ -41,59 +41,89 @@ internal sealed class Router : IRouter, IAsyncDisposable
             ?? throw new InvalidOperationException($"Cache '{cacheName}' holds {entry.Type.Name}, not {typeof(T).Name}.");
     }
 
-    /// <summary>Refuses new calls and cleans up once, whoever asks and whatever they cancel: waiting callers stop waiting, the cleanup carries on.</summary>
+    /// <summary>Refuses new calls and cleans up once, whoever asks and whatever they cancel. The wait is bounded; a call or a pending key that outlives the bound keeps the router's resources alive until it has ended.</summary>
     public Task StopAsync(CancellationToken cancellationToken)
     {
-        Task stop;
+        TaskCompletionSource stopped;
+        var first = false;
         lock (_stopGate)
         {
-            stop = _stop ??= CleanupAsync();
+            if (_stop is null)
+            {
+                _stop = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+                _cleaned = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+                first = true;
+            }
+
+            stopped = _stop;
         }
 
-        return stop.WaitAsync(cancellationToken);
+        if (first)
+        {
+            _ = CleanupAsync(stopped, _cleaned!);
+        }
+
+        return stopped.Task.WaitAsync(cancellationToken);
     }
 
-    public async ValueTask DisposeAsync() => await StopAsync(CancellationToken.None).ConfigureAwait(false);
-
-    private async Task CleanupAsync()
+    /// <summary>Waits for the whole cleanup, not only the bounded stop: what the router uses is released with the provider, after this returns.</summary>
+    public async ValueTask DisposeAsync()
     {
-        _core.BeginStop();
+        await StopAsync(CancellationToken.None).ConfigureAwait(false);
+        await _cleaned!.Task.ConfigureAwait(false);
+    }
+
+    private static Task PendingSettled(IStoppable[] stoppables) => Task.WhenAll(stoppables.Select(stoppable => stoppable.WhenPendingSettledAsync()));
+
+    private async Task CleanupAsync(TaskCompletionSource foreground, TaskCompletionSource cleaned)
+    {
         try
         {
-            await StepsAsync().WaitAsync(CleanupLimit, _core.Clock).ConfigureAwait(false);
+            await StepsAsync(foreground).ConfigureAwait(false);
+            foreground.TrySetResult();
+            cleaned.TrySetResult();
         }
-        catch (TimeoutException)
+        catch (Exception ex)
         {
-            // Whatever is still running keeps the resources it uses; they are left to the finalizers.
+            foreground.TrySetException(ex);
+            cleaned.TrySetException(ex);
         }
     }
 
-    private async Task StepsAsync()
+    /// <summary>Completes <paramref name="foreground"/> once the stop's bounded part has run; whatever overran its bound carries on after that, in order, before anything is disposed.</summary>
+    private async Task StepsAsync(TaskCompletionSource foreground)
     {
+        _core.BeginStop();
         var stoppables = _caches.Values.Select(entry => entry.Cache).OfType<IStoppable>().ToArray();
 
         // Calls that were admitted finish first; a pending key stays protected until its own command can no longer land.
         var drained = await WithinAsync(_core.OperationsDrained).ConfigureAwait(false);
-        var settled = await WithinAsync(Task.WhenAll(stoppables.Select(stoppable => stoppable.WhenPendingSettledAsync()))).ConfigureAwait(false);
+        var settled = await WithinAsync(PendingSettled(stoppables)).ConfigureAwait(false);
         if (!drained || !settled)
         {
-            foreach (var stoppable in stoppables)
-            {
-                await stoppable.InvalidateAsync().ConfigureAwait(false);
-            }
+            var invalidate = Task.WhenAll(stoppables.Select(stoppable => stoppable.InvalidateAsync()));
+            await WithinAsync(invalidate).ConfigureAwait(false);
+            foreground.TrySetResult();
+            await invalidate.ConfigureAwait(false);
+            await _core.OperationsDrained.ConfigureAwait(false);
+            await PendingSettled(stoppables).ConfigureAwait(false);
         }
 
-        foreach (var stoppable in stoppables)
+        var flush = Task.WhenAll(stoppables.Select(stoppable => stoppable.FlushAsync()));
+        if (!await WithinAsync(flush).ConfigureAwait(false))
         {
-            await stoppable.FlushAsync().ConfigureAwait(false);
+            foreground.TrySetResult();
         }
 
+        await flush.ConfigureAwait(false);
         _core.CancelBackground();
-        if (!await WithinAsync(_core.DrainAsync()).ConfigureAwait(false))
+        var background = _core.DrainAsync();
+        if (!await WithinAsync(background).ConfigureAwait(false))
         {
-            return;
+            foreground.TrySetResult();
         }
 
+        await background.ConfigureAwait(false);
         foreach (var (_, cache) in _caches.Values)
         {
             (cache as IDisposable)?.Dispose();

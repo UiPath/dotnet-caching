@@ -88,6 +88,13 @@ internal sealed class TestNode : IAsyncDisposable
         await stop;
     }
 
+    /// <summary>The router's dispose, as a provider runs it, with the clock left alone.</summary>
+    public Task StartDispose()
+    {
+        _stopped = true;
+        return _router.DisposeAsync().AsTask();
+    }
+
     /// <summary>Starts the router's stop and leaves the clock alone.</summary>
     public Task StartStop(CancellationToken cancellationToken = default)
     {

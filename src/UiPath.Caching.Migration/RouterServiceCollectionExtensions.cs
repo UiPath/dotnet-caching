@@ -63,26 +63,21 @@ public static class RouterServiceCollectionExtensions
         return services;
     }
 
-    /// <summary>The longest a library write can stay in flight: the pipeline timeout of a call plus the connection's own command timeout.</summary>
-    private static TimeSpan LibrarySettleWithin(IServiceProvider root)
+    internal static Func<TimeSpan> LibrarySettleWithin(IServiceProvider root, TimeSpan? explicitBound)
     {
-        var pipeline = root.GetRequiredKeyedService<IOptions<RedisCacheOptions>>(StackName).Value.Timeout;
-        var asyncTimeout = TimeSpan.FromSeconds(5);
-        try
+        if (explicitBound is { } bound)
         {
-            if (root.GetService<IOptions<RedisConnectionOptions>>()?.Value.ConnectionString is { Length: > 0 } connectionString)
-            {
-                asyncTimeout = TimeSpan.FromMilliseconds(ConfigurationOptions.Parse(connectionString).AsyncTimeout);
-            }
-        }
-        catch (ArgumentException)
-        {
-            // A connection string the library accepts and this parse does not keeps the default command timeout.
+            return () => bound;
         }
 
-        return pipeline + asyncTimeout;
+        var options = root.GetRequiredKeyedService<IOptions<RedisCacheOptions>>(StackName).Value;
+        var connector = root.GetRequiredService<IRedisConnector>();
+        var connection = root.GetService<IOptions<RedisConnectionOptions>>()?.Value;
+        LibrarySettleBound.ThrowIfBeyondHorizon(LibrarySettleBound.Join(connection?.ConnectionString, connection?.ConnectionStringExtraParams));
+
+        // A primary is listed only for a finished connection, so this never waits for one; once seen, the configuration is kept.
+        return new LibrarySettleSnapshot(() => options.Timeout, () => connector.GetPrimaries().FirstOrDefault()?.Multiplexer.Configuration).Current;
     }
-
     private static Router CreateRouter(IServiceProvider root, RouterBuilder builder, Func<string, bool> predicate)
     {
         var core = new RouterCore(
@@ -102,7 +97,7 @@ public static class RouterServiceCollectionExtensions
                 root.GetRequiredKeyedService<ITopicFactory>(StackName).Get(),
                 root.GetRequiredKeyedService<ICacheEventFactory>(StackName),
                 root.GetRequiredKeyedService<IOptions<CacheOptions>>(StackName).Value.SourceUri ?? CacheOptions.MachineUri,
-                LibrarySettleWithin(root));
+                LibrarySettleWithin(root, builder.SettleBound));
             return new Router(core, builder.Registrations, context);
         }
         catch

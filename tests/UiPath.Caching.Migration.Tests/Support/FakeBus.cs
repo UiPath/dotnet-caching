@@ -9,10 +9,19 @@ internal sealed class FakeBus
 
     public bool FailPublish { get; set; }
 
+    /// <summary>When set, a publish throws it, as a timeout does.</summary>
+    public Exception? FailWith { get; set; }
+
     /// <summary>When set, a publish waits for it before it goes out, as a hung broker would.</summary>
     public TaskCompletionSource? Hold { get; set; }
 
     public int Published { get; private set; }
+
+    /// <summary>Publishes that reached the broker call, whether they were held, failed or went out.</summary>
+    public int Attempts { get; private set; }
+
+    /// <summary>The next this many publishes report failure.</summary>
+    public int FailNext { get; set; }
 
     /// <summary>Runs at the moment of every publish, after the failure check.</summary>
     public Action<ICacheEvent>? OnPublish { get; set; }
@@ -44,6 +53,12 @@ internal sealed class FakeBus
     {
         if (FailPublish)
         {
+            return false;
+        }
+
+        if (FailNext > 0)
+        {
+            FailNext--;
             return false;
         }
 
@@ -108,9 +123,15 @@ internal sealed class FakeBus
 
         public async ValueTask<bool> PublishAsync(ICacheEvent @event, CancellationToken token = default)
         {
+            bus.Attempts++;
             if (bus.Hold is { } hold)
             {
                 await hold.Task;
+            }
+
+            if (bus.FailWith is { } failure)
+            {
+                throw failure;
             }
 
             return bus.Publish(key.Name, node, @event);
