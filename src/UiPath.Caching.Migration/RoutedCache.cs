@@ -108,12 +108,12 @@ internal sealed class RoutedCache<T> : IRoutedCache<T>, IStoppable, IDisposable
 
         var mark = _core.Tier.Capture(local, _epoch);
         var read = await ReadAsync(key, local, route, mark, cancellationToken).ConfigureAwait(false);
-        if (read is null)
+        if (read.Value is null)
         {
             RouterTelemetry.CountMiss(_registration.Name, _registration.Group, route);
         }
 
-        return read;
+        return read.Value;
     }
 
     public async ValueTask<WriteOutcome> SetAsync(string key, T value, CacheExpiry expiry = default, CancellationToken cancellationToken = default)
@@ -179,7 +179,7 @@ internal sealed class RoutedCache<T> : IRoutedCache<T>, IStoppable, IDisposable
         {
             return await publish().ConfigureAwait(false);
         }
-        catch (Exception ex) when (ex is not OperationCanceledException)
+        catch (Exception ex) when (ex is not OutOfMemoryException)
         {
             return false;
         }
@@ -227,9 +227,9 @@ internal sealed class RoutedCache<T> : IRoutedCache<T>, IStoppable, IDisposable
             var generation = state.Generation;
             var mark = _core.Tier.Capture(local, _epoch);
             var existing = await ReadAsync(key, local, route, mark, cancellationToken).ConfigureAwait(false);
-            if (existing is not null)
+            if (existing.Value is not null)
             {
-                return existing;
+                return existing.Value;
             }
 
             RouterTelemetry.CountMiss(_registration.Name, _registration.Group, route);
@@ -239,7 +239,7 @@ internal sealed class RoutedCache<T> : IRoutedCache<T>, IStoppable, IDisposable
             // Checked under the key's lock and the write fence, where this node's writes and clears of the key cannot slip in before the send.
             if (value is not null)
             {
-                await WriteAsync(key, value, expiry, route, current => current.Generation == generation && _epoch.Value == mark.Epoch, cancellationToken).ConfigureAwait(false);
+                await WriteAsync(key, value, expiry, existing.Write, current => current.Generation == generation && _epoch.Value == mark.Epoch, cancellationToken).ConfigureAwait(false);
             }
 
             return value;
@@ -251,7 +251,7 @@ internal sealed class RoutedCache<T> : IRoutedCache<T>, IStoppable, IDisposable
     }
 
     /// <summary>A hit, filled into the local tier; null for a miss. Throws when the call has no answer and must not run the factory.</summary>
-    private async Task<T?> ReadAsync(string key, LocalKey local, Route route, FillMark mark, CancellationToken cancellationToken)
+    private async Task<Loaded> ReadAsync(string key, LocalKey local, Route route, FillMark mark, CancellationToken cancellationToken)
     {
         var name = _registration.Name;
         var group = _registration.Group;
@@ -259,12 +259,12 @@ internal sealed class RoutedCache<T> : IRoutedCache<T>, IStoppable, IDisposable
         var first = await Client(route.Path).ReadAsync(key, cancellationToken).ConfigureAwait(false);
         if (first.Kind == ReadOutcome.Found)
         {
-            return Hit(first, local, mark, readStart, route.Path, route.Reason);
+            return new Loaded(Hit(first, local, mark, readStart, route.Path, route.Reason), route);
         }
 
         if (first.Kind == ReadOutcome.Absent)
         {
-            return null;
+            return new Loaded(null, route);
         }
 
         if (first.Kind == ReadOutcome.Unreadable)
@@ -276,7 +276,7 @@ internal sealed class RoutedCache<T> : IRoutedCache<T>, IStoppable, IDisposable
             RouterTelemetry.CountUnavailable(name, group, route.Path, route.Reason);
             if (route.Path == RoutePath.Source)
             {
-                return null;
+                return new Loaded(null, route);
             }
         }
 
@@ -285,7 +285,7 @@ internal sealed class RoutedCache<T> : IRoutedCache<T>, IStoppable, IDisposable
         switch (second.Kind)
         {
             case ReadOutcome.Found:
-                return Hit(second, local, mark, readStart, route.Other, Route.OtherClientRead);
+                return new Loaded(Hit(second, local, mark, readStart, route.Other, Route.OtherClientRead), route);
             case ReadOutcome.Unreadable:
                 RouterTelemetry.CountUnreadable(name, group, route.Other, Route.OtherClientUnreadable);
                 break;
@@ -300,7 +300,8 @@ internal sealed class RoutedCache<T> : IRoutedCache<T>, IStoppable, IDisposable
             throw new CacheUnavailableException($"Neither client of cache '{name}' could answer.");
         }
 
-        return null;
+        // The library just failed, so what the factory makes goes to the source first; the library stays the fallback when the source refuses to send.
+        return new Loaded(null, firstUnavailable && route.Path == RoutePath.Library ? new Route(RoutePath.Source, Route.OtherClientRead) : route);
     }
 
     private T Hit(PathRead<T> read, LocalKey local, FillMark mark, DateTimeOffset readStart, RoutePath path, string reason)
@@ -354,6 +355,23 @@ internal sealed class RoutedCache<T> : IRoutedCache<T>, IStoppable, IDisposable
     {
         // Before anything is sent: nothing to settle.
         cancellationToken.ThrowIfCancellationRequested();
+        var announcement = new Announcement();
+        try
+        {
+            return await MutateLockedAsync(key, route, command, validate, announcement, cancellationToken).ConfigureAwait(false);
+        }
+        finally
+        {
+            // The key lock and the write slot are free by now: a slow publish holds back neither the next write of the key nor a clear.
+            if (announcement.Route is { } announced)
+            {
+                await PublishKeyAsync(key, setDeadline, announced).ConfigureAwait(false);
+            }
+        }
+    }
+
+    private async ValueTask<WriteOutcome> MutateLockedAsync(string key, Route route, Func<IPathClient<T>, CancellationToken, ValueTask<WriteResult>> command, Func<KeyState, bool>? validate, Announcement announcement, CancellationToken cancellationToken)
+    {
         await _fence.EnterWriteAsync(cancellationToken).ConfigureAwait(false);
         try
         {
@@ -365,7 +383,7 @@ internal sealed class RoutedCache<T> : IRoutedCache<T>, IStoppable, IDisposable
                 {
                     return validate is not null && !validate(state)
                         ? WriteOutcome.NotSent
-                        : await SendAsync(key, route, command, setDeadline, state, cancellationToken).ConfigureAwait(false);
+                        : await SendAsync(key, route, command, state, announcement, cancellationToken).ConfigureAwait(false);
                 }
                 finally
                 {
@@ -383,32 +401,36 @@ internal sealed class RoutedCache<T> : IRoutedCache<T>, IStoppable, IDisposable
         }
     }
 
-    private async ValueTask<WriteOutcome> SendAsync(string key, Route route, Func<IPathClient<T>, CancellationToken, ValueTask<WriteResult>> command, DateTimeOffset? setDeadline, KeyState state, CancellationToken cancellationToken)
+    private async ValueTask<WriteOutcome> SendAsync(string key, Route route, Func<IPathClient<T>, CancellationToken, ValueTask<WriteResult>> command, KeyState state, Announcement announcement, CancellationToken cancellationToken)
     {
-        var client = Client(route.Path);
-        WriteResult result;
+        var result = await CommandAsync(Client(route.Path), key, route, command, state, announcement, cancellationToken).ConfigureAwait(false);
+        if (result.Outcome == WriteOutcome.NotSent)
+        {
+            // A token cancelled before the library sent anything must not reach the other client: that command would be sent already cancelled.
+            cancellationToken.ThrowIfCancellationRequested();
+            result = await CommandAsync(Client(route.Other), key, route, command, state, announcement, cancellationToken).ConfigureAwait(false);
+        }
+
+        Settle(key, result, route, state, announcement);
+        return result.Outcome;
+    }
+
+    private async ValueTask<WriteResult> CommandAsync(IPathClient<T> client, string key, Route route, Func<IPathClient<T>, CancellationToken, ValueTask<WriteResult>> command, KeyState state, Announcement announcement, CancellationToken cancellationToken)
+    {
         try
         {
-            result = await command(client, cancellationToken).ConfigureAwait(false);
-            if (result.Outcome == WriteOutcome.NotSent)
-            {
-                client = Client(route.Other);
-                result = await command(client, cancellationToken).ConfigureAwait(false);
-            }
+            return await command(client, cancellationToken).ConfigureAwait(false);
         }
         catch (OperationCanceledException)
         {
             // Cancelled in flight: the command may still land, for as long as its client says.
-            await SettleAsync(key, client.SettleWithin is { } within ? WriteResult.UnknownWithin(within) : WriteOutcome.Unknown, route, setDeadline, state).ConfigureAwait(false);
+            Settle(key, client.SettleWithin is { } within ? WriteResult.UnknownWithin(within) : WriteOutcome.Unknown, route, state, announcement);
             throw;
         }
-
-        await SettleAsync(key, result, route, setDeadline, state).ConfigureAwait(false);
-        return result.Outcome;
     }
 
-    /// <summary>Evict on this node and advance the mark, then publish; a write of unknown outcome stays off the local tier until it can no longer land, then does both again.</summary>
-    private async ValueTask SettleAsync(string key, WriteResult result, Route route, DateTimeOffset? setDeadline, KeyState state)
+    /// <summary>Evict on this node and advance the mark; a write of unknown outcome stays off the local tier until it can no longer land, then does both again. The caller publishes once the key's lock is released.</summary>
+    private void Settle(string key, WriteResult result, Route route, KeyState state, Announcement announcement)
     {
         if (result.Outcome == WriteOutcome.NotSent)
         {
@@ -427,9 +449,8 @@ internal sealed class RoutedCache<T> : IRoutedCache<T>, IStoppable, IDisposable
 
         // A caller that starts now must not join a load that began before this write.
         _flights.TryRemove(key, out _);
-        await PublishKeyAsync(key, setDeadline, route).ConfigureAwait(false);
+        announcement.Route = route;
     }
-
     private async ValueTask PublishKeyAsync(string key, DateTimeOffset? setDeadline, Route route)
     {
         var options = new RouterEntryOptions(key, _topic, setDeadline ?? _core.Clock.GetUtcNow());
@@ -468,6 +489,13 @@ internal sealed class RoutedCache<T> : IRoutedCache<T>, IStoppable, IDisposable
     {
         RouterTelemetry.CountPublishFailed(_registration.Name, _registration.Group, route);
         _core.LogPublishFailed(_registration.Name);
+    }
+
+    private readonly record struct Loaded(T? Value, Route Write);
+
+    private sealed class Announcement
+    {
+        public Route? Route { get; set; }
     }
 
     private sealed class Flight(Task<T?> task, CancellationToken leaderToken)

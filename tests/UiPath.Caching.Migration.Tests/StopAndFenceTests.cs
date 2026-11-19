@@ -224,6 +224,7 @@ public sealed class StopAndFenceTests : RouterTestBase
         await node.StopAsync();
 
         Bus.Events.Should().Contain(ev => ev.Type == KnownEventTypes.TopicInvalidated);
+        await RunBackgroundAsync(node, TimeSpan.FromMinutes(1));
         node.Core.IsIdle.Should().BeTrue();
         node.Core.IsStopped.Should().BeTrue();
     }

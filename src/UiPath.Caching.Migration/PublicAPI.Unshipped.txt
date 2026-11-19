@@ -96,3 +96,4 @@ static UiPath.Caching.Migration.WriteResult.operator ==(UiPath.Caching.Migration
 ~override UiPath.Caching.Migration.WriteResult.ToString() -> string
 ~static UiPath.Caching.Migration.SourceRead<T>.operator !=(UiPath.Caching.Migration.SourceRead<T> left, UiPath.Caching.Migration.SourceRead<T> right) -> bool
 ~static UiPath.Caching.Migration.SourceRead<T>.operator ==(UiPath.Caching.Migration.SourceRead<T> left, UiPath.Caching.Migration.SourceRead<T> right) -> bool
+UiPath.Caching.Migration.RouterBuilder.UseLibrarySettleBound(System.TimeSpan bound) -> UiPath.Caching.Migration.RouterBuilder!

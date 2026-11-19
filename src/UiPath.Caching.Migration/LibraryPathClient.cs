@@ -1,10 +1,15 @@
 namespace UiPath.Caching.Migration;
 
 /// <summary>The library path: a failed snapshot read is unavailable and never absent, a write refused before sending is not sent, and any other failed write is unknown and never replayed.</summary>
-internal sealed class LibraryPathClient<T>(ILibraryStore store, IConnectionState connection, Func<string, string> redisKey, TimeSpan settleWithin) : IPathClient<T>
+internal sealed class LibraryPathClient<T>(ILibraryStore store, IConnectionState connection, Func<string, string> redisKey, Func<TimeSpan> settleWithin) : IPathClient<T>
     where T : class
 {
-    public TimeSpan? SettleWithin => settleWithin;
+    public LibraryPathClient(ILibraryStore store, IConnectionState connection, Func<string, string> redisKey, TimeSpan settleWithin)
+        : this(store, connection, redisKey, () => settleWithin)
+    {
+    }
+
+    public TimeSpan? SettleWithin => settleWithin();
 
     public async ValueTask<PathRead<T>> ReadAsync(string key, CancellationToken cancellationToken)
     {
@@ -40,6 +45,9 @@ internal sealed class LibraryPathClient<T>(ILibraryStore store, IConnectionState
     public ValueTask<WriteResult> RemoveAsync(string key, CancellationToken cancellationToken) =>
         WriteAsync(key, (cacheKey, token) => store.RemoveAsync<T>(cacheKey, token), cancellationToken);
 
+    private static WriteResult Failed(ReadProbe probe, TimeSpan bound) =>
+        probe.SerializeFailed ? WriteOutcome.NotSent : WriteResult.UnknownWithin(bound);
+
     private async ValueTask<WriteResult> WriteAsync(string key, Func<CacheKey, CancellationToken, ValueTask<bool>> command, CancellationToken cancellationToken)
     {
         if (cancellationToken.IsCancellationRequested || !connection.IsConnected)
@@ -57,23 +65,21 @@ internal sealed class LibraryPathClient<T>(ILibraryStore store, IConnectionState
             return WriteOutcome.NotSent;
         }
 
+        var bound = settleWithin();
         var probe = ReadProbe.Begin();
         try
         {
             return await command(cacheKey, cancellationToken).ConfigureAwait(false)
                 ? WriteOutcome.Committed
-                : Failed(probe);
+                : Failed(probe, bound);
         }
         catch (Exception ex) when (ex is not OperationCanceledException || !cancellationToken.IsCancellationRequested)
         {
-            return Failed(probe);
+            return Failed(probe, bound);
         }
         finally
         {
             ReadProbe.End();
         }
     }
-
-    private WriteResult Failed(ReadProbe probe) =>
-        probe.SerializeFailed ? WriteOutcome.NotSent : WriteResult.UnknownWithin(settleWithin);
 }

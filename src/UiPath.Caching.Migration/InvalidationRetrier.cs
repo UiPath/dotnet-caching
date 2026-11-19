@@ -94,7 +94,7 @@ internal sealed class InvalidationRetrier(
         {
             return await publish().ConfigureAwait(false);
         }
-        catch (Exception ex) when (ex is not OperationCanceledException)
+        catch (Exception ex) when (ex is not OutOfMemoryException)
         {
             return false;
         }
@@ -111,6 +111,26 @@ internal sealed class InvalidationRetrier(
 
     private async Task WorkAsync(CancellationToken stopping)
     {
+        var released = false;
+        try
+        {
+            released = await RunAsync(stopping).ConfigureAwait(false);
+        }
+        finally
+        {
+            if (!released)
+            {
+                lock (_gate)
+                {
+                    _running = false;
+                }
+            }
+        }
+    }
+
+    /// <summary>True when it ended with nothing left and already released the running flag under the gate, so a report cannot slip in between.</summary>
+    private async Task<bool> RunAsync(CancellationToken stopping)
+    {
         var delay = FirstDelay;
         while (true)
         {
@@ -121,12 +141,16 @@ internal sealed class InvalidationRetrier(
                 if (_clear is null && _keys.Count == 0)
                 {
                     _running = false;
-                    return;
+                    return true;
                 }
 
                 var last = _clear?.Expires ?? _keys.Values.Max(w => w.Expires);
                 var remaining = last - core.Clock.GetUtcNow();
                 wait = delay < remaining ? delay : remaining;
+                if (wait < TimeSpan.Zero)
+                {
+                    wait = TimeSpan.Zero;
+                }
             }
 
             try
@@ -135,19 +159,13 @@ internal sealed class InvalidationRetrier(
             }
             catch (OperationCanceledException)
             {
-                lock (_gate)
-                {
-                    _running = false;
-                }
-
-                return;
+                return false;
             }
 
             var succeeded = await AttemptAsync().ConfigureAwait(false);
             delay = succeeded ? FirstDelay : Backoff(delay);
         }
     }
-
     private async Task<bool> AttemptAsync()
     {
         Waiting? clear;

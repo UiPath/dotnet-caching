@@ -10,6 +10,7 @@ internal sealed class PendingMutations(RouterCore core, string cache, Func<strin
 #endif
     private readonly Dictionary<string, Entry> _entries = new(StringComparer.Ordinal);
     private TaskCompletionSource? _empty;
+    private int _announcing;
 
     public int Count
     {
@@ -42,12 +43,12 @@ internal sealed class PendingMutations(RouterCore core, string cache, Func<strin
         core.Run(ct => WaitAsync(key, entry, ct));
     }
 
-    /// <summary>Completes when no key is pending.</summary>
+    /// <summary>Completes when no key is pending and every final announcement, with the retry it may have registered, is done.</summary>
     public Task WhenEmptyAsync()
     {
         lock (_gate)
         {
-            if (_entries.Count == 0)
+            if (_entries.Count == 0 && _announcing == 0)
             {
                 return Task.CompletedTask;
             }
@@ -77,18 +78,15 @@ internal sealed class PendingMutations(RouterCore core, string cache, Func<strin
         }
     }
 
-    /// <summary>Under the gate: evicts, ends the pending protection and removes the entry, so no replacement can come in between.</summary>
+    /// <summary>Under the gate: evicts, detaches the key's loads, ends the pending protection and removes the entry, so no replacement and no load validated in between can write. Takes the key gates' lock inside the gate and never the other way round.</summary>
     private void Retire(string key)
     {
         var local = new LocalKey(cache, key);
         core.Tier.Evict(local);
+        detach(key);
         core.Tier.EndPending(local);
         _entries.Remove(key);
-        if (_entries.Count == 0)
-        {
-            _empty?.TrySetResult();
-            _empty = null;
-        }
+        _announcing++;
     }
 
     private async Task WaitAsync(string key, Entry entry, CancellationToken stopping)
@@ -127,7 +125,6 @@ internal sealed class PendingMutations(RouterCore core, string cache, Func<strin
 
     private async Task AnnounceAsync(string key)
     {
-        detach(key);
         try
         {
             await announceRemoval(key).ConfigureAwait(false);
@@ -135,6 +132,18 @@ internal sealed class PendingMutations(RouterCore core, string cache, Func<strin
         catch (Exception ex) when (ex is not OutOfMemoryException)
         {
             // The announcement is best effort here; a failed one is already queued for retry by the caller of announceRemoval.
+        }
+        finally
+        {
+            lock (_gate)
+            {
+                _announcing--;
+                if (_entries.Count == 0 && _announcing == 0)
+                {
+                    _empty?.TrySetResult();
+                    _empty = null;
+                }
+            }
         }
     }
 

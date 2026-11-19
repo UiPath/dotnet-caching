@@ -21,11 +21,94 @@ public sealed class LifecycleTests : RouterTestBase
         await writer.StopAsync();
 
         Bus.Events.Should().ContainSingle(ev => ev.Type == KnownEventTypes.TopicInvalidated, "the pending write outlived the stop limit, so a cache-level invalidation goes out");
-        Bus.Events[^1].Type.Should().Be(KnownEventTypes.CacheRemoved, "then the final announcement of the key");
+        writer.Core.IsIdle.Should().BeFalse("the key keeps its own timer until the command can no longer land");
+        await RunBackgroundAsync(writer, TimeSpan.FromMinutes(1));
+
+        Bus.Events[^1].Type.Should().Be(KnownEventTypes.CacheRemoved, "then the final announcement of the key, at its own deadline");
         peer.IsLocal("k").Should().BeFalse();
         writer.Core.IsIdle.Should().BeTrue();
     }
 
+    [Fact]
+    public async Task A_commit_that_lands_after_the_stop_announcement_is_still_evicted_and_announced()
+    {
+        var writer = NewNode(pendingWindow: TimeSpan.FromMinutes(5));
+        var peer = NewNode();
+        Store["k"] = new Item("old");
+        writer.LibraryBackend.WriteOutcome = WriteOutcome.Unknown;
+        await writer.Cache.SetAsync("k", new Item("new"), default, Ct);
+
+        await writer.StopAsync();
+        await peer.Cache.TryGetAsync("k", Ct);
+        writer.LibraryBackend.Land("k", new Item("new"));
+        peer.IsLocal("k").Should().BeTrue("a peer refilled the old value after the stop's announcement");
+        await RunBackgroundAsync(writer, TimeSpan.FromMinutes(1));
+
+        peer.IsLocal("k").Should().BeFalse("the late commit was announced when its deadline passed");
+        Bus.Events[^1].Type.Should().Be(KnownEventTypes.CacheRemoved);
+    }
+
+    [Fact]
+    public async Task A_call_that_outlives_the_drain_limit_settles_before_anything_is_disposed()
+    {
+        var node = NewNode(pendingWindow: TimeSpan.FromSeconds(30));
+        var inFlight = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        node.LibraryBackend.WriteOutcome = WriteOutcome.Unknown;
+        node.LibraryBackend.InFlight = async _ =>
+        {
+            inFlight.TrySetResult();
+            await release.Task;
+        };
+        var write = node.Cache.SetAsync("k", new Item("v"), default, Ct).AsTask();
+        await inFlight.Task;
+
+        await node.StopAsync();
+        var tier = () => node.Core.Tier.TryGet(new LocalKey(node.CacheName, "k"), node.Cache.Epoch, out _);
+        tier.Should().NotThrow("the straggler still uses the tier");
+        release.SetResult();
+
+        (await write).Should().Be(WriteOutcome.Unknown);
+        await RunBackgroundAsync(node, TimeSpan.FromSeconds(31));
+        Bus.Events[^1].Type.Should().Be(KnownEventTypes.CacheRemoved, "the pending key the straggler began retires at its deadline");
+        var until = DateTime.UtcNow.AddSeconds(5);
+        while (DateTime.UtcNow < until)
+        {
+            try
+            {
+                tier();
+            }
+            catch (ObjectDisposedException)
+            {
+                return;
+            }
+
+            await Task.Delay(10, Ct);
+        }
+
+        throw new TimeoutException("the tier was never disposed after the straggler ended");
+    }
+
+    [Fact]
+    public async Task A_publish_that_hangs_does_not_hold_back_the_next_write_of_the_key()
+    {
+        var node = NewNode();
+        Bus.Hold = new TaskCompletionSource();
+        var first = node.Cache.SetAsync("k", new Item("one"), default, Ct).AsTask();
+        await Task.Delay(100, Ct);
+
+        var second = node.Cache.SetAsync("k", new Item("two"), default, Ct).AsTask();
+        var until = DateTime.UtcNow.AddSeconds(2);
+        while (node.LibraryBackend.Writes < 2 && DateTime.UtcNow < until)
+        {
+            await Task.Delay(10, Ct);
+        }
+
+        node.LibraryBackend.Writes.Should().Be(2, "the key lock is free once the command is settled locally");
+        Bus.Hold.SetResult();
+        await first;
+        await second;
+    }
     [Fact]
     public async Task A_call_after_stop_fails_before_anything_is_sent()
     {
