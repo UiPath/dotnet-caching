@@ -175,6 +175,17 @@ public class UiPathDistributedCacheTests
     }
 
     [Fact]
+    public async Task Key_strategy_receives_the_caller_key_trimmed()
+    {
+        var recording = new RecordingKeyStrategy();
+        var sut = Build(keyStrategy: recording);
+
+        await sut.GetAsync(" AbC", TestContext.Current.CancellationToken);
+
+        recording.Received.Should().Equal("AbC");
+    }
+
+    [Fact]
     public async Task Key_strategy_returning_an_empty_key_fails_loudly()
     {
         var broken = Build(keyStrategy: new EmptyKeyStrategy());
@@ -727,7 +738,18 @@ public class UiPathDistributedCacheTests
         }
     }
 
-    private sealed class AmbientCasingKeyStrategy: ICacheKeyStrategy, ISpanCacheKeyStrategy
+    private sealed class RecordingKeyStrategy : ICacheKeyStrategy
+    {
+        public List<string?> Received { get; } = [];
+
+        public CacheKey GetCacheKey<T>(CacheKey key)
+        {
+            Received.Add(key.Name);
+            return key;
+        }
+    }
+
+    private sealed class AmbientCasingKeyStrategy :ICacheKeyStrategy, ISpanCacheKeyStrategy
     {
         public CacheKey GetCacheKey<T>(CacheKey key) => new(key.Name, CacheKeyCasing.Insensitive);
 

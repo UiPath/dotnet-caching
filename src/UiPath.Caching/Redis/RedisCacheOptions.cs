@@ -56,6 +56,11 @@ public class RedisCacheOptions : ICacheOptions
     public int HashFieldBatchSize { get; set; } = 1000;
 
     /// <summary>Delete a value whose format header no registered serializer owns, once it is counted as unreadable; on by default. Off, the read is still a counted miss and the key is left in place until a write replaces it, as a <c>GetOrAdd</c> does after its generator runs.</summary>
+    /// <remarks>
+    /// Off, <c>TryAddAsync</c> returns false and <c>ContainsAsync</c> returns true for such a key until it expires or a <c>Set</c> or <c>GetOrAdd</c> replaces it.
+    /// The classification applies to string values only; hash values are never removed.
+    /// With an empty registry and serializer metrics on, every write records a json serializer-write metric and reads take the header-sniff path.
+    /// </remarks>
     public bool RemoveUnreadable { get; set; } = true;
 
     public FormatNegotiationOptions FormatNegotiation { get; set; } = new();

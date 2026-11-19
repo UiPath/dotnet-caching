@@ -102,6 +102,16 @@ public class SpanKeyReadTests
     }
 
     [Fact]
+    public async Task A_cache_with_a_verbatim_strategy_that_declines_the_span_probes_the_key_it_stored()
+    {
+        using var cache = InMemoryMultilayer.Cache(new InMemoryCacheOptions { CacheKeyStrategy = new VerbatimDecliningStrategy() });
+        (await cache.SetAsync<string>("User:42", "v", policy: null, Ct)).Should().BeTrue();
+
+        SpanReads.Read<string>(cache, "User:42", Ct).Should().Be("v");
+        (await cache.GetAsync<string>("User:42", policy: null, Ct)).Should().Be("v");
+    }
+
+    [Fact]
     public async Task A_typed_cache_with_a_prefix_strategy_reads_by_span_what_it_wrote_by_key()
     {
         using var cache = InMemoryMultilayer.Cache(new InMemoryCacheOptions { CacheKeyStrategy = new PrefixCacheKeyStrategy("tier") });
@@ -521,7 +531,18 @@ public class SpanKeyReadTests
         public bool TryGetCacheKey<T>(ReadOnlySpan<char> key, Span<char> destination, out int written) => throw new NotSupportedException("the strategy was reached");
     }
 
-    private sealed class DecliningStrategy : ICacheKeyStrategy, ISpanCacheKeyStrategy
+    private sealed class VerbatimDecliningStrategy : ICacheKeyStrategy, ISpanCacheKeyStrategy
+    {
+        public CacheKey GetCacheKey<T>(CacheKey key) => CacheKey.Verbatim("Tier:" + key.Name);
+
+        public bool TryGetCacheKey<T>(ReadOnlySpan<char> key, Span<char> destination, out int written)
+        {
+            written = 0;
+            return false;
+        }
+    }
+
+    private sealed class DecliningStrategy :ICacheKeyStrategy, ISpanCacheKeyStrategy
     {
         public CacheKey GetCacheKey<T>(CacheKey key) => key.WithName(key.Name + "#d");
 

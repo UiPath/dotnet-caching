@@ -1,6 +1,6 @@
 namespace UiPath.Caching;
 
-/// <summary>Cached <see cref="CacheKey"/> equality comparers: <see cref="Sensitive"/> (ordinal, the struct's own equality) and <see cref="Insensitive"/> (ordinal, case-folding).</summary>
+/// <summary>Cached <see cref="CacheKey"/> equality comparers: <see cref="Sensitive"/> (ordinal, the struct's own equality) and <see cref="Insensitive"/> (ordinal, case-folding, <see cref="CacheKeyCasing.Verbatim"/> keys included).</summary>
 public abstract class CacheKeyComparer : EqualityComparer<CacheKey>
 {
     public static CacheKeyComparer Sensitive { get; } = new SensitiveComparer();

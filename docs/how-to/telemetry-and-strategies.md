@@ -330,6 +330,8 @@ public sealed class TenantKeyStrategy(string tenant) : ICacheKeyStrategy, ISpanC
 }
 ```
 
+A strategy that returns `CacheKey.Verbatim` keys must not implement `ISpanCacheKeyStrategy`, or must return `false` from `TryGetCacheKey`: the span path normalizes the key, so a verbatim key would be stored under one spelling and probed under another. The `IDistributedCache` adapter trims the caller's key before its strategy runs, so a strategy returning `CacheKey.Verbatim` can add text but cannot restore the caller's whitespace.
+
 ### App-version prefix
 
 A `PrefixCacheKeyStrategy` that bakes the assembly version into the prefix gives you free deploy invalidation — old keys cannot collide with new keys because the version segment in the key changes with every deploy.

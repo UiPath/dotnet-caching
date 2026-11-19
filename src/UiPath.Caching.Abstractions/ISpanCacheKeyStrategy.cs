@@ -4,6 +4,6 @@ namespace UiPath.Caching;
 /// <remarks>Apart from <see cref="ICacheKeyStrategy"/>, so a mock of <see cref="ICacheKeyStrategy"/> never has to proxy a span; a strategy without it sends span reads down the string path.</remarks>
 public interface ISpanCacheKeyStrategy
 {
-    /// <summary>Writes the text <see cref="ICacheKeyStrategy.GetCacheKey{T}"/> would build for <paramref name="key"/>, which arrives normalized, into <paramref name="destination"/> without a string; the caller normalizes the result as <see cref="CacheKey.WithName"/> would. False when it does not fit, or when the strategy cannot compose by span, and the caller builds the key instead.</summary>
+    /// <summary>Writes the text <see cref="ICacheKeyStrategy.GetCacheKey{T}"/> would build for <paramref name="key"/>, which arrives normalized, into <paramref name="destination"/> without a string; the caller normalizes the result as <see cref="CacheKey.WithName"/> would. False when it does not fit, or when the strategy cannot compose by span, and the caller builds the key instead. A strategy whose <see cref="ICacheKeyStrategy"/> returns <see cref="CacheKeyCasing.Verbatim"/> keys must return false here, because the caller normalizes the span result.</summary>
     bool TryGetCacheKey<T>(ReadOnlySpan<char> key, Span<char> destination, out int written);
 }
