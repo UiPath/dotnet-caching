@@ -41,7 +41,7 @@ internal sealed partial class MultilayerHashCache
 
     // The batch's events carry no fields; counting the write is what keeps a peer from applying a later write over a copy that lacks this one.
     // The version it took stays on its entry for the keep and is recorded, as a single write's is, so the key's writes that return out of order see which copy is newer.
-    private static async ValueTask<bool> CountedBatchedAsync<T>(IVersionedHashCache versioned, (InternalHashCacheEntryOptions Options, IDictionary<string, T?> Values)[] entries, int index, HashCacheEntryOptions inner, CachePolicy policy, BackgroundWrites.Keeper keeper)
+    private static async ValueTask<bool> CountedBatchedAsync<T>(ISharedHashTier versioned, (InternalHashCacheEntryOptions Options, IDictionary<string, T?> Values)[] entries, int index, HashCacheEntryOptions inner, CachePolicy policy, BackgroundWrites.Keeper keeper)
     {
         var (options, values) = entries[index];
         var counted = await versioned.SetVersionedAsync<T?>(options.CacheKey, values, inner, policy, default, options.Token).ConfigureAwait(false);

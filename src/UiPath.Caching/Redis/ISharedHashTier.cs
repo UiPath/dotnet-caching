@@ -1,11 +1,13 @@
 namespace UiPath.Caching.Redis;
 
-/// <summary>The inner tier's writes that count a hash's writes, so the multilayer cache can tell its peers what a write changed.</summary>
-internal interface IVersionedHashCache
+internal interface ISharedHashTier : ISharedTier
 {
     ValueTask<VersionedWrite> SetVersionedAsync<T>(CacheKey cacheKey, IDictionary<string, T?> values, HashCacheEntryOptions options, CachePolicy? policy, PeerFieldLimits limits, CancellationToken token = default);
 
     ValueTask<bool> RemoveFieldsVersionedAsync<T>(CacheKey cacheKey, string[] fields, CancellationToken token = default);
 
     bool TryDecodeFields<T>(IReadOnlyDictionary<string, byte[]?> encoded, CachePolicy? policy, [MaybeNullWhen(false)] out Dictionary<string, T?> values);
+
+    /// <summary>Reads the fields and their remaining lifetime as one snapshot; fails by throwing where a plain read answers a miss.</summary>
+    ValueTask<ICacheEntry<IDictionary<string, T?>>> ReadForAdoptionAsync<T>(CacheKey cacheKey, CachePolicy? policy, CancellationToken token);
 }

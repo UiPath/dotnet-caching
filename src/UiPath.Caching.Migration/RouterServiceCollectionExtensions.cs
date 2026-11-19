@@ -87,9 +87,7 @@ public static class RouterServiceCollectionExtensions
         try
         {
             var cache = root.GetRequiredKeyedService<ICacheFactory>(StackName).CreateCache(KnownCacheProviderNames.Redis);
-            var store = new CacheLibraryStore(
-                cache,
-                cache as ISnapshotReadCache ?? throw new InvalidOperationException("The library's Redis cache does not offer snapshot reads, so the router cannot tell an absent entry from a failed read."));
+            var store = new CacheLibraryStore(cache);
             var context = new RouterContext(
                 core,
                 store,

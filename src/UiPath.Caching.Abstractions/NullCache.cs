@@ -2,7 +2,7 @@ namespace UiPath.Caching;
 
 [ExcludeFromCodeCoverage]
 [System.Diagnostics.CodeAnalysis.SuppressMessage("Performance", "CA1822:Mark members as static", Justification = "Public instance members mirroring ICache, so calls on a NullCache-typed variable bind.")]
-public sealed class NullCache : ICache, ISpanKeyCache, IResultCache
+public sealed class NullCache : ICache, ISpanKeyCache, IResultCache, IMigrationCache
 {
     public static readonly NullCache Instance = new();
 
@@ -272,6 +272,31 @@ public sealed class NullCache : ICache, ISpanKeyCache, IResultCache
 
     /// <inheritdoc cref="TryAddAsync{T}(CacheKey, T, CachePolicy, CancellationToken)"/>
     public ValueTask<bool> TryAddAsync<T>(CacheKey cacheKey, T? value, DateTimeOffset expiration, CachePolicy? policy, CancellationToken token = default) => ReturnTrueAsync<T>();
+
+    /// <summary>Always <see cref="FillOutcome.Added"/>.</summary>
+    public ValueTask<FillResult<T>> TryFillAsync<T>(CacheKey cacheKey, T? value, TimeSpan expiration, CachePolicy? policy, CancellationToken token = default)
+    {
+        NotCacheableException.ThrowIfNotCacheable<T>();
+        return ValueTask.FromResult(new FillResult<T>(FillOutcome.Added, default));
+    }
+
+    /// <inheritdoc cref="TryFillAsync{T}(CacheKey, T, TimeSpan, CachePolicy, CancellationToken)"/>
+    public ValueTask<FillResult<T>> TryFillAsync<T>(CacheKey cacheKey, T? value, DateTimeOffset expiration, CachePolicy? policy, CancellationToken token = default) =>
+        TryFillAsync(cacheKey, value, TimeSpan.Zero, policy, token);
+
+    /// <summary>Always <see cref="ChangeOutcome.Filled"/>.</summary>
+    public ValueTask<ChangeResult<T>> SetIfChangedAsync<T>(CacheKey cacheKey, T? value, IEqualityComparer<T> comparer, TimeSpan expiration, CachePolicy? policy, CancellationToken token = default)
+    {
+        NotCacheableException.ThrowIfNotCacheable<T>();
+        return ValueTask.FromResult(new ChangeResult<T>(ChangeOutcome.Filled, value));
+    }
+
+    /// <inheritdoc cref="SetIfChangedAsync{T}(CacheKey, T, IEqualityComparer{T}, TimeSpan, CachePolicy, CancellationToken)"/>
+    public ValueTask<ChangeResult<T>> SetIfChangedAsync<T>(CacheKey cacheKey, T? value, IEqualityComparer<T> comparer, DateTimeOffset expiration, CachePolicy? policy, CancellationToken token = default) =>
+        SetIfChangedAsync(cacheKey, value, comparer, TimeSpan.Zero, policy, token);
+
+    public ValueTask<ICacheEntry<T?>> ReadSnapshotAsync<T>(CacheKey cacheKey, CachePolicy? policy, CancellationToken token = default) =>
+        GetCacheEntryAsync<T>(cacheKey, policy, token);
 
     public ValueTask<TimeSpan?> TimeToLiveAsync<T>(CacheKey cacheKey, CancellationToken token = default)
     {

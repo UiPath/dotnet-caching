@@ -7,7 +7,7 @@ using UiPath.Caching.Telemetry;
 
 namespace UiPath.Caching.Redis;
 
-public abstract class RedisCacheBase : IConnectionState, IMasterReadScope, IDisposable
+public abstract class RedisCacheBase : IConnectionState, IDisposable
 {
     private static readonly AsyncLocal<bool> MasterDemanded = new();
     private static int _demands;
@@ -123,7 +123,7 @@ public abstract class RedisCacheBase : IConnectionState, IMasterReadScope, IDisp
         GC.SuppressFinalize(this);
     }
 
-    IDisposable IMasterReadScope.DemandMaster()
+    internal static IDisposable DemandMaster()
     {
         var scope = new MasterScope();
         MasterDemanded.Value = true;

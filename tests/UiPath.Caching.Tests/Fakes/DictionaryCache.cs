@@ -13,6 +13,10 @@ internal class DictionaryCache : ICache
 
     public int SetCalls { get; private set; }
 
+    public int ReadCalls { get; private set; }
+
+    public IEnumerable<CacheKey> Keys => _store.Keys;
+
     public int TryAddCalls { get; private set; }
 
     public List<CacheKey> GetOrAddKeys { get; } = [];
@@ -39,10 +43,13 @@ internal class DictionaryCache : ICache
         return ValueTask.FromResult(results);
     }
 
-    public ValueTask<ICacheEntry<T?>> GetCacheEntryAsync<T>(CacheKey cacheKey, CachePolicy? policy, CancellationToken token = default) =>
-        ValueTask.FromResult<ICacheEntry<T?>>(_store.TryGetValue(cacheKey, out var v)
+    public ValueTask<ICacheEntry<T?>> GetCacheEntryAsync<T>(CacheKey cacheKey, CachePolicy? policy, CancellationToken token = default)
+    {
+        ReadCalls++;
+        return ValueTask.FromResult<ICacheEntry<T?>>(_store.TryGetValue(cacheKey, out var v)
             ? new TestCacheEntry<T?> { Value = (T?)v, Expiration = DateTimeOffset.MaxValue, Found = true }
             : new TestCacheEntry<T?> { Value = default, Expiration = DateTimeOffset.MinValue });
+    }
 
     public ValueTask<T?> GetAsync<T>(CacheKey cacheKey, CachePolicy? policy, CancellationToken token = default) =>
         ValueTask.FromResult(Read<T>(cacheKey));
@@ -156,6 +163,35 @@ internal class DictionaryCache : ICache
 
     public ValueTask<bool> TryAddAsync<T>(CacheKey cacheKey, T? value, DateTimeOffset expiration, CachePolicy? policy, CancellationToken token = default) =>
         TryAddAsync(cacheKey, value, policy, token);
+
+    public ValueTask<FillResult<T>> TryFillAsync<T>(CacheKey cacheKey, T? value, TimeSpan expiration, CachePolicy? policy, CancellationToken token = default) =>
+        ValueTask.FromResult(_store.TryGetValue(cacheKey, out var held)
+            ? new FillResult<T>(FillOutcome.Existed, (T?)held)
+            : new FillResult<T>(_store.TryAdd(cacheKey, value) ? FillOutcome.Added : FillOutcome.Failed, default));
+
+    public ValueTask<FillResult<T>> TryFillAsync<T>(CacheKey cacheKey, T? value, DateTimeOffset expiration, CachePolicy? policy, CancellationToken token = default) =>
+        TryFillAsync(cacheKey, value, TimeSpan.MaxValue, policy, token);
+
+    public ValueTask<ChangeResult<T>> SetIfChangedAsync<T>(CacheKey cacheKey, T? value, IEqualityComparer<T> comparer, TimeSpan expiration, CachePolicy? policy, CancellationToken token = default)
+    {
+        if (!_store.TryGetValue(cacheKey, out var held))
+        {
+            _store[cacheKey] = value;
+            return ValueTask.FromResult(new ChangeResult<T>(ChangeOutcome.Filled, value));
+        }
+
+        if (comparer.Equals((T)held!, value!))
+        {
+            return ValueTask.FromResult(new ChangeResult<T>(ChangeOutcome.Unchanged, (T?)held));
+        }
+
+        _store[cacheKey] = value;
+        return ValueTask.FromResult(new ChangeResult<T>(ChangeOutcome.Replaced, value));
+    }
+
+    public ValueTask<ChangeResult<T>> SetIfChangedAsync<T>(CacheKey cacheKey, T? value, IEqualityComparer<T> comparer, DateTimeOffset expiration, CachePolicy? policy, CancellationToken token = default) =>
+        SetIfChangedAsync(cacheKey, value, comparer, TimeSpan.MaxValue, policy, token);
+
 
     public ValueTask<bool> RemoveAsync<T>(CacheKey cacheKey, CancellationToken token = default) =>
         ValueTask.FromResult(_store.Remove(cacheKey));

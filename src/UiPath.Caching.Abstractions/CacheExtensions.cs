@@ -48,6 +48,27 @@ public static class CacheExtensions
     public static ValueTask<bool> SetAsync<T>(this ICache cache, KeyValuePair<CacheKey, T?>[] keyValues, DateTimeOffset expiration, CancellationToken token = default)
         => cache.SetAsync<T>(keyValues, expiration, null, token);
 
+    /// <inheritdoc cref="ICache.TryFillAsync{T}(CacheKey, T, TimeSpan, CachePolicy, CancellationToken)"/>
+    public static ValueTask<FillResult<T>> TryFillAsync<T>(this ICache cache, CacheKey cacheKey, T? value, TimeSpan expiration, CancellationToken token = default)
+        => cache.TryFillAsync<T>(cacheKey, value, expiration, null, token);
+
+    /// <inheritdoc cref="ICache.TryFillAsync{T}(CacheKey, T, TimeSpan, CachePolicy, CancellationToken)"/>
+    public static ValueTask<FillResult<T>> TryFillAsync<T>(this ICache cache, CacheKey cacheKey, T? value, DateTimeOffset expiration, CancellationToken token = default)
+        => cache.TryFillAsync<T>(cacheKey, value, expiration, null, token);
+
+    /// <inheritdoc cref="ICache.SetIfChangedAsync{T}(CacheKey, T, IEqualityComparer{T}, TimeSpan, CachePolicy, CancellationToken)"/>
+    public static ValueTask<ChangeResult<T>> SetIfChangedAsync<T>(this ICache cache, CacheKey cacheKey, T? value, IEqualityComparer<T> comparer, TimeSpan expiration, CancellationToken token = default)
+        => cache.SetIfChangedAsync<T>(cacheKey, value, comparer, expiration, null, token);
+
+    /// <inheritdoc cref="ICache.SetIfChangedAsync{T}(CacheKey, T, IEqualityComparer{T}, TimeSpan, CachePolicy, CancellationToken)"/>
+    public static ValueTask<ChangeResult<T>> SetIfChangedAsync<T>(this ICache cache, CacheKey cacheKey, T? value, IEqualityComparer<T> comparer, DateTimeOffset expiration, CancellationToken token = default)
+        => cache.SetIfChangedAsync<T>(cacheKey, value, comparer, expiration, null, token);
+
+    /// <summary>Throws <see cref="NotSupportedException"/> when the cache is not an <see cref="IMigrationCache"/>.</summary>
+    public static IMigrationCache AsMigrationCache(this ICache cache) =>
+        cache as IMigrationCache
+        ?? throw new NotSupportedException($"{cache.GetType().FullName} does not support migration reads. Implement {nameof(IMigrationCache)} on it.");
+
     /// <inheritdoc cref="ICache.TryAddAsync{T}(CacheKey, T, CachePolicy, CancellationToken)"/>
     public static ValueTask<bool> TryAddAsync<T>(this ICache cache, CacheKey cacheKey, T? value, CancellationToken token = default)
         => cache.TryAddAsync<T>(cacheKey, value, (CachePolicy?)null, token);

@@ -497,7 +497,7 @@ public abstract partial class MultilayerCacheBase
         /// <summary>Holds the master scope until the read ends, abandoned or not: commands it sends after its first await demand the master too.</summary>
         private async Task<PeerRead[]> ReadOnMasterAsync(PeerRefreshTarget target, CacheKey[] keys, CancellationToken token)
         {
-            using (cache._innerTier.MasterReads?.DemandMaster())
+            using (cache._innerTier.Shared?.DemandMaster())
             {
                 return await target.Reader.ReadAsync(cache, keys, target.Policy, token).ConfigureAwait(false);
             }

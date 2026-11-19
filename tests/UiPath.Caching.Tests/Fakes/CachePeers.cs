@@ -363,7 +363,7 @@ internal sealed class CachePeers : IDisposable
     }
 
     /// <summary>The inner tier of a node over the shared store: counts its reads, can hold or fail them, and reports a connection state the test sets.</summary>
-    internal class NodeInner : DispatchProxy, IConnectionState, IMasterReadScope, IAdoptionReadCache
+    internal class NodeInner : DispatchProxy, IConnectionState, ISharedTier, IMigrationCache
     {
         private static readonly MethodInfo ReadOne = typeof(NodeInner).GetMethod(nameof(ReadOneAsync), BindingFlags.Instance | BindingFlags.NonPublic)!;
         private static readonly MethodInfo ReadMany = typeof(NodeInner).GetMethod(nameof(ReadManyAsync), BindingFlags.Instance | BindingFlags.NonPublic)!;
@@ -396,7 +396,7 @@ internal sealed class CachePeers : IDisposable
 
         public int[] BatchSizes => [.. _batchSizes];
 
-        /// <summary>Per read, in order: whether it ran inside <see cref="IMasterReadScope.DemandMaster"/>, gated as the Redis tier gates it: the flow's flag and a scope still open.</summary>
+        /// <summary>Per read, in order: whether it ran inside <see cref="ISharedTier.DemandMaster"/>.</summary>
         public bool[] ReadsOnMaster => [.. _readsOnMaster];
 
         /// <summary>When set, a read waits for it before it reads its flags, as a command sent after the read's first await does.</summary>
@@ -435,10 +435,18 @@ internal sealed class CachePeers : IDisposable
             }
         }
 
-        ValueTask<ICacheEntry<T?>> IAdoptionReadCache.ReadForAdoptionAsync<T>(CacheKey cacheKey, CachePolicy? policy, CancellationToken token)
+        ValueTask<ICacheEntry<T?>> IMigrationCache.ReadSnapshotAsync<T>(CacheKey cacheKey, CachePolicy? policy, CancellationToken token)
             where T : default => ReadOneAsync<T>(cacheKey, token);
 
-        IDisposable IMasterReadScope.DemandMaster()
+        void ISharedTier.Invalidated(CacheKey key)
+        {
+        }
+
+        void ISharedTier.InvalidatedAll()
+        {
+        }
+
+        IDisposable ISharedTier.DemandMaster()
         {
             _masterDemanded.Value = true;
             Interlocked.Increment(ref _openScopes);

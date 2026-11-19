@@ -184,7 +184,7 @@ public class ChangeTokenTests : IAsyncLifetime
     {
         var seen = new List<(object? State, bool Lost, bool HasChanged)>();
         var state = new object();
-        ((IInvalidationSource)Sut).RegisterInvalidatingCallback((s, l) => seen.Add((s, l, Sut.HasChanged)), state);
+        ((IPeerAwareToken)Sut).RegisterInvalidatingCallback((s, l) => seen.Add((s, l, Sut.HasChanged)), state);
 
         switch (cause)
         {
@@ -209,7 +209,7 @@ public class ChangeTokenTests : IAsyncLifetime
         ((IMissedEventsObserver)Sut).OnEventsMissed(MissedEventsReason.Lost);
         var seen = new List<bool>();
 
-        ((IInvalidationSource)Sut).RegisterInvalidatingCallback((_, l) => seen.Add(l), null);
+        ((IPeerAwareToken)Sut).RegisterInvalidatingCallback((_, l) => seen.Add(l), null);
 
         seen.Should().Equal(true);
     }
@@ -218,8 +218,8 @@ public class ChangeTokenTests : IAsyncLifetime
     public void The_invalidating_callback_runs_for_a_peer_update_the_holder_applied()
     {
         var seen = 0;
-        ((IInvalidationSource)Sut).RegisterInvalidatingCallback((_, _) => seen++, null);
-        ((IPeerUpdateSource)Sut).PeerUpdateHandler = _ => true;
+        ((IPeerAwareToken)Sut).RegisterInvalidatingCallback((_, _) => seen++, null);
+        ((IPeerAwareToken)Sut).PeerUpdateHandler = _ => true;
 
         Sut.OnNext(new TestCacheEvent
         {
@@ -311,7 +311,7 @@ public class ChangeTokenTests : IAsyncLifetime
         var seen = new List<object?>();
         var changed = false;
         Sut.RegisterChangeCallback(_ => changed = true, null);
-        ((IPeerRefreshSource)Sut).RegisterPeerRefresh(s => { seen.Add(s); return true; }, state);
+        ((IPeerAwareToken)Sut).RegisterPeerRefresh(s => { seen.Add(s); return true; }, state);
 
         Sut.OnNext(PeerEvent(KnownEventTypes.CacheSet));
 
@@ -323,7 +323,7 @@ public class ChangeTokenTests : IAsyncLifetime
     [Fact]
     public void A_peer_set_the_hook_declines_changes_the_token()
     {
-        ((IPeerRefreshSource)Sut).RegisterPeerRefresh(_ => false, null);
+        ((IPeerAwareToken)Sut).RegisterPeerRefresh(_ => false, null);
 
         Sut.OnNext(PeerEvent(KnownEventTypes.CacheSet));
 
@@ -333,7 +333,7 @@ public class ChangeTokenTests : IAsyncLifetime
     [Fact]
     public void A_peer_set_the_hook_declines_clears_a_refreshed_expiration()
     {
-        ((IPeerRefreshSource)Sut).RegisterPeerRefresh(_ => false, null);
+        ((IPeerAwareToken)Sut).RegisterPeerRefresh(_ => false, null);
         Sut.OnNext(PeerEvent(KnownEventTypes.CacheRefreshed, new Dictionary<string, object?> { ["_expiration_"] = DateTimeOffset.Now.AddMinutes(5) }));
         Sut.Expiration.Should().NotBeNull();
 
@@ -347,7 +347,7 @@ public class ChangeTokenTests : IAsyncLifetime
     {
         var changed = false;
         Sut.RegisterChangeCallback(_ => changed = true, null);
-        ((IPeerRefreshSource)Sut).RegisterPeerRefresh(_ => throw new InvalidOperationException("hook failed"), null);
+        ((IPeerAwareToken)Sut).RegisterPeerRefresh(_ => throw new InvalidOperationException("hook failed"), null);
 
         Sut.Invoking(s => s.OnNext(PeerEvent(KnownEventTypes.CacheSet))).Should().NotThrow();
 
@@ -359,7 +359,7 @@ public class ChangeTokenTests : IAsyncLifetime
     public void A_pending_peer_set_whose_hook_throws_still_changes_the_token()
     {
         var calls = 0;
-        ((IPeerRefreshSource)Sut).RegisterPeerRefresh(_ => ++calls == 1 ? true : throw new InvalidOperationException("hook failed"), null);
+        ((IPeerAwareToken)Sut).RegisterPeerRefresh(_ => ++calls == 1 ? true : throw new InvalidOperationException("hook failed"), null);
         Sut.OnNext(PeerEvent(KnownEventTypes.CacheSet));
 
         Sut.Invoking(s => s.OnNext(PeerEvent(KnownEventTypes.CacheSet))).Should().NotThrow();
@@ -372,7 +372,7 @@ public class ChangeTokenTests : IAsyncLifetime
     public void A_peer_removal_never_reaches_the_refresh_hook()
     {
         var calls = 0;
-        ((IPeerRefreshSource)Sut).RegisterPeerRefresh(_ => { calls++; return true; }, null);
+        ((IPeerAwareToken)Sut).RegisterPeerRefresh(_ => { calls++; return true; }, null);
 
         Sut.OnNext(PeerEvent(KnownEventTypes.CacheRemoved));
 
@@ -383,7 +383,7 @@ public class ChangeTokenTests : IAsyncLifetime
     [Fact]
     public void A_refresh_event_after_a_pending_peer_set_drops_the_entry()
     {
-        ((IPeerRefreshSource)Sut).RegisterPeerRefresh(_ => true, null);
+        ((IPeerAwareToken)Sut).RegisterPeerRefresh(_ => true, null);
         Sut.OnNext(PeerEvent(KnownEventTypes.CacheSet));
 
         Sut.OnNext(PeerEvent(KnownEventTypes.CacheRefreshed, new Dictionary<string, object?> { ["_expiration_"] = DateTimeOffset.Now }));
@@ -397,7 +397,7 @@ public class ChangeTokenTests : IAsyncLifetime
     public void A_second_peer_set_while_pending_reaches_the_hook_again()
     {
         var calls = 0;
-        ((IPeerRefreshSource)Sut).RegisterPeerRefresh(_ => { calls++; return true; }, null);
+        ((IPeerAwareToken)Sut).RegisterPeerRefresh(_ => { calls++; return true; }, null);
 
         Sut.OnNext(PeerEvent(KnownEventTypes.CacheSet));
         Sut.OnNext(PeerEvent(KnownEventTypes.CacheSet));
@@ -410,7 +410,7 @@ public class ChangeTokenTests : IAsyncLifetime
     public void A_loss_while_a_refresh_is_pending_still_drops()
     {
         var calls = 0;
-        ((IPeerRefreshSource)Sut).RegisterPeerRefresh(_ => { calls++; return true; }, null);
+        ((IPeerAwareToken)Sut).RegisterPeerRefresh(_ => { calls++; return true; }, null);
         Sut.OnNext(PeerEvent(KnownEventTypes.CacheSet));
 
         ((IMissedEventsObserver)Sut).OnEventsMissed(MissedEventsReason.Lost);
@@ -423,8 +423,8 @@ public class ChangeTokenTests : IAsyncLifetime
     public void The_invalidating_callback_runs_before_the_refresh_hook()
     {
         var order = new List<string>();
-        ((IInvalidationSource)Sut).RegisterInvalidatingCallback((_, _) => order.Add("invalidating"), null);
-        ((IPeerRefreshSource)Sut).RegisterPeerRefresh(_ => { order.Add("refresh"); return true; }, null);
+        ((IPeerAwareToken)Sut).RegisterInvalidatingCallback((_, _) => order.Add("invalidating"), null);
+        ((IPeerAwareToken)Sut).RegisterPeerRefresh(_ => { order.Add("refresh"); return true; }, null);
 
         Sut.OnNext(PeerEvent(KnownEventTypes.CacheSet));
 
@@ -539,7 +539,7 @@ public class ChangeTokenTests : IAsyncLifetime
         Sut.RegisterChangeCallback(_ => refreshable.Add(Sut.MetadataHasChanged || Sut.Expiration is not null), null);
         if (case_ == "handler declines")
         {
-            ((IPeerUpdateSource)Sut).PeerUpdateHandler = _ => false;
+            ((IPeerAwareToken)Sut).PeerUpdateHandler = _ => false;
         }
 
         Sut.OnNext(new TestCacheEvent
@@ -678,7 +678,7 @@ public class ChangeTokenTests : IAsyncLifetime
         var strict = new ThrowingSerializer();
         var token = new ChangeToken<byte[]>(_key, _topic, _source, strict, _fixture.Freeze<ILogger<ChangeToken<byte[]>>>(), _telemetryProvider, _acceptedEvents);
         PeerUpdate? seen = null;
-        ((IPeerUpdateSource)token).PeerUpdateHandler = update =>
+        ((IPeerAwareToken)token).PeerUpdateHandler = update =>
         {
             seen = update;
             return true;
@@ -712,7 +712,7 @@ public class ChangeTokenTests : IAsyncLifetime
     public void JsonElement_properties_still_use_the_fallback()
     {
         PeerUpdate? seen = null;
-        ((IPeerUpdateSource)Sut).PeerUpdateHandler = update =>
+        ((IPeerAwareToken)Sut).PeerUpdateHandler = update =>
         {
             seen = update;
             return true;
@@ -736,7 +736,7 @@ public class ChangeTokenTests : IAsyncLifetime
         var recording = new RecordingSerializer();
         var token = new ChangeToken<byte[]>(_key, _topic, _source, recording, _fixture.Freeze<ILogger<ChangeToken<byte[]>>>(), _telemetryProvider, _acceptedEvents);
         PeerUpdate? seen = null;
-        ((IPeerUpdateSource)token).PeerUpdateHandler = update =>
+        ((IPeerAwareToken)token).PeerUpdateHandler = update =>
         {
             seen = update;
             return true;
@@ -756,7 +756,7 @@ public class ChangeTokenTests : IAsyncLifetime
     public void Null_JsonElement_metadata_still_applies_the_peer_update()
     {
         PeerUpdate? seen = null;
-        ((IPeerUpdateSource)Sut).PeerUpdateHandler = update =>
+        ((IPeerAwareToken)Sut).PeerUpdateHandler = update =>
         {
             seen = update;
             return true;
@@ -790,7 +790,7 @@ public class ChangeTokenTests : IAsyncLifetime
         await new CacheEventPublisher("cache", topics, factory, NullLogger.Instance)
             .CacheSetAsync(options, typeof(string), 7, new Dictionary<string, byte[]?> { ["a"] = [1, 2], ["b"] = null });
         PeerUpdate? seen = null;
-        ((IPeerUpdateSource)Sut).PeerUpdateHandler = update =>
+        ((IPeerAwareToken)Sut).PeerUpdateHandler = update =>
         {
             seen = update;
             return true;
@@ -809,7 +809,7 @@ public class ChangeTokenTests : IAsyncLifetime
     public void An_in_process_peer_update_with_invalid_base64_fails_when_the_fields_are_first_used()
     {
         PeerUpdate? seen = null;
-        ((IPeerUpdateSource)Sut).PeerUpdateHandler = update =>
+        ((IPeerAwareToken)Sut).PeerUpdateHandler = update =>
         {
             seen = update;
             return false;
@@ -833,7 +833,7 @@ public class ChangeTokenTests : IAsyncLifetime
         body = System.Text.Encoding.UTF8.GetBytes(System.Text.Encoding.UTF8.GetString(body).Replace("@", _key));
         var decoded = new CacheEventFormatter().Decode(body)!;
         var handed = false;
-        ((IPeerUpdateSource)Sut).PeerUpdateHandler = _ =>
+        ((IPeerAwareToken)Sut).PeerUpdateHandler = _ =>
         {
             handed = true;
             return false;
@@ -850,12 +850,12 @@ public class ChangeTokenTests : IAsyncLifetime
         var other = new ChangeToken<byte[]>(_key, _topic, _source, _serializer, _fixture.Freeze<ILogger<ChangeToken<byte[]>>>(), _telemetryProvider, _acceptedEvents);
         PeerUpdate? first = null;
         PeerUpdate? second = null;
-        ((IPeerUpdateSource)Sut).PeerUpdateHandler = update =>
+        ((IPeerAwareToken)Sut).PeerUpdateHandler = update =>
         {
             first = update;
             return true;
         };
-        ((IPeerUpdateSource)other).PeerUpdateHandler = update =>
+        ((IPeerAwareToken)other).PeerUpdateHandler = update =>
         {
             second = update;
             return true;

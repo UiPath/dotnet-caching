@@ -12,6 +12,9 @@ internal static class FormatRewriteScripts
     private const string StringScript =
         "local v = redis.call('GET', KEYS[1]) if v == ARGV[1] then redis.call('SET', KEYS[1], ARGV[2], 'KEEPTTL') return 1 end return 0";
 
+    private const string ReplaceScript =
+        "local v = redis.call('GET', KEYS[1]) if v == ARGV[1] then if tonumber(ARGV[3]) > 0 then redis.call('SET', KEYS[1], ARGV[2], 'PX', ARGV[3]) else redis.call('SET', KEYS[1], ARGV[2]) end return 1 end return 0";
+
     // ARGV holds a field, the bytes it was read with and the new value, per field.
     private const string HashScript =
         "local n = 0 for i = 1, #ARGV, 3 do local v = redis.call('HGET', KEYS[1], ARGV[i]) if v == ARGV[i + 1] then redis.call('HSET', KEYS[1], ARGV[i], ARGV[i + 2]) n = n + 1 end end return n";
@@ -46,6 +49,47 @@ internal static class FormatRewriteScripts
         // The server-side compare-and-set needs Redis 8.4; this library supports 6.
         transaction.AddCondition(Condition.StringEqual(key, expected));
         transaction.StringSetAsync(key, value, expiry: null, keepTtl: true, When.Always, CommandFlags.DemandMaster).Forget();
+        return await transaction.ExecuteAsync(CommandFlags.DemandMaster).ConfigureAwait(false);
+    }
+
+    /// <summary>Replaces the value only if the key still holds <paramref name="expected"/>; null with nothing sent once the lifetime is not positive.</summary>
+    public static async Task<bool?> ReplaceStringAsync(
+        IDatabase db, RedisKey key, RedisValue expected, RedisValue value, Func<TimeSpan> remaining, bool useScripts = true, Action<Exception>? scriptRefused = null)
+    {
+        var expiration = remaining();
+        if (expiration <= TimeSpan.Zero)
+        {
+            return null;
+        }
+
+        if (useScripts)
+        {
+            try
+            {
+                var milliseconds = expiration == TimeSpan.MaxValue ? 0 : Math.Max(1, (long)Math.Ceiling(expiration.TotalMilliseconds));
+                var reply = await db.ScriptEvaluateAsync(ReplaceScript, [key], [expected, value, milliseconds], CommandFlags.DemandMaster).ConfigureAwait(false);
+                return (long)reply == 1;
+            }
+            catch (Exception ex) when (IsWrongType(ex))
+            {
+                return false;
+            }
+            catch (Exception ex) when (RedisUtils.RefusesScript(ex))
+            {
+                scriptRefused?.Invoke(ex);
+            }
+        }
+
+        // A refused script cost a round trip, so the lifetime is worked out again.
+        expiration = remaining();
+        if (expiration <= TimeSpan.Zero)
+        {
+            return null;
+        }
+
+        var transaction = db.CreateTransaction(asyncState: null);
+        transaction.AddCondition(Condition.StringEqual(key, expected));
+        transaction.StringSetAsync(key, value, expiration, When.Always, CommandFlags.DemandMaster).Forget();
         return await transaction.ExecuteAsync(CommandFlags.DemandMaster).ConfigureAwait(false);
     }
 

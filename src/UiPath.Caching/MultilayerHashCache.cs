@@ -16,7 +16,7 @@ internal sealed partial class MultilayerHashCache : MultilayerCacheBase, IHashCa
     private readonly HashCacheEntryBuilder _entryBuilder;
     private readonly HashLocalMemorySetter _localMemorySetter;
     private readonly bool _sharedInner;
-    private readonly IVersionedHashCache? _versioned;
+    private readonly ISharedHashTier? _versioned;
     private readonly PeerFieldLimits _peerLimits;
 
     // Held copies a peer's write was handed to the refresh for, which lack that write: marked and read under the key's merge lock.
@@ -54,7 +54,7 @@ internal sealed partial class MultilayerHashCache : MultilayerCacheBase, IHashCa
 
         _localMemorySetter = new HashLocalMemorySetter(cacheName, changeTokenFactory, _topicProvider, _memoryCache, logger, _clock, _multiLayerCacheOptions, memoryCacheOptions, telemetryProvider, _masker, !_clearLocalOnReconnect)
         {
-            Invalidations = _innerTier.Invalidations,
+            Invalidations = _innerTier.Shared,
             PeerApply = _versioned is null ? null : TryApplyPeerUpdate,
             PeerRefresh = _peerRefresher is null ? null : HandToRefresh,
             PeerRefreshChanged = _peerRefresher is { } changed ? changed.TokenChanged : null,
@@ -62,7 +62,7 @@ internal sealed partial class MultilayerHashCache : MultilayerCacheBase, IHashCa
     }
 
     /// <summary>The tier told of received invalidations: the inner cache when it tracks them; tests check the wiring.</summary>
-    internal IInvalidationSink? Invalidations => _localMemorySetter.Invalidations;
+    internal ISharedTier? Invalidations => _localMemorySetter.Invalidations;
 
     /// <summary>Test seam: runs on the dispatcher thread as a peer's write is handed to the refresh, before the key is queued.</summary>
     internal Action? PeerRefreshHandOver { get; set; }
@@ -791,7 +791,7 @@ internal sealed partial class MultilayerHashCache : MultilayerCacheBase, IHashCa
         }
 
         // A field the inner tier could not read would survive a write that only sets fields, and every node would miss on it again once its local copy expired.
-        if (cacheEntry is IUnreadableEntry && cacheEntryOptions.SetOption == HashCacheSetOption.HashReplace)
+        if (cacheEntry is UnreadableEntry<IDictionary<string, T?>> && cacheEntryOptions.SetOption == HashCacheSetOption.HashReplace)
         {
             cacheEntryOptions = cacheEntryOptions with { SetOption = HashCacheSetOption.KeyReplace };
         }
@@ -819,7 +819,7 @@ internal sealed partial class MultilayerHashCache : MultilayerCacheBase, IHashCa
         }
 
         // The first read was clean, so a field another policy wrote since is only found here.
-        return await RunHashGeneratorAndStoreEntryAsync(current is IUnreadableEntry && options.SetOption == HashCacheSetOption.HashReplace ? options with { SetOption = HashCacheSetOption.KeyReplace } : options, generator, policy, scope).ConfigureAwait(false);
+        return await RunHashGeneratorAndStoreEntryAsync(current is UnreadableEntry<IDictionary<string, T?>> && options.SetOption == HashCacheSetOption.HashReplace ? options with { SetOption = HashCacheSetOption.KeyReplace } : options, generator, policy, scope).ConfigureAwait(false);
     }
 
     /// <summary>Takes the key's run before anything else and runs the generator inline in the caller that took it: a caller that arrives meanwhile joins the run at once; only the caller that runs it takes the distributed lock, if one is enabled.</summary>

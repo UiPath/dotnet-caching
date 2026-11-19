@@ -12,7 +12,7 @@ internal sealed partial class MultilayerCache
 
         public bool InnerIsNull => !cache._sharedInner;
 
-        public bool CanAdopt => cache._innerCache is IAdoptionReadCache;
+        public bool CanAdopt => cache._innerCache is IMigrationCache;
 
         public bool IsEmpty(T? value) => value is null;
 
@@ -25,7 +25,7 @@ internal sealed partial class MultilayerCache
             cache._innerCache.GetCacheEntryAsync<T>(options.CacheKey, policy, options.Token);
 
         public ValueTask<ICacheEntry<T?>> ReadForAdoptionAsync(CacheEntryOptions options, CachePolicy policy) =>
-            ((IAdoptionReadCache)cache._innerCache).ReadForAdoptionAsync<T>(options.CacheKey, policy, options.Token);
+            ((IMigrationCache)cache._innerCache).ReadSnapshotAsync<T>(options.CacheKey, policy, options.Token);
 
         public void Adopt(ref CacheEntryOptions options, ICacheEntry<T?> fetched) => options.Expiration = fetched.Expiration;
 

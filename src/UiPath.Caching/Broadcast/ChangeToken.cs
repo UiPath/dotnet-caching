@@ -2,7 +2,7 @@ using UiPath.Caching.Telemetry;
 
 namespace UiPath.Caching.Broadcast;
 
-public sealed partial class ChangeToken<T> : ICacheChangeToken, IKeyedObserver<ICacheEvent>, IMissedEventsObserver, IPeerUpdateSource, IInvalidationSource, IPeerRefreshSource, IDisposable
+public sealed partial class ChangeToken<T> : ICacheChangeToken, IKeyedObserver<ICacheEvent>, IMissedEventsObserver, IPeerAwareToken, IDisposable
 {
     private readonly string _key;
     private readonly KeyMasker _masker;
@@ -95,7 +95,7 @@ public sealed partial class ChangeToken<T> : ICacheChangeToken, IKeyedObserver<I
     public string? TransportId { get; private set; }
 
     [System.Diagnostics.CodeAnalysis.SuppressMessage("Major Code Smell", "S2292:Trivial properties should be auto-implemented", Justification = "An explicit implementation of an internal interface member cannot be an auto-property.")]
-    Func<PeerUpdate, bool>? IPeerUpdateSource.PeerUpdateHandler
+    Func<PeerUpdate, bool>? IPeerAwareToken.PeerUpdateHandler
     {
         get => _peerUpdateHandler;
         set => _peerUpdateHandler = value;
@@ -153,7 +153,7 @@ public sealed partial class ChangeToken<T> : ICacheChangeToken, IKeyedObserver<I
 
 
 
-    void IInvalidationSource.RegisterInvalidatingCallback(Action<object?, bool> callback, object? state)
+    void IPeerAwareToken.RegisterInvalidatingCallback(Action<object?, bool> callback, object? state)
     {
         lock (_notifyLock)
         {
@@ -167,7 +167,7 @@ public sealed partial class ChangeToken<T> : ICacheChangeToken, IKeyedObserver<I
         }
     }
 
-    void IPeerRefreshSource.RegisterPeerRefresh(Func<object?, bool> refresh, object? state)
+    void IPeerAwareToken.RegisterPeerRefresh(Func<object?, bool> refresh, object? state)
     {
         lock (_notifyLock)
         {

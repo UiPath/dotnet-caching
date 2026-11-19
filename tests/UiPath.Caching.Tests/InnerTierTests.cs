@@ -9,7 +9,7 @@ public sealed class InnerTierTests
 
         sut.Should().BeOfType<NoInnerTier>();
         sut.IsShared.Should().BeFalse();
-        sut.Invalidations.Should().BeNull();
+        sut.Shared.Should().BeNull();
         sut.Versioned.Should().BeNull();
         sut.Connection.Should().BeNull();
     }
@@ -31,7 +31,7 @@ public sealed class InnerTierTests
 
         sut.Should().BeOfType<SharedInnerTier>();
         sut.IsShared.Should().BeTrue();
-        sut.Invalidations.Should().BeSameAs(cache);
+        sut.Shared.Should().BeSameAs(cache);
         sut.Versioned.Should().BeSameAs(cache);
         sut.Connection.Should().BeSameAs(cache);
         sut.PeerLimits.Should().Be(new PeerFieldLimits(7, 99));
@@ -43,7 +43,7 @@ public sealed class InnerTierTests
         var sut = InnerTier.For(Substitute.For<IHashCache>(), new InMemoryRedisCacheOptions { PeerFieldUpdates = true });
 
         sut.IsShared.Should().BeTrue();
-        sut.Invalidations.Should().BeNull();
+        sut.Shared.Should().BeNull();
         sut.Versioned.Should().BeNull();
         sut.Connection.Should().BeNull();
     }
@@ -59,7 +59,7 @@ public sealed class InnerTierTests
 
     private static FullFeaturedTier FullFeatured() => new();
 
-    private sealed class FullFeaturedTier : IInvalidationSink, IVersionedHashCache, IConnectionState
+    private sealed class FullFeaturedTier : ISharedHashTier, IConnectionState
     {
         public event EventHandler? OnConnectionFailed
         {
@@ -109,6 +109,11 @@ public sealed class InnerTierTests
         public void InvalidatedAll()
         {
         }
+
+        public IDisposable DemandMaster() => Fakes.NoMasterScope.Instance;
+
+        public ValueTask<ICacheEntry<IDictionary<string, T?>>> ReadForAdoptionAsync<T>(CacheKey cacheKey, CachePolicy? policy, CancellationToken token) =>
+            throw new NotSupportedException();
 
         public ValueTask<VersionedWrite> SetVersionedAsync<T>(CacheKey cacheKey, IDictionary<string, T?> values, HashCacheEntryOptions options, CachePolicy? policy, PeerFieldLimits limits, CancellationToken token = default) =>
             throw new NotSupportedException();

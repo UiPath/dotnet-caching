@@ -44,3 +44,74 @@ UiPath.Caching.Broadcast.ITopicSubscriptionState
 UiPath.Caching.Broadcast.ITopicSubscriptionState.IsSubscribed.get -> bool
 static UiPath.Caching.CacheKey.Verbatim(string! name) -> UiPath.Caching.CacheKey
 UiPath.Caching.CacheKeyCasing.Verbatim = 2 -> UiPath.Caching.CacheKeyCasing
+
+~override UiPath.Caching.ChangeResult<T>.Equals(object obj) -> bool
+~override UiPath.Caching.ChangeResult<T>.ToString() -> string
+~override UiPath.Caching.FillResult<T>.Equals(object obj) -> bool
+~override UiPath.Caching.FillResult<T>.ToString() -> string
+override UiPath.Caching.ChangeResult<T>.GetHashCode() -> int
+override UiPath.Caching.FillResult<T>.GetHashCode() -> int
+static UiPath.Caching.CacheExtensions.SetIfChangedAsync<T>(this UiPath.Caching.ICache! cache, UiPath.Caching.CacheKey cacheKey, T? value, System.Collections.Generic.IEqualityComparer<T>! comparer, System.DateTimeOffset expiration, System.Threading.CancellationToken token = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.ValueTask<UiPath.Caching.ChangeResult<T>>
+static UiPath.Caching.CacheExtensions.SetIfChangedAsync<T>(this UiPath.Caching.ICache! cache, UiPath.Caching.CacheKey cacheKey, T? value, System.Collections.Generic.IEqualityComparer<T>! comparer, System.TimeSpan expiration, System.Threading.CancellationToken token = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.ValueTask<UiPath.Caching.ChangeResult<T>>
+static UiPath.Caching.CacheExtensions.TryFillAsync<T>(this UiPath.Caching.ICache! cache, UiPath.Caching.CacheKey cacheKey, T? value, System.DateTimeOffset expiration, System.Threading.CancellationToken token = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.ValueTask<UiPath.Caching.FillResult<T>>
+static UiPath.Caching.CacheExtensions.TryFillAsync<T>(this UiPath.Caching.ICache! cache, UiPath.Caching.CacheKey cacheKey, T? value, System.TimeSpan expiration, System.Threading.CancellationToken token = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.ValueTask<UiPath.Caching.FillResult<T>>
+static UiPath.Caching.ChangeResult<T>.operator !=(UiPath.Caching.ChangeResult<T> left, UiPath.Caching.ChangeResult<T> right) -> bool
+static UiPath.Caching.ChangeResult<T>.operator ==(UiPath.Caching.ChangeResult<T> left, UiPath.Caching.ChangeResult<T> right) -> bool
+static UiPath.Caching.FillResult<T>.operator !=(UiPath.Caching.FillResult<T> left, UiPath.Caching.FillResult<T> right) -> bool
+static UiPath.Caching.FillResult<T>.operator ==(UiPath.Caching.FillResult<T> left, UiPath.Caching.FillResult<T> right) -> bool
+UiPath.Caching.ChangeOutcome
+UiPath.Caching.ChangeOutcome.Failed = 0 -> UiPath.Caching.ChangeOutcome
+UiPath.Caching.ChangeOutcome.Filled = 1 -> UiPath.Caching.ChangeOutcome
+UiPath.Caching.ChangeOutcome.Replaced = 3 -> UiPath.Caching.ChangeOutcome
+UiPath.Caching.ChangeOutcome.Unchanged = 2 -> UiPath.Caching.ChangeOutcome
+UiPath.Caching.ChangeResult<T>
+UiPath.Caching.ChangeResult<T>.ChangeResult() -> void
+UiPath.Caching.ChangeResult<T>.ChangeResult(UiPath.Caching.ChangeOutcome Outcome, T? Current, System.DateTimeOffset? Expiration = null) -> void
+UiPath.Caching.ChangeResult<T>.Current.get -> T?
+UiPath.Caching.ChangeResult<T>.Current.init -> void
+UiPath.Caching.ChangeResult<T>.Deconstruct(out UiPath.Caching.ChangeOutcome Outcome, out T? Current, out System.DateTimeOffset? Expiration) -> void
+UiPath.Caching.ChangeResult<T>.Equals(UiPath.Caching.ChangeResult<T> other) -> bool
+UiPath.Caching.ChangeResult<T>.Expiration.get -> System.DateTimeOffset?
+UiPath.Caching.ChangeResult<T>.Expiration.init -> void
+UiPath.Caching.ChangeResult<T>.Outcome.get -> UiPath.Caching.ChangeOutcome
+UiPath.Caching.ChangeResult<T>.Outcome.init -> void
+UiPath.Caching.FillOutcome
+UiPath.Caching.FillOutcome.Added = 1 -> UiPath.Caching.FillOutcome
+UiPath.Caching.FillOutcome.Existed = 2 -> UiPath.Caching.FillOutcome
+UiPath.Caching.FillOutcome.Failed = 0 -> UiPath.Caching.FillOutcome
+UiPath.Caching.FillOutcome.Unreadable = 3 -> UiPath.Caching.FillOutcome
+UiPath.Caching.FillResult<T>
+UiPath.Caching.FillResult<T>.Deconstruct(out UiPath.Caching.FillOutcome Outcome, out T? Existing, out System.DateTimeOffset? Expiration) -> void
+UiPath.Caching.FillResult<T>.Equals(UiPath.Caching.FillResult<T> other) -> bool
+UiPath.Caching.FillResult<T>.Existing.get -> T?
+UiPath.Caching.FillResult<T>.Existing.init -> void
+UiPath.Caching.FillResult<T>.Expiration.get -> System.DateTimeOffset?
+UiPath.Caching.FillResult<T>.Expiration.init -> void
+UiPath.Caching.FillResult<T>.FillResult() -> void
+UiPath.Caching.FillResult<T>.FillResult(UiPath.Caching.FillOutcome Outcome, T? Existing, System.DateTimeOffset? Expiration = null) -> void
+UiPath.Caching.FillResult<T>.Outcome.get -> UiPath.Caching.FillOutcome
+UiPath.Caching.FillResult<T>.Outcome.init -> void
+UiPath.Caching.ICache.SetIfChangedAsync<T>(ref UiPath.Caching.CacheKeyHandler cacheKey, T? value, System.Collections.Generic.IEqualityComparer<T>! comparer, System.DateTimeOffset expiration, UiPath.Caching.CachePolicy? policy, System.Threading.CancellationToken token = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.ValueTask<UiPath.Caching.ChangeResult<T>>
+UiPath.Caching.ICache.SetIfChangedAsync<T>(ref UiPath.Caching.CacheKeyHandler cacheKey, T? value, System.Collections.Generic.IEqualityComparer<T>! comparer, System.TimeSpan expiration, UiPath.Caching.CachePolicy? policy, System.Threading.CancellationToken token = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.ValueTask<UiPath.Caching.ChangeResult<T>>
+UiPath.Caching.ICache.SetIfChangedAsync<T>(UiPath.Caching.CacheKey cacheKey, T? value, System.Collections.Generic.IEqualityComparer<T>! comparer, System.DateTimeOffset expiration, UiPath.Caching.CachePolicy? policy, System.Threading.CancellationToken token = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.ValueTask<UiPath.Caching.ChangeResult<T>>
+UiPath.Caching.ICache.SetIfChangedAsync<T>(UiPath.Caching.CacheKey cacheKey, T? value, System.Collections.Generic.IEqualityComparer<T>! comparer, System.TimeSpan expiration, UiPath.Caching.CachePolicy? policy, System.Threading.CancellationToken token = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.ValueTask<UiPath.Caching.ChangeResult<T>>
+UiPath.Caching.ICache.TryFillAsync<T>(ref UiPath.Caching.CacheKeyHandler cacheKey, T? value, System.DateTimeOffset expiration, UiPath.Caching.CachePolicy? policy, System.Threading.CancellationToken token = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.ValueTask<UiPath.Caching.FillResult<T>>
+UiPath.Caching.ICache.TryFillAsync<T>(ref UiPath.Caching.CacheKeyHandler cacheKey, T? value, System.TimeSpan expiration, UiPath.Caching.CachePolicy? policy, System.Threading.CancellationToken token = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.ValueTask<UiPath.Caching.FillResult<T>>
+UiPath.Caching.ICache.TryFillAsync<T>(UiPath.Caching.CacheKey cacheKey, T? value, System.DateTimeOffset expiration, UiPath.Caching.CachePolicy? policy, System.Threading.CancellationToken token = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.ValueTask<UiPath.Caching.FillResult<T>>
+UiPath.Caching.ICache.TryFillAsync<T>(UiPath.Caching.CacheKey cacheKey, T? value, System.TimeSpan expiration, UiPath.Caching.CachePolicy? policy, System.Threading.CancellationToken token = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.ValueTask<UiPath.Caching.FillResult<T>>
+UiPath.Caching.ICache<T>.SetIfChangedAsync(ref UiPath.Caching.CacheKeyHandler cacheKey, T? value, System.Collections.Generic.IEqualityComparer<T>! comparer, System.DateTimeOffset expiration, System.Threading.CancellationToken token = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.ValueTask<UiPath.Caching.ChangeResult<T>>
+UiPath.Caching.ICache<T>.SetIfChangedAsync(ref UiPath.Caching.CacheKeyHandler cacheKey, T? value, System.Collections.Generic.IEqualityComparer<T>! comparer, System.TimeSpan expiration, System.Threading.CancellationToken token = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.ValueTask<UiPath.Caching.ChangeResult<T>>
+UiPath.Caching.ICache<T>.SetIfChangedAsync(UiPath.Caching.CacheKey cacheKey, T? value, System.Collections.Generic.IEqualityComparer<T>! comparer, System.DateTimeOffset expiration, System.Threading.CancellationToken token = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.ValueTask<UiPath.Caching.ChangeResult<T>>
+UiPath.Caching.ICache<T>.SetIfChangedAsync(UiPath.Caching.CacheKey cacheKey, T? value, System.Collections.Generic.IEqualityComparer<T>! comparer, System.TimeSpan expiration, System.Threading.CancellationToken token = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.ValueTask<UiPath.Caching.ChangeResult<T>>
+UiPath.Caching.ICache<T>.TryFillAsync(ref UiPath.Caching.CacheKeyHandler cacheKey, T? value, System.DateTimeOffset expiration, System.Threading.CancellationToken token = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.ValueTask<UiPath.Caching.FillResult<T>>
+UiPath.Caching.ICache<T>.TryFillAsync(ref UiPath.Caching.CacheKeyHandler cacheKey, T? value, System.TimeSpan expiration, System.Threading.CancellationToken token = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.ValueTask<UiPath.Caching.FillResult<T>>
+UiPath.Caching.ICache<T>.TryFillAsync(UiPath.Caching.CacheKey cacheKey, T? value, System.DateTimeOffset expiration, System.Threading.CancellationToken token = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.ValueTask<UiPath.Caching.FillResult<T>>
+UiPath.Caching.ICache<T>.TryFillAsync(UiPath.Caching.CacheKey cacheKey, T? value, System.TimeSpan expiration, System.Threading.CancellationToken token = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.ValueTask<UiPath.Caching.FillResult<T>>
+UiPath.Caching.NullCache.ReadSnapshotAsync<T>(UiPath.Caching.CacheKey cacheKey, UiPath.Caching.CachePolicy? policy, System.Threading.CancellationToken token = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.ValueTask<UiPath.Caching.ICacheEntry<T?>!>
+UiPath.Caching.NullCache.SetIfChangedAsync<T>(UiPath.Caching.CacheKey cacheKey, T? value, System.Collections.Generic.IEqualityComparer<T>! comparer, System.DateTimeOffset expiration, UiPath.Caching.CachePolicy? policy, System.Threading.CancellationToken token = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.ValueTask<UiPath.Caching.ChangeResult<T>>
+UiPath.Caching.NullCache.SetIfChangedAsync<T>(UiPath.Caching.CacheKey cacheKey, T? value, System.Collections.Generic.IEqualityComparer<T>! comparer, System.TimeSpan expiration, UiPath.Caching.CachePolicy? policy, System.Threading.CancellationToken token = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.ValueTask<UiPath.Caching.ChangeResult<T>>
+UiPath.Caching.NullCache.TryFillAsync<T>(UiPath.Caching.CacheKey cacheKey, T? value, System.DateTimeOffset expiration, UiPath.Caching.CachePolicy? policy, System.Threading.CancellationToken token = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.ValueTask<UiPath.Caching.FillResult<T>>
+UiPath.Caching.NullCache.TryFillAsync<T>(UiPath.Caching.CacheKey cacheKey, T? value, System.TimeSpan expiration, UiPath.Caching.CachePolicy? policy, System.Threading.CancellationToken token = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.ValueTask<UiPath.Caching.FillResult<T>>
+UiPath.Caching.IMigrationCache
+UiPath.Caching.IMigrationCache.ReadSnapshotAsync<T>(UiPath.Caching.CacheKey cacheKey, UiPath.Caching.CachePolicy? policy, System.Threading.CancellationToken token = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.ValueTask<UiPath.Caching.ICacheEntry<T?>!>
+static UiPath.Caching.CacheExtensions.AsMigrationCache(this UiPath.Caching.ICache! cache) -> UiPath.Caching.IMigrationCache!

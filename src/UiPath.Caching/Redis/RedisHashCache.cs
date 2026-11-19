@@ -7,7 +7,7 @@ using UiPath.Caching.Telemetry;
 
 namespace UiPath.Caching.Redis;
 
-internal sealed partial class RedisHashCache : RedisCacheBase, IHashCache, ISpanKeyHashCache, IVersionedHashCache, IInvalidationSink, IAdoptionReadHashCache
+internal sealed partial class RedisHashCache : RedisCacheBase, IHashCache, ISpanKeyHashCache, ISharedHashTier
 {
     /// <summary>All fields and the absolute expiration in one atomic read-only call.</summary>
     private const string ReadWithExpirationScript = "local n = redis.call('HLEN', KEYS[1]) if n > tonumber(ARGV[1]) then return {n, redis.call('PEXPIRETIME', KEYS[1])} end return {redis.call('HGETALL', KEYS[1]), redis.call('PEXPIRETIME', KEYS[1])}";
@@ -298,9 +298,11 @@ internal sealed partial class RedisHashCache : RedisCacheBase, IHashCache, ISpan
     public ValueTask<bool> SetMetadataAsync<T>(CacheKey cacheKey, IDictionary<string, string?> metadata, CancellationToken token = default) =>
         SetMetadataCoreAsync<T>(cacheKey, metadata, FormatFor(policy: null, forWrite: true).Writer, token);
 
-    void IInvalidationSink.Invalidated(CacheKey key) => NoteInvalidated(_redisKeyStrategy, key);
+    void ISharedTier.Invalidated(CacheKey key) => NoteInvalidated(_redisKeyStrategy, key);
 
-    void IInvalidationSink.InvalidatedAll() => NoteAllInvalidated();
+    void ISharedTier.InvalidatedAll() => NoteAllInvalidated();
+
+    IDisposable ISharedTier.DemandMaster() => DemandMaster();
 
     /// <summary>Throws a transaction's own failure, not the cancellation of what it queued.</summary>
     private static async Task CommitAsync(ITransaction transaction, string what, RedisKey key, Task first, Task second)

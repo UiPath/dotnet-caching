@@ -331,7 +331,7 @@ public class MultilayerCacheBatchRehydrateTests(ITestContextAccessor testContext
 
         await WaitForAsync(() => _telemetry.Events.Any(e => e.Name == "cache.rehydrate.adopted"), TimeSpan.FromSeconds(10), token);
         generatorCalls.Should().Be(0);
-        inner.Calls.Should().BeEquivalentTo(nameof(ICache.GetCacheEntriesAsync), "ReadForAdoptionAsync:a", "ReadForAdoptionAsync:b");
+        inner.Calls.Should().BeEquivalentTo(nameof(ICache.GetCacheEntriesAsync), "ReadSnapshotAsync:a", "ReadSnapshotAsync:b");
     }
 
     [Fact]
