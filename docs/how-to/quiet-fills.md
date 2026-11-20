@@ -59,6 +59,6 @@ A mock that is not set up answers `default(FillResult<T>)` or `default(ChangeRes
 
 - A layered cache keeps an `Existed` or `Unchanged` value locally only if the cache below it reports `Expiration`; one that answers `null` there keeps nothing.
 - The first call of either primitive turns on change counting for that cache instance for good, which every local write then pays for: a stripe lock and a counter.
-- `ReadSnapshotAsync` on a local-only cache reports the deadline the local tier gives an entry that `TryFillAsync` or `SetIfChangedAsync` wrote; an entry written by `SetAsync` or `GetOrAddAsync` reports the expiration it was written with, which can be later than the local cap.
+- `ReadSnapshotAsync` on a local-only cache reports the deadline the local tier evicts the entry at. With a custom `EntryFactory`, an entry written by `SetAsync` or `GetOrAddAsync` reports the expiration it was written with, which can be later than the local cap.
 
 See [Quiet fills and the local tier](../concepts.md#quiet-fills).

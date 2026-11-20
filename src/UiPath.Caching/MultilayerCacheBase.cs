@@ -239,7 +239,7 @@ public abstract partial class MultilayerCacheBase : IDisposable
     /// <summary>Gives <paramref name="to"/> the last read of the entry it replaces.</summary>
     private protected static void InheritRead(object? from, object? to)
     {
-        if (from is IReadTracked { LastRead: not IReadTracked.NeverRead and var last } && to is IReadTracked inheriting)
+        if (from is ILocalEntry { LastRead: not ILocalEntry.NeverRead and var last } && to is ILocalEntry inheriting)
         {
             inheriting.MarkRead(last);
         }
@@ -247,7 +247,7 @@ public abstract partial class MultilayerCacheBase : IDisposable
 
     /// <summary>Sets whether a local hit marks <paramref name="entry"/>, before it is published.</summary>
     private protected static void Track(object? entry, bool tracked) =>
-        (entry as IReadTracked)?.Track(tracked);
+        (entry as ILocalEntry)?.Track(tracked);
 
     /// <summary>A delete the caller cancels may have landed, so it answers false inside the turn and the invalidations still go out.</summary>
     private protected static async ValueTask<bool> RemoveInnerAsync(ValueTask<bool> removing, CancellationToken token)
@@ -265,7 +265,7 @@ public abstract partial class MultilayerCacheBase : IDisposable
     /// <summary>Gives <paramref name="to"/>, the copy a refresh keeps in place of <paramref name="from"/>, that refresh's number.</summary>
     private protected static void LinkRefresh(object? from, object? to)
     {
-        if (from is IRefreshLinked { ReplacedBy: var refresh } && to is IRefreshLinked copy)
+        if (from is ILocalEntry { ReplacedBy: var refresh } && to is ILocalEntry copy)
         {
             copy.Replaces = refresh;
         }
@@ -283,7 +283,7 @@ public abstract partial class MultilayerCacheBase : IDisposable
             return;
         }
 
-        if (entry is IReadTracked tracked)
+        if (entry is ILocalEntry tracked)
         {
             tracked.MarkRead(NowSeconds());
         }
