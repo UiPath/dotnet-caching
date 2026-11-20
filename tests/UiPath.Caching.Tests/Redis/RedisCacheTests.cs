@@ -1007,7 +1007,7 @@ public class RedisCacheTests(ITestContextAccessor testContextAccessor) : IAsyncL
         _database.StringGetAsync(_redisKey, Arg.Any<CommandFlags>()).Returns(_serializer.Serialize("replaced"));
         _database.KeyTimeToLiveAsync(_redisKey, Arg.Any<CommandFlags>()).Returns(ttl);
 
-        var entry = await Sut.ReadSnapshotAsync<string>(_cacheKey, policy: null, token: testContextAccessor.Current.CancellationToken);
+        var entry = (await Sut.ReadSnapshotAsync<string>(_cacheKey, policy: null, token: testContextAccessor.Current.CancellationToken)).Entry!;
 
         entry.Value.Should().Be(snapshot);
         entry.Expiration.Should().Be(_clock.UtcNow.Add(ttl));
@@ -1024,13 +1024,13 @@ public class RedisCacheTests(ITestContextAccessor testContextAccessor) : IAsyncL
         _transaction.KeyTimeToLiveAsync(_redisKey, CommandFlags.DemandMaster).Returns((TimeSpan?)null);
         _transaction.ExecuteAsync(CommandFlags.DemandMaster).Returns(true);
 
-        var entry = await Sut.ReadSnapshotAsync<string>(_cacheKey, policy: null, token: testContextAccessor.Current.CancellationToken);
+        var entry = (await Sut.ReadSnapshotAsync<string>(_cacheKey, policy: null, token: testContextAccessor.Current.CancellationToken)).Entry!;
 
         entry.Expiration.Should().Be(DateTimeOffset.MaxValue);
     }
 
     [Fact]
-    public async Task ReadSnapshot_reports_a_failed_read_where_a_plain_read_answers_a_miss()
+    public async Task ReadSnapshot_reports_a_failed_read_as_failed_where_a_plain_read_answers_a_miss()
     {
         _transaction.StringGetAsync(_redisKey, CommandFlags.DemandMaster).Returns(_serializer.Serialize(_fixture.Create<string>()));
         _transaction.KeyTimeToLiveAsync(_redisKey, CommandFlags.DemandMaster).Returns(TimeSpan.FromMinutes(9));
@@ -1039,10 +1039,10 @@ public class RedisCacheTests(ITestContextAccessor testContextAccessor) : IAsyncL
         _database.KeyTimeToLiveAsync(_redisKey, Arg.Any<CommandFlags>()).Returns(Task.FromException<TimeSpan?>(new RedisException("lost")));
 
         var plain = await Sut.GetCacheEntryAsync<string>(_cacheKey, policy: null, token: testContextAccessor.Current.CancellationToken);
-        var adoption = async () => await Sut.ReadSnapshotAsync<string>(_cacheKey, policy: null, token: testContextAccessor.Current.CancellationToken);
+        var snapshot = await Sut.ReadSnapshotAsync<string>(_cacheKey, policy: null, token: testContextAccessor.Current.CancellationToken);
 
         plain.Found.Should().BeFalse();
-        await adoption.Should().ThrowAsync<RedisException>();
+        snapshot.Should().Be(new SnapshotRead<string>(SnapshotOutcome.Failed, null));
     }
 
     [Fact]

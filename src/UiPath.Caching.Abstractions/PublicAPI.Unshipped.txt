@@ -107,11 +107,39 @@ UiPath.Caching.ICache<T>.TryFillAsync(ref UiPath.Caching.CacheKeyHandler cacheKe
 UiPath.Caching.ICache<T>.TryFillAsync(ref UiPath.Caching.CacheKeyHandler cacheKey, T? value, System.TimeSpan expiration, System.Threading.CancellationToken token = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.ValueTask<UiPath.Caching.FillResult<T>>
 UiPath.Caching.ICache<T>.TryFillAsync(UiPath.Caching.CacheKey cacheKey, T? value, System.DateTimeOffset expiration, System.Threading.CancellationToken token = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.ValueTask<UiPath.Caching.FillResult<T>>
 UiPath.Caching.ICache<T>.TryFillAsync(UiPath.Caching.CacheKey cacheKey, T? value, System.TimeSpan expiration, System.Threading.CancellationToken token = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.ValueTask<UiPath.Caching.FillResult<T>>
-UiPath.Caching.NullCache.ReadSnapshotAsync<T>(UiPath.Caching.CacheKey cacheKey, UiPath.Caching.CachePolicy? policy, System.Threading.CancellationToken token = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.ValueTask<UiPath.Caching.ICacheEntry<T?>!>
 UiPath.Caching.NullCache.SetIfChangedAsync<T>(UiPath.Caching.CacheKey cacheKey, T? value, System.Collections.Generic.IEqualityComparer<T>! comparer, System.DateTimeOffset expiration, UiPath.Caching.CachePolicy? policy, System.Threading.CancellationToken token = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.ValueTask<UiPath.Caching.ChangeResult<T>>
 UiPath.Caching.NullCache.SetIfChangedAsync<T>(UiPath.Caching.CacheKey cacheKey, T? value, System.Collections.Generic.IEqualityComparer<T>! comparer, System.TimeSpan expiration, UiPath.Caching.CachePolicy? policy, System.Threading.CancellationToken token = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.ValueTask<UiPath.Caching.ChangeResult<T>>
 UiPath.Caching.NullCache.TryFillAsync<T>(UiPath.Caching.CacheKey cacheKey, T? value, System.DateTimeOffset expiration, UiPath.Caching.CachePolicy? policy, System.Threading.CancellationToken token = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.ValueTask<UiPath.Caching.FillResult<T>>
 UiPath.Caching.NullCache.TryFillAsync<T>(UiPath.Caching.CacheKey cacheKey, T? value, System.TimeSpan expiration, UiPath.Caching.CachePolicy? policy, System.Threading.CancellationToken token = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.ValueTask<UiPath.Caching.FillResult<T>>
 UiPath.Caching.IMigrationCache
-UiPath.Caching.IMigrationCache.ReadSnapshotAsync<T>(UiPath.Caching.CacheKey cacheKey, UiPath.Caching.CachePolicy? policy, System.Threading.CancellationToken token = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.ValueTask<UiPath.Caching.ICacheEntry<T?>!>
 static UiPath.Caching.CacheExtensions.AsMigrationCache(this UiPath.Caching.ICache! cache) -> UiPath.Caching.IMigrationCache!
+~override UiPath.Caching.SnapshotRead<T>.Equals(object obj) -> bool
+~override UiPath.Caching.SnapshotRead<T>.ToString() -> string
+override UiPath.Caching.SnapshotRead<T>.GetHashCode() -> int
+static UiPath.Caching.SnapshotRead<T>.operator !=(UiPath.Caching.SnapshotRead<T> left, UiPath.Caching.SnapshotRead<T> right) -> bool
+static UiPath.Caching.SnapshotRead<T>.operator ==(UiPath.Caching.SnapshotRead<T> left, UiPath.Caching.SnapshotRead<T> right) -> bool
+UiPath.Caching.IMigrationCache.DeleteAsync<T>(UiPath.Caching.CacheKey cacheKey, System.Threading.CancellationToken token = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.ValueTask<UiPath.Caching.StoreOutcome>
+UiPath.Caching.IMigrationCache.ReadSnapshotAsync<T>(UiPath.Caching.CacheKey cacheKey, UiPath.Caching.CachePolicy? policy, System.Threading.CancellationToken token = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.ValueTask<UiPath.Caching.SnapshotRead<T>>
+UiPath.Caching.IMigrationCache.WriteAsync<T>(UiPath.Caching.CacheKey cacheKey, T? value, System.DateTimeOffset expiration, UiPath.Caching.CachePolicy? policy, System.Threading.CancellationToken token = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.ValueTask<UiPath.Caching.StoreOutcome>
+UiPath.Caching.NullCache.DeleteAsync<T>(UiPath.Caching.CacheKey cacheKey, System.Threading.CancellationToken token = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.ValueTask<UiPath.Caching.StoreOutcome>
+UiPath.Caching.NullCache.ReadSnapshotAsync<T>(UiPath.Caching.CacheKey cacheKey, UiPath.Caching.CachePolicy? policy, System.Threading.CancellationToken token = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.ValueTask<UiPath.Caching.SnapshotRead<T>>
+UiPath.Caching.NullCache.WriteAsync<T>(UiPath.Caching.CacheKey cacheKey, T? value, System.DateTimeOffset expiration, UiPath.Caching.CachePolicy? policy, System.Threading.CancellationToken token = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.ValueTask<UiPath.Caching.StoreOutcome>
+UiPath.Caching.SnapshotOutcome
+UiPath.Caching.SnapshotOutcome.Absent = 1 -> UiPath.Caching.SnapshotOutcome
+UiPath.Caching.SnapshotOutcome.Failed = 0 -> UiPath.Caching.SnapshotOutcome
+UiPath.Caching.SnapshotOutcome.Found = 2 -> UiPath.Caching.SnapshotOutcome
+UiPath.Caching.SnapshotOutcome.Unreadable = 3 -> UiPath.Caching.SnapshotOutcome
+UiPath.Caching.SnapshotRead<T>
+UiPath.Caching.SnapshotRead<T>.Deconstruct(out UiPath.Caching.SnapshotOutcome Outcome, out UiPath.Caching.ICacheEntry<T?>? Entry) -> void
+UiPath.Caching.SnapshotRead<T>.Entry.get -> UiPath.Caching.ICacheEntry<T?>?
+UiPath.Caching.SnapshotRead<T>.Entry.init -> void
+UiPath.Caching.SnapshotRead<T>.Equals(UiPath.Caching.SnapshotRead<T> other) -> bool
+UiPath.Caching.SnapshotRead<T>.Outcome.get -> UiPath.Caching.SnapshotOutcome
+UiPath.Caching.SnapshotRead<T>.Outcome.init -> void
+UiPath.Caching.SnapshotRead<T>.SnapshotRead() -> void
+UiPath.Caching.SnapshotRead<T>.SnapshotRead(UiPath.Caching.SnapshotOutcome Outcome, UiPath.Caching.ICacheEntry<T?>? Entry) -> void
+UiPath.Caching.StoreOutcome
+UiPath.Caching.StoreOutcome.Committed = 2 -> UiPath.Caching.StoreOutcome
+UiPath.Caching.StoreOutcome.Failed = 0 -> UiPath.Caching.StoreOutcome
+UiPath.Caching.StoreOutcome.NotSent = 1 -> UiPath.Caching.StoreOutcome
+UiPath.Caching.StoreOutcome.Unknown = 3 -> UiPath.Caching.StoreOutcome

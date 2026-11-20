@@ -17,7 +17,7 @@ internal abstract class AdoptionProxyBase : DispatchProxy
     /// <summary>Answers a plain call by method name and arguments with the value inside its task.</summary>
     public Func<string, object?[], object?> Answer { get; set; } = static (name, _) => throw new NotSupportedException(name);
 
-    /// <summary>Answers a read for adoption with the entry, or throws.</summary>
+    /// <summary>Answers a read for adoption with the entry or a <see cref="SnapshotOutcome"/>, or throws.</summary>
     public Func<CacheKey, object> Adoption { get; set; } = static _ => throw new NotSupportedException(nameof(Adoption));
 
     public string[] Calls
@@ -88,22 +88,36 @@ internal class AdoptionProxy : AdoptionProxyBase, IMigrationCache
         return proxy;
     }
 
-    async ValueTask<ICacheEntry<T?>> IMigrationCache.ReadSnapshotAsync<T>(CacheKey cacheKey, CachePolicy? policy, CancellationToken token)
+    async ValueTask<SnapshotRead<T>> IMigrationCache.ReadSnapshotAsync<T>(CacheKey cacheKey, CachePolicy? policy, CancellationToken token)
         where T : default
     {
         Record(nameof(IMigrationCache.ReadSnapshotAsync) + ":" + cacheKey.Name);
+        ICacheEntry<T?> entry;
         if (Target is not ICache target)
         {
-            return (ICacheEntry<T?>)Adoption(cacheKey);
-        }
+            if (Adoption(cacheKey) is SnapshotOutcome outcome)
+            {
+                return new SnapshotRead<T>(outcome, null);
+            }
 
-        if (BatchBacked)
+            entry = (ICacheEntry<T?>)Adoption(cacheKey);
+        }
+        else if (BatchBacked)
         {
-            return (await target.GetCacheEntriesAsync<T>([cacheKey], policy, token).ConfigureAwait(false))[0].Value;
+            entry = (await target.GetCacheEntriesAsync<T>([cacheKey], policy, token).ConfigureAwait(false))[0].Value;
+        }
+        else
+        {
+            entry = await target.GetCacheEntryAsync<T>(cacheKey, policy, token).ConfigureAwait(false);
         }
 
-        return await target.GetCacheEntryAsync<T>(cacheKey, policy, token).ConfigureAwait(false);
+        return entry.Found ? new SnapshotRead<T>(SnapshotOutcome.Found, entry) : new SnapshotRead<T>(SnapshotOutcome.Absent, null);
     }
+
+    ValueTask<StoreOutcome> IMigrationCache.WriteAsync<T>(CacheKey cacheKey, T? value, DateTimeOffset expiration, CachePolicy? policy, CancellationToken token)
+        where T : default => throw new NotSupportedException();
+
+    ValueTask<StoreOutcome> IMigrationCache.DeleteAsync<T>(CacheKey cacheKey, CancellationToken token) => throw new NotSupportedException();
 }
 
 /// <summary>An <c>IHashCache</c> proxy; it is a shared hash tier, and a versioned write over a target that is not one goes through the target's plain write, as an untracked write does.</summary>

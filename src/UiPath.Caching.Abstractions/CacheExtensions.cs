@@ -67,7 +67,7 @@ public static class CacheExtensions
     /// <summary>Throws <see cref="NotSupportedException"/> when the cache is not an <see cref="IMigrationCache"/>.</summary>
     public static IMigrationCache AsMigrationCache(this ICache cache) =>
         cache as IMigrationCache
-        ?? throw new NotSupportedException($"{cache.GetType().FullName} does not support migration reads. Implement {nameof(IMigrationCache)} on it.");
+        ?? throw new NotSupportedException($"{cache.GetType().FullName} does not support migration access. Implement {nameof(IMigrationCache)} on it.");
 
     /// <inheritdoc cref="ICache.TryAddAsync{T}(CacheKey, T, CachePolicy, CancellationToken)"/>
     public static ValueTask<bool> TryAddAsync<T>(this ICache cache, CacheKey cacheKey, T? value, CancellationToken token = default)

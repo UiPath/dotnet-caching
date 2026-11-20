@@ -54,7 +54,7 @@ public static class RouterServiceCollectionExtensions
                     chain.Services.TryAddSingleton<ICacheEventFactory, CacheEventFactory>();
                 },
                 sectionName,
-                (stack, _) => stack.AddSingleton<ISerializerProxy<byte[]>>(new ProbingSerializerProxy(envelope)))
+                (stack, _) => stack.AddSingleton<ISerializerProxy<byte[]>>(envelope))
             .Expose<ICacheEventFactory>()
             .Expose<IOptions<CacheOptions>>()
             .Expose<IOptions<RedisCacheOptions>>();
@@ -87,10 +87,9 @@ public static class RouterServiceCollectionExtensions
         try
         {
             var cache = root.GetRequiredKeyedService<ICacheFactory>(StackName).CreateCache(KnownCacheProviderNames.Redis);
-            var store = new CacheLibraryStore(cache);
             var context = new RouterContext(
                 core,
-                store,
+                cache.AsMigrationCache(),
                 root.GetRequiredService<IRedisConnector>(),
                 root.GetRequiredKeyedService<ITopicFactory>(StackName).Get(),
                 root.GetRequiredKeyedService<ICacheEventFactory>(StackName),

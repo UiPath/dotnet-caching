@@ -85,6 +85,12 @@ internal sealed class CachePeers : IDisposable
             from.Published.Add(@event);
         }
 
+        from.OnPublish?.Invoke();
+        if (from.PublishRefused)
+        {
+            return new ValueTask<bool>(false);
+        }
+
         if (AutoDeliver)
         {
             foreach (var node in _nodes)
@@ -159,6 +165,12 @@ internal sealed class CachePeers : IDisposable
         public KeyedSubject<ICacheEvent> Subject { get; } = new(NullLogger.Instance);
 
         public List<ICacheEvent> Published { get; } = [];
+
+        /// <summary>When set, the node's topic reports every event as not published.</summary>
+        public bool PublishRefused { get; set; }
+
+        /// <summary>Runs inside every event the node publishes, before it is delivered.</summary>
+        public Action? OnPublish { get; set; }
 
         /// <summary>Every observer that subscribed to the node's topic, in order: the change tokens of its local entries.</summary>
         public List<IObserver<ICacheEvent>> Subscribers { get; } = [];
@@ -419,6 +431,12 @@ internal sealed class CachePeers : IDisposable
         }
 #pragma warning restore S2292
 
+        /// <summary>What <see cref="IMigrationCache.WriteAsync{T}"/> and <see cref="IMigrationCache.DeleteAsync{T}"/> answer, once they have applied a committed one to the store.</summary>
+        public StoreOutcome MigrationOutcome { get; set; } = StoreOutcome.Committed;
+
+        /// <summary>When set, a migration write or delete waits for it before it answers.</summary>
+        public Task? MigrationGate { get; set; }
+
         /// <summary>When set, a removal waits for it before it reaches the store.</summary>
         public Task? RemoveHold { get; set; }
 
@@ -435,8 +453,43 @@ internal sealed class CachePeers : IDisposable
             }
         }
 
-        ValueTask<ICacheEntry<T?>> IMigrationCache.ReadSnapshotAsync<T>(CacheKey cacheKey, CachePolicy? policy, CancellationToken token)
-            where T : default => ReadOneAsync<T>(cacheKey, token);
+        async ValueTask<SnapshotRead<T>> IMigrationCache.ReadSnapshotAsync<T>(CacheKey cacheKey, CachePolicy? policy, CancellationToken token)
+            where T : default
+        {
+            var entry = await ReadOneAsync<T>(cacheKey, token);
+            return entry.Found ? new SnapshotRead<T>(SnapshotOutcome.Found, entry) : new SnapshotRead<T>(SnapshotOutcome.Absent, null);
+        }
+
+        async ValueTask<StoreOutcome> IMigrationCache.WriteAsync<T>(CacheKey cacheKey, T? value, DateTimeOffset expiration, CachePolicy? policy, CancellationToken token)
+            where T : default
+        {
+            if (MigrationGate is { } gate)
+            {
+                await gate;
+            }
+
+            if (MigrationOutcome == StoreOutcome.Committed)
+            {
+                Store.Values[cacheKey.Name] = value;
+            }
+
+            return MigrationOutcome;
+        }
+
+        async ValueTask<StoreOutcome> IMigrationCache.DeleteAsync<T>(CacheKey cacheKey, CancellationToken token)
+        {
+            if (MigrationGate is { } gate)
+            {
+                await gate;
+            }
+
+            if (MigrationOutcome == StoreOutcome.Committed)
+            {
+                Store.Values.TryRemove(cacheKey.Name, out _);
+            }
+
+            return MigrationOutcome;
+        }
 
         void ISharedTier.Invalidated(CacheKey key)
         {

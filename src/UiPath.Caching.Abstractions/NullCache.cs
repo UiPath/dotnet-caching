@@ -295,8 +295,26 @@ public sealed class NullCache : ICache, ISpanKeyCache, IResultCache, IMigrationC
     public ValueTask<ChangeResult<T>> SetIfChangedAsync<T>(CacheKey cacheKey, T? value, IEqualityComparer<T> comparer, DateTimeOffset expiration, CachePolicy? policy, CancellationToken token = default) =>
         SetIfChangedAsync(cacheKey, value, comparer, TimeSpan.Zero, policy, token);
 
-    public ValueTask<ICacheEntry<T?>> ReadSnapshotAsync<T>(CacheKey cacheKey, CachePolicy? policy, CancellationToken token = default) =>
-        GetCacheEntryAsync<T>(cacheKey, policy, token);
+    /// <summary>Always <see cref="SnapshotOutcome.Absent"/>.</summary>
+    public ValueTask<SnapshotRead<T>> ReadSnapshotAsync<T>(CacheKey cacheKey, CachePolicy? policy, CancellationToken token = default)
+    {
+        NotCacheableException.ThrowIfNotCacheable<T>();
+        return ValueTask.FromResult(new SnapshotRead<T>(SnapshotOutcome.Absent, null));
+    }
+
+    /// <summary>Always <see cref="StoreOutcome.Committed"/>, as <c>SetAsync</c> always answers true.</summary>
+    public ValueTask<StoreOutcome> WriteAsync<T>(CacheKey cacheKey, T? value, DateTimeOffset expiration, CachePolicy? policy, CancellationToken token = default)
+    {
+        NotCacheableException.ThrowIfNotCacheable<T>();
+        return ValueTask.FromResult(StoreOutcome.Committed);
+    }
+
+    /// <summary>Always <see cref="StoreOutcome.Committed"/>, as <c>RemoveAsync</c> always answers true.</summary>
+    public ValueTask<StoreOutcome> DeleteAsync<T>(CacheKey cacheKey, CancellationToken token = default)
+    {
+        NotCacheableException.ThrowIfNotCacheable<T>();
+        return ValueTask.FromResult(StoreOutcome.Committed);
+    }
 
     public ValueTask<TimeSpan?> TimeToLiveAsync<T>(CacheKey cacheKey, CancellationToken token = default)
     {

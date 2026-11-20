@@ -81,7 +81,7 @@ public class LocalSnapshotDeadlineTests
         // A deadline computed at read time instead of write time would move with the clock.
         var capped = clock.GetUtcNow() + cap;
         clock.Advance(TimeSpan.FromSeconds(30));
-        var entry = await sut.AsMigrationCache().ReadSnapshotAsync<string>("k", null, Ct);
+        var entry = (await sut.AsMigrationCache().ReadSnapshotAsync<string>("k", null, Ct)).Entry!;
 
         entry.Value.Should().Be("v");
         entry.Expiration.Should().Be(requested < capped ? requested : capped);

@@ -34,7 +34,7 @@ public class FillPrimitivesTests(ITestContextAccessor testContextAccessor)
     {
         (await NullCache.Instance.TryFillAsync("k", "v", Ttl, Ct)).Outcome.Should().Be(FillOutcome.Added);
         (await NullCache.Instance.SetIfChangedAsync("k", "v", EqualityComparer<string>.Default, Ttl, Ct)).Outcome.Should().Be(ChangeOutcome.Filled);
-        (await NullCache.Instance.AsMigrationCache().ReadSnapshotAsync<string>("k", null, Ct)).Found.Should().BeFalse();
+        (await NullCache.Instance.AsMigrationCache().ReadSnapshotAsync<string>("k", null, Ct)).Should().Be(new SnapshotRead<string>(SnapshotOutcome.Absent, null));
     }
 
     [Fact]
@@ -79,15 +79,40 @@ public class FillPrimitivesTests(ITestContextAccessor testContextAccessor)
     }
 
     [Fact]
+    public async Task The_null_cache_reports_a_write_and_a_delete_as_committed()
+    {
+        var cache = NullCache.Instance.AsMigrationCache();
+
+        (await cache.WriteAsync("k", "v", DateTimeOffset.MaxValue, null, Ct)).Should().Be(StoreOutcome.Committed);
+        (await cache.DeleteAsync<string>("k", Ct)).Should().Be(StoreOutcome.Committed);
+    }
+
+    [Fact]
+    public async Task A_local_only_write_and_delete_are_committed_and_a_cancelled_one_is_not_sent()
+    {
+        using var sut = LocalOnly();
+        var cache = sut.AsMigrationCache();
+        using var cts = new CancellationTokenSource();
+        await cts.CancelAsync();
+
+        (await cache.WriteAsync("k", "v", DateTimeOffset.UtcNow + Ttl, null, Ct)).Should().Be(StoreOutcome.Committed);
+        (await cache.ReadSnapshotAsync<string>("k", null, Ct)).Outcome.Should().Be(SnapshotOutcome.Found);
+        (await cache.DeleteAsync<string>("k", cts.Token)).Should().Be(StoreOutcome.NotSent);
+        (await cache.DeleteAsync<string>("k", Ct)).Should().Be(StoreOutcome.Committed);
+        (await cache.ReadSnapshotAsync<string>("k", null, Ct)).Outcome.Should().Be(SnapshotOutcome.Absent);
+        (await cache.WriteAsync("k", "v", DateTimeOffset.UtcNow + Ttl, null, cts.Token)).Should().Be(StoreOutcome.NotSent);
+    }
+
+    [Fact]
     public async Task An_unchanged_local_value_keeps_its_deadline()
     {
         using var sut = LocalOnly();
         await sut.SetIfChangedAsync("k", "a", StringComparer.Ordinal, TimeSpan.FromSeconds(30), Ct);
-        var before = (await sut.AsMigrationCache().ReadSnapshotAsync<string>("k", null, Ct)).Expiration;
+        var before = (await sut.AsMigrationCache().ReadSnapshotAsync<string>("k", null, Ct)).Entry!.Expiration;
 
         await sut.SetIfChangedAsync("k", "a", StringComparer.Ordinal, TimeSpan.FromHours(1), Ct);
 
-        (await sut.AsMigrationCache().ReadSnapshotAsync<string>("k", null, Ct)).Expiration.Should().Be(before);
+        (await sut.AsMigrationCache().ReadSnapshotAsync<string>("k", null, Ct)).Entry!.Expiration.Should().Be(before);
     }
 
     [Fact]
@@ -95,10 +120,10 @@ public class FillPrimitivesTests(ITestContextAccessor testContextAccessor)
     {
         using var sut = LocalOnly();
 
-        (await sut.AsMigrationCache().ReadSnapshotAsync<string>("k", null, Ct)).Found.Should().BeFalse();
+        (await sut.AsMigrationCache().ReadSnapshotAsync<string>("k", null, Ct)).Outcome.Should().Be(SnapshotOutcome.Absent);
         await sut.SetAsync("k", "v", Ttl, null, Ct);
 
-        var entry = await sut.AsMigrationCache().ReadSnapshotAsync<string>("k", null, Ct);
+        var entry = (await sut.AsMigrationCache().ReadSnapshotAsync<string>("k", null, Ct)).Entry!;
 
         entry.Found.Should().BeTrue();
         entry.Value.Should().Be("v");
@@ -197,7 +222,7 @@ public class FillPrimitivesTests(ITestContextAccessor testContextAccessor)
         (await first.GetAsync<string>("k", Ct)).Should().Be("a");
         await second.SetIfChangedAsync("k", "b", StringComparer.Ordinal, Ttl, Ct);
 
-        var entry = await first.AsMigrationCache().ReadSnapshotAsync<string>("k", null, Ct);
+        var entry = (await first.AsMigrationCache().ReadSnapshotAsync<string>("k", null, Ct)).Entry!;
 
         entry.Value.Should().Be("b", "the snapshot is the shared tier's, and the first node still holds \"a\" locally");
         (await first.GetAsync<string>("k", Ct)).Should().Be("a");
@@ -263,7 +288,7 @@ public class FillPrimitivesTests(ITestContextAccessor testContextAccessor)
 
         foreach (var key in new[] { "a", "b" })
         {
-            (await sut.AsMigrationCache().ReadSnapshotAsync<string>(key, null, Ct)).Expiration.Should().BeCloseTo(DateTimeOffset.UtcNow + TimeSpan.FromMinutes(1), TimeSpan.FromSeconds(10));
+            (await sut.AsMigrationCache().ReadSnapshotAsync<string>(key, null, Ct)).Entry!.Expiration.Should().BeCloseTo(DateTimeOffset.UtcNow + TimeSpan.FromMinutes(1), TimeSpan.FromSeconds(10));
         }
     }
 
@@ -574,7 +599,7 @@ public class FillPrimitivesTests(ITestContextAccessor testContextAccessor)
 
         (await sut.SetIfChangedAsync("k", "b", slow, TimeSpan.FromHours(1), Ct)).Outcome.Should().Be(ChangeOutcome.Replaced);
 
-        (await sut.AsMigrationCache().ReadSnapshotAsync<string>("k", null, Ct)).Expiration.Should().Be(start + TimeSpan.FromMinutes(1));
+        (await sut.AsMigrationCache().ReadSnapshotAsync<string>("k", null, Ct)).Entry!.Expiration.Should().Be(start + TimeSpan.FromMinutes(1));
     }
 
     [Theory]
@@ -594,7 +619,7 @@ public class FillPrimitivesTests(ITestContextAccessor testContextAccessor)
             await sut.TryFillAsync("k", "v", TimeSpan.FromHours(1), Ct);
         }
 
-        (await sut.AsMigrationCache().ReadSnapshotAsync<string>("k", null, Ct)).Expiration.Should().Be(clock.GetUtcNow() + TimeSpan.FromMinutes(1));
+        (await sut.AsMigrationCache().ReadSnapshotAsync<string>("k", null, Ct)).Entry!.Expiration.Should().Be(clock.GetUtcNow() + TimeSpan.FromMinutes(1));
     }
 
     [Fact]
@@ -721,8 +746,17 @@ public class FillPrimitivesTests(ITestContextAccessor testContextAccessor)
         /// <summary>Holds each single read after it read.</summary>
         public Func<Task>? ReadGate { get; set; }
 
-        public ValueTask<ICacheEntry<T?>> ReadSnapshotAsync<T>(CacheKey cacheKey, CachePolicy? policy, CancellationToken token = default) =>
-            GetCacheEntryAsync<T>(cacheKey, policy, token);
+        public async ValueTask<SnapshotRead<T>> ReadSnapshotAsync<T>(CacheKey cacheKey, CachePolicy? policy, CancellationToken token = default)
+        {
+            var entry = await GetCacheEntryAsync<T>(cacheKey, policy, token);
+            return entry.Found ? new SnapshotRead<T>(SnapshotOutcome.Found, entry) : new SnapshotRead<T>(SnapshotOutcome.Absent, null);
+        }
+
+        public async ValueTask<StoreOutcome> WriteAsync<T>(CacheKey cacheKey, T? value, DateTimeOffset expiration, CachePolicy? policy, CancellationToken token = default) =>
+            await SetAsync(cacheKey, value, expiration, policy, token) ? StoreOutcome.Committed : StoreOutcome.Failed;
+
+        public async ValueTask<StoreOutcome> DeleteAsync<T>(CacheKey cacheKey, CancellationToken token = default) =>
+            await RemoveAsync<T>(cacheKey, token) ? StoreOutcome.Committed : StoreOutcome.Failed;
 
         public new async ValueTask<ICacheEntry<T?>> GetCacheEntryAsync<T>(CacheKey cacheKey, CachePolicy? policy, CancellationToken token = default)
         {

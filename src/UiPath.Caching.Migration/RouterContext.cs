@@ -4,7 +4,7 @@ namespace UiPath.Caching.Migration;
 
 internal sealed record RouterContext(
     RouterCore Core,
-    ILibraryStore Store,
+    IMigrationCache Store,
     IConnectionState Connection,
     ITopicProvider Topics,
     ICacheEventFactory Events,

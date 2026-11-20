@@ -189,7 +189,7 @@ public sealed class FillPrimitivesRedisIntegrationTests(RedisContainerFixture fi
         (await node.GetAsync<string>(key, Ct)).Should().Be("old");
         await Raw.StringSetAsync(await FindAsync(key), "\"fresh\"", Ttl);
 
-        var entry = await node.AsMigrationCache().ReadSnapshotAsync<string>(key, null, Ct);
+        var entry = (await node.AsMigrationCache().ReadSnapshotAsync<string>(key, null, Ct)).Entry!;
 
         entry.Value.Should().Be("fresh");
         entry.Expiration.Should().BeCloseTo(DateTimeOffset.UtcNow + Ttl, TimeSpan.FromSeconds(15));
