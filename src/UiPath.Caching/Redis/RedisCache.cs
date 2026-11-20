@@ -7,7 +7,7 @@ using UiPath.Caching.Telemetry;
 
 namespace UiPath.Caching.Redis;
 
-internal sealed partial class RedisCache : RedisCacheBase, ICache, IInvalidationSink, IAdoptionReadCache, ISnapshotReadCache
+internal sealed partial class RedisCache : RedisCacheBase, ICache, ISharedTier, IMigrationCache
 {
     /// <summary>Value and absolute expiration in one atomic read-only call.</summary>
     private const string ReadWithExpirationScript = "local v = redis.call('GET', KEYS[1]) if not v then return false end return {v, redis.call('PEXPIRETIME', KEYS[1])}";
@@ -115,16 +115,13 @@ internal sealed partial class RedisCache : RedisCacheBase, ICache, IInvalidation
         return format.Sniff ? GetCacheEntryInternalAsync<T, ValueFormat>(cacheKey, format, token) : GetCacheEntryInternalAsync<T, PlainFormat>(cacheKey, default, token);
     }
 
-    public ValueTask<ICacheEntry<T?>> ReadSnapshotAsync<T>(CacheKey cacheKey, CachePolicy? policy, CancellationToken token = default) =>
-        ReadForAdoptionAsync<T>(cacheKey, policy, token);
-
-    public ValueTask<ICacheEntry<T?>> ReadForAdoptionAsync<T>(CacheKey cacheKey, CachePolicy? policy, CancellationToken token)
+    public ValueTask<ICacheEntry<T?>> ReadSnapshotAsync<T>(CacheKey cacheKey, CachePolicy? policy, CancellationToken token = default)
     {
         NotCacheableException.ThrowIfNotCacheable<T>();
         var format = FormatFor(policy, forWrite: false);
         return format.Sniff
-            ? GetCacheEntryInternalAsync<T, ValueFormat>(cacheKey, format, token, nameof(ReadForAdoptionAsync), atomic: true)
-            : GetCacheEntryInternalAsync<T, PlainFormat>(cacheKey, default, token, nameof(ReadForAdoptionAsync), atomic: true);
+            ? GetCacheEntryInternalAsync<T, ValueFormat>(cacheKey, format, token, nameof(ReadSnapshotAsync), atomic: true)
+            : GetCacheEntryInternalAsync<T, PlainFormat>(cacheKey, default, token, nameof(ReadSnapshotAsync), atomic: true);
     }
 
     public ValueTask<KeyValuePair<CacheKey, ICacheEntry<T?>>[]> GetCacheEntriesAsync<T>(CacheKey[] cacheKeys, CachePolicy? policy, CancellationToken token = default)
@@ -274,9 +271,11 @@ internal sealed partial class RedisCache : RedisCacheBase, ICache, IInvalidation
         return KeyExpireTimeAsync(_read, StartOperation<T>(), _redisKeyStrategy, cacheKey, _logFailure, token);
     }
 
-    void IInvalidationSink.Invalidated(CacheKey key) => NoteInvalidated(_redisKeyStrategy, key);
+    void ISharedTier.Invalidated(CacheKey key) => NoteInvalidated(_redisKeyStrategy, key);
 
-    void IInvalidationSink.InvalidatedAll() => NoteAllInvalidated();
+    void ISharedTier.InvalidatedAll() => NoteAllInvalidated();
+
+    IDisposable ISharedTier.DemandMaster() => DemandMaster();
 
     private static (RedisKey Key, bool Hit)[] InitReads(RedisKey[] redisKeys)
     {

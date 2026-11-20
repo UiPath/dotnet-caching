@@ -12,7 +12,7 @@ internal sealed partial class MultilayerHashCache
 
         public bool InnerIsNull => !cache._sharedInner;
 
-        public bool CanAdopt => cache._innerCache is IAdoptionReadHashCache;
+        public bool CanAdopt => cache._innerCache is ISharedHashTier;
 
         public bool IsEmpty(IDictionary<string, T?>? value) => IsNullOrEmpty(value);
 
@@ -25,7 +25,7 @@ internal sealed partial class MultilayerHashCache
             cache._innerCache.GetCacheEntryAsync<T>(options.CacheKey, policy, options.Token);
 
         public ValueTask<ICacheEntry<IDictionary<string, T?>>> ReadForAdoptionAsync(InternalHashCacheEntryOptions options, CachePolicy policy) =>
-            ((IAdoptionReadHashCache)cache._innerCache).ReadForAdoptionAsync<T>(options.CacheKey, policy, options.Token);
+            ((ISharedHashTier)cache._innerCache).ReadForAdoptionAsync<T>(options.CacheKey, policy, options.Token);
 
         public void Adopt(ref InternalHashCacheEntryOptions options, ICacheEntry<IDictionary<string, T?>> fetched)
         {

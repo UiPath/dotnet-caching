@@ -327,6 +327,18 @@ public class Cache<T> : ICache<T>, ISpanKeyCache<T>, IResultCache<T>
     public ValueTask<bool> TryAddAsync(CacheKey cacheKey, T? value, DateTimeOffset expiration, CancellationToken token = default) =>
         _cache.TryAddAsync(GetCacheKey(cacheKey), value, expiration, Policy, token);
 
+    public ValueTask<FillResult<T>> TryFillAsync(CacheKey cacheKey, T? value, TimeSpan expiration, CancellationToken token = default) =>
+        _cache.TryFillAsync(GetCacheKey(cacheKey), value, expiration, Policy, token);
+
+    public ValueTask<FillResult<T>> TryFillAsync(CacheKey cacheKey, T? value, DateTimeOffset expiration, CancellationToken token = default) =>
+        _cache.TryFillAsync(GetCacheKey(cacheKey), value, expiration, Policy, token);
+
+    public ValueTask<ChangeResult<T>> SetIfChangedAsync(CacheKey cacheKey, T? value, IEqualityComparer<T> comparer, TimeSpan expiration, CancellationToken token = default) =>
+        _cache.SetIfChangedAsync(GetCacheKey(cacheKey), value, comparer, expiration, Policy, token);
+
+    public ValueTask<ChangeResult<T>> SetIfChangedAsync(CacheKey cacheKey, T? value, IEqualityComparer<T> comparer, DateTimeOffset expiration, CancellationToken token = default) =>
+        _cache.SetIfChangedAsync(GetCacheKey(cacheKey), value, comparer, expiration, Policy, token);
+
 
     public ValueTask<TimeSpan?> TimeToLiveAsync(CacheKey cacheKey, CancellationToken token = default) =>
         _cache.TimeToLiveAsync<T>(GetCacheKey(cacheKey), token);

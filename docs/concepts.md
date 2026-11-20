@@ -506,6 +506,13 @@ Opt out per policy (`RefreshLocalOnPeerWrite: false`) for read-after-peer-write 
 
 See also: [how-to/resilience.md#named-policies](how-to/resilience.md#named-policies), [reference/settings.md#policiesname-cachepolicy](reference/settings.md#policiesname-cachepolicy).
 
+### Quiet fills
+
+`TryFillAsync` and `SetIfChangedAsync` ([how-to/quiet-fills.md](how-to/quiet-fills.md)) write the distributed tier without an event, as the fill after a `GetOrAddAsync` miss does. Peers are not told, so what a peer already holds for the key stays until its own local lifetime ends. A key a fill finds absent can only be in a peer's local tier if the distributed tier lost it early; that copy lasts at most the smaller of the entry's TTL and `LocalMaxExpiration`, the same window a `GetOrAddAsync` fill leaves.
+
+`SetIfChangedAsync` announces only a replacement, exactly as `SetAsync` does, so peers refresh or drop their copy of a value that really changed. A filled key and an equal value cost nothing.
+
+These calls keep the value they read or wrote in the local tier under the rule a read hit follows: a mark is taken before the call to the distributed tier, and the value is installed only if no local write, removal or peer event for the key (or a key sharing its stripe) advanced it meanwhile. A refused keep does not change the outcome; a refused replacement also evicts the local copy it would have replaced, and is still announced. A local-only cache holds the key's local turn across the check and the write, so two concurrent fills of one key get one `Added`.
 ---
 
 ## Value serializers and the format header

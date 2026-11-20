@@ -165,7 +165,7 @@ public class RedisHashCacheTests(ITestContextAccessor testContextAccessor) : IAs
     {
         _redisCacheOptions.ReadFrom = RedisReadFrom.Replica;
         var flags = StubFieldReads();
-        ((IInvalidationSink)Sut).Invalidated(_cacheKey);
+        ((ISharedTier)Sut).Invalidated(_cacheKey);
 
         await Sut.GetItemAsync<string>(_cacheKey, "f", policy: null, token: testContextAccessor.Current.CancellationToken);
         _now += RecentTouches.DefaultWindow;
@@ -179,7 +179,7 @@ public class RedisHashCacheTests(ITestContextAccessor testContextAccessor) : IAs
     {
         _redisCacheOptions.ReadFrom = RedisReadFrom.Replica;
         var flags = StubFieldReads();
-        ((IInvalidationSink)Sut).InvalidatedAll();
+        ((ISharedTier)Sut).InvalidatedAll();
 
         await Sut.GetItemAsync<string>(_cacheKey, "f", policy: null, token: testContextAccessor.Current.CancellationToken);
 
@@ -268,7 +268,7 @@ public class RedisHashCacheTests(ITestContextAccessor testContextAccessor) : IAs
         _redisCacheOptions.ReadFrom = RedisReadFrom.Replica;
         _redisCacheOptions.MasterReadWindow = TimeSpan.FromSeconds(5);
         var flags = StubFieldReads();
-        ((IInvalidationSink)Sut).Invalidated(_cacheKey);
+        ((ISharedTier)Sut).Invalidated(_cacheKey);
 
         _now += TimeSpan.FromSeconds(5) - TimeSpan.FromMilliseconds(1);
         await Sut.GetItemAsync<string>(_cacheKey, "f", policy: null, token: testContextAccessor.Current.CancellationToken);
@@ -302,7 +302,7 @@ public class RedisHashCacheTests(ITestContextAccessor testContextAccessor) : IAs
         using var budget = new CancellationTokenSource(TimeSpan.FromMilliseconds(50));
         _transaction.ExecuteAsync(Arg.Any<CommandFlags>()).Returns(_ => HangUntilAsync<bool>(budget.Token));
 
-        var read = ((IAdoptionReadHashCache)Sut).ReadForAdoptionAsync<string>(_cacheKey, policy: null, budget.Token).AsTask();
+        var read = ((ISharedHashTier)Sut).ReadForAdoptionAsync<string>(_cacheKey, policy: null, budget.Token).AsTask();
 
         await read.Invoking(r => r).Should().ThrowAsync<OperationCanceledException>();
         LoggedExceptionTypes.Should().BeEmpty();

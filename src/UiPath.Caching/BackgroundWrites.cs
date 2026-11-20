@@ -200,46 +200,7 @@ internal sealed class BackgroundWrites(int limit, TimeSpan drainTimeout, string 
     public long Mark(string key) => _counting ? Volatile.Read(ref _changes[Stripe(key)]) : Untracked;
 
     /// <summary>Null, and nothing kept, when the key or one sharing its stripe changed since <paramref name="mark"/>, or a write of the key is in flight; otherwise what <paramref name="set"/> returned.</summary>
-    public bool? Fill<TState>(string key, long mark, TState state, Func<TState, bool> set)
-    {
-        if (!_counting)
-        {
-            return set(state);
-        }
-
-        // Read before counting began: its order is not known.
-        if (mark == Untracked)
-        {
-            FillRefused(_refusedUntracked);
-            return null;
-        }
-
-        var stripe = Stripe(key);
-        TelemetryTags<string> refused;
-        lock (StripeLock(stripe))
-        {
-            if (Volatile.Read(ref _changes[stripe]) != mark)
-            {
-                refused = _refusedChanged;
-            }
-            else if (Volatile.Read(ref _writing[stripe]) != 0)
-            {
-                refused = _refusedInFlight;
-            }
-            else if (_active && InTails(key))
-            {
-                // The inner tier may change under a read while a write is in flight; its end moves the count.
-                refused = _refusedInFlight;
-            }
-            else
-            {
-                return set(state);
-            }
-        }
-
-        FillRefused(refused);
-        return null;
-    }
+    public bool? Fill<TState>(string key, long mark, TState state, Func<TState, bool> set) => FillCore(key, mark, state, set, advance: false);
 
     /// <summary>Keeps the read's value locally as <see cref="Fill{TState}(string, long, TState, Func{TState, bool})"/> does, and calls <paramref name="notKept"/> when a change since <paramref name="mark"/> kept it out.</summary>
     public void Fill<TState>(string key, long mark, TState state, Func<TState, bool> set, Action<TState> notKept)
@@ -249,6 +210,9 @@ internal sealed class BackgroundWrites(int limit, TimeSpan drainTimeout, string 
             notKept(state);
         }
     }
+
+    /// <summary>As <c>Fill</c>, and the kept value counts as a change of the key.</summary>
+    public bool? FillAdvancing<TState>(string key, long mark, TState state, Func<TState, bool> set) => FillCore(key, mark, state, set, advance: true);
 
     /// <summary>Whether a write of <paramref name="key"/>, or of a key sharing its stripe, is in flight: a fill declined for it is declined again until the write ends.</summary>
     public bool WriteInFlight(string key)
@@ -593,6 +557,52 @@ internal sealed class BackgroundWrites(int limit, TimeSpan drainTimeout, string 
         {
             telemetry.TryTrackException(ex);
         }
+    }
+
+    private bool? FillCore<TState>(string key, long mark, TState state, Func<TState, bool> set, bool advance)
+    {
+        if (!_counting)
+        {
+            return set(state);
+        }
+
+        // Read before counting began: its order is not known.
+        if (mark == Untracked)
+        {
+            FillRefused(_refusedUntracked);
+            return null;
+        }
+
+        var stripe = Stripe(key);
+        TelemetryTags<string> refused;
+        lock (StripeLock(stripe))
+        {
+            if (Volatile.Read(ref _changes[stripe]) != mark)
+            {
+                refused = _refusedChanged;
+            }
+            else if (Volatile.Read(ref _writing[stripe]) != 0)
+            {
+                refused = _refusedInFlight;
+            }
+            else if (_active && InTails(key))
+            {
+                // The inner tier may change under a read while a write is in flight; its end moves the count.
+                refused = _refusedInFlight;
+            }
+            else
+            {
+                if (advance)
+                {
+                    Interlocked.Increment(ref _changes[stripe]);
+                }
+
+                return set(state);
+            }
+        }
+
+        FillRefused(refused);
+        return null;
     }
 
     private void ActivateLocked()

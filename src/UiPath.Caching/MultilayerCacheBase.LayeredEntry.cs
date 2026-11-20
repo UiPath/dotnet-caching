@@ -51,13 +51,12 @@ public abstract partial class MultilayerCacheBase
                 : FetchSharedInnerAsync(options, policy);
 
         /// <returns>Whether the value was kept locally; a fill an inner read lost the race for is not.</returns>
-        public bool FillFromInnerRead(TOptions options, long mark, TValue value, CachePolicy policy)
+        public bool FillFromInnerRead(TOptions options, long mark, TValue value, CachePolicy policy, bool advance = false)
         {
-            var kept = cache._background.Fill(
-                options.CacheKey.Name,
-                mark,
-                (Cache: cache, Shape: shape, Options: options, Value: value, Max: cache.LocalLifetime(policy), Policy: policy),
-                static s => s.Shape.KeepLocal(s.Options, s.Value, s.Max, s.Policy));
+            var state = (Cache: cache, Shape: shape, Options: options, Value: value, Max: cache.LocalLifetime(policy), Policy: policy);
+            var kept = advance
+                ? cache._background.FillAdvancing(options.CacheKey.Name, mark, state, static s => s.Shape.KeepLocal(s.Options, s.Value, s.Max, s.Policy))
+                : cache._background.Fill(options.CacheKey.Name, mark, state, static s => s.Shape.KeepLocal(s.Options, s.Value, s.Max, s.Policy));
             if (kept is null)
             {
                 cache.LogInnerCopyNotKept(LoggedKey.For(cache._masker, options.CallerKey, options.CacheKey.Name, shape.EntryType));

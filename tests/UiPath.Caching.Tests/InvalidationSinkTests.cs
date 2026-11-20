@@ -163,7 +163,7 @@ public sealed class InvalidationSinkTests : IDisposable
         };
     }
 
-    private sealed class RecordingSink(Func<bool> live) : IInvalidationSink
+    private sealed class RecordingSink(Func<bool> live) : ISharedTier
     {
         public List<string> Keys { get; } = [];
 
@@ -182,6 +182,8 @@ public sealed class InvalidationSinkTests : IDisposable
             LiveAtReport.Add(live());
             All++;
         }
+
+        public IDisposable DemandMaster() => Fakes.NoMasterScope.Instance;
     }
 
     private sealed class CapturingTopic : ITopic<ICacheEvent>

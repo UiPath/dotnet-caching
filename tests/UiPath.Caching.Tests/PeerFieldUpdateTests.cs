@@ -1449,7 +1449,7 @@ public class PeerFieldUpdateTests
         var (subject, token) = Token();
         using var _ = token;
         var seen = new List<PeerUpdate>();
-        ((IPeerUpdateSource)token).PeerUpdateHandler = update =>
+        ((IPeerAwareToken)token).PeerUpdateHandler = update =>
         {
             seen.Add(update);
             return true;
@@ -1475,7 +1475,7 @@ public class PeerFieldUpdateTests
         token.MetadataHasChanged.Should().BeFalse();
         var (second, declined) = Token();
         using var __ = declined;
-        ((IPeerUpdateSource)declined).PeerUpdateHandler = _ => false;
+        ((IPeerAwareToken)declined).PeerUpdateHandler = _ => false;
 
         second.OnNext(SetEvent("2", properties));
 
@@ -1488,7 +1488,7 @@ public class PeerFieldUpdateTests
         var (subject, token) = Token();
         using var _ = token;
         var offered = 0;
-        ((IPeerUpdateSource)token).PeerUpdateHandler = _ =>
+        ((IPeerAwareToken)token).PeerUpdateHandler = _ =>
         {
             offered++;
             return true;

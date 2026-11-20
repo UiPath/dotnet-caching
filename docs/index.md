@@ -31,6 +31,7 @@ UiPath's internal multilayer caching library. L1 in-memory + L2 Redis, cross-nod
 - Cross-node sync, per-topic options, streams notify doorbell, sharded Pub/Sub → [how-to/broadcast.md](how-to/broadcast.md).
 - Per-field caching, side-channel metadata, bundled GET+TTL → [how-to/hash-cache.md](how-to/hash-cache.md).
 - OpenTelemetry adapter + Redis instrumentation, custom key/channel strategies → [how-to/telemetry-and-strategies.md](how-to/telemetry-and-strategies.md).
+- Writing without the event traffic of `SetAsync`: `TryFillAsync` and `SetIfChangedAsync` → [how-to/quiet-fills.md](how-to/quiet-fills.md).
 - Routing a cache group between an existing Redis client and the library → [how-to/router.md](how-to/router.md).
 - Adding a new cache provider, topic provider, or serializer → [how-to/extending.md](how-to/extending.md).
 - Set ("queue") caches: what they are, how they stay coherent → [concepts.md#set-caches](concepts.md#set-caches), [reference/settings.md#queue-caches-uipathcachingqueue](reference/settings.md#queue-caches-uipathcachingqueue).

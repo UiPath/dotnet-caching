@@ -433,6 +433,10 @@ public class CapturingGeneratorTests
                 ValueTask<bool> ICache<Item>.ContainsAsync(CacheKey cacheKey, CancellationToken token) => throw null!;
                 ValueTask<TimeSpan?> ICache<Item>.TimeToLiveAsync(CacheKey cacheKey, CancellationToken token) => throw null!;
                 ValueTask<DateTimeOffset?> ICache<Item>.ExpireTimeAsync(CacheKey cacheKey, CancellationToken token) => throw null!;
+                ValueTask<FillResult<Item>> ICache<Item>.TryFillAsync(CacheKey cacheKey, Item? value, TimeSpan expiration, CancellationToken token) => throw null!;
+                ValueTask<FillResult<Item>> ICache<Item>.TryFillAsync(CacheKey cacheKey, Item? value, DateTimeOffset expiration, CancellationToken token) => throw null!;
+                ValueTask<ChangeResult<Item>> ICache<Item>.SetIfChangedAsync(CacheKey cacheKey, Item? value, IEqualityComparer<Item> comparer, TimeSpan expiration, CancellationToken token) => throw null!;
+                ValueTask<ChangeResult<Item>> ICache<Item>.SetIfChangedAsync(CacheKey cacheKey, Item? value, IEqualityComparer<Item> comparer, DateTimeOffset expiration, CancellationToken token) => throw null!;
             }
             """);
         return Verify.FixAsync(source, source, Verify.Diagnostic(0, ThisDelegate, PassIt));

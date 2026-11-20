@@ -374,7 +374,7 @@ internal sealed class PeerCluster : IDisposable
     }
 
     /// <summary>The inner tier of a node: a stand-in for the Redis hash cache, which proxies cannot be made to look like because its counting interface is internal.</summary>
-    internal class PeerInner : DispatchProxy, IVersionedHashCache, ISpanKeyHashCache, IConnectionState, IAdoptionReadHashCache
+    internal class PeerInner : DispatchProxy, ISpanKeyHashCache, IConnectionState, ISharedHashTier
     {
         private volatile bool _connected = true;
         private int _reads;
@@ -447,6 +447,16 @@ internal sealed class PeerCluster : IDisposable
         public bool FailsDecode { get; set; }
 
         public int CountedRemovals { get; private set; }
+
+        void ISharedTier.Invalidated(CacheKey key)
+        {
+        }
+
+        void ISharedTier.InvalidatedAll()
+        {
+        }
+
+        IDisposable ISharedTier.DemandMaster() => NoMasterScope.Instance;
 
         public async ValueTask<VersionedWrite> SetVersionedAsync<T>(CacheKey cacheKey, IDictionary<string, T?> values, HashCacheEntryOptions options, CachePolicy? policy, PeerFieldLimits limits, CancellationToken token = default)
         {
@@ -537,7 +547,7 @@ internal sealed class PeerCluster : IDisposable
 
         ValueTask<IDictionary<string, string?>?> ISpanKeyHashCache.GetMetadataAsync<T>(Span<char> cacheKey, CancellationToken token) => throw new NotSupportedException();
 
-        ValueTask<ICacheEntry<IDictionary<string, T?>>> IAdoptionReadHashCache.ReadForAdoptionAsync<T>(CacheKey cacheKey, CachePolicy? policy, CancellationToken token)
+        ValueTask<ICacheEntry<IDictionary<string, T?>>> ISharedHashTier.ReadForAdoptionAsync<T>(CacheKey cacheKey, CachePolicy? policy, CancellationToken token)
             where T : default
         {
             Interlocked.Increment(ref _reads);

@@ -254,7 +254,7 @@ public class MultilayerCacheRehydrateTests(ITestContextAccessor testContextAcces
 
         await WaitForAsync(() => _telemetry.Events.Any(e => e.Name is "cache.rehydrate.adopted" or "cache.rehydrate.succeeded"), TimeSpan.FromSeconds(5), token);
         generator.Calls.Should().Be(fails ? 1 : 0);
-        inner.Calls.Count(call => call.StartsWith("ReadForAdoptionAsync:", StringComparison.Ordinal)).Should().Be(1);
+        inner.Calls.Count(call => call.StartsWith("ReadSnapshotAsync:", StringComparison.Ordinal)).Should().Be(1);
         inner.Count(nameof(ICache.GetCacheEntryAsync)).Should().Be(1);
         _telemetry.Events.Where(e => e.Name == "cache.rehydrate.adopt_read_failed").Select(e => e.Properties!["reason"])
             .Should().Equal(fails ? ErrorReason : []);

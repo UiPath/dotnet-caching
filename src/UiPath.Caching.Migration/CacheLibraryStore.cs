@@ -1,9 +1,12 @@
 namespace UiPath.Caching.Migration;
 
-internal sealed class CacheLibraryStore(ICache cache, ISnapshotReadCache snapshot) : ILibraryStore
+/// <summary>The library side of the router.</summary>
+internal sealed class CacheLibraryStore(ICache cache) : ILibraryStore
 {
+    private readonly IMigrationCache _migration = cache.AsMigrationCache();
+
     public ValueTask<ICacheEntry<T?>> ReadSnapshotAsync<T>(CacheKey key, CancellationToken cancellationToken) =>
-        snapshot.ReadSnapshotAsync<T>(key, null, cancellationToken);
+        _migration.ReadSnapshotAsync<T>(key, null, cancellationToken);
 
     public ValueTask<bool> SetAsync<T>(CacheKey key, T value, DateTimeOffset expiration, CancellationToken cancellationToken) =>
         cache.SetAsync(key, value, expiration, null, cancellationToken);

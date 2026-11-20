@@ -141,8 +141,8 @@ public class MultilayerHashCacheRehydrateTests(ITestContextAccessor testContextA
     public async Task Rehydrate_decides_on_the_snapshot_read_of_an_inner_cache_that_offers_one()
     {
         var token = testContextAccessor.Current.CancellationToken;
-        var proxy = DispatchProxy.Create<IHashCache, AdoptionProxy>();
-        var inner = (AdoptionProxy)(object)proxy;
+        var proxy = DispatchProxy.Create<IHashCache, AdoptionHashProxy>();
+        var inner = (AdoptionHashProxy)(object)proxy;
         _fixture.Inject(proxy);
         // The plain read always shows the aged copy, so only the snapshot read can tell a peer refreshed it.
         inner.Answer = (name, _) => name == nameof(IHashCache.GetCacheEntryAsync)
@@ -359,6 +359,19 @@ public class MultilayerHashCacheRehydrateTests(ITestContextAccessor testContextA
             Arg.Any<CancellationToken>());
     }
 
+    [Fact]
+    public async Task A_write_through_the_adoption_proxy_over_a_plain_hash_cache_works_with_peer_field_updates_on()
+    {
+        var token = testContextAccessor.Current.CancellationToken;
+        _options.PeerFieldUpdates = true;
+        _innerCache.SetAsync<string?>(_cacheKey, Arg.Any<IDictionary<string, string?>>(), Arg.Any<HashCacheEntryOptions>(), Arg.Any<CachePolicy?>(), Arg.Any<CancellationToken>())
+            .Returns(true);
+
+        (await Sut.SetAsync<string>(_cacheKey, CachedDict, token)).Should().BeTrue();
+
+        await _innerCache.Received(1).SetAsync<string?>(_cacheKey, Arg.Any<IDictionary<string, string?>>(), Arg.Any<HashCacheEntryOptions>(), Arg.Any<CachePolicy?>(), Arg.Any<CancellationToken>());
+    }
+
     public ValueTask DisposeAsync() => ValueTask.CompletedTask;
 
     public ValueTask InitializeAsync()
@@ -366,7 +379,7 @@ public class MultilayerHashCacheRehydrateTests(ITestContextAccessor testContextA
         _cacheKey = _fixture.Create<string>();
         _topicKey = _fixture.Create<string>();
         _innerCache = _fixture.Freeze<IHashCache>();
-        _fixture.Inject(AdoptionProxy.Over(_innerCache));
+        _fixture.Inject(AdoptionHashProxy.Over(_innerCache));
         _memoryCache = _fixture.Freeze<global::Microsoft.Extensions.Caching.Memory.IMemoryCache>();
         _distributedLock = _fixture.Freeze<IDistributedLock>();
         _telemetry = new RecordingTelemetryProvider();

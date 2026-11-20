@@ -37,7 +37,7 @@ internal abstract class MemoryCacheSetter(
     internal long Writes => Volatile.Read(ref _writes);
 
     /// <summary>Told which keys a received event invalidated, so the tier below can read them from the master for a moment.</summary>
-    internal IInvalidationSink? Invalidations { get; init; }
+    internal ISharedTier? Invalidations { get; init; }
 
     /// <summary>Takes a peer's write to a held key for a background refresh; false drops the entry.</summary>
     internal Func<RefreshMetadataState, bool>? PeerRefresh { get; init; }
@@ -125,6 +125,9 @@ internal abstract class MemoryCacheSetter(
         }
     }
 
+    /// <summary>The deadline the tier gives an entry written now.</summary>
+    internal DateTimeOffset DeadlineFor(DateTimeOffset expiration, TimeSpan? maxExpiration) => GetCacheExpiration(expiration, maxExpiration);
+
     internal void RefreshMetadata(object? state)
     {
         if (state is RefreshMetadataState metadataState)
@@ -166,18 +169,18 @@ internal abstract class MemoryCacheSetter(
     {
         // Boxed once for every callback that takes it.
         object state = new RefreshMetadataState(options.CacheKey, options.TopicKey, item, token, entryType, maxExpiration, options.CallerKey, refresh);
-        if (Invalidations != null && token is IInvalidationSource source)
+        if (Invalidations != null && token is IPeerAwareToken source)
         {
             source.RegisterInvalidatingCallback(_invalidating ??= Invalidating, state);
         }
 
-        if (refresh is not null && PeerRefresh is not null && token is IPeerRefreshSource peerRefresh)
+        if (refresh is not null && PeerRefresh is not null && token is IPeerAwareToken peerRefresh)
         {
             peerRefresh.RegisterPeerRefresh(_peerRefresh ??= RefreshOnPeerWrite, state);
         }
 
         token.RegisterChangeCallback(_refreshMetadata ??= RefreshMetadata, state);
-        if (AppliesPeerUpdates && token is IPeerUpdateSource peer)
+        if (AppliesPeerUpdates && token is IPeerAwareToken peer)
         {
             var held = (RefreshMetadataState)state;
             peer.PeerUpdateHandler = update => TryApplyPeerUpdate(held, update);
@@ -206,7 +209,7 @@ internal abstract class MemoryCacheSetter(
     {
         var token = metadataState.Token;
         // A custom factory's token cannot report before it changes: reported late rather than not at all.
-        if (token is not IInvalidationSource)
+        if (token is not IPeerAwareToken)
         {
             Invalidations?.Invalidated(metadataState.CacheKey);
         }

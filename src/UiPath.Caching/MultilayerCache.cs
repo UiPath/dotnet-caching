@@ -6,7 +6,7 @@ using UiPath.Caching.Telemetry;
 
 namespace UiPath.Caching;
 
-internal sealed partial class MultilayerCache : MultilayerCacheBase, ICache, ISpanKeyCache, IResultCache
+internal sealed partial class MultilayerCache : MultilayerCacheBase, ICache, ISpanKeyCache, IResultCache, IMigrationCache
 {
     private readonly ICache _innerCache;
     private readonly bool _sharedInner;
@@ -39,7 +39,7 @@ internal sealed partial class MultilayerCache : MultilayerCacheBase, ICache, ISp
         _entryBuilder = new CacheEntryBuilder(cacheKeyStrategy, topicKeyStrategy, _clock);
         _localMemorySetter = new LocalMemorySetter(cacheName, changeTokenFactory, _topicProvider, _memoryCache, logger, _clock, _multiLayerCacheOptions, memoryCacheOptions, telemetryProvider, _masker, !_clearLocalOnReconnect)
         {
-            Invalidations = _innerTier.Invalidations,
+            Invalidations = _innerTier.Shared,
             PeerRefresh = _peerRefresher is { } refresher ? refresher.TryEnqueue : null,
             PeerRefreshChanged = _peerRefresher is { } changed ? changed.TokenChanged : null,
             // A keep that lands while a peer's event is dispatched is heard by the entry's token, not by the store.
@@ -49,7 +49,7 @@ internal sealed partial class MultilayerCache : MultilayerCacheBase, ICache, ISp
     }
 
     /// <summary>The tier told of received invalidations: the inner cache when it tracks them; tests check the wiring.</summary>
-    internal IInvalidationSink? Invalidations => _localMemorySetter.Invalidations;
+    internal ISharedTier? Invalidations => _localMemorySetter.Invalidations;
 
     /// <summary>Runs, inner reads and generators fail-safe stopped waiting for, still going; tests check they drain once callers are done.</summary>
     internal int RunsInFlight => _innerReads.Count + _generations.Count + _background.InFlight + (_peerRefresher?.Pending ?? 0) + LateGenerations;
@@ -628,12 +628,12 @@ internal sealed partial class MultilayerCache : MultilayerCacheBase, ICache, ISp
     }
 
     /// <summary>One snapshot read per key, concurrently.</summary>
-    private static async Task<ICacheEntry<T?>[]> ReadEachForAdoptionAsync<T>(IAdoptionReadCache snapshot, CacheKey[] keys, CachePolicy policy, CancellationToken token)
+    private static async Task<ICacheEntry<T?>[]> ReadEachForAdoptionAsync<T>(IMigrationCache snapshot, CacheKey[] keys, CachePolicy policy, CancellationToken token)
     {
         var reads = new Task<ICacheEntry<T?>>[keys.Length];
         for (var i = 0; i < keys.Length; i++)
         {
-            reads[i] = snapshot.ReadForAdoptionAsync<T>(keys[i], policy, token).AsTask();
+            reads[i] = snapshot.ReadSnapshotAsync<T>(keys[i], policy, token).AsTask();
         }
 
         try
@@ -922,7 +922,7 @@ internal sealed partial class MultilayerCache : MultilayerCacheBase, ICache, ISp
         CancellationToken token)
         where TState : notnull
     {
-        if (states.Length == 0 || !_sharedInner || _innerCache is not IAdoptionReadCache snapshot || GetInnerCacheDisconnected())
+        if (states.Length == 0 || !_sharedInner || _innerCache is not IMigrationCache snapshot || GetInnerCacheDisconnected())
         {
             return states;
         }

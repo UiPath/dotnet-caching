@@ -1,6 +1,6 @@
 namespace UiPath.Caching.Redis;
 
-internal sealed class UnreadableEntry<T>(ICacheEntry<T> miss) : ICacheEntry<T>, IUnreadableEntry
+internal sealed class UnreadableEntry<T>(ICacheEntry<T> miss) : ICacheEntry<T>
 {
     public DateTimeOffset Expiration => miss.Expiration;
 

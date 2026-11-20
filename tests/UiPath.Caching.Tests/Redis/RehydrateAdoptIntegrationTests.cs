@@ -76,7 +76,7 @@ public sealed class RehydrateAdoptIntegrationTests(RedisContainerFixture fixture
         served.Should().OnlyContain(v => v == "v1" || v == "v2");
         (await EventuallyAsync(() => Tracked(telemetryB, "cache.rehydrate.adopted"))).Should().BeTrue("the value is kept before the run reports it");
         Tracked(telemetryB, "cache.rehydrate.succeeded").Should().BeFalse();
-        telemetryB.Metrics.Should().Contain(m => m.Name.Contains("ReadForAdoptionAsync", StringComparison.Ordinal), "the adoption read is the snapshot read of the built-in Redis cache");
+        telemetryB.Metrics.Should().Contain(m => m.Name.Contains("ReadSnapshotAsync", StringComparison.Ordinal), "the adoption read is the snapshot read of the built-in Redis cache");
     }
 
     public void Dispose()

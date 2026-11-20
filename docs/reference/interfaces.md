@@ -59,6 +59,14 @@ public interface ICache<T>
 
     ValueTask<bool> TryAddAsync(CacheKey cacheKey, T? value, DateTimeOffset expiration, CancellationToken token = default);
 
+    ValueTask<FillResult<T>> TryFillAsync(CacheKey cacheKey, T? value, TimeSpan expiration, CancellationToken token = default);
+
+    ValueTask<FillResult<T>> TryFillAsync(CacheKey cacheKey, T? value, DateTimeOffset expiration, CancellationToken token = default);
+
+    ValueTask<ChangeResult<T>> SetIfChangedAsync(CacheKey cacheKey, T? value, IEqualityComparer<T> comparer, TimeSpan expiration, CancellationToken token = default);
+
+    ValueTask<ChangeResult<T>> SetIfChangedAsync(CacheKey cacheKey, T? value, IEqualityComparer<T> comparer, DateTimeOffset expiration, CancellationToken token = default);
+
     ValueTask<bool> RefreshAsync(CacheKey cacheKey, CancellationToken token = default);
 
     ValueTask<bool> RefreshAsync(CacheKey cacheKey, TimeSpan expiration, CancellationToken token = default);
@@ -78,6 +86,8 @@ public interface ICache<T>
 The multi-key `GetOrAddAsync<TState>` overloads pair each key with an opaque caller state (`TState`) — a database id, a request object, whatever identifies the entry in the caller's own vocabulary. The generator is invoked at most once, with only the states of the entries that missed, and results come back keyed by state. These three overloads are **abstract** on `ICache<T>`, as they are on `ICache`: neither interface supplies a default body. A hand-written `ICache<T>` implementation (a test fake, typically) must add all three. There is no key-only convenience overload on the async surface: a caller whose keys are their own identity pairs each key with itself (`TState = CacheKey`). The blocking `CacheSyncExtensions.GetOrAdd` forwarder is the one place that accepts `CacheKey[]` directly and does that pairing for you.
 
 `TryAddAsync` is the conditional-add (create-if-absent) member: it writes only when the key does not already exist, and returns `true` only to the caller that created it. On a Redis-backed cache it maps to StackExchange.Redis `When.NotExists` (`SET key value EX … NX`) — a single atomic round-trip, so exactly one caller across all nodes wins a given key. It is the primitive to reach for when you need at-most-once semantics keyed by something: a dedup marker, an idempotency key, a "who runs this job" election. See [`ICache.TryAddAsync`](#icache) for the full contract, including what a `false` return does and does not tell you.
+
+`TryFillAsync` and `SetIfChangedAsync` write without announcing: a fill, or the write of a value equal to the stored one, costs peers nothing. See [Quiet fills](../how-to/quiet-fills.md) for the contract.
 
 > **Typical vs. power-user surface:** This is the standard typed surface. If you need to vary the value type or key per call rather than per cache instance, use [`ICache`](#icache) instead. `ICache<T>` and `ICache` are different shapes for different problems — neither is strictly more capable.
 
@@ -151,6 +161,14 @@ public interface ICache : IDisposable
 
     ValueTask<bool> TryAddAsync<T>(CacheKey cacheKey, T? value, DateTimeOffset expiration, CachePolicy? policy, CancellationToken token = default);
 
+    ValueTask<FillResult<T>> TryFillAsync<T>(CacheKey cacheKey, T? value, TimeSpan expiration, CachePolicy? policy, CancellationToken token = default);
+
+    ValueTask<FillResult<T>> TryFillAsync<T>(CacheKey cacheKey, T? value, DateTimeOffset expiration, CachePolicy? policy, CancellationToken token = default);
+
+    ValueTask<ChangeResult<T>> SetIfChangedAsync<T>(CacheKey cacheKey, T? value, IEqualityComparer<T> comparer, TimeSpan expiration, CachePolicy? policy, CancellationToken token = default);
+
+    ValueTask<ChangeResult<T>> SetIfChangedAsync<T>(CacheKey cacheKey, T? value, IEqualityComparer<T> comparer, DateTimeOffset expiration, CachePolicy? policy, CancellationToken token = default);
+
     ValueTask<bool> RefreshAsync<T>(CacheKey cacheKey, CachePolicy? policy, CancellationToken token = default);
 
     ValueTask<bool> RefreshAsync<T>(CacheKey cacheKey, TimeSpan expiration, CachePolicy? policy, CancellationToken token = default);
@@ -166,6 +184,19 @@ public interface ICache : IDisposable
 ```
 
 `ICache` is the dynamic-key, dynamic-type cache surface. Unlike `ICache<T>`, the value type is specified as a generic type argument on each method call rather than fixed at cache-creation time, and a `CachePolicy` can be supplied per call rather than resolved by `typeof(T).FullName`. It also exposes `GetCacheEntryAsync` for callers that need cache-entry metadata (hit/miss status, expiration) in addition to the value. `ICache` implements `IDisposable`, but instances returned by `ICacheFactory.CreateCache(...)` are provider-owned (typically singletons resolved through a `Lazy<>`); their lifetime is managed by the provider and the DI container, so callers should not dispose them per use.
+
+### `IMigrationCache`
+
+```csharp
+public interface IMigrationCache
+{
+    ValueTask<ICacheEntry<T?>> ReadSnapshotAsync<T>(CacheKey cacheKey, CachePolicy? policy, CancellationToken token = default);
+}
+```
+
+For code that moves cache data between stores. `ReadSnapshotAsync` reads the value and its remaining lifetime from the primary as one snapshot and bypasses the local tier. A store fault throws where `GetCacheEntryAsync` answers a miss, and an unreadable value is left in place. A local-only cache returns its local entry.
+
+The library's Redis, layered and null caches implement it; `Cache<T>` does not. `cache.AsMigrationCache()` returns it from an `ICache` or throws `NotSupportedException` naming the type, so a custom cache or decorator opts in by implementing it.
 
 ### Expiration
 

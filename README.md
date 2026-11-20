@@ -176,6 +176,7 @@ flowchart LR
 | Broadcast (per-topic, notify doorbell, sharded Pub/Sub) | [docs/how-to/broadcast.md](docs/how-to/broadcast.md) |
 | Hash cache (metadata, bundled GET+TTL) | [docs/how-to/hash-cache.md](docs/how-to/hash-cache.md) |
 | Telemetry + custom strategies | [docs/how-to/telemetry-and-strategies.md](docs/how-to/telemetry-and-strategies.md) |
+| Quiet fills (`TryFillAsync`, `SetIfChangedAsync`) | [docs/how-to/quiet-fills.md](docs/how-to/quiet-fills.md) |
 | Router (existing Redis client and the library on one local tier) | [docs/how-to/router.md](docs/how-to/router.md) |
 | Azure Managed Redis with Entra ID (and custom auth) | [docs/recipes/azure-entra-authentication.md](docs/recipes/azure-entra-authentication.md) |
 | Set ("queue") caches — model, coherence, pitfalls | [docs/concepts.md#set-caches](docs/concepts.md#set-caches) |
