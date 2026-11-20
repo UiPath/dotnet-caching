@@ -633,7 +633,7 @@ internal sealed partial class MultilayerCache : MultilayerCacheBase, ICache, ISp
         var reads = new Task<ICacheEntry<T?>>[keys.Length];
         for (var i = 0; i < keys.Length; i++)
         {
-            reads[i] = snapshot.ReadSnapshotAsync<T>(keys[i], policy, token).AsTask();
+            reads[i] = AdoptionEntryAsync(snapshot.ReadSnapshotAsync<T>(keys[i], policy, token)).AsTask();
         }
 
         try

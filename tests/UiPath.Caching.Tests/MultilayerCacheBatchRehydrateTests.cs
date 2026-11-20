@@ -335,6 +335,42 @@ public class MultilayerCacheBatchRehydrateTests(ITestContextAccessor testContext
     }
 
     [Fact]
+    public async Task A_batch_adopts_the_keys_a_peer_refreshed_when_one_of_them_is_unreadable()
+    {
+        var token = testContextAccessor.Current.CancellationToken;
+        var proxy = DispatchProxy.Create<ICache, AdoptionProxy>();
+        var inner = (AdoptionProxy)(object)proxy;
+        _fixture.Inject(proxy);
+        SeedAged("a", "A");
+        SeedAged("b", "B");
+        inner.Answer = (name, args) => name == nameof(ICache.GetCacheEntriesAsync)
+            ? ((CacheKey[])args[0]!).Select(k => new KeyValuePair<CacheKey, ICacheEntry<string?>>(k, new TestCacheEntry<string?> { Value = k.Name.ToUpperInvariant(), Expiration = DateTimeOffset.UtcNow.AddMinutes(2), Found = true })).ToArray()
+            : name == nameof(ICache.SetAsync) ? true : throw new NotSupportedException(name);
+        inner.Adoption = key => key.Name == "a"
+            ? SnapshotOutcome.Unreadable
+            : new TestCacheEntry<string?> { Value = key.Name + "-by-peer", Expiration = DateTimeOffset.UtcNow.AddMinutes(9), Found = true };
+        var generated = new List<long>();
+
+        await Sut.GetOrAddAsync<string, long>(
+            [new((CacheKey)"a", 1L), new((CacheKey)"b", 2L)],
+            (ids, _) =>
+            {
+                lock (generated)
+                {
+                    generated.AddRange(ids);
+                }
+
+                return Task.FromResult(ids.Select(id => new KeyValuePair<long, string?>(id, "fresh:" + id)).ToArray());
+            },
+            RehydratePolicy(),
+            token);
+
+        await WaitForAsync(() => _telemetry.Events.Any(e => e.Name is "cache.rehydrate.adopted" or "cache.rehydrate.succeeded"), TimeSpan.FromSeconds(10), token);
+        generated.Should().Equal(1L);
+        _telemetry.Events.Should().NotContain(e => e.Name == "cache.rehydrate.adopt_read_failed");
+    }
+
+    [Fact]
     public async Task A_batch_generates_when_the_inner_cache_offers_no_snapshot_read()
     {
         var token = testContextAccessor.Current.CancellationToken;

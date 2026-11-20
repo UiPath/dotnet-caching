@@ -115,13 +115,13 @@ internal sealed partial class RedisCache : RedisCacheBase, ICache, ISharedTier, 
         return format.Sniff ? GetCacheEntryInternalAsync<T, ValueFormat>(cacheKey, format, token) : GetCacheEntryInternalAsync<T, PlainFormat>(cacheKey, default, token);
     }
 
-    public ValueTask<ICacheEntry<T?>> ReadSnapshotAsync<T>(CacheKey cacheKey, CachePolicy? policy, CancellationToken token = default)
+    public ValueTask<SnapshotRead<T>> ReadSnapshotAsync<T>(CacheKey cacheKey, CachePolicy? policy, CancellationToken token = default)
     {
         NotCacheableException.ThrowIfNotCacheable<T>();
         var format = FormatFor(policy, forWrite: false);
         return format.Sniff
-            ? GetCacheEntryInternalAsync<T, ValueFormat>(cacheKey, format, token, nameof(ReadSnapshotAsync), atomic: true)
-            : GetCacheEntryInternalAsync<T, PlainFormat>(cacheKey, default, token, nameof(ReadSnapshotAsync), atomic: true);
+            ? ReadSnapshotInternalAsync<T, ValueFormat>(cacheKey, format, token)
+            : ReadSnapshotInternalAsync<T, PlainFormat>(cacheKey, default, token);
     }
 
     public ValueTask<KeyValuePair<CacheKey, ICacheEntry<T?>>[]> GetCacheEntriesAsync<T>(CacheKey[] cacheKeys, CachePolicy? policy, CancellationToken token = default)
@@ -314,10 +314,6 @@ internal sealed partial class RedisCache : RedisCacheBase, ICache, ISharedTier, 
 
         return (values, expirations);
     }
-
-    /// <summary>The miss a plain read answers where an atomic one reports the failure.</summary>
-    private static ICacheEntry<T?> Missed<T>(bool atomic, string failure, ICacheEntry<T?> miss) =>
-        atomic ? throw new InvalidOperationException(failure) : miss;
 
     /// <summary>One attempt at the read: the snapshot transaction, the script, or a GET with a PTTL.</summary>
     private static async Task ReadOnceAsync(RedisCache self, RedisKey key, StrongBox<StrongBox<(RedisValue Value, DateTimeOffset? Expiration)>?> read, bool atomic)
@@ -725,8 +721,14 @@ internal sealed partial class RedisCache : RedisCacheBase, ICache, ISharedTier, 
     /// is also treated as a miss when the option is off.
     /// </summary>
     private (bool Found, T? Value, int Unreadable) InterpretReadResult<T, TFormat>(RedisKey key, RedisValue value, TFormat format)
+        where TFormat : struct, IValueFormat =>
+        InterpretReadResult<T, TFormat>(key, value, format, out _);
+
+    /// <param name="undecoded">Stored bytes were present but gave no value.</param>
+    private (bool Found, T? Value, int Unreadable) InterpretReadResult<T, TFormat>(RedisKey key, RedisValue value, TFormat format, out bool undecoded)
         where TFormat : struct, IValueFormat
     {
+        undecoded = false;
         if (value.IsNull)
         {
             return (false, default, 0);
@@ -745,6 +747,7 @@ internal sealed partial class RedisCache : RedisCacheBase, ICache, ISharedTier, 
             if (outcome.IsMiss)
             {
                 ReportReadMiss(outcome);
+                undecoded = true;
                 return (false, default, outcome.UnreadableFormat);
             }
 
@@ -759,6 +762,7 @@ internal sealed partial class RedisCache : RedisCacheBase, ICache, ISharedTier, 
             deserialized = _serializer.Deserialize<T>(value);
         }
 
+        undecoded = deserialized is null && value.Length() != 0;
         if (!_cacheNullValues && IsDefault(deserialized))
         {
             return (false, default, 0);
@@ -1280,15 +1284,14 @@ internal sealed partial class RedisCache : RedisCacheBase, ICache, ISharedTier, 
         return retValues;
     }
 
-    /// <param name="atomic">Reads value and remaining lifetime in one transaction on the primary, lets a failure through instead of answering a miss, and leaves an unreadable value where it is.</param>
-    private async ValueTask<ICacheEntry<T?>> GetCacheEntryInternalAsync<T, TFormat>(CacheKey cacheKey, TFormat format, CancellationToken token, string methodName = nameof(GetCacheEntryInternalAsync), bool atomic = false)
+    private async ValueTask<ICacheEntry<T?>> GetCacheEntryInternalAsync<T, TFormat>(CacheKey cacheKey, TFormat format, CancellationToken token, string methodName = nameof(GetCacheEntryInternalAsync))
         where TFormat : struct, IValueFormat
     {
         token.ThrowIfCancellationRequested();
         var redisKey = ToRedisKey(cacheKey, token);
         if (!IsConnected)
         {
-            return Missed(atomic, "The cache is not connected", DefaultEntry<T>());
+            return DefaultEntry<T>();
         }
 
         var operation = StartOperation<T>(methodName);
@@ -1300,17 +1303,17 @@ internal sealed partial class RedisCache : RedisCacheBase, ICache, ISharedTier, 
             var committed = await _read.ExecuteAsync(static async (s, token) =>
             {
                 token.ThrowIfCancellationRequested();
-                await ReadOnceAsync(s.Self, s.Key, s.Read, s.Atomic).ConfigureAwait(false);
+                await ReadOnceAsync(s.Self, s.Key, s.Read, atomic: false).ConfigureAwait(false);
                 return true;
             },
-            (Self: this, Key: redisKey, Read: read, Atomic: atomic),
+            (Self: this, Key: redisKey, Read: read),
             default,
             token).ConfigureAwait(false);
 
             if (!committed || read.Value is not { } result)
             {
                 operation.Stop();
-                return Missed(atomic, "Unable to read from redis", ret);
+                return ret;
             }
 
             var (value, expiration) = result.Value;
@@ -1320,7 +1323,7 @@ internal sealed partial class RedisCache : RedisCacheBase, ICache, ISharedTier, 
                 ret = _cacheEntryFactory.Create<T?>(deserialized, Clock.ToDateTimeOffset(expiration));
             }
 
-            if (unreadable != 0 && !atomic)
+            if (unreadable != 0)
             {
                 await RemoveUnreadableAsync<T>(redisKey, value, unreadable, token).ConfigureAwait(false);
             }
@@ -1332,7 +1335,7 @@ internal sealed partial class RedisCache : RedisCacheBase, ICache, ISharedTier, 
             operation.Cancel();
             throw;
         }
-        catch (Exception ex) when (!atomic && format.Handles(ex))
+        catch (Exception ex) when (format.Handles(ex))
         {
             operation.Stop();
             LogRedisCacheException(ex);
@@ -1343,6 +1346,96 @@ internal sealed partial class RedisCache : RedisCacheBase, ICache, ISharedTier, 
         }
 
         return ret;
+    }
+
+    private async ValueTask<SnapshotRead<T>> ReadSnapshotInternalAsync<T, TFormat>(CacheKey cacheKey, TFormat format, CancellationToken token)
+        where TFormat : struct, IValueFormat
+    {
+        token.ThrowIfCancellationRequested();
+        if (!IsConnected)
+        {
+            return default;
+        }
+
+        RedisKey redisKey;
+        try
+        {
+            redisKey = ToRedisKey(cacheKey, token);
+        }
+        catch (Exception ex) when (ex is not OutOfMemoryException && !(ex is OperationCanceledException && token.IsCancellationRequested))
+        {
+            LogRedisCacheException(ex);
+            return default;
+        }
+
+        var operation = StartOperation<T>(nameof(ReadSnapshotAsync));
+        var found = false;
+        try
+        {
+            var read = new StrongBox<StrongBox<(RedisValue Value, DateTimeOffset? Expiration)>?>();
+            var committed = await _read.ExecuteAsync(static async (s, token) =>
+            {
+                token.ThrowIfCancellationRequested();
+                await ReadOnceAsync(s.Self, s.Key, s.Read, atomic: true).ConfigureAwait(false);
+                return true;
+            },
+            (Self: this, Key: redisKey, Read: read),
+            default,
+            token).ConfigureAwait(false);
+
+            if (!committed || read.Value is not { } result)
+            {
+                operation.Stop();
+                return default;
+            }
+
+            var (value, expiration) = result.Value;
+            var snapshot = InterpretSnapshot<T, TFormat>(redisKey, value, Clock.ToDateTimeOffset(expiration), format);
+            found = snapshot.Outcome == SnapshotOutcome.Found;
+            operation.Stop();
+            return snapshot;
+        }
+        catch (OperationCanceledException) when (token.IsCancellationRequested)
+        {
+            operation.Cancel();
+            throw;
+        }
+        catch (Exception ex) when (ex is not OutOfMemoryException)
+        {
+            operation.Stop();
+            LogRedisCacheException(ex);
+            return default;
+        }
+        finally
+        {
+            TrackRead(operation, found, redisKey);
+        }
+    }
+
+    private SnapshotRead<T> InterpretSnapshot<T, TFormat>(RedisKey key, RedisValue value, DateTimeOffset expiration, TFormat format)
+        where TFormat : struct, IValueFormat
+    {
+        bool found;
+        T? deserialized;
+        bool undecoded;
+        try
+        {
+            (found, deserialized, _) = InterpretReadResult<T, TFormat>(key, value, format, out undecoded);
+        }
+        catch (Exception ex) when (ex is not OutOfMemoryException && ex is not OperationCanceledException)
+        {
+            LogRedisCacheException(ex);
+            return new SnapshotRead<T>(SnapshotOutcome.Unreadable, null);
+        }
+
+        if (undecoded)
+        {
+            return new SnapshotRead<T>(SnapshotOutcome.Unreadable, null);
+        }
+
+        return found
+            ? new SnapshotRead<T>(SnapshotOutcome.Found, _cacheEntryFactory.Create<T?>(deserialized, expiration))
+            : new SnapshotRead<T>(SnapshotOutcome.Absent, null);
     }
 
     private async ValueTask<KeyValuePair<CacheKey, ICacheEntry<T?>>[]> GetCacheEntriesInternalAsync<T, TFormat>(CacheKey[] keys, TFormat format, CancellationToken token)
@@ -1439,6 +1532,20 @@ internal sealed partial class RedisCache : RedisCacheBase, ICache, ISharedTier, 
 
     private KeyValuePair<CacheKey, ICacheEntry<T?>>[] GetDefaultEntries<T>(CacheKey[] keys) =>
         [.. keys.Select(k => new KeyValuePair<CacheKey, ICacheEntry<T?>>(k, DefaultEntry<T>()))];
+
+    private bool TryToRedisKey(CacheKey cacheKey, CancellationToken token, out RedisKey redisKey)
+    {
+        try
+        {
+            redisKey = ToRedisKey(cacheKey, token);
+            return true;
+        }
+        catch (Exception ex) when (ex is not OutOfMemoryException)
+        {
+            redisKey = default;
+            return false;
+        }
+    }
 
     private RedisKey ToRedisKey(CacheKey cacheKey, CancellationToken token = default)
     {

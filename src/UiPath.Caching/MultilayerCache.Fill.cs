@@ -24,7 +24,7 @@ internal sealed partial class MultilayerCache
     public ValueTask<ChangeResult<T>> SetIfChangedAsync<T>(CacheKey cacheKey, T? value, IEqualityComparer<T> comparer, DateTimeOffset expiration, CachePolicy? policy, CancellationToken token = default) =>
         SetIfChangedCoreAsync(cacheKey, value, comparer, GetExpiration(expiration), policy ?? _defaultPolicy, token);
 
-    public ValueTask<ICacheEntry<T?>> ReadSnapshotAsync<T>(CacheKey cacheKey, CachePolicy? policy, CancellationToken token = default)
+    public ValueTask<SnapshotRead<T>> ReadSnapshotAsync<T>(CacheKey cacheKey, CachePolicy? policy, CancellationToken token = default)
     {
         NotCacheableException.ThrowIfNotCacheable<T>();
         var options = _entryBuilder.BuildEntryOptions<T>(cacheKey, default, token);
@@ -33,7 +33,21 @@ internal sealed partial class MultilayerCache
             return _innerCache.AsMigrationCache().ReadSnapshotAsync<T>(options.CacheKey, policy, token);
         }
 
-        return new(LocalSnapshot<T>(options.CacheKey.Name) ?? NullCache.NullCacheEntry<T?>.Instance);
+        return new(LocalSnapshot<T>(options.CacheKey.Name) is { } local
+            ? new SnapshotRead<T>(SnapshotOutcome.Found, local)
+            : new SnapshotRead<T>(SnapshotOutcome.Absent, null));
+    }
+
+    /// <summary>The entry an adoption read answers: a miss for anything but a found value, and a failure as an exception, as the throw-on-failure read did.</summary>
+    internal static async ValueTask<ICacheEntry<T?>> AdoptionEntryAsync<T>(ValueTask<SnapshotRead<T>> read)
+    {
+        var snapshot = await read.ConfigureAwait(false);
+        return snapshot.Outcome switch
+        {
+            SnapshotOutcome.Found when snapshot.Entry is { } entry => entry,
+            SnapshotOutcome.Failed => throw new InvalidOperationException("The inner cache could not read the key"),
+            _ => NullCache.NullCacheEntry<T?>.Instance,
+        };
     }
 
     private async ValueTask<FillResult<T>> TryFillCoreAsync<T>(CacheKey cacheKey, T? value, DateTimeOffset expiration, CachePolicy policy, CancellationToken token)

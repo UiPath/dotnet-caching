@@ -723,6 +723,280 @@ public class RedisCacheSerializerTests(ITestContextAccessor testContextAccessor)
         pool.Returned.Should().Contain(array => ReferenceEquals(array, payload));
     }
 
+    [Fact]
+    public async Task A_snapshot_of_a_value_is_found_with_the_lifetime_of_the_same_transaction()
+    {
+        var sut = Create(out _);
+        StubSnapshot(new SystemJsonByteSerializerProxy().Serialize("v"), TimeSpan.FromMinutes(3));
+
+        var read = await sut.ReadSnapshotAsync<string>("k", null, Token);
+
+        read.Outcome.Should().Be(SnapshotOutcome.Found);
+        read.Entry!.Value.Should().Be("v");
+        read.Entry.Expiration.Should().BeCloseTo(DateTimeOffset.UtcNow + TimeSpan.FromMinutes(3), TimeSpan.FromSeconds(10));
+    }
+
+    [Fact]
+    public async Task A_snapshot_of_a_missing_key_is_absent()
+    {
+        var sut = Create(out _);
+        StubSnapshot(RedisValue.Null, null);
+
+        (await sut.ReadSnapshotAsync<string>("k", null, Token)).Should().Be(new SnapshotRead<string>(SnapshotOutcome.Absent, null));
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task A_snapshot_of_an_unknown_format_is_unreadable_and_the_key_stays_whatever_RemoveUnreadable_says(bool removeUnreadable)
+    {
+        var sut = Create(out _, removeUnreadable: removeUnreadable);
+        StubSnapshot(new byte[] { 0x1E, 1, 2 }, TimeSpan.FromMinutes(3));
+
+        var read = await sut.ReadSnapshotAsync<string>("k", null, Token);
+
+        read.Should().Be(new SnapshotRead<string>(SnapshotOutcome.Unreadable, null));
+        AssertNothingDeleted();
+        _ = _transaction.DidNotReceive().KeyDeleteAsync(Arg.Any<RedisKey>(), Arg.Any<CommandFlags>());
+    }
+
+    [Fact]
+    public async Task A_snapshot_of_a_value_its_serializer_cannot_read_is_unreadable()
+    {
+        var sut = Create(new ValueSerializerRegistry([RegistryEntry.Of("bad", new ThrowingValueSerializer())]));
+        StubSnapshot(new byte[] { 0x10, 1, 2 }, TimeSpan.FromMinutes(3));
+
+        (await sut.ReadSnapshotAsync<string>("k", null, Token)).Outcome.Should().Be(SnapshotOutcome.Unreadable);
+    }
+
+    [Fact]
+    public async Task A_snapshot_of_bytes_the_default_serializer_cannot_parse_is_unreadable()
+    {
+        var sut = Create(ValueSerializerRegistry.Empty, removeUnreadable: false);
+        StubSnapshot(Encoding.UTF8.GetBytes("{not json"), TimeSpan.FromMinutes(3));
+
+        (await sut.ReadSnapshotAsync<string>("k", null, Token)).Outcome.Should().Be(SnapshotOutcome.Unreadable);
+    }
+
+    [Fact]
+    public async Task A_snapshot_the_store_cannot_answer_is_failed_and_does_not_throw()
+    {
+        var sut = Create(out _);
+        _transaction.ExecuteAsync(Arg.Any<CommandFlags>()).Returns(Task.FromException<bool>(new RedisException("lost")));
+
+        (await sut.ReadSnapshotAsync<string>("k", null, Token)).Should().Be(new SnapshotRead<string>(SnapshotOutcome.Failed, null));
+    }
+
+    [Fact]
+    public async Task A_snapshot_of_a_cache_that_is_not_connected_is_failed()
+    {
+        var sut = Create(FastRegistry(), connected: false);
+
+        (await sut.ReadSnapshotAsync<string>("k", null, Token)).Outcome.Should().Be(SnapshotOutcome.Failed);
+        _ = _database.DidNotReceive().CreateTransaction(Arg.Any<object?>());
+    }
+
+    [Fact]
+    public async Task A_snapshot_with_a_cancelled_token_throws()
+    {
+        var sut = Create(out _);
+        using var cts = new CancellationTokenSource();
+        await cts.CancelAsync();
+
+        await FluentActions.Awaiting(async () => await sut.ReadSnapshotAsync<string>("k", null, cts.Token)).Should().ThrowAsync<OperationCanceledException>();
+    }
+
+    [Fact]
+    public async Task An_acknowledged_write_and_delete_are_committed()
+    {
+        var sut = Create(out _);
+        StubStore(set: true, delete: true);
+
+        (await sut.WriteAsync("k", "v", DateTimeOffset.UtcNow.AddMinutes(1), null, Token)).Should().Be(StoreOutcome.Committed);
+        (await sut.DeleteAsync<string>("k", Token)).Should().Be(StoreOutcome.Committed);
+    }
+
+    [Fact]
+    public async Task A_write_and_delete_cancelled_before_sending_are_not_sent()
+    {
+        var sut = Create(out _);
+        StubStore(set: true, delete: true);
+        using var cts = new CancellationTokenSource();
+        await cts.CancelAsync();
+
+        (await sut.WriteAsync("k", "v", DateTimeOffset.UtcNow.AddMinutes(1), null, cts.Token)).Should().Be(StoreOutcome.NotSent);
+        (await sut.DeleteAsync<string>("k", cts.Token)).Should().Be(StoreOutcome.NotSent);
+        _ = _database.DidNotReceiveWithAnyArgs().StringSetAsync(default, default, default, default, default);
+        _ = _database.DidNotReceiveWithAnyArgs().KeyDeleteAsync(default(RedisKey), default);
+    }
+
+    [Fact]
+    public async Task A_write_and_delete_on_a_cache_that_is_not_connected_are_not_sent()
+    {
+        var sut = Create(FastRegistry(), connected: false);
+        StubStore(set: true, delete: true);
+
+        (await sut.WriteAsync("k", "v", DateTimeOffset.UtcNow.AddMinutes(1), null, Token)).Should().Be(StoreOutcome.NotSent);
+        (await sut.DeleteAsync<string>("k", Token)).Should().Be(StoreOutcome.NotSent);
+        _ = _database.DidNotReceiveWithAnyArgs().StringSetAsync(default, default, default, default, default);
+        _ = _database.DidNotReceiveWithAnyArgs().KeyDeleteAsync(default(RedisKey), default);
+    }
+
+    [Fact]
+    public async Task A_value_that_fails_to_serialize_is_not_sent()
+    {
+        var registry = new ValueSerializerRegistry([RegistryEntry.Of("bad", new ThrowingValueSerializer())]);
+        var sut = Create(registry);
+        StubStore(set: true, delete: true);
+
+        var write = await sut.WriteAsync("k", "v", DateTimeOffset.UtcNow.AddMinutes(1), ResolvedPolicy(registry, "bad"), Token);
+
+        write.Should().Be(StoreOutcome.NotSent);
+        _ = _database.DidNotReceiveWithAnyArgs().StringSetAsync(default, default, default, default, default);
+    }
+
+    [Fact]
+    public async Task A_write_and_delete_that_time_out_after_sending_are_unknown()
+    {
+        var sut = Create(FastRegistry(), write: new GivingUpPipeline(TimeSpan.FromMilliseconds(100)));
+        var never = new TaskCompletionSource<bool>();
+        _database.StringSetAsync(Arg.Any<RedisKey>(), Arg.Any<RedisValue>(), Arg.Any<TimeSpan?>(), Arg.Any<When>(), Arg.Any<CommandFlags>()).Returns(never.Task);
+        _database.KeyDeleteAsync(Arg.Any<RedisKey>(), Arg.Any<CommandFlags>()).Returns(never.Task);
+
+        (await sut.WriteAsync("k", "v", DateTimeOffset.UtcNow.AddMinutes(1), null, Token)).Should().Be(StoreOutcome.Unknown);
+        (await sut.DeleteAsync<string>("k", Token)).Should().Be(StoreOutcome.Unknown);
+        _ = _database.Received(1).StringSetAsync(Arg.Any<RedisKey>(), Arg.Any<RedisValue>(), Arg.Any<TimeSpan?>(), Arg.Any<When>(), Arg.Any<CommandFlags>());
+    }
+
+    [Fact]
+    public async Task A_write_the_store_answers_with_a_failure_is_failed()
+    {
+        var sut = Create(out _);
+        StubStore(set: false, delete: true);
+
+        (await sut.WriteAsync("k", "v", DateTimeOffset.UtcNow.AddMinutes(1), null, Token)).Should().Be(StoreOutcome.Failed);
+    }
+
+    [Fact]
+    public async Task A_write_that_landed_late_after_a_timeout_is_committed_whatever_the_retry_did()
+    {
+        var late = new TaskCompletionSource<bool>();
+        var sut = Create(FastRegistry(), write: new RetryOncePipeline(TimeSpan.FromMilliseconds(100), async () =>
+        {
+            late.SetResult(true);
+            await Task.Delay(100, Token);
+        }));
+        _database.StringSetAsync(Arg.Any<RedisKey>(), Arg.Any<RedisValue>(), Arg.Any<TimeSpan?>(), Arg.Any<When>(), Arg.Any<CommandFlags>())
+            .Returns(late.Task, Task.FromException<bool>(new RedisException("lost")));
+
+        (await sut.WriteAsync("k", "v", DateTimeOffset.UtcNow.AddMinutes(1), null, Token)).Should().Be(StoreOutcome.Committed);
+    }
+
+    [Fact]
+    public async Task An_unrelated_write_a_hook_starts_during_a_timed_out_command_does_not_make_it_committed()
+    {
+        RedisCache? sut = null;
+        var hooked = new HookedPipeline(new GivingUpPipeline(TimeSpan.FromMilliseconds(200)), async () => await sut!.SetAsync("other", "x", TimeSpan.FromMinutes(1), policy: null, Token));
+        sut = Create(FastRegistry(), write: hooked);
+        var never = new TaskCompletionSource<bool>();
+        _database.StringSetAsync(Arg.Any<RedisKey>(), Arg.Any<RedisValue>(), Arg.Any<TimeSpan?>(), Arg.Any<When>(), Arg.Any<CommandFlags>()).Returns(never.Task);
+        _database.StringSetAsync((RedisKey)"test:str:other", Arg.Any<RedisValue>(), Arg.Any<TimeSpan?>(), Arg.Any<When>(), Arg.Any<CommandFlags>()).Returns(true);
+
+        (await sut.WriteAsync("k", "v", DateTimeOffset.UtcNow.AddMinutes(1), null, Token)).Should().Be(StoreOutcome.Unknown);
+        hooked.HookRan.Should().BeTrue();
+    }
+
+    [Fact]
+    public async Task A_refused_write_retried_into_a_timeout_is_unknown()
+    {
+        var sut = Create(FastRegistry(), write: new RetryOncePipeline(TimeSpan.FromMilliseconds(100), () => Task.CompletedTask));
+        var never = new TaskCompletionSource<bool>();
+        _database.StringSetAsync(Arg.Any<RedisKey>(), Arg.Any<RedisValue>(), Arg.Any<TimeSpan?>(), Arg.Any<When>(), Arg.Any<CommandFlags>())
+            .Returns(Task.FromResult(false), never.Task);
+
+        (await sut.WriteAsync("k", "v", DateTimeOffset.UtcNow.AddMinutes(1), null, Token)).Should().Be(StoreOutcome.Unknown);
+    }
+
+    [Fact]
+    public async Task A_write_and_delete_cancelled_in_flight_are_unknown()
+    {
+        var sut = Create(FastRegistry(), write: new GivingUpPipeline(TimeSpan.FromSeconds(30)));
+        var never = new TaskCompletionSource<bool>();
+        _database.StringSetAsync(Arg.Any<RedisKey>(), Arg.Any<RedisValue>(), Arg.Any<TimeSpan?>(), Arg.Any<When>(), Arg.Any<CommandFlags>()).Returns(never.Task);
+        _database.KeyDeleteAsync(Arg.Any<RedisKey>(), Arg.Any<CommandFlags>()).Returns(never.Task);
+        using var cts = CancellationTokenSource.CreateLinkedTokenSource(Token);
+        cts.CancelAfter(TimeSpan.FromMilliseconds(100));
+
+        (await sut.WriteAsync("k", "v", DateTimeOffset.UtcNow.AddMinutes(1), null, cts.Token)).Should().Be(StoreOutcome.Unknown);
+        using var again = CancellationTokenSource.CreateLinkedTokenSource(Token);
+        again.CancelAfter(TimeSpan.FromMilliseconds(100));
+        (await sut.DeleteAsync<string>("k", again.Token)).Should().Be(StoreOutcome.Unknown);
+    }
+
+    [Fact]
+    public async Task A_null_value_written_as_a_delete_that_times_out_is_unknown()
+    {
+        var sut = Create(FastRegistry(), write: new GivingUpPipeline(TimeSpan.FromMilliseconds(100)));
+        var never = new TaskCompletionSource<bool>();
+        _database.KeyDeleteAsync(Arg.Any<RedisKey>(), Arg.Any<CommandFlags>()).Returns(never.Task);
+
+        (await sut.WriteAsync<string>("k", null, DateTimeOffset.UtcNow.AddMinutes(1), null, Token)).Should().Be(StoreOutcome.Unknown);
+        _ = _database.DidNotReceiveWithAnyArgs().StringSetAsync(default, default, default, default, default);
+    }
+
+    [Fact]
+    public async Task A_write_or_delete_that_cannot_be_prepared_is_not_sent_and_does_not_throw()
+    {
+        var sut = Create(FastRegistry());
+        StubStore(set: true, delete: true);
+        var unregistered = new CachePolicy { Serializer = new SerializerPolicy { Write = "nobody" } };
+
+        (await sut.WriteAsync("k", 1, DateTimeOffset.UtcNow.AddMinutes(1), null, Token)).Should().Be(StoreOutcome.NotSent);
+        (await sut.DeleteAsync<int>("k", Token)).Should().Be(StoreOutcome.NotSent);
+        (await sut.WriteAsync("k", "v", DateTimeOffset.UtcNow.AddMinutes(1), unregistered, Token)).Should().Be(StoreOutcome.NotSent);
+        _ = _database.DidNotReceiveWithAnyArgs().StringSetAsync(default, default, default, default, default);
+    }
+
+    [Fact]
+    public async Task A_snapshot_cancelled_while_its_key_is_converted_throws_and_a_write_is_not_sent()
+    {
+        using var cts = CancellationTokenSource.CreateLinkedTokenSource(Token);
+        var sut = Create(FastRegistry(), keyOf: _ =>
+        {
+            cts.Cancel();
+            throw new OperationCanceledException(cts.Token);
+        });
+        StubStore(set: true, delete: true);
+
+        await FluentActions.Awaiting(async () => await sut.ReadSnapshotAsync<string>("k", null, cts.Token)).Should().ThrowAsync<OperationCanceledException>();
+        using var writing = CancellationTokenSource.CreateLinkedTokenSource(Token);
+        var other = Create(FastRegistry(), keyOf: _ =>
+        {
+            writing.Cancel();
+            throw new OperationCanceledException(writing.Token);
+        });
+        (await other.WriteAsync("k", "v", DateTimeOffset.UtcNow.AddMinutes(1), null, writing.Token)).Should().Be(StoreOutcome.NotSent);
+    }
+
+    [Fact]
+    public async Task A_snapshot_of_bytes_outside_the_policys_readable_formats_is_unreadable()
+    {
+        var registry = FastRegistry();
+        var sut = Create(registry);
+        var policy = new DefaultCachePolicyFactory(null, new CachePolicy { Serializer = new SerializerPolicy { Read = ["json"] } }, valueSerializers: registry).Default!;
+        StubSnapshot(Header(0x10, "v"), TimeSpan.FromMinutes(3));
+
+        (await sut.ReadSnapshotAsync<string>("k", policy, Token)).Should().Be(new SnapshotRead<string>(SnapshotOutcome.Unreadable, null));
+    }
+
+    [Fact]
+    public async Task A_snapshot_of_stored_bytes_that_decode_to_nothing_is_unreadable()
+    {
+        var sut = Create(ValueSerializerRegistry.Empty);
+        StubSnapshot(Encoding.UTF8.GetBytes("null"), TimeSpan.FromMinutes(3));
+
+        (await sut.ReadSnapshotAsync<string>("k", null, Token)).Should().Be(new SnapshotRead<string>(SnapshotOutcome.Unreadable, null));
+    }
     private static byte[] Header(byte id, string body) => [id, .. Encoding.UTF8.GetBytes(body)];
 
     private static CachePolicy ResolvedPolicy(ValueSerializerRegistry registry, string write) =>
@@ -789,20 +1063,20 @@ public class RedisCacheSerializerTests(ITestContextAccessor testContextAccessor)
         return Create(registry, cacheNullValues: cacheNullValues, removeUnreadable: removeUnreadable, keyReadTelemetry: keyReadTelemetry);
     }
 
-    private RedisCache Create(ValueSerializerRegistry registry, ISerializerProxy<byte[]>? proxy = null, CachePolicy? defaultPolicy = null, bool cacheNullValues = false, bool removeUnreadable = true, bool keyReadTelemetry = false)
+    private RedisCache Create(ValueSerializerRegistry registry, ISerializerProxy<byte[]>? proxy = null, CachePolicy? defaultPolicy = null, bool cacheNullValues = false, bool removeUnreadable = true, bool keyReadTelemetry = false, IResiliencePipeline? write = null, bool connected = true, Func<CacheKey, RedisKey>? keyOf = null)
     {
         var connector = Substitute.For<IRedisConnector>();
         connector.Database.Returns(_database);
         connector.Version.Returns(new Version(6, 0));
-        connector.IsConnected.Returns(true);
+        connector.IsConnected.Returns(connected);
         _database.Multiplexer.GetHashSlot(Arg.Any<RedisKey>()).Returns(0);
         _transaction.ExecuteAsync(Arg.Any<CommandFlags>()).Returns(true);
         _database.CreateTransaction(Arg.Any<object?>()).Returns(_transaction);
         var pipelines = Substitute.For<IResiliencePipelineProvider>();
         pipelines.Get(ResiliencePipelineNames.Read).Returns(EmptyResiliencePipeline.Instance);
-        pipelines.Get(ResiliencePipelineNames.Write).Returns(_write);
+        pipelines.Get(ResiliencePipelineNames.Write).Returns(write ?? _write);
         var strategy = Substitute.For<IRedisKeyStrategy>();
-        strategy.GetRedisKey(Arg.Any<CacheKey>()).Returns(call => (RedisKey)$"test:str:{call.Arg<CacheKey>()}");
+        strategy.GetRedisKey(Arg.Any<CacheKey>()).Returns(call => keyOf?.Invoke(call.Arg<CacheKey>()) ?? (RedisKey)$"test:str:{call.Arg<CacheKey>()}");
         var strategies = Substitute.For<IRedisKeyStrategyFactory>();
         strategies.Create(Arg.Any<CacheOptions>(), Arg.Any<Type>()).Returns(strategy);
         var options = new RedisCacheOptions { RedisKeyStrategyFactory = strategies, ReadScriptsEnabled = false, CacheNullValues = cacheNullValues, RemoveUnreadable = removeUnreadable, KeyReadTelemetryEnabled = keyReadTelemetry };
@@ -841,6 +1115,18 @@ public class RedisCacheSerializerTests(ITestContextAccessor testContextAccessor)
         return captured;
     }
 
+    private void StubSnapshot(RedisValue value, TimeSpan? timeToLive)
+    {
+        _transaction.StringGetAsync(Arg.Any<RedisKey>(), Arg.Any<CommandFlags>()).Returns(value);
+        _transaction.KeyTimeToLiveAsync(Arg.Any<RedisKey>(), Arg.Any<CommandFlags>()).Returns(timeToLive);
+    }
+
+    private void StubStore(bool set, bool delete)
+    {
+        _database.StringSetAsync(Arg.Any<RedisKey>(), Arg.Any<RedisValue>(), Arg.Any<TimeSpan?>(), Arg.Any<When>(), Arg.Any<CommandFlags>()).Returns(set);
+        _database.KeyDeleteAsync(Arg.Any<RedisKey>(), Arg.Any<CommandFlags>()).Returns(delete);
+    }
+
     private sealed class OutOfMemoryProxy : ISerializerProxy<byte[]>
     {
         public byte[]? Serialize(object? value) => throw new NotSupportedException();
@@ -861,5 +1147,73 @@ public class RedisCacheSerializerTests(ITestContextAccessor testContextAccessor)
         public bool TryDeserialize<T>(string? value, out T? result) => throw new NotSupportedException();
 
         public bool TryDeserialize<T>(object? value, out T? result) => throw new NotSupportedException();
+    }
+
+    private sealed class GivingUpPipeline(TimeSpan timeout) : IResiliencePipeline
+    {
+        public async ValueTask<TResult> ExecuteAsync<TResult>(Func<CancellationToken, ValueTask<TResult>> callback, TResult defaultValue, CancellationToken cancellationToken = default)
+        {
+            using var cts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+            cts.CancelAfter(timeout);
+            try
+            {
+                return await callback(cts.Token).AsTask().WaitAsync(cts.Token);
+            }
+            catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
+            {
+                return defaultValue;
+            }
+        }
+    }
+    private sealed class HookedPipeline(IResiliencePipeline inner, Func<Task> hook) : IResiliencePipeline
+    {
+        private int _hooked;
+
+        public bool HookRan => Volatile.Read(ref _hooked) == 2;
+
+        public async ValueTask<TResult> ExecuteAsync<TResult>(Func<CancellationToken, ValueTask<TResult>> callback, TResult defaultValue, CancellationToken cancellationToken = default)
+        {
+            if (Interlocked.CompareExchange(ref _hooked, 1, 0) == 0)
+            {
+                var running = inner.ExecuteAsync(callback, defaultValue, cancellationToken).AsTask();
+                await hook();
+                Volatile.Write(ref _hooked, 2);
+                return await running;
+            }
+
+            return await inner.ExecuteAsync(callback, defaultValue, cancellationToken);
+        }
+    }
+
+    private sealed class RetryOncePipeline(TimeSpan wait, Func<Task> between) : IResiliencePipeline
+    {
+        public async ValueTask<TResult> ExecuteAsync<TResult>(Func<CancellationToken, ValueTask<TResult>> callback, TResult defaultValue, CancellationToken cancellationToken = default)
+        {
+            for (var attempt = 0; attempt < 2; attempt++)
+            {
+                var running = callback(cancellationToken).AsTask();
+                var finished = await Task.WhenAny(running, Task.Delay(wait, cancellationToken));
+                if (finished != running)
+                {
+                    await between();
+                    continue;
+                }
+
+                try
+                {
+                    var result = await running;
+                    if (!EqualityComparer<TResult>.Default.Equals(result, defaultValue))
+                    {
+                        return result;
+                    }
+                }
+                catch (RedisException)
+                {
+                    // The attempt failed; the next one runs.
+                }
+            }
+
+            return defaultValue;
+        }
     }
 }

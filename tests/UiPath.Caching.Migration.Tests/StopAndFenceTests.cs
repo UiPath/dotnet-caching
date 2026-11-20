@@ -139,13 +139,13 @@ public sealed class StopAndFenceTests : RouterTestBase
     public async Task A_write_cancelled_in_flight_keeps_the_settle_bound_of_its_client()
     {
         var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        var store = new FakeLibraryStore
+        var store = new FakeMigrationCache
         {
             Write = async (_, token) =>
             {
                 entered.TrySetResult();
                 await Task.Delay(Timeout.Infinite, token);
-                return true;
+                return StoreOutcome.Committed;
             },
         };
         var node = NewNode(pendingWindow: TimeSpan.FromSeconds(5), library: new LibraryPathClient<Item>(store, new FakeConnection(), key => key, TimeSpan.FromSeconds(60)));

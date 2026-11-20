@@ -25,7 +25,7 @@ internal sealed partial class MultilayerCache
             cache._innerCache.GetCacheEntryAsync<T>(options.CacheKey, policy, options.Token);
 
         public ValueTask<ICacheEntry<T?>> ReadForAdoptionAsync(CacheEntryOptions options, CachePolicy policy) =>
-            ((IMigrationCache)cache._innerCache).ReadSnapshotAsync<T>(options.CacheKey, policy, options.Token);
+            AdoptionEntryAsync(((IMigrationCache)cache._innerCache).ReadSnapshotAsync<T>(options.CacheKey, policy, options.Token));
 
         public void Adopt(ref CacheEntryOptions options, ICacheEntry<T?> fetched) => options.Expiration = fetched.Expiration;
 

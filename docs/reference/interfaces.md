@@ -190,13 +190,24 @@ public interface ICache : IDisposable
 ```csharp
 public interface IMigrationCache
 {
-    ValueTask<ICacheEntry<T?>> ReadSnapshotAsync<T>(CacheKey cacheKey, CachePolicy? policy, CancellationToken token = default);
+    ValueTask<SnapshotRead<T>> ReadSnapshotAsync<T>(CacheKey cacheKey, CachePolicy? policy, CancellationToken token = default);
+    ValueTask<StoreOutcome> WriteAsync<T>(CacheKey cacheKey, T? value, DateTimeOffset expiration, CachePolicy? policy, CancellationToken token = default);
+    ValueTask<StoreOutcome> DeleteAsync<T>(CacheKey cacheKey, CancellationToken token = default);
 }
+
+public enum SnapshotOutcome { Failed = 0, Absent, Found, Unreadable }
+public readonly record struct SnapshotRead<T>(SnapshotOutcome Outcome, ICacheEntry<T?>? Entry);
+
+public enum StoreOutcome { Failed = 0, NotSent, Committed, Unknown }
 ```
 
-For code that moves cache data between stores. `ReadSnapshotAsync` reads the value and its remaining lifetime from the primary as one snapshot and bypasses the local tier. A store fault throws where `GetCacheEntryAsync` answers a miss, and an unreadable value is left in place. A local-only cache returns its local entry.
+For code that moves cache data between stores. Every member reports what happened instead of throwing or answering a miss, and `Failed` is the default so an unconfigured mock never reads as a success.
 
-The library's Redis, layered and null caches implement it; `Cache<T>` does not. `cache.AsMigrationCache()` returns it from an `ICache` or throws `NotSupportedException` naming the type, so a custom cache or decorator opts in by implementing it.
+`ReadSnapshotAsync` reads the value and its remaining lifetime from the primary as one snapshot and bypasses the local tier. `Entry` is set only for `Found`. `Unreadable` means the key holds a value this cache cannot read; it is left in place whatever `RemoveUnreadable` says. `Failed` means the store could not answer. Cancellation throws. A local-only cache returns its local entry as `Found`, or `Absent`.
+
+`WriteAsync` and `DeleteAsync` announce exactly as `SetAsync` and `RemoveAsync` do. They differ in the outcome they report: `NotSent` when nothing left the process (cancelled before the send, not connected, or the key or value failed first), `Committed` when the store acknowledged, `Unknown` when the command was sent but a timeout or a lost connection left the result unknown, and `Failed` for anything else. Only `NotSent` means the write did not happen: `Unknown` and `Failed` may both have landed, so a caller that must not replay a write treats them alike. The layered cache awaits the store write even under `BackgroundDistributedWrite` and reports the inner tier's outcome: `NotSent` while the inner tier is disconnected, and `Committed` stays committed when the announcement or the local keep fails afterwards. An inner tier that does not implement `IMigrationCache` is written through `SetAsync` and `RemoveAsync`: a true answer is `Committed`, anything else is `Unknown`, since a false may follow a committed write.
+
+The library's Redis, layered and null caches implement it; the null cache answers `Absent` and `Committed`. `Cache<T>` does not implement it. `cache.AsMigrationCache()` returns it from an `ICache` or throws `NotSupportedException` naming the type, so a custom cache or decorator opts in by implementing it.
 
 ### Expiration
 

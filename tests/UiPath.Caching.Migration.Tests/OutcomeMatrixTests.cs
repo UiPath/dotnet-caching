@@ -57,7 +57,7 @@ public sealed class OutcomeMatrixTests : RouterTestBase
     [Fact]
     public async Task A_library_read_that_times_out_is_unavailable_and_never_runs_the_factory()
     {
-        var store = new FakeLibraryStore { Read = (_, _) => throw new TimeoutException("redis timeout") };
+        var store = new FakeMigrationCache { Read = (_, _) => throw new TimeoutException("redis timeout") };
         var node = NewNode(library: new LibraryPathClient<Item>(store, new FakeConnection(), key => key, TimeSpan.FromSeconds(1)));
         node.SourceBackend.ReadOverride = ReadOutcome.Unavailable;
         var factoryRuns = 0;

@@ -231,9 +231,12 @@ public class MultilayerCacheRehydrateTests(ITestContextAccessor testContextAcces
     }
 
     [Theory]
-    [InlineData(false)]
-    [InlineData(true)]
-    public async Task Rehydrate_decides_on_the_snapshot_read_of_an_inner_cache_that_offers_one(bool fails)
+    [InlineData("fresh", false)]
+    [InlineData("throws", true)]
+    [InlineData("failed", true)]
+    [InlineData("absent", false)]
+    [InlineData("unreadable", false)]
+    public async Task Rehydrate_decides_on_the_snapshot_read_of_an_inner_cache_that_offers_one(string snapshot, bool fails)
     {
         var token = testContextAccessor.Current.CancellationToken;
         var proxy = DispatchProxy.Create<ICache, AdoptionProxy>();
@@ -246,18 +249,59 @@ public class MultilayerCacheRehydrateTests(ITestContextAccessor testContextAcces
             nameof(ICache.SetAsync) => true,
             _ => throw new NotSupportedException(name),
         };
-        inner.Adoption = _ => fails ? throw new InvalidOperationException("lost") : Entry("by-peer", TimeSpan.FromMinutes(9));
+        inner.Adoption = _ => snapshot switch
+        {
+            "fresh" => Entry("by-peer", TimeSpan.FromMinutes(9)),
+            "throws" => throw new InvalidOperationException("lost"),
+            "failed" => SnapshotOutcome.Failed,
+            "absent" => SnapshotOutcome.Absent,
+            _ => SnapshotOutcome.Unreadable,
+        };
         _distributedLock.TryAcquireAsync(Arg.Any<string>(), Arg.Any<TimeSpan>(), Arg.Any<CancellationToken>()).Returns(Substitute.For<IAsyncDisposable>());
         var generator = new CountingGenerator();
 
         await Sut.GetOrAddAsync(_cacheKey, generator.Run, RehydratePolicy(), token);
 
         await WaitForAsync(() => _telemetry.Events.Any(e => e.Name is "cache.rehydrate.adopted" or "cache.rehydrate.succeeded"), TimeSpan.FromSeconds(5), token);
-        generator.Calls.Should().Be(fails ? 1 : 0);
+        generator.Calls.Should().Be(snapshot == "fresh" ? 0 : 1);
         inner.Calls.Count(call => call.StartsWith("ReadSnapshotAsync:", StringComparison.Ordinal)).Should().Be(1);
         inner.Count(nameof(ICache.GetCacheEntryAsync)).Should().Be(1);
         _telemetry.Events.Where(e => e.Name == "cache.rehydrate.adopt_read_failed").Select(e => e.Properties!["reason"])
             .Should().Equal(fails ? ErrorReason : []);
+    }
+
+    [Theory]
+    [InlineData(SnapshotOutcome.Found)]
+    [InlineData(SnapshotOutcome.Absent)]
+    [InlineData(SnapshotOutcome.Unreadable)]
+    [InlineData(SnapshotOutcome.Failed)]
+    public async Task A_snapshot_read_reports_the_inner_outcome_without_touching_the_local_copy(SnapshotOutcome outcome)
+    {
+        var proxy = DispatchProxy.Create<ICache, AdoptionProxy>();
+        var inner = (AdoptionProxy)(object)proxy;
+        _fixture.Inject(proxy);
+        var held = Entry("inner", TimeSpan.FromMinutes(9));
+        inner.Adoption = _ => outcome == SnapshotOutcome.Found ? held : outcome;
+
+        var read = await Sut.ReadSnapshotAsync<string>(_cacheKey, null, testContextAccessor.Current.CancellationToken);
+
+        read.Outcome.Should().Be(outcome);
+        read.Entry.Should().BeSameAs(outcome == SnapshotOutcome.Found ? held : null);
+        inner.Calls.Should().Equal("ReadSnapshotAsync:" + _cacheKey.Name);
+    }
+
+    [Theory]
+    [InlineData(true, StoreOutcome.Committed)]
+    [InlineData(false, StoreOutcome.Unknown)]
+    public async Task An_inner_cache_that_is_not_migration_capable_commits_only_on_a_true_answer(bool answer, StoreOutcome expected)
+    {
+        var token = testContextAccessor.Current.CancellationToken;
+        _fixture.Inject(_innerCache);
+        _innerCache.SetAsync<string?>(_cacheKey, Arg.Any<string?>(), Arg.Any<DateTimeOffset>(), Arg.Any<CachePolicy?>(), Arg.Any<CancellationToken>()).Returns(answer);
+        _innerCache.RemoveAsync<string>(_cacheKey, Arg.Any<CancellationToken>()).Returns(answer);
+
+        (await Sut.WriteAsync(_cacheKey, "v", DateTimeOffset.UtcNow.AddMinutes(5), null, token)).Should().Be(expected);
+        (await Sut.DeleteAsync<string>(_cacheKey, token)).Should().Be(expected);
     }
 
     [Fact]
