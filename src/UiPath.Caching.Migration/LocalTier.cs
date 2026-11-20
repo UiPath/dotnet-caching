@@ -73,6 +73,20 @@ internal sealed class LocalTier : IDisposable
         }
     }
 
+    /// <summary>Drops every entry and advances every mark, so a fill whose read started before is rejected; keys held pending stay pending.</summary>
+    public void Clear()
+    {
+        for (var stripe = 0; stripe < Stripes; stripe++)
+        {
+            lock (_locks[stripe])
+            {
+                _marks[stripe]++;
+            }
+        }
+
+        _memory.Clear();
+    }
+
     public void BeginPending(LocalKey key)
     {
         var stripe = StripeOf(key);

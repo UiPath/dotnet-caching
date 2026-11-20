@@ -1,3 +1,7 @@
+using Microsoft.Extensions.Hosting;
+using Microsoft.Extensions.Options;
+using UiPath.Caching.Broadcast;
+
 namespace UiPath.Caching.Migration.Tests.Support;
 
 public abstract class RouterTestBase : IAsyncDisposable
@@ -24,6 +28,24 @@ public abstract class RouterTestBase : IAsyncDisposable
         GC.SuppressFinalize(this);
     }
 
+    internal static async Task UntilAsync(Func<bool> condition)
+    {
+        var until = DateTime.UtcNow.AddSeconds(10);
+        while (!condition() && DateTime.UtcNow < until)
+        {
+            await Task.Delay(10, Ct);
+        }
+
+        condition().Should().BeTrue();
+    }
+
+    internal static Task<RouterMode> NextMode(TestNode node)
+    {
+        var next = new TaskCompletionSource<RouterMode>(TaskCreationOptions.RunContinuationsAsynchronously);
+        node.Router.ModeChanged += (mode, _) => next.TrySetResult(mode);
+        return next.Task;
+    }
+
     internal TestNode NewNode(
         Func<string, bool>? useLibrary = null,
         TimeSpan? localCap = null,
@@ -31,9 +53,15 @@ public abstract class RouterTestBase : IAsyncDisposable
         string? cacheName = null,
         TimeSpan? defaultExpiry = null,
         TestNode? sharing = null,
-        IPathClient<Item>? library = null)
+        IPathClient<Item>? library = null,
+        Func<bool>? bypass = null,
+        TimeSpan? sourceTimeout = null,
+        Func<LibraryParts>? lazyLibrary = null,
+        Func<CancellationToken, Task<LibraryParts>>? lazyLibraryAsync = null,
+        TimeSpan? startBound = null,
+        TimeSpan? cleanupBound = null)
     {
-        var node = TestNode.Create(Bus, Clock, Store, cacheName ?? CacheName, useLibrary, localCap, pendingWindow, defaultExpiry: defaultExpiry, sharedCore: sharing?.Core, library: library);
+        var node = TestNode.Create(Bus, Clock, Store, cacheName ?? CacheName, useLibrary, localCap, pendingWindow, defaultExpiry: defaultExpiry, sharedCore: sharing?.Core, library: library, bypass: bypass, sourceTimeout: sourceTimeout, lazyLibrary: lazyLibrary, lazyLibraryAsync: lazyLibraryAsync, startBound: startBound, cleanupBound: cleanupBound);
         _nodes.Add(node);
         return node;
     }
@@ -64,5 +92,42 @@ public abstract class RouterTestBase : IAsyncDisposable
         }
 
         throw new TimeoutException("background work never finished");
+    }
+
+    internal LibraryParts Parts(FakeMigrationCache store, IReadOnlyList<IHostedService>? started = null)
+    {
+        var source = new Uri($"urn:lazy-{Guid.NewGuid():N}");
+        return new LibraryParts(
+            store,
+            new FakeConnection(),
+            Bus.For(source),
+            new CacheEventFactory(Options.Create(new CacheOptions { SourceUri = source })),
+            source,
+            () => TimeSpan.FromSeconds(30),
+            started);
+    }
+
+    /// <summary>Waits for a timer to be armed, then moves the clock.</summary>
+    internal async Task AdvanceWhenArmedAsync(TimeSpan by)
+    {
+        var until = DateTime.UtcNow.AddSeconds(5);
+        while (!Clock.HasTimers && DateTime.UtcNow < until)
+        {
+            await Task.Delay(5, Ct);
+        }
+
+        Clock.Advance(by);
+        await Task.Delay(20, Ct);
+    }
+
+    internal async Task AdvanceUntilAsync(Task task, TimeSpan step)
+    {
+        var until = DateTime.UtcNow.AddSeconds(10);
+        while (!task.IsCompleted && DateTime.UtcNow < until)
+        {
+            await AdvanceWhenArmedAsync(step);
+        }
+
+        await task.WaitAsync(TimeSpan.FromSeconds(1), Ct);
     }
 }
