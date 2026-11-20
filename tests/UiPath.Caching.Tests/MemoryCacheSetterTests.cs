@@ -242,7 +242,7 @@ public class MemoryCacheSetterTests : IAsyncLifetime
         var entry = new CacheEntryFactory().Create("v", _clock.UtcNow.AddDays(1));
         if (!tracked)
         {
-            entry.Should().BeAssignableTo<IReadTracked>().Subject.Track(false);
+            entry.Should().BeAssignableTo<ILocalEntry>().Subject.Track(false);
         }
 
         Sut.Set(x, entry, typeof(string), TimeSpan.FromMinutes(1));
@@ -250,7 +250,7 @@ public class MemoryCacheSetterTests : IAsyncLifetime
 
         _memoryCache.TryGetValue(_cacheKey.Name, out var held).Should().BeTrue();
         held.Should().NotBeSameAs(entry);
-        ((IReadTracked)held!).IsTracked.Should().Be(tracked);
+        ((ILocalEntry)held!).IsTracked.Should().Be(tracked);
     }
 
     public ValueTask DisposeAsync()

@@ -542,6 +542,62 @@ public class FillPrimitivesTests(ITestContextAccessor testContextAccessor)
     }
 
     [Fact]
+    public async Task A_local_change_whose_comparer_outlasts_the_local_cap_fails_without_a_write()
+    {
+        var clock = new ManualTimeProvider(DateTimeOffset.UtcNow);
+        using var sut = InMemoryMultilayer.Cache(new InMemoryCacheOptions { LocalMaxExpiration = TimeSpan.FromMinutes(1) }, clock: clock);
+        await sut.SetAsync("k", "a", TimeSpan.FromMinutes(30), null, Ct);
+        var slow = new DelegateComparer(() =>
+        {
+            clock.Advance(TimeSpan.FromMinutes(2));
+            return false;
+        });
+
+        var result = await sut.SetIfChangedAsync("k", "b", slow, TimeSpan.FromMinutes(30), Ct);
+
+        result.Outcome.Should().Be(ChangeOutcome.Failed);
+        (await sut.GetAsync<string>("k", Ct)).Should().BeNull("the old entry passed its local cap and nothing was written");
+    }
+
+    [Fact]
+    public async Task A_local_change_keeps_the_deadline_capped_from_the_start_of_the_call()
+    {
+        var clock = new ManualTimeProvider(new DateTimeOffset(2030, 1, 1, 0, 0, 0, TimeSpan.Zero));
+        using var sut = InMemoryMultilayer.Cache(new InMemoryCacheOptions { LocalMaxExpiration = TimeSpan.FromMinutes(1) }, clock: clock);
+        await sut.SetAsync("k", "a", TimeSpan.FromHours(1), null, Ct);
+        var start = clock.GetUtcNow();
+        var slow = new DelegateComparer(() =>
+        {
+            clock.Advance(TimeSpan.FromSeconds(30));
+            return false;
+        });
+
+        (await sut.SetIfChangedAsync("k", "b", slow, TimeSpan.FromHours(1), Ct)).Outcome.Should().Be(ChangeOutcome.Replaced);
+
+        (await sut.AsMigrationCache().ReadSnapshotAsync<string>("k", null, Ct)).Expiration.Should().Be(start + TimeSpan.FromMinutes(1));
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task A_local_fill_through_a_custom_entry_factory_reports_the_capped_deadline(bool change)
+    {
+        var clock = new ManualTimeProvider(new DateTimeOffset(2030, 1, 1, 0, 0, 0, TimeSpan.Zero));
+        using var sut = InMemoryMultilayer.Cache(new InMemoryCacheOptions { LocalMaxExpiration = TimeSpan.FromMinutes(1), EntryFactory = new TestCacheEntryFactory() }, clock: clock);
+
+        if (change)
+        {
+            await sut.SetIfChangedAsync("k", "v", StringComparer.Ordinal, TimeSpan.FromHours(1), Ct);
+        }
+        else
+        {
+            await sut.TryFillAsync("k", "v", TimeSpan.FromHours(1), Ct);
+        }
+
+        (await sut.AsMigrationCache().ReadSnapshotAsync<string>("k", null, Ct)).Expiration.Should().Be(clock.GetUtcNow() + TimeSpan.FromMinutes(1));
+    }
+
+    [Fact]
     public async Task A_local_comparer_never_runs_while_the_key_is_locked()
     {
         using var sut = InMemoryMultilayer.Cache();

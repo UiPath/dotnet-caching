@@ -33,7 +33,7 @@ internal sealed partial class MultilayerCache
             return _innerCache.AsMigrationCache().ReadSnapshotAsync<T>(options.CacheKey, policy, token);
         }
 
-        return new(HeldLocally<T>(options.CacheKey.Name) ?? NullCache.NullCacheEntry<T?>.Instance);
+        return new(LocalSnapshot<T>(options.CacheKey.Name) ?? NullCache.NullCacheEntry<T?>.Instance);
     }
 
     private async ValueTask<FillResult<T>> TryFillCoreAsync<T>(CacheKey cacheKey, T? value, DateTimeOffset expiration, CachePolicy policy, CancellationToken token)
@@ -182,6 +182,14 @@ internal sealed partial class MultilayerCache
 
     private ICacheEntry<T?>? HeldLocally<T>(string name) =>
         _memoryCache.TryGetValue(name, out ICacheEntry<T?>? held) && held!.Found ? held : null;
+
+    /// <summary>The held entry as of its local deadline, which is when this tier evicts it.</summary>
+    private ICacheEntry<T?>? LocalSnapshot<T>(string name) =>
+        HeldLocally<T>(name) is { } held
+            ? held is ILocalEntry { LocalDeadline: var deadline } && deadline > DateTimeOffset.MinValue && deadline != held.Expiration
+                ? (ICacheEntry<T?>)held.NewEntry(deadline, held.Metadata)
+                : held
+            : null;
 
     /// <summary>The options a local-only entry is written with; the expiration is the deadline the local tier gives it.</summary>
     private CacheEntryOptions EffectiveLocalOptions(CacheEntryOptions options, CachePolicy policy) =>

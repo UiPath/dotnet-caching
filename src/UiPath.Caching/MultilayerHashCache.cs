@@ -709,7 +709,7 @@ internal sealed partial class MultilayerHashCache : MultilayerCacheBase, IHashCa
         };
         var merged = CreateEntry(combined, options);
         HashVersions.Stamp<T>(merged, update.Version, version.LocalDeadline, ahead);
-        Track(merged, held is not IReadTracked { IsTracked: false });
+        Track(merged, held is not ILocalEntry { IsTracked: false });
         InheritRead(held, merged);
         return _localMemorySetter.Set(options, merged, typeof(T), remaining, state.Refresh);
     }

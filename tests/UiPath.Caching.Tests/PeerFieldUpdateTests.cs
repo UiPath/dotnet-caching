@@ -53,7 +53,7 @@ public class PeerFieldUpdateTests
         (await peer.Cache.GetAsync<string>("k", AwaitedDropping, Ct)).Should().HaveCount(3);
 
         peer.InnerReads.Should().Be(1);
-        ReadMark(c, peer).Should().Be(IReadTracked.NeverRead);
+        ReadMark(c, peer).Should().Be(ILocalEntry.NeverRead);
     }
 
     [Fact]
@@ -70,7 +70,7 @@ public class PeerFieldUpdateTests
 
         (await peer.Cache.GetAsync<string>("k", Awaited, Ct)).Should().HaveCount(3);
 
-        stamped.Should().NotBe(IReadTracked.NeverRead);
+        stamped.Should().NotBe(ILocalEntry.NeverRead);
         ReadMark(c, peer).Should().BeGreaterThan(stamped);
     }
 
@@ -83,7 +83,7 @@ public class PeerFieldUpdateTests
         await Seed(writer);
         (await peer.Cache.GetAsync<string>("k", Awaited, Ct)).Should().HaveCount(2);
         var stamped = ReadMark(c, peer);
-        stamped.Should().NotBe(IReadTracked.NeverRead);
+        stamped.Should().NotBe(ILocalEntry.NeverRead);
         clock.Advance(TimeSpan.FromSeconds(5));
 
         (await peer.Cache.GetAsync<string>("k", Awaited, Ct)).Should().HaveCount(2);
@@ -103,7 +103,7 @@ public class PeerFieldUpdateTests
 
         (await peer.Cache.GetAsync<string>("k", AwaitedDropping, Ct)).Should().HaveCount(2);
 
-        ReadMark(c, peer).Should().Be(IReadTracked.NeverRead);
+        ReadMark(c, peer).Should().Be(ILocalEntry.NeverRead);
     }
 
     [Fact]
@@ -134,7 +134,7 @@ public class PeerFieldUpdateTests
 
         (await peer.Cache.GetAsync<string>("k", Awaited, Ct)).Should().HaveCount(2);
 
-        ReadMark(c, peer).Should().Be(IReadTracked.NeverRead);
+        ReadMark(c, peer).Should().Be(ILocalEntry.NeverRead);
     }
 
     [Fact]
@@ -1603,7 +1603,7 @@ public class PeerFieldUpdateTests
     }
 
     private static int ReadMark(PeerCluster c, PeerCluster.Node node) =>
-        ((IReadTracked)Local(c, node)).LastRead;
+        ((ILocalEntry)Local(c, node)).LastRead;
 
     private static async Task Race(Barrier barrier, PeerCluster.Node node, string field)
     {

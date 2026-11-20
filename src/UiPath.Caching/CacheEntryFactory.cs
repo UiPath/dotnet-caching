@@ -12,6 +12,7 @@ public sealed class CacheEntryFactory : ICacheEntryFactory
         public int Read;
         public long ReplacedBy;
         public long Replaces;
+        public long LocalDeadline;
 
         public readonly bool Equals(Marks other) => true;
 
@@ -20,7 +21,7 @@ public sealed class CacheEntryFactory : ICacheEntryFactory
         public override readonly int GetHashCode() => 0;
     }
 
-    private sealed record CacheEntry<T> : ICacheEntry<T>, IReadTracked, IRefreshLinked
+    private sealed record CacheEntry<T> : ICacheEntry<T>, ILocalEntry
     {
         // Not part of the entry's value: every copy of an entry equals the others.
         private Marks _marks;
@@ -40,23 +41,29 @@ public sealed class CacheEntryFactory : ICacheEntryFactory
 
         object? ICacheEntry.Value => Value;
 
-        int IReadTracked.LastRead => Math.Max(Volatile.Read(ref _marks.Read), IReadTracked.NeverRead);
+        int ILocalEntry.LastRead => Math.Max(Volatile.Read(ref _marks.Read), ILocalEntry.NeverRead);
 
-        bool IReadTracked.IsTracked => Volatile.Read(ref _marks.Read) != Untracked;
+        bool ILocalEntry.IsTracked => Volatile.Read(ref _marks.Read) != Untracked;
 
-        long IRefreshLinked.ReplacedBy
+        long ILocalEntry.ReplacedBy
         {
             get => Volatile.Read(ref _marks.ReplacedBy);
             set => Volatile.Write(ref _marks.ReplacedBy, value);
         }
 
-        long IRefreshLinked.Replaces
+        long ILocalEntry.Replaces
         {
             get => Volatile.Read(ref _marks.Replaces);
             set => Volatile.Write(ref _marks.Replaces, value);
         }
 
-        void IReadTracked.Track(bool tracked)
+        DateTimeOffset ILocalEntry.LocalDeadline
+        {
+            get => Volatile.Read(ref _marks.LocalDeadline) is var ticks and > 0 ? new DateTimeOffset(ticks, TimeSpan.Zero) : DateTimeOffset.MinValue;
+            set => Volatile.Write(ref _marks.LocalDeadline, value.UtcTicks);
+        }
+
+        void ILocalEntry.Track(bool tracked)
         {
             if (!tracked)
             {
@@ -64,11 +71,11 @@ public sealed class CacheEntryFactory : ICacheEntryFactory
             }
             else if (Volatile.Read(ref _marks.Read) == Untracked)
             {
-                Volatile.Write(ref _marks.Read, IReadTracked.NeverRead);
+                Volatile.Write(ref _marks.Read, ILocalEntry.NeverRead);
             }
         }
 
-        void IReadTracked.MarkRead(int nowSeconds)
+        void ILocalEntry.MarkRead(int nowSeconds)
         {
             var last = Volatile.Read(ref _marks.Read);
             if (last != nowSeconds && last != Untracked)

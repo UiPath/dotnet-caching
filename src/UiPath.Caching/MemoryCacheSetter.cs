@@ -103,6 +103,12 @@ internal abstract class MemoryCacheSetter(
                     entry.RegisterPostEvictionCallback(StaleValues.EntryLeft, kept);
                 }
 
+                if (item is ILocalEntry recorded)
+                {
+                    // In place, not on a copy: the stored entry is compared by reference. A promoted item is rewritten in its key's turn, and the later write wins.
+                    recorded.LocalDeadline = deadline;
+                }
+
                 entry.Value = item;
             }
 
@@ -228,10 +234,10 @@ internal abstract class MemoryCacheSetter(
             var options = CreateEntry(metadataState, cts.Token);
             var newEntry = metadataState.CacheEntity.NewEntry(options.Expiration, options.Metadata);
             // Same value, new expiry or metadata: the entry it replaces keeps its tracking, and its last read still counts.
-            if (metadataState.CacheEntity is IReadTracked held && newEntry is IReadTracked renewed)
+            if (metadataState.CacheEntity is ILocalEntry held && newEntry is ILocalEntry renewed)
             {
                 renewed.Track(held.IsTracked);
-                if (held.LastRead is not IReadTracked.NeverRead and var lastRead)
+                if (held.LastRead is not ILocalEntry.NeverRead and var lastRead)
                 {
                     renewed.MarkRead(lastRead);
                 }

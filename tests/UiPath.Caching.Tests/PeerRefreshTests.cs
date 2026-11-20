@@ -172,9 +172,9 @@ public class PeerRefreshTests
     public void Hits_in_the_same_second_keep_the_read_time()
     {
 #pragma warning disable S1944 // The factory's entries are read-tracked at run time.
-        var tracked = (IReadTracked)new CacheEntryFactory().Create("v", DateTimeOffset.UtcNow.AddHours(1));
+        var tracked = (ILocalEntry)new CacheEntryFactory().Create("v", DateTimeOffset.UtcNow.AddHours(1));
 #pragma warning restore S1944
-        tracked.LastRead.Should().Be(IReadTracked.NeverRead);
+        tracked.LastRead.Should().Be(ILocalEntry.NeverRead);
 
         tracked.MarkRead(5);
         for (var i = 0; i < 1000; i++)
@@ -675,7 +675,7 @@ public class PeerRefreshTests
 
         (await b.Cache.GetAsync<string>(Key, new CachePolicy { RefreshLocalOnPeerWrite = false }, Ct)).Should().Be("old");
 
-        ReadMark(b).Should().Be(IReadTracked.NeverRead);
+        ReadMark(b).Should().Be(ILocalEntry.NeverRead);
     }
 
     [Fact]
@@ -685,7 +685,7 @@ public class PeerRefreshTests
         var clock = new ManualTimeProvider(DateTimeOffset.UtcNow);
         var (_, b) = await HoldingOld(peers, policy: Window, clock: clock);
         var stamped = ReadMark(b);
-        stamped.Should().NotBe(IReadTracked.NeverRead);
+        stamped.Should().NotBe(ILocalEntry.NeverRead);
         clock.Advance(TimeSpan.FromSeconds(5));
 
         (await b.Cache.GetAsync<string>(Key, Window, Ct)).Should().Be("old");
@@ -717,7 +717,7 @@ public class PeerRefreshTests
 
         (await b.Cache.GetAsync<string>(Key, Window, Ct)).Should().Be("old");
 
-        ReadMark(b).Should().Be(IReadTracked.NeverRead);
+        ReadMark(b).Should().Be(ILocalEntry.NeverRead);
     }
 
     [Fact]
@@ -1438,7 +1438,7 @@ public class PeerRefreshTests
     {
         node.Local.TryGetValue(Key, out ICacheEntry<string>? entry).Should().BeTrue();
 #pragma warning disable S1944 // The node's entries are read-tracked at run time.
-        return ((IReadTracked)entry!).LastRead;
+        return ((ILocalEntry)entry!).LastRead;
 #pragma warning restore S1944
     }
 

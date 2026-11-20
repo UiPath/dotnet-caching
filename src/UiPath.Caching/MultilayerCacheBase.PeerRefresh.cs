@@ -42,7 +42,7 @@ public abstract partial class MultilayerCacheBase
 
     /// <summary>How <paramref name="entry"/>, kept under <paramref name="policy"/>, is refreshed on a peer's write; null, and dropped then, when nothing refreshes it, no policy is in scope, the policy opts out, or the entry cannot be linked to the copy a refresh would keep (a custom entry factory made it).</summary>
     private protected PeerRefreshTarget? RefreshTarget(IPeerRefreshReader reader, CachePolicy? policy, object entry) =>
-        _peerRefresher is null || policy is null || policy.RefreshLocalOnPeerWrite == false || entry is not IRefreshLinked ? null : new PeerRefreshTarget(reader, policy);
+        _peerRefresher is null || policy is null || policy.RefreshLocalOnPeerWrite == false || entry is not ILocalEntry ? null : new PeerRefreshTarget(reader, policy);
 
     /// <summary>Removes the key locally, only while it still holds <paramref name="held"/>.</summary>
     private protected void DropLocal(string name, object held) =>
@@ -67,11 +67,11 @@ public abstract partial class MultilayerCacheBase
     }
 
     /// <summary>Whether no local hit has read the entry within the policy's local expiration, or the cache's default when the policy sets none.</summary>
-    private bool IsIdle(IReadTracked entry, CachePolicy? policy)
+    private bool IsIdle(ILocalEntry entry, CachePolicy? policy)
     {
         var window = IdleWindow(policy);
         var last = entry.LastRead;
-        return last == IReadTracked.NeverRead || NowSeconds() - last > window.TotalSeconds;
+        return last == ILocalEntry.NeverRead || NowSeconds() - last > window.TotalSeconds;
     }
 
     private TimeSpan IdleWindow(CachePolicy? policy)
@@ -161,7 +161,7 @@ public abstract partial class MultilayerCacheBase
             }
 
             // Not read within the local expiration: this node has no use for a fresher copy, so it drops as it did before refreshing existed.
-            if (held.CacheEntity is IReadTracked tracked && cache.IsIdle(tracked, held.Refresh?.Policy))
+            if (held.CacheEntity is ILocalEntry tracked && cache.IsIdle(tracked, held.Refresh?.Policy))
             {
                 Interlocked.Increment(ref _dropped[IdleIndex]);
                 FlushIfDue();
@@ -261,9 +261,9 @@ public abstract partial class MultilayerCacheBase
 
         /// <summary>The copy a kept refresh installed in place of the held entry, while it is the local entry; null when none is, or a later write replaced it.</summary>
         private object? RefreshedCopy(RefreshMetadataState held) =>
-            held.CacheEntity is IRefreshLinked { ReplacedBy: not IRefreshLinked.None and var refresh }
+            held.CacheEntity is ILocalEntry { ReplacedBy: not ILocalEntry.NoRefresh and var refresh }
             && cache._memoryCache.TryGetValue(held.CacheKey.Name, out var current)
-            && current is IRefreshLinked { Replaces: var replaces }
+            && current is ILocalEntry { Replaces: var replaces }
             && replaces == refresh
                 ? current
                 : null;
@@ -559,7 +559,7 @@ public abstract partial class MultilayerCacheBase
         {
             var held = item.State;
             // Numbered before the keep: the copy carries the number before any thread can see it installed.
-            if (held.CacheEntity is IRefreshLinked replaced)
+            if (held.CacheEntity is ILocalEntry replaced)
             {
                 replaced.ReplacedBy = Interlocked.Increment(ref _refreshes);
             }
