@@ -2,16 +2,24 @@ namespace UiPath.Caching.Migration;
 
 public sealed class RouterBuilder
 {
-    private readonly List<Func<RouterContext, (string Name, Type Type, object Cache)>> _registrations = [];
+    private readonly List<Func<RouterCore, (string Name, Type Type, object Cache)>> _registrations = [];
     private readonly HashSet<string> _names = new(StringComparer.Ordinal);
 
-    internal IReadOnlyList<Func<RouterContext, (string Name, Type Type, object Cache)>> Registrations => _registrations;
+    internal IReadOnlyList<Func<RouterCore, (string Name, Type Type, object Cache)>> Registrations => _registrations;
 
     internal Func<string, bool>? LibraryPredicate { get; private set; }
 
     internal ISerializerProxy<byte[]>? Envelope { get; private set; }
 
     internal TimeSpan? SettleBound { get; private set; }
+
+    internal Func<bool>? BypassFlag { get; private set; }
+
+    internal string? NodeIdentity { get; private set; }
+
+    internal TimeSpan? SourceTimeout { get; private set; }
+
+    internal TimeSpan CleanupBound { get; set; } = TimeSpan.FromSeconds(10);
 
     public RouterBuilder Add<T>(RouterCacheRegistration<T> registration)
         where T : class
@@ -27,16 +35,40 @@ public sealed class RouterBuilder
             throw new ArgumentException($"A cache named '{registration.Name}' is already registered.", nameof(registration));
         }
 
-        _registrations.Add(context => (
+        _registrations.Add(core => (
             registration.Name,
             typeof(T),
             new RoutedCache<T>(
-                context.Core,
-                registration,
-                new LibraryPathClient<T>(context.Store, context.Connection, registration.RedisKey, context.LibrarySettleWithin),
-                context.Topics,
-                context.Events,
-                context.Source)));
+                core,
+                registration)));
+        return this;
+    }
+
+    /// <summary>A live setting read on every call: true puts every call on the source path, and it wins over <see cref="UseLibraryWhen"/>.</summary>
+    public RouterBuilder UseBypassWhen(Func<bool> flag)
+    {
+        BypassFlag = flag ?? throw new ArgumentNullException(nameof(flag));
+        return this;
+    }
+
+    /// <summary>Names this process in the router's source identity; without it the process id and a random part are used.</summary>
+    public RouterBuilder UseNodeIdentity(string processId)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(processId);
+        if (processId.Length > 64 || !processId.All(character => char.IsAsciiLetterOrDigit(character) || character is '.' or '-' or '_'))
+        {
+            throw new ArgumentException("The identity holds letters, digits, dot, dash and underscore only, at most 64 characters.", nameof(processId));
+        }
+
+        NodeIdentity = processId;
+        return this;
+    }
+
+    /// <summary>The longest a source-path call runs, which bounds a mode change's waits; default 30 seconds.</summary>
+    public RouterBuilder UseSourceTimeout(TimeSpan timeout)
+    {
+        ArgumentOutOfRangeException.ThrowIfLessThanOrEqual(timeout, TimeSpan.Zero);
+        SourceTimeout = timeout;
         return this;
     }
 
