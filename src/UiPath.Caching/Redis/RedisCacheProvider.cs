@@ -111,8 +111,13 @@ public sealed class RedisCacheProvider : ICacheProvider
     /// As <see cref="CountFormatsByKeyAsync(CacheKey, CancellationToken)"/>, with the reason each value is where it is as well as its format: see <see cref="FormatCensusReport"/>.
     /// Each string costs a <c>PTTL</c> and a headerless one a <c>STRLEN</c> besides the two-byte read, so run it off the request path, as the sweep is.
     /// </summary>
-    public async Task<FormatCensusReport> CountFormatsByReasonAsync(CacheKey keyPattern, CancellationToken token = default)
+    public Task<FormatCensusReport> CountFormatsByReasonAsync(CacheKey keyPattern, CancellationToken token = default) =>
+        CountFormatsByReasonAsync(keyPattern, DefaultSweepGroup, token);
+
+    /// <summary>As <see cref="CountFormatsByReasonAsync(CacheKey, CancellationToken)"/>, tracking <c>cache.format.census</c> under <paramref name="group"/> so a census of one set of keys does not replace the gauge of another.</summary>
+    public async Task<FormatCensusReport> CountFormatsByReasonAsync(CacheKey keyPattern, string group, CancellationToken token = default)
     {
+        ArgumentException.ThrowIfNullOrWhiteSpace(group);
         var census = NewCensus();
         var report = await census.CountByReasonAsync(keyPattern, ValueMigration.MaxValueBytes, token).ConfigureAwait(false);
 
@@ -127,7 +132,7 @@ public sealed class RedisCacheProvider : ICacheProvider
         {
             try
             {
-                _cachingTelemetryProvider.TrackMetric(Metrics.FormatCensus, count, [new("reason", reason), new("group", DefaultSweepGroup)]);
+                _cachingTelemetryProvider.TrackMetric(Metrics.FormatCensus, count, [new("reason", reason), new("group", group)]);
             }
             catch (Exception ex)
             {
@@ -145,7 +150,7 @@ public sealed class RedisCacheProvider : ICacheProvider
     /// <remarks>
     /// A value converts only if it comes out the same, by the compare-and-set that a read's rewrite uses: it replaces the exact bytes that were read, keeps the TTL, and
     /// never creates a key, so a writer or a delete that came meanwhile wins. It calls no origin and writes no event. Whether the node list allows the target format is asked
-    /// again for each key, and the first refusal ends the pass. It shares the one-minute claim window and the byte budget of <c>MigrateOnRead</c>, but takes its own rate from
+    /// again for each key, and the first refusal ends the pass; so does a Redis error that is not the key's own (a timeout, a dropped connection, a busy or loading server), which returns the report with a cursor to resume from. It shares the one-minute claim window and the byte budget of <c>MigrateOnRead</c>, but takes its own rate from
     /// <see cref="FormatSweepOptions.RatePerSecond"/>. Cancellation throws; use <see cref="FormatSweepOptions.Budget"/> to stop with a cursor. Throws <see cref="InvalidOperationException"/>
     /// when no serializer is registered or the default policy writes JSON, since there is no format to move toward.
     /// </remarks>

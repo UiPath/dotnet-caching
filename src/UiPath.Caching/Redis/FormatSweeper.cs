@@ -28,49 +28,59 @@ internal sealed class FormatSweeper(
     public async Task<FormatSweepReport> SweepAsync(CacheKey keyPattern, FormatSweepOptions options, CancellationToken token)
     {
         Validate(options);
-        var plan = await census.PlanAsync(keyPattern, token).ConfigureAwait(false);
-        var identities = await IdentitiesAsync(plan.Primaries, plan.Database.Database, token).ConfigureAwait(false);
-        var (primaryIndex, cursor) = Resume(options.Cursor, identities);
-        var limit = Math.Min(options.MaxValueBytes, ValueMigration.MaxValueBytes);
-        var pacer = new Pacer(clock, options.RatePerSecond);
-        var started = clock.GetTimestamp();
         var tally = new Tally();
-        string? next = null;
+        string? next = options.Cursor;
         var completed = false;
-        var pages = 0;
-        while (true)
+        string[]? identities = null;
+        var primaryIndex = 0;
+        ulong cursor = 0;
+        try
         {
-            if (primaryIndex >= plan.Primaries.Count)
+            var plan = await census.PlanAsync(keyPattern, token).ConfigureAwait(false);
+            identities = await IdentitiesAsync(plan.Primaries, plan.Database.Database, token).ConfigureAwait(false);
+            (primaryIndex, cursor) = Resume(options.Cursor, identities);
+            var limit = Math.Min(options.MaxValueBytes, ValueMigration.MaxValueBytes);
+            var pacer = new Pacer(clock, options.RatePerSecond, options.Budget);
+            var pages = 0;
+            while (true)
             {
-                completed = true;
-                break;
-            }
+                if (primaryIndex >= plan.Primaries.Count)
+                {
+                    completed = true;
+                    break;
+                }
 
-            // Between pages, so a page is never left half-done: the cursor names the start of one.
-            if (options.Budget is { } budget && clock.GetElapsedTime(started) >= budget && pages > 0)
-            {
-                next = Position(identities[primaryIndex], cursor);
-                break;
-            }
+                // Between pages here, and between keys in a page, which starts again from its first key when the pass is resumed.
+                if (pages > 0 && pacer.BudgetPassed)
+                {
+                    next = Position(identities[primaryIndex], cursor);
+                    break;
+                }
 
-            var primary = plan.Primaries[primaryIndex];
-            pages++;
-            var (after, keys) = await FormatCensus.ScanPageAsync(primary, plan.Database.Database, plan.StringPattern, "string", cursor, options.PageSize, token).ConfigureAwait(false);
-            if (!await SweepPageAsync(keys, plan, limit, pacer, tally, token).ConfigureAwait(false))
-            {
-                next = Position(identities[primaryIndex], cursor);
-                break;
-            }
+                var primary = plan.Primaries[primaryIndex];
+                pages++;
+                var (after, keys) = await FormatCensus.ScanPageAsync(primary, plan.Database.Database, plan.StringPattern, "string", cursor, options.PageSize, token).ConfigureAwait(false);
+                if (!await SweepPageAsync(keys, plan, limit, pacer, tally, token).ConfigureAwait(false))
+                {
+                    next = Position(identities[primaryIndex], cursor);
+                    break;
+                }
 
-            if (after == 0)
-            {
-                primaryIndex++;
-                cursor = 0;
+                if (after == 0)
+                {
+                    primaryIndex++;
+                    cursor = 0;
+                }
+                else
+                {
+                    cursor = after;
+                }
             }
-            else
-            {
-                cursor = after;
-            }
+        }
+        catch (Exception ex) when (IsTransient(ex) && !token.IsCancellationRequested)
+        {
+            // The page that was under way starts again: a key it already converted is current by then.
+            next = identities is null ? options.Cursor : Position(identities[primaryIndex], cursor);
         }
 
         var report = tally.ToReport(next, completed);
@@ -91,6 +101,8 @@ internal sealed class FormatSweeper(
         ArgumentException.ThrowIfNullOrWhiteSpace(options.Group);
     }
 
+    private static bool IsTransient(Exception ex) => ex is RedisException or RedisTimeoutException;
+
     private static bool IsWrongType(RedisServerException ex) => ex.Message.StartsWith("WRONGTYPE", StringComparison.OrdinalIgnoreCase);
 
     private static string Position(string identity, ulong cursor) =>
@@ -108,7 +120,7 @@ internal sealed class FormatSweeper(
         var at = text.LastIndexOf(CursorSeparator);
         if (at <= 0 || !ulong.TryParse(text.AsSpan(at + 1), NumberStyles.None, CultureInfo.InvariantCulture, out var cursor))
         {
-            throw new ArgumentException("The cursor is not one a sweep reported.", nameof(text));
+            throw new ArgumentException("The cursor is not one a sweep reported.", nameof(FormatSweepOptions.Cursor));
         }
 
         var identity = text[..at];
@@ -243,8 +255,6 @@ internal sealed class FormatSweeper(
             }
         }
 
-        // From here the key costs commands of its own, so it is paced.
-        await pacer.WaitAsync(token).ConfigureAwait(false);
         if (!migration.Allows(target))
         {
             tally.Held++;
@@ -274,7 +284,7 @@ internal sealed class FormatSweeper(
             return true;
         }
 
-        return await ConvertAsync(database, key, limit, tally, token).ConfigureAwait(false);
+        return await ConvertAsync(database, key, limit, pacer, tally, token).ConfigureAwait(false);
     }
 
     private async Task<bool> CountEmptyAsync(IDatabase database, RedisKey key, Tally tally)
@@ -293,10 +303,17 @@ internal sealed class FormatSweeper(
     }
 
     // The value is read with a bound, so what a writer put there since STRLEN cannot be fetched past it, and the bound is what the byte budget is asked for.
-    private async Task<bool> ConvertAsync(IDatabase database, RedisKey key, int limit, Tally tally, CancellationToken token)
+    private async Task<bool> ConvertAsync(IDatabase database, RedisKey key, int limit, Pacer pacer, Tally tally, CancellationToken token)
     {
         var migrator = migration.Migrator;
         var bound = limit + 1;
+
+        // Asked before the claim, which a key stopped at would keep for the window; a pass always takes one key in full, so each one moves on.
+        if (pacer.Paced && pacer.BudgetPassed)
+        {
+            return false;
+        }
+
         switch (migrator.TryClaimDirect(owner, key, bound, out var heldLossy))
         {
             case FormatMigrator.ClaimResult.Recent:
@@ -318,6 +335,8 @@ internal sealed class FormatSweeper(
         var lossy = false;
         try
         {
+            // Only a key that is taken in full is paced; one that is current, recent, oversize or left costs no more than its checks.
+            await pacer.WaitAsync(token).ConfigureAwait(false);
             var stored = (byte[]?)await database.StringGetRangeAsync(key, 0, limit, CommandFlags.DemandMaster).ConfigureAwait(false);
             if (stored is null)
             {
@@ -346,6 +365,13 @@ internal sealed class FormatSweeper(
 
             if (!migration.Wants(target, stored))
             {
+                // A header means a writer or another sweep converted it since the scan; it is not held back as lossy.
+                if (ValueHeader.TryRead(stored, out var formatId, out _))
+                {
+                    CountHeaded(formatId, tally);
+                    return true;
+                }
+
                 // Headerless bytes of a proxy that cannot be compared are never looked at.
                 lossy = true;
                 tally.Lossy++;
@@ -373,6 +399,18 @@ internal sealed class FormatSweeper(
         finally
         {
             migrator.Finish(owner, key, bound, lossy);
+        }
+    }
+
+    private void CountHeaded(int formatId, Tally tally)
+    {
+        if (registry.TryGetByFormat(formatId, out var source) && ReferenceEquals(source, target))
+        {
+            tally.Current++;
+        }
+        else
+        {
+            tally.Unreadable++;
         }
     }
 
@@ -437,13 +475,20 @@ internal sealed class FormatSweeper(
     }
 
     // A key a second, or the rate given: the next is let through once its turn comes, so a burst is never taken.
-    private sealed class Pacer(TimeProvider clock, int rate)
+    private sealed class Pacer(TimeProvider clock, int rate, TimeSpan? budget)
     {
         private readonly TimeSpan _interval = TimeSpan.FromSeconds(1d / rate);
+        private readonly long _started = clock.GetTimestamp();
         private long _next = clock.GetTimestamp();
+        private long _paced;
+
+        public bool Paced => _paced > 0;
+
+        public bool BudgetPassed => budget is { } limit && clock.GetElapsedTime(_started) >= limit;
 
         public async ValueTask WaitAsync(CancellationToken token)
         {
+            _paced++;
             var now = clock.GetTimestamp();
             var due = _next;
             _next = Math.Max(now, due) + (long)(_interval.TotalSeconds * clock.TimestampFrequency);

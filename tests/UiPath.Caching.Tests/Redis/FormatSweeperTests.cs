@@ -362,6 +362,171 @@ public sealed class FormatSweeperTests : IDisposable
         await act.Should().ThrowAsync<ArgumentOutOfRangeException>();
     }
 
+    [Theory]
+    [InlineData("head", "connection")]
+    [InlineData("length", "timeout")]
+    [InlineData("scan", "busy")]
+    [InlineData("length", "loading")]
+    public async Task A_redis_error_outside_the_rewrite_ends_the_pass_with_a_cursor_that_a_later_pass_continues_from(string where, string kind)
+    {
+        var keys = new Keyspace();
+        for (var i = 0; i < 4; i++)
+        {
+            keys.Add(0, $"k{i}", Json);
+        }
+
+        keys.Fault = (op, at) => op == where && at is "k2" or "2" ? Transient(kind) : null;
+
+        var report = await Sweep(keys, new FormatSweepOptions { RatePerSecond = 1000, PageSize = 2 });
+
+        report.Completed.Should().BeFalse();
+        report.NextCursor.Should().Be("10.0.0.1:6379|2", "the page that failed starts again, the one before it is done");
+        report.Converted.Should().Be(2);
+        report.Failed.Should().Be(0);
+        _migrator.ClaimedBytes.Should().Be(0);
+
+        keys.Fault = null;
+        var resumed = await Sweep(keys, new FormatSweepOptions { RatePerSecond = 1000, PageSize = 2, Cursor = report.NextCursor });
+
+        resumed.Completed.Should().BeTrue();
+        resumed.Converted.Should().Be(2);
+        _rewritten.Should().BeEquivalentTo("k0", "k1", "k2", "k3").And.OnlyHaveUniqueItems();
+    }
+
+    [Fact]
+    public async Task A_redis_error_on_the_first_page_gives_back_the_cursor_the_pass_was_given()
+    {
+        var keys = new Keyspace();
+        keys.Add(0, "k0", Json);
+        keys.Fault = (op, _) => op == "scan" ? Transient("timeout") : null;
+
+        var report = await Sweep(keys, new FormatSweepOptions { Cursor = "10.0.0.1:6379|0" });
+
+        report.Completed.Should().BeFalse();
+        report.NextCursor.Should().Be("10.0.0.1:6379|0");
+        report.Scanned.Should().Be(0);
+    }
+
+    [Fact]
+    public async Task Cancelling_inside_a_redis_call_throws_and_gives_back_the_claim()
+    {
+        var keys = new Keyspace { Claimed = () => _migrator.ClaimedBytes };
+        for (var i = 0; i < 3; i++)
+        {
+            keys.Add(0, $"k{i}", Json);
+        }
+
+        using var cancel = CancellationTokenSource.CreateLinkedTokenSource(Ct);
+        keys.Fault = (op, at) =>
+        {
+            if (op != "read" || at != "k1")
+            {
+                return null;
+            }
+
+            cancel.Cancel();
+            return new OperationCanceledException(cancel.Token);
+        };
+
+        var act = () => SweepWith(keys, new FormatSweepOptions { RatePerSecond = 1000 }, cancel.Token);
+
+        await act.Should().ThrowAsync<OperationCanceledException>();
+        _rewritten.Should().Equal("k0");
+        _migrator.ClaimedBytes.Should().Be(0, "the claim of the key being read was given back");
+    }
+
+    [Fact]
+    public async Task A_budget_ends_the_pass_between_the_keys_of_a_page_and_the_cursor_starts_that_page_again()
+    {
+        var keys = new Keyspace();
+        for (var i = 0; i < 6; i++)
+        {
+            keys.Add(0, $"k{i}", Json);
+        }
+
+        var first = await Sweep(keys, new FormatSweepOptions { RatePerSecond = 1, PageSize = 6, Budget = TimeSpan.FromSeconds(2.5) });
+
+        first.Completed.Should().BeFalse();
+        first.Converted.Should().Be(4, "keys are taken at 0, 1, 2 and 3 seconds, and the budget has passed at the fifth");
+        first.NextCursor.Should().Be("10.0.0.1:6379|0", "a page is only ever resumed from its start");
+        (_clock.GetUtcNow() - Start).Should().Be(TimeSpan.FromSeconds(3));
+
+        var second = await Sweep(keys, new FormatSweepOptions { RatePerSecond = 1000, PageSize = 6, Cursor = first.NextCursor });
+
+        second.Completed.Should().BeTrue();
+        second.Converted.Should().Be(2);
+        second.Recent.Should().Be(4, "the keys the first pass did are skipped, not done twice");
+        _rewritten.Should().BeEquivalentTo("k0", "k1", "k2", "k3", "k4", "k5").And.OnlyHaveUniqueItems();
+    }
+
+    [Fact]
+    public async Task A_pass_whose_budget_is_gone_before_it_starts_still_takes_one_key_so_each_pass_moves_on()
+    {
+        var keys = new Keyspace();
+        for (var i = 0; i < 3; i++)
+        {
+            keys.Add(0, $"k{i}", Json);
+        }
+
+        _outcomes["k0"] = () =>
+        {
+            _clock.Advance(TimeSpan.FromMinutes(1));
+            return RewriteTally.Of(RewriteOutcome.Done);
+        };
+
+        var report = await Sweep(keys, new FormatSweepOptions { RatePerSecond = 1, PageSize = 3, Budget = TimeSpan.FromSeconds(1) });
+
+        report.Converted.Should().Be(1);
+        report.Completed.Should().BeFalse();
+    }
+
+    [Fact]
+    public async Task A_key_that_is_recent_or_oversize_is_not_paced()
+    {
+        var keys = new Keyspace();
+        keys.Add(0, "recent", Json);
+        keys.Add(0, "oversize", [.. "\""u8, .. new byte[300 * 1024], .. "\""u8]);
+        keys.Add(0, "work", Json);
+        _migrator.TryClaimDirect(this, "recent", 1, out _);
+
+        var report = await Sweep(keys, new FormatSweepOptions { RatePerSecond = 1 });
+
+        report.Recent.Should().Be(1);
+        report.Oversize.Should().Be(1);
+        report.Converted.Should().Be(1);
+        (_clock.GetUtcNow() - Start).Should().Be(TimeSpan.Zero, "only the key taken in full has a turn, and the first turn is at once");
+    }
+
+    [Fact]
+    public async Task A_byte_budget_that_is_full_counts_each_key_as_held_and_the_pass_goes_on()
+    {
+        var keys = new Keyspace();
+        keys.Add(0, "a", Json);
+        keys.Add(0, "b", Json);
+        _migrator.TryClaimDirect(new object(), "reads", (int)FormatMigrator.DefaultMaxQueuedBytes, out _).Should().Be(FormatMigrator.ClaimResult.Claimed);
+
+        var report = await Sweep(keys, new FormatSweepOptions { RatePerSecond = 1000 });
+
+        report.Held.Should().Be(2);
+        report.Converted.Should().Be(0);
+        report.Completed.Should().BeTrue("only the node list ends a pass");
+    }
+
+    [Fact]
+    public async Task A_key_converted_meanwhile_is_current_and_not_held_back_as_lossy()
+    {
+        var keys = new Keyspace();
+        keys.Add(0, "k", Json);
+        keys.AfterLength = key => keys.Replace(key, Fast);
+
+        var report = await Sweep(keys, new FormatSweepOptions { RatePerSecond = 1000 });
+
+        report.Current.Should().Be(1);
+        report.Lossy.Should().Be(0);
+        _rewritten.Should().BeEmpty();
+        _migrator.LossyKeys.Should().Be(0);
+    }
+
     [Fact]
     public async Task The_census_gives_each_string_its_reasons_and_a_gone_key_none()
     {
@@ -389,6 +554,14 @@ public sealed class FormatSweeperTests : IDisposable
         report.Scanned.Should().Be(6);
         await keys.Database.Received(3).StringLengthAsync(Arg.Any<RedisKey>(), Arg.Any<CommandFlags>());
     }
+
+    private static Exception Transient(string kind) => kind switch
+    {
+        "connection" => new RedisConnectionException(ConnectionFailureType.SocketFailure, CommandFlags.None, "the connection dropped"),
+        "timeout" => new RedisTimeoutException(CommandFlags.None, "the command timed out", CommandStatus.WaitingToBeSent),
+        "busy" => new RedisServerException(RedisErrorKind.None, CommandFlags.None, "BUSY Redis is busy running a script"),
+        _ => new RedisServerException(RedisErrorKind.None, CommandFlags.None, "LOADING Redis is loading the dataset in memory"),
+    };
 
     // The fake delegate is told the bytes, so the key they belong to is looked up.
     private static string Name(Keyspace keys, byte[] original) => keys.NameOf(original);
@@ -512,6 +685,9 @@ public sealed class FormatSweeperTests : IDisposable
         /// <summary>Told the key once its STRLEN has been answered, so a writer can come in between.</summary>
         public Action<string>? AfterLength { get; set; }
 
+        /// <summary>Asked for each command, by its kind (<c>scan</c> with the cursor, <c>head</c>, <c>length</c> and <c>read</c> with the key); an exception it gives is what the command fails with.</summary>
+        public Func<string, string, Exception?>? Fault { get; set; }
+
         public void Replace(string key, byte[] value)
         {
             var at = _keys.FindIndex(k => k.Key == key);
@@ -542,6 +718,11 @@ public sealed class FormatSweeperTests : IDisposable
                 return Task.FromException<long>(new RedisServerException(RedisErrorKind.None, CommandFlags.None, "WRONGTYPE Operation against a key holding the wrong kind of value"));
             }
 
+            if (Fault?.Invoke("length", key) is { } fault)
+            {
+                return Task.FromException<long>(fault);
+            }
+
             var length = (long)(Find(key)?.Length ?? 0);
             AfterLength?.Invoke(key);
             return Task.FromResult(length);
@@ -550,6 +731,11 @@ public sealed class FormatSweeperTests : IDisposable
         // As GETRANGE: the bytes from the start to the end given, both ends counted, never more than the value has.
         private Task<RedisValue> Range(string key, long end)
         {
+            if (Fault?.Invoke(end > 1 ? "read" : "head", key) is { } fault)
+            {
+                return Task.FromException<RedisValue>(fault);
+            }
+
             if (end > 1)
             {
                 if (WrongTypeAtRead.Contains(key))
@@ -572,6 +758,11 @@ public sealed class FormatSweeperTests : IDisposable
         private RedisResult Page(int primary, object[] arguments)
         {
             var cursor = (int)(ulong)arguments[0];
+            if (Fault?.Invoke("scan", cursor.ToString(System.Globalization.CultureInfo.InvariantCulture)) is { } fault)
+            {
+                throw fault;
+            }
+
             var count = (int)arguments[4];
             var type = (string)arguments[6];
             var mine = type == "string" ? _keys.Where(k => k.Primary == primary).Select(k => k.Key).ToArray() : [];

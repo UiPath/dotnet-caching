@@ -1,9 +1,11 @@
+using System.Net;
 using System.Reflection;
 using System.Text;
 using System.Text.Json;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using StackExchange.Redis;
+using StackExchange.Redis.KeyspaceIsolation;
 using UiPath.Caching.Config;
 using UiPath.Caching.Logging;
 using UiPath.Caching.Negotiation;
@@ -85,6 +87,67 @@ public class FormatSweepIntegrationTests(RedisContainerFixture fixture)
         census.Scanned.Should().Be(8);
         rig.Tracked(Metrics.FormatCensus, "reason", "format_json").Should().Be(3);
         rig.Tracked(Metrics.FormatSweep, "outcome", "converted").Should().Be(3);
+    }
+
+    [Fact]
+    public async Task A_connector_key_prefix_is_looked_for_and_taken_off_so_prefixed_keys_are_counted_and_rewritten_and_others_left()
+    {
+        Assert.SkipUnless(fixture.Enabled, "Set RUN_REDIS_INTEGRATION_TESTS=1 (Docker required) to run.");
+        Assert.SkipUnless(fixture.ServerVersion >= new Version(7, 0), "PEXPIRETIME needs Redis 7.");
+        using var rig = Rig.Build(fixture.ConnectionString, envelope: false, prefix: $"pfx{Guid.NewGuid():N}:");
+        await using var raw = await ConnectionMultiplexer.ConnectAsync(fixture.ConnectionString);
+        var db = raw.GetDatabase();
+        var ttl = TimeSpan.FromMinutes(5);
+        await rig.SetAsync(db, "json", Json(new Item("a")), ttl);
+        await rig.SetAsync(db, "other", [0x12, .. Json(new Item("b"))], ttl);
+        await rig.SetAsync(db, "already", [.. Header, .. Json(new Item("c"))], ttl);
+        var stray = (RedisKey)$"{rig.App}:s:{rig.Run}:stray";
+        await db.StringSetAsync(stray, Json(new Item("s")), ttl);
+        var expiry = await rig.ExpiryAsync(db, "json");
+
+        var before = await rig.Provider.CountFormatsByReasonAsync(rig.Pattern, Ct);
+
+        before.ByFormat.Should().BeEquivalentTo(new Dictionary<string, long> { ["json"] = 1, ["other"] = 1, ["fast"] = 1 }, "the key without the prefix is not this connector's");
+        before.Scanned.Should().Be(3);
+
+        var report = await rig.Provider.SweepFormatsAsync<Item>(rig.Pattern, new FormatSweepOptions { RatePerSecond = 1000 }, Ct);
+
+        report.Converted.Should().Be(2);
+        report.Current.Should().Be(1);
+        report.Scanned.Should().Be(3);
+        report.Failed.Should().Be(0);
+        report.Completed.Should().BeTrue();
+        (await rig.GetAsync(db, "json")).Should().Equal([.. Header, .. Json(new Item("a"))]);
+        (await rig.GetAsync(db, "other")).Should().Equal([.. Header, .. Json(new Item("b"))]);
+        (await rig.ExpiryAsync(db, "json")).Should().Be(expiry, "the exact expiry is kept under the prefix");
+        ((byte[]?)await db.StringGetAsync(stray)).Should().Equal(Json(new Item("s")), "a key outside the prefix is left as it is");
+        (await db.KeyTimeToLiveAsync(stray)).Should().NotBeNull();
+
+        var after = await rig.Provider.CountFormatsByReasonAsync(rig.Pattern, Ct);
+
+        after.ByFormat.Should().BeEquivalentTo(new Dictionary<string, long> { ["fast"] = 3 });
+        after.ByReason.Should().BeEquivalentTo(new Dictionary<string, long> { ["format_fast"] = 3 });
+    }
+
+    [Fact]
+    public async Task The_census_is_tracked_under_the_group_it_is_given_and_one_group_does_not_replace_the_gauge_of_another()
+    {
+        Assert.SkipUnless(fixture.Enabled, "Set RUN_REDIS_INTEGRATION_TESTS=1 (Docker required) to run.");
+        using var rig = Rig.Build(fixture.ConnectionString, envelope: false);
+        await using var raw = await ConnectionMultiplexer.ConnectAsync(fixture.ConnectionString);
+        await rig.SetAsync(raw.GetDatabase(), "k", Json(new Item("a")), TimeSpan.FromMinutes(5));
+
+        await rig.Provider.CountFormatsByReasonAsync(rig.Pattern, "alpha", Ct);
+
+        rig.CensusValues("alpha", "format_json").Should().Equal([1d]);
+        rig.Telemetry.Metrics.Where(m => m.Name == Metrics.FormatCensus).Should().OnlyContain(m => m.Properties!["group"] == "alpha");
+
+        await rig.Provider.CountFormatsByReasonAsync(new CacheKey($"{rig.Run}-none:*"), "beta", Ct);
+        await rig.Provider.CountFormatsByReasonAsync(rig.Pattern, Ct);
+
+        rig.CensusValues("beta", "format_json").Should().Equal([0d]);
+        rig.CensusValues("alpha", "format_json").Should().Equal([1d], "the zero of another group's pattern does not reach it");
+        rig.CensusValues("default", "format_json").Should().Equal([1d]);
     }
 
     [Fact]
@@ -334,10 +397,13 @@ public class FormatSweepIntegrationTests(RedisContainerFixture fixture)
     private sealed class Rig : IDisposable
     {
         private readonly ServiceProvider _services;
+        private readonly IConnectionMultiplexer? _mux;
 
-        private Rig(ServiceProvider services, RecordingTelemetryProvider telemetry, string app)
+        private Rig(ServiceProvider services, RecordingTelemetryProvider telemetry, string app, IConnectionMultiplexer? mux, string prefix)
         {
             _services = services;
+            _mux = mux;
+            Prefix = prefix;
             Telemetry = telemetry;
             App = app;
             Run = $"sweep{Guid.NewGuid():N}"[..24];
@@ -352,13 +418,21 @@ public class FormatSweepIntegrationTests(RedisContainerFixture fixture)
 
         public string Run { get; }
 
+        public string Prefix { get; }
+
         public CacheKey Pattern => new($"{Run}:*");
 
-        public static Rig Build(string connection, bool envelope, bool scripts = false, string writes = "fast")
+        public static Rig Build(string connection, bool envelope, bool scripts = false, string writes = "fast", string? prefix = null)
         {
             var telemetry = new RecordingTelemetryProvider();
+            var mux = prefix is null ? null : ConnectionMultiplexer.Connect(connection);
             var app = $"sw{Guid.NewGuid():N}"[..12];
             var services = new ServiceCollection().AddLogging().AddSingleton<ICachingTelemetryProvider>(telemetry);
+            if (mux is not null)
+            {
+                services.AddSingleton<IRedisConnector>(new PrefixingConnector(mux, prefix!));
+            }
+
             var fast = new PassthroughValueSerializer(0x10);
             var other = new PassthroughValueSerializer(0x12);
             services.AddCaching(
@@ -369,6 +443,7 @@ public class FormatSweepIntegrationTests(RedisContainerFixture fixture)
                     {
                         o.FormatNegotiation.Mode = FormatNegotiationMode.Force;
                         o.ReadScriptsEnabled = scripts;
+                        o.KeyPrefix = prefix ?? string.Empty;
                     });
                     b.AddValueSerializer("fast", fast.FormatIds, _ => fast);
                     b.AddValueSerializer("other", other.FormatIds, _ => other);
@@ -386,10 +461,10 @@ public class FormatSweepIntegrationTests(RedisContainerFixture fixture)
                         Serializer = new SerializerPolicy { Write = writes, Read = ["json", "fast", "other"] },
                     };
                 });
-            return new Rig(services.BuildServiceProvider(), telemetry, app);
+            return new Rig(services.BuildServiceProvider(), telemetry, app, mux, prefix ?? string.Empty);
         }
 
-        public RedisKey Key(string name) => $"{App}:s:{Run}:{name}";
+        public RedisKey Key(string name) => $"{Prefix}{App}:s:{Run}:{name}";
 
         public Task SetAsync(IDatabase db, string name, byte[] value, TimeSpan? ttl) => db.StringSetAsync(Key(name), value, ttl is { } span ? span : Expiration.Default);
 
@@ -399,6 +474,9 @@ public class FormatSweepIntegrationTests(RedisContainerFixture fixture)
 
         public double Tracked(string metric, string tag, string value) =>
             Telemetry.Metrics.Where(m => m.Name == metric && m.Properties![tag] == value).Sum(m => m.Value);
+
+        public List<double> CensusValues(string group, string reason) =>
+            [.. Telemetry.Metrics.Where(m => m.Name == Metrics.FormatCensus && m.Properties!["group"] == group && m.Properties["reason"] == reason).Select(m => m.Value)];
 
         // A sweep whose connector runs the step once, right after the sweep has read a string and before it rewrites it.
         public RaceStep Race(Func<RedisKey, Task> step) => new(this, step);
@@ -421,7 +499,51 @@ public class FormatSweepIntegrationTests(RedisContainerFixture fixture)
                 _services.GetService<FormatNegotiation>()?.Negotiator,
                 _services.GetService<ValueMigration>());
 
-        public void Dispose() => _services.Dispose();
+        public void Dispose()
+        {
+            _services.Dispose();
+            _mux?.Dispose();
+        }
+    }
+
+    // An application's own connector whose database prefixes every key, as WithKeyPrefix does.
+    private sealed class PrefixingConnector(IConnectionMultiplexer mux, string prefix) : IRedisConnector
+    {
+        public event EventHandler? OnConnectionFailed
+        {
+            add { /* Expected: this connector never raises the event. */ }
+            remove { /* Expected: nothing is attached. */ }
+        }
+
+        public event EventHandler? OnConnectionRestored
+        {
+            add { /* Expected: this connector never raises the event. */ }
+            remove { /* Expected: nothing is attached. */ }
+        }
+
+        public event EventHandler? OnReconnected
+        {
+            add { /* Expected: this connector never raises the event. */ }
+            remove { /* Expected: nothing is attached. */ }
+        }
+
+        public bool IsConnected => mux.IsConnected;
+
+        public Version Version => mux.GetServer(mux.GetEndPoints()[0]).Version;
+
+        public IDatabase Database => mux.GetDatabase().WithKeyPrefix(prefix);
+
+        public ISubscriber Subscriber => mux.GetSubscriber();
+
+        public void ForceReconnect()
+        {
+        }
+
+        public EndPoint[] GetEndPoints(bool configuredOnly = false) => mux.GetEndPoints(configuredOnly);
+
+        public void Dispose()
+        {
+        }
     }
 
     private sealed class RaceStep : IDisposable

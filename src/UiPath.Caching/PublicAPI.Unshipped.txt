@@ -50,7 +50,6 @@ UiPath.Caching.IHeaderFreeSerializerProxy
 UiPath.Caching.Redis.FormatCensusReport
 UiPath.Caching.Redis.FormatCensusReport.ByFormat.get -> System.Collections.Generic.IReadOnlyDictionary<string!, long>!
 UiPath.Caching.Redis.FormatCensusReport.ByReason.get -> System.Collections.Generic.IReadOnlyDictionary<string!, long>!
-UiPath.Caching.Redis.FormatCensusReport.FormatCensusReport(System.Collections.Generic.IReadOnlyDictionary<string!, long>! byFormat, System.Collections.Generic.IReadOnlyDictionary<string!, long>! byReason, long scanned) -> void
 UiPath.Caching.Redis.FormatCensusReport.Scanned.get -> long
 UiPath.Caching.Redis.FormatSweepOptions
 UiPath.Caching.Redis.FormatSweepOptions.Budget.get -> System.TimeSpan?
@@ -94,6 +93,7 @@ UiPath.Caching.Redis.FormatSweepReport.Scanned.get -> long
 UiPath.Caching.Redis.FormatSweepReport.Scanned.init -> void
 UiPath.Caching.Redis.FormatSweepReport.Unreadable.get -> long
 UiPath.Caching.Redis.FormatSweepReport.Unreadable.init -> void
+UiPath.Caching.Redis.RedisCacheProvider.CountFormatsByReasonAsync(UiPath.Caching.CacheKey keyPattern, string! group, System.Threading.CancellationToken token = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<UiPath.Caching.Redis.FormatCensusReport!>!
 UiPath.Caching.Redis.RedisCacheProvider.CountFormatsByReasonAsync(UiPath.Caching.CacheKey keyPattern, System.Threading.CancellationToken token = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<UiPath.Caching.Redis.FormatCensusReport!>!
 UiPath.Caching.Redis.RedisCacheProvider.SweepFormatsAsync<T>(UiPath.Caching.CacheKey keyPattern, UiPath.Caching.Redis.FormatSweepOptions! options, System.Threading.CancellationToken token = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<UiPath.Caching.Redis.FormatSweepReport!>!
 const UiPath.Caching.Metrics.FormatCensus = "cache.format.census" -> string!

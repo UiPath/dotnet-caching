@@ -8,14 +8,21 @@ namespace UiPath.Caching.Redis;
 /// <c>hash_sampled</c> (a hash, of which only the first 256 user fields are looked at). A value equal to <c>default(T)</c> or one that would not come out the same
 /// needs the type, so only <see cref="RedisCacheProvider.SweepFormatsAsync{T}"/> reports those.
 /// </remarks>
-public sealed class FormatCensusReport(IReadOnlyDictionary<string, long> byFormat, IReadOnlyDictionary<string, long> byReason, long scanned)
+public sealed class FormatCensusReport
 {
+    internal FormatCensusReport(IReadOnlyDictionary<string, long> byFormat, IReadOnlyDictionary<string, long> byReason, long scanned)
+    {
+        ByFormat = byFormat;
+        ByReason = byReason;
+        Scanned = scanned;
+    }
+
     /// <summary>The keys counted under each format: <c>json</c>, a registered serializer's name, or <see cref="CacheValueFormats.UnknownName"/>.</summary>
-    public IReadOnlyDictionary<string, long> ByFormat { get; } = byFormat;
+    public IReadOnlyDictionary<string, long> ByFormat { get; }
 
     /// <summary>The keys counted under each reason; a reason with no key is absent.</summary>
-    public IReadOnlyDictionary<string, long> ByReason { get; } = byReason;
+    public IReadOnlyDictionary<string, long> ByReason { get; }
 
     /// <summary>How many keys were looked at; a key that went away during the scan is not counted.</summary>
-    public long Scanned { get; } = scanned;
+    public long Scanned { get; }
 }

@@ -18,7 +18,7 @@ public sealed class FormatSweepReport
     /// <summary>Strings over <see cref="FormatSweepOptions.MaxValueBytes"/>, left.</summary>
     public long Oversize { get; init; }
 
-    /// <summary>Strings not rewritten because the node list does not allow the target format now, or the byte budget shared with reads was full. The first of these ends the pass.</summary>
+    /// <summary>Strings not rewritten because the node list does not allow the target format now, or the byte budget shared with reads was full. The first refusal by the node list ends the pass; one by the byte budget is counted and the pass goes on.</summary>
     public long Held { get; init; }
 
     /// <summary>Strings whose rewrite threw; logged, and left as they were.</summary>
@@ -39,6 +39,6 @@ public sealed class FormatSweepReport
     /// <summary>Where the next pass continues, as <see cref="FormatSweepOptions.Cursor"/>; null once <see cref="Completed"/>.</summary>
     public string? NextCursor { get; init; }
 
-    /// <summary>Whether every primary was scanned to its end; false when the budget ran out or the target format stopped being allowed.</summary>
+    /// <summary>Whether every primary was scanned to its end; false when the budget ran out, the target format stopped being allowed, or a Redis error ended the pass.</summary>
     public bool Completed { get; init; }
 }
