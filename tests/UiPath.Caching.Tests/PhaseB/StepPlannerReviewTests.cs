@@ -1,0 +1,145 @@
+using UiPath.Caching.PhaseB;
+using static UiPath.Caching.Tests.PhaseB.PlannerKit;
+
+namespace UiPath.Caching.Tests.PhaseB;
+
+// The review findings that live in the step logic: the reverse residue, and the clean pass that clears an automatic hold.
+public class StepPlannerReviewTests
+{
+    private static readonly StateRecord ReverseMoving = State("S3", "rev", ep: 16, nPop: 1, caches: "a+b", prev: "S1:rev:1:15:id15", residue: new Dictionary<string, long> { ["a"] = 0, ["b"] = 0, ["gone"] = 7 });
+    private static readonly StateRecord ReverseDrained = State("S4", "rev", ep: 17, nPop: 1, caches: "a+b", prev: "S3:rev:1:16:id16");
+    private static readonly StateRecord Moving = State("S3", ep: 13, nPop: 1, prev: "S2:fwd:0:12:id12");
+
+    [Fact]
+    public async Task X9_carries_the_reverse_census_into_S4_replacing_the_forward_counts_and_dropping_the_caches_it_no_longer_reports()
+    {
+        var mover = new FakeMoverStatus { Report = FakeMoverStatus.Drained(0, ("a", 3), ("b", 0)) };
+
+        var plan = await StepPlanner.DecideAsync(Input(ReverseMoving, mover: mover), Defaults);
+
+        plan.Spec!.Code.Should().Be("X9");
+        plan.Spec.PostFields.Should().BeEquivalentTo([("res:a", "3"), ("res:b", "0")]);
+        plan.Spec.PostDelete.Should().Equal("res:gone");
+    }
+
+    [Fact]
+    public async Task X10_waits_while_the_residue_of_any_cache_is_unknown_and_the_consent_hashes_the_reverse_counts()
+    {
+        var unknown = ReverseDrained with { Residue = new Dictionary<string, long> { ["a"] = 0 } };
+        var wait = await StepPlanner.DecideAsync(Input(unknown.Approved(ApprovalKinds.Release), mover: new FakeMoverStatus { Report = FakeMoverStatus.Drained(0, ("a", 0)) }), Defaults);
+        wait.Kind.Should().Be(StepKind.None);
+        wait.AlertList.Should().ContainSingle().Which.Should().Be(new StageAlert("stage_pending", "release_residue_unknown:b"));
+
+        var forwardZero = ReverseDrained with { Residue = new Dictionary<string, long> { ["a"] = 0, ["b"] = 0 } };
+        var approved = forwardZero.Approved(ApprovalKinds.Release);
+        var reverseCensus = new FakeMoverStatus { Report = FakeMoverStatus.Drained(0, ("a", 4), ("b", 0)) };
+
+        var plan = await StepPlanner.DecideAsync(Input(approved, mover: reverseCensus), Defaults);
+
+        plan.Kind.Should().Be(StepKind.None, "a census that differs from the counts the consent covers is stored first, and X10 does not run on the old consent");
+        plan.AlertList.Should().ContainSingle().Which.Should().Be(new StageAlert("stage_pending", "release_census_changed"));
+        plan.Fields.Should().Contain(("res:a", "4"), "the new census is stored, which voids the consent");
+        (await StepPlanner.DecideAsync(Input(approved, mover: new FakeMoverStatus { Report = FakeMoverStatus.Drained(0, ("a", 0), ("b", 0)) }), Defaults)).Kind.Should().Be(StepKind.Transit, "the consent covers the counts a re-census finds");
+        var stored = approved.With(("res:a", "4")) with { Residue = new Dictionary<string, long> { ["a"] = 4, ["b"] = 0 } };
+        (await StepPlanner.DecideAsync(Input(stored, mover: reverseCensus), Defaults)).AlertList.Single().Detail.Should().Be("release_consent");
+    }
+
+    [Theory]
+    [InlineData(1, false)]
+    [InlineData(5, false)]
+    [InlineData(0, true)]
+    public async Task A_canary_hold_clears_only_after_a_pass_that_counted_none(long canary, bool clears)
+    {
+        var mover = new FakeMoverStatus { Report = FakeMoverStatus.Drained(canary) };
+
+        var plan = await StepPlanner.DecideAsync(Input(Moving with { HoldAuto = "canary" }, flag: Verdict(min: 3), mover: mover), Defaults);
+
+        plan.AutoHoldClear.Should().Be(clears);
+    }
+
+    [Fact]
+    public async Task A_canary_hold_stays_when_the_mover_has_no_report_and_clears_in_a_reverse_where_the_canary_only_counts()
+    {
+        var none = await StepPlanner.DecideAsync(Input(Moving with { HoldAuto = "canary" }, flag: Verdict(min: 3), mover: new FakeMoverStatus()), Defaults);
+        none.AutoHoldClear.Should().BeFalse();
+
+        var reverse = await StepPlanner.DecideAsync(Input(ReverseDrained with { HoldAuto = "canary", Residue = new Dictionary<string, long> { ["a"] = 0, ["b"] = 0 } }, mover: new FakeMoverStatus()), Defaults);
+        reverse.AutoHoldClear.Should().BeTrue();
+    }
+
+    [Fact]
+    public async Task A_hold_for_a_node_without_pb_clears_as_soon_as_the_cause_is_gone_without_a_census()
+    {
+        var plan = await StepPlanner.DecideAsync(Input(Moving with { HoldAuto = "no_pb:n2" }, flag: Verdict(min: 3), mover: new FakeMoverStatus()), Defaults);
+
+        plan.AutoHoldClear.Should().BeTrue();
+    }
+
+    [Fact]
+    public async Task An_automatic_hold_left_in_S0_by_the_last_run_is_cleared_so_a_raise_is_not_blocked_until_Resume()
+    {
+        var off = State("S0", "none", ep: 18, prev: "S4:rev:1:17:id17", holdAuto: "no_pb:n2");
+
+        var plan = await StepPlanner.DecideAsync(Input(off, flag: Verdict(min: 2)), Defaults);
+
+        plan.AutoHoldClear.Should().BeTrue();
+        (await StepPlanner.DecideAsync(Input(off with { HoldOp = "x" }, flag: Verdict(min: 2)), Defaults)).AutoHoldClear.Should().BeTrue("the operator hold is a different class and stays");
+    }
+
+    [Fact]
+    public async Task A_forward_S4_without_residue_gets_it_from_a_master_census_unless_an_operator_hold_asks_for_a_census_first()
+    {
+        var drained = State("S4", ep: 14, nPop: 1, prev: "S3:fwd:1:13:id13").With((StateFields.DrainedAt, "0"));
+        var mover = new FakeMoverStatus { Census = new Dictionary<string, long> { ["a"] = 4 } };
+
+        var plan = await StepPlanner.DecideAsync(Input(drained, flag: Verdict(min: 4), mover: mover), Defaults);
+
+        plan.Fields.Should().Contain(("res:a", "4"));
+        (await StepPlanner.DecideAsync(Input(drained with { HoldOp = "census first" }, flag: Verdict(min: 4), mover: mover), Defaults)).Fields.Should().NotContain(f => f.Field == "res:a");
+        (await StepPlanner.DecideAsync(Input(drained with { Residue = new Dictionary<string, long> { ["a"] = 1 } }, flag: Verdict(min: 4), mover: mover), Defaults)).Fields.Should().NotContain(f => f.Field == "res:a");
+    }
+
+    [Fact]
+    public async Task C3_needs_no_canary_for_the_whole_soak_and_a_mover_with_no_report_adds_no_evidence_either_way()
+    {
+        var soaked = State("S4", ep: 14, nPop: 1, prev: "S3:fwd:1:13:id13", residue: new Dictionary<string, long> { ["a"] = 0 }).With((StateFields.DrainedAt, "0"));
+        var confirmed = Verdict(min: 5, confirmed: TimeSpan.FromMinutes(3));
+        var recent = DateTimeOffset.UnixEpoch.AddDays(30).AddHours(-1).ToUnixTimeMilliseconds().ToString();
+        var facts = new FakeGroupFacts { ReleaseFloorAttested = true };
+        var options = new StageDriverOptions { DrainedSoak = TimeSpan.FromHours(6) };
+        var mover = new FakeMoverStatus { Census = new Dictionary<string, long> { ["a"] = 0 } };
+
+        var early = await StepPlanner.DecideAsync(Input(soaked.With((StateFields.CanaryAt, recent)).Approved(ApprovalKinds.Close), flag: confirmed, facts: facts, mover: mover), options);
+        early.AlertList.Single(a => a.Code == "close_pending").Detail.Should().Be("C3:canary");
+
+        var old = DateTimeOffset.UnixEpoch.AddDays(30).AddHours(-7).ToUnixTimeMilliseconds().ToString();
+        (await StepPlanner.DecideAsync(Input(soaked.With((StateFields.CanaryAt, old)).Approved(ApprovalKinds.Close), flag: confirmed, facts: facts, mover: mover), options)).Spec!.Code.Should().Be("X5");
+        (await StepPlanner.DecideAsync(Input(soaked.Approved(ApprovalKinds.Close), flag: confirmed, facts: facts, mover: mover), options)).Spec!.Code.Should().Be("X5", "no report and no canary on record");
+    }
+
+    [Fact]
+    public async Task A_pass_that_counts_a_canary_key_records_when_so_the_soak_restarts()
+    {
+        var moving = State("S3", ep: 13, nPop: 1, prev: "S2:fwd:0:12:id12");
+        var mover = new FakeMoverStatus { Report = FakeMoverStatus.Drained(canary: 2) };
+
+        var plan = await StepPlanner.DecideAsync(Input(moving, flag: Verdict(min: 3), mover: mover), Defaults);
+
+        plan.Fields.Should().Contain(f => f.Field == StateFields.CanaryAt);
+    }
+
+    [Fact]
+    public async Task The_soak_is_capped_by_the_longest_source_ttl_of_the_group()
+    {
+        var drainedAt = DateTimeOffset.UnixEpoch.AddDays(30).AddHours(-2).ToUnixTimeMilliseconds().ToString();
+        var state = State("S4", ep: 14, nPop: 1, prev: "S3:fwd:1:13:id13", residue: new Dictionary<string, long> { ["a"] = 0 }).With((StateFields.DrainedAt, drainedAt)).Approved(ApprovalKinds.Close);
+        var mover = new FakeMoverStatus { Report = FakeMoverStatus.Drained(), Census = new Dictionary<string, long> { ["a"] = 0 } };
+        var confirmed = Verdict(min: 5, confirmed: TimeSpan.FromMinutes(3));
+
+        var long7 = await StepPlanner.DecideAsync(Input(state, flag: confirmed, mover: mover), Defaults);
+        long7.AlertList.Single(a => a.Code == "close_pending").Detail.Should().Be("C2:soak");
+
+        var capped = await StepPlanner.DecideAsync(Input(state, flag: confirmed, mover: mover, facts: new FakeGroupFacts { ReleaseFloorAttested = true, SourceTtl = TimeSpan.FromHours(1) }), Defaults);
+        capped.Spec!.Code.Should().Be("X5");
+    }
+}

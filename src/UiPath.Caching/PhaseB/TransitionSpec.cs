@@ -7,6 +7,7 @@ namespace UiPath.Caching.PhaseB;
 /// <param name="ReleaseClaim">A transition into S0 of a group that holds a claim: certificate before DURABLE, idle after.</param>
 /// <param name="RecheckViews">The views are read again just before step 4, and the transition is abandoned if one fell (X5).</param>
 /// <param name="PostFields">Fields written under the new identity once it is durable.</param>
+/// <param name="PostDelete">Fields deleted under the new identity once it is durable.</param>
 internal sealed record TransitionSpec(
     string Code,
     string State,
@@ -18,4 +19,5 @@ internal sealed record TransitionSpec(
     bool ReleaseClaim = false,
     PreStep Pre = PreStep.None,
     bool RecheckViews = false,
-    IReadOnlyList<(string Field, string Value)>? PostFields = null);
+    IReadOnlyList<(string Field, string Value)>? PostFields = null,
+    IReadOnlyList<string>? PostDelete = null);

@@ -31,9 +31,21 @@ internal static partial class StepPlanner
         var state = i.State;
         var skip = Approval.ValidFor(state, ApprovalKinds.SkipBarrier) is not null;
         var kind = Classify(state);
-        if (kind is not null && !StillAsked(i, kind))
+
+        // From step 4 on nothing is called off: the transition completes whatever the flag shows.
+        if (kind is not null && state.Field(StateFields.CommitBegun) != state.Id)
         {
-            return new StepPlan(StepKind.Abandon);
+            if (!StillAsked(i, kind))
+            {
+                return new StepPlan(StepKind.Abandon);
+            }
+
+            // A forward step before step 4 needs evidence: a pod that has not read the flag, or no fresh advert at all, is no view at or above the stage.
+            if (ForwardLevel(kind) is not null && (i.Fresh.Count == 0 || i.Fresh.Any(a => a.FlagOf(i.Group) is null)))
+            {
+                var nodes = string.Join(',', i.Fresh.Where(a => a.FlagOf(i.Group) is null).Select(a => a.Node));
+                return StepPlan.Wait("stage_pending", $"flag_view:{nodes}");
+            }
         }
 
         return i.DurZeroFor >= options.DurRetry
@@ -54,4 +66,12 @@ internal static partial class StepPlanner
             _ => true,
         };
     }
+
+    private static int? ForwardLevel(string kind) => kind switch
+    {
+        "X1" or "X2" or "X3" => 3,
+        "X4" => 4,
+        "X5" => 5,
+        _ => null,
+    };
 }

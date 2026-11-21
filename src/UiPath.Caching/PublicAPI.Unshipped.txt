@@ -50,5 +50,5 @@ UiPath.Caching.PhaseB.IMigrationStageSource
 UiPath.Caching.PhaseB.IMigrationStageSource.GetStageAsync(string! group, System.Threading.CancellationToken cancellationToken) -> System.Threading.Tasks.ValueTask<int?>
 UiPath.Caching.PhaseB.IntFlagStageSource
 UiPath.Caching.PhaseB.IntFlagStageSource.GetStageAsync(string! group, System.Threading.CancellationToken cancellationToken) -> System.Threading.Tasks.ValueTask<int?>
-UiPath.Caching.PhaseB.IntFlagStageSource.IntFlagStageSource(System.Func<string!, System.Threading.CancellationToken, System.Threading.Tasks.ValueTask<int>>! getInt) -> void
+UiPath.Caching.PhaseB.IntFlagStageSource.IntFlagStageSource(System.Func<string!, int, System.Threading.CancellationToken, System.Threading.Tasks.ValueTask<int>>! getInt) -> void
 const UiPath.Caching.PhaseB.IntFlagStageSource.Sentinel = -1 -> int

@@ -9,6 +9,8 @@ namespace UiPath.Caching.Tests.PhaseB;
 [Trait("Category", "Integration")]
 public class StageDriverFlipTests(RedisContainerFixture fixture)
 {
+    private static readonly TimeSpan Ten = TimeSpan.FromSeconds(10);
+
     [Fact]
     public async Task A_flip_back_before_step_4_abandons_the_transition_to_the_last_committed_state_at_once()
     {
@@ -39,11 +41,12 @@ public class StageDriverFlipTests(RedisContainerFixture fixture)
         await kit.Kit.Db.HashSetAsync(kit.Kit.StateKey, [new HashEntry("dur", "0"), new HashEntry("prev", StateRecord.FormatPrev(ready.State, ready.Direction, ready.NPop, ready.Ep, ready.Id))]);
         kit.Fleet.All(n => n.Fl = 2);
 
+        (await kit.StepAsync(Ten))!.Plan.Kind.Should().Be(StepKind.None, "step 4 began, so the leader neither abandons nor hurries");
         var outcome = await kit.StepAsync();
 
-        outcome!.Plan.Kind.Should().Be(StepKind.Abandon);
+        outcome!.Plan.Kind.Should().Be(StepKind.Resume);
         var after = await kit.StateAsync();
-        after.Should().Match<StateRecord>(s => s.State == "S3" && s.Id == target.Id && s.Durable, "the abandon is refused past step 4 and the transition is completed");
+        after.Should().Match<StateRecord>(s => s.State == "S3" && s.Id == target.Id && s.Durable, "the transition is completed and the flag is read again from the new state");
     }
 
     [Fact]

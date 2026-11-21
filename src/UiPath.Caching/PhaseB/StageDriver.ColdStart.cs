@@ -14,22 +14,22 @@ internal sealed partial class StageDriver
             if (marker.Length == 0)
             {
                 marker = state.Claim.Length > 0 ? state.Claim : NoClaim;
-                if (await services.Scripts.FieldsAsync(key, state.Id, [(StateFields.ColdStart, marker)], []).ConfigureAwait(false) != MoveScripts.Written)
+                if (await services.Scripts.FieldsAsync(key, state.Id, [(StateFields.ColdStart, marker)], [], Fence(group)).ConfigureAwait(false) != MoveScripts.Written)
                 {
                     return null;
                 }
             }
 
             // Before the sweep stored lswept the claim field is still open and needs no reopen.
-            if (marker != NoClaim && state.Swept == state.Id && await services.Claim.ReopenAsync(group, marker, cancellationToken).ConfigureAwait(false) != ClaimOutcome.Done)
+            if (marker != NoClaim && state.Swept == state.Id && await services.Claim.ReopenAsync(group, marker, Fence(group), cancellationToken).ConfigureAwait(false) != ClaimOutcome.Done)
             {
-                services.Alert?.Invoke(group, "abandon_refused", "the move claim could not be reopened");
+                Notify(group, "abandon_refused", "the move claim could not be reopened");
                 return null;
             }
 
             var ep = state.Ep + 1;
             var target = new StateTarget("S0", "none", 0, ep, MoveScripts.NewNonce(), StateRecord.FormatPrev(state.State, state.Direction, state.NPop, state.Ep, state.Id), time.GetUtcNow().ToUnixTimeMilliseconds());
-            return await services.Sequence.RunAsync(group, StateExpectation.Holding(state.Ep, state.Id, 1), target, new SequenceOptions(Ledger: services.Ledger, HoldsLease: () => services.HoldsLease(group), Fence: services.Fence?.Invoke(group)), cancellationToken).ConfigureAwait(false);
+            return await services.Sequence.RunAsync(group, StateExpectation.Holding(state.Ep, state.Id, 1), target, new SequenceOptions(Ledger: services.Ledger, HoldsLease: () => services.HoldsLease(group), Fence: Fence(group)), cancellationToken).ConfigureAwait(false);
         }
 
         return await PurgeAfterFlipAsync(group, state, marker, input, cancellationToken).ConfigureAwait(false);
@@ -41,30 +41,35 @@ internal sealed partial class StageDriver
         var waiting = input.Fresh.Where(a => !a.Acknowledges(group, state) || a.Recycled(group) != state.Ep).Select(a => a.Node).ToArray();
         if (input.Fresh.Count == 0 || waiting.Length > 0)
         {
-            services.Alert?.Invoke(group, "stage_pending", $"recycle:{string.Join(',', waiting)}");
+            Notify(group, "stage_pending", $"recycle:{string.Join(',', waiting)}");
             return null;
         }
 
-        await services.Data.PurgeNativeAsync(group, cancellationToken).ConfigureAwait(false);
-        await services.Data.PurgeLegacyAsync(group, cancellationToken).ConfigureAwait(false);
+        if (await GuardAsync(group, state.Id).ConfigureAwait(false) is not { } guard)
+        {
+            return null;
+        }
+
+        await services.Data.PurgeNativeAsync(group, guard, cancellationToken).ConfigureAwait(false);
+        await services.Data.PurgeLegacyAsync(group, guard, cancellationToken).ConfigureAwait(false);
         var key = services.Names.State(group);
         if (marker != NoClaim)
         {
-            if (await services.Claim.CertifyAsync(group, marker, state.Ep, "S0", cancellationToken).ConfigureAwait(false) == ClaimOutcome.Failed)
+            if (await services.Claim.CertifyAsync(group, marker, state.Ep, "S0", Fence(group), cancellationToken).ConfigureAwait(false) == ClaimOutcome.Failed)
             {
-                services.Alert?.Invoke(group, "claim_release_failed", marker);
+                Notify(group, "claim_release_failed", marker);
                 return null;
             }
 
-            await services.Scripts.FieldsAsync(key, state.Id, [(StateFields.Release, $"{marker}:{state.Ep}:S0")], []).ConfigureAwait(false);
-            if (await services.Claim.ReleaseIdleAsync(group, marker, cancellationToken).ConfigureAwait(false) == ClaimOutcome.Failed)
+            await services.Scripts.FieldsAsync(key, state.Id, [(StateFields.Release, $"{marker}:{state.Ep}:S0")], [], Fence(group)).ConfigureAwait(false);
+            if (await services.Claim.ReleaseIdleAsync(group, marker, Fence(group), cancellationToken).ConfigureAwait(false) == ClaimOutcome.Failed)
             {
-                services.Alert?.Invoke(group, "claim_release_failed", marker);
+                Notify(group, "claim_release_failed", marker);
                 return null;
             }
         }
 
-        await services.Scripts.FieldsAsync(key, state.Id, [], [StateFields.ColdStart]).ConfigureAwait(false);
+        await services.Scripts.FieldsAsync(key, state.Id, [], [StateFields.ColdStart], Fence(group)).ConfigureAwait(false);
         return new TransitionResult(TransitionOutcome.Completed);
     }
 }

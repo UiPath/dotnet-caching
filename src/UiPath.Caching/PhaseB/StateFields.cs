@@ -27,4 +27,5 @@ internal static class StateFields
     public const string ClosedAt = "closedAt";
     public const string DryRun = "dry";
     public const string ColdStart = "x11";
+    public const string CanaryAt = "canaryAt";
 }

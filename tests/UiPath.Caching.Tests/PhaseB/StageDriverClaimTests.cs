@@ -25,7 +25,7 @@ public class StageDriverClaimTests(RedisContainerFixture fixture)
     }
 
     [Fact]
-    public async Task A_refused_pend_starts_nothing_and_a_refused_open_abandons_X1_and_releases_the_claim_with_its_certificate()
+    public async Task A_refused_pend_starts_nothing_and_a_refused_open_abandons_X1_and_releases_the_pending_claim_idle_with_no_certificate()
     {
         await using var kit = await DriverKit.CreateAsync(fixture);
         kit.Facts.Claims = true;
@@ -44,9 +44,9 @@ public class StageDriverClaimTests(RedisContainerFixture fixture)
         outcome!.Plan.Spec!.Code.Should().Be("X1");
         var after = await kit.StateAsync();
         after.Should().Match<StateRecord>(s => s.State == "S0" && s.Durable);
-        kit.Claim.Calls.Should().Equal("pend:rt", "open", "cert:S0", "idle");
-        after.Claim.Should().NotBeEmpty();
-        after.Release.Should().Be($"{after.Claim}:{after.Ep}:S0");
+        kit.Claim.Calls.Should().Equal("pend:rt", "open", "idle");
+        after.Claim.Should().BeEmpty("a claim that never opened has no certificate and its token is dropped");
+        after.Release.Should().BeEmpty();
     }
 
     [Fact]
@@ -176,6 +176,58 @@ public class StageDriverClaimTests(RedisContainerFixture fixture)
 
         (await kit.StateAsync()).Should().Match<StateRecord>(s => s.State == "S5" && s.Ep == closed.Ep);
         kit.Alerts.Should().Contain(a => a.Code == "abandon_refused");
+    }
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task The_abandon_of_X1_certifies_an_open_claim_and_only_releases_a_pending_one(bool open)
+    {
+        await using var kit = await DriverKit.CreateAsync(fixture);
+        kit.Facts.Claims = true;
+        await kit.PrepareAsync();
+        var off = await kit.StateAsync();
+        var target = StateKit.TargetFrom(off, "S1", "fwd", 0) with { Claim = "tok", Move = "rt", MoveId = off.Ep + 1 };
+        await kit.Kit.Scripts.TransitAsync(kit.Kit.StateKey, StateKit.Expecting(off), target);
+        kit.Claim.ForcedStatus = open ? ClaimStatus.Open : ClaimStatus.Pending;
+        kit.Fleet.Nodes[0].Fl = 2;
+
+        var outcome = await kit.StepAsync();
+
+        outcome!.Plan.Kind.Should().Be(StepKind.Abandon);
+        var after = await kit.StateAsync();
+        after.Should().Match<StateRecord>(s => s.State == "S0" && s.Durable);
+        if (open)
+        {
+            kit.Claim.Calls.Should().Equal("cert:S0", "idle");
+            after.Release.Should().Be($"tok:{after.Ep}:S0");
+            after.Claim.Should().Be("tok");
+        }
+        else
+        {
+            kit.Claim.Calls.Should().Equal("idle");
+            after.Release.Should().BeEmpty();
+            after.Claim.Should().BeEmpty();
+        }
+    }
+
+    [Fact]
+    public async Task Every_claim_call_carries_the_lease_fence()
+    {
+        await using var kit = await DriverKit.CreateAsync(fixture);
+        kit.Facts.Claims = true;
+        var key = kit.Kit.Names.Lead(kit.Group);
+        var lease = new LeaderLease(kit.Kit.Scripts, key, kit.Kit.Options, kit.Kit.Time);
+        await lease.TryHoldAsync();
+        kit.Fence = lease.Fence;
+        await kit.PrepareAsync();
+        await kit.StepUntilAsync("S1");
+        kit.Fleet.Nodes[0].Fl = 2;
+        await kit.StepUntilAsync("S0", "none", advance: Ten);
+
+        kit.Claim.Calls.Should().NotBeEmpty();
+        kit.Claim.Fences.Should().OnlyContain(f => f == lease.Fence);
+        await kit.Kit.Db.KeyDeleteAsync(key);
     }
 
     private static async Task<StateRecord> ToClosedAsync(DriverKit kit)

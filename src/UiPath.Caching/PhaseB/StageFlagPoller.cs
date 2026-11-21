@@ -13,7 +13,17 @@ internal sealed class StageFlagPoller(IMigrationStageSource source, Func<string,
     /// <summary>The last value read, null before the first successful read: a pod with no view advertises no <c>fl</c>.</summary>
     public int? ViewOf(string group) => _views.TryGetValue(group, out var value) ? value : null;
 
-    public TimeSpan IntervalFor(string group) => isActive(group) ? options.PollInterval : options.SlowPollInterval;
+    public TimeSpan IntervalFor(string group)
+    {
+        try
+        {
+            return isActive(group) ? options.PollInterval : options.SlowPollInterval;
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            return options.SlowPollInterval;
+        }
+    }
 
     public void Start(IEnumerable<string> groups, CancellationToken cancellationToken)
     {
@@ -38,9 +48,12 @@ internal sealed class StageFlagPoller(IMigrationStageSource source, Func<string,
     public async Task<bool> StepAsync(string group, CancellationToken cancellationToken)
     {
         var bound = IntervalFor(group);
+        using var timeout = new CancellationTokenSource(bound, time);
+        using var linked = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, timeout.Token);
         try
         {
-            var value = await source.GetStageAsync(group, cancellationToken).AsTask().WaitAsync(bound, time, cancellationToken).ConfigureAwait(false);
+            // The source sees the timeout token, so a call that honours it stops; one that does not is left behind by the wait.
+            var value = await source.GetStageAsync(group, linked.Token).AsTask().WaitAsync(bound, time, cancellationToken).ConfigureAwait(false);
             if (value is >= 0 and <= 5)
             {
                 _views[group] = value.Value;
@@ -65,7 +78,7 @@ internal sealed class StageFlagPoller(IMigrationStageSource source, Func<string,
                 await Task.Delay(IntervalFor(group), time, cancellationToken).ConfigureAwait(false);
             }
         }
-        catch (OperationCanceledException)
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
             // Stopped.
         }

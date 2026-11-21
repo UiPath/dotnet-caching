@@ -28,15 +28,46 @@ public class StepPlannerFlightTests
     }
 
     [Fact]
-    public async Task A_transition_still_asked_is_resumed_only_after_DurRetry_and_a_pod_without_a_view_does_not_abandon_it()
+    public async Task A_transition_still_asked_is_resumed_only_after_DurRetry()
     {
         var x2 = InFlight("S2", "fwd", "S1:fwd:0:11:id11");
-        var fresh = new[] { Advert("n1", fl: 3), Advert("n2", fl: null) };
 
-        (await DecideAsync(Input(x2, fresh, Verdict(min: 3, missing: true), durZero: TimeSpan.FromSeconds(9)))).Kind.Should().Be(StepKind.None);
-        var resumed = await DecideAsync(Input(x2, fresh, Verdict(min: 3, missing: true), durZero: TimeSpan.FromSeconds(10)));
+        (await DecideAsync(Input(x2, Fleet(fl: 3), Verdict(min: 3), durZero: TimeSpan.FromSeconds(9)))).Kind.Should().Be(StepKind.None);
+        var resumed = await DecideAsync(Input(x2, Fleet(fl: 3), Verdict(min: 3), durZero: TimeSpan.FromSeconds(10)));
         resumed.Kind.Should().Be(StepKind.Resume);
         resumed.SkipBarriers.Should().BeFalse();
+    }
+
+    [Theory]
+    [InlineData("S1", "fwd", "S0:none:0:11:id11")]
+    [InlineData("S2", "fwd", "S1:fwd:0:11:id11")]
+    [InlineData("S3", "fwd", "S2:fwd:0:11:id11")]
+    public async Task A_forward_transition_before_step_4_is_not_resumed_while_a_pod_has_no_view_or_no_advert_is_fresh(string state, string direction, string prev)
+    {
+        var flight = InFlight(state, direction, prev);
+        var missing = new[] { Advert("n1", fl: 3), Advert("n2", fl: null) };
+
+        var blocked = await DecideAsync(Input(flight, missing, Verdict(min: 3, missing: true), durZero: TimeSpan.FromMinutes(5)));
+        blocked.Kind.Should().Be(StepKind.None);
+        blocked.AlertList.Should().ContainSingle().Which.Should().Be(new StageAlert("stage_pending", "flag_view:n2"));
+
+        var nobody = await DecideAsync(Input(flight, [], Verdict(min: null, fresh: 0), durZero: TimeSpan.FromMinutes(5)));
+        nobody.Kind.Should().Be(StepKind.None);
+
+        var allMissing = await DecideAsync(Input(flight, [Advert("n1", fl: null)], Verdict(min: null, fresh: 1, missing: true), durZero: TimeSpan.FromMinutes(5)));
+        allMissing.Kind.Should().Be(StepKind.None, "a pod that never read F15 is not a view at or above the stage");
+    }
+
+    [Fact]
+    public async Task A_transition_whose_step_4_began_is_completed_even_when_pods_show_no_view_and_is_never_abandoned()
+    {
+        var begun = InFlight("S2", "fwd", "S1:fwd:0:11:id11").With((StateFields.CommitBegun, "id12"));
+
+        var missing = await DecideAsync(Input(begun, [Advert("n1", fl: null)], Verdict(min: null, fresh: 1, missing: true), durZero: TimeSpan.FromSeconds(10)));
+        missing.Kind.Should().Be(StepKind.Resume);
+
+        var lowered = await DecideAsync(Input(begun, Fleet(fl: 1), Verdict(min: 1), durZero: TimeSpan.FromSeconds(10)));
+        lowered.Kind.Should().Be(StepKind.Resume);
     }
 
     [Fact]

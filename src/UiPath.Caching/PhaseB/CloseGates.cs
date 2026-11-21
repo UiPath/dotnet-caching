@@ -15,14 +15,17 @@ internal static class CloseGates
             failures.Add(new GateFailure("C1", string.Join(',', i.Fresh.Where(a => !a.Acknowledges(i.Group, state)).Select(a => a.Node))));
         }
 
-        var drainedAt = long.TryParse(state.Field(StateFields.DrainedAt), out var ms) ? DateTimeOffset.FromUnixTimeMilliseconds(ms) : (DateTimeOffset?)null;
-        if (drainedAt is null || i.Now - drainedAt < options.DrainedSoak)
+        var soak = i.Facts.LongestSourceTtl(i.Group) is { } ttl && ttl < options.DrainedSoak ? ttl : options.DrainedSoak;
+        var drainedAt = Moment(state.Field(StateFields.DrainedAt));
+        if (drainedAt is null || i.Now - drainedAt < soak)
         {
             Overridable("C2", drainedAt is null ? "drained_at_unknown" : "soak", forced, failures, overrides);
         }
 
+        // C3: no key written after S3 was counted for the whole soak, so the last pass that counted one is older than it; a mover with no report adds no evidence either way.
+        var canaryAt = Moment(state.Field(StateFields.CanaryAt));
         var drain = await i.Drain().ConfigureAwait(false);
-        if (drain is null || drain.Canary > 0)
+        if ((drain is { Canary: > 0 }) || (canaryAt is not null && i.Now - canaryAt < soak))
         {
             Overridable("C3", "canary", forced, failures, overrides);
         }
@@ -84,4 +87,6 @@ internal static class CloseGates
             failures.Add(new GateFailure(gate, reason));
         }
     }
+
+    private static DateTimeOffset? Moment(string text) => long.TryParse(text, out var ms) ? DateTimeOffset.FromUnixTimeMilliseconds(ms) : null;
 }

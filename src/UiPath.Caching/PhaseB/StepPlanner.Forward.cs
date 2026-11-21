@@ -15,7 +15,7 @@ internal static partial class StepPlanner
             ("S5", _) => FromClosed(i, options),
             ("S1", "rev") => FromReverseReady(i),
             ("S3", "rev") => await FromReverseMovingAsync(i).ConfigureAwait(false),
-            ("S4", "rev") => FromReverseDrained(i),
+            ("S4", "rev") => FromReverseDrained(i, side),
             _ => StepPlan.Wait("unknown_state", $"{state.State}:{state.Direction}"),
         };
     }
@@ -80,7 +80,7 @@ internal static partial class StepPlanner
         var noOrigin = i.Facts.HasNoOrigin(i.Group, i.State.CacheIds);
         if (!noOrigin && i.ViewStable < options.AckStable)
         {
-            return StepPlan.Wait("stage_pending", $"ack_stable:{Number((long)(options.AckStable - i.ViewStable).TotalSeconds)}s");
+            return StepPlan.Wait("stage_pending", "ack_stable");
         }
 
         if (await StartGates.ReplicasAsync(i).ConfigureAwait(false) is { } preflight)

@@ -5,7 +5,10 @@ namespace UiPath.Caching.PhaseB;
 /// <summary>The leader's loop for each group: reads the state and the fresh adverts, asks the step logic for the next step, and runs it, checking the lease before every write.</summary>
 internal sealed partial class StageDriver(StageDriverServices services, StageDriverOptions options, PhaseBStateOptions stateOptions, FlagViews flags, ViewStability stability, TimeProvider time)
 {
+    private static readonly TimeSpan DirectAlertEvery = TimeSpan.FromMinutes(1);
+
     private readonly ConcurrentDictionary<string, GroupMemory> _memory = new(StringComparer.Ordinal);
+    private readonly ConcurrentDictionary<string, long> _notified = new(StringComparer.Ordinal);
     private CancellationTokenSource? _stop;
     private Task[] _loops = [];
 
@@ -66,15 +69,16 @@ internal sealed partial class StageDriver(StageDriverServices services, StageDri
                 {
                     await StepAsync(group, cancellationToken).ConfigureAwait(false);
                 }
-                catch (Exception ex) when (ex is RedisException or TimeoutException)
+                catch (Exception ex) when (!cancellationToken.IsCancellationRequested)
                 {
-                    services.Alert?.Invoke(group, "step_failed", ex.Message);
+                    // Whatever failed, the group's loop goes on: a leader that stops stepping silently leaves the group where it is.
+                    Notify(group, "step_failed", ex.Message);
                 }
 
                 await Task.Delay(options.StepInterval, time, cancellationToken).ConfigureAwait(false);
             }
         }
-        catch (OperationCanceledException)
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
             // Stopped.
         }
@@ -111,6 +115,22 @@ internal sealed partial class StageDriver(StageDriverServices services, StageDri
 
     private async Task<IReadOnlyList<NodeAdvert>> FreshAsync(CancellationToken cancellationToken) =>
         [.. (await services.Adverts.ReadAsync(cancellationToken).ConfigureAwait(false)).Where(a => a.Age <= options.AdvertFresh)];
+
+    private LeaseFence? Fence(string group) => services.Fence?.Invoke(group);
+
+    // The alerts the steps raise directly repeat on every step while their cause stands, so each is sent once a minute.
+    private void Notify(string group, string code, string detail)
+    {
+        var key = $"{group}|{code}|{detail}";
+        var now = time.GetTimestamp();
+        if (_notified.TryGetValue(key, out var sent) && time.GetElapsedTime(sent, now) < DirectAlertEvery)
+        {
+            return;
+        }
+
+        _notified[key] = now;
+        services.Alert?.Invoke(group, code, detail);
+    }
 
     private void RaiseAlerts(string group, GroupMemory memory, IReadOnlyList<StageAlert> alerts)
     {

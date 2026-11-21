@@ -92,6 +92,12 @@ public class NodeAdvertTests
         list.Should().Equal("pb", "pbg=g1", "ca=g1:a", "g1@0", "pi=g1:0");
     }
 
+    [Fact]
+    public void A_view_above_5_reads_as_5()
+    {
+        new NodeAdvert("n", TimeSpan.Zero, ["fl=g1:9"]).FlagOf(Group).Should().Be(5);
+    }
+
     private sealed class Flags(int? value) : IMigrationStageSource
     {
         public ValueTask<int?> GetStageAsync(string group, CancellationToken cancellationToken) => ValueTask.FromResult(value);

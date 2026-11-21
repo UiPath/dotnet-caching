@@ -40,14 +40,30 @@ internal static partial class StepPlanner
             pending.Add("D3");
         }
 
-        return pending.Count > 0
-            ? StepPlan.Wait("stage_pending", $"drained:{string.Join(',', pending)}")
-            : new StepPlan(StepKind.Transit, new TransitionSpec("X9", "S4", "rev", 1, WayBack: true));
+        if (pending.Count > 0)
+        {
+            return StepPlan.Wait("stage_pending", $"drained:{string.Join(',', pending)}");
+        }
+
+        // The residue of the reverse is the census of N: it replaces whatever the forward move stored.
+        var (post, delete) = ResidueFields(i.State, drain!.Residue);
+        return new StepPlan(StepKind.Transit, new TransitionSpec("X9", "S4", "rev", 1, WayBack: true, PostFields: post, PostDelete: delete));
     }
 
-    // X10: after the stored release consent, N is swept and the group flips to S0.
-    private static StepPlan FromReverseDrained(StepInput i) =>
-        Approval.ValidFor(i.State, ApprovalKinds.Release) is null
+    // X10: after the stored release consent, N is swept and the group flips to S0. A census that differs from the stored counts is written first, and the consent then no longer covers it.
+    private static StepPlan FromReverseDrained(StepInput i, StepSide side) =>
+        side.Fields.Any(f => f.Field.StartsWith(StateFields.ResiduePrefix, StringComparison.Ordinal))
+            ? StepPlan.Wait("stage_pending", "release_census_changed")
+            : i.State.CacheIds.Where(c => i.State.Residue is null || !i.State.Residue.ContainsKey(c)).ToArray() is { Length: > 0 } unknown
+            ? StepPlan.Wait("stage_pending", $"release_residue_unknown:{string.Join(',', unknown)}")
+            : Approval.ValidFor(i.State, ApprovalKinds.Release) is null
             ? StepPlan.Wait("stage_pending", "release_consent")
             : new StepPlan(StepKind.Transit, new TransitionSpec("X10", "S0", "none", 0, WayBack: true, ReleaseClaim: i.State.Claim.Length > 0, Pre: PreStep.SweepNative));
+
+    private static (List<(string Field, string Value)> Set, List<string> Delete) ResidueFields(StateRecord state, IReadOnlyDictionary<string, long> residue)
+    {
+        var set = residue.Select(r => (StateFields.ResiduePrefix + r.Key, Number(r.Value))).ToList();
+        var delete = (state.Residue?.Keys ?? []).Where(c => !residue.ContainsKey(c)).Select(c => StateFields.ResiduePrefix + c).ToList();
+        return (set, delete);
+    }
 }

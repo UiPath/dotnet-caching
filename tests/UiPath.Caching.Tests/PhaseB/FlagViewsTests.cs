@@ -98,6 +98,21 @@ public class FlagViewsTests
     }
 
     [Fact]
+    public void A_pod_that_joins_showing_the_level_restarts_the_confirmation_of_every_view()
+    {
+        var views = Views();
+        var old = new[] { Advert("n1", fl: 5), Advert("n2", fl: 5) };
+        views.Sample(Group, old, 4, confirmLevel: 5);
+        _time.Advance(TimeSpan.FromMinutes(3));
+        views.Sample(Group, old, 4, confirmLevel: 5).Confirmed.Should().Be(TimeSpan.FromMinutes(3));
+
+        views.Sample(Group, [.. old, Advert("n3", fl: 5)], 4, confirmLevel: 5).Confirmed.Should().Be(TimeSpan.Zero);
+        _time.Advance(TimeSpan.FromSeconds(30));
+
+        views.Sample(Group, [.. old, Advert("n3", fl: 5)], 4, confirmLevel: 5).Confirmed.Should().Be(TimeSpan.FromSeconds(30), "the least time any pod has shown 5");
+    }
+
+    [Fact]
     public void A_pod_that_has_not_read_the_flag_does_not_count_as_confirmed()
     {
         var views = Views();

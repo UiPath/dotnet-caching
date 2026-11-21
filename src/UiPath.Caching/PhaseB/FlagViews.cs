@@ -30,23 +30,24 @@ internal sealed class FlagViews(StageDriverOptions options, TimeProvider time)
 
             foreach (var (node, view) in views)
             {
-                samples.Nodes[node] = Advance(samples.Nodes.GetValueOrDefault(node), view, stageFlag, now);
+                samples.Nodes[node] = Advance(samples.Nodes.GetValueOrDefault(node), view, stageFlag, confirmLevel, now);
             }
 
             var missing = views.Any(v => v.View is null);
             var known = views.Where(v => v.View is not null).Select(v => v.View!.Value).ToArray();
             var lowered = Lowered(samples, stageFlag, now);
-            var confirmed = Confirmed(samples, views.Select(v => v.View).ToArray(), confirmLevel, now);
+            var confirmed = Confirmed(samples, confirmLevel, now);
             return new FlagVerdict(views.Length, missing, known.Length == 0 ? null : known.Min(), lowered, confirmed);
         }
     }
 
-    private static NodeSample Advance(NodeSample? previous, int? view, int stageFlag, long now)
+    private static NodeSample Advance(NodeSample? previous, int? view, int stageFlag, int? confirmLevel, long now)
     {
         var below = view is { } v && v < stageFlag;
         var belowSince = below ? previous?.BelowSince ?? now : (long?)null;
         var valueSince = previous is not null && previous.View == view ? previous.ValueSince : now;
-        return new NodeSample(view, belowSince, valueSince);
+        long? levelSince = confirmLevel is { } level && view >= level ? previous?.LevelSince ?? now : null;
+        return new NodeSample(view, belowSince, valueSince, levelSince);
     }
 
     // Some node must have stayed below the stage for the hold; the way back goes to the lowest view that persisted for the hold.
@@ -59,34 +60,23 @@ internal sealed class FlagViews(StageDriverOptions options, TimeProvider time)
         return persisted.Length == 0 ? null : persisted.Min();
     }
 
-    private TimeSpan Confirmed(GroupSamples samples, int?[] views, int? level, long now)
+    // Confirmation is per pod: the least time any fresh pod has shown the level, so a pod that joins restarts it.
+    private TimeSpan Confirmed(GroupSamples samples, int? level, long now)
     {
-        if (samples.ConfirmLevel != level)
+        if (level is null || samples.Nodes.Count == 0 || samples.Nodes.Values.Any(n => n.LevelSince is null))
         {
-            samples.ConfirmSince = null;
-            samples.ConfirmLevel = level;
-        }
-
-        if (level is not { } wanted || views.Length == 0 || views.Any(v => v is null || v < wanted))
-        {
-            samples.ConfirmSince = null;
             return TimeSpan.Zero;
         }
 
-        samples.ConfirmSince ??= now;
-        return time.GetElapsedTime(samples.ConfirmSince.Value, now);
+        return samples.Nodes.Values.Min(n => time.GetElapsedTime(n.LevelSince!.Value, now));
     }
 
-    private sealed record NodeSample(int? View, long? BelowSince, long ValueSince);
+    private sealed record NodeSample(int? View, long? BelowSince, long ValueSince, long? LevelSince);
 
     private sealed class GroupSamples
     {
         public Dictionary<string, NodeSample> Nodes { get; } = new(StringComparer.Ordinal);
 
         public int StageFlag { get; set; } = -1;
-
-        public long? ConfirmSince { get; set; }
-
-        public int? ConfirmLevel { get; set; }
     }
 }

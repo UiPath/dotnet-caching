@@ -10,6 +10,8 @@ internal sealed class SimulatedFleet(StateStore store, string group) : IAdvertSo
 
     public List<FleetNode> Nodes { get; } = [new FleetNode("n1"), new FleetNode("n2")];
 
+    public Exception? Fail { get; set; }
+
     public int Reads => Volatile.Read(ref _reads);
 
     public void All(Action<FleetNode> change) => Nodes.ForEach(change);
@@ -20,6 +22,11 @@ internal sealed class SimulatedFleet(StateStore store, string group) : IAdvertSo
     public async Task<IReadOnlyList<NodeAdvert>> ReadAsync(CancellationToken cancellationToken)
     {
         var count = Interlocked.Increment(ref _reads);
+        if (Fail is { } failure)
+        {
+            throw failure;
+        }
+
         if (_hook is { } hook && count > hook.After)
         {
             _hook = null;

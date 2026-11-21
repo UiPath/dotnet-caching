@@ -9,6 +9,7 @@ internal sealed partial class MoveScripts
     public const long LeaseHeldByAnother = 0;
 
     private const string HoldSetScript = """
+        if #KEYS > 1 and redis.call('GET', KEYS[2]) ~= ARGV[3] then return -7 end
         if redis.call('EXISTS', KEYS[1]) == 0 then return 0 end
         redis.call('HSET', KEYS[1], ARGV[1], ARGV[2])
         return 1
@@ -47,10 +48,10 @@ internal sealed partial class MoveScripts
     }
 
     /// <summary>Sets a hold field on an existing state hash and never creates the hash.</summary>
-    /// <returns>1 written (also a repeat); 0 when there is no hash.</returns>
-    public async Task<long> HoldSetAsync(RedisKey state, string field, string reason)
+    /// <returns>1 written (also a repeat); 0 when there is no hash; <see cref="LeaseNotHeld"/> when a fence is given and its lease is not the caller's.</returns>
+    public async Task<long> HoldSetAsync(RedisKey state, string field, string reason, LeaseFence? fence = null)
     {
-        var reply = await EvaluateAsync(HoldSetScript, [state], [field, reason]).ConfigureAwait(false);
+        var reply = await EvaluateAsync(HoldSetScript, KeysOf(state, fence), [field, reason, fence?.Token ?? string.Empty]).ConfigureAwait(false);
         if (reply is not null)
         {
             return (long)reply;
@@ -58,6 +59,11 @@ internal sealed partial class MoveScripts
 
         return await WatchedAsync(async () =>
         {
+            if (fence is not null && !await HoldsFenceAsync(fence).ConfigureAwait(false))
+            {
+                return LeaseNotHeld;
+            }
+
             if (!await _db.KeyExistsAsync(state, Master).ConfigureAwait(false))
             {
                 return ExpectationFailed;
@@ -65,6 +71,7 @@ internal sealed partial class MoveScripts
 
             var transaction = _db.CreateTransaction();
             var queued = new List<Task>();
+            AddFence(transaction, fence);
             transaction.AddCondition(Condition.KeyExists(state));
             queued.Add(transaction.HashSetAsync(state, field, reason, When.Always, Master));
             return await ExecuteAllAsync(transaction, queued).ConfigureAwait(false) ? Written : null;

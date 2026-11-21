@@ -12,6 +12,12 @@ internal interface IGroupFacts
     /// <summary>The group takes the move claim at X1 (a router group).</summary>
     bool TakesClaim(string group);
 
+    /// <summary>The kind of claim the group takes, as the <c>mv</c> descriptor.</summary>
+    string ClaimDescriptor(string group);
+
+    /// <summary>The longest <c>MaxSourceTtl</c> of the group's caches, which caps the DRAINED soak; null when unknown.</summary>
+    TimeSpan? LongestSourceTtl(string group);
+
     /// <summary>Every cache of the group registered <c>AcceptRefill</c>, which X11 needs.</summary>
     bool AllAcceptRefill(string group, IReadOnlyList<string> cacheIds);
 

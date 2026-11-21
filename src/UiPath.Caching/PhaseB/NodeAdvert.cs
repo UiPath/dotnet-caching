@@ -33,7 +33,7 @@ internal sealed record NodeAdvert(string Node, TimeSpan Age, IReadOnlyList<strin
     public bool Lists(string group) => Has($"pbg={group}");
 
     /// <summary>The F15 view the node advertised, or null when it has not read the flag.</summary>
-    public int? FlagOf(string group) => Int(Value("fl=", group));
+    public int? FlagOf(string group) => Int(Value("fl=", group)) is { } view ? Math.Min(view, 5) : null;
 
     public int? PromotionUnits(string group) => Int(Value("pi=", group));
 

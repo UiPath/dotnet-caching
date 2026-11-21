@@ -20,25 +20,50 @@ public class StageFlagPollerTests
     [InlineData(int.MaxValue, null)]
     public async Task The_int_flag_helper_maps_the_sentinel_and_every_value_outside_0_to_5_to_null(int value, int? expected)
     {
-        var source = new IntFlagStageSource((_, _) => ValueTask.FromResult(value));
+        var source = new IntFlagStageSource((_, _, _) => ValueTask.FromResult(value));
 
         (await source.GetStageAsync(Group, CancellationToken.None)).Should().Be(expected);
     }
 
     [Fact]
-    public async Task The_helper_passes_the_group_through_to_the_getter_and_the_sentinel_is_minus_one()
+    public async Task The_helper_hands_the_getter_the_group_and_the_sentinel_as_its_default_so_a_failed_evaluation_is_null()
     {
         string? asked = null;
-        var source = new IntFlagStageSource((group, _) =>
+        int? offered = null;
+        var source = new IntFlagStageSource((group, defaultValue, _) =>
         {
             asked = group;
-            return ValueTask.FromResult(IntFlagStageSource.Sentinel);
+            offered = defaultValue;
+            return ValueTask.FromResult(defaultValue);
         });
 
-        (await source.GetStageAsync("orders", CancellationToken.None)).Should().BeNull();
+        (await source.GetStageAsync("orders", CancellationToken.None)).Should().BeNull("a flag system that returns its default on a failed read is a read that failed");
 
         asked.Should().Be("orders");
-        IntFlagStageSource.Sentinel.Should().Be(-1);
+        offered.Should().Be(-1);
+    }
+
+    [Fact]
+    public async Task The_source_is_given_a_token_that_the_poll_interval_cancels_so_a_call_that_honours_it_stops()
+    {
+        var seen = new TaskCompletionSource<CancellationToken>();
+        var poller = Poller(new Source(() => null)
+        {
+            GateWithToken = token =>
+            {
+                seen.TrySetResult(token);
+                return new TaskCompletionSource<int?>().Task;
+            },
+        });
+        var step = poller.StepAsync(Group, CancellationToken.None);
+        var token = await seen.Task;
+        token.IsCancellationRequested.Should().BeFalse();
+
+        await TimeSteps.ArmedAsync(_time);
+        _time.Advance(TimeSpan.FromSeconds(2));
+
+        (await step).Should().BeFalse();
+        token.IsCancellationRequested.Should().BeTrue();
     }
 
     [Fact]
@@ -130,7 +155,9 @@ public class StageFlagPollerTests
     {
         public Func<Task<int?>>? Gate { get; init; }
 
+        public Func<CancellationToken, Task<int?>>? GateWithToken { get; init; }
+
         public ValueTask<int?> GetStageAsync(string group, CancellationToken cancellationToken) =>
-            Gate is { } gate ? new ValueTask<int?>(gate()) : ValueTask.FromResult(read());
+            GateWithToken is { } withToken ? new ValueTask<int?>(withToken(cancellationToken)) : Gate is { } gate ? new ValueTask<int?>(gate()) : ValueTask.FromResult(read());
     }
 }

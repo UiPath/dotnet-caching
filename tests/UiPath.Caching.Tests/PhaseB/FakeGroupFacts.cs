@@ -18,9 +18,15 @@ internal sealed class FakeGroupFacts : IGroupFacts
 
     public bool ReleaseFloorAttested { get; set; }
 
+    public TimeSpan? SourceTtl { get; set; }
+
     public bool HasNoOrigin(string group, IReadOnlyList<string> cacheIds) => NoOrigin;
 
     public bool TakesClaim(string group) => Claims;
+
+    public string ClaimDescriptor(string group) => "rt";
+
+    public TimeSpan? LongestSourceTtl(string group) => SourceTtl;
 
     public bool AllAcceptRefill(string group, IReadOnlyList<string> cacheIds) => AcceptRefill;
 

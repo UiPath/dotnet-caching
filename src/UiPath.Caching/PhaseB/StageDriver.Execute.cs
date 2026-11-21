@@ -4,7 +4,6 @@ internal sealed partial class StageDriver
 {
     internal const string ViewsFell = "the views fell before step 4";
     internal const string ClaimRefused = "the move claim refused to open";
-    private const string RouterMove = "rt";
 
     private async Task<TransitionResult?> ExecuteAsync(string group, StateRecord state, StepInput input, StepPlan plan, GroupMemory memory, CancellationToken cancellationToken)
     {
@@ -18,7 +17,7 @@ internal sealed partial class StageDriver
         {
             StepKind.Transit => await TransitAsync(group, state, input, plan.Spec!, memory, cancellationToken).ConfigureAwait(false),
             StepKind.Abandon => await AbandonAsync(group, state, input, cancellationToken).ConfigureAwait(false),
-            StepKind.Resume => await ResumeAsync(group, state, plan.SkipBarriers, cancellationToken).ConfigureAwait(false),
+            StepKind.Resume => await ResumeAsync(group, state, input, plan.SkipBarriers, true, cancellationToken).ConfigureAwait(false),
             StepKind.ColdStart => await ColdStartAsync(group, state, input, cancellationToken).ConfigureAwait(false),
             _ => null,
         };
@@ -33,11 +32,11 @@ internal sealed partial class StageDriver
 
         if (plan.AutoHoldSet is { } reason)
         {
-            await services.Store.SetHoldAsync(group, HoldKind.Automatic, reason).ConfigureAwait(false);
+            await services.Store.SetHoldAsync(group, HoldKind.Automatic, reason, Fence(group)).ConfigureAwait(false);
         }
         else if (plan.AutoHoldClear)
         {
-            if (services.Fence?.Invoke(group) is { } fence)
+            if (Fence(group) is { } fence)
             {
                 await services.Store.ClearAutomaticHoldAsync(group, fence).ConfigureAwait(false);
             }
@@ -49,12 +48,12 @@ internal sealed partial class StageDriver
 
         if (plan.AllAck)
         {
-            await services.Store.AllAckAsync(group, state.Id, services.Fence?.Invoke(group)).ConfigureAwait(false);
+            await services.Store.AllAckAsync(group, state.Id, Fence(group)).ConfigureAwait(false);
         }
 
         if (plan.FieldList.Count > 0)
         {
-            await services.Scripts.FieldsAsync(services.Names.State(group), state.Id, plan.FieldList, []).ConfigureAwait(false);
+            await services.Scripts.FieldsAsync(services.Names.State(group), state.Id, plan.FieldList, [], Fence(group)).ConfigureAwait(false);
         }
 
         cancellationToken.ThrowIfCancellationRequested();
@@ -62,7 +61,7 @@ internal sealed partial class StageDriver
 
     private async Task<TransitionResult?> TransitAsync(string group, StateRecord state, StepInput input, TransitionSpec spec, GroupMemory memory, CancellationToken cancellationToken)
     {
-        if (!await PrepareAsync(group, spec, cancellationToken).ConfigureAwait(false))
+        if (!await PrepareAsync(group, state, spec, cancellationToken).ConfigureAwait(false))
         {
             return null;
         }
@@ -71,10 +70,10 @@ internal sealed partial class StageDriver
         if (spec.TakeClaim)
         {
             token = MoveScripts.NewNonce();
-            var pended = await services.Claim.PendAsync(group, token, RouterMove, cancellationToken).ConfigureAwait(false);
+            var pended = await services.Claim.PendAsync(group, token, services.Facts.ClaimDescriptor(group), Fence(group), cancellationToken).ConfigureAwait(false);
             if (pended != ClaimOutcome.Done)
             {
-                services.Alert?.Invoke(group, pended == ClaimOutcome.Refused ? "start_blocked" : "claim_failed", "claim_held");
+                Notify(group, pended == ClaimOutcome.Refused ? "start_blocked" : "claim_failed", "claim_held");
                 return null;
             }
         }
@@ -90,7 +89,7 @@ internal sealed partial class StageDriver
             time.GetUtcNow().ToUnixTimeMilliseconds(),
             MoveId: spec.NewMoveId ? ep : null,
             Claim: spec.TakeClaim ? token : null,
-            Move: spec.TakeClaim ? RouterMove : null);
+            Move: spec.TakeClaim ? services.Facts.ClaimDescriptor(group) : null);
         var sequence = SequenceFor(group, spec, token, ep);
         var result = await services.Sequence.RunAsync(group, StateExpectation.Holding(state.Ep, state.Id, 1), target, sequence, cancellationToken).ConfigureAwait(false);
         if (result.Outcome == TransitionOutcome.StateChanged && result.Detail is ViewsFell or ClaimRefused)
@@ -116,7 +115,7 @@ internal sealed partial class StageDriver
         Func<CancellationToken, Task<TransitionResult?>>? beforeCommit = null;
         if (spec.TakeClaim)
         {
-            beforeCommit = async ct => await services.Claim.OpenAsync(group, token, restore: false, ct).ConfigureAwait(false) switch
+            beforeCommit = async ct => await services.Claim.OpenAsync(group, token, restore: false, Fence(group), ct).ConfigureAwait(false) switch
             {
                 ClaimOutcome.Done => null,
                 ClaimOutcome.Refused => new TransitionResult(TransitionOutcome.StateChanged, Detail: ClaimRefused),
@@ -137,24 +136,29 @@ internal sealed partial class StageDriver
             Release: release,
             Ledger: services.Ledger,
             HoldsLease: () => services.HoldsLease(group),
-            Fence: services.Fence?.Invoke(group),
+            Fence: Fence(group),
             BeforeCommit: beforeCommit,
             BeforeDurable: release.Length == 0 ? null : ct => CertifyAsync(group, token, ep, ct));
     }
 
     private async Task<TransitionResult?> CertifyAsync(string group, string token, long ep, CancellationToken cancellationToken) =>
-        await services.Claim.CertifyAsync(group, token, ep, "S0", cancellationToken).ConfigureAwait(false) switch
+        await services.Claim.CertifyAsync(group, token, ep, "S0", Fence(group), cancellationToken).ConfigureAwait(false) switch
         {
             ClaimOutcome.Failed => new TransitionResult(TransitionOutcome.BarrierStuck, Detail: "the move claim certificate could not be written"),
             _ => null,
         };
 
-    // The census and the sweep that come before a transition; false when the step must wait.
-    private async Task<bool> PrepareAsync(string group, TransitionSpec spec, CancellationToken cancellationToken)
+    // The census and the sweep that come before a transition; false when the step must wait. A purge runs only while the state still holds the identity it was decided under and this node still holds the lease.
+    private async Task<bool> PrepareAsync(string group, StateRecord state, TransitionSpec spec, CancellationToken cancellationToken)
     {
         if (spec.Pre == PreStep.SweepNative)
         {
-            await services.Data.PurgeNativeAsync(group, cancellationToken).ConfigureAwait(false);
+            if (await GuardAsync(group, state.Id).ConfigureAwait(false) is not { } sweep)
+            {
+                return false;
+            }
+
+            await services.Data.PurgeNativeAsync(group, sweep, cancellationToken).ConfigureAwait(false);
             return true;
         }
 
@@ -166,10 +170,15 @@ internal sealed partial class StageDriver
         // N is empty by construction in S1 and S2, so a key found there is junk: delete it by PurgeData and count again.
         if (await services.Data.CountNativeAsync(group, cancellationToken).ConfigureAwait(false) > 0)
         {
-            await services.Data.PurgeNativeAsync(group, cancellationToken).ConfigureAwait(false);
+            if (await GuardAsync(group, state.Id) is not { } guard)
+            {
+                return false;
+            }
+
+            await services.Data.PurgeNativeAsync(group, guard, cancellationToken).ConfigureAwait(false);
             if (await services.Data.CountNativeAsync(group, cancellationToken).ConfigureAwait(false) > 0)
             {
-                services.Alert?.Invoke(group, "stage_pending", "native_keys_remain");
+                Notify(group, "stage_pending", "native_keys_remain");
                 return false;
             }
         }
@@ -177,18 +186,32 @@ internal sealed partial class StageDriver
         return true;
     }
 
+    // Null, with an alert, when the state moved on or the lease was taken over: nothing destructive may run.
+    private async Task<DataGuard?> GuardAsync(string group, string id)
+    {
+        var fence = Fence(group);
+        var held = await services.Scripts.GuardAsync(services.Names.State(group), id, fence).ConfigureAwait(false);
+        if (held == MoveScripts.Written)
+        {
+            return new DataGuard(id, fence);
+        }
+
+        Notify(group, held == MoveScripts.LeaseNotHeld ? "lease_lost" : "state_moved", "purge refused");
+        return null;
+    }
+
     private async Task AfterCompletedAsync(string group, TransitionSpec spec, string token, long ep, string id, CancellationToken cancellationToken)
     {
-        if (spec.PostFields is { Count: > 0 } post)
+        if (spec.PostFields is { Count: > 0 } || spec.PostDelete is { Count: > 0 })
         {
-            await services.Scripts.FieldsAsync(services.Names.State(group), id, post, []).ConfigureAwait(false);
+            await services.Scripts.FieldsAsync(services.Names.State(group), id, spec.PostFields ?? [], spec.PostDelete ?? [], Fence(group)).ConfigureAwait(false);
         }
 
         if (spec.ReleaseClaim && token.Length > 0)
         {
-            if (await services.Claim.ReleaseIdleAsync(group, token, cancellationToken).ConfigureAwait(false) == ClaimOutcome.Failed)
+            if (await services.Claim.ReleaseIdleAsync(group, token, Fence(group), cancellationToken).ConfigureAwait(false) == ClaimOutcome.Failed)
             {
-                services.Alert?.Invoke(group, "claim_release_failed", $"{token}:{ep}");
+                Notify(group, "claim_release_failed", $"{token}:{ep}");
             }
         }
     }
@@ -199,33 +222,46 @@ internal sealed partial class StageDriver
         var ep = state.Ep + 1;
         var token = state.Claim;
         var abandoning = StepPlanner.Classify(state) == "X1" && token.Length > 0;
-        var spec = new TransitionSpec("X12", "S0", "none", 0, WayBack: true, ReleaseClaim: abandoning);
+
+        // Only an open claim has a certificate to give; one that never opened is released idle and its token dropped from the state.
+        var status = abandoning ? await services.Claim.StatusAsync(group, token, cancellationToken).ConfigureAwait(false) : ClaimStatus.Absent;
+        var spec = new TransitionSpec("X12", "S0", "none", 0, WayBack: true, ReleaseClaim: status == ClaimStatus.Open);
         var result = await services.Sequence.AbandonAsync(group, acknowledged, time.GetUtcNow().ToUnixTimeMilliseconds(), SequenceFor(group, spec, token, ep), cancellationToken).ConfigureAwait(false);
         if (result.Outcome == TransitionOutcome.AbandonRefused)
         {
             // Step 4 began or a node acknowledged: the transition is completed, and the flag is read again from the new state.
-            return await ResumeAsync(group, state, false, cancellationToken).ConfigureAwait(false);
+            return await ResumeAsync(group, state, input, false, false, cancellationToken).ConfigureAwait(false);
         }
 
-        if (result.Outcome == TransitionOutcome.Completed && abandoning)
+        if (result.Outcome == TransitionOutcome.Completed && abandoning && status != ClaimStatus.Absent)
         {
-            await services.Claim.ReleaseIdleAsync(group, token, cancellationToken).ConfigureAwait(false);
+            await services.Claim.ReleaseIdleAsync(group, token, Fence(group), cancellationToken).ConfigureAwait(false);
+            if (status == ClaimStatus.Pending && await services.Store.ReadAsync(group, cancellationToken).ConfigureAwait(false) is { } abandoned)
+            {
+                await services.Scripts.FieldsAsync(services.Names.State(group), abandoned.Id, [], [StateFields.Claim], Fence(group)).ConfigureAwait(false);
+            }
         }
 
         return result;
     }
 
-    private async Task<TransitionResult?> ResumeAsync(string group, StateRecord state, bool skipBarriers, CancellationToken cancellationToken)
+    private async Task<TransitionResult?> ResumeAsync(string group, StateRecord state, StepInput input, bool skipBarriers, bool recheck, CancellationToken cancellationToken)
     {
         var kind = StepPlanner.Classify(state);
         var wayBack = kind is "X6" or "X7" || (state is { State: "S3" or "S4", Direction: "rev" }) || state.State == "S0";
-        var into0 = state.State == "S0" && state.Claim.Length > 0;
-        var spec = new TransitionSpec(kind ?? "X12", state.State, state.Direction, state.NPop, WayBack: wayBack, TakeClaim: kind == "X1" && state.Claim.Length > 0, ReleaseClaim: into0);
+        var into0 = state.State == "S0" && state.Claim.Length > 0 && await services.Claim.StatusAsync(group, state.Claim, cancellationToken).ConfigureAwait(false) == ClaimStatus.Open;
+        var spec = new TransitionSpec(kind ?? "X12", state.State, state.Direction, state.NPop, WayBack: wayBack, TakeClaim: kind == "X1" && state.Claim.Length > 0, ReleaseClaim: into0, RecheckViews: recheck && kind == "X5" && state.Field(StateFields.CommitBegun) != state.Id);
         var options = SequenceFor(group, spec, state.Claim, state.Ep) with { SkipBarriers = skipBarriers };
         var result = await services.Sequence.ResumeAsync(group, options, cancellationToken).ConfigureAwait(false);
+        if (recheck && result.Outcome == TransitionOutcome.StateChanged && result.Detail is ViewsFell or ClaimRefused)
+        {
+            // Before step 4 nothing was acted on, so the transition is abandoned; the abandon falls back to completion once step 4 began.
+            return await AbandonAsync(group, state, input, cancellationToken).ConfigureAwait(false);
+        }
+
         if (result.Outcome == TransitionOutcome.Completed && into0)
         {
-            await services.Claim.ReleaseIdleAsync(group, state.Claim, cancellationToken).ConfigureAwait(false);
+            await services.Claim.ReleaseIdleAsync(group, state.Claim, Fence(group), cancellationToken).ConfigureAwait(false);
         }
 
         return result;

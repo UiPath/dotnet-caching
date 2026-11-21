@@ -34,10 +34,10 @@ internal sealed class StateStore(IDatabase stateDatabase, MoveKeyNames names, Mo
         await scripts.HoldClearAsync(names.State(group), fence, StateFields.HoldAuto).ConfigureAwait(false) == MoveScripts.Written;
 
     /// <summary>Stores a hold with its reason on an existing state; false when the group has no hash.</summary>
-    public async Task<bool> SetHoldAsync(string group, HoldKind kind, string reason)
+    public async Task<bool> SetHoldAsync(string group, HoldKind kind, string reason, LeaseFence? fence = null)
     {
         ArgumentException.ThrowIfNullOrEmpty(reason);
-        return await scripts.HoldSetAsync(names.State(group), HoldField(kind), reason).ConfigureAwait(false) == MoveScripts.Written;
+        return await scripts.HoldSetAsync(names.State(group), HoldField(kind), reason, fence).ConfigureAwait(false) == MoveScripts.Written;
     }
 
     /// <summary>Deletes the operator hold, the automatic hold, or both (<c>Resume</c>); false when the group has no hash.</summary>

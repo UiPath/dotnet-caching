@@ -84,7 +84,7 @@ public class StepPlannerReverseTests
     [Fact]
     public async Task X10_needs_the_stored_release_consent_then_sweeps_N_before_the_flip_to_S0()
     {
-        var waiting = await DecideAsync(Input(ReverseDrained));
+        var waiting = await DecideAsync(Input(ReverseDrained with { Residue = new Dictionary<string, long> { ["a"] = 0 } }));
         waiting.AlertList.Should().ContainSingle().Which.Should().Be(new StageAlert("stage_pending", "release_consent"));
 
         var plan = await DecideAsync(Input((ReverseDrained with { Claim = "tok", Residue = new Dictionary<string, long> { ["a"] = 1 } }).Approved(ApprovalKinds.Release)));

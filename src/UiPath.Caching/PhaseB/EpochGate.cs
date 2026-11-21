@@ -22,7 +22,7 @@ internal sealed class EpochGate
         }
     }
 
-    /// <summary>Admits a unit under the identity in force; null while the node has none (the caller then follows the rules of an unknown state).</summary>
+    /// <summary>Admits a unit under the identity in force; null while the node has none. The caller applies the rules of the snapshot first, so a unit is never admitted at dur=0.</summary>
     public AdmittedUnit? Enter(string group, bool promotion = false)
     {
         var units = _groups.GetOrAdd(group, _ => new GroupUnits());
