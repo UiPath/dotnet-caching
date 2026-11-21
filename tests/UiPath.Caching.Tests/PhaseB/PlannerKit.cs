@@ -45,7 +45,7 @@ internal static class PlannerKit
         return state with { Values = values, FieldNames = [.. values.Keys] };
     }
 
-    public static NodeAdvert Advert(string node, int? fl = 3, bool pb = true, bool pin = true, bool pbg = true, string? ca = "a", StateRecord? acks = null, string? scope = null, int? snap = null, int? pi = 0, long? rc = null, bool byp = false, string? group = null)
+    public static NodeAdvert Advert(string node, int? fl = 3, bool pb = true, bool pin = true, bool pbg = true, string? ca = "a", StateRecord? acks = null, string? scope = null, int? snap = 0, int? pi = 0, long? rc = null, bool byp = false, string? group = null)
     {
         group ??= Group;
         var tokens = new List<string>();
@@ -104,7 +104,7 @@ internal static class PlannerKit
     }
 
     public static IReadOnlyList<NodeAdvert> Fleet(StateRecord? acks = null, int? fl = 3, int count = 2) =>
-        [.. Enumerable.Range(1, count).Select(n => Advert("n" + n, fl: fl, acks: acks))];
+        [.. Enumerable.Range(1, count).Select(n => Advert("n" + n, fl: fl, ca: acks is null ? "a" : string.Join(',', acks.CacheIds), acks: acks))];
 
     public static FlagVerdict Verdict(int? min = 3, int? lowered = null, int fresh = 2, bool missing = false, TimeSpan? confirmed = null) =>
         new(fresh, missing, min, lowered, confirmed ?? TimeSpan.Zero);

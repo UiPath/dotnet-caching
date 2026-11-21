@@ -1,0 +1,105 @@
+using StackExchange.Redis;
+using UiPath.Caching.PhaseB;
+using UiPath.Caching.Tests.Redis;
+
+namespace UiPath.Caching.Tests.PhaseB;
+
+// A group in S1 over a real connection with managed caches a and b, a key space of unique prefixes, and the purge and census over them.
+internal sealed class DataOpsKit : IAsyncDisposable
+{
+    private readonly List<string> _made = [];
+
+    private DataOpsKit(StateKit kit, string prefix, int batch)
+    {
+        Kit = kit;
+        Prefix = prefix;
+        var tag = "pb3c" + Guid.NewGuid().ToString("N")[..10];
+        Space = new FakeKeySpace(tag + ":n:", tag + ":l:");
+        Scanner = new MasterScanner(() => kit.Mux.GetServers(), 0, prefix);
+        DataScripts = new MoveScripts(kit.ControlDb, true, kit.Mux.GetServers().Min(s => s.Version)!);
+        Data = new GroupDataOps(Scanner, Space, kit.Store, kit.Scripts, DataScripts, kit.Names, batch);
+        Census = new MasterCensus(Scanner, Space, kit.Store, kit.Db, prefix, kit.Time);
+    }
+
+    public StateKit Kit { get; }
+
+    public string Prefix { get; }
+
+    public IDatabase ControlDb => Kit.ControlDb;
+
+    public FakeKeySpace Space { get; }
+
+    public MasterScanner Scanner { get; }
+
+    public MoveScripts DataScripts { get; }
+
+    public GroupDataOps Data { get; }
+
+    public MasterCensus Census { get; }
+
+    public string Group => Kit.Group;
+
+    public static async Task<DataOpsKit> StandaloneAsync(RedisContainerFixture fixture, bool useScripts, string prefix = "", int batch = 128)
+    {
+        var kit = await StateKit.StandaloneAsync(fixture, useScripts, prefix: prefix);
+        var data = new DataOpsKit(kit, prefix, batch);
+        await data.StartAsync();
+        return data;
+    }
+
+    public static async Task<DataOpsKit> ClusterAsync(string prefix, int batch = 128)
+    {
+        var kit = await StateKit.ClusterAsync(useScripts: true, prefix: prefix);
+        var data = new DataOpsKit(kit, prefix, batch);
+        await data.StartAsync();
+        return data;
+    }
+
+    public async Task<StateRecord> StateAsync() => (await Kit.Store.ReadAsync(Group, CancellationToken.None))!;
+
+    // The logical key of a cache on a side, written under the connector prefix; a ttl of null leaves it without expiry.
+    public async Task<string> SetAsync(MoveSide side, string cache, string name, TimeSpan? ttl = null)
+    {
+        var key = $"{Space.PrefixOf(side)}{cache}:{name}";
+        _made.Add(Prefix + key);
+        await Kit.Db.StringSetAsync(Prefix + key, "v");
+        if (ttl is { } life)
+        {
+            await Kit.Db.KeyExpireAsync(Prefix + key, life);
+        }
+
+        return key;
+    }
+
+    public async Task<bool> ExistsAsync(string key) => await Kit.Db.KeyExistsAsync(Prefix + key);
+
+    // The group moves on under a new identity through the real sequence, which rewrites every control record.
+    public async Task<StateRecord> MoveToAsync(string state, string direction = "fwd", int nPop = 0)
+    {
+        var from = await StateAsync();
+        var result = await Kit.Sequence.RunAsync(Group, StateKit.Expecting(from), StateKit.TargetFrom(from, state, direction, nPop), null, CancellationToken.None);
+        result.Outcome.Should().Be(TransitionOutcome.Completed);
+        return await StateAsync();
+    }
+
+    public async ValueTask DisposeAsync()
+    {
+        try
+        {
+            if (_made.Count > 0)
+            {
+                await Task.WhenAll(_made.Select(k => Kit.Db.KeyDeleteAsync(k)));
+            }
+        }
+        finally
+        {
+            await Kit.DisposeAsync();
+        }
+    }
+
+    private async Task StartAsync()
+    {
+        await Kit.InitAsync("a", "b");
+        await MoveToAsync("S1");
+    }
+}

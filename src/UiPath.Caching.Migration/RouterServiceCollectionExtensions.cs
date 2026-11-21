@@ -10,6 +10,7 @@ using StackExchange.Redis;
 using UiPath.Caching.Broadcast;
 using UiPath.Caching.Broadcast.Redis;
 using UiPath.Caching.Config;
+using UiPath.Caching.PhaseB;
 using UiPath.Caching.Redis;
 
 namespace UiPath.Caching.Migration;
@@ -141,6 +142,8 @@ public static class RouterServiceCollectionExtensions
             SourceTimeout = builder.SourceTimeout ?? TimeSpan.FromSeconds(30),
             CleanupBound = builder.CleanupBound,
         };
+        AdvertisementSetup? setup = null;
+        var phaseB = builder.PhaseB is { } phaseSetup ? new PhaseBNode(phaseSetup, root.GetRequiredService<TimeProvider>()) : null;
         try
         {
             // The one check that fails the host: a setting no library start could ever satisfy.
@@ -150,8 +153,8 @@ public static class RouterServiceCollectionExtensions
             }
 
             // Everything that builds, starts or reaches the library is behind the factory: a throw or a hang there leaves the router on the source.
-            core.UseLibrary(token => StartLibraryAsync(root, builder, token));
-            var setup = AdvertisementSetup.TryCreate(root, builder, processId, section, logger);
+            core.UseLibrary(token => StartLibraryAsync(root, builder, phaseB, setup, token));
+            setup = AdvertisementSetup.TryCreate(root, builder, processId, section, logger);
             if (builder.PinPredicate is { } pinWhen)
             {
                 ValidatePinSetup(section, setup, logger);
@@ -162,14 +165,14 @@ public static class RouterServiceCollectionExtensions
                 gate!.Attach(pins);
             }
 
-            var advertiser = setup is null ? null : CreateAdvertiser(setup, core, logger);
+            var advertiser = setup is null ? null : CreateAdvertiser(setup, core, phaseB, logger);
             if (advertiser is not null && core.Pins is { } attached)
             {
                 attached.OwnField = advertiser.Field;
                 attached.Fresh = advertiser.Fresh;
             }
 
-            var router = new Router(core, builder.Registrations) { Advertiser = advertiser };
+            var router = new Router(core, builder.Registrations) { Advertiser = advertiser, PhaseB = phaseB };
 
             RouterBanner.Log(logger, builder, processId);
             router.Start();
@@ -208,7 +211,7 @@ public static class RouterServiceCollectionExtensions
             logger.LogWarning("UsePinWhen is set but the application has no AppShortName, so the pin gate cannot attribute nodes to this application and stays closed.");
         }
     }
-    private static RouterAdvertiser CreateAdvertiser(AdvertisementSetup setup, RouterCore core, ILogger logger)
+    private static RouterAdvertiser CreateAdvertiser(AdvertisementSetup setup, RouterCore core, PhaseBNode? phaseB, ILogger logger)
     {
         var sources = new List<IAdvertisementTokens> { new BypassTokens(core), new ScopeTokens(setup.Scope) };
         if (core.Pins is { } pins)
@@ -216,10 +219,15 @@ public static class RouterServiceCollectionExtensions
             sources.Add(pins);
         }
 
+        if (phaseB is { HasGroups: true })
+        {
+            sources.Add(new PhaseBTokens(phaseB.Tokens));
+        }
+
         return new RouterAdvertiser(setup.Store, setup.NodeId, setup.Build, sources, setup.RefreshInterval, setup.LivenessWindow, core.Clock, logger);
     }
 
-    private static async Task<LibraryParts> StartLibraryAsync(IServiceProvider root, RouterBuilder builder, CancellationToken cancellationToken)
+    private static async Task<LibraryParts> StartLibraryAsync(IServiceProvider root, RouterBuilder builder, PhaseBNode? phaseB, AdvertisementSetup? setup, CancellationToken cancellationToken)
     {
         var started = new List<IHostedService>();
         try
@@ -230,10 +238,19 @@ public static class RouterServiceCollectionExtensions
                 started.Add(service);
             }
 
+            var connector = root.GetRequiredService<IRedisConnector>();
+            if (phaseB is { HasGroups: true })
+            {
+                // The leader needs the node entries of the router; without the advertisement it still acknowledges and polls, and leads nothing.
+                var prefix = root.GetService<IOptions<RedisCacheOptions>>()?.Value.KeyPrefix ?? string.Empty;
+                var hosted = new PhaseBHostedService(phaseB, connector, prefix, setup is null ? null : new RouterAdvertSource(setup.Store), setup?.Scope);
+                await hosted.StartAsync(cancellationToken).ConfigureAwait(false);
+                started.Add(hosted);
+            }
+
             var options = root.GetRequiredKeyedService<IOptions<CacheOptions>>(StackName).Value;
             var source = options.SourceUri ?? CacheOptions.MachineUri;
             var topics = root.GetRequiredKeyedService<ITopicFactory>(StackName).Get();
-            var connector = root.GetRequiredService<IRedisConnector>();
             var streams = new PrefixStrategy(RedisKeyspaces.Streams, options);
             var group = source.ToString().ToLowerInvariant();
             return new LibraryParts(

@@ -44,6 +44,32 @@ internal sealed class GroupStateMonitor(IStateReader reader, PhaseBStateOptions 
     public GroupRules RulesFor(string group) =>
         _groups.TryGetValue(group, out var tracker) ? GroupRuleEvaluator.Evaluate(tracker.View(), options) : GroupRules.Unaffected;
 
+    /// <summary>The state the node last read for the group, whether or not it acts on it yet; null for none.</summary>
+    public StateRecord? CurrentState(string group) => _groups.TryGetValue(group, out var tracker) ? tracker.View().State : null;
+
+    /// <summary>The age of the node's oldest snapshot among its relevant groups; null when it has none, or when a relevant group has not read yet, which is no snapshot at all.</summary>
+    public TimeSpan? SnapshotAge()
+    {
+        TimeSpan? oldest = null;
+        foreach (var tracker in _groups.Values)
+        {
+            var view = tracker.View();
+            if (!GroupRuleEvaluator.IsRelevant(view))
+            {
+                continue;
+            }
+
+            if (view.SinceRead is not { } age)
+            {
+                return null;
+            }
+
+            oldest = oldest is { } held && held > age ? held : age;
+        }
+
+        return oldest;
+    }
+
     /// <summary>Records that the node drained every unit of the older identities and now runs under this one.</summary>
     public bool Acknowledge(string group, long ep, string id) =>
         _groups.TryGetValue(group, out var tracker) && tracker.Acknowledge(ep, id);

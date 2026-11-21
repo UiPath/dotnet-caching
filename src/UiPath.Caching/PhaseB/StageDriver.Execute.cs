@@ -19,6 +19,7 @@ internal sealed partial class StageDriver
             StepKind.Abandon => await AbandonAsync(group, state, input, cancellationToken).ConfigureAwait(false),
             StepKind.Resume => await ResumeAsync(group, state, input, plan.SkipBarriers, true, cancellationToken).ConfigureAwait(false),
             StepKind.ColdStart => await ColdStartAsync(group, state, input, cancellationToken).ConfigureAwait(false),
+            StepKind.RebuildCaches => await RebuildCachesAsync(group, state, plan, cancellationToken).ConfigureAwait(false),
             _ => null,
         };
     }
@@ -49,6 +50,11 @@ internal sealed partial class StageDriver
         if (plan.AllAck)
         {
             await services.Store.AllAckAsync(group, state.Id, Fence(group)).ConfigureAwait(false);
+            if (state.State == "S3")
+            {
+                // T3 of the canary (6.6): the moment every node acknowledged the S3 identity.
+                await services.Scripts.FieldsAsync(services.Names.State(group), state.Id, [(StateFields.T3At, time.GetUtcNow().ToUnixTimeMilliseconds().ToString(System.Globalization.CultureInfo.InvariantCulture))], [], Fence(group)).ConfigureAwait(false);
+            }
         }
 
         if (plan.FieldList.Count > 0)
@@ -57,6 +63,18 @@ internal sealed partial class StageDriver
         }
 
         cancellationToken.ThrowIfCancellationRequested();
+    }
+
+    // X12 in S1 or S2 for the cache set the fresh nodes agree on; every node acknowledges the new identity before X3.
+    private async Task<TransitionResult?> RebuildCachesAsync(string group, StateRecord state, StepPlan plan, CancellationToken cancellationToken)
+    {
+        if (services.Upkeep is null || plan.Caches is null)
+        {
+            return null;
+        }
+
+        var options = new SequenceOptions(Ledger: services.Ledger, HoldsLease: () => services.HoldsLease(group), Fence: Fence(group));
+        return await services.Upkeep.RebuildAsync(group, state, plan.Caches, options, cancellationToken).ConfigureAwait(false);
     }
 
     private async Task<TransitionResult?> TransitAsync(string group, StateRecord state, StepInput input, TransitionSpec spec, GroupMemory memory, CancellationToken cancellationToken)

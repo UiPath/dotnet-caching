@@ -30,6 +30,16 @@ internal sealed class PhaseBStateOptions
 
     public TimeSpan UpkeepInterval { get; init; } = TimeSpan.FromSeconds(60);
 
+    public TimeSpan ClearLockTtl { get; init; } = TimeSpan.FromSeconds(120);
+
+    public TimeSpan ClearLockRenewInterval { get; init; } = TimeSpan.FromSeconds(30);
+
+    /// <summary>How many times a Clear closes the gates and sweeps again when a transition replaced the gates during the sweep.</summary>
+    public int ClearRetries { get; init; } = 3;
+
+    /// <summary>A gate closed for longer than this raises <c>gate_stuck</c>.</summary>
+    public TimeSpan GateStuckAfter { get; init; } = TimeSpan.FromMinutes(5);
+
     /// <summary>How long a master that failed a barrier counts as failing for the way back.</summary>
     public TimeSpan BarrierFailureWindow { get; init; } = TimeSpan.FromMinutes(10);
 

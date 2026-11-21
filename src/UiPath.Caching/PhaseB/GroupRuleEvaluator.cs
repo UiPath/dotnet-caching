@@ -20,6 +20,20 @@ internal static class GroupRuleEvaluator
 
     public static GroupRules Evaluate(GroupView view, PhaseBStateOptions options)
     {
+        var rules = EvaluateRules(view, options);
+        if (!rules.Relevant || view.State is not { } state)
+        {
+            return rules;
+        }
+
+        // A cache the state does not manage uses the Phase A path; a registration that differs from the stored set is reported either way.
+        var managed = state.CacheIds.ToHashSet(StringComparer.Ordinal);
+        var drift = view.Registration.CacheIds is { } registered && !registered.ToHashSet(StringComparer.Ordinal).SetEquals(managed);
+        return rules with { Managed = managed, Alerts = drift ? [.. rules.Alerts, "cache_set_drift"] : rules.Alerts };
+    }
+
+    private static GroupRules EvaluateRules(GroupView view, PhaseBStateOptions options)
+    {
         if (!IsRelevant(view))
         {
             return GroupRules.Unaffected;

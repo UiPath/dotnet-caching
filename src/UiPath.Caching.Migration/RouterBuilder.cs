@@ -1,4 +1,5 @@
 using StackExchange.Redis;
+using UiPath.Caching.PhaseB;
 
 namespace UiPath.Caching.Migration;
 
@@ -26,6 +27,8 @@ public sealed class RouterBuilder
     internal TimeSpan CleanupBound { get; set; } = TimeSpan.FromSeconds(10);
 
     internal Func<IDatabase>? SourceDatabase { get; private set; }
+
+    internal PhaseBSetup? PhaseB { get; private set; }
 
     public RouterBuilder Add<T>(RouterCacheRegistration<T> registration)
         where T : class
@@ -112,6 +115,13 @@ public sealed class RouterBuilder
     public RouterBuilder UseSourceConnection(Func<IDatabase> database)
     {
         SourceDatabase = database ?? throw new ArgumentNullException(nameof(database));
+        return this;
+    }
+
+    /// <summary>The Phase B node of this router: its groups, stage flag and seams. Without it nothing of Phase B runs and nothing of it is advertised.</summary>
+    internal RouterBuilder UsePhaseB(PhaseBSetup setup)
+    {
+        PhaseB = setup ?? throw new ArgumentNullException(nameof(setup));
         return this;
     }
 }

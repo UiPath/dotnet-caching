@@ -106,6 +106,14 @@ internal sealed class MoveKeyNames
         return $"{LibraryPrefix}{Keyspace}:{{{group}}}:lead";
     }
 
+    /// <summary>The lock of one Clear at a time for a cache, in the slot of the group's state hash.</summary>
+    public RedisKey ClearLock(string group, string cacheId)
+    {
+        ValidateName(group, nameof(group));
+        ValidateName(cacheId, nameof(cacheId));
+        return $"{LibraryPrefix}{Keyspace}:{{{group}}}:clrlock:{cacheId}";
+    }
+
     /// <summary>The control record of <paramref name="group"/> in the slot of <paramref name="dataKey"/>.</summary>
     public RedisKey ControlFor(string group, string dataKey) => Control(group, SlotOf(dataKey));
 

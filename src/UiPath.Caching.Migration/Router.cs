@@ -1,3 +1,5 @@
+using UiPath.Caching.PhaseB;
+
 namespace UiPath.Caching.Migration;
 
 internal sealed class Router : IRouter, IAsyncDisposable
@@ -39,6 +41,8 @@ internal sealed class Router : IRouter, IAsyncDisposable
     public RouterModeReason ModeReason => _core.ModeReason;
 
     internal RouterAdvertiser? Advertiser { get; init; }
+
+    internal PhaseBNode? PhaseB { get; init; }
 
     public Task EnterBypassAsync(CancellationToken cancellationToken = default)
     {

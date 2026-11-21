@@ -42,5 +42,10 @@ internal sealed class PhaseBAdvertTokens(
                 tokens.Add($"rc={group.Name}:{ep}");
             }
         }
+
+        if (monitor.SnapshotAge() is { } age)
+        {
+            tokens.Add(NodeAdvert.Snapshot(age));
+        }
     }
 }

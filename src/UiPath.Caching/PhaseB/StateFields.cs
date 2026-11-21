@@ -29,4 +29,5 @@ internal static class StateFields
     public const string ColdStart = "x11";
     public const string CanaryAt = "canaryAt";
     public const string ResidueId = "resId";
+    public const string T3At = "t3At";
 }

@@ -41,7 +41,7 @@ internal static class StartGates
 
         Overridable(i, ApprovalKinds.Start, "G5", "release_floor_not_attested", i.Facts.ReleaseFloorAttested, failures, overrides, counted: false);
         Overridable(i, ApprovalKinds.StartUnsettled, "G6", "view_changed", i.ViewStable >= options.UpgradeHold, failures, overrides);
-        if (Nodes(a => a.SnapshotSeconds is { } age && TimeSpan.FromSeconds(age) > i.StaleAfter) is { Length: > 0 } stale)
+        if (Nodes(a => a.SnapshotSeconds is not { } age || TimeSpan.FromSeconds(age) > i.StaleAfter) is { Length: > 0 } stale)
         {
             Fail("G7", stale);
         }
