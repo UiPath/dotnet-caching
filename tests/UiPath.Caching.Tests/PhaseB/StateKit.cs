@@ -57,7 +57,7 @@ internal sealed class StateKit : IAsyncDisposable
     {
         Assert.SkipUnless(fixture.Enabled, "Set RUN_REDIS_INTEGRATION_TESTS=1 (Docker required) to run.");
         var mux = await ConnectionMultiplexer.ConnectAsync(fixture.ConnectionString);
-        return new StateKit(mux, new MoveKeyNames(prefix, Library, cluster: false), options ?? new PhaseBStateOptions(), useScripts, fixture.ServerVersion, prefix);
+        return new StateKit(mux, new MoveKeyNames(prefix, Library, cluster: false), options ?? new PhaseBStateOptions { ExpectedReplicasPerMaster = 0 }, useScripts, fixture.ServerVersion, prefix);
     }
 
     public static async Task<StateKit> ClusterAsync(bool useScripts, PhaseBStateOptions? options = null, string prefix = "")

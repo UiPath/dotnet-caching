@@ -8,6 +8,7 @@ internal sealed class GroupTracker(GroupRegistration registration, TimeProvider 
     private StateAnswer _answer;
     private StateRecord? _state;
     private bool _recordFound;
+    private bool _everPresent;
     private ActedState? _lastKnown;
     private ActedState? _acknowledged;
     private ControlSample? _sample;
@@ -41,6 +42,7 @@ internal sealed class GroupTracker(GroupRegistration registration, TimeProvider 
             _state = record;
             _readAt = now;
             _regressed = false;
+            _everPresent |= record is not null;
             if (record is null)
             {
                 _durZeroIdentity = null;
@@ -110,6 +112,7 @@ internal sealed class GroupTracker(GroupRegistration registration, TimeProvider 
                 _answer,
                 _state,
                 _recordFound,
+                _everPresent,
                 _lastKnown,
                 _sample,
                 conflict,
@@ -119,11 +122,12 @@ internal sealed class GroupTracker(GroupRegistration registration, TimeProvider 
         }
     }
 
-    // A record above the state means the hash was rolled back; a committed record under an uncommitted state means the commit marker of the state was lost.
+    // A record above the state, or at its epoch under another id, means the hash was rolled back or conflicts; a committed record under an uncommitted state means the commit marker of the state was lost.
     private static string? SampleConflict(StateRecord state, ControlSample? sample) => sample switch
     {
         null => null,
         _ when sample.Ep > state.Ep => "identity_conflict",
+        _ when sample.Ep == state.Ep && sample.Id != state.Id => "identity_conflict",
         _ when sample.Ep == state.Ep && sample.Durable && !state.Durable => "commit_mismatch",
         _ => null,
     };

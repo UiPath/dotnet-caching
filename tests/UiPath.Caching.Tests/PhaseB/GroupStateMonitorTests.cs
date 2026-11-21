@@ -278,6 +278,40 @@ public class GroupStateMonitorTests
     }
 
     [Fact]
+    public async Task A_group_that_once_showed_a_state_stays_relevant_when_a_flush_makes_it_absent()
+    {
+        var monitor = Monitor(listed: false);
+        _reader.State = FakeStateReader.Record("S0", 1);
+        await monitor.StepAsync(Group, CancellationToken.None);
+        _reader.State = FakeStateReader.Record("S2", 2);
+        await monitor.StepAsync(Group, CancellationToken.None);
+
+        _reader.State = null;
+        var next = await monitor.StepAsync(Group, CancellationToken.None);
+
+        next.Should().Be(TimeSpan.FromSeconds(2));
+        monitor.RulesFor(Group).Should().Match<GroupRules>(r => r.Relevant && r.Writes == WriteRule.FailClosed && r.Reads == ReadRule.UnionNativeFirst && r.Alerts.Contains("state_missing"));
+    }
+
+    [Theory]
+    [InlineData("S0")]
+    [InlineData("S3")]
+    public async Task A_record_at_the_epoch_of_the_state_under_another_id_is_an_identity_conflict_and_the_state_is_not_acted_on(string state)
+    {
+        var monitor = Monitor(listed: true);
+        _reader.State = FakeStateReader.Record(state, 5, "A");
+        _reader.Sample = new ControlSample(5, "B", state, "fwd", true);
+
+        await monitor.StepAsync(Group, CancellationToken.None);
+
+        var rules = monitor.RulesFor(Group);
+        rules.Alerts.Should().ContainSingle().Which.Should().Be("identity_conflict");
+        rules.Writes.Should().Be(WriteRule.FailClosed);
+        rules.Acting.Should().BeNull();
+        monitor.Acknowledge(Group, 5, "A").Should().BeFalse();
+    }
+
+    [Fact]
     public async Task A_record_above_the_state_is_an_identity_conflict_and_the_node_does_not_adopt_the_lower_state()
     {
         var monitor = Monitor(listed: true);

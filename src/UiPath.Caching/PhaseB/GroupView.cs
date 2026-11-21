@@ -1,6 +1,7 @@
 namespace UiPath.Caching.PhaseB;
 
 /// <summary>Everything the rules of a group are chosen from, at one instant.</summary>
+/// <param name="EverPresent">The node has read a state hash for the group at some time, which makes the group relevant for as long as the node runs.</param>
 /// <param name="SinceRead">Age of the last definitive state read; null before the first.</param>
 /// <param name="DurZeroFor">How long the node has seen the current identity at <c>dur=0</c>; null when it is durable.</param>
 internal sealed record GroupView(
@@ -8,6 +9,7 @@ internal sealed record GroupView(
     StateAnswer Answer,
     StateRecord? State,
     bool RecordFound,
+    bool EverPresent,
     ActedState? LastKnown,
     ControlSample? Sample,
     string? Conflict,

@@ -154,6 +154,19 @@ public class StateStoreTests(RedisContainerFixture fixture)
     }
 
     [Fact]
+    public async Task A_restart_that_meets_a_control_record_of_the_same_epoch_under_another_id_closes_writes()
+    {
+        await using var kit = await StateKit.StandaloneAsync(fixture, useScripts: true);
+        var init = await kit.InitAsync("a");
+        await kit.Scripts.ControlSyncAsync(kit.Names.Control(kit.Group, 0), MoveTestEnvironment.Record(init.Ep, "intruder", ("a", "n")));
+        var monitor = Monitor(kit, listed: true);
+
+        await monitor.StepAsync(kit.Group, CancellationToken.None);
+
+        monitor.RulesFor(kit.Group).Should().Match<GroupRules>(r => r.Writes == WriteRule.FailClosed && r.Alerts.Contains("identity_conflict") && r.Acting == null);
+    }
+
+    [Fact]
     public async Task A_lost_commit_marker_on_the_state_is_a_commit_mismatch_found_from_the_control_record()
     {
         await using var kit = await StateKit.StandaloneAsync(fixture, useScripts: true);

@@ -29,6 +29,10 @@ internal sealed class MasterChannel : IMasterChannel
 
     public IDatabase StateDatabase { get; }
 
+    public Task<EndPoint?> ControlOwnerAsync(RedisKey key) => ControlDatabase.IdentifyEndpointAsync(key, CommandFlags.DemandMaster);
+
+    public Task<EndPoint?> StateOwnerAsync(RedisKey key) => StateDatabase.IdentifyEndpointAsync(key, CommandFlags.DemandMaster);
+
     public async Task<long> WaitAsync(int replicas, TimeSpan timeout, CancellationToken cancellationToken)
     {
         var reply = await _mux.GetServer(Endpoint).ExecuteAsync("WAIT", replicas, (long)timeout.TotalMilliseconds).WaitAsync(cancellationToken).ConfigureAwait(false);

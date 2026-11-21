@@ -18,6 +18,11 @@ internal interface IMasterChannel : IAsyncDisposable
 
     IDatabase StateDatabase { get; }
 
+    /// <summary>The master this connection would send a command on <paramref name="key"/> to, null when it does not know.</summary>
+    Task<EndPoint?> ControlOwnerAsync(RedisKey key);
+
+    Task<EndPoint?> StateOwnerAsync(RedisKey key);
+
     /// <returns>The number of replicas that acknowledged this connection's writes, at most the timeout later.</returns>
     Task<long> WaitAsync(int replicas, TimeSpan timeout, CancellationToken cancellationToken);
 }

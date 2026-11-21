@@ -315,4 +315,80 @@ public class TransitionSequenceTests(RedisContainerFixture fixture)
         late.Outcome.Should().Be(TransitionOutcome.StateChanged);
         (await kit.Store.ReadAsync(kit.Group, CancellationToken.None))!.Id.Should().Be(winner.Id);
     }
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task A_standalone_connection_that_is_not_told_its_replicas_refuses_a_barrier_and_writes_nothing(bool useScripts)
+    {
+        await using var kit = await StateKit.StandaloneAsync(fixture, useScripts, new PhaseBStateOptions());
+        var init = await kit.InitAsync("a");
+
+        (await kit.Real.ReadLayoutAsync(CancellationToken.None)).Masters.Should().ContainSingle().Which.ConfiguredReplicas.Should().Be(MasterLayout.UnknownReplicas);
+        var act = () => kit.Sequence.RunAsync(kit.Group, StateKit.Expecting(init), StateKit.TargetFrom(init, "S1", "fwd", 0), null, CancellationToken.None);
+
+        await act.Should().ThrowAsync<InvalidOperationException>();
+        (await kit.Store.ReadAsync(kit.Group, CancellationToken.None))!.Id.Should().Be(init.Id);
+        (await kit.ControlAsync(0)).Should().BeEmpty();
+    }
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task A_replica_count_of_zero_is_a_failed_barrier_when_one_replica_is_configured(bool useScripts)
+    {
+        await using var kit = await StateKit.StandaloneAsync(fixture, useScripts, WithReplica);
+        var init = await kit.InitAsync("a");
+        kit.Topology.Wait = (_, _) => 0;
+
+        var result = await kit.Sequence.RunAsync(kit.Group, StateKit.Expecting(init), StateKit.TargetFrom(init, "S1", "fwd", 0), null, CancellationToken.None);
+
+        result.Outcome.Should().Be(TransitionOutcome.BarrierStuck);
+        kit.Reports.Select(r => r.Kind).Should().NotContain("no_replica");
+    }
+
+    [Theory]
+    [InlineData(true, 1)]
+    [InlineData(false, 1)]
+    [InlineData(true, 0)]
+    [InlineData(false, 0)]
+    public async Task A_resume_of_a_durable_state_repeats_the_durable_write_and_its_wait(bool useScripts, long acked)
+    {
+        await using var kit = await StateKit.StandaloneAsync(fixture, useScripts, WithReplica);
+        var init = await kit.InitAsync("a");
+        kit.Topology.Wait = (_, _) => 1;
+        await kit.Sequence.RunAsync(kit.Group, StateKit.Expecting(init), StateKit.TargetFrom(init, "S1", "fwd", 0), null, CancellationToken.None);
+        var waitsBefore = kit.Topology.Waits;
+        kit.Topology.Wait = (_, _) => acked;
+        await using var probe = await WriteProbe.CreateAsync(fixture.ConnectionString);
+        await probe.WatchAsync(kit.StateKey);
+
+        var result = await kit.Sequence.ResumeAsync(kit.Group, null, CancellationToken.None);
+
+        (await probe.TouchedAsync()).Should().BeTrue("DURABLE is written again so the WAIT has an offset");
+        result.Should().Be(new TransitionResult(TransitionOutcome.Completed, WaitSkipped: acked == 0));
+        kit.Topology.Waits.Should().Be(waitsBefore + (acked == 0 ? WithReplica.BarrierRetries : 1));
+    }
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task A_run_whose_durable_reply_was_lost_is_waited_for_on_resume(bool useScripts)
+    {
+        await using var kit = await StateKit.StandaloneAsync(fixture, useScripts, WithReplica);
+        var init = await kit.InitAsync("a");
+        var target = StateKit.TargetFrom(init, "S3", "fwd", 1);
+        await kit.Scripts.TransitAsync(kit.StateKey, StateKit.Expecting(init), target);
+        var stored = (await kit.Store.ReadAsync(kit.Group, CancellationToken.None))!;
+        var control = kit.Names.Control(kit.Group, 0);
+        await kit.Scripts.ControlSyncAsync(control, stored.ToControlRecord([("a", "n")]));
+        await kit.Scripts.ControlCommitAsync(control, stored.Ep, stored.Id);
+        await kit.Scripts.DurableAsync(kit.StateKey, stored.Id);
+        kit.Topology.Wait = (_, _) => 1;
+
+        var result = await kit.Sequence.ResumeAsync(kit.Group, null, CancellationToken.None);
+
+        result.Outcome.Should().Be(TransitionOutcome.Completed);
+        kit.Topology.Waits.Should().Be(1);
+    }
 }

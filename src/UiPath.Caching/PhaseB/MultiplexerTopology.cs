@@ -23,8 +23,8 @@ internal sealed class MultiplexerTopology(
         if (servers[0].ServerType != ServerType.Cluster)
         {
             var master = servers.FirstOrDefault(s => !s.IsReplica) ?? servers[0];
-            var replicas = expectedReplicasPerMaster ?? await ConnectedReplicasAsync(master).WaitAsync(cancellationToken).ConfigureAwait(false);
-            return new ClusterLayout([new MasterLayout(master.EndPoint, [new SlotRange(0, HashSlot.Count - 1)], replicas)]);
+            // The connected count is not the configured one: a replica that dropped would read as none. Only the operator's number counts.
+            return new ClusterLayout([new MasterLayout(master.EndPoint, [new SlotRange(0, HashSlot.Count - 1)], expectedReplicasPerMaster ?? MasterLayout.UnknownReplicas)]);
         }
 
         var nodes = (await ClusterConfigurationAsync(servers, cancellationToken).ConfigureAwait(false)).Nodes;

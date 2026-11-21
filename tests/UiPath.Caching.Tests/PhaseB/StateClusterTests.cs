@@ -91,6 +91,71 @@ public class StateClusterTests
     }
 
     [Fact]
+    public async Task A_control_write_that_the_dedicated_connection_sent_to_another_master_is_issued_and_confirmed_on_the_owner()
+    {
+        await using var kit = await StateKit.ClusterAsync(useScripts: true, WithReplica);
+        var init = await kit.InitAsync("a");
+        var masters = (await kit.Real.ReadLayoutAsync(CancellationToken.None)).Masters.Select(m => m.Endpoint).OrderBy(e => e.ToString(), StringComparer.Ordinal).ToArray();
+        var (liar, other) = (masters[0], masters[1]);
+        var waits = new List<string>();
+        kit.Topology.Wait = (endpoint, _) =>
+        {
+            lock (waits)
+            {
+                waits.Add(endpoint.ToString()!);
+            }
+
+            return 1;
+        };
+
+        // Every key of the first master has moved to the second, as far as both connections can tell.
+        kit.Topology.ControlOwner = (_, key, _) => kit.Db.IdentifyEndpoint(key)?.Equals(liar) == true ? other : null;
+        var target = StateKit.TargetFrom(init, "S1", "fwd", 0);
+        var result = await kit.Sequence.RunAsync(kit.Group, StateKit.Expecting(init), target, null, CancellationToken.None);
+
+        result.Outcome.Should().Be(TransitionOutcome.Completed);
+
+        // Each of the two phases waits on the second master twice: for its own slots, then for the first master's.
+        waits.Count(w => w == other.ToString()).Should().BeGreaterThanOrEqualTo(4, "the slots of the first master were confirmed on the second");
+        await AssertEveryRecordAsync(kit, kit.Names.SlotSet(), target, durable: true);
+    }
+
+    [Fact]
+    public async Task A_state_write_that_the_dedicated_connection_sent_to_another_master_is_issued_again_and_waited_for_on_the_owner()
+    {
+        await using var kit = await StateKit.ClusterAsync(useScripts: true, WithReplica);
+        var init = await kit.InitAsync("a");
+        var owner = (await kit.Db.IdentifyEndpointAsync(kit.StateKey))!;
+        var other = (await kit.Real.ReadLayoutAsync(CancellationToken.None)).Masters.Select(m => m.Endpoint).First(e => !e.Equals(owner));
+        var waits = new List<System.Net.EndPoint>();
+        kit.Topology.Wait = (endpoint, _) =>
+        {
+            lock (waits)
+            {
+                waits.Add(endpoint);
+            }
+
+            return 1;
+        };
+
+        // The first TRANSIT is seen going to the wrong master (the owner check before and after it); the next check says the true owner.
+        var checks = 0;
+        kit.Topology.StateOwner = (endpoint, _, n) =>
+        {
+            checks = n;
+            return n <= 2 && endpoint.Equals(owner) ? other : null;
+        };
+        var result = await kit.Sequence.RunAsync(kit.Group, StateKit.Expecting(init), StateKit.TargetFrom(init, "S1", "fwd", 0), null, CancellationToken.None);
+
+        result.Outcome.Should().Be(TransitionOutcome.Completed);
+
+        // Hop 1 on the owner is misdirected, hop 2 on the claimed owner finds the truth (the owner), hop 3 is confirmed: no WAIT follows a misdirected write.
+        checks.Should().BeGreaterThanOrEqualTo(6);
+        waits[0].Should().Be(owner);
+        (await kit.Store.ReadAsync(kit.Group, CancellationToken.None))!.Durable.Should().BeTrue();
+    }
+
+    [Fact]
     public async Task A_run_whose_topology_never_settles_on_the_owner_of_a_record_is_stuck_not_confirmed()
     {
         await using var kit = await StateKit.ClusterAsync(useScripts: true, WithReplica);

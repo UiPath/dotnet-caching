@@ -8,7 +8,7 @@ internal static class GroupRuleEvaluator
 
     public static bool IsRelevant(GroupView view) => view.Answer == StateAnswer.Unknown
         ? view.Registration.Flagged || view.Registration.Listed || view.RecordFound
-        : view.Registration.Listed || view.Answer == StateAnswer.Present || view.RecordFound;
+        : view.Registration.Listed || view.Answer == StateAnswer.Present || view.RecordFound || view.EverPresent;
 
     /// <summary>S1 to S4 and a listed group in S0 are polled often, S5 and the rest slowly.</summary>
     public static TimeSpan PollInterval(GroupView view, PhaseBStateOptions options) => view.State?.State switch

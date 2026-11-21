@@ -1,4 +1,3 @@
-using System.Diagnostics;
 using StackExchange.Redis;
 using UiPath.Caching.PhaseB;
 using UiPath.Caching.Tests.Redis;
@@ -11,8 +10,6 @@ namespace UiPath.Caching.Tests.PhaseB;
 [Trait("Category", "Integration")]
 public class ReplicaBarrierTests(RedisContainerFixture fixture)
 {
-    private static readonly TimeSpan Stalled = TimeSpan.FromMilliseconds(2000);
-
     public static TheoryData<string> Repeats => ["ctlsync", "ctlcommit", "gate", "durable", "allack", "transit"];
 
     [Theory]
@@ -23,9 +20,9 @@ public class ReplicaBarrierTests(RedisContainerFixture fixture)
         var repeat = await rig.PrepareAsync(kind);
         await rig.Confirmed();
 
-        var elapsed = await rig.WaitedAfterAsync(repeat);
+        var held = await rig.WaitedAfterAsync(repeat, TestContext.Current.CancellationToken);
 
-        elapsed.Should().BeGreaterThan(TimeSpan.FromMilliseconds(800), kind);
+        held.Should().BeTrue($"{kind}: the WAIT stayed pending while the replica could not acknowledge");
     }
 
     [Theory]
@@ -36,15 +33,15 @@ public class ReplicaBarrierTests(RedisContainerFixture fixture)
         await rig.PrepareAsync(kind);
         await rig.Confirmed();
 
-        var elapsed = await rig.WaitedAfterAsync(() => Task.CompletedTask);
+        var held = await rig.WaitedAfterAsync(() => Task.CompletedTask, TestContext.Current.CancellationToken);
 
-        elapsed.Should().BeLessThan(TimeSpan.FromMilliseconds(500), kind);
+        held.Should().BeFalse($"{kind}: with nothing written the WAIT has nothing to wait for");
     }
 
     [Fact]
     public async Task A_run_with_a_real_replica_confirms_both_barriers_and_the_state_wait()
     {
-        await using var kit = await StateKit.StandaloneAsync(fixture, useScripts: true, new PhaseBStateOptions { BarrierWait = TimeSpan.FromSeconds(3) });
+        await using var kit = await StateKit.StandaloneAsync(fixture, useScripts: true, new PhaseBStateOptions { ExpectedReplicasPerMaster = 1, BarrierWait = TimeSpan.FromSeconds(3) });
         _ = ReplicaString();
         var init = await kit.InitAsync("a");
 
@@ -57,22 +54,39 @@ public class ReplicaBarrierTests(RedisContainerFixture fixture)
     [Fact]
     public async Task A_replica_that_does_not_acknowledge_leaves_the_transition_waiting_at_dur_zero_until_it_comes_back()
     {
-        await using var kit = await StateKit.StandaloneAsync(fixture, useScripts: true, new PhaseBStateOptions { BarrierWait = TimeSpan.FromMilliseconds(300) });
+        await using var kit = await StateKit.StandaloneAsync(fixture, useScripts: true, new PhaseBStateOptions { ExpectedReplicasPerMaster = 1, BarrierWait = TimeSpan.FromMilliseconds(300) });
         _ = ReplicaString();
         await using var replica = await ConnectionMultiplexer.ConnectAsync(ReplicaString() + ",allowAdmin=true");
         var init = await kit.InitAsync("a");
-        var sleep = Task.Run(() => replica.GetServer(replica.GetEndPoints()[0]).ExecuteAsync("DEBUG", "SLEEP", "4"));
-        await Task.Delay(300, TestContext.Current.CancellationToken);
+        var stall = await ReplicaStall.StartAsync(replica, 3);
 
         var stuck = await kit.Sequence.RunAsync(kit.Group, StateKit.Expecting(init), StateKit.TargetFrom(init, "S1", "fwd", 0), null, CancellationToken.None);
 
         stuck.Outcome.Should().Be(TransitionOutcome.BarrierStuck);
         (await kit.Store.ReadAsync(kit.Group, CancellationToken.None))!.Durable.Should().BeFalse();
-        await sleep;
-        await Task.Delay(1500, TestContext.Current.CancellationToken);
+        await stall.FinishedAsync();
 
         (await kit.Sequence.ResumeAsync(kit.Group, null, CancellationToken.None)).Outcome.Should().Be(TransitionOutcome.Completed);
         (await kit.Store.ReadAsync(kit.Group, CancellationToken.None))!.Durable.Should().BeTrue();
+    }
+
+    [Fact]
+    public async Task A_resume_after_a_lost_durable_reply_repeats_the_write_and_waits_for_the_replica()
+    {
+        await using var kit = await StateKit.StandaloneAsync(fixture, useScripts: true, new PhaseBStateOptions { ExpectedReplicasPerMaster = 1, BarrierWait = TimeSpan.FromSeconds(5) });
+        await using var replica = await ConnectionMultiplexer.ConnectAsync(ReplicaString() + ",allowAdmin=true");
+        var init = await kit.InitAsync("a");
+        var target = StateKit.TargetFrom(init, "S1", "fwd", 0);
+        (await kit.Sequence.RunAsync(kit.Group, StateKit.Expecting(init), target, null, CancellationToken.None)).Outcome.Should().Be(TransitionOutcome.Completed);
+        var stall = await ReplicaStall.StartAsync(replica, 3);
+
+        // The controller crashed after DURABLE executed and before its WAIT: the state is durable, its replication unconfirmed.
+        var resume = kit.Sequence.ResumeAsync(kit.Group, null, CancellationToken.None);
+        await Task.Delay(500, TestContext.Current.CancellationToken);
+
+        resume.IsCompleted.Should().BeFalse("the repeated DURABLE write has a WAIT to wait for");
+        (await resume).Should().Be(new TransitionResult(TransitionOutcome.Completed));
+        await stall.FinishedAsync();
     }
 
     private static string ReplicaString()
@@ -88,7 +102,7 @@ public class ReplicaBarrierTests(RedisContainerFixture fixture)
         var replicaString = ReplicaString();
         var primary = await ConnectionMultiplexer.ConnectAsync(fixture.ConnectionString);
         var replica = await ConnectionMultiplexer.ConnectAsync(replicaString + ",allowAdmin=true");
-        var topology = new MultiplexerTopology(primary, string.Empty, useScripts: true, fixture.ServerVersion);
+        var topology = new MultiplexerTopology(primary, string.Empty, useScripts: true, fixture.ServerVersion, expectedReplicasPerMaster: 1);
         var layout = await topology.ReadLayoutAsync(CancellationToken.None);
         layout.Masters.Should().ContainSingle().Which.ConfiguredReplicas.Should().Be(1);
         return new Rig(primary, replica, await topology.OpenAsync(layout.Masters[0].Endpoint, CancellationToken.None));
@@ -136,18 +150,17 @@ public class ReplicaBarrierTests(RedisContainerFixture fixture)
 
         public async Task Confirmed() => (await channel.WaitAsync(1, TimeSpan.FromSeconds(5), CancellationToken.None)).Should().BeGreaterThanOrEqualTo(1);
 
-        // The replica stops answering for a while; the repeat runs, then the WAIT is timed.
-        public async Task<TimeSpan> WaitedAfterAsync(Func<Task> repeat)
+        // The replica stops answering; the repeat runs; the WAIT is started and either is still pending half a second later or has returned.
+        public async Task<bool> WaitedAfterAsync(Func<Task> repeat, CancellationToken cancellationToken)
         {
-            var sleep = Task.Run(() => replica.GetServer(replica.GetEndPoints()[0]).ExecuteAsync("DEBUG", "SLEEP", Stalled.TotalSeconds.ToString(System.Globalization.CultureInfo.InvariantCulture)));
-            await Task.Delay(300);
+            var stall = await ReplicaStall.StartAsync(replica, 4);
             await repeat();
-            var watch = Stopwatch.StartNew();
-            await channel.WaitAsync(1, TimeSpan.FromSeconds(5), CancellationToken.None);
-            watch.Stop();
-            await sleep;
-            await Task.Delay(1200);
-            return watch.Elapsed;
+            var wait = channel.WaitAsync(1, TimeSpan.FromSeconds(5), cancellationToken);
+            await Task.WhenAny(wait, Task.Delay(500, cancellationToken));
+            var pending = !wait.IsCompleted;
+            (await wait).Should().BeGreaterThanOrEqualTo(1);
+            await stall.FinishedAsync();
+            return pending;
         }
 
         public async ValueTask DisposeAsync()
