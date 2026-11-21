@@ -264,6 +264,28 @@ public class EffectiveWriteTests(ITestContextAccessor testContextAccessor)
     }
 
     [Fact]
+    public async Task A_policy_on_a_custom_proxy_behind_an_outside_gate_writes_what_the_proxy_writes_until_the_gate_opens()
+    {
+        var registry = new ValueSerializerRegistry([RegistryEntry.Of("fast", _fast)]);
+        var gate = new OutsideGate { Reason = "node_without_pin" };
+        var negotiator = new FormatNegotiator([new DesiredWrite(_fast, Binary, ["default"], [])], new FormatNegotiationOptions { UpgradeHold = TimeSpan.Zero }, TimeProvider.System, writeGate: gate);
+        var view = new NodeListView([new("me", new("3.2.0", "i", ["json", "10"], new Dictionary<string, IReadOnlyList<string>>()), TimeSpan.Zero)], [], Complete: true);
+        negotiator.Observe(view);
+        var sut = SimpleCache(registry, negotiator, new RawByteSerializerProxy());
+        var written = CaptureSimpleWrites();
+        byte[] raw = [0x02, 0xC4, 0x01, 0x41];
+        var policy = ResolvedPolicy(registry);
+
+        await sut.SetAsync("k", raw, TimeSpan.FromMinutes(1), policy, Token);
+        gate.Reason = null;
+        negotiator.Observe(view);
+        await sut.SetAsync("k", raw, TimeSpan.FromMinutes(1), policy, Token);
+
+        written[0].Should().Equal(raw, "the gate holds the format, and the proxy's own bytes are what a node that cannot read it still reads");
+        written[1][0].Should().Be(0x10);
+    }
+
+    [Fact]
     public void A_node_that_does_not_sniff_advertises_json_only_for_the_policies_that_do_not()
     {
         var registry = new ValueSerializerRegistry([RegistryEntry.Of("fast", _fast)]);
@@ -413,6 +435,13 @@ public class EffectiveWriteTests(ITestContextAccessor testContextAccessor)
             ValueSerializers = registry,
             EffectiveFormat = _gate,
         };
+    }
+
+    private sealed class OutsideGate : IFormatWriteGate
+    {
+        public string? Reason { get; set; }
+
+        public string? Hold() => Reason;
     }
 
     private sealed class Gate : IEffectiveFormat

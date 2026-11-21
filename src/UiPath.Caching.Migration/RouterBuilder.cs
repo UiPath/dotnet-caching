@@ -1,3 +1,5 @@
+using StackExchange.Redis;
+
 namespace UiPath.Caching.Migration;
 
 public sealed class RouterBuilder
@@ -8,6 +10,8 @@ public sealed class RouterBuilder
     internal IReadOnlyList<Func<RouterCore, (string Name, Type Type, object Cache)>> Registrations => _registrations;
 
     internal Func<string, bool>? LibraryPredicate { get; private set; }
+
+    internal Func<string, bool>? PinPredicate { get; private set; }
 
     internal ISerializerProxy<byte[]>? Envelope { get; private set; }
 
@@ -20,6 +24,8 @@ public sealed class RouterBuilder
     internal TimeSpan? SourceTimeout { get; private set; }
 
     internal TimeSpan CleanupBound { get; set; } = TimeSpan.FromSeconds(10);
+
+    internal Func<IDatabase>? SourceDatabase { get; private set; }
 
     public RouterBuilder Add<T>(RouterCacheRegistration<T> registration)
         where T : class
@@ -79,6 +85,13 @@ public sealed class RouterBuilder
         return this;
     }
 
+    /// <summary>A live setting that pins groups to the library path, never the source; a group is switched once a format write needs it and every node has the pin. Group names hold none of <c>+ @ = { }</c>.</summary>
+    public RouterBuilder UsePinWhen(Func<string, bool> pinned)
+    {
+        PinPredicate = pinned ?? throw new ArgumentNullException(nameof(pinned));
+        return this;
+    }
+
     /// <summary>The serializer that writes and reads the older client's value envelope.</summary>
     public RouterBuilder UseEnvelope(ISerializerProxy<byte[]> envelope)
     {
@@ -92,6 +105,13 @@ public sealed class RouterBuilder
         ArgumentOutOfRangeException.ThrowIfLessThanOrEqual(bound, TimeSpan.Zero);
         ArgumentOutOfRangeException.ThrowIfGreaterThan(bound, LibrarySettleBound.Horizon);
         SettleBound = bound;
+        return this;
+    }
+
+    /// <summary>The source client's database, returned at once and with no key prefix of its own, which carries the router's node advertisement while the library is down.</summary>
+    public RouterBuilder UseSourceConnection(Func<IDatabase> database)
+    {
+        SourceDatabase = database ?? throw new ArgumentNullException(nameof(database));
         return this;
     }
 }

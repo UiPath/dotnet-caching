@@ -38,6 +38,8 @@ internal sealed class Router : IRouter, IAsyncDisposable
 
     public RouterModeReason ModeReason => _core.ModeReason;
 
+    internal RouterAdvertiser? Advertiser { get; init; }
+
     public Task EnterBypassAsync(CancellationToken cancellationToken = default)
     {
         _core.ThrowIfStopped();
@@ -96,7 +98,28 @@ internal sealed class Router : IRouter, IAsyncDisposable
         await _cleaned!.Task.ConfigureAwait(false);
     }
 
-    internal void Start() => _core.Start();
+    internal void Start()
+    {
+        // The switch state is read before the first call is admitted.
+        _core.Pins?.Initialize(_core.StartBound);
+        _core.Start();
+        if (Advertiser is { } advertiser)
+        {
+            _core.ModeChanged += (_, _) => advertiser.Nudge();
+            if (_core.Pins is { } changing)
+            {
+                changing.Changed += advertiser.Nudge;
+            }
+
+            advertiser.Start();
+        }
+
+        if (_core.Pins is { } pins)
+        {
+            _core.ModeChanged += (_, _) => pins.RequestRefresh();
+            pins.Start();
+        }
+    }
 
     private static Task PendingSettled(IRouterParticipant[] stoppables) => Task.WhenAll(stoppables.Select(stoppable => stoppable.WhenPendingSettledAsync()));
 
@@ -112,6 +135,14 @@ internal sealed class Router : IRouter, IAsyncDisposable
         {
             foreground.TrySetException(ex);
             cleaned.TrySetException(ex);
+        }
+        finally
+        {
+            // A stop that failed part way still takes the advertisement down; StopAsync never throws and runs once.
+            if (Advertiser is { Stopped: false } advertiser)
+            {
+                await advertiser.StopAsync(PhaseLimit).ConfigureAwait(false);
+            }
         }
     }
 
@@ -149,6 +180,17 @@ internal sealed class Router : IRouter, IAsyncDisposable
         }
 
         await background.ConfigureAwait(false);
+        if (Advertiser is { } advertiser)
+        {
+            // Departs only after every call has ended, so a reader never sees this node gone while it still serves.
+            var departed = advertiser.StopAsync(PhaseLimit);
+            if (!await WithinAsync(departed).ConfigureAwait(false))
+            {
+                foreground.TrySetResult();
+            }
+
+            await departed.ConfigureAwait(false);
+        }
 
         // A transition that an outside caller started holds the lock until it ends; the semaphore is disposed only after every one has.
         await BoundedStop.CompletesAsync(_core.TransitionsEnded, _core.CleanupBound).ConfigureAwait(false);

@@ -57,7 +57,10 @@ internal sealed class TestNode : IAsyncDisposable
         Func<LibraryParts>? lazyLibrary = null,
         Func<CancellationToken, Task<LibraryParts>>? lazyLibraryAsync = null,
         TimeSpan? startBound = null,
-        TimeSpan? cleanupBound = null)
+        TimeSpan? cleanupBound = null,
+        Func<string, bool>? pinWhen = null,
+        IPinStore? pinStore = null,
+        string? scope = null)
     {
         var source = new Uri($"urn:test-{node ?? Guid.NewGuid().ToString("N")}");
         var sourceBackend = new FakeBackend(store, clock);
@@ -69,6 +72,11 @@ internal sealed class TestNode : IAsyncDisposable
             StartBound = startBound ?? TimeSpan.FromSeconds(5),
             CleanupBound = cleanupBound ?? TimeSpan.FromSeconds(10),
         };
+        if (pinWhen is not null && sharedCore is null)
+        {
+            core.Pins = new PinCoordinator(core, pinWhen, pinStore, scope, TimeSpan.FromSeconds(15), TimeSpan.FromMinutes(2), NullLogger.Instance) { OwnField = "n1" + RouterAdvertisement.FieldSuffix };
+        }
+
         var registration = new RouterCacheRegistration<Item>
         {
             Name = cacheName,

@@ -3,7 +3,13 @@ namespace UiPath.Caching.Migration;
 /// <summary>The one place that says which setting decides a call's path; <see cref="Order"/> is what the startup banner and the documentation list.</summary>
 internal static class RoutePrecedence
 {
-    public static IReadOnlyList<string> Order { get; } = ["bypass (flag, explicit request, library not started)", "group predicate", "pin (not available in this version)"];
+    public static IReadOnlyList<string> Order { get; } = ["pin (UsePinWhen, or a switched group)", "bypass (flag, explicit request, library not started)", "group predicate"];
+
+    /// <summary>No read of the switch state is recent enough to tell whether the group is switched: the call is not answered by either client.</summary>
+    public static Route Unknown { get; } = new(RoutePath.Library, Route.PinStateUnknown, Tier: false, NoFallback: true, Hold: true);
+
+    /// <summary>The library, whatever the bypass and the group predicate say, and never the source.</summary>
+    public static Route Pinned(bool tier) => new(RoutePath.Library, Route.Pinned, Tier: tier, NoFallback: true);
 
     public static Route Resolve(bool inBypass, bool libraryDown, FlagState flag, bool tierOpen, Func<string, bool> predicate, string group)
     {
