@@ -101,7 +101,27 @@ public sealed class PinTests : RouterTestBase
     }
 
     [Fact]
-    public async Task Withdrawing_the_pin_withdraws_the_acknowledgement_at_once_and_the_group_returns_to_its_predicate()
+    public async Task Withdrawing_a_pin_that_was_never_acknowledged_returns_the_group_to_its_predicate_at_once()
+    {
+        var node = NewNode(useLibrary: _ => false, pinWhen: _ => _pinned, pinStore: _store);
+        var pins = node.Core.Pins!;
+        await Settled(node);
+        var running = node.Core.PinFor("g")!;
+        running.TryBeginSource().Should().BeTrue();
+        _pinned = true;
+        pins.EvaluatePins();
+        Tokens(pins).Should().NotContain("pin=g", "a call that started on the source is still running");
+
+        _pinned = false;
+        pins.EvaluatePins();
+        await node.Cache.TryGetAsync("k", Ct);
+
+        node.SourceBackend.Reads.Should().Be(1, "no node was ever shown an acknowledgement, so no switch can be recorded on it");
+        running.EndSource();
+    }
+
+    [Fact]
+    public async Task Withdrawing_an_acknowledged_pin_withdraws_it_at_once_and_fails_unavailable_until_a_read_shows_no_switch_was_recorded()
     {
         var node = NewNode(useLibrary: _ => false, pinWhen: _ => _pinned, pinStore: _store);
         var pins = node.Core.Pins!;
@@ -112,12 +132,139 @@ public sealed class PinTests : RouterTestBase
 
         _pinned = false;
         pins.EvaluatePins();
-        await node.Cache.TryGetAsync("k", Ct);
 
         Tokens(pins).Should().NotContain("pin=g");
+        var read = async () => await node.Cache.TryGetAsync("k", Ct);
+        await read.Should().ThrowAsync<CacheUnavailableException>();
+        node.SourceBackend.Reads.Should().Be(0);
+
+        await pins.RefreshAsync(Ct);
+        await node.Cache.TryGetAsync("k", Ct);
+
+        node.SourceBackend.Reads.Should().Be(1, "the durable state was read after the withdrawal and holds no switch");
+    }
+
+    [Fact]
+    public async Task A_peer_that_records_the_switch_while_a_node_withdraws_its_pin_keeps_that_node_off_the_source()
+    {
+        var node = NewNode(useLibrary: _ => false, pinWhen: _ => _pinned, pinStore: _store);
+        var pins = node.Core.Pins!;
+        await Settled(node);
+        _pinned = true;
+        pins.EvaluatePins();
+
+        _pinned = false;
+        pins.EvaluatePins();
+        _store.Set("g", SwitchRead.Switched);
+        var before = async () => await node.Cache.TryGetAsync("k", Ct);
+        await before.Should().ThrowAsync<CacheUnavailableException>();
+        await pins.RefreshAsync(Ct);
+        (await node.Cache.TryGetAsync("k", Ct)).Should().BeNull();
+
+        node.SourceBackend.Reads.Should().Be(0);
+        node.LibraryBackend.Reads.Should().Be(1, "the group is switched now, and a switched group takes the library");
+        node.Core.PinFor("g")!.Applied.Should().BeTrue();
+    }
+
+    [Fact]
+    public async Task A_read_that_began_before_the_withdrawal_does_not_confirm_it()
+    {
+        var node = NewNode(useLibrary: _ => false, pinWhen: _ => _pinned, pinStore: _store);
+        var pins = node.Core.Pins!;
+        await Settled(node);
+        _pinned = true;
+        pins.EvaluatePins();
+        _store.DuringStateRead = () =>
+        {
+            _store.DuringStateRead = null;
+            _pinned = false;
+            pins.EvaluatePins();
+        };
+
+        await pins.RefreshAsync(Ct);
+
+        var read = async () => await node.Cache.TryGetAsync("k", Ct);
+        await read.Should().ThrowAsync<CacheUnavailableException>("the read may have run before a peer recorded the switch");
+        await pins.RefreshAsync(Ct);
+        await node.Cache.TryGetAsync("k", Ct);
         node.SourceBackend.Reads.Should().Be(1);
     }
 
+    [Fact]
+    public async Task A_library_read_that_outlives_the_state_does_not_fall_back_to_the_source()
+    {
+        var node = NewNode(useLibrary: _ => true, pinWhen: _ => false, pinStore: _store);
+        var pins = node.Core.Pins!;
+        await Settled(node);
+        node.LibraryBackend.ReadOverride = ReadOutcome.Unavailable;
+        var release = new TaskCompletionSource();
+        node.LibraryBackend.AfterRead = () => release.Task;
+        _store.Down = true;
+        var inFlight = node.Cache.TryGetAsync("k", Ct).AsTask();
+        await UntilAsync(() => node.LibraryBackend.Reads == 1);
+
+        Clock.Advance(pins.StateValidity + TimeSpan.FromSeconds(1));
+        release.SetResult();
+
+        var result = async () => await inFlight;
+        await result.Should().ThrowAsync<CacheUnavailableException>();
+        node.SourceBackend.Reads.Should().Be(0, "the state read that let the call in is too old to let it take the source now");
+    }
+
+    [Fact]
+    public async Task A_group_switched_while_a_library_read_is_running_does_not_fall_back_to_the_source()
+    {
+        var node = NewNode(useLibrary: _ => true, pinWhen: _ => false, pinStore: _store);
+        var pins = node.Core.Pins!;
+        await Settled(node);
+        node.LibraryBackend.ReadOverride = ReadOutcome.Unavailable;
+        var release = new TaskCompletionSource();
+        node.LibraryBackend.AfterRead = () => release.Task;
+        var inFlight = node.Cache.TryGetAsync("k", Ct).AsTask();
+        await UntilAsync(() => node.LibraryBackend.Reads == 1);
+
+        _store.Set("g", SwitchRead.Switched);
+        await pins.RefreshAsync(Ct);
+        release.SetResult();
+
+        var result = async () => await inFlight;
+        await result.Should().ThrowAsync<CacheUnavailableException>();
+        node.SourceBackend.Reads.Should().Be(0);
+    }
+
+    [Fact]
+    public async Task A_library_write_that_outlives_the_state_does_not_fall_back_to_the_source()
+    {
+        var node = NewNode(useLibrary: _ => true, pinWhen: _ => false, pinStore: _store);
+        var pins = node.Core.Pins!;
+        await Settled(node);
+        node.LibraryBackend.WriteOutcome = WriteOutcome.NotSent;
+        var release = new TaskCompletionSource();
+        node.LibraryBackend.InFlight = _ => release.Task;
+        _store.Down = true;
+        var inFlight = node.Cache.SetAsync("k", new Item("v"), default, Ct).AsTask();
+        await UntilAsync(() => node.LibraryBackend.Writes == 1);
+
+        Clock.Advance(pins.StateValidity + TimeSpan.FromSeconds(1));
+        release.SetResult();
+
+        (await inFlight).Should().Be(WriteOutcome.NotSent);
+        node.SourceBackend.Writes.Should().Be(0);
+    }
+
+    [Fact]
+    public async Task A_library_call_that_falls_back_while_the_state_is_still_good_takes_the_source()
+    {
+        var node = NewNode(useLibrary: _ => true, pinWhen: _ => false, pinStore: _store);
+        await Settled(node);
+        node.LibraryBackend.ReadOverride = ReadOutcome.Unavailable;
+        node.LibraryBackend.WriteOutcome = WriteOutcome.NotSent;
+
+        await node.Cache.TryGetAsync("k", Ct);
+        await node.Cache.SetAsync("k", new Item("v"), default, Ct);
+
+        (node.SourceBackend.Reads, node.SourceBackend.Writes).Should().Be((1, 1));
+    }
     [Fact]
     public async Task A_setting_that_throws_leaves_the_group_as_it_was()
     {

@@ -15,6 +15,9 @@ internal sealed class FakePinStore : IPinStore
 
     public bool WritesDown { get; set; }
 
+    /// <summary>Runs inside a state read, after it began and before it answers, to make something happen during it.</summary>
+    public Action? DuringStateRead { get; set; }
+
     public IReadOnlyList<string> Log
     {
         get
@@ -53,6 +56,7 @@ internal sealed class FakePinStore : IPinStore
     public Task<SwitchRead> ReadStateAsync(string group, CancellationToken cancellationToken)
     {
         ThrowIfDown();
+        DuringStateRead?.Invoke();
         lock (_gate)
         {
             _log.Add("read:" + group);

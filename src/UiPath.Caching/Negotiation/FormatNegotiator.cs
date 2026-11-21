@@ -32,6 +32,7 @@ internal sealed class FormatNegotiator : IEffectiveFormat, IEventWrites
     private readonly Lock _gate = new();
     private readonly long?[] _candidateSince;
     private readonly bool[] _suspended;
+    private readonly int[] _gateClosed;
     private readonly string?[] _reasons;
     private HashSet<string> _readers = [];
     private volatile Snapshot _snapshot;
@@ -61,6 +62,7 @@ internal sealed class FormatNegotiator : IEffectiveFormat, IEventWrites
         _logger = logger ?? NullLogger.Instance;
         _candidateSince = new long?[_slots.Length];
         _suspended = new bool[_slots.Length];
+        _gateClosed = new int[_slots.Length];
         _reasons = new string?[_slots.Length];
         Array.Fill(_reasons, ReasonNoView);
         _snapshot = Publish(new bool[_slots.Length], 0);
@@ -76,6 +78,8 @@ internal sealed class FormatNegotiator : IEffectiveFormat, IEventWrites
         }
     }
 
+    public bool Gated => _writeGate is not null;
+
     public bool Allows(ICacheValueSerializer writer)
     {
         var snapshot = _snapshot;
@@ -85,7 +89,7 @@ internal sealed class FormatNegotiator : IEffectiveFormat, IEventWrites
             if (ReferenceEquals(writers[i].Writer, writer))
             {
                 // A view that stopped refreshing, without failing, decays on its own: the age is checked here, off the cached stamp and the injected clock.
-                return writers[i].Allowed && _clock.GetElapsedTime(snapshot.Stamp) <= _options.MaxViewAge && (_writeGate is null || _writeGate.Hold() is null);
+                return writers[i].Allowed && _clock.GetElapsedTime(snapshot.Stamp) <= _options.MaxViewAge && GateOpen(i);
             }
         }
 
@@ -116,8 +120,15 @@ internal sealed class FormatNegotiator : IEffectiveFormat, IEventWrites
             {
                 // A node that joins ends what a departure held back: the format then waits for the hold like any other.
                 _suspended[i] &= !joined;
+                var closed = Interlocked.Exchange(ref _gateClosed[i], 0) == 1;
+                if (closed)
+                {
+                    _suspended[i] = false;
+                    _candidateSince[i] = null;
+                }
+
                 _reasons[i] = Block(_slots[i], view);
-                allowed[i] = Decide(i, previous[i].Allowed, joined, grace, now);
+                allowed[i] = Decide(i, previous[i].Allowed && !closed, joined, grace, now);
             }
 
             Transition(previous, allowed);
@@ -181,6 +192,28 @@ internal sealed class FormatNegotiator : IEffectiveFormat, IEventWrites
                 _ => null,
             }
             : null;
+
+    // A closure seen here is kept until the next view, which restarts the hold, so reopening before it never resumes the write.
+    private bool GateOpen(int slot)
+    {
+        if (_writeGate is null)
+        {
+            return true;
+        }
+
+        if (Volatile.Read(ref _gateClosed[slot]) == 1)
+        {
+            return false;
+        }
+
+        if (_writeGate.Hold() is null)
+        {
+            return true;
+        }
+
+        Volatile.Write(ref _gateClosed[slot], 1);
+        return false;
+    }
 
     private string? Block(Slot want, NodeListView view)
     {

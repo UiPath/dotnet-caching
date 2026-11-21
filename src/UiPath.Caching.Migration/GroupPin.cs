@@ -19,6 +19,8 @@ internal sealed class GroupPin(string group)
     private bool _pinned;
     private long _knownAt;
     private int _known;
+    private int _unconfirmed;
+    private long _withdrawals;
 
     public string Group { get; } = group;
 
@@ -30,6 +32,9 @@ internal sealed class GroupPin(string group)
 
     /// <summary>The switch is recorded in Redis, as far as this node last saw.</summary>
     public bool Durable => Volatile.Read(ref _durable) == 1;
+
+    /// <summary>Counts the withdrawals of an acknowledged pin; a state read confirms only the withdrawal that began before it.</summary>
+    public long Withdrawals => Volatile.Read(ref _withdrawals);
 
     internal int SourceCalls => Volatile.Read(ref _sourceCalls);
 
@@ -55,8 +60,24 @@ internal sealed class GroupPin(string group)
 
     public void EndSource() => Interlocked.Decrement(ref _sourceCalls);
 
-    /// <summary>Whether a state read succeeded within <paramref name="validity"/>.</summary>
-    public bool StateKnown(TimeProvider clock, TimeSpan validity) => Volatile.Read(ref _known) == 1 && clock.GetElapsedTime(Volatile.Read(ref _knownAt)) <= validity;
+    /// <summary>Whether a state read succeeded within <paramref name="validity"/>, and no withdrawn acknowledgement is waiting for its read.</summary>
+    public bool StateKnown(TimeProvider clock, TimeSpan validity) =>
+        Volatile.Read(ref _unconfirmed) == 0 && Volatile.Read(ref _known) == 1 && clock.GetElapsedTime(Volatile.Read(ref _knownAt)) <= validity;
+
+    /// <summary>
+    /// A read of the durable state, begun after withdrawal number <paramref name="withdrawals"/>, found no switch: a peer that read the old acknowledgement
+    /// can no longer have recorded one, so the source may be used again.
+    /// </summary>
+    public void ConfirmUnswitched(long withdrawals)
+    {
+        lock (_gate)
+        {
+            if (withdrawals == _withdrawals && !Switched)
+            {
+                Volatile.Write(ref _unconfirmed, 0);
+            }
+        }
+    }
 
     public void StateRead(TimeProvider clock)
     {
@@ -99,6 +120,13 @@ internal sealed class GroupPin(string group)
     {
         var applied = _pinned || Switched;
         var before = Acked;
+        if (before && !applied)
+        {
+            // A peer may hold the acknowledgement it read and record the switch: the source stays closed until a read made after this shows none, and the flag is set before the source can be admitted.
+            _withdrawals++;
+            Volatile.Write(ref _unconfirmed, 1);
+        }
+
         Interlocked.Exchange(ref _applied, applied ? 1 : 0);
 
         // The drain reads the counter after the flag is published; a call that counts after that sees the flag and never counts.

@@ -229,6 +229,8 @@ internal sealed class RoutedCache<T> : IRouterParticipant, IRoutedCache<T>, IDis
 
     private IPathClient<T> Client(Route route) => route.Hold ? UnavailablePathClient<T>.Instance : Client(route.Path);
 
+    private bool MayFallBack(Route route) => route.Other != RoutePath.Source || _core.MaySourceFallback(_pin);
+
     private Admission Admit(out Route route) => _pin is null ? _core.Admit(_registration.Group, out route) : _core.Admit(_pin, _registration.Group, out route);
 
     private bool TryLocal(LocalKey local, Route route, out T? value)
@@ -311,8 +313,8 @@ internal sealed class RoutedCache<T> : IRouterParticipant, IRoutedCache<T>, IDis
             return new Loaded(null, route);
         }
 
-        // A pinned group has no other client: an answer that is not one, from the library, is no answer.
-        if (route.NoFallback)
+        // A pinned group has no other client: an answer that is not one, from the library, is no answer. The source is asked again whether it may be taken, as the state may have expired or changed since admission.
+        if (route.NoFallback || !MayFallBack(route))
         {
             return first.Kind == ReadOutcome.Unavailable ? throw new CacheUnavailableException($"The library cannot answer for the pinned group of cache '{name}'.") : new Loaded(null, route);
         }
@@ -338,7 +340,7 @@ internal sealed class RoutedCache<T> : IRouterParticipant, IRoutedCache<T>, IDis
         }
 
         // The library just failed, so what the factory makes goes to the source first; the library stays the fallback when the source refuses to send.
-        return new Loaded(null, firstUnavailable && route.Path == RoutePath.Library ? new Route(RoutePath.Source, Route.OtherClientRead) : route);
+        return new Loaded(null, firstUnavailable && route.Path == RoutePath.Library && MayFallBack(route) ? new Route(RoutePath.Source, Route.OtherClientRead) : route);
     }
 
     private T Hit(PathRead<T> read, LocalKey local, FillMark mark, DateTimeOffset readStart, RoutePath path, string reason, bool fill)
@@ -448,7 +450,7 @@ internal sealed class RoutedCache<T> : IRouterParticipant, IRoutedCache<T>, IDis
     private async ValueTask<WriteOutcome> SendAsync(string key, Route route, Func<IPathClient<T>, CancellationToken, ValueTask<WriteResult>> command, KeyState state, Announcement announcement, CancellationToken cancellationToken)
     {
         var result = await CommandAsync(Client(route), key, route, command, state, announcement, cancellationToken).ConfigureAwait(false);
-        if (result.Outcome == WriteOutcome.NotSent && !route.Bypass && !route.NoFallback)
+        if (result.Outcome == WriteOutcome.NotSent && !route.Bypass && !route.NoFallback && MayFallBack(route))
         {
             // A token cancelled before the library sent anything must not reach the other client: that command would be sent already cancelled.
             cancellationToken.ThrowIfCancellationRequested();

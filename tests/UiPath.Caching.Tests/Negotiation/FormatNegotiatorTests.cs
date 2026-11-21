@@ -454,6 +454,27 @@ public class FormatNegotiatorTests
     }
 
     [Fact]
+    public void A_gate_that_closes_and_reopens_between_two_views_restarts_the_hold_when_the_next_view_arrives()
+    {
+        var gate = new FakeGate(null);
+        var sut = Negotiator(gate);
+        var view = View(Node("a", Binary));
+        Settle(sut, view);
+        sut.Allows(_writer).Should().BeTrue();
+
+        gate.Reason = "node_without_pin";
+        sut.Allows(_writer).Should().BeFalse();
+        gate.Reason = null;
+
+        sut.Allows(_writer).Should().BeFalse("the closure was seen, and only a view that waits out the hold lifts it");
+        sut.Observe(view);
+        sut.Allows(_writer).Should().BeFalse();
+        _clock.Advance(_options.UpgradeHold);
+        sut.Observe(view);
+        sut.Allows(_writer).Should().BeTrue();
+    }
+
+    [Fact]
     public void A_decision_behind_an_open_gate_is_read_without_allocating()
     {
         var sut = Negotiator(new FakeGate(null));

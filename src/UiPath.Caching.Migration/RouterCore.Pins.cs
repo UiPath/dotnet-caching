@@ -7,6 +7,9 @@ internal sealed partial class RouterCore
 
     public GroupPin? PinFor(string group) => Pins?.GroupFor(group);
 
+    /// <summary>Asked again at the point a call would take the source as its fallback: the pin must still be unapplied and its state read recently enough.</summary>
+    public bool MaySourceFallback(GroupPin? pin) => pin is null || (!pin.Applied && pin.StateKnown(Clock, Pins!.StateValidity));
+
     /// <summary>
     /// Admits a call of a group that can be pinned. A group the pin applies to goes to the library and never the source; one that is not known to be
     /// unswitched is answered unavailable; any other keeps its usual path, and is counted until it ends so the pin can tell when the old path has drained.

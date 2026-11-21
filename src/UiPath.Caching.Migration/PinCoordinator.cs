@@ -11,6 +11,7 @@ internal sealed partial class PinCoordinator(RouterCore core, Func<string, bool>
 {
     private const string NotWanted = "format_not_wanted";
     private const string NoPin = "no_pin";
+    private const string UnpinnedGroup = "unpinned_group";
     private const string NodeListUnreadable = "node_list_unreadable";
     private const string StateNotWritten = "state_not_written";
 
@@ -101,7 +102,8 @@ internal sealed partial class PinCoordinator(RouterCore core, Func<string, bool>
             return "view_stale";
         }
 
-        foreach (var group in snapshot.Groups)
+        // Every group of the router, not the ones that were pinned when the gate opened: one that lost its pin since closes it.
+        foreach (var group in _groups)
         {
             if (!group.Acked || !group.Durable)
             {
@@ -185,6 +187,8 @@ internal sealed partial class PinCoordinator(RouterCore core, Func<string, bool>
 
     private async Task<bool> RefreshGroupAsync(GroupPin group, NodeCache nodes, CancellationToken cancellationToken)
     {
+        // The withdrawal this read can confirm: one that happened after it began would not be covered by what it finds.
+        var withdrawals = group.Withdrawals;
         SwitchRead read;
         try
         {
@@ -211,6 +215,7 @@ internal sealed partial class PinCoordinator(RouterCore core, Func<string, bool>
                     return false;
                 }
 
+                group.ConfirmUnswitched(withdrawals);
                 break;
         }
 
@@ -263,15 +268,14 @@ internal sealed partial class PinCoordinator(RouterCore core, Func<string, bool>
 
     private async Task<bool> EvaluateGateAsync(GroupPin[] groups, NodeCache nodes, CancellationToken cancellationToken)
     {
-        var pinned = groups.Where(group => group.Applied).ToArray();
-        var reason = await GateReasonAsync(pinned, nodes, cancellationToken).ConfigureAwait(false);
+        var reason = await GateReasonAsync(groups, nodes, cancellationToken).ConfigureAwait(false);
         if (reason == NodeListUnreadable && _snapshot is not null)
         {
             // As the format negotiation does: the last view stands until it is too old.
             return false;
         }
 
-        var snapshot = new GateSnapshot(reason, core.Clock.GetTimestamp(), pinned);
+        var snapshot = new GateSnapshot(reason, core.Clock.GetTimestamp());
         var wasOpen = _snapshot is { Reason: null };
         _snapshot = snapshot;
         if (wasOpen != (reason is null))
@@ -282,6 +286,7 @@ internal sealed partial class PinCoordinator(RouterCore core, Func<string, bool>
         return reason is not (NodeListUnreadable or StateNotWritten);
     }
 
+    // The format is written by one serializer for every cache of the router, which knows nothing of groups: the gate opens only when all of them are pinned.
     private async Task<string?> GateReasonAsync(GroupPin[] pinned, NodeCache nodes, CancellationToken cancellationToken)
     {
         if (Volatile.Read(ref _wanted) == 0)
@@ -292,6 +297,11 @@ internal sealed partial class PinCoordinator(RouterCore core, Func<string, bool>
         if (pinned.Length == 0)
         {
             return NoPin;
+        }
+
+        if (pinned.Any(group => !group.Applied))
+        {
+            return UnpinnedGroup;
         }
 
         if (pinned.Any(group => !group.Acked))
@@ -400,7 +410,7 @@ internal sealed partial class PinCoordinator(RouterCore core, Func<string, bool>
     [LoggerMessage(Level = LogLevel.Warning, Message = "The node list could not be read for the pin; the gate stays closed and the state of an absent key cannot be told from a lost one.")]
     private partial void LogNodesFailed(Exception exception);
 
-    private sealed record GateSnapshot(string? Reason, long Stamp, GroupPin[] Groups);
+    private sealed record GateSnapshot(string? Reason, long Stamp);
 
     /// <summary>One read of the node hash per pass, shared by the groups; null when it failed.</summary>
     private sealed class NodeCache(IPinStore? store, CancellationToken cancellationToken, Action<Exception> onFailure)

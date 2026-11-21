@@ -9,5 +9,5 @@ internal sealed class PinFormatGate : IFormatWriteGate
 
     public void Attach(PinCoordinator pins) => _pins = pins;
 
-    public string? Hold() => _pins?.Hold() ?? "router_not_ready";
+    public string? Hold() => _pins is { } pins ? pins.Hold() : "router_not_ready";
 }

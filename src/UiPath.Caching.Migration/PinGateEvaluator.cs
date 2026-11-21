@@ -3,7 +3,7 @@ namespace UiPath.Caching.Migration;
 /// <summary>
 /// Reads the node hash for the pin: which nodes belong to this application, whether each has acknowledged the group, and whether a peer reports it switched.
 /// Entries of another application sharing the hash are told apart by the <c>ap</c> token of their router entry, and a library advertisement by the router
-/// entry of the same node; what cannot be attributed to another application counts as ours, so it can only hold a gate, never open one.
+/// entry of the same node; an entry that names no application counts as ours, so it can only hold a gate, never open one.
 /// </summary>
 internal static class PinGateEvaluator
 {
@@ -17,6 +17,12 @@ internal static class PinGateEvaluator
         if (!ours.Any(pair => pair.Key == ownField))
         {
             return new PinVerdict(new HashSet<string>(), OwnEntryMissing);
+        }
+
+        // What names no application may be ours or anyone's: it holds the gate, and its pin, if it has one, approves nothing.
+        if (ours.Any(pair => pair.Value.Scope is null))
+        {
+            return new PinVerdict(new HashSet<string>(), UnattributedNode);
         }
 
         foreach (var node in nodes)

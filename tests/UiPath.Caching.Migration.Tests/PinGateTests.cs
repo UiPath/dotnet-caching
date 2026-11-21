@@ -239,10 +239,91 @@ public sealed class PinGateTests
 
         var verdict = PinGateEvaluator.Evaluate(nodes, "app1", "a#router", ["g"], Fresh);
 
-        verdict.Blocker.Should().BeNull();
-        verdict.Satisfied.Should().BeEmpty("an entry of a build that names no application may be ours, and it has no pin");
+        verdict.Blocker.Should().Be(PinGateEvaluator.UnattributedNode, "an entry of a build that names no application may be ours");
+        verdict.Satisfied.Should().BeEmpty();
     }
 
+    [Fact]
+    public void An_entry_that_names_no_application_never_approves_even_when_it_carries_the_pin()
+    {
+        var nodes = new List<NodeEntry> { Node("a", "pin=g", "ap=app1"), Node("older", "pin=g") };
+
+        var verdict = PinGateEvaluator.Evaluate(nodes, "app1", "a#router", ["g"], Fresh);
+
+        verdict.Blocker.Should().Be(PinGateEvaluator.UnattributedNode);
+        verdict.Satisfied.Should().BeEmpty();
+    }
+
+    [Fact]
+    public void A_node_that_has_no_application_of_its_own_cannot_open_the_gate_either()
+    {
+        var nodes = new List<NodeEntry> { Node("a", "pin=g") };
+
+        var verdict = PinGateEvaluator.Evaluate(nodes, null, "a#router", ["g"], Fresh);
+
+        verdict.Blocker.Should().Be(PinGateEvaluator.UnattributedNode);
+        verdict.Satisfied.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task An_unattributed_entry_with_the_pin_holds_the_gate_through_the_coordinator()
+    {
+        var pins = Coordinator("a", _ => true);
+        pins.EvaluatePins();
+        _store.Nodes.AddRange([Node("a", "pin=g", "ap=app"), Node("older", "pin=g")]);
+        pins.Hold();
+
+        await pins.RefreshAsync(Ct);
+
+        pins.Hold().Should().Be(PinGateEvaluator.UnattributedNode);
+        _store.StateOf("g").Should().Be(SwitchRead.Unswitched);
+    }
+
+    [Fact]
+    public async Task The_gate_handed_to_the_stack_is_closed_until_the_router_attaches_and_then_follows_the_coordinator()
+    {
+        var gate = new PinFormatGate();
+        gate.Hold().Should().Be("router_not_ready");
+        var pins = Coordinator("a", _ => true);
+        pins.EvaluatePins();
+        _store.Nodes.AddRange([Node("a", "pin=g", "ap=app")]);
+        gate.Attach(pins);
+        gate.Hold().Should().Be("no_view");
+
+        await pins.RefreshAsync(Ct);
+
+        gate.Hold().Should().BeNull("an attached coordinator that says open is open");
+    }
+
+    [Fact]
+    public async Task One_pinned_group_does_not_open_the_gate_while_another_group_of_the_router_can_still_write_through_the_serializer()
+    {
+        var pins = Coordinator("a", group => group == "g");
+        pins.GroupFor("h");
+        pins.EvaluatePins();
+        _store.Nodes.AddRange([Node("a", "pin=g", "ap=app")]);
+        pins.Hold();
+
+        await pins.RefreshAsync(Ct);
+
+        pins.Hold().Should().Be("unpinned_group");
+        _store.StateOf("g").Should().Be(SwitchRead.Unswitched, "nothing is recorded for a gate that cannot open");
+    }
+
+    [Fact]
+    public async Task The_gate_opens_once_every_group_of_the_router_is_pinned_and_each_switch_is_recorded()
+    {
+        var pins = Coordinator("a", _ => true);
+        pins.GroupFor("h");
+        pins.EvaluatePins();
+        _store.Nodes.AddRange([Node("a", "pin=g", "pin=h", "ap=app")]);
+        pins.Hold();
+
+        await pins.RefreshAsync(Ct);
+
+        pins.Hold().Should().BeNull();
+        (_store.StateOf("g"), _store.StateOf("h")).Should().Be((SwitchRead.Switched, SwitchRead.Switched));
+    }
     [Fact]
     public void A_library_advertisement_of_another_application_with_its_own_router_entry_is_ignored()
     {
