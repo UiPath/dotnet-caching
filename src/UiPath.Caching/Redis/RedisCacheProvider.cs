@@ -102,13 +102,12 @@ public sealed class RedisCacheProvider : ICacheProvider
     /// <summary>As <see cref="CountFormatsAsync(string, CancellationToken)"/>, for a pattern taken exactly as <see cref="CacheKey"/> holds it, such as a <see cref="CacheKey.Verbatim(string)"/> one.</summary>
     public Task<IReadOnlyDictionary<string, long>> CountFormatsByKeyAsync(CacheKey keyPattern, CancellationToken token = default)
     {
-        var factory = _redisCacheOptions.RedisKeyStrategyFactory ?? new DefaultRedisKeyStrategyFactory();
         return new FormatCensus(
             _redis,
             _redisCacheOptions.KeyPrefix ?? string.Empty,
             _valueSerializers,
-            factory.Create(_cacheOptions, typeof(RedisCache)),
-            factory.Create(_cacheOptions, typeof(RedisHashCache)),
+            RedisKeyStrategies.Resolve(_redisCacheOptions, _cacheOptions, typeof(RedisCache)),
+            RedisKeyStrategies.Resolve(_redisCacheOptions, _cacheOptions, typeof(RedisHashCache)),
             _cacheOptions.KeyCasing).CountAsync(keyPattern, token);
     }
 

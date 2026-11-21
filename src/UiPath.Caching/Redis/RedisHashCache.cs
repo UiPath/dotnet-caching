@@ -63,7 +63,7 @@ internal sealed partial class RedisHashCache : RedisCacheBase, IHashCache, ISpan
         _write = new ConnectingPipeline(redis, resiliencePipelineProvider.Get(ResiliencePipelineNames.Write));
         _cacheOptions = cacheOptions;
         _cacheEntryFactory = redisCacheOptions.EntryFactory ?? new CacheEntryFactory();
-        _redisKeyStrategy = (redisCacheOptions.RedisKeyStrategyFactory ?? new DefaultRedisKeyStrategyFactory()).Create(_cacheOptions, GetType());
+        _redisKeyStrategy = RedisKeyStrategies.Resolve(redisCacheOptions, _cacheOptions, GetType());
         _cacheNullValues = redisCacheOptions.CacheNullValues;
         _fieldBatchSize = Math.Max(1, redisCacheOptions.HashFieldBatchSize);
         _auditLargeValues = _cacheOptions.AuditEnabled && _cacheOptions.LargeValueThreshold > 0;

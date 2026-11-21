@@ -470,6 +470,29 @@ public class RedisSetCacheTests(ITestContextAccessor testContextAccessor) : IAsy
     }
 
     [Fact]
+    public async Task A_key_format_joins_the_set_key()
+    {
+        _redisCacheOptions.RedisKeyStrategyFactory = null;
+        _redisCacheOptions.KeyFormat = RedisKeyFormat.Dollar;
+        var keys = new List<RedisKey>();
+        _database.SetLengthAsync(Arg.Do<RedisKey>(keys.Add), Arg.Any<CommandFlags>()).Returns(1L);
+
+        await Sut.CountAsync<TestDto>(new CacheKey("Tenant:Set", CacheKeyCasing.Sensitive), testContextAccessor.Current.CancellationToken);
+
+        keys.Should().ContainSingle().Which.ToString().Should().EndWith("$se$Tenant:Set");
+    }
+
+    [Fact]
+    public void A_key_format_with_a_custom_factory_is_refused()
+    {
+        _redisCacheOptions.KeyFormat = RedisKeyFormat.Dollar;
+
+        var act = () => Sut;
+
+        act.Should().Throw<Exception>().Which.GetBaseException().Message.Should().Contain(nameof(RedisCacheOptions.KeyFormat));
+    }
+
+    [Fact]
     public async Task Count_redis_exception_returns_zero()
     {
         _database.SetLengthAsync(_redisKey, CommandFlags.PreferMaster).ThrowsAsync<Exception>();
