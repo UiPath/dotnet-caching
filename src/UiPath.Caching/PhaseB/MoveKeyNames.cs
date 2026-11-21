@@ -128,10 +128,7 @@ internal sealed class MoveKeyNames
     public IReadOnlyList<(int Slot, RedisKey Key)> ControlRecords(string group) =>
         [.. SlotSet().Select(slot => (slot, Control(group, slot)))];
 
-    /// <summary>
-    /// The app's claim key: the library prefix, the reserved <c>mx</c> keyspace and a tag of the lowercased app name, so each app's claim has its own slot.
-    /// With the library prefix <c>{app}:</c> it is the design's <c>{app}:mx:{{app}}</c>; it never depends on a key format.
-    /// </summary>
+    /// <summary>The app's claim key: the library prefix, <c>mx</c> and a tag of the lowercased app name; with the prefix <c>{app}:</c> it is <c>{app}:mx:{{app}}</c>.</summary>
     public string Claim(string app)
     {
         var name = app.ToLowerInvariant();

@@ -1,9 +1,6 @@
 namespace UiPath.Caching.PhaseB;
 
-/// <summary>
-/// The five claim scripts as C# predicates over one snapshot of the record, statement for statement, for the fallback when scripts are refused. Each
-/// returns the script's code and the writes it would make, in order; the conformance test runs the same rows through both.
-/// </summary>
+/// <summary>The five claim scripts as C# predicates over one snapshot, statement for statement, returning the code and the writes in order.</summary>
 internal static class ClaimLogic
 {
     public static ClaimDecision Pend(IReadOnlyList<KeyValuePair<string, string>> record, string field, string token, string descriptor, string expectedPointer)

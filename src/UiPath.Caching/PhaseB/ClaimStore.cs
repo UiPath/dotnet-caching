@@ -3,10 +3,7 @@ using UiPath.Caching.Redis;
 
 namespace UiPath.Caching.PhaseB;
 
-/// <summary>
-/// The app's claim record on one server: the five scripts, their fallback when scripts are refused, the WAIT that follows OPEN, REOPEN and REL, and the
-/// admission read. Give it a connection of its own: WAIT blocks the connection it runs on.
-/// </summary>
+/// <summary>The app's claim record on one server: the five scripts, their fallback, the WAIT after OPEN, REOPEN and REL, and the admission read; give it a connection of its own.</summary>
 internal sealed class ClaimStore
 {
     /// <summary>How many times a fallback transaction is tried before the outcome is unknown (-7).</summary>
@@ -76,52 +73,71 @@ internal sealed class ClaimStore
     private static List<KeyValuePair<string, string>> ToPairs(HashEntry[] entries) =>
         [.. entries.Select(e => new KeyValuePair<string, string>((string)e.Name!, (string)e.Value!))];
 
-    private static async Task<int> ReplicasAsync(IServer server) =>
-        await server.RoleAsync().ConfigureAwait(false) is Role.Master master ? master.Replicas.Count : 0;
-
-    /// <summary>
-    /// A step that returned 1 or 2, then WAIT on the claim's master: one replica or more confirms; 0, a timeout or an error repeat the step (it returns 2
-    /// and rewrites the field, so the next WAIT covers it) up to <see cref="BarrierRetries"/> times. A master with no replica needs no WAIT.
-    /// </summary>
+    /// <summary>A step, then WAIT on the master its write reached; 0, a timeout, an error, a role change or a moved master repeat it up to <see cref="BarrierRetries"/> times.</summary>
+    /// <remarks>
+    /// Each attempt resolves the claim's master and its role first, writes (the first attempt is the step, the others repeat it; a repeat returns 2 and
+    /// rewrites the field), checks the master did not change, and only then waits on that server. A node that is no longer a master never counts as a
+    /// master without replicas, and a failure to resolve it or read its role is "not confirmed", as a 0 is.
+    /// </remarks>
     private async Task<ClaimResult> DurableAsync(Func<Task<long>> step)
     {
-        var code = await step().ConfigureAwait(false);
-        if (code is not (ClaimCodes.Done or ClaimCodes.AlreadyDone))
-        {
-            return new ClaimResult(code, ClaimDurability.NotApplicable);
-        }
-
-        var server = _db.Multiplexer.GetServer(await _db.IdentifyEndpointAsync(Key, Master).ConfigureAwait(false) ?? throw new RedisException("The claim's master is unknown."));
+        long? first = null;
         for (var attempt = 0; ; attempt++)
         {
-            if (await ReplicasAsync(server).ConfigureAwait(false) == 0)
+            var target = await MasterAsync().ConfigureAwait(false);
+            var code = await step().ConfigureAwait(false);
+            first ??= code;
+            if (code is not (ClaimCodes.Done or ClaimCodes.AlreadyDone))
             {
-                return new ClaimResult(code, ClaimDurability.NoReplica);
+                return new ClaimResult(code, ClaimDurability.NotApplicable);
             }
 
-            try
+            if (target is { } master)
             {
-                var acknowledged = (long)await server.ExecuteAsync("WAIT", 1, (long)BarrierTimeout.TotalMilliseconds).ConfigureAwait(false);
-                if (acknowledged >= 1)
+                if (master.Replicas == 0)
                 {
-                    return new ClaimResult(code, ClaimDurability.Confirmed);
+                    return new ClaimResult(first.Value, ClaimDurability.NoReplica);
                 }
-            }
-            catch (RedisException)
-            {
-                // Not confirmed; the step runs again below.
+
+                try
+                {
+                    var now = await _db.IdentifyEndpointAsync(Key, Master).ConfigureAwait(false);
+                    if (Equals(now, master.Server.EndPoint)
+                        && (long)await master.Server.ExecuteAsync("WAIT", 1, (long)BarrierTimeout.TotalMilliseconds).ConfigureAwait(false) >= 1)
+                    {
+                        return new ClaimResult(first.Value, ClaimDurability.Confirmed);
+                    }
+                }
+                catch (RedisException)
+                {
+                    // Not confirmed; the step runs again below.
+                }
             }
 
             if (attempt >= BarrierRetries)
             {
-                return new ClaimResult(code, ClaimDurability.NotConfirmed);
+                return new ClaimResult(first.Value, ClaimDurability.NotConfirmed);
+            }
+        }
+    }
+
+    /// <summary>The claim's master and its replica count; null when it cannot be resolved, its role cannot be read, or it is not a master.</summary>
+    private async Task<(IServer Server, int Replicas)?> MasterAsync()
+    {
+        try
+        {
+            var endpoint = await _db.IdentifyEndpointAsync(Key, Master).ConfigureAwait(false);
+            if (endpoint is null)
+            {
+                return null;
             }
 
-            var repeat = await step().ConfigureAwait(false);
-            if (repeat is not (ClaimCodes.Done or ClaimCodes.AlreadyDone))
-            {
-                return new ClaimResult(repeat, ClaimDurability.NotApplicable);
-            }
+            var server = _db.Multiplexer.GetServer(endpoint);
+            return await server.RoleAsync().ConfigureAwait(false) is Role.Master master ? (server, master.Replicas.Count) : null;
+        }
+        catch (RedisException)
+        {
+            return null;
         }
     }
 

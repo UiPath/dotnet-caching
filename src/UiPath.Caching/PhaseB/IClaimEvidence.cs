@@ -8,4 +8,7 @@ internal interface IClaimEvidence
 
     /// <summary>Whether any record of the group (a sample of every master) or its state shows S0 or S5, with or without <c>lswept</c>.</summary>
     Task<bool> ShowsTerminalAsync(string group, CancellationToken cancellationToken);
+
+    /// <summary>Whether the group may be removed: SO14 took it out of every build and, for a group that reached S5, <c>lswept</c> is stored.</summary>
+    Task<bool> RemovableAsync(string group, CancellationToken cancellationToken);
 }

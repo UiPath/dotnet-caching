@@ -4,6 +4,15 @@ internal enum ClaimCommandOutcome
 {
     Done,
 
+    /// <summary>Done, but a WAIT did not confirm a step; the caller raises <c>wait_skipped{claim}</c>.</summary>
+    DoneUnconfirmed,
+
+    /// <summary>A field of the group is live (pend or open).</summary>
+    Live,
+
+    /// <summary>The group is still in a build, or reached S5 without <c>lswept</c>.</summary>
+    NotRemovable,
+
     /// <summary>The record changed since it was shown; re-read and confirm again.</summary>
     Changed,
 

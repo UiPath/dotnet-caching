@@ -2,10 +2,7 @@ using System.Text;
 
 namespace UiPath.Caching.PhaseB;
 
-/// <summary>
-/// The claim record's grammar, the same as the scripts' shared header byte for byte: ASCII classes as Lua's %a, %w, %x and %d, whole-string anchors,
-/// lengths in UTF-8 bytes as Lua's #. Admission, the fallback and the operator commands all read through it.
-/// </summary>
+/// <summary>The claim record's grammar, byte for byte with the scripts' header: ASCII classes, whole-string anchors, lengths in UTF-8 bytes.</summary>
 internal static class ClaimGrammar
 {
     public const string Pending = "pend";
