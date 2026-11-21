@@ -5,7 +5,7 @@ namespace UiPath.Caching.PhaseB;
 /// <summary>What one side of a move can do, as probed on each of its masters (section 3.8); each side picks script or fallback alone.</summary>
 /// <param name="Masters">Every primary the side's view reaches, each probed alone: one older or restricted master decides for the side.</param>
 /// <param name="SlotEnforced">A cross-slot two-key script is refused, so the side uses per-slot records and the tag table whatever its server type says.</param>
-/// <param name="Denied">Commands a probe found refused (NOPERM or blocked), each as <c>command@endpoint</c>, reported for the operator; each already shows in the capability it probed.</param>
+/// <param name="Denied">Commands a probe found refused (NOPERM or blocked), each as <c>command@endpoint</c>, reported for the operator; each already shows in the capability it probed, except a refused DEL, which fails the gate.</param>
 /// <param name="Unreachable">Primaries the view lists that were not connected; each is a failure, never dropped from the probe or the scan.</param>
 internal sealed record SideCaps(
     IReadOnlyList<MasterCaps> Masters,
@@ -46,6 +46,11 @@ internal sealed record SideCaps(
         foreach (var endpoint in Unreachable)
         {
             yield return $"{side}: {endpoint} unreachable";
+        }
+
+        foreach (var denial in Denied.Where(static d => d.StartsWith("DEL@", StringComparison.Ordinal)))
+        {
+            yield return $"{side}: {denial[4..]} refuses DEL, which the move needs to delete its keys";
         }
 
         foreach (var master in Masters)

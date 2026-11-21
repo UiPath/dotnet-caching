@@ -176,7 +176,7 @@ public sealed class MoveSidesTests(RedisContainerFixture fixture)
             transaction =>
             {
                 written++;
-                return transaction.StringSetAsync("sidetest:k", "v");
+                _ = transaction.StringSetAsync("sidetest:k", "v");
             },
             wayBack: false);
 
@@ -398,6 +398,29 @@ public sealed class MoveSidesTests(RedisContainerFixture fixture)
         caps.Denied.Should().Contain(d => d.StartsWith("script:pexpireat@", StringComparison.OrdinalIgnoreCase));
         caps.Denied.Should().Contain(d => d.StartsWith("transaction:", StringComparison.Ordinal), "the server aborts the EXEC without naming the command, unlike the script");
         caps.Failures("src").Should().Contain(f => f.Contains("neither scripts nor the fallback", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task A_user_denied_del_and_unlink_fails_the_gate_though_every_other_probe_succeeds()
+    {
+        Assert.SkipUnless(fixture.Enabled, Skip);
+        var user = $"nodel-{Guid.NewGuid():N}";
+        await using var admin = await ConnectionMultiplexer.ConnectAsync($"{fixture.ConnectionString},allowAdmin=true");
+        var server = admin.GetServer(admin.GetEndPoints()[0]);
+        await server.ExecuteAsync("ACL", "SETUSER", user, "on", ">nodelpw", "~*", "&*", "+@all", "-del", "-unlink");
+        try
+        {
+            await using var mux = await ConnectionMultiplexer.ConnectAsync($"{fixture.ConnectionString},allowAdmin=true,user={user},password=nodelpw");
+
+            var caps = await SideProbe.ProbeAsync(mux.GetDatabase(), "sidetest:mg:", "sidetest:*", cancellationToken: TestContext.Current.CancellationToken);
+
+            DeniedCommands(caps).Should().Contain("DEL");
+            caps.Failures("src").Should().Contain(f => f.Contains("refuses DEL", StringComparison.Ordinal));
+        }
+        finally
+        {
+            await server.ExecuteAsync("ACL", "DELUSER", user);
+        }
     }
 
     [Fact]

@@ -37,7 +37,7 @@ public sealed class ServerBarrierDurabilityTests
                 transaction =>
                 {
                     Interlocked.Increment(ref writes);
-                    return transaction.StringSetAsync(key, "v");
+                    _ = transaction.StringSetAsync(key, "v");
                 },
                 wayBack: false);
 

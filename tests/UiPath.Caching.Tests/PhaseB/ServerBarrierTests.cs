@@ -338,6 +338,99 @@ public sealed class ServerBarrierTests
         fake.Waits.Should().Be(0);
     }
 
+    [Fact]
+    public async Task A_queued_write_that_fails_at_run_time_after_exec_succeeded_is_not_confirmed_and_never_replayed()
+    {
+        var fake = new Fake();
+        var barrier = fake.Barrier();
+
+        (await barrier.WriteAndWaitAsync(Fake.WriteWithFailure, wayBack: false)).Should().Be(BarrierOutcome.NotConfirmed);
+        fake.Writes.Should().Be(1, "the transaction was partly applied, so it is not sent again");
+        fake.Waits.Should().Be(0);
+        barrier.LastError.Should().BeOfType<RedisServerException>().Which.Message.Should().Contain("no such key");
+    }
+
+    [Fact]
+    public async Task A_run_time_failure_of_a_queued_write_starts_the_recent_failure_episode()
+    {
+        var fake = new Fake();
+        var barrier = fake.Barrier();
+
+        await barrier.WriteAndWaitAsync(Fake.WriteWithFailure, wayBack: false);
+
+        (await barrier.WriteAndWaitAsync(Fake.Write, wayBack: true)).Should().Be(BarrierOutcome.SkippedAfterRecentFailure);
+    }
+
+    [Fact]
+    public async Task Every_queued_command_is_observed_whichever_the_caller_awaits()
+    {
+        // The failing command is queued first and nothing awaits it: the barrier still sees it.
+        var fake = new Fake();
+
+        (await fake.Barrier().WriteAndWaitAsync(Fake.WriteWithFailure, wayBack: false)).Should().NotBe(BarrierOutcome.Confirmed);
+        fake.Transactions.Should().Equal(["CLIENT", "INFO", "RENAME", "SET", "EXEC"]);
+    }
+
+    [Theory]
+    [InlineData("EXECABORT Transaction discarded because of previous errors.")]
+    [InlineData("MOVED 1234 b:6379")]
+    [InlineData("ASK 1234 b:6379")]
+    public async Task An_unbound_write_that_is_refused_returns_the_outcome_and_throws_nothing(string error)
+    {
+        var fake = new Fake { Admin = false, Exec = _ => new RedisServerException(RedisErrorKind.None, CommandFlags.None, error) };
+        var barrier = fake.Barrier();
+
+        (await barrier.WriteAndWaitAsync(Fake.Write, wayBack: false)).Should().Be(BarrierOutcome.NotConfirmed);
+        fake.Writes.Should().Be(1);
+        barrier.LastError.Should().NotBeNull();
+    }
+
+    [Fact]
+    public async Task An_unbound_write_with_a_failing_queued_command_returns_the_outcome_and_keeps_the_error()
+    {
+        var fake = new Fake { Admin = false };
+        var barrier = fake.Barrier();
+
+        (await barrier.WriteAndWaitAsync(Fake.WriteWithFailure, wayBack: false)).Should().Be(BarrierOutcome.NotConfirmed);
+        barrier.LastError.Should().BeOfType<RedisServerException>();
+    }
+
+    [Theory]
+    [InlineData("EXECABORT Transaction discarded because of previous errors.")]
+    [InlineData("MOVED 1234 b:6379")]
+    public async Task A_way_back_write_after_a_recent_failure_that_is_refused_returns_the_outcome_and_throws_nothing(string error)
+    {
+        var fake = new Fake { Wait = _ => Task.FromResult(0L), Exec = call => call >= 2 ? new RedisServerException(RedisErrorKind.None, CommandFlags.None, error) : null };
+        var barrier = fake.Barrier(retries: 1);
+        (await barrier.WriteAndWaitAsync(Fake.Write, wayBack: false)).Should().Be(BarrierOutcome.NotConfirmed);
+
+        (await barrier.WriteAndWaitAsync(Fake.Write, wayBack: true)).Should().Be(BarrierOutcome.SkippedAfterRecentFailure);
+        barrier.LastError.Should().NotBeNull();
+    }
+
+    [Fact]
+    public async Task A_denied_role_with_a_master_in_the_info_confirms_and_one_that_says_replica_after_the_wait_does_not()
+    {
+        Task<Role> Denied(int _) => Task.FromException<Role>(new RedisServerException(RedisErrorKind.None, CommandFlags.None, "NOPERM User u has no permissions to run the 'role' command"));
+
+        var master = new Fake { Role = Denied };
+        (await master.Barrier().WriteAndWaitAsync(Fake.Write, wayBack: false)).Should().Be(BarrierOutcome.Confirmed);
+        master.Waits.Should().Be(1);
+
+        var demoted = new Fake { Role = Denied, PostRole = _ => "slave" };
+        (await demoted.Barrier(retries: 1).WriteAndWaitAsync(Fake.Write, wayBack: false)).Should().Be(BarrierOutcome.NotConfirmed);
+        demoted.Waits.Should().Be(2, "the WAIT ran on both attempts, and the INFO after it never said master");
+    }
+
+    [Fact]
+    public async Task A_denied_role_with_a_replica_in_the_info_of_the_write_never_waits()
+    {
+        var fake = new Fake { Role = _ => Task.FromException<Role>(new RedisServerException(RedisErrorKind.None, CommandFlags.None, "NOPERM User u has no permissions to run the 'role' command")), TransactionRole = "slave" };
+
+        (await fake.Barrier(retries: 1).WriteAndWaitAsync(Fake.Write, wayBack: false)).Should().Be(BarrierOutcome.NotConfirmed);
+        fake.Waits.Should().Be(0);
+    }
+
     /// <summary>A database, multiplexer, transaction and server whose answers come from delegates, each given its call number.</summary>
     private sealed class Fake
     {
@@ -391,7 +484,18 @@ public sealed class ServerBarrierTests
         /// <summary>The number of arguments of every INFO sent in the transaction.</summary>
         public List<int> InfoArguments { get; } = [];
 
-        public static Task Write(ITransaction transaction) => transaction.StringSetAsync("barriertest:{fake}", "v");
+        public string TransactionRole { get; init; } = "master";
+
+        /// <summary>The role the INFO after the WAIT reports, by proof number.</summary>
+        public Func<int, string> PostRole { get; init; } = _ => "master";
+
+        public static void WriteWithFailure(ITransaction transaction)
+        {
+            _ = transaction.KeyRenameAsync("barriertest:{fake}:missing", "barriertest:{fake}:dst");
+            _ = transaction.StringSetAsync("barriertest:{fake}", "v");
+        }
+
+        public static void Write(ITransaction transaction) => _ = transaction.StringSetAsync("barriertest:{fake}", "v");
 
         public ServerBarrier Barrier(int retries = 3, bool replicaFree = false, TimeSpan? timeout = null)
         {
@@ -417,8 +521,8 @@ public sealed class ServerBarrierTests
         private static Task<RedisResult> Busy() =>
             Task.FromException<RedisResult>(new RedisServerException(RedisErrorKind.None, CommandFlags.None, "BUSY Redis is busy running a script. You can only call SCRIPT KILL or SHUTDOWN NOSAVE."));
 
-        private static Task<RedisResult> Info(string runId, string replicationId) =>
-            Task.FromResult(RedisResult.Create((RedisValue)$"# Server\r\nredis_version:7.4.0\r\nrun_id:{runId}\r\n# Replication\r\nrole:master\r\nmaster_replid:{replicationId}\r\n"));
+        private static Task<RedisResult> Info(string runId, string replicationId, string role = "master") =>
+            Task.FromResult(RedisResult.Create((RedisValue)$"# Server\r\nredis_version:7.4.0\r\nrun_id:{runId}\r\n# Replication\r\nrole:{role}\r\nmaster_replid:{replicationId}\r\n"));
 
         private static async Task<RedisResult> AsResult(Task<long> value, List<object?>? timeouts = null, object? timeout = null)
         {
@@ -444,7 +548,10 @@ public sealed class ServerBarrierTests
                     case nameof(ITransaction.ExecuteAsync) when args[0] is "INFO":
                         Transactions.Add("INFO");
                         InfoArguments.Add(((object[])args[1]!).Length);
-                        return TransactionInfoBusy-- > 0 ? Busy() : Info(Run, Repl);
+                        return TransactionInfoBusy-- > 0 ? Busy() : Info(Run, Repl, TransactionRole);
+                    case nameof(ITransaction.KeyRenameAsync):
+                        Transactions.Add("RENAME");
+                        return Task.FromException<bool>(new RedisServerException(RedisErrorKind.None, CommandFlags.None, "ERR no such key"));
                     case nameof(ITransaction.StringSetAsync):
                         Transactions.Add("SET");
                         return Task.FromResult(true);
@@ -462,7 +569,7 @@ public sealed class ServerBarrierTests
             {
                 "WAIT" => AsResult(Wait(Waits++), WaitTimeouts, ((object[])args[1]!)[1]),
                 "CLIENT" => Task.FromResult(RedisResult.Create(PostClientId(_posts))),
-                "INFO" => PostInfoBusy-- > 0 ? Busy() : Info(PostRunId(_posts), PostReplicationId(_posts++)),
+                "INFO" => PostInfoBusy-- > 0 ? Busy() : Info(PostRunId(_posts), PostReplicationId(_posts), PostRole(_posts++)),
                 var other => throw new NotSupportedException(other),
             },
             _ => throw new NotSupportedException(method.Name),
