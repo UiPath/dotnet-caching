@@ -94,7 +94,6 @@ internal sealed partial class RouterCore(TimeProvider clock, Func<string, bool> 
         }
     }
 
-
     public void LogPublishFailed(string cache)
     {
         var now = Clock.GetTimestamp();
@@ -121,9 +120,6 @@ internal sealed partial class RouterCore(TimeProvider clock, Func<string, bool> 
 
         Tier.Dispose();
     }
-
-    /// <summary>Adds a task with no removal continuation, as a continuation that has not run yet leaves one; tests only.</summary>
-    internal void AddWithoutRemoval(Task task) => _background.TryAdd(task, 0);
 
     private static async Task Ended(Task task)
     {

@@ -1,8 +1,8 @@
 namespace UiPath.Caching.Migration;
 
 /// <summary>The library path: a failed snapshot read is unavailable and never absent, and a write that was not sent is told apart from one whose result is unknown, which is never replayed.</summary>
-/// <remarks><paramref name="writePolicy"/> is asked at each write, so a group can write another format than the stack default; it must not throw.</remarks>
-internal sealed class LibraryPathClient<T>(IMigrationCache store, IConnectionState connection, Func<string, string> redisKey, Func<TimeSpan> settleWithin, Func<WriteLease>? writePolicy = null) : IPathClient<T>
+/// <remarks><paramref name="writePolicy"/> is asked at each write, so a group can write another format than the stack default, and <paramref name="readPolicy"/> at each read, so a group that is not ready is never rewritten on read; neither may throw.</remarks>
+internal sealed class LibraryPathClient<T>(IMigrationCache store, IConnectionState connection, Func<string, string> redisKey, Func<TimeSpan> settleWithin, Func<WriteLease>? writePolicy = null, Func<CachePolicy?>? readPolicy = null) : IPathClient<T>
     where T : class
 {
     public LibraryPathClient(IMigrationCache store, IConnectionState connection, Func<string, string> redisKey, TimeSpan settleWithin)
@@ -21,7 +21,7 @@ internal sealed class LibraryPathClient<T>(IMigrationCache store, IConnectionSta
 
         try
         {
-            var read = await store.ReadSnapshotAsync<T>(CacheKey.Verbatim(redisKey(key)), null, cancellationToken).ConfigureAwait(false);
+            var read = await store.ReadSnapshotAsync<T>(CacheKey.Verbatim(redisKey(key)), readPolicy?.Invoke(), cancellationToken).ConfigureAwait(false);
             return read.Outcome switch
             {
                 SnapshotOutcome.Found when read.Entry is { Value: { } value } entry => new PathRead<T>(ReadOutcome.Found, value, entry.Expiration == DateTimeOffset.MaxValue ? null : entry.Expiration),

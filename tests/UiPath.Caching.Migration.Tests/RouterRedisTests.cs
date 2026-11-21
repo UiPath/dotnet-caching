@@ -74,6 +74,17 @@ public sealed class RouterRedisTests(RedisFixture fixture) : IAsyncLifetime
     }
 
     [Fact]
+    public async Task A_router_with_value_serializers_and_no_write_format_setting_starts_its_library_whatever_its_format_negotiation_section_holds()
+    {
+        Assert.SkipUnless(fixture.Enabled, "Set RUN_REDIS_INTEGRATION_TESTS=1 (Redis at 127.0.0.1:6379) to run.");
+        var malformed = new Dictionary<string, string?> { ["Caching:Redis:FormatNegotiation:AdvertiseInterval"] = "00:00:00", ["Caching:Redis:FormatNegotiation:Mode"] = "Force" };
+
+        var router = NewNode("a", () => true, TimeSpan.Zero, extra: malformed, serializers: true).GetRequiredService<IRouter>();
+
+        (await UntilAsync(() => Task.FromResult(router.Mode == RouterMode.Library))).Should().BeTrue("a malformed section is skipped, as before");
+    }
+
+    [Fact]
     public async Task A_flip_runs_no_extra_factory_and_leaves_the_entry_where_it_was()
     {
         Assert.SkipUnless(fixture.Enabled, "Set RUN_REDIS_INTEGRATION_TESTS=1 (Redis at 127.0.0.1:6379) to run.");
@@ -178,7 +189,7 @@ public sealed class RouterRedisTests(RedisFixture fixture) : IAsyncLifetime
 
     private string RedisKeyOf(string key) => $"n:{_cacheName},c:{key}";
 
-    private ServiceProvider NewNode(string name, Func<bool> useLibrary, TimeSpan localCap, string transport = KnownTopicNames.RedisStreams)
+    private ServiceProvider NewNode(string name, Func<bool> useLibrary, TimeSpan localCap, string transport = KnownTopicNames.RedisStreams, Dictionary<string, string?>? extra = null, bool serializers = false)
     {
         var pubSub = transport == KnownTopicNames.RedisPubSub;
         var configuration = new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>
@@ -192,24 +203,32 @@ public sealed class RouterRedisTests(RedisFixture fixture) : IAsyncLifetime
             ["Caching:DefaultTopic"] = transport,
             ["Caching:Broadcast:RedisPubSub:Enabled"] = pubSub ? "true" : "false",
             ["Caching:Broadcast:RedisStreams:Enabled"] = pubSub ? "false" : "true",
-        }).Build();
+        }).AddInMemoryCollection(extra ?? []).Build();
         var source = new LegacySource(_redis!, _cacheName);
         var services = new ServiceCollection().AddLogging();
         services.AddCaching(configuration, builder => builder.AddRedisConnection());
         services.AddCachingRouter(
             configuration,
-            router => router
-                .Add(new RouterCacheRegistration<List<long>>
+            router =>
+            {
+                router
+                    .Add(new RouterCacheRegistration<List<long>>
+                    {
+                        Name = "lists",
+                        Group = "g",
+                        Source = source,
+                        RedisKey = source.RedisKey,
+                        LocalCap = localCap,
+                        DefaultExpiry = Lifetime,
+                    })
+                    .UseLibraryWhen(_ => useLibrary())
+                    .UseEnvelope(new LegacyEnvelopeProxy());
+                if (serializers)
                 {
-                    Name = "lists",
-                    Group = "g",
-                    Source = source,
-                    RedisKey = source.RedisKey,
-                    LocalCap = localCap,
-                    DefaultExpiry = Lifetime,
-                })
-                .UseLibraryWhen(_ => useLibrary())
-                .UseEnvelope(new LegacyEnvelopeProxy()));
+                    // A registered format is what makes the stack's negotiation validate its section.
+                    router.UseValueSerializers(stack => stack.AddValueSerializer("messagepack", [TestFormatSerializer.Id], _ => new TestFormatSerializer()));
+                }
+            });
         var provider = services.BuildServiceProvider();
         _nodes.Add(provider);
         _ = provider.GetRequiredService<IRouter>();

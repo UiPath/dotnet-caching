@@ -108,26 +108,25 @@ public sealed class PinHostTests
 
         create.Should().Throw<InvalidOperationException>().WithMessage("*pin store*advertisement*");
     }
+
     [Fact]
-    public async Task A_write_format_setting_without_a_pin_setting_fails_router_registration()
+    public void A_write_format_setting_without_a_pin_setting_fails_router_registration()
     {
         var source = new FakeBackend([], new ManualTimeProvider(DateTimeOffset.UnixEpoch));
 
         var build = () => Build(source, "g", router => router.UseValueSerializers(_ => { }).UseWriteFormatWhen(_ => "messagepack"));
 
         build.Should().Throw<InvalidOperationException>().WithMessage("*UseWriteFormatWhen*UsePinWhen*");
-        await Task.CompletedTask;
     }
 
     [Fact]
-    public async Task A_write_format_setting_without_value_serializers_fails_router_registration()
+    public void A_write_format_setting_without_value_serializers_fails_router_registration()
     {
         var source = new FakeBackend([], new ManualTimeProvider(DateTimeOffset.UnixEpoch));
 
         var build = () => Build(source, "g", router => router.UsePinWhen(_ => true).UseWriteFormatWhen(_ => "messagepack"));
 
         build.Should().Throw<InvalidOperationException>().WithMessage("*UseWriteFormatWhen*UseValueSerializers*");
-        await Task.CompletedTask;
     }
 
     [Fact]

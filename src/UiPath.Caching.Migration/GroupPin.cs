@@ -37,7 +37,8 @@ internal sealed class GroupPin(string group)
     /// <summary>The group's write format setting asked for MessagePack at its last answer.</summary>
     public bool Wanted => Volatile.Read(ref _wanted) == 1;
 
-    /// <summary>A MessagePack write of the group is between its gate check and its end; the gate covers the group meanwhile, whatever the setting says.</summary>
+    /// <summary>A MessagePack write of the group is in flight.</summary>
+    /// <remarks>Between its gate check and its end; the gate covers the group meanwhile, whatever the setting says.</remarks>
     public bool Writing => Volatile.Read(ref _writing) > 0;
 
     /// <summary>Counts the withdrawals of an acknowledged pin; a state read confirms only the withdrawal that began before it.</summary>

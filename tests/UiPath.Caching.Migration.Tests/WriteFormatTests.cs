@@ -11,6 +11,7 @@ public sealed class WriteFormatTests
     private readonly FakePinStore _store = new();
     private readonly Dictionary<string, string?> _format = [];
     private readonly Dictionary<string, bool> _pinned = [];
+    private bool _formatThrows;
 
     private static CancellationToken Ct => TestContext.Current.CancellationToken;
 
@@ -212,6 +213,7 @@ public sealed class WriteFormatTests
         var policy = () => selector.PolicyFor(a);
 
         policy.Should().NotThrow().Subject.Should().BeSameAs(WriteFormats.Envelope);
+        a.Wanted.Should().BeFalse("a setting that throws clears the wanted bit, as an answer that is not messagepack does");
         throwing = false;
         selector.PolicyFor(a).Should().BeSameAs(WriteFormats.MessagePackPolicy, "the next answer that can be read is used");
     }
@@ -306,6 +308,85 @@ public sealed class WriteFormatTests
         logger.Warnings.Should().Be(2, "a valid answer in between ends the report, so the next failure is new");
     }
 
+    [Fact]
+    public async Task A_setting_that_throws_at_a_pass_clears_the_wanted_bit()
+    {
+        var pins = ReadyCoordinator(out var a);
+        _format["A"] = "messagepack";
+        new WriteFormatSelector(g => _format[g], pins, NullLogger.Instance).PolicyFor(a);
+        a.Wanted.Should().BeTrue();
+
+        _formatThrows = true;
+        pins.EvaluatePins();
+
+        a.Wanted.Should().BeFalse("a group whose setting cannot be read holds the gate no longer");
+        await pins.RefreshAsync(Ct);
+        pins.Hold().Should().Be("format_not_wanted");
+    }
+
+    [Theory]
+    [InlineData("success")]
+    [InlineData("throw")]
+    [InlineData("cancel")]
+    public async Task A_messagepack_write_keeps_its_group_in_the_gate_while_the_store_write_runs_and_not_after_it_ends(string end)
+    {
+        var (selector, pins, a) = await ReadySelectorAsync();
+        var store = new FakeMigrationCache();
+        var blocked = new TaskCompletionSource<StoreOutcome>(TaskCreationOptions.RunContinuationsAsynchronously);
+        store.Write = (_, token) => blocked.Task.WaitAsync(token);
+        using var cancel = CancellationTokenSource.CreateLinkedTokenSource(Ct);
+        var client = new LibraryPathClient<Item>(store, new FakeConnection(), key => key, () => TimeSpan.FromSeconds(30), () => selector.Select(a));
+        a.Writing.Should().BeFalse();
+
+        var write = client.SetAsync("k", new Item("v"), null, cancel.Token).AsTask();
+
+        a.Writing.Should().BeTrue("the lease is held while the store write blocks");
+        store.WritePolicies.Should().ContainSingle().Which.Should().BeSameAs(WriteFormats.MessagePackPolicy);
+        pins.Hold().Should().BeNull();
+        switch (end)
+        {
+            case "success":
+                blocked.SetResult(StoreOutcome.Committed);
+                break;
+            case "throw":
+                blocked.SetException(new InvalidOperationException("store down"));
+                break;
+            default:
+                await cancel.CancelAsync();
+                break;
+        }
+
+        await Task.WhenAny(write).WaitAsync(TimeSpan.FromSeconds(5), Ct);
+
+        write.IsCompleted.Should().BeTrue();
+        a.Writing.Should().BeFalse("the lease ends with the write, whatever ended it");
+    }
+
+    [Fact]
+    public async Task A_group_that_is_not_ready_reads_with_the_envelope_policy_and_a_ready_one_with_none()
+    {
+        var pins = ReadyCoordinator(out var a);
+        _format["A"] = "messagepack";
+        var selector = new WriteFormatSelector(g => _format[g], pins, NullLogger.Instance);
+        var store = new FakeMigrationCache();
+        var client = new LibraryPathClient<Item>(store, new FakeConnection(), key => key, () => TimeSpan.FromSeconds(30), () => selector.Select(a), () => selector.ReadPolicy(a));
+
+        await client.ReadAsync("k", Ct);
+        selector.PolicyFor(a);
+        await client.ReadAsync("k", Ct);
+        await pins.RefreshAsync(Ct);
+        await client.ReadAsync("k", Ct);
+        _format["A"] = "json";
+        selector.PolicyFor(a);
+        await client.ReadAsync("k", Ct);
+
+        store.ReadPolicies.Should().HaveCount(4);
+        store.ReadPolicies[0].Should().BeSameAs(WriteFormats.Envelope, "the group never asked for MessagePack");
+        store.ReadPolicies[1].Should().BeSameAs(WriteFormats.Envelope, "it asked but is not switched yet");
+        store.ReadPolicies[2].Should().BeNull("it is switched and durable, so the stack default applies as before");
+        store.ReadPolicies[3].Should().BeSameAs(WriteFormats.Envelope, "it stopped asking");
+    }
+
     private static GroupPin Enter(GroupPin group)
     {
         group.EnterWriting();
@@ -314,6 +395,17 @@ public sealed class WriteFormatTests
 
     private static NodeEntry Node(string node, params string[] tokens) =>
         new(node + RouterAdvertisement.FieldSuffix, new RouterAdvertisement(node, "b", tokens, false).Encode(), TimeSpan.Zero);
+
+    private async Task<(WriteFormatSelector Selector, PinCoordinator Pins, GroupPin Pin)> ReadySelectorAsync()
+    {
+        var pins = ReadyCoordinator(out var a);
+        _format["A"] = "messagepack";
+        var selector = new WriteFormatSelector(g => _format[g], pins, NullLogger.Instance);
+        selector.PolicyFor(a);
+        await pins.RefreshAsync(Ct);
+        selector.PolicyFor(a).Should().BeSameAs(WriteFormats.MessagePackPolicy);
+        return (selector, pins, a);
+    }
 
     private PinCoordinator ReadyCoordinator(out GroupPin a)
     {
@@ -331,7 +423,7 @@ public sealed class WriteFormatTests
         var pins = new PinCoordinator(core, group => _pinned.GetValueOrDefault(group), _store, "app", TimeSpan.FromSeconds(15), MaxViewAge, NullLogger.Instance)
         {
             OwnField = node + RouterAdvertisement.FieldSuffix,
-            WriteFormat = group => _format.GetValueOrDefault(group),
+            WriteFormat = group => _formatThrows ? throw new InvalidOperationException("no such tenant") : _format.GetValueOrDefault(group),
         };
         core.Pins = pins;
         return pins;

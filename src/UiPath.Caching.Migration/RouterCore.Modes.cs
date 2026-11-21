@@ -190,10 +190,18 @@ internal sealed partial class RouterCore
         {
             if (participant.Topic is { } topic)
             {
+                using var bound = new CancellationTokenSource(CleanupBound, Clock);
                 try
                 {
-                    using var bound = new CancellationTokenSource(CleanupBound);
-                    await BoundedAsync(parts.ReleaseTopicAsync(topic, bound.Token), "topic release").ConfigureAwait(false);
+                    try
+                    {
+                        await BoundedAsync(parts.ReleaseTopicAsync(topic, bound.Token), "topic release").ConfigureAwait(false);
+                    }
+                    finally
+                    {
+                        // A step that outlasted its bound is cut off here, not left running after the release has moved on.
+                        await bound.CancelAsync().ConfigureAwait(false);
+                    }
                 }
                 catch (Exception ex) when (ex is not OutOfMemoryException)
                 {

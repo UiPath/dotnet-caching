@@ -2,21 +2,22 @@ using Microsoft.Extensions.Logging;
 
 namespace UiPath.Caching.Migration;
 
-/// <summary>Picks the write policy of one call by its group: MessagePack only while the group is switched and the gate is open, the envelope in every other case.</summary>
+/// <summary>Picks the write and read policy of one call by its group.</summary>
 /// <remarks>
-/// The setting is read on every call. An answer that throws, or that names no known format, writes the envelope: the group is never moved toward MessagePack by a setting that cannot be read.
+/// A write is MessagePack only while the group is switched and the gate is open, the envelope in every other case.
+/// The setting is read on every write. An answer that throws, or that names no known format, writes the envelope and clears the group's wanted bit: the group is never moved toward MessagePack by a setting that cannot be read, and holds the gate no longer.
 /// The library still applies its own negotiation to a MessagePack write, so a node that joined without the pin turns the write back to the envelope there.
 /// </remarks>
 internal sealed partial class WriteFormatSelector(Func<string, string?> format, PinCoordinator pins, ILogger logger)
 {
     private readonly HashSet<string> _failed = [];
 
-    /// <summary>The policy alone, for a caller that writes nothing with it.</summary>
-    public CachePolicy PolicyFor(GroupPin pin)
-    {
-        using var lease = Select(pin);
-        return lease.Policy!;
-    }
+    /// <summary>The policy of one read: none while the group is ready for MessagePack, else the envelope, so a stack-wide rewrite on read never converts a group that is not.</summary>
+    /// <remarks>
+    /// Ready is the group's own state: it asks for MessagePack and is applied, acknowledged, switched and durable. The gate is not asked, since the library holds a rewrite on its own gate, which covers every group that asks.
+    /// The envelope policy names no rewrite target, so a default <c>MigrateOnRead</c> does nothing for it.
+    /// </remarks>
+    public CachePolicy? ReadPolicy(GroupPin pin) => pin.Wanted && pin.Applied && pin.Acked && pin.Switched && pin.Durable ? null : WriteFormats.Envelope;
 
     /// <summary>The policy of one write; a MessagePack lease keeps the group in the gate's coverage until it is disposed after the write.</summary>
     public WriteLease Select(GroupPin pin)
@@ -29,6 +30,7 @@ internal sealed partial class WriteFormatSelector(Func<string, string?> format, 
         catch (Exception ex) when (ex is not OutOfMemoryException)
         {
             Report(pin.Group, ex);
+            pins.Want(pin, false);
             return new(WriteFormats.Envelope, null);
         }
 
@@ -50,9 +52,17 @@ internal sealed partial class WriteFormatSelector(Func<string, string?> format, 
 
         // Counted as writing before the gate is asked, so a concurrent answer that clears the wanted bit cannot drop the group from the library's own check.
         pin.EnterWriting();
-        if (Ready(pin))
+        try
         {
-            return new(WriteFormats.MessagePackPolicy, pin);
+            if (Ready(pin))
+            {
+                return new(WriteFormats.MessagePackPolicy, pin);
+            }
+        }
+        catch
+        {
+            pin.ExitWriting();
+            throw;
         }
 
         pin.ExitWriting();

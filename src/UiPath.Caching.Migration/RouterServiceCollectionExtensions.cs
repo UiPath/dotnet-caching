@@ -64,8 +64,11 @@ public static class RouterServiceCollectionExtensions
                         options.RedisKeyStrategyFactory = PassThroughKeyStrategyFactory.Instance;
                         options.RemoveUnreadable = false;
 
-                        // The stack's negotiation takes the timings the pin was validated against, so the hold the pin checks is the hold the stack applies.
-                        configuration.GetSection(sectionName).GetSection("Redis:FormatNegotiation").Bind(options.FormatNegotiation);
+                        // With a write format setting, the stack's negotiation takes the timings the pin was validated against, so the hold the pin checks is the hold the stack applies; a router without one keeps the stack's own defaults.
+                        if (builder.WriteFormatPredicate is not null)
+                        {
+                            configuration.GetSection(sectionName).GetSection("Redis:FormatNegotiation").Bind(options.FormatNegotiation);
+                        }
                     });
                     builder.ValueSerializers?.Invoke(chain);
                     chain.AddBroadcast();

@@ -86,8 +86,8 @@ internal sealed partial class PinCoordinator(RouterCore core, Func<string, bool>
     /// <remarks>With a write format setting, the groups that asked for MessagePack, or are writing it, are the ones that count; otherwise every group does, from the first ask.</remarks>
     public string? Hold() => HoldFor(null);
 
-    /// <summary><see cref="Hold"/>, and the group about to write must itself be covered by the snapshot, acknowledged and durable.</summary>
-    /// <remarks>Checked for the writing group directly, so a concurrent answer that clears its wanted bit cannot drop it from the check.</remarks>
+    /// <summary><see cref="Hold"/>, and the writing group must itself be covered.</summary>
+    /// <remarks>The group about to write must be covered by the snapshot, acknowledged and durable. Checked for the writing group directly, so a concurrent answer that clears its wanted bit cannot drop it from the check.</remarks>
     public string? HoldFor(GroupPin? writing)
     {
         if (WriteFormat is null && Volatile.Read(ref _wanted) == 0 && Interlocked.Exchange(ref _wanted, 1) == 0)
@@ -260,8 +260,9 @@ internal sealed partial class PinCoordinator(RouterCore core, Func<string, bool>
         }
         catch (Exception ex) when (ex is not OutOfMemoryException)
         {
-            // Left as it was: the write path already sends the envelope for an answer that throws.
+            // The write path sends the envelope for an answer that throws and clears the bit, so this does the same.
             _ = ex;
+            group.SetWanted(false);
         }
     }
 

@@ -170,7 +170,7 @@ internal sealed class RoutedCache<T> : IRouterParticipant, IRoutedCache<T>, IDis
     public void ResetLocal() => ClearLocal();
 
     public IRouterParticipant.IAttachment Prepare(LibraryParts library) =>
-        Prepare(new LibraryPathClient<T>(library.Store, library.Connection, _registration.RedisKey, library.LibrarySettleWithin, WritePolicy()), library.Topics, library.Events, library.Source);
+        Prepare(new LibraryPathClient<T>(library.Store, library.Connection, _registration.RedisKey, library.LibrarySettleWithin, WritePolicy(), ReadPolicy()), library.Topics, library.Events, library.Source);
 
     public Task WhenPendingSettledAsync() => _pending.WhenEmptyAsync();
 
@@ -230,6 +230,8 @@ internal sealed class RoutedCache<T> : IRouterParticipant, IRoutedCache<T>, IDis
     private IPathClient<T> Client(Route route) => route.Hold ? UnavailablePathClient<T>.Instance : Client(route.Path);
 
     private Func<WriteLease>? WritePolicy() => _core.WriteFormats is { } formats && _pin is { } pin ? () => formats.Select(pin) : null;
+
+    private Func<CachePolicy?>? ReadPolicy() => _core.WriteFormats is { } formats && _pin is { } pin ? () => formats.ReadPolicy(pin) : null;
 
     private bool MayFallBack(Route route) => route.Other != RoutePath.Source || _core.MaySourceFallback(_pin);
 

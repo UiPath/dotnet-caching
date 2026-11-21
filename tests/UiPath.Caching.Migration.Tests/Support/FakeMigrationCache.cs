@@ -38,12 +38,16 @@ internal sealed class FakeMigrationCache : IMigrationCache
 
     public List<CacheKey> Keys { get; } = [];
 
+    /// <summary>The policy each read was given, in order.</summary>
+    public List<CachePolicy?> ReadPolicies { get; } = [];
+
     /// <summary>The policy each write was given, in order.</summary>
     public List<CachePolicy?> WritePolicies { get; } = [];
 
     public async ValueTask<SnapshotRead<T>> ReadSnapshotAsync<T>(CacheKey cacheKey, CachePolicy? policy, CancellationToken token = default)
     {
         Keys.Add(cacheKey);
+        ReadPolicies.Add(policy);
         return await Read(cacheKey, token) switch
         {
             T typed => new SnapshotRead<T>(SnapshotOutcome.Found, new TestEntry<T>(typed, DateTimeOffset.UtcNow.AddMinutes(1))),
