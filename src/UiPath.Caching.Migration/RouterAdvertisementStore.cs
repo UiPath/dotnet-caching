@@ -4,7 +4,8 @@ using StackExchange.Redis;
 namespace UiPath.Caching.Migration;
 
 /// <summary>Router entries in the node hash, in its <c>{server ms}|{text}</c> layout, stamped and aged by the server's clock.</summary>
-internal sealed class RouterAdvertisementStore(Func<IDatabase> database, RedisKey key)
+/// <param name="database">Acquires the database; it runs off the caller's thread and a wait on it ends with the caller's token, so a stalled connection never holds a stop.</param>
+internal sealed class RouterAdvertisementStore(Func<CancellationToken, ValueTask<IDatabase>> database, RedisKey key)
 {
     private const char StampSeparator = '|';
 
@@ -33,7 +34,7 @@ internal sealed class RouterAdvertisementStore(Func<IDatabase> database, RedisKe
 
     public async Task WriteAsync(string field, RouterAdvertisement advertisement, CancellationToken cancellationToken)
     {
-        var db = database();
+        var db = await AcquireAsync(cancellationToken).ConfigureAwait(false);
         var text = advertisement.Encode();
         if (!_scriptsRefused)
         {
@@ -56,7 +57,7 @@ internal sealed class RouterAdvertisementStore(Func<IDatabase> database, RedisKe
     /// <summary>Every router entry with its age; library advertisements and entries that do not parse are left out.</summary>
     public async Task<IReadOnlyList<(string Field, RouterAdvertisement Advertisement, TimeSpan Age, long Stamp)>> ReadAsync(CancellationToken cancellationToken)
     {
-        var db = database();
+        var db = await AcquireAsync(cancellationToken).ConfigureAwait(false);
         var now = await ServerMillisecondsAsync(db, cancellationToken).ConfigureAwait(false);
         var entries = await db.HashGetAllAsync(Key, CommandFlags.DemandMaster).WaitAsync(cancellationToken).ConfigureAwait(false);
         var result = new List<(string, RouterAdvertisement, TimeSpan, long)>();
@@ -75,7 +76,7 @@ internal sealed class RouterAdvertisementStore(Func<IDatabase> database, RedisKe
         return result;
     }
 
-    /// <summary>Removes an entry only while it still holds the stamp it was read with, so a router that wrote again in between keeps its entry.</summary>
+    /// <summary>Removes an entry only while it still holds the stamp it was read with, so a router that wrote again in between keeps its entry; nothing without scripts.</summary>
     public async Task PruneAsync(IReadOnlyCollection<(string Field, long Stamp)> stale, CancellationToken cancellationToken)
     {
         if (stale.Count == 0)
@@ -83,9 +84,9 @@ internal sealed class RouterAdvertisementStore(Func<IDatabase> database, RedisKe
             return;
         }
 
-        var db = database();
         if (!_scriptsRefused)
         {
+            var db = await AcquireAsync(cancellationToken).ConfigureAwait(false);
             try
             {
                 RedisValue[] arguments = [.. stale.SelectMany(s => new RedisValue[] { s.Field, s.Stamp.ToString(CultureInfo.InvariantCulture) })];
@@ -98,14 +99,7 @@ internal sealed class RouterAdvertisementStore(Func<IDatabase> database, RedisKe
             }
         }
 
-        foreach (var (field, stamp) in stale)
-        {
-            var held = (string?)await db.HashGetAsync(Key, field, CommandFlags.DemandMaster).WaitAsync(cancellationToken).ConfigureAwait(false);
-            if (held is not null && held.StartsWith(stamp.ToString(CultureInfo.InvariantCulture) + StampSeparator, StringComparison.Ordinal))
-            {
-                await db.HashDeleteAsync(Key, field, CommandFlags.DemandMaster).WaitAsync(cancellationToken).ConfigureAwait(false);
-            }
-        }
+        // Without a script the compare and the delete are two commands, and a router that wrote in between would lose its entry; readers age it out instead.
     }
 
     private static bool IsScriptRefusal(Exception ex) =>
@@ -115,6 +109,9 @@ internal sealed class RouterAdvertisementStore(Func<IDatabase> database, RedisKe
                 || server.Message.StartsWith("NOSCRIPT", StringComparison.OrdinalIgnoreCase)
                 || server.Message.Contains("unknown command", StringComparison.OrdinalIgnoreCase)
                 || server.Message.Contains("disabled", StringComparison.OrdinalIgnoreCase)));
+
+    private async Task<IDatabase> AcquireAsync(CancellationToken cancellationToken) =>
+        await Task.Run(() => database(cancellationToken).AsTask(), cancellationToken).WaitAsync(cancellationToken).ConfigureAwait(false);
 
     private async Task<long> ServerMillisecondsAsync(IDatabase db, CancellationToken cancellationToken)
     {

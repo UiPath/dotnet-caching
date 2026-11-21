@@ -115,6 +115,10 @@ public static class RouterServiceCollectionExtensions
         return (redisOptions.RedisKeyStrategyFactory ?? new DefaultRedisKeyStrategyFactory()).Create(cacheOptions, RedisKeyspaces.String).GetRedisKey(name);
     }
 
+    /// <summary>The router stack's source identity: the named stack's <c>?stack=</c> form, then the process part.</summary>
+    internal static Uri StackIdentity(Uri source, string processId) =>
+        WithProcess(new Uri($"{source.AbsoluteUri.Split('?')[0]}?stack={Uri.EscapeDataString(StackName)}"), processId);
+
     internal static Uri WithProcess(Uri source, string processId)
     {
         var text = source.AbsoluteUri;
@@ -141,7 +145,7 @@ public static class RouterServiceCollectionExtensions
 
             // Everything that builds, starts or reaches the library is behind the factory: a throw or a hang there leaves the router on the source.
             core.UseLibrary(token => StartLibraryAsync(root, builder, token));
-            var advertiser = CreateAdvertiser(root, builder, core, logger);
+            var advertiser = CreateAdvertiser(root, builder, core, processId, logger);
             var router = new Router(core, builder.Registrations) { Advertiser = advertiser };
 
             RouterBanner.Log(logger, builder, processId);
@@ -156,22 +160,32 @@ public static class RouterServiceCollectionExtensions
         }
     }
 
-    /// <summary>Reads only the stack's options, so it needs no started library; a failure leaves the router without an advertisement, never the host down.</summary>
-    private static RouterAdvertiser? CreateAdvertiser(IServiceProvider root, RouterBuilder builder, RouterCore core, ILogger logger)
+    /// <summary>
+    /// Built from the application's root options and the process id, never from the library's container, so a library build that hangs or throws
+    /// cannot hold or disable the entry. The router's stack binds the same configuration section, so the identity and node-list key agree with it.
+    /// </summary>
+    private static RouterAdvertiser? CreateAdvertiser(IServiceProvider root, RouterBuilder builder, RouterCore core, string processId, ILogger logger)
     {
         try
         {
-            var cacheOptions = root.GetRequiredKeyedService<IOptions<CacheOptions>>(StackName).Value;
-            var redisOptions = root.GetRequiredKeyedService<IOptions<RedisCacheOptions>>(StackName).Value;
-            var database = builder.SourceDatabase ?? (() => root.GetRequiredService<IRedisConnector>().Database);
+            var cacheOptions = root.GetRequiredService<IOptions<CacheOptions>>().Value;
+            var negotiation = root.GetService<IOptions<RedisCacheOptions>>()?.Value.FormatNegotiation ?? new FormatNegotiationOptions();
+            Func<CancellationToken, ValueTask<IDatabase>> database = builder.SourceDatabase is { } source
+                ? _ => ValueTask.FromResult(source())
+                : async token =>
+                {
+                    var connector = root.GetRequiredService<IRedisConnector>();
+                    await connector.ConnectAsync(token).ConfigureAwait(false);
+                    return connector.Database;
+                };
             var build = typeof(Router).Assembly.GetCustomAttribute<AssemblyInformationalVersionAttribute>()?.InformationalVersion ?? string.Empty;
             return new RouterAdvertiser(
-                new RouterAdvertisementStore(database, NodeListKey(cacheOptions, redisOptions)),
-                (cacheOptions.SourceUri ?? CacheOptions.MachineUri).ToString().ToLowerInvariant(),
+                new RouterAdvertisementStore(database, NodeListKey(new CacheOptions { Separator = cacheOptions.Separator }, new RedisCacheOptions { RedisKeyStrategyFactory = PassThroughKeyStrategyFactory.Instance })),
+                StackIdentity(cacheOptions.SourceUri ?? CacheOptions.MachineUri, processId).ToString().ToLowerInvariant(),
                 build,
                 [new BypassTokens(core)],
-                redisOptions.FormatNegotiation.AdvertiseInterval,
-                redisOptions.FormatNegotiation.LivenessWindow,
+                negotiation.AdvertiseInterval,
+                negotiation.LivenessWindow,
                 core.Clock,
                 logger);
         }

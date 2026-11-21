@@ -84,6 +84,57 @@ public sealed class AdvertisementTests
         Volatile.Read(ref attempts).Should().BeGreaterThanOrEqualTo(4, "the departing write is attempted too, and nothing threw");
     }
 
+    [Fact]
+    public async Task A_stalled_connection_never_holds_the_stop()
+    {
+        using var never = new ManualResetEventSlim();
+        var core = new RouterCore(TimeProvider.System, _ => true, NullLogger.Instance);
+        var advertiser = Advertiser(
+            () =>
+            {
+                never.Wait(TimeSpan.FromSeconds(30));
+                throw new RedisException("released");
+            },
+            core);
+        advertiser.Start();
+        await Task.Delay(100, Ct);
+
+        var stopping = advertiser.StopAsync(TimeSpan.FromMilliseconds(200));
+
+        (await Task.WhenAny(stopping, Task.Delay(TimeSpan.FromSeconds(5), Ct))).Should().BeSameAs(stopping, "the stop is bounded even while acquisition blocks");
+        never.Set();
+    }
+
+    [Fact]
+    public async Task Mode_change_nudges_keep_the_failure_backoff()
+    {
+        var attempts = 0;
+        var core = new RouterCore(TimeProvider.System, _ => true, NullLogger.Instance);
+        var advertiser = Advertiser(
+            () =>
+            {
+                Interlocked.Increment(ref attempts);
+                throw new RedisException("down");
+            },
+            core,
+            interval: TimeSpan.FromHours(1));
+        advertiser.Start();
+        var deadline = DateTime.UtcNow.AddSeconds(5);
+        while (Volatile.Read(ref attempts) == 0 && DateTime.UtcNow < deadline)
+        {
+            await Task.Delay(5, Ct);
+        }
+
+        for (var i = 0; i < 30; i++)
+        {
+            advertiser.Nudge();
+            await Task.Delay(5, Ct);
+        }
+
+        Volatile.Read(ref attempts).Should().Be(1, "the first retry waits its 500 ms backoff whatever the nudges");
+        await advertiser.StopAsync(TimeSpan.FromSeconds(1));
+    }
+
     [Theory]
     [InlineData(1, 500)]
     [InlineData(2, 1000)]
@@ -111,9 +162,15 @@ public sealed class AdvertisementTests
             .Should().Be((RedisKey)"app$s$caching$nodes");
     }
 
+    [Theory]
+    [InlineData("urn:host", "urn:host-pabc?stack=UiPath.Caching.Migration")]
+    [InlineData("urn:host?x=1", "urn:host-pabc?stack=UiPath.Caching.Migration")]
+    public void The_identity_is_the_stack_form_then_the_process_part(string source, string expected) =>
+        RouterServiceCollectionExtensions.StackIdentity(new Uri(source), "abc").ToString().Should().Be(expected);
+
     internal static RouterAdvertiser Advertiser(Func<IDatabase> database, RouterCore core, TimeSpan? interval = null, TimeSpan? liveness = null) =>
         new(
-            new RouterAdvertisementStore(database, "caching:nodes"),
+            new RouterAdvertisementStore(_ => ValueTask.FromResult(database()), "caching:nodes"),
             "urn:test",
             "test-build",
             [new BypassTokens(core)],

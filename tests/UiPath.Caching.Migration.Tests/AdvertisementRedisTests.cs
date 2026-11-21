@@ -2,9 +2,11 @@ using System.Globalization;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging.Abstractions;
+using Microsoft.Extensions.Options;
 using StackExchange.Redis;
 using UiPath.Caching.Config;
 using UiPath.Caching.Migration.Tests.Support;
+using UiPath.Caching.Redis;
 
 namespace UiPath.Caching.Migration.Tests;
 
@@ -16,6 +18,7 @@ public sealed class AdvertisementRedisTests(RedisFixture fixture) : IAsyncLifeti
 
     private readonly RedisKey _key = $"adv-test:{Guid.NewGuid():N}";
     private ConnectionMultiplexer? _redis;
+    private string? _identity;
 
     private static CancellationToken Ct => TestContext.Current.CancellationToken;
 
@@ -42,7 +45,7 @@ public sealed class AdvertisementRedisTests(RedisFixture fixture) : IAsyncLifeti
     public async Task Written_entry_reads_back_with_a_server_age()
     {
         Assert.SkipUnless(fixture.Enabled, Skip);
-        var store = new RouterAdvertisementStore(() => Db, _key);
+        var store = new RouterAdvertisementStore(_ => ValueTask.FromResult(Db), _key);
 
         await store.WriteAsync("urn:a#router", new RouterAdvertisement("urn:a", "b1", ["byp"]), Ct);
         await Db.HashSetAsync(_key, "urn:lib", "1|lib=1;inst=x;vr=json");
@@ -60,7 +63,7 @@ public sealed class AdvertisementRedisTests(RedisFixture fixture) : IAsyncLifeti
         Assert.SkipUnless(fixture.Enabled, Skip);
         var core = new RouterCore(TimeProvider.System, _ => true, NullLogger.Instance);
         core.UseLibrary(token => Task.Delay(Timeout.Infinite, token).ContinueWith<LibraryParts>(_ => throw new OperationCanceledException(), TaskScheduler.Default));
-        var store = new RouterAdvertisementStore(() => Db, _key);
+        var store = new RouterAdvertisementStore(_ => ValueTask.FromResult(Db), _key);
         await using var router = new Router(core, Array.Empty<(string, Type, object)>()) { Advertiser = Advertiser(store, core) };
         router.Start();
 
@@ -74,7 +77,7 @@ public sealed class AdvertisementRedisTests(RedisFixture fixture) : IAsyncLifeti
     {
         Assert.SkipUnless(fixture.Enabled, Skip);
         var core = new RouterCore(TimeProvider.System, _ => true, NullLogger.Instance);
-        var store = new RouterAdvertisementStore(() => Db, _key);
+        var store = new RouterAdvertisementStore(_ => ValueTask.FromResult(Db), _key);
         await using var router = new Router(core, Array.Empty<(string, Type, object)>()) { Advertiser = Advertiser(store, core) };
         router.Start();
         router.Mode.Should().Be(RouterMode.Library);
@@ -93,7 +96,7 @@ public sealed class AdvertisementRedisTests(RedisFixture fixture) : IAsyncLifeti
     public async Task A_stale_entry_ages_out_and_is_pruned_while_a_fresh_one_stays()
     {
         Assert.SkipUnless(fixture.Enabled, Skip);
-        var store = new RouterAdvertisementStore(() => Db, _key);
+        var store = new RouterAdvertisementStore(_ => ValueTask.FromResult(Db), _key);
         var core = new RouterCore(TimeProvider.System, _ => true, NullLogger.Instance);
         var advertiser = new RouterAdvertiser(store, "urn:live", "b", [new BypassTokens(core)], TimeSpan.FromMilliseconds(50), TimeSpan.FromMilliseconds(50), TimeProvider.System, NullLogger.Instance);
         var time = await Db.ExecuteAsync("TIME");
@@ -110,37 +113,52 @@ public sealed class AdvertisementRedisTests(RedisFixture fixture) : IAsyncLifeti
     }
 
     [Fact]
-    public async Task The_router_from_DI_writes_its_entry_over_the_source_connection_into_the_stack_node_list()
+    public async Task The_source_database_reaches_the_stack_node_hash_under_the_stack_identity()
     {
         Assert.SkipUnless(fixture.Enabled, Skip);
-        var identity = $"adv{Guid.NewGuid():N}"[..16];
-        var configuration = new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>
-        {
-            ["Caching:AppShortName"] = "advtest",
-            ["Caching:DefaultCache"] = KnownCacheProviderNames.Redis,
-            ["Caching:Connections:Redis:ConnectionString"] = fixture.ConnectionString,
-            ["Caching:Connections:Redis:WarmUpOnStart"] = "false",
-            ["Caching:Connections:Redis:PlannedMaintenanceEnabled"] = "false",
-        }).Build();
-        var source = new LegacySource(_redis!, "advc");
-        var services = new ServiceCollection().AddLogging();
-        services.AddCaching(configuration, builder => builder.AddRedisConnection());
-        services.AddCachingRouter(configuration, router => router
-            .UseLibraryWhen(_ => true)
-            .UseEnvelope(new LegacyEnvelopeProxy())
-            .UseNodeIdentity(identity)
-            .UseSourceConnection(() => Db)
-            .Add(new RouterCacheRegistration<List<long>> { Name = "advc", Group = "advg", Source = source, RedisKey = source.RedisKey }));
-        await using var provider = services.BuildServiceProvider();
-        var router = provider.GetRequiredService<IRouter>();
-        router.Should().NotBeNull();
-        var key = (RedisKey)"caching:nodes";
+        await using var provider = Provider($"adv{Guid.NewGuid():N}"[..16]);
+        _ = provider.GetRequiredService<IRouter>();
+        var stackCache = provider.GetRequiredKeyedService<IOptions<CacheOptions>>(RouterServiceCollectionExtensions.StackName).Value;
+        var stackRedis = provider.GetRequiredKeyedService<IOptions<RedisCacheOptions>>(RouterServiceCollectionExtensions.StackName).Value;
+        var key = RouterServiceCollectionExtensions.NodeListKey(stackCache, stackRedis);
+        var field = stackCache.SourceUri!.ToString().ToLowerInvariant() + RouterAdvertisement.FieldSuffix;
 
-        (await UntilAsync(async () => (await Db.HashKeysAsync(key)).Any(f => ((string)f!).Contains(identity, StringComparison.Ordinal) && ((string)f!).EndsWith(RouterAdvertisement.FieldSuffix, StringComparison.Ordinal))))
-            .Should().BeTrue();
-        foreach (var field in (await Db.HashKeysAsync(key)).Where(f => ((string)f!).Contains(identity, StringComparison.Ordinal)))
+        (await UntilAsync(async () => await Db.HashExistsAsync(key, field))).Should().BeTrue("the entry built from root options lands where the stack's node list is");
+        await Db.HashDeleteAsync(key, field);
+    }
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task A_library_build_that_hangs_or_throws_does_not_hold_or_disable_the_entry(bool hangs)
+    {
+        Assert.SkipUnless(fixture.Enabled, Skip);
+        using var release = new ManualResetEventSlim();
+        T Fail<T>()
         {
-            await Db.HashDeleteAsync(key, field);
+            if (hangs)
+            {
+                release.Wait(TimeSpan.FromSeconds(60));
+            }
+
+            throw new InvalidOperationException("library build failed");
+        }
+
+        await using var provider = Provider($"adv{Guid.NewGuid():N}"[..16], services => services
+            .AddKeyedSingleton(RouterServiceCollectionExtensions.StackName, (_, _) => Fail<StackServices>())
+            .AddKeyedSingleton(RouterServiceCollectionExtensions.StackName, (_, _) => Fail<IOptions<CacheOptions>>())
+            .AddKeyedSingleton(RouterServiceCollectionExtensions.StackName, (_, _) => Fail<IOptions<RedisCacheOptions>>()));
+        var created = Task.Run(() => provider.GetRequiredService<IRouter>(), Ct);
+        (await Task.WhenAny(created, Task.Delay(TimeSpan.FromSeconds(15), Ct))).Should().BeSameAs(created);
+        var router = await created;
+
+        (await UntilAsync(async () => (await Db.HashKeysAsync("caching:nodes")).Any(f => ((string)f!).Contains(_identity!, StringComparison.Ordinal))))
+            .Should().BeTrue("the advertisement needs nothing from the library");
+        router.Mode.Should().Be(RouterMode.BypassLibrary);
+        release.Set();
+        foreach (var f in (await Db.HashKeysAsync("caching:nodes")).Where(f => ((string)f!).Contains(_identity!, StringComparison.Ordinal)))
+        {
+            await Db.HashDeleteAsync("caching:nodes", f);
         }
     }
 
@@ -161,5 +179,29 @@ public sealed class AdvertisementRedisTests(RedisFixture fixture) : IAsyncLifeti
         }
 
         return false;
+    }
+
+    private ServiceProvider Provider(string identity, Action<IServiceCollection>? after = null)
+    {
+        _identity = identity;
+        var configuration = new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>
+        {
+            ["Caching:AppShortName"] = "advtest",
+            ["Caching:DefaultCache"] = KnownCacheProviderNames.Redis,
+            ["Caching:Connections:Redis:ConnectionString"] = fixture.ConnectionString,
+            ["Caching:Connections:Redis:WarmUpOnStart"] = "false",
+            ["Caching:Connections:Redis:PlannedMaintenanceEnabled"] = "false",
+        }).Build();
+        var source = new LegacySource(_redis!, "advc");
+        var services = new ServiceCollection().AddLogging();
+        services.AddCaching(configuration, builder => builder.AddRedisConnection());
+        services.AddCachingRouter(configuration, router => router
+            .UseLibraryWhen(_ => true)
+            .UseEnvelope(new LegacyEnvelopeProxy())
+            .UseNodeIdentity(identity)
+            .UseSourceConnection(() => Db)
+            .Add(new RouterCacheRegistration<List<long>> { Name = "advc", Group = "advg", Source = source, RedisKey = source.RedisKey }));
+        after?.Invoke(services);
+        return services.BuildServiceProvider();
     }
 }

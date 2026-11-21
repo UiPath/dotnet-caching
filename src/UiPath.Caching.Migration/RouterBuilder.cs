@@ -101,7 +101,7 @@ public sealed class RouterBuilder
 
     /// <summary>
     /// The source client's database, without a key prefix of its own, over which the router writes its node advertisement, so the entry is kept while the
-    /// library is down. Without it the application's library connection carries the entry.
+    /// library is down. It must return at once, without waiting for a connection. Without it the application's library connection carries the entry.
     /// </summary>
     public RouterBuilder UseSourceConnection(Func<IDatabase> database)
     {

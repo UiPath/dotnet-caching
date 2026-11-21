@@ -78,10 +78,18 @@ internal sealed class RouterAdvertiser(
     /// <summary>Stops the loop and writes the departing entry once, within <paramref name="bound"/>; an entry that is not replaced expires on its own.</summary>
     public async Task StopAsync(TimeSpan bound)
     {
-        await _stop.CancelAsync().ConfigureAwait(false);
-        await _loop.ConfigureAwait(false);
-        Volatile.Write(ref _left, 1);
         using var timeout = new CancellationTokenSource(bound, clock);
+        await _stop.CancelAsync().ConfigureAwait(false);
+        try
+        {
+            await _loop.WaitAsync(timeout.Token).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException)
+        {
+            // A loop stuck past the bound is left behind; its write can no longer hold the stop.
+        }
+
+        Volatile.Write(ref _left, 1);
         try
         {
             await _writing.WaitAsync(timeout.Token).ConfigureAwait(false);
@@ -110,7 +118,8 @@ internal sealed class RouterAdvertiser(
         var delay = TimeSpan.Zero;
         while (!_stop.IsCancellationRequested)
         {
-            if (!await WaitAsync(delay).ConfigureAwait(false))
+            // After a failure the backoff holds even when a change asks for a write; the retry carries the change.
+            if (!await WaitAsync(delay, honorNudge: failures == 0).ConfigureAwait(false))
             {
                 return;
             }
@@ -132,13 +141,14 @@ internal sealed class RouterAdvertiser(
     }
 
     /// <summary>False once stopping.</summary>
-    private async Task<bool> WaitAsync(TimeSpan delay)
+    private async Task<bool> WaitAsync(TimeSpan delay, bool honorNudge)
     {
         var nudge = Volatile.Read(ref _nudge);
         using var wake = CancellationTokenSource.CreateLinkedTokenSource(_stop.Token);
         try
         {
-            await Task.WhenAny(Task.Delay(delay, clock, wake.Token), nudge.Task).ConfigureAwait(false);
+            var delayed = Task.Delay(delay, clock, wake.Token);
+            await (honorNudge ? Task.WhenAny(delayed, nudge.Task) : Task.WhenAny(delayed)).ConfigureAwait(false);
         }
         finally
         {
