@@ -1,5 +1,6 @@
 using System.Runtime.CompilerServices;
 using System.Runtime.ExceptionServices;
+using System.Runtime.InteropServices;
 using UiPath.Caching.Telemetry;
 
 namespace UiPath.Caching;
@@ -7,6 +8,8 @@ namespace UiPath.Caching;
 /// <summary>Detached inner-tier writes, at most <c>limit</c> at once, in issue order per key with the awaited ones.</summary>
 internal sealed class BackgroundWrites(int limit, TimeSpan drainTimeout, string cacheName, ILogger logger, ICachingTelemetryProvider telemetry, TimeProvider clock, Action<string>? onIssued = null)
 {
+    internal const long Untracked = -1;
+
     private const string FailedEvent = "cache.background_write.failed";
     private const string FillRefusedMetric = "cache.background_write.fill_refused";
     private const string CoalescedMetric = "cache.background_write.coalesced";
@@ -15,9 +18,12 @@ internal sealed class BackgroundWrites(int limit, TimeSpan drainTimeout, string 
     // Keys share counters by stripe; locks are shared by more stripes than counters are, so a cache with many stripes keeps few locks.
     private const int Stripes = 8192;
     private const int StripeLocks = 1024;
-    private const long Untracked = -1;
 
     private readonly Lock _gate = new();
+    private readonly Lock _fillGate = new();
+    // Keys with a fill in progress, each with the number of changes of that key since the first fill began: exact where a stripe's count is shared.
+    private readonly Dictionary<string, FillWatch> _fills = new(StringComparer.Ordinal);
+    private readonly TelemetryTags<string> _refusedSuperseded = [new(TagCache, cacheName), new(TagReason, "superseded")];
     private readonly TelemetryTags<string> _refusedChanged = [new(TagCache, cacheName), new(TagReason, "changed")];
     private readonly TelemetryTags<string> _refusedInFlight = [new(TagCache, cacheName), new(TagReason, "in_flight")];
     private readonly TelemetryTags<string> _refusedUntracked = [new(TagCache, cacheName), new(TagReason, "untracked")];
@@ -31,6 +37,8 @@ internal sealed class BackgroundWrites(int limit, TimeSpan drainTimeout, string 
     private int[] _writing = [];
     private Lock[] _stripes = [];
     private volatile bool _counting;
+    // Keys with a fill in progress, for a cheap check by every write.
+    private int _filling;
     // The write order, from the first background write on.
     private volatile bool _active;
     private int _inFlight;
@@ -129,9 +137,107 @@ internal sealed class BackgroundWrites(int limit, TimeSpan drainTimeout, string 
         // Its place is never reserved past the limit, so it is never refused.
         RunCore(key, state, local, work, false, true) ?? false;
 
-    /// <summary>Places an awaited write of the key after the background writes issued before it.</summary>
-    public Turn Enter(string key)
+    /// <summary>Starts watching the key for changes by anything but a fill; the token it returns is what <see cref="FillIntact"/> takes.</summary>
+    public long BeginFill(string key)
     {
+        lock (_fillGate)
+        {
+            ref var watch = ref CollectionsMarshal.GetValueRefOrAddDefault(_fills, key, out _);
+            watch.Count++;
+            Volatile.Write(ref _filling, _fills.Count);
+            return watch.Version;
+        }
+    }
+
+    public void EndFill(string key)
+    {
+        lock (_fillGate)
+        {
+            ref var watch = ref CollectionsMarshal.GetValueRefOrNullRef(_fills, key);
+            if (!Unsafe.IsNullRef(ref watch) && --watch.Count == 0)
+            {
+                _fills.Remove(key);
+                Volatile.Write(ref _filling, _fills.Count);
+            }
+        }
+    }
+
+    /// <summary>True when nothing but a fill has changed the key since <paramref name="token"/> was taken; a token that was not taken stands for no watch.</summary>
+    public bool FillIntact(string key, long token)
+    {
+        if (token == Untracked)
+        {
+            return true;
+        }
+
+        lock (_fillGate)
+        {
+            ref var watch = ref CollectionsMarshal.GetValueRefOrNullRef(_fills, key);
+            return !Unsafe.IsNullRef(ref watch) && watch.Version == token;
+        }
+    }
+
+    /// <summary>A local write or removal of the key, or a peer's: a fill in progress for it no longer holds the newest word.</summary>
+    public void NoteChange(string key)
+    {
+        if (Volatile.Read(ref _filling) == 0)
+        {
+            return;
+        }
+
+        lock (_fillGate)
+        {
+            ref var watch = ref CollectionsMarshal.GetValueRefOrNullRef(_fills, key);
+            if (!Unsafe.IsNullRef(ref watch))
+            {
+                watch.Version++;
+            }
+        }
+    }
+
+    /// <summary>Changes that were not heard, or an invalidation of every key: every fill in progress is superseded.</summary>
+    public void NoteChangeAll()
+    {
+        if (Volatile.Read(ref _filling) == 0)
+        {
+            return;
+        }
+
+        lock (_fillGate)
+        {
+            foreach (var key in _fills.Keys.ToArray())
+            {
+                ref var watch = ref CollectionsMarshal.GetValueRefOrNullRef(_fills, key);
+                watch.Version++;
+            }
+        }
+    }
+
+    /// <summary>A peer's change of the key.</summary>
+    public void Heard(string key)
+    {
+        Touch(key);
+        NoteChange(key);
+    }
+
+    /// <summary>Changes of a peer that were not heard.</summary>
+    public void HeardAll()
+    {
+        TouchAll();
+        NoteChangeAll();
+    }
+
+    /// <summary>Counts a fill refused because the key changed while its generator ran.</summary>
+    public void FillSuperseded() => FillRefused(_refusedSuperseded);
+
+    /// <summary>Places an awaited write of the key after the background writes issued before it; a fill's own write is not a change of the key.</summary>
+    public Turn Enter(string key, bool fill = false)
+    {
+        if (!fill)
+        {
+            NoteChange(key);
+        }
+
         if (!_active)
         {
             return EnterUnordered(key, null);
@@ -147,14 +253,25 @@ internal sealed class BackgroundWrites(int limit, TimeSpan drainTimeout, string 
         return new Turn(this, key, null, mine, previous ?? Task.CompletedTask);
     }
 
-    public Turn Enter(IEnumerable<string> keys)
+    public Turn Enter(IEnumerable<string> keys, bool fill = false)
     {
         if (!_active)
         {
-            return _counting ? EnterUnordered(null, keys as string[] ?? keys.ToArray()) : default;
+            var unordered = keys as string[] ?? keys.ToArray();
+            if (!fill)
+            {
+                Array.ForEach(unordered, NoteChange);
+            }
+
+            return _counting ? EnterUnordered(null, unordered) : default;
         }
 
         var all = keys as string[] ?? keys.ToArray();
+        if (!fill)
+        {
+            Array.ForEach(all, NoteChange);
+        }
+
         var mine = new Awaited();
         List<Task>? pending = null;
         lock (_gate)
@@ -177,6 +294,13 @@ internal sealed class BackgroundWrites(int limit, TimeSpan drainTimeout, string 
 
     public ValueTask<TResult> WriteAsync<TState, TWritten, TResult>(IEnumerable<string> keys, TState state, Action<TState>? before, Func<TState, Keeper, ValueTask<TWritten>> write, Func<TState, TWritten, Keeper, TResult> keep, CancellationToken token) =>
         WriteInTurnAsync(Enter(keys), state, before, write, keep, token);
+
+    /// <summary>As <see cref="WriteAsync{TState, TWritten, TResult}(string, TState, Action{TState}?, Func{TState, Keeper, ValueTask{TWritten}}, Func{TState, TWritten, Keeper, TResult}, CancellationToken)"/> for a fill, which is not a change of the key a fill in progress watches for.</summary>
+    public ValueTask<TResult> FillAsync<TState, TWritten, TResult>(string key, TState state, Func<TState, Keeper, ValueTask<TWritten>> write, Func<TState, TWritten, Keeper, TResult> keep, CancellationToken token) =>
+        WriteInTurnAsync(Enter(key, fill: true), state, null, write, keep, token);
+
+    public ValueTask<TResult> FillAsync<TState, TWritten, TResult>(IEnumerable<string> keys, TState state, Func<TState, Keeper, ValueTask<TWritten>> write, Func<TState, TWritten, Keeper, TResult> keep, CancellationToken token) =>
+        WriteInTurnAsync(Enter(keys, fill: true), state, null, write, keep, token);
 
     /// <summary>For a write that keeps nothing locally, a removal or a refresh.</summary>
     public ValueTask<TResult> WriteAsync<TState, TResult>(string key, TState state, Action<TState>? before, Func<TState, ValueTask<TResult>> write, CancellationToken token) =>
@@ -734,6 +858,12 @@ internal sealed class BackgroundWrites(int limit, TimeSpan drainTimeout, string 
 
     private bool? RunCore<TState>(string key, TState state, Func<TState, bool> local, Func<TState, CancellationToken, ValueTask> work, bool coalesce, bool publishes)
     {
+        // A write that sends no event is a fill.
+        if (publishes)
+        {
+            NoteChange(key);
+        }
+
         Queued? mine = null;
         Queued? replaced = null;
         Task? previous = null;
@@ -978,6 +1108,12 @@ internal sealed class BackgroundWrites(int limit, TimeSpan drainTimeout, string 
                 owner?.RecordReturned(of, version);
             }
         }
+    }
+
+    private struct FillWatch
+    {
+        public int Count;
+        public long Version;
     }
 
     internal sealed class Awaited() : TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously)

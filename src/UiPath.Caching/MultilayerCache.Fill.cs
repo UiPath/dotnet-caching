@@ -121,6 +121,7 @@ internal sealed partial class MultilayerCache
         }
 
         _background.Track();
+        _background.NoteChange(options.CacheKey.Name);
         if (!_sharedInner)
         {
             return await ChangeLocallyAsync(options, value, comparer, policy).ConfigureAwait(false);

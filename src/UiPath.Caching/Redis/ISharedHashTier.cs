@@ -4,6 +4,9 @@ internal interface ISharedHashTier : ISharedTier
 {
     ValueTask<VersionedWrite> SetVersionedAsync<T>(CacheKey cacheKey, IDictionary<string, T?> values, HashCacheEntryOptions options, CachePolicy? policy, PeerFieldLimits limits, CancellationToken token = default);
 
+    /// <summary>As <see cref="SetVersionedAsync{T}"/>, writing only when the key is absent; <see cref="VersionedWrite.Existed"/> when it was not.</summary>
+    ValueTask<VersionedWrite> FillVersionedAsync<T>(CacheKey cacheKey, IDictionary<string, T?> values, HashCacheEntryOptions options, CachePolicy? policy, PeerFieldLimits limits, CancellationToken token = default);
+
     ValueTask<bool> RemoveFieldsVersionedAsync<T>(CacheKey cacheKey, string[] fields, CancellationToken token = default);
 
     bool TryDecodeFields<T>(IReadOnlyDictionary<string, byte[]?> encoded, CachePolicy? policy, [MaybeNullWhen(false)] out Dictionary<string, T?> values);

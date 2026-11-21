@@ -228,6 +228,13 @@ internal sealed partial class RedisHashCache : RedisCacheBase, IHashCache, ISpan
         return new VersionedWrite(written, report.Version, report.Fields);
     }
 
+    public async ValueTask<VersionedWrite> FillVersionedAsync<T>(CacheKey cacheKey, IDictionary<string, T?> values, HashCacheEntryOptions options, CachePolicy? policy, PeerFieldLimits limits, CancellationToken token = default)
+    {
+        var report = new WriteReport(limits) { OnlyIfAbsent = true };
+        var written = await SetCountingAsync(cacheKey, values, options, policy, report, token).ConfigureAwait(false);
+        return new VersionedWrite(written, report.Version, report.Fields, report.Existed);
+    }
+
     public ValueTask<bool> RemoveFieldsVersionedAsync<T>(CacheKey cacheKey, string[] fields, CancellationToken token = default) =>
         RemoveFieldsCoreAsync<T>(cacheKey, fields, versioned: true, token);
 
@@ -1534,15 +1541,19 @@ internal sealed partial class RedisHashCache : RedisCacheBase, IHashCache, ISpan
 
     private async ValueTask<bool> WriteAsync(RedisKey redisKey, HashEntry[] hashEntries, HashCacheSetOption setOption, DateTimeOffset expiration, DateTimeOffset now, WriteReport? report, bool dropMetadata, CancellationToken token)
     {
+        var absent = report?.OnlyIfAbsent == true;
         if (expiration < now || hashEntries.Length == 0)
         {
-            return await DeleteKeyAsync(redisKey, token).ConfigureAwait(false);
+            // A fill of an absent key has nothing to write, and must not delete what is held.
+            return !absent && await DeleteKeyAsync(redisKey, token).ConfigureAwait(false);
         }
 
-        if (hashEntries.Length > _fieldBatchSize && TryChunkedWriteKeys(redisKey, setOption, out var staging))
+        // Written to a staging key and renamed under the key, so a hash that appeared meanwhile is never merged into.
+        var chunkOption = absent ? HashCacheSetOption.KeyReplace : setOption;
+        if (hashEntries.Length > _fieldBatchSize && TryChunkedWriteKeys(redisKey, chunkOption, out var staging))
         {
             await EnsureConnectedAsync(_write, token).ConfigureAwait(false);
-            return await _write.ExecuteAsync(static (s, token) => s.Self.WriteInChunksAsync(s.Key, s.Staging, s.Entries, s.Option, s.Expiration, s.Report, token), (Self: this, Key: redisKey, Staging: staging, Entries: hashEntries, Option: setOption, Expiration: expiration, Report: report), default, token).ConfigureAwait(false);
+            return await _write.ExecuteAsync(static (s, token) => s.Self.WriteInChunksAsync(s.Key, s.Staging, s.Entries, s.Option, s.Expiration, s.Report, token), (Self: this, Key: redisKey, Staging: staging, Entries: hashEntries, Option: chunkOption, Expiration: expiration, Report: report), default, token).ConfigureAwait(false);
         }
 
         return await WriteInTransactionAsync(redisKey, hashEntries, setOption, expiration, report, dropMetadata, token).ConfigureAwait(false);
@@ -1563,6 +1574,11 @@ internal sealed partial class RedisHashCache : RedisCacheBase, IHashCache, ISpan
     {
         await EnsureConnectedAsync(_write, token).ConfigureAwait(false);
         var transaction = Database.CreateTransaction();
+        if (report?.OnlyIfAbsent == true)
+        {
+            transaction.AddCondition(Condition.KeyNotExists(redisKey));
+        }
+
         if (setOption == HashCacheSetOption.KeyReplace)
         {
             transaction.KeyDeleteAsync(redisKey).Forget();
@@ -1602,7 +1618,12 @@ internal sealed partial class RedisHashCache : RedisCacheBase, IHashCache, ISpan
             transaction,
             default,
             token).ConfigureAwait(false);
-        if (!committed)
+        if (!committed && report?.OnlyIfAbsent == true)
+        {
+            // Its condition failed: the key is held.
+            report.Existed = true;
+        }
+        else if (!committed)
         {
             LogRedisTransactionFailed();
         }
@@ -1644,11 +1665,24 @@ internal sealed partial class RedisHashCache : RedisCacheBase, IHashCache, ISpan
 
                 try
                 {
-                    await RenameOverAsync(staging, redisKey, expiration).ConfigureAwait(false);
+                    if (report?.OnlyIfAbsent == true)
+                    {
+                        if (!await RenameIfAbsentAsync(staging, redisKey, expiration).ConfigureAwait(false))
+                        {
+                            report.Existed = true;
+                            DropStaging(staging);
+                            return false;
+                        }
+                    }
+                    else
+                    {
+                        await RenameOverAsync(staging, redisKey, expiration).ConfigureAwait(false);
+                    }
                 }
                 catch (Exception renameFailed) when (expiration < Clock.GetUtcNow())
                 {
-                    return await DeleteExpiredReplacementAsync(redisKey, renameFailed).ConfigureAwait(false);
+                    // A fill of an absent key must not delete what is held, so its expired replacement is only dropped.
+                    return report?.OnlyIfAbsent != true && await DeleteExpiredReplacementAsync(redisKey, renameFailed).ConfigureAwait(false);
                 }
             }
 
@@ -1720,6 +1754,31 @@ internal sealed partial class RedisHashCache : RedisCacheBase, IHashCache, ISpan
         var renamed = transaction.KeyRenameAsync(staging, redisKey, When.Always, CommandFlags.DemandMaster);
         var persisted = transaction.KeyPersistAsync(redisKey, CommandFlags.DemandMaster);
         await CommitAsync(transaction, "The replacement", redisKey, renamed, persisted).ConfigureAwait(false);
+    }
+
+    /// <summary>Renames the staging key to the key only if the key is absent; false when it is held, or the staging key is gone.</summary>
+    private async Task<bool> RenameIfAbsentAsync(RedisKey staging, RedisKey redisKey, DateTimeOffset expiration)
+    {
+        if (expiration != DateTimeOffset.MaxValue)
+        {
+            return await Database.KeyRenameAsync(staging, redisKey, When.NotExists, CommandFlags.DemandMaster).ConfigureAwait(false);
+        }
+
+        // As the replacement drops the staging key's orphan lifetime, but only if the rename took the key's place.
+        var transaction = Database.CreateTransaction();
+        transaction.AddCondition(Condition.KeyExists(staging));
+        transaction.AddCondition(Condition.KeyNotExists(redisKey));
+        var renamed = transaction.KeyRenameAsync(staging, redisKey, When.Always, CommandFlags.DemandMaster);
+        var persisted = transaction.KeyPersistAsync(redisKey, CommandFlags.DemandMaster);
+        if (!await transaction.ExecuteAsync(CommandFlags.DemandMaster).ConfigureAwait(false))
+        {
+            renamed.Forget();
+            persisted.Forget();
+            return false;
+        }
+
+        await ObserveAllAsync([renamed, persisted]).ConfigureAwait(false);
+        return true;
     }
 
     private async Task WriteWithLifetimeAsync(RedisKey target, HashEntry[] chunk, HashCacheSetOption setOption, DateTimeOffset expiration)

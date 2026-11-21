@@ -1348,7 +1348,7 @@ internal sealed partial class RedisCache : RedisCacheBase, ICache, ISharedTier, 
         return ret;
     }
 
-    private async ValueTask<SnapshotRead<T>> ReadSnapshotInternalAsync<T, TFormat>(CacheKey cacheKey, TFormat format, CancellationToken token)
+    private async ValueTask<SnapshotRead<T>> ReadSnapshotInternalAsync<T, TFormat>(CacheKey cacheKey, TFormat format, CancellationToken token, StrongBox<RedisValue>? raw = null)
         where TFormat : struct, IValueFormat
     {
         token.ThrowIfCancellationRequested();
@@ -1390,6 +1390,11 @@ internal sealed partial class RedisCache : RedisCacheBase, ICache, ISharedTier, 
             }
 
             var (value, expiration) = result.Value;
+            if (raw is not null)
+            {
+                raw.Value = value;
+            }
+
             var snapshot = InterpretSnapshot<T, TFormat>(redisKey, value, Clock.ToDateTimeOffset(expiration), format);
             found = snapshot.Outcome == SnapshotOutcome.Found;
             operation.Stop();

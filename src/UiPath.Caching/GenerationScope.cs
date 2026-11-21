@@ -1,7 +1,7 @@
 namespace UiPath.Caching;
 
-/// <summary>What a generation runs under: its token, the shared run when it has one, so it can tell that every caller has left and not store over a newer value, and the run's end when this frame is the one that ends it.</summary>
-internal readonly record struct GenerationScope(IInFlightRun? Run, CancellationToken Token, IInFlightEnd<object?>? End = null)
+/// <summary>What a generation runs under: its token, the shared run when it has one, so it can tell that every caller has left and not store over a newer value, the run's end when this frame is the one that ends it, and the token of the key's fill watch.</summary>
+internal readonly record struct GenerationScope(IInFlightRun? Run, CancellationToken Token, IInFlightEnd<object?>? End = null, long Fill = BackgroundWrites.Untracked)
 {
     public bool IsAbandoned => Run?.IsAbandoned == true;
 

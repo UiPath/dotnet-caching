@@ -57,15 +57,15 @@ public class GeneratedExpirationTests
         var inner = Substitute.For<ICache>();
         inner.GetCacheEntryAsync<string>(Arg.Any<CacheKey>(), Arg.Any<CachePolicy?>(), Arg.Any<CancellationToken>())
             .Returns(new TestCacheEntry<string?> { Expiration = DateTimeOffset.MinValue });
-        inner.SetAsync<string?>(Arg.Any<CacheKey>(), Arg.Any<string?>(), Arg.Any<DateTimeOffset>(), Arg.Any<CachePolicy?>(), Arg.Any<CancellationToken>()).Returns(true);
+        inner.TryFillAsync<string>(Arg.Any<CacheKey>(), Arg.Any<string?>(), Arg.Any<DateTimeOffset>(), Arg.Any<CachePolicy?>(), Arg.Any<CancellationToken>()).Returns(new FillResult<string>(FillOutcome.Added, null));
         using var cache = InMemoryMultilayer.Cache(inner: inner);
         var deadline = DateTimeOffset.UtcNow.AddMinutes(7);
 
         await cache.GetOrAddWithExpirationAsync<string>("live", _ => Task.FromResult(new GeneratedValue<string>("jwt", deadline)), Ct);
         await cache.GetOrAddWithExpirationAsync<string>("stale", _ => Task.FromResult(new GeneratedValue<string>("jwt", DateTimeOffset.UtcNow.AddMinutes(-1))), Ct);
 
-        await inner.Received(1).SetAsync<string?>(new CacheKey("live"), "jwt", deadline, Arg.Any<CachePolicy?>(), Arg.Any<CancellationToken>());
-        await inner.DidNotReceive().SetAsync<string?>(new CacheKey("stale"), Arg.Any<string?>(), Arg.Any<DateTimeOffset>(), Arg.Any<CachePolicy?>(), Arg.Any<CancellationToken>());
+        await inner.Received(1).TryFillAsync<string>(new CacheKey("live"), "jwt", deadline, Arg.Any<CachePolicy?>(), Arg.Any<CancellationToken>());
+        await inner.DidNotReceive().TryFillAsync<string>(new CacheKey("stale"), Arg.Any<string?>(), Arg.Any<DateTimeOffset>(), Arg.Any<CachePolicy?>(), Arg.Any<CancellationToken>());
     }
 
     [Fact]

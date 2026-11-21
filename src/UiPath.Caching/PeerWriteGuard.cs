@@ -92,22 +92,22 @@ internal sealed partial class PeerWriteGuard(BackgroundWrites background, ITopic
         var type = value.Type;
         if (Is(type, KnownEventTypes.TopicInvalidated))
         {
-            background.TouchAll();
+            background.HeardAll();
         }
         else if (value.Key is { } key && (Is(type, KnownEventTypes.CacheSet) || Is(type, KnownEventTypes.CacheRemoved) || ChangesMetadata(value)))
         {
-            background.Touch(key);
+            background.Heard(key);
         }
     }
 
-    private void Lost() => background.TouchAll();
+    private void Lost() => background.HeardAll();
 
     /// <summary>The topic ended: events published on it again are heard only once a read watches it again.</summary>
     private void Ended(Watcher watcher)
     {
         _watched.TryRemove(new KeyValuePair<TopicKey, Watcher>(watcher.Topic, watcher));
         watcher.End();
-        background.TouchAll();
+        background.HeardAll();
     }
 
     [LoggerMessage(Level = LogLevel.Warning, Message = "Could not watch topic {Topic} for peers' writes; a read racing one may keep the older value until it expires locally. Tried again on a read after the retry delay.")]

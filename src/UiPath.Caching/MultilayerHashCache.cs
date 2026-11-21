@@ -852,6 +852,7 @@ internal sealed partial class MultilayerHashCache : MultilayerCacheBase, IHashCa
         LogCacheMissed(Logged(cacheEntryOptions, typeof(T)));
         var ret = await InvokeFactoryAsync(cacheEntryOptions.CacheKey, generator, policy.FactoryTimeout, scope.Token).ConfigureAwait(false);
 
+        ICacheEntry<IDictionary<string, T?>>? stored = null;
         // A generator that ignores its token can finish after every caller left and a newer run took the key: its value must not replace theirs.
         if ((!IsNullOrEmpty(ret) || _multiLayerCacheOptions.CacheNullValues) && !scope.IsAbandoned)
         {
@@ -863,12 +864,18 @@ internal sealed partial class MultilayerHashCache : MultilayerCacheBase, IHashCa
             {
                 FillInBackground(store, ret ?? Empty<T>(), policy);
             }
+            else if (!innerCacheDisconnected && _innerCache is ISharedHashTier tier)
+            {
+                // Written only if the key is absent: a hash a peer stored meanwhile is the answer, and is not replaced.
+                stored = await FillHashAsync(store, ret ?? Empty<T>(), policy, tier).ConfigureAwait(false);
+            }
             else
             {
                 await Layered<T>().InternalSetAsync(store, ret ?? Empty<T>(), innerCacheDisconnected, policy, keepRefused: true).ConfigureAwait(false);
             }
         }
-        return _cacheEntryFactory.Create<IDictionary<string, T?>>(ret ?? Empty<T>(), cacheEntryOptions.Expiration, cacheEntryOptions.Metadata);
+
+        return stored ?? _cacheEntryFactory.Create<IDictionary<string, T?>>(ret ?? Empty<T>(), cacheEntryOptions.Expiration, cacheEntryOptions.Metadata);
     }
 
     private async ValueTask<bool> SetCoreAsync<T>(CacheKey cacheKey, IDictionary<string, T?> values, DateTimeOffset expiration, CachePolicy policy, CancellationToken token)

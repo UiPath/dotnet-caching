@@ -101,8 +101,8 @@ public class InnerTierOutageTests
         var inner = Substitute.For<ICache>();
         inner.GetCacheEntryAsync<string>(Arg.Any<CacheKey>(), Arg.Any<CachePolicy?>(), Arg.Any<CancellationToken>())
             .Returns(new ValueTask<ICacheEntry<string?>>(new TestCacheEntry<string?> { Expiration = DateTimeOffset.MinValue }));
-        inner.SetAsync(Arg.Any<CacheKey>(), Arg.Any<string?>(), Arg.Any<DateTimeOffset>(), Arg.Any<CachePolicy?>(), Arg.Any<CancellationToken>())
-            .Returns(false);
+        inner.TryFillAsync<string>(Arg.Any<CacheKey>(), Arg.Any<string?>(), Arg.Any<DateTimeOffset>(), Arg.Any<CachePolicy?>(), Arg.Any<CancellationToken>())
+            .Returns(new FillResult<string>(FillOutcome.Failed, null));
         using var cache = InMemoryMultilayer.Cache(WaitingOutTheGenerator, inner: inner);
         var generated = 0;
         async Task<string?> Generate(CancellationToken token)
@@ -147,8 +147,8 @@ public class InnerTierOutageTests
         var inner = Substitute.For<ICache>();
         inner.GetCacheEntryAsync<string>(Arg.Any<CacheKey>(), Arg.Any<CachePolicy?>(), Arg.Any<CancellationToken>())
             .Returns(new ValueTask<ICacheEntry<string?>>(new TestCacheEntry<string?> { Expiration = DateTimeOffset.MinValue }));
-        inner.SetAsync(Arg.Any<CacheKey>(), Arg.Any<string?>(), Arg.Any<DateTimeOffset>(), Arg.Any<CachePolicy?>(), Arg.Any<CancellationToken>())
-            .Returns<ValueTask<bool>>(_ => throw new InvalidOperationException("inner write failed"));
+        inner.TryFillAsync<string>(Arg.Any<CacheKey>(), Arg.Any<string?>(), Arg.Any<DateTimeOffset>(), Arg.Any<CachePolicy?>(), Arg.Any<CancellationToken>())
+            .Returns<ValueTask<FillResult<string>>>(_ => throw new InvalidOperationException("inner write failed"));
         using var cache = InMemoryMultilayer.Cache(WaitingOutTheGenerator, inner: inner);
         var generated = 0;
         async Task<string?> Generate(CancellationToken token)
@@ -170,8 +170,8 @@ public class InnerTierOutageTests
     public async Task Concurrent_batch_misses_run_the_generator_once_when_the_inner_tier_refuses_the_write(bool throws)
     {
         var inner = BatchMissInner();
-        inner.SetAsync(Arg.Any<KeyValuePair<CacheKey, string?>[]>(), Arg.Any<DateTimeOffset>(), Arg.Any<CachePolicy?>(), Arg.Any<CancellationToken>())
-            .Returns(_ => throws ? throw new InvalidOperationException("inner write failed") : new ValueTask<bool>(false));
+        inner.TryFillAsync<string>(Arg.Any<CacheKey>(), Arg.Any<string?>(), Arg.Any<DateTimeOffset>(), Arg.Any<CachePolicy?>(), Arg.Any<CancellationToken>())
+            .Returns(_ => throws ? throw new InvalidOperationException("inner write failed") : new ValueTask<FillResult<string>>(new FillResult<string>(FillOutcome.Failed, null)));
         using var cache = InMemoryMultilayer.Cache(WaitingOutTheGenerator, inner: inner);
         var generated = 0;
         async Task<KeyValuePair<int, string?>[]> Generate(int[] states, CancellationToken token)
@@ -196,8 +196,8 @@ public class InnerTierOutageTests
     {
         using var cts = CancellationTokenSource.CreateLinkedTokenSource(Ct);
         var inner = BatchMissInner();
-        inner.SetAsync(Arg.Any<KeyValuePair<CacheKey, string?>[]>(), Arg.Any<DateTimeOffset>(), Arg.Any<CachePolicy?>(), Arg.Any<CancellationToken>())
-            .Returns(_ => CancelWrite(cts, answersFalse), _ => new ValueTask<bool>(false));
+        inner.TryFillAsync<string>(Arg.Any<CacheKey>(), Arg.Any<string?>(), Arg.Any<DateTimeOffset>(), Arg.Any<CachePolicy?>(), Arg.Any<CancellationToken>())
+            .Returns(_ => CancelFill(cts, answersFalse), _ => new ValueTask<FillResult<string>>(new FillResult<string>(FillOutcome.Failed, null)));
         using var cache = InMemoryMultilayer.Cache(inner: inner);
         var generated = 0;
         Task<KeyValuePair<int, string?>[]> Generate(int[] states, CancellationToken _)
@@ -245,8 +245,8 @@ public class InnerTierOutageTests
             var inner = Substitute.For<ICache>();
             inner.GetCacheEntryAsync<string>(Arg.Any<CacheKey>(), Arg.Any<CachePolicy?>(), Arg.Any<CancellationToken>())
                 .Returns(new ValueTask<ICacheEntry<string?>>(new TestCacheEntry<string?> { Expiration = DateTimeOffset.MinValue }));
-            inner.SetAsync(Arg.Any<CacheKey>(), Arg.Any<string?>(), Arg.Any<DateTimeOffset>(), Arg.Any<CachePolicy?>(), Arg.Any<CancellationToken>())
-                .Returns(_ => CancelWrite(cts, answersFalse), _ => new ValueTask<bool>(false));
+            inner.TryFillAsync<string>(Arg.Any<CacheKey>(), Arg.Any<string?>(), Arg.Any<DateTimeOffset>(), Arg.Any<CachePolicy?>(), Arg.Any<CancellationToken>())
+                .Returns(_ => CancelFill(cts, answersFalse), _ => new ValueTask<FillResult<string>>(new FillResult<string>(FillOutcome.Failed, null)));
             using var cache = InMemoryMultilayer.Cache(inner: inner);
             Task<string?> Generate(CancellationToken _)
             {
@@ -289,8 +289,8 @@ public class InnerTierOutageTests
             var inner = Substitute.For<ICache>();
             inner.GetCacheEntryAsync<string>(Arg.Any<CacheKey>(), Arg.Any<CachePolicy?>(), Arg.Any<CancellationToken>())
                 .Returns(new ValueTask<ICacheEntry<string?>>(new TestCacheEntry<string?> { Expiration = DateTimeOffset.MinValue }));
-            inner.SetAsync(Arg.Any<CacheKey>(), Arg.Any<string?>(), Arg.Any<DateTimeOffset>(), Arg.Any<CachePolicy?>(), Arg.Any<CancellationToken>())
-                .Returns(true);
+            inner.TryFillAsync<string>(Arg.Any<CacheKey>(), Arg.Any<string?>(), Arg.Any<DateTimeOffset>(), Arg.Any<CachePolicy?>(), Arg.Any<CancellationToken>())
+                .Returns(new FillResult<string>(FillOutcome.Added, null));
             using var cache = InMemoryMultilayer.Cache(options, inner);
             await cache.GetOrAddAsync("user:42", _ => Task.FromResult<string?>("v"), policy: null, Ct);
         }
@@ -533,6 +533,12 @@ public class InnerTierOutageTests
     {
         cts.Cancel();
         return answersFalse ? new ValueTask<bool>(false) : throw new OperationCanceledException(cts.Token);
+    }
+
+    private static ValueTask<FillResult<string>> CancelFill(CancellationTokenSource cts, bool answersFalse)
+    {
+        cts.Cancel();
+        return answersFalse ? new ValueTask<FillResult<string>>(new FillResult<string>(FillOutcome.Failed, null)) : throw new OperationCanceledException(cts.Token);
     }
 
     private static ICache BatchMissInner()

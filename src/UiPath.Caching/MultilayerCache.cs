@@ -1261,6 +1261,7 @@ internal sealed partial class MultilayerCache : MultilayerCacheBase, ICache, ISp
     private async ValueTask<object?> RunOrdinaryGeneratorAsync<T, TState>(CacheEntryOptions cacheEntryOptions, TState state, Func<TState, CancellationToken, Task<T?>> generator, CachePolicy policy, GenerationScope scope, bool localOnly)
     {
         ICacheEntry<T?> entry;
+        scope = BeginFill(cacheEntryOptions, scope, localOnly);
         try
         {
             LogCacheMissed(Logged(cacheEntryOptions, typeof(T)));
@@ -1271,6 +1272,10 @@ internal sealed partial class MultilayerCache : MultilayerCacheBase, ICache, ISp
         {
             scope.Fail(ex);
             throw;
+        }
+        finally
+        {
+            EndFill(cacheEntryOptions.CacheKey.Name, scope);
         }
 
         scope.Complete(entry);
@@ -1294,11 +1299,35 @@ internal sealed partial class MultilayerCache : MultilayerCacheBase, ICache, ISp
 
             // The starter's token, unless it cancelled while callers that joined still wait for the value: then the run's, which outlives it.
             var store = cacheEntryOptions.Token.IsCancellationRequested && !scope.IsAbandoned ? cacheEntryOptions with { Token = scope.Token } : cacheEntryOptions;
+            if (!innerCacheDisconnected && !_background.FillIntact(cacheEntryOptions.CacheKey.Name, scope.Fill))
+            {
+                // Written or removed since the generator started, so this value may be older than what it left: neither stored nor kept.
+                _background.FillSuperseded();
+                return entry;
+            }
+
             // A peer that takes the distributed lock next must find the value; a late fail-safe value checks in its foreground turn that it is still current.
             var detached = !innerCacheDisconnected && policy.BackgroundDistributedWrite == true && !DistributedLockOn(policy.Lock) && !InLateStore && _background.TryReserve(cacheEntryOptions.CacheKey.Name, false) && FillInBackground(store, ret, policy, entry);
             if (!detached)
             {
-                await StoreGeneratedForegroundAsync(store, ret, innerCacheDisconnected, policy, entry).ConfigureAwait(false);
+                if (innerCacheDisconnected)
+                {
+                    await StoreGeneratedForegroundAsync(store, ret, true, policy, entry).ConfigureAwait(false);
+                }
+                else
+                {
+                    var (adopted, won) = await FillInnerAsync(store, ret, policy, entry, scope.Fill).ConfigureAwait(false);
+                    if (adopted is not null)
+                    {
+                        entry = adopted;
+                    }
+
+                    // Peers in a cooldown serve the value this one replaces, and need the event.
+                    if (won && InLateStore)
+                    {
+                        await Layered<T>().PublishSetAsync(store).ConfigureAwait(false);
+                    }
+                }
             }
         }
         else if (!scope.IsAbandoned)
@@ -1417,6 +1446,7 @@ internal sealed partial class MultilayerCache : MultilayerCacheBase, ICache, ISp
     private async ValueTask<object?> RunOrdinaryGeneratedAsync<T, TState>(CacheEntryOptions cacheEntryOptions, TState state, Func<TState, CancellationToken, Task<GeneratedValue<T>>> generator, CachePolicy policy, GenerationScope scope, bool localOnly)
     {
         ICacheEntry<T?> entry;
+        scope = BeginFill(cacheEntryOptions, scope, localOnly);
         try
         {
             LogCacheMissed(Logged(cacheEntryOptions, typeof(T)));
@@ -1427,6 +1457,10 @@ internal sealed partial class MultilayerCache : MultilayerCacheBase, ICache, ISp
         {
             scope.Fail(ex);
             throw;
+        }
+        finally
+        {
+            EndFill(cacheEntryOptions.CacheKey.Name, scope);
         }
 
         scope.Complete(entry);
@@ -1726,17 +1760,34 @@ internal sealed partial class MultilayerCache : MultilayerCacheBase, ICache, ISp
             LogBatchCacheMissed(Logged(missedOptions, typeof(T)), stillMissing.Count);
         }
 
-        var produced = await InvokeFactoryAsync(telemetryKey, ct => generator(requestStates, ct), policy.FactoryTimeout, token).ConfigureAwait(false);
-        var producedByState = SelectRequestedProduced(produced, requestStates);
-
-        var toStore = SelectEntriesToStore<T, TState>(missOptions, missStates, stillMissing, producedByState);
-        if (toStore.Count > 0)
+        var watched = BeginBatchFill(missOptions, stillMissing);
+        try
         {
-            var innerCacheDisconnected = GetInnerCacheDisconnected();
-            await InternalSetAsync<T>(toStore.ToArray(), innerCacheDisconnected, policy, keepRefused: true, token).ConfigureAwait(false);
-        }
+            var produced = await InvokeFactoryAsync(telemetryKey, ct => generator(requestStates, ct), policy.FactoryTimeout, token).ConfigureAwait(false);
+            var producedByState = SelectRequestedProduced(produced, requestStates);
 
-        return BuildBatchEntries<T, TState>(missOptions, missStates, probe, producedByState);
+            var toStore = SelectEntriesToStore<T, TState>(missOptions, missStates, stillMissing, producedByState);
+            Dictionary<string, ICacheEntry<T?>>? adopted = null;
+            if (toStore.Count > 0)
+            {
+                var innerCacheDisconnected = GetInnerCacheDisconnected();
+                if (innerCacheDisconnected)
+                {
+                    await InternalSetAsync<T>(toStore.ToArray(), innerCacheDisconnected, policy, keepRefused: true, token).ConfigureAwait(false);
+                }
+                else
+                {
+                    toStore.RemoveAll(e => !_background.FillIntact(e.CacheEntry.CacheKey.Name, BatchToken(watched, e.CacheEntry.CacheKey.Name)));
+                    adopted = await FillBatchAsync(toStore.ToArray(), watched, policy, token).ConfigureAwait(false);
+                }
+            }
+
+            return BuildBatchEntries<T, TState>(missOptions, missStates, probe, producedByState, adopted);
+        }
+        finally
+        {
+            EndBatchFill(watched);
+        }
     }
 
     /// <summary>The write set: the answered still-missing slots, minus the nulls this cache does not store.</summary>
@@ -1766,7 +1817,8 @@ internal sealed partial class MultilayerCache : MultilayerCacheBase, ICache, ISp
         CacheEntryOptions[] missOptions,
         TState[] missStates,
         KeyValuePair<CacheKey, ICacheEntry<T?>>[] probe,
-        Dictionary<TState, T?> producedByState)
+        Dictionary<TState, T?> producedByState,
+        Dictionary<string, ICacheEntry<T?>>? adopted = null)
         where TState : notnull
     {
         var results = new KeyValuePair<CacheKey, ICacheEntry<T?>>[missOptions.Length];
@@ -1777,6 +1829,14 @@ internal sealed partial class MultilayerCache : MultilayerCacheBase, ICache, ISp
                 results[i] = probe[i];
                 continue;
             }
+
+            // A peer stored the key first: its value is the answer, not the one this call generated.
+            if (adopted is not null && adopted.TryGetValue(missOptions[i].CacheKey.Name, out var stored))
+            {
+                results[i] = new KeyValuePair<CacheKey, ICacheEntry<T?>>(missOptions[i].CacheKey, stored);
+                continue;
+            }
+
             var wasProduced = producedByState.TryGetValue(missStates[i], out var value);
             results[i] = new KeyValuePair<CacheKey, ICacheEntry<T?>>(
                 missOptions[i].CacheKey,

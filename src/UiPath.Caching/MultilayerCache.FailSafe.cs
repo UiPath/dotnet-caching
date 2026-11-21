@@ -71,6 +71,7 @@ internal sealed partial class MultilayerCache
         Func<MultilayerCache, CacheEntryOptions, TResult, CachePolicy, GenerationScope, bool, ValueTask<ICacheEntry<T?>>> store)
     {
         ICacheEntry<T?> entry;
+        scope = BeginFill(options, scope, localOnly);
         try
         {
             LogCacheMissed(Logged(options, typeof(T)));
@@ -81,6 +82,10 @@ internal sealed partial class MultilayerCache
         {
             scope.Fail(ex);
             throw;
+        }
+        finally
+        {
+            EndFill(options.CacheKey.Name, scope);
         }
 
         scope.Complete(entry);

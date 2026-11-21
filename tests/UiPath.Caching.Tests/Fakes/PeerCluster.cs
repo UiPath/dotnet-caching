@@ -131,10 +131,15 @@ internal sealed class PeerCluster : IDisposable
             }
         }
 
-        public VersionedWrite Write(string key, IDictionary<string, string?> values, HashCacheEntryOptions options, PeerFieldLimits limits, bool counted)
+        public VersionedWrite Write(string key, IDictionary<string, string?> values, HashCacheEntryOptions options, PeerFieldLimits limits, bool counted, bool onlyIfAbsent = false)
         {
             lock (_gate)
             {
+                if (onlyIfAbsent && _hashes.ContainsKey(key))
+                {
+                    return new VersionedWrite(false, 0, null, Existed: true);
+                }
+
                 var merge = options.SetOption == HashCacheSetOption.HashReplace;
                 if (!_hashes.TryGetValue(key, out var hash) || !merge)
                 {
@@ -458,32 +463,11 @@ internal sealed class PeerCluster : IDisposable
 
         IDisposable ISharedTier.DemandMaster() => NoMasterScope.Instance;
 
-        public async ValueTask<VersionedWrite> SetVersionedAsync<T>(CacheKey cacheKey, IDictionary<string, T?> values, HashCacheEntryOptions options, CachePolicy? policy, PeerFieldLimits limits, CancellationToken token = default)
-        {
-            Interlocked.Increment(ref _countedWrites);
-            if (Hold is { } hold)
-            {
-                await hold.WaitAsync(token);
-            }
+        public ValueTask<VersionedWrite> SetVersionedAsync<T>(CacheKey cacheKey, IDictionary<string, T?> values, HashCacheEntryOptions options, CachePolicy? policy, PeerFieldLimits limits, CancellationToken token = default) =>
+            WriteVersionedAsync(cacheKey, values, options, limits, onlyIfAbsent: false, token);
 
-            if (Refuses)
-            {
-                return default;
-            }
-
-            var written = Store.Write(cacheKey.Name, (IDictionary<string, string?>)values, options, limits, counted: true);
-            if (AfterWrite?.Invoke((IDictionary<string, string?>)values) is { } after)
-            {
-                await after.WaitAsync(token);
-            }
-
-            if (ReportsVersion is { } report)
-            {
-                written = written with { Version = report(written.Version) };
-            }
-
-            return ReportsUnwritten ? written with { Written = false } : written;
-        }
+        public ValueTask<VersionedWrite> FillVersionedAsync<T>(CacheKey cacheKey, IDictionary<string, T?> values, HashCacheEntryOptions options, CachePolicy? policy, PeerFieldLimits limits, CancellationToken token = default) =>
+            WriteVersionedAsync(cacheKey, values, options, limits, onlyIfAbsent: true, token);
 
         public ValueTask<bool> RemoveFieldsVersionedAsync<T>(CacheKey cacheKey, string[] fields, CancellationToken token = default)
         {
@@ -583,6 +567,33 @@ internal sealed class PeerCluster : IDisposable
                 default:
                     throw new NotSupportedException(targetMethod.Name);
             }
+        }
+
+        private async ValueTask<VersionedWrite> WriteVersionedAsync<T>(CacheKey cacheKey, IDictionary<string, T?> values, HashCacheEntryOptions options, PeerFieldLimits limits, bool onlyIfAbsent, CancellationToken token)
+        {
+            Interlocked.Increment(ref _countedWrites);
+            if (Hold is { } hold)
+            {
+                await hold.WaitAsync(token);
+            }
+
+            if (Refuses)
+            {
+                return default;
+            }
+
+            var written = Store.Write(cacheKey.Name, (IDictionary<string, string?>)values, options, limits, counted: true, onlyIfAbsent);
+            if (AfterWrite?.Invoke((IDictionary<string, string?>)values) is { } after)
+            {
+                await after.WaitAsync(token);
+            }
+
+            if (ReportsVersion is { } report)
+            {
+                written = written with { Version = report(written.Version) };
+            }
+
+            return ReportsUnwritten ? written with { Written = false } : written;
         }
 
         private ValueTask<bool> RemoveFieldsAfter(string key, string[] fields, bool counted)

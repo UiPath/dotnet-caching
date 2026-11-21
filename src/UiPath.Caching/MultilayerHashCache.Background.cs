@@ -59,7 +59,7 @@ internal sealed partial class MultilayerHashCache : IAsyncDisposable
         }
 
         _background.RunAppending(options.CacheKey.Name, (Cache: this, Options: options, Value: values, Policy: policy, Local: local), static s => s.Cache.MemorySet(s.Options, s.Local.Entry!, s.Cache.DisconnectedLifetime(s.Policy), s.Policy), static (s, token) =>
-            s.Cache.DetachedWriteAsync(s, static (s, token) => s.Cache.WriteDetachedAsync(s.Options, s.Value, s.Policy, s.Local, token), static s => s.Cache.PromoteDetached(s.Options, s.Policy, s.Local), publish: null, token));
+            s.Cache.DetachedWriteAsync(s, static (s, token) => s.Cache.FillDetachedAsync(s.Options, s.Value, s.Policy, s.Local, token), static s => s.Cache.PromoteDetached(s.Options, s.Policy, s.Local), publish: null, token));
     }
 
     private ICacheEntry<IDictionary<string, T?>> NewEntry<T>(InternalHashCacheEntryOptions options, IDictionary<string, T?> values)

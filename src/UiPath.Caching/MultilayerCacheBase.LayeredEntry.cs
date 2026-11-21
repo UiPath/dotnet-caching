@@ -173,7 +173,9 @@ public abstract partial class MultilayerCacheBase
 
         private async ValueTask RehydrateAsync(CacheKey originalCacheKey, DateTimeOffset entryExpiration, Func<CancellationToken, Task<TValue>> generator, CachePolicy policy, TimeSpan duration, TimeSpan? rehydrateJitter, RehydrateRun run, CancellationToken ct)
         {
-            if (await TryAdoptInnerAsync(originalCacheKey, entryExpiration, policy, duration, run, ct).ConfigureAwait(false))
+            // What the adoption read saw, so the store below can refuse to overwrite a write that landed while the generator ran.
+            var stamp = new StampBox();
+            if (await TryAdoptInnerAsync(originalCacheKey, entryExpiration, policy, duration, run, ct, stamp).ConfigureAwait(false))
             {
                 return;
             }
@@ -189,7 +191,11 @@ public abstract partial class MultilayerCacheBase
                 ? entryExpiration
                 : cache._clock.ToDateTimeOffset(ApplyJitter(duration, rehydrateJitter));
             var rehydrateOptions = shape.BuildOptions(originalCacheKey, rehydrateExpiration, ct);
-            if (!await StoreAsync(rehydrateOptions, shape.Present(newValue), cache.GetInnerCacheDisconnected(), policy).ConfigureAwait(false))
+            var disconnected = cache.GetInnerCacheDisconnected();
+            var stored = !disconnected && stamp.Read && shape.CanStamp
+                ? await StoreIfUnchangedAsync(originalCacheKey, entryExpiration, rehydrateOptions, shape.Present(newValue), policy, duration, run, stamp, ct).ConfigureAwait(false)
+                : await StoreAsync(rehydrateOptions, shape.Present(newValue), disconnected, policy).ConfigureAwait(false);
+            if (!stored)
             {
                 // A run timeout that ended the store is the coordinator's to report, not a write failure.
                 ct.ThrowIfCancellationRequested();
@@ -197,8 +203,24 @@ public abstract partial class MultilayerCacheBase
             }
         }
 
+        /// <summary>Writes the value over what the adoption read saw; when a write has landed since, that one stands and is kept here instead, and nothing is announced.</summary>
+        private async ValueTask<bool> StoreIfUnchangedAsync(CacheKey originalCacheKey, DateTimeOffset entryExpiration, TOptions options, TValue value, CachePolicy policy, TimeSpan duration, RehydrateRun run, StampBox stamp, CancellationToken ct)
+        {
+            switch (await shape.StoreStampedAsync(options, value, policy, stamp).ConfigureAwait(false))
+            {
+                case StampedWrite.Won:
+                    // Written before the event, so a node it wakes reads the new value.
+                    return await PublishSetAsync(options).ConfigureAwait(false);
+                case StampedWrite.Lost:
+                    await TryAdoptInnerAsync(originalCacheKey, entryExpiration, policy, duration, run, ct, new StampBox()).ConfigureAwait(false);
+                    return true;
+                default:
+                    return false;
+            }
+        }
+
         /// <summary>Keeps the inner tier's copy when another node already refreshed it, so the generator is not run again; true only when the copy was kept.</summary>
-        private async ValueTask<bool> TryAdoptInnerAsync(CacheKey originalCacheKey, DateTimeOffset entryExpiration, CachePolicy policy, TimeSpan duration, RehydrateRun run, CancellationToken ct)
+        private async ValueTask<bool> TryAdoptInnerAsync(CacheKey originalCacheKey, DateTimeOffset entryExpiration, CachePolicy policy, TimeSpan duration, RehydrateRun run, CancellationToken ct, StampBox stamp)
         {
             if (shape.InnerIsNull || !shape.CanAdopt || cache.GetInnerCacheDisconnected())
             {
@@ -211,11 +233,12 @@ public abstract partial class MultilayerCacheBase
             var budget = RehydrationCoordinator.AdoptReadTimeout(rehydrate, duration);
             read.CancelAfter(budget);
             var mark = cache.MarkInnerRead(options.CacheKey.Name, options.TopicKey);
+            stamp.Mark = mark;
             Task<ICacheEntry<TValue>>? reading = null;
             ICacheEntry<TValue> fetched;
             try
             {
-                reading = shape.ReadForAdoptionAsync(options.WithToken(read.Token), policy).AsTask();
+                reading = shape.ReadForAdoptionAsync(options.WithToken(read.Token), policy, stamp).AsTask();
                 // The token alone does not bound a read that ignores it; an abandoned read is never kept, as nothing below runs for it.
                 fetched = await reading.WaitAsync(budget, cache._clock, ct).ConfigureAwait(false);
             }
