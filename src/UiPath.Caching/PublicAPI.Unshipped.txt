@@ -47,3 +47,54 @@ UiPath.Caching.Cache<T>.SetIfChangedAsync(UiPath.Caching.CacheKey cacheKey, T? v
 UiPath.Caching.Cache<T>.TryFillAsync(UiPath.Caching.CacheKey cacheKey, T? value, System.DateTimeOffset expiration, System.Threading.CancellationToken token = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.ValueTask<UiPath.Caching.FillResult<T>>
 UiPath.Caching.Cache<T>.TryFillAsync(UiPath.Caching.CacheKey cacheKey, T? value, System.TimeSpan expiration, System.Threading.CancellationToken token = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.ValueTask<UiPath.Caching.FillResult<T>>
 UiPath.Caching.IHeaderFreeSerializerProxy
+UiPath.Caching.Redis.FormatCensusReport
+UiPath.Caching.Redis.FormatCensusReport.ByFormat.get -> System.Collections.Generic.IReadOnlyDictionary<string!, long>!
+UiPath.Caching.Redis.FormatCensusReport.ByReason.get -> System.Collections.Generic.IReadOnlyDictionary<string!, long>!
+UiPath.Caching.Redis.FormatCensusReport.FormatCensusReport(System.Collections.Generic.IReadOnlyDictionary<string!, long>! byFormat, System.Collections.Generic.IReadOnlyDictionary<string!, long>! byReason, long scanned) -> void
+UiPath.Caching.Redis.FormatCensusReport.Scanned.get -> long
+UiPath.Caching.Redis.FormatSweepOptions
+UiPath.Caching.Redis.FormatSweepOptions.Budget.get -> System.TimeSpan?
+UiPath.Caching.Redis.FormatSweepOptions.Budget.init -> void
+UiPath.Caching.Redis.FormatSweepOptions.Cursor.get -> string?
+UiPath.Caching.Redis.FormatSweepOptions.Cursor.init -> void
+UiPath.Caching.Redis.FormatSweepOptions.FormatSweepOptions() -> void
+UiPath.Caching.Redis.FormatSweepOptions.Group.get -> string!
+UiPath.Caching.Redis.FormatSweepOptions.Group.init -> void
+UiPath.Caching.Redis.FormatSweepOptions.MaxValueBytes.get -> int
+UiPath.Caching.Redis.FormatSweepOptions.MaxValueBytes.init -> void
+UiPath.Caching.Redis.FormatSweepOptions.PageSize.get -> int
+UiPath.Caching.Redis.FormatSweepOptions.PageSize.init -> void
+UiPath.Caching.Redis.FormatSweepOptions.RatePerSecond.get -> int
+UiPath.Caching.Redis.FormatSweepOptions.RatePerSecond.init -> void
+UiPath.Caching.Redis.FormatSweepReport
+UiPath.Caching.Redis.FormatSweepReport.Changed.get -> long
+UiPath.Caching.Redis.FormatSweepReport.Changed.init -> void
+UiPath.Caching.Redis.FormatSweepReport.Completed.get -> bool
+UiPath.Caching.Redis.FormatSweepReport.Completed.init -> void
+UiPath.Caching.Redis.FormatSweepReport.Converted.get -> long
+UiPath.Caching.Redis.FormatSweepReport.Converted.init -> void
+UiPath.Caching.Redis.FormatSweepReport.Current.get -> long
+UiPath.Caching.Redis.FormatSweepReport.Current.init -> void
+UiPath.Caching.Redis.FormatSweepReport.DefaultOrEmpty.get -> long
+UiPath.Caching.Redis.FormatSweepReport.DefaultOrEmpty.init -> void
+UiPath.Caching.Redis.FormatSweepReport.Failed.get -> long
+UiPath.Caching.Redis.FormatSweepReport.Failed.init -> void
+UiPath.Caching.Redis.FormatSweepReport.FormatSweepReport() -> void
+UiPath.Caching.Redis.FormatSweepReport.Held.get -> long
+UiPath.Caching.Redis.FormatSweepReport.Held.init -> void
+UiPath.Caching.Redis.FormatSweepReport.Lossy.get -> long
+UiPath.Caching.Redis.FormatSweepReport.Lossy.init -> void
+UiPath.Caching.Redis.FormatSweepReport.NextCursor.get -> string?
+UiPath.Caching.Redis.FormatSweepReport.NextCursor.init -> void
+UiPath.Caching.Redis.FormatSweepReport.Oversize.get -> long
+UiPath.Caching.Redis.FormatSweepReport.Oversize.init -> void
+UiPath.Caching.Redis.FormatSweepReport.Recent.get -> long
+UiPath.Caching.Redis.FormatSweepReport.Recent.init -> void
+UiPath.Caching.Redis.FormatSweepReport.Scanned.get -> long
+UiPath.Caching.Redis.FormatSweepReport.Scanned.init -> void
+UiPath.Caching.Redis.FormatSweepReport.Unreadable.get -> long
+UiPath.Caching.Redis.FormatSweepReport.Unreadable.init -> void
+UiPath.Caching.Redis.RedisCacheProvider.CountFormatsByReasonAsync(UiPath.Caching.CacheKey keyPattern, System.Threading.CancellationToken token = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<UiPath.Caching.Redis.FormatCensusReport!>!
+UiPath.Caching.Redis.RedisCacheProvider.SweepFormatsAsync<T>(UiPath.Caching.CacheKey keyPattern, UiPath.Caching.Redis.FormatSweepOptions! options, System.Threading.CancellationToken token = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<UiPath.Caching.Redis.FormatSweepReport!>!
+const UiPath.Caching.Metrics.FormatCensus = "cache.format.census" -> string!
+const UiPath.Caching.Metrics.FormatSweep = "cache.format.sweep" -> string!

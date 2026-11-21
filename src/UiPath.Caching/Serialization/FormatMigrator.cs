@@ -186,6 +186,65 @@ internal sealed partial class FormatMigrator : IDisposable
         return ClaimResult.Claimed;
     }
 
+    /// <summary>
+    /// Admits one value for a caller that does the work itself, as a sweep does: not offered within the window, and within the byte budget, but with no share of
+    /// the read rate or the queue, which the caller paces for itself. A claim is given back with <see cref="Finish"/>.
+    /// </summary>
+    /// <param name="owner">What the key belongs to, the same object a read offers it under, so a read and a sweep do not both rewrite it within a window.</param>
+    /// <param name="key">The key as the cache holds it.</param>
+    /// <param name="bytes">What the value weighs, counted against the byte budget until <see cref="Finish"/>.</param>
+    /// <param name="lossy">Set when the value is refused as <see cref="ClaimResult.Recent"/> because it was found lossy lately.</param>
+    public ClaimResult TryClaimDirect(object owner, RedisKey key, int bytes, out bool lossy)
+    {
+        var offer = new OfferKey(owner, key);
+        var now = _clock.GetTimestamp();
+        lossy = false;
+        lock (_gate)
+        {
+            if (_disposed)
+            {
+                return ClaimResult.Refused;
+            }
+
+            if (Recent(offer, now))
+            {
+                lossy = _seen[offer].Lossy;
+                return ClaimResult.Recent;
+            }
+
+            Sweep(now);
+            if (_bytes + bytes > _maxBytes)
+            {
+                return ClaimResult.Refused;
+            }
+
+            _bytes += bytes;
+            if (_seen.TryGetValue(offer, out var expired) && expired.Lossy)
+            {
+                _lossyKeys--;
+            }
+
+            _seen[offer] = new(now + _windowTicks, Lossy: false);
+        }
+
+        return ClaimResult.Claimed;
+    }
+
+    /// <summary>Ends a claim of <see cref="TryClaimDirect"/>, leaving the key in the window; a lossy value is held back as long as one found lossy by a read.</summary>
+    public void Finish(object owner, RedisKey key, int bytes, bool lossy)
+    {
+        var offer = new OfferKey(owner, key);
+        lock (_gate)
+        {
+            _bytes -= bytes;
+            if (lossy && _lossyKeys < MaxLossyKeys)
+            {
+                _lossyKeys++;
+                _seen[offer] = new(_clock.GetTimestamp() + Ticks(LossyWindow), Lossy: true);
+            }
+        }
+    }
+
     /// <summary>Queues the job for values that were claimed; if it cannot be made or queued, the claims are given back.</summary>
     public bool EnqueueClaimed<TState>(string cache, OfferKey[] claimed, int bytes, TState state, Func<TState, Func<CancellationToken, ValueTask<RewriteTally>>> start)
     {

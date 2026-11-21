@@ -47,6 +47,9 @@ internal sealed class ValueRewriter(ISerializerProxy<byte[]> json, ValueSerializ
         return true;
     }
 
+    /// <summary>Whether <paramref name="original"/> reads as <c>default(T)</c>, a value that is never rewritten.</summary>
+    public bool ReadsAsDefault<T>(byte[] original) => original.Length != 0 && TryRead<T>(original, out var value) && IsDefault(value);
+
     private bool TryRead<T>(byte[] bytes, out T? value)
     {
         try

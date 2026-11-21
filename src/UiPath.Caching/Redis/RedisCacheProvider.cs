@@ -7,6 +7,8 @@ namespace UiPath.Caching.Redis;
 
 public sealed class RedisCacheProvider : ICacheProvider
 {
+    private const string DefaultSweepGroup = "default";
+
     private readonly RedisCacheOptions _redisCacheOptions;
     private readonly CacheOptions _cacheOptions;
     private readonly IRedisConnector _redis;
@@ -102,14 +104,65 @@ public sealed class RedisCacheProvider : ICacheProvider
     /// <summary>As <see cref="CountFormatsAsync(string, CancellationToken)"/>, for a pattern taken exactly as <see cref="CacheKey"/> holds it, such as a <see cref="CacheKey.Verbatim(string)"/> one.</summary>
     public Task<IReadOnlyDictionary<string, long>> CountFormatsByKeyAsync(CacheKey keyPattern, CancellationToken token = default)
     {
-        var factory = _redisCacheOptions.RedisKeyStrategyFactory ?? new DefaultRedisKeyStrategyFactory();
-        return new FormatCensus(
+        return NewCensus().CountAsync(keyPattern, token);
+    }
+
+    /// <summary>
+    /// As <see cref="CountFormatsByKeyAsync(CacheKey, CancellationToken)"/>, with the reason each value is where it is as well as its format: see <see cref="FormatCensusReport"/>.
+    /// Each string costs a <c>PTTL</c> and a headerless one a <c>STRLEN</c> besides the two-byte read, so run it off the request path, as the sweep is.
+    /// </summary>
+    public async Task<FormatCensusReport> CountFormatsByReasonAsync(CacheKey keyPattern, CancellationToken token = default)
+    {
+        var report = await NewCensus().CountByReasonAsync(keyPattern, ValueMigration.MaxValueBytes, token).ConfigureAwait(false);
+        foreach (var (reason, count) in report.ByReason)
+        {
+            try
+            {
+                _cachingTelemetryProvider.TrackMetric(Metrics.FormatCensus, count, [new("reason", reason), new("group", DefaultSweepGroup)]);
+            }
+            catch (Exception ex)
+            {
+                _cachingTelemetryProvider.TryTrackException(ex);
+            }
+        }
+
+        return report;
+    }
+
+    /// <summary>
+    /// Rewrites the strings under <paramref name="keyPattern"/> that are stored in another format into the format the default policy writes, in place, for as long as
+    /// <paramref name="options"/> allows; hashes are not swept. It is the pass <c>Serializer.MigrateOnRead</c> cannot make: values that are not read, have no TTL, or were skipped.
+    /// </summary>
+    /// <remarks>
+    /// A value converts only if it comes out the same, by the compare-and-set that a read's rewrite uses: it replaces the exact bytes that were read, keeps the TTL, and
+    /// never creates a key, so a writer or a delete that came meanwhile wins. It calls no origin and writes no event. Whether the node list allows the target format is asked
+    /// again for each key, and the first refusal ends the pass. It shares the one-minute claim window and the byte budget of <c>MigrateOnRead</c>, but takes its own rate from
+    /// <see cref="FormatSweepOptions.RatePerSecond"/>. Cancellation throws; use <see cref="FormatSweepOptions.Budget"/> to stop with a cursor. Throws <see cref="InvalidOperationException"/>
+    /// when no serializer is registered or the default policy writes JSON, since there is no format to move toward.
+    /// </remarks>
+    public Task<FormatSweepReport> SweepFormatsAsync<T>(CacheKey keyPattern, FormatSweepOptions options, CancellationToken token = default)
+        where T : class
+    {
+        ArgumentNullException.ThrowIfNull(options);
+        if (_migration is not { } migration)
+        {
+            throw new InvalidOperationException("No value serializer is registered, so there is no format to sweep toward.");
+        }
+
+        var target = _valueSerializers.WriteSerializerFor(_policyFactory.Default, "default")
+            ?? throw new InvalidOperationException("The default cache policy writes JSON, so there is no format to sweep toward.");
+        var cache = _cache.Value;
+        return new FormatSweeper(
+            NewCensus(),
             _redis,
-            _redisCacheOptions.KeyPrefix ?? string.Empty,
+            migration,
             _valueSerializers,
-            factory.Create(_cacheOptions, typeof(RedisCache)),
-            factory.Create(_cacheOptions, typeof(RedisHashCache)),
-            _cacheOptions.KeyCasing).CountAsync(keyPattern, token);
+            target,
+            cache,
+            (key, original, token) => cache.RewriteStoredAsync<T>(key, original, target, migration, token),
+            original => migration.Rewriter.ReadsAsDefault<T>(original),
+            _cachingTelemetryProvider,
+            _clock).SweepAsync(keyPattern, options, token);
     }
 
     public void Dispose()
@@ -140,6 +193,18 @@ public sealed class RedisCacheProvider : ICacheProvider
             services.GetRequiredService<ValueSerializerRegistry>(),
             services.GetService<FormatNegotiation>()?.Negotiator,
             services.GetService<ValueMigration>());
+
+    private FormatCensus NewCensus()
+    {
+        var factory = _redisCacheOptions.RedisKeyStrategyFactory ?? new DefaultRedisKeyStrategyFactory();
+        return new FormatCensus(
+            _redis,
+            _redisCacheOptions.KeyPrefix ?? string.Empty,
+            _valueSerializers,
+            factory.Create(_cacheOptions, typeof(RedisCache)),
+            factory.Create(_cacheOptions, typeof(RedisHashCache)),
+            _cacheOptions.KeyCasing);
+    }
 
     private RedisCache BuildCache()
     {
