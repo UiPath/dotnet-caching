@@ -29,7 +29,7 @@ public sealed class ClaimDurabilityTests
 
             // The replica sleeps, so no acknowledgement arrives while the step is retried.
             var sleeping = replica.GetServer(replica.GetEndPoints()[0]).ExecuteAsync("DEBUG", "SLEEP", "2");
-            await Task.Delay(100);
+            await Task.Delay(100, TestContext.Current.CancellationToken);
 
             var result = await store.IdleAsync("rt:a", T1);
 
@@ -58,7 +58,7 @@ public sealed class ClaimDurabilityTests
         {
             (await new ClaimStore(first.GetDatabase(), key, scripts, new Version(7, 4)).OpenAsync("rt:a", T1, "rt", restore: true)).Durability.Should().Be(ClaimDurability.Confirmed);
             var sleeping = replica.GetServer(replica.GetEndPoints()[0]).ExecuteAsync("DEBUG", "SLEEP", "2");
-            await Task.Delay(100);
+            await Task.Delay(100, TestContext.Current.CancellationToken);
 
             // The fresh connection never wrote: without the rewrite of the repeat, its WAIT would return at once with the replica's count.
             var repeat = await new ClaimStore(fresh.GetDatabase(), key, scripts, new Version(7, 4)) { BarrierTimeout = TimeSpan.FromMilliseconds(200), BarrierRetries = 1 }
@@ -86,9 +86,9 @@ public sealed class ClaimDurabilityTests
             await db.HashSetAsync(key, "rt:r", $"open|{T1}|rt|");
             var store = new ClaimStore(db, key, useScripts: true, new Version(7, 4)) { BarrierTimeout = TimeSpan.FromMilliseconds(200), BarrierRetries = 1 };
             var sleeping = replica.GetServer(replica.GetEndPoints()[0]).ExecuteAsync("DEBUG", "SLEEP", "2");
-            await Task.Delay(100);
+            await Task.Delay(100, TestContext.Current.CancellationToken);
 
-            var outcome = await new ClaimOperator(store, new TerminalEvidence()).CertifyAsync("rt:r", $"open|{T1}|rt|", "n", default);
+            var outcome = await new ClaimOperator(store, new TerminalEvidence()).CertifyAsync("rt:r", $"open|{T1}|rt|", "n", TestContext.Current.CancellationToken);
 
             outcome.Should().Be(ClaimCommandOutcome.DoneUnconfirmed, "the caller raises wait_skipped{claim}");
             await sleeping;

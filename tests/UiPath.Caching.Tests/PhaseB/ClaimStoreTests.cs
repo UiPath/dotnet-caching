@@ -133,11 +133,11 @@ public sealed class ClaimStoreTests(RedisContainerFixture fixture) : IAsyncLifet
         await Db.HashSetAsync(_key, "fm:g1", value);
         var evidence = new FakeEvidence { ShowsTerminal = true };
 
-        (await new ClaimOperator(Store(), evidence).ReleaseAsync("fm:g1", value, "n", default)).Should().Be(ClaimCommandOutcome.NeedsCertify);
+        (await new ClaimOperator(Store(), evidence).ReleaseAsync("fm:g1", value, "n", TestContext.Current.CancellationToken)).Should().Be(ClaimCommandOutcome.NeedsCertify);
         (await Db.HashExistsAsync(_key, "fm:g1")).Should().BeTrue();
 
         evidence.ShowsTerminal = false;
-        (await new ClaimOperator(Store(), evidence).ReleaseAsync("fm:g1", value, "n", default)).Should().Be(ClaimCommandOutcome.Done);
+        (await new ClaimOperator(Store(), evidence).ReleaseAsync("fm:g1", value, "n", TestContext.Current.CancellationToken)).Should().Be(ClaimCommandOutcome.Done);
         (await Db.HashExistsAsync(_key, "fm:g1")).Should().BeFalse();
     }
 
@@ -148,11 +148,11 @@ public sealed class ClaimStoreTests(RedisContainerFixture fixture) : IAsyncLifet
         await Db.HashSetAsync(_key, "fm:g1", $"open|{T1}|{Fmt}|");
         var claim = new ClaimOperator(Store(), new FakeEvidence { Terminal = new ClaimTerminal(42, Swept: true) });
 
-        (await claim.CertifyAsync("fm:g1", $"open|{T1}|{Fmt}|", "n", default)).Should().Be(ClaimCommandOutcome.Done);
+        (await claim.CertifyAsync("fm:g1", $"open|{T1}|{Fmt}|", "n", TestContext.Current.CancellationToken)).Should().Be(ClaimCommandOutcome.Done);
 
         ((string?)await Db.HashGetAsync(_key, "fm:g1")).Should().Be($"closed|{T1}|{Fmt}|42:S5");
         ((string?)await Db.HashGetAsync(_key, "cur:fm")).Should().Be($"g1|{T1}|2|1");
-        (await claim.CertifyAsync("fm:g1", $"closed|{T1}|{Fmt}|42:S5", "n", default)).Should().Be(ClaimCommandOutcome.Refused, "a closed field needs no certificate");
+        (await claim.CertifyAsync("fm:g1", $"closed|{T1}|{Fmt}|42:S5", "n", TestContext.Current.CancellationToken)).Should().Be(ClaimCommandOutcome.Refused, "a closed field needs no certificate");
     }
 
     [Fact]
@@ -162,11 +162,11 @@ public sealed class ClaimStoreTests(RedisContainerFixture fixture) : IAsyncLifet
         await Db.HashSetAsync(_key, "rt:r", $"open|{T1}|rt|");
 
         var shown = $"open|{T1}|rt|";
-        (await new ClaimOperator(Store(), new FakeEvidence()).CertifyAsync("rt:r", shown, "n", default)).Should().Be(ClaimCommandOutcome.NoEvidence);
+        (await new ClaimOperator(Store(), new FakeEvidence()).CertifyAsync("rt:r", shown, "n", TestContext.Current.CancellationToken)).Should().Be(ClaimCommandOutcome.NoEvidence);
         var claim = new ClaimOperator(Store(), new FakeEvidence { Terminal = new ClaimTerminal(7, Swept: false) });
-        (await claim.CertifyAsync("rt:r", shown, string.Empty, default)).Should().Be(ClaimCommandOutcome.Refused, "the operator must confirm");
-        (await claim.CertifyAsync("rt:r", $"pend|{T1}|rt|", "n", default)).Should().Be(ClaimCommandOutcome.Changed, "the value is no longer the one shown");
-        (await claim.CertifyAsync("rt:r", shown, "n", default)).Should().Be(ClaimCommandOutcome.Done);
+        (await claim.CertifyAsync("rt:r", shown, string.Empty, TestContext.Current.CancellationToken)).Should().Be(ClaimCommandOutcome.Refused, "the operator must confirm");
+        (await claim.CertifyAsync("rt:r", $"pend|{T1}|rt|", "n", TestContext.Current.CancellationToken)).Should().Be(ClaimCommandOutcome.Changed, "the value is no longer the one shown");
+        (await claim.CertifyAsync("rt:r", shown, "n", TestContext.Current.CancellationToken)).Should().Be(ClaimCommandOutcome.Done);
 
         ((string?)await Db.HashGetAsync(_key, "rt:r")).Should().Be($"idle|{T1}|rt|7:S0");
     }
@@ -177,8 +177,8 @@ public sealed class ClaimStoreTests(RedisContainerFixture fixture) : IAsyncLifet
         Assert.SkipUnless(fixture.Enabled, Skip);
         await Db.HashSetAsync(_key, [new HashEntry("fm:g1", $"closed|{T1}|{Fmt}|9:S5"), new HashEntry("prv:g1", "-"), new HashEntry("cur:fm", $"g1|{T1}|2|1"), new HashEntry("rt:other", $"open|{T1}|rt|")]);
 
-        (await new ClaimOperator(Store(), new FakeEvidence()).RemoveGroupAsync("g1", "n", default)).Should().Be(ClaimCommandOutcome.NotRemovable);
-        (await new ClaimOperator(Store(), new FakeEvidence { Removable = true }).RemoveGroupAsync("g1", "n", default)).Should().Be(ClaimCommandOutcome.Done);
+        (await new ClaimOperator(Store(), new FakeEvidence()).RemoveGroupAsync("g1", "n", TestContext.Current.CancellationToken)).Should().Be(ClaimCommandOutcome.NotRemovable);
+        (await new ClaimOperator(Store(), new FakeEvidence { Removable = true }).RemoveGroupAsync("g1", "n", TestContext.Current.CancellationToken)).Should().Be(ClaimCommandOutcome.Done);
 
         (await Db.HashKeysAsync(_key)).Select(k => (string)k!).Should().BeEquivalentTo(["cur:fm", "rt:other"]);
     }
@@ -189,7 +189,7 @@ public sealed class ClaimStoreTests(RedisContainerFixture fixture) : IAsyncLifet
         Assert.SkipUnless(fixture.Enabled, Skip);
         await Db.HashSetAsync(_key, [new HashEntry("fm:g1", $"open|{T1}|{Fmt}|"), new HashEntry("prv:g1", "-")]);
 
-        (await new ClaimOperator(Store(), new FakeEvidence { Removable = true }).RemoveGroupAsync("g1", "n", default)).Should().Be(ClaimCommandOutcome.Live);
+        (await new ClaimOperator(Store(), new FakeEvidence { Removable = true }).RemoveGroupAsync("g1", "n", TestContext.Current.CancellationToken)).Should().Be(ClaimCommandOutcome.Live);
 
         (await Db.HashLengthAsync(_key)).Should().Be(2);
     }
@@ -210,7 +210,7 @@ public sealed class ClaimStoreTests(RedisContainerFixture fixture) : IAsyncLifet
             return InterceptingProxy.Proceed;
         });
 
-        var outcome = await new ClaimOperator(new ClaimStore(racing, _key, useScripts: true, fixture.ServerVersion), new FakeEvidence { Removable = true }).RemoveGroupAsync("g1", "n", default);
+        var outcome = await new ClaimOperator(new ClaimStore(racing, _key, useScripts: true, fixture.ServerVersion), new FakeEvidence { Removable = true }).RemoveGroupAsync("g1", "n", TestContext.Current.CancellationToken);
 
         outcome.Should().Be(ClaimCommandOutcome.Changed);
         (await Db.HashExistsAsync(_key, "prv:g1")).Should().BeTrue("the pointer stays while its move is not removed");
