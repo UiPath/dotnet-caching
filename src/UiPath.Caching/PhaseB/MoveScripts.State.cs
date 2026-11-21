@@ -9,25 +9,27 @@ internal sealed partial class MoveScripts
     public const long StateCreated = 1;
     public const long StateRefreshed = 2;
     public const long StateNotInitial = -1;
+    public const long LeaseNotHeld = -7;
 
     private const string TransitScript = """
+        if #KEYS > 1 and redis.call('GET', KEYS[2]) ~= ARGV[1] then return -7 end
         local ep = redis.call('HGET', KEYS[1], 'ep')
         local id = redis.call('HGET', KEYS[1], 'id')
-        if ep and tonumber(ep) == tonumber(ARGV[8]) and id == ARGV[9] then
-          redis.call('HSET', KEYS[1], 'id', ARGV[9])
+        if ep and tonumber(ep) == tonumber(ARGV[9]) and id == ARGV[10] then
+          redis.call('HSET', KEYS[1], 'id', ARGV[10])
           return 2
         end
-        if ARGV[1] == 'c' then
+        if ARGV[2] == 'c' then
           if redis.call('EXISTS', KEYS[1]) == 1 then return 0 end
-        elseif ep ~= ARGV[2] or id ~= ARGV[3] or redis.call('HGET', KEYS[1], 'dur') ~= ARGV[4] then
+        elseif ep ~= ARGV[3] or id ~= ARGV[4] or redis.call('HGET', KEYS[1], 'dur') ~= ARGV[5] then
           return 0
-        elseif ARGV[12] == '1' and redis.call('HGET', KEYS[1], 'cmt') == id then
+        elseif ARGV[13] == '1' and redis.call('HGET', KEYS[1], 'cmt') == id then
           return 0
         end
-        redis.call('HSET', KEYS[1], 'st', ARGV[5], 'dir', ARGV[6], 'nPop', ARGV[7], 'ep', ARGV[8], 'id', ARGV[9], 'dur', '0', 'prev', ARGV[10], 'upd', ARGV[11])
-        local n = tonumber(ARGV[13])
-        for i = 14, 13 + n do redis.call('HDEL', KEYS[1], ARGV[i]) end
-        for i = 14 + n, #ARGV, 2 do redis.call('HSET', KEYS[1], ARGV[i], ARGV[i + 1]) end
+        redis.call('HSET', KEYS[1], 'st', ARGV[6], 'dir', ARGV[7], 'nPop', ARGV[8], 'ep', ARGV[9], 'id', ARGV[10], 'dur', '0', 'prev', ARGV[11], 'upd', ARGV[12])
+        local n = tonumber(ARGV[14])
+        for i = 15, 14 + n do redis.call('HDEL', KEYS[1], ARGV[i]) end
+        for i = 15 + n, #ARGV, 2 do redis.call('HSET', KEYS[1], ARGV[i], ARGV[i + 1]) end
         return 1
         """;
 
@@ -41,12 +43,14 @@ internal sealed partial class MoveScripts
         """;
 
     private const string CommitBeginScript = """
+        if #KEYS > 1 and redis.call('GET', KEYS[2]) ~= ARGV[2] then return -7 end
         if redis.call('HGET', KEYS[1], 'id') ~= ARGV[1] then return 0 end
         redis.call('HSET', KEYS[1], 'cmt', ARGV[1])
         return 1
         """;
 
     private const string AllAckScript = """
+        if #KEYS > 1 and redis.call('GET', KEYS[2]) ~= ARGV[2] then return -7 end
         if redis.call('HGET', KEYS[1], 'id') ~= ARGV[1] then return 0 end
         redis.call('HSET', KEYS[1], 'allAck', ARGV[1])
         return 1
@@ -66,8 +70,8 @@ internal sealed partial class MoveScripts
         """;
 
     /// <summary>TRANSIT: a compare-and-set that replaces the stored identity with the target one at <c>dur=0</c>, or creates the hash when the expectation is absence.</summary>
-    /// <returns>1 written; 0 when the stored state is not what was expected; 2 when the target identity is already stored (a repeat, which rewrites the id so a following WAIT has an offset to confirm).</returns>
-    public async Task<long> TransitAsync(RedisKey state, StateExpectation expected, StateTarget target)
+    /// <returns>1 written; 0 when the stored state is not the expected one; 2 for a repeat of the stored target, which rewrites its id; <see cref="LeaseNotHeld"/> when the fence's lease is not the caller's.</returns>
+    public async Task<long> TransitAsync(RedisKey state, StateExpectation expected, StateTarget target, LeaseFence? fence = null)
     {
         if (expected.Ep is { } expectedEp && target.Ep <= expectedEp)
         {
@@ -110,7 +114,7 @@ internal sealed partial class MoveScripts
 
         var args = new List<RedisValue>
         {
-            expected.IsAbsent ? "c" : "u", expected.Ep ?? 0, expected.Id ?? string.Empty, expected.Durable,
+            fence?.Token ?? string.Empty, expected.IsAbsent ? "c" : "u", expected.Ep ?? 0, expected.Id ?? string.Empty, expected.Durable,
             target.State, target.Direction, target.NPop, target.Ep, target.Id, target.Prev, target.UpdatedAt, expected.Abandon ? 1 : 0, clear.Count,
         };
         args.AddRange(clear.Select(f => (RedisValue)f));
@@ -120,7 +124,7 @@ internal sealed partial class MoveScripts
             args.Add(value);
         }
 
-        var reply = await EvaluateAsync(TransitScript, [state], [.. args]).ConfigureAwait(false);
+        var reply = await EvaluateAsync(TransitScript, KeysOf(state, fence), [.. args]).ConfigureAwait(false);
         if (reply is not null)
         {
             return (long)reply;
@@ -128,9 +132,15 @@ internal sealed partial class MoveScripts
 
         return await WatchedAsync(async () =>
         {
+            if (fence is not null && !await HoldsFenceAsync(fence).ConfigureAwait(false))
+            {
+                return LeaseNotHeld;
+            }
+
             var held = await _db.HashGetAsync(state, [StateFields.Ep, StateFields.Id, StateFields.Durable, StateFields.CommitBegun], Master).ConfigureAwait(false);
             var transaction = _db.CreateTransaction();
             var queued = new List<Task>();
+            AddFence(transaction, fence);
             if (!held[0].IsNull && long.TryParse((string)held[0]!, NumberStyles.None, CultureInfo.InvariantCulture, out var stored) && stored == target.Ep && held[1] == target.Id)
             {
                 AddIdentityConditions(transaction, state, held[0], held[1]);
@@ -156,6 +166,9 @@ internal sealed partial class MoveScripts
 
                 AddIdentityConditions(transaction, state, held[0], held[1]);
                 transaction.AddCondition(Condition.HashEqual(state, StateFields.Durable, held[2]));
+
+                // The abandon check above saw this marker or its absence; a begin that lands after the read must fail the transaction, as the script would refuse it.
+                transaction.AddCondition(held[3].IsNull ? Condition.HashNotExists(state, StateFields.CommitBegun) : Condition.HashEqual(state, StateFields.CommitBegun, held[3]));
             }
 
             var entries = new List<HashEntry>
@@ -216,10 +229,10 @@ internal sealed partial class MoveScripts
     /// CMTBEGIN: marks on the state that the commit of this identity begins, before the first CTLCOMMIT. An abandon is refused from then on, and a begin is refused once the id is replaced, so the two
     /// are arbitrated by the one key both write. A repeat writes the marker again.
     /// </summary>
-    /// <returns>1 marked; 0 when the stored id differs.</returns>
-    public async Task<long> CommitBeginAsync(RedisKey state, string id)
+    /// <returns>1 marked; 0 when the stored id differs; <see cref="LeaseNotHeld"/> when the fence's lease is not the caller's.</returns>
+    public async Task<long> CommitBeginAsync(RedisKey state, string id, LeaseFence? fence = null)
     {
-        var reply = await EvaluateAsync(CommitBeginScript, [state], [id]).ConfigureAwait(false);
+        var reply = await EvaluateAsync(CommitBeginScript, KeysOf(state, fence), [id, fence?.Token ?? string.Empty]).ConfigureAwait(false);
         if (reply is not null)
         {
             return (long)reply;
@@ -227,6 +240,11 @@ internal sealed partial class MoveScripts
 
         return await WatchedAsync(async () =>
         {
+            if (fence is not null && !await HoldsFenceAsync(fence).ConfigureAwait(false))
+            {
+                return LeaseNotHeld;
+            }
+
             if (await _db.HashGetAsync(state, StateFields.Id, Master).ConfigureAwait(false) != id)
             {
                 return ExpectationFailed;
@@ -234,6 +252,7 @@ internal sealed partial class MoveScripts
 
             var transaction = _db.CreateTransaction();
             var queued = new List<Task>();
+            AddFence(transaction, fence);
             transaction.AddCondition(Condition.HashEqual(state, StateFields.Id, id));
             queued.Add(transaction.HashSetAsync(state, StateFields.CommitBegun, id, When.Always, Master));
             return await ExecuteAllAsync(transaction, queued).ConfigureAwait(false) ? Written : null;
@@ -241,10 +260,10 @@ internal sealed partial class MoveScripts
     }
 
     /// <summary>ALLACK: records that every fresh node acknowledged the identity, only while it is the stored one; a repeat writes the same value again.</summary>
-    /// <returns>1 written; 0 when the stored id differs.</returns>
-    public async Task<long> AllAckAsync(RedisKey state, string id)
+    /// <returns>1 written; 0 when the stored id differs; <see cref="LeaseNotHeld"/> when the fence's lease is not the caller's.</returns>
+    public async Task<long> AllAckAsync(RedisKey state, string id, LeaseFence? fence = null)
     {
-        var reply = await EvaluateAsync(AllAckScript, [state], [id]).ConfigureAwait(false);
+        var reply = await EvaluateAsync(AllAckScript, KeysOf(state, fence), [id, fence?.Token ?? string.Empty]).ConfigureAwait(false);
         if (reply is not null)
         {
             return (long)reply;
@@ -252,6 +271,11 @@ internal sealed partial class MoveScripts
 
         return await WatchedAsync(async () =>
         {
+            if (fence is not null && !await HoldsFenceAsync(fence).ConfigureAwait(false))
+            {
+                return LeaseNotHeld;
+            }
+
             var held = await _db.HashGetAsync(state, StateFields.Id, Master).ConfigureAwait(false);
             if (held != id)
             {
@@ -260,16 +284,14 @@ internal sealed partial class MoveScripts
 
             var transaction = _db.CreateTransaction();
             var queued = new List<Task>();
+            AddFence(transaction, fence);
             transaction.AddCondition(Condition.HashEqual(state, StateFields.Id, id));
             queued.Add(transaction.HashSetAsync(state, StateFields.AllAck, id, When.Always, Master));
             return await ExecuteAllAsync(transaction, queued).ConfigureAwait(false) ? Written : null;
         }).ConfigureAwait(false);
     }
 
-    /// <summary>
-    /// X0: creates the S0 state with <c>ep</c> the larger of the server clock in microseconds and one above <paramref name="highestRecordEp"/>, or refreshes the managed set of an existing S0 state.
-    /// An existing state of any other stage is refused.
-    /// </summary>
+    /// <summary>X0: creates the S0 state above the server clock and <paramref name="highestRecordEp"/>, or refreshes the set of an S0 state; any later stage is refused.</summary>
     public async Task<InitResult> InitAsync(RedisKey state, string caches, string cacheSet, long highestRecordEp, long updatedAt)
     {
         var micros = await ServerMicrosecondsAsync(state).ConfigureAwait(false);
@@ -320,4 +342,16 @@ internal sealed partial class MoveScripts
         var time = await _db.Multiplexer.GetServer(endpoint).TimeAsync(Master).ConfigureAwait(false);
         return (DateTime.SpecifyKind(time, DateTimeKind.Utc) - DateTime.UnixEpoch).Ticks / 10;
     }
+
+    private static RedisKey[] KeysOf(RedisKey state, LeaseFence? fence) => fence is null ? [state] : [state, fence.Key];
+
+    private static void AddFence(ITransaction transaction, LeaseFence? fence)
+    {
+        if (fence is not null)
+        {
+            transaction.AddCondition(Condition.StringEqual(fence.Key, fence.Token));
+        }
+    }
+
+    private async Task<bool> HoldsFenceAsync(LeaseFence fence) => await _db.StringGetAsync(fence.Key, Master).ConfigureAwait(false) == fence.Token;
 }

@@ -9,7 +9,7 @@ internal sealed class StateRecovery(StateStore store, ControlSampler sampler, Co
     private static readonly string[] AlwaysCleared = [StateFields.AllAck, StateFields.Swept, StateFields.DrainedAt, StateFields.ClosedAt, StateFields.DryRun, StateFields.HoldAuto];
 
     /// <param name="registeredCaches">The caches the nodes registered (<c>ca</c>), used only for S0; S1 to S5 take the set from the surviving records.</param>
-    public async Task<RecoveryResult> RecreateAsync(string group, IReadOnlyList<PeerIdentity> peers, IReadOnlyList<string> registeredCaches, ClaimFields? claim, CancellationToken cancellationToken)
+    public async Task<RecoveryResult> RecreateAsync(string group, IReadOnlyList<PeerIdentity> peers, IReadOnlyList<string> registeredCaches, ClaimFields? claim, CancellationToken cancellationToken, SequenceOptions? sequenceOptions = null)
     {
         if (await store.ReadAsync(group, cancellationToken).ConfigureAwait(false) is not null)
         {
@@ -71,7 +71,7 @@ internal sealed class StateRecovery(StateStore store, ControlSampler sampler, Co
             Move: claim?.Move,
             Release: claim?.Release,
             HoldOp: "recreated");
-        var result = await sequence.RunAsync(group, StateExpectation.Absent, target, null, cancellationToken).ConfigureAwait(false);
+        var result = await sequence.RunAsync(group, StateExpectation.Absent, target, sequenceOptions, cancellationToken).ConfigureAwait(false);
         return new RecoveryResult(RecoveryOutcome.Done, result);
     }
 
@@ -79,7 +79,7 @@ internal sealed class StateRecovery(StateStore store, ControlSampler sampler, Co
     /// Rebuilds the state from the control records of every slot. With no record, the operator names the state and the managed set.
     /// The new state keeps no residue counts, so the source fallback stays on, and carries <c>hold:op</c>.
     /// </summary>
-    public async Task<RecoveryResult> ReassertAsync(string group, string confirm, (string State, string Direction)? named, IReadOnlyList<string>? caches, ClaimFields? claim, CancellationToken cancellationToken)
+    public async Task<RecoveryResult> ReassertAsync(string group, string confirm, (string State, string Direction)? named, IReadOnlyList<string>? caches, ClaimFields? claim, CancellationToken cancellationToken, SequenceOptions? sequenceOptions = null)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(confirm);
 
@@ -165,7 +165,7 @@ internal sealed class StateRecovery(StateStore store, ControlSampler sampler, Co
             HoldOp: "reassert",
             Clear: clear);
         var expected = stored is null ? StateExpectation.Absent : StateExpectation.Holding(stored.Ep, stored.Id, stored.Durable ? 1 : 0);
-        return new RecoveryResult(RecoveryOutcome.Done, await sequence.RunAsync(group, expected, target, null, cancellationToken).ConfigureAwait(false));
+        return new RecoveryResult(RecoveryOutcome.Done, await sequence.RunAsync(group, expected, target, sequenceOptions, cancellationToken).ConfigureAwait(false));
     }
 
     private static int DerivedNPop(string state, string direction) => state is "S3" or "S4" or "S5" || direction == "rev" ? 1 : 0;

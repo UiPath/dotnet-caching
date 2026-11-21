@@ -16,9 +16,15 @@ internal sealed class GroupStateMonitor(IStateReader reader, PhaseBStateOptions 
     /// <summary>Registers the groups and starts one loop for each; the first reads run in the background.</summary>
     public void Start(IEnumerable<GroupRegistration> registrations, CancellationToken cancellationToken)
     {
-        _stop = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        if (_stop is not null)
+        {
+            throw new InvalidOperationException("The monitor is already running; stop it before it is started again.");
+        }
+
         var trackers = Register(registrations);
-        _loops = [.. trackers.Select(t => Task.Run(() => RunAsync(t, _stop.Token), CancellationToken.None))];
+        _stop = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        var token = _stop.Token;
+        _loops = [.. trackers.Select(t => Task.Run(() => RunAsync(t, token), CancellationToken.None))];
     }
 
     public async Task StopAsync()
@@ -32,6 +38,7 @@ internal sealed class GroupStateMonitor(IStateReader reader, PhaseBStateOptions 
         await Task.WhenAll(_loops).ConfigureAwait(false);
         _stop.Dispose();
         _stop = null;
+        _loops = [];
     }
 
     public GroupRules RulesFor(string group) =>
@@ -61,13 +68,23 @@ internal sealed class GroupStateMonitor(IStateReader reader, PhaseBStateOptions 
         var first = tracker.View().Answer == StateAnswer.Unknown;
         try
         {
+            // The records are read before the state: a transition that lands between the two reads makes the state newer than the records, never older.
+            // A listed group is reconciled with a sample of every master; an unlisted one is only probed, and sampled once a state shows it is a Phase B group.
+            var before = tracker.View();
+            var sampling = first || before.Answer != StateAnswer.Present || before.Conflict is not null;
+            var listed = tracker.Registration.Listed;
+            var sample = sampling
+                ? (listed ? await reader.SampleAsync(group, cancellationToken).ConfigureAwait(false) : await reader.ProbeAsync(group, cancellationToken).ConfigureAwait(false))
+                : null;
             var record = await reader.ReadAsync(group, cancellationToken).ConfigureAwait(false);
-            if (first || record is null || tracker.View().Conflict is not null)
+            if (sampling && record is not null && !listed)
             {
-                // A present or listed group is reconciled with a sample of every master; an unlisted absent one needs only to know whether any record exists.
-                var sample = record is not null || tracker.Registration.Listed
-                    ? await reader.SampleAsync(group, cancellationToken).ConfigureAwait(false)
-                    : await reader.ProbeAsync(group, cancellationToken).ConfigureAwait(false);
+                sample = await reader.SampleAsync(group, cancellationToken).ConfigureAwait(false);
+                record = await reader.ReadAsync(group, cancellationToken).ConfigureAwait(false);
+            }
+
+            if (sampling)
+            {
                 tracker.Probed(sample);
             }
 
@@ -123,8 +140,25 @@ internal sealed class GroupStateMonitor(IStateReader reader, PhaseBStateOptions 
     {
         try
         {
-            while (await StepAsync(tracker.Registration.Name, cancellationToken).ConfigureAwait(false) is { } delay)
+            while (true)
             {
+                TimeSpan delay;
+                try
+                {
+                    if (await StepAsync(tracker.Registration.Name, cancellationToken).ConfigureAwait(false) is not { } next)
+                    {
+                        return;
+                    }
+
+                    delay = next;
+                }
+                catch (Exception ex) when (ex is not OperationCanceledException)
+                {
+                    // A faulted step is reported and tried again; the loop of a group never ends by an error.
+                    Notify(tracker.Registration.Name, "monitor_failed");
+                    delay = options.RetryInterval;
+                }
+
                 await Task.Delay(delay, time, cancellationToken).ConfigureAwait(false);
             }
         }
@@ -139,10 +173,23 @@ internal sealed class GroupStateMonitor(IStateReader reader, PhaseBStateOptions 
         var current = GroupRuleEvaluator.Evaluate(tracker.View(), options).Alerts;
         foreach (var code in current.Where(c => !tracker.Alerted.Contains(c)))
         {
-            alert?.Invoke(tracker.Registration.Name, code);
+            Notify(tracker.Registration.Name, code);
         }
 
         tracker.Alerted.Clear();
         tracker.Alerted.UnionWith(current);
+    }
+
+    // The callback belongs to the caller: its failure must not stop the group's loop, so it is swallowed here.
+    private void Notify(string group, string code)
+    {
+        try
+        {
+            alert?.Invoke(group, code);
+        }
+        catch (Exception)
+        {
+            // Reporting is best effort.
+        }
     }
 }

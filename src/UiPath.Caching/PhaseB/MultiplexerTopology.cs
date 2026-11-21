@@ -10,7 +10,8 @@ internal sealed class MultiplexerTopology(
     bool useScripts,
     Version? serverVersion,
     int? expectedReplicasPerMaster = null,
-    Func<ConfigurationOptions, Task<IConnectionMultiplexer>>? connect = null) : IStateTopology
+    Func<ConfigurationOptions, Task<IConnectionMultiplexer>>? connect = null,
+    TimeSpan? barrierWait = null) : IStateTopology
 {
     public async Task<ClusterLayout> ReadLayoutAsync(CancellationToken cancellationToken)
     {
@@ -32,7 +33,7 @@ internal sealed class MultiplexerTopology(
             .Where(n => !n.IsReplica && n.Slots.Count > 0)
             .Select(n => new MasterLayout(n.EndPoint!, [.. n.Slots], expectedReplicasPerMaster ?? nodes.Count(r => r.ParentNodeId == n.NodeId)))
             .ToArray();
-        return new ClusterLayout(masters);
+        return new ClusterLayout(masters, nodes.SelectMany(n => ClusterLayout.ParseTransitions(n.Raw ?? string.Empty)).ToHashSet());
     }
 
     public async Task<MasterProbe> ProbeAsync(EndPoint master, CancellationToken cancellationToken)
@@ -55,6 +56,15 @@ internal sealed class MultiplexerTopology(
         var options = ConfigurationOptions.Parse(application.Configuration);
         options.EndPoints.Clear();
         options.EndPoints.Add(master);
+
+        // WAIT blocks its connection for the barrier time; a command timeout below that would fail every barrier on a slow replica.
+        if (barrierWait is { } wait)
+        {
+            var milliseconds = (int)(wait + TimeSpan.FromSeconds(5)).TotalMilliseconds;
+            options.AsyncTimeout = Math.Max(options.AsyncTimeout, milliseconds);
+            options.SyncTimeout = Math.Max(options.SyncTimeout, milliseconds);
+        }
+
         var mux = connect is null
             ? await ConnectionMultiplexer.ConnectAsync(options).WaitAsync(cancellationToken).ConfigureAwait(false)
             : await connect(options).WaitAsync(cancellationToken).ConfigureAwait(false);

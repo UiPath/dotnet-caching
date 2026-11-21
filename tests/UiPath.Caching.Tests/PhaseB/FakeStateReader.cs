@@ -7,6 +7,8 @@ internal sealed class FakeStateReader : IStateReader
     private int _reads;
     private int _probes;
 
+    public List<string> Calls { get; } = [];
+
     public StateRecord? State { get; set; }
 
     public ControlSample? Sample { get; set; }
@@ -27,18 +29,24 @@ internal sealed class FakeStateReader : IStateReader
     public Task<StateRecord?> ReadAsync(string group, CancellationToken cancellationToken)
     {
         Interlocked.Increment(ref _reads);
+        Calls.Add("read");
         return Fail ? Task.FromException<StateRecord?>(new TimeoutException("state shard down")) : Task.FromResult(State);
     }
 
     public Task<ControlSample?> SampleAsync(string group, CancellationToken cancellationToken)
     {
         Samples++;
-        return ProbeAsync(group, cancellationToken);
+        Calls.Add("sample");
+        return Answer();
     }
 
     public Task<ControlSample?> ProbeAsync(string group, CancellationToken cancellationToken)
     {
         Interlocked.Increment(ref _probes);
-        return FailProbe || (Fail && Sample is null) ? Task.FromException<ControlSample?>(new TimeoutException("probe failed")) : Task.FromResult(Sample);
+        Calls.Add("probe");
+        return Answer();
     }
+
+    private Task<ControlSample?> Answer() =>
+        FailProbe || (Fail && Sample is null) ? Task.FromException<ControlSample?>(new TimeoutException("probe failed")) : Task.FromResult(Sample);
 }

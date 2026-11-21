@@ -291,7 +291,7 @@ public class GroupStateMonitorTests
         await other.StepAsync("g2", CancellationToken.None);
 
         _reader.Samples.Should().Be(1, "an unlisted group with no hash only asks whether a record exists");
-        _reader.Probes.Should().Be(2);
+        _reader.Probes.Should().Be(1);
     }
 
     [Fact]
@@ -425,7 +425,7 @@ public class GroupStateMonitorTests
         var monitor = new GroupStateMonitor(_reader, _options, _time);
         _reader.Fail = true;
         monitor.Start([new GroupRegistration("a", false, true), new GroupRegistration("b", false, true)], CancellationToken.None);
-        await Until(() => _reader.Reads >= 2);
+        await Until(() => _reader.Samples >= 2);
 
         _reader.Fail = false;
         _reader.State = FakeStateReader.Record("S1", 5);
@@ -433,6 +433,87 @@ public class GroupStateMonitorTests
 
         var reads = _reader.Reads;
         await AdvancingUntil(() => _reader.Reads >= reads + 2);
+        await monitor.StopAsync();
+    }
+
+    [Fact]
+    public async Task A_state_that_is_not_durable_is_polled_every_two_seconds_whatever_stage_it_names()
+    {
+        var monitor = Monitor(listed: true);
+        _reader.State = FakeStateReader.Record("S4", 5);
+        await monitor.StepAsync(Group, CancellationToken.None);
+
+        _reader.State = FakeStateReader.Record("S5", 6, "next", durable: false);
+        var next = await monitor.StepAsync(Group, CancellationToken.None);
+
+        next.Should().Be(TimeSpan.FromSeconds(2), "the node still acts under S4 and must see dur=1 within a poll");
+        _time.Advance(TimeSpan.FromSeconds(61));
+        monitor.RulesFor(Group).Alerts.Should().Contain("snapshot_stale", "StaleAfter follows the 2 s poll of the stage in force, not the 60 s of the newest read");
+
+        _reader.State = FakeStateReader.Record("S5", 6, "next");
+        (await monitor.StepAsync(Group, CancellationToken.None)).Should().Be(TimeSpan.FromSeconds(60));
+    }
+
+    [Fact]
+    public async Task The_records_are_read_before_the_state_so_a_late_transition_never_looks_like_a_conflict()
+    {
+        var monitor = Monitor(listed: true);
+        _reader.State = FakeStateReader.Record("S1", 5);
+
+        await monitor.StepAsync(Group, CancellationToken.None);
+
+        _reader.Calls.Should().Equal("sample", "read");
+
+        var unlisted = new GroupStateMonitor(_reader, _options, _time);
+        unlisted.Register([new GroupRegistration("g2", false, false)]);
+        _reader.Calls.Clear();
+        await unlisted.StepAsync("g2", CancellationToken.None);
+        _reader.Calls.Should().Equal("probe", "read", "sample", "read");
+    }
+
+    [Fact]
+    public async Task A_faulted_callback_or_step_is_reported_and_the_loop_goes_on()
+    {
+        var monitor = new GroupStateMonitor(_reader, _options, _time, (_, _) => throw new InvalidOperationException("the callback is broken"));
+        _reader.Fail = true;
+        monitor.Start([new GroupRegistration("a", false, true)], CancellationToken.None);
+        await TimeSteps.UntilAsync(() => _reader.Samples >= 1);
+
+        _reader.Fail = false;
+        _reader.State = FakeStateReader.Record("S1", 5);
+        await AdvancingUntil(() => monitor.RulesFor("a").Writes == WriteRule.Follow);
+
+        var reads = _reader.Reads;
+        await AdvancingUntil(() => _reader.Reads >= reads + 2);
+        await monitor.StopAsync();
+    }
+
+    [Fact]
+    public async Task A_step_that_throws_what_the_reader_should_not_is_retried_after_the_retry_interval()
+    {
+        var reader = new ThrowingReader();
+        var monitor = new GroupStateMonitor(reader, _options, _time);
+        monitor.Start([new GroupRegistration("a", false, true)], CancellationToken.None);
+        await TimeSteps.UntilAsync(() => reader.Reads >= 1);
+
+        await AdvancingUntil(() => reader.Reads >= 3);
+
+        await monitor.StopAsync();
+    }
+
+    [Fact]
+    public async Task The_monitor_cannot_be_started_twice_and_a_refused_start_leaves_nothing_running()
+    {
+        var monitor = new GroupStateMonitor(_reader, _options, _time);
+        var bad = () => monitor.Start([new GroupRegistration("bad+name", false, true)], CancellationToken.None);
+        bad.Should().Throw<ArgumentException>();
+
+        monitor.Start([new GroupRegistration("a", false, true)], CancellationToken.None);
+        var again = () => monitor.Start([new GroupRegistration("b", false, true)], CancellationToken.None);
+        again.Should().Throw<InvalidOperationException>();
+
+        await monitor.StopAsync();
+        monitor.Start([new GroupRegistration("c", false, true)], CancellationToken.None);
         await monitor.StopAsync();
     }
 
@@ -472,5 +553,22 @@ public class GroupStateMonitorTests
         var monitor = new GroupStateMonitor(_reader, _options, _time, (g, a) => _alerts.Add((g, a)));
         monitor.Register([new GroupRegistration(Group, flagged, listed)]);
         return monitor;
+    }
+
+    private sealed class ThrowingReader : IStateReader
+    {
+        private int _reads;
+
+        public int Reads => Volatile.Read(ref _reads);
+
+        public Task<StateRecord?> ReadAsync(string group, CancellationToken cancellationToken)
+        {
+            Interlocked.Increment(ref _reads);
+            throw new InvalidCastException("not a Redis failure");
+        }
+
+        public Task<ControlSample?> ProbeAsync(string group, CancellationToken cancellationToken) => Task.FromResult<ControlSample?>(null);
+
+        public Task<ControlSample?> SampleAsync(string group, CancellationToken cancellationToken) => Task.FromResult<ControlSample?>(null);
     }
 }

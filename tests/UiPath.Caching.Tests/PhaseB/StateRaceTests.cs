@@ -135,8 +135,8 @@ public class StateRaceTests(RedisContainerFixture fixture)
         await kit.Scripts.ControlCommitAsync(control, 40, "recid");
         var db = what switch
         {
-            "vanish" => RaceDatabase.Before(kit.ControlDb, nameof(IDatabase.HashGetAllAsync), () => kit.ControlDb.KeyDelete(control)),
-            "changed" => RaceDatabase.Before(kit.ControlDb, nameof(IDatabase.HashGetAllAsync), () => kit.ControlDb.HashSet(control, "id", "other")),
+            "vanish" => RaceDatabase.Before(kit.ControlDb, () => kit.ControlDb.KeyDelete(control), nameof(IDatabase.HashGetAllAsync), nameof(IDatabase.HashKeysAsync)),
+            "changed" => RaceDatabase.Before(kit.ControlDb, () => kit.ControlDb.HashSet(control, "id", "other"), nameof(IDatabase.HashGetAllAsync), nameof(IDatabase.HashKeysAsync)),
             _ => kit.ControlDb,
         };
         var raced = new StateRecovery(kit.Store, kit.Sampler, kit.Records, db, kit.Sequence, kit.Names, TimeProvider.System);

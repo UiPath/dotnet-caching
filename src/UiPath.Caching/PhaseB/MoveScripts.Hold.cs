@@ -15,8 +15,9 @@ internal sealed partial class MoveScripts
         """;
 
     private const string HoldClearScript = """
+        if #KEYS > 1 and redis.call('GET', KEYS[2]) ~= ARGV[1] then return -7 end
         if redis.call('EXISTS', KEYS[1]) == 0 then return 0 end
-        for i = 1, #ARGV do redis.call('HDEL', KEYS[1], ARGV[i]) end
+        for i = 2, #ARGV do redis.call('HDEL', KEYS[1], ARGV[i]) end
         return 1
         """;
 
@@ -70,11 +71,11 @@ internal sealed partial class MoveScripts
         }).ConfigureAwait(false);
     }
 
-    /// <summary>Deletes hold fields from an existing state hash.</summary>
-    /// <returns>1 when the hash exists; 0 when there is none.</returns>
-    public async Task<long> HoldClearAsync(RedisKey state, params string[] fields)
+    /// <summary>Deletes hold fields from an existing state hash; with a fence, only for the holder of the lease.</summary>
+    /// <returns>1 when the hash exists; 0 when there is none; <see cref="LeaseNotHeld"/> when the lease is not the caller's.</returns>
+    public async Task<long> HoldClearAsync(RedisKey state, LeaseFence? fence, params string[] fields)
     {
-        var reply = await EvaluateAsync(HoldClearScript, [state], [.. fields.Select(f => (RedisValue)f)]).ConfigureAwait(false);
+        var reply = await EvaluateAsync(HoldClearScript, KeysOf(state, fence), [fence?.Token ?? string.Empty, .. fields.Select(f => (RedisValue)f)]).ConfigureAwait(false);
         if (reply is not null)
         {
             return (long)reply;
@@ -82,6 +83,11 @@ internal sealed partial class MoveScripts
 
         return await WatchedAsync(async () =>
         {
+            if (fence is not null && !await HoldsFenceAsync(fence).ConfigureAwait(false))
+            {
+                return LeaseNotHeld;
+            }
+
             if (!await _db.KeyExistsAsync(state, Master).ConfigureAwait(false))
             {
                 return ExpectationFailed;
@@ -89,6 +95,7 @@ internal sealed partial class MoveScripts
 
             var transaction = _db.CreateTransaction();
             var queued = new List<Task>();
+            AddFence(transaction, fence);
             transaction.AddCondition(Condition.KeyExists(state));
             queued.Add(transaction.HashDeleteAsync(state, [.. fields.Select(f => (RedisValue)f)], Master));
             return await ExecuteAllAsync(transaction, queued).ConfigureAwait(false) ? Written : null;

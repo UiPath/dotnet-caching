@@ -26,8 +26,12 @@ internal sealed class StateStore(IDatabase stateDatabase, MoveKeyNames names, Mo
     }
 
     /// <summary>ALLACK: stores that every fresh node acknowledged <paramref name="id"/>, when it is still the stored identity.</summary>
-    public async Task<bool> AllAckAsync(string group, string id) =>
-        await scripts.AllAckAsync(names.State(group), id).ConfigureAwait(false) == MoveScripts.Written;
+    public async Task<bool> AllAckAsync(string group, string id, LeaseFence? fence = null) =>
+        await scripts.AllAckAsync(names.State(group), id, fence).ConfigureAwait(false) == MoveScripts.Written;
+
+    /// <summary>The leader clears <c>hold:auto</c> once its cause is gone; only while it still holds the lease.</summary>
+    public async Task<bool> ClearAutomaticHoldAsync(string group, LeaseFence fence) =>
+        await scripts.HoldClearAsync(names.State(group), fence, StateFields.HoldAuto).ConfigureAwait(false) == MoveScripts.Written;
 
     /// <summary>Stores a hold with its reason on an existing state; false when the group has no hash.</summary>
     public async Task<bool> SetHoldAsync(string group, HoldKind kind, string reason)
@@ -38,7 +42,7 @@ internal sealed class StateStore(IDatabase stateDatabase, MoveKeyNames names, Mo
 
     /// <summary>Deletes the operator hold, the automatic hold, or both (<c>Resume</c>); false when the group has no hash.</summary>
     public async Task<bool> ClearHoldAsync(string group, params HoldKind[] kinds) =>
-        await scripts.HoldClearAsync(names.State(group), [.. kinds.Select(HoldField)]).ConfigureAwait(false) == MoveScripts.Written;
+        await scripts.HoldClearAsync(names.State(group), null, [.. kinds.Select(HoldField)]).ConfigureAwait(false) == MoveScripts.Written;
 
     private static string HoldField(HoldKind kind) => kind == HoldKind.Operator ? StateFields.HoldOp : StateFields.HoldAuto;
 }

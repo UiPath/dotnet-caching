@@ -198,12 +198,12 @@ public class TransitionSequenceTests(RedisContainerFixture fixture)
         var init = await kit.InitAsync("a");
         var retries = WithReplica.BarrierRetries;
 
-        // TRANSIT and barrier 1 confirm at once; barrier 2 and the state WAIT fail in every try.
-        kit.Topology.Wait = (_, n) => n <= 2 ? 1 : 0;
+        // TRANSIT, barrier 1 and the commit marker confirm at once; barrier 2 and the state WAIT fail in every try.
+        kit.Topology.Wait = (_, n) => n <= 3 ? 1 : 0;
         var result = await kit.Sequence.RunAsync(kit.Group, StateKit.Expecting(init), StateKit.TargetFrom(init, "S1", "fwd", 0), null, CancellationToken.None);
 
         result.Should().Be(new TransitionResult(TransitionOutcome.Completed, WaitSkipped: true));
-        kit.Topology.Waits.Should().Be(2 + (2 * retries));
+        kit.Topology.Waits.Should().Be(3 + (2 * retries));
         (await kit.Store.ReadAsync(kit.Group, CancellationToken.None))!.Durable.Should().BeTrue();
         (await kit.ControlAsync(0)).Should().Contain(e => e.Name == "dur" && e.Value == "1");
         kit.Reports.Count(r => r.Kind == "wait_skipped").Should().Be(2);
@@ -271,7 +271,7 @@ public class TransitionSequenceTests(RedisContainerFixture fixture)
         var deleted = false;
         kit.Topology.Wait = (_, n) =>
         {
-            if (n == 3 && !deleted)
+            if (n == 4 && !deleted)
             {
                 deleted = true;
                 kit.Db.KeyDelete(control);

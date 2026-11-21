@@ -10,6 +10,9 @@ internal sealed class LeaderLease(MoveScripts scripts, RedisKey key, PhaseBState
 
     public string Token { get; } = MoveScripts.NewNonce();
 
+    /// <summary>What a state mutation carries so the server refuses it unless this node still holds the lease.</summary>
+    public LeaseFence Fence => new(key, Token);
+
     /// <summary>True while the last successful take or renewal, counted from before it was sent, is younger than the lease lifetime.</summary>
     public bool HoldsLease => Volatile.Read(ref _held) == 1 && time.GetElapsedTime(Volatile.Read(ref _sentAt)) < options.LeaseTtl;
 

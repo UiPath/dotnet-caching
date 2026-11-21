@@ -8,7 +8,7 @@ namespace UiPath.Caching.Tests.PhaseB;
 [Trait("Category", "Integration")]
 public class StateHoldAndLeaseScriptsTests(RedisContainerFixture fixture)
 {
-    public static TheoryData<string> Commands => ["holdset", "holdclear", "lease-acquire", "lease-renew", "lease-release", "transit-extras", "commitbegin"];
+    public static TheoryData<string> Commands => ["holdset", "holdclear", "lease-acquire", "lease-renew", "lease-release", "transit-extras", "commitbegin", "transit-fenced"];
 
     [Theory]
     [InlineData(true)]
@@ -19,14 +19,14 @@ public class StateHoldAndLeaseScriptsTests(RedisContainerFixture fixture)
         var state = env.Make("state");
 
         (await env.Scripts.HoldSetAsync(state, "hold:op", "why")).Should().Be(0);
-        (await env.Scripts.HoldClearAsync(state, "hold:op")).Should().Be(0);
+        (await env.Scripts.HoldClearAsync(state, null, "hold:op")).Should().Be(0);
         (await env.Db.KeyExistsAsync(state)).Should().BeFalse();
 
         await env.Db.HashSetAsync(state, "st", "S1");
         (await env.Scripts.HoldSetAsync(state, "hold:op", "why")).Should().Be(1);
         (await env.Scripts.HoldSetAsync(state, "hold:auto", "canary")).Should().Be(1);
         (await env.Db.HashGetAsync(state, "hold:op")).Should().Be("why");
-        (await env.Scripts.HoldClearAsync(state, "hold:op", "hold:auto")).Should().Be(1);
+        (await env.Scripts.HoldClearAsync(state, null, "hold:op", "hold:auto")).Should().Be(1);
         (await env.Db.HashGetAllAsync(state)).Select(e => (string)e.Name!).Should().Equal("st");
     }
 
@@ -92,6 +92,51 @@ public class StateHoldAndLeaseScriptsTests(RedisContainerFixture fixture)
         (await env.Scripts.TransitAsync(state, StateExpectation.Holding(6, "id-6", 0, abandon: true), back)).Should().Be(MoveScripts.ExpectationFailed);
         (await env.Db.HashGetAsync(state, "id")).Should().Be("id-6");
         (await env.Scripts.TransitAsync(state, StateExpectation.Holding(6, "id-6", 0), back)).Should().Be(MoveScripts.Written);
+    }
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task A_mutation_that_carries_a_lease_fence_is_refused_unless_the_lease_holds_that_token(bool useScripts)
+    {
+        await using var env = await MoveTestEnvironment.CreateAsync(fixture, useScripts, openControl: false);
+        var state = env.Make("state");
+        var lead = env.Make("lead");
+        await env.Scripts.TransitAsync(state, StateExpectation.Absent, new StateTarget("S1", "fwd", 0, 6, "id-6", "S0:none:0:5:id-5", 1));
+        await env.Db.HashSetAsync(state, [new("hold:auto", "canary")]);
+        var next = new StateTarget("S3", "fwd", 1, 7, "id-7", "p", 2);
+        var mine = new LeaseFence(lead, "me");
+
+        // No lease at all, then another holder's: every fenced mutation is refused and changes nothing.
+        (await env.Scripts.TransitAsync(state, StateExpectation.Holding(6, "id-6", 0), next, mine)).Should().Be(MoveScripts.LeaseNotHeld);
+        await env.Db.StringSetAsync(lead, "other", TimeSpan.FromSeconds(60));
+        (await env.Scripts.TransitAsync(state, StateExpectation.Holding(6, "id-6", 0), next, mine)).Should().Be(MoveScripts.LeaseNotHeld);
+        (await env.Scripts.CommitBeginAsync(state, "id-6", mine)).Should().Be(MoveScripts.LeaseNotHeld);
+        (await env.Scripts.AllAckAsync(state, "id-6", mine)).Should().Be(MoveScripts.LeaseNotHeld);
+        (await env.Scripts.HoldClearAsync(state, mine, "hold:auto")).Should().Be(MoveScripts.LeaseNotHeld);
+        (await env.Db.HashGetAllAsync(state)).Select(e => (string)e.Name!).Should().NotContain(["cmt", "allAck"]).And.Contain("hold:auto");
+        (await env.Db.HashGetAsync(state, "id")).Should().Be("id-6");
+
+        await env.Db.StringSetAsync(lead, "me", TimeSpan.FromSeconds(60));
+        (await env.Scripts.CommitBeginAsync(state, "id-6", mine)).Should().Be(1);
+        (await env.Scripts.AllAckAsync(state, "id-6", mine)).Should().Be(1);
+        (await env.Scripts.HoldClearAsync(state, mine, "hold:auto")).Should().Be(1);
+        (await env.Scripts.TransitAsync(state, StateExpectation.Holding(6, "id-6", 0), next, mine)).Should().Be(MoveScripts.Written);
+    }
+
+    [Fact]
+    public async Task The_fallback_transit_fails_its_transaction_when_a_commit_marker_lands_between_its_read_and_its_exec()
+    {
+        await using var env = await MoveTestEnvironment.CreateAsync(fixture, useScripts: false, openControl: false);
+        var state = env.Make("state");
+        await env.Scripts.TransitAsync(state, StateExpectation.Absent, new StateTarget("S1", "fwd", 0, 6, "id-6", "S0:none:0:5:id-5", 1));
+        var racing = RaceDatabase.AfterHashGetFields(env.Db, () => env.Db.HashSet(state, "cmt", "id-6"));
+        var scripts = new MoveScripts(racing, useScripts: false, env.ServerVersion);
+
+        var code = await scripts.TransitAsync(state, StateExpectation.Holding(6, "id-6", 0, abandon: true), new StateTarget("S0", "none", 0, 7, "id-7", "S0:none:0:5:id-5", 2));
+
+        code.Should().Be(MoveScripts.ExpectationFailed);
+        (await env.Db.HashGetAsync(state, "id")).Should().Be("id-6");
     }
 
     [Fact]
@@ -187,6 +232,10 @@ public class StateHoldAndLeaseScriptsTests(RedisContainerFixture fixture)
             case "commitbegin":
                 await env.Db.HashSetAsync(key, [new("st", "S1"), new("ep", 5), new("id", "id-5"), new("dur", "0")]);
                 break;
+            case "transit-fenced":
+                await env.Db.HashSetAsync(key, [new("st", "S1"), new("dir", "fwd"), new("nPop", "0"), new("ep", 5), new("id", "id-5"), new("dur", "1")]);
+                await env.Db.StringSetAsync(key.ToString() + ":lead", "me", TimeSpan.FromSeconds(60));
+                break;
             case "transit-extras":
                 await env.Db.HashSetAsync(key, [new("st", "S1"), new("dir", "fwd"), new("nPop", "0"), new("ep", 5), new("id", "id-5"), new("dur", "1"), new("res:a", "1")]);
                 break;
@@ -203,7 +252,7 @@ public class StateHoldAndLeaseScriptsTests(RedisContainerFixture fixture)
             case "holdset":
                 return await scripts.HoldSetAsync(key, "hold:op", "why");
             case "holdclear":
-                return await scripts.HoldClearAsync(key, "hold:op");
+                return await scripts.HoldClearAsync(key, null, "hold:op");
             case "lease-acquire":
             case "lease-renew":
                 return await scripts.LeaseAsync(key, "a", 30_000);
@@ -211,6 +260,8 @@ public class StateHoldAndLeaseScriptsTests(RedisContainerFixture fixture)
                 return await scripts.LeaseReleaseAsync(key, "a") ? 1 : 0;
             case "commitbegin":
                 return await scripts.CommitBeginAsync(key, "id-5");
+            case "transit-fenced":
+                return await scripts.TransitAsync(key, StateExpectation.Holding(5, "id-5", 1), new StateTarget("S1", "fwd", 0, 6, "id-6", "p", 1), new LeaseFence(key.ToString() + ":lead", "me"));
             case "transit-extras":
                 return await scripts.TransitAsync(key, StateExpectation.Holding(5, "id-5", 1), new StateTarget("S1", "fwd", 0, 6, "id-6", "p", 1, Move: "m", Clear: ["res:a"]));
             default:

@@ -5,5 +5,6 @@ namespace UiPath.Caching.PhaseB;
 /// <param name="SkipAtOnce">Issue the writes and issue no <c>WAIT</c>: the abandon of a transition that nothing acted on.</param>
 /// <param name="WayBack">A way-back transition: a master that failed a barrier in the ledger's window is skipped at once, any other one after its tries.</param>
 /// <param name="HoldsLease">Asked before every step that writes; false stops the sequence with <c>LeaseLost</c>, so a controller that outlived its lease writes nothing more.</param>
+/// <param name="Fence">The lease the state mutations of the sequence (TRANSIT, the commit marker) carry, so a controller that was paused past its lease is refused by the server.</param>
 /// <param name="Ledger">Remembers failed barriers across transitions; required for the way-back rule.</param>
-internal sealed record SequenceOptions(bool SkipBarriers = false, string Release = "", bool SkipAtOnce = false, bool WayBack = false, BarrierLedger? Ledger = null, Func<bool>? HoldsLease = null);
+internal sealed record SequenceOptions(bool SkipBarriers = false, string Release = "", bool SkipAtOnce = false, bool WayBack = false, BarrierLedger? Ledger = null, Func<bool>? HoldsLease = null, LeaseFence? Fence = null);

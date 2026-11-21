@@ -23,7 +23,12 @@ internal sealed class TransitionSequence(IStateTopology topology, MoveKeyNames n
         }
 
         var key = names.State(group);
-        var (confirmed, _) = await StateStepAsync(episode, key, channel => channel.State.TransitAsync(key, expected, target), code => code != MoveScripts.ExpectationFailed, cancellationToken).ConfigureAwait(false);
+        var (confirmed, written) = await StateStepAsync(episode, key, channel => channel.State.TransitAsync(key, expected, target, episode.Sequence.Fence), code => code is MoveScripts.Written or MoveScripts.Repeated, cancellationToken).ConfigureAwait(false);
+        if (confirmed == BarrierResult.Refused && written == MoveScripts.LeaseNotHeld)
+        {
+            return new TransitionResult(TransitionOutcome.LeaseLost, Detail: "the server found the lease held by another controller");
+        }
+
         if (confirmed == BarrierResult.Refused)
         {
             return new TransitionResult(TransitionOutcome.StateChanged, Detail: "the stored state is not the one this transition replaces");
@@ -101,7 +106,7 @@ internal sealed class TransitionSequence(IStateTopology topology, MoveKeyNames n
         episode.Sequence.HoldsLease is { } holds && !holds() ? new TransitionResult(TransitionOutcome.LeaseLost, Detail: "the controller no longer holds the lease") : null;
 
     private static int ConfiguredReplicas(ClusterLayout layout, EndPoint master) =>
-        layout.Masters.FirstOrDefault(m => m.Endpoint.Equals(master))?.ConfiguredReplicas ?? throw new RedisException($"The topology does not list the master {master}.");
+        layout.Masters.FirstOrDefault(m => EndPointMatch.Same(m.Endpoint, master))?.ConfiguredReplicas ?? throw new RedisException($"The topology does not list the master {master}.");
 
     // The owner is read before and after the write: a connection that sent it to another master would have its WAIT ask the wrong one.
     private static async Task<long> IssueSlotAsync(IMasterChannel channel, RedisKey key, int slot, SlotPhase phase, ConcurrentDictionary<int, EndPoint> misrouted)
@@ -109,7 +114,7 @@ internal sealed class TransitionSequence(IStateTopology topology, MoveKeyNames n
         var before = await channel.ControlOwnerAsync(key).ConfigureAwait(false);
         var code = await phase.Issue(channel, key).ConfigureAwait(false);
         var after = await channel.ControlOwnerAsync(key).ConfigureAwait(false);
-        if (!channel.Endpoint.Equals(before) || !channel.Endpoint.Equals(after))
+        if (!EndPointMatch.Same(channel.Endpoint, before) || !EndPointMatch.Same(channel.Endpoint, after))
         {
             misrouted[slot] = after ?? before ?? channel.Endpoint;
         }
@@ -173,15 +178,25 @@ internal sealed class TransitionSequence(IStateTopology topology, MoveKeyNames n
         return LeaseLost(episode) ?? await DurableStepAsync(group, state, episode, cancellationToken).ConfigureAwait(false);
     }
 
-    // Marks on the state that the commit of this identity begins, so an abandon of it is refused from here on; refused itself when the identity was replaced.
+    // Marks on the state, and confirms on a replica, that the commit of this identity begins, so an abandon of it is refused from here on and a failover cannot lose the marker.
     private async Task<TransitionResult?> CommitBeginStepAsync(string group, StateRecord state, Episode episode, CancellationToken cancellationToken)
     {
         var key = names.State(group);
-        var (master, _) = await StateMasterAsync(key, cancellationToken).ConfigureAwait(false);
-        var channel = await episode.Channels.GetAsync(master, cancellationToken).ConfigureAwait(false);
-        return await channel.State.CommitBeginAsync(key, state.Id).ConfigureAwait(false) == MoveScripts.Written
-            ? null
-            : new TransitionResult(TransitionOutcome.StateChanged, Detail: "the identity was replaced before its commit began");
+        var (confirmed, code) = await StateStepAsync(episode, key, channel => channel.State.CommitBeginAsync(key, state.Id, episode.Sequence.Fence), c => c == MoveScripts.Written, cancellationToken).ConfigureAwait(false);
+        switch (confirmed)
+        {
+            case BarrierResult.Refused when code == MoveScripts.LeaseNotHeld:
+                return new TransitionResult(TransitionOutcome.LeaseLost, Detail: "the server found the lease held by another controller");
+            case BarrierResult.Refused:
+                return new TransitionResult(TransitionOutcome.StateChanged, Detail: "the identity was replaced before its commit began");
+            case BarrierResult.Skipped:
+                NoteSkipped(episode, "the commit marker");
+                return null;
+            case BarrierResult.Failed when !SkipOrStuck(episode, "the commit marker"):
+                return new TransitionResult(TransitionOutcome.BarrierStuck, Detail: "the commit marker is not on a replica");
+            default:
+                return null;
+        }
     }
 
     // Steps 2 and 3. Null when every slot holds the target identity and its master confirmed the writes.
@@ -307,8 +322,10 @@ internal sealed class TransitionSequence(IStateTopology topology, MoveKeyNames n
                 owners.Remove(slot);
             }
 
-            unverified = verified.Pending;
-            pending = [.. verified.Pending.Union(moved).Union(misrouted.Keys).Where(slot => !failedMasters.Contains(owners.GetValueOrDefault(slot) ?? next.OwnerOf(slot)))];
+            // A slot that is migrating or importing may have taken the write on the node it is handed to, so it counts as unconfirmed until it settles.
+            var unsettled = slots.Where(next.Unsettled.Contains).ToArray();
+            unverified = [.. verified.Pending.Union(unsettled)];
+            pending = [.. verified.Pending.Union(moved).Union(misrouted.Keys).Union(unsettled).Where(slot => !failedMasters.Contains(owners.GetValueOrDefault(slot) ?? next.OwnerOf(slot)))];
         }
 
         return new SlotPhaseResult(false, false, unverified.Union(pending).Count(), failedMasters.Count > 0, skipped);
@@ -373,7 +390,7 @@ internal sealed class TransitionSequence(IStateTopology topology, MoveKeyNames n
         var required = Math.Min(options.StateWaitReplicas, configuredReplicas);
         if (required <= 0)
         {
-            if (episode.NoReplica.TryAdd(master, 0))
+            if (configuredReplicas == 0 && episode.NoReplica.TryAdd(master, 0))
             {
                 report?.Invoke("no_replica", master.ToString()!);
             }
@@ -454,7 +471,7 @@ internal sealed class TransitionSequence(IStateTopology topology, MoveKeyNames n
                     }
 
                     var after = await channel.StateOwnerAsync(key).ConfigureAwait(false);
-                    if (channel.Endpoint.Equals(before) && channel.Endpoint.Equals(after))
+                    if (EndPointMatch.Same(channel.Endpoint, before) && EndPointMatch.Same(channel.Endpoint, after))
                     {
                         return IssueResult.Done;
                     }
@@ -463,12 +480,12 @@ internal sealed class TransitionSequence(IStateTopology topology, MoveKeyNames n
                     return IssueResult.Misrouted;
                 },
                 cancellationToken).ConfigureAwait(false);
-            if (result != BarrierResult.Misrouted)
+            layout = await topology.ReadLayoutAsync(cancellationToken).ConfigureAwait(false);
+            if (result != BarrierResult.Misrouted && !(result == BarrierResult.Confirmed && layout.Unsettled.Contains(HashSlot.Of(key.ToString()))))
             {
                 return (result, code);
             }
 
-            layout = await topology.ReadLayoutAsync(cancellationToken).ConfigureAwait(false);
             owner = actual ?? layout.OwnerOf(HashSlot.Of(key.ToString()));
         }
 
@@ -494,17 +511,16 @@ internal sealed class TransitionSequence(IStateTopology topology, MoveKeyNames n
         return false;
     }
 
-    private async Task<(EndPoint Master, int Configured)> StateMasterAsync(RedisKey key, CancellationToken cancellationToken)
+    private async Task<EndPoint> StateMasterAsync(RedisKey key, CancellationToken cancellationToken)
     {
         var layout = await topology.ReadLayoutAsync(cancellationToken).ConfigureAwait(false);
-        var master = layout.OwnerOf(HashSlot.Of(key.ToString()));
-        return (master, layout.MasterAt(master).ConfiguredReplicas);
+        return layout.OwnerOf(HashSlot.Of(key.ToString()));
     }
 
     private async Task<StateRecord?> ReadStateAsync(string group, Episode episode, CancellationToken cancellationToken)
     {
         var key = names.State(group);
-        var (master, _) = await StateMasterAsync(key, cancellationToken).ConfigureAwait(false);
+        var master = await StateMasterAsync(key, cancellationToken).ConfigureAwait(false);
         var channel = await episode.Channels.GetAsync(master, cancellationToken).ConfigureAwait(false);
         return StateRecord.Parse(await channel.StateDatabase.HashGetAllAsync(key, Master).ConfigureAwait(false));
     }

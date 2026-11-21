@@ -18,7 +18,7 @@ internal sealed class StateKit : IAsyncDisposable
         var database = mux.GetDatabase();
         ControlDb = prefix.Length == 0 ? database : StackExchange.Redis.KeyspaceIsolation.DatabaseExtensions.WithKeyPrefix(database, prefix);
         Scripts = new MoveScripts(database, useScripts, version);
-        Real = new MultiplexerTopology(mux, prefix, useScripts, version, options.ExpectedReplicasPerMaster);
+        Real = new MultiplexerTopology(mux, prefix, useScripts, version, options.ExpectedReplicasPerMaster, barrierWait: options.BarrierWait);
         Topology = new HookedTopology(Real);
         Sampler = new ControlSampler(ControlDb, names, Topology);
         Store = new StateStore(database, names, Scripts, Sampler, TimeProvider.System);

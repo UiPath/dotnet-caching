@@ -89,6 +89,35 @@ public class ReplicaBarrierTests(RedisContainerFixture fixture)
         await stall.FinishedAsync();
     }
 
+    [Fact]
+    public async Task A_stalled_replica_keeps_the_commit_marker_unconfirmed_so_no_record_is_committed()
+    {
+        await using var kit = await StateKit.StandaloneAsync(fixture, useScripts: true, new PhaseBStateOptions { ExpectedReplicasPerMaster = 1, BarrierWait = TimeSpan.FromMilliseconds(250) });
+        await using var replica = await ConnectionMultiplexer.ConnectAsync(ReplicaString() + ",allowAdmin=true,syncTimeout=30000,asyncTimeout=30000");
+        var init = await kit.InitAsync("a");
+        ReplicaStall? stall = null;
+
+        // The epoch sync is confirmed by the real replica; the replica then stops just before the WAIT of the commit marker.
+        kit.Topology.Wait = (_, n) =>
+        {
+            if (n == 3)
+            {
+                stall = ReplicaStall.StartAsync(replica, 4).GetAwaiter().GetResult();
+            }
+
+            return null;
+        };
+        var result = await kit.Sequence.RunAsync(kit.Group, StateKit.Expecting(init), StateKit.TargetFrom(init, "S1", "fwd", 0), null, CancellationToken.None);
+
+        result.Outcome.Should().Be(TransitionOutcome.BarrierStuck);
+        (await kit.ControlAsync(0)).Should().NotContain(e => e.Name == "dur" && e.Value == "1");
+        (await kit.Db.HashGetAsync(kit.StateKey, "cmt")).HasValue.Should().BeTrue();
+        await stall!.FinishedAsync();
+
+        kit.Topology.Wait = null;
+        (await kit.Sequence.ResumeAsync(kit.Group, null, CancellationToken.None)).Outcome.Should().Be(TransitionOutcome.Completed);
+    }
+
     private static string ReplicaString()
     {
         var connection = Environment.GetEnvironmentVariable("REDIS_REPLICA_CONNECTION_STRING");

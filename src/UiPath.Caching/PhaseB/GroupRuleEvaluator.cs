@@ -10,8 +10,8 @@ internal static class GroupRuleEvaluator
         ? view.Registration.Flagged || view.Registration.Listed || view.RecordFound
         : view.Registration.Listed || view.Answer == StateAnswer.Present || view.RecordFound || view.EverPresent;
 
-    /// <summary>S1 to S4 and a listed group in S0 are polled often, S5 and the rest slowly.</summary>
-    public static TimeSpan PollInterval(GroupView view, PhaseBStateOptions options) => view.State?.State switch
+    /// <summary>S1 to S4, a listed S0 and any state not yet durable are polled often, S5 and the rest slowly, by the state in force.</summary>
+    public static TimeSpan PollInterval(GroupView view, PhaseBStateOptions options) => view.State is { Durable: false } ? options.PollInterval : (view.LastKnown?.State ?? view.State?.State) switch
     {
         Closed => options.SlowPollInterval,
         Off => view.Registration.Listed ? options.PollInterval : options.SlowPollInterval,
