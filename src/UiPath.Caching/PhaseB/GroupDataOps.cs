@@ -2,10 +2,8 @@ using StackExchange.Redis;
 
 namespace UiPath.Caching.PhaseB;
 
-/// <summary>
-/// <c>PurgeData</c> and the owned-key census: every delete is a script that checks the control record of the key's slot, so a purge under a moved state is refused key by key,
-/// and the state identity and the lease are checked again before the run and before every batch. A purge ends with a pass on the masters that finds no owned key.
-/// </summary>
+/// <summary><c>PurgeData</c> and the owned-key census, every delete checked by the control record of its key's slot.</summary>
+/// <remarks>The state identity and the lease are checked again before the run and before each batch, and a purge ends with a pass on the masters that finds no owned key.</remarks>
 /// <param name="scanner">The masters, through the view that adds the connector prefix to the pattern.</param>
 /// <param name="stateScripts">The scripts over the view of the state hash, which carries no connector prefix.</param>
 /// <param name="dataScripts">The scripts over the view that names data keys and control records, with the connector prefix.</param>
@@ -40,7 +38,8 @@ internal sealed class GroupDataOps(MasterScanner scanner, IGroupKeySpace space, 
 
         try
         {
-            await PurgeAsync(group, MoveSide.Native, new DataGuard(state.Id, null, AllowNoRecord: true), cancellationToken).ConfigureAwait(false);
+            // A missing record is repaired, not purged around, unless the group provably never started: no X1 ever stamped moveId.
+            await PurgeAsync(group, MoveSide.Native, new DataGuard(state.Id, null, AllowNoRecord: state.MoveId is null), cancellationToken).ConfigureAwait(false);
             return PurgeOutcome.Purged;
         }
         catch (PurgeRefusedException)
@@ -49,18 +48,23 @@ internal sealed class GroupDataOps(MasterScanner scanner, IGroupKeySpace space, 
         }
     }
 
-    private async Task<long> CountAsync(string group, MoveSide side, IReadOnlyList<string> cacheIds, CancellationToken cancellationToken)
+    private Task<long> CountAsync(string group, MoveSide side, IReadOnlyList<string> cacheIds, CancellationToken cancellationToken)
     {
-        long found = 0;
-        await foreach (var key in scanner.ScanAsync(space.Patterns(group, side), cancellationToken).ConfigureAwait(false))
+        async Task<long> Count(IAsyncEnumerable<string> keys)
         {
-            if (space.OwnerOf(group, cacheIds, side, key) is not null)
+            long found = 0;
+            await foreach (var key in keys.WithCancellation(cancellationToken).ConfigureAwait(false))
             {
-                found++;
+                if (space.OwnerOf(group, cacheIds, side, key) is not null)
+                {
+                    found++;
+                }
             }
+
+            return found;
         }
 
-        return found;
+        return scanner.RunAsync(space.Patterns(group, side), Count, cancellationToken);
     }
 
     private async Task PurgeAsync(string group, MoveSide side, DataGuard guard, CancellationToken cancellationToken)
@@ -83,32 +87,38 @@ internal sealed class GroupDataOps(MasterScanner scanner, IGroupKeySpace space, 
         throw new PurgeRefusedException($"Owned keys of '{group}' were still found after {maxPasses} passes on the masters.");
     }
 
-    private async Task<long> DeletePassAsync(string group, MoveSide side, IReadOnlyList<string> cacheIds, DataGuard guard, CancellationToken cancellationToken)
+    // A repeated attempt deletes the same keys again, which is harmless, and counts only the attempt that stood.
+    private Task<long> DeletePassAsync(string group, MoveSide side, IReadOnlyList<string> cacheIds, DataGuard guard, CancellationToken cancellationToken)
     {
-        long seen = 0;
-        var batch = new List<string>(batchSize);
-        await foreach (var key in scanner.ScanAsync(space.Patterns(group, side), cancellationToken).ConfigureAwait(false))
+        async Task<long> Pass(IAsyncEnumerable<string> keys)
         {
-            if (space.OwnerOf(group, cacheIds, side, key) is null)
+            long seen = 0;
+            var batch = new List<string>(batchSize);
+            await foreach (var key in keys.WithCancellation(cancellationToken).ConfigureAwait(false))
             {
-                continue;
+                if (space.OwnerOf(group, cacheIds, side, key) is null)
+                {
+                    continue;
+                }
+
+                seen++;
+                batch.Add(key);
+                if (batch.Count == batchSize)
+                {
+                    await DeleteBatchAsync(group, batch, guard).ConfigureAwait(false);
+                    batch.Clear();
+                }
             }
 
-            seen++;
-            batch.Add(key);
-            if (batch.Count == batchSize)
+            if (batch.Count > 0)
             {
                 await DeleteBatchAsync(group, batch, guard).ConfigureAwait(false);
-                batch.Clear();
             }
+
+            return seen;
         }
 
-        if (batch.Count > 0)
-        {
-            await DeleteBatchAsync(group, batch, guard).ConfigureAwait(false);
-        }
-
-        return seen;
+        return scanner.RunAsync(space.Patterns(group, side), Pass, cancellationToken);
     }
 
     private async Task DeleteBatchAsync(string group, List<string> batch, DataGuard guard)
@@ -125,10 +135,15 @@ internal sealed class GroupDataOps(MasterScanner scanner, IGroupKeySpace space, 
 
     private async Task EnsureAsync(string group, DataGuard guard)
     {
-        var held = await stateScripts.GuardAsync(names.State(group), guard.Id, guard.Fence).ConfigureAwait(false);
+        var held = await stateScripts.GuardAsync(names.State(group), guard.Id, guard.Fence, guard.AllowNoRecord).ConfigureAwait(false);
         if (held != MoveScripts.Written)
         {
-            throw new PurgeRefusedException(held == MoveScripts.LeaseNotHeld ? $"The lease of '{group}' is no longer held." : $"The state of '{group}' moved.");
+            throw new PurgeRefusedException(held switch
+            {
+                MoveScripts.LeaseNotHeld => $"The lease of '{group}' is no longer held.",
+                MoveScripts.GroupStarted => $"The group '{group}' has started a move, so a missing control record is not proof of an empty group.",
+                _ => $"The state of '{group}' moved.",
+            });
         }
     }
 }

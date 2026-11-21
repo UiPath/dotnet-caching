@@ -88,6 +88,14 @@ public class SnapshotAgeTests
     }
 
     [Fact]
+    public async Task G7_adds_the_age_of_the_advert_to_the_snapshot_age_it_carries()
+    {
+        var state = ReadyOff();
+        (await Decide(state, [Advert("n1"), Advert("n2", snap: 40) with { Age = TimeSpan.FromSeconds(20) }])).AlertList.Select(a => a.Code).Should().NotContain("start_blocked");
+        Blocked(await Decide(state, [Advert("n1"), Advert("n2", snap: 60) with { Age = TimeSpan.FromSeconds(5) }]), "G7", "n2");
+    }
+
+    [Fact]
     public async Task G7_reads_the_stale_age_of_the_node_s_own_poll_interval()
     {
         var state = ReadyOff();

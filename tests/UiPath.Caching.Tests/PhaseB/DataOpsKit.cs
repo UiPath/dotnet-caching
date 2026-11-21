@@ -8,14 +8,16 @@ namespace UiPath.Caching.Tests.PhaseB;
 internal sealed class DataOpsKit : IAsyncDisposable
 {
     private readonly List<string> _made = [];
+    private readonly bool _started;
 
-    private DataOpsKit(StateKit kit, string prefix, int batch)
+    private DataOpsKit(StateKit kit, string prefix, int batch, bool started)
     {
         Kit = kit;
+        _started = started;
         Prefix = prefix;
         var tag = "pb3c" + Guid.NewGuid().ToString("N")[..10];
         Space = new FakeKeySpace(tag + ":n:", tag + ":l:");
-        Scanner = new MasterScanner(() => kit.Mux.GetServers(), 0, prefix);
+        Scanner = new MasterScanner(() => kit.Mux.GetServers(), kit.Topology, 0, prefix);
         DataScripts = new MoveScripts(kit.ControlDb, true, kit.Mux.GetServers().Min(s => s.Version)!);
         Data = new GroupDataOps(Scanner, Space, kit.Store, kit.Scripts, DataScripts, kit.Names, batch);
         Census = new MasterCensus(Scanner, Space, kit.Store, kit.Db, prefix, kit.Time);
@@ -39,10 +41,10 @@ internal sealed class DataOpsKit : IAsyncDisposable
 
     public string Group => Kit.Group;
 
-    public static async Task<DataOpsKit> StandaloneAsync(RedisContainerFixture fixture, bool useScripts, string prefix = "", int batch = 128)
+    public static async Task<DataOpsKit> StandaloneAsync(RedisContainerFixture fixture, bool useScripts, string prefix = "", int batch = 128, bool started = true)
     {
         var kit = await StateKit.StandaloneAsync(fixture, useScripts, prefix: prefix);
-        var data = new DataOpsKit(kit, prefix, batch);
+        var data = new DataOpsKit(kit, prefix, batch, started);
         await data.StartAsync();
         return data;
     }
@@ -50,7 +52,7 @@ internal sealed class DataOpsKit : IAsyncDisposable
     public static async Task<DataOpsKit> ClusterAsync(string prefix, int batch = 128)
     {
         var kit = await StateKit.ClusterAsync(useScripts: true, prefix: prefix);
-        var data = new DataOpsKit(kit, prefix, batch);
+        var data = new DataOpsKit(kit, prefix, batch, true);
         await data.StartAsync();
         return data;
     }
@@ -77,7 +79,7 @@ internal sealed class DataOpsKit : IAsyncDisposable
     public async Task<StateRecord> MoveToAsync(string state, string direction = "fwd", int nPop = 0)
     {
         var from = await StateAsync();
-        var result = await Kit.Sequence.RunAsync(Group, StateKit.Expecting(from), StateKit.TargetFrom(from, state, direction, nPop), null, CancellationToken.None);
+        var result = await Kit.Sequence.RunAsync(Group, StateKit.Expecting(from), StateKit.TargetFrom(from, state, direction, nPop) with { MoveId = from.State == "S0" && state == "S1" ? from.Ep + 1 : null }, null, CancellationToken.None);
         result.Outcome.Should().Be(TransitionOutcome.Completed);
         return await StateAsync();
     }
@@ -100,6 +102,9 @@ internal sealed class DataOpsKit : IAsyncDisposable
     private async Task StartAsync()
     {
         await Kit.InitAsync("a", "b");
-        await MoveToAsync("S1");
+        if (_started)
+        {
+            await MoveToAsync("S1");
+        }
     }
 }

@@ -26,8 +26,8 @@ internal sealed class StateStore(IDatabase stateDatabase, MoveKeyNames names, Mo
     }
 
     /// <summary>ALLACK: stores that every fresh node acknowledged <paramref name="id"/>, when it is still the stored identity.</summary>
-    public async Task<bool> AllAckAsync(string group, string id, LeaseFence? fence = null) =>
-        await scripts.AllAckAsync(names.State(group), id, fence).ConfigureAwait(false) == MoveScripts.Written;
+    public async Task<bool> AllAckAsync(string group, string id, LeaseFence? fence = null, long? t3At = null) =>
+        await scripts.AllAckAsync(names.State(group), id, fence, t3At).ConfigureAwait(false) == MoveScripts.Written;
 
     /// <summary>The leader clears <c>hold:auto</c> once its cause is gone; only while it still holds the lease.</summary>
     public async Task<bool> ClearAutomaticHoldAsync(string group, LeaseFence fence) =>

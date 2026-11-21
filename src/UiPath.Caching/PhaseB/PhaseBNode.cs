@@ -5,28 +5,36 @@ using UiPath.Caching.Redis;
 
 namespace UiPath.Caching.PhaseB;
 
-/// <summary>
-/// The Phase B parts of one node: the snapshot loop, the stage flag poller, the acknowledgements, the lease of each group, the leader's driver and the control upkeep. The advert tokens exist from construction;
-/// everything that needs Redis starts with <see cref="StartAsync"/> and stops with <see cref="StopAsync"/>. A setup with no group runs nothing.
-/// </summary>
+/// <summary>The Phase B parts of one node: snapshot loop, flag poller, acknowledgements, leases, leader driver and control upkeep.</summary>
+/// <remarks>The advert tokens exist from construction; everything that needs Redis starts with <c>StartAsync</c> and is rebuilt when the connection is replaced. A setup with no group runs nothing.</remarks>
 internal sealed class PhaseBNode
 {
+    private static readonly TimeSpan RewireCheckInterval = TimeSpan.FromMilliseconds(500);
+
     private readonly PhaseBSetup _setup;
     private readonly TimeProvider _time;
     private readonly DeferredStateReader _reader = new();
     private readonly EpochGate _gate = new();
     private readonly GroupStateMonitor _monitor;
     private readonly StageFlagPoller _poller;
+    private readonly BarrierLedger _ledger;
     private readonly ConcurrentDictionary<string, long> _recycled = new(StringComparer.Ordinal);
     private Action _recycle = () => { };
     private CancellationTokenSource? _stop;
     private Task[] _loops = [];
     private StageDriver? _driver;
+    private IRedisConnector? _connector;
+    private string _connectorPrefix = string.Empty;
+    private IAdvertSource? _adverts;
+    private string? _ownScope;
+    private Dictionary<string, LeaderLease> _leases = [];
+    private volatile Wiring? _wiring;
 
     public PhaseBNode(PhaseBSetup setup, TimeProvider time)
     {
         _setup = setup ?? throw new ArgumentNullException(nameof(setup));
         _time = time ?? throw new ArgumentNullException(nameof(time));
+        _ledger = new BarrierLedger(setup.State, time);
         _monitor = new GroupStateMonitor(_reader, setup.State, time, (group, code) => setup.Alert?.Invoke(group, code, string.Empty));
         _poller = new StageFlagPoller(setup.Stages, IsActive, setup.State, time);
         Tokens = new PhaseBAdvertTokens(
@@ -53,7 +61,7 @@ internal sealed class PhaseBNode
 
     /// <param name="adverts">The router entries of the node hash; null starts the snapshot and the acknowledgements and no leader.</param>
     /// <param name="ownScope">The scope token of this node's adverts (G4).</param>
-    public Task StartAsync(IRedisConnector connector, string connectorPrefix, IAdvertSource? adverts, string? ownScope, CancellationToken cancellationToken)
+    public async Task StartAsync(IRedisConnector connector, string connectorPrefix, IAdvertSource? adverts, string? ownScope, CancellationToken cancellationToken)
     {
         if (_stop is not null)
         {
@@ -62,69 +70,40 @@ internal sealed class PhaseBNode
 
         if (!HasGroups)
         {
-            return Task.CompletedTask;
+            return;
         }
 
-        var database = connector.Database;
-        var control = connectorPrefix.Length == 0 ? database : database.WithKeyPrefix(connectorPrefix);
-        var cluster = database.Multiplexer.GetServers().Any(s => s.ServerType == ServerType.Cluster);
-        var version = connector.Version;
-        var state = _setup.State;
-        var names = new MoveKeyNames(connectorPrefix, _setup.LibraryPrefix, cluster);
-        var stateScripts = new MoveScripts(database, true, version);
-        var controlScripts = new MoveScripts(control, true, version);
-        var topology = new MultiplexerTopology(database.Multiplexer, connectorPrefix, true, version, state.ExpectedReplicasPerMaster, barrierWait: state.BarrierWait);
-        var sampler = new ControlSampler(control, names, topology);
-        var store = new StateStore(database, names, stateScripts, sampler, _time);
-        _reader.Attach(store);
+        _connector = connector;
+        _connectorPrefix = connectorPrefix;
+        _adverts = adverts;
+        _ownScope = ownScope;
         _recycle = _setup.RecycleConnections ?? connector.ForceReconnect;
-
-        var report = (string kind, string detail) => _setup.Alert?.Invoke(string.Empty, kind, detail);
-        var sequence = new TransitionSequence(topology, names, state, report);
-        var records = new ControlRecordReader(control, names);
-        var upkeep = new ControlUpkeep(records, sequence, store, state, _time, report);
-        var scanner = new MasterScanner(connector.GetPrimaries, database.Database, connectorPrefix);
-        var census = new MasterCensus(scanner, _setup.KeySpace, store, database, connectorPrefix, _time);
-        var data = new GroupDataOps(scanner, _setup.KeySpace, store, stateScripts, controlScripts, names);
-        var leases = _setup.Groups.ToDictionary(g => g.Name, g => new LeaderLease(stateScripts, names.Lead(g.Name), state, _time), StringComparer.Ordinal);
-        var stuck = new StuckGateReopener(records, controlScripts, database, names, state, _time);
-        var recovery = new StateRecovery(store, sampler, records, control, sequence, names, _time);
-        var options = _setup.Driver;
+        await connector.ConnectAsync(cancellationToken).ConfigureAwait(false);
+        var wiring = Wire();
+        _leases = _setup.Groups.ToDictionary(g => g.Name, g => new LeaderLease(wiring.StateScripts, wiring.Names.Lead(g.Name), _setup.State, _time), StringComparer.Ordinal);
+        _wiring = wiring;
+        _reader.Attach(wiring.Store);
 
         _stop = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         var token = _stop.Token;
-        var names2 = _setup.Groups.Select(g => g.Name).ToArray();
+        var names = _setup.Groups.Select(g => g.Name).ToArray();
         _monitor.Start(_setup.Groups, token);
-        _poller.Start(names2, token);
-        var acks = new AckCoordinator(_monitor, _gate, options, _time, BeforeAck);
+        _poller.Start(names, token);
+        var acks = new AckCoordinator(_monitor, _gate, _setup.Driver, _time, BeforeAck);
         var loops = new List<Task>
         {
-            Task.Run(() => acks.RunAsync(names2, token), CancellationToken.None),
-            Task.Run(() => RunLeasesAsync(leases, token), CancellationToken.None),
+            Task.Run(() => acks.RunAsync(names, token), CancellationToken.None),
+            Task.Run(() => RunLeasesAsync(token), CancellationToken.None),
+            Task.Run(() => RunRewireAsync(names, token), CancellationToken.None),
         };
         if (adverts is not null)
         {
-            _driver = new StageDriver(
-                new StageDriverServices(store, stateScripts, names, sequence, new PreflightChecker(topology, state), new BarrierLedger(state, _time), adverts, _setup.Facts, _setup.Claim, data, new CensusMoverStatus(census, _setup.MoverFinishedPass), g => leases[g].HoldsLease, _monitor, ownScope, _setup.Alert, g => leases[g].Fence, upkeep),
-                options,
-                state,
-                new FlagViews(options, _time),
-                new ViewStability(_time),
-                _time);
-            _driver.Start(names2, token);
-            loops.Add(Task.Run(() => RunUpkeepAsync(names2, leases, upkeep, stuck, store, token), CancellationToken.None));
+            StartDriver(wiring, names, token);
+            loops.Add(Task.Run(() => RunUpkeepAsync(names, token), CancellationToken.None));
         }
 
         _loops = [.. loops];
-        Runtime = new PhaseBRuntime(
-            store,
-            new StageCommands(store, stateScripts, names, options),
-            data,
-            new ClearCoordinator(store, stateScripts, controlScripts, records, names, state, _time),
-            new GroupRemoval(store, stateScripts, controlScripts, names, _setup.DropClaim),
-            recovery,
-            _driver!);
-        return Task.CompletedTask;
+        Runtime = RuntimeOf(wiring);
     }
 
     public async Task StopAsync()
@@ -148,6 +127,124 @@ internal sealed class PhaseBNode
         _driver = null;
         _loops = [];
         Runtime = null;
+    }
+
+    // Everything that holds a connection, built over the connector's current one; rebuilt when the connector replaces it.
+    private Wiring Wire()
+    {
+        var connector = _connector!;
+        var prefix = _connectorPrefix;
+        var database = connector.Database;
+        var control = prefix.Length == 0 ? database : database.WithKeyPrefix(prefix);
+        var cluster = database.Multiplexer.GetServers().Any(s => s.ServerType == ServerType.Cluster);
+        var version = connector.Version;
+        var state = _setup.State;
+        var names = new MoveKeyNames(prefix, _setup.LibraryPrefix, cluster);
+        var stateScripts = new MoveScripts(database, true, version);
+        var controlScripts = new MoveScripts(control, true, version);
+        var topology = new MultiplexerTopology(database.Multiplexer, prefix, true, version, state.ExpectedReplicasPerMaster, barrierWait: state.BarrierWait);
+        var sampler = new ControlSampler(control, names, topology);
+        var store = new StateStore(database, names, stateScripts, sampler, _time);
+        var report = (string kind, string detail) => _setup.Alert?.Invoke(string.Empty, kind, detail);
+        var sequence = new TransitionSequence(topology, names, state, report);
+        var records = new ControlRecordReader(control, names);
+        var scanner = new MasterScanner(connector.GetPrimaries, topology, database.Database, prefix);
+        return new Wiring(
+            database.Multiplexer,
+            store,
+            stateScripts,
+            controlScripts,
+            names,
+            topology,
+            sequence,
+            records,
+            new ControlUpkeep(records, sequence, store, state, _time, report),
+            new GroupDataOps(scanner, _setup.KeySpace, store, stateScripts, controlScripts, names),
+            new MasterCensus(scanner, _setup.KeySpace, store, database, prefix, _time),
+            new StuckGateReopener(records, controlScripts, database, names, state, _time),
+            new StateRecovery(store, sampler, records, control, sequence, names, _time),
+            new ClearCoordinator(store, stateScripts, controlScripts, records, names, state, _time),
+            new GroupRemoval(store, stateScripts, controlScripts, names, _setup.DropClaim));
+    }
+
+    private void StartDriver(Wiring wiring, string[] names, CancellationToken token)
+    {
+        _driver = new StageDriver(
+            new StageDriverServices(
+                wiring.Store,
+                wiring.StateScripts,
+                wiring.Names,
+                wiring.Sequence,
+                new PreflightChecker(wiring.Topology, _setup.State),
+                _ledger,
+                _adverts!,
+                _setup.Facts,
+                _setup.Claim,
+                wiring.Data,
+                new CensusMoverStatus(wiring.Census, _setup.MoverFinishedPass),
+                g => _leases[g].HoldsLease,
+                _monitor,
+                _ownScope,
+                _setup.Alert,
+                g => _leases[g].Fence,
+                wiring.Upkeep),
+            _setup.Driver,
+            _setup.State,
+            new FlagViews(_setup.Driver, _time),
+            new ViewStability(_time),
+            _time);
+        _driver.Start(names, token);
+    }
+
+    private PhaseBRuntime RuntimeOf(Wiring w) =>
+        new(w.Store, new StageCommands(w.Store, w.StateScripts, w.Names, _setup.Driver), w.Data, w.Clear, w.Removal, w.Recovery, _driver!);
+
+    // The connector replaces its connection after a failure and on a forced reconnect, and disposes the old one: the services are rebuilt over the new one, keeping the leases and their tokens.
+    private async Task RunRewireAsync(string[] names, CancellationToken cancellationToken)
+    {
+        try
+        {
+            while (true)
+            {
+                await Task.Delay(RewireCheckInterval, _time, cancellationToken).ConfigureAwait(false);
+                try
+                {
+                    await _connector!.ConnectAsync(cancellationToken).ConfigureAwait(false);
+                    if (!ReferenceEquals(_connector.Database.Multiplexer, _wiring!.Mux))
+                    {
+                        await RewireAsync(names, cancellationToken).ConfigureAwait(false);
+                    }
+                }
+                catch (Exception ex) when (ex is not OperationCanceledException)
+                {
+                    // The connection is not up yet; the next check looks again.
+                }
+            }
+        }
+        catch (OperationCanceledException)
+        {
+            // Stopped.
+        }
+    }
+
+    private async Task RewireAsync(string[] names, CancellationToken cancellationToken)
+    {
+        var wiring = Wire();
+        _reader.Attach(wiring.Store);
+        foreach (var (group, lease) in _leases)
+        {
+            lease.Rebind(wiring.StateScripts);
+            _ = group;
+        }
+
+        _wiring = wiring;
+        if (_driver is not null)
+        {
+            await _driver.StopAsync().ConfigureAwait(false);
+            StartDriver(wiring, names, _stop!.Token);
+        }
+
+        Runtime = RuntimeOf(wiring);
     }
 
     // The flag is read every 2 s from S1 to S4 and while a listed group waits in S0 or is unknown; a closed group, and a group the node does not list, is read every minute.
@@ -180,13 +277,13 @@ internal sealed class PhaseBNode
         return true;
     }
 
-    private async Task RunLeasesAsync(Dictionary<string, LeaderLease> leases, CancellationToken cancellationToken)
+    private async Task RunLeasesAsync(CancellationToken cancellationToken)
     {
         try
         {
             while (true)
             {
-                foreach (var (group, lease) in leases)
+                foreach (var (group, lease) in _leases)
                 {
                     try
                     {
@@ -196,7 +293,7 @@ internal sealed class PhaseBNode
                             await lease.TryHoldAsync().ConfigureAwait(false);
                         }
                     }
-                    catch (Exception ex) when (ex is RedisException or TimeoutException)
+                    catch (Exception ex) when (ex is not OperationCanceledException)
                     {
                         // The lease stays valid only for what the last renewal bought.
                     }
@@ -207,28 +304,29 @@ internal sealed class PhaseBNode
         }
         catch (OperationCanceledException)
         {
-            foreach (var lease in leases.Values)
+            foreach (var lease in _leases.Values)
             {
                 await lease.ReleaseAsync().ConfigureAwait(false);
             }
         }
     }
 
-    private async Task RunUpkeepAsync(string[] groups, Dictionary<string, LeaderLease> leases, ControlUpkeep upkeep, StuckGateReopener stuck, StateStore store, CancellationToken cancellationToken)
+    private async Task RunUpkeepAsync(string[] groups, CancellationToken cancellationToken)
     {
         try
         {
             while (true)
             {
                 await Task.Delay(_setup.State.UpkeepInterval, _time, cancellationToken).ConfigureAwait(false);
-                foreach (var group in groups.Where(g => leases[g].HoldsLease))
+                foreach (var group in groups.Where(g => _leases[g].HoldsLease))
                 {
                     try
                     {
-                        await upkeep.CheckOnceAsync(group, cancellationToken, leases[group]).ConfigureAwait(false);
-                        if (await store.ReadAsync(group, cancellationToken).ConfigureAwait(false) is { } state)
+                        var wiring = _wiring!;
+                        await wiring.Upkeep.CheckOnceAsync(group, cancellationToken, _leases[group]).ConfigureAwait(false);
+                        if (await wiring.Store.ReadAsync(group, cancellationToken).ConfigureAwait(false) is { } state)
                         {
-                            var (reopened, stillClosed) = await stuck.CheckAsync(group, state, cancellationToken).ConfigureAwait(false);
+                            var (reopened, stillClosed) = await wiring.Stuck.CheckAsync(group, state, cancellationToken).ConfigureAwait(false);
                             foreach (var cache in stillClosed)
                             {
                                 _setup.Alert?.Invoke(group, "gate_stuck", cache);
@@ -240,7 +338,7 @@ internal sealed class PhaseBNode
                             }
                         }
                     }
-                    catch (Exception ex) when (ex is RedisException or TimeoutException)
+                    catch (Exception ex) when (ex is not OperationCanceledException)
                     {
                         _setup.Alert?.Invoke(group, "upkeep_failed", ex.Message);
                     }
@@ -252,4 +350,21 @@ internal sealed class PhaseBNode
             // Stopped.
         }
     }
+
+    private sealed record Wiring(
+        IConnectionMultiplexer Mux,
+        StateStore Store,
+        MoveScripts StateScripts,
+        MoveScripts ControlScripts,
+        MoveKeyNames Names,
+        MultiplexerTopology Topology,
+        TransitionSequence Sequence,
+        ControlRecordReader Records,
+        ControlUpkeep Upkeep,
+        GroupDataOps Data,
+        MasterCensus Census,
+        StuckGateReopener Stuck,
+        StateRecovery Recovery,
+        ClearCoordinator Clear,
+        GroupRemoval Removal);
 }

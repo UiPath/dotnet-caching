@@ -21,7 +21,11 @@ internal sealed class GroupStateMonitor(IStateReader reader, PhaseBStateOptions 
             throw new InvalidOperationException("The monitor is already running; stop it before it is started again.");
         }
 
-        var trackers = Register(registrations);
+        var list = registrations.ToArray();
+        _ = Register(list);
+
+        // A monitor that was stopped keeps its trackers, and every one of them is polled again.
+        var trackers = list.Select(r => _groups[r.Name]).Distinct().ToArray();
         _stop = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         var token = _stop.Token;
         _loops = [.. trackers.Select(t => Task.Run(() => RunAsync(t, token), CancellationToken.None))];

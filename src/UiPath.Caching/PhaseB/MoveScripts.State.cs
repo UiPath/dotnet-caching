@@ -10,6 +10,7 @@ internal sealed partial class MoveScripts
     public const long StateRefreshed = 2;
     public const long StateNotInitial = -1;
     public const long LeaseNotHeld = -7;
+    public const long GroupStarted = -8;
 
     private const string TransitScript = """
         if #KEYS > 1 and redis.call('GET', KEYS[2]) ~= ARGV[1] then return -7 end
@@ -52,6 +53,7 @@ internal sealed partial class MoveScripts
     private const string AllAckScript = """
         if #KEYS > 1 and redis.call('GET', KEYS[2]) ~= ARGV[2] then return -7 end
         if redis.call('HGET', KEYS[1], 'id') ~= ARGV[1] then return 0 end
+        if ARGV[3] ~= '' and redis.call('HGET', KEYS[1], 'allAck') ~= ARGV[1] then redis.call('HSET', KEYS[1], 't3At', ARGV[3]) end
         redis.call('HSET', KEYS[1], 'allAck', ARGV[1])
         return 1
         """;
@@ -260,10 +262,12 @@ internal sealed partial class MoveScripts
     }
 
     /// <summary>ALLACK: records that every fresh node acknowledged the identity, only while it is the stored one; a repeat writes the same value again.</summary>
+    /// <param name="t3At">The time of the first acknowledgement of an S3 identity, written in the same step so it is never missing next to <c>allAck</c>; null for any other state.</param>
     /// <returns>1 written; 0 when the stored id differs; <see cref="LeaseNotHeld"/> when the fence's lease is not the caller's.</returns>
-    public async Task<long> AllAckAsync(RedisKey state, string id, LeaseFence? fence = null)
+    public async Task<long> AllAckAsync(RedisKey state, string id, LeaseFence? fence = null, long? t3At = null)
     {
-        var reply = await EvaluateAsync(AllAckScript, KeysOf(state, fence), [id, fence?.Token ?? string.Empty]).ConfigureAwait(false);
+        var stamp = t3At?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? string.Empty;
+        var reply = await EvaluateAsync(AllAckScript, KeysOf(state, fence), [id, fence?.Token ?? string.Empty, stamp]).ConfigureAwait(false);
         if (reply is not null)
         {
             return (long)reply;
@@ -276,8 +280,8 @@ internal sealed partial class MoveScripts
                 return LeaseNotHeld;
             }
 
-            var held = await _db.HashGetAsync(state, StateFields.Id, Master).ConfigureAwait(false);
-            if (held != id)
+            var held = await _db.HashGetAsync(state, [StateFields.Id, StateFields.AllAck], Master).ConfigureAwait(false);
+            if (held[0] != id)
             {
                 return ExpectationFailed;
             }
@@ -286,6 +290,12 @@ internal sealed partial class MoveScripts
             var queued = new List<Task>();
             AddFence(transaction, fence);
             transaction.AddCondition(Condition.HashEqual(state, StateFields.Id, id));
+            transaction.AddCondition(held[1].IsNull ? Condition.HashNotExists(state, StateFields.AllAck) : Condition.HashEqual(state, StateFields.AllAck, held[1]));
+            if (stamp.Length > 0 && held[1] != id)
+            {
+                queued.Add(transaction.HashSetAsync(state, StateFields.T3At, stamp, When.Always, Master));
+            }
+
             queued.Add(transaction.HashSetAsync(state, StateFields.AllAck, id, When.Always, Master));
             return await ExecuteAllAsync(transaction, queued).ConfigureAwait(false) ? Written : null;
         }).ConfigureAwait(false);

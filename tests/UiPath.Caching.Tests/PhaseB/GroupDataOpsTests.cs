@@ -152,12 +152,11 @@ public class GroupDataOpsTests(RedisContainerFixture fixture)
     }
 
     [Fact]
-    public async Task The_operator_purge_runs_in_S0_without_any_control_record_and_never_touches_records_or_state()
+    public async Task The_operator_purge_runs_in_a_group_that_never_started_without_any_control_record_and_never_touches_the_state()
     {
-        await using var kit = await DataOpsKit.StandaloneAsync(fixture, useScripts: true);
-        await kit.MoveToAsync("S0");
-        await kit.Kit.ControlDb.KeyDeleteAsync(kit.Kit.Names.Control(kit.Group, 0));
+        await using var kit = await DataOpsKit.StandaloneAsync(fixture, useScripts: true, started: false);
         var key = await kit.SetAsync(MoveSide.Native, "a", "k1");
+        (await kit.ControlDb.KeyExistsAsync(kit.Kit.Names.Control(kit.Group, 0))).Should().BeFalse();
 
         (await kit.Data.PurgeDataAsync(kit.Group, Ct)).Should().Be(PurgeOutcome.Purged);
 
@@ -166,16 +165,45 @@ public class GroupDataOpsTests(RedisContainerFixture fixture)
     }
 
     [Fact]
-    public async Task The_operator_purge_still_refuses_a_record_of_another_identity_and_a_group_that_is_not_in_S0_or_has_no_state()
+    public async Task A_group_that_ran_and_came_back_to_S0_is_not_purged_around_a_lost_control_record_which_is_repaired_instead()
     {
         await using var kit = await DataOpsKit.StandaloneAsync(fixture, useScripts: true);
+        await kit.MoveToAsync("S0");
+        await kit.Kit.ControlDb.KeyDeleteAsync(kit.Kit.Names.Control(kit.Group, 0));
         var key = await kit.SetAsync(MoveSide.Native, "a", "k1");
 
-        (await kit.Data.PurgeDataAsync(kit.Group, Ct)).Should().Be(PurgeOutcome.NotApplicable, "the group is in S1");
+        (await kit.Data.PurgeDataAsync(kit.Group, Ct)).Should().Be(PurgeOutcome.Refused);
+
+        (await kit.ExistsAsync(key)).Should().BeTrue("S0 alone does not prove the group never started");
+    }
+
+    [Fact]
+    public async Task The_never_started_permission_is_checked_inside_the_purge_boundary_not_only_by_the_caller()
+    {
+        await using var kit = await DataOpsKit.StandaloneAsync(fixture, useScripts: true);
         await kit.MoveToAsync("S0");
+        await kit.Kit.ControlDb.KeyDeleteAsync(kit.Kit.Names.Control(kit.Group, 0));
+        var key = await kit.SetAsync(MoveSide.Native, "a", "k1");
+        var id = (await kit.StateAsync()).Id;
+
+        var act = () => kit.Data.PurgeNativeAsync(kit.Group, new DataGuard(id, null, AllowNoRecord: true), Ct);
+
+        await act.Should().ThrowAsync<PurgeRefusedException>().WithMessage("*started*");
+        (await kit.ExistsAsync(key)).Should().BeTrue();
+    }
+
+    [Fact]
+    public async Task The_operator_purge_still_refuses_a_record_of_another_identity_and_a_group_that_is_not_in_S0_or_has_no_state()
+    {
+        await using var kit = await DataOpsKit.StandaloneAsync(fixture, useScripts: true, started: false);
+        var key = await kit.SetAsync(MoveSide.Native, "a", "k1");
         await kit.ControlDb.HashSetAsync(kit.Kit.Names.Control(kit.Group, 0), "id", "other");
+
         (await kit.Data.PurgeDataAsync(kit.Group, Ct)).Should().Be(PurgeOutcome.Refused);
         (await kit.ExistsAsync(key)).Should().BeTrue();
+        await kit.ControlDb.KeyDeleteAsync(kit.Kit.Names.Control(kit.Group, 0));
+        await kit.MoveToAsync("S1");
+        (await kit.Data.PurgeDataAsync(kit.Group, Ct)).Should().Be(PurgeOutcome.NotApplicable);
         (await kit.Data.PurgeDataAsync("g" + Guid.NewGuid().ToString("N")[..8], Ct)).Should().Be(PurgeOutcome.NoState);
     }
 

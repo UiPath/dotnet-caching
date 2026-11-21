@@ -29,6 +29,11 @@ internal sealed partial class MoveScripts
         return 0
         """;
 
+    private const string LeaseRenewScript = """
+        if redis.call('GET', KEYS[1]) == ARGV[1] then redis.call('PEXPIRE', KEYS[1], ARGV[2]) return 1 end
+        return 0
+        """;
+
     private const string LeaseReleaseScript = """
         if redis.call('GET', KEYS[1]) == ARGV[1] then return redis.call('DEL', KEYS[1]) end
         return 0
@@ -133,6 +138,30 @@ internal sealed partial class MoveScripts
             queued.Add(transaction.StringSetAsync(lease, token, TimeSpan.FromMilliseconds(ttlMilliseconds), When.Always, Master));
             return await ExecuteAllAsync(transaction, queued).ConfigureAwait(false) ? (held.IsNull ? LeaseAcquired : LeaseRenewed) : null;
         }).ConfigureAwait(false);
+    }
+
+    /// <summary>Extends the lease only while <paramref name="token"/> still holds it; a lease that expired is never taken again.</summary>
+    public async Task<bool> LeaseRenewAsync(RedisKey lease, string token, long ttlMilliseconds)
+    {
+        var reply = await EvaluateAsync(LeaseRenewScript, [lease], [token, ttlMilliseconds]).ConfigureAwait(false);
+        if (reply is not null)
+        {
+            return (long)reply == 1;
+        }
+
+        return await WatchedAsync(async () =>
+        {
+            if (await _db.StringGetAsync(lease, Master).ConfigureAwait(false) != token)
+            {
+                return ExpectationFailed;
+            }
+
+            var transaction = _db.CreateTransaction();
+            var queued = new List<Task>();
+            transaction.AddCondition(Condition.StringEqual(lease, token));
+            queued.Add(transaction.KeyExpireAsync(lease, TimeSpan.FromMilliseconds(ttlMilliseconds), Master));
+            return await ExecuteAllAsync(transaction, queued).ConfigureAwait(false) ? Written : null;
+        }).ConfigureAwait(false) == Written;
     }
 
     /// <summary>Deletes the lease when <paramref name="token"/> still holds it.</summary>

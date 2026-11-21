@@ -4,39 +4,31 @@ using StackExchange.Redis;
 namespace UiPath.Caching.PhaseB;
 
 /// <summary>SCAN on every master through the server API, which does not apply the connector prefix: the pattern starts with it and each result has it stripped.</summary>
-internal sealed class MasterScanner(Func<IEnumerable<IServer>> servers, int database, string connectorPrefix, int pageSize = 500)
+/// <remarks>A scan needs every slot owned by a connected master and no change of ownership while it ran, otherwise it is repeated, and it fails when that never settles.</remarks>
+internal sealed class MasterScanner(Func<IEnumerable<IServer>> servers, IStateTopology topology, int database, string connectorPrefix, int pageSize = 500, int attempts = 3)
 {
     private const CommandFlags Master = CommandFlags.DemandMaster;
 
-    public async IAsyncEnumerable<string> ScanAsync(IReadOnlyList<string> patterns, [EnumeratorCancellation] CancellationToken cancellationToken)
+    /// <summary>Runs <paramref name="consume"/> over the keys of every master; its result is the one of the attempt in which the slot map did not change.</summary>
+    /// <param name="consume">Called afresh for each attempt, so it must start from empty state.</param>
+    public async Task<T> RunAsync<T>(IReadOnlyList<string> patterns, Func<IAsyncEnumerable<string>, Task<T>> consume, CancellationToken cancellationToken)
     {
-        var masters = servers().Where(s => s.IsConnected && !s.IsReplica).ToArray();
-        if (masters.Length == 0)
+        for (var attempt = 0; attempt < attempts; attempt++)
         {
-            throw new RedisException("No master is connected, so the keys cannot be scanned on one.");
-        }
-
-        var seen = patterns.Count > 1 ? new HashSet<string>(StringComparer.Ordinal) : null;
-        foreach (var server in masters)
-        {
-            foreach (var pattern in patterns)
+            var before = await topology.ReadLayoutAsync(cancellationToken).ConfigureAwait(false);
+            if (before.Unsettled.Count == 0)
             {
-                await foreach (var key in server.KeysAsync(database, EscapeGlob(connectorPrefix) + pattern, pageSize, 0, 0, Master).WithCancellation(cancellationToken).ConfigureAwait(false))
+                var owners = OwnersOf(before);
+                var result = await consume(KeysAsync(owners, patterns, cancellationToken)).ConfigureAwait(false);
+                var after = await topology.ReadLayoutAsync(cancellationToken).ConfigureAwait(false);
+                if (after.Unsettled.Count == 0 && after.MovedSince(before, Enumerable.Range(0, HashSlot.Count)).Count == 0)
                 {
-                    var text = (string?)key;
-                    if (text is null || !text.StartsWith(connectorPrefix, StringComparison.Ordinal))
-                    {
-                        continue;
-                    }
-
-                    var logical = text[connectorPrefix.Length..];
-                    if (seen is null || seen.Add(logical))
-                    {
-                        yield return logical;
-                    }
+                    return result;
                 }
             }
         }
+
+        throw new RedisException($"The slot map kept changing through {attempts} scans, so no scan of every master could be trusted.");
     }
 
     internal static string EscapeGlob(string text)
@@ -58,5 +50,43 @@ internal sealed class MasterScanner(Func<IEnumerable<IServer>> servers, int data
         }
 
         return escaped.ToString();
+    }
+
+    // Every slot must have a master, and each master a connected server: a shard that is down is an unavailable owner, never an empty one.
+    private IReadOnlyList<IServer> OwnersOf(ClusterLayout layout)
+    {
+        var covered = layout.Masters.Sum(m => m.Slots.Sum(r => r.To - r.From + 1));
+        if (covered != HashSlot.Count)
+        {
+            throw new RedisException($"The masters own {covered} of {HashSlot.Count} slots, so a scan of them would miss keys.");
+        }
+
+        var connected = servers().Where(s => s.IsConnected && !s.IsReplica).ToArray();
+        return [.. layout.Masters.Select(m => connected.FirstOrDefault(s => EndPointMatch.Same(s.EndPoint, m.Endpoint)) ?? throw new RedisException($"The master {m.Endpoint} is not connected, so its keys cannot be scanned."))];
+    }
+
+    private async IAsyncEnumerable<string> KeysAsync(IReadOnlyList<IServer> masters, IReadOnlyList<string> patterns, [EnumeratorCancellation] CancellationToken cancellationToken)
+    {
+        var seen = patterns.Count > 1 ? new HashSet<string>(StringComparer.Ordinal) : null;
+        foreach (var server in masters)
+        {
+            foreach (var pattern in patterns)
+            {
+                await foreach (var key in server.KeysAsync(database, EscapeGlob(connectorPrefix) + pattern, pageSize, 0, 0, Master).WithCancellation(cancellationToken).ConfigureAwait(false))
+                {
+                    var text = (string?)key;
+                    if (text is null || !text.StartsWith(connectorPrefix, StringComparison.Ordinal))
+                    {
+                        continue;
+                    }
+
+                    var logical = text[connectorPrefix.Length..];
+                    if (seen is null || seen.Add(logical))
+                    {
+                        yield return logical;
+                    }
+                }
+            }
+        }
     }
 }

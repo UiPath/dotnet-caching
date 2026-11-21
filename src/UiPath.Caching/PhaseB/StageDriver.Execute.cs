@@ -49,12 +49,9 @@ internal sealed partial class StageDriver
 
         if (plan.AllAck)
         {
-            await services.Store.AllAckAsync(group, state.Id, Fence(group)).ConfigureAwait(false);
-            if (state.State == "S3")
-            {
-                // T3 of the canary (6.6): the moment every node acknowledged the S3 identity.
-                await services.Scripts.FieldsAsync(services.Names.State(group), state.Id, [(StateFields.T3At, time.GetUtcNow().ToUnixTimeMilliseconds().ToString(System.Globalization.CultureInfo.InvariantCulture))], [], Fence(group)).ConfigureAwait(false);
-            }
+            // T3 of the canary (6.6) is stored with the acknowledgement itself, so one never exists without the other.
+            long? t3 = state.State == "S3" ? time.GetUtcNow().ToUnixTimeMilliseconds() : null;
+            await services.Store.AllAckAsync(group, state.Id, Fence(group), t3).ConfigureAwait(false);
         }
 
         if (plan.FieldList.Count > 0)

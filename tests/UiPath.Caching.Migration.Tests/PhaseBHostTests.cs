@@ -118,6 +118,33 @@ public sealed class PhaseBHostTests(RedisFixture fixture) : IAsyncLifetime
         (await UntilAsync(async () => (await Tokens(router, provider)).Any(t => t.StartsWith($"{Group}@{state.Ep}:{state.Id}:S0", StringComparison.Ordinal)))).Should().BeTrue();
     }
 
+    [Fact]
+    public async Task After_a_reconnect_the_node_reads_state_renews_its_lease_and_runs_commands_over_the_new_connection()
+    {
+        Assert.SkipUnless(fixture.Enabled, Skip);
+        await using var provider = Provider(phaseB: true);
+        var router = (Router)provider.GetRequiredService<IRouter>();
+        var connector = provider.GetRequiredService<IRedisConnector>();
+        (await UntilAsync(() => router.PhaseB!.Runtime is not null)).Should().BeTrue();
+        await router.PhaseB!.Runtime!.Commands.InitAsync(Group, ["advc"], Ct);
+        var before = router.PhaseB.Runtime;
+        var oldMux = connector.Database.Multiplexer;
+        var lead = $"{Library}mg:{{{Group}}}:lead";
+        (await UntilAsync(async () => await Db.KeyExistsAsync(lead))).Should().BeTrue();
+
+        connector.ForceReconnect();
+        (await UntilAsync(() => !ReferenceEquals(connector.Database.Multiplexer, oldMux))).Should().BeTrue("the connector replaced its multiplexer");
+
+        (await UntilAsync(() => !ReferenceEquals(router.PhaseB.Runtime, before))).Should().BeTrue("the node rebuilt its services over the new connection");
+        await Db.KeyDeleteAsync(lead);
+        (await UntilAsync(async () => await Db.KeyExistsAsync(lead))).Should().BeTrue("the lease is taken again through the new connection");
+        (await router.PhaseB.Runtime!.Store.ReadAsync(Group, Ct)).Should().NotBeNull("commands run over the new connection");
+
+        // A snapshot loop that stopped at the reconnect would show an age that only grows, so the age must stay at or below one bucket well past 5 seconds.
+        await Task.Delay(TimeSpan.FromSeconds(7), Ct);
+        (await UntilAsync(async () => (await Tokens(router, provider)).Any(t => t is "snap=0" or "snap=5"))).Should().BeTrue("the snapshot loop reads through the new connection");
+    }
+
     private static async Task<bool> UntilAsync(Func<bool> condition) => await UntilAsync(() => Task.FromResult(condition()));
 
     private static async Task<bool> UntilAsync(Func<Task<bool>> condition)

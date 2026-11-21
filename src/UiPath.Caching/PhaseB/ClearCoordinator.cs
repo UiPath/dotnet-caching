@@ -2,10 +2,8 @@ using StackExchange.Redis;
 
 namespace UiPath.Caching.PhaseB;
 
-/// <summary>
-/// Clear of one cache in S1 to S4 (3.6): the lock <c>clrlock</c>, the gate of the cache closed on every slot, the sweep, a check that no transition replaced the gates, and the reopen that
-/// only reopens this Clear's own close. In S0 and S5, and for a group with no state, it is the plain sweep with the two events.
-/// </summary>
+/// <summary>Clear of one cache (3.6): the lock, the gate closed on every slot, the sweep, the check that no transition replaced the gates, and the reopen of its own close.</summary>
+/// <remarks>In S0 and S5, and for a group with no state, it is the plain sweep with the two events.</remarks>
 /// <param name="stateScripts">The scripts over the view of the state hash, which holds the lock.</param>
 /// <param name="controlScripts">The scripts over the view that names control records.</param>
 internal sealed class ClearCoordinator(StateStore store, MoveScripts stateScripts, MoveScripts controlScripts, ControlRecordReader records, MoveKeyNames names, PhaseBStateOptions options, TimeProvider time)
@@ -31,17 +29,18 @@ internal sealed class ClearCoordinator(StateStore store, MoveScripts stateScript
 
         var lockKey = names.ClearLock(group, cacheId);
         var token = MoveScripts.NewNonce();
+        var acquiredAt = time.GetTimestamp();
         if (await stateScripts.LeaseAsync(lockKey, token, (long)options.ClearLockTtl.TotalMilliseconds).ConfigureAwait(false) == MoveScripts.LeaseHeldByAnother)
         {
             return ClearOutcome.Unavailable;
         }
 
         using var sweepStop = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-        var lost = false;
-        var renewing = Task.Run(() => RenewAsync(lockKey, token, sweepStop, () => lost = true), CancellationToken.None);
+        var validity = new LockValidity(time, options.ClearLockTtl, acquiredAt);
+        var renewing = Task.Run(() => RenewAsync(lockKey, token, sweepStop, validity), CancellationToken.None);
         try
         {
-            return await ClearGatedAsync(group, cacheId, state, hooks, () => Volatile.Read(ref lost), sweepStop.Token, cancellationToken).ConfigureAwait(false);
+            return await ClearGatedAsync(group, cacheId, state, hooks, () => validity.Lost, sweepStop.Token, cancellationToken).ConfigureAwait(false);
         }
         finally
         {
@@ -54,6 +53,11 @@ internal sealed class ClearCoordinator(StateStore store, MoveScripts stateScript
     private async Task<ClearOutcome> ClearGatedAsync(string group, string cacheId, StateRecord state, ClearHooks hooks, Func<bool> lockLost, CancellationToken sweepToken, CancellationToken cancellationToken)
     {
         await hooks.PublishFirst(cancellationToken).ConfigureAwait(false);
+        if (lockLost())
+        {
+            return ClearOutcome.Failed;
+        }
+
         for (var attempt = 0; attempt < options.ClearRetries; attempt++)
         {
             if (attempt > 0)
@@ -156,19 +160,24 @@ internal sealed class ClearCoordinator(StateStore store, MoveScripts stateScript
         return ok;
     }
 
-    private async Task RenewAsync(RedisKey lockKey, string token, CancellationTokenSource stop, Action markLost)
+    private async Task RenewAsync(RedisKey lockKey, string token, CancellationTokenSource stop, LockValidity validity)
     {
         try
         {
             while (true)
             {
                 await Task.Delay(options.ClearLockRenewInterval, time, stop.Token).ConfigureAwait(false);
-                if (await stateScripts.LeaseAsync(lockKey, token, (long)options.ClearLockTtl.TotalMilliseconds).ConfigureAwait(false) == MoveScripts.LeaseHeldByAnother)
+                var sent = time.GetTimestamp();
+
+                // Renewal only: a lock that expired is not taken again, since another node may hold it by now or the leader may have reopened the gate.
+                if (!await stateScripts.LeaseRenewAsync(lockKey, token, (long)options.ClearLockTtl.TotalMilliseconds).ConfigureAwait(false))
                 {
-                    markLost();
+                    validity.MarkLost();
                     await stop.CancelAsync().ConfigureAwait(false);
                     return;
                 }
+
+                validity.Renewed(sent);
             }
         }
         catch (OperationCanceledException)
@@ -178,8 +187,21 @@ internal sealed class ClearCoordinator(StateStore store, MoveScripts stateScript
         catch (Exception ex) when (ex is RedisException or TimeoutException)
         {
             // A lock that cannot be renewed is lost: the sweep stops and reopens only what it closed.
-            markLost();
+            validity.MarkLost();
             await stop.CancelAsync().ConfigureAwait(false);
         }
+    }
+
+    // The lock is good for its lifetime counted from before the request that last confirmed it; past that, or once a renewal failed, it is gone for good.
+    private sealed class LockValidity(TimeProvider time, TimeSpan ttl, long confirmedAt)
+    {
+        private long _confirmedAt = confirmedAt;
+        private int _lost;
+
+        public bool Lost => Volatile.Read(ref _lost) == 1 || time.GetElapsedTime(Volatile.Read(ref _confirmedAt)) >= ttl;
+
+        public void MarkLost() => Volatile.Write(ref _lost, 1);
+
+        public void Renewed(long sentAt) => Volatile.Write(ref _confirmedAt, sentAt);
     }
 }

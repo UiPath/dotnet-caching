@@ -22,49 +22,57 @@ internal sealed class MasterCensus(MasterScanner scanner, IGroupKeySpace space, 
 
         var side = SourceOf(state);
         var cacheIds = state.CacheIds;
-        var residue = cacheIds.ToDictionary(c => c, _ => 0L, StringComparer.Ordinal);
-        long movable = 0;
-        long? canary = T3Of(state) is null ? null : 0;
         var now = time.GetUtcNow().ToUnixTimeMilliseconds();
-        var batch = new List<(string Key, string Cache)>(LifeBatch);
+        var t3 = T3Of(state);
 
-        async Task FlushAsync()
+        // Each attempt of the scan counts afresh, so a repeated scan never adds to the counts of the one before.
+        async Task<CensusResult> Count(IAsyncEnumerable<string> keys)
         {
-            var lives = await Task.WhenAll(batch.Select(b => database.KeyTimeToLiveAsync(connectorPrefix + b.Key, CommandFlags.DemandMaster))).ConfigureAwait(false);
-            for (var n = 0; n < batch.Count; n++)
+            var residue = cacheIds.ToDictionary(c => c, _ => 0L, StringComparer.Ordinal);
+            long movable = 0;
+            long? canary = t3 is null ? null : 0;
+            var batch = new List<(string Key, string Cache)>(LifeBatch);
+
+            async Task FlushAsync()
             {
-                var (key, cache) = batch[n];
-                if (space.IsMovable(group, side, cache, key, lives[n]))
+                var lives = await Task.WhenAll(batch.Select(b => database.KeyTimeToLiveAsync(connectorPrefix + b.Key, CommandFlags.DemandMaster))).ConfigureAwait(false);
+                for (var n = 0; n < batch.Count; n++)
                 {
-                    movable++;
+                    var (key, cache) = batch[n];
+                    if (space.IsMovable(group, side, cache, key, lives[n]))
+                    {
+                        movable++;
+                    }
+
+                    if (canary is not null && lives[n] is { } life && space.MaxSourceTtl(group, cache) is { } longest && life.TotalMilliseconds + (now - t3!.Value) > longest.TotalMilliseconds)
+                    {
+                        canary++;
+                    }
                 }
 
-                if (canary is not null && lives[n] is { } life && space.MaxSourceTtl(group, cache) is { } longest && life.TotalMilliseconds + (now - T3Of(state)!.Value) > longest.TotalMilliseconds)
+                batch.Clear();
+            }
+
+            await foreach (var key in keys.WithCancellation(cancellationToken).ConfigureAwait(false))
+            {
+                if (space.OwnerOf(group, cacheIds, side, key) is not { } cache)
                 {
-                    canary++;
+                    continue;
+                }
+
+                residue[cache]++;
+                batch.Add((key, cache));
+                if (batch.Count == LifeBatch)
+                {
+                    await FlushAsync().ConfigureAwait(false);
                 }
             }
 
-            batch.Clear();
+            await FlushAsync().ConfigureAwait(false);
+            return new CensusResult(residue, movable, canary);
         }
 
-        await foreach (var key in scanner.ScanAsync(space.Patterns(group, side), cancellationToken).ConfigureAwait(false))
-        {
-            if (space.OwnerOf(group, cacheIds, side, key) is not { } cache)
-            {
-                continue;
-            }
-
-            residue[cache]++;
-            batch.Add((key, cache));
-            if (batch.Count == LifeBatch)
-            {
-                await FlushAsync().ConfigureAwait(false);
-            }
-        }
-
-        await FlushAsync().ConfigureAwait(false);
-        return new CensusResult(residue, movable, canary);
+        return await scanner.RunAsync(space.Patterns(group, side), Count, cancellationToken).ConfigureAwait(false);
     }
 
     // S3 is when every node acknowledged the S3 identity; the leader stores the time next to the acknowledgement.

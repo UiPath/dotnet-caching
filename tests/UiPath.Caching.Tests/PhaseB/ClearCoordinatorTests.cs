@@ -198,6 +198,37 @@ public class ClearCoordinatorTests(RedisContainerFixture fixture)
     }
 
     [Fact]
+    public async Task A_lock_that_expired_is_not_taken_again_by_the_renewal_and_the_gate_the_leader_reopened_stays_open()
+    {
+        await using var kit = await StartedAsync();
+        var control = new MoveScripts(kit.ControlDb, true, fixture.ServerVersion);
+        var lockKey = kit.Names.ClearLock(kit.Group, "a");
+        var reopener = new StuckGateReopener(kit.Records, control, kit.Db, kit.Names, kit.Options, kit.Time);
+        var hooks = new ClearHooks(
+            _ => Task.CompletedTask,
+            async token =>
+            {
+                // The Clear was suspended past its lock's life: the lock is gone and the leader reopens the gate it finds closed.
+                await kit.Db.KeyDeleteAsync(lockKey);
+                (await reopener.CheckAsync(kit.Group, (await kit.Store.ReadAsync(kit.Group, Ct))!, Ct)).Reopened.Should().Equal("a");
+                for (var tries = 0; !token.IsCancellationRequested; tries++)
+                {
+                    tries.Should().BeLessThan(2000, "the renewal never noticed the expired lock");
+                    await TimeSteps.AdvanceArmedAsync(kit.Time, kit.Options.ClearLockRenewInterval);
+                    await Task.Delay(5, CancellationToken.None);
+                }
+
+                token.ThrowIfCancellationRequested();
+            },
+            _ => Task.CompletedTask);
+
+        (await Coordinator(kit).ClearAsync(kit.Group, "a", hooks, Ct)).Should().Be(ClearOutcome.Failed);
+
+        (await kit.Db.KeyExistsAsync(lockKey)).Should().BeFalse("renewal never creates the lock again");
+        (await Gate(kit, "a")).Should().StartWith("OPEN:");
+    }
+
+    [Fact]
     public async Task The_leader_reopens_a_gate_left_closed_once_its_lock_has_expired_and_not_before()
     {
         await using var kit = await StartedAsync();
