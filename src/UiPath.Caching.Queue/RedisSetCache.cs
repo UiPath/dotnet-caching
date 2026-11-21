@@ -42,9 +42,13 @@ public sealed partial class RedisSetCache : RedisCacheBase, ISetCache
 
         _pop = resiliencePipelineProvider.Get(setCacheOptions.ResilienceKeyName);
         _cacheOptions = cacheOptions;
-        _redisKeyStrategy = redisCacheOptions.KeyFormat is { } keyFormat
-            ? new KeyFormatStrategy(keyFormat, _cacheOptions.AppShortName, redisCacheOptions.RedisKeyStrategyFactory)
-            : (redisCacheOptions.RedisKeyStrategyFactory ?? new DefaultRedisKeyStrategyFactory()).Create(_cacheOptions, RedisSetKeyspace);
+        _redisKeyStrategy = (redisCacheOptions.KeyFormat, redisCacheOptions.RedisKeyStrategyFactory) switch
+        {
+            (null, var factory) => (factory ?? new DefaultRedisKeyStrategyFactory()).Create(_cacheOptions, RedisSetKeyspace),
+            (var format, null) => format.CreateStrategy(_cacheOptions.AppShortName, RedisSetKeyspace),
+            _ => throw new InvalidOperationException(
+                $"{nameof(RedisCacheOptions)}.{nameof(RedisCacheOptions.KeyFormat)} cannot be combined with a custom {nameof(RedisCacheOptions.RedisKeyStrategyFactory)}."),
+        };
     }
 
     public string Name => KnownCacheProviderNames.Redis;
@@ -366,24 +370,4 @@ public sealed partial class RedisSetCache : RedisCacheBase, ISetCache
 
     [LoggerMessage(Level = LogLevel.Warning, Message = "Redis transaction failed.")]
     private partial void LogRedisTransactionFailed();
-    private sealed class KeyFormatStrategy : IRedisKeyStrategy
-    {
-        private readonly RedisKeyFormat _format;
-        private readonly string _app;
-
-        public KeyFormatStrategy(RedisKeyFormat format, string app, IRedisKeyStrategyFactory? factory)
-        {
-            if (factory is not null)
-            {
-                throw new InvalidOperationException(
-                    $"{nameof(RedisCacheOptions)}.{nameof(RedisCacheOptions.KeyFormat)} cannot be combined with a custom {nameof(RedisCacheOptions.RedisKeyStrategyFactory)}.");
-            }
-
-            _format = format;
-            _app = string.IsNullOrWhiteSpace(app) ? throw new ArgumentException("Value cannot be null or whitespace.", nameof(app)) : app;
-        }
-
-        public RedisKey GetRedisKey(CacheKey key) =>
-            _format.Build(_app, RedisSetKeyspace, key.Name);
-    }
 }

@@ -221,11 +221,11 @@ public class RedisKeyFormatTests
     {
         RedisKeyFormatRules.EnsureValidVersion(version);
         string[] live = [version, "v9"];
-        RedisKeyFormatRules.IsLiveVersion($"{version}:key", live).Should().BeTrue();
-        RedisKeyFormatRules.IsLiveVersion("v9:key", live).Should().BeTrue();
-        RedisKeyFormatRules.IsLiveVersion("v1:key", live).Should().BeFalse("dead version");
-        RedisKeyFormatRules.IsLiveVersion($"{version}x:key", live).Should().BeFalse();
-        RedisKeyFormatRules.IsLiveVersion(version, live).Should().BeFalse();
+        RedisKeyFormatRules.IsLiveVersion(RedisKeyFormat.Colon, $"{version}:key", live).Should().BeTrue();
+        RedisKeyFormatRules.IsLiveVersion(RedisKeyFormat.Colon, "v9:key", live).Should().BeTrue();
+        RedisKeyFormatRules.IsLiveVersion(RedisKeyFormat.Colon, "v1:key", live).Should().BeFalse("dead version");
+        RedisKeyFormatRules.IsLiveVersion(RedisKeyFormat.Colon, $"{version}x:key", live).Should().BeFalse();
+        RedisKeyFormatRules.IsLiveVersion(RedisKeyFormat.Colon, version, live).Should().BeFalse();
     }
 
     [Theory]

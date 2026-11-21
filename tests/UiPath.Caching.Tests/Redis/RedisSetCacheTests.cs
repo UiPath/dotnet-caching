@@ -483,6 +483,17 @@ public class RedisSetCacheTests(ITestContextAccessor testContextAccessor) : IAsy
     }
 
     [Fact]
+    public void A_key_format_whose_set_prefix_overlaps_another_keyspace_is_refused()
+    {
+        _redisCacheOptions.RedisKeyStrategyFactory = null;
+        _redisCacheOptions.KeyFormat = RedisKeyFormat.Create('e', shardKey: false);
+
+        var act = () => Sut;
+
+        act.Should().Throw<Exception>().Which.GetBaseException().Message.Should().Contain("keyspace 'se'");
+    }
+
+    [Fact]
     public void A_key_format_with_a_custom_factory_is_refused()
     {
         _redisCacheOptions.KeyFormat = RedisKeyFormat.Dollar;

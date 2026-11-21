@@ -78,6 +78,8 @@ internal static class RedisKeyFormatRules
             return false;
         }
 
+        name = LogicalName(format, name);
+
         // Both go through CacheKey, so they carry the casing in force when the library built them.
         return !name.Equals(LibraryKeyNames.NodeList(nameSeparator), StringComparison.OrdinalIgnoreCase)
             && !name.Equals(LibraryKeyNames.MaintainerLock(nameSeparator), StringComparison.OrdinalIgnoreCase)
@@ -95,8 +97,9 @@ internal static class RedisKeyFormatRules
     }
 
     /// <summary>A name is live when it starts with one of the live versions and the key separator; anything else is a dead version.</summary>
-    public static bool IsLiveVersion(string name, IEnumerable<string> liveVersions)
+    public static bool IsLiveVersion(RedisKeyFormat format, string parsedName, IEnumerable<string> liveVersions)
     {
+        var name = LogicalName(format, parsedName);
         foreach (var version in liveVersions)
         {
             if (name.Length > version.Length
@@ -109,4 +112,9 @@ internal static class RedisKeyFormatRules
 
         return false;
     }
+    /// <summary>A parsed name without the tag a sharded format wrapped around it: <see cref="RedisKeyFormat.Build"/> of either gives the same key.</summary>
+    internal static string LogicalName(RedisKeyFormat format, string parsedName) =>
+        format.ShardKey && parsedName.Length > 2 && parsedName[0] == '{' && parsedName[^1] == '}' && RedisHashTag.ContainsNoBraces(parsedName[1..^1])
+            ? parsedName[1..^1]
+            : parsedName;
 }

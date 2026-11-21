@@ -70,6 +70,16 @@ public sealed class RedisKeyFormat
         return true;
     }
 
+    /// <summary>The strategy for one app and keyspace. Refuses an app name with braces and a format whose prefixes over the library keyspaces overlap.</summary>
+    public IRedisKeyStrategy CreateStrategy(string app, string keyspace)
+    {
+        RedisKeyFormatRules.EnsurePrefixFree(
+            Guard.NotNullOrWhiteSpace(app, nameof(app)),
+            [this],
+            RedisKeyFormatRules.Keyspaces.Contains(keyspace, StringComparer.Ordinal) ? RedisKeyFormatRules.Keyspaces : [.. RedisKeyFormatRules.Keyspaces, keyspace]);
+        return new FormatRedisKeyStrategy(this, app, keyspace);
+    }
+
     /// <summary>The format today's options imply. Unlike <see cref="Create"/> it takes any separator they accept, braces included.</summary>
     internal static RedisKeyFormat Derive(char separator, bool shardKey)
     {

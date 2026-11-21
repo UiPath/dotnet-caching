@@ -37,8 +37,7 @@ internal static class RedisKeyStrategies
                 $"{nameof(RedisCacheOptions)}.{nameof(RedisCacheOptions.KeyFormat)} cannot be combined with a custom {nameof(RedisCacheOptions.RedisKeyStrategyFactory)}.");
         }
 
-        return new FormatRedisKeyStrategy(
-            format,
+        return format.CreateStrategy(
             Guard.NotNullOrWhiteSpace(options.AppShortName, nameof(options.AppShortName)),
             Guard.NotNullOrWhiteSpace(keyspace, nameof(keyspace)));
     }

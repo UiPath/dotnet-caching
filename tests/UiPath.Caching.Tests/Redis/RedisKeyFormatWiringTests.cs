@@ -95,8 +95,58 @@ public class RedisKeyFormatWiringTests
             after.TryParse(newKey, App, "s", out var newName).Should().BeTrue();
             newName.Should().Be(oldName).And.Be("v3:Tenant:Key");
             options.Separator.Should().Be(separator);
-            RedisKeyFormatRules.IsLiveVersion(newName!, ["v3"]).Should().BeTrue();
-            RedisKeyFormatRules.IsLiveVersion(newName!, ["v2"]).Should().BeFalse("a dead version is counted, not moved");
+            RedisKeyFormatRules.IsLiveVersion(after, newName!, ["v3"]).Should().BeTrue();
+            RedisKeyFormatRules.IsLiveVersion(after, newName!, ["v2"]).Should().BeFalse("a dead version is counted, not moved");
+        }
+    }
+    [Fact]
+    public void An_explicit_format_whose_prefixes_overlap_is_refused_on_every_path()
+    {
+        // With 'e' as separator, a string named "efoo" and a set named "foo" are both "appeseefoo".
+        var overlapping = RedisKeyFormat.Create('e', shardKey: false);
+        var options = new CacheOptions { AppShortName = "app" };
+        var resolve = () => RedisKeyStrategies.Resolve(new RedisCacheOptions { KeyFormat = overlapping }, options, typeof(RedisCache));
+        resolve.Should().Throw<InvalidOperationException>().WithMessage("*keyspace 's'*keyspace 'se'*");
+        var direct = () => overlapping.CreateStrategy("app", "se");
+        direct.Should().Throw<InvalidOperationException>();
+    }
+
+    [Fact]
+    public void An_explicit_format_refuses_an_app_name_with_braces()
+    {
+        var resolve = () => RedisKeyStrategies.Resolve(
+            new RedisCacheOptions { KeyFormat = RedisKeyFormat.Colon }, new CacheOptions { AppShortName = "my{app}" }, "s");
+        resolve.Should().Throw<InvalidOperationException>().WithMessage("*braces*");
+    }
+
+    [Fact]
+    public void Tagged_library_keys_are_never_movable()
+    {
+        var format = RedisKeyFormat.Create(':', shardKey: true);
+        var options = new CacheOptions { AppShortName = App };
+        var redisOptions = new RedisCacheOptions { KeyFormat = format };
+        var nodeList = NodeListStore.KeyFor(options, redisOptions);
+        RedisKeyFormatRules.IsMovable(format, nodeList, App, "s", ':').Should().BeFalse("node list");
+
+        var strategy = RedisKeyStrategies.Resolve(redisOptions, options, "s");
+        var hashes = RedisKeyStrategies.Resolve(redisOptions, options, "h");
+        RedisKeyFormatRules.IsMovable(format, strategy.GetRedisKey(LibraryKeyNames.MaintainerLock(':')), App, "s", ':').Should().BeFalse("lock");
+        var quarantine = hashes.GetRedisKey(new CacheKey(LibraryKeyNames.QuarantineMarker(':') + "stream1$", CacheKeyCasing.Sensitive));
+        RedisKeyFormatRules.IsMovable(format, quarantine, App, "h", ':').Should().BeFalse("quarantine");
+        RedisKeyFormatRules.IsMovable(format, strategy.GetRedisKey("user:42"), App, "s", ':').Should().BeTrue();
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void A_versioned_name_stays_live_in_both_tag_modes(bool shardKey)
+    {
+        var format = RedisKeyFormat.Create('$', shardKey);
+        foreach (var name in new[] { "v3:key", "v3:{tenant}:key" })
+        {
+            format.TryParse(format.Build(App, "s", name), App, "s", out var parsed).Should().BeTrue();
+            RedisKeyFormatRules.IsLiveVersion(format, parsed!, ["v3"]).Should().BeTrue(name);
+            RedisKeyFormatRules.IsLiveVersion(format, parsed!, ["v2"]).Should().BeFalse(name);
         }
     }
 }
