@@ -44,6 +44,8 @@ internal sealed class Router : IRouter, IAsyncDisposable
 
     internal ISerializerProxy<byte[]>? Envelope { get; init; }
 
+    internal TimeProvider Clock => _core.Clock;
+
     public Task EnterBypassAsync(CancellationToken cancellationToken = default)
     {
         _core.ThrowIfStopped();

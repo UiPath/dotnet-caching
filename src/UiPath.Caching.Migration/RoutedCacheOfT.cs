@@ -15,7 +15,6 @@ internal sealed class RoutedCache<T> : IRouterParticipant, IRoutedCache<T>, IDis
     /// <summary>What the local tier holds for a cached null, which it cannot hold itself.</summary>
     private static readonly object NullMarker = new();
 
-
     private readonly RouterCore _core;
     private readonly RouterCacheRegistration<T> _registration;
     private readonly IPathClient<T> _source;
@@ -164,7 +163,9 @@ internal sealed class RoutedCache<T> : IRouterParticipant, IRoutedCache<T>, IDis
             async (client, token) =>
             {
                 var result = await client.TryAddAsync(key, value, deadline, token).ConfigureAwait(false);
-                reported = result.Outcome;
+
+                // A source that answers anything else (Failed, or a value outside the enum) is settled and reported as unknown.
+                reported = result.Outcome is AddOutcome.Added or AddOutcome.Exists or AddOutcome.NotSent ? result.Outcome : AddOutcome.Unknown;
                 return result.Outcome switch
                 {
                     AddOutcome.Added => WriteOutcome.Committed,

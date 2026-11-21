@@ -32,7 +32,7 @@ public static class RouterConformance
         var store = services.GetRequiredKeyedService<ICacheFactory>(RouterServiceCollectionExtensions.StackName).CreateCache(KnownCacheProviderNames.Redis).AsMigrationCache();
         var library = new LibraryPathClient<T>(store, connector, cache.Registration.RedisKey, Lifetime);
         var source = new SourcePathClient<T>(cache.Registration.Source);
-        var clock = services.GetService<TimeProvider>() ?? TimeProvider.System;
+        var clock = router.Clock;
         var failures = new List<string>();
         var index = 0;
         foreach (var (key, value) in samples)

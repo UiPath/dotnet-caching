@@ -67,6 +67,33 @@ public sealed class RegistrationCompletenessTests : RouterTestBase
     }
 
     [Fact]
+    public async Task A_source_create_answering_failed_is_settled_and_reported_as_unknown()
+    {
+        var node = NewNode(useLibrary: _ => false, pendingWindow: TimeSpan.FromSeconds(30));
+        node.SourceBackend.CreateOverride = AddOutcome.Failed;
+
+        (await node.Cache.TryAddAsync("k", new Item("new"), default, Ct)).Should().Be(AddOutcome.Unknown);
+        Bus.Published.Should().Be(1, "an unknown create is announced like a write of unknown outcome");
+    }
+
+    [Fact]
+    public void A_version_provider_returning_null_is_refused()
+    {
+        var registration = new RouterCacheRegistration<Item>
+        {
+            Name = "items",
+            Group = "g",
+            Source = new FakeBackend([], Clock),
+            RedisKey = key => key,
+            Version = () => null!,
+        };
+
+        var act = () => new RouterBuilder().Add(registration);
+
+        act.Should().Throw<ArgumentException>().WithMessage("*returned null*");
+    }
+
+    [Fact]
     public async Task TryAdd_with_a_deadline_already_passed_creates_nothing()
     {
         var node = NewNode();

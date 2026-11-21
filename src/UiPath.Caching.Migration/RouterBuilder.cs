@@ -38,7 +38,9 @@ public sealed class RouterBuilder
         ArgumentOutOfRangeException.ThrowIfLessThanOrEqual(registration.PendingWindow, TimeSpan.Zero);
         ArgumentOutOfRangeException.ThrowIfGreaterThan(registration.PendingWindow, LibrarySettleBound.Horizon);
         // Read once: the value checked here is the one the cache's events use.
-        var version = registration.Version?.Invoke();
+        var version = registration.Version is { } provider
+            ? provider() ?? throw new ArgumentException($"The version provider of cache '{registration.Name}' returned null.", nameof(registration))
+            : null;
         if (version is not null && (string.IsNullOrWhiteSpace(version) || version.AsSpan().IndexOfAny("@+={} ") >= 0))
         {
             throw new ArgumentException($"The version of cache '{registration.Name}' must be non-empty and hold no '@', '+', '=', braces or spaces.", nameof(registration));
