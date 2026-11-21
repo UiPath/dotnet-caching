@@ -13,6 +13,7 @@ public class RedisKeyBuildBenchmark
     private IRedisKeyStrategy _plain = default!;
     private IRedisKeyStrategy _sharded = default!;
     private IRedisKeyStrategy _format = default!;
+    private IRedisKeyStrategy _shardedFormat = default!;
     private int _next;
 
     [GlobalSetup]
@@ -24,6 +25,7 @@ public class RedisKeyBuildBenchmark
         _sharded = Resolve(new CacheOptions { AppShortName = "app", ShardKeyEnabled = true });
 #pragma warning restore CS0618
         _format = RedisKeyFormat.Dollar.CreateStrategy("app", "se");
+        _shardedFormat = RedisKeyFormat.Create('$', shardKey: true).CreateStrategy("app", "se");
     }
 
     [Benchmark(Baseline = true)]
@@ -34,6 +36,9 @@ public class RedisKeyBuildBenchmark
 
     [Benchmark]
     public RedisKey ExplicitFormat() => _format.GetRedisKey(_keys[_next++ & (Pool - 1)]);
+
+    [Benchmark]
+    public RedisKey ShardedExplicitFormat() => _shardedFormat.GetRedisKey(_keys[_next++ & (Pool - 1)]);
 
     private static IRedisKeyStrategy Resolve(CacheOptions options) =>
         RedisKeyStrategies.Resolve(new RedisCacheOptions(), options, typeof(RedisCache));

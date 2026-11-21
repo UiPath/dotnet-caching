@@ -57,19 +57,7 @@ public class RedisKeyFormatWiringTests
     public void T_S2_13_the_maintainer_keys_stay_on_the_pinned_format()
     {
         var options = new CacheOptions { AppShortName = App };
-        RedisKey Quarantine(RedisCacheOptions redisOptions)
-        {
-            var maintainer = new RedisStreamHealthMaintainer(
-                Substitute.For<IRedisConnector>(),
-                new RecordingTelemetryProvider(),
-                Options.Create(new RedisStreamsTopicOptions()),
-                Options.Create(redisOptions),
-                Options.Create(options),
-                NullLogger<RedisStreamHealthMaintainer>.Instance,
-                TimeProvider.System);
-            maintainer.Initialize();
-            return maintainer.QuarantineKey("stream1");
-        }
+        RedisKey Quarantine(RedisCacheOptions redisOptions) => Maintainer(options, redisOptions).QuarantineKey("stream1");
 
         Quarantine(new RedisCacheOptions { KeyFormat = RedisKeyFormat.Dollar }).Should().Be((RedisKey)"myapp$h$caching:meta:stream$stream1$");
         Quarantine(new RedisCacheOptions { KeyFormat = RedisKeyFormat.Dollar, PinnedKeyFormat = RedisKeyFormat.Colon })
@@ -99,6 +87,7 @@ public class RedisKeyFormatWiringTests
             RedisKeyFormatRules.IsLiveVersion(after, newName!, ["v2"]).Should().BeFalse("a dead version is counted, not moved");
         }
     }
+
     [Fact]
     public void An_explicit_format_whose_prefixes_overlap_is_refused_on_every_path()
     {
@@ -125,15 +114,38 @@ public class RedisKeyFormatWiringTests
         var format = RedisKeyFormat.Create(':', shardKey: true);
         var options = new CacheOptions { AppShortName = App };
         var redisOptions = new RedisCacheOptions { KeyFormat = format };
-        var nodeList = NodeListStore.KeyFor(options, redisOptions);
-        RedisKeyFormatRules.IsMovable(format, nodeList, App, "s", ':').Should().BeFalse("node list");
+        var maintainer = Maintainer(options, redisOptions);
 
-        var strategy = RedisKeyStrategies.Resolve(redisOptions, options, "s");
-        var hashes = RedisKeyStrategies.Resolve(redisOptions, options, "h");
-        RedisKeyFormatRules.IsMovable(format, strategy.GetRedisKey(LibraryKeyNames.MaintainerLock(':')), App, "s", ':').Should().BeFalse("lock");
-        var quarantine = hashes.GetRedisKey(new CacheKey(LibraryKeyNames.QuarantineMarker(':') + "stream1$", CacheKeyCasing.Sensitive));
-        RedisKeyFormatRules.IsMovable(format, quarantine, App, "h", ':').Should().BeFalse("quarantine");
-        RedisKeyFormatRules.IsMovable(format, strategy.GetRedisKey("user:42"), App, "s", ':').Should().BeTrue();
+        RedisKeyFormatRules.IsMovable(format, NodeListStore.KeyFor(options, redisOptions), App, "s", ':').Should().BeFalse("node list");
+        RedisKeyFormatRules.IsMovable(format, maintainer.LockKey, App, "s", ':').Should().BeFalse("lock");
+        RedisKeyFormatRules.IsMovable(format, maintainer.QuarantineKey("myapp:st:{topic}"), App, "h", ':').Should().BeFalse("quarantine");
+        RedisKeyFormatRules.IsMovable(format, RedisKeyStrategies.Resolve(redisOptions, options, "s").GetRedisKey("user:42"), App, "s", ':').Should().BeTrue();
+    }
+
+    [Fact]
+    public void Without_a_key_format_the_library_keys_are_unchanged()
+    {
+        var options = new CacheOptions { AppShortName = "tst" };
+        NodeListStore.KeyFor(options, new RedisCacheOptions()).Should().Be((RedisKey)"tst:s:caching:nodes");
+        Maintainer(options, new RedisCacheOptions()).LockKey.Should().Be((RedisKey)"tst:s:redisstreamhealthmaintainer:lock2");
+    }
+
+    [Fact]
+    public void Formats_are_equal_by_id()
+    {
+        RedisKeyFormat.Create(':', shardKey: true).Should().Be(RedisKeyFormat.Create(':', shardKey: true));
+        RedisKeyFormat.Create(':', shardKey: true).GetHashCode().Should().Be(RedisKeyFormat.Create(':', shardKey: true).GetHashCode());
+        RedisKeyFormat.Create(':', shardKey: true).Should().NotBe(RedisKeyFormat.Colon);
+        RedisKeyFormat.Derive(':', shardKey: false).Should().Be(RedisKeyFormat.Colon);
+    }
+
+    [Fact]
+    public void Build_and_TryParse_refuse_an_app_name_with_braces()
+    {
+        var build = () => RedisKeyFormat.Colon.Build("my{app}", "s", "k");
+        build.Should().Throw<ArgumentException>().WithMessage("*braces*");
+        var parse = () => RedisKeyFormat.Colon.TryParse("my{app}:s:k", "my{app}", "s", out _);
+        parse.Should().Throw<ArgumentException>();
     }
 
     [Theory]
@@ -148,5 +160,18 @@ public class RedisKeyFormatWiringTests
             RedisKeyFormatRules.IsLiveVersion(format, parsed!, ["v3"]).Should().BeTrue(name);
             RedisKeyFormatRules.IsLiveVersion(format, parsed!, ["v2"]).Should().BeFalse(name);
         }
+    }
+    private static RedisStreamHealthMaintainer Maintainer(CacheOptions options, RedisCacheOptions redisOptions)
+    {
+        var maintainer = new RedisStreamHealthMaintainer(
+            Substitute.For<IRedisConnector>(),
+            new RecordingTelemetryProvider(),
+            Options.Create(new RedisStreamsTopicOptions()),
+            Options.Create(redisOptions),
+            Options.Create(options),
+            NullLogger<RedisStreamHealthMaintainer>.Instance,
+            TimeProvider.System);
+        maintainer.Initialize();
+        return maintainer;
     }
 }

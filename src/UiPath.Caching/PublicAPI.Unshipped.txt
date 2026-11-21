@@ -56,3 +56,5 @@ static UiPath.Caching.Redis.RedisKeyFormat.Dollar.get -> UiPath.Caching.Redis.Re
 UiPath.Caching.Redis.RedisCacheOptions.KeyFormat.get -> UiPath.Caching.Redis.RedisKeyFormat?
 UiPath.Caching.Redis.RedisCacheOptions.KeyFormat.set -> void
 UiPath.Caching.Redis.RedisKeyFormat.CreateStrategy(string! app, string! keyspace) -> UiPath.Caching.Redis.IRedisKeyStrategy!
+override UiPath.Caching.Redis.RedisKeyFormat.Equals(object? obj) -> bool
+override UiPath.Caching.Redis.RedisKeyFormat.GetHashCode() -> int

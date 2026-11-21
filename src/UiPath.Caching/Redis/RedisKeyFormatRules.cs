@@ -112,6 +112,7 @@ internal static class RedisKeyFormatRules
 
         return false;
     }
+
     /// <summary>A parsed name without the tag a sharded format wrapped around it: <see cref="RedisKeyFormat.Build"/> of either gives the same key.</summary>
     internal static string LogicalName(RedisKeyFormat format, string parsedName) =>
         format.ShardKey && parsedName.Length > 2 && parsedName[0] == '{' && parsedName[^1] == '}' && RedisHashTag.ContainsNoBraces(parsedName[1..^1])

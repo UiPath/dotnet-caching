@@ -37,6 +37,10 @@ public sealed class RedisKeyFormat
         return format;
     }
 
+    public override bool Equals(object? obj) => obj is RedisKeyFormat other && Id == other.Id;
+
+    public override int GetHashCode() => StringComparer.Ordinal.GetHashCode(Id);
+
     public RedisKey Build(string app, string keyspace, string name) =>
         BuildName(Prefix(app, keyspace), name);
 
@@ -111,6 +115,11 @@ public sealed class RedisKeyFormat
 
     internal RedisKey Prefix(string app, string keyspace)
     {
+        if (app.AsSpan().IndexOfAny('{', '}') >= 0)
+        {
+            throw new ArgumentException($"The app short name '{app}' cannot contain braces.", nameof(app));
+        }
+
         var joined = string.Join(
             Separator,
             Guard.NotNullOrWhiteSpace(app, nameof(app)),
