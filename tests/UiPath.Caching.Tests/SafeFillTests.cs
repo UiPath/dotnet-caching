@@ -505,6 +505,23 @@ public class SafeFillTests
     }
 
     [Fact]
+    public async Task A_fill_whose_conditional_heal_loses_to_a_removal_does_not_write_the_key_again()
+    {
+        using var peers = new CachePeers();
+        var (a, b) = (peers.Add("a"), peers.Add("b"));
+        peers.Store.Values["k"] = CachePeers.SharedStore.Unreadable;
+        a.Inner.BeforeStampedWrite = async () =>
+        {
+            a.Inner.BeforeStampedWrite = null;
+            await b.Cache.RemoveAsync<string>(Key, Ct);
+        };
+
+        (await a.Cache.GetOrAddAsync<string>(Key, _ => Task.FromResult<string?>("generated"), Policy, Ct)).Should().Be("generated", "the caller still gets what its generator made");
+
+        peers.Store.Values.ContainsKey("k").Should().BeFalse("the peer removed the key while the heal compared, and the fill leaves it removed");
+    }
+
+    [Fact]
     public async Task A_fill_that_finds_an_unreadable_value_replaces_it()
     {
         using var peers = new CachePeers();

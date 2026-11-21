@@ -48,6 +48,20 @@ public class RedisCacheFillManyTests(ITestContextAccessor testContextAccessor) :
         results[1].Outcome.Should().Be(FillOutcome.Failed);
     }
 
+    [Fact]
+    public async Task A_key_that_lost_its_command_adopts_the_stored_value_while_another_key_of_its_slot_failed()
+    {
+        Sets(_redisFirst, Task.FromException<bool>(new RedisException("down")));
+        Sets(_redisSecond, Task.FromResult(false));
+        _transaction.StringGetAsync(_redisSecond, Arg.Any<CommandFlags>()).Returns(Task.FromResult<RedisValue>("\"stored\""u8.ToArray()));
+
+        var results = await FillAsync();
+
+        results[0].Outcome.Should().Be(FillOutcome.Failed);
+        results[1].Outcome.Should().Be(FillOutcome.Existed);
+        results[1].Existing.Should().Be("stored");
+    }
+
     public ValueTask InitializeAsync()
     {
         const string prefix = "test";

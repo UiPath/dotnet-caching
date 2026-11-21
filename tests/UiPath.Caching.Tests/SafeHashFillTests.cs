@@ -159,6 +159,43 @@ public class SafeHashFillTests
     }
 
     [Fact]
+    public async Task A_hash_fill_is_not_kept_locally_when_the_key_changes_while_the_keep_waits_for_the_key_turn()
+    {
+        using var c = new PeerCluster();
+        var writer = c.Add("a");
+        var background = (BackgroundWrites)typeof(MultilayerCacheBase).GetField("_background", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!.GetValue(writer.Cache)!;
+        var landed = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        writer.Inner.AfterWrite = _ => landed.Task;
+        var fill = writer.Cache.GetOrAddAsync<string>("k", _ => Task.FromResult<IDictionary<string, string?>>(Fields(("a", "1"))), Awaited, Ct).AsTask();
+        await CachePeers.Until(() => c.Redis.Fields() is not null);
+
+        // Holds the key's turn after the write, so the keep that follows waits for it.
+        var held = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var free = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        bool Hold(int _)
+        {
+            held.SetResult();
+            free.Task.Wait(Ct);
+            return true;
+        }
+
+        var holder = Task.Run(() => background.Apply("k", 0, Hold), Ct);
+        await held.Task.WaitAsync(TimeSpan.FromSeconds(10), Ct);
+        landed.SetResult();
+        await Task.Delay(300, Ct);
+        fill.IsCompleted.Should().BeFalse("the keep waits for the key's turn");
+
+        background.NoteChange("k");
+        free.SetResult();
+        await holder;
+        await fill;
+
+        var reads = writer.InnerReads;
+        await writer.Cache.GetAsync<string>("k", Awaited, Ct);
+        writer.InnerReads.Should().Be(reads + 1, "the change that came while the keep waited refused the keep, so the read goes to the store");
+    }
+
+    [Fact]
     public async Task A_fill_over_an_unreadable_hash_replaces_it()
     {
         using var c = new PeerCluster();

@@ -452,6 +452,9 @@ internal sealed class CachePeers : IDisposable
         /// <summary>When set, a removal waits for it before it reaches the store.</summary>
         public Task? RemoveHold { get; set; }
 
+        /// <summary>When set, a conditional write runs it before it compares.</summary>
+        public Func<Task>? BeforeStampedWrite { get; set; }
+
         /// <summary>When set, a single-key write reaches the store and then waits for it before it answers.</summary>
         public Task? AfterWrite { get; set; }
 
@@ -486,13 +489,18 @@ internal sealed class CachePeers : IDisposable
                 : (new SnapshotRead<T>(SnapshotOutcome.Absent, null), null);
         }
 
-        ValueTask<StampedWrite> IStampedTier.WriteIfStampAsync<T>(CacheKey cacheKey, T? value, DateTimeOffset expiration, CachePolicy? policy, object? stamp, CancellationToken token)
+        async ValueTask<StampedWrite> IStampedTier.WriteIfStampAsync<T>(CacheKey cacheKey, T? value, DateTimeOffset expiration, CachePolicy? policy, object? stamp, CancellationToken token)
             where T : default
         {
+            if (BeforeStampedWrite is { } before)
+            {
+                await before();
+            }
+
             var won = stamp is Seen seen
                 ? Store.Values.TryUpdate(cacheKey.Name, value, seen.Value)
                 : Store.Values.TryAdd(cacheKey.Name, value);
-            return new(won ? StampedWrite.Won : StampedWrite.Lost);
+            return won ? StampedWrite.Won : StampedWrite.Lost;
         }
 
         ValueTask<FillResult<T>[]> IFillManyTier.TryFillManyAsync<T>(KeyValuePair<CacheKey, T?>[] entries, DateTimeOffset expiration, CachePolicy? policy, CancellationToken token)

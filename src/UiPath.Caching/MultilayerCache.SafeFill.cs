@@ -103,14 +103,20 @@ internal sealed partial class MultilayerCache
                 }
 
                 // Changed again since the read: the key is the winner's, or gone.
-                return written == StampedWrite.Lost ? await AfterLostHealAsync(options, value, policy).ConfigureAwait(false) : default;
+                return written == StampedWrite.Lost ? await AfterLostHealAsync(options, value, policy, fill).ConfigureAwait(false) : default;
             default:
                 return default;
         }
     }
 
-    private async ValueTask<FillResult<T>> AfterLostHealAsync<T>(CacheEntryOptions options, T? value, CachePolicy policy)
+    private async ValueTask<FillResult<T>> AfterLostHealAsync<T>(CacheEntryOptions options, T? value, CachePolicy policy, long fill)
     {
+        // A removal that arrived while the compare was in flight leaves the key to it.
+        if (!_background.FillIntact(options.CacheKey.Name, fill))
+        {
+            return default;
+        }
+
         var filled = await _innerCache.TryFillAsync<T>(options.CacheKey, value, options.Expiration, policy, options.Token).ConfigureAwait(false);
         return filled.Outcome == FillOutcome.Unreadable ? default : filled;
     }
