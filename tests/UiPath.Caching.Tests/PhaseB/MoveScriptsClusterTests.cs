@@ -10,6 +10,8 @@ public class MoveScriptsClusterTests
     private const string Id = "id1";
     private const string Cid = "c1";
 
+    private static readonly string RunTag = Guid.NewGuid().ToString("N")[..8];
+
     public static TheoryData<string> Prefixes => ["", "app:", "{shard}:"];
 
     public static TheoryData<bool, string, string> Cases()
@@ -44,7 +46,7 @@ public class MoveScriptsClusterTests
 
     [Theory]
     [MemberData(nameof(Cases))]
-        public async Task Source_scripts_run_with_the_control_record_of_the_key_slot(bool useScripts, string library, string prefix)
+    public async Task Source_scripts_run_with_the_control_record_of_the_key_slot(bool useScripts, string library, string prefix)
     {
         await using var cluster = await ClusterAsync(prefix, library, useScripts);
 
@@ -91,7 +93,7 @@ public class MoveScriptsClusterTests
 
         for (var i = 0; i < 100; i++)
         {
-            var native = $"s:{{cache:k{i}}}";
+            var native = $"s:{{cache:k{i}:{RunTag}}}";
             var ctl = cluster.Control(native);
             await cluster.Scripts.ControlSyncAsync(ctl, MoveTestEnvironment.Record(1, Id, (Cid, "n1")));
             var keys = new FencedKeys(cluster.Track(cluster.Names.ForwardFence(native)), cluster.Track(native), ctl);
@@ -152,8 +154,9 @@ public class MoveScriptsClusterTests
         (await cluster.Db.HashGetAsync(cluster.Control(InPlaceKeys().First()), "id")).Should().Be(Id);
     }
 
+    // Unique per test process: other processes run these tests against the same cluster at the same time.
     private static IEnumerable<string> InPlaceKeys() =>
-        Enumerable.Range(0, 100).Select(i => $"n:cache{i % 7},c:key{i}");
+        Enumerable.Range(0, 100).Select(i => $"n:cache{i % 7},c:key{i}:{RunTag}");
 
     private static async Task<ClusterContext> ClusterAsync(string prefix, string library, bool useScripts)
     {
